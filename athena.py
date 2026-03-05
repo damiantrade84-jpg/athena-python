@@ -1081,9 +1081,20 @@ def run_full_scan():
                             log.info(f"[EXCH] {exch_code}: OPEN")
                 except Exception: pass
     except Exception as e: log.warning(f"[EXCH] Exchange check failed: {e}")
-    # Pre-fetch: news context + BTC bias (serial, before parallel pair analysis)
+    # Pre-fetch: news context + BTC bias + yield curve + div/split (serial, before parallel pair analysis)
     log.info("Fetching market context...")
     news_ctx = fetch_news_context()
+    # Phase A: Yield curve context
+    yield_ctx = None
+    try:
+        yield_ctx = fetch_yield_curve()
+        if yield_ctx: news_ctx["yieldCurve"] = yield_ctx
+    except Exception as e: log.warning(f"[YIELD] scan fetch err: {e}")
+    # Phase B: Dividend/split context
+    try:
+        ds_ctx = fetch_div_split_context()
+        if ds_ctx: news_ctx["divSplit"] = ds_ctx
+    except Exception as e: log.warning(f"[DIVS] scan fetch err: {e}")
     try:
         btc=fetch_candles({"symbol":"BTCUSDT","source":"binance"},"D1",CONFIG["D1_CANDLES"])
         if btc and len(btc)>=200:
@@ -1200,6 +1211,119 @@ def fetch_dxy_context():
         trend="rising" if chg>0.3 else "falling" if chg<-0.3 else "flat"
         return f"trend={trend} 5d_chg={chg}% price={round(cl[-1],2)}"
     except: return None
+
+# Phase A: UST Yield Curve cache (1hr TTL — rates change slowly)
+_yield_cache = {"data": None, "ts": 0}
+_YIELD_TTL = 3600
+
+def fetch_yield_curve():
+    """Fetch UST yield rates from EODHD. Returns shape, 2Y-10Y spread, and 3M rate for AI risk context."""
+    global _yield_cache
+    now = time.time()
+    if _yield_cache["data"] and (now - _yield_cache["ts"]) < _YIELD_TTL:
+        return _yield_cache["data"]
+    try:
+        _key = os.environ.get("EODHD_KEY", "")
+        if not _key: return None
+        r = http_requests.get(f"https://eodhd.com/api/ust/yield-rates?api_token={_key}&fmt=json", timeout=10)
+        if r.status_code != 200: return None
+        data = r.json()
+        # API returns {"meta":{...},"data":[{"date":"...","tenor":"2Y","rate":3.47},...]}
+        rows = data.get("data", data) if isinstance(data, dict) else data
+        if not rows or not isinstance(rows, list): return None
+        # Build tenor map from latest date
+        latest_date = max(_row["date"] for _row in rows if _row.get("date"))
+        tenor_map = {_row["tenor"]: _row["rate"] for _row in rows if _row.get("date") == latest_date and _row.get("tenor") and _row.get("rate") is not None}
+        y3m  = tenor_map.get("3M")  or tenor_map.get("1.5M")
+        y2y  = tenor_map.get("2Y")
+        y10y = tenor_map.get("10Y")
+        y30y = tenor_map.get("30Y")
+        if y2y is None or y10y is None: return None
+        spread_2_10 = round(float(y10y) - float(y2y), 3)
+        if spread_2_10 < -0.1:   shape = "inverted"
+        elif spread_2_10 < 0.1:  shape = "flat"
+        else:                     shape = "normal"
+        result = {
+            "shape": shape,
+            "spread_2_10": spread_2_10,
+            "y3m":  round(float(y3m), 3)  if y3m  else None,
+            "y2y":  round(float(y2y), 3),
+            "y10y": round(float(y10y), 3),
+            "y30y": round(float(y30y), 3) if y30y else None,
+            "riskContext": "risk-off (recession warning)" if shape=="inverted" else "neutral" if shape=="flat" else "risk-on",
+            "date": latest_date
+        }
+        _yield_cache = {"data": result, "ts": now}
+        log.info(f"[YIELD] Curve: {shape} | 2Y:{y2y}% 10Y:{y10y}% spread:{spread_2_10}%")
+        return result
+    except Exception as e:
+        log.warning(f"[YIELD] fetch failed: {e}")
+        return None
+
+# Phase B: Dividend/Split awareness cache (24hr TTL)
+_divsplit_cache = {"data": {}, "ts": 0}
+_DIVSPLIT_TTL = 86400  # 24 hours
+
+# Stock pairs that can have dividends/splits
+_DIV_SPLIT_PAIRS = ["GOOG.US", "GLD.US", "NPN.JO", "AGL.JO", "PRX.JO", "SPY.US", "QQQ.US", "TLT.US"]
+
+def fetch_div_split_context():
+    """Fetch upcoming dividends and splits for stock pairs. Warns AI if ex-div within 7 days."""
+    global _divsplit_cache
+    now = time.time()
+    if _divsplit_cache["data"] and (now - _divsplit_cache["ts"]) < _DIVSPLIT_TTL:
+        return _divsplit_cache["data"]
+    _key = os.environ.get("EODHD_KEY", "")
+    if not _key: return {}
+    today = datetime.now(timezone.utc).date()
+    result = {}
+    for sym in _DIV_SPLIT_PAIRS:
+        entry = {}
+        # Dividends
+        try:
+            r = http_requests.get(f"https://eodhd.com/api/div/{sym}?api_token={_key}&fmt=json", timeout=8)
+            if r.status_code == 200:
+                divs = r.json()
+                if divs and isinstance(divs, list):
+                    upcoming = []
+                    for d in divs:
+                        ex = d.get("date") or d.get("exDividendDate")
+                        if not ex: continue
+                        try:
+                            ex_date = datetime.strptime(str(ex)[:10], "%Y-%m-%d").date()
+                            days_to = (ex_date - today).days
+                            if 0 <= days_to <= 14:
+                                upcoming.append({"exDate": str(ex_date), "daysTo": days_to, "amount": d.get("value", d.get("dividend"))})
+                        except: pass
+                    if upcoming:
+                        entry["upcomingDiv"] = upcoming
+                        log.info(f"[DIVS] {sym}: ex-div in {upcoming[0]['daysTo']} days")
+        except Exception as e: log.warning(f"[DIVS] {sym}: {e}")
+        # Splits
+        try:
+            r = http_requests.get(f"https://eodhd.com/api/splits/{sym}?api_token={_key}&fmt=json", timeout=8)
+            if r.status_code == 200:
+                splits = r.json()
+                if splits and isinstance(splits, list):
+                    upcoming = []
+                    for s in splits:
+                        sd = s.get("date")
+                        if not sd: continue
+                        try:
+                            s_date = datetime.strptime(str(sd)[:10], "%Y-%m-%d").date()
+                            days_to = (s_date - today).days
+                            if 0 <= days_to <= 30:
+                                upcoming.append({"splitDate": str(s_date), "daysTo": days_to, "ratio": s.get("split")})
+                        except: pass
+                    if upcoming:
+                        entry["upcomingSplit"] = upcoming
+                        log.warning(f"[SPLITS] {sym}: split in {upcoming[0]['daysTo']} days")
+        except Exception as e: log.warning(f"[SPLITS] {sym}: {e}")
+        if entry:
+            result[sym] = entry
+    _divsplit_cache = {"data": result, "ts": now}
+    log.info(f"[DIVS] Checked {len(_DIV_SPLIT_PAIRS)} pairs — {len(result)} with upcoming events")
+    return result
 
 # P2: 5-minute TTL cache for news context — avoid redundant API calls during rapid scans
 _news_cache = {"data": None, "ts": 0}
@@ -1328,6 +1452,22 @@ def run_ai(signal, news_ctx=None, style_pref="auto"):
              f"EntryMode:{signal.get('entryMode','trend')} "
              f"StylePref:{style_pref.upper()}")
         if dxy_ctx: msg += f" DXY:{dxy_ctx}"
+        # Phase A: Yield curve context
+        _yc = fetch_yield_curve()
+        if _yc:
+            msg += (f" YieldCurve:{{shape:{_yc['shape']},2y10y_spread:{_yc['spread_2_10']}%,"
+                    f"3m:{_yc.get('y3m')}%,10y:{_yc['y10y']}%,context:{_yc['riskContext']}}}")
+        # Phase B: Div/split warnings for stock pairs
+        _ds = fetch_div_split_context()
+        _pair_sym = signal.get("symbol", "")
+        if _ds and _pair_sym in _ds:
+            _ev = _ds[_pair_sym]
+            if _ev.get("upcomingDiv"):
+                _d = _ev["upcomingDiv"][0]
+                msg += f" ExDivWarning:ex-div in {_d['daysTo']} days ({_d['exDate']}, amount:{_d.get('amount','?')}) — gap-down risk, reduce size"
+            if _ev.get("upcomingSplit"):
+                _s = _ev["upcomingSplit"][0]
+                msg += f" SplitWarning:split in {_s['daysTo']} days ({_s['splitDate']}, ratio:{_s.get('ratio','?')}) — price distortion risk"
         # R6: Feed AI backtest performance context if available
         _bt = signal.get("backtestStats")
         if _bt:
@@ -1690,6 +1830,60 @@ def api_analyze():
         log.error(f"api_analyze error: {e}")
         return jsonify({"error":"Analysis failed"}), 500
 
+@app.route("/api/screener-scan", methods=["POST"])
+def api_screener_scan():
+    """Phase C: Discover new high-cap momentum stocks via EODHD screener. Finds candidates not yet in our 70 pairs."""
+    try:
+        _key = os.environ.get("EODHD_KEY", "")
+        if not _key: return jsonify({"error": "EODHD_KEY not set"}), 500
+        d = request.json or {}
+        min_cap = d.get("minMarketCap", 50000000000)  # $50B default
+        limit   = min(d.get("limit", 50), 100)
+        # Fetch top momentum stocks: sorted by 200d_new_hi (price near 52-week high)
+        url = (f"https://eodhd.com/api/screener?api_token={_key}&sort=200d_new_hi-desc"
+               f"&filters=[[\"market_capitalization\",\">\",{min_cap}]]"
+               f"&limit={limit}&offset=0&fmt=json")
+        r = http_requests.get(url, timeout=15)
+        if r.status_code == 403: return jsonify({"error": "Screener requires All-In-One plan (403)"}), 403
+        if r.status_code != 200: return jsonify({"error": f"EODHD screener error: HTTP {r.status_code}"}), 502
+        data = r.json()
+        rows = data.get("data", data) if isinstance(data, dict) else data
+        if not rows or not isinstance(rows, list): return jsonify({"error": "No screener results"}), 404
+        # Cross-reference against our existing 70 pairs
+        existing_syms = {p["symbol"].upper() for p in ALL_PAIRS}
+        candidates = []
+        already_tracked = []
+        for row in rows:
+            sym = (row.get("code") or row.get("symbol") or "").upper()
+            name = row.get("name") or row.get("description") or sym
+            exchange = row.get("exchange") or ""
+            full_sym = f"{sym}.{exchange}" if exchange and "." not in sym else sym
+            entry = {
+                "symbol": full_sym,
+                "name": name,
+                "exchange": exchange,
+                "marketCap": row.get("market_capitalization"),
+                "52wHigh": row.get("52w_high"),
+                "52wLow": row.get("52w_low"),
+                "price": row.get("close") or row.get("last_close"),
+                "200dNewHi": row.get("200d_new_hi"),
+            }
+            if full_sym in existing_syms or sym in existing_syms:
+                already_tracked.append(entry)
+            else:
+                candidates.append(entry)
+        log.info(f"[SCREENER] Found {len(candidates)} new candidates, {len(already_tracked)} already tracked")
+        return jsonify({
+            "success": True,
+            "newCandidates": candidates[:20],
+            "alreadyTracked": already_tracked[:10],
+            "totalScanned": len(rows),
+            "scannedAt": datetime.now(timezone.utc).isoformat()
+        })
+    except Exception as e:
+        log.error(f"api_screener_scan error: {e}")
+        return jsonify({"error": "Screener scan failed"}), 500
+
 def _auto_toggle_pair(pair, result):
     """Auto-enable/disable a pair based on backtest SQN criteria.
     Enable: SQN > +0.5, IS_SQN > 0, OOS_SQN >= 0 (or < 3 OOS trades).
@@ -1768,6 +1962,45 @@ def api_killswitch():
 def api_prices():
     return jsonify({"prices": _live_prices, "count": len(_live_prices),
                     "ts": datetime.now(timezone.utc).isoformat()})
+
+@app.route("/api/yield-curve")
+def api_yield_curve():
+    """Phase E: Yield curve data for dashboard widget."""
+    try:
+        yc = fetch_yield_curve()
+        if not yc: return jsonify({"error": "Yield curve unavailable"}), 503
+        return jsonify(yc)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/bulk-prices")
+def api_bulk_prices():
+    """Phase D: Bulk live OHLCV for US stocks via EODHD real-time endpoint (1 call vs multiple WS connections)."""
+    try:
+        _key = os.environ.get("EODHD_KEY", "")
+        if not _key: return jsonify({"error": "EODHD_KEY not set"}), 500
+        syms = request.args.get("symbols", "GOOG.US,GLD.US,SPY.US,QQQ.US")
+        r = http_requests.get(f"https://eodhd.com/api/real-time/{syms.split(',')[0]}?s={','.join(syms.split(',')[1:])}&api_token={_key}&fmt=json", timeout=8)
+        if r.status_code != 200: return jsonify({"error": f"HTTP {r.status_code}"}), 502
+        data = r.json()
+        results = {}
+        rows = data if isinstance(data, list) else [data]
+        for row in rows:
+            sym = row.get("code", "")
+            results[sym] = {
+                "price": row.get("close") or row.get("last_trade"),
+                "open": row.get("open"),
+                "high": row.get("high"),
+                "low": row.get("low"),
+                "volume": row.get("volume"),
+                "changePct": row.get("change_p"),
+                "changeDiff": row.get("change"),
+                "timestamp": row.get("timestamp")
+            }
+        return jsonify({"prices": results, "ts": datetime.now(timezone.utc).isoformat()})
+    except Exception as e:
+        log.error(f"api_bulk_prices error: {e}")
+        return jsonify({"error": "Bulk prices failed"}), 500
 
 @app.route("/api/health")
 def health():

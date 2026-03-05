@@ -207,6 +207,17 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 .bt-prog-bar-wrap{width:100%;background:var(--border);border-radius:4px;height:6px;margin:12px 0;}
 .bt-prog-bar{height:6px;border-radius:4px;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width 0.3s;}
 .bt-errors{background:rgba(255,59,92,0.05);border:1px solid rgba(255,59,92,0.2);border-radius:8px;padding:12px 16px;margin-top:12px;font-size:11px;font-family:'Space Mono',monospace;color:var(--muted);}
+/* Yield Curve Widget */
+.yield-badge{display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:8px;background:var(--card);border:1px solid var(--border);font-family:'Space Mono',monospace;font-size:10px;cursor:default;}
+.yield-badge.normal{border-color:rgba(0,230,118,0.3);}
+.yield-badge.flat{border-color:rgba(245,158,11,0.3);}
+.yield-badge.inverted{border-color:rgba(255,59,92,0.4);animation:pulse-warn 2s infinite;}
+@keyframes pulse-warn{0%,100%{box-shadow:none;}50%{box-shadow:0 0 8px rgba(255,59,92,0.3);}}
+.yield-shape{font-weight:700;font-size:11px;}
+.yield-shape.normal{color:var(--bull);}
+.yield-shape.flat{color:var(--warn);}
+.yield-shape.inverted{color:var(--bear);}
+.yield-spread{color:var(--muted);font-size:9px;}
 /* Live Price Ticker Strip */
 .ticker-strip{display:flex;gap:6px;padding:10px 0;margin-bottom:12px;overflow-x:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
 .ticker-strip::-webkit-scrollbar{height:4px;}.ticker-strip::-webkit-scrollbar-track{background:transparent;}.ticker-strip::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
@@ -252,6 +263,11 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
         <span style="font-size:11px;color:var(--muted)">BTC:</span>
         <span id="btcBiasText" style="font-size:11px;font-weight:700;">—</span>
       </div>
+      <div class="yield-badge" id="yieldBadge" style="display:none" title="UST Yield Curve — 2Y/10Y spread. Inverted = recession risk">
+        <span style="font-size:9px;color:var(--muted);font-weight:700;">YIELD</span>
+        <span class="yield-shape" id="yieldShape">—</span>
+        <span class="yield-spread" id="yieldSpread"></span>
+      </div>
       <div class="session-badge">
         <div class="session-dot" id="sessionDot" style="background:#64748b"></div>
         <span id="sessionName" style="font-size:11px;">Loading...</span>
@@ -277,6 +293,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
   <div class="tab-bar">
     <button class="tab-btn active" id="tab-signals" onclick="switchTab('signals')">⚡ SIGNALS</button>
     <button class="tab-btn" id="tab-backtest" onclick="switchTab('backtest')">📊 BACKTEST</button>
+    <button class="tab-btn" id="tab-screener" onclick="switchTab('screener')">🔍 SCREENER</button>
   </div>
 
   <div class="tab-panel active" id="panel-signals">
@@ -330,6 +347,20 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
       </div>
     </div>
   </div><!-- /panel-backtest -->
+
+  <div class="tab-panel" id="panel-screener">
+    <div class="bt-controls">
+      <button class="bt-btn" id="scrRunBtn" onclick="runScreener()">&#128269; SCAN MOMENTUM STOCKS</button>
+      <span style="font-size:11px;color:var(--muted);font-family:'Space Mono',monospace">Top $50B+ cap stocks near 52-week highs &middot; Cross-referenced vs 70 tracked pairs</span>
+    </div>
+    <div id="scrContent">
+      <div class="empty-state">
+        <div class="icon">&#128269;</div>
+        <h3>Momentum Screener</h3>
+        <p>Discover high-cap stocks near 52-week highs not yet in your tracked universe.</p>
+      </div>
+    </div>
+  </div><!-- /panel-screener -->
 
 </div>
 
@@ -435,6 +466,84 @@ function updateTickerStrip(prices) {
   }).catch(function(){});
   setTimeout(pollPrices, 2500);
 })();
+
+// ── Phase E: Yield Curve Widget ──
+(function pollYieldCurve() {
+  fetch('/api/yield-curve').then(function(r){ return r.ok ? r.json() : null; }).then(function(yc) {
+    if (!yc || yc.error) return;
+    var badge = document.getElementById('yieldBadge');
+    var shape = document.getElementById('yieldShape');
+    var spread = document.getElementById('yieldSpread');
+    if (!badge || !shape) return;
+    badge.style.display = 'flex';
+    badge.className = 'yield-badge ' + yc.shape;
+    shape.className = 'yield-shape ' + yc.shape;
+    shape.textContent = yc.shape.toUpperCase();
+    if (spread) spread.textContent = '2Y/10Y: ' + (yc.spread_2_10 > 0 ? '+' : '') + yc.spread_2_10 + '%';
+    badge.title = 'UST Yield Curve: ' + yc.shape + ' | 2Y:' + yc.y2y + '% 10Y:' + yc.y10y + '% | ' + yc.riskContext;
+  }).catch(function(){});
+  setTimeout(pollYieldCurve, 3600000); // refresh every 1 hour
+})();
+
+// ── Phase C: Momentum Screener ──
+async function runScreener() {
+  var btn = document.getElementById('scrRunBtn');
+  btn.disabled = true; btn.textContent = '⏳ Scanning...';
+  document.getElementById('scrContent').innerHTML =
+    '<div class="bt-progress"><div style="font-size:14px;font-weight:700;margin-bottom:4px">Running Momentum Screener</div>' +
+    '<div style="font-size:11px;color:var(--muted);font-family:monospace">Fetching top $50B+ cap stocks near 52-week highs...</div></div>';
+  try {
+    var resp = await fetch('/api/screener-scan', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({})});
+    var data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    renderScreenerResults(data);
+  } catch(err) {
+    document.getElementById('scrContent').innerHTML = '<div class="bt-errors">&#9888; ' + err.message + '</div>';
+    showToast('Screener failed: ' + err.message, true);
+  } finally {
+    btn.disabled = false; btn.textContent = '🔍 SCAN MOMENTUM STOCKS';
+  }
+}
+
+function fmtCap(n) {
+  if (!n) return '—';
+  if (n >= 1e12) return '$' + (n/1e12).toFixed(1) + 'T';
+  if (n >= 1e9)  return '$' + (n/1e9).toFixed(1) + 'B';
+  return '$' + (n/1e6).toFixed(0) + 'M';
+}
+
+function renderScreenerResults(data) {
+  var html = '<h3 style="font-size:15px;font-weight:800;margin-bottom:4px">Momentum Screener Results</h3>' +
+    '<div style="font-size:10px;color:var(--muted);font-family:monospace;margin-bottom:16px">Scanned ' + data.totalScanned + ' stocks &middot; ' + data.scannedAt.slice(0,19).replace('T',' ') + ' UTC</div>';
+
+  if (data.newCandidates && data.newCandidates.length) {
+    html += '<div style="font-size:11px;font-family:monospace;color:var(--accent);font-weight:700;margin-bottom:8px;letter-spacing:0.04em">NEW CANDIDATES — Not yet in your 70 pairs</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-bottom:24px">';
+    data.newCandidates.forEach(function(c) {
+      html += '<div style="background:var(--card);border:1px solid rgba(0,212,255,0.2);border-radius:8px;padding:12px">' +
+        '<div style="font-size:12px;font-weight:800;color:var(--text)">' + c.symbol + '</div>' +
+        '<div style="font-size:10px;color:var(--muted);margin-bottom:8px">' + (c.name||'').slice(0,28) + '</div>' +
+        '<div style="font-size:10px;font-family:monospace;color:var(--muted)">Cap: ' + fmtCap(c.marketCap) + '</div>' +
+        (c['200dNewHi'] != null ? '<div style="font-size:10px;font-family:monospace;color:var(--bull)">200d High: ' + (c['200dNewHi']*100).toFixed(1) + '%</div>' : '') +
+        '</div>';
+    });
+    html += '</div>';
+  }
+
+  if (data.alreadyTracked && data.alreadyTracked.length) {
+    html += '<div style="font-size:11px;font-family:monospace;color:var(--muted);font-weight:700;margin-bottom:8px;letter-spacing:0.04em">ALREADY IN YOUR UNIVERSE</div>';
+    html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+    data.alreadyTracked.forEach(function(c) {
+      html += '<span style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:10px;font-family:monospace;color:var(--muted)">' + c.symbol + '</span>';
+    });
+    html += '</div>';
+  }
+
+  if (!data.newCandidates || !data.newCandidates.length) {
+    html += '<div class="empty-state"><div class="icon">✓</div><h3>All Top Stocks Tracked</h3><p>No new momentum candidates found outside your 70 pairs.</p></div>';
+  }
+  document.getElementById('scrContent').innerHTML = html;
+}
 
 // Populate backtest pair selector — all 70 pairs grouped by category
 (function populateBtSelect(){
