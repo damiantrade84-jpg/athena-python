@@ -1,4 +1,0 @@
-{"ts": "2026-03-05T06:57:17.167301+00:00", "pair": "XAG/USD", "score": 7, "direction": "LONG", "trendState": "TRENDING", "grade": "B", "edgeProbability": 39, "riskLevel": "High", "style": "auto"}
-{"ts": "2026-03-05T06:57:27.816525+00:00", "pair": "Naspers", "score": 7, "direction": "LONG", "trendState": "TRENDING", "grade": "B", "edgeProbability": null, "riskLevel": null, "style": "auto"}
-{"ts": "2026-03-05T11:24:29.793403+00:00", "pair": "Prosus", "score": 6, "direction": "SHORT", "trendState": "RANGING", "grade": "F", "edgeProbability": 24, "riskLevel": "High", "style": "auto"}
-{"ts": "2026-03-05T11:24:31.118909+00:00", "pair": "Naspers", "score": 6, "direction": "SHORT", "trendState": "DEAD RANGING", "grade": "F", "edgeProbability": 18, "riskLevel": "High", "style": "auto"}
