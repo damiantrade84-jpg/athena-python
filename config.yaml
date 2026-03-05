@@ -1,0 +1,63 @@
+# Athena v3.0 — Tunable thresholds (override CONFIG defaults)
+# Edit this file and restart to apply changes — no code deploy needed.
+
+# Per-class D1 ADX trend minimum
+ADX_TREND_MIN_CLASS:
+  crypto: 20
+  forex: 22
+  commodity: 25
+  stock: 25
+  index: 25
+
+# Per-class counter-trend penalty
+COUNTER_TREND_PEN:
+  crypto: -1.5
+  forex: -2.0
+  commodity: -3.0
+  stock: -3.0
+  index: -3.0
+
+# Per-class RSI bounds
+RSI_BOUNDS:
+  crypto:    { ob: 88, os: 15 }
+  forex:     { ob: 80, os: 20 }
+  commodity: { ob: 78, os: 22 }
+  stock:     { ob: 78, os: 22 }
+  index:     { ob: 78, os: 22 }
+
+# Per-class backtest macro lookback (D1 bars)
+MACRO_LOOKBACK:
+  crypto: 15
+  forex: 30
+  commodity: 50
+  stock: 50
+  index: 50
+
+# Per-class Weinstein lookback (D1 bars)
+WEINSTEIN_LOOKBACK:
+  crypto: 60
+  forex: 100
+  commodity: 150
+  stock: 150
+  index: 150
+
+# Per-class backtest minimum score
+BT_MIN:
+  crypto: 8.0
+  commodity: 6.0
+  forex: 6.5
+  stock: 6.0
+  index: 6.0
+
+# Per-class live scan minimum confluence
+MIN_CONFLUENCE_CLASS:
+  crypto: 8.0
+  commodity: 6.0
+  forex: 6.5
+  stock: 6.0
+  index: 6.0
+
+# Risk settings
+RISK_PCT: 0.01
+MIN_CONFLUENCE: 7.0
+VOLUME_THRESHOLD: 1.5
