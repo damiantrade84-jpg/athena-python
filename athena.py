@@ -6,7 +6,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(line_buffering=True)
-import os, sys, json, math, time, threading, webbrowser, logging
+import os, sys, json, math, time, threading, webbrowser, logging, sqlite3
 from datetime import datetime, timezone
 from flask import Flask, jsonify, request, send_from_directory
 import requests as _requests_mod
@@ -1789,6 +1789,29 @@ def run_full_backtest():
     results.sort(key=lambda x: x["sqn"] if x["sqn"] is not None else -999, reverse=True)
     return {"success": True, "results": results, "errors": errors, "totalPairs": len(ALL_PAIRS)}
 
+def _init_audit_db(db_path: str) -> None:
+    """Create audit table if it doesn't exist."""
+    con = sqlite3.connect(db_path)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts        TEXT NOT NULL,
+            pair      TEXT,
+            score     REAL,
+            direction TEXT,
+            trend     TEXT,
+            grade     TEXT,
+            edge_prob REAL,
+            risk      TEXT,
+            style     TEXT
+        )
+    """)
+    con.commit()
+    con.close()
+
+_AUDIT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
+_init_audit_db(_AUDIT_DB)
+
 app=Flask(__name__,static_folder="static")
 
 @app.route("/")
@@ -1812,18 +1835,19 @@ def api_analyze():
         news_ctx = sig.get("newsCtx") or fetch_news_context()
         style_pref = d.get("stylePreference", "auto")
         result = run_ai(sig, news_ctx, style_pref)
-        # N9: Audit log — append every AI analysis to audit.jsonl
+        # N9: Audit log — persist every AI analysis to SQLite
         try:
-            _audit_entry = {"ts":datetime.now(timezone.utc).isoformat(),"pair":sig.get("pair"),
-                "score":sig.get("confluenceScore"),"direction":sig.get("direction"),
-                "trendState":sig.get("trendState"),"grade":result.get("grade"),
-                "edgeProbability":result.get("edgeProbability"),"riskLevel":result.get("riskLevel"),
-                "style":style_pref}
-            _audit_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.jsonl")
-            with open(_audit_path, "a") as _af:
-                _af.write(json.dumps(_audit_entry)+"\n")
+            _con = sqlite3.connect(_AUDIT_DB)
+            _con.execute(
+                "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style) VALUES(?,?,?,?,?,?,?,?,?)",
+                (datetime.now(timezone.utc).isoformat(), sig.get("pair"), sig.get("confluenceScore"),
+                 sig.get("direction"), sig.get("trendState"), result.get("grade"),
+                 result.get("edgeProbability"), result.get("riskLevel"), style_pref)
+            )
+            _con.commit()
+            _con.close()
         except Exception as _ae:
-            log.warning(f"Audit log write failed: {_ae}")
+            log.warning(f"Audit DB write failed: {_ae}")
         return jsonify(result)
     except Exception as e:
         # S2: Sanitise exception — don't leak internal paths
@@ -2008,6 +2032,21 @@ def health():
         "pairs":len(ALL_PAIRS),"activePairs":len(ACTIVE_PAIRS),
         "dataSource":"yfinance+binance",
         "anthropicKey":CONFIG["ANTHROPIC_KEY"]!="YOUR_ANTHROPIC_API_KEY"})
+
+@app.route("/api/audit")
+def api_audit():
+    """Return last N audit log entries from SQLite."""
+    limit = min(int(request.args.get("limit", 50)), 500)
+    try:
+        con = sqlite3.connect(_AUDIT_DB)
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        con.close()
+        return jsonify([dict(r) for r in rows])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__=="__main__":
     log.info("="*60)
