@@ -305,7 +305,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
       </div>
       <div class="binance-badge disconnected" id="binanceBadge" title="Binance not connected" onclick="showBinanceStatus()">
         <span class="binance-dot off" id="binanceDot"></span>
-        <span id="binanceLabel">BNB: OFF</span>
+        <span id="binanceLabel">Binance: OFF</span>
       </div>
       <div class="yield-badge" id="yieldBadge" style="display:none" title="UST Yield Curve — 2Y/10Y spread. Inverted = recession risk">
         <span style="font-size:9px;color:var(--muted);font-weight:700;">YIELD</span>
@@ -1188,16 +1188,16 @@ window._binanceAccount = null;
       window._binanceAccount = d.account;
       badge.className = 'binance-badge connected';
       dot.className = 'binance-dot on';
-      label.textContent = 'BNB: $' + (d.account.balance||0).toLocaleString();
+      label.textContent = 'Binance: $' + (d.account.balance||0).toLocaleString();
       badge.title = 'Binance Connected | Exchange: ' + d.account.exchange + ' | Free: $' + (d.account.freeBalance||0).toLocaleString();
       document.querySelectorAll('.exec-btn').forEach(function(b){
-        if (b.textContent.indexOf('Binance') > -1) { b.disabled = false; b.removeAttribute('title'); }
+        if (b.textContent.indexOf('Binance') > -1 || b.textContent.indexOf('(Binance)') > -1) { b.disabled = false; b.removeAttribute('title'); }
       });
     } else {
       window._binanceConnected = false;
       badge.className = 'binance-badge disconnected';
       dot.className = 'binance-dot off';
-      label.textContent = 'BNB: OFF';
+      label.textContent = 'Binance: OFF';
       badge.title = 'Binance not connected — check API keys';
     }
   }).catch(function(){});
@@ -1216,14 +1216,18 @@ window._binanceAccount = null;
       dot.className = 'mt5-dot on';
       label.textContent = 'MT5: $' + (d.account.balance||0).toLocaleString();
       badge.title = 'MT5 Connected | Server: ' + d.account.server + ' | Equity: $' + (d.account.equity||0).toLocaleString() + ' | Positions: ' + d.openPositions;
-      document.querySelectorAll('.exec-btn').forEach(function(b){ b.disabled = false; b.removeAttribute('title'); });
+      document.querySelectorAll('.exec-btn').forEach(function(b){
+        if (b.textContent.indexOf('Binance') === -1) { b.disabled = false; b.removeAttribute('title'); }
+      });
     } else {
       window._mt5Connected = false;
       badge.className = 'mt5-badge disconnected';
       dot.className = 'mt5-dot off';
       label.textContent = 'MT5: OFF';
       badge.title = 'MT5 not connected — start MT5 terminal';
-      document.querySelectorAll('.exec-btn').forEach(function(b){ b.disabled = true; b.title = 'MT5 not connected'; });
+      document.querySelectorAll('.exec-btn').forEach(function(b){
+        if (b.textContent.indexOf('Binance') === -1) { b.disabled = true; b.title = 'MT5 not connected'; }
+      });
     }
   }).catch(function(){});
   setTimeout(pollMT5, 10000);
@@ -1251,16 +1255,19 @@ function showBinanceStatus() {
 function confirmExecute(symbol) {
   var sig = allSignals.find(function(s){ return s.symbol === symbol; });
   if (!sig) return;
-  if (!window._mt5Connected) { showToast('MT5 not connected', true); return; }
+  var isCrypto = sig.type === 'crypto';
+  if (isCrypto && !window._binanceConnected) { showToast('Binance not connected', true); return; }
+  if (!isCrypto && !window._mt5Connected) { showToast('MT5 not connected', true); return; }
   var dir = sig.direction;
   var dirColor = dir === 'LONG' ? 'var(--bull)' : 'var(--bear)';
-  var acct = window._mt5Account || {};
+  var acct = isCrypto ? (window._binanceAccount || {}) : (window._mt5Account || {});
+  var via = isCrypto ? 'Binance' : 'MT5';
   var riskAmt = ((acct.balance || 500) * 0.01).toFixed(2);
   var overlay = document.createElement('div');
   overlay.className = 'exec-modal-overlay';
   overlay.onclick = function(e) { if (e.target === overlay) document.body.removeChild(overlay); };
   overlay.innerHTML = '<div class="exec-modal">' +
-    '<h3 style="color:' + dirColor + '">' + (dir==='LONG'?'▲':'▼') + ' EXECUTE ' + dir + ' — ' + sig.display + '</h3>' +
+    '<h3 style="color:' + dirColor + '">' + (dir==='LONG'?'▲':'▼') + ' EXECUTE ' + dir + ' — ' + sig.display + ' (' + via + ')</h3>' +
     '<div class="exec-summary">' +
       '<div>Pair: <strong>' + sig.display + '</strong></div>' +
       '<div>Direction: <strong style="color:' + dirColor + '">' + dir + '</strong></div>' +
@@ -1271,7 +1278,7 @@ function confirmExecute(symbol) {
       '<div>Score: <strong>' + sig.confluenceScore + '/' + (sig.maxScore||13) + '</strong></div>' +
       '<div>Account: <strong>$' + (acct.balance||0).toLocaleString() + '</strong></div>' +
       '<div>Risk (1%): <strong style="color:var(--accent)">$' + riskAmt + '</strong></div>' +
-      '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);color:var(--warn);font-size:10px">Position size will be calculated by the risk engine based on your MT5 account balance and SL distance.</div>' +
+      '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);color:var(--warn);font-size:10px">Position size will be calculated by the risk engine based on your ' + via + ' account balance and SL distance.</div>' +
     '</div>' +
     '<div class="exec-actions">' +
       '<button class="exec-cancel" onclick="this.closest(\'.exec-modal-overlay\').remove()">CANCEL</button>' +

@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(where py)",
+      "Bash(where python)",
+      "Bash(where python3)",
+      "Bash(ls /c/Python*/python.exe)",
+      "Read(//c/Users/damia/AppData/Local/Programs/**)",
+      "Bash(py:*)"
+    ]
+  }
+}

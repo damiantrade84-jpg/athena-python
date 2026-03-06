@@ -5,7 +5,6 @@ No code path bypasses this module. Even on demo. Even for manual clicks.
 """
 import logging
 import math
-import time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 
@@ -79,7 +78,7 @@ def _count_correlated(pair_display: str, open_positions: list) -> int:
 
 
 def _calc_volume(account_balance: float, entry_price: float, sl_price: float,
-                 symbol_info: dict | None = None) -> float:
+                 symbol_info: dict | None = None, asset_type: str = "") -> float:
     """Calculate position size in lots from risk budget and SL distance.
 
     symbol_info may contain: volume_min, volume_max, volume_step, trade_contract_size, point
@@ -90,9 +89,16 @@ def _calc_volume(account_balance: float, entry_price: float, sl_price: float,
     if sl_distance == 0 or entry_price == 0:
         return 0.0
 
-    # Default forex-like lot: 1 lot = 100,000 units
-    contract_size = 100_000
-    point = 0.00001  # 5-digit broker default
+    is_crypto = asset_type == "crypto"
+
+    # Crypto: 1 unit = 1 unit, tick_value = tick_size (USDT pairs)
+    # Forex: 1 lot = 100,000 units, 5-digit broker default
+    if is_crypto:
+        contract_size = 1
+        point = 0.01
+    else:
+        contract_size = 100_000
+        point = 0.00001  # 5-digit broker default
 
     if symbol_info:
         contract_size = symbol_info.get("trade_contract_size", contract_size)
@@ -120,9 +126,14 @@ def _calc_volume(account_balance: float, entry_price: float, sl_price: float,
              f"ticks={ticks_in_sl:.1f}, tick_val={tick_value}, risk/lot=${risk_per_lot:.2f}, raw_vol={volume:.4f}")
 
     # Clamp to symbol constraints
-    vol_min = symbol_info.get("volume_min", 0.01) if symbol_info else 0.01
-    vol_max = symbol_info.get("volume_max", 100.0) if symbol_info else 100.0
-    vol_step = symbol_info.get("volume_step", 0.01) if symbol_info else 0.01
+    if is_crypto:
+        vol_min = symbol_info.get("volume_min", 0.001) if symbol_info else 0.001
+        vol_max = symbol_info.get("volume_max", 9999.0) if symbol_info else 9999.0
+        vol_step = symbol_info.get("volume_step", 0.001) if symbol_info else 0.001
+    else:
+        vol_min = symbol_info.get("volume_min", 0.01) if symbol_info else 0.01
+        vol_max = symbol_info.get("volume_max", 100.0) if symbol_info else 100.0
+        vol_step = symbol_info.get("volume_step", 0.01) if symbol_info else 0.01
 
     if volume < vol_min:
         log.warning(f"[RISK] volume {volume:.6f} < vol_min {vol_min} — too small")
@@ -131,7 +142,7 @@ def _calc_volume(account_balance: float, entry_price: float, sl_price: float,
     # Round down to nearest step
     volume = math.floor(volume / vol_step) * vol_step if vol_step > 0 else volume
     volume = min(volume, vol_max)
-    volume = round(volume, 2)
+    volume = round(volume, 6 if is_crypto else 2)
 
     return volume
 
@@ -179,8 +190,8 @@ def risk_check(signal: dict, account_balance: float, account_equity: float,
                 log.warning(f"{prefix} REJECTED: signal is {age:.0f}s old (max {_EXEC['SIGNAL_MAX_AGE_SEC']}s)")
                 return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "STALE_SIGNAL")
         except (ValueError, TypeError):
-            pass  # Can't parse timestamp — allow execution but log
-            log.warning(f"{prefix} could not parse signal timestamp: {ts_str}")
+            log.warning(f"{prefix} REJECTED: could not parse signal timestamp: {ts_str}")
+            return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "UNPARSEABLE_TIMESTAMP")
 
     # ── Check 2: Drawdown circuit breaker ───────────────────────────────────
     dd = _current_drawdown(account_equity)
@@ -211,14 +222,16 @@ def risk_check(signal: dict, account_balance: float, account_equity: float,
         log.warning(f"{prefix} REJECTED: invalid entry={entry} or sl={sl}")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "INVALID_LEVELS")
 
-    volume = _calc_volume(account_balance, entry, sl, symbol_info)
-    volume = round(volume * dd_factor, 2)  # Apply drawdown reduction
+    asset_type = signal.get("type", "")
+    volume = _calc_volume(account_balance, entry, sl, symbol_info, asset_type)
+    is_crypto = asset_type == "crypto"
+    volume = round(volume * dd_factor, 6 if is_crypto else 2)  # Apply drawdown reduction
 
     # Re-clamp after dd_factor
     if symbol_info:
-        vol_step = symbol_info.get("volume_step", 0.01)
+        vol_step = symbol_info.get("volume_step", 0.001 if is_crypto else 0.01)
         volume = math.floor(volume / vol_step) * vol_step if vol_step > 0 else volume
-        volume = round(volume, 2)
+        volume = round(volume, 6 if is_crypto else 2)
 
     if volume <= 0:
         log.warning(f"{prefix} REJECTED: calculated volume is 0 (balance={account_balance}, SL dist={abs(entry-sl):.6f})")
@@ -226,8 +239,14 @@ def risk_check(signal: dict, account_balance: float, account_equity: float,
 
     # ── Check 6: Risk amount validation ─────────────────────────────────────
     sl_distance = abs(entry - sl)
-    tick_size = symbol_info.get("trade_tick_size", 0.00001) if symbol_info else 0.00001
-    tick_value = symbol_info.get("trade_tick_value", 0.00001 * 100_000) if symbol_info else 1.0
+    if is_crypto:
+        _default_tick = 0.01
+        _default_tick_val = 0.01
+    else:
+        _default_tick = 0.00001
+        _default_tick_val = 1.0
+    tick_size = symbol_info.get("trade_tick_size", _default_tick) if symbol_info else _default_tick
+    tick_value = symbol_info.get("trade_tick_value", _default_tick_val) if symbol_info else _default_tick_val
     ticks_in_sl = sl_distance / tick_size if tick_size > 0 else 0
     risk_amount = ticks_in_sl * tick_value * volume
 

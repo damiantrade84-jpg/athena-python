@@ -61,7 +61,7 @@ def detect_div(d1c: list, h4c: list, h1c: list) -> list:
 CORR_CLUSTERS: dict = {
     "metals":    ["XAU/USD", "XAG/USD", "GLD"],
     "defi":      ["SOL/USDT", "AVAX/USDT", "LINK/USDT", "BNB/USDT", "ETH/USDT", "INJ/USDT", "NEAR/USDT"],
-    "ai_crypto": ["FET/USDT", "RENDER/USDT", "NEAR/USDT"],
+    "ai_crypto": ["FET/USDT", "RENDER/USDT"],
     "forex_usd": ["EUR/USD", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CHF", "USD/CAD", "USD/ZAR", "USD/MXN", "USD/SGD"],
     "forex_jpy": ["EUR/JPY", "GBP/JPY", "AUD/JPY"],
     "jse":       ["Naspers", "Sasol", "Std Bank", "Anglo Am", "MTN Group", "Shoprite",

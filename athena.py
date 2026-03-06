@@ -373,7 +373,15 @@ def fetch_yfinance(sym, tf, limit):
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [col[0] for col in df.columns]
         if tf == "H4":
-            df = df.resample("4h").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna()
+            # Column-by-column resample — avoids pandas version issues with .agg(dict)
+            vol_col = df["Volume"] if "Volume" in df.columns else pd.Series(0.0, index=df.index)
+            df = pd.DataFrame({
+                "Open":   df["Open"].resample("4h").first(),
+                "High":   df["High"].resample("4h").max(),
+                "Low":    df["Low"].resample("4h").min(),
+                "Close":  df["Close"].resample("4h").last(),
+                "Volume": vol_col.resample("4h").sum(),
+            }).dropna(subset=["Open", "Close"])
         df = df.tail(limit)
         return [{"time":str(idx.date() if tf=="D1" else idx),"open":float(r["Open"]),"high":float(r["High"]),"low":float(r["Low"]),"close":float(r["Close"]),"vol":float(r.get("Volume",0))} for idx,r in df.iterrows()]
     except Exception as e: log.error(f"[YF] {sym}: {e}"); return None
@@ -423,7 +431,15 @@ def fetch_eodhd(pair, tf, limit):
                 import pandas as pd
                 df = pd.DataFrame(candles)
                 df["time"] = pd.to_datetime(df["time"])
-                df = df.set_index("time").resample("4h").agg({"open":"first","high":"max","low":"min","close":"last","vol":"sum"}).dropna()
+                df = df.set_index("time")
+                # Column-by-column resample — avoids pandas version issues with .agg(dict)
+                df = pd.DataFrame({
+                    "open":  df["open"].resample("4h").first(),
+                    "high":  df["high"].resample("4h").max(),
+                    "low":   df["low"].resample("4h").min(),
+                    "close": df["close"].resample("4h").last(),
+                    "vol":   df["vol"].resample("4h").sum(),
+                }).dropna(subset=["open", "close"])
                 candles = [{"time": str(idx), "open": float(r["open"]), "high": float(r["high"]),
                             "low": float(r["low"]), "close": float(r["close"]), "vol": float(r["vol"])}
                            for idx, r in df.iterrows()]
@@ -1098,8 +1114,20 @@ def backtest_pair(pair):
             if h1_df is None or h1_df.empty: h1_df = None
             elif isinstance(h1_df.columns, pd.MultiIndex): h1_df.columns = [col[0] for col in h1_df.columns]
             d1_raw = df_to_candles(d1_df)
-            h4_raw = df_to_candles(h1_df.resample("4h").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna()) if h1_df is not None else None
-            h1_raw = df_to_candles(h1_df) if h1_df is not None else None
+            if h1_df is not None:
+                vol_col = h1_df["Volume"] if "Volume" in h1_df.columns else pd.Series(0.0, index=h1_df.index)
+                h4_df = pd.DataFrame({
+                    "Open":   h1_df["Open"].resample("4h").first(),
+                    "High":   h1_df["High"].resample("4h").max(),
+                    "Low":    h1_df["Low"].resample("4h").min(),
+                    "Close":  h1_df["Close"].resample("4h").last(),
+                    "Volume": vol_col.resample("4h").sum(),
+                }).dropna(subset=["Open", "Close"])
+                h4_raw = df_to_candles(h4_df)
+                h1_raw = df_to_candles(h1_df)
+            else:
+                h4_raw = None
+                h1_raw = None
         if not d1_raw: return {"error": f"No D1 data for {pair['display']}"}
         if not h4_raw or not h1_raw: return {"error": f"No H4/H1 data for {pair['display']}"}
         if len(d1_raw) < 230: return {"error": f"Insufficient D1 history for {pair['display']} ({len(d1_raw)} bars)"}
@@ -1208,6 +1236,11 @@ def backtest_pair(pair):
         sl = lvl["sl"]; tp1 = lvl["tp1"]; tp2 = lvl["tp2"]
         sl_mult = lvl["mults"]["sl"]; tp1_mult = lvl["mults"]["tp1"]; tp2_mult = lvl["mults"]["tp2"]
         rr1 = lvl["rr1"]
+        # Validate levels are finite and meaningful — NaN/0 levels cause ghost OPEN trades
+        if not all(math.isfinite(v) and v > 0 for v in (sl, tp1, tp2)):
+            i += 1; continue
+        if abs(entry - sl) < entry * 0.0001:  # SL less than 0.01% from entry — invalid
+            i += 1; continue
         # V3: Structure-based stops for crypto — use wider of ATR-stop vs swing-stop
         if _ptype == "crypto":
             _recent = d1_window[-10:]
@@ -1238,7 +1271,18 @@ def backtest_pair(pair):
                 if bar["high"] >= sl:  outcome = "SL";  result_r = -1.0; exit_bar = j; break
                 if bar["low"] <= tp2:  outcome = "TP2"; result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult)); exit_bar = j; break
                 if bar["low"] <= tp1:  outcome = "TP1"; result_r = rr1 - (slip / (atr * sl_mult)); exit_bar = j; break
-        if outcome == "OPEN": result_r = 0.0
+        if outcome == "OPEN":
+            # Force-close at last forward bar — record actual P&L vs recording a ghost 0R
+            _last_fwd = d1_raw[min(i + 20, total_bars - 1)]
+            _exit_px = _last_fwd["close"]
+            _sl_dist = abs(entry - sl)
+            if _sl_dist > 0 and math.isfinite(_exit_px):
+                result_r = ((_exit_px - entry) / _sl_dist if direction == "LONG"
+                            else (entry - _exit_px) / _sl_dist)
+                result_r = round(max(-5.0, min(5.0, result_r)), 2)  # cap outliers
+            else:
+                result_r = 0.0
+            outcome = "TIMEOUT"
         risk_mult = CONFIG["RISK_MULT"].get(_ptype, 1.0)
         # T1: Apply volatility adjustment to position size
         equity_change = result_r * CONFIG["RISK_PCT"] * risk_mult * _vol_adj
@@ -1255,12 +1299,12 @@ def backtest_pair(pair):
             "outcome": outcome, "resultR": round(result_r, 2),
             "regime": _regime, "oos": i >= _oos_start, "volAdj": _vol_adj
         })
-        if outcome != "OPEN": last_exit_bar = exit_bar
+        if outcome not in ("OPEN",): last_exit_bar = exit_bar
         i = exit_bar + 1 if outcome != "OPEN" else i + 1
 
     if not trades: return {"error": f"No signals generated for {pair['display']} (threshold too high or insufficient data)"}
-    wins = [t for t in trades if t["outcome"] in ("TP1","TP2")]
-    losses = [t for t in trades if t["outcome"] == "SL"]
+    wins   = [t for t in trades if t["outcome"] in ("TP1","TP2") or (t["outcome"] == "TIMEOUT" and t["resultR"] > 0)]
+    losses = [t for t in trades if t["outcome"] == "SL"          or (t["outcome"] == "TIMEOUT" and t["resultR"] <= 0)]
     gross_profit = sum(t["resultR"] for t in wins)
     gross_loss   = abs(sum(t["resultR"] for t in losses))
     win_rate     = round(len(wins) / len(trades) * 100, 1) if trades else 0
@@ -1454,8 +1498,7 @@ def api_execute():
             account = ccxt_get_account()
             if not account:
                 return jsonify({"error": "Binance not connected. Set BINANCE_API_KEY and BINANCE_API_SECRET in .env"}), 503
-            # Only count positions with tracked risk (not pre-loaded testnet balances)
-            positions = [p for p in ccxt_get_positions() if p.get("risk_amount", 0) > 0]
+            positions = ccxt_get_positions()
             symbol_info = ccxt_get_symbol_info(pair)
         else:
             from mt5_executor import mt5_get_account, mt5_get_positions, mt5_get_symbol_info, mt5_execute

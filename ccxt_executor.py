@@ -6,7 +6,6 @@ All orders must arrive as a pre-validated RiskApproval from risk_engine.py.
 """
 import os
 import logging
-import time
 
 log = logging.getLogger("athena")
 
@@ -154,7 +153,11 @@ def ccxt_get_account() -> dict | None:
 
 
 def ccxt_get_positions() -> list:
-    """Get open positions (for spot, this is non-zero balances)."""
+    """Get open positions (for spot, this is non-zero balances).
+
+    Estimates risk_amount from position value so crypto positions count
+    toward portfolio heat and max-position checks in risk_engine.
+    """
     exchange = _get_exchange()
     if not exchange:
         return []
@@ -164,18 +167,32 @@ def ccxt_get_positions() -> list:
         # Only count coins we actually trade (our 18 tracked crypto pairs)
         tracked_coins = {sym.replace("USDT", "") for sym in _INTERNAL_TO_CCXT}
         positions = []
+        # Fetch prices for all tracked pairs in one call for risk estimation
+        prices = {}
+        try:
+            tracked_symbols = [f"{c}/USDT" for c in tracked_coins]
+            tickers = exchange.fetch_tickers(tracked_symbols)
+            for sym, tick in tickers.items():
+                coin = sym.split("/")[0]
+                prices[coin] = tick.get("last", 0) or 0
+        except Exception as te:
+            log.debug(f"[CCXT] Could not fetch tickers for risk estimation: {te}")
         for coin, amounts in balance.items():
             if not isinstance(amounts, dict) or coin in skip_keys:
                 continue
             total = amounts.get("total", 0) or 0
             if total <= 0 or coin not in tracked_coins:
                 continue
+            # Estimate risk: position_value * assumed 2% SL distance
+            price = prices.get(coin, 0)
+            pos_value = total * price
+            est_risk = round(pos_value * 0.02, 2) if pos_value > 0 else 0
             positions.append({
                 "pair": f"{coin}/USDT",
                 "symbol": f"{coin}USDT",
                 "volume": total,
                 "free": amounts.get("free", 0),
-                "risk_amount": 0,
+                "risk_amount": est_risk,
             })
         return positions
     except Exception as e:
@@ -282,10 +299,13 @@ def ccxt_execute(signal: dict, approval: "RiskApproval") -> dict:
             return {"success": False, "error": f"NO_PRICE_DATA: {ccxt_symbol}"}
 
         # If volume looks like forex lots (e.g. 0.05), convert to crypto units
-        # Risk amount / price = units to buy
-        if volume < 1 and price > 100:
-            volume = approval.risk_amount / (abs(signal.get("price", price) - signal.get("sl", price * 0.98)) or 1)
-            volume = round(volume, 6)
+        # Risk amount / SL distance = units to buy
+        sl = signal.get("sl", 0)
+        if volume < 1 and price > 100 and sl > 0:
+            sl_dist = abs(signal.get("price", price) - sl)
+            if sl_dist > 0:
+                volume = approval.risk_amount / sl_dist
+                volume = round(volume, 6)
 
         log.info(f"[CCXT] Placing market BUY: {volume} {ccxt_symbol} @ ~{price}")
 
