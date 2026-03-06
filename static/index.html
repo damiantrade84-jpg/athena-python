@@ -143,6 +143,34 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 .analyze-btn:hover{background:rgba(0,212,255,0.15);border-color:var(--accent);}
 .analyze-btn:disabled{opacity:0.5;cursor:not-allowed;}
 
+/* Execute Button */
+.exec-btn{width:100%;padding:12px;border-radius:8px;border:none;cursor:pointer;font-family:'Syne',sans-serif;font-size:13px;font-weight:800;letter-spacing:0.06em;transition:all 0.2s;margin-top:8px;}
+.exec-btn.LONG{background:linear-gradient(135deg,rgba(0,230,118,0.2),rgba(0,230,118,0.08));border:1px solid rgba(0,230,118,0.4);color:var(--bull);}
+.exec-btn.LONG:hover{background:rgba(0,230,118,0.3);box-shadow:0 0 20px rgba(0,230,118,0.2);}
+.exec-btn.SHORT{background:linear-gradient(135deg,rgba(255,59,92,0.2),rgba(255,59,92,0.08));border:1px solid rgba(255,59,92,0.4);color:var(--bear);}
+.exec-btn.SHORT:hover{background:rgba(255,59,92,0.3);box-shadow:0 0 20px rgba(255,59,92,0.2);}
+.exec-btn:disabled{opacity:0.4;cursor:not-allowed;box-shadow:none;}
+.exec-btn .exec-detail{font-size:10px;font-family:'Space Mono',monospace;font-weight:400;opacity:0.8;display:block;margin-top:3px;}
+
+/* MT5 Status Badge */
+.mt5-badge{display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:8px;background:var(--card);border:1px solid var(--border);font-family:'Space Mono',monospace;font-size:10px;cursor:pointer;transition:border-color 0.3s;}
+.mt5-badge.connected{border-color:rgba(0,230,118,0.3);}
+.mt5-badge.disconnected{border-color:rgba(255,59,92,0.3);}
+.mt5-dot{width:6px;height:6px;border-radius:50%;}
+.mt5-dot.on{background:var(--bull);animation:pulse 2s infinite;}
+.mt5-dot.off{background:var(--bear);}
+
+/* Confirm Modal */
+.exec-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center;}
+.exec-modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px;max-width:440px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.6);}
+.exec-modal h3{font-size:16px;margin-bottom:16px;}
+.exec-modal .exec-summary{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:16px;font-family:'Space Mono',monospace;font-size:11px;line-height:1.8;}
+.exec-modal .exec-actions{display:flex;gap:10px;justify-content:flex-end;}
+.exec-modal .exec-cancel{padding:10px 20px;border-radius:8px;background:transparent;border:1px solid var(--border);color:var(--muted);cursor:pointer;font-family:'Syne',sans-serif;font-weight:700;font-size:12px;}
+.exec-modal .exec-confirm{padding:10px 20px;border-radius:8px;border:none;cursor:pointer;font-family:'Syne',sans-serif;font-weight:800;font-size:12px;letter-spacing:0.04em;}
+.exec-confirm.LONG{background:var(--bull);color:#000;}
+.exec-confirm.SHORT{background:var(--bear);color:#fff;}
+
 .trade-style{padding:3px 10px;border-radius:12px;font-size:10px;font-weight:700;letter-spacing:0.06em;font-family:'Space Mono',monospace;margin-left:6px;}
 .trade-style.SCALP{background:rgba(245,158,11,0.15);color:#f59e0b;border:1px solid rgba(245,158,11,0.3);}
 .trade-style.INTRADAY{background:rgba(0,212,255,0.15);color:#00d4ff;border:1px solid rgba(0,212,255,0.3);}
@@ -262,6 +290,10 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
       <div class="btc-badge" id="btcBadge" style="display:none">
         <span style="font-size:11px;color:var(--muted)">BTC:</span>
         <span id="btcBiasText" style="font-size:11px;font-weight:700;">—</span>
+      </div>
+      <div class="mt5-badge disconnected" id="mt5Badge" title="MT5 not connected" onclick="showMT5Status()">
+        <span class="mt5-dot off" id="mt5Dot"></span>
+        <span id="mt5Label">MT5: OFF</span>
       </div>
       <div class="yield-badge" id="yieldBadge" style="display:none" title="UST Yield Curve — 2Y/10Y spread. Inverted = recession risk">
         <span style="font-size:9px;color:var(--muted);font-weight:700;">YIELD</span>
@@ -1018,8 +1050,24 @@ function buildCard(s,idx) {
         '<span class="pos-size-result" id="ps-'+sid+'">$'+(accountSize*0.01).toFixed(2)+'</span>'+
       '</div>'+
       aiSection+
+      buildExecButton(s)+
     '</div>'+
   '</div>';
+}
+
+function buildExecButton(s) {
+  if (s.signalTier === 'watchlist') return '';
+  var dir = s.direction;
+  var sid = (s.symbol||'').replace(/[\/=^.]/g,'_');
+  if (s.type === 'crypto' && dir === 'SHORT') return '<div style="text-align:center;font-size:10px;color:var(--muted);font-family:Space Mono,monospace;padding:8px;margin-top:8px;border:1px dashed var(--border);border-radius:6px">SHORT not supported on Binance Spot</div>';
+  var isCrypto = s.type === 'crypto';
+  var disabled = isCrypto ? !window._binanceConnected : !window._mt5Connected;
+  var disTitle = isCrypto ? 'Binance not connected' : 'MT5 not connected';
+  var via = isCrypto ? ' (Binance)' : '';
+  return '<button class="exec-btn '+dir+'" id="execbtn-'+sid+'" onclick="confirmExecute(\''+s.symbol+'\')" '+(disabled?'disabled title="'+disTitle+'"':'')+'>'+
+    (dir==='LONG'?'▲':'▼')+' EXECUTE '+dir+via+
+    '<span class="exec-detail">'+s.display+' @ '+fmtPrice(s.price)+' | SL: '+fmtPrice(s.sl)+' | TP: '+fmtPrice(s.tp1)+'</span>'+
+  '</button>';
 }
 
 function updateAcct(val) {
@@ -1110,6 +1158,126 @@ function fmtPrice(p) {
   if(p>1000) return p.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
   if(p>10) return p.toFixed(4);
   return p.toFixed(5);
+}
+
+// ── MT5 & Binance Status ──
+window._mt5Connected = false;
+window._mt5Account = null;
+window._binanceConnected = false;
+window._binanceAccount = null;
+
+(function pollBinance() {
+  fetch('/api/binance-status').then(function(r){ return r.json(); }).then(function(d) {
+    if (d.connected) {
+      window._binanceConnected = true;
+      window._binanceAccount = d.account;
+      document.querySelectorAll('.exec-btn').forEach(function(b){
+        if (b.textContent.indexOf('Binance') > -1) { b.disabled = false; b.removeAttribute('title'); }
+      });
+    } else {
+      window._binanceConnected = false;
+    }
+  }).catch(function(){});
+  setTimeout(pollBinance, 15000);
+})();
+
+(function pollMT5() {
+  fetch('/api/mt5-status').then(function(r){ return r.json(); }).then(function(d) {
+    var badge = document.getElementById('mt5Badge');
+    var dot = document.getElementById('mt5Dot');
+    var label = document.getElementById('mt5Label');
+    if (d.connected) {
+      window._mt5Connected = true;
+      window._mt5Account = d.account;
+      badge.className = 'mt5-badge connected';
+      dot.className = 'mt5-dot on';
+      label.textContent = 'MT5: $' + (d.account.balance||0).toLocaleString();
+      badge.title = 'MT5 Connected | Server: ' + d.account.server + ' | Equity: $' + (d.account.equity||0).toLocaleString() + ' | Positions: ' + d.openPositions;
+      document.querySelectorAll('.exec-btn').forEach(function(b){ b.disabled = false; b.removeAttribute('title'); });
+    } else {
+      window._mt5Connected = false;
+      badge.className = 'mt5-badge disconnected';
+      dot.className = 'mt5-dot off';
+      label.textContent = 'MT5: OFF';
+      badge.title = 'MT5 not connected — start MT5 terminal';
+      document.querySelectorAll('.exec-btn').forEach(function(b){ b.disabled = true; b.title = 'MT5 not connected'; });
+    }
+  }).catch(function(){});
+  setTimeout(pollMT5, 10000);
+})();
+
+function showMT5Status() {
+  if (window._mt5Account) {
+    var a = window._mt5Account;
+    showToast('MT5: ' + a.server + ' | Balance: $' + a.balance.toLocaleString() + ' | Equity: $' + a.equity.toLocaleString());
+  } else {
+    showToast('MT5 not connected — start MT5 terminal and set MT5_LOGIN, MT5_PASSWORD, MT5_SERVER env vars', true);
+  }
+}
+
+// ── Execute Signal ──
+function confirmExecute(symbol) {
+  var sig = allSignals.find(function(s){ return s.symbol === symbol; });
+  if (!sig) return;
+  if (!window._mt5Connected) { showToast('MT5 not connected', true); return; }
+  var dir = sig.direction;
+  var dirColor = dir === 'LONG' ? 'var(--bull)' : 'var(--bear)';
+  var acct = window._mt5Account || {};
+  var riskAmt = ((acct.balance || 500) * 0.01).toFixed(2);
+  var overlay = document.createElement('div');
+  overlay.className = 'exec-modal-overlay';
+  overlay.onclick = function(e) { if (e.target === overlay) document.body.removeChild(overlay); };
+  overlay.innerHTML = '<div class="exec-modal">' +
+    '<h3 style="color:' + dirColor + '">' + (dir==='LONG'?'▲':'▼') + ' EXECUTE ' + dir + ' — ' + sig.display + '</h3>' +
+    '<div class="exec-summary">' +
+      '<div>Pair: <strong>' + sig.display + '</strong></div>' +
+      '<div>Direction: <strong style="color:' + dirColor + '">' + dir + '</strong></div>' +
+      '<div>Entry: <strong>' + fmtPrice(sig.price) + '</strong></div>' +
+      '<div>Stop Loss: <strong style="color:var(--bear)">' + fmtPrice(sig.sl) + '</strong></div>' +
+      '<div>Take Profit: <strong style="color:var(--bull)">' + fmtPrice(sig.tp1) + '</strong></div>' +
+      '<div>SL Risk: <strong>' + (sig.slPct||'?') + '%</strong></div>' +
+      '<div>Score: <strong>' + sig.confluenceScore + '/' + (sig.maxScore||13) + '</strong></div>' +
+      '<div>Account: <strong>$' + (acct.balance||0).toLocaleString() + '</strong></div>' +
+      '<div>Risk (1%): <strong style="color:var(--accent)">$' + riskAmt + '</strong></div>' +
+      '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);color:var(--warn);font-size:10px">Position size will be calculated by the risk engine based on your MT5 account balance and SL distance.</div>' +
+    '</div>' +
+    '<div class="exec-actions">' +
+      '<button class="exec-cancel" onclick="this.closest(\'.exec-modal-overlay\').remove()">CANCEL</button>' +
+      '<button class="exec-confirm ' + dir + '" onclick="doExecute(\'' + symbol + '\', this)">CONFIRM ' + dir + '</button>' +
+    '</div>' +
+  '</div>';
+  document.body.appendChild(overlay);
+}
+
+async function doExecute(symbol, btn) {
+  var sig = allSignals.find(function(s){ return s.symbol === symbol; });
+  if (!sig) return;
+  btn.disabled = true; btn.textContent = 'SENDING...';
+  try {
+    var resp = await fetch('/api/execute', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ signal: sig })
+    });
+    var data = await resp.json();
+    // Close modal
+    var overlay = btn.closest('.exec-modal-overlay');
+    if (overlay) overlay.remove();
+    if (data.success) {
+      showToast('ORDER FILLED: ' + sig.display + ' ' + sig.direction + ' | Ticket: ' + data.ticket + ' | Vol: ' + data.volume);
+      // Disable the execute button on the card
+      var sid = (sig.symbol||'').replace(/[\/=^.]/g, '_');
+      var execBtn = document.getElementById('execbtn-' + sid);
+      if (execBtn) { execBtn.disabled = true; execBtn.innerHTML = '✓ EXECUTED — Ticket #' + data.ticket; }
+    } else {
+      var errMsg = data.error || 'Unknown error';
+      if (data.approval && !data.approval.approved) errMsg = 'Risk Engine: ' + data.approval.reason;
+      showToast('REJECTED: ' + errMsg, true);
+    }
+  } catch(err) {
+    showToast('Execution failed: ' + err.message, true);
+    btn.disabled = false; btn.textContent = 'RETRY';
+  }
 }
 
 function showToast(msg,isErr) {

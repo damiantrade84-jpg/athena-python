@@ -59,6 +59,18 @@ CONFIG: dict = {
     "WEINSTEIN_LOOKBACK":{"crypto": 60, "forex": 100, "commodity": 150, "stock": 150, "index": 150},
     "BT_MIN":              {"crypto": 8.0, "commodity": 6.0, "forex": 5.5, "stock": 6.0, "index": 6.0},
     "MIN_CONFLUENCE_CLASS":{"crypto": 8.0, "commodity": 6.0, "forex": 5.5, "stock": 6.0, "index": 6.0},
+    # ── Execution engine ────────────────────────────────────────────────────
+    "EXECUTION_ENABLED": False,         # Master switch — must be explicitly enabled
+    "AUTO_EXECUTE": False,              # Auto-execute after AI grade (manual click only when False)
+    "AUTO_EXECUTE_MIN_SCORE": 8.0,      # Minimum confluence score for auto-execute
+    "AUTO_EXECUTE_MIN_GRADE": "B",      # Minimum AI grade for auto-execute
+    "MAX_PORTFOLIO_HEAT": 0.06,         # 6% total risk across all positions
+    "MAX_OPEN_POSITIONS": 5,            # Max simultaneous open trades
+    "MAX_CORRELATED_POSITIONS": 2,      # Max positions in same correlation cluster
+    "SIGNAL_MAX_AGE_SEC": 300,          # Reject signals older than 5 minutes
+    "MAX_RISK_PER_TRADE": 0.03,         # Hard cap: never risk > 3% on single trade
+    "DRAWDOWN_REDUCE_THRESHOLD": 0.10,  # At 10% drawdown, halve position sizes
+    "DRAWDOWN_STOP_THRESHOLD": 0.15,    # At 15% drawdown, reject ALL new trades
 }
 
 # Apply YAML overrides — deep-merge dicts, overwrite scalars

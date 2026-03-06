@@ -140,7 +140,12 @@ class EODHDWebSocketManager:
         def _run():
             self._loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._loop)
-            self._loop.run_until_complete(self._run_all(pairs))
+            # For crypto: always subscribe all crypto pairs for price display (Option B)
+            price_pairs = list(pairs)
+            # Add any disabled crypto pairs for price streaming
+            crypto_disabled = [p for p in CRYPTO_PAIRS if not p.get("enabled", True)]
+            price_pairs.extend(crypto_disabled)
+            self._loop.run_until_complete(self._run_all(price_pairs))
         self._thread = threading.Thread(target=_run, daemon=True, name="eodhd-ws")
         self._thread.start()
         log.info("[WS] WebSocket manager started")
@@ -1420,6 +1425,148 @@ def api_analyze():
         # S2: Sanitise exception — don't leak internal paths
         log.error(f"api_analyze error: {e}")
         return jsonify({"error":"Analysis failed"}), 500
+
+# ── Execution Engine Endpoints ───────────────────────────────────────────────
+_executed_signals: set = set()  # Track executed signal IDs to prevent duplicates
+
+@app.route("/api/execute", methods=["POST"])
+def api_execute():
+    """Execute a trade signal via MT5. Every order passes through risk_engine first."""
+    if not CONFIG.get("EXECUTION_ENABLED", False):
+        return jsonify({"error": "Execution disabled. Set EXECUTION_ENABLED: true in config.yaml"}), 403
+    if _kill_switch:
+        return jsonify({"error": "Kill-switch active — execution blocked"}), 503
+    d = request.json
+    if not d or "signal" not in d:
+        return jsonify({"error": "Invalid payload: expected {signal: {...}}"}), 400
+    sig = d["signal"]
+    pair = sig.get("pair", "")
+    # Duplicate guard
+    sig_id = f"{pair}_{sig.get('direction')}_{sig.get('timestamp', '')}"
+    if sig_id in _executed_signals:
+        return jsonify({"error": "DUPLICATE: This signal has already been executed"}), 409
+    try:
+        from risk_engine import risk_check
+        sig_type = sig.get("type", "")
+        is_crypto = sig_type == "crypto"
+        if is_crypto:
+            from ccxt_executor import ccxt_get_account, ccxt_get_positions, ccxt_get_symbol_info, ccxt_execute
+            account = ccxt_get_account()
+            if not account:
+                return jsonify({"error": "Binance not connected. Set BINANCE_API_KEY and BINANCE_API_SECRET in .env"}), 503
+            # Only count positions with tracked risk (not pre-loaded testnet balances)
+            positions = [p for p in ccxt_get_positions() if p.get("risk_amount", 0) > 0]
+            symbol_info = ccxt_get_symbol_info(pair)
+        else:
+            from mt5_executor import mt5_get_account, mt5_get_positions, mt5_get_symbol_info, mt5_execute
+            account = mt5_get_account()
+            if not account:
+                return jsonify({"error": "MT5 not connected. Start MT5 terminal and check credentials."}), 503
+            positions = mt5_get_positions()
+            symbol_info = mt5_get_symbol_info(pair)
+        # MANDATORY RISK CHECK — no bypass
+        approval = risk_check(
+            signal=sig,
+            account_balance=account["balance"],
+            account_equity=account["equity"],
+            open_positions=positions,
+            symbol_info=symbol_info,
+            kill_switch=_kill_switch,
+        )
+        if not approval.approved:
+            log.warning(f"[EXEC] {pair} REJECTED by risk engine: {approval.reason}")
+            return jsonify({"error": f"Risk engine rejected: {approval.reason}", "approval": approval.to_dict()}), 200
+        # Execute via appropriate executor
+        if is_crypto:
+            result = ccxt_execute(sig, approval)
+        else:
+            result = mt5_execute(sig, approval)
+        if result.get("success"):
+            _executed_signals.add(sig_id)
+            # Log to audit DB
+            try:
+                with sqlite3.connect(_AUDIT_DB) as con:
+                    con.execute(
+                        "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style) VALUES(?,?,?,?,?,?,?,?,?)",
+                        (datetime.now(timezone.utc).isoformat(), pair, sig.get("confluenceScore"),
+                         sig.get("direction"), sig.get("trendState"), "EXECUTED",
+                         None, f"${approval.risk_amount}", "execution")
+                    )
+                    con.commit()
+            except Exception as ae:
+                log.warning(f"Audit DB write failed: {ae}")
+            log.info(f"[EXEC] {pair} EXECUTED: ticket={result.get('ticket')}, volume={result.get('volume')}")
+        return jsonify(result)
+    except Exception as e:
+        log.error(f"[EXEC] execution error: {e}")
+        return jsonify({"error": "Execution failed — check logs"}), 500
+
+@app.route("/api/mt5-status")
+def api_mt5_status():
+    """Get MT5 connection status and account info."""
+    try:
+        from mt5_executor import mt5_get_account, mt5_get_positions
+        account = mt5_get_account()
+        if not account:
+            return jsonify({"connected": False, "error": "MT5 not connected"})
+        positions = mt5_get_positions()
+        return jsonify({
+            "connected": True,
+            "account": account,
+            "openPositions": len(positions),
+            "positions": positions,
+            "executionEnabled": CONFIG.get("EXECUTION_ENABLED", False),
+        })
+    except Exception as e:
+        return jsonify({"connected": False, "error": str(e)})
+
+@app.route("/api/mt5-positions")
+def api_mt5_positions():
+    """Get open MT5 positions."""
+    try:
+        from mt5_executor import mt5_get_positions
+        return jsonify({"positions": mt5_get_positions()})
+    except Exception as e:
+        return jsonify({"positions": [], "error": str(e)})
+
+@app.route("/api/binance-status")
+def api_binance_status():
+    """Get Binance connection status and account info."""
+    try:
+        from ccxt_executor import ccxt_get_account, ccxt_get_positions
+        account = ccxt_get_account()
+        if not account:
+            return jsonify({"connected": False, "error": "Binance not connected"})
+        positions = ccxt_get_positions()
+        return jsonify({
+            "connected": True,
+            "account": account,
+            "openPositions": len(positions),
+            "positions": positions,
+        })
+    except Exception as e:
+        return jsonify({"connected": False, "error": str(e)})
+
+@app.route("/api/execution-config", methods=["GET", "POST"])
+def api_execution_config():
+    """Get or update execution config (EXECUTION_ENABLED, AUTO_EXECUTE, etc.)."""
+    if request.method == "GET":
+        return jsonify({
+            "executionEnabled": CONFIG.get("EXECUTION_ENABLED", False),
+            "autoExecute": CONFIG.get("AUTO_EXECUTE", False),
+            "autoExecuteMinScore": CONFIG.get("AUTO_EXECUTE_MIN_SCORE", 8.0),
+            "autoExecuteMinGrade": CONFIG.get("AUTO_EXECUTE_MIN_GRADE", "B"),
+            "maxPortfolioHeat": CONFIG.get("MAX_PORTFOLIO_HEAT", 0.06),
+            "maxOpenPositions": CONFIG.get("MAX_OPEN_POSITIONS", 5),
+            "riskPct": CONFIG.get("RISK_PCT", 0.01),
+        })
+    d = request.json or {}
+    if "executionEnabled" in d:
+        CONFIG["EXECUTION_ENABLED"] = bool(d["executionEnabled"])
+        log.info(f"[EXEC] Execution {'ENABLED' if CONFIG['EXECUTION_ENABLED'] else 'DISABLED'}")
+    if "autoExecute" in d:
+        CONFIG["AUTO_EXECUTE"] = bool(d["autoExecute"])
+    return jsonify({"success": True})
 
 @app.route("/api/screener-scan", methods=["POST"])
 def api_screener_scan():
