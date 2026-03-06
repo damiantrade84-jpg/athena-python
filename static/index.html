@@ -160,6 +160,14 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 .mt5-dot.on{background:var(--bull);animation:pulse 2s infinite;}
 .mt5-dot.off{background:var(--bear);}
 
+/* Binance Status Badge */
+.binance-badge{display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:8px;background:var(--card);border:1px solid var(--border);font-family:'Space Mono',monospace;font-size:10px;cursor:pointer;transition:border-color 0.3s;}
+.binance-badge.connected{border-color:rgba(243,186,47,0.4);}
+.binance-badge.disconnected{border-color:rgba(255,59,92,0.3);}
+.binance-dot{width:6px;height:6px;border-radius:50%;}
+.binance-dot.on{background:#f3ba2f;animation:pulse 2s infinite;}
+.binance-dot.off{background:var(--bear);}
+
 /* Confirm Modal */
 .exec-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center;}
 .exec-modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px;max-width:440px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.6);}
@@ -294,6 +302,10 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
       <div class="mt5-badge disconnected" id="mt5Badge" title="MT5 not connected" onclick="showMT5Status()">
         <span class="mt5-dot off" id="mt5Dot"></span>
         <span id="mt5Label">MT5: OFF</span>
+      </div>
+      <div class="binance-badge disconnected" id="binanceBadge" title="Binance not connected" onclick="showBinanceStatus()">
+        <span class="binance-dot off" id="binanceDot"></span>
+        <span id="binanceLabel">BNB: OFF</span>
       </div>
       <div class="yield-badge" id="yieldBadge" style="display:none" title="UST Yield Curve — 2Y/10Y spread. Inverted = recession risk">
         <span style="font-size:9px;color:var(--muted);font-weight:700;">YIELD</span>
@@ -1168,14 +1180,25 @@ window._binanceAccount = null;
 
 (function pollBinance() {
   fetch('/api/binance-status').then(function(r){ return r.json(); }).then(function(d) {
+    var badge = document.getElementById('binanceBadge');
+    var dot = document.getElementById('binanceDot');
+    var label = document.getElementById('binanceLabel');
     if (d.connected) {
       window._binanceConnected = true;
       window._binanceAccount = d.account;
+      badge.className = 'binance-badge connected';
+      dot.className = 'binance-dot on';
+      label.textContent = 'BNB: $' + (d.account.balance||0).toLocaleString();
+      badge.title = 'Binance Connected | Exchange: ' + d.account.exchange + ' | Free: $' + (d.account.freeBalance||0).toLocaleString();
       document.querySelectorAll('.exec-btn').forEach(function(b){
         if (b.textContent.indexOf('Binance') > -1) { b.disabled = false; b.removeAttribute('title'); }
       });
     } else {
       window._binanceConnected = false;
+      badge.className = 'binance-badge disconnected';
+      dot.className = 'binance-dot off';
+      label.textContent = 'BNB: OFF';
+      badge.title = 'Binance not connected — check API keys';
     }
   }).catch(function(){});
   setTimeout(pollBinance, 15000);
@@ -1212,6 +1235,15 @@ function showMT5Status() {
     showToast('MT5: ' + a.server + ' | Balance: $' + a.balance.toLocaleString() + ' | Equity: $' + a.equity.toLocaleString());
   } else {
     showToast('MT5 not connected — start MT5 terminal and set MT5_LOGIN, MT5_PASSWORD, MT5_SERVER env vars', true);
+  }
+}
+
+function showBinanceStatus() {
+  if (window._binanceAccount) {
+    var a = window._binanceAccount;
+    showToast('Binance: ' + a.exchange + (a.testnet ? ' (Testnet)' : ' (LIVE)') + ' | Balance: $' + a.balance.toLocaleString() + ' | Free: $' + a.freeBalance.toLocaleString());
+  } else {
+    showToast('Binance not connected — check BINANCE_API_KEY and BINANCE_API_SECRET in .env', true);
   }
 }
 
