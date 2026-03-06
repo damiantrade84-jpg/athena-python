@@ -116,8 +116,8 @@ class EODHDWebSocketManager:
                                 entry["marketStatus"] = msg.get("ms", "unknown")
                             if entry.get("price"):
                                 _live_prices[disp] = entry
-                        except Exception:
-                            pass
+                        except Exception as _e:
+                            log.debug(f"[WS] msg parse error: {_e}")
             except Exception as e:
                 log.warning(f"[WS] {endpoint} disconnected: {e} — reconnecting in 5s")
                 await asyncio.sleep(5)
@@ -418,7 +418,7 @@ def fetch_eodhd_indicators(pair):
                 if r.status_code == 200:
                     val = r.json()
                     if isinstance(val, (int, float)): result[name] = round(float(val), 4)
-            except Exception: pass
+            except Exception as _e: log.debug(f"[IND] {name} fetch error: {_e}")
         if result:
             log.info(f"[IND] {_disp:12s} {' '.join(f'{k}={v}' for k,v in result.items())}")
         return result if result else None
@@ -1079,7 +1079,7 @@ def run_full_scan():
                             log.info(f"[EXCH] {exch_code}: CLOSED")
                         else:
                             log.info(f"[EXCH] {exch_code}: OPEN")
-                except Exception: pass
+                except Exception as _e: log.debug(f"[EXCH] {exch_code} check error: {_e}")
     except Exception as e: log.warning(f"[EXCH] Exchange check failed: {e}")
     # Pre-fetch: news context + BTC bias + yield curve + div/split (serial, before parallel pair analysis)
     log.info("Fetching market context...")
@@ -1131,7 +1131,7 @@ def run_full_scan():
             elif sig and sig["confluenceScore"]>=CONFIG["MIN_CONFLUENCE_CLASS"].get(pair["type"], CONFIG["MIN_CONFLUENCE"]):
                 # Phase 5: Attach server-side indicators (EODHD covers all asset classes incl. crypto via .CC)
                 try: sig["serverIndicators"] = fetch_eodhd_indicators(pair)
-                except Exception: pass
+                except Exception as _e: log.debug(f"[IND] {pair['display']} server indicators skipped: {_e}")
                 sig["newsCtx"]=news_ctx; results.append(sig)
                 scan_funnel["passed"] += 1
                 log.info(f"{pair['display']:12s} {sig['direction']:5s} {sig['confluenceScore']}/13 [{sig.get('trendState','?')}]")
@@ -1294,7 +1294,7 @@ def fetch_div_split_context():
                             days_to = (ex_date - today).days
                             if 0 <= days_to <= 14:
                                 upcoming.append({"exDate": str(ex_date), "daysTo": days_to, "amount": d.get("value", d.get("dividend"))})
-                        except: pass
+                        except Exception as _e: log.debug(f"[DIVS] date parse error: {_e}")
                     if upcoming:
                         entry["upcomingDiv"] = upcoming
                         log.info(f"[DIVS] {sym}: ex-div in {upcoming[0]['daysTo']} days")
@@ -1314,7 +1314,7 @@ def fetch_div_split_context():
                             days_to = (s_date - today).days
                             if 0 <= days_to <= 30:
                                 upcoming.append({"splitDate": str(s_date), "daysTo": days_to, "ratio": s.get("split")})
-                        except: pass
+                        except Exception as _e: log.debug(f"[SPLITS] date parse error: {_e}")
                     if upcoming:
                         entry["upcomingSplit"] = upcoming
                         log.warning(f"[SPLITS] {sym}: split in {upcoming[0]['daysTo']} days")
@@ -1393,7 +1393,7 @@ def fetch_news_context():
                     ndata = http_requests.get(f"https://eodhd.com/api/news?s={sticker}&limit=3&api_token={_eodhd_key}&fmt=json", timeout=8).json()
                     if ndata and isinstance(ndata, list):
                         pair_news[display] = [{"t": a.get("title","")[:80], "s": round(a.get("sentiment",{}).get("polarity",0.5),2)} for a in ndata[:3]]
-                except Exception: pass
+                except Exception as _e: log.debug(f"[NEWS] {display} news fetch error: {_e}")
             if pair_news:
                 ctx["pairNews"] = pair_news
                 log.info(f"[NEWS] EODHD per-pair news: {len(pair_news)} pairs, {sum(len(v) for v in pair_news.values())} articles")
@@ -1404,7 +1404,7 @@ def fetch_news_context():
                     wdata = http_requests.get(f"https://eodhd.com/api/news-word-weights?s={sticker}&page[limit]=5&api_token={_eodhd_key}&fmt=json", timeout=8).json()
                     if wdata and isinstance(wdata, dict) and wdata.get("data"):
                         word_weights[display] = list(wdata["data"].keys())[:5]
-                except Exception: pass
+                except Exception as _e: log.debug(f"[NEWS] {display} word weights error: {_e}")
             if word_weights:
                 ctx["wordWeights"] = word_weights
                 log.info(f"[NEWS] Word weights: {len(word_weights)} pairs")
