@@ -264,6 +264,19 @@ def calc_atr_percentile(atr_series: list, lookback: int = 100) -> tuple:
     return pct, label
 
 
+def calc_levels(price: float, atr: float, direction: str, pair_type: str) -> dict:
+    """Shared SL/TP calculation — used by both analyze_pair and backtest_pair."""
+    m = CONFIG["ATR_CLASS"].get(pair_type, {
+        "sl": CONFIG["SL_ATR_MULT"], "tp1": CONFIG["TP1_ATR_MULT"], "tp2": CONFIG["TP2_ATR_MULT"]
+    })
+    sl  = price - atr * m["sl"]  if direction == "LONG" else price + atr * m["sl"]
+    tp1 = price + atr * m["tp1"] if direction == "LONG" else price - atr * m["tp1"]
+    tp2 = price + atr * m["tp2"] if direction == "LONG" else price - atr * m["tp2"]
+    rr1 = abs(tp1 - price) / abs(sl - price) if abs(sl - price) > 0 else 0
+    rr2 = abs(tp2 - price) / abs(sl - price) if abs(sl - price) > 0 else 0
+    return {"sl": sl, "tp1": tp1, "tp2": tp2, "rr1": rr1, "rr2": rr2, "mults": m}
+
+
 def calc_fib(candles: list) -> dict:
     """Calculate Fibonacci retracement levels from last 50 candles' high/low range."""
     r = candles[-50:]
