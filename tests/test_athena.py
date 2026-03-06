@@ -160,6 +160,7 @@ class TestConfig:
 # ── Scoring tests ────────────────────────────────────────────────────────────
 
 from scoring import get_session, detect_div, apply_correlation_cap
+from athena import _build_event_risk, _classify_signal
 
 
 class TestGetSession:
@@ -191,3 +192,54 @@ class TestDetectDiv:
         candles = [{"close": 100, "high": 101, "low": 99, "vol": 1000}] * 5
         result = detect_div(candles, candles, candles)
         assert isinstance(result, list)
+
+
+class TestScanClassification:
+    def test_trade_signal_requires_enabled_and_unblocked(self):
+        pair = {"type": "stock", "enabled": True}
+        signal = {
+            "scanThreshold": 6.0,
+            "confluenceScore": 6.8,
+            "eventRisk": {"hardBlock": False},
+            "exchangeClosed": False,
+            "trendState": "TRENDING",
+            "scanDiagnostics": [],
+        }
+        tier, reason = _classify_signal(signal, pair)
+        assert tier == "trade"
+        assert reason == "Trade-ready"
+
+    def test_disabled_pair_becomes_watchlist(self):
+        pair = {"type": "stock", "enabled": False}
+        signal = {
+            "scanThreshold": 6.0,
+            "confluenceScore": 6.8,
+            "eventRisk": {"hardBlock": False},
+            "exchangeClosed": False,
+            "trendState": "TRENDING",
+            "scanDiagnostics": [{"code": "inactive_pair", "detail": "Pair not auto-enabled for live trading"}],
+        }
+        tier, reason = _classify_signal(signal, pair)
+        assert tier == "watchlist"
+        assert "not auto-enabled" in reason
+
+    def test_event_block_forces_watchlist(self):
+        pair = {"symbol": "AAPL.US", "type": "stock", "enabled": True}
+        risk = _build_event_risk(
+            pair,
+            {},
+            {"AAPL.US": {"date": "2026-03-07", "daysTo": 1}},
+            set(),
+        )
+        assert risk["hardBlock"] is True
+        signal = {
+            "scanThreshold": 6.0,
+            "confluenceScore": 7.2,
+            "eventRisk": risk,
+            "exchangeClosed": False,
+            "trendState": "TRENDING",
+            "scanDiagnostics": [{"code": "event_risk", "detail": "Earnings in 1 day(s)"}],
+        }
+        tier, reason = _classify_signal(signal, pair)
+        assert tier == "watchlist"
+        assert "Earnings" in reason

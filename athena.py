@@ -7,7 +7,7 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(line_buffering=True)
 import os, sys, json, math, time, threading, webbrowser, logging, sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from flask import Flask, jsonify, request, send_from_directory
 import requests as _requests_mod
 # C2: Use requests.Session for connection pooling across all HTTP calls
@@ -234,15 +234,134 @@ CRYPTO_PAIRS = [
     {"symbol":"RENDERUSDT","type":"crypto","display":"RENDER/USDT","source":"binance","enabled":False}, # SQN -2.45
 ]
 ALL_PAIRS = FOREX_PAIRS + COMMODITY_PAIRS + INDEX_PAIRS + US_STOCK_PAIRS + ETF_PAIRS + JSE_PAIRS + CRYPTO_PAIRS
+
+_TOGGLE_STATE_FILE = os.path.join(os.path.dirname(__file__), "toggle_state.json")
+
+def _persist_toggle_state():
+    """Save current enabled/disabled state to JSON so it survives restarts."""
+    state = {p["display"]: p.get("enabled", True) for p in ALL_PAIRS}
+    try:
+        with open(_TOGGLE_STATE_FILE, "w") as f:
+            json.dump(state, f, indent=2)
+        log.info(f"[TOGGLE] Persisted toggle state for {len(state)} pairs")
+    except Exception as e:
+        log.warning(f"[TOGGLE] Failed to persist: {e}")
+
+def _load_toggle_state():
+    """Restore enabled/disabled state from JSON sidecar on startup."""
+    global ACTIVE_PAIRS
+    if not os.path.exists(_TOGGLE_STATE_FILE):
+        return
+    try:
+        with open(_TOGGLE_STATE_FILE) as f:
+            state = json.load(f)
+        applied = 0
+        for p in ALL_PAIRS:
+            if p["display"] in state:
+                p["enabled"] = state[p["display"]]
+                applied += 1
+        ACTIVE_PAIRS = [p for p in ALL_PAIRS if p.get("enabled", True)]
+        log.info(f"[TOGGLE] Restored toggle state: {applied} pairs, {len(ACTIVE_PAIRS)} active")
+    except Exception as e:
+        log.warning(f"[TOGGLE] Failed to load: {e}")
+
 ACTIVE_PAIRS = [p for p in ALL_PAIRS if p.get("enabled", True)]
+_load_toggle_state()
 TF_B = {"D1":"1d","H4":"4h","H1":"1h"}
+_YF_INTRADAY_PERIOD = "180d"
+_VENDOR_SYMBOL_OVERRIDES = {
+    "WTI Oil": {"yfinance": "CL=F", "fallback": "yfinance"},
+    "FTSE 100": {"yfinance": "^FTSE", "fallback": "yfinance"},
+}
+
+def _vendor_overrides(pair: dict) -> dict:
+    return _VENDOR_SYMBOL_OVERRIDES.get(pair.get("display", ""), {})
+
+def _yfinance_symbol_for_pair(pair: dict) -> str | None:
+    override = pair.get("yfinanceSymbol") or _vendor_overrides(pair).get("yfinance")
+    return override or pair.get("symbol")
+
+def _eodhd_ticker_for_pair(pair: dict) -> str | None:
+    override = pair.get("eodhdTicker") or _vendor_overrides(pair).get("eodhd")
+    if override:
+        return override
+    disp = pair.get("display", "")
+    ptype = pair.get("type", "")
+    sym = pair.get("symbol", "")
+    if ptype == "crypto":
+        base = disp.split("/")[0] if "/" in disp else disp.replace("USDT", "")
+        return f"{base}-USD.CC"
+    if ptype == "forex":
+        return disp.replace("/", "") + ".FOREX"
+    if ptype == "commodity":
+        if "/" in disp:
+            return disp.replace("/", "") + ".FOREX"
+        if sym.endswith((".FOREX", ".COMM")):
+            return sym
+        return None
+    if ptype == "stock" and ".JO" in sym:
+        return sym.replace(".JO", ".JSE")
+    if ptype == "index":
+        return sym if ".INDX" in sym else sym.lstrip("^") + ".INDX"
+    return sym or None
+
+def _polygon_ticker_for_pair(pair: dict) -> str | None:
+    override = pair.get("polygonTicker") or _vendor_overrides(pair).get("polygon")
+    if override:
+        return override
+    disp = pair.get("display", "")
+    ptype = pair.get("type", "")
+    if ptype in ("forex", "commodity") and "/" in disp:
+        return "C:" + disp.replace("/", "")
+    sym = pair.get("symbol", "")
+    if sym.startswith(("C:", "X:", "I:")):
+        return sym
+    return None
+
+def _fallback_source_for_pair(pair: dict) -> str | None:
+    override = pair.get("fallbackSource") or _vendor_overrides(pair).get("fallback")
+    if override:
+        return override
+    ptype = pair.get("type", "")
+    if ptype == "stock":
+        return "yfinance"
+    if ptype == "index":
+        return "yfinance" if _yfinance_symbol_for_pair(pair) else None
+    if ptype == "commodity":
+        return "polygon" if _polygon_ticker_for_pair(pair) else ("yfinance" if _yfinance_symbol_for_pair(pair) else None)
+    if ptype == "forex":
+        return "polygon" if _polygon_ticker_for_pair(pair) else None
+    return None
+
+def _fetch_fallback_candles(pair: dict, tf: str, limit: int, reason: str = ""):
+    source = _fallback_source_for_pair(pair)
+    if not source:
+        return None
+    if source == "polygon":
+        if not _polygon_ticker_for_pair(pair):
+            return None
+        log.info(f"[FALLBACK] {pair['display']} {tf}: using Polygon{f' ({reason})' if reason else ''}")
+        return fetch_polygon(pair, tf, limit)
+    if source == "yfinance":
+        yf_symbol = _yfinance_symbol_for_pair(pair)
+        if not yf_symbol:
+            return None
+        log.info(f"[FALLBACK] {pair['display']} {tf}: using yfinance{f' ({reason})' if reason else ''}")
+        return fetch_yfinance(yf_symbol, tf, limit)
+    return None
+
+def _atr_for_levels(d1i: dict, h4i: dict, h1i: dict):
+    return h1i["snap"].get("atr") or h4i["snap"].get("atr") or d1i["snap"].get("atr")
+
+def _max_score_for_pair(pair: dict) -> float:
+    return 12.0 if pair.get("type") == "forex" else 13.0
 
 def fetch_yfinance(sym, tf, limit):
     """Download OHLCV candles from Yahoo Finance. Returns list of candle dicts or None."""
     try:
         import yfinance as yf
         import pandas as pd
-        period = "2y" if tf == "D1" else "730d"
+        period = "2y" if tf == "D1" else _YF_INTRADAY_PERIOD
         interval = "1d" if tf == "D1" else "1h"
         df = yf.download(sym, period=period, interval=interval, progress=False, auto_adjust=True)
         if df is None or df.empty: log.warning(f"[YF] {sym}: no data"); return None
@@ -270,39 +389,27 @@ def fetch_eodhd(pair, tf, limit):
     try:
         api = _get_eodhd_client()
         if not api: log.warning("[EODHD] No EODHD_KEY set"); return None
-        # Derive EODHD ticker from pair config
-        _disp = pair["display"]
-        _ptype = pair.get("type", "")
-        if _ptype in ("forex", "commodity") or "/" in _disp:
-            ticker = _disp.replace("/", "") + ".FOREX"
-        elif _ptype == "stock" and ".JO" in pair["symbol"]:
-            ticker = pair["symbol"].replace(".JO", ".JSE")
-        elif _ptype == "index":
-            ticker = pair["symbol"] if ".INDX" in pair["symbol"] else pair["symbol"].lstrip("^") + ".INDX"
-        else:
-            ticker = pair["symbol"]
+        ticker = _eodhd_ticker_for_pair(pair)
+        if not ticker:
+            return _fetch_fallback_candles(pair, tf, limit, reason="no valid EODHD ticker")
         if tf == "D1":
-            from datetime import timedelta
             start = (datetime.now(timezone.utc) - timedelta(days=730)).strftime("%Y-%m-%d")
             bars = api.get_eod_historical_stock_market_data(ticker, period="d", from_date=start, order="a")
-            if not bars: log.warning(f"[EODHD] {ticker} D1: no data"); return None
+            if not bars:
+                log.warning(f"[EODHD] {ticker} D1: no data")
+                return _fetch_fallback_candles(pair, tf, limit, reason="EODHD daily unavailable")
             candles = [{"time": b["date"], "open": float(b["open"]), "high": float(b["high"]),
                         "low": float(b["low"]), "close": float(b["close"]),
                         "vol": float(b.get("volume") or 0)} for b in bars]
         else:
-            # H1 or H4 — SDK intraday (H4 = fetch H1 then resample)
-            from datetime import timedelta
             start_ts = int((datetime.now(timezone.utc) - timedelta(days=120)).timestamp())
             bars = api.get_intraday_historical_data(ticker, interval="1h", from_unix_time=start_ts)
             if not bars:
-                # Auto-fallback: EODHD has no intraday for some assets (commodities, JSE)
-                if _ptype == "commodity" or "/" in _disp:
-                    log.info(f"[EODHD] {ticker} {tf}: no intraday — fallback to Polygon")
-                    return fetch_polygon(pair, tf, limit)
-                elif _ptype == "stock":
-                    log.info(f"[EODHD] {ticker} {tf}: no intraday — fallback to yfinance")
-                    return fetch_yfinance(pair["symbol"], tf, limit)
-                log.warning(f"[EODHD] {ticker} {tf}: no data"); return None
+                fallback = _fetch_fallback_candles(pair, tf, limit, reason="EODHD intraday unavailable")
+                if fallback:
+                    return fallback
+                log.warning(f"[EODHD] {ticker} {tf}: no data")
+                return None
             candles = [{"time": b["datetime"], "open": float(b["open"]), "high": float(b["high"]),
                         "low": float(b["low"]), "close": float(b["close"]),
                         "vol": float(b.get("volume") or 0)} for b in bars
@@ -318,87 +425,46 @@ def fetch_eodhd(pair, tf, limit):
         return candles[-limit:] if len(candles) > limit else candles
     except Exception as e: log.error(f"[EODHD] {pair['display']}: {e}"); return None
 
-def fetch_eodhd_indicators(pair):
-    """Phase 5: Fetch server-side indicator snapshots via EODHD filter=last_X. Returns dict or None."""
-    try:
-        _key = os.environ.get("EODHD_KEY", "")
-        if not _key: return None
-        _disp, _ptype = pair["display"], pair.get("type", "")
-        if _ptype == "crypto":
-            base_sym = _disp.split("/")[0] if "/" in _disp else _disp.replace("USDT","")
-            ticker = f"{base_sym}-USD.CC"
-        elif _ptype in ("forex", "commodity") or ("/" in _disp and _ptype != "crypto"):
-            ticker = _disp.replace("/", "") + ".FOREX"
-        elif _ptype == "stock" and ".JO" in pair["symbol"]:
-            ticker = pair["symbol"].replace(".JO", ".JSE")
-        elif _ptype == "index":
-            ticker = pair["symbol"] if ".INDX" in pair["symbol"] else pair["symbol"].lstrip("^") + ".INDX"
-        else:
-            ticker = pair["symbol"]
-        base = f"https://eodhd.com/api/technical/{ticker}?api_token={_key}&fmt=json"
-        indicators = [
-            ("EMA21", "function=ema&period=21&filter=last_ema"),
-            ("EMA50", "function=ema&period=50&filter=last_ema"),
-            ("RSI",   "function=rsi&period=14&filter=last_rsi"),
-            ("ADX",   "function=adx&period=14&filter=last_adx"),
-            ("ATR",   "function=atr&period=14&filter=last_atr"),
-            ("MACD",  "function=macd&filter=last_macd"),
-            ("SAR",   "function=sar&filter=last_sar"),
-        ]
-        result = {}
-        for name, params in indicators:
-            try:
-                r = http_requests.get(f"{base}&{params}", timeout=6)
-                if r.status_code == 200:
-                    val = r.json()
-                    if isinstance(val, (int, float)): result[name] = round(float(val), 4)
-            except Exception as _e: log.debug(f"[IND] {name} fetch error: {_e}")
-        if result:
-            log.info(f"[IND] {_disp:12s} {' '.join(f'{k}={v}' for k,v in result.items())}")
-        return result if result else None
-    except Exception as e:
-        log.warning(f"[IND] {pair['display']}: {e}")
-        return None
+_polygon_lock = threading.Lock()
 
 def fetch_polygon(pair, tf, limit):
     """Download OHLCV candles from Polygon.io REST API. Best forex data quality."""
-    try:
-        key = os.environ.get("POLYGON_KEY", CONFIG.get("POLYGON_KEY", ""))
-        if not key: log.warning("[PG] No POLYGON_KEY set"); return None
-        # Derive Polygon ticker from display: "EUR/USD" → "C:EURUSD"
-        ticker = "C:" + pair["display"].replace("/", "")
-        mult, span = {"D1": (1, "day"), "H4": (4, "hour"), "H1": (1, "hour")}.get(tf, (1, "day"))
-        # Date range — 2 years back
-        from datetime import timedelta
-        end = datetime.now(timezone.utc)
-        start = end - timedelta(days=730)
-        url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{mult}/{span}/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
-        r = http_requests.get(url, params={"apiKey": key, "limit": 50000, "sort": "asc"}, timeout=20)
-        if r.status_code == 403:
-            log.warning(f"[PG] {ticker}: 403 Forbidden — check API key or plan"); return None
-        if r.status_code != 200:
-            log.warning(f"[PG] {ticker} HTTP {r.status_code}: {r.text[:120]}"); return None
-        data = r.json()
-        results = data.get("results", [])
-        if not results: log.warning(f"[PG] {ticker}: no results"); return None
-        candles = [{"time": datetime.fromtimestamp(bar["t"] / 1000, tz=timezone.utc).isoformat(),
-                     "open": float(bar["o"]), "high": float(bar["h"]), "low": float(bar["l"]),
-                     "close": float(bar["c"]), "vol": float(bar.get("v", 0))}
-                    for bar in results]
-        # Rate limit: Polygon free = 5 calls/min
-        time.sleep(12)
-        return candles[-limit:] if len(candles) > limit else candles
-    except Exception as e: log.error(f"[PG] {pair['display']}: {e}"); return None
+    with _polygon_lock:
+        try:
+            key = os.environ.get("POLYGON_KEY", CONFIG.get("POLYGON_KEY", ""))
+            if not key: log.warning("[PG] No POLYGON_KEY set"); return None
+            ticker = _polygon_ticker_for_pair(pair)
+            if not ticker:
+                log.info(f"[PG] {pair['display']}: no Polygon ticker mapping")
+                return None
+            mult, span = {"D1": (1, "day"), "H4": (4, "hour"), "H1": (1, "hour")}.get(tf, (1, "day"))
+            end = datetime.now(timezone.utc)
+            start = end - timedelta(days=730)
+            url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{mult}/{span}/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
+            r = http_requests.get(url, params={"apiKey": key, "limit": 50000, "sort": "asc"}, timeout=20)
+            if r.status_code == 403:
+                log.warning(f"[PG] {ticker}: 403 Forbidden — check API key or plan"); return None
+            if r.status_code != 200:
+                log.warning(f"[PG] {ticker} HTTP {r.status_code}: {r.text[:120]}"); return None
+            data = r.json()
+            results = data.get("results", [])
+            if not results: log.warning(f"[PG] {ticker}: no results"); return None
+            candles = [{"time": datetime.fromtimestamp(bar["t"] / 1000, tz=timezone.utc).isoformat(),
+                         "open": float(bar["o"]), "high": float(bar["h"]), "low": float(bar["l"]),
+                         "close": float(bar["c"]), "vol": float(bar.get("v", 0))}
+                        for bar in results]
+            time.sleep(12)
+            return candles[-limit:] if len(candles) > limit else candles
+        except Exception as e: log.error(f"[PG] {pair['display']}: {e}"); return None
 
 def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
     """Route candle fetch to correct source (binance, yfinance, or polygon) based on pair config."""
     if pair["source"]=="binance": return fetch_binance(pair["symbol"], TF_B[tf], limit)
     if pair["source"]=="eodhd": return fetch_eodhd(pair, tf, limit)
     if pair["source"]=="polygon": return fetch_polygon(pair, tf, limit)
-    if pair["source"]=="yfinance": return fetch_yfinance(pair["symbol"], tf, limit)
+    if pair["source"]=="yfinance": return fetch_yfinance(_yfinance_symbol_for_pair(pair), tf, limit)
     return None
 
-# ── Indicator functions (extracted to indicators.py) ──
 from indicators import (
     calc_ema, calc_sma, calc_rsi, calc_macd, calc_atr, calc_adx, calc_bb,
     calc_rsi_divergence, calc_weinstein_stage, calc_fib_proximity,
@@ -406,7 +472,6 @@ from indicators import (
     calc_atr_percentile, calc_levels, calc_indicators, calc_fib,
 )
 
-# ── Scoring engine (extracted to scoring.py) ──
 from scoring import (
     get_session, calc_confluence, detect_div,
     CORR_CLUSTERS, apply_correlation_cap,
@@ -417,103 +482,140 @@ _kill_switch = False      # N4: Kill-switch — blocks new scans/analyses when T
 _disabled_pairs: set = set()  # per-pair kill-switch — display names of pairs to exclude
 
 def run_full_scan() -> dict:
-    """Parallel scan of all ACTIVE_PAIRS. Returns signals, errors, skipped lists."""
+    """Parallel scan of all tracked pairs. Returns strict trade signals, watchlist, errors, and skips."""
     global _scan_in_progress
     if _kill_switch:
-        return {"success":False,"error":"Kill-switch active — system paused","signals":[],"errors":[],"skipped":[],"btcBias":"neutral","totalPairs":0,"scannedAt":datetime.now(timezone.utc).isoformat()}
+        return {"success":False,"error":"Kill-switch active — system paused","signals":[],"tradeSignals":[],"watchlist":[],"errors":[],"skipped":[],"btcBias":"neutral","totalPairs":0,"activePairs":0,"scannedAt":datetime.now(timezone.utc).isoformat()}
     if _scan_in_progress:
-        return {"success":False,"error":"Scan already in progress","signals":[],"errors":[],"skipped":[],"btcBias":"neutral","totalPairs":0,"scannedAt":datetime.now(timezone.utc).isoformat()}
+        return {"success":False,"error":"Scan already in progress","signals":[],"tradeSignals":[],"watchlist":[],"errors":[],"skipped":[],"btcBias":"neutral","totalPairs":0,"activePairs":0,"scannedAt":datetime.now(timezone.utc).isoformat()}
     _scan_in_progress = True
-    results,errors,skipped=[],[],[]
-    # N3: Live scan funnel counters
-    scan_funnel = {"total":len(ACTIVE_PAIRS), "no_data":0, "low_score":0, "passed":0, "errors":0}
-    btc_bias="neutral"
-    # Phase 6: Exchange open/close detection — skip closed markets for stock/ETF pairs
-    _closed_exchanges = set()
     try:
-        _eodhd_key = os.environ.get("EODHD_KEY", "")
-        if _eodhd_key:
-            for exch_code in ["JSE", "US"]:
-                try:
-                    r = http_requests.get(f"https://eodhd.com/api/exchange-details/{exch_code}?api_token={_eodhd_key}&fmt=json", timeout=8)
-                    if r.status_code == 200:
-                        edata = r.json()
-                        if not edata.get("isOpen", True):
-                            _closed_exchanges.add(exch_code)
-                            log.info(f"[EXCH] {exch_code}: CLOSED")
-                        else:
-                            log.info(f"[EXCH] {exch_code}: OPEN")
-                except Exception as _e: log.debug(f"[EXCH] {exch_code} check error: {_e}")
-    except Exception as e: log.warning(f"[EXCH] Exchange check failed: {e}")
-    # Pre-fetch: news context + BTC bias + yield curve + div/split (serial, before parallel pair analysis)
-    log.info("Fetching market context...")
-    news_ctx = fetch_news_context()
-    # Phase A: Yield curve context
-    yield_ctx = None
-    try:
-        yield_ctx = fetch_yield_curve()
-        if yield_ctx: news_ctx["yieldCurve"] = yield_ctx
-    except Exception as e: log.warning(f"[YIELD] scan fetch err: {e}")
-    # Phase B: Dividend/split context
-    try:
-        ds_ctx = fetch_div_split_context()
-        if ds_ctx: news_ctx["divSplit"] = ds_ctx
-    except Exception as e: log.warning(f"[DIVS] scan fetch err: {e}")
-    try:
-        btc=fetch_candles({"symbol":"BTCUSDT","source":"binance"},"D1",CONFIG["D1_CANDLES"])
-        if btc and len(btc)>=200:
-            s=calc_indicators(btc)["snap"]
-            if s["ema21"] and s["ema50"] and s["ema200"]:
-                if s["ema21"]>s["ema50"]>s["ema200"]: btc_bias="bullish"
-                elif s["ema21"]<s["ema50"]<s["ema200"]: btc_bias="bearish"
-        log.info(f"BTC bias: {btc_bias}")
-    except Exception as e: log.error(f"BTC err: {e}")
-    # B4: Parallel pair analysis — ThreadPoolExecutor(max_workers=4)
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    def _analyse(pair):
-        # Phase 6: Skip pairs on closed exchanges
-        if _closed_exchanges:
-            sym = pair.get("symbol", "")
-            if ".JO" in sym and "JSE" in _closed_exchanges:
-                log.info(f"{pair['display']:12s} SKIP (JSE closed)")
-                return pair, None, None
-            if (".US" in sym or ".INDX" in sym) and pair["type"] in ("stock","index") and "US" in _closed_exchanges:
-                log.info(f"{pair['display']:12s} SKIP (US closed)")
-                return pair, None, None
+        candidate_pairs = [p for p in ALL_PAIRS if p["display"] not in _disabled_pairs]
+        active_pairs = [p for p in candidate_pairs if p.get("enabled", True)]
+        results, watchlist, errors, skipped = [], [], [], []
+        scan_funnel = {
+            "total": len(candidate_pairs), "active": len(active_pairs), "no_data": 0,
+            "low_score": 0, "passed": 0, "watchlist": 0, "errors": 0,
+            "closed_exchange": 0, "event_block": 0, "inactive_pair": 0,
+            "counter_trend": 0, "dead_ranging": 0,
+        }
+        btc_bias = "neutral"
+        _closed_exchanges = set()
+        ds_ctx = {}
+        earnings_ctx = {}
         try:
-            return pair, analyze_pair(pair, btc_bias), None
+            _eodhd_key = os.environ.get("EODHD_KEY", "")
+            if _eodhd_key:
+                for exch_code in ["JSE", "US"]:
+                    try:
+                        r = http_requests.get(f"https://eodhd.com/api/exchange-details/{exch_code}?api_token={_eodhd_key}&fmt=json", timeout=8)
+                        if r.status_code == 200:
+                            edata = r.json()
+                            if not edata.get("isOpen", True):
+                                _closed_exchanges.add(exch_code)
+                                log.info(f"[EXCH] {exch_code}: CLOSED")
+                            else:
+                                log.info(f"[EXCH] {exch_code}: OPEN")
+                    except Exception as _e:
+                        log.debug(f"[EXCH] {exch_code} check error: {_e}")
         except Exception as e:
-            return pair, None, str(e)
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        futures = {pool.submit(_analyse, pair): pair for pair in ACTIVE_PAIRS}
-        for fut in as_completed(futures):
-            pair, sig, err = fut.result()
-            if err:
-                errors.append({"pair":pair["display"],"error":err})
-                scan_funnel["errors"] += 1
-                log.error(f"{pair['display']:12s} ERR: {err}")
-            elif sig and sig["confluenceScore"]>=CONFIG["MIN_CONFLUENCE_CLASS"].get(pair["type"], CONFIG["MIN_CONFLUENCE"]):
-                # Phase 5: Attach server-side indicators (EODHD covers all asset classes incl. crypto via .CC)
-                try: sig["serverIndicators"] = fetch_eodhd_indicators(pair)
-                except Exception as _e: log.debug(f"[IND] {pair['display']} server indicators skipped: {_e}")
-                sig["newsCtx"]=news_ctx; results.append(sig)
-                scan_funnel["passed"] += 1
-                log.info(f"{pair['display']:12s} {sig['direction']:5s} {sig['confluenceScore']}/13 [{sig.get('trendState','?')}]")
-            elif sig:
-                skipped.append({"pair":pair["display"],"reason":f"Low confluence ({sig['confluenceScore']}/13)"})
-                scan_funnel["low_score"] += 1
-                log.info(f"{pair['display']:12s} WEAK  {sig['confluenceScore']}/13")
-            else:
-                skipped.append({"pair":pair["display"],"reason":"No data"})
-                scan_funnel["no_data"] += 1
-                log.info(f"{pair['display']:12s} SKIP")
-    log.info(f"Scan funnel: {scan_funnel}")
-    results.sort(key=lambda x:x["confluenceScore"],reverse=True)
-    # B5: Apply correlation cap warnings after sorting (highest score first = priority preserved)
-    results = apply_correlation_cap(results)
-    _scan_in_progress = False
-    return {"success":True,"signals":results,"errors":errors,"skipped":skipped,"scanFunnel":scan_funnel,
-            "btcBias":btc_bias,"totalPairs":len(ACTIVE_PAIRS),"scannedAt":datetime.now(timezone.utc).isoformat()}
+            log.warning(f"[EXCH] Exchange check failed: {e}")
+        log.info("Fetching market context...")
+        news_ctx = fetch_news_context(candidate_pairs)
+        try:
+            yield_ctx = fetch_yield_curve()
+            if yield_ctx:
+                news_ctx["yieldCurve"] = yield_ctx
+        except Exception as e:
+            log.warning(f"[YIELD] scan fetch err: {e}")
+        try:
+            ds_ctx = fetch_div_split_context()
+            if ds_ctx:
+                news_ctx["divSplit"] = ds_ctx
+        except Exception as e:
+            log.warning(f"[DIVS] scan fetch err: {e}")
+        try:
+            earnings_ctx = fetch_upcoming_earnings_context(candidate_pairs)
+            if earnings_ctx:
+                news_ctx["upcomingEarnings"] = earnings_ctx
+        except Exception as e:
+            log.warning(f"[EARN] scan fetch err: {e}")
+        try:
+            btc = fetch_candles({"symbol":"BTCUSDT","source":"binance"}, "D1", CONFIG["D1_CANDLES"])
+            if btc and len(btc) >= 200:
+                s = calc_indicators(btc)["snap"]
+                if s["ema21"] and s["ema50"] and s["ema200"]:
+                    if s["ema21"] > s["ema50"] > s["ema200"]:
+                        btc_bias = "bullish"
+                    elif s["ema21"] < s["ema50"] < s["ema200"]:
+                        btc_bias = "bearish"
+            log.info(f"BTC bias: {btc_bias}")
+        except Exception as e:
+            log.error(f"BTC err: {e}")
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        def _analyse(pair):
+            try:
+                return pair, analyze_pair(pair, btc_bias), None
+            except Exception as e:
+                return pair, None, str(e)
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = {pool.submit(_analyse, pair): pair for pair in candidate_pairs}
+            for fut in as_completed(futures):
+                pair, sig, err = fut.result()
+                if err:
+                    errors.append({"pair": pair["display"], "error": err})
+                    scan_funnel["errors"] += 1
+                    log.error(f"{pair['display']:12s} ERR: {err}")
+                    continue
+                if not sig:
+                    skipped.append({"pair": pair["display"], "reason": "No data", "tier": "skip", "diagnostics": [{"code": "no_data", "detail": "No data"}]})
+                    scan_funnel["no_data"] += 1
+                    log.info(f"{pair['display']:12s} SKIP")
+                    continue
+                threshold = CONFIG["MIN_CONFLUENCE_CLASS"].get(pair["type"], CONFIG["MIN_CONFLUENCE"])
+                sig = _annotate_signal_for_scan(sig, pair, threshold, ds_ctx, earnings_ctx, _closed_exchanges, news_ctx)
+                tier, tier_reason = _classify_signal(sig, pair)
+                sig["signalTier"] = tier
+                sig["watchlistReason"] = tier_reason if tier == "watchlist" else None
+                codes = {d.get("code") for d in sig.get("scanDiagnostics", [])}
+                if "low_confluence" in codes:
+                    scan_funnel["low_score"] += 1
+                if "closed_exchange" in codes:
+                    scan_funnel["closed_exchange"] += 1
+                if "event_risk" in codes:
+                    scan_funnel["event_block"] += 1
+                if "inactive_pair" in codes:
+                    scan_funnel["inactive_pair"] += 1
+                if "counter_trend" in codes:
+                    scan_funnel["counter_trend"] += 1
+                if "dead_ranging" in codes:
+                    scan_funnel["dead_ranging"] += 1
+                if tier == "trade":
+                    try:
+                        sig["serverIndicators"] = fetch_eodhd_indicators(pair)
+                    except Exception as _e:
+                        log.debug(f"[IND] {pair['display']} server indicators skipped: {_e}")
+                    results.append(sig)
+                    scan_funnel["passed"] += 1
+                    log.info(f"{pair['display']:12s} {sig['direction']:5s} {sig['confluenceScore']}/{sig.get('maxScore', 13)} [{sig.get('trendState','?')}]")
+                elif tier == "watchlist":
+                    watchlist.append(sig)
+                    scan_funnel["watchlist"] += 1
+                    log.info(f"{pair['display']:12s} WATCH {sig['confluenceScore']}/{sig.get('maxScore', 13)} :: {tier_reason}")
+                else:
+                    skipped.append({"pair": pair["display"], "reason": tier_reason, "tier": "skip", "diagnostics": sig.get("scanDiagnostics", [])})
+                    log.info(f"{pair['display']:12s} SKIP  {sig['confluenceScore']}/{sig.get('maxScore', 13)} :: {tier_reason}")
+        log.info(f"Scan funnel: {scan_funnel}")
+        results.sort(key=lambda x: x["confluenceScore"], reverse=True)
+        watchlist.sort(key=lambda x: x["confluenceScore"], reverse=True)
+        results = apply_correlation_cap(results)
+        watchlist = apply_correlation_cap(watchlist)
+        return {"success": True, "signals": results, "tradeSignals": results, "watchlist": watchlist,
+                "errors": errors, "skipped": skipped, "scanFunnel": scan_funnel,
+                "btcBias": btc_bias, "totalPairs": len(candidate_pairs), "activePairs": len(active_pairs),
+                "scannedAt": datetime.now(timezone.utc).isoformat()}
+    finally:
+        _scan_in_progress = False
 
 EXPERT_PROMPT="""You are Marcus Reid — 18-year prop-desk veteran. Framework: Elder Triple Screen, Wilder rules, Weinstein stages, Murphy intermarket, Minervini templates, Van Tharp R-multiples, Douglas probability. Be direct, blunt, zero sugar-coating. Never guarantee outcomes.
 
@@ -574,7 +676,7 @@ def fetch_dxy_context():
         chg=round((cl[-1]-cl[-5])/cl[-5]*100,2)
         trend="rising" if chg>0.3 else "falling" if chg<-0.3 else "flat"
         return f"trend={trend} 5d_chg={chg}% price={round(cl[-1],2)}"
-    except: return None
+    except Exception: return None
 
 # Phase A: UST Yield Curve cache (1hr TTL — rates change slowly)
 _yield_cache = {"data": None, "ts": 0}
@@ -629,7 +731,7 @@ _divsplit_cache = {"data": {}, "ts": 0}
 _DIVSPLIT_TTL = 86400  # 24 hours
 
 # Stock pairs that can have dividends/splits
-_DIV_SPLIT_PAIRS = ["GOOG.US", "GLD.US", "NPN.JO", "AGL.JO", "PRX.JO", "SPY.US", "QQQ.US", "TLT.US"]
+_DIV_SPLIT_PAIRS = [p["symbol"] for p in ALL_PAIRS if p.get("type") == "stock"]
 
 def fetch_div_split_context():
     """Fetch upcoming dividends and splits for stock pairs. Warns AI if ex-div within 7 days."""
@@ -689,11 +791,72 @@ def fetch_div_split_context():
     log.info(f"[DIVS] Checked {len(_DIV_SPLIT_PAIRS)} pairs — {len(result)} with upcoming events")
     return result
 
+# Phase B2: Upcoming earnings awareness cache (6hr TTL)
+_earnings_cache = {"data": {}, "ts": 0}
+_EARNINGS_TTL = 21600
+_EARNINGS_AVAILABLE = None  # None = untested, True = works, False = 403 on this plan
+
+def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
+    """Fetch upcoming earnings for tracked stock pairs via EODHD SDK."""
+    global _earnings_cache, _EARNINGS_AVAILABLE
+    if _EARNINGS_AVAILABLE is False:
+        return {}
+    now = time.time()
+    if _earnings_cache["data"] and (now - _earnings_cache["ts"]) < _EARNINGS_TTL:
+        return _earnings_cache["data"]
+    api = _get_eodhd_client()
+    if not api:
+        return {}
+    stock_pairs = [p for p in (pairs or ALL_PAIRS) if p.get("type") == "stock"]
+    if not stock_pairs:
+        return {}
+    symbols = [p["symbol"] for p in stock_pairs]
+    today = datetime.now(timezone.utc).date()
+    end_date = today + timedelta(days=14)
+    try:
+        rows = api.get_upcoming_earnings_data(
+            from_date=today.strftime("%Y-%m-%d"),
+            to_date=end_date.strftime("%Y-%m-%d"),
+            symbols=",".join(symbols),
+        ) or []
+        _EARNINGS_AVAILABLE = True
+    except Exception as e:
+        if "403" in str(e) or "Forbidden" in str(e):
+            _EARNINGS_AVAILABLE = False
+            log.info("[EARN] Endpoint not available on current EODHD plan — skipping future calls")
+        else:
+            log.warning(f"[EARN] fetch failed: {e}")
+        return {}
+    result = {}
+    for row in rows:
+        sym = (row.get("code") or row.get("symbol") or row.get("ticker") or "").upper()
+        if not sym or sym not in symbols:
+            continue
+        dt_raw = row.get("report_date") or row.get("date") or row.get("earnings_date") or row.get("datetime")
+        if not dt_raw:
+            continue
+        try:
+            earn_date = datetime.strptime(str(dt_raw)[:10], "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        days_to = (earn_date - today).days
+        if 0 <= days_to <= 14:
+            result[sym] = {
+                "date": str(earn_date),
+                "daysTo": days_to,
+                "beforeMarket": row.get("before_market"),
+                "afterMarket": row.get("after_market"),
+                "currency": row.get("currency"),
+            }
+    _earnings_cache = {"data": result, "ts": now}
+    log.info(f"[EARN] Checked {len(symbols)} stock symbols — {len(result)} with upcoming earnings")
+    return result
+
 # P2: 5-minute TTL cache for news context — avoid redundant API calls during rapid scans
 _news_cache = {"data": None, "ts": 0}
 _NEWS_TTL = 300  # 5 minutes
 
-def fetch_news_context():
+def fetch_news_context(pairs: list | None = None):
     now = time.time()
     if _news_cache["data"] and (now - _news_cache["ts"]) < _NEWS_TTL:
         log.info("[NEWS] Using cached context")
@@ -703,41 +866,32 @@ def fetch_news_context():
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         r = http_requests.get(f"https://finnhub.io/api/v1/calendar/economic?from={today}&to={today}&token={CONFIG.get('FINNHUB_KEY','')}", timeout=8)
         if r.status_code == 200:
-            events = [e for e in r.json().get("economicCalendar",[]) if e.get("impact","").lower() in ["high","3"]]
-            ctx["forexEvents"] = [{"time":e.get("time",""),"currency":e.get("country",""),"event":e.get("event","")} for e in events[:5]]
+            events = [e for e in r.json().get("economicCalendar", []) if e.get("impact", "").lower() in ["high", "3"]]
+            ctx["forexEvents"] = [{"time": e.get("time", ""), "currency": e.get("country", ""), "event": e.get("event", "")} for e in events[:5]]
             log.info(f"[NEWS] Economic calendar: {len(ctx['forexEvents'])} high-impact events today")
-    except Exception as e: log.warning(f"[NEWS] Economic calendar failed: {e}")
+    except Exception as e:
+        log.warning(f"[NEWS] Economic calendar failed: {e}")
     if CONFIG.get("CRYPTOPANIC_KEY"):
         try:
             r = http_requests.get(f"https://cryptopanic.com/api/v1/posts/?auth_token={CONFIG['CRYPTOPANIC_KEY']}&public=true&filter=hot", timeout=8)
             if r.status_code == 200:
                 posts = r.json().get("results", [])
-                ctx["cryptoNews"] = [{"title":p.get("title",""),"sentiment":"bullish" if p.get("votes",{}).get("positive",0)>p.get("votes",{}).get("negative",0) else "bearish" if p.get("votes",{}).get("negative",0)>0 else "neutral","currencies":[c["code"] for c in p.get("currencies",[])]} for p in posts[:8]]
+                ctx["cryptoNews"] = [{"title": p.get("title", ""), "sentiment": "bullish" if p.get("votes", {}).get("positive", 0) > p.get("votes", {}).get("negative", 0) else "bearish" if p.get("votes", {}).get("negative", 0) > 0 else "neutral", "currencies": [c["code"] for c in p.get("currencies", [])]} for p in posts[:8]]
                 log.info(f"[NEWS] CryptoPanic: {len(ctx['cryptoNews'])} headlines")
-        except Exception as e: log.warning(f"[NEWS] CryptoPanic failed: {e}")
+        except Exception as e:
+            log.warning(f"[NEWS] CryptoPanic failed: {e}")
     if CONFIG.get("FINNHUB_KEY"):
         try:
             r = http_requests.get(f"https://finnhub.io/api/v1/news?category=general&token={CONFIG['FINNHUB_KEY']}", timeout=8)
             if r.status_code == 200:
-                ctx["marketNews"] = [{"headline":a.get("headline",""),"summary":a.get("summary","")[:100]} for a in r.json()[:5]]
+                ctx["marketNews"] = [{"headline": a.get("headline", ""), "summary": a.get("summary", "")[:100]} for a in r.json()[:5]]
                 log.info(f"[NEWS] Finnhub: {len(ctx['marketNews'])} market headlines")
-        except Exception as e: log.warning(f"[NEWS] Finnhub failed: {e}")
-    # EODHD per-pair sentiment — batch call: normalized 0.0–1.0 (>0.6 bullish, <0.4 bearish)
+        except Exception as e:
+            log.warning(f"[NEWS] Finnhub failed: {e}")
     try:
         _eodhd_key = os.environ.get("EODHD_KEY", "")
         if _eodhd_key:
-            def _eodhd_ticker(p):
-                _d, _t = p["display"], p.get("type","")
-                if _t == "crypto":
-                    # BTC/USDT → BTC-USD.CC
-                    base = _d.split("/")[0] if "/" in _d else _d.replace("USDT","")
-                    return f"{base}-USD.CC"
-                if _t in ("forex","commodity") or ("/" in _d and _t != "crypto"): return _d.replace("/","") + ".FOREX"
-                elif _t == "stock" and ".JO" in p["symbol"]: return p["symbol"].replace(".JO",".JSE")
-                elif _t == "index": return p["symbol"] if ".INDX" in p["symbol"] else p["symbol"].lstrip("^") + ".INDX"
-                else: return p["symbol"]
-            ticker_map = {_eodhd_ticker(p): p["display"] for p in ACTIVE_PAIRS}
-            # Phase 2: Single batch sentiment call instead of N sequential calls
+            ticker_map = {t: p["display"] for p in (pairs or ACTIVE_PAIRS) if (t := _eodhd_ticker_for_pair(p))}
             sentiments = {}
             if ticker_map:
                 tickers_csv = ",".join(ticker_map.keys())
@@ -749,30 +903,32 @@ def fetch_news_context():
                         label = "bullish" if sc > 0.6 else "bearish" if sc < 0.4 else "neutral"
                         sentiments[display] = round(sc, 3)
                         log.info(f"[SENT] {display:12s} {sc:.2f} {label}")
-                if sentiments: ctx["pairSentiment"] = sentiments
-            # Phase 3: EODHD per-pair financial news (replaces Finnhub general news)
+                if sentiments:
+                    ctx["pairSentiment"] = sentiments
             pair_news = {}
             for sticker, display in list(ticker_map.items())[:10]:
                 try:
                     ndata = http_requests.get(f"https://eodhd.com/api/news?s={sticker}&limit=3&api_token={_eodhd_key}&fmt=json", timeout=8).json()
                     if ndata and isinstance(ndata, list):
-                        pair_news[display] = [{"t": a.get("title","")[:80], "s": round(a.get("sentiment",{}).get("polarity",0.5),2)} for a in ndata[:3]]
-                except Exception as _e: log.debug(f"[NEWS] {display} news fetch error: {_e}")
+                        pair_news[display] = [{"t": a.get("title", "")[:80], "s": round(a.get("sentiment", {}).get("polarity", 0.5), 2)} for a in ndata[:3]]
+                except Exception as _e:
+                    log.debug(f"[NEWS] {display} news fetch error: {_e}")
             if pair_news:
                 ctx["pairNews"] = pair_news
                 log.info(f"[NEWS] EODHD per-pair news: {len(pair_news)} pairs, {sum(len(v) for v in pair_news.values())} articles")
-            # Phase 4: News word weights — top keywords driving each pair's news
             word_weights = {}
             for sticker, display in list(ticker_map.items())[:10]:
                 try:
                     wdata = http_requests.get(f"https://eodhd.com/api/news-word-weights?s={sticker}&page[limit]=5&api_token={_eodhd_key}&fmt=json", timeout=8).json()
                     if wdata and isinstance(wdata, dict) and wdata.get("data"):
                         word_weights[display] = list(wdata["data"].keys())[:5]
-                except Exception as _e: log.debug(f"[NEWS] {display} word weights error: {_e}")
+                except Exception as _e:
+                    log.debug(f"[NEWS] {display} word weights error: {_e}")
             if word_weights:
                 ctx["wordWeights"] = word_weights
                 log.info(f"[NEWS] Word weights: {len(word_weights)} pairs")
-    except Exception as e: log.warning(f"[NEWS] EODHD sentiment/news failed: {e}")
+    except Exception as e:
+        log.warning(f"[NEWS] EODHD sentiment/news failed: {e}")
     _news_cache["data"] = ctx
     _news_cache["ts"] = time.time()
     return ctx
@@ -871,7 +1027,6 @@ def _build_signal_message(signal: dict, news_ctx: dict | None,
 
     return msg
 
-
 def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto") -> dict:
     """Send signal data to Anthropic Claude for Marcus Reid AI analysis. Returns parsed JSON dict."""
     if not CONFIG.get("ANTHROPIC_KEY") or CONFIG["ANTHROPIC_KEY"] == "YOUR_ANTHROPIC_API_KEY":
@@ -934,14 +1089,17 @@ def backtest_pair(pair):
             d1_df = yf.download(sym, period="2y", interval="1d", progress=False, auto_adjust=True)
             if d1_df is None or d1_df.empty: return {"error": f"No D1 data for {pair['display']}"}
             if isinstance(d1_df.columns, pd.MultiIndex): d1_df.columns = [col[0] for col in d1_df.columns]
-            h1_df = yf.download(sym, period="730d", interval="1h", progress=False, auto_adjust=True)
+            h1_df = yf.download(sym, period="180d", interval="1h", progress=False, auto_adjust=True)
             if h1_df is None or h1_df.empty: h1_df = None
             elif isinstance(h1_df.columns, pd.MultiIndex): h1_df.columns = [col[0] for col in h1_df.columns]
             d1_raw = df_to_candles(d1_df)
             h4_raw = df_to_candles(h1_df.resample("4h").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna()) if h1_df is not None else None
             h1_raw = df_to_candles(h1_df) if h1_df is not None else None
         if not d1_raw: return {"error": f"No D1 data for {pair['display']}"}
+        if not h4_raw or not h1_raw: return {"error": f"No H4/H1 data for {pair['display']}"}
         if len(d1_raw) < 230: return {"error": f"Insufficient D1 history for {pair['display']} ({len(d1_raw)} bars)"}
+        h4_times = pd.to_datetime([c["time"] for c in h4_raw], utc=True, errors="coerce")
+        h1_times = pd.to_datetime([c["time"] for c in h1_raw], utc=True, errors="coerce")
     except Exception as e:
         return {"error": f"Data fetch failed: {e}"}
 
@@ -967,6 +1125,8 @@ def backtest_pair(pair):
     MIN_BARS = 220; COOLDOWN = 5; MAX_OPEN = 3  # R5: max concurrent positions
     total_bars = len(d1_raw)
     _ptype = pair["type"]
+    _h4_need = max(50, CONFIG["H4_CANDLES"])
+    _h1_need = max(50, CONFIG["H1_CANDLES"])
     i = MIN_BARS; last_exit_bar = 0; open_positions = 0
     # F8: Trade funnel diagnostic counters
     funnel = {"total_setups":0, "fail_score":0, "fail_macro":0, "fail_regime":0, "taken":0}
@@ -980,8 +1140,12 @@ def backtest_pair(pair):
         if open_positions >= MAX_OPEN:
             i += 1; continue
         d1_window = d1_raw[i - MIN_BARS : i]
-        h4_window = d1_window[-80:]
-        h1_window = d1_window[-60:]
+        entry_ts = pd.to_datetime(d1_raw[i]["time"], utc=True, errors="coerce")
+        if pd.isna(entry_ts):
+            i += 1; continue
+        intraday_cutoff = entry_ts + pd.Timedelta(days=1)
+        h4_window = [bar for bar, ts in zip(h4_raw, h4_times) if not pd.isna(ts) and ts < intraday_cutoff][-_h4_need:]
+        h1_window = [bar for bar, ts in zip(h1_raw, h1_times) if not pd.isna(ts) and ts < intraday_cutoff][-_h1_need:]
         if len(h4_window) < 50 or len(h1_window) < 50:
             i += 1; continue
         try:
@@ -989,7 +1153,7 @@ def backtest_pair(pair):
             h4i = calc_indicators(h4_window)
             h1i = calc_indicators(h1_window)
             vols = [c["vol"] for c in h1_window]; vsma = calc_sma(vols, 20)
-            vr = vols[-1] / vsma[-1] if vsma[-1] and vsma[-1] > 0 else 1.0
+            vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
             stoch = calc_stochastic(h4_window, 14, 3, 3)
             e200 = calc_ema([c["close"] for c in d1_window], 200)
             e200s = (e200[-1] - e200[-21]) / e200[-21] if e200[-1] and len(e200) >= 21 and e200[-21] else 0
@@ -1032,7 +1196,7 @@ def backtest_pair(pair):
         raw_entry = entry_bar["close"]
         slip = raw_entry * _get_slippage(entry_bar, _ptype)
         entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
-        atr = d1i["snap"]["atr"]
+        atr = _atr_for_levels(d1i, h4i, h1i)
         if not atr or atr == 0: i += 1; continue
         # C4: Use shared calc_levels (deduplicates with analyze_pair)
         lvl = calc_levels(entry, atr, direction, _ptype)
@@ -1100,7 +1264,7 @@ def backtest_pair(pair):
     r_values     = [t["resultR"] for t in trades]
     avg_r        = round(total_r / len(trades), 3) if trades else 0
     _var = sum((r - avg_r)**2 for r in r_values) / len(r_values) if r_values else 0
-    sqn  = round((avg_r / _var**0.5) * (len(trades)**0.5), 2) if len(trades) > 1 and avg_r != 0 and _var > 0 else 0
+    sqn  = round(max(-10, min(10, (avg_r / _var**0.5) * (len(trades)**0.5))), 2) if len(trades) > 1 and avg_r != 0 and _var > 0 else 0
     peak = 1.0; max_dd = 0.0
     for e in equity_curve:
         if e > peak: peak = e
@@ -1154,7 +1318,7 @@ def backtest_pair(pair):
         rv = [t["resultR"] for t in tlist]
         _a = sum(rv)/len(rv)
         _v = sum((r-_a)**2 for r in rv)/len(rv)
-        return round((_a / _v**0.5) * (len(rv)**0.5), 2) if _a != 0 and _v > 0 else 0
+        return round(max(-10, min(10, (_a / _v**0.5) * (len(rv)**0.5))), 2) if _a != 0 and _v > 0 else 0
     is_sqn = _calc_sqn(is_trades)
     oos_sqn = _calc_sqn(oos_trades)
     wf_split = {"is_trades":len(is_trades), "oos_trades":len(oos_trades),
@@ -1174,12 +1338,22 @@ def backtest_pair(pair):
     }
 
 def run_full_backtest():
-    """Run backtest_pair on ALL_PAIRS and return sorted leaderboard by SQN."""
+    """Run backtest_pair on ALL_PAIRS in parallel and return sorted leaderboard by SQN."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     results = []; errors = []
-    for pair in ALL_PAIRS:
-        r = backtest_pair(pair)
-        if "error" in r: errors.append({"pair": pair["display"], "error": r["error"]})
-        else: results.append(r)
+    def _bt(pair):
+        try:
+            return pair, backtest_pair(pair)
+        except Exception as e:
+            return pair, {"error": str(e)}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(_bt, p): p for p in ALL_PAIRS}
+        for fut in as_completed(futures):
+            pair, r = fut.result()
+            if "error" in r:
+                errors.append({"pair": pair["display"], "error": r["error"]})
+            else:
+                results.append(r)
     results.sort(key=lambda x: x["sqn"] if x["sqn"] is not None else -999, reverse=True)
     return {"success": True, "results": results, "errors": errors, "totalPairs": len(ALL_PAIRS)}
 
@@ -1231,15 +1405,14 @@ def api_analyze():
         result = run_ai(sig, news_ctx, style_pref)
         # N9: Audit log — persist every AI analysis to SQLite
         try:
-            _con = sqlite3.connect(_AUDIT_DB)
-            _con.execute(
-                "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style) VALUES(?,?,?,?,?,?,?,?,?)",
-                (datetime.now(timezone.utc).isoformat(), sig.get("pair"), sig.get("confluenceScore"),
-                 sig.get("direction"), sig.get("trendState"), result.get("grade"),
-                 result.get("edgeProbability"), result.get("riskLevel"), style_pref)
-            )
-            _con.commit()
-            _con.close()
+            with sqlite3.connect(_AUDIT_DB) as _con:
+                _con.execute(
+                    "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (datetime.now(timezone.utc).isoformat(), sig.get("pair"), sig.get("confluenceScore"),
+                     sig.get("direction"), sig.get("trendState"), result.get("grade"),
+                     result.get("edgeProbability"), result.get("riskLevel"), style_pref)
+                )
+                _con.commit()
         except Exception as _ae:
             log.warning(f"Audit DB write failed: {_ae}")
         return jsonify(result)
@@ -1258,15 +1431,42 @@ def api_screener_scan():
         min_cap = d.get("minMarketCap", 50000000000)  # $50B default
         limit   = min(d.get("limit", 50), 100)
         # Fetch top momentum stocks: sorted by 200d_new_hi (price near 52-week high)
-        url = (f"https://eodhd.com/api/screener?api_token={_key}&sort=200d_new_hi-desc"
-               f"&filters=[[\"market_capitalization\",\">\",{min_cap}]]"
-               f"&limit={limit}&offset=0&fmt=json")
-        r = http_requests.get(url, timeout=15)
-        if r.status_code == 403: return jsonify({"error": "Screener requires All-In-One plan (403)"}), 403
-        if r.status_code != 200: return jsonify({"error": f"EODHD screener error: HTTP {r.status_code}"}), 502
+        params = {
+            "api_token": _key,
+            "fmt": "json",
+            "limit": limit,
+            "offset": 0,
+            "filters": json.dumps([["market_capitalization", ">", min_cap]]),
+            # EODHD screener rejects sort arrays on current plan; we'll sort client-side instead
+        }
+        r = http_requests.get("https://eodhd.com/api/screener", params=params, timeout=15)
+        if r.status_code == 403:
+            return jsonify({"error": "Screener requires All-In-One plan (403)"}), 403
+        if r.status_code != 200:
+            err_detail = None
+            try:
+                err_json = r.json()
+                if isinstance(err_json, dict):
+                    if err_json.get("errors"):
+                        # Flatten first error message for readability
+                        first_key = next(iter(err_json["errors"].keys()), None)
+                        if first_key:
+                            err_vals = err_json["errors"].get(first_key)
+                            if isinstance(err_vals, list) and err_vals:
+                                err_detail = f"{first_key}: {err_vals[0]}"
+                if not err_detail:
+                    err_detail = err_json
+            except Exception:
+                err_detail = r.text[:200]
+            return jsonify({"error": f"EODHD screener error: HTTP {r.status_code}", "details": err_detail}), 502
         data = r.json()
         rows = data.get("data", data) if isinstance(data, dict) else data
         if not rows or not isinstance(rows, list): return jsonify({"error": "No screener results"}), 404
+        # Sort by 200d_new_hi locally (descending) now that API sort is unavailable on this plan
+        try:
+            rows.sort(key=lambda r: r.get("200d_new_hi", 0) or 0, reverse=True)
+        except Exception:
+            pass
         # Cross-reference against our existing 70 pairs
         existing_syms = {p["symbol"].upper() for p in ALL_PAIRS}
         candidates = []
@@ -1331,6 +1531,7 @@ def _auto_toggle_pair(pair, result):
         log.warning(f"[BT-AUTO] {pair['display']} AUTO-DISABLED (SQN:{sqn}, IS:{is_sqn}, OOS:{oos_sqn})")
     if action:
         ACTIVE_PAIRS = [p for p in ALL_PAIRS if p.get("enabled", True)]
+        _persist_toggle_state()
     return action
 
 @app.route("/api/backtest",methods=["POST"])
@@ -1480,6 +1681,208 @@ def _check_api_keys() -> None:
             log.warning(f"  • {m}")
     else:
         log.info("[KEYS] All API keys configured")
+
+
+# ── Injected runtime definitions (scan helpers, analyze_pair, event risk) ──
+
+def fetch_eodhd_indicators(pair):
+    try:
+        _key = os.environ.get("EODHD_KEY", "")
+        if not _key:
+            return None
+        _disp = pair["display"]
+        ticker = _eodhd_ticker_for_pair(pair)
+        if not ticker:
+            return None
+        base = f"https://eodhd.com/api/technical/{ticker}?api_token={_key}&fmt=json"
+        indicators = [
+            ("EMA21", "function=ema&period=21&filter=last_ema"),
+            ("EMA50", "function=ema&period=50&filter=last_ema"),
+            ("RSI", "function=rsi&period=14&filter=last_rsi"),
+            ("ADX", "function=adx&period=14&filter=last_adx"),
+            ("ATR", "function=atr&period=14&filter=last_atr"),
+            ("MACD", "function=macd&filter=last_macd"),
+            ("SAR", "function=sar&filter=last_sar"),
+        ]
+        result = {}
+        for name, params in indicators:
+            try:
+                r = http_requests.get(f"{base}&{params}", timeout=6)
+                if r.status_code == 200:
+                    val = r.json()
+                    if isinstance(val, (int, float)):
+                        result[name] = round(float(val), 4)
+            except Exception as _e:
+                log.debug(f"[IND] {name} fetch error: {_e}")
+        if result:
+            log.info(f"[IND] {_disp:12s} {' '.join(f'{k}={v}' for k, v in result.items())}")
+        return result if result else None
+    except Exception as e:
+        log.warning(f"[IND] {pair['display']}: {e}")
+        return None
+
+def _pair_exchange_code(pair: dict) -> str | None:
+    sym = pair.get("symbol", "")
+    if ".JO" in sym:
+        return "JSE"
+    if (".US" in sym or ".INDX" in sym) and pair.get("type") in ("stock", "index"):
+        return "US"
+    return None
+
+def _pair_exchange_closed(pair: dict, closed_exchanges: set) -> bool:
+    exch = _pair_exchange_code(pair)
+    return exch in closed_exchanges if exch else False
+
+def analyze_pair(pair, btc_bias):
+    d1 = fetch_candles(pair, "D1", CONFIG["D1_CANDLES"])
+    h4 = fetch_candles(pair, "H4", CONFIG["H4_CANDLES"])
+    h1 = fetch_candles(pair, "H1", CONFIG["H1_CANDLES"])
+    if not d1 or not h4 or not h1:
+        return None
+    if len(d1) < 220 or len(h4) < 50 or len(h1) < 50:
+        return None
+    d1i = calc_indicators(d1)
+    h4i = calc_indicators(h4)
+    h1i = calc_indicators(h1)
+    vols = [c["vol"] for c in h1]
+    vsma = calc_sma(vols, 20)
+    vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
+    stoch = calc_stochastic(h4, 14, 3, 3)
+    e200 = calc_ema([c["close"] for c in d1], 200)
+    e200s = (e200[-1] - e200[-21]) / e200[-21] if e200[-1] and len(e200) >= 21 and e200[-21] else 0
+    res = calc_confluence(
+        d1i, h4i, h1i, vr, stoch, e200s, pair, btc_bias,
+        d1_candles=d1, h4_candles=h4, h1_candles=h1,
+    )
+    direction = res["direction"]
+    live_px = (_live_prices.get(pair["display"], {}) or {}).get("price")
+    price = live_px or h1i["snap"].get("close") or h4i["snap"].get("close") or d1i["snap"].get("close")
+    atr = _atr_for_levels(d1i, h4i, h1i)
+    if price is None or not atr:
+        return None
+    fib = calc_fib(h4)
+    lvl = calc_levels(float(price), float(atr), direction, pair["type"])
+    sk = stoch["k"][-1] if stoch["k"] and stoch["k"][-1] is not None else None
+    sd = stoch["d"][-1] if stoch["d"] and stoch["d"][-1] is not None else None
+    risk_pct = round(abs(float(price) - float(lvl["sl"])) / float(price) * 100, 2) if price else None
+    warn_list = list(res.get("warnings", []))
+    for w in detect_div(d1, h4, h1):
+        if w not in warn_list:
+            warn_list.append(w)
+    max_score = _max_score_for_pair(pair)
+    return {
+        "pair": pair["display"],
+        "display": pair["display"],
+        "symbol": pair["symbol"],
+        "type": pair["type"],
+        "direction": direction,
+        "confluenceScore": res["score"],
+        "confluencePct": round(res["score"] / max_score * 100),
+        "votes": res["votes"],
+        "maxScore": max_score,
+        "price": round(float(price), 6),
+        "sl": round(float(lvl["sl"]), 6),
+        "tp1": round(float(lvl["tp1"]), 6),
+        "tp2": round(float(lvl["tp2"]), 6),
+        "rr1": round(float(lvl["rr1"]), 2),
+        "rr2": round(float(lvl["rr2"]), 2),
+        "atr": round(float(atr), 6),
+        "slPips": round(abs(float(price) - float(lvl["sl"])), 6),
+        "slPct": risk_pct,
+        "fib": fib,
+        "d1": d1i,
+        "h4": h4i,
+        "h1": h1i,
+        "volRatio": round(vr, 2),
+        "ema200Slope": round(e200s * 100, 3),
+        "stochK": round(sk, 1) if sk is not None else None,
+        "stochD": round(sd, 1) if sd is not None else None,
+        "btcBias": btc_bias if pair["type"] == "crypto" else "n/a",
+        "trendState": res["trendState"],
+        "weinsteinStage": res["weinsteinStage"],
+        "weinsteinLabel": res["weinsteinLabel"],
+        "entryMode": res.get("entryMode", "trend"),
+        "adxMomentum": res.get("adxMomentum"),
+        "adxSlope": res.get("adxSlope"),
+        "spread": res.get("spread", 0),
+        "warnings": warn_list,
+        "session": get_session(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "aiAnalysis": None,
+    }
+
+def _build_event_risk(pair: dict, ds_ctx: dict, earnings_ctx: dict, closed_exchanges: set) -> dict:
+    risk = {"hardBlock": False, "reasons": []}
+    sym = pair.get("symbol", "")
+    if _pair_exchange_closed(pair, closed_exchanges):
+        risk["exchangeClosed"] = True
+        risk["reasons"].append("Exchange closed")
+    if sym in earnings_ctx:
+        e = earnings_ctx[sym]
+        risk["earnings"] = e
+        risk["reasons"].append(f"Earnings in {e['daysTo']} day(s)")
+        if e.get("daysTo", 99) <= 1:
+            risk["hardBlock"] = True
+    if sym in ds_ctx:
+        ev = ds_ctx[sym]
+        if ev.get("upcomingDiv"):
+            d = ev["upcomingDiv"][0]
+            risk["dividend"] = d
+            risk["reasons"].append(f"Ex-div in {d['daysTo']} day(s)")
+        if ev.get("upcomingSplit"):
+            s = ev["upcomingSplit"][0]
+            risk["split"] = s
+            risk["reasons"].append(f"Split in {s['daysTo']} day(s)")
+            if s.get("daysTo", 99) <= 3:
+                risk["hardBlock"] = True
+    return risk
+
+def _annotate_signal_for_scan(signal: dict, pair: dict, threshold: float,
+                              ds_ctx: dict, earnings_ctx: dict,
+                              closed_exchanges: set, news_ctx: dict) -> dict:
+    signal["scanThreshold"] = threshold
+    signal["isEnabled"] = pair.get("enabled", True)
+    signal["exchangeClosed"] = _pair_exchange_closed(pair, closed_exchanges)
+    signal["eventRisk"] = _build_event_risk(pair, ds_ctx, earnings_ctx, closed_exchanges)
+    signal["newsCtx"] = news_ctx
+    diagnostics = []
+    if signal["confluenceScore"] < threshold:
+        diagnostics.append({"code": "low_confluence", "detail": f"Score {signal['confluenceScore']}/{threshold}"})
+    if signal.get("trendState") == "RANGING":
+        diagnostics.append({"code": "ranging", "detail": "Ranging regime"})
+    if signal.get("trendState") == "DEAD RANGING":
+        diagnostics.append({"code": "dead_ranging", "detail": "Dead ranging regime"})
+    if any("COUNTER-TREND" in w for w in signal.get("warnings", [])):
+        diagnostics.append({"code": "counter_trend", "detail": "Counter-trend warning active"})
+    if signal.get("exchangeClosed"):
+        diagnostics.append({"code": "closed_exchange", "detail": "Exchange closed"})
+    if signal["eventRisk"].get("hardBlock"):
+        diagnostics.append({"code": "event_risk", "detail": ", ".join(signal["eventRisk"].get("reasons", []))})
+    if not pair.get("enabled", True):
+        diagnostics.append({"code": "inactive_pair", "detail": "Pair not auto-enabled for live trading"})
+    signal["scanDiagnostics"] = diagnostics
+    for reason in signal["eventRisk"].get("reasons", []):
+        warn = f"EVENT RISK: {reason}"
+        if warn not in signal["warnings"]:
+            signal["warnings"].append(warn)
+    return signal
+
+def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
+    threshold = signal.get("scanThreshold", CONFIG["MIN_CONFLUENCE_CLASS"].get(pair["type"], CONFIG["MIN_CONFLUENCE"]))
+    score = signal.get("confluenceScore", 0)
+    hard_event = signal.get("eventRisk", {}).get("hardBlock", False)
+    exchange_closed = signal.get("exchangeClosed", False)
+    if pair.get("enabled", True) and not exchange_closed and not hard_event and score >= threshold:
+        return "trade", "Trade-ready"
+    watch_floor = max(round(threshold - 1.0, 1), 4.5)
+    reasons = [d["detail"] for d in signal.get("scanDiagnostics", [])]
+    if score >= threshold and not pair.get("enabled", True):
+        return "watchlist", "; ".join(reasons) or "Strong setup, but pair is disabled"
+    if score >= threshold and (exchange_closed or hard_event):
+        return "watchlist", "; ".join(reasons) or "Blocked by exchange/event risk"
+    if signal.get("trendState") != "DEAD RANGING" and score >= watch_floor:
+        return "watchlist", "; ".join(reasons) or f"Near miss ({score}/{threshold})"
+    return "skip", "; ".join(reasons) or "Below discovery threshold"
 
 
 if __name__=="__main__":

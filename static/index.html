@@ -830,7 +830,9 @@ async function runScan() {
     var data=await resp.json();
     if(!data.success) throw new Error(data.error||'Scan failed');
 
-    allSignals=data.signals;
+    var tradeSignals=data.tradeSignals||data.signals||[];
+    var watchlistSignals=data.watchlist||[];
+    allSignals=tradeSignals.concat(watchlistSignals);
     renderStats(data);
     renderSignals(applyStyleFilter(allSignals));
 
@@ -847,13 +849,15 @@ async function runScan() {
     document.getElementById('statsBar').style.display='flex';
     document.getElementById('filterBar').style.display='flex';
 
-    var highConf=allSignals.filter(function(s){return s.confluenceScore>=6;});
+    var highConf=tradeSignals.filter(function(s){return s.confluenceScore>=6;});
     if (highConf.length>0) {
-      showToast('✨ '+highConf.length+' high-confluence setups found');
+      showToast('✨ '+tradeSignals.length+' trade signals · '+watchlistSignals.length+' watchlist');
       for (var i=0;i<Math.min(highConf.length,3);i++) {
         (function(sym){setTimeout(function(){analyzeSignal(sym,true);},800+i*600);})(highConf[i].symbol);
       }
-    } else { showToast('Scan complete — '+allSignals.length+' pairs analyzed'); }
+    } else if (watchlistSignals.length>0) {
+      showToast('Scan complete — 0 trade signals · '+watchlistSignals.length+' watchlist setups');
+    } else { showToast('Scan complete — '+allSignals.length+' results surfaced'); }
   } catch(err) {
     console.error('Scan Error:',err);
     showToast('⚠ '+err.message,true);
@@ -865,10 +869,13 @@ async function runScan() {
 
 // ── Stats ──
 function renderStats(data) {
-  document.getElementById('statScanned').textContent=data.signals.length+'/'+(data.totalPairs||'?');
-  document.getElementById('statHigh').textContent=data.signals.filter(function(s){return s.confluenceScore>=6;}).length;
-  document.getElementById('statLong').textContent=data.signals.filter(function(s){return s.direction==='LONG';}).length;
-  document.getElementById('statShort').textContent=data.signals.filter(function(s){return s.direction==='SHORT';}).length;
+  var tradeSignals=data.tradeSignals||data.signals||[];
+  var watchlistSignals=data.watchlist||[];
+  var displaySignals=tradeSignals.concat(watchlistSignals);
+  document.getElementById('statScanned').textContent=displaySignals.length+'/'+(data.totalPairs||'?');
+  document.getElementById('statHigh').textContent=tradeSignals.length;
+  document.getElementById('statLong').textContent=displaySignals.filter(function(s){return s.direction==='LONG';}).length;
+  document.getElementById('statShort').textContent=displaySignals.filter(function(s){return s.direction==='SHORT';}).length;
   document.getElementById('statTime').textContent=new Date(data.scannedAt).toLocaleTimeString();
   if(data.skipped&&data.skipped.length)console.log('SKIPPED:',JSON.stringify(data.skipped));
   if(data.errors&&data.errors.length)console.log('ERRORS:',JSON.stringify(data.errors));
@@ -905,6 +912,13 @@ function buildCard(s,idx) {
   var confCol=pct<42?'#f59e0b':pct<67?'#00d4ff':'#00e676';
   var sid=s.symbol.replace(/\//g,'_');
   var iconLabel=(s.display||s.pair||s.symbol||'??').split('/')[0].slice(0,3);
+  var tier=s.signalTier||'trade';
+  var tierBadge=tier==='watchlist'
+    ? '<span style="padding:4px 8px;border-radius:999px;border:1px solid rgba(245,158,11,0.4);background:rgba(245,158,11,0.12);color:var(--warn);font-size:10px;font-weight:700;letter-spacing:.08em">WATCHLIST</span>'
+    : '';
+  var watchReasonHtml=(tier==='watchlist'&&s.watchlistReason)
+    ? '<div style="margin-bottom:8px;padding:8px 10px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.25);border-radius:8px;font-size:11px;color:var(--warn)"><strong>Watchlist:</strong> '+s.watchlistReason+'</div>'
+    : '';
 
   // Organize votes by screen
   var screen1keys=['D1 Trend Gate','D1 ADX Trend','D1 Weinstein Stage'];
@@ -968,6 +982,7 @@ function buildCard(s,idx) {
         '<div class="pair-icon '+s.type+'">'+iconLabel+'</div>'+
         '<div><div class="pair-name">'+s.display+'</div><div class="pair-type">'+s.type+' · '+s.session.name+'</div></div>'+
       '</div>'+
+      tierBadge+
       '<span class="direction-badge '+s.direction+'">'+(s.direction==='LONG'?'▲ LONG':'▼ SHORT')+'</span>'+
       '<span class="trend-badge '+s.trendState+'">'+(s.trendState||'')+'</span>'+
     '</div>'+
@@ -980,6 +995,7 @@ function buildCard(s,idx) {
       votesHtml+
       metaHtml+
       corrWarn+
+      watchReasonHtml+
       warnHtml+
       '<div class="levels-grid">'+
         '<div class="level-box"><div class="level-label">Entry</div><div class="level-val neutral">'+fmtPrice(s.price)+'</div></div>'+
