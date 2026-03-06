@@ -6,7 +6,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(line_buffering=True)
-import os, sys, json, math, time, threading, webbrowser, logging
+import os, sys, json, math, time, threading, webbrowser, logging, sqlite3
 from datetime import datetime, timezone
 from flask import Flask, jsonify, request, send_from_directory
 import requests as _requests_mod
@@ -116,8 +116,8 @@ class EODHDWebSocketManager:
                                 entry["marketStatus"] = msg.get("ms", "unknown")
                             if entry.get("price"):
                                 _live_prices[disp] = entry
-                        except Exception:
-                            pass
+                        except Exception as _e:
+                            log.debug(f"[WS] msg parse error: {_e}")
             except Exception as e:
                 log.warning(f"[WS] {endpoint} disconnected: {e} — reconnecting in 5s")
                 await asyncio.sleep(5)
@@ -145,74 +145,8 @@ class EODHDWebSocketManager:
         self._thread.start()
         log.info("[WS] WebSocket manager started")
 
-# N1: Load external config.yaml overrides (tunable thresholds without code deploy)
-_yaml_overrides = {}
-try:
-    import yaml as _yaml
-    _cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
-    if os.path.exists(_cfg_path):
-        with open(_cfg_path, "r") as _f:
-            _yaml_overrides = _yaml.safe_load(_f) or {}
-        log.info(f"Loaded config.yaml ({len(_yaml_overrides)} keys)")
-except ImportError:
-    pass  # pyyaml optional
-except Exception as _e:
-    log.warning(f"config.yaml load failed: {_e}")
-
-CONFIG = {
-    # "TWELVE_DATA_KEY": os.environ.get("TWELVE_DATA_KEY", ""),  # kept for revert reference
-    "ANTHROPIC_KEY": os.environ.get("ANTHROPIC_KEY", "YOUR_ANTHROPIC_API_KEY"),
-    "ANTHROPIC_MODEL": "claude-sonnet-4-6",
-    "CRYPTOPANIC_KEY": os.environ.get("CRYPTOPANIC_KEY", ""),
-    "FINNHUB_KEY": os.environ.get("FINNHUB_KEY", ""),
-    "RISK_PCT": 0.01, "SL_ATR_MULT": 1.5, "TP1_ATR_MULT": 2.0, "TP2_ATR_MULT": 3.5,
-    "VOLUME_THRESHOLD": 1.5, "ADX_TREND_MIN": 25,
-    "D1_CANDLES": 250, "H4_CANDLES": 120, "H1_CANDLES": 120, "MIN_CONFLUENCE": 7.0,
-    # Asset-class risk multipliers — applied to RISK_PCT in backtest and live scan
-    # Metals = alpha driver (1.2x), Crypto = high-conviction burst (0.8x), Forex/Index/Stock = stabiliser (0.6x)
-    "RISK_MULT": {"commodity":1.2, "crypto":0.8, "forex":0.6, "index":0.6, "stock":0.6},
-    # Asset-class ranging suppression thresholds — crypto is more tolerant (trends hard, consolidates often)
-    # (dead_thresh, dead_penalty, choppy_thresh, choppy_penalty)
-    "RANGING": {
-        "crypto":    {"dead":14, "dead_pen":3.0, "choppy":18, "choppy_pen":1.5},
-        "commodity": {"dead":18, "dead_pen":3.0, "choppy":23, "choppy_pen":1.5},
-        "forex":     {"dead":16, "dead_pen":3.0, "choppy":20, "choppy_pen":1.5},
-        "stock":     {"dead":16, "dead_pen":3.0, "choppy":21, "choppy_pen":1.5},
-        "index":     {"dead":16, "dead_pen":3.0, "choppy":21, "choppy_pen":1.5},
-    },
-    "ATR_CLASS": {
-        "forex":     {"sl":1.2, "tp1":2.0, "tp2":3.0},
-        "commodity": {"sl":1.5, "tp1":2.5, "tp2":4.0},
-        "index":     {"sl":1.5, "tp1":2.5, "tp2":4.0},
-        "stock":     {"sl":1.5, "tp1":2.5, "tp2":4.0},
-        "crypto":    {"sl":2.0, "tp1":3.5, "tp2":5.0}
-    },
-    # F1: Per-class D1 ADX trend minimum — crypto trends emerge at ADX 18-22
-    "ADX_TREND_MIN_CLASS": {"crypto":20, "forex":22, "commodity":25, "stock":25, "index":25},
-    # F3: Per-class counter-trend penalty — crypto breaks D1 trends routinely from H4
-    "COUNTER_TREND_PEN": {"crypto":-1.5, "forex":-2.0, "commodity":-3.0, "stock":-3.0, "index":-3.0},
-    # F4: Per-class RSI bounds — crypto stays overbought for weeks in bull runs
-    "RSI_BOUNDS": {
-        "crypto":    {"ob":88, "os":15},
-        "forex":     {"ob":80, "os":20},
-        "commodity": {"ob":78, "os":22},
-        "stock":     {"ob":78, "os":22},
-        "index":     {"ob":78, "os":22},
-    },
-    # F6: Per-class backtest macro lookback — crypto is fast-cycling
-    "MACRO_LOOKBACK": {"crypto":15, "forex":15, "commodity":50, "stock":50, "index":50},
-    # F7: Per-class Weinstein lookback (D1 bars) — crypto cycles are 60-90 bars vs 150 for equities
-    "WEINSTEIN_LOOKBACK": {"crypto":60, "forex":100, "commodity":150, "stock":150, "index":150},
-    # V2: Per-class bt_min + live MIN_CONFLUENCE — crypto requires higher conviction
-    "BT_MIN": {"crypto":8.0, "commodity":6.0, "forex":5.5, "stock":6.0, "index":6.0},
-    "MIN_CONFLUENCE_CLASS": {"crypto":8.0, "commodity":6.0, "forex":5.5, "stock":6.0, "index":6.0},
-}
-# N1: Apply YAML overrides — deep-merge dicts, overwrite scalars
-for _k, _v in _yaml_overrides.items():
-    if _k in CONFIG and isinstance(CONFIG[_k], dict) and isinstance(_v, dict):
-        CONFIG[_k].update(_v)
-    else:
-        CONFIG[_k] = _v
+# N1: CONFIG loaded from config.py (YAML overrides + validation happen there)
+from config import CONFIG
 
 # enabled=False = negative backtest SQN, excluded from live scan (still available in backtest)
 FOREX_PAIRS = [
@@ -418,7 +352,7 @@ def fetch_eodhd_indicators(pair):
                 if r.status_code == 200:
                     val = r.json()
                     if isinstance(val, (int, float)): result[name] = round(float(val), 4)
-            except Exception: pass
+            except Exception as _e: log.debug(f"[IND] {name} fetch error: {_e}")
         if result:
             log.info(f"[IND] {_disp:12s} {' '.join(f'{k}={v}' for k,v in result.items())}")
         return result if result else None
@@ -456,7 +390,7 @@ def fetch_polygon(pair, tf, limit):
         return candles[-limit:] if len(candles) > limit else candles
     except Exception as e: log.error(f"[PG] {pair['display']}: {e}"); return None
 
-def fetch_candles(pair, tf, limit):
+def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
     """Route candle fetch to correct source (binance, yfinance, or polygon) based on pair config."""
     if pair["source"]=="binance": return fetch_binance(pair["symbol"], TF_B[tf], limit)
     if pair["source"]=="eodhd": return fetch_eodhd(pair, tf, limit)
@@ -464,595 +398,25 @@ def fetch_candles(pair, tf, limit):
     if pair["source"]=="yfinance": return fetch_yfinance(pair["symbol"], tf, limit)
     return None
 
-def calc_ema(c, p):
-    """Exponential Moving Average. Returns list aligned with input, None-padded."""
-    k=2/(p+1); e=[None]*len(c)
-    if len(c)<p: return e
-    e[p-1]=sum(c[:p])/p
-    for i in range(p,len(c)): e[i]=c[i]*k+e[i-1]*(1-k)
-    return e
+# ── Indicator functions (extracted to indicators.py) ──
+from indicators import (
+    calc_ema, calc_sma, calc_rsi, calc_macd, calc_atr, calc_adx, calc_bb,
+    calc_rsi_divergence, calc_weinstein_stage, calc_fib_proximity,
+    calc_stochastic, calc_adx_momentum, calc_adx_percentile,
+    calc_atr_percentile, calc_levels, calc_indicators, calc_fib,
+)
 
-def calc_sma(a, p):
-    """Simple Moving Average. Returns list aligned with input, None-padded."""
-    r=[None]*len(a)
-    for i in range(p-1,len(a)): r[i]=sum(a[i-p+1:i+1])/p
-    return r
-
-def calc_rsi(c, p):
-    """Wilder RSI (smoothed). Returns list aligned with input, None-padded."""
-    r=[None]*len(c)
-    if len(c)<p+1: return r
-    g=l=0
-    for i in range(1,p+1):
-        d=c[i]-c[i-1]
-        if d>0: g+=d
-        else: l-=d
-    ag,al=g/p,l/p
-    r[p]=100 if al==0 else 100-100/(1+ag/al)
-    for i in range(p+1,len(c)):
-        d=c[i]-c[i-1]; ag=(ag*(p-1)+max(d,0))/p; al=(al*(p-1)+max(-d,0))/p
-        r[i]=100 if al==0 else 100-100/(1+ag/al)
-    return r
-
-def calc_macd(c, f=12, s=26, sig=9):
-    ef,es=calc_ema(c,f),calc_ema(c,s)
-    ml=[ef[i]-es[i] if ef[i] is not None and es[i] is not None else None for i in range(len(c))]
-    valid=[v for v in ml if v is not None]; se=calc_ema(valid,sig)
-    sl2=[None]*len(c); vf=next((i for i,v in enumerate(ml) if v is not None),len(c)); si=0
-    for i in range(vf,len(c)): sl2[i]=se[si] if si<len(se) else None; si+=1
-    hist=[ml[i]-sl2[i] if ml[i] is not None and sl2[i] is not None else None for i in range(len(c))]
-    return {"macd":ml,"signal":sl2,"hist":hist}
-
-def calc_atr(h, l, c, p):
-    tr=[0]+[max(h[i]-l[i],abs(h[i]-c[i-1]),abs(l[i]-c[i-1])) for i in range(1,len(c))]
-    a=[None]*len(c)
-    if len(tr)<=p: return a
-    a[p]=sum(tr[1:p+1])/p
-    for i in range(p+1,len(tr)): a[i]=(a[i-1]*(p-1)+tr[i])/p
-    return a
-
-def calc_adx(hi, lo, c, p):
-    """Wilder ADX with +DI/-DI. Returns dict with aligned arrays, None-padded."""
-    n=len(c); adx=[None]*n; plus_di=[None]*n; minus_di=[None]*n
-    if n<p*2: return {"adx":adx,"plusDI":plus_di,"minusDI":minus_di}
-    true_range,dm_plus,dm_minus=[],[],[]
-    for i in range(1,n):
-        up_move,down_move=hi[i]-hi[i-1],lo[i-1]-lo[i]
-        dm_plus.append(up_move if up_move>down_move and up_move>0 else 0)
-        dm_minus.append(down_move if down_move>up_move and down_move>0 else 0)
-        true_range.append(max(hi[i]-lo[i],abs(hi[i]-c[i-1]),abs(lo[i]-c[i-1])))
-    smooth_tr,smooth_dp,smooth_dm=sum(true_range[:p]),sum(dm_plus[:p]),sum(dm_minus[:p]); dx_values=[]
-    for i in range(p,len(true_range)):
-        smooth_tr=smooth_tr-smooth_tr/p+true_range[i]
-        smooth_dp=smooth_dp-smooth_dp/p+dm_plus[i]
-        smooth_dm=smooth_dm-smooth_dm/p+dm_minus[i]
-        pdi_val=(smooth_dp/smooth_tr)*100 if smooth_tr else 0
-        mdi_val=(smooth_dm/smooth_tr)*100 if smooth_tr else 0
-        di_sum=pdi_val+mdi_val
-        plus_di[i+1]=pdi_val; minus_di[i+1]=mdi_val
-        dx_values.append(abs(pdi_val-mdi_val)/di_sum*100 if di_sum else 0)
-    if len(dx_values)>=p:
-        adx_avg=sum(dx_values[:p])/p
-        if p*2<n: adx[p*2]=adx_avg
-        for i in range(p,len(dx_values)):
-            adx_avg=(adx_avg*(p-1)+dx_values[i])/p; idx=i+p+1
-            if idx<n: adx[idx]=adx_avg
-    return {"adx":adx,"plusDI":plus_di,"minusDI":minus_di}
-
-def calc_bb(c, p, m):
-    u,mid,l=[],[],[]
-    for i in range(len(c)):
-        if i<p-1: u.append(None); mid.append(None); l.append(None); continue
-        sl=c[i-p+1:i+1]; mn=sum(sl)/p; sd=math.sqrt(sum((x-mn)**2 for x in sl)/p)
-        mid.append(mn); u.append(mn+m*sd); l.append(mn-m*sd)
-    return {"upper":u,"mid":mid,"lower":l}
-
-def calc_rsi_divergence(candles, lookback=30):
-    """Wilder: RSI divergence using proper 3-bar pivot detection.
-    Returns: 'bullish', 'bearish', or None"""
-    try:
-        c=candles[-lookback:]; cl=[x["close"] for x in c]; hi=[x["high"] for x in c]; lo=[x["low"] for x in c]
-        rsi=calc_rsi(cl,14); n=len(cl)
-        if n<15 or rsi[-1] is None: return None
-        # Find pivot highs: hi[i] > hi[i-1] and hi[i] > hi[i+1] (local maxima)
-        phigh_idx=[i for i in range(1,n-1) if hi[i]>hi[i-1] and hi[i]>hi[i+1] and rsi[i] is not None]
-        # Find pivot lows: lo[i] < lo[i-1] and lo[i] < lo[i+1] (local minima)
-        plow_idx=[i for i in range(1,n-1) if lo[i]<lo[i-1] and lo[i]<lo[i+1] and rsi[i] is not None]
-        # Bearish divergence: need 2 pivot highs, price higher high, RSI lower high
-        if len(phigh_idx)>=2:
-            i1,i2=phigh_idx[-2],phigh_idx[-1]
-            if hi[i2]>hi[i1]*1.001 and rsi[i2]<rsi[i1]*0.99: return "bearish"
-        # Bullish divergence: need 2 pivot lows, price lower low, RSI higher low
-        if len(plow_idx)>=2:
-            i1,i2=plow_idx[-2],plow_idx[-1]
-            if lo[i2]<lo[i1]*0.999 and rsi[i2]>rsi[i1]*1.01: return "bullish"
-    except Exception as e: log.warning(f"calc_rsi_divergence: {e}")
-    return None
-
-def calc_weinstein_stage(candles, lookback=150):
-    """Stan Weinstein stage analysis using configurable MA lookback.
-    F7: Per-class lookback — crypto=60, forex=100, equities=150 D1 bars.
-    Stage 1=Basing, Stage 2=Advancing, Stage 3=Topping, Stage 4=Declining"""
-    try:
-        cl=[c["close"] for c in candles]
-        if len(cl)<lookback: return None,None
-        ma30w=calc_sma(cl,lookback); L=len(cl)-1
-        if ma30w[L] is None or ma30w[L-5] is None: return None,None
-        price=cl[L]; ma=ma30w[L]; ma_prev=ma30w[L-5]
-        ma_rising=ma>ma_prev
-        if price>ma and ma_rising: return 2,"Stage 2 — Advancing"
-        if price>ma and not ma_rising: return 3,"Stage 3 — Topping"
-        if price<ma and not ma_rising: return 4,"Stage 4 — Declining"
-        if price<ma and ma_rising: return 1,"Stage 1 — Basing"
-    except Exception as e: log.warning(f"calc_weinstein_stage: {e}")
-    return None,None
-
-def calc_fib_proximity(price, fib):
-    """Check if price is near a key Fibonacci level (within 1.5% range band).
-    Direction-agnostic: price BELOW a fib level = support = bullish vote (+1).
-    Price ABOVE a fib level = resistance = bearish vote (-1). 0 = not near any level.
-    This avoids circular bias where direction determines fib vote before all votes are in."""
-    try:
-        levels=[fib["fib382"],fib["fib500"],fib["fib618"]]
-        rng=fib["highest"]-fib["lowest"]
-        if rng<=0: return 0
-        band=rng*0.015
-        for lvl in levels:
-            if abs(price-lvl)<=band:
-                if price<=lvl: return 1   # price at or below fib = support zone = bullish
-                else:          return -1  # price at or above fib = resistance zone = bearish
-    except Exception as e: log.warning(f"calc_fib_proximity: {e}")
-    return 0
-
-def calc_stochastic(candles, kp, ks, ds):
-    hi=[c["high"] for c in candles]; lo=[c["low"] for c in candles]; cl=[c["close"] for c in candles]
-    n=len(cl); rawK=[None]*n
-    for i in range(kp-1,n):
-        hh,ll=max(hi[i-kp+1:i+1]),min(lo[i-kp+1:i+1])
-        rawK[i]=((cl[i]-ll)/(hh-ll))*100 if hh!=ll else 50
-    mapped=[v if v is not None else 0 for v in rawK]; kL=calc_sma(mapped,ks)
-    for i in range(kp-1+ks-1):
-        if i<len(kL): kL[i]=None
-    mapped2=[v if v is not None else 0 for v in kL]; dL=calc_sma(mapped2,ds)
-    for i in range(kp-1+ks-1+ds-1):
-        if i<len(dL): dL[i]=None
-    return {"k":kL,"d":dL}
-
-def calc_adx_momentum(adx_series, window=5):
-    """CR1/CR2: Detect ADX momentum — is the trend strengthening or exhausting?
-    Returns (slope, state) where state is one of:
-      'strengthening' — ADX rising, trend getting stronger
-      'exhausting'    — ADX was >30 and is now falling (trend losing steam)
-      'collapsing'    — ADX falling fast from >25 (regime transition imminent)
-      'stable'        — ADX roughly flat
-    This is critical for crypto where regimes shift in days not weeks."""
-    valid = [v for v in adx_series if v is not None]
-    if len(valid) < window + 2:
-        return 0, "stable"
-    recent = valid[-(window+1):]
-    slope = (recent[-1] - recent[0]) / window
-    peak = max(valid[-20:]) if len(valid) >= 20 else max(valid)
-    cur = valid[-1]
-    if slope > 0.5:
-        return round(slope, 2), "strengthening"
-    elif peak > 30 and cur < peak * 0.8 and slope < -0.3:
-        return round(slope, 2), "collapsing"
-    elif peak > 25 and slope < -0.3:
-        return round(slope, 2), "exhausting"
-    return round(slope, 2), "stable"
-
-def calc_adx_percentile(adx_series, lookback=252):
-    """Rank current ADX vs its own history — tells if momentum is expanding or contracting.
-    Returns (percentile 0-100, label). E.g. 78th pct = ADX higher than 78% of last 252 bars."""
-    valid=[v for v in adx_series if v is not None]
-    if len(valid)<20: return None,"insufficient data"
-    cur=valid[-1]; window=valid[-lookback:]
-    pct=round(sum(1 for v in window if v<=cur)/len(window)*100,1)
-    label="expanding" if (len(valid)>=3 and valid[-1]>valid[-2]) else "contracting"
-    return pct,label
-
-def calc_atr_percentile(atr_series, lookback=100):
-    """V1: Rank current ATR vs its own history — detects volatility compression/expansion.
-    Returns (percentile 0-100, label). Crypto trends explode from compression (low ATR pct)."""
-    valid=[v for v in atr_series if v is not None]
-    if len(valid)<20: return None,"insufficient data"
-    cur=valid[-1]; window=valid[-lookback:]
-    pct=round(sum(1 for v in window if v<=cur)/len(window)*100,1)
-    expanding = len(valid)>=3 and valid[-1]>valid[-2]
-    label="expanding" if expanding else "contracting"
-    return pct,label
-
-def calc_levels(price, atr, direction, pair_type):
-    """C4: Shared SL/TP calculation — used by both analyze_pair and backtest_pair."""
-    m=CONFIG["ATR_CLASS"].get(pair_type,{"sl":CONFIG["SL_ATR_MULT"],"tp1":CONFIG["TP1_ATR_MULT"],"tp2":CONFIG["TP2_ATR_MULT"]})
-    sl =price-atr*m["sl"]  if direction=="LONG" else price+atr*m["sl"]
-    tp1=price+atr*m["tp1"] if direction=="LONG" else price-atr*m["tp1"]
-    tp2=price+atr*m["tp2"] if direction=="LONG" else price-atr*m["tp2"]
-    rr1=abs(tp1-price)/abs(sl-price) if abs(sl-price)>0 else 0
-    rr2=abs(tp2-price)/abs(sl-price) if abs(sl-price)>0 else 0
-    return {"sl":sl,"tp1":tp1,"tp2":tp2,"rr1":rr1,"rr2":rr2,"mults":m}
-
-def calc_indicators(candles):
-    """Compute all indicators for a candle series. Returns dict with 'snap' of latest values."""
-    cl=[c["close"] for c in candles]; hi=[c["high"] for c in candles]; lo=[c["low"] for c in candles]
-    e21,e50,e200=calc_ema(cl,21),calc_ema(cl,50),calc_ema(cl,200)
-    rsi=calc_rsi(cl,14); macd=calc_macd(cl); atr=calc_atr(hi,lo,cl,14)
-    adx=calc_adx(hi,lo,cl,14); bb=calc_bb(cl,20,2); L=len(cl)-1
-    adx_now=adx["adx"][L]; adx_prev=next((adx["adx"][j] for j in range(L-1,-1,-1) if adx["adx"][j] is not None),None)
-    rsi_prev=next((rsi[j] for j in range(L-1,-1,-1) if rsi[j] is not None),None)
-    e200_slope=round((e200[L]-e200[L-10])/e200[L-10]*100,3) if e200[L] and L>=10 and e200[L-10] else 0
-    adx_pct,adx_lbl=calc_adx_percentile(adx["adx"])
-    atr_pct,atr_lbl=calc_atr_percentile(atr)
-    adx_slope,adx_momentum=calc_adx_momentum(adx["adx"])
-    return {"snap":{"ema21":e21[L],"ema50":e50[L],"ema200":e200[L],"close":cl[L],"rsi":rsi[L],"rsiPrev":rsi_prev,
-        "macdLine":macd["macd"][L],"macdSignal":macd["signal"][L],"macdHist":macd["hist"][L],
-        "macdHistPrev":macd["hist"][L-1] if L>0 else None,
-        "atr":atr[L],"adx":adx_now,"adxPrev":adx_prev,"adxPct":adx_pct,"adxLabel":adx_lbl,
-        "atrPct":atr_pct,"atrLabel":atr_lbl,
-        "adxSlope":adx_slope,"adxMomentum":adx_momentum,
-        "plusDI":adx["plusDI"][L],"minusDI":adx["minusDI"][L],
-        "bbUpper":bb["upper"][L],"bbMid":bb["mid"][L],"bbLower":bb["lower"][L],"ema200Slope10":e200_slope}}
-
-def calc_fib(candles):
-    """Calculate Fibonacci retracement levels from last 50 candles' high/low range."""
-    r=candles[-50:]; high=max(c["high"] for c in r); low=min(c["low"] for c in r); rng=high-low
-    return {"highest":round(high,6),"lowest":round(low,6),"fib236":round(high-rng*0.236,6),
-            "fib382":round(high-rng*0.382,6),"fib500":round(high-rng*0.5,6),"fib618":round(high-rng*0.618,6),
-            "fib786":round(high-rng*0.786,6),"ext1618":round(high+rng*0.618,6)}
-
-def get_session():
-    """Determine current forex session (Asian/London/NY/Overlap) from UTC hour."""
-    h=datetime.now(timezone.utc).hour
-    if 7<=h<9: return {"name":"London Open","quality":"high","color":"#22c55e"}
-    if 13<=h<16: return {"name":"London/NY Overlap","quality":"high","color":"#22c55e"}
-    if 9<=h<13: return {"name":"London","quality":"medium","color":"#3b82f6"}
-    if 16<=h<22: return {"name":"New York","quality":"medium","color":"#3b82f6"}
-    return {"name":"Asian / Off-Hours","quality":"low","color":"#f59e0b"}
-
-def calc_confluence(d1, h4, h1, vr, stoch, e200s, pair, btc_bias, d1_candles=None, h4_candles=None, h1_candles=None):
-    """Weighted confluence system — higher timeframes score more than lower timeframes.
-    Weights reflect statistical importance: D1 > H4 > H1 (Elder/Wilder/Cardwell/Murphy/Weinstein).
-    Max possible score = 13.0. Counter-trend penalty = -3.0.
-    Ranging suppression: ADX<20 on H4 = brutal score reduction (markets bleed in chop).
-
-    Vote weights:
-      D1 Trend Gate     = 2.0  (highest — primary trend filter)
-      D1 ADX Trend      = 1.5  (confirms D1 is trending not drifting)
-      D1 Weinstein Stage= 1.5  (independent cycle stage)
-      H4 MACD Momentum  = 1.5  (Elder Screen 2 momentum wave)
-      H4 RSI Zone       = 1.0  (Cardwell regime health)
-      H4 Stochastic     = 1.0  (entry timing)
-      H1 EMA Entry      = 1.0  (Elder Screen 3 trigger)
-      H1 BB Pullback    = 0.5  (weakest — noise-prone)
-      H1 RSI Divergence = 1.0  (strong reversal signal when present)
-      H4 Fib Level      = 1.0  (Murphy price-at-fib confluence)
-    """
-    v={}; w=[]; bull=bear=0.0; s=d1["snap"]; s4=h4["snap"]; s1=h1["snap"]
-
-    # ── VOTE 1: D1 Trend Gate — weight 2.0 (Elder Screen 1) ────────────────
-    # F2: Crypto gets partial credit (1.0) for ema21>ema50 even without ema200 alignment
-    # Forex: reduced to 1.0 — forex is more mean-reverting than trending
-    W1=1.0 if pair["type"]=="forex" else 2.0; d1_trend=0; _ptype=pair["type"]
-    if s["ema21"] and s["ema50"] and s["ema200"]:
-        if s["ema21"]>s["ema50"]>s["ema200"]:   v["D1 Trend Gate"]=1;  bull+=W1; d1_trend=1
-        elif s["ema21"]<s["ema50"]<s["ema200"]: v["D1 Trend Gate"]=-1; bear+=W1; d1_trend=-1
-        elif _ptype=="crypto" and s["ema21"]>s["ema50"]: v["D1 Trend Gate"]=1; bull+=1.0; d1_trend=1; w.append("D1 EMA partial — ema21>ema50 but ema200 not aligned (crypto partial credit 1.0)")
-        elif _ptype=="crypto" and s["ema21"]<s["ema50"]: v["D1 Trend Gate"]=-1; bear+=1.0; d1_trend=-1; w.append("D1 EMA partial — ema21<ema50 but ema200 not aligned (crypto partial credit 1.0)")
-        else: v["D1 Trend Gate"]=0; w.append("D1 EMA stack mixed — no clear trend")
-    else: v["D1 Trend Gate"]=0
-
-    # ── VOTE 2: D1 ADX Trend Strength — weight 1.5 (Wilder) ────────────────
-    # F1: Per-class ADX threshold. R1: Percentile gradient (75th+=full, 50th+=1.0, 25th+=0.5)
-    W2=1.5; d1_adx=s.get("adx"); d1_pdi=s.get("plusDI"); d1_mdi=s.get("minusDI")
-    _adx_min=CONFIG["ADX_TREND_MIN_CLASS"].get(_ptype, 25)
-    _d1_adx_pct=s.get("adxPct")
-    if d1_adx is not None and d1_pdi is not None and d1_mdi is not None:
-        # R1: Percentile-based gradient scoring
-        if _d1_adx_pct is not None and _d1_adx_pct>=75:
-            _w2=W2  # full 1.5
-        elif _d1_adx_pct is not None and _d1_adx_pct>=50:
-            _w2=1.0  # partial
-        elif d1_adx>=_adx_min:
-            _w2=0.5  # floor credit if above class threshold
-        else:
-            _w2=0
-        if _w2>0:
-            if d1_pdi>d1_mdi: v["D1 ADX Trend"]=1;  bull+=_w2
-            else:              v["D1 ADX Trend"]=-1; bear+=_w2
-        else:
-            v["D1 ADX Trend"]=0
-            adx_str=f"{d1_adx:.1f}" if d1_adx is not None else "n/a"
-            w.append(f"D1 ADX weak ({adx_str}, pct:{_d1_adx_pct}) — below {_ptype} threshold ({_adx_min})")
-    else:
-        v["D1 ADX Trend"]=0
-
-    # ── VOTE 3: D1 Weinstein Stage — weight 1.5 ─────────────────────────────
-    # F7: Per-class Weinstein lookback — crypto=60, forex=100, equities=150
-    W3=1.5; weinstein_stage=None; weinstein_label=None
-    _wein_lb=CONFIG["WEINSTEIN_LOOKBACK"].get(_ptype, 150)
-    if d1_candles:
-        weinstein_stage, weinstein_label = calc_weinstein_stage(d1_candles, lookback=_wein_lb)
-        if weinstein_stage==2:   v["D1 Weinstein Stage"]=1;  bull+=W3
-        elif weinstein_stage==4: v["D1 Weinstein Stage"]=-1; bear+=W3
-        elif weinstein_stage==3: v["D1 Weinstein Stage"]=0; w.append(f"Weinstein {weinstein_label} — potential distribution, avoid new longs")
-        elif weinstein_stage==1: v["D1 Weinstein Stage"]=0; w.append(f"Weinstein {weinstein_label} — basing, wait for Stage 2 breakout")
-        else: v["D1 Weinstein Stage"]=0
-    else: v["D1 Weinstein Stage"]=0
-
-    # Hard D1 gate for counter-trend penalty
-    hard_long_block  = (v["D1 Trend Gate"]==-1)
-    hard_short_block = (v["D1 Trend Gate"]==1)
-
-    # ── FOREX SESSION FILTER — only fire during London/NY expansion windows ──
-    # F5: AUD/NZD pairs are ACTIVE during Asian session — exempt from penalty
-    _forex_session_pen = 0.0
-    if _ptype == "forex":
-        _sess = get_session()
-        _is_asia_active = any(x in pair["display"] for x in ["AUD","NZD"])
-        if _sess["quality"] == "low" and not _is_asia_active:
-            _forex_session_pen = 1.5
-            w.append(f"FOREX SESSION: {_sess['name']} — off-hours, low-expansion window, score penalised -1.5")
-        elif _sess["quality"] == "low" and _is_asia_active:
-            w.append(f"FOREX SESSION: {_sess['name']} — but {pair['display']} is active during Asian hours (no penalty)")
-
-    # ── RANGING SUPPRESSION — asset-class aware ADX thresholds ─────────────
-    # Crypto: tolerant (ADX<14 dead, <18 choppy) — trends hard, consolidates between legs
-    # Commodity: moderate (ADX<18 dead, <23 choppy) — sustained multi-week trends
-    # Forex/Stock/Index: stricter (ADX<16 dead, <20-21 choppy) — more mean-reverting
-    adx_val=s4["adx"]; adx_prev=s4.get("adxPrev")
-    _adx_mom=s4.get("adxMomentum","stable"); _adx_slope=s4.get("adxSlope",0)
-    ranging_penalty=0.0
-    _rng=CONFIG["RANGING"].get(pair["type"],CONFIG["RANGING"]["commodity"])
-    if adx_val is not None and adx_val < _rng["dead"]:
-        ranging_penalty = _rng["dead_pen"]
-        w.append(f"DEAD RANGING: H4 ADX={adx_val:.1f} (<{_rng['dead']}) — score penalised -{_rng['dead_pen']}, avoid entirely")
-    elif adx_val is not None and adx_val < _rng["choppy"]:
-        ranging_penalty = _rng["choppy_pen"]
-        w.append(f"CHOPPY MARKET: H4 ADX={adx_val:.1f} (<{_rng['choppy']}) — score penalised -{_rng['choppy_pen']}")
-
-    # CR1/CR2: ADX momentum — detect regime TRANSITIONS for crypto
-    # When ADX was strong but is now collapsing, trend-follow signals are stale
-    if _ptype == "crypto" and _adx_mom in ("collapsing", "exhausting"):
-        _trans_pen = 1.5 if _adx_mom == "collapsing" else 0.8
-        ranging_penalty += _trans_pen
-        w.append(f"REGIME TRANSITION: H4 ADX {_adx_mom} (slope={_adx_slope}) — trend fading, -{_trans_pen} penalty")
-
-    # ── VOTE 4: H4 MACD Momentum — weight 1.5 (Elder Screen 2) ─────────────
-    W4=1.5
-    if s4["macdLine"] is not None and s4["macdSignal"] is not None and s4["macdHist"] is not None:
-        hist_now=s4["macdHist"]; hist_prev=s4.get("macdHistPrev")
-        if s4["macdLine"]>s4["macdSignal"] and hist_now>0:
-            v["H4 MACD Momentum"]=1; bull+=W4
-            if hist_prev is not None and hist_now<hist_prev: w.append("H4 MACD histogram decelerating — momentum fading")
-        elif s4["macdLine"]<s4["macdSignal"] and hist_now<0:
-            v["H4 MACD Momentum"]=-1; bear+=W4
-            if hist_prev is not None and hist_now>hist_prev: w.append("H4 MACD histogram decelerating — momentum fading")
-        else: v["H4 MACD Momentum"]=0
-    else: v["H4 MACD Momentum"]=0
-
-    # ── VOTE 5: H4 RSI Zone — weight 1.0 (Cardwell regime) ─────────────────
-    # F4: Per-class RSI bounds — crypto stays overbought for weeks in bull runs
-    W5=1.0; r4=s4["rsi"]
-    _rsi_b=CONFIG["RSI_BOUNDS"].get(_ptype, {"ob":78, "os":22})
-    if r4 is not None:
-        if 45<r4<_rsi_b["ob"]:   v["H4 RSI Zone"]=1;  bull+=W5
-        elif _rsi_b["os"]<r4<55: v["H4 RSI Zone"]=-1; bear+=W5
-        elif r4>=_rsi_b["ob"]: v["H4 RSI Zone"]=0; w.append(f"H4 RSI overbought ({r4:.0f} >= {_rsi_b['ob']}) — wait for pullback")
-        elif r4<=_rsi_b["os"]: v["H4 RSI Zone"]=0; w.append(f"H4 RSI oversold ({r4:.0f} <= {_rsi_b['os']}) — wait for bounce")
-        else: v["H4 RSI Zone"]=0
-    else: v["H4 RSI Zone"]=0
-
-    # ── VOTE 6: H4 Stochastic Entry Timing — weight 1.0 ─────────────────────
-    W6=1.0
-    lK=stoch["k"][-1] if stoch["k"] and stoch["k"][-1] is not None else None
-    lD=stoch["d"][-1] if stoch["d"] and stoch["d"][-1] is not None else None
-    if lK is not None and lD is not None:
-        if   lK>lD and lK<35:       v["H4 Stochastic"]=1;  bull+=W6
-        elif lK<lD and lK>65:       v["H4 Stochastic"]=-1; bear+=W6
-        elif lK>lD and 35<=lK<=55:  v["H4 Stochastic"]=1;  bull+=W6
-        elif lK<lD and 45<=lK<=65:  v["H4 Stochastic"]=-1; bear+=W6
-        else: v["H4 Stochastic"]=0
-    else: v["H4 Stochastic"]=0
-
-    # ── VOTE 7: H1 EMA Entry — weight 1.0 (Elder Screen 3) ──────────────────
-    W7=1.0
-    if s1["ema21"] and s1["ema50"]:
-        if s1["ema21"]>s1["ema50"]: v["H1 EMA Entry"]=1;  bull+=W7
-        else:                        v["H1 EMA Entry"]=-1; bear+=W7
-    else: v["H1 EMA Entry"]=0
-
-    # ── VOTE 8: H1 BB Pullback Zone — weight 0.5 (weakest signal) ───────────
-    W8=0.5
-    if s1["bbUpper"] is not None and s1["bbLower"] is not None:
-        bbr=s1["bbUpper"]-s1["bbLower"]; cl1_p=s1.get("close")
-        if bbr>0 and cl1_p is not None:
-            bbp=(cl1_p-s1["bbLower"])/bbr
-            if bbp<0.25:   v["H1 BB Pullback"]=1;  bull+=W8
-            elif bbp>0.75: v["H1 BB Pullback"]=-1; bear+=W8
-            else: v["H1 BB Pullback"]=0
-        else: v["H1 BB Pullback"]=0
-    else: v["H1 BB Pullback"]=0
-
-    # ── VOTE 9: H1 RSI Divergence — weight 1.0 (Wilder reversal) ────────────
-    W9=1.0
-    if h1_candles:
-        h1_div=calc_rsi_divergence(h1_candles)
-        if h1_div=="bullish":   v["H1 RSI Divergence"]=1;  bull+=W9; w.append("H1 RSI Bullish Divergence — reversal signal (Wilder)")
-        elif h1_div=="bearish": v["H1 RSI Divergence"]=-1; bear+=W9; w.append("H1 RSI Bearish Divergence — reversal signal (Wilder)")
-        else: v["H1 RSI Divergence"]=0
-    else: v["H1 RSI Divergence"]=0
-
-    # ── VOTE 10: H4 Fib Confluence — weight 1.0 (Murphy) ────────────────────
-    # Direction is NOT pre-decided here — Fib votes independently based on price vs level.
-    # This prevents circular bias where direction determined at vote 9 always gets Fib confirmation.
-    W10=1.0
-    if h4_candles:
-        h4_fib=calc_fib(h4_candles)
-        fib_vote=calc_fib_proximity(s4.get("close",0) or 0, h4_fib)
-        v["H4 Fib Level"]=fib_vote
-        if fib_vote==1:    bull+=W10
-        elif fib_vote==-1: bear+=W10
-    else: v["H4 Fib Level"]=0
-
-    # ── DIRECTION decided after ALL 10 votes are tallied ─────────────────────
-    direction="LONG" if bull>=bear else "SHORT"
-
-    # V1: ATR compression bonus for crypto — trends explode from low-volatility compression
-    _atr_pct=s4.get("atrPct"); _atr_lbl=s4.get("atrLabel","")
-    if _ptype=="crypto" and _atr_pct is not None:
-        if _atr_pct<=25 and _atr_lbl=="expanding":
-            bull+=0.5 if direction=="LONG" else 0; bear+=0.5 if direction=="SHORT" else 0
-            w.append(f"ATR COMPRESSION BREAKOUT: ATR pct={_atr_pct} (25th) expanding — crypto volatility expanding from compression (+0.5)")
-        elif _atr_pct>=75:
-            w.append(f"ATR EXTENDED: ATR pct={_atr_pct} (75th+) — already extended, late entry risk")
-
-    # V4: Range detection — mean-reversion at BB extremes when ranging (forex + crypto regime transitions)
-    _entry_mode="trend"
-    if (_ptype=="forex" and ranging_penalty>0) or (_ptype=="crypto" and _adx_mom in ("collapsing","exhausting")):
-        _h4_bbp=None
-        if s4["bbUpper"] is not None and s4["bbLower"] is not None:
-            _bbr4=s4["bbUpper"]-s4["bbLower"]
-            if _bbr4>0: _h4_bbp=(s4.get("close",0)-s4["bbLower"])/_bbr4
-        if _h4_bbp is not None and r4 is not None:
-            if (_h4_bbp<0.20 and r4<40) or (_h4_bbp>0.80 and r4>60):
-                _entry_mode="mean_revert"
-                ranging_penalty=max(0, ranging_penalty-1.0)  # reduce penalty for mean-reversion setups
-                if _h4_bbp<0.20: direction="LONG"
-                elif _h4_bbp>0.80: direction="SHORT"
-                w.append(f"MEAN-REVERT: BB%={_h4_bbp:.2f}, ranging penalty reduced — fade to BB mid")
-
-    # Volume context (non-forex only)
-    if _ptype != "forex":
-        if vr>=CONFIG["VOLUME_THRESHOLD"]: w.append(f"High volume ({vr:.1f}x) confirms move")
-        elif max(bull,bear)>=5: w.append(f"Low volume ({vr:.1f}x avg) — confirm before entry")
-
-    # ── INTERMARKET CONTEXT (BTC bias for alts) ──────────────────────────────
-    if pair["type"]=="crypto" and pair["symbol"]!="BTCUSDT":
-        if direction=="LONG"  and btc_bias=="bearish": w.append("BTC bearish — alt LONG is counter-trend risk")
-        elif direction=="SHORT" and btc_bias=="bullish": w.append("BTC bullish — alt SHORT is counter-trend risk")
-
-    # ── FINAL SCORE: weighted sum, apply ranging + session + counter-trend penalties
-    raw_score = max(bull, bear)
-    score = max(0.0, raw_score - ranging_penalty - _forex_session_pen)
-
-    # F3: Per-class counter-trend penalty — crypto breaks D1 trends routinely from H4
-    _ct_pen=abs(CONFIG["COUNTER_TREND_PEN"].get(_ptype, -3.0))
-    if direction=="LONG" and hard_long_block:
-        w.append(f"COUNTER-TREND: D1 bearish — Elder Triple Screen violation, -{_ct_pen} score")
-        score = max(0.0, score - _ct_pen)
-    if direction=="SHORT" and hard_short_block:
-        w.append(f"COUNTER-TREND: D1 bullish — Elder Triple Screen violation, -{_ct_pen} score")
-        score = max(0.0, score - _ct_pen)
-
-    score = round(score, 1)
-
-    # Trend state for Marcus Reid AI context
-    if adx_val is not None:
-        if adx_val>=35:   trend_state="TRENDING"
-        elif adx_val>=25: trend_state="DEVELOPING"
-        elif adx_val>=_rng["dead"]: trend_state="RANGING"
-        else:             trend_state="DEAD RANGING"
-    else: trend_state="UNKNOWN"
-
-    atr_mults=CONFIG["ATR_CLASS"].get(pair["type"],{"sl":CONFIG["SL_ATR_MULT"]})
-    if s1["atr"] and s1.get("close") and s1["atr"]*atr_mults["sl"]>s1["close"]*0.03:
-        w.append("Wide SL > 3% of price — size down")
-
-    spread = round(abs(bull - bear), 1)
-    return {"score":score,"votes":v,"direction":direction,"bull":round(bull,1),"bear":round(bear,1),
-            "spread":spread,"warnings":w,"trendState":trend_state,"weinsteinStage":weinstein_stage,"weinsteinLabel":weinstein_label,
-            "entryMode":_entry_mode,"adxMomentum":_adx_mom,"adxSlope":_adx_slope}
-
-def detect_div(d1c, h4c, h1c):
-    """Detect H4 RSI divergence and H1 volume divergence. Returns list of warning strings."""
-    w=[]
-    try:
-        h4=h4c[-20:]; cl=[c["close"] for c in h4]; rsi=calc_rsi(cl,14); pr=[c["high"] for c in h4]; n=len(pr)
-        if n>=10 and rsi[-1] is not None:
-            t=n//3; pm=max(pr[t:2*t]); rm=[x for x in rsi[t:2*t] if x is not None]
-            if rm:
-                if pr[-1]>pm and rsi[-1]<max(rm): w.append("H4 RSI Bearish Divergence")
-                if pr[-1]<pm and rsi[-1]>max(rm): w.append("H4 RSI Bullish Divergence")
-    except Exception as e: log.warning(f"detect_div H4: {e}")
-    try:
-        h1=h1c[-20:]; vols=[c["vol"] for c in h1]; pr=[c["close"] for c in h1]; n=len(pr)
-        if n>=10:
-            m=n//2
-            if pr[-1]>pr[0] and vols[-1]<vols[m] and vols[-1]>0: w.append("H1 Vol Div - rising price, falling vol")
-            if pr[-1]<pr[0] and vols[-1]<vols[m] and vols[-1]>0: w.append("H1 Vol Div - falling price, falling vol")
-    except Exception as e: log.warning(f"detect_div H1: {e}")
-    return w
-
-def analyze_pair(pair, btc_bias):
-    """Full analysis pipeline for one pair: fetch data, calc indicators, score confluence, compute levels."""
-    d1=fetch_candles(pair,"D1",CONFIG["D1_CANDLES"])
-    h4=fetch_candles(pair,"H4",CONFIG["H4_CANDLES"])
-    h1=fetch_candles(pair,"H1",CONFIG["H1_CANDLES"])
-    if not d1 or not h4 or not h1: return None
-    if len(d1)<200 or len(h4)<50 or len(h1)<50: return None
-    d1i,h4i,h1i=calc_indicators(d1),calc_indicators(h4),calc_indicators(h1)
-    vols=[c["vol"] for c in h1]; vsma=calc_sma(vols,20)
-    vr=vols[-1]/vsma[-1] if vsma[-1] and vsma[-1]>0 else 0
-    stoch=calc_stochastic(h4,14,3,3)
-    e200=calc_ema([c["close"] for c in d1],200)
-    e200s=(e200[-1]-e200[-21])/e200[-21] if e200[-1] and len(e200)>=21 and e200[-21] else 0
-    res=calc_confluence(d1i,h4i,h1i,vr,stoch,e200s,pair,btc_bias,d1_candles=d1,h4_candles=h4,h1_candles=h1)
-    allw=res["warnings"]+detect_div(d1,h4,h1)
-    price=h1[-1]["close"]; atr=h1i["snap"]["atr"]
-    if not atr or atr==0: return None
-    d=res["direction"]
-    # C4: Use shared calc_levels helper (deduplicates SL/TP logic with backtest)
-    lvl=calc_levels(price, atr, d, pair["type"])
-    sl=lvl["sl"]; tp1=lvl["tp1"]; tp2=lvl["tp2"]; rr1=lvl["rr1"]; rr2=lvl["rr2"]
-    sk=stoch["k"][-1] if stoch["k"] and stoch["k"][-1] is not None else None
-    sd=stoch["d"][-1] if stoch["d"] and stoch["d"][-1] is not None else None
-    risk_dollar=round(abs(price-sl)/price*100,2)
-    max_score=13.0  # weighted system max: D1(2)+D1ADX(1.5)+Weinstein(1.5)+H4MACD(1.5)+H4RSI(1)+Stoch(1)+H1EMA(1)+BB(0.5)+Div(1)+Fib(1)
-
-    return {"pair":pair["display"],"display":pair["display"],"symbol":pair["symbol"],"type":pair["type"],
-        "direction":d,"confluenceScore":res["score"],"confluencePct":round(res["score"]/max_score*100),
-        "spread":res["spread"],"entryMode":res.get("entryMode","trend"),
-        "votes":res["votes"],"maxScore":max_score,"price":price,"sl":round(sl,6),"tp1":round(tp1,6),
-        "tp2":round(tp2,6),"rr1":round(rr1,2),"rr2":round(rr2,2),"atr":round(atr,6),
-        "slPips":round(abs(price-sl),6),"slPct":risk_dollar,"fib":calc_fib(h4),"d1":d1i,"h4":h4i,"h1":h1i,
-        "volRatio":round(vr,2),"ema200Slope":round(e200s*100,3),
-        "stochK":round(sk,1) if sk else None,"stochD":round(sd,1) if sd else None,
-        "btcBias":btc_bias if pair["type"]=="crypto" else "n/a",
-        "trendState":res["trendState"],"weinsteinStage":res["weinsteinStage"],"weinsteinLabel":res["weinsteinLabel"],
-        "warnings":allw,"session":get_session(),
-        "timestamp":datetime.now(timezone.utc).isoformat(),"aiAnalysis":None}
-
-# B5: Correlation clusters — pairs in the same cluster share USD or sector exposure
-# If 2+ signals fire from same cluster, 3rd gets a correlation warning (half-size)
-CORR_CLUSTERS = {
-    "metals":    ["XAU/USD","XAG/USD","GLD"],
-    "defi":      ["SOL/USDT","AVAX/USDT","LINK/USDT","BNB/USDT","ETH/USDT","INJ/USDT","NEAR/USDT"],
-    "ai_crypto": ["FET/USDT","RENDER/USDT","NEAR/USDT"],
-    "forex_usd": ["EUR/USD","GBP/USD","AUD/USD","NZD/USD","USD/CHF","USD/CAD","USD/ZAR","USD/MXN","USD/SGD"],
-    "forex_jpy": ["EUR/JPY","GBP/JPY","AUD/JPY"],
-    "jse":       ["Naspers","Sasol","Std Bank","Anglo Am","MTN Group","Shoprite","Richemont","FirstRand","Absa","Capitec","Prosus","Gold Fields","AngloGold","Sibanye"],
-    "us_tech":   ["AAPL","TSLA","NVDA","MSFT","AMZN","META","GOOG"],
-    "us_sp500":  ["SPY","QQQ","S&P 500","Nasdaq"],
-}
-
-def _apply_correlation_cap(signals):
-    """Tag signals with correlationWarning if cluster already has 2+ active signals."""
-    cluster_counts = {}
-    for sig in signals:
-        pair_name = sig["pair"]
-        for cluster, members in CORR_CLUSTERS.items():
-            if pair_name in members:
-                cluster_counts[cluster] = cluster_counts.get(cluster, 0) + 1
-                if cluster_counts[cluster] >= 2:
-                    sig.setdefault("warnings", [])
-                    sig["warnings"].append(f"CORR CAP: {cluster} cluster already has {cluster_counts[cluster]-1} signal(s) — halve size to cap USD exposure")
-                    sig["correlationWarning"] = cluster
-    return signals
+# ── Scoring engine (extracted to scoring.py) ──
+from scoring import (
+    get_session, calc_confluence, detect_div,
+    CORR_CLUSTERS, apply_correlation_cap,
+)
 
 _scan_in_progress = False
-_kill_switch = False  # N4: Kill-switch — blocks new scans/analyses when True
+_kill_switch = False      # N4: Kill-switch — blocks new scans/analyses when True
+_disabled_pairs: set = set()  # per-pair kill-switch — display names of pairs to exclude
 
-def run_full_scan():
+def run_full_scan() -> dict:
     """Parallel scan of all ACTIVE_PAIRS. Returns signals, errors, skipped lists."""
     global _scan_in_progress
     if _kill_switch:
@@ -1079,7 +443,7 @@ def run_full_scan():
                             log.info(f"[EXCH] {exch_code}: CLOSED")
                         else:
                             log.info(f"[EXCH] {exch_code}: OPEN")
-                except Exception: pass
+                except Exception as _e: log.debug(f"[EXCH] {exch_code} check error: {_e}")
     except Exception as e: log.warning(f"[EXCH] Exchange check failed: {e}")
     # Pre-fetch: news context + BTC bias + yield curve + div/split (serial, before parallel pair analysis)
     log.info("Fetching market context...")
@@ -1131,7 +495,7 @@ def run_full_scan():
             elif sig and sig["confluenceScore"]>=CONFIG["MIN_CONFLUENCE_CLASS"].get(pair["type"], CONFIG["MIN_CONFLUENCE"]):
                 # Phase 5: Attach server-side indicators (EODHD covers all asset classes incl. crypto via .CC)
                 try: sig["serverIndicators"] = fetch_eodhd_indicators(pair)
-                except Exception: pass
+                except Exception as _e: log.debug(f"[IND] {pair['display']} server indicators skipped: {_e}")
                 sig["newsCtx"]=news_ctx; results.append(sig)
                 scan_funnel["passed"] += 1
                 log.info(f"{pair['display']:12s} {sig['direction']:5s} {sig['confluenceScore']}/13 [{sig.get('trendState','?')}]")
@@ -1146,7 +510,7 @@ def run_full_scan():
     log.info(f"Scan funnel: {scan_funnel}")
     results.sort(key=lambda x:x["confluenceScore"],reverse=True)
     # B5: Apply correlation cap warnings after sorting (highest score first = priority preserved)
-    results = _apply_correlation_cap(results)
+    results = apply_correlation_cap(results)
     _scan_in_progress = False
     return {"success":True,"signals":results,"errors":errors,"skipped":skipped,"scanFunnel":scan_funnel,
             "btcBias":btc_bias,"totalPairs":len(ACTIVE_PAIRS),"scannedAt":datetime.now(timezone.utc).isoformat()}
@@ -1294,7 +658,7 @@ def fetch_div_split_context():
                             days_to = (ex_date - today).days
                             if 0 <= days_to <= 14:
                                 upcoming.append({"exDate": str(ex_date), "daysTo": days_to, "amount": d.get("value", d.get("dividend"))})
-                        except: pass
+                        except Exception as _e: log.debug(f"[DIVS] date parse error: {_e}")
                     if upcoming:
                         entry["upcomingDiv"] = upcoming
                         log.info(f"[DIVS] {sym}: ex-div in {upcoming[0]['daysTo']} days")
@@ -1314,7 +678,7 @@ def fetch_div_split_context():
                             days_to = (s_date - today).days
                             if 0 <= days_to <= 30:
                                 upcoming.append({"splitDate": str(s_date), "daysTo": days_to, "ratio": s.get("split")})
-                        except: pass
+                        except Exception as _e: log.debug(f"[SPLITS] date parse error: {_e}")
                     if upcoming:
                         entry["upcomingSplit"] = upcoming
                         log.warning(f"[SPLITS] {sym}: split in {upcoming[0]['daysTo']} days")
@@ -1393,7 +757,7 @@ def fetch_news_context():
                     ndata = http_requests.get(f"https://eodhd.com/api/news?s={sticker}&limit=3&api_token={_eodhd_key}&fmt=json", timeout=8).json()
                     if ndata and isinstance(ndata, list):
                         pair_news[display] = [{"t": a.get("title","")[:80], "s": round(a.get("sentiment",{}).get("polarity",0.5),2)} for a in ndata[:3]]
-                except Exception: pass
+                except Exception as _e: log.debug(f"[NEWS] {display} news fetch error: {_e}")
             if pair_news:
                 ctx["pairNews"] = pair_news
                 log.info(f"[NEWS] EODHD per-pair news: {len(pair_news)} pairs, {sum(len(v) for v in pair_news.values())} articles")
@@ -1404,7 +768,7 @@ def fetch_news_context():
                     wdata = http_requests.get(f"https://eodhd.com/api/news-word-weights?s={sticker}&page[limit]=5&api_token={_eodhd_key}&fmt=json", timeout=8).json()
                     if wdata and isinstance(wdata, dict) and wdata.get("data"):
                         word_weights[display] = list(wdata["data"].keys())[:5]
-                except Exception: pass
+                except Exception as _e: log.debug(f"[NEWS] {display} word weights error: {_e}")
             if word_weights:
                 ctx["wordWeights"] = word_weights
                 log.info(f"[NEWS] Word weights: {len(word_weights)} pairs")
@@ -1413,93 +777,123 @@ def fetch_news_context():
     _news_cache["ts"] = time.time()
     return ctx
 
-def run_ai(signal, news_ctx=None, style_pref="auto"):
+def _build_signal_message(signal: dict, news_ctx: dict | None,
+                          style_pref: str, style_labels: dict) -> str:
+    """Build the structured signal string sent to Marcus Reid (Claude) for analysis."""
+    max_score = signal.get("maxScore", 13.0)
+    spread = signal.get("spread", 0)
+    conviction = "HIGH" if spread >= 3 else "MEDIUM" if spread >= 1.5 else "LOW"
+    pair_sqn = signal.get("pairSQN")
+
+    parts = [
+        f"Pair:{signal['pair']} Dir:{signal['direction']} Score:{signal['confluenceScore']}/{max_score}",
+        f"Spread:{spread}({conviction} conviction)",
+        f"PairSQN:{pair_sqn}" if pair_sqn else "",
+        f"TrendState:{signal.get('trendState', '?')}",
+        f"ADXPct:{signal.get('h4', {}).get('snap', {}).get('adxPct', '?')}th-pct"
+        f"({signal.get('h4', {}).get('snap', {}).get('adxLabel', '?')})",
+        f"Weinstein:{signal.get('weinsteinLabel', 'n/a')}",
+        f"Price:{signal['price']} SL:{signal['sl']}(SL%:{signal.get('slPct', '?')}%)",
+        f"TP1:{signal['tp1']}(R:{signal['rr1']}) TP2:{signal['tp2']}(R:{signal['rr2']})",
+        f"ATR:{signal['atr']}",
+        f"Votes:{json.dumps(signal['votes'])}",
+        f"Vol:{signal['volRatio']}x Stoch:{signal.get('stochK')}/{signal.get('stochD')}",
+        f"EMA200slope:{signal['ema200Slope']}%",
+        f"BTC:{signal.get('btcBias', 'n/a')}",
+        f"Session:{signal['session']['name']}({signal['session']['quality']})",
+        f"Warnings:{json.dumps(signal['warnings'])}",
+        f"Fib:{json.dumps(signal['fib'])}",
+        f"ATRPct:{signal.get('h4', {}).get('snap', {}).get('atrPct', '?')}"
+        f"({signal.get('h4', {}).get('snap', {}).get('atrLabel', '?')})",
+        f"EntryMode:{signal.get('entryMode', 'trend')}",
+        f"StylePref:{style_pref.upper()}",
+    ]
+    msg = " ".join(p for p in parts if p)
+
+    dxy_ctx = fetch_dxy_context()
+    if dxy_ctx:
+        msg += f" DXY:{dxy_ctx}"
+
+    _yc = fetch_yield_curve()
+    if _yc:
+        msg += (f" YieldCurve:{{shape:{_yc['shape']},2y10y_spread:{_yc['spread_2_10']}%,"
+                f"3m:{_yc.get('y3m')}%,10y:{_yc['y10y']}%,context:{_yc['riskContext']}}}")
+
+    _ds = fetch_div_split_context()
+    _pair_sym = signal.get("symbol", "")
+    if _ds and _pair_sym in _ds:
+        _ev = _ds[_pair_sym]
+        if _ev.get("upcomingDiv"):
+            _d = _ev["upcomingDiv"][0]
+            msg += (f" ExDivWarning:ex-div in {_d['daysTo']} days"
+                    f" ({_d['exDate']}, amount:{_d.get('amount', '?')}) — gap-down risk, reduce size")
+        if _ev.get("upcomingSplit"):
+            _s = _ev["upcomingSplit"][0]
+            msg += (f" SplitWarning:split in {_s['daysTo']} days"
+                    f" ({_s['splitDate']}, ratio:{_s.get('ratio', '?')}) — price distortion risk")
+
+    _bt = signal.get("backtestStats")
+    if _bt:
+        msg += (f" BT_SQN:{_bt.get('sqn', '?')} BT_WR:{_bt.get('winRate', '?')}%"
+                f" BT_Expect:{_bt.get('expectancy', '?')}R BT_MaxDD:{_bt.get('maxDrawdownPct', '?')}%")
+        _rs = _bt.get("regimeStats", {})
+        if _rs:
+            msg += f" BT_RegimeWR:{json.dumps({k: v.get('wr') for k, v in _rs.items()})}"
+
+    msg += f" StyleDetail:{style_labels.get(style_pref.lower(), style_pref.upper())}"
+
+    if news_ctx:
+        if news_ctx.get("forexEvents"):
+            msg += f" HighImpactEvents:{json.dumps(news_ctx['forexEvents'])}"
+        if news_ctx.get("marketNews"):
+            msg += f" MarketNews:{json.dumps(news_ctx['marketNews'])}"
+        if news_ctx.get("cryptoNews") and signal.get("type") == "crypto":
+            pair_coins = [signal["symbol"].replace("USDT", "").replace("USDC", "")]
+            relevant = [n for n in news_ctx["cryptoNews"]
+                        if not n["currencies"] or any(c in pair_coins for c in n["currencies"])]
+            if relevant:
+                msg += f" CryptoNews:{json.dumps(relevant[:3])}"
+        _sent = news_ctx.get("pairSentiment", {})
+        if _sent.get(signal.get("pair", "")):
+            _sc = _sent[signal["pair"]]
+            _sl = "bullish" if _sc > 0.6 else "bearish" if _sc < 0.4 else "neutral"
+            msg += f" NewsSentiment:{_sc}({_sl})"
+        _pnews = news_ctx.get("pairNews", {}).get(signal.get("pair", ""), [])
+        if _pnews:
+            msg += f" PairNews:{json.dumps(_pnews)}"
+        _ww = news_ctx.get("wordWeights", {}).get(signal.get("pair", ""), [])
+        if _ww:
+            msg += f" NewsDrivers:{json.dumps(_ww)}"
+
+    _server_ind = signal.get("serverIndicators")
+    if _server_ind:
+        msg += f" ServerIndicators:{json.dumps(_server_ind)}"
+
+    return msg
+
+
+def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto") -> dict:
     """Send signal data to Anthropic Claude for Marcus Reid AI analysis. Returns parsed JSON dict."""
-    if not CONFIG.get("ANTHROPIC_KEY") or CONFIG["ANTHROPIC_KEY"]=="YOUR_ANTHROPIC_API_KEY":
+    if not CONFIG.get("ANTHROPIC_KEY") or CONFIG["ANTHROPIC_KEY"] == "YOUR_ANTHROPIC_API_KEY":
         log.error("[AI] Anthropic API key is None or not configured!")
-        return {"error":"Anthropic API key not configured"}
+        return {"error": "Anthropic API key not configured"}
     try:
         log.info(f"[AI] Analyzing {signal['pair']}...")
         import anthropic
-        c=anthropic.Anthropic(api_key=CONFIG["ANTHROPIC_KEY"])
-        style_labels = {"scalp":"SCALP — focus on H1 exhaustion, tight 1.5R, quick execution","intraday":"INTRADAY — H4+H1 alignment, same-session execution, 2-3R","swing":"SWING — D1 trend dominance, EMA200 slope, 4-6R multi-day hold"}
-        # Auto-style detection if not specified
+        c = anthropic.Anthropic(api_key=CONFIG["ANTHROPIC_KEY"])
+        style_labels = {
+            "scalp":    "SCALP — focus on H1 exhaustion, tight 1.5R, quick execution",
+            "intraday": "INTRADAY — H4+H1 alignment, same-session execution, 2-3R",
+            "swing":    "SWING — D1 trend dominance, EMA200 slope, 4-6R multi-day hold",
+        }
         if style_pref == "auto":
             _sc = signal.get("confluenceScore", 0)
             style_pref = "swing" if _sc >= 9 else "intraday" if _sc >= 7 else "scalp"
-        dxy_ctx=fetch_dxy_context()
-        max_score=signal.get("maxScore",13.0)
-        spread=signal.get("spread",0)
-        conviction="HIGH" if spread>=3 else "MEDIUM" if spread>=1.5 else "LOW"
-        pair_sqn=signal.get("pairSQN")
-        msg=(f"Pair:{signal['pair']} Dir:{signal['direction']} Score:{signal['confluenceScore']}/{max_score} "
-             f"Spread:{spread}({conviction} conviction) "
-             f"{'PairSQN:'+str(pair_sqn)+' ' if pair_sqn else ''}"
-             f"TrendState:{signal.get('trendState','?')} "
-             f"ADXPct:{signal.get('h4',{}).get('snap',{}).get('adxPct','?')}th-pct({signal.get('h4',{}).get('snap',{}).get('adxLabel','?')}) "
-             f"Weinstein:{signal.get('weinsteinLabel','n/a')} "
-             f"Price:{signal['price']} SL:{signal['sl']}(SL%:{signal.get('slPct','?')}%) "
-             f"TP1:{signal['tp1']}(R:{signal['rr1']}) TP2:{signal['tp2']}(R:{signal['rr2']}) "
-             f"ATR:{signal['atr']} "
-             f"Votes:{json.dumps(signal['votes'])} "
-             f"Vol:{signal['volRatio']}x Stoch:{signal.get('stochK')}/{signal.get('stochD')} "
-             f"EMA200slope:{signal['ema200Slope']}% "
-             f"BTC:{signal.get('btcBias','n/a')} "
-             f"Session:{signal['session']['name']}({signal['session']['quality']}) "
-             f"Warnings:{json.dumps(signal['warnings'])} "
-             f"Fib:{json.dumps(signal['fib'])} "
-             f"ATRPct:{signal.get('h4',{}).get('snap',{}).get('atrPct','?')}({signal.get('h4',{}).get('snap',{}).get('atrLabel','?')}) "
-             f"EntryMode:{signal.get('entryMode','trend')} "
-             f"StylePref:{style_pref.upper()}")
-        if dxy_ctx: msg += f" DXY:{dxy_ctx}"
-        # Phase A: Yield curve context
-        _yc = fetch_yield_curve()
-        if _yc:
-            msg += (f" YieldCurve:{{shape:{_yc['shape']},2y10y_spread:{_yc['spread_2_10']}%,"
-                    f"3m:{_yc.get('y3m')}%,10y:{_yc['y10y']}%,context:{_yc['riskContext']}}}")
-        # Phase B: Div/split warnings for stock pairs
-        _ds = fetch_div_split_context()
-        _pair_sym = signal.get("symbol", "")
-        if _ds and _pair_sym in _ds:
-            _ev = _ds[_pair_sym]
-            if _ev.get("upcomingDiv"):
-                _d = _ev["upcomingDiv"][0]
-                msg += f" ExDivWarning:ex-div in {_d['daysTo']} days ({_d['exDate']}, amount:{_d.get('amount','?')}) — gap-down risk, reduce size"
-            if _ev.get("upcomingSplit"):
-                _s = _ev["upcomingSplit"][0]
-                msg += f" SplitWarning:split in {_s['daysTo']} days ({_s['splitDate']}, ratio:{_s.get('ratio','?')}) — price distortion risk"
-        # R6: Feed AI backtest performance context if available
-        _bt = signal.get("backtestStats")
-        if _bt:
-            msg += (f" BT_SQN:{_bt.get('sqn','?')} BT_WR:{_bt.get('winRate','?')}%"
-                    f" BT_Expect:{_bt.get('expectancy','?')}R BT_MaxDD:{_bt.get('maxDrawdownPct','?')}%")
-            _rs = _bt.get("regimeStats", {})
-            if _rs:
-                msg += f" BT_RegimeWR:{json.dumps({k:v.get('wr') for k,v in _rs.items()})}"
-        if style_pref:
-            msg += f" StyleDetail:{style_labels.get(style_pref.lower(), style_pref.upper())}"
-        if news_ctx:
-            if news_ctx.get("forexEvents"): msg += f" HighImpactEvents:{json.dumps(news_ctx['forexEvents'])}"
-            if news_ctx.get("marketNews"): msg += f" MarketNews:{json.dumps(news_ctx['marketNews'])}"
-            if news_ctx.get("cryptoNews") and signal.get("type")=="crypto":
-                pair_coins = [signal["symbol"].replace("USDT","").replace("USDC","")]
-                relevant = [n for n in news_ctx["cryptoNews"] if not n["currencies"] or any(c in pair_coins for c in n["currencies"])]
-                if relevant: msg += f" CryptoNews:{json.dumps(relevant[:3])}"
-            _sent = news_ctx.get("pairSentiment", {})
-            if _sent.get(signal.get("pair","")):
-                _sc = _sent[signal["pair"]]
-                _sl = "bullish" if _sc > 0.6 else "bearish" if _sc < 0.4 else "neutral"
-                msg += f" NewsSentiment:{_sc}({_sl})"
-            # Phase 3: Per-pair news headlines with article sentiment
-            _pnews = news_ctx.get("pairNews", {}).get(signal.get("pair",""), [])
-            if _pnews: msg += f" PairNews:{json.dumps(_pnews)}"
-            # Phase 4: News word weights — top keywords driving this pair's news
-            _ww = news_ctx.get("wordWeights", {}).get(signal.get("pair",""), [])
-            if _ww: msg += f" NewsDrivers:{json.dumps(_ww)}"
-        # Phase 5: Server-side indicators via EODHD filter=last_X
-        _server_ind = signal.get("serverIndicators")
-        if _server_ind: msg += f" ServerIndicators:{json.dumps(_server_ind)}"
-        r=c.messages.create(model=CONFIG["ANTHROPIC_MODEL"],max_tokens=1500,system=EXPERT_PROMPT,messages=[{"role":"user","content":msg}])
+        msg = _build_signal_message(signal, news_ctx, style_pref, style_labels)
+        r = c.messages.create(
+            model=CONFIG["ANTHROPIC_MODEL"], max_tokens=1500,
+            system=EXPERT_PROMPT, messages=[{"role": "user", "content": msg}]
+        )
         t=r.content[0].text.strip()
         if "```" in t:
             parts = t.split("```")
@@ -1789,6 +1183,29 @@ def run_full_backtest():
     results.sort(key=lambda x: x["sqn"] if x["sqn"] is not None else -999, reverse=True)
     return {"success": True, "results": results, "errors": errors, "totalPairs": len(ALL_PAIRS)}
 
+def _init_audit_db(db_path: str) -> None:
+    """Create audit table if it doesn't exist."""
+    con = sqlite3.connect(db_path)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts        TEXT NOT NULL,
+            pair      TEXT,
+            score     REAL,
+            direction TEXT,
+            trend     TEXT,
+            grade     TEXT,
+            edge_prob REAL,
+            risk      TEXT,
+            style     TEXT
+        )
+    """)
+    con.commit()
+    con.close()
+
+_AUDIT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
+_init_audit_db(_AUDIT_DB)
+
 app=Flask(__name__,static_folder="static")
 
 @app.route("/")
@@ -1812,18 +1229,19 @@ def api_analyze():
         news_ctx = sig.get("newsCtx") or fetch_news_context()
         style_pref = d.get("stylePreference", "auto")
         result = run_ai(sig, news_ctx, style_pref)
-        # N9: Audit log — append every AI analysis to audit.jsonl
+        # N9: Audit log — persist every AI analysis to SQLite
         try:
-            _audit_entry = {"ts":datetime.now(timezone.utc).isoformat(),"pair":sig.get("pair"),
-                "score":sig.get("confluenceScore"),"direction":sig.get("direction"),
-                "trendState":sig.get("trendState"),"grade":result.get("grade"),
-                "edgeProbability":result.get("edgeProbability"),"riskLevel":result.get("riskLevel"),
-                "style":style_pref}
-            _audit_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.jsonl")
-            with open(_audit_path, "a") as _af:
-                _af.write(json.dumps(_audit_entry)+"\n")
+            _con = sqlite3.connect(_AUDIT_DB)
+            _con.execute(
+                "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style) VALUES(?,?,?,?,?,?,?,?,?)",
+                (datetime.now(timezone.utc).isoformat(), sig.get("pair"), sig.get("confluenceScore"),
+                 sig.get("direction"), sig.get("trendState"), result.get("grade"),
+                 result.get("edgeProbability"), result.get("riskLevel"), style_pref)
+            )
+            _con.commit()
+            _con.close()
         except Exception as _ae:
-            log.warning(f"Audit log write failed: {_ae}")
+            log.warning(f"Audit DB write failed: {_ae}")
         return jsonify(result)
     except Exception as e:
         # S2: Sanitise exception — don't leak internal paths
@@ -1958,6 +1376,26 @@ def api_killswitch():
     log.warning(f"KILL-SWITCH {'ACTIVATED' if _kill_switch else 'DEACTIVATED'}")
     return jsonify({"killSwitch":_kill_switch})
 
+@app.route("/api/killswitch/pair/<path:display>", methods=["POST"])
+def api_killswitch_pair(display: str):
+    """Enable or disable a specific pair by display name. Body: {"enabled": false}"""
+    global _disabled_pairs, ACTIVE_PAIRS
+    d = request.json or {}
+    enabled = d.get("enabled", True)
+    if enabled:
+        _disabled_pairs.discard(display)
+    else:
+        _disabled_pairs.add(display)
+    ACTIVE_PAIRS = [p for p in ALL_PAIRS if p.get("enabled", True) and p["display"] not in _disabled_pairs]
+    log.warning(f"[KILL] Pair {display!r}: {'ENABLED' if enabled else 'DISABLED'} ({len(ACTIVE_PAIRS)} active)")
+    return jsonify({"pair": display, "enabled": enabled, "activePairs": len(ACTIVE_PAIRS),
+                    "disabledPairs": sorted(_disabled_pairs)})
+
+@app.route("/api/killswitch/pair")
+def api_killswitch_pair_list():
+    """List all disabled pairs."""
+    return jsonify({"disabledPairs": sorted(_disabled_pairs), "activePairs": len(ACTIVE_PAIRS)})
+
 @app.route("/api/prices")
 def api_prices():
     return jsonify({"prices": _live_prices, "count": len(_live_prices),
@@ -2009,15 +1447,50 @@ def health():
         "dataSource":"yfinance+binance",
         "anthropicKey":CONFIG["ANTHROPIC_KEY"]!="YOUR_ANTHROPIC_API_KEY"})
 
+@app.route("/api/audit")
+def api_audit():
+    """Return last N audit log entries from SQLite."""
+    limit = min(int(request.args.get("limit", 50)), 500)
+    try:
+        con = sqlite3.connect(_AUDIT_DB)
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        con.close()
+        return jsonify([dict(r) for r in rows])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+def _check_api_keys() -> None:
+    """Log startup warnings for missing API keys so the operator knows what's degraded."""
+    missing = []
+    if not os.environ.get("EODHD_KEY"):
+        missing.append("EODHD_KEY — real-time WebSocket prices, indicators, screener, and news all disabled")
+    _ak = os.environ.get("ANTHROPIC_KEY", CONFIG.get("ANTHROPIC_KEY", ""))
+    if not _ak or _ak == "YOUR_ANTHROPIC_API_KEY":
+        missing.append("ANTHROPIC_KEY — AI trade grading disabled")
+    if not os.environ.get("CRYPTOPANIC_KEY"):
+        missing.append("CRYPTOPANIC_KEY (optional) — crypto news sentiment reduced")
+    if not os.environ.get("FINNHUB_KEY"):
+        missing.append("FINNHUB_KEY (optional) — Polygon news fallback disabled")
+    if missing:
+        log.warning("[KEYS] Running in degraded mode — set missing keys in .env:")
+        for m in missing:
+            log.warning(f"  • {m}")
+    else:
+        log.info("[KEYS] All API keys configured")
+
+
 if __name__=="__main__":
     log.info("="*60)
     log.info("ATHENA PRO v3.1 - Python Edition")
     log.info("="*60)
+    _check_api_keys()
     active_fx=sum(1 for p in FOREX_PAIRS if p.get("enabled",True))
     active_cr=sum(1 for p in CRYPTO_PAIRS if p.get("enabled",True))
     log.info(f"Pairs: {len(ACTIVE_PAIRS)} active / {len(ALL_PAIRS)} total ({active_fx}fx {len(COMMODITY_PAIRS)}cmd {sum(1 for p in INDEX_PAIRS if p.get('enabled',True))}idx {sum(1 for p in JSE_PAIRS if p.get('enabled',True))}jse {active_cr}crypto)")
     log.info(f"Data: yfinance (free) + Binance (free)")
-    log.info(f"Anthropic: {'SET' if CONFIG['ANTHROPIC_KEY']!='YOUR_ANTHROPIC_API_KEY' else 'NOT SET'}")
     log.info(f"Est. scan time: ~30s")
     if "--scan" in sys.argv:
         log.info("[SCAN MODE] Running full scan...")

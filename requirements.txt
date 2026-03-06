@@ -2,3 +2,9 @@ flask
 requests
 anthropic
 yfinance
+pandas
+numpy
+websockets
+pyyaml
+eodhd
+python-dotenv
