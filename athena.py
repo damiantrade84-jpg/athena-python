@@ -145,74 +145,8 @@ class EODHDWebSocketManager:
         self._thread.start()
         log.info("[WS] WebSocket manager started")
 
-# N1: Load external config.yaml overrides (tunable thresholds without code deploy)
-_yaml_overrides = {}
-try:
-    import yaml as _yaml
-    _cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
-    if os.path.exists(_cfg_path):
-        with open(_cfg_path, "r") as _f:
-            _yaml_overrides = _yaml.safe_load(_f) or {}
-        log.info(f"Loaded config.yaml ({len(_yaml_overrides)} keys)")
-except ImportError:
-    pass  # pyyaml optional
-except Exception as _e:
-    log.warning(f"config.yaml load failed: {_e}")
-
-CONFIG = {
-    # "TWELVE_DATA_KEY": os.environ.get("TWELVE_DATA_KEY", ""),  # kept for revert reference
-    "ANTHROPIC_KEY": os.environ.get("ANTHROPIC_KEY", "YOUR_ANTHROPIC_API_KEY"),
-    "ANTHROPIC_MODEL": "claude-sonnet-4-6",
-    "CRYPTOPANIC_KEY": os.environ.get("CRYPTOPANIC_KEY", ""),
-    "FINNHUB_KEY": os.environ.get("FINNHUB_KEY", ""),
-    "RISK_PCT": 0.01, "SL_ATR_MULT": 1.5, "TP1_ATR_MULT": 2.0, "TP2_ATR_MULT": 3.5,
-    "VOLUME_THRESHOLD": 1.5, "ADX_TREND_MIN": 25,
-    "D1_CANDLES": 250, "H4_CANDLES": 120, "H1_CANDLES": 120, "MIN_CONFLUENCE": 7.0,
-    # Asset-class risk multipliers — applied to RISK_PCT in backtest and live scan
-    # Metals = alpha driver (1.2x), Crypto = high-conviction burst (0.8x), Forex/Index/Stock = stabiliser (0.6x)
-    "RISK_MULT": {"commodity":1.2, "crypto":0.8, "forex":0.6, "index":0.6, "stock":0.6},
-    # Asset-class ranging suppression thresholds — crypto is more tolerant (trends hard, consolidates often)
-    # (dead_thresh, dead_penalty, choppy_thresh, choppy_penalty)
-    "RANGING": {
-        "crypto":    {"dead":14, "dead_pen":3.0, "choppy":18, "choppy_pen":1.5},
-        "commodity": {"dead":18, "dead_pen":3.0, "choppy":23, "choppy_pen":1.5},
-        "forex":     {"dead":16, "dead_pen":3.0, "choppy":20, "choppy_pen":1.5},
-        "stock":     {"dead":16, "dead_pen":3.0, "choppy":21, "choppy_pen":1.5},
-        "index":     {"dead":16, "dead_pen":3.0, "choppy":21, "choppy_pen":1.5},
-    },
-    "ATR_CLASS": {
-        "forex":     {"sl":1.2, "tp1":2.0, "tp2":3.0},
-        "commodity": {"sl":1.5, "tp1":2.5, "tp2":4.0},
-        "index":     {"sl":1.5, "tp1":2.5, "tp2":4.0},
-        "stock":     {"sl":1.5, "tp1":2.5, "tp2":4.0},
-        "crypto":    {"sl":2.0, "tp1":3.5, "tp2":5.0}
-    },
-    # F1: Per-class D1 ADX trend minimum — crypto trends emerge at ADX 18-22
-    "ADX_TREND_MIN_CLASS": {"crypto":20, "forex":22, "commodity":25, "stock":25, "index":25},
-    # F3: Per-class counter-trend penalty — crypto breaks D1 trends routinely from H4
-    "COUNTER_TREND_PEN": {"crypto":-1.5, "forex":-2.0, "commodity":-3.0, "stock":-3.0, "index":-3.0},
-    # F4: Per-class RSI bounds — crypto stays overbought for weeks in bull runs
-    "RSI_BOUNDS": {
-        "crypto":    {"ob":88, "os":15},
-        "forex":     {"ob":80, "os":20},
-        "commodity": {"ob":78, "os":22},
-        "stock":     {"ob":78, "os":22},
-        "index":     {"ob":78, "os":22},
-    },
-    # F6: Per-class backtest macro lookback — crypto is fast-cycling
-    "MACRO_LOOKBACK": {"crypto":15, "forex":15, "commodity":50, "stock":50, "index":50},
-    # F7: Per-class Weinstein lookback (D1 bars) — crypto cycles are 60-90 bars vs 150 for equities
-    "WEINSTEIN_LOOKBACK": {"crypto":60, "forex":100, "commodity":150, "stock":150, "index":150},
-    # V2: Per-class bt_min + live MIN_CONFLUENCE — crypto requires higher conviction
-    "BT_MIN": {"crypto":8.0, "commodity":6.0, "forex":5.5, "stock":6.0, "index":6.0},
-    "MIN_CONFLUENCE_CLASS": {"crypto":8.0, "commodity":6.0, "forex":5.5, "stock":6.0, "index":6.0},
-}
-# N1: Apply YAML overrides — deep-merge dicts, overwrite scalars
-for _k, _v in _yaml_overrides.items():
-    if _k in CONFIG and isinstance(CONFIG[_k], dict) and isinstance(_v, dict):
-        CONFIG[_k].update(_v)
-    else:
-        CONFIG[_k] = _v
+# N1: CONFIG loaded from config.py (YAML overrides + validation happen there)
+from config import CONFIG
 
 # enabled=False = negative backtest SQN, excluded from live scan (still available in backtest)
 FOREX_PAIRS = [
@@ -456,7 +390,7 @@ def fetch_polygon(pair, tf, limit):
         return candles[-limit:] if len(candles) > limit else candles
     except Exception as e: log.error(f"[PG] {pair['display']}: {e}"); return None
 
-def fetch_candles(pair, tf, limit):
+def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
     """Route candle fetch to correct source (binance, yfinance, or polygon) based on pair config."""
     if pair["source"]=="binance": return fetch_binance(pair["symbol"], TF_B[tf], limit)
     if pair["source"]=="eodhd": return fetch_eodhd(pair, tf, limit)
@@ -983,7 +917,7 @@ def detect_div(d1c, h4c, h1c):
     except Exception as e: log.warning(f"detect_div H1: {e}")
     return w
 
-def analyze_pair(pair, btc_bias):
+def analyze_pair(pair: dict, btc_bias: str) -> dict | None:
     """Full analysis pipeline for one pair: fetch data, calc indicators, score confluence, compute levels."""
     d1=fetch_candles(pair,"D1",CONFIG["D1_CANDLES"])
     h4=fetch_candles(pair,"H4",CONFIG["H4_CANDLES"])
@@ -1050,9 +984,10 @@ def _apply_correlation_cap(signals):
     return signals
 
 _scan_in_progress = False
-_kill_switch = False  # N4: Kill-switch — blocks new scans/analyses when True
+_kill_switch = False      # N4: Kill-switch — blocks new scans/analyses when True
+_disabled_pairs: set = set()  # per-pair kill-switch — display names of pairs to exclude
 
-def run_full_scan():
+def run_full_scan() -> dict:
     """Parallel scan of all ACTIVE_PAIRS. Returns signals, errors, skipped lists."""
     global _scan_in_progress
     if _kill_switch:
@@ -1413,93 +1348,123 @@ def fetch_news_context():
     _news_cache["ts"] = time.time()
     return ctx
 
-def run_ai(signal, news_ctx=None, style_pref="auto"):
+def _build_signal_message(signal: dict, news_ctx: dict | None,
+                          style_pref: str, style_labels: dict) -> str:
+    """Build the structured signal string sent to Marcus Reid (Claude) for analysis."""
+    max_score = signal.get("maxScore", 13.0)
+    spread = signal.get("spread", 0)
+    conviction = "HIGH" if spread >= 3 else "MEDIUM" if spread >= 1.5 else "LOW"
+    pair_sqn = signal.get("pairSQN")
+
+    parts = [
+        f"Pair:{signal['pair']} Dir:{signal['direction']} Score:{signal['confluenceScore']}/{max_score}",
+        f"Spread:{spread}({conviction} conviction)",
+        f"PairSQN:{pair_sqn}" if pair_sqn else "",
+        f"TrendState:{signal.get('trendState', '?')}",
+        f"ADXPct:{signal.get('h4', {}).get('snap', {}).get('adxPct', '?')}th-pct"
+        f"({signal.get('h4', {}).get('snap', {}).get('adxLabel', '?')})",
+        f"Weinstein:{signal.get('weinsteinLabel', 'n/a')}",
+        f"Price:{signal['price']} SL:{signal['sl']}(SL%:{signal.get('slPct', '?')}%)",
+        f"TP1:{signal['tp1']}(R:{signal['rr1']}) TP2:{signal['tp2']}(R:{signal['rr2']})",
+        f"ATR:{signal['atr']}",
+        f"Votes:{json.dumps(signal['votes'])}",
+        f"Vol:{signal['volRatio']}x Stoch:{signal.get('stochK')}/{signal.get('stochD')}",
+        f"EMA200slope:{signal['ema200Slope']}%",
+        f"BTC:{signal.get('btcBias', 'n/a')}",
+        f"Session:{signal['session']['name']}({signal['session']['quality']})",
+        f"Warnings:{json.dumps(signal['warnings'])}",
+        f"Fib:{json.dumps(signal['fib'])}",
+        f"ATRPct:{signal.get('h4', {}).get('snap', {}).get('atrPct', '?')}"
+        f"({signal.get('h4', {}).get('snap', {}).get('atrLabel', '?')})",
+        f"EntryMode:{signal.get('entryMode', 'trend')}",
+        f"StylePref:{style_pref.upper()}",
+    ]
+    msg = " ".join(p for p in parts if p)
+
+    dxy_ctx = fetch_dxy_context()
+    if dxy_ctx:
+        msg += f" DXY:{dxy_ctx}"
+
+    _yc = fetch_yield_curve()
+    if _yc:
+        msg += (f" YieldCurve:{{shape:{_yc['shape']},2y10y_spread:{_yc['spread_2_10']}%,"
+                f"3m:{_yc.get('y3m')}%,10y:{_yc['y10y']}%,context:{_yc['riskContext']}}}")
+
+    _ds = fetch_div_split_context()
+    _pair_sym = signal.get("symbol", "")
+    if _ds and _pair_sym in _ds:
+        _ev = _ds[_pair_sym]
+        if _ev.get("upcomingDiv"):
+            _d = _ev["upcomingDiv"][0]
+            msg += (f" ExDivWarning:ex-div in {_d['daysTo']} days"
+                    f" ({_d['exDate']}, amount:{_d.get('amount', '?')}) — gap-down risk, reduce size")
+        if _ev.get("upcomingSplit"):
+            _s = _ev["upcomingSplit"][0]
+            msg += (f" SplitWarning:split in {_s['daysTo']} days"
+                    f" ({_s['splitDate']}, ratio:{_s.get('ratio', '?')}) — price distortion risk")
+
+    _bt = signal.get("backtestStats")
+    if _bt:
+        msg += (f" BT_SQN:{_bt.get('sqn', '?')} BT_WR:{_bt.get('winRate', '?')}%"
+                f" BT_Expect:{_bt.get('expectancy', '?')}R BT_MaxDD:{_bt.get('maxDrawdownPct', '?')}%")
+        _rs = _bt.get("regimeStats", {})
+        if _rs:
+            msg += f" BT_RegimeWR:{json.dumps({k: v.get('wr') for k, v in _rs.items()})}"
+
+    msg += f" StyleDetail:{style_labels.get(style_pref.lower(), style_pref.upper())}"
+
+    if news_ctx:
+        if news_ctx.get("forexEvents"):
+            msg += f" HighImpactEvents:{json.dumps(news_ctx['forexEvents'])}"
+        if news_ctx.get("marketNews"):
+            msg += f" MarketNews:{json.dumps(news_ctx['marketNews'])}"
+        if news_ctx.get("cryptoNews") and signal.get("type") == "crypto":
+            pair_coins = [signal["symbol"].replace("USDT", "").replace("USDC", "")]
+            relevant = [n for n in news_ctx["cryptoNews"]
+                        if not n["currencies"] or any(c in pair_coins for c in n["currencies"])]
+            if relevant:
+                msg += f" CryptoNews:{json.dumps(relevant[:3])}"
+        _sent = news_ctx.get("pairSentiment", {})
+        if _sent.get(signal.get("pair", "")):
+            _sc = _sent[signal["pair"]]
+            _sl = "bullish" if _sc > 0.6 else "bearish" if _sc < 0.4 else "neutral"
+            msg += f" NewsSentiment:{_sc}({_sl})"
+        _pnews = news_ctx.get("pairNews", {}).get(signal.get("pair", ""), [])
+        if _pnews:
+            msg += f" PairNews:{json.dumps(_pnews)}"
+        _ww = news_ctx.get("wordWeights", {}).get(signal.get("pair", ""), [])
+        if _ww:
+            msg += f" NewsDrivers:{json.dumps(_ww)}"
+
+    _server_ind = signal.get("serverIndicators")
+    if _server_ind:
+        msg += f" ServerIndicators:{json.dumps(_server_ind)}"
+
+    return msg
+
+
+def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto") -> dict:
     """Send signal data to Anthropic Claude for Marcus Reid AI analysis. Returns parsed JSON dict."""
-    if not CONFIG.get("ANTHROPIC_KEY") or CONFIG["ANTHROPIC_KEY"]=="YOUR_ANTHROPIC_API_KEY":
+    if not CONFIG.get("ANTHROPIC_KEY") or CONFIG["ANTHROPIC_KEY"] == "YOUR_ANTHROPIC_API_KEY":
         log.error("[AI] Anthropic API key is None or not configured!")
-        return {"error":"Anthropic API key not configured"}
+        return {"error": "Anthropic API key not configured"}
     try:
         log.info(f"[AI] Analyzing {signal['pair']}...")
         import anthropic
-        c=anthropic.Anthropic(api_key=CONFIG["ANTHROPIC_KEY"])
-        style_labels = {"scalp":"SCALP — focus on H1 exhaustion, tight 1.5R, quick execution","intraday":"INTRADAY — H4+H1 alignment, same-session execution, 2-3R","swing":"SWING — D1 trend dominance, EMA200 slope, 4-6R multi-day hold"}
-        # Auto-style detection if not specified
+        c = anthropic.Anthropic(api_key=CONFIG["ANTHROPIC_KEY"])
+        style_labels = {
+            "scalp":    "SCALP — focus on H1 exhaustion, tight 1.5R, quick execution",
+            "intraday": "INTRADAY — H4+H1 alignment, same-session execution, 2-3R",
+            "swing":    "SWING — D1 trend dominance, EMA200 slope, 4-6R multi-day hold",
+        }
         if style_pref == "auto":
             _sc = signal.get("confluenceScore", 0)
             style_pref = "swing" if _sc >= 9 else "intraday" if _sc >= 7 else "scalp"
-        dxy_ctx=fetch_dxy_context()
-        max_score=signal.get("maxScore",13.0)
-        spread=signal.get("spread",0)
-        conviction="HIGH" if spread>=3 else "MEDIUM" if spread>=1.5 else "LOW"
-        pair_sqn=signal.get("pairSQN")
-        msg=(f"Pair:{signal['pair']} Dir:{signal['direction']} Score:{signal['confluenceScore']}/{max_score} "
-             f"Spread:{spread}({conviction} conviction) "
-             f"{'PairSQN:'+str(pair_sqn)+' ' if pair_sqn else ''}"
-             f"TrendState:{signal.get('trendState','?')} "
-             f"ADXPct:{signal.get('h4',{}).get('snap',{}).get('adxPct','?')}th-pct({signal.get('h4',{}).get('snap',{}).get('adxLabel','?')}) "
-             f"Weinstein:{signal.get('weinsteinLabel','n/a')} "
-             f"Price:{signal['price']} SL:{signal['sl']}(SL%:{signal.get('slPct','?')}%) "
-             f"TP1:{signal['tp1']}(R:{signal['rr1']}) TP2:{signal['tp2']}(R:{signal['rr2']}) "
-             f"ATR:{signal['atr']} "
-             f"Votes:{json.dumps(signal['votes'])} "
-             f"Vol:{signal['volRatio']}x Stoch:{signal.get('stochK')}/{signal.get('stochD')} "
-             f"EMA200slope:{signal['ema200Slope']}% "
-             f"BTC:{signal.get('btcBias','n/a')} "
-             f"Session:{signal['session']['name']}({signal['session']['quality']}) "
-             f"Warnings:{json.dumps(signal['warnings'])} "
-             f"Fib:{json.dumps(signal['fib'])} "
-             f"ATRPct:{signal.get('h4',{}).get('snap',{}).get('atrPct','?')}({signal.get('h4',{}).get('snap',{}).get('atrLabel','?')}) "
-             f"EntryMode:{signal.get('entryMode','trend')} "
-             f"StylePref:{style_pref.upper()}")
-        if dxy_ctx: msg += f" DXY:{dxy_ctx}"
-        # Phase A: Yield curve context
-        _yc = fetch_yield_curve()
-        if _yc:
-            msg += (f" YieldCurve:{{shape:{_yc['shape']},2y10y_spread:{_yc['spread_2_10']}%,"
-                    f"3m:{_yc.get('y3m')}%,10y:{_yc['y10y']}%,context:{_yc['riskContext']}}}")
-        # Phase B: Div/split warnings for stock pairs
-        _ds = fetch_div_split_context()
-        _pair_sym = signal.get("symbol", "")
-        if _ds and _pair_sym in _ds:
-            _ev = _ds[_pair_sym]
-            if _ev.get("upcomingDiv"):
-                _d = _ev["upcomingDiv"][0]
-                msg += f" ExDivWarning:ex-div in {_d['daysTo']} days ({_d['exDate']}, amount:{_d.get('amount','?')}) — gap-down risk, reduce size"
-            if _ev.get("upcomingSplit"):
-                _s = _ev["upcomingSplit"][0]
-                msg += f" SplitWarning:split in {_s['daysTo']} days ({_s['splitDate']}, ratio:{_s.get('ratio','?')}) — price distortion risk"
-        # R6: Feed AI backtest performance context if available
-        _bt = signal.get("backtestStats")
-        if _bt:
-            msg += (f" BT_SQN:{_bt.get('sqn','?')} BT_WR:{_bt.get('winRate','?')}%"
-                    f" BT_Expect:{_bt.get('expectancy','?')}R BT_MaxDD:{_bt.get('maxDrawdownPct','?')}%")
-            _rs = _bt.get("regimeStats", {})
-            if _rs:
-                msg += f" BT_RegimeWR:{json.dumps({k:v.get('wr') for k,v in _rs.items()})}"
-        if style_pref:
-            msg += f" StyleDetail:{style_labels.get(style_pref.lower(), style_pref.upper())}"
-        if news_ctx:
-            if news_ctx.get("forexEvents"): msg += f" HighImpactEvents:{json.dumps(news_ctx['forexEvents'])}"
-            if news_ctx.get("marketNews"): msg += f" MarketNews:{json.dumps(news_ctx['marketNews'])}"
-            if news_ctx.get("cryptoNews") and signal.get("type")=="crypto":
-                pair_coins = [signal["symbol"].replace("USDT","").replace("USDC","")]
-                relevant = [n for n in news_ctx["cryptoNews"] if not n["currencies"] or any(c in pair_coins for c in n["currencies"])]
-                if relevant: msg += f" CryptoNews:{json.dumps(relevant[:3])}"
-            _sent = news_ctx.get("pairSentiment", {})
-            if _sent.get(signal.get("pair","")):
-                _sc = _sent[signal["pair"]]
-                _sl = "bullish" if _sc > 0.6 else "bearish" if _sc < 0.4 else "neutral"
-                msg += f" NewsSentiment:{_sc}({_sl})"
-            # Phase 3: Per-pair news headlines with article sentiment
-            _pnews = news_ctx.get("pairNews", {}).get(signal.get("pair",""), [])
-            if _pnews: msg += f" PairNews:{json.dumps(_pnews)}"
-            # Phase 4: News word weights — top keywords driving this pair's news
-            _ww = news_ctx.get("wordWeights", {}).get(signal.get("pair",""), [])
-            if _ww: msg += f" NewsDrivers:{json.dumps(_ww)}"
-        # Phase 5: Server-side indicators via EODHD filter=last_X
-        _server_ind = signal.get("serverIndicators")
-        if _server_ind: msg += f" ServerIndicators:{json.dumps(_server_ind)}"
-        r=c.messages.create(model=CONFIG["ANTHROPIC_MODEL"],max_tokens=1500,system=EXPERT_PROMPT,messages=[{"role":"user","content":msg}])
+        msg = _build_signal_message(signal, news_ctx, style_pref, style_labels)
+        r = c.messages.create(
+            model=CONFIG["ANTHROPIC_MODEL"], max_tokens=1500,
+            system=EXPERT_PROMPT, messages=[{"role": "user", "content": msg}]
+        )
         t=r.content[0].text.strip()
         if "```" in t:
             parts = t.split("```")
@@ -1982,6 +1947,26 @@ def api_killswitch():
     log.warning(f"KILL-SWITCH {'ACTIVATED' if _kill_switch else 'DEACTIVATED'}")
     return jsonify({"killSwitch":_kill_switch})
 
+@app.route("/api/killswitch/pair/<path:display>", methods=["POST"])
+def api_killswitch_pair(display: str):
+    """Enable or disable a specific pair by display name. Body: {"enabled": false}"""
+    global _disabled_pairs, ACTIVE_PAIRS
+    d = request.json or {}
+    enabled = d.get("enabled", True)
+    if enabled:
+        _disabled_pairs.discard(display)
+    else:
+        _disabled_pairs.add(display)
+    ACTIVE_PAIRS = [p for p in ALL_PAIRS if p.get("enabled", True) and p["display"] not in _disabled_pairs]
+    log.warning(f"[KILL] Pair {display!r}: {'ENABLED' if enabled else 'DISABLED'} ({len(ACTIVE_PAIRS)} active)")
+    return jsonify({"pair": display, "enabled": enabled, "activePairs": len(ACTIVE_PAIRS),
+                    "disabledPairs": sorted(_disabled_pairs)})
+
+@app.route("/api/killswitch/pair")
+def api_killswitch_pair_list():
+    """List all disabled pairs."""
+    return jsonify({"disabledPairs": sorted(_disabled_pairs), "activePairs": len(ACTIVE_PAIRS)})
+
 @app.route("/api/prices")
 def api_prices():
     return jsonify({"prices": _live_prices, "count": len(_live_prices),
@@ -2048,15 +2033,35 @@ def api_audit():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+def _check_api_keys() -> None:
+    """Log startup warnings for missing API keys so the operator knows what's degraded."""
+    missing = []
+    if not os.environ.get("EODHD_KEY"):
+        missing.append("EODHD_KEY — real-time WebSocket prices, indicators, screener, and news all disabled")
+    _ak = os.environ.get("ANTHROPIC_KEY", CONFIG.get("ANTHROPIC_KEY", ""))
+    if not _ak or _ak == "YOUR_ANTHROPIC_API_KEY":
+        missing.append("ANTHROPIC_KEY — AI trade grading disabled")
+    if not os.environ.get("CRYPTOPANIC_KEY"):
+        missing.append("CRYPTOPANIC_KEY (optional) — crypto news sentiment reduced")
+    if not os.environ.get("FINNHUB_KEY"):
+        missing.append("FINNHUB_KEY (optional) — Polygon news fallback disabled")
+    if missing:
+        log.warning("[KEYS] Running in degraded mode — set missing keys in .env:")
+        for m in missing:
+            log.warning(f"  • {m}")
+    else:
+        log.info("[KEYS] All API keys configured")
+
+
 if __name__=="__main__":
     log.info("="*60)
     log.info("ATHENA PRO v3.1 - Python Edition")
     log.info("="*60)
+    _check_api_keys()
     active_fx=sum(1 for p in FOREX_PAIRS if p.get("enabled",True))
     active_cr=sum(1 for p in CRYPTO_PAIRS if p.get("enabled",True))
     log.info(f"Pairs: {len(ACTIVE_PAIRS)} active / {len(ALL_PAIRS)} total ({active_fx}fx {len(COMMODITY_PAIRS)}cmd {sum(1 for p in INDEX_PAIRS if p.get('enabled',True))}idx {sum(1 for p in JSE_PAIRS if p.get('enabled',True))}jse {active_cr}crypto)")
     log.info(f"Data: yfinance (free) + Binance (free)")
-    log.info(f"Anthropic: {'SET' if CONFIG['ANTHROPIC_KEY']!='YOUR_ANTHROPIC_API_KEY' else 'NOT SET'}")
     log.info(f"Est. scan time: ~30s")
     if "--scan" in sys.argv:
         log.info("[SCAN MODE] Running full scan...")
