@@ -309,8 +309,25 @@ def ccxt_execute(signal: dict, approval: "RiskApproval") -> dict:
 
         log.info(f"[CCXT] Placing market BUY: {volume} {ccxt_symbol} @ ~{price}")
 
-        # Market buy order
-        order = exchange.create_market_buy_order(ccxt_symbol, volume)
+        # Market buy order — 3-attempt retry on transient network errors
+        import time as _time
+        order = None
+        _last_err = None
+        for _attempt in range(3):
+            try:
+                order = exchange.create_market_buy_order(ccxt_symbol, volume)
+                break
+            except Exception as _oe:
+                _oe_name = type(_oe).__name__
+                # Only retry on network/timeout errors, not on validation/order errors
+                if any(s in _oe_name for s in ("NetworkError", "RequestTimeout", "ExchangeNotAvailable")):
+                    _last_err = _oe
+                    log.warning(f"[CCXT] Order attempt {_attempt + 1}/3 failed ({_oe_name}), retrying...")
+                    _time.sleep(1)
+                else:
+                    raise  # Non-retryable error — propagate immediately
+        if order is None:
+            raise _last_err
 
         order_id = order.get("id", "")
         filled_price = order.get("average", order.get("price", price))

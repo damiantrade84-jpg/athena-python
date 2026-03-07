@@ -157,7 +157,7 @@ def _calc_portfolio_heat(open_positions: list, account_balance: float) -> float:
 
 def risk_check(signal: dict, account_balance: float, account_equity: float,
                open_positions: list, symbol_info: dict | None = None,
-               kill_switch: bool = False) -> RiskApproval:
+               kill_switch: bool = False, sizing_override: float = 1.0) -> RiskApproval:
     """Mandatory risk gateway. Every execution path calls this first.
 
     Args:
@@ -225,7 +225,15 @@ def risk_check(signal: dict, account_balance: float, account_equity: float,
     asset_type = signal.get("type", "")
     volume = _calc_volume(account_balance, entry, sl, symbol_info, asset_type)
     is_crypto = asset_type == "crypto"
-    volume = round(volume * dd_factor, 6 if is_crypto else 2)  # Apply drawdown reduction
+
+    # Score-scaled sizing: scale position by signal quality (weak signals get smaller bets)
+    max_score = signal.get("maxScore", 13.0)
+    score = signal.get("confluenceScore", max_score)
+    score_factor = max(0.25, min(1.0, score / max_score)) if max_score > 0 else 1.0
+    # Also apply AI sizing override (1.0=full, 0.75=normal, 0.5=half, 0.25=quarter)
+    combined_factor = dd_factor * score_factor * max(0.25, min(1.0, sizing_override))
+    volume = round(volume * combined_factor, 6 if is_crypto else 2)
+    log.info(f"{prefix} sizing: score_factor={score_factor:.2f}, sizing_override={sizing_override:.2f}, dd_factor={dd_factor:.2f} → combined={combined_factor:.2f}")
 
     # Re-clamp after dd_factor
     if symbol_info:

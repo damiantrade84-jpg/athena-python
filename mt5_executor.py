@@ -321,6 +321,36 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:
         }
 
     log.info(f"[MT5] ORDER FILLED: ticket={result.order} | {direction} {result.volume} {mt5_symbol} @ {result.price}")
+
+    # Place TP2 as a separate pending limit order at half the volume (second target)
+    tp2_ticket = None
+    tp2_raw = signal.get("tp2", 0)
+    tp2 = round(float(tp2_raw), digits) if tp2_raw else 0
+    if tp2 and tp2 != tp and result.volume > 0:
+        half_vol = round(result.volume / 2, 2)
+        if half_vol >= 0.01:
+            tp2_type = mt5.ORDER_TYPE_SELL_LIMIT if direction == "LONG" else mt5.ORDER_TYPE_BUY_LIMIT
+            tp2_req = {
+                "action": mt5.TRADE_ACTION_PENDING,
+                "symbol": mt5_symbol,
+                "volume": half_vol,
+                "type": tp2_type,
+                "price": tp2,
+                "sl": sl,
+                "deviation": 20,
+                "magic": 240601,
+                "comment": f"Athena|{pair}|TP2",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_IOC,
+            }
+            tp2_result = mt5.order_send(tp2_req)
+            if tp2_result and tp2_result.retcode == mt5.TRADE_RETCODE_DONE:
+                tp2_ticket = tp2_result.order
+                log.info(f"[MT5] TP2 pending order placed: ticket={tp2_ticket} @ {tp2} ({half_vol} lots)")
+            else:
+                _rc = tp2_result.retcode if tp2_result else "None"
+                log.warning(f"[MT5] TP2 order failed (retcode={_rc}) — manage TP2 manually at {tp2}")
+
     return {
         "success": True,
         "ticket": result.order,
@@ -330,6 +360,8 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:
         "direction": direction,
         "sl": sl,
         "tp": tp,
+        "tp2": tp2,
+        "tp2Ticket": tp2_ticket,
         "riskAmount": approval.risk_amount,
         "riskPct": approval.risk_pct,
     }

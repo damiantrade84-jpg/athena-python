@@ -371,7 +371,14 @@ def fetch_yfinance(sym, tf, limit):
         df = yf.download(sym, period=period, interval=interval, progress=False, auto_adjust=True)
         if df is None or df.empty: log.warning(f"[YF] {sym}: no data"); return None
         if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [col[0] for col in df.columns]
+            # Determine which level holds OHLCV names (level 0 or level 1)
+            _ohlcv = {"Open", "High", "Low", "Close", "Volume"}
+            _l0 = set(df.columns.get_level_values(0))
+            df.columns = (df.columns.get_level_values(0)
+                          if _ohlcv.intersection(_l0)
+                          else df.columns.get_level_values(1))
+        # Drop duplicate columns (some JSE tickers produce duplicates after MultiIndex flatten)
+        df = df.loc[:, ~df.columns.duplicated(keep="first")]
         if tf == "H4":
             # Column-by-column resample — avoids pandas version issues with .agg(dict)
             vol_col = df["Volume"] if "Volume" in df.columns else pd.Series(0.0, index=df.index)
@@ -815,13 +822,11 @@ def fetch_div_split_context():
 # Phase B2: Upcoming earnings awareness cache (6hr TTL)
 _earnings_cache = {"data": {}, "ts": 0}
 _EARNINGS_TTL = 21600
-_EARNINGS_AVAILABLE = None  # None = untested, True = works, False = 403 on this plan
+_EARNINGS_AVAILABLE = None  # None = untested, True = confirmed working
 
 def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
     """Fetch upcoming earnings for tracked stock pairs via EODHD SDK."""
     global _earnings_cache, _EARNINGS_AVAILABLE
-    if _EARNINGS_AVAILABLE is False:
-        return {}
     now = time.time()
     if _earnings_cache["data"] and (now - _earnings_cache["ts"]) < _EARNINGS_TTL:
         return _earnings_cache["data"]
@@ -843,8 +848,11 @@ def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
         _EARNINGS_AVAILABLE = True
     except Exception as e:
         if "403" in str(e) or "Forbidden" in str(e):
-            _EARNINGS_AVAILABLE = False
-            log.info("[EARN] Endpoint not available on current EODHD plan — skipping future calls")
+            # Don't permanently disable — paid plans may have this endpoint.
+            # Log clearly so user can verify their EODHD plan includes calendar/earnings.
+            log.warning(f"[EARN] 403 Forbidden on earnings endpoint — verify your EODHD plan includes "
+                        f"calendar/earnings access (Dashboard → API Tokens). Key in use ends with "
+                        f"...{os.environ.get('EODHD_KEY','')[-6:]}")
         else:
             log.warning(f"[EARN] fetch failed: {e}")
         return {}
@@ -955,7 +963,8 @@ def fetch_news_context(pairs: list | None = None):
     return ctx
 
 def _build_signal_message(signal: dict, news_ctx: dict | None,
-                          style_pref: str, style_labels: dict) -> str:
+                          style_pref: str, style_labels: dict,
+                          portfolio_heat: float = 0.0, drawdown_pct: float = 0.0) -> str:
     """Build the structured signal string sent to Marcus Reid (Claude) for analysis."""
     max_score = signal.get("maxScore", 13.0)
     spread = signal.get("spread", 0)
@@ -984,6 +993,8 @@ def _build_signal_message(signal: dict, news_ctx: dict | None,
         f"({signal.get('h4', {}).get('snap', {}).get('atrLabel', '?')})",
         f"EntryMode:{signal.get('entryMode', 'trend')}",
         f"StylePref:{style_pref.upper()}",
+        f"PortfolioHeat:{portfolio_heat:.1%}" if portfolio_heat > 0 else "",
+        f"CurrentDrawdown:{drawdown_pct:.1%}" if drawdown_pct > 0 else "",
     ]
     msg = " ".join(p for p in parts if p)
 
@@ -1048,7 +1059,8 @@ def _build_signal_message(signal: dict, news_ctx: dict | None,
 
     return msg
 
-def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto") -> dict:
+def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto",
+           portfolio_heat: float = 0.0, drawdown_pct: float = 0.0) -> dict:
     """Send signal data to Anthropic Claude for Marcus Reid AI analysis. Returns parsed JSON dict."""
     if not CONFIG.get("ANTHROPIC_KEY") or CONFIG["ANTHROPIC_KEY"] == "YOUR_ANTHROPIC_API_KEY":
         log.error("[AI] Anthropic API key is None or not configured!")
@@ -1065,7 +1077,8 @@ def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto")
         if style_pref == "auto":
             _sc = signal.get("confluenceScore", 0)
             style_pref = "swing" if _sc >= 9 else "intraday" if _sc >= 7 else "scalp"
-        msg = _build_signal_message(signal, news_ctx, style_pref, style_labels)
+        msg = _build_signal_message(signal, news_ctx, style_pref, style_labels,
+                                    portfolio_heat=portfolio_heat, drawdown_pct=drawdown_pct)
         r = c.messages.create(
             model=CONFIG["ANTHROPIC_MODEL"], max_tokens=1500,
             system=EXPERT_PROMPT, messages=[{"role": "user", "content": msg}]
@@ -1109,10 +1122,18 @@ def backtest_pair(pair):
         else:
             d1_df = yf.download(sym, period="2y", interval="1d", progress=False, auto_adjust=True)
             if d1_df is None or d1_df.empty: return {"error": f"No D1 data for {pair['display']}"}
-            if isinstance(d1_df.columns, pd.MultiIndex): d1_df.columns = [col[0] for col in d1_df.columns]
+            if isinstance(d1_df.columns, pd.MultiIndex):
+                _ohlcv = {"Open", "High", "Low", "Close", "Volume"}
+                _l0 = set(d1_df.columns.get_level_values(0))
+                d1_df.columns = (d1_df.columns.get_level_values(0) if _ohlcv.intersection(_l0) else d1_df.columns.get_level_values(1))
+            d1_df = d1_df.loc[:, ~d1_df.columns.duplicated(keep="first")]
             h1_df = yf.download(sym, period="180d", interval="1h", progress=False, auto_adjust=True)
             if h1_df is None or h1_df.empty: h1_df = None
-            elif isinstance(h1_df.columns, pd.MultiIndex): h1_df.columns = [col[0] for col in h1_df.columns]
+            elif isinstance(h1_df.columns, pd.MultiIndex):
+                _ohlcv = {"Open", "High", "Low", "Close", "Volume"}
+                _l0 = set(h1_df.columns.get_level_values(0))
+                h1_df.columns = (h1_df.columns.get_level_values(0) if _ohlcv.intersection(_l0) else h1_df.columns.get_level_values(1))
+                h1_df = h1_df.loc[:, ~h1_df.columns.duplicated(keep="first")]
             d1_raw = df_to_candles(d1_df)
             if h1_df is not None:
                 vol_col = h1_df["Volume"] if "Volume" in h1_df.columns else pd.Series(0.0, index=h1_df.index)
@@ -1264,13 +1285,13 @@ def backtest_pair(pair):
             if direction == "LONG":
                 # A2: worst-case intrabar — SL checked before TP (conservative)
                 if bar["low"] <= sl:   outcome = "SL";  result_r = -1.0; exit_bar = j; break
-                if bar["high"] >= tp2: outcome = "TP2"; result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult)); exit_bar = j; break
-                if bar["high"] >= tp1: outcome = "TP1"; result_r = rr1 - (slip / (atr * sl_mult)); exit_bar = j; break
+                if bar["high"] >= tp2: outcome = "TP2"; result_r = max(0.0, (tp2_mult / sl_mult) - (slip / (atr * sl_mult))); exit_bar = j; break
+                if bar["high"] >= tp1: outcome = "TP1"; result_r = max(0.0, rr1 - (slip / (atr * sl_mult))); exit_bar = j; break
             else:
                 # A2: worst-case intrabar — SL checked before TP (conservative)
                 if bar["high"] >= sl:  outcome = "SL";  result_r = -1.0; exit_bar = j; break
-                if bar["low"] <= tp2:  outcome = "TP2"; result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult)); exit_bar = j; break
-                if bar["low"] <= tp1:  outcome = "TP1"; result_r = rr1 - (slip / (atr * sl_mult)); exit_bar = j; break
+                if bar["low"] <= tp2:  outcome = "TP2"; result_r = max(0.0, (tp2_mult / sl_mult) - (slip / (atr * sl_mult))); exit_bar = j; break
+                if bar["low"] <= tp1:  outcome = "TP1"; result_r = max(0.0, rr1 - (slip / (atr * sl_mult))); exit_bar = j; break
         if outcome == "OPEN":
             # Force-close at last forward bar — record actual P&L vs recording a ghost 0R
             _last_fwd = d1_raw[min(i + 20, total_bars - 1)]
@@ -1407,22 +1428,39 @@ def run_full_backtest():
     return {"success": True, "results": results, "errors": errors, "totalPairs": len(ALL_PAIRS)}
 
 def _init_audit_db(db_path: str) -> None:
-    """Create audit table if it doesn't exist."""
+    """Create audit table if it doesn't exist, and migrate legacy schemas."""
     con = sqlite3.connect(db_path)
     con.execute("""
         CREATE TABLE IF NOT EXISTS audit_log (
-            id        INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts        TEXT NOT NULL,
-            pair      TEXT,
-            score     REAL,
-            direction TEXT,
-            trend     TEXT,
-            grade     TEXT,
-            edge_prob REAL,
-            risk      TEXT,
-            style     TEXT
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts            TEXT NOT NULL,
+            pair          TEXT,
+            score         REAL,
+            direction     TEXT,
+            trend         TEXT,
+            grade         TEXT,
+            edge_prob     REAL,
+            risk          TEXT,
+            style         TEXT,
+            entry_price   REAL,
+            sl            REAL,
+            tp            REAL,
+            volume        REAL,
+            regime        TEXT,
+            risk_amount   REAL,
+            risk_pct      REAL,
+            ticket        TEXT
         )
     """)
+    # Migrate: add new columns to existing tables that lack them
+    existing = {row[1] for row in con.execute("PRAGMA table_info(audit_log)")}
+    for col, defn in [
+        ("entry_price", "REAL"), ("sl", "REAL"), ("tp", "REAL"),
+        ("volume", "REAL"), ("regime", "TEXT"), ("risk_amount", "REAL"),
+        ("risk_pct", "REAL"), ("ticket", "TEXT"),
+    ]:
+        if col not in existing:
+            con.execute(f"ALTER TABLE audit_log ADD COLUMN {col} {defn}")
     con.commit()
     con.close()
 
@@ -1451,7 +1489,26 @@ def api_analyze():
     try:
         news_ctx = sig.get("newsCtx") or fetch_news_context()
         style_pref = d.get("stylePreference", "auto")
-        result = run_ai(sig, news_ctx, style_pref)
+        # Fetch live portfolio context so Claude knows current risk exposure
+        _p_heat = 0.0
+        _dd_pct = 0.0
+        try:
+            from risk_engine import _calc_portfolio_heat, _current_drawdown
+            _sig_type = sig.get("type", "")
+            if _sig_type == "crypto":
+                from ccxt_executor import ccxt_get_account, ccxt_get_positions
+                _acct = ccxt_get_account()
+                _pos = ccxt_get_positions()
+            else:
+                from mt5_executor import mt5_get_account, mt5_get_positions
+                _acct = mt5_get_account()
+                _pos = mt5_get_positions()
+            if _acct:
+                _p_heat = _calc_portfolio_heat(_pos or [], _acct["balance"])
+                _dd_pct = _current_drawdown(_acct["equity"])
+        except Exception:
+            pass
+        result = run_ai(sig, news_ctx, style_pref, portfolio_heat=_p_heat, drawdown_pct=_dd_pct)
         # N9: Audit log — persist every AI analysis to SQLite
         try:
             with sqlite3.connect(_AUDIT_DB) as _con:
@@ -1507,6 +1564,18 @@ def api_execute():
                 return jsonify({"error": "MT5 not connected. Start MT5 terminal and check credentials."}), 503
             positions = mt5_get_positions()
             symbol_info = mt5_get_symbol_info(pair)
+        # Map AI grade/positionSizing to a sizing multiplier
+        _grade = d.get("grade", "")
+        _pos_size_str = d.get("positionSizing", "").lower()
+        if "quarter" in _pos_size_str:
+            _sizing_override = 0.25
+        elif "half" in _pos_size_str:
+            _sizing_override = 0.5
+        elif "normal" in _pos_size_str or _grade == "A":
+            _sizing_override = 0.75
+        else:
+            _sizing_override = 1.0  # Full / A+ / unspecified
+
         # MANDATORY RISK CHECK — no bypass
         approval = risk_check(
             signal=sig,
@@ -1515,6 +1584,7 @@ def api_execute():
             open_positions=positions,
             symbol_info=symbol_info,
             kill_switch=_kill_switch,
+            sizing_override=_sizing_override,
         )
         if not approval.approved:
             log.warning(f"[EXEC] {pair} REJECTED by risk engine: {approval.reason}")
@@ -1526,14 +1596,19 @@ def api_execute():
             result = mt5_execute(sig, approval)
         if result.get("success"):
             _executed_signals.add(sig_id)
-            # Log to audit DB
+            # Log to audit DB — full trade lifecycle entry
             try:
                 with sqlite3.connect(_AUDIT_DB) as con:
                     con.execute(
-                        "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style) VALUES(?,?,?,?,?,?,?,?,?)",
+                        "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style,"
+                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (datetime.now(timezone.utc).isoformat(), pair, sig.get("confluenceScore"),
                          sig.get("direction"), sig.get("trendState"), "EXECUTED",
-                         None, f"${approval.risk_amount}", "execution")
+                         None, f"${approval.risk_amount}", "execution",
+                         result.get("entryPrice"), sig.get("sl"), sig.get("tp1"),
+                         result.get("volume"), sig.get("trendState"),
+                         approval.risk_amount, approval.risk_pct, str(result.get("ticket", "")))
                     )
                     con.commit()
             except Exception as ae:
