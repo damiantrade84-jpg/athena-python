@@ -243,6 +243,20 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 .bt-prog-bar-wrap{width:100%;background:var(--border);border-radius:4px;height:6px;margin:12px 0;}
 .bt-prog-bar{height:6px;border-radius:4px;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width 0.3s;}
 .bt-errors{background:rgba(255,59,92,0.05);border:1px solid rgba(255,59,92,0.2);border-radius:8px;padding:12px 16px;margin-top:12px;font-size:11px;font-family:'Space Mono',monospace;color:var(--muted);}
+/* Performance Tab */
+.perf-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px;}
+.perf-stat{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center;}
+.perf-stat-val{font-size:24px;font-weight:800;font-family:'Syne',sans-serif;margin-bottom:4px;}
+.perf-stat-lbl{font-size:10px;color:var(--muted);font-family:'Space Mono',monospace;text-transform:uppercase;}
+.perf-table{width:100%;border-collapse:collapse;font-family:'Space Mono',monospace;font-size:11px;margin-top:12px;}
+.perf-table th{padding:8px 10px;text-align:left;color:var(--muted);font-weight:400;border-bottom:1px solid var(--border);font-size:10px;text-transform:uppercase;}
+.perf-table td{padding:7px 10px;border-bottom:1px solid rgba(30,42,54,0.4);}
+.perf-section{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px;}
+.perf-section h4{font-size:12px;font-weight:700;margin:0 0 12px 0;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;}
+.equity-curve{width:100%;height:120px;display:block;}
+.wr-green{color:#22c55e;font-weight:700;}
+.wr-red{color:var(--bear);font-weight:700;}
+.wr-neutral{color:var(--text);}
 /* Yield Curve Widget */
 .yield-badge{display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:8px;background:var(--card);border:1px solid var(--border);font-family:'Space Mono',monospace;font-size:10px;cursor:default;}
 .yield-badge.normal{border-color:rgba(0,230,118,0.3);}
@@ -338,6 +352,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
     <button class="tab-btn active" id="tab-signals" onclick="switchTab('signals')">⚡ SIGNALS</button>
     <button class="tab-btn" id="tab-backtest" onclick="switchTab('backtest')">📊 BACKTEST</button>
     <button class="tab-btn" id="tab-screener" onclick="switchTab('screener')">🔍 SCREENER</button>
+    <button class="tab-btn" id="tab-performance" onclick="switchTab('performance');loadPerformance()">🏆 PERFORMANCE</button>
   </div>
 
   <div class="tab-panel active" id="panel-signals">
@@ -405,6 +420,20 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
       </div>
     </div>
   </div><!-- /panel-screener -->
+
+  <div class="tab-panel" id="panel-performance">
+    <div class="bt-controls">
+      <button class="bt-btn" onclick="loadPerformance()">&#8635; REFRESH</button>
+      <span style="font-size:11px;color:var(--muted);font-family:'Space Mono',monospace">Live trade outcomes tracked from audit.db</span>
+    </div>
+    <div id="perfContent">
+      <div class="empty-state">
+        <div class="icon">&#127942;</div>
+        <h3>Performance Dashboard</h3>
+        <p>Execute trades to begin tracking outcomes. Stats appear here after positions close.</p>
+      </div>
+    </div>
+  </div><!-- /panel-performance -->
 
 </div>
 
@@ -645,6 +674,92 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.remove('active');});
   document.getElementById('tab-'+tab).classList.add('active');
   document.getElementById('panel-'+tab).classList.add('active');
+}
+
+async function loadPerformance() {
+  var el = document.getElementById('perfContent');
+  el.innerHTML = '<div class="bt-progress"><div style="font-size:14px;font-weight:700">Loading performance data...</div></div>';
+  try {
+    var resp = await fetch('/api/performance');
+    var d = await resp.json();
+    if (d.total_trades === 0 || d.message) {
+      el.innerHTML = '<div class="empty-state"><div class="icon">&#127942;</div><h3>No Completed Trades</h3><p>Execute trades and let them close to see performance stats.</p></div>';
+      return;
+    }
+    function wrClass(wr) { return wr >= 55 ? 'wr-green' : (wr < 45 ? 'wr-red' : 'wr-neutral'); }
+    function fmtWr(wr) { return '<span class="' + wrClass(wr) + '">' + wr + '%</span>'; }
+
+    // Equity curve SVG
+    var curve = d.equity_curve || [];
+    var curveSvg = '';
+    if (curve.length > 1) {
+      var mn = Math.min.apply(null, curve), mx = Math.max.apply(null, curve);
+      var rng = mx - mn || 1;
+      var pts = curve.map(function(v, i) {
+        var x = (i / (curve.length - 1)) * 400;
+        var y = 110 - ((v - mn) / rng) * 100;
+        return x + ',' + y;
+      }).join(' ');
+      var lastColor = curve[curve.length-1] >= 0 ? '#22c55e' : '#ff3b5c';
+      curveSvg = '<svg class="equity-curve" viewBox="0 0 400 120" preserveAspectRatio="none">' +
+        '<polyline points="' + pts + '" fill="none" stroke="' + lastColor + '" stroke-width="2"/>' +
+        '<line x1="0" y1="' + (110 - (0 - mn) / rng * 100) + '" x2="400" y2="' + (110 - (0 - mn) / rng * 100) + '" stroke="var(--border)" stroke-dasharray="4,4" stroke-width="1"/>' +
+        '</svg>';
+    }
+
+    // Regime table rows
+    var regimeRows = Object.entries(d.win_rate_by_regime || {}).map(function(e) {
+      return '<tr><td>' + e[0] + '</td><td>' + fmtWr(e[1]) + '</td></tr>';
+    }).join('');
+
+    // Score band rows
+    var bandRows = Object.entries(d.win_rate_by_score_band || {}).map(function(e) {
+      return '<tr><td>' + e[0] + '</td><td>' + fmtWr(e[1]) + '</td></tr>';
+    }).join('');
+
+    // Asset type rows
+    var assetRows = Object.entries(d.win_rate_by_asset_type || {}).map(function(e) {
+      return '<tr><td>' + e[0] + '</td><td>' + fmtWr(e[1]) + '</td></tr>';
+    }).join('');
+
+    // Last 20 trades table
+    var tradeRows = (d.last_20_trades || []).map(function(t) {
+      var pnlColor = (t.pnl || 0) >= 0 ? '#22c55e' : '#ff3b5c';
+      var r = t.r_multiple != null ? t.r_multiple.toFixed(2) + 'R' : '—';
+      return '<tr>' +
+        '<td>' + (t.pair || '—') + '</td>' +
+        '<td>' + (t.direction || '—') + '</td>' +
+        '<td>' + (t.exit_reason || '—') + '</td>' +
+        '<td style="color:' + pnlColor + '">' + (t.pnl != null ? '$' + t.pnl.toFixed(2) : '—') + '</td>' +
+        '<td style="color:' + pnlColor + '">' + r + '</td>' +
+        '<td>' + (t.holding_period_hours != null ? t.holding_period_hours + 'h' : '—') + '</td>' +
+        '</tr>';
+    }).join('');
+
+    el.innerHTML =
+      '<div class="perf-grid">' +
+        '<div class="perf-stat"><div class="perf-stat-val">' + d.total_trades + '</div><div class="perf-stat-lbl">Total Trades</div></div>' +
+        '<div class="perf-stat"><div class="perf-stat-val ' + wrClass(d.win_rate) + '">' + d.win_rate + '%</div><div class="perf-stat-lbl">Win Rate</div></div>' +
+        '<div class="perf-stat"><div class="perf-stat-val">' + (d.average_r_multiple || 0).toFixed(2) + 'R</div><div class="perf-stat-lbl">Avg R</div></div>' +
+        '<div class="perf-stat"><div class="perf-stat-val">' + (d.total_r || 0).toFixed(1) + 'R</div><div class="perf-stat-lbl">Total R</div></div>' +
+        '<div class="perf-stat"><div class="perf-stat-val">' + (d.profit_factor != null ? d.profit_factor : '—') + '</div><div class="perf-stat-lbl">Profit Factor</div></div>' +
+        '<div class="perf-stat"><div class="perf-stat-val ' + (d.max_drawdown_pct > 20 ? 'wr-red' : '') + '">' + d.max_drawdown_pct + '%</div><div class="perf-stat-lbl">Max Drawdown</div></div>' +
+        '<div class="perf-stat"><div class="perf-stat-val">' + (d.average_holding_period_hours != null ? d.average_holding_period_hours + 'h' : '—') + '</div><div class="perf-stat-lbl">Avg Hold</div></div>' +
+        '<div class="perf-stat"><div class="perf-stat-val" style="font-size:14px">' + (d.best_pair || '—') + '</div><div class="perf-stat-lbl">Best Pair</div></div>' +
+      '</div>' +
+      '<div class="perf-section"><h4>Equity Curve (Cumulative R)</h4>' + (curveSvg || '<p style="color:var(--muted);font-size:11px">Need more trades</p>') + '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px">' +
+        '<div class="perf-section"><h4>Win Rate by Regime</h4><table class="perf-table"><thead><tr><th>Regime</th><th>WR%</th></tr></thead><tbody>' + (regimeRows || '<tr><td colspan="2" style="color:var(--muted)">—</td></tr>') + '</tbody></table></div>' +
+        '<div class="perf-section"><h4>Win Rate by Score Band</h4><table class="perf-table"><thead><tr><th>Band</th><th>WR%</th></tr></thead><tbody>' + (bandRows || '<tr><td colspan="2" style="color:var(--muted)">—</td></tr>') + '</tbody></table></div>' +
+        '<div class="perf-section"><h4>Win Rate by Asset Type</h4><table class="perf-table"><thead><tr><th>Type</th><th>WR%</th></tr></thead><tbody>' + (assetRows || '<tr><td colspan="2" style="color:var(--muted)">—</td></tr>') + '</tbody></table></div>' +
+      '</div>' +
+      '<div class="perf-section"><h4>Last 20 Completed Trades</h4>' +
+        '<table class="perf-table"><thead><tr><th>Pair</th><th>Dir</th><th>Exit</th><th>PnL</th><th>R</th><th>Hold</th></tr></thead><tbody>' +
+        (tradeRows || '<tr><td colspan="6" style="color:var(--muted)">No completed trades</td></tr>') +
+        '</tbody></table></div>';
+  } catch(err) {
+    el.innerHTML = '<div class="bt-errors">Failed to load performance data: ' + err.message + '</div>';
+  }
 }
 
 async function runBacktest() {

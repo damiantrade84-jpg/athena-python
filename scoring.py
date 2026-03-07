@@ -9,6 +9,7 @@ from config import CONFIG
 from indicators import (
     calc_rsi, calc_fib, calc_fib_proximity, calc_rsi_divergence, calc_weinstein_stage,
 )
+from regime import detect_regime
 
 log = logging.getLogger("athena")
 
@@ -94,7 +95,8 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
                     e200s: float, pair: dict, btc_bias: str,
                     d1_candles: list | None = None,
                     h4_candles: list | None = None,
-                    h1_candles: list | None = None) -> dict:
+                    h1_candles: list | None = None,
+                    funding_rate: float | None = None) -> dict:
     """Weighted confluence system — higher timeframes score more than lower timeframes.
 
     Vote weights:
@@ -108,7 +110,8 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
       H1 BB Pullback     = 0.5  (noise-prone)
       H1 RSI Divergence  = 1.0  (strong reversal signal)
       H4 Fib Level       = 1.0  (Murphy price-at-fib)
-    Max score = 13.0
+      Funding Rate       = 1.0  (crypto only; extreme funding signals overextension)
+    Max score = 13.0 (non-crypto) / 14.0 (crypto, when funding rate available)
     """
     v: dict = {}
     w: list = []
@@ -187,21 +190,19 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
         elif _sess["quality"] == "low" and _is_asia_active:
             w.append(f"FOREX SESSION: {_sess['name']} — but {pair['display']} is active during Asian hours (no penalty)")
 
-    # ── RANGING SUPPRESSION ──────────────────────────────────────────────────
+    # ── RANGING SUPPRESSION — via detect_regime ──────────────────────────────
     adx_val = s4["adx"]; adx_prev = s4.get("adxPrev")
     _adx_mom = s4.get("adxMomentum", "stable"); _adx_slope = s4.get("adxSlope", 0)
-    ranging_penalty = 0.0
     _rng = CONFIG["RANGING"].get(pair["type"], CONFIG["RANGING"]["commodity"])
+    _regime = detect_regime(s4, _ptype)
+    ranging_penalty = _regime["ranging_penalty"]
     if adx_val is not None and adx_val < _rng["dead"]:
-        ranging_penalty = _rng["dead_pen"]
         w.append(f"DEAD RANGING: H4 ADX={adx_val:.1f} (<{_rng['dead']}) — score penalised -{_rng['dead_pen']}, avoid entirely")
     elif adx_val is not None and adx_val < _rng["choppy"]:
-        ranging_penalty = _rng["choppy_pen"]
         w.append(f"CHOPPY MARKET: H4 ADX={adx_val:.1f} (<{_rng['choppy']}) — score penalised -{_rng['choppy_pen']}")
 
     if _ptype == "crypto" and _adx_mom in ("collapsing", "exhausting"):
         _trans_pen = 1.5 if _adx_mom == "collapsing" else 0.8
-        ranging_penalty += _trans_pen
         w.append(f"REGIME TRANSITION: H4 ADX {_adx_mom} (slope={_adx_slope}) — trend fading, -{_trans_pen} penalty")
 
     # ── VOTE 4: H4 MACD Momentum — weight 1.5 ───────────────────────────────
@@ -299,7 +300,23 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
     else:
         v["H4 Fib Level"] = 0
 
-    # ── DIRECTION decided after ALL 10 votes are tallied ─────────────────────
+    # ── VOTE 11: Funding Rate — weight 1.0 (crypto only) ────────────────────
+    W11 = 1.0
+    _funding_vote_active = False
+    if _ptype == "crypto" and funding_rate is not None:
+        _funding_vote_active = True
+        if funding_rate > 0.001:  # above 0.1% — extreme
+            w.append(f"EXTREME FUNDING: {funding_rate*100:.4f}% — overleveraged, reversal risk")
+        if funding_rate < 0.0001:  # below 0.01% — favorable for LONG
+            v["Funding Rate"] = 1;  bull += W11
+        elif funding_rate > 0.0005:  # above 0.05% — favorable for SHORT
+            v["Funding Rate"] = -1; bear += W11
+        else:
+            v["Funding Rate"] = 0  # neutral 0.01%–0.05%
+    else:
+        v["Funding Rate"] = 0
+
+    # ── DIRECTION decided after ALL votes are tallied ─────────────────────────
     direction = "LONG" if bull >= bear else "SHORT"
 
     # ATR compression bonus for crypto
@@ -370,10 +387,14 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
         w.append("Wide SL > 3% of price — size down")
 
     spread = round(abs(bull - bear), 1)
+    effective_max = 14.0 if (_ptype == "crypto" and _funding_vote_active) else None  # None = caller uses _max_score_for_pair
     return {
         "score": score, "votes": v, "direction": direction,
         "bull": round(bull, 1), "bear": round(bear, 1), "spread": spread,
         "warnings": w, "trendState": trend_state,
         "weinsteinStage": weinstein_stage, "weinsteinLabel": weinstein_label,
         "entryMode": _entry_mode, "adxMomentum": _adx_mom, "adxSlope": _adx_slope,
+        "regime": _regime,
+        "fundingRate": funding_rate,
+        "maxScoreOverride": effective_max,
     }

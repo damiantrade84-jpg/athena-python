@@ -29,6 +29,27 @@ def _get_eodhd_client():
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("athena")
 
+# ── Binance Funding Rate Cache (Task 3) ──────────────────────────────────────
+_funding_rate_cache: dict = {}  # symbol -> (rate: float, fetched_at: float)
+_FUNDING_CACHE_TTL = 300  # 5 minutes
+
+def _fetch_funding_rate(binance_symbol: str) -> float | None:
+    """Fetch current perpetual funding rate from Binance public API. Cached 5 min."""
+    now = time.time()
+    cached = _funding_rate_cache.get(binance_symbol)
+    if cached and now - cached[1] < _FUNDING_CACHE_TTL:
+        return cached[0]
+    try:
+        url = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={binance_symbol}"
+        r = http_requests.get(url, timeout=4)
+        if r.status_code == 200:
+            rate = float(r.json().get("lastFundingRate", 0))
+            _funding_rate_cache[binance_symbol] = (rate, now)
+            return rate
+    except Exception as _e:
+        log.debug(f"[FUNDING] {binance_symbol} fetch failed: {_e}")
+    return None
+
 # ── EODHD WebSocket Real-Time Price Manager ──
 import asyncio
 _live_prices = {}  # thread-safe via GIL for simple dict reads/writes
@@ -1458,6 +1479,9 @@ def _init_audit_db(db_path: str) -> None:
         ("entry_price", "REAL"), ("sl", "REAL"), ("tp", "REAL"),
         ("volume", "REAL"), ("regime", "TEXT"), ("risk_amount", "REAL"),
         ("risk_pct", "REAL"), ("ticket", "TEXT"),
+        # Task 1 — outcome tracking
+        ("exit_price", "REAL"), ("exit_time", "TEXT"), ("pnl", "REAL"),
+        ("r_multiple", "REAL"), ("exit_reason", "TEXT"), ("holding_period_hours", "REAL"),
     ]:
         if col not in existing:
             con.execute(f"ALTER TABLE audit_log ADD COLUMN {col} {defn}")
@@ -2015,9 +2039,16 @@ def analyze_pair(pair, btc_bias):
     stoch = calc_stochastic(h4, 14, 3, 3)
     e200 = calc_ema([c["close"] for c in d1], 200)
     e200s = (e200[-1] - e200[-21]) / e200[-21] if e200[-1] and len(e200) >= 21 and e200[-21] else 0
+    # Fetch funding rate for crypto pairs (Task 3)
+    _funding_rate = None
+    if pair.get("type") == "crypto":
+        _bn_sym = pair.get("symbol", "").replace("/", "")  # e.g. BTCUSDT
+        _funding_rate = _fetch_funding_rate(_bn_sym)
+
     res = calc_confluence(
         d1i, h4i, h1i, vr, stoch, e200s, pair, btc_bias,
         d1_candles=d1, h4_candles=h4, h1_candles=h1,
+        funding_rate=_funding_rate,
     )
     direction = res["direction"]
     live_px = (_live_prices.get(pair["display"], {}) or {}).get("price")
@@ -2034,7 +2065,7 @@ def analyze_pair(pair, btc_bias):
     for w in detect_div(d1, h4, h1):
         if w not in warn_list:
             warn_list.append(w)
-    max_score = _max_score_for_pair(pair)
+    max_score = res.get("maxScoreOverride") or _max_score_for_pair(pair)
     return {
         "pair": pair["display"],
         "display": pair["display"],
@@ -2074,6 +2105,8 @@ def analyze_pair(pair, btc_bias):
         "session": get_session(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "aiAnalysis": None,
+        "fundingRate": res.get("fundingRate"),
+        "regime": res.get("regime"),
     }
 
 def _build_event_risk(pair: dict, ds_ctx: dict, earnings_ctx: dict, closed_exchanges: set) -> dict:
@@ -2150,6 +2183,285 @@ def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
     return "skip", "; ".join(reasons) or "Below discovery threshold"
 
 
+# ── Task 1: Trade Outcome Monitor ────────────────────────────────────────────
+
+def _resolve_exit_reason(exit_price: float, sl: float | None, tp: float | None) -> str:
+    """Classify exit as SL_HIT, TP_HIT, or MANUAL_CLOSE based on price proximity."""
+    if exit_price is None:
+        return "MANUAL_CLOSE"
+    tol_pct = 0.002  # 0.2% tolerance
+    if sl and abs(exit_price - sl) / max(abs(sl), 1e-9) <= tol_pct:
+        return "SL_HIT"
+    if tp and abs(exit_price - tp) / max(abs(tp), 1e-9) <= tol_pct:
+        return "TP_HIT"
+    return "MANUAL_CLOSE"
+
+
+def _update_trade_outcome(ticket: str, exit_price: float, exit_time: str,
+                          pnl: float, entry_price: float | None,
+                          sl: float | None, tp: float | None,
+                          volume: float | None, entry_ts: str | None) -> None:
+    """Write outcome columns for a closed trade in audit_log."""
+    exit_reason = _resolve_exit_reason(exit_price, sl, tp)
+    # R-multiple: profit / (risk_distance * volume), risk_distance in price terms
+    r_multiple = None
+    if entry_price and sl and volume and abs(entry_price - sl) > 0:
+        risk_dist = abs(entry_price - sl)
+        r_multiple = round(pnl / (risk_dist * volume), 2) if volume else None
+    # Holding period
+    holding_hours = None
+    if entry_ts:
+        try:
+            t_entry = datetime.fromisoformat(entry_ts.replace("Z", "+00:00"))
+            t_exit = datetime.fromisoformat(exit_time.replace("Z", "+00:00"))
+            holding_hours = round((t_exit - t_entry).total_seconds() / 3600, 2)
+        except Exception:
+            pass
+    try:
+        with sqlite3.connect(_AUDIT_DB) as con:
+            con.execute(
+                "UPDATE audit_log SET exit_price=?, exit_time=?, pnl=?, r_multiple=?, "
+                "exit_reason=?, holding_period_hours=? WHERE ticket=? AND exit_price IS NULL",
+                (exit_price, exit_time, pnl, r_multiple, exit_reason, holding_hours, ticket)
+            )
+            con.commit()
+        log.info(f"[MONITOR] Outcome logged: ticket={ticket} exit={exit_price} pnl={pnl} R={r_multiple} reason={exit_reason}")
+    except Exception as e:
+        log.warning(f"[MONITOR] DB write failed for ticket {ticket}: {e}")
+
+
+def _outcome_monitor_loop() -> None:
+    """Background loop: every 60s reconcile closed MT5/CCXT trades against audit_log."""
+    while True:
+        try:
+            time.sleep(60)
+            _check_mt5_outcomes()
+            _check_ccxt_outcomes()
+        except Exception as e:
+            log.debug(f"[MONITOR] loop error: {e}")
+
+
+def _check_mt5_outcomes() -> None:
+    """Check MT5 for positions that have closed since last check."""
+    try:
+        from mt5_executor import mt5_get_positions, mt5_connect
+        import MetaTrader5 as _mt5_lib
+        if not mt5_connect():
+            return
+        open_tickets = {str(p["ticket"]) for p in (mt5_get_positions() or [])}
+        # Find audit rows with a ticket but no exit_price
+        with sqlite3.connect(_AUDIT_DB) as con:
+            con.row_factory = sqlite3.Row
+            pending = con.execute(
+                "SELECT id, ticket, entry_price, sl, tp, volume, ts FROM audit_log "
+                "WHERE ticket IS NOT NULL AND ticket != '' AND exit_price IS NULL"
+            ).fetchall()
+        for row in pending:
+            ticket_str = str(row["ticket"])
+            if ticket_str in open_tickets:
+                continue  # still open
+            # Position closed — look up deal history
+            try:
+                ticket_int = int(ticket_str)
+                deals = _mt5_lib.history_deals_get(ticket=ticket_int)
+                if not deals:
+                    # Broader search: last 30 days
+                    from_dt = datetime.now(timezone.utc) - timedelta(days=30)
+                    deals = _mt5_lib.history_deals_get(
+                        int(from_dt.timestamp()), int(datetime.now(timezone.utc).timestamp())
+                    )
+                    deals = [d for d in (deals or []) if d.position_id == ticket_int]
+                if deals:
+                    close_deal = sorted(deals, key=lambda d: d.time)[-1]
+                    _update_trade_outcome(
+                        ticket=ticket_str,
+                        exit_price=close_deal.price,
+                        exit_time=datetime.fromtimestamp(close_deal.time, tz=timezone.utc).isoformat(),
+                        pnl=close_deal.profit,
+                        entry_price=row["entry_price"],
+                        sl=row["sl"],
+                        tp=row["tp"],
+                        volume=row["volume"],
+                        entry_ts=row["ts"],
+                    )
+            except Exception as e:
+                log.debug(f"[MONITOR] MT5 deal lookup failed for ticket {ticket_str}: {e}")
+    except Exception as e:
+        log.debug(f"[MONITOR] MT5 outcome check failed: {e}")
+
+
+def _check_ccxt_outcomes() -> None:
+    """Check Binance spot for crypto positions that have been fully exited."""
+    try:
+        import ccxt_executor as _ccxt_mod
+        exchange = _ccxt_mod._get_exchange()
+        if not exchange:
+            return
+        open_symbols = {p["symbol"] for p in (_ccxt_mod.ccxt_get_positions() or [])}
+        with sqlite3.connect(_AUDIT_DB) as con:
+            con.row_factory = sqlite3.Row
+            pending = con.execute(
+                "SELECT id, ticket, pair, entry_price, sl, tp, volume, ts FROM audit_log "
+                "WHERE ticket IS NOT NULL AND ticket != '' AND exit_price IS NULL "
+                "AND (trend LIKE '%crypto%' OR pair LIKE '%USDT%')"
+            ).fetchall()
+        for row in pending:
+            symbol = (row["pair"] or "").replace("/", "")  # e.g. BTCUSDT
+            if symbol in open_symbols:
+                continue  # still holding
+            # Try to get last trade for this symbol
+            try:
+                ccxt_sym = symbol[:-4] + "/USDT" if symbol.endswith("USDT") else symbol
+                trades = exchange.fetch_my_trades(ccxt_sym, limit=10)
+                if trades:
+                    last_trade = sorted(trades, key=lambda t: t["timestamp"])[-1]
+                    pnl_est = last_trade.get("cost", 0) - (row["entry_price"] or 0) * last_trade.get("amount", 0)
+                    _update_trade_outcome(
+                        ticket=str(row["ticket"]),
+                        exit_price=last_trade["price"],
+                        exit_time=last_trade.get("datetime", datetime.now(timezone.utc).isoformat()),
+                        pnl=round(pnl_est, 4),
+                        entry_price=row["entry_price"],
+                        sl=row["sl"],
+                        tp=row["tp"],
+                        volume=row["volume"],
+                        entry_ts=row["ts"],
+                    )
+            except Exception as e:
+                log.debug(f"[MONITOR] CCXT trade lookup failed for {row['pair']}: {e}")
+    except Exception as e:
+        log.debug(f"[MONITOR] CCXT outcome check failed: {e}")
+
+
+def _start_outcome_monitor() -> None:
+    """Start the trade outcome monitor as a background daemon thread."""
+    t = threading.Thread(target=_outcome_monitor_loop, name="OutcomeMonitor", daemon=True)
+    t.start()
+    log.info("[MONITOR] Trade outcome monitor started (60s interval)")
+
+
+# ── Task 2: Performance Dashboard Endpoint ────────────────────────────────────
+
+@app.route("/api/performance")
+def api_performance():
+    """Return performance statistics for all completed trades."""
+    try:
+        with sqlite3.connect(_AUDIT_DB) as con:
+            con.row_factory = sqlite3.Row
+            rows = con.execute(
+                "SELECT * FROM audit_log WHERE exit_price IS NOT NULL ORDER BY ts ASC"
+            ).fetchall()
+        trades = [dict(r) for r in rows]
+        if not trades:
+            return jsonify({"total_trades": 0, "message": "No completed trades yet"})
+
+        wins = [t for t in trades if (t.get("pnl") or 0) > 0]
+        losses = [t for t in trades if (t.get("pnl") or 0) <= 0]
+        total = len(trades)
+        win_count = len(wins)
+        loss_count = len(losses)
+        win_rate = round(win_count / total * 100, 1) if total else 0
+
+        r_vals = [t.get("r_multiple") for t in trades if t.get("r_multiple") is not None]
+        avg_r = round(sum(r_vals) / len(r_vals), 2) if r_vals else 0
+        total_r = round(sum(r_vals), 2) if r_vals else 0
+
+        gross_wins = sum(t.get("pnl") or 0 for t in wins)
+        gross_losses = abs(sum(t.get("pnl") or 0 for t in losses))
+        profit_factor = round(gross_wins / gross_losses, 2) if gross_losses > 0 else None
+
+        # Max drawdown from cumulative R equity curve
+        cum_r = 0; peak = 0; max_dd = 0
+        for r in r_vals:
+            cum_r += r
+            if cum_r > peak: peak = cum_r
+            dd = peak - cum_r
+            if dd > max_dd: max_dd = dd
+        max_dd_pct = round(max_dd / peak * 100, 1) if peak > 0 else 0
+
+        # Win rate by regime (trendState)
+        from collections import defaultdict
+        regime_stats: dict = defaultdict(lambda: {"w": 0, "l": 0})
+        for t in trades:
+            k = t.get("trend") or t.get("regime") or "UNKNOWN"
+            if (t.get("pnl") or 0) > 0: regime_stats[k]["w"] += 1
+            else: regime_stats[k]["l"] += 1
+        win_rate_by_regime = {
+            k: round(v["w"] / (v["w"] + v["l"]) * 100, 1)
+            for k, v in regime_stats.items() if v["w"] + v["l"] > 0
+        }
+
+        # Win rate by score band
+        bands = [(5,6,"5-6"),(6,7,"6-7"),(7,8,"7-8"),(8,9,"8-9"),(9,99,"9+")]
+        win_rate_by_score_band: dict = {}
+        for lo, hi, label in bands:
+            bt = [t for t in trades if lo <= (t.get("score") or 0) < hi]
+            if bt:
+                bw = sum(1 for t in bt if (t.get("pnl") or 0) > 0)
+                win_rate_by_score_band[label] = round(bw / len(bt) * 100, 1)
+
+        # Win rate by asset type (inferred from pair name)
+        def _pair_type(pair: str) -> str:
+            if not pair: return "unknown"
+            p = (pair or "").upper()
+            if "USDT" in p: return "crypto"
+            if any(c in p for c in ["EUR","GBP","USD","JPY","AUD","NZD","CHF","CAD","ZAR","MXN","SGD"]): return "forex"
+            if any(c in p for c in ["XAU","XAG","OIL","GLD"]): return "commodity"
+            if any(c in p for c in ["SPY","QQQ","S&P","NASDAQ","NAS"]): return "index"
+            return "stock"
+        asset_stats: dict = defaultdict(lambda: {"w": 0, "l": 0})
+        for t in trades:
+            k = _pair_type(t.get("pair", ""))
+            if (t.get("pnl") or 0) > 0: asset_stats[k]["w"] += 1
+            else: asset_stats[k]["l"] += 1
+        win_rate_by_asset_type = {
+            k: round(v["w"] / (v["w"] + v["l"]) * 100, 1)
+            for k, v in asset_stats.items() if v["w"] + v["l"] > 0
+        }
+
+        # Best/worst pair by total R
+        pair_r: dict = defaultdict(float)
+        for t in trades:
+            pair_r[t.get("pair", "?")] += t.get("r_multiple") or 0
+        best_pair = max(pair_r, key=pair_r.get) if pair_r else None
+        worst_pair = min(pair_r, key=pair_r.get) if pair_r else None
+
+        hp_vals = [t.get("holding_period_hours") for t in trades if t.get("holding_period_hours") is not None]
+        avg_holding = round(sum(hp_vals) / len(hp_vals), 1) if hp_vals else None
+
+        # Last 20 completed trades
+        last_20 = sorted(trades, key=lambda t: t.get("ts") or "", reverse=True)[:20]
+
+        # Equity curve: cumulative R list for charting
+        equity_curve = []
+        cum = 0
+        for t in sorted(trades, key=lambda t: t.get("ts") or ""):
+            cum += t.get("r_multiple") or 0
+            equity_curve.append(round(cum, 2))
+
+        return jsonify({
+            "total_trades": total,
+            "win_count": win_count,
+            "loss_count": loss_count,
+            "win_rate": win_rate,
+            "average_r_multiple": avg_r,
+            "total_r": total_r,
+            "profit_factor": profit_factor,
+            "max_drawdown_pct": max_dd_pct,
+            "win_rate_by_regime": win_rate_by_regime,
+            "win_rate_by_score_band": win_rate_by_score_band,
+            "win_rate_by_asset_type": win_rate_by_asset_type,
+            "best_pair": best_pair,
+            "worst_pair": worst_pair,
+            "average_holding_period_hours": avg_holding,
+            "equity_curve": equity_curve,
+            "last_20_trades": last_20,
+        })
+    except Exception as e:
+        log.error(f"api_performance error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__=="__main__":
     log.info("="*60)
     log.info("ATHENA PRO v3.1 - Python Edition")
@@ -2186,4 +2498,5 @@ if __name__=="__main__":
         log.warning("[WS] No EODHD_KEY — WebSocket prices disabled")
     log.info(f"http://localhost:5000")
     threading.Timer(1.5,lambda:webbrowser.open("http://localhost:5000")).start()
+    _start_outcome_monitor()
     app.run(host="0.0.0.0",port=5000,debug=False)
