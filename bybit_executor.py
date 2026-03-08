@@ -342,10 +342,13 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:
         if sl and sl > 0:
             try:
                 sl_side = "sell" if direction == "LONG" else "buy"
+                # triggerDirection: 1=ascending (price rises to trigger), 2=descending (price falls to trigger)
+                sl_trigger = "2" if direction == "LONG" else "1"  # LONG SL triggers on price falling
                 sl_order = exchange.create_order(
                     ccxt_symbol, "stop_market", sl_side, filled_amount,
                     params={
                         "stopPrice": sl,
+                        "triggerDirection": sl_trigger,
                         "reduceOnly": True,
                         "positionIdx": 0,
                     }
@@ -361,10 +364,13 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:
         if tp1 and tp1 > 0:
             try:
                 tp_side = "sell" if direction == "LONG" else "buy"
+                # triggerDirection: LONG TP triggers on price rising, SHORT TP on price falling
+                tp_trigger = "1" if direction == "LONG" else "2"
                 tp_order = exchange.create_order(
                     ccxt_symbol, "take_profit_market", tp_side, filled_amount,
                     params={
                         "stopPrice": tp1,
+                        "triggerDirection": tp_trigger,
                         "reduceOnly": True,
                         "positionIdx": 0,
                     }
@@ -392,6 +398,44 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:
     except Exception as e:
         log.error(f"[BYBIT] Order failed: {e}")
         return {"success": False, "error": f"ORDER_FAILED: {str(e)}"}
+
+
+def bybit_move_sl_to_breakeven(ccxt_symbol: str, direction: str, entry_price: float,
+                                volume: float) -> dict:
+    """Move stop-loss to breakeven (entry price) for an open position.
+
+    Called by the outcome monitor when a position reaches 1R profit.
+    Cancels existing SL orders and places a new one at entry price.
+    """
+    exchange = _get_exchange()
+    if not exchange:
+        return {"success": False, "error": "BYBIT_NOT_CONNECTED"}
+    try:
+        # Cancel all existing conditional orders for this symbol
+        open_orders = exchange.fetch_open_orders(ccxt_symbol, params={"type": "linear"})
+        for o in open_orders:
+            o_type = (o.get("type") or "").lower()
+            if "stop" in o_type:
+                try:
+                    exchange.cancel_order(o["id"], ccxt_symbol, params={"type": "linear"})
+                    log.info(f"[BYBIT] Cancelled old SL order {o['id']}")
+                except Exception:
+                    pass
+        # Place new SL at breakeven (entry price)
+        sl_side = "sell" if direction == "LONG" else "buy"
+        sl_order = exchange.create_order(
+            ccxt_symbol, "stop_market", sl_side, volume,
+            params={
+                "stopPrice": entry_price,
+                "reduceOnly": True,
+                "positionIdx": 0,
+            }
+        )
+        log.info(f"[BYBIT] BREAKEVEN SL placed: {ccxt_symbol} @ {entry_price} (was profitable at 1R)")
+        return {"success": True, "slOrderId": sl_order.get("id"), "newSl": entry_price}
+    except Exception as e:
+        log.warning(f"[BYBIT] Failed to move SL to breakeven for {ccxt_symbol}: {e}")
+        return {"success": False, "error": str(e)}
 
 
 def bybit_disconnect():

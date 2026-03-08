@@ -1375,6 +1375,8 @@ def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
     now = time.time()
     if _earnings_cache["data"] and (now - _earnings_cache["ts"]) < _EARNINGS_TTL:
         return _earnings_cache["data"]
+    if _EARNINGS_AVAILABLE is False:
+        return {}  # Already confirmed unavailable on this EODHD plan — skip API call
     api = _get_eodhd_client()
     if not api:
         return {}
@@ -2226,7 +2228,7 @@ def _auth_and_rate_limit():
     # Rate limiting
     now = time.time()
     is_sensitive = path.startswith("/api/execute") or path.startswith("/api/killswitch")
-    max_req = _RATE_EXECUTE_MAX if is_sensitive else _RATE_MAX_REQUESTS
+    max_req = (_RATE_EXECUTE_MAX * 4 if _test_mode else _RATE_EXECUTE_MAX) if is_sensitive else _RATE_MAX_REQUESTS
     key = f"{ip}:{path}" if is_sensitive else ip
     if key not in _rate_limits:
         _rate_limits[key] = []

@@ -280,6 +280,10 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:
     order_type = mt5.ORDER_TYPE_BUY if direction == "LONG" else mt5.ORDER_TYPE_SELL
     price = tick.ask if direction == "LONG" else tick.bid
 
+    # Guard: reject if price is 0 (market closed / no tick)
+    if not price or price <= 0:
+        return {"success": False, "error": f"MARKET_CLOSED: {mt5_symbol} price is 0 — market likely closed"}
+
     # Get symbol info for proper rounding
     sym_info = mt5.symbol_info(mt5_symbol)
     digits = sym_info.digits if sym_info else 5
@@ -287,6 +291,38 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:
     sl = round(float(signal.get("sl", 0)), digits)
     tp = round(float(signal.get("tp1", 0)), digits)  # Use TP1 as primary target
     price = round(price, digits)
+
+    # ── SL/TP validation against live price ────────────────────────────────
+    # Ensure SL/TP are on the correct side of entry price
+    if direction == "LONG":
+        if sl >= price:
+            log.error(f"[MT5] {mt5_symbol} LONG: SL {sl} >= entry {price} — invalid (SL must be below entry)")
+            return {"success": False, "error": f"INVALID_SL: SL {sl} is above entry {price} for LONG"}
+        if tp <= price:
+            log.error(f"[MT5] {mt5_symbol} LONG: TP {tp} <= entry {price} — invalid (TP must be above entry)")
+            return {"success": False, "error": f"INVALID_TP: TP {tp} is below entry {price} for LONG"}
+    else:  # SHORT
+        if sl <= price:
+            log.error(f"[MT5] {mt5_symbol} SHORT: SL {sl} <= entry {price} — invalid (SL must be above entry)")
+            return {"success": False, "error": f"INVALID_SL: SL {sl} is below entry {price} for SHORT"}
+        if tp >= price:
+            log.error(f"[MT5] {mt5_symbol} SHORT: TP {tp} >= entry {price} — invalid (TP must be below entry)")
+            return {"success": False, "error": f"INVALID_TP: TP {tp} is above entry {price} for SHORT"}
+
+    # Ensure SL distance is reasonable (not more than 30% of price — data scale mismatch guard)
+    sl_dist_pct = abs(price - sl) / price
+    if sl_dist_pct > 0.30:
+        log.error(f"[MT5] {mt5_symbol}: SL distance {sl_dist_pct:.1%} of price — likely data scale mismatch")
+        return {"success": False, "error": f"SL_TOO_FAR: SL is {sl_dist_pct:.0%} from entry (max 30%) — possible data mismatch"}
+
+    # Check broker minimum stop distance
+    if sym_info:
+        min_stop_pts = sym_info.trade_stops_level  # in points
+        point = sym_info.point
+        min_stop_price = min_stop_pts * point if min_stop_pts and point else 0
+        if min_stop_price > 0 and abs(price - sl) < min_stop_price:
+            log.error(f"[MT5] {mt5_symbol}: SL too close — {abs(price-sl):.{digits}f} < min {min_stop_price:.{digits}f}")
+            return {"success": False, "error": f"SL_TOO_CLOSE: distance {abs(price-sl):.{digits}f} < broker min {min_stop_price:.{digits}f}"}
 
     # Build order request
     request = {

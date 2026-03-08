@@ -204,10 +204,17 @@ def _calc_volume(account_balance: float, entry_price: float, sl_price: float,
              f"ticks={ticks_in_sl:.1f}, tick_val={tick_value}, risk/lot=${risk_per_lot:.2f}, raw_vol={volume:.4f}")
 
     # Clamp to symbol constraints
+    _MAX_CRYPTO_NOTIONAL = 5000.0  # Hard cap: max $5000 notional per crypto trade (at 1x leverage)
     if is_crypto:
         vol_min = symbol_info.get("volume_min", 0.001) if symbol_info else 0.001
         vol_max = symbol_info.get("volume_max", 9999.0) if symbol_info else 9999.0
         vol_step = symbol_info.get("volume_step", 0.001) if symbol_info else 0.001
+        # Notional cap: prevent oversized positions even when SL is tight
+        if entry_price > 0:
+            max_by_notional = _MAX_CRYPTO_NOTIONAL / entry_price
+            if volume > max_by_notional:
+                log.warning(f"[RISK] crypto volume {volume:.4f} clamped to {max_by_notional:.4f} (${_MAX_CRYPTO_NOTIONAL} notional cap)")
+                volume = max_by_notional
     else:
         vol_min = symbol_info.get("volume_min", 0.01) if symbol_info else 0.01
         vol_max = symbol_info.get("volume_max", 100.0) if symbol_info else 100.0
