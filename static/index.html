@@ -1294,8 +1294,9 @@ function toggleChart(sid, candles, levels) {
   });
 
   var data = candles.map(function(c) {
-    return { time: Math.floor(c.t/1000), open: c.o, high: c.h, low: c.l, close: c.c };
-  }).filter(function(c) { return c.open && c.high && c.low && c.close; });
+    var ts = typeof c.t === 'number' ? Math.floor(c.t/1000) : Math.floor(new Date(c.t).getTime()/1000);
+    return { time: ts, open: c.o, high: c.h, low: c.l, close: c.c };
+  }).filter(function(c) { return c.time && !isNaN(c.time) && c.open && c.high && c.low && c.close; });
   candleSeries.setData(data);
 
   // EMA 21 line

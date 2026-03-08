@@ -78,7 +78,8 @@ def _get_exchange():
         log.warning("[BYBIT] BYBIT_API_KEY / BYBIT_API_SECRET not set or placeholder")
         return None
 
-    use_testnet = os.environ.get("BYBIT_TESTNET", "true").lower() in ("true", "1", "yes")
+    use_testnet = os.environ.get("BYBIT_TESTNET", "false").lower() in ("true", "1", "yes")
+    use_demo    = os.environ.get("BYBIT_DEMO", "false").lower() in ("true", "1", "yes")
 
     try:
         _exchange = ccxt.bybit({
@@ -94,7 +95,10 @@ def _get_exchange():
         if use_testnet:
             _exchange.set_sandbox_mode(True)
 
-        env_label = "TESTNET" if use_testnet else "LIVE"
+        if use_demo:
+            _exchange.enable_demo_trading(True)
+
+        env_label = "DEMO" if use_demo else ("TESTNET" if use_testnet else "LIVE")
         log.info(f"[BYBIT] Bybit Linear Futures {env_label} connected")
         return _exchange
 

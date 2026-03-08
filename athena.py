@@ -1337,11 +1337,8 @@ def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
         _EARNINGS_AVAILABLE = True
     except Exception as e:
         if "403" in str(e) or "Forbidden" in str(e):
-            # Don't permanently disable â€” paid plans may have this endpoint.
-            # Log clearly so user can verify their EODHD plan includes calendar/earnings.
-            log.warning(f"[EARN] 403 Forbidden on earnings endpoint â€” verify your EODHD plan includes "
-                        f"calendar/earnings access (Dashboard â†’ API Tokens). Key in use ends with "
-                        f"...{os.environ.get('EODHD_KEY','')[-6:]}")
+            _EARNINGS_AVAILABLE = False  # Disable for this session — plan doesn't include it
+            log.warning("[EARN] 403 Forbidden — earnings calendar not available on this EODHD plan. Disabling for session.")
         else:
             log.warning(f"[EARN] fetch failed: {e}")
         return {}
@@ -2134,9 +2131,9 @@ def api_analyze():
             from risk_engine import _calc_portfolio_heat, _current_drawdown
             _sig_type = sig.get("type", "")
             if _sig_type == "crypto":
-                from ccxt_executor import ccxt_get_account, ccxt_get_positions
-                _acct = ccxt_get_account()
-                _pos = ccxt_get_positions()
+                from bybit_executor import bybit_get_account, bybit_get_positions
+                _acct = bybit_get_account()
+                _pos = bybit_get_positions()
             else:
                 from mt5_executor import mt5_get_account, mt5_get_positions
                 _acct = mt5_get_account()
@@ -2816,7 +2813,7 @@ def analyze_pair(pair, btc_bias, style="swing"):
         "fundingRate": res.get("fundingRate"),
         "regime": res.get("regime"),
         "style": _style,
-        "h4Candles": [{"t": c["ts"], "o": round(c["open"], 6), "h": round(c["high"], 6),
+        "h4Candles": [{"t": c.get("time", ""), "o": round(c["open"], 6), "h": round(c["high"], 6),
                         "l": round(c["low"], 6), "c": round(c["close"], 6)} for c in h4[-80:]],
     }
 
@@ -3002,13 +2999,13 @@ def _check_mt5_outcomes() -> None:
 
 
 def _check_ccxt_outcomes() -> None:
-    """Check Binance spot for crypto positions that have been fully exited."""
+    """Check Bybit futures for crypto positions that have been fully exited."""
     try:
-        import ccxt_executor as _ccxt_mod
-        exchange = _ccxt_mod._get_exchange()
+        import bybit_executor as _bybit_mod
+        exchange = _bybit_mod._get_exchange()
         if not exchange:
             return
-        open_symbols = {p["symbol"] for p in (_ccxt_mod.ccxt_get_positions() or [])}
+        open_symbols = {p["symbol"] for p in (_bybit_mod.bybit_get_positions() or [])}
         with sqlite3.connect(_AUDIT_DB) as con:
             con.row_factory = sqlite3.Row
             pending = con.execute(
@@ -3018,11 +3015,12 @@ def _check_ccxt_outcomes() -> None:
             ).fetchall()
         for row in pending:
             symbol = (row["pair"] or "").replace("/", "")  # e.g. BTCUSDT
-            if symbol in open_symbols:
+            ccxt_sym = _bybit_mod.bybit_map_symbol(symbol)
+            if not ccxt_sym:
+                continue
+            if ccxt_sym in open_symbols:
                 continue  # still holding
-            # Try to get last trade for this symbol
             try:
-                ccxt_sym = symbol[:-4] + "/USDT" if symbol.endswith("USDT") else symbol
                 trades = exchange.fetch_my_trades(ccxt_sym, limit=10)
                 if trades:
                     last_trade = sorted(trades, key=lambda t: t["timestamp"])[-1]
@@ -3039,9 +3037,9 @@ def _check_ccxt_outcomes() -> None:
                         entry_ts=row["ts"],
                     )
             except Exception as e:
-                log.debug(f"[MONITOR] CCXT trade lookup failed for {row['pair']}: {e}")
+                log.debug(f"[MONITOR] Bybit trade lookup failed for {row['pair']}: {e}")
     except Exception as e:
-        log.debug(f"[MONITOR] CCXT outcome check failed: {e}")
+        log.debug(f"[MONITOR] Bybit outcome check failed: {e}")
 
 
 def _start_outcome_monitor() -> None:
