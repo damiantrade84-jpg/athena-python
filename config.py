@@ -29,15 +29,15 @@ CONFIG: dict = {
     "CRYPTOPANIC_KEY": os.environ.get("CRYPTOPANIC_KEY", ""),
     "FINNHUB_KEY":     os.environ.get("FINNHUB_KEY", ""),
     "RISK_PCT": 0.01, "SL_ATR_MULT": 1.5, "TP1_ATR_MULT": 2.0, "TP2_ATR_MULT": 3.5,
-    "VOLUME_THRESHOLD": 1.5, "ADX_TREND_MIN": 25,
+    "VOLUME_THRESHOLD": 1.5, "VOLUME_THRESHOLD_BACKTEST": 1.2, "ADX_TREND_MIN": 25,
     "D1_CANDLES": 250, "H4_CANDLES": 120, "H1_CANDLES": 120, "MIN_CONFLUENCE": 7.0,
     "RISK_MULT": {"commodity": 1.2, "crypto": 0.8, "forex": 0.6, "index": 0.6, "stock": 0.6},
     "RANGING": {
-        "crypto":    {"dead": 14, "dead_pen": 3.0, "choppy": 18, "choppy_pen": 1.5},
-        "commodity": {"dead": 18, "dead_pen": 3.0, "choppy": 23, "choppy_pen": 1.5},
-        "forex":     {"dead": 16, "dead_pen": 3.0, "choppy": 20, "choppy_pen": 1.5},
-        "stock":     {"dead": 16, "dead_pen": 3.0, "choppy": 21, "choppy_pen": 1.5},
-        "index":     {"dead": 16, "dead_pen": 3.0, "choppy": 21, "choppy_pen": 1.5},
+        "crypto":    {"dead": 14, "dead_pen": 1.5, "choppy": 18, "choppy_pen": 0.5},
+        "commodity": {"dead": 18, "dead_pen": 1.5, "choppy": 23, "choppy_pen": 0.5},
+        "forex":     {"dead": 16, "dead_pen": 1.5, "choppy": 20, "choppy_pen": 0.5},
+        "stock":     {"dead": 16, "dead_pen": 1.5, "choppy": 21, "choppy_pen": 0.5},
+        "index":     {"dead": 16, "dead_pen": 1.5, "choppy": 21, "choppy_pen": 0.5},
     },
     "ATR_CLASS": {
         "forex":     {"sl": 1.2, "tp1": 2.0, "tp2": 3.0},
@@ -47,7 +47,7 @@ CONFIG: dict = {
         "crypto":    {"sl": 2.0, "tp1": 3.5, "tp2": 5.0},
     },
     "ADX_TREND_MIN_CLASS":  {"crypto": 20, "forex": 22, "commodity": 25, "stock": 25, "index": 25},
-    "COUNTER_TREND_PEN":    {"crypto": -1.5, "forex": -2.0, "commodity": -3.0, "stock": -3.0, "index": -3.0},
+    "COUNTER_TREND_PEN":    {"crypto": -1.0, "forex": -1.0, "commodity": -1.0, "stock": -1.0, "index": -1.0},
     "RSI_BOUNDS": {
         "crypto":    {"ob": 88, "os": 15},
         "forex":     {"ob": 80, "os": 20},
@@ -55,10 +55,20 @@ CONFIG: dict = {
         "stock":     {"ob": 78, "os": 22},
         "index":     {"ob": 78, "os": 22},
     },
-    "MACRO_LOOKBACK":    {"crypto": 15, "forex": 15, "commodity": 50, "stock": 50, "index": 50},
+    "MACRO_LOOKBACK":    {"crypto": 15, "forex": 30, "commodity": 50, "stock": 50, "index": 50},
     "WEINSTEIN_LOOKBACK":{"crypto": 60, "forex": 100, "commodity": 150, "stock": 150, "index": 150},
-    "BT_MIN":              {"crypto": 8.0, "commodity": 6.0, "forex": 5.5, "stock": 6.0, "index": 6.0},
-    "MIN_CONFLUENCE_CLASS":{"crypto": 8.0, "commodity": 6.0, "forex": 5.5, "stock": 6.0, "index": 6.0},
+    "BT_MIN":              {"crypto": 4.0, "commodity": 4.0, "forex": 4.0, "stock": 4.5, "index": 4.0},
+    "MIN_CONFLUENCE_CLASS":{"crypto": 5.0, "commodity": 5.0, "forex": 5.0, "stock": 5.5, "index": 5.0},
+    # Per-class vote weight multipliers — route each indicator to where it's strongest
+    "VOTE_WEIGHTS": {
+        "crypto":    {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "h4_macd": 1.0, "h4_oscillator": 0.75, "volume": 1.0, "funding": 1.0, "session": 0.0, "h4_fib": 0.5, "h1_bb": 1.0, "weinstein": 0.0, "divergence": 1.0},
+        "forex":     {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "h4_macd": 1.0, "h4_oscillator": 1.0, "volume": 0.0, "funding": 0.0, "session": 1.0, "h4_fib": 1.0, "h1_bb": 0.5, "weinstein": 0.0, "divergence": 1.0},
+        "stock":     {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "h4_macd": 1.0, "h4_oscillator": 1.0, "volume": 1.0, "funding": 0.0, "session": 0.0, "h4_fib": 1.0, "h1_bb": 1.0, "weinstein": 1.0, "divergence": 1.0},
+        "commodity": {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "h4_macd": 1.0, "h4_oscillator": 1.0, "volume": 1.0, "funding": 0.0, "session": 0.0, "h4_fib": 1.0, "h1_bb": 1.0, "weinstein": 0.5, "divergence": 1.0},
+        "index":     {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "h4_macd": 1.0, "h4_oscillator": 1.0, "volume": 1.0, "funding": 0.0, "session": 0.0, "h4_fib": 1.0, "h1_bb": 1.0, "weinstein": 0.5, "divergence": 1.0},
+    },
+    "BT_AUTO_TOGGLE": False,           # If False, backtest will never enable/disable live pairs
+    "BT_PERCENTILE_FILTER": False,     # If False, disable rolling percentile floor in backtest
     # ── Execution engine ────────────────────────────────────────────────────
     "EXECUTION_ENABLED": False,         # Master switch — must be explicitly enabled
     "AUTO_EXECUTE": False,              # Auto-execute after AI grade (manual click only when False)

@@ -5,6 +5,8 @@ No code path bypasses this module. Even on demo. Even for manual clicks.
 """
 import logging
 import math
+import os
+import sqlite3
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 
@@ -23,6 +25,7 @@ _EXEC = {
     "DRAWDOWN_REDUCE": CONFIG.get("DRAWDOWN_REDUCE_THRESHOLD", 0.10),
     "DRAWDOWN_STOP": CONFIG.get("DRAWDOWN_STOP_THRESHOLD", 0.15),
     "MAX_RISK_PER_TRADE": CONFIG.get("MAX_RISK_PER_TRADE", 0.03),
+    "DAILY_LOSS_LIMIT": CONFIG.get("DAILY_LOSS_LIMIT", 0.05),
 }
 
 
@@ -40,15 +43,90 @@ class RiskApproval:
         return asdict(self)
 
 
-# ── Peak equity tracker for drawdown circuit breaker ─────────────────────────
-_peak_equity = 0.0
+# ── Peak equity persistence (survives restarts) ─────────────────────────────
+_RISK_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
+
+def _init_peak_table():
+    """Create peak_equity table if it doesn't exist."""
+    try:
+        with sqlite3.connect(_RISK_DB) as con:
+            con.execute("CREATE TABLE IF NOT EXISTS peak_equity (id INTEGER PRIMARY KEY CHECK(id=1), value REAL NOT NULL, updated_at TEXT NOT NULL)")
+            con.commit()
+    except Exception as e:
+        log.error(f"[RISK] Failed to init peak_equity table: {e}")
+
+def _load_peak_equity() -> float:
+    """Restore peak equity from SQLite on startup."""
+    try:
+        with sqlite3.connect(_RISK_DB) as con:
+            row = con.execute("SELECT value, updated_at FROM peak_equity WHERE id=1").fetchone()
+            if row:
+                log.info(f"[RISK] Restored peak equity: ${row[0]:,.2f} (saved {row[1]})")
+                return float(row[0])
+    except Exception as e:
+        log.warning(f"[RISK] Could not load peak equity: {e}")
+    return 0.0
+
+def _save_peak_equity(value: float):
+    """Persist peak equity to SQLite."""
+    try:
+        ts = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(_RISK_DB) as con:
+            con.execute(
+                "INSERT INTO peak_equity (id, value, updated_at) VALUES (1, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                (value, ts))
+            con.commit()
+    except Exception:
+        pass  # non-fatal — next update will retry
+
+_init_peak_table()
+_peak_equity = _load_peak_equity()
+
+# ── Daily loss tracker ───────────────────────────────────────────────────────
+_daily_pnl: float = 0.0
+_daily_pnl_date: str = ""
+_daily_start_balance: float = 0.0
+
+
+def record_daily_pnl(pnl: float, account_balance: float) -> None:
+    """Record realized P&L for daily loss tracking. Called by outcome monitor."""
+    global _daily_pnl, _daily_pnl_date, _daily_start_balance
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if today != _daily_pnl_date:
+        _daily_pnl = 0.0
+        _daily_pnl_date = today
+        _daily_start_balance = account_balance
+    _daily_pnl += pnl
+    if _daily_start_balance > 0 and _daily_pnl < 0:
+        loss_pct = abs(_daily_pnl) / _daily_start_balance
+        if loss_pct >= _EXEC["DAILY_LOSS_LIMIT"]:
+            log.warning(f"[RISK] DAILY LOSS LIMIT: lost ${abs(_daily_pnl):.2f} ({loss_pct:.1%}) today — blocking new trades")
+
+
+def _check_daily_loss(account_balance: float) -> tuple[bool, float]:
+    """Check if daily loss limit is breached. Returns (blocked, loss_pct)."""
+    global _daily_pnl_date, _daily_pnl, _daily_start_balance
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if today != _daily_pnl_date:
+        _daily_pnl = 0.0
+        _daily_pnl_date = today
+        _daily_start_balance = account_balance
+        return False, 0.0
+    if _daily_start_balance <= 0:
+        _daily_start_balance = account_balance
+    if _daily_pnl >= 0:
+        return False, 0.0
+    loss_pct = abs(_daily_pnl) / _daily_start_balance
+    return loss_pct >= _EXEC["DAILY_LOSS_LIMIT"], loss_pct
 
 
 def _update_peak(equity: float) -> float:
-    """Track peak equity for drawdown calculation."""
+    """Track peak equity for drawdown calculation. Persists to SQLite on new highs."""
     global _peak_equity
     if equity > _peak_equity:
         _peak_equity = equity
+        _save_peak_equity(_peak_equity)
     return _peak_equity
 
 
@@ -179,6 +257,12 @@ def risk_check(signal: dict, account_balance: float, account_equity: float,
     if kill_switch:
         log.warning(f"{prefix} REJECTED: kill switch active")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "KILL_SWITCH_ACTIVE")
+
+    # ── Check 0.5: Daily loss limit ────────────────────────────────────────
+    daily_blocked, daily_loss_pct = _check_daily_loss(account_balance)
+    if daily_blocked:
+        log.warning(f"{prefix} REJECTED: daily loss {daily_loss_pct:.1%} exceeds {_EXEC['DAILY_LOSS_LIMIT']:.0%} limit")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "DAILY_LOSS_LIMIT")
 
     # ── Check 1: Signal freshness ───────────────────────────────────────────
     ts_str = signal.get("timestamp")

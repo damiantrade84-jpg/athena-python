@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """ATHENA PRO v3.1 - Trading Intelligence Engine (Python Edition)"""
 # Windows CMD: force unbuffered output so all prints show immediately
 import sys
@@ -6,7 +6,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(line_buffering=True)
-import os, sys, json, math, time, threading, webbrowser, logging, sqlite3
+import os, sys, json, math, time, threading, webbrowser, logging, sqlite3, signal as _signal
 from datetime import datetime, timezone, timedelta
 from flask import Flask, jsonify, request, send_from_directory
 import requests as _requests_mod
@@ -50,9 +50,62 @@ def _fetch_funding_rate(binance_symbol: str) -> float | None:
         log.debug(f"[FUNDING] {binance_symbol} fetch failed: {_e}")
     return None
 
+# â”€â”€ Open Interest Cache (crypto) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+_oi_cache: dict = {}  # symbol -> {"oi": float, "price": float, "ts": float}
+_OI_CACHE_TTL = 300  # 5 minutes
+
+def _fetch_open_interest(binance_symbol: str) -> dict | None:
+    """Fetch open interest + price from Binance Futures public API. Cached 5 min.
+    Returns {"oi": float, "oiChange": float|None, "price": float} or None."""
+    now = time.time()
+    cached = _oi_cache.get(binance_symbol)
+    if cached and now - cached["ts"] < _OI_CACHE_TTL:
+        return cached
+    try:
+        url = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={binance_symbol}"
+        r = http_requests.get(url, timeout=4)
+        if r.status_code != 200:
+            return cached  # stale is better than nothing
+        oi_val = float(r.json().get("openInterest", 0))
+        # Get current price for divergence calc
+        pr = http_requests.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={binance_symbol}", timeout=4)
+        price = float(pr.json().get("price", 0)) if pr.status_code == 200 else 0
+        prev = _oi_cache.get(binance_symbol)
+        oi_change = None
+        if prev and prev.get("oi") and prev["oi"] > 0:
+            oi_change = round((oi_val - prev["oi"]) / prev["oi"] * 100, 2)
+        entry = {"oi": oi_val, "oiChange": oi_change, "price": price, "ts": now}
+        _oi_cache[binance_symbol] = entry
+        return entry
+    except Exception as _e:
+        log.debug(f"[OI] {binance_symbol} fetch failed: {_e}")
+    return cached
+
+def _calc_oi_divergence(oi_data: dict | None, current_price: float,
+                         prev_price: float | None) -> dict | None:
+    """Detect OI + price divergence. Returns signal dict or None."""
+    if not oi_data or oi_data.get("oiChange") is None or not prev_price:
+        return None
+    oi_chg = oi_data["oiChange"]
+    price_chg = (current_price - prev_price) / prev_price * 100 if prev_price else 0
+    result = {"oiChange": oi_chg, "priceChange": round(price_chg, 2), "signal": "neutral"}
+    if oi_chg > 3 and price_chg < -1:
+        result["signal"] = "bearish_divergence"
+        result["warning"] = f"OI rising +{oi_chg:.1f}% while price falling {price_chg:.1f}% — overleveraged longs, liquidation risk"
+    elif oi_chg < -3 and price_chg > 1:
+        result["signal"] = "exhaustion"
+        result["warning"] = f"OI falling {oi_chg:.1f}% while price rising +{price_chg:.1f}% — short squeeze exhaustion, rally losing steam"
+    elif oi_chg > 3 and price_chg > 1:
+        result["signal"] = "bullish_conviction"
+    elif oi_chg < -3 and price_chg < -1:
+        result["signal"] = "capitulation"
+        result["warning"] = f"OI falling {oi_chg:.1f}% + price falling {price_chg:.1f}% — capitulation, potential bottom"
+    return result
+
 # â”€â”€ EODHD WebSocket Real-Time Price Manager â”€â”€
 import asyncio
-_live_prices = {}  # thread-safe via GIL for simple dict reads/writes
+_live_prices = {}  # protected by _live_prices_lock for compound writes
+_live_prices_lock = threading.Lock()
 _ws_manager_started = False
 
 class EODHDWebSocketManager:
@@ -137,7 +190,8 @@ class EODHDWebSocketManager:
                                 entry["volume"] = msg.get("v")
                                 entry["marketStatus"] = msg.get("ms", "unknown")
                             if entry.get("price"):
-                                _live_prices[disp] = entry
+                                with _live_prices_lock:
+                                    _live_prices[disp] = entry
                                 # Crypto candles come from Binance — only build WS candles for forex/US
                                 if _candle_builder and endpoint != "crypto":
                                     _candle_builder.on_tick(disp, entry["price"], entry.get("volume", 0), entry.get("ts", 0))
@@ -948,7 +1002,7 @@ from scoring import (
     CORR_CLUSTERS, apply_correlation_cap,
 )
 
-_scan_in_progress = False
+_scan_lock = threading.Lock()  # thread-safe scan guard (replaces bare boolean)
 _kill_switch = False      # N4: Kill-switch â€” blocks new scans/analyses when True
 _disabled_pairs: set = set()  # per-pair kill-switch â€” display names of pairs to exclude
 
@@ -977,7 +1031,6 @@ def _effective_backtest_style(pair: dict, requested_style: str) -> str:
 
 def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
     """Parallel scan of tracked pairs. Optional asset_class filter (crypto/forex/stock/commodity/index)."""
-    global _scan_in_progress
     _requested_style = _normalize_style(style)
     _valid_classes = {"crypto", "forex", "stock", "commodity", "index"}
     _ac = asset_class.lower().strip() if asset_class else None
@@ -988,9 +1041,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
                 "scannedAt": datetime.now(timezone.utc).isoformat()}
     if _kill_switch:
         return {"success":False,"error":"Kill-switch active â€” system paused","signals":[],"tradeSignals":[],"watchlist":[],"errors":[],"skipped":[],"btcBias":"neutral","totalPairs":0,"activePairs":0,"scannedAt":datetime.now(timezone.utc).isoformat()}
-    if _scan_in_progress:
+    if not _scan_lock.acquire(blocking=False):
         return {"success":False,"error":"Scan already in progress","signals":[],"tradeSignals":[],"watchlist":[],"errors":[],"skipped":[],"btcBias":"neutral","totalPairs":0,"activePairs":0,"scannedAt":datetime.now(timezone.utc).isoformat()}
-    _scan_in_progress = True
     try:
         candidate_pairs = [p for p in ALL_PAIRS if p["display"] not in _disabled_pairs]
         if _ac:
@@ -1121,7 +1173,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
                 "scannedAt": datetime.now(timezone.utc).isoformat(),
                 "styleRequested": _requested_style, "style": _requested_style}
     finally:
-        _scan_in_progress = False
+        _scan_lock.release()
 
 EXPERT_PROMPT="""You are Marcus Reid — 18-year prop-desk veteran turned trading mentor. You've seen it all and you're not easily impressed, but when a setup is clean you get genuinely excited. You speak like a sharp friend who happens to be a market wizard — concise, opinionated, occasionally witty. No corporate-speak. No filler.
 
@@ -1608,15 +1660,39 @@ def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto",
             system=EXPERT_PROMPT, messages=[{"role": "user", "content": msg}]
         )
         t=r.content[0].text.strip()
+        # Robust JSON extraction: try code-fence first, then regex, then brace-matching
+        import re as _re
+        _parsed = None
+        # Attempt 1: code-fence extraction
         if "```" in t:
             parts = t.split("```")
             for p in parts:
                 p = p.strip()
                 if p.startswith("json"): p = p[4:].strip()
-                if p.startswith("{"): t = p; break
-        start = t.find("{"); end = t.rfind("}") + 1
-        if start >= 0 and end > start: t = t[start:end]
-        result = json.loads(t)
+                if p.startswith("{"):
+                    try: _parsed = json.loads(p[:p.rfind("}") + 1]); break
+                    except json.JSONDecodeError: pass
+        # Attempt 2: regex for outermost JSON object
+        if _parsed is None:
+            _m = _re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', t)
+            if _m:
+                try: _parsed = json.loads(_m.group())
+                except json.JSONDecodeError: pass
+        # Attempt 3: first { to last } (original fallback)
+        if _parsed is None:
+            start = t.find("{"); end = t.rfind("}") + 1
+            if start >= 0 and end > start:
+                try: _parsed = json.loads(t[start:end])
+                except json.JSONDecodeError: pass
+        if _parsed is None:
+            log.error(f"[AI] {signal['pair']}: could not parse JSON from response: {t[:200]}")
+            return {"error": "AI response was not valid JSON"}
+        result = _parsed
+        # Validate required keys
+        _required = {"grade", "edgeProbability", "riskLevel"}
+        _missing = _required - set(result.keys())
+        if _missing:
+            log.warning(f"[AI] {signal['pair']}: parsed JSON missing keys {_missing}")
         log.info(f"[AI] {signal['pair']} => Grade:{result.get('grade','?')} Prob:{result.get('edgeProbability','?')}% Risk:{result.get('riskLevel','?')} | {str(result.get('verdict',''))[:60]}")
         return result
     except Exception as e:
@@ -1747,23 +1823,27 @@ def backtest_pair(pair, style="auto"):
             if res["score"] < bt_min:
                 funnel["fail_score"] += 1; i += 1; continue
             direction = res["direction"]
-            entry_bar = d1_raw[i]
-            raw_entry = entry_bar["close"]
+            # Realistic entry: signal on bar i close, enter at bar i+1 open (no lookahead)
+            if i + 1 >= total_bars:
+                i += 1; continue
+            entry_bar = d1_raw[i + 1]
+            raw_entry = entry_bar.get("open", entry_bar["close"])
             slip = raw_entry * _get_slippage(entry_bar, _ptype)
             entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
             atr = _atr_for_levels(d1i, h4i, h1i)
             if not atr or atr == 0: i += 1; continue
             # C4: Use shared calc_levels (deduplicates with analyze_pair)
-            lvl = calc_levels(entry, atr, direction, _ptype)
+            _bt_regime_state = res.get("regime", {}).get("state") if res.get("regime") else None
+            lvl = calc_levels(entry, atr, direction, _ptype, regime_state=_bt_regime_state)
             sl = lvl["sl"]; tp1 = lvl["tp1"]; tp2 = lvl["tp2"]
             sl_mult = lvl["mults"]["sl"]; tp1_mult = lvl["mults"]["tp1"]; tp2_mult = lvl["mults"]["tp2"]
             rr1 = lvl["rr1"]
-            # Validate levels are finite and meaningful â€” NaN/0 levels cause ghost OPEN trades
+            # Validate levels are finite and meaningful — NaN/0 levels cause ghost OPEN trades
             if not all(math.isfinite(v) and v > 0 for v in (sl, tp1, tp2)):
                 i += 1; continue
-            if abs(entry - sl) < entry * 0.0001:  # SL less than 0.01% from entry â€” invalid
+            if abs(entry - sl) < entry * 0.0001:  # SL less than 0.01% from entry — invalid
                 i += 1; continue
-            # V3: Structure-based stops for crypto â€” use wider of ATR-stop vs swing-stop
+            # V3: Structure-based stops for crypto — use wider of ATR-stop vs swing-stop
             if _ptype == "crypto":
                 _recent = d1_window[-10:]
                 if direction == "LONG":
@@ -1871,13 +1951,17 @@ def backtest_pair(pair, style="auto"):
             if res["score"] < bt_min:
                 funnel["fail_score"] += 1; i += 1; continue
             direction = res["direction"]
-            entry_bar = h4_raw[i]
-            raw_entry = entry_bar["close"]
+            # Realistic entry: signal on bar i close, enter at bar i+1 open (no lookahead)
+            if i + 1 >= total_h4:
+                i += 1; continue
+            entry_bar = h4_raw[i + 1]
+            raw_entry = entry_bar.get("open", entry_bar["close"])
             slip = raw_entry * _get_slippage(entry_bar, _ptype)
             entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
             atr = _atr_for_levels(d1i_ctx, h4i, h1i)
             if not atr or atr == 0: i += 1; continue
-            lvl = calc_levels(entry, atr, direction, _ptype)
+            _bt_regime_state2 = res.get("regime", {}).get("state") if res.get("regime") else None
+            lvl = calc_levels(entry, atr, direction, _ptype, regime_state=_bt_regime_state2)
             sl = lvl["sl"]; tp1 = lvl["tp1"]; tp2 = lvl["tp2"]
             sl_mult = lvl["mults"]["sl"]; tp1_mult = lvl["mults"]["tp1"]; tp2_mult = lvl["mults"]["tp2"]
             rr1 = lvl["rr1"]
@@ -1961,6 +2045,15 @@ def backtest_pair(pair, style="auto"):
     avg_win  = round(sum(t["resultR"] for t in wins) / len(wins), 3) if wins else 0
     avg_loss = round(sum(t["resultR"] for t in losses) / len(losses), 3) if losses else 0
     r_skew   = round(avg_win / abs(avg_loss), 2) if avg_loss != 0 else None
+    # Sharpe ratio (annualized): mean(R) / std(R) * sqrt(trades_per_year)
+    # Sortino ratio: mean(R) / downside_std(R) * sqrt(trades_per_year)
+    _trades_per_year = max(1, len(trades))  # treat full backtest as ~1 year
+    _std_r = _var ** 0.5 if _var > 0 else 0
+    sharpe = round(avg_r / _std_r * (_trades_per_year ** 0.5), 2) if _std_r > 0 else 0
+    _downside = [r for r in r_values if r < 0]
+    _down_var = sum(r ** 2 for r in _downside) / len(_downside) if _downside else 0
+    _down_std = _down_var ** 0.5
+    sortino = round(avg_r / _down_std * (_trades_per_year ** 0.5), 2) if _down_std > 0 else 0
 
     # B2: Monte Carlo drawdown simulation â€” 500 random shuffles of trade sequence
     # Transforms single-path DD into distribution: P5=best case, P95=worst case
@@ -2011,12 +2104,13 @@ def backtest_pair(pair, style="auto"):
                 "is_sqn":is_sqn, "oos_sqn":oos_sqn,
                 "overfit_flag": oos_sqn < is_sqn * 0.5 if is_sqn > 0 and len(oos_trades) >= 3 else False}
 
-    log.info(f"[BT] {pair['display']} done: {len(trades)} trades, WR {win_rate}%, PF {profit_factor}, Expect {avg_r}R, SQN {sqn}, IS:{is_sqn}/OOS:{oos_sqn}, MC-P95 DD {mc_dd['p95']}%")
+    log.info(f"[BT] {pair['display']} done: {len(trades)} trades, WR {win_rate}%, PF {profit_factor}, Expect {avg_r}R, SQN {sqn}, Sharpe {sharpe}, Sortino {sortino}, IS:{is_sqn}/OOS:{oos_sqn}, MC-P95 DD {mc_dd['p95']}%")
     return {
         "pair": pair["display"], "symbol": pair["symbol"], "type": pair["type"],
         "totalTrades": len(trades), "wins": len(wins), "losses": len(losses),
         "winRate": win_rate, "profitFactor": profit_factor,
         "totalR": total_r, "expectancy": avg_r, "sqn": sqn,
+        "sharpe": sharpe, "sortino": sortino,
         "avgWin": avg_win, "avgLoss": avg_loss, "rSkew": r_skew,
         "maxDrawdownPct": max_dd_pct, "mcDD": mc_dd, "scoreBands": score_bands,
         "regimeStats": regime_stats, "wfSplit": wf_split, "funnel": funnel,
@@ -2102,6 +2196,42 @@ _init_audit_db(_AUDIT_DB)
 
 app=Flask(__name__,static_folder="static")
 
+# ── API authentication (shared-secret header) ────────────────────────────
+_ATHENA_API_KEY = os.environ.get("ATHENA_API_KEY", "")  # set in .env to enable auth
+_AUTH_EXEMPT = {"/", "/favicon.ico"}  # paths that don't require auth
+
+# ── Lightweight rate limiter (no external dependency) ─────────────────────
+_rate_limits: dict = {}  # ip -> [timestamps]
+_RATE_WINDOW = 60        # seconds
+_RATE_MAX_REQUESTS = 120  # max requests per window (2/sec average)
+_RATE_EXECUTE_MAX = 5     # stricter limit for execution endpoints
+
+@app.before_request
+def _auth_and_rate_limit():
+    from flask import request as _req
+    path = _req.path or ""
+    ip = _req.remote_addr or "unknown"
+
+    # Auth check — only enforced when ATHENA_API_KEY is set in .env
+    if _ATHENA_API_KEY and path not in _AUTH_EXEMPT:
+        provided = _req.headers.get("X-Athena-Key", "")
+        if provided != _ATHENA_API_KEY:
+            log.warning(f"[AUTH] {ip} rejected on {path} — invalid/missing X-Athena-Key")
+            return jsonify({"error": "Unauthorized — set X-Athena-Key header"}), 401
+
+    # Rate limiting
+    now = time.time()
+    is_sensitive = path.startswith("/api/execute") or path.startswith("/api/killswitch")
+    max_req = _RATE_EXECUTE_MAX if is_sensitive else _RATE_MAX_REQUESTS
+    key = f"{ip}:{path}" if is_sensitive else ip
+    if key not in _rate_limits:
+        _rate_limits[key] = []
+    _rate_limits[key] = [t for t in _rate_limits[key] if now - t < _RATE_WINDOW]
+    if len(_rate_limits[key]) >= max_req:
+        log.warning(f"[RATE] {ip} exceeded {max_req} req/{_RATE_WINDOW}s on {path}")
+        return jsonify({"error": "Rate limit exceeded. Try again shortly."}), 429
+    _rate_limits[key].append(now)
+
 @app.route("/")
 def index(): return send_from_directory("static","index.html")
 
@@ -2141,8 +2271,8 @@ def api_analyze():
             if _acct:
                 _p_heat = _calc_portfolio_heat(_pos or [], _acct["balance"])
                 _dd_pct = _current_drawdown(_acct["equity"])
-        except Exception:
-            pass
+        except Exception as _ph_err:
+            log.debug(f"[AI] portfolio heat/drawdown fetch failed: {_ph_err}")
         result = run_ai(sig, news_ctx, style_pref, portfolio_heat=_p_heat, drawdown_pct=_dd_pct)
         # N9: Audit log â€” persist every AI analysis to SQLite
         try:
@@ -2177,7 +2307,7 @@ _executed_signals: set = set()  # Track executed signal IDs to prevent duplicate
 
 @app.route("/api/execute", methods=["POST"])
 def api_execute():
-    """Execute a trade signal via MT5. Every order passes through risk_engine first."""
+    """Execute a trade signal via MT5 (forex/stocks) or Bybit (crypto). Every order passes through risk_engine first."""
     if not CONFIG.get("EXECUTION_ENABLED", False):
         return jsonify({"error": "Execution disabled. Set EXECUTION_ENABLED: true in config.yaml"}), 403
     if _kill_switch:
@@ -2555,7 +2685,9 @@ def api_candle_cache():
 
 @app.route("/api/prices")
 def api_prices():
-    return jsonify({"prices": _live_prices, "count": len(_live_prices),
+    with _live_prices_lock:
+        snapshot = dict(_live_prices)
+    return jsonify({"prices": snapshot, "count": len(snapshot),
                     "ts": datetime.now(timezone.utc).isoformat()})
 
 @app.route("/api/yield-curve")
@@ -2728,11 +2860,17 @@ def analyze_pair(pair, btc_bias, style="swing"):
         _e200 = calc_ema([c["close"] for c in d1], 200)
         e200s = (_e200[-1] - _e200[-21]) / _e200[-21] if _e200[-1] and len(_e200) >= 21 and _e200[-21] else 0
 
-    # Fetch funding rate for crypto pairs (Task 3)
+    # Fetch funding rate + open interest for crypto pairs
     _funding_rate = None
+    _oi_divergence = None
     if pair.get("type") == "crypto":
         _bn_sym = pair.get("symbol", "").replace("/", "")  # e.g. BTCUSDT
         _funding_rate = _fetch_funding_rate(_bn_sym)
+        _oi_data = _fetch_open_interest(_bn_sym)
+        _prev_close = d1[-2]["close"] if d1 and len(d1) >= 2 else None
+        _cur_close = h1i["snap"].get("close") or (d1[-1]["close"] if d1 else None)
+        if _cur_close and _prev_close:
+            _oi_divergence = _calc_oi_divergence(_oi_data, _cur_close, _prev_close)
 
     res = calc_confluence(
         _cf_d1i, _cf_h4i, _cf_h1i, vr, stoch, e200s, pair, btc_bias,
@@ -2762,7 +2900,8 @@ def analyze_pair(pair, btc_bias, style="swing"):
     if price is None or not atr:
         return None
     fib = calc_fib(h4)
-    lvl = calc_levels(float(price), float(atr), direction, pair["type"])
+    _regime_state = res.get("regime", {}).get("state") if res.get("regime") else None
+    lvl = calc_levels(float(price), float(atr), direction, pair["type"], regime_state=_regime_state)
     sk = stoch["k"][-1] if stoch["k"] and stoch["k"][-1] is not None else None
     sd = stoch["d"][-1] if stoch["d"] and stoch["d"][-1] is not None else None
     risk_pct = round(abs(float(price) - float(lvl["sl"])) / float(price) * 100, 2) if price else None
@@ -2770,6 +2909,8 @@ def analyze_pair(pair, btc_bias, style="swing"):
     for w in detect_div(d1, h4, h1):
         if w not in warn_list:
             warn_list.append(w)
+    if _oi_divergence and _oi_divergence.get("warning"):
+        warn_list.append(_oi_divergence["warning"])
     max_score = res.get("maxScoreOverride") or _max_score_for_pair(pair)
     return {
         "pair": pair["display"],
@@ -2923,8 +3064,8 @@ def _update_trade_outcome(ticket: str, exit_price: float, exit_time: str,
             t_entry = datetime.fromisoformat(entry_ts.replace("Z", "+00:00"))
             t_exit = datetime.fromisoformat(exit_time.replace("Z", "+00:00"))
             holding_hours = round((t_exit - t_entry).total_seconds() / 3600, 2)
-        except Exception:
-            pass
+        except Exception as _hp_err:
+            log.debug(f"[AUDIT] holding period calc failed: {_hp_err}")
     try:
         with sqlite3.connect(_AUDIT_DB) as con:
             con.execute(
@@ -2934,17 +3075,50 @@ def _update_trade_outcome(ticket: str, exit_price: float, exit_time: str,
             )
             con.commit()
         log.info(f"[MONITOR] Outcome logged: ticket={ticket} exit={exit_price} pnl={pnl} R={r_multiple} reason={exit_reason}")
+        # Feed realized P&L to daily loss tracker
+        if pnl is not None:
+            try:
+                from risk_engine import record_daily_pnl
+                # Get current balance for reference
+                _bal = 0.0
+                try:
+                    from mt5_executor import mt5_get_account
+                    _acc = mt5_get_account()
+                    if _acc: _bal = _acc.get("balance", 0)
+                except Exception as _mt5e:
+                    log.debug(f"[DAILY-PNL] MT5 balance fetch: {_mt5e}")
+                if _bal <= 0:
+                    try:
+                        import bybit_executor as _bm
+                        _bex = _bm._get_exchange()
+                        if _bex:
+                            _bb = _bex.fetch_balance()
+                            _bal = float(_bb.get("total", {}).get("USDT", 0))
+                    except Exception as _bbe:
+                        log.debug(f"[DAILY-PNL] Bybit balance fetch: {_bbe}")
+                if _bal > 0:
+                    record_daily_pnl(pnl, _bal)
+            except Exception as _dpnl_err:
+                log.debug(f"[DAILY-PNL] record failed: {_dpnl_err}")
     except Exception as e:
         log.warning(f"[MONITOR] DB write failed for ticket {ticket}: {e}")
 
 
+_score_decay_counter = 0
+
 def _outcome_monitor_loop() -> None:
     """Background loop: every 60s reconcile closed MT5/CCXT trades against audit_log."""
+    global _score_decay_counter
     while True:
         try:
             time.sleep(60)
             _check_mt5_outcomes()
             _check_ccxt_outcomes()
+            # Score decay check every 5 minutes (not every 60s — too expensive)
+            _score_decay_counter += 1
+            if _score_decay_counter >= 5:
+                _score_decay_counter = 0
+                _check_score_decay()
         except Exception as e:
             log.debug(f"[MONITOR] loop error: {e}")
 
@@ -2998,14 +3172,65 @@ def _check_mt5_outcomes() -> None:
         log.debug(f"[MONITOR] MT5 outcome check failed: {e}")
 
 
+_breakeven_applied: set = set()  # tickets already moved to breakeven
+
 def _check_ccxt_outcomes() -> None:
-    """Check Bybit futures for crypto positions that have been fully exited."""
+    """Check Bybit futures for crypto positions that have been fully exited.
+    Also checks open positions for 1R profit to move SL to breakeven."""
     try:
         import bybit_executor as _bybit_mod
         exchange = _bybit_mod._get_exchange()
         if not exchange:
             return
-        open_symbols = {p["symbol"] for p in (_bybit_mod.bybit_get_positions() or [])}
+        positions = _bybit_mod.bybit_get_positions() or []
+        open_symbols = {p["symbol"] for p in positions}
+
+        # ── Breakeven trailing stop at 1R ──────────────────────────────────
+        for pos in positions:
+            try:
+                ccxt_sym = pos.get("symbol", "")
+                entry_px = float(pos.get("entryPrice", 0) or 0)
+                cur_px = float(pos.get("markPrice", 0) or pos.get("lastPrice", 0) or 0)
+                side = (pos.get("side") or "").lower()
+                contracts = abs(float(pos.get("contracts", 0) or 0))
+                if not entry_px or not cur_px or not contracts or not side:
+                    continue
+                # Find matching audit row for SL distance
+                with sqlite3.connect(_AUDIT_DB) as con:
+                    con.row_factory = sqlite3.Row
+                    match = con.execute(
+                        "SELECT ticket, sl, entry_price FROM audit_log "
+                        "WHERE exit_price IS NULL AND ticket IS NOT NULL AND ticket != '' "
+                        "AND (pair LIKE '%USDT%') ORDER BY ts DESC LIMIT 10"
+                    ).fetchall()
+                for row in match:
+                    audit_entry = float(row["entry_price"] or 0)
+                    audit_sl = float(row["sl"] or 0)
+                    ticket = str(row["ticket"])
+                    if not audit_entry or not audit_sl or ticket in _breakeven_applied:
+                        continue
+                    sl_dist = abs(audit_entry - audit_sl)
+                    if sl_dist == 0:
+                        continue
+                    # Check if entry matches this position (within 1%)
+                    if abs(audit_entry - entry_px) / entry_px > 0.01:
+                        continue
+                    # Calculate current R
+                    if side == "long":
+                        current_r = (cur_px - entry_px) / sl_dist
+                    else:
+                        current_r = (entry_px - cur_px) / sl_dist
+                    if current_r >= 1.0:
+                        result = _bybit_mod.bybit_move_sl_to_breakeven(
+                            ccxt_sym, "LONG" if side == "long" else "SHORT",
+                            entry_px, contracts
+                        )
+                        if result.get("success"):
+                            _breakeven_applied.add(ticket)
+                            log.info(f"[MONITOR] {ccxt_sym}: reached {current_r:.1f}R — SL moved to breakeven @ {entry_px}")
+                    break  # only match one audit row per position
+            except Exception as e:
+                log.debug(f"[MONITOR] breakeven check error: {e}")
         with sqlite3.connect(_AUDIT_DB) as con:
             con.row_factory = sqlite3.Row
             pending = con.execute(
@@ -3049,6 +3274,59 @@ def _start_outcome_monitor() -> None:
     log.info("[MONITOR] Trade outcome monitor started (60s interval)")
 
 
+# ── Score Decay Monitor — recalculate confluence for open positions ────────
+_score_decay_results: dict = {}  # pair -> {"score": float, "entryScore": float, "ts": str}
+
+def _check_score_decay() -> None:
+    """Re-evaluate confluence for open positions; log warnings if score has decayed."""
+    try:
+        with sqlite3.connect(_AUDIT_DB) as con:
+            con.row_factory = sqlite3.Row
+            open_trades = con.execute(
+                "SELECT pair, score, direction FROM audit_log "
+                "WHERE exit_price IS NULL AND ticket IS NOT NULL AND ticket != ''"
+            ).fetchall()
+        if not open_trades:
+            return
+        all_pairs = {p["display"]: p for p in ALL_PAIRS}
+        for row in open_trades:
+            pair_name = row["pair"]
+            entry_score = row["score"] or 0
+            pair = all_pairs.get(pair_name)
+            if not pair:
+                continue
+            try:
+                result = analyze_pair(pair, "neutral", style="swing")
+                if not result:
+                    continue
+                cur_score = result.get("confluenceScore", 0)
+                decay = entry_score - cur_score
+                _score_decay_results[pair_name] = {
+                    "currentScore": cur_score,
+                    "entryScore": entry_score,
+                    "decay": round(decay, 2),
+                    "direction": row["direction"],
+                    "currentDirection": result.get("direction"),
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }
+                if decay >= 3:
+                    log.warning(f"[DECAY] {pair_name}: score dropped {entry_score:.1f} → {cur_score:.1f} (Δ{decay:.1f}) — consider exit")
+                elif decay >= 1.5:
+                    log.info(f"[DECAY] {pair_name}: score softened {entry_score:.1f} → {cur_score:.1f} (Δ{decay:.1f})")
+                if row["direction"] and result.get("direction") and row["direction"] != result.get("direction"):
+                    log.warning(f"[DECAY] {pair_name}: DIRECTION FLIP — entered {row['direction']}, now {result['direction']}")
+            except Exception as e:
+                log.debug(f"[DECAY] {pair_name} re-eval failed: {e}")
+    except Exception as e:
+        log.debug(f"[DECAY] score decay check failed: {e}")
+
+
+@app.route("/api/score-decay")
+def api_score_decay():
+    """Return score decay status for open positions."""
+    return jsonify(_score_decay_results)
+
+
 # â”€â”€ Task 2: Performance Dashboard Endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.route("/api/performance")
@@ -3087,6 +3365,16 @@ def api_performance():
             dd = peak - cum_r
             if dd > max_dd: max_dd = dd
         max_dd_pct = round(max_dd / peak * 100, 1) if peak > 0 else 0
+
+        # Sharpe + Sortino ratios (from R-multiples)
+        _perf_avg_r = sum(r_vals) / len(r_vals) if r_vals else 0
+        _perf_var = sum((r - _perf_avg_r) ** 2 for r in r_vals) / len(r_vals) if r_vals else 0
+        _perf_std = _perf_var ** 0.5
+        perf_sharpe = round(_perf_avg_r / _perf_std * (len(r_vals) ** 0.5), 2) if _perf_std > 0 else 0
+        _perf_down = [r for r in r_vals if r < 0]
+        _perf_down_var = sum(r ** 2 for r in _perf_down) / len(_perf_down) if _perf_down else 0
+        _perf_down_std = _perf_down_var ** 0.5
+        perf_sortino = round(_perf_avg_r / _perf_down_std * (len(r_vals) ** 0.5), 2) if _perf_down_std > 0 else 0
 
         # Win rate by regime (trendState)
         from collections import defaultdict
@@ -3156,6 +3444,8 @@ def api_performance():
             "average_r_multiple": avg_r,
             "total_r": total_r,
             "profit_factor": profit_factor,
+            "sharpe": perf_sharpe,
+            "sortino": perf_sortino,
             "max_drawdown_pct": max_dd_pct,
             "win_rate_by_regime": win_rate_by_regime,
             "win_rate_by_score_band": win_rate_by_score_band,
@@ -3212,7 +3502,66 @@ if __name__=="__main__":
         log.info("[CB] Candle builder started (WS ticks + 6mo seed + Bulk D1 every 4h)")
     else:
         log.warning("[WS] No EODHD_KEY â€” WebSocket prices disabled")
+    # Startup position reconciliation — check for open positions on restart
+    def _startup_reconcile():
+        """On startup, check MT5/Bybit for open positions and log them."""
+        time.sleep(5)  # wait for connections to establish
+        try:
+            from mt5_executor import mt5_get_positions, mt5_connect
+            if mt5_connect():
+                mt5_pos = mt5_get_positions() or []
+                if mt5_pos:
+                    log.info(f"[STARTUP] MT5: {len(mt5_pos)} open position(s)")
+                    for p in mt5_pos:
+                        log.info(f"  - {p.get('symbol')} {p.get('type','?')} vol={p.get('volume')} entry={p.get('price_open')} P&L={p.get('profit')}")
+        except Exception as e:
+            log.debug(f"[STARTUP] MT5 reconcile skipped: {e}")
+        try:
+            import bybit_executor as _bm
+            bpos = _bm.bybit_get_positions() or []
+            if bpos:
+                log.info(f"[STARTUP] Bybit: {len(bpos)} open position(s)")
+                for p in bpos:
+                    log.info(f"  - {p.get('symbol')} {p.get('side')} size={p.get('contracts')} entry={p.get('entryPrice')} uPnL={p.get('unrealizedPnl')}")
+        except Exception as e:
+            log.debug(f"[STARTUP] Bybit reconcile skipped: {e}")
+        # Check audit DB for unresolved trades
+        try:
+            with sqlite3.connect(_AUDIT_DB) as con:
+                con.row_factory = sqlite3.Row
+                unresolved = con.execute(
+                    "SELECT pair, direction, entry_price, ticket FROM audit_log "
+                    "WHERE exit_price IS NULL AND ticket IS NOT NULL AND ticket != ''"
+                ).fetchall()
+            if unresolved:
+                log.warning(f"[STARTUP] {len(unresolved)} unresolved trade(s) in audit DB:")
+                for r in unresolved:
+                    log.warning(f"  - {r['pair']} {r['direction']} entry={r['entry_price']} ticket={r['ticket']}")
+        except Exception as e:
+            log.debug(f"[STARTUP] Audit DB reconcile failed: {e}")
+    threading.Thread(target=_startup_reconcile, daemon=True, name="StartupReconcile").start()
+
+    # Graceful shutdown handler — clean up connections on SIGINT/SIGTERM
+    def _graceful_shutdown(signum, frame):
+        sig_name = "SIGINT" if signum == _signal.SIGINT else "SIGTERM"
+        log.warning(f"[SHUTDOWN] {sig_name} received — shutting down gracefully...")
+        try:
+            from bybit_executor import bybit_disconnect
+            bybit_disconnect()
+        except Exception:
+            pass
+        try:
+            from mt5_executor import mt5_disconnect
+            mt5_disconnect()
+        except Exception:
+            pass
+        log.info("[SHUTDOWN] Connections closed. Exiting.")
+        sys.exit(0)
+    _signal.signal(_signal.SIGINT, _graceful_shutdown)
+    _signal.signal(_signal.SIGTERM, _graceful_shutdown)
+
     log.info(f"http://localhost:5000")
     threading.Timer(1.5,lambda:webbrowser.open("http://localhost:5000")).start()
     _start_outcome_monitor()
-    app.run(host="0.0.0.0",port=5000,debug=False)
+    _host = os.environ.get("ATHENA_HOST", "127.0.0.1")  # default localhost; set to 0.0.0.0 in .env for LAN
+    app.run(host=_host,port=5000,debug=False)
