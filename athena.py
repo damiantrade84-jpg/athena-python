@@ -138,7 +138,8 @@ class EODHDWebSocketManager:
                                 entry["marketStatus"] = msg.get("ms", "unknown")
                             if entry.get("price"):
                                 _live_prices[disp] = entry
-                                if _candle_builder:
+                                # Crypto candles come from Binance — only build WS candles for forex/US
+                                if _candle_builder and endpoint != "crypto":
                                     _candle_builder.on_tick(disp, entry["price"], entry.get("volume", 0), entry.get("ts", 0))
                         except Exception as _e:
                             log.debug(f"[WS] msg parse error: {_e}")
@@ -272,6 +273,9 @@ class CandleBuilder:
         seeded = 0
         for p in pairs:
             try:
+                # Crypto candles come from Binance — skip EODHD seed for crypto
+                if p.get("type") == "crypto":
+                    continue
                 ticker = _eodhd_ticker_for_pair(p)
                 if not ticker:
                     continue
@@ -370,9 +374,11 @@ class CandleBuilder:
         _key = os.environ.get("EODHD_KEY", "")
         if not _key:
             return
-        # Build mapping: exchange → {bulk_code → display_name}
+        # Build mapping: exchange → {bulk_code → display_name} (skip crypto — Binance owns that)
         exchange_map = {}
         for p in ALL_PAIRS:
+            if p.get("type") == "crypto":
+                continue
             ticker = _eodhd_ticker_for_pair(p)
             if not ticker or "." not in ticker:
                 continue
@@ -2193,12 +2199,12 @@ def api_execute():
         sig_type = sig.get("type", "")
         is_crypto = sig_type == "crypto"
         if is_crypto:
-            from ccxt_executor import ccxt_get_account, ccxt_get_positions, ccxt_get_symbol_info, ccxt_execute
-            account = ccxt_get_account()
+            from bybit_executor import bybit_get_account, bybit_get_positions, bybit_get_symbol_info, bybit_execute
+            account = bybit_get_account()
             if not account:
-                return jsonify({"error": "Binance not connected. Set BINANCE_API_KEY and BINANCE_API_SECRET in .env"}), 503
-            positions = ccxt_get_positions()
-            symbol_info = ccxt_get_symbol_info(pair)
+                return jsonify({"error": "Bybit not connected. Set BYBIT_API_KEY and BYBIT_API_SECRET in .env"}), 503
+            positions = bybit_get_positions()
+            symbol_info = bybit_get_symbol_info(pair)
         else:
             from mt5_executor import mt5_get_account, mt5_get_positions, mt5_get_symbol_info, mt5_execute
             account = mt5_get_account()
@@ -2233,7 +2239,7 @@ def api_execute():
             return jsonify({"error": f"Risk engine rejected: {approval.reason}", "approval": approval.to_dict()}), 200
         # Execute via appropriate executor
         if is_crypto:
-            result = ccxt_execute(sig, approval)
+            result = bybit_execute(sig, approval)
         else:
             result = mt5_execute(sig, approval)
         if result.get("success"):
@@ -2289,15 +2295,15 @@ def api_mt5_positions():
     except Exception as e:
         return jsonify({"positions": [], "error": str(e)})
 
-@app.route("/api/binance-status")
-def api_binance_status():
-    """Get Binance connection status and account info."""
+@app.route("/api/bybit-status")
+def api_bybit_status():
+    """Get Bybit Futures connection status and account info."""
     try:
-        from ccxt_executor import ccxt_get_account, ccxt_get_positions
-        account = ccxt_get_account()
+        from bybit_executor import bybit_get_account, bybit_get_positions
+        account = bybit_get_account()
         if not account:
-            return jsonify({"connected": False, "error": "Binance not connected"})
-        positions = ccxt_get_positions()
+            return jsonify({"connected": False, "error": "Bybit not connected"})
+        positions = bybit_get_positions()
         return jsonify({
             "connected": True,
             "account": account,
@@ -2306,6 +2312,11 @@ def api_binance_status():
         })
     except Exception as e:
         return jsonify({"connected": False, "error": str(e)})
+
+@app.route("/api/binance-status")
+def api_binance_status():
+    """Legacy endpoint — redirects to Bybit status."""
+    return api_bybit_status()
 
 @app.route("/api/execution-config", methods=["GET", "POST"])
 def api_execution_config():
@@ -2805,6 +2816,8 @@ def analyze_pair(pair, btc_bias, style="swing"):
         "fundingRate": res.get("fundingRate"),
         "regime": res.get("regime"),
         "style": _style,
+        "h4Candles": [{"t": c["ts"], "o": round(c["open"], 6), "h": round(c["high"], 6),
+                        "l": round(c["low"], 6), "c": round(c["close"], 6)} for c in h4[-80:]],
     }
 
 def _build_event_risk(pair: dict, ds_ctx: dict, earnings_ctx: dict, closed_exchanges: set) -> dict:
