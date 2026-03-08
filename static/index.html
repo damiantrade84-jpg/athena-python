@@ -156,8 +156,19 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 .analyze-btn:hover{background:rgba(0,212,255,0.15);border-color:var(--accent);}
 .analyze-btn:disabled{opacity:0.5;cursor:not-allowed;}
 
+/* Test Mode Toggle */
+.test-toggle{display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:8px;background:var(--card);border:1px solid var(--border);font-family:'Space Mono',monospace;font-size:10px;cursor:pointer;transition:all 0.3s;user-select:none;}
+.test-toggle:hover{border-color:var(--warn);}
+.test-toggle.active{background:rgba(245,158,11,0.15);border-color:var(--warn);color:var(--warn);}
+.test-toggle .toggle-dot{width:10px;height:10px;border-radius:50%;background:var(--muted);transition:background 0.2s;}
+.test-toggle.active .toggle-dot{background:var(--warn);box-shadow:0 0 8px rgba(245,158,11,0.5);}
+.test-banner{display:none;padding:8px 16px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.3);border-radius:8px;color:var(--warn);font-size:11px;font-weight:700;text-align:center;margin-bottom:8px;letter-spacing:0.05em;}
+.test-banner.visible{display:block;}
+
 /* Execute Button */
 .exec-btn{width:100%;padding:12px;border-radius:8px;border:none;cursor:pointer;font-family:'Syne',sans-serif;font-size:13px;font-weight:800;letter-spacing:0.06em;transition:all 0.2s;margin-top:8px;}
+.exec-btn.force{background:linear-gradient(135deg,rgba(245,158,11,0.25),rgba(245,158,11,0.08));border:1px solid rgba(245,158,11,0.5);color:var(--warn);}
+.exec-btn.force:hover{background:rgba(245,158,11,0.35);box-shadow:0 0 20px rgba(245,158,11,0.2);}
 .exec-btn.LONG{background:linear-gradient(135deg,rgba(0,230,118,0.2),rgba(0,230,118,0.08));border:1px solid rgba(0,230,118,0.4);color:var(--bull);}
 .exec-btn.LONG:hover{background:rgba(0,230,118,0.3);box-shadow:0 0 20px rgba(0,230,118,0.2);}
 .exec-btn.SHORT{background:linear-gradient(135deg,rgba(255,59,92,0.2),rgba(255,59,92,0.08));border:1px solid rgba(255,59,92,0.4);color:var(--bear);}
@@ -173,13 +184,13 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 .mt5-dot.on{background:var(--bull);animation:pulse 2s infinite;}
 .mt5-dot.off{background:var(--bear);}
 
-/* Binance Status Badge */
-.binance-badge{display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:8px;background:var(--card);border:1px solid var(--border);font-family:'Space Mono',monospace;font-size:10px;cursor:pointer;transition:border-color 0.3s;}
-.binance-badge.connected{border-color:rgba(243,186,47,0.4);}
-.binance-badge.disconnected{border-color:rgba(255,59,92,0.3);}
-.binance-dot{width:6px;height:6px;border-radius:50%;}
-.binance-dot.on{background:#f3ba2f;animation:pulse 2s infinite;}
-.binance-dot.off{background:var(--bear);}
+/* Bybit Status Badge */
+.bybit-badge{display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:8px;background:var(--card);border:1px solid var(--border);font-family:'Space Mono',monospace;font-size:10px;cursor:pointer;transition:border-color 0.3s;}
+.bybit-badge.connected{border-color:rgba(243,186,47,0.4);}
+.bybit-badge.disconnected{border-color:rgba(255,59,92,0.3);}
+.bybit-dot{width:6px;height:6px;border-radius:50%;}
+.bybit-dot.on{background:#f3ba2f;animation:pulse 2s infinite;}
+.bybit-dot.off{background:var(--bear);}
 
 /* Confirm Modal */
 .exec-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center;}
@@ -338,9 +349,9 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
         <span class="mt5-dot off" id="mt5Dot"></span>
         <span id="mt5Label">MT5: OFF</span>
       </div>
-      <div class="binance-badge disconnected" id="binanceBadge" title="Binance not connected" onclick="showBinanceStatus()">
-        <span class="binance-dot off" id="binanceDot"></span>
-        <span id="binanceLabel">Binance: OFF</span>
+      <div class="bybit-badge disconnected" id="bybitBadge" title="Bybit not connected" onclick="showBybitStatus()">
+        <span class="bybit-dot off" id="bybitDot"></span>
+        <span id="bybitLabel">Bybit: OFF</span>
       </div>
       <div class="yield-badge" id="yieldBadge" style="display:none" title="UST Yield Curve - 2Y/10Y spread. Inverted = recession risk">
         <span style="font-size:9px;color:var(--muted);font-weight:700;">YIELD</span>
@@ -370,6 +381,10 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         SCAN
       </button>
+      <div class="test-toggle" id="testToggle" onclick="toggleTestMode()" title="Test Mode: drops score thresholds, enables force-execute on all signals">
+        <span class="toggle-dot"></span>
+        <span>TEST</span>
+      </div>
     </div>
   </header>
 
@@ -389,6 +404,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
     <strong>Athena Pro v3.1</strong>&nbsp; - 10-vote regime-adaptive system | backtest-filtered | walk-forward validated
   </div>
 
+  <div class="test-banner" id="testBanner">TEST MODE ACTIVE — Score thresholds lowered, force-execute enabled on all signals</div>
   <div class="stats-bar" id="statsBar" style="display:none">
     <div class="stat-chip">Scanned: <span id="statScanned">0</span> pairs</div>
     <div class="stat-chip">Signals: <span id="statTotal">0</span></div>
@@ -490,6 +506,7 @@ let accountSize = 500;
 let tradeStylePref = 'auto';
 let btChart = null;
 let _prevPrices = {};
+window._testMode = false;
 
 // -- Live Price Ticker --
 function fmtTickerPrice(p) {
@@ -1213,7 +1230,7 @@ function buildCard(s,idx) {
     '<div class="card-body">'+
       '<div class="conf-row">'+
         '<span class="conf-label">Confluence</span>'+
-        '<span class="conf-score" style="color:'+confCol+'">'+s.confluenceScore+'/13 | '+pct+'%</span>'+
+        '<span class="conf-score" style="color:'+confCol+'">'+s.confluenceScore+'/'+(s.maxScore||13)+' | '+pct+'%</span>'+
       '</div>'+
       '<div class="conf-bar-track"><div class="conf-bar-fill '+fillCls+'" style="width:'+pct+'%"></div></div>'+
       votesHtml+
@@ -1339,15 +1356,18 @@ function toggleChart(sid) {
 }
 
 function buildExecButton(s) {
-  if (s.signalTier === 'watchlist') return '';
+  if (s.signalTier === 'watchlist' && !window._testMode) return '';
   var dir = s.direction;
   var sid = (s.symbol||'').replace(/[\/=^.]/g,'_');
   var isCrypto = s.type === 'crypto';
   var disabled = isCrypto ? !window._bybitConnected : !window._mt5Connected;
   var disTitle = isCrypto ? 'Bybit not connected' : 'MT5 not connected';
   var via = isCrypto ? ' (Bybit Futures)' : '';
-  return '<button class="exec-btn '+dir+'" id="execbtn-'+sid+'" onclick="confirmExecute(\''+s.symbol+'\')" '+(disabled?'disabled title="'+disTitle+'"':'')+'>'+
-    'EXECUTE '+dir+via+
+  var isForce = s.signalTier === 'watchlist' && window._testMode;
+  var btnClass = isForce ? 'exec-btn force' : 'exec-btn '+dir;
+  var label = isForce ? 'FORCE EXECUTE '+dir+via : 'EXECUTE '+dir+via;
+  return '<button class="'+btnClass+'" id="execbtn-'+sid+'" onclick="confirmExecute(\''+s.symbol+'\', '+isForce+')" '+(disabled?'disabled title="'+disTitle+'"':'')+'>'+
+    label+
     '<span class="exec-detail">'+s.display+' @ '+fmtPrice(s.price)+' | SL: '+fmtPrice(s.sl)+' | TP: '+fmtPrice(s.tp1)+'</span>'+
   '</button>';
 }
@@ -1467,14 +1487,14 @@ window._bybitAccount = null;
 
 (function pollBybit() {
   fetch('/api/bybit-status').then(function(r){ return r.json(); }).then(function(d) {
-    var badge = document.getElementById('binanceBadge');
-    var dot = document.getElementById('binanceDot');
-    var label = document.getElementById('binanceLabel');
+    var badge = document.getElementById('bybitBadge');
+    var dot = document.getElementById('bybitDot');
+    var label = document.getElementById('bybitLabel');
     if (d.connected) {
       window._bybitConnected = true;
       window._bybitAccount = d.account;
-      badge.className = 'binance-badge connected';
-      dot.className = 'binance-dot on';
+      badge.className = 'bybit-badge connected';
+      dot.className = 'bybit-dot on';
       label.textContent = 'Bybit: $' + (d.account.balance||0).toLocaleString();
       badge.title = 'Bybit Futures Connected | Free: $' + (d.account.freeBalance||0).toLocaleString() + (d.account.testnet?' [TESTNET]':'');
       document.querySelectorAll('.exec-btn').forEach(function(b){
@@ -1482,14 +1502,23 @@ window._bybitAccount = null;
       });
     } else {
       window._bybitConnected = false;
-      badge.className = 'binance-badge disconnected';
-      dot.className = 'binance-dot off';
+      badge.className = 'bybit-badge disconnected';
+      dot.className = 'bybit-dot off';
       label.textContent = 'Bybit: OFF';
       badge.title = 'Bybit not connected - check BYBIT_API_KEY in .env';
     }
   }).catch(function(){});
   setTimeout(pollBybit, 15000);
 })();
+
+// Sync test mode state on page load
+fetch('/api/test-mode').then(function(r){return r.json();}).then(function(d){
+  window._testMode = d.testMode;
+  if (d.testMode) {
+    document.getElementById('testToggle').classList.add('active');
+    document.getElementById('testBanner').classList.add('visible');
+  }
+}).catch(function(){});
 
 (function pollMT5() {
   fetch('/api/mt5-status').then(function(r){ return r.json(); }).then(function(d) {
@@ -1504,7 +1533,7 @@ window._bybitAccount = null;
       label.textContent = 'MT5: $' + (d.account.balance||0).toLocaleString();
       badge.title = 'MT5 Connected | Server: ' + d.account.server + ' | Equity: $' + (d.account.equity||0).toLocaleString() + ' | Positions: ' + d.openPositions;
       document.querySelectorAll('.exec-btn').forEach(function(b){
-        if (b.textContent.indexOf('Binance') === -1) { b.disabled = false; b.removeAttribute('title'); }
+        if (b.textContent.indexOf('Bybit') === -1) { b.disabled = false; b.removeAttribute('title'); }
       });
     } else {
       window._mt5Connected = false;
@@ -1529,7 +1558,7 @@ function showMT5Status() {
   }
 }
 
-function showBinanceStatus() {
+function showBybitStatus() {
   if (window._bybitAccount) {
     var a = window._bybitAccount;
     showToast('Bybit Futures' + (a.testnet ? ' [TESTNET]' : ' [LIVE]') + ' | Balance: $' + a.balance.toLocaleString() + ' | Free: $' + a.freeBalance.toLocaleString());
@@ -1539,7 +1568,27 @@ function showBinanceStatus() {
 }
 
 // -- Execute Signal --
-function confirmExecute(symbol) {
+async function toggleTestMode() {
+  try {
+    var resp = await fetch('/api/test-mode', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'toggle'})});
+    var d = await resp.json();
+    window._testMode = d.testMode;
+    var el = document.getElementById('testToggle');
+    var banner = document.getElementById('testBanner');
+    if (d.testMode) {
+      el.classList.add('active');
+      banner.classList.add('visible');
+      showToast('TEST MODE ON — Score thresholds lowered. Re-scan to see more signals.');
+    } else {
+      el.classList.remove('active');
+      banner.classList.remove('visible');
+      showToast('TEST MODE OFF — Normal thresholds restored.');
+    }
+    if (allSignals.length > 0) renderSignals(applyStyleFilter(allSignals));
+  } catch(e) { showToast('Error toggling test mode: '+e.message); }
+}
+
+function confirmExecute(symbol, forceMode) {
   var sig = allSignals.find(function(s){ return s.symbol === symbol; });
   if (!sig) return;
   var isCrypto = sig.type === 'crypto';
@@ -1553,8 +1602,11 @@ function confirmExecute(symbol) {
   var overlay = document.createElement('div');
   overlay.className = 'exec-modal-overlay';
   overlay.onclick = function(e) { if (e.target === overlay) document.body.removeChild(overlay); };
+  var isForce = forceMode || false;
+  var modalTitle = isForce ? 'FORCE EXECUTE ' + dir + ' - ' + sig.display + ' (' + via + ')' : 'EXECUTE ' + dir + ' - ' + sig.display + ' (' + via + ')';
+  var forceWarn = isForce ? '<div style="margin:8px 0;padding:8px;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.3);border-radius:6px;color:var(--warn);font-size:11px">TEST MODE: Force-executing watchlist signal (score below normal threshold). Risk engine checks still apply.</div>' : '';
   overlay.innerHTML = '<div class="exec-modal">' +
-    '<h3 style="color:' + dirColor + '">EXECUTE ' + dir + ' - ' + sig.display + ' (' + via + ')</h3>' +
+    '<h3 style="color:' + (isForce ? 'var(--warn)' : dirColor) + '">' + modalTitle + '</h3>' + forceWarn +
     '<div class="exec-summary">' +
       '<div>Pair: <strong>' + sig.display + '</strong></div>' +
       '<div>Direction: <strong style="color:' + dirColor + '">' + dir + '</strong></div>' +
@@ -1569,21 +1621,23 @@ function confirmExecute(symbol) {
     '</div>' +
     '<div class="exec-actions">' +
       '<button class="exec-cancel" onclick="this.closest(\'.exec-modal-overlay\').remove()">CANCEL</button>' +
-      '<button class="exec-confirm ' + dir + '" onclick="doExecute(\'' + symbol + '\', this)">CONFIRM ' + dir + '</button>' +
+      '<button class="exec-confirm ' + dir + '" onclick="doExecute(\'' + symbol + '\', this, ' + isForce + ')">CONFIRM ' + dir + '</button>' +
     '</div>' +
   '</div>';
   document.body.appendChild(overlay);
 }
 
-async function doExecute(symbol, btn) {
+async function doExecute(symbol, btn, forceMode) {
   var sig = allSignals.find(function(s){ return s.symbol === symbol; });
   if (!sig) return;
   btn.disabled = true; btn.textContent = 'SENDING...';
   try {
+    var payload = { signal: sig };
+    if (forceMode) payload.force = true;
     var resp = await fetch('/api/execute', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ signal: sig })
+      body: JSON.stringify(payload)
     });
     var data = await resp.json();
     // Close modal

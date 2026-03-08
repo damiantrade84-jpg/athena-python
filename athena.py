@@ -1003,8 +1003,9 @@ from scoring import (
 )
 
 _scan_lock = threading.Lock()  # thread-safe scan guard (replaces bare boolean)
-_kill_switch = False      # N4: Kill-switch â€” blocks new scans/analyses when True
-_disabled_pairs: set = set()  # per-pair kill-switch â€” display names of pairs to exclude
+_kill_switch = False      # N4: Kill-switch — blocks new scans/analyses when True
+_test_mode = False        # Test mode: drops score thresholds, enables force-execute on all signals
+_disabled_pairs: set = set()  # per-pair kill-switch — display names of pairs to exclude
 
 def _normalize_style(style: str | None) -> str:
     """Normalize style strings used by scan/backtest endpoints."""
@@ -1130,6 +1131,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
                     log.info(f"{pair['display']:12s} SKIP")
                     continue
                 threshold = CONFIG["MIN_CONFLUENCE_CLASS"].get(pair["type"], CONFIG["MIN_CONFLUENCE"])
+                if _test_mode:
+                    threshold = max(1.0, threshold - 3.0)  # drop threshold by 3 in test mode
                 sig = _annotate_signal_for_scan(sig, pair, threshold, ds_ctx, earnings_ctx, _closed_exchanges, news_ctx)
                 tier, tier_reason = _classify_signal(sig, pair)
                 sig["signalTier"] = tier
@@ -1171,7 +1174,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
                 "errors": errors, "skipped": skipped, "scanFunnel": scan_funnel,
                 "btcBias": btc_bias, "totalPairs": len(candidate_pairs), "activePairs": len(active_pairs),
                 "scannedAt": datetime.now(timezone.utc).isoformat(),
-                "styleRequested": _requested_style, "style": _requested_style}
+                "styleRequested": _requested_style, "style": _requested_style,
+                "testMode": _test_mode}
     finally:
         _scan_lock.release()
 
@@ -2317,10 +2321,13 @@ def api_execute():
         return jsonify({"error": "Invalid payload: expected {signal: {...}}"}), 400
     sig = d["signal"]
     pair = sig.get("pair", "")
-    # Duplicate guard
+    force = d.get("force", False) and _test_mode  # force only works when test mode is active
+    # Duplicate guard (skipped in force mode)
     sig_id = f"{pair}_{sig.get('direction')}_{sig.get('timestamp', '')}"
-    if sig_id in _executed_signals:
+    if sig_id in _executed_signals and not force:
         return jsonify({"error": "DUPLICATE: This signal has already been executed"}), 409
+    if force:
+        log.warning(f"[EXEC] FORCE EXECUTE: {pair} {sig.get('direction')} (test mode, score {sig.get('confluenceScore', '?')})")
     try:
         from risk_engine import risk_check
         sig_type = sig.get("type", "")
@@ -2650,6 +2657,23 @@ def api_killswitch_pair(display: str):
 def api_killswitch_pair_list():
     """List all disabled pairs."""
     return jsonify({"disabledPairs": sorted(_disabled_pairs), "activePairs": len(ACTIVE_PAIRS)})
+
+@app.route("/api/test-mode", methods=["POST"])
+def api_test_mode():
+    """Toggle test mode: drops score thresholds, enables force-execute on all signals. For demo accounts only."""
+    global _test_mode
+    d = request.json or {}
+    action = d.get("action", "toggle")
+    if action == "on": _test_mode = True
+    elif action == "off": _test_mode = False
+    else: _test_mode = not _test_mode
+    log.warning(f"[TEST MODE] {'ACTIVATED' if _test_mode else 'DEACTIVATED'} — score thresholds {'lowered' if _test_mode else 'restored'}")
+    return jsonify({"testMode": _test_mode})
+
+@app.route("/api/test-mode")
+def api_test_mode_status():
+    """Check current test mode status."""
+    return jsonify({"testMode": _test_mode})
 
 @app.route("/api/candle-cache")
 def api_candle_cache():
