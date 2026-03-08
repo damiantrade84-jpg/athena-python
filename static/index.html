@@ -1250,23 +1250,30 @@ function buildCard(s,idx) {
 
 // -- Candlestick Chart --
 var _chartInstances = {};
+var _chartData = {};
 
 function buildChartSection(s) {
   var sid = (s.symbol||'').replace(/[\/=^.]/g,'_');
   var candles = s.h4Candles;
   if (!candles || !candles.length) return '';
-  return '<button class="chart-toggle-btn" id="chartbtn-'+sid+'" onclick="toggleChart(\''+sid+'\','+JSON.stringify(candles).replace(/'/g,"\\'")+',' +
-    JSON.stringify({entry:s.price,sl:s.sl,tp1:s.tp1,dir:s.direction,ema21:(s.h4&&s.h4.snap?s.h4.snap.ema21:null),ema50:(s.h4&&s.h4.snap?s.h4.snap.ema50:null)}) +
-    ')">' +
+  _chartData[sid] = {
+    candles: candles,
+    levels: {
+      entry: s.price, sl: s.sl, tp1: s.tp1, dir: s.direction,
+      ema21: (s.h4&&s.h4.snap) ? s.h4.snap.ema21 : null,
+      ema50: (s.h4&&s.h4.snap) ? s.h4.snap.ema50 : null
+    }
+  };
+  return '<button class="chart-toggle-btn" id="chartbtn-'+sid+'" onclick="toggleChart(\''+sid+'\')">' +
     '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' +
     ' H4 CHART</button>' +
     '<div class="sig-chart-wrap" id="chart-'+sid+'" style="height:220px"></div>';
 }
 
-function toggleChart(sid, candles, levels) {
+function toggleChart(sid) {
   var wrap = document.getElementById('chart-'+sid);
   var btn  = document.getElementById('chartbtn-'+sid);
-  if (!wrap) return;
+  if (!wrap || !_chartData[sid]) return;
   if (wrap.classList.contains('open')) {
     wrap.classList.remove('open');
     btn && btn.classList.remove('open');
@@ -1276,6 +1283,9 @@ function toggleChart(sid, candles, levels) {
   wrap.classList.add('open');
   btn && btn.classList.add('open');
   if (_chartInstances[sid]) return;
+
+  var candles = _chartData[sid].candles;
+  var levels  = _chartData[sid].levels;
 
   var chart = LightweightCharts.createChart(wrap, {
     width: wrap.clientWidth || 400,
@@ -1294,9 +1304,12 @@ function toggleChart(sid, candles, levels) {
   });
 
   var data = candles.map(function(c) {
-    var ts = typeof c.t === 'number' ? Math.floor(c.t/1000) : Math.floor(new Date(c.t).getTime()/1000);
+    var tStr = String(c.t || '').replace(' ', 'T');
+    var ts = typeof c.t === 'number' ? Math.floor(c.t/1000) : Math.floor(new Date(tStr).getTime()/1000);
     return { time: ts, open: c.o, high: c.h, low: c.l, close: c.c };
   }).filter(function(c) { return c.time && !isNaN(c.time) && c.open && c.high && c.low && c.close; });
+
+  data.sort(function(a,b){ return a.time - b.time; });
   candleSeries.setData(data);
 
   // EMA 21 line
