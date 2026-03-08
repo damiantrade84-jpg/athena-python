@@ -6,22 +6,25 @@ reusable function. Imported by scoring.py and backtest utilities.
 from config import CONFIG
 
 
-def detect_regime(h4_snap: dict, pair_type: str, config: dict | None = None) -> dict:
-    """Classify the current market regime from H4 ADX indicators.
+def detect_regime(h4_snap: dict, pair_type: str, config: dict | None = None,
+                  bb_width_pct: float | None = None) -> dict:
+    """Classify the current market regime from H4 ADX indicators + BB width confirmation.
 
     Args:
-        h4_snap:   The 'snap' dict from H4 indicators (contains adx, adxMomentum, adxSlope).
-        pair_type: Asset class string ('crypto', 'forex', 'commodity', 'stock', 'index').
-        config:    Optional config override; defaults to global CONFIG.
+        h4_snap:      The 'snap' dict from H4 indicators (contains adx, adxMomentum, adxSlope).
+        pair_type:    Asset class string ('crypto', 'forex', 'commodity', 'stock', 'index').
+        config:       Optional config override; defaults to global CONFIG.
+        bb_width_pct: BB width percentile (0-100). Used as second confirmation signal.
 
     Returns:
         dict with keys:
             state            int   0=TRENDING, 1=TRANSITIONAL, 2=CHAOTIC
             label            str   human-readable state name
             adx_value        float|None
-            adx_momentum     str   'rising'|'stable'|'exhausting'|'collapsing'
+            adx_momentum     str   'strengthening'|'stable'|'exhausting'|'collapsing'
             ranging_penalty  float  calculated score penalty
             confidence       str   'high'|'medium'|'low'
+            bb_width_pct     float|None  BB width percentile for transparency
     """
     cfg = config or CONFIG
     _rng = cfg["RANGING"].get(pair_type, cfg["RANGING"].get("commodity", {"dead": 15, "choppy": 20, "dead_pen": 3.0, "choppy_pen": 1.5}))
@@ -43,7 +46,7 @@ def detect_regime(h4_snap: dict, pair_type: str, config: dict | None = None) -> 
         _trans_pen = 1.5 if adx_mom == "collapsing" else 0.8
         ranging_penalty += _trans_pen
 
-    # Determine state
+    # Determine state from ADX
     if adx_val is None:
         state = 1
         label = "TRANSITIONAL"
@@ -52,7 +55,7 @@ def detect_regime(h4_snap: dict, pair_type: str, config: dict | None = None) -> 
         state = 2
         label = "CHAOTIC"
         confidence = "high" if adx_val is not None and adx_val < _rng["dead"] else "medium"
-    elif adx_val >= _rng["choppy"] and adx_mom in ("stable", "rising"):
+    elif adx_val >= _rng["choppy"] and adx_mom in ("stable", "strengthening"):
         state = 0
         label = "TRENDING"
         confidence = "high" if adx_val >= 35 else "medium"
@@ -61,6 +64,21 @@ def detect_regime(h4_snap: dict, pair_type: str, config: dict | None = None) -> 
         label = "TRANSITIONAL"
         confidence = "medium" if adx_val >= _rng["dead"] else "low"
 
+    # BB width percentile confirmation — upgrade/downgrade confidence
+    if bb_width_pct is not None:
+        if state == 0 and bb_width_pct <= 25:
+            # ADX says trending but BB says compressed — disagreement → downgrade
+            confidence = "low"
+        elif state == 0 and bb_width_pct >= 60:
+            # ADX says trending AND BB is wide — both agree → upgrade
+            confidence = "high"
+        elif state == 2 and bb_width_pct >= 75:
+            # ADX says chaotic AND BB is wide — both agree → high confidence chaos
+            confidence = "high"
+        elif state == 2 and bb_width_pct <= 25:
+            # ADX says chaotic but BB is compressed — may be a squeeze, not chaos
+            confidence = "low"
+
     return {
         "state": state,
         "label": label,
@@ -68,4 +86,5 @@ def detect_regime(h4_snap: dict, pair_type: str, config: dict | None = None) -> 
         "adx_momentum": adx_mom,
         "ranging_penalty": ranging_penalty,
         "confidence": confidence,
+        "bb_width_pct": bb_width_pct,
     }

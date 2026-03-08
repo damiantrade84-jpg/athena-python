@@ -70,6 +70,23 @@ _MT5_SYMBOL_MAP = {
     "QQQ":   "QQQ",
     "GLD":   "GLD",
     "TLT":   "TLT",
+    # JSE Stocks — standard JSE ticker codes (verify against your broker's Market Watch)
+    # Common SA brokers (Khwezi, GT247, Purple Group) use these exact codes.
+    # If your broker appends a suffix (e.g. "NPN.JSE"), update accordingly.
+    "Naspers":    "NPN",
+    "Sasol":      "SOL",
+    "Std Bank":   "SBK",
+    "Anglo Am":   "AGL",
+    "MTN Group":  "MTN",
+    "Shoprite":   "SHP",
+    "Richemont":  "CFR",
+    "FirstRand":  "FSR",
+    "Absa":       "ABG",
+    "Capitec":    "CPI",
+    "Prosus":     "PRX",
+    "Gold Fields":"GFI",
+    "AngloGold":  "ANG",
+    "Sibanye":    "SSW",
 }
 
 # Connection state

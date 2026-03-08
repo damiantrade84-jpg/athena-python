@@ -160,7 +160,7 @@ def bybit_get_account() -> dict | None:
         free  = usdt.get("free",  0) or 0
         return {
             "exchange": "Bybit",
-            "testnet": os.environ.get("BYBIT_TESTNET", "true").lower() in ("true", "1", "yes"),
+            "testnet": os.environ.get("BYBIT_TESTNET", "false").lower() in ("true", "1", "yes"),
             "balance": total,
             "equity": total,
             "freeBalance": free,
@@ -190,12 +190,17 @@ def bybit_get_positions() -> list:
             symbol_raw = pos.get("symbol", "")
             # Convert BTC/USDT:USDT back to display format BTC/USDT
             display = symbol_raw.split(":")[0] if ":" in symbol_raw else symbol_raw
+            # markPrice: ccxt stores as "markPrice" in info or top-level
+            mark_price = float(pos.get("markPrice") or pos.get("info", {}).get("markPrice") or 0)
             positions.append({
                 "pair": display,
                 "symbol": symbol_raw,
                 "volume": size,
+                "contracts": size,
                 "side": pos.get("side", ""),
                 "entryPrice": entry,
+                "markPrice": mark_price,
+                "lastPrice": mark_price,
                 "unrealizedPnl": float(pos.get("unrealizedPnl", 0) or 0),
                 "notional": round(notional, 2),
                 "risk_amount": est_risk,

@@ -8,15 +8,27 @@ from datetime import datetime, timezone
 from config import CONFIG
 from indicators import (
     calc_rsi, calc_fib, calc_fib_proximity, calc_rsi_divergence, calc_weinstein_stage,
+    calc_bb_width_percentile, calc_obv_trend, calc_squeeze,
 )
 from regime import detect_regime
 
 log = logging.getLogger("athena")
 
 
-def get_session() -> dict:
-    """Determine current forex session (Asian/London/NY/Overlap) from UTC hour."""
-    h = datetime.now(timezone.utc).hour
+def get_session(bar_time: str | None = None) -> dict:
+    """Determine forex session from UTC hour.
+
+    bar_time: ISO timestamp string of the bar being evaluated (for backtesting).
+              If None, uses current wall-clock time (live mode).
+    """
+    if bar_time:
+        try:
+            dt = datetime.fromisoformat(bar_time.replace("Z", "+00:00"))
+            h = dt.hour
+        except Exception:
+            h = datetime.now(timezone.utc).hour
+    else:
+        h = datetime.now(timezone.utc).hour
     if 7  <= h < 9:  return {"name": "London Open",         "quality": "high",   "color": "#22c55e"}
     if 13 <= h < 16: return {"name": "London/NY Overlap",   "quality": "high",   "color": "#22c55e"}
     if 9  <= h < 13: return {"name": "London",              "quality": "medium",  "color": "#3b82f6"}
@@ -96,105 +108,134 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
                     d1_candles: list | None = None,
                     h4_candles: list | None = None,
                     h1_candles: list | None = None,
-                    funding_rate: float | None = None) -> dict:
-    """Weighted confluence system — higher timeframes score more than lower timeframes.
+                    funding_rate: float | None = None,
+                    volume_threshold: float | None = None,
+                    bar_time: str | None = None) -> dict:
+    """Spec-aligned confluence system with per-class vote routing.
 
-    Vote weights:
-      D1 Trend Gate      = 2.0  (primary trend filter)
-      D1 ADX Trend       = 1.5  (confirms D1 is trending)
-      D1 Weinstein Stage = 1.5  (independent cycle stage)
-      H4 MACD Momentum   = 1.5  (Elder Screen 2 momentum wave)
-      H4 RSI Zone        = 1.0  (Cardwell regime health)
-      H4 Stochastic      = 1.0  (entry timing)
-      H1 EMA Entry       = 1.0  (Elder Screen 3 trigger)
-      H1 BB Pullback     = 0.5  (noise-prone)
-      H1 RSI Divergence  = 1.0  (strong reversal signal)
-      H4 Fib Level       = 1.0  (Murphy price-at-fib)
-      Funding Rate       = 1.0  (crypto only; extreme funding signals overextension)
-    Max score = 13.0 (non-crypto) / 14.0 (crypto, when funding rate available)
+    Categories (balanced to ~25/25/25/17/8 split):
+      TREND:     D1 Trend Gate (2.0) + H1 EMA Entry (1.0)
+      MOMENTUM:  D1 ADX Strength (1.0) + H4 MACD (1.0) + H4 Oscillator (1.0)
+      FLOW:      Volume (1.0) + Funding/Session per class (1.0)
+      STRUCTURE: H4 Fib (1.0) + H1 BB Pullback (1.0)
+      CYCLE:     Weinstein (1.0 stocks, 0 crypto/forex — AI context only)
+    BONUS:       H1 RSI Divergence (+1.0 when detected)
+    Per-class max varies: crypto ~9.25, forex ~9.0, stock ~10.0, commodity/index ~9.5
+    All indicators STILL COMPUTED and fed to Marcus Reid AI regardless of per-class weight.
     """
     v: dict = {}
     w: list = []
     bull = bear = 0.0
     s = d1["snap"]; s4 = h4["snap"]; s1 = h1["snap"]
     _ptype = pair["type"]
+    _vw = CONFIG.get("VOTE_WEIGHTS", {}).get(_ptype, CONFIG.get("VOTE_WEIGHTS", {}).get("stock", {}))
 
-    # ── VOTE 1: D1 Trend Gate — weight 2.0 ──────────────────────────────────
-    W1 = 1.0 if _ptype == "forex" else 2.0
+    # ── CAT 1 / TREND: D1 Trend Gate — per-class weight ─────────────────────
+    W_TREND = _vw.get("d1_trend", 2.0)
     d1_trend = 0
     if s["ema21"] and s["ema50"] and s["ema200"]:
         if s["ema21"] > s["ema50"] > s["ema200"]:
-            v["D1 Trend Gate"] = 1;  bull += W1; d1_trend = 1
+            v["D1 Trend Gate"] = 1;  bull += W_TREND; d1_trend = 1
         elif s["ema21"] < s["ema50"] < s["ema200"]:
-            v["D1 Trend Gate"] = -1; bear += W1; d1_trend = -1
-        elif _ptype == "crypto" and s["ema21"] > s["ema50"]:
-            v["D1 Trend Gate"] = 1; bull += 1.0; d1_trend = 1
-            w.append("D1 EMA partial — ema21>ema50 but ema200 not aligned (crypto partial credit 1.0)")
-        elif _ptype == "crypto" and s["ema21"] < s["ema50"]:
-            v["D1 Trend Gate"] = -1; bear += 1.0; d1_trend = -1
-            w.append("D1 EMA partial — ema21<ema50 but ema200 not aligned (crypto partial credit 1.0)")
+            v["D1 Trend Gate"] = -1; bear += W_TREND; d1_trend = -1
+        elif s["ema21"] > s["ema50"]:
+            v["D1 Trend Gate"] = 1; bull += W_TREND * 0.5; d1_trend = 1
+            w.append(f"D1 EMA partial — ema21>ema50 but ema200 not aligned (partial credit {W_TREND * 0.5:.1f})")
+        elif s["ema21"] < s["ema50"]:
+            v["D1 Trend Gate"] = -1; bear += W_TREND * 0.5; d1_trend = -1
+            w.append(f"D1 EMA partial — ema21<ema50 but ema200 not aligned (partial credit {W_TREND * 0.5:.1f})")
         else:
             v["D1 Trend Gate"] = 0; w.append("D1 EMA stack mixed — no clear trend")
     else:
         v["D1 Trend Gate"] = 0
 
-    # ── VOTE 2: D1 ADX Trend Strength — weight 1.5 ──────────────────────────
-    W2 = 1.5
+    # ── CAT 2 / MOMENTUM: D1 ADX Strength — STRENGTH ONLY, not direction ────
+    W_ADX = _vw.get("d1_adx", 1.0)
     d1_adx = s.get("adx"); d1_pdi = s.get("plusDI"); d1_mdi = s.get("minusDI")
     _adx_min = CONFIG["ADX_TREND_MIN_CLASS"].get(_ptype, 25)
     _d1_adx_pct = s.get("adxPct")
-    if d1_adx is not None and d1_pdi is not None and d1_mdi is not None:
-        if _d1_adx_pct is not None and _d1_adx_pct >= 75:  _w2 = W2
-        elif _d1_adx_pct is not None and _d1_adx_pct >= 50: _w2 = 1.0
-        elif d1_adx >= _adx_min:                             _w2 = 0.5
-        else:                                                 _w2 = 0
-        if _w2 > 0:
-            if d1_pdi > d1_mdi: v["D1 ADX Trend"] = 1;  bull += _w2
-            else:               v["D1 ADX Trend"] = -1; bear += _w2
+    _adx_strength = 0
+    if d1_adx is not None:
+        if _d1_adx_pct is not None and _d1_adx_pct >= 75:    _adx_strength = W_ADX
+        elif _d1_adx_pct is not None and _d1_adx_pct >= 50:  _adx_strength = W_ADX * 0.67
+        elif d1_adx >= _adx_min:                               _adx_strength = W_ADX * 0.33
+        if _adx_strength > 0:
+            v["D1 ADX Strength"] = 1
+            if d1_trend == 1:    bull += _adx_strength
+            elif d1_trend == -1: bear += _adx_strength
+            else:
+                if d1_pdi is not None and d1_mdi is not None:
+                    if d1_pdi > d1_mdi: bull += _adx_strength
+                    else:               bear += _adx_strength
+                else:
+                    bull += _adx_strength * 0.5; bear += _adx_strength * 0.5
         else:
-            v["D1 ADX Trend"] = 0
+            v["D1 ADX Strength"] = 0
             w.append(f"D1 ADX weak ({d1_adx:.1f}, pct:{_d1_adx_pct}) — below {_ptype} threshold ({_adx_min})")
     else:
-        v["D1 ADX Trend"] = 0
+        v["D1 ADX Strength"] = 0
 
-    # ── VOTE 3: D1 Weinstein Stage — weight 1.5 ─────────────────────────────
-    W3 = 1.5
+    # ── CAT 5 / CYCLE: Weinstein Stage — per-class weight ───────────────────
+    W_WEIN = _vw.get("weinstein", 0.0)
     weinstein_stage = weinstein_label = None
     _wein_lb = CONFIG["WEINSTEIN_LOOKBACK"].get(_ptype, 150)
     if d1_candles:
         weinstein_stage, weinstein_label = calc_weinstein_stage(d1_candles, lookback=_wein_lb)
-        if weinstein_stage == 2:   v["D1 Weinstein Stage"] = 1;  bull += W3
-        elif weinstein_stage == 4: v["D1 Weinstein Stage"] = -1; bear += W3
-        elif weinstein_stage == 3:
-            v["D1 Weinstein Stage"] = 0
-            w.append(f"Weinstein {weinstein_label} — potential distribution, avoid new longs")
-        elif weinstein_stage == 1:
-            v["D1 Weinstein Stage"] = 0
-            w.append(f"Weinstein {weinstein_label} — basing, wait for Stage 2 breakout")
+        if W_WEIN > 0:
+            if weinstein_stage == 2:   v["D1 Weinstein Stage"] = 1;  bull += W_WEIN
+            elif weinstein_stage == 4: v["D1 Weinstein Stage"] = -1; bear += W_WEIN
+            elif weinstein_stage == 3:
+                v["D1 Weinstein Stage"] = 0
+                w.append(f"Weinstein {weinstein_label} — potential distribution, avoid new longs")
+            elif weinstein_stage == 1:
+                v["D1 Weinstein Stage"] = 0
+                w.append(f"Weinstein {weinstein_label} — basing, wait for Stage 2 breakout")
+            else:
+                v["D1 Weinstein Stage"] = 0
         else:
             v["D1 Weinstein Stage"] = 0
+            if weinstein_stage in (3, 1):
+                w.append(f"Weinstein {weinstein_label} — AI context only for {_ptype} (weight=0)")
     else:
         v["D1 Weinstein Stage"] = 0
 
     hard_long_block  = (v["D1 Trend Gate"] == -1)
     hard_short_block = (v["D1 Trend Gate"] == 1)
 
-    # ── FOREX SESSION FILTER ─────────────────────────────────────────────────
-    _forex_session_pen = 0.0
-    if _ptype == "forex":
-        _sess = get_session()
-        _is_asia_active = any(x in pair["display"] for x in ["AUD", "NZD"])
-        if _sess["quality"] == "low" and not _is_asia_active:
-            _forex_session_pen = 1.5
-            w.append(f"FOREX SESSION: {_sess['name']} — off-hours, low-expansion window, score penalised -1.5")
-        elif _sess["quality"] == "low" and _is_asia_active:
-            w.append(f"FOREX SESSION: {_sess['name']} — but {pair['display']} is active during Asian hours (no penalty)")
+    # ── CAT 3 / FLOW: Session Quality — scored for forex, warning for others ─
+    W_SESS = _vw.get("session", 0.0)
+    # bar_time: use historical bar timestamp in backtest so session vote reflects
+    # when the trade would actually have been taken, not the current wall-clock time.
+    _bar_ts = bar_time
+    if not _bar_ts and h4_candles:
+        _bar_ts = (h4_candles[-1] or {}).get("time")
+    _sess = get_session(_bar_ts)
+    _is_asia_active = any(x in pair["display"] for x in ["AUD", "NZD"])
+    if W_SESS > 0:
+        if _sess["quality"] == "high":
+            v["Session Quality"] = 1
+            bull += W_SESS * 0.5; bear += W_SESS * 0.5
+        elif _sess["quality"] == "medium":
+            v["Session Quality"] = 0
+        elif _is_asia_active:
+            v["Session Quality"] = 0
+            w.append(f"FOREX SESSION: {_sess['name']} — {pair['display']} active during Asian hours")
+        else:
+            v["Session Quality"] = -1
+            w.append(f"FOREX SESSION: {_sess['name']} — off-hours, low-expansion window")
+    else:
+        v["Session Quality"] = 0
+        if _ptype == "forex" and _sess["quality"] == "low" and not _is_asia_active:
+            w.append(f"FOREX SESSION: {_sess['name']} — off-hours (warning only for {_ptype})")
 
     # ── RANGING SUPPRESSION — via detect_regime ──────────────────────────────
     adx_val = s4["adx"]; adx_prev = s4.get("adxPrev")
     _adx_mom = s4.get("adxMomentum", "stable"); _adx_slope = s4.get("adxSlope", 0)
     _rng = CONFIG["RANGING"].get(pair["type"], CONFIG["RANGING"]["commodity"])
-    _regime = detect_regime(s4, _ptype)
+    _bbw_pct = None
+    if h4_candles and len(h4_candles) >= 50:
+        _bbw_pct, _bbw_lbl = calc_bb_width_percentile(h4_candles)
+    _regime = detect_regime(s4, _ptype, bb_width_pct=_bbw_pct)
     ranging_penalty = _regime["ranging_penalty"]
     if adx_val is not None and adx_val < _rng["dead"]:
         w.append(f"DEAD RANGING: H4 ADX={adx_val:.1f} (<{_rng['dead']}) — score penalised -{_rng['dead_pen']}, avoid entirely")
@@ -202,19 +243,18 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
         w.append(f"CHOPPY MARKET: H4 ADX={adx_val:.1f} (<{_rng['choppy']}) — score penalised -{_rng['choppy_pen']}")
 
     if _ptype == "crypto" and _adx_mom in ("collapsing", "exhausting"):
-        _trans_pen = 1.5 if _adx_mom == "collapsing" else 0.8
-        w.append(f"REGIME TRANSITION: H4 ADX {_adx_mom} (slope={_adx_slope}) — trend fading, -{_trans_pen} penalty")
+        w.append(f"REGIME TRANSITION: H4 ADX {_adx_mom} (slope={_adx_slope}) — trend fading (warning only)")
 
-    # ── VOTE 4: H4 MACD Momentum — weight 1.5 ───────────────────────────────
-    W4 = 1.5
+    # ── CAT 2 / MOMENTUM: H4 MACD — per-class weight ────────────────────────
+    W_MACD = _vw.get("h4_macd", 1.0)
     if s4["macdLine"] is not None and s4["macdSignal"] is not None and s4["macdHist"] is not None:
         hist_now = s4["macdHist"]; hist_prev = s4.get("macdHistPrev")
         if s4["macdLine"] > s4["macdSignal"] and hist_now > 0:
-            v["H4 MACD Momentum"] = 1; bull += W4
+            v["H4 MACD Momentum"] = 1; bull += W_MACD
             if hist_prev is not None and hist_now < hist_prev:
                 w.append("H4 MACD histogram decelerating — momentum fading")
         elif s4["macdLine"] < s4["macdSignal"] and hist_now < 0:
-            v["H4 MACD Momentum"] = -1; bear += W4
+            v["H4 MACD Momentum"] = -1; bear += W_MACD
             if hist_prev is not None and hist_now > hist_prev:
                 w.append("H4 MACD histogram decelerating — momentum fading")
         else:
@@ -222,97 +262,134 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
     else:
         v["H4 MACD Momentum"] = 0
 
-    # ── VOTE 5: H4 RSI Zone — weight 1.0 ────────────────────────────────────
-    W5 = 1.0; r4 = s4["rsi"]
+    # ── CAT 2 / MOMENTUM: H4 Oscillator (merged RSI + Stoch) — per-class ────
+    W_OSC = _vw.get("h4_oscillator", 1.0)
+    r4 = s4["rsi"]
     _rsi_b = CONFIG["RSI_BOUNDS"].get(_ptype, {"ob": 78, "os": 22})
-    if r4 is not None:
-        if 45 < r4 < _rsi_b["ob"]:
-            v["H4 RSI Zone"] = 1;  bull += W5
-        elif _rsi_b["os"] < r4 < 55:
-            v["H4 RSI Zone"] = -1; bear += W5
-        elif r4 >= _rsi_b["ob"]:
-            v["H4 RSI Zone"] = 0; w.append(f"H4 RSI overbought ({r4:.0f} >= {_rsi_b['ob']}) — wait for pullback")
-        elif r4 <= _rsi_b["os"]:
-            v["H4 RSI Zone"] = 0; w.append(f"H4 RSI oversold ({r4:.0f} <= {_rsi_b['os']}) — wait for bounce")
-        else:
-            v["H4 RSI Zone"] = 0
-    else:
-        v["H4 RSI Zone"] = 0
-
-    # ── VOTE 6: H4 Stochastic — weight 1.0 ──────────────────────────────────
-    W6 = 1.0
     lK = stoch["k"][-1] if stoch["k"] and stoch["k"][-1] is not None else None
     lD = stoch["d"][-1] if stoch["d"] and stoch["d"][-1] is not None else None
+    _rsi_dir = 0; _stoch_dir = 0
+    if r4 is not None:
+        if 45 < r4 < _rsi_b["ob"]:      _rsi_dir = 1
+        elif _rsi_b["os"] < r4 < 55:    _rsi_dir = -1
+        elif r4 >= _rsi_b["ob"]:
+            w.append(f"H4 RSI overbought ({r4:.0f} >= {_rsi_b['ob']}) — wait for pullback")
+        elif r4 <= _rsi_b["os"]:
+            w.append(f"H4 RSI oversold ({r4:.0f} <= {_rsi_b['os']}) — wait for bounce")
     if lK is not None and lD is not None:
-        if   lK > lD and lK < 35:       v["H4 Stochastic"] = 1;  bull += W6
-        elif lK < lD and lK > 65:       v["H4 Stochastic"] = -1; bear += W6
-        elif lK > lD and 35 <= lK <= 55: v["H4 Stochastic"] = 1;  bull += W6
-        elif lK < lD and 45 <= lK <= 65: v["H4 Stochastic"] = -1; bear += W6
-        else:                            v["H4 Stochastic"] = 0
+        if   lK > lD and lK < 35:        _stoch_dir = 1
+        elif lK < lD and lK > 65:        _stoch_dir = -1
+        elif lK > lD and 35 <= lK <= 55: _stoch_dir = 1
+        elif lK < lD and 45 <= lK <= 65: _stoch_dir = -1
+    if _rsi_dir != 0 and _stoch_dir != 0 and _rsi_dir == _stoch_dir:
+        v["H4 Oscillator"] = _rsi_dir
+        if _rsi_dir == 1: bull += W_OSC
+        else:              bear += W_OSC
+    elif _rsi_dir != 0:
+        v["H4 Oscillator"] = _rsi_dir
+        if _rsi_dir == 1: bull += W_OSC * 0.5
+        else:              bear += W_OSC * 0.5
+        w.append(f"H4 Oscillator split — RSI={_rsi_dir}, Stoch={'neutral' if _stoch_dir == 0 else 'opposite'} (half credit)")
+    elif _stoch_dir != 0:
+        v["H4 Oscillator"] = _stoch_dir
+        if _stoch_dir == 1: bull += W_OSC * 0.5
+        else:                bear += W_OSC * 0.5
+        w.append(f"H4 Oscillator split — Stoch={_stoch_dir}, RSI neutral (half credit)")
     else:
-        v["H4 Stochastic"] = 0
+        v["H4 Oscillator"] = 0
 
-    # ── VOTE 7: H1 EMA Entry — weight 1.0 ───────────────────────────────────
-    W7 = 1.0
+    # ── CAT 1 / TREND: H1 EMA Entry — per-class weight ──────────────────────
+    W_H1EMA = _vw.get("h1_ema", 1.0)
     if s1["ema21"] and s1["ema50"]:
-        if s1["ema21"] > s1["ema50"]: v["H1 EMA Entry"] = 1;  bull += W7
-        else:                          v["H1 EMA Entry"] = -1; bear += W7
+        if s1["ema21"] > s1["ema50"]: v["H1 EMA Entry"] = 1;  bull += W_H1EMA
+        else:                          v["H1 EMA Entry"] = -1; bear += W_H1EMA
     else:
         v["H1 EMA Entry"] = 0
 
-    # ── VOTE 8: H1 BB Pullback Zone — weight 0.5 ────────────────────────────
-    W8 = 0.5
+    # ── CAT 4 / STRUCTURE: H1 BB Pullback — per-class weight (upgraded) ─────
+    W_BB = _vw.get("h1_bb", 1.0)
     if s1["bbUpper"] is not None and s1["bbLower"] is not None:
         bbr = s1["bbUpper"] - s1["bbLower"]; cl1_p = s1.get("close")
         if bbr > 0 and cl1_p is not None:
             bbp = (cl1_p - s1["bbLower"]) / bbr
-            if bbp < 0.25:   v["H1 BB Pullback"] = 1;  bull += W8
-            elif bbp > 0.75: v["H1 BB Pullback"] = -1; bear += W8
+            if bbp < 0.25:   v["H1 BB Pullback"] = 1;  bull += W_BB
+            elif bbp > 0.75: v["H1 BB Pullback"] = -1; bear += W_BB
             else:            v["H1 BB Pullback"] = 0
         else:
             v["H1 BB Pullback"] = 0
     else:
         v["H1 BB Pullback"] = 0
 
-    # ── VOTE 9: H1 RSI Divergence — weight 1.0 ──────────────────────────────
-    W9 = 1.0
+    # ── BONUS: H1 RSI Divergence — per-class weight (not in base max) ───────
+    W_DIV = _vw.get("divergence", 1.0)
     if h1_candles:
         h1_div = calc_rsi_divergence(h1_candles)
         if h1_div == "bullish":
-            v["H1 RSI Divergence"] = 1;  bull += W9
+            v["H1 RSI Divergence"] = 1;  bull += W_DIV
             w.append("H1 RSI Bullish Divergence — reversal signal (Wilder)")
         elif h1_div == "bearish":
-            v["H1 RSI Divergence"] = -1; bear += W9
+            v["H1 RSI Divergence"] = -1; bear += W_DIV
             w.append("H1 RSI Bearish Divergence — reversal signal (Wilder)")
         else:
             v["H1 RSI Divergence"] = 0
     else:
         v["H1 RSI Divergence"] = 0
 
-    # ── VOTE 10: H4 Fib Confluence — weight 1.0 ─────────────────────────────
-    W10 = 1.0
+    # ── CAT 4 / STRUCTURE: H4 Fib Confluence — per-class weight ─────────────
+    W_FIB = _vw.get("h4_fib", 1.0)
     if h4_candles:
         h4_fib = calc_fib(h4_candles)
         fib_vote = calc_fib_proximity(s4.get("close", 0) or 0, h4_fib)
         v["H4 Fib Level"] = fib_vote
-        if fib_vote == 1:    bull += W10
-        elif fib_vote == -1: bear += W10
+        if fib_vote == 1:    bull += W_FIB
+        elif fib_vote == -1: bear += W_FIB
     else:
         v["H4 Fib Level"] = 0
 
-    # ── VOTE 11: Funding Rate — weight 1.0 (crypto only) ────────────────────
-    W11 = 1.0
+    # ── CAT 3 / FLOW: Volume Ratio — promoted to scored vote (non-forex) ────
+    W_VOL = _vw.get("volume", 0.0)
+    _vol_thr = CONFIG["VOLUME_THRESHOLD"] if volume_threshold is None else float(volume_threshold)
+    if W_VOL > 0:
+        if vr >= _vol_thr:
+            v["Volume"] = 1
+            if d1_trend == 1 or bull > bear: bull += W_VOL
+            else:                             bear += W_VOL
+            w.append(f"High volume ({vr:.1f}x avg) confirms move (+{W_VOL})")
+        else:
+            v["Volume"] = 0
+            if max(bull, bear) >= 4:
+                w.append(f"Low volume ({vr:.1f}x avg) — confirm before entry")
+    else:
+        v["Volume"] = 0
+        if _ptype != "forex" and vr >= _vol_thr:
+            w.append(f"High volume ({vr:.1f}x) confirms move (warning only for {_ptype})")
+        elif _ptype != "forex" and max(bull, bear) >= 4:
+            w.append(f"Low volume ({vr:.1f}x avg) — confirm before entry")
+
+    # ── OBV trend confirmation (warning-only, not a scored vote) ─────────────
+    if h4_candles and _ptype != "forex":
+        _obv = calc_obv_trend(h4_candles, lookback=20)
+        if _obv == "diverging_bearish":
+            w.append("OBV BEARISH DIVERGENCE: price rising but volume accumulation falling — rally may be exhausting")
+        elif _obv == "diverging_bullish":
+            w.append("OBV BULLISH DIVERGENCE: price falling but volume accumulation rising — selling pressure weakening")
+
+    # ── CAT 3 / FLOW: Funding Rate — per-class weight (crypto only) ─────────
+    W_FUND = _vw.get("funding", 0.0)
     _funding_vote_active = False
     if _ptype == "crypto" and funding_rate is not None:
         _funding_vote_active = True
-        if funding_rate > 0.001:  # above 0.1% — extreme
+        if funding_rate > 0.001:
             w.append(f"EXTREME FUNDING: {funding_rate*100:.4f}% — overleveraged, reversal risk")
-        if funding_rate < 0.0001:  # below 0.01% — favorable for LONG
-            v["Funding Rate"] = 1;  bull += W11
-        elif funding_rate > 0.0005:  # above 0.05% — favorable for SHORT
-            v["Funding Rate"] = -1; bear += W11
+        if W_FUND > 0:
+            if funding_rate < 0.0001:
+                v["Funding Rate"] = 1;  bull += W_FUND
+            elif funding_rate > 0.0005:
+                v["Funding Rate"] = -1; bear += W_FUND
+            else:
+                v["Funding Rate"] = 0
         else:
-            v["Funding Rate"] = 0  # neutral 0.01%–0.05%
+            v["Funding Rate"] = 0
     else:
         v["Funding Rate"] = 0
 
@@ -328,6 +405,22 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
             w.append(f"ATR COMPRESSION BREAKOUT: ATR pct={_atr_pct} (25th) expanding (+0.5)")
         elif _atr_pct >= 75:
             w.append(f"ATR EXTENDED: ATR pct={_atr_pct} (75th+) — already extended, late entry risk")
+
+    # Volatility squeeze detection (BB inside Keltner) — all asset classes
+    if h4_candles and len(h4_candles) >= 25:
+        _squeeze = calc_squeeze(h4_candles)
+        if _squeeze and _squeeze["active"]:
+            _sq_bars = _squeeze["bars"]
+            _sq_mom = _squeeze["momentum"]
+            if _sq_bars >= 6:
+                # Sustained squeeze — breakout imminent, add bonus
+                if _sq_mom == "bullish" and (d1_trend == 1 or bull > bear):
+                    bull += 0.5
+                elif _sq_mom == "bearish" and (d1_trend == -1 or bear > bull):
+                    bear += 0.5
+                w.append(f"VOLATILITY SQUEEZE: BB inside Keltner for {_sq_bars} bars — {_sq_mom} breakout likely (+0.5)")
+            else:
+                w.append(f"VOLATILITY SQUEEZE: BB inside Keltner for {_sq_bars} bars — watch for breakout")
 
     # Range mean-reversion mode
     _entry_mode = "trend"
@@ -345,13 +438,6 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
                 elif _h4_bbp > 0.80: direction = "SHORT"
                 w.append(f"MEAN-REVERT: BB%={_h4_bbp:.2f}, ranging penalty reduced — fade to BB mid")
 
-    # Volume context (non-forex only)
-    if _ptype != "forex":
-        if vr >= CONFIG["VOLUME_THRESHOLD"]:
-            w.append(f"High volume ({vr:.1f}x) confirms move")
-        elif max(bull, bear) >= 5:
-            w.append(f"Low volume ({vr:.1f}x avg) — confirm before entry")
-
     # Intermarket: BTC bias for alts
     if pair["type"] == "crypto" and pair["symbol"] != "BTCUSDT":
         if direction == "LONG"  and btc_bias == "bearish":
@@ -359,11 +445,11 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
         elif direction == "SHORT" and btc_bias == "bullish":
             w.append("BTC bullish — alt SHORT is counter-trend risk")
 
-    # Final score
+    # Final score — one penalty per condition (no stacking)
     raw_score = max(bull, bear)
-    score = max(0.0, raw_score - ranging_penalty - _forex_session_pen)
+    score = max(0.0, raw_score - ranging_penalty)
 
-    _ct_pen = abs(CONFIG["COUNTER_TREND_PEN"].get(_ptype, -3.0))
+    _ct_pen = abs(CONFIG["COUNTER_TREND_PEN"].get(_ptype, -1.0))
     if direction == "LONG" and hard_long_block:
         w.append(f"COUNTER-TREND: D1 bearish — Elder Triple Screen violation, -{_ct_pen} score")
         score = max(0.0, score - _ct_pen)
@@ -387,7 +473,8 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
         w.append("Wide SL > 3% of price — size down")
 
     spread = round(abs(bull - bear), 1)
-    effective_max = 14.0 if (_ptype == "crypto" and _funding_vote_active) else None  # None = caller uses _max_score_for_pair
+    # Per-class base max from VOTE_WEIGHTS (sum all non-divergence weights)
+    _base_max = sum(v for k, v in _vw.items() if k != "divergence")
     return {
         "score": score, "votes": v, "direction": direction,
         "bull": round(bull, 1), "bear": round(bear, 1), "spread": spread,
@@ -396,5 +483,5 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
         "entryMode": _entry_mode, "adxMomentum": _adx_mom, "adxSlope": _adx_slope,
         "regime": _regime,
         "fundingRate": funding_rate,
-        "maxScoreOverride": effective_max,
+        "maxScoreOverride": round(_base_max, 2),
     }

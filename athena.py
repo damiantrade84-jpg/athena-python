@@ -145,7 +145,10 @@ class EODHDWebSocketManager:
         url = f"{self.WS_BASE}/{endpoint}?api_token={self._key}"
         while True:
             try:
-                async with websockets.connect(url, ping_interval=30, ping_timeout=10) as ws:
+                async with websockets.connect(url, ping_interval=None) as ws:
+                    # EODHD manages keepalive at application layer (heartbeat messages).
+                    # WebSocket-level pings cause 1011 errors because EODHD doesn't respond
+                    # to protocol-level PINGs — disable them and rely on app heartbeats.
                     sub = json.dumps({"action": "subscribe", "symbols": ",".join(tickers)})
                     await ws.send(sub)
                     log.info(f"[WS] {endpoint}: subscribed to {len(tickers)} tickers")
@@ -221,7 +224,8 @@ class EODHDWebSocketManager:
             asyncio.set_event_loop(self._loop)
             # Subscribe ALL WS-capable pairs (not just active) so candle builder gets full coverage
             # WS supports: US stocks/ETFs (us endpoint), forex/commodities (forex endpoint), crypto (crypto endpoint)
-            # 50-ticker limit per connection: forex~19, US~14, crypto~18 — all well under limit
+            # 50-ticker limit per connection: forex=20, US=14, crypto=18 → 52 total, all well under limit
+            # NOT on WS (no live prices): INDEX_PAIRS (3), FTSE 100 (1), JSE_PAIRS (14) — use candle close instead
             ws_pairs = list(ALL_PAIRS)
             self._loop.run_until_complete(self._run_all(ws_pairs))
         self._thread = threading.Thread(target=_run, daemon=True, name="eodhd-ws")
@@ -728,11 +732,12 @@ def _atr_for_levels(d1i: dict, h4i: dict, h1i: dict):
     return h1i["snap"].get("atr") or h4i["snap"].get("atr") or d1i["snap"].get("atr")
 
 def _max_score_for_pair(pair: dict) -> float:
-    """Compute theoretical max score from per-class VOTE_WEIGHTS (sum of all vote slots)."""
+    """Compute theoretical max score from per-class VOTE_WEIGHTS (sum of all non-divergence vote slots).
+    Matches maxScoreOverride in calc_confluence — divergence is a bonus above base max."""
     ptype = pair.get("type", "stock")
     weights = CONFIG.get("VOTE_WEIGHTS", {}).get(ptype)
     if weights:
-        return round(sum(weights.values()), 2)
+        return round(sum(v for k, v in weights.items() if k != "divergence"), 2)
     return 12.0
 
 def fetch_yfinance(sym, tf, limit):
@@ -982,13 +987,39 @@ def fetch_polygon(pair, tf, limit):
             return candles[-limit:] if len(candles) > limit else candles
         except Exception as e: log.error(f"[PG] {pair['display']}: {e}"); return None
 
+_candle_cache: dict = {}          # (symbol, tf) → (candles, expiry_epoch)
+_candle_cache_lock = threading.Lock()
+# TTL per timeframe: cache holds until ~1 bar before the next bar is due
+_CANDLE_CACHE_TTL = {"h1": 55 * 60, "h4": 235 * 60, "d1": 23 * 3600}
+
 def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
-    """Route candle fetch to correct source (binance, yfinance, or polygon) based on pair config."""
-    if pair["source"]=="binance": return fetch_binance(pair["symbol"], TF_B[tf], limit)
-    if pair["source"]=="eodhd": return fetch_eodhd(pair, tf, limit)
-    if pair["source"]=="polygon": return fetch_polygon(pair, tf, limit)
-    if pair["source"]=="yfinance": return fetch_yfinance(_yfinance_symbol_for_pair(pair), tf, limit)
-    return None
+    """Route candle fetch to correct source with in-memory TTL cache.
+
+    Caches candle lists per (symbol, tf) so repeated scans within the same bar
+    window reuse data instead of hammering the REST API on every scan.
+    TTL: H1=55 min, H4=3h55m, D1=23h — expires just before the next bar closes.
+    """
+    key = (pair.get("symbol", pair.get("display")), tf)
+    now = time.time()
+    with _candle_cache_lock:
+        entry = _candle_cache.get(key)
+        if entry is not None:
+            candles, expiry = entry
+            if now < expiry:
+                return candles
+
+    # Cache miss or expired — fetch fresh
+    if pair["source"] == "binance":   candles = fetch_binance(pair["symbol"], TF_B[tf], limit)
+    elif pair["source"] == "eodhd":   candles = fetch_eodhd(pair, tf, limit)
+    elif pair["source"] == "polygon": candles = fetch_polygon(pair, tf, limit)
+    elif pair["source"] == "yfinance": candles = fetch_yfinance(_yfinance_symbol_for_pair(pair), tf, limit)
+    else:                              candles = None
+
+    if candles:
+        ttl = _CANDLE_CACHE_TTL.get(tf, 55 * 60)
+        with _candle_cache_lock:
+            _candle_cache[key] = (candles, now + ttl)
+    return candles
 
 from indicators import (
     calc_ema, calc_sma, calc_rsi, calc_macd, calc_atr, calc_adx, calc_bb,
@@ -1818,7 +1849,8 @@ def backtest_pair(pair, style="auto"):
                 e200s = (e200[-1] - e200[-21]) / e200[-21] if e200[-1] and len(e200) >= 21 and e200[-21] else 0
                 res = calc_confluence(d1i, h4i, h1i, vr, stoch, e200s, pair, "neutral",
                                        d1_candles=d1_window, h4_candles=h4_window, h1_candles=h1_window,
-                                       volume_threshold=CONFIG.get("VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"]))
+                                       volume_threshold=CONFIG.get("VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"]),
+                                       bar_time=h4_window[-1].get("time") if h4_window else None)
             except Exception:
                 i += 1; continue
             funnel["total_setups"] += 1
@@ -1946,7 +1978,8 @@ def backtest_pair(pair, style="auto"):
                 e200s = (e200[-1] - e200[-21]) / e200[-21] if e200[-1] and len(e200) >= 21 and e200[-21] else 0
                 res = calc_confluence(h4i, h1i, h1i, vr, stoch, e200s, pair, "neutral",
                                        d1_candles=d1_ctx, h4_candles=h4_window, h1_candles=h1_window,
-                                       volume_threshold=CONFIG.get("VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"]))
+                                       volume_threshold=CONFIG.get("VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"]),
+                                       bar_time=h4_window[-1].get("time") if h4_window else None)
             except Exception:
                 i += 1; continue
             funnel["total_setups"] += 1
@@ -2227,7 +2260,7 @@ def _auth_and_rate_limit():
 
     # Rate limiting
     now = time.time()
-    is_sensitive = path.startswith("/api/execute") or path.startswith("/api/killswitch")
+    is_sensitive = path.startswith("/api/execute") or path.startswith("/api/killswitch") or path.startswith("/api/webhook")
     max_req = (_RATE_EXECUTE_MAX * 4 if _test_mode else _RATE_EXECUTE_MAX) if is_sensitive else _RATE_MAX_REQUESTS
     key = f"{ip}:{path}" if is_sensitive else ip
     if key not in _rate_limits:
@@ -2330,6 +2363,47 @@ def api_execute():
         return jsonify({"error": "DUPLICATE: This signal has already been executed"}), 409
     if force:
         log.warning(f"[EXEC] FORCE EXECUTE: {pair} {sig.get('direction')} (test mode, score {sig.get('confluenceScore', '?')})")
+
+    # ── Auto-refresh stale signals using live price feed ─────────────────────
+    # If the signal is older than SIGNAL_MAX_AGE_SEC/2, re-run analyze_pair now.
+    # _live_prices is updated every tick from the webhook/WebSocket feed, so this
+    # gives execution at the actual current market price, not a stale scan price.
+    _sig_age = 9999
+    _ts_str = sig.get("timestamp", "")
+    if _ts_str:
+        try:
+            _sig_age = (datetime.now(timezone.utc) -
+                        datetime.fromisoformat(_ts_str.replace("Z", "+00:00"))).total_seconds()
+        except Exception:
+            _sig_age = 9999
+    _max_age = CONFIG.get("SIGNAL_MAX_AGE_SEC", 300)
+    if _sig_age > _max_age / 2:  # stale by half the window — refresh proactively
+        _pair_obj = next((p for p in ALL_PAIRS if p["display"] == pair), None)
+        if _pair_obj:
+            try:
+                _btc_bias = "neutral"
+                _fresh = analyze_pair(_pair_obj, _btc_bias, style=sig.get("style", "swing"))
+                if _fresh:
+                    _orig_dir = sig.get("direction", "")
+                    # Merge fresh levels/price/timestamp; preserve user's direction choice
+                    sig["price"]           = _fresh["price"]
+                    sig["sl"]              = _fresh["sl"]
+                    sig["tp1"]             = _fresh["tp1"]
+                    sig["tp2"]             = _fresh["tp2"]
+                    sig["atr"]             = _fresh.get("atr", sig.get("atr", 0))
+                    sig["confluenceScore"] = _fresh["confluenceScore"]
+                    sig["maxScore"]        = _fresh.get("maxScore", sig.get("maxScore", 13))
+                    sig["trendState"]      = _fresh.get("trendState", sig.get("trendState"))
+                    sig["timestamp"]       = _fresh["timestamp"]
+                    if _fresh["direction"] != _orig_dir:
+                        log.warning(f"[EXEC] {pair}: live direction now {_fresh['direction']} vs selected {_orig_dir} — executing {_orig_dir} as requested")
+                    log.info(f"[EXEC] {pair}: signal refreshed @ {_fresh['price']} (was {_sig_age:.0f}s old)")
+            except Exception as _re:
+                log.warning(f"[EXEC] {pair}: live refresh failed ({_re}) — using original signal, refreshing timestamp")
+                sig["timestamp"] = datetime.now(timezone.utc).isoformat()
+        else:
+            # Pair not in ALL_PAIRS (e.g. webhook signal) — just stamp it fresh
+            sig["timestamp"] = datetime.now(timezone.utc).isoformat()
     try:
         from risk_engine import risk_check
         sig_type = sig.get("type", "")
@@ -2402,6 +2476,135 @@ def api_execute():
     except Exception as e:
         log.error(f"[EXEC] execution error: {e}")
         return jsonify({"error": "Execution failed â€” check logs"}), 500
+
+@app.route("/api/webhook", methods=["POST"])
+def api_webhook():
+    """Ingest external signals (e.g. TradingView alerts) and execute via risk engine.
+
+    Payload (all fields required):
+      {
+        "secret":    "WEBHOOK_SECRET from .env (optional but recommended)",
+        "pair":      "BTC/USDT",
+        "type":      "crypto",          # crypto | forex | stock | commodity | index
+        "direction": "LONG",            # LONG | SHORT
+        "price":     65000.0,           # entry price
+        "sl":        63000.0,           # stop-loss
+        "tp1":       68000.0,           # take-profit 1
+        "tp2":       71000.0,           # take-profit 2 (optional)
+        "score":     7.5,               # confluence score (optional, for sizing)
+        "maxScore":  10.0               # max possible score (optional)
+      }
+
+    Returns: same shape as /api/execute (success, ticket, volume, entryPrice, etc.)
+    """
+    if not CONFIG.get("EXECUTION_ENABLED", False):
+        return jsonify({"error": "Execution disabled in config.yaml"}), 403
+    if _kill_switch:
+        return jsonify({"error": "Kill-switch active — webhook blocked"}), 503
+
+    d = request.get_json(force=True, silent=True) or {}
+
+    # Optional shared-secret guard (separate from ATHENA_API_KEY header auth)
+    _wh_secret = os.environ.get("WEBHOOK_SECRET", "")
+    if _wh_secret and d.get("secret", "") != _wh_secret:
+        log.warning(f"[WEBHOOK] {request.remote_addr} rejected — invalid secret")
+        return jsonify({"error": "Unauthorized — invalid webhook secret"}), 401
+
+    # Build minimal signal dict from webhook payload
+    pair_name = d.get("pair", "")
+    direction  = (d.get("direction") or d.get("side") or "").upper()
+    sig_type   = d.get("type", "")
+    price      = d.get("price") or d.get("entry") or 0
+    sl         = d.get("sl") or d.get("stop") or 0
+    tp1        = d.get("tp1") or d.get("tp") or 0
+    tp2        = d.get("tp2", 0)
+
+    if not pair_name or direction not in ("LONG", "SHORT") or not price or not sl or not tp1:
+        return jsonify({"error": "Missing required fields: pair, direction, price, sl, tp1"}), 400
+
+    sig = {
+        "pair":           pair_name,
+        "display":        pair_name,
+        "symbol":         d.get("symbol", pair_name.replace("/", "")),
+        "type":           sig_type,
+        "direction":      direction,
+        "price":          float(price),
+        "sl":             float(sl),
+        "tp1":            float(tp1),
+        "tp2":            float(tp2) if tp2 else float(tp1),
+        "confluenceScore": float(d.get("score", 5.0)),
+        "maxScore":        float(d.get("maxScore", 10.0)),
+        "timestamp":      datetime.now(timezone.utc).isoformat(),
+        "trendState":     d.get("trendState", "DEVELOPING"),
+    }
+
+    # Duplicate guard — webhook signals use pair+direction+minute-bucket as key
+    _minute = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
+    sig_id = f"wh_{pair_name}_{direction}_{_minute}"
+    if sig_id in _executed_signals:
+        log.info(f"[WEBHOOK] Duplicate suppressed: {sig_id}")
+        return jsonify({"error": "DUPLICATE: webhook signal already fired this minute"}), 409
+
+    try:
+        from risk_engine import risk_check
+        is_crypto = sig_type == "crypto"
+        if is_crypto:
+            from bybit_executor import bybit_get_account, bybit_get_positions, bybit_get_symbol_info, bybit_execute
+            account = bybit_get_account()
+            if not account:
+                return jsonify({"error": "Bybit not connected"}), 503
+            positions  = bybit_get_positions()
+            symbol_info = bybit_get_symbol_info(pair_name)
+        else:
+            from mt5_executor import mt5_get_account, mt5_get_positions, mt5_get_symbol_info, mt5_execute
+            account = mt5_get_account()
+            if not account:
+                return jsonify({"error": "MT5 not connected"}), 503
+            positions  = mt5_get_positions()
+            symbol_info = mt5_get_symbol_info(pair_name)
+
+        approval = risk_check(
+            signal=sig,
+            account_balance=account["balance"],
+            account_equity=account["equity"],
+            open_positions=positions,
+            symbol_info=symbol_info,
+            kill_switch=_kill_switch,
+            sizing_override=float(d.get("sizingOverride", 1.0)),
+        )
+        if not approval.approved:
+            log.warning(f"[WEBHOOK] {pair_name} REJECTED: {approval.reason}")
+            return jsonify({"error": f"Risk engine rejected: {approval.reason}", "approval": approval.to_dict()}), 200
+
+        if is_crypto:
+            result = bybit_execute(sig, approval)
+        else:
+            result = mt5_execute(sig, approval)
+
+        if result.get("success"):
+            _executed_signals.add(sig_id)
+            try:
+                with sqlite3.connect(_AUDIT_DB) as con:
+                    con.execute(
+                        "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style,"
+                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (datetime.now(timezone.utc).isoformat(), pair_name,
+                         sig.get("confluenceScore"), direction, sig.get("trendState"),
+                         "WEBHOOK", None, f"${approval.risk_amount}", "webhook",
+                         result.get("entryPrice"), sig.get("sl"), sig.get("tp1"),
+                         result.get("volume"), sig.get("trendState"),
+                         approval.risk_amount, approval.risk_pct, str(result.get("ticket", "")))
+                    )
+                    con.commit()
+            except Exception as ae:
+                log.warning(f"[WEBHOOK] Audit DB write failed: {ae}")
+            log.info(f"[WEBHOOK] {pair_name} {direction} EXECUTED: ticket={result.get('ticket')} vol={result.get('volume')}")
+        return jsonify(result)
+    except Exception as e:
+        log.error(f"[WEBHOOK] execution error: {e}")
+        return jsonify({"error": "Webhook execution failed — check logs"}), 500
+
 
 @app.route("/api/mt5-status")
 def api_mt5_status():
@@ -2708,6 +2911,15 @@ def api_candle_cache():
     return jsonify({"stats": stats, "activeBars": active,
                     "activePairCount": len(active),
                     "ts": datetime.now(timezone.utc).isoformat()})
+
+@app.route("/api/flush-candle-cache", methods=["POST"])
+def api_flush_candle_cache():
+    """Clear the in-memory REST candle cache so the next scan fetches fresh data from all sources."""
+    with _candle_cache_lock:
+        count = len(_candle_cache)
+        _candle_cache.clear()
+    log.info(f"[CACHE] Flushed {count} cached candle entries")
+    return jsonify({"flushed": count, "ts": datetime.now(timezone.utc).isoformat()})
 
 @app.route("/api/prices")
 def api_prices():
@@ -3260,13 +3472,14 @@ def _check_ccxt_outcomes() -> None:
         with sqlite3.connect(_AUDIT_DB) as con:
             con.row_factory = sqlite3.Row
             pending = con.execute(
-                "SELECT id, ticket, pair, entry_price, sl, tp, volume, ts FROM audit_log "
+                "SELECT id, ticket, pair, direction, entry_price, sl, tp, volume, ts FROM audit_log "
                 "WHERE ticket IS NOT NULL AND ticket != '' AND exit_price IS NULL "
-                "AND (trend LIKE '%crypto%' OR pair LIKE '%USDT%')"
+                "AND pair LIKE '%USDT%'"
             ).fetchall()
         for row in pending:
-            symbol = (row["pair"] or "").replace("/", "")  # e.g. BTCUSDT
-            ccxt_sym = _bybit_mod.bybit_map_symbol(symbol)
+            # pair is stored as "BTC/USDT"; map to ccxt format via internal map
+            pair_raw = row["pair"] or ""
+            ccxt_sym = _bybit_mod.bybit_map_symbol(pair_raw) or _bybit_mod.bybit_map_symbol(pair_raw.replace("/", ""))
             if not ccxt_sym:
                 continue
             if ccxt_sym in open_symbols:
@@ -3275,12 +3488,24 @@ def _check_ccxt_outcomes() -> None:
                 trades = exchange.fetch_my_trades(ccxt_sym, limit=10)
                 if trades:
                     last_trade = sorted(trades, key=lambda t: t["timestamp"])[-1]
-                    pnl_est = last_trade.get("cost", 0) - (row["entry_price"] or 0) * last_trade.get("amount", 0)
+                    # P&L: (exit - entry) * size for LONG, (entry - exit) * size for SHORT
+                    exit_px = float(last_trade.get("price") or 0)
+                    entry_px = float(row["entry_price"] or 0)
+                    vol = float(row["volume"] or last_trade.get("amount") or 0)
+                    direction = (row["direction"] or "").upper()
+                    if exit_px and entry_px and vol:
+                        if direction == "SHORT":
+                            pnl_est = (entry_px - exit_px) * vol
+                        else:  # LONG or unknown
+                            pnl_est = (exit_px - entry_px) * vol
+                        pnl_est = round(pnl_est, 4)
+                    else:
+                        pnl_est = round(float(last_trade.get("info", {}).get("realizedPnl") or 0), 4)
                     _update_trade_outcome(
                         ticket=str(row["ticket"]),
-                        exit_price=last_trade["price"],
+                        exit_price=exit_px,
                         exit_time=last_trade.get("datetime", datetime.now(timezone.utc).isoformat()),
-                        pnl=round(pnl_est, 4),
+                        pnl=pnl_est,
                         entry_price=row["entry_price"],
                         sl=row["sl"],
                         tp=row["tp"],

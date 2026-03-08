@@ -132,6 +132,85 @@ def calc_bb(c: list, p: int, m: float) -> dict:
     return {"upper": u, "mid": mid, "lower": l}
 
 
+def calc_squeeze(candles: list, bb_period: int = 20, bb_mult: float = 2.0,
+                  kc_period: int = 20, kc_mult: float = 1.5) -> dict | None:
+    """Detect Bollinger Band squeeze (BB inside Keltner Channels).
+    Returns dict with 'active' (bool), 'bars' (consecutive squeeze bars), 'momentum' direction."""
+    if len(candles) < max(bb_period, kc_period) + 5:
+        return None
+    cl = [c["close"] for c in candles]
+    hi = [c["high"] for c in candles]
+    lo = [c["low"] for c in candles]
+    n = len(cl)
+    # Keltner Channel: EMA(kc_period) ± kc_mult * ATR(kc_period)
+    ema = calc_ema(cl, kc_period)
+    atr = calc_atr(hi, lo, cl, kc_period)
+    # Check last bar
+    i = n - 1
+    if ema[i] is None or atr[i] is None:
+        return None
+    kc_upper = ema[i] + kc_mult * atr[i]
+    kc_lower = ema[i] - kc_mult * atr[i]
+    # BB at last bar
+    sl = cl[i - bb_period + 1:i + 1]
+    mn = sum(sl) / bb_period
+    sd = math.sqrt(sum((x - mn) ** 2 for x in sl) / bb_period)
+    bb_upper = mn + bb_mult * sd
+    bb_lower = mn - bb_mult * sd
+    squeeze_now = bb_upper < kc_upper and bb_lower > kc_lower
+    # Count consecutive squeeze bars
+    bars = 0
+    for j in range(i, max(bb_period, kc_period), -1):
+        if ema[j] is None or atr[j] is None:
+            break
+        _kcu = ema[j] + kc_mult * atr[j]
+        _kcl = ema[j] - kc_mult * atr[j]
+        _sl = cl[j - bb_period + 1:j + 1]
+        _mn = sum(_sl) / bb_period
+        _sd = math.sqrt(sum((x - _mn) ** 2 for x in _sl) / bb_period)
+        _bbu = _mn + bb_mult * _sd
+        _bbl = _mn - bb_mult * _sd
+        if _bbu < _kcu and _bbl > _kcl:
+            bars += 1
+        else:
+            break
+    # Momentum direction: close relative to midline
+    mom_dir = "bullish" if cl[-1] > mn else "bearish"
+    return {"active": squeeze_now, "bars": bars, "momentum": mom_dir}
+
+
+def calc_obv_trend(candles: list, lookback: int = 20) -> str | None:
+    """On-Balance Volume trend vs price trend.
+    Returns: 'confirming', 'diverging_bearish', 'diverging_bullish', or None."""
+    if len(candles) < lookback + 5:
+        return None
+    window = candles[-lookback:]
+    cl = [c["close"] for c in window]
+    vols = [c.get("vol", 0) for c in window]
+    # Build OBV
+    obv = [0.0]
+    for i in range(1, len(cl)):
+        if cl[i] > cl[i - 1]:
+            obv.append(obv[-1] + vols[i])
+        elif cl[i] < cl[i - 1]:
+            obv.append(obv[-1] - vols[i])
+        else:
+            obv.append(obv[-1])
+    # Compare slopes: price vs OBV over last N bars
+    half = lookback // 2
+    price_slope = cl[-1] - cl[half] if len(cl) > half else 0
+    obv_slope = obv[-1] - obv[half] if len(obv) > half else 0
+    if price_slope > 0 and obv_slope > 0:
+        return "confirming"
+    if price_slope < 0 and obv_slope < 0:
+        return "confirming"
+    if price_slope > 0 and obv_slope < 0:
+        return "diverging_bearish"
+    if price_slope < 0 and obv_slope > 0:
+        return "diverging_bullish"
+    return None
+
+
 def calc_rsi_divergence(candles: list, lookback: int = 30) -> str | None:
     """Wilder: RSI divergence using proper 3-bar pivot detection.
     Returns: 'bullish', 'bearish', or None"""
@@ -264,17 +343,50 @@ def calc_atr_percentile(atr_series: list, lookback: int = 100) -> tuple:
     return pct, label
 
 
-def calc_levels(price: float, atr: float, direction: str, pair_type: str) -> dict:
-    """Shared SL/TP calculation — used by both analyze_pair and backtest_pair."""
+def calc_bb_width_percentile(candles: list, bb_period: int = 20, bb_mult: float = 2.0,
+                             lookback: int = 100) -> tuple:
+    """Rank current Bollinger Band width vs its own history.
+    Returns (percentile 0-100, label: 'compressed'|'expanded'|'normal')."""
+    cl = [c["close"] for c in candles]
+    if len(cl) < bb_period + lookback:
+        return None, "insufficient data"
+    widths = []
+    for i in range(bb_period - 1, len(cl)):
+        sl = cl[i - bb_period + 1:i + 1]
+        mn = sum(sl) / bb_period
+        sd = math.sqrt(sum((x - mn) ** 2 for x in sl) / bb_period)
+        w = (2 * bb_mult * sd) / mn if mn > 0 else 0  # normalised width
+        widths.append(w)
+    if len(widths) < 20:
+        return None, "insufficient data"
+    cur = widths[-1]
+    window = widths[-lookback:]
+    pct = round(sum(1 for v in window if v <= cur) / len(window) * 100, 1)
+    label = "compressed" if pct <= 25 else ("expanded" if pct >= 75 else "normal")
+    return pct, label
+
+
+def calc_levels(price: float, atr: float, direction: str, pair_type: str,
+                regime_state: int | None = None) -> dict:
+    """Shared SL/TP calculation — used by both analyze_pair and backtest_pair.
+
+    regime_state: 0=TRENDING (wider stops), 1=TRANSITIONAL (default), 2=CHAOTIC (tighter stops).
+    """
     m = CONFIG["ATR_CLASS"].get(pair_type, {
         "sl": CONFIG["SL_ATR_MULT"], "tp1": CONFIG["TP1_ATR_MULT"], "tp2": CONFIG["TP2_ATR_MULT"]
     })
-    sl  = price - atr * m["sl"]  if direction == "LONG" else price + atr * m["sl"]
-    tp1 = price + atr * m["tp1"] if direction == "LONG" else price - atr * m["tp1"]
-    tp2 = price + atr * m["tp2"] if direction == "LONG" else price - atr * m["tp2"]
+    _REGIME_FACTOR = {0: 1.25, 1: 1.0, 2: 0.75}
+    rf = _REGIME_FACTOR.get(regime_state, 1.0)
+    sl_mult  = m["sl"]  * rf
+    tp1_mult = m["tp1"] * rf
+    tp2_mult = m["tp2"] * rf
+    sl  = price - atr * sl_mult  if direction == "LONG" else price + atr * sl_mult
+    tp1 = price + atr * tp1_mult if direction == "LONG" else price - atr * tp1_mult
+    tp2 = price + atr * tp2_mult if direction == "LONG" else price - atr * tp2_mult
     rr1 = abs(tp1 - price) / abs(sl - price) if abs(sl - price) > 0 else 0
     rr2 = abs(tp2 - price) / abs(sl - price) if abs(sl - price) > 0 else 0
-    return {"sl": sl, "tp1": tp1, "tp2": tp2, "rr1": rr1, "rr2": rr2, "mults": m}
+    return {"sl": sl, "tp1": tp1, "tp2": tp2, "rr1": rr1, "rr2": rr2, "mults": m,
+            "regimeFactor": rf}
 
 
 def calc_fib(candles: list) -> dict:

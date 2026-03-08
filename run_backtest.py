@@ -1,7 +1,7 @@
 """Run full backtest via API and print results."""
 import requests, json
 
-r = requests.post("http://localhost:5000/api/backtest", json={}, timeout=600)
+r = requests.post("http://localhost:5000/api/backtest", json={"style": "auto"}, timeout=600)
 d = r.json()
 
 print(f"Success: {d.get('success')}  Total pairs: {d.get('totalPairs')}  Errors: {len(d.get('errors',[]))}")

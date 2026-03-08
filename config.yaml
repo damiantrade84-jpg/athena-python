@@ -3,24 +3,24 @@
 
 # Per-class D1 ADX trend minimum
 ADX_TREND_MIN_CLASS:
-  crypto: 20
+  crypto: 15
   forex: 22
   commodity: 25
   stock: 25
   index: 25
 
-# Per-class counter-trend penalty
+# Per-class counter-trend penalty (standardized — Trend Gate already handles direction)
 COUNTER_TREND_PEN:
-  crypto: -1.5
-  forex: -2.0
-  commodity: -3.0
-  stock: -3.0
-  index: -3.0
+  crypto: -1.0
+  forex: -1.0
+  commodity: -1.0
+  stock: -1.0
+  index: -1.0
 
 # Per-class RSI bounds
 RSI_BOUNDS:
-  crypto:    { ob: 88, os: 15 }
-  forex:     { ob: 80, os: 20 }
+  crypto:    { ob: 78, os: 22 }
+  forex:     { ob: 78, os: 22 }
   commodity: { ob: 78, os: 22 }
   stock:     { ob: 78, os: 22 }
   index:     { ob: 78, os: 22 }
@@ -41,26 +41,31 @@ WEINSTEIN_LOOKBACK:
   stock: 150
   index: 150
 
-# Per-class backtest minimum score
+# Per-class backtest minimum score (~45% of per-class max)
 BT_MIN:
-  crypto: 8.0
-  commodity: 6.0
-  forex: 6.5
-  stock: 6.0
-  index: 6.0
+  crypto: 4.0
+  commodity: 4.0
+  forex: 4.0
+  stock: 4.5
+  index: 4.0
 
-# Per-class live scan minimum confluence
+# Backtest must not alter live pair enable/disable state
+BT_AUTO_TOGGLE: false
+BT_PERCENTILE_FILTER: false
+
+# Per-class live scan minimum confluence (~55% of per-class max)
 MIN_CONFLUENCE_CLASS:
-  crypto: 8.0
-  commodity: 6.0
-  forex: 6.5
-  stock: 6.0
-  index: 6.0
+  crypto: 5.0
+  commodity: 5.0
+  forex: 5.0
+  stock: 5.5
+  index: 5.0
 
 # Risk settings
 RISK_PCT: 0.01
 MIN_CONFLUENCE: 7.0
 VOLUME_THRESHOLD: 1.5
+VOLUME_THRESHOLD_BACKTEST: 1.2
 
 # ── Execution Engine ──────────────────────────────────────
 EXECUTION_ENABLED: true       # Enable manual execution via dashboard
@@ -72,3 +77,38 @@ SIGNAL_MAX_AGE_SEC: 300       # 5 min freshness window
 MAX_RISK_PER_TRADE: 0.03      # Hard cap 3% per trade
 DRAWDOWN_REDUCE_THRESHOLD: 0.10   # Halve size at 10% drawdown
 DRAWDOWN_STOP_THRESHOLD: 0.15     # Stop all trading at 15% drawdown
+# Ranging penalties — halved (ADX vote=0 already penalises, one penalty per condition)
+RANGING:
+  crypto:
+    dead: 14
+    dead_pen: 1.5
+    choppy: 18
+    choppy_pen: 0.5
+  forex:
+    dead: 16
+    dead_pen: 1.5
+    choppy: 20
+    choppy_pen: 0.5
+  commodity:
+    dead: 18
+    dead_pen: 1.5
+    choppy: 23
+    choppy_pen: 0.5
+  stock:
+    dead: 16
+    dead_pen: 1.5
+    choppy: 21
+    choppy_pen: 0.5
+  index:
+    dead: 16
+    dead_pen: 1.5
+    choppy: 21
+    choppy_pen: 0.5
+
+# Per-class vote weight routing — each indicator weighted where it's strongest
+VOTE_WEIGHTS:
+  crypto:    { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, h4_macd: 1.0, h4_oscillator: 0.75, volume: 1.0, funding: 1.0, session: 0.0, h4_fib: 0.5, h1_bb: 1.0, weinstein: 0.0, divergence: 1.0 }
+  forex:     { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, h4_macd: 1.0, h4_oscillator: 1.0, volume: 0.0, funding: 0.0, session: 1.0, h4_fib: 1.0, h1_bb: 0.5, weinstein: 0.0, divergence: 1.0 }
+  stock:     { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, h4_macd: 1.0, h4_oscillator: 1.0, volume: 1.0, funding: 0.0, session: 0.0, h4_fib: 1.0, h1_bb: 1.0, weinstein: 1.0, divergence: 1.0 }
+  commodity: { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, h4_macd: 1.0, h4_oscillator: 1.0, volume: 1.0, funding: 0.0, session: 0.0, h4_fib: 1.0, h1_bb: 1.0, weinstein: 0.5, divergence: 1.0 }
+  index:     { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, h4_macd: 1.0, h4_oscillator: 1.0, volume: 1.0, funding: 0.0, session: 0.0, h4_fib: 1.0, h1_bb: 1.0, weinstein: 0.5, divergence: 1.0 }
