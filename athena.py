@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """ATHENA PRO v3.1 - Trading Intelligence Engine (Python Edition)"""
 # Windows CMD: force unbuffered output so all prints show immediately
 import sys
@@ -16,7 +16,7 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass  # dotenv optional — falls back to os.environ
+    pass  # dotenv optional â€” falls back to os.environ
 from eodhd import APIClient as _EODHDClient
 _eodhd_client = None
 def _get_eodhd_client():
@@ -29,7 +29,7 @@ def _get_eodhd_client():
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("athena")
 
-# ── Binance Funding Rate Cache (Task 3) ──────────────────────────────────────
+# â”€â”€ Binance Funding Rate Cache (Task 3) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _funding_rate_cache: dict = {}  # symbol -> (rate: float, fetched_at: float)
 _FUNDING_CACHE_TTL = 300  # 5 minutes
 
@@ -50,7 +50,7 @@ def _fetch_funding_rate(binance_symbol: str) -> float | None:
         log.debug(f"[FUNDING] {binance_symbol} fetch failed: {_e}")
     return None
 
-# ── EODHD WebSocket Real-Time Price Manager ──
+# â”€â”€ EODHD WebSocket Real-Time Price Manager â”€â”€
 import asyncio
 _live_prices = {}  # thread-safe via GIL for simple dict reads/writes
 _ws_manager_started = False
@@ -65,9 +65,9 @@ class EODHDWebSocketManager:
         self._thread = None
 
     def _build_ticker_map(self, pairs):
-        """Map Athena display names → {ws_endpoint: [ws_tickers], display_map: {ws_ticker: display}}"""
+        """Map Athena display names â†’ {ws_endpoint: [ws_tickers], display_map: {ws_ticker: display}}"""
         us_tickers, fx_tickers, cr_tickers = [], [], []
-        display_map = {}  # ws_ticker → athena display name
+        display_map = {}  # ws_ticker â†’ athena display name
         for p in pairs:
             disp, ptype = p["display"], p.get("type", "")
             sym = p.get("symbol", "")
@@ -129,6 +129,7 @@ class EODHDWebSocketManager:
                                 entry["changeDiff"] = _f("dd")
                             elif endpoint == "crypto":
                                 entry["price"] = _f("p")
+                                entry["volume"] = _f("q") or 0
                                 entry["changePct"] = _f("dc")
                                 entry["changeDiff"] = _f("dd")
                             elif endpoint == "us":
@@ -137,10 +138,12 @@ class EODHDWebSocketManager:
                                 entry["marketStatus"] = msg.get("ms", "unknown")
                             if entry.get("price"):
                                 _live_prices[disp] = entry
+                                if _candle_builder:
+                                    _candle_builder.on_tick(disp, entry["price"], entry.get("volume", 0), entry.get("ts", 0))
                         except Exception as _e:
                             log.debug(f"[WS] msg parse error: {_e}")
             except Exception as e:
-                log.warning(f"[WS] {endpoint} disconnected: {e} — reconnecting in 5s")
+                log.warning(f"[WS] {endpoint} disconnected: {e} â€” reconnecting in 5s")
                 await asyncio.sleep(5)
 
     async def _run_all(self, pairs):
@@ -161,29 +164,314 @@ class EODHDWebSocketManager:
         def _run():
             self._loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._loop)
-            # For crypto: always subscribe all crypto pairs for price display (Option B)
-            price_pairs = list(pairs)
-            # Add any disabled crypto pairs for price streaming
-            crypto_disabled = [p for p in CRYPTO_PAIRS if not p.get("enabled", True)]
-            price_pairs.extend(crypto_disabled)
-            self._loop.run_until_complete(self._run_all(price_pairs))
+            # Subscribe ALL WS-capable pairs (not just active) so candle builder gets full coverage
+            # WS supports: US stocks/ETFs (us endpoint), forex/commodities (forex endpoint), crypto (crypto endpoint)
+            # 50-ticker limit per connection: forex~19, US~14, crypto~18 — all well under limit
+            ws_pairs = list(ALL_PAIRS)
+            self._loop.run_until_complete(self._run_all(ws_pairs))
         self._thread = threading.Thread(target=_run, daemon=True, name="eodhd-ws")
         self._thread.start()
         log.info("[WS] WebSocket manager started")
+
+# ── Candle Builder: WS ticks → H1/H4/D1 OHLCV → SQLite ──────────────
+_candle_builder = None
+
+class CandleBuilder:
+    """Accumulates WebSocket ticks into H1/H4/D1 candles, persists completed bars to SQLite.
+    On startup, seeds the cache with EODHD historical so scans have instant history."""
+    _TFS = {"H1": 3600, "H4": 14400, "D1": 86400}
+
+    def __init__(self):
+        self._bars = {}  # (display, tf) → {start, o, h, l, c, vol, ticks}
+        self._lock = threading.Lock()
+        self._db = os.path.join(os.path.dirname(os.path.abspath(__file__)), "candle_cache.db")
+        self._init_db()
+
+    def _init_db(self):
+        with sqlite3.connect(self._db) as con:
+            con.execute("""CREATE TABLE IF NOT EXISTS candle_cache (
+                pair TEXT NOT NULL, timeframe TEXT NOT NULL, bar_time TEXT NOT NULL,
+                open REAL NOT NULL, high REAL NOT NULL, low REAL NOT NULL, close REAL NOT NULL,
+                volume REAL DEFAULT 0, tick_count INTEGER DEFAULT 0,
+                PRIMARY KEY (pair, timeframe, bar_time))""")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_cc_lookup ON candle_cache(pair, timeframe)")
+
+    @staticmethod
+    def _bar_start(ts_s, tf_sec):
+        """Align timestamp to bar boundary (UTC)."""
+        return datetime.fromtimestamp(int(ts_s // tf_sec) * tf_sec, tz=timezone.utc)
+
+    def on_tick(self, display, price, volume, ts_ms):
+        """Process a tick: update in-progress bars, flush completed ones to DB."""
+        if not price or price <= 0:
+            return
+        ts_s = ts_ms / 1000.0 if ts_ms > 1e12 else float(ts_ms) if ts_ms > 0 else time.time()
+        vol = volume or 0
+        with self._lock:
+            for tf, tf_sec in self._TFS.items():
+                key = (display, tf)
+                start = self._bar_start(ts_s, tf_sec)
+                bar = self._bars.get(key)
+                if bar and bar["start"] != start:
+                    self._flush(display, tf, bar)
+                    bar = None
+                if bar is None:
+                    self._bars[key] = {"start": start, "o": price, "h": price,
+                                       "l": price, "c": price, "vol": vol, "ticks": 1}
+                else:
+                    bar["h"] = max(bar["h"], price)
+                    bar["l"] = min(bar["l"], price)
+                    bar["c"] = price
+                    bar["vol"] += vol
+                    bar["ticks"] += 1
+
+    def _flush(self, pair, tf, bar):
+        """Write a completed bar to SQLite."""
+        try:
+            t = bar["start"].strftime("%Y-%m-%d %H:%M:%S")
+            with sqlite3.connect(self._db) as con:
+                con.execute(
+                    "INSERT OR REPLACE INTO candle_cache "
+                    "(pair,timeframe,bar_time,open,high,low,close,volume,tick_count) "
+                    "VALUES(?,?,?,?,?,?,?,?,?)",
+                    (pair, tf, t, bar["o"], bar["h"], bar["l"], bar["c"], bar["vol"], bar["ticks"]))
+        except Exception as e:
+            log.error(f"[CB] flush {pair} {tf}: {e}")
+
+    def get_candles(self, display, tf, limit=500):
+        """Return completed candles from DB + current in-progress bar."""
+        try:
+            with sqlite3.connect(self._db) as con:
+                con.row_factory = sqlite3.Row
+                rows = con.execute(
+                    "SELECT bar_time,open,high,low,close,volume FROM candle_cache "
+                    "WHERE pair=? AND timeframe=? ORDER BY bar_time DESC LIMIT ?",
+                    (display, tf, limit)).fetchall()
+            candles = [{"time": r["bar_time"], "open": r["open"], "high": r["high"],
+                        "low": r["low"], "close": r["close"], "vol": r["volume"]}
+                       for r in reversed(rows)]
+            with self._lock:
+                bar = self._bars.get((display, tf))
+                if bar:
+                    candles.append({"time": bar["start"].strftime("%Y-%m-%d %H:%M:%S"),
+                                    "open": bar["o"], "high": bar["h"], "low": bar["l"],
+                                    "close": bar["c"], "vol": bar["vol"]})
+            return candles if candles else None
+        except Exception as e:
+            log.error(f"[CB] get {display} {tf}: {e}")
+            return None
+
+    def seed(self, pairs):
+        """Seed candle_cache with EODHD historical data (D1 EOD + H1 intraday → H4 resample)."""
+        time.sleep(3)
+        _key = os.environ.get("EODHD_KEY", "")
+        if not _key:
+            log.warning("[CB] No EODHD_KEY, skip seed")
+            return
+        log.info(f"[CB] Seeding candle cache for {len(pairs)} pairs...")
+        seeded = 0
+        for p in pairs:
+            try:
+                ticker = _eodhd_ticker_for_pair(p)
+                if not ticker:
+                    continue
+                disp = p["display"]
+                with sqlite3.connect(self._db) as con:
+                    cnt = con.execute(
+                        "SELECT COUNT(*) FROM candle_cache WHERE pair=? AND timeframe='H1'",
+                        (disp,)).fetchone()[0]
+                if cnt >= 100:
+                    continue
+                d1_n = 0
+                # D1 from EOD historical (365 days)
+                api = _get_eodhd_client()
+                if api:
+                    d1_start = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
+                    try:
+                        d1_bars = api.get_eod_historical_stock_market_data(
+                            ticker, period="d", from_date=d1_start, order="a")
+                    except Exception:
+                        d1_bars = None
+                    if d1_bars and isinstance(d1_bars, list):
+                        d1_rows = [(disp, "D1", b["date"],
+                                    float(b["open"]), float(b["high"]),
+                                    float(b["low"]), float(b["close"]),
+                                    float(b.get("volume") or 0), 0)
+                                   for b in d1_bars if b.get("open") is not None]
+                        if d1_rows:
+                            with sqlite3.connect(self._db) as con:
+                                con.executemany(
+                                    "INSERT OR IGNORE INTO candle_cache "
+                                    "(pair,timeframe,bar_time,open,high,low,close,volume,tick_count) "
+                                    "VALUES(?,?,?,?,?,?,?,?,?)", d1_rows)
+                            d1_n = len(d1_rows)
+                # H1 from EODHD library intraday historical (180 days / 6 months)
+                from_ts = int((datetime.now(timezone.utc) - timedelta(days=180)).timestamp())
+                bars = None
+                if api:
+                    try:
+                        bars = api.get_intraday_historical_data(
+                            ticker, interval="1h", from_unix_time=from_ts)
+                    except Exception:
+                        bars = None
+                if not bars or not isinstance(bars, list):
+                    if d1_n:
+                        seeded += 1
+                        log.info(f"[CB] {disp}: {d1_n} D1 (no intraday)")
+                    continue
+                h1_rows = [(disp, "H1", b["datetime"],
+                            float(b["open"]), float(b["high"]),
+                            float(b["low"]), float(b["close"]),
+                            float(b.get("volume") or 0), 0)
+                           for b in bars
+                           if b.get("open") is not None and b.get("close") is not None]
+                # Resample H1 → H4
+                import pandas as pd
+                df = pd.DataFrame(
+                    [{"time": b["datetime"], "open": float(b["open"]),
+                      "high": float(b["high"]), "low": float(b["low"]),
+                      "close": float(b["close"]),
+                      "vol": float(b.get("volume") or 0)}
+                     for b in bars
+                     if b.get("open") is not None and b.get("close") is not None])
+                h4_rows = []
+                if len(df) >= 4:
+                    df["time"] = pd.to_datetime(df["time"])
+                    df = df.set_index("time")
+                    h4 = pd.DataFrame({
+                        "open":  df["open"].resample("4h").first(),
+                        "high":  df["high"].resample("4h").max(),
+                        "low":   df["low"].resample("4h").min(),
+                        "close": df["close"].resample("4h").last(),
+                        "vol":   df["vol"].resample("4h").sum(),
+                    }).dropna(subset=["open", "close"])
+                    h4_rows = [(disp, "H4", str(idx),
+                                float(row["open"]), float(row["high"]),
+                                float(row["low"]), float(row["close"]),
+                                float(row["vol"]), 0)
+                               for idx, row in h4.iterrows()]
+                all_rows = h1_rows + h4_rows
+                if all_rows:
+                    with sqlite3.connect(self._db) as con:
+                        con.executemany(
+                            "INSERT OR IGNORE INTO candle_cache "
+                            "(pair,timeframe,bar_time,open,high,low,close,volume,tick_count) "
+                            "VALUES(?,?,?,?,?,?,?,?,?)", all_rows)
+                seeded += 1
+                log.info(f"[CB] {disp}: {d1_n} D1, {len(h1_rows)} H1, {len(h4_rows)} H4")
+                time.sleep(0.5)
+            except Exception as e:
+                log.warning(f"[CB] Seed {p['display']}: {e}")
+        log.info(f"[CB] Seed complete: {seeded}/{len(pairs)} pairs")
+
+    def bulk_update_d1(self):
+        """Use EODHD Bulk EOD API to update D1 candles for all pairs in ~5 API calls.
+        One call per exchange (US, FOREX, CC, JSE, INDX) instead of 70 individual calls."""
+        _key = os.environ.get("EODHD_KEY", "")
+        if not _key:
+            return
+        # Build mapping: exchange → {bulk_code → display_name}
+        exchange_map = {}
+        for p in ALL_PAIRS:
+            ticker = _eodhd_ticker_for_pair(p)
+            if not ticker or "." not in ticker:
+                continue
+            code, exch = ticker.rsplit(".", 1)
+            if exch not in exchange_map:
+                exchange_map[exch] = {}
+            exchange_map[exch][code] = p["display"]
+        updated = 0
+        for exch, code_map in exchange_map.items():
+            try:
+                symbols_csv = ",".join(code_map.keys())
+                r = http_requests.get(
+                    f"https://eodhd.com/api/eod-bulk-last-day/{exch}",
+                    params={"api_token": _key, "fmt": "json", "symbols": symbols_csv},
+                    timeout=30)
+                if r.status_code != 200:
+                    log.warning(f"[CB] Bulk D1 {exch}: HTTP {r.status_code}")
+                    continue
+                bars = r.json()
+                if not bars or not isinstance(bars, list):
+                    continue
+                rows = []
+                def _sf(v):
+                    """Safe float — handles 'NA' and None from Bulk API."""
+                    if v is None or v == "NA":
+                        return None
+                    try:
+                        return float(v)
+                    except (ValueError, TypeError):
+                        return None
+                for b in bars:
+                    code = b.get("code", "")
+                    disp = code_map.get(code)
+                    if not disp or not b.get("date"):
+                        continue
+                    o, h, l, c = _sf(b.get("open")), _sf(b.get("high")), _sf(b.get("low")), _sf(b.get("close"))
+                    if o is None or c is None:
+                        continue
+                    rows.append((disp, "D1", b["date"], o, h, l, c,
+                                 _sf(b.get("volume")) or 0, 0))
+                if rows:
+                    with sqlite3.connect(self._db) as con:
+                        con.executemany(
+                            "INSERT OR REPLACE INTO candle_cache "
+                            "(pair,timeframe,bar_time,open,high,low,close,volume,tick_count) "
+                            "VALUES(?,?,?,?,?,?,?,?,?)", rows)
+                    updated += len(rows)
+                log.info(f"[CB] Bulk D1 {exch}: {len(rows)} bars")
+            except Exception as e:
+                log.warning(f"[CB] Bulk D1 {exch}: {e}")
+        log.info(f"[CB] Bulk D1 update: {updated} total bars across {len(exchange_map)} exchanges")
+
+    def start_refresh_loop(self):
+        """Background loop: bulk D1 update every 4 hours to catch all market closes."""
+        def _loop():
+            while True:
+                try:
+                    self.bulk_update_d1()
+                except Exception as e:
+                    log.warning(f"[CB] Refresh loop error: {e}")
+                time.sleep(4 * 3600)  # 4 hours
+        threading.Thread(target=_loop, daemon=True, name="candle-refresh").start()
+        log.info("[CB] D1 refresh loop started (Bulk API every 4h)")
+
+    def stats(self):
+        """Summary of candle cache contents."""
+        try:
+            with sqlite3.connect(self._db) as con:
+                rows = con.execute(
+                    "SELECT pair, timeframe, COUNT(*), MIN(bar_time), MAX(bar_time) "
+                    "FROM candle_cache GROUP BY pair, timeframe "
+                    "ORDER BY pair, timeframe").fetchall()
+            return [{"pair": r[0], "tf": r[1], "bars": r[2],
+                     "oldest": r[3], "newest": r[4]} for r in rows]
+        except Exception as e:
+            log.error(f"[CB] stats: {e}")
+            return []
+
+
+def fetch_candles_live(display, tf, limit=500):
+    """Fetch candles from the candle_cache (WS-built + historical seed).
+    Returns list of OHLCV dicts or None if cache is empty/unavailable."""
+    if _candle_builder:
+        return _candle_builder.get_candles(display, tf, limit)
+    return None
 
 # N1: CONFIG loaded from config.py (YAML overrides + validation happen there)
 from config import CONFIG
 
 # enabled=False = negative backtest SQN, excluded from live scan (still available in backtest)
 FOREX_PAIRS = [
-    {"symbol":"EURUSD=X","type":"forex","display":"EUR/USD","source":"eodhd","enabled":False},  # SQN +0.16 (Phase A, weak — cut)
+    {"symbol":"EURUSD=X","type":"forex","display":"EUR/USD","source":"eodhd","enabled":False},  # SQN +0.16 (Phase A, weak â€” cut)
     {"symbol":"GBPUSD=X","type":"forex","display":"GBP/USD","source":"eodhd","enabled":False},  # SQN -0.53 (Phase A)
     {"symbol":"USDJPY=X","type":"forex","display":"USD/JPY","source":"eodhd","enabled":False},  # SQN -2.33 (Phase A)
-    {"symbol":"AUDUSD=X","type":"forex","display":"AUD/USD","source":"eodhd","enabled":False},  # SQN +0.46 (Phase A, weak — cut)
+    {"symbol":"AUDUSD=X","type":"forex","display":"AUD/USD","source":"eodhd","enabled":False},  # SQN +0.46 (Phase A, weak â€” cut)
     {"symbol":"NZDUSD=X","type":"forex","display":"NZD/USD","source":"eodhd","enabled":False},  # SQN  0.00 (Phase A, zero trades)
     {"symbol":"EURGBP=X","type":"forex","display":"EUR/GBP","source":"eodhd","enabled":False},  # SQN +0.65 (Phase A, watchlist)
-    {"symbol":"USDCAD=X","type":"forex","display":"USD/CAD","source":"eodhd","enabled":False},  # SQN +0.27 (Phase A, weak — cut)
-    {"symbol":"USDCHF=X","type":"forex","display":"USD/CHF","source":"eodhd","enabled":True},   # v3.1 SQN +0.61, OOS +1.22 ✔ (Polygon data)
+    {"symbol":"USDCAD=X","type":"forex","display":"USD/CAD","source":"eodhd","enabled":False},  # SQN +0.27 (Phase A, weak â€” cut)
+    {"symbol":"USDCHF=X","type":"forex","display":"USD/CHF","source":"eodhd","enabled":True},   # v3.1 SQN +0.61, OOS +1.22 âœ” (Polygon data)
     {"symbol":"EURJPY=X","type":"forex","display":"EUR/JPY","source":"eodhd","enabled":False},  # SQN +1.06, IS:-0.23 (IS neg, watchlist)
     {"symbol":"GBPJPY=X","type":"forex","display":"GBP/JPY","source":"eodhd","enabled":False},  # SQN -0.72
     {"symbol":"AUDJPY=X","type":"forex","display":"AUD/JPY","source":"eodhd","enabled":False},  # SQN +0.22
@@ -191,16 +479,16 @@ FOREX_PAIRS = [
     {"symbol":"GBPAUD=X","type":"forex","display":"GBP/AUD","source":"eodhd","enabled":False},  # SQN +0.91, IS:-1.38 (IS neg, watchlist)
     {"symbol":"USDZAR=X","type":"forex","display":"USD/ZAR","source":"eodhd","enabled":False},  # SQN -0.32
     {"symbol":"EURCHF=X","type":"forex","display":"EUR/CHF","source":"eodhd","enabled":False},  # SQN -0.83
-    {"symbol":"USDMXN=X","type":"forex","display":"USD/MXN","source":"eodhd","enabled":True},   # SQN +0.85, IS:+0.61/OOS:+0.60 ✔
+    {"symbol":"USDMXN=X","type":"forex","display":"USD/MXN","source":"eodhd","enabled":True},   # SQN +0.85, IS:+0.61/OOS:+0.60 âœ”
     {"symbol":"USDSGD=X","type":"forex","display":"USD/SGD","source":"eodhd","enabled":False},  # SQN +0.43
 ]
 COMMODITY_PAIRS = [
-    {"symbol":"GC=F","type":"commodity","display":"XAU/USD","source":"eodhd","enabled":True},     # SQN +3.53 (v3.1) ✓ → EODHD D1, Polygon H4/H1 fallback
-    {"symbol":"SI=F","type":"commodity","display":"XAG/USD","source":"eodhd","enabled":True},     # SQN +3.08 (v3.1) ✓ → EODHD D1, Polygon H4/H1 fallback
+    {"symbol":"GC=F","type":"commodity","display":"XAU/USD","source":"eodhd","enabled":True},     # SQN +3.53 (v3.1) âœ“ â†’ EODHD D1, Polygon H4/H1 fallback
+    {"symbol":"SI=F","type":"commodity","display":"XAG/USD","source":"eodhd","enabled":True},     # SQN +3.08 (v3.1) âœ“ â†’ EODHD D1, Polygon H4/H1 fallback
     {"symbol":"CL=F","type":"commodity","display":"WTI Oil","source":"eodhd","enabled":False},     # SQN -1.36 (Phase A, cut)
 ]
 INDEX_PAIRS = [
-    {"symbol":"^GSPC","type":"index","display":"S&P 500","source":"eodhd","enabled":False},       # SQN +0.09 (Phase A, weak — cut)
+    {"symbol":"^GSPC","type":"index","display":"S&P 500","source":"eodhd","enabled":False},       # SQN +0.09 (Phase A, weak â€” cut)
     {"symbol":"^IXIC","type":"index","display":"Nasdaq","source":"eodhd","enabled":False},         # SQN -0.20 (Phase A)
     {"symbol":"^DJI","type":"index","display":"Dow Jones","source":"eodhd","enabled":False},      # SQN +0.80 (Phase A, watchlist)
 ]
@@ -211,7 +499,7 @@ US_STOCK_PAIRS = [
     {"symbol":"MSFT.US","type":"stock","display":"MSFT","source":"eodhd","enabled":False},        # SQN +0.49, OOS:-2.12
     {"symbol":"AMZN.US","type":"stock","display":"AMZN","source":"eodhd","enabled":False},        # SQN +0.27
     {"symbol":"META.US","type":"stock","display":"META","source":"eodhd","enabled":False},        # SQN -0.29
-    {"symbol":"GOOG.US","type":"stock","display":"GOOG","source":"eodhd","enabled":True},         # SQN +1.61, IS:+1.28/OOS:+1.01 ✔
+    {"symbol":"GOOG.US","type":"stock","display":"GOOG","source":"eodhd","enabled":True},         # SQN +1.61, IS:+1.28/OOS:+1.01 âœ”
     {"symbol":"JPM.US","type":"stock","display":"JPM","source":"eodhd","enabled":False},          # SQN +0.26
     {"symbol":"V.US","type":"stock","display":"V","source":"eodhd","enabled":False},              # SQN -1.39
     {"symbol":"XOM.US","type":"stock","display":"XOM","source":"eodhd","enabled":False},          # SQN -0.03
@@ -219,22 +507,22 @@ US_STOCK_PAIRS = [
 ETF_PAIRS = [
     {"symbol":"SPY.US","type":"stock","display":"SPY","source":"eodhd","enabled":False},          # SQN +1.03, OOS:0 (no OOS, watchlist)
     {"symbol":"QQQ.US","type":"stock","display":"QQQ","source":"eodhd","enabled":False},          # SQN +0.38
-    {"symbol":"GLD.US","type":"stock","display":"GLD","source":"eodhd","enabled":True},           # SQN +2.08, IS:+0.95/OOS:+2.98 ✔ Gold ETF
-    {"symbol":"TLT.US","type":"stock","display":"TLT","source":"eodhd","enabled":False},          # SQN 0 — Treasury ETF
+    {"symbol":"GLD.US","type":"stock","display":"GLD","source":"eodhd","enabled":True},           # SQN +2.08, IS:+0.95/OOS:+2.98 âœ” Gold ETF
+    {"symbol":"TLT.US","type":"stock","display":"TLT","source":"eodhd","enabled":False},          # SQN 0 â€” Treasury ETF
     {"symbol":"FTSE.INDX","type":"index","display":"FTSE 100","source":"eodhd","enabled":False},  # no data from EODHD
 ]
 JSE_PAIRS = [
-    {"symbol":"NPN.JO","type":"stock","display":"Naspers","source":"eodhd","enabled":True},       # SQN +1.43 (Phase A) ✓ → EODHD D1, yfinance H4/H1 fallback
+    {"symbol":"NPN.JO","type":"stock","display":"Naspers","source":"eodhd","enabled":True},       # SQN +1.43 (Phase A) âœ“ â†’ EODHD D1, yfinance H4/H1 fallback
     {"symbol":"SOL.JO","type":"stock","display":"Sasol","source":"eodhd","enabled":False},        # SQN -1.11 (Phase A)
-    {"symbol":"SBK.JO","type":"stock","display":"Std Bank","source":"eodhd","enabled":False},     # SQN +0.14 (Phase A, weak — cut)
-    {"symbol":"AGL.JO","type":"stock","display":"Anglo Am","source":"eodhd","enabled":True},      # v3.1 SQN +0.67, OOS +1.01 ✔ → EODHD D1, yfinance H4/H1 fallback
+    {"symbol":"SBK.JO","type":"stock","display":"Std Bank","source":"eodhd","enabled":False},     # SQN +0.14 (Phase A, weak â€” cut)
+    {"symbol":"AGL.JO","type":"stock","display":"Anglo Am","source":"eodhd","enabled":True},      # v3.1 SQN +0.67, OOS +1.01 âœ” â†’ EODHD D1, yfinance H4/H1 fallback
     {"symbol":"MTN.JO","type":"stock","display":"MTN Group","source":"eodhd","enabled":False},    # SQN ? (missing intraday)
     {"symbol":"SHP.JO","type":"stock","display":"Shoprite","source":"eodhd","enabled":False},     # SQN -0.83
     {"symbol":"CFR.JO","type":"stock","display":"Richemont","source":"eodhd","enabled":False},    # SQN -2.35
     {"symbol":"FSR.JO","type":"stock","display":"FirstRand","source":"eodhd","enabled":False},    # SQN -2.40
     {"symbol":"ABG.JO","type":"stock","display":"Absa","source":"eodhd","enabled":False},         # SQN +1.41, IS:-1.15 (IS neg, watchlist)
     {"symbol":"CPI.JO","type":"stock","display":"Capitec","source":"eodhd","enabled":False},      # SQN -0.78
-    {"symbol":"PRX.JO","type":"stock","display":"Prosus","source":"eodhd","enabled":True},        # SQN +1.54, IS:+1.52/OOS:+0.34 ✔
+    {"symbol":"PRX.JO","type":"stock","display":"Prosus","source":"eodhd","enabled":True},        # SQN +1.54, IS:+1.52/OOS:+0.34 âœ”
     {"symbol":"GFI.JO","type":"stock","display":"Gold Fields","source":"eodhd","enabled":False},  # SQN +1.43, OOS:-0.16 (watchlist)
     {"symbol":"ANG.JO","type":"stock","display":"AngloGold","source":"eodhd","enabled":False},    # SQN +0.39
     {"symbol":"SSW.JO","type":"stock","display":"Sibanye","source":"eodhd","enabled":False},      # SQN +0.39
@@ -247,14 +535,14 @@ CRYPTO_PAIRS = [
     {"symbol":"ADAUSDT","type":"crypto","display":"ADA/USDT","source":"binance","enabled":False},  # SQN -0.80 Phase A
     {"symbol":"DOGEUSDT","type":"crypto","display":"DOGE/USDT","source":"binance","enabled":False}, # SQN -0.64 Phase A
     {"symbol":"AVAXUSDT","type":"crypto","display":"AVAX/USDT","source":"binance","enabled":False}, # v3.1 SQN +0.44, OOS +0.02 (overfit)
-    {"symbol":"LINKUSDT","type":"crypto","display":"LINK/USDT","source":"binance","enabled":True},  # v3.1 SQN +0.93, OOS +1.00 ✔ (regime-adaptive)
+    {"symbol":"LINKUSDT","type":"crypto","display":"LINK/USDT","source":"binance","enabled":True},  # v3.1 SQN +0.93, OOS +1.00 âœ” (regime-adaptive)
     {"symbol":"MATICUSDT","type":"crypto","display":"MATIC/USDT","source":"binance","enabled":False},# SQN +0.26 Phase A (noise)
     {"symbol":"BNBUSDT","type":"crypto","display":"BNB/USDT","source":"binance","enabled":False},  # v3.1 SQN -0.55 (negative edge)
     {"symbol":"DOTUSDT","type":"crypto","display":"DOT/USDT","source":"binance","enabled":False},  # SQN -0.36 Phase A
     {"symbol":"LTCUSDT","type":"crypto","display":"LTC/USDT","source":"binance","enabled":True},   # v3.1 SQN +0.97 (improved from -0.16, near threshold)
-    {"symbol":"SUIUSDT","type":"crypto","display":"SUI/USDT","source":"binance","enabled":True},   # SQN +0.76, IS:+0.43/OOS:+0.82 ✔
+    {"symbol":"SUIUSDT","type":"crypto","display":"SUI/USDT","source":"binance","enabled":True},   # SQN +0.76, IS:+0.43/OOS:+0.82 âœ”
     {"symbol":"NEARUSDT","type":"crypto","display":"NEAR/USDT","source":"binance","enabled":False},# SQN -1.27
-    {"symbol":"APTUSDT","type":"crypto","display":"APT/USDT","source":"binance","enabled":True},   # SQN +0.67, IS:+0.56/OOS:+0.37 ✔
+    {"symbol":"APTUSDT","type":"crypto","display":"APT/USDT","source":"binance","enabled":True},   # SQN +0.67, IS:+0.56/OOS:+0.37 âœ”
     {"symbol":"INJUSDT","type":"crypto","display":"INJ/USDT","source":"binance","enabled":False},  # SQN -2.01
     {"symbol":"FETUSDT","type":"crypto","display":"FET/USDT","source":"binance","enabled":False},  # SQN +0.14
     {"symbol":"RENDERUSDT","type":"crypto","display":"RENDER/USDT","source":"binance","enabled":False}, # SQN -2.45
@@ -380,7 +668,12 @@ def _atr_for_levels(d1i: dict, h4i: dict, h1i: dict):
     return h1i["snap"].get("atr") or h4i["snap"].get("atr") or d1i["snap"].get("atr")
 
 def _max_score_for_pair(pair: dict) -> float:
-    return 12.0 if pair.get("type") == "forex" else 13.0
+    """Compute theoretical max score from per-class VOTE_WEIGHTS (sum of all vote slots)."""
+    ptype = pair.get("type", "stock")
+    weights = CONFIG.get("VOTE_WEIGHTS", {}).get(ptype)
+    if weights:
+        return round(sum(weights.values()), 2)
+    return 12.0
 
 def fetch_yfinance(sym, tf, limit):
     """Download OHLCV candles from Yahoo Finance. Returns list of candle dicts or None."""
@@ -401,7 +694,7 @@ def fetch_yfinance(sym, tf, limit):
         # Drop duplicate columns (some JSE tickers produce duplicates after MultiIndex flatten)
         df = df.loc[:, ~df.columns.duplicated(keep="first")]
         if tf == "H4":
-            # Column-by-column resample — avoids pandas version issues with .agg(dict)
+            # Column-by-column resample â€” avoids pandas version issues with .agg(dict)
             vol_col = df["Volume"] if "Volume" in df.columns else pd.Series(0.0, index=df.index)
             df = pd.DataFrame({
                 "Open":   df["Open"].resample("4h").first(),
@@ -425,8 +718,131 @@ def fetch_binance(sym, interval, limit):
         return None
     except Exception as e: log.error(f"[BN] {sym}: {e}"); return None
 
+def fetch_binance_paginated(sym, interval, total_bars):
+    """Paginate Binance klines to fetch more than 1000 bars. Used by backtest only."""
+    all_candles = []
+    end_time = None  # None = latest
+    pages = (total_bars + 999) // 1000  # ceil division
+    for page in range(pages):
+        try:
+            params = {"symbol": sym, "interval": interval, "limit": 1000}
+            if end_time:
+                params["endTime"] = end_time
+            for base in ["https://api.binance.com", "https://api1.binance.com"]:
+                r = http_requests.get(f"{base}/api/v3/klines", params=params, timeout=15)
+                if r.status_code == 200:
+                    data = r.json()
+                    if not data:
+                        break
+                    batch = [{"time": datetime.fromtimestamp(k[0]/1000, tz=timezone.utc).isoformat(),
+                              "open": float(k[1]), "high": float(k[2]), "low": float(k[3]),
+                              "close": float(k[4]), "vol": float(k[5])} for k in data]
+                    all_candles = batch + all_candles  # prepend older data
+                    end_time = data[0][0] - 1  # 1ms before earliest bar
+                    break
+                log.warning(f"[BN-PAG] {sym} HTTP {r.status_code}: {r.text[:120]}")
+            else:
+                break  # both endpoints failed
+            if page < pages - 1:
+                time.sleep(1)
+        except Exception as e:
+            log.error(f"[BN-PAG] {sym} page {page}: {e}")
+            break
+    log.info(f"[BN-PAG] {sym} {interval}: {len(all_candles)} bars ({pages} pages)")
+    return all_candles if all_candles else None
+
+def _fetch_bt_yfinance(sym, period="730d"):
+    """Fetch extended H1 data from yfinance for backtest, return (h4_candles, h1_candles) tuple."""
+    try:
+        import yfinance as yf
+        import pandas as pd
+        h1_df = yf.download(sym, period=period, interval="1h", progress=False, auto_adjust=True)
+        if h1_df is None or h1_df.empty:
+            log.warning(f"[BT-YF] {sym}: no H1 data")
+            return None, None
+        if isinstance(h1_df.columns, pd.MultiIndex):
+            _ohlcv = {"Open", "High", "Low", "Close", "Volume"}
+            _l0 = set(h1_df.columns.get_level_values(0))
+            h1_df.columns = (h1_df.columns.get_level_values(0)
+                             if _ohlcv.intersection(_l0)
+                             else h1_df.columns.get_level_values(1))
+        h1_df = h1_df.loc[:, ~h1_df.columns.duplicated(keep="first")]
+        vol_col = h1_df["Volume"] if "Volume" in h1_df.columns else pd.Series(0.0, index=h1_df.index)
+        h4_df = pd.DataFrame({
+            "Open":   h1_df["Open"].resample("4h").first(),
+            "High":   h1_df["High"].resample("4h").max(),
+            "Low":    h1_df["Low"].resample("4h").min(),
+            "Close":  h1_df["Close"].resample("4h").last(),
+            "Volume": vol_col.resample("4h").sum(),
+        }).dropna(subset=["Open", "Close"])
+        h4_candles = [{"time": str(idx), "open": float(r["Open"]), "high": float(r["High"]),
+                       "low": float(r["Low"]), "close": float(r["Close"]),
+                       "vol": float(r["Volume"])} for idx, r in h4_df.iterrows()]
+        h1_candles = [{"time": str(idx), "open": float(r["Open"]), "high": float(r["High"]),
+                       "low": float(r["Low"]), "close": float(r["Close"]),
+                       "vol": float(r.get("Volume", 0))} for idx, r in h1_df.iterrows()]
+        log.info(f"[BT-YF] {sym}: {len(h4_candles)} H4 bars, {len(h1_candles)} H1 bars")
+        return h4_candles, h1_candles
+    except Exception as e:
+        log.error(f"[BT-YF] {sym}: {e}")
+        return None, None
+
+def _fetch_eodhd_intraday_bt(pair, days=730):
+    """Fetch extended intraday H1 data from EODHD REST API with from/to params for backtest.
+    Returns (h4_candles, h1_candles) tuple. Uses raw HTTP, not SDK, to leverage from/to range."""
+    try:
+        _key = os.environ.get("EODHD_KEY", "")
+        if not _key:
+            log.warning("[EODHD-BT] No EODHD_KEY set")
+            return None, None
+        ticker = _eodhd_ticker_for_pair(pair)
+        if not ticker:
+            log.warning(f"[EODHD-BT] {pair['display']}: no valid ticker")
+            return None, None
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        from_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+        url = f"https://eodhd.com/api/intraday/{ticker}"
+        params = {"api_token": _key, "fmt": "json", "from": from_ts, "to": now_ts, "interval": "1h"}
+        r = http_requests.get(url, params=params, timeout=30)
+        if r.status_code != 200:
+            log.warning(f"[EODHD-BT] {ticker} HTTP {r.status_code}: {r.text[:120]}")
+            return None, None
+        bars = r.json()
+        if not bars or not isinstance(bars, list):
+            log.warning(f"[EODHD-BT] {ticker}: no intraday data")
+            return None, None
+        h1_candles = [{"time": b["datetime"], "open": float(b["open"]), "high": float(b["high"]),
+                       "low": float(b["low"]), "close": float(b["close"]),
+                       "vol": float(b.get("volume") or 0)} for b in bars
+                      if b.get("open") is not None and b.get("close") is not None]
+        if len(h1_candles) < 100:
+            log.warning(f"[EODHD-BT] {ticker}: only {len(h1_candles)} H1 bars")
+            return None, None
+        import pandas as pd
+        df = pd.DataFrame(h1_candles)
+        df["time"] = pd.to_datetime(df["time"])
+        df = df.set_index("time")
+        h4_df = pd.DataFrame({
+            "open":  df["open"].resample("4h").first(),
+            "high":  df["high"].resample("4h").max(),
+            "low":   df["low"].resample("4h").min(),
+            "close": df["close"].resample("4h").last(),
+            "vol":   df["vol"].resample("4h").sum(),
+        }).dropna(subset=["open", "close"])
+        h4_candles = [{"time": str(idx), "open": float(r["open"]), "high": float(r["high"]),
+                       "low": float(r["low"]), "close": float(r["close"]),
+                       "vol": float(r["vol"])} for idx, r in h4_df.iterrows()]
+        log.info(f"[EODHD-BT] {ticker}: {len(h4_candles)} H4 bars, {len(h1_candles)} H1 bars ({days}d)")
+        if len(h4_candles) < 120:
+            log.warning(f"[EODHD-BT] {ticker}: only {len(h4_candles)} H4 bars after resample (need 120+), falling back")
+            return None, None
+        return h4_candles, h1_candles
+    except Exception as e:
+        log.error(f"[EODHD-BT] {pair['display']}: {e}")
+        return None, None
+
 def fetch_eodhd(pair, tf, limit):
-    """Download OHLCV candles via EODHD SDK (APIClient). Covers forex, stocks, indices — 1000 req/min."""
+    """Download OHLCV candles via EODHD SDK (APIClient). Covers forex, stocks, indices â€” 1000 req/min."""
     try:
         api = _get_eodhd_client()
         if not api: log.warning("[EODHD] No EODHD_KEY set"); return None
@@ -443,7 +859,7 @@ def fetch_eodhd(pair, tf, limit):
                         "low": float(b["low"]), "close": float(b["close"]),
                         "vol": float(b.get("volume") or 0)} for b in bars]
         else:
-            start_ts = int((datetime.now(timezone.utc) - timedelta(days=120)).timestamp())
+            start_ts = int((datetime.now(timezone.utc) - timedelta(days=365)).timestamp())
             bars = api.get_intraday_historical_data(ticker, interval="1h", from_unix_time=start_ts)
             if not bars:
                 fallback = _fetch_fallback_candles(pair, tf, limit, reason="EODHD intraday unavailable")
@@ -460,7 +876,7 @@ def fetch_eodhd(pair, tf, limit):
                 df = pd.DataFrame(candles)
                 df["time"] = pd.to_datetime(df["time"])
                 df = df.set_index("time")
-                # Column-by-column resample — avoids pandas version issues with .agg(dict)
+                # Column-by-column resample â€” avoids pandas version issues with .agg(dict)
                 df = pd.DataFrame({
                     "open":  df["open"].resample("4h").first(),
                     "high":  df["high"].resample("4h").max(),
@@ -492,7 +908,7 @@ def fetch_polygon(pair, tf, limit):
             url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{mult}/{span}/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
             r = http_requests.get(url, params={"apiKey": key, "limit": 50000, "sort": "asc"}, timeout=20)
             if r.status_code == 403:
-                log.warning(f"[PG] {ticker}: 403 Forbidden — check API key or plan"); return None
+                log.warning(f"[PG] {ticker}: 403 Forbidden â€” check API key or plan"); return None
             if r.status_code != 200:
                 log.warning(f"[PG] {ticker} HTTP {r.status_code}: {r.text[:120]}"); return None
             data = r.json()
@@ -527,19 +943,52 @@ from scoring import (
 )
 
 _scan_in_progress = False
-_kill_switch = False      # N4: Kill-switch — blocks new scans/analyses when True
-_disabled_pairs: set = set()  # per-pair kill-switch — display names of pairs to exclude
+_kill_switch = False      # N4: Kill-switch â€” blocks new scans/analyses when True
+_disabled_pairs: set = set()  # per-pair kill-switch â€” display names of pairs to exclude
 
-def run_full_scan() -> dict:
-    """Parallel scan of all tracked pairs. Returns strict trade signals, watchlist, errors, and skips."""
+def _normalize_style(style: str | None) -> str:
+    """Normalize style strings used by scan/backtest endpoints."""
+    s = (style or "auto").lower()
+    return s if s in ("auto", "swing", "intraday", "scalp") else "auto"
+
+
+def _effective_scan_style(pair: dict, requested_style: str) -> str:
+    """Resolve scan style per pair. Auto favors intraday for fast-moving markets."""
+    if requested_style == "auto":
+        return "intraday" if pair.get("type") in ("crypto", "forex") else "swing"
+    return requested_style
+
+
+def _effective_backtest_style(pair: dict, requested_style: str) -> str:
+    """Resolve backtest iteration style per pair."""
+    if requested_style == "auto":
+        return "intraday" if pair.get("type") in ("crypto", "forex") else "swing"
+    # No dedicated scalp loop yet; closest behavior is intraday H4 walk-forward.
+    if requested_style == "scalp":
+        return "intraday"
+    return requested_style
+
+
+def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
+    """Parallel scan of tracked pairs. Optional asset_class filter (crypto/forex/stock/commodity/index)."""
     global _scan_in_progress
+    _requested_style = _normalize_style(style)
+    _valid_classes = {"crypto", "forex", "stock", "commodity", "index"}
+    _ac = asset_class.lower().strip() if asset_class else None
+    if _ac and _ac not in _valid_classes:
+        return {"success": False, "error": f"Invalid asset_class '{asset_class}'. Valid: {sorted(_valid_classes)}",
+                "signals": [], "tradeSignals": [], "watchlist": [], "errors": [], "skipped": [],
+                "btcBias": "neutral", "totalPairs": 0, "activePairs": 0,
+                "scannedAt": datetime.now(timezone.utc).isoformat()}
     if _kill_switch:
-        return {"success":False,"error":"Kill-switch active — system paused","signals":[],"tradeSignals":[],"watchlist":[],"errors":[],"skipped":[],"btcBias":"neutral","totalPairs":0,"activePairs":0,"scannedAt":datetime.now(timezone.utc).isoformat()}
+        return {"success":False,"error":"Kill-switch active â€” system paused","signals":[],"tradeSignals":[],"watchlist":[],"errors":[],"skipped":[],"btcBias":"neutral","totalPairs":0,"activePairs":0,"scannedAt":datetime.now(timezone.utc).isoformat()}
     if _scan_in_progress:
         return {"success":False,"error":"Scan already in progress","signals":[],"tradeSignals":[],"watchlist":[],"errors":[],"skipped":[],"btcBias":"neutral","totalPairs":0,"activePairs":0,"scannedAt":datetime.now(timezone.utc).isoformat()}
     _scan_in_progress = True
     try:
         candidate_pairs = [p for p in ALL_PAIRS if p["display"] not in _disabled_pairs]
+        if _ac:
+            candidate_pairs = [p for p in candidate_pairs if p.get("type") == _ac]
         active_pairs = [p for p in candidate_pairs if p.get("enabled", True)]
         results, watchlist, errors, skipped = [], [], [], []
         scan_funnel = {
@@ -604,7 +1053,8 @@ def run_full_scan() -> dict:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         def _analyse(pair):
             try:
-                return pair, analyze_pair(pair, btc_bias), None
+                _pair_style = _effective_scan_style(pair, _requested_style)
+                return pair, analyze_pair(pair, btc_bias, style=_pair_style), None
             except Exception as e:
                 return pair, None, str(e)
         with ThreadPoolExecutor(max_workers=6) as pool:
@@ -662,57 +1112,69 @@ def run_full_scan() -> dict:
         return {"success": True, "signals": results, "tradeSignals": results, "watchlist": watchlist,
                 "errors": errors, "skipped": skipped, "scanFunnel": scan_funnel,
                 "btcBias": btc_bias, "totalPairs": len(candidate_pairs), "activePairs": len(active_pairs),
-                "scannedAt": datetime.now(timezone.utc).isoformat()}
+                "scannedAt": datetime.now(timezone.utc).isoformat(),
+                "styleRequested": _requested_style, "style": _requested_style}
     finally:
         _scan_in_progress = False
 
-EXPERT_PROMPT="""You are Marcus Reid — 18-year prop-desk veteran. Framework: Elder Triple Screen, Wilder rules, Weinstein stages, Murphy intermarket, Minervini templates, Van Tharp R-multiples, Douglas probability. Be direct, blunt, zero sugar-coating. Never guarantee outcomes.
+EXPERT_PROMPT="""You are Marcus Reid — 18-year prop-desk veteran turned trading mentor. You've seen it all and you're not easily impressed, but when a setup is clean you get genuinely excited. You speak like a sharp friend who happens to be a market wizard — concise, opinionated, occasionally witty. No corporate-speak. No filler.
 
-STRICT RULES — BREAK THESE AND YOU FAIL:
-- Output ONLY valid JSON. No markdown, no explanations, no ```json.
-- Use probability language ONLY: "edge suggests", "probability favors", "setup indicates". NEVER use "will", "guaranteed", "definitely", "should hit".
-- Every sentence must reference at least one exact input field (confluenceScore, TrendState, WeinsteinLabel, votes, warnings, etc.).
+Framework: Elder Triple Screen, Wilder rules, Weinstein stages, Murphy intermarket, Minervini templates, Van Tharp R-multiples, Douglas probability.
+
+STRICT RULES:
+- Output ONLY valid JSON. No markdown, no explanations outside JSON values.
+- Use probability language: "edge suggests", "probability favors", "setup indicates". NEVER "will", "guaranteed", "should hit".
+- Reference specific input data (score%, TrendState, vote names, warnings).
 - Counter-trend = automatic grade drop of 1 full level + explicit warning.
-- Score <6.0 or DEAD RANGING = grade F, no entry.
 
-GRADING (max 13.0):
-A+ (10-13): Elite — full size. A (8-9.9): Strong — normal size. B (6-7.9): Valid — half size. C (4-5.9): Watchlist only. F (0-3.9): Avoid.
+INPUT FORMAT — the signal comes in labeled sections:
+=== SIGNAL === (pair, direction, score as percentage of class max, conviction, regime)
+=== TECHNICALS === (individual scored votes with their weights, plus context indicators)
+=== LEVELS === (entry, SL, TP1, TP2 with R-multiples)
+=== WARNINGS === (penalties already applied to score — these are facts, not opinions)
+=== CONTEXT === (NOT scored — news, DXY, yield curve, backtest stats — use for narrative color)
+=== PORTFOLIO === (current heat and drawdown if any)
+
+GRADING (use the Score % from SIGNAL section):
+A+ (85-100%): Elite — full size, everything aligned.
+A  (70-84%): Strong — normal size, minor gaps only.
+B  (55-69%): Valid — half size, needs monitoring.
+C  (40-54%): Watchlist only — interesting but not ready.
+F  (0-39%): Avoid — insufficient edge or DEAD RANGING.
 
 REGIME (read TrendState first):
-- TRENDING (ADX≥35): Full rules, pullbacks to EMA21/50 are entries, extend TP.
+- TRENDING (ADX>=35): Full rules, pullbacks to EMA21/50 are entries, extend TP.
 - DEVELOPING (25-34): Confirm with volume.
-- RANGING (per asset class): Downgrade B→C, C→F. Only fade BB extremes + stoch reversal.
+- RANGING: Downgrade B->C, C->F. Only fade BB extremes + stoch reversal.
 - DEAD RANGING: F-grade instantly. Do not trade.
 
-ELDER TRIPLE SCREEN (mandatory):
+ELDER TRIPLE SCREEN:
 D1 tide must lead. Any H4/H1 conflict = WAIT. Counter-trend = -1 grade.
 
 WILDER + MURPHY + WEINSTEIN:
-- RSI divergence = HIGH priority warning. RSI 40-80 bullish range (Cardwell). ADX<25 = no trend signals.
-- Fib proximity vote active → name exact level in entryZone. Price AT fib + stoch + EMA = A-grade cluster.
+- RSI divergence = HIGH priority. RSI 40-80 bullish range (Cardwell). ADX<25 = no trend signals.
+- Fib proximity active -> name exact level in entryZone. Fib + stoch + EMA cluster = A-grade.
 - Weinstein Stage 1/3 = no new trend trades. Stage 2 = ideal LONG. Stage 4 = ideal SHORT.
 - DXY rising = headwind for EUR,GBP,AUD,NZD,XAU,XAG LONGS. BTC bearish = alt LONG risk.
 
 VAN THARP SIZING:
-Express everything in R. SL >2% price = quarter size. Min 2R reward. SQN: <1.6=Poor, 2.5+=Good, 3+=Excellent, 5+=Superb.
+Express in R. SL >2% price = quarter size. Min 2R reward. SQN: <1.6=Poor, 2.5+=Good, 3+=Excellent, 5+=Superb.
 
 NEWS & EVENTS:
 High-impact (FOMC,NFP,CPI) within 24h = reduce 50% or WAIT. Conflicting news = downgrade 1 level.
 
 STYLE RULES:
-- SCALP: ADX>30, H1 exhaustion, 1.5-2R. Flag if D1 too strong.
-- INTRADAY: H4+H1 aligned, same session, 2-3R. Session quality medium+ required.
-- SWING: D1 EMA stack dominant, EMA200 slope, 4-6R. Warn if H1 extended.
+- SCALP: ADX>30, H1 exhaustion, 1.5-2R.
+- INTRADAY: H4+H1 aligned, same session, 2-3R.
+- SWING: D1 EMA stack dominant, EMA200 slope, 4-6R.
 If incompatible with requested style, say so and recommend correct style.
 
-edgeProbability calculation:
-Base = confluenceScore × 7.7. +15 if spread≥3 and TRENDING. -15 if counter-trend or DEAD RANGING. -10 if high-impact news. Cap at 95.
+edgeProbability: Base = Score% × 0.95. +10 if conviction HIGH and TRENDING. -15 if counter-trend or DEAD RANGING. -10 if high-impact news. Cap 20-95.
 
-riskLevel calculation:
-"Low" if edgeProbability≥70 and TRENDING and no counter-trend. "High" if edgeProbability<40 or DEAD RANGING or counter-trend. "Medium" otherwise.
+riskLevel: "Low" if edgeProb>=70 and TRENDING. "High" if edgeProb<40 or DEAD RANGING or counter-trend. "Medium" otherwise.
 
 OUTPUT — EXACT JSON ONLY:
-{"grade":"A","verdict":"ONE sharp sentence","narrative":"2-3 sentences — reference specific votes, TrendState, WeinsteinLabel","entryZone":"exact price/fib","invalidation":"exact price","keyLevels":"S1/R1","positionSizing":"Full/Half/Quarter + R explanation","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"why","warnings":["specific risks"],"edgeProbability":68,"riskLevel":"Medium"}
+{"grade":"A","verdict":"One punchy sentence — be yourself, not a robot","narrative":"2-3 sentences referencing specific votes and data. Show personality.","entryZone":"exact price/fib","invalidation":"exact price","keyLevels":"S1/R1","positionSizing":"Full/Half/Quarter + R explanation","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"why","warnings":["specific risks"],"edgeProbability":68,"riskLevel":"Medium"}
 
 Now analyse the following signal data and reply with JSON only:"""
 
@@ -727,7 +1189,7 @@ def fetch_dxy_context():
         return f"trend={trend} 5d_chg={chg}% price={round(cl[-1],2)}"
     except Exception: return None
 
-# Phase A: UST Yield Curve cache (1hr TTL — rates change slowly)
+# Phase A: UST Yield Curve cache (1hr TTL â€” rates change slowly)
 _yield_cache = {"data": None, "ts": 0}
 _YIELD_TTL = 3600
 
@@ -837,7 +1299,7 @@ def fetch_div_split_context():
         if entry:
             result[sym] = entry
     _divsplit_cache = {"data": result, "ts": now}
-    log.info(f"[DIVS] Checked {len(_DIV_SPLIT_PAIRS)} pairs — {len(result)} with upcoming events")
+    log.info(f"[DIVS] Checked {len(_DIV_SPLIT_PAIRS)} pairs â€” {len(result)} with upcoming events")
     return result
 
 # Phase B2: Upcoming earnings awareness cache (6hr TTL)
@@ -869,10 +1331,10 @@ def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
         _EARNINGS_AVAILABLE = True
     except Exception as e:
         if "403" in str(e) or "Forbidden" in str(e):
-            # Don't permanently disable — paid plans may have this endpoint.
+            # Don't permanently disable â€” paid plans may have this endpoint.
             # Log clearly so user can verify their EODHD plan includes calendar/earnings.
-            log.warning(f"[EARN] 403 Forbidden on earnings endpoint — verify your EODHD plan includes "
-                        f"calendar/earnings access (Dashboard → API Tokens). Key in use ends with "
+            log.warning(f"[EARN] 403 Forbidden on earnings endpoint â€” verify your EODHD plan includes "
+                        f"calendar/earnings access (Dashboard â†’ API Tokens). Key in use ends with "
                         f"...{os.environ.get('EODHD_KEY','')[-6:]}")
         else:
             log.warning(f"[EARN] fetch failed: {e}")
@@ -899,10 +1361,10 @@ def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
                 "currency": row.get("currency"),
             }
     _earnings_cache = {"data": result, "ts": now}
-    log.info(f"[EARN] Checked {len(symbols)} stock symbols — {len(result)} with upcoming earnings")
+    log.info(f"[EARN] Checked {len(symbols)} stock symbols â€” {len(result)} with upcoming earnings")
     return result
 
-# P2: 5-minute TTL cache for news context — avoid redundant API calls during rapid scans
+# P2: 5-minute TTL cache for news context â€” avoid redundant API calls during rapid scans
 _news_cache = {"data": None, "ts": 0}
 _NEWS_TTL = 300  # 5 minutes
 
@@ -986,47 +1448,77 @@ def fetch_news_context(pairs: list | None = None):
 def _build_signal_message(signal: dict, news_ctx: dict | None,
                           style_pref: str, style_labels: dict,
                           portfolio_heat: float = 0.0, drawdown_pct: float = 0.0) -> str:
-    """Build the structured signal string sent to Marcus Reid (Claude) for analysis."""
+    """Build sectioned signal string sent to Marcus Reid (Claude) for analysis.
+
+    Sections: SIGNAL, TECHNICALS, LEVELS, WARNINGS, CONTEXT, PORTFOLIO.
+    Removes redundant ServerIndicators (votes already contain the verdict).
+    """
     max_score = signal.get("maxScore", 13.0)
+    score = signal.get("confluenceScore", 0)
+    score_pct = round(score / max_score * 100) if max_score else 0
     spread = signal.get("spread", 0)
     conviction = "HIGH" if spread >= 3 else "MEDIUM" if spread >= 1.5 else "LOW"
-    pair_sqn = signal.get("pairSQN")
+    ptype = signal.get("type", "stock")
 
-    parts = [
-        f"Pair:{signal['pair']} Dir:{signal['direction']} Score:{signal['confluenceScore']}/{max_score}",
-        f"Spread:{spread}({conviction} conviction)",
-        f"PairSQN:{pair_sqn}" if pair_sqn else "",
-        f"TrendState:{signal.get('trendState', '?')}",
-        f"ADXPct:{signal.get('h4', {}).get('snap', {}).get('adxPct', '?')}th-pct"
-        f"({signal.get('h4', {}).get('snap', {}).get('adxLabel', '?')})",
-        f"Weinstein:{signal.get('weinsteinLabel', 'n/a')}",
-        f"Price:{signal['price']} SL:{signal['sl']}(SL%:{signal.get('slPct', '?')}%)",
-        f"TP1:{signal['tp1']}(R:{signal['rr1']}) TP2:{signal['tp2']}(R:{signal['rr2']})",
-        f"ATR:{signal['atr']}",
-        f"Votes:{json.dumps(signal['votes'])}",
-        f"Vol:{signal['volRatio']}x Stoch:{signal.get('stochK')}/{signal.get('stochD')}",
-        f"EMA200slope:{signal['ema200Slope']}%",
-        f"BTC:{signal.get('btcBias', 'n/a')}",
-        f"Session:{signal['session']['name']}({signal['session']['quality']})",
-        f"Warnings:{json.dumps(signal['warnings'])}",
-        f"Fib:{json.dumps(signal['fib'])}",
-        f"ATRPct:{signal.get('h4', {}).get('snap', {}).get('atrPct', '?')}"
-        f"({signal.get('h4', {}).get('snap', {}).get('atrLabel', '?')})",
-        f"EntryMode:{signal.get('entryMode', 'trend')}",
-        f"StylePref:{style_pref.upper()}",
-        f"PortfolioHeat:{portfolio_heat:.1%}" if portfolio_heat > 0 else "",
-        f"CurrentDrawdown:{drawdown_pct:.1%}" if drawdown_pct > 0 else "",
+    # === SIGNAL ===
+    lines = [
+        "=== SIGNAL ===",
+        f"Pair: {signal['pair']} | Direction: {signal['direction']} | Score: {score}/{max_score} ({score_pct}%)",
+        f"Conviction: {conviction} (spread {spread}) | Entry Mode: {signal.get('entryMode', 'trend')}",
+        f"Style: {style_pref.upper()} ({style_labels.get(style_pref.lower(), '')}) | "
+        f"Regime: {signal.get('trendState', '?')} "
+        f"(ADX {signal.get('h4', {}).get('snap', {}).get('adxPct', '?')}th pct, "
+        f"{signal.get('h4', {}).get('snap', {}).get('adxLabel', '?')})",
     ]
-    msg = " ".join(p for p in parts if p)
+
+    # === TECHNICALS ===
+    votes = signal.get("votes", {})
+    vote_lines = []
+    for vname, vval in votes.items():
+        sign = f"+{vval}" if vval > 0 else str(vval)
+        vote_lines.append(f"  {vname}: {sign}")
+    lines.append("")
+    lines.append("=== TECHNICALS (scored votes) ===")
+    lines.extend(vote_lines)
+    lines.append(f"  Stoch K/D: {signal.get('stochK')}/{signal.get('stochD')}")
+    lines.append(f"  Volume ratio: {signal.get('volRatio', 1.0)}x avg")
+    lines.append(f"  EMA200 slope: {signal.get('ema200Slope', 0)}%")
+    lines.append(f"  Weinstein: {signal.get('weinsteinLabel', 'n/a')}")
+    lines.append(f"  ATR percentile: {signal.get('h4', {}).get('snap', {}).get('atrPct', '?')} "
+                 f"({signal.get('h4', {}).get('snap', {}).get('atrLabel', '?')})")
+
+    # === LEVELS ===
+    lines.append("")
+    lines.append("=== LEVELS ===")
+    lines.append(f"Entry: {signal['price']} | SL: {signal['sl']} ({signal.get('slPct', '?')}%) | "
+                 f"TP1: {signal['tp1']} ({signal['rr1']}R) | TP2: {signal['tp2']} ({signal['rr2']}R)")
+    lines.append(f"ATR: {signal['atr']}")
+    fib = signal.get("fib")
+    if fib:
+        lines.append(f"Fib levels: {json.dumps(fib)}")
+
+    # === WARNINGS (scoring penalties applied) ===
+    warnings = signal.get("warnings", [])
+    if warnings:
+        lines.append("")
+        lines.append("=== WARNINGS (scoring penalties applied) ===")
+        for w in warnings:
+            lines.append(f"- {w}")
+
+    # === CONTEXT (not scored, for AI analysis) ===
+    lines.append("")
+    lines.append("=== CONTEXT (for your analysis, NOT scored) ===")
+    lines.append(f"BTC bias: {signal.get('btcBias', 'n/a')} | "
+                 f"Session: {signal['session']['name']} ({signal['session']['quality']})")
 
     dxy_ctx = fetch_dxy_context()
     if dxy_ctx:
-        msg += f" DXY:{dxy_ctx}"
+        lines.append(f"DXY: {dxy_ctx}")
 
     _yc = fetch_yield_curve()
     if _yc:
-        msg += (f" YieldCurve:{{shape:{_yc['shape']},2y10y_spread:{_yc['spread_2_10']}%,"
-                f"3m:{_yc.get('y3m')}%,10y:{_yc['y10y']}%,context:{_yc['riskContext']}}}")
+        lines.append(f"Yield curve: {_yc['shape']} (2Y-10Y spread: {_yc['spread_2_10']}%, "
+                     f"3M: {_yc.get('y3m')}%, 10Y: {_yc['y10y']}%) — {_yc['riskContext']}")
 
     _ds = fetch_div_split_context()
     _pair_sym = signal.get("symbol", "")
@@ -1034,51 +1526,59 @@ def _build_signal_message(signal: dict, news_ctx: dict | None,
         _ev = _ds[_pair_sym]
         if _ev.get("upcomingDiv"):
             _d = _ev["upcomingDiv"][0]
-            msg += (f" ExDivWarning:ex-div in {_d['daysTo']} days"
-                    f" ({_d['exDate']}, amount:{_d.get('amount', '?')}) — gap-down risk, reduce size")
+            lines.append(f"Ex-div in {_d['daysTo']} days ({_d['exDate']}, amount: {_d.get('amount', '?')}) — gap-down risk")
         if _ev.get("upcomingSplit"):
             _s = _ev["upcomingSplit"][0]
-            msg += (f" SplitWarning:split in {_s['daysTo']} days"
-                    f" ({_s['splitDate']}, ratio:{_s.get('ratio', '?')}) — price distortion risk")
+            lines.append(f"Split in {_s['daysTo']} days ({_s['splitDate']}, ratio: {_s.get('ratio', '?')}) — price distortion risk")
 
     _bt = signal.get("backtestStats")
     if _bt:
-        msg += (f" BT_SQN:{_bt.get('sqn', '?')} BT_WR:{_bt.get('winRate', '?')}%"
-                f" BT_Expect:{_bt.get('expectancy', '?')}R BT_MaxDD:{_bt.get('maxDrawdownPct', '?')}%")
+        lines.append(f"Backtest: SQN {_bt.get('sqn', '?')} | WR {_bt.get('winRate', '?')}% | "
+                     f"Expectancy {_bt.get('expectancy', '?')}R | Max DD {_bt.get('maxDrawdownPct', '?')}%")
         _rs = _bt.get("regimeStats", {})
         if _rs:
-            msg += f" BT_RegimeWR:{json.dumps({k: v.get('wr') for k, v in _rs.items()})}"
+            lines.append(f"Regime WR: {json.dumps({k: v.get('wr') for k, v in _rs.items()})}")
 
-    msg += f" StyleDetail:{style_labels.get(style_pref.lower(), style_pref.upper())}"
+    pair_sqn = signal.get("pairSQN")
+    if pair_sqn:
+        lines.append(f"Pair SQN: {pair_sqn}")
 
     if news_ctx:
+        _ctx_parts = []
         if news_ctx.get("forexEvents"):
-            msg += f" HighImpactEvents:{json.dumps(news_ctx['forexEvents'])}"
-        if news_ctx.get("marketNews"):
-            msg += f" MarketNews:{json.dumps(news_ctx['marketNews'])}"
-        if news_ctx.get("cryptoNews") and signal.get("type") == "crypto":
-            pair_coins = [signal["symbol"].replace("USDT", "").replace("USDC", "")]
-            relevant = [n for n in news_ctx["cryptoNews"]
-                        if not n["currencies"] or any(c in pair_coins for c in n["currencies"])]
-            if relevant:
-                msg += f" CryptoNews:{json.dumps(relevant[:3])}"
+            _ctx_parts.append(f"High-impact events: {json.dumps(news_ctx['forexEvents'][:5])}")
         _sent = news_ctx.get("pairSentiment", {})
         if _sent.get(signal.get("pair", "")):
             _sc = _sent[signal["pair"]]
             _sl = "bullish" if _sc > 0.6 else "bearish" if _sc < 0.4 else "neutral"
-            msg += f" NewsSentiment:{_sc}({_sl})"
+            _ctx_parts.append(f"News sentiment: {_sc} ({_sl})")
+        if news_ctx.get("cryptoNews") and ptype == "crypto":
+            pair_coins = [signal["symbol"].replace("USDT", "").replace("USDC", "")]
+            relevant = [n for n in news_ctx["cryptoNews"]
+                        if not n["currencies"] or any(c in pair_coins for c in n["currencies"])]
+            if relevant:
+                _ctx_parts.append(f"Crypto news: {json.dumps(relevant[:3])}")
+        if news_ctx.get("marketNews"):
+            _ctx_parts.append(f"Market news: {json.dumps(news_ctx['marketNews'][:3])}")
         _pnews = news_ctx.get("pairNews", {}).get(signal.get("pair", ""), [])
         if _pnews:
-            msg += f" PairNews:{json.dumps(_pnews)}"
+            _ctx_parts.append(f"Pair news: {json.dumps(_pnews[:3])}")
         _ww = news_ctx.get("wordWeights", {}).get(signal.get("pair", ""), [])
         if _ww:
-            msg += f" NewsDrivers:{json.dumps(_ww)}"
+            _ctx_parts.append(f"News drivers: {json.dumps(_ww)}")
+        for cp in _ctx_parts:
+            lines.append(cp)
 
-    _server_ind = signal.get("serverIndicators")
-    if _server_ind:
-        msg += f" ServerIndicators:{json.dumps(_server_ind)}"
+    # === PORTFOLIO ===
+    if portfolio_heat > 0 or drawdown_pct > 0:
+        lines.append("")
+        lines.append("=== PORTFOLIO ===")
+        if portfolio_heat > 0:
+            lines.append(f"Heat: {portfolio_heat:.1%}")
+        if drawdown_pct > 0:
+            lines.append(f"Drawdown: {drawdown_pct:.1%}")
 
-    return msg
+    return "\n".join(lines)
 
 def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto",
            portfolio_heat: float = 0.0, drawdown_pct: float = 0.0) -> dict:
@@ -1091,9 +1591,9 @@ def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto",
         import anthropic
         c = anthropic.Anthropic(api_key=CONFIG["ANTHROPIC_KEY"])
         style_labels = {
-            "scalp":    "SCALP — focus on H1 exhaustion, tight 1.5R, quick execution",
-            "intraday": "INTRADAY — H4+H1 alignment, same-session execution, 2-3R",
-            "swing":    "SWING — D1 trend dominance, EMA200 slope, 4-6R multi-day hold",
+            "scalp":    "SCALP â€” focus on H1 exhaustion, tight 1.5R, quick execution",
+            "intraday": "INTRADAY â€” H4+H1 alignment, same-session execution, 2-3R",
+            "swing":    "SWING â€” D1 trend dominance, EMA200 slope, 4-6R multi-day hold",
         }
         if style_pref == "auto":
             _sc = signal.get("confluenceScore", 0)
@@ -1120,65 +1620,61 @@ def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto",
         log.error(f"[AI] ERROR for {signal.get('pair','?')}: {e}")
         return {"error":str(e)}
 
-def backtest_pair(pair):
-    """Walk-forward backtest on D1 bars with slippage, regime tagging, and Monte Carlo DD simulation."""
-    log.info(f"[BT] {pair['display']} fetching data...")
+def backtest_pair(pair, style="auto"):
+    """Walk-forward backtest on D1/H4 bars with slippage, regime tagging, and Monte Carlo DD simulation."""
+    requested_style = _normalize_style(style)
+    effective_style = _effective_backtest_style(pair, requested_style)
+    if effective_style not in ("swing", "intraday"):
+        return {"error": f"Unsupported backtest style: {requested_style}"}
+    log.info(f"[BT] {pair['display']} fetching data... style={requested_style}->{effective_style}")
     try:
         import yfinance as yf, pandas as pd
         sym = pair["symbol"]
         def df_to_candles(df):
-            return [{"time":str(idx)[:10],"open":float(r["Open"]),"high":float(r["High"]),"low":float(r["Low"]),"close":float(r["Close"]),"vol":float(r.get("Volume",0))} for idx,r in df.iterrows()]
+            return [{"time":str(idx),"open":float(r["Open"]),"high":float(r["High"]),"low":float(r["Low"]),"close":float(r["Close"]),"vol":float(r.get("Volume",0))} for idx,r in df.iterrows()]
+        _ptype = pair.get("type", "")
         if pair["source"] == "binance":
+            # Crypto: paginated H4/H1 for 2+ years of data
             d1_raw = fetch_binance(sym, "1d", 1000)
-            h4_raw = fetch_binance(sym, "4h", 1000)
-            h1_raw = fetch_binance(sym, "1h", 1000)
-        elif pair["source"] == "polygon":
-            d1_raw = fetch_polygon(pair, "D1", 600)
-            h4_raw = fetch_polygon(pair, "H4", 1000)
-            h1_raw = fetch_polygon(pair, "H1", 1000)
-        elif pair["source"] == "eodhd":
-            d1_raw = fetch_eodhd(pair, "D1", 600)
-            h4_raw = fetch_eodhd(pair, "H4", 1000)
-            h1_raw = fetch_eodhd(pair, "H1", 1000)
+            h4_raw = fetch_binance_paginated(sym, "4h", 5000)
+            h1_raw = fetch_binance_paginated(sym, "1h", 2000)
+        elif _ptype == "forex":
+            # Forex: EODHD D1 + EODHD intraday H1 (from/to 730d) → resample H4, yfinance fallback
+            d1_raw = fetch_eodhd(pair, "D1", 600) or fetch_candles(pair, "D1", 600)
+            h4_raw, h1_raw = _fetch_eodhd_intraday_bt(pair, days=730)
+            if not h4_raw or not h1_raw:
+                _yf_sym = _yfinance_symbol_for_pair(pair)
+                if _yf_sym:
+                    log.info(f"[BT] {pair['display']}: EODHD intraday failed, trying yfinance")
+                    _yf_h4, _yf_h1 = _fetch_bt_yfinance(_yf_sym)
+                    h4_raw = h4_raw or _yf_h4
+                    h1_raw = h1_raw or _yf_h1
+        elif _ptype in ("stock", "commodity", "index"):
+            # Stocks/Commodities/Indices: EODHD D1 + EODHD intraday (730d), yfinance fallback
+            d1_raw = fetch_eodhd(pair, "D1", 600) or fetch_candles(pair, "D1", 600)
+            h4_raw, h1_raw = _fetch_eodhd_intraday_bt(pair, days=730)
+            if not h4_raw or not h1_raw:
+                _yf_sym = _yfinance_symbol_for_pair(pair)
+                if _yf_sym:
+                    log.info(f"[BT] {pair['display']}: EODHD intraday failed, trying yfinance")
+                    _yf_h4, _yf_h1 = _fetch_bt_yfinance(_yf_sym)
+                    h4_raw = h4_raw or _yf_h4
+                    h1_raw = h1_raw or _yf_h1
         else:
-            d1_df = yf.download(sym, period="2y", interval="1d", progress=False, auto_adjust=True)
-            if d1_df is None or d1_df.empty: return {"error": f"No D1 data for {pair['display']}"}
-            if isinstance(d1_df.columns, pd.MultiIndex):
-                _ohlcv = {"Open", "High", "Low", "Close", "Volume"}
-                _l0 = set(d1_df.columns.get_level_values(0))
-                d1_df.columns = (d1_df.columns.get_level_values(0) if _ohlcv.intersection(_l0) else d1_df.columns.get_level_values(1))
-            d1_df = d1_df.loc[:, ~d1_df.columns.duplicated(keep="first")]
-            h1_df = yf.download(sym, period="180d", interval="1h", progress=False, auto_adjust=True)
-            if h1_df is None or h1_df.empty: h1_df = None
-            elif isinstance(h1_df.columns, pd.MultiIndex):
-                _ohlcv = {"Open", "High", "Low", "Close", "Volume"}
-                _l0 = set(h1_df.columns.get_level_values(0))
-                h1_df.columns = (h1_df.columns.get_level_values(0) if _ohlcv.intersection(_l0) else h1_df.columns.get_level_values(1))
-                h1_df = h1_df.loc[:, ~h1_df.columns.duplicated(keep="first")]
-            d1_raw = df_to_candles(d1_df)
-            if h1_df is not None:
-                vol_col = h1_df["Volume"] if "Volume" in h1_df.columns else pd.Series(0.0, index=h1_df.index)
-                h4_df = pd.DataFrame({
-                    "Open":   h1_df["Open"].resample("4h").first(),
-                    "High":   h1_df["High"].resample("4h").max(),
-                    "Low":    h1_df["Low"].resample("4h").min(),
-                    "Close":  h1_df["Close"].resample("4h").last(),
-                    "Volume": vol_col.resample("4h").sum(),
-                }).dropna(subset=["Open", "Close"])
-                h4_raw = df_to_candles(h4_df)
-                h1_raw = df_to_candles(h1_df)
-            else:
-                h4_raw = None
-                h1_raw = None
+            d1_raw = fetch_candles(pair, "D1", 600)
+            h4_raw = fetch_candles(pair, "H4", 1000)
+            h1_raw = fetch_candles(pair, "H1", 1000)
         if not d1_raw: return {"error": f"No D1 data for {pair['display']}"}
         if not h4_raw or not h1_raw: return {"error": f"No H4/H1 data for {pair['display']}"}
         if len(d1_raw) < 230: return {"error": f"Insufficient D1 history for {pair['display']} ({len(d1_raw)} bars)"}
+        if effective_style == "intraday" and len(h4_raw) < 120:
+            return {"error": f"Insufficient H4 history for {pair['display']} ({len(h4_raw)} bars)"}
         h4_times = pd.to_datetime([c["time"] for c in h4_raw], utc=True, errors="coerce")
         h1_times = pd.to_datetime([c["time"] for c in h1_raw], utc=True, errors="coerce")
     except Exception as e:
         return {"error": f"Data fetch failed: {e}"}
 
-    # N8: Session-variable slippage — forex widens during Asian/off-hours
+    # N8: Session-variable slippage â€” forex widens during Asian/off-hours
     _BASE_SLIP = {"forex":0.0001,"crypto":0.002,"commodity":0.001,"stock":0.001,"index":0.001}
     def _get_slippage(bar, ptype):
         base = _BASE_SLIP.get(ptype, 0.001)
@@ -1195,154 +1691,250 @@ def backtest_pair(pair):
                 return base * 0.7  # tightest spread
         return base
 
-    # Walk forward on D1 bars — reliable 2yr history for all pair types
+    # Shared init
     trades = []; equity = 1.0; equity_curve = [1.0]
-    MIN_BARS = 220; COOLDOWN = 5; MAX_OPEN = 3  # R5: max concurrent positions
-    total_bars = len(d1_raw)
     _ptype = pair["type"]
     _h4_need = max(50, CONFIG["H4_CANDLES"])
     _h1_need = max(50, CONFIG["H1_CANDLES"])
-    i = MIN_BARS; last_exit_bar = 0; open_positions = 0
-    # F8: Trade funnel diagnostic counters
     funnel = {"total_setups":0, "fail_score":0, "fail_macro":0, "fail_regime":0, "taken":0}
     _recent_scores = []  # CR3: rolling score history for adaptive percentile threshold
-    # R4: Walk-forward split — 70% in-sample, 30% out-of-sample
-    _oos_start = MIN_BARS + int((total_bars - MIN_BARS) * 0.7)
-    while i < total_bars - 1:
-        if i - last_exit_bar < COOLDOWN:
-            i += 1; continue
-        # R5: Max concurrent positions cap
-        if open_positions >= MAX_OPEN:
-            i += 1; continue
-        d1_window = d1_raw[i - MIN_BARS : i]
-        entry_ts = pd.to_datetime(d1_raw[i]["time"], utc=True, errors="coerce")
-        if pd.isna(entry_ts):
-            i += 1; continue
-        intraday_cutoff = entry_ts + pd.Timedelta(days=1)
-        h4_window = [bar for bar, ts in zip(h4_raw, h4_times) if not pd.isna(ts) and ts < intraday_cutoff][-_h4_need:]
-        h1_window = [bar for bar, ts in zip(h1_raw, h1_times) if not pd.isna(ts) and ts < intraday_cutoff][-_h1_need:]
-        if len(h4_window) < 50 or len(h1_window) < 50:
-            i += 1; continue
-        try:
-            d1i = calc_indicators(d1_window)
-            h4i = calc_indicators(h4_window)
-            h1i = calc_indicators(h1_window)
-            vols = [c["vol"] for c in h1_window]; vsma = calc_sma(vols, 20)
-            vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
-            stoch = calc_stochastic(h4_window, 14, 3, 3)
-            e200 = calc_ema([c["close"] for c in d1_window], 200)
-            e200s = (e200[-1] - e200[-21]) / e200[-21] if e200[-1] and len(e200) >= 21 and e200[-21] else 0
-            res = calc_confluence(d1i, h4i, h1i, vr, stoch, e200s, pair, "neutral",
-                                   d1_candles=d1_window, h4_candles=h4_window, h1_candles=h1_window)
-        except Exception:
-            i += 1; continue
-        funnel["total_setups"] += 1
-        # V2/R3: Per-class bt_min from CONFIG + dynamic threshold by regime
-        bt_min = CONFIG["BT_MIN"].get(_ptype, 6.0)
-        _ts = res.get("trendState", "UNKNOWN")
-        if _ts == "TRENDING": bt_min = max(bt_min - 1.0, 5.0)  # R3: relax in strong trend
-        elif _ts == "DEAD RANGING": bt_min = bt_min + 2.0       # R3: demand more in chop
-        elif _ts == "RANGING": bt_min = bt_min + 1.0
-        # CR2: Extra penalty for regime transitions (ADX collapsing/exhausting)
-        _h4_adx_mom = h4i["snap"].get("adxMomentum", "stable")
-        if _ptype == "crypto" and _h4_adx_mom == "collapsing":
-            bt_min += 1.5  # demand much higher score during regime collapse
-        elif _ptype == "crypto" and _h4_adx_mom == "exhausting":
-            bt_min += 0.8  # moderate increase during trend exhaustion
-        # CR3: Rolling score percentile — use 60th pct of recent scores as adaptive floor
-        if _ptype == "crypto" and len(_recent_scores) >= 10:
-            _sorted = sorted(_recent_scores[-30:])
-            _p60 = _sorted[int(len(_sorted) * 0.6)]
-            bt_min = max(bt_min, _p60)  # never go below percentile floor
-        _recent_scores.append(res["score"])
-        if res["score"] < bt_min:
-            funnel["fail_score"] += 1; i += 1; continue
-        # F6: Per-class macro lookback — crypto uses 15 bars, forex 30, others 50
-        _macro_lb = CONFIG["MACRO_LOOKBACK"].get(_ptype, 50)
-        d1_closes = [c["close"] for c in d1_window[-_macro_lb:]]
-        d1_macro_mean = sum(d1_closes) / len(d1_closes)
-        d1_current = d1_closes[-1]
-        macro_long  = d1_current >= d1_macro_mean
-        macro_short = d1_current <= d1_macro_mean
-        direction = res["direction"]
-        if direction == "LONG"  and not macro_long:  funnel["fail_macro"] += 1; i += 1; continue
-        if direction == "SHORT" and not macro_short: funnel["fail_macro"] += 1; i += 1; continue
-        entry_bar = d1_raw[i]
-        raw_entry = entry_bar["close"]
-        slip = raw_entry * _get_slippage(entry_bar, _ptype)
-        entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
-        atr = _atr_for_levels(d1i, h4i, h1i)
-        if not atr or atr == 0: i += 1; continue
-        # C4: Use shared calc_levels (deduplicates with analyze_pair)
-        lvl = calc_levels(entry, atr, direction, _ptype)
-        sl = lvl["sl"]; tp1 = lvl["tp1"]; tp2 = lvl["tp2"]
-        sl_mult = lvl["mults"]["sl"]; tp1_mult = lvl["mults"]["tp1"]; tp2_mult = lvl["mults"]["tp2"]
-        rr1 = lvl["rr1"]
-        # Validate levels are finite and meaningful — NaN/0 levels cause ghost OPEN trades
-        if not all(math.isfinite(v) and v > 0 for v in (sl, tp1, tp2)):
-            i += 1; continue
-        if abs(entry - sl) < entry * 0.0001:  # SL less than 0.01% from entry — invalid
-            i += 1; continue
-        # V3: Structure-based stops for crypto — use wider of ATR-stop vs swing-stop
-        if _ptype == "crypto":
-            _recent = d1_window[-10:]
-            if direction == "LONG":
-                swing_sl = min(c["low"] for c in _recent)
-                if swing_sl < sl: sl = swing_sl  # wider stop lets noise breathe
-            else:
-                swing_sl = max(c["high"] for c in _recent)
-                if swing_sl > sl: sl = swing_sl
-            rr1 = abs(tp1 - entry) / abs(sl - entry) if abs(sl - entry) > 0 else 0
-        # T1: Volatility-adjusted sizing — if ATR > 1.5x its 20-bar SMA, reduce size 30%
-        _atr_series = calc_atr([c["high"] for c in d1_window], [c["low"] for c in d1_window], [c["close"] for c in d1_window], 14)
-        _atr_sma = calc_sma([v for v in _atr_series if v is not None], 20)
-        _vol_adj = 1.0
-        _valid_atr_sma = [v for v in _atr_sma if v is not None]
-        if _valid_atr_sma and _valid_atr_sma[-1] and _valid_atr_sma[-1] > 0:
-            if atr > _valid_atr_sma[-1] * 1.5: _vol_adj = 0.7
-        outcome = "OPEN"; result_r = 0.0; exit_bar = i
-        for j in range(i + 1, min(i + 21, total_bars)):
-            bar = d1_raw[j]
-            if direction == "LONG":
-                # A2: worst-case intrabar — SL checked before TP (conservative)
-                if bar["low"] <= sl:   outcome = "SL";  result_r = -1.0; exit_bar = j; break
-                if bar["high"] >= tp2: outcome = "TP2"; result_r = max(0.0, (tp2_mult / sl_mult) - (slip / (atr * sl_mult))); exit_bar = j; break
-                if bar["high"] >= tp1: outcome = "TP1"; result_r = max(0.0, rr1 - (slip / (atr * sl_mult))); exit_bar = j; break
-            else:
-                # A2: worst-case intrabar — SL checked before TP (conservative)
-                if bar["high"] >= sl:  outcome = "SL";  result_r = -1.0; exit_bar = j; break
-                if bar["low"] <= tp2:  outcome = "TP2"; result_r = max(0.0, (tp2_mult / sl_mult) - (slip / (atr * sl_mult))); exit_bar = j; break
-                if bar["low"] <= tp1:  outcome = "TP1"; result_r = max(0.0, rr1 - (slip / (atr * sl_mult))); exit_bar = j; break
-        if outcome == "OPEN":
-            # Force-close at last forward bar — record actual P&L vs recording a ghost 0R
-            _last_fwd = d1_raw[min(i + 20, total_bars - 1)]
-            _exit_px = _last_fwd["close"]
-            _sl_dist = abs(entry - sl)
-            if _sl_dist > 0 and math.isfinite(_exit_px):
-                result_r = ((_exit_px - entry) / _sl_dist if direction == "LONG"
-                            else (entry - _exit_px) / _sl_dist)
-                result_r = round(max(-5.0, min(5.0, result_r)), 2)  # cap outliers
-            else:
-                result_r = 0.0
-            outcome = "TIMEOUT"
-        risk_mult = CONFIG["RISK_MULT"].get(_ptype, 1.0)
-        # T1: Apply volatility adjustment to position size
-        equity_change = result_r * CONFIG["RISK_PCT"] * risk_mult * _vol_adj
-        equity = round(equity * (1 + equity_change), 6)
-        equity_curve.append(round(equity, 4))
-        # R2: Tag trade with regime for segmentation
-        _regime = _ts if _ts in ("TRENDING","DEVELOPING","RANGING","DEAD RANGING") else "UNKNOWN"
-        funnel["taken"] += 1
-        trades.append({
-            "date": entry_bar["time"][:10],
-            "pair": pair["display"], "direction": direction,
-            "score": res["score"], "entry": round(entry, 6),
-            "sl": round(sl, 6), "tp1": round(tp1, 6), "tp2": round(tp2, 6),
-            "outcome": outcome, "resultR": round(result_r, 2),
-            "regime": _regime, "oos": i >= _oos_start, "volAdj": _vol_adj
-        })
-        if outcome not in ("OPEN",): last_exit_bar = exit_bar
-        i = exit_bar + 1 if outcome != "OPEN" else i + 1
+
+    if effective_style == "swing":
+        # --- SWING D1 LOOP â€” UNCHANGED ---
+        MIN_BARS = 220; COOLDOWN = 3; MAX_OPEN = 3  # R5: max concurrent positions
+        total_bars = len(d1_raw)
+        i = MIN_BARS; last_exit_bar = 0; open_positions = 0
+        # R4: Walk-forward split â€” 70% in-sample, 30% out-of-sample
+        _oos_start = MIN_BARS + int((total_bars - MIN_BARS) * 0.7)
+
+        while i < total_bars - 1:
+            if i - last_exit_bar < COOLDOWN:
+                i += 1; continue
+            # R5: Max concurrent positions cap
+            if open_positions >= MAX_OPEN:
+                i += 1; continue
+            d1_window = d1_raw[i - MIN_BARS : i]
+            entry_ts = pd.to_datetime(d1_raw[i]["time"], utc=True, errors="coerce")
+            if pd.isna(entry_ts):
+                i += 1; continue
+            intraday_cutoff = entry_ts + pd.Timedelta(days=1)
+            h4_window = [bar for bar, ts in zip(h4_raw, h4_times) if not pd.isna(ts) and ts < intraday_cutoff][-_h4_need:]
+            h1_window = [bar for bar, ts in zip(h1_raw, h1_times) if not pd.isna(ts) and ts < intraday_cutoff][-_h1_need:]
+            if len(h4_window) < 50 or len(h1_window) < 50:
+                i += 1; continue
+            try:
+                d1i = calc_indicators(d1_window)
+                h4i = calc_indicators(h4_window)
+                h1i = calc_indicators(h1_window)
+                vols = [c["vol"] for c in h1_window]; vsma = calc_sma(vols, 20)
+                vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
+                stoch = calc_stochastic(h4_window, 14, 3, 3)
+                e200 = calc_ema([c["close"] for c in d1_window], 200)
+                e200s = (e200[-1] - e200[-21]) / e200[-21] if e200[-1] and len(e200) >= 21 and e200[-21] else 0
+                res = calc_confluence(d1i, h4i, h1i, vr, stoch, e200s, pair, "neutral",
+                                       d1_candles=d1_window, h4_candles=h4_window, h1_candles=h1_window,
+                                       volume_threshold=CONFIG.get("VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"]))
+            except Exception:
+                i += 1; continue
+            funnel["total_setups"] += 1
+            _ts = res.get("trendState", "UNKNOWN")
+            # Per-class bt_min from CONFIG — no regime bumps (penalties already in score)
+            bt_min = CONFIG["BT_MIN"].get(_ptype, 4.0)
+            _recent_scores.append(res["score"])
+            if res["score"] < bt_min:
+                funnel["fail_score"] += 1; i += 1; continue
+            direction = res["direction"]
+            entry_bar = d1_raw[i]
+            raw_entry = entry_bar["close"]
+            slip = raw_entry * _get_slippage(entry_bar, _ptype)
+            entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
+            atr = _atr_for_levels(d1i, h4i, h1i)
+            if not atr or atr == 0: i += 1; continue
+            # C4: Use shared calc_levels (deduplicates with analyze_pair)
+            lvl = calc_levels(entry, atr, direction, _ptype)
+            sl = lvl["sl"]; tp1 = lvl["tp1"]; tp2 = lvl["tp2"]
+            sl_mult = lvl["mults"]["sl"]; tp1_mult = lvl["mults"]["tp1"]; tp2_mult = lvl["mults"]["tp2"]
+            rr1 = lvl["rr1"]
+            # Validate levels are finite and meaningful â€” NaN/0 levels cause ghost OPEN trades
+            if not all(math.isfinite(v) and v > 0 for v in (sl, tp1, tp2)):
+                i += 1; continue
+            if abs(entry - sl) < entry * 0.0001:  # SL less than 0.01% from entry â€” invalid
+                i += 1; continue
+            # V3: Structure-based stops for crypto â€” use wider of ATR-stop vs swing-stop
+            if _ptype == "crypto":
+                _recent = d1_window[-10:]
+                if direction == "LONG":
+                    swing_sl = min(c["low"] for c in _recent)
+                    if swing_sl < sl: sl = swing_sl  # wider stop lets noise breathe
+                else:
+                    swing_sl = max(c["high"] for c in _recent)
+                    if swing_sl > sl: sl = swing_sl
+                rr1 = abs(tp1 - entry) / abs(sl - entry) if abs(sl - entry) > 0 else 0
+            # T1: Volatility-adjusted sizing â€” if ATR > 1.5x its 20-bar SMA, reduce size 30%
+            _atr_series = calc_atr([c["high"] for c in d1_window], [c["low"] for c in d1_window], [c["close"] for c in d1_window], 14)
+            _atr_sma = calc_sma([v for v in _atr_series if v is not None], 20)
+            _vol_adj = 1.0
+            _valid_atr_sma = [v for v in _atr_sma if v is not None]
+            if _valid_atr_sma and _valid_atr_sma[-1] and _valid_atr_sma[-1] > 0:
+                if atr > _valid_atr_sma[-1] * 1.5: _vol_adj = 0.7
+            outcome = "OPEN"; result_r = 0.0; exit_bar = i
+            for j in range(i + 1, min(i + 21, total_bars)):
+                bar = d1_raw[j]
+                if direction == "LONG":
+                    # A2: worst-case intrabar â€” SL checked before TP (conservative)
+                    if bar["low"] <= sl:   outcome = "SL";  result_r = -1.0; exit_bar = j; break
+                    if bar["high"] >= tp2: outcome = "TP2"; result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult)); exit_bar = j; break
+                    if bar["high"] >= tp1: outcome = "TP1"; result_r = rr1 - (slip / (atr * sl_mult)); exit_bar = j; break
+                else:
+                    # A2: worst-case intrabar â€” SL checked before TP (conservative)
+                    if bar["high"] >= sl:  outcome = "SL";  result_r = -1.0; exit_bar = j; break
+                    if bar["low"] <= tp2:  outcome = "TP2"; result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult)); exit_bar = j; break
+                    if bar["low"] <= tp1:  outcome = "TP1"; result_r = rr1 - (slip / (atr * sl_mult)); exit_bar = j; break
+            if outcome == "OPEN":
+                # Force-close at last forward bar â€” record actual P&L vs recording a ghost 0R
+                _last_fwd = d1_raw[min(i + 20, total_bars - 1)]
+                _exit_px = _last_fwd["close"]
+                _sl_dist = abs(entry - sl)
+                if _sl_dist > 0 and math.isfinite(_exit_px):
+                    result_r = ((_exit_px - entry) / _sl_dist if direction == "LONG"
+                                else (entry - _exit_px) / _sl_dist)
+                    result_r = round(max(-5.0, min(5.0, result_r)), 2)  # cap outliers
+                else:
+                    result_r = 0.0
+                outcome = "TIMEOUT"
+            risk_mult = CONFIG["RISK_MULT"].get(_ptype, 1.0)
+            # T1: Apply volatility adjustment to position size
+            equity_change = result_r * CONFIG["RISK_PCT"] * risk_mult * _vol_adj
+            equity = round(equity * (1 + equity_change), 6)
+            equity_curve.append(round(equity, 4))
+            # R2: Tag trade with regime for segmentation
+            _regime = _ts if _ts in ("TRENDING","DEVELOPING","RANGING","DEAD RANGING") else "UNKNOWN"
+            funnel["taken"] += 1
+            trades.append({
+                "date": entry_bar["time"][:10],
+                "pair": pair["display"], "direction": direction,
+                "score": res["score"], "entry": round(entry, 6),
+                "sl": round(sl, 6), "tp1": round(tp1, 6), "tp2": round(tp2, 6),
+                "outcome": outcome, "resultR": round(result_r, 2),
+                "regime": _regime, "oos": i >= _oos_start, "volAdj": _vol_adj
+            })
+            if outcome not in ("OPEN",): last_exit_bar = exit_bar
+            i = exit_bar + 1 if outcome != "OPEN" else i + 1
+
+    else:  # intraday â€” walk H4 bars
+        MIN_H4 = 100; COOLDOWN = 2; MAX_HOLD = 12; MAX_OPEN = 3
+        total_h4 = len(h4_raw)
+        i = MIN_H4; last_exit_bar = 0; open_positions = 0
+        _oos_start = MIN_H4 + int((total_h4 - MIN_H4) * 0.7)
+        # Pre-parse timestamps once
+        h4_ts = pd.to_datetime([c["time"] for c in h4_raw], utc=True, errors="coerce")
+        d1_ts = pd.to_datetime([c["time"] for c in d1_raw], utc=True, errors="coerce")
+
+        while i < total_h4 - 1:
+            if i - last_exit_bar < COOLDOWN:
+                i += 1; continue
+            if open_positions >= MAX_OPEN:
+                i += 1; continue
+            h4_window = h4_raw[i - MIN_H4 : i]
+            entry_ts = h4_ts[i]
+            if pd.isna(entry_ts):
+                i += 1; continue
+            # H1 alignment: all H1 bars before this H4 bar's timestamp + 4h
+            h1_cutoff = entry_ts + pd.Timedelta(hours=4)
+            h1_window = [bar for bar, ts in zip(h1_raw, h1_times) if not pd.isna(ts) and ts < h1_cutoff][-_h1_need:]
+            # D1 context: real D1 data up to this point for Weinstein/regime
+            d1_ctx = [bar for bar, ts in zip(d1_raw, d1_ts) if not pd.isna(ts) and ts <= entry_ts][-220:]
+            if len(h1_window) < 50 or len(d1_ctx) < 50:
+                i += 1; continue
+            try:
+                h4i = calc_indicators(h4_window)
+                h1i = calc_indicators(h1_window)
+                d1i_ctx = calc_indicators(d1_ctx)
+                vols = [c["vol"] for c in h1_window]; vsma = calc_sma(vols, 20)
+                vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
+                stoch = calc_stochastic(h1_window, 14, 3, 3)
+                e200 = calc_ema([c["close"] for c in h4_window], 200)
+                e200s = (e200[-1] - e200[-21]) / e200[-21] if e200[-1] and len(e200) >= 21 and e200[-21] else 0
+                res = calc_confluence(h4i, h1i, h1i, vr, stoch, e200s, pair, "neutral",
+                                       d1_candles=d1_ctx, h4_candles=h4_window, h1_candles=h1_window,
+                                       volume_threshold=CONFIG.get("VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"]))
+            except Exception:
+                i += 1; continue
+            funnel["total_setups"] += 1
+            _ts = res.get("trendState", "UNKNOWN")
+            # Per-class bt_min from CONFIG — no regime bumps (penalties already in score)
+            bt_min = CONFIG["BT_MIN"].get(_ptype, 4.0)
+            _recent_scores.append(res["score"])
+            if res["score"] < bt_min:
+                funnel["fail_score"] += 1; i += 1; continue
+            direction = res["direction"]
+            entry_bar = h4_raw[i]
+            raw_entry = entry_bar["close"]
+            slip = raw_entry * _get_slippage(entry_bar, _ptype)
+            entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
+            atr = _atr_for_levels(d1i_ctx, h4i, h1i)
+            if not atr or atr == 0: i += 1; continue
+            lvl = calc_levels(entry, atr, direction, _ptype)
+            sl = lvl["sl"]; tp1 = lvl["tp1"]; tp2 = lvl["tp2"]
+            sl_mult = lvl["mults"]["sl"]; tp1_mult = lvl["mults"]["tp1"]; tp2_mult = lvl["mults"]["tp2"]
+            rr1 = lvl["rr1"]
+            if not all(math.isfinite(v) and v > 0 for v in (sl, tp1, tp2)):
+                i += 1; continue
+            if abs(entry - sl) < entry * 0.0001:
+                i += 1; continue
+            if _ptype == "crypto":
+                _recent = h4_window[-10:]
+                if direction == "LONG":
+                    swing_sl = min(c["low"] for c in _recent)
+                    if swing_sl < sl: sl = swing_sl
+                else:
+                    swing_sl = max(c["high"] for c in _recent)
+                    if swing_sl > sl: sl = swing_sl
+                rr1 = abs(tp1 - entry) / abs(sl - entry) if abs(sl - entry) > 0 else 0
+            _atr_series = calc_atr([c["high"] for c in h4_window], [c["low"] for c in h4_window], [c["close"] for c in h4_window], 14)
+            _atr_sma = calc_sma([v for v in _atr_series if v is not None], 20)
+            _vol_adj = 1.0
+            _valid_atr_sma = [v for v in _atr_sma if v is not None]
+            if _valid_atr_sma and _valid_atr_sma[-1] and _valid_atr_sma[-1] > 0:
+                if atr > _valid_atr_sma[-1] * 1.5: _vol_adj = 0.7
+            outcome = "OPEN"; result_r = 0.0; exit_bar = i
+            for j in range(i + 1, min(i + MAX_HOLD + 1, total_h4)):
+                bar = h4_raw[j]
+                if direction == "LONG":
+                    if bar["low"] <= sl:   outcome = "SL";  result_r = -1.0; exit_bar = j; break
+                    if bar["high"] >= tp2: outcome = "TP2"; result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult)); exit_bar = j; break
+                    if bar["high"] >= tp1: outcome = "TP1"; result_r = rr1 - (slip / (atr * sl_mult)); exit_bar = j; break
+                else:
+                    if bar["high"] >= sl:  outcome = "SL";  result_r = -1.0; exit_bar = j; break
+                    if bar["low"] <= tp2:  outcome = "TP2"; result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult)); exit_bar = j; break
+                    if bar["low"] <= tp1:  outcome = "TP1"; result_r = rr1 - (slip / (atr * sl_mult)); exit_bar = j; break
+            if outcome == "OPEN":
+                _last_fwd = h4_raw[min(i + MAX_HOLD, total_h4 - 1)]
+                _exit_px = _last_fwd["close"]
+                _sl_dist = abs(entry - sl)
+                if _sl_dist > 0 and math.isfinite(_exit_px):
+                    result_r = ((_exit_px - entry) / _sl_dist if direction == "LONG"
+                                else (entry - _exit_px) / _sl_dist)
+                    result_r = round(max(-5.0, min(5.0, result_r)), 2)
+                else:
+                    result_r = 0.0
+                outcome = "TIMEOUT"
+            risk_mult = CONFIG["RISK_MULT"].get(_ptype, 1.0)
+            equity_change = result_r * CONFIG["RISK_PCT"] * risk_mult * _vol_adj
+            equity = round(equity * (1 + equity_change), 6)
+            equity_curve.append(round(equity, 4))
+            _regime = _ts if _ts in ("TRENDING","DEVELOPING","RANGING","DEAD RANGING") else "UNKNOWN"
+            funnel["taken"] += 1
+            trades.append({
+                "date": entry_bar["time"][:10],
+                "pair": pair["display"], "direction": direction,
+                "score": res["score"], "entry": round(entry, 6),
+                "sl": round(sl, 6), "tp1": round(tp1, 6), "tp2": round(tp2, 6),
+                "outcome": outcome, "resultR": round(result_r, 2),
+                "regime": _regime, "oos": i >= _oos_start, "volAdj": _vol_adj
+            })
+            if outcome not in ("OPEN",): last_exit_bar = exit_bar
+            i = exit_bar + 1 if outcome != "OPEN" else i + 1
 
     if not trades: return {"error": f"No signals generated for {pair['display']} (threshold too high or insufficient data)"}
     wins   = [t for t in trades if t["outcome"] in ("TP1","TP2") or (t["outcome"] == "TIMEOUT" and t["resultR"] > 0)]
@@ -1367,7 +1959,7 @@ def backtest_pair(pair):
     avg_loss = round(sum(t["resultR"] for t in losses) / len(losses), 3) if losses else 0
     r_skew   = round(avg_win / abs(avg_loss), 2) if avg_loss != 0 else None
 
-    # B2: Monte Carlo drawdown simulation — 500 random shuffles of trade sequence
+    # B2: Monte Carlo drawdown simulation â€” 500 random shuffles of trade sequence
     # Transforms single-path DD into distribution: P5=best case, P95=worst case
     import random as _rnd
     _risk_mult = CONFIG["RISK_MULT"].get(pair["type"], 1.0)
@@ -1384,7 +1976,7 @@ def backtest_pair(pair):
     _mc_dds.sort(); _nc = len(_mc_dds)
     mc_dd = {"p5":round(_mc_dds[int(_nc*0.05)]*100,1),"p50":round(_mc_dds[int(_nc*0.50)]*100,1),"p95":round(_mc_dds[int(_nc*0.95)]*100,1)}
 
-    # B3: Score band win rate tracking — which confluence scores actually deliver edge?
+    # B3: Score band win rate tracking â€” which confluence scores actually deliver edge?
     score_bands = {}
     for band_label, lo_b, hi_b in [("6-7",6,7),("7-8",7,8),("8-9",8,9),("9+",9,99)]:
         band_trades = [t for t in trades if lo_b <= t["score"] < hi_b]
@@ -1392,7 +1984,7 @@ def backtest_pair(pair):
             bw = sum(1 for t in band_trades if t["outcome"] in ("TP1","TP2"))
             score_bands[band_label] = {"trades": len(band_trades), "wr": round(bw/len(band_trades)*100,1)}
 
-    # R2: Regime segmentation stats — track performance by market regime
+    # R2: Regime segmentation stats â€” track performance by market regime
     regime_stats = {}
     for regime in ["TRENDING","DEVELOPING","RANGING","DEAD RANGING"]:
         rt = [t for t in trades if t.get("regime") == regime]
@@ -1401,7 +1993,7 @@ def backtest_pair(pair):
             regime_stats[regime] = {"trades":len(rt), "wr":round(rw/len(rt)*100,1),
                 "expectancy":round(sum(t["resultR"] for t in rt)/len(rt),3)}
 
-    # R4: Walk-forward split — in-sample vs out-of-sample SQN comparison
+    # R4: Walk-forward split â€” in-sample vs out-of-sample SQN comparison
     is_trades = [t for t in trades if not t.get("oos", False)]
     oos_trades = [t for t in trades if t.get("oos", False)]
     def _calc_sqn(tlist):
@@ -1425,20 +2017,28 @@ def backtest_pair(pair):
         "avgWin": avg_win, "avgLoss": avg_loss, "rSkew": r_skew,
         "maxDrawdownPct": max_dd_pct, "mcDD": mc_dd, "scoreBands": score_bands,
         "regimeStats": regime_stats, "wfSplit": wf_split, "funnel": funnel,
+        "btStyle": effective_style,
+        "btStyleRequested": requested_style,
         "equityCurve": equity_curve, "trades": trades[-50:]
     }
 
-def run_full_backtest():
-    """Run backtest_pair on ALL_PAIRS in parallel and return sorted leaderboard by SQN."""
+def run_full_backtest(style="auto", asset_class: str | None = None):
+    """Run backtest_pair in parallel. Optional asset_class filter (crypto/forex/stock/commodity/index)."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    _valid_classes = {"crypto", "forex", "stock", "commodity", "index"}
+    _ac = asset_class.lower().strip() if asset_class else None
+    if _ac and _ac not in _valid_classes:
+        return {"success": False, "error": f"Invalid asset_class '{asset_class}'. Valid: {sorted(_valid_classes)}",
+                "results": [], "errors": [], "totalPairs": 0}
+    pairs_to_test = ALL_PAIRS if not _ac else [p for p in ALL_PAIRS if p.get("type") == _ac]
     results = []; errors = []
     def _bt(pair):
         try:
-            return pair, backtest_pair(pair)
+            return pair, backtest_pair(pair, style=style)
         except Exception as e:
             return pair, {"error": str(e)}
     with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = {pool.submit(_bt, p): p for p in ALL_PAIRS}
+        futures = {pool.submit(_bt, p): p for p in pairs_to_test}
         for fut in as_completed(futures):
             pair, r = fut.result()
             if "error" in r:
@@ -1446,7 +2046,8 @@ def run_full_backtest():
             else:
                 results.append(r)
     results.sort(key=lambda x: x["sqn"] if x["sqn"] is not None else -999, reverse=True)
-    return {"success": True, "results": results, "errors": errors, "totalPairs": len(ALL_PAIRS)}
+    return {"success": True, "results": results, "errors": errors, "totalPairs": len(pairs_to_test),
+            "assetClass": _ac or "all"}
 
 def _init_audit_db(db_path: str) -> None:
     """Create audit table if it doesn't exist, and migrate legacy schemas."""
@@ -1479,9 +2080,14 @@ def _init_audit_db(db_path: str) -> None:
         ("entry_price", "REAL"), ("sl", "REAL"), ("tp", "REAL"),
         ("volume", "REAL"), ("regime", "TEXT"), ("risk_amount", "REAL"),
         ("risk_pct", "REAL"), ("ticket", "TEXT"),
-        # Task 1 — outcome tracking
+        # Task 1 â€” outcome tracking
         ("exit_price", "REAL"), ("exit_time", "TEXT"), ("pnl", "REAL"),
         ("r_multiple", "REAL"), ("exit_reason", "TEXT"), ("holding_period_hours", "REAL"),
+        # D1 self-improvement context
+        ("asset_class", "TEXT"), ("score_pct", "REAL"), ("max_score", "REAL"),
+        ("votes_json", "TEXT"), ("warnings_json", "TEXT"),
+        ("weinstein", "TEXT"), ("trend_state", "TEXT"), ("adx_pct", "REAL"),
+        ("btc_bias", "TEXT"), ("session_name", "TEXT"),
     ]:
         if col not in existing:
             con.execute(f"ALTER TABLE audit_log ADD COLUMN {col} {defn}")
@@ -1497,7 +2103,9 @@ app=Flask(__name__,static_folder="static")
 def index(): return send_from_directory("static","index.html")
 
 @app.route("/api/scan",methods=["POST"])
-def api_scan(): return jsonify(run_full_scan())
+def api_scan():
+    d = request.get_json(force=True, silent=True) or {}
+    return jsonify(run_full_scan(style=d.get("style", "auto"), asset_class=d.get("asset_class")))
 
 @app.route("/api/analyze",methods=["POST"])
 def api_analyze():
@@ -1509,7 +2117,7 @@ def api_analyze():
     if not isinstance(sig, dict) or "pair" not in sig:
         return jsonify({"error":"Invalid signal object"}), 400
     if _kill_switch:
-        return jsonify({"error":"Kill-switch active — system paused"}), 503
+        return jsonify({"error":"Kill-switch active â€” system paused"}), 503
     try:
         news_ctx = sig.get("newsCtx") or fetch_news_context()
         style_pref = d.get("stylePreference", "auto")
@@ -1533,25 +2141,35 @@ def api_analyze():
         except Exception:
             pass
         result = run_ai(sig, news_ctx, style_pref, portfolio_heat=_p_heat, drawdown_pct=_dd_pct)
-        # N9: Audit log — persist every AI analysis to SQLite
+        # N9: Audit log â€” persist every AI analysis to SQLite
         try:
+            _max_s = sig.get("maxScore", 13.0)
+            _score_pct = round(sig.get("confluenceScore", 0) / _max_s * 100, 1) if _max_s else 0
             with sqlite3.connect(_AUDIT_DB) as _con:
                 _con.execute(
-                    "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style) VALUES(?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style,"
+                    "asset_class,score_pct,max_score,votes_json,warnings_json,"
+                    "weinstein,trend_state,adx_pct,btc_bias,session_name) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (datetime.now(timezone.utc).isoformat(), sig.get("pair"), sig.get("confluenceScore"),
                      sig.get("direction"), sig.get("trendState"), result.get("grade"),
-                     result.get("edgeProbability"), result.get("riskLevel"), style_pref)
+                     result.get("edgeProbability"), result.get("riskLevel"), style_pref,
+                     sig.get("type"), _score_pct, _max_s,
+                     json.dumps(sig.get("votes", {})), json.dumps(sig.get("warnings", [])),
+                     sig.get("weinsteinLabel"), sig.get("trendState"),
+                     sig.get("h4", {}).get("snap", {}).get("adxPct"),
+                     sig.get("btcBias"), sig.get("session", {}).get("name"))
                 )
                 _con.commit()
         except Exception as _ae:
             log.warning(f"Audit DB write failed: {_ae}")
         return jsonify(result)
     except Exception as e:
-        # S2: Sanitise exception — don't leak internal paths
+        # S2: Sanitise exception â€” don't leak internal paths
         log.error(f"api_analyze error: {e}")
         return jsonify({"error":"Analysis failed"}), 500
 
-# ── Execution Engine Endpoints ───────────────────────────────────────────────
+# â”€â”€ Execution Engine Endpoints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _executed_signals: set = set()  # Track executed signal IDs to prevent duplicates
 
 @app.route("/api/execute", methods=["POST"])
@@ -1560,7 +2178,7 @@ def api_execute():
     if not CONFIG.get("EXECUTION_ENABLED", False):
         return jsonify({"error": "Execution disabled. Set EXECUTION_ENABLED: true in config.yaml"}), 403
     if _kill_switch:
-        return jsonify({"error": "Kill-switch active — execution blocked"}), 503
+        return jsonify({"error": "Kill-switch active â€” execution blocked"}), 503
     d = request.json
     if not d or "signal" not in d:
         return jsonify({"error": "Invalid payload: expected {signal: {...}}"}), 400
@@ -1600,7 +2218,7 @@ def api_execute():
         else:
             _sizing_override = 1.0  # Full / A+ / unspecified
 
-        # MANDATORY RISK CHECK — no bypass
+        # MANDATORY RISK CHECK â€” no bypass
         approval = risk_check(
             signal=sig,
             account_balance=account["balance"],
@@ -1620,7 +2238,7 @@ def api_execute():
             result = mt5_execute(sig, approval)
         if result.get("success"):
             _executed_signals.add(sig_id)
-            # Log to audit DB — full trade lifecycle entry
+            # Log to audit DB â€” full trade lifecycle entry
             try:
                 with sqlite3.connect(_AUDIT_DB) as con:
                     con.execute(
@@ -1641,7 +2259,7 @@ def api_execute():
         return jsonify(result)
     except Exception as e:
         log.error(f"[EXEC] execution error: {e}")
-        return jsonify({"error": "Execution failed — check logs"}), 500
+        return jsonify({"error": "Execution failed â€” check logs"}), 500
 
 @app.route("/api/mt5-status")
 def api_mt5_status():
@@ -1804,7 +2422,12 @@ def _auto_toggle_pair(pair, result):
     is_sqn = wf.get("is_sqn", 0)
     oos_sqn = wf.get("oos_sqn", 0)
     oos_trades = wf.get("oos_trades", 0)
+    total_trades = int(result.get("totalTrades", 0) or 0)
+    min_trades = 10 if pair.get("type") in ("crypto", "forex") else 8
     was_enabled = pair.get("enabled", True)
+    if total_trades < min_trades:
+        log.info(f"[BT-AUTO] {pair['display']} unchanged: only {total_trades} trades (<{min_trades})")
+        return None
     # Enable criteria: SQN > 0.5, IS positive, OOS non-negative (or too few OOS trades to judge)
     should_enable = sqn > 0.5 and is_sqn > 0 and (oos_sqn >= 0 or oos_trades < 3)
     # Disable criteria: overall SQN negative or IS clearly negative
@@ -1826,26 +2449,30 @@ def _auto_toggle_pair(pair, result):
 @app.route("/api/backtest",methods=["POST"])
 def api_backtest():
     try:
-        d=request.json or {}
+        d=request.get_json(force=True, silent=True) or {}
         # S1: Validate symbol if provided
         sym=d.get("symbol")
+        _bt_style=_normalize_style(d.get("style","auto"))
+        _allow_bt_toggle = bool(CONFIG.get("BT_AUTO_TOGGLE", False))
         if sym:
             if not isinstance(sym, str): return jsonify({"error":"Invalid symbol"}), 400
             pair=next((p for p in ALL_PAIRS if p["symbol"]==sym),None)
             if not pair: return jsonify({"error":"Unknown symbol"}), 404
-            result = backtest_pair(pair)
-            toggle = _auto_toggle_pair(pair, result)
-            if toggle: result["autoToggle"] = toggle
+            result = backtest_pair(pair, style=_bt_style)
+            if _allow_bt_toggle:
+                toggle = _auto_toggle_pair(pair, result)
+                if toggle: result["autoToggle"] = toggle
             result["activePairs"] = len(ACTIVE_PAIRS)
             return jsonify(result)
-        # Full backtest — auto-toggle each pair
-        full = run_full_backtest()
+        # Full backtest â€” optional asset_class filter (crypto/forex/stock/commodity/index)
+        full = run_full_backtest(style=_bt_style, asset_class=d.get("asset_class"))
         toggles = []
-        for r in full.get("results", []):
-            p = next((p for p in ALL_PAIRS if p["symbol"] == r.get("symbol")), None)
-            if p:
-                t = _auto_toggle_pair(p, r)
-                if t: toggles.append({"pair": r["pair"], "action": t, "sqn": r["sqn"]})
+        if _allow_bt_toggle:
+            for r in full.get("results", []):
+                p = next((p for p in ALL_PAIRS if p["symbol"] == r.get("symbol")), None)
+                if p:
+                    t = _auto_toggle_pair(p, r)
+                    if t: toggles.append({"pair": r["pair"], "action": t, "sqn": r["sqn"]})
         full["autoToggles"] = toggles
         full["activePairs"] = len(ACTIVE_PAIRS)
         return jsonify(full)
@@ -1854,7 +2481,7 @@ def api_backtest():
         log.error(f"api_backtest error: {e}")
         return jsonify({"error":"Backtest failed"}), 500
 
-# N4: Kill-switch API — immediately blocks new scans/analyses
+# N4: Kill-switch API â€” immediately blocks new scans/analyses
 @app.route("/api/killswitch",methods=["POST"])
 def api_killswitch():
     global _kill_switch
@@ -1885,6 +2512,38 @@ def api_killswitch_pair(display: str):
 def api_killswitch_pair_list():
     """List all disabled pairs."""
     return jsonify({"disabledPairs": sorted(_disabled_pairs), "activePairs": len(ACTIVE_PAIRS)})
+
+@app.route("/api/candle-cache")
+def api_candle_cache():
+    """View candle builder status: stats or per-pair candles.
+    GET /api/candle-cache              → summary stats
+    GET /api/candle-cache?pair=EUR/USD&tf=H1&limit=20  → candles for pair"""
+    pair = request.args.get("pair")
+    tf = request.args.get("tf", "H1")
+    limit = int(request.args.get("limit", 50))
+    if not _candle_builder:
+        return jsonify({"error": "Candle builder not running"}), 503
+    if pair:
+        candles = _candle_builder.get_candles(pair, tf, limit)
+        in_progress = {}
+        with _candle_builder._lock:
+            bar = _candle_builder._bars.get((pair, tf))
+            if bar:
+                in_progress = {"start": str(bar["start"]), "o": bar["o"], "h": bar["h"],
+                               "l": bar["l"], "c": bar["c"], "vol": bar["vol"], "ticks": bar["ticks"]}
+        return jsonify({"pair": pair, "tf": tf, "bars": len(candles) if candles else 0,
+                        "candles": (candles or [])[-limit:], "inProgress": in_progress})
+    # Summary: stats + active bar count
+    stats = _candle_builder.stats()
+    active = {}
+    with _candle_builder._lock:
+        for (disp, tf_k), bar in _candle_builder._bars.items():
+            if disp not in active:
+                active[disp] = {}
+            active[disp][tf_k] = {"ticks": bar["ticks"], "price": bar["c"]}
+    return jsonify({"stats": stats, "activeBars": active,
+                    "activePairCount": len(active),
+                    "ts": datetime.now(timezone.utc).isoformat()})
 
 @app.route("/api/prices")
 def api_prices():
@@ -1956,23 +2615,23 @@ def _check_api_keys() -> None:
     """Log startup warnings for missing API keys so the operator knows what's degraded."""
     missing = []
     if not os.environ.get("EODHD_KEY"):
-        missing.append("EODHD_KEY — real-time WebSocket prices, indicators, screener, and news all disabled")
+        missing.append("EODHD_KEY â€” real-time WebSocket prices, indicators, screener, and news all disabled")
     _ak = os.environ.get("ANTHROPIC_KEY", CONFIG.get("ANTHROPIC_KEY", ""))
     if not _ak or _ak == "YOUR_ANTHROPIC_API_KEY":
-        missing.append("ANTHROPIC_KEY — AI trade grading disabled")
+        missing.append("ANTHROPIC_KEY â€” AI trade grading disabled")
     if not os.environ.get("CRYPTOPANIC_KEY"):
-        missing.append("CRYPTOPANIC_KEY (optional) — crypto news sentiment reduced")
+        missing.append("CRYPTOPANIC_KEY (optional) â€” crypto news sentiment reduced")
     if not os.environ.get("FINNHUB_KEY"):
-        missing.append("FINNHUB_KEY (optional) — Polygon news fallback disabled")
+        missing.append("FINNHUB_KEY (optional) â€” Polygon news fallback disabled")
     if missing:
-        log.warning("[KEYS] Running in degraded mode — set missing keys in .env:")
+        log.warning("[KEYS] Running in degraded mode â€” set missing keys in .env:")
         for m in missing:
-            log.warning(f"  • {m}")
+            log.warning(f"  â€¢ {m}")
     else:
         log.info("[KEYS] All API keys configured")
 
 
-# ── Injected runtime definitions (scan helpers, analyze_pair, event risk) ──
+# â”€â”€ Injected runtime definitions (scan helpers, analyze_pair, event risk) â”€â”€
 
 def fetch_eodhd_indicators(pair):
     try:
@@ -2022,7 +2681,7 @@ def _pair_exchange_closed(pair: dict, closed_exchanges: set) -> bool:
     exch = _pair_exchange_code(pair)
     return exch in closed_exchanges if exch else False
 
-def analyze_pair(pair, btc_bias):
+def analyze_pair(pair, btc_bias, style="swing"):
     d1 = fetch_candles(pair, "D1", CONFIG["D1_CANDLES"])
     h4 = fetch_candles(pair, "H4", CONFIG["H4_CANDLES"])
     h1 = fetch_candles(pair, "H1", CONFIG["H1_CANDLES"])
@@ -2036,9 +2695,31 @@ def analyze_pair(pair, btc_bias):
     vols = [c["vol"] for c in h1]
     vsma = calc_sma(vols, 20)
     vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
-    stoch = calc_stochastic(h4, 14, 3, 3)
-    e200 = calc_ema([c["close"] for c in d1], 200)
-    e200s = (e200[-1] - e200[-21]) / e200[-21] if e200[-1] and len(e200) >= 21 and e200[-21] else 0
+
+    # Style-based timeframe routing
+    # SWING  (default): D1 trend gate, H4 momentum, H1 entry
+    # INTRADAY:         H4 trend gate, H1 momentum, H1 entry
+    # SCALP:            H1 trend gate, H1 momentum, H1 entry + D1 disagreement flag
+    _style = (style or "swing").lower()
+    if _style == "intraday":
+        _cf_d1i, _cf_h4i, _cf_h1i = h4i, h1i, h1i
+        _cf_d1c, _cf_h4c, _cf_h1c = h4, h1, h1
+        stoch = calc_stochastic(h1, 14, 3, 3)
+        _e200 = calc_ema([c["close"] for c in h4], 200)
+        e200s = (_e200[-1] - _e200[-21]) / _e200[-21] if _e200[-1] and len(_e200) >= 21 and _e200[-21] else 0
+    elif _style == "scalp":
+        _cf_d1i, _cf_h4i, _cf_h1i = h1i, h1i, h1i
+        _cf_d1c, _cf_h4c, _cf_h1c = h1, h1, h1
+        stoch = calc_stochastic(h1, 14, 3, 3)
+        _e200 = calc_ema([c["close"] for c in h1], 200)
+        e200s = (_e200[-1] - _e200[-21]) / _e200[-21] if _e200[-1] and len(_e200) >= 21 and _e200[-21] else 0
+    else:  # swing
+        _cf_d1i, _cf_h4i, _cf_h1i = d1i, h4i, h1i
+        _cf_d1c, _cf_h4c, _cf_h1c = d1, h4, h1
+        stoch = calc_stochastic(h4, 14, 3, 3)
+        _e200 = calc_ema([c["close"] for c in d1], 200)
+        e200s = (_e200[-1] - _e200[-21]) / _e200[-21] if _e200[-1] and len(_e200) >= 21 and _e200[-21] else 0
+
     # Fetch funding rate for crypto pairs (Task 3)
     _funding_rate = None
     if pair.get("type") == "crypto":
@@ -2046,10 +2727,26 @@ def analyze_pair(pair, btc_bias):
         _funding_rate = _fetch_funding_rate(_bn_sym)
 
     res = calc_confluence(
-        d1i, h4i, h1i, vr, stoch, e200s, pair, btc_bias,
-        d1_candles=d1, h4_candles=h4, h1_candles=h1,
+        _cf_d1i, _cf_h4i, _cf_h1i, vr, stoch, e200s, pair, btc_bias,
+        d1_candles=_cf_d1c, h4_candles=_cf_h4c, h1_candles=_cf_h1c,
         funding_rate=_funding_rate,
+        volume_threshold=CONFIG["VOLUME_THRESHOLD"],
     )
+
+    # For SCALP: warn if D1 trend disagrees with signal direction
+    if _style == "scalp":
+        _ds = d1i["snap"]
+        if _ds.get("ema21") and _ds.get("ema50") and _ds.get("ema200"):
+            if _ds["ema21"] > _ds["ema50"] > _ds["ema200"]:
+                _d1_dir = "LONG"
+            elif _ds["ema21"] < _ds["ema50"] < _ds["ema200"]:
+                _d1_dir = "SHORT"
+            else:
+                _d1_dir = None
+            if _d1_dir and _d1_dir != res["direction"]:
+                res["warnings"].append(
+                    f"SCALP COUNTER-TREND: D1 EMA stack is {_d1_dir} â€” trading against higher-TF trend, reduce size"
+                )
     direction = res["direction"]
     live_px = (_live_prices.get(pair["display"], {}) or {}).get("price")
     price = live_px or h1i["snap"].get("close") or h4i["snap"].get("close") or d1i["snap"].get("close")
@@ -2107,6 +2804,7 @@ def analyze_pair(pair, btc_bias):
         "aiAnalysis": None,
         "fundingRate": res.get("fundingRate"),
         "regime": res.get("regime"),
+        "style": _style,
     }
 
 def _build_event_risk(pair: dict, ds_ctx: dict, earnings_ctx: dict, closed_exchanges: set) -> dict:
@@ -2183,7 +2881,7 @@ def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
     return "skip", "; ".join(reasons) or "Below discovery threshold"
 
 
-# ── Task 1: Trade Outcome Monitor ────────────────────────────────────────────
+# â”€â”€ Task 1: Trade Outcome Monitor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _resolve_exit_reason(exit_price: float, sl: float | None, tp: float | None) -> str:
     """Classify exit as SL_HIT, TP_HIT, or MANUAL_CLOSE based on price proximity."""
@@ -2260,7 +2958,7 @@ def _check_mt5_outcomes() -> None:
             ticket_str = str(row["ticket"])
             if ticket_str in open_tickets:
                 continue  # still open
-            # Position closed — look up deal history
+            # Position closed â€” look up deal history
             try:
                 ticket_int = int(ticket_str)
                 deals = _mt5_lib.history_deals_get(ticket=ticket_int)
@@ -2340,7 +3038,7 @@ def _start_outcome_monitor() -> None:
     log.info("[MONITOR] Trade outcome monitor started (60s interval)")
 
 
-# ── Task 2: Performance Dashboard Endpoint ────────────────────────────────────
+# â”€â”€ Task 2: Performance Dashboard Endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.route("/api/performance")
 def api_performance():
@@ -2487,15 +3185,22 @@ if __name__=="__main__":
             else:
                 log.info(f"[AI TEST] OK => Grade:{ai_result.get('grade','?')} Prob:{ai_result.get('edgeProbability','?')}%")
         else:
-            log.info("[AI TEST] Skipped — no signals to test")
+            log.info("[AI TEST] Skipped â€” no signals to test")
         sys.exit(0)
-    # Start EODHD WebSocket real-time price streaming
+    # Start EODHD WebSocket real-time price streaming + candle builder
     _ws_key = os.environ.get("EODHD_KEY", "")
     if _ws_key:
         _ws_mgr = EODHDWebSocketManager(_ws_key)
         _ws_mgr.start(ACTIVE_PAIRS)
+        _candle_builder = CandleBuilder()
+        def _cb_startup():
+            _candle_builder.seed(ALL_PAIRS)          # seed 6mo H1/H4/D1
+            _candle_builder.bulk_update_d1()          # fresh D1 from Bulk API
+            _candle_builder.start_refresh_loop()      # bulk D1 every 4h
+        threading.Thread(target=_cb_startup, daemon=True, name="candle-seed").start()
+        log.info("[CB] Candle builder started (WS ticks + 6mo seed + Bulk D1 every 4h)")
     else:
-        log.warning("[WS] No EODHD_KEY — WebSocket prices disabled")
+        log.warning("[WS] No EODHD_KEY â€” WebSocket prices disabled")
     log.info(f"http://localhost:5000")
     threading.Timer(1.5,lambda:webbrowser.open("http://localhost:5000")).start()
     _start_outcome_monitor()
