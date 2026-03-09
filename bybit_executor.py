@@ -125,6 +125,25 @@ def bybit_map_symbol(athena_display: str) -> str | None:
     return None
 
 
+def _set_trading_stop(exchange, ccxt_symbol: str, sl: float = 0, tp: float = 0) -> None:
+    """Set SL/TP on an open Bybit v5 position via trading-stop endpoint.
+
+    Bybit v5 does not support stop_market / take_profit_market order types.
+    The correct approach is POST /v5/position/trading-stop.
+    ccxt_symbol format: "DOT/USDT:USDT" → raw_symbol "DOTUSDT"
+    """
+    raw_symbol = ccxt_symbol.split(":")[0].replace("/", "")  # DOT/USDT:USDT → DOTUSDT
+    params: dict = {"category": "linear", "symbol": raw_symbol, "positionIdx": 0}
+    if sl > 0:
+        params["stopLoss"] = str(sl)
+        params["slTriggerBy"] = "MarkPrice"
+    if tp > 0:
+        params["takeProfit"] = str(tp)
+        params["tpTriggerBy"] = "MarkPrice"
+    if sl > 0 or tp > 0:
+        exchange.private_post_v5_position_trading_stop(params)
+
+
 def _ensure_leverage(exchange, symbol: str):
     """Set leverage=1x and margin=ISOLATED for a symbol. Silent if already set."""
     try:
@@ -177,7 +196,7 @@ def bybit_get_positions() -> list:
     if not exchange:
         return []
     try:
-        raw = exchange.fetch_positions(params={"type": "linear"})
+        raw = exchange.fetch_positions(params={"category": "linear", "settleCoin": "USDT"})
         positions = []
         for pos in raw:
             size = abs(float(pos.get("contracts", 0) or 0))
@@ -192,18 +211,34 @@ def bybit_get_positions() -> list:
             display = symbol_raw.split(":")[0] if ":" in symbol_raw else symbol_raw
             # markPrice: ccxt stores as "markPrice" in info or top-level
             mark_price = float(pos.get("markPrice") or pos.get("info", {}).get("markPrice") or 0)
+            side = pos.get("side", "")
+            direction = "LONG" if side.lower() == "long" else "SHORT"
+            upnl = float(pos.get("unrealizedPnl", 0) or 0)
+            info = pos.get("info", {})
+            sl_val = float(info.get("stopLoss", 0) or 0)
+            tp_val = float(info.get("takeProfit", 0) or 0)
+            liq_price = float(info.get("liqPrice", 0) or 0)
             positions.append({
-                "pair": display,
-                "symbol": symbol_raw,
-                "volume": size,
-                "contracts": size,
-                "side": pos.get("side", ""),
-                "entryPrice": entry,
-                "markPrice": mark_price,
-                "lastPrice": mark_price,
-                "unrealizedPnl": float(pos.get("unrealizedPnl", 0) or 0),
-                "notional": round(notional, 2),
-                "risk_amount": est_risk,
+                # Normalised fields (match MT5 position card schema)
+                "pair":      display,
+                "direction": direction,
+                "entry":     entry,
+                "volume":    size,
+                "profit":    round(upnl, 2),
+                "sl":        sl_val,
+                "tp":        tp_val,
+                "ticket":    info.get("positionIdx", ""),
+                # Bybit-specific extras
+                "symbol":        symbol_raw,
+                "contracts":     size,
+                "side":          side,
+                "entryPrice":    entry,
+                "markPrice":     mark_price,
+                "lastPrice":     mark_price,
+                "unrealizedPnl": upnl,
+                "notional":      round(notional, 2),
+                "risk_amount":   est_risk,
+                "liqPrice":      liq_price,
             })
         return positions
     except Exception as e:
@@ -342,48 +377,16 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:
 
         log.info(f"[BYBIT] ENTRY FILLED: id={order_id} | {direction} {filled_amount} {ccxt_symbol} @ {filled_price}")
 
-        # Stop-loss order
-        sl_order_id = None
-        if sl and sl > 0:
-            try:
-                sl_side = "sell" if direction == "LONG" else "buy"
-                # triggerDirection: 1=ascending (price rises to trigger), 2=descending (price falls to trigger)
-                sl_trigger = "2" if direction == "LONG" else "1"  # LONG SL triggers on price falling
-                sl_order = exchange.create_order(
-                    ccxt_symbol, "stop_market", sl_side, filled_amount,
-                    params={
-                        "stopPrice": sl,
-                        "triggerDirection": sl_trigger,
-                        "reduceOnly": True,
-                        "positionIdx": 0,
-                    }
-                )
-                sl_order_id = sl_order.get("id")
-                log.info(f"[BYBIT] SL order placed: id={sl_order_id} @ {sl}")
-            except Exception as sle:
-                log.warning(f"[BYBIT] SL order failed (manage manually): {sle}")
-
-        # Take-profit order (TP1)
+        # Set SL/TP on the position via Bybit v5 trading-stop endpoint
+        # (stop_market / take_profit_market order types are invalid in v5)
         tp1 = signal.get("tp1", 0)
+        sl_order_id = None
         tp_order_id = None
-        if tp1 and tp1 > 0:
-            try:
-                tp_side = "sell" if direction == "LONG" else "buy"
-                # triggerDirection: LONG TP triggers on price rising, SHORT TP on price falling
-                tp_trigger = "1" if direction == "LONG" else "2"
-                tp_order = exchange.create_order(
-                    ccxt_symbol, "take_profit_market", tp_side, filled_amount,
-                    params={
-                        "stopPrice": tp1,
-                        "triggerDirection": tp_trigger,
-                        "reduceOnly": True,
-                        "positionIdx": 0,
-                    }
-                )
-                tp_order_id = tp_order.get("id")
-                log.info(f"[BYBIT] TP order placed: id={tp_order_id} @ {tp1}")
-            except Exception as tpe:
-                log.warning(f"[BYBIT] TP order failed (manage manually): {tpe}")
+        try:
+            _set_trading_stop(exchange, ccxt_symbol, sl=sl, tp=tp1)
+            log.info(f"[BYBIT] SL/TP set: SL={sl} TP={tp1}")
+        except Exception as ste:
+            log.warning(f"[BYBIT] SL/TP set failed (manage manually): {ste}")
 
         return {
             "success": True,
@@ -416,28 +419,9 @@ def bybit_move_sl_to_breakeven(ccxt_symbol: str, direction: str, entry_price: fl
     if not exchange:
         return {"success": False, "error": "BYBIT_NOT_CONNECTED"}
     try:
-        # Cancel all existing conditional orders for this symbol
-        open_orders = exchange.fetch_open_orders(ccxt_symbol, params={"type": "linear"})
-        for o in open_orders:
-            o_type = (o.get("type") or "").lower()
-            if "stop" in o_type:
-                try:
-                    exchange.cancel_order(o["id"], ccxt_symbol, params={"type": "linear"})
-                    log.info(f"[BYBIT] Cancelled old SL order {o['id']}")
-                except Exception:
-                    pass
-        # Place new SL at breakeven (entry price)
-        sl_side = "sell" if direction == "LONG" else "buy"
-        sl_order = exchange.create_order(
-            ccxt_symbol, "stop_market", sl_side, volume,
-            params={
-                "stopPrice": entry_price,
-                "reduceOnly": True,
-                "positionIdx": 0,
-            }
-        )
+        _set_trading_stop(exchange, ccxt_symbol, sl=entry_price)
         log.info(f"[BYBIT] BREAKEVEN SL placed: {ccxt_symbol} @ {entry_price} (was profitable at 1R)")
-        return {"success": True, "slOrderId": sl_order.get("id"), "newSl": entry_price}
+        return {"success": True, "newSl": entry_price}
     except Exception as e:
         log.warning(f"[BYBIT] Failed to move SL to breakeven for {ccxt_symbol}: {e}")
         return {"success": False, "error": str(e)}

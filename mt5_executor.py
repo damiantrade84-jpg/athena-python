@@ -309,6 +309,18 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:
     tp = round(float(signal.get("tp1", 0)), digits)  # Use TP1 as primary target
     price = round(price, digits)
 
+    # ── Shift SL/TP to live fill price if signal price has drifted ─────────
+    # Handles data-source mismatch (e.g. EODHD vs MT5 live feed for commodities)
+    signal_price = float(signal.get("price", 0))
+    if signal_price > 0 and sl != 0 and tp != 0:
+        drift = abs(price - signal_price) / signal_price
+        if drift > 0.01:  # >1% drift — rebase levels to live price
+            sl_offset = float(signal.get("sl", 0)) - signal_price
+            tp_offset = float(signal.get("tp1", 0)) - signal_price
+            sl = round(price + sl_offset, digits)
+            tp = round(price + tp_offset, digits)
+            log.info(f"[MT5] {mt5_symbol}: price drift {drift:.1%} ({signal_price}→{price}) — rebased SL={sl} TP={tp}")
+
     # ── SL/TP validation against live price ────────────────────────────────
     # Ensure SL/TP are on the correct side of entry price
     if direction == "LONG":

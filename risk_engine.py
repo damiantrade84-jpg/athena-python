@@ -170,10 +170,19 @@ def _calc_volume(account_balance: float, entry_price: float, sl_price: float,
     is_crypto = asset_type == "crypto"
 
     # Crypto: 1 unit = 1 unit, tick_value = tick_size (USDT pairs)
+    # Stocks: 1 lot = 1 share, price step = 0.01
     # Forex: 1 lot = 100,000 units, 5-digit broker default
+    is_stock = asset_type == "stock"
+    is_commodity = asset_type == "commodity"
     if is_crypto:
         contract_size = 1
         point = 0.01
+    elif is_stock:
+        contract_size = 1       # 1 share per lot
+        point = 0.01            # 1 cent price step
+    elif is_commodity:
+        contract_size = 100     # typical commodity lot (e.g. 100 oz gold)
+        point = 0.01            # 1 cent price step for metals/oil
     else:
         contract_size = 100_000
         point = 0.00001  # 5-digit broker default
@@ -181,13 +190,26 @@ def _calc_volume(account_balance: float, entry_price: float, sl_price: float,
     if symbol_info:
         contract_size = symbol_info.get("trade_contract_size", contract_size)
         point = symbol_info.get("point", point)
+        log.info(f"[RISK] _calc_volume symbol_info: contract_size={contract_size}, point={point}, "
+                 f"tick_value={symbol_info.get('trade_tick_value')}, tick_size={symbol_info.get('trade_tick_size')}, "
+                 f"vol_min={symbol_info.get('volume_min')}, vol_step={symbol_info.get('volume_step')}, "
+                 f"bid={symbol_info.get('bid')}, ask={symbol_info.get('ask')}")
 
     # pip value per lot = contract_size * point (simplified — works for most pairs)
     # For cross-pairs, MT5 provides tick_value which is more accurate
     tick_value = symbol_info.get("trade_tick_value", point * contract_size) if symbol_info else point * contract_size
     tick_size = symbol_info.get("trade_tick_size", point) if symbol_info else point
 
+    # Fallback: if MT5 returns tick_value=0 (market closed, no quotes), estimate from contract specs
+    if tick_value == 0 and contract_size > 0 and point > 0:
+        tick_value = point * contract_size
+        log.warning(f"[RISK] _calc_volume: MT5 tick_value=0 (market closed?), using fallback={tick_value}")
+    if tick_size == 0 and point > 0:
+        tick_size = point
+        log.warning(f"[RISK] _calc_volume: MT5 tick_size=0, using fallback={tick_size}")
+
     if tick_size == 0 or tick_value == 0:
+        log.warning(f"[RISK] _calc_volume: ZERO tick_size={tick_size} or tick_value={tick_value} — cannot calculate volume")
         return 0.0
 
     # Dollar risk per lot for the given SL distance
@@ -215,6 +237,10 @@ def _calc_volume(account_balance: float, entry_price: float, sl_price: float,
             if volume > max_by_notional:
                 log.warning(f"[RISK] crypto volume {volume:.4f} clamped to {max_by_notional:.4f} (${_MAX_CRYPTO_NOTIONAL} notional cap)")
                 volume = max_by_notional
+    elif is_stock:
+        vol_min  = symbol_info.get("volume_min",  1.0)   if symbol_info else 1.0    # min 1 share
+        vol_max  = symbol_info.get("volume_max",  5000.0) if symbol_info else 5000.0
+        vol_step = symbol_info.get("volume_step", 1.0)   if symbol_info else 1.0    # whole shares
     else:
         vol_min = symbol_info.get("volume_min", 0.01) if symbol_info else 0.01
         vol_max = symbol_info.get("volume_max", 100.0) if symbol_info else 100.0
@@ -227,7 +253,7 @@ def _calc_volume(account_balance: float, entry_price: float, sl_price: float,
     # Round down to nearest step
     volume = math.floor(volume / vol_step) * vol_step if vol_step > 0 else volume
     volume = min(volume, vol_max)
-    volume = round(volume, 6 if is_crypto else 2)
+    volume = round(volume, 6 if is_crypto else (0 if is_stock else 2))
 
     return volume
 
@@ -315,7 +341,9 @@ def risk_check(signal: dict, account_balance: float, account_equity: float,
 
     asset_type = signal.get("type", "")
     volume = _calc_volume(account_balance, entry, sl, symbol_info, asset_type)
-    is_crypto = asset_type == "crypto"
+    is_crypto    = asset_type == "crypto"
+    is_stock     = asset_type == "stock"
+    is_commodity = asset_type == "commodity"
 
     # Score-scaled sizing: scale position by signal quality (weak signals get smaller bets)
     max_score = signal.get("maxScore", 13.0)
@@ -323,17 +351,24 @@ def risk_check(signal: dict, account_balance: float, account_equity: float,
     score_factor = max(0.25, min(1.0, score / max_score)) if max_score > 0 else 1.0
     # Also apply AI sizing override (1.0=full, 0.75=normal, 0.5=half, 0.25=quarter)
     combined_factor = dd_factor * score_factor * max(0.25, min(1.0, sizing_override))
-    volume = round(volume * combined_factor, 6 if is_crypto else 2)
+    _decimals = 6 if is_crypto else (0 if is_stock else 2)
+    volume = round(volume * combined_factor, _decimals)
     log.info(f"{prefix} sizing: score_factor={score_factor:.2f}, sizing_override={sizing_override:.2f}, dd_factor={dd_factor:.2f} → combined={combined_factor:.2f}")
 
-    # Re-clamp after dd_factor
-    if symbol_info:
-        vol_step = symbol_info.get("volume_step", 0.001 if is_crypto else 0.01)
-        volume = math.floor(volume / vol_step) * vol_step if vol_step > 0 else volume
-        volume = round(volume, 6 if is_crypto else 2)
+    # Re-clamp after scaling
+    _default_step = 0.001 if is_crypto else (1.0 if is_stock else 0.01)
+    vol_step = symbol_info.get("volume_step", _default_step) if symbol_info else _default_step
+    volume = math.floor(volume / vol_step) * vol_step if vol_step > 0 else volume
+    volume = round(volume, _decimals)
+
+    # Stocks: ensure minimum 1 share (can't trade fractional on MT5)
+    if is_stock and 0 < volume < 1:
+        volume = 1.0
 
     if volume <= 0:
-        log.warning(f"{prefix} REJECTED: calculated volume is 0 (balance={account_balance}, SL dist={abs(entry-sl):.6f})")
+        log.warning(f"{prefix} REJECTED: calculated volume is 0 — raw_vol from _calc_volume scaled by combined_factor={combined_factor:.2f}, "
+                    f"balance={account_balance}, entry={entry}, SL={sl}, dist={abs(entry-sl):.6f}, asset={asset_type}, "
+                    f"symbol_info={'yes' if symbol_info else 'no'}")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "ZERO_VOLUME")
 
     # ── Check 6: Risk amount validation ─────────────────────────────────────
@@ -341,6 +376,9 @@ def risk_check(signal: dict, account_balance: float, account_equity: float,
     if is_crypto:
         _default_tick = 0.01
         _default_tick_val = 0.01
+    elif is_stock or is_commodity:
+        _default_tick = 0.01
+        _default_tick_val = 0.01  # 1 cent per tick per unit
     else:
         _default_tick = 0.00001
         _default_tick_val = 1.0

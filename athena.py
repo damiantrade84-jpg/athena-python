@@ -1539,7 +1539,8 @@ def fetch_news_context(pairs: list | None = None):
 
 def _build_signal_message(signal: dict, news_ctx: dict | None,
                           style_pref: str, style_labels: dict,
-                          portfolio_heat: float = 0.0, drawdown_pct: float = 0.0) -> str:
+                          portfolio_heat: float = 0.0, drawdown_pct: float = 0.0,
+                          learning_ctx: dict | None = None) -> str:
     """Build sectioned signal string sent to Marcus Reid (Claude) for analysis.
 
     Sections: SIGNAL, TECHNICALS, LEVELS, WARNINGS, CONTEXT, PORTFOLIO.
@@ -1670,10 +1671,46 @@ def _build_signal_message(signal: dict, news_ctx: dict | None,
         if drawdown_pct > 0:
             lines.append(f"Drawdown: {drawdown_pct:.1%}")
 
+    # === LEARNING CONTEXT (live outcome feedback) ===
+    if learning_ctx and learning_ctx.get("sample_size", 0) >= CONFIG.get("LEARNING_MIN_TRADES", 5):
+        lines.append("")
+        lines.append("=== LEARNING CONTEXT (from live outcomes) ===")
+        pair_s = learning_ctx.get("pair_stats")
+        if pair_s:
+            lines.append(
+                f"This pair history: {pair_s['win_rate']*100:.0f}% WR over "
+                f"{pair_s['total_trades']} trades (avg {pair_s['avg_r']:+.2f}R)"
+                + (f", best in {pair_s['best_regime']}" if pair_s.get("best_regime") else "")
+            )
+        at_s = learning_ctx.get("asset_type_stats")
+        if at_s:
+            lines.append(
+                f"{signal.get('type','').upper()} class: {at_s['win_rate']*100:.0f}% WR "
+                f"avg {at_s['avg_r']:+.2f}R ({at_s['total_trades']} trades)"
+            )
+        grade_acc = learning_ctx.get("grade_accuracy", {})
+        if grade_acc:
+            grade_parts = []
+            for g in ["A+", "A", "B", "C"]:
+                if g in grade_acc and grade_acc[g]["trades"] >= 2:
+                    s = grade_acc[g]
+                    grade_parts.append(f"{g}:{s['win_rate']*100:.0f}%WR/{s['avg_r']:+.1f}R")
+            if grade_parts:
+                lines.append(f"Grade calibration: {' | '.join(grade_parts)}")
+        failures = learning_ctx.get("recent_failures", [])
+        if failures:
+            fail_summary = "; ".join(
+                f"{f['pair']} {f['grade']} {f['regime']} R={f['r']:.1f}"
+                for f in failures[:3] if f.get("pair")
+            )
+            if fail_summary:
+                lines.append(f"Recent losses: {fail_summary}")
+
     return "\n".join(lines)
 
 def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto",
-           portfolio_heat: float = 0.0, drawdown_pct: float = 0.0) -> dict:
+           portfolio_heat: float = 0.0, drawdown_pct: float = 0.0,
+           learning_ctx: dict | None = None) -> dict:
     """Send signal data to Anthropic Claude for Marcus Reid AI analysis. Returns parsed JSON dict."""
     if not CONFIG.get("ANTHROPIC_KEY") or CONFIG["ANTHROPIC_KEY"] == "YOUR_ANTHROPIC_API_KEY":
         log.error("[AI] Anthropic API key is None or not configured!")
@@ -1691,7 +1728,8 @@ def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto",
             _sc = signal.get("confluenceScore", 0)
             style_pref = "swing" if _sc >= 9 else "intraday" if _sc >= 7 else "scalp"
         msg = _build_signal_message(signal, news_ctx, style_pref, style_labels,
-                                    portfolio_heat=portfolio_heat, drawdown_pct=drawdown_pct)
+                                    portfolio_heat=portfolio_heat, drawdown_pct=drawdown_pct,
+                                    learning_ctx=learning_ctx)
         r = c.messages.create(
             model=CONFIG["ANTHROPIC_MODEL"], max_tokens=1500,
             system=EXPERT_PROMPT, messages=[{"role": "user", "content": msg}]
@@ -2224,6 +2262,7 @@ def _init_audit_db(db_path: str) -> None:
         ("votes_json", "TEXT"), ("warnings_json", "TEXT"),
         ("weinstein", "TEXT"), ("trend_state", "TEXT"), ("adx_pct", "REAL"),
         ("btc_bias", "TEXT"), ("session_name", "TEXT"),
+        ("error_tag", "TEXT"),   # AUTO-ERR: reason — set on failed auto-trade attempts
     ]:
         if col not in existing:
             con.execute(f"ALTER TABLE audit_log ADD COLUMN {col} {defn}")
@@ -2232,6 +2271,19 @@ def _init_audit_db(db_path: str) -> None:
 
 _AUDIT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
 _init_audit_db(_AUDIT_DB)
+
+# ── AI Learning + Auto-Trader ─────────────────────────────────────────────
+from ai_learning import init_learning_db
+init_learning_db(_AUDIT_DB)
+
+from auto_trader import auto_trader as _auto_trader
+_auto_trader.configure(
+    run_scan_fn    = lambda style="auto", asset_class=None: run_full_scan(style, asset_class),
+    kill_switch_fn = lambda: _kill_switch,
+    test_mode_fn   = lambda: _test_mode,
+    audit_db       = _AUDIT_DB,
+    config_fn      = lambda: CONFIG,
+)
 
 app=Flask(__name__,static_folder="static")
 
@@ -2312,7 +2364,21 @@ def api_analyze():
                 _dd_pct = _current_drawdown(_acct["equity"])
         except Exception as _ph_err:
             log.debug(f"[AI] portfolio heat/drawdown fetch failed: {_ph_err}")
-        result = run_ai(sig, news_ctx, style_pref, portfolio_heat=_p_heat, drawdown_pct=_dd_pct)
+        # Fetch AI learning context for this pair
+        _learning_ctx = None
+        if CONFIG.get("LEARNING_ENABLED", True):
+            try:
+                from ai_learning import get_ai_learning_context
+                _learning_ctx = get_ai_learning_context(
+                    pair=sig.get("pair", ""),
+                    asset_type=sig.get("type", ""),
+                    db_path=_AUDIT_DB,
+                    lookback_days=CONFIG.get("LEARNING_LOOKBACK_DAYS", 90),
+                )
+            except Exception as _lce:
+                log.debug(f"[LEARN] context fetch failed: {_lce}")
+        result = run_ai(sig, news_ctx, style_pref, portfolio_heat=_p_heat, drawdown_pct=_dd_pct,
+                        learning_ctx=_learning_ctx)
         # N9: Audit log â€” persist every AI analysis to SQLite
         try:
             _max_s = sig.get("maxScore", 13.0)
@@ -2422,6 +2488,9 @@ def api_execute():
                 return jsonify({"error": "MT5 not connected. Start MT5 terminal and check credentials."}), 503
             positions = mt5_get_positions()
             symbol_info = mt5_get_symbol_info(pair)
+            if not symbol_info:
+                return jsonify({"error": f"Symbol '{pair}' not available on your MT5 broker. "
+                                f"Check Market Watch or use a broker that offers this instrument."}), 200
         # Map AI grade/positionSizing to a sizing multiplier
         _grade = d.get("grade", "")
         _pos_size_str = d.get("positionSizing", "").lower()
@@ -2562,6 +2631,9 @@ def api_webhook():
                 return jsonify({"error": "MT5 not connected"}), 503
             positions  = mt5_get_positions()
             symbol_info = mt5_get_symbol_info(pair_name)
+            if not symbol_info:
+                return jsonify({"error": f"Symbol '{pair_name}' not available on your MT5 broker. "
+                                f"Check Market Watch or use a broker that offers this instrument."}), 200
 
         approval = risk_check(
             signal=sig,
@@ -2879,6 +2951,75 @@ def api_test_mode():
 def api_test_mode_status():
     """Check current test mode status."""
     return jsonify({"testMode": _test_mode})
+
+
+# ── Auto-Trade Bot endpoints ──────────────────────────────────────────────────
+
+@app.route("/api/auto-trade", methods=["GET"])
+def api_auto_trade_status():
+    return jsonify(_auto_trader.get_status())
+
+@app.route("/api/auto-trade", methods=["POST"])
+def api_auto_trade_toggle():
+    d = request.json or {}
+    action = d.get("action", "toggle")
+    if action == "on":    _auto_trader.enable()
+    elif action == "off": _auto_trader.disable()
+    else:                 _auto_trader.toggle()
+    return jsonify(_auto_trader.get_status())
+
+
+# ── AI Learning endpoints ─────────────────────────────────────────────────────
+
+@app.route("/api/learning/stats")
+def api_learning_stats():
+    try:
+        from ai_learning import get_ai_learning_context
+        pair       = request.args.get("pair", "")
+        asset_type = request.args.get("type", "")
+        ctx = get_ai_learning_context(pair, asset_type, _AUDIT_DB,
+                                      lookback_days=CONFIG.get("LEARNING_LOOKBACK_DAYS", 90))
+        return jsonify(ctx)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/learning/meta-analysis", methods=["POST"])
+def api_meta_analysis():
+    try:
+        from ai_learning import run_meta_analysis
+        result = run_meta_analysis(
+            _AUDIT_DB,
+            CONFIG.get("ANTHROPIC_KEY", ""),
+            CONFIG.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+        )
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/auto-trade/log")
+def api_auto_trade_log():
+    """Last 30 auto-trade attempts — both successful and failed — for dashboard diagnosis."""
+    try:
+        with sqlite3.connect(_AUDIT_DB) as con:
+            con.row_factory = sqlite3.Row
+            rows = con.execute(
+                """SELECT ts, pair, direction, score, asset_class, grade, error_tag, ticket, volume, entry_price
+                   FROM audit_log
+                   WHERE grade LIKE 'AUTO%'
+                   ORDER BY id DESC LIMIT 30"""
+            ).fetchall()
+        return jsonify([dict(r) for r in rows])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/learning/last-meta")
+def api_last_meta():
+    try:
+        from ai_learning import get_last_meta_analysis
+        result = get_last_meta_analysis(_AUDIT_DB)
+        return jsonify(result or {})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/candle-cache")
 def api_candle_cache():
@@ -3313,6 +3454,13 @@ def _update_trade_outcome(ticket: str, exit_price: float, exit_time: str,
             )
             con.commit()
         log.info(f"[MONITOR] Outcome logged: ticket={ticket} exit={exit_price} pnl={pnl} R={r_multiple} reason={exit_reason}")
+        # AI self-learning: extract outcome into learning_log
+        if CONFIG.get("LEARNING_ENABLED", True):
+            try:
+                from ai_learning import extract_learning_from_trade
+                extract_learning_from_trade(_AUDIT_DB, ticket, is_demo=_test_mode)
+            except Exception as _le:
+                log.debug(f"[LEARN] extraction failed for {ticket}: {_le}")
         # Feed realized P&L to daily loss tracker
         if pnl is not None:
             try:
@@ -3814,5 +3962,14 @@ if __name__=="__main__":
     log.info(f"http://localhost:5000")
     threading.Timer(1.5,lambda:webbrowser.open("http://localhost:5000")).start()
     _start_outcome_monitor()
+    if CONFIG.get("AUTO_TRADE_ENABLED", False):
+        _auto_trader.enable()
+        log.info("[AUTO] Auto-trader ENABLED via config")
+    else:
+        # Start the scheduler thread in standby — it does nothing until enabled
+        _auto_trader._running = True
+        import threading as _t
+        _t.Thread(target=_auto_trader._scheduler_loop, name="AutoTrader", daemon=True).start()
+        log.info("[AUTO] Auto-trader standby (toggle via UI)")
     _host = os.environ.get("ATHENA_HOST", "127.0.0.1")  # default localhost; set to 0.0.0.0 in .env for LAN
     app.run(host=_host,port=5000,debug=False)

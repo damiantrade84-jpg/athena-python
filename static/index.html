@@ -174,6 +174,20 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 .exec-btn.SHORT{background:linear-gradient(135deg,rgba(255,59,92,0.2),rgba(255,59,92,0.08));border:1px solid rgba(255,59,92,0.4);color:var(--bear);}
 .exec-btn.SHORT:hover{background:rgba(255,59,92,0.3);box-shadow:0 0 20px rgba(255,59,92,0.2);}
 .exec-btn:disabled{opacity:0.4;cursor:not-allowed;box-shadow:none;}
+
+/* Open Position Cards */
+.pos-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;min-width:200px;flex:1;max-width:260px;font-family:'Space Mono',monospace;font-size:11px;}
+.pos-card.profit{border-color:rgba(0,230,118,0.35);}
+.pos-card.loss{border-color:rgba(255,59,92,0.35);}
+.pos-card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.pos-card-pair{font-weight:700;font-size:12px;color:var(--text);}
+.pos-card-dir{font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;}
+.pos-card-dir.LONG{background:rgba(0,230,118,0.15);color:var(--bull);}
+.pos-card-dir.SHORT{background:rgba(255,59,92,0.15);color:var(--bear);}
+.pos-card-pnl{font-size:13px;font-weight:700;margin-bottom:6px;}
+.pos-card-pnl.pos{color:var(--bull);}
+.pos-card-pnl.neg{color:var(--bear);}
+.pos-card-row{color:var(--muted);font-size:10px;line-height:1.7;}
 .exec-btn .exec-detail{font-size:10px;font-family:'Space Mono',monospace;font-weight:400;opacity:0.8;display:block;margin-top:3px;}
 
 /* MT5 Status Badge */
@@ -385,6 +399,10 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
         <span class="toggle-dot"></span>
         <span>TEST</span>
       </div>
+      <div class="test-toggle" id="autoTradeToggle" onclick="toggleAutoTrade()" title="Auto-Trade Bot: executes qualifying signals automatically at H4 candle closes" style="margin-left:6px;background:rgba(0,212,255,0.06);border-color:rgba(0,212,255,0.2)">
+        <span class="toggle-dot"></span>
+        <span>AUTO</span>
+      </div>
     </div>
   </header>
 
@@ -396,7 +414,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
     <button class="tab-btn active" id="tab-signals" onclick="switchTab('signals')">SIGNALS</button>
     <button class="tab-btn" id="tab-backtest" onclick="switchTab('backtest')">BACKTEST</button>
     <button class="tab-btn" id="tab-screener" onclick="switchTab('screener')">SCREENER</button>
-    <button class="tab-btn" id="tab-performance" onclick="switchTab('performance');loadPerformance()">PERFORMANCE</button>
+    <button class="tab-btn" id="tab-performance" onclick="switchTab('performance');loadPerformance();loadAutoTradeLog()">PERFORMANCE</button>
   </div>
 
   <div class="tab-panel active" id="panel-signals">
@@ -405,6 +423,11 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
   </div>
 
   <div class="test-banner" id="testBanner">TEST MODE ACTIVE — Score thresholds lowered, force-execute enabled on all signals</div>
+  <div class="test-banner" id="autoTradeBanner" style="background:rgba(0,212,255,0.08);border-color:rgba(0,212,255,0.3);color:var(--accent)">
+    AUTO-TRADE BOT ACTIVE — Next scan: <span id="autoNextScan">--:--</span> UTC &nbsp;|&nbsp;
+    Today: <span id="autoTradesToday">0</span>/<span id="autoTradesMax">3</span> trades &nbsp;|&nbsp;
+    Last: <span id="autoLastExec">none</span>
+  </div>
   <div class="stats-bar" id="statsBar" style="display:none">
     <div class="stat-chip">Scanned: <span id="statScanned">0</span> pairs</div>
     <div class="stat-chip">Signals: <span id="statTotal">0</span></div>
@@ -424,6 +447,14 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
     <button class="filter-btn" onclick="applyFilter('SHORT',this)">Short Only</button>
     <button class="filter-btn" onclick="applyFilter('stock',this)">JSE Stocks</button>
     <button class="filter-btn" onclick="applyFilter('high',this)">High Conf (6+)</button>
+  </div>
+
+  <div id="openTradesPanel" style="display:none;margin-bottom:20px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <span style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:var(--muted);font-family:'Space Mono',monospace">OPEN POSITIONS</span>
+      <span id="openTradesCount" style="font-size:10px;color:var(--accent);font-family:'Space Mono',monospace"></span>
+    </div>
+    <div id="openTradesGrid" style="display:flex;flex-wrap:wrap;gap:10px"></div>
   </div>
 
   <div class="signal-grid" id="signalGrid">
@@ -490,6 +521,19 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
         <div class="icon">&#127942;</div>
         <h3>Performance Dashboard</h3>
         <p>Execute trades to begin tracking outcomes. Stats appear here after positions close.</p>
+      </div>
+    </div>
+    <div id="autoTradeLog" style="margin-top:20px">
+      <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:var(--muted);font-family:'Space Mono',monospace;margin-bottom:10px">AUTO-TRADE LOG</div>
+      <div id="autoTradeLogContent" style="font-size:11px;font-family:'Space Mono',monospace"></div>
+    </div>
+
+    <div id="learningPanel" style="display:none;margin-top:20px">
+      <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:var(--muted);font-family:'Space Mono',monospace;margin-bottom:12px">AI LEARNING INSIGHTS</div>
+      <div id="learningContent"></div>
+      <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+        <button class="bt-btn" onclick="runMetaAnalysis()" style="font-size:11px;padding:7px 14px">&#129504; Run Meta-Analysis</button>
+        <div id="lastMetaWrap" style="font-size:10px;color:var(--muted);font-family:'Space Mono',monospace;align-self:center"></div>
       </div>
     </div>
   </div><!-- /panel-performance -->
@@ -742,6 +786,8 @@ async function loadPerformance() {
   try {
     var resp = await fetch('/api/performance');
     var d = await resp.json();
+    loadLearningStats();
+    loadAutoTradeLog();
     if (d.total_trades === 0 || d.message) {
       el.innerHTML = '<div class="empty-state"><div class="icon">&#127942;</div><h3>No Completed Trades</h3><p>Execute trades and let them close to see performance stats.</p></div>';
       return;
@@ -1479,6 +1525,197 @@ function fmtPrice(p) {
   return p.toFixed(5);
 }
 
+// -- Auto-Trade Bot --
+window._autoTradeEnabled = false;
+
+function _updateAutoTradeUI(d) {
+  var tog = document.getElementById('autoTradeToggle');
+  var banner = document.getElementById('autoTradeBanner');
+  window._autoTradeEnabled = d.enabled;
+  if (d.enabled) {
+    tog.classList.add('active');
+    banner.classList.add('visible');
+    var next = d.nextScanAt ? d.nextScanAt.slice(11,16) : '--:--';
+    document.getElementById('autoNextScan').textContent = next;
+    document.getElementById('autoTradesToday').textContent = d.tradesToday || 0;
+    document.getElementById('autoTradesMax').textContent = d.maxDaily || 3;
+    var last = d.lastExecutionPair
+      ? d.lastExecutionPair + ' ' + (d.lastExecutionDir||'')
+      : 'none';
+    document.getElementById('autoLastExec').textContent = last;
+  } else {
+    tog.classList.remove('active');
+    banner.classList.remove('visible');
+  }
+}
+
+async function toggleAutoTrade() {
+  try {
+    var resp = await fetch('/api/auto-trade', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({action:'toggle'})
+    });
+    var d = await resp.json();
+    _updateAutoTradeUI(d);
+    showToast(d.enabled
+      ? 'AUTO-TRADE ON — Bot fires at H4 closes. Min score: ' + d.minScore + ' | Max/day: ' + d.maxDaily
+      : 'AUTO-TRADE OFF — Manual only.');
+  } catch(e) { showToast('Auto-trade toggle failed: '+e.message, true); }
+}
+
+// Sync auto-trade state on load
+fetch('/api/auto-trade').then(function(r){return r.json();}).then(_updateAutoTradeUI).catch(function(){});
+
+// Poll auto-trade status every 30s (updates next scan time)
+(function pollAutoTrade() {
+  if (window._autoTradeEnabled) {
+    fetch('/api/auto-trade').then(function(r){return r.json();}).then(_updateAutoTradeUI).catch(function(){});
+  }
+  setTimeout(pollAutoTrade, 30000);
+})();
+
+// -- AI Learning Stats --
+function loadLearningStats() {
+  fetch('/api/learning/stats').then(function(r){return r.json();}).then(function(d) {
+    var panel = document.getElementById('learningPanel');
+    var content = document.getElementById('learningContent');
+    if (!d || !d.sample_size || d.sample_size < 5) {
+      panel.style.display = 'none'; return;
+    }
+    panel.style.display = 'block';
+    var html = '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">';
+    if (d.asset_type_stats) {
+      var s = d.asset_type_stats;
+      html += '<div class="bt-stat-card"><div class="bt-stat-label">Win Rate</div><div class="bt-stat-val '+(s.win_rate>=0.5?'green':'red')+'">'+(s.win_rate*100).toFixed(0)+'%</div></div>';
+      html += '<div class="bt-stat-card"><div class="bt-stat-label">Avg R</div><div class="bt-stat-val '+(s.avg_r>=0?'green':'red')+'">'+(s.avg_r>=0?'+':'')+s.avg_r.toFixed(2)+'R</div></div>';
+      html += '<div class="bt-stat-card"><div class="bt-stat-label">Sample</div><div class="bt-stat-val blue">'+d.sample_size+' trades</div></div>';
+    }
+    html += '</div>';
+    if (d.grade_accuracy && Object.keys(d.grade_accuracy).length) {
+      html += '<div style="font-size:10px;color:var(--muted);font-family:monospace;margin-bottom:6px">GRADE CALIBRATION</div>';
+      html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">';
+      ['A+','A','B','C'].forEach(function(g) {
+        var s = d.grade_accuracy[g];
+        if (!s) return;
+        var col = s.win_rate >= 0.55 ? 'var(--bull)' : s.win_rate >= 0.4 ? 'var(--warn)' : 'var(--bear)';
+        html += '<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 12px;text-align:center;min-width:70px">' +
+          '<div style="font-size:13px;font-weight:700;color:'+col+'">Grade '+g+'</div>' +
+          '<div style="font-size:11px;font-family:monospace;color:'+col+'">'+(s.win_rate*100).toFixed(0)+'% WR</div>' +
+          '<div style="font-size:10px;color:var(--muted);font-family:monospace">'+(s.avg_r>=0?'+':'')+s.avg_r.toFixed(1)+'R ('+s.trades+')</div>' +
+          '</div>';
+      });
+      html += '</div>';
+    }
+    if (d.pair_stats) {
+      var ps = d.pair_stats;
+      html += '<div style="font-size:10px;color:var(--muted);font-family:monospace;margin-bottom:4px">LAST REQUESTED PAIR — '+(ps.win_rate*100).toFixed(0)+'% WR | avg '+(ps.avg_r>=0?'+':'')+ps.avg_r.toFixed(2)+'R | '+ps.total_trades+' trades'+(ps.best_regime?' | best in '+ps.best_regime:'')+'</div>';
+    }
+    if (d.recent_failures && d.recent_failures.length) {
+      html += '<div style="font-size:10px;color:var(--muted);font-family:monospace;margin:8px 0 4px">RECENT LOSSES</div>';
+      html += '<div style="font-size:10px;font-family:monospace;color:var(--bear)">';
+      d.recent_failures.forEach(function(f) {
+        if (f.pair) html += f.pair+' Grade:'+f.grade+' '+f.regime+' R='+(f.r||0).toFixed(1)+'<br>';
+      });
+      html += '</div>';
+    }
+    content.innerHTML = html;
+
+    // Load last meta-analysis
+    fetch('/api/learning/last-meta').then(function(r){return r.json();}).then(function(m) {
+      if (m && m.summary) {
+        document.getElementById('lastMetaWrap').innerHTML =
+          'Last analysis: <span style="color:var(--text)">' + m.summary.slice(0,120) + '</span>';
+      }
+    }).catch(function(){});
+  }).catch(function(){});
+}
+
+function loadAutoTradeLog() {
+  fetch('/api/auto-trade/log').then(function(r){return r.json();}).then(function(rows) {
+    var el = document.getElementById('autoTradeLogContent');
+    if (!rows || !rows.length) {
+      el.innerHTML = '<span style="color:var(--muted)">No auto-trade attempts yet.</span>';
+      return;
+    }
+    var html = '<table style="width:100%;border-collapse:collapse">' +
+      '<tr style="color:var(--muted);font-size:10px;border-bottom:1px solid var(--border)">' +
+      '<th style="text-align:left;padding:4px 8px">Time</th>' +
+      '<th style="text-align:left;padding:4px 8px">Pair</th>' +
+      '<th style="text-align:left;padding:4px 8px">Dir</th>' +
+      '<th style="text-align:left;padding:4px 8px">Score</th>' +
+      '<th style="text-align:left;padding:4px 8px">Status</th>' +
+      '<th style="text-align:left;padding:4px 8px">Error / Ticket</th>' +
+      '</tr>';
+    rows.forEach(function(r) {
+      var isErr  = (r.grade||'').indexOf('ERR') > -1;
+      var time   = (r.ts||'').slice(11,19);
+      var status = isErr
+        ? '<span style="color:var(--bear)">FAILED</span>'
+        : '<span style="color:var(--bull)">OK</span>';
+      var detail = isErr
+        ? '<span style="color:var(--bear)">' + (r.error_tag||'?') + '</span>'
+        : '<span style="color:var(--muted)">#' + (r.ticket||'?') + '</span>';
+      var dirCol = r.direction === 'LONG' ? 'var(--bull)' : 'var(--bear)';
+      html += '<tr style="border-bottom:1px solid rgba(30,42,54,0.4)">' +
+        '<td style="padding:5px 8px;color:var(--muted)">' + time + '</td>' +
+        '<td style="padding:5px 8px">' + (r.pair||'?') + '</td>' +
+        '<td style="padding:5px 8px;color:' + dirCol + '">' + (r.direction||'?') + '</td>' +
+        '<td style="padding:5px 8px;color:var(--accent)">' + (r.score||'?') + '</td>' +
+        '<td style="padding:5px 8px">' + status + '</td>' +
+        '<td style="padding:5px 8px">' + detail + '</td>' +
+        '</tr>';
+    });
+    html += '</table>';
+    el.innerHTML = html;
+  }).catch(function(){ document.getElementById('autoTradeLogContent').innerHTML = ''; });
+}
+
+async function runMetaAnalysis() {
+  showToast('Running meta-analysis — 10-20 seconds...');
+  try {
+    var r = await fetch('/api/learning/meta-analysis', {method:'POST'});
+    var d = await r.json();
+    if (d.summary) {
+      showToast('Done: ' + d.summary.slice(0,80));
+      loadLearningStats();
+    } else if (d.error) {
+      showToast('Meta-analysis: ' + d.error, true);
+    }
+  } catch(e) { showToast('Meta-analysis failed: '+e.message, true); }
+}
+
+// -- Open Positions Renderer --
+window._openPositions = [];
+function renderOpenPositions(positions) {
+  window._openPositions = positions || [];
+  var panel = document.getElementById('openTradesPanel');
+  var grid  = document.getElementById('openTradesGrid');
+  var count = document.getElementById('openTradesCount');
+  if (!positions || positions.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = 'block';
+  count.textContent = positions.length + ' open';
+  grid.innerHTML = positions.map(function(p) {
+    var pnl = p.profit || 0;
+    var dir = p.direction || 'LONG';
+    var pnlClass = pnl >= 0 ? 'pos' : 'neg';
+    var cardClass = pnl >= 0 ? 'profit' : 'loss';
+    var pnlSign = pnl >= 0 ? '+' : '';
+    return '<div class="pos-card ' + cardClass + '">' +
+      '<div class="pos-card-header">' +
+        '<span class="pos-card-pair">' + (p.pair || p.symbol) + '</span>' +
+        '<span class="pos-card-dir ' + dir + '">' + dir + '</span>' +
+      '</div>' +
+      '<div class="pos-card-pnl ' + pnlClass + '">' + pnlSign + '$' + pnl.toFixed(2) + '</div>' +
+      '<div class="pos-card-row">Entry: ' + fmtPrice(p.entry) + '</div>' +
+      '<div class="pos-card-row">SL: ' + fmtPrice(p.sl) + ' &nbsp; TP: ' + fmtPrice(p.tp) + '</div>' +
+      '<div class="pos-card-row">Vol: ' + p.volume + (p.ticket ? ' &nbsp; #' + p.ticket : '') + '</div>' +
+    '</div>';
+  }).join('');
+}
+
 // -- MT5 & Bybit Status --
 window._mt5Connected = false;
 window._mt5Account = null;
@@ -1500,6 +1737,10 @@ window._bybitAccount = null;
       document.querySelectorAll('.exec-btn').forEach(function(b){
         if (b.textContent.indexOf('Bybit') > -1) { b.disabled = false; b.removeAttribute('title'); }
       });
+      // Merge Bybit positions with any existing MT5 positions
+      var mt5Pos = window._openPositions.filter(function(p){ return !p._bybit; });
+      var bybitPos = (d.positions || []).map(function(p){ return Object.assign({_bybit:true}, p); });
+      renderOpenPositions(mt5Pos.concat(bybitPos));
     } else {
       window._bybitConnected = false;
       badge.className = 'bybit-badge disconnected';
@@ -1535,6 +1776,7 @@ fetch('/api/test-mode').then(function(r){return r.json();}).then(function(d){
       document.querySelectorAll('.exec-btn').forEach(function(b){
         if (b.textContent.indexOf('Bybit') === -1) { b.disabled = false; b.removeAttribute('title'); }
       });
+      renderOpenPositions(d.positions || []);
     } else {
       window._mt5Connected = false;
       badge.className = 'mt5-badge disconnected';
@@ -1544,6 +1786,7 @@ fetch('/api/test-mode').then(function(r){return r.json();}).then(function(d){
       document.querySelectorAll('.exec-btn').forEach(function(b){
         if (b.textContent.indexOf('Bybit') === -1) { b.disabled = true; b.title = 'MT5 not connected'; }
       });
+      renderOpenPositions([]);
     }
   }).catch(function(){});
   setTimeout(pollMT5, 10000);
@@ -1649,6 +1892,13 @@ async function doExecute(symbol, btn, forceMode) {
       var sid = (sig.symbol||'').replace(/[\/=^.]/g, '_');
       var execBtn = document.getElementById('execbtn-' + sid);
       if (execBtn) { execBtn.disabled = true; execBtn.innerHTML = 'EXECUTED - Ticket #' + data.ticket; }
+      // Refresh open positions panel immediately
+      setTimeout(function() {
+        var statusUrl = sig.type === 'crypto' ? '/api/bybit-status' : '/api/mt5-status';
+        fetch(statusUrl).then(function(r){ return r.json(); }).then(function(d){
+          if (d.positions) renderOpenPositions(d.positions);
+        }).catch(function(){});
+      }, 1500);
     } else {
       var errMsg = data.error || 'Unknown error';
       if (data.approval && !data.approval.approved) errMsg = 'Risk Engine: ' + data.approval.reason;

@@ -70,7 +70,7 @@ CONFIG: dict = {
     "BT_AUTO_TOGGLE": False,           # If False, backtest will never enable/disable live pairs
     "BT_PERCENTILE_FILTER": False,     # If False, disable rolling percentile floor in backtest
     # ── Execution engine ────────────────────────────────────────────────────
-    "EXECUTION_ENABLED": False,         # Master switch — must be explicitly enabled
+    "EXECUTION_ENABLED": True,          # Master switch — enabled for demo live-level testing
     "AUTO_EXECUTE": False,              # Auto-execute after AI grade (manual click only when False)
     "AUTO_EXECUTE_MIN_SCORE": 8.0,      # Minimum confluence score for auto-execute
     "AUTO_EXECUTE_MIN_GRADE": "B",      # Minimum AI grade for auto-execute
@@ -81,6 +81,25 @@ CONFIG: dict = {
     "MAX_RISK_PER_TRADE": 0.03,         # Hard cap: never risk > 3% on single trade
     "DRAWDOWN_REDUCE_THRESHOLD": 0.10,  # At 10% drawdown, halve position sizes
     "DRAWDOWN_STOP_THRESHOLD": 0.15,    # At 15% drawdown, reject ALL new trades
+    # ── Auto-Trade Bot ────────────────────────────────────────────────────────
+    "AUTO_TRADE_ENABLED":       False,  # Master toggle (also togglable via UI/API)
+    "AUTO_TRADE_MIN_SCORE":     7.0,    # Min confluence score to auto-execute
+    "AUTO_TRADE_MAX_DAILY":     3,      # Max auto-trades per calendar day (UTC)
+    "AUTO_TRADE_MAX_PER_SCAN":  1,      # Max executions per single scan run
+    "AUTO_TRADE_SIZING_OVERRIDE": 1.0,  # Full live-level sizing on demo
+    "AUTO_TRADE_SCAN_INTERVAL_MIN": 30, # Scan every N minutes (30 = twice per hour)
+    "AUTO_TRADE_SESSIONS": {            # Sessions per asset class; "always" = 24/7
+        "forex":     ["london", "new_york", "london_ny_overlap"],
+        "crypto":    ["always"],
+        "stock":     ["jse", "us_regular"],
+        "commodity": ["always"],
+        "index":     ["always"],
+    },
+    # ── AI Self-Learning ──────────────────────────────────────────────────────
+    "LEARNING_ENABLED":         True,   # Extract learning data after each trade closes
+    "LEARNING_MIN_TRADES":      5,      # Min trades before context injected into AI
+    "LEARNING_LOOKBACK_DAYS":   90,     # Days of history to query for context
+    "META_ANALYSIS_ENABLED":    True,   # Weekly meta-analysis via Claude
 }
 
 # Apply YAML overrides — deep-merge dicts, overwrite scalars
