@@ -375,10 +375,17 @@ def risk_check(signal: dict, account_balance: float, account_equity: float,
     sl_distance = abs(entry - sl)
     if is_crypto:
         _default_tick = 0.01
-        _default_tick_val = 0.01
-    elif is_stock or is_commodity:
+        _default_contract = 1
+        _default_tick_val = _default_tick * _default_contract  # 0.01
+    elif is_commodity:
+        # Match _calc_volume fallback: tick_value = point * contract_size (e.g. 0.01 * 100 = 1.0 for gold)
         _default_tick = 0.01
-        _default_tick_val = 0.01  # 1 cent per tick per unit
+        _default_contract = 100
+        _default_tick_val = _default_tick * _default_contract  # 1.0
+    elif is_stock:
+        _default_tick = 0.01
+        _default_contract = 1
+        _default_tick_val = _default_tick * _default_contract  # 0.01
     else:
         _default_tick = 0.00001
         _default_tick_val = 1.0

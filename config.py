@@ -8,6 +8,16 @@ import logging
 
 log = logging.getLogger("athena")
 
+PAIR_PROFILE_VOTES = {
+    "d1_trend", "h1_ema", "d1_adx", "h4_macd", "h4_oscillator",
+    "volume", "funding", "session", "h4_fib", "h1_bb",
+    "weinstein", "divergence",
+}
+PAIR_PROFILE_FILTERS = {
+    "weinstein", "session", "regime_transition", "obv", "funding",
+    "squeeze", "mean_revert", "btc_bias", "divergence_warning",
+}
+
 # ── Load YAML overrides ──────────────────────────────────────────────────────
 _yaml_overrides: dict = {}
 try:
@@ -29,6 +39,7 @@ CONFIG: dict = {
     "CRYPTOPANIC_KEY": os.environ.get("CRYPTOPANIC_KEY", ""),
     "FINNHUB_KEY":     os.environ.get("FINNHUB_KEY", ""),
     "RISK_PCT": 0.01, "SL_ATR_MULT": 1.5, "TP1_ATR_MULT": 2.0, "TP2_ATR_MULT": 3.5,
+    "DAILY_LOSS_LIMIT": 0.05,  # Kill switch: halt trading after losing 5% of account in a day
     "VOLUME_THRESHOLD": 1.5, "VOLUME_THRESHOLD_BACKTEST": 1.2, "ADX_TREND_MIN": 25,
     "D1_CANDLES": 250, "H4_CANDLES": 120, "H1_CANDLES": 120, "MIN_CONFLUENCE": 7.0,
     "RISK_MULT": {"commodity": 1.2, "crypto": 0.8, "forex": 0.6, "index": 0.6, "stock": 0.6},
@@ -67,6 +78,7 @@ CONFIG: dict = {
         "commodity": {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "h4_macd": 1.0, "h4_oscillator": 1.0, "volume": 1.0, "funding": 0.0, "session": 0.0, "h4_fib": 1.0, "h1_bb": 1.0, "weinstein": 0.5, "divergence": 1.0},
         "index":     {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "h4_macd": 1.0, "h4_oscillator": 1.0, "volume": 1.0, "funding": 0.0, "session": 0.0, "h4_fib": 1.0, "h1_bb": 1.0, "weinstein": 0.5, "divergence": 1.0},
     },
+    "PAIR_PROFILES": {},
     "BT_AUTO_TOGGLE": False,           # If False, backtest will never enable/disable live pairs
     "BT_PERCENTILE_FILTER": False,     # If False, disable rolling percentile floor in backtest
     # ── Execution engine ────────────────────────────────────────────────────
@@ -130,6 +142,44 @@ def validate_config(cfg: dict) -> None:
         missing = _asset_classes - set(cfg.get(sub_key, {}).keys())
         if missing:
             log.warning(f"[CFG] {sub_key} missing asset classes: {missing}")
+    pair_profiles = cfg.get("PAIR_PROFILES", {}) or {}
+    if not isinstance(pair_profiles, dict):
+        log.warning(f"[CFG] PAIR_PROFILES must be a dict, got {type(pair_profiles).__name__!r}")
+        return
+    for profile_name, profile in pair_profiles.items():
+        if not isinstance(profile, dict):
+            log.warning(f"[CFG] PAIR_PROFILES[{profile_name!r}] must be a dict")
+            continue
+        disabled_votes = set(profile.get("disabled_votes", []) or [])
+        unknown_votes = sorted(disabled_votes - PAIR_PROFILE_VOTES)
+        if unknown_votes:
+            log.warning(f"[CFG] PAIR_PROFILES[{profile_name!r}] unknown disabled_votes: {unknown_votes}")
+        disabled_filters = set(profile.get("disable_filters", []) or [])
+        unknown_filters = sorted(disabled_filters - PAIR_PROFILE_FILTERS)
+        if unknown_filters:
+            log.warning(f"[CFG] PAIR_PROFILES[{profile_name!r}] unknown disable_filters: {unknown_filters}")
+        weight_overrides = profile.get("weight_overrides", {}) or {}
+        if not isinstance(weight_overrides, dict):
+            log.warning(f"[CFG] PAIR_PROFILES[{profile_name!r}].weight_overrides must be a dict")
+            weight_overrides = {}
+        for vote_name, weight in weight_overrides.items():
+            if vote_name not in PAIR_PROFILE_VOTES:
+                log.warning(f"[CFG] PAIR_PROFILES[{profile_name!r}] unknown vote override: {vote_name!r}")
+                continue
+            if vote_name in disabled_votes:
+                log.warning(f"[CFG] PAIR_PROFILES[{profile_name!r}] disables and overrides {vote_name!r}; disabled_votes wins")
+            try:
+                float(weight)
+            except (TypeError, ValueError):
+                log.warning(f"[CFG] PAIR_PROFILES[{profile_name!r}] invalid weight for {vote_name!r}: {weight!r}")
+        for numeric_key in ("min_confluence", "bt_min", "volume_threshold"):
+            if numeric_key in profile:
+                try:
+                    float(profile[numeric_key])
+                except (TypeError, ValueError):
+                    log.warning(
+                        f"[CFG] PAIR_PROFILES[{profile_name!r}] {numeric_key} must be numeric, got {profile[numeric_key]!r}"
+                    )
 
 
 validate_config(CONFIG)

@@ -160,7 +160,7 @@ class TestConfig:
 # ── Scoring tests ────────────────────────────────────────────────────────────
 
 from scoring import get_session, detect_div, apply_correlation_cap
-from athena import _build_event_risk, _classify_signal
+from athena import _build_event_risk, _classify_signal, _json_safe
 
 
 class TestGetSession:
@@ -243,3 +243,16 @@ class TestScanClassification:
         tier, reason = _classify_signal(signal, pair)
         assert tier == "watchlist"
         assert "Earnings" in reason
+
+
+class TestJsonSafety:
+    def test_non_finite_floats_are_sanitized(self):
+        payload = {
+            "atr": float("nan"),
+            "score": float("inf"),
+            "signals": [{"ema200Slope": float("-inf"), "pair": "EUR/USD"}],
+        }
+        cleaned = _json_safe(payload)
+        assert cleaned["atr"] is None
+        assert cleaned["score"] is None
+        assert cleaned["signals"][0]["ema200Slope"] is None

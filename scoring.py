@@ -5,7 +5,7 @@ Depends on: config.CONFIG, indicators (calc_* functions).
 import logging
 from datetime import datetime, timezone
 
-from config import CONFIG
+from config import CONFIG, PAIR_PROFILE_VOTES, PAIR_PROFILE_FILTERS
 from indicators import (
     calc_rsi, calc_fib, calc_fib_proximity, calc_rsi_divergence, calc_weinstein_stage,
     calc_bb_width_percentile, calc_obv_trend, calc_squeeze,
@@ -13,6 +13,51 @@ from indicators import (
 from regime import detect_regime
 
 log = logging.getLogger("athena")
+
+
+def get_pair_profile(pair: dict) -> dict:
+    """Return pair-specific profile overrides keyed by display or symbol."""
+    profiles = CONFIG.get("PAIR_PROFILES", {}) or {}
+    return profiles.get(pair.get("display")) or profiles.get(pair.get("symbol")) or {}
+
+
+def get_pair_vote_weights(pair: dict) -> dict:
+    """Merge pair overrides on top of class-level vote weights."""
+    ptype = pair.get("type", "stock")
+    weights = dict(CONFIG.get("VOTE_WEIGHTS", {}).get(ptype, CONFIG.get("VOTE_WEIGHTS", {}).get("stock", {})))
+    profile = get_pair_profile(pair)
+    for vote_name in profile.get("disabled_votes", []) or []:
+        weights[vote_name] = 0.0
+    for vote_name, weight in (profile.get("weight_overrides", {}) or {}).items():
+        try:
+            weights[vote_name] = float(weight)
+        except (TypeError, ValueError):
+            log.warning(f"[CFG] Invalid weight override for {pair.get('display')}: {vote_name}={weight!r}")
+    return weights
+
+
+def pair_filter_enabled(pair: dict, filter_name: str) -> bool:
+    disabled = set(get_pair_profile(pair).get("disable_filters", []) or [])
+    return filter_name not in disabled
+
+
+def classify_signal_setup(direction: str, entry_mode: str,
+                          squeeze_bonus: bool = False, atr_breakout: bool = False,
+                          votes: dict | None = None) -> str:
+    """Classify the setup so pair-specific routing is easier to audit.
+
+    Uses structured flags (squeeze_bonus, atr_breakout) set during scoring rather
+    than re-parsing warning strings, so renaming warning text never silently breaks classification.
+    """
+    if entry_mode == "mean_revert":
+        return "mean_reversion"
+    if squeeze_bonus or atr_breakout:
+        return "breakout"
+    dir_vote = 1 if direction == "LONG" else -1
+    votes = votes or {}
+    if votes.get("H1 BB Pullback") == dir_vote and votes.get("D1 Trend Gate") == dir_vote:
+        return "trend_pullback"
+    return "trend_continuation"
 
 
 def get_session(bar_time: str | None = None) -> dict:
@@ -104,7 +149,7 @@ def apply_correlation_cap(signals: list) -> list:
 
 
 def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
-                    e200s: float, pair: dict, btc_bias: str,
+                    pair: dict, btc_bias: str,
                     d1_candles: list | None = None,
                     h4_candles: list | None = None,
                     h1_candles: list | None = None,
@@ -128,7 +173,7 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
     bull = bear = 0.0
     s = d1["snap"]; s4 = h4["snap"]; s1 = h1["snap"]
     _ptype = pair["type"]
-    _vw = CONFIG.get("VOTE_WEIGHTS", {}).get(_ptype, CONFIG.get("VOTE_WEIGHTS", {}).get("stock", {}))
+    _vw = get_pair_vote_weights(pair)
 
     # ── CAT 1 / TREND: D1 Trend Gate — per-class weight ─────────────────────
     W_TREND = _vw.get("d1_trend", 2.0)
@@ -184,17 +229,17 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
         if W_WEIN > 0:
             if weinstein_stage == 2:   v["D1 Weinstein Stage"] = 1;  bull += W_WEIN
             elif weinstein_stage == 4: v["D1 Weinstein Stage"] = -1; bear += W_WEIN
-            elif weinstein_stage == 3:
+            elif weinstein_stage == 3 and pair_filter_enabled(pair, "weinstein"):
                 v["D1 Weinstein Stage"] = 0
                 w.append(f"Weinstein {weinstein_label} — potential distribution, avoid new longs")
-            elif weinstein_stage == 1:
+            elif weinstein_stage == 1 and pair_filter_enabled(pair, "weinstein"):
                 v["D1 Weinstein Stage"] = 0
                 w.append(f"Weinstein {weinstein_label} — basing, wait for Stage 2 breakout")
             else:
                 v["D1 Weinstein Stage"] = 0
         else:
             v["D1 Weinstein Stage"] = 0
-            if weinstein_stage in (3, 1):
+            if weinstein_stage in (3, 1) and pair_filter_enabled(pair, "weinstein"):
                 w.append(f"Weinstein {weinstein_label} — AI context only for {_ptype} (weight=0)")
     else:
         v["D1 Weinstein Stage"] = 0
@@ -211,7 +256,7 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
         _bar_ts = (h4_candles[-1] or {}).get("time")
     _sess = get_session(_bar_ts)
     _is_asia_active = any(x in pair["display"] for x in ["AUD", "NZD"])
-    if W_SESS > 0:
+    if W_SESS > 0 and pair_filter_enabled(pair, "session"):
         if _sess["quality"] == "high":
             v["Session Quality"] = 1
             bull += W_SESS * 0.5; bear += W_SESS * 0.5
@@ -242,7 +287,7 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
     elif adx_val is not None and adx_val < _rng["choppy"]:
         w.append(f"CHOPPY MARKET: H4 ADX={adx_val:.1f} (<{_rng['choppy']}) — score penalised -{_rng['choppy_pen']}")
 
-    if _ptype == "crypto" and _adx_mom in ("collapsing", "exhausting"):
+    if _ptype == "crypto" and _adx_mom in ("collapsing", "exhausting") and pair_filter_enabled(pair, "regime_transition"):
         w.append(f"REGIME TRANSITION: H4 ADX {_adx_mom} (slope={_adx_slope}) — trend fading (warning only)")
 
     # ── CAT 2 / MOMENTUM: H4 MACD — per-class weight ────────────────────────
@@ -270,6 +315,10 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
     lD = stoch["d"][-1] if stoch["d"] and stoch["d"][-1] is not None else None
     _rsi_dir = 0; _stoch_dir = 0
     if r4 is not None:
+        # RSI zones are intentionally asymmetric: LONG fires in (45, ob) — biased toward
+        # overbought momentum; SHORT fires in (os, 55) — biased toward oversold reversal.
+        # Both zones span the same width but are offset so ambiguous mid-range (55-ob) only
+        # allows LONG signals, reinforcing the long-bias of trending momentum markets.
         if 45 < r4 < _rsi_b["ob"]:      _rsi_dir = 1
         elif _rsi_b["os"] < r4 < 55:    _rsi_dir = -1
         elif r4 >= _rsi_b["ob"]:
@@ -367,7 +416,7 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
             w.append(f"Low volume ({vr:.1f}x avg) — confirm before entry")
 
     # ── OBV trend confirmation (warning-only, not a scored vote) ─────────────
-    if h4_candles and _ptype != "forex":
+    if h4_candles and _ptype != "forex" and pair_filter_enabled(pair, "obv"):
         _obv = calc_obv_trend(h4_candles, lookback=20)
         if _obv == "diverging_bearish":
             w.append("OBV BEARISH DIVERGENCE: price rising but volume accumulation falling — rally may be exhausting")
@@ -379,7 +428,7 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
     _funding_vote_active = False
     if _ptype == "crypto" and funding_rate is not None:
         _funding_vote_active = True
-        if funding_rate > 0.001:
+        if funding_rate > 0.001 and pair_filter_enabled(pair, "funding"):
             w.append(f"EXTREME FUNDING: {funding_rate*100:.4f}% — overleveraged, reversal risk")
         if W_FUND > 0:
             if funding_rate < 0.0001:
@@ -394,20 +443,24 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
         v["Funding Rate"] = 0
 
     # ── DIRECTION decided after ALL votes are tallied ─────────────────────────
+    # Tie-break: bull >= bear → LONG (intentional long bias; ties are rare with weighted votes).
     direction = "LONG" if bull >= bear else "SHORT"
 
     # ATR compression bonus for crypto
     _atr_pct = s4.get("atrPct"); _atr_lbl = s4.get("atrLabel", "")
+    _atr_breakout = False
     if _ptype == "crypto" and _atr_pct is not None:
         if _atr_pct <= 25 and _atr_lbl == "expanding":
             if direction == "LONG":  bull += 0.5
             else:                    bear += 0.5
+            _atr_breakout = True
             w.append(f"ATR COMPRESSION BREAKOUT: ATR pct={_atr_pct} (25th) expanding (+0.5)")
         elif _atr_pct >= 75:
             w.append(f"ATR EXTENDED: ATR pct={_atr_pct} (75th+) — already extended, late entry risk")
 
     # Volatility squeeze detection (BB inside Keltner) — all asset classes
-    if h4_candles and len(h4_candles) >= 25:
+    _squeeze_bonus = False
+    if h4_candles and len(h4_candles) >= 25 and pair_filter_enabled(pair, "squeeze"):
         _squeeze = calc_squeeze(h4_candles)
         if _squeeze and _squeeze["active"]:
             _sq_bars = _squeeze["bars"]
@@ -415,16 +468,16 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
             if _sq_bars >= 6:
                 # Sustained squeeze — breakout imminent, add bonus
                 if _sq_mom == "bullish" and (d1_trend == 1 or bull > bear):
-                    bull += 0.5
+                    bull += 0.5; _squeeze_bonus = True
                 elif _sq_mom == "bearish" and (d1_trend == -1 or bear > bull):
-                    bear += 0.5
+                    bear += 0.5; _squeeze_bonus = True
                 w.append(f"VOLATILITY SQUEEZE: BB inside Keltner for {_sq_bars} bars — {_sq_mom} breakout likely (+0.5)")
             else:
                 w.append(f"VOLATILITY SQUEEZE: BB inside Keltner for {_sq_bars} bars — watch for breakout")
 
     # Range mean-reversion mode
     _entry_mode = "trend"
-    if (_ptype == "forex" and ranging_penalty > 0) or (_ptype == "crypto" and _adx_mom in ("collapsing", "exhausting")):
+    if pair_filter_enabled(pair, "mean_revert") and ((_ptype == "forex" and ranging_penalty > 0) or (_ptype == "crypto" and _adx_mom in ("collapsing", "exhausting"))):
         _h4_bbp = None
         if s4["bbUpper"] is not None and s4["bbLower"] is not None:
             _bbr4 = s4["bbUpper"] - s4["bbLower"]
@@ -439,7 +492,7 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
                 w.append(f"MEAN-REVERT: BB%={_h4_bbp:.2f}, ranging penalty reduced — fade to BB mid")
 
     # Intermarket: BTC bias for alts
-    if pair["type"] == "crypto" and pair["symbol"] != "BTCUSDT":
+    if pair["type"] == "crypto" and pair["symbol"] != "BTCUSDT" and pair_filter_enabled(pair, "btc_bias"):
         if direction == "LONG"  and btc_bias == "bearish":
             w.append("BTC bearish — alt LONG is counter-trend risk")
         elif direction == "SHORT" and btc_bias == "bullish":
@@ -473,14 +526,23 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
         w.append("Wide SL > 3% of price — size down")
 
     spread = round(abs(bull - bear), 1)
-    # Per-class base max from VOTE_WEIGHTS (sum all non-divergence weights)
+    # Per-class base max from VOTE_WEIGHTS (sum all non-divergence weights).
+    # Session quality adds W_SESS*0.5 to BOTH bull and bear simultaneously — net directional
+    # contribution is 0.5 max, not the full W_SESS. Subtract the unused half so confluencePct
+    # is not overstated (e.g. forex: 8.5 reported → 8.0 effective when W_SESS=1.0).
     _base_max = sum(v for k, v in _vw.items() if k != "divergence")
+    if W_SESS > 0:
+        _base_max -= W_SESS * 0.5
+    signal_class = classify_signal_setup(direction, _entry_mode,
+                                         squeeze_bonus=_squeeze_bonus, atr_breakout=_atr_breakout,
+                                         votes=v)
     return {
         "score": score, "votes": v, "direction": direction,
         "bull": round(bull, 1), "bear": round(bear, 1), "spread": spread,
         "warnings": w, "trendState": trend_state,
         "weinsteinStage": weinstein_stage, "weinsteinLabel": weinstein_label,
         "entryMode": _entry_mode, "adxMomentum": _adx_mom, "adxSlope": _adx_slope,
+        "signalClass": signal_class,
         "regime": _regime,
         "fundingRate": funding_rate,
         "maxScoreOverride": round(_base_max, 2),

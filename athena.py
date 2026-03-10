@@ -493,11 +493,11 @@ class CandleBuilder:
         """Background loop: bulk D1 update every 4 hours to catch all market closes."""
         def _loop():
             while True:
+                time.sleep(4 * 3600)
                 try:
                     self.bulk_update_d1()
                 except Exception as e:
                     log.warning(f"[CB] Refresh loop error: {e}")
-                time.sleep(4 * 3600)  # 4 hours
         threading.Thread(target=_loop, daemon=True, name="candle-refresh").start()
         log.info("[CB] D1 refresh loop started (Bulk API every 4h)")
 
@@ -734,10 +734,13 @@ def _atr_for_levels(d1i: dict, h4i: dict, h1i: dict):
 def _max_score_for_pair(pair: dict) -> float:
     """Compute theoretical max score from per-class VOTE_WEIGHTS (sum of all non-divergence vote slots).
     Matches maxScoreOverride in calc_confluence — divergence is a bonus above base max."""
-    ptype = pair.get("type", "stock")
-    weights = CONFIG.get("VOTE_WEIGHTS", {}).get(ptype)
+    weights = get_pair_vote_weights(pair)
     if weights:
-        return round(sum(v for k, v in weights.items() if k != "divergence"), 2)
+        max_score = sum(v for k, v in weights.items() if k != "divergence")
+        session_weight = float(weights.get("session", 0.0) or 0.0)
+        if session_weight > 0:
+            max_score -= session_weight * 0.5
+        return round(max_score, 2)
     return 12.0
 
 def fetch_yfinance(sym, tf, limit):
@@ -990,7 +993,7 @@ def fetch_polygon(pair, tf, limit):
 _candle_cache: dict = {}          # (symbol, tf) → (candles, expiry_epoch)
 _candle_cache_lock = threading.Lock()
 # TTL per timeframe: cache holds until ~1 bar before the next bar is due
-_CANDLE_CACHE_TTL = {"h1": 55 * 60, "h4": 235 * 60, "d1": 23 * 3600}
+_CANDLE_CACHE_TTL = {"H1": 55 * 60, "H4": 235 * 60, "D1": 23 * 3600}
 
 def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
     """Route candle fetch to correct source with in-memory TTL cache.
@@ -999,6 +1002,12 @@ def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
     window reuse data instead of hammering the REST API on every scan.
     TTL: H1=55 min, H4=3h55m, D1=23h — expires just before the next bar closes.
     """
+    if pair.get("type") != "crypto":
+        live_candles = fetch_candles_live(pair.get("display", ""), tf, limit)
+        _min_live_bars = {"D1": 220, "H4": 50, "H1": 50}.get(tf, limit)
+        if live_candles and len(live_candles) >= min(limit, _min_live_bars):
+            return live_candles[-limit:] if len(live_candles) > limit else live_candles
+
     key = (pair.get("symbol", pair.get("display")), tf)
     now = time.time()
     with _candle_cache_lock:
@@ -1030,7 +1039,8 @@ from indicators import (
 
 from scoring import (
     get_session, calc_confluence, detect_div,
-    CORR_CLUSTERS, apply_correlation_cap,
+    CORR_CLUSTERS, apply_correlation_cap, get_pair_profile,
+    get_pair_vote_weights, pair_filter_enabled,
 )
 
 _scan_lock = threading.Lock()  # thread-safe scan guard (replaces bare boolean)
@@ -1161,7 +1171,10 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
                     scan_funnel["no_data"] += 1
                     log.info(f"{pair['display']:12s} SKIP")
                     continue
-                threshold = CONFIG["MIN_CONFLUENCE_CLASS"].get(pair["type"], CONFIG["MIN_CONFLUENCE"])
+                threshold = get_pair_profile(pair).get(
+                    "min_confluence",
+                    CONFIG["MIN_CONFLUENCE_CLASS"].get(pair["type"], CONFIG["MIN_CONFLUENCE"])
+                )
                 if _test_mode:
                     threshold = max(1.0, threshold - 3.0)  # drop threshold by 3 in test mode
                 sig = _annotate_signal_for_scan(sig, pair, threshold, ds_ctx, earnings_ctx, _closed_exchanges, news_ctx)
@@ -1557,7 +1570,8 @@ def _build_signal_message(signal: dict, news_ctx: dict | None,
     lines = [
         "=== SIGNAL ===",
         f"Pair: {signal['pair']} | Direction: {signal['direction']} | Score: {score}/{max_score} ({score_pct}%)",
-        f"Conviction: {conviction} (spread {spread}) | Entry Mode: {signal.get('entryMode', 'trend')}",
+        f"Conviction: {conviction} (spread {spread}) | Entry Mode: {signal.get('entryMode', 'trend')} | "
+        f"Class: {signal.get('signalClass', 'trend_continuation')}",
         f"Style: {style_pref.upper()} ({style_labels.get(style_pref.lower(), '')}) | "
         f"Regime: {signal.get('trendState', '?')} "
         f"(ADX {signal.get('h4', {}).get('snap', {}).get('adxPct', '?')}th pct, "
@@ -1883,18 +1897,19 @@ def backtest_pair(pair, style="auto"):
                 vols = [c["vol"] for c in h1_window]; vsma = calc_sma(vols, 20)
                 vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
                 stoch = calc_stochastic(h4_window, 14, 3, 3)
-                e200 = calc_ema([c["close"] for c in d1_window], 200)
-                e200s = (e200[-1] - e200[-21]) / e200[-21] if e200[-1] and len(e200) >= 21 and e200[-21] else 0
-                res = calc_confluence(d1i, h4i, h1i, vr, stoch, e200s, pair, "neutral",
+                res = calc_confluence(d1i, h4i, h1i, vr, stoch, pair, "neutral",
                                        d1_candles=d1_window, h4_candles=h4_window, h1_candles=h1_window,
-                                       volume_threshold=CONFIG.get("VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"]),
+                                       volume_threshold=get_pair_profile(pair).get(
+                                           "volume_threshold",
+                                           CONFIG.get("VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"])
+                                       ),
                                        bar_time=h4_window[-1].get("time") if h4_window else None)
             except Exception:
                 i += 1; continue
             funnel["total_setups"] += 1
             _ts = res.get("trendState", "UNKNOWN")
             # Per-class bt_min from CONFIG — no regime bumps (penalties already in score)
-            bt_min = CONFIG["BT_MIN"].get(_ptype, 4.0)
+            bt_min = get_pair_profile(pair).get("bt_min", CONFIG["BT_MIN"].get(_ptype, 4.0))
             _recent_scores.append(res["score"])
             if res["score"] < bt_min:
                 funnel["fail_score"] += 1; i += 1; continue
@@ -1968,6 +1983,7 @@ def backtest_pair(pair, style="auto"):
             equity_curve.append(round(equity, 4))
             # R2: Tag trade with regime for segmentation
             _regime = _ts if _ts in ("TRENDING","DEVELOPING","RANGING","DEAD RANGING") else "UNKNOWN"
+            open_positions += 1
             funnel["taken"] += 1
             trades.append({
                 "date": entry_bar["time"][:10],
@@ -1977,7 +1993,9 @@ def backtest_pair(pair, style="auto"):
                 "outcome": outcome, "resultR": round(result_r, 2),
                 "regime": _regime, "oos": i >= _oos_start, "volAdj": _vol_adj
             })
-            if outcome not in ("OPEN",): last_exit_bar = exit_bar
+            if outcome not in ("OPEN",):
+                last_exit_bar = exit_bar
+                open_positions -= 1
             i = exit_bar + 1 if outcome != "OPEN" else i + 1
 
     else:  # intraday â€” walk H4 bars
@@ -2012,18 +2030,19 @@ def backtest_pair(pair, style="auto"):
                 vols = [c["vol"] for c in h1_window]; vsma = calc_sma(vols, 20)
                 vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
                 stoch = calc_stochastic(h1_window, 14, 3, 3)
-                e200 = calc_ema([c["close"] for c in h4_window], 200)
-                e200s = (e200[-1] - e200[-21]) / e200[-21] if e200[-1] and len(e200) >= 21 and e200[-21] else 0
-                res = calc_confluence(h4i, h1i, h1i, vr, stoch, e200s, pair, "neutral",
+                res = calc_confluence(h4i, h1i, h1i, vr, stoch, pair, "neutral",
                                        d1_candles=d1_ctx, h4_candles=h4_window, h1_candles=h1_window,
-                                       volume_threshold=CONFIG.get("VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"]),
+                                       volume_threshold=get_pair_profile(pair).get(
+                                           "volume_threshold",
+                                           CONFIG.get("VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"])
+                                       ),
                                        bar_time=h4_window[-1].get("time") if h4_window else None)
             except Exception:
                 i += 1; continue
             funnel["total_setups"] += 1
             _ts = res.get("trendState", "UNKNOWN")
             # Per-class bt_min from CONFIG — no regime bumps (penalties already in score)
-            bt_min = CONFIG["BT_MIN"].get(_ptype, 4.0)
+            bt_min = get_pair_profile(pair).get("bt_min", CONFIG["BT_MIN"].get(_ptype, 4.0))
             _recent_scores.append(res["score"])
             if res["score"] < bt_min:
                 funnel["fail_score"] += 1; i += 1; continue
@@ -2088,6 +2107,7 @@ def backtest_pair(pair, style="auto"):
             equity = round(equity * (1 + equity_change), 6)
             equity_curve.append(round(equity, 4))
             _regime = _ts if _ts in ("TRENDING","DEVELOPING","RANGING","DEAD RANGING") else "UNKNOWN"
+            open_positions += 1
             funnel["taken"] += 1
             trades.append({
                 "date": entry_bar["time"][:10],
@@ -2097,7 +2117,9 @@ def backtest_pair(pair, style="auto"):
                 "outcome": outcome, "resultR": round(result_r, 2),
                 "regime": _regime, "oos": i >= _oos_start, "volAdj": _vol_adj
             })
-            if outcome not in ("OPEN",): last_exit_bar = exit_bar
+            if outcome not in ("OPEN",):
+                last_exit_bar = exit_bar
+                open_positions -= 1
             i = exit_bar + 1 if outcome != "OPEN" else i + 1
 
     if not trades: return {"error": f"No signals generated for {pair['display']} (threshold too high or insufficient data)"}
@@ -2297,6 +2319,19 @@ _RATE_WINDOW = 60        # seconds
 _RATE_MAX_REQUESTS = 120  # max requests per window (2/sec average)
 _RATE_EXECUTE_MAX = 5     # stricter limit for execution endpoints
 
+
+def _json_safe(value):
+    """Recursively convert NaN/inf values to None so Flask emits valid JSON."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, tuple):
+        return [_json_safe(v) for v in value]
+    return value
+
 @app.before_request
 def _auth_and_rate_limit():
     from flask import request as _req
@@ -2329,7 +2364,7 @@ def index(): return send_from_directory("static","index.html")
 @app.route("/api/scan",methods=["POST"])
 def api_scan():
     d = request.get_json(force=True, silent=True) or {}
-    return jsonify(run_full_scan(style=d.get("style", "auto"), asset_class=d.get("asset_class")))
+    return jsonify(_json_safe(run_full_scan(style=d.get("style", "auto"), asset_class=d.get("asset_class"))))
 
 @app.route("/api/analyze",methods=["POST"])
 def api_analyze():
@@ -2387,8 +2422,8 @@ def api_analyze():
                 _con.execute(
                     "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style,"
                     "asset_class,score_pct,max_score,votes_json,warnings_json,"
-                    "weinstein,trend_state,adx_pct,btc_bias,session_name) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "weinstein,trend_state,adx_pct,btc_bias,session_name,regime) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (datetime.now(timezone.utc).isoformat(), sig.get("pair"), sig.get("confluenceScore"),
                      sig.get("direction"), sig.get("trendState"), result.get("grade"),
                      result.get("edgeProbability"), result.get("riskLevel"), style_pref,
@@ -2396,7 +2431,8 @@ def api_analyze():
                      json.dumps(sig.get("votes", {})), json.dumps(sig.get("warnings", [])),
                      sig.get("weinsteinLabel"), sig.get("trendState"),
                      sig.get("h4", {}).get("snap", {}).get("adxPct"),
-                     sig.get("btcBias"), sig.get("session", {}).get("name"))
+                     sig.get("btcBias"), sig.get("session", {}).get("name"),
+                     sig.get("trendState"))
                 )
                 _con.commit()
         except Exception as _ae:
@@ -2451,7 +2487,13 @@ def api_execute():
                 _fresh = analyze_pair(_pair_obj, _btc_bias, style=sig.get("style", "swing"))
                 if _fresh:
                     _orig_dir = sig.get("direction", "")
-                    # Merge fresh levels/price/timestamp; preserve user's direction choice
+                    if _fresh["direction"] != _orig_dir:
+                        return jsonify({
+                            "error": f"SIGNAL_FLIPPED: {pair} is now {_fresh['direction']} (was {_orig_dir})",
+                            "newDirection": _fresh["direction"],
+                            "refreshedAt": _fresh["timestamp"],
+                        }), 409
+                    # Merge refreshed levels/price/timestamp once the direction still matches.
                     sig["price"]           = _fresh["price"]
                     sig["sl"]              = _fresh["sl"]
                     sig["tp1"]             = _fresh["tp1"]
@@ -2461,8 +2503,6 @@ def api_execute():
                     sig["maxScore"]        = _fresh.get("maxScore", sig.get("maxScore", 13))
                     sig["trendState"]      = _fresh.get("trendState", sig.get("trendState"))
                     sig["timestamp"]       = _fresh["timestamp"]
-                    if _fresh["direction"] != _orig_dir:
-                        log.warning(f"[EXEC] {pair}: live direction now {_fresh['direction']} vs selected {_orig_dir} — executing {_orig_dir} as requested")
                     log.info(f"[EXEC] {pair}: signal refreshed @ {_fresh['price']} (was {_sig_age:.0f}s old)")
             except Exception as _re:
                 log.warning(f"[EXEC] {pair}: live refresh failed ({_re}) — using original signal, refreshing timestamp")
@@ -2885,7 +2925,7 @@ def api_backtest():
                 toggle = _auto_toggle_pair(pair, result)
                 if toggle: result["autoToggle"] = toggle
             result["activePairs"] = len(ACTIVE_PAIRS)
-            return jsonify(result)
+            return jsonify(_json_safe(result))
         # Full backtest â€” optional asset_class filter (crypto/forex/stock/commodity/index)
         full = run_full_backtest(style=_bt_style, asset_class=d.get("asset_class"))
         toggles = []
@@ -2897,7 +2937,7 @@ def api_backtest():
                     if t: toggles.append({"pair": r["pair"], "action": t, "sqn": r["sqn"]})
         full["autoToggles"] = toggles
         full["activePairs"] = len(ACTIVE_PAIRS)
-        return jsonify(full)
+        return jsonify(_json_safe(full))
     except Exception as e:
         # S2: Sanitise exception
         log.error(f"api_backtest error: {e}")
@@ -3201,6 +3241,7 @@ def _pair_exchange_closed(pair: dict, closed_exchanges: set) -> bool:
     return exch in closed_exchanges if exch else False
 
 def analyze_pair(pair, btc_bias, style="swing"):
+    pair_profile = get_pair_profile(pair)
     d1 = fetch_candles(pair, "D1", CONFIG["D1_CANDLES"])
     h4 = fetch_candles(pair, "H4", CONFIG["H4_CANDLES"])
     h1 = fetch_candles(pair, "H1", CONFIG["H1_CANDLES"])
@@ -3252,10 +3293,10 @@ def analyze_pair(pair, btc_bias, style="swing"):
             _oi_divergence = _calc_oi_divergence(_oi_data, _cur_close, _prev_close)
 
     res = calc_confluence(
-        _cf_d1i, _cf_h4i, _cf_h1i, vr, stoch, e200s, pair, btc_bias,
+        _cf_d1i, _cf_h4i, _cf_h1i, vr, stoch, pair, btc_bias,
         d1_candles=_cf_d1c, h4_candles=_cf_h4c, h1_candles=_cf_h1c,
         funding_rate=_funding_rate,
-        volume_threshold=CONFIG["VOLUME_THRESHOLD"],
+        volume_threshold=pair_profile.get("volume_threshold", CONFIG["VOLUME_THRESHOLD"]),
     )
 
     # For SCALP: warn if D1 trend disagrees with signal direction
@@ -3285,9 +3326,10 @@ def analyze_pair(pair, btc_bias, style="swing"):
     sd = stoch["d"][-1] if stoch["d"] and stoch["d"][-1] is not None else None
     risk_pct = round(abs(float(price) - float(lvl["sl"])) / float(price) * 100, 2) if price else None
     warn_list = list(res.get("warnings", []))
-    for w in detect_div(d1, h4, h1):
-        if w not in warn_list:
-            warn_list.append(w)
+    if pair_filter_enabled(pair, "divergence_warning"):
+        for w in detect_div(d1, h4, h1):
+            if w not in warn_list:
+                warn_list.append(w)
     if _oi_divergence and _oi_divergence.get("warning"):
         warn_list.append(_oi_divergence["warning"])
     max_score = res.get("maxScoreOverride") or _max_score_for_pair(pair)
@@ -3323,6 +3365,7 @@ def analyze_pair(pair, btc_bias, style="swing"):
         "weinsteinStage": res["weinsteinStage"],
         "weinsteinLabel": res["weinsteinLabel"],
         "entryMode": res.get("entryMode", "trend"),
+        "signalClass": res.get("signalClass", "trend_continuation"),
         "adxMomentum": res.get("adxMomentum"),
         "adxSlope": res.get("adxSlope"),
         "spread": res.get("spread", 0),
@@ -3332,6 +3375,7 @@ def analyze_pair(pair, btc_bias, style="swing"):
         "aiAnalysis": None,
         "fundingRate": res.get("fundingRate"),
         "regime": res.get("regime"),
+        "pairProfile": pair_profile,
         "style": _style,
         "h4Candles": [{"t": c.get("time", ""), "o": round(c["open"], 6), "h": round(c["high"], 6),
                         "l": round(c["low"], 6), "c": round(c["close"], 6)} for c in h4[-80:]],
@@ -3867,8 +3911,15 @@ if __name__=="__main__":
     _check_api_keys()
     active_fx=sum(1 for p in FOREX_PAIRS if p.get("enabled",True))
     active_cr=sum(1 for p in CRYPTO_PAIRS if p.get("enabled",True))
-    log.info(f"Pairs: {len(ACTIVE_PAIRS)} active / {len(ALL_PAIRS)} total ({active_fx}fx {len(COMMODITY_PAIRS)}cmd {sum(1 for p in INDEX_PAIRS if p.get('enabled',True))}idx {sum(1 for p in JSE_PAIRS if p.get('enabled',True))}jse {active_cr}crypto)")
-    log.info(f"Data: yfinance (free) + Binance (free)")
+    active_cmd=sum(1 for p in COMMODITY_PAIRS if p.get("enabled",True))
+    active_idx=sum(1 for p in INDEX_PAIRS if p.get("enabled",True))
+    active_stock=sum(1 for p in (US_STOCK_PAIRS + ETF_PAIRS) if p.get("enabled",True))
+    active_jse=sum(1 for p in JSE_PAIRS if p.get("enabled",True))
+    log.info(
+        f"Pairs: {len(ACTIVE_PAIRS)} active / {len(ALL_PAIRS)} total "
+        f"({active_fx}fx {active_cmd}cmd {active_idx}idx {active_stock}us {active_jse}jse {active_cr}crypto)"
+    )
+    log.info("Data: EODHD + Polygon + yfinance + Binance")
     log.info(f"Est. scan time: ~30s")
     if "--scan" in sys.argv:
         log.info("[SCAN MODE] Running full scan...")

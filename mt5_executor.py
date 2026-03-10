@@ -199,8 +199,16 @@ def mt5_get_positions() -> list:
     for pos in positions:
         athena_pair = reverse_map.get(pos.symbol, pos.symbol)
         sl_dist = abs(pos.price_open - pos.sl) if pos.sl > 0 else 0
-        # Approximate risk amount from SL distance
-        risk_amount = sl_dist * pos.volume * 100_000 * 0.00001  # Simplified
+        risk_amount = 0.0
+        if sl_dist > 0:
+            info = mt5.symbol_info(pos.symbol)
+            if info:
+                tick_size = info.trade_tick_size or info.point or 0
+                tick_value = info.trade_tick_value
+                if tick_value == 0 and info.trade_contract_size and info.point:
+                    tick_value = info.trade_contract_size * info.point
+                if tick_size and tick_value:
+                    risk_amount = (sl_dist / tick_size) * tick_value * pos.volume
         result.append({
             "ticket": pos.ticket,
             "pair": athena_pair,
@@ -211,7 +219,7 @@ def mt5_get_positions() -> list:
             "sl": pos.sl,
             "tp": pos.tp,
             "profit": pos.profit,
-            "risk_amount": risk_amount,
+            "risk_amount": round(risk_amount, 2),
         })
     return result
 

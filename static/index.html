@@ -1197,7 +1197,7 @@ function buildCard(s,idx) {
   var pct=s.confluencePct;
   var fillCls=pct<42?'conf-fill-low':pct<67?'conf-fill-medium':'conf-fill-high';
   var confCol=pct<42?'#f59e0b':pct<67?'#00d4ff':'#00e676';
-  var sid=s.symbol.replace(/\//g,'_');
+  var sid=(s.symbol||'').replace(/[\/=^.]/g,'_');
   var iconLabel=(s.display||s.pair||s.symbol||'??').split('/')[0].slice(0,3);
   var tier=s.signalTier||'trade';
   var tierBadge=tier==='watchlist'
@@ -1428,7 +1428,7 @@ function updateAcct(val) {
 
 // -- AI Content --
 function buildAIContent(ai,symbol) {
-  var sid=symbol.replace(/\//g,'_');
+  var sid=(symbol||'').replace(/[\/=^.]/g,'_');
   var gk=ai.grade?(ai.grade==='A+'?'Aplus':ai.grade):'unknown';
   var warnArr=Array.isArray(ai.warnings)?ai.warnings:(ai.warnings?[ai.warnings]:[]);
   var warns=warnArr.map(function(w){return '<div class="ai-warning-item">'+w+'</div>';}).join('');
@@ -1476,7 +1476,7 @@ function toggleAI(id){
 
 // -- Analyze Signal --
 async function analyzeSignal(symbol,auto) {
-  var sid=symbol.replace(/\//g,'_');
+  var sid=(symbol||'').replace(/[\/=^.]/g,'_');
   var sig=allSignals.find(function(s){return s.symbol===symbol;});
   if(!sig)return;
   var btn=document.getElementById('abtn-'+sid);

@@ -7,6 +7,7 @@ All orders must arrive as a pre-validated RiskApproval from risk_engine.py.
 """
 import os
 import logging
+import time
 
 log = logging.getLogger("athena")
 
@@ -59,6 +60,25 @@ _INTERNAL_MAP = {
 _LEVERAGE = 1  # 1x — enables SHORT without amplified risk
 
 
+def _validate_exit_levels(direction: str, entry_price: float, sl: float, tp: float) -> str | None:
+    """Ensure SL/TP are on the correct side of the current entry price."""
+    if entry_price <= 0:
+        return "NO_PRICE_DATA"
+    if sl <= 0 or tp <= 0:
+        return "INVALID_LEVELS"
+    if direction == "LONG":
+        if sl >= entry_price:
+            return f"INVALID_SL: SL {sl} is above entry {entry_price} for LONG"
+        if tp <= entry_price:
+            return f"INVALID_TP: TP {tp} is below entry {entry_price} for LONG"
+    else:
+        if sl <= entry_price:
+            return f"INVALID_SL: SL {sl} is below entry {entry_price} for SHORT"
+        if tp >= entry_price:
+            return f"INVALID_TP: TP {tp} is above entry {entry_price} for SHORT"
+    return None
+
+
 def _get_exchange():
     """Initialize Bybit Linear Futures connection."""
     global _exchange
@@ -89,6 +109,8 @@ def _get_exchange():
             "options": {
                 "defaultType": "linear",   # USDT Perpetual
                 "defaultSettle": "USDT",
+                "adjustForTimeDifference": True,
+                "recvWindow": 10000,
             },
         })
 
@@ -97,6 +119,13 @@ def _get_exchange():
 
         if use_demo:
             _exchange.enable_demo_trading(True)
+
+        # Sync local/client drift against Bybit server time to avoid retCode 10002
+        # on signed requests like fetch_positions/fetch_balance during startup polling.
+        try:
+            _exchange.load_time_difference()
+        except Exception as sync_err:
+            log.debug(f"[BYBIT] time sync note: {sync_err}")
 
         env_label = "DEMO" if use_demo else ("TESTNET" if use_testnet else "LIVE")
         log.info(f"[BYBIT] Bybit Linear Futures {env_label} connected")
@@ -339,10 +368,27 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:
         if price <= 0:
             return {"success": False, "error": f"NO_PRICE_DATA: {ccxt_symbol}"}
 
-        # Recalculate volume in base units if needed (risk_amount / SL distance)
         sl = signal.get("sl", 0)
+        tp1 = signal.get("tp1", 0)
+        signal_price = float(signal.get("price", 0) or 0)
+
+        # Rebase levels when the scanned price is materially stale versus the live fill price.
+        if signal_price > 0 and sl and tp1:
+            drift = abs(price - signal_price) / signal_price
+            if drift > 0.01:
+                sl_offset = float(sl) - signal_price
+                tp_offset = float(tp1) - signal_price
+                sl = round(price + sl_offset, 8)
+                tp1 = round(price + tp_offset, 8)
+                log.info(f"[BYBIT] {ccxt_symbol}: price drift {drift:.1%} ({signal_price}→{price}) — rebased SL={sl} TP={tp1}")
+
+        level_error = _validate_exit_levels(direction, float(price), float(sl or 0), float(tp1 or 0))
+        if level_error:
+            return {"success": False, "error": level_error}
+
+        # Recalculate volume in base units if needed (risk_amount / SL distance)
         if volume < 1 and price > 100 and sl:
-            sl_dist = abs(signal.get("price", price) - sl)
+            sl_dist = abs(price - sl)
             if sl_dist > 0:
                 volume = round(approval.risk_amount / sl_dist, 6)
 
@@ -377,16 +423,72 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:
 
         log.info(f"[BYBIT] ENTRY FILLED: id={order_id} | {direction} {filled_amount} {ccxt_symbol} @ {filled_price}")
 
+        fill_level_error = _validate_exit_levels(direction, filled_price, float(sl or 0), float(tp1 or 0))
+        if fill_level_error:
+            try:
+                close_side = "sell" if direction == "LONG" else "buy"
+                exchange.create_market_order(
+                    ccxt_symbol, close_side, filled_amount,
+                    params={"reduceOnly": True, "positionIdx": 0}
+                )
+                log.warning(f"[BYBIT] Emergency close sent after invalid post-fill levels for {ccxt_symbol}")
+            except Exception as close_err:
+                log.error(f"[BYBIT] Emergency close failed after invalid post-fill levels for {ccxt_symbol}: {close_err}")
+                return {
+                    "success": False,
+                    "error": fill_level_error,
+                    "ticket": order_id,
+                    "entryPrice": filled_price,
+                    "volume": filled_amount,
+                    "rollbackError": str(close_err),
+                }
+            return {
+                "success": False,
+                "error": fill_level_error,
+                "ticket": order_id,
+                "entryPrice": filled_price,
+                "volume": filled_amount,
+                "rolledBack": True,
+            }
+
         # Set SL/TP on the position via Bybit v5 trading-stop endpoint
         # (stop_market / take_profit_market order types are invalid in v5)
-        tp1 = signal.get("tp1", 0)
         sl_order_id = None
         tp_order_id = None
-        try:
-            _set_trading_stop(exchange, ccxt_symbol, sl=sl, tp=tp1)
-            log.info(f"[BYBIT] SL/TP set: SL={sl} TP={tp1}")
-        except Exception as ste:
-            log.warning(f"[BYBIT] SL/TP set failed (manage manually): {ste}")
+        _sl_tp_err = None
+        for _attempt in range(2):  # 1 retry before emergency close
+            try:
+                _set_trading_stop(exchange, ccxt_symbol, sl=sl, tp=tp1)
+                log.info(f"[BYBIT] SL/TP set: SL={sl} TP={tp1}")
+                _sl_tp_err = None
+                break
+            except Exception as ste:
+                _sl_tp_err = ste
+                if _attempt == 0:
+                    log.warning(f"[BYBIT] SL/TP set attempt 1 failed ({ste}), retrying in 2s…")
+                    time.sleep(2)
+        if _sl_tp_err is not None:
+            log.error(f"[BYBIT] SL/TP set failed after retry — attempting emergency close: {_sl_tp_err}")
+            rollback_error = None
+            try:
+                close_side = "sell" if direction == "LONG" else "buy"
+                exchange.create_market_order(
+                    ccxt_symbol, close_side, filled_amount,
+                    params={"reduceOnly": True, "positionIdx": 0}
+                )
+                log.warning(f"[BYBIT] Emergency close sent for unprotected {ccxt_symbol} position")
+            except Exception as close_err:
+                rollback_error = str(close_err)
+                log.error(f"[BYBIT] Emergency close failed for {ccxt_symbol}: {close_err}")
+            return {
+                "success": False,
+                "error": f"PROTECTIVE_ORDERS_FAILED: {_sl_tp_err}",
+                "rolledBack": rollback_error is None,
+                "rollbackError": rollback_error,
+                "ticket": order_id,
+                "entryPrice": filled_price,
+                "volume": filled_amount,
+            }
 
         return {
             "success": True,

@@ -183,8 +183,17 @@ class AutoTrader:
             return
 
         signals = result.get("tradeSignals", [])
+        watchlist = result.get("watchlist", [])
+        funnel = result.get("scanFunnel", {})
+        log.info(
+            f"[AUTO] Scan done — passed={len(signals)} watchlist={len(watchlist)} "
+            f"low_score={funnel.get('low_score',0)} closed={funnel.get('closed_exchange',0)} "
+            f"inactive={funnel.get('inactive_pair',0)}"
+        )
         if not signals:
-            log.info("[AUTO] Scan complete — no qualifying signals")
+            if watchlist:
+                top = watchlist[0]
+                log.info(f"[AUTO] Best near-miss: {top.get('pair')} score={top.get('confluenceScore')}/{top.get('maxScore')} ({top.get('direction')})")
             return
 
         # Sort by score descending — best signal first
@@ -209,12 +218,20 @@ class AutoTrader:
 
     def _can_execute(self, signal: dict, cfg: dict) -> tuple[bool, str]:
         """Check score gate + session filter."""
-        min_score = cfg.get("AUTO_TRADE_MIN_SCORE", 7.0)
         score = signal.get("confluenceScore", 0)
+        max_score = signal.get("maxScore", 13)
+        asset_type = signal.get("type", "")
+
+        # Use per-class min as floor so auto-trader matches the scan gate exactly
+        class_mins = cfg.get("MIN_CONFLUENCE_CLASS", {})
+        class_floor = class_mins.get(asset_type, cfg.get("MIN_CONFLUENCE", 7.0))
+        min_score = max(cfg.get("AUTO_TRADE_MIN_SCORE", 5.5), class_floor)
+
+        log.info(f"[AUTO] {signal.get('pair')} candidate: score={score}/{max_score} min={min_score} dir={signal.get('direction')}")
+
         if score < min_score:
             return False, f"score {score:.1f} < min {min_score}"
 
-        asset_type = signal.get("type", "")
         now = datetime.now(timezone.utc)
         session_cfg = cfg.get("AUTO_TRADE_SESSIONS", {})
         allowed_sessions = session_cfg.get(asset_type, ["always"])

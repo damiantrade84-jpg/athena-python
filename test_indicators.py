@@ -4,8 +4,8 @@ Run with: py -m pytest test_indicators.py -v
 import math
 import pytest
 
-# Import indicator functions from athena
-from athena import (
+# Import indicator functions from pure module to avoid booting the full Flask app in tests
+from indicators import (
     calc_ema, calc_sma, calc_rsi, calc_atr, calc_adx, calc_bb,
     calc_stochastic, calc_atr_percentile, calc_adx_percentile,
     calc_fib, calc_levels

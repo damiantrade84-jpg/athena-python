@@ -70,6 +70,13 @@ VOLUME_THRESHOLD_BACKTEST: 1.2
 # ── Execution Engine ──────────────────────────────────────
 EXECUTION_ENABLED: true       # Enable manual execution via dashboard
 AUTO_EXECUTE: false            # Manual click only (no auto-fire)
+
+# ── Auto-Trader ────────────────────────────────────────────
+AUTO_TRADE_ENABLED: true           # Start auto-trader on server boot
+AUTO_TRADE_MIN_SCORE: 5.5          # Match MIN_CONFLUENCE_CLASS (was 7.0 — too strict)
+AUTO_TRADE_MAX_DAILY: 3            # Max auto-executions per day
+AUTO_TRADE_MAX_PER_SCAN: 1         # Max per scan cycle
+AUTO_TRADE_SCAN_INTERVAL_MIN: 30   # Scan every 30 minutes
 MAX_PORTFOLIO_HEAT: 0.06      # 6% total risk across all positions
 MAX_OPEN_POSITIONS: 5
 MAX_CORRELATED_POSITIONS: 2
@@ -112,3 +119,29 @@ VOTE_WEIGHTS:
   stock:     { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, h4_macd: 1.0, h4_oscillator: 1.0, volume: 1.0, funding: 0.0, session: 0.0, h4_fib: 1.0, h1_bb: 1.0, weinstein: 1.0, divergence: 1.0 }
   commodity: { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, h4_macd: 1.0, h4_oscillator: 1.0, volume: 1.0, funding: 0.0, session: 0.0, h4_fib: 1.0, h1_bb: 1.0, weinstein: 0.5, divergence: 1.0 }
   index:     { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, h4_macd: 1.0, h4_oscillator: 1.0, volume: 1.0, funding: 0.0, session: 0.0, h4_fib: 1.0, h1_bb: 1.0, weinstein: 0.5, divergence: 1.0 }
+
+# Pair-specific routing. Use this to disable filters that do not help a pair,
+# zero out weak votes, or tighten thresholds without touching the whole asset class.
+# Valid vote keys: d1_trend, h1_ema, d1_adx, h4_macd, h4_oscillator, volume,
+# funding, session, h4_fib, h1_bb, weinstein, divergence
+# Valid filter keys: weinstein, session, regime_transition, obv, funding,
+# squeeze, mean_revert, btc_bias, divergence_warning
+# PAIR_PROFILES:
+#   XAU/USD:
+#     disable_filters: [obv, session]
+#     weight_overrides:
+#       h4_fib: 1.5
+#       h1_bb: 0.5
+#     min_confluence: 5.8
+#     bt_min: 4.6
+#   EUR/USD:
+#     disabled_votes: [volume]
+#     disable_filters: [obv]
+#     weight_overrides:
+#       session: 1.25
+#       h1_bb: 0.75
+#   BTC/USDT:
+#     disable_filters: [mean_revert, squeeze]
+#     weight_overrides:
+#       funding: 1.25
+#       divergence: 0.5

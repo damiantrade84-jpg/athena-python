@@ -87,6 +87,9 @@ def extract_learning_from_trade(db_path: str, ticket: str, is_demo: bool = False
             ).fetchone()
         if row is None:
             return
+        # sqlite3.Row doesn't support .get() or set operations — convert so we can
+        # safely use dict access patterns (e.g. "max_score" in row.keys()) below.
+        row = dict(row)
         if not is_demo and row["r_multiple"] is None:
             return  # live only learns from real outcomes
 
@@ -123,7 +126,7 @@ def extract_learning_from_trade(db_path: str, ticket: str, is_demo: bool = False
                     row["score"],
                     row["max_score"] if "max_score" in row.keys() else None,
                     round(row["score"] / row["max_score"], 3)
-                    if row["score"] and row.get("max_score") else None,
+                    if row["score"] and "max_score" in row.keys() and row["max_score"] else None,
                     votes_raw,
                     row["regime"],
                     pnl,
