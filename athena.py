@@ -331,6 +331,9 @@ class CandleBuilder:
         seeded = 0
         for p in pairs:
             try:
+                # Skip disabled pairs — no point seeding data we won't scan
+                if not p.get("enabled", True):
+                    continue
                 # Crypto candles come from Binance — skip EODHD seed for crypto
                 if p.get("type") == "crypto":
                     continue
@@ -427,14 +430,16 @@ class CandleBuilder:
         log.info(f"[CB] Seed complete: {seeded}/{len(pairs)} pairs")
 
     def bulk_update_d1(self):
-        """Use EODHD Bulk EOD API to update D1 candles for all pairs in ~5 API calls.
-        One call per exchange (US, FOREX, CC, JSE, INDX) instead of 70 individual calls."""
+        """Use EODHD Bulk EOD API to update D1 candles for all active pairs in ~5 API calls.
+        One call per exchange (US, FOREX, CC, JSE, INDX) instead of individual calls."""
         _key = os.environ.get("EODHD_KEY", "")
         if not _key:
             return
         # Build mapping: exchange → {bulk_code → display_name} (skip crypto — Binance owns that)
         exchange_map = {}
         for p in ALL_PAIRS:
+            if not p.get("enabled", True):
+                continue
             if p.get("type") == "crypto":
                 continue
             ticker = _eodhd_ticker_for_pair(p)
@@ -637,7 +642,7 @@ CRYPTO_PAIRS = [
     {"symbol":"FETUSDT","type":"crypto","display":"FET/USDT","source":"binance","enabled":False},  # SQN +0.14
     {"symbol":"RENDERUSDT","type":"crypto","display":"RENDER/USDT","source":"binance","enabled":False}, # SQN -2.45
 ]
-ALL_PAIRS = FOREX_PAIRS + COMMODITY_PAIRS + INDEX_PAIRS + US_STOCK_PAIRS + ETF_PAIRS + CRYPTO_PAIRS
+ALL_PAIRS = FOREX_PAIRS + COMMODITY_PAIRS + INDEX_PAIRS + US_STOCK_PAIRS + ETF_PAIRS + JSE_PAIRS + CRYPTO_PAIRS
 
 _TOGGLE_STATE_FILE = os.path.join(os.path.dirname(__file__), "toggle_state.json")
 
@@ -3317,6 +3322,24 @@ def api_bulk_prices():
     except Exception as e:
         log.error(f"api_bulk_prices error: {e}")
         return jsonify({"error": "Bulk prices failed"}), 500
+
+@app.route("/api/pairs")
+def api_pairs():
+    """Return ALL_PAIRS grouped by asset type for frontend selectors."""
+    type_labels = {"forex": "Forex", "commodity": "Commodities", "index": "Indices",
+                   "stock": "US Stocks", "etf": "ETFs", "crypto": "Crypto"}
+    groups = {}
+    for p in ALL_PAIRS:
+        t = p.get("type", "other")
+        label = type_labels.get(t, t.title())
+        # Separate JSE stocks from US stocks by source
+        if t == "stock" and p.get("source") == "eodhd" and p["symbol"].endswith(".JO"):
+            label = "JSE Stocks"
+        if label not in groups:
+            groups[label] = []
+        groups[label].append({"sym": p["symbol"], "label": p["display"],
+                              "enabled": p.get("enabled", True)})
+    return jsonify({"groups": groups, "total": len(ALL_PAIRS)})
 
 @app.route("/api/health")
 def health():

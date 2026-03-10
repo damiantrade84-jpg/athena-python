@@ -473,7 +473,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
   <div class="tab-panel" id="panel-backtest">
     <div class="bt-controls">
       <select class="bt-select" id="btPairSelect">
-        <option value="">All 70 Pairs (Leaderboard)</option>
+        <option value="">All Pairs (Leaderboard)</option>
       </select>
       <select class="bt-select" id="btStyleSelect" title="Backtest style">
         <option value="auto">Style: Auto (Crypto/Forex Intraday)</option>
@@ -496,7 +496,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
       <div class="empty-state">
         <div class="icon">&#128202;</div>
         <h3>No Results Yet</h3>
-        <p>Select a pair or run all 70 pairs to see historical performance.</p>
+        <p>Select a pair or run all pairs to see historical performance.</p>
       </div>
     </div>
   </div><!-- /panel-backtest -->
@@ -504,7 +504,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
   <div class="tab-panel" id="panel-screener">
     <div class="bt-controls">
       <button class="bt-btn" id="scrRunBtn" onclick="runScreener()">&#128269; SCAN MOMENTUM STOCKS</button>
-      <span style="font-size:11px;color:var(--muted);font-family:'Space Mono',monospace">Top $50B+ cap stocks near 52-week highs &middot; Cross-referenced vs 70 tracked pairs</span>
+      <span style="font-size:11px;color:var(--muted);font-family:'Space Mono',monospace">Top $50B+ cap stocks near 52-week highs &middot; Cross-referenced vs tracked pairs</span>
     </div>
     <div id="scrContent">
       <div class="empty-state">
@@ -698,7 +698,7 @@ function renderScreenerResults(data) {
     '<div style="font-size:10px;color:var(--muted);font-family:monospace;margin-bottom:16px">Scanned ' + data.totalScanned + ' stocks &middot; ' + data.scannedAt.slice(0,19).replace('T',' ') + ' UTC</div>';
 
   if (data.newCandidates && data.newCandidates.length) {
-    html += '<div style="font-size:11px;font-family:monospace;color:var(--accent);font-weight:700;margin-bottom:8px;letter-spacing:0.04em">NEW CANDIDATES - Not yet in your 70 pairs</div>';
+    html += '<div style="font-size:11px;font-family:monospace;color:var(--accent);font-weight:700;margin-bottom:8px;letter-spacing:0.04em">NEW CANDIDATES - Not yet in your tracked pairs</div>';
     html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-bottom:24px">';
     data.newCandidates.forEach(function(c) {
       html += '<div style="background:var(--card);border:1px solid rgba(0,212,255,0.2);border-radius:8px;padding:12px">' +
@@ -721,60 +721,31 @@ function renderScreenerResults(data) {
   }
 
   if (!data.newCandidates || !data.newCandidates.length) {
-    html += '<div class="empty-state"><div class="icon">&#10003;</div><h3>All Top Stocks Tracked</h3><p>No new momentum candidates found outside your 70 pairs.</p></div>';
+    html += '<div class="empty-state"><div class="icon">&#10003;</div><h3>All Top Stocks Tracked</h3><p>No new momentum candidates found outside your tracked pairs.</p></div>';
   }
   document.getElementById('scrContent').innerHTML = html;
 }
 
-// Populate backtest pair selector - all 70 pairs grouped by category
-(function populateBtSelect(){
+// Populate backtest pair selector dynamically from /api/pairs
+(async function populateBtSelect(){
   var sel=document.getElementById('btPairSelect');
-  var groups=[
-    {name:'Forex (17)',pairs:[
-      {sym:'EURUSD=X',label:'EUR/USD'},{sym:'GBPUSD=X',label:'GBP/USD'},{sym:'USDJPY=X',label:'USD/JPY'},
-      {sym:'AUDUSD=X',label:'AUD/USD'},{sym:'NZDUSD=X',label:'NZD/USD'},{sym:'EURGBP=X',label:'EUR/GBP'},
-      {sym:'USDCAD=X',label:'USD/CAD'},{sym:'USDCHF=X',label:'USD/CHF'},{sym:'EURJPY=X',label:'EUR/JPY'},
-      {sym:'GBPJPY=X',label:'GBP/JPY'},{sym:'AUDJPY=X',label:'AUD/JPY'},{sym:'EURAUD=X',label:'EUR/AUD'},
-      {sym:'GBPAUD=X',label:'GBP/AUD'},{sym:'USDZAR=X',label:'USD/ZAR'},{sym:'EURCHF=X',label:'EUR/CHF'},
-      {sym:'USDMXN=X',label:'USD/MXN'},{sym:'USDSGD=X',label:'USD/SGD'}
-    ]},
-    {name:'Commodities (3)',pairs:[
-      {sym:'GC=F',label:'XAU/USD (Gold)'},{sym:'SI=F',label:'XAG/USD (Silver)'},{sym:'CL=F',label:'WTI Oil'}
-    ]},
-    {name:'Indices (3)',pairs:[
-      {sym:'^GSPC',label:'S&P 500'},{sym:'^IXIC',label:'Nasdaq'},{sym:'^DJI',label:'Dow Jones'}
-    ]},
-    {name:'US Stocks (10)',pairs:[
-      {sym:'AAPL.US',label:'AAPL'},{sym:'TSLA.US',label:'TSLA'},{sym:'NVDA.US',label:'NVDA'},
-      {sym:'MSFT.US',label:'MSFT'},{sym:'AMZN.US',label:'AMZN'},{sym:'META.US',label:'META'},
-      {sym:'GOOG.US',label:'GOOG'},{sym:'JPM.US',label:'JPM'},{sym:'V.US',label:'Visa'},
-      {sym:'XOM.US',label:'XOM'}
-    ]},
-    {name:'ETFs (5)',pairs:[
-      {sym:'SPY.US',label:'SPY'},{sym:'QQQ.US',label:'QQQ'},{sym:'GLD.US',label:'GLD'},
-      {sym:'TLT.US',label:'TLT'},{sym:'FTSE.INDX',label:'FTSE 100'}
-    ]},
-    {name:'JSE Stocks (14)',pairs:[
-      {sym:'NPN.JO',label:'Naspers'},{sym:'SOL.JO',label:'Sasol'},{sym:'SBK.JO',label:'Std Bank'},
-      {sym:'AGL.JO',label:'Anglo Am'},{sym:'MTN.JO',label:'MTN Group'},{sym:'SHP.JO',label:'Shoprite'},
-      {sym:'CFR.JO',label:'Richemont'},{sym:'FSR.JO',label:'FirstRand'},{sym:'ABG.JO',label:'Absa'},
-      {sym:'CPI.JO',label:'Capitec'},{sym:'PRX.JO',label:'Prosus'},{sym:'GFI.JO',label:'Gold Fields'},
-      {sym:'ANG.JO',label:'AngloGold'},{sym:'SSW.JO',label:'Sibanye'}
-    ]},
-    {name:'Crypto (18)',pairs:[
-      {sym:'BTCUSDT',label:'BTC/USDT'},{sym:'ETHUSDT',label:'ETH/USDT'},{sym:'XRPUSDT',label:'XRP/USDT'},
-      {sym:'SOLUSDT',label:'SOL/USDT'},{sym:'ADAUSDT',label:'ADA/USDT'},{sym:'DOGEUSDT',label:'DOGE/USDT'},
-      {sym:'AVAXUSDT',label:'AVAX/USDT'},{sym:'LINKUSDT',label:'LINK/USDT'},{sym:'MATICUSDT',label:'MATIC/USDT'},
-      {sym:'BNBUSDT',label:'BNB/USDT'},{sym:'DOTUSDT',label:'DOT/USDT'},{sym:'LTCUSDT',label:'LTC/USDT'},
-      {sym:'SUIUSDT',label:'SUI/USDT'},{sym:'NEARUSDT',label:'NEAR/USDT'},{sym:'APTUSDT',label:'APT/USDT'},
-      {sym:'INJUSDT',label:'INJ/USDT'},{sym:'FETUSDT',label:'FET/USDT'},{sym:'RENDERUSDT',label:'RENDER/USDT'}
-    ]}
-  ];
-  groups.forEach(function(g){
-    var og=document.createElement('optgroup');og.label=g.name;
-    g.pairs.forEach(function(p){var o=document.createElement('option');o.value=p.sym;o.textContent=p.label;og.appendChild(o);});
-    sel.appendChild(og);
-  });
+  try {
+    var resp = await fetch('/api/pairs');
+    var data = await resp.json();
+    sel.options[0].textContent = 'All ' + data.total + ' Pairs (Leaderboard)';
+    window._totalPairs = data.total;
+    var order = ['Forex','Commodities','Indices','US Stocks','ETFs','JSE Stocks','Crypto'];
+    order.forEach(function(name){
+      var pairs = data.groups[name];
+      if (!pairs || !pairs.length) return;
+      var og=document.createElement('optgroup');
+      og.label=name+' ('+pairs.length+')';
+      pairs.forEach(function(p){
+        var o=document.createElement('option');o.value=p.sym;o.textContent=p.label;og.appendChild(o);
+      });
+      sel.appendChild(og);
+    });
+  } catch(e) { console.warn('Failed to load pairs:', e); }
 })();
 
 function switchTab(tab) {
@@ -878,7 +849,7 @@ async function runBacktest() {
   var btn = document.getElementById('btRunBtn');
   btn.disabled = true;
   btn.textContent = 'Running...';
-  var label = sym ? document.getElementById('btPairSelect').selectedOptions[0].text : 'All 70 Pairs';
+  var label = sym ? document.getElementById('btPairSelect').selectedOptions[0].text : 'All ' + (window._totalPairs || '') + ' Pairs';
   document.getElementById('btContent').innerHTML =
     '<div class="bt-progress">'+
       '<div style="font-size:14px;font-weight:700;margin-bottom:4px">Running Backtest: '+label+'</div>'+
@@ -915,7 +886,7 @@ async function runBacktest() {
       });
     }
     if (data.activePairs != null) {
-      showToast('Active pairs: ' + data.activePairs + ' / 70');
+      showToast('Active pairs: ' + data.activePairs + ' / ' + (data.totalPairs || window._totalPairs || '?'));
     }
   } catch(err) {
     clearInterval(progInterval);
