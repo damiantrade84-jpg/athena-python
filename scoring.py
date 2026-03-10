@@ -201,8 +201,8 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
     _d1_adx_pct = s.get("adxPct")
     _adx_strength = 0
     if d1_adx is not None:
-        if _d1_adx_pct is not None and _d1_adx_pct >= 65:    _adx_strength = W_ADX
-        elif _d1_adx_pct is not None and _d1_adx_pct >= 40:  _adx_strength = W_ADX * 0.67
+        if _d1_adx_pct is not None and _d1_adx_pct >= 70:    _adx_strength = W_ADX
+        elif _d1_adx_pct is not None and _d1_adx_pct >= 45:  _adx_strength = W_ADX * 0.67
         elif d1_adx >= _adx_min:                               _adx_strength = W_ADX * 0.33
         if _adx_strength > 0:
             v["D1 ADX Strength"] = 1
@@ -364,8 +364,6 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
             bbp = (cl1_p - s1["bbLower"]) / bbr
             if bbp < 0.25:   v["H1 BB Pullback"] = 1;  bull += W_BB
             elif bbp > 0.75: v["H1 BB Pullback"] = -1; bear += W_BB
-            elif bbp < 0.40: v["H1 BB Pullback"] = 1;  bull += W_BB * 0.5
-            elif bbp > 0.60: v["H1 BB Pullback"] = -1; bear += W_BB * 0.5
             else:            v["H1 BB Pullback"] = 0
         else:
             v["H1 BB Pullback"] = 0
@@ -434,7 +432,7 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
         if funding_rate > 0.001 and pair_filter_enabled(pair, "funding"):
             w.append(f"EXTREME FUNDING: {funding_rate*100:.4f}% — overleveraged, reversal risk")
         if W_FUND > 0:
-            if funding_rate < 0.0003:
+            if funding_rate < 0.0001:
                 v["Funding Rate"] = 1;  bull += W_FUND
             elif funding_rate > 0.0005:
                 v["Funding Rate"] = -1; bear += W_FUND

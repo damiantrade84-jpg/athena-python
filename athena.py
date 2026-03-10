@@ -1065,10 +1065,7 @@ def _effective_backtest_style(pair: dict, requested_style: str) -> str:
     """Resolve backtest iteration style per pair."""
     if requested_style == "auto":
         return "intraday" if pair.get("type") in ("crypto", "forex") else "swing"
-    # No dedicated scalp loop yet; closest behavior is intraday H4 walk-forward.
-    if requested_style == "scalp":
-        return "intraday"
-    return requested_style
+    return requested_style  # scalp, intraday, swing all have dedicated loops
 
 
 def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
@@ -1792,7 +1789,7 @@ def backtest_pair(pair, style="auto"):
     """Walk-forward backtest on D1/H4 bars with slippage, regime tagging, and Monte Carlo DD simulation."""
     requested_style = _normalize_style(style)
     effective_style = _effective_backtest_style(pair, requested_style)
-    if effective_style not in ("swing", "intraday"):
+    if effective_style not in ("swing", "intraday", "scalp"):
         return {"error": f"Unsupported backtest style: {requested_style}"}
     log.info(f"[BT] {pair['display']} fetching data... style={requested_style}->{effective_style}")
     try:
@@ -1837,6 +1834,8 @@ def backtest_pair(pair, style="auto"):
         if len(d1_raw) < 230: return {"error": f"Insufficient D1 history for {pair['display']} ({len(d1_raw)} bars)"}
         if effective_style == "intraday" and len(h4_raw) < 120:
             return {"error": f"Insufficient H4 history for {pair['display']} ({len(h4_raw)} bars)"}
+        if effective_style == "scalp" and len(h1_raw) < 120:
+            return {"error": f"Insufficient H1 history for {pair['display']} ({len(h1_raw)} bars)"}
         h4_times = pd.to_datetime([c["time"] for c in h4_raw], utc=True, errors="coerce")
         h1_times = pd.to_datetime([c["time"] for c in h1_raw], utc=True, errors="coerce")
     except Exception as e:
@@ -1998,7 +1997,7 @@ def backtest_pair(pair, style="auto"):
                 open_positions -= 1
             i = exit_bar + 1 if outcome != "OPEN" else i + 1
 
-    else:  # intraday â€” walk H4 bars
+    elif effective_style == "intraday":  # walk H4 bars
         MIN_H4 = 100; COOLDOWN = 2; MAX_HOLD = 12; MAX_OPEN = 3
         total_h4 = len(h4_raw)
         i = MIN_H4; last_exit_bar = 0; open_positions = 0
@@ -2093,6 +2092,127 @@ def backtest_pair(pair, style="auto"):
                     if bar["low"] <= tp1:  outcome = "TP1"; result_r = rr1 - (slip / (atr * sl_mult)); exit_bar = j; break
             if outcome == "OPEN":
                 _last_fwd = h4_raw[min(i + MAX_HOLD, total_h4 - 1)]
+                _exit_px = _last_fwd["close"]
+                _sl_dist = abs(entry - sl)
+                if _sl_dist > 0 and math.isfinite(_exit_px):
+                    result_r = ((_exit_px - entry) / _sl_dist if direction == "LONG"
+                                else (entry - _exit_px) / _sl_dist)
+                    result_r = round(max(-5.0, min(5.0, result_r)), 2)
+                else:
+                    result_r = 0.0
+                outcome = "TIMEOUT"
+            risk_mult = CONFIG["RISK_MULT"].get(_ptype, 1.0)
+            equity_change = result_r * CONFIG["RISK_PCT"] * risk_mult * _vol_adj
+            equity = round(equity * (1 + equity_change), 6)
+            equity_curve.append(round(equity, 4))
+            _regime = _ts if _ts in ("TRENDING","DEVELOPING","RANGING","DEAD RANGING") else "UNKNOWN"
+            open_positions += 1
+            funnel["taken"] += 1
+            trades.append({
+                "date": entry_bar["time"][:10],
+                "pair": pair["display"], "direction": direction,
+                "score": res["score"], "entry": round(entry, 6),
+                "sl": round(sl, 6), "tp1": round(tp1, 6), "tp2": round(tp2, 6),
+                "outcome": outcome, "resultR": round(result_r, 2),
+                "regime": _regime, "oos": i >= _oos_start, "volAdj": _vol_adj
+            })
+            if outcome not in ("OPEN",):
+                last_exit_bar = exit_bar
+                open_positions -= 1
+            i = exit_bar + 1 if outcome != "OPEN" else i + 1
+
+    elif effective_style == "scalp":  # H1 bar walk-forward
+        MIN_H1 = 100; COOLDOWN = 1; MAX_HOLD = 6; MAX_OPEN = 3
+        total_h1 = len(h1_raw)
+        i = MIN_H1; last_exit_bar = 0; open_positions = 0
+        _oos_start = MIN_H1 + int((total_h1 - MIN_H1) * 0.7)
+        h1_ts_sc = pd.to_datetime([c["time"] for c in h1_raw], utc=True, errors="coerce")
+        d1_ts_sc = pd.to_datetime([c["time"] for c in d1_raw], utc=True, errors="coerce")
+        h4_ts_sc = pd.to_datetime([c["time"] for c in h4_raw], utc=True, errors="coerce")
+
+        while i < total_h1 - 1:
+            if i - last_exit_bar < COOLDOWN:
+                i += 1; continue
+            if open_positions >= MAX_OPEN:
+                i += 1; continue
+            h1_window = h1_raw[i - MIN_H1 : i]
+            entry_ts = h1_ts_sc[i]
+            if pd.isna(entry_ts):
+                i += 1; continue
+            # H4 context: all H4 bars before this H1 bar
+            h4_ctx = [bar for bar, ts in zip(h4_raw, h4_ts_sc) if not pd.isna(ts) and ts <= entry_ts][-100:]
+            # D1 context: real D1 data up to this point for Weinstein/regime
+            d1_ctx = [bar for bar, ts in zip(d1_raw, d1_ts_sc) if not pd.isna(ts) and ts <= entry_ts][-220:]
+            if len(h4_ctx) < 50 or len(d1_ctx) < 50:
+                i += 1; continue
+            try:
+                h1i = calc_indicators(h1_window)
+                h4i_ctx = calc_indicators(h4_ctx)
+                d1i_ctx = calc_indicators(d1_ctx)
+                vols = [c["vol"] for c in h1_window]; vsma = calc_sma(vols, 20)
+                vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
+                stoch = calc_stochastic(h1_window, 14, 3, 3)
+                res = calc_confluence(d1i_ctx, h4i_ctx, h1i, vr, stoch, pair, "neutral",
+                                       d1_candles=d1_ctx, h4_candles=h4_ctx, h1_candles=h1_window,
+                                       volume_threshold=get_pair_profile(pair).get(
+                                           "volume_threshold",
+                                           CONFIG.get("VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"])
+                                       ),
+                                       bar_time=h1_window[-1].get("time") if h1_window else None)
+            except Exception:
+                i += 1; continue
+            funnel["total_setups"] += 1
+            _ts = res.get("trendState", "UNKNOWN")
+            bt_min = get_pair_profile(pair).get("bt_min", CONFIG["BT_MIN"].get(_ptype, 4.0))
+            _recent_scores.append(res["score"])
+            if res["score"] < bt_min:
+                funnel["fail_score"] += 1; i += 1; continue
+            direction = res["direction"]
+            if i + 1 >= total_h1:
+                i += 1; continue
+            entry_bar = h1_raw[i + 1]
+            raw_entry = entry_bar.get("open", entry_bar["close"])
+            slip = raw_entry * _get_slippage(entry_bar, _ptype)
+            entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
+            atr = _atr_for_levels(d1i_ctx, h4i_ctx, h1i)
+            if not atr or atr == 0: i += 1; continue
+            _bt_regime_state3 = res.get("regime", {}).get("state") if res.get("regime") else None
+            lvl = calc_levels(entry, atr, direction, _ptype, regime_state=_bt_regime_state3)
+            sl = lvl["sl"]; tp1 = lvl["tp1"]; tp2 = lvl["tp2"]
+            sl_mult = lvl["mults"]["sl"]; tp1_mult = lvl["mults"]["tp1"]; tp2_mult = lvl["mults"]["tp2"]
+            rr1 = lvl["rr1"]
+            if not all(math.isfinite(v) and v > 0 for v in (sl, tp1, tp2)):
+                i += 1; continue
+            if abs(entry - sl) < entry * 0.0001:
+                i += 1; continue
+            if _ptype == "crypto":
+                _recent = h1_window[-10:]
+                if direction == "LONG":
+                    swing_sl = min(c["low"] for c in _recent)
+                    if swing_sl < sl: sl = swing_sl
+                else:
+                    swing_sl = max(c["high"] for c in _recent)
+                    if swing_sl > sl: sl = swing_sl
+                rr1 = abs(tp1 - entry) / abs(sl - entry) if abs(sl - entry) > 0 else 0
+            _atr_series = calc_atr([c["high"] for c in h1_window], [c["low"] for c in h1_window], [c["close"] for c in h1_window], 14)
+            _atr_sma = calc_sma([v for v in _atr_series if v is not None], 20)
+            _vol_adj = 1.0
+            _valid_atr_sma = [v for v in _atr_sma if v is not None]
+            if _valid_atr_sma and _valid_atr_sma[-1] and _valid_atr_sma[-1] > 0:
+                if atr > _valid_atr_sma[-1] * 1.5: _vol_adj = 0.7
+            outcome = "OPEN"; result_r = 0.0; exit_bar = i
+            for j in range(i + 1, min(i + MAX_HOLD + 1, total_h1)):
+                bar = h1_raw[j]
+                if direction == "LONG":
+                    if bar["low"] <= sl:   outcome = "SL";  result_r = -1.0; exit_bar = j; break
+                    if bar["high"] >= tp2: outcome = "TP2"; result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult)); exit_bar = j; break
+                    if bar["high"] >= tp1: outcome = "TP1"; result_r = rr1 - (slip / (atr * sl_mult)); exit_bar = j; break
+                else:
+                    if bar["high"] >= sl:  outcome = "SL";  result_r = -1.0; exit_bar = j; break
+                    if bar["low"] <= tp2:  outcome = "TP2"; result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult)); exit_bar = j; break
+                    if bar["low"] <= tp1:  outcome = "TP1"; result_r = rr1 - (slip / (atr * sl_mult)); exit_bar = j; break
+            if outcome == "OPEN":
+                _last_fwd = h1_raw[min(i + MAX_HOLD, total_h1 - 1)]
                 _exit_px = _last_fwd["close"]
                 _sl_dist = abs(entry - sl)
                 if _sl_dist > 0 and math.isfinite(_exit_px):
@@ -3256,22 +3376,22 @@ def analyze_pair(pair, btc_bias, style="swing"):
     vsma = calc_sma(vols, 20)
     vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
 
-    # Style-based timeframe routing
+    # Style-based timeframe routing (Elder Triple Screen: D1 tide, H4 momentum, H1 entry)
     # SWING  (default): D1 trend gate, H4 momentum, H1 entry
-    # INTRADAY:         H4 trend gate, H1 momentum, H1 entry
-    # SCALP:            H1 trend gate, H1 momentum, H1 entry + D1 disagreement flag
+    # INTRADAY:         D1 trend gate, H4 momentum, H1 entry + H1 stochastic
+    # SCALP:            D1 trend gate, H4 momentum, H1 entry + H1 stochastic
     _style = (style or "swing").lower()
     if _style == "intraday":
-        _cf_d1i, _cf_h4i, _cf_h1i = h4i, h1i, h1i
-        _cf_d1c, _cf_h4c, _cf_h1c = h4, h1, h1
+        _cf_d1i, _cf_h4i, _cf_h1i = d1i, h4i, h1i
+        _cf_d1c, _cf_h4c, _cf_h1c = d1, h4, h1
         stoch = calc_stochastic(h1, 14, 3, 3)
-        _e200 = calc_ema([c["close"] for c in h4], 200)
+        _e200 = calc_ema([c["close"] for c in d1], 200)
         e200s = (_e200[-1] - _e200[-21]) / _e200[-21] if _e200[-1] and len(_e200) >= 21 and _e200[-21] else 0
     elif _style == "scalp":
-        _cf_d1i, _cf_h4i, _cf_h1i = h1i, h1i, h1i
-        _cf_d1c, _cf_h4c, _cf_h1c = h1, h1, h1
+        _cf_d1i, _cf_h4i, _cf_h1i = d1i, h4i, h1i
+        _cf_d1c, _cf_h4c, _cf_h1c = d1, h4, h1
         stoch = calc_stochastic(h1, 14, 3, 3)
-        _e200 = calc_ema([c["close"] for c in h1], 200)
+        _e200 = calc_ema([c["close"] for c in d1], 200)
         e200s = (_e200[-1] - _e200[-21]) / _e200[-21] if _e200[-1] and len(_e200) >= 21 and _e200[-21] else 0
     else:  # swing
         _cf_d1i, _cf_h4i, _cf_h1i = d1i, h4i, h1i
