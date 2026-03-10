@@ -275,6 +275,27 @@ def bybit_get_positions() -> list:
         return []
 
 
+def bybit_close_position(pair: str, direction: str, volume: float) -> dict:
+    """Close an open Bybit position via reduceOnly market order."""
+    exchange = _get_exchange()
+    if not exchange:
+        return {"success": False, "error": "Bybit not connected"}
+    try:
+        ccxt_symbol = bybit_map_symbol(pair)
+        if not ccxt_symbol:
+            return {"success": False, "error": f"No symbol mapping for {pair}"}
+        close_side = "sell" if direction == "LONG" else "buy"
+        exchange.create_market_order(
+            ccxt_symbol, close_side, volume,
+            params={"reduceOnly": True, "positionIdx": 0},
+        )
+        log.info(f"[BYBIT] Manual close {direction} {pair} vol={volume}")
+        return {"success": True, "pair": pair, "direction": direction, "volume": volume}
+    except Exception as e:
+        log.error(f"[BYBIT] Close failed {pair}: {e}")
+        return {"success": False, "error": str(e)}
+
+
 def bybit_get_symbol_info(athena_display: str) -> dict | None:
     """Get Bybit symbol info for risk engine calculations."""
     exchange = _get_exchange()

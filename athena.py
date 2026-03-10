@@ -2884,6 +2884,30 @@ def api_bybit_status():
     except Exception as e:
         return jsonify({"connected": False, "error": str(e)})
 
+@app.route("/api/close-position", methods=["POST"])
+def api_close_position():
+    """Manually close an open position on MT5 or Bybit."""
+    data = request.get_json(force=True)
+    exch = data.get("exchange", "")
+    pair = data.get("pair", "")
+    direction = data.get("direction", "")
+    volume = float(data.get("volume", 0))
+    ticket = data.get("ticket")
+
+    if exch == "bybit":
+        from bybit_executor import bybit_close_position
+        result = bybit_close_position(pair, direction, volume)
+    elif exch == "mt5":
+        if not ticket:
+            return jsonify({"success": False, "error": "MT5 close requires ticket"}), 400
+        from mt5_executor import mt5_close_position
+        result = mt5_close_position(int(ticket))
+    else:
+        return jsonify({"success": False, "error": f"Unknown exchange: {exch}"}), 400
+
+    status = 200 if result.get("success") else 500
+    return jsonify(result), status
+
 @app.route("/api/binance-status")
 def api_binance_status():
     """Legacy endpoint — redirects to Bybit status."""

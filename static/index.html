@@ -188,6 +188,9 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 .pos-card-pnl.pos{color:var(--bull);}
 .pos-card-pnl.neg{color:var(--bear);}
 .pos-card-row{color:var(--muted);font-size:10px;line-height:1.7;}
+.pos-close-btn{width:100%;padding:5px;margin-top:8px;border-radius:6px;border:1px solid rgba(255,59,92,0.4);background:rgba(255,59,92,0.1);color:var(--bear);font-family:'Syne',sans-serif;font-size:10px;font-weight:700;letter-spacing:0.06em;cursor:pointer;transition:all 0.2s;}
+.pos-close-btn:hover{background:rgba(255,59,92,0.25);box-shadow:0 0 12px rgba(255,59,92,0.15);}
+.pos-close-btn:disabled{opacity:0.4;cursor:not-allowed;}
 .exec-btn .exec-detail{font-size:10px;font-family:'Space Mono',monospace;font-weight:400;opacity:0.8;display:block;margin-top:3px;}
 
 /* MT5 Status Badge */
@@ -1704,6 +1707,8 @@ function renderOpenPositions(positions) {
     var pnlClass = pnl >= 0 ? 'pos' : 'neg';
     var cardClass = pnl >= 0 ? 'profit' : 'loss';
     var pnlSign = pnl >= 0 ? '+' : '';
+    var exch = p._bybit ? 'bybit' : 'mt5';
+    var pairSafe = (p.pair || p.symbol).replace(/'/g, "\\'");
     return '<div class="pos-card ' + cardClass + '">' +
       '<div class="pos-card-header">' +
         '<span class="pos-card-pair">' + (p.pair || p.symbol) + '</span>' +
@@ -1713,6 +1718,7 @@ function renderOpenPositions(positions) {
       '<div class="pos-card-row">Entry: ' + fmtPrice(p.entry) + '</div>' +
       '<div class="pos-card-row">SL: ' + fmtPrice(p.sl) + ' &nbsp; TP: ' + fmtPrice(p.tp) + '</div>' +
       '<div class="pos-card-row">Vol: ' + p.volume + (p.ticket ? ' &nbsp; #' + p.ticket : '') + '</div>' +
+      '<button class="pos-close-btn" onclick="confirmClosePosition(\'' + exch + '\',\'' + pairSafe + '\',\'' + dir + '\',' + p.volume + ',' + (p.ticket || 0) + ',this)">CLOSE</button>' +
     '</div>';
   }).join('');
 }
@@ -1917,6 +1923,39 @@ function showToast(msg,isErr) {
   t.style.borderColor=isErr?'var(--bear)':'var(--accent)';
   t.classList.add('show');
   setTimeout(function(){t.classList.remove('show');},3500);
+}
+
+function confirmClosePosition(exchange, pair, direction, volume, ticket, btn) {
+  if (!confirm('Close ' + direction + ' ' + pair + ' (' + volume + ') on ' + exchange.toUpperCase() + '?')) return;
+  btn.disabled = true;
+  btn.textContent = 'CLOSING...';
+  fetch('/api/close-position', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({exchange: exchange, pair: pair, direction: direction, volume: volume, ticket: ticket})
+  }).then(function(r){ return r.json(); }).then(function(d) {
+    if (d.success) {
+      showToast('Closed ' + pair + ' ' + direction);
+      // Refresh positions after short delay
+      setTimeout(function(){
+        fetch('/api/bybit-status').then(function(r){return r.json();}).then(function(bd){
+          var bybitPos = (bd.positions||[]).map(function(p){return Object.assign({_bybit:true},p);});
+          fetch('/api/mt5-status').then(function(r){return r.json();}).then(function(md){
+            var mt5Pos = md.connected ? (md.positions||[]) : [];
+            renderOpenPositions(mt5Pos.concat(bybitPos));
+          }).catch(function(){ renderOpenPositions(bybitPos); });
+        }).catch(function(){});
+      }, 1500);
+    } else {
+      showToast('Close failed: ' + (d.error || 'unknown'), true);
+      btn.disabled = false;
+      btn.textContent = 'CLOSE';
+    }
+  }).catch(function(e) {
+    showToast('Close error: ' + e, true);
+    btn.disabled = false;
+    btn.textContent = 'CLOSE';
+  });
 }
 </script>
 </body>

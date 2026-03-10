@@ -224,6 +224,41 @@ def mt5_get_positions() -> list:
     return result
 
 
+def mt5_close_position(ticket: int) -> dict:
+    """Close an open MT5 position by ticket number."""
+    mt5 = _get_mt5()
+    if not mt5 or not mt5_connect():
+        return {"success": False, "error": "MT5 not connected"}
+    positions = mt5.positions_get(ticket=ticket)
+    if not positions:
+        return {"success": False, "error": f"Position {ticket} not found"}
+    pos = positions[0]
+    close_type = mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY
+    tick = mt5.symbol_info_tick(pos.symbol)
+    if not tick:
+        return {"success": False, "error": f"No tick data for {pos.symbol}"}
+    price = tick.bid if pos.type == 0 else tick.ask
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": pos.symbol,
+        "volume": pos.volume,
+        "type": close_type,
+        "price": price,
+        "position": ticket,
+        "magic": 240601,
+        "comment": "Athena|CLOSE",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+    result = mt5.order_send(request)
+    if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+        log.info(f"[MT5] Manual close ticket={ticket} price={price}")
+        return {"success": True, "ticket": ticket, "closePrice": price}
+    err = result.comment if result else "order_send failed"
+    log.error(f"[MT5] Close failed ticket={ticket}: {err}")
+    return {"success": False, "error": err}
+
+
 def mt5_get_symbol_info(athena_display: str) -> dict | None:
     """Get MT5 symbol info for risk engine calculations."""
     mt5 = _get_mt5()
