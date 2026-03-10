@@ -136,7 +136,7 @@ Click the **SCAN** button on the SIGNALS tab. A full scan takes ~30 seconds and 
 
 ### Scan Funnel (bottom of scan results)
 ```
-Total: 70 pairs scanned
+Total: 96 pairs scanned
 Active: 28 enabled
 Passed: 4 → TRADE signals
 Watchlist: 8 → monitoring

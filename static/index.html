@@ -734,7 +734,7 @@ function renderScreenerResults(data) {
     var data = await resp.json();
     sel.options[0].textContent = 'All ' + data.total + ' Pairs (Leaderboard)';
     window._totalPairs = data.total;
-    var order = ['Forex','Commodities','Indices','US Stocks','ETFs','JSE Stocks','Crypto'];
+    var order = ['Forex','Commodities','Indices','US Stocks','ETFs','Crypto'];
     order.forEach(function(name){
       var pairs = data.groups[name];
       if (!pairs || !pairs.length) return;

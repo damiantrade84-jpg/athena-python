@@ -2377,7 +2377,10 @@ def run_full_backtest(style="auto", asset_class: str | None = None):
     if _ac and _ac not in _valid_classes:
         return {"success": False, "error": f"Invalid asset_class '{asset_class}'. Valid: {sorted(_valid_classes)}",
                 "results": [], "errors": [], "totalPairs": 0}
-    pairs_to_test = ALL_PAIRS if not _ac else [p for p in ALL_PAIRS if p.get("type") == _ac]
+    _jse_syms = {p["symbol"] for p in JSE_PAIRS}
+    pairs_to_test = [p for p in ALL_PAIRS if p["symbol"] not in _jse_syms]
+    if _ac:
+        pairs_to_test = [p for p in pairs_to_test if p.get("type") == _ac]
     results = []; errors = []
     def _bt(pair):
         try:
@@ -2967,7 +2970,7 @@ def api_execution_config():
 
 @app.route("/api/screener-scan", methods=["POST"])
 def api_screener_scan():
-    """Phase C: Discover new high-cap momentum stocks via EODHD screener. Finds candidates not yet in our 70 pairs."""
+    """Phase C: Discover new high-cap momentum stocks via EODHD screener. Finds candidates not yet in our tracked pairs."""
     try:
         _key = os.environ.get("EODHD_KEY", "")
         if not _key: return jsonify({"error": "EODHD_KEY not set"}), 500
@@ -3011,7 +3014,7 @@ def api_screener_scan():
             rows.sort(key=lambda r: r.get("200d_new_hi", 0) or 0, reverse=True)
         except Exception:
             pass
-        # Cross-reference against our existing 70 pairs
+        # Cross-reference against our existing pairs
         existing_syms = {p["symbol"].upper() for p in ALL_PAIRS}
         candidates = []
         already_tracked = []
@@ -3325,21 +3328,24 @@ def api_bulk_prices():
 
 @app.route("/api/pairs")
 def api_pairs():
-    """Return ALL_PAIRS grouped by asset type for frontend selectors."""
+    """Return ALL_PAIRS grouped by asset type for frontend selectors (excludes JSE)."""
     type_labels = {"forex": "Forex", "commodity": "Commodities", "index": "Indices",
                    "stock": "US Stocks", "etf": "ETFs", "crypto": "Crypto"}
+    _etf_syms = {p["symbol"] for p in ETF_PAIRS}
+    _jse_syms = {p["symbol"] for p in JSE_PAIRS}
     groups = {}
     for p in ALL_PAIRS:
+        sym = p["symbol"]
+        if sym in _jse_syms:
+            continue  # JSE excluded from backtest selector (data quality)
         t = p.get("type", "other")
-        label = type_labels.get(t, t.title())
-        # Separate JSE stocks from US stocks by source
-        if t == "stock" and p.get("source") == "eodhd" and p["symbol"].endswith(".JO"):
-            label = "JSE Stocks"
+        label = "ETFs" if sym in _etf_syms else type_labels.get(t, t.title())
         if label not in groups:
             groups[label] = []
-        groups[label].append({"sym": p["symbol"], "label": p["display"],
+        groups[label].append({"sym": sym, "label": p["display"],
                               "enabled": p.get("enabled", True)})
-    return jsonify({"groups": groups, "total": len(ALL_PAIRS)})
+    bt_total = len(ALL_PAIRS) - len(JSE_PAIRS)
+    return jsonify({"groups": groups, "total": bt_total, "active": len(ACTIVE_PAIRS)})
 
 @app.route("/api/health")
 def health():
