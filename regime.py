@@ -41,10 +41,10 @@ def detect_regime(h4_snap: dict, pair_type: str, config: dict | None = None,
         elif adx_val < _rng["choppy"]:
             ranging_penalty = _rng["choppy_pen"]
 
-    # Crypto-specific transition penalty on top of range penalty
+    # Crypto-specific transition penalty on top of range penalty (capped at 2.0 total)
     if pair_type == "crypto" and adx_mom in ("collapsing", "exhausting"):
         _trans_pen = 1.5 if adx_mom == "collapsing" else 0.8
-        ranging_penalty += _trans_pen
+        ranging_penalty = min(ranging_penalty + _trans_pen, 2.0)
 
     # Determine state from ADX
     if adx_val is None:

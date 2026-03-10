@@ -387,10 +387,12 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:
             return {"success": False, "error": level_error}
 
         # Recalculate volume in base units if needed (risk_amount / SL distance)
+        # Clamp to approved volume so we never exceed the risk-approved position size
         if volume < 1 and price > 100 and sl:
             sl_dist = abs(price - sl)
             if sl_dist > 0:
-                volume = round(approval.risk_amount / sl_dist, 6)
+                recalc = round(approval.risk_amount / sl_dist, 6)
+                volume = min(recalc, approval.volume) if approval.volume else recalc
 
         side = "buy" if direction == "LONG" else "sell"
         log.info(f"[BYBIT] Placing {side.upper()} market order: {volume} {ccxt_symbol} @ ~{price}")

@@ -79,7 +79,9 @@ class AutoTrader:
         log.warning("[AUTO] Auto-trader DISABLED")
 
     def toggle(self):
-        if self._enabled:
+        with self._lock:
+            was_enabled = self._enabled
+        if was_enabled:
             self.disable()
         else:
             self.enable()

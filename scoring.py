@@ -201,8 +201,8 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
     _d1_adx_pct = s.get("adxPct")
     _adx_strength = 0
     if d1_adx is not None:
-        if _d1_adx_pct is not None and _d1_adx_pct >= 75:    _adx_strength = W_ADX
-        elif _d1_adx_pct is not None and _d1_adx_pct >= 50:  _adx_strength = W_ADX * 0.67
+        if _d1_adx_pct is not None and _d1_adx_pct >= 65:    _adx_strength = W_ADX
+        elif _d1_adx_pct is not None and _d1_adx_pct >= 40:  _adx_strength = W_ADX * 0.67
         elif d1_adx >= _adx_min:                               _adx_strength = W_ADX * 0.33
         if _adx_strength > 0:
             v["D1 ADX Strength"] = 1
@@ -261,7 +261,8 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
             v["Session Quality"] = 1
             bull += W_SESS * 0.5; bear += W_SESS * 0.5
         elif _sess["quality"] == "medium":
-            v["Session Quality"] = 0
+            v["Session Quality"] = 1
+            bull += W_SESS * 0.25; bear += W_SESS * 0.25
         elif _is_asia_active:
             v["Session Quality"] = 0
             w.append(f"FOREX SESSION: {_sess['name']} — {pair['display']} active during Asian hours")
@@ -328,8 +329,8 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
     if lK is not None and lD is not None:
         if   lK > lD and lK < 35:        _stoch_dir = 1
         elif lK < lD and lK > 65:        _stoch_dir = -1
-        elif lK > lD and 35 <= lK <= 55: _stoch_dir = 1
-        elif lK < lD and 45 <= lK <= 65: _stoch_dir = -1
+        elif lK > lD and 35 <= lK <= 60: _stoch_dir = 1
+        elif lK < lD and 40 <= lK <= 65: _stoch_dir = -1
     if _rsi_dir != 0 and _stoch_dir != 0 and _rsi_dir == _stoch_dir:
         v["H4 Oscillator"] = _rsi_dir
         if _rsi_dir == 1: bull += W_OSC
@@ -363,6 +364,8 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
             bbp = (cl1_p - s1["bbLower"]) / bbr
             if bbp < 0.25:   v["H1 BB Pullback"] = 1;  bull += W_BB
             elif bbp > 0.75: v["H1 BB Pullback"] = -1; bear += W_BB
+            elif bbp < 0.40: v["H1 BB Pullback"] = 1;  bull += W_BB * 0.5
+            elif bbp > 0.60: v["H1 BB Pullback"] = -1; bear += W_BB * 0.5
             else:            v["H1 BB Pullback"] = 0
         else:
             v["H1 BB Pullback"] = 0
@@ -431,7 +434,7 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
         if funding_rate > 0.001 and pair_filter_enabled(pair, "funding"):
             w.append(f"EXTREME FUNDING: {funding_rate*100:.4f}% — overleveraged, reversal risk")
         if W_FUND > 0:
-            if funding_rate < 0.0001:
+            if funding_rate < 0.0003:
                 v["Funding Rate"] = 1;  bull += W_FUND
             elif funding_rate > 0.0005:
                 v["Funding Rate"] = -1; bear += W_FUND

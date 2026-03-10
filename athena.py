@@ -3324,7 +3324,7 @@ def analyze_pair(pair, btc_bias, style="swing"):
     lvl = calc_levels(float(price), float(atr), direction, pair["type"], regime_state=_regime_state)
     sk = stoch["k"][-1] if stoch["k"] and stoch["k"][-1] is not None else None
     sd = stoch["d"][-1] if stoch["d"] and stoch["d"][-1] is not None else None
-    risk_pct = round(abs(float(price) - float(lvl["sl"])) / float(price) * 100, 2) if price else None
+    risk_pct = round(abs(float(price) - float(lvl["sl"])) / float(price) * 100, 2) if price and float(price) != 0 else None
     warn_list = list(res.get("warnings", []))
     if pair_filter_enabled(pair, "divergence_warning"):
         for w in detect_div(d1, h4, h1):

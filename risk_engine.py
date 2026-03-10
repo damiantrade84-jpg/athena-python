@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import sqlite3
+import threading
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 
@@ -77,8 +78,8 @@ def _save_peak_equity(value: float):
                 "ON CONFLICT(id) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
                 (value, ts))
             con.commit()
-    except Exception:
-        pass  # non-fatal — next update will retry
+    except Exception as e:
+        log.warning(f"[RISK] peak equity save failed: {e}")  # non-fatal — next update will retry
 
 _init_peak_table()
 _peak_equity = _load_peak_equity()
@@ -87,38 +88,41 @@ _peak_equity = _load_peak_equity()
 _daily_pnl: float = 0.0
 _daily_pnl_date: str = ""
 _daily_start_balance: float = 0.0
+_daily_lock = threading.Lock()
 
 
 def record_daily_pnl(pnl: float, account_balance: float) -> None:
     """Record realized P&L for daily loss tracking. Called by outcome monitor."""
     global _daily_pnl, _daily_pnl_date, _daily_start_balance
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if today != _daily_pnl_date:
-        _daily_pnl = 0.0
-        _daily_pnl_date = today
-        _daily_start_balance = account_balance
-    _daily_pnl += pnl
-    if _daily_start_balance > 0 and _daily_pnl < 0:
-        loss_pct = abs(_daily_pnl) / _daily_start_balance
-        if loss_pct >= _EXEC["DAILY_LOSS_LIMIT"]:
-            log.warning(f"[RISK] DAILY LOSS LIMIT: lost ${abs(_daily_pnl):.2f} ({loss_pct:.1%}) today — blocking new trades")
+    with _daily_lock:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if today != _daily_pnl_date:
+            _daily_pnl = 0.0
+            _daily_pnl_date = today
+            _daily_start_balance = account_balance
+        _daily_pnl += pnl
+        if _daily_start_balance > 0 and _daily_pnl < 0:
+            loss_pct = abs(_daily_pnl) / _daily_start_balance
+            if loss_pct >= _EXEC["DAILY_LOSS_LIMIT"]:
+                log.warning(f"[RISK] DAILY LOSS LIMIT: lost ${abs(_daily_pnl):.2f} ({loss_pct:.1%}) today — blocking new trades")
 
 
 def _check_daily_loss(account_balance: float) -> tuple[bool, float]:
     """Check if daily loss limit is breached. Returns (blocked, loss_pct)."""
     global _daily_pnl_date, _daily_pnl, _daily_start_balance
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if today != _daily_pnl_date:
-        _daily_pnl = 0.0
-        _daily_pnl_date = today
-        _daily_start_balance = account_balance
-        return False, 0.0
-    if _daily_start_balance <= 0:
-        _daily_start_balance = account_balance
-    if _daily_pnl >= 0:
-        return False, 0.0
-    loss_pct = abs(_daily_pnl) / _daily_start_balance
-    return loss_pct >= _EXEC["DAILY_LOSS_LIMIT"], loss_pct
+    with _daily_lock:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if today != _daily_pnl_date:
+            _daily_pnl = 0.0
+            _daily_pnl_date = today
+            _daily_start_balance = account_balance
+            return False, 0.0
+        if _daily_start_balance <= 0:
+            _daily_start_balance = account_balance
+        if _daily_pnl >= 0:
+            return False, 0.0
+        loss_pct = abs(_daily_pnl) / _daily_start_balance
+        return loss_pct >= _EXEC["DAILY_LOSS_LIMIT"], loss_pct
 
 
 def _update_peak(equity: float) -> float:
