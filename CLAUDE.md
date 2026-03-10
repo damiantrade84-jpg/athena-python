@@ -20,7 +20,7 @@ Multi-asset algorithmic trading system: Flask dashboard, confluence-based signal
 | `auto_trader.py` | Autonomous scheduler: scan every 30 min, auto-execute | |
 | `ai_learning.py` | Outcome extraction → learning_log in audit.db | |
 | `regime.py` | Market regime detection (TRENDING/DEVELOPING/RANGING/DEAD RANGING) | |
-| `static/index.html` | Dashboard UI: signals, backtest, screener tabs | ~1320 lines |
+| `static/index.html` | Dashboard UI: signals, backtest, screener tabs — pair selector populated dynamically from `/api/pairs` | ~1300 lines |
 | `tests/test_athena.py` | Main test suite (23+ tests) | |
 | `test_indicators.py` | Pure indicator unit tests (imports from `indicators` only) | |
 | `audit.db` | SQLite runtime DB — do NOT commit | |
@@ -125,6 +125,9 @@ Computes theoretical max score using `get_pair_vote_weights(pair)`, subtracts `W
 - Crypto: uses TTL cache only
 - Cache TTL keys are **uppercase**: `"H1"`, `"H4"`, `"D1"` (not lowercase)
 - TTL: H1=55 min, H4=3h55m, D1=23h
+
+### `/api/pairs` endpoint — athena.py
+Returns ALL_PAIRS grouped by asset class for the frontend pair selector. Response: `{groups: {label: [{sym, label, enabled}]}, total, active}`. The backtest dropdown in index.html fetches this on page load — do NOT hardcode pair lists in HTML.
 
 ### `risk_check(signal, balance, equity, positions, symbol_info, ...)` — risk_engine.py
 - Commodity tick defaults: tick=0.01, contract=100, tick_val=1.0 (e.g. gold: 0.01×100)
@@ -233,7 +236,7 @@ bybit_execute(signal, approval)
 ## Scan Funnel (what the numbers mean)
 
 ```
-{'total': 70, 'active': 28, 'inactive_pair': 42, 'closed_exchange': 15,
+{'total': 96, 'active': 28, 'inactive_pair': 68, 'closed_exchange': 15,
  'low_score': 61, 'passed': 1, 'watchlist': 16, 'dead_ranging': 4}
 ```
 - `total` = ALL_PAIRS count
@@ -256,9 +259,9 @@ Schema auto-migrated on startup — adding a new column: add it to both `CREATE 
 
 ## Python Environment
 
-- **Python 3.14.3** — always use `py` (not `python` or `python3`)
-- **Run tests**: `py -m pytest tests/ test_indicators.py -v`
-- **Platform**: Windows 11, bash shell
+- **Python 3.14.3** — always use `py` (not `python` or `python3`); on Linux use `python3`
+- **Run tests**: `py -m pytest tests/ test_indicators.py -v` (Windows) / `python3 -m pytest tests/ test_indicators.py -v` (Linux)
+- **Platform**: Windows 11, bash shell (dev); Linux also supported
 
 ---
 
@@ -272,3 +275,6 @@ Schema auto-migrated on startup — adding a new column: add it to both `CREATE 
 6. Never use string matching on warning text for classification — use structured flags
 7. `PAIR_PROFILE_VOTES` / `PAIR_PROFILE_FILTERS` live in `config.py` only — do not redefine in scoring.py
 8. Cache TTL dict keys are uppercase `"H1"/"H4"/"D1"` — lowercase misses the cache
+9. `ALL_PAIRS = FOREX_PAIRS + COMMODITY_PAIRS + INDEX_PAIRS + US_STOCK_PAIRS + ETF_PAIRS + JSE_PAIRS + CRYPTO_PAIRS` — JSE_PAIRS must stay in this concatenation
+10. Never hardcode pair counts or pair lists in `static/index.html` — the backtest selector fetches `/api/pairs` dynamically
+11. `CandleBuilder.seed()` and `bulk_update_d1()` skip `enabled:False` pairs — do not remove these checks
