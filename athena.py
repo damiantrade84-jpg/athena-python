@@ -550,11 +550,22 @@ COMMODITY_PAIRS = [
     {"symbol":"GC=F","type":"commodity","display":"XAU/USD","source":"eodhd","enabled":True},     # SQN +3.53 (v3.1) âœ“ â†’ EODHD D1, Polygon H4/H1 fallback
     {"symbol":"SI=F","type":"commodity","display":"XAG/USD","source":"eodhd","enabled":True},     # SQN +3.08 (v3.1) âœ“ â†’ EODHD D1, Polygon H4/H1 fallback
     {"symbol":"CL=F","type":"commodity","display":"WTI Oil","source":"eodhd","enabled":False},     # SQN -1.36 (Phase A, cut)
+    {"symbol":"BZ=F","type":"commodity","display":"Brent Oil","source":"eodhd","enabled":False},   # Pepperstone: SPOTBRENT
+    {"symbol":"NG=F","type":"commodity","display":"Nat Gas","source":"eodhd","enabled":False},     # Pepperstone: NATGAS
+    {"symbol":"PL=F","type":"commodity","display":"XPT/USD","source":"eodhd","enabled":False},     # Pepperstone: XPTUSD (Platinum)
+    {"symbol":"PA=F","type":"commodity","display":"XPD/USD","source":"eodhd","enabled":False},     # Pepperstone: XPDUSD (Palladium)
+    {"symbol":"HG=F","type":"commodity","display":"Copper","source":"eodhd","enabled":False},      # Pepperstone: COPPER
 ]
 INDEX_PAIRS = [
     {"symbol":"^GSPC","type":"index","display":"S&P 500","source":"eodhd","enabled":False},       # SQN +0.09 (Phase A, weak â€” cut)
     {"symbol":"^IXIC","type":"index","display":"Nasdaq","source":"eodhd","enabled":False},         # SQN -0.20 (Phase A)
     {"symbol":"^DJI","type":"index","display":"Dow Jones","source":"eodhd","enabled":False},      # SQN +0.80 (Phase A, watchlist)
+    {"symbol":"^GDAXI","type":"index","display":"DAX 40","source":"eodhd","enabled":False},       # Pepperstone: GER40
+    {"symbol":"^FTSE","type":"index","display":"FTSE 100","source":"eodhd","enabled":False},       # Pepperstone: UK100
+    {"symbol":"^AXJO","type":"index","display":"ASX 200","source":"eodhd","enabled":False},        # Pepperstone: AUS200
+    {"symbol":"^N225","type":"index","display":"Nikkei 225","source":"eodhd","enabled":False},     # Pepperstone: JPN225
+    {"symbol":"^HSI","type":"index","display":"Hang Seng","source":"eodhd","enabled":False},       # Pepperstone: HK50
+    {"symbol":"^STOXX50E","type":"index","display":"Euro Stoxx 50","source":"eodhd","enabled":False}, # Pepperstone: EUSTX50
 ]
 US_STOCK_PAIRS = [
     {"symbol":"AAPL.US","type":"stock","display":"AAPL","source":"eodhd","enabled":False},        # SQN -0.30
@@ -567,13 +578,28 @@ US_STOCK_PAIRS = [
     {"symbol":"JPM.US","type":"stock","display":"JPM","source":"eodhd","enabled":False},          # SQN +0.26
     {"symbol":"V.US","type":"stock","display":"V","source":"eodhd","enabled":False},              # SQN -1.39
     {"symbol":"XOM.US","type":"stock","display":"XOM","source":"eodhd","enabled":False},          # SQN -0.03
+    {"symbol":"NFLX.US","type":"stock","display":"NFLX","source":"eodhd","enabled":False},       # Pepperstone CFD
+    {"symbol":"AMD.US","type":"stock","display":"AMD","source":"eodhd","enabled":False},          # Pepperstone CFD
+    {"symbol":"CRM.US","type":"stock","display":"CRM","source":"eodhd","enabled":False},          # Pepperstone CFD
+    {"symbol":"DIS.US","type":"stock","display":"DIS","source":"eodhd","enabled":False},          # Pepperstone CFD
+    {"symbol":"BA.US","type":"stock","display":"BA","source":"eodhd","enabled":False},            # Pepperstone CFD
+    {"symbol":"COIN.US","type":"stock","display":"COIN","source":"eodhd","enabled":False},        # Pepperstone CFD
+    {"symbol":"PYPL.US","type":"stock","display":"PYPL","source":"eodhd","enabled":False},        # Pepperstone CFD
+    {"symbol":"INTC.US","type":"stock","display":"INTC","source":"eodhd","enabled":False},        # Pepperstone CFD
+    {"symbol":"UBER.US","type":"stock","display":"UBER","source":"eodhd","enabled":False},        # Pepperstone CFD
+    {"symbol":"PLTR.US","type":"stock","display":"PLTR","source":"eodhd","enabled":False},        # Pepperstone CFD
 ]
 ETF_PAIRS = [
     {"symbol":"SPY.US","type":"stock","display":"SPY","source":"eodhd","enabled":False},          # SQN +1.03, OOS:0 (no OOS, watchlist)
     {"symbol":"QQQ.US","type":"stock","display":"QQQ","source":"eodhd","enabled":False},          # SQN +0.38
-    {"symbol":"GLD.US","type":"stock","display":"GLD","source":"eodhd","enabled":True},           # SQN +2.08, IS:+0.95/OOS:+2.98 âœ” Gold ETF
-    {"symbol":"TLT.US","type":"stock","display":"TLT","source":"eodhd","enabled":False},          # SQN 0 â€” Treasury ETF
-    {"symbol":"FTSE.INDX","type":"index","display":"FTSE 100","source":"eodhd","enabled":False},  # no data from EODHD
+    {"symbol":"GLD.US","type":"stock","display":"GLD","source":"eodhd","enabled":True},           # SQN +2.08, IS:+0.95/OOS:+2.98 Gold ETF
+    {"symbol":"TLT.US","type":"stock","display":"TLT","source":"eodhd","enabled":False},          # SQN 0 Treasury ETF
+    {"symbol":"IWM.US","type":"stock","display":"IWM","source":"eodhd","enabled":False},          # Russell 2000 ETF
+    {"symbol":"EEM.US","type":"stock","display":"EEM","source":"eodhd","enabled":False},          # Emerging Markets ETF
+    {"symbol":"XLF.US","type":"stock","display":"XLF","source":"eodhd","enabled":False},          # Financial Sector ETF
+    {"symbol":"XLE.US","type":"stock","display":"XLE","source":"eodhd","enabled":False},          # Energy Sector ETF
+    {"symbol":"SLV.US","type":"stock","display":"SLV","source":"eodhd","enabled":False},          # Silver ETF
+    {"symbol":"USO.US","type":"stock","display":"USO","source":"eodhd","enabled":False},          # Oil ETF
 ]
 JSE_PAIRS = [
     {"symbol":"NPN.JO","type":"stock","display":"Naspers","source":"eodhd","enabled":True},       # SQN +1.43 (Phase A) âœ“ â†’ EODHD D1, yfinance H4/H1 fallback
@@ -611,7 +637,7 @@ CRYPTO_PAIRS = [
     {"symbol":"FETUSDT","type":"crypto","display":"FET/USDT","source":"binance","enabled":False},  # SQN +0.14
     {"symbol":"RENDERUSDT","type":"crypto","display":"RENDER/USDT","source":"binance","enabled":False}, # SQN -2.45
 ]
-ALL_PAIRS = FOREX_PAIRS + COMMODITY_PAIRS + INDEX_PAIRS + US_STOCK_PAIRS + ETF_PAIRS + JSE_PAIRS + CRYPTO_PAIRS
+ALL_PAIRS = FOREX_PAIRS + COMMODITY_PAIRS + INDEX_PAIRS + US_STOCK_PAIRS + ETF_PAIRS + CRYPTO_PAIRS
 
 _TOGGLE_STATE_FILE = os.path.join(os.path.dirname(__file__), "toggle_state.json")
 

@@ -50,11 +50,21 @@ _MT5_SYMBOL_MAP = {
     "XAU/USD":   "XAUUSD",
     "XAG/USD":   "XAGUSD",
     "WTI Oil":   "USOUSD",       # Pepperstone WTI CFD — verify in MT5 Market Watch
+    "Brent Oil": "SPOTBRENT",    # Pepperstone Brent Crude CFD
+    "Nat Gas":   "NATGAS",       # Pepperstone Natural Gas CFD
+    "XPT/USD":   "XPTUSD",      # Pepperstone Platinum CFD
+    "XPD/USD":   "XPDUSD",      # Pepperstone Palladium CFD
+    "Copper":    "COPPER",       # Pepperstone Copper CFD
     # Indices
-    "S&P 500":   "US500",
-    "Nasdaq":    "USTEC",
-    "Dow Jones": "US30",
-    "FTSE 100":  "UK100",
+    "S&P 500":      "US500",
+    "Nasdaq":       "USTEC",
+    "Dow Jones":    "US30",
+    "DAX 40":       "GER40",
+    "FTSE 100":     "UK100",
+    "ASX 200":      "AUS200",
+    "Nikkei 225":   "JPN225",
+    "Hang Seng":    "HK50",
+    "Euro Stoxx 50":"EUSTX50",
     # US Stocks (CFDs on Pepperstone)
     "AAPL":  "AAPL",
     "TSLA":  "TSLA",
@@ -66,27 +76,27 @@ _MT5_SYMBOL_MAP = {
     "JPM":   "JPM",
     "V":     "V",
     "XOM":   "XOM",
+    "NFLX":  "NFLX",
+    "AMD":   "AMD",
+    "CRM":   "CRM",
+    "DIS":   "DIS",
+    "BA":    "BA",
+    "COIN":  "COIN",
+    "PYPL":  "PYPL",
+    "INTC":  "INTC",
+    "UBER":  "UBER",
+    "PLTR":  "PLTR",
+    # ETFs
     "SPY":   "SPY",
     "QQQ":   "QQQ",
     "GLD":   "GLD",
     "TLT":   "TLT",
-    # JSE Stocks — standard JSE ticker codes (verify against your broker's Market Watch)
-    # Common SA brokers (Khwezi, GT247, Purple Group) use these exact codes.
-    # If your broker appends a suffix (e.g. "NPN.JSE"), update accordingly.
-    "Naspers":    "NPN",
-    "Sasol":      "SOL",
-    "Std Bank":   "SBK",
-    "Anglo Am":   "AGL",
-    "MTN Group":  "MTN",
-    "Shoprite":   "SHP",
-    "Richemont":  "CFR",
-    "FirstRand":  "FSR",
-    "Absa":       "ABG",
-    "Capitec":    "CPI",
-    "Prosus":     "PRX",
-    "Gold Fields":"GFI",
-    "AngloGold":  "ANG",
-    "Sibanye":    "SSW",
+    "IWM":   "IWM",
+    "EEM":   "EEM",
+    "XLF":   "XLF",
+    "XLE":   "XLE",
+    "SLV":   "SLV",
+    "USO":   "USO",
 }
 
 # Connection state
