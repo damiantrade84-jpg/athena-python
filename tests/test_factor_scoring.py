@@ -60,11 +60,12 @@ class TestFactorScore:
 
 class TestMinFactorGate:
     def test_insufficient_factors_zeroes_score(self):
-        """With very sparse data, score should be zero."""
+        """With very sparse data (unknown pair, no candles), score should be zero."""
         empty_snap = {}
         result = compute_factor_scores(
             d1_snap=empty_snap, h4_snap=empty_snap, h1_snap=empty_snap,
-            pair=_make_pair(), d1_candles=[], h4_candles=[], h1_candles=[],
+            pair={"type": "forex", "display": "XYZ/ABC"},  # unknown — no COT/carry cache
+            d1_candles=[], h4_candles=[], h1_candles=[],
             volume_ratio=None,
         )
         assert result["insufficient_factors"] is True

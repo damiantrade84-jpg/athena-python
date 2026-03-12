@@ -2285,13 +2285,12 @@ def _normalize_style(style: str | None) -> str:
 
 
 
-def _effective_scan_style(pair: dict, requested_style: str) -> str:
-
+def _resolve_scan_style(requested_style: str, pair: dict) -> str:
     """Resolve scan style per pair. Auto favors intraday for fast-moving markets."""
 
     if requested_style == "auto":
 
-        return "intraday" if pair.get("type") in ("crypto", "forex") else "swing"
+        return "intraday" if pair.get("type") == "crypto" else "swing"
 
     return requested_style
 
@@ -2305,7 +2304,7 @@ def _effective_backtest_style(pair: dict, requested_style: str) -> str:
 
     if requested_style == "auto":
 
-        return "intraday" if pair.get("type") in ("crypto", "forex") else "swing"
+        return "intraday" if pair.get("type") == "crypto" else "swing"
 
     return requested_style  # scalp, intraday, swing all have dedicated loops
 
@@ -2477,7 +2476,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
 
             try:
 
-                _pair_style = _effective_scan_style(pair, _requested_style)
+                _pair_style = _resolve_scan_style(_requested_style, pair)
 
                 return pair, analyze_pair(pair, btc_bias, style=_pair_style), None
 
@@ -3785,7 +3784,7 @@ def backtest_pair(pair, style="auto"):
 
         elif _ptype == "forex":
 
-            # Forex: EODHD D1 + EODHD intraday H1 (from/to 730d) → resample H4, yfinance fallback
+            # Forex: EODHD D1 + EODHD intraday H1 (from/to 730d) → use D1 directly, yfinance fallback
 
             d1_raw = _extract_candles(fetch_eodhd(pair, "D1", 600)) or fetch_candles(pair, "D1", 600)
 
@@ -3983,9 +3982,7 @@ def backtest_pair(pair, style="auto"):
 
                                        ),
 
-                                       bar_time=h4_window[-1].get("time") if h4_window else None,
-
-                                       backtest=True)
+                                       bar_time=h4_window[-1].get("time") if h4_window else None)
 
             except Exception:
 
@@ -4271,9 +4268,7 @@ def backtest_pair(pair, style="auto"):
 
                                        ),
 
-                                       bar_time=h4_window[-1].get("time") if h4_window else None,
-
-                                       backtest=True)
+                                       bar_time=h4_window[-1].get("time") if h4_window else None)
 
             except Exception:
 
@@ -4539,9 +4534,7 @@ def backtest_pair(pair, style="auto"):
 
                                        ),
 
-                                       bar_time=h1_window[-1].get("time") if h1_window else None,
-
-                                       backtest=True)
+                                       bar_time=h1_window[-1].get("time") if h1_window else None)
 
             except Exception:
 
@@ -5121,6 +5114,8 @@ def _init_audit_db(db_path: str) -> None:
 
         ("fee_cost", "REAL"),    # Actual paid commission captured from exchange order
 
+        ("factors_json", "TEXT"),  # Factor scores + key indicators (COT, carry, microstructure, etc.)
+
     ]:
 
         if col not in existing:
@@ -5378,15 +5373,21 @@ def api_analyze():
 
             with sqlite3.connect(_AUDIT_DB) as _con:
 
+                _factors = {
+                    "scores": sig.get("factorScores"),
+                    "weights": sig.get("factorWeights"),
+                    "disabled": sig.get("disabledFactors"),
+                    "regime": sig.get("regimeName"),
+                }
                 _con.execute(
 
                     "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style,"
 
                     "asset_class,score_pct,max_score,votes_json,warnings_json,"
 
-                    "weinstein,trend_state,adx_pct,btc_bias,session_name,regime) "
+                    "weinstein,trend_state,adx_pct,btc_bias,session_name,regime,factors_json) "
 
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 
                     (datetime.now(timezone.utc).isoformat(), sig.get("pair"), sig.get("confluenceScore"),
 
@@ -5404,7 +5405,7 @@ def api_analyze():
 
                      sig.get("btcBias"), sig.get("session", {}).get("name"),
 
-                     sig.get("trendState"))
+                     sig.get("trendState"), json.dumps(_factors))
 
                 )
 
@@ -5680,13 +5681,19 @@ def api_execute():
 
                 with sqlite3.connect(_AUDIT_DB) as con:
 
+                    _factors = {
+                        "scores": sig.get("factorScores"),
+                        "weights": sig.get("factorWeights"),
+                        "disabled": sig.get("disabledFactors"),
+                        "regime": sig.get("regimeName"),
+                    }
                     con.execute(
 
                         "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style,"
 
-                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost) "
+                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json) "
 
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 
                         (datetime.now(timezone.utc).isoformat(), pair, sig.get("confluenceScore"),
 
@@ -5700,7 +5707,7 @@ def api_execute():
 
                          approval.risk_amount, approval.risk_pct, str(result.get("ticket", "")),
 
-                         result.get("feeCost"))
+                         result.get("feeCost"), json.dumps(_factors))
 
                     )
 
@@ -5952,13 +5959,19 @@ def api_webhook():
 
                 with sqlite3.connect(_AUDIT_DB) as con:
 
+                    _factors = {
+                        "scores": sig.get("factorScores"),
+                        "weights": sig.get("factorWeights"),
+                        "disabled": sig.get("disabledFactors"),
+                        "regime": sig.get("regimeName"),
+                    }
                     con.execute(
 
                         "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style,"
 
-                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket) "
+                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,factors_json) "
 
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 
                         (datetime.now(timezone.utc).isoformat(), pair_name,
 
@@ -5970,7 +5983,9 @@ def api_webhook():
 
                          result.get("volume"), sig.get("trendState"),
 
-                         approval.risk_amount, approval.risk_pct, str(result.get("ticket", "")))
+                         approval.risk_amount, approval.risk_pct, str(result.get("ticket", "")),
+
+                         json.dumps(_factors))
 
                     )
 
@@ -7157,7 +7172,13 @@ def analyze_pair(pair, btc_bias, style="swing"):
 
     vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
 
-
+    # Forex: override candle volume (zero/unreliable on EODHD) with real Dukascopy tick volume
+    if pair.get("type") == "forex":
+        try:
+            from duka_volume import get_forex_vr as _get_forex_vr
+            vr = _get_forex_vr(pair.get("display", ""), tf="H1", lookback=20)
+        except Exception:
+            pass  # gracefully degrade to EODHD-derived vr if duka unavailable
 
     # Style-based timeframe routing (Elder Triple Screen: D1 tide, H4 momentum, H1 entry)
 
@@ -8623,7 +8644,26 @@ if __name__=="__main__":
 
     threading.Thread(target=_startup_reconcile, daemon=True, name="StartupReconcile").start()
 
+    # Seed Dukascopy forex volume cache in background (skips days already cached)
+    def _duka_seed():
+        try:
+            from duka_volume import seed_all_forex
+            seed_all_forex(days=90, workers=3)
+        except Exception as e:
+            log.warning(f"[DUKA] Startup seed failed: {e}")
+    threading.Thread(target=_duka_seed, daemon=True, name="DukaSeed").start()
 
+    # Seed COT (CFTC) and carry (FRED) data in background
+    try:
+        from cot_feed import seed_cot_background
+        seed_cot_background()
+    except Exception as e:
+        log.warning(f"[COT] Startup seed failed: {e}")
+    try:
+        from carry_feed import seed_carry_background
+        seed_carry_background()
+    except Exception as e:
+        log.warning(f"[CARRY] Startup seed failed: {e}")
 
     # Graceful shutdown handler — clean up connections on SIGINT/SIGTERM
 

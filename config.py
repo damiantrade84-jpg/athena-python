@@ -94,7 +94,7 @@ CONFIG: dict = {
     # Per-class vote weight multipliers — route each indicator to where it's strongest
     "VOTE_WEIGHTS": {
         "crypto":    {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "h4_macd": 1.0, "h4_oscillator": 0.75, "volume": 1.0, "funding": 1.0, "session": 0.0, "h4_fib": 0.5, "h1_bb": 1.0, "weinstein": 0.0, "divergence": 1.0, "aroon": 0.0},
-        "forex":     {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "h4_macd": 1.0, "h4_oscillator": 1.0, "volume": 0.0, "funding": 0.0, "session": 1.0, "h4_fib": 1.0, "h1_bb": 0.5, "weinstein": 0.0, "divergence": 1.0, "aroon": 1.0},
+        "forex":     {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "d1_macd": 1.0, "d1_oscillator": 1.0, "volume": 0.0, "funding": 0.0, "session": 1.0, "d1_fib": 1.0, "h1_bb": 0.5, "weinstein": 0.0, "divergence": 1.0, "aroon": 1.0},
         "stock":     {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "h4_macd": 1.0, "h4_oscillator": 1.0, "volume": 1.0, "funding": 0.0, "session": 0.0, "h4_fib": 1.0, "h1_bb": 1.0, "weinstein": 1.0, "divergence": 1.0, "aroon": 0.0},
         "commodity": {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "h4_macd": 1.0, "h4_oscillator": 1.0, "volume": 1.0, "funding": 0.0, "session": 0.0, "h4_fib": 1.0, "h1_bb": 1.0, "weinstein": 0.5, "divergence": 1.0, "aroon": 0.0},
         "index":     {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "h4_macd": 1.0, "h4_oscillator": 1.0, "volume": 1.0, "funding": 0.0, "session": 0.0, "h4_fib": 1.0, "h1_bb": 1.0, "weinstein": 0.5, "divergence": 1.0, "aroon": 0.0},
@@ -102,10 +102,10 @@ CONFIG: dict = {
     # Factor weights per asset class (base, before regime overrides)
     "FACTOR_WEIGHTS": {
         "crypto":    {"trend": 2.0, "momentum": 1.5, "volatility": 1.0, "volume": 1.0, "structure": 1.0, "derivatives": 1.5, "microstructure": 1.5},
-        "forex":     {"trend": 2.0, "momentum": 1.2, "volatility": 1.0, "volume": 0.0, "structure": 1.2, "derivatives": 0.5, "microstructure": 1.5},
+        "forex":     {"trend": 2.0, "momentum": 1.2, "volatility": 1.0, "volume": 0.5, "structure": 1.2, "derivatives": 1.5, "microstructure": 1.5},
         "stock":     {"trend": 2.0, "momentum": 1.5, "volatility": 1.0, "volume": 1.5, "structure": 1.0, "derivatives": 0.5, "microstructure": 1.5},
-        "commodity": {"trend": 2.0, "momentum": 1.3, "volatility": 1.5, "volume": 1.0, "structure": 1.3, "derivatives": 0.5, "microstructure": 1.5},
-        "index":     {"trend": 2.0, "momentum": 1.4, "volatility": 1.2, "volume": 0.8, "structure": 1.0, "derivatives": 0.8, "microstructure": 1.5},
+        "commodity": {"trend": 2.0, "momentum": 1.3, "volatility": 1.5, "volume": 1.0, "structure": 1.3, "derivatives": 1.0, "microstructure": 1.5},
+        "index":     {"trend": 2.0, "momentum": 1.4, "volatility": 1.2, "volume": 0.8, "structure": 1.0, "derivatives": 1.2, "microstructure": 1.5},
     },
     # Regime-aware factor weight overrides
     "REGIME_WEIGHTS": {

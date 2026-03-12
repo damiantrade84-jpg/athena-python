@@ -528,7 +528,8 @@ class AutoTrader:
 
                     return False
 
-                positions   = bybit_get_positions()
+                pos_result  = bybit_get_positions()
+                positions   = pos_result.get("positions", []) if isinstance(pos_result, dict) else (pos_result or [])
 
                 symbol_info = bybit_get_symbol_info(pair)
 
@@ -548,7 +549,8 @@ class AutoTrader:
 
                     return False
 
-                positions   = mt5_get_positions()
+                pos_result  = mt5_get_positions()
+                positions   = pos_result.get("positions", []) if isinstance(pos_result, dict) else (pos_result or [])
 
                 symbol_info = mt5_get_symbol_info(pair)
 

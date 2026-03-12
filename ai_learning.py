@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS learning_log (
     win              INTEGER,
     exit_reason      TEXT,
     holding_hours    REAL,
-    is_demo          INTEGER DEFAULT 0
+    is_demo          INTEGER DEFAULT 0,
+    factors_json     TEXT
 );
 """
 
@@ -65,6 +66,10 @@ def init_learning_db(db_path: str) -> None:
             con.execute(_CREATE_META_LOG)
             for idx in _LEARNING_IDX:
                 con.execute(idx)
+            # Migrate: add factors_json if missing
+            existing = {r[1] for r in con.execute("PRAGMA table_info(learning_log)").fetchall()}
+            if "factors_json" not in existing:
+                con.execute("ALTER TABLE learning_log ADD COLUMN factors_json TEXT")
             con.commit()
         log.info("[LEARN] Learning DB ready")
     except Exception as e:
@@ -106,14 +111,17 @@ def extract_learning_from_trade(db_path: str, ticket: str, is_demo: bool = False
         except Exception:
             pass
 
+        # Copy factor scores if available
+        factors_raw = row.get("factors_json")
+
         with sqlite3.connect(db_path) as con:
             con.execute(
                 """INSERT INTO learning_log
                    (ts, trade_ts, ticket, pair, asset_type, direction,
                     ai_grade, edge_prob, confluence_score, max_score, score_pct,
                     votes_json, regime, pnl, r_multiple, win, exit_reason,
-                    holding_hours, is_demo)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    holding_hours, is_demo, factors_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     datetime.now(timezone.utc).isoformat(),
                     row["ts"],
@@ -135,6 +143,7 @@ def extract_learning_from_trade(db_path: str, ticket: str, is_demo: bool = False
                     row["exit_reason"],
                     row["holding_period_hours"],
                     1 if is_demo else 0,
+                    factors_raw,
                 )
             )
             con.commit()
@@ -257,13 +266,48 @@ def get_ai_learning_context(pair: str, asset_type: str, db_path: str,
             top_votes.append({"vote": v, "win_rate": wr, "count": total})
     top_votes.sort(key=lambda x: x["win_rate"], reverse=True)
 
+    # ── Factor score analysis (from factors_json) ─────────────────────────────
+    factor_stats: dict = {}
+    for r in rows:
+        if not r.get("factors_json"):
+            continue
+        try:
+            fdata = json.loads(r["factors_json"])
+            scores = fdata.get("scores") or {}
+            for fname, fval in scores.items():
+                if fval is None:
+                    continue
+                factor_stats.setdefault(fname, {"win_sum": 0.0, "loss_sum": 0.0,
+                                                  "win_n": 0, "loss_n": 0})
+                if r.get("win"):
+                    factor_stats[fname]["win_sum"] += fval
+                    factor_stats[fname]["win_n"] += 1
+                else:
+                    factor_stats[fname]["loss_sum"] += fval
+                    factor_stats[fname]["loss_n"] += 1
+        except Exception:
+            pass
+
+    factor_reliability = []
+    for fname, fs in factor_stats.items():
+        total_n = fs["win_n"] + fs["loss_n"]
+        if total_n >= 5:
+            avg_win = round(fs["win_sum"] / fs["win_n"], 3) if fs["win_n"] else 0
+            avg_loss = round(fs["loss_sum"] / fs["loss_n"], 3) if fs["loss_n"] else 0
+            factor_reliability.append({
+                "factor": fname, "avg_win": avg_win, "avg_loss": avg_loss,
+                "count": total_n,
+            })
+    factor_reliability.sort(key=lambda x: abs(x["avg_win"] - x["avg_loss"]), reverse=True)
+
     return {
-        "sample_size":     len(rows),
-        "grade_accuracy":  grade_summary,
-        "asset_type_stats": asset_stats,
-        "pair_stats":      pair_stats if pair_stats else None,
-        "recent_failures": recent_failures,
-        "top_votes":       top_votes[:5],
+        "sample_size":       len(rows),
+        "grade_accuracy":    grade_summary,
+        "asset_type_stats":  asset_stats,
+        "pair_stats":        pair_stats if pair_stats else None,
+        "recent_failures":   recent_failures,
+        "top_votes":         top_votes[:5],
+        "factor_reliability": factor_reliability[:8],
     }
 
 
@@ -577,6 +621,39 @@ def build_learning_memory(db_path: str, asset_type: str,
 
     if pair_line:
         memory += pair_line + "\n"
+
+    # 7. Factor score analysis (new z-score factors)
+    factor_lines = []
+    factor_agg: dict = {}
+    for r in rows:
+        fj = r.get("factors_json")
+        if not fj:
+            continue
+        try:
+            fdata = json.loads(fj)
+            scores = fdata.get("scores") or {}
+            for fname, fval in scores.items():
+                if fval is None:
+                    continue
+                factor_agg.setdefault(fname, {"w_sum": 0.0, "w_n": 0, "l_sum": 0.0, "l_n": 0})
+                if r.get("win"):
+                    factor_agg[fname]["w_sum"] += fval
+                    factor_agg[fname]["w_n"] += 1
+                else:
+                    factor_agg[fname]["l_sum"] += fval
+                    factor_agg[fname]["l_n"] += 1
+        except Exception:
+            pass
+
+    for fname, fs in sorted(factor_agg.items()):
+        total = fs["w_n"] + fs["l_n"]
+        if total >= 5:
+            avg_w = round(fs["w_sum"] / fs["w_n"], 2) if fs["w_n"] else 0
+            avg_l = round(fs["l_sum"] / fs["l_n"], 2) if fs["l_n"] else 0
+            factor_lines.append(f"  {fname}: avg {avg_w} (wins) vs {avg_l} (losses) [{total} trades]")
+
+    if factor_lines:
+        memory += "Factor Scores (wins vs losses):\n" + "\n".join(factor_lines[:8]) + "\n"
 
     memory += (
         "\nUse this data to calibrate your confidence. "
