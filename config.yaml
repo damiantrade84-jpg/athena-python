@@ -41,25 +41,33 @@ WEINSTEIN_LOOKBACK:
   stock: 150
   index: 150
 
-# Per-class backtest minimum score (calibrated for z-score factor engine)
+# Per-class backtest minimum score
+# Calibrated from 3874-trade backtest (82 pairs, all asset classes, 2024-2026)
+# Set slightly below live MIN_CONFLUENCE_CLASS to capture near-threshold signals for analysis
 BT_MIN:
-  crypto: 0.55
-  commodity: 0.55
-  forex: 0.55
-  stock: 0.65
-  index: 0.55
+  crypto: 0.80     # first profitable cumulative threshold: 0.9; BT shows broader range
+  commodity: 0.90  # first profitable cumulative threshold: 1.0
+  forex: 0.90      # no profitable threshold found — raising BT floor to study quality signals only
+  stock: 1.00      # no profitable threshold found — study 1.0+ only
+  index: 0.90      # no profitable threshold found — study 0.9+ only
 
 # Backtest must not alter live pair enable/disable state
 BT_AUTO_TOGGLE: false
 BT_PERCENTILE_FILTER: false
 
-# Per-class live scan minimum confluence (calibrated for z-score factor engine)
+# Per-class live scan minimum confluence — execute button threshold
+# DATA SOURCE: 3874-trade backtest across 82 pairs (2024-2026).
+#   Crypto:    PF turns profitable (>1.0) at >= 0.9; PF=1.11 at >= 1.1 (303 trades)
+#   Commodity: PF turns profitable (>1.0) at >= 1.0; PF=1.21 at >= 1.1 (119 trades)
+#   Index:     No threshold produced PF >= 1.0 — raised to 1.1 to reduce poor-quality signals
+#   Forex:     No threshold produced PF >= 1.0 — raised to 1.2 to reduce poor-quality signals
+#   Stock:     No threshold produced PF >= 1.0 — raised to 1.2 to reduce poor-quality signals
 MIN_CONFLUENCE_CLASS:
-  crypto: 0.70
-  commodity: 0.70
-  forex: 0.70
-  stock: 0.80
-  index: 0.70
+  crypto: 1.10     # was 0.70 — data: PF=1.11 cumulative at >= 1.1 (303 trades)
+  commodity: 1.10  # was 0.70 — data: PF=1.21 cumulative at >= 1.1 (119 trades)
+  forex: 1.20      # was 0.70 — no edge found; raised to limit signal quantity
+  stock: 1.20      # was 0.80 — no edge found; raised to limit signal quantity
+  index: 1.10      # was 0.70 — no edge found; raised to limit signal quantity
 
 # Risk settings
 RISK_PCT: 0.01
@@ -152,7 +160,7 @@ RANGING:
 # Per-class vote weight routing — each indicator weighted where it's strongest
 VOTE_WEIGHTS:
   crypto:    { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, h4_macd: 1.0, h4_oscillator: 0.75, volume: 1.0, funding: 1.0, session: 0.0, h4_fib: 0.5, h1_bb: 1.0, weinstein: 0.0, divergence: 1.0, aroon: 1.0 }
-  forex:     { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, h4_macd: 1.0, h4_oscillator: 1.0, volume: 0.0, funding: 0.0, session: 1.0, h4_fib: 1.0, h1_bb: 0.5, weinstein: 0.0, divergence: 1.0, aroon: 1.0 }
+  forex:     { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, d1_macd: 1.0, d1_oscillator: 1.0, volume: 0.0, funding: 0.0, session: 1.0, d1_fib: 1.0, h1_bb: 0.5, weinstein: 0.0, divergence: 1.0, aroon: 1.0 }
   stock:     { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, h4_macd: 1.0, h4_oscillator: 1.0, volume: 1.0, funding: 0.0, session: 0.0, h4_fib: 1.0, h1_bb: 1.0, weinstein: 1.0, divergence: 1.0, aroon: 1.0 }
   commodity: { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, h4_macd: 1.0, h4_oscillator: 1.0, volume: 1.0, funding: 0.0, session: 0.0, h4_fib: 1.0, h1_bb: 1.0, weinstein: 0.5, divergence: 1.0, aroon: 1.0 }
   index:     { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, h4_macd: 1.0, h4_oscillator: 1.0, volume: 1.0, funding: 0.0, session: 0.0, h4_fib: 1.0, h1_bb: 1.0, weinstein: 0.5, divergence: 1.0, aroon: 1.0 }
@@ -160,10 +168,10 @@ VOTE_WEIGHTS:
 # Factor weights per asset class (base)
 FACTOR_WEIGHTS:
   crypto:    { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.0, structure: 1.0, derivatives: 1.5, microstructure: 1.5 }
-  forex:     { trend: 2.0, momentum: 1.2, volatility: 1.0, volume: 0.0, structure: 1.2, derivatives: 0.5, microstructure: 1.5 }
+  forex:     { trend: 2.0, momentum: 1.2, volatility: 1.0, volume: 0.5, structure: 1.2, derivatives: 1.5, microstructure: 1.5 }
   stock:     { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.5, structure: 1.0, derivatives: 0.5, microstructure: 1.5 }
-  commodity: { trend: 2.0, momentum: 1.3, volatility: 1.5, volume: 1.0, structure: 1.3, derivatives: 0.5, microstructure: 1.5 }
-  index:     { trend: 2.0, momentum: 1.4, volatility: 1.2, volume: 0.8, structure: 1.0, derivatives: 0.8, microstructure: 1.5 }
+  commodity: { trend: 2.0, momentum: 1.3, volatility: 1.5, volume: 1.0, structure: 1.3, derivatives: 1.0, microstructure: 1.5 }
+  index:     { trend: 2.0, momentum: 1.4, volatility: 1.2, volume: 0.8, structure: 1.0, derivatives: 1.2, microstructure: 1.5 }
 
 # Regime-aware factor weights
 REGIME_WEIGHTS:

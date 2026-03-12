@@ -21,3 +21,15 @@ test_ws.py
 # IDE
 .windsurf/
 .vscode/
+
+# SQLite databases — too large for GitHub, contain runtime/market data
+*.db
+*.db-shm
+*.db-wal
+
+# Backtest result dumps
+bt_*.json
+
+# Tick data folders
+tickdata_test/
+tickdata_test2/

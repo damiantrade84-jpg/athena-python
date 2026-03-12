@@ -9,22 +9,30 @@ Multi-asset algorithmic trading system: Flask dashboard, confluence-based signal
 
 | File | Purpose | Size |
 |------|---------|------|
-| `athena.py` | Flask app, scan engine, all API routes, backtest | ~2150 lines — use offset/limit |
+| `athena.py` | Flask app, scan engine, all API routes, backtest | ~2200 lines — use offset/limit |
 | `indicators.py` | Pure indicator functions (EMA, RSI, MACD, ATR, ADX, BB, Stochastic, Weinstein, Fib, OBV, Squeeze) | |
 | `scoring.py` | Confluence engine, vote weights, session, pair profiles, signal classification | |
+| `factor_scoring.py` | Z-score factor engine — directional (trend, momentum, microstructure, derivatives) + non-directional (trend_strength, volatility, volume, structure). Candle-based microstructure proxies for all asset types. | |
+| `confidence_engine.py` | 4-component confidence scoring (indicator agreement, timeframe alignment, regime fit, liquidity) | |
+| `feature_normalizer.py` | Rolling z-score, percentile rank, min-max normalization | |
 | `config.py` | Hard-coded CONFIG defaults + YAML loader + validation | |
 | `config.yaml` | All tunable thresholds — edit this, not config.py | |
 | `risk_engine.py` | Risk gateway: kill switch, drawdown, position sizing, portfolio heat | |
 | `mt5_executor.py` | MetaTrader 5 execution | |
 | `bybit_executor.py` | Bybit Linear Futures execution | |
 | `auto_trader.py` | Autonomous scheduler: scan every 30 min, auto-execute | |
-| `ai_learning.py` | Outcome extraction → learning_log in audit.db | |
+| `ai_learning.py` | Outcome extraction → learning_log in audit.db; factor-level analysis for AI calibration | |
 | `regime.py` | Market regime detection (TRENDING/DEVELOPING/RANGING/DEAD RANGING) | |
-| `static/index.html` | Dashboard UI: signals, backtest, screener tabs — pair selector populated dynamically from `/api/pairs` | ~1300 lines |
-| `tests/test_athena.py` | Main test suite (23+ tests) | |
+| `carry_feed.py` | Interest rate carry data — FRED static fallback, 1h cooldown on failure, non-blocking | |
+| `cot_feed.py` | CFTC Commitment of Traders z-scores — non-blocking, cache-first during scans | |
+| `duka_volume.py` | Dukascopy tick volume for forex — non-blocking during scans (returns 1.0 if cache not ready) | |
+| `static/index.html` | Dashboard UI: signals, backtest, screener tabs — pair selector populated dynamically from `/api/pairs` | ~1320 lines |
+| `tests/test_athena.py` | Main test suite (56+ tests) | |
+| `tests/test_factor_scoring.py` | Factor scoring unit tests | |
 | `test_indicators.py` | Pure indicator unit tests (imports from `indicators` only) | |
-| `audit.db` | SQLite runtime DB — do NOT commit | |
-| `candle_cache.db` | SQLite candle cache — do NOT commit | |
+| `audit.db` | SQLite runtime DB — **never commit** (gitignored) | |
+| `candle_cache.db` | SQLite candle cache — **never commit** (gitignored) | |
+| `*.db` | All `.db` files are gitignored — too large / runtime data | |
 
 ---
 
@@ -258,9 +266,11 @@ bybit_execute(signal, approval)
 
 ## Audit DB Schema (audit.db — audit_log table)
 
-Key columns: `ts, pair, score, direction, trend, grade, edge_prob, risk, style, asset_class, score_pct, max_score, votes_json, warnings_json, weinstein, trend_state, adx_pct, btc_bias, session_name, regime, entry_price, sl, tp, volume, risk_amount, risk_pct, ticket, exit_price, exit_time, pnl, r_multiple, exit_reason, holding_period_hours, error_tag, fee_cost`
+Key columns: `ts, pair, score, direction, trend, grade, edge_prob, risk, style, asset_class, score_pct, max_score, votes_json, warnings_json, weinstein, trend_state, adx_pct, btc_bias, session_name, regime, entry_price, sl, tp, volume, risk_amount, risk_pct, ticket, exit_price, exit_time, pnl, r_multiple, exit_reason, holding_period_hours, error_tag, fee_cost, factors_json`
 
 `fee_cost` (REAL) — actual exchange commission paid, captured from `bybit_execute()` → `order["fee"]["cost"]`. NULL for MT5 trades (not available via API).
+
+`factors_json` (TEXT) — JSON blob `{scores, weights, disabled, regime}` from `compute_factor_scores()`. Written on every AI analysis, execution, and webhook entry. Used by `ai_learning.py` to analyze factor reliability across winning/losing trades.
 
 Schema auto-migrated on startup — adding a new column: add it to both `CREATE TABLE` and the migration list in `_init_audit_db()`.
 
@@ -274,12 +284,35 @@ Schema auto-migrated on startup — adding a new column: add it to both `CREATE 
 
 ---
 
+## Claude Code Usage
+
+This project uses **Claude Code** (CLI) as the primary AI coding assistant. To start a session:
+
+```bash
+# From the project directory:
+claude
+```
+
+**Preferred workflow:**
+- Use Claude Code CLI (not Windsurf or other IDEs) for all code changes — context is preserved across sessions via `CLAUDE.md` and the memory system at `~/.claude/projects/`
+- To paste long logs or output: use a file (`log.txt`) and ask Claude to read it, rather than pasting directly
+- To share a server log: save to a temp file and say "read log.txt"
+- Claude Code sessions auto-summarize context so long projects are not lost
+
+**Key commands:**
+- `/help` — list all slash commands
+- `/model` — switch model (Opus 4.6 for complex tasks, Sonnet 4.6 for speed)
+- `/clear` — clear context window (does NOT lose CLAUDE.md memory)
+- `Ctrl+C` — interrupt a running tool without exiting
+
+---
+
 ## Hard Rules
 
 1. Never bypass `risk_check()` for any execution
 2. Never hardcode thresholds in Python — use `config.yaml`
 3. Never import from `athena.py` in unit tests — use `indicators` or `scoring` directly
-4. Never commit `audit.db` or `candle_cache.db`
+4. Never commit `*.db` files — all SQLite databases are gitignored (runtime/market data, too large)
 5. Never add `e200s` back to `calc_confluence()` — it was intentionally removed
 6. Never use string matching on warning text for classification — use structured flags
 7. `PAIR_PROFILE_VOTES` / `PAIR_PROFILE_FILTERS` live in `config.py` only — do not redefine in scoring.py
@@ -287,3 +320,5 @@ Schema auto-migrated on startup — adding a new column: add it to both `CREATE 
 9. `ALL_PAIRS = FOREX_PAIRS + COMMODITY_PAIRS + INDEX_PAIRS + US_STOCK_PAIRS + ETF_PAIRS + JSE_PAIRS + CRYPTO_PAIRS` — JSE_PAIRS must stay in this concatenation
 10. Never hardcode pair counts or pair lists in `static/index.html` — the backtest selector fetches `/api/pairs` dynamically
 11. `CandleBuilder.seed()` and `bulk_update_d1()` skip `enabled:False` pairs — do not remove these checks
+12. `_resolve_scan_style(requested_style, pair)` — use this for per-pair style resolution in `run_full_scan()`; do not rename or replace with ad-hoc functions
+13. Non-blocking I/O during scans: `carry_feed`, `cot_feed`, `duka_volume` must never block the scan thread — return cached/neutral values if data not ready
