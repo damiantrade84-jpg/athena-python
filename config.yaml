@@ -1,0 +1,249 @@
+# Athena v3.0 — Tunable thresholds (override CONFIG defaults)
+# Edit this file and restart to apply changes — no code deploy needed.
+
+# Per-class D1 ADX trend minimum
+ADX_TREND_MIN_CLASS:
+  crypto: 15
+  forex: 22
+  commodity: 25
+  stock: 25
+  index: 25
+
+# Per-class counter-trend penalty (standardized — Trend Gate already handles direction)
+COUNTER_TREND_PEN:
+  crypto: -1.0
+  forex: -1.0
+  commodity: -1.0
+  stock: -1.0
+  index: -1.0
+
+# Per-class RSI bounds
+RSI_BOUNDS:
+  crypto:    { ob: 70, os: 30 }
+  forex:     { ob: 70, os: 30 }
+  commodity: { ob: 70, os: 30 }
+  stock:     { ob: 70, os: 30 }
+  index:     { ob: 70, os: 30 }
+
+# Per-class backtest macro lookback (D1 bars)
+MACRO_LOOKBACK:
+  crypto: 15
+  forex: 30
+  commodity: 50
+  stock: 50
+  index: 50
+
+# Per-class Weinstein lookback (D1 bars)
+WEINSTEIN_LOOKBACK:
+  crypto: 60
+  forex: 100
+  commodity: 150
+  stock: 150
+  index: 150
+
+# Per-class backtest minimum score (calibrated for z-score factor engine)
+BT_MIN:
+  crypto: 0.55
+  commodity: 0.55
+  forex: 0.55
+  stock: 0.65
+  index: 0.55
+
+# Backtest must not alter live pair enable/disable state
+BT_AUTO_TOGGLE: false
+BT_PERCENTILE_FILTER: false
+
+# Per-class live scan minimum confluence (calibrated for z-score factor engine)
+MIN_CONFLUENCE_CLASS:
+  crypto: 0.70
+  commodity: 0.70
+  forex: 0.70
+  stock: 0.80
+  index: 0.70
+
+# Risk settings
+RISK_PCT: 0.01
+MIN_CONFLUENCE: 1.0
+VOLUME_THRESHOLD: 1.5
+VOLUME_THRESHOLD_BACKTEST: 1.2
+
+# Round-trip fee per trade as fraction of notional (entry + exit commission)
+# Bybit taker 0.055% × 2 sides = 0.11%; forex ECN ~0.02% × 2 = 0.04%
+FEE_PCT:
+  crypto:    0.0011
+  forex:     0.0004
+  commodity: 0.0004
+  stock:     0.0006
+  index:     0.0004
+
+# ── Execution Engine ──────────────────────────────────────
+# Indicator correlation filter — expensive O(n²) operation, disable for backtest speed
+# Enable only when doing deep live analysis; backtest accuracy unaffected without it
+INDICATOR_CORRELATION_ENABLED: false
+
+EXECUTION_ENABLED: true       # Enable manual execution via dashboard
+AUTO_EXECUTE: false            # Manual click only (no auto-fire)
+
+# ── Auto-Trader ────────────────────────────────────────────
+AUTO_TRADE_ENABLED: true           # Start auto-trader on server boot
+AUTO_TRADE_MIN_SCORE: 0.75         # Calibrated for z-score factor engine
+AUTO_TRADE_MAX_DAILY: 3            # Max auto-executions per day
+AUTO_TRADE_MAX_PER_SCAN: 1         # Max per scan cycle
+AUTO_TRADE_SCAN_INTERVAL_MIN: 30   # Scan every 30 minutes
+MAX_PORTFOLIO_HEAT: 0.06      # 6% total risk across all positions
+MAX_OPEN_POSITIONS: 5
+MAX_CORRELATED_POSITIONS: 2
+SIGNAL_MAX_AGE_SEC: 300       # 5 min freshness window
+MAX_RISK_PER_TRADE: 0.03      # Hard cap 3% per trade
+DRAWDOWN_REDUCE_THRESHOLD: 0.10   # Halve size at 10% drawdown
+DRAWDOWN_STOP_THRESHOLD: 0.15     # Stop all trading at 15% drawdown
+
+# ── EODHD Sentiment Gate ──────────────────────────────────
+SENTIMENT_GATE_ENABLED: true       # Check news sentiment before auto-trades
+SENTIMENT_BLOCK_THRESHOLD: 0.4     # Block if sentiment opposes direction by >0.4
+
+# ── EODHD Event Risk Filter ──────────────────────────────
+EVENT_RISK_ENABLED: true           # Block trades near high-impact events (NFP/CPI/FOMC)
+EVENT_RISK_HOURS: 4                # Hours ahead to check for events
+
+# ── Adaptive Kelly Position Sizing ────────────────────────
+ADAPTIVE_KELLY_ENABLED: true       # Use fractional Kelly for dynamic position sizing
+KELLY_FRACTION: 0.5                # Half-Kelly (safety proven)
+
+# ── Signal Debate (Bull/Bear/Judge) ───────────────────────
+SIGNAL_DEBATE_ENABLED: true        # Run LLM debate before auto-trades (needs ANTHROPIC_API_KEY)
+
+# ── AI Learning ───────────────────────────────────────────
+LEARNING_ENABLED: true             # Enable AI self-learning (outcome extraction + prompt injection)
+LEARNING_LOOKBACK_DAYS: 90         # How many days of trade history to use for learning context
+LEARNING_MIN_TRADES: 5             # Minimum trades required before injecting learning context into AI prompts
+
+# ── EODHD Insider / Fundamentals Enrichment ───────────────
+INSIDER_TRADING_ENABLED: true      # Check SEC Form 4 insider activity for stock signals
+FUNDAMENTALS_ENABLED: true         # Enrich stock signals with fundamental data
+# Ranging penalties — halved (ADX vote=0 already penalises, one penalty per condition)
+RANGING:
+  crypto:
+    dead: 14
+    dead_pen: 1.5
+    choppy: 18
+    choppy_pen: 0.5
+  forex:
+    dead: 18
+    dead_pen: 1.5
+    choppy: 23
+    choppy_pen: 1.0
+  commodity:
+    dead: 18
+    dead_pen: 1.5
+    choppy: 23
+    choppy_pen: 0.5
+  stock:
+    dead: 16
+    dead_pen: 1.5
+    choppy: 21
+    choppy_pen: 0.5
+  index:
+    dead: 16
+    dead_pen: 1.5
+    choppy: 21
+    choppy_pen: 0.5
+
+# Per-class vote weight routing — each indicator weighted where it's strongest
+VOTE_WEIGHTS:
+  crypto:    { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, h4_macd: 1.0, h4_oscillator: 0.75, volume: 1.0, funding: 1.0, session: 0.0, h4_fib: 0.5, h1_bb: 1.0, weinstein: 0.0, divergence: 1.0, aroon: 1.0 }
+  forex:     { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, h4_macd: 1.0, h4_oscillator: 1.0, volume: 0.0, funding: 0.0, session: 1.0, h4_fib: 1.0, h1_bb: 0.5, weinstein: 0.0, divergence: 1.0, aroon: 1.0 }
+  stock:     { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, h4_macd: 1.0, h4_oscillator: 1.0, volume: 1.0, funding: 0.0, session: 0.0, h4_fib: 1.0, h1_bb: 1.0, weinstein: 1.0, divergence: 1.0, aroon: 1.0 }
+  commodity: { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, h4_macd: 1.0, h4_oscillator: 1.0, volume: 1.0, funding: 0.0, session: 0.0, h4_fib: 1.0, h1_bb: 1.0, weinstein: 0.5, divergence: 1.0, aroon: 1.0 }
+  index:     { d1_trend: 2.0, h1_ema: 1.0, d1_adx: 1.0, h4_macd: 1.0, h4_oscillator: 1.0, volume: 1.0, funding: 0.0, session: 0.0, h4_fib: 1.0, h1_bb: 1.0, weinstein: 0.5, divergence: 1.0, aroon: 1.0 }
+
+# Factor weights per asset class (base)
+FACTOR_WEIGHTS:
+  crypto:    { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.0, structure: 1.0, derivatives: 1.5, microstructure: 1.5 }
+  forex:     { trend: 2.0, momentum: 1.2, volatility: 1.0, volume: 0.0, structure: 1.2, derivatives: 0.5, microstructure: 1.5 }
+  stock:     { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.5, structure: 1.0, derivatives: 0.5, microstructure: 1.5 }
+  commodity: { trend: 2.0, momentum: 1.3, volatility: 1.5, volume: 1.0, structure: 1.3, derivatives: 0.5, microstructure: 1.5 }
+  index:     { trend: 2.0, momentum: 1.4, volatility: 1.2, volume: 0.8, structure: 1.0, derivatives: 0.8, microstructure: 1.5 }
+
+# Regime-aware factor weights
+REGIME_WEIGHTS:
+  TRENDING:       { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.0, structure: 0.5, derivatives: 1.2, microstructure: 1.5 }
+  RANGING:        { trend: 0.5, momentum: 1.5, volatility: 1.0, volume: 1.0, structure: 2.0, derivatives: 1.0, microstructure: 1.5 }
+  HIGH_VOLATILITY: { trend: 1.0, momentum: 1.0, volatility: 2.0, volume: 1.5, structure: 1.0, derivatives: 1.5, microstructure: 1.5 }
+  LOW_VOLATILITY: { trend: 1.2, momentum: 1.0, volatility: 0.5, volume: 1.0, structure: 1.0, derivatives: 1.0, microstructure: 1.5 }
+
+# Normalization
+NORMALIZATION_LOOKBACK:
+  crypto: 200
+  forex: 200
+  commodity: 300
+  stock: 200
+  index: 200
+
+# Realized volatility
+REALIZED_VOL_LOOKBACK: 30
+REALIZED_VOL_ANNUALIZATION:
+  crypto: 365
+  forex: 252
+  stock: 252
+  index: 252
+  commodity: 252
+
+# Microstructure datafeed configuration
+MICROSTRUCTURE:
+  exchanges:
+    - binance
+    - bybit
+  orderbook_depth:
+    binance: 20
+    bybit: 50
+  update_interval_seconds: 1
+  liquidity_wall_threshold: 5
+
+# Indicator correlation
+INDICATOR_CORRELATION_WINDOW: 200
+
+# Confidence engine
+CONFIDENCE_THRESHOLD: 0.55
+POSITION_SIZE_CONFIDENCE_SCALING: true
+MICROSTRUCTURE_FEEDS_ENABLED: true
+
+# Pair-specific routing. Use this to disable filters that do not help a pair,
+# zero out weak votes, or tighten thresholds without touching the whole asset class.
+# Valid vote keys: d1_trend, h1_ema, d1_adx, h4_macd, h4_oscillator, volume,
+# funding, session, h4_fib, h1_bb, weinstein, divergence
+# Valid filter keys: weinstein, session, regime_transition, obv, funding,
+# squeeze, mean_revert, btc_bias, divergence_warning
+PAIR_PROFILES:
+  XAU/USD:
+    disable_filters: [obv, session]
+    weight_overrides:
+      h4_fib: 1.5
+      h1_bb: 0.5
+    min_confluence: 0.65
+    bt_min: 0.50
+  XAG/USD:
+    disable_filters: [obv, session]
+    weight_overrides:
+      h4_fib: 1.5
+    min_confluence: 0.65
+    bt_min: 0.50
+  LINK/USDT:
+    disable_filters: [mean_revert]
+    weight_overrides:
+      funding: 1.25
+  SUI/USDT:
+    disable_filters: [mean_revert]
+  APT/USDT:
+    disable_filters: [mean_revert]
+  LTC/USDT:
+    disable_filters: [mean_revert]
+  USD/CHF:
+    disable_filters: [obv]
+    weight_overrides:
+      session: 1.25
+      h1_bb: 0.75
+  USD/MXN:
+    disable_filters: [obv]
+    weight_overrides:
+      session: 1.25

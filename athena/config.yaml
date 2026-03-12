@@ -1,0 +1,3 @@
+# Athena configuration (moved to root for now; symlink or copy can be added here if needed)
+# For now, this file is a placeholder; actual config lives at project root.
+# To use, import from root config.py or reference ../../config.yaml

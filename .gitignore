@@ -1,0 +1,23 @@
+# Environment / secrets
+.env
+
+# Python cache
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+
+# Logs / audit
+audit.jsonl
+*.log
+
+# Backup files
+*_backup*.py
+*_backup*.html
+
+# Test scripts
+test_ws.py
+
+# IDE
+.windsurf/
+.vscode/
