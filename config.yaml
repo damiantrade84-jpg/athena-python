@@ -45,12 +45,15 @@ WEINSTEIN_LOOKBACK:
 # Recalibrated for multiplicative factor formula (score = abs(dir) * (0.6 + nondir/3 * 0.4))
 # BT_MIN MUST equal MIN_CONFLUENCE_CLASS — lower BT_MIN counts trades the live system rejects,
 # inflating trade count and distorting SQN.
+# Threshold set to 0.70 to match multiplicative formula scale (old 0.90–0.95 was calibrated for
+# the old additive formula which produced higher raw scores; 0.70 here ≈ 0.95 old-formula gate).
+# Tune up per-class after running backtests to find first-profitable threshold.
 BT_MIN:
-  crypto: 0.90
-  commodity: 0.90
-  forex: 0.95
-  stock: 0.95
-  index: 0.90
+  crypto: 0.70
+  commodity: 0.70
+  forex: 0.70
+  stock: 0.70
+  index: 0.70
 
 # Backtest must not alter live pair enable/disable state
 BT_AUTO_TOGGLE: false
@@ -60,12 +63,13 @@ BT_PERCENTILE_FILTER: false
 # Recalibrated for multiplicative factor formula. Old additive thresholds (1.10–1.20) mapped
 # to ~0.88–0.96 in the new formula (multiplicative compresses inflated quality-driven scores).
 # BT_MIN is set equal to MIN_CONFLUENCE_CLASS so backtest and live scan use identical gates.
+# Set to 0.70 to match new formula scale; tune up after data-driven threshold analysis.
 MIN_CONFLUENCE_CLASS:
-  crypto: 0.90
-  commodity: 0.90
-  forex: 0.95
-  stock: 0.95
-  index: 0.90
+  crypto: 0.70
+  commodity: 0.70
+  forex: 0.70
+  stock: 0.70
+  index: 0.70
 
 # Risk settings
 RISK_PCT: 0.01
@@ -95,7 +99,7 @@ AUTO_TRADE_ENABLED: true           # Start auto-trader on server boot
 # Effective gate = max(AUTO_TRADE_MIN_SCORE, MIN_CONFLUENCE_CLASS[asset_type])
 # With all MIN_CONFLUENCE_CLASS set to 0.90–0.95, this 0.90 floor is functionally
 # overridden by the per-class MIN_CONFLUENCE_CLASS for most asset types.
-AUTO_TRADE_MIN_SCORE: 0.90         # Hard floor — class-specific threshold takes precedence
+AUTO_TRADE_MIN_SCORE: 0.70         # Hard floor — class-specific threshold takes precedence; recalibrated for multiplicative formula
 AUTO_TRADE_MAX_DAILY: 3            # Max auto-executions per day
 AUTO_TRADE_MAX_PER_SCAN: 1         # Max per scan cycle; raise to 2 only with >10 active pairs
 AUTO_TRADE_SCAN_INTERVAL_MIN: 30   # Scan every 30 minutes
