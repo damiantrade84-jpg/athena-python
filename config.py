@@ -62,11 +62,11 @@ CONFIG: dict = {
     },
     # Rolling windows for normalization (bars)
     "NORMALIZATION_LOOKBACK": {
-        "crypto": 200,
-        "forex": 200,
+        "crypto": 300,
+        "forex": 400,
         "commodity": 300,
-        "stock": 200,
-        "index": 200,
+        "stock": 350,
+        "index": 350,
     },
     # Realized volatility lookback and annualization factors (per asset class)
     "REALIZED_VOL_LOOKBACK": 30,
@@ -89,8 +89,8 @@ CONFIG: dict = {
     },
     "MACRO_LOOKBACK":    {"crypto": 15, "forex": 30, "commodity": 50, "stock": 50, "index": 50},
     "WEINSTEIN_LOOKBACK":{"crypto": 60, "forex": 100, "commodity": 150, "stock": 150, "index": 150},
-    "BT_MIN":              {"crypto": 0.90, "commodity": 0.90, "forex": 0.95, "stock": 0.95, "index": 0.90},
-    "MIN_CONFLUENCE_CLASS":{"crypto": 0.90, "commodity": 0.90, "forex": 0.95, "stock": 0.95, "index": 0.90},
+    "BT_MIN":              {"crypto": 0.70, "commodity": 0.70, "forex": 0.70, "stock": 0.70, "index": 0.70},
+    "MIN_CONFLUENCE_CLASS":{"crypto": 0.70, "commodity": 0.70, "forex": 0.70, "stock": 0.70, "index": 0.70},
     # Factor scoring gates — see factor_scoring.py
     "FACTOR_MIN_DIRECTIONAL": 0.25,  # Skip if abs(dir_score) < this (near-directionless signal)
     "REGIME_SMOOTHING_BARS": 3,      # Consecutive bars required before committing to a regime change
@@ -105,10 +105,10 @@ CONFIG: dict = {
     # Factor weights per asset class (base, before regime overrides)
     "FACTOR_WEIGHTS": {
         "crypto":    {"trend": 2.0, "momentum": 1.5, "volatility": 1.0, "volume": 1.0, "structure": 1.0, "derivatives": 1.5, "microstructure": 1.5},
-        "forex":     {"trend": 2.0, "momentum": 1.2, "volatility": 1.0, "volume": 0.5, "structure": 1.2, "derivatives": 1.5, "microstructure": 1.5},
-        "stock":     {"trend": 2.0, "momentum": 1.5, "volatility": 1.0, "volume": 1.5, "structure": 1.0, "derivatives": 0.5, "microstructure": 1.5},
-        "commodity": {"trend": 2.0, "momentum": 1.3, "volatility": 1.5, "volume": 1.0, "structure": 1.3, "derivatives": 1.0, "microstructure": 1.5},
-        "index":     {"trend": 2.0, "momentum": 1.4, "volatility": 1.2, "volume": 0.8, "structure": 1.0, "derivatives": 1.2, "microstructure": 1.5},
+        "forex":     {"trend": 2.0, "momentum": 1.0, "volatility": 1.0, "volume": 0.5, "structure": 1.5, "derivatives": 1.5, "microstructure": 0.5},
+        "stock":     {"trend": 2.0, "momentum": 1.5, "volatility": 1.0, "volume": 1.5, "structure": 1.0, "derivatives": 0.5, "microstructure": 0.75},
+        "commodity": {"trend": 2.0, "momentum": 1.3, "volatility": 1.5, "volume": 1.0, "structure": 1.3, "derivatives": 1.0, "microstructure": 0.75},
+        "index":     {"trend": 2.0, "momentum": 1.4, "volatility": 1.2, "volume": 0.8, "structure": 1.0, "derivatives": 1.2, "microstructure": 0.75},
     },
     # Regime-aware factor weight overrides
     "REGIME_WEIGHTS": {
