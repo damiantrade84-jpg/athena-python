@@ -1112,7 +1112,7 @@ FOREX_PAIRS = [
 
     {"symbol":"AUDJPY=X","type":"forex","display":"AUD/JPY","source":"eodhd","enabled":False},  # SQN +0.22
 
-    {"symbol":"EURAUD=X","type":"forex","display":"EUR/AUD","source":"eodhd","enabled":False},  # SQN +0.15
+    {"symbol":"EURAUD=X","type":"forex","display":"EUR/AUD","source":"eodhd","enabled":False},  # SQN -1.43, IS:-1.25/OOS:-0.66 (post-fix: old +0.15 was look-ahead/factor bias)
 
     {"symbol":"GBPAUD=X","type":"forex","display":"GBP/AUD","source":"eodhd","enabled":False},  # SQN +0.91, IS:-1.38 (IS neg, watchlist)
 
