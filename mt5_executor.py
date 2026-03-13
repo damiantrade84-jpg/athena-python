@@ -16,6 +16,8 @@ import logging
 
 import time
 
+import telegram_notify
+
 
 
 log = logging.getLogger("athena")
@@ -931,6 +933,18 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:
 
 
     log.info(f"[MT5] ORDER FILLED: ticket={result.order} | {direction} {result.volume} {mt5_symbol} @ {result.price}")
+
+    # Send Telegram notification for trade opened
+    try:
+        telegram_notify.notify_trade_opened(
+            pair=pair,
+            direction=direction,
+            entry_price=result.price,
+            stop_loss=sl,
+            take_profit=tp
+        )
+    except Exception as _tn_e:
+        log.debug(f"[TELEGRAM] Trade open notification failed: {_tn_e}")
 
 
 

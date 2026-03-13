@@ -267,9 +267,15 @@ PAIR_PROFILES:
   USD/CHF:
     disable_filters: [obv]
     weight_overrides:
-      session: 1.25
+      h4_fib: 1.5
       h1_bb: 0.75
   USD/MXN:
     disable_filters: [obv]
     weight_overrides:
       session: 1.25
+
+# ── Telegram Notifications ────────────────────────────────────────────────
+TELEGRAM:
+  token: "8692443091:AAGMZyBuFQTsqn151DY_wQHheKtrtDqXkW8"
+  chat_id: "5884106332"
+  enabled: true
