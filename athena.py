@@ -2276,7 +2276,7 @@ from scoring import (
 
     CORR_CLUSTERS, apply_correlation_cap, get_pair_profile,
 
-    get_pair_vote_weights, pair_filter_enabled,
+    pair_filter_enabled,
 
     _pair_exchange_code, _pair_exchange_closed,
 
