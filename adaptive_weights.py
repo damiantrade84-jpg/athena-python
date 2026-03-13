@@ -59,7 +59,7 @@ def _compute_adaptive_weights(db_path: str, asset_type: str,
                                regime: str) -> dict:
     """Compute adaptive weights from learning_log data."""
     try:
-        con = sqlite3.connect(db_path)
+        con = sqlite3.connect(db_path, timeout=1.0)
         con.row_factory = sqlite3.Row
 
         # Get last 50 closed trades for this asset type

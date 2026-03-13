@@ -266,6 +266,16 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
     try:
         from cot_feed import get_cot_z as _get_cot_z
         _cot = _get_cot_z(pair.get("display", ""))
+        
+        # Fade the herd for Forex and Commodities: Speculators are trapped at extremes
+        if pair.get("type", "stock") in ("forex", "commodity") and _cot != 0.0:
+            if abs(_cot) >= 2.0:
+                # Extreme overcrowded positioning -> Reverse the signal (fade the herd)
+                _cot = -_cot * 1.5
+            elif abs(_cot) < 1.0:
+                # Insignificant positioning -> ignore lagged data
+                _cot = 0.0
+                
         indicators["cot_z"] = float(_cot) if _cot != 0.0 else None
     except Exception:
         indicators["cot_z"] = None

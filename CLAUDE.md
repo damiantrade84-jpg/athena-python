@@ -322,3 +322,4 @@ claude
 11. `CandleBuilder.seed()` and `bulk_update_d1()` skip `enabled:False` pairs — do not remove these checks
 12. `_resolve_scan_style(requested_style, pair)` — use this for per-pair style resolution in `run_full_scan()`; do not rename or replace with ad-hoc functions
 13. Non-blocking I/O during scans: `carry_feed`, `cot_feed`, `duka_volume` must never block the scan thread — return cached/neutral values if data not ready
+14. Always use `timeout=1.0` and `PRAGMA journal_mode=WAL` for `sqlite3.connect` to avoid `database is locked` concurrency errors

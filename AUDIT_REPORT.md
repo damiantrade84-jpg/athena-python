@@ -334,6 +334,7 @@ Display-only issue. The session badge shown in the UI reflects "now" rather than
 | 7 | **LOW/UNSURE** | `athena.py:3456-3465` | Possibly including incomplete (forming) bars | False signals from partial candles (needs verification) |
 | 8 | **LOW** | `indicators.py:290` | Stochastic zero-fills warmup Nones | Negligible with 50+ bar minimum |
 | 9 | **INFO** | `athena.py:3584` | Session display uses wall-clock not bar time | Display-only; vote scoring unaffected |
+| 10 | **CRITICAL** | `athena.py:5035` | SQLite initialized without WAL mode | Concurrent access from auto-trader thread throws `database is locked` |
 
 ---
 
@@ -418,4 +419,52 @@ if sl_val > 0 and entry > 0:
     est_risk = round(abs(entry - sl_val) * size, 2)
 else:
     est_risk = round(notional * 0.02, 2)  # fallback when no SL set
+```
+
+---
+
+## ISSUE #10 — CRITICAL: SQLite Concurrency Flaw (`database is locked`)
+
+### Buggy Code
+`athena.py` line 5035 (`_init_audit_db`):
+```python
+def _init_audit_db(db_path: str) -> None:
+    """Create audit table if it doesn't exist..."""
+    con = sqlite3.connect(db_path)
+    con.execute("CREATE TABLE IF NOT EXISTS audit_log...")
+```
+`ai_learning.py` line 67 (`init_learning_db`):
+```python
+def init_learning_db(db_path: str) -> None:
+    con = sqlite3.connect(db_path)
+    con.execute("CREATE TABLE IF NOT EXISTS learning_log...")
+```
+
+### What's Wrong
+The SQLite databases are initialized without enabling `PRAGMA journal_mode=WAL`. The default SQLite journal mode locks the entire database file during a write, preventing any other thread from reading.
+
+### Consequence
+The `auto_trader.py` runs on a dedicated background thread and attempts to `INSERT` trades into `audit.db`. Meanwhile, the live scanner runs `run_full_scan` utilizing a `ThreadPoolExecutor` with 6 worker threads, all of which call `risk_engine.py -> _adaptive_risk_pct()`. This function opens a read connection to `audit.db` to calculate Kelly fractions.
+If any thread attempts to read while another thread is writing (or vice versa), the reader/writer will fail instantly with a fatal `sqlite3.OperationalError: database is locked` because no connection `timeout` was provided. This will cause scan failures or prevent auto-trades from being recorded.
+
+### Fix
+Enable WAL (Write-Ahead Logging) on initialization and add a timeout for concurrent connections:
+```python
+# athena.py
+def _init_audit_db(db_path: str) -> None:
+    con = sqlite3.connect(db_path, timeout=15.0)
+    con.execute("PRAGMA journal_mode=WAL")
+    # ...
+
+# ai_learning.py
+def init_learning_db(db_path: str) -> None:
+    con = sqlite3.connect(db_path, timeout=15.0)
+    con.execute("PRAGMA journal_mode=WAL")
+    # ...
+
+# risk_engine.py
+def _adaptive_risk_pct(asset_type: str, regime: str = "") -> float:
+    # ...
+    con = sqlite3.connect(db_path, timeout=15.0)
+    # ...
 ```
