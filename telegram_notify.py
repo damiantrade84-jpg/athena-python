@@ -43,7 +43,15 @@ def _load_config() -> Dict[str, Any]:
             _config = config.get('TELEGRAM', {})
     except Exception:
         _config = {}
-    
+
+    import os
+    _env_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    _env_chat  = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if _env_token:
+        _config["token"] = _env_token
+    if _env_chat:
+        _config["chat_id"] = _env_chat
+
     return _config
 
 def _is_enabled() -> bool:
