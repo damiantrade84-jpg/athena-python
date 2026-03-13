@@ -125,6 +125,17 @@ CONFIG: dict = {
             "trend": 1.2, "momentum": 1.0, "volatility": 0.5, "volume": 1.0, "structure": 1.0, "derivatives": 1.0, "microstructure": 1.5,
         },
     },
+    # Per-indicator weights within each factor group (multiplied with correlation weights).
+    # Missing keys default to 1.0. Set to 0.0 to disable an indicator.
+    "INDICATOR_WEIGHTS": {
+        "trend":          {"d1_ema_trend": 0.5, "h4_ema_trend": 0.3, "ema_trend": 0.2},
+        "momentum":       {"rsi_z": 0.6, "macdLine_z": 0.4},
+        "derivatives":    {"cot_z": 0.5, "carry_z": 0.35, "funding_rate": 0.15},
+        "microstructure": {"order_book_imbalance": 0.4, "liquidity_wall_detection": 0.25,
+                           "orderflow_delta": 0.2, "liquidity_pressure": 0.15},
+        "volatility":     {"atr_z": 0.5, "bbWidth_z": 0.3, "realized_vol_z": 0.2},
+        "volume":         {"volume_ratio": 0.7, "obv_trend": 0.3},
+    },
     # Indicator correlation control
     "INDICATOR_CORRELATION_ENABLED": False,  # Expensive O(n²); enable manually for live deep analysis
     "INDICATOR_CORRELATION_WINDOW": 200,
