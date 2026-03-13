@@ -3986,6 +3986,15 @@ def backtest_pair(pair, style="auto"):
 
                 h4i = calc_indicators_with_normalized(h4_window, pair.get("type", "stock"))
 
+                # Inject fib_proximity so structure factor is non-None during backtest
+                try:
+                    _bt_fib = calc_fib(h4_window)
+                    _bt_h4_close = h4_window[-1]["close"] if h4_window else None
+                    if _bt_fib and _bt_h4_close:
+                        h4i["snap"]["fib_proximity"] = calc_fib_proximity(float(_bt_h4_close), _bt_fib)
+                except Exception:
+                    pass
+
                 h1i = calc_indicators_with_normalized(h1_window, pair.get("type", "stock"))
 
                 vols = [c["vol"] for c in h1_window]; vsma = calc_sma(vols, 20)
@@ -4268,6 +4277,15 @@ def backtest_pair(pair, style="auto"):
             try:
 
                 h4i = calc_indicators_with_normalized(h4_window, pair.get("type", "stock"))
+
+                # Inject fib_proximity so structure factor is non-None during backtest
+                try:
+                    _bt_fib = calc_fib(h4_window)
+                    _bt_h4_close = h4_window[-1]["close"] if h4_window else None
+                    if _bt_fib and _bt_h4_close:
+                        h4i["snap"]["fib_proximity"] = calc_fib_proximity(float(_bt_h4_close), _bt_fib)
+                except Exception:
+                    pass
 
                 h1i = calc_indicators_with_normalized(h1_window, pair.get("type", "stock"))
 
@@ -7195,6 +7213,15 @@ def analyze_pair(pair, btc_bias, style="swing"):
     d1i = calc_indicators_with_normalized(d1, pair.get("type", "stock"))
 
     h4i = calc_indicators_with_normalized(h4, pair.get("type", "stock"))
+
+    # Inject fib proximity into H4 snap so structure factor in compute_factor_scores() is non-None
+    try:
+        _h4_fib = calc_fib(h4)
+        _h4_close = h4[-1]["close"] if h4 else None
+        if _h4_fib and _h4_close:
+            h4i["snap"]["fib_proximity"] = calc_fib_proximity(float(_h4_close), _h4_fib)
+    except Exception:
+        pass  # gracefully degrade — structure factor stays None
 
     # Inject live microstructure signals if WS feed has data for this symbol
     _msig = _micro_cache.get(pair.get("symbol", ""), {})

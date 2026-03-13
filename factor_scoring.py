@@ -263,31 +263,40 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
 
     # COT positioning — CFTC net speculator z-score (directional, weekly)
     # Covers: all forex, BTC/ETH (CME), S&P/Nasdaq futures, gold/silver
-    try:
-        from cot_feed import get_cot_z as _get_cot_z
-        _cot = _get_cot_z(pair.get("display", ""))
-        
-        # Fade the herd for Forex and Commodities: Speculators are trapped at extremes
-        if pair.get("type", "stock") in ("forex", "commodity") and _cot != 0.0:
-            if abs(_cot) >= 2.0:
-                # Extreme overcrowded positioning -> Reverse the signal (fade the herd)
-                _cot = -_cot * 1.5
-            elif abs(_cot) < 1.0:
-                # Insignificant positioning -> ignore lagged data
-                _cot = 0.0
-                
-        indicators["cot_z"] = float(_cot) if _cot != 0.0 else None
-    except Exception:
+    # NOTE: zeroed out during backtest (bar_time provided) — no historical COT lookup,
+    #       using live values would introduce look-ahead bias across all walk-forward bars.
+    if bar_time is not None:
         indicators["cot_z"] = None
+    else:
+        try:
+            from cot_feed import get_cot_z as _get_cot_z
+            _cot = _get_cot_z(pair.get("display", ""))
+
+            # Fade the herd for Forex and Commodities: Speculators are trapped at extremes
+            if pair.get("type", "stock") in ("forex", "commodity") and _cot != 0.0:
+                if abs(_cot) >= 2.0:
+                    # Extreme overcrowded positioning -> Reverse the signal (fade the herd)
+                    _cot = -_cot * 1.5
+                elif abs(_cot) < 1.0:
+                    # Insignificant positioning -> ignore lagged data
+                    _cot = 0.0
+
+            indicators["cot_z"] = float(_cot) if _cot != 0.0 else None
+        except Exception:
+            indicators["cot_z"] = None
 
     # Carry — interest rate differential z-score (directional, monthly)
     # Forex: base_rate - quote_rate; Indices/gold: inverted 10Y yield
-    try:
-        from carry_feed import get_carry_z as _get_carry_z
-        _carry = _get_carry_z(pair.get("display", ""))
-        indicators["carry_z"] = float(_carry) if _carry != 0.0 else None
-    except Exception:
+    # NOTE: zeroed out during backtest (bar_time provided) — same look-ahead reason as COT.
+    if bar_time is not None:
         indicators["carry_z"] = None
+    else:
+        try:
+            from carry_feed import get_carry_z as _get_carry_z
+            _carry = _get_carry_z(pair.get("display", ""))
+            indicators["carry_z"] = float(_carry) if _carry != 0.0 else None
+        except Exception:
+            indicators["carry_z"] = None
 
     # Microstructure (directional if available)
     # Crypto: values injected from Binance/Bybit WS feeds via _micro_cache in athena.py
