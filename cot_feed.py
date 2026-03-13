@@ -122,6 +122,7 @@ _PAIR_FORMULA: dict[str, list[tuple[float, str]]] = {
 def _init_db():
     with _db_lock:
         con = sqlite3.connect(_DB_PATH, timeout=1.0)
+        con.execute("PRAGMA journal_mode=WAL")
         con.execute("""
             CREATE TABLE IF NOT EXISTS cot_net (
                 asset       TEXT    NOT NULL,
