@@ -179,7 +179,7 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
     # Map final_score to legacy 'score' field
     score = factor_result["final_score"]
     direction = factor_result["direction"]
-    log.info(f"[FACTOR] {pair.get('display')} score={score:.3f} dir={direction} "
+    log.debug(f"[FACTOR] {pair.get('display')} score={score:.3f} dir={direction} "
              f"dir_score={factor_result.get('directional_score', 0):.3f} "
              f"nondir_score={factor_result.get('nondirectional_score', 0):.3f} "
              f"factors={factor_result['factor_scores']} regime={factor_result['regime']}")

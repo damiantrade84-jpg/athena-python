@@ -1094,7 +1094,7 @@ FOREX_PAIRS = [
 
     {"symbol":"EURUSD=X","type":"forex","display":"EUR/USD","source":"eodhd","enabled":True},   # SQN +0.16 — enabled; score gate filters low-conviction setups
 
-    {"symbol":"GBPUSD=X","type":"forex","display":"GBP/USD","source":"eodhd","enabled":True},   # SQN -0.53 — enabled; formula fix targets inflated non-directional scores
+    {"symbol":"GBPUSD=X","type":"forex","display":"GBP/USD","source":"eodhd","enabled":False},  # SQN -1.62 (post-fix BT 2026-03-13): 7 trades/730d, WR 14%, OOS:-10 — no edge confirmed
 
     {"symbol":"USDJPY=X","type":"forex","display":"USD/JPY","source":"eodhd","enabled":True},   # SQN -2.33 — enabled; re-evaluate post-formula fix
 
