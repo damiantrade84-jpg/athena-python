@@ -1174,7 +1174,7 @@ US_STOCK_PAIRS = [
 
     {"symbol":"TSLA.US","type":"stock","display":"TSLA","source":"eodhd","enabled":False},        # SQN +0.10
 
-    {"symbol":"NVDA.US","type":"stock","display":"NVDA","source":"eodhd","enabled":False},        # SQN +1.44, OOS:0 (no OOS, watchlist)
+    {"symbol":"NVDA.US","type":"stock","display":"NVDA","source":"eodhd","enabled":True},         # SQN +1.44, OOS:0 (no OOS — enabled, monitor)
 
     {"symbol":"MSFT.US","type":"stock","display":"MSFT","source":"eodhd","enabled":False},        # SQN +0.49, OOS:-2.12
 
@@ -1198,7 +1198,7 @@ US_STOCK_PAIRS = [
 
     {"symbol":"DIS.US","type":"stock","display":"DIS","source":"eodhd","enabled":False},          # Pepperstone CFD
 
-    {"symbol":"BA.US","type":"stock","display":"BA","source":"eodhd","enabled":False},            # Pepperstone CFD
+    {"symbol":"BA.US","type":"stock","display":"BA","source":"eodhd","enabled":True},             # Pepperstone CFD — enabled per user request (score >1.5 in scan)
 
     {"symbol":"COIN.US","type":"stock","display":"COIN","source":"eodhd","enabled":False},        # Pepperstone CFD
 
@@ -1214,7 +1214,7 @@ US_STOCK_PAIRS = [
 
 ETF_PAIRS = [
 
-    {"symbol":"SPY.US","type":"stock","display":"SPY","source":"eodhd","enabled":False},          # SQN +1.03, OOS:0 (no OOS, watchlist)
+    {"symbol":"SPY.US","type":"stock","display":"SPY","source":"eodhd","enabled":True},           # SQN +1.03 — enabled per user request (score >1.5 in scan)
 
     {"symbol":"QQQ.US","type":"stock","display":"QQQ","source":"eodhd","enabled":False},          # SQN +0.38
 
@@ -1400,7 +1400,7 @@ _VENDOR_SYMBOL_OVERRIDES = {
 
     # Additional Pepperstone indices
 
-    "DAX 40": {"yfinance": "DAX", "eodhd": "DAX.INDX"},
+    "DAX 40": {"yfinance": "^GDAXI", "eodhd": "GDAXI.INDX"},  # was DAX.INDX — wrong symbol (404)
 
     "ASX 200": {"yfinance": "^AXJO", "eodhd": "AXJO.INDX"},
 
@@ -2041,6 +2041,8 @@ def fetch_eodhd(pair, tf, limit):
 
 
 _polygon_lock = threading.Lock()
+_polygon_last_request: float = 0.0  # epoch seconds of last Polygon HTTP request
+_POLYGON_MIN_INTERVAL = 12.0        # 5 req/min free tier → 1 request per 12 s
 
 
 
@@ -2054,75 +2056,89 @@ def fetch_polygon(pair, tf, limit):
 
     with _polygon_lock:
 
+        global _polygon_last_request
+
+        # Pre-request throttle: enforce minimum interval regardless of success or error.
+        # Old approach (sleep after success only) left 429/error paths unthrottled,
+        # causing immediate follow-up calls that triggered further 429s on best pairs (XAU, XAG).
+        elapsed = time.time() - _polygon_last_request
+        if elapsed < _POLYGON_MIN_INTERVAL:
+            time.sleep(_POLYGON_MIN_INTERVAL - elapsed)
+        _polygon_last_request = time.time()
+
         try:
 
-            key = os.environ.get("POLYGON_KEY", CONFIG.get("POLYGON_KEY", ""))
+            key = os.environ.get(“POLYGON_KEY”, CONFIG.get(“POLYGON_KEY”, “”))
 
             if not key:
 
-                log.warning("[PG] No POLYGON_KEY set")
+                log.warning(“[PG] No POLYGON_KEY set”)
 
-                return {"error": True, "symbol": symbol, "detail": "No POLYGON_KEY set"}
+                return {“error”: True, “symbol”: symbol, “detail”: “No POLYGON_KEY set”}
 
             ticker = _polygon_ticker_for_pair(pair)
 
             if not ticker:
 
-                log.info(f"[PG] {pair['display']}: no Polygon ticker mapping")
+                log.info(f”[PG] {pair['display']}: no Polygon ticker mapping”)
 
-                return {"error": True, "symbol": symbol, "detail": "no Polygon ticker mapping"}
+                return {“error”: True, “symbol”: symbol, “detail”: “no Polygon ticker mapping”}
 
-            mult, span = {"D1": (1, "day"), "H4": (4, "hour"), "H1": (1, "hour")}.get(tf, (1, "day"))
+            mult, span = {“D1”: (1, “day”), “H4”: (4, “hour”), “H1”: (1, “hour”)}.get(tf, (1, “day”))
 
             end = datetime.now(timezone.utc)
 
             start = end - timedelta(days=730)
 
-            url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{mult}/{span}/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
+            url = f”https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{mult}/{span}/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}”
 
-            r = http_requests.get(url, params={"apiKey": key, "limit": 50000, "sort": "asc"}, timeout=20)
+            r = http_requests.get(url, params={“apiKey”: key, “limit”: 50000, “sort”: “asc”}, timeout=20)
 
             if r.status_code == 403:
 
-                log.warning(f"[PG] {ticker}: 403 Forbidden â€” check API key or plan")
+                log.warning(f”[PG] {ticker}: 403 Forbidden — check API key or plan”)
 
-                return {"error": True, "symbol": symbol, "detail": "403 Forbidden - check API key or plan"}
+                return {“error”: True, “symbol”: symbol, “detail”: “403 Forbidden - check API key or plan”}
+
+            if r.status_code == 429:
+
+                log.warning(f”[PG] {ticker}: 429 rate limited — throttle will apply before next request”)
+
+                return {“error”: True, “symbol”: symbol, “detail”: “HTTP 429 rate limited”}
 
             if r.status_code != 200:
 
-                log.warning(f"[PG] {ticker} HTTP {r.status_code}: {r.text[:120]}")
+                log.warning(f”[PG] {ticker} HTTP {r.status_code}: {r.text[:120]}”)
 
-                return {"error": True, "symbol": symbol, "detail": f"HTTP {r.status_code}"}
+                return {“error”: True, “symbol”: symbol, “detail”: f”HTTP {r.status_code}”}
 
             data = r.json()
 
-            results = data.get("results", [])
+            results = data.get(“results”, [])
 
             if not results:
 
-                log.warning(f"[PG] {ticker}: no results")
+                log.warning(f”[PG] {ticker}: no results”)
 
-                return {"error": True, "symbol": symbol, "detail": "no results"}
+                return {“error”: True, “symbol”: symbol, “detail”: “no results”}
 
-            candles = [{"time": datetime.fromtimestamp(bar["t"] / 1000, tz=timezone.utc).isoformat(),
+            candles = [{“time”: datetime.fromtimestamp(bar[“t”] / 1000, tz=timezone.utc).isoformat(),
 
-                         "open": float(bar["o"]), "high": float(bar["h"]), "low": float(bar["l"]),
+                         “open”: float(bar[“o”]), “high”: float(bar[“h”]), “low”: float(bar[“l”]),
 
-                         "close": float(bar["c"]), "vol": float(bar.get("v", 0))}
+                         “close”: float(bar[“c”]), “vol”: float(bar.get(“v”, 0))}
 
                         for bar in results]
 
-            time.sleep(12)
-
             final_candles = candles[-limit:] if len(candles) > limit else candles
 
-            return {"error": False, "symbol": symbol, "detail": "", "candles": final_candles}
+            return {“error”: False, “symbol”: symbol, “detail”: “”, “candles”: final_candles}
 
         except Exception as e:
 
-            log.error(f"[PG] {pair['display']}: {e}")
+            log.error(f”[PG] {pair['display']}: {e}”)
 
-            return {"error": True, "symbol": symbol, "detail": str(e)}
+            return {“error”: True, “symbol”: symbol, “detail”: str(e)}
 
 
 

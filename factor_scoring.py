@@ -15,11 +15,39 @@ Blueprint compliance:
 """
 import math
 import logging
+import threading
 from typing import List, Dict, Optional
 from config import CONFIG
 from regime import detect_regime
 
 log = logging.getLogger("athena")
+
+# ── Regime smoothing state ────────────────────────────────────────────────────
+# Tracks the last N raw regime labels per pair to prevent whipsawing.
+# Only updates the committed regime once N consecutive bars agree on the new label.
+_regime_history: Dict[str, list] = {}    # pair_display -> rolling list of raw regime labels
+_regime_committed: Dict[str, str] = {}  # pair_display -> currently committed (smoothed) regime
+_regime_lock = threading.Lock()
+
+
+def _get_smoothed_regime(pair_id: str, raw_regime: str) -> str:
+    """Return smoothed regime: only switch if new regime holds for REGIME_SMOOTHING_BARS bars."""
+    min_bars = CONFIG.get("REGIME_SMOOTHING_BARS", 3)
+    with _regime_lock:
+        hist = _regime_history.setdefault(pair_id, [])
+        committed = _regime_committed.get(pair_id)
+        hist.append(raw_regime)
+        # Keep only the last min_bars entries
+        if len(hist) > min_bars:
+            hist[:] = hist[-min_bars:]
+        # Bootstrap: first observation commits immediately
+        if committed is None:
+            _regime_committed[pair_id] = raw_regime
+            return raw_regime
+        # Switch only when all of the last min_bars bars agree on the new regime
+        if len(hist) >= min_bars and len(set(hist[-min_bars:])) == 1:
+            _regime_committed[pair_id] = hist[-1]
+        return _regime_committed[pair_id]
 
 
 # ── Correlation filter ───────────────────────────────────────────────────────
@@ -367,7 +395,10 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
 
     # ── Regime detection ─────────────────────────────────────────────────
     _bbw_pct = h4_snap.get("bbWidth_pct") or h4_snap.get("bb_width_pct")
-    regime = detect_regime(h4_snap, asset_type, bb_width_pct=_bbw_pct).get("regime", "UNKNOWN")
+    _raw_regime = detect_regime(h4_snap, asset_type, bb_width_pct=_bbw_pct).get("regime", "UNKNOWN")
+    # Apply smoothing: require REGIME_SMOOTHING_BARS consecutive bars before accepting regime switch
+    _pair_id = pair.get("display", pair.get("symbol", "unknown"))
+    regime = _get_smoothed_regime(_pair_id, _raw_regime)
     regime_weights = CONFIG.get("REGIME_WEIGHTS", {}).get(regime.upper(), {})
     base_weights = CONFIG.get("FACTOR_WEIGHTS", {}).get(asset_type, {})
 
@@ -421,8 +452,17 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
         for f, s in active_nondir.items():
             nondir_score += (weights.get(f, 1.0) / nondir_w_sum) * s
 
-    # Combine: directional strength + quality boost (0.6 dir + 0.4 nondir)
-    final_score = abs(dir_score) * 0.6 + nondir_score * 0.4
+    # Multiplicative combination: quality amplifies direction, cannot substitute for it.
+    # nondir_score normalized to [0,1] (max theoretical is 3.0) then scales the dir contribution
+    # from 0.6 (no quality) up to 1.0 (perfect quality), preserving 0–3.0 output range.
+    # A minimum directional conviction gate prevents near-directionless setups from passing.
+    _min_dir = CONFIG.get("FACTOR_MIN_DIRECTIONAL", 0.0)
+    if abs(dir_score) < _min_dir:
+        # Signal is directionless — score too low to qualify regardless of quality
+        final_score = 0.0
+    else:
+        _nondir_norm = min(nondir_score / 3.0, 1.0)  # normalize quality to [0, 1]
+        final_score = abs(dir_score) * (0.6 + _nondir_norm * 0.4)
 
     return {
         "final_score": final_score,
