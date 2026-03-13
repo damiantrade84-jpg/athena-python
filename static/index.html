@@ -1134,7 +1134,7 @@ function renderStats(data) {
   var tradeSignals=data.tradeSignals||data.signals||[];
   var watchlistSignals=data.watchlist||[];
   var displaySignals=tradeSignals.concat(watchlistSignals);
-  document.getElementById('statScanned').textContent=displaySignals.length+'/'+(data.totalPairs||'?');
+  document.getElementById('statScanned').textContent=(data.activePairs!=null?data.activePairs:displaySignals.length)+'/'+(data.totalPairs||'?');
   document.getElementById('statTotal').textContent=displaySignals.length;
   document.getElementById('statHigh').textContent=tradeSignals.length;
   document.getElementById('statLong').textContent=displaySignals.filter(function(s){return s.direction==='LONG';}).length;
