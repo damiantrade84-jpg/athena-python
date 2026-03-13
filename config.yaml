@@ -196,11 +196,11 @@ REGIME_WEIGHTS:
 
 # Normalization
 NORMALIZATION_LOOKBACK:
-  crypto: 200
-  forex: 200
+  crypto:    300
+  forex:     400
   commodity: 300
-  stock: 200
-  index: 200
+  stock:     350
+  index:     350
 
 # Realized volatility
 REALIZED_VOL_LOOKBACK: 30
