@@ -1014,9 +1014,10 @@ def calc_indicators_with_normalized(candles: list, asset_type: str = "crypto") -
 
     vol = calc_realized_volatility(candles, lookback=CONFIG.get("REALIZED_VOL_LOOKBACK", 30), asset_type=asset_type)
 
-    # OBV trend (+1 rising, -1 falling, 0 flat) — convert string result to numeric for factor scoring
+    # OBV trend (+1 rising, -1 falling) — convert string result to numeric for factor scoring
+    # None when no trend detected or no real volume data — excluded from factor scoring (not 0)
     _obv_str = calc_obv_trend(candles)
-    obv_val = {"confirming": 1, "diverging_bullish": 0.5, "diverging_bearish": -0.5}.get(_obv_str or "", 0)
+    obv_val = {"confirming": 1, "diverging_bullish": 0.5, "diverging_bearish": -0.5}.get(_obv_str) if _obv_str else None
 
     # BB width percentile for regime detection
 
