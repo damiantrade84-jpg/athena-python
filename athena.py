@@ -15,6 +15,7 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(line_buffering=True)
 
 import os, sys, json, math, time, threading, webbrowser, logging, sqlite3, signal as _signal
+import telegram_notify
 
 from datetime import datetime, timezone, timedelta
 
@@ -2106,6 +2107,12 @@ def fetch_polygon(pair, tf, limit):
 
                 log.warning(f"[PG] {ticker}: 429 rate limited — throttle will apply before next request")
 
+                # Send Telegram notification for Polygon rate limit
+                try:
+                    telegram_notify.notify_polygon_rate_limit()
+                except Exception as _tn_e:
+                    log.debug(f"[TELEGRAM] Polygon rate limit notification failed: {_tn_e}")
+
                 return {"error": True, "symbol": symbol, "detail": "HTTP 429 rate limited"}
 
             if r.status_code != 200:
@@ -2577,6 +2584,25 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
                     scan_funnel["dead_ranging"] += 1
 
                 if tier == "trade":
+
+                    # Send Telegram notification for signal crossing MIN_CONFLUENCE_CLASS
+                    try:
+                        # Extract factor information for notification
+                        factors = sig.get("factorScores", {})
+                        top_factors = sorted(factors.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
+                        top_factor_names = [name for name, score in top_factors]
+                        
+                        telegram_notify.notify_signal_fired(
+                            pair=pair['display'],
+                            direction=sig['direction'],
+                            score=sig.get('confluenceScore', 0),
+                            dir_score=sig.get('directionalScore', 0),
+                            nondir_score=sig.get('nonDirectionalScore', 0),
+                            top_factors=top_factor_names,
+                            regime=sig.get('trendState', 'UNKNOWN')
+                        )
+                    except Exception as _e:
+                        log.debug(f"[TELEGRAM] Signal notification failed: {_e}")
 
                     try:
 

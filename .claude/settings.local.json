@@ -42,7 +42,9 @@
       "Bash(git commit:*)",
       "Bash(git push:*)",
       "Bash(git pull:*)",
-      "Bash(git fetch:*)"
+      "Bash(git fetch:*)",
+      "Bash(gh pr:*)",
+      "Bash(winget install:*)"
     ]
   }
 }

@@ -8,6 +8,7 @@ All orders must arrive as a pre-validated RiskApproval from risk_engine.py.
 import os
 import logging
 import time
+import telegram_notify
 
 log = logging.getLogger("sentinel")
 
@@ -482,6 +483,18 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:
         filled_amount = float(order.get("filled") or volume)
 
         log.info(f"[BYBIT] ENTRY FILLED: id={order_id} | {direction} {filled_amount} {ccxt_symbol} @ {filled_price}")
+
+        # Send Telegram notification for trade opened
+        try:
+            telegram_notify.notify_trade_opened(
+                pair=pair,
+                direction=direction,
+                entry_price=filled_price,
+                stop_loss=sl,
+                take_profit=tp1
+            )
+        except Exception as _tn_e:
+            log.debug(f"[TELEGRAM] Trade open notification failed: {_tn_e}")
 
         fill_level_error = _validate_exit_levels(direction, filled_price, float(sl or 0), float(tp1 or 0))
         if fill_level_error:

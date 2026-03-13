@@ -9,6 +9,7 @@ import logging
 import time
 from typing import Dict, List, Tuple, Optional
 import websockets
+import telegram_notify
 
 log = logging.getLogger("sentinel")
 from athena.microstructure.microstructure_store import store_metrics
@@ -78,6 +79,11 @@ class BybitWS:
                     break
         except Exception as e:
             log.error(f"[BybitWS] Connection error: {e}")
+            # Send Telegram notification for WebSocket disconnect
+            try:
+                telegram_notify.notify_bybit_ws_disconnect()
+            except Exception as _tn_e:
+                log.debug(f"[TELEGRAM] WS disconnect notification failed: {_tn_e}")
         finally:
             if self._ws:
                 await self._ws.close()
