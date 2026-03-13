@@ -239,7 +239,7 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
         # (deviation > 0.05 indicates an external source like Dukascopy supplied real data,
         #  vs the 1.0 fallback returned when no data is available)
         _has_candle_vol = any(c.get("vol", 0) > 0 for c in (h4_candles[-5:] if h4_candles else []))
-        _has_external_vol = abs(volume_ratio - 1.0) > 0.05
+        _has_external_vol = asset_type == "forex" and volume_ratio != 1.0
         if _has_candle_vol or _has_external_vol:
             # Center around 1.0 (average), scale: 2x average → +3.0
             indicators["volume_ratio"] = max(-3.0, min(3.0, (volume_ratio - 1.0) * 3.0))
