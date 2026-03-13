@@ -8,6 +8,7 @@ All orders must arrive as a pre-validated RiskApproval from risk_engine.py.
 import os
 import logging
 import time
+import telegram_notify
 
 log = logging.getLogger("sentinel")
 
@@ -196,39 +197,54 @@ def bybit_connect() -> bool:
         return False
 
 
+def _resync_time_if_needed(exchange, e: Exception) -> bool:
+    """Re-sync clock on retCode 10002 (timestamp drift). Returns True if re-synced."""
+    if "10002" in str(e):
+        try:
+            exchange.load_time_difference()
+            log.info("[BYBIT] Clock re-synced after 10002 timestamp error")
+            return True
+        except Exception as sync_err:
+            log.warning(f"[BYBIT] Clock re-sync failed: {sync_err}")
+    return False
+
+
 def bybit_get_account() -> dict:
     """Get Bybit futures wallet balance (USDT).
     Returns dict with standardized error format."""
     exchange = _get_exchange()
     if not exchange:
         return {"error": True, "symbol": "Bybit", "detail": "Bybit not connected"}
-    try:
-        balance = exchange.fetch_balance(params={"type": "linear"})
-        usdt = balance.get("USDT", {})
-        total = usdt.get("total", 0) or 0
-        free  = usdt.get("free",  0) or 0
-        # Include unrealized PnL so drawdown circuit breaker sees real equity
+    for attempt in range(2):
         try:
-            positions = exchange.fetch_positions(
-                params={"category": "linear", "settleCoin": "USDT"})
-            unrealized = sum(
-                float(p.get("unrealizedPnl", 0) or 0) for p in (positions or []))
-        except Exception:
-            unrealized = 0.0
-        return {
-            "error": False,
-            "symbol": "Bybit",
-            "detail": "",
-            "exchange": "Bybit",
-            "testnet": os.environ.get("BYBIT_TESTNET", "false").lower() in ("true", "1", "yes"),
-            "balance": total,
-            "equity": total + unrealized,   # ← real equity including open P&L
-            "freeBalance": free,
-            "currency": "USDT",
-        }
-    except Exception as e:
-        log.error(f"[BYBIT] Failed to fetch balance: {e}")
-        return {"error": True, "symbol": "Bybit", "detail": str(e)}
+            balance = exchange.fetch_balance(params={"type": "linear"})
+            usdt = balance.get("USDT", {})
+            total = usdt.get("total", 0) or 0
+            free  = usdt.get("free",  0) or 0
+            # Include unrealized PnL so drawdown circuit breaker sees real equity
+            try:
+                positions = exchange.fetch_positions(
+                    params={"category": "linear", "settleCoin": "USDT"})
+                unrealized = sum(
+                    float(p.get("unrealizedPnl", 0) or 0) for p in (positions or []))
+            except Exception:
+                unrealized = 0.0
+            return {
+                "error": False,
+                "symbol": "Bybit",
+                "detail": "",
+                "exchange": "Bybit",
+                "testnet": os.environ.get("BYBIT_TESTNET", "false").lower() in ("true", "1", "yes"),
+                "balance": total,
+                "equity": total + unrealized,   # ← real equity including open P&L
+                "freeBalance": free,
+                "currency": "USDT",
+            }
+        except Exception as e:
+            if attempt == 0 and _resync_time_if_needed(exchange, e):
+                continue
+            log.error(f"[BYBIT] Failed to fetch balance: {e}")
+            return {"error": True, "symbol": "Bybit", "detail": str(e)}
 
 
 def bybit_get_positions() -> dict:
@@ -237,57 +253,60 @@ def bybit_get_positions() -> dict:
     exchange = _get_exchange()
     if not exchange:
         return {"error": True, "symbol": "Bybit", "detail": "Bybit not connected", "positions": []}
-    try:
-        raw = exchange.fetch_positions(params={"category": "linear", "settleCoin": "USDT"})
-        positions = []
-        for pos in raw:
-            size = abs(float(pos.get("contracts", 0) or 0))
-            if size <= 0:
+    for attempt in range(2):
+        try:
+            raw = exchange.fetch_positions(params={"category": "linear", "settleCoin": "USDT"})
+            positions = []
+            for pos in raw:
+                size = abs(float(pos.get("contracts", 0) or 0))
+                if size <= 0:
+                    continue
+                entry  = float(pos.get("entryPrice", 0) or 0)
+                notional = size * entry
+                info = pos.get("info", {})
+                sl_val = float(info.get("stopLoss", 0) or 0)
+                tp_val = float(info.get("takeProfit", 0) or 0)
+                liq_price = float(info.get("liqPrice", 0) or 0)
+                if sl_val > 0 and entry > 0:
+                    est_risk = round(abs(entry - sl_val) / entry * notional, 2)
+                else:
+                    est_risk = round(notional * 0.02, 2)  # fallback: 2% when no SL is set
+                symbol_raw = pos.get("symbol", "")
+                # Convert BTC/USDT:USDT back to display format BTC/USDT
+                display = symbol_raw.split(":")[0] if ":" in symbol_raw else symbol_raw
+                # markPrice: ccxt stores as "markPrice" in info or top-level
+                mark_price = float(pos.get("markPrice") or info.get("markPrice") or 0)
+                side = pos.get("side", "")
+                direction = "LONG" if side.lower() == "long" else "SHORT"
+                upnl = float(pos.get("unrealizedPnl", 0) or 0)
+                positions.append({
+                    # Normalised fields (match MT5 position card schema)
+                    "pair":      display,
+                    "direction": direction,
+                    "entry":     entry,
+                    "volume":    size,
+                    "profit":    round(upnl, 2),
+                    "sl":        sl_val,
+                    "tp":        tp_val,
+                    "ticket":    info.get("positionIdx", ""),
+                    # Bybit-specific extras
+                    "symbol":        symbol_raw,
+                    "contracts":     size,
+                    "side":          side,
+                    "entryPrice":    entry,
+                    "markPrice":     mark_price,
+                    "lastPrice":     mark_price,
+                    "unrealizedPnl": upnl,
+                    "notional":      round(notional, 2),
+                    "risk_amount":   est_risk,
+                    "liqPrice":      liq_price,
+                })
+            return {"error": False, "symbol": "Bybit", "detail": "", "positions": positions}
+        except Exception as e:
+            if attempt == 0 and _resync_time_if_needed(exchange, e):
                 continue
-            entry  = float(pos.get("entryPrice", 0) or 0)
-            notional = size * entry
-            info = pos.get("info", {})
-            sl_val = float(info.get("stopLoss", 0) or 0)
-            tp_val = float(info.get("takeProfit", 0) or 0)
-            liq_price = float(info.get("liqPrice", 0) or 0)
-            if sl_val > 0 and entry > 0:
-                est_risk = round(abs(entry - sl_val) / entry * notional, 2)
-            else:
-                est_risk = round(notional * 0.02, 2)  # fallback: 2% when no SL is set
-            symbol_raw = pos.get("symbol", "")
-            # Convert BTC/USDT:USDT back to display format BTC/USDT
-            display = symbol_raw.split(":")[0] if ":" in symbol_raw else symbol_raw
-            # markPrice: ccxt stores as "markPrice" in info or top-level
-            mark_price = float(pos.get("markPrice") or info.get("markPrice") or 0)
-            side = pos.get("side", "")
-            direction = "LONG" if side.lower() == "long" else "SHORT"
-            upnl = float(pos.get("unrealizedPnl", 0) or 0)
-            positions.append({
-                # Normalised fields (match MT5 position card schema)
-                "pair":      display,
-                "direction": direction,
-                "entry":     entry,
-                "volume":    size,
-                "profit":    round(upnl, 2),
-                "sl":        sl_val,
-                "tp":        tp_val,
-                "ticket":    info.get("positionIdx", ""),
-                # Bybit-specific extras
-                "symbol":        symbol_raw,
-                "contracts":     size,
-                "side":          side,
-                "entryPrice":    entry,
-                "markPrice":     mark_price,
-                "lastPrice":     mark_price,
-                "unrealizedPnl": upnl,
-                "notional":      round(notional, 2),
-                "risk_amount":   est_risk,
-                "liqPrice":      liq_price,
-            })
-        return {"error": False, "symbol": "Bybit", "detail": "", "positions": positions}
-    except Exception as e:
-        log.error(f"[BYBIT] Failed to fetch positions: {e}")
-        return {"error": True, "symbol": "Bybit", "detail": str(e), "positions": []}
+            log.error(f"[BYBIT] Failed to fetch positions: {e}")
+            return {"error": True, "symbol": "Bybit", "detail": str(e), "positions": []}
 
 
 def bybit_close_position(pair: str, direction: str, volume: float) -> dict:
@@ -464,6 +483,18 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:
         filled_amount = float(order.get("filled") or volume)
 
         log.info(f"[BYBIT] ENTRY FILLED: id={order_id} | {direction} {filled_amount} {ccxt_symbol} @ {filled_price}")
+
+        # Send Telegram notification for trade opened
+        try:
+            telegram_notify.notify_trade_opened(
+                pair=pair,
+                direction=direction,
+                entry_price=filled_price,
+                stop_loss=sl,
+                take_profit=tp1
+            )
+        except Exception as _tn_e:
+            log.debug(f"[TELEGRAM] Trade open notification failed: {_tn_e}")
 
         fill_level_error = _validate_exit_levels(direction, filled_price, float(sl or 0), float(tp1 or 0))
         if fill_level_error:

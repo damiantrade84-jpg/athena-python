@@ -61,9 +61,20 @@ _FRED_CURRENCY_SERIES: dict[str, str] = {
     "GBP": "BOERUKM",   # Bank of England base rate (monthly)
 }
 
-# 10Y US Treasury yield — for index/gold risk signal
-_FRED_10Y_SERIES = "DGS10"   # 10-Year Treasury Constant Maturity Rate
-_STATIC_10Y = 4.20           # Fallback when FRED is unreachable (~current 10Y yield, update manually)
+# 10Y government bond yields — for index/commodity risk signals
+_FRED_10Y_SERIES    = "DGS10"    # US 10-Year Treasury Constant Maturity Rate
+_FRED_10Y_SERIES_GB = "IRLTLT01GBM156N"  # UK 10-Year Gilt yield (monthly)
+_FRED_10Y_SERIES_DE = "IRLTLT01DEM156N"  # Germany 10-Year Bund yield (monthly)
+_FRED_10Y_SERIES_AU = "IRLTLT01AUM156N"  # Australia 10-Year yield (monthly)
+_FRED_10Y_SERIES_JP = "IRLTLT01JPM156N"  # Japan 10-Year JGB yield (monthly)
+_FRED_10Y_SERIES_EZ = "IRLTLT01EZM156N"  # Euro Area 10-Year yield (monthly)
+
+_STATIC_10Y     = 4.20   # US  — fallback when FRED is unreachable
+_STATIC_10Y_GB  = 4.50   # UK
+_STATIC_10Y_DE  = 2.50   # Germany
+_STATIC_10Y_AU  = 4.40   # Australia
+_STATIC_10Y_JP  = 1.50   # Japan
+_STATIC_10Y_EZ  = 2.80   # Euro Area
 
 # ── Hardcoded policy rates for currencies without reliable FRED coverage ──────
 # Update these when central banks change rates (meetings ~6-8x per year).
@@ -119,11 +130,11 @@ _PAIR_CARRY_FORMULA: dict[str, list[tuple[float, str]]] = {
     "Nasdaq":      [(-1.0, "_10Y")],
     "QQQ":         [(-1.0, "_10Y")],
     "Dow Jones":   [(-1.0, "_10Y")],
-    "UK100":       [(-1.0, "_10Y")],
-    "DAX 40":      [(-1.0, "_10Y")],
-    "ASX 200":     [(-1.0, "_10Y")],
-    "Nikkei 225":  [(-1.0, "_10Y")],
-    "Euro Stoxx 50": [(-1.0, "_10Y")],
+    "UK100":         [(-1.0, "_10Y_GB")],
+    "DAX 40":        [(-1.0, "_10Y_DE")],
+    "ASX 200":       [(-1.0, "_10Y_AU")],
+    "Nikkei 225":    [(-1.0, "_10Y_JP")],
+    "Euro Stoxx 50": [(-1.0, "_10Y_EZ")],
     "Hang Seng":   [(-1.0, "_10Y")],
     # ── Commodities ────────────────────────────────────────────────────────
     "XAU/USD":     [(-1.0, "_10Y")],  # gold is inversely correlated with real yields
@@ -309,8 +320,18 @@ def _carry_zscore(carry: float, history: list[float]) -> Optional[float]:
 _rate_cache: dict[str, tuple[float, float]] = {}  # series_id → (rate, fetched_at)
 
 
+_10Y_SERIES_MAP: dict[str, tuple[str, float]] = {
+    "_10Y":    (_FRED_10Y_SERIES,    _STATIC_10Y),
+    "_10Y_GB": (_FRED_10Y_SERIES_GB, _STATIC_10Y_GB),
+    "_10Y_DE": (_FRED_10Y_SERIES_DE, _STATIC_10Y_DE),
+    "_10Y_AU": (_FRED_10Y_SERIES_AU, _STATIC_10Y_AU),
+    "_10Y_JP": (_FRED_10Y_SERIES_JP, _STATIC_10Y_JP),
+    "_10Y_EZ": (_FRED_10Y_SERIES_EZ, _STATIC_10Y_EZ),
+}
+
+
 def _get_rate_for_key(key: str) -> Optional[float]:
-    """Get latest rate for a currency key or special key like _10Y.
+    """Get latest rate for a currency key or special key like _10Y / _10Y_GB etc.
 
     Priority:
       1. FRED (live data) if a series is configured for this key
@@ -318,8 +339,8 @@ def _get_rate_for_key(key: str) -> Optional[float]:
     """
     now = time.time()
 
-    if key == "_10Y":
-        series_id = _FRED_10Y_SERIES
+    if key in _10Y_SERIES_MAP:
+        series_id, static_fallback = _10Y_SERIES_MAP[key]
         cached = _rate_cache.get(series_id)
         if cached and now - cached[1] < 3600:
             return cached[0]
@@ -327,7 +348,7 @@ def _get_rate_for_key(key: str) -> Optional[float]:
         if rate is not None:
             _rate_cache[series_id] = (rate, now)
             return rate
-        return _STATIC_10Y  # fallback: hardcoded 10Y yield
+        return static_fallback
 
     # FRED-backed currency
     series_id = _FRED_CURRENCY_SERIES.get(key)
@@ -353,11 +374,12 @@ def _get_rate_series_for_key(key: str, months: int = 36) -> list[float]:
     (correct for z-score when rate has been stable; slightly inaccurate
     during easing/hiking cycles, but acceptable for a weekly signal).
     """
-    if key == "_10Y":
-        s = _get_rate_series(_FRED_10Y_SERIES, months)
+    if key in _10Y_SERIES_MAP:
+        series_id, static_fallback = _10Y_SERIES_MAP[key]
+        s = _get_rate_series(series_id, months)
         if len(s) >= 4:
             return s
-        return [_STATIC_10Y] * months  # flat fallback
+        return [static_fallback] * months  # flat fallback
 
     series_id = _FRED_CURRENCY_SERIES.get(key)
     if series_id:

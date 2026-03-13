@@ -38,7 +38,13 @@
       "Bash(curl -s -X POST http://localhost:5000/api/backtest -H \"Content-Type: application/json\" -d '{\"pair\":\"EURUSD=X\",\"style\":\"auto\"}' 2>&1 | head -100)",
       "Bash(curl -s -X POST http://localhost:5000/api/backtest -H \"Content-Type: application/json\" -d '{\"pair\":\"EURUSD=X\",\"style\":\"auto\"}' 2>&1 | python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d,indent=2\\)\\)\" 2>&1 || curl -s -X POST http://localhost:5000/api/backtest -H \"Content-Type: application/json\" -d '{\"pair\":\"EURUSD=X\",\"style\":\"auto\"}' 2>&1 | head -200)",
       "Bash(ls -la /c/Users/damia/OneDrive/Desktop/athena-python/*.py | grep -i factor)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "Bash(git fetch:*)",
+      "Bash(gh pr:*)",
+      "Bash(winget install:*)"
     ]
   }
 }
