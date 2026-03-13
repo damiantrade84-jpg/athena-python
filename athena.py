@@ -60,7 +60,7 @@ log = logging.getLogger("sentinel")
 
 
 
-# â”€â”€ Binance Funding Rate Cache (Task 3) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â"€â"€ Binance Funding Rate Cache (Task 3) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 _funding_rate_cache: dict = {}  # symbol -> (rate: float, fetched_at: float)
 
@@ -108,7 +108,7 @@ def _fetch_funding_rate(binance_symbol: str) -> dict:
 
 
 
-# â”€â”€ Open Interest Cache (crypto) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â"€â"€ Open Interest Cache (crypto) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 _oi_cache: dict = {}  # symbol -> {"oi": float, "price": float, "ts": float}
 
@@ -220,7 +220,7 @@ def _calc_oi_divergence(oi_data: dict | None, current_price: float,
 
 
 
-# â”€â”€ EODHD WebSocket Real-Time Price Manager â”€â”€
+# â"€â"€ EODHD WebSocket Real-Time Price Manager â"€â"€
 
 import asyncio
 
@@ -1092,79 +1092,79 @@ from config import CONFIG
 
 FOREX_PAIRS = [
 
-    {“symbol”:”EURUSD=X”,”type”:”forex”,”display”:”EUR/USD”,”source”:”eodhd”,”enabled”:True},   # SQN +0.16 — enabled; score gate filters low-conviction setups
+    {"symbol":"EURUSD=X","type":"forex","display":"EUR/USD","source":"eodhd","enabled":True},   # SQN +0.16 — enabled; score gate filters low-conviction setups
 
-    {“symbol”:”GBPUSD=X”,”type”:”forex”,”display”:”GBP/USD”,”source”:”eodhd”,”enabled”:True},   # SQN -0.53 — enabled; formula fix targets inflated non-directional scores
+    {"symbol":"GBPUSD=X","type":"forex","display":"GBP/USD","source":"eodhd","enabled":True},   # SQN -0.53 — enabled; formula fix targets inflated non-directional scores
 
-    {“symbol”:”USDJPY=X”,”type”:”forex”,”display”:”USD/JPY”,”source”:”eodhd”,”enabled”:True},   # SQN -2.33 — enabled; re-evaluate post-formula fix
+    {"symbol":"USDJPY=X","type":"forex","display":"USD/JPY","source":"eodhd","enabled":True},   # SQN -2.33 — enabled; re-evaluate post-formula fix
 
-    {“symbol”:”AUDUSD=X”,”type”:”forex”,”display”:”AUD/USD”,”source”:”eodhd”,”enabled”:True},   # SQN +0.46
+    {"symbol":"AUDUSD=X","type":"forex","display":"AUD/USD","source":"eodhd","enabled":True},   # SQN +0.46
 
-    {“symbol”:”NZDUSD=X”,”type”:”forex”,”display”:”NZD/USD”,”source”:”eodhd”,”enabled”:True},   # SQN 0.00 — enabled; zero trades was data gap not signal failure
+    {"symbol":"NZDUSD=X","type":"forex","display":"NZD/USD","source":"eodhd","enabled":True},   # SQN 0.00 — enabled; zero trades was data gap not signal failure
 
-    {“symbol”:”EURGBP=X”,”type”:”forex”,”display”:”EUR/GBP”,”source”:”eodhd”,”enabled”:True},   # SQN +0.65
+    {"symbol":"EURGBP=X","type":"forex","display":"EUR/GBP","source":"eodhd","enabled":True},   # SQN +0.65
 
-    {“symbol”:”USDCAD=X”,”type”:”forex”,”display”:”USD/CAD”,”source”:”eodhd”,”enabled”:True},   # SQN +0.27
+    {"symbol":"USDCAD=X","type":"forex","display":"USD/CAD","source":"eodhd","enabled":True},   # SQN +0.27
 
-    {“symbol”:”USDCHF=X”,”type”:”forex”,”display”:”USD/CHF”,”source”:”eodhd”,”enabled”:True},   # v3.1 SQN +0.61, OOS +1.22 ✓
+    {"symbol":"USDCHF=X","type":"forex","display":"USD/CHF","source":"eodhd","enabled":True},   # v3.1 SQN +0.61, OOS +1.22 ✓
 
-    {“symbol”:”EURJPY=X”,”type”:”forex”,”display”:”EUR/JPY”,”source”:”eodhd”,”enabled”:True},   # SQN +1.06
+    {"symbol":"EURJPY=X","type":"forex","display":"EUR/JPY","source":"eodhd","enabled":True},   # SQN +1.06
 
-    {“symbol”:”GBPJPY=X”,”type”:”forex”,”display”:”GBP/JPY”,”source”:”eodhd”,”enabled”:True},   # SQN -0.72
+    {"symbol":"GBPJPY=X","type":"forex","display":"GBP/JPY","source":"eodhd","enabled":True},   # SQN -0.72
 
-    {“symbol”:”AUDJPY=X”,”type”:”forex”,”display”:”AUD/JPY”,”source”:”eodhd”,”enabled”:True},   # SQN +0.22
+    {"symbol":"AUDJPY=X","type":"forex","display":"AUD/JPY","source":"eodhd","enabled":True},   # SQN +0.22
 
-    {“symbol”:”EURAUD=X”,”type”:”forex”,”display”:”EUR/AUD”,”source”:”eodhd”,”enabled”:True},   # SQN -1.43 (old look-ahead bias) — re-evaluate post-formula fix
+    {"symbol":"EURAUD=X","type":"forex","display":"EUR/AUD","source":"eodhd","enabled":True},   # SQN -1.43 (old look-ahead bias) — re-evaluate post-formula fix
 
-    {“symbol”:”GBPAUD=X”,”type”:”forex”,”display”:”GBP/AUD”,”source”:”eodhd”,”enabled”:True},   # SQN +0.91
+    {"symbol":"GBPAUD=X","type":"forex","display":"GBP/AUD","source":"eodhd","enabled":True},   # SQN +0.91
 
-    {“symbol”:”USDZAR=X”,”type”:”forex”,”display”:”USD/ZAR”,”source”:”eodhd”,”enabled”:True},   # SQN -0.32
+    {"symbol":"USDZAR=X","type":"forex","display":"USD/ZAR","source":"eodhd","enabled":True},   # SQN -0.32
 
-    {“symbol”:”EURCHF=X”,”type”:”forex”,”display”:”EUR/CHF”,”source”:”eodhd”,”enabled”:True},   # SQN -0.83
+    {"symbol":"EURCHF=X","type":"forex","display":"EUR/CHF","source":"eodhd","enabled":True},   # SQN -0.83
 
-    {“symbol”:”USDMXN=X”,”type”:”forex”,”display”:”USD/MXN”,”source”:”eodhd”,”enabled”:True},   # SQN +0.85, OOS +0.60 ✓
+    {"symbol":"USDMXN=X","type":"forex","display":"USD/MXN","source":"eodhd","enabled":True},   # SQN +0.85, OOS +0.60 ✓
 
-    {“symbol”:”USDSGD=X”,”type”:”forex”,”display”:”USD/SGD”,”source”:”eodhd”,”enabled”:True},   # SQN +0.43
+    {"symbol":"USDSGD=X","type":"forex","display":"USD/SGD","source":"eodhd","enabled":True},   # SQN +0.43
 
 ]
 
 COMMODITY_PAIRS = [
 
-    {“symbol”:”GC=F”,”type”:”commodity”,”display”:”XAU/USD”,”source”:”eodhd”,”enabled”:True},     # SQN +3.53 ✓
+    {"symbol":"GC=F","type":"commodity","display":"XAU/USD","source":"eodhd","enabled":True},     # SQN +3.53 ✓
 
-    {“symbol”:”SI=F”,”type”:”commodity”,”display”:”XAG/USD”,”source”:”eodhd”,”enabled”:True},     # SQN +3.08 ✓
+    {"symbol":"SI=F","type":"commodity","display":"XAG/USD","source":"eodhd","enabled":True},     # SQN +3.08 ✓
 
-    {“symbol”:”CL=F”,”type”:”commodity”,”display”:”WTI Oil”,”source”:”eodhd”,”enabled”:True},     # SQN -1.36 — enabled; score gate filters
+    {"symbol":"CL=F","type":"commodity","display":"WTI Oil","source":"eodhd","enabled":True},     # SQN -1.36 — enabled; score gate filters
 
-    {“symbol”:”BZ=F”,”type”:”commodity”,”display”:”Brent Oil”,”source”:”eodhd”,”enabled”:True},   # Pepperstone: SPOTBRENT
+    {"symbol":"BZ=F","type":"commodity","display":"Brent Oil","source":"eodhd","enabled":True},   # Pepperstone: SPOTBRENT
 
-    {“symbol”:”NG.US”,”type”:”commodity”,”display”:”Nat Gas”,”source”:”eodhd”,”enabled”:True},    # EODHD: NG.US; Pepperstone: NATGAS
+    {"symbol":"NG.US","type":"commodity","display":"Nat Gas","source":"eodhd","enabled":True},    # EODHD: NG.US; Pepperstone: NATGAS
 
-    {“symbol”:”PL=F”,”type”:”commodity”,”display”:”XPT/USD”,”source”:”eodhd”,”enabled”:True},     # Pepperstone: XPTUSD
+    {"symbol":"PL=F","type":"commodity","display":"XPT/USD","source":"eodhd","enabled":True},     # Pepperstone: XPTUSD
 
-    {“symbol”:”PA=F”,”type”:”commodity”,”display”:”XPD/USD”,”source”:”eodhd”,”enabled”:True},     # Pepperstone: XPDUSD
+    {"symbol":"PA=F","type":"commodity","display":"XPD/USD","source":"eodhd","enabled":True},     # Pepperstone: XPDUSD
 
-    {“symbol”:”HG=F”,”type”:”commodity”,”display”:”Copper”,”source”:”eodhd”,”enabled”:True},      # Pepperstone: COPPER
+    {"symbol":"HG=F","type":"commodity","display":"Copper","source":"eodhd","enabled":True},      # Pepperstone: COPPER
 
 ]
 
 INDEX_PAIRS = [
 
-    {“symbol”:”^GSPC”,”type”:”index”,”display”:”S&P 500”,”source”:”eodhd”,”enabled”:True},       # SQN +0.09
+    {"symbol":"^GSPC","type":"index","display":"S&P 500","source":"eodhd","enabled":True},       # SQN +0.09
 
-    {“symbol”:”^IXIC”,”type”:”index”,”display”:”Nasdaq”,”source”:”eodhd”,”enabled”:True},         # SQN -0.20
+    {"symbol":"^IXIC","type":"index","display":"Nasdaq","source":"eodhd","enabled":True},         # SQN -0.20
 
-    {“symbol”:”^DJI”,”type”:”index”,”display”:”Dow Jones”,”source”:”eodhd”,”enabled”:True},      # SQN +0.80
+    {"symbol":"^DJI","type":"index","display":"Dow Jones","source":"eodhd","enabled":True},      # SQN +0.80
 
-    {“symbol”:”^GDAXI”,”type”:”index”,”display”:”DAX 40”,”source”:”eodhd”,”enabled”:True},       # Pepperstone: GER40
+    {"symbol":"^GDAXI","type":"index","display":"DAX 40","source":"eodhd","enabled":True},       # Pepperstone: GER40
 
-    {“symbol”:”^FTSE”,”type”:”index”,”display”:”UK100”,”source”:”eodhd”,”enabled”:True},          # Pepperstone: UK100
+    {"symbol":"^FTSE","type":"index","display":"UK100","source":"eodhd","enabled":True},          # Pepperstone: UK100
 
-    {“symbol”:”^AXJO”,”type”:”index”,”display”:”ASX 200”,”source”:”eodhd”,”enabled”:True},        # Pepperstone: AUS200
+    {"symbol":"^AXJO","type":"index","display":"ASX 200","source":"eodhd","enabled":True},        # Pepperstone: AUS200
 
-    {“symbol”:”^N225”,”type”:”index”,”display”:”Nikkei 225”,”source”:”eodhd”,”enabled”:True},     # Pepperstone: JPN225
+    {"symbol":"^N225","type":"index","display":"Nikkei 225","source":"eodhd","enabled":True},     # Pepperstone: JPN225
 
-    {“symbol”:”^HSI”,”type”:”index”,”display”:”Hang Seng”,”source”:”eodhd”,”enabled”:True},       # Pepperstone: HK50
+    {"symbol":"^HSI","type":"index","display":"Hang Seng","source":"eodhd","enabled":True},       # Pepperstone: HK50
 
     {"symbol":"^STOXX50E","type":"index","display":"Euro Stoxx 50","source":"eodhd","enabled":True},  # Pepperstone: EUSTX50
 
@@ -1172,69 +1172,69 @@ INDEX_PAIRS = [
 
 US_STOCK_PAIRS = [
 
-    {“symbol”:”AAPL.US”,”type”:”stock”,”display”:”AAPL”,”source”:”eodhd”,”enabled”:True},         # SQN -0.30 — score gate filters
+    {"symbol":"AAPL.US","type":"stock","display":"AAPL","source":"eodhd","enabled":True},         # SQN -0.30 — score gate filters
 
-    {“symbol”:”TSLA.US”,”type”:”stock”,”display”:”TSLA”,”source”:”eodhd”,”enabled”:True},         # SQN +0.10
+    {"symbol":"TSLA.US","type":"stock","display":"TSLA","source":"eodhd","enabled":True},         # SQN +0.10
 
-    {“symbol”:”NVDA.US”,”type”:”stock”,”display”:”NVDA”,”source”:”eodhd”,”enabled”:True},         # SQN +1.44 ✓
+    {"symbol":"NVDA.US","type":"stock","display":"NVDA","source":"eodhd","enabled":True},         # SQN +1.44 ✓
 
-    {“symbol”:”MSFT.US”,”type”:”stock”,”display”:”MSFT”,”source”:”eodhd”,”enabled”:True},         # SQN +0.49
+    {"symbol":"MSFT.US","type":"stock","display":"MSFT","source":"eodhd","enabled":True},         # SQN +0.49
 
-    {“symbol”:”AMZN.US”,”type”:”stock”,”display”:”AMZN”,”source”:”eodhd”,”enabled”:True},         # SQN +0.27
+    {"symbol":"AMZN.US","type":"stock","display":"AMZN","source":"eodhd","enabled":True},         # SQN +0.27
 
-    {“symbol”:”META.US”,”type”:”stock”,”display”:”META”,”source”:”eodhd”,”enabled”:True},         # SQN -0.29
+    {"symbol":"META.US","type":"stock","display":"META","source":"eodhd","enabled":True},         # SQN -0.29
 
-    {“symbol”:”GOOG.US”,”type”:”stock”,”display”:”GOOG”,”source”:”eodhd”,”enabled”:True},         # SQN +1.61, OOS:+1.01 ✓
+    {"symbol":"GOOG.US","type":"stock","display":"GOOG","source":"eodhd","enabled":True},         # SQN +1.61, OOS:+1.01 ✓
 
-    {“symbol”:”JPM.US”,”type”:”stock”,”display”:”JPM”,”source”:”eodhd”,”enabled”:True},           # SQN +0.26
+    {"symbol":"JPM.US","type":"stock","display":"JPM","source":"eodhd","enabled":True},           # SQN +0.26
 
-    {“symbol”:”V.US”,”type”:”stock”,”display”:”V”,”source”:”eodhd”,”enabled”:True},               # SQN -1.39
+    {"symbol":"V.US","type":"stock","display":"V","source":"eodhd","enabled":True},               # SQN -1.39
 
-    {“symbol”:”XOM.US”,”type”:”stock”,”display”:”XOM”,”source”:”eodhd”,”enabled”:True},           # SQN -0.03
+    {"symbol":"XOM.US","type":"stock","display":"XOM","source":"eodhd","enabled":True},           # SQN -0.03
 
-    {“symbol”:”NFLX.US”,”type”:”stock”,”display”:”NFLX”,”source”:”eodhd”,”enabled”:True},        # Pepperstone CFD
+    {"symbol":"NFLX.US","type":"stock","display":"NFLX","source":"eodhd","enabled":True},        # Pepperstone CFD
 
-    {“symbol”:”AMD.US”,”type”:”stock”,”display”:”AMD”,”source”:”eodhd”,”enabled”:True},           # Pepperstone CFD
+    {"symbol":"AMD.US","type":"stock","display":"AMD","source":"eodhd","enabled":True},           # Pepperstone CFD
 
-    {“symbol”:”CRM.US”,”type”:”stock”,”display”:”CRM”,”source”:”eodhd”,”enabled”:True},           # Pepperstone CFD
+    {"symbol":"CRM.US","type":"stock","display":"CRM","source":"eodhd","enabled":True},           # Pepperstone CFD
 
-    {“symbol”:”DIS.US”,”type”:”stock”,”display”:”DIS”,”source”:”eodhd”,”enabled”:True},           # Pepperstone CFD
+    {"symbol":"DIS.US","type":"stock","display":"DIS","source":"eodhd","enabled":True},           # Pepperstone CFD
 
-    {“symbol”:”BA.US”,”type”:”stock”,”display”:”BA”,”source”:”eodhd”,”enabled”:True},             # Pepperstone CFD
+    {"symbol":"BA.US","type":"stock","display":"BA","source":"eodhd","enabled":True},             # Pepperstone CFD
 
-    {“symbol”:”COIN.US”,”type”:”stock”,”display”:”COIN”,”source”:”eodhd”,”enabled”:True},         # Pepperstone CFD
+    {"symbol":"COIN.US","type":"stock","display":"COIN","source":"eodhd","enabled":True},         # Pepperstone CFD
 
-    {“symbol”:”PYPL.US”,”type”:”stock”,”display”:”PYPL”,”source”:”eodhd”,”enabled”:True},         # Pepperstone CFD
+    {"symbol":"PYPL.US","type":"stock","display":"PYPL","source":"eodhd","enabled":True},         # Pepperstone CFD
 
-    {“symbol”:”INTC.US”,”type”:”stock”,”display”:”INTC”,”source”:”eodhd”,”enabled”:True},         # Pepperstone CFD
+    {"symbol":"INTC.US","type":"stock","display":"INTC","source":"eodhd","enabled":True},         # Pepperstone CFD
 
-    {“symbol”:”UBER.US”,”type”:”stock”,”display”:”UBER”,”source”:”eodhd”,”enabled”:True},         # Pepperstone CFD
+    {"symbol":"UBER.US","type":"stock","display":"UBER","source":"eodhd","enabled":True},         # Pepperstone CFD
 
-    {“symbol”:”PLTR.US”,”type”:”stock”,”display”:”PLTR”,”source”:”eodhd”,”enabled”:True},         # Pepperstone CFD
+    {"symbol":"PLTR.US","type":"stock","display":"PLTR","source":"eodhd","enabled":True},         # Pepperstone CFD
 
 ]
 
 ETF_PAIRS = [
 
-    {“symbol”:”SPY.US”,”type”:”stock”,”display”:”SPY”,”source”:”eodhd”,”enabled”:True},           # SQN +1.03 ✓
+    {"symbol":"SPY.US","type":"stock","display":"SPY","source":"eodhd","enabled":True},           # SQN +1.03 ✓
 
-    {“symbol”:”QQQ.US”,”type”:”stock”,”display”:”QQQ”,”source”:”eodhd”,”enabled”:True},           # SQN +0.38
+    {"symbol":"QQQ.US","type":"stock","display":"QQQ","source":"eodhd","enabled":True},           # SQN +0.38
 
-    {“symbol”:”GLD.US”,”type”:”stock”,”display”:”GLD”,”source”:”eodhd”,”enabled”:True},           # SQN +2.08, OOS:+2.98 ✓
+    {"symbol":"GLD.US","type":"stock","display":"GLD","source":"eodhd","enabled":True},           # SQN +2.08, OOS:+2.98 ✓
 
-    {“symbol”:”TLT.US”,”type”:”stock”,”display”:”TLT”,”source”:”eodhd”,”enabled”:True},           # Treasury ETF
+    {"symbol":"TLT.US","type":"stock","display":"TLT","source":"eodhd","enabled":True},           # Treasury ETF
 
-    {“symbol”:”IWM.US”,”type”:”stock”,”display”:”IWM”,”source”:”eodhd”,”enabled”:True},           # Russell 2000 ETF
+    {"symbol":"IWM.US","type":"stock","display":"IWM","source":"eodhd","enabled":True},           # Russell 2000 ETF
 
-    {“symbol”:”EEM.US”,”type”:”stock”,”display”:”EEM”,”source”:”eodhd”,”enabled”:True},           # Emerging Markets ETF
+    {"symbol":"EEM.US","type":"stock","display":"EEM","source":"eodhd","enabled":True},           # Emerging Markets ETF
 
-    {“symbol”:”XLF.US”,”type”:”stock”,”display”:”XLF”,”source”:”eodhd”,”enabled”:True},           # Financial Sector ETF
+    {"symbol":"XLF.US","type":"stock","display":"XLF","source":"eodhd","enabled":True},           # Financial Sector ETF
 
-    {“symbol”:”XLE.US”,”type”:”stock”,”display”:”XLE”,”source”:”eodhd”,”enabled”:True},           # Energy Sector ETF
+    {"symbol":"XLE.US","type":"stock","display":"XLE","source":"eodhd","enabled":True},           # Energy Sector ETF
 
-    {“symbol”:”SLV.US”,”type”:”stock”,”display”:”SLV”,”source”:”eodhd”,”enabled”:True},           # Silver ETF
+    {"symbol":"SLV.US","type":"stock","display":"SLV","source":"eodhd","enabled":True},           # Silver ETF
 
-    {“symbol”:”USO.US”,”type”:”stock”,”display”:”USO”,”source”:”eodhd”,”enabled”:True},           # Oil ETF
+    {"symbol":"USO.US","type":"stock","display":"USO","source":"eodhd","enabled":True},           # Oil ETF
 
 ]
 
@@ -1286,7 +1286,7 @@ CRYPTO_PAIRS = [
 
     {"symbol":"AVAXUSDT","type":"crypto","display":"AVAX/USDT","source":"binance","enabled":False}, # v3.1 SQN +0.44, OOS +0.02 (overfit)
 
-    {"symbol":"LINKUSDT","type":"crypto","display":"LINK/USDT","source":"binance","enabled":True},  # v3.1 SQN +0.93, OOS +1.00 âœ” (regime-adaptive)
+    {"symbol":"LINKUSDT","type":"crypto","display":"LINK/USDT","source":"binance","enabled":True},  # v3.1 SQN +0.93, OOS +1.00 âœ" (regime-adaptive)
 
     {"symbol":"MATICUSDT","type":"crypto","display":"MATIC/USDT","source":"binance","enabled":False},# SQN +0.26 Phase A (noise)
 
@@ -1296,11 +1296,11 @@ CRYPTO_PAIRS = [
 
     {"symbol":"LTCUSDT","type":"crypto","display":"LTC/USDT","source":"binance","enabled":True},   # v3.1 SQN +0.97 (improved from -0.16, near threshold)
 
-    {"symbol":"SUIUSDT","type":"crypto","display":"SUI/USDT","source":"binance","enabled":True},   # SQN +0.76, IS:+0.43/OOS:+0.82 âœ”
+    {"symbol":"SUIUSDT","type":"crypto","display":"SUI/USDT","source":"binance","enabled":True},   # SQN +0.76, IS:+0.43/OOS:+0.82 âœ"
 
     {"symbol":"NEARUSDT","type":"crypto","display":"NEAR/USDT","source":"binance","enabled":False},# SQN -1.27
 
-    {"symbol":"APTUSDT","type":"crypto","display":"APT/USDT","source":"binance","enabled":True},   # SQN +0.67, IS:+0.56/OOS:+0.37 âœ”
+    {"symbol":"APTUSDT","type":"crypto","display":"APT/USDT","source":"binance","enabled":True},   # SQN +0.67, IS:+0.56/OOS:+0.37 âœ"
 
     {"symbol":"INJUSDT","type":"crypto","display":"INJ/USDT","source":"binance","enabled":False},  # SQN -2.01
 
@@ -2070,77 +2070,77 @@ def fetch_polygon(pair, tf, limit):
 
         try:
 
-            key = os.environ.get(“POLYGON_KEY”, CONFIG.get(“POLYGON_KEY”, “”))
+            key = os.environ.get("POLYGON_KEY", CONFIG.get("POLYGON_KEY", ""))
 
             if not key:
 
-                log.warning(“[PG] No POLYGON_KEY set”)
+                log.warning("[PG] No POLYGON_KEY set")
 
-                return {“error”: True, “symbol”: symbol, “detail”: “No POLYGON_KEY set”}
+                return {"error": True, "symbol": symbol, "detail": "No POLYGON_KEY set"}
 
             ticker = _polygon_ticker_for_pair(pair)
 
             if not ticker:
 
-                log.info(f”[PG] {pair['display']}: no Polygon ticker mapping”)
+                log.info(f"[PG] {pair['display']}: no Polygon ticker mapping")
 
-                return {“error”: True, “symbol”: symbol, “detail”: “no Polygon ticker mapping”}
+                return {"error": True, "symbol": symbol, "detail": "no Polygon ticker mapping"}
 
-            mult, span = {“D1”: (1, “day”), “H4”: (4, “hour”), “H1”: (1, “hour”)}.get(tf, (1, “day”))
+            mult, span = {"D1": (1, "day"), "H4": (4, "hour"), "H1": (1, "hour")}.get(tf, (1, "day"))
 
             end = datetime.now(timezone.utc)
 
             start = end - timedelta(days=730)
 
-            url = f”https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{mult}/{span}/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}”
+            url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{mult}/{span}/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
 
-            r = http_requests.get(url, params={“apiKey”: key, “limit”: 50000, “sort”: “asc”}, timeout=20)
+            r = http_requests.get(url, params={"apiKey": key, "limit": 50000, "sort": "asc"}, timeout=20)
 
             if r.status_code == 403:
 
-                log.warning(f”[PG] {ticker}: 403 Forbidden — check API key or plan”)
+                log.warning(f"[PG] {ticker}: 403 Forbidden — check API key or plan")
 
-                return {“error”: True, “symbol”: symbol, “detail”: “403 Forbidden - check API key or plan”}
+                return {"error": True, "symbol": symbol, "detail": "403 Forbidden - check API key or plan"}
 
             if r.status_code == 429:
 
-                log.warning(f”[PG] {ticker}: 429 rate limited — throttle will apply before next request”)
+                log.warning(f"[PG] {ticker}: 429 rate limited — throttle will apply before next request")
 
-                return {“error”: True, “symbol”: symbol, “detail”: “HTTP 429 rate limited”}
+                return {"error": True, "symbol": symbol, "detail": "HTTP 429 rate limited"}
 
             if r.status_code != 200:
 
-                log.warning(f”[PG] {ticker} HTTP {r.status_code}: {r.text[:120]}”)
+                log.warning(f"[PG] {ticker} HTTP {r.status_code}: {r.text[:120]}")
 
-                return {“error”: True, “symbol”: symbol, “detail”: f”HTTP {r.status_code}”}
+                return {"error": True, "symbol": symbol, "detail": f"HTTP {r.status_code}"}
 
             data = r.json()
 
-            results = data.get(“results”, [])
+            results = data.get("results", [])
 
             if not results:
 
-                log.warning(f”[PG] {ticker}: no results”)
+                log.warning(f"[PG] {ticker}: no results")
 
-                return {“error”: True, “symbol”: symbol, “detail”: “no results”}
+                return {"error": True, "symbol": symbol, "detail": "no results"}
 
-            candles = [{“time”: datetime.fromtimestamp(bar[“t”] / 1000, tz=timezone.utc).isoformat(),
+            candles = [{"time": datetime.fromtimestamp(bar["t"] / 1000, tz=timezone.utc).isoformat(),
 
-                         “open”: float(bar[“o”]), “high”: float(bar[“h”]), “low”: float(bar[“l”]),
+                         "open": float(bar["o"]), "high": float(bar["h"]), "low": float(bar["l"]),
 
-                         “close”: float(bar[“c”]), “vol”: float(bar.get(“v”, 0))}
+                         "close": float(bar["c"]), "vol": float(bar.get("v", 0))}
 
                         for bar in results]
 
             final_candles = candles[-limit:] if len(candles) > limit else candles
 
-            return {“error”: False, “symbol”: symbol, “detail”: “”, “candles”: final_candles}
+            return {"error": False, "symbol": symbol, "detail": "", "candles": final_candles}
 
         except Exception as e:
 
-            log.error(f”[PG] {pair['display']}: {e}”)
+            log.error(f"[PG] {pair['display']}: {e}")
 
-            return {“error”: True, “symbol”: symbol, “detail”: str(e)}
+            return {"error": True, "symbol": symbol, "detail": str(e)}
 
 
 
@@ -5500,7 +5500,7 @@ def api_analyze():
 
 
 
-# â”€â”€ Execution Engine Endpoints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â"€â"€ Execution Engine Endpoints â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 _executed_signals: set = set()  # Track executed signal IDs to prevent duplicates
 
@@ -7122,7 +7122,7 @@ def _check_api_keys() -> None:
 
 
 
-# â”€â”€ Injected runtime definitions (scan helpers, analyze_pair, event risk) â”€â”€
+# â"€â"€ Injected runtime definitions (scan helpers, analyze_pair, event risk) â"€â"€
 
 
 
@@ -7595,7 +7595,7 @@ def _annotate_signal_for_scan(signal: dict, pair: dict, threshold: float,
 
 
 
-# â”€â”€ Task 1: Trade Outcome Monitor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â"€â"€ Task 1: Trade Outcome Monitor â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 
 
@@ -8253,7 +8253,7 @@ def api_score_decay():
 
 
 
-# â”€â”€ Task 2: Performance Dashboard Endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â"€â"€ Task 2: Performance Dashboard Endpoint â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 
 
