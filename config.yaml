@@ -51,7 +51,7 @@ WEINSTEIN_LOOKBACK:
 BT_MIN:
   crypto: 0.70
   commodity: 0.70
-  forex: 0.60        # lowered to recover pullback trades with D1-dominant weighting
+  forex: 0.60
   stock: 0.70
   index: 0.70
 

@@ -89,8 +89,8 @@ CONFIG: dict = {
     },
     "MACRO_LOOKBACK":    {"crypto": 15, "forex": 30, "commodity": 50, "stock": 50, "index": 50},
     "WEINSTEIN_LOOKBACK":{"crypto": 60, "forex": 100, "commodity": 150, "stock": 150, "index": 150},
-    "BT_MIN":              {"crypto": 0.70, "commodity": 0.70, "forex": 0.55, "stock": 0.70, "index": 0.70},
-    "MIN_CONFLUENCE_CLASS":{"crypto": 0.70, "commodity": 0.70, "forex": 0.55, "stock": 0.70, "index": 0.70},
+    "BT_MIN":              {"crypto": 0.70, "commodity": 0.70, "forex": 0.60, "stock": 0.70, "index": 0.70},
+    "MIN_CONFLUENCE_CLASS":{"crypto": 0.70, "commodity": 0.70, "forex": 0.60, "stock": 0.70, "index": 0.70},
     # Factor scoring gates — see factor_scoring.py
     "FACTOR_MIN_DIRECTIONAL": 0.25,  # Skip if abs(dir_score) < this (near-directionless signal)
     "REGIME_SMOOTHING_BARS": 3,      # Consecutive bars required before committing to a regime change
