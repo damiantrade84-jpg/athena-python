@@ -49,12 +49,28 @@ class BybitWS:
             await self._ws.send(json.dumps(subscribe_msg))
             log.info(f"[BybitWS] Subscribed to orderbook.50 and publicTrade for {self.symbol}")
             # Listen for messages
+            _last_ping = time.time()
             while self._running:
                 try:
-                    raw = await asyncio.wait_for(self._ws.recv(), timeout=30)
+                    raw = await asyncio.wait_for(self._ws.recv(), timeout=60)
                     msg = json.loads(raw)
+                    # Handle server-side ping — respond with pong to keep connection alive.
+                    # Bybit sends {"op":"ping"} every ~20s; without a pong reply the server
+                    # closes the connection, causing the 6+/min reconnect storm seen in logs.
+                    if isinstance(msg, dict) and msg.get("op") == "ping":
+                        await self._ws.send(json.dumps({"op": "pong"}))
+                        _last_ping = time.time()
+                        continue
                     await self._handle_message(msg)
                 except asyncio.TimeoutError:
+                    # Proactive heartbeat if server hasn't pinged us in 40s
+                    if time.time() - _last_ping > 40:
+                        try:
+                            await self._ws.send(json.dumps({"op": "ping"}))
+                            _last_ping = time.time()
+                            continue
+                        except Exception:
+                            pass
                     log.warning("[BybitWS] Receive timeout; reconnecting")
                     break
                 except Exception as e:

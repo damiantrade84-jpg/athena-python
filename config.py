@@ -89,8 +89,11 @@ CONFIG: dict = {
     },
     "MACRO_LOOKBACK":    {"crypto": 15, "forex": 30, "commodity": 50, "stock": 50, "index": 50},
     "WEINSTEIN_LOOKBACK":{"crypto": 60, "forex": 100, "commodity": 150, "stock": 150, "index": 150},
-    "BT_MIN":              {"crypto": 0.55, "commodity": 0.55, "forex": 0.55, "stock": 0.65, "index": 0.55},
-    "MIN_CONFLUENCE_CLASS":{"crypto": 0.70, "commodity": 0.70, "forex": 0.70, "stock": 0.80, "index": 0.70},
+    "BT_MIN":              {"crypto": 0.90, "commodity": 0.90, "forex": 0.95, "stock": 0.95, "index": 0.90},
+    "MIN_CONFLUENCE_CLASS":{"crypto": 0.90, "commodity": 0.90, "forex": 0.95, "stock": 0.95, "index": 0.90},
+    # Factor scoring gates — see factor_scoring.py
+    "FACTOR_MIN_DIRECTIONAL": 0.25,  # Skip if abs(dir_score) < this (near-directionless signal)
+    "REGIME_SMOOTHING_BARS": 3,      # Consecutive bars required before committing to a regime change
     # Per-class vote weight multipliers — route each indicator to where it's strongest
     "VOTE_WEIGHTS": {
         "crypto":    {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "h4_macd": 1.0, "h4_oscillator": 0.75, "volume": 1.0, "funding": 1.0, "session": 0.0, "h4_fib": 0.5, "h1_bb": 1.0, "weinstein": 0.0, "divergence": 1.0, "aroon": 0.0},
