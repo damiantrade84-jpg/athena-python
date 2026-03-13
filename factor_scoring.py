@@ -247,12 +247,19 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
             indicators["volume_ratio"] = None  # No real volume data — exclude factor
     else:
         indicators["volume_ratio"] = None
+    # OBV trend — only meaningful when real volume data exists (volume_ratio not None)
+    # For forex/pairs without centralized volume, OBV computed on zero-vol candles is noise
     obv_raw = h4_snap.get("obv_trend")
-    indicators["obv_trend"] = obv_raw if obv_raw is not None else None
+    if indicators["volume_ratio"] is not None and obv_raw is not None:
+        indicators["obv_trend"] = obv_raw
+    else:
+        indicators["obv_trend"] = None
 
     # Structure — fib proximity (non-directional)
+    # fib_proximity returns +1/-1 when near a level, 0 when not near any level
+    # 0 means "no structural info" — exclude from scoring (not "structure is bad")
     fib_prox = h4_snap.get("fib_proximity")
-    indicators["fib_proximity"] = fib_prox if fib_prox is not None else None
+    indicators["fib_proximity"] = fib_prox if fib_prox is not None and fib_prox != 0 else None
 
     # Derivatives — funding rate (directional: negative funding = bullish for longs)
     if funding_rate is not None and funding_rate != 0:
