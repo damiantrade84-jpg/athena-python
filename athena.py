@@ -1086,153 +1086,155 @@ from config import CONFIG
 
 
 
-# enabled=False = negative backtest SQN, excluded from live scan (still available in backtest)
+# enabled=True  = included in live scan; confluence score is the execution gate
+# enabled=False = JSE-only pairs (no trading platform) or instruments with no viable data source
+# BT_AUTO_TOGGLE=False ensures backtest NEVER modifies this flag
 
 FOREX_PAIRS = [
 
-    {"symbol":"EURUSD=X","type":"forex","display":"EUR/USD","source":"eodhd","enabled":False},  # SQN +0.16 (Phase A, weak â€” cut)
+    {“symbol”:”EURUSD=X”,”type”:”forex”,”display”:”EUR/USD”,”source”:”eodhd”,”enabled”:True},   # SQN +0.16 — enabled; score gate filters low-conviction setups
 
-    {"symbol":"GBPUSD=X","type":"forex","display":"GBP/USD","source":"eodhd","enabled":False},  # SQN -0.53 (Phase A)
+    {“symbol”:”GBPUSD=X”,”type”:”forex”,”display”:”GBP/USD”,”source”:”eodhd”,”enabled”:True},   # SQN -0.53 — enabled; formula fix targets inflated non-directional scores
 
-    {"symbol":"USDJPY=X","type":"forex","display":"USD/JPY","source":"eodhd","enabled":False},  # SQN -2.33 (Phase A)
+    {“symbol”:”USDJPY=X”,”type”:”forex”,”display”:”USD/JPY”,”source”:”eodhd”,”enabled”:True},   # SQN -2.33 — enabled; re-evaluate post-formula fix
 
-    {"symbol":"AUDUSD=X","type":"forex","display":"AUD/USD","source":"eodhd","enabled":False},  # SQN +0.46 (Phase A, weak â€” cut)
+    {“symbol”:”AUDUSD=X”,”type”:”forex”,”display”:”AUD/USD”,”source”:”eodhd”,”enabled”:True},   # SQN +0.46
 
-    {"symbol":"NZDUSD=X","type":"forex","display":"NZD/USD","source":"eodhd","enabled":False},  # SQN  0.00 (Phase A, zero trades)
+    {“symbol”:”NZDUSD=X”,”type”:”forex”,”display”:”NZD/USD”,”source”:”eodhd”,”enabled”:True},   # SQN 0.00 — enabled; zero trades was data gap not signal failure
 
-    {"symbol":"EURGBP=X","type":"forex","display":"EUR/GBP","source":"eodhd","enabled":False},  # SQN +0.65 (Phase A, watchlist)
+    {“symbol”:”EURGBP=X”,”type”:”forex”,”display”:”EUR/GBP”,”source”:”eodhd”,”enabled”:True},   # SQN +0.65
 
-    {"symbol":"USDCAD=X","type":"forex","display":"USD/CAD","source":"eodhd","enabled":False},  # SQN +0.27 (Phase A, weak â€” cut)
+    {“symbol”:”USDCAD=X”,”type”:”forex”,”display”:”USD/CAD”,”source”:”eodhd”,”enabled”:True},   # SQN +0.27
 
-    {"symbol":"USDCHF=X","type":"forex","display":"USD/CHF","source":"eodhd","enabled":True},   # v3.1 SQN +0.61, OOS +1.22 âœ” (Polygon data)
+    {“symbol”:”USDCHF=X”,”type”:”forex”,”display”:”USD/CHF”,”source”:”eodhd”,”enabled”:True},   # v3.1 SQN +0.61, OOS +1.22 ✓
 
-    {"symbol":"EURJPY=X","type":"forex","display":"EUR/JPY","source":"eodhd","enabled":False},  # SQN +1.06, IS:-0.23 (IS neg, watchlist)
+    {“symbol”:”EURJPY=X”,”type”:”forex”,”display”:”EUR/JPY”,”source”:”eodhd”,”enabled”:True},   # SQN +1.06
 
-    {"symbol":"GBPJPY=X","type":"forex","display":"GBP/JPY","source":"eodhd","enabled":False},  # SQN -0.72
+    {“symbol”:”GBPJPY=X”,”type”:”forex”,”display”:”GBP/JPY”,”source”:”eodhd”,”enabled”:True},   # SQN -0.72
 
-    {"symbol":"AUDJPY=X","type":"forex","display":"AUD/JPY","source":"eodhd","enabled":False},  # SQN +0.22
+    {“symbol”:”AUDJPY=X”,”type”:”forex”,”display”:”AUD/JPY”,”source”:”eodhd”,”enabled”:True},   # SQN +0.22
 
-    {"symbol":"EURAUD=X","type":"forex","display":"EUR/AUD","source":"eodhd","enabled":False},  # SQN -1.43, IS:-1.25/OOS:-0.66 (post-fix: old +0.15 was look-ahead/factor bias)
+    {“symbol”:”EURAUD=X”,”type”:”forex”,”display”:”EUR/AUD”,”source”:”eodhd”,”enabled”:True},   # SQN -1.43 (old look-ahead bias) — re-evaluate post-formula fix
 
-    {"symbol":"GBPAUD=X","type":"forex","display":"GBP/AUD","source":"eodhd","enabled":False},  # SQN +0.91, IS:-1.38 (IS neg, watchlist)
+    {“symbol”:”GBPAUD=X”,”type”:”forex”,”display”:”GBP/AUD”,”source”:”eodhd”,”enabled”:True},   # SQN +0.91
 
-    {"symbol":"USDZAR=X","type":"forex","display":"USD/ZAR","source":"eodhd","enabled":False},  # SQN -0.32
+    {“symbol”:”USDZAR=X”,”type”:”forex”,”display”:”USD/ZAR”,”source”:”eodhd”,”enabled”:True},   # SQN -0.32
 
-    {"symbol":"EURCHF=X","type":"forex","display":"EUR/CHF","source":"eodhd","enabled":False},  # SQN -0.83
+    {“symbol”:”EURCHF=X”,”type”:”forex”,”display”:”EUR/CHF”,”source”:”eodhd”,”enabled”:True},   # SQN -0.83
 
-    {"symbol":"USDMXN=X","type":"forex","display":"USD/MXN","source":"eodhd","enabled":True},   # SQN +0.85, IS:+0.61/OOS:+0.60 âœ”
+    {“symbol”:”USDMXN=X”,”type”:”forex”,”display”:”USD/MXN”,”source”:”eodhd”,”enabled”:True},   # SQN +0.85, OOS +0.60 ✓
 
-    {"symbol":"USDSGD=X","type":"forex","display":"USD/SGD","source":"eodhd","enabled":False},  # SQN +0.43
+    {“symbol”:”USDSGD=X”,”type”:”forex”,”display”:”USD/SGD”,”source”:”eodhd”,”enabled”:True},   # SQN +0.43
 
 ]
 
 COMMODITY_PAIRS = [
 
-    {"symbol":"GC=F","type":"commodity","display":"XAU/USD","source":"eodhd","enabled":True},     # SQN +3.53 (v3.1) âœ“ â†’ EODHD D1, Polygon H4/H1 fallback
+    {“symbol”:”GC=F”,”type”:”commodity”,”display”:”XAU/USD”,”source”:”eodhd”,”enabled”:True},     # SQN +3.53 ✓
 
-    {"symbol":"SI=F","type":"commodity","display":"XAG/USD","source":"eodhd","enabled":True},     # SQN +3.08 (v3.1) âœ“ â†’ EODHD D1, Polygon H4/H1 fallback
+    {“symbol”:”SI=F”,”type”:”commodity”,”display”:”XAG/USD”,”source”:”eodhd”,”enabled”:True},     # SQN +3.08 ✓
 
-    {"symbol":"CL=F","type":"commodity","display":"WTI Oil","source":"eodhd","enabled":False},     # SQN -1.36 (Phase A, cut)
+    {“symbol”:”CL=F”,”type”:”commodity”,”display”:”WTI Oil”,”source”:”eodhd”,”enabled”:True},     # SQN -1.36 — enabled; score gate filters
 
-    {"symbol":"BZ=F","type":"commodity","display":"Brent Oil","source":"eodhd","enabled":False},   # Pepperstone: SPOTBRENT
+    {“symbol”:”BZ=F”,”type”:”commodity”,”display”:”Brent Oil”,”source”:”eodhd”,”enabled”:True},   # Pepperstone: SPOTBRENT
 
-    {"symbol":"NG.US","type":"commodity","display":"Nat Gas","source":"eodhd","enabled":False},     # EODHD: NG.US (Henry Hub), Pepperstone: NATGAS
+    {“symbol”:”NG.US”,”type”:”commodity”,”display”:”Nat Gas”,”source”:”eodhd”,”enabled”:True},    # EODHD: NG.US; Pepperstone: NATGAS
 
-    {"symbol":"PL=F","type":"commodity","display":"XPT/USD","source":"eodhd","enabled":False},     # Pepperstone: XPTUSD (Platinum)
+    {“symbol”:”PL=F”,”type”:”commodity”,”display”:”XPT/USD”,”source”:”eodhd”,”enabled”:True},     # Pepperstone: XPTUSD
 
-    {"symbol":"PA=F","type":"commodity","display":"XPD/USD","source":"eodhd","enabled":False},     # Pepperstone: XPDUSD (Palladium)
+    {“symbol”:”PA=F”,”type”:”commodity”,”display”:”XPD/USD”,”source”:”eodhd”,”enabled”:True},     # Pepperstone: XPDUSD
 
-    {"symbol":"HG=F","type":"commodity","display":"Copper","source":"eodhd","enabled":False},      # Pepperstone: COPPER
+    {“symbol”:”HG=F”,”type”:”commodity”,”display”:”Copper”,”source”:”eodhd”,”enabled”:True},      # Pepperstone: COPPER
 
 ]
 
 INDEX_PAIRS = [
 
-    {"symbol":"^GSPC","type":"index","display":"S&P 500","source":"eodhd","enabled":False},       # SQN +0.09 (Phase A, weak â€” cut)
+    {“symbol”:”^GSPC”,”type”:”index”,”display”:”S&P 500”,”source”:”eodhd”,”enabled”:True},       # SQN +0.09
 
-    {"symbol":"^IXIC","type":"index","display":"Nasdaq","source":"eodhd","enabled":False},         # SQN -0.20 (Phase A)
+    {“symbol”:”^IXIC”,”type”:”index”,”display”:”Nasdaq”,”source”:”eodhd”,”enabled”:True},         # SQN -0.20
 
-    {"symbol":"^DJI","type":"index","display":"Dow Jones","source":"eodhd","enabled":False},      # SQN +0.80 (Phase A, watchlist)
+    {“symbol”:”^DJI”,”type”:”index”,”display”:”Dow Jones”,”source”:”eodhd”,”enabled”:True},      # SQN +0.80
 
-    {"symbol":"^GDAXI","type":"index","display":"DAX 40","source":"eodhd","enabled":False},       # Pepperstone: GER40
+    {“symbol”:”^GDAXI”,”type”:”index”,”display”:”DAX 40”,”source”:”eodhd”,”enabled”:True},       # Pepperstone: GER40
 
-    {"symbol":"^FTSE","type":"index","display":"UK100","source":"eodhd","enabled":False},       # Pepperstone: UK100
+    {“symbol”:”^FTSE”,”type”:”index”,”display”:”UK100”,”source”:”eodhd”,”enabled”:True},          # Pepperstone: UK100
 
-    {"symbol":"^AXJO","type":"index","display":"ASX 200","source":"eodhd","enabled":False},        # Pepperstone: AUS200
+    {“symbol”:”^AXJO”,”type”:”index”,”display”:”ASX 200”,”source”:”eodhd”,”enabled”:True},        # Pepperstone: AUS200
 
-    {"symbol":"^N225","type":"index","display":"Nikkei 225","source":"eodhd","enabled":False},     # Pepperstone: JPN225
+    {“symbol”:”^N225”,”type”:”index”,”display”:”Nikkei 225”,”source”:”eodhd”,”enabled”:True},     # Pepperstone: JPN225
 
-    {"symbol":"^HSI","type":"index","display":"Hang Seng","source":"eodhd","enabled":False},       # Pepperstone: HK50
+    {“symbol”:”^HSI”,”type”:”index”,”display”:”Hang Seng”,”source”:”eodhd”,”enabled”:True},       # Pepperstone: HK50
 
-    {"symbol":"^STOXX50E","type":"index","display":"Euro Stoxx 50","source":"eodhd","enabled":False}, # Pepperstone: EUSTX50
+    {"symbol":"^STOXX50E","type":"index","display":"Euro Stoxx 50","source":"eodhd","enabled":True},  # Pepperstone: EUSTX50
 
 ]
 
 US_STOCK_PAIRS = [
 
-    {"symbol":"AAPL.US","type":"stock","display":"AAPL","source":"eodhd","enabled":False},        # SQN -0.30
+    {“symbol”:”AAPL.US”,”type”:”stock”,”display”:”AAPL”,”source”:”eodhd”,”enabled”:True},         # SQN -0.30 — score gate filters
 
-    {"symbol":"TSLA.US","type":"stock","display":"TSLA","source":"eodhd","enabled":False},        # SQN +0.10
+    {“symbol”:”TSLA.US”,”type”:”stock”,”display”:”TSLA”,”source”:”eodhd”,”enabled”:True},         # SQN +0.10
 
-    {"symbol":"NVDA.US","type":"stock","display":"NVDA","source":"eodhd","enabled":True},         # SQN +1.44, OOS:0 (no OOS — enabled, monitor)
+    {“symbol”:”NVDA.US”,”type”:”stock”,”display”:”NVDA”,”source”:”eodhd”,”enabled”:True},         # SQN +1.44 ✓
 
-    {"symbol":"MSFT.US","type":"stock","display":"MSFT","source":"eodhd","enabled":False},        # SQN +0.49, OOS:-2.12
+    {“symbol”:”MSFT.US”,”type”:”stock”,”display”:”MSFT”,”source”:”eodhd”,”enabled”:True},         # SQN +0.49
 
-    {"symbol":"AMZN.US","type":"stock","display":"AMZN","source":"eodhd","enabled":False},        # SQN +0.27
+    {“symbol”:”AMZN.US”,”type”:”stock”,”display”:”AMZN”,”source”:”eodhd”,”enabled”:True},         # SQN +0.27
 
-    {"symbol":"META.US","type":"stock","display":"META","source":"eodhd","enabled":False},        # SQN -0.29
+    {“symbol”:”META.US”,”type”:”stock”,”display”:”META”,”source”:”eodhd”,”enabled”:True},         # SQN -0.29
 
-    {"symbol":"GOOG.US","type":"stock","display":"GOOG","source":"eodhd","enabled":True},         # SQN +1.61, IS:+1.28/OOS:+1.01 âœ”
+    {“symbol”:”GOOG.US”,”type”:”stock”,”display”:”GOOG”,”source”:”eodhd”,”enabled”:True},         # SQN +1.61, OOS:+1.01 ✓
 
-    {"symbol":"JPM.US","type":"stock","display":"JPM","source":"eodhd","enabled":False},          # SQN +0.26
+    {“symbol”:”JPM.US”,”type”:”stock”,”display”:”JPM”,”source”:”eodhd”,”enabled”:True},           # SQN +0.26
 
-    {"symbol":"V.US","type":"stock","display":"V","source":"eodhd","enabled":False},              # SQN -1.39
+    {“symbol”:”V.US”,”type”:”stock”,”display”:”V”,”source”:”eodhd”,”enabled”:True},               # SQN -1.39
 
-    {"symbol":"XOM.US","type":"stock","display":"XOM","source":"eodhd","enabled":False},          # SQN -0.03
+    {“symbol”:”XOM.US”,”type”:”stock”,”display”:”XOM”,”source”:”eodhd”,”enabled”:True},           # SQN -0.03
 
-    {"symbol":"NFLX.US","type":"stock","display":"NFLX","source":"eodhd","enabled":False},       # Pepperstone CFD
+    {“symbol”:”NFLX.US”,”type”:”stock”,”display”:”NFLX”,”source”:”eodhd”,”enabled”:True},        # Pepperstone CFD
 
-    {"symbol":"AMD.US","type":"stock","display":"AMD","source":"eodhd","enabled":False},          # Pepperstone CFD
+    {“symbol”:”AMD.US”,”type”:”stock”,”display”:”AMD”,”source”:”eodhd”,”enabled”:True},           # Pepperstone CFD
 
-    {"symbol":"CRM.US","type":"stock","display":"CRM","source":"eodhd","enabled":False},          # Pepperstone CFD
+    {“symbol”:”CRM.US”,”type”:”stock”,”display”:”CRM”,”source”:”eodhd”,”enabled”:True},           # Pepperstone CFD
 
-    {"symbol":"DIS.US","type":"stock","display":"DIS","source":"eodhd","enabled":False},          # Pepperstone CFD
+    {“symbol”:”DIS.US”,”type”:”stock”,”display”:”DIS”,”source”:”eodhd”,”enabled”:True},           # Pepperstone CFD
 
-    {"symbol":"BA.US","type":"stock","display":"BA","source":"eodhd","enabled":True},             # Pepperstone CFD — enabled per user request (score >1.5 in scan)
+    {“symbol”:”BA.US”,”type”:”stock”,”display”:”BA”,”source”:”eodhd”,”enabled”:True},             # Pepperstone CFD
 
-    {"symbol":"COIN.US","type":"stock","display":"COIN","source":"eodhd","enabled":False},        # Pepperstone CFD
+    {“symbol”:”COIN.US”,”type”:”stock”,”display”:”COIN”,”source”:”eodhd”,”enabled”:True},         # Pepperstone CFD
 
-    {"symbol":"PYPL.US","type":"stock","display":"PYPL","source":"eodhd","enabled":False},        # Pepperstone CFD
+    {“symbol”:”PYPL.US”,”type”:”stock”,”display”:”PYPL”,”source”:”eodhd”,”enabled”:True},         # Pepperstone CFD
 
-    {"symbol":"INTC.US","type":"stock","display":"INTC","source":"eodhd","enabled":False},        # Pepperstone CFD
+    {“symbol”:”INTC.US”,”type”:”stock”,”display”:”INTC”,”source”:”eodhd”,”enabled”:True},         # Pepperstone CFD
 
-    {"symbol":"UBER.US","type":"stock","display":"UBER","source":"eodhd","enabled":False},        # Pepperstone CFD
+    {“symbol”:”UBER.US”,”type”:”stock”,”display”:”UBER”,”source”:”eodhd”,”enabled”:True},         # Pepperstone CFD
 
-    {"symbol":"PLTR.US","type":"stock","display":"PLTR","source":"eodhd","enabled":False},        # Pepperstone CFD
+    {“symbol”:”PLTR.US”,”type”:”stock”,”display”:”PLTR”,”source”:”eodhd”,”enabled”:True},         # Pepperstone CFD
 
 ]
 
 ETF_PAIRS = [
 
-    {"symbol":"SPY.US","type":"stock","display":"SPY","source":"eodhd","enabled":True},           # SQN +1.03 — enabled per user request (score >1.5 in scan)
+    {“symbol”:”SPY.US”,”type”:”stock”,”display”:”SPY”,”source”:”eodhd”,”enabled”:True},           # SQN +1.03 ✓
 
-    {"symbol":"QQQ.US","type":"stock","display":"QQQ","source":"eodhd","enabled":False},          # SQN +0.38
+    {“symbol”:”QQQ.US”,”type”:”stock”,”display”:”QQQ”,”source”:”eodhd”,”enabled”:True},           # SQN +0.38
 
-    {"symbol":"GLD.US","type":"stock","display":"GLD","source":"eodhd","enabled":True},           # SQN +2.08, IS:+0.95/OOS:+2.98 Gold ETF
+    {“symbol”:”GLD.US”,”type”:”stock”,”display”:”GLD”,”source”:”eodhd”,”enabled”:True},           # SQN +2.08, OOS:+2.98 ✓
 
-    {"symbol":"TLT.US","type":"stock","display":"TLT","source":"eodhd","enabled":False},          # SQN 0 Treasury ETF
+    {“symbol”:”TLT.US”,”type”:”stock”,”display”:”TLT”,”source”:”eodhd”,”enabled”:True},           # Treasury ETF
 
-    {"symbol":"IWM.US","type":"stock","display":"IWM","source":"eodhd","enabled":False},          # Russell 2000 ETF
+    {“symbol”:”IWM.US”,”type”:”stock”,”display”:”IWM”,”source”:”eodhd”,”enabled”:True},           # Russell 2000 ETF
 
-    {"symbol":"EEM.US","type":"stock","display":"EEM","source":"eodhd","enabled":False},          # Emerging Markets ETF
+    {“symbol”:”EEM.US”,”type”:”stock”,”display”:”EEM”,”source”:”eodhd”,”enabled”:True},           # Emerging Markets ETF
 
-    {"symbol":"XLF.US","type":"stock","display":"XLF","source":"eodhd","enabled":False},          # Financial Sector ETF
+    {“symbol”:”XLF.US”,”type”:”stock”,”display”:”XLF”,”source”:”eodhd”,”enabled”:True},           # Financial Sector ETF
 
-    {"symbol":"XLE.US","type":"stock","display":"XLE","source":"eodhd","enabled":True},          # Energy Sector ETF
+    {“symbol”:”XLE.US”,”type”:”stock”,”display”:”XLE”,”source”:”eodhd”,”enabled”:True},           # Energy Sector ETF
 
-    {"symbol":"SLV.US","type":"stock","display":"SLV","source":"eodhd","enabled":True},          # Silver ETF
+    {“symbol”:”SLV.US”,”type”:”stock”,”display”:”SLV”,”source”:”eodhd”,”enabled”:True},           # Silver ETF
 
-    {"symbol":"USO.US","type":"stock","display":"USO","source":"eodhd","enabled":True},          # Oil ETF
+    {“symbol”:”USO.US”,”type”:”stock”,”display”:”USO”,”source”:”eodhd”,”enabled”:True},           # Oil ETF
 
 ]
 

@@ -186,7 +186,7 @@ class AutoTrader:
 
             "maxDaily":         cfg.get("AUTO_TRADE_MAX_DAILY", 3),
 
-            "minScore":         cfg.get("AUTO_TRADE_MIN_SCORE", 7.0),
+            "minScore":         cfg.get("AUTO_TRADE_MIN_SCORE", cfg.get("MIN_CONFLUENCE", 0.90)),
 
             "lastScanAt":       self._last_scan_at.isoformat() if self._last_scan_at else None,
 
