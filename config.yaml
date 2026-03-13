@@ -99,7 +99,7 @@ AUTO_TRADE_ENABLED: true           # Start auto-trader on server boot
 # Effective gate = max(AUTO_TRADE_MIN_SCORE, MIN_CONFLUENCE_CLASS[asset_type])
 # With all MIN_CONFLUENCE_CLASS set to 0.90–0.95, this 0.90 floor is functionally
 # overridden by the per-class MIN_CONFLUENCE_CLASS for most asset types.
-AUTO_TRADE_MIN_SCORE: 0.70         # Hard floor — class-specific threshold takes precedence; recalibrated for multiplicative formula
+AUTO_TRADE_MIN_SCORE: 0.55         # Hard floor — class-specific threshold takes precedence; aligned with lowest class BT_MIN
 AUTO_TRADE_MAX_DAILY: 3            # Max auto-executions per day
 AUTO_TRADE_MAX_PER_SCAN: 1         # Max per scan cycle; raise to 2 only with >10 active pairs
 AUTO_TRADE_SCAN_INTERVAL_MIN: 30   # Scan every 30 minutes
