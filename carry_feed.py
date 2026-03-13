@@ -473,7 +473,7 @@ def get_carry_differential(display: str) -> Optional[float]:
 def seed_carry_background():
     """Trigger background fetch of all FRED rate series on startup."""
     def _seed():
-        all_series = set(_FRED_CURRENCY_SERIES.values()) | {_FRED_10Y_SERIES}
+        all_series = set(_FRED_CURRENCY_SERIES.values()) | set(sid for sid, _ in _10Y_SERIES_MAP.values())
         for sid in sorted(all_series):
             try:
                 _ensure_series(sid, blocking=True)
