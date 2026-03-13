@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from config import CONFIG, PAIR_PROFILE_VOTES, PAIR_PROFILE_FILTERS
 from indicators import (
     calc_rsi, calc_fib, calc_fib_proximity, calc_rsi_divergence, calc_weinstein_stage,
-    calc_bb_width_percentile, calc_obv_trend, calc_squeeze, calc_aroon,
+    calc_bb_width_percentile, calc_obv_trend, calc_squeeze,
 )
 from regime import detect_regime
 

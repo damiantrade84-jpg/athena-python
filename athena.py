@@ -2276,7 +2276,7 @@ from scoring import (
 
     CORR_CLUSTERS, apply_correlation_cap, get_pair_profile,
 
-    get_pair_vote_weights, pair_filter_enabled,
+    pair_filter_enabled,
 
     _pair_exchange_code, _pair_exchange_closed,
 
@@ -4628,9 +4628,9 @@ def backtest_pair(pair, style="auto"):
 
             _ts = res.get("trendState", "UNKNOWN")
 
-            # F2: Use live MIN_CONFLUENCE_CLASS as BT threshold
+            # F2: Use BT_MIN as BT threshold natively (must equal MIN_CONFLUENCE_CLASS)
 
-            bt_min = get_pair_profile(pair).get("bt_min", CONFIG["MIN_CONFLUENCE_CLASS"].get(_ptype, CONFIG["BT_MIN"].get(_ptype, 4.0)))
+            bt_min = get_pair_profile(pair).get("bt_min", CONFIG["BT_MIN"].get(_ptype, 0.70))
 
             _recent_scores.append(res["score"])
 
@@ -5049,6 +5049,8 @@ def backtest_pair(pair, style="auto"):
         "bhReturn": bh_return,
 
         "volumeThreshold": {"bt": CONFIG.get("VOLUME_THRESHOLD_BACKTEST", 1.2), "live": CONFIG.get("VOLUME_THRESHOLD", 1.5)},
+
+        "pairMaxScore": _pair_max_score,
 
         "equityCurve": equity_curve, "trades": trades[-50:]
 

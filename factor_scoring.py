@@ -179,17 +179,27 @@ def _factor_score(indicators: Dict[str, Optional[float]],
 def _weighted_factor_score(indicators: Dict[str, Optional[float]],
                            keys: List[str],
                            corr_weights: Dict[str, float],
-                           use_abs: bool = False) -> Optional[float]:
-    """Compute factor score as correlation-adjusted weighted mean of available indicators.
+                           use_abs: bool = False,
+                           factor_name: str = "") -> Optional[float]:
+    """Compute factor score as indicator-weighted, correlation-adjusted mean.
+
+    Applies per-indicator weights from CONFIG["INDICATOR_WEIGHTS"][factor_name]
+    on top of correlation adjustments. Missing indicator weight keys default to 1.0.
     use_abs=True for non-directional factors (always positive contribution).
     """
+    # Per-indicator weights from config (empty dict = equal weighting)
+    ind_weights = CONFIG.get("INDICATOR_WEIGHTS", {}).get(factor_name, {})
+
     vals = []
     wgts = []
     for k in keys:
         v = indicators.get(k)
         if v is not None:
             vals.append(abs(v) if use_abs else v)
-            wgts.append(corr_weights.get(k, 1.0))
+            # Combined weight: indicator config weight × correlation adjustment
+            iw = ind_weights.get(k, 1.0)
+            cw = corr_weights.get(k, 1.0)
+            wgts.append(iw * cw)
     if not vals:
         return None
     w_sum = sum(wgts)
@@ -377,12 +387,14 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
         "structure":      ["fib_proximity"],
     }
 
-    # ── Compute factor scores (correlation-adjusted) ─────────────────────
+    # ── Compute factor scores (correlation-adjusted × indicator-weighted) ────
     factor_scores: Dict[str, Optional[float]] = {}
     for factor, keys in directional_factors.items():
-        factor_scores[factor] = _weighted_factor_score(indicators, keys, corr_weights, use_abs=False)
+        factor_scores[factor] = _weighted_factor_score(
+            indicators, keys, corr_weights, use_abs=False, factor_name=factor)
     for factor, keys in nondirectional_factors.items():
-        factor_scores[factor] = _weighted_factor_score(indicators, keys, corr_weights, use_abs=True)
+        factor_scores[factor] = _weighted_factor_score(
+            indicators, keys, corr_weights, use_abs=True, factor_name=factor)
 
     # ── Determine direction from directional factors ─────────────────────
     dir_signals = []
