@@ -51,7 +51,7 @@ WEINSTEIN_LOOKBACK:
 BT_MIN:
   crypto: 0.70
   commodity: 0.70
-  forex: 0.55        # lowered to recover pullback trades with D1-dominant weighting
+  forex: 0.60        # lowered to recover pullback trades with D1-dominant weighting
   stock: 0.70
   index: 0.70
 
@@ -67,7 +67,7 @@ BT_PERCENTILE_FILTER: false
 MIN_CONFLUENCE_CLASS:
   crypto: 0.70
   commodity: 0.70
-  forex: 0.55        # must equal BT_MIN — always
+  forex: 0.60        # must equal BT_MIN — always
   stock: 0.70
   index: 0.70
 
