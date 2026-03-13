@@ -5024,6 +5024,8 @@ def backtest_pair(pair, style="auto"):
 
         "volumeThreshold": {"bt": CONFIG.get("VOLUME_THRESHOLD_BACKTEST", 1.2), "live": CONFIG.get("VOLUME_THRESHOLD", 1.5)},
 
+        "pairMaxScore": _pair_max_score,
+
         "equityCurve": equity_curve, "trades": trades[-50:]
 
     }

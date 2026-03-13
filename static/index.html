@@ -935,7 +935,7 @@ function renderBtSingle(d) {
         return '<div class="bt-trade-row">'+
           '<span>'+t.date+'</span>'+
           '<span style="'+(t.direction==='LONG'?'color:var(--bull)':'color:var(--bear)')+'">'+t.direction+'</span>'+
-          '<span>'+t.score+'/13</span>'+
+          '<span>'+t.score+'/'+(d.pairMaxScore||3)+'</span>'+
           '<span style="'+oc+'">'+t.outcome+'</span>'+
           '<span style="'+rc+'">'+(t.resultR>0?'+':'')+t.resultR+'R</span>'+
         '</div>';
@@ -1253,7 +1253,7 @@ function buildCard(s,idx) {
     '<div class="card-body">'+
       '<div class="conf-row">'+
         '<span class="conf-label">Confluence</span>'+
-        '<span class="conf-score" style="color:'+confCol+'">'+s.confluenceScore+'/'+(s.maxScore||13)+' | '+pct+'%</span>'+
+        '<span class="conf-score" style="color:'+confCol+'">'+s.confluenceScore+'/'+(s.maxScore||3)+' | '+pct+'%</span>'+
       '</div>'+
       '<div class="conf-bar-track"><div class="conf-bar-fill '+fillCls+'" style="width:'+pct+'%"></div></div>'+
       votesHtml+
@@ -1837,7 +1837,7 @@ function confirmExecute(symbol, forceMode) {
       '<div>Stop Loss: <strong style="color:var(--bear)">' + fmtPrice(sig.sl) + '</strong></div>' +
       '<div>Take Profit: <strong style="color:var(--bull)">' + fmtPrice(sig.tp1) + '</strong></div>' +
       '<div>SL Risk: <strong>' + (sig.slPct||'?') + '%</strong></div>' +
-      '<div>Score: <strong>' + sig.confluenceScore + '/' + (sig.maxScore||13) + '</strong></div>' +
+      '<div>Score: <strong>' + sig.confluenceScore + '/' + (sig.maxScore||3) + '</strong></div>' +
       '<div>Account: <strong>$' + (acct.balance||0).toLocaleString() + '</strong></div>' +
       '<div>Risk (1%): <strong style="color:var(--accent)">$' + riskAmt + '</strong></div>' +
       '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);color:var(--warn);font-size:10px">Position size will be calculated by the risk engine based on your ' + via + ' account balance and SL distance.</div>' +
