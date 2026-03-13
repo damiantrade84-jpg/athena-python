@@ -61,7 +61,8 @@ _db_lock = threading.Lock()
 
 def _init_db():
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+        con = sqlite3.connect(_DB_PATH, timeout=1.0)
+        con.execute("PRAGMA journal_mode=WAL")
         con.execute("""
             CREATE TABLE IF NOT EXISTS forex_volume (
                 symbol  TEXT    NOT NULL,
@@ -166,7 +167,7 @@ def _cache_write(duka_symbol: str, volumes: dict):
     if not rows:
         return
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+        con = sqlite3.connect(_DB_PATH, timeout=1.0)
         con.executemany(
             "INSERT OR REPLACE INTO forex_volume (symbol, tf, bar_ts, volume) VALUES (?,?,?,?)",
             rows
@@ -178,7 +179,7 @@ def _cache_write(duka_symbol: str, volumes: dict):
 def _cache_read(duka_symbol: str, tf: str, from_ts: int, to_ts: int) -> list:
     """Return [(bar_ts, volume)] sorted ascending."""
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+        con = sqlite3.connect(_DB_PATH, timeout=1.0)
         rows = con.execute(
             "SELECT bar_ts, volume FROM forex_volume "
             "WHERE symbol=? AND tf=? AND bar_ts>=? AND bar_ts<=? ORDER BY bar_ts",
@@ -190,7 +191,7 @@ def _cache_read(duka_symbol: str, tf: str, from_ts: int, to_ts: int) -> list:
 
 def _newest_cached_ts(duka_symbol: str, tf: str) -> Optional[int]:
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+        con = sqlite3.connect(_DB_PATH, timeout=1.0)
         row = con.execute(
             "SELECT MAX(bar_ts) FROM forex_volume WHERE symbol=? AND tf=?",
             (duka_symbol, tf)
@@ -294,17 +295,37 @@ def get_forex_vr(display: str, tf: str = "H1", lookback: int = 20) -> float:
     if len(bars) < lookback + 1:
         return 1.0
 
-    vols = [b["vol"] for b in bars if b["vol"] > 0]
-    if len(vols) < lookback + 1:
+    recent_bar = bars[-1]
+    if recent_bar["vol"] <= 0:
         return 1.0
 
-    recent   = vols[-1]
-    sma_vals = vols[-(lookback + 1) : -1]
-    sma      = sum(sma_vals) / len(sma_vals) if sma_vals else 0
+    import datetime
+    try:
+        recent_dt = datetime.datetime.fromtimestamp(recent_bar["time"], datetime.timezone.utc)
+        recent_hour = recent_dt.hour
+    except Exception:
+        return 1.0
+
+    tod_vols = []
+    for b in reversed(bars[:-1]):
+        if b["vol"] > 0:
+            try:
+                dt = datetime.datetime.fromtimestamp(b["time"], datetime.timezone.utc)
+                if dt.hour == recent_hour:
+                    tod_vols.append(b["vol"])
+                    if len(tod_vols) >= lookback:
+                        break
+            except Exception:
+                continue
+
+    if len(tod_vols) < 3:
+        return 1.0
+
+    sma = sum(tod_vols) / len(tod_vols)
     if sma <= 0:
         return 1.0
 
-    return round(min(recent / sma, 5.0), 3)   # cap at 5x to prevent outliers
+    return round(min(recent_bar["vol"] / sma, 5.0), 3)
 
 
 # ── CLI: bulk seed all forex pairs ───────────────────────────────────────────

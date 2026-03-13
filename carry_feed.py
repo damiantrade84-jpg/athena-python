@@ -136,7 +136,8 @@ _PAIR_CARRY_FORMULA: dict[str, list[tuple[float, str]]] = {
 
 def _init_db():
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+        con = sqlite3.connect(_DB_PATH, timeout=1.0)
+        con.execute("PRAGMA journal_mode=WAL")
         con.execute("""
             CREATE TABLE IF NOT EXISTS rate_series (
                 series_id   TEXT    NOT NULL,
@@ -184,7 +185,7 @@ def _fetch_fred(series_id: str) -> list[tuple[str, float]]:
 
 def _needs_refresh(series_id: str) -> bool:
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+        con = sqlite3.connect(_DB_PATH, timeout=1.0)
         row = con.execute(
             "SELECT last_fetch FROM carry_meta WHERE series_id=?", (series_id,)
         ).fetchone()
@@ -196,7 +197,7 @@ def _needs_refresh(series_id: str) -> bool:
 
 def _write_series(series_id: str, rows: list[tuple[str, float]]):
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+        con = sqlite3.connect(_DB_PATH, timeout=1.0)
         con.executemany(
             "INSERT OR REPLACE INTO rate_series (series_id, obs_date, rate) VALUES (?,?,?)",
             [(series_id, d, v) for d, v in rows]
@@ -218,7 +219,7 @@ def _mark_fetch_attempted(series_id: str):
     """Write a timestamp to carry_meta even on failure, so _needs_refresh returns False
     for _FAIL_COOLDOWN seconds. Prevents thread storm when FRED is unreachable."""
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+        con = sqlite3.connect(_DB_PATH, timeout=1.0)
         con.execute(
             "INSERT OR REPLACE INTO carry_meta (series_id, last_fetch) VALUES (?,?)",
             (series_id, time.time() - _FETCH_TTL + _FAIL_COOLDOWN)
@@ -266,7 +267,7 @@ def _get_latest_rate(series_id: str) -> Optional[float]:
     """Return most recent non-null rate for a FRED series."""
     _ensure_series(series_id)
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+        con = sqlite3.connect(_DB_PATH, timeout=1.0)
         row = con.execute(
             "SELECT rate FROM rate_series WHERE series_id=? ORDER BY obs_date DESC LIMIT 1",
             (series_id,)
@@ -279,7 +280,7 @@ def _get_rate_series(series_id: str, months: int = 36) -> list[float]:
     """Return last `months` monthly rate values (most recent last)."""
     _ensure_series(series_id)
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+        con = sqlite3.connect(_DB_PATH, timeout=1.0)
         rows = con.execute(
             "SELECT rate FROM rate_series WHERE series_id=? ORDER BY obs_date DESC LIMIT ?",
             (series_id, months)

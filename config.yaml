@@ -4,7 +4,7 @@
 # Per-class D1 ADX trend minimum
 ADX_TREND_MIN_CLASS:
   crypto: 15
-  forex: 22
+  forex: 40    # Elevated: Forces mean-reversion default for macro peg pairs
   commodity: 25
   stock: 25
   index: 25
@@ -168,7 +168,7 @@ VOTE_WEIGHTS:
 # Factor weights per asset class (base)
 FACTOR_WEIGHTS:
   crypto:    { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.0, structure: 1.0, derivatives: 1.5, microstructure: 1.5 }
-  forex:     { trend: 2.0, momentum: 1.2, volatility: 1.0, volume: 0.5, structure: 1.2, derivatives: 1.5, microstructure: 1.5 }
+  forex:     { trend: 1.0, momentum: 0.5, volatility: 1.5, volume: 0.5, structure: 2.0, derivatives: 1.5, microstructure: 1.5 }
   stock:     { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.5, structure: 1.0, derivatives: 0.5, microstructure: 1.5 }
   commodity: { trend: 2.0, momentum: 1.3, volatility: 1.5, volume: 1.0, structure: 1.3, derivatives: 1.0, microstructure: 1.5 }
   index:     { trend: 2.0, momentum: 1.4, volatility: 1.2, volume: 0.8, structure: 1.0, derivatives: 1.2, microstructure: 1.5 }

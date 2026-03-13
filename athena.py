@@ -510,7 +510,7 @@ class CandleBuilder:
 
     def _init_db(self):
 
-        with sqlite3.connect(self._db) as con:
+        with sqlite3.connect(self._db, timeout=1.0) as con:
 
             con.execute("""CREATE TABLE IF NOT EXISTS candle_cache (
 
@@ -592,7 +592,7 @@ class CandleBuilder:
 
             t = bar["start"].strftime("%Y-%m-%d %H:%M:%S")
 
-            with sqlite3.connect(self._db) as con:
+            with sqlite3.connect(self._db, timeout=1.0) as con:
 
                 con.execute(
 
@@ -616,7 +616,7 @@ class CandleBuilder:
 
         try:
 
-            with sqlite3.connect(self._db) as con:
+            with sqlite3.connect(self._db, timeout=1.0) as con:
 
                 con.row_factory = sqlite3.Row
 
@@ -698,7 +698,7 @@ class CandleBuilder:
 
                 disp = p["display"]
 
-                with sqlite3.connect(self._db) as con:
+                with sqlite3.connect(self._db, timeout=1.0) as con:
 
                     cnt = con.execute(
 
@@ -744,7 +744,7 @@ class CandleBuilder:
 
                         if d1_rows:
 
-                            with sqlite3.connect(self._db) as con:
+                            with sqlite3.connect(self._db, timeout=1.0) as con:
 
                                 con.executemany(
 
@@ -850,7 +850,7 @@ class CandleBuilder:
 
                 if all_rows:
 
-                    with sqlite3.connect(self._db) as con:
+                    with sqlite3.connect(self._db, timeout=1.0) as con:
 
                         con.executemany(
 
@@ -982,7 +982,7 @@ class CandleBuilder:
 
                 if rows:
 
-                    with sqlite3.connect(self._db) as con:
+                    with sqlite3.connect(self._db, timeout=1.0) as con:
 
                         con.executemany(
 
@@ -1034,7 +1034,7 @@ class CandleBuilder:
 
         try:
 
-            with sqlite3.connect(self._db) as con:
+            with sqlite3.connect(self._db, timeout=1.0) as con:
 
                 rows = con.execute(
 
@@ -3444,6 +3444,30 @@ def _build_signal_message(signal: dict, news_ctx: dict | None,
 
             lines.append(f"Split in {_s['daysTo']} days ({_s['splitDate']}, ratio: {_s.get('ratio', '?')}) — price distortion risk")
 
+    
+
+    _oi_div = signal.get("oiDivergence")
+
+    if _oi_div:
+
+        lines.append(f"Open Interest: {_oi_div.get('oiChange', 0)}% chg | Price: {_oi_div.get('priceChange', 0)}% chg | Signal: {_oi_div.get('signal', 'neutral')}")
+
+
+
+    if "_fundamentals" in signal:
+
+        _f = signal["_fundamentals"]
+
+        lines.append(f"Fundamentals: P/E {_f.get('pe_ratio','?')} | Fwd P/E {_f.get('forward_pe','?')} | Margin {_f.get('profit_margin','?')} | Beta {_f.get('beta','?')}")
+
+
+
+    if "_insider" in signal:
+
+        _ins = signal["_insider"]
+
+        lines.append(f"Insider Trading (90d): {_ins.get('net_sentiment')} | {_ins.get('buys')} buys (${_ins.get('buy_value')}), {_ins.get('sells')} sells (${_ins.get('sell_value')})")
+
 
 
     _bt = signal.get("backtestStats")
@@ -3962,6 +3986,15 @@ def backtest_pair(pair, style="auto"):
 
                 h4i = calc_indicators_with_normalized(h4_window, pair.get("type", "stock"))
 
+                # Inject fib_proximity so structure factor is non-None during backtest
+                try:
+                    _bt_fib = calc_fib(h4_window)
+                    _bt_h4_close = h4_window[-1]["close"] if h4_window else None
+                    if _bt_fib and _bt_h4_close:
+                        h4i["snap"]["fib_proximity"] = calc_fib_proximity(float(_bt_h4_close), _bt_fib)
+                except Exception:
+                    pass
+
                 h1i = calc_indicators_with_normalized(h1_window, pair.get("type", "stock"))
 
                 vols = [c["vol"] for c in h1_window]; vsma = calc_sma(vols, 20)
@@ -3992,9 +4025,8 @@ def backtest_pair(pair, style="auto"):
 
             _ts = res.get("trendState", "UNKNOWN")
 
-            # F2: Use live MIN_CONFLUENCE_CLASS as BT threshold (matches live execution gate)
-
-            bt_min = get_pair_profile(pair).get("bt_min", CONFIG["MIN_CONFLUENCE_CLASS"].get(_ptype, CONFIG["BT_MIN"].get(_ptype, 0.4)))
+            # F2: Use BT_MIN as BT threshold natively
+            bt_min = get_pair_profile(pair).get("bt_min", CONFIG["BT_MIN"].get(_ptype, 0.4))
 
             _recent_scores.append(res["score"])
 
@@ -4246,6 +4278,15 @@ def backtest_pair(pair, style="auto"):
 
                 h4i = calc_indicators_with_normalized(h4_window, pair.get("type", "stock"))
 
+                # Inject fib_proximity so structure factor is non-None during backtest
+                try:
+                    _bt_fib = calc_fib(h4_window)
+                    _bt_h4_close = h4_window[-1]["close"] if h4_window else None
+                    if _bt_fib and _bt_h4_close:
+                        h4i["snap"]["fib_proximity"] = calc_fib_proximity(float(_bt_h4_close), _bt_fib)
+                except Exception:
+                    pass
+
                 h1i = calc_indicators_with_normalized(h1_window, pair.get("type", "stock"))
 
                 d1i_ctx = calc_indicators_with_normalized(d1_ctx, pair.get("type", "stock"))
@@ -4278,9 +4319,8 @@ def backtest_pair(pair, style="auto"):
 
             _ts = res.get("trendState", "UNKNOWN")
 
-            # F2: Use live MIN_CONFLUENCE_CLASS as BT threshold (matches live execution gate)
-
-            bt_min = get_pair_profile(pair).get("bt_min", CONFIG["MIN_CONFLUENCE_CLASS"].get(_ptype, CONFIG["BT_MIN"].get(_ptype, 0.4)))
+            # F2: Use BT_MIN as BT threshold natively
+            bt_min = get_pair_profile(pair).get("bt_min", CONFIG["BT_MIN"].get(_ptype, 0.4))
 
             _recent_scores.append(res["score"])
 
@@ -5036,7 +5076,8 @@ def _init_audit_db(db_path: str) -> None:
 
     """Create audit table if it doesn't exist, and migrate legacy schemas."""
 
-    con = sqlite3.connect(db_path)
+    con = sqlite3.connect(db_path, timeout=1.0)
+    con.execute("PRAGMA journal_mode=WAL")
 
     con.execute("""
 
@@ -5359,6 +5400,20 @@ def api_analyze():
 
                 log.debug(f"[LEARN] context fetch failed: {_lce}")
 
+        
+
+        if sig.get("type") in ("stock", "index"):
+
+            try:
+
+                from eodhd_enrichment import enrich_signal
+
+                sig = enrich_signal(sig)
+
+            except Exception as enc_err:
+
+                log.debug(f"[ENRICH] failed: {enc_err}")
+
         result = run_ai(sig, news_ctx, style_pref, portfolio_heat=_p_heat, drawdown_pct=_dd_pct,
 
                         learning_ctx=_learning_ctx)
@@ -5371,7 +5426,7 @@ def api_analyze():
 
             _score_pct = round(sig.get("confluenceScore", 0) / _max_s * 100, 1) if _max_s else 0
 
-            with sqlite3.connect(_AUDIT_DB) as _con:
+            with sqlite3.connect(_AUDIT_DB, timeout=1.0) as _con:
 
                 _factors = {
                     "scores": sig.get("factorScores"),
@@ -5679,7 +5734,7 @@ def api_execute():
 
             try:
 
-                with sqlite3.connect(_AUDIT_DB) as con:
+                with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
 
                     _factors = {
                         "scores": sig.get("factorScores"),
@@ -5957,7 +6012,7 @@ def api_webhook():
 
             try:
 
-                with sqlite3.connect(_AUDIT_DB) as con:
+                with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
 
                     _factors = {
                         "scores": sig.get("factorScores"),
@@ -6707,7 +6762,7 @@ def api_auto_trade_log():
 
     try:
 
-        with sqlite3.connect(_AUDIT_DB) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
 
             con.row_factory = sqlite3.Row
 
@@ -6989,7 +7044,7 @@ def api_audit():
 
     try:
 
-        con = sqlite3.connect(_AUDIT_DB)
+        con = sqlite3.connect(_AUDIT_DB, timeout=1.0)
 
         con.row_factory = sqlite3.Row
 
@@ -7159,6 +7214,15 @@ def analyze_pair(pair, btc_bias, style="swing"):
 
     h4i = calc_indicators_with_normalized(h4, pair.get("type", "stock"))
 
+    # Inject fib proximity into H4 snap so structure factor in compute_factor_scores() is non-None
+    try:
+        _h4_fib = calc_fib(h4)
+        _h4_close = h4[-1]["close"] if h4 else None
+        if _h4_fib and _h4_close:
+            h4i["snap"]["fib_proximity"] = calc_fib_proximity(float(_h4_close), _h4_fib)
+    except Exception:
+        pass  # gracefully degrade — structure factor stays None
+
     # Inject live microstructure signals if WS feed has data for this symbol
     _msig = _micro_cache.get(pair.get("symbol", ""), {})
     if _msig:
@@ -7167,13 +7231,29 @@ def analyze_pair(pair, btc_bias, style="swing"):
     h1i = calc_indicators_with_normalized(h1, pair.get("type", "stock"))
 
     vols = [c["vol"] for c in h1]
+    _ptype = pair.get("type", "stock")
 
-    vsma = calc_sma(vols, 20)
-
-    vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
+    if _ptype in ("stock", "index"):
+        # TOD Z-Scoring for U-Shaped Volume (compare current hour to same-hour history)
+        try:
+            current_dt = datetime.fromisoformat(h1[-1].get("time", "").replace("Z", "+00:00"))
+            current_hour = current_dt.hour
+            tod_vols = [c["vol"] for c in h1 if datetime.fromisoformat(c.get("time", "").replace("Z", "+00:00")).hour == current_hour]
+            if len(tod_vols) >= 5:
+                vsma_tod = calc_sma(tod_vols, min(len(tod_vols) - 1, 20))
+                vr = tod_vols[-1] / vsma_tod[-1] if vsma_tod and vsma_tod[-1] and vsma_tod[-1] > 0 else 1.0
+            else:
+                vsma = calc_sma(vols, 20)
+                vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
+        except Exception:
+            vsma = calc_sma(vols, 20)
+            vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
+    else:
+        vsma = calc_sma(vols, 20)
+        vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
 
     # Forex: override candle volume (zero/unreliable on EODHD) with real Dukascopy tick volume
-    if pair.get("type") == "forex":
+    if _ptype == "forex":
         try:
             from duka_volume import get_forex_vr as _get_forex_vr
             vr = _get_forex_vr(pair.get("display", ""), tf="H1", lookback=20)
@@ -7409,6 +7489,8 @@ def analyze_pair(pair, btc_bias, style="swing"):
 
         "aiAnalysis": None,
 
+        "oiDivergence": _oi_divergence,
+
         "fundingRate": res.get("fundingRate"),
 
         "regime": res.get("regime"),
@@ -7583,7 +7665,7 @@ def _update_trade_outcome(ticket: str, exit_price: float, exit_time: str,
 
     try:
 
-        with sqlite3.connect(_AUDIT_DB) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
 
             con.execute(
 
@@ -7731,7 +7813,7 @@ def _check_mt5_outcomes() -> None:
 
         # Find audit rows with a ticket but no exit_price
 
-        with sqlite3.connect(_AUDIT_DB) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
 
             con.row_factory = sqlite3.Row
 
@@ -7863,7 +7945,7 @@ def _check_ccxt_outcomes() -> None:
 
                 # Find matching audit row for SL distance
 
-                with sqlite3.connect(_AUDIT_DB) as con:
+                with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
 
                     con.row_factory = sqlite3.Row
 
@@ -7933,7 +8015,7 @@ def _check_ccxt_outcomes() -> None:
 
                 log.debug(f"[MONITOR] breakeven check error: {e}")
 
-        with sqlite3.connect(_AUDIT_DB) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
 
             con.row_factory = sqlite3.Row
 
@@ -8059,7 +8141,7 @@ def _check_score_decay() -> None:
 
     try:
 
-        with sqlite3.connect(_AUDIT_DB) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
 
             con.row_factory = sqlite3.Row
 
@@ -8165,7 +8247,7 @@ def api_performance():
 
     try:
 
-        with sqlite3.connect(_AUDIT_DB) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
 
             con.row_factory = sqlite3.Row
 
@@ -8618,7 +8700,7 @@ if __name__=="__main__":
 
         try:
 
-            with sqlite3.connect(_AUDIT_DB) as con:
+            with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
 
                 con.row_factory = sqlite3.Row
 

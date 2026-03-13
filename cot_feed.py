@@ -121,7 +121,8 @@ _PAIR_FORMULA: dict[str, list[tuple[float, str]]] = {
 
 def _init_db():
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+        con = sqlite3.connect(_DB_PATH, timeout=1.0)
+        con.execute("PRAGMA journal_mode=WAL")
         con.execute("""
             CREATE TABLE IF NOT EXISTS cot_net (
                 asset       TEXT    NOT NULL,
@@ -278,7 +279,7 @@ def _write_rows(data: dict[str, dict[str, int]]):
     if not rows:
         return
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+        con = sqlite3.connect(_DB_PATH, timeout=1.0)
         con.executemany(
             "INSERT OR REPLACE INTO cot_net (asset, report_date, net_long) VALUES (?,?,?)",
             rows
@@ -289,7 +290,7 @@ def _write_rows(data: dict[str, dict[str, int]]):
 
 def _needs_refresh(source: str, ttl: float) -> bool:
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+        con = sqlite3.connect(_DB_PATH, timeout=1.0)
         row = con.execute("SELECT last_fetch FROM cot_meta WHERE source=?", (source,)).fetchone()
         con.close()
     return not row or (time.time() - row[0] > ttl)
@@ -297,7 +298,7 @@ def _needs_refresh(source: str, ttl: float) -> bool:
 
 def _mark_fetch(source: str):
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+        con = sqlite3.connect(_DB_PATH, timeout=1.0)
         con.execute("INSERT OR REPLACE INTO cot_meta (source, last_fetch) VALUES (?,?)",
                     (source, time.time()))
         con.commit()
@@ -306,7 +307,7 @@ def _mark_fetch(source: str):
 
 def _row_count(asset: str) -> int:
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+        con = sqlite3.connect(_DB_PATH, timeout=1.0)
         row = con.execute("SELECT COUNT(*) FROM cot_net WHERE asset=?", (asset,)).fetchone()
         con.close()
     return row[0] if row else 0
@@ -383,7 +384,7 @@ def refresh_cot(force: bool = False):
     if force:
         # Clear meta to force re-download
         with _db_lock:
-            con = sqlite3.connect(_DB_PATH)
+            con = sqlite3.connect(_DB_PATH, timeout=1.0)
             con.execute("DELETE FROM cot_meta")
             con.commit()
             con.close()
@@ -395,7 +396,7 @@ def refresh_cot(force: bool = False):
 
 def _get_net_series(asset: str, weeks: int = 104) -> list[int]:
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+        con = sqlite3.connect(_DB_PATH, timeout=1.0)
         rows = con.execute(
             "SELECT net_long FROM cot_net WHERE asset=? ORDER BY report_date DESC LIMIT ?",
             (asset, weeks)
