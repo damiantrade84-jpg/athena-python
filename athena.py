@@ -1570,9 +1570,32 @@ def _fetch_fallback_candles(pair: dict, tf: str, limit: int, reason: str = ""):
 
 
 
-def _atr_for_levels(d1i: dict, h4i: dict, h1i: dict):
+def _atr_for_levels(d1i: dict, h4i: dict, h1i: dict, pair: dict = None):
+    """
+    Returns ATR value for SL/TP calculation — correct timeframe per asset class.
 
-    return h1i["snap"].get("atr") or h4i["snap"].get("atr") or d1i["snap"].get("atr")
+    CRYPTO:              H4 ATR first — entries are H4-based, H1 too tight for
+                         overnight crypto gaps and volatile moves
+    FOREX:               D1 ATR first — D1 swing trades, normal pullback 40-80
+                         pips, H1 ATR (25-30 pips) causes premature stop-outs
+    STOCKS/ETFs:         D1 ATR first — stocks gap at open daily, H1 too tight
+                         for 5-20 day swing holds
+    COMMODITIES:         D1 ATR first — macro-driven, daily gaps common on news
+    INDICES:             D1 ATR first — daily range 0.5-1.5%, H1 only 0.1-0.3%
+    """
+    ptype = (pair or {}).get("type", "")
+
+    if ptype == "crypto":
+        # Crypto: H4 → H1 → D1
+        return (h4i["snap"].get("atr") or
+                h1i["snap"].get("atr") or
+                d1i["snap"].get("atr"))
+
+    # Forex, stock, commodity, index — all D1 swing trades
+    # D1 → H4 → H1
+    return (d1i["snap"].get("atr") or
+            h4i["snap"].get("atr") or
+            h1i["snap"].get("atr"))
 
 
 
@@ -4193,7 +4216,7 @@ def backtest_pair(pair, style="auto"):
 
             entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
-            atr = _atr_for_levels(d1i, h4i, h1i)
+            atr = _atr_for_levels(d1i, h4i, h1i, pair=pair)
 
             if not atr or atr == 0: i += 1; continue
 
@@ -4487,7 +4510,7 @@ def backtest_pair(pair, style="auto"):
 
             entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
-            atr = _atr_for_levels(d1i_ctx, h4i, h1i)
+            atr = _atr_for_levels(d1i_ctx, h4i, h1i, pair=pair)
 
             if not atr or atr == 0: i += 1; continue
 
@@ -4751,7 +4774,7 @@ def backtest_pair(pair, style="auto"):
 
             entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
-            atr = _atr_for_levels(d1i_ctx, h4i_ctx, h1i)
+            atr = _atr_for_levels(d1i_ctx, h4i_ctx, h1i, pair=pair)
 
             if not atr or atr == 0: i += 1; continue
 
@@ -7583,7 +7606,7 @@ def analyze_pair(pair, btc_bias, style="swing"):
 
     price = live_px or h1i["snap"].get("close") or h4i["snap"].get("close") or d1i["snap"].get("close")
 
-    atr = _atr_for_levels(d1i, h4i, h1i)
+    atr = _atr_for_levels(d1i, h4i, h1i, pair=pair)
 
     if price is None or not atr:
 
