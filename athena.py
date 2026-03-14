@@ -3924,14 +3924,24 @@ def backtest_pair(pair, style="auto"):
                     _pg_h1 = _extract_candles(fetch_polygon(pair, "H1", 5000))
                     h4_raw = h4_raw or _pg_h4
                     h1_raw = h1_raw or _pg_h1
-                # yfinance as final fallback
-                if not h4_raw or not h1_raw:
+                # yfinance as final fallback — also triggers when Polygon returns thin data (<500 H4 bars)
+                # Polygon free plan caps H4 history for C:XAUUSD etc. at ~38 days, which is
+                # unusable: all 228 bars postdate most D1 entries, indicators compute out-of-context.
+                _h4_thin = not h4_raw or len(h4_raw or []) < 500
+                _h1_thin = not h1_raw or len(h1_raw or []) < 500
+                if _h4_thin or _h1_thin:
                     _yf_sym = _yfinance_symbol_for_pair(pair)
                     if _yf_sym:
-                        log.info(f"[BT] {pair['display']}: trying yfinance fallback")
+                        log.info(f"[BT] {pair['display']}: H4={len(h4_raw or [])} H1={len(h1_raw or [])} bars — trying yfinance for better coverage")
                         _yf_h4, _yf_h1 = _fetch_bt_yfinance(_yf_sym)
-                        h4_raw = h4_raw or _yf_h4
-                        h1_raw = h1_raw or _yf_h1
+                        if _yf_h4 and len(_yf_h4) > len(h4_raw or []):
+                            h4_raw = _yf_h4
+                        elif not h4_raw:
+                            h4_raw = _yf_h4
+                        if _yf_h1 and len(_yf_h1) > len(h1_raw or []):
+                            h1_raw = _yf_h1
+                        elif not h1_raw:
+                            h1_raw = _yf_h1
 
         else:
 
@@ -3946,6 +3956,10 @@ def backtest_pair(pair, style="auto"):
         if not h4_raw or not h1_raw: return {"error": f"No H4/H1 data for {pair['display']}"}
 
         if len(d1_raw) < 230: return {"error": f"Insufficient D1 history for {pair['display']} ({len(d1_raw)} bars)"}
+
+        if effective_style == "swing" and len(h4_raw) < 250:
+
+            return {"error": f"Insufficient H4 history for swing backtest ({len(h4_raw)} bars, need 250+) — Polygon free plan may cap intraday history. Try adding a yfinanceSymbol override or EODHD intraday key."}
 
         if effective_style == "intraday" and len(h4_raw) < 260:
 
