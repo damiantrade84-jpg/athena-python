@@ -4166,8 +4166,10 @@ def backtest_pair(pair, style="auto"):
 
             _ts = res.get("trendState", "UNKNOWN")
 
-            # F2: Use BT_MIN as BT threshold natively
-            bt_min = get_pair_profile(pair).get("bt_min", CONFIG["BT_MIN"].get(_ptype, 0.4))
+            # F2: Use BT_MIN as BT threshold natively.
+            # Forex bt_min already set by routing block (MIN_FOREX_CONFLUENCE) — do not overwrite.
+            if pair.get("type") != "forex":
+                bt_min = get_pair_profile(pair).get("bt_min", CONFIG["BT_MIN"].get(_ptype, 0.4))
 
             _recent_scores.append(res["score"])
 
