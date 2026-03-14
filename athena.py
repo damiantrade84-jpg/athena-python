@@ -4124,19 +4124,39 @@ def backtest_pair(pair, style="auto"):
 
                 stoch = calc_stochastic(h4_window, 5, 3, 3)  # TA-Lib STOCH standard: fastK=5, slowK=3, slowD=3
 
-                res = calc_confluence(d1i, h4i, h1i, vr, stoch, pair, "neutral",
-
-                                       d1_candles=d1_window, h4_candles=h4_window, h1_candles=h1_window,
-
-                                       volume_threshold=get_pair_profile(pair).get(
-
-                                           "volume_threshold",
-
-                                           CONFIG.get("VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"])
-
-                                       ),
-
-                                       bar_time=h4_window[-1].get("time") if h4_window else None)
+                # Route forex pairs to dedicated forex scoring engine in backtest
+                if pair.get("type") == "forex":
+                    from forex_scoring import compute_forex_score
+                    _min_forex = CONFIG.get("MIN_FOREX_CONFLUENCE", 0.40)
+                    _fx = compute_forex_score(
+                        d1_snap=d1i["snap"],
+                        h4_snap=h4i["snap"],
+                        h1_snap=h1i["snap"],
+                        h1_candles=h1_window,
+                        pair=pair,
+                        bar_time=d1_raw[i]["time"],  # use actual current D1 bar datetime
+                        backtest_mode=True,  # bypass session filter in backtest
+                    )
+                    res = {
+                        "final_score": _fx.final_score,
+                        "direction": _fx.direction,
+                        "factor_scores": _fx.components,
+                        "regime": {"state": 1, "label": _fx.signal_type},  # Match calc_confluence format
+                        "signal_type": _fx.signal_type,
+                        "score": _fx.final_score,  # Add compatibility field for backtest
+                        "trendState": _fx.signal_type,  # Add compatibility field
+                    }
+                    score = _fx.final_score
+                    direction = _fx.direction
+                    bt_min = _min_forex
+                else:
+                    res = calc_confluence(d1i, h4i, h1i, vr, stoch, pair, "neutral",
+                                           d1_candles=d1_window, h4_candles=h4_window, h1_candles=h1_window,
+                                           volume_threshold=get_pair_profile(pair).get(
+                                               "volume_threshold",
+                                               CONFIG.get("VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"])
+                                           ),
+                                           bar_time=h4_window[-1].get("time") if h4_window else None)
 
             except Exception:
 
@@ -7493,17 +7513,37 @@ def analyze_pair(pair, btc_bias, style="swing"):
 
 
 
-    res = calc_confluence(
-
-        _cf_d1i, _cf_h4i, _cf_h1i, vr, stoch, pair, btc_bias,
-
-        d1_candles=_cf_d1c, h4_candles=_cf_h4c, h1_candles=_cf_h1c,
-
-        funding_rate=_funding_rate,
-
-        volume_threshold=pair_profile.get("volume_threshold", CONFIG["VOLUME_THRESHOLD"]),
-
-    )
+    # Route forex pairs to dedicated forex scoring engine
+    if pair.get("type") == "forex":
+        from forex_scoring import compute_forex_score
+        _forex_result = compute_forex_score(
+            d1_snap=_cf_d1i["snap"],
+            h4_snap=_cf_h4i["snap"],
+            h1_snap=_cf_h1i["snap"],
+            h1_candles=_cf_h1c,
+            pair=pair,
+            bar_time=bar_time,
+        )
+        _min_forex = CONFIG.get("MIN_FOREX_CONFLUENCE", 0.40)
+        res = {
+            "final_score":    _forex_result.final_score,
+            "direction":      _forex_result.direction,
+            "factor_scores":  _forex_result.components,
+            "regime":         {"state": 1, "label": _forex_result.signal_type},  # Match calc_confluence format
+            "signal_type":    _forex_result.signal_type,
+            "score":          _forex_result.final_score,  # Add compatibility field
+            "trendState":     _forex_result.signal_type,  # Add compatibility field
+        }
+        if _forex_result.final_score < _min_forex:
+            return None  # below threshold — skip this pair entirely
+        # Signal passes — continue to risk check and execution as normal
+    else:
+        res = calc_confluence(
+            _cf_d1i, _cf_h4i, _cf_h1i, vr, stoch, pair, btc_bias,
+            d1_candles=_cf_d1c, h4_candles=_cf_h4c, h1_candles=_cf_h1c,
+            funding_rate=_funding_rate,
+            volume_threshold=pair_profile.get("volume_threshold", CONFIG["VOLUME_THRESHOLD"]),
+        )
 
 
 
