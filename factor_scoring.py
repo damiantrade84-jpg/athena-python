@@ -180,7 +180,8 @@ def _weighted_factor_score(indicators: Dict[str, Optional[float]],
                            keys: List[str],
                            corr_weights: Dict[str, float],
                            use_abs: bool = False,
-                           factor_name: str = "") -> Optional[float]:
+                           factor_name: str = "",
+                           asset_type: str = "") -> Optional[float]:
     """Compute factor score as indicator-weighted, correlation-adjusted mean.
 
     Applies per-indicator weights from CONFIG["INDICATOR_WEIGHTS"][factor_name]
@@ -188,7 +189,11 @@ def _weighted_factor_score(indicators: Dict[str, Optional[float]],
     use_abs=True for non-directional factors (always positive contribution).
     """
     # Per-indicator weights from config (empty dict = equal weighting)
-    ind_weights = CONFIG.get("INDICATOR_WEIGHTS", {}).get(factor_name, {})
+    _iw_cfg = CONFIG.get("INDICATOR_WEIGHTS", {}).get(factor_name, {})
+    if _iw_cfg and isinstance(next(iter(_iw_cfg.values()), None), dict):
+        ind_weights = _iw_cfg.get(asset_type, _iw_cfg.get("crypto", {}))
+    else:
+        ind_weights = _iw_cfg
 
     vals = []
     wgts = []
@@ -387,10 +392,10 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
     factor_scores: Dict[str, Optional[float]] = {}
     for factor, keys in directional_factors.items():
         factor_scores[factor] = _weighted_factor_score(
-            indicators, keys, corr_weights, use_abs=False, factor_name=factor)
+            indicators, keys, corr_weights, use_abs=False, factor_name=factor, asset_type=asset_type)
     for factor, keys in nondirectional_factors.items():
         factor_scores[factor] = _weighted_factor_score(
-            indicators, keys, corr_weights, use_abs=True, factor_name=factor)
+            indicators, keys, corr_weights, use_abs=True, factor_name=factor, asset_type=asset_type)
 
     # ── Determine direction from directional factors ─────────────────────
     dir_signals = []
