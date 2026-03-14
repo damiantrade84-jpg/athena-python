@@ -26,13 +26,16 @@ log = logging.getLogger("athena")
 @dataclass
 class ForexScoreResult:
     final_score: float = 0.0
-    direction: str = "LONG"          # "LONG" or "SHORT"
-    signal_type: str = "NONE"        # "TREND_PULLBACK", "LONDON_BREAKOUT", "NONE"
-    trend_gate: bool = False         # D1/H4 EMA alignment confirmed
-    session_active: bool = False     # In London or NY session
-    entry_quality: float = 0.0       # RSI pullback quality 0-1
-    cot_boost: float = 0.0           # COT confirmation 0-1
-    breakout_score: float = 0.0      # London breakout quality 0-1
+    direction: str = "LONG"
+    signal_type: str = "NONE"
+    trend_gate: bool = False
+    session_active: bool = False
+    entry_quality: float = 0.0
+    momentum_confirm: float = 0.0
+    adx_filter: float = 0.0
+    cot_boost: float = 0.0
+    carry_tilt: float = 0.0
+    breakout_score: float = 0.0
     components: dict = field(default_factory=dict)
 
 
@@ -117,6 +120,74 @@ def _entry_quality(h1_snap: dict, direction: str) -> float:
             return 0.2
         else:
             return 0.0
+
+
+# ─── Momentum confirmation ───────────────────────────────────────────────────────
+
+def _momentum_confirm(h4_snap: dict, direction: str) -> float:
+    """
+    H4 MACD histogram direction as momentum confirmation.
+    LONG: MACD histogram > 0 and rising = 1.0, > 0 but falling = 0.5
+    SHORT: MACD histogram < 0 and falling = 1.0, < 0 but rising = 0.5
+    Returns 0.0-1.0
+    """
+    hist = h4_snap.get("macdHist")
+    hist_prev = h4_snap.get("macdHistPrev")
+    if hist is None:
+        return 0.3  # neutral if no data
+
+    if direction == "LONG":
+        if hist > 0:
+            if hist_prev is not None and hist > hist_prev:
+                return 1.0  # positive and rising
+            return 0.5  # positive but falling
+        return 0.0  # negative histogram
+    else:  # SHORT
+        if hist < 0:
+            if hist_prev is not None and hist < hist_prev:
+                return 1.0  # negative and falling
+            return 0.5  # negative but rising
+        return 0.0  # positive histogram
+
+
+# ─── ADX filter ───────────────────────────────────────────────────────────────
+
+def _adx_filter(h4_snap: dict) -> float:
+    """
+    ADX-based trend strength filter.
+    ADX >= 25 = confirmed trend (1.0)
+    ADX < 25 = no trend / choppy (0.0 — should not trade)
+    Binary filter: no partial credit for developing trends.
+    """
+    adx = h4_snap.get("adx")
+    if adx is None:
+        return 0.3  # neutral if no data
+    if adx >= 25:
+        return 1.0
+    return 0.0
+
+
+# ─── Carry tilt ───────────────────────────────────────────────────────────────
+
+def _carry_tilt(pair: dict, direction: str,
+                bar_time: Optional[str] = None) -> float:
+    """
+    Carry direction as a mild tilt (booster, never blocker).
+    Returns 0.0-1.0. Carry aligned with direction = boost.
+    Carry opposing = 0.0 (neutral, not negative).
+    """
+    try:
+        from carry_feed import get_carry_z
+        _as_of = bar_time[:10] if bar_time else None
+        carry_z = get_carry_z(pair.get("display", ""), as_of_date=_as_of)
+        if carry_z is None or carry_z == 0.0:
+            return 0.0
+        # Carry aligned with direction = boost
+        if (direction == "LONG" and carry_z > 0) or (direction == "SHORT" and carry_z < 0):
+            return min(1.0, abs(carry_z) / 2.0)
+        return 0.0  # opposing carry = no boost, not penalty
+    except Exception:
+        return 0.0
 
 
 # ─── COT boost ───────────────────────────────────────────────────────────────
@@ -231,20 +302,34 @@ def compute_forex_score(
 
     trend_score = 0.0
     if trend_ok and session_ok:
-        eq  = _entry_quality(h1_snap, trend_dir)
-        cot = _cot_boost(pair, trend_dir, bar_time)
+        eq    = _entry_quality(h1_snap, trend_dir)
+        mom   = _momentum_confirm(h4_snap, trend_dir)
+        adx_f = _adx_filter(h4_snap)
+        cot   = _cot_boost(pair, trend_dir, bar_time)
+        carry = _carry_tilt(pair, trend_dir, bar_time)
 
-        if backtest_mode:
-            # Plan spec: 0.3 + eq*0.4 + cot*0.3
-            trend_score = 0.3 + eq * 0.4 + cot * 0.3
-        else:
-            # Plan spec: 0.4 + eq*0.4 + cot*0.2
-            trend_score = 0.4 + eq * 0.4 + cot * 0.2
+        # Component-weighted scoring:
+        # base (trend gate passed)           = 0.20
+        # entry_quality (RSI pullback)       = 0.25 max
+        # momentum_confirm (MACD histogram)  = 0.20 max
+        # adx_filter (trend strength)        = 0.15 max
+        # cot_boost (COT alignment)          = 0.10 max
+        # carry_tilt (carry direction)       = 0.10 max
+        # Total max = 1.00
+        trend_score = (0.20
+                       + eq    * 0.25
+                       + mom   * 0.20
+                       + adx_f * 0.15
+                       + cot   * 0.10
+                       + carry * 0.10)
 
-        result.trend_gate     = trend_ok
-        result.session_active = session_ok
-        result.entry_quality  = eq
-        result.cot_boost      = cot
+        result.trend_gate       = trend_ok
+        result.session_active  = session_ok
+        result.entry_quality   = eq
+        result.momentum_confirm = mom
+        result.adx_filter      = adx_f
+        result.cot_boost       = cot
+        result.carry_tilt      = carry
 
     # ── Signal 2: London breakout ─────────────────────────────────────────
     bo_score, bo_dir = _london_breakout_score(h1_candles, utc_hour)
@@ -267,14 +352,17 @@ def compute_forex_score(
         result.signal_type = "LONDON_BREAKOUT"
 
     result.components = {
-        "trend_gate":     trend_ok,
-        "session_active": session_ok,
-        "utc_hour":       utc_hour,
-        "entry_quality":  result.entry_quality,
-        "cot_boost":      result.cot_boost,
-        "breakout_score": bo_score,
-        "trend_score":    round(trend_score, 4),
-        "breakout_final": round(bo_final, 4),
+        "trend_gate":        trend_ok,
+        "session_active":    session_ok,
+        "utc_hour":          utc_hour,
+        "entry_quality":     result.entry_quality,
+        "momentum_confirm":  result.momentum_confirm,
+        "adx_filter":        result.adx_filter,
+        "cot_boost":         result.cot_boost,
+        "carry_tilt":        result.carry_tilt,
+        "breakout_score":    bo_score,
+        "trend_score":       round(trend_score, 4),
+        "breakout_final":    round(bo_final, 4),
     }
 
     return result

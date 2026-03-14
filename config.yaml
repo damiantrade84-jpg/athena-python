@@ -67,12 +67,12 @@ BT_PERCENTILE_FILTER: false
 MIN_CONFLUENCE_CLASS:
   crypto: 0.70
   commodity: 0.70
-  forex: 0.60        # must equal BT_MIN — always
+  forex: 0.70        # must equal BT_MIN — always
   stock: 0.70
   index: 0.70
 
 # Forex-specific scoring thresholds (new forex_scoring.py engine)
-MIN_FOREX_CONFLUENCE: 0.60
+MIN_FOREX_CONFLUENCE: 0.70
 MIN_FOREX_BREAKOUT: 0.50
 
 # Risk settings
@@ -103,7 +103,7 @@ AUTO_TRADE_ENABLED: true           # Start auto-trader on server boot
 # Effective gate = max(AUTO_TRADE_MIN_SCORE, MIN_CONFLUENCE_CLASS[asset_type])
 # With all MIN_CONFLUENCE_CLASS set to 0.90–0.95, this 0.90 floor is functionally
 # overridden by the per-class MIN_CONFLUENCE_CLASS for most asset types.
-AUTO_TRADE_MIN_SCORE: 0.70         # Hard floor — must be >= highest class BT_MIN to avoid executing below any class threshold
+AUTO_TRADE_MIN_SCORE: 0.75         # Hard floor — must be >= highest class BT_MIN to avoid executing below any class threshold
 AUTO_TRADE_MAX_DAILY: 3            # Max auto-executions per day
 AUTO_TRADE_MAX_PER_SCAN: 1         # Max per scan cycle; raise to 2 only with >10 active pairs
 AUTO_TRADE_SCAN_INTERVAL_MIN: 30   # Scan every 30 minutes
