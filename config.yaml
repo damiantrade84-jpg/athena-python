@@ -72,7 +72,7 @@ MIN_CONFLUENCE_CLASS:
   index: 0.70
 
 # Forex-specific scoring thresholds (new forex_scoring.py engine)
-MIN_FOREX_CONFLUENCE: 0.40
+MIN_FOREX_CONFLUENCE: 0.60
 MIN_FOREX_BREAKOUT: 0.50
 
 # Risk settings
