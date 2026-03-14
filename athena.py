@@ -4009,7 +4009,7 @@ def backtest_pair(pair, style="auto"):
 
     _h1_need = max(50, CONFIG["H1_CANDLES"])
 
-    funnel = {"total_setups":0, "fail_score":0, "fail_macro":0, "fail_regime":0, "taken":0}
+    funnel = {"total_setups":0, "fail_score":0, "fail_macro":0, "fail_regime":0, "taken":0, "skip_window":0}
 
     _recent_scores = []  # CR3: rolling score history for adaptive percentile threshold
 
@@ -4061,7 +4061,7 @@ def backtest_pair(pair, style="auto"):
 
             if len(h4_window) < 50 or len(h1_window) < 50:
 
-                i += 1; continue
+                funnel["skip_window"] += 1; i += 1; continue
 
             try:
 
@@ -4847,7 +4847,18 @@ def backtest_pair(pair, style="auto"):
 
 
 
-    if not trades: return {"error": f"No signals generated for {pair['display']} (threshold too high or insufficient data)"}
+    if not trades:
+        _max_score_seen = round(max(_recent_scores), 3) if _recent_scores else 0
+        _bt_min_used = get_pair_profile(pair).get("bt_min", CONFIG["BT_MIN"].get(_ptype, 0.4))
+        _h4_bars = len(h4_raw) if h4_raw else 0
+        _h1_bars = len(h1_raw) if h1_raw else 0
+        return {"error": (
+            f"No signals generated for {pair['display']} — "
+            f"setups={funnel['total_setups']} skip_window={funnel['skip_window']} "
+            f"fail_score={funnel['fail_score']} bt_min={_bt_min_used} "
+            f"max_score_seen={_max_score_seen} "
+            f"d1={len(d1_raw)} h4={_h4_bars} h1={_h1_bars}"
+        )}
 
     wins   = [t for t in trades if t["outcome"] in ("TP1","TP2") or (t["outcome"] == "TIMEOUT" and t["resultR"] > 0)]
 
