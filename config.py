@@ -107,7 +107,7 @@ CONFIG: dict = {
         "crypto":    {"trend": 2.0, "momentum": 1.5, "volatility": 1.0, "volume": 1.0, "structure": 1.0, "derivatives": 1.5, "microstructure": 1.5, "carry": 1.0},
         "forex":     {"trend": 2.0, "momentum": 1.0, "volatility": 1.0, "volume": 0.5, "structure": 1.5, "derivatives": 0.0, "microstructure": 0.5, "carry": 0.0},
         "stock":     {"trend": 2.0, "momentum": 1.5, "volatility": 1.0, "volume": 1.5, "structure": 1.0, "derivatives": 0.5, "microstructure": 0.75, "carry": 1.0},
-        "commodity": {"trend": 2.0, "momentum": 1.3, "volatility": 1.5, "volume": 1.0, "structure": 1.3, "derivatives": 1.0, "microstructure": 0.75, "carry": 1.0},
+        "commodity": {"trend": 2.0, "momentum": 1.3, "volatility": 1.5, "volume": 1.0, "structure": 1.3, "derivatives": 0.0, "microstructure": 0.75, "carry": 0.0},
         "index":     {"trend": 2.0, "momentum": 1.4, "volatility": 1.2, "volume": 0.8, "structure": 1.0, "derivatives": 1.2, "microstructure": 0.75, "carry": 1.0},
     },
     # Regime-aware factor weight overrides
@@ -130,7 +130,7 @@ CONFIG: dict = {
     "INDICATOR_WEIGHTS": {
         "trend":          {"d1_ema_trend": 0.5, "h4_ema_trend": 0.3, "ema_trend": 0.2},
         "momentum":       {"rsi_z": 0.6, "macdLine_z": 0.4},
-        "derivatives":    {"cot_z": 0.5, "carry_z": 0.35, "funding_rate": 0.15},
+        "derivatives":    {"cot_z": 0.6, "funding_rate": 0.4},
         "microstructure": {"order_book_imbalance": 0.4, "liquidity_wall_detection": 0.25,
                            "orderflow_delta": 0.2, "liquidity_pressure": 0.15},
         "volatility":     {"atr_z": 0.5, "bbWidth_z": 0.3, "realized_vol_z": 0.2},
@@ -163,7 +163,7 @@ CONFIG: dict = {
     "DRAWDOWN_STOP_THRESHOLD": 0.15,    # At 15% drawdown, reject ALL new trades
     # ── Auto-Trade Bot ────────────────────────────────────────────────────────
     "AUTO_TRADE_ENABLED":       False,  # Master toggle (also togglable via UI/API)
-    "AUTO_TRADE_MIN_SCORE":     0.75,   # Min confluence score to auto-execute (z-score scale)
+    "AUTO_TRADE_MIN_SCORE":     0.70,   # Min confluence score to auto-execute (z-score scale)
     "AUTO_TRADE_MAX_DAILY":     3,      # Max auto-trades per calendar day (UTC)
     "AUTO_TRADE_MAX_PER_SCAN":  1,      # Max executions per single scan run
     "AUTO_TRADE_SIZING_OVERRIDE": 1.0,  # Full live-level sizing on demo

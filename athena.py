@@ -6800,6 +6800,38 @@ def api_meta_analysis():
 
 
 
+@app.route("/api/sentiment/inject", methods=["POST"])
+
+def api_inject_sentiment():
+
+    """Inject external sentiment score (from LunarCrush, Crypto.com, etc.)"""
+
+    data = request.get_json()
+
+    pair = data.get("pair", "")
+
+    score = data.get("score", 0)
+
+    source = data.get("source", "external")
+
+    if not pair:
+
+        return jsonify({"error": "pair required"}), 400
+
+    try:
+
+        from sentiment_gate import inject_external_sentiment
+
+        inject_external_sentiment(pair, float(score), source)
+
+        return jsonify({"success": True, "pair": pair, "score": score, "source": source})
+
+    except Exception as e:
+
+        return jsonify({"error": str(e)}), 500
+
+
+
 @app.route("/api/auto-trade/log")
 
 def api_auto_trade_log():

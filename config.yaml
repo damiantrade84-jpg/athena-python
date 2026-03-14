@@ -99,7 +99,7 @@ AUTO_TRADE_ENABLED: true           # Start auto-trader on server boot
 # Effective gate = max(AUTO_TRADE_MIN_SCORE, MIN_CONFLUENCE_CLASS[asset_type])
 # With all MIN_CONFLUENCE_CLASS set to 0.90–0.95, this 0.90 floor is functionally
 # overridden by the per-class MIN_CONFLUENCE_CLASS for most asset types.
-AUTO_TRADE_MIN_SCORE: 0.55         # Hard floor — class-specific threshold takes precedence; aligned with lowest class BT_MIN
+AUTO_TRADE_MIN_SCORE: 0.70         # Hard floor — must be >= highest class BT_MIN to avoid executing below any class threshold
 AUTO_TRADE_MAX_DAILY: 3            # Max auto-executions per day
 AUTO_TRADE_MAX_PER_SCAN: 1         # Max per scan cycle; raise to 2 only with >10 active pairs
 AUTO_TRADE_SCAN_INTERVAL_MIN: 30   # Scan every 30 minutes
@@ -179,7 +179,7 @@ FACTOR_WEIGHTS:
   crypto:    { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.0, structure: 1.0, derivatives: 1.5, microstructure: 1.5, carry: 1.0 }
   forex:     { trend: 2.0, momentum: 1.0, volatility: 1.0, volume: 0.5, structure: 1.5, derivatives: 0.0, microstructure: 0.5, carry: 0.0 }
   stock:     { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.5, structure: 1.0, derivatives: 0.5, microstructure: 0.75, carry: 1.0 }
-  commodity: { trend: 2.0, momentum: 1.3, volatility: 1.5, volume: 1.0, structure: 1.3, derivatives: 1.0, microstructure: 0.75, carry: 1.0 }
+  commodity: { trend: 2.0, momentum: 1.3, volatility: 1.5, volume: 1.0, structure: 1.3, derivatives: 0.0, microstructure: 0.75, carry: 0.0 }
   index:     { trend: 2.0, momentum: 1.4, volatility: 1.2, volume: 0.8, structure: 1.0, derivatives: 1.2, microstructure: 0.75, carry: 1.0 }
 
 # Per-indicator weights WITHIN each factor group.
@@ -198,12 +198,11 @@ INDICATOR_WEIGHTS:
   momentum:
     rsi_z: 0.6
     macdLine_z: 0.4
-  # DERIVATIVES: COT is weekly (lagging), carry is monthly (slow-moving), funding is crypto-only
-  # When only one fires (e.g. carry only for indices), it gets full weight automatically.
+  # DERIVATIVES: COT is weekly (lagging), funding is crypto-only
+  # When only one fires (e.g. funding only for crypto), it gets full weight automatically.
   derivatives:
-    cot_z: 0.5
-    carry_z: 0.35
-    funding_rate: 0.15       # Only fires for crypto
+    cot_z: 0.6
+    funding_rate: 0.4       # Only fires for crypto
   # MICROSTRUCTURE: For non-crypto (candle proxies), OBI is the strongest signal.
   # OFD and LP are derived from the same OHLC data — correlated, so down-weighted.
   # For crypto (real WS orderbook), liquidity_wall_detection gets meaningful weight.

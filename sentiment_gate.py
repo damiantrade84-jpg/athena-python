@@ -156,3 +156,31 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
         log.error(f"[SENTIMENT] Unexpected error: {e}")
         return {"allowed": True, "score": 0.0, "count": 0,
                 "reason": f"Error: {e}"}
+
+
+def inject_external_sentiment(pair: str, score: float, source: str = "external") -> None:
+    """Inject external sentiment score (e.g., from LunarCrush) into the cache.
+
+    Args:
+        pair: Display name e.g. "BTC/USDT"
+        score: Sentiment score (-1.0 to +1.0), positive = bullish
+        source: Label for the data source
+    """
+    global _cache
+    # Store for both LONG and SHORT directions
+    for direction in ("LONG", "SHORT"):
+        cache_key = f"{pair}_{direction}"
+        is_aligned = (score > 0 and direction == "LONG") or (score < 0 and direction == "SHORT")
+        threshold = 0.4  # Same as SENTIMENT_BLOCK_THRESHOLD
+        allowed = is_aligned or abs(score) < threshold
+        _cache[cache_key] = {
+            "ts": time.time(),
+            "result": {
+                "allowed": allowed,
+                "score": score,
+                "count": 1,
+                "source": source,
+                "reason": f"{source} sentiment {'aligned' if is_aligned else 'opposing'}: {score:+.2f}"
+            }
+        }
+    log.info(f"[SENTIMENT] Injected {source} score for {pair}: {score:+.2f}")

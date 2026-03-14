@@ -426,6 +426,22 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
         # If base weight is 0 (asset class disables this factor), regime cannot override
         weights[factor] = 0.0 if base_w == 0 else regime_weights.get(wk, base_w)
 
+    # Adaptive weight blending — adjust weights based on empirical factor performance
+    # Only applies when learning_log has enough data (30+ trades for the asset class).
+    # Blend rate is 30% (research-backed optimal range 0.25-0.35).
+    # Disabled factors (weight=0) are never adjusted — adaptive cannot override explicit disable.
+    try:
+        from adaptive_weights import get_adaptive_weights
+        import os
+        _db = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
+        _adaptive = get_adaptive_weights(_db, asset_type, regime)
+        if _adaptive:
+            for factor in weights:
+                if weights[factor] > 0 and factor in _adaptive:
+                    weights[factor] = _adaptive[factor]
+    except Exception:
+        pass  # Graceful degradation — use base weights if adaptive fails
+
     # ── Final aggregation ────────────────────────────────────────────────
     active_dir = {f: s for f, s in factor_scores.items() if s is not None and f in directional_factors}
     active_nondir = {f: s for f, s in factor_scores.items() if s is not None and f in nondirectional_factors}
