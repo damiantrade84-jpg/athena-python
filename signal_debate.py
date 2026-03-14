@@ -38,6 +38,14 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
+        try:
+            from config import CONFIG
+            api_key = CONFIG.get("ANTHROPIC_KEY", "")
+            if api_key == "YOUR_ANTHROPIC_API_KEY":
+                api_key = ""
+        except ImportError:
+            pass
+    if not api_key:
         return {"grade": "SKIP", "allowed": True,
                 "reasoning": "No ANTHROPIC_API_KEY — debate skipped",
                 "bull_conviction": 0, "bear_conviction": 0,
@@ -51,16 +59,25 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
     votes = signal.get("votes", {})
     asset_type = signal.get("type", "unknown")
 
+    # Factor scores for AI context
+    _factor_scores = signal.get("factorScores", {})
+    _factor_str = " | ".join(f"{k}={v:.2f}" if v is not None else f"{k}=None" for k, v in _factor_scores.items()) if _factor_scores else "N/A"
+    _confidence = signal.get("confidence", "?")
+    _warnings = signal.get("warnings", [])
+
     # Build signal context
     context = (
         f"Pair: {pair} | Direction: {direction} | Score: {score}/{max_score} "
         f"| Regime: {regime} | Asset: {asset_type}\n"
+        f"Factor Scores: {_factor_str}\n"
+        f"Confidence: {_confidence}\n"
         f"Votes: {json.dumps(votes, default=str)}\n"
         f"Entry: {signal.get('price')} | SL: {signal.get('sl')} | "
         f"TP1: {signal.get('tp1')} | TP2: {signal.get('tp2')}\n"
         f"R:R = 1:{signal.get('rr1', '?')} / 1:{signal.get('rr2', '?')}\n"
         f"Vol Ratio: {signal.get('volRatio', '?')} | "
-        f"EMA200 Slope: {signal.get('ema200Slope', '?')}%"
+        f"EMA200 Slope: {signal.get('ema200Slope', '?')}%\n"
+        f"Warnings: {'; '.join(_warnings) if _warnings else 'None'}"
     )
 
     try:

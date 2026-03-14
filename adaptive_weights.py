@@ -23,8 +23,11 @@ _BASE_WEIGHTS = {
     "trend": 1.0,
     "momentum": 1.0,
     "volatility": 1.0,
-    "mean_reversion": 1.0,
     "volume": 1.0,
+    "structure": 1.0,
+    "derivatives": 1.0,
+    "microstructure": 1.0,
+    "carry": 1.0,
 }
 
 _BLEND_RATE = 0.3  # 30% blend — proven optimal range (0.25-0.35)

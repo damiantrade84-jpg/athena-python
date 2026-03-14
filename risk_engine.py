@@ -408,6 +408,14 @@ def risk_check(signal: dict, account_balance: float, account_equity: float,
         log.warning(f"{prefix} REJECTED: {corr_count} positions in '{cluster}' cluster (max {_cfg('MAX_CORRELATED_POSITIONS', 2)})")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "CORRELATED_CLUSTER_FULL")
 
+    # ── Check 4b: Same-pair duplicate guard ─────────────────────────────────
+    # Block opening a second position on a pair we already hold.
+    # Prevents position stacking on persistent signals (DOT/USDT, USO pattern).
+    _existing_same_pair = sum(1 for pos in open_positions if pos.get("pair") == pair)
+    if _existing_same_pair >= 1:
+        log.warning(f"{prefix} REJECTED: already holding {_existing_same_pair} position(s) on {pair}")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "DUPLICATE_PAIR")
+
     # ── Check 5: Calculate position size ────────────────────────────────────
     entry = signal.get("price", 0)
     sl = signal.get("sl", 0)

@@ -84,6 +84,8 @@ class AutoTrader:
 
         self._last_exec_at  = None        # datetime
 
+        self._last_meta_analysis = None  # datetime of last weekly meta-analysis
+
         self._last_exec_pair = ""
 
         self._last_exec_dir  = ""
@@ -237,6 +239,22 @@ class AutoTrader:
                 now = datetime.now(timezone.utc)
 
                 self._reset_daily_counter(now)
+
+                # Weekly meta-analysis: run once per week (Sunday 22:00 UTC)
+                if now.weekday() == 6 and now.hour == 22:
+                    if self._last_meta_analysis is None or (now - self._last_meta_analysis).days >= 6:
+                        self._last_meta_analysis = now
+                        try:
+                            from ai_learning import run_meta_analysis
+                            cfg = self._config_fn() if self._config_fn else {}
+                            _meta_result = run_meta_analysis(
+                                self._audit_db,
+                                cfg.get("ANTHROPIC_KEY", ""),
+                                cfg.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+                            )
+                            log.info(f"[AUTO] Weekly meta-analysis complete: {_meta_result.get('summary', '')[:100]}")
+                        except Exception as _me:
+                            log.warning(f"[AUTO] Weekly meta-analysis failed: {_me}")
 
 
 
@@ -470,6 +488,13 @@ class AutoTrader:
 
 
 
+        # Regime filter — only execute in TRENDING regime (37% WR vs 11% RANGING, 0% DEVELOPING)
+        _trend_state = signal.get("trendState", "UNKNOWN")
+        _regime = signal.get("regimeName", signal.get("regime", {}).get("label", "UNKNOWN") if isinstance(signal.get("regime"), dict) else "UNKNOWN")
+        _blocked_regimes = {"DEAD RANGING", "RANGING", "DEVELOPING"}
+        if _trend_state in _blocked_regimes or _regime.upper() in {"RANGING", "LOW_VOLATILITY"}:
+            return False, f"Regime filter: {_trend_state}/{_regime} — only TRENDING allowed for auto-trade"
+
         now = datetime.now(timezone.utc)
 
         session_cfg = cfg.get("AUTO_TRADE_SESSIONS", {})
@@ -523,6 +548,41 @@ class AutoTrader:
                 pass
 
 
+
+        # Signal debate gate — AI Bull/Bear/Judge evaluation before auto-execution
+        if cfg.get("SIGNAL_DEBATE_ENABLED", True):
+            try:
+                from signal_debate import run_signal_debate
+                debate = run_signal_debate(signal)
+                _grade = debate.get("grade", "SKIP")
+                _allowed = debate.get("allowed", True)
+                _reasoning = debate.get("reasoning", "")
+                log.info(f"[AUTO] {signal.get('pair')} debate: {_grade} — {_reasoning}")
+                # Notify Telegram of debate result
+                try:
+                    from telegram_notify import _send_message_async
+                    _bull = debate.get("bull_conviction", "?")
+                    _bear = debate.get("bear_conviction", "?")
+                    _msg = (
+                        f"🤖 *AI Debate: {signal.get('pair')} {signal.get('direction')}*\n"
+                        f"Grade: *{_grade}*\n"
+                        f"Bull: {_bull}/10 | Bear: {_bear}/10\n"
+                        f"Score: {signal.get('confluenceScore', 0):.2f}\n"
+                        f"_{_reasoning}_"
+                    )
+                    _send_message_async(_msg)
+                except Exception:
+                    pass
+                if not _allowed:
+                    return False, f"Debate: {_grade} — {_reasoning}"
+                # Apply score adjustment from debate (optional tuning)
+                _adj = debate.get("score_adjustment", 0.0)
+                if _adj != 0.0:
+                    signal["confluenceScore"] = max(0, signal.get("confluenceScore", 0) + _adj)
+            except ImportError:
+                log.debug("[AUTO] signal_debate not available — skipping")
+            except Exception as _debate_err:
+                log.warning(f"[AUTO] Debate failed (proceeding): {_debate_err}")
 
         return True, ""
 
