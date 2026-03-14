@@ -1085,6 +1085,9 @@ def fetch_candles_live(display, tf, limit=500):
 
 from config import CONFIG
 
+# twelvedata_feed imported lazily inside backtest block to avoid startup cost
+# (The lazy import inside the try block handles this — no top-level import needed)
+
 
 
 # enabled=True  = included in live scan; confluence score is the execution gate
@@ -3924,6 +3927,27 @@ def backtest_pair(pair, style="auto"):
                     _pg_h1 = _extract_candles(fetch_polygon(pair, "H1", 5000))
                     h4_raw = h4_raw or _pg_h4
                     h1_raw = h1_raw or _pg_h1
+                # Twelvedata — better commodity/metal history than yfinance (free, reliable)
+                # Only fires for commodity pairs that have a Twelvedata symbol mapping
+                _h4_thin = not h4_raw or len(h4_raw or []) < 500
+                _h1_thin = not h1_raw or len(h1_raw or []) < 500
+                if (_h4_thin or _h1_thin) and _ptype == "commodity":
+                    try:
+                        from twelvedata_feed import fetch_twelvedata_bt
+                        _td_h4, _td_h1 = fetch_twelvedata_bt(pair["display"], days=730)
+                        if _td_h4 and len(_td_h4) > len(h4_raw or []):
+                            h4_raw = _td_h4
+                            log.info(f"[BT] {pair['display']}: Twelvedata H4 {len(h4_raw)} bars")
+                        elif not h4_raw:
+                            h4_raw = _td_h4
+                        if _td_h1 and len(_td_h1) > len(h1_raw or []):
+                            h1_raw = _td_h1
+                            log.info(f"[BT] {pair['display']}: Twelvedata H1 {len(h1_raw)} bars")
+                        elif not h1_raw:
+                            h1_raw = _td_h1
+                    except Exception as _td_err:
+                        log.debug(f"[BT] Twelvedata failed for {pair['display']}: {_td_err}")
+                
                 # yfinance as final fallback — also triggers when Polygon returns thin data (<500 H4 bars)
                 # Polygon free plan caps H4 history for C:XAUUSD etc. at ~38 days, which is
                 # unusable: all 228 bars postdate most D1 entries, indicators compute out-of-context.

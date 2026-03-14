@@ -334,10 +334,13 @@ PAIR_PROFILES:
     weight_overrides:
       session: 1.25
 
-# ── Telegram Notifications ────────────────────────────────────────────────
+# Telegram Notifications ────────────────────────────────────────────────
 TELEGRAM:
   # Token and chat_id loaded from environment variables (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
   # NEVER commit real tokens to config.yaml — revoke and regenerate if exposed.
   token: ""
   chat_id: ""
   enabled: true
+
+# ── External API Keys ────────────────────────────────────────────────
+TWELVEDATA_KEY: "9087d0ff6aeb49d1a0c5eaffce5d81a0"
