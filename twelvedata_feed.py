@@ -72,15 +72,15 @@ def _fetch_page(symbol: str, interval: str, start_dt: datetime,
 
 
 def _to_candle(bar: dict) -> Optional[dict]:
-    """Convert Twelvedata bar to Athena candle format."""
+    """Convert Twelvedata bar to Athena candle format (uses 'time'/'vol' keys)."""
     try:
         return {
-            "datetime": bar.get("datetime") or bar.get("time") or bar.get("date", ""),
-            "open":     float(bar["open"]),
-            "high":     float(bar["high"]),
-            "low":      float(bar["low"]),
-            "close":    float(bar["close"]),
-            "volume":   float(bar.get("volume", 0)),
+            "time":  bar.get("datetime") or bar.get("time") or bar.get("date", ""),
+            "open":  float(bar["open"]),
+            "high":  float(bar["high"]),
+            "low":   float(bar["low"]),
+            "close": float(bar["close"]),
+            "vol":   float(bar.get("volume", 0)),
         }
     except (KeyError, ValueError, TypeError):
         return None
@@ -95,7 +95,7 @@ def _resample_h1_to_h4(h1_candles: list) -> list:
     current_h4 = None
     for c in h1_candles:
         try:
-            dt = datetime.fromisoformat(c.get("datetime") or c.get("time") or c.get("date", ""))
+            dt = datetime.fromisoformat(c["time"])
         except Exception:
             continue
         h4_slot = dt.replace(minute=0, second=0, microsecond=0)
@@ -105,24 +105,24 @@ def _resample_h1_to_h4(h1_candles: list) -> list:
         if h4_slot != current_h4:
             if bucket:
                 h4.append({
-                    "datetime": current_h4.isoformat(),
-                    "open":     bucket[0]["open"],
-                    "high":     max(b["high"] for b in bucket),
-                    "low":      min(b["low"] for b in bucket),
-                    "close":    bucket[-1]["close"],
-                    "volume":   sum(b["volume"] for b in bucket),
+                    "time":  current_h4.isoformat(),
+                    "open":  bucket[0]["open"],
+                    "high":  max(b["high"] for b in bucket),
+                    "low":   min(b["low"] for b in bucket),
+                    "close": bucket[-1]["close"],
+                    "vol":   sum(b["vol"] for b in bucket),
                 })
             bucket = []
             current_h4 = h4_slot
         bucket.append(c)
     if bucket:
         h4.append({
-            "datetime": current_h4.isoformat(),
-            "open":     bucket[0]["open"],
-            "high":     max(b["high"] for b in bucket),
-            "low":      min(b["low"] for b in bucket),
-            "close":    bucket[-1]["close"],
-            "volume":   sum(b["volume"] for b in bucket),
+            "time":  current_h4.isoformat(),
+            "open":  bucket[0]["open"],
+            "high":  max(b["high"] for b in bucket),
+            "low":   min(b["low"] for b in bucket),
+            "close": bucket[-1]["close"],
+            "vol":   sum(b["vol"] for b in bucket),
         })
     return h4
 
@@ -181,10 +181,9 @@ def fetch_twelvedata_bt(display_name: str, days: int = 730) -> tuple[list, list]
     # Deduplicate and sort
     seen = set()
     unique_h1 = []
-    for c in sorted(all_h1, key=lambda x: x["datetime"]):
-        key = c.get("datetime") or c.get("time") or c.get("date", "")
-        if key not in seen:
-            seen.add(key)
+    for c in sorted(all_h1, key=lambda x: x["time"]):
+        if c["time"] not in seen:
+            seen.add(c["time"])
             unique_h1.append(c)
 
     h4_candles = _resample_h1_to_h4(unique_h1)
