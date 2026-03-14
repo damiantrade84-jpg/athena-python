@@ -308,40 +308,35 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
 
     # COT positioning — CFTC net speculator z-score (directional, weekly)
     # Covers: all forex, BTC/ETH (CME), S&P/Nasdaq futures, gold/silver
-    # NOTE: zeroed out during backtest (bar_time provided) — no historical COT lookup,
-    #       using live values would introduce look-ahead bias across all walk-forward bars.
-    if bar_time is not None:
+    # NOTE: Now supports historical lookup during backtest using bar_time
+    try:
+        from cot_feed import get_cot_z as _get_cot_z
+        _as_of = bar_time[:10] if bar_time else None
+        _cot = _get_cot_z(pair.get("display", ""), as_of_date=_as_of)
+
+        # Fade the herd for Forex and Commodities: Speculators are trapped at extremes
+        if pair.get("type", "stock") in ("forex", "commodity") and _cot != 0.0:
+            if abs(_cot) >= 2.0:
+                # Extreme overcrowded positioning -> Reverse the signal (fade the herd)
+                _cot = -_cot * 1.5
+            elif abs(_cot) < 1.0:
+                # Insignificant positioning -> ignore lagged data
+                _cot = 0.0
+
+        indicators["cot_z"] = float(_cot) if _cot != 0.0 else None
+    except Exception:
         indicators["cot_z"] = None
-    else:
-        try:
-            from cot_feed import get_cot_z as _get_cot_z
-            _cot = _get_cot_z(pair.get("display", ""))
-
-            # Fade the herd for Forex and Commodities: Speculators are trapped at extremes
-            if pair.get("type", "stock") in ("forex", "commodity") and _cot != 0.0:
-                if abs(_cot) >= 2.0:
-                    # Extreme overcrowded positioning -> Reverse the signal (fade the herd)
-                    _cot = -_cot * 1.5
-                elif abs(_cot) < 1.0:
-                    # Insignificant positioning -> ignore lagged data
-                    _cot = 0.0
-
-            indicators["cot_z"] = float(_cot) if _cot != 0.0 else None
-        except Exception:
-            indicators["cot_z"] = None
 
     # Carry — interest rate differential z-score (directional, monthly)
     # Forex: base_rate - quote_rate; Indices/gold: inverted 10Y yield
-    # NOTE: zeroed out during backtest (bar_time provided) — same look-ahead reason as COT.
-    if bar_time is not None:
+    # NOTE: Now supports historical lookup during backtest using bar_time
+    try:
+        from carry_feed import get_carry_z as _get_carry_z
+        _as_of = bar_time[:10] if bar_time else None
+        _carry = _get_carry_z(pair.get("display", ""), as_of_date=_as_of)
+        indicators["carry_z"] = float(_carry) if _carry != 0.0 else None
+    except Exception:
         indicators["carry_z"] = None
-    else:
-        try:
-            from carry_feed import get_carry_z as _get_carry_z
-            _carry = _get_carry_z(pair.get("display", ""))
-            indicators["carry_z"] = float(_carry) if _carry != 0.0 else None
-        except Exception:
-            indicators["carry_z"] = None
 
     # Microstructure (directional if available)
     # Crypto: values injected from Binance/Bybit WS feeds via _micro_cache in athena.py
@@ -375,7 +370,7 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
         # All 3 aligned → ±1.0 (high conviction); mixed → near 0 (conflicting)
         "trend":          ["ema_trend", "h4_ema_trend", "d1_ema_trend"],
         "momentum":       ["rsi_z", "macdLine_z"],
-        "derivatives":    ["funding_rate", "cot_z", "carry_z"],
+        "derivatives":    ["funding_rate", "cot_z"],
         "microstructure": ["order_book_imbalance", "liquidity_wall_detection",
                            "orderflow_delta", "liquidity_pressure"],
     }
@@ -385,6 +380,7 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
         "volatility":     ["atr_z", "bbWidth_z", "realized_vol_z"],
         "volume":         ["volume_ratio", "obv_trend"],
         "structure":      ["fib_proximity"],
+        "carry":          ["carry_z"],
     }
 
     # ── Compute factor scores (correlation-adjusted × indicator-weighted) ────
@@ -419,6 +415,7 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
         "trend": "trend", "momentum": "momentum", "derivatives": "derivatives",
         "microstructure": "microstructure", "trend_strength": "trend",
         "volatility": "volatility", "volume": "volume", "structure": "structure",
+        "carry": "carry",
     }
     weights: Dict[str, float] = {}
     all_factors = dict(directional_factors)
