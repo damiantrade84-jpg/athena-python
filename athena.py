@@ -3891,58 +3891,44 @@ def backtest_pair(pair, style="auto"):
 
             if not h4_raw or not h1_raw:
 
-                # Try Polygon first (more reliable than yfinance for commodities/indices)
-                _poly_ticker = _polygon_ticker_for_pair(pair)
-                if _poly_ticker:
+                _pg_ticker = _polygon_ticker_for_pair(pair)
+                if _pg_ticker:
                     log.info(f"[BT] {pair['display']}: EODHD intraday failed, trying Polygon")
-                    try:
-                        _poly_result = fetch_polygon(pair, "H1", 17520)  # 730d * 24h
-                        _poly_candles = _extract_candles(_poly_result)
-                        if _poly_candles:
-                            # Resample H1 to H4
-                            h1_raw = h1_raw or _poly_candles
-                            h4_raw = h4_raw or _resample_to_h4(_poly_candles)
-                    except Exception as e:
-                        log.debug(f"[BT] Polygon fallback failed for {pair['display']}: {e}")
-                
-                # Final fallback — yfinance
+                    _pg_h4 = _extract_candles(fetch_polygon(pair, "H4", 5000))
+                    _pg_h1 = _extract_candles(fetch_polygon(pair, "H1", 5000))
+                    h4_raw = h4_raw or _pg_h4
+                    h1_raw = h1_raw or _pg_h1
                 if not h4_raw or not h1_raw:
                     _yf_sym = _yfinance_symbol_for_pair(pair)
                     if _yf_sym:
-                        log.info(f"[BT] {pair['display']}: trying yfinance as last resort")
+                        log.info(f"[BT] {pair['display']}: trying yfinance fallback")
                         _yf_h4, _yf_h1 = _fetch_bt_yfinance(_yf_sym)
                         h4_raw = h4_raw or _yf_h4
                         h1_raw = h1_raw or _yf_h1
 
         elif _ptype in ("stock", "commodity", "index"):
 
-            # Stocks/Commodities/Indices: EODHD D1 + EODHD intraday (730d), yfinance fallback
-
+            # Stocks/Commodities/Indices: EODHD D1 + EODHD intraday (730d)
+            # Fallback chain: EODHD → Polygon (commodities) → yfinance
             d1_raw = _extract_candles(fetch_eodhd(pair, "D1", 600)) or fetch_candles(pair, "D1", 600)
 
             h4_raw, h1_raw = _fetch_eodhd_intraday_bt(pair, days=730)
 
             if not h4_raw or not h1_raw:
 
-                # Try Polygon first (more reliable than yfinance for commodities/indices)
-                _poly_ticker = _polygon_ticker_for_pair(pair)
-                if _poly_ticker:
+                # Try Polygon first for commodities (better data quality than yfinance)
+                _pg_ticker = _polygon_ticker_for_pair(pair)
+                if _pg_ticker and _ptype == "commodity":
                     log.info(f"[BT] {pair['display']}: EODHD intraday failed, trying Polygon")
-                    try:
-                        _poly_result = fetch_polygon(pair, "H1", 17520)  # 730d * 24h
-                        _poly_candles = _extract_candles(_poly_result)
-                        if _poly_candles:
-                            # Resample H1 to H4
-                            h1_raw = h1_raw or _poly_candles
-                            h4_raw = h4_raw or _resample_to_h4(_poly_candles)
-                    except Exception as e:
-                        log.debug(f"[BT] Polygon fallback failed for {pair['display']}: {e}")
-                
-                # Final fallback — yfinance
+                    _pg_h4 = _extract_candles(fetch_polygon(pair, "H4", 5000))
+                    _pg_h1 = _extract_candles(fetch_polygon(pair, "H1", 5000))
+                    h4_raw = h4_raw or _pg_h4
+                    h1_raw = h1_raw or _pg_h1
+                # yfinance as final fallback
                 if not h4_raw or not h1_raw:
                     _yf_sym = _yfinance_symbol_for_pair(pair)
                     if _yf_sym:
-                        log.info(f"[BT] {pair['display']}: trying yfinance as last resort")
+                        log.info(f"[BT] {pair['display']}: trying yfinance fallback")
                         _yf_h4, _yf_h1 = _fetch_bt_yfinance(_yf_sym)
                         h4_raw = h4_raw or _yf_h4
                         h1_raw = h1_raw or _yf_h1
