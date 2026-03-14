@@ -274,7 +274,7 @@ def _ensure_series(series_id: str, blocking: bool = False):
         threading.Thread(target=_do_fetch, daemon=True, name=f"FRED-{series_id}").start()
 
 
-def _get_latest_rate(series_id: str) -> Optional[float]:
+def _get_latest_rate(series_id: str, as_of_date: str = None) -> Optional[float]:
     """Return most recent non-null rate for a FRED series."""
     _ensure_series(series_id)
     with _db_lock:
@@ -287,7 +287,7 @@ def _get_latest_rate(series_id: str) -> Optional[float]:
     return row[0] if row else None
 
 
-def _get_rate_series(series_id: str, months: int = 36) -> list[float]:
+def _get_rate_series(series_id: str, months: int = 36, as_of_date: str = None) -> list[float]:
     """Return last `months` monthly rate values (most recent last)."""
     _ensure_series(series_id)
     with _db_lock:
@@ -330,7 +330,7 @@ _10Y_SERIES_MAP: dict[str, tuple[str, float]] = {
 }
 
 
-def _get_rate_for_key(key: str) -> Optional[float]:
+def _get_rate_for_key(key: str, as_of_date: str = None) -> Optional[float]:
     """Get latest rate for a currency key or special key like _10Y / _10Y_GB etc.
 
     Priority:
@@ -341,24 +341,28 @@ def _get_rate_for_key(key: str) -> Optional[float]:
 
     if key in _10Y_SERIES_MAP:
         series_id, static_fallback = _10Y_SERIES_MAP[key]
-        cached = _rate_cache.get(series_id)
-        if cached and now - cached[1] < 3600:
-            return cached[0]
-        rate = _get_latest_rate(series_id)   # non-blocking (background fetch)
+        if not as_of_date:
+            cached = _rate_cache.get(series_id)
+            if cached and now - cached[1] < 3600:
+                return cached[0]
+        rate = _get_latest_rate(series_id, as_of_date=as_of_date)   # non-blocking (background fetch)
         if rate is not None:
-            _rate_cache[series_id] = (rate, now)
+            if not as_of_date:
+                _rate_cache[series_id] = (rate, now)
             return rate
         return static_fallback
 
     # FRED-backed currency
     series_id = _FRED_CURRENCY_SERIES.get(key)
     if series_id:
-        cached = _rate_cache.get(series_id)
-        if cached and now - cached[1] < 3600:
-            return cached[0]
-        rate = _get_latest_rate(series_id)
+        if not as_of_date:
+            cached = _rate_cache.get(series_id)
+            if cached and now - cached[1] < 3600:
+                return cached[0]
+        rate = _get_latest_rate(series_id, as_of_date=as_of_date)
         if rate is not None:
-            _rate_cache[series_id] = (rate, now)
+            if not as_of_date:
+                _rate_cache[series_id] = (rate, now)
             return rate
         # FRED failed — fall through to static
 
@@ -366,7 +370,7 @@ def _get_rate_for_key(key: str) -> Optional[float]:
     return _STATIC_RATES.get(key)
 
 
-def _get_rate_series_for_key(key: str, months: int = 36) -> list[float]:
+def _get_rate_series_for_key(key: str, months: int = 36, as_of_date: str = None) -> list[float]:
     """Return historical rate series for a currency key.
 
     For FRED-backed keys: returns real historical data.
@@ -376,14 +380,14 @@ def _get_rate_series_for_key(key: str, months: int = 36) -> list[float]:
     """
     if key in _10Y_SERIES_MAP:
         series_id, static_fallback = _10Y_SERIES_MAP[key]
-        s = _get_rate_series(series_id, months)
+        s = _get_rate_series(series_id, months, as_of_date=as_of_date)
         if len(s) >= 4:
             return s
         return [static_fallback] * months  # flat fallback
 
     series_id = _FRED_CURRENCY_SERIES.get(key)
     if series_id:
-        s = _get_rate_series(series_id, months)
+        s = _get_rate_series(series_id, months, as_of_date=as_of_date)
         if len(s) >= 4:
             return s
 
@@ -394,7 +398,7 @@ def _get_rate_series_for_key(key: str, months: int = 36) -> list[float]:
     return []
 
 
-def get_carry_z(display: str) -> float:
+def get_carry_z(display: str, as_of_date: str = None) -> float:
     """Return interest rate carry z-score for a pair.
 
     Positive = base currency / asset has carry tailwind.
@@ -402,44 +406,50 @@ def get_carry_z(display: str) -> float:
 
     Args:
         display: Athena display name e.g. "EUR/USD", "S&P 500", "XAU/USD"
+        as_of_date: Optional date string for historical lookup (YYYY-MM-DD)
 
     Returns:
         float in [-3.0, 3.0]; 0.0 = neutral / no coverage
     """
     now = time.time()
-    cached = _mem_cache.get(display)
-    if cached and now - cached[1] < _MEM_TTL:
-        return cached[0]
+    if not as_of_date:
+        cached = _mem_cache.get(display)
+        if cached and now - cached[1] < _MEM_TTL:
+            return cached[0]
 
     formula = _PAIR_CARRY_FORMULA.get(display, [])
     if not formula:
-        _mem_cache[display] = (0.0, now)
+        if not as_of_date:
+            _mem_cache[display] = (0.0, now)
         return 0.0
 
     # Compute current carry value
     carry = 0.0
     for sign, key in formula:
-        rate = _get_rate_for_key(key)
+        rate = _get_rate_for_key(key, as_of_date=as_of_date)
         if rate is None:
-            _mem_cache[display] = (0.0, now)
+            if not as_of_date:
+                _mem_cache[display] = (0.0, now)
             return 0.0
         carry += sign * rate
 
     # Build historical carry series for z-score (36 months)
     history_lists = []
     for sign, key in formula:
-        s = _get_rate_series_for_key(key, months=36)
+        s = _get_rate_series_for_key(key, months=36, as_of_date=as_of_date)
         if s:
             history_lists.append((sign, s))
 
     # Compute carry for each historical date
     if not history_lists:
-        _mem_cache[display] = (0.0, now)
+        if not as_of_date:
+            _mem_cache[display] = (0.0, now)
         return 0.0
 
     min_len = min(len(s) for _, s in history_lists)
     if min_len < 4:
-        _mem_cache[display] = (0.0, now)
+        if not as_of_date:
+            _mem_cache[display] = (0.0, now)
         return 0.0
 
     carry_history = []
@@ -449,7 +459,8 @@ def get_carry_z(display: str) -> float:
 
     z = _carry_zscore(carry, carry_history)
     result = round(z, 3) if z is not None else 0.0
-    _mem_cache[display] = (result, now)
+    if not as_of_date:
+        _mem_cache[display] = (result, now)
     return result
 
 

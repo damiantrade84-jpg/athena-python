@@ -394,13 +394,19 @@ def refresh_cot(force: bool = False):
 
 # ── Z-score computation ───────────────────────────────────────────────────────
 
-def _get_net_series(asset: str, weeks: int = 104) -> list[int]:
+def _get_net_series(asset: str, weeks: int = 104, as_of_date: str = None) -> list[int]:
     with _db_lock:
         con = sqlite3.connect(_DB_PATH, timeout=1.0)
-        rows = con.execute(
-            "SELECT net_long FROM cot_net WHERE asset=? ORDER BY report_date DESC LIMIT ?",
-            (asset, weeks)
-        ).fetchall()
+        if as_of_date:
+            rows = con.execute(
+                "SELECT net_long FROM cot_net WHERE asset=? AND report_date<=? ORDER BY report_date DESC LIMIT ?",
+                (asset, as_of_date, weeks)
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT net_long FROM cot_net WHERE asset=? ORDER BY report_date DESC LIMIT ?",
+                (asset, weeks)
+            ).fetchall()
         con.close()
     return [r[0] for r in reversed(rows)]
 
@@ -420,28 +426,31 @@ def _zscore(series: list[int], window: int = 52) -> Optional[float]:
     return max(-3.0, min(3.0, (latest - mean) / std))
 
 
-def _asset_z(asset: str) -> Optional[float]:
+def _asset_z(asset: str, as_of_date: str = None) -> Optional[float]:
     now = time.time()
-    cached = _mem_cache.get(asset)
-    if cached and now - cached[1] < _MEM_TTL:
-        return cached[0]
+    if not as_of_date:
+        cached = _mem_cache.get(asset)
+        if cached and now - cached[1] < _MEM_TTL:
+            return cached[0]
 
-    series = _get_net_series(asset)
+    series = _get_net_series(asset, as_of_date=as_of_date)
     if len(series) < 4:
         # Not enough data yet — background seed hasn't completed.
         # Do NOT call refresh_cot() here: it blocks the scan thread for 30-60s
         # downloading CFTC ZIPs. Let the background COTSeed thread populate the DB.
-        _mem_cache[asset] = (None, now)
+        if not as_of_date:
+            _mem_cache[asset] = (None, now)
         return None
 
     z = _zscore(series)
-    _mem_cache[asset] = (z, now)
+    if not as_of_date:
+        _mem_cache[asset] = (z, now)
     return z
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def get_cot_z(display: str) -> float:
+def get_cot_z(display: str, as_of_date: str = None) -> float:
     """Return COT net positioning z-score for a pair.
 
     Positive = speculators net long the base currency / asset (bullish signal).
@@ -453,7 +462,7 @@ def get_cot_z(display: str) -> float:
 
     total, count = 0.0, 0
     for sign, key in formula:
-        z = _asset_z(key)
+        z = _asset_z(key, as_of_date=as_of_date)
         if z is not None:
             total += sign * z
             count += 1

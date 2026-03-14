@@ -104,25 +104,25 @@ CONFIG: dict = {
     },
     # Factor weights per asset class (base, before regime overrides)
     "FACTOR_WEIGHTS": {
-        "crypto":    {"trend": 2.0, "momentum": 1.5, "volatility": 1.0, "volume": 1.0, "structure": 1.0, "derivatives": 1.5, "microstructure": 1.5},
-        "forex":     {"trend": 2.0, "momentum": 1.0, "volatility": 1.0, "volume": 0.5, "structure": 1.5, "derivatives": 1.5, "microstructure": 0.5},
-        "stock":     {"trend": 2.0, "momentum": 1.5, "volatility": 1.0, "volume": 1.5, "structure": 1.0, "derivatives": 0.5, "microstructure": 0.75},
-        "commodity": {"trend": 2.0, "momentum": 1.3, "volatility": 1.5, "volume": 1.0, "structure": 1.3, "derivatives": 1.0, "microstructure": 0.75},
-        "index":     {"trend": 2.0, "momentum": 1.4, "volatility": 1.2, "volume": 0.8, "structure": 1.0, "derivatives": 1.2, "microstructure": 0.75},
+        "crypto":    {"trend": 2.0, "momentum": 1.5, "volatility": 1.0, "volume": 1.0, "structure": 1.0, "derivatives": 1.5, "microstructure": 1.5, "carry": 1.0},
+        "forex":     {"trend": 2.0, "momentum": 1.0, "volatility": 1.0, "volume": 0.5, "structure": 1.5, "derivatives": 0.0, "microstructure": 0.5, "carry": 0.0},
+        "stock":     {"trend": 2.0, "momentum": 1.5, "volatility": 1.0, "volume": 1.5, "structure": 1.0, "derivatives": 0.5, "microstructure": 0.75, "carry": 1.0},
+        "commodity": {"trend": 2.0, "momentum": 1.3, "volatility": 1.5, "volume": 1.0, "structure": 1.3, "derivatives": 1.0, "microstructure": 0.75, "carry": 1.0},
+        "index":     {"trend": 2.0, "momentum": 1.4, "volatility": 1.2, "volume": 0.8, "structure": 1.0, "derivatives": 1.2, "microstructure": 0.75, "carry": 1.0},
     },
     # Regime-aware factor weight overrides
     "REGIME_WEIGHTS": {
         "TRENDING": {
-            "trend": 2.0, "momentum": 1.5, "volatility": 1.0, "volume": 1.0, "structure": 0.5, "derivatives": 1.2, "microstructure": 1.5,
+            "trend": 2.0, "momentum": 1.5, "volatility": 1.0, "volume": 1.0, "structure": 0.5, "derivatives": 1.2, "microstructure": 1.5, "carry": 1.0,
         },
         "RANGING": {
-            "trend": 0.5, "momentum": 1.5, "volatility": 1.0, "volume": 1.0, "structure": 2.0, "derivatives": 1.0, "microstructure": 1.5,
+            "trend": 0.5, "momentum": 1.5, "volatility": 1.0, "volume": 1.0, "structure": 2.0, "derivatives": 1.0, "microstructure": 1.5, "carry": 1.0,
         },
         "HIGH_VOLATILITY": {
-            "trend": 1.0, "momentum": 1.0, "volatility": 2.0, "volume": 1.5, "structure": 1.0, "derivatives": 1.5, "microstructure": 1.5,
+            "trend": 1.0, "momentum": 1.0, "volatility": 2.0, "volume": 1.5, "structure": 1.0, "derivatives": 1.5, "microstructure": 1.5, "carry": 1.0,
         },
         "LOW_VOLATILITY": {
-            "trend": 1.2, "momentum": 1.0, "volatility": 0.5, "volume": 1.0, "structure": 1.0, "derivatives": 1.0, "microstructure": 1.5,
+            "trend": 1.2, "momentum": 1.0, "volatility": 0.5, "volume": 1.0, "structure": 1.0, "derivatives": 1.0, "microstructure": 1.5, "carry": 1.0,
         },
     },
     # Per-indicator weights within each factor group (multiplied with correlation weights).
