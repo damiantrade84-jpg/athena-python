@@ -191,9 +191,26 @@ INDICATOR_WEIGHTS:
   # Equal weighting treats a normal H1 pullback as weak direction — wrong for trend-following.
   # D1-dominant: pullback in strong D1 trend scores 0.60 instead of 0.33.
   trend:
-    d1_ema_trend: 0.5
-    h4_ema_trend: 0.3
-    ema_trend: 0.2          # H1 entry timeframe — lowest weight
+    crypto:
+      d1_ema_trend: 0.5
+      h4_ema_trend: 0.3
+      ema_trend: 0.2
+    forex:
+      d1_ema_trend: 0.5
+      h4_ema_trend: 0.3
+      ema_trend: 0.2
+    commodity:
+      d1_ema_trend: 0.34
+      h4_ema_trend: 0.33
+      ema_trend: 0.33
+    stock:
+      d1_ema_trend: 0.4
+      h4_ema_trend: 0.35
+      ema_trend: 0.25
+    index:
+      d1_ema_trend: 0.4
+      h4_ema_trend: 0.35
+      ema_trend: 0.25
   # MOMENTUM: RSI is more responsive for forex; MACD lags but confirms
   momentum:
     rsi_z: 0.6

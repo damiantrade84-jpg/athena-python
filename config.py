@@ -128,7 +128,13 @@ CONFIG: dict = {
     # Per-indicator weights within each factor group (multiplied with correlation weights).
     # Missing keys default to 1.0. Set to 0.0 to disable an indicator.
     "INDICATOR_WEIGHTS": {
-        "trend":          {"d1_ema_trend": 0.5, "h4_ema_trend": 0.3, "ema_trend": 0.2},
+        "trend": {
+            "crypto": {"d1_ema_trend": 0.5, "h4_ema_trend": 0.3, "ema_trend": 0.2},
+            "forex": {"d1_ema_trend": 0.5, "h4_ema_trend": 0.3, "ema_trend": 0.2},
+            "commodity": {"d1_ema_trend": 0.34, "h4_ema_trend": 0.33, "ema_trend": 0.33},
+            "stock": {"d1_ema_trend": 0.4, "h4_ema_trend": 0.35, "ema_trend": 0.25},
+            "index": {"d1_ema_trend": 0.4, "h4_ema_trend": 0.35, "ema_trend": 0.25}
+        },
         "momentum":       {"rsi_z": 0.6, "macdLine_z": 0.4},
         "derivatives":    {"cot_z": 0.6, "funding_rate": 0.4},
         "microstructure": {"order_book_imbalance": 0.4, "liquidity_wall_detection": 0.25,
