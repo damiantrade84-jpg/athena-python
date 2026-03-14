@@ -1385,29 +1385,29 @@ _YF_INTRADAY_PERIOD = "180d"
 
 _VENDOR_SYMBOL_OVERRIDES = {
 
-    "UK100": {"yfinance": "^FTSE", "eodhd": "FTSE", "polygon": "C:UK100", "fallback": "yfinance", "eodhd_intraday": "FTSE.INDX"},
-
-    # Commodities — EODHD daily only, yfinance for intraday (EODHD has no commodity intraday)
-    "XAU/USD": {"eodhd": "GC", "yfinance": "GC=F"},
-    "XAG/USD": {"eodhd": "SI", "yfinance": "SI=F"},
-    "WTI Oil": {"yfinance": "CL=F", "fallback": "yfinance", "eodhd": "CL"},
-    "Brent Oil": {"polygon": "C:BZ=F", "eodhd": "BZ", "yfinance": "BZ=F"},
-    "Nat Gas": {"polygon": "C:NG=F", "eodhd": "NG", "yfinance": "NG=F"},
-    "Copper": {"polygon": "C:HG=F", "eodhd": "HG", "yfinance": "HG=F"},
-    "XPT/USD": {"polygon": "C:XPTUSD", "eodhd": "PL", "yfinance": "PL=F"},
-    # XPD/USD (Palladium) removed - PA symbol not available on EODHD (404 error)
+    # Precious metals: EODHD D1 via .FOREX suffix (confirmed 12,350 bars); Polygon C: for H4/H1
+    # EODHD has NO intraday for XAU/XAG — Polygon handles H4/H1 backtest fallback
+    "XAU/USD": {"eodhd": "XAUUSD.FOREX", "polygon": "C:XAUUSD"},
+    "XAG/USD": {"eodhd": "XAGUSD.FOREX", "polygon": "C:XAGUSD"},
+    "XPT/USD": {"polygon": "C:XPTUSD", "eodhd": "XPTUSD.FOREX", "yfinance": "PL=F"},
     "XPD/USD": {"polygon": "C:XPDUSD", "fallback": "yfinance"},
 
-    # Indices — EODHD daily + intraday with .INDX suffix (confirmed working)
-    "S&P 500": {"yfinance": "^GSPC", "eodhd": "GSPC", "eodhd_intraday": "GSPC.INDX"},
-    "Nasdaq": {"yfinance": "^IXIC", "eodhd": "IXIC", "eodhd_intraday": "IXIC.INDX"},
-    "Dow Jones": {"yfinance": "^DJI", "eodhd": "DJI", "eodhd_intraday": "DJI.INDX"},
-    "UK100": {"yfinance": "^FTSE", "eodhd": "FTSE", "polygon": "C:UK100", "fallback": "yfinance", "eodhd_intraday": "FTSE.INDX"},
-    "DAX 40": {"yfinance": "^GDAXI", "eodhd": "GDAXI", "eodhd_intraday": "GDAXI.INDX"},
-    "ASX 200": {"yfinance": "^AXJO", "eodhd": "AXJO", "eodhd_intraday": "AXJO.INDX"},
-    "Nikkei 225": {"yfinance": "^N225", "eodhd": "N225", "eodhd_intraday": "N225.INDX"},
-    "Hang Seng": {"yfinance": "^HSI", "eodhd": "HSI", "eodhd_intraday": "HSI.INDX"},
-    "Euro Stoxx 50": {"yfinance": "^STOXX50E", "eodhd": "STOXX50E", "eodhd_intraday": "STOXX50E.INDX"},
+    # Energy / base metals: EODHD D1 plain symbol; yfinance fallback for intraday
+    "WTI Oil":  {"yfinance": "CL=F", "eodhd": "CL",  "fallback": "yfinance"},
+    "Brent Oil":{"yfinance": "BZ=F", "eodhd": "BZ",  "fallback": "yfinance"},
+    "Nat Gas":  {"yfinance": "NG=F", "eodhd": "NG",  "fallback": "yfinance"},
+    "Copper":   {"yfinance": "HG=F", "eodhd": "HG",  "fallback": "yfinance"},
+
+    # Indices: EODHD plain symbol for D1; eodhd_intraday uses .INDX suffix (confirmed working)
+    "UK100":        {"yfinance": "^FTSE",    "eodhd": "FTSE",    "eodhd_intraday": "FTSE.INDX",    "polygon": "C:UK100", "fallback": "yfinance"},
+    "S&P 500":      {"yfinance": "^GSPC",    "eodhd": "GSPC",    "eodhd_intraday": "GSPC.INDX",    "fallback": "yfinance"},
+    "Nasdaq":       {"yfinance": "^IXIC",    "eodhd": "IXIC",    "eodhd_intraday": "IXIC.INDX",    "fallback": "yfinance"},
+    "Dow Jones":    {"yfinance": "^DJI",     "eodhd": "DJI",     "eodhd_intraday": "DJI.INDX",     "fallback": "yfinance"},
+    "DAX 40":       {"yfinance": "^GDAXI",   "eodhd": "GDAXI",   "eodhd_intraday": "GDAXI.INDX",   "fallback": "yfinance"},
+    "ASX 200":      {"yfinance": "^AXJO",    "eodhd": "AXJO",    "eodhd_intraday": "AXJO.INDX",    "fallback": "yfinance"},
+    "Nikkei 225":   {"yfinance": "^N225",    "eodhd": "N225",    "eodhd_intraday": "N225.INDX",    "fallback": "yfinance"},
+    "Hang Seng":    {"yfinance": "^HSI",     "eodhd": "HSI",     "eodhd_intraday": "HSI.INDX",     "fallback": "yfinance"},
+    "Euro Stoxx 50":{"yfinance": "^STOXX50E","eodhd": "STOXX50E","eodhd_intraday": "STOXX50E.INDX","fallback": "yfinance"},
 
 }
 
