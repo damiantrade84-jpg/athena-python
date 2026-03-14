@@ -7524,7 +7524,7 @@ def analyze_pair(pair, btc_bias, style="swing"):
             h1_snap=_cf_h1i["snap"],
             h1_candles=_cf_h1c,
             pair=pair,
-            bar_time=bar_time,
+            bar_time=str(d1[-1].get("time", "") or d1[-1].get("datetime", "")),
         )
         _min_forex = CONFIG.get("MIN_FOREX_CONFLUENCE", 0.40)
         res = {

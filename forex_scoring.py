@@ -20,6 +20,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+import numpy as np
+import pandas as pd
+
 log = logging.getLogger("athena")
 
 
@@ -51,22 +54,111 @@ def _in_session(utc_hour: int) -> bool:
             _NY_OPEN[0]     <= utc_hour <= _NY_OPEN[1])
 
 
+def _hurst_exponent(prices: list, max_lag: int = 20) -> float:
+    """
+    Hurst Exponent via variance of lagged differences.
+    H < 0.45 = mean-reverting  H > 0.55 = trending  H = 0.5 = random walk
+    """
+    if len(prices) < max_lag * 2:
+        return 0.5
+    try:
+        arr  = np.array(prices, dtype=float)
+        lags = range(2, max_lag)
+        tau  = [np.sqrt(np.std(np.subtract(arr[lag:], arr[:-lag])))
+                for lag in lags]
+        tau  = [t for t in tau if t > 0]
+        if len(tau) < 2:
+            return 0.5
+        valid_lags = list(lags)[:len(tau)]
+        poly = np.polyfit(np.log(valid_lags), np.log(tau), 1)
+        return float(np.clip(poly[0] * 2.0, 0.0, 1.0))
+    except Exception:
+        return 0.5
+
+
+def _mad_zscore(value: float, history: list, window: int = 20) -> float:
+    """
+    Modified Z-score using Median Absolute Deviation.
+    Resistant to fat tails and volatility compression — correct for forex.
+    Formula: M = 0.6745 * (x - median) / MAD
+    """
+    if len(history) < window:
+        return 0.0
+    try:
+        series = pd.Series(history[-window:], dtype=float)
+        med = series.median()
+        mad = float(np.median(np.abs(series - med)))
+        if mad < 1e-8:
+            return 0.0
+        return float(np.clip(0.6745 * (value - med) / mad, -3.0, 3.0))
+    except Exception:
+        return 0.0
+
+
+class DynamicForexWeights:
+    """
+    Shifts scoring weights based on Hurst Exponent regime.
+    Mean-reverting (H<0.45): RSI pullback quality dominates.
+    Trending (H>0.55): EMA trend alignment and COT dominate.
+    Neutral (0.45-0.55): balanced weights.
+    """
+    def __init__(self):
+        self.rsi_w  = 0.40
+        self.cot_w  = 0.20
+        self.base   = 0.30
+        self.regime = "NEUTRAL"
+
+    def update(self, hurst: float, backtest_mode: bool = False) -> None:
+        b = 0.25 if backtest_mode else 0.35
+        if hurst < 0.45:
+            self.base   = b - 0.05
+            self.rsi_w  = 0.60
+            self.cot_w  = 0.20
+            self.regime = "MEAN_REVERTING"
+        elif hurst > 0.55:
+            self.base   = b + 0.05
+            self.rsi_w  = 0.20
+            self.cot_w  = 0.25
+            self.regime = "TRENDING"
+        else:
+            self.base   = b
+            self.rsi_w  = 0.40
+            self.cot_w  = 0.20
+            self.regime = "NEUTRAL"
+
+    def score(self, eq: float, cot: float) -> float:
+        return self.base + eq * self.rsi_w + cot * self.cot_w
+
+
 # ─── Trend gate ──────────────────────────────────────────────────────────────
 
 def _check_trend_gate(d1_snap: dict, h4_snap: dict) -> tuple[bool, str]:
     """
-    D1 and H4 EMA alignment check.
+    D1 and H4 EMA alignment check with ADX trend filter.
+    ADX filter — market must be trending, not ranging
+    ADX < 20 = choppy/ranging = EMA signals are noise in forex
     LONG: D1 close > D1 ema200 AND H4 ema50 > H4 ema200
     SHORT: D1 close < D1 ema200 AND H4 ema50 < H4 ema200
     Mixed = no trade.
     Also checks ema200Slope10 for trend health — flat ema200 reduces conviction.
     """
+    # ADX filter — market must be trending, not ranging
+    # ADX < 20 = choppy/ranging = EMA signals are noise in forex
+    adx = d1_snap.get("adx")
+    if adx is None:
+        adx = 0.0
+    try:
+        adx = float(adx)
+    except (ValueError, TypeError):
+        adx = 0.0
+    if adx < 20.0:
+        return False, "LONG"  # not trending — skip regardless of EMA alignment
+
     d1_close  = d1_snap.get("close")
     d1_ema200 = d1_snap.get("ema200")
     h4_ema50  = h4_snap.get("ema50")
     h4_ema200 = h4_snap.get("ema200")
-
-    d1_slope = d1_snap.get("ema200Slope10", 0)
+    d1_slope  = d1_snap.get("ema200Slope10", 0) or 0
 
     if None in (d1_close, d1_ema200, h4_ema50, h4_ema200):
         return False, "LONG"
@@ -76,13 +168,13 @@ def _check_trend_gate(d1_snap: dict, h4_snap: dict) -> tuple[bool, str]:
 
     if d1_bull and h4_bull:
         margin = (d1_close - d1_ema200) / d1_ema200
-        if margin > 0.001 or d1_slope > 0:
+        if margin > 0.003 or d1_slope > 0:
             return True, "LONG"
         return False, "LONG"
 
     if not d1_bull and not h4_bull:
         margin = (d1_ema200 - d1_close) / d1_ema200
-        if margin > 0.001 or d1_slope < 0:
+        if margin > 0.003 or d1_slope < 0:
             return True, "SHORT"
         return False, "SHORT"
 
@@ -91,35 +183,35 @@ def _check_trend_gate(d1_snap: dict, h4_snap: dict) -> tuple[bool, str]:
 
 # ─── Entry quality (RSI pullback) ────────────────────────────────────────────
 
-def _entry_quality(h1_snap: dict, direction: str) -> float:
-    """
-    Score the H1 RSI pullback depth.
-    LONG: RSI between 35-55 = good pullback (1.0), 55-65 = ok (0.5)
-    SHORT: RSI between 45-65 = good pullback (1.0), 35-45 = ok (0.5)
-    Outside these zones = 0.0 (too extended or too deep)
-    """
+def _entry_quality(h1_snap: dict, direction: str,
+                   rsi_history: list = None) -> float:
     rsi = h1_snap.get("rsi") or h1_snap.get("rsi14")
     if rsi is None:
-        return 0.3  # neutral if no RSI data
+        return 0.3
+
+    if rsi_history and len(rsi_history) >= 10:
+        rsi_z = _mad_zscore(rsi, rsi_history)
+        if direction == "LONG":
+            if rsi_z <= -0.5:   return 1.0
+            elif rsi_z <= 0.0:  return 0.6
+            elif rsi_z <= 0.5:  return 0.3
+            else:               return 0.0
+        else:
+            if rsi_z >= 0.5:    return 1.0
+            elif rsi_z >= 0.0:  return 0.6
+            elif rsi_z >= -0.5: return 0.3
+            else:               return 0.0
 
     if direction == "LONG":
-        if 35 <= rsi <= 55:
-            return 1.0
-        elif 55 < rsi <= 65:
-            return 0.5
-        elif rsi < 35:
-            return 0.2  # too oversold
-        else:
-            return 0.0  # overbought
-    else:  # SHORT
-        if 45 <= rsi <= 65:
-            return 1.0
-        elif 35 <= rsi < 45:
-            return 0.5
-        elif rsi > 65:
-            return 0.2
-        else:
-            return 0.0
+        if 35 <= rsi <= 55:   return 1.0
+        elif 55 < rsi <= 65:  return 0.5
+        elif rsi < 35:        return 0.2
+        else:                 return 0.0
+    else:
+        if 45 <= rsi <= 65:   return 1.0
+        elif 35 <= rsi < 45:  return 0.5
+        elif rsi > 65:        return 0.2
+        else:                 return 0.0
 
 
 # ─── Momentum confirmation ───────────────────────────────────────────────────────
@@ -249,12 +341,20 @@ def _london_breakout_score(h1_candles: list, utc_hour: int) -> tuple[float, str]
 
     current       = h1_candles[-1]
     current_close = current.get("close", 0)
+    current_open  = current.get("open", current_close)
+    body_size     = abs(current_close - current_open)
+    candle_range  = current.get("high", current_close) - current.get("low", current_close)
+    body_ratio    = body_size / candle_range if candle_range > 0 else 0
 
     if current_close > asian_high:
+        if body_ratio < 0.3:
+            return 0.0, "LONG"
         breakout_pct = (current_close - asian_high) / asian_range
         return min(1.0, breakout_pct * 3), "LONG"
 
     if current_close < asian_low:
+        if body_ratio < 0.3:
+            return 0.0, "SHORT"
         breakout_pct = (asian_low - current_close) / asian_range
         return min(1.0, breakout_pct * 3), "SHORT"
 
@@ -295,41 +395,29 @@ def compute_forex_score(
         except Exception:
             pass
 
-    # ── Signal 1: Trend pullback ──────────────────────────────────────────
+    # Hurst Exponent from H1 close prices — determines regime weighting
+    _closes = [c.get("close", 0) for c in (h1_candles or [])[-60:]
+               if c.get("close")]
+    _hurst  = _hurst_exponent(_closes) if len(_closes) >= 20 else 0.5
+
+    _dfw = DynamicForexWeights()
+    _dfw.update(_hurst, backtest_mode)
+
     trend_ok, trend_dir = _check_trend_gate(d1_snap, h4_snap)
-    # backtest_mode bypasses session filter — D1 bars are timestamped midnight UTC
     session_ok = True if backtest_mode else _in_session(utc_hour)
 
     trend_score = 0.0
     if trend_ok and session_ok:
-        eq    = _entry_quality(h1_snap, trend_dir)
-        mom   = _momentum_confirm(h4_snap, trend_dir)
-        adx_f = _adx_filter(h4_snap)
-        cot   = _cot_boost(pair, trend_dir, bar_time)
-        carry = _carry_tilt(pair, trend_dir, bar_time)
+        rsi_history = [c.get("rsi", 50) for c in (h1_candles or [])[-40:]
+                       if c.get("rsi") is not None]
+        eq  = _entry_quality(h1_snap, trend_dir, rsi_history)
+        cot = _cot_boost(pair, trend_dir, bar_time)
+        trend_score = _dfw.score(eq, cot)
 
-        # Component-weighted scoring:
-        # base (trend gate passed)           = 0.20
-        # entry_quality (RSI pullback)       = 0.25 max
-        # momentum_confirm (MACD histogram)  = 0.20 max
-        # adx_filter (trend strength)        = 0.15 max
-        # cot_boost (COT alignment)          = 0.10 max
-        # carry_tilt (carry direction)       = 0.10 max
-        # Total max = 1.00
-        trend_score = (0.20
-                       + eq    * 0.25
-                       + mom   * 0.20
-                       + adx_f * 0.15
-                       + cot   * 0.10
-                       + carry * 0.10)
-
-        result.trend_gate       = trend_ok
-        result.session_active  = session_ok
-        result.entry_quality   = eq
-        result.momentum_confirm = mom
-        result.adx_filter      = adx_f
-        result.cot_boost       = cot
-        result.carry_tilt      = carry
+        result.trend_gate     = trend_ok
+        result.session_active = session_ok
+        result.entry_quality  = eq
+        result.cot_boost      = cot
 
     # ── Signal 2: London breakout ─────────────────────────────────────────
     bo_score, bo_dir = _london_breakout_score(h1_candles, utc_hour)
@@ -363,6 +451,8 @@ def compute_forex_score(
         "breakout_score":    bo_score,
         "trend_score":       round(trend_score, 4),
         "breakout_final":    round(bo_final, 4),
+        "hurst":             round(_hurst, 3),
+        "regime":            _dfw.regime,
     }
 
     return result
