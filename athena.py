@@ -1385,32 +1385,29 @@ _YF_INTRADAY_PERIOD = "180d"
 
 _VENDOR_SYMBOL_OVERRIDES = {
 
-    "WTI Oil": {"yfinance": "CL=F", "fallback": "yfinance", "eodhd": "CL"},
+    "UK100": {"yfinance": "^FTSE", "eodhd": "FTSE", "polygon": "C:UK100", "fallback": "yfinance", "eodhd_intraday": "FTSE.INDX"},
 
-    "UK100": {"yfinance": "^FTSE", "eodhd": "FTSE", "polygon": "C:UK100", "fallback": "yfinance"},
-
-    # Commodity symbol overrides for EODHD (plain symbol format - proven to work)
-    "XAU/USD": {"eodhd": "GC"},
-    "XAG/USD": {"eodhd": "SI"},
+    # Commodities — EODHD daily only, yfinance for intraday (EODHD has no commodity intraday)
+    "XAU/USD": {"eodhd": "GC", "yfinance": "GC=F"},
+    "XAG/USD": {"eodhd": "SI", "yfinance": "SI=F"},
     "WTI Oil": {"yfinance": "CL=F", "fallback": "yfinance", "eodhd": "CL"},
     "Brent Oil": {"polygon": "C:BZ=F", "eodhd": "BZ", "yfinance": "BZ=F"},
     "Nat Gas": {"polygon": "C:NG=F", "eodhd": "NG", "yfinance": "NG=F"},
     "Copper": {"polygon": "C:HG=F", "eodhd": "HG", "yfinance": "HG=F"},
-    "XPT/USD": {"polygon": "C:XPTUSD", "eodhd": "PL"},
+    "XPT/USD": {"polygon": "C:XPTUSD", "eodhd": "PL", "yfinance": "PL=F"},
     # XPD/USD (Palladium) removed - PA symbol not available on EODHD (404 error)
     "XPD/USD": {"polygon": "C:XPDUSD", "fallback": "yfinance"},
 
-    # Additional indices - EODHD uses plain symbol format (no .INDX suffix)
-    "DAX 40": {"yfinance": "^GDAXI", "eodhd": "GDAXI"},  # was GDAXI.INDX — wrong symbol (404)
-    "ASX 200": {"yfinance": "^AXJO", "eodhd": "AXJO"},
-    "Nikkei 225": {"yfinance": "^N225", "eodhd": "N225"},
-    "Hang Seng": {"yfinance": "^HSI", "eodhd": "HSI"},
-    "Euro Stoxx 50": {"yfinance": "^STOXX50E", "eodhd": "STOXX50E"},
-    # US indices - need overrides for plain symbol format
-    "S&P 500": {"yfinance": "^GSPC", "eodhd": "GSPC"},
-    "Nasdaq": {"yfinance": "^IXIC", "eodhd": "IXIC"},
-    "Dow Jones": {"yfinance": "^DJI", "eodhd": "DJI"},
-    "UK100": {"yfinance": "^FTSE", "eodhd": "FTSE"},
+    # Indices — EODHD daily + intraday with .INDX suffix (confirmed working)
+    "S&P 500": {"yfinance": "^GSPC", "eodhd": "GSPC", "eodhd_intraday": "GSPC.INDX"},
+    "Nasdaq": {"yfinance": "^IXIC", "eodhd": "IXIC", "eodhd_intraday": "IXIC.INDX"},
+    "Dow Jones": {"yfinance": "^DJI", "eodhd": "DJI", "eodhd_intraday": "DJI.INDX"},
+    "UK100": {"yfinance": "^FTSE", "eodhd": "FTSE", "polygon": "C:UK100", "fallback": "yfinance", "eodhd_intraday": "FTSE.INDX"},
+    "DAX 40": {"yfinance": "^GDAXI", "eodhd": "GDAXI", "eodhd_intraday": "GDAXI.INDX"},
+    "ASX 200": {"yfinance": "^AXJO", "eodhd": "AXJO", "eodhd_intraday": "AXJO.INDX"},
+    "Nikkei 225": {"yfinance": "^N225", "eodhd": "N225", "eodhd_intraday": "N225.INDX"},
+    "Hang Seng": {"yfinance": "^HSI", "eodhd": "HSI", "eodhd_intraday": "HSI.INDX"},
+    "Euro Stoxx 50": {"yfinance": "^STOXX50E", "eodhd": "STOXX50E", "eodhd_intraday": "STOXX50E.INDX"},
 
 }
 
@@ -1810,6 +1807,41 @@ def _fetch_bt_yfinance(sym, period="730d"):
 
 
 
+def _resample_to_h4(h1_candles):
+    """Resample H1 candles to H4 format."""
+    if not h1_candles:
+        return []
+    
+    import pandas as pd
+    df = pd.DataFrame(h1_candles)
+    df["time"] = pd.to_datetime(df["time"])
+    df = df.set_index("time")
+    
+    h4_df = pd.DataFrame({
+        "open":  df["open"].resample("4h").first(),
+        "high":  df["high"].resample("4h").max(),
+        "low":   df["low"].resample("4h").min(),
+        "close": df["close"].resample("4h").last(),
+        "vol":   df["vol"].resample("4h").sum(),
+    }).dropna(subset=["open", "close"])
+    
+    h4_candles = [{"time": str(idx), "open": float(r["open"]), "high": float(r["high"]),
+                   "low": float(r["low"]), "close": float(r["close"]),
+                   "vol": float(r["vol"])} for idx, r in h4_df.iterrows()]
+    
+    return h4_candles
+
+def _eodhd_intraday_ticker_for_pair(pair: dict) -> str | None:
+    """Get EODHD intraday ticker for pair, checking eodhd_intraday override first."""
+    override = pair.get("eodhdIntradayTicker") or _vendor_overrides(pair).get("eodhd_intraday")
+    if override:
+        return override
+    # For commodities without intraday override, return None to trigger yfinance fallback
+    if pair.get("type") == "commodity":
+        return None
+    # Fall back to regular ticker for other types
+    return _eodhd_ticker_for_pair(pair)
+
 def _fetch_eodhd_intraday_bt(pair, days=730):
 
     """Fetch extended intraday H1 data from EODHD REST API with from/to params for backtest.
@@ -1826,11 +1858,11 @@ def _fetch_eodhd_intraday_bt(pair, days=730):
 
             return None, None
 
-        ticker = _eodhd_ticker_for_pair(pair)
+        ticker = _eodhd_intraday_ticker_for_pair(pair)
 
         if not ticker:
 
-            log.warning(f"[EODHD-BT] {pair['display']}: no valid ticker")
+            log.warning(f"[EODHD-BT] {pair['display']}: no valid intraday ticker")
 
             return None, None
 
@@ -3859,17 +3891,28 @@ def backtest_pair(pair, style="auto"):
 
             if not h4_raw or not h1_raw:
 
-                _yf_sym = _yfinance_symbol_for_pair(pair)
-
-                if _yf_sym:
-
-                    log.info(f"[BT] {pair['display']}: EODHD intraday failed, trying yfinance")
-
-                    _yf_h4, _yf_h1 = _fetch_bt_yfinance(_yf_sym)
-
-                    h4_raw = h4_raw or _yf_h4
-
-                    h1_raw = h1_raw or _yf_h1
+                # Try Polygon first (more reliable than yfinance for commodities/indices)
+                _poly_ticker = _polygon_ticker_for_pair(pair)
+                if _poly_ticker:
+                    log.info(f"[BT] {pair['display']}: EODHD intraday failed, trying Polygon")
+                    try:
+                        _poly_result = fetch_polygon(pair, "H1", 17520)  # 730d * 24h
+                        _poly_candles = _extract_candles(_poly_result)
+                        if _poly_candles:
+                            # Resample H1 to H4
+                            h1_raw = h1_raw or _poly_candles
+                            h4_raw = h4_raw or _resample_to_h4(_poly_candles)
+                    except Exception as e:
+                        log.debug(f"[BT] Polygon fallback failed for {pair['display']}: {e}")
+                
+                # Final fallback — yfinance
+                if not h4_raw or not h1_raw:
+                    _yf_sym = _yfinance_symbol_for_pair(pair)
+                    if _yf_sym:
+                        log.info(f"[BT] {pair['display']}: trying yfinance as last resort")
+                        _yf_h4, _yf_h1 = _fetch_bt_yfinance(_yf_sym)
+                        h4_raw = h4_raw or _yf_h4
+                        h1_raw = h1_raw or _yf_h1
 
         elif _ptype in ("stock", "commodity", "index"):
 
@@ -3881,17 +3924,28 @@ def backtest_pair(pair, style="auto"):
 
             if not h4_raw or not h1_raw:
 
-                _yf_sym = _yfinance_symbol_for_pair(pair)
-
-                if _yf_sym:
-
-                    log.info(f"[BT] {pair['display']}: EODHD intraday failed, trying yfinance")
-
-                    _yf_h4, _yf_h1 = _fetch_bt_yfinance(_yf_sym)
-
-                    h4_raw = h4_raw or _yf_h4
-
-                    h1_raw = h1_raw or _yf_h1
+                # Try Polygon first (more reliable than yfinance for commodities/indices)
+                _poly_ticker = _polygon_ticker_for_pair(pair)
+                if _poly_ticker:
+                    log.info(f"[BT] {pair['display']}: EODHD intraday failed, trying Polygon")
+                    try:
+                        _poly_result = fetch_polygon(pair, "H1", 17520)  # 730d * 24h
+                        _poly_candles = _extract_candles(_poly_result)
+                        if _poly_candles:
+                            # Resample H1 to H4
+                            h1_raw = h1_raw or _poly_candles
+                            h4_raw = h4_raw or _resample_to_h4(_poly_candles)
+                    except Exception as e:
+                        log.debug(f"[BT] Polygon fallback failed for {pair['display']}: {e}")
+                
+                # Final fallback — yfinance
+                if not h4_raw or not h1_raw:
+                    _yf_sym = _yfinance_symbol_for_pair(pair)
+                    if _yf_sym:
+                        log.info(f"[BT] {pair['display']}: trying yfinance as last resort")
+                        _yf_h4, _yf_h1 = _fetch_bt_yfinance(_yf_sym)
+                        h4_raw = h4_raw or _yf_h4
+                        h1_raw = h1_raw or _yf_h1
 
         else:
 
