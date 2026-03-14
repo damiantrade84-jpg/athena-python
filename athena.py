@@ -1385,33 +1385,32 @@ _YF_INTRADAY_PERIOD = "180d"
 
 _VENDOR_SYMBOL_OVERRIDES = {
 
-    "WTI Oil": {"yfinance": "CL=F", "fallback": "yfinance"},
+    "WTI Oil": {"yfinance": "CL=F", "fallback": "yfinance", "eodhd": "CL"},
 
-    "UK100": {"yfinance": "^FTSE", "eodhd": "FTSE.INDX", "polygon": "C:UK100", "fallback": "yfinance"},
+    "UK100": {"yfinance": "^FTSE", "eodhd": "FTSE", "polygon": "C:UK100", "fallback": "yfinance"},
 
-    # Pepperstone CFD symbol mappings
+    # Commodity symbol overrides for EODHD (plain symbol format - proven to work)
+    "XAU/USD": {"eodhd": "GC"},
+    "XAG/USD": {"eodhd": "SI"},
+    "WTI Oil": {"yfinance": "CL=F", "fallback": "yfinance", "eodhd": "CL"},
+    "Brent Oil": {"polygon": "C:BZ=F", "eodhd": "BZ", "yfinance": "BZ=F"},
+    "Nat Gas": {"polygon": "C:NG=F", "eodhd": "NG", "yfinance": "NG=F"},
+    "Copper": {"polygon": "C:HG=F", "eodhd": "HG", "yfinance": "HG=F"},
+    "XPT/USD": {"polygon": "C:XPTUSD", "eodhd": "PL"},
+    # XPD/USD (Palladium) removed - PA symbol not available on EODHD (404 error)
+    "XPD/USD": {"polygon": "C:XPDUSD", "fallback": "yfinance"},
 
-    "XPT/USD": {"polygon": "C:XPTUSD", "eodhd": "XPTUSD.FOREX"},
-
-    "XPD/USD": {"polygon": "C:XPDUSD", "eodhd": "XPDUSD.FOREX"},
-
-    "Brent Oil": {"polygon": "C:BZ=F", "eodhd": "BZ=F.FOREX", "yfinance": "BZ=F"},
-
-    "Nat Gas": {"polygon": "C:NG=F", "eodhd": "NG.US", "yfinance": "NG=F"},
-
-    "Copper": {"polygon": "C:HG=F", "eodhd": "HG=F.FOREX", "yfinance": "HG=F"},
-
-    # Additional Pepperstone indices
-
-    "DAX 40": {"yfinance": "^GDAXI", "eodhd": "GDAXI.INDX"},  # was DAX.INDX — wrong symbol (404)
-
-    "ASX 200": {"yfinance": "^AXJO", "eodhd": "AXJO.INDX"},
-
-    "Nikkei 225": {"yfinance": "^N225", "eodhd": "N225.INDX"},
-
-    "Hang Seng": {"yfinance": "^HSI", "eodhd": "HSI.INDX"},
-
-    "Euro Stoxx 50": {"yfinance": "^STOXX50E", "eodhd": "STOXX50E.INDX"},
+    # Additional indices - EODHD uses plain symbol format (no .INDX suffix)
+    "DAX 40": {"yfinance": "^GDAXI", "eodhd": "GDAXI"},  # was GDAXI.INDX — wrong symbol (404)
+    "ASX 200": {"yfinance": "^AXJO", "eodhd": "AXJO"},
+    "Nikkei 225": {"yfinance": "^N225", "eodhd": "N225"},
+    "Hang Seng": {"yfinance": "^HSI", "eodhd": "HSI"},
+    "Euro Stoxx 50": {"yfinance": "^STOXX50E", "eodhd": "STOXX50E"},
+    # US indices - need overrides for plain symbol format
+    "S&P 500": {"yfinance": "^GSPC", "eodhd": "GSPC"},
+    "Nasdaq": {"yfinance": "^IXIC", "eodhd": "IXIC"},
+    "Dow Jones": {"yfinance": "^DJI", "eodhd": "DJI"},
+    "UK100": {"yfinance": "^FTSE", "eodhd": "FTSE"},
 
 }
 

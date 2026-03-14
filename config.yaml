@@ -306,14 +306,14 @@ PAIR_PROFILES:
     weight_overrides:
       h4_fib: 1.5
       h1_bb: 0.5
-    min_confluence: 0.70
-    bt_min: 0.70
+    min_confluence: 0.55
+    bt_min: 0.55
   XAG/USD:
     disable_filters: [obv, session]
     weight_overrides:
       h4_fib: 1.5
-    min_confluence: 0.70
-    bt_min: 0.70
+    min_confluence: 0.55
+    bt_min: 0.55
   LINK/USDT:
     disable_filters: [mean_revert]
     weight_overrides:
