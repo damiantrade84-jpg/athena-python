@@ -3586,7 +3586,9 @@ def _build_signal_message(signal: dict, news_ctx: dict | None,
 
     if fib:
 
-        lines.append(f"Fib levels: {json.dumps(fib)}")
+        # Only send key fib levels — full dump is ~100 extra tokens
+        _key_fibs = {k: v for k, v in fib.items() if k in ("0", "236", "382", "500", "618", "786", "1000")}
+        lines.append(f"Fib levels: {json.dumps(_key_fibs)}")
 
 
 
@@ -3710,9 +3712,13 @@ def _build_signal_message(signal: dict, news_ctx: dict | None,
 
         _ctx_parts = []
 
+        # Forex events — keep only event name + date (strip full object bloat)
         if news_ctx.get("forexEvents"):
 
-            _ctx_parts.append(f"High-impact events: {json.dumps(news_ctx['forexEvents'][:5])}")
+            _fe = [{"e": e.get("event", e.get("title", "")), "d": e.get("date", e.get("time", ""))}
+                   for e in news_ctx["forexEvents"][:4]]
+
+            _ctx_parts.append(f"High-impact events: {json.dumps(_fe)}")
 
         _sent = news_ctx.get("pairSentiment", {})
 
@@ -3734,23 +3740,25 @@ def _build_signal_message(signal: dict, news_ctx: dict | None,
 
             if relevant:
 
-                _ctx_parts.append(f"Crypto news: {json.dumps(relevant[:3])}")
+                # Title only — strip full article body
+                _ctx_parts.append(f"Crypto news: {', '.join(n.get('title', '')[:80] for n in relevant[:2])}")
 
         if news_ctx.get("marketNews"):
 
-            _ctx_parts.append(f"Market news: {json.dumps(news_ctx['marketNews'][:3])}")
+            # Title only
+            _ctx_parts.append(f"Market news: {', '.join(n.get('title', n.get('headline', ''))[:80] for n in news_ctx['marketNews'][:2])}")
 
         _pnews = news_ctx.get("pairNews", {}).get(signal.get("pair", ""), [])
 
         if _pnews:
 
-            _ctx_parts.append(f"Pair news: {json.dumps(_pnews[:3])}")
+            _ctx_parts.append(f"Pair news: {', '.join(n.get('title', n.get('headline', ''))[:80] for n in _pnews[:2])}")
 
         _ww = news_ctx.get("wordWeights", {}).get(signal.get("pair", ""), [])
 
         if _ww:
 
-            _ctx_parts.append(f"News drivers: {json.dumps(_ww)}")
+            _ctx_parts.append(f"News drivers: {json.dumps(_ww[:5])}")
 
         for cp in _ctx_parts:
 
@@ -3896,7 +3904,7 @@ def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto",
 
         r = c.responses.create(
 
-            model=CONFIG["XAI_MODEL"], max_output_tokens=1500,
+            model=CONFIG["XAI_MODEL"], max_output_tokens=900,
 
             instructions=EXPERT_PROMPT, input=msg
 
