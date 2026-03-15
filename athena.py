@@ -232,6 +232,95 @@ _live_prices_lock = threading.Lock()
 _ws_manager_started = False
 
 
+def _eodhd_rt_symbol(pair):
+    """Convert pair dict → EODHD real-time API symbol (e.g. GBPUSD.FOREX, AAPL.US, GSPC.INDX)."""
+    # Non-slash commodity display names need an explicit EODHD symbol override
+    _COMMODITY_OVERRIDES = {
+        "Copper":    "XCUUSD.FOREX",
+        "WTI Oil":   "WTICOUSD.FOREX",
+        "Brent Oil": "BRENTOIL.FOREX",
+        "Nat Gas":   "NATGASUSD.FOREX",
+    }
+    ptype = pair.get("type", "")
+    sym   = pair.get("symbol", "")
+    disp  = pair.get("display", "")
+    if ptype in ("forex", "commodity"):
+        if disp in _COMMODITY_OVERRIDES:
+            return _COMMODITY_OVERRIDES[disp]
+        return disp.replace("/", "") + ".FOREX"
+    elif ptype == "index":
+        return sym.lstrip("^") + ".INDX"
+    return sym   # stock / ETF: already "AAPL.US"
+
+
+def _fetch_eodhd_live_prices(pairs):
+    """Batch-fetch EODHD real-time prices for a list of pairs; write into _live_prices."""
+    import requests as _req
+    key = os.environ.get("EODHD_KEY", "")
+    if not key or not pairs:
+        return
+    sym_map = {_eodhd_rt_symbol(p): p["display"] for p in pairs}
+    symbols = list(sym_map)
+    try:
+        params = {"api_token": key, "fmt": "json"}
+        if len(symbols) > 1:
+            params["s"] = ",".join(symbols[1:])
+        resp = _req.get(
+            f"https://eodhd.com/api/real-time/{symbols[0]}",
+            params=params, timeout=10
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        if isinstance(rows, dict):
+            rows = [rows]
+        updated = 0
+        for row in rows:
+            disp = sym_map.get(row.get("code"))
+            px   = row.get("close") or row.get("adjusted_close")
+            if disp and px:
+                with _live_prices_lock:
+                    _live_prices[disp] = {"price": float(px), "ts": time.time()}
+                updated += 1
+        log.debug(f"[PRICE-POLL] EODHD real-time: updated {updated}/{len(symbols)} pairs")
+    except Exception as _e:
+        log.debug(f"[PRICE-POLL] EODHD real-time error: {_e}")
+
+
+def _fetch_binance_live_prices(pairs):
+    """Batch-fetch Binance spot prices for non-WS crypto pairs; write into _live_prices."""
+    import requests as _req, json as _json
+    if not pairs:
+        return
+    sym_map = {p["symbol"]: p["display"] for p in pairs}
+    try:
+        resp = _req.get(
+            "https://api.binance.com/api/v3/ticker/price",
+            params={"symbols": _json.dumps(list(sym_map))},
+            timeout=8
+        )
+        resp.raise_for_status()
+        updated = 0
+        for row in resp.json():
+            disp = sym_map.get(row["symbol"])
+            px   = float(row["price"])
+            if disp and px:
+                with _live_prices_lock:
+                    _live_prices[disp] = {"price": px, "ts": time.time()}
+                updated += 1
+        log.debug(f"[PRICE-POLL] Binance REST: updated {updated}/{len(sym_map)} crypto pairs")
+    except Exception as _e:
+        log.debug(f"[PRICE-POLL] Binance REST error: {_e}")
+
+
+def _run_eodhd_price_poller():
+    """Background daemon thread: poll EODHD + Binance REST prices for non-WS pairs every 60s."""
+    log.info(f"[PRICE-POLL] Started — {len(_NON_WS_EODHD)} EODHD + {len(_NON_WS_CRYPTO)} Binance non-WS pairs (60s interval)")
+    while True:
+        _fetch_eodhd_live_prices(_NON_WS_EODHD)
+        _fetch_binance_live_prices(_NON_WS_CRYPTO)
+        time.sleep(60)
+
+
 
 class EODHDWebSocketManager:
 
@@ -491,6 +580,9 @@ class EODHDWebSocketManager:
         self._thread = threading.Thread(target=_run, daemon=True, name="eodhd-ws")
 
         self._thread.start()
+
+        # Start REST price poller for non-WS pairs (runs every 60s, daemon)
+        threading.Thread(target=_run_eodhd_price_poller, daemon=True, name="eodhd-price-poll").start()
 
         log.info("[WS] WebSocket manager started")
 
@@ -1330,6 +1422,10 @@ CRYPTO_PAIRS = [
 ]
 
 ALL_PAIRS = FOREX_PAIRS + COMMODITY_PAIRS + INDEX_PAIRS + US_STOCK_PAIRS + ETF_PAIRS + JSE_PAIRS + CRYPTO_PAIRS
+
+# Pairs that opted out of WS — polled via REST every 60s
+_NON_WS_EODHD  = [p for p in ALL_PAIRS if not p.get("ws", True) and p.get("source") == "eodhd"]
+_NON_WS_CRYPTO = [p for p in ALL_PAIRS if not p.get("ws", True) and p.get("source") == "binance"]
 
 
 
