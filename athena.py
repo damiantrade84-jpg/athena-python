@@ -1208,11 +1208,11 @@ FOREX_PAIRS = [
 
     {"symbol":"USDJPY=X","type":"forex","display":"USD/JPY","source":"eodhd","enabled":True},   # SQN -2.33 — enabled; re-evaluate post-formula fix
 
-    {"symbol":"AUDUSD=X","type":"forex","display":"AUD/USD","source":"eodhd","enabled":True},   # SQN +0.46
+    {"symbol":"AUDUSD=X","type":"forex","display":"AUD/USD","source":"eodhd","enabled":True},   # SQN +1.00, WR 53.3%, IS:+0.45/OOS:+0.88 (2026-03-15 confirmed)
 
     {"symbol":"NZDUSD=X","type":"forex","display":"NZD/USD","source":"eodhd","enabled":True,"ws":False},   # SQN 0.00 — enabled; zero trades was data gap not signal failure
 
-    {"symbol":"EURGBP=X","type":"forex","display":"EUR/GBP","source":"eodhd","enabled":True},   # SQN +0.65
+    {"symbol":"EURGBP=X","type":"forex","display":"EUR/GBP","source":"eodhd","enabled":True},   # SQN +1.54, WR 59.1%, IS:+1.48/OOS:+1.61 (2026-03-15 confirmed)
 
     {"symbol":"USDCAD=X","type":"forex","display":"USD/CAD","source":"eodhd","enabled":True},   # SQN +0.27
 
@@ -1240,11 +1240,11 @@ FOREX_PAIRS = [
 
 COMMODITY_PAIRS = [
 
-    {"symbol":"GC=F","type":"commodity","display":"XAU/USD","source":"eodhd","enabled":True},     # SQN +3.53 ✓
+    {"symbol":"GC=F","type":"commodity","display":"XAU/USD","source":"eodhd","enabled":True},     # SQN +1.92, WR 64.7%, 17 trades (2026-03-15 ATR-fix confirmed)
 
-    {"symbol":"SI=F","type":"commodity","display":"XAG/USD","source":"eodhd","enabled":True},     # SQN +3.08 ✓
+    {"symbol":"SI=F","type":"commodity","display":"XAG/USD","source":"eodhd","enabled":True},     # SQN -0.07 — DISABLE (borderline, no edge confirmed)
 
-    {"symbol":"CL=F","type":"commodity","display":"WTI Oil","source":"eodhd","enabled":True},     # SQN -1.36 — enabled; score gate filters
+    {"symbol":"CL=F","type":"commodity","display":"WTI Oil","source":"eodhd","enabled":True},     # SQN not retested with correct ATR — monitor only
 
     {"symbol":"BZ=F","type":"commodity","display":"Brent Oil","source":"eodhd","enabled":True},   # Pepperstone: SPOTBRENT
 
@@ -1384,7 +1384,7 @@ CRYPTO_PAIRS = [
 
     {"symbol":"BTCUSDT","type":"crypto","display":"BTC/USDT","source":"binance","enabled":True,"ws":False},  # SQN -0.81 Phase A / pre-PhaseA: +0.18 (borderline, re-test) # re-enabled for ATR-fix retest
 
-    {"symbol":"ETHUSDT","type":"crypto","display":"ETH/USDT","source":"binance","enabled":True},  # SQN +0.50 Phase A (weak) # re-enabled for ATR-fix retest
+    {"symbol":"ETHUSDT","type":"crypto","display":"ETH/USDT","source":"binance","enabled":True},  # SQN +2.97, WR 64.3%, 28 trades (2026-03-15 ATR-fix confirmed)
 
     {"symbol":"XRPUSDT","type":"crypto","display":"XRP/USDT","source":"binance","enabled":True},  # SQN -0.80 Phase A # re-enabled for ATR-fix retest
 
@@ -1396,7 +1396,7 @@ CRYPTO_PAIRS = [
 
     {"symbol":"AVAXUSDT","type":"crypto","display":"AVAX/USDT","source":"binance","enabled":True,"ws":False}, # v3.1 SQN +0.44, OOS +0.02 (overfit) # re-enabled for ATR-fix retest
 
-    {"symbol":"LINKUSDT","type":"crypto","display":"LINK/USDT","source":"binance","enabled":True},  # v3.1 SQN +0.93, OOS +1.00 âœ" (regime-adaptive)
+    {"symbol":"LINKUSDT","type":"crypto","display":"LINK/USDT","source":"binance","enabled":True},  # SQN +1.68, WR 69.2%, 13 trades (2026-03-15 confirmed)
 
     {"symbol":"MATICUSDT","type":"crypto","display":"MATIC/USDT","source":"binance","enabled":True},# SQN +0.26 Phase A (noise) # re-enabled for ATR-fix retest
 
@@ -7333,6 +7333,22 @@ def api_flush_candle_cache():
 
 
 
+@app.route("/api/backup-db", methods=["POST"])
+def api_backup_db():
+    """Manually trigger database backup."""
+    try:
+        from backup_db import backup_now
+        backed_up = backup_now(reason="manual")
+        return jsonify({
+            "success": True,
+            "backed_up": [os.path.basename(p) for p in backed_up],
+            "message": f"Backed up {len(backed_up)} databases"
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+
 @app.route("/api/prices")
 
 def api_prices():
@@ -9285,6 +9301,14 @@ if __name__=="__main__":
         log.info("[AUTO] Auto-trader standby (toggle via UI)")
 
     _host = os.environ.get("ATHENA_HOST", "127.0.0.1")  # default localhost; set to 0.0.0.0 in .env for LAN
+
+    # Backup databases at startup — protects against data loss during updates
+    try:
+        from backup_db import backup_now
+        backup_now(reason="startup")
+        log.info("[BACKUP] Database backup completed at startup")
+    except Exception as _bak_e:
+        log.warning(f"[BACKUP] Startup backup failed: {_bak_e}")
 
     app.run(host=_host,port=5000,debug=False)
 

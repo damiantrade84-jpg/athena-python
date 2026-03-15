@@ -21,21 +21,6 @@ def get_pair_profile(pair: dict) -> dict:
     return profiles.get(pair.get("display")) or profiles.get(pair.get("symbol")) or {}
 
 
-def get_pair_vote_weights(pair: dict) -> dict:
-    """Merge pair overrides on top of class-level vote weights."""
-    ptype = pair.get("type", "stock")
-    weights = dict(CONFIG.get("VOTE_WEIGHTS", {}).get(ptype, CONFIG.get("VOTE_WEIGHTS", {}).get("stock", {})))
-    profile = get_pair_profile(pair)
-    for vote_name in profile.get("disabled_votes", []) or []:
-        weights[vote_name] = 0.0
-    for vote_name, weight in (profile.get("weight_overrides", {}) or {}).items():
-        try:
-            weights[vote_name] = float(weight)
-        except (TypeError, ValueError):
-            log.warning(f"[CFG] Invalid weight override for {pair.get('display')}: {vote_name}={weight!r}")
-    return weights
-
-
 def pair_filter_enabled(pair: dict, filter_name: str) -> bool:
     disabled = set(get_pair_profile(pair).get("disable_filters", []) or [])
     return filter_name not in disabled

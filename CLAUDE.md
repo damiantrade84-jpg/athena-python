@@ -1,5 +1,12 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## ⚠️ DATA PROTECTION
+audit.db and candle_cache.db contain all live trading history.
+NEVER delete, overwrite, or zip these files during updates.
+Run `python backup_db.py` before any major code changes.
+Backups stored in db_backups/ folder — keep last 7 days automatically.
+Do not touch any scoring, risk, or trading logic.
+
 ## Project Overview
 Multi-asset algorithmic trading system: Flask dashboard, confluence-based signal engine, AI analysis (Claude claude-sonnet-4-6), live execution on MT5 (forex/stocks/commodities/indices) and Bybit Linear Futures (crypto LONG+SHORT).
 

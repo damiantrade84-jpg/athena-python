@@ -94,14 +94,6 @@ CONFIG: dict = {
     # Factor scoring gates — see factor_scoring.py
     "FACTOR_MIN_DIRECTIONAL": 0.25,  # Skip if abs(dir_score) < this (near-directionless signal)
     "REGIME_SMOOTHING_BARS": 3,      # Consecutive bars required before committing to a regime change
-    # Per-class vote weight multipliers — route each indicator to where it's strongest
-    "VOTE_WEIGHTS": {
-        "crypto":    {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "h4_macd": 1.0, "h4_oscillator": 0.75, "volume": 1.0, "funding": 1.0, "session": 0.0, "h4_fib": 0.5, "h1_bb": 1.0, "weinstein": 0.0, "divergence": 1.0, "aroon": 0.0},
-        "forex":     {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "d1_macd": 1.0, "d1_oscillator": 1.0, "volume": 0.0, "funding": 0.0, "session": 1.0, "d1_fib": 1.0, "h1_bb": 0.5, "weinstein": 0.0, "divergence": 1.0, "aroon": 1.0},
-        "stock":     {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "h4_macd": 1.0, "h4_oscillator": 1.0, "volume": 1.0, "funding": 0.0, "session": 0.0, "h4_fib": 1.0, "h1_bb": 1.0, "weinstein": 1.0, "divergence": 1.0, "aroon": 0.0},
-        "commodity": {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "h4_macd": 1.0, "h4_oscillator": 1.0, "volume": 1.0, "funding": 0.0, "session": 0.0, "h4_fib": 1.0, "h1_bb": 1.0, "weinstein": 0.5, "divergence": 1.0, "aroon": 0.0},
-        "index":     {"d1_trend": 2.0, "h1_ema": 1.0, "d1_adx": 1.0, "h4_macd": 1.0, "h4_oscillator": 1.0, "volume": 1.0, "funding": 0.0, "session": 0.0, "h4_fib": 1.0, "h1_bb": 1.0, "weinstein": 0.5, "divergence": 1.0, "aroon": 0.0},
-    },
     # Factor weights per asset class (base, before regime overrides)
     "FACTOR_WEIGHTS": {
         "crypto":    {"trend": 2.0, "momentum": 1.5, "volatility": 1.0, "volume": 1.0, "structure": 1.0, "derivatives": 1.5, "microstructure": 1.5, "carry": 1.0},

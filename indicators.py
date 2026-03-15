@@ -840,7 +840,7 @@ def calc_levels(price: float, atr: float, direction: str, pair_type: str,
 
 
 
-    regime_state: 0=TRENDING (wider stops), 1=RANGING (default), 2=HIGH_VOLATILITY (tighter), 3=LOW_VOLATILITY.
+    regime_state: 0=TRENDING (wider stops), 1=RANGING (default), 2=HIGH_VOLATILITY (wider stops), 3=LOW_VOLATILITY (tighter stops).
 
     """
 
@@ -850,7 +850,11 @@ def calc_levels(price: float, atr: float, direction: str, pair_type: str,
 
     })
 
-    _REGIME_FACTOR = {0: 1.25, 1: 1.0, 2: 0.75, 3: 1.1}
+    _REGIME_FACTOR = {0: 1.25, 1: 1.0, 2: 1.35, 3: 0.9}
+    # 0=TRENDING: wider stops (1.25x) — let trend breathe
+    # 1=RANGING: default (1.0x)
+    # 2=HIGH_VOLATILITY: wider stops (1.35x) — avoid noise stop-outs
+    # 3=LOW_VOLATILITY: slightly tighter (0.9x) — low noise environment
 
     rf = _REGIME_FACTOR.get(regime_state, 1.0)
 

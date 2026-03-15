@@ -51,7 +51,7 @@ _RISK_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
 def _init_peak_table():
     """Create peak_equity table if it doesn't exist."""
     try:
-        with sqlite3.connect(_RISK_DB, timeout=1.0) as con:
+        with sqlite3.connect(_RISK_DB, timeout=5.0) as con:
             con.execute("CREATE TABLE IF NOT EXISTS peak_equity (id INTEGER PRIMARY KEY CHECK(id=1), value REAL NOT NULL, updated_at TEXT NOT NULL)")
             con.commit()
     except Exception as e:
@@ -60,7 +60,7 @@ def _init_peak_table():
 def _load_peak_equity() -> float:
     """Restore peak equity from SQLite on startup."""
     try:
-        with sqlite3.connect(_RISK_DB, timeout=1.0) as con:
+        with sqlite3.connect(_RISK_DB, timeout=5.0) as con:
             row = con.execute("SELECT value, updated_at FROM peak_equity WHERE id=1").fetchone()
             if row:
                 log.info(f"[RISK] Restored peak equity: ${row[0]:,.2f} (saved {row[1]})")
@@ -73,7 +73,7 @@ def _save_peak_equity(value: float):
     """Persist peak equity to SQLite."""
     try:
         ts = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(_RISK_DB, timeout=1.0) as con:
+        with sqlite3.connect(_RISK_DB, timeout=5.0) as con:
             con.execute(
                 "INSERT INTO peak_equity (id, value, updated_at) VALUES (1, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
@@ -189,7 +189,7 @@ def _adaptive_risk_pct(asset_type: str, regime: str = "") -> float:
 
     try:
         db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
-        con = sqlite3.connect(db_path, timeout=1.0)
+        con = sqlite3.connect(db_path, timeout=5.0)
         con.execute("PRAGMA journal_mode=WAL")
         con.row_factory = sqlite3.Row
 
@@ -239,7 +239,7 @@ def _adaptive_risk_pct(asset_type: str, regime: str = "") -> float:
 
 def _calc_volume(account_balance: float, entry_price: float, sl_price: float,
                  symbol_info: dict | None = None, asset_type: str = "",
-                 regime: str = "") -> float:
+                 regime: str = "", pair: dict = None) -> float:
     """Calculate position size in lots from risk budget and SL distance.
 
     symbol_info may contain: volume_min, volume_max, volume_step, trade_contract_size, point
@@ -249,6 +249,18 @@ def _calc_volume(account_balance: float, entry_price: float, sl_price: float,
 
     if sl_distance == 0 or entry_price == 0:
         return 0.0
+
+    # Per-commodity contract sizes
+    _COMMODITY_CONTRACTS = {
+        "XAU/USD":  100,    # 100 troy oz per lot (gold)
+        "XAG/USD":  5000,   # 5000 troy oz per lot (silver)
+        "WTI Oil":  1000,   # 1000 barrels per lot (crude)
+        "Brent Oil":1000,   # 1000 barrels per lot
+        "Nat Gas":  10000,  # 10000 MMBtu per lot
+        "Copper":   25000,  # 25000 lbs per lot
+        "XPT/USD":  50,     # 50 oz per lot (platinum)
+        "XPD/USD":  100,    # 100 oz per lot (palladium)
+    }
 
     is_crypto = asset_type == "crypto"
 
@@ -264,7 +276,8 @@ def _calc_volume(account_balance: float, entry_price: float, sl_price: float,
         contract_size = 1       # 1 share per lot
         point = 0.01            # 1 cent price step
     elif is_commodity:
-        contract_size = 100     # typical commodity lot (e.g. 100 oz gold)
+        display = pair.get("display", "") if isinstance(pair, dict) else ""
+        contract_size = _COMMODITY_CONTRACTS.get(display, 100)
         point = 0.01            # 1 cent price step for metals/oil
     else:
         contract_size = 100_000
@@ -437,7 +450,7 @@ def risk_check(signal: dict, account_balance: float, account_equity: float,
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "INVALID_LEVELS")
 
     asset_type = signal.get("type", "")
-    volume = _calc_volume(account_balance, entry, sl, symbol_info, asset_type)
+    volume = _calc_volume(account_balance, entry, sl, symbol_info, asset_type, pair=signal)
     is_crypto    = asset_type == "crypto"
     is_stock     = asset_type == "stock"
     is_commodity = asset_type == "commodity"

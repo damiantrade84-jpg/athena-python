@@ -33,3 +33,6 @@ bt_*.json
 # Tick data folders
 tickdata_test/
 tickdata_test2/
+
+# Database backups
+db_backups/
