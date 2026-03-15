@@ -34,8 +34,8 @@ except Exception as _e:
 
 # ── Default CONFIG ───────────────────────────────────────────────────────────
 CONFIG: dict = {
-    "ANTHROPIC_KEY":   os.environ.get("ANTHROPIC_KEY", "YOUR_ANTHROPIC_API_KEY"),
-    "ANTHROPIC_MODEL": "claude-sonnet-4-6",
+    "XAI_API_KEY":   os.environ.get("XAI_API_KEY", "YOUR_XAI_API_KEY"),
+    "XAI_MODEL": "grok-4.20-multi-agent-beta-0309",
     "CRYPTOPANIC_KEY": os.environ.get("CRYPTOPANIC_KEY", ""),
     "FINNHUB_KEY":     os.environ.get("FINNHUB_KEY", ""),
     "RISK_PCT": 0.01, "SL_ATR_MULT": 1.5, "TP1_ATR_MULT": 2.0, "TP2_ATR_MULT": 3.5,
