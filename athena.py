@@ -261,6 +261,9 @@ class EODHDWebSocketManager:
 
         for p in pairs:
 
+            if not p.get("ws", True):   # default True = backward-compatible
+                continue
+
             disp, ptype = p["display"], p.get("type", "")
 
             sym = p.get("symbol", "")
@@ -288,6 +291,19 @@ class EODHDWebSocketManager:
                 ws_t = disp.replace("/", "")
 
                 fx_tickers.append(ws_t)
+
+                display_map[ws_t] = disp
+
+            elif ptype == "index":
+
+                # Indices use EODHD .INDX suffix (same as REST API).
+                # US indices → us endpoint; international indices → forex endpoint.
+                ws_t = sym.lstrip("^") + ".INDX"
+
+                if sym in ("^GSPC", "^IXIC", "^DJI"):
+                    us_tickers.append(ws_t)
+                else:
+                    fx_tickers.append(ws_t)
 
                 display_map[ws_t] = disp
 
@@ -461,13 +477,12 @@ class EODHDWebSocketManager:
 
             asyncio.set_event_loop(self._loop)
 
-            # Subscribe ALL WS-capable pairs (not just active) so candle builder gets full coverage
-
-            # WS supports: US stocks/ETFs (us endpoint), forex/commodities (forex endpoint), crypto (crypto endpoint)
-
-            # 50-ticker limit per connection: forex=20, US=14, crypto=18 → 52 total, all well under limit
-
-            # NOT on WS (no live prices): INDEX_PAIRS (3), UK100 (1), JSE_PAIRS (14) — use candle close instead
+            # Subscribe WS-capable pairs only (ws:True, default) — capped at 50 tickers (EODHD plan limit)
+            # us=17:  COIN,AAPL,PLTR,GOOG,MSFT,NFLX,PYPL,UBER,INTC,AMD + SLV,SPY,EEM,IWM,USO + GSPC.INDX,DJI.INDX
+            # forex=19: EURUSD,GBPJPY,AUDUSD,USDJPY,GBPAUD,USDCHF,EURGBP,USDCAD + XAU,XPT,NatGas,WTI,XAG,Brent,XPD
+            #           + FTSE.INDX,AXJO.INDX,HSI.INDX,N225.INDX
+            # crypto=14: ETH,LINK,XRP,APT,NEAR,DOGE,ADA,SOL,FET,DOT,INJ,BNB,MATIC,SUI
+            # Pairs with ws:False use REST cache (H1:55m, H4:3h55m, D1:23h TTL) — scan/backtest/execute unaffected
 
             ws_pairs = list(ALL_PAIRS)
 
@@ -1098,13 +1113,13 @@ FOREX_PAIRS = [
 
     {"symbol":"EURUSD=X","type":"forex","display":"EUR/USD","source":"eodhd","enabled":True},   # SQN +0.16 — enabled; score gate filters low-conviction setups
 
-    {"symbol":"GBPUSD=X","type":"forex","display":"GBP/USD","source":"eodhd","enabled":False},  # SQN -1.62 (post-fix BT 2026-03-13): 7 trades/730d, WR 14%, OOS:-10 — no edge confirmed
+    {"symbol":"GBPUSD=X","type":"forex","display":"GBP/USD","source":"eodhd","enabled":True,"ws":False},  # SQN -1.62 (post-fix BT 2026-03-13): 7 trades/730d, WR 14%, OOS:-10 — no edge confirmed # re-enabled for ATR-fix retest
 
     {"symbol":"USDJPY=X","type":"forex","display":"USD/JPY","source":"eodhd","enabled":True},   # SQN -2.33 — enabled; re-evaluate post-formula fix
 
     {"symbol":"AUDUSD=X","type":"forex","display":"AUD/USD","source":"eodhd","enabled":True},   # SQN +0.46
 
-    {"symbol":"NZDUSD=X","type":"forex","display":"NZD/USD","source":"eodhd","enabled":True},   # SQN 0.00 — enabled; zero trades was data gap not signal failure
+    {"symbol":"NZDUSD=X","type":"forex","display":"NZD/USD","source":"eodhd","enabled":True,"ws":False},   # SQN 0.00 — enabled; zero trades was data gap not signal failure
 
     {"symbol":"EURGBP=X","type":"forex","display":"EUR/GBP","source":"eodhd","enabled":True},   # SQN +0.65
 
@@ -1112,23 +1127,23 @@ FOREX_PAIRS = [
 
     {"symbol":"USDCHF=X","type":"forex","display":"USD/CHF","source":"eodhd","enabled":True},   # v3.1 SQN +0.61, OOS +1.22 ✓
 
-    {"symbol":"EURJPY=X","type":"forex","display":"EUR/JPY","source":"eodhd","enabled":True},   # SQN +1.06
+    {"symbol":"EURJPY=X","type":"forex","display":"EUR/JPY","source":"eodhd","enabled":True,"ws":False},   # SQN +1.06
 
     {"symbol":"GBPJPY=X","type":"forex","display":"GBP/JPY","source":"eodhd","enabled":True},   # SQN -0.72
 
-    {"symbol":"AUDJPY=X","type":"forex","display":"AUD/JPY","source":"eodhd","enabled":True},   # SQN +0.22
+    {"symbol":"AUDJPY=X","type":"forex","display":"AUD/JPY","source":"eodhd","enabled":True,"ws":False},   # SQN +0.22
 
-    {"symbol":"EURAUD=X","type":"forex","display":"EUR/AUD","source":"eodhd","enabled":True},   # SQN -1.43 (old look-ahead bias) — re-evaluate post-formula fix
+    {"symbol":"EURAUD=X","type":"forex","display":"EUR/AUD","source":"eodhd","enabled":True,"ws":False},   # SQN -1.43 (old look-ahead bias) — re-evaluate post-formula fix
 
     {"symbol":"GBPAUD=X","type":"forex","display":"GBP/AUD","source":"eodhd","enabled":True},   # SQN +0.91
 
-    {"symbol":"USDZAR=X","type":"forex","display":"USD/ZAR","source":"eodhd","enabled":True},   # SQN -0.32
+    {"symbol":"USDZAR=X","type":"forex","display":"USD/ZAR","source":"eodhd","enabled":True,"ws":False},   # SQN -0.32
 
-    {"symbol":"EURCHF=X","type":"forex","display":"EUR/CHF","source":"eodhd","enabled":True},   # SQN -0.83
+    {"symbol":"EURCHF=X","type":"forex","display":"EUR/CHF","source":"eodhd","enabled":True,"ws":False},   # SQN -0.83
 
-    {"symbol":"USDMXN=X","type":"forex","display":"USD/MXN","source":"eodhd","enabled":True},   # SQN +0.85, OOS +0.60 ✓
+    {"symbol":"USDMXN=X","type":"forex","display":"USD/MXN","source":"eodhd","enabled":True,"ws":False},   # SQN +0.85, OOS +0.60 ✓
 
-    {"symbol":"USDSGD=X","type":"forex","display":"USD/SGD","source":"eodhd","enabled":True},   # SQN +0.43
+    {"symbol":"USDSGD=X","type":"forex","display":"USD/SGD","source":"eodhd","enabled":True,"ws":False},   # SQN +0.43
 
 ]
 
@@ -1148,29 +1163,29 @@ COMMODITY_PAIRS = [
 
     {"symbol":"PA=F","type":"commodity","display":"XPD/USD","source":"eodhd","enabled":True},     # Pepperstone: XPDUSD
 
-    {"symbol":"HG=F","type":"commodity","display":"Copper","source":"eodhd","enabled":True},      # Pepperstone: COPPER
+    {"symbol":"HG=F","type":"commodity","display":"Copper","source":"eodhd","enabled":True,"ws":False},      # Pepperstone: COPPER
 
 ]
 
 INDEX_PAIRS = [
 
-    {"symbol":"^GSPC","type":"index","display":"S&P 500","source":"eodhd","enabled":True},       # SQN +0.09
+    {"symbol":"^GSPC","type":"index","display":"S&P 500","source":"eodhd","enabled":True},       # SQN +1.23 WR 60.0% (10T) ← WS: us endpoint GSPC.INDX
 
-    {"symbol":"^IXIC","type":"index","display":"Nasdaq","source":"eodhd","enabled":True},         # SQN -0.20
+    {"symbol":"^IXIC","type":"index","display":"Nasdaq","source":"eodhd","enabled":True,"ws":False},         # SQN -2.43 WR 23.1% (13T)
 
-    {"symbol":"^DJI","type":"index","display":"Dow Jones","source":"eodhd","enabled":True},      # SQN +0.80
+    {"symbol":"^DJI","type":"index","display":"Dow Jones","source":"eodhd","enabled":True},      # SQN +0.61 WR 55.6% (9T) ← WS: us endpoint DJI.INDX
 
-    {"symbol":"^GDAXI","type":"index","display":"DAX 40","source":"eodhd","enabled":True},       # Pepperstone: GER40
+    {"symbol":"^GDAXI","type":"index","display":"DAX 40","source":"eodhd","enabled":True,"ws":False},       # SQN -1.89 WR 23.1% (13T) Pepperstone: GER40
 
-    {"symbol":"^FTSE","type":"index","display":"UK100","source":"eodhd","enabled":True},          # Pepperstone: UK100
+    {"symbol":"^FTSE","type":"index","display":"UK100","source":"eodhd","enabled":True},          # SQN +0.67 WR 50.0% (12T) Pepperstone: UK100 ← WS: forex ep
 
-    {"symbol":"^AXJO","type":"index","display":"ASX 200","source":"eodhd","enabled":True},        # Pepperstone: AUS200
+    {"symbol":"^AXJO","type":"index","display":"ASX 200","source":"eodhd","enabled":True},        # SQN +0.12 WR 40.0% (10T) Pepperstone: AUS200 ← WS: forex ep
 
-    {"symbol":"^N225","type":"index","display":"Nikkei 225","source":"eodhd","enabled":True},     # Pepperstone: JPN225
+    {"symbol":"^N225","type":"index","display":"Nikkei 225","source":"eodhd","enabled":True},     # SQN -0.39 WR 33.3% (9T) Pepperstone: JPN225 ← WS: forex ep
 
-    {"symbol":"^HSI","type":"index","display":"Hang Seng","source":"eodhd","enabled":True},       # Pepperstone: HK50
+    {"symbol":"^HSI","type":"index","display":"Hang Seng","source":"eodhd","enabled":True},       # SQN -0.38 WR 33.3% (9T) Pepperstone: HK50 ← WS: forex ep
 
-    {"symbol":"^STOXX50E","type":"index","display":"Euro Stoxx 50","source":"eodhd","enabled":True},  # Pepperstone: EUSTX50
+    {"symbol":"^STOXX50E","type":"index","display":"Euro Stoxx 50","source":"eodhd","enabled":True,"ws":False},  # SQN -1.56 WR 20.0% (10T) Pepperstone: EUSTX50
 
 ]
 
@@ -1178,33 +1193,33 @@ US_STOCK_PAIRS = [
 
     {"symbol":"AAPL.US","type":"stock","display":"AAPL","source":"eodhd","enabled":True},         # SQN -0.30 — score gate filters
 
-    {"symbol":"TSLA.US","type":"stock","display":"TSLA","source":"eodhd","enabled":True},         # SQN +0.10
+    {"symbol":"TSLA.US","type":"stock","display":"TSLA","source":"eodhd","enabled":True,"ws":False},         # SQN +0.10
 
-    {"symbol":"NVDA.US","type":"stock","display":"NVDA","source":"eodhd","enabled":True},         # SQN +1.44 ✓
+    {"symbol":"NVDA.US","type":"stock","display":"NVDA","source":"eodhd","enabled":True,"ws":False},         # SQN +1.44 ✓
 
     {"symbol":"MSFT.US","type":"stock","display":"MSFT","source":"eodhd","enabled":True},         # SQN +0.49
 
-    {"symbol":"AMZN.US","type":"stock","display":"AMZN","source":"eodhd","enabled":True},         # SQN +0.27
+    {"symbol":"AMZN.US","type":"stock","display":"AMZN","source":"eodhd","enabled":True,"ws":False},         # SQN +0.27
 
-    {"symbol":"META.US","type":"stock","display":"META","source":"eodhd","enabled":True},         # SQN -0.29
+    {"symbol":"META.US","type":"stock","display":"META","source":"eodhd","enabled":True,"ws":False},         # SQN -0.29
 
     {"symbol":"GOOG.US","type":"stock","display":"GOOG","source":"eodhd","enabled":True},         # SQN +1.61, OOS:+1.01 ✓
 
-    {"symbol":"JPM.US","type":"stock","display":"JPM","source":"eodhd","enabled":True},           # SQN +0.26
+    {"symbol":"JPM.US","type":"stock","display":"JPM","source":"eodhd","enabled":True,"ws":False},           # SQN +0.26
 
-    {"symbol":"V.US","type":"stock","display":"V","source":"eodhd","enabled":True},               # SQN -1.39
+    {"symbol":"V.US","type":"stock","display":"V","source":"eodhd","enabled":True,"ws":False},               # SQN -1.39
 
-    {"symbol":"XOM.US","type":"stock","display":"XOM","source":"eodhd","enabled":True},           # SQN -0.03
+    {"symbol":"XOM.US","type":"stock","display":"XOM","source":"eodhd","enabled":True,"ws":False},           # SQN -0.03
 
     {"symbol":"NFLX.US","type":"stock","display":"NFLX","source":"eodhd","enabled":True},        # Pepperstone CFD
 
     {"symbol":"AMD.US","type":"stock","display":"AMD","source":"eodhd","enabled":True},           # Pepperstone CFD
 
-    {"symbol":"CRM.US","type":"stock","display":"CRM","source":"eodhd","enabled":True},           # Pepperstone CFD
+    {"symbol":"CRM.US","type":"stock","display":"CRM","source":"eodhd","enabled":True,"ws":False},           # Pepperstone CFD
 
-    {"symbol":"DIS.US","type":"stock","display":"DIS","source":"eodhd","enabled":True},           # Pepperstone CFD
+    {"symbol":"DIS.US","type":"stock","display":"DIS","source":"eodhd","enabled":True,"ws":False},           # Pepperstone CFD
 
-    {"symbol":"BA.US","type":"stock","display":"BA","source":"eodhd","enabled":True},             # Pepperstone CFD
+    {"symbol":"BA.US","type":"stock","display":"BA","source":"eodhd","enabled":True,"ws":False},             # Pepperstone CFD
 
     {"symbol":"COIN.US","type":"stock","display":"COIN","source":"eodhd","enabled":True},         # Pepperstone CFD
 
@@ -1222,19 +1237,19 @@ ETF_PAIRS = [
 
     {"symbol":"SPY.US","type":"stock","display":"SPY","source":"eodhd","enabled":True},           # SQN +1.03 ✓
 
-    {"symbol":"QQQ.US","type":"stock","display":"QQQ","source":"eodhd","enabled":True},           # SQN +0.38
+    {"symbol":"QQQ.US","type":"stock","display":"QQQ","source":"eodhd","enabled":True,"ws":False},           # SQN +0.38
 
-    {"symbol":"GLD.US","type":"stock","display":"GLD","source":"eodhd","enabled":True},           # SQN +2.08, OOS:+2.98 ✓
+    {"symbol":"GLD.US","type":"stock","display":"GLD","source":"eodhd","enabled":True,"ws":False},           # SQN +2.08, OOS:+2.98 ✓
 
-    {"symbol":"TLT.US","type":"stock","display":"TLT","source":"eodhd","enabled":True},           # Treasury ETF
+    {"symbol":"TLT.US","type":"stock","display":"TLT","source":"eodhd","enabled":True,"ws":False},           # Treasury ETF
 
     {"symbol":"IWM.US","type":"stock","display":"IWM","source":"eodhd","enabled":True},           # Russell 2000 ETF
 
     {"symbol":"EEM.US","type":"stock","display":"EEM","source":"eodhd","enabled":True},           # Emerging Markets ETF
 
-    {"symbol":"XLF.US","type":"stock","display":"XLF","source":"eodhd","enabled":True},           # Financial Sector ETF
+    {"symbol":"XLF.US","type":"stock","display":"XLF","source":"eodhd","enabled":True,"ws":False},           # Financial Sector ETF
 
-    {"symbol":"XLE.US","type":"stock","display":"XLE","source":"eodhd","enabled":True},           # Energy Sector ETF
+    {"symbol":"XLE.US","type":"stock","display":"XLE","source":"eodhd","enabled":True,"ws":False},           # Energy Sector ETF
 
     {"symbol":"SLV.US","type":"stock","display":"SLV","source":"eodhd","enabled":True},           # Silver ETF
 
@@ -1276,41 +1291,41 @@ JSE_PAIRS = [
 
 CRYPTO_PAIRS = [
 
-    {"symbol":"BTCUSDT","type":"crypto","display":"BTC/USDT","source":"binance","enabled":False},  # SQN -0.81 Phase A / pre-PhaseA: +0.18 (borderline, re-test)
+    {"symbol":"BTCUSDT","type":"crypto","display":"BTC/USDT","source":"binance","enabled":True,"ws":False},  # SQN -0.81 Phase A / pre-PhaseA: +0.18 (borderline, re-test) # re-enabled for ATR-fix retest
 
-    {"symbol":"ETHUSDT","type":"crypto","display":"ETH/USDT","source":"binance","enabled":False},  # SQN +0.50 Phase A (weak)
+    {"symbol":"ETHUSDT","type":"crypto","display":"ETH/USDT","source":"binance","enabled":True},  # SQN +0.50 Phase A (weak) # re-enabled for ATR-fix retest
 
-    {"symbol":"XRPUSDT","type":"crypto","display":"XRP/USDT","source":"binance","enabled":False},  # SQN -0.80 Phase A
+    {"symbol":"XRPUSDT","type":"crypto","display":"XRP/USDT","source":"binance","enabled":True},  # SQN -0.80 Phase A # re-enabled for ATR-fix retest
 
-    {"symbol":"SOLUSDT","type":"crypto","display":"SOL/USDT","source":"binance","enabled":False},  # v3.1 SQN +0.02 (improved from -0.64 but still weak)
+    {"symbol":"SOLUSDT","type":"crypto","display":"SOL/USDT","source":"binance","enabled":True},  # v3.1 SQN +0.02 (improved from -0.64 but still weak) # re-enabled for ATR-fix retest
 
-    {"symbol":"ADAUSDT","type":"crypto","display":"ADA/USDT","source":"binance","enabled":False},  # SQN -0.80 Phase A
+    {"symbol":"ADAUSDT","type":"crypto","display":"ADA/USDT","source":"binance","enabled":True},  # SQN -0.80 Phase A # re-enabled for ATR-fix retest
 
-    {"symbol":"DOGEUSDT","type":"crypto","display":"DOGE/USDT","source":"binance","enabled":False}, # SQN -0.64 Phase A
+    {"symbol":"DOGEUSDT","type":"crypto","display":"DOGE/USDT","source":"binance","enabled":True}, # SQN -0.64 Phase A # re-enabled for ATR-fix retest
 
-    {"symbol":"AVAXUSDT","type":"crypto","display":"AVAX/USDT","source":"binance","enabled":False}, # v3.1 SQN +0.44, OOS +0.02 (overfit)
+    {"symbol":"AVAXUSDT","type":"crypto","display":"AVAX/USDT","source":"binance","enabled":True,"ws":False}, # v3.1 SQN +0.44, OOS +0.02 (overfit) # re-enabled for ATR-fix retest
 
     {"symbol":"LINKUSDT","type":"crypto","display":"LINK/USDT","source":"binance","enabled":True},  # v3.1 SQN +0.93, OOS +1.00 âœ" (regime-adaptive)
 
-    {"symbol":"MATICUSDT","type":"crypto","display":"MATIC/USDT","source":"binance","enabled":False},# SQN +0.26 Phase A (noise)
+    {"symbol":"MATICUSDT","type":"crypto","display":"MATIC/USDT","source":"binance","enabled":True},# SQN +0.26 Phase A (noise) # re-enabled for ATR-fix retest
 
-    {"symbol":"BNBUSDT","type":"crypto","display":"BNB/USDT","source":"binance","enabled":False},  # v3.1 SQN -0.55 (negative edge)
+    {"symbol":"BNBUSDT","type":"crypto","display":"BNB/USDT","source":"binance","enabled":True},  # v3.1 SQN -0.55 (negative edge) # re-enabled for ATR-fix retest
 
-    {"symbol":"DOTUSDT","type":"crypto","display":"DOT/USDT","source":"binance","enabled":False},  # SQN -0.36 Phase A
+    {"symbol":"DOTUSDT","type":"crypto","display":"DOT/USDT","source":"binance","enabled":True},  # SQN -0.36 Phase A # re-enabled for ATR-fix retest
 
-    {"symbol":"LTCUSDT","type":"crypto","display":"LTC/USDT","source":"binance","enabled":True},   # v3.1 SQN +0.97 (improved from -0.16, near threshold)
+    {"symbol":"LTCUSDT","type":"crypto","display":"LTC/USDT","source":"binance","enabled":True,"ws":False},   # v3.1 SQN +0.97 (improved from -0.16, near threshold)
 
     {"symbol":"SUIUSDT","type":"crypto","display":"SUI/USDT","source":"binance","enabled":True},   # SQN +0.76, IS:+0.43/OOS:+0.82 âœ"
 
-    {"symbol":"NEARUSDT","type":"crypto","display":"NEAR/USDT","source":"binance","enabled":False},# SQN -1.27
+    {"symbol":"NEARUSDT","type":"crypto","display":"NEAR/USDT","source":"binance","enabled":True},# SQN -1.27 # re-enabled for ATR-fix retest
 
     {"symbol":"APTUSDT","type":"crypto","display":"APT/USDT","source":"binance","enabled":True},   # SQN +0.67, IS:+0.56/OOS:+0.37 âœ"
 
-    {"symbol":"INJUSDT","type":"crypto","display":"INJ/USDT","source":"binance","enabled":False},  # SQN -2.01
+    {"symbol":"INJUSDT","type":"crypto","display":"INJ/USDT","source":"binance","enabled":True},  # SQN -2.01 # re-enabled for ATR-fix retest
 
-    {"symbol":"FETUSDT","type":"crypto","display":"FET/USDT","source":"binance","enabled":False},  # SQN +0.14
+    {"symbol":"FETUSDT","type":"crypto","display":"FET/USDT","source":"binance","enabled":True},  # SQN +0.14 # re-enabled for ATR-fix retest
 
-    {"symbol":"RENDERUSDT","type":"crypto","display":"RENDER/USDT","source":"binance","enabled":False}, # SQN -2.45
+    {"symbol":"RENDERUSDT","type":"crypto","display":"RENDER/USDT","source":"binance","enabled":True,"ws":False}, # SQN -2.45 # re-enabled for ATR-fix retest
 
 ]
 
@@ -5155,6 +5170,38 @@ def backtest_pair(pair, style="auto"):
 
     log.info(f"[BT] {pair['display']} done: {len(trades)} trades, WR {win_rate}%, PF {profit_factor}, Expect {avg_r}R, SQN {sqn}, Sharpe {sharpe}, Sortino {sortino}, IS:{is_sqn}/OOS:{oos_sqn}, MC-P95 DD {mc_dd['p95']}%, MaxRec {max_recovery_bars} bars")
 
+    # Save backtest result to DB
+    try:
+        import sqlite3 as _sq
+        with _sq.connect(_AUDIT_DB) as _con:
+            _con.execute(
+                "INSERT INTO backtest_results "
+                "(run_date,pair,asset_type,engine,trades,win_rate,profit_factor,"
+                "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,bt_min,atr_source) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    __import__('datetime').datetime.utcnow().isoformat(),
+                    pair["display"],
+                    pair.get("type", ""),
+                    "forex_scoring" if pair.get("type") == "forex" else "factor_scoring",
+                    len(trades),
+                    round(win_rate, 4),
+                    round(profit_factor, 4),
+                    round(avg_r, 4),
+                    round(sqn, 4),
+                    round(sharpe, 4),
+                    round(sortino, 4),
+                    round(is_sqn, 4),
+                    round(oos_sqn, 4),
+                    round(max_dd_pct, 4),
+                    float(bt_min),
+                    "D1_ATR" if pair.get("type") != "crypto" else "H4_ATR",
+                )
+            )
+        log.info(f"[BT-DB] Saved: {pair['display']} SQN={sqn:.2f} ({len(trades)} trades) → audit.db")
+    except Exception as _dbe:
+        log.debug(f"[BT-DB] Failed to save result: {_dbe}")
+
     return {
 
         "pair": pair["display"], "symbol": pair["symbol"], "type": pair["type"],
@@ -5302,6 +5349,32 @@ def _init_audit_db(db_path: str) -> None:
 
     """)
 
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS backtest_results (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_date        TEXT    NOT NULL,
+            pair            TEXT    NOT NULL,
+            asset_type      TEXT,
+            engine          TEXT,
+            trades          INTEGER,
+            win_rate        REAL,
+            profit_factor   REAL,
+            expectancy      REAL,
+            sqn             REAL,
+            sharpe          REAL,
+            sortino         REAL,
+            is_score        REAL,
+            oos_score       REAL,
+            max_dd_pct      REAL,
+            bt_min          REAL,
+            atr_source      TEXT,
+            notes           TEXT
+        )
+    """)
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_bt_pair ON backtest_results (pair, run_date)"
+    )
+
     # Migrate: add new columns to existing tables that lack them
 
     existing = {row[1] for row in con.execute("PRAGMA table_info(audit_log)")}
@@ -5381,6 +5454,8 @@ _auto_trader.configure(
 
 
 app=Flask(__name__,static_folder="static")
+
+app.config['PERMANENT_SESSION_LIFETIME'] = 86400  # 24 hours
 
 
 
@@ -6747,7 +6822,65 @@ def api_backtest():
 
 
 
-# N4: Kill-switch API â€” immediately blocks new scans/analyses
+@app.route("/api/backtest-history")
+def api_backtest_history():
+    """Return all stored backtest results, newest first."""
+    try:
+        with sqlite3.connect(_AUDIT_DB) as con:
+            con.row_factory = sqlite3.Row
+            rows = con.execute("""
+                SELECT * FROM backtest_results
+                ORDER BY run_date DESC
+                LIMIT 500
+            """).fetchall()
+            return jsonify([dict(r) for r in rows])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+@app.route("/api/backtest-history/<pair_name>")
+def api_backtest_history_pair(pair_name):
+    """Return backtest history for a specific pair."""
+    try:
+        with sqlite3.connect(_AUDIT_DB) as con:
+            con.row_factory = sqlite3.Row
+            rows = con.execute("""
+                SELECT * FROM backtest_results
+                WHERE pair = ?
+                ORDER BY run_date DESC
+                LIMIT 50
+            """, (pair_name,)).fetchall()
+            return jsonify([dict(r) for r in rows])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+@app.route("/api/backtest-best")
+def api_backtest_best():
+    """Return best result per pair (highest SQN from most recent run)."""
+    try:
+        with sqlite3.connect(_AUDIT_DB) as con:
+            con.row_factory = sqlite3.Row
+            rows = con.execute("""
+                SELECT b.*
+                FROM backtest_results b
+                INNER JOIN (
+                    SELECT pair, MAX(run_date) as latest
+                    FROM backtest_results
+                    GROUP BY pair
+                ) latest ON b.pair = latest.pair
+                AND b.run_date = latest.latest
+                ORDER BY b.sqn DESC
+            """).fetchall()
+            return jsonify([dict(r) for r in rows])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+# N4: Kill-switch API â€" immediately blocks new scans/analyses
 
 @app.route("/api/killswitch",methods=["POST"])
 
@@ -7549,19 +7682,21 @@ def analyze_pair(pair, btc_bias, style="swing"):
             pair=pair,
             bar_time=str(d1[-1].get("time", "") or d1[-1].get("datetime", "")),
         )
-        _min_forex = CONFIG.get("MIN_FOREX_CONFLUENCE", 0.40)
         res = {
             "final_score":    _forex_result.final_score,
             "direction":      _forex_result.direction,
             "factor_scores":  _forex_result.components,
-            "regime":         {"state": 1, "label": _forex_result.signal_type},  # Match calc_confluence format
+            "regime":         {"state": 1, "label": _forex_result.signal_type},
             "signal_type":    _forex_result.signal_type,
-            "score":          _forex_result.final_score,  # Add compatibility field
-            "trendState":     _forex_result.signal_type,  # Add compatibility field
+            "score":          _forex_result.final_score,
+            "trendState":     _forex_result.signal_type,
+            # Keys required by signal dict construction below
+            "votes":          {},
+            "warnings":       [],
+            "weinsteinStage": None,
+            "weinsteinLabel": "N/A",
+            "maxScoreOverride": 1.0,  # forex scores are 0–1; keeps confluencePct meaningful
         }
-        if _forex_result.final_score < _min_forex:
-            return None  # below threshold — skip this pair entirely
-        # Signal passes — continue to risk check and execution as normal
     else:
         res = calc_confluence(
             _cf_d1i, _cf_h4i, _cf_h1i, vr, stoch, pair, btc_bias,

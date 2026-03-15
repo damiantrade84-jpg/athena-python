@@ -1772,6 +1772,21 @@ fetch('/api/test-mode').then(function(r){return r.json();}).then(function(d){
   setTimeout(pollMT5, 10000);
 })();
 
+// -- Wake-up recovery: reload page if hidden > 60s --
+// Browsers throttle setTimeout to ~1 min when the screen is off or tab is inactive.
+// The Flask server keeps running; the page just needs a fresh start on return.
+var _tabHiddenAt = 0;
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState === 'hidden') {
+    _tabHiddenAt = Date.now();
+  } else if (document.visibilityState === 'visible' && _tabHiddenAt) {
+    if ((Date.now() - _tabHiddenAt) > 60000) {
+      location.reload();
+    }
+    _tabHiddenAt = 0;
+  }
+});
+
 function showMT5Status() {
   if (window._mt5Account) {
     var a = window._mt5Account;

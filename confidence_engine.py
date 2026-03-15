@@ -18,9 +18,9 @@ log = logging.getLogger("sentinel")
 
 # Default component weights (must sum to 1.0)
 _DEFAULT_WEIGHTS = {
-    "indicator_agreement": 0.35,
-    "timeframe_alignment": 0.30,
-    "regime_fit": 0.20,
+    "indicator_agreement": 0.40,  # increased from 0.35
+    "timeframe_alignment": 0.15,  # reduced from 0.30
+    "regime_fit": 0.30,           # increased from 0.20
     "liquidity_quality": 0.15,
 }
 
@@ -42,24 +42,58 @@ def _std(values: List[float]) -> float:
     return math.sqrt(var)
 
 
+def _mad(values: List[float]) -> float:
+    """Median Absolute Deviation - robust measure of dispersion."""
+    if len(values) < 2:
+        return 0.0
+    sorted_vals = sorted(values)
+    n = len(sorted_vals)
+    median = sorted_vals[n//2] if n % 2 == 1 else (sorted_vals[n//2 - 1] + sorted_vals[n//2]) / 2
+    mad = sorted(abs(v - median) for v in values)[n//2] if n % 2 == 1 else \
+           sorted(abs(v - median) for v in values)[n//2 - 1]
+    return mad
+
+def _robust_z_score_normalization(mean_mad: float) -> float:
+    """Normalize using robust Z-score approach with graceful scaling for extreme values.
+    Uses 0.6745 constant to convert MAD to standard deviation equivalent.
+    """
+    if mean_mad <= 0:
+        return 1.0  # perfect agreement
+    
+    # Convert MAD to standard deviation equivalent
+    std_equiv = mean_mad / 0.6745
+    
+    # Robust Z-score scaling with graceful handling of extreme values
+    # Instead of hard-clamping at 3.0, use soft scaling that preserves information
+    robust_z = 1.0 / (1.0 + std_equiv)
+    
+    # Apply additional scaling for extreme volatility spikes (>3.0 std equiv)
+    if std_equiv > 3.0:
+        # Graceful degradation for extreme macroeconomic volatility
+        extreme_factor = 1.0 / (1.0 + (std_equiv - 3.0) * 0.1)
+        robust_z *= extreme_factor
+    
+    return max(0.0, min(1.0, robust_z))
+
+
 def indicator_agreement(factor_scores: Dict[str, Optional[float]],
                         filtered_indicators: Dict[str, Optional[float]],
                         factor_map: Dict[str, List[str]]) -> Optional[float]:
-    """Measure variance between normalized indicator signals within each factor.
-    agreement = 1 - mean(std per factor). Returns 0-1 or None if no data."""
-    stds = []
+    """Measure variance between normalized indicator signals within each factor using robust MAD.
+    agreement = robust_z_score_normalization(mean_mad). Returns 0-1 or None if no data."""
+    mads = []
     for factor, keys in factor_map.items():
         vals = [filtered_indicators.get(k) for k in keys
                 if filtered_indicators.get(k) is not None]
         if len(vals) >= 2:
-            stds.append(_std(vals))
+            mads.append(_mad(vals))
         elif len(vals) == 1:
-            stds.append(0.0)  # single indicator = perfect agreement
-    if not stds:
+            mads.append(0.0)  # single indicator = perfect agreement
+    if not mads:
         return None
-    mean_std = sum(stds) / len(stds)
-    # Clamp: z-scores are in [-3,3] so max std is ~3; normalize to 0-1
-    return max(0.0, min(1.0, 1.0 - mean_std / 3.0))
+    mean_mad = sum(mads) / len(mads)
+    # Use robust Z-score normalization instead of hard-clamping
+    return _robust_z_score_normalization(mean_mad)
 
 
 def timeframe_alignment(d1_factor_result: Optional[Dict],
@@ -88,23 +122,26 @@ def regime_fit(regime: str, signal_type: str = "trend") -> Optional[float]:
 
 
 def liquidity_quality(volume_ratio: Optional[float],
-                      microstructure: Optional[Dict] = None) -> Optional[float]:
-    """Use normalized volume, orderflow, and spread metrics.
+                      microstructure: Optional[Dict] = None,
+                      session_vol_multiplier: float = 1.0) -> Optional[float]:
+    """Use normalized volume and session-based volatility multiplier.
+    Forex is decentralized, so we rely on volume_ratio and session timing.
     Returns 0-1 or None if no data available."""
     components = []
     # Volume ratio: >1.0 means above-average volume
     if volume_ratio is not None and volume_ratio > 0:
         vol_score = min(1.0, volume_ratio / 2.0)  # 2x average = 1.0
+        # Apply session-based volatility multiplier
+        vol_score = min(1.0, vol_score * session_vol_multiplier)
         components.append(vol_score)
-    # Microstructure signals (if available)
+    # Microstructure signals (excluding order book metrics for Forex)
     if microstructure:
-        imb = microstructure.get("order_book_imbalance")
-        delta = microstructure.get("orderflow_delta")
-        if imb is not None and imb != 0.0:
-            # Higher absolute imbalance = clearer directional liquidity
-            components.append(min(1.0, abs(imb)))
-        if delta is not None and delta != 0.0:
-            components.append(min(1.0, abs(delta)))
+        wall = microstructure.get("liquidity_wall_detection")
+        pressure = microstructure.get("liquidity_pressure")
+        if wall is not None and wall != 0.0:
+            components.append(min(1.0, abs(wall)))
+        if pressure is not None and pressure != 0.0:
+            components.append(min(1.0, abs(pressure)))
     if not components:
         return None
     return sum(components) / len(components)
@@ -117,6 +154,7 @@ def compute_confidence(factor_result: Dict,
                        signal_type: str = "trend",
                        volume_ratio: Optional[float] = None,
                        microstructure: Optional[Dict] = None,
+                       session_vol_multiplier: float = 1.0,
                        factor_map: Optional[Dict] = None) -> Dict:
     """Compute signal confidence with graceful degradation.
 
@@ -133,8 +171,7 @@ def compute_confidence(factor_result: Dict,
             "volume": ["volume_ratio", "obv_trend"],
             "structure": ["fib_proximity"],
             "derivatives": ["funding_rate"],
-            "microstructure": ["order_book_imbalance", "liquidity_wall_detection",
-                               "orderflow_delta", "liquidity_pressure"],
+            "microstructure": ["liquidity_wall_detection", "liquidity_pressure"],
         }
 
     regime = factor_result.get("regime", "UNKNOWN")
@@ -147,7 +184,7 @@ def compute_confidence(factor_result: Dict,
         "timeframe_alignment": timeframe_alignment(
             d1_factor_result, h4_factor_result, h1_factor_result),
         "regime_fit": regime_fit(regime, signal_type),
-        "liquidity_quality": liquidity_quality(volume_ratio, microstructure),
+        "liquidity_quality": liquidity_quality(volume_ratio, microstructure, session_vol_multiplier),
     }
 
     # Redistribute weights among available components

@@ -140,6 +140,14 @@ Computes theoretical max score using `get_pair_vote_weights(pair)`, subtracts `W
 - Crypto: uses TTL cache only
 - Cache TTL keys are **uppercase**: `"H1"`, `"H4"`, `"D1"` (not lowercase)
 - TTL: H1=55 min, H4=3h55m, D1=23h
+- Pairs with `"ws": False` use REST cache only — no live price tick; negligible latency impact for swing/intraday
+
+### `_build_ticker_map(pairs)` — athena.py (EODHDWSManager)
+Routes pairs to EODHD WS endpoints (`us`, `forex`, `crypto`). Skips any pair with `"ws": False`.
+- EODHD plan cap: **50 tickers total** across all endpoints
+- WS allocation (50): us=17, forex=19, crypto=14 — see comment at `start()` for full ticker list
+- Pairs with `"ws": False` still scan, backtest, and execute normally via REST cache
+- To re-allocate WS slots: run backtests → query `backtest_results` by SQN → update `"ws"` flags in pair lists
 
 ### `/api/pairs` endpoint — athena.py
 Returns ALL_PAIRS grouped by asset class for the frontend pair selector. Response: `{groups: {label: [{sym, label, enabled}]}, total, active}`. The backtest dropdown in index.html fetches this on page load — do NOT hardcode pair lists in HTML.
@@ -264,13 +272,26 @@ bybit_execute(signal, approval)
 
 ---
 
-## Audit DB Schema (audit.db — audit_log table)
+## Audit DB Schema (audit.db)
 
+### `audit_log` table
 Key columns: `ts, pair, score, direction, trend, grade, edge_prob, risk, style, asset_class, score_pct, max_score, votes_json, warnings_json, weinstein, trend_state, adx_pct, btc_bias, session_name, regime, entry_price, sl, tp, volume, risk_amount, risk_pct, ticket, exit_price, exit_time, pnl, r_multiple, exit_reason, holding_period_hours, error_tag, fee_cost, factors_json`
 
 `fee_cost` (REAL) — actual exchange commission paid, captured from `bybit_execute()` → `order["fee"]["cost"]`. NULL for MT5 trades (not available via API).
 
 `factors_json` (TEXT) — JSON blob `{scores, weights, disabled, regime}` from `compute_factor_scores()`. Written on every AI analysis, execution, and webhook entry. Used by `ai_learning.py` to analyze factor reliability across winning/losing trades.
+
+### `backtest_results` table
+Populated after every `backtest_pair()` run. Columns: `id, run_date, pair, asset_type, engine, trades, win_rate, profit_factor, expectancy, sqn, sharpe, sortino, is_score, oos_score, max_dd_pct, bt_min, atr_source, notes`
+
+- `engine`: `"forex_scoring"` for forex pairs, `"factor_scoring"` for all others
+- `atr_source`: `"D1_ATR"` for non-crypto, `"H4_ATR"` for crypto
+- Index: `idx_bt_pair (pair, run_date)`
+
+**Backtest history API endpoints:**
+- `GET /api/backtest-history` — last 500 results, newest first
+- `GET /api/backtest-history/<pair_name>` — last 50 for a specific pair (URL-encode slashes: `XAU%2FUSD`)
+- `GET /api/backtest-best` — most recent run per pair, ordered by SQN desc
 
 Schema auto-migrated on startup — adding a new column: add it to both `CREATE TABLE` and the migration list in `_init_audit_db()`.
 
@@ -323,3 +344,5 @@ claude
 12. `_resolve_scan_style(requested_style, pair)` — use this for per-pair style resolution in `run_full_scan()`; do not rename or replace with ad-hoc functions
 13. Non-blocking I/O during scans: `carry_feed`, `cot_feed`, `duka_volume` must never block the scan thread — return cached/neutral values if data not ready
 14. Always use `timeout=1.0` and `PRAGMA journal_mode=WAL` for `sqlite3.connect` to avoid `database is locked` concurrency errors
+15. `"ws": False` on a pair dict opts it out of WS subscription only — scan/backtest/execute are unaffected. Default is `True` (backward-compatible). EODHD plan cap is 50 tickers total; do not add `ws:True` pairs without removing others first
+16. BybitWS (`athena/datafeeds/bybit_ws.py`): `ping_interval=None` in `websockets.connect()` is required — disables library-level keepalive and lets app-level `{"op":"ping"}` handling prevent 1011 keepalive errors

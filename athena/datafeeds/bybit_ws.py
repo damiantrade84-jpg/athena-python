@@ -36,7 +36,10 @@ class BybitWS:
     async def _connect(self) -> None:
         """Connect to Bybit WebSocket and subscribe to streams."""
         try:
-            self._ws = await websockets.connect(self.base_url)
+            self._ws = await websockets.connect(
+                self.base_url,
+                ping_interval=None,  # disable built-in keepalive — app-level ping/pong handles this
+            )
             log.info(f"[BybitWS] Connected to {self.base_url}")
             # Subscribe to orderbook.50 and publicTrade
             subscribe_msg = {

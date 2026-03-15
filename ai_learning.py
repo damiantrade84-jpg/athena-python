@@ -236,10 +236,11 @@ def get_ai_learning_context(pair: str, asset_type: str, db_path: str,
     losses = [r for r in rows if r.get("win") == 0][:5]
     recent_failures = [
         {
-            "pair":   r.get("pair"),
-            "grade":  r.get("ai_grade"),
-            "r":      r.get("r_multiple") or 0.0,
-            "regime": r.get("regime"),
+            "pair":        r.get("pair"),
+            "grade":       r.get("ai_grade"),
+            "r":           r.get("r_multiple") or 0.0,
+            "regime":      r.get("regime"),
+            "time_in_trade": r.get("holding_hours", 0.0),
         }
         for r in losses
     ]
@@ -279,13 +280,23 @@ def get_ai_learning_context(pair: str, asset_type: str, db_path: str,
                 if fval is None:
                     continue
                 factor_stats.setdefault(fname, {"win_sum": 0.0, "loss_sum": 0.0,
-                                                  "win_n": 0, "loss_n": 0})
+                                                  "win_n": 0, "loss_n": 0,
+                                                  "choppy_time": 0.0, "choppy_n": 0})
                 if r.get("win"):
                     factor_stats[fname]["win_sum"] += fval
                     factor_stats[fname]["win_n"] += 1
                 else:
                     factor_stats[fname]["loss_sum"] += fval
                     factor_stats[fname]["loss_n"] += 1
+                    
+                    # Track time-in-trade for choppy session analysis
+                    hold_time = r.get("holding_hours", 0.0)
+                    regime = r.get("regime", "")
+                    
+                    # Penalize factors that result in long hold times in ranging regimes
+                    if regime in ["RANGING", "LOW_VOLATILITY"] and hold_time > 2.0:
+                        factor_stats[fname]["choppy_time"] += hold_time
+                        factor_stats[fname]["choppy_n"] += 1
         except Exception:
             pass
 
@@ -295,11 +306,24 @@ def get_ai_learning_context(pair: str, asset_type: str, db_path: str,
         if total_n >= 5:
             avg_win = round(fs["win_sum"] / fs["win_n"], 3) if fs["win_n"] else 0
             avg_loss = round(fs["loss_sum"] / fs["loss_n"], 3) if fs["loss_n"] else 0
+            
+            # Calculate choppy session penalty
+            choppy_penalty = 0.0
+            if fs["choppy_n"] > 0:
+                avg_choppy_time = fs["choppy_time"] / fs["choppy_n"]
+                # Higher penalty for longer average time in choppy sessions
+                choppy_penalty = round(avg_choppy_time, 2)
+            
             factor_reliability.append({
                 "factor": fname, "avg_win": avg_win, "avg_loss": avg_loss,
-                "count": total_n,
+                "count": total_n, "choppy_penalty": choppy_penalty,
+                "choppy_trades": fs["choppy_n"],
             })
-    factor_reliability.sort(key=lambda x: abs(x["avg_win"] - x["avg_loss"]), reverse=True)
+    
+    # Sort by choppy penalty first, then by reliability difference
+    factor_reliability.sort(key=lambda x: (x["choppy_penalty"], 
+                                         abs(x["avg_win"] - x["avg_loss"])), 
+                          reverse=True)
 
     return {
         "sample_size":       len(rows),

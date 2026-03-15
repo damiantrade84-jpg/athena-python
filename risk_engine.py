@@ -168,8 +168,21 @@ def _adaptive_risk_pct(asset_type: str, regime: str = "") -> float:
     Uses half-Kelly criterion: kelly * 0.5 for safety.
     Falls back to fixed RISK_PCT if insufficient data (<10 trades).
     Clamped to 0.5%-3% hard safety bounds.
+    
+    Per-asset-class base risk:
+    - Forex: 0.5% (lower risk, tighter stops with D1 ATR)
+    - Crypto: 1.0% (higher risk, more volatile)
+    - Others: 1.0% (default)
     """
-    base_risk = _cfg("RISK_PCT", 0.01)
+    # Per-asset-class base risk percentages
+    asset_risk_map = {
+        "forex": 0.005,  # 0.5% for forex (tighter stops with D1 ATR)
+        "crypto": 0.010, # 1.0% for crypto (more volatile)
+        "stock": 0.010,  # 1.0% for stocks
+        "commodity": 0.010, # 1.0% for commodities
+        "index": 0.010,  # 1.0% for indices
+    }
+    base_risk = asset_risk_map.get(asset_type, _cfg("RISK_PCT", 0.01))
 
     if not _cfg("ADAPTIVE_KELLY_ENABLED", True):
         return base_risk
