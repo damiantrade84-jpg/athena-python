@@ -1,6 +1,6 @@
 """signal_debate.py — Multi-agent Bull/Bear/Judge debate for Sentinel Pro v4.0.
 
-Before auto-execution, runs a structured 3-step debate using the Anthropic API:
+Before auto-execution, runs a structured 3-step debate using the xAI Grok API:
   1. BULL CASE: Make the strongest case FOR the trade
   2. BEAR CASE: Make the strongest case AGAINST the trade
   3. JUDGE: Evaluate both cases and grade: STRONG_GO / WEAK_GO / PASS / STRONG_AVOID
@@ -9,7 +9,7 @@ Based on TradingAgents (UCLA/MIT, arXiv 2024) research showing debate patterns
 improve Sharpe ratio and reduce max drawdown vs single-pass analysis.
 
 Only runs on auto-trade candidates (not manual scans) to control API costs.
-~3 API calls per debate = ~$0.10/day at 3 trades/day with Claude Sonnet.
+~3 API calls per debate = ~$0.10/day at 3 trades/day with Grok.
 """
 import json
 import logging
@@ -36,18 +36,18 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
             "allowed": bool
         }
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    api_key = os.environ.get("XAI_API_KEY", "")
     if not api_key:
         try:
             from config import CONFIG
-            api_key = CONFIG.get("ANTHROPIC_KEY", "")
-            if api_key == "YOUR_ANTHROPIC_API_KEY":
+            api_key = CONFIG.get("XAI_API_KEY", "")
+            if api_key == "YOUR_XAI_API_KEY":
                 api_key = ""
         except ImportError:
             pass
     if not api_key:
         return {"grade": "SKIP", "allowed": True,
-                "reasoning": "No ANTHROPIC_API_KEY — debate skipped",
+                "reasoning": "No XAI_API_KEY — debate skipped",
                 "bull_conviction": 0, "bear_conviction": 0,
                 "score_adjustment": 0.0}
 
@@ -81,8 +81,8 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
     )
 
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
+        import openai
+        client = openai.OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
 
         # Step 1: Bull Case
         bull_response = _get_debate_case(client, context, direction, "BULL")
@@ -116,9 +116,9 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
         return result
 
     except ImportError:
-        log.warning("[DEBATE] anthropic library not installed — debate skipped")
+        log.warning("[DEBATE] openai library not installed — debate skipped")
         return {"grade": "SKIP", "allowed": True,
-                "reasoning": "anthropic library not available",
+                "reasoning": "openai library not available",
                 "bull_conviction": 0, "bear_conviction": 0,
                 "score_adjustment": 0.0}
     except Exception as e:
@@ -154,12 +154,12 @@ def _get_debate_case(client, context: str, direction: str,
         )
 
     try:
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=400,
-            messages=[{"role": "user", "content": prompt}]
+        response = client.responses.create(
+            model="grok-4.20-multi-agent-beta-0309",
+            max_output_tokens=400,
+            input=prompt
         )
-        text = response.content[0].text.strip()
+        text = response.output_text.strip()
         # Extract JSON from response
         start = text.find("{")
         end = text.rfind("}") + 1
@@ -189,12 +189,12 @@ def _get_judge_verdict(client, context: str, direction: str,
     )
 
     try:
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=300,
-            messages=[{"role": "user", "content": prompt}]
+        response = client.responses.create(
+            model="grok-4.20-multi-agent-beta-0309",
+            max_output_tokens=300,
+            input=prompt
         )
-        text = response.content[0].text.strip()
+        text = response.output_text.strip()
         start = text.find("{")
         end = text.rfind("}") + 1
         if start >= 0 and end > start:

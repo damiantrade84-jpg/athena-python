@@ -15,6 +15,15 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(line_buffering=True)
 
 import os, sys, json, math, time, threading, webbrowser, logging, sqlite3, signal as _signal
+
+# Load .env BEFORE importing any module that reads env vars at import time
+# (telegram_notify starts a background thread on import that calls _load_config())
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv optional — falls back to os.environ
+
 import telegram_notify
 
 from datetime import datetime, timezone, timedelta
@@ -26,16 +35,6 @@ import requests as _requests_mod
 # C2: Use requests.Session for connection pooling across all HTTP calls
 
 http_requests = _requests_mod.Session()
-
-try:
-
-    from dotenv import load_dotenv
-
-    load_dotenv()
-
-except ImportError:
-
-    pass  # dotenv optional â€” falls back to os.environ
 
 from eodhd import APIClient as _EODHDClient
 
@@ -1646,35 +1645,25 @@ def _fallback_source_for_pair(pair: dict) -> str | None:
 
 
 def _fetch_fallback_candles(pair: dict, tf: str, limit: int, reason: str = ""):
+    """Try fallback sources in order: Polygon → yfinance.
+    Twelvedata re-enabled once upgraded to Grow/Venture plan.
+    Returns candle list or None if all sources fail."""
 
-    source = _fallback_source_for_pair(pair)
+    tag = f" ({reason})" if reason else ""
+    disp = pair["display"]
 
-    if not source:
-
-        return None
-
-    if source == "polygon":
-
-        if not _polygon_ticker_for_pair(pair):
-
-            return None
-
-        log.info(f"[FALLBACK] {pair['display']} {tf}: using Polygon{f' ({reason})' if reason else ''}")
-
+    # 1. Polygon — good for forex/metals, rate-limited to 5 req/min on free tier
+    if _polygon_ticker_for_pair(pair):
         resp = fetch_polygon(pair, tf, limit)
+        candles = _extract_candles(resp)
+        if candles:
+            log.info(f"[FALLBACK] {disp} {tf}: using Polygon{tag}")
+            return candles
 
-        return _extract_candles(resp)
-
-    if source == "yfinance":
-
-        yf_symbol = _yfinance_symbol_for_pair(pair)
-
-        if not yf_symbol:
-
-            return None
-
-        log.info(f"[FALLBACK] {pair['display']} {tf}: using yfinance{f' ({reason})' if reason else ''}")
-
+    # 2. yfinance — last resort, broad coverage but lower reliability
+    yf_symbol = _yfinance_symbol_for_pair(pair)
+    if yf_symbol:
+        log.info(f"[FALLBACK] {disp} {tf}: using yfinance{tag}")
         return fetch_yfinance(yf_symbol, tf, limit)
 
     return None
@@ -2753,24 +2742,35 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
 
                 if tier == "trade":
 
-                    # Send Telegram notification for signal crossing MIN_CONFLUENCE_CLASS
-                    try:
-                        # Extract factor information for notification
-                        factors = sig.get("factorScores", {})
-                        top_factors = sorted(factors.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
-                        top_factor_names = [name for name, score in top_factors]
-                        
-                        telegram_notify.notify_signal_fired(
-                            pair=pair['display'],
-                            direction=sig['direction'],
-                            score=sig.get('confluenceScore', 0),
-                            dir_score=sig.get('directionalScore', 0),
-                            nondir_score=sig.get('nonDirectionalScore', 0),
-                            top_factors=top_factor_names,
-                            regime=sig.get('trendState', 'UNKNOWN')
-                        )
-                    except Exception as _e:
-                        log.debug(f"[TELEGRAM] Signal notification failed: {_e}")
+                    # Run AI analysis in background thread — only notify if grade A or B
+                    if telegram_notify._is_enabled():
+                        _sig_snap = {k: v for k, v in sig.items()
+                                     if k not in ("d1", "h4", "h1", "h4Candles")}
+
+                        def _ai_notify(_s=_sig_snap):
+                            try:
+                                ai = run_ai(_s)
+                                telegram_notify.notify_signal_with_ai(
+                                    pair=_s["pair"],
+                                    direction=_s["direction"],
+                                    score=_s.get("confluenceScore", 0),
+                                    max_score=_s.get("maxScore", 3.0),
+                                    entry=_s.get("price", 0),
+                                    sl=_s.get("sl", 0),
+                                    tp1=_s.get("tp1", 0),
+                                    rr1=_s.get("rr1", 0),
+                                    regime=_s.get("trendState", ""),
+                                    signal_class=_s.get("signalClass", ""),
+                                    ai_grade=ai.get("grade", ""),
+                                    ai_verdict=ai.get("verdict", ""),
+                                    ai_edge_prob=ai.get("edgeProbability", 0),
+                                    ai_risk=ai.get("riskLevel", ""),
+                                    ai_warnings=ai.get("warnings", []),
+                                )
+                            except Exception as _e:
+                                log.debug(f"[TELEGRAM] AI notify failed: {_e}")
+
+                        threading.Thread(target=_ai_notify, daemon=True).start()
 
                     try:
 
@@ -3856,21 +3856,21 @@ def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto",
 
            learning_ctx: dict | None = None) -> dict:
 
-    """Send signal data to Anthropic Claude for Marcus Reid AI analysis. Returns parsed JSON dict."""
+    """Send signal data to xAI Grok for Marcus Reid AI analysis. Returns parsed JSON dict."""
 
-    if not CONFIG.get("ANTHROPIC_KEY") or CONFIG["ANTHROPIC_KEY"] == "YOUR_ANTHROPIC_API_KEY":
+    if not CONFIG.get("XAI_API_KEY") or CONFIG["XAI_API_KEY"] == "YOUR_XAI_API_KEY":
 
-        log.error("[AI] Anthropic API key is None or not configured!")
+        log.error("[AI] xAI API key is None or not configured!")
 
-        return {"error": "Anthropic API key not configured"}
+        return {"error": "xAI API key not configured"}
 
     try:
 
         log.info(f"[AI] Analyzing {signal['pair']}...")
 
-        import anthropic
+        import openai
 
-        c = anthropic.Anthropic(api_key=CONFIG["ANTHROPIC_KEY"])
+        c = openai.OpenAI(api_key=CONFIG["XAI_API_KEY"], base_url="https://api.x.ai/v1")
 
         style_labels = {
 
@@ -3894,15 +3894,15 @@ def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto",
 
                                     learning_ctx=learning_ctx)
 
-        r = c.messages.create(
+        r = c.responses.create(
 
-            model=CONFIG["ANTHROPIC_MODEL"], max_tokens=1500,
+            model=CONFIG["XAI_MODEL"], max_output_tokens=1500,
 
-            system=EXPERT_PROMPT, messages=[{"role": "user", "content": msg}]
+            instructions=EXPERT_PROMPT, input=msg
 
         )
 
-        t=r.content[0].text.strip()
+        t=r.output_text.strip()
 
         # Robust JSON extraction: try code-fence first, then regex, then brace-matching
 
@@ -7148,9 +7148,9 @@ def api_meta_analysis():
 
             _AUDIT_DB,
 
-            CONFIG.get("ANTHROPIC_KEY", ""),
+            CONFIG.get("XAI_API_KEY", ""),
 
-            CONFIG.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+            CONFIG.get("XAI_MODEL", "grok-4-1-fast-reasoning"),
 
         )
 
@@ -7470,7 +7470,7 @@ def health():
 
         "dataSource":"yfinance+binance",
 
-        "anthropicKey":CONFIG["ANTHROPIC_KEY"]!="YOUR_ANTHROPIC_API_KEY"})
+        "xaiKey":CONFIG["XAI_API_KEY"]!="YOUR_XAI_API_KEY"})
 
 
 
@@ -7514,11 +7514,11 @@ def _check_api_keys() -> None:
 
         missing.append("EODHD_KEY â€” real-time WebSocket prices, indicators, screener, and news all disabled")
 
-    _ak = os.environ.get("ANTHROPIC_KEY", CONFIG.get("ANTHROPIC_KEY", ""))
+    _ak = os.environ.get("XAI_API_KEY", CONFIG.get("XAI_API_KEY", ""))
 
-    if not _ak or _ak == "YOUR_ANTHROPIC_API_KEY":
+    if not _ak or _ak == "YOUR_XAI_API_KEY":
 
-        missing.append("ANTHROPIC_KEY â€” AI trade grading disabled")
+        missing.append("XAI_API_KEY â€” AI trade grading disabled")
 
     if not os.environ.get("CRYPTOPANIC_KEY"):
 

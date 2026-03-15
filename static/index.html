@@ -1097,6 +1097,7 @@ async function runScan() {
     allSignals=tradeSignals.concat(watchlistSignals);
     renderStats(data);
     renderSignals(applyStyleFilter(allSignals));
+    try { localStorage.setItem('lastScanData', JSON.stringify(data)); } catch(e) {}
 
     // BTC Bias display
     if (data.btcBias) {
@@ -1543,6 +1544,32 @@ async function toggleAutoTrade() {
 // Sync auto-trade state on load
 fetch('/api/auto-trade').then(function(r){return r.json();}).then(_updateAutoTradeUI).catch(function(){});
 
+// Restore last scan results from localStorage on page load
+(function restoreLastScan() {
+  try {
+    var saved = localStorage.getItem('lastScanData');
+    if (!saved) return;
+    var data = JSON.parse(saved);
+    var age = data.scannedAt ? Math.round((Date.now() - new Date(data.scannedAt).getTime()) / 60000) : null;
+    var tradeSignals = data.tradeSignals || data.signals || [];
+    var watchlistSignals = data.watchlist || [];
+    allSignals = tradeSignals.concat(watchlistSignals);
+    renderStats(data);
+    renderSignals(applyStyleFilter(allSignals));
+    document.getElementById('configBanner').style.display = 'none';
+    document.getElementById('statsBar').style.display = 'flex';
+    document.getElementById('filterBar').style.display = 'flex';
+    if (data.btcBias) {
+      var bb = document.getElementById('btcBadge');
+      bb.style.display = 'flex';
+      var bt = document.getElementById('btcBiasText');
+      bt.textContent = data.btcBias.toUpperCase();
+      bt.style.color = data.btcBias === 'bullish' ? 'var(--bull)' : data.btcBias === 'bearish' ? 'var(--bear)' : 'var(--muted)';
+    }
+    if (age !== null) showToast('Restored last scan (' + age + 'min ago) — press Scan All to refresh');
+  } catch(e) {}
+})();
+
 // Poll auto-trade status every 30s (updates next scan time)
 (function pollAutoTrade() {
   if (window._autoTradeEnabled) {
@@ -1780,7 +1807,7 @@ document.addEventListener('visibilitychange', function() {
   if (document.visibilityState === 'hidden') {
     _tabHiddenAt = Date.now();
   } else if (document.visibilityState === 'visible' && _tabHiddenAt) {
-    if ((Date.now() - _tabHiddenAt) > 60000) {
+    if ((Date.now() - _tabHiddenAt) > 600000) {
       location.reload();
     }
     _tabHiddenAt = 0;

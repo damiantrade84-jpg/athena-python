@@ -33,7 +33,8 @@ _daily_stats: Dict[str, Any] = {
 def _load_config() -> Dict[str, Any]:
     """Load Telegram configuration from config.yaml"""
     global _config
-    if _config:
+    # Skip cache if we cached an empty token — dotenv may not have loaded yet on first call
+    if _config and _config.get("token"):
         return _config
     
     config_path = Path(__file__).parent / "config.yaml"
@@ -88,33 +89,68 @@ def _send_message_async(message: str) -> None:
     # Fire and forget in background thread
     threading.Thread(target=_send, daemon=True).start()
 
-def notify_signal_fired(pair: str, direction: str, score: float, 
+def notify_signal_fired(pair: str, direction: str, score: float,
                        dir_score: float, nondir_score: float,
                        top_factors: List[str], regime: str) -> None:
-    """Notify when a signal crosses MIN_CONFLUENCE_CLASS threshold"""
+    """Legacy notify — kept for backward compatibility. Prefer notify_signal_with_ai."""
     if not _is_enabled():
         return
-    
-    emoji = "🟢" if direction == "LONG" else "🔴"
-    
-    # Format top factors
-    factors_str = ", ".join(top_factors[:3])  # Show top 3
-    
+
+    emoji = "Long" if direction == "LONG" else "Short"
+    factors_str = ", ".join(top_factors[:3])
+
     message = (
-        f"{emoji} *Signal Fired — {pair}*\n"
-        f"Direction: `{direction}` | Score: `{score:.3f}`\n"
-        f"Dir Score: `{dir_score:.3f}` | Non-Dir: `{nondir_score:.3f}`\n"
-        f"Regime: `{regime}`\n"
-        f"Top Factors: `{factors_str}`"
+        f"[{emoji}] *Signal — {pair}*\n"
+        f"Score: `{score:.3f}` | Regime: `{regime}`\n"
+        f"Factors: `{factors_str}`"
     )
-    
+
     _send_message_async(message)
-    
-    # Track for daily summary
     _daily_stats["signals_fired"].append({
-        "pair": pair,
-        "direction": direction,
-        "score": score,
+        "pair": pair, "direction": direction, "score": score,
+        "timestamp": datetime.utcnow()
+    })
+
+
+def notify_signal_with_ai(pair: str, direction: str, score: float, max_score: float,
+                          entry: float, sl: float, tp1: float, rr1: float,
+                          regime: str, signal_class: str,
+                          ai_grade: str, ai_verdict: str,
+                          ai_edge_prob: int, ai_risk: str,
+                          ai_warnings: Optional[List[str]] = None) -> None:
+    """Send Telegram only for AI-approved signals (grade A or B).
+    Called from a background thread — never blocks the scan loop."""
+    if not _is_enabled():
+        return
+    if ai_grade not in ("A", "B"):
+        return
+
+    arrow = "LONG" if direction == "LONG" else "SHORT"
+    grade_tag = "A+" if ai_grade == "A" else "B"
+    score_pct = round(score / max_score * 100) if max_score else 0
+
+    # Format warnings (max 2, keep them short)
+    warn_lines = ""
+    if ai_warnings:
+        warn_lines = "\n" + "\n".join(f"  - {w}" for w in ai_warnings[:2])
+
+    # Format price levels — strip trailing zeros
+    def _fmt(v: float) -> str:
+        s = f"{v:.5f}".rstrip("0").rstrip(".")
+        return s if "." in s else s
+
+    message = (
+        f"*[{grade_tag}] {arrow} — {pair}*\n"
+        f"Score: `{score:.2f}/{max_score:.1f}` ({score_pct}%) | `{regime}` | `{signal_class}`\n"
+        f"Entry `{_fmt(entry)}` | SL `{_fmt(sl)}` | TP `{_fmt(tp1)}` ({rr1:.1f}R)\n"
+        f"_{ai_verdict}_\n"
+        f"Edge: `{ai_edge_prob}%` | Risk: `{ai_risk}`"
+        f"{warn_lines}"
+    )
+
+    _send_message_async(message)
+    _daily_stats["signals_fired"].append({
+        "pair": pair, "direction": direction, "score": score,
         "timestamp": datetime.utcnow()
     })
 
@@ -240,6 +276,7 @@ def update_open_positions(positions: List[Dict[str, Any]]) -> None:
 # Background thread to check for daily summary time
 def _daily_summary_worker():
     """Background worker that checks daily summary time"""
+    time.sleep(10)  # Wait for main thread to finish load_dotenv() before first config read
     while True:
         try:
             notify_daily_summary()

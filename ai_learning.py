@@ -446,23 +446,23 @@ Reply in JSON only:
 def run_meta_analysis(db_path: str, anthropic_key: str, model: str,
                       days: int = 7) -> dict:
     """Ask Claude to review recent outcomes and identify systematic biases."""
-    if not anthropic_key or anthropic_key == "YOUR_ANTHROPIC_API_KEY":
-        return {"error": "Anthropic API key not configured"}
+    if not anthropic_key or anthropic_key == "YOUR_XAI_API_KEY":
+        return {"error": "xAI API key not configured"}
 
     context = get_meta_analysis_context(db_path, days=days)
     if not context or context.startswith("Insufficient"):
         return {"error": context or "No data"}
 
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=anthropic_key)
-        resp = client.messages.create(
+        import openai
+        client = openai.OpenAI(api_key=anthropic_key, base_url="https://api.x.ai/v1")
+        resp = client.responses.create(
             model=model,
-            max_tokens=800,
-            system=_META_SYSTEM,
-            messages=[{"role": "user", "content": _META_USER_TMPL.format(context=context)}]
+            max_output_tokens=800,
+            instructions=_META_SYSTEM,
+            input=_META_USER_TMPL.format(context=context)
         )
-        raw = resp.content[0].text.strip()
+        raw = resp.output_text.strip()
         import re, json as _json
         try:
             result = _json.loads(raw)

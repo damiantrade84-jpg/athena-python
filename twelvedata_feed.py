@@ -1,6 +1,7 @@
 """
-Twelvedata REST feed — commodity and metal H1/H4 intraday history.
-Used as backtest data source for XAU/USD, XAG/USD and other commodities
+Twelvedata REST feed — commodity, metal, and index candle history.
+Used as fallback (EODHD → Twelvedata → Polygon → yfinance) for live scanning
+and as backtest data source for XAU/USD, XAG/USD and other commodities
 where EODHD has no intraday and Polygon free plan returns only ~38 days.
 
 Free tier: 800 credits/day. Each paginated call = 1 credit.
@@ -16,13 +17,26 @@ log = logging.getLogger("athena")
 
 # Twelvedata symbol mapping — native symbols, no futures proxy needed
 _TD_SYMBOLS = {
+    # Precious metals
     "XAU/USD":   "XAU/USD",
     "XAG/USD":   "XAG/USD",
+    "XPT/USD":   "XPT/USD",
+    "XPD/USD":   "XPD/USD",
+    # Energy / base metals
     "WTI Oil":   "WTI/USD",
     "Brent Oil": "BRNT/USD",
     "Nat Gas":   "NGAS/USD",
     "Copper":    "XCU/USD",
-    "XPT/USD":   "XPT/USD",
+    # Major indices (Twelvedata index symbols)
+    "S&P 500":       "SPX",
+    "Nasdaq":        "IXIC",
+    "Dow Jones":     "DJI",
+    "DAX 40":        "DAX",
+    "UK100":         "FTSE100",
+    "Nikkei 225":    "N225",
+    "Hang Seng":     "HSI",
+    "ASX 200":       "AS51",
+    "Euro Stoxx 50": "STOXX50E",
 }
 
 _BASE_URL = "https://api.twelvedata.com/time_series"
@@ -191,3 +205,54 @@ def fetch_twelvedata_bt(display_name: str, days: int = 730) -> tuple[list, list]
     log.info(f"[TWELVEDATA] {display_name}: {len(unique_h1)} H1 bars, "
              f"{len(h4_candles)} H4 bars")
     return h4_candles, unique_h1
+
+
+# Twelvedata interval strings for live scan fetches
+_TD_INTERVAL = {"H1": "1h", "H4": "4h", "D1": "1day"}
+
+# Approximate hours per bar — used to compute a date window from limit
+_HOURS_PER_BAR = {"H1": 1, "H4": 4, "D1": 24}
+
+
+def fetch_twelvedata_live(display_name: str, tf: str, limit: int) -> Optional[list]:
+    """
+    Fetch recent candles from Twelvedata for live scanning / EODHD fallback.
+    Returns list of Athena candle dicts (time, open, high, low, close, vol),
+    or None on failure / no symbol mapping.
+
+    Costs 1 API credit per call — only triggered when EODHD returns no data.
+    """
+    td_symbol = _td_symbol_for_display(display_name)
+    if not td_symbol:
+        return None
+
+    try:
+        api_key = _get_api_key()
+    except ValueError as e:
+        log.warning(f"[TWELVEDATA] {e}")
+        return None
+
+    interval = _TD_INTERVAL.get(tf)
+    if not interval:
+        log.warning(f"[TWELVEDATA] Unknown timeframe: {tf}")
+        return None
+
+    # Fetch 2× the limit to allow for weekends / market closures, then trim
+    hours_needed = _HOURS_PER_BAR.get(tf, 24) * limit * 2
+    end_dt   = datetime.now(timezone.utc).replace(tzinfo=None)
+    start_dt = end_dt - timedelta(hours=hours_needed)
+
+    log.info(f"[TWELVEDATA] Live fetch {display_name} ({td_symbol}) {tf} "
+             f"start={start_dt.date()}")
+
+    bars = _fetch_page(td_symbol, interval, start_dt, end_dt, api_key)
+    if not bars:
+        log.warning(f"[TWELVEDATA] No live data for {display_name} {tf}")
+        return None
+
+    candles = [c for c in (_to_candle(b) for b in bars) if c is not None]
+    if not candles:
+        return None
+
+    candles.sort(key=lambda x: x["time"])
+    return candles[-limit:] if len(candles) > limit else candles
