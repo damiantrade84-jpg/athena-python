@@ -50,7 +50,9 @@
       "Bash(sleep 5 && curl -s http://localhost:5000/api/health 2>&1)",
       "Bash(curl -s -X POST http://localhost:5000/api/backtest -H \"Content-Type: application/json\" -d \"{\\\\\"pair\\\\\":\\\\\"EUR/USD\\\\\",\\\\\"style\\\\\":\\\\\"swing\\\\\"}\" 2>&1)",
       "Bash(curl -s -X POST http://localhost:5000/api/backtest -H \"Content-Type: application/json\" -d \"{\\\\\"pair\\\\\":\\\\\"GBP/USD\\\\\",\\\\\"style\\\\\":\\\\\"swing\\\\\"}\" 2>&1)",
-      "Bash(sleep 10 && curl -s -X POST http://localhost:5000/api/backtest -H \"Content-Type: application/json\" -d \"{\\\\\"pair\\\\\":\\\\\"EUR/USD\\\\\",\\\\\"style\\\\\":\\\\\"swing\\\\\"}\" 2>&1)"
+      "Bash(sleep 10 && curl -s -X POST http://localhost:5000/api/backtest -H \"Content-Type: application/json\" -d \"{\\\\\"pair\\\\\":\\\\\"EUR/USD\\\\\",\\\\\"style\\\\\":\\\\\"swing\\\\\"}\" 2>&1)",
+      "Bash(sqlite3:*)",
+      "Bash(cd:*)"
     ]
   }
 }
