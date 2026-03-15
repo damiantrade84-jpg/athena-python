@@ -1541,12 +1541,11 @@ def _yfinance_symbol_for_pair(pair: dict) -> str | None:
 
 
 def _eodhd_ticker_for_pair(pair: dict) -> str | None:
-
-    override = pair.get("eodhdTicker") or _vendor_overrides(pair).get("eodhd")
-
+    # Check vendor override first — highest priority
+    override = _vendor_overrides(pair).get("eodhd")
     if override:
-
         return override
+    # ... rest of existing function unchanged
 
     disp = pair.get("display", "")
 
