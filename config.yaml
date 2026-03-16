@@ -100,7 +100,7 @@ EXECUTION_ENABLED: true       # Enable manual execution via dashboard
 AUTO_EXECUTE: false            # Manual click only (no auto-fire)
 
 # ── Auto-Trader ────────────────────────────────────────────
-AUTO_TRADE_ENABLED: false          # Start auto-trader on server boot
+AUTO_TRADE_ENABLED: true          # Start auto-trader on server boot
 # Effective gate = max(AUTO_TRADE_MIN_SCORE, MIN_CONFLUENCE_CLASS[asset_type])
 # With all MIN_CONFLUENCE_CLASS set to 0.90–0.95, this 0.90 floor is functionally
 # overridden by the per-class MIN_CONFLUENCE_CLASS for most asset types.

@@ -2440,6 +2440,13 @@ def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
 
     else:                              candles = None
 
+    # Fallback chain for non-crypto: eodhd → yfinance (twelvedata removed - rate limited)
+    if not candles and pair.get("type") != "crypto" and pair.get("source") == "eodhd":
+        _yf_sym = _yfinance_symbol_for_pair(pair)
+        if _yf_sym:
+            log.info(f"[CANDLE] {pair.get('display')} EODHD failed, trying yfinance ({_yf_sym})")
+            candles = fetch_yfinance(_yf_sym, tf, limit)
+
     candles = _extract_candles(candles)
 
     # Data quality guard: reject candles with zero/negative close prices
@@ -7889,53 +7896,58 @@ def analyze_pair(pair, btc_bias, style="swing"):
 
     # Route forex pairs to dedicated forex scoring engine
     if pair.get("type") == "forex":
-        from forex_scoring import compute_forex_score
-        _forex_result = compute_forex_score(
-            d1_snap=_cf_d1i["snap"],
-            h4_snap=_cf_h4i["snap"],
-            h1_snap=_cf_h1i["snap"],
-            h1_candles=_cf_h1c,
-            pair=pair,
-            bar_time=str(d1[-1].get("time", "") or d1[-1].get("datetime", "")),
-        )
-        # Map forex factor_scores to UI-compatible votes format
-        fx_votes = {
-            "screen1": {},  # D1 indicators
-            "screen2": {},  # H4 indicators  
-            "screen3": {}   # H1 indicators
-        }
-        
-        # Map forex components to screen structure for UI display
-        components = _forex_result.components
-        if components:
-            # Screen 1 (D1) - Trend gate and session
-            fx_votes["screen1"]["D1 Trend"] = 1.0 if components.get("trend_gate") else 0.0
-            fx_votes["screen1"]["Session"] = 1.0 if components.get("session_active") else 0.0
+        try:
+            from forex_scoring import compute_forex_score
+            _forex_result = compute_forex_score(
+                d1_snap=_cf_d1i["snap"],
+                h4_snap=_cf_h4i["snap"],
+                h1_snap=_cf_h1i["snap"],
+                h1_candles=_cf_h1c,
+                pair=pair,
+                bar_time=str(d1[-1].get("time", "") or d1[-1].get("datetime", "")),
+            )
+            # Map forex factor_scores to UI-compatible votes format
+            fx_votes = {
+                "screen1": {},  # D1 indicators
+                "screen2": {},  # H4 indicators  
+                "screen3": {}   # H1 indicators
+            }
             
-            # Screen 2 (H4) - Momentum and ADX
-            fx_votes["screen2"]["H4 Momentum"] = components.get("momentum_confirm", 0.0)
-            fx_votes["screen2"]["H4 ADX"] = components.get("adx_filter", 0.0)
+            # Map forex components to screen structure for UI display
+            components = _forex_result.components
+            if components:
+                # Screen 1 (D1) - Trend gate and session
+                fx_votes["screen1"]["D1 Trend"] = 1.0 if components.get("trend_gate") else 0.0
+                fx_votes["screen1"]["Session"] = 1.0 if components.get("session_active") else 0.0
+                
+                # Screen 2 (H4) - Momentum and ADX
+                fx_votes["screen2"]["H4 Momentum"] = components.get("momentum_confirm", 0.0)
+                fx_votes["screen2"]["H4 ADX"] = components.get("adx_filter", 0.0)
+                
+                # Screen 3 (H1) - Entry quality and COT
+                fx_votes["screen3"]["H1 Entry"] = components.get("entry_quality", 0.0)
+                fx_votes["screen3"]["COT Boost"] = components.get("cot_boost", 0.0)
             
-            # Screen 3 (H1) - Entry quality and COT
-            fx_votes["screen3"]["H1 Entry"] = components.get("entry_quality", 0.0)
-            fx_votes["screen3"]["COT Boost"] = components.get("cot_boost", 0.0)
-        
-        res = {
-            "final_score":    _forex_result.final_score * 3.0,  # Scale 0-1 to 0-3 for UI consistency
-            "direction":      _forex_result.direction,
-            "factor_scores":  _forex_result.components,
-            "regime":         {"state": 1, "label": _forex_result.signal_type},
-            "signal_type":    _forex_result.signal_type,
-            "score":          _forex_result.final_score * 3.0,  # Scale for UI consistency
-            "trendState":     _forex_result.signal_type,
-            # Keys required by signal dict construction below
-            "votes":          fx_votes,
-            "warnings":       [],
-            "weinsteinStage": None,
-            "weinsteinLabel": "N/A",
-            "maxScoreOverride": 3.0,  # Normalize forex to same 0-3 scale as other assets for consistent UI display
-        }
-    else:
+            res = {
+                "final_score":    _forex_result.final_score * 3.0,  # Scale 0-1 to 0-3 for UI consistency
+                "direction":      _forex_result.direction,
+                "factor_scores":  _forex_result.components,
+                "regime":         {"state": 1, "label": _forex_result.signal_type},
+                "signal_type":    _forex_result.signal_type,
+                "score":          _forex_result.final_score * 3.0,  # Scale for UI consistency
+                "trendState":     _forex_result.signal_type,
+                # Keys required by signal dict construction below
+                "votes":          fx_votes,
+                "warnings":       [],
+                "weinsteinStage": None,
+                "weinsteinLabel": "N/A",
+                "maxScoreOverride": 3.0,  # Normalize forex to same 0-3 scale as other assets for consistent UI display
+            }
+        except Exception as _fx_err:
+            log.error(f"[FOREX] {pair.get('display')} forex_scoring FAILED: {_fx_err} — falling back to calc_confluence")
+            res = None  # force fallback
+
+    if res is None or pair.get("type") != "forex":
         res = calc_confluence(
             _cf_d1i, _cf_h4i, _cf_h1i, vr, stoch, pair, btc_bias,
             d1_candles=_cf_d1c, h4_candles=_cf_h4c, h1_candles=_cf_h1c,
@@ -8025,9 +8037,9 @@ def analyze_pair(pair, btc_bias, style="swing"):
 
         "direction": direction,
 
-        "confluenceScore": res["score"],
+        "confluenceScore": round(res["score"], 4),
 
-        "confluencePct": round(res["score"] / max_score * 100),
+        "confluencePct": min(100, round(res["score"] / max_score * 100)),
 
         "votes": res["votes"],
 

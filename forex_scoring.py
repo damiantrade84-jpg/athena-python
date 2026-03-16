@@ -384,7 +384,9 @@ def _local_to_utc_hour() -> int:
     except Exception:
         offset = 2
     local_hour = datetime.now().hour
-    return (local_hour - offset) % 24
+    utc_h = (local_hour - offset) % 24
+    log.debug(f"[FOREX-TZ] local_hour={local_hour} offset={offset} utc_hour={utc_h}")
+    return utc_h
 
 
 # ─── Main scoring function ───────────────────────────────────────────────────

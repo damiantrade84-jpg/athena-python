@@ -537,7 +537,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
       <div id="autoTradeLogContent" style="font-size:11px;font-family:'Space Mono',monospace"></div>
     </div>
 
-    <div id="learningPanel" style="display:none;margin-top:20px">
+    <div id="learningPanel" style="margin-top:20px">
       <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:var(--muted);font-family:'Space Mono',monospace;margin-bottom:12px">AI LEARNING INSIGHTS</div>
       <div id="learningContent"></div>
       <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
@@ -700,7 +700,7 @@ function fmtCap(n) {
 
 function renderScreenerResults(data) {
   var html = '<h3 style="font-size:15px;font-weight:800;margin-bottom:4px">Momentum Screener Results</h3>' +
-    '<div style="font-size:10px;color:var(--muted);font-family:monospace;margin-bottom:16px">Scanned ' + data.totalScanned + ' stocks &middot; ' + data.scannedAt.slice(0,19).replace('T',' ') + ' UTC</div>';
+    '<div style="font-size:10px;color:var(--muted);font-family:monospace;margin-bottom:16px">Scanned ' + data.totalScanned + ' stocks &middot; ' + new Date(data.scannedAt).toLocaleString() + ' (local)</div>';
 
   if (data.newCandidates && data.newCandidates.length) {
     html += '<div style="font-size:11px;font-family:monospace;color:var(--accent);font-weight:700;margin-bottom:8px;letter-spacing:0.04em">NEW CANDIDATES - Not yet in your tracked pairs</div>';
@@ -1144,7 +1144,7 @@ function renderStats(data) {
   document.getElementById('statHigh').textContent=tradeSignals.length;
   document.getElementById('statLong').textContent=displaySignals.filter(function(s){return s.direction==='LONG';}).length;
   document.getElementById('statShort').textContent=displaySignals.filter(function(s){return s.direction==='SHORT';}).length;
-  document.getElementById('statTime').textContent=new Date(data.scannedAt).toLocaleTimeString();
+  document.getElementById('statTime').textContent=new Date(data.scannedAt).toLocaleString('en-ZA', {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
   if(data.skipped&&data.skipped.length)console.log('SKIPPED:',JSON.stringify(data.skipped));
   if(data.errors&&data.errors.length)console.log('ERRORS:',JSON.stringify(data.errors));
 }
@@ -1258,7 +1258,7 @@ function buildCard(s,idx) {
     '<div class="card-body">'+
       '<div class="conf-row">'+
         '<span class="conf-label">Confluence</span>'+
-        '<span class="conf-score" style="color:'+confCol+'">'+s.confluenceScore+'/'+(s.maxScore||3)+' | '+pct+'%</span>'+
+        '<span class="conf-score" style="color:'+confCol+'">'+(typeof s.confluenceScore==='number'?s.confluenceScore.toFixed(2):s.confluenceScore)+'/'+(s.maxScore||3)+' | '+pct+'%</span>'+
       '</div>'+
       '<div class="conf-bar-track"><div class="conf-bar-fill '+fillCls+'" style="width:'+pct+'%"></div></div>'+
       votesHtml+
@@ -1587,10 +1587,10 @@ function loadLearningStats() {
   fetch('/api/learning/stats').then(function(r){return r.json();}).then(function(d) {
     var panel = document.getElementById('learningPanel');
     var content = document.getElementById('learningContent');
-    if (!d || !d.sample_size) {
-      panel.style.display = 'none'; return;
+    if (!d || !d.sample_size || d.sample_size < 5) {
+      content.innerHTML = '<span style="color:var(--muted);font-size:11px">Need 5+ completed trades for AI learning insights. Meta-Analysis button available below.</span>';
+      return;
     }
-    panel.style.display = 'block';
     var html = '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">';
     if (d.asset_type_stats) {
       var s = d.asset_type_stats;
@@ -1920,7 +1920,7 @@ function confirmExecute(symbol, forceMode) {
       '<div>Stop Loss: <strong style="color:var(--bear)">' + fmtPrice(sig.sl) + '</strong></div>' +
       '<div>Take Profit: <strong style="color:var(--bull)">' + fmtPrice(sig.tp1) + '</strong></div>' +
       '<div>SL Risk: <strong>' + (sig.slPct||'?') + '%</strong></div>' +
-      '<div>Score: <strong>' + sig.confluenceScore + '/' + (sig.maxScore||3) + '</strong></div>' +
+      '<div>Score: <strong>' + (typeof sig.confluenceScore==='number'?sig.confluenceScore.toFixed(2):sig.confluenceScore) + '/' + (sig.maxScore||3) + '</strong></div>' +
       '<div>Account: <strong>$' + (acct.balance||0).toLocaleString() + '</strong></div>' +
       '<div>Risk (1%): <strong style="color:var(--accent)">$' + riskAmt + '</strong></div>' +
       '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);color:var(--warn);font-size:10px">Position size will be calculated by the risk engine based on your ' + via + ' account balance and SL distance.</div>' +
