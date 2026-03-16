@@ -1,5 +1,31 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-16)
+
+**Testing Week Adjustments:**
+- `MAX_OPEN_POSITIONS: 20` (was 5) — raised for testing with multiple open trades
+- `MAX_CORRELATED_POSITIONS: 10` (was 2) — allow multiple correlated pairs during testing
+- Revert both to 5 and 2 before live account activation
+
+**Forex Session & Timezone Fixes:**
+- Added `SERVER_TZ_OFFSET_HOURS: 2` config (for GMT+2/SAST) — derives UTC from local system time to fix Windows timezone misconfiguration
+- Added Asian session window (00:00–08:00 UTC) to `forex_scoring.py` — forex now trades 24h (was London+NY only)
+- Added `FOREX_SESSION_FILTER: true` config to disable session gate if needed
+
+**Scoring & Auto-Trade Threshold Fixes:**
+- `AUTO_TRADE_MIN_SCORE` changed from flat 0.75 to **per-class dict** (crypto: 0.80, forex: 0.65, stock: 0.85, commodity: 0.80, index: 0.80)
+  - **Why:** factor engine scores 0–3.0, forex engine scores 0–1.0 — same 0.75 threshold was incompatible
+- `MIN_CONFLUENCE_CLASS.forex: 0.70` → **0.60** (matches forex_scoring.py scale; 0.70 was over-filtering)
+- `BT_MIN.forex: 0.60` kept in sync with MIN_CONFLUENCE_CLASS.forex
+- Removed dead config `MIN_FOREX_CONFLUENCE: 0.60` and `MIN_FOREX_BREAKOUT: 0.50` — replaced with comments
+
+**Dashboard Enhancements:**
+- Added "Failed Executions" section in Performance tab (shows manual & auto rejections with error reasons)
+- Failed manual executions now logged to audit_log with `grade="MANUAL-ERR"` and `error_tag=<reason>`
+- New `/api/failed-executions` endpoint returns last 50 failed attempts
+
+---
+
 ## ⚠️ DATA PROTECTION
 audit.db and candle_cache.db contain all live trading history.
 NEVER delete, overwrite, or zip these files during updates.
@@ -33,6 +59,8 @@ Multi-asset algorithmic trading system: Flask dashboard, confluence-based signal
 | `carry_feed.py` | Interest rate carry data — FRED static fallback, 1h cooldown on failure, non-blocking | |
 | `cot_feed.py` | CFTC Commitment of Traders z-scores — non-blocking, cache-first during scans | |
 | `duka_volume.py` | Dukascopy tick volume for forex — non-blocking during scans (returns 1.0 if cache not ready) | |
+| `forex_scoring.py` | Dedicated forex scoring engine (rules-based, 0–1 scale) — trend gate + session filter + RSI pullback + COT boost | |
+| `auto_trader.py` | Autonomous trade executor with per-class auto-trade thresholds (dict-based, per CONFIG) | |
 | `static/index.html` | Dashboard UI: signals, backtest, screener tabs — pair selector populated dynamically from `/api/pairs` | ~1320 lines |
 | `tests/test_athena.py` | Main test suite (56+ tests) | |
 | `tests/test_factor_scoring.py` | Factor scoring unit tests | |
@@ -132,6 +160,9 @@ Imported in `athena.py` via `from config import _json_safe`.
 ### `_build_event_risk(pair, ds_ctx, earnings_ctx, closed_exchanges)` — scoring.py
 Builds `{hardBlock, reasons, earnings?, dividend?, split?}` risk dict for a pair.
 
+### `_local_to_utc_hour()` — forex_scoring.py
+Derives UTC hour from local system time + `SERVER_TZ_OFFSET_HOURS` config. Fixes Windows timezone misconfiguration where `datetime.now(timezone.utc)` returns wrong UTC. User sets offset to match their timezone (SAST = 2, UTC+0 = 0, etc.).
+
 ### `_classify_signal(signal, pair)` — scoring.py
 Returns `(tier, reason)` where `tier` is `"trade"` | `"watchlist"` | `"skip"`.
 
@@ -158,6 +189,19 @@ Routes pairs to EODHD WS endpoints (`us`, `forex`, `crypto`). Skips any pair wit
 
 ### `/api/pairs` endpoint — athena.py
 Returns ALL_PAIRS grouped by asset class for the frontend pair selector. Response: `{groups: {label: [{sym, label, enabled}]}, total, active}`. The backtest dropdown in index.html fetches this on page load — do NOT hardcode pair lists in HTML.
+
+### `_can_execute(signal, cfg)` — auto_trader.py
+Gate for auto-trade execution. Reads `AUTO_TRADE_MIN_SCORE` as a **per-class dict** from CONFIG:
+```yaml
+AUTO_TRADE_MIN_SCORE:
+  crypto:    0.80   # factor engine (0–3 scale)
+  stock:     0.85   # higher bar for single stocks
+  commodity: 0.80
+  index:     0.80
+  forex:     0.65   # forex engine (0–1 scale)
+```
+Effective min = `max(AUTO_TRADE_MIN_SCORE[asset_type], MIN_CONFLUENCE_CLASS[asset_type])`. Falls back to crypto value if asset_type missing.
+**Why per-class:** factor engine outputs 0–3.0; forex outputs 0–1.0 — same flat threshold was incompatible.
 
 ### `risk_check(signal, balance, equity, positions, symbol_info, ...)` — risk_engine.py
 - Commodity tick defaults: tick=0.01, contract=100, tick_val=1.0 (e.g. gold: 0.01×100)
@@ -301,6 +345,13 @@ Populated after every `backtest_pair()` run. Columns: `id, run_date, pair, asset
 - `GET /api/backtest-best` — most recent run per pair, ordered by SQN desc
 
 Schema auto-migrated on startup — adding a new column: add it to both `CREATE TABLE` and the migration list in `_init_audit_db()`.
+
+**Failed Execution Logging (as of 2026-03-16):**
+- Manual executions rejected by `risk_check()` now log to `audit_log` with `grade="MANUAL-ERR"` and `error_tag=<reason>`
+- Auto-trade failures already logged with `grade="AUTO-ERR-*"`
+- Query failed executions: `WHERE grade LIKE '%-ERR%'` — shows both manual and auto rejections with reason
+- New `/api/failed-executions` endpoint returns last 50 failed attempts
+- Dashboard "Performance" tab now shows "Failed Executions" section with time, pair, direction, score, source, and reason
 
 ---
 

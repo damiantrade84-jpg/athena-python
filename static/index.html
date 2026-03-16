@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -533,7 +533,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
       <div id="failedExecContent" style="font-size:11px;font-family:'Space Mono',monospace"></div>
     </div>
     <div id="autoTradeLog" style="margin-top:20px">
-      <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:var(--muted);font-family:'Space Mono',monospace;margin-bottom:10px">AUTO-TRADE LOG</div>
+      <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:var(--muted);font-family:'Space Mono',monospace;margin-bottom:10px">TRADE HISTORY</div>
       <div id="autoTradeLogContent" style="font-size:11px;font-family:'Space Mono',monospace"></div>
     </div>
 
@@ -1587,7 +1587,7 @@ function loadLearningStats() {
   fetch('/api/learning/stats').then(function(r){return r.json();}).then(function(d) {
     var panel = document.getElementById('learningPanel');
     var content = document.getElementById('learningContent');
-    if (!d || !d.sample_size || d.sample_size < 5) {
+    if (!d || !d.sample_size) {
       panel.style.display = 'none'; return;
     }
     panel.style.display = 'block';
@@ -1642,7 +1642,7 @@ function loadAutoTradeLog() {
   fetch('/api/auto-trade/log').then(function(r){return r.json();}).then(function(rows) {
     var el = document.getElementById('autoTradeLogContent');
     if (!rows || !rows.length) {
-      el.innerHTML = '<span style="color:var(--muted)">No auto-trade attempts yet.</span>';
+      el.innerHTML = '<span style="color:var(--muted)">No trade attempts yet.</span>';
       return;
     }
     var html = '<table style="width:100%;border-collapse:collapse">' +

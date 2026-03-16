@@ -7898,20 +7898,42 @@ def analyze_pair(pair, btc_bias, style="swing"):
             pair=pair,
             bar_time=str(d1[-1].get("time", "") or d1[-1].get("datetime", "")),
         )
+        # Map forex factor_scores to UI-compatible votes format
+        fx_votes = {
+            "screen1": {},  # D1 indicators
+            "screen2": {},  # H4 indicators  
+            "screen3": {}   # H1 indicators
+        }
+        
+        # Map forex components to screen structure for UI display
+        components = _forex_result.components
+        if components:
+            # Screen 1 (D1) - Trend gate and session
+            fx_votes["screen1"]["D1 Trend"] = 1.0 if components.get("trend_gate") else 0.0
+            fx_votes["screen1"]["Session"] = 1.0 if components.get("session_active") else 0.0
+            
+            # Screen 2 (H4) - Momentum and ADX
+            fx_votes["screen2"]["H4 Momentum"] = components.get("momentum_confirm", 0.0)
+            fx_votes["screen2"]["H4 ADX"] = components.get("adx_filter", 0.0)
+            
+            # Screen 3 (H1) - Entry quality and COT
+            fx_votes["screen3"]["H1 Entry"] = components.get("entry_quality", 0.0)
+            fx_votes["screen3"]["COT Boost"] = components.get("cot_boost", 0.0)
+        
         res = {
-            "final_score":    _forex_result.final_score,
+            "final_score":    _forex_result.final_score * 3.0,  # Scale 0-1 to 0-3 for UI consistency
             "direction":      _forex_result.direction,
             "factor_scores":  _forex_result.components,
             "regime":         {"state": 1, "label": _forex_result.signal_type},
             "signal_type":    _forex_result.signal_type,
-            "score":          _forex_result.final_score,
+            "score":          _forex_result.final_score * 3.0,  # Scale for UI consistency
             "trendState":     _forex_result.signal_type,
             # Keys required by signal dict construction below
-            "votes":          {},
+            "votes":          fx_votes,
             "warnings":       [],
             "weinsteinStage": None,
             "weinsteinLabel": "N/A",
-            "maxScoreOverride": 1.0,  # forex scores are 0–1; keeps confluencePct meaningful
+            "maxScoreOverride": 3.0,  # Normalize forex to same 0-3 scale as other assets for consistent UI display
         }
     else:
         res = calc_confluence(
