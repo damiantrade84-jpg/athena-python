@@ -52,7 +52,13 @@
       "Bash(curl -s -X POST http://localhost:5000/api/backtest -H \"Content-Type: application/json\" -d \"{\\\\\"pair\\\\\":\\\\\"GBP/USD\\\\\",\\\\\"style\\\\\":\\\\\"swing\\\\\"}\" 2>&1)",
       "Bash(sleep 10 && curl -s -X POST http://localhost:5000/api/backtest -H \"Content-Type: application/json\" -d \"{\\\\\"pair\\\\\":\\\\\"EUR/USD\\\\\",\\\\\"style\\\\\":\\\\\"swing\\\\\"}\" 2>&1)",
       "Bash(sqlite3:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(git check-ignore:*)",
+      "Bash(git update-index:*)",
+      "Bash(git reset:*)",
+      "Bash(git hash-object:*)",
+      "Bash(git diff-tree:*)",
+      "Bash(echo:*)"
     ]
   }
 }
