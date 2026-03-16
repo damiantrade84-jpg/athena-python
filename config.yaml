@@ -49,11 +49,11 @@ WEINSTEIN_LOOKBACK:
 # the old additive formula which produced higher raw scores; 0.70 here ≈ 0.95 old-formula gate).
 # Tune up per-class after running backtests to find first-profitable threshold.
 BT_MIN:
-  crypto: 0.70
-  commodity: 0.70
-  forex: 0.60
-  stock: 0.70
-  index: 0.70
+  crypto:    0.70   # must equal MIN_CONFLUENCE_CLASS.crypto
+  commodity: 0.70   # must equal MIN_CONFLUENCE_CLASS.commodity
+  forex:     0.60   # must equal MIN_CONFLUENCE_CLASS.forex — forex engine 0–1 scale
+  stock:     0.70   # must equal MIN_CONFLUENCE_CLASS.stock
+  index:     0.70   # must equal MIN_CONFLUENCE_CLASS.index
 
 # Backtest must not alter live pair enable/disable state
 BT_AUTO_TOGGLE: false
@@ -65,15 +65,16 @@ BT_PERCENTILE_FILTER: false
 # BT_MIN is set equal to MIN_CONFLUENCE_CLASS so backtest and live scan use identical gates.
 # Set to 0.70 to match new formula scale; tune up after data-driven threshold analysis.
 MIN_CONFLUENCE_CLASS:
-  crypto: 0.70
-  commodity: 0.70
-  forex: 0.70        # must equal BT_MIN — always
-  stock: 0.70
-  index: 0.70
+  crypto:    0.70   # factor engine (0–3 scale): ~23% of max — moderate conviction
+  commodity: 0.70   # factor engine (0–3 scale)
+  forex:     0.60   # forex engine (0–1 scale): 60% of max — matches MIN_FOREX_CONFLUENCE
+  stock:     0.70   # factor engine (0–3 scale)
+  index:     0.70   # factor engine (0–3 scale)
 
-# Forex-specific scoring thresholds (new forex_scoring.py engine)
-MIN_FOREX_CONFLUENCE: 0.60
-MIN_FOREX_BREAKOUT: 0.50
+# Forex scan threshold — forex_scoring engine outputs 0–1.0 (not 0–3.0)
+# 0.60 = 60% of max; a TREND_PULLBACK with good RSI pullback and no COT boost scores ~0.60–0.75
+# MIN_CONFLUENCE_CLASS.forex must match this — they are the same gate
+MIN_FOREX_CONFLUENCE: 0.60      # used as MIN_CONFLUENCE_CLASS.forex below — keep in sync
 
 # Risk settings
 RISK_PCT: 0.01
@@ -103,14 +104,24 @@ AUTO_TRADE_ENABLED: false          # Start auto-trader on server boot
 # Effective gate = max(AUTO_TRADE_MIN_SCORE, MIN_CONFLUENCE_CLASS[asset_type])
 # With all MIN_CONFLUENCE_CLASS set to 0.90–0.95, this 0.90 floor is functionally
 # overridden by the per-class MIN_CONFLUENCE_CLASS for most asset types.
-AUTO_TRADE_MIN_SCORE: 0.75         # Hard floor — must be >= highest class BT_MIN to avoid executing below any class threshold
+# Per-class auto-trade minimum score (must be >= matching MIN_CONFLUENCE_CLASS)
+# Factor engine (crypto/stock/commodity/index) outputs 0–3.0
+# Forex engine outputs 0–1.0  — threshold must be calibrated to its own scale
+AUTO_TRADE_MIN_SCORE:
+  crypto:    0.80   # factor engine: strong directional + moderate quality required
+  commodity: 0.80   # factor engine
+  stock:     0.85   # factor engine: higher bar — single stocks more volatile/gappy
+  index:     0.80   # factor engine
+  forex:     0.65   # forex engine (0–1): ~65% of max, above scan gate of 0.60
 AUTO_TRADE_MAX_DAILY: 3            # Max auto-executions per day
 AUTO_TRADE_MAX_PER_SCAN: 1         # Max per scan cycle; raise to 2 only with >10 active pairs
 AUTO_TRADE_SCAN_INTERVAL_MIN: 30   # Scan every 30 minutes
 MAX_PORTFOLIO_HEAT: 0.06      # 6% total risk across all positions
-MAX_OPEN_POSITIONS: 5
-MAX_CORRELATED_POSITIONS: 2
+MAX_OPEN_POSITIONS: 20         # Raised for testing week — revert to 5 before live account
+MAX_CORRELATED_POSITIONS: 10   # Raised for testing week — revert to 2 before live account
 SIGNAL_MAX_AGE_SEC: 300       # 5 min freshness window
+FOREX_SESSION_FILTER: true    # true = London+NY+Asian only; false = 24h (disable for testing)
+SERVER_TZ_OFFSET_HOURS: 2    # Your local timezone UTC offset — SAST = 2 (GMT+2)
 MAX_RISK_PER_TRADE: 0.03      # Hard cap 3% per trade
 DRAWDOWN_REDUCE_THRESHOLD: 0.10   # Halve size at 10% drawdown
 DRAWDOWN_STOP_THRESHOLD: 0.15     # Stop all trading at 15% drawdown

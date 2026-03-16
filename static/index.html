@@ -417,7 +417,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
     <button class="tab-btn active" id="tab-signals" onclick="switchTab('signals')">SIGNALS</button>
     <button class="tab-btn" id="tab-backtest" onclick="switchTab('backtest')">BACKTEST</button>
     <button class="tab-btn" id="tab-screener" onclick="switchTab('screener')">SCREENER</button>
-    <button class="tab-btn" id="tab-performance" onclick="switchTab('performance');loadPerformance();loadAutoTradeLog()">PERFORMANCE</button>
+    <button class="tab-btn" id="tab-performance" onclick="switchTab('performance');loadPerformance();loadAutoTradeLog();loadFailedExecutions()">PERFORMANCE</button>
   </div>
 
   <div class="tab-panel active" id="panel-signals">
@@ -527,6 +527,10 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
         <h3>Performance Dashboard</h3>
         <p>Execute trades to begin tracking outcomes. Stats appear here after positions close.</p>
       </div>
+    </div>
+    <div id="failedExecLog" style="margin-top:20px">
+      <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:var(--muted);font-family:'Space Mono',monospace;margin-bottom:10px">FAILED EXECUTIONS <span style="font-weight:400;color:var(--muted)">(manual &amp; auto rejections)</span></div>
+      <div id="failedExecContent" style="font-size:11px;font-family:'Space Mono',monospace"></div>
     </div>
     <div id="autoTradeLog" style="margin-top:20px">
       <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:var(--muted);font-family:'Space Mono',monospace;margin-bottom:10px">AUTO-TRADE LOG</div>
@@ -1672,6 +1676,43 @@ function loadAutoTradeLog() {
     html += '</table>';
     el.innerHTML = html;
   }).catch(function(){ document.getElementById('autoTradeLogContent').innerHTML = ''; });
+}
+
+function loadFailedExecutions() {
+  fetch('/api/failed-executions').then(function(r){return r.json();}).then(function(rows) {
+    var el = document.getElementById('failedExecContent');
+    if (!el) return;
+    if (!rows || !rows.length) {
+      el.innerHTML = '<span style="color:var(--muted)">No failed executions recorded.</span>';
+      return;
+    }
+    var html = '<table style="width:100%;border-collapse:collapse">' +
+      '<tr style="color:var(--muted);font-size:10px;border-bottom:1px solid var(--border)">' +
+      '<th style="text-align:left;padding:4px 8px">Time</th>' +
+      '<th style="text-align:left;padding:4px 8px">Pair</th>' +
+      '<th style="text-align:left;padding:4px 8px">Dir</th>' +
+      '<th style="text-align:left;padding:4px 8px">Score</th>' +
+      '<th style="text-align:left;padding:4px 8px">Source</th>' +
+      '<th style="text-align:left;padding:4px 8px">Reason</th>' +
+      '</tr>';
+    rows.forEach(function(r) {
+      var time   = (r.ts||'').slice(0,19).replace('T',' ');
+      var source = (r.grade||'').indexOf('MANUAL') > -1
+        ? '<span style="color:var(--warn)">MANUAL</span>'
+        : '<span style="color:var(--muted)">AUTO</span>';
+      var dirCol = r.direction === 'LONG' ? 'var(--bull)' : r.direction === 'SHORT' ? 'var(--bear)' : 'var(--muted)';
+      html += '<tr style="border-bottom:1px solid rgba(30,42,54,0.4)">' +
+        '<td style="padding:5px 8px;color:var(--muted);font-size:10px">' + time + '</td>' +
+        '<td style="padding:5px 8px">' + (r.pair||'?') + '</td>' +
+        '<td style="padding:5px 8px;color:' + dirCol + '">' + (r.direction||'-') + '</td>' +
+        '<td style="padding:5px 8px;color:var(--accent)">' + (r.score != null ? r.score : '-') + '</td>' +
+        '<td style="padding:5px 8px">' + source + '</td>' +
+        '<td style="padding:5px 8px;color:var(--bear)">' + (r.error_tag||'?') + '</td>' +
+        '</tr>';
+    });
+    html += '</table>';
+    el.innerHTML = html;
+  }).catch(function(){ var el = document.getElementById('failedExecContent'); if(el) el.innerHTML = ''; });
 }
 
 async function runMetaAnalysis() {

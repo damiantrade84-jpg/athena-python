@@ -230,59 +230,107 @@ _live_prices_lock = threading.Lock()
 
 _ws_manager_started = False
 
+_PRICE_POLL_FIRST_RUN = True
+
 
 def _eodhd_rt_symbol(pair):
-    """Convert pair dict → EODHD real-time API symbol (e.g. GBPUSD.FOREX, AAPL.US, GSPC.INDX)."""
-    # Non-slash commodity display names need an explicit EODHD symbol override
-    _COMMODITY_OVERRIDES = {
-        "Copper":    "XCUUSD.FOREX",
-        "WTI Oil":   "WTICOUSD.FOREX",
-        "Brent Oil": "BRENTOIL.FOREX",
-        "Nat Gas":   "NATGASUSD.FOREX",
-    }
+    """Convert Athena pair → EODHD real-time API symbol."""
+    disp  = pair.get("display", "")
     ptype = pair.get("type", "")
     sym   = pair.get("symbol", "")
-    disp  = pair.get("display", "")
-    if ptype in ("forex", "commodity"):
-        if disp in _COMMODITY_OVERRIDES:
-            return _COMMODITY_OVERRIDES[disp]
+
+    # Explicit overrides for commodities and indices
+    _OVERRIDES = {
+        # Precious metals — confirmed .FOREX format works
+        "XAU/USD":       "XAUUSD.FOREX",
+        "XAG/USD":       "XAGUSD.FOREX",
+        "XPT/USD":       "XPTUSD.FOREX",
+        "XPD/USD":       "XPDUSD.FOREX",
+        # Energy — FOREX format confirmed for WTI
+        "WTI Oil":       "WTICOUSD.FOREX",
+        "Brent Oil":     "BRENTOIL.FOREX",
+        "Nat Gas":       "NATGASUSD.FOREX",
+        "Copper":        "XCUUSD.FOREX",
+        # Indices — confirmed .INDX format works
+        "S&P 500":       "GSPC.INDX",
+        "Nasdaq":        "IXIC.INDX",
+        "Dow Jones":     "DJI.INDX",
+        "DAX 40":        "GDAXI.INDX",
+        "UK100":         "FTSE.INDX",
+        "Nikkei 225":    "N225.INDX",
+        "Hang Seng":     "HSI.INDX",
+        "ASX 200":       "AXJO.INDX",
+        "Euro Stoxx 50": "STOXX50E.INDX",
+    }
+    if disp in _OVERRIDES:
+        return _OVERRIDES[disp]
+
+    if ptype == "forex":
         return disp.replace("/", "") + ".FOREX"
-    elif ptype == "index":
+    if ptype == "stock":
+        return sym.replace("=X", "").replace(".US", "") + ".US"
+    if ptype == "crypto":
+        base = disp.replace("/USDT", "").replace("/USD", "")
+        return f"{base}-USD.CC"
+    if ptype == "index":
+        # Special case for FTSE and other indices
+        if disp == "FTSE":
+            return "FTSE.INDX"
         return sym.lstrip("^") + ".INDX"
-    return sym   # stock / ETF: already "AAPL.US"
+
+    return None
 
 
-def _fetch_eodhd_live_prices(pairs):
-    """Batch-fetch EODHD real-time prices for a list of pairs; write into _live_prices."""
+def _fetch_eodhd_live_prices(pairs: list) -> None:
+    """Batch-fetch EODHD real-time prices for non-WS pairs. 
+    Covers forex (~1min delay) and stocks (15-20min delay).
+    Commodities/indices: tested via COMM/INDX suffix — logs failures."""
     import requests as _req
-    key = os.environ.get("EODHD_KEY", "")
-    if not key or not pairs:
+    _key = os.environ.get("EODHD_KEY", "")
+    if not _key:
         return
-    sym_map = {_eodhd_rt_symbol(p): p["display"] for p in pairs}
-    symbols = list(sym_map)
-    try:
-        params = {"api_token": key, "fmt": "json"}
-        if len(symbols) > 1:
-            params["s"] = ",".join(symbols[1:])
-        resp = _req.get(
-            f"https://eodhd.com/api/real-time/{symbols[0]}",
-            params=params, timeout=10
-        )
-        resp.raise_for_status()
-        rows = resp.json()
-        if isinstance(rows, dict):
-            rows = [rows]
-        updated = 0
-        for row in rows:
-            disp = sym_map.get(row.get("code"))
-            px   = row.get("close") or row.get("adjusted_close")
-            if disp and px:
-                with _live_prices_lock:
-                    _live_prices[disp] = {"price": float(px), "ts": time.time()}
-                updated += 1
-        log.debug(f"[PRICE-POLL] EODHD real-time: updated {updated}/{len(symbols)} pairs")
-    except Exception as _e:
-        log.debug(f"[PRICE-POLL] EODHD real-time error: {_e}")
+    
+    # Build symbol list — batch max 15 per call (EODHD recommendation)
+    sym_map = {}  # eodhd_symbol → display_name
+    for p in pairs:
+        s = _eodhd_rt_symbol(p)
+        if s:
+            sym_map[s] = p["display"]
+    
+    if not sym_map:
+        return
+
+    symbols = list(sym_map.keys())
+    # Process in batches of 15
+    for i in range(0, len(symbols), 15):
+        batch = symbols[i:i+15]
+        try:
+            url = (f"https://eodhd.com/api/real-time/{batch[0]}"
+                   f"?s={','.join(batch[1:])}&api_token={_key}&fmt=json")
+            resp = _req.get(url, timeout=8)
+            if resp.status_code != 200:
+                log.warning(f"[PRICE-POLL] EODHD batch {i//15+1}: HTTP {resp.status_code}")
+                continue
+            items = resp.json()
+            if not isinstance(items, list):
+                items = [items]
+            updated = 0
+            for item in items:
+                code = item.get("code", "")
+                px   = item.get("close") or item.get("adjusted_close")
+                disp = sym_map.get(code)
+                if disp and px:
+                    with _live_prices_lock:
+                        _live_prices[disp] = {"price": float(px), "ts": time.time()}
+                    updated += 1
+                elif disp:
+                    if _PRICE_POLL_FIRST_RUN:
+                        log.info(f"[PRICE-POLL] {disp} ({code}): no price — not on plan, will use candle fallback")
+                    else:
+                        log.debug(f"[PRICE-POLL] {disp} ({code}): no price in response — symbol may not be on plan")
+            log.info(f"[PRICE-POLL] EODHD batch {i//15+1}: {updated}/{len(batch)} updated")
+        except Exception as _e:
+            log.warning(f"[PRICE-POLL] EODHD batch {i//15+1} error: {_e}")
 
 
 def _fetch_binance_live_prices(pairs):
@@ -317,6 +365,9 @@ def _run_eodhd_price_poller():
     while True:
         _fetch_eodhd_live_prices(_NON_WS_EODHD)
         _fetch_binance_live_prices(_NON_WS_CRYPTO)
+        # Reset first-run flag after first cycle
+        global _PRICE_POLL_FIRST_RUN
+        _PRICE_POLL_FIRST_RUN = False
         time.sleep(60)
 
 
@@ -6071,6 +6122,23 @@ def api_execute():
 
             log.warning(f"[EXEC] {pair} REJECTED by risk engine: {approval.reason}")
 
+            try:
+                with sqlite3.connect(_AUDIT_DB, timeout=1.0) as _con:
+                    _con.execute(
+                        "INSERT INTO audit_log(ts,pair,score,direction,style,grade,error_tag) VALUES(?,?,?,?,?,?,?)",
+                        (
+                            datetime.utcnow().isoformat(),
+                            pair,
+                            sig.get("score"),
+                            sig.get("direction"),
+                            sig.get("style", "manual"),
+                            "MANUAL-ERR",
+                            approval.reason,
+                        ),
+                    )
+            except Exception as _e:
+                log.warning(f"[EXEC] Failed to log rejection to audit_db: {_e}")
+
             return jsonify({"error": f"Risk engine rejected: {approval.reason}", "approval": approval.to_dict()}), 200
 
         # Execute via appropriate executor
@@ -7222,6 +7290,35 @@ def api_auto_trade_log():
                    WHERE grade LIKE 'AUTO%'
 
                    ORDER BY id DESC LIMIT 30"""
+
+            ).fetchall()
+
+        return jsonify([dict(r) for r in rows])
+
+    except Exception as e:
+
+        return jsonify({"error": str(e)}), 500
+
+
+
+@app.route("/api/failed-executions")
+
+def api_failed_executions():
+
+    """Return recent failed/rejected trade attempts (manual and auto) with rejection reason."""
+
+    try:
+
+        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+
+            con.row_factory = sqlite3.Row
+
+            rows = con.execute(
+
+                """SELECT ts, pair, direction, score, grade, error_tag
+                   FROM audit_log
+                   WHERE grade LIKE '%-ERR%'
+                   ORDER BY id DESC LIMIT 50"""
 
             ).fetchall()
 

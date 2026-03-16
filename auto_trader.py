@@ -188,7 +188,7 @@ class AutoTrader:
 
             "maxDaily":         cfg.get("AUTO_TRADE_MAX_DAILY", 3),
 
-            "minScore":         cfg.get("AUTO_TRADE_MIN_SCORE", cfg.get("MIN_CONFLUENCE", 0.90)),
+            "minScore":         cfg.get("AUTO_TRADE_MIN_SCORE", {}),  # per-class dict
 
             "lastScanAt":       self._last_scan_at.isoformat() if self._last_scan_at else None,
 
@@ -468,13 +468,20 @@ class AutoTrader:
 
 
 
-        # Use per-class min as floor so auto-trader matches the scan gate exactly
+        # Per-class auto-trade minimum — different engines have different score scales:
+        # factor engine (crypto/stock/commodity/index) → 0–3.0
+        # forex engine → 0–1.0
+        # AUTO_TRADE_MIN_SCORE can be a dict (per-class) or a flat float (legacy)
+        _auto_min_cfg = cfg.get("AUTO_TRADE_MIN_SCORE", {})
+        if isinstance(_auto_min_cfg, dict):
+            auto_min = _auto_min_cfg.get(asset_type, _auto_min_cfg.get("crypto", 0.80))
+        else:
+            auto_min = float(_auto_min_cfg)  # backward compat with flat value
 
         class_mins = cfg.get("MIN_CONFLUENCE_CLASS", {})
+        class_floor = class_mins.get(asset_type, cfg.get("MIN_CONFLUENCE", 0.70))
 
-        class_floor = class_mins.get(asset_type, cfg.get("MIN_CONFLUENCE", 7.0))
-
-        min_score = max(cfg.get("AUTO_TRADE_MIN_SCORE", 5.5), class_floor)
+        min_score = max(auto_min, class_floor)
 
 
 

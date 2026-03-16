@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 import numpy as np
@@ -44,13 +44,21 @@ class ForexScoreResult:
 
 # ─── Session windows (UTC hours, inclusive) ─────────────────────────────────
 
+_ASIAN_OPEN   = (0,  8)   # 00:00–08:00 UTC  (Tokyo/Sydney)
 _LONDON_OPEN  = (7, 11)   # 07:00–11:00 UTC
 _NY_OPEN      = (12, 16)  # 12:00–16:00 UTC
 
 
 def _in_session(utc_hour: int) -> bool:
-    """True if current hour is inside London open or NY open window."""
-    return (_LONDON_OPEN[0] <= utc_hour <= _LONDON_OPEN[1] or
+    """True if current hour is inside Asian, London, or NY open window."""
+    try:
+        from config import CONFIG
+        if not CONFIG.get("FOREX_SESSION_FILTER", True):
+            return True  # session filter disabled — always trade
+    except Exception:
+        pass
+    return (_ASIAN_OPEN[0]  <= utc_hour <= _ASIAN_OPEN[1]  or
+            _LONDON_OPEN[0] <= utc_hour <= _LONDON_OPEN[1] or
             _NY_OPEN[0]     <= utc_hour <= _NY_OPEN[1])
 
 
@@ -361,6 +369,24 @@ def _london_breakout_score(h1_candles: list, utc_hour: int) -> tuple[float, str]
     return 0.0, "LONG"
 
 
+# ─── UTC hour helper ─────────────────────────────────────────────────────────
+
+def _local_to_utc_hour() -> int:
+    """
+    Derive UTC hour from local system clock + SERVER_TZ_OFFSET_HOURS config.
+    Uses datetime.now() (local time) to avoid relying on the OS timezone
+    database, which can be misconfigured on Windows machines.
+    Set SERVER_TZ_OFFSET_HOURS = 2 for SAST (GMT+2).
+    """
+    try:
+        from config import CONFIG
+        offset = int(CONFIG.get("SERVER_TZ_OFFSET_HOURS", 2))
+    except Exception:
+        offset = 2
+    local_hour = datetime.now().hour
+    return (local_hour - offset) % 24
+
+
 # ─── Main scoring function ───────────────────────────────────────────────────
 
 def compute_forex_score(
@@ -388,12 +414,13 @@ def compute_forex_score(
     """
     result = ForexScoreResult()
 
-    utc_hour = datetime.now(timezone.utc).hour
     if bar_time:
         try:
             utc_hour = datetime.fromisoformat(bar_time).hour
         except Exception:
-            pass
+            utc_hour = _local_to_utc_hour()
+    else:
+        utc_hour = _local_to_utc_hour()
 
     # Hurst Exponent from H1 close prices — determines regime weighting
     _closes = [c.get("close", 0) for c in (h1_candles or [])[-60:]
@@ -405,6 +432,20 @@ def compute_forex_score(
 
     trend_ok, trend_dir = _check_trend_gate(d1_snap, h4_snap)
     session_ok = True if backtest_mode else _in_session(utc_hour)
+
+    if not session_ok:
+        log.info(f"[FOREX] {pair.get('display','?')} session closed (utc_hour={utc_hour})")
+    if not trend_ok:
+        _adx_val = d1_snap.get("adx")
+        _d1c     = d1_snap.get("close")
+        _d1e200  = d1_snap.get("ema200")
+        _h4e50   = h4_snap.get("ema50")
+        _h4e200  = h4_snap.get("ema200")
+        log.info(
+            f"[FOREX] {pair.get('display','?')} trend_gate=False "
+            f"adx={_adx_val} d1_close={_d1c} d1_ema200={_d1e200} "
+            f"h4_ema50={_h4e50} h4_ema200={_h4e200}"
+        )
 
     trend_score = 0.0
     if trend_ok and session_ok:
