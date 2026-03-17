@@ -2723,7 +2723,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
 
                 return pair, None, str(e)
 
-        with ThreadPoolExecutor(max_workers=6) as pool:
+        with ThreadPoolExecutor(max_workers=3) as pool:
 
             futures = {pool.submit(_analyse, pair): pair for pair in candidate_pairs}
 
@@ -5897,6 +5897,239 @@ def api_analyze():
 
 
 
+@app.route("/api/naked-analysis", methods=["POST"])
+def api_naked_analysis():
+    d = request.json
+    if not d or "signal" not in d:
+        return jsonify({"error": "Invalid payload"}), 400
+        
+    sig = d["signal"]
+    symbol = sig.get("symbol") or sig.get("pair")
+    if not symbol:
+        return jsonify({"error": "Invalid signal"}), 400
+        
+    pair_obj = {"symbol": symbol, "type": sig.get("type", "crypto"), "display": sig.get("display", symbol), "source": CONFIG.get("EXCHANGE_SOURCE", "binance")}
+    direction = sig.get("direction", "LONG")
+    
+    try:
+        d1 = fetch_candles(pair_obj, "D1", CONFIG.get("D1_CANDLES", 220))
+        h4 = fetch_candles(pair_obj, "H4", CONFIG.get("H4_CANDLES", 220))
+        h1 = fetch_candles(pair_obj, "H1", CONFIG.get("H1_CANDLES", 220))
+        
+        if not d1 or not h4 or not h1:
+            return jsonify({"error": "Failed to fetch D1/H4/H1 candles"}), 500
+            
+        d1 = d1[:-1] if len(d1) > 1 else d1
+        h4 = h4[:-1] if len(h4) > 1 else h4
+        h1 = h1[:-1] if len(h1) > 1 else h1
+        
+        h4_highs = [float(c["high"]) for c in h4]
+        h4_lows = [float(c["low"]) for c in h4]
+        h4_closes = [float(c["close"]) for c in h4]
+        atr_series = calc_atr(h4_highs, h4_lows, h4_closes, 14)
+        atr = float(atr_series[-1]) if atr_series else 0.0
+        
+        if not atr or atr <= 0:
+            return jsonify({"error": "Failed to calc valid ATR"}), 500
+            
+        current_price = float(sig.get("price") or h1[-1]["close"])
+        
+        from market_structure import NakedEngine
+        engine = NakedEngine()
+        res = engine.analyze_structure(d1, h4, h1, current_price, direction, atr)
+        
+        # Include current price for the UI rendering
+        res["current_price"] = current_price
+        
+        return jsonify(res)
+        
+    except Exception as e:
+        log.error(f"naked_analysis error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": "Naked Structure Analysis failed"}), 500
+
+@app.route("/api/quick-execute", methods=["POST"])
+def api_quick_execute():
+    d = request.json
+    if not d or "signal" not in d or "engine_b" not in d:
+        return jsonify({"error": "Invalid payload"}), 400
+        
+    sig = d["signal"]
+    engine_b = d["engine_b"]
+    
+    # Override Engine A SL/TP with Engine B structure
+    if "recommended_stop_loss" in engine_b and engine_b["recommended_stop_loss"]:
+        sig["sl"] = engine_b["recommended_stop_loss"]
+    if "recommended_take_profit" in engine_b and engine_b["recommended_take_profit"]:
+        sig["tp1"] = engine_b["recommended_take_profit"]
+        sig["tp2"] = engine_b["recommended_take_profit"] # For scalping, tp2 defaults to tp1
+        
+    is_crypto = sig.get("type") == "crypto"
+    
+    try:
+        from risk_engine import risk_check
+        if is_crypto:
+            from bybit_executor import bybit_get_account, bybit_get_positions, bybit_get_symbol_info, bybit_execute
+            account = bybit_get_account()
+            if not account: return jsonify({"error": "Bybit not connected"}), 400
+            pos_result = bybit_get_positions()
+            positions = pos_result.get("positions", []) if isinstance(pos_result, dict) else (pos_result or [])
+            symbol_info = bybit_get_symbol_info(sig.get("pair") or sig.get("symbol"))
+            executor = bybit_execute
+        else:
+            from mt5_executor import mt5_get_account, mt5_get_positions, mt5_get_symbol_info, mt5_execute
+            account = mt5_get_account()
+            if not account: return jsonify({"error": "MT5 not connected"}), 400
+            pos_result = mt5_get_positions()
+            positions = pos_result.get("positions", []) if isinstance(pos_result, dict) else (pos_result or [])
+            symbol_info = mt5_get_symbol_info(sig.get("pair") or sig.get("symbol"))
+            if not symbol_info: return jsonify({"error": "Symbol not on broker"}), 400
+            executor = mt5_execute
+            
+        approval = risk_check(
+            signal=sig,
+            account_balance=account["balance"],
+            account_equity=account["equity"],
+            open_positions=positions,
+            symbol_info=symbol_info,
+            kill_switch=False,
+            sizing_override=CONFIG.get("AUTO_TRADE_SIZING_OVERRIDE", 1.0),
+            is_manual_override=True
+        )
+        
+        if not approval.approved:
+            return jsonify({"error": f"Risk Blocked: {approval.reason}"}), 400
+            
+        result = executor(sig, approval)
+        if result.get("success"):
+            return jsonify({"success": True, "ticket": result.get("ticket"), "message": f"Executed instantly!"})
+        else:
+            return jsonify({"error": result.get("error", "Execution failed")}), 400
+            
+    except Exception as e:
+        log.error(f"quick_execute error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/scan-naked", methods=["POST"])
+def api_scan_naked():
+    d = request.json or {}
+    asset_class = d.get("assetClass", "crypto").lower()
+    
+    candidate_pairs = [p for p in ALL_PAIRS if p.get("type", "").lower() == asset_class and p.get("enabled", True) and p["display"] not in _disabled_pairs]
+    
+    results = []
+    
+    from market_structure import NakedEngine
+    engine = NakedEngine()
+    
+    import time
+    for pair in candidate_pairs:
+        try:
+            # Yield CPU to prevent Flask thread locking during synchronous scan
+            time.sleep(0.1) 
+            d1 = fetch_candles(pair, "D1", CONFIG.get("D1_CANDLES", 220))
+            h4 = fetch_candles(pair, "H4", CONFIG.get("H4_CANDLES", 220))
+            h1 = fetch_candles(pair, "H1", CONFIG.get("H1_CANDLES", 220))
+            
+            if not d1 or not h4 or not h1:
+                continue
+                
+            d1 = d1[:-1] if len(d1) > 1 else d1
+            h4 = h4[:-1] if len(h4) > 1 else h4
+            h1 = h1[:-1] if len(h1) > 1 else h1
+            
+            if len(h4) < 10 or len(h1) < 10:
+                continue
+                
+            h4_highs = [float(c["high"]) for c in h4]
+            h4_lows = [float(c["low"]) for c in h4]
+            h4_closes = [float(c["close"]) for c in h4]
+            
+            atr_series = calc_atr(h4_highs, h4_lows, h4_closes, 14)
+            atr = float(atr_series[-1]) if atr_series else 0.0
+            
+            if not atr or atr <= 0:
+                continue
+                
+            current_price = float(h1[-1]["close"])
+            
+            # Test both directions
+            for direction in ["LONG", "SHORT"]:
+                res = engine.analyze_structure(d1, h4, h1, current_price, direction, atr)
+                
+                if res.get("structural_verdict") == "CLEAR":
+                    seq = res.get("current_swing_sequence", "")
+                    
+                    # Only accept strong structural alignments
+                    if direction == "LONG" and seq == "HH_HL":
+                        valid = True
+                    elif direction == "SHORT" and seq == "LH_LL":
+                        valid = True
+                    else:
+                        valid = False
+                        
+                    if valid:
+                        res["current_price"] = current_price
+                        res["symbol"] = pair.get("symbol")
+                        res["display"] = pair.get("display")
+                        res["type"] = pair.get("type")
+                        res["direction"] = direction
+                        
+                        sl = res.get("recommended_stop_loss")
+                        tp = res.get("recommended_take_profit")
+                        
+                        # Apply fallback TP if N/A based on 1:1.5 RR logic
+                        if not tp and sl:
+                            sl_dist = abs(current_price - sl)
+                            if direction == "LONG":
+                                tp = current_price + (sl_dist * 1.5)
+                            else:
+                                tp = current_price - (sl_dist * 1.5)
+                            res["recommended_take_profit"] = tp
+                            res["fallback_tp_applied"] = True
+                        
+                        conf_data = engine.calculate_confidence(res, current_price, direction)
+                        
+                        signal = {
+                            "id": f"NKD_{pair['display']}_{direction}_{int(time.time())}",
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "pair": pair.get("display"),
+                            "display": pair.get("display"),
+                            "symbol": pair.get("symbol"),
+                            "type": pair.get("type"),
+                            "direction": direction,
+                            "price": current_price,
+                            "confluenceScore": conf_data["score"],
+                            "confluencePct": conf_data["pct"],
+                            "volRatio": 1.0,
+                            "stochK": None,
+                            "stochD": None,
+                            "ema200Slope": 0.0,
+                            "session": {"name": "Global"},
+                            "grade": "Naked Structure",
+                            "trendState": seq,
+                            "edgeProbability": 99.9, # To indicate different sorting
+                            "riskLevel": "Low",
+                            "score_pct": conf_data["pct"],
+                            "is_naked": True, # Flag for UI
+                            "sl": sl,
+                            "slPct": round(abs(current_price - sl) / current_price * 100, 2) if sl else 0.0,
+                            "tp1": tp,
+                            "tp2": tp,
+                            "rr1": 1.5,
+                            "rr2": 1.5,
+                            "fib": { "fib618": 0.0, "fib500": 0.0 },
+                            "naked_data": res 
+                        }
+                        results.append(signal)
+        except Exception as e:
+            log.warning(f"Error scanning naked {pair['display']}: {e}")
+            continue
+            
+    return jsonify({"success": True, "signals": results})
+
 # â"€â"€ Execution Engine Endpoints â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 _executed_signals: set = set()  # Track executed signal IDs to prevent duplicates
@@ -7747,7 +7980,7 @@ def fetch_eodhd_indicators(pair):
 
 
 
-def analyze_pair(pair, btc_bias, style="swing"):
+def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
 
     pair_profile = get_pair_profile(pair)
 
@@ -7894,6 +8127,7 @@ def analyze_pair(pair, btc_bias, style="swing"):
 
 
 
+    res = None
     # Route forex pairs to dedicated forex scoring engine
     if pair.get("type") == "forex":
         try:
@@ -8024,6 +8258,49 @@ def analyze_pair(pair, btc_bias, style="swing"):
         warn_list.append(_oi_divergence["warning"])
 
     max_score = res.get("maxScoreOverride") or _max_score_for_pair(pair)
+
+    # --- ENGINE B: NAKED MARKET STRUCTURE OVERLAY ---
+    structure_data = None
+    if use_naked_engine and res["score"] >= get_pair_profile(pair).get("min_score", CONFIG.get("MIN_CONFLUENCE", 0.6)):
+        try:
+            from market_structure import engine as naked_engine
+            structure_data = naked_engine.analyze_structure(d1, h4, h1, float(price), direction, float(atr))
+            
+            if structure_data and structure_data.get("structural_verdict") == "CLEAR":
+                _min_room = float(atr) * 1.5
+                if direction == "LONG" and structure_data.get("distance_to_res", float('inf')) < _min_room:
+                    log.warning(f"[ENGINE-B] {pair['display']} LONG blocked: nearest resistance too close")
+                    return None
+                if direction == "SHORT" and structure_data.get("distance_to_sup", float('inf')) < _min_room:
+                    log.warning(f"[ENGINE-B] {pair['display']} SHORT blocked: nearest support too close")
+                    return None
+                    
+                if pair.get("type") in ("crypto", "forex", "commodity"):
+                    # Light fetch for DXY correlation
+                    _dxy = fetch_candles({"symbol": "USDollar", "display": "DXY", "source": "twelvedata", "type": "index"}, "H4", 100)
+                    if _dxy:
+                        _dxy_c = [float(c["close"]) for c in _dxy]
+                        _asset_c = [float(c["close"]) for c in h4]
+                        if not naked_engine.check_macro_correlation(_asset_c, _dxy_c, direction):
+                            log.warning(f"[ENGINE-B] {pair['display']} {direction} blocked: adverse DXY correlation")
+                            return None
+                            
+                # Safest Stop Loss Override (Combined Risk Management)
+                if structure_data.get("recommended_stop_loss"):
+                    _struct_sl = float(structure_data["recommended_stop_loss"])
+                    _math_sl = float(lvl["sl"])
+                    lvl["sl"] = min(_math_sl, _struct_sl) if direction == "LONG" else max(_math_sl, _struct_sl)
+                
+                # Take Profit Override to sit safely inside structural walls
+                if structure_data.get("recommended_take_profit"):
+                    _struct_tp = float(structure_data["recommended_take_profit"])
+                    _math_tp1 = float(lvl["tp1"])
+                    lvl["tp1"] = min(_math_tp1, _struct_tp) if direction == "LONG" else max(_math_tp1, _struct_tp)
+                    
+                risk_pct = round(abs(float(price) - float(lvl["sl"])) / float(price) * 100, 2)
+        except Exception as e:
+            log.error(f"[ENGINE-B] Error on {pair['display']}: {e}")
+    # ------------------------------------------------
 
     return {
 

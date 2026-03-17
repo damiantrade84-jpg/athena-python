@@ -364,7 +364,8 @@ def _calc_portfolio_heat(open_positions: list, account_balance: float) -> float:
 
 def risk_check(signal: dict, account_balance: float, account_equity: float,
                open_positions: list, symbol_info: dict | None = None,
-               kill_switch: bool = False, sizing_override: float = 1.0) -> RiskApproval:
+               kill_switch: bool = False, sizing_override: float = 1.0,
+               is_manual_override: bool = False) -> RiskApproval:
     """Mandatory risk gateway. Every execution path calls this first.
 
     Args:
@@ -401,7 +402,7 @@ def risk_check(signal: dict, account_balance: float, account_equity: float,
 
     # ── Check 1: Signal freshness ───────────────────────────────────────────
     ts_str = signal.get("timestamp")
-    if ts_str:
+    if ts_str and not is_manual_override:
         try:
             sig_time = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
             age = (datetime.now(timezone.utc) - sig_time).total_seconds()

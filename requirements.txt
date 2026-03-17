@@ -10,3 +10,4 @@ eodhd==1.0.32
 python-dotenv==1.2.2
 ccxt==4.5.42
 pytest==8.4.2
+scipy>=1.15.0

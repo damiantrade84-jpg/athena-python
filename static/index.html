@@ -398,6 +398,9 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         SCAN
       </button>
+      <button class="scan-btn" id="scanNakedBtn" onclick="runNakedGlobalScan()" style="background:var(--card);border:1px solid var(--bull);color:var(--bull);margin-left:5px;">
+        🌍 NAKED SCAN
+      </button>
       <div class="test-toggle" id="testToggle" onclick="toggleTestMode()" title="Test Mode: drops score thresholds, enables force-execute on all signals">
         <span class="toggle-dot"></span>
         <span>TEST</span>
@@ -1119,9 +1122,6 @@ async function runScan() {
     var highConf=tradeSignals.filter(function(s){return s.confluenceScore>=1.5;});
     if (highConf.length>0) {
       showToast(tradeSignals.length+' trade signals | '+watchlistSignals.length+' watchlist');
-      for (var i=0;i<Math.min(highConf.length,3);i++) {
-        (function(sym){setTimeout(function(){analyzeSignal(sym,true);},800+i*600);})(highConf[i].symbol);
-      }
     } else if (watchlistSignals.length>0) {
       showToast('Scan complete - 0 trade signals | '+watchlistSignals.length+' watchlist setups');
     } else { showToast('Scan complete - '+allSignals.length+' results surfaced'); }
@@ -1132,6 +1132,50 @@ async function runScan() {
   }
   btn.disabled=false;
   btn.innerHTML='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> SCAN ALL PAIRS';
+}
+
+// -- Naked Global Scan --
+async function runNakedGlobalScan() {
+  var btn=document.getElementById('scanNakedBtn');
+  btn.disabled=true; btn.innerHTML='<div class="spinner"></div> SCANNING...';
+  showSkeletons();
+  try {
+    var acFilter = document.getElementById('assetClassFilter').value || 'crypto';
+    var payload = {assetClass: acFilter};
+    var resp=await fetch('/api/scan-naked',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload)
+    });
+    if(!resp.ok) throw new Error('Server error: HTTP '+resp.status);
+    var data=await resp.json();
+    if(!data.success) throw new Error(data.error||'Scan failed');
+
+    var tradeSignals=data.signals||[];
+    allSignals=tradeSignals;
+    
+    var dataStats = {
+      tradeSignals: tradeSignals,
+      watchlist: [],
+      activePairs: tradeSignals.length,
+      scannedAt: new Date().toISOString()
+    };
+    renderStats(dataStats);
+    renderSignals(applyStyleFilter(allSignals));
+    
+    document.getElementById('configBanner').style.display='none';
+    document.getElementById('statsBar').style.display='flex';
+    document.getElementById('filterBar').style.display='flex';
+    
+    showToast('Naked Scan complete - '+allSignals.length+' structural setups found');
+    
+  } catch(err) {
+    console.error('Naked Scan Error:',err);
+    showToast('Warning: '+err.message,true);
+    document.getElementById('signalGrid').innerHTML='<div class="empty-state"><div class="icon">!</div><h3>Scan Error</h3><p>'+err.message+'</p></div>';
+  }
+  btn.disabled=false;
+  btn.innerHTML='🌍 NAKED SCAN';
 }
 
 // -- Stats --
@@ -1202,7 +1246,9 @@ function buildCard(s,idx) {
     return '<div class="screen-group"><div class="screen-label">'+label+'</div><div class="votes-row">'+pills+'</div></div>';
   }
 
-  var votesHtml=voteHtml(screen1keys,'Screen 1 | D1 Tide')+voteHtml(screen2keys,'Screen 2 | H4 Wave')+voteHtml(screen3keys,'Screen 3 | H1 Ripple');
+  var votesHtml=s.is_naked 
+    ? '<div style="margin:8px 0;padding:8px 10px;background:rgba(0,230,118,0.1);border:1px solid rgba(0,230,118,0.2);border-radius:6px;color:#00e676;font-size:11px;font-family:monospace;text-align:center;letter-spacing:1px;font-weight:bold;">🌍 PURE NAKED STRUCTURE ENTRY</div>' 
+    : voteHtml(screen1keys,'Screen 1 | D1 Tide')+voteHtml(screen2keys,'Screen 2 | H4 Wave')+voteHtml(screen3keys,'Screen 3 | H1 Ripple');
 
   // Warnings
   var warnHtml='';
@@ -1309,9 +1355,14 @@ function buildChartSection(s) {
       ema50: (s.h4&&s.h4.snap) ? s.h4.snap.ema50 : null
     }
   };
-  return '<button class="chart-toggle-btn" id="chartbtn-'+sid+'" onclick="toggleChart(\''+sid+'\')">' +
+  return '<div style="display:flex;gap:8px;margin-bottom:8px;">' +
+    '<button class="chart-toggle-btn" id="chartbtn-'+sid+'" onclick="toggleChart(\''+sid+'\')" style="flex:1">' +
     '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' +
     ' H4 CHART</button>' +
+    '<button class="chart-toggle-btn naked" id="nbtn-'+sid+'" onclick="runNakedScan(\''+s.symbol+'\')" style="flex:1;border-color:var(--accent);color:var(--accent)">👁 NAKED SCALP</button>' +
+    '<button class="chart-toggle-btn compare" id="cbtn-'+sid+'" onclick="runCompare(\''+s.symbol+'\')" style="flex:1;border-color:#f59e0b;color:#f59e0b">⚖️ COMPARE A&B</button>' +
+    '</div>' +
+    '<div id="nres-'+sid+'" style="display:none;margin-bottom:8px;padding:10px;border:1px solid var(--accent);border-radius:6px;background:rgba(0,212,255,0.05);font-size:11px;font-family:monospace;white-space:pre-wrap;"></div>' +
     '<div class="sig-chart-wrap" id="chart-'+sid+'" style="height:220px"></div>';
 }
 
@@ -1478,6 +1529,155 @@ async function analyzeSignal(symbol,auto) {
     showToast('Error: '+err.message,true);
   }
 }
+
+// -- Naked Scalp Scan & Compare --
+async function quickExecute(symbol, engineBData) {
+  var sid=(symbol||'').replace(/[\/=^.]/g,'_');
+  var sig=allSignals.find(function(s){return s.symbol===symbol;});
+  if(!sig) return;
+  var btn = document.getElementById('qexecbtn-'+sid);
+  if(btn){btn.disabled=true;btn.textContent='Executing...';}
+  
+  try {
+    var resp=await fetch('/api/quick-execute', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({signal:sig, engine_b: engineBData})
+    });
+    var resData=await resp.json();
+    if(!resp.ok || resData.error) throw new Error(resData.error || 'Execution failed');
+    
+    if(btn){btn.disabled=true;btn.textContent='Success! '+resData.ticket; setTimeout(function(){btn.style.display='none';},2000);}
+    showToast('Quick executed ' + symbol + ' successfully! Ticket: ' + resData.ticket);
+  } catch(err) {
+    if(btn){btn.disabled=false;btn.textContent='⚡ RETRY QUICK EXEC';}
+    showToast('Execute Error: '+err.message, true);
+  }
+}
+
+async function runNakedScan(symbol) {
+  var sid=(symbol||'').replace(/[\/=^.]/g,'_');
+  var sig=allSignals.find(function(s){return s.symbol===symbol;});
+  if(!sig) return;
+  var btn=document.getElementById('nbtn-'+sid);
+  if(btn){btn.disabled=true;btn.textContent='Scanning...';}
+  
+  var resDiv = document.getElementById('nres-'+sid);
+  if(resDiv) {
+    resDiv.style.display = 'block';
+    resDiv.innerHTML = 'Engine B evaluating market structure for ' + symbol + '...';
+  }
+
+  try {
+    var resp=await fetch('/api/naked-analysis', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({signal:sig})
+    });
+    if(!resp.ok) throw new Error('Server error: HTTP ' + resp.status);
+    var data=await resp.json();
+    if(data.error) throw new Error(data.error);
+    
+    // Store Engine B data for Quick Execution
+    window['_engineB_'+sid] = data;
+
+    // Format output
+    var isCrypto = sig.type === 'crypto';
+    var isConnected = isCrypto ? window._bybitConnected : window._mt5Connected;
+    var exeDisabled = !isConnected ? 'disabled title="Broker Not Connected"' : '';
+
+    var out = 'NAKED ENGINE STRUCTURAL VERDICT: ' + data.structural_verdict + '\n';
+    out += 'CURRENT PRICE: ' + (data.current_price ? data.current_price.toFixed(4) : '?') + '\n';
+    out += 'SWING SEQUENCE: ' + data.current_swing_sequence + '\n\n';
+    
+    if (data.nearest_resistance_zone) {
+       out += 'RESISTANCE ZONE: ' + data.nearest_resistance_zone.lower.toFixed(4) + ' - ' + data.nearest_resistance_zone.upper.toFixed(4) + '\n';
+    } else {
+       out += 'RESISTANCE ZONE: None nearby\n';
+    }
+    
+    if (data.nearest_support_zone) {
+       out += 'SUPPORT ZONE: ' + data.nearest_support_zone.lower.toFixed(4) + ' - ' + data.nearest_support_zone.upper.toFixed(4) + '\n';
+    } else {
+       out += 'SUPPORT ZONE: None nearby\n';
+    }
+    
+    out += '\nEngine B SL: ' + (data.recommended_stop_loss ? data.recommended_stop_loss.toFixed(4) : 'N/A') + '\n';
+    out += 'Engine B TP: ' + (data.recommended_take_profit ? data.recommended_take_profit.toFixed(4) : 'N/A') + '\n\n';
+    
+    // Convert newlines to breaks for HTML injecting
+    var htmlContent = out.replace(/\n/g, '<br>');
+    
+    var execBtnHTML = '<button class="exec-btn force" style="margin-top:8px;width:100%" id="qexecbtn-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'])" '+exeDisabled+'>⚡ QUICK SCALP EXECUTE (Uses Engine B SL/TP)</button>';
+    if(resDiv) resDiv.innerHTML = htmlContent + execBtnHTML;
+    
+    if(btn){btn.disabled=false;btn.textContent='👁 RE-RUN SCALP';}
+    showToast('Naked Scan complete for ' + symbol);
+  } catch(err) {
+    if(btn){btn.disabled=false;btn.textContent='👁 RETRY NAKED SCALP';}
+    if(resDiv) resDiv.textContent = 'Engine B Error: ' + err.message;
+    showToast('Engine B Error: '+err.message, true);
+  }
+}
+
+async function runCompare(symbol) {
+  var sid=(symbol||'').replace(/[\/=^.]/g,'_');
+  var sig=allSignals.find(function(s){return s.symbol===symbol;});
+  if(!sig) return;
+  var btn=document.getElementById('cbtn-'+sid);
+  if(btn){btn.disabled=true;btn.textContent='Comparing...';}
+  
+  var resDiv = document.getElementById('nres-'+sid);
+  if(resDiv) {
+    resDiv.style.display = 'block';
+    resDiv.innerHTML = 'Analyzing Engine A Math vs Engine B Structure...';
+  }
+
+  try {
+    var resp=await fetch('/api/naked-analysis', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({signal:sig})
+    });
+    if(!resp.ok) throw new Error('Server error: HTTP ' + resp.status);
+    var data=await resp.json();
+    if(data.error) throw new Error(data.error);
+
+    // Store Engine B data for Quick Execution
+    window['_engineB_'+sid] = data;
+    
+    var isCrypto = sig.type === 'crypto';
+    var isConnected = isCrypto ? window._bybitConnected : window._mt5Connected;
+    var exeDisabled = !isConnected ? 'disabled title="Broker Not Connected"' : '';
+
+    var match = false;
+    var stVerdict = data.structural_verdict.toLowerCase();
+    if (sig.direction === 'LONG' && (stVerdict.includes('bullish') || stVerdict.includes('buy') || stVerdict.includes('clear'))) match = true;
+    if (sig.direction === 'SHORT' && (stVerdict.includes('bearish') || stVerdict.includes('sell') || stVerdict.includes('clear'))) match = true;
+    
+    var verdictColor = match ? '#00e676' : '#ff3b5c';
+    var verdictText = match ? '✅ CONFLUENCE ALIGNED' : '❌ CONFLUENCE MISMATCH';
+    
+    var html = '<div style="font-weight:bold;margin-bottom:8px;font-size:12px;color:'+verdictColor+'">'+verdictText+'</div>';
+    
+    html += '<table style="width:100%;text-align:left;border-collapse:collapse;margin-bottom:8px;font-size:11px">';
+    html += '<tr><th style="padding:4px;border-bottom:1px solid #2a3b4d">Metric</th><th style="padding:4px;border-bottom:1px solid #2a3b4d;color:#00d4ff">Engine A (Math)</th><th style="padding:4px;border-bottom:1px solid #2a3b4d;color:#f59e0b">Engine B (Structure)</th></tr>';
+    html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Bias</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+sig.direction+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+data.structural_verdict+'</td></tr>';
+    html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Stop Loss</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(sig.sl?sig.sl.toFixed(4):'-')+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(data.recommended_stop_loss?data.recommended_stop_loss.toFixed(4):'-')+'</td></tr>';
+    html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Take Profit</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(sig.tp1?sig.tp1.toFixed(4):'-')+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(data.recommended_take_profit?data.recommended_take_profit.toFixed(4):'-')+'</td></tr>';
+    html += '</table>';
+
+    var execBtnHTML = '<button class="exec-btn force" style="margin-top:4px;width:100%" id="qexecbtn-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'])" '+exeDisabled+'>⚡ QUICK SCALP EXECUTE (Uses Engine B SL/TP)</button>';
+    
+    if(resDiv) resDiv.innerHTML = html + execBtnHTML;
+    if(btn){btn.disabled=false;btn.textContent='⚖️ RE-COMPARE A & B';}
+  } catch(err) {
+    if(btn){btn.disabled=false;btn.textContent='⚖️ RETRY COMPARE';}
+    if(resDiv) resDiv.textContent = 'Compare Error: ' + err.message;
+    showToast('Compare Error: '+err.message, true);
+  }
+}
+
 
 // -- Skeletons --
 function showSkeletons() {

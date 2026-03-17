@@ -293,7 +293,6 @@ class AutoTrader:
                 if elapsed >= interval_min:
 
                     # Convert UTC to local time for display only (don't affect scheduling logic)
-                    from datetime import datetime
                     local_now = datetime.fromtimestamp(now.timestamp())
                     log.info(f"[AUTO] Interval scan ({interval_min}min) firing at {local_now.strftime('%H:%M')}")
 

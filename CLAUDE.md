@@ -1,6 +1,21 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
-## Recent Changes (2026-03-16)
+## Recent Changes (2026-03-17)
+
+**Engine B (Naked Market Structure):**
+- Added `market_structure.py` housing `NakedEngine` for pure price-action evaluation (no indicators).
+- Engine looks at D1/H4 swings (HH/HL, LH/LL) and checks H1 for nearest structural Resistance/Support zones using wick/body clusters.
+- Added `/api/scan-naked` to run Naked Engine against all active candidate pairs.
+- Added `/api/naked-analysis` to run deep Engine B analysis on a single selected pair.
+
+**Dashboard Performance & UI:**
+- **Optimization A:** Throttled `run_full_scan` `ThreadPoolExecutor` from 6 workers to 3 to prevent CPU lock-ups.
+- **Optimization B:** De-synced the Naked Scan execution loop by intentionally yielding checking blocks with `time.sleep(0.1)` so the Flask web thread remains responsive.
+- **Optimization C:** Removed automatic `setTimeout` chart opening payloads from `index.html` after a scan finishes. Charts now Lazy-Load strictly on button clicks, preventing LightweightCharts from seizing the GPU/DOM.
+- Added "NAKED GLOBAL SCAN" manual button to UI.
+- Added "👁 NAKED SCALP" button to individual signal cards, producing a structural verdict window with a "⚡ QUICK SCALP EXECUTE" button that executes based on Engine B's proprietary SL/TP levels.
+
+## Previous Changes (2026-03-16)
 
 **Testing Week Adjustments:**
 - `MAX_OPEN_POSITIONS: 20` (was 5) — raised for testing with multiple open trades
