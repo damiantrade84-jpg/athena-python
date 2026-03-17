@@ -114,9 +114,9 @@ _MT5_SYMBOL_MAP = {
 
     "XAG/USD":   "XAGUSD",
 
-    "WTI Oil":   "USOUSD",       # Pepperstone WTI CFD — verify in MT5 Market Watch
+    "WTI Oil":   "SpotCrude",    # Pepperstone WTI CFD — user verified 'SpotCrude'
 
-    "Brent Oil": "SPOTBRENT",    # Pepperstone Brent Crude CFD
+    "Brent Oil": "SpotBrent",    # Pepperstone Brent Crude CFD
 
     "Nat Gas":   "NATGAS",       # Pepperstone Natural Gas CFD
 
@@ -147,69 +147,38 @@ _MT5_SYMBOL_MAP = {
     "Euro Stoxx 50":"EUSTX50",
 
     # US Stocks (CFDs on Pepperstone)
-
-    "AAPL":  "AAPL",
-
-    "TSLA":  "TSLA",
-
-    "NVDA":  "NVDA",
-
-    "MSFT":  "MSFT",
-
-    "AMZN":  "AMZN",
-
-    "META":  "META",
-
-    "GOOG":  "GOOG",
-
-    "JPM":   "JPM",
-
-    "V":     "V",
-
+    "AAPL":  "AAPL.US",
+    "TSLA":  "TSLA.US",
+    "NVDA":  "NVDA.US",
+    "MSFT":  "MSFT.US",
+    "AMZN":  "AMZN.US",
+    "META":  "META.US",
+    "GOOG":  "GOOG.US",
+    "JPM":   "JPM.US",
+    "V":     "V.US",
     "XOM":   "XOM.US",
-
-    "NFLX":  "NFLX",
-
-    "AMD":   "AMD",
-
-    "CRM":   "CRM",
-
-    "DIS":   "DIS",
-
-    "BA":    "BA",
-
-    "COIN":  "COIN",
-
-    "PYPL":  "PYPL",
-
-    "INTC":  "INTC",
-
-    "UBER":  "UBER",
-
-    "PLTR":  "PLTR",
+    "NFLX":  "NFLX.US",
+    "AMD":   "AMD.US",
+    "CRM":   "CRM.US",
+    "DIS":   "DIS.US",
+    "BA":    "BA.US",
+    "COIN":  "COIN.US",
+    "PYPL":  "PYPL.US",
+    "INTC":  "INTC.US",
+    "UBER":  "UBER.US",
+    "PLTR":  "PLTR.US",
 
     # ETFs
-
-    "SPY":   "SPY",
-
-    "QQQ":   "QQQ",
-
-    "GLD":   "GLD",
-
-    "TLT":   "TLT",
-
-    "IWM":   "IWM",
-
-    "EEM":   "EEM",
-
-    "XLF":   "XLF",
-
+    "SPY":   "SPY.US",
+    "QQQ":   "QQQ.US",
+    "GLD":   "GLD.US",
+    "TLT":   "TLT.US",
+    "IWM":   "IWM.US",
+    "EEM":   "EEM.US",
+    "XLF":   "XLF.US",
     "XLE":   "XLE.US",   # Common MT5 suffix for US energy ETF
-
     "SLV":   "SLV.US",   # Common MT5 suffix for silver ETF
-
     "USO":   "USO.US",   # Many MT5 brokers expose USO as USO.US
-
 }
 
 
@@ -568,7 +537,7 @@ def mt5_close_position(ticket: int) -> dict:
 
     }
 
-    result = mt5.order_send(request)
+    result = _send_order_with_filling_fallback(request)
 
     if result and result.retcode == mt5.TRADE_RETCODE_DONE:
 
@@ -667,7 +636,35 @@ def mt5_get_symbol_info(athena_display: str) -> dict:
     }
 
 
+def _send_order_with_filling_fallback(request: dict):
+    """Attempt order send and dynamically fallback if filling mode unsupported."""
+    mt5 = _get_mt5()
+    mt5_symbol = request.get("symbol")
+    if not mt5 or not mt5_symbol:
+        return None
+    
+    # Try current or default
+    current_filling = _SYMBOL_FILLING_MODES.get(mt5_symbol, mt5.ORDER_FILLING_IOC)
+    request["type_filling"] = current_filling
+    result = mt5.order_send(request)
 
+    # MT5 Unsupported filling mode retcode is 10030, but checking comment is safe
+    if result and result.retcode != mt5.TRADE_RETCODE_DONE and "filling" in str(result.comment).lower():
+        # Try fallbacks
+        fallbacks = [mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_RETURN, mt5.ORDER_FILLING_IOC]
+        if current_filling in fallbacks:
+            fallbacks.remove(current_filling)
+
+        for fallback in fallbacks:
+            request["type_filling"] = fallback
+            result = mt5.order_send(request)
+            if result and (result.retcode == mt5.TRADE_RETCODE_DONE or "filling" not in str(result.comment).lower()):
+                if result.retcode == mt5.TRADE_RETCODE_DONE:
+                    # Save the working filling mode globally
+                    _SYMBOL_FILLING_MODES[mt5_symbol] = fallback
+                    log.info(f"[MT5] Dynamically saved {fallback} as filling mode for {mt5_symbol}")
+                break
+    return result
 
 
 def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:
@@ -904,7 +901,7 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:
 
 
 
-    result = mt5.order_send(request)
+    result = _send_order_with_filling_fallback(request)
 
     if result is None:
 
@@ -990,7 +987,7 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:
 
             }
 
-            tp2_result = mt5.order_send(tp2_req)
+            tp2_result = _send_order_with_filling_fallback(tp2_req)
 
             if tp2_result and tp2_result.retcode == mt5.TRADE_RETCODE_DONE:
 
