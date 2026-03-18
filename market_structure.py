@@ -294,6 +294,15 @@ class NakedEngine:
             # If TP is above or within 0.5 ATR of entry, discard and use RR fallback
             if tp >= current_price - (atr * 0.5):
                 tp = None
+                
+        # Generate TP from 2.0 RR fallback if no valid opposing structural zone exists
+        if tp is None:
+            sl_dist = abs(current_price - sl) if (sl is not None) else (atr * sl_mult)
+            if sl_dist == 0: sl_dist = atr * sl_mult
+            if direction == "LONG":
+                tp = current_price + (sl_dist * 2.0)
+            else:
+                tp = current_price - (sl_dist * 2.0)
 
         # 6. BOS validation
         bos_confirmed = (direction == "LONG" and bos_data["bos_bull"]) or (direction == "SHORT" and bos_data["bos_bear"])
