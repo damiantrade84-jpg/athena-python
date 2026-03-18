@@ -1082,20 +1082,21 @@ def calc_indicators_with_normalized(candles: list, asset_type: str = "crypto") -
 # ── Forex-specific helpers (safe, optional, never called by other engines) ──
 
 def detect_fvg(candles: list) -> list:
-    """Fair Value Gap detection — standard 3-candle pattern."""
+    """Fair Value Gap detection — standard 3-candle pattern.
+    Candle 1 (i-2) = reference, Candle 2 (i-1) = impulse, Candle 3 (i) = confirmation.
+    Bullish FVG: Candle 3 low > Candle 1 high (gap above Candle 1).
+    Bearish FVG: Candle 3 high < Candle 1 low (gap below Candle 1)."""
     fvgs = []
-    for i in range(2, len(candles)-1):
-        prev_low = candles[i-1]["low"]
-        prev_high = candles[i-1]["high"]
-        curr_low = candles[i]["low"]
-        curr_high = candles[i]["high"]
-        next_low = candles[i+1]["low"]
-        next_high = candles[i+1]["high"]
+    for i in range(2, len(candles)):
+        c1_high = candles[i-2]["high"]  # Candle 1
+        c1_low  = candles[i-2]["low"]
+        c3_high = candles[i]["high"]    # Candle 3
+        c3_low  = candles[i]["low"]
 
-        if prev_low > next_high:   # Bullish FVG
-            fvgs.append({"type": "bullish", "top": prev_low, "bottom": next_high})
-        if prev_high < next_low:   # Bearish FVG
-            fvgs.append({"type": "bearish", "top": next_low, "bottom": prev_high})
+        if c3_low > c1_high:   # Bullish FVG — gap zone is [c1_high, c3_low]
+            fvgs.append({"type": "bullish", "top": c3_low, "bottom": c1_high})
+        if c3_high < c1_low:   # Bearish FVG — gap zone is [c3_high, c1_low]
+            fvgs.append({"type": "bearish", "top": c1_low, "bottom": c3_high})
     return fvgs
 
 def detect_liquidity_sweep(candles: list, atr: float) -> bool:

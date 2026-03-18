@@ -59,6 +59,15 @@ BT_MIN:
 BT_AUTO_TOGGLE: false
 BT_PERCENTILE_FILTER: false
 
+# ── Engine B (Naked Market Structure) thresholds ──────────────────────────────
+# NAKED_BT_MIN: Minimum confidence score from NakedEngine.simulate_trade to take a trade in backtest
+NAKED_BT_MIN: 1.8
+# NAKED_CONFIDENCE_THRESHOLD: Live scan minimum confidence for Engine B signals
+NAKED_CONFIDENCE_THRESHOLD: 1.8
+# NAKED_MAX_DAILY: Max Engine B trades per pair per day (live auto-trade cap)
+NAKED_MAX_DAILY: 3
+
+
 # Per-class live scan minimum confluence — execute button threshold
 # Recalibrated for multiplicative factor formula. Old additive thresholds (1.10–1.20) mapped
 # to ~0.88–0.96 in the new formula (multiplicative compresses inflated quality-driven scores).

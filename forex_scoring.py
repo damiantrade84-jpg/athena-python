@@ -480,11 +480,11 @@ def compute_forex_score(
         # 1. FVG confirmation
         fvgs = detect_fvg(h4_candles or [])
         current_price = h4_snap.get("close", 0)
+        # Check if current price falls within any FVG zone (proper SMC overlap)
         fvg_overlap = any(
-            not (z.get("upper", z.get("bbUpper", current_price)) < fvg["bottom"] or z.get("lower", z.get("bbLower", current_price)) > fvg["top"])
-            for z in [h4_snap] if fvgs
+            fvg["bottom"] <= current_price <= fvg["top"]
             for fvg in fvgs
-        )
+        ) if fvgs else False
         if fvg_overlap:
             fvg_bonus = 0.35
 

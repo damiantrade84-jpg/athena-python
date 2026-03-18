@@ -5475,44 +5475,52 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
             atr_list = calc_atr([c["high"] for c in h4_ctx], [c["low"] for c in h4_ctx], [c["close"] for c in h4_ctx], 14)
             atr = atr_list[-1] if atr_list and atr_list[-1] else (current_price * 0.01)
             
-            signal = naked_engine.simulate_trade(
-                d1_candles=candles_d1,
-                h4_candles=h4_ctx,
-                h1_candles=candles_h1, # Highly simplified reference slice
-                current_price=current_price,
-                direction="LONG",  # or test both directions
-                atr=atr,
-                regime_label="TRENDING",  # Hardcoded placeholder
-                confidence_threshold=CONFIG.get("NAKED_BT_MIN", 1.8)
-            )
-            
-            if signal:
-                entry = signal["entry_price"]
-                sl = signal["sl"]
-                tp = signal["tp1"]
-                r_multiple = 1.8 if current_price > tp else -1.0  # Simplified
+            # Test BOTH directions (P1 fix: was LONG-only)
+            for direction in ["LONG", "SHORT"]:
+                signal = naked_engine.simulate_trade(
+                    d1_candles=candles_d1,
+                    h4_candles=h4_ctx,
+                    h1_candles=candles_h1,
+                    current_price=current_price,
+                    direction=direction,
+                    atr=atr,
+                    regime_label="TRENDING",
+                    confidence_threshold=CONFIG.get("NAKED_BT_MIN", 1.8)
+                )
                 
-                trades.append({
-                    "entry": entry,
-                    "exit": tp if r_multiple > 0 else sl,
-                    "r_multiple": r_multiple,
-                    "score": signal.get("score", 0)
-                })
+                if signal:
+                    entry = signal["entry_price"]
+                    sl = signal["sl"]
+                    tp = signal["tp1"]
+                    
+                    # Forward-walk outcome using future bars
+                    r_multiple = -1.0
+                    for f_idx in range(i+1, min(i+12, len(candles_h4))):
+                        future = candles_h4[f_idx]
+                        if direction == "LONG":
+                            if float(future["low"]) <= sl: r_multiple = -1.0; break
+                            if float(future["high"]) >= tp: r_multiple = 2.0; break
+                        else:
+                            if float(future["high"]) >= sl: r_multiple = -1.0; break
+                            if float(future["low"]) <= tp: r_multiple = 2.0; break
+                    
+                    trades.append({
+                        "entry": entry,
+                        "exit": tp if r_multiple > 0 else sl,
+                        "r_multiple": r_multiple,
+                        "score": signal.get("score", 0)
+                    })
+                    break  # Only take first valid direction per bar
                 
     # ── Forex backtest path (Engine B only) ─────────────────────────────────────
     elif pair_type == "forex":
         from forex_scoring import compute_forex_score
-        from indicators import map_indicators
-        from __main__ import _find_closest_bar
-        import math
         
-        # Pre-map indicators for snapshot building
-        d1_mapped = map_indicators(candles_d1)
-        h4_mapped = map_indicators(candles_h4)
-        h1_mapped = map_indicators(candles_h1)
-
+        # Build indicator snapshots using the same proven pattern as Engine A
+        from scoring import calc_indicators_with_normalized
+        
         h4_window = candles_h4
-        h1_window = candles_h1
+        h1_window = candles_h1 or []
 
         for i in range(50, len(h4_window) - 5):  # Warmup + forward simulation
             current_price = float(h4_window[i]["close"])
@@ -5524,25 +5532,44 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
             h4_time = h4_window[i].get("time") or h4_window[i].get("datetime")
             if not h4_time: continue
 
-            # Find matching context arrays
-            _d1_idx = _find_closest_bar(d1_mapped, h4_time, max(0, int(i/6)))
-            d1i_ctx = d1_mapped[_d1_idx].get("snap", {}) if _d1_idx >= 0 else {}
+            # Build snaps directly from sliced candle arrays (no broken helpers)
+            try:
+                h4i_full = calc_indicators_with_normalized(h4_ctx, "forex")
+                h4i = h4i_full.get("snap", {})
+            except Exception:
+                h4i = {}
+            h4i["atr"] = atr  # ensure atr exists
             
-            _h1_idx = _find_closest_bar(h1_mapped, h4_time, min(len(h1_mapped)-1, i*4))
-            h1i = h1_mapped[_h1_idx].get("snap", {}) if _h1_idx >= 0 else {}
+            try:
+                d1i_ctx = calc_indicators_with_normalized(candles_d1, "forex").get("snap", {})
+            except Exception:
+                d1i_ctx = {}
             
-            h4i = h4_mapped[i].get("snap", {})
-            h4i["atr"] = atr # ensure atr exists
+            # Slice H1 candles up to the current H4 bar's time
+            import bisect
+            h1_slice_end = len(h1_window)
+            try:
+                h4_ts = h4_time if isinstance(h4_time, str) else str(h4_time)
+                h1_times = [c.get("time", c.get("datetime", "")) for c in h1_window]
+                h1_slice_end = bisect.bisect_right(h1_times, h4_ts)
+            except Exception:
+                pass
+            h1_ctx = h1_window[:h1_slice_end] if h1_slice_end > 50 else h1_window[:min(len(h1_window), i*4+1)]
+            
+            try:
+                h1i = calc_indicators_with_normalized(h1_ctx, "forex").get("snap", {})
+            except Exception:
+                h1i = {}
             
             result = compute_forex_score(
                 d1_snap=d1i_ctx,
                 h4_snap=h4i,
                 h1_snap=h1i,
-                h1_candles=h1_window[:_h1_idx+1],
+                h1_candles=h1_ctx,
                 pair=pair,
                 bar_time=h4_time,
                 backtest_mode=True,
-                h4_candles=h4_window[:i+1]
+                h4_candles=h4_ctx
             )
 
             if result.final_score >= CONFIG.get("BT_MIN", {}).get("forex", 0.60):
