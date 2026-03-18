@@ -249,8 +249,9 @@ class NakedEngine:
                 for fvg in fvgs
             )
         
-        # 2. Immediate M30/H1 Sequence
+        # 2. Immediate H1 Sequence and Macro H4 Sequence
         sequence_data = self._determine_sequence(h1_highs, h1_lows, atr, direction)
+        macro_seq_data = self._determine_sequence(h4_highs, h4_lows, atr, direction)
         
         # 3. BOS and Sweep Detection
         bos_data = self._detect_bos(h1_highs, h1_lows, atr)
@@ -318,6 +319,7 @@ class NakedEngine:
             "nearest_resistance_zone": nearest_res,
             "nearest_support_zone": nearest_sup,
             "current_swing_sequence": sequence_data["state"],
+            "macro_swing_sequence": macro_seq_data["state"],
             "recommended_stop_loss": sl,
             "recommended_take_profit": tp,
             "distance_to_res": (nearest_res["lower"] - current_price) if nearest_res else None,
@@ -332,27 +334,43 @@ class NakedEngine:
 
     def calculate_confidence(self, res: dict, current_price: float, direction: str) -> dict:
         """
-        Engine B confidence score out of 3.0 — fully earned, no free base point.
-        Structure points: up to 1.0 (swing sequence alignment)
+        Engine B confidence score out of 3.0 + catalyst bonus.
+        Structure points: up to 1.0 (swing sequence alignment) — MANDATORY gatekeeper
         RR points: up to 1.0 (based on actual risk:reward)
         Room points: up to 1.0 (space before hitting opposing zone)
+        Catalyst bonus: up to 0.8 (liquidity sweep + FVG overlap)
+
+        If structure is not aligned (no HH_HL or LH_LL), Room and RR are
+        multiplied by 0.3 so the max possible score without structure is
+        ~0.6 + catalyst — well below the 1.8 threshold unless a real
+        SMC catalyst is present.
         """
         atr = res.get("atr", 1.0)
         atr_val = atr if atr > 0 else 0.0001
 
-        # Structure points — is swing sequence aligned with direction?
-        seq = res.get("current_swing_sequence", "")
+        # ── Structure points — swing sequence must align with direction ──
+        # Both H4 macro-trend and H1 micro-trend must align for full points.
+        h1_seq = res.get("current_swing_sequence", "")
+        h4_seq = res.get("macro_swing_sequence", "")
         bos = res.get("bos_confirmed", False)
-        if direction == "LONG" and seq == "HH_HL":
-            struct_score = 1.0 if bos else 0.7
-        elif direction == "SHORT" and seq == "LH_LL":
-            struct_score = 1.0 if bos else 0.7
-        elif seq in ("EXPANSION", "CONTRACTION"):
-            struct_score = 0.4
+        
+        if direction == "LONG" and h1_seq == "HH_HL":
+            if h4_seq == "HH_HL":
+                struct_score = 1.0 if bos else 0.8
+            else:
+                struct_score = 0.5  # H1 is bullish but H4 does not agree
+        elif direction == "SHORT" and h1_seq == "LH_LL":
+            if h4_seq == "LH_LL":
+                struct_score = 1.0 if bos else 0.8
+            else:
+                struct_score = 0.5  # H1 is bearish but H4 does not agree
         else:
-            struct_score = 0.1  # RANGING — weak structure
+            struct_score = 0.0  # No directional alignment = zero structure
 
-        # Room to Move (points out of 1.0)
+        # Penalty multiplier: if structure is weak, slash Room & RR contribution
+        multiplier = 1.0 if struct_score >= 0.7 else 0.3
+
+        # ── Room to Move (points out of 1.0) ──
         room_score = 0.3  # default: no zone data
         if direction == "LONG" and res.get("distance_to_res"):
             dist = res["distance_to_res"]
@@ -360,8 +378,9 @@ class NakedEngine:
         elif direction == "SHORT" and res.get("distance_to_sup"):
             dist = res["distance_to_sup"]
             room_score = min(1.0, (dist / atr_val) / 2.0)
+        room_score *= multiplier
 
-        # Risk Reward (points out of 1.0)
+        # ── Risk Reward (points out of 1.0) ──
         sl = res.get("recommended_stop_loss")
         tp = res.get("recommended_take_profit")
         rr_score = 0.2  # default: no levels
@@ -371,16 +390,26 @@ class NakedEngine:
             if sl_dist > 0:
                 rr = tp_dist / sl_dist
                 rr_score = min(1.0, rr / 2.0)  # 1:2 RR = full point
+        rr_score *= multiplier
 
-        total_score = round(struct_score + room_score + rr_score, 2)
-        pct = min(100, int((total_score / 3.0) * 100))
+        # ── Catalyst bonus (SMC edge — sweeps and FVGs can rescue a trade) ──
+        catalyst_bonus = 0.0
+        if res.get("liquidity_sweep"):
+            catalyst_bonus += 0.5
+        if res.get("fvg_overlap"):
+            catalyst_bonus += 0.3
+
+        total_score = round(struct_score + room_score + rr_score + catalyst_bonus, 2)
+        max_possible = 3.0 + 0.8  # 3.0 base + 0.8 catalyst
+        pct = min(100, int((total_score / max_possible) * 100))
 
         return {
             "score": total_score,
             "pct": pct,
             "struct_points": round(struct_score, 2),
             "rr_points": round(rr_score, 2),
-            "room_points": round(room_score, 2)
+            "room_points": round(room_score, 2),
+            "catalyst_bonus": round(catalyst_bonus, 2)
         }
 
     def check_macro_correlation(self, asset_close_series: list, dxy_close_series: list, direction: str) -> bool:
