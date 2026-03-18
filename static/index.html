@@ -490,6 +490,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
         <option value="scalp">Style: Scalp (H1 iteration)</option>
         <option value="intraday">Style: Intraday (H4 iteration)</option>
         <option value="swing">Style: Swing (D1 iteration)</option>
+        <option value="naked">Style: Naked (Engine B / Forex SMC)</option>
       </select>
       <select class="bt-select" id="btClassSelect" title="Asset class filter">
         <option value="">All Classes</option>
@@ -877,12 +878,20 @@ async function runBacktest() {
     if(bar){var w=parseInt(bar.style.width)||15;if(w<90)bar.style.width=(w+1)+'%';}
   },2000);
   try {
+    var API_URL = '/api/backtest';
     var payload = {style: btStyle};
-    if (sym) payload.symbol = sym;
-    var btClass = (document.getElementById('btClassSelect') || {}).value || '';
-    if (!sym && btClass) payload.asset_class = btClass;
+    
+    if (btStyle === 'naked') {
+        API_URL = '/api/backtest-naked';
+        if (sym) payload.pair = sym;
+    } else {
+        if (sym) payload.symbol = sym;
+        var btClass = (document.getElementById('btClassSelect') || {}).value || '';
+        if (!sym && btClass) payload.asset_class = btClass;
+    }
+    
     var body = JSON.stringify(payload);
-    var resp = await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:body});
+    var resp = await fetch(API_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:body});
     clearInterval(progInterval);
     if(!resp.ok) throw new Error('Server error: HTTP '+resp.status);
     var data = await resp.json();
