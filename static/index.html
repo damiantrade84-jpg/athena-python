@@ -485,13 +485,20 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
       <select class="bt-select" id="btPairSelect">
         <option value="">All Pairs (Leaderboard)</option>
       </select>
-      <select class="bt-select" id="btStyleSelect" title="Backtest style">
-        <option value="auto">Style: Auto (Crypto/Forex Intraday)</option>
-        <option value="scalp">Style: Scalp (H1 iteration)</option>
-        <option value="intraday">Style: Intraday (H4 iteration)</option>
-        <option value="swing">Style: Swing (D1 iteration)</option>
-        <option value="naked">Style: Naked (Engine B / Forex SMC)</option>
-      </select>
+    
+      <!-- NEW: Clear Engine A / Engine B Selector -->
+      <div style="display:flex;gap:8px;align-items:center;min-width:280px">
+        <label style="font-size:11px;color:var(--muted);font-family:'Space Mono',monospace;white-space:nowrap">ENGINE:</label>
+        <div class="btn-group" role="group" style="flex:1;display:flex;gap:4px">
+          <button type="button" id="engineA-btn" 
+                  class="bt-btn active" style="font-size:12px;padding:9px 16px;flex:1;background:rgba(0,212,255,0.15);border:1px solid rgba(0,212,255,0.3);color:var(--accent)"
+                  onclick="selectBacktestEngine('A')">Engine A (Factor)</button>
+          <button type="button" id="engineB-btn" 
+                  class="bt-btn" style="font-size:12px;padding:9px 16px;flex:1;background:transparent;border:1px solid var(--border);color:var(--muted)"
+                  onclick="selectBacktestEngine('B')">Engine B (Naked)</button>
+        </div>
+      </div>
+    
       <select class="bt-select" id="btClassSelect" title="Asset class filter">
         <option value="">All Classes</option>
         <option value="crypto">Crypto Only</option>
@@ -500,8 +507,9 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
         <option value="commodity">Commodities Only</option>
         <option value="index">Indices Only</option>
       </select>
+      
       <button class="bt-btn" id="btRunBtn" onclick="runBacktest()">&#9654; RUN BACKTEST</button>
-      <span style="font-size:11px;color:var(--muted);font-family:'Space Mono',monospace" id="btNote">Auto mode uses intraday for crypto/forex and swing for slower markets.</span>
+      <span style="font-size:11px;color:var(--muted);font-family:'Space Mono',monospace" id="btNote">Engine A = Quantitative Factor Model</span>
     </div>
     <div id="btContent">
       <div class="empty-state">
@@ -858,9 +866,40 @@ async function loadPerformance() {
   }
 }
 
+window.selectedBacktestEngine = 'A';
+
+function selectBacktestEngine(engine) {
+  window.selectedBacktestEngine = engine;
+  var btnA = document.getElementById('engineA-btn');
+  var btnB = document.getElementById('engineB-btn');
+  var note = document.getElementById('btNote');
+  
+  if (engine === 'A') {
+    btnA.style.background = 'rgba(0,212,255,0.15)';
+    btnA.style.borderColor = 'rgba(0,212,255,0.3)';
+    btnA.style.color = 'var(--accent)';
+    
+    btnB.style.background = 'transparent';
+    btnB.style.borderColor = 'var(--border)';
+    btnB.style.color = 'var(--muted)';
+    
+    note.textContent = "Engine A = Quantitative Factor Model";
+  } else {
+    btnB.style.background = 'rgba(0,230,118,0.15)';
+    btnB.style.borderColor = 'rgba(0,230,118,0.3)';
+    btnB.style.color = 'var(--bull)';
+    
+    btnA.style.background = 'transparent';
+    btnA.style.borderColor = 'var(--border)';
+    btnA.style.color = 'var(--muted)';
+    
+    note.textContent = "Engine B = Pure Market Structure (FVG + Liquidity + Volume)";
+  }
+}
+
 async function runBacktest() {
   var sym = document.getElementById('btPairSelect').value;
-  var btStyle = (document.getElementById('btStyleSelect') || {}).value || 'auto';
+  var btStyle = window.selectedBacktestEngine === 'B' ? 'naked' : 'auto';
   var btn = document.getElementById('btRunBtn');
   btn.disabled = true;
   btn.textContent = 'Running...';
