@@ -178,6 +178,15 @@ CONFIG: dict = {
     "LEARNING_MIN_TRADES":      5,      # Min trades before context injected into AI
     "LEARNING_LOOKBACK_DAYS":   90,     # Days of history to query for context
     "META_ANALYSIS_ENABLED":    True,   # Weekly meta-analysis via Claude
+    # ── Engine B (Naked Scalp) ────────────────────────────────────────────────
+    "NAKED_ENGINE": {
+        "zone_multipliers": {
+            "TRENDING":        {"upper": 0.3, "lower": 1.0, "sl": 1.5},
+            "RANGING":         {"upper": 0.5, "lower": 1.2, "sl": 1.0},
+            "HIGH_VOLATILITY": {"upper": 0.4, "lower": 1.5, "sl": 2.5},
+            "LOW_VOLATILITY":  {"upper": 0.2, "lower": 0.8, "sl": 0.8},
+        }
+    },
 }
 
 # Apply YAML overrides — deep-merge dicts, overwrite scalars

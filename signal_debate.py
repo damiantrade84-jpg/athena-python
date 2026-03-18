@@ -155,7 +155,7 @@ def _get_debate_case(client, context: str, direction: str,
 
     try:
         response = client.responses.create(
-            model="grok-4.20-multi-agent-beta-0309",
+            model="grok-4-1-fast-reasoning",
             max_output_tokens=400,
             input=prompt
         )
@@ -190,7 +190,7 @@ def _get_judge_verdict(client, context: str, direction: str,
 
     try:
         response = client.responses.create(
-            model="grok-4.20-multi-agent-beta-0309",
+            model="grok-4-1-fast-reasoning",
             max_output_tokens=300,
             input=prompt
         )

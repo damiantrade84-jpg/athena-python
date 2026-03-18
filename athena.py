@@ -3147,8 +3147,8 @@ def fetch_div_split_context():
 
     now = time.time()
 
-    if _divsplit_cache["data"] and (now - _divsplit_cache["ts"]) < _DIVSPLIT_TTL:
-
+    if _divsplit_cache["ts"] > 0 and (now - _divsplit_cache["ts"]) < _DIVSPLIT_TTL:
+        log.debug(f"[DIVS] Cache hit — age {int(now - _divsplit_cache['ts'])}s")
         return _divsplit_cache["data"]
 
     _key = os.environ.get("EODHD_KEY", "")
@@ -3249,7 +3249,9 @@ def fetch_div_split_context():
 
     _divsplit_cache = {"data": result, "ts": now}
 
-    log.info(f"[DIVS] Checked {len(_DIV_SPLIT_PAIRS)} pairs â€” {len(result)} with upcoming events")
+    log.info(f"[DIVS] Checked {len(_DIV_SPLIT_PAIRS)} pairs — {len(result)} with upcoming events")
+
+    log.info(f"[DIVS] Cache populated — {len(_DIV_SPLIT_PAIRS)} pairs, {len(result)} events found. Next refresh in 24h.")
 
     return result
 
@@ -3596,16 +3598,24 @@ def _build_signal_message(signal: dict, news_ctx: dict | None,
 
 
     # === TECHNICALS ===
-
     votes = signal.get("votes", {})
-
     vote_lines = []
+    
+    # Flatten nested votes dynamically (e.g. from old frontend cache or UI-structured payloads)
+    flat_votes = {}
+    for k, v in votes.items():
+        if isinstance(v, dict):
+            for sub_k, sub_v in v.items():
+                flat_votes[sub_k] = sub_v
+        else:
+            flat_votes[k] = v
 
-    for vname, vval in votes.items():
-
-        sign = f"+{vval}" if vval > 0 else str(vval)
-
-        vote_lines.append(f"  {vname}: {sign}")
+    for vname, vval in flat_votes.items():
+        try:
+            sign = f"+{vval}" if float(vval) > 0 else str(vval)
+            vote_lines.append(f"  {vname}: {sign}")
+        except (ValueError, TypeError):
+            vote_lines.append(f"  {vname}: {vval}")
 
     lines.append("")
 
@@ -3632,11 +3642,8 @@ def _build_signal_message(signal: dict, news_ctx: dict | None,
     lines.append("")
 
     lines.append("=== LEVELS ===")
-
     lines.append(f"Entry: {signal['price']} | SL: {signal['sl']} ({signal.get('slPct', '?')}%) | "
-
                  f"TP1: {signal['tp1']} ({signal['rr1']}R) | TP2: {signal['tp2']} ({signal['rr2']}R)")
-
     lines.append(f"ATR: {signal['atr']}")
 
     fib = signal.get("fib")
@@ -3672,7 +3679,6 @@ def _build_signal_message(signal: dict, news_ctx: dict | None,
     lines.append("=== CONTEXT (for your analysis, NOT scored) ===")
 
     lines.append(f"BTC bias: {signal.get('btcBias', 'n/a')} | "
-
                  f"Session: {signal['session']['name']} ({signal['session']['quality']})")
 
 
@@ -4335,6 +4341,7 @@ def backtest_pair(pair, style="auto"):
                         pair=pair,
                         bar_time=d1_raw[i]["time"],  # use actual current D1 bar datetime
                         backtest_mode=True,  # bypass session filter in backtest
+                        h4_candles=h4_window,
                     )
                     res = {
                         "final_score": _fx.final_score,
@@ -5398,6 +5405,183 @@ def backtest_pair(pair, style="auto"):
     }
 
 
+def _format_backtest_results(trades, pair, engine_type="NAKED"):
+    if not trades:
+        return {"error": f"No signals generated for {pair['display']} in NAKED mode"}
+    wins   = [t for t in trades if t["r_multiple"] > 0]
+    losses = [t for t in trades if t["r_multiple"] <= 0]
+    gross_profit = sum(t["r_multiple"] for t in wins)
+    gross_loss   = abs(sum(t["r_multiple"] for t in losses))
+    win_rate     = round(len(wins) / len(trades) * 100, 1) if trades else 0
+    profit_factor = round(gross_profit / gross_loss, 2) if gross_loss > 0 else None
+    total_r      = round(sum(t["r_multiple"] for t in trades), 2)
+    r_values     = [t["r_multiple"] for t in trades]
+    avg_r        = round(total_r / len(trades), 3) if trades else 0
+    _var = sum((r - avg_r)**2 for r in r_values) / (len(r_values) - 1) if len(r_values) > 1 else 0
+    sqn  = round(max(-10, min(10, (avg_r / _var**0.5) * (len(trades)**0.5))), 2) if len(trades) > 1 and avg_r != 0 and _var > 0 else 0
+    
+    result = {
+        "pair": pair["display"], "symbol": pair["symbol"], "type": pair["type"],
+        "totalTrades": len(trades), "wins": len(wins), "losses": len(losses),
+        "winRate": win_rate, "profitFactor": profit_factor,
+        "totalR": total_r, "expectancy": avg_r, "sqn": sqn,
+        "maxDrawdownPct": 0.0, "mcDD": {}, "scoreBands": {}, "regimeStats": {}, "funnel": {},
+        "btStyle": "naked", "engine": engine_type
+    }
+    
+    # ── NEW: Forex-specific backtest summary for the 3 upgrades ───────────────
+    if pair.get("type") == "forex":
+        fvg_avg = sum(t.get("fvg_bonus", 0) for t in trades) / len(trades) if trades else 0
+        liquidity_pct = sum(1 for t in trades if t.get("liquidity_sweep")) / len(trades) * 100 if trades else 0
+        volume_avg = sum(t.get("volume_strength", 0) for t in trades) / len(trades) if trades else 0
+        fvg_overlap_pct = sum(1 for t in trades if t.get("fvg_overlap")) / len(trades) * 100 if trades else 0
+
+        result.update({
+            "fvg_avg_bonus": round(fvg_avg, 3),
+            "liquidity_sweep_pct": round(liquidity_pct, 1),
+            "avg_volume_strength": round(volume_avg, 3),
+            "fvg_overlap_pct": round(fvg_overlap_pct, 1),
+            "engine": "FOREX"  # clearly labels this as Engine B
+        })
+        
+    return result
+
+# ── NEW: Engine B (Naked) Backtest Function ───────────────────────────────
+def backtest_pair_naked(pair: dict, style: str = "naked"):
+    """Separate backtest loop for NakedEngine (Engine B).
+    Completely isolated from Engine A backtest_pair()."""
+    from market_structure import engine as naked_engine
+    from indicators import calc_atr
+    
+    candles_d1 = fetch_candles(pair, "D1", CONFIG.get("D1_CANDLES", 600))
+    candles_h4 = fetch_candles(pair, "H4", CONFIG.get("H4_CANDLES", 1000))
+    candles_h1 = fetch_candles(pair, "H1", CONFIG.get("H1_CANDLES", 2000))
+    
+    if not candles_d1 or not candles_h4:
+        return None
+    
+    pair_type = pair.get("type", "crypto")
+    
+    trades = []
+    
+    # ── Crypto path (Naked Engine structure loop) ───────────────────────────────
+    if pair_type != "forex":
+        # Walk forward on H4 (primary timeframe for NakedEngine)
+        for i in range(50, len(candles_h4) - 5):  # Warmup + forward simulation
+            h4_ctx = candles_h4[:i+1]
+            current_price = float(candles_h4[i]["close"])
+            
+            # Calculate ATR on H4
+            atr_list = calc_atr([c["high"] for c in h4_ctx], [c["low"] for c in h4_ctx], [c["close"] for c in h4_ctx], 14)
+            atr = atr_list[-1] if atr_list and atr_list[-1] else (current_price * 0.01)
+            
+            signal = naked_engine.simulate_trade(
+                d1_candles=candles_d1,
+                h4_candles=h4_ctx,
+                h1_candles=candles_h1, # Highly simplified reference slice
+                current_price=current_price,
+                direction="LONG",  # or test both directions
+                atr=atr,
+                regime_label="TRENDING",  # Hardcoded placeholder
+                confidence_threshold=CONFIG.get("NAKED_BT_MIN", 1.8)
+            )
+            
+            if signal:
+                entry = signal["entry_price"]
+                sl = signal["sl"]
+                tp = signal["tp1"]
+                r_multiple = 1.8 if current_price > tp else -1.0  # Simplified
+                
+                trades.append({
+                    "entry": entry,
+                    "exit": tp if r_multiple > 0 else sl,
+                    "r_multiple": r_multiple,
+                    "score": signal.get("score", 0)
+                })
+                
+    # ── Forex backtest path (Engine B only) ─────────────────────────────────────
+    elif pair_type == "forex":
+        from forex_scoring import compute_forex_score
+        from indicators import map_indicators
+        from __main__ import _find_closest_bar
+        import math
+        
+        # Pre-map indicators for snapshot building
+        d1_mapped = map_indicators(candles_d1)
+        h4_mapped = map_indicators(candles_h4)
+        h1_mapped = map_indicators(candles_h1)
+
+        h4_window = candles_h4
+        h1_window = candles_h1
+
+        for i in range(50, len(h4_window) - 5):  # Warmup + forward simulation
+            current_price = float(h4_window[i]["close"])
+            h4_ctx = h4_window[:i+1]
+            
+            atr_list = calc_atr([c["high"] for c in h4_ctx], [c["low"] for c in h4_ctx], [c["close"] for c in h4_ctx], 14)
+            atr = atr_list[-1] if atr_list and atr_list[-1] else (current_price * 0.01)
+
+            h4_time = h4_window[i].get("time") or h4_window[i].get("datetime")
+            if not h4_time: continue
+
+            # Find matching context arrays
+            _d1_idx = _find_closest_bar(d1_mapped, h4_time, max(0, int(i/6)))
+            d1i_ctx = d1_mapped[_d1_idx].get("snap", {}) if _d1_idx >= 0 else {}
+            
+            _h1_idx = _find_closest_bar(h1_mapped, h4_time, min(len(h1_mapped)-1, i*4))
+            h1i = h1_mapped[_h1_idx].get("snap", {}) if _h1_idx >= 0 else {}
+            
+            h4i = h4_mapped[i].get("snap", {})
+            h4i["atr"] = atr # ensure atr exists
+            
+            result = compute_forex_score(
+                d1_snap=d1i_ctx,
+                h4_snap=h4i,
+                h1_snap=h1i,
+                h1_candles=h1_window[:_h1_idx+1],
+                pair=pair,
+                bar_time=h4_time,
+                backtest_mode=True,
+                h4_candles=h4_window[:i+1]
+            )
+
+            if result.final_score >= CONFIG.get("BT_MIN", {}).get("forex", 0.60):
+                # Calculate SL/TP dynamically since compute_forex_score only returns score and direction
+                direction = result.direction
+                atr_dist = atr * 1.5
+                sl = current_price - atr_dist if direction == "LONG" else current_price + atr_dist
+                tp1 = current_price + (atr_dist * 2) if direction == "LONG" else current_price - (atr_dist * 2)
+                
+                # Check outcome simply
+                r_multiple = -1.0
+                for f_idx in range(i+1, min(i+12, len(h4_window))):
+                    future = h4_window[f_idx]
+                    if direction == "LONG":
+                        if float(future["low"]) <= sl: r_multiple = -1.0; break
+                        if float(future["high"]) >= tp1: r_multiple = 2.0; break
+                    else:
+                        if float(future["high"]) >= sl: r_multiple = -1.0; break
+                        if float(future["low"]) <= tp1: r_multiple = 2.0; break
+                        
+                # NEW: Capture the 3 new components
+                trade_record = {
+                    "entry": current_price,
+                    "sl": sl,
+                    "tp1": tp1,
+                    "direction": result.direction,
+                    "score": result.final_score,
+                    "r_multiple": r_multiple,
+                    
+                    # ── NEW COMPONENTS FROM UPGRADES ─────────────────────────────
+                    "fvg_bonus": result.components.get("fvg_bonus", 0.0),
+                    "liquidity_sweep": result.components.get("liquidity_sweep", False),
+                    "volume_strength": result.components.get("volume_strength", 0.0),
+                    "fvg_overlap": result.components.get("fvg_overlap", False),
+                    # ─────────────────────────────────────────────────────────────
+                }
+                trades.append(trade_record)
+                
+    return _format_backtest_results(trades, pair, engine_type="NAKED")
 
 def run_full_backtest(style="auto", asset_class: str | None = None):
 
@@ -5983,8 +6167,9 @@ def api_quick_execute():
             if not account: return jsonify({"error": "MT5 not connected"}), 400
             pos_result = mt5_get_positions()
             positions = pos_result.get("positions", []) if isinstance(pos_result, dict) else (pos_result or [])
-            symbol_info = mt5_get_symbol_info(sig.get("pair") or sig.get("symbol"))
-            if not symbol_info: return jsonify({"error": "Symbol not on broker"}), 400
+            # mt5_get_symbol_info takes the Athena display name to map to the internal MT5 dictionary
+            symbol_info = mt5_get_symbol_info(sig.get("display") or sig.get("pair"))
+            if not symbol_info or symbol_info.get("error"): return jsonify({"error": "Symbol not on broker"}), 400
             executor = mt5_execute
             
         approval = risk_check(
@@ -6025,13 +6210,27 @@ def api_scan_naked():
     engine = NakedEngine()
     
     import time
+    
+    def _fetch_cached_only(pair, tf, limit):
+        """For naked scan: check in-memory TTL cache first, only call live if truly expired."""
+        key = (pair.get("symbol", pair.get("display")), tf)
+        now = time.time()
+        with _candle_cache_lock:
+            entry = _candle_cache.get(key)
+            if entry is not None:
+                candles, expiry = entry
+                if now < expiry:
+                    return candles
+        # Cache miss — call normal fetch_candles (will populate cache for next time)
+        return fetch_candles(pair, tf, limit)
+    
     for pair in candidate_pairs:
         try:
             # Yield CPU to prevent Flask thread locking during synchronous scan
             time.sleep(0.1) 
-            d1 = fetch_candles(pair, "D1", CONFIG.get("D1_CANDLES", 220))
-            h4 = fetch_candles(pair, "H4", CONFIG.get("H4_CANDLES", 220))
-            h1 = fetch_candles(pair, "H1", CONFIG.get("H1_CANDLES", 220))
+            d1 = _fetch_cached_only(pair, "D1", CONFIG.get("D1_CANDLES", 220))
+            h4 = _fetch_cached_only(pair, "H4", CONFIG.get("H4_CANDLES", 220))
+            h1 = _fetch_cached_only(pair, "H1", CONFIG.get("H1_CANDLES", 220))
             
             if not d1 or not h4 or not h1:
                 continue
@@ -6059,6 +6258,26 @@ def api_scan_naked():
             for direction in ["LONG", "SHORT"]:
                 res = engine.analyze_structure(d1, h4, h1, current_price, direction, atr)
                 
+                # Displacement filter: self-calibrating multiplier based on body consistency
+                # Ranging markets (tight bodies) use 1.1x, volatile markets use up to 1.3x
+                h1_bodies = [abs(float(c["close"]) - float(c["open"])) for c in h1[-20:]]
+                if len(h1_bodies) >= 10:
+                    avg_body = sum(h1_bodies[:-3]) / max(len(h1_bodies[:-3]), 1)
+                    if avg_body > 0:
+                        body_std = (sum((b - avg_body) ** 2 for b in h1_bodies[:-3]) / max(len(h1_bodies[:-3]), 1)) ** 0.5
+                        cv = body_std / avg_body  # coefficient of variation: low=ranging, high=volatile
+                        # cv < 0.4 = compressed/ranging → threshold 1.1x (easier to pass)
+                        # cv 0.4-0.8 = normal → threshold 1.2x
+                        # cv > 0.8 = volatile/trending → threshold 1.3x (stricter, only clear impulse)
+                        disp_mult = 1.1 if cv < 0.4 else 1.3 if cv > 0.8 else 1.2
+                        recent_bodies = h1_bodies[-3:]
+                        has_displacement = any(b >= avg_body * disp_mult for b in recent_bodies)
+                        log.info(f"[NAKED-DISP] {pair.get('display')} {direction}: cv={cv:.2f} mult={disp_mult} avg={avg_body:.5f} recent_max={max(recent_bodies):.5f} pass={has_displacement}")
+                    else:
+                        has_displacement = True
+                else:
+                    has_displacement = True
+                
                 if res.get("structural_verdict") == "CLEAR":
                     seq = res.get("current_swing_sequence", "")
                     
@@ -6070,7 +6289,7 @@ def api_scan_naked():
                     else:
                         valid = False
                         
-                    if valid:
+                    if valid and has_displacement:
                         res["current_price"] = current_price
                         res["symbol"] = pair.get("symbol")
                         res["display"] = pair.get("display")
@@ -6125,7 +6344,7 @@ def api_scan_naked():
                         }
                         results.append(signal)
         except Exception as e:
-            log.warning(f"Error scanning naked {pair['display']}: {e}")
+            log.warning(f"[NAKED-SCAN] Error on {pair['display']}: {e}", exc_info=True)
             continue
             
     return jsonify({"success": True, "signals": results})
@@ -7163,6 +7382,21 @@ def _auto_toggle_pair(pair, result):
 
 
 
+@app.route("/api/backtest-naked", methods=["POST"])
+def api_backtest_naked():
+    """Separate endpoint for Engine B backtesting."""
+    data = request.get_json(force=True, silent=True) or {}
+    pair_symbol = data.get("pair") or data.get("symbol")
+    if not pair_symbol:
+        return jsonify({"success": False, "error": "pair/symbol required"})
+    
+    pair = next((p for p in ALL_PAIRS if p["display"] == pair_symbol or p["symbol"] == pair_symbol), None)
+    if not pair:
+        return jsonify({"success": False, "error": f"pair {pair_symbol} not found"})
+    
+    result = backtest_pair_naked(pair, style="naked")
+    return jsonify(_json_safe(result) if "_json_safe" in globals() else result)
+
 @app.route("/api/backtest",methods=["POST"])
 
 def api_backtest():
@@ -7344,29 +7578,32 @@ def api_killswitch_pair(display: str):
                     "disabledPairs": sorted(_disabled_pairs)})
 
 
-
 @app.route("/api/killswitch/pair")
-
 def api_killswitch_pair_list():
-
     """List all disabled pairs."""
-
     return jsonify({"disabledPairs": sorted(_disabled_pairs), "activePairs": len(ACTIVE_PAIRS)})
 
-
+def _update_yaml_toggle(state: bool):
+    try:
+        import os, re
+        cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+        if os.path.exists(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            new_val = "true" if state else "false"
+            content = re.sub(r'^(AUTO_TRADE_ENABLED\s*:\s*)(true|false)(.*)$', 
+                             rf'\g<1>{new_val}\3', content, flags=re.IGNORECASE | re.MULTILINE)
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(content)
+    except Exception as e:
+        log.error(f"Failed to update config.yaml: {e}")
 
 @app.route("/api/test-mode", methods=["POST"])
-
 def api_test_mode():
-
     """Toggle test mode: drops score thresholds, enables force-execute on all signals. For demo accounts only."""
-
     global _test_mode
-
     d = request.json or {}
-
     action = d.get("action", "toggle")
-
     if action == "on": _test_mode = True
 
     elif action == "off": _test_mode = False
@@ -8139,28 +8376,25 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
                 h1_candles=_cf_h1c,
                 pair=pair,
                 bar_time=str(d1[-1].get("time", "") or d1[-1].get("datetime", "")),
+                h4_candles=_cf_h4c,
             )
-            # Map forex factor_scores to UI-compatible votes format
-            fx_votes = {
-                "screen1": {},  # D1 indicators
-                "screen2": {},  # H4 indicators  
-                "screen3": {}   # H1 indicators
-            }
+            # Map forex factor_scores to UI-compatible votes format (MUST be flat for AI consumption)
+            fx_votes = {}
             
-            # Map forex components to screen structure for UI display
+            # Map forex components to screen structure for UI display and AI logging
             components = _forex_result.components
             if components:
                 # Screen 1 (D1) - Trend gate and session
-                fx_votes["screen1"]["D1 Trend"] = 1.0 if components.get("trend_gate") else 0.0
-                fx_votes["screen1"]["Session"] = 1.0 if components.get("session_active") else 0.0
+                fx_votes["D1 Trend"] = 1.0 if components.get("trend_gate") else 0.0
+                fx_votes["Session"] = 1.0 if components.get("session_active") else 0.0
                 
                 # Screen 2 (H4) - Momentum and ADX
-                fx_votes["screen2"]["H4 Momentum"] = components.get("momentum_confirm", 0.0)
-                fx_votes["screen2"]["H4 ADX"] = components.get("adx_filter", 0.0)
+                fx_votes["H4 Momentum"] = components.get("momentum_confirm", 0.0)
+                fx_votes["H4 ADX"] = components.get("adx_filter", 0.0)
                 
                 # Screen 3 (H1) - Entry quality and COT
-                fx_votes["screen3"]["H1 Entry"] = components.get("entry_quality", 0.0)
-                fx_votes["screen3"]["COT Boost"] = components.get("cot_boost", 0.0)
+                fx_votes["H1 Entry"] = components.get("entry_quality", 0.0)
+                fx_votes["COT Boost"] = components.get("cot_boost", 0.0)
             
             res = {
                 "final_score":    _forex_result.final_score * 3.0,  # Scale 0-1 to 0-3 for UI consistency
@@ -8264,7 +8498,9 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
     if use_naked_engine and res["score"] >= get_pair_profile(pair).get("min_score", CONFIG.get("MIN_CONFLUENCE", 0.6)):
         try:
             from market_structure import engine as naked_engine
-            structure_data = naked_engine.analyze_structure(d1, h4, h1, float(price), direction, float(atr))
+            _reg = res.get("regime", {})
+            _regime_label = _reg.get("label", "RANGING") if isinstance(_reg, dict) else (str(_reg) if _reg else "RANGING")
+            structure_data = naked_engine.analyze_structure(d1, h4, h1, float(price), direction, float(atr), _regime_label)
             
             if structure_data and structure_data.get("structural_verdict") == "CLEAR":
                 _min_room = float(atr) * 1.5
@@ -9035,27 +9271,19 @@ def _check_score_decay() -> None:
     try:
 
         with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
-
             con.row_factory = sqlite3.Row
-
             open_trades = con.execute(
-
                 "SELECT pair, score, direction FROM audit_log "
-
-                "WHERE exit_price IS NULL AND ticket IS NOT NULL AND ticket != ''"
-
+                "WHERE exit_price IS NULL"
             ).fetchall()
 
         if not open_trades:
-
             return
 
         all_pairs = {p["display"]: p for p in ALL_PAIRS}
 
         for row in open_trades:
-
             pair_name = row["pair"]
-
             entry_score = row["score"] or 0
 
             pair = all_pairs.get(pair_name)
@@ -9093,16 +9321,9 @@ def _check_score_decay() -> None:
                 }
 
                 if decay >= 3:
-
                     log.warning(f"[DECAY] {pair_name}: score dropped {entry_score:.1f} → {cur_score:.1f} (Δ{decay:.1f}) — consider exit")
-
                 elif decay >= 1.5:
-
                     log.info(f"[DECAY] {pair_name}: score softened {entry_score:.1f} → {cur_score:.1f} (Δ{decay:.1f})")
-
-                if row["direction"] and result.get("direction") and row["direction"] != result.get("direction"):
-
-                    log.warning(f"[DECAY] {pair_name}: DIRECTION FLIP — entered {row['direction']}, now {result['direction']}")
 
             except Exception as e:
 

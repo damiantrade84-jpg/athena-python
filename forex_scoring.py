@@ -400,20 +400,14 @@ def compute_forex_score(
     pair:          dict,
     bar_time:      Optional[str] = None,
     backtest_mode: bool = False,
+    h4_candles:    Optional[list] = None,
 ) -> ForexScoreResult:
     """
-    Compute forex-specific confluence score.
-
-    Scoring formula:
-      TREND_PULLBACK signal:
-        live:     trend_score = 0.4 + entry_quality * 0.4 + cot_boost * 0.2
-        backtest: trend_score = 0.3 + entry_quality * 0.4 + cot_boost * 0.3
-        (trend_gate is binary — if False, score = 0)
-
-      LONDON_BREAKOUT signal (independent of trend gate):
-        final_score = breakout_score * (1.0 + cot_boost * 0.3)
-
-      Returns the higher of the two signal scores.
+    Updated with 3 new 2026 SMC edges:
+    1. FVG confirmation
+    2. Liquidity sweep detection
+    3. Volume strength at Asian range / Fib level
+    All new logic is isolated and only affects forex scoring.
     """
     result = ForexScoreResult()
 
@@ -473,15 +467,50 @@ def compute_forex_score(
         bo_final = 0.0
         bo_dir   = trend_dir
 
-    # ── Pick best signal ──────────────────────────────────────────────────
+    # ── NEW: 3 SMC Upgrades (2026 edge) ─────────────────────────────────────
+    try:
+        from indicators import detect_fvg, detect_liquidity_sweep, volume_strength_at_level, calc_fib
+        atr = h4_snap.get("atr", 0.0)
+        fvg_bonus = 0.0
+        liquidity_bonus = 0.0
+        volume_bonus = 0.0
+        
+        direction = trend_dir if trend_score >= bo_final else bo_dir
+
+        # 1. FVG confirmation
+        fvgs = detect_fvg(h4_candles or [])
+        current_price = h4_snap.get("close", 0)
+        fvg_overlap = any(
+            not (z.get("upper", z.get("bbUpper", current_price)) < fvg["bottom"] or z.get("lower", z.get("bbLower", current_price)) > fvg["top"])
+            for z in [h4_snap] if fvgs
+            for fvg in fvgs
+        )
+        if fvg_overlap:
+            fvg_bonus = 0.35
+
+        # 2. Liquidity sweep
+        if detect_liquidity_sweep(h1_candles or [], atr):
+            liquidity_bonus = 0.30
+
+        # 3. Volume strength at Asian range or Fib level
+        fib = calc_fib(h4_candles or [])
+        key_level = fib.get("fib618", current_price) if direction == "LONG" else fib.get("fib382", current_price)
+        volume_bonus = volume_strength_at_level(h1_candles or [], key_level) * 0.25
+    except Exception as e:
+        log.error(f"[FOREX SMC ERROR] {e}")
+        fvg_bonus, liquidity_bonus, volume_bonus, fvg_overlap = 0.0, 0.0, 0.0, False
+
+    # ── Final score with bonuses ────────────────────────────────────────────
     if trend_score >= bo_final:
-        result.final_score = round(trend_score, 4)
-        result.direction   = trend_dir
+        final_score = round(trend_score + fvg_bonus + liquidity_bonus + volume_bonus, 4)
+        result.direction = trend_dir
         result.signal_type = "TREND_PULLBACK" if trend_score > 0 else "NONE"
     else:
-        result.final_score = round(bo_final, 4)
-        result.direction   = bo_dir
+        final_score = round(bo_final + fvg_bonus + liquidity_bonus + volume_bonus, 4)
+        result.direction = bo_dir
         result.signal_type = "LONDON_BREAKOUT"
+
+    result.final_score = min(1.0, final_score)  # keep 0–1 scale
 
     result.components = {
         "trend_gate":        trend_ok,
@@ -497,6 +526,11 @@ def compute_forex_score(
         "breakout_final":    round(bo_final, 4),
         "hurst":             round(_hurst, 3),
         "regime":            _dfw.regime,
+        # newly added visibility metrics
+        "fvg_bonus":         round(fvg_bonus, 3),
+        "liquidity_sweep":   liquidity_bonus > 0,
+        "volume_strength":   round(volume_bonus, 3),
+        "fvg_overlap":       fvg_overlap,
     }
 
     return result

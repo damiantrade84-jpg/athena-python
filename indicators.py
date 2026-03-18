@@ -1079,3 +1079,50 @@ def calc_indicators_with_normalized(candles: list, asset_type: str = "crypto") -
 
     return result
 
+# ── Forex-specific helpers (safe, optional, never called by other engines) ──
+
+def detect_fvg(candles: list) -> list:
+    """Fair Value Gap detection — standard 3-candle pattern."""
+    fvgs = []
+    for i in range(2, len(candles)-1):
+        prev_low = candles[i-1]["low"]
+        prev_high = candles[i-1]["high"]
+        curr_low = candles[i]["low"]
+        curr_high = candles[i]["high"]
+        next_low = candles[i+1]["low"]
+        next_high = candles[i+1]["high"]
+
+        if prev_low > next_high:   # Bullish FVG
+            fvgs.append({"type": "bullish", "top": prev_low, "bottom": next_high})
+        if prev_high < next_low:   # Bearish FVG
+            fvgs.append({"type": "bearish", "top": next_low, "bottom": prev_high})
+    return fvgs
+
+def detect_liquidity_sweep(candles: list, atr: float) -> bool:
+    """Liquidity sweep: equal highs/lows + price wick beyond the equal level."""
+    if len(candles) < 10:
+        return False
+    highs = [c["high"] for c in candles[-8:]]
+    lows = [c["low"] for c in candles[-8:]]
+    last_high = highs[-1]
+    last_low = lows[-1]
+    prev_high = max(highs[:-1])
+    prev_low = min(lows[:-1])
+
+    if abs(last_high - prev_high) < atr * 0.25 and last_high > prev_high + atr * 0.1:
+        return True  # swept equal highs
+    if abs(last_low - prev_low) < atr * 0.25 and last_low < prev_low - atr * 0.1:
+        return True  # swept equal lows
+    return False
+
+
+def volume_strength_at_level(candles: list, level: float, lookback: int = 20) -> float:
+    """Volume strength at a key level (Asian range or Fib). 1.0 = strong."""
+    if len(candles) < lookback:
+        return 1.0
+    recent_vol = sum(c.get("vol", 0) for c in candles[-lookback:])
+    avg_vol = recent_vol / lookback
+    if avg_vol == 0:
+        return 1.0
+    level_vol = sum(c.get("vol", 0) for c in candles[-5:] if abs(c["close"] - level) < (c["high"] - c["low"]) * 0.5)
+    return min(1.0, level_vol / (avg_vol * 0.6))

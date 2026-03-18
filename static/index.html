@@ -418,6 +418,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 
   <div class="tab-bar">
     <button class="tab-btn active" id="tab-signals" onclick="switchTab('signals')">SIGNALS</button>
+    <button class="tab-btn" id="tab-trades" onclick="switchTab('trades')">TRADES <span id="tradesTabCount" style="font-size:10px;color:var(--accent);margin-left:4px"></span></button>
     <button class="tab-btn" id="tab-backtest" onclick="switchTab('backtest')">BACKTEST</button>
     <button class="tab-btn" id="tab-screener" onclick="switchTab('screener')">SCREENER</button>
     <button class="tab-btn" id="tab-performance" onclick="switchTab('performance');loadPerformance();loadAutoTradeLog();loadFailedExecutions()">PERFORMANCE</button>
@@ -456,14 +457,6 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
     <button class="filter-btn" onclick="applyFilter('high',this)">High Conf (1.5+)</button>
   </div>
 
-  <div id="openTradesPanel" style="display:none;margin-bottom:20px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-      <span style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:var(--muted);font-family:'Space Mono',monospace">OPEN POSITIONS</span>
-      <span id="openTradesCount" style="font-size:10px;color:var(--accent);font-family:'Space Mono',monospace"></span>
-    </div>
-    <div id="openTradesGrid" style="display:flex;flex-wrap:wrap;gap:10px"></div>
-  </div>
-
   <div class="signal-grid" id="signalGrid">
     <div class="empty-state">
       <div class="icon">></div>
@@ -473,6 +466,19 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
   </div>
 
   </div><!-- /panel-signals -->
+
+  <div class="tab-panel" id="panel-trades">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <span style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:var(--muted);font-family:'Space Mono',monospace">OPEN POSITIONS</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span id="tradesTabCountFull" style="font-size:11px;color:var(--accent);font-family:'Space Mono',monospace"></span>
+          <button class="bt-btn" onclick="refreshTradesTab()" style="padding:6px 14px;font-size:11px">⟳ REFRESH</button>
+        </div>
+      </div>
+      <div id="tradesTabGrid" style="display:flex;flex-wrap:wrap;gap:12px">
+        <div style="color:var(--muted);font-size:13px;padding:40px;text-align:center;width:100%">No open positions. Execute a trade to see it here.</div>
+      </div>
+    </div>
 
   <div class="tab-panel" id="panel-backtest">
     <div class="bt-controls">
@@ -1215,7 +1221,14 @@ function applyFilter(f,el) {
 function renderSignals(signals) {
   var grid=document.getElementById('signalGrid');
   if (!signals.length) {grid.innerHTML='<div class="empty-state"><div class="icon">Search</div><h3>No signals match</h3><p>Try a different filter</p></div>';return;}
-  grid.innerHTML=signals.map(function(s,i){return buildCard(s,i);}).join('');
+  grid.innerHTML=signals.map(function(s,i){ 
+    var card = buildCard(s,i);
+    // Store naked scan signals for fallback lookup
+    if(s.is_naked) {
+      window['_nakedSig_'+(s.symbol||'').replace(/[\/=^.]/g,'_')] = s;
+    }
+    return card;
+  }).join('');
 }
 
 // -- Build Card --
@@ -1558,7 +1571,12 @@ async function quickExecute(symbol, engineBData) {
 async function runNakedScan(symbol) {
   var sid=(symbol||'').replace(/[\/=^.]/g,'_');
   var sig=allSignals.find(function(s){return s.symbol===symbol;});
-  if(!sig) return;
+  if(!sig){
+    // Fallback: signal may be from naked scan cards (not in allSignals)
+    // Reconstruct minimal signal from the card's stored data
+    sig = window['_nakedSig_'+(symbol||'').replace(/[\/=^.]/g,'_')];
+  }
+  if(!sig) { showToast('Signal not found for '+symbol, true); return; }
   var btn=document.getElementById('nbtn-'+sid);
   if(btn){btn.disabled=true;btn.textContent='Scanning...';}
   
@@ -1650,21 +1668,24 @@ async function runCompare(symbol) {
     var isConnected = isCrypto ? window._bybitConnected : window._mt5Connected;
     var exeDisabled = !isConnected ? 'disabled title="Broker Not Connected"' : '';
 
+    var seq = data.current_swing_sequence || '';
+    var bos = data.bos_confirmed || false;
     var match = false;
-    var stVerdict = data.structural_verdict.toLowerCase();
-    if (sig.direction === 'LONG' && (stVerdict.includes('bullish') || stVerdict.includes('buy') || stVerdict.includes('clear'))) match = true;
-    if (sig.direction === 'SHORT' && (stVerdict.includes('bearish') || stVerdict.includes('sell') || stVerdict.includes('clear'))) match = true;
-    
+    if (sig.direction === 'LONG' && seq === 'HH_HL') match = true;
+    if (sig.direction === 'SHORT' && seq === 'LH_LL') match = true;
+
     var verdictColor = match ? '#00e676' : '#ff3b5c';
-    var verdictText = match ? '✅ CONFLUENCE ALIGNED' : '❌ CONFLUENCE MISMATCH';
-    
+    var verdictText = match ? '✅ STRUCTURE ALIGNED WITH ENGINE A' : '❌ STRUCTURE CONFLICTS WITH ENGINE A';
+
     var html = '<div style="font-weight:bold;margin-bottom:8px;font-size:12px;color:'+verdictColor+'">'+verdictText+'</div>';
-    
+
     html += '<table style="width:100%;text-align:left;border-collapse:collapse;margin-bottom:8px;font-size:11px">';
-    html += '<tr><th style="padding:4px;border-bottom:1px solid #2a3b4d">Metric</th><th style="padding:4px;border-bottom:1px solid #2a3b4d;color:#00d4ff">Engine A (Math)</th><th style="padding:4px;border-bottom:1px solid #2a3b4d;color:#f59e0b">Engine B (Structure)</th></tr>';
-    html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Bias</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+sig.direction+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+data.structural_verdict+'</td></tr>';
+    html += '<tr><th style="padding:4px;border-bottom:1px solid #2a3b4d">Metric</th><th style="padding:4px;border-bottom:1px solid #2a3b4d;color:#00d4ff">Engine A</th><th style="padding:4px;border-bottom:1px solid #2a3b4d;color:#f59e0b">Engine B</th></tr>';
+    html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Direction</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+sig.direction+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+seq+'</td></tr>';
+    html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">BOS Confirmed</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">-</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(bos?'✅ Yes':'❌ No')+'</td></tr>';
     html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Stop Loss</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(sig.sl?sig.sl.toFixed(4):'-')+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(data.recommended_stop_loss?data.recommended_stop_loss.toFixed(4):'-')+'</td></tr>';
     html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Take Profit</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(sig.tp1?sig.tp1.toFixed(4):'-')+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(data.recommended_take_profit?data.recommended_take_profit.toFixed(4):'-')+'</td></tr>';
+    html += '<tr><td style="padding:4px">Confluence</td><td style="padding:4px">'+sig.confluenceScore+'/'+( sig.maxScore||3)+'</td><td style="padding:4px">'+(data.nearest_resistance_zone?'Res: '+data.nearest_resistance_zone.lower.toFixed(4):'No zone')+'</td></tr>';
     html += '</table>';
 
     var execBtnHTML = '<button class="exec-btn force" style="margin-top:4px;width:100%" id="qexecbtn-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'])" '+exeDisabled+'>⚡ QUICK SCALP EXECUTE (Uses Engine B SL/TP)</button>';
@@ -1932,17 +1953,41 @@ async function runMetaAnalysis() {
 // -- Open Positions Renderer --
 window._openPositions = [];
 function renderOpenPositions(positions) {
+  console.log('renderOpenPositions called with:', positions);
   window._openPositions = positions || [];
   var panel = document.getElementById('openTradesPanel');
   var grid  = document.getElementById('openTradesGrid');
   var count = document.getElementById('openTradesCount');
+  
+  // Update trades tab elements
+  var tabCount = document.getElementById('tradesTabCount');
+  var tabCountFull = document.getElementById('tradesTabCountFull');
+  var tabGrid = document.getElementById('tradesTabGrid');
+  
+  console.log('Elements found - tabCount:', !!tabCount, 'tabCountFull:', !!tabCountFull, 'tabGrid:', !!tabGrid);
+  
   if (!positions || positions.length === 0) {
-    panel.style.display = 'none';
+    console.log('No positions to display');
+    // Hide old panel if it exists
+    if (panel) panel.style.display = 'none';
+    // Update trades tab for empty state
+    if (tabCount) tabCount.textContent = '';
+    if (tabCountFull) tabCountFull.textContent = '0 open';
+    if (tabGrid) tabGrid.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:40px;text-align:center;width:100%">No open positions. Execute a trade to see it here.</div>';
     return;
   }
-  panel.style.display = 'block';
-  count.textContent = positions.length + ' open';
-  grid.innerHTML = positions.map(function(p) {
+  
+  console.log('Displaying', positions.length, 'positions');
+  // Show old panel if it exists
+  if (panel) panel.style.display = 'block';
+  if (count) count.textContent = positions.length + ' open';
+  
+  // Update trades tab
+  if (tabCount) tabCount.textContent = positions.length > 0 ? '('+positions.length+')' : '';
+  if (tabCountFull) tabCountFull.textContent = positions.length + ' open';
+  
+  // Generate position cards
+  var positionsHtml = positions.map(function(p) {
     var pnl = p.profit || 0;
     var dir = p.direction || 'LONG';
     var pnlClass = pnl >= 0 ? 'pos' : 'neg';
@@ -1962,6 +2007,39 @@ function renderOpenPositions(positions) {
       '<button class="pos-close-btn" onclick="confirmClosePosition(\'' + exch + '\',\'' + pairSafe + '\',\'' + dir + '\',' + p.volume + ',' + (p.ticket || 0) + ',this)">CLOSE</button>' +
     '</div>';
   }).join('');
+  
+  console.log('Generated HTML length:', positionsHtml.length);
+  
+  // Update both grids
+  if (grid) grid.innerHTML = positionsHtml;
+  if (tabGrid) {
+    tabGrid.innerHTML = positionsHtml;
+    console.log('Updated trades tab grid');
+  } else {
+    console.error('tradesTabGrid element not found!');
+  }
+}
+
+function refreshTradesTab() {
+  console.log('refreshTradesTab called');
+  Promise.all([
+    fetch('/api/bybit-status').then(function(r){ return r.json(); }).catch(function(e){ console.error('Bybit status error:', e); return {}; }),
+    fetch('/api/mt5-status').then(function(r){ return r.json(); }).catch(function(e){ console.error('MT5 status error:', e); return {}; })
+  ]).then(function(results) {
+    console.log('Status results:', results);
+    var bybitData = results[0];
+    var mt5Data = results[1];
+    var bybitPos = bybitData.connected ? (bybitData.positions||[]).map(function(p){ return Object.assign({_bybit:true}, p); }) : [];
+    var mt5Pos = mt5Data.connected ? (mt5Data.positions||[]) : [];
+    console.log('Positions - Bybit:', bybitPos, 'MT5:', mt5Pos);
+    var allPositions = mt5Pos.concat(bybitPos);
+    console.log('All positions:', allPositions);
+    renderOpenPositions(allPositions);
+    showToast('Positions refreshed');
+  }).catch(function(e) {
+    console.error('Refresh trades error:', e);
+    showToast('Error refreshing positions', true);
+  });
 }
 
 // -- MT5 & Bybit Status --

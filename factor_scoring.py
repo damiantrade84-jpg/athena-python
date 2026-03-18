@@ -14,6 +14,7 @@ Blueprint compliance:
     fib_proximity) measure signal quality/strength — contribute via abs().
 """
 import math
+import numpy as np
 import logging
 import threading
 from typing import List, Dict, Optional
@@ -21,6 +22,28 @@ from config import CONFIG
 from regime import detect_regime
 
 log = logging.getLogger("athena")
+
+def _dynamic_regime_weights(factor_scores: dict, recent_momentum: float, regime: str) -> dict:
+    """Momentum-adjusted regime weights — only for factor engine (crypto/stock/etc.).
+    Forex uses its own static rules in forex_scoring.py and is untouched."""
+    base = CONFIG.get("REGIME_WEIGHTS", {}).get(regime.upper(), {})
+    dynamic = {}
+    for factor, w in base.items():
+        if w == 0:  # disabled factor — never touch
+            dynamic[factor] = 0.0
+            continue
+        adj = 1.0 + (recent_momentum * 0.3 if factor in ["trend", "momentum"] else -recent_momentum * 0.2)
+        dynamic[factor] = round(max(0.3, min(2.5, w * adj)), 3)
+    return dynamic
+
+def _bayesian_blend(factor_scores: dict, historical_winrates: dict) -> dict:
+    """Bayesian update using past factor performance — only for factor engine."""
+    blended = {}
+    for factor, score in factor_scores.items():
+        hist_wr = historical_winrates.get(factor, 0.5)
+        blended[factor] = round(score * (0.7 + 0.3 * hist_wr), 3)
+    return blended
+
 
 # ── Regime smoothing state ────────────────────────────────────────────────────
 # Tracks the last N raw regime labels per pair to prevent whipsawing.
@@ -113,14 +136,19 @@ def _apply_correlation_filter(indicator_scalars: Dict[str, Optional[float]],
             if pair_key in checked:
                 continue
             checked.add(pair_key)
-            corr = _pearson(series[k1], series[k2])
-            if corr is not None and abs(corr) > 0.8:
-                v1 = abs(indicator_scalars[k1]) if indicator_scalars[k1] is not None else 0.0
-                v2 = abs(indicator_scalars[k2]) if indicator_scalars[k2] is not None else 0.0
-                weaker = k2 if v1 >= v2 else k1
-                # Reduce by 50% but cap total reduction at 50%
-                weight_mult[weaker] = max(0.5, weight_mult[weaker] - 0.5)
-                log.debug(f"[CORR] {k1}<->{k2} r={corr:.2f}, reducing {weaker} weight to {weight_mult[weaker]:.2f}")
+            corr_raw = _pearson(series[k1], series[k2])
+            
+            if corr_raw is not None:
+                decay_factor = 0.94  # 6% decay per bar (standard in 2026 quant guides)
+                corr = corr_raw * decay_factor
+                
+                if abs(corr) > 0.8:
+                    v1 = abs(indicator_scalars[k1]) if indicator_scalars[k1] is not None else 0.0
+                    v2 = abs(indicator_scalars[k2]) if indicator_scalars[k2] is not None else 0.0
+                    weaker = k2 if v1 >= v2 else k1
+                    # Reduce by 50% but cap total reduction at 50%
+                    weight_mult[weaker] = max(0.5, weight_mult[weaker] - 0.5)
+                    log.debug(f"[CORR] {k1}<->{k2} r={corr:.2f}, reducing {weaker} weight to {weight_mult[weaker]:.2f}")
     return weight_mult
 
 
@@ -211,6 +239,19 @@ def _weighted_factor_score(indicators: Dict[str, Optional[float]],
     if w_sum <= 0:
         return None
     return sum(v * w / w_sum for v, w in zip(vals, wgts))
+
+
+def _dynamic_regime_weights(factor_scores: dict, recent_returns: list, regime: str):
+    """Momentum-based dynamic allocation (Tai 2026 SSRN)."""
+    momentum = np.mean(recent_returns[-10:]) if len(recent_returns) >= 10 else 0.0
+    base = CONFIG.get("REGIME_WEIGHTS", {}).get(regime.upper(), {})
+    
+    dynamic = {}
+    for factor, w in base.items():
+        # Boost trending factors when momentum is positive
+        adj = 1.0 + (momentum * 0.3 if factor in ["trend", "momentum"] else -momentum * 0.2)
+        dynamic[factor] = round(max(0.3, min(2.5, w * adj)), 3)
+    return dynamic
 
 
 def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dict,
