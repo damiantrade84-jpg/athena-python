@@ -5517,7 +5517,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         from forex_scoring import compute_forex_score
         
         # Build indicator snapshots using the same proven pattern as Engine A
-        from scoring import calc_indicators_with_normalized
+        from indicators import calc_indicators_with_normalized
         
         h4_window = candles_h4
         h1_window = candles_h1 or []
