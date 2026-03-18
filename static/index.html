@@ -899,28 +899,18 @@ function selectBacktestEngine(engine) {
 
 async function runBacktest() {
   var sym = document.getElementById('btPairSelect').value;
-  var btStyle = window.selectedBacktestEngine === 'B' ? 'naked' : 'auto';
   var btn = document.getElementById('btRunBtn');
   btn.disabled = true;
   btn.textContent = 'Running...';
-  var label = sym ? document.getElementById('btPairSelect').selectedOptions[0].text : 'All ' + (window._totalPairs || '') + ' Pairs';
-  document.getElementById('btContent').innerHTML =
-    '<div class="bt-progress">'+
-      '<div style="font-size:14px;font-weight:700;margin-bottom:4px">Running Backtest: '+label+'</div>'+
-      '<div style="font-size:11px;color:var(--text);font-family:monospace;margin-bottom:6px">Mode: '+btStyle.toUpperCase()+'</div>'+
-      '<div style="font-size:11px;color:var(--muted);font-family:monospace">Fetching 2 years of data and simulating trades...</div>'+
-      '<div class="bt-prog-bar-wrap"><div class="bt-prog-bar" id="btProgBar" style="width:15%"></div></div>'+
-      '<div style="font-size:11px;color:var(--muted);font-family:monospace">This may take 2-3 minutes for all pairs.</div>'+
-    '</div>';
-  var progInterval = setInterval(function(){
-    var bar=document.getElementById('btProgBar');
-    if(bar){var w=parseInt(bar.style.width)||15;if(w<90)bar.style.width=(w+1)+'%';}
-  },2000);
+
+  var label = sym ? document.getElementById('btPairSelect').selectedOptions[0].text : 'All Pairs';
+  document.getElementById('btContent').innerHTML = '<div class="bt-progress"><div style="font-size:14px;font-weight:700">Running ' + (window.selectedBacktestEngine === 'B' ? 'Engine B (Naked)' : 'Engine A') + ': ' + label + '</div></div>';
+
   try {
     var API_URL = '/api/backtest';
-    var payload = {style: btStyle};
+    var payload = { style: 'auto' };
     
-    if (btStyle === 'naked') {
+    if (window.selectedBacktestEngine === 'B') {
         API_URL = '/api/backtest-naked';
         if (sym) payload.pair = sym;
     } else {
@@ -929,13 +919,16 @@ async function runBacktest() {
         if (!sym && btClass) payload.asset_class = btClass;
     }
     
-    var body = JSON.stringify(payload);
-    var resp = await fetch(API_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:body});
-    clearInterval(progInterval);
-    if(!resp.ok) throw new Error('Server error: HTTP '+resp.status);
+    var resp = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
     var data = await resp.json();
-    if(data.error) throw new Error(data.error);
-    if(data.results) renderBtLeaderboard(data);
+    if (data.error) throw new Error(data.error);
+
+    if (data.results) renderBtLeaderboard(data);
     else renderBtSingle(data);
     // Show auto-toggle notifications
     if (data.autoToggle) {
@@ -951,7 +944,6 @@ async function runBacktest() {
       showToast('Active pairs: ' + data.activePairs + ' / ' + (data.totalPairs || window._totalPairs || '?'));
     }
   } catch(err) {
-    clearInterval(progInterval);
     document.getElementById('btContent').innerHTML='<div class="bt-errors">&#9888; '+err.message+'</div>';
     showToast('&#9888; Backtest failed: '+err.message,true);
   } finally {
