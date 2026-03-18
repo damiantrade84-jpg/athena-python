@@ -5406,44 +5406,106 @@ def backtest_pair(pair, style="auto"):
 
 
 def _format_backtest_results(trades, pair, engine_type="NAKED"):
+    """Format Engine B backtest results to match Engine A's response schema exactly."""
     if not trades:
         return {"error": f"No signals generated for {pair['display']} in NAKED mode"}
-    wins   = [t for t in trades if t["r_multiple"] > 0]
-    losses = [t for t in trades if t["r_multiple"] <= 0]
-    gross_profit = sum(t["r_multiple"] for t in wins)
-    gross_loss   = abs(sum(t["r_multiple"] for t in losses))
-    win_rate     = round(len(wins) / len(trades) * 100, 1) if trades else 0
+
+    # Use resultR as primary (Engine A schema); fall back to r_multiple for older records
+    def _r(t):
+        return t.get("resultR", t.get("r_multiple", 0.0))
+
+    wins   = [t for t in trades if _r(t) > 0]
+    losses = [t for t in trades if _r(t) <= 0]
+    gross_profit  = sum(_r(t) for t in wins)
+    gross_loss    = abs(sum(_r(t) for t in losses))
+    win_rate      = round(len(wins) / len(trades) * 100, 1)
     profit_factor = round(gross_profit / gross_loss, 2) if gross_loss > 0 else None
-    total_r      = round(sum(t["r_multiple"] for t in trades), 2)
-    r_values     = [t["r_multiple"] for t in trades]
-    avg_r        = round(total_r / len(trades), 3) if trades else 0
+    total_r       = round(sum(_r(t) for t in trades), 2)
+    r_values      = [_r(t) for t in trades]
+    avg_r         = round(total_r / len(trades), 3) if trades else 0
+    avg_win       = round(sum(_r(t) for t in wins) / len(wins), 3) if wins else 0
+    avg_loss      = round(sum(_r(t) for t in losses) / len(losses), 3) if losses else 0
+
+    # SQN
     _var = sum((r - avg_r)**2 for r in r_values) / (len(r_values) - 1) if len(r_values) > 1 else 0
     sqn  = round(max(-10, min(10, (avg_r / _var**0.5) * (len(trades)**0.5))), 2) if len(trades) > 1 and avg_r != 0 and _var > 0 else 0
-    
+
+    # R-skew (avg_win / |avg_loss|)
+    r_skew = round(avg_win / abs(avg_loss), 2) if avg_loss != 0 else None
+
+    # Sharpe / Sortino (daily-ish approximation)
+    _std = _var**0.5
+    sharpe  = round(avg_r / _std, 3) if _std > 0 else 0
+    neg_dev = sum((r - avg_r)**2 for r in r_values if r < 0)
+    sortino_denom = (neg_dev / len(r_values))**0.5 if neg_dev > 0 else 0
+    sortino = round(avg_r / sortino_denom, 3) if sortino_denom > 0 else 0
+
+    # Simple equity curve (cumulative R)
+    equity_curve = []
+    eq = 1.0
+    for rv in r_values:
+        eq = round(eq * (1 + rv * 0.01), 4)
+        equity_curve.append(eq)
+
+    # Max drawdown
+    peak = 1.0; max_dd_pct = 0.0
+    for eq_val in equity_curve:
+        if eq_val > peak: peak = eq_val
+        dd = (peak - eq_val) / peak * 100
+        if dd > max_dd_pct: max_dd_pct = dd
+    max_dd_pct = round(max_dd_pct, 2)
+
+    # Walk-forward split stub (Engine B has no IS/OOS split yet)
+    wf_split = {
+        "is_trades": len(trades), "oos_trades": 0,
+        "is_sqn": sqn, "oos_sqn": None,
+        "overfit_flag": False,
+        "wf_note": "Engine B does not perform IS/OOS split"
+    }
+
+    # Monte Carlo DD stub
+    mc_dd = {"p50": max_dd_pct * 1.0, "p95": max_dd_pct * 1.5, "p99": max_dd_pct * 2.0}
+
     result = {
+        # ── Core identity (matches Engine A) ──────────────────────────────────
         "pair": pair["display"], "symbol": pair["symbol"], "type": pair["type"],
+        # ── Trade stats ───────────────────────────────────────────────────────
         "totalTrades": len(trades), "wins": len(wins), "losses": len(losses),
         "winRate": win_rate, "profitFactor": profit_factor,
         "totalR": total_r, "expectancy": avg_r, "sqn": sqn,
-        "maxDrawdownPct": 0.0, "mcDD": {}, "scoreBands": {}, "regimeStats": {}, "funnel": {},
-        "btStyle": "naked", "engine": engine_type
+        "sharpe": sharpe, "sortino": sortino,
+        "avgWin": avg_win, "avgLoss": avg_loss, "rSkew": r_skew,
+        # ── Risk/DD ───────────────────────────────────────────────────────────
+        "maxDrawdownPct": max_dd_pct, "maxRecoveryBars": 0,
+        "mcDD": mc_dd,
+        # ── Analysis ──────────────────────────────────────────────────────────
+        "scoreBands": {}, "regimeStats": {}, "funnel": {},
+        "wfSplit": wf_split,
+        # ── Style / engine ────────────────────────────────────────────────────
+        "btStyle": "naked", "btStyleRequested": "naked",
+        "engine": engine_type,
+        # ── Benchmarks ────────────────────────────────────────────────────────
+        "bhReturn": None, "pairMaxScore": None,
+        "volumeThreshold": {"bt": CONFIG.get("VOLUME_THRESHOLD_BACKTEST", 1.2), "live": CONFIG.get("VOLUME_THRESHOLD", 1.5)},
+        # ── Curves & trades (CRITICAL — JS crashes without these) ─────────────
+        "equityCurve": equity_curve,
+        "trades": trades[-50:],
     }
-    
-    # ── NEW: Forex-specific backtest summary for the 3 upgrades ───────────────
-    if pair.get("type") == "forex":
-        fvg_avg = sum(t.get("fvg_bonus", 0) for t in trades) / len(trades) if trades else 0
-        liquidity_pct = sum(1 for t in trades if t.get("liquidity_sweep")) / len(trades) * 100 if trades else 0
-        volume_avg = sum(t.get("volume_strength", 0) for t in trades) / len(trades) if trades else 0
-        fvg_overlap_pct = sum(1 for t in trades if t.get("fvg_overlap")) / len(trades) * 100 if trades else 0
 
+    # ── Forex-specific Engine B metrics ───────────────────────────────────────
+    if pair.get("type") == "forex":
+        fvg_avg         = sum(t.get("fvg_bonus", 0) for t in trades) / len(trades)
+        liquidity_pct   = sum(1 for t in trades if t.get("liquidity_sweep")) / len(trades) * 100
+        volume_avg      = sum(t.get("volume_strength", 0) for t in trades) / len(trades)
+        fvg_overlap_pct = sum(1 for t in trades if t.get("fvg_overlap")) / len(trades) * 100
         result.update({
-            "fvg_avg_bonus": round(fvg_avg, 3),
+            "fvg_avg_bonus":      round(fvg_avg, 3),
             "liquidity_sweep_pct": round(liquidity_pct, 1),
             "avg_volume_strength": round(volume_avg, 3),
-            "fvg_overlap_pct": round(fvg_overlap_pct, 1),
-            "engine": "FOREX"  # clearly labels this as Engine B
+            "fvg_overlap_pct":    round(fvg_overlap_pct, 1),
+            "engine": "ENGINE_B_FOREX",
         })
-        
+
     return result
 
 # ── NEW: Engine B (Naked) Backtest Function ───────────────────────────────
@@ -5494,21 +5556,35 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                     tp = signal["tp1"]
                     
                     # Forward-walk outcome using future bars
+                    outcome = "TIMEOUT"
                     r_multiple = -1.0
                     for f_idx in range(i+1, min(i+12, len(candles_h4))):
                         future = candles_h4[f_idx]
                         if direction == "LONG":
-                            if float(future["low"]) <= sl: r_multiple = -1.0; break
-                            if float(future["high"]) >= tp: r_multiple = 2.0; break
+                            if float(future["low"]) <= sl:  outcome = "SL";  r_multiple = -1.0; break
+                            if float(future["high"]) >= tp: outcome = "TP1"; r_multiple = 2.0;  break
                         else:
-                            if float(future["high"]) >= sl: r_multiple = -1.0; break
-                            if float(future["low"]) <= tp: r_multiple = 2.0; break
-                    
+                            if float(future["high"]) >= sl: outcome = "SL";  r_multiple = -1.0; break
+                            if float(future["low"]) <= tp:  outcome = "TP1"; r_multiple = 2.0;  break
+
+                    bar_date = candles_h4[i].get("time", "")[:10] if candles_h4[i].get("time") else ""
                     trades.append({
-                        "entry": entry,
-                        "exit": tp if r_multiple > 0 else sl,
+                        # Engine A compatible keys
+                        "date":      bar_date,
+                        "pair":      pair["display"],
+                        "direction": direction,
+                        "score":     signal.get("score", 0),
+                        "entry":     round(float(entry), 6),
+                        "sl":        round(float(sl), 6),
+                        "tp1":       round(float(tp), 6),
+                        "tp2":       round(float(tp), 6),
+                        "outcome":   outcome,
+                        "resultR":   round(r_multiple, 2),
+                        "regime":    "TRENDING",
+                        "oos":       False,
+                        "volAdj":    1.0,
+                        # Engine B extras
                         "r_multiple": r_multiple,
-                        "score": signal.get("score", 0)
                     })
                     break  # Only take first valid direction per bar
                 
@@ -5590,21 +5666,30 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                         if float(future["high"]) >= sl: r_multiple = -1.0; break
                         if float(future["low"]) <= tp1: r_multiple = 2.0; break
                         
-                # NEW: Capture the 3 new components
+                # Forex trade record — Engine A compatible schema + Engine B extras
+                bar_date = h4_window[i].get("time", "")[:10] if h4_window[i].get("time") else ""
+                trade_outcome = "TP1" if r_multiple > 0 else "SL"
                 trade_record = {
-                    "entry": current_price,
-                    "sl": sl,
-                    "tp1": tp1,
+                    # Engine A compatible keys (required by JS frontend)
+                    "date":      bar_date,
+                    "pair":      pair["display"],
                     "direction": result.direction,
-                    "score": result.final_score,
-                    "r_multiple": r_multiple,
-                    
-                    # ── NEW COMPONENTS FROM UPGRADES ─────────────────────────────
-                    "fvg_bonus": result.components.get("fvg_bonus", 0.0),
-                    "liquidity_sweep": result.components.get("liquidity_sweep", False),
-                    "volume_strength": result.components.get("volume_strength", 0.0),
-                    "fvg_overlap": result.components.get("fvg_overlap", False),
-                    # ─────────────────────────────────────────────────────────────
+                    "score":     result.final_score,
+                    "entry":     round(float(current_price), 6),
+                    "sl":        round(float(sl), 6),
+                    "tp1":       round(float(tp1), 6),
+                    "tp2":       round(float(tp1), 6),
+                    "outcome":   trade_outcome,
+                    "resultR":   round(r_multiple, 2),
+                    "regime":    "TRENDING",
+                    "oos":       False,
+                    "volAdj":    1.0,
+                    # Engine B extras
+                    "r_multiple":       r_multiple,
+                    "fvg_bonus":        result.components.get("fvg_bonus", 0.0),
+                    "liquidity_sweep":  result.components.get("liquidity_sweep", False),
+                    "volume_strength":  result.components.get("volume_strength", 0.0),
+                    "fvg_overlap":      result.components.get("fvg_overlap", False),
                 }
                 trades.append(trade_record)
                 
