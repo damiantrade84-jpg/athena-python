@@ -99,6 +99,18 @@ CONFIG: dict = {
         "stock": {"sl": 1.5, "tp1": 2.5, "tp2": 4.0},
         "crypto": {"sl": 2.0, "tp1": 3.5, "tp2": 5.0},
     },
+    "LEVEL_ATR_PRIORITY": {
+        "default": {
+            "scalp": ["H1", "H4", "D1"],
+            "intraday": ["H4", "H1", "D1"],
+            "swing": ["D1", "H4", "H1"],
+        },
+        "crypto": {
+            "scalp": ["H1", "H4", "D1"],
+            "intraday": ["H4", "H1", "D1"],
+            "swing": ["H4", "D1", "H1"],
+        },
+    },
     # Rolling windows for normalization (bars)
     "NORMALIZATION_LOOKBACK": {
         "crypto": 300,
@@ -329,6 +341,22 @@ CONFIG: dict = {
         "commodity": ["always"],
         "index": ["always"],
     },
+    "AUTO_TRADE_BLOCKED_TREND_STATES": {
+        "default": ["DEAD RANGING", "RANGING"],
+        "crypto": ["DEAD RANGING", "RANGING"],
+        "forex": [],
+        "commodity": ["DEAD RANGING", "RANGING"],
+        "stock": ["DEAD RANGING", "RANGING"],
+        "index": ["DEAD RANGING", "RANGING"],
+    },
+    "AUTO_TRADE_BLOCKED_REGIMES": {
+        "default": ["RANGING"],
+        "crypto": ["RANGING"],
+        "forex": [],
+        "commodity": ["RANGING"],
+        "stock": ["RANGING"],
+        "index": ["RANGING"],
+    },
     # ── AI Self-Learning ──────────────────────────────────────────────────────
     "LEARNING_ENABLED": True,  # Extract learning data after each trade closes
     "LEARNING_MIN_TRADES": 5,  # Min trades before context injected into AI
@@ -341,7 +369,40 @@ CONFIG: dict = {
             "RANGING": {"upper": 0.5, "lower": 1.2, "sl": 1.0},
             "HIGH_VOLATILITY": {"upper": 0.4, "lower": 1.5, "sl": 1.8},
             "LOW_VOLATILITY": {"upper": 0.2, "lower": 0.8, "sl": 1.0},
-        }
+        },
+        "style_profiles": {
+            "scalp": {
+                "min_score": 0.9,
+                "min_room_atr": 0.35,
+                "min_rr": 1.0,
+                "fallback_rr": 1.4,
+                "require_macro_align": False,
+            },
+            "intraday": {
+                "min_score": 1.5,
+                "min_room_atr": 0.7,
+                "min_rr": 1.2,
+                "fallback_rr": 1.8,
+                "require_macro_align": False,
+            },
+            "swing": {
+                "min_score": 1.8,
+                "min_room_atr": 1.0,
+                "min_rr": 1.6,
+                "fallback_rr": 2.2,
+                "require_macro_align": True,
+            },
+        },
+    },
+    "FOREX_ENGINE": {
+        "trend_gate_adx_min": 20.0,
+        "trend_margin_min": 0.003,
+        "adx_confirm_min": 22.0,
+        "trend_support_weights": {
+            "momentum": 0.15,
+            "adx": 0.10,
+            "carry": 0.05,
+        },
     },
 }
 

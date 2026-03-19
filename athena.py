@@ -2275,7 +2275,9 @@ def _fetch_fallback_candles(pair: dict, tf: str, limit: int, reason: str = ""):
     return None
 
 
-def _atr_for_levels(d1i: dict, h4i: dict, h1i: dict, pair: dict = None):
+def _atr_for_levels(
+    d1i: dict, h4i: dict, h1i: dict, pair: dict = None, style: str | None = None
+):
     """
     Returns ATR value for SL/TP calculation — correct timeframe per asset class.
 
@@ -2289,16 +2291,34 @@ def _atr_for_levels(d1i: dict, h4i: dict, h1i: dict, pair: dict = None):
     INDICES:             D1 ATR first — daily range 0.5-1.5%, H1 only 0.1-0.3%
     """
     ptype = (pair or {}).get("type", "")
+    resolved_style = _normalize_style(style or "swing")
+    if resolved_style == "auto":
+        resolved_style = "swing"
 
-    if ptype == "crypto":
-        # Crypto: H4 → H1 → D1
-        return (
-            h4i["snap"].get("atr") or h1i["snap"].get("atr") or d1i["snap"].get("atr")
-        )
+    priority_cfg = CONFIG.get("LEVEL_ATR_PRIORITY", {}) or {}
+    style_map = priority_cfg.get(ptype, {}) or priority_cfg.get("default", {})
+    order = style_map.get(resolved_style)
 
-    # Forex, stock, commodity, index — all D1 swing trades
-    # D1 → H4 → H1
-    return d1i["snap"].get("atr") or h4i["snap"].get("atr") or h1i["snap"].get("atr")
+    if not order:
+        if resolved_style == "scalp":
+            order = ["H1", "H4", "D1"]
+        elif resolved_style == "intraday":
+            order = ["H4", "H1", "D1"]
+        elif ptype == "crypto":
+            order = ["H4", "D1", "H1"]
+        else:
+            order = ["D1", "H4", "H1"]
+
+    snaps = {
+        "D1": (d1i or {}).get("snap", {}),
+        "H4": (h4i or {}).get("snap", {}),
+        "H1": (h1i or {}).get("snap", {}),
+    }
+    for tf in order:
+        atr_val = (snaps.get(tf) or {}).get("atr")
+        if atr_val:
+            return atr_val
+    return None
 
 
 def _max_score_for_pair(pair: dict) -> float:
@@ -5228,7 +5248,7 @@ def backtest_pair(pair, style="auto"):
 
             entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
-            atr = _atr_for_levels(d1i, h4i, h1i, pair=pair)
+            atr = _atr_for_levels(d1i, h4i, h1i, pair=pair, style=effective_style)
 
             if not atr or atr == 0:
                 i += 1
@@ -5600,7 +5620,9 @@ def backtest_pair(pair, style="auto"):
 
             entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
-            atr = _atr_for_levels(d1i_ctx, h4i, h1i, pair=pair)
+            atr = _atr_for_levels(
+                d1i_ctx, h4i, h1i, pair=pair, style=effective_style
+            )
 
             if not atr or atr == 0:
                 i += 1
@@ -5944,7 +5966,9 @@ def backtest_pair(pair, style="auto"):
 
             entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
-            atr = _atr_for_levels(d1i_ctx, h4i_ctx, h1i, pair=pair)
+            atr = _atr_for_levels(
+                d1i_ctx, h4i_ctx, h1i, pair=pair, style=effective_style
+            )
 
             if not atr or atr == 0:
                 i += 1
@@ -7413,37 +7437,44 @@ def _naked_scan_style_profile(style: str | None) -> tuple[str, dict]:
         resolved = "scalp"
     profiles = {
         "scalp": {
-            "min_score": 0.8,
-            "min_room_atr": 0.3,
-            "min_rr": 0.9,
-            "fallback_rr": 1.5,
+            "min_score": 0.9,
+            "min_room_atr": 0.35,
+            "min_rr": 1.0,
+            "fallback_rr": 1.4,
             "require_macro_align": False,
-            "zone_tf": "H4",  # S/R zone detection timeframe
-            "entry_tf": "H1",  # Micro sequence / BOS / sweep timeframe
-            "atr_tf": "H4",  # ATR calculation timeframe
+            "zone_tf": "H4",
+            "entry_tf": "H1",
+            "atr_tf": "H4",
         },
         "intraday": {
-            "min_score": 1.8,
-            "min_room_atr": 0.9,
-            "min_rr": 1.5,
-            "fallback_rr": 2.0,
-            "require_macro_align": True,
+            "min_score": 1.5,
+            "min_room_atr": 0.7,
+            "min_rr": 1.2,
+            "fallback_rr": 1.8,
+            "require_macro_align": False,
             "zone_tf": "H4",
             "entry_tf": "H1",
             "atr_tf": "H4",
         },
         "swing": {
-            "min_score": 2.0,
-            "min_room_atr": 1.2,
-            "min_rr": 2.0,
-            "fallback_rr": 2.5,
+            "min_score": 1.8,
+            "min_room_atr": 1.0,
+            "min_rr": 1.6,
+            "fallback_rr": 2.2,
             "require_macro_align": True,
-            "zone_tf": "D1",  # D1 zones for multi-day holds
-            "entry_tf": "H4",  # H4 structure for swing entries
-            "atr_tf": "D1",  # D1 ATR for wider SL/TP
+            "zone_tf": "D1",
+            "entry_tf": "H4",
+            "atr_tf": "D1",
         },
     }
-    return resolved, profiles.get(resolved, profiles["scalp"])
+    cfg_profiles = (CONFIG.get("NAKED_ENGINE", {}) or {}).get("style_profiles", {}) or {}
+    merged_profiles = {}
+    for profile_name, defaults in profiles.items():
+        merged_profiles[profile_name] = dict(defaults)
+        cfg_override = cfg_profiles.get(profile_name, {})
+        if isinstance(cfg_override, dict):
+            merged_profiles[profile_name].update(cfg_override)
+    return resolved, merged_profiles.get(resolved, merged_profiles["scalp"])
 
 
 def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None):
@@ -10094,20 +10125,19 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
                 fx_votes["COT Boost"] = components.get("cot_boost", 0.0)
 
             res = {
-                "final_score": _forex_result.final_score
-                * 3.0,  # Scale 0-1 to 0-3 for UI consistency
+                "final_score": _forex_result.final_score,
                 "direction": _forex_result.direction,
                 "factor_scores": _forex_result.components,
                 "regime": {"state": 1, "label": _forex_result.signal_type},
                 "signal_type": _forex_result.signal_type,
-                "score": _forex_result.final_score * 3.0,  # Scale for UI consistency
+                "score": _forex_result.final_score,
                 "trendState": _forex_result.signal_type,
                 # Keys required by signal dict construction below
                 "votes": fx_votes,
                 "warnings": [],
                 "weinsteinStage": None,
                 "weinsteinLabel": "N/A",
-                "maxScoreOverride": 3.0,  # Normalize forex to same 0-3 scale as other assets for consistent UI display
+                "maxScoreOverride": 1.0,
             }
         except Exception as _fx_err:
             log.error(
@@ -10164,7 +10194,7 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
         or d1i["snap"].get("close")
     )
 
-    atr = _atr_for_levels(d1i, h4i, h1i, pair=pair)
+    atr = _atr_for_levels(d1i, h4i, h1i, pair=pair, style=_style)
 
     if price is None or not atr:
         return None
@@ -10206,6 +10236,7 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
     ):
         try:
             from market_structure import engine as naked_engine
+            _overlay_style, _overlay_profile = _naked_scan_style_profile(_style)
 
             _reg = res.get("regime", {})
             _regime_label = (
@@ -10218,7 +10249,7 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
             )
 
             if structure_data and structure_data.get("structural_verdict") == "CLEAR":
-                _min_room = float(atr) * 1.5
+                _min_room = float(atr) * float(_overlay_profile.get("min_room_atr", 1.0))
                 if (
                     direction == "LONG"
                     and structure_data.get("distance_to_res", float("inf")) < _min_room

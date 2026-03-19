@@ -186,7 +186,16 @@ def _check_trend_gate(d1_snap: dict, h4_snap: dict) -> tuple[bool, str]:
         adx = float(adx)
     except (ValueError, TypeError):
         adx = 0.0
-    if adx < 20.0:
+    try:
+        from config import CONFIG
+
+        fx_cfg = CONFIG.get("FOREX_ENGINE", {}) or {}
+        trend_gate_adx_min = float(fx_cfg.get("trend_gate_adx_min", 20.0))
+        trend_margin_min = float(fx_cfg.get("trend_margin_min", 0.003))
+    except Exception:
+        trend_gate_adx_min = 20.0
+        trend_margin_min = 0.003
+    if adx < trend_gate_adx_min:
         return False, "LONG"  # not trending — skip regardless of EMA alignment
 
     d1_close = d1_snap.get("close")
@@ -203,13 +212,13 @@ def _check_trend_gate(d1_snap: dict, h4_snap: dict) -> tuple[bool, str]:
 
     if d1_bull and h4_bull:
         margin = (d1_close - d1_ema200) / d1_ema200
-        if margin > 0.003 or d1_slope > 0:
+        if margin > trend_margin_min or d1_slope > 0:
             return True, "LONG"
         return False, "LONG"
 
     if not d1_bull and not h4_bull:
         margin = (d1_ema200 - d1_close) / d1_ema200
-        if margin > 0.003 or d1_slope < 0:
+        if margin > trend_margin_min or d1_slope < 0:
             return True, "SHORT"
         return False, "SHORT"
 
@@ -307,7 +316,14 @@ def _adx_filter(h4_snap: dict) -> float:
     adx = h4_snap.get("adx")
     if adx is None:
         return 0.3  # neutral if no data
-    if adx >= 25:
+    try:
+        from config import CONFIG
+
+        fx_cfg = CONFIG.get("FOREX_ENGINE", {}) or {}
+        adx_confirm_min = float(fx_cfg.get("adx_confirm_min", 22.0))
+    except Exception:
+        adx_confirm_min = 22.0
+    if adx >= adx_confirm_min:
         return 1.0
     return 0.0
 
@@ -485,6 +501,25 @@ def compute_forex_score(
     session_ok = (
         True if backtest_mode else _in_session(utc_hour, pair.get("display", ""))
     )
+    momentum_score = _momentum_confirm(h4_snap, trend_dir)
+    adx_score = _adx_filter(h4_snap)
+    carry_score = _carry_tilt(pair, trend_dir, bar_time)
+    result.trend_gate = trend_ok
+    result.session_active = session_ok
+    result.momentum_confirm = momentum_score
+    result.adx_filter = adx_score
+    result.carry_tilt = carry_score
+
+    try:
+        from config import CONFIG
+
+        fx_cfg = CONFIG.get("FOREX_ENGINE", {}) or {}
+        trend_support_weights = fx_cfg.get("trend_support_weights", {}) or {}
+    except Exception:
+        trend_support_weights = {}
+    momentum_w = float(trend_support_weights.get("momentum", 0.15))
+    adx_w = float(trend_support_weights.get("adx", 0.10))
+    carry_w = float(trend_support_weights.get("carry", 0.05))
 
     if not session_ok:
         log.info(
@@ -507,10 +542,14 @@ def compute_forex_score(
         rsi_history = rsi_history_override if rsi_history_override else None
         eq = _entry_quality(h1_snap, trend_dir, rsi_history)
         cot = _cot_boost(pair, trend_dir, bar_time)
-        trend_score = _dfw.score(eq, cot)
+        trend_score = min(
+            1.0,
+            _dfw.score(eq, cot)
+            + momentum_score * momentum_w
+            + adx_score * adx_w
+            + carry_score * carry_w,
+        )
 
-        result.trend_gate = trend_ok
-        result.session_active = session_ok
         result.entry_quality = eq
         result.cot_boost = cot
 
@@ -585,7 +624,10 @@ def compute_forex_score(
         "session_active": session_ok,
         "utc_hour": utc_hour,
         "entry_quality": result.entry_quality,
+        "momentum_confirm": round(result.momentum_confirm, 3),
+        "adx_filter": round(result.adx_filter, 3),
         "cot_boost": result.cot_boost,
+        "carry_tilt": round(result.carry_tilt, 3),
         "breakout_score": bo_score,
         "trend_score": round(trend_score, 4),
         "breakout_final": round(bo_final, 4),

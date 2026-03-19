@@ -398,14 +398,31 @@ class AutoTrader:
             if isinstance(signal.get("regime"), dict)
             else "UNKNOWN",
         )
-        _blocked_regimes = {"DEAD RANGING", "RANGING", "DEVELOPING"}
-        if _trend_state in _blocked_regimes or _regime.upper() in {
-            "RANGING",
-            "LOW_VOLATILITY",
-        }:
+        _blocked_state_cfg = cfg.get("AUTO_TRADE_BLOCKED_TREND_STATES", {})
+        if isinstance(_blocked_state_cfg, dict):
+            _blocked_states = set(
+                _blocked_state_cfg.get(
+                    asset_type, _blocked_state_cfg.get("default", ["DEAD RANGING", "RANGING"])
+                )
+            )
+        else:
+            _blocked_states = set(_blocked_state_cfg or ["DEAD RANGING", "RANGING"])
+
+        _blocked_regime_cfg = cfg.get("AUTO_TRADE_BLOCKED_REGIMES", {})
+        if isinstance(_blocked_regime_cfg, dict):
+            _blocked_regimes = {
+                str(v).upper()
+                for v in _blocked_regime_cfg.get(
+                    asset_type, _blocked_regime_cfg.get("default", ["RANGING"])
+                )
+            }
+        else:
+            _blocked_regimes = {str(v).upper() for v in (_blocked_regime_cfg or ["RANGING"])}
+
+        if _trend_state in _blocked_states or _regime.upper() in _blocked_regimes:
             return (
                 False,
-                f"Regime filter: {_trend_state}/{_regime} — only TRENDING allowed for auto-trade",
+                f"Regime filter: {_trend_state}/{_regime} blocked for auto-trade",
             )
 
         now = datetime.now(timezone.utc)
