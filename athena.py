@@ -6487,10 +6487,7 @@ def api_quick_execute():
         if result.get("success"):
             # Build Engine B factor JSON for AI learning
             _b_factors = {}
-            if "structural_verdict" in engine_b:
-                bos = engine_b.get("bos_data", {})
-                sweep = engine_b.get("sweep_data", {})
-                seq = engine_b.get("sequence_data", {}).get("state", "RANGING")
+
                 
                 _b_factors["Naked_BOS_Bull"] = 1.0 if bos.get("bos_bull") else 0.0
                 _b_factors["Naked_BOS_Bear"] = 1.0 if bos.get("bos_bear") else 0.0
