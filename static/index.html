@@ -642,6 +642,19 @@ function buildLiveSignalPayload(sig) {
   return payload;
 }
 
+function getLiveSignalMetrics(sig) {
+  var entry = getSignalLivePrice(sig);
+  var sl = sig && sig.sl != null && !isNaN(sig.sl) ? parseFloat(sig.sl) : null;
+  var tp1 = sig && sig.tp1 != null && !isNaN(sig.tp1) ? parseFloat(sig.tp1) : null;
+  var tp2 = sig && sig.tp2 != null && !isNaN(sig.tp2) ? parseFloat(sig.tp2) : null;
+  var riskPct = (entry && sl) ? (Math.abs(entry - sl) / entry * 100) : null;
+  var rr1 = (entry && sl && tp1 && Math.abs(entry - sl) > 0) ? (Math.abs(tp1 - entry) / Math.abs(entry - sl)) : null;
+  var rr2 = (entry && sl && tp2 && Math.abs(entry - sl) > 0) ? (Math.abs(tp2 - entry) / Math.abs(entry - sl)) : null;
+  var riskAmt = riskPct != null ? accountSize * 0.01 : null;
+  var sizeUnits = (riskPct != null && riskPct > 0 && entry) ? (riskAmt / Math.abs(entry - sl)) : null;
+  return {entry: entry, sl: sl, tp1: tp1, tp2: tp2, riskPct: riskPct, rr1: rr1, rr2: rr2, riskAmt: riskAmt, sizeUnits: sizeUnits};
+}
+
 function updateTickerStrip(prices) {
   var strip = document.getElementById('tickerStrip');
   var offline = document.getElementById('tickerOffline');
@@ -716,6 +729,9 @@ function updateTickerStrip(prices) {
         var dl = document.getElementById('lived-' + sid);
         var entryEl = document.getElementById('entryval-' + sid);
         var execDetailEl = document.getElementById('execdetail-' + sid);
+        var slRiskEl = document.getElementById('slrisk-' + sid);
+        var rrEl = document.getElementById('rrval-' + sid);
+        var posSizeEl = document.getElementById('ps-' + sid);
         if (el) {
           el.textContent = fmtTickerPrice(livePrice);
           var isLong = s.direction === 'LONG';
@@ -729,7 +745,16 @@ function updateTickerStrip(prices) {
         }
         if (entryEl) entryEl.textContent = fmtPrice(livePrice);
         if (execDetailEl) execDetailEl.textContent = s.display + ' @ ' + fmtPrice(livePrice) + ' | SL: ' + fmtPrice(s.sl) + ' | TP: ' + fmtPrice(s.tp1);
-        if (_chartData[sid] && _chartData[sid].levels) _chartData[sid].levels.entry = livePrice;
+        var metrics = getLiveSignalMetrics(s);
+        if (slRiskEl) slRiskEl.textContent = metrics.riskPct != null ? metrics.riskPct.toFixed(2) + '%' : '-';
+        if (rrEl) rrEl.textContent = 'TP1 = 1:' + (metrics.rr1 != null ? metrics.rr1.toFixed(2) : '?') + ' | TP2 = 1:' + (metrics.rr2 != null ? metrics.rr2.toFixed(2) : '?');
+        if (posSizeEl) posSizeEl.textContent = metrics.riskAmt != null ? ('$' + metrics.riskAmt.toFixed(2)) : '$0.00';
+        if (_chartData[sid] && _chartData[sid].levels) {
+          _chartData[sid].levels.entry = livePrice;
+          if (_chartData[sid].entryLine) {
+            _chartData[sid].entryLine.applyOptions({ price: livePrice });
+          }
+        }
       });
     }
   }).catch(function(){});
@@ -1447,20 +1472,20 @@ function buildCard(s,idx) {
         '<div class="level-box"><div class="level-label">Stop Loss</div><div class="level-val bear">'+fmtPrice(s.sl)+'</div></div>'+
         '<div class="level-box"><div class="level-label">TP1 ('+s.rr1+'R)</div><div class="level-val bull">'+fmtPrice(s.tp1)+'</div></div>'+
         '<div class="level-box"><div class="level-label">TP2 ('+s.rr2+'R)</div><div class="level-val bull">'+fmtPrice(s.tp2)+'</div></div>'+
-        '<div class="level-box"><div class="level-label">SL Risk %</div><div class="level-val bear">'+(s.slPct||'-')+'%</div></div>'+
+        '<div class="level-box"><div class="level-label">SL Risk %</div><div class="level-val bear" id="slrisk-'+sid+'">'+(getLiveSignalMetrics(s).riskPct != null ? getLiveSignalMetrics(s).riskPct.toFixed(2)+'%' : '-')+'</div></div>'+
         '<div class="level-box"><div class="level-label">61.8% Fib</div><div class="level-val accent">'+fmtPrice(s.fib.fib618)+'</div></div>'+
         '<div class="level-box"><div class="level-label">50% Fib</div><div class="level-val accent">'+fmtPrice(s.fib.fib500)+'</div></div>'+
         '<div class="level-box" id="live-'+sid+'" style="grid-column:1/-1;background:rgba(0,212,255,0.04);border-color:rgba(0,212,255,0.15)"><div class="level-label" style="color:var(--accent)">LIVE PRICE</div><div class="level-val" style="color:var(--accent);font-size:14px" id="livep-'+sid+'">connecting...</div><div id="lived-'+sid+'" style="font-size:9px;color:var(--muted);font-family:Space Mono,monospace;margin-top:2px"></div></div>'+
       '</div>'+
       '<div class="rr-row">'+
         '<span style="font-size:10px;color:var(--muted);font-family:\'Space Mono\',monospace">R:R</span>'+
-        '<span class="rr-val">TP1 = 1:'+s.rr1+' | TP2 = 1:'+s.rr2+'</span>'+
+        '<span class="rr-val" id="rrval-'+sid+'">TP1 = 1:'+(getLiveSignalMetrics(s).rr1 != null ? getLiveSignalMetrics(s).rr1.toFixed(2) : '?')+' | TP2 = 1:'+(getLiveSignalMetrics(s).rr2 != null ? getLiveSignalMetrics(s).rr2.toFixed(2) : '?')+'</span>'+
       '</div>'+
       '<div class="pos-size-row">'+
         '<label>Account $</label>'+
         '<input class="pos-size-input" type="number" value="'+accountSize+'" onchange="updateAcct(this.value)" onfocus="this.select()">'+
         '<label>1% Risk =</label>'+
-        '<span class="pos-size-result" id="ps-'+sid+'">$'+(accountSize*0.01).toFixed(2)+'</span>'+
+        '<span class="pos-size-result" id="ps-'+sid+'">$'+(getLiveSignalMetrics(s).riskAmt != null ? getLiveSignalMetrics(s).riskAmt.toFixed(2) : (accountSize*0.01).toFixed(2))+'</span>'+
       '</div>'+
       '<div id="compare-ai-'+sid+'" style="display:none;margin-bottom:8px"></div>'+
       aiSection+
@@ -1551,7 +1576,7 @@ function toggleChart(sid) {
   }
 
   // Entry, SL, TP lines
-  if (levels.entry) candleSeries.createPriceLine({ price: levels.entry, color: '#9fb0c5', lineWidth: 1, lineStyle: 2, title: 'Entry' });
+  if (levels.entry) _chartData[sid].entryLine = candleSeries.createPriceLine({ price: levels.entry, color: '#9fb0c5', lineWidth: 1, lineStyle: 2, title: 'Entry' });
   if (levels.sl)    candleSeries.createPriceLine({ price: levels.sl,    color: '#ff3b5c', lineWidth: 1, lineStyle: 1, title: 'SL' });
   if (levels.tp1)   candleSeries.createPriceLine({ price: levels.tp1,   color: '#00e676', lineWidth: 1, lineStyle: 1, title: 'TP1' });
 
@@ -1587,7 +1612,10 @@ function buildExecButton(s) {
 function updateAcct(val) {
   accountSize=parseFloat(val)||500;
   document.querySelectorAll('.pos-size-result').forEach(function(el){
-    el.textContent='$'+(accountSize*0.01).toFixed(2);
+    var sid = (el.id || '').replace(/^ps-/, '');
+    var sig = allSignals.find(function(s){ return (s.symbol||'').replace(/[\/=^.]/g,'_') === sid; }) || window['_nakedSig_'+sid];
+    var metrics = sig ? getLiveSignalMetrics(sig) : null;
+    el.textContent='$'+((metrics && metrics.riskAmt != null) ? metrics.riskAmt.toFixed(2) : (accountSize*0.01).toFixed(2));
   });
   document.querySelectorAll('.pos-size-input').forEach(function(el){el.value=accountSize;});
 }
@@ -2411,6 +2439,7 @@ function confirmExecute(symbol, forceMode) {
   var isForce = forceMode || false;
   var modalTitle = isForce ? 'FORCE EXECUTE ' + dir + ' - ' + sig.display + ' (' + via + ')' : 'EXECUTE ' + dir + ' - ' + sig.display + ' (' + via + ')';
   var forceWarn = isForce ? '<div style="margin:8px 0;padding:8px;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.3);border-radius:6px;color:var(--warn);font-size:11px">TEST MODE: Force-executing watchlist signal (score below normal threshold). Risk engine checks still apply.</div>' : '';
+  var metrics = getLiveSignalMetrics(sig);
   overlay.innerHTML = '<div class="exec-modal">' +
     '<h3 style="color:' + (isForce ? 'var(--warn)' : dirColor) + '">' + modalTitle + '</h3>' + forceWarn +
     '<div class="exec-summary">' +
@@ -2419,10 +2448,10 @@ function confirmExecute(symbol, forceMode) {
       '<div>Entry: <strong>' + fmtPrice(execSig.price) + '</strong></div>' +
       '<div>Stop Loss: <strong style="color:var(--bear)">' + fmtPrice(execSig.sl) + '</strong></div>' +
       '<div>Take Profit: <strong style="color:var(--bull)">' + fmtPrice(execSig.tp1) + '</strong></div>' +
-      '<div>SL Risk: <strong>' + (sig.slPct||'?') + '%</strong></div>' +
+      '<div>SL Risk: <strong>' + (metrics.riskPct != null ? metrics.riskPct.toFixed(2) : '?') + '%</strong></div>' +
       '<div>Score: <strong>' + (typeof sig.confluenceScore==='number'?sig.confluenceScore.toFixed(2):sig.confluenceScore) + '/' + (sig.maxScore||3) + '</strong></div>' +
       '<div>Account: <strong>$' + (acct.balance||0).toLocaleString() + '</strong></div>' +
-      '<div>Risk (1%): <strong style="color:var(--accent)">$' + riskAmt + '</strong></div>' +
+      '<div>Risk (1%): <strong style="color:var(--accent)">$' + (metrics.riskAmt != null ? metrics.riskAmt.toFixed(2) : riskAmt) + '</strong></div>' +
       '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);color:var(--warn);font-size:10px">Position size will be calculated by the risk engine based on your ' + via + ' account balance and SL distance.</div>' +
     '</div>' +
     '<div class="exec-actions">' +
