@@ -1420,6 +1420,7 @@ function buildCard(s,idx) {
         '<label>1% Risk =</label>'+
         '<span class="pos-size-result" id="ps-'+sid+'">$'+(accountSize*0.01).toFixed(2)+'</span>'+
       '</div>'+
+      '<div id="compare-ai-'+sid+'" style="display:none;margin-bottom:8px"></div>'+
       aiSection+
       buildChartSection(s)+
       buildExecButton(s)+
@@ -1548,8 +1549,9 @@ function updateAcct(val) {
 }
 
 // -- AI Content --
-function buildAIContent(ai,symbol) {
-  var sid=(symbol||'').replace(/[\/=^.]/g,'_');
+function buildAIContent(ai,symbol,idSuffix) {
+  var sidBase=(symbol||'').replace(/[\/=^.]/g,'_');
+  var sid=idSuffix ? sidBase+'-'+String(idSuffix).replace(/[^\w-]/g,'_') : sidBase;
   var gk=ai.grade?(ai.grade==='A+'?'Aplus':ai.grade):'unknown';
   var warnArr=Array.isArray(ai.warnings)?ai.warnings:(ai.warnings?[ai.warnings]:[]);
   var warns=warnArr.map(function(w){return '<div class="ai-warning-item">'+w+'</div>';}).join('');
@@ -1773,9 +1775,14 @@ async function runCompare(symbol) {
   if(btn){btn.disabled=true;btn.textContent='Comparing...';}
   
   var resDiv = document.getElementById('nres-'+sid);
+  var compareAIDiv = document.getElementById('compare-ai-'+sid);
   if(resDiv) {
     resDiv.style.display = 'block';
     resDiv.innerHTML = 'Analyzing Engine A Math vs Engine B Structure...';
+  }
+  if(compareAIDiv) {
+    compareAIDiv.style.display = 'none';
+    compareAIDiv.innerHTML = '';
   }
 
   try {
@@ -1823,15 +1830,31 @@ async function runCompare(symbol) {
 
     if(engineB.ai_analysis) {
       html += '<div style="margin:8px 0 4px;font-size:10px;font-weight:700;color:#f59e0b;letter-spacing:1px;font-family:monospace">⚖️ CROSS-ENGINE AI REVIEW (A+B aware)</div>';
-      html += buildAIContent(engineB.ai_analysis, symbol);
+      html += buildAIContent(engineB.ai_analysis, symbol, 'compare-inline');
+    }
+
+    if(compareAIDiv && engineB.ai_analysis) {
+      compareAIDiv.style.display = 'block';
+      compareAIDiv.innerHTML = ''+
+        '<div style="margin:8px 0 4px;font-size:10px;font-weight:700;color:#f59e0b;letter-spacing:1px;font-family:monospace">⚖️ CROSS-ENGINE AI REVIEW (A+B aware)</div>'+
+        buildAIContent(engineB.ai_analysis, symbol, 'compare-card');
     }
 
     var execBtnHTML = '<button class="exec-btn force" style="margin-top:4px;width:100%" id="qexecbtn-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'])" '+exeDisabled+'>⚡ QUICK SCALP EXECUTE (Uses Engine B SL/TP)</button>';
     
     if(resDiv) resDiv.innerHTML = html + execBtnHTML;
+    if(compareAIDiv && engineB.ai_analysis && compareAIDiv.scrollIntoView) {
+      compareAIDiv.scrollIntoView({behavior:'smooth', block:'nearest'});
+    } else if(resDiv && resDiv.scrollIntoView) {
+      resDiv.scrollIntoView({behavior:'smooth', block:'nearest'});
+    }
     if(btn){btn.disabled=false;btn.textContent='⚖️ RE-COMPARE A & B';}
   } catch(err) {
     if(btn){btn.disabled=false;btn.textContent='⚖️ RETRY COMPARE';}
+    if(compareAIDiv) {
+      compareAIDiv.style.display = 'none';
+      compareAIDiv.innerHTML = '';
+    }
     if(resDiv) resDiv.textContent = 'Compare Error: ' + err.message;
     showToast('Compare Error: '+err.message, true);
   }
