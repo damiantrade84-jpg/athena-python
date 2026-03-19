@@ -61,7 +61,7 @@ _LEARNING_IDX = [
 def init_learning_db(db_path: str) -> None:
     """Create learning tables and indexes if they don't exist."""
     try:
-        with sqlite3.connect(db_path, timeout=1.0) as con:
+        with sqlite3.connect(db_path, timeout=15.0) as con:
             con.execute("PRAGMA journal_mode=WAL")
             con.execute(_CREATE_LEARNING_LOG)
             con.execute(_CREATE_META_LOG)
@@ -86,7 +86,7 @@ def extract_learning_from_trade(db_path: str, ticket: str, is_demo: bool = False
     In demo mode all closed trades are logged; live mode requires r_multiple != NULL.
     """
     try:
-        with sqlite3.connect(db_path, timeout=1.0) as con:
+        with sqlite3.connect(db_path, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             row = con.execute(
                 "SELECT * FROM audit_log WHERE ticket=? ORDER BY id DESC LIMIT 1", (ticket,)
@@ -115,7 +115,7 @@ def extract_learning_from_trade(db_path: str, ticket: str, is_demo: bool = False
         # Copy factor scores if available
         factors_raw = row.get("factors_json")
 
-        with sqlite3.connect(db_path, timeout=1.0) as con:
+        with sqlite3.connect(db_path, timeout=15.0) as con:
             con.execute(
                 """INSERT INTO learning_log
                    (ts, trade_ts, ticket, pair, asset_type, direction,
@@ -171,7 +171,7 @@ def get_ai_learning_context(pair: str, asset_type: str, db_path: str,
     """
     cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
     try:
-        with sqlite3.connect(db_path, timeout=1.0) as con:
+        with sqlite3.connect(db_path, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             rows = con.execute(
                 "SELECT * FROM learning_log WHERE ts > ? ORDER BY ts DESC",
@@ -342,7 +342,7 @@ def get_meta_analysis_context(db_path: str, days: int = 7) -> str:
     """Build a plain-text summary of recent outcomes for Claude meta-analysis."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     try:
-        with sqlite3.connect(db_path, timeout=1.0) as con:
+        with sqlite3.connect(db_path, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             rows = con.execute(
                 "SELECT * FROM learning_log WHERE ts > ? ORDER BY ts DESC", (cutoff,)
@@ -472,7 +472,7 @@ def run_meta_analysis(db_path: str, anthropic_key: str, model: str,
 
         # Persist to meta_analysis_log
         try:
-            with sqlite3.connect(db_path, timeout=1.0) as con:
+            with sqlite3.connect(db_path, timeout=15.0) as con:
                 con.execute(
                     "INSERT INTO meta_analysis_log (ts, days, summary, insights, raw_response) VALUES (?,?,?,?,?)",
                     (
@@ -498,7 +498,7 @@ def run_meta_analysis(db_path: str, anthropic_key: str, model: str,
 def get_last_meta_analysis(db_path: str) -> dict | None:
     """Return the most recent meta-analysis result."""
     try:
-        with sqlite3.connect(db_path, timeout=1.0) as con:
+        with sqlite3.connect(db_path, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             row = con.execute(
                 "SELECT * FROM meta_analysis_log ORDER BY id DESC LIMIT 1"
@@ -540,7 +540,7 @@ def build_learning_memory(db_path: str, asset_type: str,
             return entry["text"]
 
     try:
-        con = sqlite3.connect(db_path, timeout=1.0)
+        con = sqlite3.connect(db_path, timeout=15.0)
         con.row_factory = sqlite3.Row
         rows = con.execute(
             "SELECT * FROM learning_log WHERE asset_type = ? AND win IS NOT NULL "

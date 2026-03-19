@@ -731,7 +731,9 @@ class CandleBuilder:
 
     def _init_db(self):
 
-        with sqlite3.connect(self._db, timeout=1.0) as con:
+        with sqlite3.connect(self._db, timeout=15.0) as con:
+
+            con.execute("PRAGMA journal_mode=WAL")
 
             con.execute("""CREATE TABLE IF NOT EXISTS candle_cache (
 
@@ -813,7 +815,7 @@ class CandleBuilder:
 
             t = bar["start"].strftime("%Y-%m-%d %H:%M:%S")
 
-            with sqlite3.connect(self._db, timeout=1.0) as con:
+            with sqlite3.connect(self._db, timeout=15.0) as con:
 
                 con.execute(
 
@@ -837,7 +839,7 @@ class CandleBuilder:
 
         try:
 
-            with sqlite3.connect(self._db, timeout=1.0) as con:
+            with sqlite3.connect(self._db, timeout=15.0) as con:
 
                 con.row_factory = sqlite3.Row
 
@@ -919,7 +921,7 @@ class CandleBuilder:
 
                 disp = p["display"]
 
-                with sqlite3.connect(self._db, timeout=1.0) as con:
+                with sqlite3.connect(self._db, timeout=15.0) as con:
 
                     cnt = con.execute(
 
@@ -965,7 +967,7 @@ class CandleBuilder:
 
                         if d1_rows:
 
-                            with sqlite3.connect(self._db, timeout=1.0) as con:
+                            with sqlite3.connect(self._db, timeout=15.0) as con:
 
                                 con.executemany(
 
@@ -1071,7 +1073,7 @@ class CandleBuilder:
 
                 if all_rows:
 
-                    with sqlite3.connect(self._db, timeout=1.0) as con:
+                    with sqlite3.connect(self._db, timeout=15.0) as con:
 
                         con.executemany(
 
@@ -1203,7 +1205,7 @@ class CandleBuilder:
 
                 if rows:
 
-                    with sqlite3.connect(self._db, timeout=1.0) as con:
+                    with sqlite3.connect(self._db, timeout=15.0) as con:
 
                         con.executemany(
 
@@ -1255,7 +1257,7 @@ class CandleBuilder:
 
         try:
 
-            with sqlite3.connect(self._db, timeout=1.0) as con:
+            with sqlite3.connect(self._db, timeout=15.0) as con:
 
                 rows = con.execute(
 
@@ -5872,7 +5874,7 @@ def _init_audit_db(db_path: str) -> None:
 
     """Create audit table if it doesn't exist, and migrate legacy schemas."""
 
-    con = sqlite3.connect(db_path, timeout=1.0)
+    con = sqlite3.connect(db_path, timeout=15.0)
     con.execute("PRAGMA journal_mode=WAL")
 
     con.execute("""
@@ -6250,7 +6252,7 @@ def api_analyze():
 
             _score_pct = round(sig.get("confluenceScore", 0) / _max_s * 100, 1) if _max_s else 0
 
-            with sqlite3.connect(_AUDIT_DB, timeout=1.0) as _con:
+            with sqlite3.connect(_AUDIT_DB, timeout=15.0) as _con:
 
                 _factors = {
                     "scores": sig.get("factorScores"),
@@ -6432,7 +6434,7 @@ def api_quick_execute():
         if not approval.approved:
             log.warning(f"[QUICK EXEC] {pair_name} REJECTED: {approval.reason}")
             try:
-                with sqlite3.connect(_AUDIT_DB, timeout=1.0) as _con:
+                with sqlite3.connect(_AUDIT_DB, timeout=15.0) as _con:
                     _con.execute(
                         "INSERT INTO audit_log(ts,pair,score,direction,style,grade,error_tag) VALUES(?,?,?,?,?,?,?)",
                         (
@@ -6473,7 +6475,7 @@ def api_quick_execute():
                 "regime": engine_b.get("regime", "RANGING"),
             }
             try:
-                with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+                with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
                     con.execute(
                         "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style,"
                         "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json) "
@@ -6884,7 +6886,7 @@ def api_execute():
             log.warning(f"[EXEC] {pair} REJECTED by risk engine: {approval.reason}")
 
             try:
-                with sqlite3.connect(_AUDIT_DB, timeout=1.0) as _con:
+                with sqlite3.connect(_AUDIT_DB, timeout=15.0) as _con:
                     _con.execute(
                         "INSERT INTO audit_log(ts,pair,score,direction,style,grade,error_tag) VALUES(?,?,?,?,?,?,?)",
                         (
@@ -6920,7 +6922,7 @@ def api_execute():
 
             try:
 
-                with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+                with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
                     _factors = {
                         "scores": sig.get("factorScores"),
@@ -7198,7 +7200,7 @@ def api_webhook():
 
             try:
 
-                with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+                with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
                     _factors = {
                         "scores": sig.get("factorScores"),
@@ -7787,7 +7789,7 @@ def api_backtest():
 def api_backtest_history():
     """Return all stored backtest results, newest first."""
     try:
-        with sqlite3.connect(_AUDIT_DB) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             rows = con.execute("""
                 SELECT * FROM backtest_results
@@ -7804,7 +7806,7 @@ def api_backtest_history():
 def api_backtest_history_pair(pair_name):
     """Return backtest history for a specific pair."""
     try:
-        with sqlite3.connect(_AUDIT_DB) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             rows = con.execute("""
                 SELECT * FROM backtest_results
@@ -7822,7 +7824,7 @@ def api_backtest_history_pair(pair_name):
 def api_backtest_best():
     """Return best result per pair (highest SQN from most recent run)."""
     try:
-        with sqlite3.connect(_AUDIT_DB) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             rows = con.execute("""
                 SELECT b.*
@@ -8070,7 +8072,7 @@ def api_auto_trade_log():
 
     try:
 
-        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
             con.row_factory = sqlite3.Row
 
@@ -8102,7 +8104,7 @@ def api_failed_executions():
 
     try:
 
-        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
             con.row_factory = sqlite3.Row
 
@@ -8397,7 +8399,7 @@ def api_audit():
 
     try:
 
-        con = sqlite3.connect(_AUDIT_DB, timeout=1.0)
+        con = sqlite3.connect(_AUDIT_DB, timeout=15.0)
 
         con.row_factory = sqlite3.Row
 
@@ -8928,7 +8930,7 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
 
         "warnings": warn_list,
 
-        "session": get_session(),
+        "session": get_session(h4[-1].get("time") if h4 else None),
 
         "timestamp": datetime.now(timezone.utc).isoformat(),
 
@@ -9110,7 +9112,7 @@ def _update_trade_outcome(ticket: str, exit_price: float, exit_time: str,
 
     try:
 
-        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
             con.execute(
 
@@ -9258,7 +9260,7 @@ def _check_mt5_outcomes() -> None:
 
         # Find audit rows with a ticket but no exit_price
 
-        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
             con.row_factory = sqlite3.Row
 
@@ -9390,7 +9392,7 @@ def _check_ccxt_outcomes() -> None:
 
                 # Find matching audit row for SL distance
 
-                with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+                with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
                     con.row_factory = sqlite3.Row
 
@@ -9460,7 +9462,7 @@ def _check_ccxt_outcomes() -> None:
 
                 log.debug(f"[MONITOR] breakeven check error: {e}")
 
-        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
             con.row_factory = sqlite3.Row
 
@@ -9586,7 +9588,7 @@ def _check_score_decay() -> None:
 
     try:
 
-        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             open_trades = con.execute(
                 "SELECT pair, score, direction FROM audit_log "
@@ -9677,7 +9679,7 @@ def api_performance():
 
     try:
 
-        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
             con.row_factory = sqlite3.Row
 
@@ -10139,7 +10141,7 @@ if __name__=="__main__":
 
         try:
 
-            with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+            with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
                 con.row_factory = sqlite3.Row
 
