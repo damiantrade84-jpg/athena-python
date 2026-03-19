@@ -241,19 +241,6 @@ def _weighted_factor_score(indicators: Dict[str, Optional[float]],
     return sum(v * w / w_sum for v, w in zip(vals, wgts))
 
 
-def _dynamic_regime_weights(factor_scores: dict, recent_returns: list, regime: str):
-    """Momentum-based dynamic allocation (Tai 2026 SSRN)."""
-    momentum = np.mean(recent_returns[-10:]) if len(recent_returns) >= 10 else 0.0
-    base = CONFIG.get("REGIME_WEIGHTS", {}).get(regime.upper(), {})
-    
-    dynamic = {}
-    for factor, w in base.items():
-        # Boost trending factors when momentum is positive
-        adj = 1.0 + (momentum * 0.3 if factor in ["trend", "momentum"] else -momentum * 0.2)
-        dynamic[factor] = round(max(0.3, min(2.5, w * adj)), 3)
-    return dynamic
-
-
 def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dict,
                           d1_candles: List, h4_candles: List, h1_candles: List,
                           volume_ratio: float, funding_rate: Optional[float] = None,
