@@ -10,6 +10,7 @@ news-driven volatility spikes that frequently stop out positions.
 Uses EODHD `get_economic_events_data()` from the Python library.
 Results are cached for 60 minutes to limit API calls.
 """
+
 import logging
 import os
 import time
@@ -23,21 +24,50 @@ _CACHE_TTL = 3600  # 60 minutes
 
 # Map currency codes to EODHD country codes
 _CURRENCY_TO_COUNTRY = {
-    "USD": "US", "EUR": "EU", "GBP": "GB", "JPY": "JP", "AUD": "AU",
-    "NZD": "NZ", "CAD": "CA", "CHF": "CH", "ZAR": "ZA", "MXN": "MX",
-    "SGD": "SG", "HKD": "HK", "CNY": "CN", "SEK": "SE", "NOK": "NO",
-    "BTC": None, "ETH": None,  # Crypto — no economic calendar events
+    "USD": "US",
+    "EUR": "EU",
+    "GBP": "GB",
+    "JPY": "JP",
+    "AUD": "AU",
+    "NZD": "NZ",
+    "CAD": "CA",
+    "CHF": "CH",
+    "ZAR": "ZA",
+    "MXN": "MX",
+    "SGD": "SG",
+    "HKD": "HK",
+    "CNY": "CN",
+    "SEK": "SE",
+    "NOK": "NO",
+    "BTC": None,
+    "ETH": None,  # Crypto — no economic calendar events
 }
 
 # High-impact event keywords (normalized to lowercase for matching)
 _HIGH_IMPACT_KEYWORDS = [
-    "interest rate", "rate decision", "monetary policy", "fomc",
-    "non-farm", "nonfarm", "nfp", "employment change",
-    "cpi", "consumer price", "inflation",
-    "gdp", "gross domestic",
-    "retail sales", "trade balance",
-    "pmi", "purchasing manager",
-    "central bank", "ecb", "boe", "boj", "rba", "rbnz",
+    "interest rate",
+    "rate decision",
+    "monetary policy",
+    "fomc",
+    "non-farm",
+    "nonfarm",
+    "nfp",
+    "employment change",
+    "cpi",
+    "consumer price",
+    "inflation",
+    "gdp",
+    "gross domestic",
+    "retail sales",
+    "trade balance",
+    "pmi",
+    "purchasing manager",
+    "central bank",
+    "ecb",
+    "boe",
+    "boj",
+    "rba",
+    "rbnz",
 ]
 
 
@@ -51,8 +81,14 @@ def _pair_to_countries(pair: str, asset_type: str) -> list[str]:
 
     # Commodity mapping
     commodity_currencies = {
-        "GC": ["US"], "SI": ["US"], "CL": ["US"], "BZ": ["US", "GB"],
-        "NG": ["US"], "PL": ["US"], "PA": ["US"], "HG": ["US"],
+        "GC": ["US"],
+        "SI": ["US"],
+        "CL": ["US"],
+        "BZ": ["US", "GB"],
+        "NG": ["US"],
+        "PL": ["US"],
+        "PA": ["US"],
+        "HG": ["US"],
     }
     for sym, countries in commodity_currencies.items():
         if clean.startswith(sym):
@@ -60,9 +96,16 @@ def _pair_to_countries(pair: str, asset_type: str) -> list[str]:
 
     # Index mapping
     index_countries = {
-        "SPX": ["US"], "NDX": ["US"], "DJI": ["US"], "GSPC": ["US"],
-        "IXIC": ["US"], "FTSE": ["GB"], "GDAXI": ["EU"], "N225": ["JP"],
-        "HSI": ["HK"], "STI": ["SG"],
+        "SPX": ["US"],
+        "NDX": ["US"],
+        "DJI": ["US"],
+        "GSPC": ["US"],
+        "IXIC": ["US"],
+        "FTSE": ["GB"],
+        "GDAXI": ["EU"],
+        "N225": ["JP"],
+        "HSI": ["HK"],
+        "STI": ["SG"],
     }
     for sym, countries in index_countries.items():
         if sym in clean:
@@ -108,15 +151,22 @@ def check_event_risk(pair: str, asset_type: str, lookahead_hours: int = 4) -> di
     """
     countries = _pair_to_countries(pair, asset_type)
     if not countries:
-        return {"allowed": True, "events": [],
-                "reason": f"No economic calendar for {asset_type}"}
+        return {
+            "allowed": True,
+            "events": [],
+            "reason": f"No economic calendar for {asset_type}",
+        }
 
     try:
         from eodhd import APIClient
+
         api_key = os.environ.get("EODHD_KEY", "")
         if not api_key:
-            return {"allowed": True, "events": [],
-                    "reason": "No EODHD_KEY — event risk skipped"}
+            return {
+                "allowed": True,
+                "events": [],
+                "reason": "No EODHD_KEY — event risk skipped",
+            }
 
         api = APIClient(api_key)
         now = datetime.now(timezone.utc)
@@ -128,7 +178,10 @@ def check_event_risk(pair: str, asset_type: str, lookahead_hours: int = 4) -> di
         for country in countries:
             # Check cache
             cache_key = f"{country}_{date_from}"
-            if cache_key in _cache and time.time() - _cache[cache_key]["ts"] < _CACHE_TTL:
+            if (
+                cache_key in _cache
+                and time.time() - _cache[cache_key]["ts"] < _CACHE_TTL
+            ):
                 events = _cache[cache_key]["events"]
             else:
                 try:
@@ -136,7 +189,7 @@ def check_event_risk(pair: str, asset_type: str, lookahead_hours: int = 4) -> di
                         date_from=date_from,
                         date_to=date_to,
                         country=country,
-                        limit="50"
+                        limit="50",
                     )
                     if not isinstance(events, list):
                         events = []
@@ -155,7 +208,8 @@ def check_event_risk(pair: str, asset_type: str, lookahead_hours: int = 4) -> di
                 try:
                     if "T" in str(ev_date):
                         ev_dt = datetime.fromisoformat(
-                            str(ev_date).replace("Z", "+00:00"))
+                            str(ev_date).replace("Z", "+00:00")
+                        )
                     else:
                         ev_dt = datetime.strptime(str(ev_date), "%Y-%m-%d")
                         ev_dt = ev_dt.replace(tzinfo=timezone.utc)
@@ -165,24 +219,31 @@ def check_event_risk(pair: str, asset_type: str, lookahead_hours: int = 4) -> di
                 # Check if event is within lookahead window
                 hours_until = (ev_dt - now).total_seconds() / 3600
                 if -1 <= hours_until <= lookahead_hours:
-                    high_impact_events.append({
-                        "event": ev.get("event", "Unknown"),
-                        "country": country,
-                        "time": ev_date,
-                        "hours_until": round(hours_until, 1),
-                        "importance": ev.get("importance", ""),
-                    })
+                    high_impact_events.append(
+                        {
+                            "event": ev.get("event", "Unknown"),
+                            "country": country,
+                            "time": ev_date,
+                            "hours_until": round(hours_until, 1),
+                            "importance": ev.get("importance", ""),
+                        }
+                    )
 
         if high_impact_events:
             ev_names = ", ".join(e["event"][:40] for e in high_impact_events[:3])
             hours_min = min(e["hours_until"] for e in high_impact_events)
-            reason = (f"EVENT RISK BLOCK: {len(high_impact_events)} high-impact event(s) "
-                     f"in {hours_min:.1f}h — {ev_names}")
+            reason = (
+                f"EVENT RISK BLOCK: {len(high_impact_events)} high-impact event(s) "
+                f"in {hours_min:.1f}h — {ev_names}"
+            )
             log.warning(f"[EVENT_RISK] {pair}: {reason}")
             return {"allowed": False, "events": high_impact_events, "reason": reason}
 
-        return {"allowed": True, "events": [],
-                "reason": f"No high-impact events for {'/'.join(countries)} within {lookahead_hours}h"}
+        return {
+            "allowed": True,
+            "events": [],
+            "reason": f"No high-impact events for {'/'.join(countries)} within {lookahead_hours}h",
+        }
 
     except ImportError:
         log.warning("[EVENT_RISK] eodhd library not installed — gate skipped")

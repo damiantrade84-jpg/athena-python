@@ -4,6 +4,7 @@ Handles connection to Binance (testnet or live) and order placement.
 This module is DELIBERATELY DUMB — it cannot size orders.
 All orders must arrive as a pre-validated RiskApproval from risk_engine.py.
 """
+
 import os
 import logging
 
@@ -14,45 +15,45 @@ _exchange = None
 
 # ── Symbol mapping: Athena display name → Binance symbol ─────────────────────
 _BINANCE_SYMBOL_MAP = {
-    "BTC/USDT":    "BTC/USDT",
-    "ETH/USDT":    "ETH/USDT",
-    "XRP/USDT":    "XRP/USDT",
-    "SOL/USDT":    "SOL/USDT",
-    "ADA/USDT":    "ADA/USDT",
-    "DOGE/USDT":   "DOGE/USDT",
-    "AVAX/USDT":   "AVAX/USDT",
-    "LINK/USDT":   "LINK/USDT",
-    "MATIC/USDT":  "MATIC/USDT",
-    "BNB/USDT":    "BNB/USDT",
-    "DOT/USDT":    "DOT/USDT",
-    "LTC/USDT":    "LTC/USDT",
-    "SUI/USDT":    "SUI/USDT",
-    "NEAR/USDT":   "NEAR/USDT",
-    "APT/USDT":    "APT/USDT",
-    "INJ/USDT":    "INJ/USDT",
-    "FET/USDT":    "FET/USDT",
+    "BTC/USDT": "BTC/USDT",
+    "ETH/USDT": "ETH/USDT",
+    "XRP/USDT": "XRP/USDT",
+    "SOL/USDT": "SOL/USDT",
+    "ADA/USDT": "ADA/USDT",
+    "DOGE/USDT": "DOGE/USDT",
+    "AVAX/USDT": "AVAX/USDT",
+    "LINK/USDT": "LINK/USDT",
+    "MATIC/USDT": "MATIC/USDT",
+    "BNB/USDT": "BNB/USDT",
+    "DOT/USDT": "DOT/USDT",
+    "LTC/USDT": "LTC/USDT",
+    "SUI/USDT": "SUI/USDT",
+    "NEAR/USDT": "NEAR/USDT",
+    "APT/USDT": "APT/USDT",
+    "INJ/USDT": "INJ/USDT",
+    "FET/USDT": "FET/USDT",
     "RENDER/USDT": "RENDER/USDT",
 }
 
 # Reverse map from Athena's internal symbol format (BTCUSDT) to ccxt format
 _INTERNAL_TO_CCXT = {
-    "BTCUSDT":    "BTC/USDT",
-    "ETHUSDT":    "ETH/USDT",
-    "XRPUSDT":    "XRP/USDT",
-    "SOLUSDT":    "SOL/USDT",
-    "ADAUSDT":    "ADA/USDT",
-    "DOGEUSDT":   "DOGE/USDT",
-    "AVAXUSDT":   "AVAX/USDT",
-    "LINKUSDT":   "LINK/USDT",
-    "MATICUSDT":  "MATIC/USDT",
-    "BNBUSDT":    "BNB/USDT",
-    "DOTUSDT":    "DOT/USDT",
-    "LTCUSDT":    "LTC/USDT",
-    "SUIUSDT":    "SUI/USDT",
-    "NEARUSDT":   "NEAR/USDT",
-    "APTUSDT":    "APT/USDT",
-    "INJUSDT":    "INJ/USDT",
-    "FETUSDT":    "FET/USDT",
+    "BTCUSDT": "BTC/USDT",
+    "ETHUSDT": "ETH/USDT",
+    "XRPUSDT": "XRP/USDT",
+    "SOLUSDT": "SOL/USDT",
+    "ADAUSDT": "ADA/USDT",
+    "DOGEUSDT": "DOGE/USDT",
+    "AVAXUSDT": "AVAX/USDT",
+    "LINKUSDT": "LINK/USDT",
+    "MATICUSDT": "MATIC/USDT",
+    "BNBUSDT": "BNB/USDT",
+    "DOTUSDT": "DOT/USDT",
+    "LTCUSDT": "LTC/USDT",
+    "SUIUSDT": "SUI/USDT",
+    "NEARUSDT": "NEAR/USDT",
+    "APTUSDT": "APT/USDT",
+    "INJUSDT": "INJ/USDT",
+    "FETUSDT": "FET/USDT",
     "RENDERUSDT": "RENDER/USDT",
 }
 
@@ -76,18 +77,24 @@ def _get_exchange():
         log.warning("[CCXT] BINANCE_API_KEY / BINANCE_API_SECRET not set")
         return None
 
-    use_testnet = os.environ.get("BINANCE_TESTNET", "true").lower() in ("true", "1", "yes")
+    use_testnet = os.environ.get("BINANCE_TESTNET", "true").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
 
     try:
-        _exchange = ccxt.binance({
-            "apiKey": api_key,
-            "secret": api_secret,
-            "sandbox": use_testnet,
-            "enableRateLimit": True,
-            "options": {
-                "defaultType": "spot",
-            },
-        })
+        _exchange = ccxt.binance(
+            {
+                "apiKey": api_key,
+                "secret": api_secret,
+                "sandbox": use_testnet,
+                "enableRateLimit": True,
+                "options": {
+                    "defaultType": "spot",
+                },
+            }
+        )
 
         env_label = "TESTNET" if use_testnet else "LIVE"
         log.info(f"[CCXT] Binance {env_label} connected")
@@ -163,7 +170,17 @@ def ccxt_get_positions() -> list:
         return []
     try:
         balance = exchange.fetch_balance()
-        skip_keys = {"USDT", "BUSD", "USD", "info", "free", "used", "total", "timestamp", "datetime"}
+        skip_keys = {
+            "USDT",
+            "BUSD",
+            "USD",
+            "info",
+            "free",
+            "used",
+            "total",
+            "timestamp",
+            "datetime",
+        }
         # Only count coins we actually trade (our 18 tracked crypto pairs)
         tracked_coins = {sym.replace("USDT", "") for sym in _INTERNAL_TO_CCXT}
         positions = []
@@ -187,13 +204,15 @@ def ccxt_get_positions() -> list:
             price = prices.get(coin, 0)
             pos_value = total * price
             est_risk = round(pos_value * 0.02, 2) if pos_value > 0 else 0
-            positions.append({
-                "pair": f"{coin}/USDT",
-                "symbol": f"{coin}USDT",
-                "volume": total,
-                "free": amounts.get("free", 0),
-                "risk_amount": est_risk,
-            })
+            positions.append(
+                {
+                    "pair": f"{coin}/USDT",
+                    "symbol": f"{coin}USDT",
+                    "volume": total,
+                    "free": amounts.get("free", 0),
+                    "risk_amount": est_risk,
+                }
+            )
         return positions
     except Exception as e:
         log.error(f"[CCXT] Failed to fetch positions: {e}")
@@ -229,7 +248,9 @@ def ccxt_get_symbol_info(athena_display: str) -> dict | None:
             "symbol": ccxt_symbol,
             "description": market.get("info", {}).get("baseAsset", ccxt_symbol),
             "point": tick_size,
-            "digits": len(str(tick_size).split(".")[-1]) if isinstance(tick_size, float) else 2,
+            "digits": len(str(tick_size).split(".")[-1])
+            if isinstance(tick_size, float)
+            else 2,
             "volume_min": market["limits"]["amount"].get("min", 0.001),
             "volume_max": market["limits"]["amount"].get("max", 9999),
             "volume_step": market["precision"].get("amount", 0.001),
@@ -245,7 +266,7 @@ def ccxt_get_symbol_info(athena_display: str) -> dict | None:
         return None
 
 
-def ccxt_execute(signal: dict, approval: "RiskApproval") -> dict:
+def ccxt_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
     """Execute a crypto trade on Binance. ONLY accepts a pre-validated RiskApproval.
 
     For spot Binance:
@@ -263,7 +284,10 @@ def ccxt_execute(signal: dict, approval: "RiskApproval") -> dict:
     from risk_engine import RiskApproval
 
     if not isinstance(approval, RiskApproval):
-        return {"success": False, "error": "INVALID_APPROVAL: must be RiskApproval from risk_engine"}
+        return {
+            "success": False,
+            "error": "INVALID_APPROVAL: must be RiskApproval from risk_engine",
+        }
 
     if not approval.approved:
         return {"success": False, "error": f"NOT_APPROVED: {approval.reason}"}
@@ -281,7 +305,10 @@ def ccxt_execute(signal: dict, approval: "RiskApproval") -> dict:
 
     # Spot only supports BUY (LONG). SHORT requires futures.
     if direction == "SHORT":
-        return {"success": False, "error": "SHORT not supported on Binance Spot — futures coming later"}
+        return {
+            "success": False,
+            "error": "SHORT not supported on Binance Spot — futures coming later",
+        }
 
     if direction != "LONG":
         return {"success": False, "error": f"INVALID_DIRECTION: {direction}"}
@@ -311,6 +338,7 @@ def ccxt_execute(signal: dict, approval: "RiskApproval") -> dict:
 
         # Market buy order — 3-attempt retry on transient network errors
         import time as _time
+
         order = None
         _last_err = None
         for _attempt in range(3):
@@ -320,9 +348,14 @@ def ccxt_execute(signal: dict, approval: "RiskApproval") -> dict:
             except Exception as _oe:
                 _oe_name = type(_oe).__name__
                 # Only retry on network/timeout errors, not on validation/order errors
-                if any(s in _oe_name for s in ("NetworkError", "RequestTimeout", "ExchangeNotAvailable")):
+                if any(
+                    s in _oe_name
+                    for s in ("NetworkError", "RequestTimeout", "ExchangeNotAvailable")
+                ):
                     _last_err = _oe
-                    log.warning(f"[CCXT] Order attempt {_attempt + 1}/3 failed ({_oe_name}), retrying...")
+                    log.warning(
+                        f"[CCXT] Order attempt {_attempt + 1}/3 failed ({_oe_name}), retrying..."
+                    )
                     _time.sleep(1)
                 else:
                     raise  # Non-retryable error — propagate immediately
@@ -333,7 +366,9 @@ def ccxt_execute(signal: dict, approval: "RiskApproval") -> dict:
         filled_price = order.get("average", order.get("price", price))
         filled_amount = order.get("filled", volume)
 
-        log.info(f"[CCXT] ORDER FILLED: id={order_id} | BUY {filled_amount} {ccxt_symbol} @ {filled_price}")
+        log.info(
+            f"[CCXT] ORDER FILLED: id={order_id} | BUY {filled_amount} {ccxt_symbol} @ {filled_price}"
+        )
 
         # Place stop-loss as a separate stop order if supported
         sl = signal.get("sl", 0)
@@ -341,8 +376,12 @@ def ccxt_execute(signal: dict, approval: "RiskApproval") -> dict:
         if sl and sl > 0:
             try:
                 sl_order = exchange.create_order(
-                    ccxt_symbol, "stop_loss_limit", "sell",
-                    filled_amount, sl, {"stopPrice": sl}
+                    ccxt_symbol,
+                    "stop_loss_limit",
+                    "sell",
+                    filled_amount,
+                    sl,
+                    {"stopPrice": sl},
                 )
                 sl_order_id = sl_order.get("id")
                 log.info(f"[CCXT] SL order placed: id={sl_order_id} @ {sl}")

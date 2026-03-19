@@ -9,10 +9,10 @@ Components:
   3. regime_fit            — how well signal type matches detected regime
   4. liquidity_quality     — normalized volume, orderflow, spread metrics
 """
+
 import math
 import logging
 from typing import Dict, Optional, List
-from config import CONFIG
 
 log = logging.getLogger("sentinel")
 
@@ -20,16 +20,26 @@ log = logging.getLogger("sentinel")
 _DEFAULT_WEIGHTS = {
     "indicator_agreement": 0.40,  # increased from 0.35
     "timeframe_alignment": 0.15,  # reduced from 0.30
-    "regime_fit": 0.30,           # increased from 0.20
+    "regime_fit": 0.30,  # increased from 0.20
     "liquidity_quality": 0.15,
 }
 
 # Regime-signal affinity matrix: regime → signal_type → fit score
 _REGIME_FIT_MATRIX = {
-    "TRENDING":        {"trend": 1.0, "momentum": 0.8, "mean_reversion": 0.3, "breakout": 0.7},
-    "RANGING":         {"trend": 0.3, "momentum": 0.6, "mean_reversion": 1.0, "breakout": 0.5},
-    "HIGH_VOLATILITY": {"trend": 0.5, "momentum": 0.6, "mean_reversion": 0.4, "breakout": 1.0},
-    "LOW_VOLATILITY":  {"trend": 0.6, "momentum": 0.4, "mean_reversion": 0.7, "breakout": 0.3},
+    "TRENDING": {"trend": 1.0, "momentum": 0.8, "mean_reversion": 0.3, "breakout": 0.7},
+    "RANGING": {"trend": 0.3, "momentum": 0.6, "mean_reversion": 1.0, "breakout": 0.5},
+    "HIGH_VOLATILITY": {
+        "trend": 0.5,
+        "momentum": 0.6,
+        "mean_reversion": 0.4,
+        "breakout": 1.0,
+    },
+    "LOW_VOLATILITY": {
+        "trend": 0.6,
+        "momentum": 0.4,
+        "mean_reversion": 0.7,
+        "breakout": 0.3,
+    },
 }
 
 
@@ -48,10 +58,18 @@ def _mad(values: List[float]) -> float:
         return 0.0
     sorted_vals = sorted(values)
     n = len(sorted_vals)
-    median = sorted_vals[n//2] if n % 2 == 1 else (sorted_vals[n//2 - 1] + sorted_vals[n//2]) / 2
-    mad = sorted(abs(v - median) for v in values)[n//2] if n % 2 == 1 else \
-           sorted(abs(v - median) for v in values)[n//2 - 1]
+    median = (
+        sorted_vals[n // 2]
+        if n % 2 == 1
+        else (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2
+    )
+    mad = (
+        sorted(abs(v - median) for v in values)[n // 2]
+        if n % 2 == 1
+        else sorted(abs(v - median) for v in values)[n // 2 - 1]
+    )
     return mad
+
 
 def _robust_z_score_normalization(mean_mad: float) -> float:
     """Normalize using robust Z-score approach with graceful scaling for extreme values.
@@ -59,32 +77,37 @@ def _robust_z_score_normalization(mean_mad: float) -> float:
     """
     if mean_mad <= 0:
         return 1.0  # perfect agreement
-    
+
     # Convert MAD to standard deviation equivalent
     std_equiv = mean_mad / 0.6745
-    
+
     # Robust Z-score scaling with graceful handling of extreme values
     # Instead of hard-clamping at 3.0, use soft scaling that preserves information
     robust_z = 1.0 / (1.0 + std_equiv)
-    
+
     # Apply additional scaling for extreme volatility spikes (>3.0 std equiv)
     if std_equiv > 3.0:
         # Graceful degradation for extreme macroeconomic volatility
         extreme_factor = 1.0 / (1.0 + (std_equiv - 3.0) * 0.1)
         robust_z *= extreme_factor
-    
+
     return max(0.0, min(1.0, robust_z))
 
 
-def indicator_agreement(factor_scores: Dict[str, Optional[float]],
-                        filtered_indicators: Dict[str, Optional[float]],
-                        factor_map: Dict[str, List[str]]) -> Optional[float]:
+def indicator_agreement(
+    factor_scores: Dict[str, Optional[float]],
+    filtered_indicators: Dict[str, Optional[float]],
+    factor_map: Dict[str, List[str]],
+) -> Optional[float]:
     """Measure variance between normalized indicator signals within each factor using robust MAD.
     agreement = robust_z_score_normalization(mean_mad). Returns 0-1 or None if no data."""
     mads = []
     for factor, keys in factor_map.items():
-        vals = [filtered_indicators.get(k) for k in keys
-                if filtered_indicators.get(k) is not None]
+        vals = [
+            filtered_indicators.get(k)
+            for k in keys
+            if filtered_indicators.get(k) is not None
+        ]
         if len(vals) >= 2:
             mads.append(_mad(vals))
         elif len(vals) == 1:
@@ -96,9 +119,11 @@ def indicator_agreement(factor_scores: Dict[str, Optional[float]],
     return _robust_z_score_normalization(mean_mad)
 
 
-def timeframe_alignment(d1_factor_result: Optional[Dict],
-                        h4_factor_result: Optional[Dict],
-                        h1_factor_result: Optional[Dict]) -> Optional[float]:
+def timeframe_alignment(
+    d1_factor_result: Optional[Dict],
+    h4_factor_result: Optional[Dict],
+    h1_factor_result: Optional[Dict],
+) -> Optional[float]:
     """Compare factor scores across timeframes.
     alignment = 1 - std(factor_scores_across_timeframes). Returns 0-1 or None."""
     scores = []
@@ -121,9 +146,11 @@ def regime_fit(regime: str, signal_type: str = "trend") -> Optional[float]:
     return _REGIME_FIT_MATRIX[regime_upper].get(signal_type, 0.5)
 
 
-def liquidity_quality(volume_ratio: Optional[float],
-                      microstructure: Optional[Dict] = None,
-                      session_vol_multiplier: float = 1.0) -> Optional[float]:
+def liquidity_quality(
+    volume_ratio: Optional[float],
+    microstructure: Optional[Dict] = None,
+    session_vol_multiplier: float = 1.0,
+) -> Optional[float]:
     """Use normalized volume and session-based volatility multiplier.
     Forex is decentralized, so we rely on volume_ratio and session timing.
     Returns 0-1 or None if no data available."""
@@ -147,15 +174,17 @@ def liquidity_quality(volume_ratio: Optional[float],
     return sum(components) / len(components)
 
 
-def compute_confidence(factor_result: Dict,
-                       d1_factor_result: Optional[Dict] = None,
-                       h4_factor_result: Optional[Dict] = None,
-                       h1_factor_result: Optional[Dict] = None,
-                       signal_type: str = "trend",
-                       volume_ratio: Optional[float] = None,
-                       microstructure: Optional[Dict] = None,
-                       session_vol_multiplier: float = 1.0,
-                       factor_map: Optional[Dict] = None) -> Dict:
+def compute_confidence(
+    factor_result: Dict,
+    d1_factor_result: Optional[Dict] = None,
+    h4_factor_result: Optional[Dict] = None,
+    h1_factor_result: Optional[Dict] = None,
+    signal_type: str = "trend",
+    volume_ratio: Optional[float] = None,
+    microstructure: Optional[Dict] = None,
+    session_vol_multiplier: float = 1.0,
+    factor_map: Optional[Dict] = None,
+) -> Dict:
     """Compute signal confidence with graceful degradation.
 
     When a component has no data, it is excluded and weights are
@@ -180,11 +209,15 @@ def compute_confidence(factor_result: Dict,
     # Compute each component (None = unavailable)
     components = {
         "indicator_agreement": indicator_agreement(
-            factor_result.get("factor_scores", {}), filtered, factor_map),
+            factor_result.get("factor_scores", {}), filtered, factor_map
+        ),
         "timeframe_alignment": timeframe_alignment(
-            d1_factor_result, h4_factor_result, h1_factor_result),
+            d1_factor_result, h4_factor_result, h1_factor_result
+        ),
         "regime_fit": regime_fit(regime, signal_type),
-        "liquidity_quality": liquidity_quality(volume_ratio, microstructure, session_vol_multiplier),
+        "liquidity_quality": liquidity_quality(
+            volume_ratio, microstructure, session_vol_multiplier
+        ),
     }
 
     # Redistribute weights among available components

@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aura-Style Dashboard Mockup</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root {
+    --bg: #101014;
+    --panel-bg: #1c1c24;
+    --border: #2c2c35;
+    --text-main: #f3f4f6;
+    --text-mut: #9ca3af;
+    --green: #10b981;
+    --red: #ef4444;
+    --blue: #3b82f6;
+    --accent: #6366f1;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text-main); font-family: 'Inter', sans-serif; height: 100vh; display: flex; overflow: hidden; }
+
+  /* Left Global Nav */
+  .global-nav { width: 70px; background: #0b0b0e; border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding: 20px 0; }
+  .logo { width: 32px; height: 32px; background: var(--accent); border-radius: 8px; margin-bottom: 40px; display: flex; align-items: center; justify-content: center; font-weight: bold; }
+  .nav-item { margin-bottom: 24px; color: var(--text-mut); font-size: 10px; text-transform: uppercase; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; }
+  .nav-item:hover, .nav-item.active { color: var(--accent); }
+  .nav-icon { width: 24px; height: 24px; background: rgba(255,255,255,0.05); border-radius: 6px; }
+  .nav-item.active .nav-icon { background: rgba(99, 102, 241, 0.2); }
+
+  /* Main App Container */
+  .app-content { flex: 1; display: flex; flex-direction: column; padding: 16px; gap: 16px; min-width: 0; }
+  
+  /* Top Bar */
+  .top-search { height: 40px; display: flex; align-items: center; justify-content: space-between; }
+  .title-group { display: flex; align-items: center; gap: 12px; font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 700; }
+  .search-box { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 20px; padding: 8px 16px; width: 300px; color: var(--text-main); font-size: 13px; }
+
+  /* Dashboard Grid */
+  .dashboard { flex: 1; display: grid; grid-template-columns: 300px 1fr 280px; grid-template-rows: 1fr 200px; gap: 16px; min-height: 0; }
+
+  .panel { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; }
+  .p-header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-weight: 600; font-size: 14px; }
+  .p-content { flex: 1; padding: 16px; overflow-y: auto; }
+
+  /* Left Column: Lists */
+  .list-col { grid-row: 1 / 3; display: flex; flex-direction: column; gap: 16px; }
+  .list-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
+  .list-row:last-child { border-bottom: none; }
+  .pair-info { display: flex; align-items: center; gap: 10px; }
+  .coin-icon { width: 24px; height: 24px; border-radius: 50%; background: #333; display: flex; align-items:center; justify-content:center; font-size: 10px; font-weight: bold;}
+  
+  /* Center Column: Chart & Bottom widgets */
+  .chart-panel { grid-column: 2; grid-row: 1; }
+  
+  .bottom-widgets { grid-column: 2; grid-row: 2; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  .b-widget { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 12px; display: flex; flex-direction: column; }
+  .bw-header { padding: 12px 16px; font-size: 13px; font-weight: 600; border-bottom: 1px solid var(--border); }
+  .bw-body { flex: 1; position: relative; padding: 16px; display: flex; align-items: center; justify-content: center; }
+
+  /* Right Column: execution/prediction */
+  .pred-col { grid-row: 1 / 3; display: flex; flex-direction: column; gap: 16px; }
+  
+  .pred-data { margin-bottom: 24px; }
+  .pd-row { display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 13px; }
+  .pd-lbl { color: var(--text-mut); }
+  .pd-val { font-weight: 600; }
+  .pd-val.buy { color: var(--green); }
+  .pd-val.sell { color: var(--red); }
+  
+  .progress-bar { width: 100%; height: 6px; background: var(--border); border-radius: 3px; margin: 4px 0 16px; }
+  .progress-fill { height: 100%; background: var(--green); border-radius: 3px; }
+
+  .exec-btn { background: var(--blue); color: #fff; width: 100%; border: none; padding: 12px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: 0.2s; }
+  .exec-btn:hover { background: #2563eb; }
+
+  /* Micro Charts */
+  .heatmap-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; width: 100%; height: 100%; }
+  .heat-cell { background: var(--border); border-radius: 2px; }
+  .heat-cell.green { background: rgba(16, 185, 129, 0.5); }
+  .heat-cell.red { background: rgba(239, 68, 68, 0.5); }
+
+</style>
+</head>
+<body>
+
+  <!-- Left Global Nav -->
+  <div class="global-nav">
+    <div class="logo">S</div>
+    <div class="nav-item active"><div class="nav-icon"></div>Dashboard</div>
+    <div class="nav-item"><div class="nav-icon"></div>Markets</div>
+    <div class="nav-item"><div class="nav-icon"></div>Analysis</div>
+    <div class="nav-item"><div class="nav-icon"></div>Logs</div>
+    <div style="flex:1"></div>
+    <div class="nav-item"><div class="nav-icon"></div>Settings</div>
+  </div>
+
+  <div class="app-content">
+    
+    <div class="top-search">
+      <div class="title-group">
+        <span style="color:var(--accent)">Sentinel</span> Analysis
+      </div>
+      <div>
+        <input type="text" class="search-box" placeholder="Search Asset...">
+      </div>
+    </div>
+
+    <div class="dashboard">
+      
+      <!-- Left Column -->
+      <div class="list-col">
+        <div class="panel" style="flex: 1;">
+          <div class="p-header">Market Watch</div>
+          <div class="p-content" style="padding: 0 16px;">
+            <div class="list-row">
+              <div class="pair-info"><div class="coin-icon" style="background:#f59e0b">B</div><div>BTC/USDT<br><span style="font-size:10px;color:var(--text-mut)">Crypto</span></div></div>
+              <div style="text-align:right"><div>96,250.0</div><div style="color:var(--green)">+2.1%</div></div>
+            </div>
+            <div class="list-row">
+              <div class="pair-info"><div class="coin-icon" style="background:#3b82f6">E</div><div>ETH/USDT<br><span style="font-size:10px;color:var(--text-mut)">Crypto</span></div></div>
+              <div style="text-align:right"><div>3,210.5</div><div style="color:var(--green)">+1.4%</div></div>
+            </div>
+            <div class="list-row">
+              <div class="pair-info"><div class="coin-icon" style="background:#ef4444">S</div><div>SPX500<br><span style="font-size:10px;color:var(--text-mut)">Index</span></div></div>
+              <div style="text-align:right"><div>5,920.0</div><div style="color:var(--red)">-0.5%</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" style="flex: 1;">
+          <div class="p-header">Active Setup Watchlist</div>
+          <div class="p-content" style="padding: 0 16px;">
+            <div class="list-row">
+              <div class="pair-info"><div class="coin-icon">B</div> BTC/USDT</div>
+              <div style="text-align:center;color:var(--green)">2.5</div>
+              <div style="color:var(--green);font-weight:600">LONG</div>
+            </div>
+            <div class="list-row">
+              <div class="pair-info"><div class="coin-icon">E</div> EUR/USD</div>
+              <div style="text-align:center;color:var(--green)">1.8</div>
+              <div style="color:var(--red);font-weight:600">SHORT</div>
+            </div>
+            <div class="list-row">
+              <div class="pair-info"><div class="coin-icon">X</div> XAU/USD</div>
+              <div style="text-align:center;color:var(--text-mut)">1.2</div>
+              <div style="color:var(--text-mut);font-weight:600">RANGING</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Center Chart -->
+      <div class="panel chart-panel">
+        <div class="p-header">
+          <div>BTC/USD <span style="color:var(--text-mut);font-weight:normal;margin-left:8px">1H</span></div>
+        </div>
+        <div id="tv-chart" style="width:100%; height:calc(100% - 49px)"></div>
+      </div>
+
+      <!-- Center Bottom Widgets -->
+      <div class="bottom-widgets">
+        <div class="b-widget">
+          <div class="bw-header">AI Market Sentiment</div>
+          <div class="bw-body">
+            <canvas id="gaugeChart"></canvas>
+            <div style="position:absolute; bottom:16px; text-align:center; width:100%; font-weight:700">Bullish HH_HL</div>
+          </div>
+        </div>
+        <div class="b-widget">
+          <div class="bw-header">Eq. Curve (Recent)</div>
+          <div class="bw-body" style="padding:0">
+            <canvas id="lineChart" style="padding: 10px"></canvas>
+          </div>
+        </div>
+        <div class="b-widget">
+          <div class="bw-header">Factor Heatmap</div>
+          <div class="bw-body">
+            <div class="heatmap-grid">
+              <div class="heat-cell green"></div><div class="heat-cell green"></div><div class="heat-cell green"></div><div class="heat-cell red"></div>
+              <div class="heat-cell green"></div><div class="heat-cell red"></div><div class="heat-cell green"></div><div class="heat-cell green"></div>
+              <div class="heat-cell red"></div><div class="heat-cell red"></div><div class="heat-cell green"></div><div class="heat-cell"></div>
+              <div class="heat-cell green"></div><div class="heat-cell green"></div><div class="heat-cell"></div><div class="heat-cell"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column -->
+      <div class="pred-col">
+        <div class="panel" style="flex:1">
+          <div class="p-header">Live Sentinel Prediction</div>
+          <div class="p-content">
+            <div class="pred-data">
+              <div class="pd-row"><span class="pd-lbl">Sentinel Signal:</span> <span class="pd-val buy">STRONG BUY</span></div>
+              <div class="pd-row"><span class="pd-lbl">Confluence:</span> <span class="pd-val">2.5 / 3.0</span></div>
+              <div class="progress-bar"><div class="progress-fill" style="width: 83%"></div></div>
+
+              <div class="pd-row"><span class="pd-lbl">Micro Structure:</span> <span class="pd-val">HH_HL</span></div>
+              <div class="pd-row"><span class="pd-lbl">Macro Alignment:</span> <span class="pd-val buy">ALIGNED</span></div>
+            </div>
+
+            <div class="pred-data">
+              <div class="pd-row"><span class="pd-lbl">Target (TP):</span> <span class="pd-val buy">98,400.0</span></div>
+              <div class="pd-row"><span class="pd-lbl">Risk (SL):</span> <span class="pd-val sell">95,100.0</span></div>
+              <div class="pd-row"><span class="pd-lbl">Risk:Reward:</span> <span class="pd-val">1:1.8</span></div>
+            </div>
+
+            <button class="exec-btn">QUICK SCALP EXECUTE</button>
+          </div>
+        </div>
+
+        <div class="panel" style="flex:1">
+          <div class="p-header">Analysis Log</div>
+          <div class="p-content" style="font-size:12px; font-family:monospace; color:var(--text-mut)">
+            <div style="margin-bottom:8px">> Engine A: 2.5 Score</div>
+            <div style="margin-bottom:8px">> Engine B: HH_HL Seq Found</div>
+            <div style="margin-bottom:8px">> AI Review: Edge 82%</div>
+            <div style="margin-bottom:8px; color:var(--green)">> Action: Ready for Execution</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+<script>
+  // TradingView Chart
+  const chartProps = { layout: { background: { type: 'solid', color: '#1c1c24' }, textColor: '#9ca3af' }, grid: { vertLines: { color: '#2c2c35' }, horzLines: { color: '#2c2c35' } } };
+  const chart = LightweightCharts.createChart(document.getElementById('tv-chart'), chartProps);
+  const series = chart.addCandlestickSeries({ upColor: '#10b981', downColor: '#ef4444', borderVisible: false });
+  
+  const data = [];
+  let price = 95000;
+  for(let i=0; i<80; i++) {
+    const open = price;
+    const close = price + (Math.random() - 0.45) * 500;
+    const high = Math.max(open, close) + Math.random() * 200;
+    const low = Math.min(open, close) - Math.random() * 200;
+    data.push({ time: Date.now() / 1000 - (80-i)*3600, open, high, low, close });
+    price = close;
+  }
+  series.setData(data);
+  chart.timeScale().fitContent();
+
+  // Resize observer for TV chart
+  new ResizeObserver(entries => {
+    if (entries.length === 0 || entries[0].target !== document.getElementById('tv-chart')) return;
+    const newRect = entries[0].contentRect;
+    chart.applyOptions({ height: newRect.height, width: newRect.width });
+  }).observe(document.getElementById('tv-chart'));
+
+  // Gauge Chart
+  new Chart(document.getElementById('gaugeChart'), {
+    type: 'doughnut',
+    data: { datasets: [{ data: [1.8, 0.7, 0.5], backgroundColor: ['#ef4444', '#f59e0b', '#10b981'], borderWidth: 0, rotation: 270, circumference: 180 }] },
+    options: { cutout: '80%', responsive: true, maintainAspectRatio: false, plugins: { tooltip: { enabled: false } } }
+  });
+
+  // Line Chart
+  new Chart(document.getElementById('lineChart'), {
+    type: 'line',
+    data: { labels: ['1','2','3','4','5','6','7'], datasets: [{ data: [100, 150, 130, 200, 250, 230, 300], borderColor: '#3b82f6', tension: 0.4, borderWidth: 2, pointRadius: 0 }] },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display:false } }, scales: { x:{display:false}, y:{display:false} } }
+  });
+</script>
+</body>
+</html>

@@ -2,15 +2,14 @@
 
 Depends on: config.CONFIG, indicators (calc_* functions).
 """
+
 import logging
 from datetime import datetime, timezone
 
-from config import CONFIG, PAIR_PROFILE_VOTES, PAIR_PROFILE_FILTERS
+from config import CONFIG
 from indicators import (
-    calc_rsi, calc_fib, calc_fib_proximity, calc_rsi_divergence, calc_weinstein_stage,
-    calc_bb_width_percentile, calc_obv_trend, calc_squeeze,
+    calc_rsi,
 )
-from regime import detect_regime
 
 log = logging.getLogger("athena")
 
@@ -26,9 +25,13 @@ def pair_filter_enabled(pair: dict, filter_name: str) -> bool:
     return filter_name not in disabled
 
 
-def classify_signal_setup(direction: str, entry_mode: str,
-                          squeeze_bonus: bool = False, atr_breakout: bool = False,
-                          votes: dict | None = None) -> str:
+def classify_signal_setup(
+    direction: str,
+    entry_mode: str,
+    squeeze_bonus: bool = False,
+    atr_breakout: bool = False,
+    votes: dict | None = None,
+) -> str:
     """Classify the setup so pair-specific routing is easier to audit.
 
     Uses structured flags (squeeze_bonus, atr_breakout) set during scoring rather
@@ -40,7 +43,10 @@ def classify_signal_setup(direction: str, entry_mode: str,
         return "breakout"
     dir_vote = 1 if direction == "LONG" else -1
     votes = votes or {}
-    if votes.get("H1 BB Pullback") == dir_vote and votes.get("D1 Trend Gate") == dir_vote:
+    if (
+        votes.get("H1 BB Pullback") == dir_vote
+        and votes.get("D1 Trend Gate") == dir_vote
+    ):
         return "trend_pullback"
     return "trend_continuation"
 
@@ -59,10 +65,14 @@ def get_session(bar_time: str | None = None) -> dict:
             h = datetime.now(timezone.utc).hour
     else:
         h = datetime.now(timezone.utc).hour
-    if 7  <= h < 9:  return {"name": "London Open",         "quality": "high",   "color": "#22c55e"}
-    if 13 <= h < 16: return {"name": "London/NY Overlap",   "quality": "high",   "color": "#22c55e"}
-    if 9  <= h < 13: return {"name": "London",              "quality": "medium",  "color": "#3b82f6"}
-    if 16 <= h < 22: return {"name": "New York",            "quality": "medium",  "color": "#3b82f6"}
+    if 7 <= h < 9:
+        return {"name": "London Open", "quality": "high", "color": "#22c55e"}
+    if 13 <= h < 16:
+        return {"name": "London/NY Overlap", "quality": "high", "color": "#22c55e"}
+    if 9 <= h < 13:
+        return {"name": "London", "quality": "medium", "color": "#3b82f6"}
+    if 16 <= h < 22:
+        return {"name": "New York", "quality": "medium", "color": "#3b82f6"}
     return {"name": "Asian / Off-Hours", "quality": "low", "color": "#f59e0b"}
 
 
@@ -77,11 +87,13 @@ def detect_div(d1c: list, h4c: list, h1c: list) -> list:
         n = len(pr)
         if n >= 10 and rsi[-1] is not None:
             t = n // 3
-            pm = max(pr[t:2 * t])
-            rm = [x for x in rsi[t:2 * t] if x is not None]
+            pm = max(pr[t : 2 * t])
+            rm = [x for x in rsi[t : 2 * t] if x is not None]
             if rm:
-                if pr[-1] > pm and rsi[-1] < max(rm): w.append("H4 RSI Bearish Divergence")
-                if pr[-1] < pm and rsi[-1] > max(rm): w.append("H4 RSI Bullish Divergence")
+                if pr[-1] > pm and rsi[-1] < max(rm):
+                    w.append("H4 RSI Bearish Divergence")
+                if pr[-1] < pm and rsi[-1] > max(rm):
+                    w.append("H4 RSI Bullish Divergence")
     except Exception as e:
         log.warning(f"detect_div H4: {e}")
     try:
@@ -102,17 +114,48 @@ def detect_div(d1c: list, h4c: list, h1c: list) -> list:
 
 # ── Correlation clusters ─────────────────────────────────────────────────────
 CORR_CLUSTERS: dict = {
-    "metals":    ["XAU/USD", "XAG/USD", "GLD", "SLV"],
-    "energy":    ["XOM", "XLE", "USO", "WTI Oil", "Brent Oil"],
-    "defi":      ["SOL/USDT", "AVAX/USDT", "LINK/USDT", "BNB/USDT", "ETH/USDT", "INJ/USDT", "NEAR/USDT"],
+    "metals": ["XAU/USD", "XAG/USD", "GLD", "SLV"],
+    "energy": ["XOM", "XLE", "USO", "WTI Oil", "Brent Oil"],
+    "defi": [
+        "SOL/USDT",
+        "AVAX/USDT",
+        "LINK/USDT",
+        "BNB/USDT",
+        "ETH/USDT",
+        "INJ/USDT",
+        "NEAR/USDT",
+    ],
     "ai_crypto": ["FET/USDT", "RENDER/USDT"],
-    "forex_usd": ["EUR/USD", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CHF", "USD/CAD", "USD/ZAR", "USD/MXN", "USD/SGD"],
+    "forex_usd": [
+        "EUR/USD",
+        "GBP/USD",
+        "AUD/USD",
+        "NZD/USD",
+        "USD/CHF",
+        "USD/CAD",
+        "USD/ZAR",
+        "USD/MXN",
+        "USD/SGD",
+    ],
     "forex_jpy": ["EUR/JPY", "GBP/JPY", "AUD/JPY"],
-    "jse":       ["Naspers", "Sasol", "Std Bank", "Anglo Am", "MTN Group", "Shoprite",
-                  "Richemont", "FirstRand", "Absa", "Capitec", "Prosus", "Gold Fields",
-                  "AngloGold", "Sibanye"],
-    "us_tech":   ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "GOOG"],
-    "us_sp500":  ["SPY", "QQQ", "S&P 500", "Nasdaq"],
+    "jse": [
+        "Naspers",
+        "Sasol",
+        "Std Bank",
+        "Anglo Am",
+        "MTN Group",
+        "Shoprite",
+        "Richemont",
+        "FirstRand",
+        "Absa",
+        "Capitec",
+        "Prosus",
+        "Gold Fields",
+        "AngloGold",
+        "Sibanye",
+    ],
+    "us_tech": ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "GOOG"],
+    "us_sp500": ["SPY", "QQQ", "S&P 500", "Nasdaq"],
 }
 
 
@@ -134,51 +177,74 @@ def apply_correlation_cap(signals: list) -> list:
     return signals
 
 
-def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
-                    pair: dict, btc_bias: str,
-                    d1_candles: list | None = None,
-                    h4_candles: list | None = None,
-                    h1_candles: list | None = None,
-                    funding_rate: float | None = None,
-                    volume_threshold: float | None = None,
-                    bar_time: str | None = None) -> dict:
+def calc_confluence(
+    d1: dict,
+    h4: dict,
+    h1: dict,
+    vr: float,
+    stoch: dict,
+    pair: dict,
+    btc_bias: str,
+    d1_candles: list | None = None,
+    h4_candles: list | None = None,
+    h1_candles: list | None = None,
+    funding_rate: float | None = None,
+    volume_threshold: float | None = None,
+    bar_time: str | None = None,
+) -> dict:
     """Factor-based confluence using normalized indicators, regime-aware weights, and correlation filtering.
     Preserves legacy API and raw-threshold warnings for human readability.
     """
     from factor_scoring import compute_factor_scores
     from confidence_engine import compute_confidence
+
     # Compute factor scores
-    factor_result = compute_factor_scores(d1["snap"], h4["snap"], h1["snap"], pair,
-                                        d1_candles or [], h4_candles or [], h1_candles or [],
-                                        vr, funding_rate, bar_time)
+    factor_result = compute_factor_scores(
+        d1["snap"],
+        h4["snap"],
+        h1["snap"],
+        pair,
+        d1_candles or [],
+        h4_candles or [],
+        h1_candles or [],
+        vr,
+        funding_rate,
+        bar_time,
+    )
     # Preserve warnings for readability (raw thresholds)
     w = []
-    s = d1["snap"]; s4 = h4["snap"]; s1 = h1["snap"]
+    d1["snap"]
+    s4 = h4["snap"]
+    h1["snap"]
     _ptype = pair["type"]
     _rsi_b = CONFIG["RSI_BOUNDS"].get(_ptype, {"ob": 70, "os": 30})
     r4 = s4.get("rsi")
     if r4 is not None:
         if r4 >= _rsi_b["ob"]:
-            w.append(f"H4 RSI overbought ({r4:.0f} >= {_rsi_b['ob']}) — wait for pullback")
+            w.append(
+                f"H4 RSI overbought ({r4:.0f} >= {_rsi_b['ob']}) — wait for pullback"
+            )
         elif r4 <= _rsi_b["os"]:
             w.append(f"H4 RSI oversold ({r4:.0f} <= {_rsi_b['os']}) — wait for bounce")
     # Map final_score to legacy 'score' field
     score = factor_result["final_score"]
     direction = factor_result["direction"]
-    log.debug(f"[FACTOR] {pair.get('display')} score={score:.3f} dir={direction} "
-             f"dir_score={factor_result.get('directional_score', 0):.3f} "
-             f"nondir_score={factor_result.get('nondirectional_score', 0):.3f} "
-             f"factors={factor_result['factor_scores']} regime={factor_result['regime']}")
+    log.debug(
+        f"[FACTOR] {pair.get('display')} score={score:.3f} dir={direction} "
+        f"dir_score={factor_result.get('directional_score', 0):.3f} "
+        f"nondir_score={factor_result.get('nondirectional_score', 0):.3f} "
+        f"factors={factor_result['factor_scores']} regime={factor_result['regime']}"
+    )
     # Legacy compatibility: construct votes dict from factor scores
     v = {}
     for factor, val in factor_result["factor_scores"].items():
         if val is not None:
             v[f"FACTOR_{factor.upper()}"] = 1 if val > 0 else -1
-    
+
     # Map legacy vote names for UI compatibility
     legacy_votes = {
         "D1 Trend Gate": v.get("FACTOR_TREND", 0),
-        "D1 ADX Trend": v.get("FACTOR_MOMENTUM", 0), 
+        "D1 ADX Trend": v.get("FACTOR_MOMENTUM", 0),
         "D1 Weinstein Stage": v.get("FACTOR_WEINSTEIN", 0),
         "H4 MACD Momentum": v.get("FACTOR_MOMENTUM", 0),
         "H4 RSI Zone": v.get("FACTOR_RSI", 0),
@@ -197,10 +263,14 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
     _rng = CONFIG["RANGING"].get(pair["type"], CONFIG["RANGING"]["commodity"])
     trend_state = "UNKNOWN"
     if adx_val is not None:
-        if adx_val >= 35:               trend_state = "TRENDING"
-        elif adx_val >= 25:             trend_state = "DEVELOPING"
-        elif adx_val >= _rng["dead"]:   trend_state = "RANGING"
-        else:                           trend_state = "DEAD RANGING"
+        if adx_val >= 35:
+            trend_state = "TRENDING"
+        elif adx_val >= 25:
+            trend_state = "DEVELOPING"
+        elif adx_val >= _rng["dead"]:
+            trend_state = "RANGING"
+        else:
+            trend_state = "DEAD RANGING"
     # Legacy compatibility values
     bull = max(0.0, score)
     bear = max(0.0, score) if direction == "SHORT" else 0.0
@@ -208,7 +278,12 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
     spread = round(abs(factor_result.get("directional_score", 0.0)), 2)
     # Rebuild regime as dict so callers can do res['regime'].get('state')
     _regime_str = factor_result.get("regime", "UNKNOWN") or "UNKNOWN"
-    _REGIME_STATE = {"TRENDING": 0, "RANGING": 1, "HIGH_VOLATILITY": 2, "LOW_VOLATILITY": 3}
+    _REGIME_STATE = {
+        "TRENDING": 0,
+        "RANGING": 1,
+        "HIGH_VOLATILITY": 2,
+        "LOW_VOLATILITY": 3,
+    }
     _regime = {"state": _REGIME_STATE.get(_regime_str.upper(), 1), "label": _regime_str}
     w.append(f"Regime: {_regime_str.upper()}")
     # Confidence engine — diagnostic field (graceful degradation)
@@ -222,11 +297,19 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
     confidence_val = _conf["confidence"]
     # Legacy return dict
     return {
-        "score": score, "votes": v, "direction": direction,
-        "bull": round(bull, 1), "bear": round(bear, 1), "spread": spread,
-        "warnings": w, "trendState": trend_state,
-        "weinsteinStage": None, "weinsteinLabel": None,
-        "entryMode": "trend", "adxMomentum": None, "adxSlope": None,
+        "score": score,
+        "votes": v,
+        "direction": direction,
+        "bull": round(bull, 1),
+        "bear": round(bear, 1),
+        "spread": spread,
+        "warnings": w,
+        "trendState": trend_state,
+        "weinsteinStage": None,
+        "weinsteinLabel": None,
+        "entryMode": "trend",
+        "adxMomentum": None,
+        "adxSlope": None,
         "signalClass": "trend_continuation",
         "regime": _regime,
         "fundingRate": funding_rate,
@@ -247,6 +330,7 @@ def calc_confluence(d1: dict, h4: dict, h1: dict, vr: float, stoch: dict,
 # ── Scan classification helpers — pure functions, no Flask/athena deps ────────
 # Kept here so unit tests can import without touching athena.py (CLAUDE.md Rule 3).
 
+
 def _pair_exchange_code(pair: dict) -> str | None:
     """Return the exchange code for a pair (JSE / US) or None."""
     sym = pair.get("symbol", "")
@@ -262,8 +346,9 @@ def _pair_exchange_closed(pair: dict, closed_exchanges: set) -> bool:
     return exch in closed_exchanges if exch else False
 
 
-def _build_event_risk(pair: dict, ds_ctx: dict, earnings_ctx: dict,
-                      closed_exchanges: set) -> dict:
+def _build_event_risk(
+    pair: dict, ds_ctx: dict, earnings_ctx: dict, closed_exchanges: set
+) -> dict:
     """Build event-risk dict (hardBlock + reasons) for a pair."""
     risk: dict = {"hardBlock": False, "reasons": []}
     sym = pair.get("symbol", "")
@@ -295,12 +380,19 @@ def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
     """Return (tier, reason) where tier is 'trade' | 'watchlist' | 'skip'."""
     threshold = signal.get(
         "scanThreshold",
-        CONFIG["MIN_CONFLUENCE_CLASS"].get(pair.get("type", ""), CONFIG["MIN_CONFLUENCE"]),
+        CONFIG["MIN_CONFLUENCE_CLASS"].get(
+            pair.get("type", ""), CONFIG["MIN_CONFLUENCE"]
+        ),
     )
     score = signal.get("confluenceScore", 0)
     hard_event = signal.get("eventRisk", {}).get("hardBlock", False)
     exchange_closed = signal.get("exchangeClosed", False)
-    if pair.get("enabled", True) and not exchange_closed and not hard_event and score >= threshold:
+    if (
+        pair.get("enabled", True)
+        and not exchange_closed
+        and not hard_event
+        and score >= threshold
+    ):
         return "trade", "Trade-ready"
     watch_floor = max(round(threshold - 0.3, 2), 0.2)
     reasons = [d["detail"] for d in signal.get("scanDiagnostics", [])]

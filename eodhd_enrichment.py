@@ -9,6 +9,7 @@ for use by the signal debate system and AI analysis prompts.
 
 Does NOT block trades — purely informational enrichment.
 """
+
 import logging
 import os
 import time
@@ -41,6 +42,7 @@ def enrich_signal(signal: dict) -> dict:
 
     try:
         from eodhd import APIClient
+
         api = APIClient(api_key)
 
         # Map pair to EODHD ticker
@@ -73,24 +75,33 @@ def _get_insider_data(api, ticker: str) -> dict | None:
     try:
         date_from = (datetime.utcnow() - timedelta(days=90)).strftime("%Y-%m-%d")
         transactions = api.get_insider_transactions_data(
-            code=ticker,
-            date_from=date_from,
-            limit="20"
+            code=ticker, date_from=date_from, limit="20"
         )
 
         if not isinstance(transactions, list) or not transactions:
             return None
 
         # Analyze insider activity
-        buys = [t for t in transactions if str(t.get("transactionType", "")).lower() in ("buy", "purchase", "p-purchase")]
-        sells = [t for t in transactions if str(t.get("transactionType", "")).lower() in ("sell", "sale", "s-sale")]
+        buys = [
+            t
+            for t in transactions
+            if str(t.get("transactionType", "")).lower()
+            in ("buy", "purchase", "p-purchase")
+        ]
+        sells = [
+            t
+            for t in transactions
+            if str(t.get("transactionType", "")).lower() in ("sell", "sale", "s-sale")
+        ]
 
         total_buy_value = sum(float(t.get("transactionAmount", 0) or 0) for t in buys)
         total_sell_value = sum(float(t.get("transactionAmount", 0) or 0) for t in sells)
 
         # Net sentiment: positive = more buying, negative = more selling
-        net_sentiment = "BULLISH" if total_buy_value > total_sell_value * 1.5 else (
-            "BEARISH" if total_sell_value > total_buy_value * 1.5 else "NEUTRAL"
+        net_sentiment = (
+            "BULLISH"
+            if total_buy_value > total_sell_value * 1.5
+            else ("BEARISH" if total_sell_value > total_buy_value * 1.5 else "NEUTRAL")
         )
 
         result = {
@@ -109,11 +120,13 @@ def _get_insider_data(api, ticker: str) -> dict | None:
                     "date": t.get("date", ""),
                 }
                 for t in transactions[:5]  # Last 5 transactions
-            ]
+            ],
         }
 
         _cache[cache_key] = {"data": result, "ts": time.time()}
-        log.info(f"[INSIDER] {ticker}: {result['net_sentiment']} ({result['buys']} buys, {result['sells']} sells)")
+        log.info(
+            f"[INSIDER] {ticker}: {result['net_sentiment']} ({result['buys']} buys, {result['sells']} sells)"
+        )
         return result
 
     except Exception as e:
@@ -159,8 +172,10 @@ def _get_fundamentals_data(api, ticker: str) -> dict | None:
 
         if result:
             _cache[cache_key] = {"data": result, "ts": time.time()}
-            log.info(f"[FUNDAMENTALS] {ticker}: PE={result.get('pe_ratio','?')}, "
-                     f"EPS={result.get('eps','?')}, Beta={result.get('beta','?')}")
+            log.info(
+                f"[FUNDAMENTALS] {ticker}: PE={result.get('pe_ratio', '?')}, "
+                f"EPS={result.get('eps', '?')}, Beta={result.get('beta', '?')}"
+            )
 
         return result if result else None
 

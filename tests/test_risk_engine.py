@@ -1,4 +1,5 @@
 """test_risk_engine.py — Unit tests for risk_engine.py."""
+
 import sys
 import os
 import threading
@@ -7,7 +8,7 @@ import pytest
 # Ensure project root is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from risk_engine import RiskApproval, risk_check, _cfg, _update_peak
+from risk_engine import risk_check, _cfg, _update_peak
 import risk_engine
 
 
@@ -21,16 +22,21 @@ def _reset_peak_equity():
         risk_engine._peak_equity = old
 
 
-
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
 
 def _make_signal(**overrides):
     """Minimal valid signal dict."""
     base = {
-        "pair": "BTCUSDT", "direction": "LONG", "price": 60000,
-        "sl": 59000, "tp1": 62000, "tp2": 64000,
-        "type": "crypto", "timestamp": None, "confluenceScore": 5.0,
+        "pair": "BTCUSDT",
+        "direction": "LONG",
+        "price": 60000,
+        "sl": 59000,
+        "tp1": 62000,
+        "tp2": 64000,
+        "type": "crypto",
+        "timestamp": None,
+        "confluenceScore": 5.0,
     }
     base.update(overrides)
     return base
@@ -82,6 +88,7 @@ class TestDrawdown:
     def test_severe_drawdown_rejects(self):
         # Simulate 20% drawdown: peak was 10000, equity is 8000
         import risk_engine
+
         with risk_engine._peak_lock:
             old = risk_engine._peak_equity
             risk_engine._peak_equity = 10000.0
@@ -139,6 +146,7 @@ class TestApproval:
 class TestPeakEquityThreadSafety:
     def test_concurrent_updates(self):
         import risk_engine
+
         with risk_engine._peak_lock:
             risk_engine._peak_equity = 0.0
         results = []

@@ -6,11 +6,11 @@ Uses 30% blend rate to avoid overfitting (research-backed).
 
 Called by scoring.py before factor scoring to get adjusted weights.
 """
+
 import json
 import logging
 import sqlite3
 import time
-from datetime import datetime, timezone
 
 log = logging.getLogger("sentinel.adaptive_weights")
 
@@ -33,8 +33,7 @@ _BASE_WEIGHTS = {
 _BLEND_RATE = 0.3  # 30% blend — proven optimal range (0.25-0.35)
 
 
-def get_adaptive_weights(db_path: str, asset_type: str,
-                         regime: str = "") -> dict:
+def get_adaptive_weights(db_path: str, asset_type: str, regime: str = "") -> dict:
     """Get factor weights adjusted from trade outcome history.
 
     Args:
@@ -58,8 +57,7 @@ def get_adaptive_weights(db_path: str, asset_type: str,
         return _BASE_WEIGHTS.copy()
 
 
-def _compute_adaptive_weights(db_path: str, asset_type: str,
-                               regime: str) -> dict:
+def _compute_adaptive_weights(db_path: str, asset_type: str, regime: str) -> dict:
     """Compute adaptive weights from learning_log data."""
     try:
         con = sqlite3.connect(db_path, timeout=15.0)
@@ -76,15 +74,22 @@ def _compute_adaptive_weights(db_path: str, asset_type: str,
         con.close()
 
         if len(rows) < 10:
-            log.info(f"[ADAPT] {asset_type}: only {len(rows)} trades, using base weights")
+            log.info(
+                f"[ADAPT] {asset_type}: only {len(rows)} trades, using base weights"
+            )
             return _BASE_WEIGHTS.copy()
 
         # Analyze factor performance
         factor_stats: dict = {}
         for factor in _BASE_WEIGHTS:
-            factor_stats[factor] = {"positive_wins": 0, "positive_total": 0,
-                                     "negative_wins": 0, "negative_total": 0,
-                                     "r_when_positive": [], "r_when_negative": []}
+            factor_stats[factor] = {
+                "positive_wins": 0,
+                "positive_total": 0,
+                "negative_wins": 0,
+                "negative_total": 0,
+                "r_when_positive": [],
+                "r_when_negative": [],
+            }
 
         for row in rows:
             try:
@@ -94,12 +99,15 @@ def _compute_adaptive_weights(db_path: str, asset_type: str,
 
                 # Map vote keys to factors
                 factor_map = {
-                    "D1 Trend Gate": "trend", "D1 ADX Trend": "trend",
+                    "D1 Trend Gate": "trend",
+                    "D1 ADX Trend": "trend",
                     "D1 Weinstein Stage": "trend",
-                    "H4 MACD Momentum": "momentum", "H4 RSI Zone": "momentum",
+                    "H4 MACD Momentum": "momentum",
+                    "H4 RSI Zone": "momentum",
                     "H4 Stochastic": "momentum",
                     "H4 Fib Level": "mean_reversion",
-                    "H1 EMA Entry": "trend", "H1 BB Pullback": "mean_reversion",
+                    "H1 EMA Entry": "trend",
+                    "H1 BB Pullback": "mean_reversion",
                     "H1 RSI Divergence": "momentum",
                 }
 
@@ -143,8 +151,9 @@ def _compute_adaptive_weights(db_path: str, asset_type: str,
                 new_weight = _BASE_WEIGHTS[factor] * (1 + _BLEND_RATE * factor_adj)
                 weights[factor] = round(max(0.3, min(2.0, new_weight)), 3)
                 adjustments[factor] = {
-                    "wr": round(win_rate, 2), "adj": round(factor_adj, 2),
-                    "weight": weights[factor]
+                    "wr": round(win_rate, 2),
+                    "adj": round(factor_adj, 2),
+                    "weight": weights[factor],
                 }
 
         # Normalize so weights sum stays constant

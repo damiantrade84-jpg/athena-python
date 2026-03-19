@@ -3,6 +3,7 @@ backup_db.py — Automated database backup for Athena.
 Run manually or called at startup to protect audit.db and candle_cache.db.
 Keeps last 7 daily backups. Never overwrites — always creates new timestamped copy.
 """
+
 import os
 import shutil
 import sqlite3
@@ -15,6 +16,7 @@ DATABASES = [
     "audit.db",
     "candle_cache.db",
 ]
+
 
 def backup_now(reason: str = "manual") -> list:
     """Create timestamped backup of all databases. Returns list of backup paths."""
@@ -42,30 +44,38 @@ def backup_now(reason: str = "manual") -> list:
     _prune_old_backups()
     return backed_up
 
+
 def _prune_old_backups(keep: int = 7):
     """Keep only the most recent `keep` backups per database."""
     if not os.path.exists(_BACKUP_DIR):
         return
     for db_name in DATABASES:
-        backups = sorted([
-            f for f in os.listdir(_BACKUP_DIR)
-            if f.startswith(db_name) and f.endswith(".bak")
-        ])
+        backups = sorted(
+            [
+                f
+                for f in os.listdir(_BACKUP_DIR)
+                if f.startswith(db_name) and f.endswith(".bak")
+            ]
+        )
         for old in backups[:-keep]:
             try:
                 os.remove(os.path.join(_BACKUP_DIR, old))
             except Exception:
                 pass
 
+
 def restore_latest(db_name: str) -> bool:
     """Restore the most recent backup of a database."""
     if not os.path.exists(_BACKUP_DIR):
-        print(f"[RESTORE] No backup directory found")
+        print("[RESTORE] No backup directory found")
         return False
-    backups = sorted([
-        f for f in os.listdir(_BACKUP_DIR)
-        if f.startswith(db_name) and f.endswith(".bak")
-    ])
+    backups = sorted(
+        [
+            f
+            for f in os.listdir(_BACKUP_DIR)
+            if f.startswith(db_name) and f.endswith(".bak")
+        ]
+    )
     if not backups:
         print(f"[RESTORE] No backups found for {db_name}")
         return False
@@ -79,6 +89,7 @@ def restore_latest(db_name: str) -> bool:
         print(f"[RESTORE] ERROR: {e}")
         return False
 
+
 def list_backups():
     """Print all available backups."""
     if not os.path.exists(_BACKUP_DIR):
@@ -90,8 +101,10 @@ def list_backups():
         size = os.path.getsize(path) / 1024
         print(f"  {f}  ({size:.1f} KB)")
 
+
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) > 1 and sys.argv[1] == "restore":
         db = sys.argv[2] if len(sys.argv) > 2 else "audit.db"
         restore_latest(db)

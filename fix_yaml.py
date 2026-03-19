@@ -1,5 +1,3 @@
-import sys
-
 with open("config.yaml", "r", encoding="utf-8") as f:
     lines = f.readlines()
 

@@ -3,7 +3,7 @@ telegram_notify.py — Non-blocking Telegram notification system
 
 Provides notification functions for:
 - Signal fired events
-- Trade opened/closed events  
+- Trade opened/closed events
 - System alerts (WS disconnect, rate limiting)
 - Daily summary at 22:00 UTC
 
@@ -16,7 +16,6 @@ import threading
 import time
 from datetime import datetime, time as dt_time
 from typing import Dict, List, Optional, Any
-import json
 import yaml
 from pathlib import Path
 
@@ -27,8 +26,9 @@ _daily_stats: Dict[str, Any] = {
     "trades_opened": [],
     "trades_closed": [],
     "open_positions": [],
-    "last_summary_time": None
+    "last_summary_time": None,
 }
+
 
 def _load_config() -> Dict[str, Any]:
     """Load Telegram configuration from config.yaml"""
@@ -36,18 +36,19 @@ def _load_config() -> Dict[str, Any]:
     # Skip cache if we cached an empty token — dotenv may not have loaded yet on first call
     if _config and _config.get("token"):
         return _config
-    
+
     config_path = Path(__file__).parent / "config.yaml"
     try:
-        with open(config_path, 'r') as f:
+        with open(config_path, "r") as f:
             config = yaml.safe_load(f)
-            _config = config.get('TELEGRAM', {})
+            _config = config.get("TELEGRAM", {})
     except Exception:
         _config = {}
 
     import os
+
     _env_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    _env_chat  = os.environ.get("TELEGRAM_CHAT_ID", "")
+    _env_chat = os.environ.get("TELEGRAM_CHAT_ID", "")
     if _env_token:
         _config["token"] = _env_token
     if _env_chat:
@@ -55,43 +56,48 @@ def _load_config() -> Dict[str, Any]:
 
     return _config
 
+
 def _is_enabled() -> bool:
     """Check if Telegram notifications are enabled"""
     config = _load_config()
-    return config.get('enabled', False)
+    return config.get("enabled", False)
+
 
 def _send_message_async(message: str) -> None:
     """Send message to Telegram in background thread"""
     if not _is_enabled():
         return
-    
+
     def _send():
         try:
             config = _load_config()
-            token = config.get('token')
-            chat_id = config.get('chat_id')
-            
+            token = config.get("token")
+            chat_id = config.get("chat_id")
+
             if not token or not chat_id:
                 return
-            
+
             url = f"https://api.telegram.org/bot{token}/sendMessage"
-            payload = {
-                "chat_id": chat_id,
-                "text": message,
-                "parse_mode": "Markdown"
-            }
-            
+            payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
+
             requests.post(url, json=payload, timeout=10)
         except Exception:
             # Silently fail to avoid disrupting main trading logic
             pass
-    
+
     # Fire and forget in background thread
     threading.Thread(target=_send, daemon=True).start()
 
-def notify_signal_fired(pair: str, direction: str, score: float,
-                       dir_score: float, nondir_score: float,
-                       top_factors: List[str], regime: str) -> None:
+
+def notify_signal_fired(
+    pair: str,
+    direction: str,
+    score: float,
+    dir_score: float,
+    nondir_score: float,
+    top_factors: List[str],
+    regime: str,
+) -> None:
     """Legacy notify — kept for backward compatibility. Prefer notify_signal_with_ai."""
     if not _is_enabled():
         return
@@ -106,18 +112,33 @@ def notify_signal_fired(pair: str, direction: str, score: float,
     )
 
     _send_message_async(message)
-    _daily_stats["signals_fired"].append({
-        "pair": pair, "direction": direction, "score": score,
-        "timestamp": datetime.utcnow()
-    })
+    _daily_stats["signals_fired"].append(
+        {
+            "pair": pair,
+            "direction": direction,
+            "score": score,
+            "timestamp": datetime.utcnow(),
+        }
+    )
 
 
-def notify_signal_with_ai(pair: str, direction: str, score: float, max_score: float,
-                          entry: float, sl: float, tp1: float, rr1: float,
-                          regime: str, signal_class: str,
-                          ai_grade: str, ai_verdict: str,
-                          ai_edge_prob: int, ai_risk: str,
-                          ai_warnings: Optional[List[str]] = None) -> None:
+def notify_signal_with_ai(
+    pair: str,
+    direction: str,
+    score: float,
+    max_score: float,
+    entry: float,
+    sl: float,
+    tp1: float,
+    rr1: float,
+    regime: str,
+    signal_class: str,
+    ai_grade: str,
+    ai_verdict: str,
+    ai_edge_prob: int,
+    ai_risk: str,
+    ai_warnings: Optional[List[str]] = None,
+) -> None:
     """Send Telegram only for AI-approved signals (grade A or B).
     Called from a background thread — never blocks the scan loop."""
     if not _is_enabled():
@@ -149,19 +170,25 @@ def notify_signal_with_ai(pair: str, direction: str, score: float, max_score: fl
     )
 
     _send_message_async(message)
-    _daily_stats["signals_fired"].append({
-        "pair": pair, "direction": direction, "score": score,
-        "timestamp": datetime.utcnow()
-    })
+    _daily_stats["signals_fired"].append(
+        {
+            "pair": pair,
+            "direction": direction,
+            "score": score,
+            "timestamp": datetime.utcnow(),
+        }
+    )
 
-def notify_trade_opened(pair: str, direction: str, entry_price: float,
-                       stop_loss: float, take_profit: float) -> None:
+
+def notify_trade_opened(
+    pair: str, direction: str, entry_price: float, stop_loss: float, take_profit: float
+) -> None:
     """Notify when a trade is opened"""
     if not _is_enabled():
         return
-    
+
     emoji = "🟢" if direction == "LONG" else "🔴"
-    
+
     message = (
         f"{emoji} *Trade Opened — {pair}*\n"
         f"Direction: `{direction}`\n"
@@ -169,87 +196,98 @@ def notify_trade_opened(pair: str, direction: str, entry_price: float,
         f"Stop Loss: `{stop_loss:.5f}`\n"
         f"Take Profit: `{take_profit:.5f}`"
     )
-    
-    _send_message_async(message)
-    
-    # Track for daily summary
-    _daily_stats["trades_opened"].append({
-        "pair": pair,
-        "direction": direction,
-        "entry_price": entry_price,
-        "timestamp": datetime.utcnow()
-    })
 
-def notify_trade_closed(pair: str, pnl_r: float, is_win: bool, 
-                       duration_minutes: float) -> None:
+    _send_message_async(message)
+
+    # Track for daily summary
+    _daily_stats["trades_opened"].append(
+        {
+            "pair": pair,
+            "direction": direction,
+            "entry_price": entry_price,
+            "timestamp": datetime.utcnow(),
+        }
+    )
+
+
+def notify_trade_closed(
+    pair: str, pnl_r: float, is_win: bool, duration_minutes: float
+) -> None:
     """Notify when a trade is closed"""
     if not _is_enabled():
         return
-    
+
     emoji = "✅" if is_win else "❌"
     result = "WIN" if is_win else "LOSS"
-    
+
     message = (
         f"{emoji} *Trade Closed — {pair}*\n"
         f"P&L: `{pnl_r:+.2f}R` | Result: `{result}`\n"
         f"Duration: `{duration_minutes:.0f} min`"
     )
-    
+
     _send_message_async(message)
-    
+
     # Track for daily summary
-    _daily_stats["trades_closed"].append({
-        "pair": pair,
-        "pnl_r": pnl_r,
-        "is_win": is_win,
-        "duration_minutes": duration_minutes,
-        "timestamp": datetime.utcnow()
-    })
+    _daily_stats["trades_closed"].append(
+        {
+            "pair": pair,
+            "pnl_r": pnl_r,
+            "is_win": is_win,
+            "duration_minutes": duration_minutes,
+            "timestamp": datetime.utcnow(),
+        }
+    )
+
 
 def notify_bybit_ws_disconnect() -> None:
     """Notify when Bybit WebSocket connection drops"""
     if not _is_enabled():
         return
-    
+
     message = "⚠️ *Bybit WebSocket Disconnected*\nConnection dropped, attempting to reconnect..."
     _send_message_async(message)
+
 
 def notify_polygon_rate_limit() -> None:
     """Notify when Polygon API returns 429 rate limit error"""
     if not _is_enabled():
         return
-    
-    message = "⚠️ *Polygon API Rate Limited*\n429 error received, backing off requests..."
+
+    message = (
+        "⚠️ *Polygon API Rate Limited*\n429 error received, backing off requests..."
+    )
     _send_message_async(message)
+
 
 def notify_daily_summary() -> None:
     """Send daily summary at 22:00 UTC"""
     if not _is_enabled():
         return
-    
+
     now = datetime.utcnow()
-    
+
     # Only send at 22:00 UTC
     if now.time() < dt_time(22, 0) or now.time() >= dt_time(22, 1):
         return
-    
+
     # Only send once per day
     if _daily_stats["last_summary_time"]:
         last_summary = _daily_stats["last_summary_time"]
         if now.date() == last_summary.date():
             return
-    
+
     # Calculate daily stats
     signals_count = len(_daily_stats["signals_fired"])
     trades_opened_count = len(_daily_stats["trades_opened"])
     trades_closed_count = len(_daily_stats["trades_closed"])
     open_positions_count = len(_daily_stats["open_positions"])
-    
+
     # Calculate P&L for closed trades
     total_pnl = sum(trade["pnl_r"] for trade in _daily_stats["trades_closed"])
     wins = sum(1 for trade in _daily_stats["trades_closed"] if trade["is_win"])
     win_rate = (wins / trades_closed_count * 100) if trades_closed_count > 0 else 0
-    
+
     message = (
         f"📊 *Daily Summary — {now.strftime('%Y-%m-%d')}*\n"
         f"Signals Fired: `{signals_count}`\n"
@@ -259,9 +297,9 @@ def notify_daily_summary() -> None:
         f"Daily P&L: `{total_pnl:+.2f}R`\n"
         f"Win Rate: `{win_rate:.1f}%`"
     )
-    
+
     _send_message_async(message)
-    
+
     # Update last summary time and reset daily stats
     _daily_stats["last_summary_time"] = now
     _daily_stats["signals_fired"] = []
@@ -269,20 +307,25 @@ def notify_daily_summary() -> None:
     _daily_stats["trades_closed"] = []
     _daily_stats["open_positions"] = []
 
+
 def update_open_positions(positions: List[Dict[str, Any]]) -> None:
     """Update current open positions for daily summary"""
     _daily_stats["open_positions"] = positions
 
+
 # Background thread to check for daily summary time
 def _daily_summary_worker():
     """Background worker that checks daily summary time"""
-    time.sleep(10)  # Wait for main thread to finish load_dotenv() before first config read
+    time.sleep(
+        10
+    )  # Wait for main thread to finish load_dotenv() before first config read
     while True:
         try:
             notify_daily_summary()
         except Exception:
             pass
         time.sleep(60)  # Check every minute
+
 
 # Start daily summary worker thread
 threading.Thread(target=_daily_summary_worker, daemon=True).start()

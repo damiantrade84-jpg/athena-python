@@ -9,6 +9,7 @@ is blocked. If it aligns, a boost note is attached.
 
 Caches results for 30 minutes per symbol to limit API calls.
 """
+
 import logging
 import os
 import time
@@ -38,9 +39,14 @@ def _get_eodhd_ticker(pair: str, asset_type: str) -> str | None:
     elif asset_type == "commodity":
         # Commodities: GC=F -> GC.COMEX  (gold)
         mapping = {
-            "GC=F": "GC.COMEX", "SI=F": "SI.COMEX", "CL=F": "CL.COMEX",
-            "BZ=F": "BZ.COMEX", "NG.US": "NG.COMEX", "PL=F": "PL.COMEX",
-            "PA=F": "PA.COMEX", "HG=F": "HG.COMEX",
+            "GC=F": "GC.COMEX",
+            "SI=F": "SI.COMEX",
+            "CL=F": "CL.COMEX",
+            "BZ=F": "BZ.COMEX",
+            "NG.US": "NG.COMEX",
+            "PL=F": "PL.COMEX",
+            "PA=F": "PA.COMEX",
+            "HG=F": "HG.COMEX",
         }
         return mapping.get(pair, None)
     return None
@@ -67,15 +73,24 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
 
     try:
         from eodhd import APIClient
+
         api_key = os.environ.get("EODHD_KEY", "")
         if not api_key:
-            return {"allowed": True, "score": 0.0, "count": 0,
-                    "reason": "No EODHD_KEY — sentiment gate skipped"}
+            return {
+                "allowed": True,
+                "score": 0.0,
+                "count": 0,
+                "reason": "No EODHD_KEY — sentiment gate skipped",
+            }
 
         ticker = _get_eodhd_ticker(pair, asset_type)
         if not ticker:
-            return {"allowed": True, "score": 0.0, "count": 0,
-                    "reason": f"No ticker mapping for {pair}"}
+            return {
+                "allowed": True,
+                "score": 0.0,
+                "count": 0,
+                "reason": f"No ticker mapping for {pair}",
+            }
 
         api = APIClient(api_key)
 
@@ -85,19 +100,24 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
 
         try:
             news = api.financial_news(
-                s=ticker,
-                from_date=date_from,
-                to_date=date_to,
-                limit="20"
+                s=ticker, from_date=date_from, to_date=date_to, limit="20"
             )
         except Exception as e:
             log.warning(f"[SENTIMENT] News API error for {ticker}: {e}")
-            return {"allowed": True, "score": 0.0, "count": 0,
-                    "reason": f"API error: {e}"}
+            return {
+                "allowed": True,
+                "score": 0.0,
+                "count": 0,
+                "reason": f"API error: {e}",
+            }
 
         if not news or not isinstance(news, list):
-            return {"allowed": True, "score": 0.0, "count": 0,
-                    "reason": "No news articles found"}
+            return {
+                "allowed": True,
+                "score": 0.0,
+                "count": 0,
+                "reason": "No news articles found",
+            }
 
         # Extract sentiment scores from articles
         sentiments = []
@@ -109,8 +129,12 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
                     sentiments.append(polarity)
 
         if not sentiments:
-            result = {"allowed": True, "score": 0.0, "count": len(news),
-                      "reason": f"{len(news)} articles, no sentiment scores"}
+            result = {
+                "allowed": True,
+                "score": 0.0,
+                "count": len(news),
+                "reason": f"{len(news)} articles, no sentiment scores",
+            }
         else:
             avg_score = sum(sentiments) / len(sentiments)
             count = len(sentiments)
@@ -124,10 +148,14 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
 
             if direction == "LONG" and avg_score < -0.4:
                 blocked = True
-                reason = f"SENTIMENT BLOCK: strongly bearish ({avg_score:.2f}) opposes LONG"
+                reason = (
+                    f"SENTIMENT BLOCK: strongly bearish ({avg_score:.2f}) opposes LONG"
+                )
             elif direction == "SHORT" and avg_score > 0.4:
                 blocked = True
-                reason = f"SENTIMENT BLOCK: strongly bullish ({avg_score:.2f}) opposes SHORT"
+                reason = (
+                    f"SENTIMENT BLOCK: strongly bullish ({avg_score:.2f}) opposes SHORT"
+                )
             elif direction == "LONG" and avg_score > 0.3:
                 reason = f"Sentiment aligned: bullish ({avg_score:.2f}) supports LONG"
             elif direction == "SHORT" and avg_score < -0.3:
@@ -139,7 +167,7 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
                 "allowed": not blocked,
                 "score": round(avg_score, 3),
                 "count": count,
-                "reason": reason
+                "reason": reason,
             }
 
         # Cache the result
@@ -150,15 +178,20 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
 
     except ImportError:
         log.warning("[SENTIMENT] eodhd library not installed — gate skipped")
-        return {"allowed": True, "score": 0.0, "count": 0,
-                "reason": "eodhd library not available"}
+        return {
+            "allowed": True,
+            "score": 0.0,
+            "count": 0,
+            "reason": "eodhd library not available",
+        }
     except Exception as e:
         log.error(f"[SENTIMENT] Unexpected error: {e}")
-        return {"allowed": True, "score": 0.0, "count": 0,
-                "reason": f"Error: {e}"}
+        return {"allowed": True, "score": 0.0, "count": 0, "reason": f"Error: {e}"}
 
 
-def inject_external_sentiment(pair: str, score: float, source: str = "external") -> None:
+def inject_external_sentiment(
+    pair: str, score: float, source: str = "external"
+) -> None:
     """Inject external sentiment score (e.g., from LunarCrush) into the cache.
 
     Args:
@@ -170,7 +203,9 @@ def inject_external_sentiment(pair: str, score: float, source: str = "external")
     # Store for both LONG and SHORT directions
     for direction in ("LONG", "SHORT"):
         cache_key = f"{pair}_{direction}"
-        is_aligned = (score > 0 and direction == "LONG") or (score < 0 and direction == "SHORT")
+        is_aligned = (score > 0 and direction == "LONG") or (
+            score < 0 and direction == "SHORT"
+        )
         threshold = 0.4  # Same as SENTIMENT_BLOCK_THRESHOLD
         allowed = is_aligned or abs(score) < threshold
         _cache[cache_key] = {
@@ -180,7 +215,7 @@ def inject_external_sentiment(pair: str, score: float, source: str = "external")
                 "score": score,
                 "count": 1,
                 "source": source,
-                "reason": f"{source} sentiment {'aligned' if is_aligned else 'opposing'}: {score:+.2f}"
-            }
+                "reason": f"{source} sentiment {'aligned' if is_aligned else 'opposing'}: {score:+.2f}",
+            },
         }
     log.info(f"[SENTIMENT] Injected {source} score for {pair}: {score:+.2f}")

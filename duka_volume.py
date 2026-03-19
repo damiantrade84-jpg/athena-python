@@ -17,6 +17,7 @@ Usage:
     # Get current volume ratio (current bar vol / 20-bar SMA) — used in scoring
     vr = get_forex_vr("EUR/USD", tf="H1", lookback=20)
 """
+
 import os
 import sqlite3
 import struct
@@ -24,7 +25,6 @@ import logging
 import datetime
 import threading
 from collections import defaultdict
-from io import BytesIO
 from lzma import LZMADecompressor, LZMAError, FORMAT_AUTO
 from typing import Optional
 
@@ -34,12 +34,23 @@ log = logging.getLogger("sentinel")
 
 # ── Symbol map: Athena display → Dukascopy symbol ────────────────────────────
 DUKA_SYMBOL_MAP = {
-    "EUR/USD": "EURUSD", "GBP/USD": "GBPUSD", "USD/JPY": "USDJPY",
-    "AUD/USD": "AUDUSD", "NZD/USD": "NZDUSD", "EUR/GBP": "EURGBP",
-    "USD/CAD": "USDCAD", "USD/CHF": "USDCHF", "EUR/JPY": "EURJPY",
-    "GBP/JPY": "GBPJPY", "AUD/JPY": "AUDJPY", "EUR/AUD": "EURAUD",
-    "GBP/AUD": "GBPAUD", "USD/ZAR": "USDZAR", "EUR/CHF": "EURCHF",
-    "USD/MXN": "USDMXN", "USD/SGD": "USDSGD",
+    "EUR/USD": "EURUSD",
+    "GBP/USD": "GBPUSD",
+    "USD/JPY": "USDJPY",
+    "AUD/USD": "AUDUSD",
+    "NZD/USD": "NZDUSD",
+    "EUR/GBP": "EURGBP",
+    "USD/CAD": "USDCAD",
+    "USD/CHF": "USDCHF",
+    "EUR/JPY": "EURJPY",
+    "GBP/JPY": "GBPJPY",
+    "AUD/JPY": "AUDJPY",
+    "EUR/AUD": "EURAUD",
+    "GBP/AUD": "GBPAUD",
+    "USD/ZAR": "USDZAR",
+    "EUR/CHF": "EURCHF",
+    "USD/MXN": "USDMXN",
+    "USD/SGD": "USDSGD",
 }
 
 # Dukascopy URL — month is 0-indexed (Jan=0, Feb=1, ... Dec=11)
@@ -48,16 +59,17 @@ _URL = (
     "{symbol}/{year}/{month:02d}/{day:02d}/{hour:02d}h_ticks.bi5"
 )
 
-_TOKEN_SIZE  = 20          # bytes per raw tick record (struct !IIIff)
-_TIMEOUT_S   = 15          # per-hour HTTP timeout
-_H1_SECONDS  = 3600
-_H4_SECONDS  = 14400
+_TOKEN_SIZE = 20  # bytes per raw tick record (struct !IIIff)
+_TIMEOUT_S = 15  # per-hour HTTP timeout
+_H1_SECONDS = 3600
+_H4_SECONDS = 14400
 
 _DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "duka_volume.db")
 _db_lock = threading.Lock()
 
 
 # ── SQLite cache ──────────────────────────────────────────────────────────────
+
 
 def _init_db():
     with _db_lock:
@@ -72,7 +84,9 @@ def _init_db():
                 PRIMARY KEY (symbol, tf, bar_ts)
             )
         """)
-        con.execute("CREATE INDEX IF NOT EXISTS idx_fv_sym_tf ON forex_volume (symbol, tf, bar_ts)")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fv_sym_tf ON forex_volume (symbol, tf, bar_ts)"
+        )
         con.commit()
         con.close()
 
@@ -82,12 +96,13 @@ _init_db()
 
 # ── Low-level fetch + decompress ──────────────────────────────────────────────
 
+
 def _fetch_hour_raw(duka_symbol: str, day: datetime.date, hour: int) -> bytes:
     """Download one hour of tick data. Returns empty bytes on failure (market closed etc)."""
     url = _URL.format(
         symbol=duka_symbol,
         year=day.year,
-        month=day.month - 1,   # Dukascopy is 0-indexed
+        month=day.month - 1,  # Dukascopy is 0-indexed
         day=day.day,
         hour=hour,
     )
@@ -114,10 +129,14 @@ def _decompress_bi5(data: bytes, day: datetime.date) -> list:
     ticks = []
     for i in range(n_tokens):
         chunk = raw[i * _TOKEN_SIZE : (i + 1) * _TOKEN_SIZE]
-        ms_offset, ask_raw, bid_raw, ask_vol_f, bid_vol_f = struct.unpack("!IIIff", chunk)
-        dt = datetime.datetime(day.year, day.month, day.day) + datetime.timedelta(milliseconds=ms_offset)
-        ask     = ask_raw / 100_000
-        bid     = bid_raw / 100_000
+        ms_offset, ask_raw, bid_raw, ask_vol_f, bid_vol_f = struct.unpack(
+            "!IIIff", chunk
+        )
+        dt = datetime.datetime(day.year, day.month, day.day) + datetime.timedelta(
+            milliseconds=ms_offset
+        )
+        ask = ask_raw / 100_000
+        bid = bid_raw / 100_000
         ask_vol = round(ask_vol_f * 1_000_000)
         bid_vol = round(bid_vol_f * 1_000_000)
         ticks.append((dt, ask, bid, ask_vol, bid_vol))
@@ -125,6 +144,7 @@ def _decompress_bi5(data: bytes, day: datetime.date) -> list:
 
 
 # ── Per-day fetch → H1/H4 volume aggregation ─────────────────────────────────
+
 
 def _fetch_day_volumes(duka_symbol: str, day: datetime.date) -> dict:
     """
@@ -157,6 +177,7 @@ def _fetch_day_volumes(duka_symbol: str, day: datetime.date) -> dict:
 
 # ── Cache write / read ────────────────────────────────────────────────────────
 
+
 def _cache_write(duka_symbol: str, volumes: dict):
     tf_name = {_H1_SECONDS: "H1", _H4_SECONDS: "H4"}
     rows = [
@@ -170,7 +191,7 @@ def _cache_write(duka_symbol: str, volumes: dict):
         con = sqlite3.connect(_DB_PATH, timeout=15.0)
         con.executemany(
             "INSERT OR REPLACE INTO forex_volume (symbol, tf, bar_ts, volume) VALUES (?,?,?,?)",
-            rows
+            rows,
         )
         con.commit()
         con.close()
@@ -183,7 +204,7 @@ def _cache_read(duka_symbol: str, tf: str, from_ts: int, to_ts: int) -> list:
         rows = con.execute(
             "SELECT bar_ts, volume FROM forex_volume "
             "WHERE symbol=? AND tf=? AND bar_ts>=? AND bar_ts<=? ORDER BY bar_ts",
-            (duka_symbol, tf, from_ts, to_ts)
+            (duka_symbol, tf, from_ts, to_ts),
         ).fetchall()
         con.close()
     return rows
@@ -194,13 +215,14 @@ def _newest_cached_ts(duka_symbol: str, tf: str) -> Optional[int]:
         con = sqlite3.connect(_DB_PATH, timeout=15.0)
         row = con.execute(
             "SELECT MAX(bar_ts) FROM forex_volume WHERE symbol=? AND tf=?",
-            (duka_symbol, tf)
+            (duka_symbol, tf),
         ).fetchone()
         con.close()
     return row[0] if row and row[0] else None
 
 
 # ── Public: download and cache N days ────────────────────────────────────────
+
 
 def fetch_and_cache(display: str, days: int = 90):
     """
@@ -216,7 +238,7 @@ def fetch_and_cache(display: str, days: int = 90):
         log.warning(f"[DUKA] No symbol mapping for '{display}'")
         return
 
-    today     = datetime.date.today()
+    today = datetime.date.today()
     start_day = today - datetime.timedelta(days=days)
 
     # Find newest cached timestamp to skip already-fetched days
@@ -242,8 +264,10 @@ def fetch_and_cache(display: str, days: int = 90):
 
 # ── Public: get volume bars ───────────────────────────────────────────────────
 
-def get_forex_volume_bars(display: str, tf: str = "H1", days: int = 60,
-                          blocking_fetch: bool = True) -> list:
+
+def get_forex_volume_bars(
+    display: str, tf: str = "H1", days: int = 60, blocking_fetch: bool = True
+) -> list:
     """
     Return a list of dicts [{time_unix, volume}] for the last `days` days.
 
@@ -261,13 +285,15 @@ def get_forex_volume_bars(display: str, tf: str = "H1", days: int = 60,
     if not duka_sym:
         return []
 
-    now    = datetime.datetime.utcnow()
-    to_ts  = int(now.timestamp())
+    now = datetime.datetime.utcnow()
+    to_ts = int(now.timestamp())
     from_ts = int((now - datetime.timedelta(days=days)).timestamp())
 
     rows = _cache_read(duka_sym, tf, from_ts, to_ts)
     if len(rows) < 20 and blocking_fetch:
-        log.info(f"[DUKA] {display} {tf}: cache insufficient ({len(rows)} bars), fetching...")
+        log.info(
+            f"[DUKA] {display} {tf}: cache insufficient ({len(rows)} bars), fetching..."
+        )
         fetch_and_cache(display, days=days + 5)
         rows = _cache_read(duka_sym, tf, from_ts, to_ts)
 
@@ -275,6 +301,7 @@ def get_forex_volume_bars(display: str, tf: str = "H1", days: int = 60,
 
 
 # ── Public: get volume ratio (current / SMA) for scoring ─────────────────────
+
 
 def get_forex_vr(display: str, tf: str = "H1", lookback: int = 20) -> float:
     """
@@ -300,8 +327,11 @@ def get_forex_vr(display: str, tf: str = "H1", lookback: int = 20) -> float:
         return 1.0
 
     import datetime
+
     try:
-        recent_dt = datetime.datetime.fromtimestamp(recent_bar["time"], datetime.timezone.utc)
+        recent_dt = datetime.datetime.fromtimestamp(
+            recent_bar["time"], datetime.timezone.utc
+        )
         recent_hour = recent_dt.hour
     except Exception:
         return 1.0
@@ -330,6 +360,7 @@ def get_forex_vr(display: str, tf: str = "H1", lookback: int = 20) -> float:
 
 # ── CLI: bulk seed all forex pairs ───────────────────────────────────────────
 
+
 def seed_all_forex(days: int = 90, workers: int = 4):
     """
     Download and cache `days` of volume data for all 17 forex pairs.
@@ -357,6 +388,7 @@ def seed_all_forex(days: int = 90, workers: int = 4):
 
 if __name__ == "__main__":
     import sys
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     days = int(sys.argv[1]) if len(sys.argv) > 1 else 90
     workers = int(sys.argv[2]) if len(sys.argv) > 2 else 3

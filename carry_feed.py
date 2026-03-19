@@ -27,13 +27,13 @@ Usage:
     z = get_carry_z("USD/MXN")   # −1.5 → MXN rate >> USD rate (carry opposes LONG USD)
     z = get_carry_z("S&P 500")   # −1.2 → elevated 10Y yield → risk-off headwind
 """
+
 import os
 import csv
 import sqlite3
 import logging
 import threading
 import time
-import datetime
 from io import StringIO
 from typing import Optional
 
@@ -44,11 +44,11 @@ log = logging.getLogger("sentinel")
 _DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "carry_cache.db")
 _db_lock = threading.Lock()
 _TIMEOUT = 30
-_FETCH_TTL = 86400          # re-download daily (rates change monthly but freshness matters)
+_FETCH_TTL = 86400  # re-download daily (rates change monthly but freshness matters)
 
 # In-memory cache: pair → (z_score, fetched_at)
 _mem_cache: dict = {}
-_MEM_TTL = 24 * 3600        # 24-hour in-memory cache (rates change slowly)
+_MEM_TTL = 24 * 3600  # 24-hour in-memory cache (rates change slowly)
 
 # ── FRED series IDs per currency ──────────────────────────────────────────────
 _FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
@@ -56,25 +56,25 @@ _FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
 # FRED only provides clean, reliable data for USD, EUR, GBP (confirmed working).
 # AUD/JPY/NZD/CHF/ZAR/MXN/CAD are not available cleanly — use hardcoded fallback.
 _FRED_CURRENCY_SERIES: dict[str, str] = {
-    "USD": "DFF",       # Fed Funds Rate (daily effective — most current)
-    "EUR": "ECBDFR",    # ECB Deposit Facility Rate
-    "GBP": "BOERUKM",   # Bank of England base rate (monthly)
+    "USD": "DFF",  # Fed Funds Rate (daily effective — most current)
+    "EUR": "ECBDFR",  # ECB Deposit Facility Rate
+    "GBP": "BOERUKM",  # Bank of England base rate (monthly)
 }
 
 # 10Y government bond yields — for index/commodity risk signals
-_FRED_10Y_SERIES    = "DGS10"    # US 10-Year Treasury Constant Maturity Rate
+_FRED_10Y_SERIES = "DGS10"  # US 10-Year Treasury Constant Maturity Rate
 _FRED_10Y_SERIES_GB = "IRLTLT01GBM156N"  # UK 10-Year Gilt yield (monthly)
 _FRED_10Y_SERIES_DE = "IRLTLT01DEM156N"  # Germany 10-Year Bund yield (monthly)
 _FRED_10Y_SERIES_AU = "IRLTLT01AUM156N"  # Australia 10-Year yield (monthly)
 _FRED_10Y_SERIES_JP = "IRLTLT01JPM156N"  # Japan 10-Year JGB yield (monthly)
 _FRED_10Y_SERIES_EZ = "IRLTLT01EZM156N"  # Euro Area 10-Year yield (monthly)
 
-_STATIC_10Y     = 4.20   # US  — fallback when FRED is unreachable
-_STATIC_10Y_GB  = 4.50   # UK
-_STATIC_10Y_DE  = 2.50   # Germany
-_STATIC_10Y_AU  = 4.40   # Australia
-_STATIC_10Y_JP  = 1.50   # Japan
-_STATIC_10Y_EZ  = 2.80   # Euro Area
+_STATIC_10Y = 4.20  # US  — fallback when FRED is unreachable
+_STATIC_10Y_GB = 4.50  # UK
+_STATIC_10Y_DE = 2.50  # Germany
+_STATIC_10Y_AU = 4.40  # Australia
+_STATIC_10Y_JP = 1.50  # Japan
+_STATIC_10Y_EZ = 2.80  # Euro Area
 
 # ── Hardcoded policy rates for currencies without reliable FRED coverage ──────
 # Update these when central banks change rates (meetings ~6-8x per year).
@@ -82,17 +82,17 @@ _STATIC_10Y_EZ  = 2.80   # Euro Area
 # Update these when central banks change rates. USD/EUR/GBP also listed here
 # as fallback when FRED is temporarily unreachable.
 _STATIC_RATES: dict[str, float] = {
-    "USD": 4.33,   # Fed Funds Rate (target range 4.25-4.50%)
-    "EUR": 2.40,   # ECB Deposit Facility Rate
-    "GBP": 4.50,   # Bank of England base rate
-    "JPY": 0.50,   # Bank of Japan — raised to 0.5% Jan 2025
-    "AUD": 4.10,   # RBA — easing cycle started Feb 2025
-    "NZD": 3.75,   # RBNZ — cutting cycle
-    "CAD": 3.00,   # Bank of Canada — cutting cycle
-    "CHF": 0.50,   # SNB
-    "ZAR": 7.50,   # SARB repo rate
-    "MXN": 9.00,   # Banxico — cutting cycle
-    "SGD": 3.00,   # MAS (proxy: SGD SORA ~3%)
+    "USD": 4.33,  # Fed Funds Rate (target range 4.25-4.50%)
+    "EUR": 2.40,  # ECB Deposit Facility Rate
+    "GBP": 4.50,  # Bank of England base rate
+    "JPY": 0.50,  # Bank of Japan — raised to 0.5% Jan 2025
+    "AUD": 4.10,  # RBA — easing cycle started Feb 2025
+    "NZD": 3.75,  # RBNZ — cutting cycle
+    "CAD": 3.00,  # Bank of Canada — cutting cycle
+    "CHF": 0.50,  # SNB
+    "ZAR": 7.50,  # SARB repo rate
+    "MXN": 9.00,  # Banxico — cutting cycle
+    "SGD": 3.00,  # MAS (proxy: SGD SORA ~3%)
 }
 
 # ── Pair → carry formula ──────────────────────────────────────────────────────
@@ -119,31 +119,47 @@ _PAIR_CARRY_FORMULA: dict[str, list[tuple[float, str]]] = {
     "USD/ZAR": [(1.0, "USD"), (-1.0, "ZAR")],
     "USD/SGD": [(1.0, "USD"), (-1.0, "SGD")],
     # ── Crypto: carry handled by funding rate factor ───────────────────────
-    "BTC/USDT": [], "ETH/USDT": [], "SOL/USDT": [], "BNB/USDT": [],
-    "XRP/USDT": [], "AVAX/USDT": [], "LINK/USDT": [], "ADA/USDT": [],
-    "DOGE/USDT": [], "DOT/USDT": [], "SUI/USDT": [], "APT/USDT": [],
-    "LTC/USDT": [], "NEAR/USDT": [], "INJ/USDT": [], "FET/USDT": [],
-    "RENDER/USDT": [], "ATOM/USDT": [], "OP/USDT": [], "ARB/USDT": [],
+    "BTC/USDT": [],
+    "ETH/USDT": [],
+    "SOL/USDT": [],
+    "BNB/USDT": [],
+    "XRP/USDT": [],
+    "AVAX/USDT": [],
+    "LINK/USDT": [],
+    "ADA/USDT": [],
+    "DOGE/USDT": [],
+    "DOT/USDT": [],
+    "SUI/USDT": [],
+    "APT/USDT": [],
+    "LTC/USDT": [],
+    "NEAR/USDT": [],
+    "INJ/USDT": [],
+    "FET/USDT": [],
+    "RENDER/USDT": [],
+    "ATOM/USDT": [],
+    "OP/USDT": [],
+    "ARB/USDT": [],
     # ── Indices — 10Y yield risk signal ────────────────────────────────────
-    "S&P 500":     [(-1.0, "_10Y")],  # inverted: high yield = bearish equity
-    "SPY":         [(-1.0, "_10Y")],
-    "Nasdaq":      [(-1.0, "_10Y")],
-    "QQQ":         [(-1.0, "_10Y")],
-    "Dow Jones":   [(-1.0, "_10Y")],
-    "UK100":         [(-1.0, "_10Y_GB")],
-    "DAX 40":        [(-1.0, "_10Y_DE")],
-    "ASX 200":       [(-1.0, "_10Y_AU")],
-    "Nikkei 225":    [(-1.0, "_10Y_JP")],
+    "S&P 500": [(-1.0, "_10Y")],  # inverted: high yield = bearish equity
+    "SPY": [(-1.0, "_10Y")],
+    "Nasdaq": [(-1.0, "_10Y")],
+    "QQQ": [(-1.0, "_10Y")],
+    "Dow Jones": [(-1.0, "_10Y")],
+    "UK100": [(-1.0, "_10Y_GB")],
+    "DAX 40": [(-1.0, "_10Y_DE")],
+    "ASX 200": [(-1.0, "_10Y_AU")],
+    "Nikkei 225": [(-1.0, "_10Y_JP")],
     "Euro Stoxx 50": [(-1.0, "_10Y_EZ")],
-    "Hang Seng":   [(-1.0, "_10Y")],
+    "Hang Seng": [(-1.0, "_10Y")],
     # ── Commodities ────────────────────────────────────────────────────────
-    "XAU/USD":     [(-1.0, "_10Y")],  # gold is inversely correlated with real yields
-    "XAG/USD":     [(-1.0, "_10Y")],
-    "WTI Oil":     [],
-    "Brent Oil":   [],
+    "XAU/USD": [(-1.0, "_10Y")],  # gold is inversely correlated with real yields
+    "XAG/USD": [(-1.0, "_10Y")],
+    "WTI Oil": [],
+    "Brent Oil": [],
 }
 
 # ── SQLite cache ──────────────────────────────────────────────────────────────
+
 
 def _init_db():
     with _db_lock:
@@ -157,7 +173,9 @@ def _init_db():
                 PRIMARY KEY (series_id, obs_date)
             )
         """)
-        con.execute("CREATE INDEX IF NOT EXISTS idx_rs_series ON rate_series (series_id, obs_date)")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rs_series ON rate_series (series_id, obs_date)"
+        )
         con.execute("""
             CREATE TABLE IF NOT EXISTS carry_meta (
                 series_id  TEXT PRIMARY KEY,
@@ -172,6 +190,7 @@ _init_db()
 
 
 # ── FRED data fetch ───────────────────────────────────────────────────────────
+
 
 def _fetch_fred(series_id: str) -> list[tuple[str, float]]:
     """Download FRED series CSV. Returns list of (YYYY-MM-DD, value) sorted asc."""
@@ -211,11 +230,11 @@ def _write_series(series_id: str, rows: list[tuple[str, float]]):
         con = sqlite3.connect(_DB_PATH, timeout=15.0)
         con.executemany(
             "INSERT OR REPLACE INTO rate_series (series_id, obs_date, rate) VALUES (?,?,?)",
-            [(series_id, d, v) for d, v in rows]
+            [(series_id, d, v) for d, v in rows],
         )
         con.execute(
             "INSERT OR REPLACE INTO carry_meta (series_id, last_fetch) VALUES (?,?)",
-            (series_id, time.time())
+            (series_id, time.time()),
         )
         con.commit()
         con.close()
@@ -233,7 +252,7 @@ def _mark_fetch_attempted(series_id: str):
         con = sqlite3.connect(_DB_PATH, timeout=15.0)
         con.execute(
             "INSERT OR REPLACE INTO carry_meta (series_id, last_fetch) VALUES (?,?)",
-            (series_id, time.time() - _FETCH_TTL + _FAIL_COOLDOWN)
+            (series_id, time.time() - _FETCH_TTL + _FAIL_COOLDOWN),
         )
         con.commit()
         con.close()
@@ -271,7 +290,9 @@ def _ensure_series(series_id: str, blocking: bool = False):
     if blocking:
         _do_fetch()
     else:
-        threading.Thread(target=_do_fetch, daemon=True, name=f"FRED-{series_id}").start()
+        threading.Thread(
+            target=_do_fetch, daemon=True, name=f"FRED-{series_id}"
+        ).start()
 
 
 def _get_latest_rate(series_id: str, as_of_date: str = None) -> Optional[float]:
@@ -281,20 +302,22 @@ def _get_latest_rate(series_id: str, as_of_date: str = None) -> Optional[float]:
         con = sqlite3.connect(_DB_PATH, timeout=15.0)
         row = con.execute(
             "SELECT rate FROM rate_series WHERE series_id=? ORDER BY obs_date DESC LIMIT 1",
-            (series_id,)
+            (series_id,),
         ).fetchone()
         con.close()
     return row[0] if row else None
 
 
-def _get_rate_series(series_id: str, months: int = 36, as_of_date: str = None) -> list[float]:
+def _get_rate_series(
+    series_id: str, months: int = 36, as_of_date: str = None
+) -> list[float]:
     """Return last `months` monthly rate values (most recent last)."""
     _ensure_series(series_id)
     with _db_lock:
         con = sqlite3.connect(_DB_PATH, timeout=15.0)
         rows = con.execute(
             "SELECT rate FROM rate_series WHERE series_id=? ORDER BY obs_date DESC LIMIT ?",
-            (series_id, months)
+            (series_id, months),
         ).fetchall()
         con.close()
     return [r[0] for r in reversed(rows)]
@@ -302,13 +325,14 @@ def _get_rate_series(series_id: str, months: int = 36, as_of_date: str = None) -
 
 # ── Z-score helpers ───────────────────────────────────────────────────────────
 
+
 def _carry_zscore(carry: float, history: list[float]) -> Optional[float]:
     """Z-score of carry value vs historical carry distribution."""
     if len(history) < 6:
         return None
     mean = sum(history) / len(history)
     variance = sum((x - mean) ** 2 for x in history) / len(history)
-    std = variance ** 0.5
+    std = variance**0.5
     if std < 0.01:
         # Rates nearly unchanged over period — return sign of carry (weak signal)
         return max(-1.0, min(1.0, carry))
@@ -321,7 +345,7 @@ _rate_cache: dict[str, tuple[float, float]] = {}  # series_id → (rate, fetched
 
 
 _10Y_SERIES_MAP: dict[str, tuple[str, float]] = {
-    "_10Y":    (_FRED_10Y_SERIES,    _STATIC_10Y),
+    "_10Y": (_FRED_10Y_SERIES, _STATIC_10Y),
     "_10Y_GB": (_FRED_10Y_SERIES_GB, _STATIC_10Y_GB),
     "_10Y_DE": (_FRED_10Y_SERIES_DE, _STATIC_10Y_DE),
     "_10Y_AU": (_FRED_10Y_SERIES_AU, _STATIC_10Y_AU),
@@ -345,7 +369,9 @@ def _get_rate_for_key(key: str, as_of_date: str = None) -> Optional[float]:
             cached = _rate_cache.get(series_id)
             if cached and now - cached[1] < 3600:
                 return cached[0]
-        rate = _get_latest_rate(series_id, as_of_date=as_of_date)   # non-blocking (background fetch)
+        rate = _get_latest_rate(
+            series_id, as_of_date=as_of_date
+        )  # non-blocking (background fetch)
         if rate is not None:
             if not as_of_date:
                 _rate_cache[series_id] = (rate, now)
@@ -370,7 +396,9 @@ def _get_rate_for_key(key: str, as_of_date: str = None) -> Optional[float]:
     return _STATIC_RATES.get(key)
 
 
-def _get_rate_series_for_key(key: str, months: int = 36, as_of_date: str = None) -> list[float]:
+def _get_rate_series_for_key(
+    key: str, months: int = 36, as_of_date: str = None
+) -> list[float]:
     """Return historical rate series for a currency key.
 
     For FRED-backed keys: returns real historical data.
@@ -483,29 +511,43 @@ def get_carry_differential(display: str) -> Optional[float]:
 
 def seed_carry_background():
     """Trigger background fetch of all FRED rate series on startup."""
+
     def _seed():
-        all_series = set(_FRED_CURRENCY_SERIES.values()) | set(sid for sid, _ in _10Y_SERIES_MAP.values())
+        all_series = set(_FRED_CURRENCY_SERIES.values()) | set(
+            sid for sid, _ in _10Y_SERIES_MAP.values()
+        )
         for sid in sorted(all_series):
             try:
                 _ensure_series(sid, blocking=True)
             except Exception as e:
                 log.warning(f"[CARRY] Seed {sid} failed: {e}")
         log.info(f"[CARRY] Rate seed complete ({len(all_series)} series)")
+
     t = threading.Thread(target=_seed, daemon=True, name="CarrySeed")
     t.start()
 
 
 if __name__ == "__main__":
-    import sys
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     print("Fetching FRED rate data...")
     seed_carry_background()
     import time as _time
-    _time.sleep(15)   # wait for background fetch
+
+    _time.sleep(15)  # wait for background fetch
     pairs = [
-        "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "NZD/USD",
-        "USD/MXN", "USD/ZAR", "USD/CHF", "EUR/JPY", "GBP/JPY",
-        "S&P 500", "Nasdaq", "XAU/USD",
+        "EUR/USD",
+        "GBP/USD",
+        "USD/JPY",
+        "AUD/USD",
+        "NZD/USD",
+        "USD/MXN",
+        "USD/ZAR",
+        "USD/CHF",
+        "EUR/JPY",
+        "GBP/JPY",
+        "S&P 500",
+        "Nasdaq",
+        "XAU/USD",
     ]
     print("\nCarry z-scores (+ = tailwind for LONG, − = headwind):")
     for p in pairs:

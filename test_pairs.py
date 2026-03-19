@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-import importlib.util, sys
+import importlib.util
+
 spec = importlib.util.spec_from_file_location("athena_main", "athena.py")
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
@@ -15,8 +16,8 @@ print(f"ETF pairs: {len(mod.ETF_PAIRS)}")
 print(f"CRYPTO pairs: {len(mod.CRYPTO_PAIRS)}")
 
 # Check JSE pairs are in ALL_PAIRS
-jse_symbols = [p['display'] for p in mod.JSE_PAIRS]
-all_symbols = [p['display'] for p in mod.ALL_PAIRS]
+jse_symbols = [p["display"] for p in mod.JSE_PAIRS]
+all_symbols = [p["display"] for p in mod.ALL_PAIRS]
 missing_jse = [s for s in jse_symbols if s not in all_symbols]
 if missing_jse:
     print(f"Missing JSE pairs from ALL_PAIRS: {missing_jse}")

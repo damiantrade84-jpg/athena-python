@@ -13,8 +13,8 @@ Blueprint compliance:
   - NON-DIRECTIONAL indicators (adx_z, atr_z, bbWidth_z, realized_vol_z, volume_ratio,
     fib_proximity) measure signal quality/strength — contribute via abs().
 """
+
 import math
-import numpy as np
 import logging
 import threading
 from typing import List, Dict, Optional
@@ -23,7 +23,10 @@ from regime import detect_regime
 
 log = logging.getLogger("athena")
 
-def _dynamic_regime_weights(factor_scores: dict, recent_momentum: float, regime: str) -> dict:
+
+def _dynamic_regime_weights(
+    factor_scores: dict, recent_momentum: float, regime: str
+) -> dict:
     """Momentum-adjusted regime weights — only for factor engine (crypto/stock/etc.).
     Forex uses its own static rules in forex_scoring.py and is untouched."""
     base = CONFIG.get("REGIME_WEIGHTS", {}).get(regime.upper(), {})
@@ -32,9 +35,14 @@ def _dynamic_regime_weights(factor_scores: dict, recent_momentum: float, regime:
         if w == 0:  # disabled factor — never touch
             dynamic[factor] = 0.0
             continue
-        adj = 1.0 + (recent_momentum * 0.3 if factor in ["trend", "momentum"] else -recent_momentum * 0.2)
+        adj = 1.0 + (
+            recent_momentum * 0.3
+            if factor in ["trend", "momentum"]
+            else -recent_momentum * 0.2
+        )
         dynamic[factor] = round(max(0.3, min(2.5, w * adj)), 3)
     return dynamic
+
 
 def _bayesian_blend(factor_scores: dict, historical_winrates: dict) -> dict:
     """Bayesian update using past factor performance — only for factor engine."""
@@ -48,8 +56,12 @@ def _bayesian_blend(factor_scores: dict, historical_winrates: dict) -> dict:
 # ── Regime smoothing state ────────────────────────────────────────────────────
 # Tracks the last N raw regime labels per pair to prevent whipsawing.
 # Only updates the committed regime once N consecutive bars agree on the new label.
-_regime_history: Dict[str, list] = {}    # pair_display -> rolling list of raw regime labels
-_regime_committed: Dict[str, str] = {}  # pair_display -> currently committed (smoothed) regime
+_regime_history: Dict[
+    str, list
+] = {}  # pair_display -> rolling list of raw regime labels
+_regime_committed: Dict[
+    str, str
+] = {}  # pair_display -> currently committed (smoothed) regime
 _regime_lock = threading.Lock()
 
 
@@ -75,6 +87,7 @@ def _get_smoothed_regime(pair_id: str, raw_regime: str) -> str:
 
 # ── Correlation filter ───────────────────────────────────────────────────────
 
+
 def _pearson(x: List[float], y: List[float]) -> Optional[float]:
     """Pearson correlation between two equal-length float lists. Returns None if insufficient data."""
     pairs = [(a, b) for a, b in zip(x, y) if a is not None and b is not None]
@@ -90,11 +103,14 @@ def _pearson(x: List[float], y: List[float]) -> Optional[float]:
     return num / den if den > 0 else 0.0
 
 
-def _build_indicator_series(h4_candles: List[dict], window: int) -> Dict[str, List[float]]:
+def _build_indicator_series(
+    h4_candles: List[dict], window: int
+) -> Dict[str, List[float]]:
     """Build indicator time series from H4 candles for correlation computation.
     Only imports are lightweight — reuses the same calc functions as indicators.py.
     """
     from indicators import calc_rsi, calc_macd, calc_atr, calc_adx
+
     if len(h4_candles) < max(window, 50):
         return {}
     candles = h4_candles[-window:]
@@ -109,9 +125,9 @@ def _build_indicator_series(h4_candles: List[dict], window: int) -> Dict[str, Li
     }
 
 
-def _apply_correlation_filter(indicator_scalars: Dict[str, Optional[float]],
-                               h4_candles: List[dict],
-                               window: int) -> Dict[str, float]:
+def _apply_correlation_filter(
+    indicator_scalars: Dict[str, Optional[float]], h4_candles: List[dict], window: int
+) -> Dict[str, float]:
     """Per-blueprint correlation filter:
     1. Compute pairwise rolling correlation between indicator time series.
     2. If abs(correlation) > 0.8, reduce the weaker indicator's effective weight by 50%.
@@ -128,31 +144,44 @@ def _apply_correlation_filter(indicator_scalars: Dict[str, Optional[float]],
         return weight_mult
 
     # Only correlate indicators we have both scalar and series for
-    corr_keys = [k for k in series if k in indicator_scalars and indicator_scalars[k] is not None]
+    corr_keys = [
+        k for k in series if k in indicator_scalars and indicator_scalars[k] is not None
+    ]
     checked = set()
     for i, k1 in enumerate(corr_keys):
-        for k2 in corr_keys[i + 1:]:
+        for k2 in corr_keys[i + 1 :]:
             pair_key = tuple(sorted([k1, k2]))
             if pair_key in checked:
                 continue
             checked.add(pair_key)
             corr_raw = _pearson(series[k1], series[k2])
-            
+
             if corr_raw is not None:
                 decay_factor = 0.94  # 6% decay per bar (standard in 2026 quant guides)
                 corr = corr_raw * decay_factor
-                
+
                 if abs(corr) > 0.8:
-                    v1 = abs(indicator_scalars[k1]) if indicator_scalars[k1] is not None else 0.0
-                    v2 = abs(indicator_scalars[k2]) if indicator_scalars[k2] is not None else 0.0
+                    v1 = (
+                        abs(indicator_scalars[k1])
+                        if indicator_scalars[k1] is not None
+                        else 0.0
+                    )
+                    v2 = (
+                        abs(indicator_scalars[k2])
+                        if indicator_scalars[k2] is not None
+                        else 0.0
+                    )
                     weaker = k2 if v1 >= v2 else k1
                     # Reduce by 50% but cap total reduction at 50%
                     weight_mult[weaker] = max(0.5, weight_mult[weaker] - 0.5)
-                    log.debug(f"[CORR] {k1}<->{k2} r={corr:.2f}, reducing {weaker} weight to {weight_mult[weaker]:.2f}")
+                    log.debug(
+                        f"[CORR] {k1}<->{k2} r={corr:.2f}, reducing {weaker} weight to {weight_mult[weaker]:.2f}"
+                    )
     return weight_mult
 
 
 # ── Factor scoring ───────────────────────────────────────────────────────────
+
 
 def _candle_microstructure(h4_candles: List[dict]) -> Dict[str, Optional[float]]:
     """Compute microstructure proxies from H4 OHLC data (no order book required).
@@ -165,10 +194,14 @@ def _candle_microstructure(h4_candles: List[dict]) -> Dict[str, Optional[float]]
         liquidity_pressure    — avg close position within bar over 5 bars (signed)
     """
     if not h4_candles or len(h4_candles) < 5:
-        return {"order_book_imbalance": None, "orderflow_delta": None, "liquidity_pressure": None}
+        return {
+            "order_book_imbalance": None,
+            "orderflow_delta": None,
+            "liquidity_pressure": None,
+        }
 
     recent10 = h4_candles[-10:]
-    recent5  = h4_candles[-5:]
+    recent5 = h4_candles[-5:]
 
     # order_book_imbalance: mean of (close-open)/(high-low) per bar → directional body strength
     obi_vals = []
@@ -176,7 +209,9 @@ def _candle_microstructure(h4_candles: List[dict]) -> Dict[str, Optional[float]]
         rng = c["high"] - c["low"]
         if rng > 0:
             obi_vals.append((c["close"] - c["open"]) / rng)
-    obi = max(-3.0, min(3.0, (sum(obi_vals) / len(obi_vals)) * 3.0)) if obi_vals else None
+    obi = (
+        max(-3.0, min(3.0, (sum(obi_vals) / len(obi_vals)) * 3.0)) if obi_vals else None
+    )
 
     # orderflow_delta: (bull bars - bear bars) / n — directional bar count balance
     n = len(recent10)
@@ -192,11 +227,16 @@ def _candle_microstructure(h4_candles: List[dict]) -> Dict[str, Optional[float]]
             lp_vals.append((c["close"] - c["low"]) / rng - 0.5)
     lp = max(-3.0, min(3.0, (sum(lp_vals) / len(lp_vals)) * 6.0)) if lp_vals else None
 
-    return {"order_book_imbalance": obi, "orderflow_delta": ofd, "liquidity_pressure": lp}
+    return {
+        "order_book_imbalance": obi,
+        "orderflow_delta": ofd,
+        "liquidity_pressure": lp,
+    }
 
 
-def _factor_score(indicators: Dict[str, Optional[float]],
-                  mapping: Dict[str, str]) -> Optional[float]:
+def _factor_score(
+    indicators: Dict[str, Optional[float]], mapping: Dict[str, str]
+) -> Optional[float]:
     """Simple mean of indicators whose keys appear in mapping values (legacy test API)."""
     vals = [indicators[k] for k in mapping.values() if indicators.get(k) is not None]
     if not vals:
@@ -204,12 +244,14 @@ def _factor_score(indicators: Dict[str, Optional[float]],
     return sum(vals) / len(vals)
 
 
-def _weighted_factor_score(indicators: Dict[str, Optional[float]],
-                           keys: List[str],
-                           corr_weights: Dict[str, float],
-                           use_abs: bool = False,
-                           factor_name: str = "",
-                           asset_type: str = "") -> Optional[float]:
+def _weighted_factor_score(
+    indicators: Dict[str, Optional[float]],
+    keys: List[str],
+    corr_weights: Dict[str, float],
+    use_abs: bool = False,
+    factor_name: str = "",
+    asset_type: str = "",
+) -> Optional[float]:
     """Compute factor score as indicator-weighted, correlation-adjusted mean.
 
     Applies per-indicator weights from CONFIG["INDICATOR_WEIGHTS"][factor_name]
@@ -241,10 +283,18 @@ def _weighted_factor_score(indicators: Dict[str, Optional[float]],
     return sum(v * w / w_sum for v, w in zip(vals, wgts))
 
 
-def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dict,
-                          d1_candles: List, h4_candles: List, h1_candles: List,
-                          volume_ratio: float, funding_rate: Optional[float] = None,
-                          bar_time: Optional[str] = None) -> Dict:
+def compute_factor_scores(
+    d1_snap: Dict,
+    h4_snap: Dict,
+    h1_snap: Dict,
+    pair: Dict,
+    d1_candles: List,
+    h4_candles: List,
+    h1_candles: List,
+    volume_ratio: float,
+    funding_rate: Optional[float] = None,
+    bar_time: Optional[str] = None,
+) -> Dict:
     """Compute factor scores, apply regime weights, and aggregate to final score.
 
     Returns dict with final_score (always >= 0), direction, factor_scores, weights, regime, etc.
@@ -258,11 +308,15 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
     _atr_raw = h4_snap.get("atr")
     if _close is not None and _close > 0 and _ema21 is not None:
         if _ema21 > 0 and _ema21 / _close < 0.001:
-            log.warning(f"[FACTOR] {pair.get('display')} DATA QUALITY: EMA21={_ema21:.6f} vs close={_close:.4f} "
-                        f"— ratio {_ema21/_close:.6f} suggests stale/corrupt data")
+            log.warning(
+                f"[FACTOR] {pair.get('display')} DATA QUALITY: EMA21={_ema21:.6f} vs close={_close:.4f} "
+                f"— ratio {_ema21 / _close:.6f} suggests stale/corrupt data"
+            )
     if _close is not None and _close > 0 and _atr_raw is not None and _atr_raw == 0:
-        log.warning(f"[FACTOR] {pair.get('display')} DATA QUALITY: ATR=0 with close={_close:.6f} "
-                    f"— zero ATR indicates frozen/stale candle data")
+        log.warning(
+            f"[FACTOR] {pair.get('display')} DATA QUALITY: ATR=0 with close={_close:.6f} "
+            f"— zero ATR indicates frozen/stale candle data"
+        )
 
     # ── Gather indicators ────────────────────────────────────────────────
     indicators: Dict[str, Optional[float]] = {}
@@ -309,7 +363,9 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
         # Accept volume if candles have real vol OR if ratio meaningfully deviates from 1.0
         # (deviation > 0.05 indicates an external source like Dukascopy supplied real data,
         #  vs the 1.0 fallback returned when no data is available)
-        _has_candle_vol = any(c.get("vol", 0) > 0 for c in (h4_candles[-5:] if h4_candles else []))
+        _has_candle_vol = any(
+            c.get("vol", 0) > 0 for c in (h4_candles[-5:] if h4_candles else [])
+        )
         _has_external_vol = asset_type == "forex" and volume_ratio != 1.0
         if _has_candle_vol or _has_external_vol:
             # Center around 1.0 (average), scale: 2x average → +3.0
@@ -330,7 +386,9 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
     # fib_proximity returns +1/-1 when near a level, 0 when not near any level
     # 0 means "no structural info" — exclude from scoring (not "structure is bad")
     fib_prox = h4_snap.get("fib_proximity")
-    indicators["fib_proximity"] = fib_prox if fib_prox is not None and fib_prox != 0 else None
+    indicators["fib_proximity"] = (
+        fib_prox if fib_prox is not None and fib_prox != 0 else None
+    )
 
     # Derivatives — funding rate (directional: negative funding = bullish for longs)
     if funding_rate is not None and funding_rate != 0:
@@ -344,6 +402,7 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
     # NOTE: Now supports historical lookup during backtest using bar_time
     try:
         from cot_feed import get_cot_z as _get_cot_z
+
         _as_of = bar_time[:10] if bar_time else None
         _cot = _get_cot_z(pair.get("display", ""), as_of_date=_as_of)
 
@@ -365,6 +424,7 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
     # NOTE: Now supports historical lookup during backtest using bar_time
     try:
         from carry_feed import get_carry_z as _get_carry_z
+
         _as_of = bar_time[:10] if bar_time else None
         _carry = _get_carry_z(pair.get("display", ""), as_of_date=_as_of)
         indicators["carry_z"] = float(_carry) if _carry != 0.0 else None
@@ -374,23 +434,23 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
     # Microstructure (directional if available)
     # Crypto: values injected from Binance/Bybit WS feeds via _micro_cache in athena.py
     # All others: computed from H4 OHLC price action (no order book required)
-    _ws_obi  = h4_snap.get("order_book_imbalance")
-    _ws_lwl  = h4_snap.get("liquidity_wall_detection")
-    _ws_ofd  = h4_snap.get("orderflow_delta")
-    _ws_lp   = h4_snap.get("liquidity_pressure")
+    _ws_obi = h4_snap.get("order_book_imbalance")
+    _ws_lwl = h4_snap.get("liquidity_wall_detection")
+    _ws_ofd = h4_snap.get("orderflow_delta")
+    _ws_lp = h4_snap.get("liquidity_pressure")
 
     if _ws_obi is None and _ws_ofd is None and _ws_lp is None:
         # No WS data — compute candle-based proxies
         _cm = _candle_microstructure(h4_candles)
-        indicators["order_book_imbalance"]    = _cm["order_book_imbalance"]
-        indicators["orderflow_delta"]         = _cm["orderflow_delta"]
-        indicators["liquidity_pressure"]      = _cm["liquidity_pressure"]
+        indicators["order_book_imbalance"] = _cm["order_book_imbalance"]
+        indicators["orderflow_delta"] = _cm["orderflow_delta"]
+        indicators["liquidity_pressure"] = _cm["liquidity_pressure"]
         indicators["liquidity_wall_detection"] = None  # requires real order book
     else:
-        indicators["order_book_imbalance"]    = _ws_obi
+        indicators["order_book_imbalance"] = _ws_obi
         indicators["liquidity_wall_detection"] = _ws_lwl
-        indicators["orderflow_delta"]         = _ws_ofd
-        indicators["liquidity_pressure"]      = _ws_lp
+        indicators["orderflow_delta"] = _ws_ofd
+        indicators["liquidity_pressure"] = _ws_lp
 
     # ── Correlation filter (blueprint: abs(corr) > 0.8 → reduce weaker by 50%) ──
     corr_window = CONFIG.get("INDICATOR_CORRELATION_WINDOW", 200)
@@ -401,29 +461,45 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
     directional_factors = {
         # Multi-timeframe EMA alignment: D1 tide + H4 momentum + H1 entry
         # All 3 aligned → ±1.0 (high conviction); mixed → near 0 (conflicting)
-        "trend":          ["ema_trend", "h4_ema_trend", "d1_ema_trend"],
-        "momentum":       ["rsi_z", "macdLine_z"],
-        "derivatives":    ["funding_rate", "cot_z"],
-        "microstructure": ["order_book_imbalance", "liquidity_wall_detection",
-                           "orderflow_delta", "liquidity_pressure"],
+        "trend": ["ema_trend", "h4_ema_trend", "d1_ema_trend"],
+        "momentum": ["rsi_z", "macdLine_z"],
+        "derivatives": ["funding_rate", "cot_z"],
+        "microstructure": [
+            "order_book_imbalance",
+            "liquidity_wall_detection",
+            "orderflow_delta",
+            "liquidity_pressure",
+        ],
     }
     # Non-directional factors: abs value = quality/strength (always positive)
     nondirectional_factors = {
         "trend_strength": ["adx_z"],
-        "volatility":     ["atr_z", "bbWidth_z", "realized_vol_z"],
-        "volume":         ["volume_ratio", "obv_trend"],
-        "structure":      ["fib_proximity"],
-        "carry":          ["carry_z"],
+        "volatility": ["atr_z", "bbWidth_z", "realized_vol_z"],
+        "volume": ["volume_ratio", "obv_trend"],
+        "structure": ["fib_proximity"],
+        "carry": ["carry_z"],
     }
 
     # ── Compute factor scores (correlation-adjusted × indicator-weighted) ────
     factor_scores: Dict[str, Optional[float]] = {}
     for factor, keys in directional_factors.items():
         factor_scores[factor] = _weighted_factor_score(
-            indicators, keys, corr_weights, use_abs=False, factor_name=factor, asset_type=asset_type)
+            indicators,
+            keys,
+            corr_weights,
+            use_abs=False,
+            factor_name=factor,
+            asset_type=asset_type,
+        )
     for factor, keys in nondirectional_factors.items():
         factor_scores[factor] = _weighted_factor_score(
-            indicators, keys, corr_weights, use_abs=True, factor_name=factor, asset_type=asset_type)
+            indicators,
+            keys,
+            corr_weights,
+            use_abs=True,
+            factor_name=factor,
+            asset_type=asset_type,
+        )
 
     # ── Determine direction from directional factors ─────────────────────
     dir_signals = []
@@ -436,7 +512,9 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
 
     # ── Regime detection ─────────────────────────────────────────────────
     _bbw_pct = h4_snap.get("bbWidth_pct") or h4_snap.get("bb_width_pct")
-    _raw_regime = detect_regime(h4_snap, asset_type, bb_width_pct=_bbw_pct).get("regime", "UNKNOWN")
+    _raw_regime = detect_regime(h4_snap, asset_type, bb_width_pct=_bbw_pct).get(
+        "regime", "UNKNOWN"
+    )
     # Apply smoothing: require REGIME_SMOOTHING_BARS consecutive bars before accepting regime switch
     _pair_id = pair.get("display", pair.get("symbol", "unknown"))
     regime = _get_smoothed_regime(_pair_id, _raw_regime)
@@ -445,9 +523,14 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
 
     # Map factor names to config weight keys
     _weight_key_map = {
-        "trend": "trend", "momentum": "momentum", "derivatives": "derivatives",
-        "microstructure": "microstructure", "trend_strength": "trend",
-        "volatility": "volatility", "volume": "volume", "structure": "structure",
+        "trend": "trend",
+        "momentum": "momentum",
+        "derivatives": "derivatives",
+        "microstructure": "microstructure",
+        "trend_strength": "trend",
+        "volatility": "volatility",
+        "volume": "volume",
+        "structure": "structure",
         "carry": "carry",
     }
     weights: Dict[str, float] = {}
@@ -466,6 +549,7 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
     try:
         from adaptive_weights import get_adaptive_weights
         import os
+
         _db = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
         _adaptive = get_adaptive_weights(_db, asset_type, regime)
         if _adaptive:
@@ -476,19 +560,35 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
         pass  # Graceful degradation — use base weights if adaptive fails
 
     # ── Final aggregation ────────────────────────────────────────────────
-    active_dir = {f: s for f, s in factor_scores.items() if s is not None and f in directional_factors}
-    active_nondir = {f: s for f, s in factor_scores.items() if s is not None and f in nondirectional_factors}
+    active_dir = {
+        f: s
+        for f, s in factor_scores.items()
+        if s is not None and f in directional_factors
+    }
+    active_nondir = {
+        f: s
+        for f, s in factor_scores.items()
+        if s is not None and f in nondirectional_factors
+    }
     disabled_factors = [f for f, s in factor_scores.items() if s is None]
 
     # Minimum active factors guard: require at least 1 directional factor.
     # Prevents inflated scores driven solely by volatility (e.g. JSE stocks with no H4/H1 data).
     if not active_dir:
-        log.debug(f"[FACTOR] {pair.get('display')} no active directional factors — score=0")
+        log.debug(
+            f"[FACTOR] {pair.get('display')} no active directional factors — score=0"
+        )
         return {
-            "final_score": 0.0, "direction": "LONG", "factor_scores": factor_scores,
-            "weights": weights, "regime": regime, "filtered_indicators": indicators,
-            "disabled_factors": disabled_factors, "directional_score": 0.0,
-            "nondirectional_score": 0.0, "correlation_adjustments": {},
+            "final_score": 0.0,
+            "direction": "LONG",
+            "factor_scores": factor_scores,
+            "weights": weights,
+            "regime": regime,
+            "filtered_indicators": indicators,
+            "disabled_factors": disabled_factors,
+            "directional_score": 0.0,
+            "nondirectional_score": 0.0,
+            "correlation_adjustments": {},
             "insufficient_factors": True,
         }
 
@@ -504,7 +604,9 @@ def compute_factor_scores(d1_snap: Dict, h4_snap: Dict, h1_snap: Dict, pair: Dic
     nondir_score = 0.0
     if active_nondir:
         # Exclude factors with 0 weight
-        active_nondir = {f: s for f, s in active_nondir.items() if weights.get(f, 1.0) > 0}
+        active_nondir = {
+            f: s for f, s in active_nondir.items() if weights.get(f, 1.0) > 0
+        }
     if active_nondir:
         nondir_w_sum = sum(weights.get(f, 1.0) for f in active_nondir)
         for f, s in active_nondir.items():

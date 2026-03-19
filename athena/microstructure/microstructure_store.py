@@ -2,12 +2,12 @@
 
 Never stores raw order book updates; only stores aggregated metrics per interval.
 """
+
 import sqlite3
-import json
 import logging
 import time
 import threading
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List
 from pathlib import Path
 
 log = logging.getLogger("sentinel")
@@ -15,6 +15,7 @@ log = logging.getLogger("sentinel")
 DB_PATH = Path(__file__).parent.parent.parent / "microstructure.db"
 
 _db_lock = threading.Lock()
+
 
 # Ensure table exists on first import
 def _ensure_db() -> None:
@@ -35,10 +36,15 @@ def _ensure_db() -> None:
                     UNIQUE(timestamp, exchange, symbol)
                 )
             """)
-            con.execute("CREATE INDEX IF NOT EXISTS idx_time_symbol ON metrics(timestamp, symbol)")
-            con.execute("CREATE INDEX IF NOT EXISTS idx_exchange_symbol ON metrics(exchange, symbol)")
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_time_symbol ON metrics(timestamp, symbol)"
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_exchange_symbol ON metrics(exchange, symbol)"
+            )
     except Exception as _e:
         log.warning(f"[MicroStore] DB init warning: {_e}")
+
 
 _ensure_db()
 
@@ -60,14 +66,26 @@ def init_db() -> None:
                 UNIQUE(timestamp, exchange, symbol)
             )
         """)
-        con.execute("CREATE INDEX IF NOT EXISTS idx_time_symbol ON metrics(timestamp, symbol)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_exchange_symbol ON metrics(exchange, symbol)")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_time_symbol ON metrics(timestamp, symbol)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exchange_symbol ON metrics(exchange, symbol)"
+        )
     log.info("Microstructure DB initialized")
+
 
 def store_metrics(metrics: Dict) -> None:
     """Store aggregated metrics; rejects raw orderbook data."""
-    required_keys = {"timestamp", "exchange", "symbol", "order_book_imbalance",
-                     "liquidity_wall_detection", "orderflow_delta", "liquidity_pressure"}
+    required_keys = {
+        "timestamp",
+        "exchange",
+        "symbol",
+        "order_book_imbalance",
+        "liquidity_wall_detection",
+        "orderflow_delta",
+        "liquidity_pressure",
+    }
     missing = required_keys - set(metrics.keys())
     if missing:
         log.warning(f"[MicroStore] Missing required keys: {missing}")
@@ -79,28 +97,33 @@ def store_metrics(metrics: Dict) -> None:
     try:
         with _db_lock:
             with sqlite3.connect(DB_PATH, timeout=15.0) as con:
-                con.execute("""
+                con.execute(
+                    """
                     INSERT OR REPLACE INTO metrics
                     (timestamp, exchange, symbol, order_book_imbalance,
                      liquidity_wall_detection, orderflow_delta, liquidity_pressure)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    metrics["timestamp"],
-                    metrics["exchange"],
-                    metrics["symbol"],
-                    metrics["order_book_imbalance"],
-                    metrics["liquidity_wall_detection"],
-                    metrics["orderflow_delta"],
-                    metrics["liquidity_pressure"],
-                ))
+                """,
+                    (
+                        metrics["timestamp"],
+                        metrics["exchange"],
+                        metrics["symbol"],
+                        metrics["order_book_imbalance"],
+                        metrics["liquidity_wall_detection"],
+                        metrics["orderflow_delta"],
+                        metrics["liquidity_pressure"],
+                    ),
+                )
     except Exception as e:
         log.error(f"[MicroStore] Failed to store metrics: {e}")
+
 
 def query_latest(symbol: str, exchange: str, limit: int = 100) -> List[Dict]:
     """Query latest aggregated metrics for a symbol."""
     try:
         with sqlite3.connect(DB_PATH, timeout=15.0) as con:
-            cur = con.execute("""
+            cur = con.execute(
+                """
                 SELECT timestamp, exchange, symbol,
                        order_book_imbalance, liquidity_wall_detection,
                        orderflow_delta, liquidity_pressure
@@ -108,7 +131,9 @@ def query_latest(symbol: str, exchange: str, limit: int = 100) -> List[Dict]:
                 WHERE symbol = ? AND exchange = ?
                 ORDER BY timestamp DESC
                 LIMIT ?
-            """, (symbol, exchange, limit))
+            """,
+                (symbol, exchange, limit),
+            )
             rows = cur.fetchall()
             return [
                 {
@@ -126,6 +151,7 @@ def query_latest(symbol: str, exchange: str, limit: int = 100) -> List[Dict]:
         log.error(f"[MicroStore] Query failed: {e}")
         return []
 
+
 def purge_old(keep_hours: int = 24) -> None:
     """Purge metrics older than keep_hours."""
     cutoff = time.time() - keep_hours * 3600
@@ -134,9 +160,12 @@ def purge_old(keep_hours: int = 24) -> None:
             cur = con.execute("DELETE FROM metrics WHERE timestamp < ?", (cutoff,))
             deleted = cur.rowcount
             if deleted:
-                log.info(f"[MicroStore] Purged {deleted} old records (older than {keep_hours}h)")
+                log.info(
+                    f"[MicroStore] Purged {deleted} old records (older than {keep_hours}h)"
+                )
     except Exception as e:
         log.error(f"[MicroStore] Purge failed: {e}")
+
 
 if __name__ == "__main__":
     init_db()

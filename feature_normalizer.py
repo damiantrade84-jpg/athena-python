@@ -3,9 +3,10 @@
 Provides z-score, percentile rank, and min-max scaling with configurable lookbacks.
 All z-scores are clamped to [-3, +3] to prevent extreme influence.
 """
+
 import math
 import logging
-from typing import List, Optional, Tuple
+from typing import List, Optional
 from config import CONFIG
 
 log = logging.getLogger("sentinel")
@@ -18,7 +19,7 @@ def _rolling_mean(series: List[float], window: int) -> List[Optional[float]]:
     if window <= 0:
         return out
     for i in range(window - 1, n):
-        window_vals = [v for v in series[i - window + 1:i + 1] if v is not None]
+        window_vals = [v for v in series[i - window + 1 : i + 1] if v is not None]
         if len(window_vals) == window:
             out[i] = sum(window_vals) / window
     return out
@@ -31,7 +32,7 @@ def _rolling_std(series: List[float], window: int) -> List[Optional[float]]:
     if window <= 0:
         return out
     for i in range(window - 1, n):
-        window_vals = [v for v in series[i - window + 1:i + 1] if v is not None]
+        window_vals = [v for v in series[i - window + 1 : i + 1] if v is not None]
         if len(window_vals) == window:
             mean = sum(window_vals) / window
             var = sum((v - mean) ** 2 for v in window_vals) / (window - 1)
@@ -63,7 +64,7 @@ def percentile_rank(series: List[float], window: int) -> List[Optional[float]]:
     if window <= 0:
         return out
     for i in range(window - 1, n):
-        window_vals = [v for v in series[i - window + 1:i + 1] if v is not None]
+        window_vals = [v for v in series[i - window + 1 : i + 1] if v is not None]
         if len(window_vals) == window:
             sorted_vals = sorted(window_vals)
             rank = sum(1 for v in sorted_vals if v < series[i])
@@ -78,7 +79,7 @@ def minmax_scale(series: List[float], window: int) -> List[Optional[float]]:
     if window <= 0:
         return out
     for i in range(window - 1, n):
-        window_vals = [v for v in series[i - window + 1:i + 1] if v is not None]
+        window_vals = [v for v in series[i - window + 1 : i + 1] if v is not None]
         if len(window_vals) == window:
             min_val = min(window_vals)
             max_val = max(window_vals)

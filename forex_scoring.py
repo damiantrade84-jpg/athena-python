@@ -14,7 +14,6 @@ Threshold: MIN_FOREX_CONFLUENCE (default 0.60) in config.yaml
 """
 
 from __future__ import annotations
-import os
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -44,13 +43,21 @@ class ForexScoreResult:
 
 # ─── Session windows (UTC hours, inclusive) ─────────────────────────────────
 
-_ASIAN_OPEN   = (0,  8)   # 00:00–08:00 UTC  (Tokyo/Sydney)
-_LONDON_OPEN  = (7, 16)   # 07:00–17:00 UTC  (full London session, BST)
-_NY_OPEN      = (12, 21)  # 12:00–21:00 UTC  (full NY session: 08:00–17:00 ET)
+_ASIAN_OPEN = (0, 8)  # 00:00–08:00 UTC  (Tokyo/Sydney)
+_LONDON_OPEN = (7, 16)  # 07:00–17:00 UTC  (full London session, BST)
+_NY_OPEN = (12, 21)  # 12:00–21:00 UTC  (full NY session: 08:00–17:00 ET)
 
 
-_ASIAN_SESSION_PAIRS = {"USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY", "NZD/JPY",
-                        "AUD/USD", "NZD/USD", "AUD/NZD"}
+_ASIAN_SESSION_PAIRS = {
+    "USD/JPY",
+    "EUR/JPY",
+    "GBP/JPY",
+    "AUD/JPY",
+    "NZD/JPY",
+    "AUD/USD",
+    "NZD/USD",
+    "AUD/NZD",
+}
 
 
 def _in_session(utc_hour: int, pair_display: str = "") -> bool:
@@ -61,17 +68,22 @@ def _in_session(utc_hour: int, pair_display: str = "") -> bool:
     """
     try:
         from config import CONFIG
+
         if not CONFIG.get("FOREX_SESSION_FILTER", True):
             return True  # session filter disabled — always trade
     except Exception:
         pass
     # London and NY are valid for all forex pairs
-    if (_LONDON_OPEN[0] <= utc_hour <= _LONDON_OPEN[1] or
-            _NY_OPEN[0] <= utc_hour <= _NY_OPEN[1]):
+    if (
+        _LONDON_OPEN[0] <= utc_hour <= _LONDON_OPEN[1]
+        or _NY_OPEN[0] <= utc_hour <= _NY_OPEN[1]
+    ):
         return True
     # Asian session only for JPY/AUD/NZD crosses
-    if (_ASIAN_OPEN[0] <= utc_hour <= _ASIAN_OPEN[1] and
-            pair_display in _ASIAN_SESSION_PAIRS):
+    if (
+        _ASIAN_OPEN[0] <= utc_hour <= _ASIAN_OPEN[1]
+        and pair_display in _ASIAN_SESSION_PAIRS
+    ):
         return True
     return False
 
@@ -84,14 +96,13 @@ def _hurst_exponent(prices: list, max_lag: int = 20) -> float:
     if len(prices) < max_lag * 2:
         return 0.5
     try:
-        arr  = np.array(prices, dtype=float)
+        arr = np.array(prices, dtype=float)
         lags = range(2, max_lag)
-        tau  = [np.sqrt(np.std(np.subtract(arr[lag:], arr[:-lag])))
-                for lag in lags]
-        tau  = [t for t in tau if t > 0]
+        tau = [np.sqrt(np.std(np.subtract(arr[lag:], arr[:-lag]))) for lag in lags]
+        tau = [t for t in tau if t > 0]
         if len(tau) < 2:
             return 0.5
-        valid_lags = list(lags)[:len(tau)]
+        valid_lags = list(lags)[: len(tau)]
         poly = np.polyfit(np.log(valid_lags), np.log(tau), 1)
         return float(np.clip(poly[0] * 2.0, 0.0, 1.0))
     except Exception:
@@ -124,28 +135,29 @@ class DynamicForexWeights:
     Trending (H>0.55): EMA trend alignment and COT dominate.
     Neutral (0.45-0.55): balanced weights.
     """
+
     def __init__(self):
-        self.rsi_w  = 0.40
-        self.cot_w  = 0.20
-        self.base   = 0.30
+        self.rsi_w = 0.40
+        self.cot_w = 0.20
+        self.base = 0.30
         self.regime = "NEUTRAL"
 
     def update(self, hurst: float, backtest_mode: bool = False) -> None:
         b = 0.25 if backtest_mode else 0.35
         if hurst < 0.45:
-            self.base   = b - 0.05
-            self.rsi_w  = 0.60
-            self.cot_w  = 0.20
+            self.base = b - 0.05
+            self.rsi_w = 0.60
+            self.cot_w = 0.20
             self.regime = "MEAN_REVERTING"
         elif hurst > 0.55:
-            self.base   = b + 0.05
-            self.rsi_w  = 0.20
-            self.cot_w  = 0.25
+            self.base = b + 0.05
+            self.rsi_w = 0.20
+            self.cot_w = 0.25
             self.regime = "TRENDING"
         else:
-            self.base   = b
-            self.rsi_w  = 0.40
-            self.cot_w  = 0.20
+            self.base = b
+            self.rsi_w = 0.40
+            self.cot_w = 0.20
             self.regime = "NEUTRAL"
 
     def score(self, eq: float, cot: float) -> float:
@@ -153,6 +165,7 @@ class DynamicForexWeights:
 
 
 # ─── Trend gate ──────────────────────────────────────────────────────────────
+
 
 def _check_trend_gate(d1_snap: dict, h4_snap: dict) -> tuple[bool, str]:
     """
@@ -176,11 +189,11 @@ def _check_trend_gate(d1_snap: dict, h4_snap: dict) -> tuple[bool, str]:
     if adx < 20.0:
         return False, "LONG"  # not trending — skip regardless of EMA alignment
 
-    d1_close  = d1_snap.get("close")
+    d1_close = d1_snap.get("close")
     d1_ema200 = d1_snap.get("ema200")
-    h4_ema50  = h4_snap.get("ema50")
+    h4_ema50 = h4_snap.get("ema50")
     h4_ema200 = h4_snap.get("ema200")
-    d1_slope  = d1_snap.get("ema200Slope10", 0) or 0
+    d1_slope = d1_snap.get("ema200Slope10", 0) or 0
 
     if None in (d1_close, d1_ema200, h4_ema50, h4_ema200):
         return False, "LONG"
@@ -205,8 +218,8 @@ def _check_trend_gate(d1_snap: dict, h4_snap: dict) -> tuple[bool, str]:
 
 # ─── Entry quality (RSI pullback) ────────────────────────────────────────────
 
-def _entry_quality(h1_snap: dict, direction: str,
-                   rsi_history: list = None) -> float:
+
+def _entry_quality(h1_snap: dict, direction: str, rsi_history: list = None) -> float:
     rsi = h1_snap.get("rsi") or h1_snap.get("rsi14")
     if rsi is None:
         return 0.3
@@ -214,29 +227,46 @@ def _entry_quality(h1_snap: dict, direction: str,
     if rsi_history and len(rsi_history) >= 10:
         rsi_z = _mad_zscore(rsi, rsi_history)
         if direction == "LONG":
-            if rsi_z <= -0.5:   return 1.0
-            elif rsi_z <= 0.0:  return 0.6
-            elif rsi_z <= 0.5:  return 0.3
-            else:               return 0.0
+            if rsi_z <= -0.5:
+                return 1.0
+            elif rsi_z <= 0.0:
+                return 0.6
+            elif rsi_z <= 0.5:
+                return 0.3
+            else:
+                return 0.0
         else:
-            if rsi_z >= 0.5:    return 1.0
-            elif rsi_z >= 0.0:  return 0.6
-            elif rsi_z >= -0.5: return 0.3
-            else:               return 0.0
+            if rsi_z >= 0.5:
+                return 1.0
+            elif rsi_z >= 0.0:
+                return 0.6
+            elif rsi_z >= -0.5:
+                return 0.3
+            else:
+                return 0.0
 
     if direction == "LONG":
-        if 35 <= rsi <= 55:   return 1.0
-        elif 55 < rsi <= 65:  return 0.5
-        elif rsi < 35:        return 0.2
-        else:                 return 0.0
+        if 35 <= rsi <= 55:
+            return 1.0
+        elif 55 < rsi <= 65:
+            return 0.5
+        elif rsi < 35:
+            return 0.2
+        else:
+            return 0.0
     else:
-        if 45 <= rsi <= 65:   return 1.0
-        elif 35 <= rsi < 45:  return 0.5
-        elif rsi > 65:        return 0.2
-        else:                 return 0.0
+        if 45 <= rsi <= 65:
+            return 1.0
+        elif 35 <= rsi < 45:
+            return 0.5
+        elif rsi > 65:
+            return 0.2
+        else:
+            return 0.0
 
 
 # ─── Momentum confirmation ───────────────────────────────────────────────────────
+
 
 def _momentum_confirm(h4_snap: dict, direction: str) -> float:
     """
@@ -266,6 +296,7 @@ def _momentum_confirm(h4_snap: dict, direction: str) -> float:
 
 # ─── ADX filter ───────────────────────────────────────────────────────────────
 
+
 def _adx_filter(h4_snap: dict) -> float:
     """
     ADX-based trend strength filter.
@@ -283,8 +314,8 @@ def _adx_filter(h4_snap: dict) -> float:
 
 # ─── Carry tilt ───────────────────────────────────────────────────────────────
 
-def _carry_tilt(pair: dict, direction: str,
-                bar_time: Optional[str] = None) -> float:
+
+def _carry_tilt(pair: dict, direction: str, bar_time: Optional[str] = None) -> float:
     """
     Carry direction as a mild tilt (booster, never blocker).
     Returns 0.0-1.0. Carry aligned with direction = boost.
@@ -292,12 +323,15 @@ def _carry_tilt(pair: dict, direction: str,
     """
     try:
         from carry_feed import get_carry_z
+
         _as_of = bar_time[:10] if bar_time else None
         carry_z = get_carry_z(pair.get("display", ""), as_of_date=_as_of)
         if carry_z is None or carry_z == 0.0:
             return 0.0
         # Carry aligned with direction = boost
-        if (direction == "LONG" and carry_z > 0) or (direction == "SHORT" and carry_z < 0):
+        if (direction == "LONG" and carry_z > 0) or (
+            direction == "SHORT" and carry_z < 0
+        ):
             return min(1.0, abs(carry_z) / 2.0)
         return 0.0  # opposing carry = no boost, not penalty
     except Exception:
@@ -306,8 +340,8 @@ def _carry_tilt(pair: dict, direction: str,
 
 # ─── COT boost ───────────────────────────────────────────────────────────────
 
-def _cot_boost(pair: dict, direction: str,
-               bar_time: Optional[str] = None) -> float:
+
+def _cot_boost(pair: dict, direction: str, bar_time: Optional[str] = None) -> float:
     """
     COT commercial positioning as signal booster.
     Returns 0.0-1.0. Never blocks a signal — only amplifies.
@@ -315,6 +349,7 @@ def _cot_boost(pair: dict, direction: str,
     """
     try:
         from cot_feed import get_cot_z
+
         cot_z = get_cot_z(pair.get("display", ""), as_of_date=bar_time)
         if cot_z is None:
             return 0.0
@@ -328,6 +363,7 @@ def _cot_boost(pair: dict, direction: str,
 
 
 # ─── London breakout ─────────────────────────────────────────────────────────
+
 
 def _london_breakout_score(h1_candles: list, utc_hour: int) -> tuple[float, str]:
     """
@@ -354,19 +390,21 @@ def _london_breakout_score(h1_candles: list, utc_hour: int) -> tuple[float, str]
     if len(asian_candles) < 3:
         return 0.0, "LONG"
 
-    asian_high  = max(c["high"] for c in asian_candles)
-    asian_low   = min(c["low"]  for c in asian_candles)
+    asian_high = max(c["high"] for c in asian_candles)
+    asian_low = min(c["low"] for c in asian_candles)
     asian_range = asian_high - asian_low
 
     if asian_range <= 0:
         return 0.0, "LONG"
 
-    current       = h1_candles[-1]
+    current = h1_candles[-1]
     current_close = current.get("close", 0)
-    current_open  = current.get("open", current_close)
-    body_size     = abs(current_close - current_open)
-    candle_range  = current.get("high", current_close) - current.get("low", current_close)
-    body_ratio    = body_size / candle_range if candle_range > 0 else 0
+    current_open = current.get("open", current_close)
+    body_size = abs(current_close - current_open)
+    candle_range = current.get("high", current_close) - current.get(
+        "low", current_close
+    )
+    body_ratio = body_size / candle_range if candle_range > 0 else 0
 
     if current_close > asian_high:
         if body_ratio < 0.3:
@@ -385,6 +423,7 @@ def _london_breakout_score(h1_candles: list, utc_hour: int) -> tuple[float, str]
 
 # ─── UTC hour helper ─────────────────────────────────────────────────────────
 
+
 def _local_to_utc_hour() -> int:
     """
     Derive UTC hour from local system clock + SERVER_TZ_OFFSET_HOURS config.
@@ -394,6 +433,7 @@ def _local_to_utc_hour() -> int:
     """
     try:
         from config import CONFIG
+
         offset = int(CONFIG.get("SERVER_TZ_OFFSET_HOURS", 2))
     except Exception:
         offset = 2
@@ -405,15 +445,16 @@ def _local_to_utc_hour() -> int:
 
 # ─── Main scoring function ───────────────────────────────────────────────────
 
+
 def compute_forex_score(
-    d1_snap:       dict,
-    h4_snap:       dict,
-    h1_snap:       dict,
-    h1_candles:    list,
-    pair:          dict,
-    bar_time:      Optional[str] = None,
+    d1_snap: dict,
+    h4_snap: dict,
+    h1_snap: dict,
+    h1_candles: list,
+    pair: dict,
+    bar_time: Optional[str] = None,
     backtest_mode: bool = False,
-    h4_candles:    Optional[list] = None,
+    h4_candles: Optional[list] = None,
     rsi_history_override: Optional[list] = None,
 ) -> ForexScoreResult:
     """
@@ -434,26 +475,29 @@ def compute_forex_score(
         utc_hour = _local_to_utc_hour()
 
     # Hurst Exponent from H1 close prices — determines regime weighting
-    _closes = [c.get("close", 0) for c in (h1_candles or [])[-60:]
-               if c.get("close")]
-    _hurst  = _hurst_exponent(_closes) if len(_closes) >= 20 else 0.5
+    _closes = [c.get("close", 0) for c in (h1_candles or [])[-60:] if c.get("close")]
+    _hurst = _hurst_exponent(_closes) if len(_closes) >= 20 else 0.5
 
     _dfw = DynamicForexWeights()
     _dfw.update(_hurst, backtest_mode)
 
     trend_ok, trend_dir = _check_trend_gate(d1_snap, h4_snap)
-    session_ok = True if backtest_mode else _in_session(utc_hour, pair.get("display", ""))
+    session_ok = (
+        True if backtest_mode else _in_session(utc_hour, pair.get("display", ""))
+    )
 
     if not session_ok:
-        log.info(f"[FOREX] {pair.get('display','?')} session closed (utc_hour={utc_hour})")
+        log.info(
+            f"[FOREX] {pair.get('display', '?')} session closed (utc_hour={utc_hour})"
+        )
     if not trend_ok:
         _adx_val = d1_snap.get("adx")
-        _d1c     = d1_snap.get("close")
-        _d1e200  = d1_snap.get("ema200")
-        _h4e50   = h4_snap.get("ema50")
-        _h4e200  = h4_snap.get("ema200")
+        _d1c = d1_snap.get("close")
+        _d1e200 = d1_snap.get("ema200")
+        _h4e50 = h4_snap.get("ema50")
+        _h4e200 = h4_snap.get("ema200")
         log.info(
-            f"[FOREX] {pair.get('display','?')} trend_gate=False "
+            f"[FOREX] {pair.get('display', '?')} trend_gate=False "
             f"adx={_adx_val} d1_close={_d1c} d1_ema200={_d1e200} "
             f"h4_ema50={_h4e50} h4_ema200={_h4e200}"
         )
@@ -461,43 +505,50 @@ def compute_forex_score(
     trend_score = 0.0
     if trend_ok and session_ok:
         rsi_history = rsi_history_override if rsi_history_override else None
-        eq  = _entry_quality(h1_snap, trend_dir, rsi_history)
+        eq = _entry_quality(h1_snap, trend_dir, rsi_history)
         cot = _cot_boost(pair, trend_dir, bar_time)
         trend_score = _dfw.score(eq, cot)
 
-        result.trend_gate     = trend_ok
+        result.trend_gate = trend_ok
         result.session_active = session_ok
-        result.entry_quality  = eq
-        result.cot_boost      = cot
+        result.entry_quality = eq
+        result.cot_boost = cot
 
     # ── Signal 2: London breakout ─────────────────────────────────────────
     bo_score, bo_dir = _london_breakout_score(h1_candles, utc_hour)
     if bo_score > 0:
-        cot_bo   = _cot_boost(pair, bo_dir, bar_time)
+        cot_bo = _cot_boost(pair, bo_dir, bar_time)
         bo_final = bo_score * (1.0 + cot_bo * 0.3)
         result.breakout_score = bo_score
     else:
         bo_final = 0.0
-        bo_dir   = trend_dir
+        bo_dir = trend_dir
 
     # ── NEW: 3 SMC Upgrades (2026 edge) ─────────────────────────────────────
     try:
-        from indicators import detect_fvg, detect_liquidity_sweep, volume_strength_at_level, calc_fib
+        from indicators import (
+            detect_fvg,
+            detect_liquidity_sweep,
+            volume_strength_at_level,
+            calc_fib,
+        )
+
         atr = h4_snap.get("atr", 0.0)
         fvg_bonus = 0.0
         liquidity_bonus = 0.0
         volume_bonus = 0.0
-        
+
         direction = trend_dir if trend_score >= bo_final else bo_dir
 
         # 1. FVG confirmation
         fvgs = detect_fvg(h4_candles or [])
         current_price = h4_snap.get("close", 0)
         # Check if current price falls within any FVG zone (proper SMC overlap)
-        fvg_overlap = any(
-            fvg["bottom"] <= current_price <= fvg["top"]
-            for fvg in fvgs
-        ) if fvgs else False
+        fvg_overlap = (
+            any(fvg["bottom"] <= current_price <= fvg["top"] for fvg in fvgs)
+            if fvgs
+            else False
+        )
         if fvg_overlap:
             fvg_bonus = 0.35
 
@@ -507,7 +558,11 @@ def compute_forex_score(
 
         # 3. Volume strength at Asian range or Fib level
         fib = calc_fib(h4_candles or [])
-        key_level = fib.get("fib618", current_price) if direction == "LONG" else fib.get("fib382", current_price)
+        key_level = (
+            fib.get("fib618", current_price)
+            if direction == "LONG"
+            else fib.get("fib382", current_price)
+        )
         volume_bonus = volume_strength_at_level(h1_candles or [], key_level) * 0.25
     except Exception as e:
         log.error(f"[FOREX SMC ERROR] {e}")
@@ -526,21 +581,21 @@ def compute_forex_score(
     result.final_score = min(1.0, final_score)  # keep 0–1 scale
 
     result.components = {
-        "trend_gate":        trend_ok,
-        "session_active":    session_ok,
-        "utc_hour":          utc_hour,
-        "entry_quality":     result.entry_quality,
-        "cot_boost":         result.cot_boost,
-        "breakout_score":    bo_score,
-        "trend_score":       round(trend_score, 4),
-        "breakout_final":    round(bo_final, 4),
-        "hurst":             round(_hurst, 3),
-        "regime":            _dfw.regime,
+        "trend_gate": trend_ok,
+        "session_active": session_ok,
+        "utc_hour": utc_hour,
+        "entry_quality": result.entry_quality,
+        "cot_boost": result.cot_boost,
+        "breakout_score": bo_score,
+        "trend_score": round(trend_score, 4),
+        "breakout_final": round(bo_final, 4),
+        "hurst": round(_hurst, 3),
+        "regime": _dfw.regime,
         # newly added visibility metrics
-        "fvg_bonus":         round(fvg_bonus, 3),
-        "liquidity_sweep":   liquidity_bonus > 0,
-        "volume_strength":   round(volume_bonus, 3),
-        "fvg_overlap":       fvg_overlap,
+        "fvg_bonus": round(fvg_bonus, 3),
+        "liquidity_sweep": liquidity_bonus > 0,
+        "volume_strength": round(volume_bonus, 3),
+        "fvg_overlap": fvg_overlap,
     }
 
     return result

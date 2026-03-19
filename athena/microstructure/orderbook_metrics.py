@@ -3,9 +3,9 @@
 Computes order book imbalance, liquidity wall detection, orderflow delta,
 and liquidity pressure. All outputs are normalized to [-1, 1].
 """
-import math
+
 import logging
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Tuple
 
 log = logging.getLogger("sentinel")
 
@@ -22,7 +22,9 @@ def _normalize_to_range(value: float, min_val: float, max_val: float) -> float:
     return 2.0 * norm - 1.0
 
 
-def order_book_imbalance(bids: List[Tuple[float, float]], asks: List[Tuple[float, float]]) -> float:
+def order_book_imbalance(
+    bids: List[Tuple[float, float]], asks: List[Tuple[float, float]]
+) -> float:
     """Compute order book imbalance: (bid_vol - ask_vol) / (bid_vol + ask_vol).
     Returns value in [-1, 1]; positive = bid-heavy, negative = ask-heavy."""
     bid_vol = sum(size for _, size in bids)
@@ -33,8 +35,12 @@ def order_book_imbalance(bids: List[Tuple[float, float]], asks: List[Tuple[float
     return (bid_vol - ask_vol) / total
 
 
-def liquidity_wall_detection(bids: List[Tuple[float, float]], asks: List[Tuple[float, float]],
-                            current_price: float, threshold_multiplier: float = 5.0) -> float:
+def liquidity_wall_detection(
+    bids: List[Tuple[float, float]],
+    asks: List[Tuple[float, float]],
+    current_price: float,
+    threshold_multiplier: float = 5.0,
+) -> float:
     """Detect large limit orders (>threshold_multiplier x average level size) and return distance to nearest wall.
     Returns normalized distance in [-1, 1] where -1 = wall far below price, 1 = wall far above price."""
     if not bids or not asks or current_price <= 0:
@@ -80,12 +86,14 @@ def liquidity_pressure(imbalance: float, normalized_delta: float) -> float:
     return max(-1.0, min(1.0, pressure))
 
 
-def compute_microstructure_signals(bids: List[Tuple[float, float]],
-                                  asks: List[Tuple[float, float]],
-                                  current_price: float,
-                                  market_buy_volume: float = 0.0,
-                                  market_sell_volume: float = 0.0,
-                                  liquidity_wall_threshold: float = 5.0) -> Dict[str, float]:
+def compute_microstructure_signals(
+    bids: List[Tuple[float, float]],
+    asks: List[Tuple[float, float]],
+    current_price: float,
+    market_buy_volume: float = 0.0,
+    market_sell_volume: float = 0.0,
+    liquidity_wall_threshold: float = 5.0,
+) -> Dict[str, float]:
     """Compute all microstructure signals with normalized outputs.
     Args:
         bids: list of (price, size) tuples for bid levels
@@ -102,7 +110,9 @@ def compute_microstructure_signals(bids: List[Tuple[float, float]],
     """
     # Compute individual signals
     imb = order_book_imbalance(bids, asks)
-    wall_dist = liquidity_wall_detection(bids, asks, current_price, threshold_multiplier=liquidity_wall_threshold)
+    wall_dist = liquidity_wall_detection(
+        bids, asks, current_price, threshold_multiplier=liquidity_wall_threshold
+    )
     delta = orderflow_delta(market_buy_volume, market_sell_volume)
     pressure = liquidity_pressure(imb, delta)
     return {

@@ -11,10 +11,10 @@ improve Sharpe ratio and reduce max drawdown vs single-pass analysis.
 Only runs on auto-trade candidates (not manual scans) to control API costs.
 ~3 API calls per debate = ~$0.10/day at 3 trades/day with Grok.
 """
+
 import json
 import logging
 import os
-from typing import Optional
 
 log = logging.getLogger("sentinel.debate")
 
@@ -40,16 +40,21 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
     if not api_key:
         try:
             from config import CONFIG
+
             api_key = CONFIG.get("XAI_API_KEY", "")
             if api_key == "YOUR_XAI_API_KEY":
                 api_key = ""
         except ImportError:
             pass
     if not api_key:
-        return {"grade": "SKIP", "allowed": True,
-                "reasoning": "No XAI_API_KEY — debate skipped",
-                "bull_conviction": 0, "bear_conviction": 0,
-                "score_adjustment": 0.0}
+        return {
+            "grade": "SKIP",
+            "allowed": True,
+            "reasoning": "No XAI_API_KEY — debate skipped",
+            "bull_conviction": 0,
+            "bear_conviction": 0,
+            "score_adjustment": 0.0,
+        }
 
     pair = signal.get("display", signal.get("pair", "?"))
     direction = signal.get("direction", "?")
@@ -61,7 +66,14 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
 
     # Factor scores for AI context
     _factor_scores = signal.get("factorScores", {})
-    _factor_str = " | ".join(f"{k}={v:.2f}" if v is not None else f"{k}=None" for k, v in _factor_scores.items()) if _factor_scores else "N/A"
+    _factor_str = (
+        " | ".join(
+            f"{k}={v:.2f}" if v is not None else f"{k}=None"
+            for k, v in _factor_scores.items()
+        )
+        if _factor_scores
+        else "N/A"
+    )
     _confidence = signal.get("confidence", "?")
     _warnings = signal.get("warnings", [])
 
@@ -82,6 +94,7 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
 
     try:
         import openai
+
         client = openai.OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
 
         # Step 1: Bull Case
@@ -92,7 +105,8 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
 
         # Step 3: Judge
         judge_response = _get_judge_verdict(
-            client, context, direction, bull_response, bear_response)
+            client, context, direction, bull_response, bear_response
+        )
 
         grade = judge_response.get("grade", "PASS")
         allowed = grade in ("STRONG_GO", "WEAK_GO")
@@ -109,28 +123,37 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
             "allowed": allowed,
         }
 
-        log.info(f"[DEBATE] {pair} {direction}: {grade} "
-                 f"(Bull:{result['bull_conviction']}/10, "
-                 f"Bear:{result['bear_conviction']}/10)")
+        log.info(
+            f"[DEBATE] {pair} {direction}: {grade} "
+            f"(Bull:{result['bull_conviction']}/10, "
+            f"Bear:{result['bear_conviction']}/10)"
+        )
 
         return result
 
     except ImportError:
         log.warning("[DEBATE] openai library not installed — debate skipped")
-        return {"grade": "SKIP", "allowed": True,
-                "reasoning": "openai library not available",
-                "bull_conviction": 0, "bear_conviction": 0,
-                "score_adjustment": 0.0}
+        return {
+            "grade": "SKIP",
+            "allowed": True,
+            "reasoning": "openai library not available",
+            "bull_conviction": 0,
+            "bear_conviction": 0,
+            "score_adjustment": 0.0,
+        }
     except Exception as e:
         log.error(f"[DEBATE] Error: {e}")
-        return {"grade": "ERROR", "allowed": True,
-                "reasoning": f"Debate error: {e}",
-                "bull_conviction": 0, "bear_conviction": 0,
-                "score_adjustment": 0.0}
+        return {
+            "grade": "ERROR",
+            "allowed": True,
+            "reasoning": f"Debate error: {e}",
+            "bull_conviction": 0,
+            "bear_conviction": 0,
+            "score_adjustment": 0.0,
+        }
 
 
-def _get_debate_case(client, context: str, direction: str,
-                     side: str) -> dict:
+def _get_debate_case(client, context: str, direction: str, side: str) -> dict:
     """Get bull or bear case from the LLM."""
     if side == "BULL":
         prompt = (
@@ -155,9 +178,7 @@ def _get_debate_case(client, context: str, direction: str,
 
     try:
         response = client.responses.create(
-            model="grok-4-1-fast-reasoning",
-            max_output_tokens=400,
-            input=prompt
+            model="grok-4-1-fast-reasoning", max_output_tokens=400, input=prompt
         )
         text = response.output_text.strip()
         # Extract JSON from response
@@ -171,8 +192,9 @@ def _get_debate_case(client, context: str, direction: str,
         return {"conviction": 5, "key_arguments": [f"Error: {e}"]}
 
 
-def _get_judge_verdict(client, context: str, direction: str,
-                       bull: dict, bear: dict) -> dict:
+def _get_judge_verdict(
+    client, context: str, direction: str, bull: dict, bear: dict
+) -> dict:
     """Get judge verdict comparing bull and bear cases."""
     prompt = (
         f"You are an impartial JUDGE evaluating a {direction} trade.\n\n"
@@ -190,9 +212,7 @@ def _get_judge_verdict(client, context: str, direction: str,
 
     try:
         response = client.responses.create(
-            model="grok-4-1-fast-reasoning",
-            max_output_tokens=300,
-            input=prompt
+            model="grok-4-1-fast-reasoning", max_output_tokens=300, input=prompt
         )
         text = response.output_text.strip()
         start = text.find("{")
@@ -204,9 +224,7 @@ def _get_judge_verdict(client, context: str, direction: str,
             if result.get("grade") not in valid_grades:
                 result["grade"] = "PASS"
             return result
-        return {"grade": "PASS", "reasoning": "Parse error",
-                "score_adjustment": 0.0}
+        return {"grade": "PASS", "reasoning": "Parse error", "score_adjustment": 0.0}
     except Exception as e:
         log.warning(f"[DEBATE] Judge error: {e}")
-        return {"grade": "PASS", "reasoning": f"Error: {e}",
-                "score_adjustment": 0.0}
+        return {"grade": "PASS", "reasoning": f"Error: {e}", "score_adjustment": 0.0}

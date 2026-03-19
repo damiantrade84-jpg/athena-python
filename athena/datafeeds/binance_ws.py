@@ -3,17 +3,17 @@
 Streams depth20@100ms and trade streams, maintains local order book, computes
 order book imbalance and orderflow delta, and emits metrics to Athena pipeline.
 """
+
 import asyncio
 import json
 import logging
 import time
 from typing import Dict, List, Tuple, Optional
 import websockets
-from collections import deque
 
 log = logging.getLogger("sentinel")
-from athena.microstructure.microstructure_store import store_metrics
-from athena.microstructure.orderbook_metrics import (
+from athena.microstructure.microstructure_store import store_metrics  # noqa: E402
+from athena.microstructure.orderbook_metrics import (  # noqa: E402
     liquidity_wall_detection as _liq_wall,
     liquidity_pressure as _liq_pressure,
 )
@@ -21,6 +21,7 @@ from athena.microstructure.orderbook_metrics import (
 
 class BinanceWS:
     """Binance WebSocket client for depth20@100ms and trade streams."""
+
     def __init__(self, symbol: str = "btcusdt", emit_interval: float = 1.0):
         self.symbol = symbol.lower()
         self.base_url = "wss://stream.binance.com:9443/stream"
@@ -81,7 +82,7 @@ class BinanceWS:
 
     def _handle_trade(self, data: Dict) -> None:
         """Update orderflow delta from trade stream."""
-        price = float(data.get("p", 0))
+        float(data.get("p", 0))
         size = float(data.get("q", 0))
         is_buyer_maker = data.get("m")  # true if buyer is maker (seller is taker)
         # Binance trade: if m is True, buyer is the maker (seller is taker)
@@ -111,7 +112,11 @@ class BinanceWS:
             asks = self.orderbook["asks"]
             mid = (bids[0][0] + asks[0][0]) / 2.0 if bids and asks else 0.0
             wall = _liq_wall(bids, asks, mid) if mid > 0 else 0.0
-            norm_delta = self.orderflow_delta / max(abs(self.orderflow_delta), 1e-9) if self.orderflow_delta != 0 else 0.0
+            norm_delta = (
+                self.orderflow_delta / max(abs(self.orderflow_delta), 1e-9)
+                if self.orderflow_delta != 0
+                else 0.0
+            )
             pressure = _liq_pressure(imbalance, norm_delta)
             metrics = {
                 "timestamp": time.time(),
@@ -180,8 +185,11 @@ class BinanceWS:
 # Example usage
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+
     def metrics_cb(metrics):
-        print(f"[METRICS] Imbalance: {metrics['order_book_imbalance']:.4f}, Delta: {metrics['orderflow_delta']:.4f}")
+        print(
+            f"[METRICS] Imbalance: {metrics['order_book_imbalance']:.4f}, Delta: {metrics['orderflow_delta']:.4f}"
+        )
 
     client = BinanceWS(symbol="btcusdt", emit_interval=1.0)
     try:

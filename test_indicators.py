@@ -1,25 +1,68 @@
 """Unit tests for Sentinel v4.0 core indicator functions.
 Run with: py -m pytest test_indicators.py -v
 """
-import math
-import pytest
 
 # Import indicator functions from pure module to avoid booting the full Flask app in tests
 from indicators import (
-    calc_ema, calc_sma, calc_rsi, calc_atr, calc_adx, calc_bb,
-    calc_stochastic, calc_atr_percentile, calc_adx_percentile,
-    calc_fib, calc_levels
+    calc_ema,
+    calc_sma,
+    calc_rsi,
+    calc_atr,
+    calc_adx,
+    calc_bb,
+    calc_stochastic,
+    calc_atr_percentile,
+    calc_adx_percentile,
+    calc_fib,
+    calc_levels,
 )
 
 # ── Test data: 30 synthetic OHLCV candles with known properties ──────────
-CLOSES = [100, 102, 101, 103, 105, 104, 106, 108, 107, 109,
-          111, 110, 112, 114, 113, 115, 117, 116, 118, 120,
-          119, 121, 123, 122, 124, 126, 125, 127, 129, 128]
-HIGHS  = [c + 1.5 for c in CLOSES]
-LOWS   = [c - 1.5 for c in CLOSES]
-CANDLES = [{"time": f"2024-01-{i+1:02d}", "open": CLOSES[i] - 0.5,
-            "high": HIGHS[i], "low": LOWS[i], "close": CLOSES[i], "vol": 1000 + i * 10}
-           for i in range(len(CLOSES))]
+CLOSES = [
+    100,
+    102,
+    101,
+    103,
+    105,
+    104,
+    106,
+    108,
+    107,
+    109,
+    111,
+    110,
+    112,
+    114,
+    113,
+    115,
+    117,
+    116,
+    118,
+    120,
+    119,
+    121,
+    123,
+    122,
+    124,
+    126,
+    125,
+    127,
+    129,
+    128,
+]
+HIGHS = [c + 1.5 for c in CLOSES]
+LOWS = [c - 1.5 for c in CLOSES]
+CANDLES = [
+    {
+        "time": f"2024-01-{i + 1:02d}",
+        "open": CLOSES[i] - 0.5,
+        "high": HIGHS[i],
+        "low": LOWS[i],
+        "close": CLOSES[i],
+        "vol": 1000 + i * 10,
+    }
+    for i in range(len(CLOSES))
+]
 
 
 class TestEMA:
@@ -110,9 +153,9 @@ class TestATR:
     def test_constant_range_atr(self):
         # If high-low = 3.0 for every bar, ATR should converge to 3.0
         h = [103.0] * 30
-        l = [100.0] * 30
+        lo = [100.0] * 30
         c = [101.5] * 30
-        result = calc_atr(h, l, c, 5)
+        result = calc_atr(h, lo, c, 5)
         valid = [v for v in result if v is not None]
         assert abs(valid[-1] - 3.0) < 0.01
 
@@ -163,8 +206,10 @@ class TestStochastic:
         result = calc_stochastic(CANDLES, 14, 3, 3)
         k, d = result["k"], result["d"]
         # k/d may be a scalar or last element of a list
-        if isinstance(k, list): k = k[-1] if k else None
-        if isinstance(d, list): d = d[-1] if d else None
+        if isinstance(k, list):
+            k = k[-1] if k else None
+        if isinstance(d, list):
+            d = d[-1] if d else None
         if k is not None:
             assert 0 <= k <= 100
         if d is not None:
@@ -189,7 +234,15 @@ class TestADXPercentile:
 class TestFib:
     def test_fib_levels_ordered(self):
         result = calc_fib(CANDLES)
-        assert result["highest"] >= result["fib236"] >= result["fib382"] >= result["fib500"] >= result["fib618"] >= result["fib786"] >= result["lowest"]
+        assert (
+            result["highest"]
+            >= result["fib236"]
+            >= result["fib382"]
+            >= result["fib500"]
+            >= result["fib618"]
+            >= result["fib786"]
+            >= result["lowest"]
+        )
 
     def test_extension_above_high(self):
         result = calc_fib(CANDLES)

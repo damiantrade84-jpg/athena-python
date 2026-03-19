@@ -26,6 +26,7 @@ Usage:
     z = get_cot_z("XAU/USD")   # +2.1  → very crowded long gold
     refresh_cot()               # force re-download
 """
+
 import os
 import csv
 import sqlite3
@@ -41,40 +42,40 @@ import requests
 
 log = logging.getLogger("sentinel")
 
-_DB_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cot_cache.db")
-_db_lock  = threading.Lock()
-_TIMEOUT  = 30
-_WEEKLY_TTL  = 7 * 86400       # re-fetch weekly file at most once per week
-_HISTORY_TTL = 30 * 86400      # re-fetch annual ZIPs at most once per month
+_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cot_cache.db")
+_db_lock = threading.Lock()
+_TIMEOUT = 30
+_WEEKLY_TTL = 7 * 86400  # re-fetch weekly file at most once per week
+_HISTORY_TTL = 30 * 86400  # re-fetch annual ZIPs at most once per month
 
 # In-memory cache: asset_key → (z_score, fetched_at)
 _mem_cache: dict = {}
 _MEM_TTL = 6 * 3600
 
 # ── CFTC URLs ─────────────────────────────────────────────────────────────────
-_WEEKLY_FIN_URL    = "https://www.cftc.gov/dea/newcot/FinFutWk.txt"
-_HIST_FIN_URL      = "https://www.cftc.gov/files/dea/history/fut_fin_txt_{year}.zip"
-_HIST_DISAGG_URL   = "https://www.cftc.gov/files/dea/history/fut_disagg_txt_{year}.zip"
+_WEEKLY_FIN_URL = "https://www.cftc.gov/dea/newcot/FinFutWk.txt"
+_HIST_FIN_URL = "https://www.cftc.gov/files/dea/history/fut_fin_txt_{year}.zip"
+_HIST_DISAGG_URL = "https://www.cftc.gov/files/dea/history/fut_disagg_txt_{year}.zip"
 
 # ── Contract fragment matching (upper-case substring in CFTC contract name) ───
 _CONTRACT_FRAGMENTS: dict[str, str] = {
     # Financial futures (fin files)
-    "EUR":   "EURO FX",
-    "GBP":   "BRITISH POUND",
-    "JPY":   "JAPANESE YEN",
-    "AUD":   "AUSTRALIAN DOLLAR",
-    "NZD":   "NEW ZEALAND DOLLAR",
-    "CAD":   "CANADIAN DOLLAR",
-    "CHF":   "SWISS FRANC",
-    "MXN":   "MEXICAN PESO",
-    "BTC":   "BITCOIN",
-    "ETH":   "ETHER",
+    "EUR": "EURO FX",
+    "GBP": "BRITISH POUND",
+    "JPY": "JAPANESE YEN",
+    "AUD": "AUSTRALIAN DOLLAR",
+    "NZD": "NEW ZEALAND DOLLAR",
+    "CAD": "CANADIAN DOLLAR",
+    "CHF": "SWISS FRANC",
+    "MXN": "MEXICAN PESO",
+    "BTC": "BITCOIN",
+    "ETH": "ETHER",
     "SP500": "E-MINI S&P 500",
     "NQ100": "E-MINI NASDAQ-100",
     # Disaggregated (managed money) — commodities
-    "XAU":   "GOLD",
-    "XAG":   "SILVER",
-    "OIL":   "CRUDE OIL, LIGHT SWEET",
+    "XAU": "GOLD",
+    "XAG": "SILVER",
+    "OIL": "CRUDE OIL, LIGHT SWEET",
 }
 
 _DISAGG_ASSETS = {"XAU", "XAG", "OIL"}
@@ -98,26 +99,40 @@ _PAIR_FORMULA: dict[str, list[tuple[float, str]]] = {
     "USD/MXN": [(-1.0, "MXN")],
     "USD/ZAR": [],
     "USD/SGD": [],
-    "BTC/USDT":    [(1.0, "BTC")],
-    "ETH/USDT":    [(1.0, "ETH")],
-    "SOL/USDT": [], "BNB/USDT": [], "XRP/USDT": [], "AVAX/USDT": [],
-    "LINK/USDT": [], "ADA/USDT": [], "DOGE/USDT": [], "DOT/USDT": [],
-    "SUI/USDT": [], "APT/USDT": [], "LTC/USDT": [], "NEAR/USDT": [],
-    "INJ/USDT": [], "FET/USDT": [], "RENDER/USDT": [], "ATOM/USDT": [],
+    "BTC/USDT": [(1.0, "BTC")],
+    "ETH/USDT": [(1.0, "ETH")],
+    "SOL/USDT": [],
+    "BNB/USDT": [],
+    "XRP/USDT": [],
+    "AVAX/USDT": [],
+    "LINK/USDT": [],
+    "ADA/USDT": [],
+    "DOGE/USDT": [],
+    "DOT/USDT": [],
+    "SUI/USDT": [],
+    "APT/USDT": [],
+    "LTC/USDT": [],
+    "NEAR/USDT": [],
+    "INJ/USDT": [],
+    "FET/USDT": [],
+    "RENDER/USDT": [],
+    "ATOM/USDT": [],
     "S&P 500": [(1.0, "SP500")],
-    "SPY":     [(1.0, "SP500")],
-    "Nasdaq":  [(1.0, "NQ100")],
-    "QQQ":     [(1.0, "NQ100")],
+    "SPY": [(1.0, "SP500")],
+    "Nasdaq": [(1.0, "NQ100")],
+    "QQQ": [(1.0, "NQ100")],
     "Dow Jones": [(1.0, "SP500")],
-    "UK100": [], "DAX 40": [],
+    "UK100": [],
+    "DAX 40": [],
     "XAU/USD": [(1.0, "XAU")],
     "XAG/USD": [(1.0, "XAG")],
-    "WTI Oil":   [(1.0, "OIL")],
+    "WTI Oil": [(1.0, "OIL")],
     "Brent Oil": [(1.0, "OIL")],
 }
 
 
 # ── SQLite ────────────────────────────────────────────────────────────────────
+
 
 def _init_db():
     with _db_lock:
@@ -131,7 +146,9 @@ def _init_db():
                 PRIMARY KEY (asset, report_date)
             )
         """)
-        con.execute("CREATE INDEX IF NOT EXISTS idx_cot ON cot_net (asset, report_date)")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cot ON cot_net (asset, report_date)"
+        )
         con.execute("""
             CREATE TABLE IF NOT EXISTS cot_meta (
                 source     TEXT PRIMARY KEY,
@@ -147,9 +164,12 @@ _init_db()
 
 # ── CSV parsing ───────────────────────────────────────────────────────────────
 
+
 def _parse_fin_csv(text: str) -> dict[str, dict[str, int]]:
     """Parse a financial futures CSV (with header) → {asset_key: {date: net}}."""
-    fin_assets = {k: v for k, v in _CONTRACT_FRAGMENTS.items() if k not in _DISAGG_ASSETS}
+    fin_assets = {
+        k: v for k, v in _CONTRACT_FRAGMENTS.items() if k not in _DISAGG_ASSETS
+    }
     frag_list = sorted(fin_assets.items(), key=lambda x: len(x[1]), reverse=True)
     result: dict[str, dict[str, int]] = {k: {} for k in fin_assets}
 
@@ -175,8 +195,12 @@ def _parse_fin_csv(text: str) -> dict[str, dict[str, int]]:
             try:
                 # Annual ZIPs use TFF (Traders in Financial Futures) format:
                 # Lev_Money = leveraged funds / hedge funds / CTAs (speculative positioning)
-                long_pos  = int(row.get("Lev_Money_Positions_Long_All",  "0").replace(",", ""))
-                short_pos = int(row.get("Lev_Money_Positions_Short_All", "0").replace(",", ""))
+                long_pos = int(
+                    row.get("Lev_Money_Positions_Long_All", "0").replace(",", "")
+                )
+                short_pos = int(
+                    row.get("Lev_Money_Positions_Short_All", "0").replace(",", "")
+                )
                 net = long_pos - short_pos
             except Exception:
                 continue
@@ -213,8 +237,12 @@ def _parse_disagg_csv(text: str) -> dict[str, dict[str, int]]:
                 continue
 
             try:
-                long_pos  = int(row.get("M_Money_Positions_Long_All",  "0").replace(",", ""))
-                short_pos = int(row.get("M_Money_Positions_Short_All", "0").replace(",", ""))
+                long_pos = int(
+                    row.get("M_Money_Positions_Long_All", "0").replace(",", "")
+                )
+                short_pos = int(
+                    row.get("M_Money_Positions_Short_All", "0").replace(",", "")
+                )
                 net = long_pos - short_pos
             except Exception:
                 continue
@@ -234,7 +262,9 @@ def _parse_weekly_fin_no_header(text: str) -> dict[str, dict[str, int]]:
       8: NonComm_Positions_Long_All
       9: NonComm_Positions_Short_All
     """
-    fin_assets = {k: v for k, v in _CONTRACT_FRAGMENTS.items() if k not in _DISAGG_ASSETS}
+    fin_assets = {
+        k: v for k, v in _CONTRACT_FRAGMENTS.items() if k not in _DISAGG_ASSETS
+    }
     frag_list = sorted(fin_assets.items(), key=lambda x: len(x[1]), reverse=True)
     result: dict[str, dict[str, int]] = {k: {} for k in fin_assets}
 
@@ -274,15 +304,18 @@ def _parse_weekly_fin_no_header(text: str) -> dict[str, dict[str, int]]:
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
+
 def _write_rows(data: dict[str, dict[str, int]]):
-    rows = [(asset, date, net) for asset, dm in data.items() for date, net in dm.items()]
+    rows = [
+        (asset, date, net) for asset, dm in data.items() for date, net in dm.items()
+    ]
     if not rows:
         return
     with _db_lock:
         con = sqlite3.connect(_DB_PATH, timeout=15.0)
         con.executemany(
             "INSERT OR REPLACE INTO cot_net (asset, report_date, net_long) VALUES (?,?,?)",
-            rows
+            rows,
         )
         con.commit()
         con.close()
@@ -291,7 +324,9 @@ def _write_rows(data: dict[str, dict[str, int]]):
 def _needs_refresh(source: str, ttl: float) -> bool:
     with _db_lock:
         con = sqlite3.connect(_DB_PATH, timeout=15.0)
-        row = con.execute("SELECT last_fetch FROM cot_meta WHERE source=?", (source,)).fetchone()
+        row = con.execute(
+            "SELECT last_fetch FROM cot_meta WHERE source=?", (source,)
+        ).fetchone()
         con.close()
     return not row or (time.time() - row[0] > ttl)
 
@@ -299,8 +334,10 @@ def _needs_refresh(source: str, ttl: float) -> bool:
 def _mark_fetch(source: str):
     with _db_lock:
         con = sqlite3.connect(_DB_PATH, timeout=15.0)
-        con.execute("INSERT OR REPLACE INTO cot_meta (source, last_fetch) VALUES (?,?)",
-                    (source, time.time()))
+        con.execute(
+            "INSERT OR REPLACE INTO cot_meta (source, last_fetch) VALUES (?,?)",
+            (source, time.time()),
+        )
         con.commit()
         con.close()
 
@@ -308,12 +345,15 @@ def _mark_fetch(source: str):
 def _row_count(asset: str) -> int:
     with _db_lock:
         con = sqlite3.connect(_DB_PATH, timeout=15.0)
-        row = con.execute("SELECT COUNT(*) FROM cot_net WHERE asset=?", (asset,)).fetchone()
+        row = con.execute(
+            "SELECT COUNT(*) FROM cot_net WHERE asset=?", (asset,)
+        ).fetchone()
         con.close()
     return row[0] if row else 0
 
 
 # ── Download helpers ──────────────────────────────────────────────────────────
+
 
 def _fetch_zip_txt(url: str, inner_filename_hint: str = ".txt") -> Optional[str]:
     """Download a ZIP and return the text content of the first .txt file inside."""
@@ -379,6 +419,7 @@ def _update_weekly():
 
 # ── Public refresh ────────────────────────────────────────────────────────────
 
+
 def refresh_cot(force: bool = False):
     """Seed history (2 years) and fetch current week. Safe to call repeatedly."""
     if force:
@@ -394,18 +435,19 @@ def refresh_cot(force: bool = False):
 
 # ── Z-score computation ───────────────────────────────────────────────────────
 
+
 def _get_net_series(asset: str, weeks: int = 104, as_of_date: str = None) -> list[int]:
     with _db_lock:
         con = sqlite3.connect(_DB_PATH, timeout=15.0)
         if as_of_date:
             rows = con.execute(
                 "SELECT net_long FROM cot_net WHERE asset=? AND report_date<=? ORDER BY report_date DESC LIMIT ?",
-                (asset, as_of_date, weeks)
+                (asset, as_of_date, weeks),
             ).fetchall()
         else:
             rows = con.execute(
                 "SELECT net_long FROM cot_net WHERE asset=? ORDER BY report_date DESC LIMIT ?",
-                (asset, weeks)
+                (asset, weeks),
             ).fetchall()
         con.close()
     return [r[0] for r in reversed(rows)]
@@ -450,6 +492,7 @@ def _asset_z(asset: str, as_of_date: str = None) -> Optional[float]:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+
 def get_cot_z(display: str, as_of_date: str = None) -> float:
     """Return COT net positioning z-score for a pair.
 
@@ -484,7 +527,7 @@ def get_cot_net(display: str) -> Optional[dict]:
         series = _get_net_series(key, weeks=1)
         results[key] = {
             "net": series[-1] if series else None,
-            "z":   _asset_z(key),
+            "z": _asset_z(key),
             "weeks_of_data": _row_count(key),
         }
     return results
@@ -498,17 +541,32 @@ def seed_cot_background():
 
 if __name__ == "__main__":
     import sys
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     refresh_cot(force="--force" in sys.argv)
-    pairs = ["EUR/USD", "USD/JPY", "GBP/USD", "AUD/USD", "NZD/USD",
-             "EUR/JPY", "GBP/JPY", "USD/CAD", "USD/CHF",
-             "BTC/USDT", "ETH/USDT",
-             "XAU/USD", "XAG/USD",
-             "S&P 500", "Nasdaq"]
+    pairs = [
+        "EUR/USD",
+        "USD/JPY",
+        "GBP/USD",
+        "AUD/USD",
+        "NZD/USD",
+        "EUR/JPY",
+        "GBP/JPY",
+        "USD/CAD",
+        "USD/CHF",
+        "BTC/USDT",
+        "ETH/USDT",
+        "XAU/USD",
+        "XAG/USD",
+        "S&P 500",
+        "Nasdaq",
+    ]
     print("\nCOT z-scores (+ = net long = bullish base):")
     for p in pairs:
         z = get_cot_z(p)
         detail = get_cot_net(p) or {}
         weeks = max((v.get("weeks_of_data", 0) for v in detail.values()), default=0)
         bar = "█" * int(abs(z) * 4)
-        print(f"  {p:18s}  z={z:+.3f}  [{weeks}wk]  {'▲ LONG' if z > 0.5 else '▼ SHORT' if z < -0.5 else '  neutral'}  {bar}")
+        print(
+            f"  {p:18s}  z={z:+.3f}  [{weeks}wk]  {'▲ LONG' if z > 0.5 else '▼ SHORT' if z < -0.5 else '  neutral'}  {bar}"
+        )

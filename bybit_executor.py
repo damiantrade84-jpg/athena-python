@@ -5,6 +5,7 @@ Supports LONG and SHORT via Bybit Linear (USDT-M) Perpetual contracts.
 Leverage: 1x, Margin: ISOLATED (safest configuration).
 All orders must arrive as a pre-validated RiskApproval from risk_engine.py.
 """
+
 import os
 import logging
 import time
@@ -16,52 +17,54 @@ _exchange = None
 
 # Symbol mapping: Athena display/internal → ccxt linear futures format
 _SYMBOL_MAP = {
-    "BTC/USDT":    "BTC/USDT:USDT",
-    "ETH/USDT":    "ETH/USDT:USDT",
-    "XRP/USDT":    "XRP/USDT:USDT",
-    "SOL/USDT":    "SOL/USDT:USDT",
-    "ADA/USDT":    "ADA/USDT:USDT",
-    "DOGE/USDT":   "DOGE/USDT:USDT",
-    "AVAX/USDT":   "AVAX/USDT:USDT",
-    "LINK/USDT":   "LINK/USDT:USDT",
-    "MATIC/USDT":  "MATIC/USDT:USDT",
-    "BNB/USDT":    "BNB/USDT:USDT",
-    "DOT/USDT":    "DOT/USDT:USDT",
-    "LTC/USDT":    "LTC/USDT:USDT",
-    "SUI/USDT":    "SUI/USDT:USDT",
-    "NEAR/USDT":   "NEAR/USDT:USDT",
-    "APT/USDT":    "APT/USDT:USDT",
-    "INJ/USDT":    "INJ/USDT:USDT",
-    "FET/USDT":    "FET/USDT:USDT",
+    "BTC/USDT": "BTC/USDT:USDT",
+    "ETH/USDT": "ETH/USDT:USDT",
+    "XRP/USDT": "XRP/USDT:USDT",
+    "SOL/USDT": "SOL/USDT:USDT",
+    "ADA/USDT": "ADA/USDT:USDT",
+    "DOGE/USDT": "DOGE/USDT:USDT",
+    "AVAX/USDT": "AVAX/USDT:USDT",
+    "LINK/USDT": "LINK/USDT:USDT",
+    "MATIC/USDT": "MATIC/USDT:USDT",
+    "BNB/USDT": "BNB/USDT:USDT",
+    "DOT/USDT": "DOT/USDT:USDT",
+    "LTC/USDT": "LTC/USDT:USDT",
+    "SUI/USDT": "SUI/USDT:USDT",
+    "NEAR/USDT": "NEAR/USDT:USDT",
+    "APT/USDT": "APT/USDT:USDT",
+    "INJ/USDT": "INJ/USDT:USDT",
+    "FET/USDT": "FET/USDT:USDT",
     "RENDER/USDT": "RENDER/USDT:USDT",
 }
 
 # Reverse map from internal symbol (BTCUSDT) to ccxt format
 _INTERNAL_MAP = {
-    "BTCUSDT":    "BTC/USDT:USDT",
-    "ETHUSDT":    "ETH/USDT:USDT",
-    "XRPUSDT":    "XRP/USDT:USDT",
-    "SOLUSDT":    "SOL/USDT:USDT",
-    "ADAUSDT":    "ADA/USDT:USDT",
-    "DOGEUSDT":   "DOGE/USDT:USDT",
-    "AVAXUSDT":   "AVAX/USDT:USDT",
-    "LINKUSDT":   "LINK/USDT:USDT",
-    "MATICUSDT":  "MATIC/USDT:USDT",
-    "BNBUSDT":    "BNB/USDT:USDT",
-    "DOTUSDT":    "DOT/USDT:USDT",
-    "LTCUSDT":    "LTC/USDT:USDT",
-    "SUIUSDT":    "SUI/USDT:USDT",
-    "NEARUSDT":   "NEAR/USDT:USDT",
-    "APTUSDT":    "APT/USDT:USDT",
-    "INJUSDT":    "INJ/USDT:USDT",
-    "FETUSDT":    "FET/USDT:USDT",
+    "BTCUSDT": "BTC/USDT:USDT",
+    "ETHUSDT": "ETH/USDT:USDT",
+    "XRPUSDT": "XRP/USDT:USDT",
+    "SOLUSDT": "SOL/USDT:USDT",
+    "ADAUSDT": "ADA/USDT:USDT",
+    "DOGEUSDT": "DOGE/USDT:USDT",
+    "AVAXUSDT": "AVAX/USDT:USDT",
+    "LINKUSDT": "LINK/USDT:USDT",
+    "MATICUSDT": "MATIC/USDT:USDT",
+    "BNBUSDT": "BNB/USDT:USDT",
+    "DOTUSDT": "DOT/USDT:USDT",
+    "LTCUSDT": "LTC/USDT:USDT",
+    "SUIUSDT": "SUI/USDT:USDT",
+    "NEARUSDT": "NEAR/USDT:USDT",
+    "APTUSDT": "APT/USDT:USDT",
+    "INJUSDT": "INJ/USDT:USDT",
+    "FETUSDT": "FET/USDT:USDT",
     "RENDERUSDT": "RENDER/USDT:USDT",
 }
 
 _LEVERAGE = 1  # 1x — enables SHORT without amplified risk
 
 
-def _validate_exit_levels(direction: str, entry_price: float, sl: float, tp: float) -> str | None:
+def _validate_exit_levels(
+    direction: str, entry_price: float, sl: float, tp: float
+) -> str | None:
     """Ensure SL/TP are on the correct side of the current entry price."""
     if entry_price <= 0:
         return "NO_PRICE_DATA"
@@ -92,28 +95,34 @@ def _get_exchange():
         log.error("[BYBIT] ccxt not installed. Run: pip install ccxt")
         return None
 
-    api_key    = os.environ.get("BYBIT_API_KEY", "")
+    api_key = os.environ.get("BYBIT_API_KEY", "")
     api_secret = os.environ.get("BYBIT_API_SECRET", "")
 
     if not api_key or not api_secret or api_key == "REVOKE_AND_REPLACE":
         log.warning("[BYBIT] BYBIT_API_KEY / BYBIT_API_SECRET not set or placeholder")
         return None
 
-    use_testnet = os.environ.get("BYBIT_TESTNET", "false").lower() in ("true", "1", "yes")
-    use_demo    = os.environ.get("BYBIT_DEMO", "false").lower() in ("true", "1", "yes")
+    use_testnet = os.environ.get("BYBIT_TESTNET", "false").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+    use_demo = os.environ.get("BYBIT_DEMO", "false").lower() in ("true", "1", "yes")
 
     try:
-        _exchange = ccxt.bybit({
-            "apiKey": api_key,
-            "secret": api_secret,
-            "enableRateLimit": True,
-            "options": {
-                "defaultType": "linear",   # USDT Perpetual
-                "defaultSettle": "USDT",
-                "adjustForTimeDifference": True,
-                "recvWindow": 10000,
-            },
-        })
+        _exchange = ccxt.bybit(
+            {
+                "apiKey": api_key,
+                "secret": api_secret,
+                "enableRateLimit": True,
+                "options": {
+                    "defaultType": "linear",  # USDT Perpetual
+                    "defaultSettle": "USDT",
+                    "adjustForTimeDifference": True,
+                    "recvWindow": 10000,
+                },
+            }
+        )
 
         if use_testnet:
             _exchange.set_sandbox_mode(True)
@@ -220,13 +229,15 @@ def bybit_get_account() -> dict:
             balance = exchange.fetch_balance(params={"type": "linear"})
             usdt = balance.get("USDT", {})
             total = usdt.get("total", 0) or 0
-            free  = usdt.get("free",  0) or 0
+            free = usdt.get("free", 0) or 0
             # Include unrealized PnL so drawdown circuit breaker sees real equity
             try:
                 positions = exchange.fetch_positions(
-                    params={"category": "linear", "settleCoin": "USDT"})
+                    params={"category": "linear", "settleCoin": "USDT"}
+                )
                 unrealized = sum(
-                    float(p.get("unrealizedPnl", 0) or 0) for p in (positions or []))
+                    float(p.get("unrealizedPnl", 0) or 0) for p in (positions or [])
+                )
             except Exception:
                 unrealized = 0.0
             return {
@@ -234,9 +245,10 @@ def bybit_get_account() -> dict:
                 "symbol": "Bybit",
                 "detail": "",
                 "exchange": "Bybit",
-                "testnet": os.environ.get("BYBIT_TESTNET", "false").lower() in ("true", "1", "yes"),
+                "testnet": os.environ.get("BYBIT_TESTNET", "false").lower()
+                in ("true", "1", "yes"),
                 "balance": total,
-                "equity": total + unrealized,   # ← real equity including open P&L
+                "equity": total + unrealized,  # ← real equity including open P&L
                 "freeBalance": free,
                 "currency": "USDT",
             }
@@ -252,16 +264,23 @@ def bybit_get_positions() -> dict:
     Returns dict with standardized error format."""
     exchange = _get_exchange()
     if not exchange:
-        return {"error": True, "symbol": "Bybit", "detail": "Bybit not connected", "positions": []}
+        return {
+            "error": True,
+            "symbol": "Bybit",
+            "detail": "Bybit not connected",
+            "positions": [],
+        }
     for attempt in range(2):
         try:
-            raw = exchange.fetch_positions(params={"category": "linear", "settleCoin": "USDT"})
+            raw = exchange.fetch_positions(
+                params={"category": "linear", "settleCoin": "USDT"}
+            )
             positions = []
             for pos in raw:
                 size = abs(float(pos.get("contracts", 0) or 0))
                 if size <= 0:
                     continue
-                entry  = float(pos.get("entryPrice", 0) or 0)
+                entry = float(pos.get("entryPrice", 0) or 0)
                 notional = size * entry
                 info = pos.get("info", {})
                 sl_val = float(info.get("stopLoss", 0) or 0)
@@ -270,7 +289,9 @@ def bybit_get_positions() -> dict:
                 if sl_val > 0 and entry > 0:
                     est_risk = round(abs(entry - sl_val) / entry * notional, 2)
                 else:
-                    est_risk = round(notional * 0.02, 2)  # fallback: 2% when no SL is set
+                    est_risk = round(
+                        notional * 0.02, 2
+                    )  # fallback: 2% when no SL is set
                 symbol_raw = pos.get("symbol", "")
                 # Convert BTC/USDT:USDT back to display format BTC/USDT
                 display = symbol_raw.split(":")[0] if ":" in symbol_raw else symbol_raw
@@ -279,29 +300,36 @@ def bybit_get_positions() -> dict:
                 side = pos.get("side", "")
                 direction = "LONG" if side.lower() == "long" else "SHORT"
                 upnl = float(pos.get("unrealizedPnl", 0) or 0)
-                positions.append({
-                    # Normalised fields (match MT5 position card schema)
-                    "pair":      display,
-                    "direction": direction,
-                    "entry":     entry,
-                    "volume":    size,
-                    "profit":    round(upnl, 2),
-                    "sl":        sl_val,
-                    "tp":        tp_val,
-                    "ticket":    info.get("positionIdx", ""),
-                    # Bybit-specific extras
-                    "symbol":        symbol_raw,
-                    "contracts":     size,
-                    "side":          side,
-                    "entryPrice":    entry,
-                    "markPrice":     mark_price,
-                    "lastPrice":     mark_price,
-                    "unrealizedPnl": upnl,
-                    "notional":      round(notional, 2),
-                    "risk_amount":   est_risk,
-                    "liqPrice":      liq_price,
-                })
-            return {"error": False, "symbol": "Bybit", "detail": "", "positions": positions}
+                positions.append(
+                    {
+                        # Normalised fields (match MT5 position card schema)
+                        "pair": display,
+                        "direction": direction,
+                        "entry": entry,
+                        "volume": size,
+                        "profit": round(upnl, 2),
+                        "sl": sl_val,
+                        "tp": tp_val,
+                        "ticket": info.get("positionIdx", ""),
+                        # Bybit-specific extras
+                        "symbol": symbol_raw,
+                        "contracts": size,
+                        "side": side,
+                        "entryPrice": entry,
+                        "markPrice": mark_price,
+                        "lastPrice": mark_price,
+                        "unrealizedPnl": upnl,
+                        "notional": round(notional, 2),
+                        "risk_amount": est_risk,
+                        "liqPrice": liq_price,
+                    }
+                )
+            return {
+                "error": False,
+                "symbol": "Bybit",
+                "detail": "",
+                "positions": positions,
+            }
         except Exception as e:
             if attempt == 0 and _resync_time_if_needed(exchange, e):
                 continue
@@ -320,7 +348,9 @@ def bybit_close_position(pair: str, direction: str, volume: float) -> dict:
             return {"success": False, "error": f"No symbol mapping for {pair}"}
         close_side = "sell" if direction == "LONG" else "buy"
         exchange.create_market_order(
-            ccxt_symbol, close_side, volume,
+            ccxt_symbol,
+            close_side,
+            volume,
             params={"reduceOnly": True, "positionIdx": 0},
         )
         log.info(f"[BYBIT] Manual close {direction} {pair} vol={volume}")
@@ -335,7 +365,11 @@ def bybit_get_symbol_info(athena_display: str) -> dict:
     Returns dict with standardized error format."""
     exchange = _get_exchange()
     if not exchange:
-        return {"error": True, "symbol": athena_display, "detail": "Bybit not connected"}
+        return {
+            "error": True,
+            "symbol": athena_display,
+            "detail": "Bybit not connected",
+        }
 
     ccxt_symbol = bybit_map_symbol(athena_display)
     if not ccxt_symbol:
@@ -346,16 +380,20 @@ def bybit_get_symbol_info(athena_display: str) -> dict:
         exchange.load_markets()
         market = exchange.market(ccxt_symbol)
         if not market:
-            return {"error": True, "symbol": athena_display, "detail": "Market not found"}
+            return {
+                "error": True,
+                "symbol": athena_display,
+                "detail": "Market not found",
+            }
 
         ticker = exchange.fetch_ticker(ccxt_symbol)
         price = ticker.get("last", 0) or 0
 
-        tick_size   = market["precision"].get("price", 0.01)
-        tick_value  = tick_size  # For USDT pairs: 1 unit move = tick_size USDT
-        vol_min     = market["limits"]["amount"].get("min", 0.001) or 0.001
-        vol_max     = market["limits"]["amount"].get("max", 9999) or 9999
-        vol_step    = market["precision"].get("amount", 0.001) or 0.001
+        tick_size = market["precision"].get("price", 0.01)
+        tick_value = tick_size  # For USDT pairs: 1 unit move = tick_size USDT
+        vol_min = market["limits"]["amount"].get("min", 0.001) or 0.001
+        vol_max = market["limits"]["amount"].get("max", 9999) or 9999
+        vol_step = market["precision"].get("amount", 0.001) or 0.001
 
         return {
             "error": False,
@@ -364,7 +402,9 @@ def bybit_get_symbol_info(athena_display: str) -> dict:
             "ccxt_symbol": ccxt_symbol,
             "description": market.get("baseId", ccxt_symbol),
             "point": tick_size,
-            "digits": len(str(tick_size).split(".")[-1]) if isinstance(tick_size, float) else 2,
+            "digits": len(str(tick_size).split(".")[-1])
+            if isinstance(tick_size, float)
+            else 2,
             "volume_min": vol_min,
             "volume_max": vol_max,
             "volume_step": vol_step,
@@ -380,7 +420,7 @@ def bybit_get_symbol_info(athena_display: str) -> dict:
         return {"error": True, "symbol": athena_display, "detail": str(e)}
 
 
-def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:
+def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
     """Execute a crypto trade on Bybit USDT Perpetual Futures.
 
     LONG  signal → market BUY  order (open long position)
@@ -406,7 +446,7 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:
     if not exchange:
         return {"success": False, "error": "BYBIT_NOT_CONNECTED"}
 
-    pair        = signal.get("pair", "")
+    pair = signal.get("pair", "")
     ccxt_symbol = bybit_map_symbol(pair) or bybit_map_symbol(signal.get("symbol", ""))
     if not ccxt_symbol:
         return {"success": False, "error": f"NO_SYMBOL_MAPPING: {pair}"}
@@ -423,7 +463,9 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:
 
         # Resolve live price
         ticker = exchange.fetch_ticker(ccxt_symbol)
-        price  = ticker.get("ask" if direction == "LONG" else "bid", 0) or ticker.get("last", 0)
+        price = ticker.get("ask" if direction == "LONG" else "bid", 0) or ticker.get(
+            "last", 0
+        )
         if price <= 0:
             return {"success": False, "error": f"NO_PRICE_DATA: {ccxt_symbol}"}
 
@@ -439,9 +481,13 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:
                 tp_offset = float(tp1) - signal_price
                 sl = round(price + sl_offset, 8)
                 tp1 = round(price + tp_offset, 8)
-                log.info(f"[BYBIT] {ccxt_symbol}: price drift {drift:.1%} ({signal_price}→{price}) — rebased SL={sl} TP={tp1}")
+                log.info(
+                    f"[BYBIT] {ccxt_symbol}: price drift {drift:.1%} ({signal_price}→{price}) — rebased SL={sl} TP={tp1}"
+                )
 
-        level_error = _validate_exit_levels(direction, float(price), float(sl or 0), float(tp1 or 0))
+        level_error = _validate_exit_levels(
+            direction, float(price), float(sl or 0), float(tp1 or 0)
+        )
         if level_error:
             return {"success": False, "error": level_error}
 
@@ -454,35 +500,47 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:
                 volume = min(recalc, approval.volume) if approval.volume else recalc
 
         side = "buy" if direction == "LONG" else "sell"
-        log.info(f"[BYBIT] Placing {side.upper()} market order: {volume} {ccxt_symbol} @ ~{price}")
+        log.info(
+            f"[BYBIT] Placing {side.upper()} market order: {volume} {ccxt_symbol} @ ~{price}"
+        )
 
         # Market entry order — 3-attempt retry on transient errors
         import time as _time
+
         order = None
         _last_err = None
         for _attempt in range(3):
             try:
                 order = exchange.create_market_order(
-                    ccxt_symbol, side, volume,
-                    params={"positionIdx": 0}  # one-way mode
+                    ccxt_symbol,
+                    side,
+                    volume,
+                    params={"positionIdx": 0},  # one-way mode
                 )
                 break
             except Exception as _oe:
                 _oe_name = type(_oe).__name__
-                if any(s in _oe_name for s in ("NetworkError", "RequestTimeout", "ExchangeNotAvailable")):
+                if any(
+                    s in _oe_name
+                    for s in ("NetworkError", "RequestTimeout", "ExchangeNotAvailable")
+                ):
                     _last_err = _oe
-                    log.warning(f"[BYBIT] Order attempt {_attempt + 1}/3 failed ({_oe_name}), retrying...")
+                    log.warning(
+                        f"[BYBIT] Order attempt {_attempt + 1}/3 failed ({_oe_name}), retrying..."
+                    )
                     _time.sleep(1)
                 else:
                     raise
         if order is None:
             raise _last_err
 
-        order_id      = order.get("id", "")
-        filled_price  = float(order.get("average") or order.get("price") or price)
+        order_id = order.get("id", "")
+        filled_price = float(order.get("average") or order.get("price") or price)
         filled_amount = float(order.get("filled") or volume)
 
-        log.info(f"[BYBIT] ENTRY FILLED: id={order_id} | {direction} {filled_amount} {ccxt_symbol} @ {filled_price}")
+        log.info(
+            f"[BYBIT] ENTRY FILLED: id={order_id} | {direction} {filled_amount} {ccxt_symbol} @ {filled_price}"
+        )
 
         # Send Telegram notification for trade opened
         try:
@@ -491,22 +549,30 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:
                 direction=direction,
                 entry_price=filled_price,
                 stop_loss=sl,
-                take_profit=tp1
+                take_profit=tp1,
             )
         except Exception as _tn_e:
             log.debug(f"[TELEGRAM] Trade open notification failed: {_tn_e}")
 
-        fill_level_error = _validate_exit_levels(direction, filled_price, float(sl or 0), float(tp1 or 0))
+        fill_level_error = _validate_exit_levels(
+            direction, filled_price, float(sl or 0), float(tp1 or 0)
+        )
         if fill_level_error:
             try:
                 close_side = "sell" if direction == "LONG" else "buy"
                 exchange.create_market_order(
-                    ccxt_symbol, close_side, filled_amount,
-                    params={"reduceOnly": True, "positionIdx": 0}
+                    ccxt_symbol,
+                    close_side,
+                    filled_amount,
+                    params={"reduceOnly": True, "positionIdx": 0},
                 )
-                log.warning(f"[BYBIT] Emergency close sent after invalid post-fill levels for {ccxt_symbol}")
+                log.warning(
+                    f"[BYBIT] Emergency close sent after invalid post-fill levels for {ccxt_symbol}"
+                )
             except Exception as close_err:
-                log.error(f"[BYBIT] Emergency close failed after invalid post-fill levels for {ccxt_symbol}: {close_err}")
+                log.error(
+                    f"[BYBIT] Emergency close failed after invalid post-fill levels for {ccxt_symbol}: {close_err}"
+                )
                 return {
                     "success": False,
                     "error": fill_level_error,
@@ -538,21 +604,31 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:
             except Exception as ste:
                 _sl_tp_err = ste
                 if _attempt == 0:
-                    log.warning(f"[BYBIT] SL/TP set attempt 1 failed ({ste}), retrying in 2s…")
+                    log.warning(
+                        f"[BYBIT] SL/TP set attempt 1 failed ({ste}), retrying in 2s…"
+                    )
                     time.sleep(2)
         if _sl_tp_err is not None:
-            log.error(f"[BYBIT] SL/TP set failed after retry — attempting emergency close: {_sl_tp_err}")
+            log.error(
+                f"[BYBIT] SL/TP set failed after retry — attempting emergency close: {_sl_tp_err}"
+            )
             rollback_error = None
             try:
                 close_side = "sell" if direction == "LONG" else "buy"
                 exchange.create_market_order(
-                    ccxt_symbol, close_side, filled_amount,
-                    params={"reduceOnly": True, "positionIdx": 0}
+                    ccxt_symbol,
+                    close_side,
+                    filled_amount,
+                    params={"reduceOnly": True, "positionIdx": 0},
                 )
-                log.warning(f"[BYBIT] Emergency close sent for unprotected {ccxt_symbol} position")
+                log.warning(
+                    f"[BYBIT] Emergency close sent for unprotected {ccxt_symbol} position"
+                )
             except Exception as close_err:
                 rollback_error = str(close_err)
-                log.error(f"[BYBIT] Emergency close failed for {ccxt_symbol}: {close_err}")
+                log.error(
+                    f"[BYBIT] Emergency close failed for {ccxt_symbol}: {close_err}"
+                )
             return {
                 "success": False,
                 "error": f"PROTECTIVE_ORDERS_FAILED: {_sl_tp_err}",
@@ -586,8 +662,9 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:
         return {"success": False, "error": f"ORDER_FAILED: {str(e)}"}
 
 
-def bybit_move_sl_to_breakeven(ccxt_symbol: str, direction: str, entry_price: float,
-                                volume: float) -> dict:
+def bybit_move_sl_to_breakeven(
+    ccxt_symbol: str, direction: str, entry_price: float, volume: float
+) -> dict:
     """Move stop-loss to breakeven (entry price) for an open position.
 
     Called by the outcome monitor when a position reaches 1R profit.
@@ -598,7 +675,9 @@ def bybit_move_sl_to_breakeven(ccxt_symbol: str, direction: str, entry_price: fl
         return {"success": False, "error": "BYBIT_NOT_CONNECTED"}
     try:
         _set_trading_stop(exchange, ccxt_symbol, sl=entry_price)
-        log.info(f"[BYBIT] BREAKEVEN SL placed: {ccxt_symbol} @ {entry_price} (was profitable at 1R)")
+        log.info(
+            f"[BYBIT] BREAKEVEN SL placed: {ccxt_symbol} @ {entry_price} (was profitable at 1R)"
+        )
         return {"success": True, "newSl": entry_price}
     except Exception as e:
         log.warning(f"[BYBIT] Failed to move SL to breakeven for {ccxt_symbol}: {e}")

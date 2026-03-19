@@ -3,11 +3,16 @@
 Extracts ADX-based market regime classification from scoring.py into a
 reusable function. Imported by scoring.py and backtest utilities.
 """
+
 from config import CONFIG
 
 
-def detect_regime(h4_snap: dict, pair_type: str, config: dict | None = None,
-                  bb_width_pct: float | None = None) -> dict:
+def detect_regime(
+    h4_snap: dict,
+    pair_type: str,
+    config: dict | None = None,
+    bb_width_pct: float | None = None,
+) -> dict:
     """Classify the current market regime from H4 ADX indicators + BB width confirmation.
 
     Args:
@@ -28,11 +33,16 @@ def detect_regime(h4_snap: dict, pair_type: str, config: dict | None = None,
             bb_width_pct     float|None  BB width percentile for transparency
     """
     cfg = config or CONFIG
-    _rng = cfg["RANGING"].get(pair_type, cfg["RANGING"].get("commodity", {"dead": 15, "choppy": 20, "dead_pen": 3.0, "choppy_pen": 1.5}))
+    _rng = cfg["RANGING"].get(
+        pair_type,
+        cfg["RANGING"].get(
+            "commodity", {"dead": 15, "choppy": 20, "dead_pen": 3.0, "choppy_pen": 1.5}
+        ),
+    )
 
-    adx_val    = h4_snap.get("adx")
-    adx_mom    = h4_snap.get("adxMomentum", "stable")
-    adx_slope  = h4_snap.get("adxSlope", 0)
+    adx_val = h4_snap.get("adx")
+    adx_mom = h4_snap.get("adxMomentum", "stable")
+    h4_snap.get("adxSlope", 0)
 
     ranging_penalty = 0.0
 
@@ -55,7 +65,9 @@ def detect_regime(h4_snap: dict, pair_type: str, config: dict | None = None,
     elif adx_val < _rng["dead"] or adx_mom == "collapsing":
         state = 2
         label = "HIGH_VOLATILITY"
-        confidence = "high" if adx_val is not None and adx_val < _rng["dead"] else "medium"
+        confidence = (
+            "high" if adx_val is not None and adx_val < _rng["dead"] else "medium"
+        )
     elif adx_val >= _rng["choppy"] and adx_mom in ("stable", "strengthening"):
         state = 0
         label = "TRENDING"

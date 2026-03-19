@@ -2,16 +2,22 @@
 
 Run: python -m pytest tests/ -v
 """
+
 import pytest
-import math
 
 # ── Indicator unit tests ─────────────────────────────────────────────────────
 
 from indicators import (
-    calc_ema, calc_sma, calc_rsi, calc_macd, calc_atr, calc_adx, calc_bb,
-    calc_stochastic, calc_fib, calc_indicators, calc_levels,
-    calc_adx_momentum, calc_adx_percentile, calc_atr_percentile,
-    calc_rsi_divergence, calc_weinstein_stage, calc_fib_proximity,
+    calc_ema,
+    calc_sma,
+    calc_rsi,
+    calc_macd,
+    calc_atr,
+    calc_bb,
+    calc_stochastic,
+    calc_fib,
+    calc_indicators,
+    calc_levels,
 )
 
 
@@ -69,9 +75,9 @@ class TestATR:
     def test_atr_positive(self):
         n = 30
         h = [10.0 + i * 0.1 for i in range(n)]
-        l = [9.0 + i * 0.1 for i in range(n)]
+        lo = [9.0 + i * 0.1 for i in range(n)]
         c = [9.5 + i * 0.1 for i in range(n)]
-        result = calc_atr(h, l, c, 14)
+        result = calc_atr(h, lo, c, 14)
         valid = [v for v in result if v is not None]
         assert len(valid) > 0
         assert all(v > 0 for v in valid)
@@ -96,7 +102,10 @@ class TestStochastic:
 
 class TestFib:
     def test_fib_levels(self):
-        candles = [{"high": 100 + i * 0.5, "low": 90 + i * 0.3, "close": 95 + i * 0.4} for i in range(60)]
+        candles = [
+            {"high": 100 + i * 0.5, "low": 90 + i * 0.3, "close": 95 + i * 0.4}
+            for i in range(60)
+        ]
         result = calc_fib(candles)
         assert result["highest"] > result["lowest"]
         assert result["fib382"] > result["fib618"]  # 38.2% closer to high
@@ -106,7 +115,7 @@ class TestFib:
 class TestCalcLevels:
     def test_long_levels(self):
         result = calc_levels(100.0, 2.0, "LONG", "forex")
-        assert result["sl"] < 100.0   # SL below price for LONG
+        assert result["sl"] < 100.0  # SL below price for LONG
         assert result["tp1"] > 100.0  # TP above price for LONG
         assert result["tp2"] > result["tp1"]
         assert result["rr1"] > 0
@@ -114,16 +123,23 @@ class TestCalcLevels:
 
     def test_short_levels(self):
         result = calc_levels(100.0, 2.0, "SHORT", "crypto")
-        assert result["sl"] > 100.0   # SL above price for SHORT
+        assert result["sl"] > 100.0  # SL above price for SHORT
         assert result["tp1"] < 100.0  # TP below price for SHORT
         assert result["tp2"] < result["tp1"]
 
 
 class TestCalcIndicators:
     def test_full_indicator_set(self):
-        candles = [{"open": 100 + i * 0.1, "high": 101 + i * 0.1,
-                    "low": 99 + i * 0.1, "close": 100.5 + i * 0.1, "vol": 1000}
-                   for i in range(260)]
+        candles = [
+            {
+                "open": 100 + i * 0.1,
+                "high": 101 + i * 0.1,
+                "low": 99 + i * 0.1,
+                "close": 100.5 + i * 0.1,
+                "vol": 1000,
+            }
+            for i in range(260)
+        ]
         result = calc_indicators(candles)
         snap = result["snap"]
         assert snap["ema21"] is not None
@@ -136,20 +152,34 @@ class TestCalcIndicators:
 
 # ── Config tests ─────────────────────────────────────────────────────────────
 
-from config import CONFIG, validate_config
+from config import CONFIG, validate_config  # noqa: E402
 
 
 class TestConfig:
     def test_required_keys(self):
-        required = ["RISK_PCT", "SL_ATR_MULT", "TP1_ATR_MULT", "TP2_ATR_MULT",
-                     "D1_CANDLES", "H4_CANDLES", "H1_CANDLES", "MIN_CONFLUENCE"]
+        required = [
+            "RISK_PCT",
+            "SL_ATR_MULT",
+            "TP1_ATR_MULT",
+            "TP2_ATR_MULT",
+            "D1_CANDLES",
+            "H4_CANDLES",
+            "H1_CANDLES",
+            "MIN_CONFLUENCE",
+        ]
         for k in required:
             assert k in CONFIG, f"Missing CONFIG key: {k}"
 
     def test_asset_class_coverage(self):
         classes = {"crypto", "forex", "commodity", "stock", "index"}
-        for key in ("RISK_MULT", "RANGING", "ATR_CLASS", "RSI_BOUNDS",
-                     "BT_MIN", "MIN_CONFLUENCE_CLASS"):
+        for key in (
+            "RISK_MULT",
+            "RANGING",
+            "ATR_CLASS",
+            "RSI_BOUNDS",
+            "BT_MIN",
+            "MIN_CONFLUENCE_CLASS",
+        ):
             assert classes == set(CONFIG[key].keys()), f"{key} missing classes"
 
     def test_validate_config_no_crash(self):
@@ -159,8 +189,15 @@ class TestConfig:
 
 # ── Scoring tests ────────────────────────────────────────────────────────────
 
-from scoring import get_session, detect_div, apply_correlation_cap, _build_event_risk, _classify_signal
-from config import _json_safe
+from scoring import (  # noqa: E402
+    get_session,
+    detect_div,
+    apply_correlation_cap,
+    _build_event_risk,
+    _classify_signal,
+)
+from config import _json_safe  # noqa: E402
+
 
 class TestGetSession:
     def test_returns_dict(self):
@@ -216,7 +253,12 @@ class TestScanClassification:
             "eventRisk": {"hardBlock": False},
             "exchangeClosed": False,
             "trendState": "TRENDING",
-            "scanDiagnostics": [{"code": "inactive_pair", "detail": "Pair not auto-enabled for live trading"}],
+            "scanDiagnostics": [
+                {
+                    "code": "inactive_pair",
+                    "detail": "Pair not auto-enabled for live trading",
+                }
+            ],
         }
         tier, reason = _classify_signal(signal, pair)
         assert tier == "watchlist"
@@ -237,7 +279,9 @@ class TestScanClassification:
             "eventRisk": risk,
             "exchangeClosed": False,
             "trendState": "TRENDING",
-            "scanDiagnostics": [{"code": "event_risk", "detail": "Earnings in 1 day(s)"}],
+            "scanDiagnostics": [
+                {"code": "event_risk", "detail": "Earnings in 1 day(s)"}
+            ],
         }
         tier, reason = _classify_signal(signal, pair)
         assert tier == "watchlist"
