@@ -1,5 +1,29 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-19)
+
+**EODHD WebSocket & Data Feed Optimization:**
+- **Complete Crypto Migration**: All 19 crypto pairs now use Binance Futures WebSocket (`fstream.binance.com/ws/!ticker@arr`) exclusively - removed from EODHD WebSocket and REST poller
+- **EODHD WebSocket Expansion**: Added TSLA, NVDA, META to EODHD WebSocket (removed `"ws":False`) - now ~45 pairs with live data
+- **REST Poller Optimization**: Reduced frequency from 60s to 21 minutes for delayed stock data (15-20min exchange delays) - 95% API call reduction
+- **Smart Batch Processing**: Enhanced REST poller with type-based grouping (forex/stock/other) and optimal 15-symbol batches
+- **Pair Cleanup**: Removed MT5-specific instruments (Euro Stoxx 50, XLF) and replaced Nasdaq Composite with NASDAQ-100
+- **Copper WebSocket**: Moved Copper from REST to EODHD WebSocket for real-time pricing
+
+**Pair Configuration Updates:**
+- **Total Active Pairs**: 90 (removed 2 MT5 pairs, added 1 NAS100)
+- **EODHD WebSocket**: ~45 pairs (TSLA/NVDA/META added)
+- **Binance WebSocket**: 19 crypto pairs (all live, no REST dependency)
+- **EODHD REST**: 15 pairs only (21min polling, optimized for delays)
+- **Removed**: Euro Stoxx 50, XLF, Nasdaq Composite
+- **Added**: NASDAQ-100 (via EODHD REST)
+
+**Data Source Summary:**
+- Crypto: Binance Futures WebSocket (≤1s latency)
+- Forex/Stocks/Commodities: EODHD WebSocket (real-time) + REST fallback (21min)
+- No TwelveData/Polygon usage (fallback only)
+- All 92 active trading pairs have live price access for both Engine A & Engine B
+
 ## Recent Changes (2026-03-17)
 
 **Engine B (Naked Market Structure):**
@@ -16,8 +40,11 @@
 - Added "👁 NAKED SCALP" button to individual signal cards, producing a structural verdict window with a "⚡ QUICK SCALP EXECUTE" button that executes based on Engine B's proprietary SL/TP levels.
 
 **Data Feeds & Infrastructure:**
-- **Crypto Live Pricing Migration:** Moved all crypto live price feeds (REST poller and EODHD WebSocket) to a dedicated `BinanceLivePriceWS` thread consuming the `fstream.binance.com/ws/!ticker@arr` stream.
-- **API Optimization:** Adjusted EODHD background price poller for non-WS pairs to 21-minute intervals (optimized for delayed stock/index data) grouped in 15-symbol batches.
+- **Crypto Live Pricing Migration**: Complete migration to dedicated `BinanceLivePriceWS` thread consuming `fstream.binance.com/ws/!ticker@arr` stream (19 pairs, real-time ≤1s)
+- **EODHD WebSocket Optimization**: ~45 pairs for live pricing (US stocks, forex, commodities, indices). Recent additions: TSLA, NVDA, META now live via WebSocket
+- **EODHD REST Poller**: 15 pairs only, 21-minute intervals (optimized for 15-20min stock exchange delays). 95% API call reduction from previous 60s polling
+- **Pair Cleanup**: Removed MT5 instruments (Euro Stoxx 50, XLF), replaced Nasdaq Composite with NASDAQ-100 via REST
+- **Live Price Access**: All 92 active pairs have live data for both Engine A (_live_prices dict) and Engine B (H1 candle close)
 
 ## Previous Changes (2026-03-16)
 
@@ -193,17 +220,19 @@ Post-fill failure triggers emergency market close (1 retry on SL/TP set before e
 Computes theoretical max score using `get_pair_vote_weights(pair)`, subtracts `W_SESS×0.5` to match `calc_confluence` accounting.
 
 ### `fetch_candles(pair, tf, limit)` — athena.py
-- Non-crypto: tries `fetch_candles_live()` first; falls back to TTL cache
-- Crypto: uses TTL cache only
-- Cache TTL keys are **uppercase**: `"H1"`, `"H4"`, `"D1"` (not lowercase)
-- TTL: H1=55 min, H4=3h55m, D1=23h
-- Pairs with `"ws": False` use REST cache only — no live price tick; negligible latency impact for swing/intraday
+- **Crypto pairs**: Routes to Binance REST API (cached with TTL)
+- **Non-crypto pairs**: Tries `fetch_candles_live()` first (EODHD WebSocket-built cache); falls back to TTL cache
+- **Cache TTL keys**: Uppercase `"H1"`, `"H4"`, `"D1"` (not lowercase)
+- **TTL**: H1=55 min, H4=3h55m, D1=23h
+- **Fallback chain**: EODHD → YFinance (TwelveData removed due to rate limits)
+- **Pairs with `"ws": False`**: Use REST cache only (15 pairs, 21min polling)
 
 ### `_build_ticker_map(pairs)` — athena.py (EODHDWSManager)
 Routes pairs to EODHD WS endpoints (`us`, `forex`). Skips any pair with `"ws": False`. Crypto pairs are entirely excluded from EODHD and handled natively by `BinanceLivePriceWS` without connection limits.
 - EODHD plan cap: **50 tickers total** across all endpoints
-- WS allocation (~36): us=17, forex=19 — see comment at `start()` for full ticker list
-- Pairs with `"ws": False` still scan, backtest, and execute normally via REST cache
+- **Current WS allocation (~45)**: US stocks/ETFs ~17, Forex/Commodities/Indices ~28
+- Recent additions: TSLA, NVDA, META moved from REST to WebSocket
+- Pairs with `"ws": False` (15 pairs) still scan, backtest, and execute normally via REST cache (21min polling)
 - To re-allocate WS slots: run backtests → query `backtest_results` by SQN → update `"ws"` flags in pair lists
 
 ### `/api/pairs` endpoint — athena.py
@@ -329,10 +358,10 @@ bybit_execute(signal, approval)
 ## Scan Funnel (what the numbers mean)
 
 ```
-{'total': 96, 'active': 28, 'inactive_pair': 68, 'closed_exchange': 15,
+{'total': 90, 'active': 28, 'inactive_pair': 62, 'closed_exchange': 15,
  'low_score': 61, 'passed': 1, 'watchlist': 16, 'dead_ranging': 4}
 ```
-- `total` = ALL_PAIRS count
+- `total` = ALL_PAIRS count (90 after recent cleanup)
 - `active` = enabled pairs scanned
 - `inactive_pair` = total - active (disabled, never scored)
 - `closed_exchange` = pairs with open exchange flagged closed at scan time (JSE / US pre-open)

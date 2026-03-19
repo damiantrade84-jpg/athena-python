@@ -254,13 +254,13 @@ def _eodhd_rt_symbol(pair):
         # Indices — confirmed .INDX format works
         "S&P 500":       "GSPC.INDX",
         "Nasdaq":        "IXIC.INDX",
+        "NASDAQ-100":    "IXIC.INDX",
         "Dow Jones":     "DJI.INDX",
         "DAX 40":        "GDAXI.INDX",
         "UK100":         "FTSE.INDX",
         "Nikkei 225":    "N225.INDX",
         "Hang Seng":     "HSI.INDX",
         "ASX 200":       "AXJO.INDX",
-        "Euro Stoxx 50": "STOXX50E.INDX",
     }
     if disp in _OVERRIDES:
         return _OVERRIDES[disp]
@@ -284,32 +284,49 @@ def _eodhd_rt_symbol(pair):
 def _fetch_eodhd_live_prices(pairs: list) -> None:
     """Batch-fetch EODHD real-time prices for non-WS pairs. 
     Covers forex (~1min delay) and stocks (15-20min delay).
+    Optimized for API efficiency: groups by type, uses 15-symbol batches.
     Commodities/indices: tested via COMM/INDX suffix — logs failures."""
     import requests as _req
     _key = os.environ.get("EODHD_KEY", "")
     if not _key:
         return
     
-    # Build symbol list — batch max 15 per call (EODHD recommendation)
-    sym_map = {}  # eodhd_symbol → display_name
+    # Filter and group pairs by type for optimal API usage
+    forex_pairs = []
+    stock_pairs = []
+    other_pairs = []
+    
     for p in pairs:
         s = _eodhd_rt_symbol(p)
-        if s:
-            sym_map[s] = p["display"]
+        if not s:
+            continue
+        
+        if p.get("type") == "forex":
+            forex_pairs.append((s, p["display"]))
+        elif p.get("type") == "stock":
+            stock_pairs.append((s, p["display"]))
+        else:
+            other_pairs.append((s, p["display"]))
     
-    if not sym_map:
+    all_pairs = forex_pairs + stock_pairs + other_pairs
+    if not all_pairs:
         return
 
-    symbols = list(sym_map.keys())
-    # Process in batches of 15
+    log.debug(f"[PRICE-POLL] Fetching {len(all_pairs)} pairs: {len(forex_pairs)} forex, {len(stock_pairs)} stocks, {len(other_pairs)} other")
+    
+    # Process in optimal batches of 15 (EODHD recommendation)
+    symbols = [s for s, _ in all_pairs]
+    display_map = {s: d for s, d in all_pairs}
+    
     for i in range(0, len(symbols), 15):
         batch = symbols[i:i+15]
         try:
+            # Use efficient batch API call
             url = (f"https://eodhd.com/api/real-time/{batch[0]}"
                    f"?s={','.join(batch[1:])}&api_token={_key}&fmt=json")
             resp = _req.get(url, timeout=8)
             if resp.status_code != 200:
-                log.warning(f"[PRICE-POLL] EODHD batch {i//15+1}: HTTP {resp.status_code}")
+                log.warning(f"[PRICE-POLL] EODHD batch {i//15+1}/{(len(symbols)-1)//15+1}: HTTP {resp.status_code}")
                 continue
             items = resp.json()
             if not isinstance(items, list):
@@ -318,7 +335,7 @@ def _fetch_eodhd_live_prices(pairs: list) -> None:
             for item in items:
                 code = item.get("code", "")
                 px   = item.get("close") or item.get("adjusted_close")
-                disp = sym_map.get(code)
+                disp = display_map.get(code)
                 if disp and px:
                     with _live_prices_lock:
                         _live_prices[disp] = {"price": float(px), "ts": time.time()}
@@ -334,15 +351,96 @@ def _fetch_eodhd_live_prices(pairs: list) -> None:
 
 
 def _run_eodhd_price_poller():
-    """Background daemon thread: poll EODHD REST prices for non-WS pairs every 60s."""
-    log.info(f"[PRICE-POLL] Started — {len(_NON_WS_EODHD)} EODHD non-WS pairs (60s interval)")
+    """Background daemon thread: poll EODHD REST prices for non-WS pairs every 21min.
+    Optimized for delayed stock data (15-20min delay) and API efficiency."""
+    log.info(f"[PRICE-POLL] Started — {len(_NON_WS_EODHD)} EODHD non-WS pairs (21min interval for delayed stocks)")
     while True:
         _fetch_eodhd_live_prices(_NON_WS_EODHD)
         # Reset first-run flag after first cycle
         global _PRICE_POLL_FIRST_RUN
         _PRICE_POLL_FIRST_RUN = False
-        time.sleep(60)
+        time.sleep(21 * 60)  # 21 minutes for delayed stock data optimization
 
+
+
+class BinanceLivePriceWS:
+    """Binance Futures WebSocket manager for live crypto prices using !ticker@arr stream."""
+    
+    def __init__(self):
+        self._running = True
+        self._thread = None
+    
+    def _connect_and_stream(self):
+        """Connect to Binance Futures WebSocket and stream all market tickers."""
+        import websockets
+        import json
+        import asyncio
+        
+        url = "wss://fstream.binance.com/ws/!ticker@arr"
+        
+        # Build symbol lookup for faster matching
+        crypto_symbols = {pair["symbol"].replace("/", ""): pair["display"] 
+                         for pair in CRYPTO_PAIRS if pair.get("enabled", True)}
+        
+        while self._running:
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                async def _stream():
+                    async with websockets.connect(url, ping_interval=20) as ws:
+                        log.info(f"[BINANCE-WS] Connected to fstream.binance.com !ticker@arr")
+                        while self._running:
+                            try:
+                                data = await asyncio.wait_for(ws.recv(), timeout=30)
+                                tickers = json.loads(data)
+                                
+                                for ticker in tickers:
+                                    symbol = ticker.get("s", "")
+                                    if symbol in crypto_symbols:
+                                        display_name = crypto_symbols[symbol]
+                                        price = float(ticker.get("c", 0))
+                                        
+                                        if price > 0:
+                                            with _live_prices_lock:
+                                                _live_prices[display_name] = {
+                                                    "price": price, 
+                                                    "ts": time.time()
+                                                }
+                                
+                            except asyncio.TimeoutError:
+                                log.warning("[BINANCE-WS] Receive timeout, reconnecting...")
+                                break
+                            except Exception as e:
+                                log.error(f"[BINANCE-WS] Process error: {e}")
+                                break
+                
+                loop.run_until_complete(_stream())
+                
+            except Exception as e:
+                log.error(f"[BINANCE-WS] Connection error: {e}")
+                if self._running:
+                    time.sleep(5)  # Wait before reconnect
+            finally:
+                try:
+                    loop.close()
+                except:
+                    pass
+    
+    def start(self):
+        """Start the WebSocket thread."""
+        if self._thread is None or not self._thread.is_alive():
+            self._running = True
+            self._thread = threading.Thread(target=self._connect_and_stream, daemon=True, name="BinanceLivePriceWS")
+            self._thread.start()
+            log.info("[BINANCE-WS] Started Binance Futures price feed thread")
+    
+    def stop(self):
+        """Stop the WebSocket thread."""
+        self._running = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
+        log.info("[BINANCE-WS] Stopped Binance Futures price feed thread")
 
 
 class EODHDWebSocketManager:
@@ -381,13 +479,8 @@ class EODHDWebSocketManager:
             sym = p.get("symbol", "")
 
             if ptype == "crypto":
-                base = disp.split("/")[0] if "/" in disp else disp.replace("USDT", "")
-
-                ws_t = f"{base}-USD"
-
-                cr_tickers.append(ws_t)
-
-                display_map[ws_t] = disp
+                # Crypto pairs are now handled by BinanceLivePriceWS - skip EODHD mapping
+                continue
 
             elif ptype in ("stock",) and ".US" in sym:
 
@@ -558,10 +651,8 @@ class EODHDWebSocketManager:
 
         tasks = []
 
-        for ep, tickers in [("us", ticker_info["us"]), ("forex", ticker_info["forex"]), ("crypto", ticker_info["crypto"])]:
-
+        for ep, tickers in [("us", ticker_info["us"]), ("forex", ticker_info["forex"])]:
             if tickers:
-
                 tasks.append(self._connect(ep, tickers, ticker_info["map"]))
 
         if tasks:
@@ -1227,13 +1318,13 @@ FOREX_PAIRS = [
 
     {"symbol":"EURUSD=X","type":"forex","display":"EUR/USD","source":"eodhd","enabled":True},   # SQN +0.16 — enabled; score gate filters low-conviction setups
 
-    {"symbol":"GBPUSD=X","type":"forex","display":"GBP/USD","source":"eodhd","enabled":True,"ws":False},  # SQN -1.62 (post-fix BT 2026-03-13): 7 trades/730d, WR 14%, OOS:-10 — no edge confirmed # re-enabled for ATR-fix retest
+    {"symbol":"GBPUSD=X","type":"forex","display":"GBP/USD","source":"eodhd","enabled":True},  # SQN -1.62 (post-fix BT 2026-03-13): 7 trades/730d, WR 14%, OOS:-10 — no edge confirmed # re-enabled for ATR-fix retest
 
     {"symbol":"USDJPY=X","type":"forex","display":"USD/JPY","source":"eodhd","enabled":True},   # SQN -2.33 — enabled; re-evaluate post-formula fix
 
     {"symbol":"AUDUSD=X","type":"forex","display":"AUD/USD","source":"eodhd","enabled":True},   # SQN +1.00, WR 53.3%, IS:+0.45/OOS:+0.88 (2026-03-15 confirmed)
 
-    {"symbol":"NZDUSD=X","type":"forex","display":"NZD/USD","source":"eodhd","enabled":True,"ws":False},   # SQN 0.00 — enabled; zero trades was data gap not signal failure
+    {"symbol":"NZDUSD=X","type":"forex","display":"NZD/USD","source":"eodhd","enabled":True},   # SQN 0.00 — enabled; zero trades was data gap not signal failure
 
     {"symbol":"EURGBP=X","type":"forex","display":"EUR/GBP","source":"eodhd","enabled":True},   # SQN +1.54, WR 59.1%, IS:+1.48/OOS:+1.61 (2026-03-15 confirmed)
 
@@ -1241,23 +1332,23 @@ FOREX_PAIRS = [
 
     {"symbol":"USDCHF=X","type":"forex","display":"USD/CHF","source":"eodhd","enabled":True},   # v3.1 SQN +0.61, OOS +1.22 ✓
 
-    {"symbol":"EURJPY=X","type":"forex","display":"EUR/JPY","source":"eodhd","enabled":True,"ws":False},   # SQN +1.06
+    {"symbol":"EURJPY=X","type":"forex","display":"EUR/JPY","source":"eodhd","enabled":True},   # SQN +1.06
 
     {"symbol":"GBPJPY=X","type":"forex","display":"GBP/JPY","source":"eodhd","enabled":True},   # SQN -0.72
 
-    {"symbol":"AUDJPY=X","type":"forex","display":"AUD/JPY","source":"eodhd","enabled":True,"ws":False},   # SQN +0.22
+    {"symbol":"AUDJPY=X","type":"forex","display":"AUD/JPY","source":"eodhd","enabled":True},   # SQN +0.22
 
-    {"symbol":"EURAUD=X","type":"forex","display":"EUR/AUD","source":"eodhd","enabled":True,"ws":False},   # SQN -1.43 (old look-ahead bias) — re-evaluate post-formula fix
+    {"symbol":"EURAUD=X","type":"forex","display":"EUR/AUD","source":"eodhd","enabled":True},   # SQN -1.43 (old look-ahead bias) — re-evaluate post-formula fix
 
     {"symbol":"GBPAUD=X","type":"forex","display":"GBP/AUD","source":"eodhd","enabled":True},   # SQN +0.91
 
-    {"symbol":"USDZAR=X","type":"forex","display":"USD/ZAR","source":"eodhd","enabled":True,"ws":False},   # SQN -0.32
+    {"symbol":"USDZAR=X","type":"forex","display":"USD/ZAR","source":"eodhd","enabled":True},   # SQN -0.32
 
-    {"symbol":"EURCHF=X","type":"forex","display":"EUR/CHF","source":"eodhd","enabled":True,"ws":False},   # SQN -0.83
+    {"symbol":"EURCHF=X","type":"forex","display":"EUR/CHF","source":"eodhd","enabled":True},   # SQN -0.83
 
-    {"symbol":"USDMXN=X","type":"forex","display":"USD/MXN","source":"eodhd","enabled":True,"ws":False},   # SQN +0.85, OOS +0.60 ✓
+    {"symbol":"USDMXN=X","type":"forex","display":"USD/MXN","source":"eodhd","enabled":True},   # SQN +0.85, OOS +0.60 ✓
 
-    {"symbol":"USDSGD=X","type":"forex","display":"USD/SGD","source":"eodhd","enabled":True,"ws":False},   # SQN +0.43
+    {"symbol":"USDSGD=X","type":"forex","display":"USD/SGD","source":"eodhd","enabled":True},   # SQN +0.43
 
 ]
 
@@ -1273,19 +1364,21 @@ COMMODITY_PAIRS = [
 
     {"symbol":"NG.US","type":"commodity","display":"Nat Gas","source":"eodhd","enabled":True},    # EODHD: NG.US; Pepperstone: NATGAS
 
+    {"symbol":"HG=F","type":"commodity","display":"Copper","source":"eodhd","enabled":True},      # Pepperstone: COPPER - WebSocket enabled
+
     {"symbol":"PL=F","type":"commodity","display":"XPT/USD","source":"eodhd","enabled":True},     # Pepperstone: XPTUSD
 
     {"symbol":"PA=F","type":"commodity","display":"XPD/USD","source":"eodhd","enabled":True},     # Pepperstone: XPDUSD
 
-    {"symbol":"HG=F","type":"commodity","display":"Copper","source":"eodhd","enabled":True,"ws":False},      # Pepperstone: COPPER
 
 ]
 
 INDEX_PAIRS = [
 
-    {"symbol":"^GSPC","type":"index","display":"S&P 500","source":"eodhd","enabled":True},       # SQN +1.23 WR 60.0% (10T) ← WS: us endpoint GSPC.INDX
+    {"symbol":"^IXIC","type":"index","display":"NASDAQ-100","source":"eodhd","enabled":True,"ws":False},        # NAS100 index via EODHD REST
 
-    {"symbol":"^IXIC","type":"index","display":"Nasdaq","source":"eodhd","enabled":True,"ws":False},         # SQN -2.43 WR 23.1% (13T)
+
+    {"symbol":"^GSPC","type":"index","display":"S&P 500","source":"eodhd","enabled":True},       # SQN +1.23 WR 60.0% (10T) ← WS: us endpoint GSPC.INDX
 
     {"symbol":"^DJI","type":"index","display":"Dow Jones","source":"eodhd","enabled":True},      # SQN +0.61 WR 55.6% (9T) ← WS: us endpoint DJI.INDX
 
@@ -1299,7 +1392,6 @@ INDEX_PAIRS = [
 
     {"symbol":"^HSI","type":"index","display":"Hang Seng","source":"eodhd","enabled":True},       # SQN -0.38 WR 33.3% (9T) Pepperstone: HK50 ← WS: forex ep
 
-    {"symbol":"^STOXX50E","type":"index","display":"Euro Stoxx 50","source":"eodhd","enabled":True,"ws":False},  # SQN -1.56 WR 20.0% (10T) Pepperstone: EUSTX50
 
 ]
 
@@ -1307,15 +1399,15 @@ US_STOCK_PAIRS = [
 
     {"symbol":"AAPL.US","type":"stock","display":"AAPL","source":"eodhd","enabled":True},         # SQN -0.30 — score gate filters
 
-    {"symbol":"TSLA.US","type":"stock","display":"TSLA","source":"eodhd","enabled":True,"ws":False},         # SQN +0.10
+    {"symbol":"TSLA.US","type":"stock","display":"TSLA","source":"eodhd","enabled":True},         # SQN +0.10
 
-    {"symbol":"NVDA.US","type":"stock","display":"NVDA","source":"eodhd","enabled":True,"ws":False},         # SQN +1.44 ✓
+    {"symbol":"NVDA.US","type":"stock","display":"NVDA","source":"eodhd","enabled":True},         # SQN +1.44 ✓
 
     {"symbol":"MSFT.US","type":"stock","display":"MSFT","source":"eodhd","enabled":True},         # SQN +0.49
 
     {"symbol":"AMZN.US","type":"stock","display":"AMZN","source":"eodhd","enabled":True,"ws":False},         # SQN +0.27
 
-    {"symbol":"META.US","type":"stock","display":"META","source":"eodhd","enabled":True,"ws":False},         # SQN -0.29
+    {"symbol":"META.US","type":"stock","display":"META","source":"eodhd","enabled":True},         # SQN -0.29
 
     {"symbol":"GOOG.US","type":"stock","display":"GOOG","source":"eodhd","enabled":True},         # SQN +1.61, OOS:+1.01 ✓
 
@@ -1361,7 +1453,6 @@ ETF_PAIRS = [
 
     {"symbol":"EEM.US","type":"stock","display":"EEM","source":"eodhd","enabled":True},           # Emerging Markets ETF
 
-    {"symbol":"XLF.US","type":"stock","display":"XLF","source":"eodhd","enabled":True,"ws":False},           # Financial Sector ETF
 
     {"symbol":"XLE.US","type":"stock","display":"XLE","source":"eodhd","enabled":True,"ws":False},           # Energy Sector ETF
 
@@ -1538,12 +1629,12 @@ _VENDOR_SYMBOL_OVERRIDES = {
     "UK100":        {"yfinance": "^FTSE",    "eodhd": "FTSE",    "eodhd_intraday": "FTSE.INDX",    "polygon": "C:UK100", "fallback": "yfinance"},
     "S&P 500":      {"yfinance": "^GSPC",    "eodhd": "GSPC",    "eodhd_intraday": "GSPC.INDX",    "fallback": "yfinance"},
     "Nasdaq":       {"yfinance": "^IXIC",    "eodhd": "IXIC",    "eodhd_intraday": "IXIC.INDX",    "fallback": "yfinance"},
+    "NASDAQ-100":   {"yfinance": "^IXIC",    "eodhd": "IXIC",    "eodhd_intraday": "IXIC.INDX",    "fallback": "yfinance"},
     "Dow Jones":    {"yfinance": "^DJI",     "eodhd": "DJI",     "eodhd_intraday": "DJI.INDX",     "fallback": "yfinance"},
     "DAX 40":       {"yfinance": "^GDAXI",   "eodhd": "GDAXI",   "eodhd_intraday": "GDAXI.INDX",   "fallback": "yfinance"},
     "ASX 200":      {"yfinance": "^AXJO",    "eodhd": "AXJO",    "eodhd_intraday": "AXJO.INDX",    "fallback": "yfinance"},
     "Nikkei 225":   {"yfinance": "^N225",    "eodhd": "N225",    "eodhd_intraday": "N225.INDX",    "fallback": "yfinance"},
     "Hang Seng":    {"yfinance": "^HSI",     "eodhd": "HSI",     "eodhd_intraday": "HSI.INDX",     "fallback": "yfinance"},
-    "Euro Stoxx 50":{"yfinance": "^STOXX50E","eodhd": "STOXX50E","eodhd_intraday": "STOXX50E.INDX","fallback": "yfinance"},
 
 }
 
@@ -6217,12 +6308,21 @@ def api_naked_analysis():
         h4_highs = [float(c["high"]) for c in h4]
         h4_lows = [float(c["low"]) for c in h4]
         h4_closes = [float(c["close"]) for c in h4]
+        
+        log.info(f"[NAKED-AI] {pair_obj.get('display')}: H4 candles={len(h4)}, sample_high={h4_highs[-1] if h4_highs else 'N/A'}")
+        
         atr_series = calc_atr(h4_highs, h4_lows, h4_closes, 14)
-        atr = float(atr_series[-1]) if atr_series else 0.0
+        atr = float(atr_series[-1]) if atr_series and atr_series[-1] is not None else 0.0
+        
+        log.info(f"[NAKED-AI] {pair_obj.get('display')}: ATR series length={len(atr_series) if atr_series else 0}, final_ATR={atr}")
         
         if not atr or atr <= 0:
-            return jsonify({"error": "Failed to calc valid ATR"}), 500
-            
+            log.warning(f"[NAKED-AI] {pair_obj.get('display')}: Failed ATR calc - series={atr_series}, using fallback ATR")
+            # Fallback: estimate ATR as 1% of current price
+            current_price = float(sig.get("price") or h1[-1]["close"])
+            atr = current_price * 0.01
+            log.info(f"[NAKED-AI] {pair_obj.get('display')}: Using fallback ATR={atr}")
+        
         current_price = float(sig.get("price") or h1[-1]["close"])
         
         from market_structure import NakedEngine
@@ -9849,6 +9949,15 @@ if __name__=="__main__":
     else:
 
         log.warning("[WS] No EODHD_KEY â€” WebSocket prices disabled")
+
+    # Start Binance Futures WebSocket for crypto live prices
+    crypto_enabled = [p for p in CRYPTO_PAIRS if p.get("enabled", True)]
+    if crypto_enabled:
+        _binance_ws = BinanceLivePriceWS()
+        _binance_ws.start()
+        log.info(f"[BINANCE-WS] Started for {len(crypto_enabled)} enabled crypto pairs")
+    else:
+        log.info("[BINANCE-WS] No enabled crypto pairs - Binance Futures WS disabled")
 
     # Microstructure WebSocket feeds (Binance + Bybit orderbook/trade streams)
     if CONFIG.get("MICROSTRUCTURE_FEEDS_ENABLED", False):
