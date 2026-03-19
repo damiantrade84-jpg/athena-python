@@ -316,9 +316,9 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 .yield-shape.inverted{color:var(--bear);}
 .yield-spread{color:var(--muted);font-size:9px;}
 /* Live Price Ticker Strip */
-.ticker-strip{display:flex;gap:6px;padding:10px 0;margin-bottom:12px;overflow-x:auto;-webkit-scrollbar-width:thin;-webkit-scrollbar-color:var(--border) transparent;scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
+.ticker-strip{display:flex;gap:6px;padding:10px 0;margin-bottom:12px;overflow-x:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
 .ticker-strip::-webkit-scrollbar{height:4px;}.ticker-strip::-webkit-scrollbar-track{background:transparent;}.ticker-strip::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
-.ticker-item{display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:8px;background:var(--card);border:1px solid var(--border);font-family:'Space Mono',monospace;font-size:11px;white-space:nowrap;min-width:-webkit-fill-available;min-width:fit-content;transition:border-color 0.3s;}
+.ticker-item{display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:8px;background:var(--card);border:1px solid var(--border);font-family:'Space Mono',monospace;font-size:11px;white-space:nowrap;min-width:-webkit-fit-content;min-width:fit-content;transition:border-color 0.3s;}
 .ticker-item:hover{border-color:rgba(0,212,255,0.3);}
 .ticker-name{color:var(--muted);font-size:10px;font-weight:700;letter-spacing:0.04em;}
 .ticker-price{font-weight:700;color:var(--text);font-size:12px;transition:color 0.3s;}
@@ -345,6 +345,39 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
   .bt-lb-header,.bt-lb-row{grid-template-columns:2fr 1fr 1fr 1fr;}
   .bt-lb-header span:nth-child(5),.bt-lb-row span:nth-child(5),.bt-lb-header span:nth-child(6),.bt-lb-row span:nth-child(6){display:none;}
 }
+/* ── Utility: replace inline styles ─────────────────────────────────────── */
+.d-none{display:none!important;}
+.hdr-lbl{font-size:11px;color:var(--muted);}
+.hdr-val{font-size:11px;font-weight:700;}
+.yield-lbl{font-size:9px;color:var(--muted);font-weight:700;}
+.session-nm{font-size:11px;}
+.asset-filter{padding:8px 10px;border-radius:8px;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:'Space Mono',monospace;font-size:11px;cursor:pointer;}
+.naked-scan-btn{background:var(--card);border:1px solid var(--bull)!important;color:var(--bull)!important;margin-left:5px;}
+.auto-toggle-btn{margin-left:6px;background:rgba(0,212,255,0.06)!important;border-color:rgba(0,212,255,0.2)!important;}
+.tab-badge{font-size:10px;color:var(--accent);margin-left:4px;}
+.auto-banner{background:rgba(0,212,255,0.08)!important;border-color:rgba(0,212,255,0.3)!important;color:var(--accent)!important;}
+.panel-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
+.panel-row-title{font-size:13px;font-weight:700;letter-spacing:0.08em;color:var(--muted);font-family:'Space Mono',monospace;}
+.panel-row-actions{display:flex;gap:8px;align-items:center;}
+.count-lbl{font-size:11px;color:var(--accent);font-family:'Space Mono',monospace;}
+.flex-wrap-grid{display:flex;flex-wrap:wrap;gap:12px;}
+.empty-msg{color:var(--muted);font-size:13px;padding:40px;text-align:center;width:100%;}
+.engine-row{display:flex;gap:8px;align-items:center;min-width:280px;}
+.engine-row-lbl{font-size:11px;color:var(--muted);font-family:'Space Mono',monospace;white-space:nowrap;}
+.btn-flex-group{flex:1;display:flex;gap:4px;}
+.engine-btn-a{font-size:12px;padding:9px 16px;flex:1;background:rgba(0,212,255,0.15);border:1px solid rgba(0,212,255,0.3)!important;color:var(--accent)!important;}
+.engine-btn-a.inactive{background:transparent!important;border-color:var(--border)!important;color:var(--muted)!important;}
+.engine-btn-b{font-size:12px;padding:9px 16px;flex:1;background:transparent;border:1px solid var(--border)!important;color:var(--muted)!important;}
+.engine-btn-b.active{background:rgba(0,230,118,0.15)!important;border-color:rgba(0,230,118,0.3)!important;color:var(--bull)!important;}
+.ctrl-note{font-size:11px;color:var(--muted);font-family:'Space Mono',monospace;}
+.bt-btn-sm{font-size:11px;padding:7px 14px;}
+.perf-block{margin-top:20px;}
+.perf-hdr{font-size:11px;font-weight:700;letter-spacing:0.08em;color:var(--muted);font-family:'Space Mono',monospace;margin-bottom:10px;}
+.perf-hdr-lg{font-size:11px;font-weight:700;letter-spacing:0.08em;color:var(--muted);font-family:'Space Mono',monospace;margin-bottom:12px;}
+.perf-muted{font-weight:400;color:var(--muted);}
+.mono-11{font-size:11px;font-family:'Space Mono',monospace;}
+.meta-flex{margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;}
+.meta-note{font-size:10px;color:var(--muted);font-family:'Space Mono',monospace;align-self:center;}
 </style>
 </head>
 <body>
@@ -359,8 +392,8 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
     </div>
     <div class="header-right">
       <div class="btc-badge" id="btcBadge" style="display:none">
-        <span style="font-size:11px;color:var(--muted)">BTC:</span>
-        <span id="btcBiasText" style="font-size:11px;font-weight:700;">-</span>
+        <span class="hdr-lbl">BTC:</span>
+        <span id="btcBiasText" class="hdr-val">-</span>
       </div>
       <div class="mt5-badge disconnected" id="mt5Badge" title="MT5 not connected" onclick="showMT5Status()">
         <span class="mt5-dot off" id="mt5Dot"></span>
@@ -371,13 +404,13 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
         <span id="bybitLabel">Bybit: OFF</span>
       </div>
       <div class="yield-badge" id="yieldBadge" style="display:none" title="UST Yield Curve - 2Y/10Y spread. Inverted = recession risk">
-        <span style="font-size:9px;color:var(--muted);font-weight:700;">YIELD</span>
+        <span class="yield-lbl">YIELD</span>
         <span class="yield-shape" id="yieldShape">-</span>
         <span class="yield-spread" id="yieldSpread"></span>
       </div>
       <div class="session-badge">
-        <div class="session-dot" id="sessionDot" style="background:#64748b"></div>
-        <span id="sessionName" style="font-size:11px;">Loading...</span>
+        <div class="session-dot" id="sessionDot"></div>
+        <span id="sessionName" class="session-nm">Loading...</span>
       </div>
       <div class="style-selector">
         <span class="style-label">MODE:</span>
@@ -386,7 +419,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
         <button class="style-btn" id="sbtn-intraday" onclick="setStyle('intraday',this)">INTRADAY</button>
         <button class="style-btn" id="sbtn-swing" onclick="setStyle('swing',this)">SWING</button>
       </div>
-      <select id="assetClassFilter" title="Filter by asset class" style="padding:8px 10px;border-radius:8px;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:'Space Mono',monospace;font-size:11px;cursor:pointer">
+      <select id="assetClassFilter" title="Filter by asset class" class="asset-filter">
         <option value="">ALL CLASSES</option>
         <option value="crypto">CRYPTO</option>
         <option value="forex">FOREX</option>
@@ -398,14 +431,14 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         SCAN
       </button>
-      <button class="scan-btn" id="scanNakedBtn" onclick="runNakedGlobalScan()" style="background:var(--card);border:1px solid var(--bull);color:var(--bull);margin-left:5px;">
+      <button class="scan-btn naked-scan-btn" id="scanNakedBtn" onclick="runNakedGlobalScan()">
         🌍 NAKED SCAN
       </button>
       <div class="test-toggle" id="testToggle" onclick="toggleTestMode()" title="Test Mode: drops score thresholds, enables force-execute on all signals">
         <span class="toggle-dot"></span>
         <span>TEST</span>
       </div>
-      <div class="test-toggle" id="autoTradeToggle" onclick="toggleAutoTrade()" title="Auto-Trade Bot: executes qualifying signals automatically at H4 candle closes" style="margin-left:6px;background:rgba(0,212,255,0.06);border-color:rgba(0,212,255,0.2)">
+      <div class="test-toggle auto-toggle-btn" id="autoTradeToggle" onclick="toggleAutoTrade()" title="Auto-Trade Bot: executes qualifying signals automatically at H4 candle closes">
         <span class="toggle-dot"></span>
         <span>AUTO</span>
       </div>
@@ -418,7 +451,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 
   <div class="tab-bar">
     <button class="tab-btn active" id="tab-signals" onclick="switchTab('signals')">SIGNALS</button>
-    <button class="tab-btn" id="tab-trades" onclick="switchTab('trades')">TRADES <span id="tradesTabCount" style="font-size:10px;color:var(--accent);margin-left:4px"></span></button>
+    <button class="tab-btn" id="tab-trades" onclick="switchTab('trades')">TRADES <span id="tradesTabCount" class="tab-badge"></span></button>
     <button class="tab-btn" id="tab-backtest" onclick="switchTab('backtest')">BACKTEST</button>
     <button class="tab-btn" id="tab-screener" onclick="switchTab('screener')">SCREENER</button>
     <button class="tab-btn" id="tab-performance" onclick="switchTab('performance');loadPerformance();loadAutoTradeLog();loadFailedExecutions()">PERFORMANCE</button>
@@ -430,7 +463,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
   </div>
 
   <div class="test-banner" id="testBanner">TEST MODE ACTIVE — Score thresholds lowered, force-execute enabled on all signals</div>
-  <div class="test-banner" id="autoTradeBanner" style="background:rgba(0,212,255,0.08);border-color:rgba(0,212,255,0.3);color:var(--accent)">
+  <div class="test-banner auto-banner" id="autoTradeBanner">
     AUTO-TRADE BOT ACTIVE — Next scan: <span id="autoNextScan">--:--</span> UTC &nbsp;|&nbsp;
     Today: <span id="autoTradesToday">0</span>/<span id="autoTradesMax">3</span> trades &nbsp;|&nbsp;
     Last: <span id="autoLastExec">none</span>
@@ -468,15 +501,15 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
   </div><!-- /panel-signals -->
 
   <div class="tab-panel" id="panel-trades">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-        <span style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:var(--muted);font-family:'Space Mono',monospace">OPEN POSITIONS</span>
-        <div style="display:flex;gap:8px;align-items:center">
-          <span id="tradesTabCountFull" style="font-size:11px;color:var(--accent);font-family:'Space Mono',monospace"></span>
-          <button class="bt-btn" onclick="refreshTradesTab()" style="padding:6px 14px;font-size:11px">⟳ REFRESH</button>
+      <div class="panel-row">
+        <span class="panel-row-title">OPEN POSITIONS</span>
+        <div class="panel-row-actions">
+          <span id="tradesTabCountFull" class="count-lbl"></span>
+          <button class="bt-btn bt-btn-sm" onclick="refreshTradesTab()">⟳ REFRESH</button>
         </div>
       </div>
-      <div id="tradesTabGrid" style="display:flex;flex-wrap:wrap;gap:12px">
-        <div style="color:var(--muted);font-size:13px;padding:40px;text-align:center;width:100%">No open positions. Execute a trade to see it here.</div>
+      <div id="tradesTabGrid" class="flex-wrap-grid">
+        <div class="empty-msg">No open positions. Execute a trade to see it here.</div>
       </div>
     </div>
 
@@ -487,14 +520,14 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
       </select>
     
       <!-- NEW: Clear Engine A / Engine B Selector -->
-      <div style="display:flex;gap:8px;align-items:center;min-width:280px">
-        <label style="font-size:11px;color:var(--muted);font-family:'Space Mono',monospace;white-space:nowrap">ENGINE:</label>
-        <div class="btn-group" role="group" style="flex:1;display:flex;gap:4px">
-          <button type="button" id="engineA-btn" 
-                  class="bt-btn active" style="font-size:12px;padding:9px 16px;flex:1;background:rgba(0,212,255,0.15);border:1px solid rgba(0,212,255,0.3);color:var(--accent)"
+      <div class="engine-row">
+        <label class="engine-row-lbl">ENGINE:</label>
+        <div class="btn-group btn-flex-group" role="group">
+          <button type="button" id="engineA-btn"
+                  class="bt-btn engine-btn-a"
                   onclick="selectBacktestEngine('A')">Engine A (Factor)</button>
-          <button type="button" id="engineB-btn" 
-                  class="bt-btn" style="font-size:12px;padding:9px 16px;flex:1;background:transparent;border:1px solid var(--border);color:var(--muted)"
+          <button type="button" id="engineB-btn"
+                  class="bt-btn engine-btn-b"
                   onclick="selectBacktestEngine('B')">Engine B (Naked)</button>
         </div>
       </div>
@@ -509,7 +542,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
       </select>
       
       <button class="bt-btn" id="btRunBtn" onclick="runBacktest()">&#9654; RUN BACKTEST</button>
-      <span style="font-size:11px;color:var(--muted);font-family:'Space Mono',monospace" id="btNote">Engine A = Quantitative Factor Model</span>
+      <span class="ctrl-note" id="btNote">Engine A = Quantitative Factor Model</span>
     </div>
     <div id="btContent">
       <div class="empty-state">
@@ -523,7 +556,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
   <div class="tab-panel" id="panel-screener">
     <div class="bt-controls">
       <button class="bt-btn" id="scrRunBtn" onclick="runScreener()">&#128269; SCAN MOMENTUM STOCKS</button>
-      <span style="font-size:11px;color:var(--muted);font-family:'Space Mono',monospace">Top $50B+ cap stocks near 52-week highs &middot; Cross-referenced vs tracked pairs</span>
+      <span class="ctrl-note">Top $50B+ cap stocks near 52-week highs &middot; Cross-referenced vs tracked pairs</span>
     </div>
     <div id="scrContent">
       <div class="empty-state">
@@ -537,7 +570,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
   <div class="tab-panel" id="panel-performance">
     <div class="bt-controls">
       <button class="bt-btn" onclick="loadPerformance()">&#8635; REFRESH</button>
-      <span style="font-size:11px;color:var(--muted);font-family:'Space Mono',monospace">Live trade outcomes tracked from audit.db</span>
+      <span class="ctrl-note">Live trade outcomes tracked from audit.db</span>
     </div>
     <div id="perfContent">
       <div class="empty-state">
@@ -546,21 +579,21 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
         <p>Execute trades to begin tracking outcomes. Stats appear here after positions close.</p>
       </div>
     </div>
-    <div id="failedExecLog" style="margin-top:20px">
-      <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:var(--muted);font-family:'Space Mono',monospace;margin-bottom:10px">FAILED EXECUTIONS <span style="font-weight:400;color:var(--muted)">(manual &amp; auto rejections)</span></div>
-      <div id="failedExecContent" style="font-size:11px;font-family:'Space Mono',monospace"></div>
+    <div id="failedExecLog" class="perf-block">
+      <div class="perf-hdr">FAILED EXECUTIONS <span class="perf-muted">(manual &amp; auto rejections)</span></div>
+      <div id="failedExecContent" class="mono-11"></div>
     </div>
-    <div id="autoTradeLog" style="margin-top:20px">
-      <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:var(--muted);font-family:'Space Mono',monospace;margin-bottom:10px">TRADE HISTORY</div>
-      <div id="autoTradeLogContent" style="font-size:11px;font-family:'Space Mono',monospace"></div>
+    <div id="autoTradeLog" class="perf-block">
+      <div class="perf-hdr">TRADE HISTORY</div>
+      <div id="autoTradeLogContent" class="mono-11"></div>
     </div>
 
-    <div id="learningPanel" style="margin-top:20px">
-      <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:var(--muted);font-family:'Space Mono',monospace;margin-bottom:12px">AI LEARNING INSIGHTS</div>
+    <div id="learningPanel" class="perf-block">
+      <div class="perf-hdr-lg">AI LEARNING INSIGHTS</div>
       <div id="learningContent"></div>
-      <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
-        <button class="bt-btn" onclick="runMetaAnalysis()" style="font-size:11px;padding:7px 14px">&#129504; Run Meta-Analysis</button>
-        <div id="lastMetaWrap" style="font-size:10px;color:var(--muted);font-family:'Space Mono',monospace;align-self:center"></div>
+      <div class="meta-flex">
+        <button class="bt-btn bt-btn-sm" onclick="runMetaAnalysis()">&#129504; Run Meta-Analysis</button>
+        <div id="lastMetaWrap" class="meta-note"></div>
       </div>
     </div>
   </div><!-- /panel-performance -->
@@ -873,26 +906,14 @@ function selectBacktestEngine(engine) {
   var btnA = document.getElementById('engineA-btn');
   var btnB = document.getElementById('engineB-btn');
   var note = document.getElementById('btNote');
-  
+
   if (engine === 'A') {
-    btnA.style.background = 'rgba(0,212,255,0.15)';
-    btnA.style.borderColor = 'rgba(0,212,255,0.3)';
-    btnA.style.color = 'var(--accent)';
-    
-    btnB.style.background = 'transparent';
-    btnB.style.borderColor = 'var(--border)';
-    btnB.style.color = 'var(--muted)';
-    
+    btnA.classList.remove('inactive');
+    btnB.classList.remove('active');
     note.textContent = "Engine A = Quantitative Factor Model";
   } else {
-    btnB.style.background = 'rgba(0,230,118,0.15)';
-    btnB.style.borderColor = 'rgba(0,230,118,0.3)';
-    btnB.style.color = 'var(--bull)';
-    
-    btnA.style.background = 'transparent';
-    btnA.style.borderColor = 'var(--border)';
-    btnA.style.color = 'var(--muted)';
-    
+    btnA.classList.add('inactive');
+    btnB.classList.add('active');
     note.textContent = "Engine B = Pure Market Structure (FVG + Liquidity + Volume)";
   }
 }
