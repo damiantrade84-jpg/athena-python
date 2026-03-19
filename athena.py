@@ -6364,6 +6364,9 @@ def _naked_scan_style_profile(style: str | None) -> tuple[str, dict]:
             "min_rr": 0.9,
             "fallback_rr": 1.5,
             "require_macro_align": False,
+            "zone_tf": "H4",     # S/R zone detection timeframe
+            "entry_tf": "H1",    # Micro sequence / BOS / sweep timeframe
+            "atr_tf": "H4",      # ATR calculation timeframe
         },
         "intraday": {
             "min_score": 1.8,
@@ -6371,6 +6374,9 @@ def _naked_scan_style_profile(style: str | None) -> tuple[str, dict]:
             "min_rr": 1.5,
             "fallback_rr": 2.0,
             "require_macro_align": True,
+            "zone_tf": "H4",
+            "entry_tf": "H1",
+            "atr_tf": "H4",
         },
         "swing": {
             "min_score": 2.0,
@@ -6378,6 +6384,9 @@ def _naked_scan_style_profile(style: str | None) -> tuple[str, dict]:
             "min_rr": 2.0,
             "fallback_rr": 2.5,
             "require_macro_align": True,
+            "zone_tf": "D1",     # D1 zones for multi-day holds
+            "entry_tf": "H4",    # H4 structure for swing entries
+            "atr_tf": "D1",      # D1 ATR for wider SL/TP
         },
     }
     return resolved, profiles.get(resolved, profiles["scalp"])
@@ -6692,55 +6701,67 @@ def api_scan_naked():
         # Cache miss — call normal fetch_candles (will populate cache for next time)
         return fetch_candles(pair, tf, limit)
     
+    # Determine which timeframes this style needs
+    _zone_tf  = style_profile.get("zone_tf", "H4")
+    _entry_tf = style_profile.get("entry_tf", "H1")
+    _atr_tf   = style_profile.get("atr_tf", "H4")
+    _needed_tfs = list({_zone_tf, _entry_tf, _atr_tf, "D1"})  # always fetch D1 as fallback
+
     for pair in candidate_pairs:
         try:
             # Yield CPU to prevent Flask thread locking during synchronous scan
-            time.sleep(0.1) 
-            d1 = _fetch_cached_only(pair, "D1", CONFIG.get("D1_CANDLES", 220))
-            h4 = _fetch_cached_only(pair, "H4", CONFIG.get("H4_CANDLES", 220))
-            h1 = _fetch_cached_only(pair, "H1", CONFIG.get("H1_CANDLES", 220))
-            
-            if not d1 or not h4 or not h1:
+            time.sleep(0.1)
+
+            # Fetch all needed timeframes
+            _tf_map = {}
+            for tf in _needed_tfs:
+                cfg_key = f"{tf.upper().replace('H','H').replace('D','D')}_CANDLES"
+                limit = CONFIG.get(cfg_key, 220)
+                raw = _fetch_cached_only(pair, tf, limit)
+                if raw and len(raw) > 1:
+                    _tf_map[tf] = raw[:-1]  # drop incomplete current bar
+                elif raw:
+                    _tf_map[tf] = raw
+                else:
+                    _tf_map[tf] = []
+
+            zone_candles  = _tf_map.get(_zone_tf, [])
+            entry_candles = _tf_map.get(_entry_tf, [])
+            d1_candles    = _tf_map.get("D1", [])
+            atr_candles   = _tf_map.get(_atr_tf, zone_candles)
+
+            if len(zone_candles) < 10 or len(entry_candles) < 10:
                 continue
-                
-            d1 = d1[:-1] if len(d1) > 1 else d1
-            h4 = h4[:-1] if len(h4) > 1 else h4
-            h1 = h1[:-1] if len(h1) > 1 else h1
-            
-            if len(h4) < 10 or len(h1) < 10:
-                continue
-                
-            h4_highs = [float(c["high"]) for c in h4]
-            h4_lows = [float(c["low"]) for c in h4]
-            h4_closes = [float(c["close"]) for c in h4]
-            
-            atr_series = calc_atr(h4_highs, h4_lows, h4_closes, 14)
+
+            # ATR from the style's designated timeframe
+            _atr_highs  = [float(c["high"]) for c in atr_candles]
+            _atr_lows   = [float(c["low"]) for c in atr_candles]
+            _atr_closes = [float(c["close"]) for c in atr_candles]
+            atr_series = calc_atr(_atr_highs, _atr_lows, _atr_closes, 14)
             atr = float(atr_series[-1]) if atr_series else 0.0
-            
+
             if not atr or atr <= 0:
                 continue
-                
-            current_price = float(h1[-1]["close"])
-            
+
+            current_price = float(entry_candles[-1]["close"])
+
             # Test both directions
+            # analyze_structure uses: arg2 (h4 slot) for zones/macro, arg3 (h1 slot) for micro/BOS/sweep
             for direction in ["LONG", "SHORT"]:
-                res = engine.analyze_structure(d1, h4, h1, current_price, direction, atr)
-                
-                # Displacement filter: self-calibrating multiplier based on body consistency
-                # Ranging markets (tight bodies) use 1.1x, volatile markets use up to 1.3x
-                h1_bodies = [abs(float(c["close"]) - float(c["open"])) for c in h1[-20:]]
-                if len(h1_bodies) >= 10:
-                    avg_body = sum(h1_bodies[:-3]) / max(len(h1_bodies[:-3]), 1)
+                res = engine.analyze_structure(d1_candles, zone_candles, entry_candles, current_price, direction, atr)
+
+                # Displacement filter on entry-TF bodies (self-calibrating CV multiplier)
+                _disp_candles = entry_candles[-20:]
+                _entry_bodies = [abs(float(c["close"]) - float(c["open"])) for c in _disp_candles]
+                if len(_entry_bodies) >= 10:
+                    avg_body = sum(_entry_bodies[:-3]) / max(len(_entry_bodies[:-3]), 1)
                     if avg_body > 0:
-                        body_std = (sum((b - avg_body) ** 2 for b in h1_bodies[:-3]) / max(len(h1_bodies[:-3]), 1)) ** 0.5
-                        cv = body_std / avg_body  # coefficient of variation: low=ranging, high=volatile
-                        # cv < 0.4 = compressed/ranging → threshold 1.1x (easier to pass)
-                        # cv 0.4-0.8 = normal → threshold 1.2x
-                        # cv > 0.8 = volatile/trending → threshold 1.3x (stricter, only clear impulse)
+                        body_std = (sum((b - avg_body) ** 2 for b in _entry_bodies[:-3]) / max(len(_entry_bodies[:-3]), 1)) ** 0.5
+                        cv = body_std / avg_body
                         disp_mult = 1.1 if cv < 0.4 else 1.3 if cv > 0.8 else 1.2
-                        recent_bodies = h1_bodies[-3:]
+                        recent_bodies = _entry_bodies[-3:]
                         has_displacement = any(b >= avg_body * disp_mult for b in recent_bodies)
-                        log.info(f"[NAKED-DISP] {pair.get('display')} {direction}: cv={cv:.2f} mult={disp_mult} avg={avg_body:.5f} recent_max={max(recent_bodies):.5f} pass={has_displacement}")
+                        log.info(f"[NAKED-DISP] {pair.get('display')} {direction} ({_entry_tf}): cv={cv:.2f} mult={disp_mult} avg={avg_body:.5f} recent_max={max(recent_bodies):.5f} pass={has_displacement}")
                     else:
                         has_displacement = True
                 else:
@@ -6778,6 +6799,9 @@ def api_scan_naked():
                         res["type"] = pair.get("type")
                         res["direction"] = direction
                         res["style"] = resolved_style
+                        res["zone_tf"] = _zone_tf
+                        res["entry_tf"] = _entry_tf
+                        res["atr_tf"] = _atr_tf
 
                         sl = res.get("recommended_stop_loss")
                         tp = res.get("recommended_take_profit")
