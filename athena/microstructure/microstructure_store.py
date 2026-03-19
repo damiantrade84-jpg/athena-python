@@ -19,7 +19,7 @@ _db_lock = threading.Lock()
 # Ensure table exists on first import
 def _ensure_db() -> None:
     try:
-        with sqlite3.connect(DB_PATH, timeout=1.0) as con:
+        with sqlite3.connect(DB_PATH, timeout=15.0) as con:
             # Enable WAL mode for better concurrent write performance
             con.execute("PRAGMA journal_mode=WAL")
             con.execute("""
@@ -45,7 +45,7 @@ _ensure_db()
 
 def init_db() -> None:
     """Initialize SQLite database for microstructure metrics."""
-    with sqlite3.connect(DB_PATH, timeout=1.0) as con:
+    with sqlite3.connect(DB_PATH, timeout=15.0) as con:
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("""
             CREATE TABLE IF NOT EXISTS metrics (
@@ -78,7 +78,7 @@ def store_metrics(metrics: Dict) -> None:
         return
     try:
         with _db_lock:
-            with sqlite3.connect(DB_PATH, timeout=5.0) as con:
+            with sqlite3.connect(DB_PATH, timeout=15.0) as con:
                 con.execute("""
                     INSERT OR REPLACE INTO metrics
                     (timestamp, exchange, symbol, order_book_imbalance,
@@ -99,7 +99,7 @@ def store_metrics(metrics: Dict) -> None:
 def query_latest(symbol: str, exchange: str, limit: int = 100) -> List[Dict]:
     """Query latest aggregated metrics for a symbol."""
     try:
-        with sqlite3.connect(DB_PATH, timeout=1.0) as con:
+        with sqlite3.connect(DB_PATH, timeout=15.0) as con:
             cur = con.execute("""
                 SELECT timestamp, exchange, symbol,
                        order_book_imbalance, liquidity_wall_detection,
@@ -130,7 +130,7 @@ def purge_old(keep_hours: int = 24) -> None:
     """Purge metrics older than keep_hours."""
     cutoff = time.time() - keep_hours * 3600
     try:
-        with sqlite3.connect(DB_PATH, timeout=1.0) as con:
+        with sqlite3.connect(DB_PATH, timeout=15.0) as con:
             cur = con.execute("DELETE FROM metrics WHERE timestamp < ?", (cutoff,))
             deleted = cur.rowcount
             if deleted:

@@ -731,7 +731,9 @@ class CandleBuilder:
 
     def _init_db(self):
 
-        with sqlite3.connect(self._db, timeout=1.0) as con:
+        with sqlite3.connect(self._db, timeout=15.0) as con:
+
+            con.execute("PRAGMA journal_mode=WAL")
 
             con.execute("""CREATE TABLE IF NOT EXISTS candle_cache (
 
@@ -813,7 +815,7 @@ class CandleBuilder:
 
             t = bar["start"].strftime("%Y-%m-%d %H:%M:%S")
 
-            with sqlite3.connect(self._db, timeout=1.0) as con:
+            with sqlite3.connect(self._db, timeout=15.0) as con:
 
                 con.execute(
 
@@ -837,7 +839,7 @@ class CandleBuilder:
 
         try:
 
-            with sqlite3.connect(self._db, timeout=1.0) as con:
+            with sqlite3.connect(self._db, timeout=15.0) as con:
 
                 con.row_factory = sqlite3.Row
 
@@ -919,7 +921,7 @@ class CandleBuilder:
 
                 disp = p["display"]
 
-                with sqlite3.connect(self._db, timeout=1.0) as con:
+                with sqlite3.connect(self._db, timeout=15.0) as con:
 
                     cnt = con.execute(
 
@@ -965,7 +967,7 @@ class CandleBuilder:
 
                         if d1_rows:
 
-                            with sqlite3.connect(self._db, timeout=1.0) as con:
+                            with sqlite3.connect(self._db, timeout=15.0) as con:
 
                                 con.executemany(
 
@@ -1071,7 +1073,7 @@ class CandleBuilder:
 
                 if all_rows:
 
-                    with sqlite3.connect(self._db, timeout=1.0) as con:
+                    with sqlite3.connect(self._db, timeout=15.0) as con:
 
                         con.executemany(
 
@@ -1203,7 +1205,7 @@ class CandleBuilder:
 
                 if rows:
 
-                    with sqlite3.connect(self._db, timeout=1.0) as con:
+                    with sqlite3.connect(self._db, timeout=15.0) as con:
 
                         con.executemany(
 
@@ -1255,7 +1257,7 @@ class CandleBuilder:
 
         try:
 
-            with sqlite3.connect(self._db, timeout=1.0) as con:
+            with sqlite3.connect(self._db, timeout=15.0) as con:
 
                 rows = con.execute(
 
@@ -2972,6 +2974,8 @@ INPUT FORMAT — the signal comes in labeled sections:
 
 === SIGNAL === (pair, direction, score as percentage of class max, conviction, regime)
 
+=== ENGINE B (NAKED MARKET STRUCTURE) === (present if naked structure analysis was run — overrides traditional technicals)
+
 === TECHNICALS === (individual scored votes with their weights, plus context indicators)
 
 === LEVELS === (entry, SL, TP1, TP2 with R-multiples)
@@ -3049,6 +3053,14 @@ STYLE RULES:
 - SWING: D1 EMA stack dominant, EMA200 slope, 4-6R.
 
 If incompatible with requested style, say so and recommend correct style.
+
+
+
+ENGINE B (NAKED) RULES:
+
+- If the "ENGINE B (NAKED MARKET STRUCTURE)" section is fully present, the setup is a PURE price-action trade.
+
+- You MUST prioritize the structural verdict (Swing Sequence, Nearest Support/Resistance, Break of Structure) and base the narrative entirely on market structure and liquidity. Disregard the absence of traditional indicators.
 
 
 
@@ -3730,7 +3742,7 @@ def _build_signal_message(signal: dict, news_ctx: dict | None,
     lines.append("=== LEVELS ===")
     lines.append(f"Entry: {signal['price']} | SL: {signal['sl']} ({signal.get('slPct', '?')}%) | "
                  f"TP1: {signal['tp1']} ({signal['rr1']}R) | TP2: {signal['tp2']} ({signal['rr2']}R)")
-    lines.append(f"ATR: {signal['atr']}")
+    lines.append(f"ATR: {signal.get('atr', signal.get('naked_data', {}).get('atr', 'N/A'))}")
 
     fib = signal.get("fib")
 
@@ -3764,8 +3776,10 @@ def _build_signal_message(signal: dict, news_ctx: dict | None,
 
     lines.append("=== CONTEXT (for your analysis, NOT scored) ===")
 
+    _sname = signal.get('session', {}).get('name', 'Global')
+    _squal = signal.get('session', {}).get('quality', 'N/A')
     lines.append(f"BTC bias: {signal.get('btcBias', 'n/a')} | "
-                 f"Session: {signal['session']['name']} ({signal['session']['quality']})")
+                 f"Session: {_sname} ({_squal})")
 
 
 
@@ -3998,10 +4012,25 @@ def _build_signal_message(signal: dict, news_ctx: dict | None,
             )
 
             if fail_summary:
-
                 lines.append(f"Recent losses: {fail_summary}")
-
-
+                
+        factors = learning_ctx.get("factor_reliability", [])
+        if factors:
+            factor_summary = " | ".join(
+                f"{f['factor']} ({f['count']} trades, avg W:{f['avg_win']} L:{f['avg_loss']})"
+                for f in factors[:6]
+            )
+            if factor_summary:
+                lines.append(f"Top Pattern Reliability: {factor_summary}")
+                
+        top_votes = learning_ctx.get("top_votes", [])
+        if top_votes:
+            vote_summary = " | ".join(
+                f"{v['vote']} ({v['count']} trades, WR:{int(v['win_rate']*100)}%)" 
+                for v in top_votes[:4]
+            )
+            if vote_summary:
+                lines.append(f"Best Indicator Combos: {vote_summary}")
 
     return "\n".join(lines)
 
@@ -5845,7 +5874,7 @@ def _init_audit_db(db_path: str) -> None:
 
     """Create audit table if it doesn't exist, and migrate legacy schemas."""
 
-    con = sqlite3.connect(db_path, timeout=1.0)
+    con = sqlite3.connect(db_path, timeout=15.0)
     con.execute("PRAGMA journal_mode=WAL")
 
     con.execute("""
@@ -6223,7 +6252,7 @@ def api_analyze():
 
             _score_pct = round(sig.get("confluenceScore", 0) / _max_s * 100, 1) if _max_s else 0
 
-            with sqlite3.connect(_AUDIT_DB, timeout=1.0) as _con:
+            with sqlite3.connect(_AUDIT_DB, timeout=15.0) as _con:
 
                 _factors = {
                     "scores": sig.get("factorScores"),
@@ -6401,11 +6430,68 @@ def api_quick_execute():
             is_manual_override=True
         )
         
+        pair_name = sig.get("pair", sig.get("symbol", "N/A"))
         if not approval.approved:
+            log.warning(f"[QUICK EXEC] {pair_name} REJECTED: {approval.reason}")
+            try:
+                with sqlite3.connect(_AUDIT_DB, timeout=15.0) as _con:
+                    _con.execute(
+                        "INSERT INTO audit_log(ts,pair,score,direction,style,grade,error_tag) VALUES(?,?,?,?,?,?,?)",
+                        (
+                            datetime.now(timezone.utc).isoformat(),
+                            pair_name,
+                            sig.get("confluenceScore", 0),
+                            sig.get("direction"),
+                            "scalp",
+                            "MANUAL-ERR",
+                            approval.reason,
+                        ),
+                    )
+            except Exception as _e:
+                log.warning(f"[QUICK EXEC] Failed to log rejection to audit_db: {_e}")
             return jsonify({"error": f"Risk Blocked: {approval.reason}"}), 400
             
         result = executor(sig, approval)
         if result.get("success"):
+            # Build Engine B factor JSON for AI learning
+            _b_factors = {}
+            if "structural_verdict" in engine_b and isinstance(engine_b["structural_verdict"], dict):
+                sv = engine_b["structural_verdict"]
+                bos = sv.get("bos_data", {})
+                sweep = sv.get("sweep_data", {})
+                seq = sv.get("sequence_data", {}).get("state", "RANGING")
+                
+                _b_factors["Naked_BOS_Bull"] = 1.0 if bos.get("bos_bull") else 0.0
+                _b_factors["Naked_BOS_Bear"] = 1.0 if bos.get("bos_bear") else 0.0
+                _b_factors["Naked_Sweep_Bull"] = 1.0 if sweep.get("bull_sweep") else 0.0
+                _b_factors["Naked_Sweep_Bear"] = 1.0 if sweep.get("bear_sweep") else 0.0
+                _b_factors["Naked_Seq_Bull"] = 1.0 if seq == "HH_HL" else 0.0
+                _b_factors["Naked_Seq_Bear"] = 1.0 if seq == "LH_LL" else 0.0
+                
+            _factors = {
+                "scores": _b_factors,
+                "weights": {},
+                "disabled": [],
+                "regime": engine_b.get("regime", "RANGING"),
+            }
+            try:
+                with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
+                    con.execute(
+                        "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style,"
+                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (datetime.now(timezone.utc).isoformat(), pair_name, sig.get("confluenceScore", 0),
+                         sig.get("direction"), engine_b.get("structural_verdict", {}).get("sequence_data", {}).get("state", "RANGING"), "EXECUTED",
+                         None, f"${approval.risk_amount}", "scalp",
+                         result.get("entryPrice"), sig.get("sl"), sig.get("tp1"),
+                         result.get("volume"), engine_b.get("regime", "RANGING"),
+                         approval.risk_amount, approval.risk_pct, str(result.get("ticket", "")),
+                         result.get("feeCost"), json.dumps(_factors))
+                    )
+                    con.commit()
+            except Exception as ae:
+                log.warning(f"[QUICK EXEC] Audit DB write failed: {ae}")
+
             return jsonify({"success": True, "ticket": result.get("ticket"), "message": f"Executed instantly!"})
         else:
             return jsonify({"error": result.get("error", "Execution failed")}), 400
@@ -6800,7 +6886,7 @@ def api_execute():
             log.warning(f"[EXEC] {pair} REJECTED by risk engine: {approval.reason}")
 
             try:
-                with sqlite3.connect(_AUDIT_DB, timeout=1.0) as _con:
+                with sqlite3.connect(_AUDIT_DB, timeout=15.0) as _con:
                     _con.execute(
                         "INSERT INTO audit_log(ts,pair,score,direction,style,grade,error_tag) VALUES(?,?,?,?,?,?,?)",
                         (
@@ -6836,7 +6922,7 @@ def api_execute():
 
             try:
 
-                with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+                with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
                     _factors = {
                         "scores": sig.get("factorScores"),
@@ -7114,7 +7200,7 @@ def api_webhook():
 
             try:
 
-                with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+                with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
                     _factors = {
                         "scores": sig.get("factorScores"),
@@ -7703,7 +7789,7 @@ def api_backtest():
 def api_backtest_history():
     """Return all stored backtest results, newest first."""
     try:
-        with sqlite3.connect(_AUDIT_DB) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             rows = con.execute("""
                 SELECT * FROM backtest_results
@@ -7720,7 +7806,7 @@ def api_backtest_history():
 def api_backtest_history_pair(pair_name):
     """Return backtest history for a specific pair."""
     try:
-        with sqlite3.connect(_AUDIT_DB) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             rows = con.execute("""
                 SELECT * FROM backtest_results
@@ -7738,7 +7824,7 @@ def api_backtest_history_pair(pair_name):
 def api_backtest_best():
     """Return best result per pair (highest SQN from most recent run)."""
     try:
-        with sqlite3.connect(_AUDIT_DB) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             rows = con.execute("""
                 SELECT b.*
@@ -7986,7 +8072,7 @@ def api_auto_trade_log():
 
     try:
 
-        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
             con.row_factory = sqlite3.Row
 
@@ -8018,7 +8104,7 @@ def api_failed_executions():
 
     try:
 
-        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
             con.row_factory = sqlite3.Row
 
@@ -8313,7 +8399,7 @@ def api_audit():
 
     try:
 
-        con = sqlite3.connect(_AUDIT_DB, timeout=1.0)
+        con = sqlite3.connect(_AUDIT_DB, timeout=15.0)
 
         con.row_factory = sqlite3.Row
 
@@ -8844,7 +8930,7 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
 
         "warnings": warn_list,
 
-        "session": get_session(),
+        "session": get_session(h4[-1].get("time") if h4 else None),
 
         "timestamp": datetime.now(timezone.utc).isoformat(),
 
@@ -9026,7 +9112,7 @@ def _update_trade_outcome(ticket: str, exit_price: float, exit_time: str,
 
     try:
 
-        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
             con.execute(
 
@@ -9174,7 +9260,7 @@ def _check_mt5_outcomes() -> None:
 
         # Find audit rows with a ticket but no exit_price
 
-        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
             con.row_factory = sqlite3.Row
 
@@ -9306,7 +9392,7 @@ def _check_ccxt_outcomes() -> None:
 
                 # Find matching audit row for SL distance
 
-                with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+                with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
                     con.row_factory = sqlite3.Row
 
@@ -9376,7 +9462,7 @@ def _check_ccxt_outcomes() -> None:
 
                 log.debug(f"[MONITOR] breakeven check error: {e}")
 
-        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
             con.row_factory = sqlite3.Row
 
@@ -9502,7 +9588,7 @@ def _check_score_decay() -> None:
 
     try:
 
-        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             open_trades = con.execute(
                 "SELECT pair, score, direction FROM audit_log "
@@ -9593,7 +9679,7 @@ def api_performance():
 
     try:
 
-        with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
             con.row_factory = sqlite3.Row
 
@@ -10055,7 +10141,7 @@ if __name__=="__main__":
 
         try:
 
-            with sqlite3.connect(_AUDIT_DB, timeout=1.0) as con:
+            with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
 
                 con.row_factory = sqlite3.Row
 

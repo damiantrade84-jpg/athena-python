@@ -61,7 +61,7 @@ _db_lock = threading.Lock()
 
 def _init_db():
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH, timeout=1.0)
+        con = sqlite3.connect(_DB_PATH, timeout=15.0)
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("""
             CREATE TABLE IF NOT EXISTS forex_volume (
@@ -167,7 +167,7 @@ def _cache_write(duka_symbol: str, volumes: dict):
     if not rows:
         return
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH, timeout=1.0)
+        con = sqlite3.connect(_DB_PATH, timeout=15.0)
         con.executemany(
             "INSERT OR REPLACE INTO forex_volume (symbol, tf, bar_ts, volume) VALUES (?,?,?,?)",
             rows
@@ -179,7 +179,7 @@ def _cache_write(duka_symbol: str, volumes: dict):
 def _cache_read(duka_symbol: str, tf: str, from_ts: int, to_ts: int) -> list:
     """Return [(bar_ts, volume)] sorted ascending."""
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH, timeout=1.0)
+        con = sqlite3.connect(_DB_PATH, timeout=15.0)
         rows = con.execute(
             "SELECT bar_ts, volume FROM forex_volume "
             "WHERE symbol=? AND tf=? AND bar_ts>=? AND bar_ts<=? ORDER BY bar_ts",
@@ -191,7 +191,7 @@ def _cache_read(duka_symbol: str, tf: str, from_ts: int, to_ts: int) -> list:
 
 def _newest_cached_ts(duka_symbol: str, tf: str) -> Optional[int]:
     with _db_lock:
-        con = sqlite3.connect(_DB_PATH, timeout=1.0)
+        con = sqlite3.connect(_DB_PATH, timeout=15.0)
         row = con.execute(
             "SELECT MAX(bar_ts) FROM forex_volume WHERE symbol=? AND tf=?",
             (duka_symbol, tf)
