@@ -4112,74 +4112,7 @@ def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto",
 
                                     learning_ctx=learning_ctx)
 
-        r = c.responses.create(
 
-            model=CONFIG["XAI_MODEL"], max_output_tokens=900,
-
-            input=[
-                {"role": "system", "content": EXPERT_PROMPT},
-                {"role": "user", "content": msg}
-            ]
-
-        )
-
-        t=r.output_text.strip()
-
-        # Robust JSON extraction: try code-fence first, then regex, then brace-matching
-
-        import re as _re
-
-        _parsed = None
-
-        # Attempt 1: code-fence extraction
-
-        if "```" in t:
-
-            parts = t.split("```")
-
-            for p in parts:
-
-                p = p.strip()
-
-                if p.startswith("json"): p = p[4:].strip()
-
-                if p.startswith("{"):
-
-                    try: _parsed = json.loads(p[:p.rfind("}") + 1]); break
-
-                    except json.JSONDecodeError: pass
-
-        # Attempt 2: regex for outermost JSON object
-
-        if _parsed is None:
-
-            _m = _re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', t)
-
-            if _m:
-
-                try: _parsed = json.loads(_m.group())
-
-                except json.JSONDecodeError: pass
-
-        # Attempt 3: first { to last } (original fallback)
-
-        if _parsed is None:
-
-            start = t.find("{"); end = t.rfind("}") + 1
-
-            if start >= 0 and end > start:
-
-                try: _parsed = json.loads(t[start:end])
-
-                except json.JSONDecodeError: pass
-
-        if _parsed is None:
-
-            log.error(f"[AI] {signal['pair']}: could not parse JSON from response: {t[:200]}")
-
-            return {"error": "AI response was not valid JSON"}
-
-        result = _parsed
         
         # Try structured outputs first (guaranteed valid JSON)
         if CONFIG.get("AI_STRUCTURED_OUTPUTS", True):
@@ -6490,6 +6423,7 @@ def _compute_naked_analysis(sig: dict):
         if not atr or atr <= 0:
             log.warning(f"[NAKED-AI] {pair_obj.get('display')}: Failed ATR calc - series={atr_series}, using fallback ATR")
             current_price = float(sig.get("price") or h1[-1]["close"])
+
             _atr_pct = {"forex": 0.002, "crypto": 0.02, "commodity": 0.008,
                         "stock": 0.008, "index": 0.006}
             atr = current_price * _atr_pct.get(pair_obj.get("type", ""), 0.01)
