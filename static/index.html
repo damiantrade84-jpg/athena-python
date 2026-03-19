@@ -1289,7 +1289,10 @@ async function runNakedGlobalScan() {
     var data=await resp.json();
     if(!data.success) throw new Error(data.error||'Scan failed');
 
-    var tradeSignals=data.signals||[];
+    var tradeSignals=(data.signals||[]).map(function(s){
+      if (!s.is_naked) s.is_naked = true;
+      return s;
+    });
     allSignals=tradeSignals;
     
     var dataStats = {
@@ -1369,6 +1372,7 @@ function buildCard(s,idx) {
   var fillCls=pct<42?'conf-fill-low':pct<67?'conf-fill-medium':'conf-fill-high';
   var confCol=pct<42?'#f59e0b':pct<67?'#00d4ff':'#00e676';
   var sid=(s.symbol||'').replace(/[\/=^.]/g,'_');
+  var isNaked = !!(s.is_naked || s.naked_data);
   var iconLabel=(s.display||s.pair||s.symbol||'??').split('/')[0].slice(0,3);
   var tier=s.signalTier||'trade';
   var tierBadge=tier==='watchlist'
@@ -1391,7 +1395,7 @@ function buildCard(s,idx) {
     return '<div class="screen-group"><div class="screen-label">'+label+'</div><div class="votes-row">'+pills+'</div></div>';
   }
 
-  var votesHtml=s.is_naked 
+  var votesHtml=isNaked 
     ? '<div style="margin:8px 0;padding:8px 10px;background:rgba(0,230,118,0.1);border:1px solid rgba(0,230,118,0.2);border-radius:6px;color:#00e676;font-size:11px;font-family:monospace;text-align:center;letter-spacing:1px;font-weight:bold;">🌍 PURE NAKED STRUCTURE ENTRY</div>' 
     : voteHtml(screen1keys,'Screen 1 | D1 Tide')+voteHtml(screen2keys,'Screen 2 | H4 Wave')+voteHtml(screen3keys,'Screen 3 | H1 Ripple');
 
@@ -1421,7 +1425,7 @@ function buildCard(s,idx) {
 
   // AI Section
   var aiSection;
-  if (s.is_naked) {
+  if (isNaked) {
     aiSection='<div class="ai-panel" id="ai-'+sid+'">'+
       '<div class="ai-header" onclick="toggleAI(\''+sid+'\')">'+
         '<span class="ai-label"><span class="ai-dot"></span> Cross-Engine AI Review</span>'+
