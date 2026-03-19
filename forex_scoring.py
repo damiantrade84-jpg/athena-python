@@ -45,8 +45,8 @@ class ForexScoreResult:
 # ─── Session windows (UTC hours, inclusive) ─────────────────────────────────
 
 _ASIAN_OPEN   = (0,  8)   # 00:00–08:00 UTC  (Tokyo/Sydney)
-_LONDON_OPEN  = (7, 11)   # 07:00–11:00 UTC
-_NY_OPEN      = (12, 16)  # 12:00–16:00 UTC
+_LONDON_OPEN  = (7, 16)   # 07:00–17:00 UTC  (full London session, BST)
+_NY_OPEN      = (12, 21)  # 12:00–21:00 UTC  (full NY session: 08:00–17:00 ET)
 
 
 _ASIAN_SESSION_PAIRS = {"USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY", "NZD/JPY",
