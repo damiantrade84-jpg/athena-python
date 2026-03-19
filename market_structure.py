@@ -332,13 +332,14 @@ class NakedEngine:
             "liquidity_sweep": sequence_data.get("liquidity_sweep", False)
         }
 
-    def calculate_confidence(self, res: dict, current_price: float, direction: str) -> dict:
+    def calculate_confidence(self, res: dict, current_price: float, direction: str, learning_ctx: dict = None) -> dict:
         """
-        Engine B confidence score out of 3.0 + catalyst bonus.
+        Engine B confidence score out of 3.0 + catalyst bonus + ai adjustment.
         Structure points: up to 1.0 (swing sequence alignment) — MANDATORY gatekeeper
         RR points: up to 1.0 (based on actual risk:reward)
         Room points: up to 1.0 (space before hitting opposing zone)
         Catalyst bonus: up to 0.8 (liquidity sweep + FVG overlap)
+        AI Adjustment: up to +0.2 or -0.3 based on Pillar 5 empirical stats.
 
         If structure is not aligned (no HH_HL or LH_LL), Room and RR are
         multiplied by 0.3 so the max possible score without structure is
@@ -399,8 +400,19 @@ class NakedEngine:
         if res.get("fvg_overlap"):
             catalyst_bonus += 0.3
 
-        total_score = round(struct_score + room_score + rr_score + catalyst_bonus, 2)
-        max_possible = 3.0 + 0.8  # 3.0 base + 0.8 catalyst
+        # ── Pillar 5: AI Statistical Feedback Loop ──
+        ai_adjustment = 0.0
+        if learning_ctx and isinstance(learning_ctx, dict):
+            p_stats = learning_ctx.get("pair_stats")
+            if p_stats and p_stats.get("total_trades", 0) >= 4:
+                wr = p_stats.get("win_rate", 0.0)
+                if wr < 0.40:
+                    ai_adjustment = -0.3  # Penalise low probability pairs
+                elif wr >= 0.65:
+                    ai_adjustment = 0.2   # Boost high probability pairs
+
+        total_score = round(max(0.0, struct_score + room_score + rr_score + catalyst_bonus + ai_adjustment), 2)
+        max_possible = 3.0 + 0.8 + 0.2  # 3.0 base + 0.8 catalyst + 0.2 ai
         pct = min(100, int((total_score / max_possible) * 100))
 
         return {
@@ -409,7 +421,8 @@ class NakedEngine:
             "struct_points": round(struct_score, 2),
             "rr_points": round(rr_score, 2),
             "room_points": round(room_score, 2),
-            "catalyst_bonus": round(catalyst_bonus, 2)
+            "catalyst_bonus": round(catalyst_bonus, 2),
+            "ai_adjustment": round(ai_adjustment, 2)
         }
 
     def check_macro_correlation(self, asset_close_series: list, dxy_close_series: list, direction: str) -> bool:
@@ -442,13 +455,13 @@ class NakedEngine:
         return True # Clear
 
     def simulate_trade(self, d1_candles, h4_candles, h1_candles, current_price, 
-                       direction, atr, regime_label="RANGING", confidence_threshold=1.8):
+                       direction, atr, regime_label="RANGING", confidence_threshold=1.8, learning_ctx=None):
         """Backtest-friendly wrapper that returns entry/exit signals.
         Returns dict compatible with existing backtest reporting."""
         result = self.analyze_structure(d1_candles, h4_candles, h1_candles, 
                                         current_price, direction, atr, regime_label)
         
-        confidence = self.calculate_confidence(result, current_price, direction)
+        confidence = self.calculate_confidence(result, current_price, direction, learning_ctx)
         
         if confidence["score"] < confidence_threshold:
             return None  # No trade signal
@@ -462,7 +475,8 @@ class NakedEngine:
             "confidence_pct": confidence["pct"],
             "fvg_overlap": result.get("fvg_overlap", False),
             "liquidity_sweep": result.get("liquidity_sweep", False),
-            "structural_verdict": result["structural_verdict"]
+            "structural_verdict": result["structural_verdict"],
+            "ai_adjustment": confidence.get("ai_adjustment", 0.0)
         }
 
 # Singleton instance

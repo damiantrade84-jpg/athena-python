@@ -333,38 +333,11 @@ def _fetch_eodhd_live_prices(pairs: list) -> None:
             log.warning(f"[PRICE-POLL] EODHD batch {i//15+1} error: {_e}")
 
 
-def _fetch_binance_live_prices(pairs):
-    """Batch-fetch Binance spot prices for non-WS crypto pairs; write into _live_prices."""
-    import requests as _req, json as _json
-    if not pairs:
-        return
-    sym_map = {p["symbol"]: p["display"] for p in pairs}
-    try:
-        resp = _req.get(
-            "https://api.binance.com/api/v3/ticker/price",
-            params={"symbols": _json.dumps(list(sym_map))},
-            timeout=8
-        )
-        resp.raise_for_status()
-        updated = 0
-        for row in resp.json():
-            disp = sym_map.get(row["symbol"])
-            px   = float(row["price"])
-            if disp and px:
-                with _live_prices_lock:
-                    _live_prices[disp] = {"price": px, "ts": time.time()}
-                updated += 1
-        log.debug(f"[PRICE-POLL] Binance REST: updated {updated}/{len(sym_map)} crypto pairs")
-    except Exception as _e:
-        log.debug(f"[PRICE-POLL] Binance REST error: {_e}")
-
-
 def _run_eodhd_price_poller():
-    """Background daemon thread: poll EODHD + Binance REST prices for non-WS pairs every 60s."""
-    log.info(f"[PRICE-POLL] Started — {len(_NON_WS_EODHD)} EODHD + {len(_NON_WS_CRYPTO)} Binance non-WS pairs (60s interval)")
+    """Background daemon thread: poll EODHD REST prices for non-WS pairs every 60s."""
+    log.info(f"[PRICE-POLL] Started — {len(_NON_WS_EODHD)} EODHD non-WS pairs (60s interval)")
     while True:
         _fetch_eodhd_live_prices(_NON_WS_EODHD)
-        _fetch_binance_live_prices(_NON_WS_CRYPTO)
         # Reset first-run flag after first cycle
         global _PRICE_POLL_FIRST_RUN
         _PRICE_POLL_FIRST_RUN = False
@@ -408,7 +381,6 @@ class EODHDWebSocketManager:
             sym = p.get("symbol", "")
 
             if ptype == "crypto":
-
                 base = disp.split("/")[0] if "/" in disp else disp.replace("USDT", "")
 
                 ws_t = f"{base}-USD"
@@ -3594,8 +3566,31 @@ def _build_signal_message(signal: dict, news_ctx: dict | None,
         f"{signal.get('h4', {}).get('snap', {}).get('adxLabel', '?')})",
 
     ]
-
-
+    # === ENGINE B (NAKED MARKET STRUCTURE) ===
+    eng_b = signal.get("engine_b")
+    if eng_b:
+        lines.append("")
+        lines.append("=== ENGINE B (NAKED MARKET STRUCTURE) ===")
+        lines.append(f"  Structural Verdict: {eng_b.get('structural_verdict')}")
+        lines.append(f"  Current Swing Seq: {eng_b.get('current_swing_sequence')}")
+        lines.append(f"  Macro Swing Seq: {eng_b.get('macro_swing_sequence')}")
+        
+        rz = eng_b.get("nearest_resistance_zone")
+        if rz: lines.append(f"  Nearest Res Zone: {rz.get('lower', 0):.4f} - {rz.get('upper', 0):.4f}")
+        
+        sz = eng_b.get("nearest_support_zone")
+        if sz: lines.append(f"  Nearest Sup Zone: {sz.get('lower', 0):.4f} - {sz.get('upper', 0):.4f}")
+        
+        lines.append(f"  Distance to Res: {eng_b.get('distance_to_res', 0):.2f}%")
+        lines.append(f"  Distance to Sup: {eng_b.get('distance_to_sup', 0):.2f}%")
+        lines.append(f"  Room to Move Bonus: {eng_b.get('room_to_move_bonus', 0)}")
+        lines.append(f"  Catalyst Bonus: {eng_b.get('catalyst_bonus', 0)}")
+        lines.append(f"  AI Stats Adjustment: {eng_b.get('ai_adjustment', 0):.2f}")
+        lines.append(f"  Engine B Final Score: {eng_b.get('score', 0):.2f} / {eng_b.get('max_possible', 3.0):.2f} ({eng_b.get('score_pct', 0):.1f}%)")
+        lines.append(f"  Engine B Actionable: {'YES' if eng_b.get('is_actionable') else 'NO'}")
+        lines.append(f"  Engine B Rec SL: {eng_b.get('recommended_stop_loss')}")
+        lines.append(f"  Engine B Rec TP: {eng_b.get('recommended_take_profit')}")
+    
 
     # === TECHNICALS ===
     votes = signal.get("votes", {})
@@ -6233,6 +6228,17 @@ def api_naked_analysis():
         from market_structure import NakedEngine
         engine = NakedEngine()
         res = engine.analyze_structure(d1, h4, h1, current_price, direction, atr)
+        
+        # Pillar 5: Statistical Feedback Loop
+        try:
+            from ai_learning import get_ai_learning_context
+            learning_ctx = get_ai_learning_context(pair_obj, pair_obj.get("type", "crypto"), _AUDIT_DB)
+        except Exception as e:
+            log.warning(f"Failed to fetch AI learning context for Naked Analysis: {e}")
+            learning_ctx = None
+            
+        conf = engine.calculate_confidence(res, current_price, direction, learning_ctx)
+        res.update(conf)
         
         # Include current price for the UI rendering
         res["current_price"] = current_price

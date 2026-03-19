@@ -1657,7 +1657,8 @@ async function runNakedScan(symbol) {
 
     var out = 'NAKED ENGINE STRUCTURAL VERDICT: ' + data.structural_verdict + '\n';
     out += 'CURRENT PRICE: ' + (data.current_price ? data.current_price.toFixed(4) : '?') + '\n';
-    out += 'SWING SEQUENCE: ' + data.current_swing_sequence + '\n\n';
+    out += 'SWING SEQUENCE: ' + data.current_swing_sequence + '\n';
+    out += 'H4 MACRO TREND: ' + data.macro_swing_sequence + '\n\n';
     
     if (data.nearest_resistance_zone) {
        out += 'RESISTANCE ZONE: ' + data.nearest_resistance_zone.lower.toFixed(4) + ' - ' + data.nearest_resistance_zone.upper.toFixed(4) + '\n';
@@ -1671,6 +1672,10 @@ async function runNakedScan(symbol) {
        out += 'SUPPORT ZONE: None nearby\n';
     }
     
+    out += '\nCATALYSTS: ' + (data.catalyst_bonus ? '+' + data.catalyst_bonus : 'None') + '\n';
+    out += 'AI ADJUSTMENT: ' + (data.ai_adjustment ? data.ai_adjustment.toFixed(2) : '0.00') + '\n';
+    out += 'SCORE: ' + (data.score ? data.score.toFixed(2) : '0') + '/' + (data.max_possible ? data.max_possible.toFixed(2) : '3.0') + '\n';
+    
     out += '\nEngine B SL: ' + (data.recommended_stop_loss ? data.recommended_stop_loss.toFixed(4) : 'N/A') + '\n';
     out += 'Engine B TP: ' + (data.recommended_take_profit ? data.recommended_take_profit.toFixed(4) : 'N/A') + '\n\n';
     
@@ -1678,7 +1683,9 @@ async function runNakedScan(symbol) {
     var htmlContent = out.replace(/\n/g, '<br>');
     
     var execBtnHTML = '<button class="exec-btn force" style="margin-top:8px;width:100%" id="qexecbtn-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'])" '+exeDisabled+'>⚡ QUICK SCALP EXECUTE (Uses Engine B SL/TP)</button>';
-    if(resDiv) resDiv.innerHTML = htmlContent + execBtnHTML;
+    var aiBtnHTML = '<button class="exec-btn" style="margin-top:8px;width:100%;background-color:var(--accent);color:#0a0e17" id="abtn-naked-'+sid+'" onclick="analyzeNakedSignal(\''+symbol+'\')">🤖 ANALYZE ENGINE B</button>';
+    
+    if(resDiv) resDiv.innerHTML = htmlContent + execBtnHTML + aiBtnHTML;
     
     if(btn){btn.disabled=false;btn.textContent='👁 RE-RUN SCALP';}
     showToast('Naked Scan complete for ' + symbol);
@@ -1730,13 +1737,18 @@ async function runCompare(symbol) {
 
     var html = '<div style="font-weight:bold;margin-bottom:8px;font-size:12px;color:'+verdictColor+'">'+verdictText+'</div>';
 
+    var macroSeq = data.macro_swing_sequence || '';
+    var isMacroAligned = (seq === macroSeq && seq !== 'RANGE');
+    var macroAlignText = isMacroAligned ? '✅ Aligned ('+macroSeq+')' : '❌ Conflict ('+macroSeq+')';
+
     html += '<table style="width:100%;text-align:left;border-collapse:collapse;margin-bottom:8px;font-size:11px">';
     html += '<tr><th style="padding:4px;border-bottom:1px solid #2a3b4d">Metric</th><th style="padding:4px;border-bottom:1px solid #2a3b4d;color:#00d4ff">Engine A</th><th style="padding:4px;border-bottom:1px solid #2a3b4d;color:#f59e0b">Engine B</th></tr>';
     html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Direction</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+sig.direction+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+seq+'</td></tr>';
     html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">BOS Confirmed</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">-</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(bos?'✅ Yes':'❌ No')+'</td></tr>';
+    html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Macro Align</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">-</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+macroAlignText+'</td></tr>';
     html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Stop Loss</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(sig.sl?sig.sl.toFixed(4):'-')+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(data.recommended_stop_loss?data.recommended_stop_loss.toFixed(4):'-')+'</td></tr>';
     html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Take Profit</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(sig.tp1?sig.tp1.toFixed(4):'-')+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(data.recommended_take_profit?data.recommended_take_profit.toFixed(4):'-')+'</td></tr>';
-    html += '<tr><td style="padding:4px">Confluence</td><td style="padding:4px">'+sig.confluenceScore+'/'+( sig.maxScore||3)+'</td><td style="padding:4px">'+(data.nearest_resistance_zone?'Res: '+data.nearest_resistance_zone.lower.toFixed(4):'No zone')+'</td></tr>';
+    html += '<tr><td style="padding:4px">Confluence</td><td style="padding:4px">'+sig.confluenceScore+'/'+(sig.maxScore||3)+'</td><td style="padding:4px">AI Adj: '+(data.ai_adjustment ? data.ai_adjustment.toFixed(2) : '0.00')+'</td></tr>';
     html += '</table>';
 
     var execBtnHTML = '<button class="exec-btn force" style="margin-top:4px;width:100%" id="qexecbtn-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'])" '+exeDisabled+'>⚡ QUICK SCALP EXECUTE (Uses Engine B SL/TP)</button>';
