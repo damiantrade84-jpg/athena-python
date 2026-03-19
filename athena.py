@@ -4105,14 +4105,14 @@ def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto",
             _pct = (_sc / _max * 100) if _max > 0 else 0
 
             style_pref = "swing" if _pct >= 75 else "intraday" if _pct >= 50 else "scalp"
-
+@@
         msg = _build_signal_message(signal, news_ctx, style_pref, style_labels,
 
                                     portfolio_heat=portfolio_heat, drawdown_pct=drawdown_pct,
 
                                     learning_ctx=learning_ctx)
 
-
+        result = None
         
         # Try structured outputs first (guaranteed valid JSON)
         if CONFIG.get("AI_STRUCTURED_OUTPUTS", True):
@@ -6423,7 +6423,6 @@ def _compute_naked_analysis(sig: dict):
         if not atr or atr <= 0:
             log.warning(f"[NAKED-AI] {pair_obj.get('display')}: Failed ATR calc - series={atr_series}, using fallback ATR")
             current_price = float(sig.get("price") or h1[-1]["close"])
-
             _atr_pct = {"forex": 0.002, "crypto": 0.02, "commodity": 0.008,
                         "stock": 0.008, "index": 0.006}
             atr = current_price * _atr_pct.get(pair_obj.get("type", ""), 0.01)

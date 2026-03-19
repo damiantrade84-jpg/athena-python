@@ -132,7 +132,8 @@ def build_engine_b_signal_message(
         # Recent failures
         recent_fails = learning_ctx.get("recent_failures", [])
         if recent_fails:
-
+            fail_strs = [f"{f.get('pair','?')} {f.get('grade','?')} {f.get('r',0):+.1f}R" if isinstance(f, dict) else str(f) for f in recent_fails[:3]]
+            lines.append(f"Recent failures: {', '.join(fail_strs)}")
     
     return "\n".join(lines)
 
@@ -175,7 +176,64 @@ Focus on: swing structure alignment, BOS confirmation, liquidity sweeps, FVG ove
 Output strict JSON: {"grade":"A+","edgeProbability":75,"riskLevel":"MEDIUM","verdict":"concise analysis"}
 Grade scale: A+ (elite), A (strong), B (acceptable), C (marginal), D/F (reject)."""
         
-<
+        parsed = None
+        
+        # Try structured outputs first (guaranteed valid JSON)
+        try:
+            from ai_schemas import EngineBResponse
+            completion = client.beta.chat.completions.parse(
+                model=xai_model,
+                max_tokens=800,
+                messages=[
+                    {"role": "system", "content": expert_prompt},
+                    {"role": "user", "content": message}
+                ],
+                response_format=EngineBResponse,
+            )
+            if completion.choices[0].message.parsed:
+                parsed = completion.choices[0].message.parsed.model_dump()
+                log.debug(f"[ENGINE_B_AI] {pair}: structured output success")
+        except Exception as _so_err:
+            log.debug(f"[ENGINE_B_AI] {pair}: structured output failed ({_so_err}), using fallback")
+        
+        # Fallback to Responses API + manual parsing
+        if parsed is None:
+            response = client.responses.create(
+                model=xai_model,
+                max_output_tokens=800,
+                input=[
+                    {"role": "system", "content": expert_prompt},
+                    {"role": "user", "content": message}
+                ]
+            )
+            
+            text = response.output_text.strip()
+            import re
+            import json
+            
+            # Try code fence
+            if "```" in text:
+                for p in text.split("```"):
+                    p = p.strip()
+                    if p.startswith("json"): p = p[4:].strip()
+                    if p.startswith("{"):
+                        try: parsed = json.loads(p[:p.rfind("}") + 1]); break
+                        except json.JSONDecodeError: pass
+            
+            # Try regex
+            if parsed is None:
+                match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text)
+                if match:
+                    try: parsed = json.loads(match.group())
+                    except json.JSONDecodeError: pass
+            
+            # Fallback to brace matching
+            if parsed is None:
+                start = text.find("{")
+                end = text.rfind("}") + 1
+                if start >= 0 and end > start:
+                    try: parsed = json.loads(text[start:end])
+                    except json.JSONDecodeError: pass
         
         if parsed is None:
             log.error(f"[ENGINE_B_AI] {pair}: Failed to parse JSON from AI response")
