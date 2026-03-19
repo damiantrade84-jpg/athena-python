@@ -418,6 +418,7 @@ class NakedEngine:
         return {
             "score": total_score,
             "pct": pct,
+            "max_possible": round(max_possible, 2),
             "struct_points": round(struct_score, 2),
             "rr_points": round(rr_score, 2),
             "room_points": round(room_score, 2),
