@@ -16,6 +16,7 @@ def build_engine_b_signal_message(
     structure_result: dict,
     confidence_result: dict,
     learning_ctx: Optional[dict] = None,
+    engine_a_ctx: Optional[dict] = None,
 ) -> str:
     """
     Build AI prompt message for Engine B structural signals.
@@ -28,12 +29,33 @@ def build_engine_b_signal_message(
         structure_result: Output from NakedEngine.analyze_structure()
         confidence_result: Output from NakedEngine.calculate_confidence()
         learning_ctx: AI learning context from trade outcomes
+        engine_a_ctx: Optional Engine A signal dict for cross-engine alignment check
         
     Returns:
         Formatted message string for AI analysis
     """
     lines = []
-    
+
+    # === ENGINE A CROSS-CHECK (only when compare mode) ===
+    if engine_a_ctx and isinstance(engine_a_ctx, dict):
+        a_dir = engine_a_ctx.get("direction", "?")
+        a_score = engine_a_ctx.get("confluenceScore") or engine_a_ctx.get("score", 0)
+        a_max = engine_a_ctx.get("maxScore") or engine_a_ctx.get("max_score", 3.0)
+        a_pct = engine_a_ctx.get("confluencePct") or round((a_score / a_max * 100) if a_max else 0)
+        a_trend = engine_a_ctx.get("trendState") or engine_a_ctx.get("trend_state", "?")
+        a_sl = engine_a_ctx.get("sl")
+        a_tp = engine_a_ctx.get("tp1")
+        a_entry = engine_a_ctx.get("price", current_price)
+        agree = a_dir == direction
+        lines.append("=== ENGINE A CROSS-CHECK ===")
+        lines.append(f"Engine A Direction: {a_dir} | Agreement: {'YES ✓' if agree else 'NO — CONFLICT ✗'}")
+        lines.append(f"Engine A Confluence: {a_score:.2f} / {a_max} ({a_pct}%)")
+        lines.append(f"Engine A Trend State: {a_trend}")
+        lines.append(f"Engine A Entry: {a_entry} | SL: {a_sl} | TP1: {a_tp}")
+        if not agree:
+            lines.append("WARNING: Engines disagree on direction — higher risk, comment explicitly.")
+        lines.append("")
+
     # === SIGNAL ===
     conf_score = confidence_result.get("score", 0)
     max_score = confidence_result.get("max_possible", 3.0)
@@ -147,6 +169,7 @@ def get_engine_b_ai_verdict(
     learning_ctx: Optional[dict] = None,
     xai_api_key: str = None,
     xai_model: str = "grok-beta",
+    engine_a_ctx: Optional[dict] = None,
 ) -> dict:
     """
     Get AI analysis for Engine B signal using xAI Grok API.
@@ -168,13 +191,22 @@ def get_engine_b_ai_verdict(
         client = openai.OpenAI(api_key=xai_api_key, base_url="https://api.x.ai/v1")
         
         message = build_engine_b_signal_message(
-            pair, direction, current_price, structure_result, confidence_result, learning_ctx
+            pair, direction, current_price, structure_result, confidence_result, learning_ctx,
+            engine_a_ctx=engine_a_ctx
         )
-        
-        expert_prompt = """You are Marcus Reid, veteran SMC/ICT structural trader analyzing naked price action setups.
-Focus on: swing structure alignment, BOS confirmation, liquidity sweeps, FVG overlap, zone quality, and risk:reward.
-Output strict JSON: {"grade":"A+","edgeProbability":75,"riskLevel":"MEDIUM","verdict":"concise analysis"}
-Grade scale: A+ (elite), A (strong), B (acceptable), C (marginal), D/F (reject)."""
+
+        cross_engine_note = (
+            " When Engine A context is present, explicitly comment on whether both engines agree "
+            "and how that affects conviction."
+        ) if engine_a_ctx else ""
+
+        expert_prompt = (
+            "You are Marcus Reid, veteran SMC/ICT structural trader analyzing naked price action setups."
+            " Focus on: swing structure alignment, BOS confirmation, liquidity sweeps, FVG overlap, zone quality, and risk:reward."
+            + cross_engine_note +
+            ' Output strict JSON: {"grade":"A+","edgeProbability":75,"riskLevel":"MEDIUM","verdict":"concise analysis"}'
+            " Grade scale: A+ (elite), A (strong), B (acceptable), C (marginal), D/F (reject)."
+        )
         
         parsed = None
         

@@ -6393,7 +6393,7 @@ def _naked_scan_style_profile(style: str | None) -> tuple[str, dict]:
 
 
 
-def _compute_naked_analysis(sig: dict):
+def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None):
     if not isinstance(sig, dict):
         return None, None, "Invalid signal"
 
@@ -6464,7 +6464,8 @@ def _compute_naked_analysis(sig: dict):
                 confidence_result=conf,
                 learning_ctx=learning_ctx,
                 xai_api_key=CONFIG.get("XAI_API_KEY"),
-                xai_model=CONFIG.get("XAI_MODEL", "grok-beta")
+                xai_model=CONFIG.get("XAI_MODEL", "grok-beta"),
+                engine_a_ctx=engine_a_ctx,
             )
             if "error" not in ai_verdict:
                 res["ai_analysis"] = ai_verdict
@@ -6523,7 +6524,7 @@ def api_compare_engines():
             "direction": compare_direction,
             "price": engine_a.get("price", sig.get("price")),
         })
-        engine_b, _pair_obj, err = _compute_naked_analysis(engine_b_seed)
+        engine_b, _pair_obj, err = _compute_naked_analysis(engine_b_seed, engine_a_ctx=engine_a)
         if err:
             return jsonify({"error": err}), 422
 

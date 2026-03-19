@@ -1801,11 +1801,8 @@ async function runCompare(symbol) {
     html += '</table>';
 
     if(summary.aiReviewIncluded && engineB.ai_analysis) {
-      html += '<div style="margin:8px 0 10px;padding:10px;border:1px solid rgba(245,158,11,0.25);border-radius:8px;background:rgba(245,158,11,0.08);font-size:11px">' +
-        '<div style="font-weight:700;color:#f59e0b;margin-bottom:4px">Engine B AI Review Included</div>' +
-        '<div><strong>Grade:</strong> '+(engineB.ai_analysis.grade||'-')+' | <strong>Edge:</strong> '+(engineB.ai_analysis.edgeProbability||'-')+'% | <strong>Risk:</strong> '+(engineB.ai_analysis.riskLevel||'-')+'</div>' +
-        '<div style="margin-top:4px;color:var(--text-secondary)">'+(engineB.ai_analysis.verdict||'')+'</div>' +
-      '</div>';
+      html += '<div style="margin:8px 0 4px;font-size:10px;font-weight:700;color:#f59e0b;letter-spacing:1px;font-family:monospace">⚖️ CROSS-ENGINE AI REVIEW (A+B aware)</div>';
+      html += buildAIContent(engineB.ai_analysis, symbol);
     }
 
     var execBtnHTML = '<button class="exec-btn force" style="margin-top:4px;width:100%" id="qexecbtn-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'])" '+exeDisabled+'>⚡ QUICK SCALP EXECUTE (Uses Engine B SL/TP)</button>';
