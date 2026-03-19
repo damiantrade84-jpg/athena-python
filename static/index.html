@@ -620,6 +620,28 @@ function fmtTickerPrice(p) {
   return p.toFixed(5);
 }
 
+var _latestPrices = {};
+
+function getSignalLivePrice(sig) {
+  if (!sig) return null;
+  var disp = sig.display || sig.pair || '';
+  var live = ((_latestPrices[disp] || {}).price);
+  if (live != null && !isNaN(live)) return parseFloat(live);
+  if (sig.livePrice != null && !isNaN(sig.livePrice)) return parseFloat(sig.livePrice);
+  if (sig.price != null && !isNaN(sig.price)) return parseFloat(sig.price);
+  return null;
+}
+
+function buildLiveSignalPayload(sig) {
+  var payload = Object.assign({}, sig || {});
+  var livePrice = getSignalLivePrice(sig);
+  if (livePrice != null && !isNaN(livePrice)) {
+    payload.price = livePrice;
+    payload.livePrice = livePrice;
+  }
+  return payload;
+}
+
 function updateTickerStrip(prices) {
   var strip = document.getElementById('tickerStrip');
   var offline = document.getElementById('tickerOffline');
@@ -678,26 +700,36 @@ function updateTickerStrip(prices) {
 (function pollPrices() {
   fetch('/api/prices').then(function(r){ return r.json(); }).then(function(d) {
     if (d.prices) {
+      _latestPrices = d.prices || {};
       updateTickerStrip(d.prices);
-      // Update live prices on signal cards
       allSignals.forEach(function(s) {
         var disp = s.display || s.pair || '';
         var lp = d.prices[disp];
         if (!lp || !lp.price) return;
+        if (s.scanPrice == null && s.price != null && !isNaN(s.price)) s.scanPrice = parseFloat(s.price);
+        var livePrice = parseFloat(lp.price);
+        if (!(livePrice > 0)) return;
+        s.livePrice = livePrice;
+        s.price = livePrice;
         var sid = (s.symbol||'').replace(/[\/=^.]/g,'_');
         var el = document.getElementById('livep-' + sid);
         var dl = document.getElementById('lived-' + sid);
+        var entryEl = document.getElementById('entryval-' + sid);
+        var execDetailEl = document.getElementById('execdetail-' + sid);
         if (el) {
-          el.textContent = fmtTickerPrice(lp.price);
+          el.textContent = fmtTickerPrice(livePrice);
           var isLong = s.direction === 'LONG';
-          var toEntry = ((lp.price - s.price) / s.price * 100).toFixed(2);
-          var toSL = ((lp.price - s.sl) / s.sl * 100).toFixed(2);
-          var toTP1 = ((s.tp1 - lp.price) / lp.price * 100).toFixed(2);
-          // Color: green if moving toward TP, red if toward SL
-          var favorable = isLong ? lp.price >= s.price : lp.price <= s.price;
+          var baseEntry = (s.scanPrice != null && !isNaN(s.scanPrice)) ? parseFloat(s.scanPrice) : livePrice;
+          var toEntry = baseEntry ? ((livePrice - baseEntry) / baseEntry * 100).toFixed(2) : '0.00';
+          var toSL = s.sl ? ((livePrice - s.sl) / s.sl * 100).toFixed(2) : '-';
+          var toTP1 = livePrice ? ((s.tp1 - livePrice) / livePrice * 100).toFixed(2) : '-';
+          var favorable = isLong ? livePrice >= baseEntry : livePrice <= baseEntry;
           el.style.color = favorable ? 'var(--bull)' : 'var(--bear)';
           if (dl) dl.innerHTML = 'vs Entry: <b style="color:'+(parseFloat(toEntry)>=0?'var(--bull)':'var(--bear)')+'">'+toEntry+'%</b> | to SL: '+toSL+'% | to TP1: '+toTP1+'%';
         }
+        if (entryEl) entryEl.textContent = fmtPrice(livePrice);
+        if (execDetailEl) execDetailEl.textContent = s.display + ' @ ' + fmtPrice(livePrice) + ' | SL: ' + fmtPrice(s.sl) + ' | TP: ' + fmtPrice(s.tp1);
+        if (_chartData[sid] && _chartData[sid].levels) _chartData[sid].levels.entry = livePrice;
       });
     }
   }).catch(function(){});
@@ -1364,7 +1396,17 @@ function buildCard(s,idx) {
 
   // AI Section
   var aiSection;
-  if (s.aiAnalysis) {
+  if (s.is_naked) {
+    aiSection='<div class="ai-panel" id="ai-'+sid+'">'+
+      '<div class="ai-header" onclick="toggleAI(\''+sid+'\')">'+
+        '<span class="ai-label"><span class="ai-dot"></span> Cross-Engine AI Review</span>'+
+        '<span style="font-size:11px;color:var(--muted)">A+B</span>'+
+      '</div>'+
+      '<div class="ai-content" id="aic-'+sid+'">'+
+        '<button class="analyze-btn" id="abtn-compare-'+sid+'" onclick="runCompare(\''+s.symbol+'\')">Run Compare A&B Review</button>'+
+      '</div>'+
+    '</div>';
+  } else if (s.aiAnalysis) {
     aiSection=buildAIContent(s.aiAnalysis,s.symbol);
   } else {
     aiSection='<div class="ai-panel" id="ai-'+sid+'">'+
@@ -1401,7 +1443,7 @@ function buildCard(s,idx) {
       watchReasonHtml+
       warnHtml+
       '<div class="levels-grid">'+
-        '<div class="level-box"><div class="level-label">Entry</div><div class="level-val neutral">'+fmtPrice(s.price)+'</div></div>'+
+        '<div class="level-box"><div class="level-label">Entry</div><div class="level-val neutral" id="entryval-'+sid+'">'+fmtPrice(getSignalLivePrice(s))+'</div></div>'+
         '<div class="level-box"><div class="level-label">Stop Loss</div><div class="level-val bear">'+fmtPrice(s.sl)+'</div></div>'+
         '<div class="level-box"><div class="level-label">TP1 ('+s.rr1+'R)</div><div class="level-val bull">'+fmtPrice(s.tp1)+'</div></div>'+
         '<div class="level-box"><div class="level-label">TP2 ('+s.rr2+'R)</div><div class="level-val bull">'+fmtPrice(s.tp2)+'</div></div>'+
@@ -1439,7 +1481,7 @@ function buildChartSection(s) {
   _chartData[sid] = {
     candles: candles,
     levels: {
-      entry: s.price, sl: s.sl, tp1: s.tp1, dir: s.direction,
+      entry: getSignalLivePrice(s), sl: s.sl, tp1: s.tp1, dir: s.direction,
       ema21: (s.h4&&s.h4.snap) ? s.h4.snap.ema21 : null,
       ema50: (s.h4&&s.h4.snap) ? s.h4.snap.ema50 : null
     }
@@ -1525,18 +1567,20 @@ function toggleChart(sid) {
 
 function buildExecButton(s) {
   if (s.signalTier === 'watchlist' && !window._testMode) return '';
-  var dir = s.direction;
-  var sid = (s.symbol||'').replace(/[\/=^.]/g,'_');
-  var isCrypto = s.type === 'crypto';
-  var disabled = isCrypto ? !window._bybitConnected : !window._mt5Connected;
-  var disTitle = isCrypto ? 'Bybit not connected' : 'MT5 not connected';
-  var via = isCrypto ? ' (Bybit Futures)' : '';
+  var sid=(s.symbol||'').replace(/[\/=^.]/g,'_');
+  var dir=s.direction==='LONG'?'LONG':'SHORT';
+  var isCrypto=s.type==='crypto';
+  var entryPrice = getSignalLivePrice(s);
+  var connected = isCrypto ? window._bybitConnected : window._mt5Connected;
+  var disTitle = isCrypto ? 'Broker Not Connected (Bybit)' : 'Broker Not Connected (MT5)';
+  var disabled = !connected;
+  var via = isCrypto ? ' (Bybit Futures)' : ' (MT5)';
   var isForce = s.signalTier === 'watchlist' && window._testMode;
   var btnClass = isForce ? 'exec-btn force' : 'exec-btn '+dir;
   var label = isForce ? 'FORCE EXECUTE '+dir+via : 'EXECUTE '+dir+via;
   return '<button class="'+btnClass+'" id="execbtn-'+sid+'" onclick="confirmExecute(\''+s.symbol+'\', '+isForce+')" '+(disabled?'disabled title="'+disTitle+'"':'')+'>'+
     label+
-    '<span class="exec-detail">'+s.display+' @ '+fmtPrice(s.price)+' | SL: '+fmtPrice(s.sl)+' | TP: '+fmtPrice(s.tp1)+'</span>'+
+    '<span class="exec-detail" id="execdetail-'+sid+'">'+s.display+' @ '+fmtPrice(entryPrice)+' | SL: '+fmtPrice(s.sl)+' | TP: '+fmtPrice(s.tp1)+'</span>'+
   '</button>';
 }
 
@@ -1605,11 +1649,12 @@ async function analyzeSignal(symbol,auto) {
   var sid=(symbol||'').replace(/[\/=^.]/g,'_');
   var sig=allSignals.find(function(s){return s.symbol===symbol;});
   if(!sig)return;
+  var liveSig = buildLiveSignalPayload(sig);
   var btn=document.getElementById('abtn-'+sid);
   if(btn){btn.disabled=true;btn.textContent='Analyzing...';}
   if(auto){var p=document.getElementById('aic-'+sid);if(p)p.classList.add('open');}
   try {
-    var resp=await fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal:sig,stylePreference:tradeStylePref})});
+    var resp=await fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal:liveSig,stylePreference:tradeStylePref})});
     if(!resp.ok) throw new Error('Server error: HTTP '+resp.status);
     var data=await resp.json();
     if(data.error)throw new Error(data.error);
@@ -1644,7 +1689,7 @@ async function analyzeNakedSignal(symbol, buttonId) {
     var resp=await fetch('/api/naked-analysis',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({signal:sig})
+      body:JSON.stringify({signal:buildLiveSignalPayload(sig)})
     });
     if(!resp.ok) throw new Error('Server error: HTTP '+resp.status);
     var data=await resp.json();
@@ -1674,13 +1719,14 @@ async function quickExecute(symbol, engineBData, buttonId) {
   var sig=allSignals.find(function(s){return s.symbol===symbol;});
   if(!sig) return;
   var btn = document.getElementById(buttonId || ('qexecbtn-'+sid));
+  var execSig = buildLiveSignalPayload(sig);
   if(btn){btn.disabled=true;btn.textContent='Executing...';}
   
   try {
     var resp=await fetch('/api/quick-execute', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({signal:sig, engine_b: engineBData})
+      body:JSON.stringify({signal:execSig, engine_b: engineBData})
     });
     var resData=await resp.json();
     if(!resp.ok || resData.error) throw new Error(resData.error || 'Execution failed');
@@ -1702,6 +1748,7 @@ async function runNakedScan(symbol) {
     sig = window['_nakedSig_'+(symbol||'').replace(/[\/=^.]/g,'_')];
   }
   if(!sig) { showToast('Signal not found for '+symbol, true); return; }
+  var liveSig = buildLiveSignalPayload(sig);
   var btn=document.getElementById('nbtn-'+sid);
   if(btn){btn.disabled=true;btn.textContent='Scanning...';}
   
@@ -1715,7 +1762,7 @@ async function runNakedScan(symbol) {
     var resp=await fetch('/api/naked-analysis', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({signal:sig})
+      body:JSON.stringify({signal:liveSig})
     });
     if(!resp.ok) throw new Error('Server error: HTTP ' + resp.status);
     var data=await resp.json();
@@ -1774,6 +1821,7 @@ async function runCompare(symbol) {
   var sid=(symbol||'').replace(/[\/=^.]/g,'_');
   var sig=allSignals.find(function(s){return s.symbol===symbol;}) || window['_nakedSig_'+sid];
   if(!sig) return;
+  var liveSig = buildLiveSignalPayload(sig);
   var btn=document.getElementById('cbtn-'+sid);
   if(btn){btn.disabled=true;btn.textContent='Comparing...';}
   
@@ -1792,7 +1840,7 @@ async function runCompare(symbol) {
     var resp=await fetch('/api/compare-engines', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({signal:sig, style:tradeStylePref})
+      body:JSON.stringify({signal:liveSig, style:tradeStylePref})
     });
     if(!resp.ok) throw new Error('Server error: HTTP ' + resp.status);
     var data=await resp.json();
@@ -2348,6 +2396,7 @@ async function toggleTestMode() {
 function confirmExecute(symbol, forceMode) {
   var sig = allSignals.find(function(s){ return s.symbol === symbol; });
   if (!sig) return;
+  var execSig = buildLiveSignalPayload(sig);
   var isCrypto = sig.type === 'crypto';
   if (isCrypto && !window._bybitConnected) { showToast('Bybit not connected', true); return; }
   if (!isCrypto && !window._mt5Connected) { showToast('MT5 not connected', true); return; }
@@ -2367,9 +2416,9 @@ function confirmExecute(symbol, forceMode) {
     '<div class="exec-summary">' +
       '<div>Pair: <strong>' + sig.display + '</strong></div>' +
       '<div>Direction: <strong style="color:' + dirColor + '">' + dir + '</strong></div>' +
-      '<div>Entry: <strong>' + fmtPrice(sig.price) + '</strong></div>' +
-      '<div>Stop Loss: <strong style="color:var(--bear)">' + fmtPrice(sig.sl) + '</strong></div>' +
-      '<div>Take Profit: <strong style="color:var(--bull)">' + fmtPrice(sig.tp1) + '</strong></div>' +
+      '<div>Entry: <strong>' + fmtPrice(execSig.price) + '</strong></div>' +
+      '<div>Stop Loss: <strong style="color:var(--bear)">' + fmtPrice(execSig.sl) + '</strong></div>' +
+      '<div>Take Profit: <strong style="color:var(--bull)">' + fmtPrice(execSig.tp1) + '</strong></div>' +
       '<div>SL Risk: <strong>' + (sig.slPct||'?') + '%</strong></div>' +
       '<div>Score: <strong>' + (typeof sig.confluenceScore==='number'?sig.confluenceScore.toFixed(2):sig.confluenceScore) + '/' + (sig.maxScore||3) + '</strong></div>' +
       '<div>Account: <strong>$' + (acct.balance||0).toLocaleString() + '</strong></div>' +
@@ -2389,7 +2438,7 @@ async function doExecute(symbol, btn, forceMode) {
   if (!sig) return;
   btn.disabled = true; btn.textContent = 'SENDING...';
   try {
-    var payload = { signal: sig };
+    var payload = { signal: buildLiveSignalPayload(sig) };
     if (forceMode) payload.force = true;
     var resp = await fetch('/api/execute', {
       method: 'POST',
