@@ -1821,7 +1821,7 @@ async function runCompare(symbol) {
     html += '<tr><td style="padding:4px">Confluence</td><td style="padding:4px">'+(engineA.confluenceScore!=null?engineA.confluenceScore:'-')+'/'+(engineA.maxScore||3)+'</td><td style="padding:4px">'+(engineB.score!=null?engineB.score.toFixed(2):'-')+'/'+(engineB.max_possible||'4.0')+'</td></tr>';
     html += '</table>';
 
-    if(summary.aiReviewIncluded && engineB.ai_analysis) {
+    if(engineB.ai_analysis) {
       html += '<div style="margin:8px 0 4px;font-size:10px;font-weight:700;color:#f59e0b;letter-spacing:1px;font-family:monospace">⚖️ CROSS-ENGINE AI REVIEW (A+B aware)</div>';
       html += buildAIContent(engineB.ai_analysis, symbol);
     }

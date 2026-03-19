@@ -7546,11 +7546,24 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None):
                     f"[NAKED-AI] {pair_obj.get('display')}: AI grade={ai_verdict.get('grade')}"
                 )
             else:
+                err_msg = ai_verdict.get("error", "AI unavailable")
                 log.warning(
-                    f"[NAKED-AI] {pair_obj.get('display')}: AI analysis failed - {ai_verdict.get('error')}"
+                    f"[NAKED-AI] {pair_obj.get('display')}: AI analysis failed - {err_msg}"
                 )
+                res["ai_analysis"] = {
+                    "grade": "N/A",
+                    "edgeProbability": None,
+                    "riskLevel": "UNKNOWN",
+                    "verdict": f"AI review unavailable: {err_msg}",
+                }
         except Exception as e:
             log.warning(f"[NAKED-AI] Failed to get AI verdict: {e}")
+            res["ai_analysis"] = {
+                "grade": "N/A",
+                "edgeProbability": None,
+                "riskLevel": "UNKNOWN",
+                "verdict": f"AI review unavailable: {e}",
+            }
 
         return res, pair_obj, None
     except Exception as e:
