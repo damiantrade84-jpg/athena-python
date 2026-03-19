@@ -4112,7 +4112,7 @@ def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto",
 
                                     learning_ctx=learning_ctx)
 
-        result = None
+
         
         # Try structured outputs first (guaranteed valid JSON)
         if CONFIG.get("AI_STRUCTURED_OUTPUTS", True):
@@ -6313,8 +6313,7 @@ def api_analyze():
         return jsonify(result)
 
     except Exception as e:
-
-        # S2: Sanitise exception â€” don't leak internal paths
+        # S2: Sanitise exception — don't leak internal paths
 
         log.error(f"api_analyze error: {e}")
 
@@ -6322,78 +6321,136 @@ def api_analyze():
 
 
 
-@app.route("/api/naked-analysis", methods=["POST"])
-def api_naked_analysis():
-    d = request.json
-    if not d or "signal" not in d:
-        return jsonify({"error": "Invalid payload"}), 400
-        
-    sig = d["signal"]
-    symbol = sig.get("symbol") or sig.get("pair")
+def _current_btc_bias() -> str:
+    btc_bias = "neutral"
+    try:
+        btc = fetch_candles({"symbol": "BTCUSDT", "source": "binance"}, "D1", CONFIG["D1_CANDLES"])
+        if btc and len(btc) >= 200:
+            s = calc_indicators(btc)["snap"]
+            if s["ema21"] and s["ema50"] and s["ema200"]:
+                if s["ema21"] > s["ema50"] > s["ema200"]:
+                    btc_bias = "bullish"
+                elif s["ema21"] < s["ema50"] < s["ema200"]:
+                    btc_bias = "bearish"
+    except Exception as e:
+        log.debug(f"[BTC-BIAS] single-pair calc failed: {e}")
+    return btc_bias
+
+
+
+def _resolve_pair_from_signal(sig: dict) -> dict | None:
+    symbol = sig.get("symbol") or sig.get("pair") or sig.get("display")
     if not symbol:
-        return jsonify({"error": "Invalid signal"}), 400
-        
-    pair_obj = {"symbol": symbol, "type": sig.get("type", "crypto"), "display": sig.get("display", symbol), "source": CONFIG.get("EXCHANGE_SOURCE", "binance")}
-    direction = sig.get("direction", "LONG")
-    
+        return None
+    pair_obj = next((p for p in ALL_PAIRS if p.get("symbol") == symbol or p.get("display") == symbol), None)
+    if pair_obj:
+        return pair_obj
+    return {
+        "symbol": sig.get("symbol") or sig.get("pair"),
+        "type": sig.get("type", "crypto"),
+        "display": sig.get("display") or sig.get("pair") or symbol,
+        "source": CONFIG.get("EXCHANGE_SOURCE", "binance"),
+    }
+
+
+
+def _naked_scan_style_profile(style: str | None) -> tuple[str, dict]:
+    resolved = _normalize_style(style)
+    if resolved == "auto":
+        resolved = "scalp"
+    profiles = {
+        "scalp": {
+            "min_score": 1.6,
+            "min_room_atr": 0.5,
+            "min_rr": 1.2,
+            "fallback_rr": 1.5,
+            "require_macro_align": False,
+        },
+        "intraday": {
+            "min_score": 1.8,
+            "min_room_atr": 0.9,
+            "min_rr": 1.5,
+            "fallback_rr": 2.0,
+            "require_macro_align": True,
+        },
+        "swing": {
+            "min_score": 2.0,
+            "min_room_atr": 1.2,
+            "min_rr": 2.0,
+            "fallback_rr": 2.5,
+            "require_macro_align": True,
+        },
+    }
+    return resolved, profiles.get(resolved, profiles["scalp"])
+
+
+
+def _compute_naked_analysis(sig: dict):
+    if not isinstance(sig, dict):
+        return None, None, "Invalid signal"
+
+    pair_obj = _resolve_pair_from_signal(sig)
+    if not pair_obj:
+        return None, None, "Invalid signal"
+
+    direction = str(sig.get("direction", "LONG")).upper()
+    if direction not in ("LONG", "SHORT"):
+        direction = "LONG"
+
     try:
         d1 = fetch_candles(pair_obj, "D1", CONFIG.get("D1_CANDLES", 220))
         h4 = fetch_candles(pair_obj, "H4", CONFIG.get("H4_CANDLES", 220))
         h1 = fetch_candles(pair_obj, "H1", CONFIG.get("H1_CANDLES", 220))
-        
+
         if not d1 or not h4 or not h1:
-            return jsonify({"error": "Failed to fetch D1/H4/H1 candles"}), 500
-            
+            return None, pair_obj, "Failed to fetch D1/H4/H1 candles"
+
         d1 = d1[:-1] if len(d1) > 1 else d1
         h4 = h4[:-1] if len(h4) > 1 else h4
         h1 = h1[:-1] if len(h1) > 1 else h1
-        
+
         h4_highs = [float(c["high"]) for c in h4]
         h4_lows = [float(c["low"]) for c in h4]
         h4_closes = [float(c["close"]) for c in h4]
-        
+
         log.info(f"[NAKED-AI] {pair_obj.get('display')}: H4 candles={len(h4)}, sample_high={h4_highs[-1] if h4_highs else 'N/A'}")
-        
+
         atr_series = calc_atr(h4_highs, h4_lows, h4_closes, 14)
         atr = float(atr_series[-1]) if atr_series and atr_series[-1] is not None else 0.0
-        
+
         log.info(f"[NAKED-AI] {pair_obj.get('display')}: ATR series length={len(atr_series) if atr_series else 0}, final_ATR={atr}")
-        
+
         if not atr or atr <= 0:
             log.warning(f"[NAKED-AI] {pair_obj.get('display')}: Failed ATR calc - series={atr_series}, using fallback ATR")
             current_price = float(sig.get("price") or h1[-1]["close"])
-            # Asset-class-aware fallback: typical H4 ATR as % of price
-            # Forex ~0.15-0.3%, Commodity ~0.5-1%, Crypto ~1.5-3%, Stock/Index ~0.5-1%
+
             _atr_pct = {"forex": 0.002, "crypto": 0.02, "commodity": 0.008,
                         "stock": 0.008, "index": 0.006}
             atr = current_price * _atr_pct.get(pair_obj.get("type", ""), 0.01)
             log.info(f"[NAKED-AI] {pair_obj.get('display')}: Using fallback ATR={atr} (type={pair_obj.get('type')})")
-        
+
         current_price = float(sig.get("price") or h1[-1]["close"])
-        
+
         from market_structure import NakedEngine
         engine = NakedEngine()
         res = engine.analyze_structure(d1, h4, h1, current_price, direction, atr)
-        
-        # Pillar 5: Statistical Feedback Loop
+
         try:
             from ai_learning import get_ai_learning_context
-            learning_ctx = get_ai_learning_context(pair_obj.get("display", symbol), pair_obj.get("type", "crypto"), _AUDIT_DB)
+            learning_ctx = get_ai_learning_context(pair_obj.get("display"), pair_obj.get("type", "crypto"), _AUDIT_DB)
         except Exception as e:
             log.warning(f"Failed to fetch AI learning context for Naked Analysis: {e}")
             learning_ctx = None
-            
+
         conf = engine.calculate_confidence(res, current_price, direction, learning_ctx)
         res.update(conf)
-        
-        # Include current price for the UI rendering
         res["current_price"] = current_price
-        
-        # Pillar 6: AI Analysis Integration (Engine A pattern adoption)
+        res["direction"] = direction
+
         try:
             from engine_b_ai import get_engine_b_ai_verdict
             ai_verdict = get_engine_b_ai_verdict(
-                pair=pair_obj.get("display", symbol),
+                pair=pair_obj.get("display"),
                 direction=direction,
                 current_price=current_price,
                 structure_result=res,
@@ -6409,14 +6466,84 @@ def api_naked_analysis():
                 log.warning(f"[NAKED-AI] {pair_obj.get('display')}: AI analysis failed - {ai_verdict.get('error')}")
         except Exception as e:
             log.warning(f"[NAKED-AI] Failed to get AI verdict: {e}")
-        
-        return jsonify(res)
-        
+
+        return res, pair_obj, None
     except Exception as e:
         log.error(f"naked_analysis error: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": "Naked Structure Analysis failed"}), 500
+        return None, pair_obj, "Naked Structure Analysis failed"
+
+
+@app.route("/api/naked-analysis", methods=["POST"])
+def api_naked_analysis():
+    d = request.json
+    if not d or "signal" not in d:
+        return jsonify({"error": "Invalid payload"}), 400
+
+    res, _pair_obj, err = _compute_naked_analysis(d["signal"])
+    if err:
+        return jsonify({"error": err}), 500
+    return jsonify(res)
+
+
+@app.route("/api/compare-engines", methods=["POST"])
+def api_compare_engines():
+    d = request.json or {}
+    sig = d.get("signal")
+    if not isinstance(sig, dict):
+        return jsonify({"error": "Invalid payload"}), 400
+
+    pair_obj = _resolve_pair_from_signal(sig)
+    if not pair_obj:
+        return jsonify({"error": "Invalid signal"}), 400
+
+    requested_style = d.get("style") or sig.get("style") or "auto"
+    engine_a_style = _resolve_scan_style(_normalize_style(requested_style), pair_obj)
+    engine_b_style, engine_b_profile = _naked_scan_style_profile(requested_style)
+
+    try:
+        btc_bias = _current_btc_bias() if pair_obj.get("type") == "crypto" else "neutral"
+        engine_a = analyze_pair(pair_obj, btc_bias, style=engine_a_style)
+        if not engine_a:
+            return jsonify({"error": "Engine A analysis unavailable for this pair"}), 422
+
+        compare_direction = sig.get("direction") if sig.get("is_naked") else engine_a.get("direction")
+        engine_b_seed = dict(sig)
+        engine_b_seed.update({
+            "symbol": pair_obj.get("symbol"),
+            "pair": pair_obj.get("display"),
+            "display": pair_obj.get("display"),
+            "type": pair_obj.get("type"),
+            "direction": compare_direction,
+            "price": engine_a.get("price", sig.get("price")),
+        })
+        engine_b, _pair_obj, err = _compute_naked_analysis(engine_b_seed)
+        if err:
+            return jsonify({"error": err}), 422
+
+        engine_b["style"] = engine_b_style
+
+        b_seq = engine_b.get("current_swing_sequence", "")
+        b_macro = engine_b.get("macro_swing_sequence", "")
+        a_dir = engine_a.get("direction")
+        b_dir = engine_b.get("direction")
+        structure_aligned = ((a_dir == "LONG" and b_seq == "HH_HL") or
+                             (a_dir == "SHORT" and b_seq == "LH_LL"))
+        macro_aligned = ((a_dir == "LONG" and b_macro == "HH_HL") or
+                         (a_dir == "SHORT" and b_macro == "LH_LL"))
+        summary = {
+            "sameDirection": a_dir == b_dir,
+            "structureAligned": structure_aligned,
+            "macroAligned": macro_aligned,
+            "aiReviewIncluded": bool(engine_b.get("ai_analysis")),
+            "engineAStyle": engine_a_style,
+            "engineBStyle": engine_b_style,
+            "engineBMinScore": engine_b_profile["min_score"],
+            "verdict": "ALIGNED" if a_dir == b_dir and structure_aligned else "CONFLICT",
+        }
+        return jsonify({"engineA": engine_a, "engineB": engine_b, "summary": summary})
+    except Exception as e:
+        log.error(f"compare_engines error: {e}")
+        return jsonify({"error": "Engine comparison failed"}), 500
 
 @app.route("/api/quick-execute", methods=["POST"])
 def api_quick_execute():
@@ -6496,7 +6623,8 @@ def api_quick_execute():
             if "structural_verdict" in engine_b:
                 bos = engine_b.get("bos_data", {})
                 sweep = engine_b.get("sweep_data", {})
-                seq = engine_b.get("sequence_data", {}).get("state", "RANGING")
+                seq = engine_b.get("current_swing_sequence", "RANGING")
+                macro_seq = engine_b.get("macro_swing_sequence", "RANGING")
                 
                 _b_factors["Naked_BOS_Bull"] = 1.0 if bos.get("bos_bull") else 0.0
                 _b_factors["Naked_BOS_Bear"] = 1.0 if bos.get("bos_bear") else 0.0
@@ -6518,7 +6646,7 @@ def api_quick_execute():
                         "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json) "
                         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (datetime.now(timezone.utc).isoformat(), pair_name, sig.get("confluenceScore", 0),
-                         sig.get("direction"), engine_b.get("structural_verdict", {}).get("sequence_data", {}).get("state", "RANGING"), "EXECUTED",
+                         sig.get("direction"), engine_b.get("current_swing_sequence", "RANGING"), "EXECUTED",
                          None, f"${approval.risk_amount}", "scalp",
                          result.get("entryPrice"), sig.get("sl"), sig.get("tp1"),
                          result.get("volume"), engine_b.get("regime", "RANGING"),
@@ -6542,6 +6670,7 @@ def api_quick_execute():
 def api_scan_naked():
     d = request.json or {}
     asset_class = d.get("assetClass", "crypto").lower()
+    resolved_style, style_profile = _naked_scan_style_profile(d.get("style", "auto"))
     
     candidate_pairs = [p for p in ALL_PAIRS if p.get("type", "").lower() == asset_class and p.get("enabled", True) and p["display"] not in _disabled_pairs]
     
@@ -6621,6 +6750,7 @@ def api_scan_naked():
                 
                 if res.get("structural_verdict") == "CLEAR":
                     seq = res.get("current_swing_sequence", "")
+                    macro_seq = res.get("macro_swing_sequence", "")
                     
                     # Only accept strong structural alignments
                     if direction == "LONG" and seq == "HH_HL":
@@ -6631,26 +6761,46 @@ def api_scan_naked():
                         valid = False
                         
                     if valid and has_displacement:
+                        conf_data = engine.calculate_confidence(res, current_price, direction)
+                        if conf_data["score"] < style_profile["min_score"]:
+                            continue
+
+                        if style_profile["require_macro_align"]:
+                            if direction == "LONG" and macro_seq != "HH_HL":
+                                continue
+                            if direction == "SHORT" and macro_seq != "LH_LL":
+                                continue
+
+                        room_dist = res.get("distance_to_res") if direction == "LONG" else res.get("distance_to_sup")
+                        if room_dist is not None and room_dist < atr * style_profile["min_room_atr"]:
+                            continue
+
                         res["current_price"] = current_price
                         res["symbol"] = pair.get("symbol")
                         res["display"] = pair.get("display")
                         res["type"] = pair.get("type")
                         res["direction"] = direction
-                        
+                        res["style"] = resolved_style
+
                         sl = res.get("recommended_stop_loss")
                         tp = res.get("recommended_take_profit")
-                        
-                        # Apply fallback TP if N/A based on 1:1.5 RR logic
+                        rr = 0.0
+
                         if not tp and sl:
                             sl_dist = abs(current_price - sl)
                             if direction == "LONG":
-                                tp = current_price + (sl_dist * 1.5)
+                                tp = current_price + (sl_dist * style_profile["fallback_rr"])
                             else:
-                                tp = current_price - (sl_dist * 1.5)
+                                tp = current_price - (sl_dist * style_profile["fallback_rr"])
                             res["recommended_take_profit"] = tp
                             res["fallback_tp_applied"] = True
-                        
-                        conf_data = engine.calculate_confidence(res, current_price, direction)
+
+                        if sl and tp:
+                            sl_dist = abs(current_price - sl)
+                            tp_dist = abs(tp - current_price)
+                            rr = (tp_dist / sl_dist) if sl_dist > 0 else 0.0
+                            if rr < style_profile["min_rr"]:
+                                continue
                         
                         signal = {
                             "id": f"NKD_{pair['display']}_{direction}_{int(time.time())}",
@@ -6674,12 +6824,13 @@ def api_scan_naked():
                             "riskLevel": "Low",
                             "score_pct": conf_data["pct"],
                             "is_naked": True, # Flag for UI
+                            "style": resolved_style,
                             "sl": sl,
                             "slPct": round(abs(current_price - sl) / current_price * 100, 2) if sl else 0.0,
                             "tp1": tp,
                             "tp2": tp,
-                            "rr1": 1.5,
-                            "rr2": 1.5,
+                            "rr1": round(rr, 2) if rr else style_profile["fallback_rr"],
+                            "rr2": round(rr, 2) if rr else style_profile["fallback_rr"],
                             "fib": { "fib618": 0.0, "fib500": 0.0 },
                             "naked_data": res 
                         }

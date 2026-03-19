@@ -43,17 +43,15 @@ def build_engine_b_signal_message(
     lines.append(f"Pair: {pair} | Direction: {direction} | Price: {current_price}")
     lines.append(f"Confidence: {conf_score:.2f} / {max_score} ({score_pct}%)")
     lines.append(f"Verdict: {structure_result.get('structural_verdict', 'UNCLEAR')}")
-    lines.append(f"Actionable: {'YES' if confidence_result.get('is_actionable', False) else 'NO'}")
+    lines.append(f"Actionable: {'YES' if conf_score >= 1.8 else 'NO'}")
     
     # === STRUCTURE ===
     lines.append("")
     lines.append("=== MARKET STRUCTURE ===")
     
     # Swing sequences
-    seq_data = structure_result.get("sequence_data", {})
-    macro_seq_data = structure_result.get("macro_sequence_data", {})
-    lines.append(f"H1 Swing: {seq_data.get('state', 'RANGING')} (last: {seq_data.get('last_swing', 'N/A')})")
-    lines.append(f"H4 Swing: {macro_seq_data.get('state', 'RANGING')} (last: {macro_seq_data.get('last_swing', 'N/A')})")
+    lines.append(f"H1 Swing: {structure_result.get('current_swing_sequence', 'RANGING')}")
+    lines.append(f"H4 Swing: {structure_result.get('macro_swing_sequence', 'RANGING')}")
     
     # BOS and sweeps
     bos = structure_result.get("bos_data", {})
@@ -62,9 +60,8 @@ def build_engine_b_signal_message(
     lines.append(f"Liquidity Sweep: Bull={sweep.get('bull_sweep', False)} Bear={sweep.get('bear_sweep', False)}")
     
     # FVG
-    fvg_count = len(structure_result.get("fvg_zones", []))
-    fvg_overlap = structure_result.get("fvg_overlap_with_entry", False)
-    lines.append(f"Fair Value Gaps: {fvg_count} detected, Entry overlap: {fvg_overlap}")
+    fvg_overlap = structure_result.get("fvg_overlap", False)
+    lines.append(f"Fair Value Gap overlap at key zone: {fvg_overlap}")
     
     # === LEVELS ===
     lines.append("")
@@ -85,15 +82,19 @@ def build_engine_b_signal_message(
     
     dist_res = structure_result.get("distance_to_res", 0)
     dist_sup = structure_result.get("distance_to_sup", 0)
-    lines.append(f"Distance to Resistance: {dist_res:.2f}%")
-    lines.append(f"Distance to Support: {dist_sup:.2f}%")
+    lines.append(f"Distance to Resistance: {float(dist_res or 0):.6f}")
+    lines.append(f"Distance to Support: {float(dist_sup or 0):.6f}")
     
     # === TRADE PARAMETERS ===
     lines.append("")
     lines.append("=== TRADE PARAMETERS ===")
     sl = structure_result.get("recommended_stop_loss")
     tp = structure_result.get("recommended_take_profit")
-    rr = structure_result.get("risk_reward_ratio", 0)
+    rr = 0.0
+    if sl is not None and tp is not None:
+        sl_dist = abs(float(current_price) - float(sl))
+        tp_dist = abs(float(tp) - float(current_price))
+        rr = (tp_dist / sl_dist) if sl_dist > 0 else 0.0
     
     lines.append(f"Entry: {current_price}")
     lines.append(f"Stop Loss: {sl}")
@@ -103,9 +104,9 @@ def build_engine_b_signal_message(
     # === CONFIDENCE BREAKDOWN ===
     lines.append("")
     lines.append("=== CONFIDENCE BREAKDOWN ===")
-    lines.append(f"Structure Score: {confidence_result.get('structure_score', 0):.2f}")
-    lines.append(f"Room Score: {confidence_result.get('room_score', 0):.2f}")
-    lines.append(f"RR Score: {confidence_result.get('rr_score', 0):.2f}")
+    lines.append(f"Structure Score: {confidence_result.get('struct_points', 0):.2f}")
+    lines.append(f"Room Score: {confidence_result.get('room_points', 0):.2f}")
+    lines.append(f"RR Score: {confidence_result.get('rr_points', 0):.2f}")
     lines.append(f"Catalyst Bonus: {confidence_result.get('catalyst_bonus', 0):.2f}")
     lines.append(f"AI Adjustment: {confidence_result.get('ai_adjustment', 0):.2f}")
     
@@ -181,7 +182,7 @@ Grade scale: A+ (elite), A (strong), B (acceptable), C (marginal), D/F (reject).
             return {"error": "Invalid AI response format"}
         
         # Validate required keys
-        required = {"grade", "edgeProbability", "riskLevel"}
+        required = {"grade", "edgeProbability", "riskLevel", "verdict"}
         missing = required - set(parsed.keys())
         if missing:
             log.warning(f"[ENGINE_B_AI] {pair}: Missing keys {missing} in AI response")

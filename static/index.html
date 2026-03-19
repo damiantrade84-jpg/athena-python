@@ -1099,6 +1099,9 @@ function setStyle(style, el) {
 function applyStyleFilter(signals) {
   if (tradeStylePref === 'auto') return signals;
   return signals.filter(function(s) {
+    if (s.is_naked && s.style) {
+      return String(s.style).toLowerCase() === tradeStylePref;
+    }
     var h1 = s.h1 && s.h1.snap ? s.h1.snap : {};
     var h4 = s.h4 && s.h4.snap ? s.h4.snap : {};
     var d1 = s.d1 && s.d1.snap ? s.d1.snap : {};
@@ -1198,7 +1201,7 @@ async function runNakedGlobalScan() {
   showSkeletons();
   try {
     var acFilter = document.getElementById('assetClassFilter').value || 'crypto';
-    var payload = {assetClass: acFilter};
+    var payload = {assetClass: acFilter, style: tradeStylePref === 'auto' ? 'auto' : tradeStylePref};
     var resp=await fetch('/api/scan-naked',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -1612,16 +1615,19 @@ async function analyzeNakedSignal(symbol) {
   }
 
   try {
-    var resp=await fetch('/api/analyze',{
+    var resp=await fetch('/api/naked-analysis',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({signal:sig, stylePreference:'scalp'}) // Engine B defaults to shorter timeframes
+      body:JSON.stringify({signal:sig})
     });
     if(!resp.ok) throw new Error('Server error: HTTP '+resp.status);
     var data=await resp.json();
     if(data.error) throw new Error(data.error);
-    
-    var aiHtml = buildAIContent(data, symbol);
+
+    window['_engineB_'+sid] = data;
+    var aiPayload = data.ai_analysis || data.aiAnalysis;
+    if(!aiPayload) throw new Error('Engine B AI review unavailable');
+    var aiHtml = buildAIContent(aiPayload, symbol);
     var aiDiv = document.getElementById('ai-nres-'+sid);
     if(aiDiv) {
        aiDiv.innerHTML = aiHtml;
@@ -1740,7 +1746,7 @@ async function runNakedScan(symbol) {
 
 async function runCompare(symbol) {
   var sid=(symbol||'').replace(/[\/=^.]/g,'_');
-  var sig=allSignals.find(function(s){return s.symbol===symbol;});
+  var sig=allSignals.find(function(s){return s.symbol===symbol;}) || window['_nakedSig_'+sid];
   if(!sig) return;
   var btn=document.getElementById('cbtn-'+sid);
   if(btn){btn.disabled=true;btn.textContent='Comparing...';}
@@ -1752,46 +1758,55 @@ async function runCompare(symbol) {
   }
 
   try {
-    var resp=await fetch('/api/naked-analysis', {
+    var resp=await fetch('/api/compare-engines', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({signal:sig})
+      body:JSON.stringify({signal:sig, style:tradeStylePref})
     });
     if(!resp.ok) throw new Error('Server error: HTTP ' + resp.status);
     var data=await resp.json();
     if(data.error) throw new Error(data.error);
 
     // Store Engine B data for Quick Execution
-    window['_engineB_'+sid] = data;
+    window['_engineB_'+sid] = data.engineB;
     
-    var isCrypto = sig.type === 'crypto';
+    var engineA = data.engineA || {};
+    var engineB = data.engineB || {};
+    var summary = data.summary || {};
+    var isCrypto = (engineA.type || sig.type) === 'crypto';
     var isConnected = isCrypto ? window._bybitConnected : window._mt5Connected;
     var exeDisabled = !isConnected ? 'disabled title="Broker Not Connected"' : '';
 
-    var seq = data.current_swing_sequence || '';
-    var bos = data.bos_confirmed || false;
-    var match = false;
-    if (sig.direction === 'LONG' && seq === 'HH_HL') match = true;
-    if (sig.direction === 'SHORT' && seq === 'LH_LL') match = true;
-
-    var verdictColor = match ? '#00e676' : '#ff3b5c';
-    var verdictText = match ? '✅ STRUCTURE ALIGNED WITH ENGINE A' : '❌ STRUCTURE CONFLICTS WITH ENGINE A';
+    var verdictColor = summary.verdict === 'ALIGNED' ? '#00e676' : '#ff3b5c';
+    var verdictText = summary.verdict === 'ALIGNED'
+      ? '✅ ENGINE B STRUCTURE ALIGNS WITH ENGINE A'
+      : '❌ ENGINE B STRUCTURE CONFLICTS WITH ENGINE A';
 
     var html = '<div style="font-weight:bold;margin-bottom:8px;font-size:12px;color:'+verdictColor+'">'+verdictText+'</div>';
 
-    var macroSeq = data.macro_swing_sequence || '';
-    var isMacroAligned = (seq === macroSeq && seq !== 'RANGE');
-    var macroAlignText = isMacroAligned ? '✅ Aligned ('+macroSeq+')' : '❌ Conflict ('+macroSeq+')';
+    var macroAlignText = summary.macroAligned
+      ? '✅ Aligned ('+(engineB.macro_swing_sequence || '-')+')'
+      : '❌ Conflict ('+(engineB.macro_swing_sequence || '-')+')';
 
     html += '<table style="width:100%;text-align:left;border-collapse:collapse;margin-bottom:8px;font-size:11px">';
     html += '<tr><th style="padding:4px;border-bottom:1px solid #2a3b4d">Metric</th><th style="padding:4px;border-bottom:1px solid #2a3b4d;color:#00d4ff">Engine A</th><th style="padding:4px;border-bottom:1px solid #2a3b4d;color:#f59e0b">Engine B</th></tr>';
-    html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Direction</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+sig.direction+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+seq+'</td></tr>';
-    html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">BOS Confirmed</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">-</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(bos?'✅ Yes':'❌ No')+'</td></tr>';
+    html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Direction</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(engineA.direction||'-')+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(engineB.direction||'-')+'</td></tr>';
+    html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Micro Structure</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(engineA.direction||'-')+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(engineB.current_swing_sequence||'-')+'</td></tr>';
+    html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">BOS Confirmed</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">-</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(engineB.bos_confirmed?'✅ Yes':'❌ No')+'</td></tr>';
     html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Macro Align</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">-</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+macroAlignText+'</td></tr>';
-    html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Stop Loss</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(sig.sl?sig.sl.toFixed(4):'-')+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(data.recommended_stop_loss?data.recommended_stop_loss.toFixed(4):'-')+'</td></tr>';
-    html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Take Profit</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(sig.tp1?sig.tp1.toFixed(4):'-')+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(data.recommended_take_profit?data.recommended_take_profit.toFixed(4):'-')+'</td></tr>';
-    html += '<tr><td style="padding:4px">Confluence</td><td style="padding:4px">'+sig.confluenceScore+'/'+(sig.maxScore||3)+'</td><td style="padding:4px">AI Adj: '+(data.ai_adjustment ? data.ai_adjustment.toFixed(2) : '0.00')+'</td></tr>';
+    html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Stop Loss</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(engineA.sl?engineA.sl.toFixed(4):'-')+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(engineB.recommended_stop_loss?engineB.recommended_stop_loss.toFixed(4):'-')+'</td></tr>';
+    html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Take Profit</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(engineA.tp1?engineA.tp1.toFixed(4):'-')+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(engineB.recommended_take_profit?engineB.recommended_take_profit.toFixed(4):'-')+'</td></tr>';
+    html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Mode</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(summary.engineAStyle||'-').toUpperCase()+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(summary.engineBStyle||'-').toUpperCase()+'</td></tr>';
+    html += '<tr><td style="padding:4px">Confluence</td><td style="padding:4px">'+(engineA.confluenceScore!=null?engineA.confluenceScore:'-')+'/'+(engineA.maxScore||3)+'</td><td style="padding:4px">'+(engineB.score!=null?engineB.score.toFixed(2):'-')+'/'+(engineB.max_possible||'4.0')+'</td></tr>';
     html += '</table>';
+
+    if(summary.aiReviewIncluded && engineB.ai_analysis) {
+      html += '<div style="margin:8px 0 10px;padding:10px;border:1px solid rgba(245,158,11,0.25);border-radius:8px;background:rgba(245,158,11,0.08);font-size:11px">' +
+        '<div style="font-weight:700;color:#f59e0b;margin-bottom:4px">Engine B AI Review Included</div>' +
+        '<div><strong>Grade:</strong> '+(engineB.ai_analysis.grade||'-')+' | <strong>Edge:</strong> '+(engineB.ai_analysis.edgeProbability||'-')+'% | <strong>Risk:</strong> '+(engineB.ai_analysis.riskLevel||'-')+'</div>' +
+        '<div style="margin-top:4px;color:var(--text-secondary)">'+(engineB.ai_analysis.verdict||'')+'</div>' +
+      '</div>';
+    }
 
     var execBtnHTML = '<button class="exec-btn force" style="margin-top:4px;width:100%" id="qexecbtn-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'])" '+exeDisabled+'>⚡ QUICK SCALP EXECUTE (Uses Engine B SL/TP)</button>';
     
