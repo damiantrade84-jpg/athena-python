@@ -4105,7 +4105,6 @@ def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto",
             _pct = (_sc / _max * 100) if _max > 0 else 0
 
             style_pref = "swing" if _pct >= 75 else "intraday" if _pct >= 50 else "scalp"
-@@
         msg = _build_signal_message(signal, news_ctx, style_pref, style_labels,
 
                                     portfolio_heat=portfolio_heat, drawdown_pct=drawdown_pct,
