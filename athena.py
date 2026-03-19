@@ -4035,6 +4035,36 @@ def _build_signal_message(signal: dict, news_ctx: dict | None,
     return "\n".join(lines)
 
 
+def _parse_ai_json(text: str, pair: str = "?") -> dict | None:
+    """Parse JSON from AI response using multiple fallback strategies."""
+    import re as _re
+    _parsed = None
+    
+    # Attempt 1: code-fence extraction
+    if "```" in text:
+        for p in text.split("```"):
+            p = p.strip()
+            if p.startswith("json"): p = p[4:].strip()
+            if p.startswith("{"):
+                try: _parsed = json.loads(p[:p.rfind("}") + 1]); break
+                except json.JSONDecodeError: pass
+    
+    # Attempt 2: regex for outermost JSON object
+    if _parsed is None:
+        _m = _re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text)
+        if _m:
+            try: _parsed = json.loads(_m.group())
+            except json.JSONDecodeError: pass
+    
+    # Attempt 3: first { to last }
+    if _parsed is None:
+        start = text.find("{"); end = text.rfind("}") + 1
+        if start >= 0 and end > start:
+            try: _parsed = json.loads(text[start:end])
+            except json.JSONDecodeError: pass
+    
+    return _parsed
+
 
 def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto",
 
@@ -4071,8 +4101,10 @@ def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto",
         if style_pref == "auto":
 
             _sc = signal.get("confluenceScore", 0)
+            _max = signal.get("maxScore", 3.0) or 3.0
+            _pct = (_sc / _max * 100) if _max > 0 else 0
 
-            style_pref = "swing" if _sc >= 9 else "intraday" if _sc >= 7 else "scalp"
+            style_pref = "swing" if _pct >= 75 else "intraday" if _pct >= 50 else "scalp"
 
         msg = _build_signal_message(signal, news_ctx, style_pref, style_labels,
 
@@ -4080,71 +4112,42 @@ def run_ai(signal: dict, news_ctx: dict | None = None, style_pref: str = "auto",
 
                                     learning_ctx=learning_ctx)
 
-        r = c.responses.create(
-
-            model=CONFIG["XAI_MODEL"], max_output_tokens=900,
-
-            instructions=EXPERT_PROMPT, input=msg
-
-        )
-
-        t=r.output_text.strip()
-
-        # Robust JSON extraction: try code-fence first, then regex, then brace-matching
-
-        import re as _re
-
-        _parsed = None
-
-        # Attempt 1: code-fence extraction
-
-        if "```" in t:
-
-            parts = t.split("```")
-
-            for p in parts:
-
-                p = p.strip()
-
-                if p.startswith("json"): p = p[4:].strip()
-
-                if p.startswith("{"):
-
-                    try: _parsed = json.loads(p[:p.rfind("}") + 1]); break
-
-                    except json.JSONDecodeError: pass
-
-        # Attempt 2: regex for outermost JSON object
-
-        if _parsed is None:
-
-            _m = _re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', t)
-
-            if _m:
-
-                try: _parsed = json.loads(_m.group())
-
-                except json.JSONDecodeError: pass
-
-        # Attempt 3: first { to last } (original fallback)
-
-        if _parsed is None:
-
-            start = t.find("{"); end = t.rfind("}") + 1
-
-            if start >= 0 and end > start:
-
-                try: _parsed = json.loads(t[start:end])
-
-                except json.JSONDecodeError: pass
-
-        if _parsed is None:
-
-            log.error(f"[AI] {signal['pair']}: could not parse JSON from response: {t[:200]}")
-
-            return {"error": "AI response was not valid JSON"}
-
-        result = _parsed
+        result = None
+        
+        # Try structured outputs first (guaranteed valid JSON)
+        if CONFIG.get("AI_STRUCTURED_OUTPUTS", True):
+            try:
+                from ai_schemas import EngineAResponse
+                completion = c.beta.chat.completions.parse(
+                    model=CONFIG["XAI_MODEL"],
+                    max_tokens=900,
+                    messages=[
+                        {"role": "system", "content": EXPERT_PROMPT},
+                        {"role": "user", "content": msg}
+                    ],
+                    response_format=EngineAResponse,
+                )
+                if completion.choices[0].message.parsed:
+                    result = completion.choices[0].message.parsed.model_dump()
+                    log.debug(f"[AI] {signal['pair']}: structured output success")
+            except Exception as _so_err:
+                log.debug(f"[AI] {signal['pair']}: structured output failed ({_so_err}), using fallback")
+        
+        # Fallback to Responses API + manual parsing
+        if result is None:
+            r = c.responses.create(
+                model=CONFIG["XAI_MODEL"], max_output_tokens=900,
+                input=[
+                    {"role": "system", "content": EXPERT_PROMPT},
+                    {"role": "user", "content": msg}
+                ]
+            )
+            t = r.output_text.strip()
+            result = _parse_ai_json(t, signal['pair'])
+            
+            if result is None:
+                log.error(f"[AI] {signal['pair']}: could not parse JSON from response: {t[:200]}")
+                return {"error": "AI response was not valid JSON"}
 
         # Validate required keys
 
@@ -6358,10 +6361,13 @@ def api_naked_analysis():
         
         if not atr or atr <= 0:
             log.warning(f"[NAKED-AI] {pair_obj.get('display')}: Failed ATR calc - series={atr_series}, using fallback ATR")
-            # Fallback: estimate ATR as 1% of current price
             current_price = float(sig.get("price") or h1[-1]["close"])
-            atr = current_price * 0.01
-            log.info(f"[NAKED-AI] {pair_obj.get('display')}: Using fallback ATR={atr}")
+            # Asset-class-aware fallback: typical H4 ATR as % of price
+            # Forex ~0.15-0.3%, Commodity ~0.5-1%, Crypto ~1.5-3%, Stock/Index ~0.5-1%
+            _atr_pct = {"forex": 0.002, "crypto": 0.02, "commodity": 0.008,
+                        "stock": 0.008, "index": 0.006}
+            atr = current_price * _atr_pct.get(pair_obj.get("type", ""), 0.01)
+            log.info(f"[NAKED-AI] {pair_obj.get('display')}: Using fallback ATR={atr} (type={pair_obj.get('type')})")
         
         current_price = float(sig.get("price") or h1[-1]["close"])
         
@@ -6487,7 +6493,10 @@ def api_quick_execute():
         if result.get("success"):
             # Build Engine B factor JSON for AI learning
             _b_factors = {}
-
+            if "structural_verdict" in engine_b:
+                bos = engine_b.get("bos_data", {})
+                sweep = engine_b.get("sweep_data", {})
+                seq = engine_b.get("sequence_data", {}).get("state", "RANGING")
                 
                 _b_factors["Naked_BOS_Bull"] = 1.0 if bos.get("bos_bull") else 0.0
                 _b_factors["Naked_BOS_Bear"] = 1.0 if bos.get("bos_bear") else 0.0
@@ -6661,7 +6670,7 @@ def api_scan_naked():
                             "session": {"name": "Global"},
                             "grade": "Naked Structure",
                             "trendState": seq,
-                            "edgeProbability": 99.9, # To indicate different sorting
+                            "edgeProbability": conf_data["pct"],  # Use actual structural confidence
                             "riskLevel": "Low",
                             "score_pct": conf_data["pct"],
                             "is_naked": True, # Flag for UI
@@ -7871,7 +7880,7 @@ def api_backtest_best():
 
 
 
-# N4: Kill-switch API â€" immediately blocks new scans/analyses
+# N4: Kill-switch API — immediately blocks new scans/analyses
 
 @app.route("/api/killswitch",methods=["POST"])
 
@@ -8477,7 +8486,7 @@ def _check_api_keys() -> None:
 
         for m in missing:
 
-            log.warning(f"  â€¢ {m}")
+            log.warning(f"  • {m}")
 
     else:
 

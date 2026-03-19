@@ -386,7 +386,6 @@ def _local_to_utc_hour() -> int:
     local_hour = datetime.now().hour
     utc_h = (local_hour - offset) % 24
     log.debug(f"[FOREX-TZ] local_hour={local_hour} offset={offset} utc_hour={utc_h}")
-    log.debug(f"[FOREX-TZ] local_hour={local_hour} offset={offset} utc_hour={utc_h}")
     return utc_h
 
 
