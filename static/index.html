@@ -1555,16 +1555,19 @@ function buildAIContent(ai,symbol,idSuffix) {
   var gk=ai.grade?(ai.grade==='A+'?'Aplus':ai.grade):'unknown';
   var warnArr=Array.isArray(ai.warnings)?ai.warnings:(ai.warnings?[ai.warnings]:[]);
   var warns=warnArr.map(function(w){return '<div class="ai-warning-item">'+w+'</div>';}).join('');
+  var narrative = ai.narrative || ai.verdict || 'No detailed rationale returned.';
+  var riskLevelText = ai.riskLevel || '';
+  var riskLevelNorm = String(riskLevelText).toLowerCase();
   var edgeVal = ai.edgeProbability!=null ? ai.edgeProbability+'%' : '-';
   var edgeColor = ai.edgeProbability>=70 ? 'var(--bull)' : ai.edgeProbability>=55 ? 'var(--accent)' : 'var(--warn)';
-  var riskColor = ai.riskLevel==='Low' ? 'var(--bull)' : ai.riskLevel==='High' ? 'var(--bear)' : 'var(--accent)';
+  var riskColor = riskLevelNorm==='low' ? 'var(--bull)' : riskLevelNorm==='high' ? 'var(--bear)' : 'var(--accent)';
   return ''+
   '<div class="ai-panel" id="ai-'+sid+'">'+
     '<div class="ai-header" onclick="toggleAI(\''+sid+'\')" style="cursor:pointer">'+
       '<span class="ai-label"><span class="ai-dot"></span> Marcus Reid</span>'+
       '<span class="ai-grade grade-'+gk+'">'+(ai.grade||'N/A')+'</span>'+
       '<span style="color:'+edgeColor+';font-size:13px;font-weight:600;margin-left:auto">'+edgeVal+'</span>'+
-      '<span style="color:'+riskColor+';font-size:11px;margin-left:6px">'+(ai.riskLevel||'')+'</span>'+
+      '<span style="color:'+riskColor+';font-size:11px;margin-left:6px">'+riskLevelText+'</span>'+
     '</div>'+
     '<div class="ai-verdict-bar" onclick="toggleAI(\''+sid+'\')" style="cursor:pointer;padding:8px 14px;font-size:13px;color:var(--text-secondary)">'+
       (ai.verdict||'No verdict returned')+
@@ -1573,7 +1576,7 @@ function buildAIContent(ai,symbol,idSuffix) {
     '</div>'+
     '<div class="ai-content" id="aic-'+sid+'">'+
       '<div class="ai-content-body">'+
-        '<p class="ai-narrative">'+(ai.narrative||'')+'</p>'+
+        '<p class="ai-narrative">'+narrative+'</p>'+
         (ai.tradeStyleReason?'<p class="ai-narrative" style="font-size:11px;color:var(--text-secondary)">'+ai.tradeStyleReason+'</p>':'')+
         (ai.riskNote?'<p class="ai-narrative" style="color:var(--accent)">'+ai.riskNote+'</p>':'')+
         '<div class="ai-meta">'+

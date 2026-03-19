@@ -7458,6 +7458,75 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None):
     if direction not in ("LONG", "SHORT"):
         direction = "LONG"
 
+    def _enrich_engine_b_ai_payload(payload: dict) -> dict:
+        enriched = dict(payload or {})
+
+        def _fmt_level(value):
+            try:
+                return f"{float(value):,.4f}"
+            except Exception:
+                return "-"
+
+        risk_level = str(enriched.get("riskLevel") or "").upper()
+        if risk_level == "LOW":
+            enriched["riskLevel"] = "Low"
+        elif risk_level == "HIGH":
+            enriched["riskLevel"] = "High"
+        elif risk_level == "MEDIUM":
+            enriched["riskLevel"] = "Medium"
+
+        verdict = str(enriched.get("verdict") or "").strip()
+        struct_verdict = str(res.get("structural_verdict") or "UNCLEAR")
+        score = res.get("score")
+        max_possible = res.get("max_possible")
+        support_zone = res.get("nearest_support_zone") or {}
+        resistance_zone = res.get("nearest_resistance_zone") or {}
+        active_zone = support_zone if direction == "LONG" else resistance_zone
+        rec_sl = res.get("recommended_stop_loss")
+        rec_tp = res.get("recommended_take_profit")
+        zone_lower = active_zone.get("lower")
+        zone_upper = active_zone.get("upper")
+        zone_center = active_zone.get("center")
+        if zone_lower is not None and zone_upper is not None:
+            entry_zone = f"{_fmt_level(zone_lower)} - {_fmt_level(zone_upper)}"
+        elif zone_center is not None:
+            entry_zone = _fmt_level(zone_center)
+        else:
+            entry_zone = _fmt_level(current_price)
+
+        level_bits = [f"Entry {_fmt_level(current_price)}"]
+        if rec_sl is not None:
+            level_bits.append(f"SL {_fmt_level(rec_sl)}")
+        if rec_tp is not None:
+            level_bits.append(f"TP {_fmt_level(rec_tp)}")
+        opp_zone = resistance_zone if direction == "LONG" else support_zone
+        if opp_zone.get("center") is not None:
+            level_bits.append(f"Opp zone {_fmt_level(opp_zone.get('center'))}")
+
+        warnings = list(enriched.get("warnings") or [])
+        if not res.get("bos_confirmed"):
+            warnings.append("BOS not confirmed")
+        if res.get("liquidity_sweep"):
+            warnings.append("Liquidity sweep in play")
+        if res.get("fvg_overlap"):
+            warnings.append("FVG overlap present")
+
+        enriched["narrative"] = enriched.get("narrative") or verdict or "No AI narrative returned."
+        enriched["tradeStyleReason"] = enriched.get("tradeStyleReason") or (
+            f"{struct_verdict} structure | Score {score:.2f}/{max_possible:.1f}"
+            if score is not None and max_possible is not None
+            else f"{struct_verdict} structure"
+        )
+        enriched["riskNote"] = enriched.get("riskNote") or (
+            f"Micro {res.get('current_swing_sequence', '-')} | Macro {res.get('macro_swing_sequence', '-')}"
+        )
+        enriched["entryZone"] = enriched.get("entryZone") or entry_zone
+        enriched["invalidation"] = enriched.get("invalidation") or _fmt_level(rec_sl)
+        enriched["keyLevels"] = enriched.get("keyLevels") or " | ".join(level_bits)
+        enriched["positionSizing"] = enriched.get("positionSizing") or "Size off Engine B stop distance at fixed account risk."
+        enriched["warnings"] = list(dict.fromkeys(warnings))
+        return enriched
+
     try:
         d1 = fetch_candles(pair_obj, "D1", CONFIG.get("D1_CANDLES", 220))
         h4 = fetch_candles(pair_obj, "H4", CONFIG.get("H4_CANDLES", 220))
@@ -7541,7 +7610,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None):
                 engine_a_ctx=engine_a_ctx,
             )
             if "error" not in ai_verdict:
-                res["ai_analysis"] = ai_verdict
+                res["ai_analysis"] = _enrich_engine_b_ai_payload(ai_verdict)
                 log.info(
                     f"[NAKED-AI] {pair_obj.get('display')}: AI grade={ai_verdict.get('grade')}"
                 )
@@ -7556,6 +7625,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None):
                     "riskLevel": "UNKNOWN",
                     "verdict": f"AI review unavailable: {err_msg}",
                 }
+                res["ai_analysis"] = _enrich_engine_b_ai_payload(res["ai_analysis"])
         except Exception as e:
             log.warning(f"[NAKED-AI] Failed to get AI verdict: {e}")
             res["ai_analysis"] = {
@@ -7564,6 +7634,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None):
                 "riskLevel": "UNKNOWN",
                 "verdict": f"AI review unavailable: {e}",
             }
+            res["ai_analysis"] = _enrich_engine_b_ai_payload(res["ai_analysis"])
 
         return res, pair_obj, None
     except Exception as e:
