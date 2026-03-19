@@ -277,7 +277,7 @@ def _calc_volume(account_balance: float, entry_price: float, sl_price: float,
         contract_size = 1       # 1 share per lot
         point = 0.01            # 1 cent price step
     elif is_commodity:
-        display = pair.get("display", "") if isinstance(pair, dict) else ""
+        display = (pair.get("display") or pair.get("pair", "")) if isinstance(pair, dict) else ""
         contract_size = _COMMODITY_CONTRACTS.get(display, 100)
         point = 0.01            # 1 cent price step for metals/oil
     else:
