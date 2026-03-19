@@ -401,6 +401,7 @@ def compute_forex_score(
     bar_time:      Optional[str] = None,
     backtest_mode: bool = False,
     h4_candles:    Optional[list] = None,
+    rsi_history_override: Optional[list] = None,
 ) -> ForexScoreResult:
     """
     Updated with 3 new 2026 SMC edges:
@@ -446,8 +447,7 @@ def compute_forex_score(
 
     trend_score = 0.0
     if trend_ok and session_ok:
-        rsi_history = [c.get("rsi", 50) for c in (h1_candles or [])[-40:]
-                       if c.get("rsi") is not None]
+        rsi_history = rsi_history_override if rsi_history_override else None
         eq  = _entry_quality(h1_snap, trend_dir, rsi_history)
         cot = _cot_boost(pair, trend_dir, bar_time)
         trend_score = _dfw.score(eq, cot)
@@ -517,10 +517,7 @@ def compute_forex_score(
         "session_active":    session_ok,
         "utc_hour":          utc_hour,
         "entry_quality":     result.entry_quality,
-        "momentum_confirm":  result.momentum_confirm,
-        "adx_filter":        result.adx_filter,
         "cot_boost":         result.cot_boost,
-        "carry_tilt":        result.carry_tilt,
         "breakout_score":    bo_score,
         "trend_score":       round(trend_score, 4),
         "breakout_final":    round(bo_final, 4),

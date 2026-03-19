@@ -5731,8 +5731,13 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 h4i = {}
             h4i["atr"] = atr  # ensure atr exists
             
+            # Slice D1 candles to current H4 bar time to prevent look-ahead bias
             try:
-                d1i_ctx = calc_indicators_with_normalized(candles_d1, "forex").get("snap", {})
+                h4_ts = h4_time if isinstance(h4_time, str) else str(h4_time)
+                d1_times = [c.get("time", c.get("datetime", "")) for c in candles_d1]
+                d1_slice_end = bisect.bisect_right(d1_times, h4_ts)
+                d1_ctx = candles_d1[:d1_slice_end] if d1_slice_end > 10 else candles_d1[:min(len(candles_d1), i//4+1)]
+                d1i_ctx = calc_indicators_with_normalized(d1_ctx, "forex").get("snap", {})
             except Exception:
                 d1i_ctx = {}
             
@@ -5748,9 +5753,14 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
             h1_ctx = h1_window[:h1_slice_end] if h1_slice_end > 50 else h1_window[:min(len(h1_window), i*4+1)]
             
             try:
-                h1i = calc_indicators_with_normalized(h1_ctx, "forex").get("snap", {})
+                h1i_full = calc_indicators_with_normalized(h1_ctx, "forex")
+                h1i = h1i_full.get("snap", {})
+                # Extract RSI history from H1 indicator arrays for proper MAD z-score calculation
+                h1_rsi_array = h1i_full.get("arrays", {}).get("rsi14", [])
+                rsi_hist = [float(r) for r in h1_rsi_array[-40:] if r is not None] if h1_rsi_array else None
             except Exception:
                 h1i = {}
+                rsi_hist = None
             
             result = compute_forex_score(
                 d1_snap=d1i_ctx,
@@ -5760,7 +5770,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 pair=pair,
                 bar_time=h4_time,
                 backtest_mode=True,
-                h4_candles=h4_ctx
+                h4_candles=h4_ctx,
+                rsi_history_override=rsi_hist
             )
 
             if result.final_score >= CONFIG.get("BT_MIN", {}).get("forex", 0.60):
@@ -6361,7 +6372,7 @@ def api_naked_analysis():
         # Pillar 5: Statistical Feedback Loop
         try:
             from ai_learning import get_ai_learning_context
-            learning_ctx = get_ai_learning_context(pair_obj, pair_obj.get("type", "crypto"), _AUDIT_DB)
+            learning_ctx = get_ai_learning_context(pair_obj.get("display", symbol), pair_obj.get("type", "crypto"), _AUDIT_DB)
         except Exception as e:
             log.warning(f"Failed to fetch AI learning context for Naked Analysis: {e}")
             learning_ctx = None
@@ -6371,6 +6382,27 @@ def api_naked_analysis():
         
         # Include current price for the UI rendering
         res["current_price"] = current_price
+        
+        # Pillar 6: AI Analysis Integration (Engine A pattern adoption)
+        try:
+            from engine_b_ai import get_engine_b_ai_verdict
+            ai_verdict = get_engine_b_ai_verdict(
+                pair=pair_obj.get("display", symbol),
+                direction=direction,
+                current_price=current_price,
+                structure_result=res,
+                confidence_result=conf,
+                learning_ctx=learning_ctx,
+                xai_api_key=CONFIG.get("XAI_API_KEY"),
+                xai_model=CONFIG.get("XAI_MODEL", "grok-beta")
+            )
+            if "error" not in ai_verdict:
+                res["ai_analysis"] = ai_verdict
+                log.info(f"[NAKED-AI] {pair_obj.get('display')}: AI grade={ai_verdict.get('grade')}")
+            else:
+                log.warning(f"[NAKED-AI] {pair_obj.get('display')}: AI analysis failed - {ai_verdict.get('error')}")
+        except Exception as e:
+            log.warning(f"[NAKED-AI] Failed to get AI verdict: {e}")
         
         return jsonify(res)
         
@@ -6455,11 +6487,7 @@ def api_quick_execute():
         if result.get("success"):
             # Build Engine B factor JSON for AI learning
             _b_factors = {}
-            if "structural_verdict" in engine_b and isinstance(engine_b["structural_verdict"], dict):
-                sv = engine_b["structural_verdict"]
-                bos = sv.get("bos_data", {})
-                sweep = sv.get("sweep_data", {})
-                seq = sv.get("sequence_data", {}).get("state", "RANGING")
+
                 
                 _b_factors["Naked_BOS_Bull"] = 1.0 if bos.get("bos_bull") else 0.0
                 _b_factors["Naked_BOS_Bear"] = 1.0 if bos.get("bos_bear") else 0.0
