@@ -15,6 +15,10 @@
 - Added "NAKED GLOBAL SCAN" manual button to UI.
 - Added "👁 NAKED SCALP" button to individual signal cards, producing a structural verdict window with a "⚡ QUICK SCALP EXECUTE" button that executes based on Engine B's proprietary SL/TP levels.
 
+**Data Feeds & Infrastructure:**
+- **Crypto Live Pricing Migration:** Moved all crypto live price feeds (REST poller and EODHD WebSocket) to a dedicated `BinanceLivePriceWS` thread consuming the `fstream.binance.com/ws/!ticker@arr` stream.
+- **API Optimization:** Adjusted EODHD background price poller for non-WS pairs to 21-minute intervals (optimized for delayed stock/index data) grouped in 15-symbol batches.
+
 ## Previous Changes (2026-03-16)
 
 **Testing Week Adjustments:**
@@ -196,9 +200,9 @@ Computes theoretical max score using `get_pair_vote_weights(pair)`, subtracts `W
 - Pairs with `"ws": False` use REST cache only — no live price tick; negligible latency impact for swing/intraday
 
 ### `_build_ticker_map(pairs)` — athena.py (EODHDWSManager)
-Routes pairs to EODHD WS endpoints (`us`, `forex`, `crypto`). Skips any pair with `"ws": False`.
+Routes pairs to EODHD WS endpoints (`us`, `forex`). Skips any pair with `"ws": False`. Crypto pairs are entirely excluded from EODHD and handled natively by `BinanceLivePriceWS` without connection limits.
 - EODHD plan cap: **50 tickers total** across all endpoints
-- WS allocation (50): us=17, forex=19, crypto=14 — see comment at `start()` for full ticker list
+- WS allocation (~36): us=17, forex=19 — see comment at `start()` for full ticker list
 - Pairs with `"ws": False` still scan, backtest, and execute normally via REST cache
 - To re-allocate WS slots: run backtests → query `backtest_results` by SQN → update `"ws"` flags in pair lists
 
