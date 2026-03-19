@@ -49,17 +49,31 @@ _LONDON_OPEN  = (7, 11)   # 07:00–11:00 UTC
 _NY_OPEN      = (12, 16)  # 12:00–16:00 UTC
 
 
-def _in_session(utc_hour: int) -> bool:
-    """True if current hour is inside Asian, London, or NY open window."""
+_ASIAN_SESSION_PAIRS = {"USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY", "NZD/JPY",
+                        "AUD/USD", "NZD/USD", "AUD/NZD"}
+
+
+def _in_session(utc_hour: int, pair_display: str = "") -> bool:
+    """True if current hour is inside an active session for this pair.
+
+    Asian session (00:00-08:00 UTC) only valid for JPY and AUD/NZD crosses
+    where Tokyo/Sydney volume is meaningful. All other pairs: London + NY only.
+    """
     try:
         from config import CONFIG
         if not CONFIG.get("FOREX_SESSION_FILTER", True):
             return True  # session filter disabled — always trade
     except Exception:
         pass
-    return (_ASIAN_OPEN[0]  <= utc_hour <= _ASIAN_OPEN[1]  or
-            _LONDON_OPEN[0] <= utc_hour <= _LONDON_OPEN[1] or
-            _NY_OPEN[0]     <= utc_hour <= _NY_OPEN[1])
+    # London and NY are valid for all forex pairs
+    if (_LONDON_OPEN[0] <= utc_hour <= _LONDON_OPEN[1] or
+            _NY_OPEN[0] <= utc_hour <= _NY_OPEN[1]):
+        return True
+    # Asian session only for JPY/AUD/NZD crosses
+    if (_ASIAN_OPEN[0] <= utc_hour <= _ASIAN_OPEN[1] and
+            pair_display in _ASIAN_SESSION_PAIRS):
+        return True
+    return False
 
 
 def _hurst_exponent(prices: list, max_lag: int = 20) -> float:
@@ -428,7 +442,7 @@ def compute_forex_score(
     _dfw.update(_hurst, backtest_mode)
 
     trend_ok, trend_dir = _check_trend_gate(d1_snap, h4_snap)
-    session_ok = True if backtest_mode else _in_session(utc_hour)
+    session_ok = True if backtest_mode else _in_session(utc_hour, pair.get("display", ""))
 
     if not session_ok:
         log.info(f"[FOREX] {pair.get('display','?')} session closed (utc_hour={utc_hour})")
