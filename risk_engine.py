@@ -51,7 +51,8 @@ _RISK_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
 def _init_peak_table():
     """Create peak_equity table if it doesn't exist."""
     try:
-        with sqlite3.connect(_RISK_DB, timeout=5.0) as con:
+        with sqlite3.connect(_RISK_DB, timeout=15.0) as con:
+            con.execute("PRAGMA journal_mode=WAL")
             con.execute("CREATE TABLE IF NOT EXISTS peak_equity (id INTEGER PRIMARY KEY CHECK(id=1), value REAL NOT NULL, updated_at TEXT NOT NULL)")
             con.commit()
     except Exception as e:
@@ -60,7 +61,7 @@ def _init_peak_table():
 def _load_peak_equity() -> float:
     """Restore peak equity from SQLite on startup."""
     try:
-        with sqlite3.connect(_RISK_DB, timeout=5.0) as con:
+        with sqlite3.connect(_RISK_DB, timeout=15.0) as con:
             row = con.execute("SELECT value, updated_at FROM peak_equity WHERE id=1").fetchone()
             if row:
                 log.info(f"[RISK] Restored peak equity: ${row[0]:,.2f} (saved {row[1]})")
@@ -73,7 +74,7 @@ def _save_peak_equity(value: float):
     """Persist peak equity to SQLite."""
     try:
         ts = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(_RISK_DB, timeout=5.0) as con:
+        with sqlite3.connect(_RISK_DB, timeout=15.0) as con:
             con.execute(
                 "INSERT INTO peak_equity (id, value, updated_at) VALUES (1, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
@@ -189,7 +190,7 @@ def _adaptive_risk_pct(asset_type: str, regime: str = "") -> float:
 
     try:
         db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
-        con = sqlite3.connect(db_path, timeout=5.0)
+        con = sqlite3.connect(db_path, timeout=15.0)
         con.execute("PRAGMA journal_mode=WAL")
         con.row_factory = sqlite3.Row
 

@@ -1594,6 +1594,48 @@ async function analyzeSignal(symbol,auto) {
   }
 }
 
+// -- Analyze Naked Signal (Engine B) --
+async function analyzeNakedSignal(symbol) {
+  var sid=(symbol||'').replace(/[\/=^.]/g,'_');
+  var sig=window['_nakedSig_'+sid];
+  if(!sig) {
+    sig=allSignals.find(function(s){return s.symbol===symbol;});
+  }
+  if(!sig) { showToast('Naked signal not found for '+symbol, true); return; }
+  
+  var btn=document.getElementById('abtn-naked-'+sid);
+  if(btn){btn.disabled=true;btn.textContent='🤖 ANALYZING...';}
+  
+  var resDiv = document.getElementById('nres-'+sid);
+  if(resDiv && !document.getElementById('ai-nres-'+sid)) {
+    resDiv.innerHTML += '<div id="ai-nres-'+sid+'" style="margin-top:10px;padding:10px;border-top:1px dashed var(--border);"><span style="color:#00d4ff">Sending structural data to Marcus Reid (xAI Grok)...</span></div>';
+  }
+
+  try {
+    var resp=await fetch('/api/analyze',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({signal:sig, stylePreference:'scalp'}) // Engine B defaults to shorter timeframes
+    });
+    if(!resp.ok) throw new Error('Server error: HTTP '+resp.status);
+    var data=await resp.json();
+    if(data.error) throw new Error(data.error);
+    
+    var aiHtml = buildAIContent(data, symbol);
+    var aiDiv = document.getElementById('ai-nres-'+sid);
+    if(aiDiv) {
+       aiDiv.innerHTML = aiHtml;
+    }
+    if(btn){btn.style.display='none';}
+    showToast('AI Analysis complete for '+symbol);
+  } catch(err) {
+    if(btn){btn.disabled=false;btn.textContent='🤖 RETRY AI';}
+    var aiDiv = document.getElementById('ai-nres-'+sid);
+    if(aiDiv) aiDiv.innerHTML = '<span style="color:var(--bear)">AI Error: '+err.message+'</span>';
+    showToast('AI Error: '+err.message, true);
+  }
+}
+
 // -- Naked Scalp Scan & Compare --
 async function quickExecute(symbol, engineBData) {
   var sid=(symbol||'').replace(/[\/=^.]/g,'_');

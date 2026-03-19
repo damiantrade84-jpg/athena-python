@@ -747,7 +747,7 @@ class AutoTrader:
 
         try:
 
-            with sqlite3.connect(self._audit_db, timeout=1.0) as con:
+            with sqlite3.connect(self._audit_db, timeout=15.0) as con:
 
                 con.execute(
 
@@ -817,7 +817,7 @@ class AutoTrader:
 
         try:
 
-            with sqlite3.connect(self._audit_db, timeout=1.0) as con:
+            with sqlite3.connect(self._audit_db, timeout=15.0) as con:
 
                 con.execute(
 
