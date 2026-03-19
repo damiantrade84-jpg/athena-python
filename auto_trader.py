@@ -249,8 +249,8 @@ class AutoTrader:
                             cfg = self._config_fn() if self._config_fn else {}
                             _meta_result = run_meta_analysis(
                                 self._audit_db,
-                                cfg.get("ANTHROPIC_KEY", ""),
-                                cfg.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+                                cfg.get("XAI_API_KEY", ""),
+                                cfg.get("XAI_MODEL", "grok-4-1-fast-reasoning"),
                             )
                             log.info(f"[AUTO] Weekly meta-analysis complete: {_meta_result.get('summary', '')[:100]}")
                         except Exception as _me:

@@ -131,7 +131,7 @@ def build_engine_b_signal_message(
         # Recent failures
         recent_fails = learning_ctx.get("recent_failures", [])
         if recent_fails:
-
+            lines.append(f"Recent failures: {', '.join(recent_fails[:3])}")
     
     return "\n".join(lines)
 
@@ -174,7 +174,53 @@ Focus on: swing structure alignment, BOS confirmation, liquidity sweeps, FVG ove
 Output strict JSON: {"grade":"A+","edgeProbability":75,"riskLevel":"MEDIUM","verdict":"concise analysis"}
 Grade scale: A+ (elite), A (strong), B (acceptable), C (marginal), D/F (reject)."""
         
-<
+        response = client.responses.create(
+            model=xai_model,
+            max_output_tokens=800,
+            instructions=expert_prompt,
+            input=message
+        )
+        
+        text = response.output_text.strip()
+        
+        # Robust JSON parsing (same as Engine A)
+        import re
+        import json
+        
+        parsed = None
+        
+        # Try code fence
+        if "```" in text:
+            parts = text.split("```")
+            for p in parts:
+                p = p.strip()
+                if p.startswith("json"):
+                    p = p[4:].strip()
+                if p.startswith("{"):
+                    try:
+                        parsed = json.loads(p[:p.rfind("}") + 1])
+                        break
+                    except json.JSONDecodeError:
+                        pass
+        
+        # Try regex
+        if parsed is None:
+            match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text)
+            if match:
+                try:
+                    parsed = json.loads(match.group())
+                except json.JSONDecodeError:
+                    pass
+        
+        # Fallback to brace matching
+        if parsed is None:
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start >= 0 and end > start:
+                try:
+                    parsed = json.loads(text[start:end])
+                except json.JSONDecodeError:
+                    pass
         
         if parsed is None:
             log.error(f"[ENGINE_B_AI] {pair}: Failed to parse JSON from AI response")

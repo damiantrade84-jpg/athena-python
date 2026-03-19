@@ -634,9 +634,12 @@ def calc_aroon(candles: list, period: int = 14) -> dict:
 
     min_idx = len(lo) - 1 - lo[::-1].index(min_val)
 
-    aroon_up = (max_idx / period) * 100
+    bars_since_high = (len(hi) - 1) - max_idx
+    bars_since_low  = (len(lo) - 1) - min_idx
 
-    aroon_down = (min_idx / period) * 100
+    aroon_up = ((period - bars_since_high) / period) * 100
+
+    aroon_down = ((period - bars_since_low) / period) * 100
 
     aroon_osc = aroon_up - aroon_down
 

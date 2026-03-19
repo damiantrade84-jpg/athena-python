@@ -443,10 +443,10 @@ Reply in JSON only:
 {{"summary":"one sentence overall assessment","insights":["insight1","insight2","insight3"],"adjustments":["adj1","adj2"],"blind_spot":"one key systematic miss","devils_advocate":"strongest counter-argument to the above conclusions"}}"""
 
 
-def run_meta_analysis(db_path: str, anthropic_key: str, model: str,
+def run_meta_analysis(db_path: str, xai_key: str, model: str,
                       days: int = 7) -> dict:
-    """Ask Claude to review recent outcomes and identify systematic biases."""
-    if not anthropic_key or anthropic_key == "YOUR_XAI_API_KEY":
+    """Ask xAI Grok to review recent outcomes and identify systematic biases."""
+    if not xai_key or xai_key == "YOUR_XAI_API_KEY":
         return {"error": "xAI API key not configured"}
 
     context = get_meta_analysis_context(db_path, days=days)
@@ -455,12 +455,14 @@ def run_meta_analysis(db_path: str, anthropic_key: str, model: str,
 
     try:
         import openai
-        client = openai.OpenAI(api_key=anthropic_key, base_url="https://api.x.ai/v1")
+        client = openai.OpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
         resp = client.responses.create(
             model=model,
             max_output_tokens=800,
-            instructions=_META_SYSTEM,
-            input=_META_USER_TMPL.format(context=context)
+            input=[
+                {"role": "system", "content": _META_SYSTEM},
+                {"role": "user", "content": _META_USER_TMPL.format(context=context)}
+            ]
         )
         raw = resp.output_text.strip()
         import re, json as _json
@@ -515,180 +517,6 @@ def get_last_meta_analysis(db_path: str) -> dict | None:
     return None
 
 
-# ── Learning Memory Injection (Pillar 5) ─────────────────────────────────────
-
-# Cache for learning memory context
-_learning_memory_cache: dict = {}
-_MEMORY_CACHE_TTL = 21600  # 6 hours
-
-def build_learning_memory(db_path: str, asset_type: str,
-                          pair: str = "") -> str:
-    """Build a condensed statistical summary of trade history for AI prompt injection.
-
-    Unlike build_feedback_context() which gives raw trade-by-trade data, this
-    provides statistical summaries — win rates, regime performance, factor
-    reliability — which LLMs can reason about effectively.
-
-    Returns a formatted string ready for injection into the AI system prompt.
-    """
-    import time as _time
-
-    cache_key = f"{asset_type}_{pair}"
-    if cache_key in _learning_memory_cache:
-        entry = _learning_memory_cache[cache_key]
-        if _time.time() - entry["ts"] < _MEMORY_CACHE_TTL:
-            return entry["text"]
-
-    try:
-        con = sqlite3.connect(db_path, timeout=15.0)
-        con.row_factory = sqlite3.Row
-        rows = con.execute(
-            "SELECT * FROM learning_log WHERE asset_type = ? AND win IS NOT NULL "
-            "ORDER BY ts DESC LIMIT 100",
-            (asset_type,)
-        ).fetchall()
-        con.close()
-    except Exception:
-        return ""
-
-    rows = [dict(r) for r in rows]
-    if len(rows) < 5:
-        return f"[Limited data: only {len(rows)} completed trades for {asset_type}]"
-
-    # 1. Overall stats
-    total = len(rows)
-    wins = sum(r.get("win", 0) for r in rows)
-    wr = round(wins / total * 100, 1) if total else 0
-    r_vals = [r.get("r_multiple") or 0.0 for r in rows]
-    avg_r = round(sum(r_vals) / len(r_vals), 2) if r_vals else 0
-    total_r = round(sum(r_vals), 1)
-
-    # 2. Win rate by regime
-    regime_stats: dict = {}
-    for r in rows:
-        reg = r.get("regime") or "UNKNOWN"
-        regime_stats.setdefault(reg, {"n": 0, "w": 0, "r": 0.0})
-        regime_stats[reg]["n"] += 1
-        regime_stats[reg]["w"] += r.get("win", 0)
-        regime_stats[reg]["r"] += r.get("r_multiple") or 0.0
-
-    regime_lines = []
-    for reg, s in sorted(regime_stats.items(), key=lambda x: x[1]["n"], reverse=True):
-        if s["n"] >= 3:
-            rwr = round(s["w"] / s["n"] * 100, 0)
-            ravg = round(s["r"] / s["n"], 2)
-            regime_lines.append(f"  {reg}: {rwr}% WR ({s['n']} trades, avg {ravg}R)")
-
-    # 3. Holding time: winners vs losers
-    win_holds = [r.get("holding_hours") for r in rows if r.get("win") and r.get("holding_hours")]
-    loss_holds = [r.get("holding_hours") for r in rows if not r.get("win") and r.get("holding_hours")]
-    avg_win_hold = round(sum(win_holds) / len(win_holds), 1) if win_holds else 0
-    avg_loss_hold = round(sum(loss_holds) / len(loss_holds), 1) if loss_holds else 0
-
-    # 4. Recent streak (last 5 trades)
-    last_5 = rows[:5]
-    streak = "".join("W" if r.get("win") else "L" for r in last_5)
-
-    # 5. Factor reliability from votes
-    vote_reliability = []
-    vote_stats: dict = {}
-    for r in rows:
-        if not r.get("votes_json"):
-            continue
-        try:
-            votes = json.loads(r["votes_json"])
-            for k, v in votes.items():
-                if v is None:
-                    continue
-                vote_stats.setdefault(k, {"pos_w": 0, "pos_n": 0,
-                                           "neg_w": 0, "neg_n": 0})
-                if v > 0:
-                    vote_stats[k]["pos_n"] += 1
-                    if r.get("win"):
-                        vote_stats[k]["pos_w"] += 1
-                elif v < 0:
-                    vote_stats[k]["neg_n"] += 1
-                    if r.get("win"):
-                        vote_stats[k]["neg_w"] += 1
-        except Exception:
-            pass
-
-    for vk, vs in vote_stats.items():
-        if vs["pos_n"] >= 5:
-            wr_pos = round(vs["pos_w"] / vs["pos_n"] * 100, 0)
-            vote_reliability.append(f"  {vk}: {wr_pos}% WR when positive ({vs['pos_n']} trades)")
-
-    vote_reliability.sort()
-
-    # 6. Pair-specific stats
-    pair_line = ""
-    if pair:
-        pair_rows = [r for r in rows if r.get("pair") == pair]
-        if len(pair_rows) >= 3:
-            pw = sum(r.get("win", 0) for r in pair_rows)
-            pwr = round(pw / len(pair_rows) * 100, 0)
-            pavg = round(sum(r.get("r_multiple") or 0.0 for r in pair_rows) / len(pair_rows), 2)
-            pair_line = f"\n{pair} specific: {pwr}% WR, avg {pavg}R ({len(pair_rows)} trades)"
-
-    # Build the memory context string
-    memory = (
-        f"EMPIRICAL TRADING HISTORY ({asset_type}, last {total} trades):\n"
-        f"Overall: {wr}% WR | Avg {avg_r}R | Total {total_r}R | "
-        f"Recent: {streak}\n"
-        f"Win hold: {avg_win_hold}h avg | Loss hold: {avg_loss_hold}h avg\n"
-    )
-
-    if regime_lines:
-        memory += "Win Rate by Regime:\n" + "\n".join(regime_lines) + "\n"
-
-    if vote_reliability:
-        memory += "Factor Reliability:\n" + "\n".join(vote_reliability[:8]) + "\n"
-
-    if pair_line:
-        memory += pair_line + "\n"
-
-    # 7. Factor score analysis (new z-score factors)
-    factor_lines = []
-    factor_agg: dict = {}
-    for r in rows:
-        fj = r.get("factors_json")
-        if not fj:
-            continue
-        try:
-            fdata = json.loads(fj)
-            scores = fdata.get("scores") or {}
-            for fname, fval in scores.items():
-                if fval is None:
-                    continue
-                factor_agg.setdefault(fname, {"w_sum": 0.0, "w_n": 0, "l_sum": 0.0, "l_n": 0})
-                if r.get("win"):
-                    factor_agg[fname]["w_sum"] += fval
-                    factor_agg[fname]["w_n"] += 1
-                else:
-                    factor_agg[fname]["l_sum"] += fval
-                    factor_agg[fname]["l_n"] += 1
-        except Exception:
-            pass
-
-    for fname, fs in sorted(factor_agg.items()):
-        total = fs["w_n"] + fs["l_n"]
-        if total >= 5:
-            avg_w = round(fs["w_sum"] / fs["w_n"], 2) if fs["w_n"] else 0
-            avg_l = round(fs["l_sum"] / fs["l_n"], 2) if fs["l_n"] else 0
-            factor_lines.append(f"  {fname}: avg {avg_w} (wins) vs {avg_l} (losses) [{total} trades]")
-
-    if factor_lines:
-        memory += "Factor Scores (wins vs losses):\n" + "\n".join(factor_lines[:8]) + "\n"
-
-    memory += (
-        "\nUse this data to calibrate your confidence. "
-        "If history shows poor performance in current regime, express caution. "
-        "If history supports this setup, mention it."
-    )
-
-    # Cache
-    import time as _time
-    _learning_memory_cache[cache_key] = {"text": memory, "ts": _time.time()}
-
-    return memory
-
+# NOTE: build_learning_memory() was removed as dead code (never called).
+# The active learning path uses get_ai_learning_context() which returns a dict
+# that _build_signal_message() formats into the AI prompt at runtime.
