@@ -365,11 +365,17 @@ class NakedEngine:
                 struct_score = 1.0 if bos else 0.8
             else:
                 struct_score = 0.5  # H1 is bearish but H4 does not agree
+        elif h1_seq in ("CONTRACTION", "EXPANSION", "RANGING"):
+            # H1 neutral — credit macro alignment if H4 agrees with direction
+            if (direction == "LONG" and h4_seq == "HH_HL") or (direction == "SHORT" and h4_seq == "LH_LL"):
+                struct_score = 0.4
+            else:
+                struct_score = 0.15
         else:
-            struct_score = 0.0  # No directional alignment = zero structure
+            struct_score = 0.0  # Counter-trend = zero structure
 
-        # Penalty multiplier: if structure is weak, slash Room & RR contribution
-        multiplier = 1.0 if struct_score >= 0.7 else 0.3
+        # Graduated penalty multiplier
+        multiplier = 1.0 if struct_score >= 0.7 else 0.6 if struct_score >= 0.3 else 0.3
 
         # ── Room to Move (points out of 1.0) ──
         room_score = 0.3  # default: no zone data

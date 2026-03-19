@@ -6359,9 +6359,9 @@ def _naked_scan_style_profile(style: str | None) -> tuple[str, dict]:
         resolved = "scalp"
     profiles = {
         "scalp": {
-            "min_score": 1.6,
-            "min_room_atr": 0.5,
-            "min_rr": 1.2,
+            "min_score": 0.8,
+            "min_room_atr": 0.3,
+            "min_rr": 0.9,
             "fallback_rr": 1.5,
             "require_macro_align": False,
         },
@@ -6746,19 +6746,18 @@ def api_scan_naked():
                 else:
                     has_displacement = True
                 
-                if res.get("structural_verdict") == "CLEAR":
-                    seq = res.get("current_swing_sequence", "")
-                    macro_seq = res.get("macro_swing_sequence", "")
+                verdict = res.get("structural_verdict", "NONE")
+                seq = res.get("current_swing_sequence", "")
+                macro_seq = res.get("macro_swing_sequence", "")
+                if verdict == "CLEAR":
                     
-                    # Only accept strong structural alignments
-                    if direction == "LONG" and seq == "HH_HL":
-                        valid = True
-                    elif direction == "SHORT" and seq == "LH_LL":
-                        valid = True
-                    else:
-                        valid = False
+                    # Hard-reject only counter-trend: LONG in downtrend or SHORT in uptrend
+                    if direction == "LONG" and seq == "LH_LL":
+                        continue
+                    if direction == "SHORT" and seq == "HH_HL":
+                        continue
                         
-                    if valid and has_displacement:
+                    if has_displacement:
                         conf_data = engine.calculate_confidence(res, current_price, direction)
                         if conf_data["score"] < style_profile["min_score"]:
                             continue
