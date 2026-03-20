@@ -7604,7 +7604,7 @@ def _engine_b_regime_label(
         return "RANGING"
 
 
-def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None):
+def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool = False):
     if not isinstance(sig, dict):
         return None, None, "Invalid signal"
 
@@ -7770,56 +7770,62 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None):
         res["style"] = resolved_style
         res["regime"] = regime_label
 
-        # Fetch news context for Engine B AI advisory (if enabled, non-blocking)
-        _news_ctx = None
-        if CONFIG.get("ENGINE_B_NEWS_CONTEXT_ENABLED", True):
+        # AI execution control
+        _run_ai = force_ai or not CONFIG.get("AI_ON_DEMAND_ONLY", True)
+        if _run_ai:
+            # Fetch news context for Engine B AI advisory (if enabled, non-blocking)
+            _news_ctx = None
+            if CONFIG.get("ENGINE_B_NEWS_CONTEXT_ENABLED", True):
+                try:
+                    _news_ctx = fetch_news_context([pair_obj])
+                except Exception as _ne:
+                    log.debug(f"[NAKED-AI] News context fetch failed (non-blocking): {_ne}")
+                    _news_ctx = None
+
             try:
-                _news_ctx = fetch_news_context([pair_obj])
-            except Exception as _ne:
-                log.debug(f"[NAKED-AI] News context fetch failed (non-blocking): {_ne}")
-                _news_ctx = None
+                from engine_b_ai import get_engine_b_ai_verdict
 
-        try:
-            from engine_b_ai import get_engine_b_ai_verdict
-
-            ai_verdict = get_engine_b_ai_verdict(
-                pair=pair_obj.get("display"),
-                direction=direction,
-                current_price=current_price,
-                structure_result=res,
-                confidence_result=conf,
-                learning_ctx=learning_ctx,
-                xai_api_key=CONFIG.get("XAI_API_KEY"),
-                xai_model=CONFIG.get("XAI_MODEL", "grok-beta"),
-                engine_a_ctx=engine_a_ctx,
-                news_ctx=_news_ctx,
-            )
-            if "error" not in ai_verdict:
-                res["ai_analysis"] = _enrich_engine_b_ai_payload(ai_verdict)
-                log.info(
-                    f"[NAKED-AI] {pair_obj.get('display')}: AI grade={ai_verdict.get('grade')}"
+                ai_verdict = get_engine_b_ai_verdict(
+                    pair=pair_obj.get("display"),
+                    direction=direction,
+                    current_price=current_price,
+                    structure_result=res,
+                    confidence_result=conf,
+                    learning_ctx=learning_ctx,
+                    xai_api_key=CONFIG.get("XAI_API_KEY"),
+                    xai_model=CONFIG.get("XAI_MODEL", "grok-beta"),
+                    engine_a_ctx=engine_a_ctx,
+                    news_ctx=_news_ctx,
                 )
-            else:
-                err_msg = ai_verdict.get("error", "AI unavailable")
-                log.warning(
-                    f"[NAKED-AI] {pair_obj.get('display')}: AI analysis failed - {err_msg}"
-                )
+                if "error" not in ai_verdict:
+                    res["ai_analysis"] = _enrich_engine_b_ai_payload(ai_verdict)
+                    log.info(
+                        f"[NAKED-AI] {pair_obj.get('display')}: AI grade={ai_verdict.get('grade')}"
+                    )
+                else:
+                    err_msg = ai_verdict.get("error", "AI unavailable")
+                    log.warning(
+                        f"[NAKED-AI] {pair_obj.get('display')}: AI analysis failed - {err_msg}"
+                    )
+                    res["ai_analysis"] = {
+                        "grade": "N/A",
+                        "edgeProbability": None,
+                        "riskLevel": "UNKNOWN",
+                        "verdict": f"AI review unavailable: {err_msg}",
+                    }
+                    res["ai_analysis"] = _enrich_engine_b_ai_payload(res["ai_analysis"])
+            except Exception as e:
+                log.warning(f"[NAKED-AI] Failed to get AI verdict: {e}")
                 res["ai_analysis"] = {
                     "grade": "N/A",
                     "edgeProbability": None,
                     "riskLevel": "UNKNOWN",
-                    "verdict": f"AI review unavailable: {err_msg}",
+                    "verdict": f"AI review unavailable: {e}",
                 }
                 res["ai_analysis"] = _enrich_engine_b_ai_payload(res["ai_analysis"])
-        except Exception as e:
-            log.warning(f"[NAKED-AI] Failed to get AI verdict: {e}")
-            res["ai_analysis"] = {
-                "grade": "N/A",
-                "edgeProbability": None,
-                "riskLevel": "UNKNOWN",
-                "verdict": f"AI review unavailable: {e}",
-            }
-            res["ai_analysis"] = _enrich_engine_b_ai_payload(res["ai_analysis"])
+        else:
+            log.debug(f"[NAKED] {pair_obj.get('display')}: AI skipped (AI_ON_DEMAND_ONLY=true, force_ai=false)")
+            res["ai_analysis"] = None
 
         return res, pair_obj, None
     except Exception as e:
@@ -7833,7 +7839,7 @@ def api_naked_analysis():
     if not d or "signal" not in d:
         return jsonify({"error": "Invalid payload"}), 400
 
-    res, _pair_obj, err = _compute_naked_analysis(d["signal"])
+    res, _pair_obj, err = _compute_naked_analysis(d["signal"], force_ai=True)
     if err:
         return jsonify({"error": err}), 500
     return jsonify(_json_safe(res))
@@ -7879,7 +7885,7 @@ def api_compare_engines():
             }
         )
         engine_b, _pair_obj, err = _compute_naked_analysis(
-            engine_b_seed, engine_a_ctx=engine_a
+            engine_b_seed, engine_a_ctx=engine_a, force_ai=True
         )
         if err:
             return jsonify({"error": err}), 422
