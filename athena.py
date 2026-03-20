@@ -6683,18 +6683,31 @@ def _format_backtest_results(trades, pair, engine_type="NAKED"):
         max(trigger_counts.items(), key=lambda kv: kv[1])[0] if trigger_counts else "NONE"
     )
 
-    result.update(
-        {
-            "liquidity_sweep_pct": round(liquidity_pct, 1),
-            "zone_touch_pct": round(zone_touch_pct, 1),
-            "breakout_entry_pct": round(breakout_pct, 1),
-            "rejection_entry_pct": round(rejection_pct, 1),
-            "dominant_trigger_pattern": dominant_trigger,
-        }
-    )
-
+    # ── Forex-specific Engine B metrics ───────────────────────────────────────
     if pair.get("type") == "forex":
-        result["engine"] = "ENGINE_B_FOREX"
+        fvg_avg = sum(t.get("fvg_bonus", 0) for t in trades) / len(trades)
+        volume_avg = sum(t.get("volume_strength", 0) for t in trades) / len(trades)
+        fvg_overlap_pct = (
+            sum(1 for t in trades if t.get("fvg_overlap")) / len(trades) * 100
+        )
+        result.update(
+            {
+                "fvg_avg_bonus": round(fvg_avg, 3),
+                "avg_volume_strength": round(volume_avg, 3),
+                "fvg_overlap_pct": round(fvg_overlap_pct, 1),
+                "engine": "ENGINE_B_FOREX",
+            }
+        )
+    else:
+        result.update(
+            {
+                "liquidity_sweep_pct": round(liquidity_pct, 1),
+                "zone_touch_pct": round(zone_touch_pct, 1),
+                "breakout_entry_pct": round(breakout_pct, 1),
+                "rejection_entry_pct": round(rejection_pct, 1),
+                "dominant_trigger_pattern": dominant_trigger,
+            }
+        )
 
     return result
 
@@ -6790,6 +6803,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 direction,
                 atr,
                 regime_label,
+                fallback_rr=style_profile.get("fallback_rr", 2.0),
             )
             conf_data = naked_engine.calculate_confidence(
                 res,
@@ -6846,9 +6860,9 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         outcome = "TIMEOUT"
         r_multiple = 0.0
         exit_bar_offset = 0  # tracks which future bar resolved the trade
-        # Style-specific hold limit (H4 bars): scalp=12 (48h), intraday=24 (4d), swing=60 (10d)
-        _hold_map = {"scalp": 12, "intraday": 24, "swing": 60}
-        max_hold_bars = _hold_map.get(resolved_style, 12)
+        # Style-specific hold limit (H4 bars): scalp=24 (4d), intraday=48 (8d), swing=120 (20d)
+        _hold_map = {"scalp": 24, "intraday": 48, "swing": 120}
+        max_hold_bars = _hold_map.get(resolved_style, 24)
         future_window = candles_h4[i + 1 : min(i + max_hold_bars + 1, len(candles_h4))]
         for fi, future in enumerate(future_window):
             exit_bar_offset = fi
@@ -6902,6 +6916,9 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 "rr_target": round(target_rr, 2),
                 "bos_volume_confirmed": best["res"].get("bos_volume_confirmed", True),
                 "choch_confirmed": best["res"].get("choch_confirmed", False),
+                # Forex-specific fields
+                "fvg_bonus": best["res"].get("fvg_bonus", 0.0),
+                "volume_strength": best["res"].get("volume_strength", 0.0),
             }
         )
         # Advance past the resolved exit bar plus the configured cooldown gap.
@@ -8158,6 +8175,7 @@ def api_scan_naked():
                     direction,
                     atr,
                     regime_label,
+                    fallback_rr=style_profile.get("fallback_rr", 2.0),
                 )
 
                 verdict = res.get("structural_verdict", "NONE")

@@ -524,6 +524,7 @@ class NakedEngine:
         direction: str,
         atr: float,
         regime: str = "RANGING",
+        fallback_rr: float = 2.0,
     ) -> dict:
         """
         Analyzes raw candle data to find Support/Resistance zones and trend sequence.
@@ -653,15 +654,15 @@ class NakedEngine:
             if tp >= current_price - (atr * 0.5):
                 tp = None
 
-        # Generate TP from 2.0 RR fallback if no valid opposing structural zone exists
+        # Generate TP from fallback_rr if no valid opposing structural zone exists
         if tp is None:
             sl_dist = abs(current_price - sl) if (sl is not None) else (atr * sl_mult)
             if sl_dist == 0:
                 sl_dist = atr * sl_mult
             if direction == "LONG":
-                tp = current_price + (sl_dist * 2.0)
+                tp = current_price + (sl_dist * fallback_rr)
             else:
-                tp = current_price - (sl_dist * 2.0)
+                tp = current_price - (sl_dist * fallback_rr)
 
         # 6. BOS validation
         bos_confirmed = (direction == "LONG" and bos_data["bos_bull"]) or (
