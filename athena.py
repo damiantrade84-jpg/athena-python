@@ -6700,15 +6700,15 @@ def _format_backtest_results(trades, pair, engine_type="NAKED"):
             }
         )
     else:
-    result.update(
-        {
-            "liquidity_sweep_pct": round(liquidity_pct, 1),
-            "zone_touch_pct": round(zone_touch_pct, 1),
-            "breakout_entry_pct": round(breakout_pct, 1),
-            "rejection_entry_pct": round(rejection_pct, 1),
-            "dominant_trigger_pattern": dominant_trigger,
-        }
-    )
+        result.update(
+            {
+                "liquidity_sweep_pct": round(liquidity_pct, 1),
+                "zone_touch_pct": round(zone_touch_pct, 1),
+                "breakout_entry_pct": round(breakout_pct, 1),
+                "rejection_entry_pct": round(rejection_pct, 1),
+                "dominant_trigger_pattern": dominant_trigger,
+            }
+        )
 
     return result
 
