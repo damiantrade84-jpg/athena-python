@@ -328,6 +328,15 @@ class AutoTrader:
 
             return
 
+        # Re-stamp all signals with the scan-completion time.
+        # analyze_pair() timestamps each signal individually; with 90 pairs / 3 workers,
+        # the first pairs in the queue can be 3-5 min old by the time the scan returns.
+        # These signals are still current — they were generated this scan cycle — so we
+        # align all timestamps to now to prevent STALE_SIGNAL rejections in risk_check.
+        _scan_ts = datetime.now(timezone.utc).isoformat()
+        for _s in signals:
+            _s["timestamp"] = _scan_ts
+
         # Sort by score descending — best signal first
 
         signals = sorted(
