@@ -49,10 +49,7 @@
 
 ## Recent Changes (2026-03-17)
 
-**Engine B Backtest Refinement**:
-   - `athena.py`: Enforced `require_macro_align: True` on the Engine B `intraday` scanner profile to ensure strictly high-quality trend-following entries.
-   - `athena.py`: Expanded backtest `max_hold_bars` logic in `backtest_pair_naked` for intraday (from 24 to 48 H4 bars) and swing (from 60 to 120 H4 bars) to decrease premature closures (`TIMEOUT`).
-   - `market_structure.py`: `analyze_structure` now supports a dynamic `fallback_rr` parameter (passed down from `athena.py` styles) to respect custom RR targets rather than hardcoding a strict `2.0` RR distance.
+
 
 **Engine B (Naked Market Structure):**
 - Added `market_structure.py` housing `NakedEngine` for pure price-action evaluation (no indicators).
