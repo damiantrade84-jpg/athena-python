@@ -6813,6 +6813,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 rr = (tp_dist / sl_dist) if sl_dist > 0 else 0.0
             if rr <= 0:
                 continue
+            if rr < float(style_profile.get("min_rr", 1.0)):
+                continue
 
             candidates.append(
                 {
@@ -6898,8 +6900,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 "rr_target": round(target_rr, 2),
             }
         )
-        # Advance past exit bar + cooldown — no overlapping entries
-        i = i + 1 + exit_bar_offset + COOLDOWN
+        # Advance past the resolved exit bar plus the configured cooldown gap.
+        i = i + 2 + exit_bar_offset + COOLDOWN
 
     result = _format_backtest_results(trades, pair, engine_type="NAKED")
     _tp_count = sum(1 for t in trades if t.get("outcome") == "TP1")
