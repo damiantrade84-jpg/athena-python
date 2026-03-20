@@ -6779,6 +6779,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         )
         atr = atr_list[-1] if atr_list and atr_list[-1] else (current_price * 0.01)
 
+        regime_label = _engine_b_regime_label(h4_ctx, pair.get("type", "stock"))
         candidates = []
         for direction in ["LONG", "SHORT"]:
             res = naked_engine.analyze_structure(
@@ -6788,7 +6789,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 current_price,
                 direction,
                 atr,
-                "RANGING",
+                regime_label,
             )
             conf_data = naked_engine.calculate_confidence(
                 res,
@@ -6827,6 +6828,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                     "rr": rr,
                     "res": res,
                     "conf": conf_data,
+                    "regime_label": regime_label,
                 }
             )
 
@@ -6889,7 +6891,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 "tp2": round(float(tp), 6),
                 "outcome": outcome,
                 "resultR": round(r_multiple, 2),
-                "regime": best["res"].get("macro_swing_sequence", "RANGING"),
+                "regime": best.get("regime_label", "RANGING"),
                 "oos": i >= oos_start,
                 "volAdj": 1.0,
                 "r_multiple": r_multiple,
@@ -7513,6 +7515,34 @@ def _naked_scan_style_profile(style: str | None) -> tuple[str, dict]:
     return resolved, merged_profiles.get(resolved, merged_profiles["scalp"])
 
 
+def _engine_b_regime_label(
+    h4_candles: list,
+    pair_type: str = "stock",
+    regime_hint: dict | str | None = None,
+) -> str:
+    """Resolve a shared Engine B regime label across live, analysis, and backtest."""
+    if isinstance(regime_hint, dict):
+        hinted = regime_hint.get("label") or regime_hint.get("regime")
+        if hinted:
+            return str(hinted).upper()
+    elif regime_hint:
+        return str(regime_hint).upper()
+
+    if not h4_candles or len(h4_candles) < 20:
+        return "RANGING"
+
+    try:
+        from regime import detect_regime
+
+        h4i = calc_indicators_with_normalized(h4_candles, pair_type or "stock")
+        h4_snap = h4i.get("snap", {}) if isinstance(h4i, dict) else {}
+        bbw_pct = h4_snap.get("bbWidth_pct") or h4_snap.get("bb_width_pct")
+        regime = detect_regime(h4_snap, pair_type or "stock", bb_width_pct=bbw_pct)
+        return str(regime.get("label", "RANGING")).upper()
+    except Exception:
+        return "RANGING"
+
+
 def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None):
     if not isinstance(sig, dict):
         return None, None, "Invalid signal"
@@ -7645,7 +7675,14 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None):
         from market_structure import NakedEngine
 
         engine = NakedEngine()
-        res = engine.analyze_structure(d1, h4, h1, current_price, direction, atr)
+        regime_label = _engine_b_regime_label(
+            h4,
+            pair_obj.get("type", "stock"),
+            engine_a_ctx.get("regime") if isinstance(engine_a_ctx, dict) else None,
+        )
+        res = engine.analyze_structure(
+            d1, h4, h1, current_price, direction, atr, regime_label
+        )
 
         try:
             from ai_learning import get_ai_learning_context
@@ -7670,6 +7707,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None):
         res["current_price"] = current_price
         res["direction"] = direction
         res["style"] = resolved_style
+        res["regime"] = regime_label
 
         # Fetch news context for Engine B AI advisory (if enabled, non-blocking)
         _news_ctx = None
@@ -8067,6 +8105,7 @@ def api_scan_naked():
 
             # Test both directions
             # analyze_structure uses: arg2 (h4 slot) for zones/macro, arg3 (h1 slot) for micro/BOS/sweep
+            regime_label = _engine_b_regime_label(zone_candles, pair.get("type", "stock"))
             for direction in ["LONG", "SHORT"]:
                 res = engine.analyze_structure(
                     d1_candles,
@@ -8075,6 +8114,7 @@ def api_scan_naked():
                     current_price,
                     direction,
                     atr,
+                    regime_label,
                 )
 
                 verdict = res.get("structural_verdict", "NONE")
@@ -8097,6 +8137,7 @@ def api_scan_naked():
                     res["type"] = pair.get("type")
                     res["direction"] = direction
                     res["style"] = resolved_style
+                    res["regime"] = regime_label
                     res["zone_tf"] = _zone_tf
                     res["entry_tf"] = _entry_tf
                     res["atr_tf"] = _atr_tf
@@ -10244,11 +10285,10 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
             from market_structure import engine as naked_engine
             _overlay_style, _overlay_profile = _naked_scan_style_profile(_style)
 
-            _reg = res.get("regime", {})
-            _regime_label = (
-                _reg.get("label", "RANGING")
-                if isinstance(_reg, dict)
-                else (str(_reg) if _reg else "RANGING")
+            _regime_label = _engine_b_regime_label(
+                h4,
+                pair.get("type", "stock"),
+                res.get("regime"),
             )
             structure_data = naked_engine.analyze_structure(
                 d1, h4, h1, float(price), direction, float(atr), _regime_label
