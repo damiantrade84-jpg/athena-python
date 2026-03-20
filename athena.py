@@ -7534,10 +7534,9 @@ def _engine_b_regime_label(
     try:
         from regime import detect_regime
 
-        h4i = calc_indicators_with_normalized(h4_candles, pair_type or "stock")
+        h4i = calc_indicators(h4_candles)
         h4_snap = h4i.get("snap", {}) if isinstance(h4i, dict) else {}
-        bbw_pct = h4_snap.get("bbWidth_pct") or h4_snap.get("bb_width_pct")
-        regime = detect_regime(h4_snap, pair_type or "stock", bb_width_pct=bbw_pct)
+        regime = detect_regime(h4_snap, pair_type or "stock", bb_width_pct=None)
         return str(regime.get("label", "RANGING")).upper()
     except Exception:
         return "RANGING"
