@@ -1,5 +1,23 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-20)
+
+**Engine B (Naked) Simplification & Parity:**
+- Engine B now uses a shared naked price-action checklist across live scan, single-pair analysis, compare, and backtest.
+- Core Engine B pass/fail is now rule-based only: structure, zone/breakout location, trigger candle, room, RR, and style profile.
+- Engine B allows both retest-style and continuation-style naked entries where appropriate.
+- Engine B live scan, compare, and naked-analysis API responses are routed through `_json_safe()` before `jsonify()`.
+- Engine B backtests now persist to `backtest_results` with `engine="naked_engine"`.
+
+**Engine B AI Role (Current):**
+- AI is advisory for Engine B — it reviews generated structure data, writes narrative/warnings, and supports compare output.
+- AI does **not** currently decide whether an Engine B signal passes or fails.
+- Any historic weighted/AI-adjusted Engine B scoring guidance should be treated as obsolete.
+
+**Dashboard/UI:**
+- Confluence display on cards now favors a visual meter/bar plus qualitative labels instead of raw score fractions like `4.00/3`.
+- Engine B backtest metric cards now show naked-rule metrics such as zone touch, breakout/rejection mix, and dominant trigger rather than stale FVG/volume placeholders.
+
 ## Recent Changes (2026-03-19)
 
 **EODHD WebSocket & Data Feed Optimization:**
@@ -77,10 +95,11 @@ audit.db and candle_cache.db contain all live trading history.
 NEVER delete, overwrite, or zip these files during updates.
 Run `python backup_db.py` before any major code changes.
 Backups stored in db_backups/ folder — keep last 7 days automatically.
-Do not touch any scoring, risk, or trading logic.
+Hardcoded DB/reset/restore safeguards must remain untouched unless the user explicitly asks for that exact change.
+Do not silently change backup, restore, reset, or destructive maintenance behavior.
 
 ## Project Overview
-Multi-asset algorithmic trading system: Flask dashboard, confluence-based signal engine, AI analysis (Claude claude-sonnet-4-6), live execution on MT5 (forex/stocks/commodities/indices) and Bybit Linear Futures (crypto LONG+SHORT).
+Multi-asset algorithmic trading system: Flask dashboard, Engine A confluence/factor scoring, Engine B naked price-action structure engine, AI review/explanation, live execution on MT5 (forex/stocks/commodities/indices) and Bybit Linear Futures (crypto LONG+SHORT).
 
 ---
 
@@ -88,12 +107,14 @@ Multi-asset algorithmic trading system: Flask dashboard, confluence-based signal
 
 | File | Purpose | Size |
 |------|---------|------|
-| `athena.py` | Flask app, scan engine, all API routes, backtest | ~2200 lines — use offset/limit |
+| `athena.py` | Flask app, scan engine, all API routes, backtest | ~11500 lines — use offset/limit |
 | `indicators.py` | Pure indicator functions (EMA, RSI, MACD, ATR, ADX, BB, Stochastic, Weinstein, Fib, OBV, Squeeze) | |
 | `scoring.py` | Confluence engine, vote weights, session, pair profiles, signal classification | |
 | `factor_scoring.py` | Z-score factor engine — directional (trend, momentum, microstructure, derivatives) + non-directional (trend_strength, volatility, volume, structure). Candle-based microstructure proxies for all asset types. | |
 | `confidence_engine.py` | 4-component confidence scoring (indicator agreement, timeframe alignment, regime fit, liquidity) | |
 | `feature_normalizer.py` | Rolling z-score, percentile rank, min-max normalization | |
+| `market_structure.py` | Engine B naked price-action engine: structure, zones, trigger patterns, and shared checklist pass/fail logic | |
+| `engine_b_ai.py` | Engine B review layer — advisory AI verdict/narrative only, not primary signal generation | |
 | `config.py` | Hard-coded CONFIG defaults + YAML loader + validation | |
 | `config.yaml` | All tunable thresholds — edit this, not config.py | |
 | `risk_engine.py` | Risk gateway: kill switch, drawdown, position sizing, portfolio heat | |
@@ -101,13 +122,14 @@ Multi-asset algorithmic trading system: Flask dashboard, confluence-based signal
 | `bybit_executor.py` | Bybit Linear Futures execution | |
 | `auto_trader.py` | Autonomous scheduler: scan every 30 min, auto-execute | |
 | `ai_learning.py` | Outcome extraction → learning_log in audit.db; factor-level analysis for AI calibration | |
+| `backup_db.py` | Safe SQLite backup/restore helper for `audit.db` and `candle_cache.db` | |
 | `regime.py` | Market regime detection (TRENDING/DEVELOPING/RANGING/DEAD RANGING) | |
 | `carry_feed.py` | Interest rate carry data — FRED static fallback, 1h cooldown on failure, non-blocking | |
 | `cot_feed.py` | CFTC Commitment of Traders z-scores — non-blocking, cache-first during scans | |
 | `duka_volume.py` | Dukascopy tick volume for forex — non-blocking during scans (returns 1.0 if cache not ready) | |
 | `forex_scoring.py` | Dedicated forex scoring engine (rules-based, 0–1 scale) — trend gate + session filter + RSI pullback + COT boost | |
 | `auto_trader.py` | Autonomous trade executor with per-class auto-trade thresholds (dict-based, per CONFIG) | |
-| `static/index.html` | Dashboard UI: signals, backtest, screener tabs — pair selector populated dynamically from `/api/pairs` | ~1320 lines |
+| `static/index.html` | Dashboard UI: signals, backtest, screener tabs — pair selector populated dynamically from `/api/pairs` | ~2550 lines |
 | `tests/test_athena.py` | Main test suite (56+ tests) | |
 | `tests/test_factor_scoring.py` | Factor scoring unit tests | |
 | `test_indicators.py` | Pure indicator unit tests (imports from `indicators` only) | |
@@ -121,7 +143,7 @@ Multi-asset algorithmic trading system: Flask dashboard, confluence-based signal
 
 ```
 run_full_scan(style, asset_class)
-  └─ for each active pair (ThreadPoolExecutor, 6 workers)
+  └─ for each active pair (ThreadPoolExecutor, 3 workers)
        └─ analyze_pair(pair, btc_bias, style)
             ├─ fetch_candles(pair, "D1"/"H4"/"H1", limit)   ← TTL cache + live bypass for non-crypto
             ├─ calc_indicators(candles)                       ← returns {snap: {...}} dict
@@ -138,6 +160,19 @@ run_full_scan(style, asset_class)
   └─ _classify_signal(sig, pair) → tier: "trade" | "watchlist" | "skip"
   └─ apply_correlation_cap(results)
   └─ _json_safe(result)                                       ← strips NaN/Inf before jsonify
+```
+
+**Engine B flow:**
+```
+/api/scan-naked OR /api/naked-analysis OR /api/compare-engines
+  └─ market_structure.NakedEngine.analyze_structure(...)
+       ├─ derive swing state, BOS, sweeps, active zone, trigger pattern
+       └─ returns raw price-action structure result
+  └─ market_structure.NakedEngine.calculate_confidence(...)
+       ├─ checklist only: structure, location, trigger/entry, room, RR, macro if required
+       └─ returns pass/fail + score + pct for UI
+  └─ Engine B AI review (optional/advisory only)
+  └─ _json_safe(response)
 ```
 
 **Execution path:**
@@ -199,9 +234,18 @@ Returns `False` if `filter_name` in pair profile's `disable_filters` list.
 Filter names: `weinstein`, `session`, `regime_transition`, `obv`, `funding`, `squeeze`, `mean_revert`, `btc_bias`, `divergence_warning`
 
 ### `_json_safe(value)` — config.py
-Recursively replaces `float("nan")` / `float("inf")` / `float("-inf")` with `None`.
-Applied to ALL scan, backtest, and analyze API responses before `jsonify()`.
+Recursively replaces `float("nan")` / `float("inf")` / `float("-inf")` with `None`, and normalizes numpy scalars/arrays into native JSON-safe Python values.
+Applied to scan, backtest, analyze, naked scan, naked analysis, and compare API responses before `jsonify()`.
 Imported in `athena.py` via `from config import _json_safe`.
+
+### `NakedEngine.calculate_confidence(...)` — market_structure.py
+- Shared Engine B checklist evaluation for live scan, single analysis, compare, and backtest
+- Score is now a checklist count / UI measure, not a weighted AI-driven decision model
+- `passed` is determined by naked price-action rules, not AI interpretation
+
+### `_naked_scan_style_profile(style)` — athena.py
+- Resolves Engine B style profile for `scalp`, `intraday`, or `swing`
+- Controls checklist strictness, room, RR, ATR timeframe, and macro-alignment requirements
 
 ### `_build_event_risk(pair, ds_ctx, earnings_ctx, closed_exchanges)` — scoring.py
 Builds `{hardBlock, reasons, earnings?, dividend?, split?}` risk dict for a pair.
@@ -311,7 +355,12 @@ AutoTrader._scheduler_loop() — daemon thread, wakes every 30s
 **Config keys (config.yaml):**
 ```yaml
 AUTO_TRADE_ENABLED: true           # boot-persistent (toggling in UI resets on restart without this)
-AUTO_TRADE_MIN_SCORE: 5.5          # floored by MIN_CONFLUENCE_CLASS per asset type
+AUTO_TRADE_MIN_SCORE:
+  crypto:    0.80
+  forex:     0.65
+  stock:     0.85
+  commodity: 0.80
+  index:     0.80
 AUTO_TRADE_MAX_DAILY: 3
 AUTO_TRADE_MAX_PER_SCAN: 1
 AUTO_TRADE_SCAN_INTERVAL_MIN: 30
@@ -383,9 +432,15 @@ Key columns: `ts, pair, score, direction, trend, grade, edge_prob, risk, style, 
 ### `backtest_results` table
 Populated after every `backtest_pair()` run. Columns: `id, run_date, pair, asset_type, engine, trades, win_rate, profit_factor, expectancy, sqn, sharpe, sortino, is_score, oos_score, max_dd_pct, bt_min, atr_source, notes`
 
-- `engine`: `"forex_scoring"` for forex pairs, `"factor_scoring"` for all others
+- `engine`: `"forex_scoring"` for forex Engine A rows, `"factor_scoring"` for non-forex Engine A rows, `"naked_engine"` for Engine B rows
 - `atr_source`: `"D1_ATR"` for non-crypto, `"H4_ATR"` for crypto
 - Index: `idx_bt_pair (pair, run_date)`
+
+**Current persistence paths verified in code:**
+- `audit_log`: manual analysis writes, manual execution writes/errors, auto-trader execution writes/errors, and trade outcome updates
+- `learning_log`: populated from `extract_learning_from_trade()` after `_update_trade_outcome()` commits a closed trade outcome
+- `backtest_results`: populated by Engine A backtests and now also by Engine B naked backtests
+- `candle_cache`: populated via SQLite candle cache writes and live cache seeding logic
 
 **Backtest history API endpoints:**
 - `GET /api/backtest-history` — last 500 results, newest first
@@ -405,8 +460,8 @@ Schema auto-migrated on startup — adding a new column: add it to both `CREATE 
 
 ## Python Environment
 
-- **Python 3.14.3** — always use `py` (not `python` or `python3`); on Linux use `python3`
-- **Run tests**: `py -m pytest tests/ test_indicators.py -v` (Windows) / `python3 -m pytest tests/ test_indicators.py -v` (Linux)
+- **Python**: prefer the project virtualenv on Windows: `.\.venv\Scripts\python.exe`
+- **Run tests**: `.\.venv\Scripts\python.exe -m pytest tests/ test_indicators.py -v` (Windows) / `python3 -m pytest tests/ test_indicators.py -v` (Linux)
 - **Platform**: Windows 11, bash shell (dev); Linux also supported
 
 ---
@@ -421,7 +476,8 @@ claude
 ```
 
 **Preferred workflow:**
-- Use Claude Code CLI (not Windsurf or other IDEs) for all code changes — context is preserved across sessions via `CLAUDE.md` and the memory system at `~/.claude/projects/`
+- Use Claude Code primarily to review code paths, understand logic, inspect persistence, and then make safe, explicit edits from verified callsites
+- Keep DB/reset/restore safeguards untouched unless the user explicitly requests those exact changes
 - To paste long logs or output: use a file (`log.txt`) and ask Claude to read it, rather than pasting directly
 - To share a server log: save to a temp file and say "read log.txt"
 - Claude Code sessions auto-summarize context so long projects are not lost
@@ -449,6 +505,7 @@ claude
 11. `CandleBuilder.seed()` and `bulk_update_d1()` skip `enabled:False` pairs — do not remove these checks
 12. `_resolve_scan_style(requested_style, pair)` — use this for per-pair style resolution in `run_full_scan()`; do not rename or replace with ad-hoc functions
 13. Non-blocking I/O during scans: `carry_feed`, `cot_feed`, `duka_volume` must never block the scan thread — return cached/neutral values if data not ready
-14. Always use `timeout=1.0` and `PRAGMA journal_mode=WAL` for `sqlite3.connect` to avoid `database is locked` concurrency errors
+14. Always use `PRAGMA journal_mode=WAL` and keep SQLite writes on explicit commits; current runtime DB code uses `sqlite3.connect(..., timeout=15.0)` to reduce `database is locked` errors
 15. `"ws": False` on a pair dict opts it out of WS subscription only — scan/backtest/execute are unaffected. Default is `True` (backward-compatible). EODHD plan cap is 50 tickers total; do not add `ws:True` pairs without removing others first
 16. BybitWS (`athena/datafeeds/bybit_ws.py`): `ping_interval=None` in `websockets.connect()` is required — disables library-level keepalive and lets app-level `{"op":"ping"}` handling prevent 1011 keepalive errors
+17. Engine B AI is review-only — do not reintroduce AI as a hidden pass/fail gate for naked signals unless the user explicitly requests that design change

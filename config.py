@@ -372,21 +372,21 @@ CONFIG: dict = {
         },
         "style_profiles": {
             "scalp": {
-                "min_score": 0.9,
+                "min_score": 3.0,
                 "min_room_atr": 0.35,
                 "min_rr": 1.0,
                 "fallback_rr": 1.4,
                 "require_macro_align": False,
             },
             "intraday": {
-                "min_score": 1.5,
+                "min_score": 4.0,
                 "min_room_atr": 0.7,
                 "min_rr": 1.2,
                 "fallback_rr": 1.8,
                 "require_macro_align": False,
             },
             "swing": {
-                "min_score": 1.8,
+                "min_score": 5.0,
                 "min_room_atr": 1.0,
                 "min_rr": 1.6,
                 "fallback_rr": 2.2,
@@ -512,8 +512,17 @@ def _json_safe(value):
     """Recursively convert NaN/inf float values to None so Flask emits valid JSON."""
     import math as _math
 
+    try:
+        import numpy as _np
+    except Exception:
+        _np = None
+
     if isinstance(value, float):
         return value if _math.isfinite(value) else None
+    if _np is not None and isinstance(value, _np.generic):
+        return _json_safe(value.item())
+    if _np is not None and isinstance(value, _np.ndarray):
+        return [_json_safe(v) for v in value.tolist()]
     if isinstance(value, dict):
         return {k: _json_safe(v) for k, v in value.items()}
     if isinstance(value, list):

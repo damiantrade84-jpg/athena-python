@@ -284,6 +284,163 @@ class NakedEngine:
                 fvgs.append({"type": "bearish", "top": next_low, "bottom": prev_high})
         return fvgs
 
+    def _zone_context(
+        self, zone: dict | None, current_price: float, atr: float, direction: str, candles: list
+    ) -> dict:
+        atr_val = atr if atr and atr > 0 else 0.0001
+        if not zone:
+            return {"distance": None, "near_zone": False, "zone_touched": False}
+
+        lower = zone.get("lower")
+        upper = zone.get("upper")
+        center = zone.get("center")
+
+        if lower is not None and upper is not None:
+            if lower <= current_price <= upper:
+                distance = 0.0
+            elif current_price < lower:
+                distance = lower - current_price
+            else:
+                distance = current_price - upper
+        else:
+            distance = abs(current_price - center) if center is not None else None
+
+        near_zone = distance is not None and distance <= atr_val * 0.5
+        zone_touched = False
+
+        if candles:
+            last = candles[-1]
+            last_high = float(last["high"])
+            last_low = float(last["low"])
+            last_close = float(last["close"])
+            if direction == "LONG":
+                threshold = upper if upper is not None else center
+                floor = lower if lower is not None else center
+                if threshold is not None and last_low <= threshold + (atr_val * 0.1):
+                    zone_touched = floor is None or last_close >= floor - (atr_val * 0.1)
+            else:
+                threshold = lower if lower is not None else center
+                ceiling = upper if upper is not None else center
+                if threshold is not None and last_high >= threshold - (atr_val * 0.1):
+                    zone_touched = ceiling is None or last_close <= ceiling + (atr_val * 0.1)
+
+        return {
+            "distance": distance,
+            "near_zone": near_zone,
+            "zone_touched": zone_touched,
+        }
+
+    def _price_action_trigger(
+        self,
+        candles: list,
+        direction: str,
+        atr: float,
+        zone_hit: bool,
+        bos_confirmed: bool,
+    ) -> dict:
+        if len(candles) < 3:
+            return {
+                "pattern": "NONE",
+                "trigger_ok": False,
+                "rejection": False,
+                "engulfing": False,
+                "inside_break": False,
+                "strong_close": False,
+            }
+
+        last = candles[-1]
+        prev = candles[-2]
+        prev2 = candles[-3]
+
+        open_ = float(last["open"])
+        high = float(last["high"])
+        low = float(last["low"])
+        close = float(last["close"])
+
+        prev_open = float(prev["open"])
+        prev_high = float(prev["high"])
+        prev_low = float(prev["low"])
+        prev_close = float(prev["close"])
+
+        prev2_high = float(prev2["high"])
+        prev2_low = float(prev2["low"])
+
+        range_ = max(high - low, atr * 0.05, 1e-9)
+        body = abs(close - open_)
+        upper_wick = high - max(open_, close)
+        lower_wick = min(open_, close) - low
+
+        bull_rejection = lower_wick >= max(body * 1.2, atr * 0.08) and close >= low + (range_ * 0.6)
+        bear_rejection = upper_wick >= max(body * 1.2, atr * 0.08) and close <= high - (range_ * 0.6)
+
+        bull_engulf = (
+            close > open_
+            and prev_close < prev_open
+            and close >= prev_open
+            and open_ <= prev_close
+        )
+        bear_engulf = (
+            close < open_
+            and prev_close > prev_open
+            and close <= prev_open
+            and open_ >= prev_close
+        )
+
+        inside_bar = prev_high < prev2_high and prev_low > prev2_low
+        bull_inside_break = inside_bar and close > prev_high
+        bear_inside_break = inside_bar and close < prev_low
+
+        bull_strong_close = close > open_ and close >= low + (range_ * 0.7)
+        bear_strong_close = close < open_ and close <= high - (range_ * 0.7)
+
+        if direction == "LONG":
+            trigger_ok = bull_rejection or bull_engulf or bull_inside_break or (
+                bull_strong_close and (zone_hit or bos_confirmed)
+            )
+            pattern = (
+                "REJECTION"
+                if bull_rejection
+                else "ENGULFING"
+                if bull_engulf
+                else "INSIDE_BREAK"
+                if bull_inside_break
+                else "STRONG_CLOSE"
+                if bull_strong_close and (zone_hit or bos_confirmed)
+                else "NONE"
+            )
+            rejection = bull_rejection
+            engulfing = bull_engulf
+            inside_break = bull_inside_break
+            strong_close = bull_strong_close
+        else:
+            trigger_ok = bear_rejection or bear_engulf or bear_inside_break or (
+                bear_strong_close and (zone_hit or bos_confirmed)
+            )
+            pattern = (
+                "REJECTION"
+                if bear_rejection
+                else "ENGULFING"
+                if bear_engulf
+                else "INSIDE_BREAK"
+                if bear_inside_break
+                else "STRONG_CLOSE"
+                if bear_strong_close and (zone_hit or bos_confirmed)
+                else "NONE"
+            )
+            rejection = bear_rejection
+            engulfing = bear_engulf
+            inside_break = bear_inside_break
+            strong_close = bear_strong_close
+
+        return {
+            "pattern": pattern,
+            "trigger_ok": trigger_ok,
+            "rejection": rejection,
+            "engulfing": engulfing,
+            "inside_break": inside_break,
+            "strong_close": strong_close,
+        }
+
     def analyze_structure(
         self,
         d1_candles: list,
@@ -336,17 +493,27 @@ class NakedEngine:
 
         # 4. Find Nearest Zones Relative to Current Price
         # Nearest resistance above price
-        valid_res = [z for z in res_zones if z["lower"] > current_price]
+        valid_res = [z for z in res_zones if z["upper"] >= current_price]
         nearest_res = (
-            min(valid_res, key=lambda x: x["lower"] - current_price)
+            min(
+                valid_res,
+                key=lambda x: 0.0
+                if x["lower"] <= current_price <= x["upper"]
+                else max(0.0, x["lower"] - current_price),
+            )
             if valid_res
             else None
         )
 
         # Nearest support below price
-        valid_sup = [z for z in sup_zones if z["upper"] < current_price]
+        valid_sup = [z for z in sup_zones if z["lower"] <= current_price]
         nearest_sup = (
-            min(valid_sup, key=lambda x: current_price - x["upper"])
+            min(
+                valid_sup,
+                key=lambda x: 0.0
+                if x["lower"] <= current_price <= x["upper"]
+                else max(0.0, current_price - x["upper"]),
+            )
             if valid_sup
             else None
         )
@@ -417,6 +584,16 @@ class NakedEngine:
         elif direction == "SHORT" and nearest_res:
             fvg_overlap = nearest_res.get("fvg_overlap", False)
 
+        active_zone = nearest_sup if direction == "LONG" else nearest_res
+        zone_ctx = self._zone_context(active_zone, current_price, atr, direction, h1_candles)
+        trigger_ctx = self._price_action_trigger(
+            h1_candles,
+            direction,
+            atr,
+            zone_ctx["zone_touched"] or zone_ctx["near_zone"],
+            bos_confirmed,
+        )
+
         return {
             "structural_verdict": "CLEAR",
             "nearest_resistance_zone": nearest_res,
@@ -437,116 +614,122 @@ class NakedEngine:
             "sweep_data": sweep_data,
             "fvg_overlap": fvg_overlap,
             "liquidity_sweep": sequence_data.get("liquidity_sweep", False),
+            "active_zone_distance": zone_ctx["distance"],
+            "near_active_zone": zone_ctx["near_zone"],
+            "zone_touched": zone_ctx["zone_touched"],
+            "trigger_pattern": trigger_ctx["pattern"],
+            "trigger_ok": trigger_ctx["trigger_ok"],
+            "rejection_candle": trigger_ctx["rejection"],
+            "engulfing_candle": trigger_ctx["engulfing"],
+            "inside_break_candle": trigger_ctx["inside_break"],
+            "strong_close": trigger_ctx["strong_close"],
         }
 
     def calculate_confidence(
-        self, res: dict, current_price: float, direction: str, learning_ctx: dict = None
+        self,
+        res: dict,
+        current_price: float,
+        direction: str,
+        learning_ctx: dict = None,
+        entry_candles: list | None = None,
+        style_profile: dict | None = None,
     ) -> dict:
-        """
-        Engine B confidence score out of 3.0 + catalyst bonus + ai adjustment.
-        Structure points: up to 1.0 (swing sequence alignment) — MANDATORY gatekeeper
-        RR points: up to 1.0 (based on actual risk:reward)
-        Room points: up to 1.0 (space before hitting opposing zone)
-        Catalyst bonus: up to 0.8 (liquidity sweep + FVG overlap)
-        AI Adjustment: up to +0.2 or -0.3 based on Pillar 5 empirical stats.
-
-        If structure is not aligned (no HH_HL or LH_LL), Room and RR are
-        multiplied by 0.3 so the max possible score without structure is
-        ~0.6 + catalyst — well below the 1.8 threshold unless a real
-        SMC catalyst is present.
-        """
         atr = res.get("atr", 1.0)
         atr_val = atr if atr > 0 else 0.0001
-
-        # ── Structure points — swing sequence must align with direction ──
-        # Both H4 macro-trend and H1 micro-trend must align for full points.
         h1_seq = res.get("current_swing_sequence", "")
         h4_seq = res.get("macro_swing_sequence", "")
-        bos = res.get("bos_confirmed", False)
+        profile = style_profile if isinstance(style_profile, dict) else {}
+        min_room_atr = float(profile.get("min_room_atr", 0.35))
+        min_rr = float(profile.get("min_rr", 1.0))
+        require_macro_align = bool(profile.get("require_macro_align", False))
+        checklist_mode = str(profile.get("checklist_mode", "flexible")).lower()
+        allow_breakout_entry = bool(
+            profile.get("allow_breakout_entry", not require_macro_align)
+        )
 
-        if direction == "LONG" and h1_seq == "HH_HL":
-            if h4_seq == "HH_HL":
-                struct_score = 1.0 if bos else 0.8
-            else:
-                struct_score = 0.5  # H1 is bullish but H4 does not agree
-        elif direction == "SHORT" and h1_seq == "LH_LL":
-            if h4_seq == "LH_LL":
-                struct_score = 1.0 if bos else 0.8
-            else:
-                struct_score = 0.5  # H1 is bearish but H4 does not agree
-        elif h1_seq in ("CONTRACTION", "EXPANSION", "RANGING"):
-            # H1 neutral — credit macro alignment if H4 agrees with direction
-            if (direction == "LONG" and h4_seq == "HH_HL") or (
-                direction == "SHORT" and h4_seq == "LH_LL"
-            ):
-                struct_score = 0.4
-            else:
-                struct_score = 0.15
-        else:
-            struct_score = 0.0  # Counter-trend = zero structure
+        micro_aligned = (direction == "LONG" and h1_seq == "HH_HL") or (
+            direction == "SHORT" and h1_seq == "LH_LL"
+        )
+        macro_aligned = (direction == "LONG" and h4_seq == "HH_HL") or (
+            direction == "SHORT" and h4_seq == "LH_LL"
+        )
+        hard_counter = (direction == "LONG" and h1_seq == "LH_LL" and h4_seq == "LH_LL") or (
+            direction == "SHORT" and h1_seq == "HH_HL" and h4_seq == "HH_HL"
+        )
+        structure_ok = not hard_counter and (
+            micro_aligned
+            or macro_aligned
+            or res.get("bos_confirmed", False)
+            or res.get("liquidity_sweep", False)
+        )
+        macro_ok = macro_aligned or not require_macro_align
+        zone_ok = bool(res.get("zone_touched") or res.get("near_active_zone"))
+        trigger_ok = bool(res.get("trigger_ok"))
+        breakout_ok = bool(res.get("bos_confirmed")) and bool(
+            res.get("strong_close")
+            or res.get("inside_break_candle")
+            or res.get("engulfing_candle")
+        )
+        location_ok = zone_ok or (allow_breakout_entry and breakout_ok)
+        room_dist = res.get("distance_to_res") if direction == "LONG" else res.get("distance_to_sup")
+        room_ok = room_dist is None or room_dist >= atr_val * min_room_atr
 
-        # Graduated penalty multiplier
-        multiplier = 1.0 if struct_score >= 0.7 else 0.6 if struct_score >= 0.3 else 0.3
-
-        # ── Room to Move (points out of 1.0) ──
-        room_score = 0.3  # default: no zone data
-        if direction == "LONG" and res.get("distance_to_res"):
-            dist = res["distance_to_res"]
-            room_score = min(1.0, (dist / atr_val) / 2.0)
-        elif direction == "SHORT" and res.get("distance_to_sup"):
-            dist = res["distance_to_sup"]
-            room_score = min(1.0, (dist / atr_val) / 2.0)
-        room_score *= multiplier
-
-        # ── Risk Reward (points out of 1.0) ──
         sl = res.get("recommended_stop_loss")
         tp = res.get("recommended_take_profit")
-        rr_score = 0.2  # default: no levels
+        rr = 0.0
+        rr_ok = False
         if sl and tp:
             sl_dist = abs(current_price - sl)
             tp_dist = abs(tp - current_price)
             if sl_dist > 0:
                 rr = tp_dist / sl_dist
-                rr_score = min(1.0, rr / 2.0)  # 1:2 RR = full point
-        rr_score *= multiplier
+                rr_ok = rr >= min_rr
 
-        # ── Catalyst bonus (SMC edge — sweeps and FVGs can rescue a trade) ──
-        catalyst_bonus = 0.0
-        if res.get("liquidity_sweep"):
-            catalyst_bonus += 0.5
-        if res.get("fvg_overlap"):
-            catalyst_bonus += 0.3
-
-        # ── Pillar 5: AI Statistical Feedback Loop ──
-        ai_adjustment = 0.0
-        if learning_ctx and isinstance(learning_ctx, dict):
-            p_stats = learning_ctx.get("pair_stats")
-            if p_stats and p_stats.get("total_trades", 0) >= 4:
-                wr = p_stats.get("win_rate", 0.0)
-                if wr < 0.40:
-                    ai_adjustment = -0.3  # Penalise low probability pairs
-                elif wr >= 0.65:
-                    ai_adjustment = 0.2  # Boost high probability pairs
-
-        total_score = round(
-            max(
-                0.0,
-                struct_score + room_score + rr_score + catalyst_bonus + ai_adjustment,
-            ),
-            2,
+        entry_ok = (
+            trigger_ok
+            or breakout_ok
+            or bool(res.get("bos_confirmed"))
+            or bool(res.get("liquidity_sweep"))
         )
-        max_possible = 3.0 + 0.8 + 0.2  # 3.0 base + 0.8 catalyst + 0.2 ai
+        space_ok = room_ok or rr_ok
+
+        confirmations = [structure_ok, location_ok, entry_ok, room_ok, rr_ok]
+        if require_macro_align:
+            confirmations.append(macro_ok)
+
+        total_score = float(sum(1 for passed in confirmations if passed))
+        max_possible = float(len(confirmations)) if confirmations else 1.0
         pct = min(100, int((total_score / max_possible) * 100))
+
+        if checklist_mode == "strict":
+            passed = structure_ok and zone_ok and trigger_ok and room_ok and rr_ok and macro_ok
+        else:
+            passed = structure_ok and location_ok and entry_ok and space_ok and macro_ok
 
         return {
             "score": total_score,
             "pct": pct,
             "max_possible": round(max_possible, 2),
-            "struct_points": round(struct_score, 2),
-            "rr_points": round(rr_score, 2),
-            "room_points": round(room_score, 2),
-            "catalyst_bonus": round(catalyst_bonus, 2),
-            "ai_adjustment": round(ai_adjustment, 2),
+            "struct_points": 1.0 if structure_ok else 0.0,
+            "rr_points": 1.0 if rr_ok else 0.0,
+            "room_points": 1.0 if room_ok else 0.0,
+            "catalyst_bonus": 1.0 if entry_ok else 0.0,
+            "ai_adjustment": 0.0,
+            "zone_points": 1.0 if location_ok else 0.0,
+            "macro_points": 1.0 if macro_ok and require_macro_align else 0.0,
+            "rr": round(rr, 2),
+            "passed": passed,
+            "structure_ok": structure_ok,
+            "macro_ok": macro_ok,
+            "zone_ok": zone_ok,
+            "breakout_ok": breakout_ok,
+            "location_ok": location_ok,
+            "trigger_ok": trigger_ok,
+            "entry_ok": entry_ok,
+            "room_ok": room_ok,
+            "rr_ok": rr_ok,
+            "space_ok": space_ok,
+            "trigger_pattern": res.get("trigger_pattern", "NONE"),
         }
 
     def check_macro_correlation(
@@ -591,6 +774,7 @@ class NakedEngine:
         regime_label="RANGING",
         confidence_threshold=1.8,
         learning_ctx=None,
+        style_profile=None,
     ):
         """Backtest-friendly wrapper that returns entry/exit signals.
         Returns dict compatible with existing backtest reporting."""
@@ -604,9 +788,14 @@ class NakedEngine:
             regime_label,
         )
         confidence = self.calculate_confidence(
-            result, current_price, direction, learning_ctx
+            result,
+            current_price,
+            direction,
+            learning_ctx,
+            entry_candles=h1_candles,
+            style_profile=style_profile,
         )
-        if confidence["score"] < confidence_threshold:
+        if confidence["score"] < confidence_threshold or not confidence.get("passed"):
             return None  # No trade signal
 
         return {
@@ -620,6 +809,7 @@ class NakedEngine:
             "liquidity_sweep": result.get("liquidity_sweep", False),
             "structural_verdict": result["structural_verdict"],
             "ai_adjustment": confidence.get("ai_adjustment", 0.0),
+            "trigger_pattern": confidence.get("trigger_pattern", "NONE"),
         }
 
 

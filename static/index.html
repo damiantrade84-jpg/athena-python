@@ -79,7 +79,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 /* Confluence */
 .conf-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
 .conf-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;font-family:'Space Mono',monospace;}
-.conf-score{font-size:13px;font-weight:700;font-family:'Space Mono',monospace;}
+.conf-score{font-size:11px;font-weight:700;font-family:'Space Mono',monospace;letter-spacing:0.08em;text-transform:uppercase;}
 .conf-bar-track{width:100%;height:6px;background:var(--border);border-radius:3px;margin-bottom:12px;overflow:hidden;}
 .conf-bar-fill{height:100%;border-radius:3px;transition:width 0.8s cubic-bezier(0.4,0,0.2,1);}
 .conf-fill-low{background:var(--warn);}
@@ -1036,14 +1036,15 @@ function renderBtSingle(d) {
   var rColor  = d.totalR>0?'green':'red';
   var html = '<h3 style="font-size:16px;font-weight:800;margin-bottom:16px">'+d.pair+' &mdash; 2yr Backtest Results'+(d.autoToggle==='enabled'?' <span style="background:rgba(0,230,118,0.15);color:var(--bull);padding:2px 8px;border-radius:6px;font-size:11px;border:1px solid rgba(0,230,118,0.3)">AUTO-ENABLED</span>':d.autoToggle==='disabled'?' <span style="background:rgba(255,59,92,0.15);color:var(--bear);padding:2px 8px;border-radius:6px;font-size:11px;border:1px solid rgba(255,59,92,0.3)">AUTO-DISABLED</span>':'')+'</h3>';
   
-  if (d.engine === 'FOREX' || d.engine === 'NAKED' || d.fvg_avg_bonus !== undefined) {
+  if (d.engine === 'NAKED' || d.engine === 'ENGINE_B_FOREX' || d.zone_touch_pct !== undefined) {
     html += `
       <div style="background:rgba(0,230,118,0.08);border:1px solid rgba(0,230,118,0.3);border-radius:8px;padding:12px;margin-bottom:16px;font-family:'Space Mono',monospace;font-size:11px">
         <strong style="color:var(--bull)">ENGINE B (NAKED) METRICS</strong><br>
-        FVG Avg Bonus: <strong>${(d.fvg_avg_bonus || 0).toFixed(3)}</strong> | 
+        Zone Touch: <strong>${(d.zone_touch_pct || 0).toFixed(1)}%</strong> | 
         Liquidity Sweep: <strong>${(d.liquidity_sweep_pct || 0).toFixed(1)}%</strong><br>
-        Avg Volume Strength: <strong>${(d.avg_volume_strength || 0).toFixed(3)}</strong> | 
-        FVG Overlap: <strong>${(d.fvg_overlap_pct || 0).toFixed(1)}%</strong>
+        Breakout Entries: <strong>${(d.breakout_entry_pct || 0).toFixed(1)}%</strong> | 
+        Rejection Entries: <strong>${(d.rejection_entry_pct || 0).toFixed(1)}%</strong><br>
+        Dominant Trigger: <strong>${d.dominant_trigger_pattern || 'NONE'}</strong>
       </div>`;
   }
   
@@ -1353,9 +1354,12 @@ function applyFilter(f,el) {
 }
 
 // -- Render --
-function renderSignals(signals) {
+function renderSignals(signals){
   var grid=document.getElementById('signalGrid');
-  if (!signals.length) {grid.innerHTML='<div class="empty-state"><div class="icon">Search</div><h3>No signals match</h3><p>Try a different filter</p></div>';return;}
+  if(!signals||signals.length===0){
+    grid.innerHTML='<div class="empty-state"><div class="icon">⟢</div><h3>No Signals</h3><p>No setups matched current filters.</p></div>';
+    return;
+  }
   grid.innerHTML=signals.map(function(s,i){ 
     var card = buildCard(s,i);
     // Store naked scan signals for fallback lookup
@@ -1366,11 +1370,39 @@ function renderSignals(signals) {
   }).join('');
 }
 
+function getConfluencePct(data) {
+  if(!data) return 0;
+  var pct = data.confluencePct;
+  if (pct == null) pct = data.score_pct;
+  if (pct == null && typeof data.confluenceScore === 'number' && (data.maxScore||0) > 0) {
+    pct = (data.confluenceScore / data.maxScore) * 100;
+  }
+  if (pct == null && typeof data.score === 'number' && (data.max_possible||0) > 0) {
+    pct = (data.score / data.max_possible) * 100;
+  }
+  pct = Number(pct);
+  if (!Number.isFinite(pct)) return 0;
+  return Math.max(0, Math.min(100, Math.round(pct)));
+}
+
+function getConfluenceLabel(pct) {
+  if (pct >= 85) return 'Elite';
+  if (pct >= 67) return 'Strong';
+  if (pct >= 42) return 'Building';
+  return 'Weak';
+}
+
+function formatConfluenceText(data) {
+  var pct = getConfluencePct(data);
+  return getConfluenceLabel(pct);
+}
+
 // -- Build Card --
 function buildCard(s,idx) {
-  var pct=s.confluencePct;
+  var pct=getConfluencePct(s);
   var fillCls=pct<42?'conf-fill-low':pct<67?'conf-fill-medium':'conf-fill-high';
   var confCol=pct<42?'#f59e0b':pct<67?'#00d4ff':'#00e676';
+  var confText=formatConfluenceText(s);
   var sid=(s.symbol||'').replace(/[\/=^.]/g,'_');
   var isNaked = !!(s.is_naked || s.naked_data);
   var iconLabel=(s.display||s.pair||s.symbol||'??').split('/')[0].slice(0,3);
@@ -1463,7 +1495,7 @@ function buildCard(s,idx) {
     '<div class="card-body">'+
       '<div class="conf-row">'+
         '<span class="conf-label">Confluence</span>'+
-        '<span class="conf-score" style="color:'+confCol+'">'+(typeof s.confluenceScore==='number'?s.confluenceScore.toFixed(2):s.confluenceScore)+'/'+(s.maxScore||3)+' | '+pct+'%</span>'+
+        '<span class="conf-score" style="color:'+confCol+'">'+confText+'</span>'+
       '</div>'+
       '<div class="conf-bar-track"><div class="conf-bar-fill '+fillCls+'" style="width:'+pct+'%"></div></div>'+
       votesHtml+
@@ -1908,7 +1940,7 @@ async function runCompare(symbol) {
     html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Stop Loss</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(engineA.sl?engineA.sl.toFixed(4):'-')+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(engineB.recommended_stop_loss?engineB.recommended_stop_loss.toFixed(4):'-')+'</td></tr>';
     html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Take Profit</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(engineA.tp1?engineA.tp1.toFixed(4):'-')+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(engineB.recommended_take_profit?engineB.recommended_take_profit.toFixed(4):'-')+'</td></tr>';
     html += '<tr><td style="padding:4px;border-bottom:1px dashed #2a3b4d">Mode</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(summary.engineAStyle||'-').toUpperCase()+'</td><td style="padding:4px;border-bottom:1px dashed #2a3b4d">'+(summary.engineBStyle||'-').toUpperCase()+'</td></tr>';
-    html += '<tr><td style="padding:4px">Confluence</td><td style="padding:4px">'+(engineA.confluenceScore!=null?engineA.confluenceScore:'-')+'/'+(engineA.maxScore||3)+'</td><td style="padding:4px">'+(engineB.score!=null?engineB.score.toFixed(2):'-')+'/'+(engineB.max_possible||'4.0')+'</td></tr>';
+    html += '<tr><td style="padding:4px">Confluence</td><td style="padding:4px">'+formatConfluenceText(engineA)+'</td><td style="padding:4px">'+formatConfluenceText(engineB)+'</td></tr>';
     html += '</table>';
 
     if(compareAIDiv && engineB.ai_analysis) {
@@ -2453,7 +2485,7 @@ function confirmExecute(symbol, forceMode) {
       '<div>Stop Loss: <strong style="color:var(--bear)">' + fmtPrice(execSig.sl) + '</strong></div>' +
       '<div>Take Profit: <strong style="color:var(--bull)">' + fmtPrice(execSig.tp1) + '</strong></div>' +
       '<div>SL Risk: <strong>' + (metrics.riskPct != null ? metrics.riskPct.toFixed(2) : '?') + '%</strong></div>' +
-      '<div>Score: <strong>' + (typeof sig.confluenceScore==='number'?sig.confluenceScore.toFixed(2):sig.confluenceScore) + '/' + (sig.maxScore||3) + '</strong></div>' +
+      '<div>Confluence: <strong>' + formatConfluenceText(sig) + '</strong></div>' +
       '<div>Account: <strong>$' + (acct.balance||0).toLocaleString() + '</strong></div>' +
       '<div>Risk (1%): <strong style="color:var(--accent)">$' + (metrics.riskAmt != null ? metrics.riskAmt.toFixed(2) : riskAmt) + '</strong></div>' +
       '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);color:var(--warn);font-size:10px">Position size will be calculated by the risk engine based on your ' + via + ' account balance and SL distance.</div>' +

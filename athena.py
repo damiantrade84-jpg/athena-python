@@ -6521,6 +6521,22 @@ def _format_backtest_results(trades, pair, engine_type="NAKED"):
     def _r(t):
         return t.get("resultR", t.get("r_multiple", 0.0))
 
+    def _sqn_for(_trades):
+        if len(_trades) <= 1:
+            return 0
+        _values = [_r(t) for t in _trades]
+        _avg = sum(_values) / len(_values)
+        _var_local = (
+            sum((r - _avg) ** 2 for r in _values) / (len(_values) - 1)
+            if len(_values) > 1
+            else 0
+        )
+        return (
+            round(max(-10, min(10, (_avg / _var_local**0.5) * (len(_trades) ** 0.5))), 2)
+            if len(_trades) > 1 and _avg != 0 and _var_local > 0
+            else 0
+        )
+
     wins = [t for t in trades if _r(t) > 0]
     losses = [t for t in trades if _r(t) <= 0]
     gross_profit = sum(_r(t) for t in wins)
@@ -6573,14 +6589,27 @@ def _format_backtest_results(trades, pair, engine_type="NAKED"):
             max_dd_pct = dd
     max_dd_pct = round(max_dd_pct, 2)
 
-    # Walk-forward split stub (Engine B has no IS/OOS split yet)
+    _peak_eq = 1.0
+    _recovery_start = None
+    max_recovery_bars = 0
+    for _idx, eq_val in enumerate(equity_curve):
+        if eq_val >= _peak_eq:
+            if _recovery_start is not None:
+                max_recovery_bars = max(max_recovery_bars, _idx - _recovery_start)
+                _recovery_start = None
+            _peak_eq = eq_val
+        elif _recovery_start is None:
+            _recovery_start = _idx
+
+    is_trades = [t for t in trades if not t.get("oos")]
+    oos_trades = [t for t in trades if t.get("oos")]
     wf_split = {
-        "is_trades": len(trades),
-        "oos_trades": 0,
-        "is_sqn": sqn,
-        "oos_sqn": None,
+        "is_trades": len(is_trades),
+        "oos_trades": len(oos_trades),
+        "is_sqn": _sqn_for(is_trades),
+        "oos_sqn": _sqn_for(oos_trades) if oos_trades else None,
         "overfit_flag": False,
-        "wf_note": "Engine B does not perform IS/OOS split",
+        "wf_note": "Engine B walk-forward split uses trade oos flags",
     }
 
     # Monte Carlo DD stub
@@ -6607,7 +6636,7 @@ def _format_backtest_results(trades, pair, engine_type="NAKED"):
         "rSkew": r_skew,
         # ── Risk/DD ───────────────────────────────────────────────────────────
         "maxDrawdownPct": max_dd_pct,
-        "maxRecoveryBars": 0,
+        "maxRecoveryBars": max_recovery_bars,
         "mcDD": mc_dd,
         # ── Analysis ──────────────────────────────────────────────────────────
         "scoreBands": {},
@@ -6630,25 +6659,42 @@ def _format_backtest_results(trades, pair, engine_type="NAKED"):
         "trades": trades[-50:],
     }
 
-    # ── Forex-specific Engine B metrics ───────────────────────────────────────
+    liquidity_pct = sum(1 for t in trades if t.get("liquidity_sweep")) / len(trades) * 100
+    zone_touch_pct = sum(1 for t in trades if t.get("zone_touched")) / len(trades) * 100
+    breakout_pct = (
+        sum(
+            1
+            for t in trades
+            if t.get("trigger_pattern") in ("INSIDE_BREAK", "STRONG_CLOSE", "ENGULFING")
+        )
+        / len(trades)
+        * 100
+    )
+    rejection_pct = (
+        sum(1 for t in trades if t.get("trigger_pattern") == "REJECTION")
+        / len(trades)
+        * 100
+    )
+    trigger_counts = {}
+    for t in trades:
+        _pattern = str(t.get("trigger_pattern") or "NONE")
+        trigger_counts[_pattern] = trigger_counts.get(_pattern, 0) + 1
+    dominant_trigger = (
+        max(trigger_counts.items(), key=lambda kv: kv[1])[0] if trigger_counts else "NONE"
+    )
+
+    result.update(
+        {
+            "liquidity_sweep_pct": round(liquidity_pct, 1),
+            "zone_touch_pct": round(zone_touch_pct, 1),
+            "breakout_entry_pct": round(breakout_pct, 1),
+            "rejection_entry_pct": round(rejection_pct, 1),
+            "dominant_trigger_pattern": dominant_trigger,
+        }
+    )
+
     if pair.get("type") == "forex":
-        fvg_avg = sum(t.get("fvg_bonus", 0) for t in trades) / len(trades)
-        liquidity_pct = (
-            sum(1 for t in trades if t.get("liquidity_sweep")) / len(trades) * 100
-        )
-        volume_avg = sum(t.get("volume_strength", 0) for t in trades) / len(trades)
-        fvg_overlap_pct = (
-            sum(1 for t in trades if t.get("fvg_overlap")) / len(trades) * 100
-        )
-        result.update(
-            {
-                "fvg_avg_bonus": round(fvg_avg, 3),
-                "liquidity_sweep_pct": round(liquidity_pct, 1),
-                "avg_volume_strength": round(volume_avg, 3),
-                "fvg_overlap_pct": round(fvg_overlap_pct, 1),
-                "engine": "ENGINE_B_FOREX",
-            }
-        )
+        result["engine"] = "ENGINE_B_FOREX"
 
     return result
 
@@ -6664,259 +6710,202 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
     candles_h4 = fetch_candles(pair, "H4", CONFIG.get("H4_CANDLES", 1000))
     candles_h1 = fetch_candles(pair, "H1", CONFIG.get("H1_CANDLES", 2000))
 
-    if not candles_d1 or not candles_h4:
+    if not candles_d1 or not candles_h4 or not candles_h1:
         return {
             "success": False,
-            "error": "Insufficient candle data (D1 or H4 missing).",
+            "error": "Insufficient candle data (D1, H4, or H1 missing).",
             "trades": [],
             "totalTrades": 0,
         }
 
-    pair_type = pair.get("type", "crypto")
+    candles_d1 = candles_d1[:-1] if len(candles_d1) > 1 else candles_d1
+    candles_h4 = candles_h4[:-1] if len(candles_h4) > 1 else candles_h4
+    candles_h1 = candles_h1[:-1] if len(candles_h1) > 1 else candles_h1
+
+    requested_style = "auto" if style == "naked" else style
+    resolved_style, style_profile = _naked_scan_style_profile(requested_style)
+    d1_times = [c.get("time", c.get("datetime", "")) for c in candles_d1]
+    h1_times = [c.get("time", c.get("datetime", "")) for c in candles_h1]
+    oos_start = 50 + int(max(0, len(candles_h4) - 50) * 0.7)
 
     trades = []
+    for i in range(50, len(candles_h4) - 5):
+        h4_time = candles_h4[i].get("time") or candles_h4[i].get("datetime")
+        if not h4_time:
+            continue
 
-    # ── Crypto path (Naked Engine structure loop) ───────────────────────────────
-    if pair_type != "forex":
-        # Walk forward on H4 (primary timeframe for NakedEngine)
-        for i in range(50, len(candles_h4) - 5):  # Warmup + forward simulation
-            h4_ctx = candles_h4[: i + 1]
-            current_price = float(candles_h4[i]["close"])
+        h4_ctx = candles_h4[: i + 1]
+        d1_slice_end = bisect.bisect_right(d1_times, h4_time)
+        h1_slice_end = bisect.bisect_right(h1_times, h4_time)
+        if d1_slice_end < 20 or h1_slice_end < 20:
+            continue
 
-            # Calculate ATR on H4
-            atr_list = calc_atr(
-                [c["high"] for c in h4_ctx],
-                [c["low"] for c in h4_ctx],
-                [c["close"] for c in h4_ctx],
-                14,
+        d1_ctx = candles_d1[:d1_slice_end]
+        h1_ctx = candles_h1[:h1_slice_end]
+        current_price = float(candles_h4[i]["close"])
+
+        atr_list = calc_atr(
+            [c["high"] for c in h4_ctx],
+            [c["low"] for c in h4_ctx],
+            [c["close"] for c in h4_ctx],
+            14,
+        )
+        atr = atr_list[-1] if atr_list and atr_list[-1] else (current_price * 0.01)
+
+        candidates = []
+        for direction in ["LONG", "SHORT"]:
+            res = naked_engine.analyze_structure(
+                d1_ctx,
+                h4_ctx,
+                h1_ctx,
+                current_price,
+                direction,
+                atr,
+                "RANGING",
             )
-            atr = atr_list[-1] if atr_list and atr_list[-1] else (current_price * 0.01)
-
-            # Test BOTH directions (P1 fix: was LONG-only)
-            for direction in ["LONG", "SHORT"]:
-                signal = naked_engine.simulate_trade(
-                    d1_candles=candles_d1,
-                    h4_candles=h4_ctx,
-                    h1_candles=candles_h1,
-                    current_price=current_price,
-                    direction=direction,
-                    atr=atr,
-                    regime_label="TRENDING",
-                    confidence_threshold=CONFIG.get("NAKED_BT_MIN", 1.8),
-                )
-
-                if signal:
-                    entry = signal["entry_price"]
-                    sl = signal["sl"]
-                    tp = signal["tp1"]
-
-                    # Forward-walk outcome using future bars
-                    outcome = "TIMEOUT"
-                    r_multiple = -1.0
-                    for f_idx in range(i + 1, min(i + 12, len(candles_h4))):
-                        future = candles_h4[f_idx]
-                        if direction == "LONG":
-                            if float(future["low"]) <= sl:
-                                outcome = "SL"
-                                r_multiple = -1.0
-                                break
-                            if float(future["high"]) >= tp:
-                                outcome = "TP1"
-                                r_multiple = 2.0
-                                break
-                        else:
-                            if float(future["high"]) >= sl:
-                                outcome = "SL"
-                                r_multiple = -1.0
-                                break
-                            if float(future["low"]) <= tp:
-                                outcome = "TP1"
-                                r_multiple = 2.0
-                                break
-
-                    bar_date = (
-                        candles_h4[i].get("time", "")[:10]
-                        if candles_h4[i].get("time")
-                        else ""
-                    )
-                    trades.append(
-                        {
-                            # Engine A compatible keys
-                            "date": bar_date,
-                            "pair": pair["display"],
-                            "direction": direction,
-                            "score": signal.get("score", 0),
-                            "entry": round(float(entry), 6),
-                            "sl": round(float(sl), 6),
-                            "tp1": round(float(tp), 6),
-                            "tp2": round(float(tp), 6),
-                            "outcome": outcome,
-                            "resultR": round(r_multiple, 2),
-                            "regime": "TRENDING",
-                            "oos": False,
-                            "volAdj": 1.0,
-                            # Engine B extras
-                            "r_multiple": r_multiple,
-                        }
-                    )
-                    break  # Only take first valid direction per bar
-
-    # ── Forex backtest path (Engine B only) ─────────────────────────────────────
-    elif pair_type == "forex":
-        from forex_scoring import compute_forex_score
-
-        # Build indicator snapshots using the same proven pattern as Engine A
-        from indicators import calc_indicators_with_normalized
-
-        h4_window = candles_h4
-        h1_window = candles_h1 or []
-
-        for i in range(50, len(h4_window) - 5):  # Warmup + forward simulation
-            current_price = float(h4_window[i]["close"])
-            h4_ctx = h4_window[: i + 1]
-
-            atr_list = calc_atr(
-                [c["high"] for c in h4_ctx],
-                [c["low"] for c in h4_ctx],
-                [c["close"] for c in h4_ctx],
-                14,
+            conf_data = naked_engine.calculate_confidence(
+                res,
+                current_price,
+                direction,
+                entry_candles=h1_ctx,
+                style_profile=style_profile,
             )
-            atr = atr_list[-1] if atr_list and atr_list[-1] else (current_price * 0.01)
-
-            h4_time = h4_window[i].get("time") or h4_window[i].get("datetime")
-            if not h4_time:
+            if conf_data["score"] < style_profile["min_score"] or not conf_data.get("passed"):
                 continue
 
-            # Build snaps directly from sliced candle arrays (no broken helpers)
-            try:
-                h4i_full = calc_indicators_with_normalized(h4_ctx, "forex")
-                h4i = h4i_full.get("snap", {})
-            except Exception:
-                h4i = {}
-            h4i["atr"] = atr  # ensure atr exists
+            entry = current_price
+            sl = res.get("recommended_stop_loss")
+            tp = res.get("recommended_take_profit")
+            if sl is None or tp is None:
+                continue
 
-            # Slice D1 candles to current H4 bar time to prevent look-ahead bias
-            try:
-                h4_ts = h4_time if isinstance(h4_time, str) else str(h4_time)
-                d1_times = [c.get("time", c.get("datetime", "")) for c in candles_d1]
-                d1_slice_end = bisect.bisect_right(d1_times, h4_ts)
-                d1_ctx = (
-                    candles_d1[:d1_slice_end]
-                    if d1_slice_end > 10
-                    else candles_d1[: min(len(candles_d1), i // 4 + 1)]
-                )
-                d1i_ctx = calc_indicators_with_normalized(d1_ctx, "forex").get(
-                    "snap", {}
-                )
-            except Exception:
-                d1i_ctx = {}
+            rr = conf_data.get("rr", 0.0)
+            if rr <= 0:
+                sl_dist = abs(entry - sl)
+                tp_dist = abs(tp - entry)
+                rr = (tp_dist / sl_dist) if sl_dist > 0 else 0.0
+            if rr <= 0:
+                continue
 
-            # Slice H1 candles up to the current H4 bar's time
-            h1_slice_end = len(h1_window)
-            try:
-                h4_ts = h4_time if isinstance(h4_time, str) else str(h4_time)
-                h1_times = [c.get("time", c.get("datetime", "")) for c in h1_window]
-                h1_slice_end = bisect.bisect_right(h1_times, h4_ts)
-            except Exception:
-                pass
-            h1_ctx = (
-                h1_window[:h1_slice_end]
-                if h1_slice_end > 50
-                else h1_window[: min(len(h1_window), i * 4 + 1)]
-            )
-
-            try:
-                h1i_full = calc_indicators_with_normalized(h1_ctx, "forex")
-                h1i = h1i_full.get("snap", {})
-                # Extract RSI history from H1 indicator arrays for proper MAD z-score calculation
-                h1_rsi_array = h1i_full.get("arrays", {}).get("rsi14", [])
-                rsi_hist = (
-                    [float(r) for r in h1_rsi_array[-40:] if r is not None]
-                    if h1_rsi_array
-                    else None
-                )
-            except Exception:
-                h1i = {}
-                rsi_hist = None
-
-            result = compute_forex_score(
-                d1_snap=d1i_ctx,
-                h4_snap=h4i,
-                h1_snap=h1i,
-                h1_candles=h1_ctx,
-                pair=pair,
-                bar_time=h4_time,
-                backtest_mode=True,
-                h4_candles=h4_ctx,
-                rsi_history_override=rsi_hist,
-            )
-
-            if result.final_score >= CONFIG.get("BT_MIN", {}).get("forex", 0.60):
-                # Calculate SL/TP dynamically since compute_forex_score only returns score and direction
-                direction = result.direction
-                atr_dist = atr * 1.5
-                sl = (
-                    current_price - atr_dist
-                    if direction == "LONG"
-                    else current_price + atr_dist
-                )
-                tp1 = (
-                    current_price + (atr_dist * 2)
-                    if direction == "LONG"
-                    else current_price - (atr_dist * 2)
-                )
-
-                # Check outcome simply
-                r_multiple = -1.0
-                for f_idx in range(i + 1, min(i + 12, len(h4_window))):
-                    future = h4_window[f_idx]
-                    if direction == "LONG":
-                        if float(future["low"]) <= sl:
-                            r_multiple = -1.0
-                            break
-                        if float(future["high"]) >= tp1:
-                            r_multiple = 2.0
-                            break
-                    else:
-                        if float(future["high"]) >= sl:
-                            r_multiple = -1.0
-                            break
-                        if float(future["low"]) <= tp1:
-                            r_multiple = 2.0
-                            break
-
-                # Forex trade record — Engine A compatible schema + Engine B extras
-                bar_date = (
-                    h4_window[i].get("time", "")[:10]
-                    if h4_window[i].get("time")
-                    else ""
-                )
-                trade_outcome = "TP1" if r_multiple > 0 else "SL"
-                trade_record = {
-                    # Engine A compatible keys (required by JS frontend)
-                    "date": bar_date,
-                    "pair": pair["display"],
-                    "direction": result.direction,
-                    "score": result.final_score,
-                    "entry": round(float(current_price), 6),
-                    "sl": round(float(sl), 6),
-                    "tp1": round(float(tp1), 6),
-                    "tp2": round(float(tp1), 6),
-                    "outcome": trade_outcome,
-                    "resultR": round(r_multiple, 2),
-                    "regime": "TRENDING",
-                    "oos": False,
-                    "volAdj": 1.0,
-                    # Engine B extras
-                    "r_multiple": r_multiple,
-                    "fvg_bonus": result.components.get("fvg_bonus", 0.0),
-                    "liquidity_sweep": result.components.get("liquidity_sweep", False),
-                    "volume_strength": result.components.get("volume_strength", 0.0),
-                    "fvg_overlap": result.components.get("fvg_overlap", False),
+            candidates.append(
+                {
+                    "direction": direction,
+                    "score": conf_data["score"],
+                    "pct": conf_data["pct"],
+                    "entry": entry,
+                    "sl": sl,
+                    "tp": tp,
+                    "rr": rr,
+                    "res": res,
+                    "conf": conf_data,
                 }
-                trades.append(trade_record)
+            )
 
-    return _format_backtest_results(trades, pair, engine_type="NAKED")
+        if not candidates:
+            continue
+
+        best = max(candidates, key=lambda x: (x["score"], x["rr"], x["pct"]))
+        direction = best["direction"]
+        entry = best["entry"]
+        sl = best["sl"]
+        tp = best["tp"]
+        target_rr = best["rr"]
+
+        outcome = "TIMEOUT"
+        r_multiple = 0.0
+        future_window = candles_h4[i + 1 : min(i + 13, len(candles_h4))]
+        for future in future_window:
+            if direction == "LONG":
+                if float(future["low"]) <= sl:
+                    outcome = "SL"
+                    r_multiple = -1.0
+                    break
+                if float(future["high"]) >= tp:
+                    outcome = "TP1"
+                    r_multiple = round(target_rr, 2)
+                    break
+            else:
+                if float(future["high"]) >= sl:
+                    outcome = "SL"
+                    r_multiple = -1.0
+                    break
+                if float(future["low"]) <= tp:
+                    outcome = "TP1"
+                    r_multiple = round(target_rr, 2)
+                    break
+
+        if outcome == "TIMEOUT" and future_window:
+            last_close = float(future_window[-1]["close"])
+            risk = abs(entry - sl)
+            if risk > 0:
+                open_r = ((last_close - entry) / risk) if direction == "LONG" else ((entry - last_close) / risk)
+                r_multiple = round(max(-1.0, min(target_rr, open_r)), 2)
+
+        bar_date = candles_h4[i].get("time", "")[:10] if candles_h4[i].get("time") else ""
+        trades.append(
+            {
+                "date": bar_date,
+                "pair": pair["display"],
+                "direction": direction,
+                "score": best["score"],
+                "entry": round(float(entry), 6),
+                "sl": round(float(sl), 6),
+                "tp1": round(float(tp), 6),
+                "tp2": round(float(tp), 6),
+                "outcome": outcome,
+                "resultR": round(r_multiple, 2),
+                "regime": best["res"].get("macro_swing_sequence", "RANGING"),
+                "oos": i >= oos_start,
+                "volAdj": 1.0,
+                "r_multiple": r_multiple,
+                "liquidity_sweep": best["res"].get("liquidity_sweep", False),
+                "fvg_overlap": best["res"].get("fvg_overlap", False),
+                "trigger_pattern": best["conf"].get("trigger_pattern", "NONE"),
+                "zone_touched": best["res"].get("zone_touched", False),
+                "rr_target": round(target_rr, 2),
+            }
+        )
+
+    result = _format_backtest_results(trades, pair, engine_type="NAKED")
+    if "error" not in result:
+        result["btStyle"] = resolved_style
+        result["btStyleRequested"] = requested_style
+        try:
+            import sqlite3 as _sq
+
+            _wf = result.get("wfSplit", {}) or {}
+            _is_sqn = _wf.get("is_sqn")
+            _oos_sqn = _wf.get("oos_sqn")
+            with _sq.connect(_AUDIT_DB, timeout=15.0) as _con:
+                _con.execute(
+                    "INSERT INTO backtest_results "
+                    "(run_date,pair,asset_type,engine,trades,win_rate,profit_factor,"
+                    "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,bt_min,atr_source,notes) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        datetime.utcnow().isoformat(),
+                        pair["display"],
+                        pair.get("type", ""),
+                        "naked_engine",
+                        result.get("totalTrades", 0),
+                        result.get("winRate"),
+                        result.get("profitFactor"),
+                        result.get("expectancy"),
+                        result.get("sqn"),
+                        result.get("sharpe"),
+                        result.get("sortino"),
+                        round(_is_sqn, 4) if _is_sqn is not None else None,
+                        round(_oos_sqn, 4) if _oos_sqn is not None else None,
+                        result.get("maxDrawdownPct"),
+                        style_profile.get("min_score"),
+                        f"{style_profile.get('atr_tf', 'H4')}_ATR",
+                        f"style={resolved_style};requested={requested_style}",
+                    ),
+                )
+                _con.commit()
+        except Exception as _e:
+            log.warning(f"[ENGINE B BT] backtest_results write failed: {_e}")
+    return result
 
 
 def run_full_backtest(style="auto", asset_class: str | None = None):
@@ -7437,7 +7426,7 @@ def _naked_scan_style_profile(style: str | None) -> tuple[str, dict]:
         resolved = "scalp"
     profiles = {
         "scalp": {
-            "min_score": 0.9,
+            "min_score": 3.0,
             "min_room_atr": 0.35,
             "min_rr": 1.0,
             "fallback_rr": 1.4,
@@ -7447,7 +7436,7 @@ def _naked_scan_style_profile(style: str | None) -> tuple[str, dict]:
             "atr_tf": "H4",
         },
         "intraday": {
-            "min_score": 1.5,
+            "min_score": 4.0,
             "min_room_atr": 0.7,
             "min_rr": 1.2,
             "fallback_rr": 1.8,
@@ -7457,7 +7446,7 @@ def _naked_scan_style_profile(style: str | None) -> tuple[str, dict]:
             "atr_tf": "H4",
         },
         "swing": {
-            "min_score": 1.8,
+            "min_score": 5.0,
             "min_room_atr": 1.0,
             "min_rr": 1.6,
             "fallback_rr": 2.2,
@@ -7621,10 +7610,19 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None):
             log.warning(f"Failed to fetch AI learning context for Naked Analysis: {e}")
             learning_ctx = None
 
-        conf = engine.calculate_confidence(res, current_price, direction, learning_ctx)
+        resolved_style, style_profile = _naked_scan_style_profile(sig.get("style", "auto"))
+        conf = engine.calculate_confidence(
+            res,
+            current_price,
+            direction,
+            learning_ctx,
+            entry_candles=h1,
+            style_profile=style_profile,
+        )
         res.update(conf)
         res["current_price"] = current_price
         res["direction"] = direction
+        res["style"] = resolved_style
 
         try:
             from engine_b_ai import get_engine_b_ai_verdict
@@ -7682,7 +7680,7 @@ def api_naked_analysis():
     res, _pair_obj, err = _compute_naked_analysis(d["signal"])
     if err:
         return jsonify({"error": err}), 500
-    return jsonify(res)
+    return jsonify(_json_safe(res))
 
 
 @app.route("/api/compare-engines", methods=["POST"])
@@ -7754,7 +7752,9 @@ def api_compare_engines():
             if a_dir == b_dir and structure_aligned
             else "CONFLICT",
         }
-        return jsonify({"engineA": engine_a, "engineB": engine_b, "summary": summary})
+        return jsonify(
+            _json_safe({"engineA": engine_a, "engineB": engine_b, "summary": summary})
+        )
     except Exception as e:
         log.error(f"compare_engines error: {e}")
         return jsonify({"error": "Engine comparison failed"}), 500
@@ -8020,144 +8020,92 @@ def api_scan_naked():
                     atr,
                 )
 
-                # Displacement filter on entry-TF bodies (self-calibrating CV multiplier)
-                _disp_candles = entry_candles[-20:]
-                _entry_bodies = [
-                    abs(float(c["close"]) - float(c["open"])) for c in _disp_candles
-                ]
-                if len(_entry_bodies) >= 10:
-                    avg_body = sum(_entry_bodies[:-3]) / max(len(_entry_bodies[:-3]), 1)
-                    if avg_body > 0:
-                        body_std = (
-                            sum((b - avg_body) ** 2 for b in _entry_bodies[:-3])
-                            / max(len(_entry_bodies[:-3]), 1)
-                        ) ** 0.5
-                        cv = body_std / avg_body
-                        disp_mult = 1.1 if cv < 0.4 else 1.3 if cv > 0.8 else 1.2
-                        recent_bodies = _entry_bodies[-3:]
-                        has_displacement = any(
-                            b >= avg_body * disp_mult for b in recent_bodies
-                        )
-                        log.info(
-                            f"[NAKED-DISP] {pair.get('display')} {direction} ({_entry_tf}): cv={cv:.2f} mult={disp_mult} avg={avg_body:.5f} recent_max={max(recent_bodies):.5f} pass={has_displacement}"
-                        )
-                    else:
-                        has_displacement = True
-                else:
-                    has_displacement = True
-
                 verdict = res.get("structural_verdict", "NONE")
                 seq = res.get("current_swing_sequence", "")
-                macro_seq = res.get("macro_swing_sequence", "")
                 if verdict == "CLEAR":
-                    # Hard-reject only counter-trend: LONG in downtrend or SHORT in uptrend
-                    if direction == "LONG" and seq == "LH_LL":
+                    conf_data = engine.calculate_confidence(
+                        res,
+                        current_price,
+                        direction,
+                        entry_candles=entry_candles,
+                        style_profile=style_profile,
+                    )
+                    if conf_data["score"] < style_profile["min_score"] or not conf_data.get("passed"):
                         continue
-                    if direction == "SHORT" and seq == "HH_HL":
+
+                    res.update(conf_data)
+                    res["current_price"] = current_price
+                    res["symbol"] = pair.get("symbol")
+                    res["display"] = pair.get("display")
+                    res["type"] = pair.get("type")
+                    res["direction"] = direction
+                    res["style"] = resolved_style
+                    res["zone_tf"] = _zone_tf
+                    res["entry_tf"] = _entry_tf
+                    res["atr_tf"] = _atr_tf
+
+                    sl = res.get("recommended_stop_loss")
+                    tp = res.get("recommended_take_profit")
+                    rr = conf_data.get("rr", 0.0)
+
+                    if not tp and sl:
+                        sl_dist = abs(current_price - sl)
+                        if direction == "LONG":
+                            tp = current_price + (sl_dist * style_profile["fallback_rr"])
+                        else:
+                            tp = current_price - (sl_dist * style_profile["fallback_rr"])
+                        res["recommended_take_profit"] = tp
+                        res["fallback_tp_applied"] = True
+
+                    if sl and tp and rr <= 0:
+                        sl_dist = abs(current_price - sl)
+                        tp_dist = abs(tp - current_price)
+                        rr = (tp_dist / sl_dist) if sl_dist > 0 else 0.0
+                    if rr < style_profile["min_rr"]:
                         continue
 
-                    if has_displacement:
-                        conf_data = engine.calculate_confidence(
-                            res, current_price, direction
+                    signal = {
+                        "id": f"NKD_{pair['display']}_{direction}_{int(time.time())}",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "pair": pair.get("display"),
+                        "display": pair.get("display"),
+                        "symbol": pair.get("symbol"),
+                        "type": pair.get("type"),
+                        "direction": direction,
+                        "price": current_price,
+                        "confluenceScore": conf_data["score"],
+                        "confluencePct": conf_data["pct"],
+                        "volRatio": 1.0,
+                        "stochK": None,
+                        "stochD": None,
+                        "ema200Slope": 0.0,
+                        "session": {"name": "Global"},
+                        "grade": "Naked Structure",
+                        "trendState": seq,
+                        "edgeProbability": conf_data["pct"],
+                        "riskLevel": "Low",
+                        "score_pct": conf_data["pct"],
+                        "is_naked": True,
+                        "style": resolved_style,
+                        "sl": sl,
+                        "slPct": round(
+                            abs(current_price - sl) / current_price * 100, 2
                         )
-                        if conf_data["score"] < style_profile["min_score"]:
-                            continue
-
-                        if style_profile["require_macro_align"]:
-                            if direction == "LONG" and macro_seq != "HH_HL":
-                                continue
-                            if direction == "SHORT" and macro_seq != "LH_LL":
-                                continue
-
-                        room_dist = (
-                            res.get("distance_to_res")
-                            if direction == "LONG"
-                            else res.get("distance_to_sup")
-                        )
-                        if (
-                            room_dist is not None
-                            and room_dist < atr * style_profile["min_room_atr"]
-                        ):
-                            continue
-
-                        res["current_price"] = current_price
-                        res["symbol"] = pair.get("symbol")
-                        res["display"] = pair.get("display")
-                        res["type"] = pair.get("type")
-                        res["direction"] = direction
-                        res["style"] = resolved_style
-                        res["zone_tf"] = _zone_tf
-                        res["entry_tf"] = _entry_tf
-                        res["atr_tf"] = _atr_tf
-
-                        sl = res.get("recommended_stop_loss")
-                        tp = res.get("recommended_take_profit")
-                        rr = 0.0
-
-                        if not tp and sl:
-                            sl_dist = abs(current_price - sl)
-                            if direction == "LONG":
-                                tp = current_price + (
-                                    sl_dist * style_profile["fallback_rr"]
-                                )
-                            else:
-                                tp = current_price - (
-                                    sl_dist * style_profile["fallback_rr"]
-                                )
-                            res["recommended_take_profit"] = tp
-                            res["fallback_tp_applied"] = True
-
-                        if sl and tp:
-                            sl_dist = abs(current_price - sl)
-                            tp_dist = abs(tp - current_price)
-                            rr = (tp_dist / sl_dist) if sl_dist > 0 else 0.0
-                            if rr < style_profile["min_rr"]:
-                                continue
-
-                        signal = {
-                            "id": f"NKD_{pair['display']}_{direction}_{int(time.time())}",
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "pair": pair.get("display"),
-                            "display": pair.get("display"),
-                            "symbol": pair.get("symbol"),
-                            "type": pair.get("type"),
-                            "direction": direction,
-                            "price": current_price,
-                            "confluenceScore": conf_data["score"],
-                            "confluencePct": conf_data["pct"],
-                            "volRatio": 1.0,
-                            "stochK": None,
-                            "stochD": None,
-                            "ema200Slope": 0.0,
-                            "session": {"name": "Global"},
-                            "grade": "Naked Structure",
-                            "trendState": seq,
-                            "edgeProbability": conf_data[
-                                "pct"
-                            ],  # Use actual structural confidence
-                            "riskLevel": "Low",
-                            "score_pct": conf_data["pct"],
-                            "is_naked": True,  # Flag for UI
-                            "style": resolved_style,
-                            "sl": sl,
-                            "slPct": round(
-                                abs(current_price - sl) / current_price * 100, 2
-                            )
-                            if sl
-                            else 0.0,
-                            "tp1": tp,
-                            "tp2": tp,
-                            "rr1": round(rr, 2) if rr else style_profile["fallback_rr"],
-                            "rr2": round(rr, 2) if rr else style_profile["fallback_rr"],
-                            "fib": {"fib618": 0.0, "fib500": 0.0},
-                            "naked_data": res,
-                        }
-                        results.append(signal)
+                        if sl
+                        else 0.0,
+                        "tp1": tp,
+                        "tp2": tp,
+                        "rr1": round(rr, 2) if rr else style_profile["fallback_rr"],
+                        "rr2": round(rr, 2) if rr else style_profile["fallback_rr"],
+                        "fib": {"fib618": 0.0, "fib500": 0.0},
+                        "naked_data": res,
+                    }
+                    results.append(signal)
         except Exception as e:
             log.warning(f"[NAKED-SCAN] Error on {pair['display']}: {e}", exc_info=True)
             continue
 
-    return jsonify({"success": True, "signals": results})
+    return jsonify(_json_safe({"success": True, "signals": results}))
 
 
 # â"€â"€ Execution Engine Endpoints â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
@@ -9127,6 +9075,7 @@ def api_backtest_naked():
     try:
         data = request.get_json(force=True, silent=True) or {}
         pair_symbol = data.get("pair") or data.get("symbol")
+        requested_style = data.get("style", "auto")
 
         if not pair_symbol:
             return jsonify(
@@ -9152,7 +9101,7 @@ def api_backtest_naked():
                 }
             ), 404
 
-        result = backtest_pair_naked(pair, style="naked")
+        result = backtest_pair_naked(pair, style=requested_style)
 
         if result is None:
             return jsonify(
