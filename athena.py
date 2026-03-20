@@ -6805,7 +6805,6 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 atr,
                 regime_label,
                 fallback_rr=style_profile.get("fallback_rr", 2.0),
-                fallback_rr=style_profile.get("fallback_rr", 2.0),
             )
             conf_data = naked_engine.calculate_confidence(
                 res,
@@ -8177,7 +8176,6 @@ def api_scan_naked():
                     direction,
                     atr,
                     regime_label,
-                    fallback_rr=style_profile.get("fallback_rr", 2.0),
                     fallback_rr=style_profile.get("fallback_rr", 2.0),
                 )
 
