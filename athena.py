@@ -3235,19 +3235,29 @@ def _normalize_style(style: str | None) -> str:
 def _resolve_scan_style(requested_style: str, pair: dict) -> str:
     """Resolve scan style per pair. Auto favors intraday for fast-moving markets."""
 
-    if requested_style == "auto":
-        return "intraday" if pair.get("type") == "crypto" else "swing"
-
-    return requested_style
+    if requested_style != "auto":
+        return requested_style
+    ptype = pair.get("type", "")
+    if ptype == "crypto":
+        return "intraday"
+    elif ptype == "forex":
+        return "intraday"
+    else:
+        return "swing"  # stocks, commodities, indices, ETFs, JSE
 
 
 def _effective_backtest_style(pair: dict, requested_style: str) -> str:
     """Resolve backtest iteration style per pair."""
 
-    if requested_style == "auto":
-        return "intraday" if pair.get("type") == "crypto" else "swing"
-
-    return requested_style  # scalp, intraday, swing all have dedicated loops
+    if requested_style != "auto":
+        return requested_style
+    ptype = pair.get("type", "")
+    if ptype == "crypto":
+        return "intraday"
+    elif ptype == "forex":
+        return "intraday"
+    else:
+        return "swing"
 
 
 def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
@@ -7574,6 +7584,11 @@ def _naked_scan_style_profile(style: str | None) -> tuple[str, dict]:
     resolved = _normalize_style(style)
     if resolved == "auto":
         resolved = "intraday"  # Engine B walks H4 bars — intraday is the natural default
+    # Engine B uses structural SL behind swing highs/lows — true scalping not viable
+    # on H1/H4 structure (swings are 30-60 pips apart). Promote to intraday.
+    if resolved == "scalp":
+        resolved = "intraday"
+        log.info("[NAKED] Scalp promoted to intraday — Engine B structural stops too wide for scalp targets")
     profiles = {
         "scalp": {
             "min_score": 0.9,
@@ -7974,14 +7989,40 @@ def api_quick_execute():
     sig = d["signal"]
     engine_b = d["engine_b"]
 
-    # Override Engine A SL/TP with Engine B structure
-    if "recommended_stop_loss" in engine_b and engine_b["recommended_stop_loss"]:
-        sig["sl"] = engine_b["recommended_stop_loss"]
-    if "recommended_take_profit" in engine_b and engine_b["recommended_take_profit"]:
-        sig["tp1"] = engine_b["recommended_take_profit"]
-        sig["tp2"] = engine_b[
-            "recommended_take_profit"
-        ]  # For scalping, tp2 defaults to tp1
+    pip_mode = d.get("pip_mode")  # "scalp", "intraday", or None (use Engine B structural)
+    
+    if pip_mode in ("scalp", "intraday"):
+        # Override with Engine A researched pip logic — tight SL/TP for fast execution
+        pair_obj = _resolve_pair_from_signal(sig)
+        _ptype = pair_obj.get("type", "") if pair_obj else ""
+        d1 = fetch_candles(pair_obj, "D1", CONFIG.get("D1_CANDLES", 250))
+        h4 = fetch_candles(pair_obj, "H4", CONFIG.get("H4_CANDLES", 250))
+        h1 = fetch_candles(pair_obj, "H1", CONFIG.get("H1_CANDLES", 250))
+        d1i = calc_indicators(d1) if d1 else {}
+        h4i = calc_indicators(h4) if h4 else {}
+        h1i = calc_indicators(h1) if h1 else {}
+        _exec_atr = _atr_for_levels(d1i, h4i, h1i, pair=pair_obj, style=pip_mode)
+        if _exec_atr and _exec_atr > 0:
+            _exec_price = float(sig.get("price", 0))
+            _exec_dir = sig.get("direction", "LONG")
+            lvl = calc_levels(_exec_price, _exec_atr, _exec_dir, _ptype, 
+                              regime_state=None, style=pip_mode)
+            sig["sl"] = lvl["sl"]
+            sig["tp1"] = lvl["tp1"]
+            sig["tp2"] = lvl["tp2"]
+            log.info(f"[QUICK EXEC] {sig.get('pair')}: pip_mode={pip_mode}, "
+                     f"ATR={_exec_atr:.6f}, SL={lvl['sl']:.6f}, TP1={lvl['tp1']:.6f}")
+        else:
+            log.warning(f"[QUICK EXEC] {sig.get('pair')}: pip_mode={pip_mode} but ATR unavailable, falling back to Engine B levels")
+            pip_mode = None
+    
+    if not pip_mode:
+        # Use Engine B structural SL/TP (original behaviour for swing)
+        if "recommended_stop_loss" in engine_b and engine_b["recommended_stop_loss"]:
+            sig["sl"] = engine_b["recommended_stop_loss"]
+        if "recommended_take_profit" in engine_b and engine_b["recommended_take_profit"]:
+            sig["tp1"] = engine_b["recommended_take_profit"]
+            sig["tp2"] = engine_b["recommended_take_profit"]
 
     is_crypto = sig.get("type") == "crypto"
 
@@ -8053,7 +8094,7 @@ def api_quick_execute():
                             pair_name,
                             sig.get("confluenceScore", 0),
                             sig.get("direction"),
-                            "scalp",
+                            pip_mode or "structural",
                             "MANUAL-ERR",
                             approval.reason,
                         ),
@@ -8100,7 +8141,7 @@ def api_quick_execute():
                             "EXECUTED",
                             None,
                             f"${approval.risk_amount}",
-                            "scalp",
+                            pip_mode or "structural",
                             result.get("entryPrice"),
                             sig.get("sl"),
                             sig.get("tp1"),

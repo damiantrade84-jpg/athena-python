@@ -1177,32 +1177,13 @@ function setStyle(style, el) {
 
 function applyStyleFilter(signals) {
   if (tradeStylePref === 'auto') return signals;
+  // When a specific style is selected, the backend already scanned with that style.
+  // Only filter Engine B signals by their explicit style field.
   return signals.filter(function(s) {
     if (s.is_naked && s.style) {
       return String(s.style).toLowerCase() === tradeStylePref;
     }
-    var h1 = s.h1 && s.h1.snap ? s.h1.snap : {};
-    var h4 = s.h4 && s.h4.snap ? s.h4.snap : {};
-    var d1 = s.d1 && s.d1.snap ? s.d1.snap : {};
-    if (tradeStylePref === 'scalp') {
-      var rsi = h1.rsi; var adx = h1.adx;
-      return s.confluenceScore >= 0.8 &&
-             (rsi == null || (rsi > 30 && rsi < 70)) &&
-             (adx == null || adx > 28);
-    }
-    if (tradeStylePref === 'intraday') {
-      var h4aligned = h4.ema21 && h4.ema50 && h1.ema21 && h1.ema50 &&
-                      ((h4.ema21 > h4.ema50 && h1.ema21 > h1.ema50) ||
-                       (h4.ema21 < h4.ema50 && h1.ema21 < h1.ema50));
-      return s.confluenceScore >= 1.0 && h4aligned && s.session && s.session.quality !== 'low';
-    }
-    if (tradeStylePref === 'swing') {
-      var d1stack = d1.ema21 && d1.ema50 && d1.ema200 &&
-                   ((d1.ema21 > d1.ema50 && d1.ema50 > d1.ema200) ||
-                    (d1.ema21 < d1.ema50 && d1.ema50 < d1.ema200));
-      return s.confluenceScore >= 1.5 && d1stack && Math.abs(s.ema200Slope) > 0.1;
-    }
-    return true;
+    return true;  // Engine A signals already scanned at the correct style
   });
 }
 
@@ -1778,19 +1759,21 @@ async function analyzeNakedSignal(symbol, buttonId) {
 }
 
 // -- Naked Scalp Scan & Compare --
-async function quickExecute(symbol, engineBData, buttonId) {
+async function quickExecute(symbol, engineBData, buttonId, pipMode) {
   var sid=(symbol||'').replace(/[\/=^.]/g,'_');
   var sig=allSignals.find(function(s){return s.symbol===symbol;});
   if(!sig) return;
-  var btn = document.getElementById(buttonId || ('qexecbtn-'+sid));
+  var btn = document.getElementById(buttonId || ('qexecbtn-'+(pipMode||'swing')+'-'+sid));
   var execSig = buildLiveSignalPayload(sig);
   if(btn){btn.disabled=true;btn.textContent='Executing...';}
   
   try {
+    var payload = {signal:execSig, engine_b: engineBData};
+    if (pipMode) payload.pip_mode = pipMode;
     var resp=await fetch('/api/quick-execute', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({signal:execSig, engine_b: engineBData})
+      body:JSON.stringify(payload)
     });
     var resData=await resp.json();
     if(!resp.ok || resData.error) throw new Error(resData.error || 'Execution failed');
@@ -1867,7 +1850,11 @@ async function runNakedScan(symbol) {
     // Convert newlines to breaks for HTML injecting
     var htmlContent = out.replace(/\n/g, '<br>');
     
-    var execBtnHTML = '<button class="exec-btn force" style="margin-top:8px;width:100%" id="qexecbtn-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'])" '+exeDisabled+'>⚡ QUICK SCALP EXECUTE (Uses Engine B SL/TP)</button>';
+    var execBtnHTML = '<div style="display:flex;gap:4px;margin-top:8px">' +
+      '<button class="exec-btn force" style="flex:1;font-size:11px" id="qexecbtn-scalp-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'], null, \'scalp\')" '+exeDisabled+'>⚡ SCALP</button>' +
+      '<button class="exec-btn force" style="flex:1;font-size:11px" id="qexecbtn-intraday-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'], null, \'intraday\')" '+exeDisabled+'>📊 INTRADAY</button>' +
+      '<button class="exec-btn force" style="flex:1;font-size:11px" id="qexecbtn-swing-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'])" '+exeDisabled+'>🌊 SWING</button>' +
+      '</div>';
     var aiBtnHTML = '<button class="exec-btn" style="margin-top:8px;width:100%;background-color:var(--accent);color:#0a0e17" id="abtn-naked-'+sid+'" onclick="analyzeNakedSignal(\''+symbol+'\')">🤖 ANALYZE ENGINE B</button>';
     
     if(resDiv) resDiv.innerHTML = htmlContent + execBtnHTML + aiBtnHTML;
@@ -1950,13 +1937,19 @@ async function runCompare(symbol) {
       compareAIDiv.innerHTML = ''+
         '<div style="margin:8px 0 4px;font-size:10px;font-weight:700;color:#f59e0b;letter-spacing:1px;font-family:monospace">⚖️ CROSS-ENGINE AI REVIEW (A+B aware)</div>'+
         buildAIContent(engineB.ai_analysis, symbol, 'compare-card')+
-        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">'+
-          '<button class="exec-btn force" style="flex:1;min-width:220px" id="'+compareExecBtnId+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'], \''+compareExecBtnId+'\')" '+exeDisabled+'>⚡ QUICK SCALP EXECUTE</button>'+
-          '<button class="exec-btn" style="flex:1;min-width:220px;background-color:var(--accent);color:#0a0e17" id="'+compareAnalyzeBtnId+'" onclick="analyzeNakedSignal(\''+symbol+'\', \''+compareAnalyzeBtnId+'\')">🤖 REFRESH ENGINE B AI</button>'+
+        '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px">'+
+          '<button class="exec-btn force" style="flex:1;min-width:100px;font-size:11px" id="qexecbtn-scalp-'+sid+'-compare" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'], \'qexecbtn-scalp-'+sid+'-compare\', \'scalp\')" '+exeDisabled+'>⚡ SCALP</button>'+
+          '<button class="exec-btn force" style="flex:1;min-width:100px;font-size:11px" id="qexecbtn-intraday-'+sid+'-compare" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'], \'qexecbtn-intraday-'+sid+'-compare\', \'intraday\')" '+exeDisabled+'>📊 INTRADAY</button>'+
+          '<button class="exec-btn force" style="flex:1;min-width:100px;font-size:11px" id="qexecbtn-swing-'+sid+'-compare" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'], \'qexecbtn-swing-'+sid+'-compare\')" '+exeDisabled+'>🌊 SWING</button>'+
+          '<button class="exec-btn" style="flex:1;min-width:160px;background-color:var(--accent);color:#0a0e17" id="'+compareAnalyzeBtnId+'" onclick="analyzeNakedSignal(\''+symbol+'\', \''+compareAnalyzeBtnId+'\')">🤖 REFRESH AI</button>'+
         '</div>';
     }
 
-    var execBtnHTML = '<button class="exec-btn force" style="margin-top:4px;width:100%" id="qexecbtn-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'])" '+exeDisabled+'>⚡ QUICK SCALP EXECUTE (Uses Engine B SL/TP)</button>';
+    var execBtnHTML = '<div style="display:flex;gap:4px;margin-top:4px">' +
+      '<button class="exec-btn force" style="flex:1;font-size:11px" id="qexecbtn-scalp-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'], null, \'scalp\')" '+exeDisabled+'>⚡ SCALP</button>' +
+      '<button class="exec-btn force" style="flex:1;font-size:11px" id="qexecbtn-intraday-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'], null, \'intraday\')" '+exeDisabled+'>📊 INTRADAY</button>' +
+      '<button class="exec-btn force" style="flex:1;font-size:11px" id="qexecbtn-swing-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'])" '+exeDisabled+'>🌊 SWING</button>' +
+      '</div>';
     
     if(resDiv) resDiv.innerHTML = html + execBtnHTML;
     var compareContent = document.getElementById('aic-'+sid+'-compare-card');

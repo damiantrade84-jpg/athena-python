@@ -99,6 +99,26 @@ CONFIG: dict = {
         "stock": {"sl": 1.5, "tp1": 2.5, "tp2": 4.0},
         "crypto": {"sl": 2.0, "tp1": 3.5, "tp2": 5.0},
     },
+    # Style-specific ATR multipliers — researched from 2025-2026 industry sources.
+    # Scalp: 5-10p forex SL, $0.15-0.30 stock SL. Target 1:1.8 RR. Hold minutes to hours.
+    # Intraday: 8-15p forex SL, $0.50-1.00 stock SL. Target 1:2.0 RR. Hold hours to 1-2 days.
+    # Swing: not listed — falls through to ATR_CLASS (unchanged, proven for multi-day holds).
+    "STYLE_ATR_MULTS": {
+        "scalp": {
+            "forex":     {"sl": 0.27, "tp1": 0.47, "tp2": 0.67},
+            "crypto":    {"sl": 0.16, "tp1": 0.31, "tp2": 0.50},
+            "stock":     {"sl": 0.17, "tp1": 0.33, "tp2": 0.53},
+            "commodity": {"sl": 0.38, "tp1": 0.69, "tp2": 1.00},
+            "index":     {"sl": 0.27, "tp1": 0.50, "tp2": 0.73},
+        },
+        "intraday": {
+            "forex":     {"sl": 0.20, "tp1": 0.40, "tp2": 0.67},
+            "crypto":    {"sl": 0.27, "tp1": 0.53, "tp2": 0.80},
+            "stock":     {"sl": 0.25, "tp1": 0.50, "tp2": 0.75},
+            "commodity": {"sl": 0.50, "tp1": 1.00, "tp2": 1.47},
+            "index":     {"sl": 0.33, "tp1": 0.67, "tp2": 0.92},
+        },
+    },
     "LEVEL_ATR_PRIORITY": {
         "default": {
             "scalp": ["H1", "H4", "D1"],

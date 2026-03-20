@@ -754,6 +754,7 @@ def calc_levels(
     direction: str,
     pair_type: str,
     regime_state: int | None = None,
+    style: str = "swing",
 ) -> dict:
     """Shared SL/TP calculation — used by both analyze_pair and backtest_pair.
 
@@ -763,14 +764,22 @@ def calc_levels(
 
     """
 
-    m = CONFIG["ATR_CLASS"].get(
-        pair_type,
-        {
-            "sl": CONFIG["SL_ATR_MULT"],
-            "tp1": CONFIG["TP1_ATR_MULT"],
-            "tp2": CONFIG["TP2_ATR_MULT"],
-        },
-    )
+    # Style-aware ATR multiplier lookup
+    _style = (style or "swing").lower()
+    _style_mults = CONFIG.get("STYLE_ATR_MULTS", {}).get(_style, {})
+    _style_class = _style_mults.get(pair_type)
+
+    if _style_class:
+        m = _style_class
+    else:
+        m = CONFIG["ATR_CLASS"].get(
+            pair_type,
+            {
+                "sl": CONFIG["SL_ATR_MULT"],
+                "tp1": CONFIG["TP1_ATR_MULT"],
+                "tp2": CONFIG["TP2_ATR_MULT"],
+            },
+        )
 
     _REGIME_FACTOR = {0: 1.25, 1: 1.0, 2: 1.35, 3: 0.9}
     # 0=TRENDING: wider stops (1.25x) — let trend breathe
