@@ -6751,7 +6751,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
     h1_times = [c.get("time", c.get("datetime", "")) for c in candles_h1]
     oos_start = 50 + int(max(0, len(candles_h4) - 50) * 0.7)
 
-    COOLDOWN = 2  # H4 bars to skip after a trade resolves (prevents overlapping entries)
+    COOLDOWN = 4  # H4 bars to skip after a trade resolves (prevents overlapping entries)
     trades = []
     i = 50
     while i < len(candles_h4) - 5:

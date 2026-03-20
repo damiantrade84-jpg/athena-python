@@ -783,13 +783,9 @@ class NakedEngine:
                 rr = tp_dist / sl_dist
                 rr_ok = rr >= min_rr
 
-        entry_ok = (
-            trigger_ok
-            or breakout_ok
-            or bool(res.get("bos_confirmed"))
-            or bool(res.get("liquidity_sweep"))
-            or bool(res.get("choch_confirmed"))  # CHoCH as valid entry catalyst
-        )
+        # Engine B core: every entry must have an actual trigger candle pattern.
+        # BOS/sweep/CHoCH contribute to structure_ok, not entry bypass.
+        entry_ok = trigger_ok or breakout_ok
         space_ok = room_ok or rr_ok
 
         confirmations = [structure_ok, location_ok, entry_ok, room_ok, rr_ok]
