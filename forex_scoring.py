@@ -482,12 +482,14 @@ def compute_forex_score(
     """
     result = ForexScoreResult()
 
-    if bar_time:
+    if backtest_mode and bar_time:
+        # In backtest, use the historical bar's timestamp (UTC) for session check
         try:
             utc_hour = datetime.fromisoformat(bar_time).hour
         except Exception:
             utc_hour = _local_to_utc_hour()
     else:
+        # In live mode, D1 bar_time is always midnight UTC — use real clock instead
         utc_hour = _local_to_utc_hour()
 
     # Hurst Exponent from H1 close prices — determines regime weighting

@@ -986,8 +986,8 @@ async function runBacktest() {
 
   try {
     var API_URL = '/api/backtest';
-    var payload = { style: 'auto' };
-    
+    var payload = { style: tradeStylePref || 'auto' };
+
     if (window.selectedBacktestEngine === 'B') {
         API_URL = '/api/backtest-naked';
         if (sym) payload.pair = sym;

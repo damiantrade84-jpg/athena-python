@@ -60,10 +60,8 @@ BT_AUTO_TOGGLE: false
 BT_PERCENTILE_FILTER: false
 
 # ── Engine B (Naked Market Structure) thresholds ──────────────────────────────
-# NAKED_BT_MIN: Minimum confidence score from NakedEngine.simulate_trade to take a trade in backtest
-NAKED_BT_MIN: 1.8
-# NAKED_CONFIDENCE_THRESHOLD: Live scan minimum confidence for Engine B signals
-NAKED_CONFIDENCE_THRESHOLD: 1.8
+# Engine B min_score per style is set in NAKED_ENGINE.style_profiles below (scalp/intraday/swing).
+# Both backtest and live scan read from _naked_scan_style_profile() — single source of truth.
 # NAKED_MAX_DAILY: Max Engine B trades per pair per day (live auto-trade cap)
 NAKED_MAX_DAILY: 3
 
@@ -366,11 +364,21 @@ TWELVEDATA_KEY: "9087d0ff6aeb49d1a0c5eaffce5d81a0"
 AUTO_EXIT_ON_DECAY: false
 
 # ── Engine B (Naked Scalp) ───────────────────────────────────────────
-NAKED_BT_MIN: 1.8                    # Confidence score threshold (0-3 scale)
-NAKED_CONFIDENCE_THRESHOLD: 1.8
-NAKED_MAX_DAILY: 3
-
 NAKED_ENGINE:
+  # Per-style min_score thresholds — tune here after backtesting.
+  # These override the hardcoded defaults in _naked_scan_style_profile().
+  # Hold limits (H4 bars): scalp=12 (48h), intraday=24 (4d), swing=60 (10d)
+  style_profiles:
+    scalp:
+      min_score: 3.0
+      min_rr: 1.0
+    intraday:
+      min_score: 4.0
+      min_rr: 1.2
+    swing:
+      min_score: 5.0
+      min_rr: 1.6
+
   zone_multipliers:
     TRENDING:        {upper: 0.3, lower: 1.0, sl: 1.5}
     RANGING:         {upper: 0.5, lower: 1.2, sl: 1.0}

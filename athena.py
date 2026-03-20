@@ -5163,7 +5163,7 @@ def backtest_pair(pair, style="auto"):
                 if pair.get("type") == "forex":
                     from forex_scoring import compute_forex_score
 
-                    _min_forex = CONFIG.get("MIN_FOREX_CONFLUENCE", 0.40)
+                    _min_forex = CONFIG["MIN_CONFLUENCE_CLASS"].get("forex", CONFIG.get("MIN_FOREX_CONFLUENCE", 0.60))
                     _fx = compute_forex_score(
                         d1_snap=d1i["snap"],
                         h4_snap=h4i["snap"],
@@ -5219,11 +5219,11 @@ def backtest_pair(pair, style="auto"):
 
             _ts = res.get("trendState", "UNKNOWN")
 
-            # F2: Use BT_MIN as BT threshold natively.
-            # Forex bt_min already set by routing block (MIN_FOREX_CONFLUENCE) — do not overwrite.
+            # F2: Use MIN_CONFLUENCE_CLASS as BT threshold — same gate as live scan.
+            # Forex bt_min already set by routing block — do not overwrite.
             if pair.get("type") != "forex":
                 bt_min = get_pair_profile(pair).get(
-                    "bt_min", CONFIG["BT_MIN"].get(_ptype, 0.4)
+                    "bt_min", CONFIG["MIN_CONFLUENCE_CLASS"].get(_ptype, CONFIG.get("MIN_CONFLUENCE", 1.0))
                 )
 
             _recent_scores.append(res["score"])
@@ -5593,9 +5593,9 @@ def backtest_pair(pair, style="auto"):
 
             _ts = res.get("trendState", "UNKNOWN")
 
-            # F2: Use BT_MIN as BT threshold natively
+            # F2: Use MIN_CONFLUENCE_CLASS as BT threshold — same gate as live scan.
             bt_min = get_pair_profile(pair).get(
-                "bt_min", CONFIG["BT_MIN"].get(_ptype, 0.4)
+                "bt_min", CONFIG["MIN_CONFLUENCE_CLASS"].get(_ptype, CONFIG.get("MIN_CONFLUENCE", 1.0))
             )
 
             _recent_scores.append(res["score"])
@@ -5940,10 +5940,9 @@ def backtest_pair(pair, style="auto"):
 
             _ts = res.get("trendState", "UNKNOWN")
 
-            # F2: Use BT_MIN as BT threshold natively (must equal MIN_CONFLUENCE_CLASS)
-
+            # F2: Use MIN_CONFLUENCE_CLASS as BT threshold — same gate as live scan.
             bt_min = get_pair_profile(pair).get(
-                "bt_min", CONFIG["BT_MIN"].get(_ptype, 0.70)
+                "bt_min", CONFIG["MIN_CONFLUENCE_CLASS"].get(_ptype, CONFIG.get("MIN_CONFLUENCE", 1.0))
             )
 
             _recent_scores.append(res["score"])
@@ -6176,7 +6175,7 @@ def backtest_pair(pair, style="auto"):
     if not trades:
         _max_score_seen = round(max(_recent_scores), 3) if _recent_scores else 0
         _bt_min_used = get_pair_profile(pair).get(
-            "bt_min", CONFIG["BT_MIN"].get(_ptype, 0.4)
+            "bt_min", CONFIG["MIN_CONFLUENCE_CLASS"].get(_ptype, CONFIG.get("MIN_CONFLUENCE", 1.0))
         )
         _h4_bars = len(h4_raw) if h4_raw else 0
         _h1_bars = len(h1_raw) if h1_raw else 0
@@ -6707,11 +6706,30 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
     from market_structure import engine as naked_engine
     from indicators import calc_atr
 
-    candles_d1 = fetch_candles(pair, "D1", CONFIG.get("D1_CANDLES", 600))
-    candles_h4 = fetch_candles(pair, "H4", CONFIG.get("H4_CANDLES", 1000))
-    candles_h1 = fetch_candles(pair, "H1", CONFIG.get("H1_CANDLES", 2000))
+    log.info(f"[ENGINE B BT] {pair['display']} fetching data... style={style}")
+
+    # Use same extended data fetch as Engine A backtest — live cache only holds ~180d.
+    if pair.get("source") == "binance":
+        # Crypto: paginated Binance fetch — same as Engine A (fetch_candles capped at 250 by config)
+        sym = pair["symbol"]
+        candles_d1 = fetch_binance(sym, "1d", 1000)
+        candles_h4 = fetch_binance_paginated(sym, "4h", 5000)
+        candles_h1 = fetch_binance_paginated(sym, "1h", 2000)
+    else:
+        candles_d1 = _extract_candles(fetch_eodhd(pair, "D1", 600)) or fetch_candles(
+            pair, "D1", CONFIG.get("D1_CANDLES", 600)
+        )
+        candles_h4, candles_h1 = _fetch_eodhd_intraday_bt(pair, days=730)
+        if not candles_h4 or not candles_h1:
+            log.warning(f"[ENGINE B BT] {pair['display']} EODHD intraday failed, trying live cache")
+            candles_h4 = fetch_candles(pair, "H4", CONFIG.get("H4_CANDLES", 1000))
+            candles_h1 = fetch_candles(pair, "H1", CONFIG.get("H1_CANDLES", 2000))
 
     if not candles_d1 or not candles_h4 or not candles_h1:
+        log.warning(
+            f"[ENGINE B BT] {pair['display']} insufficient candle data "
+            f"(D1={len(candles_d1 or [])}, H4={len(candles_h4 or [])}, H1={len(candles_h1 or [])})"
+        )
         return {
             "success": False,
             "error": "Insufficient candle data (D1, H4, or H1 missing).",
@@ -6725,20 +6743,28 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
 
     requested_style = "auto" if style == "naked" else style
     resolved_style, style_profile = _naked_scan_style_profile(requested_style)
+    log.info(
+        f"[ENGINE B BT] {pair['display']} running: "
+        f"D1={len(candles_d1)} H4={len(candles_h4)} H1={len(candles_h1)} bars, style={resolved_style}"
+    )
     d1_times = [c.get("time", c.get("datetime", "")) for c in candles_d1]
     h1_times = [c.get("time", c.get("datetime", "")) for c in candles_h1]
     oos_start = 50 + int(max(0, len(candles_h4) - 50) * 0.7)
 
+    COOLDOWN = 2  # H4 bars to skip after a trade resolves (prevents overlapping entries)
     trades = []
-    for i in range(50, len(candles_h4) - 5):
+    i = 50
+    while i < len(candles_h4) - 5:
         h4_time = candles_h4[i].get("time") or candles_h4[i].get("datetime")
         if not h4_time:
+            i += 1
             continue
 
         h4_ctx = candles_h4[: i + 1]
         d1_slice_end = bisect.bisect_right(d1_times, h4_time)
         h1_slice_end = bisect.bisect_right(h1_times, h4_time)
         if d1_slice_end < 20 or h1_slice_end < 20:
+            i += 1
             continue
 
         d1_ctx = candles_d1[:d1_slice_end]
@@ -6803,6 +6829,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
             )
 
         if not candidates:
+            i += 1
             continue
 
         best = max(candidates, key=lambda x: (x["score"], x["rr"], x["pct"]))
@@ -6814,8 +6841,13 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
 
         outcome = "TIMEOUT"
         r_multiple = 0.0
-        future_window = candles_h4[i + 1 : min(i + 13, len(candles_h4))]
-        for future in future_window:
+        exit_bar_offset = 0  # tracks which future bar resolved the trade
+        # Style-specific hold limit (H4 bars): scalp=12 (48h), intraday=24 (4d), swing=60 (10d)
+        _hold_map = {"scalp": 12, "intraday": 24, "swing": 60}
+        max_hold_bars = _hold_map.get(resolved_style, 12)
+        future_window = candles_h4[i + 1 : min(i + max_hold_bars + 1, len(candles_h4))]
+        for fi, future in enumerate(future_window):
+            exit_bar_offset = fi
             if direction == "LONG":
                 if float(future["low"]) <= sl:
                     outcome = "SL"
@@ -6866,8 +6898,20 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 "rr_target": round(target_rr, 2),
             }
         )
+        # Advance past exit bar + cooldown — no overlapping entries
+        i = i + 1 + exit_bar_offset + COOLDOWN
 
     result = _format_backtest_results(trades, pair, engine_type="NAKED")
+    _tp_count = sum(1 for t in trades if t.get("outcome") == "TP1")
+    _sl_count = sum(1 for t in trades if t.get("outcome") == "SL")
+    _to_count = sum(1 for t in trades if t.get("outcome") == "TIMEOUT")
+    log.info(
+        f"[ENGINE B BT] {pair['display']} done: {result.get('totalTrades', 0)} trades "
+        f"(TP1={_tp_count} SL={_sl_count} TIMEOUT={_to_count}), "
+        f"WR {result.get('winRate', 0):.1f}%, PF {result.get('profitFactor', 0):.2f}, "
+        f"Expect {result.get('expectancy', 0):.2f}R, SQN {result.get('sqn', 0):.2f}, "
+        f"style={resolved_style}"
+    )
     if "error" not in result:
         result["btStyle"] = resolved_style
         result["btStyleRequested"] = requested_style
@@ -6884,7 +6928,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                     "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,bt_min,atr_source,notes) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
-                        datetime.utcnow().isoformat(),
+                        datetime.now(timezone.utc).isoformat(),
                         pair["display"],
                         pair.get("type", ""),
                         "naked_engine",
@@ -7424,7 +7468,7 @@ def _resolve_pair_from_signal(sig: dict) -> dict | None:
 def _naked_scan_style_profile(style: str | None) -> tuple[str, dict]:
     resolved = _normalize_style(style)
     if resolved == "auto":
-        resolved = "scalp"
+        resolved = "intraday"  # Engine B walks H4 bars — intraday is the natural default
     profiles = {
         "scalp": {
             "min_score": 3.0,
