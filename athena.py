@@ -6867,7 +6867,16 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 entry_candles=_bt_entry_candles,
                 style_profile=style_profile,
             )
-            if conf_data["score"] < style_profile["min_score"] or not conf_data.get("passed"):
+            # Regime-scale the min_score: tighter gate in ranging/choppy, looser in trending
+            _regime_gate = {
+                "TRENDING": 0.85,        # trend does the work — slightly easier entry
+                "RANGING": 1.2,          # need more conviction in chop
+                "HIGH_VOLATILITY": 1.3,  # noise kills — require strong structure
+                "LOW_VOLATILITY": 1.0,   # default — calm market, standard gate
+            }
+            _min_score_scaled = style_profile["min_score"] * _regime_gate.get(regime_label, 1.0)
+
+            if conf_data["score"] < _min_score_scaled or not conf_data.get("passed"):
                 continue
 
             entry = current_price
@@ -6952,7 +6961,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
             f_low = float(future["low"])
 
             if direction == "LONG":
-                if not _be_triggered and risk > 0 and f_high >= entry + risk:
+                if not _be_triggered and risk > 0 and f_high >= entry + (risk * 1.5):
                     _active_sl = entry
                     _be_triggered = True
                 if f_low <= _active_sl:
@@ -6964,7 +6973,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                     r_multiple = round(target_rr, 2)
                     break
             else:
-                if not _be_triggered and risk > 0 and f_low <= entry - risk:
+                if not _be_triggered and risk > 0 and f_low <= entry - (risk * 1.5):
                     _active_sl = entry
                     _be_triggered = True
                 if f_high >= _active_sl:
@@ -7865,6 +7874,15 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             entry_candles=_entry_candles,
             style_profile=style_profile,
         )
+        _regime_gate = {
+            "TRENDING": 0.85,
+            "RANGING": 1.2,
+            "HIGH_VOLATILITY": 1.3,
+            "LOW_VOLATILITY": 1.0,
+        }
+        _min_score_scaled = style_profile["min_score"] * _regime_gate.get(regime_label, 1.0)
+        res["min_score_used"] = round(_min_score_scaled, 2)
+        res["regime_gate"] = _regime_gate.get(regime_label, 1.0)
         res.update(conf)
         res["current_price"] = current_price
         res["direction"] = direction
@@ -8326,7 +8344,16 @@ def api_scan_naked():
                         entry_candles=entry_candles,
                         style_profile=style_profile,
                     )
-                    if conf_data["score"] < style_profile["min_score"] or not conf_data.get("passed"):
+                    # Regime-scale the min_score: tighter gate in ranging/choppy, looser in trending
+                    _regime_gate = {
+                        "TRENDING": 0.85,        # trend does the work — slightly easier entry
+                        "RANGING": 1.2,          # need more conviction in chop
+                        "HIGH_VOLATILITY": 1.3,  # noise kills — require strong structure
+                        "LOW_VOLATILITY": 1.0,   # default — calm market, standard gate
+                    }
+                    _min_score_scaled = style_profile["min_score"] * _regime_gate.get(regime_label, 1.0)
+
+                    if conf_data["score"] < _min_score_scaled or not conf_data.get("passed"):
                         continue
 
                     res.update(conf_data)

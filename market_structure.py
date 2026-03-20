@@ -796,12 +796,13 @@ class NakedEngine:
                 rr = tp_dist / sl_dist
                 rr_ok = rr >= min_rr
 
+        # Entry requires a candle pattern trigger OR a confirmed structural event.
+        # BOS/CHoCH alone without a trigger candle is not a valid entry.
         entry_ok = (
             trigger_ok
-            or breakout_ok
-            or bool(res.get("bos_confirmed"))
-            or bool(res.get("liquidity_sweep"))
-            or bool(res.get("choch_confirmed"))
+            or (breakout_ok and bool(res.get("bos_volume_confirmed", False)))
+            or (bool(res.get("liquidity_sweep")) and trigger_ok)
+            or (bool(res.get("choch_confirmed")) and (trigger_ok or zone_ok))
         )
         space_ok = room_ok or rr_ok
 
@@ -816,7 +817,16 @@ class NakedEngine:
         if checklist_mode == "strict":
             passed = structure_ok and zone_ok and trigger_ok and room_ok and rr_ok and macro_ok
         else:
-            passed = structure_ok and location_ok and entry_ok and space_ok and macro_ok
+            # Flexible but not free — require BOTH location AND a trigger/catalyst.
+            # BOS alone is not enough. You need: structure + (zone OR breakout) + trigger + room/rr.
+            # This prevents BOS from single-handedly passing 3 gates.
+            passed = (
+                structure_ok
+                and location_ok
+                and (trigger_ok or (breakout_ok and bool(res.get("bos_volume_confirmed", False))))
+                and rr_ok
+                and macro_ok
+            )
 
         return {
             "score": total_score,
