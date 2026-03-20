@@ -525,6 +525,7 @@ class NakedEngine:
         atr: float,
         regime: str = "RANGING",
         fallback_rr: float = 2.0,
+        asset_type: str = "",
     ) -> dict:
         """
         Analyzes raw candle data to find Support/Resistance zones and trend sequence.
@@ -536,13 +537,23 @@ class NakedEngine:
                 "reason": "Missing data or valid ATR",
             }
 
+        # Forex structure timeframe selection
+        _forex_struct_tf = config.CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
+        _use_d1_structure = (asset_type == "forex" and _forex_struct_tf == "D1")
+        if _use_d1_structure:
+            struct_candles = d1_candles
+            trigger_candles = h4_candles
+        else:
+            struct_candles = h1_candles
+            trigger_candles = h1_candles
+
         # Extract numpy arrays for scipy
         h4_highs = np.array([float(c["high"]) for c in h4_candles])
         h4_lows = np.array([float(c["low"]) for c in h4_candles])
 
-        h1_highs = np.array([float(c["high"]) for c in h1_candles])
-        h1_lows = np.array([float(c["low"]) for c in h1_candles])
-        h1_closes = np.array([float(c["close"]) for c in h1_candles])
+        struct_highs = np.array([float(c["high"]) for c in struct_candles])
+        struct_lows = np.array([float(c["low"]) for c in struct_candles])
+        struct_closes = np.array([float(c["close"]) for c in struct_candles])
 
         # 1. Macro Zones (D1/H4)
         # Using H4 to find thick zones gives standard resolution.
@@ -565,22 +576,22 @@ class NakedEngine:
             else:
                 zone["fvg_size_atr"] = 0.0
 
-        # 2. Immediate H1 Sequence and Macro H4 Sequence
-        sequence_data = self._determine_sequence(h1_highs, h1_lows, atr, direction)
+        # 2. Immediate Structure Sequence and Macro H4 Sequence
+        sequence_data = self._determine_sequence(struct_highs, struct_lows, atr, direction)
         macro_seq_data = self._determine_sequence(h4_highs, h4_lows, atr, direction)
 
         # 3. BOS and Sweep Detection
         # Extract volumes for BOS volume confirmation (None for forex — no centralized volume)
-        h1_volumes = None
-        _has_vol = any(float(c.get("vol", 0)) > 0 for c in h1_candles[-5:])
+        struct_volumes = None
+        _has_vol = any(float(c.get("vol", 0)) > 0 for c in struct_candles[-5:])
         if _has_vol:
-            h1_volumes = np.array([float(c.get("vol", 0)) for c in h1_candles])
+            struct_volumes = np.array([float(c.get("vol", 0)) for c in struct_candles])
 
-        bos_data = self._detect_bos(h1_highs, h1_lows, atr, volumes=h1_volumes, closes=h1_closes)
-        sweep_data = self._detect_sweep(h1_highs, h1_lows, h1_closes, atr)
+        bos_data = self._detect_bos(struct_highs, struct_lows, atr, volumes=struct_volumes, closes=struct_closes)
+        sweep_data = self._detect_sweep(struct_highs, struct_lows, struct_closes, atr)
 
         # 3b. CHoCH Detection (structural reversal)
-        choch_data = self._detect_choch(h1_highs, h1_lows, atr)
+        choch_data = self._detect_choch(struct_highs, struct_lows, atr)
 
         # 4. Find Nearest Zones Relative to Current Price
         # Nearest resistance above price
@@ -681,9 +692,9 @@ class NakedEngine:
             fvg_overlap = nearest_res.get("fvg_overlap", False)
 
         active_zone = nearest_sup if direction == "LONG" else nearest_res
-        zone_ctx = self._zone_context(active_zone, current_price, atr, direction, h1_candles)
+        zone_ctx = self._zone_context(active_zone, current_price, atr, direction, trigger_candles)
         trigger_ctx = self._price_action_trigger(
-            h1_candles,
+            trigger_candles,
             direction,
             atr,
             zone_ctx["zone_touched"] or zone_ctx["near_zone"],
@@ -722,6 +733,7 @@ class NakedEngine:
             "engulfing_candle": trigger_ctx["engulfing"],
             "inside_break_candle": trigger_ctx["inside_break"],
             "strong_close": trigger_ctx["strong_close"],
+            "structure_tf": "D1" if _use_d1_structure else "H1",
         }
 
     def calculate_confidence(
@@ -875,6 +887,7 @@ class NakedEngine:
         confidence_threshold=1.8,
         learning_ctx=None,
         style_profile=None,
+        asset_type="",
     ):
         """Backtest-friendly wrapper that returns entry/exit signals.
         Returns dict compatible with existing backtest reporting."""
@@ -886,13 +899,17 @@ class NakedEngine:
             direction,
             atr,
             regime_label,
+            asset_type=asset_type,
         )
+        # For forex D1 structure, use H4 as entry candles instead of H1
+        _forex_struct_tf = config.CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
+        _entry_candles = h4_candles if (asset_type == "forex" and _forex_struct_tf == "D1") else h1_candles
         confidence = self.calculate_confidence(
             result,
             current_price,
             direction,
             learning_ctx,
-            entry_candles=h1_candles,
+            entry_candles=_entry_candles,
             style_profile=style_profile,
         )
         if confidence["score"] < confidence_threshold or not confidence.get("passed"):

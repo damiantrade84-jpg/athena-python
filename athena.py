@@ -40,10 +40,20 @@ from datetime import datetime, timezone, timedelta
 from flask import Flask, jsonify, request, send_from_directory
 
 import requests as _requests_mod
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry as _Retry
 
-# C2: Use requests.Session for connection pooling across all HTTP calls
-
+# C2: Use requests.Session with retry strategy for resilient HTTP calls
+_retry_strategy = _Retry(
+    total=3,
+    backoff_factor=1.0,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["GET"],
+)
+_retry_adapter = HTTPAdapter(max_retries=_retry_strategy)
 http_requests = _requests_mod.Session()
+http_requests.mount("https://", _retry_adapter)
+http_requests.mount("http://", _retry_adapter)
 
 from eodhd import APIClient as _EODHDClient  # noqa: E402
 
@@ -2668,7 +2678,7 @@ def _fetch_eodhd_intraday_bt(pair, days=730):
             "interval": "1h",
         }
 
-        r = http_requests.get(url, params=params, timeout=30)
+        r = http_requests.get(url, params=params, timeout=60)
 
         if r.status_code != 200:
             log.warning(f"[EODHD-BT] {ticker} HTTP {r.status_code}: {r.text[:120]}")
@@ -2786,9 +2796,21 @@ def fetch_eodhd(pair, tf, limit):
                 "%Y-%m-%d"
             )
 
-            bars = api.get_eod_historical_stock_market_data(
-                ticker, period="d", from_date=start, order="a"
-            )
+            # Retry D1 SDK call with backoff
+            bars = None
+            for attempt in range(1, 4):
+                try:
+                    bars = api.get_eod_historical_stock_market_data(
+                        ticker, period="d", from_date=start, order="a"
+                    )
+                    break
+                except Exception as e:
+                    if attempt == 3:
+                        log.warning(f"[EODHD] {ticker} D1 failed after 3 attempts: {e}")
+                        raise
+                    backoff = 1.5 * attempt
+                    log.warning(f"[EODHD] {ticker} D1 attempt {attempt} failed, retry in {backoff}s: {e}")
+                    time.sleep(backoff)
 
             if not bars:
                 log.warning(f"[EODHD] {ticker} D1: no data")
@@ -2828,9 +2850,21 @@ def fetch_eodhd(pair, tf, limit):
                 (datetime.now(timezone.utc) - timedelta(days=365)).timestamp()
             )
 
-            bars = api.get_intraday_historical_data(
-                ticker, interval="1h", from_unix_time=start_ts
-            )
+            # Retry intraday SDK call with backoff
+            bars = None
+            for attempt in range(1, 4):
+                try:
+                    bars = api.get_intraday_historical_data(
+                        ticker, interval="1h", from_unix_time=start_ts
+                    )
+                    break
+                except Exception as e:
+                    if attempt == 3:
+                        log.warning(f"[EODHD] {ticker} intraday failed after 3 attempts: {e}")
+                        raise
+                    backoff = 1.5 * attempt
+                    log.warning(f"[EODHD] {ticker} intraday attempt {attempt} failed, retry in {backoff}s: {e}")
+                    time.sleep(backoff)
 
             if not bars:
                 fallback = _fetch_fallback_candles(
@@ -6794,6 +6828,10 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         atr = atr_list[-1] if atr_list and atr_list[-1] else (current_price * 0.01)
 
         regime_label = _engine_b_regime_label(h4_ctx, pair.get("type", "stock"))
+        # Determine correct entry candles based on forex structure timeframe
+        _pair_type = pair.get("type", "stock")
+        _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
+        _bt_entry_candles = h4_ctx if (_pair_type == "forex" and _forex_struct_tf == "D1") else h1_ctx
         candidates = []
         for direction in ["LONG", "SHORT"]:
             res = naked_engine.analyze_structure(
@@ -6805,12 +6843,13 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 atr,
                 regime_label,
                 fallback_rr=style_profile.get("fallback_rr", 2.0),
+                asset_type=pair.get("type", ""),
             )
             conf_data = naked_engine.calculate_confidence(
                 res,
                 current_price,
                 direction,
-                entry_candles=h1_ctx,
+                entry_candles=_bt_entry_candles,
                 style_profile=style_profile,
             )
             if conf_data["score"] < style_profile["min_score"] or not conf_data.get("passed"):
@@ -7742,7 +7781,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             engine_a_ctx.get("regime") if isinstance(engine_a_ctx, dict) else None,
         )
         res = engine.analyze_structure(
-            d1, h4, h1, current_price, direction, atr, regime_label
+            d1, h4, h1, current_price, direction, atr, regime_label, asset_type=pair_obj.get("type", "")
         )
 
         try:
@@ -7756,12 +7795,16 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             learning_ctx = None
 
         resolved_style, style_profile = _naked_scan_style_profile(sig.get("style", "auto"))
+        # Determine correct entry candles based on forex structure timeframe
+        _pair_type = pair_obj.get("type", "")
+        _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
+        _entry_candles = h4 if (_pair_type == "forex" and _forex_struct_tf == "D1") else h1
         conf = engine.calculate_confidence(
             res,
             current_price,
             direction,
             learning_ctx,
-            entry_candles=h1,
+            entry_candles=_entry_candles,
             style_profile=style_profile,
         )
         res.update(conf)
@@ -8183,6 +8226,7 @@ def api_scan_naked():
                     atr,
                     regime_label,
                     fallback_rr=style_profile.get("fallback_rr", 2.0),
+                    asset_type=pair.get("type", ""),
                 )
 
                 verdict = res.get("structural_verdict", "NONE")
@@ -10359,7 +10403,7 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
                 res.get("regime"),
             )
             structure_data = naked_engine.analyze_structure(
-                d1, h4, h1, float(price), direction, float(atr), _regime_label
+                d1, h4, h1, float(price), direction, float(atr), _regime_label, asset_type=pair.get("type", "")
             )
 
             if structure_data and structure_data.get("structural_verdict") == "CLEAR":
