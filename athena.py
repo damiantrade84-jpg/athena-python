@@ -5306,7 +5306,7 @@ def backtest_pair(pair, style="auto"):
             )
 
             lvl = calc_levels(
-                entry, atr, direction, _ptype, regime_state=_bt_regime_state
+                entry, atr, direction, _ptype, regime_state=_bt_regime_state, style=effective_style
             )
 
             sl = lvl["sl"]
@@ -5678,7 +5678,7 @@ def backtest_pair(pair, style="auto"):
             )
 
             lvl = calc_levels(
-                entry, atr, direction, _ptype, regime_state=_bt_regime_state2
+                entry, atr, direction, _ptype, regime_state=_bt_regime_state2, style=effective_style
             )
 
             sl = lvl["sl"]
@@ -6023,7 +6023,7 @@ def backtest_pair(pair, style="auto"):
             )
 
             lvl = calc_levels(
-                entry, atr, direction, _ptype, regime_state=_bt_regime_state3
+                entry, atr, direction, _ptype, regime_state=_bt_regime_state3, style=effective_style
             )
 
             sl = lvl["sl"]
@@ -6801,6 +6801,11 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
 
     requested_style = "auto" if style == "naked" else style
     resolved_style, style_profile = _naked_scan_style_profile(requested_style)
+    _pair_type = pair.get("type", "stock")
+    _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
+    if _pair_type == "forex" and _forex_struct_tf == "D1" and resolved_style == "intraday":
+        resolved_style, style_profile = _naked_scan_style_profile("swing")
+        log.info(f"[ENGINE B BT] {pair['display']}: forex D1 structure → auto-promoted to swing style")
     log.info(
         f"[ENGINE B BT] {pair['display']} running: "
         f"D1={len(candles_d1)} H4={len(candles_h4)} H1={len(candles_h1)} bars, style={resolved_style}"
@@ -6909,35 +6914,47 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
 
         outcome = "TIMEOUT"
         r_multiple = 0.0
-        exit_bar_offset = 0  # tracks which future bar resolved the trade
-        # Style-specific hold limit (H4 bars): scalp=12 (48h), intraday=24 (4d), swing=60 (10d)
+        exit_bar_offset = 0
         _hold_map = {"scalp": 12, "intraday": 24, "swing": 60}
         max_hold_bars = _hold_map.get(resolved_style, 12)
+
+        risk = abs(entry - sl)
+        _active_sl = sl
+        _be_triggered = False
+
         future_window = candles_h4[i + 1 : min(i + max_hold_bars + 1, len(candles_h4))]
         for fi, future in enumerate(future_window):
             exit_bar_offset = fi
+            f_high = float(future["high"])
+            f_low = float(future["low"])
+
             if direction == "LONG":
-                if float(future["low"]) <= sl:
-                    outcome = "SL"
-                    r_multiple = -1.0
+                if not _be_triggered and risk > 0 and f_high >= entry + risk:
+                    _active_sl = entry
+                    _be_triggered = True
+                if f_low <= _active_sl:
+                    outcome = "BE" if _be_triggered and _active_sl == entry else "SL"
+                    r_multiple = 0.0 if outcome == "BE" else -1.0
                     break
-                if float(future["high"]) >= tp:
+                if f_high >= tp:
                     outcome = "TP1"
                     r_multiple = round(target_rr, 2)
                     break
             else:
-                if float(future["high"]) >= sl:
-                    outcome = "SL"
-                    r_multiple = -1.0
+                if not _be_triggered and risk > 0 and f_low <= entry - risk:
+                    _active_sl = entry
+                    _be_triggered = True
+                if f_high >= _active_sl:
+                    outcome = "BE" if _be_triggered and _active_sl == entry else "SL"
+                    r_multiple = 0.0 if outcome == "BE" else -1.0
                     break
-                if float(future["low"]) <= tp:
+                if f_low <= tp:
                     outcome = "TP1"
                     r_multiple = round(target_rr, 2)
                     break
 
         if outcome == "TIMEOUT" and future_window:
             last_close = float(future_window[-1]["close"])
-            risk = abs(entry - sl)
             if risk > 0:
                 open_r = ((last_close - entry) / risk) if direction == "LONG" else ((entry - last_close) / risk)
                 r_multiple = round(max(-1.0, min(target_rr, open_r)), 2)
@@ -6977,10 +6994,11 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
     result = _format_backtest_results(trades, pair, engine_type="NAKED")
     _tp_count = sum(1 for t in trades if t.get("outcome") == "TP1")
     _sl_count = sum(1 for t in trades if t.get("outcome") == "SL")
+    _be_count = sum(1 for t in trades if t.get("outcome") == "BE")
     _to_count = sum(1 for t in trades if t.get("outcome") == "TIMEOUT")
     log.info(
         f"[ENGINE B BT] {pair['display']} done: {result.get('totalTrades', 0)} trades "
-        f"(TP1={_tp_count} SL={_sl_count} TIMEOUT={_to_count}), "
+        f"(TP1={_tp_count} SL={_sl_count} BE={_be_count} TIMEOUT={_to_count}), "
         f"WR {result.get('winRate', 0):.1f}%, PF {result.get('profitFactor', 0):.2f}, "
         f"Expect {result.get('expectancy', 0):.2f}R, SQN {result.get('sqn', 0):.2f}, "
         f"style={resolved_style}"
@@ -7810,9 +7828,11 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             learning_ctx = None
 
         resolved_style, style_profile = _naked_scan_style_profile(sig.get("style", "auto"))
-        # Determine correct entry candles based on forex structure timeframe
         _pair_type = pair_obj.get("type", "")
         _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
+        if _pair_type == "forex" and _forex_struct_tf == "D1" and resolved_style == "intraday":
+            resolved_style, style_profile = _naked_scan_style_profile("swing")
+        # Determine correct entry candles based on forex structure timeframe
         _entry_candles = h4 if (_pair_type == "forex" and _forex_struct_tf == "D1") else h1
         conf = engine.calculate_confidence(
             res,
@@ -8178,6 +8198,9 @@ def api_scan_naked():
     d = request.json or {}
     asset_class = d.get("assetClass", "crypto").lower()
     resolved_style, style_profile = _naked_scan_style_profile(d.get("style", "auto"))
+    _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
+    if asset_class == "forex" and _forex_struct_tf == "D1" and resolved_style == "intraday":
+        resolved_style, style_profile = _naked_scan_style_profile("swing")
 
     candidate_pairs = [
         p
@@ -10404,7 +10427,7 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
     _regime_state = res.get("regime", {}).get("state") if res.get("regime") else None
 
     lvl = calc_levels(
-        float(price), float(atr), direction, pair["type"], regime_state=_regime_state
+        float(price), float(atr), direction, pair["type"], regime_state=_regime_state, style=_style
     )
 
     sk = stoch["k"][-1] if stoch["k"] and stoch["k"][-1] is not None else None
