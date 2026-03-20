@@ -143,14 +143,16 @@ class NakedEngine:
         }
 
     def _detect_bos(self, highs: np.ndarray, lows: np.ndarray, atr: float,
-                    volumes: np.ndarray = None) -> dict:
+                    volumes: np.ndarray = None, closes: np.ndarray = None) -> dict:
         """
         Detect Break of Structure (BOS) patterns using peak/trough analysis.
         Returns dict with bullish/bearish BOS signals and broken levels.
 
+        BOS confirmation is close-based: the bar's CLOSE must breach the prior
+        swing level, not just the wick. Wick-only breaks are false positives.
+
         volumes: numpy array of bar volumes. None = skip volume check (forex).
-        For crypto/stocks with real volume, BOS candle should have at or above
-        average volume to confirm the break is not a low-conviction wick break.
+        closes: numpy array of bar closes. None = fall back to highs/lows (legacy).
         """
         try:
             from scipy.signal import find_peaks
@@ -173,17 +175,21 @@ class NakedEngine:
                     "bos_volume_confirmed": False,
                 }
 
-            # BOS Bull: recent peak > previous peak AND current close > previous peak
+            # Use close for BOS confirmation (more reliable than wick break)
+            _last_close = closes[-1] if closes is not None and len(closes) > 0 else highs[-1]
+            _last_close_bear = closes[-1] if closes is not None and len(closes) > 0 else lows[-1]
+
+            # BOS Bull: recent peak > previous peak AND current CLOSE > previous peak
             bos_bull = False
             last_broken_high = None
-            if last_peaks[-1] > last_peaks[-2] and highs[-1] > last_peaks[-2]:
+            if last_peaks[-1] > last_peaks[-2] and _last_close > last_peaks[-2]:
                 bos_bull = True
                 last_broken_high = last_peaks[-2]
 
-            # BOS Bear: recent trough < previous trough AND current close < previous trough
+            # BOS Bear: recent trough < previous trough AND current CLOSE < previous trough
             bos_bear = False
             last_broken_low = None
-            if last_troughs[-1] < last_troughs[-2] and lows[-1] < last_troughs[-2]:
+            if last_troughs[-1] < last_troughs[-2] and _last_close_bear < last_troughs[-2]:
                 bos_bear = True
                 last_broken_low = last_troughs[-2]
 
@@ -341,8 +347,6 @@ class NakedEngine:
         for i in range(2, len(candles) - 1):
             prev_high = float(candles[i - 1]["high"])
             prev_low = float(candles[i - 1]["low"])
-            float(candles[i]["high"])
-            float(candles[i]["low"])
             next_high = float(candles[i + 1]["high"])
             next_low = float(candles[i + 1]["low"])
 
@@ -545,13 +549,20 @@ class NakedEngine:
             h4_highs, h4_lows, atr, regime, h4_candles
         )
 
-        # Determine FVG overlap with zones
+        # Determine FVG overlap with zones — graded by quality
         fvgs = self._detect_fvg(h4_candles)
         for zone in res_zones + sup_zones:
-            zone["fvg_overlap"] = any(
-                not (zone["upper"] < fvg["bottom"] or zone["lower"] > fvg["top"])
-                for fvg in fvgs
-            )
+            overlapping_fvgs = [
+                fvg for fvg in fvgs
+                if not (zone["upper"] < fvg["bottom"] or zone["lower"] > fvg["top"])
+            ]
+            zone["fvg_overlap"] = len(overlapping_fvgs) > 0
+            # FVG quality: size relative to ATR (larger = more significant)
+            if overlapping_fvgs and atr > 0:
+                largest_fvg = max(overlapping_fvgs, key=lambda f: abs(f["top"] - f["bottom"]))
+                zone["fvg_size_atr"] = round(abs(largest_fvg["top"] - largest_fvg["bottom"]) / atr, 2)
+            else:
+                zone["fvg_size_atr"] = 0.0
 
         # 2. Immediate H1 Sequence and Macro H4 Sequence
         sequence_data = self._determine_sequence(h1_highs, h1_lows, atr, direction)
@@ -564,7 +575,7 @@ class NakedEngine:
         if _has_vol:
             h1_volumes = np.array([float(c.get("vol", 0)) for c in h1_candles])
 
-        bos_data = self._detect_bos(h1_highs, h1_lows, atr, volumes=h1_volumes)
+        bos_data = self._detect_bos(h1_highs, h1_lows, atr, volumes=h1_volumes, closes=h1_closes)
         sweep_data = self._detect_sweep(h1_highs, h1_lows, h1_closes, atr)
 
         # 3b. CHoCH Detection (structural reversal)

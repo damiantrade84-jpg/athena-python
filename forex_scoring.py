@@ -44,7 +44,7 @@ class ForexScoreResult:
 # ─── Session windows (UTC hours, inclusive) ─────────────────────────────────
 
 _ASIAN_OPEN = (0, 8)  # 00:00–08:00 UTC  (Tokyo/Sydney)
-_LONDON_OPEN = (7, 16)  # 07:00–17:00 UTC  (full London session, BST)
+_LONDON_OPEN = (7, 17)  # 07:00–17:00 UTC  (full London session, BST)
 _NY_OPEN = (12, 21)  # 12:00–21:00 UTC  (full NY session: 08:00–17:00 ET)
 
 
@@ -211,13 +211,13 @@ def _check_trend_gate(d1_snap: dict, h4_snap: dict) -> tuple[bool, str]:
     h4_bull = h4_ema50 > h4_ema200
 
     if d1_bull and h4_bull:
-        margin = (d1_close - d1_ema200) / d1_ema200
+        margin = (d1_close - d1_ema200) / d1_ema200 if d1_ema200 != 0 else 0.0
         if margin > trend_margin_min or d1_slope > 0:
             return True, "LONG"
         return False, "LONG"
 
     if not d1_bull and not h4_bull:
-        margin = (d1_ema200 - d1_close) / d1_ema200
+        margin = (d1_ema200 - d1_close) / d1_ema200 if d1_ema200 != 0 else 0.0
         if margin > trend_margin_min or d1_slope < 0:
             return True, "SHORT"
         return False, "SHORT"

@@ -6900,6 +6900,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 "trigger_pattern": best["conf"].get("trigger_pattern", "NONE"),
                 "zone_touched": best["res"].get("zone_touched", False),
                 "rr_target": round(target_rr, 2),
+                "bos_volume_confirmed": best["res"].get("bos_volume_confirmed", True),
+                "choch_confirmed": best["res"].get("choch_confirmed", False),
             }
         )
         # Advance past the resolved exit bar plus the configured cooldown gap.
@@ -6948,7 +6950,11 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                         result.get("maxDrawdownPct"),
                         style_profile.get("min_score"),
                         f"{style_profile.get('atr_tf', 'H4')}_ATR",
-                        f"style={resolved_style};requested={requested_style}",
+                        (
+                            f"style={resolved_style};requested={requested_style}"
+                            f";bos_vol_confirmed={sum(1 for t in trades if t.get('bos_volume_confirmed', True))}"
+                            f";choch_confirmed={sum(1 for t in trades if t.get('choch_confirmed', False))}"
+                        ),
                     ),
                 )
                 _con.commit()
@@ -7026,41 +7032,79 @@ def _init_audit_db(db_path: str) -> None:
 
         CREATE TABLE IF NOT EXISTS audit_log (
 
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
 
-            ts            TEXT NOT NULL,
+            ts                    TEXT NOT NULL,
 
-            pair          TEXT,
+            pair                  TEXT,
 
-            score         REAL,
+            score                 REAL,
 
-            direction     TEXT,
+            direction             TEXT,
 
-            trend         TEXT,
+            trend                 TEXT,
 
-            grade         TEXT,
+            grade                 TEXT,
 
-            edge_prob     REAL,
+            edge_prob             REAL,
 
-            risk          TEXT,
+            risk                  TEXT,
 
-            style         TEXT,
+            style                 TEXT,
 
-            entry_price   REAL,
+            entry_price           REAL,
 
-            sl            REAL,
+            sl                    REAL,
 
-            tp            REAL,
+            tp                    REAL,
 
-            volume        REAL,
+            volume                REAL,
 
-            regime        TEXT,
+            regime                TEXT,
 
-            risk_amount   REAL,
+            risk_amount           REAL,
 
-            risk_pct      REAL,
+            risk_pct              REAL,
 
-            ticket        TEXT
+            ticket                TEXT,
+
+            exit_price            REAL,
+
+            exit_time             TEXT,
+
+            pnl                   REAL,
+
+            r_multiple            REAL,
+
+            exit_reason           TEXT,
+
+            holding_period_hours  REAL,
+
+            asset_class           TEXT,
+
+            score_pct             REAL,
+
+            max_score             REAL,
+
+            votes_json            TEXT,
+
+            warnings_json         TEXT,
+
+            weinstein             TEXT,
+
+            trend_state           TEXT,
+
+            adx_pct               REAL,
+
+            btc_bias              TEXT,
+
+            session_name          TEXT,
+
+            error_tag             TEXT,
+
+            fee_cost              REAL,
+
+            factors_json          TEXT
 
         )
 
