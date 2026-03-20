@@ -8,6 +8,11 @@
 - Engine B allows both retest-style and continuation-style naked entries where appropriate.
 - Engine B live scan, compare, and naked-analysis API responses are routed through `_json_safe()` before `jsonify()`.
 - Engine B backtests now persist to `backtest_results` with `engine="naked_engine"`.
+- Engine B backtest now enforces the same explicit `min_rr` gate as live scan and applies a real 2-bar cooldown after the resolved exit bar.
+- Engine B backtest `auto` style resolves to `intraday`, and hold windows are style-specific: `scalp=12`, `intraday=24`, `swing=60` H4 bars.
+- Engine B now resolves one shared regime label via `_engine_b_regime_label()` across live naked scan, naked analysis, Engine A overlay, and backtest.
+- Engine B backtest trade records now store the actual regime label (`TRENDING` / `RANGING` / `HIGH_VOLATILITY` / `LOW_VOLATILITY`) instead of the macro swing sequence.
+- Engine B backtest regime lookup was optimized to use lightweight H4 indicator snapshots (`calc_indicators`) instead of the normalized factor-scoring path, avoiding multi-minute single-pair backtest regressions.
 
 **Engine B AI Role (Current):**
 - AI is advisory for Engine B — it reviews generated structure data, writes narrative/warnings, and supports compare output.
@@ -247,6 +252,11 @@ Imported in `athena.py` via `from config import _json_safe`.
 - Resolves Engine B style profile for `scalp`, `intraday`, or `swing`
 - Controls checklist strictness, room, RR, ATR timeframe, and macro-alignment requirements
 
+### `_engine_b_regime_label(...)` — athena.py
+- Shared Engine B regime resolver used by live scan, naked analysis, Engine A overlay, and backtest
+- Uses `regime.detect_regime(...)` on lightweight H4 indicator snapshots so Engine B zone multipliers adapt by asset/regime without backtest slowdown
+- Returns config-compatible regime labels: `TRENDING`, `RANGING`, `HIGH_VOLATILITY`, `LOW_VOLATILITY`
+
 ### `_build_event_risk(pair, ds_ctx, earnings_ctx, closed_exchanges)` — scoring.py
 Builds `{hardBlock, reasons, earnings?, dividend?, split?}` risk dict for a pair.
 
@@ -400,6 +410,18 @@ bybit_execute(signal, approval)
 - TIMEOUT is force-closed at last forward bar close, P&L calculated as actual R-multiple (capped ±5R) and labelled TIMEOUT (not a loss)
 - `open_positions` counter gates `MAX_OPEN=3` concurrent positions — incremented on entry, decremented on exit (not on OPEN/TIMEOUT)
 - `bt_min` per class (config.yaml `BT_MIN`), overridable per pair via `PAIR_PROFILES`
+
+## Engine B Backtest (athena.py — backtest_pair_naked)
+
+- Separate Engine B backtest loop; isolated from Engine A `backtest_pair()`
+- Uses 730-day EODHD intraday history for non-crypto pairs and paginated Binance history for crypto
+- Drops the current in-progress candle on D1/H4/H1 before iterating
+- `auto` resolves to `intraday`
+- Hold windows by style: `scalp=12`, `intraday=24`, `swing=60` H4 bars
+- Enforces Engine B style `min_score`, checklist `passed`, and explicit `min_rr` parity with live scan
+- Applies a 2-bar H4 cooldown after the resolved exit bar to prevent overlapping entries
+- TIMEOUT exits are closed at the last forward H4 close and keep their signed `R`; positive TIMEOUT trades count as wins in summary metrics because `_format_backtest_results()` groups wins/losses by final `R`
+- Uses `_engine_b_regime_label()` so Engine B zone multipliers and stop buffers adapt to actual regime across forex, crypto, and other asset classes
 - No `e200s` computed in backtest loops — variable was dead after `calc_confluence` signature change
 
 ---
