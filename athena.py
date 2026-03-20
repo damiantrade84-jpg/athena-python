@@ -6871,8 +6871,31 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 continue
 
             entry = current_price
-            sl = res.get("recommended_stop_loss")
-            tp = res.get("recommended_take_profit")
+
+            # Engine B SL/TP mode: "structural" uses naked zone placement (wide),
+            # "atr" uses Engine A calc_levels (tighter, matches bar resolution).
+            # Structural SL sits behind swing lows — often 80-150 pips on forex.
+            # ATR-based SL = ATR × multiplier — calibrated to survive H4/D1 bar noise.
+            _bt_sl_mode = CONFIG.get("ENGINE_B_BT_SL_MODE", "atr")
+
+            if _bt_sl_mode == "atr":
+                # Use Engine A's proven ATR multipliers for backtest SL/TP
+                _bt_regime = None
+                try:
+                    _bt_regime = res.get("regime_state")
+                except Exception:
+                    pass
+                _lvl = calc_levels(entry, atr, direction, pair.get("type", "stock"),
+                                   regime_state=_bt_regime, style=resolved_style)
+                sl = _lvl["sl"]
+                tp = _lvl["tp1"]
+            else:
+                # Original: use Engine B structural placement
+                from indicators import calc_levels as _calc_lvl
+                _lvl = _calc_lvl(entry, atr, direction, pair.get("type", "stock"))
+                sl = _lvl["sl"]
+                tp = _lvl["tp1"]
+
             if sl is None or tp is None:
                 continue
 

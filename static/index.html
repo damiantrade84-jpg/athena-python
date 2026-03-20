@@ -541,6 +541,12 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
         <option value="index">Indices Only</option>
       </select>
       
+      <select class="bt-select" id="btStyleSelect" title="Trading style">
+        <option value="auto">Auto (Default)</option>
+        <option value="scalp">Scalp</option>
+        <option value="intraday">Intraday</option>
+        <option value="swing">Swing</option>
+      </select>
       <button class="bt-btn" id="btRunBtn" onclick="runBacktest()">&#9654; RUN BACKTEST</button>
       <span class="ctrl-note" id="btNote">Engine A = Quantitative Factor Model</span>
     </div>
@@ -986,7 +992,8 @@ async function runBacktest() {
 
   try {
     var API_URL = '/api/backtest';
-    var payload = { style: tradeStylePref || 'auto' };
+    var btStyle = document.getElementById('btStyleSelect').value || 'auto';
+    var payload = { style: btStyle };
 
     if (window.selectedBacktestEngine === 'B') {
         API_URL = '/api/backtest-naked';
