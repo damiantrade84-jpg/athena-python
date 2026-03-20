@@ -142,10 +142,15 @@ class NakedEngine:
             "liquidity_sweep": liquidity_sweep,
         }
 
-    def _detect_bos(self, highs: np.ndarray, lows: np.ndarray, atr: float) -> dict:
+    def _detect_bos(self, highs: np.ndarray, lows: np.ndarray, atr: float,
+                    volumes: np.ndarray = None) -> dict:
         """
         Detect Break of Structure (BOS) patterns using peak/trough analysis.
         Returns dict with bullish/bearish BOS signals and broken levels.
+
+        volumes: numpy array of bar volumes. None = skip volume check (forex).
+        For crypto/stocks with real volume, BOS candle should have at or above
+        average volume to confirm the break is not a low-conviction wick break.
         """
         try:
             from scipy.signal import find_peaks
@@ -165,6 +170,7 @@ class NakedEngine:
                     "bos_bear": False,
                     "last_broken_high": None,
                     "last_broken_low": None,
+                    "bos_volume_confirmed": False,
                 }
 
             # BOS Bull: recent peak > previous peak AND current close > previous peak
@@ -181,11 +187,23 @@ class NakedEngine:
                 bos_bear = True
                 last_broken_low = last_troughs[-2]
 
+            # Volume confirmation (only when volume data available)
+            bos_volume_confirmed = True  # default True when no volume data
+            if volumes is not None and len(volumes) >= 20 and (bos_bull or bos_bear):
+                avg_vol_20 = float(np.mean(volumes[-20:]))
+                last_vol = float(volumes[-1])
+                if avg_vol_20 > 0:
+                    bos_volume_confirmed = last_vol >= avg_vol_20 * 1.0  # at or above average
+                # If volume data exists but is all zeros (forex with no real vol), skip
+                if avg_vol_20 == 0:
+                    bos_volume_confirmed = True
+
             return {
                 "bos_bull": bos_bull,
                 "bos_bear": bos_bear,
                 "last_broken_high": last_broken_high,
                 "last_broken_low": last_broken_low,
+                "bos_volume_confirmed": bos_volume_confirmed,
             }
 
         except Exception:
@@ -195,7 +213,59 @@ class NakedEngine:
                 "bos_bear": False,
                 "last_broken_high": None,
                 "last_broken_low": None,
+                "bos_volume_confirmed": False,
             }
+
+    def _detect_choch(self, highs: np.ndarray, lows: np.ndarray, atr: float) -> dict:
+        """
+        Detect Change of Character (CHoCH) — structural reversal signal.
+        CHoCH occurs when price breaks the swing that produced the last BOS,
+        indicating the trend structure has changed direction.
+
+        This is a pure price-action detection — no indicators, no z-scores.
+
+        Returns:
+            choch_bull: True if bearish structure broke bullish (reversal up)
+            choch_bear: True if bullish structure broke bearish (reversal down)
+            choch_level: The price level that was broken
+        """
+        try:
+            from scipy.signal import find_peaks
+
+            peak_idx, _ = find_peaks(highs, prominence=atr * 0.8, distance=3)
+            trough_idx, _ = find_peaks(-lows, prominence=atr * 0.8, distance=3)
+
+            last_peaks = [highs[i] for i in peak_idx[-4:]]
+            last_troughs = [lows[i] for i in trough_idx[-4:]]
+
+            if len(last_peaks) < 3 or len(last_troughs) < 3:
+                return {"choch_bull": False, "choch_bear": False, "choch_level": None}
+
+            # Bullish CHoCH: price was making LH/LL (downtrend), then breaks
+            # above the most recent Lower High — structure shifts bullish.
+            was_bearish = (last_peaks[-2] < last_peaks[-3] and
+                           last_troughs[-2] < last_troughs[-3])
+            choch_bull = was_bearish and highs[-1] > last_peaks[-2]
+
+            # Bearish CHoCH: price was making HH/HL (uptrend), then breaks
+            # below the most recent Higher Low — structure shifts bearish.
+            was_bullish = (last_peaks[-2] > last_peaks[-3] and
+                           last_troughs[-2] > last_troughs[-3])
+            choch_bear = was_bullish and lows[-1] < last_troughs[-2]
+
+            choch_level = None
+            if choch_bull:
+                choch_level = float(last_peaks[-2])
+            elif choch_bear:
+                choch_level = float(last_troughs[-2])
+
+            return {
+                "choch_bull": choch_bull,
+                "choch_bear": choch_bear,
+                "choch_level": choch_level,
+            }
+        except Exception:
+            return {"choch_bull": False, "choch_bear": False, "choch_level": None}
 
     def _detect_sweep(
         self, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, atr: float
@@ -488,8 +558,17 @@ class NakedEngine:
         macro_seq_data = self._determine_sequence(h4_highs, h4_lows, atr, direction)
 
         # 3. BOS and Sweep Detection
-        bos_data = self._detect_bos(h1_highs, h1_lows, atr)
+        # Extract volumes for BOS volume confirmation (None for forex — no centralized volume)
+        h1_volumes = None
+        _has_vol = any(float(c.get("vol", 0)) > 0 for c in h1_candles[-5:])
+        if _has_vol:
+            h1_volumes = np.array([float(c.get("vol", 0)) for c in h1_candles])
+
+        bos_data = self._detect_bos(h1_highs, h1_lows, atr, volumes=h1_volumes)
         sweep_data = self._detect_sweep(h1_highs, h1_lows, h1_closes, atr)
+
+        # 3b. CHoCH Detection (structural reversal)
+        choch_data = self._detect_choch(h1_highs, h1_lows, atr)
 
         # 4. Find Nearest Zones Relative to Current Price
         # Nearest resistance above price
@@ -578,6 +657,11 @@ class NakedEngine:
             direction == "SHORT" and bos_data["bos_bear"]
         )
 
+        # CHoCH confirmation aligned with trade direction
+        choch_confirmed = (direction == "LONG" and choch_data["choch_bull"]) or (
+            direction == "SHORT" and choch_data["choch_bear"]
+        )
+
         fvg_overlap = False
         if direction == "LONG" and nearest_sup:
             fvg_overlap = nearest_sup.get("fvg_overlap", False)
@@ -610,8 +694,11 @@ class NakedEngine:
             else None,
             "atr": atr,
             "bos_confirmed": bos_confirmed,
+            "bos_volume_confirmed": bos_data.get("bos_volume_confirmed", True),
             "bos_data": bos_data,
             "sweep_data": sweep_data,
+            "choch_data": choch_data,
+            "choch_confirmed": choch_confirmed,
             "fvg_overlap": fvg_overlap,
             "liquidity_sweep": sequence_data.get("liquidity_sweep", False),
             "active_zone_distance": zone_ctx["distance"],
@@ -690,6 +777,7 @@ class NakedEngine:
             or breakout_ok
             or bool(res.get("bos_confirmed"))
             or bool(res.get("liquidity_sweep"))
+            or bool(res.get("choch_confirmed"))  # CHoCH as valid entry catalyst
         )
         space_ok = room_ok or rr_ok
 
