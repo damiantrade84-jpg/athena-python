@@ -6765,7 +6765,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
     h1_times = [c.get("time", c.get("datetime", "")) for c in candles_h1]
     oos_start = 50 + int(max(0, len(candles_h4) - 50) * 0.7)
 
-    COOLDOWN = 4  # H4 bars to skip after a trade resolves (prevents overlapping entries)
+    COOLDOWN = 2  # H4 bars to skip after a trade resolves (prevents overlapping entries)
     trades = []
     i = 50
     while i < len(candles_h4) - 5:
@@ -6861,9 +6861,9 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         outcome = "TIMEOUT"
         r_multiple = 0.0
         exit_bar_offset = 0  # tracks which future bar resolved the trade
-        # Style-specific hold limit (H4 bars): scalp=24 (4d), intraday=48 (8d), swing=120 (20d)
-        _hold_map = {"scalp": 24, "intraday": 48, "swing": 120}
-        max_hold_bars = _hold_map.get(resolved_style, 24)
+        # Style-specific hold limit (H4 bars): scalp=12 (48h), intraday=24 (4d), swing=60 (10d)
+        _hold_map = {"scalp": 12, "intraday": 24, "swing": 60}
+        max_hold_bars = _hold_map.get(resolved_style, 12)
         future_window = candles_h4[i + 1 : min(i + max_hold_bars + 1, len(candles_h4))]
         for fi, future in enumerate(future_window):
             exit_bar_offset = fi
@@ -7537,7 +7537,7 @@ def _naked_scan_style_profile(style: str | None) -> tuple[str, dict]:
         resolved = "intraday"  # Engine B walks H4 bars — intraday is the natural default
     profiles = {
         "scalp": {
-            "min_score": 3.0,
+            "min_score": 0.9,
             "min_room_atr": 0.35,
             "min_rr": 1.0,
             "fallback_rr": 1.4,
@@ -7547,7 +7547,7 @@ def _naked_scan_style_profile(style: str | None) -> tuple[str, dict]:
             "atr_tf": "H4",
         },
         "intraday": {
-            "min_score": 4.0,
+            "min_score": 1.5,
             "min_room_atr": 0.7,
             "min_rr": 1.2,
             "fallback_rr": 1.8,
@@ -7557,7 +7557,7 @@ def _naked_scan_style_profile(style: str | None) -> tuple[str, dict]:
             "atr_tf": "H4",
         },
         "swing": {
-            "min_score": 5.0,
+            "min_score": 1.8,
             "min_room_atr": 1.0,
             "min_rr": 1.6,
             "fallback_rr": 2.2,
