@@ -376,3 +376,10 @@ NAKED_ENGINE:
     RANGING:         {upper: 0.5, lower: 1.2, sl: 1.0}
     HIGH_VOLATILITY: {upper: 0.4, lower: 1.5, sl: 1.8}
     LOW_VOLATILITY:  {upper: 0.2, lower: 0.8, sl: 1.0}
+
+# Engine B AI news context — feeds news into AI advisory review (not checklist)
+ENGINE_B_NEWS_CONTEXT_ENABLED: true
+
+# AI usage control — when true, AI only runs on explicit user actions
+# (manual analysis clicks, compare engines) — NOT on automatic scans
+AI_ON_DEMAND_ONLY: true

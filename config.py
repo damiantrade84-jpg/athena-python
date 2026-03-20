@@ -362,6 +362,9 @@ CONFIG: dict = {
     "LEARNING_MIN_TRADES": 5,  # Min trades before context injected into AI
     "LEARNING_LOOKBACK_DAYS": 90,  # Days of history to query for context
     "META_ANALYSIS_ENABLED": True,  # Weekly meta-analysis via Claude
+    # ── Engine B AI Controls ─────────────────────────────────────────────────
+    "ENGINE_B_NEWS_CONTEXT_ENABLED": True,  # Feed news into Engine B AI advisory (not checklist)
+    "AI_ON_DEMAND_ONLY": True,  # AI runs on user-initiated actions only, not auto-scans
     # ── Engine B (Naked Scalp) ────────────────────────────────────────────────
     "NAKED_ENGINE": {
         "zone_multipliers": {
