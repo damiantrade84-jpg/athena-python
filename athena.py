@@ -6589,6 +6589,7 @@ def _format_backtest_results(trades, pair, engine_type="NAKED"):
             max_dd_pct = dd
     max_dd_pct = round(max_dd_pct, 2)
 
+    # Max recovery bars calculation
     _peak_eq = 1.0
     _recovery_start = None
     max_recovery_bars = 0
@@ -6699,15 +6700,15 @@ def _format_backtest_results(trades, pair, engine_type="NAKED"):
             }
         )
     else:
-        result.update(
-            {
-                "liquidity_sweep_pct": round(liquidity_pct, 1),
-                "zone_touch_pct": round(zone_touch_pct, 1),
-                "breakout_entry_pct": round(breakout_pct, 1),
-                "rejection_entry_pct": round(rejection_pct, 1),
-                "dominant_trigger_pattern": dominant_trigger,
-            }
-        )
+    result.update(
+        {
+            "liquidity_sweep_pct": round(liquidity_pct, 1),
+            "zone_touch_pct": round(zone_touch_pct, 1),
+            "breakout_entry_pct": round(breakout_pct, 1),
+            "rejection_entry_pct": round(rejection_pct, 1),
+            "dominant_trigger_pattern": dominant_trigger,
+        }
+    )
 
     return result
 
@@ -6803,6 +6804,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 direction,
                 atr,
                 regime_label,
+                fallback_rr=style_profile.get("fallback_rr", 2.0),
                 fallback_rr=style_profile.get("fallback_rr", 2.0),
             )
             conf_data = naked_engine.calculate_confidence(
@@ -8175,6 +8177,7 @@ def api_scan_naked():
                     direction,
                     atr,
                     regime_label,
+                    fallback_rr=style_profile.get("fallback_rr", 2.0),
                     fallback_rr=style_profile.get("fallback_rr", 2.0),
                 )
 
