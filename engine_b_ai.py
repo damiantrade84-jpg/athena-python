@@ -18,6 +18,7 @@ def build_engine_b_signal_message(
     confidence_result: dict,
     learning_ctx: Optional[dict] = None,
     engine_a_ctx: Optional[dict] = None,
+    news_ctx: Optional[dict] = None,
 ) -> str:
     """
     Build AI prompt message for Engine B structural signals.
@@ -31,6 +32,7 @@ def build_engine_b_signal_message(
         confidence_result: Output from NakedEngine.calculate_confidence()
         learning_ctx: AI learning context from trade outcomes
         engine_a_ctx: Optional Engine A signal dict for cross-engine alignment check
+        news_ctx: Optional news/event context for AI advisory narrative (never affects checklist)
 
     Returns:
         Formatted message string for AI analysis
@@ -179,6 +181,70 @@ def build_engine_b_signal_message(
             ]
             lines.append(f"Recent failures: {', '.join(fail_strs)}")
 
+    # === NEWS / EVENT CONTEXT (advisory only — does not affect pass/fail) ===
+    if news_ctx and isinstance(news_ctx, dict):
+        lines.append("")
+        lines.append("=== NEWS / EVENT CONTEXT ===")
+        lines.append("NOTE: This context is for your advisory review only.")
+        lines.append("Engine B pass/fail is already decided by price-action checklist.")
+        lines.append("Use this to add warnings, timing notes, or risk context to your narrative.")
+        lines.append("")
+
+        # Economic events (high-impact: NFP, CPI, FOMC, rate decisions)
+        econ = news_ctx.get("economic_events") or news_ctx.get("events") or news_ctx.get("forexEvents") or []
+        if econ:
+            lines.append("Upcoming economic events:")
+            for ev in econ[:5]:  # cap at 5 most relevant
+                ev_name = ev.get("name") or ev.get("event") or "Unknown"
+                ev_time = ev.get("time") or ev.get("date") or ""
+                ev_impact = ev.get("impact") or ev.get("importance") or ""
+                ev_currency = ev.get("currency") or ev.get("country") or ""
+                lines.append(f"  - {ev_name} | {ev_time} | Impact: {ev_impact} | {ev_currency}")
+            lines.append("")
+
+        # Pair-specific sentiment
+        sentiment = news_ctx.get("sentiment") or news_ctx.get("pair_sentiment")
+        if not sentiment and news_ctx.get("pairSentiment"):
+            pair_sent = news_ctx["pairSentiment"]
+            sentiment = pair_sent.get(pair) if isinstance(pair_sent, dict) else None
+        if sentiment:
+            if isinstance(sentiment, dict):
+                s_score = sentiment.get("score") or sentiment.get("value") or "N/A"
+                s_label = sentiment.get("label") or sentiment.get("sentiment") or ""
+                lines.append(f"Pair sentiment: {s_label} ({s_score})")
+            elif isinstance(sentiment, (int, float)):
+                lines.append(f"Pair sentiment score: {sentiment}")
+            lines.append("")
+
+        # Market headlines (top 3)
+        headlines = (
+            news_ctx.get("headlines")
+            or news_ctx.get("news")
+            or news_ctx.get("marketNews")
+            or []
+        )
+        if headlines:
+            lines.append("Recent market headlines:")
+            for hl in headlines[:3]:
+                if isinstance(hl, dict):
+                    title = hl.get("title") or hl.get("headline") or str(hl)
+                    lines.append(f"  - {title}")
+                elif isinstance(hl, str):
+                    lines.append(f"  - {hl}")
+            lines.append("")
+
+        # Crypto-specific news (only for crypto pairs)
+        crypto_news = news_ctx.get("crypto_news") or news_ctx.get("crypto") or news_ctx.get("cryptoNews") or []
+        if crypto_news:
+            lines.append("Crypto-specific news:")
+            for cn in crypto_news[:3]:
+                if isinstance(cn, dict):
+                    title = cn.get("title") or cn.get("headline") or str(cn)
+                    lines.append(f"  - {title}")
+                elif isinstance(cn, str):
+                    lines.append(f"  - {cn}")
+            lines.append("")
+
     return "\n".join(lines)
 
 
@@ -192,6 +258,7 @@ def get_engine_b_ai_verdict(
     xai_api_key: str = None,
     xai_model: str = "grok-beta",
     engine_a_ctx: Optional[dict] = None,
+    news_ctx: Optional[dict] = None,
 ) -> dict:
     """
     Get AI analysis for Engine B signal using xAI Grok API.
@@ -220,6 +287,7 @@ def get_engine_b_ai_verdict(
             confidence_result,
             learning_ctx,
             engine_a_ctx=engine_a_ctx,
+            news_ctx=news_ctx,
         )
 
         cross_engine_note = (

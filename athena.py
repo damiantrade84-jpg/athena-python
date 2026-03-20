@@ -3475,7 +3475,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
 
                 if tier == "trade":
                     # Run AI analysis in background thread — only notify if grade A or B
-                    if telegram_notify._is_enabled():
+                    # Respect AI_ON_DEMAND_ONLY: skip AI on automatic scans
+                    if telegram_notify._is_enabled() and not CONFIG.get("AI_ON_DEMAND_ONLY", False):
                         _sig_snap = {
                             k: v
                             for k, v in sig.items()
@@ -7624,6 +7625,15 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None):
         res["direction"] = direction
         res["style"] = resolved_style
 
+        # Fetch news context for Engine B AI advisory (if enabled, non-blocking)
+        _news_ctx = None
+        if CONFIG.get("ENGINE_B_NEWS_CONTEXT_ENABLED", True):
+            try:
+                _news_ctx = fetch_news_context([pair_obj])
+            except Exception as _ne:
+                log.debug(f"[NAKED-AI] News context fetch failed (non-blocking): {_ne}")
+                _news_ctx = None
+
         try:
             from engine_b_ai import get_engine_b_ai_verdict
 
@@ -7637,6 +7647,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None):
                 xai_api_key=CONFIG.get("XAI_API_KEY"),
                 xai_model=CONFIG.get("XAI_MODEL", "grok-beta"),
                 engine_a_ctx=engine_a_ctx,
+                news_ctx=_news_ctx,
             )
             if "error" not in ai_verdict:
                 res["ai_analysis"] = _enrich_engine_b_ai_payload(ai_verdict)
@@ -11249,22 +11260,25 @@ if __name__ == "__main__":
             )
 
         if scan_result["signals"]:
-            log.info("[AI TEST] Testing AI on top signal...")
-
-            top = scan_result["signals"][0]
-
-            ai_result = run_ai(top)
-
-            if "error" in ai_result:
-                log.error(f"[AI TEST] FAILED: {ai_result['error']}")
-
+            if CONFIG.get("AI_ON_DEMAND_ONLY", False):
+                log.info("[AI TEST] Skipped -- AI_ON_DEMAND_ONLY is enabled")
             else:
-                log.info(
-                    f"[AI TEST] OK => Grade:{ai_result.get('grade', '?')} Prob:{ai_result.get('edgeProbability', '?')}%"
-                )
+                log.info("[AI TEST] Testing AI on top signal...")
+
+                top = scan_result["signals"][0]
+
+                ai_result = run_ai(top)
+
+                if "error" in ai_result:
+                    log.error(f"[AI TEST] FAILED: {ai_result['error']}")
+
+                else:
+                    log.info(
+                        f"[AI TEST] OK => Grade:{ai_result.get('grade', '?')} Prob:{ai_result.get('edgeProbability', '?')}%"
+                    )
 
         else:
-            log.info("[AI TEST] Skipped â€” no signals to test")
+            log.info("[AI TEST] Skipped -- no signals to test")
 
         sys.exit(0)
 
