@@ -134,7 +134,7 @@ def timeframe_alignment(
         return None
     std_val = _std(scores)
     # Normalize: typical score range is roughly [-10, 10]
-    return max(0.0, min(1.0, 1.0 - std_val / 10.0))
+    return max(0.0, min(1.0, 1.0 - std_val / 2.0))
 
 
 def regime_fit(regime: str, signal_type: str = "trend") -> Optional[float]:

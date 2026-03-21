@@ -177,16 +177,16 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
         return result
 
     except ImportError:
-        log.warning("[SENTIMENT] eodhd library not installed — gate skipped")
+        log.warning("[SENTIMENT] API failed — defaulting to BLOCKED for safety")
         return {
-            "allowed": True,
+            "allowed": False,
             "score": 0.0,
             "count": 0,
-            "reason": "eodhd library not available",
+            "reason": "Sentiment API unavailable — blocking by default for safety",
         }
     except Exception as e:
-        log.error(f"[SENTIMENT] Unexpected error: {e}")
-        return {"allowed": True, "score": 0.0, "count": 0, "reason": f"Error: {e}"}
+        log.warning("[SENTIMENT] API failed — defaulting to BLOCKED for safety")
+        return {"allowed": False, "score": 0.0, "count": 0, "reason": f"Sentiment API unavailable — blocking by default for safety"}
 
 
 def inject_external_sentiment(

@@ -553,6 +553,10 @@ def compute_factor_scores(
         _db = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
         _adaptive = get_adaptive_weights(_db, asset_type, regime)
         if _adaptive:
+            import logging as _logging
+            _logging.getLogger(__name__).info(
+                f"[ADAPTIVE] applying learned weights for {asset_type}/{regime}"
+            )
             for factor in weights:
                 if weights[factor] > 0 and factor in _adaptive:
                     weights[factor] = _adaptive[factor]

@@ -138,7 +138,7 @@ def extract_learning_from_trade(
                     asset_type,
                     row["direction"],
                     row["grade"] if "grade" in row.keys() else None,
-                    None,  # edge_prob — not stored in audit_log currently
+                    row["edge_prob"] if "edge_prob" in row.keys() else None,
                     row["score"],
                     row["max_score"] if "max_score" in row.keys() else None,
                     round(row["score"] / row["max_score"], 3)

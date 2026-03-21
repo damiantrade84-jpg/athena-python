@@ -6901,7 +6901,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         # Volatility gate: skip trades when ATR is below 60% of its 50-bar average
         # Dead markets produce false signals — BOS/CHoCH fire on noise
         if len(atr_list) >= 50:
-            _atr_avg_50 = float(np.mean([a for a in atr_list[-50:] if a]))
+            _valid_atrs = [a for a in atr_list[-50:] if a]
+            _atr_avg_50 = sum(_valid_atrs) / len(_valid_atrs) if _valid_atrs else 0
             if _atr_avg_50 > 0 and atr < _atr_avg_50 * 0.6:
                 i += 1
                 continue
@@ -6939,6 +6940,21 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 "LOW_VOLATILITY": 1.0,   # default — calm market, standard gate
             }
             _min_score_scaled = style_profile["min_score"] * _regime_gate.get(regime_label, 1.0)
+
+            # Drawdown penalty: tighten gate when equity is underwater
+            if len(trades) >= 10:
+                _recent_r = [t.get("resultR", 0) for t in trades[-20:]]
+                _recent_eq = 1.0
+                _recent_peak = 1.0
+                for _rv in _recent_r:
+                    _recent_eq *= (1 + _rv * 0.01)
+                    if _recent_eq > _recent_peak:
+                        _recent_peak = _recent_eq
+                _dd_pct = (_recent_peak - _recent_eq) / _recent_peak if _recent_peak > 0 else 0
+                if _dd_pct > 0.10:
+                    _min_score_scaled *= 1.5  # 50% harder to enter in >10% drawdown
+                elif _dd_pct > 0.05:
+                    _min_score_scaled *= 1.2  # 20% harder in >5% drawdown
 
             if conf_data["score"] < _min_score_scaled or not conf_data.get("passed"):
                 continue
@@ -8275,7 +8291,7 @@ def api_quick_execute():
                             sig.get("direction"),
                             engine_b.get("current_swing_sequence", "RANGING"),
                             "EXECUTED",
-                            None,
+                            engine_b.get("ai_analysis", {}).get("edgeProbability") if isinstance(engine_b.get("ai_analysis"), dict) else None,
                             f"${approval.risk_amount}",
                             pip_mode or "structural",
                             result.get("entryPrice"),
@@ -8393,7 +8409,8 @@ def api_scan_naked():
 
             # Volatility gate
             if len(atr_series) >= 50:
-                _atr_avg = float(np.mean([a for a in atr_series[-50:] if a and a > 0]))
+                _valid_atrs = [a for a in atr_series[-50:] if a and a > 0]
+                _atr_avg = sum(_valid_atrs) / len(_valid_atrs) if _valid_atrs else 0
                 if _atr_avg > 0 and atr < _atr_avg * 0.6:
                     continue
 
