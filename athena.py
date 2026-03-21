@@ -6657,8 +6657,48 @@ def _format_backtest_results(trades, pair, engine_type="NAKED"):
         "wf_note": "Engine B walk-forward split uses trade oos flags",
     }
 
-    # Monte Carlo DD stub
-    mc_dd = {"p50": max_dd_pct * 1.0, "p95": max_dd_pct * 1.5, "p99": max_dd_pct * 2.0}
+    # Monte Carlo drawdown simulation (500 shuffles)
+    mc_dd_p50 = 0.0
+    mc_dd_p95 = 0.0
+    if len(r_values) >= 10:
+        import random
+        _mc_dds = []
+        for _ in range(500):
+            _shuffled = list(r_values)
+            random.shuffle(_shuffled)
+            _mc_eq = 1.0
+            _mc_peak = 1.0
+            _mc_max_dd = 0.0
+            for rv in _shuffled:
+                _mc_eq = _mc_eq * (1 + rv * 0.01)
+                if _mc_eq > _mc_peak:
+                    _mc_peak = _mc_eq
+                _dd = (_mc_peak - _mc_eq) / _mc_peak * 100 if _mc_peak > 0 else 0
+                if _dd > _mc_max_dd:
+                    _mc_max_dd = _dd
+            _mc_dds.append(_mc_max_dd)
+        _mc_dds.sort()
+        mc_dd_p50 = round(_mc_dds[len(_mc_dds) // 2], 2)
+        mc_dd_p95 = round(_mc_dds[int(len(_mc_dds) * 0.95)], 2)
+    mc_dd = {"p50": mc_dd_p50, "p95": mc_dd_p95, "p99": round(mc_dd_p95 * 1.15, 2)}
+
+    # Confluence element analysis
+    _ob_trades = [t for t in trades if t.get("ob_at_zone")]
+    _mtf_trades = [t for t in trades if t.get("bos_mtf_confirmed")]
+    _breaker_trades = [t for t in trades if t.get("breaker_active")]
+    _fvg_trades = [t for t in trades if t.get("fvg_overlap")]
+
+    def _wr(subset):
+        if not subset:
+            return None
+        return round(len([t for t in subset if _r(t) > 0]) / len(subset) * 100, 1)
+
+    confluence_analysis = {
+        "ob_at_zone": {"count": len(_ob_trades), "wr": _wr(_ob_trades)},
+        "bos_mtf": {"count": len(_mtf_trades), "wr": _wr(_mtf_trades)},
+        "breaker": {"count": len(_breaker_trades), "wr": _wr(_breaker_trades)},
+        "fvg_overlap": {"count": len(_fvg_trades), "wr": _wr(_fvg_trades)},
+    }
 
     result = {
         # ── Core identity (matches Engine A) ──────────────────────────────────
@@ -6683,11 +6723,14 @@ def _format_backtest_results(trades, pair, engine_type="NAKED"):
         "maxDrawdownPct": max_dd_pct,
         "maxRecoveryBars": max_recovery_bars,
         "mcDD": mc_dd,
+        "mcDdP50": mc_dd_p50,
+        "mcDdP95": mc_dd_p95,
         # ── Analysis ──────────────────────────────────────────────────────────
         "scoreBands": {},
         "regimeStats": {},
         "funnel": {},
         "wfSplit": wf_split,
+        "confluenceAnalysis": confluence_analysis,
         # ── Style / engine ────────────────────────────────────────────────────
         "btStyle": "naked",
         "btStyleRequested": "naked",
@@ -6823,6 +6866,19 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
             i += 1
             continue
 
+        # Session filter: skip forex trades outside London (07-16 UTC) and NY (13-22 UTC)
+        if pair.get("type") == "forex" and h4_time:
+            try:
+                from datetime import datetime as _dt
+                _bar_dt = _dt.fromisoformat(str(h4_time).replace("Z", "+00:00"))
+                _bar_hour = _bar_dt.hour
+                # Skip Asian session (22:00 - 07:00 UTC) — low liquidity, wide spreads
+                if _bar_hour >= 22 or _bar_hour < 7:
+                    i += 1
+                    continue
+            except Exception:
+                pass  # if time parsing fails, don't block the trade
+
         h4_ctx = candles_h4[: i + 1]
         d1_slice_end = bisect.bisect_right(d1_times, h4_time)
         h1_slice_end = bisect.bisect_right(h1_times, h4_time)
@@ -6841,6 +6897,14 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
             14,
         )
         atr = atr_list[-1] if atr_list and atr_list[-1] else (current_price * 0.01)
+
+        # Volatility gate: skip trades when ATR is below 60% of its 50-bar average
+        # Dead markets produce false signals — BOS/CHoCH fire on noise
+        if len(atr_list) >= 50:
+            _atr_avg_50 = float(np.mean([a for a in atr_list[-50:] if a]))
+            if _atr_avg_50 > 0 and atr < _atr_avg_50 * 0.6:
+                i += 1
+                continue
 
         regime_label = _engine_b_regime_label(h4_ctx, pair.get("type", "stock"))
         # Determine correct entry candles based on forex structure timeframe
@@ -6991,6 +7055,13 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 open_r = ((last_close - entry) / risk) if direction == "LONG" else ((entry - last_close) / risk)
                 r_multiple = round(max(-1.0, min(target_rr, open_r)), 2)
 
+        # Deduct round-trip transaction costs from r_multiple
+        _fee_pct = CONFIG.get("FEE_PCT", {}).get(pair.get("type", "stock"), 0.0004)
+        _sl_dist_fee = abs(entry - sl)
+        if _sl_dist_fee > 0 and outcome != "TIMEOUT":
+            _fee_r = _fee_pct * entry / _sl_dist_fee
+            r_multiple = round(r_multiple - _fee_r, 4)
+
         bar_date = candles_h4[i].get("time", "")[:10] if candles_h4[i].get("time") else ""
         trades.append(
             {
@@ -7015,6 +7086,10 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 "rr_target": round(target_rr, 2),
                 "bos_volume_confirmed": best["res"].get("bos_volume_confirmed", True),
                 "choch_confirmed": best["res"].get("choch_confirmed", False),
+                "ob_at_zone": best["res"].get("ob_at_zone", False),
+                "bos_mtf_confirmed": best["res"].get("bos_mtf_confirmed", False),
+                "breaker_active": best["conf"].get("breaker_active", False),
+                "ob_strength": max((ob.get("strength", 0) for ob in best["res"].get("order_blocks", [])), default=0),
                 # Forex-specific fields
                 "fvg_bonus": best["res"].get("fvg_bonus", 0.0),
                 "volume_strength": best["res"].get("volume_strength", 0.0),
@@ -8315,6 +8390,12 @@ def api_scan_naked():
 
             if not atr or atr <= 0:
                 continue
+
+            # Volatility gate
+            if len(atr_series) >= 50:
+                _atr_avg = float(np.mean([a for a in atr_series[-50:] if a and a > 0]))
+                if _atr_avg > 0 and atr < _atr_avg * 0.6:
+                    continue
 
             current_price = float(entry_candles[-1]["close"])
 

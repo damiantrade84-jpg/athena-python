@@ -273,6 +273,83 @@ class NakedEngine:
         except Exception:
             return {"choch_bull": False, "choch_bear": False, "choch_level": None}
 
+    def _detect_order_blocks(self, candles: list, bos_data: dict, atr: float) -> list:
+        """
+        Detect Order Blocks — the last opposing candle before a Break of Structure.
+
+        Bullish OB: last bearish candle before a bullish BOS break.
+        Bearish OB: last bullish candle before a bearish BOS break.
+
+        Returns list of OB dicts with top, bottom, type, volume, displacement score.
+        """
+        obs = []
+        if not candles or len(candles) < 10:
+            return obs
+
+        try:
+            # Bullish OB: find last bearish candle before the bullish BOS
+            if bos_data.get("bos_bull") and bos_data.get("last_broken_high") is not None:
+                for i in range(len(candles) - 2, max(len(candles) - 20, 0), -1):
+                    c = candles[i]
+                    if float(c["close"]) < float(c["open"]):  # bearish candle
+                        ob_top = float(c["open"])
+                        ob_bottom = float(c["low"])
+                        # Displacement: how far price moved after this candle (in ATRs)
+                        if i + 1 < len(candles):
+                            max_after = max(float(candles[j]["high"]) for j in range(i + 1, min(i + 6, len(candles))))
+                            displacement = (max_after - ob_top) / atr if atr > 0 else 0
+                        else:
+                            displacement = 0
+                        # Volume strength
+                        vol = float(c.get("vol", 0))
+                        avg_vol = np.mean([float(candles[k].get("vol", 0)) for k in range(max(0, i - 20), i)]) if i > 0 else 1
+                        vol_ratio = vol / avg_vol if avg_vol > 0 else 1.0
+                        # Strength score: 60% displacement, 40% volume (capped 0-100)
+                        strength = min(100, int((min(displacement / 2.0, 1.0) * 60) + (min(vol_ratio / 2.0, 1.0) * 40)))
+                        obs.append({
+                            "type": "bullish",
+                            "top": ob_top,
+                            "bottom": ob_bottom,
+                            "displacement": round(displacement, 2),
+                            "vol_ratio": round(vol_ratio, 2),
+                            "strength": strength,
+                            "mitigated": False,
+                        })
+                        break
+
+            # Bearish OB: find last bullish candle before the bearish BOS
+            if bos_data.get("bos_bear") and bos_data.get("last_broken_low") is not None:
+                for i in range(len(candles) - 2, max(len(candles) - 20, 0), -1):
+                    c = candles[i]
+                    if float(c["close"]) > float(c["open"]):  # bullish candle
+                        ob_top = float(c["high"])
+                        ob_bottom = float(c["close"])
+                        # Displacement
+                        if i + 1 < len(candles):
+                            min_after = min(float(candles[j]["low"]) for j in range(i + 1, min(i + 6, len(candles))))
+                            displacement = (ob_bottom - min_after) / atr if atr > 0 else 0
+                        else:
+                            displacement = 0
+                        # Volume strength
+                        vol = float(c.get("vol", 0))
+                        avg_vol = np.mean([float(candles[k].get("vol", 0)) for k in range(max(0, i - 20), i)]) if i > 0 else 1
+                        vol_ratio = vol / avg_vol if avg_vol > 0 else 1.0
+                        strength = min(100, int((min(displacement / 2.0, 1.0) * 60) + (min(vol_ratio / 2.0, 1.0) * 40)))
+                        obs.append({
+                            "type": "bearish",
+                            "top": ob_top,
+                            "bottom": ob_bottom,
+                            "displacement": round(displacement, 2),
+                            "vol_ratio": round(vol_ratio, 2),
+                            "strength": strength,
+                            "mitigated": False,
+                        })
+                        break
+        except Exception:
+            pass
+
+        return obs
+
     def _detect_sweep(
         self, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, atr: float
     ) -> dict:
@@ -342,8 +419,19 @@ class NakedEngine:
             }
 
     def _detect_fvg(self, candles: list) -> list:
-        # Bullish + Bearish FVGs
-        fvgs = []
+        """
+        Detect Fair Value Gaps with mitigation tracking and consecutive merging.
+
+        A bullish FVG: candle[i-1].low > candle[i+1].high (gap up)
+        A bearish FVG: candle[i-1].high < candle[i+1].low (gap down)
+
+        Mitigation: FVG is considered mitigated when price has retraced
+        through 50%+ of the gap (consequent encroachment).
+
+        Consecutive merging: adjacent FVGs of same type merge into one
+        using the widest boundaries.
+        """
+        raw_fvgs = []
         for i in range(2, len(candles) - 1):
             prev_high = float(candles[i - 1]["high"])
             prev_low = float(candles[i - 1]["low"])
@@ -352,11 +440,55 @@ class NakedEngine:
 
             # Bullish FVG
             if prev_low > next_high:
-                fvgs.append({"type": "bullish", "top": prev_low, "bottom": next_high})
+                gap_top = prev_low
+                gap_bottom = next_high
+                gap_size = gap_top - gap_bottom
+                # Check mitigation: did any subsequent candle retrace 50%+ into the gap?
+                midpoint = gap_bottom + (gap_size * 0.5)
+                mitigated = False
+                for j in range(i + 2, len(candles)):
+                    if float(candles[j]["low"]) <= midpoint:
+                        mitigated = True
+                        break
+                raw_fvgs.append({
+                    "type": "bullish", "top": gap_top, "bottom": gap_bottom,
+                    "size": round(gap_size, 6), "mitigated": mitigated, "bar_index": i,
+                })
+
             # Bearish FVG
             if prev_high < next_low:
-                fvgs.append({"type": "bearish", "top": next_low, "bottom": prev_high})
-        return fvgs
+                gap_top = next_low
+                gap_bottom = prev_high
+                gap_size = gap_top - gap_bottom
+                midpoint = gap_top - (gap_size * 0.5)
+                mitigated = False
+                for j in range(i + 2, len(candles)):
+                    if float(candles[j]["high"]) >= midpoint:
+                        mitigated = True
+                        break
+                raw_fvgs.append({
+                    "type": "bearish", "top": gap_top, "bottom": gap_bottom,
+                    "size": round(gap_size, 6), "mitigated": mitigated, "bar_index": i,
+                })
+
+        # Merge consecutive FVGs of same type
+        if len(raw_fvgs) < 2:
+            return raw_fvgs
+
+        merged = [raw_fvgs[0]]
+        for fvg in raw_fvgs[1:]:
+            prev = merged[-1]
+            # Same type and adjacent (within 2 bars)
+            if fvg["type"] == prev["type"] and abs(fvg["bar_index"] - prev["bar_index"]) <= 2:
+                # Merge: use widest boundaries
+                prev["top"] = max(prev["top"], fvg["top"])
+                prev["bottom"] = min(prev["bottom"], fvg["bottom"])
+                prev["size"] = round(prev["top"] - prev["bottom"], 6)
+                prev["mitigated"] = prev["mitigated"] and fvg["mitigated"]
+            else:
+                merged.append(fvg)
+
+        return merged
 
     def _zone_context(
         self, zone: dict | None, current_price: float, atr: float, direction: str, candles: list
@@ -563,9 +695,10 @@ class NakedEngine:
 
         # Determine FVG overlap with zones — graded by quality
         fvgs = self._detect_fvg(h4_candles)
+        active_fvgs = [f for f in fvgs if not f.get("mitigated", False)]
         for zone in res_zones + sup_zones:
             overlapping_fvgs = [
-                fvg for fvg in fvgs
+                fvg for fvg in active_fvgs
                 if not (zone["upper"] < fvg["bottom"] or zone["lower"] > fvg["top"])
             ]
             zone["fvg_overlap"] = len(overlapping_fvgs) > 0
@@ -590,8 +723,96 @@ class NakedEngine:
         bos_data = self._detect_bos(struct_highs, struct_lows, atr, volumes=struct_volumes, closes=struct_closes)
         sweep_data = self._detect_sweep(struct_highs, struct_lows, struct_closes, atr)
 
+        # 3e. Multi-TF BOS Chaining — H4/struct BOS confirmed by D1 BOS = high conviction
+        d1_highs = np.array([float(c["high"]) for c in d1_candles])
+        d1_lows = np.array([float(c["low"]) for c in d1_candles])
+        d1_closes = np.array([float(c["close"]) for c in d1_candles])
+        d1_bos = self._detect_bos(d1_highs, d1_lows, atr, closes=d1_closes)
+
+        bos_mtf_confirmed = (
+            (bos_data.get("bos_bull") and d1_bos.get("bos_bull")) or
+            (bos_data.get("bos_bear") and d1_bos.get("bos_bear"))
+        )
+
         # 3b. CHoCH Detection (structural reversal)
         choch_data = self._detect_choch(struct_highs, struct_lows, atr)
+
+        # 3d. Breaker Blocks — after CHoCH, the broken swing level becomes new S/R
+        # A bullish CHoCH breaks above a Lower High → that LH level becomes support (breaker)
+        # A bearish CHoCH breaks below a Higher Low → that HL level becomes resistance (breaker)
+        breaker_block = None
+        if choch_data.get("choch_bull") and choch_data.get("choch_level") is not None:
+            breaker_block = {
+                "type": "bullish_breaker",
+                "level": choch_data["choch_level"],
+                "upper": choch_data["choch_level"] + (atr * 0.3),
+                "lower": choch_data["choch_level"] - (atr * 0.3),
+            }
+            # Add as a support zone
+            sup_zones.append({
+                "upper": breaker_block["upper"],
+                "lower": breaker_block["lower"],
+                "center": breaker_block["level"],
+                "volume_strength": 0.8,  # high default — breakers are institutional
+                "fvg_overlap": False,
+                "fvg_size_atr": 0.0,
+                "is_breaker": True,
+            })
+        elif choch_data.get("choch_bear") and choch_data.get("choch_level") is not None:
+            breaker_block = {
+                "type": "bearish_breaker",
+                "level": choch_data["choch_level"],
+                "upper": choch_data["choch_level"] + (atr * 0.3),
+                "lower": choch_data["choch_level"] - (atr * 0.3),
+            }
+            # Add as a resistance zone
+            res_zones.append({
+                "upper": breaker_block["upper"],
+                "lower": breaker_block["lower"],
+                "center": breaker_block["level"],
+                "volume_strength": 0.8,
+                "fvg_overlap": False,
+                "fvg_size_atr": 0.0,
+                "is_breaker": True,
+            })
+
+        # ── Zone Merging: cluster zones within 0.5 ATR into single high-confluence pools ──
+        def _merge_zones(zones, merge_dist):
+            if not zones:
+                return zones
+            sorted_z = sorted(zones, key=lambda z: z["center"])
+            merged = [sorted_z[0]]
+            for z in sorted_z[1:]:
+                prev = merged[-1]
+                if abs(z["center"] - prev["center"]) <= merge_dist:
+                    # Merge: widen boundaries, keep strongest volume
+                    prev["upper"] = max(prev["upper"], z["upper"])
+                    prev["lower"] = min(prev["lower"], z["lower"])
+                    prev["center"] = (prev["upper"] + prev["lower"]) / 2
+                    prev["volume_strength"] = max(
+                        prev.get("volume_strength", 0), z.get("volume_strength", 0)
+                    )
+                    # Merge FVG overlap — any overlap = True
+                    if z.get("fvg_overlap"):
+                        prev["fvg_overlap"] = True
+                        prev["fvg_size_atr"] = max(
+                            prev.get("fvg_size_atr", 0), z.get("fvg_size_atr", 0)
+                        )
+                else:
+                    merged.append(z)
+            return merged
+
+        _merge_dist = atr * 0.5
+        res_zones = _merge_zones(res_zones, _merge_dist)
+        sup_zones = _merge_zones(sup_zones, _merge_dist)
+
+        # ── Zone Mitigation Purging: remove zones that price has pierced through ──
+        current_close = float(struct_candles[-1]["close"]) if struct_candles else current_price
+        res_zones = [z for z in res_zones if z["lower"] > current_close - (atr * 0.1)]
+        sup_zones = [z for z in sup_zones if z["upper"] < current_close + (atr * 0.1)]
+
+        # 3c. Order Block Detection — last opposing candle before BOS
+        order_blocks = self._detect_order_blocks(struct_candles, bos_data, atr)
 
         # 4. Find Nearest Zones Relative to Current Price
         # Nearest resistance above price
@@ -693,6 +914,18 @@ class NakedEngine:
 
         active_zone = nearest_sup if direction == "LONG" else nearest_res
         zone_ctx = self._zone_context(active_zone, current_price, atr, direction, trigger_candles)
+
+        # Check if an Order Block overlaps with the active zone
+        _ob_min_strength = config.CONFIG.get("NAKED_ENGINE", {}).get("ob_min_strength", 50)
+        _ob_at_zone = False
+        if active_zone and order_blocks:
+            az_lower = active_zone.get("lower", 0)
+            az_upper = active_zone.get("upper", 0)
+            for ob in order_blocks:
+                if not (ob["top"] < az_lower or ob["bottom"] > az_upper):
+                    if ob.get("strength", 0) >= _ob_min_strength:
+                        _ob_at_zone = True
+                        break
         trigger_ctx = self._price_action_trigger(
             trigger_candles,
             direction,
@@ -717,11 +950,16 @@ class NakedEngine:
             else None,
             "atr": atr,
             "bos_confirmed": bos_confirmed,
+            "bos_mtf_confirmed": bos_mtf_confirmed,
             "bos_volume_confirmed": bos_data.get("bos_volume_confirmed", True),
             "bos_data": bos_data,
+            "d1_bos_data": d1_bos,
             "sweep_data": sweep_data,
             "choch_data": choch_data,
             "choch_confirmed": choch_confirmed,
+            "breaker_block": breaker_block,
+            "order_blocks": order_blocks,
+            "ob_at_zone": _ob_at_zone,
             "fvg_overlap": fvg_overlap,
             "liquidity_sweep": sequence_data.get("liquidity_sweep", False),
             "active_zone_distance": zone_ctx["distance"],
@@ -767,6 +1005,7 @@ class NakedEngine:
         hard_counter = (direction == "LONG" and h1_seq == "LH_LL" and h4_seq == "LH_LL") or (
             direction == "SHORT" and h1_seq == "HH_HL" and h4_seq == "HH_HL"
         )
+        bos_mtf = bool(res.get("bos_mtf_confirmed", False))
         structure_ok = not hard_counter and (
             micro_aligned
             or macro_aligned
@@ -781,7 +1020,8 @@ class NakedEngine:
             or res.get("inside_break_candle")
             or res.get("engulfing_candle")
         )
-        location_ok = zone_ok or (allow_breakout_entry and breakout_ok)
+        ob_at_zone = bool(res.get("ob_at_zone"))
+        location_ok = zone_ok or ob_at_zone or (allow_breakout_entry and breakout_ok)
         room_dist = res.get("distance_to_res") if direction == "LONG" else res.get("distance_to_sup")
         room_ok = room_dist is None or room_dist >= atr_val * min_room_atr
 
@@ -809,6 +1049,11 @@ class NakedEngine:
         confirmations = [structure_ok, location_ok, entry_ok, room_ok, rr_ok]
         if require_macro_align:
             confirmations.append(macro_ok)
+        # Bonus confirmations — these add to the score but don't block if missing
+        if bos_mtf:
+            confirmations.append(True)  # MTF BOS alignment = extra point
+        if ob_at_zone:
+            confirmations.append(True)  # OB at zone = extra point
 
         total_score = float(sum(1 for passed in confirmations if passed))
         max_possible = float(len(confirmations)) if confirmations else 1.0
@@ -852,6 +1097,9 @@ class NakedEngine:
             "rr_ok": rr_ok,
             "space_ok": space_ok,
             "trigger_pattern": res.get("trigger_pattern", "NONE"),
+            "ob_at_zone": ob_at_zone,
+            "bos_mtf_confirmed": bos_mtf,
+            "breaker_active": bool(res.get("breaker_block")),
         }
 
     def check_macro_correlation(

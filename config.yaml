@@ -385,6 +385,10 @@ NAKED_ENGINE:
     HIGH_VOLATILITY: {upper: 0.4, lower: 1.5, sl: 1.8}
     LOW_VOLATILITY:  {upper: 0.2, lower: 0.8, sl: 1.0}
 
+  # Order Block minimum strength (0-100) to count as valid confluence
+  # Strength = 60% displacement + 40% volume. Below this = weak/ignored.
+  ob_min_strength: 50
+
 # Engine B AI news context — feeds news into AI advisory review (not checklist)
 ENGINE_B_NEWS_CONTEXT_ENABLED: true
 
