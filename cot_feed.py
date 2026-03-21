@@ -113,6 +113,7 @@ _PAIR_FORMULA: dict[str, list[tuple[float, str]]] = {
     "ADA/USDT": [],
     "DOGE/USDT": [],
     "DOT/USDT": [],
+    "MATIC/USDT": [],
     "SUI/USDT": [],
     "APT/USDT": [],
     "LTC/USDT": [],
