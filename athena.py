@@ -86,6 +86,15 @@ logging.basicConfig(
 
 log = logging.getLogger("sentinel")
 
+# Silence noisy HTTP and library loggers — reduces console flood
+import logging as _logging
+_logging.getLogger("werkzeug").setLevel(_logging.WARNING)
+_logging.getLogger("urllib3").setLevel(_logging.WARNING)
+_logging.getLogger("requests").setLevel(_logging.WARNING)
+_logging.getLogger("httpx").setLevel(_logging.WARNING)
+
+log.setLevel(logging.WARNING)
+
 
 # â"€â"€ Binance Funding Rate Cache (Task 3) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
@@ -4866,7 +4875,7 @@ def run_ai(
         if _missing:
             log.warning(f"[AI] {signal['pair']}: parsed JSON missing keys {_missing}")
 
-        log.info(
+        log.warning(
             f"[AI] {signal['pair']} => Grade:{result.get('grade', '?')} Prob:{result.get('edgeProbability', '?')}% Risk:{result.get('riskLevel', '?')} | {str(result.get('verdict', ''))[:60]}"
         )
 
@@ -6228,15 +6237,14 @@ def backtest_pair(pair, style="auto"):
         )
         _h4_bars = len(h4_raw) if h4_raw else 0
         _h1_bars = len(h1_raw) if h1_raw else 0
-        return {
-            "error": (
-                f"No signals generated for {pair['display']} — "
-                f"setups={funnel['total_setups']} skip_window={funnel['skip_window']} "
-                f"fail_score={funnel['fail_score']} bt_min={_bt_min_used} "
-                f"max_score_seen={_max_score_seen} "
-                f"d1={len(d1_raw)} h4={_h4_bars} h1={_h1_bars}"
-            )
-        }
+        log.warning(
+            f"No signals generated for {pair['display']} — "
+            f"setups={funnel['total_setups']} skip_window={funnel['skip_window']} "
+            f"fail_score={funnel['fail_score']} bt_min={_bt_min_used} "
+            f"max_score_seen={_max_score_seen} "
+            f"d1={len(d1_raw)} h4={len(h4_raw)} h1={len(h1_raw)}"
+        )
+        return {}
 
     wins = [
         t
@@ -6483,7 +6491,7 @@ def backtest_pair(pair, style="auto"):
     except Exception:
         bh_return = None
 
-    log.info(
+    log.warning(
         f"[BT] {pair['display']} done: {len(trades)} trades, WR {win_rate}%, PF {profit_factor}, Expect {avg_r}R, SQN {sqn}, Sharpe {sharpe}, Sortino {sortino}, IS:{is_sqn}/OOS:{oos_sqn}, MC-P95 DD {mc_dd['p95']}%, MaxRec {max_recovery_bars} bars"
     )
 
@@ -7127,7 +7135,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
     _sl_count = sum(1 for t in trades if t.get("outcome") == "SL")
     _be_count = sum(1 for t in trades if t.get("outcome") == "BE")
     _to_count = sum(1 for t in trades if t.get("outcome") == "TIMEOUT")
-    log.info(
+    log.warning(
         f"[ENGINE B BT] {pair['display']} done: {result.get('totalTrades', 0)} trades "
         f"(TP1={_tp_count} SL={_sl_count} BE={_be_count} TIMEOUT={_to_count}), "
         f"WR {result.get('winRate', 0):.1f}%, PF {result.get('profitFactor', 0):.2f}, "
@@ -8177,7 +8185,7 @@ def api_quick_execute():
             sig["sl"] = lvl["sl"]
             sig["tp1"] = lvl["tp1"]
             sig["tp2"] = lvl["tp2"]
-            log.info(f"[QUICK EXEC] {sig.get('pair')}: pip_mode={pip_mode}, "
+            log.warning(f"[QUICK EXEC] {sig.get('pair')}: pip_mode={pip_mode}, "
                      f"ATR={_exec_atr:.6f}, SL={lvl['sl']:.6f}, TP1={lvl['tp1']:.6f}")
         else:
             log.warning(f"[QUICK EXEC] {sig.get('pair')}: pip_mode={pip_mode} but ATR unavailable, falling back to Engine B levels")
@@ -8203,7 +8211,7 @@ def api_quick_execute():
             sig["sl"] = lvl["sl"]
             sig["tp1"] = lvl["tp1"]
             sig["tp2"] = lvl["tp2"]
-            log.info(f"[QUICK EXEC] {sig.get('pair')}: SWING mode (ATR_CLASS), "
+            log.warning(f"[QUICK EXEC] {sig.get('pair')}: SWING mode (ATR_CLASS), "
                      f"ATR={_exec_atr:.6f}, SL={lvl['sl']:.6f}, TP1={lvl['tp1']:.6f}")
         else:
             # Last resort fallback to Engine B structural
@@ -11939,7 +11947,7 @@ if __name__ == "__main__":
 
         scan_result = run_full_scan()
 
-        log.info(
+        log.warning(
             f"Scan complete: {scan_result['totalPairs']} pairs, {len(scan_result['signals'])} signals"
         )
 
