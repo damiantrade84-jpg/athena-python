@@ -1560,6 +1560,10 @@ const TV_SYMBOL_MAP = {
   "S&P 500":"SP:SPX","Nasdaq":"NASDAQ:NDX","NASDAQ-100":"NASDAQ:NDX",
   "Dow Jones":"DJ:DJI","DAX 40":"XETR:DAX","UK100":"TVC:UKX",
   "Nikkei 225":"TVC:NI225","Hang Seng":"TVC:HSI","ASX 200":"ASX:XJO",
+  "Naspers":"JSE:NPN","Sasol":"JSE:SOL","FirstRand":"JSE:FSR",
+  "Std Bank":"JSE:SBK","MTN Group":"JSE:MTN","Shoprite":"JSE:SHP",
+  "Anglo Am":"JSE:AGL","Absa":"JSE:ABG","Capitec":"JSE:CPI",
+  "Gold Fields":"JSE:GFI","Sibanye":"JSE:SSW",
   "AAPL":"NASDAQ:AAPL","TSLA":"NASDAQ:TSLA","NVDA":"NASDAQ:NVDA",
   "MSFT":"NASDAQ:MSFT","AMZN":"NASDAQ:AMZN","META":"NASDAQ:META",
   "GOOG":"NASDAQ:GOOG","JPM":"NYSE:JPM","V":"NYSE:V","XOM":"NYSE:XOM",
@@ -1589,6 +1593,10 @@ function getTVInterval(style) {
 
 function openTVChart(display, interval) {
   const tvSym = getTVSymbol(display);
+  if (!tvSym || tvSym === display) {
+    showToast('TradingView chart not available for ' + display, true);
+    return;
+  }
   _tvCurrentSymbol = tvSym;
   _tvCurrentInterval = interval || '240';
 
@@ -1605,11 +1613,10 @@ function closeTVChart() {
   document.getElementById('tv-chart-container').innerHTML = '';
 }
 
-function setTVInterval(interval) {
+function setTVInterval(interval, el) {
   _tvCurrentInterval = interval;
-  document.querySelectorAll('.tv-tf-btn').forEach(function(btn) {
-    btn.classList.toggle('active', btn.getAttribute('data-interval') === interval);
-  });
+  document.querySelectorAll('.tv-tf-btn').forEach(function(btn) { btn.classList.remove('active'); });
+  if (el) el.classList.add('active');
   _renderTVWidget(_tvCurrentSymbol, interval);
 }
 
@@ -1646,13 +1653,7 @@ function _renderTVWidget(symbol, interval) {
     save_image: true,
     calendar: false,
     hide_volume: false,
-    support_host: "https://www.tradingview.com",
-    studies: [
-      "STD;EMA",
-      "STD;EMA",
-      "STD;RSI",
-      "STD;MACD"
-    ]
+    support_host: "https://www.tradingview.com"
   });
   wrapper.appendChild(script);
   container.appendChild(wrapper);
@@ -2723,10 +2724,10 @@ function confirmClosePosition(exchange, pair, direction, volume, ticket, btn) {
   <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:#0a0e17;border-bottom:1px solid #1e2a3a;">
     <span id="tv-chart-title" style="color:#00d4ff;font-family:'Syne',sans-serif;font-size:14px;font-weight:700;">Chart</span>
     <div style="display:flex;gap:8px;">
-      <button onclick="setTVInterval('15')" data-interval="15" class="tv-tf-btn">M15</button>
-      <button onclick="setTVInterval('60')" data-interval="60" class="tv-tf-btn">H1</button>
-      <button onclick="setTVInterval('240')" data-interval="240" class="tv-tf-btn active">H4</button>
-      <button onclick="setTVInterval('D')" data-interval="D" class="tv-tf-btn">D1</button>
+      <button onclick="setTVInterval('15', this)" data-interval="15" class="tv-tf-btn">M15</button>
+      <button onclick="setTVInterval('60', this)" data-interval="60" class="tv-tf-btn">H1</button>
+      <button onclick="setTVInterval('240', this)" data-interval="240" class="tv-tf-btn active">H4</button>
+      <button onclick="setTVInterval('D', this)" data-interval="D" class="tv-tf-btn">D1</button>
       <button onclick="closeTVChart()" style="background:#ff4444;border:none;color:#fff;padding:6px 14px;border-radius:6px;cursor:pointer;font-family:'Space Mono',monospace;font-size:12px;">✕ CLOSE</button>
     </div>
   </div>
