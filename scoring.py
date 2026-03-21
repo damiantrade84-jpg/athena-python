@@ -125,7 +125,7 @@ CORR_CLUSTERS: dict = {
         "INJ/USDT",
         "NEAR/USDT",
     ],
-    "ai_crypto": ["FET/USDT", "RENDER/USDT"],
+    "ai_crypto": ["RENDER/USDT"],
     "forex_usd": [
         "EUR/USD",
         "GBP/USD",
