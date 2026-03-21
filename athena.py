@@ -7018,7 +7018,11 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         r_multiple = 0.0
         exit_bar_offset = 0
         _hold_map = {"scalp": 12, "intraday": 24, "swing": 60}
-        max_hold_bars = _hold_map.get(resolved_style, 12)
+        # Crypto needs longer hold — 3.5 ATR target takes more bars to reach
+        if pair.get("type") == "crypto" and resolved_style == "intraday":
+            max_hold_bars = 40  # 40 × 4hr = 160hrs (~6.5 days)
+        else:
+            max_hold_bars = _hold_map.get(resolved_style, 12)
 
         risk = abs(entry - sl)
         _active_sl = sl
