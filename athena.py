@@ -3255,7 +3255,7 @@ def _effective_backtest_style(pair: dict, requested_style: str) -> str:
     if ptype == "crypto":
         return "intraday"
     elif ptype == "forex":
-        return "intraday"
+        return "swing"
     else:
         return "swing"
 
@@ -5306,7 +5306,7 @@ def backtest_pair(pair, style="auto"):
             )
 
             lvl = calc_levels(
-                entry, atr, direction, _ptype, regime_state=_bt_regime_state, style=effective_style
+                entry, atr, direction, _ptype, regime_state=_bt_regime_state
             )
 
             sl = lvl["sl"]
@@ -5678,7 +5678,7 @@ def backtest_pair(pair, style="auto"):
             )
 
             lvl = calc_levels(
-                entry, atr, direction, _ptype, regime_state=_bt_regime_state2, style=effective_style
+                entry, atr, direction, _ptype, regime_state=_bt_regime_state2
             )
 
             sl = lvl["sl"]
@@ -6023,7 +6023,7 @@ def backtest_pair(pair, style="auto"):
             )
 
             lvl = calc_levels(
-                entry, atr, direction, _ptype, regime_state=_bt_regime_state3, style=effective_style
+                entry, atr, direction, _ptype, regime_state=_bt_regime_state3
             )
 
             sl = lvl["sl"]
@@ -6961,29 +6961,16 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
 
             entry = current_price
 
-            # Engine B SL/TP mode: "structural" uses naked zone placement (wide),
-            # "atr" uses Engine A calc_levels (tighter, matches bar resolution).
-            # Structural SL sits behind swing lows — often 80-150 pips on forex.
-            # ATR-based SL = ATR × multiplier — calibrated to survive H4/D1 bar noise.
-            _bt_sl_mode = CONFIG.get("ENGINE_B_BT_SL_MODE", "atr")
-
-            if _bt_sl_mode == "atr":
-                # Use Engine A's proven ATR multipliers for backtest SL/TP
-                _bt_regime = None
-                try:
-                    _bt_regime = res.get("regime_state")
-                except Exception:
-                    pass
-                _lvl = calc_levels(entry, atr, direction, pair.get("type", "stock"),
-                                   regime_state=_bt_regime, style=resolved_style)
-                sl = _lvl["sl"]
-                tp = _lvl["tp1"]
-            else:
-                # Original: use Engine B structural placement
-                from indicators import calc_levels as _calc_lvl
-                _lvl = _calc_lvl(entry, atr, direction, pair.get("type", "stock"))
-                sl = _lvl["sl"]
-                tp = _lvl["tp1"]
+            entry = current_price
+            _bt_regime = None
+            try:
+                _bt_regime = res.get("regime_state")
+            except Exception:
+                pass
+            _lvl = calc_levels(entry, atr, direction, pair.get("type", "stock"),
+                               regime_state=_bt_regime)
+            sl = _lvl["sl"]
+            tp = _lvl["tp1"]
 
             if sl is None or tp is None:
                 continue
@@ -10575,7 +10562,7 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
     _regime_state = res.get("regime", {}).get("state") if res.get("regime") else None
 
     lvl = calc_levels(
-        float(price), float(atr), direction, pair["type"], regime_state=_regime_state, style=_style
+        float(price), float(atr), direction, pair["type"], regime_state=_regime_state
     )
 
     sk = stoch["k"][-1] if stoch["k"] and stoch["k"][-1] is not None else None
