@@ -8458,6 +8458,7 @@ def api_scan_naked():
                 _valid_atrs = [a for a in atr_series[-50:] if a and a > 0]
                 _atr_avg = sum(_valid_atrs) / len(_valid_atrs) if _valid_atrs else 0
                 if _atr_avg > 0 and atr < _atr_avg * 0.6:
+                    log.warning(f"[NAKED-DBG] {pair['display']}: ATR={atr:.6f} < 60% avg={_atr_avg:.6f} — VOL GATE")
                     continue
 
             current_price = float(entry_candles[-1]["close"])
@@ -8498,6 +8499,11 @@ def api_scan_naked():
                     _min_score_scaled = style_profile["min_score"] * _regime_gate.get(regime_label, 1.0)
 
                     if conf_data["score"] < _min_score_scaled or not conf_data.get("passed"):
+                        log.warning(
+                            f"[NAKED-DBG] {pair['display']} {direction}: "
+                            f"score={conf_data['score']:.1f} vs min={_min_score_scaled:.1f}, "
+                            f"passed={conf_data.get('passed')}, regime={regime_label} — REJECTED"
+                        )
                         continue
 
                     res.update(conf_data)
@@ -8530,6 +8536,10 @@ def api_scan_naked():
                         tp_dist = abs(tp - current_price)
                         rr = (tp_dist / sl_dist) if sl_dist > 0 else 0.0
                     if rr < style_profile["min_rr"]:
+                        log.warning(
+                            f"[NAKED-DBG] {pair['display']} {direction}: "
+                            f"rr={rr:.2f} < min_rr={style_profile['min_rr']} — REJECTED"
+                        )
                         continue
 
                     signal = {
@@ -8569,6 +8579,8 @@ def api_scan_naked():
                         "naked_data": res,
                     }
                     results.append(signal)
+                else:
+                    log.warning(f"[NAKED-DBG] {pair['display']} {direction}: verdict={verdict} seq={seq} — SKIPPED")
         except Exception as e:
             log.warning(f"[NAKED-SCAN] Error on {pair['display']}: {e}", exc_info=True)
             continue
