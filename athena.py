@@ -6965,8 +6965,6 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 continue
 
             entry = current_price
-
-            entry = current_price
             _bt_regime = None
             try:
                 _bt_regime = res.get("regime_state")
