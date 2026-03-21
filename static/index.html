@@ -2267,7 +2267,7 @@ function buildChartSection(s) {
     }
   }
   return '<div style="display:flex;gap:8px;margin-bottom:8px;">' +
-    '<button class="chart-toggle-btn" id="chartbtn-'+sid+'" onclick="openAthenaChart(\''+s.symbol+'\', \'H4\')" style="flex:1">' +
+    '<button class="chart-toggle-btn" id="chartbtn-'+sid+'" onclick="openAcm(\''+s.symbol+'\', \'H4\')" style="flex:1">' +
     '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' +
     ' CHART</button>' +
     '<button class="chart-toggle-btn" onclick="openTVChart(\''+s.display+'\', \'240\')" style="flex:1;border-color:#7b61ff;color:#7b61ff">📈 TV CHART</button>' +
@@ -3368,6 +3368,461 @@ document.getElementById('athena-chart-modal').addEventListener('click', function
 });
 document.getElementById('tv-chart-modal').addEventListener('click', function(e) {
   if (e.target === this) closeTVChart();
+});
+</script>
+<script>
+// ═══════════════════════════════════════════════════════
+// ATHENA CHART MODAL (ACM) — Fullscreen Professional Chart
+// ═══════════════════════════════════════════════════════
+var _acm = {
+  chart: null,
+  candle: null,
+  volume: null,
+  ema21: null,
+  ema50: null,
+  ema200: null,
+  levelLines: [],
+  zoneLines: [],
+  symbol: '',
+  tf: 'H4',
+  sig: null,
+  show: { vol: true, ema: true, levels: true, zones: true },
+  liveInterval: null,
+  lastData: [],
+};
+
+function openAcm(symbol, tf) {
+  _acm.symbol = symbol;
+  _acm.tf = tf || 'H4';
+  _acm.sig = allSignals.find(function(s) { return s.symbol === symbol; });
+
+  var sig = _acm.sig;
+  var display = sig ? (sig.display || sig.pair || symbol) : symbol;
+
+  // Header
+  document.getElementById('acm-pair').textContent = display;
+  document.getElementById('acm-price').textContent = '';
+
+  var dirEl = document.getElementById('acm-dir');
+  if (sig && sig.direction) {
+    dirEl.textContent = sig.direction;
+    dirEl.className = 'acm-dir-badge ' + sig.direction;
+    dirEl.style.display = '';
+  } else { dirEl.style.display = 'none'; }
+
+  var scoreEl = document.getElementById('acm-score');
+  if (sig && sig.confluenceScore != null) {
+    var maxS = sig.maxScore || sig.maxScoreOverride || 3.0;
+    scoreEl.textContent = parseFloat(sig.confluenceScore).toFixed(2) + '/' + maxS;
+    scoreEl.style.display = '';
+  } else { scoreEl.style.display = 'none'; }
+
+  var regEl = document.getElementById('acm-regime');
+  if (sig && sig.regime) {
+    var regLabel = sig.regime.label || sig.regime.regime || sig.regime;
+    regEl.textContent = (typeof regLabel === 'string') ? regLabel : '';
+    regEl.style.display = regLabel ? '' : 'none';
+  } else { regEl.style.display = 'none'; }
+
+  // Set active TF
+  document.querySelectorAll('.acm-tf-btn').forEach(function(b) { b.classList.remove('active'); });
+  document.querySelectorAll('.acm-tf-btn').forEach(function(b) {
+    if (b.textContent.trim() === _acm.tf) b.classList.add('active');
+  });
+
+  // Hide AI panel from previous
+  document.getElementById('acm-ai-panel').style.display = 'none';
+
+  // Show modal
+  document.getElementById('athena-chart-modal').style.display = 'flex';
+
+  // Fetch and render
+  _acmRender(_acm.symbol, _acm.tf);
+
+  // Start live price updates on chart
+  _acmStartLive();
+}
+
+function closeAcm() {
+  document.getElementById('athena-chart-modal').style.display = 'none';
+  _acmStopLive();
+  if (_acm.chart) { _acm.chart.remove(); _acm.chart = null; }
+}
+
+function acmSetTF(tf, el) {
+  _acm.tf = tf;
+  document.querySelectorAll('.acm-tf-btn').forEach(function(b) { b.classList.remove('active'); });
+  if (el) el.classList.add('active');
+  _acmRender(_acm.symbol, tf);
+}
+
+function acmToggle(what, el) {
+  _acm.show[what] = !_acm.show[what];
+  el.classList.toggle('on', _acm.show[what]);
+  el.classList.toggle('off', !_acm.show[what]);
+
+  if (what === 'vol' && _acm.volume)
+    _acm.volume.applyOptions({ visible: _acm.show.vol });
+  if (what === 'ema')
+    [_acm.ema21, _acm.ema50, _acm.ema200].forEach(function(s) {
+      if (s) s.applyOptions({ visible: _acm.show.ema });
+    });
+  if (what === 'levels')
+    _acm.levelLines.forEach(function(l) { try { _acm.candle.removePriceLine(l); } catch(e){} });
+  if (what === 'levels' && _acm.show.levels) _acmDrawLevels();
+  if (what === 'zones')
+    _acm.zoneLines.forEach(function(l) { try { _acm.candle.removePriceLine(l); } catch(e){} });
+  if (what === 'zones' && _acm.show.zones) _acmDrawZones();
+}
+
+function _acmEMA(data, period) {
+  if (!data.length) return [];
+  var k = 2 / (period + 1);
+  var ema = [data[0]];
+  for (var i = 1; i < data.length; i++)
+    ema.push(data[i] * k + ema[i - 1] * (1 - k));
+  return ema;
+}
+
+async function _acmRender(symbol, tf) {
+  var body = document.getElementById('acm-chart-body');
+
+  // Loading state
+  if (_acm.chart) { _acm.chart.remove(); _acm.chart = null; }
+  body.style.display = 'flex';
+  body.innerHTML = '<div id="acm-legend"></div><div id="acm-info-panel"></div>' +
+    '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;' +
+    'color:#3a4d60;font-family:Space Mono,monospace;font-size:13px;z-index:5;" id="acm-loading">' +
+    'Loading ' + tf + ' candles...</div>';
+
+  try {
+    var resp = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&tf=' + tf + '&limit=300');
+    var json = await resp.json();
+    var candles = json.candles || json;
+    if (!candles || !candles.length) throw new Error('No candle data');
+
+    // Remove loading
+    var loadEl = document.getElementById('acm-loading');
+    if (loadEl) loadEl.remove();
+
+    // Create chart
+    _acm.chart = LightweightCharts.createChart(body, {
+      width: body.clientWidth,
+      height: body.clientHeight,
+      layout: {
+        background: { type: 'solid', color: '#060a10' },
+        textColor: '#4a5d70',
+        fontSize: 11,
+        fontFamily: 'Space Mono, monospace',
+      },
+      grid: {
+        vertLines: { color: 'rgba(20,30,45,0.5)', style: 1 },
+        horzLines: { color: 'rgba(20,30,45,0.5)', style: 1 },
+      },
+      crosshair: {
+        mode: LightweightCharts.CrosshairMode.Normal,
+        vertLine: { color: 'rgba(0,212,255,0.15)', width: 1, style: 3,
+                    labelBackgroundColor: '#0d1420' },
+        horzLine: { color: 'rgba(0,212,255,0.15)', width: 1, style: 3,
+                    labelBackgroundColor: '#0d1420' },
+      },
+      rightPriceScale: {
+        borderColor: '#141e2d',
+        scaleMargins: { top: 0.06, bottom: 0.16 },
+      },
+      timeScale: {
+        borderColor: '#141e2d',
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 8,
+        barSpacing: 7,
+      },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true },
+      handleScale: { mouseWheel: true, pinch: true },
+    });
+
+    // Candles
+    _acm.candle = _acm.chart.addCandlestickSeries({
+      upColor: '#00e676',
+      downColor: '#ff3b5c',
+      borderDownColor: '#ff3b5c',
+      borderUpColor: '#00e676',
+      wickDownColor: 'rgba(255,59,92,0.5)',
+      wickUpColor: 'rgba(0,230,118,0.5)',
+    });
+
+    var data = candles.map(function(c) {
+      var tStr = String(c.t || c.time || '').replace(' ', 'T');
+      var ts = typeof c.t === 'number' ? Math.floor(c.t / 1000) :
+               Math.floor(new Date(tStr).getTime() / 1000);
+      return {
+        time: ts,
+        open: parseFloat(c.o || c.open),
+        high: parseFloat(c.h || c.high),
+        low: parseFloat(c.l || c.low),
+        close: parseFloat(c.c || c.close),
+        vol: parseFloat(c.v || c.vol || 0),
+      };
+    }).filter(function(c) {
+      return c.time && !isNaN(c.time) && c.open > 0 && c.high > 0;
+    });
+    data.sort(function(a, b) { return a.time - b.time; });
+    _acm.lastData = data;
+    _acm.candle.setData(data);
+
+    // Volume
+    _acm.volume = _acm.chart.addHistogramSeries({
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'vol',
+    });
+    _acm.chart.priceScale('vol').applyOptions({
+      scaleMargins: { top: 0.85, bottom: 0 },
+    });
+    _acm.volume.setData(data.map(function(c) {
+      return {
+        time: c.time,
+        value: c.vol,
+        color: c.close >= c.open ? 'rgba(0,230,118,0.15)' : 'rgba(255,59,92,0.15)',
+      };
+    }));
+    _acm.volume.applyOptions({ visible: _acm.show.vol });
+
+    // EMAs
+    var closes = data.map(function(c) { return c.close; });
+
+    var e21 = _acmEMA(closes, 21);
+    _acm.ema21 = _acm.chart.addLineSeries({
+      color: '#00d4ff', lineWidth: 1,
+      priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    });
+    _acm.ema21.setData(data.map(function(c, i) { return { time: c.time, value: e21[i] }; }));
+
+    var e50 = _acmEMA(closes, 50);
+    _acm.ema50 = _acm.chart.addLineSeries({
+      color: '#a78bfa', lineWidth: 1,
+      priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    });
+    _acm.ema50.setData(data.map(function(c, i) {
+      return { time: c.time, value: i >= 49 ? e50[i] : null };
+    }).filter(function(d) { return d.value !== null; }));
+
+    var e200 = _acmEMA(closes, 200);
+    _acm.ema200 = _acm.chart.addLineSeries({
+      color: 'rgba(245,158,11,0.4)', lineWidth: 1, lineStyle: 2,
+      priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    });
+    _acm.ema200.setData(data.map(function(c, i) {
+      return { time: c.time, value: i >= 199 ? e200[i] : null };
+    }).filter(function(d) { return d.value !== null; }));
+
+    [_acm.ema21, _acm.ema50, _acm.ema200].forEach(function(s) {
+      if (s) s.applyOptions({ visible: _acm.show.ema });
+    });
+
+    // Draw signal levels and zones
+    _acm.levelLines = [];
+    _acm.zoneLines = [];
+    if (_acm.show.levels) _acmDrawLevels();
+    if (_acm.show.zones) _acmDrawZones();
+
+    // Update live price display
+    var lastClose = data[data.length - 1].close;
+    var priceEl = document.getElementById('acm-price');
+    priceEl.textContent = lastClose.toFixed(
+      _acm.sig && _acm.sig.type === 'forex' ? 5 : 2
+    );
+    priceEl.style.color = '#e2e8f0';
+
+    // Legend
+    document.getElementById('acm-legend').innerHTML =
+      '<span style="color:#00d4ff">━ EMA 21</span>' +
+      '<span style="color:#a78bfa">━ EMA 50</span>' +
+      '<span style="color:rgba(245,158,11,0.6)">╌ EMA 200</span>';
+
+    // Info panel
+    var sig = _acm.sig;
+    var infoHtml = '';
+    if (sig) {
+      infoHtml += '<span style="color:#94a3b8">Entry ' + fmtPrice(sig.price || sig.entryPrice) + '</span>';
+      infoHtml += '<span style="color:#ff3b5c">SL ' + fmtPrice(sig.sl) + '</span>';
+      infoHtml += '<span style="color:#00e676">TP1 ' + fmtPrice(sig.tp1) + '</span>';
+      if (sig.rr1) infoHtml += '<span style="color:#5a6d80">RR 1:' + parseFloat(sig.rr1).toFixed(1) + '</span>';
+    }
+    document.getElementById('acm-info-panel').innerHTML = infoHtml;
+
+    _acm.chart.timeScale().fitContent();
+
+    // Resize
+    var _ro = new ResizeObserver(function() {
+      if (_acm.chart) _acm.chart.resize(body.clientWidth, body.clientHeight);
+    });
+    _ro.observe(body);
+
+  } catch (err) {
+    var loadEl2 = document.getElementById('acm-loading');
+    if (loadEl2) loadEl2.innerHTML = '<span style="color:#ff3b5c">Chart error: ' + err.message + '</span>';
+  }
+}
+
+function _acmDrawLevels() {
+  if (!_acm.candle || !_acm.sig) return;
+  var sig = _acm.sig;
+  _acm.levelLines = [];
+
+  var entry = parseFloat(sig.price || sig.entryPrice);
+  if (entry > 0) _acm.levelLines.push(_acm.candle.createPriceLine({
+    price: entry, color: '#64748b', lineWidth: 1, lineStyle: 2,
+    axisLabelVisible: true, title: 'ENTRY',
+  }));
+  if (sig.sl) _acm.levelLines.push(_acm.candle.createPriceLine({
+    price: parseFloat(sig.sl), color: '#ff3b5c', lineWidth: 2, lineStyle: 0,
+    axisLabelVisible: true, title: 'SL',
+  }));
+  if (sig.tp1) _acm.levelLines.push(_acm.candle.createPriceLine({
+    price: parseFloat(sig.tp1), color: '#00e676', lineWidth: 2, lineStyle: 0,
+    axisLabelVisible: true, title: 'TP1',
+  }));
+  if (sig.tp2 && sig.tp2 !== sig.tp1) _acm.levelLines.push(_acm.candle.createPriceLine({
+    price: parseFloat(sig.tp2), color: 'rgba(0,230,118,0.4)', lineWidth: 1, lineStyle: 2,
+    axisLabelVisible: true, title: 'TP2',
+  }));
+}
+
+function _acmDrawZones() {
+  if (!_acm.candle) return;
+  _acm.zoneLines = [];
+
+  var sid = (_acm.symbol || '').replace(/[\/=^.]/g, '_');
+  var eb = window['_engineB_' + sid];
+  if (!eb) return;
+
+  // Support zone
+  var sup = eb.nearest_support_zone;
+  if (sup && sup.upper && sup.lower) {
+    _acm.zoneLines.push(_acm.candle.createPriceLine({
+      price: parseFloat(sup.upper), color: 'rgba(0,230,118,0.35)', lineWidth: 1,
+      lineStyle: 1, axisLabelVisible: true, title: 'SUP ▲',
+    }));
+    _acm.zoneLines.push(_acm.candle.createPriceLine({
+      price: parseFloat(sup.lower), color: 'rgba(0,230,118,0.35)', lineWidth: 1,
+      lineStyle: 1, axisLabelVisible: false, title: '',
+    }));
+  }
+  // Resistance zone
+  var res = eb.nearest_resistance_zone;
+  if (res && res.upper && res.lower) {
+    _acm.zoneLines.push(_acm.candle.createPriceLine({
+      price: parseFloat(res.lower), color: 'rgba(255,59,92,0.35)', lineWidth: 1,
+      lineStyle: 1, axisLabelVisible: true, title: 'RES ▼',
+    }));
+    _acm.zoneLines.push(_acm.candle.createPriceLine({
+      price: parseFloat(res.upper), color: 'rgba(255,59,92,0.35)', lineWidth: 1,
+      lineStyle: 1, axisLabelVisible: false, title: '',
+    }));
+  }
+  // BOS
+  var bos = eb.bos_data || {};
+  if (bos.last_broken_high) _acm.zoneLines.push(_acm.candle.createPriceLine({
+    price: parseFloat(bos.last_broken_high), color: '#f59e0b', lineWidth: 1,
+    lineStyle: 3, axisLabelVisible: true, title: 'BOS ↑',
+  }));
+  if (bos.last_broken_low) _acm.zoneLines.push(_acm.candle.createPriceLine({
+    price: parseFloat(bos.last_broken_low), color: '#f59e0b', lineWidth: 1,
+    lineStyle: 3, axisLabelVisible: true, title: 'BOS ↓',
+  }));
+  // CHoCH
+  var choch = eb.choch_data || {};
+  if (choch.choch_level) _acm.zoneLines.push(_acm.candle.createPriceLine({
+    price: parseFloat(choch.choch_level), color: '#a855f7', lineWidth: 1,
+    lineStyle: 3, axisLabelVisible: true, title: 'CHoCH',
+  }));
+  // Order Blocks
+  (eb.order_blocks || []).forEach(function(ob) {
+    if (ob.top && ob.bottom) {
+      var c = ob.type === 'bullish' ? 'rgba(0,230,118,0.4)' : 'rgba(255,59,92,0.4)';
+      _acm.zoneLines.push(_acm.candle.createPriceLine({
+        price: parseFloat(ob.top), color: c, lineWidth: 1, lineStyle: 1,
+        axisLabelVisible: true, title: 'OB ' + (ob.strength || 0) + '%',
+      }));
+      _acm.zoneLines.push(_acm.candle.createPriceLine({
+        price: parseFloat(ob.bottom), color: c, lineWidth: 1, lineStyle: 1,
+        axisLabelVisible: false, title: '',
+      }));
+    }
+  });
+  // Breaker
+  var brk = eb.breaker_block;
+  if (brk && brk.level) _acm.zoneLines.push(_acm.candle.createPriceLine({
+    price: parseFloat(brk.level), color: '#06b6d4', lineWidth: 1,
+    lineStyle: 3, axisLabelVisible: true, title: 'BREAKER',
+  }));
+}
+
+// Live price updates on chart
+function _acmStartLive() {
+  _acmStopLive();
+  _acm.liveInterval = setInterval(function() {
+    if (!_acm.chart || !_acm.candle || !_acm.sig) return;
+    var display = _acm.sig.display || _acm.sig.pair || '';
+    var lp = (_latestPrices || {})[display];
+    if (!lp || !lp.price) return;
+
+    var price = parseFloat(lp.price);
+    if (!(price > 0)) return;
+
+    // Update header price
+    var priceEl = document.getElementById('acm-price');
+    var isLong = _acm.sig.direction === 'LONG';
+    var entry = parseFloat(_acm.sig.price || _acm.sig.entryPrice || 0);
+    var favorable = entry > 0 ? (isLong ? price >= entry : price <= entry) : true;
+    priceEl.textContent = price.toFixed(_acm.sig.type === 'forex' ? 5 : 2);
+    priceEl.style.color = favorable ? '#00e676' : '#ff3b5c';
+
+    // Update last candle on chart
+    if (_acm.lastData.length > 0) {
+      var last = _acm.lastData[_acm.lastData.length - 1];
+      var updated = {
+        time: last.time,
+        open: last.open,
+        high: Math.max(last.high, price),
+        low: Math.min(last.low, price),
+        close: price,
+      };
+      _acm.candle.update(updated);
+    }
+  }, 2000);
+}
+
+function _acmStopLive() {
+  if (_acm.liveInterval) { clearInterval(_acm.liveInterval); _acm.liveInterval = null; }
+}
+
+// AI Chart Read (placeholder — will be built in next phase)
+async function acmAIRead() {
+  var btn = document.getElementById('acm-ai-btn');
+  btn.textContent = '🧠 Reading...';
+  btn.disabled = true;
+
+  var panel = document.getElementById('acm-ai-panel');
+  panel.style.display = 'block';
+  panel.innerHTML = '<h4>🧠 AI CHART ANALYSIS</h4><div style="color:#5a6d80;">Capturing chart and sending to Claude Vision... (coming soon)</div>';
+
+  // TODO: Phase 2 — html2canvas screenshot + Claude Vision API call
+  setTimeout(function() {
+    btn.textContent = '🧠 AI READ';
+    btn.disabled = false;
+  }, 2000);
+}
+
+// Keyboard shortcut
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && document.getElementById('athena-chart-modal').style.display === 'flex')
+    closeAcm();
+});
+
+// Background click close
+document.getElementById('athena-chart-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeAcm();
 });
 </script>
 </body>
