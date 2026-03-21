@@ -7017,12 +7017,18 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         outcome = "TIMEOUT"
         r_multiple = 0.0
         exit_bar_offset = 0
-        _hold_map = {"scalp": 12, "intraday": 24, "swing": 60}
-        # Crypto needs longer hold — 3.5 ATR target takes more bars to reach
-        if pair.get("type") == "crypto" and resolved_style == "intraday":
-            max_hold_bars = 40  # 40 × 4hr = 160hrs (~6.5 days)
-        else:
-            max_hold_bars = _hold_map.get(resolved_style, 12)
+        # Per-asset-class backtest parameters
+        _ptype = pair.get("type", "stock")
+        _bt_params = {
+            "forex":     {"hold": {"scalp": 12, "intraday": 30, "swing": 60}, "be_min_rr": 2.0},
+            "crypto":    {"hold": {"scalp": 12, "intraday": 40, "swing": 80}, "be_min_rr": 2.0},
+            "stock":     {"hold": {"scalp": 8,  "intraday": 24, "swing": 50}, "be_min_rr": 1.5},
+            "commodity": {"hold": {"scalp": 10, "intraday": 24, "swing": 50}, "be_min_rr": 1.8},
+            "index":     {"hold": {"scalp": 10, "intraday": 24, "swing": 50}, "be_min_rr": 1.8},
+        }
+        _params = _bt_params.get(_ptype, _bt_params["stock"])
+        max_hold_bars = _params["hold"].get(resolved_style, 24)
+        _be_min_rr = _params["be_min_rr"]
 
         risk = abs(entry - sl)
         _active_sl = sl
@@ -7045,8 +7051,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                     outcome = "BE" if _be_triggered else "SL"
                     r_multiple = 0.0 if outcome == "BE" else -1.0
                     break
-                # BE trigger — only activate if RR > 2.0 (enough room to TP)
-                if not _be_triggered and risk > 0 and target_rr >= 2.0:
+                # BE trigger — only activate if RR >= be_min_rr (enough room to TP)
+                if not _be_triggered and risk > 0 and target_rr >= _be_min_rr:
                     if f_high >= entry + (risk * 1.5):
                         _active_sl = entry
                         _be_triggered = True
@@ -7061,8 +7067,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                     outcome = "BE" if _be_triggered else "SL"
                     r_multiple = 0.0 if outcome == "BE" else -1.0
                     break
-                # BE trigger — only if RR > 2.0
-                if not _be_triggered and risk > 0 and target_rr >= 2.0:
+                # BE trigger — only if RR >= be_min_rr
+                if not _be_triggered and risk > 0 and target_rr >= _be_min_rr:
                     if f_low <= entry - (risk * 1.5):
                         _active_sl = entry
                         _be_triggered = True
@@ -8178,12 +8184,35 @@ def api_quick_execute():
             pip_mode = None
     
     if not pip_mode:
-        # Use Engine B structural SL/TP (original behaviour for swing)
-        if "recommended_stop_loss" in engine_b and engine_b["recommended_stop_loss"]:
-            sig["sl"] = engine_b["recommended_stop_loss"]
-        if "recommended_take_profit" in engine_b and engine_b["recommended_take_profit"]:
-            sig["tp1"] = engine_b["recommended_take_profit"]
-            sig["tp2"] = engine_b["recommended_take_profit"]
+        # SWING: use ATR_CLASS (same as backtest) — proven, bar-appropriate widths
+        pair_obj = pair_obj if pair_obj else _resolve_pair_from_signal(sig)
+        _ptype = pair_obj.get("type", "") if pair_obj else ""
+        if not d1i:
+            d1 = fetch_candles(pair_obj, "D1", CONFIG.get("D1_CANDLES", 250))
+            h4 = fetch_candles(pair_obj, "H4", CONFIG.get("H4_CANDLES", 250))
+            h1 = fetch_candles(pair_obj, "H1", CONFIG.get("H1_CANDLES", 250))
+            d1i = calc_indicators(d1) if d1 else {}
+            h4i = calc_indicators(h4) if h4 else {}
+            h1i = calc_indicators(h1) if h1 else {}
+        _exec_atr = _atr_for_levels(d1i, h4i, h1i, pair=pair_obj)
+        if _exec_atr and _exec_atr > 0:
+            _exec_price = float(sig.get("price", 0))
+            _exec_dir = sig.get("direction", "LONG")
+            lvl = calc_levels(_exec_price, _exec_atr, _exec_dir, _ptype,
+                              regime_state=None)  # No style = ATR_CLASS defaults
+            sig["sl"] = lvl["sl"]
+            sig["tp1"] = lvl["tp1"]
+            sig["tp2"] = lvl["tp2"]
+            log.info(f"[QUICK EXEC] {sig.get('pair')}: SWING mode (ATR_CLASS), "
+                     f"ATR={_exec_atr:.6f}, SL={lvl['sl']:.6f}, TP1={lvl['tp1']:.6f}")
+        else:
+            # Last resort fallback to Engine B structural
+            if "recommended_stop_loss" in engine_b and engine_b["recommended_stop_loss"]:
+                sig["sl"] = engine_b["recommended_stop_loss"]
+            if "recommended_take_profit" in engine_b and engine_b["recommended_take_profit"]:
+                sig["tp1"] = engine_b["recommended_take_profit"]
+                sig["tp2"] = engine_b["recommended_take_profit"]
+            log.warning(f"[QUICK EXEC] {sig.get('pair')}: SWING fallback to Engine B structural (ATR unavailable)")
 
     is_crypto = sig.get("type") == "crypto"
 
