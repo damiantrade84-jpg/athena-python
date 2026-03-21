@@ -142,7 +142,7 @@ _PAIR_CARRY_FORMULA: dict[str, list[tuple[float, str]]] = {
     # ── Indices — 10Y yield risk signal ────────────────────────────────────
     "S&P 500": [(-1.0, "_10Y")],  # inverted: high yield = bearish equity
     "SPY": [(-1.0, "_10Y")],
-    "Nasdaq": [(-1.0, "_10Y")],
+    "NASDAQ-100": [(-1.0, "_10Y")],
     "QQQ": [(-1.0, "_10Y")],
     "Dow Jones": [(-1.0, "_10Y")],
     "UK100": [(-1.0, "_10Y_GB")],
@@ -154,8 +154,40 @@ _PAIR_CARRY_FORMULA: dict[str, list[tuple[float, str]]] = {
     # ── Commodities ────────────────────────────────────────────────────────
     "XAU/USD": [(-1.0, "_10Y")],  # gold is inversely correlated with real yields
     "XAG/USD": [(-1.0, "_10Y")],
-    "WTI Oil": [],
-    "Brent Oil": [],
+    "XPT/USD": [(-1.0, "_10Y")],  # platinum — precious metal, same yield dynamic
+    "WTI Oil": [(-1.0, "_10Y")],
+    "Brent Oil": [(-1.0, "_10Y")],
+    "Nat Gas": [],
+    "Copper": [],
+    # ── US Stocks — inverted 10Y yield as macro risk signal ───────────────
+    "AAPL": [(-1.0, "_10Y")],
+    "TSLA": [(-1.0, "_10Y")],
+    "NVDA": [(-1.0, "_10Y")],
+    "MSFT": [(-1.0, "_10Y")],
+    "AMZN": [(-1.0, "_10Y")],
+    "META": [(-1.0, "_10Y")],
+    "GOOG": [(-1.0, "_10Y")],
+    "JPM": [(-1.0, "_10Y")],
+    "V": [(-1.0, "_10Y")],
+    "XOM": [(-1.0, "_10Y")],
+    "NFLX": [(-1.0, "_10Y")],
+    "AMD": [(-1.0, "_10Y")],
+    "CRM": [(-1.0, "_10Y")],
+    "DIS": [(-1.0, "_10Y")],
+    "BA": [(-1.0, "_10Y")],
+    "COIN": [(-1.0, "_10Y")],
+    "PYPL": [(-1.0, "_10Y")],
+    "INTC": [(-1.0, "_10Y")],
+    "UBER": [(-1.0, "_10Y")],
+    "PLTR": [(-1.0, "_10Y")],
+    # ── ETFs ─────────────────────────────────────────────────────────────
+    "GLD": [(-1.0, "_10Y")],   # gold ETF — same yield dynamic as XAU/USD
+    "TLT": [(-1.0, "_10Y")],   # bond ETF — falls when yields rise
+    "IWM": [(-1.0, "_10Y")],
+    "EEM": [(-1.0, "_10Y")],
+    "XLE": [(-1.0, "_10Y")],
+    "SLV": [(-1.0, "_10Y")],   # silver ETF — same yield dynamic as XAG/USD
+    "USO": [],                  # oil ETF — no reliable yield correlation
 }
 
 # ── SQLite cache ──────────────────────────────────────────────────────────────
