@@ -6948,8 +6948,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
             # Regime-scale the min_score: tighter gate in ranging/choppy, looser in trending
             _regime_gate = {
                 "TRENDING": 0.85,        # trend does the work — slightly easier entry
-                "RANGING": 1.15,         # need more conviction in chop
-                "HIGH_VOLATILITY": 1.1,  # crypto lives in high vol - reduce penalty
+                "RANGING": 1.2,          # need more conviction in chop
+                "HIGH_VOLATILITY": 1.3,  # noise kills — require strong structure
                 "LOW_VOLATILITY": 1.0,   # default — calm market, standard gate
             }
             _min_score_scaled = style_profile["min_score"] * _regime_gate.get(regime_label, 1.0)
@@ -8492,8 +8492,8 @@ def api_scan_naked():
                     # Regime-scale the min_score: tighter gate in ranging/choppy, looser in trending
                     _regime_gate = {
                         "TRENDING": 0.85,        # trend does the work — slightly easier entry
-                        "RANGING": 1.15,         # need more conviction in chop
-                        "HIGH_VOLATILITY": 1.1,  # crypto lives in high vol - reduce penalty
+                        "RANGING": 1.2,          # need more conviction in chop
+                        "HIGH_VOLATILITY": 1.3,  # noise kills — require strong structure
                         "LOW_VOLATILITY": 1.0,   # default — calm market, standard gate
                     }
                     _min_score_scaled = style_profile["min_score"] * _regime_gate.get(regime_label, 1.0)
