@@ -277,6 +277,75 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 .chart-toggle-btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(0,212,255,0.05);}
 .chart-toggle-btn svg{transition:transform 0.2s;}
 .chart-toggle-btn.open svg{transform:rotate(180deg);}
+/* Athena Chart Modal */
+#athena-chart-modal {
+  display: none;
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: #060a10;
+  z-index: 9999;
+  flex-direction: column;
+}
+#acm-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  background: #080c14;
+  border-bottom: 1px solid #141e2d;
+  flex-shrink: 0;
+}
+#acm-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+#acm-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.acm-pair-name {
+  color: #e2e8f0;
+  font-family: 'Syne', sans-serif;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+}
+.acm-live-price {
+  font-family: 'Space Mono', monospace;
+  font-size: 14px;
+  font-weight: 700;
+  transition: color 0.3s;
+}
+.acm-dir-badge {
+  font-size: 10px;
+  font-weight: 800;
+  font-family: 'Space Mono', monospace;
+  padding: 2px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.05em;
+}
+.acm-dir-badge.LONG { background: rgba(0,230,118,0.15); color: #00e676; }
+.acm-dir-badge.SHORT { background: rgba(255,59,92,0.15); color: #ff3b5c; }
+.acm-score-badge {
+  font-size: 10px;
+  font-family: 'Space Mono', monospace;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(0,212,255,0.1);
+  color: #00d4ff;
+  border: 1px solid rgba(0,212,255,0.2);
+}
+.acm-regime-badge {
+  font-size: 9px;
+  font-family: 'Space Mono', monospace;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.05);
+  color: #5a6d80;
+}
 .tv-tf-btn {
   background: transparent;
   border: 1px solid #1e2a3a;
@@ -296,7 +365,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
   background: transparent;
   border: 1px solid #1a2332;
   color: #5a6d80;
-  padding: 4px 10px;
+  padding: 5px 12px;
   border-radius: 5px;
   cursor: pointer;
   font-family: 'Space Mono', monospace;
@@ -307,6 +376,89 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 }
 .acm-tf-btn:hover { border-color: #3a4d60; color: #8899aa; }
 .acm-tf-btn.active { border-color: #00d4ff; color: #00d4ff; background: rgba(0,212,255,0.08); }
+.acm-toggle-btn {
+  background: transparent;
+  border: 1px solid #1a2332;
+  color: #5a6d80;
+  padding: 5px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  transition: all 0.15s;
+}
+.acm-toggle-btn.on { border-color: rgba(0,212,255,0.3); color: #00d4ff; }
+.acm-toggle-btn.off { opacity: 0.35; }
+.acm-close-btn {
+  background: rgba(255,59,92,0.1);
+  border: 1px solid rgba(255,59,92,0.3);
+  color: #ff3b5c;
+  padding: 5px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  transition: all 0.15s;
+}
+.acm-close-btn:hover { background: rgba(255,59,92,0.2); }
+.acm-divider {
+  width: 1px;
+  height: 22px;
+  background: #1a2332;
+  margin: 0 4px;
+}
+#acm-chart-body {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+#acm-legend {
+  position: absolute;
+  top: 12px;
+  left: 16px;
+  display: flex;
+  gap: 14px;
+  font-size: 10px;
+  font-family: 'Space Mono', monospace;
+  z-index: 10;
+  pointer-events: none;
+  opacity: 0.6;
+}
+#acm-info-panel {
+  position: absolute;
+  bottom: 12px;
+  left: 16px;
+  display: flex;
+  gap: 16px;
+  font-size: 10px;
+  font-family: 'Space Mono', monospace;
+  z-index: 10;
+  pointer-events: none;
+  opacity: 0.5;
+}
+#acm-ai-panel {
+  display: none;
+  background: #0a0e17;
+  border-top: 1px solid #141e2d;
+  padding: 16px 20px;
+  max-height: 35vh;
+  overflow-y: auto;
+  flex-shrink: 0;
+  font-family: 'Space Mono', monospace;
+  font-size: 12px;
+  color: #c0cdd8;
+  line-height: 1.7;
+}
+#acm-ai-panel h4 {
+  color: #00d4ff;
+  font-family: 'Syne', sans-serif;
+  font-size: 13px;
+  font-weight: 800;
+  margin: 0 0 10px 0;
+  letter-spacing: 0.03em;
+}
 .bt-leaderboard{background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:24px;}
 .bt-lb-header{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr;gap:8px;padding:10px 16px;border-bottom:1px solid var(--border);font-size:10px;color:var(--muted);font-family:'Space Mono',monospace;text-transform:uppercase;}
 .bt-lb-row{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr;gap:8px;padding:10px 16px;border-bottom:1px solid rgba(30,42,54,0.5);font-size:12px;font-family:'Space Mono',monospace;transition:background 0.15s;cursor:pointer;}
@@ -1607,7 +1759,10 @@ let _acmCurrentSymbol = '';
 let _acmCurrentTF = 'H4';
 let _acmShowVolume = true;
 let _acmShowEMA = true;
+let _acmShowLevels = true;
+let _acmShowZones = true;
 let _acmSignalData = null;
+let _acmResizeObserver = null;
 
 function getTVSymbol(display) {
   return TV_SYMBOL_MAP[display] || TV_SYMBOL_MAP[display.replace('/', '')] || display;
@@ -1685,93 +1840,240 @@ function _renderTVWidget(symbol, interval) {
   container.appendChild(wrapper);
 }
 
+function _acmFmtPrice(value, sig) {
+  if (value == null || value === '' || isNaN(Number(value))) return '';
+  var digits = sig && sig.type === 'forex' ? 5 : sig && sig.type === 'crypto' ? 2 : 2;
+  return parseFloat(value).toFixed(digits);
+}
+
+function _acmScoreText(sig) {
+  if (!sig) return '';
+  if (typeof sig.confluencePct === 'number') return sig.confluencePct.toFixed(0) + '%';
+  if (typeof sig.score_pct === 'number') return sig.score_pct.toFixed(0) + '%';
+  if (typeof sig.confluenceScore === 'number') return sig.confluenceScore.toFixed(2);
+  return '';
+}
+
+function _acmSetActiveTF(tf) {
+  document.querySelectorAll('#acm-toolbar-right .acm-tf-btn').forEach(function(btn) {
+    var btnTf = btn.getAttribute('data-tf') || btn.textContent.trim();
+    btn.classList.toggle('active', btnTf === tf);
+  });
+}
+
+function _acmSetToggleState(id, enabled) {
+  var btn = document.getElementById(id);
+  if (!btn) return;
+  btn.classList.remove('on', 'off');
+  btn.classList.add(enabled ? 'on' : 'off');
+}
+
+function _acmSetToolbar(sig) {
+  var display = sig ? sig.display || sig.pair || _acmCurrentSymbol : _acmCurrentSymbol;
+  document.getElementById('acm-pair').textContent = display;
+  document.getElementById('acm-price').textContent = _acmFmtPrice(sig ? (sig.price || sig.entryPrice) : null, sig);
+
+  var dirEl = document.getElementById('acm-dir');
+  dirEl.className = 'acm-dir-badge';
+  dirEl.textContent = sig && sig.direction ? sig.direction : '';
+  if (sig && sig.direction) dirEl.classList.add(sig.direction);
+
+  var scoreEl = document.getElementById('acm-score');
+  scoreEl.textContent = _acmScoreText(sig) ? 'CONF ' + _acmScoreText(sig) : '';
+
+  var regime = sig ? (sig.trendState || sig.regime || '') : '';
+  document.getElementById('acm-regime').textContent = regime;
+}
+
+function _acmBuildAiPanel(sig) {
+  var panel = document.getElementById('acm-ai-panel');
+  var toggle = document.getElementById('acm-ai-btn');
+  var ai = sig && (sig.aiAnalysis || sig.ai_analysis || sig.naked_data || sig.nakedData);
+  if (!ai) {
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+    toggle.style.display = 'none';
+    toggle.classList.remove('on');
+    toggle.classList.add('off');
+    return;
+  }
+
+  toggle.style.display = 'inline-flex';
+  panel.style.display = 'none';
+  toggle.classList.remove('on');
+  toggle.classList.add('off');
+
+  var narrative = ai.narrative || ai.verdict || ai.summary || ai.trigger_pattern || 'Signal context available.';
+  var notes = [];
+  if (ai.tradeStyleReason) notes.push(ai.tradeStyleReason);
+  if (ai.riskNote) notes.push(ai.riskNote);
+  if (ai.warning) notes.push(ai.warning);
+  if (ai.trigger_pattern) notes.push('Trigger: ' + ai.trigger_pattern);
+
+  panel.innerHTML =
+    '<h4>Athena Signal Context</h4>' +
+    '<div>' + narrative + '</div>' +
+    (notes.length ? '<div style="margin-top:10px;color:#8ea2b7">' + notes.join('<br>') + '</div>' : '');
+}
+
 function openAthenaChart(symbol, tf) {
   _acmCurrentSymbol = symbol;
   _acmCurrentTF = tf || 'H4';
+  _acmSignalData = allSignals.find(function(s) { return s.symbol === symbol; }) || null;
 
-  var sig = allSignals.find(function(s) { return s.symbol === symbol; });
-  _acmSignalData = sig;
+  _acmSetToolbar(_acmSignalData);
+  _acmBuildAiPanel(_acmSignalData);
+  _acmSetActiveTF(_acmCurrentTF);
+  _acmSetToggleState('acm-vol-btn', _acmShowVolume);
+  _acmSetToggleState('acm-ema-btn', _acmShowEMA);
+  _acmSetToggleState('acm-levels-btn', _acmShowLevels);
+  _acmSetToggleState('acm-zones-btn', _acmShowZones);
 
-  var modal = document.getElementById('athena-chart-modal');
-  modal.style.display = 'flex';
-
-  var display = sig ? sig.display || sig.pair || symbol : symbol;
-  document.getElementById('acm-title').textContent = display;
-
-  var price = sig ? (sig.price || sig.entryPrice || 0) : 0;
-  document.getElementById('acm-price').textContent = price ? parseFloat(price).toFixed(
-    sig && sig.type === 'forex' ? 5 : sig && sig.type === 'crypto' ? 2 : 2
-  ) : '';
-
-  var dirEl = document.getElementById('acm-direction');
-  if (sig && sig.direction) {
-    dirEl.textContent = sig.direction;
-    dirEl.style.background = sig.direction === 'LONG' ? 'rgba(0,230,118,0.15)' : 'rgba(255,59,92,0.15)';
-    dirEl.style.color = sig.direction === 'LONG' ? '#00e676' : '#ff3b5c';
-  } else {
-    dirEl.textContent = '';
-    dirEl.style.background = 'transparent';
-  }
-
-  document.querySelectorAll('.acm-tf-btn').forEach(function(b) { b.classList.remove('active'); });
-  var tfBtns = document.querySelectorAll('.acm-tf-btn');
-  tfBtns.forEach(function(b) {
-    if (b.textContent.trim() === _acmCurrentTF) b.classList.add('active');
-  });
-
+  document.getElementById('athena-chart-modal').style.display = 'flex';
   _acmFetchAndRender(symbol, _acmCurrentTF);
 }
 
 function closeAthenaChart() {
   document.getElementById('athena-chart-modal').style.display = 'none';
-  if (_acmChart) { _acmChart.remove(); _acmChart = null; }
+  document.getElementById('acm-ai-panel').style.display = 'none';
+  _acmSetToggleState('acm-ai-btn', false);
+  if (_acmResizeObserver) {
+    _acmResizeObserver.disconnect();
+    _acmResizeObserver = null;
+  }
+  if (_acmChart) {
+    _acmChart.remove();
+    _acmChart = null;
+  }
 }
 
-function acmSetTF(tf) {
+function closeAcm() {
+  closeAthenaChart();
+}
+
+function acmSetTF(tf, el) {
   _acmCurrentTF = tf;
-  document.querySelectorAll('.acm-tf-btn').forEach(function(b) { b.classList.remove('active'); });
-  event.target.classList.add('active');
+  if (el) {
+    document.querySelectorAll('#acm-toolbar-right .acm-tf-btn').forEach(function(btn) { btn.classList.remove('active'); });
+    el.classList.add('active');
+  } else {
+    _acmSetActiveTF(tf);
+  }
   _acmFetchAndRender(_acmCurrentSymbol, tf);
 }
 
-function acmToggleVolume() {
-  _acmShowVolume = !_acmShowVolume;
-  var btn = document.getElementById('acm-vol-btn');
-  btn.style.opacity = _acmShowVolume ? '1' : '0.3';
-  if (_acmVolumeSeries) {
-    _acmVolumeSeries.applyOptions({ visible: _acmShowVolume });
+function acmToggleAI() {
+  var panel = document.getElementById('acm-ai-panel');
+  var btn = document.getElementById('acm-ai-btn');
+  if (!panel.innerHTML) return;
+  var nextOpen = panel.style.display !== 'block';
+  panel.style.display = nextOpen ? 'block' : 'none';
+  if (btn) {
+    btn.classList.toggle('on', nextOpen);
+    btn.classList.toggle('off', !nextOpen);
   }
 }
 
-function acmToggleEMA() {
-  _acmShowEMA = !_acmShowEMA;
-  var btn = document.getElementById('acm-ema-btn');
-  btn.style.opacity = _acmShowEMA ? '1' : '0.3';
-  [_acmEma21Series, _acmEma50Series, _acmEma200Series].forEach(function(s) {
-    if (s) s.applyOptions({ visible: _acmShowEMA });
-  });
+function acmAIRead() {
+  acmToggleAI();
+}
+
+function acmToggle(kind, el) {
+  if (kind === 'vol') {
+    _acmShowVolume = !_acmShowVolume;
+    _acmSetToggleState('acm-vol-btn', _acmShowVolume);
+    if (_acmVolumeSeries) _acmVolumeSeries.applyOptions({ visible: _acmShowVolume });
+    return;
+  }
+
+  if (kind === 'ema') {
+    _acmShowEMA = !_acmShowEMA;
+    _acmSetToggleState('acm-ema-btn', _acmShowEMA);
+    [_acmEma21Series, _acmEma50Series, _acmEma200Series].forEach(function(series) {
+      if (series) series.applyOptions({ visible: _acmShowEMA });
+    });
+    return;
+  }
+
+  if (kind === 'levels') {
+    _acmShowLevels = !_acmShowLevels;
+    _acmSetToggleState('acm-levels-btn', _acmShowLevels);
+  } else if (kind === 'zones') {
+    _acmShowZones = !_acmShowZones;
+    _acmSetToggleState('acm-zones-btn', _acmShowZones);
+  }
+
+  if (el) _acmSetToggleState(el.id, kind === 'levels' ? _acmShowLevels : _acmShowZones);
+  _acmFetchAndRender(_acmCurrentSymbol, _acmCurrentTF);
 }
 
 function _acmCalcEMA(data, period) {
+  if (!data.length) return [];
   var k = 2 / (period + 1);
   var ema = [data[0]];
-  for (var i = 1; i < data.length; i++) {
-    ema.push(data[i] * k + ema[i - 1] * (1 - k));
-  }
+  for (var i = 1; i < data.length; i++) ema.push(data[i] * k + ema[i - 1] * (1 - k));
   return ema;
 }
 
+function _acmLegendHtml(hasEngineB) {
+  return '<span style="color:#00d4ff">EMA 21</span>' +
+    '<span style="color:#a78bfa">EMA 50</span>' +
+    '<span style="color:rgba(245,158,11,0.75)">EMA 200</span>' +
+    '<span style="color:#ff3b5c">SL</span>' +
+    '<span style="color:#00e676">TP</span>' +
+    (hasEngineB ? '<span style="color:#f59e0b">BOS</span><span style="color:#a855f7">CHoCH</span>' : '');
+}
+
+function _acmInfoHtml(sig, tf, bars, lastCandle) {
+  var bits = ['TF ' + tf, bars + ' bars'];
+  if (sig && sig.signalClass) bits.push('Setup ' + sig.signalClass);
+  if (sig && sig.session && sig.session.name) bits.push(sig.session.name);
+  if (lastCandle) bits.push('Last ' + lastCandle);
+  return bits.map(function(bit) { return '<span>' + bit + '</span>'; }).join('');
+}
+
 async function _acmFetchAndRender(symbol, tf) {
-  var body = document.getElementById('athena-chart-body');
+  var body = document.getElementById('acm-chart-body');
   body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#5a6d80;font-family:Space Mono,monospace;font-size:13px;">Loading chart...</div>';
 
-  if (_acmChart) { _acmChart.remove(); _acmChart = null; }
+  if (_acmResizeObserver) {
+    _acmResizeObserver.disconnect();
+    _acmResizeObserver = null;
+  }
+  if (_acmChart) {
+    _acmChart.remove();
+    _acmChart = null;
+  }
 
   try {
     var resp = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&tf=' + tf + '&limit=300');
     var json = await resp.json();
-    var candles = json.candles || json;
-    if (!candles || !candles.length) throw new Error('No data');
+    if (!resp.ok) throw new Error(json.error || 'Failed to load candles');
+
+    var candles = json.candles || [];
+    if (!candles.length) throw new Error('No data');
+
+    var data = candles.map(function(c) {
+      var rawTime = c.t || c.time || '';
+      var ts = typeof rawTime === 'number'
+        ? Math.floor(rawTime / 1000)
+        : Math.floor(new Date(String(rawTime).replace(' ', 'T')).getTime() / 1000);
+      return {
+        time: ts,
+        open: parseFloat(c.o || c.open),
+        high: parseFloat(c.h || c.high),
+        low: parseFloat(c.l || c.low),
+        close: parseFloat(c.c || c.close),
+        volume: parseFloat(c.v || c.vol || 0),
+        labelTime: rawTime
+      };
+    }).filter(function(c) {
+      return c.time && !isNaN(c.time) && !isNaN(c.open) && !isNaN(c.high) && !isNaN(c.low) && !isNaN(c.close);
+    }).sort(function(a, b) {
+      return a.time - b.time;
+    });
+
+    if (!data.length) throw new Error('No valid candles');
 
     body.innerHTML = '';
 
@@ -1782,219 +2084,161 @@ async function _acmFetchAndRender(symbol, tf) {
         background: { type: 'solid', color: '#080c14' },
         textColor: '#5a6d80',
         fontSize: 11,
-        fontFamily: 'Space Mono, monospace',
+        fontFamily: 'Space Mono, monospace'
       },
       grid: {
-        vertLines: { color: 'rgba(26,35,50,0.6)', style: 1 },
-        horzLines: { color: 'rgba(26,35,50,0.6)', style: 1 },
+        vertLines: { color: 'rgba(20,30,45,0.8)', style: 1 },
+        horzLines: { color: 'rgba(20,30,45,0.8)', style: 1 }
       },
       crosshair: {
         mode: LightweightCharts.CrosshairMode.Normal,
-        vertLine: { color: 'rgba(0,212,255,0.2)', width: 1, style: 3, labelBackgroundColor: '#0d1420' },
-        horzLine: { color: 'rgba(0,212,255,0.2)', width: 1, style: 3, labelBackgroundColor: '#0d1420' },
+        vertLine: { color: 'rgba(0,212,255,0.16)', width: 1, style: 3, labelBackgroundColor: '#0d1420' },
+        horzLine: { color: 'rgba(0,212,255,0.16)', width: 1, style: 3, labelBackgroundColor: '#0d1420' }
       },
       rightPriceScale: {
         borderColor: '#1a2332',
-        scaleMargins: { top: 0.08, bottom: 0.18 },
+        scaleMargins: { top: 0.06, bottom: 0.18 }
       },
       timeScale: {
         borderColor: '#1a2332',
         timeVisible: true,
         secondsVisible: false,
-        rightOffset: 5,
-        barSpacing: 8,
-      },
+        rightOffset: 8,
+        barSpacing: 9
+      }
     });
 
     _acmCandleSeries = _acmChart.addCandlestickSeries({
       upColor: '#00e676',
       downColor: '#ff3b5c',
-      borderDownColor: '#ff3b5c',
       borderUpColor: '#00e676',
-      wickDownColor: 'rgba(255,59,92,0.6)',
-      wickUpColor: 'rgba(0,230,118,0.6)',
+      borderDownColor: '#ff3b5c',
+      wickUpColor: 'rgba(0,230,118,0.7)',
+      wickDownColor: 'rgba(255,59,92,0.7)'
     });
-
-    var data = candles.map(function(c) {
-      var tStr = String(c.t || c.time || '').replace(' ', 'T');
-      var ts = typeof c.t === 'number' ? Math.floor(c.t / 1000) :
-               Math.floor(new Date(tStr).getTime() / 1000);
-      return {
-        time: ts,
-        open: parseFloat(c.o || c.open),
-        high: parseFloat(c.h || c.high),
-        low: parseFloat(c.l || c.low),
-        close: parseFloat(c.c || c.close),
-        volume: parseFloat(c.v || c.vol || 0)
-      };
-    }).filter(function(c) {
-      return c.time && !isNaN(c.time) && c.open && c.high && c.low && c.close;
-    });
-    data.sort(function(a, b) { return a.time - b.time; });
     _acmCandleSeries.setData(data);
 
     _acmVolumeSeries = _acmChart.addHistogramSeries({
       priceFormat: { type: 'volume' },
-      priceScaleId: 'volume',
-      color: 'rgba(0,212,255,0.15)',
+      priceScaleId: 'volume'
     });
     _acmChart.priceScale('volume').applyOptions({
-      scaleMargins: { top: 0.85, bottom: 0 },
+      scaleMargins: { top: 0.84, bottom: 0 }
     });
     _acmVolumeSeries.setData(data.map(function(c) {
       return {
         time: c.time,
         value: c.volume,
-        color: c.close >= c.open ? 'rgba(0,230,118,0.2)' : 'rgba(255,59,92,0.2)',
+        color: c.close >= c.open ? 'rgba(0,230,118,0.22)' : 'rgba(255,59,92,0.22)'
       };
     }));
     _acmVolumeSeries.applyOptions({ visible: _acmShowVolume });
 
     var closes = data.map(function(c) { return c.close; });
-
     var ema21 = _acmCalcEMA(closes, 21);
-    _acmEma21Series = _acmChart.addLineSeries({
-      color: '#00d4ff', lineWidth: 1, priceLineVisible: false,
-      lastValueVisible: false, crosshairMarkerVisible: false,
-    });
-    _acmEma21Series.setData(data.map(function(c, i) {
-      return { time: c.time, value: ema21[i] };
-    }));
-
     var ema50 = _acmCalcEMA(closes, 50);
-    _acmEma50Series = _acmChart.addLineSeries({
-      color: '#a78bfa', lineWidth: 1, priceLineVisible: false,
-      lastValueVisible: false, crosshairMarkerVisible: false,
-    });
-    _acmEma50Series.setData(data.map(function(c, i) {
-      return { time: c.time, value: i >= 49 ? ema50[i] : ema50[Math.min(49, ema50.length - 1)] };
-    }));
-
     var ema200 = _acmCalcEMA(closes, 200);
-    _acmEma200Series = _acmChart.addLineSeries({
-      color: 'rgba(245,158,11,0.5)', lineWidth: 1, lineStyle: 2,
-      priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
-    });
-    _acmEma200Series.setData(data.map(function(c, i) {
-      return { time: c.time, value: i >= 199 ? ema200[i] : ema200[Math.min(199, ema200.length - 1)] };
-    }));
 
-    [_acmEma21Series, _acmEma50Series, _acmEma200Series].forEach(function(s) {
-      if (s) s.applyOptions({ visible: _acmShowEMA });
+    _acmEma21Series = _acmChart.addLineSeries({
+      color: '#00d4ff',
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false
+    });
+    _acmEma21Series.setData(data.map(function(c, i) { return { time: c.time, value: ema21[i] }; }));
+
+    _acmEma50Series = _acmChart.addLineSeries({
+      color: '#a78bfa',
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false
+    });
+    _acmEma50Series.setData(data.map(function(c, i) { return { time: c.time, value: ema50[Math.min(i, ema50.length - 1)] }; }));
+
+    _acmEma200Series = _acmChart.addLineSeries({
+      color: 'rgba(245,158,11,0.75)',
+      lineWidth: 1,
+      lineStyle: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false
+    });
+    _acmEma200Series.setData(data.map(function(c, i) { return { time: c.time, value: ema200[Math.min(i, ema200.length - 1)] }; }));
+
+    [_acmEma21Series, _acmEma50Series, _acmEma200Series].forEach(function(series) {
+      if (series) series.applyOptions({ visible: _acmShowEMA });
     });
 
     var sig = _acmSignalData;
-    if (sig) {
+    if (sig && _acmShowLevels) {
       var entryPrice = sig.price || sig.entryPrice;
       if (entryPrice) {
-        _acmCandleSeries.createPriceLine({
-          price: parseFloat(entryPrice), color: '#94a3b8', lineWidth: 1,
-          lineStyle: 2, axisLabelVisible: true, title: 'ENTRY',
-        });
+        _acmCandleSeries.createPriceLine({ price: parseFloat(entryPrice), color: '#94a3b8', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'ENTRY' });
       }
       if (sig.sl) {
-        _acmCandleSeries.createPriceLine({
-          price: parseFloat(sig.sl), color: '#ff3b5c', lineWidth: 2,
-          lineStyle: 0, axisLabelVisible: true, title: 'SL',
-        });
+        _acmCandleSeries.createPriceLine({ price: parseFloat(sig.sl), color: '#ff3b5c', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: 'SL' });
       }
       if (sig.tp1) {
-        _acmCandleSeries.createPriceLine({
-          price: parseFloat(sig.tp1), color: '#00e676', lineWidth: 2,
-          lineStyle: 0, axisLabelVisible: true, title: 'TP1',
-        });
+        _acmCandleSeries.createPriceLine({ price: parseFloat(sig.tp1), color: '#00e676', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: 'TP1' });
       }
       if (sig.tp2 && sig.tp2 !== sig.tp1) {
-        _acmCandleSeries.createPriceLine({
-          price: parseFloat(sig.tp2), color: 'rgba(0,230,118,0.5)', lineWidth: 1,
-          lineStyle: 2, axisLabelVisible: true, title: 'TP2',
-        });
+        _acmCandleSeries.createPriceLine({ price: parseFloat(sig.tp2), color: 'rgba(0,230,118,0.45)', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'TP2' });
       }
     }
 
     var sid = (symbol || '').replace(/[\/=^.]/g, '_');
     var engineB = window['_engineB_' + sid];
-    if (engineB) {
+    if (engineB && _acmShowZones) {
       var supZone = engineB.nearest_support_zone;
       if (supZone && supZone.upper && supZone.lower) {
-        _acmCandleSeries.createPriceLine({
-          price: parseFloat(supZone.upper), color: 'rgba(0,230,118,0.4)',
-          lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'SUP ▲',
-        });
-        _acmCandleSeries.createPriceLine({
-          price: parseFloat(supZone.lower), color: 'rgba(0,230,118,0.4)',
-          lineWidth: 1, lineStyle: 1, axisLabelVisible: false, title: '',
-        });
+        _acmCandleSeries.createPriceLine({ price: parseFloat(supZone.upper), color: 'rgba(0,230,118,0.35)', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'SUP +' });
+        _acmCandleSeries.createPriceLine({ price: parseFloat(supZone.lower), color: 'rgba(0,230,118,0.35)', lineWidth: 1, lineStyle: 1, axisLabelVisible: false, title: '' });
       }
       var resZone = engineB.nearest_resistance_zone;
       if (resZone && resZone.upper && resZone.lower) {
-        _acmCandleSeries.createPriceLine({
-          price: parseFloat(resZone.lower), color: 'rgba(255,59,92,0.4)',
-          lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'RES ▼',
-        });
-        _acmCandleSeries.createPriceLine({
-          price: parseFloat(resZone.upper), color: 'rgba(255,59,92,0.4)',
-          lineWidth: 1, lineStyle: 1, axisLabelVisible: false, title: '',
-        });
+        _acmCandleSeries.createPriceLine({ price: parseFloat(resZone.lower), color: 'rgba(255,59,92,0.35)', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'RES -' });
+        _acmCandleSeries.createPriceLine({ price: parseFloat(resZone.upper), color: 'rgba(255,59,92,0.35)', lineWidth: 1, lineStyle: 1, axisLabelVisible: false, title: '' });
       }
       var bosData = engineB.bos_data || {};
       if (bosData.last_broken_high) {
-        _acmCandleSeries.createPriceLine({
-          price: parseFloat(bosData.last_broken_high), color: '#f59e0b',
-          lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: 'BOS ↑',
-        });
+        _acmCandleSeries.createPriceLine({ price: parseFloat(bosData.last_broken_high), color: '#f59e0b', lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: 'BOS UP' });
       }
       if (bosData.last_broken_low) {
-        _acmCandleSeries.createPriceLine({
-          price: parseFloat(bosData.last_broken_low), color: '#f59e0b',
-          lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: 'BOS ↓',
-        });
+        _acmCandleSeries.createPriceLine({ price: parseFloat(bosData.last_broken_low), color: '#f59e0b', lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: 'BOS DN' });
       }
       var chochData = engineB.choch_data || {};
       if (chochData.choch_level) {
-        _acmCandleSeries.createPriceLine({
-          price: parseFloat(chochData.choch_level), color: '#a855f7',
-          lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: 'CHoCH',
-        });
+        _acmCandleSeries.createPriceLine({ price: parseFloat(chochData.choch_level), color: '#a855f7', lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: 'CHoCH' });
       }
-      var obs = engineB.order_blocks || [];
-      obs.forEach(function(ob) {
+      (engineB.order_blocks || []).forEach(function(ob) {
         if (ob.top && ob.bottom) {
-          var obColor = ob.type === 'bullish' ? 'rgba(0,230,118,0.5)' : 'rgba(255,59,92,0.5)';
-          _acmCandleSeries.createPriceLine({
-            price: parseFloat(ob.top), color: obColor, lineWidth: 1, lineStyle: 1,
-            axisLabelVisible: true, title: 'OB ' + (ob.strength || 0) + '%',
-          });
-          _acmCandleSeries.createPriceLine({
-            price: parseFloat(ob.bottom), color: obColor, lineWidth: 1, lineStyle: 1,
-            axisLabelVisible: false, title: '',
-          });
+          var obColor = ob.type === 'bullish' ? 'rgba(0,230,118,0.42)' : 'rgba(255,59,92,0.42)';
+          _acmCandleSeries.createPriceLine({ price: parseFloat(ob.top), color: obColor, lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'OB ' + (ob.strength || 0) + '%' });
+          _acmCandleSeries.createPriceLine({ price: parseFloat(ob.bottom), color: obColor, lineWidth: 1, lineStyle: 1, axisLabelVisible: false, title: '' });
         }
       });
-      var breaker = engineB.breaker_block;
-      if (breaker && breaker.level) {
-        _acmCandleSeries.createPriceLine({
-          price: parseFloat(breaker.level), color: '#06b6d4',
-          lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: 'BREAKER',
-        });
+      if (engineB.breaker_block && engineB.breaker_block.level) {
+        _acmCandleSeries.createPriceLine({ price: parseFloat(engineB.breaker_block.level), color: '#06b6d4', lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: 'BREAKER' });
       }
     }
 
-    var legend = document.getElementById('acm-legend');
-    legend.innerHTML = '<span style="color:#00d4ff">— EMA 21</span>' +
-      '<span style="color:#a78bfa">— EMA 50</span>' +
-      '<span style="color:rgba(245,158,11,0.5)">-- EMA 200</span>' +
-      '<span style="color:#ff3b5c">■ SL</span>' +
-      '<span style="color:#00e676">■ TP</span>' +
-      (engineB ? '<span style="color:#f59e0b">⌇ BOS</span><span style="color:#a855f7">⌇ CHoCH</span>' : '');
+    document.getElementById('acm-legend').innerHTML = _acmLegendHtml(!!engineB);
+    document.getElementById('acm-info-panel').innerHTML = _acmInfoHtml(sig, tf, data.length, data[data.length - 1].labelTime || '');
+
+    var lastClose = data[data.length - 1].close;
+    var prevClose = data.length > 1 ? data[data.length - 2].close : lastClose;
+    var priceEl = document.getElementById('acm-price');
+    priceEl.textContent = _acmFmtPrice(lastClose, sig);
+    priceEl.style.color = lastClose >= prevClose ? '#00e676' : '#ff3b5c';
 
     _acmChart.timeScale().fitContent();
 
-    var _acmRO = new ResizeObserver(function() {
+    _acmResizeObserver = new ResizeObserver(function() {
       if (_acmChart) _acmChart.resize(body.clientWidth, body.clientHeight);
     });
-    _acmRO.observe(body);
-
+    _acmResizeObserver.observe(body);
   } catch (err) {
     body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#ff3b5c;font-family:Space Mono,monospace;font-size:13px;">Chart error: ' + err.message + '</div>';
   }
@@ -3075,26 +3319,35 @@ function confirmClosePosition(exchange, pair, direction, volume, ticket, btn) {
   });
 }
 </script>
-<div id="athena-chart-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.9);z-index:9999;flex-direction:column;">
-  <div id="athena-chart-toolbar" style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px;background:#080c14;border-bottom:1px solid #1a2332;">
-    <div style="display:flex;align-items:center;gap:12px;">
-      <span id="acm-title" style="color:#00d4ff;font-family:'Syne',sans-serif;font-size:15px;font-weight:800;letter-spacing:0.03em;"></span>
-      <span id="acm-price" style="color:#e2e8f0;font-family:'Space Mono',monospace;font-size:13px;font-weight:700;"></span>
-      <span id="acm-direction" style="font-size:11px;font-weight:800;font-family:'Space Mono',monospace;padding:2px 8px;border-radius:4px;"></span>
+<div id="athena-chart-modal">
+  <div id="acm-toolbar">
+    <div id="acm-toolbar-left">
+      <span class="acm-pair-name" id="acm-pair"></span>
+      <span id="acm-price" class="acm-live-price"></span>
+      <span class="acm-dir-badge" id="acm-dir"></span>
+      <span id="acm-score" class="acm-score-badge"></span>
+      <span id="acm-regime" class="acm-regime-badge"></span>
     </div>
-    <div style="display:flex;gap:6px;align-items:center;">
-      <button onclick="acmSetTF('H1')" class="acm-tf-btn">H1</button>
-      <button onclick="acmSetTF('H4')" class="acm-tf-btn active">H4</button>
-      <button onclick="acmSetTF('D1')" class="acm-tf-btn">D1</button>
-      <div style="width:1px;height:20px;background:#1a2332;margin:0 4px;"></div>
-      <button onclick="acmToggleVolume()" class="acm-tf-btn" id="acm-vol-btn" style="border-color:rgba(0,212,255,0.3);color:#00d4ff;">VOL</button>
-      <button onclick="acmToggleEMA()" class="acm-tf-btn" id="acm-ema-btn" style="border-color:rgba(124,58,237,0.3);color:#a78bfa;">EMA</button>
-      <div style="width:1px;height:20px;background:#1a2332;margin:0 4px;"></div>
-      <button onclick="closeAthenaChart()" style="background:rgba(255,59,92,0.15);border:1px solid rgba(255,59,92,0.3);color:#ff3b5c;padding:5px 14px;border-radius:6px;cursor:pointer;font-family:'Space Mono',monospace;font-size:11px;font-weight:700;">✕ CLOSE</button>
+    <div id="acm-toolbar-right">
+      <button class="acm-tf-btn" data-tf="H1" onclick="acmSetTF('H1',this)">H1</button>
+      <button class="acm-tf-btn active" data-tf="H4" onclick="acmSetTF('H4',this)">H4</button>
+      <button class="acm-tf-btn" data-tf="D1" onclick="acmSetTF('D1',this)">D1</button>
+      <span class="acm-divider"></span>
+      <button class="acm-toggle-btn on" id="acm-vol-btn" onclick="acmToggle('vol',this)">VOL</button>
+      <button class="acm-toggle-btn on" id="acm-ema-btn" onclick="acmToggle('ema',this)">EMA</button>
+      <button class="acm-toggle-btn on" id="acm-levels-btn" onclick="acmToggle('levels',this)">LEVELS</button>
+      <button class="acm-toggle-btn on" id="acm-zones-btn" onclick="acmToggle('zones',this)">ZONES</button>
+      <span class="acm-divider"></span>
+      <button class="acm-tf-btn" onclick="acmAIRead()" id="acm-ai-btn" style="border-color:rgba(168,85,247,0.4);color:#a855f7;">🧠 AI READ</button>
+      <span class="acm-divider"></span>
+      <button class="acm-close-btn" onclick="closeAcm()">✕ CLOSE</button>
     </div>
   </div>
-  <div id="athena-chart-body" style="flex:1;position:relative;"></div>
-  <div id="acm-legend" style="position:absolute;bottom:12px;left:16px;display:flex;gap:12px;font-size:10px;font-family:'Space Mono',monospace;z-index:10;opacity:0.7;"></div>
+  <div id="acm-chart-body">
+    <div id="acm-legend"></div>
+    <div id="acm-info-panel"></div>
+  </div>
+  <div id="acm-ai-panel"></div>
 </div>
 <div id="tv-chart-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:9999;flex-direction:column;">
   <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:#0a0e17;border-bottom:1px solid #1e2a3a;">
