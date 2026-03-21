@@ -10158,6 +10158,46 @@ def api_pairs():
     return jsonify({"groups": groups, "total": bt_total, "active": len(ACTIVE_PAIRS)})
 
 
+@app.route("/api/candles", methods=["GET"])
+def api_candles():
+    """Return OHLCV candles for the chart widget."""
+    symbol = request.args.get("symbol")
+    tf = request.args.get("tf", "H4").upper()
+    try:
+        limit = min(int(request.args.get("limit", 300)), 500)
+    except (TypeError, ValueError):
+        limit = 300
+
+    if not symbol:
+        return jsonify({"error": "Missing symbol parameter"}), 400
+
+    pair = next(
+        (p for p in ALL_PAIRS if p.get("symbol") == symbol or p.get("display") == symbol),
+        None,
+    )
+    if not pair:
+        return jsonify({"error": f"Unknown symbol: {symbol}"}), 404
+
+    candles = fetch_candles(pair, tf, limit)
+    if not candles:
+        return jsonify({"error": f"No candle data for {symbol} {tf}"}), 404
+
+    result = []
+    for c in candles:
+        result.append(
+            {
+                "t": c.get("time", c.get("datetime", "")),
+                "o": float(c.get("open", 0)),
+                "h": float(c.get("high", 0)),
+                "l": float(c.get("low", 0)),
+                "c": float(c.get("close", 0)),
+                "v": float(c.get("vol", c.get("volume", 0))),
+            }
+        )
+
+    return jsonify({"candles": result, "symbol": symbol, "tf": tf})
+
+
 @app.route("/api/health")
 def health():
 

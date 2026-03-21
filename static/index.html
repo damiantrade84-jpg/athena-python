@@ -292,6 +292,21 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
   border-color: #00d4ff;
   color: #00d4ff;
 }
+.acm-tf-btn {
+  background: transparent;
+  border: 1px solid #1a2332;
+  color: #5a6d80;
+  padding: 4px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  transition: all 0.15s;
+}
+.acm-tf-btn:hover { border-color: #3a4d60; color: #8899aa; }
+.acm-tf-btn.active { border-color: #00d4ff; color: #00d4ff; background: rgba(0,212,255,0.08); }
 .bt-leaderboard{background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:24px;}
 .bt-lb-header{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr;gap:8px;padding:10px 16px;border-bottom:1px solid var(--border);font-size:10px;color:var(--muted);font-family:'Space Mono',monospace;text-transform:uppercase;}
 .bt-lb-row{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr;gap:8px;padding:10px 16px;border-bottom:1px solid rgba(30,42,54,0.5);font-size:12px;font-family:'Space Mono',monospace;transition:background 0.15s;cursor:pointer;}
@@ -1582,6 +1597,17 @@ const TV_INTERVAL_MAP = {
 
 let _tvCurrentSymbol = '';
 let _tvCurrentInterval = '240';
+let _acmChart = null;
+let _acmCandleSeries = null;
+let _acmVolumeSeries = null;
+let _acmEma21Series = null;
+let _acmEma50Series = null;
+let _acmEma200Series = null;
+let _acmCurrentSymbol = '';
+let _acmCurrentTF = 'H4';
+let _acmShowVolume = true;
+let _acmShowEMA = true;
+let _acmSignalData = null;
 
 function getTVSymbol(display) {
   return TV_SYMBOL_MAP[display] || TV_SYMBOL_MAP[display.replace('/', '')] || display;
@@ -1659,28 +1685,352 @@ function _renderTVWidget(symbol, interval) {
   container.appendChild(wrapper);
 }
 
+function openAthenaChart(symbol, tf) {
+  _acmCurrentSymbol = symbol;
+  _acmCurrentTF = tf || 'H4';
+
+  var sig = allSignals.find(function(s) { return s.symbol === symbol; });
+  _acmSignalData = sig;
+
+  var modal = document.getElementById('athena-chart-modal');
+  modal.style.display = 'flex';
+
+  var display = sig ? sig.display || sig.pair || symbol : symbol;
+  document.getElementById('acm-title').textContent = display;
+
+  var price = sig ? (sig.price || sig.entryPrice || 0) : 0;
+  document.getElementById('acm-price').textContent = price ? parseFloat(price).toFixed(
+    sig && sig.type === 'forex' ? 5 : sig && sig.type === 'crypto' ? 2 : 2
+  ) : '';
+
+  var dirEl = document.getElementById('acm-direction');
+  if (sig && sig.direction) {
+    dirEl.textContent = sig.direction;
+    dirEl.style.background = sig.direction === 'LONG' ? 'rgba(0,230,118,0.15)' : 'rgba(255,59,92,0.15)';
+    dirEl.style.color = sig.direction === 'LONG' ? '#00e676' : '#ff3b5c';
+  } else {
+    dirEl.textContent = '';
+    dirEl.style.background = 'transparent';
+  }
+
+  document.querySelectorAll('.acm-tf-btn').forEach(function(b) { b.classList.remove('active'); });
+  var tfBtns = document.querySelectorAll('.acm-tf-btn');
+  tfBtns.forEach(function(b) {
+    if (b.textContent.trim() === _acmCurrentTF) b.classList.add('active');
+  });
+
+  _acmFetchAndRender(symbol, _acmCurrentTF);
+}
+
+function closeAthenaChart() {
+  document.getElementById('athena-chart-modal').style.display = 'none';
+  if (_acmChart) { _acmChart.remove(); _acmChart = null; }
+}
+
+function acmSetTF(tf) {
+  _acmCurrentTF = tf;
+  document.querySelectorAll('.acm-tf-btn').forEach(function(b) { b.classList.remove('active'); });
+  event.target.classList.add('active');
+  _acmFetchAndRender(_acmCurrentSymbol, tf);
+}
+
+function acmToggleVolume() {
+  _acmShowVolume = !_acmShowVolume;
+  var btn = document.getElementById('acm-vol-btn');
+  btn.style.opacity = _acmShowVolume ? '1' : '0.3';
+  if (_acmVolumeSeries) {
+    _acmVolumeSeries.applyOptions({ visible: _acmShowVolume });
+  }
+}
+
+function acmToggleEMA() {
+  _acmShowEMA = !_acmShowEMA;
+  var btn = document.getElementById('acm-ema-btn');
+  btn.style.opacity = _acmShowEMA ? '1' : '0.3';
+  [_acmEma21Series, _acmEma50Series, _acmEma200Series].forEach(function(s) {
+    if (s) s.applyOptions({ visible: _acmShowEMA });
+  });
+}
+
+function _acmCalcEMA(data, period) {
+  var k = 2 / (period + 1);
+  var ema = [data[0]];
+  for (var i = 1; i < data.length; i++) {
+    ema.push(data[i] * k + ema[i - 1] * (1 - k));
+  }
+  return ema;
+}
+
+async function _acmFetchAndRender(symbol, tf) {
+  var body = document.getElementById('athena-chart-body');
+  body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#5a6d80;font-family:Space Mono,monospace;font-size:13px;">Loading chart...</div>';
+
+  if (_acmChart) { _acmChart.remove(); _acmChart = null; }
+
+  try {
+    var resp = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&tf=' + tf + '&limit=300');
+    var json = await resp.json();
+    var candles = json.candles || json;
+    if (!candles || !candles.length) throw new Error('No data');
+
+    body.innerHTML = '';
+
+    _acmChart = LightweightCharts.createChart(body, {
+      width: body.clientWidth,
+      height: body.clientHeight,
+      layout: {
+        background: { type: 'solid', color: '#080c14' },
+        textColor: '#5a6d80',
+        fontSize: 11,
+        fontFamily: 'Space Mono, monospace',
+      },
+      grid: {
+        vertLines: { color: 'rgba(26,35,50,0.6)', style: 1 },
+        horzLines: { color: 'rgba(26,35,50,0.6)', style: 1 },
+      },
+      crosshair: {
+        mode: LightweightCharts.CrosshairMode.Normal,
+        vertLine: { color: 'rgba(0,212,255,0.2)', width: 1, style: 3, labelBackgroundColor: '#0d1420' },
+        horzLine: { color: 'rgba(0,212,255,0.2)', width: 1, style: 3, labelBackgroundColor: '#0d1420' },
+      },
+      rightPriceScale: {
+        borderColor: '#1a2332',
+        scaleMargins: { top: 0.08, bottom: 0.18 },
+      },
+      timeScale: {
+        borderColor: '#1a2332',
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 5,
+        barSpacing: 8,
+      },
+    });
+
+    _acmCandleSeries = _acmChart.addCandlestickSeries({
+      upColor: '#00e676',
+      downColor: '#ff3b5c',
+      borderDownColor: '#ff3b5c',
+      borderUpColor: '#00e676',
+      wickDownColor: 'rgba(255,59,92,0.6)',
+      wickUpColor: 'rgba(0,230,118,0.6)',
+    });
+
+    var data = candles.map(function(c) {
+      var tStr = String(c.t || c.time || '').replace(' ', 'T');
+      var ts = typeof c.t === 'number' ? Math.floor(c.t / 1000) :
+               Math.floor(new Date(tStr).getTime() / 1000);
+      return {
+        time: ts,
+        open: parseFloat(c.o || c.open),
+        high: parseFloat(c.h || c.high),
+        low: parseFloat(c.l || c.low),
+        close: parseFloat(c.c || c.close),
+        volume: parseFloat(c.v || c.vol || 0)
+      };
+    }).filter(function(c) {
+      return c.time && !isNaN(c.time) && c.open && c.high && c.low && c.close;
+    });
+    data.sort(function(a, b) { return a.time - b.time; });
+    _acmCandleSeries.setData(data);
+
+    _acmVolumeSeries = _acmChart.addHistogramSeries({
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'volume',
+      color: 'rgba(0,212,255,0.15)',
+    });
+    _acmChart.priceScale('volume').applyOptions({
+      scaleMargins: { top: 0.85, bottom: 0 },
+    });
+    _acmVolumeSeries.setData(data.map(function(c) {
+      return {
+        time: c.time,
+        value: c.volume,
+        color: c.close >= c.open ? 'rgba(0,230,118,0.2)' : 'rgba(255,59,92,0.2)',
+      };
+    }));
+    _acmVolumeSeries.applyOptions({ visible: _acmShowVolume });
+
+    var closes = data.map(function(c) { return c.close; });
+
+    var ema21 = _acmCalcEMA(closes, 21);
+    _acmEma21Series = _acmChart.addLineSeries({
+      color: '#00d4ff', lineWidth: 1, priceLineVisible: false,
+      lastValueVisible: false, crosshairMarkerVisible: false,
+    });
+    _acmEma21Series.setData(data.map(function(c, i) {
+      return { time: c.time, value: ema21[i] };
+    }));
+
+    var ema50 = _acmCalcEMA(closes, 50);
+    _acmEma50Series = _acmChart.addLineSeries({
+      color: '#a78bfa', lineWidth: 1, priceLineVisible: false,
+      lastValueVisible: false, crosshairMarkerVisible: false,
+    });
+    _acmEma50Series.setData(data.map(function(c, i) {
+      return { time: c.time, value: i >= 49 ? ema50[i] : ema50[Math.min(49, ema50.length - 1)] };
+    }));
+
+    var ema200 = _acmCalcEMA(closes, 200);
+    _acmEma200Series = _acmChart.addLineSeries({
+      color: 'rgba(245,158,11,0.5)', lineWidth: 1, lineStyle: 2,
+      priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    });
+    _acmEma200Series.setData(data.map(function(c, i) {
+      return { time: c.time, value: i >= 199 ? ema200[i] : ema200[Math.min(199, ema200.length - 1)] };
+    }));
+
+    [_acmEma21Series, _acmEma50Series, _acmEma200Series].forEach(function(s) {
+      if (s) s.applyOptions({ visible: _acmShowEMA });
+    });
+
+    var sig = _acmSignalData;
+    if (sig) {
+      var entryPrice = sig.price || sig.entryPrice;
+      if (entryPrice) {
+        _acmCandleSeries.createPriceLine({
+          price: parseFloat(entryPrice), color: '#94a3b8', lineWidth: 1,
+          lineStyle: 2, axisLabelVisible: true, title: 'ENTRY',
+        });
+      }
+      if (sig.sl) {
+        _acmCandleSeries.createPriceLine({
+          price: parseFloat(sig.sl), color: '#ff3b5c', lineWidth: 2,
+          lineStyle: 0, axisLabelVisible: true, title: 'SL',
+        });
+      }
+      if (sig.tp1) {
+        _acmCandleSeries.createPriceLine({
+          price: parseFloat(sig.tp1), color: '#00e676', lineWidth: 2,
+          lineStyle: 0, axisLabelVisible: true, title: 'TP1',
+        });
+      }
+      if (sig.tp2 && sig.tp2 !== sig.tp1) {
+        _acmCandleSeries.createPriceLine({
+          price: parseFloat(sig.tp2), color: 'rgba(0,230,118,0.5)', lineWidth: 1,
+          lineStyle: 2, axisLabelVisible: true, title: 'TP2',
+        });
+      }
+    }
+
+    var sid = (symbol || '').replace(/[\/=^.]/g, '_');
+    var engineB = window['_engineB_' + sid];
+    if (engineB) {
+      var supZone = engineB.nearest_support_zone;
+      if (supZone && supZone.upper && supZone.lower) {
+        _acmCandleSeries.createPriceLine({
+          price: parseFloat(supZone.upper), color: 'rgba(0,230,118,0.4)',
+          lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'SUP ▲',
+        });
+        _acmCandleSeries.createPriceLine({
+          price: parseFloat(supZone.lower), color: 'rgba(0,230,118,0.4)',
+          lineWidth: 1, lineStyle: 1, axisLabelVisible: false, title: '',
+        });
+      }
+      var resZone = engineB.nearest_resistance_zone;
+      if (resZone && resZone.upper && resZone.lower) {
+        _acmCandleSeries.createPriceLine({
+          price: parseFloat(resZone.lower), color: 'rgba(255,59,92,0.4)',
+          lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'RES ▼',
+        });
+        _acmCandleSeries.createPriceLine({
+          price: parseFloat(resZone.upper), color: 'rgba(255,59,92,0.4)',
+          lineWidth: 1, lineStyle: 1, axisLabelVisible: false, title: '',
+        });
+      }
+      var bosData = engineB.bos_data || {};
+      if (bosData.last_broken_high) {
+        _acmCandleSeries.createPriceLine({
+          price: parseFloat(bosData.last_broken_high), color: '#f59e0b',
+          lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: 'BOS ↑',
+        });
+      }
+      if (bosData.last_broken_low) {
+        _acmCandleSeries.createPriceLine({
+          price: parseFloat(bosData.last_broken_low), color: '#f59e0b',
+          lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: 'BOS ↓',
+        });
+      }
+      var chochData = engineB.choch_data || {};
+      if (chochData.choch_level) {
+        _acmCandleSeries.createPriceLine({
+          price: parseFloat(chochData.choch_level), color: '#a855f7',
+          lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: 'CHoCH',
+        });
+      }
+      var obs = engineB.order_blocks || [];
+      obs.forEach(function(ob) {
+        if (ob.top && ob.bottom) {
+          var obColor = ob.type === 'bullish' ? 'rgba(0,230,118,0.5)' : 'rgba(255,59,92,0.5)';
+          _acmCandleSeries.createPriceLine({
+            price: parseFloat(ob.top), color: obColor, lineWidth: 1, lineStyle: 1,
+            axisLabelVisible: true, title: 'OB ' + (ob.strength || 0) + '%',
+          });
+          _acmCandleSeries.createPriceLine({
+            price: parseFloat(ob.bottom), color: obColor, lineWidth: 1, lineStyle: 1,
+            axisLabelVisible: false, title: '',
+          });
+        }
+      });
+      var breaker = engineB.breaker_block;
+      if (breaker && breaker.level) {
+        _acmCandleSeries.createPriceLine({
+          price: parseFloat(breaker.level), color: '#06b6d4',
+          lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: 'BREAKER',
+        });
+      }
+    }
+
+    var legend = document.getElementById('acm-legend');
+    legend.innerHTML = '<span style="color:#00d4ff">— EMA 21</span>' +
+      '<span style="color:#a78bfa">— EMA 50</span>' +
+      '<span style="color:rgba(245,158,11,0.5)">-- EMA 200</span>' +
+      '<span style="color:#ff3b5c">■ SL</span>' +
+      '<span style="color:#00e676">■ TP</span>' +
+      (engineB ? '<span style="color:#f59e0b">⌇ BOS</span><span style="color:#a855f7">⌇ CHoCH</span>' : '');
+
+    _acmChart.timeScale().fitContent();
+
+    var _acmRO = new ResizeObserver(function() {
+      if (_acmChart) _acmChart.resize(body.clientWidth, body.clientHeight);
+    });
+    _acmRO.observe(body);
+
+  } catch (err) {
+    body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#ff3b5c;font-family:Space Mono,monospace;font-size:13px;">Chart error: ' + err.message + '</div>';
+  }
+}
+
 function buildChartSection(s) {
   var sid = (s.symbol||'').replace(/[\/=^.]/g,'_');
   var candles = s.h4Candles;
-  if (!candles || !candles.length) return '';
-  _chartData[sid] = {
-    candles: candles,
-    levels: {
-      entry: getSignalLivePrice(s), sl: s.sl, tp1: s.tp1, dir: s.direction,
-      ema21: (s.h4&&s.h4.snap) ? s.h4.snap.ema21 : null,
-      ema50: (s.h4&&s.h4.snap) ? s.h4.snap.ema50 : null
+  if (candles && candles.length) {
+    _chartData[sid] = {
+      candles: candles,
+      levels: {
+        entry: getSignalLivePrice(s), sl: s.sl, tp1: s.tp1, dir: s.direction,
+        ema21: (s.h4&&s.h4.snap) ? s.h4.snap.ema21 : null,
+        ema50: (s.h4&&s.h4.snap) ? s.h4.snap.ema50 : null
+      }
+    };
+  } else {
+    _chartData[sid] = _chartData[sid] || {
+      candles: [],
+      levels: {
+        entry: getSignalLivePrice(s), sl: s.sl, tp1: s.tp1, dir: s.direction,
+        ema21: (s.h4&&s.h4.snap) ? s.h4.snap.ema21 : null,
+        ema50: (s.h4&&s.h4.snap) ? s.h4.snap.ema50 : null
+      }
     }
-  };
+  }
   return '<div style="display:flex;gap:8px;margin-bottom:8px;">' +
-    '<button class="chart-toggle-btn" id="chartbtn-'+sid+'" onclick="toggleChart(\''+sid+'\')" style="flex:1">' +
+    '<button class="chart-toggle-btn" id="chartbtn-'+sid+'" onclick="openAthenaChart(\''+s.symbol+'\', \'H4\')" style="flex:1">' +
     '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' +
-    ' H4 CHART</button>' +
+    ' CHART</button>' +
     '<button class="chart-toggle-btn" onclick="openTVChart(\''+s.display+'\', \'240\')" style="flex:1;border-color:#7b61ff;color:#7b61ff">📈 TV CHART</button>' +
     '<button class="chart-toggle-btn naked" id="nbtn-'+sid+'" onclick="runNakedScan(\''+s.symbol+'\')" style="flex:1;border-color:var(--accent);color:var(--accent)">👁 NAKED SCALP</button>' +
     '<button class="chart-toggle-btn compare" id="cbtn-'+sid+'" onclick="runCompare(\''+s.symbol+'\')" style="flex:1;border-color:#f59e0b;color:#f59e0b">⚖️ COMPARE A&B</button>' +
     '</div>' +
-    '<div id="nres-'+sid+'" style="display:none;margin-bottom:8px;padding:10px;border:1px solid var(--accent);border-radius:6px;background:rgba(0,212,255,0.05);font-size:11px;font-family:monospace;white-space:pre-wrap;"></div>' +
-    '<div class="sig-chart-wrap" id="chart-'+sid+'" style="height:220px"></div>';
+    '<div id="nres-'+sid+'" style="display:none;margin-bottom:8px;padding:10px;border:1px solid var(--accent);border-radius:6px;background:rgba(0,212,255,0.05);font-size:11px;font-family:monospace;white-space:pre-wrap;"></div>';
 }
 
 function toggleChart(sid) {
@@ -2686,6 +3036,11 @@ function showToast(msg,isErr) {
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') closeTVChart();
 });
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && document.getElementById('athena-chart-modal').style.display === 'flex') {
+    closeAthenaChart();
+  }
+});
 
 function confirmClosePosition(exchange, pair, direction, volume, ticket, btn) {
   if (!confirm('Close ' + direction + ' ' + pair + ' (' + volume + ') on ' + exchange.toUpperCase() + '?')) return;
@@ -2720,6 +3075,27 @@ function confirmClosePosition(exchange, pair, direction, volume, ticket, btn) {
   });
 }
 </script>
+<div id="athena-chart-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.9);z-index:9999;flex-direction:column;">
+  <div id="athena-chart-toolbar" style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px;background:#080c14;border-bottom:1px solid #1a2332;">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <span id="acm-title" style="color:#00d4ff;font-family:'Syne',sans-serif;font-size:15px;font-weight:800;letter-spacing:0.03em;"></span>
+      <span id="acm-price" style="color:#e2e8f0;font-family:'Space Mono',monospace;font-size:13px;font-weight:700;"></span>
+      <span id="acm-direction" style="font-size:11px;font-weight:800;font-family:'Space Mono',monospace;padding:2px 8px;border-radius:4px;"></span>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <button onclick="acmSetTF('H1')" class="acm-tf-btn">H1</button>
+      <button onclick="acmSetTF('H4')" class="acm-tf-btn active">H4</button>
+      <button onclick="acmSetTF('D1')" class="acm-tf-btn">D1</button>
+      <div style="width:1px;height:20px;background:#1a2332;margin:0 4px;"></div>
+      <button onclick="acmToggleVolume()" class="acm-tf-btn" id="acm-vol-btn" style="border-color:rgba(0,212,255,0.3);color:#00d4ff;">VOL</button>
+      <button onclick="acmToggleEMA()" class="acm-tf-btn" id="acm-ema-btn" style="border-color:rgba(124,58,237,0.3);color:#a78bfa;">EMA</button>
+      <div style="width:1px;height:20px;background:#1a2332;margin:0 4px;"></div>
+      <button onclick="closeAthenaChart()" style="background:rgba(255,59,92,0.15);border:1px solid rgba(255,59,92,0.3);color:#ff3b5c;padding:5px 14px;border-radius:6px;cursor:pointer;font-family:'Space Mono',monospace;font-size:11px;font-weight:700;">✕ CLOSE</button>
+    </div>
+  </div>
+  <div id="athena-chart-body" style="flex:1;position:relative;"></div>
+  <div id="acm-legend" style="position:absolute;bottom:12px;left:16px;display:flex;gap:12px;font-size:10px;font-family:'Space Mono',monospace;z-index:10;opacity:0.7;"></div>
+</div>
 <div id="tv-chart-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:9999;flex-direction:column;">
   <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:#0a0e17;border-bottom:1px solid #1e2a3a;">
     <span id="tv-chart-title" style="color:#00d4ff;font-family:'Syne',sans-serif;font-size:14px;font-weight:700;">Chart</span>
@@ -2734,6 +3110,9 @@ function confirmClosePosition(exchange, pair, direction, volume, ticket, btn) {
   <div id="tv-chart-container" style="flex:1;width:100%;"></div>
 </div>
 <script>
+document.getElementById('athena-chart-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeAthenaChart();
+});
 document.getElementById('tv-chart-modal').addEventListener('click', function(e) {
   if (e.target === this) closeTVChart();
 });
