@@ -8670,6 +8670,9 @@ def api_execute():
                     # Merge refreshed levels/price/timestamp once the direction still matches.
 
                     sig["price"] = _fresh["price"]
+                    
+                    # Update signal timestamp to reflect refresh time so risk_engine sees it as fresh
+                    sig["ts"] = datetime.now(timezone.utc).isoformat()
 
                     sig["sl"] = _fresh["sl"]
 
