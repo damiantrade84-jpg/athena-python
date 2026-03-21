@@ -277,6 +277,21 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 .chart-toggle-btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(0,212,255,0.05);}
 .chart-toggle-btn svg{transition:transform 0.2s;}
 .chart-toggle-btn.open svg{transform:rotate(180deg);}
+.tv-tf-btn {
+  background: transparent;
+  border: 1px solid #1e2a3a;
+  color: #8899aa;
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  transition: all 0.15s;
+}
+.tv-tf-btn:hover, .tv-tf-btn.active {
+  border-color: #00d4ff;
+  color: #00d4ff;
+}
 .bt-leaderboard{background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:24px;}
 .bt-lb-header{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr;gap:8px;padding:10px 16px;border-bottom:1px solid var(--border);font-size:10px;color:var(--muted);font-family:'Space Mono',monospace;text-transform:uppercase;}
 .bt-lb-row{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr;gap:8px;padding:10px 16px;border-bottom:1px solid rgba(30,42,54,0.5);font-size:12px;font-family:'Space Mono',monospace;transition:background 0.15s;cursor:pointer;}
@@ -1522,6 +1537,126 @@ function buildCard(s,idx) {
 // -- Candlestick Chart --
 var _chartInstances = {};
 var _chartData = {};
+const TV_SYMBOL_MAP = {
+  "EUR/USD":"FX:EURUSD","GBP/USD":"FX:GBPUSD","AUD/USD":"FX:AUDUSD",
+  "USD/JPY":"FX:USDJPY","USD/CAD":"FX:USDCAD","USD/CHF":"FX:USDCHF",
+  "NZD/USD":"FX:NZDUSD","EUR/GBP":"FX:EURGBP","EUR/JPY":"FX:EURJPY",
+  "GBP/JPY":"FX:GBPJPY","AUD/JPY":"FX:AUDJPY","EUR/AUD":"FX:EURAUD",
+  "GBP/AUD":"FX:GBPAUD","EUR/CHF":"FX:EURCHF","USD/ZAR":"FX:USDZAR",
+  "USD/MXN":"FX:USDMXN","USD/SGD":"FX:USDSGD",
+  "BTC/USDT":"BINANCE:BTCUSDT","ETH/USDT":"BINANCE:ETHUSDT",
+  "XRP/USDT":"BINANCE:XRPUSDT","SOL/USDT":"BINANCE:SOLUSDT",
+  "ADA/USDT":"BINANCE:ADAUSDT","DOGE/USDT":"BINANCE:DOGEUSDT",
+  "AVAX/USDT":"BINANCE:AVAXUSDT","LINK/USDT":"BINANCE:LINKUSDT",
+  "MATIC/USDT":"BINANCE:MATICUSDT","DOT/USDT":"BINANCE:DOTUSDT",
+  "BNB/USDT":"BINANCE:BNBUSDT","LTC/USDT":"BINANCE:LTCUSDT",
+  "SUI/USDT":"BINANCE:SUIUSDT","NEAR/USDT":"BINANCE:NEARUSDT",
+  "APT/USDT":"BINANCE:APTUSDT","INJ/USDT":"BINANCE:INJUSDT",
+  "FET/USDT":"BINANCE:FETUSDT","RENDER/USDT":"BINANCE:RENDERUSDT",
+  "XAU/USD":"TVC:GOLD","XAG/USD":"TVC:SILVER",
+  "XPT/USD":"TVC:PLATINUM","XPD/USD":"TVC:PALLADIUM",
+  "WTI Oil":"NYMEX:CL1!","Brent Oil":"NYMEX:BB1!",
+  "Nat Gas":"NYMEX:NG1!","Copper":"COMEX:HG1!",
+  "S&P 500":"SP:SPX","Nasdaq":"NASDAQ:NDX","NASDAQ-100":"NASDAQ:NDX",
+  "Dow Jones":"DJ:DJI","DAX 40":"XETR:DAX","UK100":"TVC:UKX",
+  "Nikkei 225":"TVC:NI225","Hang Seng":"TVC:HSI","ASX 200":"ASX:XJO",
+  "AAPL":"NASDAQ:AAPL","TSLA":"NASDAQ:TSLA","NVDA":"NASDAQ:NVDA",
+  "MSFT":"NASDAQ:MSFT","AMZN":"NASDAQ:AMZN","META":"NASDAQ:META",
+  "GOOG":"NASDAQ:GOOG","JPM":"NYSE:JPM","V":"NYSE:V","XOM":"NYSE:XOM",
+  "NFLX":"NASDAQ:NFLX","AMD":"NASDAQ:AMD","CRM":"NYSE:CRM",
+  "DIS":"NYSE:DIS","BA":"NYSE:BA","COIN":"NASDAQ:COIN",
+  "PYPL":"NASDAQ:PYPL","INTC":"NASDAQ:INTC","UBER":"NYSE:UBER","PLTR":"NYSE:PLTR",
+  "SPY":"AMEX:SPY","QQQ":"NASDAQ:QQQ","GLD":"AMEX:GLD","TLT":"NASDAQ:TLT",
+  "IWM":"AMEX:IWM","EEM":"AMEX:EEM","XLF":"AMEX:XLF","XLE":"AMEX:XLE",
+  "SLV":"AMEX:SLV","USO":"AMEX:USO"
+};
+
+const TV_INTERVAL_MAP = {
+  "scalp":"15", "intraday":"60", "swing":"D",
+  "D1":"D", "H4":"240", "H1":"60", "M15":"15"
+};
+
+let _tvCurrentSymbol = '';
+let _tvCurrentInterval = '240';
+
+function getTVSymbol(display) {
+  return TV_SYMBOL_MAP[display] || TV_SYMBOL_MAP[display.replace('/', '')] || display;
+}
+
+function getTVInterval(style) {
+  return TV_INTERVAL_MAP[style] || "240";
+}
+
+function openTVChart(display, interval) {
+  const tvSym = getTVSymbol(display);
+  _tvCurrentSymbol = tvSym;
+  _tvCurrentInterval = interval || '240';
+
+  document.getElementById('tv-chart-title').textContent = display + ' — TradingView';
+  document.getElementById('tv-chart-modal').style.display = 'flex';
+  _renderTVWidget(tvSym, _tvCurrentInterval);
+  document.querySelectorAll('.tv-tf-btn').forEach(function(btn) {
+    btn.classList.toggle('active', btn.getAttribute('data-interval') === _tvCurrentInterval);
+  });
+}
+
+function closeTVChart() {
+  document.getElementById('tv-chart-modal').style.display = 'none';
+  document.getElementById('tv-chart-container').innerHTML = '';
+}
+
+function setTVInterval(interval) {
+  _tvCurrentInterval = interval;
+  document.querySelectorAll('.tv-tf-btn').forEach(function(btn) {
+    btn.classList.toggle('active', btn.getAttribute('data-interval') === interval);
+  });
+  _renderTVWidget(_tvCurrentSymbol, interval);
+}
+
+function _renderTVWidget(symbol, interval) {
+  const container = document.getElementById('tv-chart-container');
+  container.innerHTML = '';
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'tradingview-widget-container';
+  wrapper.style.cssText = 'height:100%;width:100%;';
+
+  const inner = document.createElement('div');
+  inner.className = 'tradingview-widget-container__widget';
+  inner.style.cssText = 'height:100%;width:100%;';
+  wrapper.appendChild(inner);
+
+  const script = document.createElement('script');
+  script.type = 'text/javascript';
+  script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+  script.async = true;
+  script.innerHTML = JSON.stringify({
+    autosize: true,
+    symbol: symbol,
+    interval: interval,
+    timezone: "Etc/UTC",
+    theme: "dark",
+    style: "1",
+    locale: "en",
+    backgroundColor: "rgba(10, 14, 23, 1)",
+    gridColor: "rgba(30, 42, 58, 0.8)",
+    withdateranges: true,
+    hide_side_toolbar: false,
+    allow_symbol_change: false,
+    save_image: true,
+    calendar: false,
+    hide_volume: false,
+    support_host: "https://www.tradingview.com",
+    studies: [
+      "STD;EMA",
+      "STD;EMA",
+      "STD;RSI",
+      "STD;MACD"
+    ]
+  });
+  wrapper.appendChild(script);
+  container.appendChild(wrapper);
+}
 
 function buildChartSection(s) {
   var sid = (s.symbol||'').replace(/[\/=^.]/g,'_');
@@ -1539,6 +1674,7 @@ function buildChartSection(s) {
     '<button class="chart-toggle-btn" id="chartbtn-'+sid+'" onclick="toggleChart(\''+sid+'\')" style="flex:1">' +
     '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' +
     ' H4 CHART</button>' +
+    '<button class="chart-toggle-btn" onclick="openTVChart(\''+s.display+'\', \'240\')" style="flex:1;border-color:#7b61ff;color:#7b61ff">📈 TV CHART</button>' +
     '<button class="chart-toggle-btn naked" id="nbtn-'+sid+'" onclick="runNakedScan(\''+s.symbol+'\')" style="flex:1;border-color:var(--accent);color:var(--accent)">👁 NAKED SCALP</button>' +
     '<button class="chart-toggle-btn compare" id="cbtn-'+sid+'" onclick="runCompare(\''+s.symbol+'\')" style="flex:1;border-color:#f59e0b;color:#f59e0b">⚖️ COMPARE A&B</button>' +
     '</div>' +
@@ -2546,6 +2682,10 @@ function showToast(msg,isErr) {
   setTimeout(function(){t.classList.remove('show');},3500);
 }
 
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeTVChart();
+});
+
 function confirmClosePosition(exchange, pair, direction, volume, ticket, btn) {
   if (!confirm('Close ' + direction + ' ' + pair + ' (' + volume + ') on ' + exchange.toUpperCase() + '?')) return;
   btn.disabled = true;
@@ -2578,6 +2718,24 @@ function confirmClosePosition(exchange, pair, direction, volume, ticket, btn) {
     btn.textContent = 'CLOSE';
   });
 }
+</script>
+<div id="tv-chart-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:9999;flex-direction:column;">
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:#0a0e17;border-bottom:1px solid #1e2a3a;">
+    <span id="tv-chart-title" style="color:#00d4ff;font-family:'Syne',sans-serif;font-size:14px;font-weight:700;">Chart</span>
+    <div style="display:flex;gap:8px;">
+      <button onclick="setTVInterval('15')" data-interval="15" class="tv-tf-btn">M15</button>
+      <button onclick="setTVInterval('60')" data-interval="60" class="tv-tf-btn">H1</button>
+      <button onclick="setTVInterval('240')" data-interval="240" class="tv-tf-btn active">H4</button>
+      <button onclick="setTVInterval('D')" data-interval="D" class="tv-tf-btn">D1</button>
+      <button onclick="closeTVChart()" style="background:#ff4444;border:none;color:#fff;padding:6px 14px;border-radius:6px;cursor:pointer;font-family:'Space Mono',monospace;font-size:12px;">✕ CLOSE</button>
+    </div>
+  </div>
+  <div id="tv-chart-container" style="flex:1;width:100%;"></div>
+</div>
+<script>
+document.getElementById('tv-chart-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeTVChart();
+});
 </script>
 </body>
 </html>
