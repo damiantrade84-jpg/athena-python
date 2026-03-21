@@ -7031,29 +7031,37 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
             f_low = float(future["low"])
 
             if direction == "LONG":
-                if not _be_triggered and risk > 0 and f_high >= entry + (risk * 1.5):
-                    _active_sl = entry
-                    _be_triggered = True
-                if f_low <= _active_sl:
-                    outcome = "BE" if _be_triggered and _active_sl == entry else "SL"
-                    r_multiple = 0.0 if outcome == "BE" else -1.0
-                    break
+                # Check TP first — if price reached TP on this bar, it wins
                 if f_high >= tp:
                     outcome = "TP1"
                     r_multiple = round(target_rr, 2)
                     break
-            else:
-                if not _be_triggered and risk > 0 and f_low <= entry - (risk * 1.5):
-                    _active_sl = entry
-                    _be_triggered = True
-                if f_high >= _active_sl:
-                    outcome = "BE" if _be_triggered and _active_sl == entry else "SL"
+                # Then check SL (before any BE modification)
+                if f_low <= _active_sl:
+                    outcome = "BE" if _be_triggered else "SL"
                     r_multiple = 0.0 if outcome == "BE" else -1.0
                     break
+                # BE trigger — only activate if RR > 2.0 (enough room to TP)
+                if not _be_triggered and risk > 0 and target_rr >= 2.0:
+                    if f_high >= entry + (risk * 1.5):
+                        _active_sl = entry
+                        _be_triggered = True
+            else:
+                # Check TP first
                 if f_low <= tp:
                     outcome = "TP1"
                     r_multiple = round(target_rr, 2)
                     break
+                # Then check SL
+                if f_high >= _active_sl:
+                    outcome = "BE" if _be_triggered else "SL"
+                    r_multiple = 0.0 if outcome == "BE" else -1.0
+                    break
+                # BE trigger — only if RR > 2.0
+                if not _be_triggered and risk > 0 and target_rr >= 2.0:
+                    if f_low <= entry - (risk * 1.5):
+                        _active_sl = entry
+                        _be_triggered = True
 
         if outcome == "TIMEOUT" and future_window:
             last_close = float(future_window[-1]["close"])
