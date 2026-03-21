@@ -68,6 +68,7 @@ _CONTRACT_FRAGMENTS: dict[str, str] = {
     "CAD": "CANADIAN DOLLAR",
     "CHF": "SWISS FRANC",
     "MXN": "MEXICAN PESO",
+    "ZAR": "SOUTH AFRICAN RAND",
     "BTC": "BITCOIN",
     "ETH": "ETHER",
     "SP500": "E-MINI S&P 500",
@@ -76,9 +77,12 @@ _CONTRACT_FRAGMENTS: dict[str, str] = {
     "XAU": "GOLD",
     "XAG": "SILVER",
     "OIL": "CRUDE OIL, LIGHT SWEET",
+    "NG": "NATURAL GAS",
+    "HG": "COPPER",
+    "PL": "PLATINUM",
 }
 
-_DISAGG_ASSETS = {"XAU", "XAG", "OIL"}
+_DISAGG_ASSETS = {"XAU", "XAG", "OIL", "NG", "HG", "PL"}
 
 # ── Pair → COT formula ────────────────────────────────────────────────────────
 _PAIR_FORMULA: dict[str, list[tuple[float, str]]] = {
@@ -97,7 +101,7 @@ _PAIR_FORMULA: dict[str, list[tuple[float, str]]] = {
     "GBP/AUD": [(1.0, "GBP"), (-1.0, "AUD")],
     "EUR/CHF": [(1.0, "EUR"), (-1.0, "CHF")],
     "USD/MXN": [(-1.0, "MXN")],
-    "USD/ZAR": [],
+    "USD/ZAR": [(-1.0, "ZAR")],
     "USD/SGD": [],
     "BTC/USDT": [(1.0, "BTC")],
     "ETH/USDT": [(1.0, "ETH")],
@@ -119,15 +123,48 @@ _PAIR_FORMULA: dict[str, list[tuple[float, str]]] = {
     "ATOM/USDT": [],
     "S&P 500": [(1.0, "SP500")],
     "SPY": [(1.0, "SP500")],
-    "Nasdaq": [(1.0, "NQ100")],
+    "NASDAQ-100": [(1.0, "NQ100")],
     "QQQ": [(1.0, "NQ100")],
     "Dow Jones": [(1.0, "SP500")],
-    "UK100": [],
-    "DAX 40": [],
+    "UK100": [(1.0, "GBP")],
+    "DAX 40": [(1.0, "EUR")],
     "XAU/USD": [(1.0, "XAU")],
     "XAG/USD": [(1.0, "XAG")],
     "WTI Oil": [(1.0, "OIL")],
     "Brent Oil": [(1.0, "OIL")],
+    "Nat Gas": [(1.0, "NG")],
+    "Copper": [(1.0, "HG")],
+    "XPT/USD": [(1.0, "PL")],
+    # ── US Stocks — S&P 500 / Nasdaq E-mini as macro risk proxy ──────────
+    "AAPL": [(1.0, "SP500")],
+    "TSLA": [(1.0, "SP500")],
+    "NVDA": [(1.0, "NQ100")],
+    "MSFT": [(1.0, "NQ100")],
+    "AMZN": [(1.0, "NQ100")],
+    "META": [(1.0, "NQ100")],
+    "GOOG": [(1.0, "NQ100")],
+    "JPM": [(1.0, "SP500")],
+    "V": [(1.0, "SP500")],
+    "XOM": [(1.0, "SP500")],
+    "NFLX": [(1.0, "NQ100")],
+    "AMD": [(1.0, "NQ100")],
+    "CRM": [(1.0, "SP500")],
+    "DIS": [(1.0, "SP500")],
+    "BA": [(1.0, "SP500")],
+    "COIN": [(1.0, "BTC")],
+    "PYPL": [(1.0, "NQ100")],
+    "INTC": [(1.0, "NQ100")],
+    "UBER": [(1.0, "SP500")],
+    "PLTR": [(1.0, "NQ100")],
+    # ── ETFs ─────────────────────────────────────────────────────────────
+    "GLD": [(1.0, "XAU")],
+    "SLV": [(1.0, "XAG")],
+    "IWM": [(1.0, "SP500")],
+    "XLE": [(1.0, "OIL")],
+    "USO": [(1.0, "OIL")],
+    # ── Index currency proxies ────────────────────────────────────────────
+    "ASX 200": [(1.0, "AUD")],
+    "Nikkei 225": [(-1.0, "JPY")],
 }
 
 
@@ -509,6 +546,17 @@ def get_cot_z(display: str, as_of_date: str = None) -> float:
         if z is not None:
             total += sign * z
             count += 1
+
+    if count == 0 and formula:
+        log.warning(
+            f"[COT] {display}: formula has {len(formula)} legs but no data resolved. "
+            f"Keys: {[k for _, k in formula]}"
+        )
+    elif count < len(formula):
+        log.warning(
+            f"[COT] {display}: only {count}/{len(formula)} legs resolved. "
+            f"Result={round(total/count if count else 0, 3)}"
+        )
 
     if count == 0:
         return 0.0
