@@ -9956,12 +9956,13 @@ def api_chart_analysis():
 
     context_parts = []
 
-    # Engine A signal context from last scan
-    sig = None
-    for s in _last_scan_results.get("signals", []):
-        if s.get("symbol") == symbol or s.get("display") == symbol:
-            sig = s
-            break
+    # Engine A signal context — prefer POST body (fresh frontend state), fall back to last scan cache
+    sig = data.get("signal")
+    if not sig:
+        for s in _last_scan_results.get("signals", []):
+            if s.get("symbol") == symbol or s.get("display") == symbol:
+                sig = s
+                break
 
     if sig:
         context_parts.append(
@@ -9979,9 +9980,9 @@ def api_chart_analysis():
         if factors:
             context_parts.append(f"FACTOR VOTES: {factors}")
 
-    # Engine B context from cache
+    # Engine B context — prefer POST body (frontend state), fall back to server-side cache
     sid = symbol.replace("/", "_").replace("=", "_").replace("^", "_").replace(".", "_")
-    eb = _engine_b_cache.get(sid) or _engine_b_cache.get(symbol)
+    eb = data.get("engineB") or _engine_b_cache.get(sid) or _engine_b_cache.get(symbol)
     if eb:
         context_parts.append(
             f"ENGINE B: swing_sequence={eb.get('current_swing_sequence')}, "

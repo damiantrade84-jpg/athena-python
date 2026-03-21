@@ -3824,7 +3824,8 @@ async function acmAIRead() {
       '<div style="color:#5a6d80;">Sending to Claude Vision for analysis...</div>';
     btn.textContent = '🧠 Analysing...';
 
-    // Send to backend
+    // Send to backend — include Engine B + signal from frontend state as fallback
+    var sid = (_acm.symbol || '').replace(/[\/=^.]/g, '_');
     var resp = await fetch('/api/chart-analysis', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -3832,6 +3833,8 @@ async function acmAIRead() {
         image: base64,
         symbol: _acm.symbol,
         tf: _acm.tf,
+        engineB: window['_engineB_' + sid] || null,
+        signal: _acm.sig || null,
       }),
     });
 
