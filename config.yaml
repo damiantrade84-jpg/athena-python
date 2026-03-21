@@ -191,7 +191,7 @@ RANGING:
 # Forex trend raised to 2.0 (primary edge) and momentum to 1.0 (was under-weighted).
 FACTOR_WEIGHTS:
   crypto:    { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.0, structure: 1.0, derivatives: 1.5, microstructure: 1.5, carry: 1.0 }
-  forex:     { trend: 2.0, momentum: 1.0, volatility: 1.0, volume: 0.5, structure: 1.5, derivatives: 0.3, microstructure: 0.5, carry: 0.5 }
+  forex:     { trend: 2.0, momentum: 1.0, volatility: 1.0, volume: 0.5, structure: 1.5, derivatives: 0.5, microstructure: 0.5, carry: 0.7 }
   stock:     { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.5, structure: 1.0, derivatives: 0.5, microstructure: 0.75, carry: 1.0 }
   commodity: { trend: 2.0, momentum: 1.3, volatility: 1.5, volume: 1.0, structure: 1.3, derivatives: 0.7, microstructure: 0.75, carry: 0.5 }
   index:     { trend: 2.0, momentum: 1.4, volatility: 1.2, volume: 0.8, structure: 1.0, derivatives: 1.2, microstructure: 0.75, carry: 1.0 }
