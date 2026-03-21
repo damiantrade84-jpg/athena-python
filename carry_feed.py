@@ -155,10 +155,11 @@ _PAIR_CARRY_FORMULA: dict[str, list[tuple[float, str]]] = {
     "XAU/USD": [(-1.0, "_10Y")],  # gold is inversely correlated with real yields
     "XAG/USD": [(-1.0, "_10Y")],
     "XPT/USD": [(-1.0, "_10Y")],  # platinum — precious metal, same yield dynamic
+    "XPD/USD": [(-1.0, "_10Y")],  # palladium — precious metal, same yield dynamic
     "WTI Oil": [(-1.0, "_10Y")],
     "Brent Oil": [(-1.0, "_10Y")],
-    "Nat Gas": [],
-    "Copper": [],
+    "Nat Gas": [(-1.0, "_10Y")],
+    "Copper": [(-1.0, "_10Y")],
     # ── US Stocks — inverted 10Y yield as macro risk signal ───────────────
     "AAPL": [(-1.0, "_10Y")],
     "TSLA": [(-1.0, "_10Y")],
