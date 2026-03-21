@@ -6948,8 +6948,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
             # Regime-scale the min_score: tighter gate in ranging/choppy, looser in trending
             _regime_gate = {
                 "TRENDING": 0.85,        # trend does the work — slightly easier entry
-                "RANGING": 1.2,          # need more conviction in chop
-                "HIGH_VOLATILITY": 1.3,  # noise kills — require strong structure
+                "RANGING": 1.15,         # need more conviction in chop
+                "HIGH_VOLATILITY": 1.1,  # crypto lives in high vol - reduce penalty
                 "LOW_VOLATILITY": 1.0,   # default — calm market, standard gate
             }
             _min_score_scaled = style_profile["min_score"] * _regime_gate.get(regime_label, 1.0)
@@ -6969,7 +6969,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 elif _dd_pct > 0.05:
                     _min_score_scaled *= 1.2  # 20% harder in >5% drawdown
 
-            if conf_data["score"] < _min_score_scaled or not conf_data.get("passed"):
+            if conf_data["score"] < _min_score_scaled:
                 continue
 
             entry = current_price
@@ -8492,13 +8492,13 @@ def api_scan_naked():
                     # Regime-scale the min_score: tighter gate in ranging/choppy, looser in trending
                     _regime_gate = {
                         "TRENDING": 0.85,        # trend does the work — slightly easier entry
-                        "RANGING": 1.2,          # need more conviction in chop
-                        "HIGH_VOLATILITY": 1.3,  # noise kills — require strong structure
+                        "RANGING": 1.15,         # need more conviction in chop
+                        "HIGH_VOLATILITY": 1.1,  # crypto lives in high vol - reduce penalty
                         "LOW_VOLATILITY": 1.0,   # default — calm market, standard gate
                     }
                     _min_score_scaled = style_profile["min_score"] * _regime_gate.get(regime_label, 1.0)
 
-                    if conf_data["score"] < _min_score_scaled or not conf_data.get("passed"):
+                    if conf_data["score"] < _min_score_scaled:
                         log.warning(
                             f"[NAKED-DBG] {pair['display']} {direction}: "
                             f"score={conf_data['score']:.1f} vs min={_min_score_scaled:.1f}, "
