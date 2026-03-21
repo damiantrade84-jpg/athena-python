@@ -8,6 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
 :root {
   --bg:#080b0f; --surface:#0d1117; --card:#111820; --border:#2a3b4d;
@@ -3797,21 +3798,77 @@ function _acmStopLive() {
   if (_acm.liveInterval) { clearInterval(_acm.liveInterval); _acm.liveInterval = null; }
 }
 
-// AI Chart Read (placeholder — will be built in next phase)
 async function acmAIRead() {
   var btn = document.getElementById('acm-ai-btn');
-  btn.textContent = '🧠 Reading...';
-  btn.disabled = true;
-
   var panel = document.getElementById('acm-ai-panel');
-  panel.style.display = 'block';
-  panel.innerHTML = '<h4>🧠 AI CHART ANALYSIS</h4><div style="color:#5a6d80;">Capturing chart and sending to Claude Vision... (coming soon)</div>';
 
-  // TODO: Phase 2 — html2canvas screenshot + Claude Vision API call
-  setTimeout(function() {
-    btn.textContent = '🧠 AI READ';
-    btn.disabled = false;
-  }, 2000);
+  btn.textContent = '🧠 Capturing...';
+  btn.disabled = true;
+  panel.style.display = 'block';
+  panel.innerHTML = '<h4>🧠 AI CHART ANALYSIS</h4>' +
+    '<div style="color:#5a6d80;">Capturing chart screenshot...</div>';
+
+  try {
+    // Screenshot the chart body
+    var chartBody = document.getElementById('acm-chart-body');
+    var canvas = await html2canvas(chartBody, {
+      backgroundColor: '#060a10',
+      scale: 1.5,
+      logging: false,
+      useCORS: true,
+    });
+
+    var base64 = canvas.toDataURL('image/png');
+
+    panel.innerHTML = '<h4>🧠 AI CHART ANALYSIS</h4>' +
+      '<div style="color:#5a6d80;">Sending to Claude Vision for analysis...</div>';
+    btn.textContent = '🧠 Analysing...';
+
+    // Send to backend
+    var resp = await fetch('/api/chart-analysis', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image: base64,
+        symbol: _acm.symbol,
+        tf: _acm.tf,
+      }),
+    });
+
+    var result = await resp.json();
+
+    if (result.error) {
+      panel.innerHTML = '<h4>🧠 AI CHART ANALYSIS</h4>' +
+        '<div style="color:#ff3b5c;">Error: ' + result.error + '</div>';
+    } else {
+      // Format the analysis nicely
+      var text = result.analysis || '';
+      // Bold the section headers
+      text = text.replace(/(\d\.\s*(?:PATTERN|STRUCTURE|MISSED|SL\/TP|RATING)[:\s]*)/gi,
+        '<br><span style="color:#00d4ff;font-weight:700;">$1</span>');
+      // Highlight STRONG/MODERATE/WEAK/AVOID
+      text = text.replace(/\bSTRONG\b/g, '<span style="color:#00e676;font-weight:700;">STRONG</span>');
+      text = text.replace(/\bMODERATE\b/g, '<span style="color:#f59e0b;font-weight:700;">MODERATE</span>');
+      text = text.replace(/\bWEAK\b/g, '<span style="color:#ff3b5c;font-weight:700;">WEAK</span>');
+      text = text.replace(/\bAVOID\b/g, '<span style="color:#ff3b5c;font-weight:900;text-decoration:underline;">AVOID</span>');
+      // Highlight CONFIRM/CONTRADICT
+      text = text.replace(/\bCONFIRM[S]?\b/gi, '<span style="color:#00e676;font-weight:700;">CONFIRMS</span>');
+      text = text.replace(/\bCONTRADICT[S]?\b/gi, '<span style="color:#ff3b5c;font-weight:700;">CONTRADICTS</span>');
+
+      panel.innerHTML = '<h4>🧠 AI CHART ANALYSIS — ' + _acm.tf + ' ' +
+        (_acm.sig ? _acm.sig.display || '' : '') + '</h4>' +
+        '<div style="line-height:1.8;">' + text + '</div>' +
+        '<div style="margin-top:10px;font-size:9px;color:#3a4d60;">Model: ' +
+        (result.model || 'claude-sonnet') + ' | ' + new Date().toLocaleTimeString() + '</div>';
+    }
+
+  } catch (err) {
+    panel.innerHTML = '<h4>🧠 AI CHART ANALYSIS</h4>' +
+      '<div style="color:#ff3b5c;">Error: ' + err.message + '</div>';
+  }
+
+  btn.textContent = '🧠 AI READ';
+  btn.disabled = false;
 }
 
 // Keyboard shortcut

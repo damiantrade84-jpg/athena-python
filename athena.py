@@ -33,6 +33,11 @@ try:
 except ImportError:
     pass  # dotenv optional — falls back to os.environ
 
+try:
+    import anthropic as _anthropic_mod
+except ImportError:
+    _anthropic_mod = None
+
 import telegram_notify
 
 from datetime import datetime, timezone, timedelta
@@ -139,6 +144,8 @@ def _fetch_funding_rate(binance_symbol: str) -> dict:
 # â"€â"€ Open Interest Cache (crypto) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 _oi_cache: dict = {}  # symbol -> {"oi": float, "price": float, "ts": float}
+_last_scan_results: dict = {"signals": []}  # latest run_full_scan output for chart-analysis context
+_engine_b_cache: dict = {}  # sid/symbol -> naked analysis result dict
 
 _OI_CACHE_TTL = 300  # 5 minutes
 
@@ -7492,13 +7499,12 @@ def api_scan():
 
     d = request.get_json(force=True, silent=True) or {}
 
-    return jsonify(
-        _json_safe(
-            run_full_scan(
-                style=d.get("style", "auto"), asset_class=d.get("asset_class")
-            )
-        )
+    result = run_full_scan(
+        style=d.get("style", "auto"), asset_class=d.get("asset_class")
     )
+    global _last_scan_results
+    _last_scan_results = result
+    return jsonify(_json_safe(result))
 
 
 @app.route("/api/analyze", methods=["POST"])
@@ -8037,6 +8043,13 @@ def api_naked_analysis():
     res, _pair_obj, err = _compute_naked_analysis(d["signal"], force_ai=True)
     if err:
         return jsonify({"error": err}), 500
+    # Cache for chart-analysis context lookup
+    sig = d["signal"]
+    _sym = sig.get("symbol") or sig.get("display") or ""
+    if _sym and res:
+        _sid = _sym.replace("/", "_").replace("=", "_").replace("^", "_").replace(".", "_")
+        _engine_b_cache[_sid] = res
+        _engine_b_cache[_sym] = res
     return jsonify(_json_safe(res))
 
 
@@ -9918,6 +9931,160 @@ def api_failed_executions():
         return jsonify([dict(r) for r in rows])
 
     except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/chart-analysis", methods=["POST"])
+def api_chart_analysis():
+    """Send chart screenshot to Claude Vision for professional TA reading."""
+    if _anthropic_mod is None:
+        return jsonify({"error": "anthropic library not installed"}), 500
+
+    data = request.get_json()
+    if not data or not data.get("image"):
+        return jsonify({"error": "Missing image data"}), 400
+
+    symbol = data.get("symbol", "")
+    tf = data.get("tf", "H4")
+
+    # Find pair context
+    pair = next(
+        (p for p in ALL_PAIRS if p.get("symbol") == symbol or p.get("display") == symbol),
+        None,
+    )
+
+    context_parts = []
+
+    # Engine A signal context from last scan
+    sig = None
+    for s in _last_scan_results.get("signals", []):
+        if s.get("symbol") == symbol or s.get("display") == symbol:
+            sig = s
+            break
+
+    if sig:
+        context_parts.append(
+            f"ENGINE A: direction={sig.get('direction')}, "
+            f"score={sig.get('confluenceScore')}/{sig.get('maxScore', 3.0)}, "
+            f"regime={sig.get('regime', {}).get('label', 'UNKNOWN')}, "
+            f"style={sig.get('tradeStyle', 'swing')}"
+        )
+        context_parts.append(
+            f"LEVELS: entry={sig.get('price')}, sl={sig.get('sl')}, "
+            f"tp1={sig.get('tp1')}, tp2={sig.get('tp2')}, "
+            f"rr1={sig.get('rr1')}, rr2={sig.get('rr2')}"
+        )
+        factors = sig.get("factors_json") or sig.get("votes", {})
+        if factors:
+            context_parts.append(f"FACTOR VOTES: {factors}")
+
+    # Engine B context from cache
+    sid = symbol.replace("/", "_").replace("=", "_").replace("^", "_").replace(".", "_")
+    eb = _engine_b_cache.get(sid) or _engine_b_cache.get(symbol)
+    if eb:
+        context_parts.append(
+            f"ENGINE B: swing_sequence={eb.get('current_swing_sequence')}, "
+            f"bos_bull={eb.get('bos_data', {}).get('bos_bull')}, "
+            f"bos_bear={eb.get('bos_data', {}).get('bos_bear')}, "
+            f"choch_bull={eb.get('choch_data', {}).get('choch_bull')}, "
+            f"choch_bear={eb.get('choch_data', {}).get('choch_bear')}, "
+            f"bos_mtf_confirmed={eb.get('bos_mtf_confirmed')}"
+        )
+        if eb.get("order_blocks"):
+            obs_str = ", ".join(
+                [f"{ob['type']} str={ob.get('strength', 0)}%" for ob in eb["order_blocks"]]
+            )
+            context_parts.append(f"ORDER BLOCKS: {obs_str}")
+        if eb.get("nearest_support_zone"):
+            z = eb["nearest_support_zone"]
+            context_parts.append(f"SUPPORT ZONE: {z.get('lower')}-{z.get('upper')}")
+        if eb.get("nearest_resistance_zone"):
+            z = eb["nearest_resistance_zone"]
+            context_parts.append(f"RESISTANCE ZONE: {z.get('lower')}-{z.get('upper')}")
+        if eb.get("breaker_block"):
+            context_parts.append(
+                f"BREAKER: {eb['breaker_block'].get('type')} at {eb['breaker_block'].get('level')}"
+            )
+        if eb.get("confidence"):
+            conf = eb["confidence"]
+            context_parts.append(
+                f"CONFIDENCE: score={conf.get('score')}, "
+                f"passed={conf.get('passed')}, rr={conf.get('rr')}"
+            )
+
+    asset_type = pair.get("type", "unknown") if pair else "unknown"
+    algo_context = "\n".join(context_parts) if context_parts else "No algorithmic data available."
+
+    system_prompt = (
+        "You are a senior technical analyst reviewing a chart with full algorithmic context. "
+        "You speak directly — no hedging, no disclaimers. You are reviewing this chart for "
+        "a professional algorithmic trader who needs confirmation or contradiction of the "
+        "system's signals. Be specific about price levels and patterns you observe."
+    )
+
+    direction_str = sig.get("direction", "UNKNOWN") if sig else "UNKNOWN"
+    user_prompt = (
+        f"Analyse this {asset_type.upper()} chart ({tf} timeframe).\n\n"
+        f"ALGORITHMIC CONTEXT:\n{algo_context}\n\n"
+        "CHART ANNOTATIONS VISIBLE:\n"
+        "- Green/red candles with EMA 21 (cyan), EMA 50 (purple), EMA 200 (gold dashed)\n"
+        "- Entry (grey dashed), SL (red solid), TP1/TP2 (green solid) horizontal lines\n"
+        "- Engine B zones may be visible (support green, resistance red, BOS amber, CHoCH purple, OB labelled)\n\n"
+        "ANSWER THESE 5 QUESTIONS:\n"
+        "1. PATTERN: What price action pattern is forming? (flag, wedge, channel, H&S, double top/bottom, breakout, pullback, range, etc.)\n"
+        f"2. STRUCTURE: Does the visible price structure CONFIRM or CONTRADICT the algorithmic {direction_str} bias? Why?\n"
+        "3. MISSED: Are there any patterns or levels the algorithm may have missed? (unfilled gaps, hidden divergence, liquidity pools above/below current price, trendline breaks)\n"
+        "4. SL/TP ASSESSMENT: Based on what you see, are the SL and TP levels well-placed? Would you adjust either? Be specific with price levels.\n"
+        "5. RATING: Rate this setup — STRONG / MODERATE / WEAK / AVOID — with one sentence justification.\n\n"
+        "Keep total response under 250 words. Be direct."
+    )
+
+    try:
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return jsonify({"error": "ANTHROPIC_API_KEY not set"}), 500
+
+        client = _anthropic_mod.Anthropic(api_key=api_key)
+
+        # Strip data URL prefix if present
+        img_data = data["image"]
+        if img_data.startswith("data:"):
+            img_data = img_data.split(",", 1)[1]
+
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=500,
+            system=system_prompt,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": img_data,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": user_prompt,
+                    },
+                ],
+            }],
+        )
+
+        analysis = message.content[0].text if message.content else "No analysis returned."
+
+        return jsonify({
+            "analysis": analysis,
+            "model": "claude-sonnet-4-20250514",
+            "symbol": symbol,
+            "tf": tf,
+        })
+
+    except Exception as e:
+        log.error(f"[AI CHART] Error: {e}")
         return jsonify({"error": str(e)}), 500
 
 
