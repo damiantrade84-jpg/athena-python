@@ -7415,6 +7415,7 @@ app.config["PERMANENT_SESSION_LIFETIME"] = 86400  # 24 hours
 # ── API authentication (shared-secret header) ────────────────────────────
 
 _ATHENA_API_KEY = os.environ.get("ATHENA_API_KEY", "")  # set in .env to enable auth
+_ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")  # set in .env for Claude Vision
 
 _AUTH_EXEMPT = {"/", "/favicon.ico"}  # paths that don't require auth
 
