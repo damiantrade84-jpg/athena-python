@@ -10053,7 +10053,7 @@ def api_chart_analysis():
             img_data = img_data.split(",", 1)[1]
 
         message = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=500,
             system=system_prompt,
             messages=[{
@@ -10079,7 +10079,7 @@ def api_chart_analysis():
 
         return jsonify({
             "analysis": analysis,
-            "model": "claude-sonnet-4-20250514",
+            "model": "claude-sonnet-4-6",
             "symbol": symbol,
             "tf": tf,
         })
