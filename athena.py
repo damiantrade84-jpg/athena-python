@@ -3018,13 +3018,10 @@ def fetch_polygon(pair, tf, limit):
                     f"[PG] {ticker}: 429 rate limited — throttle will apply before next request"
                 )
 
-                # Send Telegram notification for Polygon rate limit
-                try:
-                    telegram_notify.notify_polygon_rate_limit()
-                except Exception as _tn_e:
-                    log.debug(
-                        f"[TELEGRAM] Polygon rate limit notification failed: {_tn_e}"
-                    )
+                # Log Polygon rate limit error (no Telegram notification)
+                log.warning(
+                    f"[POLYGON] Rate limited (429) - backing off requests"
+                )
 
                 return {
                     "error": True,
@@ -3546,6 +3543,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
                                     ai_edge_prob=ai.get("edgeProbability", 0),
                                     ai_risk=ai.get("riskLevel", ""),
                                     ai_warnings=ai.get("warnings", []),
+                                    is_auto_executed=False,
                                 )
                             except Exception as _e:
                                 log.debug(f"[TELEGRAM] AI notify failed: {_e}")

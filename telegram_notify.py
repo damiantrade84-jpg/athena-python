@@ -138,22 +138,23 @@ def notify_signal_with_ai(
     ai_edge_prob: int,
     ai_risk: str,
     ai_warnings: Optional[List[str]] = None,
+    is_auto_executed: bool = False,
 ) -> None:
-    """Send Telegram only for AI-approved signals (grade A or B).
+    """Send Telegram only for auto-executed high-confluence signals (70%+ score).
     Called from a background thread — never blocks the scan loop."""
     if not _is_enabled():
         return
-    if ai_grade not in ("A", "B"):
+    
+    # Only notify if auto-executed AND high confluence (70%+ score)
+    if not is_auto_executed:
+        return
+    
+    score_pct = round(score / max_score * 100) if max_score else 0
+    if score_pct < 70:
         return
 
     arrow = "LONG" if direction == "LONG" else "SHORT"
-    grade_tag = "A+" if ai_grade == "A" else "B"
     score_pct = round(score / max_score * 100) if max_score else 0
-
-    # Format warnings (max 2, keep them short)
-    warn_lines = ""
-    if ai_warnings:
-        warn_lines = "\n" + "\n".join(f"  - {w}" for w in ai_warnings[:2])
 
     # Format price levels — strip trailing zeros
     def _fmt(v: float) -> str:
@@ -161,12 +162,10 @@ def notify_signal_with_ai(
         return s if "." in s else s
 
     message = (
-        f"*[{grade_tag}] {arrow} — {pair}*\n"
-        f"Score: `{score:.2f}/{max_score:.1f}` ({score_pct}%) | `{regime}` | `{signal_class}`\n"
+        f"🚀 *AUTO-EXECUTED — {arrow} {pair}*\n"
+        f"Score: `{score:.2f}/{max_score:.1f}` ({score_pct}%) | `{regime}`\n"
         f"Entry `{_fmt(entry)}` | SL `{_fmt(sl)}` | TP `{_fmt(tp1)}` ({rr1:.1f}R)\n"
-        f"_{ai_verdict}_\n"
         f"Edge: `{ai_edge_prob}%` | Risk: `{ai_risk}`"
-        f"{warn_lines}"
     )
 
     _send_message_async(message)
@@ -238,26 +237,6 @@ def notify_trade_closed(
             "timestamp": datetime.utcnow(),
         }
     )
-
-
-def notify_bybit_ws_disconnect() -> None:
-    """Notify when Bybit WebSocket connection drops"""
-    if not _is_enabled():
-        return
-
-    message = "⚠️ *Bybit WebSocket Disconnected*\nConnection dropped, attempting to reconnect..."
-    _send_message_async(message)
-
-
-def notify_polygon_rate_limit() -> None:
-    """Notify when Polygon API returns 429 rate limit error"""
-    if not _is_enabled():
-        return
-
-    message = (
-        "⚠️ *Polygon API Rate Limited*\n429 error received, backing off requests..."
-    )
-    _send_message_async(message)
 
 
 def notify_daily_summary() -> None:

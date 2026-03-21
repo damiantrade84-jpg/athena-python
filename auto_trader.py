@@ -620,6 +620,33 @@ class AutoTrader:
 
                 self._write_audit(signal, approval, result, cfg)
 
+                # Send Telegram notification for successful auto-execution
+                try:
+                    import telegram_notify
+                    
+                    # Get AI analysis if available
+                    ai_analysis = signal.get("ai_analysis", {})
+                    telegram_notify.notify_signal_with_ai(
+                        pair=signal.get("pair", ""),
+                        direction=signal.get("direction", ""),
+                        score=signal.get("confluenceScore", 0),
+                        max_score=signal.get("maxScore", 3.0),
+                        entry=signal.get("price", 0),
+                        sl=signal.get("sl", 0),
+                        tp1=signal.get("tp1", 0),
+                        rr1=signal.get("rr1", 0),
+                        regime=signal.get("trendState", ""),
+                        signal_class=signal.get("signalClass", ""),
+                        ai_grade=ai_analysis.get("grade", ""),
+                        ai_verdict=ai_analysis.get("verdict", ""),
+                        ai_edge_prob=ai_analysis.get("edgeProbability", 0),
+                        ai_risk=ai_analysis.get("riskLevel", ""),
+                        ai_warnings=ai_analysis.get("warnings", []),
+                        is_auto_executed=True,
+                    )
+                except Exception as tn_e:
+                    log.debug(f"[AUTO] Telegram notification failed: {tn_e}")
+
                 log.warning(
                     f"[AUTO] EXECUTED: {pair} {direction} "
                     f"ticket={result.get('ticket')} vol={result.get('volume')}"
