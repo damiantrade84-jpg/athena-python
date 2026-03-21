@@ -2001,7 +2001,7 @@ CRYPTO_PAIRS = [
         "type": "crypto",
         "display": "FET/USDT",
         "source": "binance",
-        "enabled": True,
+        "enabled": False,  # DISABLED: FETUSDT contract delisted on Bybit (retCode 110074)
     },  # SQN +0.14 # re-enabled for ATR-fix retest
     {
         "symbol": "RENDERUSDT",
