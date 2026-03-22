@@ -8392,6 +8392,7 @@ def api_scan_naked():
     ]
 
     results = []
+    _best_per_pair = {}
 
     from market_structure import NakedEngine
 
