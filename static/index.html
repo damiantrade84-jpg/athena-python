@@ -509,7 +509,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 /* Live Price Ticker Strip */
 .ticker-strip{display:flex;gap:6px;padding:10px 0;margin-bottom:12px;overflow-x:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
 .ticker-strip::-webkit-scrollbar{height:4px;}.ticker-strip::-webkit-scrollbar-track{background:transparent;}.ticker-strip::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
-.ticker-item{display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:8px;background:var(--card);border:1px solid var(--border);font-family:'Space Mono',monospace;font-size:11px;white-space:nowrap;min-width:-webkit-fit-content;min-width:fit-content;transition:border-color 0.3s;}
+.ticker-item{display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:8px;background:var(--card);border:1px solid var(--border);font-family:'Space Mono',monospace;font-size:11px;white-space:nowrap;min-width:-webkit-fill-available;min-width:-webkit-fit-content;min-width:fit-content;transition:border-color 0.3s;}
 .ticker-item:hover{border-color:rgba(0,212,255,0.3);}
 .ticker-name{color:var(--muted);font-size:10px;font-weight:700;letter-spacing:0.04em;}
 .ticker-price{font-weight:700;color:var(--text);font-size:12px;transition:color 0.3s;}
