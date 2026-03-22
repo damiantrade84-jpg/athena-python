@@ -4285,10 +4285,24 @@ async function runECVisionConfirm(sid) {
         engineB: consensus.engine_b_raw || {},
       }),
     });
+
+    // Close chart modal before parsing — ensures modal closes even on error
+    closeAcm();
+
+    if (!visionResp.ok) {
+      var errText = await visionResp.text();
+      throw new Error('Chart analysis failed (' + visionResp.status + '): ' +
+        errText.substring(0, 200));
+    }
     var vision = await visionResp.json();
 
-    // Close chart modal
-    closeAcm();
+    // Guard: ensure consensus and vision are valid before confirming
+    if (!consensus) {
+      throw new Error('Consensus data lost — cannot confirm');
+    }
+    if (!vision || vision.error) {
+      throw new Error('Vision failed: ' + (vision ? vision.error : 'no response'));
+    }
 
     // Send to Engine C confirm endpoint
     var confirmResp = await fetch('/api/engine-c-confirm', {
@@ -4296,6 +4310,11 @@ async function runECVisionConfirm(sid) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({consensus: consensus, vision: vision}),
     });
+    if (!confirmResp.ok) {
+      var confErrText = await confirmResp.text();
+      throw new Error('Confirm failed (' + confirmResp.status + '): ' +
+        confErrText.substring(0, 200));
+    }
     var updated = await confirmResp.json();
 
     // Update the card

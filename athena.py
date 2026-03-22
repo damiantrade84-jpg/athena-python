@@ -8783,8 +8783,7 @@ def api_engine_c_scan():
 
 @app.route("/api/engine-c-confirm", methods=["POST"])
 def api_engine_c_confirm():
-    """Apply AI Vision result to an Engine C consensus signal.
-    Receives the consensus dict + vision analysis, returns updated consensus."""
+    """Apply AI Vision result to Engine C consensus signal."""
     try:
         d = request.get_json() or {}
         consensus = d.get("consensus")
@@ -8795,44 +8794,19 @@ def api_engine_c_confirm():
         if not vision:
             return jsonify({"error": "Missing vision data"}), 400
 
-        display = consensus.get("display", "")
+        # Import here to avoid circular imports
+        from engine_c import apply_vision
 
-        # Price drift check — use live price from _live_prices feed
-        entry_at_consensus = float(consensus.get("entry", 0))
-        current_price = 0.0
-        live_entry = _live_prices.get(display)
-        if live_entry:
-            current_price = float(live_entry.get("price", 0))
-
-        if entry_at_consensus > 0 and current_price > 0:
-            drift_pct = abs(current_price - entry_at_consensus) / entry_at_consensus * 100
-            asset_type = consensus.get("type", "")
-            max_drift = 1.5 if asset_type == "crypto" else 0.5 if asset_type == "forex" else 0.8
-
-            if drift_pct > max_drift:
-                consensus["trade"] = False
-                consensus["verdict"] = "PRICE_DRIFT"
-                consensus["drift_pct"] = round(drift_pct, 2)
-                consensus["entry"] = round(current_price, 6)
-                log.warning(
-                    f"[ENGINE C] Price drift {drift_pct:.2f}% on {display} "
-                    f"(max {max_drift}%) — signal invalidated"
-                )
-                return jsonify(_json_safe(consensus))
-
-            # Update entry to current price
-            consensus["entry"] = round(current_price, 6)
-
-        # Apply vision (apply_vision imported at top of file)
+        # Apply vision
         updated = apply_vision(consensus, vision)
 
         log.warning(
-            f"[ENGINE C] Vision confirmed {display}: {updated.get('vision_rating')} "
-            f"→ {updated.get('vision_action')} → tier={updated.get('tier')} "
-            f"trade={updated.get('trade')}"
+            f"[ENGINE C] Vision confirmed {consensus.get('display', '?')}: "
+            f"{updated.get('vision_rating')} → {updated.get('vision_action')} "
+            f"→ tier={updated.get('tier')} trade={updated.get('trade')}"
         )
 
-        return jsonify(_json_safe(updated))
+        return jsonify(updated)
 
     except Exception as e:
         log.error(f"[ENGINE C CONFIRM] Error: {e}")
@@ -10280,10 +10254,17 @@ def api_chart_analysis():
                 break
 
     if sig:
+        # regime can be a dict {"label": "..."} (Engine A) or a plain string (Engine C)
+        _regime_raw = sig.get('regime', {})
+        _regime_label = (
+            _regime_raw.get('label', 'UNKNOWN')
+            if isinstance(_regime_raw, dict)
+            else str(_regime_raw or 'UNKNOWN')
+        )
         context_parts.append(
             f"ENGINE A: direction={sig.get('direction')}, "
             f"score={sig.get('confluenceScore')}/{sig.get('maxScore', 3.0)}, "
-            f"regime={sig.get('regime', {}).get('label', 'UNKNOWN')}, "
+            f"regime={_regime_label}, "
             f"style={sig.get('tradeStyle', 'swing')}"
         )
         context_parts.append(
