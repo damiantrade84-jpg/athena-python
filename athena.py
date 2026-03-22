@@ -8582,6 +8582,21 @@ def api_scan_naked():
                         "fib": {"fib618": 0.0, "fib500": 0.0},
                         "naked_data": res,
                     }
+                    
+                    # Calculate style-specific SL/TP for display
+                    try:
+                        from indicators import calc_levels
+                        _lvl_scalp = calc_levels(current_price, atr, direction, 
+                                                  pair.get("type", "stock"), style="scalp")
+                        _lvl_intra = calc_levels(current_price, atr, direction, 
+                                                  pair.get("type", "stock"), style="intraday")
+                        signal["scalp_sl"] = _lvl_scalp["sl"]
+                        signal["scalp_tp"] = _lvl_scalp["tp1"]
+                        signal["intraday_sl"] = _lvl_intra["sl"]
+                        signal["intraday_tp"] = _lvl_intra["tp1"]
+                    except Exception:
+                        pass
+                    
                     _pair_key = pair.get("display", "")
                     _existing = _best_per_pair.get(_pair_key)
                     if _existing is None or signal["confluenceScore"] > _existing["confluenceScore"]:
