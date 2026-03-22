@@ -4124,8 +4124,10 @@ function buildECCard(c, category) {
   html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px;">';
   html += '<div style="font-size:9px;color:var(--muted);font-weight:700;margin-bottom:4px;">ENGINE A</div>';
   if (a.direction) {
+    var aScore = a.score != null ? (typeof a.score === 'number' ? a.score.toFixed(2) : a.score) : '?';
+    var aMax = a.maxScore != null ? (typeof a.maxScore === 'number' ? a.maxScore.toFixed(1) : a.maxScore) : '3.0';
     html += '<div style="font-size:11px;font-family:Space Mono,monospace;color:var(--text);">' +
-      a.direction + ' ' + (a.score || '?') + '/' + (a.maxScore || '?') + '</div>';
+      a.direction + ' ' + aScore + '/' + aMax + '</div>';
     html += '<div style="font-size:10px;color:var(--muted);font-family:Space Mono,monospace;">' +
       'SL ' + fmtPrice(a.sl) + ' TP ' + fmtPrice(a.tp1) + '</div>';
     if (a.cot != null) html += '<div style="font-size:9px;color:var(--accent);">COT ' + a.cot + '</div>';
