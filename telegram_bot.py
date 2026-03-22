@@ -46,9 +46,7 @@ def start_telegram_bot():
     
     def _run_bot():
         try:
-            asyncio.set_event_loop(asyncio.new_event_loop())
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(_start_bot_async(token, chat_id))
+            asyncio.run(_start_bot_async(token, chat_id))
         except Exception as e:
             import traceback
             log.error(f"[TELEGRAM] Bot failed to start: {e}")
