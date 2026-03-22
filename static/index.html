@@ -4273,6 +4273,16 @@ async function runECVisionConfirm(sid) {
         image: base64,
         symbol: consensus.symbol,
         tf: 'H4',
+        signal: {
+          direction: consensus.direction,
+          confluenceScore: consensus.conviction,
+          price: consensus.entry,
+          sl: consensus.sl,
+          tp1: consensus.tp,
+          type: consensus.type,
+          regime: consensus.regime,
+        },
+        engineB: consensus.engine_b_raw || {},
       }),
     });
     var vision = await visionResp.json();
