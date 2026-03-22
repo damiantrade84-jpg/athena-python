@@ -569,6 +569,43 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 .mono-11{font-size:11px;font-family:'Space Mono',monospace;}
 .meta-flex{margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;}
 .meta-note{font-size:10px;color:var(--muted);font-family:'Space Mono',monospace;align-self:center;}
+
+/* ── Market Hours Panel ─────────────────────────────────────────────────── */
+.mh-panel{padding:24px 0;}
+.mh-title{font-size:11px;font-weight:700;letter-spacing:0.1em;color:var(--muted);font-family:'Space Mono',monospace;text-transform:uppercase;margin-bottom:16px;}
+.mh-clock{font-size:22px;font-weight:700;font-family:'Space Mono',monospace;color:var(--accent);margin-bottom:4px;}
+.mh-date{font-size:11px;color:var(--muted);font-family:'Space Mono',monospace;margin-bottom:24px;}
+.mh-section{margin-bottom:28px;}
+.mh-section-title{font-size:10px;font-weight:700;letter-spacing:0.12em;color:var(--muted);font-family:'Space Mono',monospace;text-transform:uppercase;margin-bottom:10px;border-bottom:1px solid var(--border);padding-bottom:6px;}
+.mh-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;}
+.mh-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;transition:all 0.2s;}
+.mh-card.open{border-color:rgba(0,230,118,0.35);background:rgba(0,230,118,0.04);}
+.mh-card.closed{border-color:rgba(255,59,92,0.25);background:rgba(255,59,92,0.03);}
+.mh-card.premarket{border-color:rgba(245,158,11,0.3);background:rgba(245,158,11,0.04);}
+.mh-card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.mh-card-name{font-size:13px;font-weight:700;font-family:'Syne',sans-serif;}
+.mh-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+.mh-dot.open{background:var(--bull);box-shadow:0 0 6px rgba(0,230,118,0.6);animation:pulse 2s infinite;}
+.mh-dot.closed{background:var(--bear);}
+.mh-dot.premarket{background:var(--warn);animation:pulse 2s infinite;}
+.mh-status{font-size:11px;font-weight:700;font-family:'Space Mono',monospace;margin-bottom:4px;}
+.mh-status.open{color:var(--bull);}
+.mh-status.closed{color:var(--bear);}
+.mh-status.premarket{color:var(--warn);}
+.mh-note{font-size:10px;color:var(--muted);font-family:'Space Mono',monospace;}
+.mh-hours{font-size:9px;color:var(--muted);font-family:'Space Mono',monospace;margin-top:6px;opacity:0.7;}
+.mh-session-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;}
+.mh-sess{display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:20px;font-size:11px;font-family:'Space Mono',monospace;font-weight:700;background:var(--card);border:1px solid var(--border);}
+.mh-sess.active{border-color:rgba(0,212,255,0.4);background:rgba(0,212,255,0.08);color:var(--accent);}
+.mh-sess.inactive{color:var(--muted);}
+.mh-sess-dot{width:6px;height:6px;border-radius:50%;}
+.mh-sess-dot.active{background:var(--accent);animation:pulse 2s infinite;}
+.mh-sess-dot.inactive{background:var(--border);}
+.mh-overlap-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;font-size:11px;font-family:'Space Mono',monospace;font-weight:700;margin-bottom:16px;}
+.mh-overlap-badge.on{background:rgba(0,230,118,0.1);border:1px solid rgba(0,230,118,0.3);color:var(--bull);}
+.mh-overlap-badge.off{background:rgba(255,255,255,0.03);border:1px solid var(--border);color:var(--muted);}
+.mh-header-badge{display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:20px;background:rgba(255,255,255,0.04);border:1px solid var(--border);font-size:11px;font-family:'Space Mono',monospace;cursor:pointer;}
+.mh-header-badge:hover{border-color:var(--accent);color:var(--accent);}
 </style>
 </head>
 <body>
@@ -598,6 +635,10 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
         <span class="yield-lbl">YIELD</span>
         <span class="yield-shape" id="yieldShape">-</span>
         <span class="yield-spread" id="yieldSpread"></span>
+      </div>
+      <div class="mh-header-badge" onclick="switchTab('markets')" title="Market Hours — click for details" id="mhHeaderBadge">
+        <span class="mh-dot closed" id="mhHeaderDot"></span>
+        <span id="mhHeaderText">MARKETS</span>
       </div>
       <div class="session-badge">
         <div class="session-dot" id="sessionDot"></div>
@@ -647,6 +688,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
     <button class="tab-btn" id="tab-screener" onclick="switchTab('screener')">SCREENER</button>
     <button class="tab-btn" id="tab-performance" onclick="switchTab('performance');loadPerformance();loadAutoTradeLog();loadFailedExecutions()">PERFORMANCE</button>
     <button class="tab-btn" id="tab-enginec" onclick="switchTab('enginec')">ENGINE C</button>
+    <button class="tab-btn" id="tab-markets" onclick="switchTab('markets');loadMarketHours()">MARKETS</button>
   </div>
 
   <div class="tab-panel active" id="panel-signals">
@@ -826,6 +868,41 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
       </div>
     </div>
   </div><!-- /panel-enginec -->
+
+  <div class="tab-panel" id="panel-markets">
+    <div class="mh-panel">
+      <div style="display:flex;align-items:baseline;gap:16px;margin-bottom:4px;">
+        <div class="mh-clock" id="mhClock">--:--:--</div>
+        <div class="mh-date" id="mhDate">Loading...</div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:24px;flex-wrap:wrap;">
+        <div class="mh-overlap-badge off" id="mhOverlapBadge">
+          <span class="mh-dot closed" id="mhOverlapDot"></span>
+          <span id="mhOverlapText">London/NY Overlap: Inactive</span>
+        </div>
+        <button class="bt-btn bt-btn-sm" onclick="loadMarketHours()">&#8635; REFRESH</button>
+      </div>
+
+      <div class="mh-section">
+        <div class="mh-section-title">Forex Sessions (GMT+2)</div>
+        <div class="mh-session-bar" id="mhSessions">
+          <div class="mh-sess inactive"><span class="mh-sess-dot inactive"></span>Sydney</div>
+          <div class="mh-sess inactive"><span class="mh-sess-dot inactive"></span>Tokyo</div>
+          <div class="mh-sess inactive"><span class="mh-sess-dot inactive"></span>London</div>
+          <div class="mh-sess inactive"><span class="mh-sess-dot inactive"></span>New York</div>
+        </div>
+      </div>
+
+      <div class="mh-section">
+        <div class="mh-section-title">Markets</div>
+        <div class="mh-grid" id="mhMarketGrid">
+          <div class="mh-card closed">
+            <div class="mh-card-header"><span class="mh-card-name">Loading...</span><span class="mh-dot closed"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div><!-- /panel-markets -->
 
 </div>
 
@@ -4478,6 +4555,129 @@ async function executeEngineC(sid, pipMode) {
     showToast('Execution error: ' + err.message, true);
   }
 }
+
+// ── Market Hours ──────────────────────────────────────────────────────────────
+var _mhRefreshTimer = null;
+var _mhClockTimer = null;
+
+function loadMarketHours() {
+  fetch('/api/market-hours')
+    .then(function(r){ return r.json(); })
+    .then(function(d){ renderMarketHours(d); updateMhHeaderBadge(d); })
+    .catch(function(e){ console.error('Market hours error:', e); });
+}
+
+function renderMarketHours(d) {
+  var sessions = d.sessions || {};
+  var markets = d.markets || {};
+
+  // Clock
+  document.getElementById('mhDate').textContent = d.localTime || '';
+
+  // Sessions bar
+  var sessNames = ['sydney','tokyo','london','new_york'];
+  var sessLabels = ['Sydney','Tokyo','London','New York'];
+  var sessHtml = sessNames.map(function(k, i) {
+    var s = sessions[k] || {};
+    var cls = s.open ? 'active' : 'inactive';
+    return '<div class="mh-sess '+cls+'">'+
+      '<span class="mh-sess-dot '+cls+'"></span>'+
+      sessLabels[i]+
+      (s.note ? '<span style="font-size:9px;opacity:0.7;margin-left:4px">'+s.note+'</span>' : '')+
+    '</div>';
+  }).join('');
+  document.getElementById('mhSessions').innerHTML = sessHtml;
+
+  // Overlap badge
+  var ov = sessions.overlap || {};
+  var ovBadge = document.getElementById('mhOverlapBadge');
+  var ovDot = document.getElementById('mhOverlapDot');
+  var ovText = document.getElementById('mhOverlapText');
+  if (ov.open) {
+    ovBadge.className = 'mh-overlap-badge on';
+    ovDot.className = 'mh-dot open';
+    ovText.textContent = 'London/NY Overlap: ACTIVE — Peak Liquidity';
+  } else {
+    ovBadge.className = 'mh-overlap-badge off';
+    ovDot.className = 'mh-dot closed';
+    ovText.textContent = 'London/NY Overlap: Inactive';
+  }
+
+  // Market cards
+  var marketDefs = [
+    { key:'forex',  label:'Forex',        icon:'FX' },
+    { key:'crypto', label:'Crypto',       icon:'₿' },
+    { key:'jse',    label:'JSE (SA)',      icon:'JSE' },
+    { key:'lse',    label:'LSE (UK100)',   icon:'LSE' },
+    { key:'dax',    label:'DAX 40',        icon:'DAX' },
+    { key:'nyse',   label:'NYSE / US',     icon:'US' },
+  ];
+  var cardsHtml = marketDefs.map(function(def) {
+    var m = markets[def.key] || {};
+    var st = (m.status || '').toLowerCase();
+    var cardCls = m.open ? 'open' : (st === 'pre-market' ? 'premarket' : 'closed');
+    var dotCls = m.open ? 'open' : (st === 'pre-market' ? 'premarket' : 'closed');
+    var statusCls = m.open ? 'open' : (st === 'pre-market' ? 'premarket' : 'closed');
+    return '<div class="mh-card '+cardCls+'">'+
+      '<div class="mh-card-header">'+
+        '<span class="mh-card-name">'+def.label+'</span>'+
+        '<span class="mh-dot '+dotCls+'"></span>'+
+      '</div>'+
+      '<div class="mh-status '+statusCls+'">'+(m.status||'—')+'</div>'+
+      '<div class="mh-note">'+(m.note||'')+'</div>'+
+      '<div class="mh-hours">'+(m.hours||'')+'</div>'+
+    '</div>';
+  }).join('');
+  document.getElementById('mhMarketGrid').innerHTML = cardsHtml;
+}
+
+function updateMhHeaderBadge(d) {
+  var markets = d.markets || {};
+  var sessions = d.sessions || {};
+  var dot = document.getElementById('mhHeaderDot');
+  var text = document.getElementById('mhHeaderText');
+  if (!dot || !text) return;
+
+  // Count open markets (excluding crypto)
+  var openCount = ['forex','jse','lse','dax','nyse'].filter(function(k){ return markets[k] && markets[k].open; }).length;
+  var overlap = sessions.overlap && sessions.overlap.open;
+
+  if (overlap) {
+    dot.className = 'mh-dot open';
+    text.textContent = 'OVERLAP ACTIVE';
+    text.style.color = 'var(--bull)';
+  } else if (openCount > 0) {
+    dot.className = 'mh-dot open';
+    text.textContent = openCount + ' MARKET' + (openCount > 1 ? 'S' : '') + ' OPEN';
+    text.style.color = 'var(--bull)';
+  } else {
+    dot.className = 'mh-dot closed';
+    text.textContent = 'MARKETS CLOSED';
+    text.style.color = 'var(--bear)';
+  }
+}
+
+function startMhClock() {
+  function tick() {
+    var now = new Date();
+    // GMT+2
+    var gmt2 = new Date(now.getTime() + (2 * 3600000));
+    var hh = String(gmt2.getUTCHours()).padStart(2,'0');
+    var mm = String(gmt2.getUTCMinutes()).padStart(2,'0');
+    var ss = String(gmt2.getUTCSeconds()).padStart(2,'0');
+    var el = document.getElementById('mhClock');
+    if (el) el.textContent = hh+':'+mm+':'+ss+' GMT+2';
+  }
+  tick();
+  _mhClockTimer = setInterval(tick, 1000);
+}
+
+// Auto-refresh every 60s, clock every 1s
+document.addEventListener('DOMContentLoaded', function() {
+  startMhClock();
+  loadMarketHours();
+  _mhRefreshTimer = setInterval(loadMarketHours, 60000);
+});
 </script>
 </body>
 </html>

@@ -451,6 +451,31 @@ class AutoTrader:
 
         now = datetime.now(timezone.utc)
 
+        # ── Market hours guard — block execution when market is closed ──────
+        utc_weekday = now.weekday()  # 0=Mon, 6=Sun
+        utc_total = now.hour * 60 + now.minute
+
+        if asset_type in ("forex", "index", "commodity"):
+            # Forex/forex-adjacent: closed Fri 22:00 UTC → Sun 22:00 UTC
+            forex_closed = (
+                utc_weekday == 5  # all Saturday
+                or (utc_weekday == 6 and utc_total < 22 * 60)  # Sunday before 22:00
+                or (utc_weekday == 4 and utc_total >= 22 * 60)  # Friday after 22:00
+            )
+            if forex_closed:
+                return False, f"MARKET_CLOSED: {asset_type} market is closed (weekend)"
+
+        if asset_type in ("stock", "index"):
+            # Equity markets: only Mon-Fri
+            if utc_weekday >= 5:
+                return False, f"MARKET_CLOSED: {asset_type} market is closed (weekend)"
+            # JSE/LSE/DAX: 07:00–15:30 UTC | NYSE: 13:30–20:00 UTC
+            # Use a broad window Mon-Fri 07:00–21:00 UTC to cover all equity sessions
+            if not (7 * 60 <= utc_total < 21 * 60):
+                return False, f"MARKET_CLOSED: {asset_type} market hours are 07:00–21:00 UTC"
+
+        # crypto is always open — no guard needed
+
         session_cfg = cfg.get("AUTO_TRADE_SESSIONS", {})
 
         allowed_sessions = session_cfg.get(asset_type, ["always"])

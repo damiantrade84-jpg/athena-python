@@ -9735,6 +9735,153 @@ def api_binance_status():
     return api_bybit_status()
 
 
+@app.route("/api/market-hours")
+def api_market_hours():
+    """Return open/closed status for all major markets in GMT+2 (SAST/EET).
+
+    Sessions defined in UTC, converted to GMT+2 for display.
+    Crypto is always open (24/7). Forex closes Fri 22:00 UTC, reopens Sun 22:00 UTC.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    now_utc = datetime.now(timezone.utc)
+    now_gmt2 = now_utc + timedelta(hours=2)
+
+    utc_h = now_utc.hour
+    utc_m = now_utc.minute
+    utc_total = utc_h * 60 + utc_m
+    utc_weekday = now_utc.weekday()  # 0=Mon, 6=Sun
+
+    def mins_until(target_total_utc):
+        """Minutes until a UTC HH:MM time (expressed as total minutes)."""
+        diff = target_total_utc - utc_total
+        if diff <= 0:
+            diff += 24 * 60
+        return diff
+
+    def fmt_opens_in(minutes):
+        if minutes < 60:
+            return f"Opens in {minutes}m"
+        h = minutes // 60
+        m = minutes % 60
+        return f"Opens in {h}h {m}m" if m else f"Opens in {h}h"
+
+    # ── Forex (Sun 22:00 UTC – Fri 22:00 UTC) ────────────────────────────────
+    if utc_weekday == 5:  # Saturday — closed all day
+        forex_open = False
+        forex_status = "Closed (Weekend)"
+        # Opens Sun 22:00 UTC = (6-5)*24*60 - utc_total + 22*60
+        mins_to_sun22 = ((6 - utc_weekday) * 1440) - utc_total + 22 * 60
+        forex_opens_in = fmt_opens_in(mins_to_sun22 % (7 * 1440))
+    elif utc_weekday == 6 and utc_total < 22 * 60:  # Sunday before 22:00 UTC
+        forex_open = False
+        forex_status = "Closed (Weekend)"
+        forex_opens_in = fmt_opens_in(22 * 60 - utc_total)
+    elif utc_weekday == 4 and utc_total >= 22 * 60:  # Friday after 22:00 UTC
+        forex_open = False
+        forex_status = "Closed (Weekend)"
+        forex_opens_in = "Opens Sun 22:00 UTC"
+    else:
+        forex_open = True
+        forex_status = "Open"
+        forex_opens_in = None
+
+    # ── Sessions (UTC) ─────────────────────────────────────────────────────────
+    # Sydney:    21:00–06:00 UTC  (23:00–08:00 GMT+2)
+    # Tokyo:     00:00–09:00 UTC  (02:00–11:00 GMT+2)
+    # London:    07:00–16:00 UTC  (09:00–18:00 GMT+2)
+    # New York:  13:00–21:00 UTC  (15:00–23:00 GMT+2)
+
+    def session_state(start_utc, end_utc):
+        """Returns (is_open, mins_to_open_or_close)."""
+        s = start_utc * 60
+        e = end_utc * 60
+        if s <= e:
+            is_open = s <= utc_total < e
+            if is_open:
+                return True, e - utc_total
+            else:
+                return False, mins_until(s)
+        else:  # wraps midnight
+            is_open = utc_total >= s or utc_total < e
+            if is_open:
+                if utc_total >= s:
+                    return True, (24 * 60 - utc_total) + e
+                else:
+                    return True, e - utc_total
+            else:
+                return False, mins_until(s)
+
+    syd_open, syd_mins = session_state(21, 6)
+    tok_open, tok_mins = session_state(0, 9)
+    lon_open, lon_mins = session_state(7, 16)
+    ny_open, ny_mins = session_state(13, 21)
+
+    # London/NY overlap
+    overlap_open = lon_open and ny_open
+
+    # ── Equity markets (GMT+2 local times) ────────────────────────────────────
+    # JSE:       09:00–17:00 GMT+2 (Mon-Fri)
+    # LSE/UK100: 09:00–17:30 GMT+2 (Mon-Fri) = 07:00–15:30 UTC
+    # NYSE/DAX:  NYSE 15:30–22:00 GMT+2 | DAX 09:00–17:30 GMT+2
+    gmt2_h = now_gmt2.hour
+    gmt2_m = now_gmt2.minute
+    gmt2_total = gmt2_h * 60 + gmt2_m
+    is_weekday = utc_weekday <= 4  # Mon–Fri
+
+    def equity_state(open_gmt2, close_gmt2):
+        s = open_gmt2[0] * 60 + open_gmt2[1]
+        e = close_gmt2[0] * 60 + close_gmt2[1]
+        if not is_weekday:
+            diff = ((7 - utc_weekday) % 7) * 1440 + s - gmt2_total
+            return False, "Closed (Weekend)", f"Opens Mon {open_gmt2[0]:02d}:{open_gmt2[1]:02d}"
+        is_open = s <= gmt2_total < e
+        if is_open:
+            diff = e - gmt2_total
+            return True, "Open", f"Closes in {diff//60}h {diff%60}m" if diff >= 60 else f"Closes in {diff}m"
+        elif gmt2_total < s:
+            diff = s - gmt2_total
+            return False, "Pre-Market", fmt_opens_in(diff)
+        else:
+            return False, "Closed", f"Opens tomorrow {open_gmt2[0]:02d}:{open_gmt2[1]:02d}"
+
+    jse_open, jse_status, jse_note = equity_state((9, 0), (17, 0))
+    lse_open, lse_status, lse_note = equity_state((9, 0), (17, 30))
+    dax_open, dax_status, dax_note = equity_state((9, 0), (17, 30))
+    nyse_open, nyse_status, nyse_note = equity_state((15, 30), (22, 0))
+
+    # ── Build response ─────────────────────────────────────────────────────────
+    def session_detail(is_open, mins):
+        if not forex_open:
+            return {"open": False, "status": "Forex Closed", "note": forex_opens_in}
+        if is_open:
+            h, m = divmod(mins, 60)
+            note = f"Closes in {h}h {m}m" if h else f"Closes in {m}m"
+            return {"open": True, "status": "Active", "note": note}
+        else:
+            return {"open": False, "status": "Closed", "note": fmt_opens_in(mins)}
+
+    return jsonify({
+        "serverTime": now_utc.strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "localTime": now_gmt2.strftime("%Y-%m-%d %H:%M GMT+2"),
+        "sessions": {
+            "sydney":    session_detail(syd_open, syd_mins),
+            "tokyo":     session_detail(tok_open, tok_mins),
+            "london":    session_detail(lon_open, lon_mins),
+            "new_york":  session_detail(ny_open, ny_mins),
+            "overlap":   {"open": overlap_open and forex_open, "status": "London/NY Overlap" if (overlap_open and forex_open) else "Inactive", "note": "Highest liquidity"},
+        },
+        "markets": {
+            "forex":  {"open": forex_open, "status": forex_status, "note": forex_opens_in or "Closes Fri 22:00 UTC", "hours": "Sun 22:00 – Fri 22:00 UTC"},
+            "crypto": {"open": True, "status": "Open 24/7", "note": "Always open", "hours": "24/7"},
+            "jse":    {"open": jse_open, "status": jse_status, "note": jse_note, "hours": "09:00–17:00 GMT+2"},
+            "lse":    {"open": lse_open, "status": lse_status, "note": lse_note, "hours": "09:00–17:30 GMT+2"},
+            "dax":    {"open": dax_open, "status": dax_status, "note": dax_note, "hours": "09:00–17:30 GMT+2"},
+            "nyse":   {"open": nyse_open, "status": nyse_status, "note": nyse_note, "hours": "15:30–22:00 GMT+2"},
+        },
+    })
+
+
 @app.route("/api/execution-config", methods=["GET", "POST"])
 def api_execution_config():
     """Get or update execution config (EXECUTION_ENABLED, AUTO_EXECUTE, etc.)."""
