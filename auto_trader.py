@@ -569,7 +569,7 @@ class AutoTrader:
 
                 account = mt5_get_account()
 
-                if not account:
+                if not account or account.get("error"):
                     self._write_error(signal, "MT5_NOT_CONNECTED")
 
                     return False
