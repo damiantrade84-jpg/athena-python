@@ -397,6 +397,17 @@ def mt5_close_position(ticket: int) -> dict:
     if result and result.retcode == mt5.TRADE_RETCODE_DONE:
         log.info(f"[MT5] Manual close ticket={ticket} price={price}")
 
+        # Send Telegram notification for trade closed
+        try:
+            telegram_notify.notify_trade_closed(
+                pair=pos.symbol,
+                pnl_r=0.0,  # PnL not available in manual close
+                is_win=None,
+                duration_minutes=0
+            )
+        except Exception as _tn_e:
+            log.debug(f"[TELEGRAM] Trade close notification failed: {_tn_e}")
+
         return {"success": True, "ticket": ticket, "closePrice": price}
 
     err = result.comment if result else "order_send failed"

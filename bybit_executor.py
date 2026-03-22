@@ -345,13 +345,25 @@ def bybit_close_position(pair: str, direction: str, volume: float) -> dict:
         if not ccxt_symbol:
             return {"success": False, "error": f"No symbol mapping for {pair}"}
         close_side = "sell" if direction == "LONG" else "buy"
-        exchange.create_market_order(
+        order = exchange.create_market_order(
             ccxt_symbol,
             close_side,
             volume,
             params={"reduceOnly": True, "positionIdx": 0},
         )
         log.info(f"[BYBIT] Manual close {direction} {pair} vol={volume}")
+        
+        # Send Telegram notification for trade closed
+        try:
+            telegram_notify.notify_trade_closed(
+                pair=pair,
+                pnl_r=0.0,  # PnL not available in manual close
+                is_win=None,
+                duration_minutes=0
+            )
+        except Exception as _tn_e:
+            log.debug(f"[TELEGRAM] Trade close notification failed: {_tn_e}")
+        
         return {"success": True, "pair": pair, "direction": direction, "volume": volume}
     except Exception as e:
         log.error(f"[BYBIT] Close failed {pair}: {e}")

@@ -486,22 +486,7 @@ class AutoTrader:
                 _allowed = debate.get("allowed", True)
                 _reasoning = debate.get("reasoning", "")
                 log.info(f"[AUTO] {signal.get('pair')} debate: {_grade} — {_reasoning}")
-                # Notify Telegram of debate result
-                try:
-                    from telegram_notify import _send_message_async
-
-                    _bull = debate.get("bull_conviction", "?")
-                    _bear = debate.get("bear_conviction", "?")
-                    _msg = (
-                        f"🤖 *AI Debate: {signal.get('pair')} {signal.get('direction')}*\n"
-                        f"Grade: *{_grade}*\n"
-                        f"Bull: {_bull}/10 | Bear: {_bear}/10\n"
-                        f"Score: {signal.get('confluenceScore', 0):.2f}\n"
-                        f"_{_reasoning}_"
-                    )
-                    _send_message_async(_msg)
-                except Exception:
-                    pass
+                # AI debate Telegram notification disabled
                 if not _allowed:
                     return False, f"Debate: {_grade} — {_reasoning}"
                 # Apply score adjustment from debate (optional tuning)
