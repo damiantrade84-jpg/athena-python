@@ -3441,13 +3441,106 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
             log.error(f"BTC err: {e}")
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
+        from market_structure import NakedEngine
+        from indicators import calc_atr
+
+        _engine_b = NakedEngine()
 
         def _analyse(pair):
 
             try:
                 _pair_style = _resolve_scan_style(_requested_style, pair)
+                sig_a = analyze_pair(pair, btc_bias, style=_pair_style)
 
-                return pair, analyze_pair(pair, btc_bias, style=_pair_style), None
+                if not sig_a:
+                    return pair, None, None
+
+                # ── Run Engine B for combined scoring ──
+                ptype = pair.get("type", "")
+                try:
+                    resolved_style_b, style_profile_b = _naked_scan_style_profile(_pair_style)
+                    _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
+                    if ptype == "forex" and _forex_struct_tf == "D1" and resolved_style_b == "intraday":
+                        resolved_style_b, style_profile_b = _naked_scan_style_profile("swing")
+
+                    d1 = fetch_candles(pair, "D1", CONFIG.get("D1_CANDLES", 250))
+                    h4 = fetch_candles(pair, "H4", CONFIG.get("H4_CANDLES", 250))
+                    h1 = fetch_candles(pair, "H1", CONFIG.get("H1_CANDLES", 250))
+
+                    if h4 and len(h4) >= 20:
+                        _highs = [float(c["high"]) for c in h4]
+                        _lows = [float(c["low"]) for c in h4]
+                        _closes = [float(c["close"]) for c in h4]
+                        atr_series = calc_atr(_highs, _lows, _closes, 14)
+                        atr = float(atr_series[-1]) if atr_series else 0.0
+                        current_price = float(h4[-1]["close"])
+
+                        if atr and atr > 0:
+                            regime_label = _engine_b_regime_label(h4, ptype)
+                            direction = sig_a.get("direction")
+
+                            if direction in ("LONG", "SHORT"):
+                                res_b = _engine_b.analyze_structure(
+                                    d1 or [], h4, h1 or [], current_price, direction, atr,
+                                    regime_label,
+                                    fallback_rr=style_profile_b.get("fallback_rr", 2.0),
+                                    asset_type=ptype,
+                                )
+
+                                if res_b.get("structural_verdict") == "CLEAR":
+                                    conf_b = _engine_b.calculate_confidence(
+                                        res_b, current_price, direction,
+                                        entry_candles=h1 or h4,
+                                        style_profile=style_profile_b,
+                                    )
+                                    b_score = float(conf_b.get("score", 0))
+                                    b_max = float(conf_b.get("max_possible", 5))
+
+                                    # Attach Engine B data to signal
+                                    sig_a["engine_b_score"] = round(b_score, 2)
+                                    sig_a["engine_b_max"] = round(b_max, 1)
+                                    sig_a["engine_b_pct"] = round(b_score / b_max * 100, 1) if b_max else 0
+                                    sig_a["engine_b_verdict"] = res_b.get("structural_verdict")
+                                    sig_a["engine_b_bos"] = res_b.get("bos_confirmed", False)
+                                    sig_a["engine_b_ob"] = res_b.get("ob_at_zone", False)
+                                    sig_a["engine_b_sl"] = res_b.get("recommended_stop_loss")
+                                    sig_a["engine_b_tp"] = res_b.get("recommended_take_profit")
+
+                                    # Combined conviction score (Engine C style)
+                                    # Normalize both to 0-1 scale then combine
+                                    a_max = sig_a.get("maxScore", 3.0)
+                                    a_score = sig_a.get("confluenceScore", 0)
+                                    a_norm = min(a_score / a_max, 1.0) if a_max else 0
+                                    b_norm = min(b_score / b_max, 1.0) if b_max else 0
+
+                                    # Weight: 60% Engine A, 40% Engine B when aligned
+                                    combined_conviction = (a_norm * 0.6) + (b_norm * 0.4)
+                                    sig_a["combinedConviction"] = round(combined_conviction, 4)
+                                    sig_a["enginesAligned"] = True
+
+                                    log.debug(
+                                        f"[SCAN+B] {pair.get('display')} A={a_score:.2f}/{a_max} B={b_score:.2f}/{b_max} "
+                                        f"combined={combined_conviction:.3f}"
+                                    )
+                                else:
+                                    # Engine B no clear signal - use Engine A only at reduced conviction
+                                    a_max = sig_a.get("maxScore", 3.0)
+                                    a_score = sig_a.get("confluenceScore", 0)
+                                    a_norm = min(a_score / a_max, 1.0) if a_max else 0
+                                    sig_a["combinedConviction"] = round(a_norm * 0.6, 4)  # 60% of A only
+                                    sig_a["enginesAligned"] = False
+                                    sig_a["engine_b_verdict"] = res_b.get("structural_verdict", "UNCLEAR")
+
+                except Exception as _b_err:
+                    log.debug(f"[SCAN+B] {pair.get('display')} Engine B failed: {_b_err}")
+                    # Fallback: use Engine A score only
+                    a_max = sig_a.get("maxScore", 3.0)
+                    a_score = sig_a.get("confluenceScore", 0)
+                    a_norm = min(a_score / a_max, 1.0) if a_max else 0
+                    sig_a["combinedConviction"] = round(a_norm * 0.6, 4)
+                    sig_a["enginesAligned"] = False
+
+                return pair, sig_a, None
 
             except Exception as e:
                 return pair, None, str(e)
@@ -3576,9 +3669,10 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
 
         log.info(f"Scan funnel: {scan_funnel}")
 
-        results.sort(key=lambda x: x["confluenceScore"], reverse=True)
+        # Sort by combined conviction (Engine A+B) when available, fallback to confluenceScore
+        results.sort(key=lambda x: x.get("combinedConviction", x.get("confluenceScore", 0) / x.get("maxScore", 3.0)), reverse=True)
 
-        watchlist.sort(key=lambda x: x["confluenceScore"], reverse=True)
+        watchlist.sort(key=lambda x: x.get("combinedConviction", x.get("confluenceScore", 0) / x.get("maxScore", 3.0)), reverse=True)
 
         results = apply_correlation_cap(results)
 

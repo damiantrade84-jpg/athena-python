@@ -337,10 +337,11 @@ class AutoTrader:
         for _s in signals:
             _s["timestamp"] = _scan_ts
 
-        # Sort by score descending — best signal first
+        # Sort by combined conviction (Engine A+B) descending — best signal first
+        # Falls back to normalized confluenceScore if combinedConviction not present
 
         signals = sorted(
-            signals, key=lambda s: s.get("confluenceScore", 0), reverse=True
+            signals, key=lambda s: s.get("combinedConviction", s.get("confluenceScore", 0) / s.get("maxScore", 3.0)), reverse=True
         )
 
         max_per_scan = cfg.get("AUTO_TRADE_MAX_PER_SCAN", 1)
@@ -369,35 +370,49 @@ class AutoTrader:
         log.info(f"[AUTO] Scan complete — {executed} trade(s) executed")
 
     def _can_execute(self, signal: dict, cfg: dict) -> tuple[bool, str]:
-        """Check score gate + session filter."""
-
-        score = signal.get("confluenceScore", 0)
-
-        max_score = signal.get("maxScore", 13)
+        """Check score gate + session filter. Uses combined Engine A+B conviction when available."""
 
         asset_type = signal.get("type", "")
 
-        # Per-class auto-trade minimum — different engines have different score scales:
-        # factor engine (crypto/stock/commodity/index) → 0–3.0
-        # forex engine → 0–1.0
-        # AUTO_TRADE_MIN_SCORE can be a dict (per-class) or a flat float (legacy)
-        _auto_min_cfg = cfg.get("AUTO_TRADE_MIN_SCORE", {})
+        # ── Combined conviction scoring (Engine A + B) ──
+        # combinedConviction is 0-1 scale: (A_norm * 0.6) + (B_norm * 0.4) when aligned
+        # Falls back to A_norm * 0.6 when Engine B has no clear signal
+        combined_conviction = signal.get("combinedConviction")
+        engines_aligned = signal.get("enginesAligned", False)
+
+        # Legacy fallback: normalize Engine A score to 0-1 if no combined score
+        if combined_conviction is None:
+            score = signal.get("confluenceScore", 0)
+            max_score = signal.get("maxScore", 3.0)
+            combined_conviction = min(score / max_score, 1.0) if max_score else 0
+
+        # Auto-trade minimum conviction (0-1 scale)
+        # Default: 0.50 = requires decent Engine A score OR Engine A+B alignment
+        # Higher values (0.60-0.70) = stricter, prefer aligned signals
+        _auto_min_cfg = cfg.get("AUTO_TRADE_MIN_CONVICTION", {})
         if isinstance(_auto_min_cfg, dict):
-            auto_min = _auto_min_cfg.get(asset_type, _auto_min_cfg.get("crypto", 0.80))
+            auto_min_conviction = _auto_min_cfg.get(asset_type, _auto_min_cfg.get("default", 0.50))
         else:
-            auto_min = float(_auto_min_cfg)  # backward compat with flat value
+            auto_min_conviction = float(_auto_min_cfg) if _auto_min_cfg else 0.50
 
-        class_mins = cfg.get("MIN_CONFLUENCE_CLASS", {})
-        class_floor = class_mins.get(asset_type, cfg.get("MIN_CONFLUENCE", 0.70))
+        # Bonus threshold for aligned signals (both engines agree)
+        # Aligned signals can pass at lower conviction since structure confirms
+        if engines_aligned:
+            auto_min_conviction = auto_min_conviction * 0.85  # 15% discount for alignment
 
-        min_score = max(auto_min, class_floor)
+        # Engine B data for logging
+        b_score = signal.get("engine_b_score", 0)
+        b_max = signal.get("engine_b_max", 5)
+        b_verdict = signal.get("engine_b_verdict", "N/A")
 
         log.info(
-            f"[AUTO] {signal.get('pair')} candidate: score={score}/{max_score} min={min_score} dir={signal.get('direction')}"
+            f"[AUTO] {signal.get('pair')} candidate: conviction={combined_conviction:.3f} min={auto_min_conviction:.3f} "
+            f"aligned={engines_aligned} A={signal.get('confluenceScore', 0):.2f}/{signal.get('maxScore', 3)} "
+            f"B={b_score}/{b_max} ({b_verdict}) dir={signal.get('direction')}"
         )
 
-        if score < min_score:
-            return False, f"score {score:.1f} < min {min_score}"
+        if combined_conviction < auto_min_conviction:
+            return False, f"conviction {combined_conviction:.3f} < min {auto_min_conviction:.3f}"
 
         # Regime filter — only execute in TRENDING regime (37% WR vs 11% RANGING, 0% DEVELOPING)
         _trend_state = signal.get("trendState", "UNKNOWN")
