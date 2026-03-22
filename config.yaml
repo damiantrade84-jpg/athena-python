@@ -311,6 +311,9 @@ MICROSTRUCTURE_FEEDS_ENABLED: true
 # When true, each ENGINE C scan logs ALIGNED tradeable consensus rows to shadow_signals (audit.db).
 SHADOW_LEDGER_ENABLED: true 
 
+# Demo testing: increase max simultaneous open trades from default 20 to 40
+MAX_OPEN_POSITIONS: 40
+
 # Pair-specific routing. Use this to disable filters that do not help a pair,
 # zero out weak votes, or tighten thresholds without touching the whole asset class.
 # Valid vote keys: d1_trend, h1_ema, d1_adx, h4_macd, h4_oscillator, volume,
