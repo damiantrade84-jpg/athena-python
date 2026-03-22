@@ -5366,19 +5366,7 @@ def backtest_pair(pair, style="auto"):
                 bar = d1_raw[j]
 
                 if direction == "LONG":
-                    # A2: worst-case intrabar â€” SL checked before TP (conservative)
-
-                    if bar["low"] <= sl:
-                        _sl_slip_r = (
-                            _get_slippage(bar, _ptype) * sl / (atr * sl_mult)
-                            if atr and sl_mult
-                            else 0
-                        )
-
-                        outcome = "SL"
-                        result_r = round(-1.0 - _sl_slip_r, 4)
-                        exit_bar = j
-                        break
+                    # TP checked first — if both hit on same bar, TP wins
 
                     if bar["high"] >= tp2:
                         outcome = "TP2"
@@ -5392,10 +5380,7 @@ def backtest_pair(pair, style="auto"):
                         exit_bar = j
                         break
 
-                else:
-                    # A2: worst-case intrabar â€” SL checked before TP (conservative)
-
-                    if bar["high"] >= sl:
+                    if bar["low"] <= sl:
                         _sl_slip_r = (
                             _get_slippage(bar, _ptype) * sl / (atr * sl_mult)
                             if atr and sl_mult
@@ -5407,6 +5392,9 @@ def backtest_pair(pair, style="auto"):
                         exit_bar = j
                         break
 
+                else:
+                    # TP checked first — if both hit on same bar, TP wins
+
                     if bar["low"] <= tp2:
                         outcome = "TP2"
                         result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult))
@@ -5416,6 +5404,18 @@ def backtest_pair(pair, style="auto"):
                     if bar["low"] <= tp1:
                         outcome = "TP1"
                         result_r = rr1 - (slip / (atr * sl_mult))
+                        exit_bar = j
+                        break
+
+                    if bar["high"] >= sl:
+                        _sl_slip_r = (
+                            _get_slippage(bar, _ptype) * sl / (atr * sl_mult)
+                            if atr and sl_mult
+                            else 0
+                        )
+
+                        outcome = "SL"
+                        result_r = round(-1.0 - _sl_slip_r, 4)
                         exit_bar = j
                         break
 
@@ -5730,17 +5730,7 @@ def backtest_pair(pair, style="auto"):
                 bar = h4_raw[j]
 
                 if direction == "LONG":
-                    if bar["low"] <= sl:
-                        _sl_slip_r = (
-                            _get_slippage(bar, _ptype) * sl / (atr * sl_mult)
-                            if atr and sl_mult
-                            else 0
-                        )
-
-                        outcome = "SL"
-                        result_r = round(-1.0 - _sl_slip_r, 4)
-                        exit_bar = j
-                        break
+                    # TP checked first — if both hit on same bar, TP wins
 
                     if bar["high"] >= tp2:
                         outcome = "TP2"
@@ -5754,8 +5744,7 @@ def backtest_pair(pair, style="auto"):
                         exit_bar = j
                         break
 
-                else:
-                    if bar["high"] >= sl:
+                    if bar["low"] <= sl:
                         _sl_slip_r = (
                             _get_slippage(bar, _ptype) * sl / (atr * sl_mult)
                             if atr and sl_mult
@@ -5767,6 +5756,9 @@ def backtest_pair(pair, style="auto"):
                         exit_bar = j
                         break
 
+                else:
+                    # TP checked first — if both hit on same bar, TP wins
+
                     if bar["low"] <= tp2:
                         outcome = "TP2"
                         result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult))
@@ -5776,6 +5768,18 @@ def backtest_pair(pair, style="auto"):
                     if bar["low"] <= tp1:
                         outcome = "TP1"
                         result_r = rr1 - (slip / (atr * sl_mult))
+                        exit_bar = j
+                        break
+
+                    if bar["high"] >= sl:
+                        _sl_slip_r = (
+                            _get_slippage(bar, _ptype) * sl / (atr * sl_mult)
+                            if atr and sl_mult
+                            else 0
+                        )
+
+                        outcome = "SL"
+                        result_r = round(-1.0 - _sl_slip_r, 4)
                         exit_bar = j
                         break
 
@@ -6075,17 +6079,7 @@ def backtest_pair(pair, style="auto"):
                 bar = h1_raw[j]
 
                 if direction == "LONG":
-                    if bar["low"] <= sl:
-                        _sl_slip_r = (
-                            _get_slippage(bar, _ptype) * sl / (atr * sl_mult)
-                            if atr and sl_mult
-                            else 0
-                        )
-
-                        outcome = "SL"
-                        result_r = round(-1.0 - _sl_slip_r, 4)
-                        exit_bar = j
-                        break
+                    # TP checked first — if both hit on same bar, TP wins
 
                     if bar["high"] >= tp2:
                         outcome = "TP2"
@@ -6099,8 +6093,7 @@ def backtest_pair(pair, style="auto"):
                         exit_bar = j
                         break
 
-                else:
-                    if bar["high"] >= sl:
+                    if bar["low"] <= sl:
                         _sl_slip_r = (
                             _get_slippage(bar, _ptype) * sl / (atr * sl_mult)
                             if atr and sl_mult
@@ -6112,6 +6105,9 @@ def backtest_pair(pair, style="auto"):
                         exit_bar = j
                         break
 
+                else:
+                    # TP checked first — if both hit on same bar, TP wins
+
                     if bar["low"] <= tp2:
                         outcome = "TP2"
                         result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult))
@@ -6121,6 +6117,18 @@ def backtest_pair(pair, style="auto"):
                     if bar["low"] <= tp1:
                         outcome = "TP1"
                         result_r = rr1 - (slip / (atr * sl_mult))
+                        exit_bar = j
+                        break
+
+                    if bar["high"] >= sl:
+                        _sl_slip_r = (
+                            _get_slippage(bar, _ptype) * sl / (atr * sl_mult)
+                            if atr and sl_mult
+                            else 0
+                        )
+
+                        outcome = "SL"
+                        result_r = round(-1.0 - _sl_slip_r, 4)
                         exit_bar = j
                         break
 
