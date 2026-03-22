@@ -7214,6 +7214,7 @@ def run_full_backtest(style="auto", asset_class: str | None = None):
         pairs_to_test = [p for p in pairs_to_test if p.get("type") == _ac]
 
     results = []
+    _best_per_pair = {}
     errors = []
 
     def _bt(pair):
@@ -8580,12 +8581,21 @@ def api_scan_naked():
                         "fib": {"fib618": 0.0, "fib500": 0.0},
                         "naked_data": res,
                     }
-                    results.append(signal)
+                    _pair_key = pair.get("display", "")
+                    _existing = _best_per_pair.get(_pair_key)
+                    if _existing is None or signal["confluenceScore"] > _existing["confluenceScore"]:
+                        _best_per_pair[_pair_key] = signal
                 else:
                     log.warning(f"[NAKED-DBG] {pair['display']} {direction}: verdict={verdict} seq={seq} — SKIPPED")
         except Exception as e:
             log.warning(f"[NAKED-SCAN] Error on {pair['display']}: {e}", exc_info=True)
             continue
+
+    results = sorted(
+        _best_per_pair.values(),
+        key=lambda x: x.get("confluenceScore", 0),
+        reverse=True,
+    )
 
     return jsonify(_json_safe({"success": True, "signals": results}))
 
