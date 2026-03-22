@@ -11090,56 +11090,9 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
     if _oi_divergence and _oi_divergence.get("warning"):
         warn_list.append(_oi_divergence["warning"])
 
-    # Smart max_score: Only count factors that produced real data
-    # Prevents dead COT/carry from inflating denominator for altcoins
-    try:
-        factor_scores = res.get("factor_scores", {})
-        asset_type = pair.get("type", "")
-        
-        # Get base weights for this asset type
-        base_weights = CONFIG.get("FACTOR_WEIGHTS", {}).get(asset_type, {})
-        
-        # Map factor names to weight keys
-        _weight_key_map = {
-            "trend": "trend",
-            "momentum": "momentum", 
-            "derivatives": "derivatives",
-            "microstructure": "microstructure",
-            "trend_strength": "trend",
-            "volatility": "volatility",
-            "volume": "volume",
-            "structure": "structure",
-            "carry": "carry",
-        }
-        
-        _active_max = 0.0
-        for factor_name, weight in base_weights.items():
-            if weight <= 0:
-                continue
-            
-            # Find corresponding factor score
-            factor_score = None
-            for f_name, f_score in factor_scores.items():
-                mapped_key = _weight_key_map.get(f_name, f_name)
-                if mapped_key == factor_name:
-                    factor_score = f_score
-                    break
-            
-            # Factor voted (non-None, non-zero) → count its weight
-            if factor_score is not None and factor_score != 0:
-                _active_max += weight
-            # Factor is directional type but returned None → data missing, skip
-            elif factor_score is None and factor_name in ("derivatives", "carry"):
-                continue  # Don't count in max_score
-            else:
-                _active_max += weight  # Non-data factors always count
-        
-        smart_max_score = _active_max if _active_max > 0 else sum(w for w in base_weights.values() if w > 0)
-        res["maxScoreOverride"] = smart_max_score
-        
-    except Exception as e:
-        log.debug(f"[SMART MAX] Failed to calculate smart max_score for {pair.get('display')}: {e}")
-        # Fallback to default behavior
+    # Max possible final_score is always 3.0 
+    # (abs(dir_z) * (0.6 + nondir_norm * 0.4), z capped at 3.0)
+    res["maxScoreOverride"] = 3.0
     
     max_score = res.get("maxScoreOverride") or _max_score_for_pair(pair)
 
