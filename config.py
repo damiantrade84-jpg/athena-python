@@ -333,7 +333,7 @@ CONFIG: dict = {
         "liquidity_wall_threshold": 5,
     },
     # Log Engine C ALIGNED+tradeable rows to shadow_signals (no broker); Performance tab reads them.
-    "SHADOW_LEDGER_ENABLED": False,
+    "SHADOW_LEDGER_ENABLED": True,
     "MICROSTRUCTURE_FEEDS_ENABLED": True,
     "PAIR_PROFILES": {},
     "BT_AUTO_TOGGLE": False,  # If False, backtest will never enable/disable live pairs
