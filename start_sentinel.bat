@@ -14,6 +14,6 @@ if exist "venv\Scripts\activate.bat" (
     call .venv\Scripts\activate.bat
 )
 
-echo Starting Sentinel Pro v4.0...
-py athena.py
+echo Starting Sentinel Pro v4.0 (Python 3.13)...
+py -3.13 athena.py
 pause
