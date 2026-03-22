@@ -45,10 +45,13 @@ def start_telegram_bot():
         return
     
     def _run_bot():
+        import traceback
         try:
-            asyncio.run(_start_bot_async(token, chat_id))
+            from telegram.ext import Application, CommandHandler, CallbackQueryHandler
+            # Build and run the application — run_polling() manages its own event loop
+            # Must be called from a plain thread (not inside an existing async context)
+            _build_and_run(token, chat_id)
         except Exception as e:
-            import traceback
             log.error(f"[TELEGRAM] Bot failed to start: {e}")
             log.error(f"[TELEGRAM] Full traceback:\n{traceback.format_exc()}")
     
@@ -57,8 +60,9 @@ def start_telegram_bot():
     log.warning("[TELEGRAM] Bot started in background thread")
 
 
-async def _start_bot_async(token: str, chat_id: str):
-    """Async bot startup using python-telegram-bot v20."""
+def _build_and_run(token: str, chat_id: str):
+    """Build and run the bot synchronously. Application.run_polling() manages its own event loop.
+    Must be called from a plain non-async thread."""
     from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
     from telegram.ext import (
         Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -496,7 +500,7 @@ async def _start_bot_async(token: str, chat_id: str):
     app.add_handler(CallbackQueryHandler(button_callback))
     
     log.warning("[TELEGRAM] Bot handlers registered, starting polling...")
-    await app.run_polling(drop_pending_updates=True)
+    app.run_polling(drop_pending_updates=True)
 
 
 # ── Proactive notification function (called from athena.py) ──
