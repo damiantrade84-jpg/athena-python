@@ -333,10 +333,16 @@ def _get_latest_rate(series_id: str, as_of_date: str = None) -> Optional[float]:
     _ensure_series(series_id)
     with _db_lock:
         con = sqlite3.connect(_DB_PATH, timeout=15.0)
-        row = con.execute(
-            "SELECT rate FROM rate_series WHERE series_id=? ORDER BY obs_date DESC LIMIT 1",
-            (series_id,),
-        ).fetchone()
+        if as_of_date:
+            row = con.execute(
+                "SELECT rate FROM rate_series WHERE series_id=? AND obs_date<=? ORDER BY obs_date DESC LIMIT 1",
+                (series_id, as_of_date),
+            ).fetchone()
+        else:
+            row = con.execute(
+                "SELECT rate FROM rate_series WHERE series_id=? ORDER BY obs_date DESC LIMIT 1",
+                (series_id,),
+            ).fetchone()
         con.close()
     return row[0] if row else None
 
@@ -348,10 +354,16 @@ def _get_rate_series(
     _ensure_series(series_id)
     with _db_lock:
         con = sqlite3.connect(_DB_PATH, timeout=15.0)
-        rows = con.execute(
-            "SELECT rate FROM rate_series WHERE series_id=? ORDER BY obs_date DESC LIMIT ?",
-            (series_id, months),
-        ).fetchall()
+        if as_of_date:
+            rows = con.execute(
+                "SELECT rate FROM rate_series WHERE series_id=? AND obs_date<=? ORDER BY obs_date DESC LIMIT ?",
+                (series_id, as_of_date, months),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT rate FROM rate_series WHERE series_id=? ORDER BY obs_date DESC LIMIT ?",
+                (series_id, months),
+            ).fetchall()
         con.close()
     return [r[0] for r in reversed(rows)]
 
