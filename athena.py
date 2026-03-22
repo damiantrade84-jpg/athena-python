@@ -3532,40 +3532,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
                     scan_funnel["dead_ranging"] += 1
 
                 if tier == "trade":
-                    # Run AI analysis in background thread — only notify if grade A or B
-                    # Respect AI_ON_DEMAND_ONLY: skip AI on automatic scans
-                    if telegram_notify._is_enabled() and not CONFIG.get("AI_ON_DEMAND_ONLY", False):
-                        _sig_snap = {
-                            k: v
-                            for k, v in sig.items()
-                            if k not in ("d1", "h4", "h1", "h4Candles")
-                        }
-
-                        def _ai_notify(_s=_sig_snap):
-                            try:
-                                ai = run_ai(_s)
-                                telegram_notify.notify_signal_with_ai(
-                                    pair=_s["pair"],
-                                    direction=_s["direction"],
-                                    score=_s.get("confluenceScore", 0),
-                                    max_score=_s.get("maxScore", 3.0),
-                                    entry=_s.get("price", 0),
-                                    sl=_s.get("sl", 0),
-                                    tp1=_s.get("tp1", 0),
-                                    rr1=_s.get("rr1", 0),
-                                    regime=_s.get("trendState", ""),
-                                    signal_class=_s.get("signalClass", ""),
-                                    ai_grade=ai.get("grade", ""),
-                                    ai_verdict=ai.get("verdict", ""),
-                                    ai_edge_prob=ai.get("edgeProbability", 0),
-                                    ai_risk=ai.get("riskLevel", ""),
-                                    ai_warnings=ai.get("warnings", []),
-                                    is_auto_executed=False,
-                                )
-                            except Exception as _e:
-                                log.debug(f"[TELEGRAM] AI notify failed: {_e}")
-
-                        threading.Thread(target=_ai_notify, daemon=True).start()
+                    # Legacy AI notify disabled — Engine C handles notifications now
+                    pass
 
                     try:
                         sig["serverIndicators"] = fetch_eodhd_indicators(pair)
