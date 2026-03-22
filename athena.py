@@ -7469,9 +7469,33 @@ def _init_audit_db(db_path: str) -> None:
             "factors_json",
             "TEXT",
         ),  # Factor scores + key indicators (COT, carry, microstructure, etc.)
+        ("signal_price_ref", "REAL"),  # Scan/signal price at order time (vs entry_price fill)
+        ("slippage_bps", "REAL"),  # Adverse slippage in basis points (sign = bad for trader)
     ]:
         if col not in existing:
             con.execute(f"ALTER TABLE audit_log ADD COLUMN {col} {defn}")
+
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shadow_signals (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts            TEXT NOT NULL,
+            pair          TEXT,
+            asset_type    TEXT,
+            direction     TEXT,
+            signal_price  REAL,
+            sl            REAL,
+            tp            REAL,
+            rr            REAL,
+            conviction    REAL,
+            verdict       TEXT,
+            tier          TEXT,
+            source        TEXT,
+            payload_json  TEXT
+        )
+        """
+    )
+    con.execute("CREATE INDEX IF NOT EXISTS idx_shadow_ts ON shadow_signals (ts)")
 
     con.commit()
 
@@ -7481,6 +7505,46 @@ def _init_audit_db(db_path: str) -> None:
 _AUDIT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
 
 _init_audit_db(_AUDIT_DB)
+
+
+def _insert_shadow_from_engine_c(consensus: dict) -> None:
+    """Append-only log of Engine C ALIGNED+tradeable rows (no broker)."""
+    if not isinstance(consensus, dict) or not CONFIG.get("SHADOW_LEDGER_ENABLED"):
+        return
+    if consensus.get("verdict") != "ALIGNED" or not consensus.get("trade"):
+        return
+    pair = consensus.get("display") or consensus.get("symbol") or ""
+    try:
+        slim = {
+            "engine_weights": consensus.get("engine_weights"),
+            "components": consensus.get("components"),
+            "sl_method": consensus.get("sl_method"),
+            "tp_method": consensus.get("tp_method"),
+        }
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
+            con.execute(
+                """INSERT INTO shadow_signals
+                   (ts,pair,asset_type,direction,signal_price,sl,tp,rr,conviction,verdict,tier,source,payload_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    datetime.now(timezone.utc).isoformat(),
+                    pair,
+                    consensus.get("type"),
+                    consensus.get("direction"),
+                    consensus.get("entry"),
+                    consensus.get("sl"),
+                    consensus.get("tp"),
+                    consensus.get("rr"),
+                    consensus.get("conviction"),
+                    consensus.get("verdict"),
+                    consensus.get("tier"),
+                    "ENGINE_C_SCAN",
+                    json.dumps(_json_safe(slim)),
+                ),
+            )
+            con.commit()
+    except Exception as exc:
+        log.debug(f"[SHADOW] insert failed: {exc}")
 
 
 # ── AI Learning + Auto-Trader ─────────────────────────────────────────────
@@ -8867,6 +8931,7 @@ def api_engine_c_scan():
             # Categorise
             verdict = consensus["verdict"]
             if verdict == "ALIGNED":
+                _insert_shadow_from_engine_c(consensus)
                 results["aligned"].append(consensus)
             elif verdict == "A_ONLY":
                 results["a_only"].append(consensus)
@@ -9221,8 +9286,9 @@ def api_execute():
                     }
                     con.execute(
                         "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style,"
-                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
+                        "signal_price_ref,slippage_bps) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             datetime.now(timezone.utc).isoformat(),
                             pair,
@@ -9243,6 +9309,8 @@ def api_execute():
                             str(result.get("ticket", "")),
                             result.get("feeCost"),
                             json.dumps(_factors),
+                            result.get("signalPriceRef"),
+                            result.get("slippageBps"),
                         ),
                     )
 
@@ -9475,8 +9543,9 @@ def api_webhook():
                     }
                     con.execute(
                         "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style,"
-                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,factors_json) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,factors_json,"
+                        "signal_price_ref,slippage_bps) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             datetime.now(timezone.utc).isoformat(),
                             pair_name,
@@ -9496,6 +9565,8 @@ def api_webhook():
                             approval.risk_pct,
                             str(result.get("ticket", "")),
                             json.dumps(_factors),
+                            result.get("signalPriceRef"),
+                            result.get("slippageBps"),
                         ),
                     )
 
@@ -11995,7 +12066,18 @@ def api_performance():
         trades = [dict(r) for r in rows]
 
         if not trades:
-            return jsonify({"total_trades": 0, "message": "No completed trades yet"})
+            return jsonify(
+                {
+                    "total_trades": 0,
+                    "message": "No completed trades yet",
+                    "execution_quality": {
+                        "trades_with_slippage": 0,
+                        "median_abs_slippage_bps": None,
+                        "mean_abs_slippage_bps": None,
+                    },
+                    "attribution_by_source": {},
+                }
+            )
 
         wins = [t for t in trades if (t.get("pnl") or 0) > 0]
 
@@ -12208,6 +12290,56 @@ def api_performance():
 
             equity_curve.append(round(cum, 2))
 
+        # Execution quality — adverse slippage magnitude at entry (Bybit/MT5 when captured)
+        slip_vals = [
+            abs(float(t["slippage_bps"]))
+            for t in trades
+            if t.get("slippage_bps") is not None
+        ]
+        execution_quality = {
+            "trades_with_slippage": len(slip_vals),
+            "median_abs_slippage_bps": None,
+            "mean_abs_slippage_bps": None,
+        }
+        if slip_vals:
+            slip_sorted = sorted(slip_vals)
+            mid = len(slip_sorted) // 2
+            if len(slip_sorted) % 2:
+                med_slip = slip_sorted[mid]
+            else:
+                med_slip = (slip_sorted[mid - 1] + slip_sorted[mid]) / 2.0
+            execution_quality["median_abs_slippage_bps"] = round(med_slip, 2)
+            execution_quality["mean_abs_slippage_bps"] = round(
+                sum(slip_vals) / len(slip_vals), 2
+            )
+
+        # Attribution by coarse execution / grade bucket (closed trades only)
+        att_raw: dict = defaultdict(lambda: {"n": 0, "w": 0, "r_sum": 0.0})
+        for t in trades:
+            g = str(t.get("grade") or "UNKNOWN").upper()
+            if g.startswith("AUTO"):
+                bucket = "AUTO_ERR" if "ERR" in g else "AUTO"
+            elif "MANUAL" in g and "ERR" in g:
+                bucket = "MANUAL_ERR"
+            elif g == "WEBHOOK":
+                bucket = "WEBHOOK"
+            elif g == "EXECUTED":
+                bucket = "MANUAL_EXEC"
+            else:
+                bucket = "OTHER"
+            att_raw[bucket]["n"] += 1
+            if (t.get("pnl") or 0) > 0:
+                att_raw[bucket]["w"] += 1
+            att_raw[bucket]["r_sum"] += float(t.get("r_multiple") or 0)
+        attribution_by_source = {}
+        for b, v in att_raw.items():
+            if v["n"] > 0:
+                attribution_by_source[b] = {
+                    "trades": v["n"],
+                    "win_rate_pct": round(v["w"] / v["n"] * 100, 1),
+                    "total_r": round(v["r_sum"], 2),
+                }
+
         return jsonify(
             {
                 "total_trades": total,
@@ -12228,6 +12360,8 @@ def api_performance():
                 "average_holding_period_hours": avg_holding,
                 "equity_curve": equity_curve,
                 "last_20_trades": last_20,
+                "execution_quality": execution_quality,
+                "attribution_by_source": attribution_by_source,
             }
         )
 
@@ -12240,6 +12374,53 @@ def api_performance():
 # Microstructure live cache — populated by WS feed callbacks, keyed by symbol (e.g. "BTCUSDT")
 _micro_cache: dict = {}
 _ws_clients: list = []  # WS client instances for graceful shutdown
+
+
+@app.route("/api/microstructure-health")
+def api_microstructure_health():
+    """Feed freshness for crypto microstructure WS (operational dashboard)."""
+    now = time.time()
+    enabled = bool(CONFIG.get("MICROSTRUCTURE_FEEDS_ENABLED"))
+    rows = []
+    for sym, data in _micro_cache.items():
+        if not isinstance(data, dict):
+            continue
+        ts = data.get("_updated_ts")
+        age = round(now - ts, 1) if ts is not None else None
+        rows.append(
+            {
+                "symbol": sym,
+                "age_sec": age,
+                "stale": age is None or age > 45.0,
+                "order_book_imbalance": data.get("order_book_imbalance"),
+                "liquidity_pressure": data.get("liquidity_pressure"),
+            }
+        )
+    rows.sort(key=lambda r: r["symbol"])
+    return jsonify(
+        _json_safe({"feeds_enabled": enabled, "symbol_count": len(rows), "symbols": rows})
+    )
+
+
+@app.route("/api/shadow-signals")
+def api_shadow_signals():
+    """Recent Engine C shadow ledger rows (requires SHADOW_LEDGER_ENABLED + scans)."""
+    try:
+        lim = int(request.args.get("limit", 50))
+    except (TypeError, ValueError):
+        lim = 50
+    lim = max(1, min(lim, 200))
+    try:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
+            con.row_factory = sqlite3.Row
+            q = con.execute(
+                "SELECT * FROM shadow_signals ORDER BY id DESC LIMIT ?",
+                (lim,),
+            ).fetchall()
+        return jsonify(_json_safe({"signals": [dict(r) for r in q]}))
+    except Exception as e:
+        log.error(f"api_shadow_signals: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
@@ -12376,6 +12557,7 @@ if __name__ == "__main__":
                             "liquidity_pressure",
                         )
                     }
+                    _micro_cache[sym]["_updated_ts"] = time.time()
 
                 return _cb
 

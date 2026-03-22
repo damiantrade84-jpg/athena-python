@@ -60,6 +60,25 @@ _INTERNAL_MAP = {
 _LEVERAGE = 1  # 1x — enables SHORT without amplified risk
 
 
+def _entry_slippage_bps(
+    direction: str, ref_price: float, fill_price: float
+) -> tuple[float | None, float | None]:
+    """Return (reference_price_used, slippage_bps). Positive bps = adverse for the trader."""
+    try:
+        ref = float(ref_price or 0)
+        fill = float(fill_price or 0)
+    except (TypeError, ValueError):
+        return None, None
+    if ref <= 0 or fill <= 0:
+        return (round(ref, 8) if ref > 0 else None, None)
+    ref = round(ref, 8)
+    if direction == "LONG":
+        bps = round((fill - ref) / ref * 10000.0, 2)
+    else:
+        bps = round((ref - fill) / ref * 10000.0, 2)
+    return ref, bps
+
+
 def _validate_exit_levels(
     direction: str, entry_price: float, sl: float, tp: float
 ) -> str | None:
@@ -547,6 +566,10 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         order_id = order.get("id", "")
         filled_price = float(order.get("average") or order.get("price") or price)
         filled_amount = float(order.get("filled") or volume)
+        _ref_for_slip = float(signal.get("price") or 0) or float(price)
+        _sig_ref, _slip_bps = _entry_slippage_bps(
+            direction, _ref_for_slip, filled_price
+        )
 
         log.info(
             f"[BYBIT] ENTRY FILLED: id={order_id} | {direction} {filled_amount} {ccxt_symbol} @ {filled_price}"
@@ -665,6 +688,8 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             "riskAmount": approval.risk_amount,
             "riskPct": approval.risk_pct,
             "feeCost": fee_cost,
+            "signalPriceRef": _sig_ref,
+            "slippageBps": _slip_bps,
         }
 
     except Exception as e:

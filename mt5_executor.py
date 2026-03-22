@@ -22,6 +22,25 @@ import telegram_notify
 log = logging.getLogger("athena")
 
 
+def _mt5_entry_slippage_bps(
+    direction: str, ref_price: float, fill_price: float
+) -> tuple[float | None, float | None]:
+    """Return (reference_price, slippage_bps). Positive bps = adverse for the trader."""
+    try:
+        ref = float(ref_price or 0)
+        fill = float(fill_price or 0)
+    except (TypeError, ValueError):
+        return None, None
+    if ref <= 0 or fill <= 0:
+        return (round(ref, 8) if ref > 0 else None, None)
+    ref = round(ref, 8)
+    if direction == "LONG":
+        bps = round((fill - ref) / ref * 10000.0, 2)
+    else:
+        bps = round((ref - fill) / ref * 10000.0, 2)
+    return ref, bps
+
+
 # ── Lazy MT5 import (only needed when execution is used) ─────────────────────
 
 _mt5 = None
@@ -812,6 +831,9 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                     f"[MT5] TP2 order failed (retcode={_rc}) — manage TP2 manually at {tp2}"
                 )
 
+    _ref_slip = float(signal_price) if signal_price > 0 else float(price)
+    _sref, _sbps = _mt5_entry_slippage_bps(direction, _ref_slip, float(result.price))
+
     return {
         "success": True,
         "ticket": result.order,
@@ -825,6 +847,8 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         "tp2Ticket": tp2_ticket,
         "riskAmount": approval.risk_amount,
         "riskPct": approval.risk_pct,
+        "signalPriceRef": _sref,
+        "slippageBps": _sbps,
     }
 
 

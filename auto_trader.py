@@ -685,9 +685,9 @@ class AutoTrader:
 
                         entry_price, sl, tp, volume, risk_amount, risk_pct,
 
-                        ticket, grade)
+                        ticket, grade, signal_price_ref, slippage_bps)
 
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         datetime.now(timezone.utc).isoformat(),
                         signal.get("pair"),
@@ -703,6 +703,8 @@ class AutoTrader:
                         approval.risk_pct,
                         result.get("ticket"),
                         "AUTO" + ("-DEMO" if is_demo else ""),
+                        result.get("signalPriceRef"),
+                        result.get("slippageBps"),
                     ),
                 )
 

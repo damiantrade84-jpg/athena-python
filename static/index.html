@@ -1097,16 +1097,69 @@ function switchTab(tab) {
   document.getElementById('panel-'+tab).classList.add('active');
 }
 
+function buildPerfCockpit(d, micro, sh) {
+  var eq = d.execution_quality || {};
+  var att = d.attribution_by_source || {};
+  var attRows = Object.keys(att).length
+    ? Object.entries(att).map(function(e) {
+        var x = e[1];
+        return '<tr><td>' + e[0] + '</td><td>' + x.trades + '</td><td>' + x.win_rate_pct + '%</td><td>' + (x.total_r != null ? x.total_r : '-') + 'R</td></tr>';
+      }).join('')
+    : '<tr><td colspan="4" style="color:var(--muted)">No closed-trade buckets yet</td></tr>';
+  var microRows = (micro.symbols && micro.symbols.length)
+    ? micro.symbols.slice(0, 24).map(function(m) {
+        var st = m.stale ? '<span style="color:#ff3b5c">stale</span>' : '<span style="color:#22c55e">ok</span>';
+        return '<tr><td>' + (m.symbol || '-') + '</td><td>' + (m.age_sec != null ? m.age_sec + 's' : '-') + '</td><td>' + st + '</td><td>' + (m.order_book_imbalance != null ? m.order_book_imbalance.toFixed(3) : '-') + '</td></tr>';
+      }).join('')
+    : '<tr><td colspan="4" style="color:var(--muted)">' + (micro.feeds_enabled ? 'No micro cache entries (WS starting or no updates)' : 'Feeds disabled — set MICROSTRUCTURE_FEEDS_ENABLED in config') + '</td></tr>';
+  var sigs = (sh.signals && sh.signals.length) ? sh.signals : [];
+  var shadowRows = sigs.length
+    ? sigs.map(function(s) {
+        return '<tr><td>' + (s.ts || '').slice(0, 19) + '</td><td>' + (s.pair || '-') + '</td><td>' + (s.direction || '-') + '</td><td>' + (s.conviction != null ? (s.conviction * 100).toFixed(0) + '%' : '-') + '</td><td>' + (s.tier || '-') + '</td></tr>';
+      }).join('')
+    : '<tr><td colspan="5" style="color:var(--muted)">No shadow rows — enable SHADOW_LEDGER_ENABLED and run ENGINE C scan</td></tr>';
+  return '<div class="perf-section" style="margin-top:20px"><h4>Decision cockpit</h4>' +
+    '<p style="font-size:11px;color:var(--muted);margin:0 0 12px 0">Execution quality (closed trades), source attribution, micro feed health, Engine C shadow ledger.</p>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">' +
+    '<div><h5 style="font-size:12px;margin:0 0 8px 0">Entry slippage (abs bps)</h5>' +
+    '<table class="perf-table"><tbody>' +
+    '<tr><td>Trades with fill quality</td><td>' + (eq.trades_with_slippage || 0) + '</td></tr>' +
+    '<tr><td>Median |slippage| bps</td><td>' + (eq.median_abs_slippage_bps != null ? eq.median_abs_slippage_bps : '-') + '</td></tr>' +
+    '<tr><td>Mean |slippage| bps</td><td>' + (eq.mean_abs_slippage_bps != null ? eq.mean_abs_slippage_bps : '-') + '</td></tr>' +
+    '</tbody></table></div>' +
+    '<div><h5 style="font-size:12px;margin:0 0 8px 0">Attribution (closed trades)</h5>' +
+    '<table class="perf-table"><thead><tr><th>Source</th><th>N</th><th>WR%</th><th>Total R</th></tr></thead><tbody>' + attRows + '</tbody></table></div>' +
+    '</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
+    '<div><h5 style="font-size:12px;margin:0 0 8px 0">Microstructure feed</h5>' +
+    '<table class="perf-table"><thead><tr><th>Symbol</th><th>Age</th><th>Status</th><th>OBI</th></tr></thead><tbody>' + microRows + '</tbody></table></div>' +
+    '<div><h5 style="font-size:12px;margin:0 0 8px 0">Shadow signals (Engine C)</h5>' +
+    '<table class="perf-table"><thead><tr><th>Time</th><th>Pair</th><th>Dir</th><th>Conv</th><th>Tier</th></tr></thead><tbody>' + shadowRows + '</tbody></table></div>' +
+    '</div></div>';
+}
+
 async function loadPerformance() {
   var el = document.getElementById('perfContent');
   el.innerHTML = '<div class="bt-progress"><div style="font-size:14px;font-weight:700">Loading performance data...</div></div>';
   try {
-    var resp = await fetch('/api/performance');
-    var d = await resp.json();
+    function fetchJsonSafe(url) {
+      return fetch(url).then(function(r) {
+        return r.json().catch(function() { return { error: 'json' }; });
+      }).catch(function() { return { error: 'network' }; });
+    }
+    var results = await Promise.all([
+      fetchJsonSafe('/api/performance'),
+      fetchJsonSafe('/api/microstructure-health'),
+      fetchJsonSafe('/api/shadow-signals?limit=40')
+    ]);
+    var d = results[0];
+    var micro = results[1].error ? { feeds_enabled: false, symbols: [] } : results[1];
+    var sh = results[2].error ? { signals: [] } : results[2];
     loadLearningStats();
     loadAutoTradeLog();
+    var cockpit = buildPerfCockpit(d, micro, sh);
     if (d.total_trades === 0 || d.message) {
-      el.innerHTML = '<div class="empty-state"><div class="icon">&#127942;</div><h3>No Completed Trades</h3><p>Execute trades and let them close to see performance stats.</p></div>';
+      el.innerHTML = '<div class="empty-state"><div class="icon">&#127942;</div><h3>No Completed Trades</h3><p>Execute trades and let them close to see performance stats.</p></div>' + cockpit;
       return;
     }
     function wrClass(wr) { return wr >= 55 ? 'wr-green' : (wr < 45 ? 'wr-red' : 'wr-neutral'); }
@@ -1149,12 +1202,14 @@ async function loadPerformance() {
     var tradeRows = (d.last_20_trades || []).map(function(t) {
       var pnlColor = (t.pnl || 0) >= 0 ? '#22c55e' : '#ff3b5c';
       var r = t.r_multiple != null ? t.r_multiple.toFixed(2) + 'R' : '-';
+      var slip = t.slippage_bps != null ? t.slippage_bps.toFixed(1) : '-';
       return '<tr>' +
         '<td>' + (t.pair || '-') + '</td>' +
         '<td>' + (t.direction || '-') + '</td>' +
         '<td>' + (t.exit_reason || '-') + '</td>' +
         '<td style="color:' + pnlColor + '">' + (t.pnl != null ? '$' + t.pnl.toFixed(2) : '-') + '</td>' +
         '<td style="color:' + pnlColor + '">' + r + '</td>' +
+        '<td>' + slip + '</td>' +
         '<td>' + (t.holding_period_hours != null ? t.holding_period_hours + 'h' : '-') + '</td>' +
         '</tr>';
     }).join('');
@@ -1177,9 +1232,9 @@ async function loadPerformance() {
         '<div class="perf-section"><h4>Win Rate by Asset Type</h4><table class="perf-table"><thead><tr><th>Type</th><th>WR%</th></tr></thead><tbody>' + (assetRows || '<tr><td colspan="2" style="color:var(--muted)">-</td></tr>') + '</tbody></table></div>' +
       '</div>' +
       '<div class="perf-section"><h4>Last 20 Completed Trades</h4>' +
-        '<table class="perf-table"><thead><tr><th>Pair</th><th>Dir</th><th>Exit</th><th>PnL</th><th>R</th><th>Hold</th></tr></thead><tbody>' +
-        (tradeRows || '<tr><td colspan="6" style="color:var(--muted)">No completed trades</td></tr>') +
-        '</tbody></table></div>';
+        '<table class="perf-table"><thead><tr><th>Pair</th><th>Dir</th><th>Exit</th><th>PnL</th><th>R</th><th>Slip bps</th><th>Hold</th></tr></thead><tbody>' +
+        (tradeRows || '<tr><td colspan="7" style="color:var(--muted)">No completed trades</td></tr>') +
+        '</tbody></table></div>' + buildPerfCockpit(d, micro, sh);
   } catch(err) {
     el.innerHTML = '<div class="bt-errors">Failed to load performance data: ' + err.message + '</div>';
   }
