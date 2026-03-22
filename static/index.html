@@ -4178,10 +4178,9 @@ function buildECCard(c, category) {
     html += '</div>';
   }
 
-  // Execute buttons (only show after vision confirms, or for aligned HIGH/MEDIUM)
-  if (category === 'aligned' && c.trade && c.tier !== 'SKIP') {
-    html += '<div id="ec-exec-' + sid + '" style="' +
-      (c.vision_applied ? '' : 'display:none;') + '">';
+  // Execute buttons — always create div, show after vision confirms
+  if (category !== 'conflict') {
+    html += '<div id="ec-exec-' + sid + '" style="display:none;">';
     html += buildECExecButtons(c, sid);
     html += '</div>';
   }

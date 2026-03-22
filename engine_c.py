@@ -347,6 +347,10 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
                     reward = abs(updated["tp"] - updated["entry"])
                     updated["rr"] = round(reward / risk, 2)
 
+    # If Vision confirms and conviction is above LOW threshold, allow trade
+    if action == "confirm" and new_conviction >= 0.35:
+        updated["trade"] = True
+
     if action in ("override", "contradict"):
         updated["trade"] = False
         updated["verdict"] = f"VISION_{action.upper()}"

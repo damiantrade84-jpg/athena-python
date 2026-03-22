@@ -8166,6 +8166,7 @@ def api_quick_execute():
     engine_b = d["engine_b"]
 
     pip_mode = d.get("pip_mode")  # "scalp", "intraday", or None (use Engine B structural)
+    _sizing_override = float(d.get("sizing_override", 1.0))
     
     if pip_mode in ("scalp", "intraday"):
         # Override with Engine A researched pip logic — tight SL/TP for fast execution
@@ -8277,7 +8278,7 @@ def api_quick_execute():
             open_positions=positions,
             symbol_info=symbol_info,
             kill_switch=False,
-            sizing_override=CONFIG.get("AUTO_TRADE_SIZING_OVERRIDE", 1.0),
+            sizing_override=_sizing_override,
             is_manual_override=True,
         )
 
@@ -8784,53 +8785,60 @@ def api_engine_c_scan():
 def api_engine_c_confirm():
     """Apply AI Vision result to an Engine C consensus signal.
     Receives the consensus dict + vision analysis, returns updated consensus."""
-    d = request.get_json() or {}
-    consensus = d.get("consensus")
-    vision = d.get("vision")
+    try:
+        d = request.get_json() or {}
+        consensus = d.get("consensus")
+        vision = d.get("vision")
 
-    if not consensus:
-        return jsonify({"error": "Missing consensus data"}), 400
-    if not vision:
-        return jsonify({"error": "Missing vision data"}), 400
+        if not consensus:
+            return jsonify({"error": "Missing consensus data"}), 400
+        if not vision:
+            return jsonify({"error": "Missing vision data"}), 400
 
-    # Price drift check (Gemini's recommendation)
-    # If price moved > threshold since consensus was generated, flag as stale
-    entry_at_consensus = float(consensus.get("entry", 0))
-    current_price = 0.0
-    display = consensus.get("display", "")
-    if display and _latestPrices.get(display):
-        current_price = float(_latestPrices[display].get("price", 0))
+        display = consensus.get("display", "")
 
-    if entry_at_consensus > 0 and current_price > 0:
-        drift_pct = abs(current_price - entry_at_consensus) / entry_at_consensus * 100
-        asset_type = consensus.get("type", "")
-        max_drift = 1.5 if asset_type == "crypto" else 0.5 if asset_type == "forex" else 0.8
+        # Price drift check — use live price from _live_prices feed
+        entry_at_consensus = float(consensus.get("entry", 0))
+        current_price = 0.0
+        live_entry = _live_prices.get(display)
+        if live_entry:
+            current_price = float(live_entry.get("price", 0))
 
-        if drift_pct > max_drift:
-            consensus["trade"] = False
-            consensus["verdict"] = "PRICE_DRIFT"
-            consensus["drift_pct"] = round(drift_pct, 2)
+        if entry_at_consensus > 0 and current_price > 0:
+            drift_pct = abs(current_price - entry_at_consensus) / entry_at_consensus * 100
+            asset_type = consensus.get("type", "")
+            max_drift = 1.5 if asset_type == "crypto" else 0.5 if asset_type == "forex" else 0.8
+
+            if drift_pct > max_drift:
+                consensus["trade"] = False
+                consensus["verdict"] = "PRICE_DRIFT"
+                consensus["drift_pct"] = round(drift_pct, 2)
+                consensus["entry"] = round(current_price, 6)
+                log.warning(
+                    f"[ENGINE C] Price drift {drift_pct:.2f}% on {display} "
+                    f"(max {max_drift}%) — signal invalidated"
+                )
+                return jsonify(_json_safe(consensus))
+
+            # Update entry to current price
             consensus["entry"] = round(current_price, 6)
-            log.warning(
-                f"[ENGINE C] Price drift {drift_pct:.2f}% on {display} "
-                f"(max {max_drift}%) — signal invalidated"
-            )
-            return jsonify(_json_safe(consensus))
 
-        # Update entry to current price
-        consensus["entry"] = round(current_price, 6)
+        # Apply vision (apply_vision imported at top of file)
+        updated = apply_vision(consensus, vision)
 
-    # Apply vision
-    from engine_c import apply_vision
-    updated = apply_vision(consensus, vision)
+        log.warning(
+            f"[ENGINE C] Vision confirmed {display}: {updated.get('vision_rating')} "
+            f"→ {updated.get('vision_action')} → tier={updated.get('tier')} "
+            f"trade={updated.get('trade')}"
+        )
 
-    log.warning(
-        f"[ENGINE C] Vision confirmed {display}: {updated.get('vision_rating')} "
-        f"→ {updated.get('vision_action')} → tier={updated.get('tier')} "
-        f"trade={updated.get('trade')}"
-    )
+        return jsonify(_json_safe(updated))
 
-    return jsonify(_json_safe(updated))
+    except Exception as e:
+        log.error(f"[ENGINE C CONFIRM] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 
 # â"€â"€ Execution Engine Endpoints â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
