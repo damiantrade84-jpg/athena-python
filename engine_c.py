@@ -13,9 +13,9 @@ Architecture:
 AI Vision is NOT a voter — it's a validation/override layer applied manually.
 
 Sources:
-  - Regime weights: backtest evidence (Engine A wins trending, Engine B wins ranging)
-  - SL priority: structural → ATR validate → tighter with RR check
-  - TP priority: Engine B structural if RR ≥ 1.5, else Engine A ATR
+  - ENGINE_C_AB_WEIGHTS: backtest evidence (A stronger in trends, B in ranges); not CONFIG REGIME_WEIGHTS
+  - SL: structural → ATR clamp (2.5x) → tighter candidate; RR enforced in resolve_tp / consensus
+  - TP: Engine B structural if RR ≥ 1.5, else Engine A ATR
   - Vision modes: Confirm / Weaken / Contradict / Override (AVOID)
 """
 
@@ -28,7 +28,8 @@ log = logging.getLogger("sentinel")
 # ── Regime-conditional engine weights ─────────────────────────────────────────
 # Backtest evidence: Engine A dominates in trends (COT/momentum factors),
 # Engine B dominates in ranges (BOS/CHoCH/zones more meaningful at structure).
-REGIME_WEIGHTS = {
+# Blend weights for Engine A vs Engine B (NOT config.yaml REGIME_WEIGHTS, which adjusts factor weights inside A).
+ENGINE_C_AB_WEIGHTS = {
     "TRENDING":        {"A": 0.65, "B": 0.35},
     "RANGING":         {"A": 0.35, "B": 0.65},
     "HIGH_VOLATILITY": {"A": 0.50, "B": 0.50},
@@ -83,6 +84,8 @@ def normalise_engine_a(signal_a: dict) -> dict:
     else:
         regime_label = "RANGING"
 
+    # Forex (and any engine with maxScore ~1.0): slightly lower floor so marginal A-side signals still participate in C.
+    _a_has_floor = 0.25 if max_score <= 1.01 else 0.30
     return {
         "score_norm": round(norm, 4),
         "direction": signal_a.get("direction"),
@@ -93,7 +96,8 @@ def normalise_engine_a(signal_a: dict) -> dict:
         "rr": signal_a.get("rr1", 0),
         "raw_score": score,
         "max_score": max_score,
-        "has_signal": norm > 0.3 and signal_a.get("direction") in ("LONG", "SHORT"),
+        "has_signal": norm > _a_has_floor
+        and signal_a.get("direction") in ("LONG", "SHORT"),
         "cot_active": bool(signal_a.get("votes", {}).get("derivatives")),
         "carry_active": bool(signal_a.get("votes", {}).get("carry")),
         "style": signal_a.get("tradeStyle", "swing"),
@@ -157,11 +161,12 @@ def resolve_sl(
     direction: str,
     atr: float = 0.0,
 ) -> dict:
-    """Resolve unified SL using Kimi's priority system:
+    """Resolve unified SL:
     1. Engine B structural level (has market meaning)
-    2. Validate against ATR (not > 2.5x ATR from entry = too wide)
+    2. Validate against ATR (wider than 2.5x ATR from entry is clamped when ATR known)
     3. Pick tighter of valid candidates (less risk per trade)
-    4. Ensure minimum 1:1.5 RR is still possible
+
+    Minimum RR is enforced later in ``resolve_tp`` and ``compute_consensus`` (not here).
 
     Returns dict with sl price and method used.
     """
@@ -465,30 +470,31 @@ def compute_consensus(
 
     # Step 3: Both engines have signals — check direction agreement
     if a["direction"] != b["direction"]:
-        # Direction conflict — check if both are high confidence (regime change signal)
-        regime_change = a["score_norm"] > 0.70 and b["score_norm"] > 0.70
+        # Both engines strongly disagree (high normalised scores, opposite directions) — not a proven regime change.
+        opposing_high_confidence = a["score_norm"] > 0.70 and b["score_norm"] > 0.70
 
         return _build_result(
             trade=False,
-            verdict="REGIME_CHANGE_DETECTED" if regime_change else "DIRECTION_CONFLICT",
+            verdict="OPPOSING_HIGH_CONFIDENCE" if opposing_high_confidence else "DIRECTION_CONFLICT",
             direction=None,
             conviction=0.0,
             tier="SKIP",
             sizing=0.0,
             a_norm=a, b_norm=b, entry=entry,
-            regime_change=regime_change,
+            opposing_high_confidence=opposing_high_confidence,
         )
 
     # Step 4: Direction agrees — compute weighted conviction
     direction = a["direction"]
 
-    # Get regime-conditional weights
-    weights = REGIME_WEIGHTS.get(regime, {"A": 0.50, "B": 0.50})
+    # Get regime-conditional A/B blend (see ENGINE_C_AB_WEIGHTS; distinct from CONFIG REGIME_WEIGHTS).
+    weights = ENGINE_C_AB_WEIGHTS.get(regime, {"A": 0.50, "B": 0.50})
 
     conviction = (a["score_norm"] * weights["A"]) + (b["score_norm"] * weights["B"])
     conviction = min(1.0, conviction)
 
-    # Bonus for strong structural confirmation
+    # Extra emphasis when B shows MTF BOS / strong OB. Note: calculate_confidence() may already
+    # count these as extra checklist rows (raising B_norm); multipliers here are deliberate stacking.
     if b["bos_mtf"]:
         conviction = min(1.0, conviction * 1.08)  # +8% for multi-TF BOS
     if b["ob_at_zone"] and b["ob_strength"] >= 70:
@@ -558,7 +564,7 @@ def _build_result(
     rr: float = 0.0,
     weights: dict = None,
     regime: str = "",
-    regime_change: bool = False,
+    opposing_high_confidence: bool = False,
     **kwargs,
 ) -> dict:
     """Build standardised consensus result dict."""
@@ -579,7 +585,7 @@ def _build_result(
         "sizing_override": round(sizing, 4),
         "engine_weights": weights or {},
         "regime": regime,
-        "regime_change": regime_change,
+        "opposing_high_confidence": opposing_high_confidence,
         "components": {
             "a_norm": round(a_norm["score_norm"], 4) if a_norm else 0.0,
             "a_direction": a_norm.get("direction") if a_norm else None,

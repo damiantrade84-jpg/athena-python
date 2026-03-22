@@ -3506,8 +3506,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
                                     sig_a["engine_b_sl"] = res_b.get("recommended_stop_loss")
                                     sig_a["engine_b_tp"] = res_b.get("recommended_take_profit")
 
-                                    # Combined conviction score (Engine C style)
-                                    # Normalize both to 0-1 scale then combine
+                                    # combinedConviction: fixed 0.6/0.4 scan blend for sort + auto-trader.
+                                    # Engine C ``conviction`` uses ENGINE_C_AB_WEIGHTS (regime-dependent) — do not equate the two.
                                     a_max = sig_a.get("maxScore", 3.0)
                                     a_score = sig_a.get("confluenceScore", 0)
                                     a_norm = min(a_score / a_max, 1.0) if a_max else 0
@@ -7865,13 +7865,37 @@ def _engine_b_regime_label(
     pair_type: str = "stock",
     regime_hint: dict | str | None = None,
 ) -> str:
-    """Resolve a shared Engine B regime label across live, analysis, and backtest."""
+    """Resolve a shared Engine B regime label across live, analysis, and backtest.
+
+    Forex Engine A uses ``signal_type`` as ``regime.label`` (e.g. TREND_PULLBACK), which is not a
+    key in ``NAKED_ENGINE.zone_multipliers``. Map those to TRENDING/RANGING-style labels; NONE/UNKNOWN
+    falls through to H4 ``detect_regime``.
+    """
+    _std_regimes = frozenset(
+        {"TRENDING", "RANGING", "HIGH_VOLATILITY", "LOW_VOLATILITY"}
+    )
+    _forex_signal_to_zone_regime = {
+        "TREND_PULLBACK": "TRENDING",
+        "LONDON_BREAKOUT": "TRENDING",
+    }
+
+    raw = None
     if isinstance(regime_hint, dict):
-        hinted = regime_hint.get("label") or regime_hint.get("regime")
-        if hinted:
-            return str(hinted).upper()
+        raw = regime_hint.get("label") or regime_hint.get("regime")
     elif regime_hint:
-        return str(regime_hint).upper()
+        raw = regime_hint
+
+    if raw:
+        h = str(raw).upper()
+        if h in ("NONE", "UNKNOWN", ""):
+            pass
+        elif (pair_type or "").lower() == "forex":
+            if h in _forex_signal_to_zone_regime:
+                return _forex_signal_to_zone_regime[h]
+            if h in _std_regimes:
+                return h
+        else:
+            return h
 
     if not h4_candles or len(h4_candles) < 20:
         return "RANGING"
@@ -8759,8 +8783,8 @@ def api_engine_c_scan():
 
             current_price = float(h4[-1]["close"])
 
-            # Get regime
-            regime_label = _engine_b_regime_label(h4, ptype)
+            # Regime for Engine B zones + Engine C A/B blend: H4 detect_regime, with Engine A hint (forex signal_type mapped).
+            regime_label = _engine_b_regime_label(h4, ptype, sig_a.get("regime"))
 
             # Try Engine B for the direction Engine A suggests (or both if no A signal)
             sig_b_best = None
@@ -8848,7 +8872,11 @@ def api_engine_c_scan():
                 results["a_only"].append(consensus)
             elif verdict in ("B_ONLY", "B_ONLY_VISION_CONFIRMED"):
                 results["b_only"].append(consensus)
-            elif verdict in ("DIRECTION_CONFLICT", "REGIME_CHANGE_DETECTED"):
+            elif verdict in (
+                "DIRECTION_CONFLICT",
+                "OPPOSING_HIGH_CONFIDENCE",
+                "REGIME_CHANGE_DETECTED",  # legacy alias from older Engine C builds
+            ):
                 results["conflict"].append(consensus)
             else:
                 results["skipped"].append(consensus)
@@ -10429,7 +10457,9 @@ def api_chart_analysis():
         f"2. STRUCTURE: Does the visible price structure CONFIRM or CONTRADICT the algorithmic {direction_str} bias? Why?\n"
         "3. MISSED: Are there any patterns or levels the algorithm may have missed? (unfilled gaps, hidden divergence, liquidity pools above/below current price, trendline breaks)\n"
         "4. SL/TP ASSESSMENT: Based on what you see, are the SL and TP levels well-placed? Would you adjust either? Be specific with price levels.\n"
-        "5. RATING: Rate this setup — STRONG / MODERATE / WEAK / AVOID — with one sentence justification.\n\n"
+        "5. RATING: Rate this setup — STRONG / MODERATE / WEAK / AVOID / CONTRADICTS "
+        "(use CONTRADICTS if the chart clearly opposes the algorithmic direction) — "
+        "with one sentence justification.\n\n"
         "Keep total response under 250 words. Be direct."
     )
 

@@ -4191,8 +4191,8 @@ function buildECCard(c, category) {
   if (category === 'conflict') {
     html += '<div style="padding:8px;background:rgba(255,59,92,0.05);border-radius:6px;' +
       'font-size:11px;color:var(--bear);font-family:Space Mono,monospace;">';
-    html += '&#9888; ' + (c.verdict === 'REGIME_CHANGE_DETECTED' ?
-      'Strong disagreement — possible regime change' : 'Direction conflict — no trade');
+    html += '&#9888; ' + ((c.verdict === 'OPPOSING_HIGH_CONFIDENCE' || c.verdict === 'REGIME_CHANGE_DETECTED') ?
+      'Both engines strongly disagree on direction (high confidence each way)' : 'Direction conflict — no trade');
     html += '</div>';
   }
 

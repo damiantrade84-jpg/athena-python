@@ -6,11 +6,16 @@
 - Added `engine_c.py`: combines Engine A (quantitative factor scoring) and Engine B (naked price action) into a unified signal with conviction-based position sizing.
 - Architecture: Layer 1 normalises both engine scores to 0–1; Layer 2 applies regime-weighted conviction scoring; Layer 3 resolves SL/TP and sizing multiplier.
 - AI Vision is NOT a voter — it modifies conviction after consensus is established (CONFIRM/WEAKEN/CONTRADICT/AVOID).
-- Regime-conditional weights: `TRENDING={A:0.65, B:0.35}`, `RANGING={A:0.35, B:0.65}`, `HIGH_VOLATILITY={A:0.50, B:0.50}`, `LOW_VOLATILITY={A:0.45, B:0.55}`.
+- **Engine B `passed` / naked `min_score` are NOT hard gates for Engine C.** Gating on `calculate_confidence["passed"]` was removed: it blocked essentially all Engine C signals. Engine C uses structural `CLEAR`, normalised checklist score, and its own RR/tier logic instead.
+- **`combinedConviction` (main scan / auto-trader) ≠ Engine C `conviction`.** Full scan attaches `combinedConviction = 0.6×A_norm + 0.4×B_norm` when engines align (`run_full_scan`). Engine C uses `ENGINE_C_AB_WEIGHTS` in `engine_c.py` (regime-dependent, e.g. trending 0.65/0.35) plus optional BOS/OB multipliers. Do not treat the two numbers as interchangeable when ranking or explaining signals.
+- **Two different `REGIME_WEIGHTS` concepts:** `config.yaml` / `CONFIG["REGIME_WEIGHTS"]` adjusts **factor** weights inside Engine A. `ENGINE_C_AB_WEIGHTS` in `engine_c.py` is the **Engine A vs Engine B blend** for consensus only — same regime *names*, different purpose.
+- Regime-conditional A/B blend (`ENGINE_C_AB_WEIGHTS`): `TRENDING={A:0.65, B:0.35}`, `RANGING={A:0.35, B:0.65}`, `HIGH_VOLATILITY={A:0.50, B:0.50}`, `LOW_VOLATILITY={A:0.45, B:0.55}`.
+- **BOS / OB at zone:** `calculate_confidence` can add extra checklist rows for `bos_mtf` and `ob_at_zone` (raising B_norm). Engine C may also apply small conviction multipliers (×1.08 / ×1.05) when those flags are set — deliberate emphasis on structural alignment, not an accidental duplicate path.
 - Conviction tiers: `HIGH≥0.70→full size`, `MEDIUM≥0.50→0.65x`, `LOW≥0.35→0.35x`, `SKIP→no trade`.
 - Vision CONFIRM with conviction ≥ 0.35 upgrades LOW-tier signals to tradeable; AVOID/CONTRADICT hard-veto regardless.
-- SL priority: Engine B structural → ATR validate (clamp at 2.5x ATR) → pick tighter → RR check.
+- SL priority: Engine B structural → ATR validate (clamp at 2.5x ATR) → pick tighter. Minimum RR is enforced in `resolve_tp` and post-resolution checks (not inside `resolve_sl`).
 - TP priority: Engine B structural if RR ≥ 1.5, else Engine A ATR-based.
+- Verdict **`OPPOSING_HIGH_CONFIDENCE`**: both engines strongly disagree on direction (high normalised scores, opposite bias) — **not** a proven regime change; name encodes the actual condition.
 
 **New API Endpoints (athena.py):**
 - `/api/engine-c-scan` (POST): runs Engine A + B on all pairs for a given `assetClass`, returns `{aligned, a_only, b_only, conflict, skipped}` buckets sorted by conviction.
@@ -152,7 +157,7 @@ Multi-asset algorithmic trading system: Flask dashboard, Engine A confluence/fac
 | `feature_normalizer.py` | Rolling z-score, percentile rank, min-max normalization | |
 | `market_structure.py` | Engine B naked price-action engine: structure, zones, trigger patterns, and shared checklist pass/fail logic | |
 | `engine_b_ai.py` | Engine B review layer — advisory AI verdict/narrative only, not primary signal generation | |
-| `engine_c.py` | Engine C consensus layer — normalises A+B scores, regime-weighted conviction, SL/TP resolution, AI Vision modifier, sizing override | |
+| `engine_c.py` | Engine C consensus — `ENGINE_C_AB_WEIGHTS` (A vs B blend, not CONFIG `REGIME_WEIGHTS`), normalises A+B, conviction + SL/TP, Vision modifier, sizing | |
 | `config.py` | Hard-coded CONFIG defaults + YAML loader + validation | |
 | `config.yaml` | All tunable thresholds — edit this, not config.py | |
 | `risk_engine.py` | Risk gateway: kill switch, drawdown, position sizing, portfolio heat | |
@@ -218,13 +223,14 @@ run_full_scan(style, asset_class)
 /api/engine-c-scan
   └─ for each enabled pair in asset class (time.sleep(0.1) yield per pair)
        ├─ analyze_pair(pair, btc_bias, style)          ← Engine A
+       ├─ regime = _engine_b_regime_label(h4, type, sig_a.get("regime"))  ← H4 detect + Engine A hint; forex signal_type mapped to zone regimes
        ├─ NakedEngine.analyze_structure(...)           ← Engine B (best of LONG/SHORT)
        ├─ NakedEngine.calculate_confidence(...)
        └─ compute_consensus(signal_a, signal_b, confidence_b, regime, entry, atr)
             ├─ normalise_engine_a() → score_norm 0–1
             ├─ normalise_engine_b() → score_norm 0–1
-            ├─ direction gate (conflict → SKIP)
-            ├─ regime-weighted conviction = A*wA + B*wB (+ BOS/OB bonuses)
+            ├─ direction gate (conflict → SKIP; opposing strong both → OPPOSING_HIGH_CONFIDENCE)
+            ├─ ENGINE_C_AB_WEIGHTS regime blend: A*wA + B*wB (+ BOS/OB multipliers)
             ├─ resolve_sl() — structural → ATR-clamped → tighter candidate
             ├─ resolve_tp() — structural if RR≥1.5, else ATR
             └─ returns {trade, verdict, direction, conviction, tier, sizing_override, sl, tp, rr, ...}
