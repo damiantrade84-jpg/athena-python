@@ -3224,6 +3224,7 @@ from scoring import (  # noqa: E402
 )
 
 from config import _json_safe  # noqa: E402
+from engine_c import compute_consensus, apply_vision  # noqa: E402
 
 
 _scan_lock = threading.Lock()  # thread-safe scan guard (replaces bare boolean)
@@ -8586,6 +8587,250 @@ def api_scan_naked():
             continue
 
     return jsonify(_json_safe({"success": True, "signals": results}))
+
+
+@app.route("/api/engine-c-scan", methods=["POST"])
+def api_engine_c_scan():
+    """Engine C consensus scan — runs Engine A then Engine B on all pairs,
+    produces unified signals with conviction-based sizing."""
+    d = request.get_json() or {}
+    asset_class = d.get("assetClass", "").lower()
+    requested_style = d.get("style", "auto")
+
+    if not asset_class:
+        return jsonify({"error": "assetClass required"}), 400
+
+    candidate_pairs = [
+        p for p in ALL_PAIRS
+        if p.get("type", "").lower() == asset_class
+        and p.get("enabled", True)
+        and p["display"] not in _disabled_pairs
+    ]
+
+    if not candidate_pairs:
+        return jsonify({"error": f"No enabled pairs for {asset_class}"}), 404
+
+    results = {"aligned": [], "a_only": [], "b_only": [], "conflict": [], "skipped": []}
+
+    btc_bias = _current_btc_bias() if asset_class == "crypto" else "neutral"
+
+    from market_structure import NakedEngine
+    engine_b = NakedEngine()
+    import time
+
+    for pair in candidate_pairs:
+        try:
+            time.sleep(0.1)  # yield CPU
+
+            symbol = pair.get("symbol", pair.get("display"))
+            display = pair.get("display", symbol)
+            ptype = pair.get("type", "")
+
+            # ── Run Engine A ──
+            engine_a_style = _resolve_scan_style(
+                _normalize_style(requested_style), pair
+            )
+            sig_a = analyze_pair(pair, btc_bias, style=engine_a_style)
+            if not sig_a:
+                sig_a = {}
+
+            # ── Run Engine B ──
+            resolved_style_b, style_profile_b = _naked_scan_style_profile(requested_style)
+            _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
+            if ptype == "forex" and _forex_struct_tf == "D1" and resolved_style_b == "intraday":
+                resolved_style_b, style_profile_b = _naked_scan_style_profile("swing")
+
+            d1 = fetch_candles(pair, "D1", CONFIG.get("D1_CANDLES", 250))
+            h4 = fetch_candles(pair, "H4", CONFIG.get("H4_CANDLES", 250))
+            h1 = fetch_candles(pair, "H1", CONFIG.get("H1_CANDLES", 250))
+
+            if not h4 or len(h4) < 20:
+                results["skipped"].append({"display": display, "reason": "insufficient_data"})
+                continue
+
+            # ATR
+            from indicators import calc_atr
+            _highs = [float(c["high"]) for c in h4]
+            _lows = [float(c["low"]) for c in h4]
+            _closes = [float(c["close"]) for c in h4]
+            atr_series = calc_atr(_highs, _lows, _closes, 14)
+            atr = float(atr_series[-1]) if atr_series else 0.0
+
+            if not atr or atr <= 0:
+                results["skipped"].append({"display": display, "reason": "zero_atr"})
+                continue
+
+            current_price = float(h4[-1]["close"])
+
+            # Get regime
+            regime_label = _engine_b_regime_label(h4, ptype)
+
+            # Try Engine B for the direction Engine A suggests (or both if no A signal)
+            sig_b_best = None
+            conf_b_best = None
+            b_direction = None
+
+            test_directions = []
+            if sig_a.get("direction") in ("LONG", "SHORT"):
+                test_directions = [sig_a["direction"]]
+            else:
+                test_directions = ["LONG", "SHORT"]
+
+            for test_dir in test_directions:
+                res_b = engine_b.analyze_structure(
+                    d1 or [], h4, h1 or [], current_price, test_dir, atr,
+                    regime_label,
+                    fallback_rr=style_profile_b.get("fallback_rr", 2.0),
+                    asset_type=ptype,
+                )
+                if res_b.get("structural_verdict") == "CLEAR":
+                    conf_b = engine_b.calculate_confidence(
+                        res_b, current_price, test_dir,
+                        entry_candles=h1 or h4,
+                        style_profile=style_profile_b,
+                    )
+                    b_score = float(conf_b.get("score", 0))
+                    if sig_b_best is None or b_score > float(conf_b_best.get("score", 0)):
+                        sig_b_best = res_b
+                        sig_b_best["direction"] = test_dir
+                        conf_b_best = conf_b
+                        b_direction = test_dir
+
+            if sig_b_best is None:
+                sig_b_best = {"structural_verdict": "ERROR", "direction": None}
+            if conf_b_best is None:
+                conf_b_best = {"score": 0, "max_possible": 5, "pct": 0}
+
+            # ── Run Consensus ──
+            consensus = compute_consensus(
+                signal_a=sig_a,
+                signal_b=sig_b_best,
+                confidence_b=conf_b_best,
+                asset_type=ptype,
+                regime=regime_label,
+                entry_price=current_price,
+                atr=atr,
+            )
+
+            # Attach display info
+            consensus["display"] = display
+            consensus["symbol"] = symbol
+            consensus["type"] = ptype
+            consensus["style"] = resolved_style_b
+            consensus["atr"] = round(atr, 6)
+            consensus["engine_a_raw"] = {
+                "direction": sig_a.get("direction"),
+                "score": sig_a.get("confluenceScore"),
+                "maxScore": sig_a.get("maxScore"),
+                "sl": sig_a.get("sl"),
+                "tp1": sig_a.get("tp1"),
+                "regime": sig_a.get("regime"),
+                "style": sig_a.get("tradeStyle"),
+                "cot": sig_a.get("votes", {}).get("derivatives"),
+                "carry": sig_a.get("votes", {}).get("carry"),
+            }
+            consensus["engine_b_raw"] = {
+                "direction": b_direction,
+                "score": conf_b_best.get("score"),
+                "max_possible": conf_b_best.get("max_possible"),
+                "sl": sig_b_best.get("recommended_stop_loss"),
+                "tp": sig_b_best.get("recommended_take_profit"),
+                "sequence": sig_b_best.get("current_swing_sequence"),
+                "bos": sig_b_best.get("bos_confirmed"),
+                "bos_mtf": sig_b_best.get("bos_mtf_confirmed"),
+                "ob_at_zone": sig_b_best.get("ob_at_zone"),
+                "choch": sig_b_best.get("choch_confirmed"),
+                "trigger": conf_b_best.get("trigger_pattern"),
+            }
+
+            # Categorise
+            verdict = consensus["verdict"]
+            if verdict == "ALIGNED":
+                results["aligned"].append(consensus)
+            elif verdict == "A_ONLY":
+                results["a_only"].append(consensus)
+            elif verdict in ("B_ONLY", "B_ONLY_VISION_CONFIRMED"):
+                results["b_only"].append(consensus)
+            elif verdict in ("DIRECTION_CONFLICT", "REGIME_CHANGE_DETECTED"):
+                results["conflict"].append(consensus)
+            else:
+                results["skipped"].append(consensus)
+
+        except Exception as e:
+            log.error(f"[ENGINE C] Error on {pair.get('display')}: {e}")
+            results["skipped"].append({
+                "display": pair.get("display"), "reason": str(e)
+            })
+
+    # Sort aligned by conviction (highest first)
+    results["aligned"].sort(key=lambda x: x.get("conviction", 0), reverse=True)
+    results["a_only"].sort(key=lambda x: x.get("conviction", 0), reverse=True)
+    results["b_only"].sort(key=lambda x: x.get("conviction", 0), reverse=True)
+
+    total = (len(results["aligned"]) + len(results["a_only"]) +
+             len(results["b_only"]) + len(results["conflict"]))
+
+    log.warning(
+        f"[ENGINE C] Scan complete: {total} signals "
+        f"(aligned={len(results['aligned'])}, a_only={len(results['a_only'])}, "
+        f"b_only={len(results['b_only'])}, conflict={len(results['conflict'])}, "
+        f"skipped={len(results['skipped'])})"
+    )
+
+    return jsonify(_json_safe(results))
+
+
+@app.route("/api/engine-c-confirm", methods=["POST"])
+def api_engine_c_confirm():
+    """Apply AI Vision result to an Engine C consensus signal.
+    Receives the consensus dict + vision analysis, returns updated consensus."""
+    d = request.get_json() or {}
+    consensus = d.get("consensus")
+    vision = d.get("vision")
+
+    if not consensus:
+        return jsonify({"error": "Missing consensus data"}), 400
+    if not vision:
+        return jsonify({"error": "Missing vision data"}), 400
+
+    # Price drift check (Gemini's recommendation)
+    # If price moved > threshold since consensus was generated, flag as stale
+    entry_at_consensus = float(consensus.get("entry", 0))
+    current_price = 0.0
+    display = consensus.get("display", "")
+    if display and _latestPrices.get(display):
+        current_price = float(_latestPrices[display].get("price", 0))
+
+    if entry_at_consensus > 0 and current_price > 0:
+        drift_pct = abs(current_price - entry_at_consensus) / entry_at_consensus * 100
+        asset_type = consensus.get("type", "")
+        max_drift = 1.5 if asset_type == "crypto" else 0.5 if asset_type == "forex" else 0.8
+
+        if drift_pct > max_drift:
+            consensus["trade"] = False
+            consensus["verdict"] = "PRICE_DRIFT"
+            consensus["drift_pct"] = round(drift_pct, 2)
+            consensus["entry"] = round(current_price, 6)
+            log.warning(
+                f"[ENGINE C] Price drift {drift_pct:.2f}% on {display} "
+                f"(max {max_drift}%) — signal invalidated"
+            )
+            return jsonify(_json_safe(consensus))
+
+        # Update entry to current price
+        consensus["entry"] = round(current_price, 6)
+
+    # Apply vision
+    from engine_c import apply_vision
+    updated = apply_vision(consensus, vision)
+
+    log.warning(
+        f"[ENGINE C] Vision confirmed {display}: {updated.get('vision_rating')} "
+        f"→ {updated.get('vision_action')} → tier={updated.get('tier')} "
+        f"trade={updated.get('trade')}"
+    )
+
+    return jsonify(_json_safe(updated))
 
 
 # â"€â"€ Execution Engine Endpoints â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€

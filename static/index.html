@@ -646,6 +646,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
     <button class="tab-btn" id="tab-backtest" onclick="switchTab('backtest')">BACKTEST</button>
     <button class="tab-btn" id="tab-screener" onclick="switchTab('screener')">SCREENER</button>
     <button class="tab-btn" id="tab-performance" onclick="switchTab('performance');loadPerformance();loadAutoTradeLog();loadFailedExecutions()">PERFORMANCE</button>
+    <button class="tab-btn" id="tab-enginec" onclick="switchTab('enginec')">ENGINE C</button>
   </div>
 
   <div class="tab-panel active" id="panel-signals">
@@ -794,6 +795,37 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
       </div>
     </div>
   </div><!-- /panel-performance -->
+
+  <div class="tab-panel" id="panel-enginec">
+    <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px;flex-wrap:wrap;">
+      <h2 style="margin:0;font-size:18px;font-family:'Syne',sans-serif;color:var(--text);">
+        Engine C &mdash; Consensus
+      </h2>
+      <select id="ecAssetClass" style="background:var(--surface);border:1px solid var(--border);
+        border-radius:6px;padding:6px 12px;color:var(--text);font-family:'Space Mono',monospace;
+        font-size:11px;">
+        <option value="crypto">Crypto</option>
+        <option value="forex">Forex</option>
+        <option value="stock">Stocks</option>
+        <option value="commodity">Commodities</option>
+        <option value="index">Indices</option>
+      </select>
+      <button onclick="runEngineCScan()" id="ecScanBtn" style="background:var(--accent);
+        border:none;color:#000;padding:8px 20px;border-radius:6px;cursor:pointer;
+        font-family:'Syne',sans-serif;font-size:12px;font-weight:800;">
+        SCAN CONSENSUS
+      </button>
+      <span id="ecStatus" style="font-size:11px;color:var(--muted);font-family:'Space Mono',monospace;"></span>
+    </div>
+
+    <div id="ecResults" style="display:grid;gap:12px;">
+      <div class="empty-state">
+        <div class="icon">&#9878;&#65039;</div>
+        <h3>Engine C Consensus</h3>
+        <p>Select an asset class and click SCAN CONSENSUS to find signals where Engine A and B agree.</p>
+      </div>
+    </div>
+  </div><!-- /panel-enginec -->
 
 </div>
 
@@ -3958,6 +3990,409 @@ document.addEventListener('keydown', function(e) {
 document.getElementById('athena-chart-modal').addEventListener('click', function(e) {
   if (e.target === this) closeAcm();
 });
+
+// ═══════════════════════════════════════════════════════
+// ENGINE C — Consensus Tab
+// ═══════════════════════════════════════════════════════
+var _ecResults = null;
+
+async function runEngineCScan() {
+  var btn = document.getElementById('ecScanBtn');
+  var status = document.getElementById('ecStatus');
+  var container = document.getElementById('ecResults');
+  var assetClass = document.getElementById('ecAssetClass').value;
+
+  btn.disabled = true;
+  btn.textContent = 'SCANNING...';
+  status.textContent = 'Running Engine A + B on all ' + assetClass + ' pairs...';
+  container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted);">' +
+    '<div style="font-size:24px;margin-bottom:8px;">&#9203;</div>' +
+    'Running consensus scan... this may take 1-2 minutes.</div>';
+
+  try {
+    var resp = await fetch('/api/engine-c-scan', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({assetClass: assetClass, style: 'auto'}),
+    });
+    var data = await resp.json();
+
+    if (data.error) {
+      container.innerHTML = '<div style="color:var(--bear);padding:20px;">' + data.error + '</div>';
+      return;
+    }
+
+    _ecResults = data;
+    renderEngineCResults(data);
+
+    var total = (data.aligned||[]).length + (data.a_only||[]).length +
+                (data.b_only||[]).length + (data.conflict||[]).length;
+    status.textContent = total + ' signals found (' + (data.aligned||[]).length + ' aligned, ' +
+      (data.a_only||[]).length + ' A-only, ' + (data.b_only||[]).length + ' B-only, ' +
+      (data.conflict||[]).length + ' conflict)';
+
+  } catch(err) {
+    container.innerHTML = '<div style="color:var(--bear);padding:20px;">Scan error: ' + err.message + '</div>';
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'SCAN CONSENSUS';
+}
+
+function renderEngineCResults(data) {
+  var container = document.getElementById('ecResults');
+  var html = '';
+
+  // Aligned (green)
+  if (data.aligned && data.aligned.length) {
+    html += '<div style="font-size:12px;color:var(--bull);font-weight:700;font-family:Syne,sans-serif;' +
+      'margin:8px 0 4px;letter-spacing:0.05em;">&#9989; ALIGNED (' + data.aligned.length + ')</div>';
+    data.aligned.forEach(function(c) { html += buildECCard(c, 'aligned'); });
+  }
+
+  // A-only (amber)
+  if (data.a_only && data.a_only.length) {
+    html += '<div style="font-size:12px;color:#f59e0b;font-weight:700;font-family:Syne,sans-serif;' +
+      'margin:16px 0 4px;letter-spacing:0.05em;">&#9888;&#65039; ENGINE A ONLY (' + data.a_only.length + ')</div>';
+    data.a_only.forEach(function(c) { html += buildECCard(c, 'a_only'); });
+  }
+
+  // B-only (cyan)
+  if (data.b_only && data.b_only.length) {
+    html += '<div style="font-size:12px;color:var(--accent);font-weight:700;font-family:Syne,sans-serif;' +
+      'margin:16px 0 4px;letter-spacing:0.05em;">&#128065; ENGINE B ONLY (' + data.b_only.length + ')</div>';
+    data.b_only.forEach(function(c) { html += buildECCard(c, 'b_only'); });
+  }
+
+  // Conflict (red)
+  if (data.conflict && data.conflict.length) {
+    html += '<div style="font-size:12px;color:var(--bear);font-weight:700;font-family:Syne,sans-serif;' +
+      'margin:16px 0 4px;letter-spacing:0.05em;">&#128683; CONFLICT (' + data.conflict.length + ')</div>';
+    data.conflict.forEach(function(c) { html += buildECCard(c, 'conflict'); });
+  }
+
+  if (!html) {
+    html = '<div class="empty-state"><div class="icon">&#128528;</div><h3>No signals found</h3>' +
+      '<p>No pairs met the minimum threshold for any engine.</p></div>';
+  }
+
+  container.innerHTML = html;
+}
+
+function buildECCard(c, category) {
+  var sid = (c.symbol || c.display || '').replace(/[\/=^.]/g, '_');
+  var borderColor = category === 'aligned' ? 'var(--bull)' :
+                    category === 'conflict' ? 'var(--bear)' :
+                    category === 'b_only' ? 'var(--accent)' : '#f59e0b';
+
+  var convPct = Math.round((c.conviction || 0) * 100);
+  var convBar = '';
+  for (var i = 0; i < 10; i++) {
+    convBar += i < Math.round(convPct / 10) ? '&#9608;' : '&#9617;';
+  }
+
+  var a = c.engine_a_raw || {};
+  var b = c.engine_b_raw || {};
+
+  var html = '<div style="background:var(--card);border:1px solid ' + borderColor + ';' +
+    'border-radius:10px;padding:14px;margin-bottom:4px;" id="ec-' + sid + '">';
+
+  // Header
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">';
+  html += '<div style="display:flex;align-items:center;gap:10px;">';
+  html += '<span style="font-size:15px;font-weight:800;font-family:Syne,sans-serif;color:var(--text);">' +
+    (c.display || c.symbol) + '</span>';
+  if (c.direction) {
+    html += '<span style="font-size:10px;font-weight:800;padding:2px 8px;border-radius:4px;' +
+      'background:' + (c.direction === 'LONG' ? 'rgba(0,230,118,0.15)' : 'rgba(255,59,92,0.15)') + ';' +
+      'color:' + (c.direction === 'LONG' ? 'var(--bull)' : 'var(--bear)') + ';">' + c.direction + '</span>';
+  }
+  html += '<span style="font-size:10px;color:var(--muted);font-family:Space Mono,monospace;">' +
+    (c.regime || '') + '</span>';
+  html += '</div>';
+  html += '<div style="display:flex;align-items:center;gap:8px;">';
+  html += '<span style="font-family:Space Mono,monospace;font-size:11px;color:' + borderColor + ';">' +
+    convBar + '</span>';
+  html += '<span style="font-size:11px;font-weight:700;color:' + borderColor + ';font-family:Space Mono,monospace;">' +
+    (c.tier || 'SKIP') + '</span>';
+  html += '</div></div>';
+
+  // Two-column engine comparison
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">';
+
+  // Engine A column
+  html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px;">';
+  html += '<div style="font-size:9px;color:var(--muted);font-weight:700;margin-bottom:4px;">ENGINE A</div>';
+  if (a.direction) {
+    html += '<div style="font-size:11px;font-family:Space Mono,monospace;color:var(--text);">' +
+      a.direction + ' ' + (a.score || '?') + '/' + (a.maxScore || '?') + '</div>';
+    html += '<div style="font-size:10px;color:var(--muted);font-family:Space Mono,monospace;">' +
+      'SL ' + fmtPrice(a.sl) + ' TP ' + fmtPrice(a.tp1) + '</div>';
+    if (a.cot != null) html += '<div style="font-size:9px;color:var(--accent);">COT ' + a.cot + '</div>';
+  } else {
+    html += '<div style="font-size:11px;color:var(--muted);">No signal</div>';
+  }
+  html += '</div>';
+
+  // Engine B column
+  html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px;">';
+  html += '<div style="font-size:9px;color:var(--muted);font-weight:700;margin-bottom:4px;">ENGINE B</div>';
+  if (b.direction) {
+    html += '<div style="font-size:11px;font-family:Space Mono,monospace;color:var(--text);">' +
+      b.direction + ' ' + (b.score || '?') + '/' + (b.max_possible || '?') + '</div>';
+    html += '<div style="font-size:10px;color:var(--muted);font-family:Space Mono,monospace;">' +
+      'SL ' + fmtPrice(b.sl) + ' TP ' + fmtPrice(b.tp) + '</div>';
+    html += '<div style="font-size:9px;color:var(--muted);">' + (b.sequence || '') +
+      (b.bos ? ' BOS&#10003;' : '') + (b.ob_at_zone ? ' OB&#10003;' : '') + '</div>';
+  } else {
+    html += '<div style="font-size:11px;color:var(--muted);">No signal</div>';
+  }
+  html += '</div></div>';
+
+  // Consensus levels (only for aligned/a_only)
+  if (c.sl && c.tp && category !== 'conflict') {
+    html += '<div style="background:rgba(0,212,255,0.04);border:1px solid rgba(0,212,255,0.15);' +
+      'border-radius:6px;padding:8px;margin-bottom:10px;">';
+    html += '<div style="display:flex;justify-content:space-between;font-size:10px;font-family:Space Mono,monospace;">';
+    html += '<span style="color:var(--muted);">SL <span style="color:var(--bear);">' + fmtPrice(c.sl) +
+      '</span> (' + (c.sl_method || '') + ')</span>';
+    html += '<span style="color:var(--muted);">TP <span style="color:var(--bull);">' + fmtPrice(c.tp) +
+      '</span> (' + (c.tp_method || '') + ')</span>';
+    html += '<span style="color:var(--accent);">RR 1:' + (c.rr || '?') + '</span>';
+    html += '<span style="color:var(--text);">Size: ' +
+      (c.sizing_override >= 1.0 ? 'FULL' : c.sizing_override >= 0.65 ? 'HALF' :
+       c.sizing_override >= 0.35 ? 'QUARTER' : 'NONE') + '</span>';
+    html += '</div></div>';
+  }
+
+  // AI Vision section
+  if (category === 'aligned' || category === 'a_only' || category === 'b_only') {
+    html += '<div id="ec-vision-' + sid + '" style="margin-bottom:10px;">';
+    if (c.vision_applied) {
+      html += buildECVisionResult(c);
+    } else {
+      html += '<button onclick="runECVisionConfirm(\'' + sid + '\')" class="chart-toggle-btn" ' +
+        'id="ec-vision-btn-' + sid + '" style="width:100%;border-color:rgba(168,85,247,0.4);' +
+        'color:#a855f7;">&#129504; AI CONFIRM</button>';
+    }
+    html += '</div>';
+  }
+
+  // Execute buttons (only show after vision confirms, or for aligned HIGH/MEDIUM)
+  if (category === 'aligned' && c.trade && c.tier !== 'SKIP') {
+    html += '<div id="ec-exec-' + sid + '" style="' +
+      (c.vision_applied ? '' : 'display:none;') + '">';
+    html += buildECExecButtons(c, sid);
+    html += '</div>';
+  }
+
+  // Conflict message
+  if (category === 'conflict') {
+    html += '<div style="padding:8px;background:rgba(255,59,92,0.05);border-radius:6px;' +
+      'font-size:11px;color:var(--bear);font-family:Space Mono,monospace;">';
+    html += '&#9888; ' + (c.verdict === 'REGIME_CHANGE_DETECTED' ?
+      'Strong disagreement — possible regime change' : 'Direction conflict — no trade');
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function buildECVisionResult(c) {
+  var color = c.vision_action === 'confirm' ? 'var(--bull)' :
+              c.vision_action === 'weaken' ? '#f59e0b' : 'var(--bear)';
+  var icon = c.vision_action === 'confirm' ? '&#9989;' :
+             c.vision_action === 'weaken' ? '&#9888;&#65039;' : '&#128683;';
+  return '<div style="background:rgba(168,85,247,0.05);border:1px solid rgba(168,85,247,0.2);' +
+    'border-radius:6px;padding:8px;font-size:11px;font-family:Space Mono,monospace;">' +
+    '<span style="color:' + color + ';font-weight:700;">' + icon + ' ' +
+    (c.vision_rating || '?') + '</span>' +
+    (c.vision_sl_flag && c.vision_sl_flag !== 'ok' ?
+      ' | SL: <span style="color:#f59e0b;">' + c.vision_sl_flag + '</span>' : '') +
+    (c.vision_tp_flag && c.vision_tp_flag !== 'ok' ?
+      ' | TP: <span style="color:#f59e0b;">' + c.vision_tp_flag + '</span>' : '') +
+    '</div>';
+}
+
+function buildECExecButtons(c, sid) {
+  var sizeLabel = c.sizing_override >= 1.0 ? 'FULL' : c.sizing_override >= 0.65 ? 'HALF' : 'QTR';
+  return '<div style="display:flex;gap:6px;">' +
+    '<button onclick="executeEngineC(\'' + sid + '\',\'scalp\')" class="exec-btn force" ' +
+    'style="flex:1;font-size:11px;">&#9889; SCALP (' + sizeLabel + ')</button>' +
+    '<button onclick="executeEngineC(\'' + sid + '\',\'intraday\')" class="exec-btn force" ' +
+    'style="flex:1;font-size:11px;">&#128202; INTRADAY (' + sizeLabel + ')</button>' +
+    '<button onclick="executeEngineC(\'' + sid + '\',\'swing\')" class="exec-btn force" ' +
+    'style="flex:1;font-size:11px;">&#127754; SWING (' + sizeLabel + ')</button>' +
+    '</div>';
+}
+
+async function runECVisionConfirm(sid) {
+  var btn = document.getElementById('ec-vision-btn-' + sid);
+  if (!btn) return;
+  btn.textContent = '&#129504; Opening chart...';
+  btn.disabled = true;
+
+  // Find the consensus data for this symbol
+  var consensus = null;
+  ['aligned', 'a_only', 'b_only'].forEach(function(cat) {
+    (_ecResults[cat] || []).forEach(function(c) {
+      var cSid = (c.symbol || c.display || '').replace(/[\/=^.]/g, '_');
+      if (cSid === sid) consensus = c;
+    });
+  });
+
+  if (!consensus) {
+    btn.textContent = '&#129504; AI CONFIRM';
+    btn.disabled = false;
+    return;
+  }
+
+  // Open chart modal for this pair
+  openAcm(consensus.symbol, 'H4');
+
+  // Wait for chart to render
+  await new Promise(function(r) { setTimeout(r, 2000); });
+
+  // Trigger AI read
+  btn.textContent = '&#129504; Reading chart...';
+
+  try {
+    var chartBody = document.getElementById('acm-chart-body');
+    var canvas = await html2canvas(chartBody, {
+      backgroundColor: '#060a10', scale: 1.5, logging: false, useCORS: true,
+    });
+    var base64 = canvas.toDataURL('image/png');
+
+    btn.textContent = '&#129504; Analysing...';
+
+    // Get AI Vision analysis
+    var visionResp = await fetch('/api/chart-analysis', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        image: base64,
+        symbol: consensus.symbol,
+        tf: 'H4',
+      }),
+    });
+    var vision = await visionResp.json();
+
+    // Close chart modal
+    closeAcm();
+
+    // Send to Engine C confirm endpoint
+    var confirmResp = await fetch('/api/engine-c-confirm', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({consensus: consensus, vision: vision}),
+    });
+    var updated = await confirmResp.json();
+
+    // Update the card
+    var visionDiv = document.getElementById('ec-vision-' + sid);
+    if (visionDiv) {
+      visionDiv.innerHTML = buildECVisionResult(updated);
+      // Show AI analysis text if available
+      if (vision.analysis) {
+        visionDiv.innerHTML += '<div style="margin-top:6px;font-size:10px;color:var(--muted);' +
+          'font-family:Space Mono,monospace;line-height:1.6;max-height:100px;overflow-y:auto;">' +
+          vision.analysis.substring(0, 500) + '</div>';
+      }
+    }
+
+    // Show or hide execute buttons based on result
+    var execDiv = document.getElementById('ec-exec-' + sid);
+    if (execDiv) {
+      if (updated.trade) {
+        execDiv.style.display = 'block';
+        execDiv.innerHTML = buildECExecButtons(updated, sid);
+      } else {
+        execDiv.style.display = 'block';
+        execDiv.innerHTML = '<div style="padding:8px;text-align:center;color:var(--bear);' +
+          'font-size:11px;font-family:Space Mono,monospace;">&#128683; Vision ' +
+          (updated.vision_action || '') + ' — trade blocked</div>';
+      }
+    }
+
+    // Update consensus in memory
+    ['aligned', 'a_only', 'b_only'].forEach(function(cat) {
+      (_ecResults[cat] || []).forEach(function(c, i) {
+        var cSid = (c.symbol || c.display || '').replace(/[\/=^.]/g, '_');
+        if (cSid === sid) _ecResults[cat][i] = updated;
+      });
+    });
+
+  } catch(err) {
+    var visionDiv2 = document.getElementById('ec-vision-' + sid);
+    if (visionDiv2) {
+      visionDiv2.innerHTML = '<div style="color:var(--bear);font-size:11px;">Error: ' +
+        err.message + '</div>';
+    }
+    btn.textContent = '&#129504; AI CONFIRM';
+    btn.disabled = false;
+  }
+}
+
+async function executeEngineC(sid, pipMode) {
+  // Find consensus data
+  var consensus = null;
+  ['aligned', 'a_only', 'b_only'].forEach(function(cat) {
+    (_ecResults[cat] || []).forEach(function(c) {
+      var cSid = (c.symbol || c.display || '').replace(/[\/=^.]/g, '_');
+      if (cSid === sid) consensus = c;
+    });
+  });
+
+  if (!consensus || !consensus.trade) {
+    showToast('Cannot execute — no valid consensus signal', true);
+    return;
+  }
+
+  // Build signal for quick-execute
+  var signal = {
+    pair: consensus.display,
+    display: consensus.display,
+    symbol: consensus.symbol,
+    type: consensus.type,
+    direction: consensus.direction,
+    price: consensus.entry,
+    sl: consensus.sl,
+    tp1: consensus.tp,
+    tp2: consensus.tp,
+    confluenceScore: consensus.conviction,
+    ts: new Date().toISOString(),
+  };
+
+  // Use Engine B raw data for the quick-execute call
+  var engineB = consensus.engine_b_raw || {};
+  engineB.recommended_stop_loss = consensus.sl;
+  engineB.recommended_take_profit = consensus.tp;
+
+  // Call existing quick-execute with sizing override
+  try {
+    var resp = await fetch('/api/quick-execute', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        signal: signal,
+        engine_b: engineB,
+        pip_mode: pipMode === 'swing' ? null : pipMode,
+        sizing_override: consensus.sizing_override,
+      }),
+    });
+    var result = await resp.json();
+
+    if (result.success) {
+      showToast('Engine C: ' + consensus.direction + ' ' + consensus.display +
+        ' executed (' + (consensus.tier || '') + ')');
+    } else {
+      showToast('Execution failed: ' + (result.error || result.reason || 'unknown'), true);
+    }
+  } catch(err) {
+    showToast('Execution error: ' + err.message, true);
+  }
+}
 </script>
 </body>
 </html>
