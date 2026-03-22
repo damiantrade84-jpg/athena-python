@@ -12521,4 +12521,11 @@ if __name__ == "__main__":
     except Exception as _bak_e:
         log.warning(f"[BACKUP] Startup backup failed: {_bak_e}")
 
+    # Start Telegram bot (two-way command centre)
+    try:
+        from telegram_bot import start_telegram_bot
+        start_telegram_bot()
+    except Exception as e:
+        log.warning(f"[TELEGRAM] Bot startup failed: {e}")
+
     app.run(host=_host, port=5000, debug=False)
