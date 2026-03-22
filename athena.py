@@ -12930,4 +12930,13 @@ if __name__ == "__main__":
     except Exception as e:
         log.warning(f"[TELEGRAM] Bot startup failed: {e}")
 
-    app.run(host=_host, port=5000, debug=False)
+    # Clean Ctrl-C shutdown on Windows — daemon threads stop automatically
+    import signal as _signal
+    def _shutdown_handler(sig, frame):
+        log.info("[SHUTDOWN] Ctrl-C received — stopping Sentinel Pro...")
+        import os as _os
+        _os._exit(0)
+    _signal.signal(_signal.SIGINT, _shutdown_handler)
+    _signal.signal(_signal.SIGTERM, _shutdown_handler)
+
+    app.run(host=_host, port=5000, debug=False, use_reloader=False)

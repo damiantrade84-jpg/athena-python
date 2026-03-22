@@ -15,5 +15,8 @@ if exist "venv\Scripts\activate.bat" (
 )
 
 echo Starting Sentinel Pro v4.0 (Python 3.13)...
+echo Press Ctrl-C to stop.
 py -3.13 athena.py
-pause
+echo.
+echo Sentinel Pro stopped. Window will close in 3 seconds...
+timeout /t 3 /nobreak >nul
