@@ -347,6 +347,25 @@ Routes pairs to EODHD WS endpoints (`us`, `forex`). Skips any pair with `"ws": F
 - Pairs with `"ws": False` (15 pairs) still scan, backtest, and execute normally via REST cache (21min polling)
 - To re-allocate WS slots: run backtests → query `backtest_results` by SQN → update `"ws"` flags in pair lists
 
+### `/api/chart-analysis` endpoint — athena.py
+POST endpoint. Sends a chart screenshot (base64 PNG) to Claude Vision (`claude-sonnet-4-6`) for professional TA review.
+
+**Request body:**
+```json
+{
+  "image": "<base64 PNG>",
+  "symbol": "BTC/USDT",
+  "tf": "H4",
+  "signal": { "direction": "LONG", "confluenceScore": 1.2, "price": ..., "sl": ..., "tp1": ..., "regime": "RANGING" },
+  "engineB": { "current_swing_sequence": "HH-HL", "bos_confirmed": true, ... }
+}
+```
+- `signal` and `engineB` are optional — endpoint prefers POST body over scan cache (`_last_scan_results` / `_engine_b_cache`)
+- `regime` in `signal` can be a **dict** `{"label": "TRENDING"}` (Engine A) or a **plain string** `"TRENDING"` (Engine C) — both handled
+- Context builder is **outside** the try/except — any crash there returns HTML 500 (known risk area; keep context code simple)
+- Returns `{analysis: "<text>", model: "claude-sonnet-4-6", symbol, tf}` or `{error: "<msg>"}`
+- Requires `ANTHROPIC_API_KEY` env var; returns 500 if missing
+
 ### `/api/pairs` endpoint — athena.py
 Returns ALL_PAIRS grouped by asset class for the frontend pair selector. Response: `{groups: {label: [{sym, label, enabled}]}, total, active}`. The backtest dropdown in index.html fetches this on page load — do NOT hardcode pair lists in HTML.
 
