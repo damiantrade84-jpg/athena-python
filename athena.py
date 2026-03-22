@@ -11090,9 +11090,12 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
     if _oi_divergence and _oi_divergence.get("warning"):
         warn_list.append(_oi_divergence["warning"])
 
-    # Max possible final_score is always 3.0 
-    # (abs(dir_z) * (0.6 + nondir_norm * 0.4), z capped at 3.0)
-    res["maxScoreOverride"] = 3.0
+    # Max possible final_score depends on scoring engine:
+    # - Forex: 0-1 scale (forex_scoring.py caps at 1.0)
+    # - Crypto/Stock: 0-3 scale (z-score factor engine, capped at 3.0)
+    # Only set maxScoreOverride if not already set (forex sets it to 1.0)
+    if res.get("maxScoreOverride") is None:
+        res["maxScoreOverride"] = 3.0
     
     max_score = res.get("maxScoreOverride") or _max_score_for_pair(pair)
 
