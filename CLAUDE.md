@@ -1,5 +1,35 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-22)
+
+**Engine C — Consensus Layer (New):**
+- Added `engine_c.py`: combines Engine A (quantitative factor scoring) and Engine B (naked price action) into a unified signal with conviction-based position sizing.
+- Architecture: Layer 1 normalises both engine scores to 0–1; Layer 2 applies regime-weighted conviction scoring; Layer 3 resolves SL/TP and sizing multiplier.
+- AI Vision is NOT a voter — it modifies conviction after consensus is established (CONFIRM/WEAKEN/CONTRADICT/AVOID).
+- Regime-conditional weights: `TRENDING={A:0.65, B:0.35}`, `RANGING={A:0.35, B:0.65}`, `HIGH_VOLATILITY={A:0.50, B:0.50}`, `LOW_VOLATILITY={A:0.45, B:0.55}`.
+- Conviction tiers: `HIGH≥0.70→full size`, `MEDIUM≥0.50→0.65x`, `LOW≥0.35→0.35x`, `SKIP→no trade`.
+- Vision CONFIRM with conviction ≥ 0.35 upgrades LOW-tier signals to tradeable; AVOID/CONTRADICT hard-veto regardless.
+- SL priority: Engine B structural → ATR validate (clamp at 2.5x ATR) → pick tighter → RR check.
+- TP priority: Engine B structural if RR ≥ 1.5, else Engine A ATR-based.
+
+**New API Endpoints (athena.py):**
+- `/api/engine-c-scan` (POST): runs Engine A + B on all pairs for a given `assetClass`, returns `{aligned, a_only, b_only, conflict, skipped}` buckets sorted by conviction.
+- `/api/engine-c-confirm` (POST): applies AI Vision result to a consensus dict, returns updated consensus. Imports `apply_vision` locally to avoid circular imports. Always returns JSON (wrapped in try/except).
+
+**Dashboard — ENGINE C Tab:**
+- New ENGINE C tab added to the dashboard tab bar.
+- Scan controls: asset class selector + SCAN CONSENSUS button.
+- Signal cards show: two-column Engine A/B comparison, conviction bar, unified SL/TP/RR/sizing, AI CONFIRM button, and SCALP/INTRADAY/SWING execute buttons.
+- Execute buttons always rendered (hidden until Vision confirms); shown for any tier Vision approves.
+- `runECVisionConfirm`: opens H4 chart modal → html2canvas → `/api/chart-analysis` → `/api/engine-c-confirm` → updates card in-place.
+- Response guards: `closeAcm()` runs before `.json()` parse; both fetch calls check `.ok` and surface readable errors instead of "Unexpected token '<'".
+
+**Bug Fix — chart-analysis regime crash:**
+- `api_chart_analysis` crashed when Engine C passed `regime` as a plain string (`"RANGING"`) because line called `.get('label')` assuming a dict. Fixed to handle both dict (Engine A) and string (Engine C) regime values. This was outside the try/except so Flask returned HTML, causing the "Unexpected token '<'" error.
+
+**Sizing Override — quick-execute:**
+- `/api/quick-execute` now reads `sizing_override` from POST body (default 1.0) and passes it to `risk_check`, replacing the hardcoded `CONFIG.get("AUTO_TRADE_SIZING_OVERRIDE")`. Engine C HIGH/MEDIUM/LOW conviction tiers now directly control position size.
+
 ## Recent Changes (2026-03-20)
 
 **Engine B (Naked) Simplification & Parity:**
@@ -122,6 +152,7 @@ Multi-asset algorithmic trading system: Flask dashboard, Engine A confluence/fac
 | `feature_normalizer.py` | Rolling z-score, percentile rank, min-max normalization | |
 | `market_structure.py` | Engine B naked price-action engine: structure, zones, trigger patterns, and shared checklist pass/fail logic | |
 | `engine_b_ai.py` | Engine B review layer — advisory AI verdict/narrative only, not primary signal generation | |
+| `engine_c.py` | Engine C consensus layer — normalises A+B scores, regime-weighted conviction, SL/TP resolution, AI Vision modifier, sizing override | |
 | `config.py` | Hard-coded CONFIG defaults + YAML loader + validation | |
 | `config.yaml` | All tunable thresholds — edit this, not config.py | |
 | `risk_engine.py` | Risk gateway: kill switch, drawdown, position sizing, portfolio heat | |
@@ -180,6 +211,31 @@ run_full_scan(style, asset_class)
        └─ returns pass/fail + score + pct for UI
   └─ Engine B AI review (optional/advisory only)
   └─ _json_safe(response)
+```
+
+**Engine C flow:**
+```
+/api/engine-c-scan
+  └─ for each enabled pair in asset class (time.sleep(0.1) yield per pair)
+       ├─ analyze_pair(pair, btc_bias, style)          ← Engine A
+       ├─ NakedEngine.analyze_structure(...)           ← Engine B (best of LONG/SHORT)
+       ├─ NakedEngine.calculate_confidence(...)
+       └─ compute_consensus(signal_a, signal_b, confidence_b, regime, entry, atr)
+            ├─ normalise_engine_a() → score_norm 0–1
+            ├─ normalise_engine_b() → score_norm 0–1
+            ├─ direction gate (conflict → SKIP)
+            ├─ regime-weighted conviction = A*wA + B*wB (+ BOS/OB bonuses)
+            ├─ resolve_sl() — structural → ATR-clamped → tighter candidate
+            ├─ resolve_tp() — structural if RR≥1.5, else ATR
+            └─ returns {trade, verdict, direction, conviction, tier, sizing_override, sl, tp, rr, ...}
+
+/api/engine-c-confirm
+  └─ apply_vision(consensus, vision_result)
+       ├─ parse Vision rating: STRONG/MODERATE/WEAK/AVOID/CONTRADICTS
+       ├─ apply conviction multiplier
+       ├─ CONFIRM + conviction≥0.35 → trade=True
+       ├─ AVOID/CONTRADICT → trade=False, tier=SKIP
+       └─ returns updated consensus dict
 ```
 
 **Execution path:**
