@@ -17,6 +17,7 @@ import os
 import sys
 import json
 import math
+import re
 import time
 import threading
 import webbrowser
@@ -10991,11 +10992,20 @@ def api_candles():
     if not candles:
         return jsonify({"error": f"No candle data for {symbol} {tf}"}), 404
 
+    _naive_iso_utc = re.compile(
+        r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$"
+    )
     result = []
     for c in candles:
+        _t = c.get("time", c.get("datetime", ""))
+        if isinstance(_t, str):
+            _ts = _t.strip().replace(" ", "T")
+            if _naive_iso_utc.match(_ts):
+                _ts += "Z"
+            _t = _ts
         result.append(
             {
-                "t": c.get("time", c.get("datetime", "")),
+                "t": _t,
                 "o": float(c.get("open", 0)),
                 "h": float(c.get("high", 0)),
                 "l": float(c.get("low", 0)),

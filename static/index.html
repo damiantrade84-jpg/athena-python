@@ -2981,6 +2981,46 @@ function fmtPrice(p) {
   return p.toFixed(5);
 }
 
+/**
+ * Display decimals by instrument (pip/tick convention), not by scalp vs swing.
+ * Scalp/intraday/swing affects typical stop *distance* in pips, not quote precision.
+ */
+function fmtPriceForSig(p, sig) {
+  if (p == null || p === '' || isNaN(p)) return '-';
+  var num = Number(p);
+  if (!isFinite(num)) return '-';
+  var t = (sig && sig.type || '').toLowerCase();
+  var sym = String(sig && (sig.display || sig.pair || sig.symbol) || '').toUpperCase();
+  if (t === 'forex') {
+    if (sym.indexOf('JPY') >= 0) return num.toFixed(3);
+    return num.toFixed(5);
+  }
+  if (t === 'crypto') {
+    if (num >= 1000) return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (num >= 1) return num.toFixed(4);
+    if (num >= 0.01) return num.toFixed(5);
+    return num.toFixed(6);
+  }
+  if (t === 'commodity' || t === 'index') {
+    if (num >= 1000) return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (num >= 10) return num.toFixed(3);
+    return num.toFixed(4);
+  }
+  if (t === 'stock') return num.toFixed(2);
+  return fmtPrice(num);
+}
+
+/** Map Engine C consensus.entry / .tp onto .price / .tp1 for shared chart level drawing. */
+function _acmNormalizeSig(sig) {
+  if (!sig) return null;
+  if (sig.entry == null && sig.tp == null) return sig;
+  var o = Object.assign({}, sig);
+  if (o.price == null && o.entry != null) o.price = o.entry;
+  if (o.entryPrice == null && o.entry != null) o.entryPrice = o.entry;
+  if (o.tp1 == null && o.tp != null) o.tp1 = o.tp;
+  return o;
+}
+
 // -- Auto-Trade Bot --
 window._autoTradeEnabled = false;
 
@@ -3628,10 +3668,16 @@ var _acm = {
   lastData: [],
 };
 
-function openAcm(symbol, tf) {
+function openAcm(symbol, tf, fallbackSig) {
   _acm.symbol = symbol;
   _acm.tf = tf || 'H4';
-  _acm.sig = allSignals.find(function(s) { return s.symbol === symbol; });
+  var fromList = allSignals.find(function(s) { return s.symbol === symbol; });
+  // Engine C AI CONFIRM passes consensus as fallback — prefer it over a same-symbol Engine A card
+  // so ENTRY/SL/TP lines match the consensus snapshot (sl_method is EC-only).
+  var useSig = (fallbackSig && fallbackSig.sl_method != null)
+    ? fallbackSig
+    : (fromList || fallbackSig || null);
+  _acm.sig = _acmNormalizeSig(useSig);
 
   var sig = _acm.sig;
   var display = sig ? (sig.display || sig.pair || symbol) : symbol;
@@ -3651,6 +3697,9 @@ function openAcm(symbol, tf) {
   if (sig && sig.confluenceScore != null) {
     var maxS = sig.maxScore || sig.maxScoreOverride || 3.0;
     scoreEl.textContent = parseFloat(sig.confluenceScore).toFixed(2) + '/' + maxS;
+    scoreEl.style.display = '';
+  } else if (sig && sig.conviction != null) {
+    scoreEl.textContent = 'Conv ' + parseFloat(sig.conviction).toFixed(2);
     scoreEl.style.display = '';
   } else { scoreEl.style.display = 'none'; }
 
@@ -3719,6 +3768,71 @@ function _acmEMA(data, period) {
   for (var i = 1; i < data.length; i++)
     ema.push(data[i] * k + ema[i - 1] * (1 - k));
   return ema;
+}
+
+/** Athena chart modal: bar time as UTC (server stores UTC without Z). */
+function _acmBarTimeUtcSec(tRaw) {
+  if (typeof tRaw === 'number') return Math.floor(tRaw / 1000);
+  var s = String(tRaw || '').trim().replace(' ', 'T');
+  if (!s) return NaN;
+  if (!/[zZ]$/.test(s) && !/[+-]\d\d:?(\d\d)?$/.test(s)) s += 'Z';
+  var ms = Date.parse(s);
+  return isNaN(ms) ? NaN : Math.floor(ms / 1000);
+}
+
+/**
+ * Dedup timestamps, fix OHLC ordering, clip absurd wicks vs local median range
+ * (bad EODHD/forex prints / duplicates confuse Lightweight Charts + Vision).
+ */
+function _acmSanitizeCandlesForChart(rows, isForex) {
+  var parsed = rows.map(function(c) {
+    var ts = _acmBarTimeUtcSec(c.t !== undefined ? c.t : c.time);
+    var o = parseFloat(c.o !== undefined ? c.o : c.open);
+    var h = parseFloat(c.h !== undefined ? c.h : c.high);
+    var l = parseFloat(c.l !== undefined ? c.l : c.low);
+    var cl = parseFloat(c.c !== undefined ? c.c : c.close);
+    var vol = parseFloat(c.v !== undefined ? c.v : (c.vol !== undefined ? c.vol : 0));
+    if (!ts || isNaN(ts) || !isFinite(o) || !isFinite(h) || !isFinite(l) || !isFinite(cl)) return null;
+    if (!isFinite(cl) || cl === 0) return null;
+    if (h < l) { var x = h; h = l; l = x; }
+    var bh = Math.max(o, cl);
+    var bl = Math.min(o, cl);
+    h = Math.max(h, bh);
+    l = Math.min(l, bl);
+    return { time: ts, open: o, high: h, low: l, close: cl, vol: isFinite(vol) ? vol : 0 };
+  }).filter(Boolean);
+  parsed.sort(function(a, b) { return a.time - b.time; });
+  var dedup = [];
+  for (var i = 0; i < parsed.length; i++) {
+    if (dedup.length && dedup[dedup.length - 1].time === parsed[i].time)
+      dedup[dedup.length - 1] = parsed[i];
+    else dedup.push(parsed[i]);
+  }
+  var minR = isForex ? 0.0012 : 0.018;
+  var mult = isForex ? 10 : 12;
+  for (var j = 0; j < dedup.length; j++) {
+    var c = dedup[j];
+    var bodyTop = Math.max(c.open, c.close);
+    var bodyBot = Math.min(c.open, c.close);
+    var prev = dedup.slice(Math.max(0, j - 45), j);
+    if (prev.length < 10) continue;
+    var rs = prev.map(function(p) {
+      return (p.high - p.low) / Math.max(Math.abs(p.close), 1e-12);
+    });
+    rs.sort(function(a, b) { return a - b; });
+    var medR = rs[Math.floor(rs.length / 2)] || 0;
+    var curR = (c.high - c.low) / Math.max(Math.abs(c.close), 1e-12);
+    var thresh = Math.max(medR * mult, minR);
+    if (curR > thresh) {
+      var maxSpan = thresh * Math.abs(c.close);
+      var mid = (c.high + c.low) / 2;
+      c.high = mid + maxSpan / 2;
+      c.low = mid - maxSpan / 2;
+      c.high = Math.max(c.high, bodyTop);
+      c.low = Math.min(c.low, bodyBot);
+    }
+  }
+  return dedup;
 }
 
 async function _acmRender(symbol, tf) {
@@ -3790,22 +3904,9 @@ async function _acmRender(symbol, tf) {
       wickUpColor: 'rgba(38,166,154,0.5)',
     });
 
-    var data = candles.map(function(c) {
-      var tStr = String(c.t || c.time || '').replace(' ', 'T');
-      var ts = typeof c.t === 'number' ? Math.floor(c.t / 1000) :
-               Math.floor(new Date(tStr).getTime() / 1000);
-      return {
-        time: ts,
-        open: parseFloat(c.o || c.open),
-        high: parseFloat(c.h || c.high),
-        low: parseFloat(c.l || c.low),
-        close: parseFloat(c.c || c.close),
-        vol: parseFloat(c.v || c.vol || 0),
-      };
-    }).filter(function(c) {
-      return c.time && !isNaN(c.time) && c.open > 0 && c.high > 0;
-    });
-    data.sort(function(a, b) { return a.time - b.time; });
+    var isFxChart = _acm.sig && _acm.sig.type === 'forex';
+    var data = _acmSanitizeCandlesForChart(candles, isFxChart);
+    if (!data.length) throw new Error('No valid candles after sanitize');
     _acm.lastData = data;
     _acm.candle.setData(data);
 
@@ -3867,25 +3968,28 @@ async function _acmRender(symbol, tf) {
     // Update live price display
     var lastClose = data[data.length - 1].close;
     var priceEl = document.getElementById('acm-price');
-    priceEl.textContent = lastClose.toFixed(
-      _acm.sig && _acm.sig.type === 'forex' ? 5 : 2
-    );
+    priceEl.textContent = _acm.sig ? fmtPriceForSig(lastClose, _acm.sig) : fmtPrice(lastClose);
     priceEl.style.color = '#e2e8f0';
 
     // Legend
     document.getElementById('acm-legend').innerHTML =
       '<span style="color:#00d4ff">━ EMA 21</span>' +
       '<span style="color:#a78bfa">━ EMA 50</span>' +
-      '<span style="color:rgba(245,158,11,0.6)">╌ EMA 200</span>';
+      '<span style="color:rgba(245,158,11,0.6)">╌ EMA 200</span>' +
+      (_acm.sig && _acm.sig.sl_method ? '<span style="color:#475569;font-size:9px;margin-left:8px;">· SL/TP/entry = Engine C snapshot · H4 refetched on open</span>' : '');
 
     // Info panel
     var sig = _acm.sig;
     var infoHtml = '';
     if (sig) {
-      infoHtml += '<span style="color:#94a3b8">Entry ' + fmtPrice(sig.price || sig.entryPrice) + '</span>';
-      infoHtml += '<span style="color:#ff3b5c">SL ' + fmtPrice(sig.sl) + '</span>';
-      infoHtml += '<span style="color:#00e676">TP1 ' + fmtPrice(sig.tp1) + '</span>';
-      if (sig.rr1) infoHtml += '<span style="color:#5a6d80">RR 1:' + parseFloat(sig.rr1).toFixed(1) + '</span>';
+      var ent = sig.price || sig.entryPrice || sig.entry;
+      var tpShow = sig.tp1 != null ? sig.tp1 : sig.tp;
+      var tpLab = (sig.tp2 && parseFloat(sig.tp2) !== parseFloat(tpShow || 0)) ? 'TP1 ' : 'TP ';
+      infoHtml += '<span style="color:#94a3b8">Entry ' + fmtPriceForSig(ent, sig) + '</span>';
+      infoHtml += '<span style="color:#ff3b5c">SL ' + fmtPriceForSig(sig.sl, sig) + '</span>';
+      infoHtml += '<span style="color:#00e676">' + tpLab + fmtPriceForSig(tpShow, sig) + '</span>';
+      var rrV = sig.rr1 != null ? sig.rr1 : sig.rr;
+      if (rrV != null) infoHtml += '<span style="color:#5a6d80">RR 1:' + parseFloat(rrV).toFixed(1) + '</span>';
     }
     document.getElementById('acm-info-panel').innerHTML = infoHtml;
 
@@ -3908,7 +4012,7 @@ function _acmDrawLevels() {
   var sig = _acm.sig;
   _acm.levelLines = [];
 
-  var entry = parseFloat(sig.price || sig.entryPrice);
+  var entry = parseFloat(sig.price || sig.entryPrice || sig.entry || 0);
   if (entry > 0) _acm.levelLines.push(_acm.candle.createPriceLine({
     price: entry, color: 'rgba(148,163,184,0.6)', lineWidth: 1, lineStyle: 2,
     axisLabelVisible: true, title: 'ENTRY',
@@ -3917,10 +4021,15 @@ function _acmDrawLevels() {
     price: parseFloat(sig.sl), color: '#ef5350', lineWidth: 1, lineStyle: 2,
     axisLabelVisible: true, title: 'SL',
   }));
-  if (sig.tp1) _acm.levelLines.push(_acm.candle.createPriceLine({
-    price: parseFloat(sig.tp1), color: '#26a69a', lineWidth: 1, lineStyle: 2,
-    axisLabelVisible: true, title: 'TP1',
-  }));
+  var tpPrimary = sig.tp1 != null ? sig.tp1 : sig.tp;
+  if (tpPrimary) {
+    var tp2 = sig.tp2;
+    var tpTitle = (tp2 != null && parseFloat(tp2) !== parseFloat(tpPrimary)) ? 'TP1' : 'TP';
+    _acm.levelLines.push(_acm.candle.createPriceLine({
+      price: parseFloat(tpPrimary), color: '#26a69a', lineWidth: 1, lineStyle: 2,
+      axisLabelVisible: true, title: tpTitle,
+    }));
+  }
   if (sig.tp2 && sig.tp2 !== sig.tp1) _acm.levelLines.push(_acm.candle.createPriceLine({
     price: parseFloat(sig.tp2), color: 'rgba(38,166,154,0.4)', lineWidth: 1, lineStyle: 2,
     axisLabelVisible: true, title: 'TP2',
@@ -4012,9 +4121,9 @@ function _acmStartLive() {
     // Update header price
     var priceEl = document.getElementById('acm-price');
     var isLong = _acm.sig.direction === 'LONG';
-    var entry = parseFloat(_acm.sig.price || _acm.sig.entryPrice || 0);
+    var entry = parseFloat(_acm.sig.price || _acm.sig.entryPrice || _acm.sig.entry || 0);
     var favorable = entry > 0 ? (isLong ? price >= entry : price <= entry) : true;
-    priceEl.textContent = price.toFixed(_acm.sig.type === 'forex' ? 5 : 2);
+    priceEl.textContent = fmtPriceForSig(price, _acm.sig);
     priceEl.style.color = favorable ? '#00e676' : '#ff3b5c';
 
     // Update last candle on chart
@@ -4261,7 +4370,7 @@ function buildECCard(c, category) {
     html += '<div style="font-size:11px;font-family:Space Mono,monospace;color:var(--text);">' +
       a.direction + ' ' + aScore + '/' + aMax + '</div>';
     html += '<div style="font-size:10px;color:var(--muted);font-family:Space Mono,monospace;">' +
-      'SL ' + fmtPrice(a.sl) + ' TP ' + fmtPrice(a.tp1) + '</div>';
+      'SL ' + fmtPriceForSig(a.sl, c) + ' TP ' + fmtPriceForSig(a.tp1, c) + '</div>';
     if (a.cot != null) html += '<div style="font-size:9px;color:var(--accent);">COT ' + a.cot + '</div>';
   } else {
     html += '<div style="font-size:11px;color:var(--muted);">No signal</div>';
@@ -4275,7 +4384,7 @@ function buildECCard(c, category) {
     html += '<div style="font-size:11px;font-family:Space Mono,monospace;color:var(--text);">' +
       b.direction + ' ' + (b.score || '?') + '/' + (b.max_possible || '?') + '</div>';
     html += '<div style="font-size:10px;color:var(--muted);font-family:Space Mono,monospace;">' +
-      'SL ' + fmtPrice(b.sl) + ' TP ' + fmtPrice(b.tp) + '</div>';
+      'SL ' + fmtPriceForSig(b.sl, c) + ' TP ' + fmtPriceForSig(b.tp, c) + '</div>';
     html += '<div style="font-size:9px;color:var(--muted);">' + (b.sequence || '') +
       (b.bos ? ' BOS&#10003;' : '') + (b.ob_at_zone ? ' OB&#10003;' : '') + '</div>';
   } else {
@@ -4288,9 +4397,9 @@ function buildECCard(c, category) {
     html += '<div style="background:rgba(0,212,255,0.04);border:1px solid rgba(0,212,255,0.15);' +
       'border-radius:6px;padding:8px;margin-bottom:10px;">';
     html += '<div style="display:flex;justify-content:space-between;font-size:10px;font-family:Space Mono,monospace;">';
-    html += '<span style="color:var(--muted);">SL <span style="color:var(--bear);">' + fmtPrice(c.sl) +
+    html += '<span style="color:var(--muted);">SL <span style="color:var(--bear);">' + fmtPriceForSig(c.sl, c) +
       '</span> (' + (c.sl_method || '') + ')</span>';
-    html += '<span style="color:var(--muted);">TP <span style="color:var(--bull);">' + fmtPrice(c.tp) +
+    html += '<span style="color:var(--muted);">TP <span style="color:var(--bull);">' + fmtPriceForSig(c.tp, c) +
       '</span> (' + (c.tp_method || '') + ')</span>';
     html += '<span style="color:var(--accent);">RR 1:' + (c.rr || '?') + '</span>';
     html += '<span style="color:var(--text);">Size: ' +
@@ -4382,7 +4491,7 @@ async function runECVisionConfirm(sid) {
   }
 
   // Open chart modal for this pair
-  openAcm(consensus.symbol, 'H4');
+  openAcm(consensus.symbol, 'H4', consensus);
 
   // Wait for chart to render
   await new Promise(function(r) { setTimeout(r, 2000); });
