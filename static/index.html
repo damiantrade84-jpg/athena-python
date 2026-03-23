@@ -918,6 +918,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 <script>
 // Python local API - no GAS URL needed
 let allSignals = [];
+window.allSignals = allSignals;
 let currentFilter = 'all';
 let accountSize = 500;
 let tradeStylePref = 'auto';
@@ -1585,6 +1586,7 @@ async function runScan() {
     var tradeSignals=data.tradeSignals||data.signals||[];
     var watchlistSignals=data.watchlist||[];
     allSignals=tradeSignals.concat(watchlistSignals);
+    window.allSignals = allSignals;
     renderStats(data);
     renderSignals(applyStyleFilter(allSignals));
     try { localStorage.setItem('lastScanData', JSON.stringify(data)); } catch(e) {}
@@ -1639,6 +1641,7 @@ async function runNakedGlobalScan() {
       return s;
     });
     allSignals=tradeSignals;
+    window.allSignals = allSignals;
     
     var dataStats = {
       tradeSignals: tradeSignals,
@@ -3117,6 +3120,7 @@ fetch('/api/auto-trade').then(function(r){return r.json();}).then(_updateAutoTra
     var tradeSignals = data.tradeSignals || data.signals || [];
     var watchlistSignals = data.watchlist || [];
     allSignals = tradeSignals.concat(watchlistSignals);
+    window.allSignals = allSignals;
     renderStats(data);
     renderSignals(applyStyleFilter(allSignals));
     document.getElementById('configBanner').style.display = 'none';
