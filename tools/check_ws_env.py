@@ -25,7 +25,7 @@ def main() -> None:
     print(f"Python:     {sys.version.split()[0]} ({sys.executable})")
     if sys.version_info >= (3, 14):
         print(
-            "WARNING:    Python 3.14+ — full `pip install -r requirements.txt` may fail (numba/pandas-ta)."
+            "WARNING:    Python 3.14+ - full `pip install -r requirements.txt` may fail (numba/pandas-ta)."
         )
         print("            Use Python 3.13 or 3.12 for a clean venv until upstream adds 3.14 wheels.")
     print(f"websockets: {_ver('websockets')}")
