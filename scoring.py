@@ -13,6 +13,41 @@ from indicators import (
 
 log = logging.getLogger("athena")
 
+
+def _tf_score_proxy(snap: dict) -> dict | None:
+    """Build a lightweight per-timeframe score proxy for timeframe_alignment.
+
+    Uses EMA alignment, RSI bias, and MACD direction to produce a simple
+    directional score in the same scale as factor_result['final_score'].
+    Returns dict with 'final_score' or None if snap lacks data.
+    """
+    if not snap:
+        return None
+    components = []
+    # EMA alignment: close vs ema50 vs ema200
+    close = snap.get("close")
+    ema50 = snap.get("ema50")
+    ema200 = snap.get("ema200")
+    if close is not None and ema50 is not None and ema200 is not None and ema200 != 0:
+        if close > ema50 > ema200:
+            components.append(1.0)
+        elif close < ema50 < ema200:
+            components.append(-1.0)
+        else:
+            components.append(0.0)
+    # RSI bias
+    rsi = snap.get("rsi")
+    if rsi is not None:
+        components.append((rsi - 50) / 50)  # -1 to +1
+    # MACD direction
+    macd_hist = snap.get("macdHist")
+    if macd_hist is not None:
+        components.append(1.0 if macd_hist > 0 else -1.0)
+    if not components:
+        return None
+    avg = sum(components) / len(components)
+    return {"final_score": round(avg, 4)}
+
 _MAJOR_FOREX = {
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"
 }
@@ -191,12 +226,20 @@ def detect_div(d1c: list, h4c: list, h1c: list) -> list:
         n = len(pr)
         if n >= 10 and rsi[-1] is not None:
             t = n // 3
-            pm = max(pr[t : 2 * t])
-            rm = [x for x in rsi[t : 2 * t] if x is not None]
-            if rm:
-                if pr[-1] > pm and rsi[-1] < max(rm):
+            # Find prior price peak/trough index and get RSI at that exact bar
+            prior_highs = pr[t : 2 * t]
+            prior_lows = cl[t : 2 * t]
+            prior_rsi = rsi[t : 2 * t]
+            if prior_highs and prior_rsi:
+                peak_idx = prior_highs.index(max(prior_highs))
+                trough_idx = prior_lows.index(min(prior_lows))
+                rsi_at_peak = prior_rsi[peak_idx] if peak_idx < len(prior_rsi) else None
+                rsi_at_trough = prior_rsi[trough_idx] if trough_idx < len(prior_rsi) else None
+                # Bearish div: higher high in price, lower RSI at the peak
+                if rsi_at_peak is not None and pr[-1] > max(prior_highs) and rsi[-1] < rsi_at_peak:
                     w.append("H4 RSI Bearish Divergence")
-                if pr[-1] < pm and rsi[-1] > max(rm):
+                # Bullish div: lower low in price, higher RSI at the trough
+                if rsi_at_trough is not None and cl[-1] < min(prior_lows) and rsi[-1] > rsi_at_trough:
                     w.append("H4 RSI Bullish Divergence")
     except Exception as e:
         log.warning(f"detect_div H4: {e}")
@@ -391,10 +434,28 @@ def calc_confluence(
     _regime = {"state": _REGIME_STATE.get(_regime_str.upper(), 1), "label": _regime_str}
     w.append(f"Regime: {_regime_str.upper()}")
     # Confidence engine — diagnostic field (graceful degradation)
-    _signal_type = "trend"  # default; could be derived from entryMode
+    # Derive signal classification from factor result flags
+    _squeeze_bonus = factor_result.get("squeeze_bonus", False)
+    _atr_breakout = factor_result.get("atr_breakout", False)
+    _signal_class = classify_signal_setup(
+        direction, "trend", squeeze_bonus=_squeeze_bonus,
+        atr_breakout=_atr_breakout, votes=v,
+    )
+    _SIGNAL_TYPE_MAP = {
+        "mean_reversion": "mean_reversion",
+        "breakout": "breakout",
+        "trend_pullback": "trend",
+        "trend_continuation": "trend",
+    }
+    _signal_type = _SIGNAL_TYPE_MAP.get(_signal_class, "trend")
+    _d1_proxy = _tf_score_proxy(d1["snap"])
+    _h4_proxy = _tf_score_proxy(h4["snap"])
+    _h1_proxy = _tf_score_proxy(h1["snap"])
     _conf = compute_confidence(
         factor_result=factor_result,
-        h4_factor_result=factor_result,  # primary timeframe
+        d1_factor_result=_d1_proxy,
+        h4_factor_result=_h4_proxy,
+        h1_factor_result=_h1_proxy,
         signal_type=_signal_type,
         volume_ratio=vr,
     )
@@ -411,10 +472,10 @@ def calc_confluence(
         "trendState": trend_state,
         "weinsteinStage": None,
         "weinsteinLabel": None,
-        "entryMode": "trend",
+        "entryMode": _signal_type,
         "adxMomentum": None,
         "adxSlope": None,
-        "signalClass": "trend_continuation",
+        "signalClass": _signal_class,
         "regime": _regime,
         "fundingRate": funding_rate,
         "maxScoreOverride": 3.0,  # Z-score clamp cap — final_score is a weighted average of clamped z-scores

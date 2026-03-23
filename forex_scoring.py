@@ -16,7 +16,7 @@ Threshold: MIN_FOREX_CONFLUENCE (default 0.60) in config.yaml
 from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import numpy as np
@@ -98,13 +98,13 @@ def _hurst_exponent(prices: list, max_lag: int = 20) -> float:
     try:
         arr = np.array(prices, dtype=float)
         lags = range(2, max_lag)
-        tau = [np.sqrt(np.std(np.subtract(arr[lag:], arr[:-lag]))) for lag in lags]
+        tau = [np.std(np.subtract(arr[lag:], arr[:-lag])) for lag in lags]
         tau = [t for t in tau if t > 0]
         if len(tau) < 2:
             return 0.5
         valid_lags = list(lags)[: len(tau)]
         poly = np.polyfit(np.log(valid_lags), np.log(tau), 1)
-        return float(np.clip(poly[0] * 2.0, 0.0, 1.0))
+        return float(np.clip(poly[0], 0.0, 1.0))
     except Exception:
         return 0.5
 
@@ -139,23 +139,22 @@ class DynamicForexWeights:
     def __init__(self):
         self.rsi_w = 0.40
         self.cot_w = 0.20
-        self.base = 0.30
+        self.base = 0.40
         self.regime = "NEUTRAL"
 
     def update(self, hurst: float, backtest_mode: bool = False) -> None:
-        b = 0.25 if backtest_mode else 0.35
         if hurst < 0.45:
-            self.base = b - 0.05
+            self.base = 0.20
             self.rsi_w = 0.60
             self.cot_w = 0.20
             self.regime = "MEAN_REVERTING"
         elif hurst > 0.55:
-            self.base = b + 0.05
+            self.base = 0.55
             self.rsi_w = 0.20
             self.cot_w = 0.25
             self.regime = "TRENDING"
         else:
-            self.base = b
+            self.base = 0.40
             self.rsi_w = 0.40
             self.cot_w = 0.20
             self.regime = "NEUTRAL"
@@ -398,7 +397,10 @@ def _london_breakout_score(h1_candles: list, utc_hour: int) -> tuple[float, str]
     for c in h1_candles[-20:]:
         try:
             dt = datetime.fromisoformat(c.get("time", ""))  # candles use "time" key
-            if 0 <= dt.hour < 7:
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            utc_hour = dt.utctimetuple().tm_hour if dt.tzinfo else dt.hour
+            if 0 <= utc_hour < 7:
                 asian_candles.append(c)
         except Exception:
             continue
@@ -607,11 +609,11 @@ def compute_forex_score(
             else False
         )
         if fvg_overlap:
-            fvg_bonus = 0.35
+            fvg_bonus = 0.20  # multiplicative: 1.20x
 
         # 2. Liquidity sweep
         if detect_liquidity_sweep(h1_candles or [], atr):
-            liquidity_bonus = 0.30
+            liquidity_bonus = 0.15  # multiplicative: 1.15x
 
         # 3. Volume strength at Asian range or Fib level
         fib = calc_fib(h4_candles or [])
@@ -620,20 +622,21 @@ def compute_forex_score(
             if direction == "LONG"
             else fib.get("fib382", current_price)
         )
-        volume_bonus = volume_strength_at_level(h1_candles or [], key_level) * 0.25
+        volume_bonus = volume_strength_at_level(h1_candles or [], key_level) * 0.10  # up to 1.10x
     except Exception as e:
         log.error(f"[FOREX SMC ERROR] {e}")
         fvg_bonus, liquidity_bonus, volume_bonus, fvg_overlap = 0.0, 0.0, 0.0, False
 
-    # ── Final score with bonuses ────────────────────────────────────────────
+    # ── Final score with multiplicative bonuses (avoids 1.0 saturation) ─────
     if trend_score >= bo_final:
-        final_score = round(trend_score + fvg_bonus + liquidity_bonus + volume_bonus, 4)
+        base_score = trend_score
         result.direction = trend_dir
         result.signal_type = "TREND_PULLBACK" if trend_score > 0 else "NONE"
     else:
-        final_score = round(bo_final + fvg_bonus + liquidity_bonus + volume_bonus, 4)
+        base_score = bo_final
         result.direction = bo_dir
         result.signal_type = "LONDON_BREAKOUT"
+    final_score = round(base_score * (1.0 + fvg_bonus) * (1.0 + liquidity_bonus) * (1.0 + volume_bonus), 4)
 
     result.final_score = min(1.0, final_score)  # keep 0–1 scale
     try:

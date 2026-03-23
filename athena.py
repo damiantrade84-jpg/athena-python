@@ -5530,7 +5530,8 @@ def backtest_pair(pair, style="auto"):
             )
 
             lvl = calc_levels(
-                entry, atr, direction, _ptype, regime_state=_bt_regime_state
+                entry, atr, direction, _ptype, regime_state=_bt_regime_state,
+                style=effective_style,
             )
 
             sl = lvl["sl"]
@@ -5538,7 +5539,7 @@ def backtest_pair(pair, style="auto"):
             tp2 = lvl["tp2"]
 
             sl_mult = lvl["mults"]["sl"]
-            lvl["mults"]["tp1"]
+            tp1_mult = lvl["mults"]["tp1"]
             tp2_mult = lvl["mults"]["tp2"]
 
             rr1 = lvl["rr1"]
@@ -5902,7 +5903,8 @@ def backtest_pair(pair, style="auto"):
             )
 
             lvl = calc_levels(
-                entry, atr, direction, _ptype, regime_state=_bt_regime_state2
+                entry, atr, direction, _ptype, regime_state=_bt_regime_state2,
+                style=effective_style,
             )
 
             sl = lvl["sl"]
@@ -5910,7 +5912,7 @@ def backtest_pair(pair, style="auto"):
             tp2 = lvl["tp2"]
 
             sl_mult = lvl["mults"]["sl"]
-            lvl["mults"]["tp1"]
+            tp1_mult = lvl["mults"]["tp1"]
             tp2_mult = lvl["mults"]["tp2"]
 
             rr1 = lvl["rr1"]
@@ -6251,7 +6253,8 @@ def backtest_pair(pair, style="auto"):
             )
 
             lvl = calc_levels(
-                entry, atr, direction, _ptype, regime_state=_bt_regime_state3
+                entry, atr, direction, _ptype, regime_state=_bt_regime_state3,
+                style=effective_style,
             )
 
             sl = lvl["sl"]
@@ -6259,7 +6262,7 @@ def backtest_pair(pair, style="auto"):
             tp2 = lvl["tp2"]
 
             sl_mult = lvl["mults"]["sl"]
-            lvl["mults"]["tp1"]
+            tp1_mult = lvl["mults"]["tp1"]
             tp2_mult = lvl["mults"]["tp2"]
 
             rr1 = lvl["rr1"]
@@ -7202,7 +7205,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
             except Exception:
                 pass
             _lvl = calc_levels(entry, atr, direction, pair.get("type", "stock"),
-                               regime_state=_bt_regime)
+                               regime_state=_bt_regime, style=resolved_style)
             sl = _lvl["sl"]
             tp = _lvl["tp1"]
 

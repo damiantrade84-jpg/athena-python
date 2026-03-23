@@ -83,35 +83,6 @@ def _apply_pair_profile_weight_rules(pair: dict, weights: dict) -> dict:
     return out
 
 
-def _dynamic_regime_weights(
-    factor_scores: dict, recent_momentum: float, regime: str
-) -> dict:
-    """Momentum-adjusted regime weights — only for factor engine (crypto/stock/etc.).
-    Forex uses its own static rules in forex_scoring.py and is untouched."""
-    base = CONFIG.get("REGIME_WEIGHTS", {}).get(regime.upper(), {})
-    dynamic = {}
-    for factor, w in base.items():
-        if w == 0:  # disabled factor — never touch
-            dynamic[factor] = 0.0
-            continue
-        adj = 1.0 + (
-            recent_momentum * 0.3
-            if factor in ["trend", "momentum"]
-            else -recent_momentum * 0.2
-        )
-        dynamic[factor] = round(max(0.3, min(2.5, w * adj)), 3)
-    return dynamic
-
-
-def _bayesian_blend(factor_scores: dict, historical_winrates: dict) -> dict:
-    """Bayesian update using past factor performance — only for factor engine."""
-    blended = {}
-    for factor, score in factor_scores.items():
-        hist_wr = historical_winrates.get(factor, 0.5)
-        blended[factor] = round(score * (0.7 + 0.3 * hist_wr), 3)
-    return blended
-
-
 # ── Regime smoothing state ────────────────────────────────────────────────────
 # Tracks the last N raw regime labels per pair to prevent whipsawing.
 # Only updates the committed regime once N consecutive bars agree on the new label.
@@ -216,8 +187,7 @@ def _apply_correlation_filter(
             corr_raw = _pearson(series[k1], series[k2])
 
             if corr_raw is not None:
-                decay_factor = 0.94  # 6% decay per bar (standard in 2026 quant guides)
-                corr = corr_raw * decay_factor
+                corr = corr_raw
 
                 if abs(corr) > 0.8:
                     v1 = (
@@ -469,7 +439,7 @@ def compute_factor_scores(
         if pair.get("type", "stock") in ("forex", "commodity") and _cot != 0.0:
             if abs(_cot) >= 2.0:
                 # Extreme overcrowded positioning -> Reverse the signal (fade the herd)
-                _cot = -_cot * 1.5
+                _cot = max(-3.0, min(3.0, -_cot * 1.5))
             elif abs(_cot) < 1.0:
                 # Insignificant positioning -> ignore lagged data
                 _cot = 0.0
@@ -586,7 +556,7 @@ def compute_factor_scores(
         "momentum": "momentum",
         "derivatives": "derivatives",
         "microstructure": "microstructure",
-        "trend_strength": "trend",
+        "trend_strength": "trend_strength",
         "volatility": "volatility",
         "volume": "volume",
         "structure": "structure",

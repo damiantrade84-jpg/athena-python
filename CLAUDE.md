@@ -1,5 +1,61 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes — Deep Engine Audit Fixes
+
+**CRITICAL — Backtest calc_levels missing style (ATR1):**
+- All 4 backtest `calc_levels` calls in `athena.py` now pass `style=effective_style` (or `style=resolved_style` for Engine B BT). Previously all backtests defaulted to swing ATR multipliers regardless of actual style, making scalp/intraday backtest SL/TP 2-3x too wide.
+
+**HIGH — FVG label inversion (B1):**
+- `_detect_fvg` in `market_structure.py`: swapped labels. `prev_low > next_high` (gap down) now correctly labelled "bearish". `prev_high < next_low` (gap up) now correctly labelled "bullish". Mitigation checks also corrected: bearish FVG mitigation checks `high >= midpoint` (rally into gap), bullish checks `low <= midpoint` (retrace into gap).
+
+**HIGH — trend_strength weight key separation (A1):**
+- `trend_strength` (ADX magnitude, non-directional) now has its own key in `FACTOR_WEIGHTS` and `REGIME_WEIGHTS` in `config.py`, independent from directional `trend` (EMA alignment). Updated `_weight_key_map` in `factor_scoring.py`. Regime weights: TRENDING=1.5, RANGING=0.5, HIGH_VOL=1.0, LOW_VOL=0.8.
+
+**MEDIUM — Sweep label inversion (B3):**
+- `_detect_sweep` in `market_structure.py`: wick below + close above now correctly labelled `bull_sweep` (was `bear_sweep`). Wick above + close below now `bear_sweep` (was `bull_sweep`). SL override consumer updated to match: LONG uses `bull_sweep`, SHORT uses `bear_sweep`.
+
+**MEDIUM — DynamicForexWeights sum-to-1.0 (F2):**
+- `forex_scoring.py`: all regimes now sum to exactly 1.0 (MEAN_REVERTING: base=0.20+rsi=0.60+cot=0.20, TRENDING: 0.55+0.20+0.25, NEUTRAL: 0.40+0.40+0.20). Removed backtest base split that broke weight sums.
+
+**MEDIUM — Hurst exponent math (F3):**
+- `forex_scoring.py`: changed `np.sqrt(np.std(...))` to `np.std(...)` and removed `* 2.0` correction. Standard variance-of-lagged-differences estimator: `poly[0]` from log-log fit gives H directly.
+
+**MEDIUM — Forex bonus saturation (F1):**
+- `forex_scoring.py`: SMC bonuses (FVG, liquidity sweep, volume) changed from additive to multiplicative. Prevents any base score ≥0.10 from immediately hitting the 1.0 clamp. New multipliers: FVG=1.20x, liquidity=1.15x, volume=up to 1.10x.
+
+**MEDIUM — Timeframe alignment (CE1):**
+- `scoring.py`: added `_tf_score_proxy()` to build lightweight per-TF directional scores from each timeframe's indicator snapshot. `compute_confidence` now receives distinct D1/H4/H1 proxies instead of the same factor_result duplicated.
+
+**MEDIUM — Dead code removal (A2/A3):**
+- Removed `_dynamic_regime_weights()` and `_bayesian_blend()` from `factor_scoring.py` — both defined but never called.
+
+**MEDIUM — Regime classification (R1):**
+- `regime.py`: low ADX + collapsing momentum now classifies as RANGING (trend loss) instead of HIGH_VOLATILITY. Actual HIGH_VOLATILITY now requires BB width confirmation (bb_width_pct ≥ 75 while ranging). Removed dead `h4_snap.get("adxSlope", 0)` statement.
+
+**MEDIUM — Correlation filter decay (accepted suggestion):**
+- `factor_scoring.py`: removed `* 0.94` static decay in `_apply_correlation_filter`. The decay created a dead zone where correlations 0.80-0.85 never triggered the filter.
+
+**LOW — Signal classification wired (A6/A7):**
+- `scoring.py`: `classify_signal_setup()` now called in `calc_confluence()`, populating `signalClass` and `entryMode` dynamically instead of hardcoding to `"trend_continuation"` / `"trend"`. The derived signal type feeds into confidence engine's regime_fit scoring.
+
+**LOW — Unused tp1_mult statements (ATR4):**
+- Fixed 3 no-op `lvl["mults"]["tp1"]` statements in backtest loops to proper `tp1_mult = lvl["mults"]["tp1"]` assignments.
+
+**MEDIUM — COT z-score clamp escape (A4):**
+- `factor_scoring.py`: `cot_z` after fade-the-herd logic (`-_cot * 1.5`) now clamped to ±3.0. Previously could reach ±4.5, exceeding the system-wide z-score bound enforced by `feature_normalizer.py` on all other indicators.
+
+**MEDIUM — Sweep reference refactored to swing levels (B2):**
+- `market_structure.py`: `_detect_sweep()` now accepts `swing_high`/`swing_low` parameters from `find_peaks` (same prominence/distance as BOS detection). Reference levels are now structural swing highs/lows where retail stops cluster per SMC methodology, replacing the arbitrary `closes[-6]`. Falls back to `closes[-6]` only when `find_peaks` fails.
+
+**MEDIUM — RSI divergence detection (X2):**
+- `scoring.py`: `detect_div()` now compares RSI at the exact bar of the prior price peak/trough (per Wilder 1978 / Murphy definition). Previously used `max(rm)` — the highest RSI in a window, not the RSI at the actual price extreme.
+
+**LOW — London breakout UTC fallback (F4):**
+- `forex_scoring.py`: Asian candle detection now applies `timezone.utc` to naive timestamps before hour comparison. Prevents incorrect session classification when candle timestamps lack timezone info.
+
+**NOTE — X1 (AUTO_TRADE_MIN_SCORE) is NOT an issue:**
+- `auto_trader.py` uses `AUTO_TRADE_MIN_CONVICTION` (already a per-class dict at line 392-396), not `AUTO_TRADE_MIN_SCORE`. The flat 0.70 value in config.py is a legacy key not consumed by the auto-trader.
+
 ## Recent Changes (2026-03-23) — Scoring Group Audit (Engine A + B + C)
 
 **Scoring subgroup routing (separate from ATR style):**

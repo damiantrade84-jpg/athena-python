@@ -351,26 +351,30 @@ class NakedEngine:
         return obs
 
     def _detect_sweep(
-        self, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, atr: float
+        self, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, atr: float,
+        swing_high: float = None, swing_low: float = None,
     ) -> dict:
         """
         Detect liquidity sweep patterns in the last 5 candles.
-        Looks for wick-based liquidity grabs below/above a reference level.
+        Uses swing highs/lows (from find_peaks) as reference levels where
+        stop losses cluster per SMC methodology. Falls back to closes[-6]
+        only when swing data is unavailable.
         """
-        # Need at least 8 candles: 6th-to-last reference + 5 analysis candles
+        _empty = {
+            "bull_sweep": False,
+            "bear_sweep": False,
+            "sweep_low": None,
+            "sweep_high": None,
+        }
         if len(closes) < 8:
-            return {
-                "bull_sweep": False,
-                "bear_sweep": False,
-                "sweep_low": None,
-                "sweep_high": None,
-            }
+            return _empty
 
         try:
-            # Reference level: 6th-to-last close
-            ref_close = closes[-6]
+            # Reference levels: use swing highs/lows (structural levels where
+            # retail stops cluster) when available, else fall back to closes[-6]
+            ref_low = swing_low if swing_low is not None else float(closes[-6])
+            ref_high = swing_high if swing_high is not None else float(closes[-6])
 
-            # Analyze last 5 candles
             last_5_highs = highs[-5:]
             last_5_lows = lows[-5:]
             last_5_closes = closes[-5:]
@@ -380,27 +384,26 @@ class NakedEngine:
             sweep_low = None
             sweep_high = None
 
-            # Check each of the last 5 candles for sweep patterns
             for i in range(5):
                 high = last_5_highs[i]
                 low = last_5_lows[i]
                 close = last_5_closes[i]
 
-                # Bearish sweep: wick below reference, close above reference
+                # Bullish sweep: wick below swing low, close above it (stop hunt below → reversal up)
                 if (
-                    low < ref_close - 0.3 * atr  # Low dips below by >0.3*ATR
-                    and close > ref_close
-                ):  # But closes above reference
-                    bear_sweep = True
-                    sweep_low = low  # Actual wick low
-
-                # Bullish sweep: wick above reference, close below reference
-                if (
-                    high > ref_close + 0.3 * atr  # High extends above by >0.3*ATR
-                    and close < ref_close
-                ):  # But closes below reference
+                    low < ref_low - 0.3 * atr
+                    and close > ref_low
+                ):
                     bull_sweep = True
-                    sweep_high = high  # Actual wick high
+                    sweep_low = low
+
+                # Bearish sweep: wick above swing high, close below it (stop hunt above → reversal down)
+                if (
+                    high > ref_high + 0.3 * atr
+                    and close < ref_high
+                ):
+                    bear_sweep = True
+                    sweep_high = high
 
             return {
                 "bull_sweep": bull_sweep,
@@ -410,13 +413,7 @@ class NakedEngine:
             }
 
         except Exception:
-            # Fallback on any error
-            return {
-                "bull_sweep": False,
-                "bear_sweep": False,
-                "sweep_low": None,
-                "sweep_high": None,
-            }
+            return _empty
 
     def _detect_fvg(self, candles: list) -> list:
         """
@@ -438,29 +435,13 @@ class NakedEngine:
             next_high = float(candles[i + 1]["high"])
             next_low = float(candles[i + 1]["low"])
 
-            # Bullish FVG
+            # Bearish FVG — gap down: prev candle low above next candle high
             if prev_low > next_high:
                 gap_top = prev_low
                 gap_bottom = next_high
                 gap_size = gap_top - gap_bottom
-                # Check mitigation: did any subsequent candle retrace 50%+ into the gap?
+                # Mitigation: price rallies back UP into the gap (high >= midpoint)
                 midpoint = gap_bottom + (gap_size * 0.5)
-                mitigated = False
-                for j in range(i + 2, len(candles)):
-                    if float(candles[j]["low"]) <= midpoint:
-                        mitigated = True
-                        break
-                raw_fvgs.append({
-                    "type": "bullish", "top": gap_top, "bottom": gap_bottom,
-                    "size": round(gap_size, 6), "mitigated": mitigated, "bar_index": i,
-                })
-
-            # Bearish FVG
-            if prev_high < next_low:
-                gap_top = next_low
-                gap_bottom = prev_high
-                gap_size = gap_top - gap_bottom
-                midpoint = gap_top - (gap_size * 0.5)
                 mitigated = False
                 for j in range(i + 2, len(candles)):
                     if float(candles[j]["high"]) >= midpoint:
@@ -468,6 +449,23 @@ class NakedEngine:
                         break
                 raw_fvgs.append({
                     "type": "bearish", "top": gap_top, "bottom": gap_bottom,
+                    "size": round(gap_size, 6), "mitigated": mitigated, "bar_index": i,
+                })
+
+            # Bullish FVG — gap up: prev candle high below next candle low
+            if prev_high < next_low:
+                gap_top = next_low
+                gap_bottom = prev_high
+                gap_size = gap_top - gap_bottom
+                # Mitigation: price retraces DOWN into the gap (low <= midpoint)
+                midpoint = gap_top - (gap_size * 0.5)
+                mitigated = False
+                for j in range(i + 2, len(candles)):
+                    if float(candles[j]["low"]) <= midpoint:
+                        mitigated = True
+                        break
+                raw_fvgs.append({
+                    "type": "bullish", "top": gap_top, "bottom": gap_bottom,
                     "size": round(gap_size, 6), "mitigated": mitigated, "bar_index": i,
                 })
 
@@ -721,7 +719,24 @@ class NakedEngine:
             struct_volumes = np.array([float(c.get("vol", 0)) for c in struct_candles])
 
         bos_data = self._detect_bos(struct_highs, struct_lows, atr, volumes=struct_volumes, closes=struct_closes)
-        sweep_data = self._detect_sweep(struct_highs, struct_lows, struct_closes, atr)
+
+        # Compute swing highs/lows for sweep detection (structural reference levels)
+        _sweep_swing_high = None
+        _sweep_swing_low = None
+        try:
+            from scipy.signal import find_peaks as _fp
+            _pk_idx, _ = _fp(struct_highs, prominence=atr * 0.8, distance=3)
+            _tr_idx, _ = _fp(-struct_lows, prominence=atr * 0.8, distance=3)
+            if len(_pk_idx) >= 1:
+                _sweep_swing_high = float(struct_highs[_pk_idx[-1]])
+            if len(_tr_idx) >= 1:
+                _sweep_swing_low = float(struct_lows[_tr_idx[-1]])
+        except Exception:
+            pass
+        sweep_data = self._detect_sweep(
+            struct_highs, struct_lows, struct_closes, atr,
+            swing_high=_sweep_swing_high, swing_low=_sweep_swing_low,
+        )
 
         # 3e. Multi-TF BOS Chaining — H4/struct BOS confirmed by D1 BOS = high conviction
         d1_highs = np.array([float(c["high"]) for c in d1_candles])
@@ -862,13 +877,13 @@ class NakedEngine:
         # Override SL if sweep occurred
         if (
             direction == "LONG"
-            and sweep_data["bear_sweep"]
+            and sweep_data["bull_sweep"]
             and sweep_data["sweep_low"] is not None
         ):
             sl = sweep_data["sweep_low"] - (atr * sl_mult)
         elif (
             direction == "SHORT"
-            and sweep_data["bull_sweep"]
+            and sweep_data["bear_sweep"]
             and sweep_data["sweep_high"] is not None
         ):
             sl = sweep_data["sweep_high"] + (atr * sl_mult)

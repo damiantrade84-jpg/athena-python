@@ -42,8 +42,6 @@ def detect_regime(
 
     adx_val = h4_snap.get("adx")
     adx_mom = h4_snap.get("adxMomentum", "stable")
-    h4_snap.get("adxSlope", 0)
-
     ranging_penalty = 0.0
 
     if adx_val is not None:
@@ -63,10 +61,10 @@ def detect_regime(
         label = "RANGING"
         confidence = "low"
     elif adx_val < _rng["dead"] or adx_mom == "collapsing":
-        state = 2
-        label = "HIGH_VOLATILITY"
+        state = 1
+        label = "RANGING"
         confidence = (
-            "high" if adx_val is not None and adx_val < _rng["dead"] else "medium"
+            "medium" if adx_val is not None and adx_val < _rng["dead"] else "low"
         )
     elif adx_val >= _rng["choppy"] and adx_mom in ("stable", "strengthening"):
         state = 0
@@ -91,8 +89,13 @@ def detect_regime(
         elif state == 2 and bb_width_pct <= 25:
             # ADX says high_vol but BB is compressed — may be a squeeze
             confidence = "low"
+        # HIGH_VOLATILITY: ranging/choppy + wide BB = true volatility expansion
+        if state == 1 and bb_width_pct >= 75:
+            state = 2
+            label = "HIGH_VOLATILITY"
+            confidence = "high"
         # LOW_VOLATILITY: low ADX + compressed BB
-        if state == 1 and bb_width_pct <= 20:
+        elif state == 1 and bb_width_pct <= 20:
             state = 3
             label = "LOW_VOLATILITY"
             confidence = "medium"
