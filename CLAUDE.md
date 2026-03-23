@@ -17,6 +17,9 @@
 - **`_acm.priceDisplay`:** Set from API **`display`**; live header / last-bar poll uses it so WS prices resolve. Forex: ignore live tick if **>12%** from last candle close (glitch guard).
 - **Legend (EC):** When `sl_method` present, note that **SL/TP/entry are Engine C snapshot** while **H4 is refetched on modal open**.
 
+**`/api/engine-c-scan` (forex Engine C entry vs chart):**
+- For **`type == forex`**, H4/H1 passed into Engine B + **`current_price` / consensus `entry`** use **`fetch_eodhd` + `_merge_forex_forming_ws`**, same as **`/api/candles`**. Previously **`fetch_candles`** (mixed cache) last close could differ from the chart’s last H4 close, so the **ENTRY** price line looked misaligned on the modal.
+
 ## Recent Changes (2026-03-22)
 
 **Engine C — Consensus Layer (New):**

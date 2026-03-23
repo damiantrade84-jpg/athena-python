@@ -3967,6 +3967,24 @@ async function _acmRender(symbol, tf) {
       if (s) s.applyOptions({ visible: _acm.show.ema });
     });
 
+    // Rebase entry to fresh H4 close so the ENTRY line sits on the chart's current bar.
+    // SL and TP are structural — they stay fixed. RR is recalculated.
+    var lastClose = data[data.length - 1].close;
+    if (_acm.sig && lastClose > 0) {
+      _acm.sig.price = lastClose;
+      _acm.sig.entryPrice = lastClose;
+      _acm.sig.entry = lastClose;
+      var _sl = parseFloat(_acm.sig.sl || 0);
+      var _tp = parseFloat(_acm.sig.tp1 || _acm.sig.tp || 0);
+      if (_sl > 0 && _tp > 0) {
+        var _risk = Math.abs(lastClose - _sl);
+        var _reward = Math.abs(_tp - lastClose);
+        var _newRR = _risk > 0 ? (_reward / _risk) : 0;
+        if (_acm.sig.rr != null) _acm.sig.rr = Math.round(_newRR * 100) / 100;
+        if (_acm.sig.rr1 != null) _acm.sig.rr1 = Math.round(_newRR * 100) / 100;
+      }
+    }
+
     // Draw signal levels and zones
     _acm.levelLines = [];
     _acm.zoneLines = [];
@@ -3974,7 +3992,6 @@ async function _acmRender(symbol, tf) {
     if (_acm.show.zones) _acmDrawZones();
 
     // Update live price display
-    var lastClose = data[data.length - 1].close;
     var priceEl = document.getElementById('acm-price');
     priceEl.textContent = _acm.sig ? fmtPriceForSig(lastClose, _acm.sig) : fmtPrice(lastClose);
     priceEl.style.color = '#e2e8f0';
@@ -3984,7 +4001,7 @@ async function _acmRender(symbol, tf) {
       '<span style="color:#00d4ff">━ EMA 21</span>' +
       '<span style="color:#a78bfa">━ EMA 50</span>' +
       '<span style="color:rgba(245,158,11,0.6)">╌ EMA 200</span>' +
-      (_acm.sig && _acm.sig.sl_method ? '<span style="color:#475569;font-size:9px;margin-left:8px;">· SL/TP/entry = Engine C snapshot · H4 refetched on open</span>' : '');
+      (_acm.sig && _acm.sig.sl_method ? '<span style="color:#475569;font-size:9px;margin-left:8px;">· SL/TP fixed · Entry rebased to H4 close</span>' : '');
 
     // Info panel
     var sig = _acm.sig;

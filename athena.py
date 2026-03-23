@@ -8930,6 +8930,18 @@ def api_engine_c_scan():
             h4 = fetch_candles(pair, "H4", CONFIG.get("H4_CANDLES", 250))
             h1 = fetch_candles(pair, "H1", CONFIG.get("H1_CANDLES", 250))
 
+            # Forex: same H1/H4 pipeline as /api/candles (EODHD + WS forming merge) so
+            # consensus entry = last H4 close matches the chart modal (avoids cache/WS mix).
+            if ptype == "forex":
+                _h4_n = min(int(CONFIG.get("H4_CANDLES", 250)), 500)
+                _h1_n = min(int(CONFIG.get("H1_CANDLES", 250)), 500)
+                e4 = _extract_candles(fetch_eodhd(pair, "H4", _h4_n))
+                if e4 and len(e4) >= 20:
+                    h4, _ = _merge_forex_forming_ws(e4, display, "H4", _h4_n)
+                e1 = _extract_candles(fetch_eodhd(pair, "H1", _h1_n))
+                if e1 and len(e1) >= 20:
+                    h1, _ = _merge_forex_forming_ws(e1, display, "H1", _h1_n)
+
             if not h4 or len(h4) < 20:
                 results["skipped"].append({"display": display, "reason": "insufficient_data"})
                 continue
