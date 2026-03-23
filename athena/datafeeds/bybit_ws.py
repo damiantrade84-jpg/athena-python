@@ -40,7 +40,10 @@ class BybitWS:
         try:
             self._ws = await websockets.connect(
                 self.base_url,
-                ping_interval=None,  # disable built-in keepalive — app-level ping/pong handles this
+                ping_interval=None,
+                ping_timeout=None,
+                open_timeout=45,
+                close_timeout=10,
             )
             log.info(f"[BybitWS] Connected to {self.base_url}")
             # Subscribe to orderbook.50 and publicTrade
@@ -61,7 +64,15 @@ class BybitWS:
             while self._running:
                 try:
                     raw = await asyncio.wait_for(self._ws.recv(), timeout=60)
-                    msg = json.loads(raw)
+                    if not raw:
+                        continue
+                    if isinstance(raw, (bytes, bytearray)):
+                        raw = raw.decode("utf-8", errors="replace")
+                    try:
+                        msg = json.loads(raw)
+                    except json.JSONDecodeError:
+                        log.warning("[BybitWS] Non-JSON frame; reconnecting")
+                        break
                     # Handle server-side ping — respond with pong to keep connection alive.
                     # Bybit sends {"op":"ping"} every ~20s; without a pong reply the server
                     # closes the connection, causing the 6+/min reconnect storm seen in logs.
@@ -92,9 +103,13 @@ class BybitWS:
             except Exception as _tn_e:
                 log.debug(f"[TELEGRAM] WS disconnect notification failed: {_tn_e}")
         finally:
-            if self._ws:
-                await self._ws.close()
-                self._ws = None
+            ws = self._ws
+            self._ws = None
+            if ws:
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
         # Reconnect after delay
         if self._running:
             await asyncio.sleep(5)

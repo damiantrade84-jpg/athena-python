@@ -40,15 +40,26 @@ class BinanceWS:
         trade_stream = f"{self.symbol}@trade"
         url = f"{self.base_url}?streams={depth_stream}/{trade_stream}"
         try:
-            async with websockets.connect(url) as ws:
+            async with websockets.connect(
+                url,
+                ping_interval=None,
+                ping_timeout=None,
+                open_timeout=45,
+                close_timeout=10,
+            ) as ws:
                 log.info(f"[BinanceWS] Connected to combined stream for {self.symbol}")
                 while self._running:
                     try:
-                        raw = await asyncio.wait_for(ws.recv(), timeout=30)
+                        raw = await asyncio.wait_for(ws.recv(), timeout=45)
+                        if not raw:
+                            continue
                         msg = json.loads(raw)
                         await self._handle_message(msg)
                     except asyncio.TimeoutError:
                         log.warning("[BinanceWS] Receive timeout; reconnecting")
+                        break
+                    except json.JSONDecodeError as e:
+                        log.warning(f"[BinanceWS] Non-JSON frame; reconnecting: {e}")
                         break
                     except Exception as e:
                         log.error(f"[BinanceWS] Error receiving: {e}")

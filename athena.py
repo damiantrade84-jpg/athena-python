@@ -399,7 +399,13 @@ def _fetch_eodhd_live_prices(pairs: list) -> None:
                     f"[PRICE-POLL] EODHD batch {i // 15 + 1}/{(len(symbols) - 1) // 15 + 1}: HTTP {resp.status_code}"
                 )
                 continue
-            items = resp.json()
+            try:
+                items = resp.json()
+            except ValueError as je:
+                log.warning(
+                    f"[PRICE-POLL] EODHD batch {i // 15 + 1}: invalid JSON (404/HTML?) — {je}"
+                )
+                continue
             if not isinstance(items, list):
                 items = [items]
             updated = 0
@@ -469,13 +475,21 @@ class BinanceLivePriceWS:
                 asyncio.set_event_loop(loop)
 
                 async def _stream():
-                    async with websockets.connect(url, ping_interval=20) as ws:
+                    # Disable client PING frames — slow/VPN links often miss PONG in time (1011).
+                    # !ticker@arr pushes frequently; recv timeout is the liveness check.
+                    async with websockets.connect(
+                        url,
+                        ping_interval=None,
+                        ping_timeout=None,
+                        open_timeout=45,
+                        close_timeout=10,
+                    ) as ws:
                         log.info(
                             "[BINANCE-WS] Connected to fstream.binance.com !ticker@arr"
                         )
                         while self._running:
                             try:
-                                data = await asyncio.wait_for(ws.recv(), timeout=30)
+                                data = await asyncio.wait_for(ws.recv(), timeout=45)
                                 tickers = json.loads(data)
 
                                 for ticker in tickers:
@@ -494,6 +508,11 @@ class BinanceLivePriceWS:
                             except asyncio.TimeoutError:
                                 log.warning(
                                     "[BINANCE-WS] Receive timeout, reconnecting..."
+                                )
+                                break
+                            except json.JSONDecodeError as e:
+                                log.warning(
+                                    f"[BINANCE-WS] Non-JSON payload, reconnecting: {e}"
                                 )
                                 break
                             except Exception as e:
@@ -604,7 +623,13 @@ class EODHDWebSocketManager:
 
         while True:
             try:
-                async with websockets.connect(url, ping_interval=None) as ws:
+                async with websockets.connect(
+                    url,
+                    ping_interval=None,
+                    ping_timeout=None,
+                    open_timeout=45,
+                    close_timeout=10,
+                ) as ws:
                     # EODHD manages keepalive at application layer (heartbeat messages).
 
                     # WebSocket-level pings cause 1011 errors because EODHD doesn't respond
@@ -712,7 +737,7 @@ class EODHDWebSocketManager:
                             log.debug(f"[WS] msg parse error: {_e}")
 
             except Exception as e:
-                log.warning(f"[WS] {endpoint} disconnected: {e} â€” reconnecting in 5s")
+                log.warning(f"[WS] {endpoint} disconnected: {e} — reconnecting in 5s")
 
                 await asyncio.sleep(5)
 
