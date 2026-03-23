@@ -45,7 +45,7 @@ class BybitWS:
                 open_timeout=45,
                 close_timeout=10,
             )
-            log.info(f"[BybitWS] Connected to {self.base_url}")
+            log.info(f"[BybitWS] Connected to {self.base_url} for {self.symbol}")
             # Subscribe to orderbook.50 and publicTrade
             subscribe_msg = {
                 "req_id": str(int(time.time() * 1000)),
@@ -90,13 +90,20 @@ class BybitWS:
                             continue
                         except Exception:
                             pass
-                    log.warning("[BybitWS] Receive timeout; reconnecting")
+                    log.warning(
+                        f"[BybitWS] {self.symbol}: receive timeout after 60s; reconnecting"
+                    )
+                    break
+                except websockets.exceptions.ConnectionClosed as e:
+                    log.warning(
+                        f"[BybitWS] {self.symbol}: connection closed ({e}); reconnecting"
+                    )
                     break
                 except Exception as e:
-                    log.error(f"[BybitWS] Error receiving message: {e}")
+                    log.error(f"[BybitWS] {self.symbol}: error receiving message: {e}")
                     break
         except Exception as e:
-            log.error(f"[BybitWS] Connection error: {e}")
+            log.error(f"[BybitWS] {self.symbol}: connection error: {e}")
             # Send Telegram notification for WebSocket disconnect
             try:
                 telegram_notify.notify_bybit_ws_disconnect()

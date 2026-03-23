@@ -24,7 +24,9 @@ class BinanceWS:
 
     def __init__(self, symbol: str = "btcusdt", emit_interval: float = 1.0):
         self.symbol = symbol.lower()
-        self.base_url = "wss://stream.binance.com:9443/stream"
+        # Crypto execution + live pricing use Binance Futures; keep microstructure on the
+        # same venue to avoid spot/futures mismatch and inconsistent symbol behavior.
+        self.base_url = "wss://fstream.binance.com/stream"
         self.emit_interval = emit_interval
         self.orderbook: Dict[str, List[Tuple[float, float]]] = {"bids": [], "asks": []}
         self.last_update_id: Optional[int] = None
@@ -50,22 +52,31 @@ class BinanceWS:
                 log.info(f"[BinanceWS] Connected to combined stream for {self.symbol}")
                 while self._running:
                     try:
-                        raw = await asyncio.wait_for(ws.recv(), timeout=45)
+                        raw = await asyncio.wait_for(ws.recv(), timeout=120)
                         if not raw:
                             continue
                         msg = json.loads(raw)
                         await self._handle_message(msg)
                     except asyncio.TimeoutError:
-                        log.warning("[BinanceWS] Receive timeout; reconnecting")
+                        log.warning(
+                            f"[BinanceWS] {self.symbol}: receive timeout after 120s; reconnecting"
+                        )
                         break
                     except json.JSONDecodeError as e:
-                        log.warning(f"[BinanceWS] Non-JSON frame; reconnecting: {e}")
+                        log.warning(
+                            f"[BinanceWS] {self.symbol}: non-JSON frame; reconnecting: {e}"
+                        )
+                        break
+                    except websockets.exceptions.ConnectionClosed as e:
+                        log.warning(
+                            f"[BinanceWS] {self.symbol}: connection closed ({e}); reconnecting"
+                        )
                         break
                     except Exception as e:
-                        log.error(f"[BinanceWS] Error receiving: {e}")
+                        log.error(f"[BinanceWS] {self.symbol}: error receiving: {e}")
                         break
         except Exception as e:
-            log.error(f"[BinanceWS] Failed to connect: {e}")
+            log.error(f"[BinanceWS] {self.symbol}: failed to connect: {e}")
             # Reconnect after delay
             await asyncio.sleep(5)
             if self._running:
