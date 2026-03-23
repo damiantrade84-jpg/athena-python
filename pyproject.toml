@@ -1,0 +1,7 @@
+# Metadata only: dependency install for this repo is `pip install -r requirements.txt`.
+# requires-python documents supported interpreters; it is not a substitute for recreating .venv.
+[project]
+name = "athena-python"
+version = "0.0.0"
+requires-python = ">=3.11,<3.14"
+description = "Sentinel / Athena trading stack"
