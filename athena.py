@@ -3118,6 +3118,106 @@ def _extract_candles(resp) -> list | None:
     return None
 
 
+def _candle_time_epoch_utc(val) -> int | None:
+    """Normalize candle timestamp to UTC unix seconds (for bar alignment compare)."""
+    if val is None or val == "":
+        return None
+    if isinstance(val, (int, float)):
+        x = float(val)
+        if x > 1e12:
+            return int(x / 1000.0)
+        return int(x)
+    s = str(val).strip()
+    if " " in s and "T" not in s:
+        s = s.replace(" ", "T", 1)
+    try:
+        if s.endswith("Z"):
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        else:
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    except ValueError:
+        return None
+
+
+def _merge_forex_forming_ws(candles: list, display: str, tf: str, limit: int):
+    """Blend CandleBuilder WS OHLC into last EODHD bar or append newer WS bar.
+
+    Returns (candles, note) where note is 'replaced', 'appended', or None.
+    """
+    global _candle_builder
+
+    if not _candle_builder or not display or not candles:
+        return candles, None
+
+    try:
+        live = _candle_builder.get_candles(display, tf, min(8, max(3, len(candles))))
+    except Exception:
+        return candles, None
+
+    if not live:
+        return candles, None
+
+    ws_last = live[-1]
+    rest_last = candles[-1]
+
+    k_rest = _candle_time_epoch_utc(
+        rest_last.get("time") if rest_last.get("time") is not None else rest_last.get("datetime")
+    )
+    k_ws = _candle_time_epoch_utc(ws_last.get("time"))
+    if k_rest is None or k_ws is None:
+        return candles, None
+
+    def _flt(d: dict, *keys: str, default: float = 0.0) -> float:
+        for k in keys:
+            if k in d and d[k] is not None:
+                try:
+                    return float(d[k])
+                except (TypeError, ValueError):
+                    continue
+        return default
+
+    out = list(candles)
+
+    if k_ws == k_rest:
+        ro = _flt(rest_last, "open")
+        rh, rl = _flt(rest_last, "high"), _flt(rest_last, "low")
+        wh, wl, wc = _flt(ws_last, "high"), _flt(ws_last, "low"), _flt(ws_last, "close")
+        o = ro
+        c = wc
+        h = max(o, c, rh, wh)
+        l = min(o, c, rl, wl)
+        nl = dict(rest_last)
+        nl["open"] = o
+        nl["high"] = h
+        nl["low"] = l
+        nl["close"] = c
+        wv = _flt(ws_last, "vol", "volume")
+        rv = _flt(rest_last, "vol", "volume")
+        nl["vol"] = wv if wv else rv
+        out[-1] = nl
+        return out, "replaced"
+
+    if k_ws > k_rest:
+        out.append(
+            {
+                "time": ws_last.get("time"),
+                "open": _flt(ws_last, "open"),
+                "high": _flt(ws_last, "high"),
+                "low": _flt(ws_last, "low"),
+                "close": _flt(ws_last, "close"),
+                "vol": _flt(ws_last, "vol", "volume"),
+            }
+        )
+        if len(out) > limit:
+            out = out[-limit:]
+        return out, "appended"
+
+    return candles, None
+
+
 def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
     """Route candle fetch to correct source with in-memory TTL cache.
 
@@ -10988,9 +11088,39 @@ def api_candles():
     if not pair:
         return jsonify({"error": f"Unknown symbol: {symbol}"}), 404
 
-    candles = fetch_candles(pair, tf, limit)
+    # Dashboard chart: forex H1/H4 default = EODHD intraday resample (matches vendor charts),
+    # then merge only the forming bar from CandleBuilder (EODHD WS) — no mixed-history cache.
+    # ?source=live uses fetch_candles only (debug / compare WS+cache series).
+    ptype = pair.get("type") or ""
+    source_q = (request.args.get("source") or "").strip().lower()
+    chart_source = "cache"
+    used_eodhd_forex = False
+
+    if ptype == "forex" and tf in ("H1", "H4"):
+        if source_q == "live":
+            candles = fetch_candles(pair, tf, limit)
+            chart_source = "live"
+        else:
+            eod = fetch_eodhd(pair, tf, limit)
+            candles = _extract_candles(eod)
+            if candles:
+                used_eodhd_forex = True
+                chart_source = "eodhd"
+            if not candles:
+                candles = fetch_candles(pair, tf, limit)
+                chart_source = "cache"
+    else:
+        candles = fetch_candles(pair, tf, limit)
+
     if not candles:
         return jsonify({"error": f"No candle data for {symbol} {tf}"}), 404
+
+    if used_eodhd_forex and source_q != "live":
+        candles, _ws_note = _merge_forex_forming_ws(
+            candles, pair.get("display", ""), tf, limit
+        )
+        if _ws_note:
+            chart_source = "eodhd+ws"
 
     _naive_iso_utc = re.compile(
         r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$"
@@ -11014,7 +11144,16 @@ def api_candles():
             }
         )
 
-    return jsonify({"candles": result, "symbol": symbol, "tf": tf})
+    return jsonify(
+        {
+            "candles": result,
+            "symbol": symbol,
+            "display": pair.get("display", symbol),
+            "tf": tf,
+            "pairType": ptype,
+            "candlesSource": chart_source,
+        }
+    )
 
 
 @app.route("/api/health")

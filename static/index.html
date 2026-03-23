@@ -3663,6 +3663,8 @@ var _acm = {
   symbol: '',
   tf: 'H4',
   sig: null,
+  pairType: '',
+  priceDisplay: '',
   show: { vol: true, ema: true, levels: true, zones: true },
   liveInterval: null,
   lastData: [],
@@ -3808,28 +3810,32 @@ function _acmSanitizeCandlesForChart(rows, isForex) {
       dedup[dedup.length - 1] = parsed[i];
     else dedup.push(parsed[i]);
   }
-  var minR = isForex ? 0.0012 : 0.018;
-  var mult = isForex ? 10 : 12;
-  for (var j = 0; j < dedup.length; j++) {
-    var c = dedup[j];
-    var bodyTop = Math.max(c.open, c.close);
-    var bodyBot = Math.min(c.open, c.close);
-    var prev = dedup.slice(Math.max(0, j - 45), j);
-    if (prev.length < 10) continue;
-    var rs = prev.map(function(p) {
-      return (p.high - p.low) / Math.max(Math.abs(p.close), 1e-12);
-    });
-    rs.sort(function(a, b) { return a - b; });
-    var medR = rs[Math.floor(rs.length / 2)] || 0;
-    var curR = (c.high - c.low) / Math.max(Math.abs(c.close), 1e-12);
-    var thresh = Math.max(medR * mult, minR);
-    if (curR > thresh) {
-      var maxSpan = thresh * Math.abs(c.close);
-      var mid = (c.high + c.low) / 2;
-      c.high = mid + maxSpan / 2;
-      c.low = mid - maxSpan / 2;
-      c.high = Math.max(c.high, bodyTop);
-      c.low = Math.min(c.low, bodyBot);
+  // Wick clipping stays for crypto/stocks (bad prints). Forex: clipping distorted EM pairs
+  // (e.g. USD/ZAR) vs TradingView; vendor OHLC from /api/candles is trusted.
+  if (!isForex) {
+    var minR = 0.018;
+    var mult = 12;
+    for (var j = 0; j < dedup.length; j++) {
+      var c = dedup[j];
+      var bodyTop = Math.max(c.open, c.close);
+      var bodyBot = Math.min(c.open, c.close);
+      var prev = dedup.slice(Math.max(0, j - 45), j);
+      if (prev.length < 10) continue;
+      var rs = prev.map(function(p) {
+        return (p.high - p.low) / Math.max(Math.abs(p.close), 1e-12);
+      });
+      rs.sort(function(a, b) { return a - b; });
+      var medR = rs[Math.floor(rs.length / 2)] || 0;
+      var curR = (c.high - c.low) / Math.max(Math.abs(c.close), 1e-12);
+      var thresh = Math.max(medR * mult, minR);
+      if (curR > thresh) {
+        var maxSpan = thresh * Math.abs(c.close);
+        var mid = (c.high + c.low) / 2;
+        c.high = mid + maxSpan / 2;
+        c.low = mid - maxSpan / 2;
+        c.high = Math.max(c.high, bodyTop);
+        c.low = Math.min(c.low, bodyBot);
+      }
     }
   }
   return dedup;
@@ -3850,6 +3856,8 @@ async function _acmRender(symbol, tf) {
     var resp = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&tf=' + tf + '&limit=300');
     var json = await resp.json();
     var candles = json.candles || json;
+    _acm.pairType = json.pairType || '';
+    _acm.priceDisplay = json.display || '';
     if (!candles || !candles.length) throw new Error('No candle data');
 
     // Remove loading
@@ -3904,7 +3912,7 @@ async function _acmRender(symbol, tf) {
       wickUpColor: 'rgba(38,166,154,0.5)',
     });
 
-    var isFxChart = _acm.sig && _acm.sig.type === 'forex';
+    var isFxChart = _acm.pairType === 'forex' || (_acm.sig && _acm.sig.type === 'forex');
     var data = _acmSanitizeCandlesForChart(candles, isFxChart);
     if (!data.length) throw new Error('No valid candles after sanitize');
     _acm.lastData = data;
@@ -4110,20 +4118,30 @@ function _acmDrawZones() {
 function _acmStartLive() {
   _acmStopLive();
   _acm.liveInterval = setInterval(function() {
-    if (!_acm.chart || !_acm.candle || !_acm.sig) return;
-    var display = _acm.sig.display || _acm.sig.pair || '';
+    if (!_acm.chart || !_acm.candle) return;
+    var display = _acm.priceDisplay
+      || (_acm.sig && (_acm.sig.display || _acm.sig.pair))
+      || _acm.symbol;
     var lp = (_latestPrices || {})[display];
     if (!lp || !lp.price) return;
 
     var price = parseFloat(lp.price);
     if (!(price > 0)) return;
 
+    var isFx = _acm.pairType === 'forex' || (_acm.sig && _acm.sig.type === 'forex');
+    if (isFx && _acm.lastData && _acm.lastData.length) {
+      var refPx = _acm.lastData[_acm.lastData.length - 1].close;
+      if (refPx > 0 && Math.abs(price - refPx) / refPx > 0.12) return;
+    }
+
     // Update header price
     var priceEl = document.getElementById('acm-price');
-    var isLong = _acm.sig.direction === 'LONG';
-    var entry = parseFloat(_acm.sig.price || _acm.sig.entryPrice || _acm.sig.entry || 0);
+    var sig = _acm.sig;
+    var isLong = sig && sig.direction === 'LONG';
+    var entry = sig ? parseFloat(sig.price || sig.entryPrice || sig.entry || 0) : 0;
     var favorable = entry > 0 ? (isLong ? price >= entry : price <= entry) : true;
-    priceEl.textContent = fmtPriceForSig(price, _acm.sig);
+    var fmtSig = sig || { type: _acm.pairType, display: display, symbol: _acm.symbol };
+    priceEl.textContent = fmtPriceForSig(price, fmtSig);
     priceEl.style.color = favorable ? '#00e676' : '#ff3b5c';
 
     // Update last candle on chart

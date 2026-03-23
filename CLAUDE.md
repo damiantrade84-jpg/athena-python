@@ -1,5 +1,22 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-23)
+
+**`/api/candles` (dashboard chart widget — `static/index.html` ACM):**
+- **Forex `H1` / `H4`:** Loads **`fetch_eodhd`** first (intraday H1 → pandas `4h` resample). Avoids serving the old **`candle_cache` + WS** mix that produced disjoint OHLC vs TradingView on pairs like **USD/ZAR**. Falls back to `fetch_candles` if EODHD returns nothing.
+- **`_merge_forex_forming_ws`:** After EODHD, merges **only** the **forming bar** from **`CandleBuilder`** (EODHD WebSocket ticks): same bar time → update H/L/C/vol, keep REST **open**; newer WS bar → append one bar (trim to `limit`). Scans and non-forex paths unchanged.
+- **Debug:** `GET ?source=live` uses **`fetch_candles` only** (legacy mixed series) for A/B comparison.
+- **Response metadata:** `pairType`, `display` (for `_latestPrices` key, e.g. `USD/ZAR` vs `USDZAR=X`), **`candlesSource`**: `eodhd` | `eodhd+ws` | `live` | `cache`.
+- **Timestamps:** Naive ISO datetimes from storage get **`Z`** appended so the browser parses them as UTC.
+
+**Athena chart modal (ACM) & Engine C Vision chart:**
+- **`_acmNormalizeSig`:** Maps Engine C **`entry` / `tp`** onto **`price` / `tp1`** so ENTRY/SL/TP price lines draw correctly.
+- **`openAcm`:** If fallback has **`sl_method`** (Engine C consensus), **prefer that fallback** over a same-symbol row from `allSignals` so levels match the EC snapshot, not Engine A.
+- **`fmtPriceForSig`:** Quote decimals by **`pairType` / signal type** — e.g. JPY crosses **3** dp, other forex **5** dp; crypto/stock/commodity scaled by magnitude. **Scalp vs intraday vs swing** affects typical stop **distance**, not pip **display** decimals.
+- **Forex sanitize:** `_acmSanitizeCandlesForChart` **does not** wick-clip forex (vendor OHLC trusted); clipping remains for other assets to damp bad prints.
+- **`_acm.priceDisplay`:** Set from API **`display`**; live header / last-bar poll uses it so WS prices resolve. Forex: ignore live tick if **>12%** from last candle close (glitch guard).
+- **Legend (EC):** When `sl_method` present, note that **SL/TP/entry are Engine C snapshot** while **H4 is refetched on modal open**.
+
 ## Recent Changes (2026-03-22)
 
 **Engine C — Consensus Layer (New):**
