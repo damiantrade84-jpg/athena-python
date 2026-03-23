@@ -852,6 +852,13 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
         <option value="commodity">Commodities</option>
         <option value="index">Indices</option>
       </select>
+      <select id="ecStyle" style="background:var(--surface);border:1px solid var(--border);
+        border-radius:6px;padding:6px 12px;color:var(--text);font-family:'Space Mono',monospace;
+        font-size:11px;">
+        <option value="intraday">Intraday</option>
+        <option value="scalp">Scalp</option>
+        <option value="swing">Swing</option>
+      </select>
       <button onclick="runEngineCScan()" id="ecScanBtn" style="background:var(--accent);
         border:none;color:#000;padding:8px 20px;border-radius:6px;cursor:pointer;
         font-family:'Syne',sans-serif;font-size:12px;font-weight:800;">
@@ -2600,6 +2607,37 @@ function updateAcct(val) {
 }
 
 // -- AI Content --
+function _buildStyleRatingStrip(sr) {
+  if (!sr) return '';
+  var styles = ['scalp','intraday','swing'];
+  var labels = {scalp:'SCALP',intraday:'INTRADAY',swing:'SWING'};
+  var html = '<div style="display:flex;gap:4px;margin:6px 0;font-family:Space Mono,monospace;font-size:10px;">';
+  styles.forEach(function(s) {
+    var r = sr[s];
+    if (!r) return;
+    var isObj = typeof r === 'object';
+    var grade = isObj ? (r.grade||'-') : (r||'-');
+    var prob = isObj ? r.edgeProbability : null;
+    var risk = isObj ? (r.riskLevel||'') : '';
+    var riskNorm = String(risk).toLowerCase();
+    var gk = grade==='A+'?'Aplus':grade;
+    var gradeColor = (grade==='A+'||grade==='A')?'var(--bull)':grade==='B'?'var(--accent)':'var(--bear)';
+    if (typeof grade==='string' && ['STRONG','MODERATE','WEAK','AVOID','CONTRADICTS'].indexOf(grade.toUpperCase())>=0) {
+      var vr = grade.toUpperCase();
+      gradeColor = (vr==='STRONG')?'var(--bull)':(vr==='MODERATE')?'var(--accent)':'var(--bear)';
+    }
+    var riskColor = riskNorm==='low'?'var(--bull)':riskNorm==='high'?'var(--bear)':'var(--accent)';
+    html += '<div style="flex:1;text-align:center;background:rgba(168,85,247,0.06);border:1px solid rgba(168,85,247,0.15);border-radius:4px;padding:4px 2px;">';
+    html += '<div style="font-weight:700;font-size:9px;color:var(--muted);margin-bottom:2px;">'+labels[s]+'</div>';
+    html += '<div style="color:'+gradeColor+';font-weight:800;font-size:13px;">'+grade+'</div>';
+    if (prob!=null) html += '<div style="font-size:9px;color:var(--text-secondary);">'+prob+'%</div>';
+    if (risk) html += '<div style="font-size:8px;color:'+riskColor+';">'+risk+'</div>';
+    html += '</div>';
+  });
+  html += '</div>';
+  return html;
+}
+
 function buildAIContent(ai,symbol,idSuffix) {
   var sidBase=(symbol||'').replace(/[\/=^.]/g,'_');
   var sid=idSuffix ? sidBase+'-'+String(idSuffix).replace(/[^\w-]/g,'_') : sidBase;
@@ -2612,6 +2650,7 @@ function buildAIContent(ai,symbol,idSuffix) {
   var edgeVal = ai.edgeProbability!=null ? ai.edgeProbability+'%' : '-';
   var edgeColor = ai.edgeProbability>=70 ? 'var(--bull)' : ai.edgeProbability>=55 ? 'var(--accent)' : 'var(--warn)';
   var riskColor = riskLevelNorm==='low' ? 'var(--bull)' : riskLevelNorm==='high' ? 'var(--bear)' : 'var(--accent)';
+  var styleStrip = _buildStyleRatingStrip(ai.style_ratings);
   return ''+
   '<div class="ai-panel" id="ai-'+sid+'">'+
     '<div class="ai-header" onclick="toggleAI(\''+sid+'\')" style="cursor:pointer">'+
@@ -2620,6 +2659,7 @@ function buildAIContent(ai,symbol,idSuffix) {
       '<span style="color:'+edgeColor+';font-size:13px;font-weight:600;margin-left:auto">'+edgeVal+'</span>'+
       '<span style="color:'+riskColor+';font-size:11px;margin-left:6px">'+riskLevelText+'</span>'+
     '</div>'+
+    styleStrip+
     '<div class="ai-verdict-bar" onclick="toggleAI(\''+sid+'\')" style="cursor:pointer;padding:8px 14px;font-size:13px;color:var(--text-secondary)">'+
       (ai.verdict||'No verdict returned')+
       (ai.tradeStyle?' <span class="trade-style '+ai.tradeStyle+'" style="font-size:10px;padding:2px 6px;margin-left:6px">'+ai.tradeStyle+'</span>':'')+
@@ -3673,6 +3713,7 @@ var _acm = {
 function openAcm(symbol, tf, fallbackSig) {
   _acm.symbol = symbol;
   _acm.tf = tf || 'H4';
+  _acm.lastData = [];
   var fromList = allSignals.find(function(s) { return s.symbol === symbol; });
   // Engine C AI CONFIRM passes consensus as fallback — prefer it over a same-symbol Engine A card
   // so ENTRY/SL/TP lines match the consensus snapshot (sl_method is EC-only).
@@ -3843,6 +3884,7 @@ function _acmSanitizeCandlesForChart(rows, isForex) {
 
 async function _acmRender(symbol, tf) {
   var body = document.getElementById('acm-chart-body');
+  _acm.lastData = [];
 
   // Loading state
   if (_acm.chart) { _acm.chart.remove(); _acm.chart = null; }
@@ -4289,7 +4331,7 @@ async function runEngineCScan() {
     var resp = await fetch('/api/engine-c-scan', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({assetClass: assetClass, style: 'auto'}),
+      body: JSON.stringify({assetClass: assetClass, style: document.getElementById('ecStyle').value || 'intraday'}),
     });
     var data = await resp.json();
 
@@ -4385,6 +4427,11 @@ function buildECCard(c, category) {
   }
   html += '<span style="font-size:10px;color:var(--muted);font-family:Space Mono,monospace;">' +
     (c.regime || '') + '</span>';
+  if (c.style) {
+    html += '<span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:3px;' +
+      'background:rgba(0,212,255,0.12);color:var(--accent);text-transform:uppercase;">' +
+      c.style + '</span>';
+  }
   html += '</div>';
   html += '<div style="display:flex;align-items:center;gap:8px;">';
   html += '<span style="font-family:Space Mono,monospace;font-size:11px;color:' + borderColor + ';">' +
@@ -4481,27 +4528,49 @@ function buildECVisionResult(c) {
               c.vision_action === 'weaken' ? '#f59e0b' : 'var(--bear)';
   var icon = c.vision_action === 'confirm' ? '&#9989;' :
              c.vision_action === 'weaken' ? '&#9888;&#65039;' : '&#128683;';
-  return '<div style="background:rgba(168,85,247,0.05);border:1px solid rgba(168,85,247,0.2);' +
+  var html = '<div style="background:rgba(168,85,247,0.05);border:1px solid rgba(168,85,247,0.2);' +
     'border-radius:6px;padding:8px;font-size:11px;font-family:Space Mono,monospace;">' +
     '<span style="color:' + color + ';font-weight:700;">' + icon + ' ' +
     (c.vision_rating || '?') + '</span>' +
     (c.vision_sl_flag && c.vision_sl_flag !== 'ok' ?
       ' | SL: <span style="color:#f59e0b;">' + c.vision_sl_flag + '</span>' : '') +
     (c.vision_tp_flag && c.vision_tp_flag !== 'ok' ?
-      ' | TP: <span style="color:#f59e0b;">' + c.vision_tp_flag + '</span>' : '') +
-    '</div>';
+      ' | TP: <span style="color:#f59e0b;">' + c.vision_tp_flag + '</span>' : '');
+  var vsr = c.vision_style_ratings;
+  if (vsr) {
+    html += _buildStyleRatingStrip(vsr);
+  }
+  html += '</div>';
+  return html;
+}
+
+function _ecStyleBlocked(c, style) {
+  var vsr = c.vision_style_ratings || {};
+  var r = (vsr[style] || '').toUpperCase();
+  return r === 'AVOID' || r === 'CONTRADICTS';
 }
 
 function buildECExecButtons(c, sid) {
   var sizeLabel = c.sizing_override >= 1.0 ? 'FULL' : c.sizing_override >= 0.65 ? 'HALF' : 'QTR';
-  return '<div style="display:flex;gap:6px;">' +
-    '<button onclick="executeEngineC(\'' + sid + '\',\'scalp\')" class="exec-btn force" ' +
-    'style="flex:1;font-size:11px;">&#9889; SCALP (' + sizeLabel + ')</button>' +
-    '<button onclick="executeEngineC(\'' + sid + '\',\'intraday\')" class="exec-btn force" ' +
-    'style="flex:1;font-size:11px;">&#128202; INTRADAY (' + sizeLabel + ')</button>' +
-    '<button onclick="executeEngineC(\'' + sid + '\',\'swing\')" class="exec-btn force" ' +
-    'style="flex:1;font-size:11px;">&#127754; SWING (' + sizeLabel + ')</button>' +
-    '</div>';
+  var styles = [
+    {key:'scalp', label:'SCALP', icon:'&#9889;'},
+    {key:'intraday', label:'INTRADAY', icon:'&#128202;'},
+    {key:'swing', label:'SWING', icon:'&#127754;'}
+  ];
+  var html = '<div style="display:flex;gap:6px;">';
+  styles.forEach(function(s) {
+    var blocked = _ecStyleBlocked(c, s.key);
+    if (blocked) {
+      html += '<button disabled class="exec-btn" ' +
+        'style="flex:1;font-size:11px;opacity:0.35;cursor:not-allowed;" ' +
+        'title="Vision rated '+s.key+' as AVOID/CONTRADICTS">&#128683; '+s.label+'</button>';
+    } else {
+      html += '<button onclick="executeEngineC(\''+sid+'\',\''+s.key+'\')" class="exec-btn force" ' +
+        'style="flex:1;font-size:11px;">'+s.icon+' '+s.label+' ('+sizeLabel+')</button>';
+    }
+  });
+  html += '</div>';
+  return html;
 }
 
 async function runECVisionConfirm(sid) {
@@ -4528,12 +4597,14 @@ async function runECVisionConfirm(sid) {
   // Open chart modal for this pair
   openAcm(consensus.symbol, 'H4', consensus);
 
-  // Wait until chart actually renders (poll for candle data, max 15s)
+  // Wait until chart actually renders (poll for candle data + loading overlay gone, max 15s)
   btn.textContent = '&#129504; Waiting for chart...';
   var _chartReady = false;
   for (var _poll = 0; _poll < 30; _poll++) {
     await new Promise(function(r) { setTimeout(r, 500); });
-    if (_acm.lastData && _acm.lastData.length > 0 && _acm.candle) {
+    var _loadingEl = document.getElementById('acm-loading');
+    var _loadingVisible = !!(_loadingEl && _loadingEl.parentElement);
+    if (_acm.lastData && _acm.lastData.length >= 20 && _acm.candle && !_loadingVisible) {
       _chartReady = true;
       break;
     }

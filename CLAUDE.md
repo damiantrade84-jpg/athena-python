@@ -1,5 +1,28 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-23) — ATR Recalibration & Per-Style AI Ratings
+
+**ATR TP/SL Benchmark Recalibration:**
+- `STYLE_ATR_MULTS` recalibrated against industry research (quantstock.org, bestmt4ea.com, atrindicator.com, luxalgo.com, fxnx.com, cryptotrading-guide.com 2026, fxpremiere.com for XAU/USD, tapbit.com 2026).
+- Previous scalp/intraday values (sl=0.16-0.27x for scalp, sl=0.20-0.33x for intraday) were 2-5x below industry minimum, causing noise stop-outs on every trade.
+- New tiered TP1/TP2 approach: TP1 = quick partial exit (slightly below industry floor), TP2 = industry standard runner.
+- Scalp (H1 ATR): sl=0.50, tp1=0.75, tp2=1.25 (commodity: sl=0.65, tp1=1.00, tp2=1.50).
+- Intraday (H4 ATR): sl=0.75, tp1=1.50, tp2=2.50 (commodity: sl=1.00, tp1=2.00, tp2=3.00).
+- Swing now explicit in STYLE_ATR_MULTS (mirrors ATR_CLASS; ATR_CLASS demoted to fallback-only).
+- `analyze_pair` `calc_levels` call now passes `style=_style` (was missing — always used ATR_CLASS swing defaults even for scalp/intraday scans). This was the core bug causing "TP too far" on all engines.
+
+**Per-Style AI Ratings (Scalp / Intraday / Swing):**
+- `StyleRating` sub-model added to `ai_schemas.py` with grade/edgeProbability/riskLevel.
+- `EngineAResponse` and `EngineBResponse` now include `style_ratings` (Optional dict) for per-style breakdown.
+- Engine A prompt (`EXPERT_PROMPT` in athena.py) now requests independent ratings for all 3 styles. Top-level grade/edgeProbability/riskLevel reflects the AI's best-rated style.
+- Engine B prompt (`get_engine_b_ai_verdict` in engine_b_ai.py) same per-style rating request.
+- AI Vision prompt (`/api/chart-analysis`) now asks for `SCALP RATING:`, `INTRADAY RATING:`, `SWING RATING:` independently. Max tokens bumped to 700.
+- `apply_vision` in `engine_c.py`: new `_parse_style_ratings_from_text()` extracts per-style ratings via regex. Stored as `vision_style_ratings` on the updated consensus dict. Fallback: if no per-style found, all styles get the single overall rating.
+- Engine C execute buttons (SCALP/INTRADAY/SWING) now individually gated: if Vision rates a style as AVOID/CONTRADICTS, that button is disabled.
+- `buildAIContent` (Engine A + B AI panels): new `_buildStyleRatingStrip()` renders a 3-column rating strip showing grade + probability + risk per style.
+- `buildECVisionResult`: shows per-style vision rating badges when available.
+- Engine C tab: added style selector (Scalp/Intraday/Swing) next to asset class selector. Scan passes selected style to `/api/engine-c-scan` so card SL/TP/RR matches the intended trade style.
+
 ## Recent Changes (2026-03-23)
 
 **`/api/candles` (dashboard chart widget — `static/index.html` ACM):**

@@ -3922,9 +3922,19 @@ riskLevel: "Low" if edgeProb>=70 and TRENDING. "High" if edgeProb<40 or DEAD RAN
 
 
 
+PER-STYLE RATINGS:
+
+Rate this signal for ALL THREE trade styles independently based on the data provided:
+- SCALP (hold minutes, H1 ATR, tight SL/TP, 1.5-2R)
+- INTRADAY (hold hours, H4 ATR, moderate SL/TP, 2-3R)
+- SWING (hold days, D1 ATR, wide SL/TP, 3-6R)
+Include in "style_ratings". The top-level grade/edgeProbability/riskLevel should reflect whichever style you rate highest. Set "tradeStyle" to that best style.
+
+
+
 OUTPUT — EXACT JSON ONLY:
 
-{"grade":"A","verdict":"One punchy sentence — be yourself, not a robot","narrative":"2-3 sentences referencing specific votes and data. Show personality.","entryZone":"exact price/fib","invalidation":"exact price","keyLevels":"S1/R1","positionSizing":"Full/Half/Quarter + R explanation","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"why","warnings":["specific risks"],"edgeProbability":68,"riskLevel":"Medium"}
+{"grade":"A","verdict":"One punchy sentence — be yourself, not a robot","narrative":"2-3 sentences referencing specific votes and data. Show personality.","entryZone":"exact price/fib","invalidation":"exact price","keyLevels":"S1/R1","positionSizing":"Full/Half/Quarter + R explanation","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"why","warnings":["specific risks"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}
 
 
 
@@ -8545,6 +8555,31 @@ def api_quick_execute():
         pair_name = sig.get("pair", sig.get("symbol", "N/A"))
         if not approval.approved:
             log.warning(f"[QUICK EXEC] {pair_name} REJECTED: {approval.reason}")
+            err_msg = f"Risk Blocked: {approval.reason}"
+            if approval.reason == "CORRELATED_CLUSTER_FULL":
+                try:
+                    from scoring import CORR_CLUSTERS  # local import to avoid startup coupling
+
+                    _cluster = None
+                    _members = set()
+                    for _cname, _pairs in CORR_CLUSTERS.items():
+                        if pair_name in _pairs:
+                            _cluster = _cname
+                            _members = set(_pairs)
+                            break
+                    _corr_count = (
+                        sum(1 for _p in positions if _p.get("pair") in _members)
+                        if _members
+                        else 0
+                    )
+                    _corr_max = int(CONFIG.get("MAX_CORRELATED_POSITIONS", 2))
+                    if _cluster:
+                        err_msg = (
+                            f"Risk Blocked: {approval.reason} "
+                            f"({_cluster} {_corr_count}/{_corr_max})"
+                        )
+                except Exception:
+                    pass
             try:
                 with sqlite3.connect(_AUDIT_DB, timeout=15.0) as _con:
                     _con.execute(
@@ -8561,7 +8596,7 @@ def api_quick_execute():
                     )
             except Exception as _e:
                 log.warning(f"[QUICK EXEC] Failed to log rejection to audit_db: {_e}")
-            return jsonify({"error": f"Risk Blocked: {approval.reason}"}), 400
+            return jsonify({"error": err_msg}), 400
 
         result = executor(sig, approval)
         if result.get("success"):
@@ -10788,10 +10823,14 @@ def api_chart_analysis():
         f"2. STRUCTURE: Does the visible price structure CONFIRM or CONTRADICT the algorithmic {direction_str} bias? Why?\n"
         "3. MISSED: Are there any patterns or levels the algorithm may have missed? (unfilled gaps, hidden divergence, liquidity pools above/below current price, trendline breaks)\n"
         "4. SL/TP ASSESSMENT: Based on what you see, are the SL and TP levels well-placed? Would you adjust either? Be specific with price levels.\n"
-        "5. RATING: Rate this setup — STRONG / MODERATE / WEAK / AVOID / CONTRADICTS "
-        "(use CONTRADICTS if the chart clearly opposes the algorithmic direction) — "
-        "with one sentence justification.\n\n"
-        "Keep total response under 250 words. Be direct."
+        "5. PER-STYLE RATINGS: Rate this chart setup for EACH trade style independently. "
+        "Consider whether the visible structure, momentum, and levels suit that holding period.\n"
+        "SCALP RATING: STRONG / MODERATE / WEAK / AVOID\n"
+        "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID\n"
+        "SWING RATING: STRONG / MODERATE / WEAK / AVOID\n"
+        "(use CONTRADICTS instead if the chart clearly opposes the algorithmic direction for that style) "
+        "— one sentence justification per style.\n\n"
+        "Keep total response under 350 words. Be direct."
     )
 
     try:
@@ -10808,7 +10847,7 @@ def api_chart_analysis():
 
         message = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=500,
+            max_tokens=700,
             system=system_prompt,
             messages=[{
                 "role": "user",
@@ -11570,7 +11609,8 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
     _regime_state = res.get("regime", {}).get("state") if res.get("regime") else None
 
     lvl = calc_levels(
-        float(price), float(atr), direction, pair["type"], regime_state=_regime_state
+        float(price), float(atr), direction, pair["type"],
+        regime_state=_regime_state, style=_style,
     )
 
     sk = stoch["k"][-1] if stoch["k"] and stoch["k"][-1] is not None else None

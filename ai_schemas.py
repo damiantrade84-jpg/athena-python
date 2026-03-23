@@ -30,6 +30,16 @@ class AIGrade(str, Enum):
     F = "F"
 
 
+class StyleRating(BaseModel):
+    """Per-style rating (scalp / intraday / swing)."""
+
+    grade: str = Field(description="Trade grade: A+, A, B, C, D, or F")
+    edgeProbability: float = Field(
+        ge=0, le=100, description="Win probability estimate 0-100"
+    )
+    riskLevel: str = Field(description="Low, Medium, or High")
+
+
 class EngineAResponse(BaseModel):
     """Schema for main AI analysis response (Marcus Reid Engine A)."""
 
@@ -47,6 +57,10 @@ class EngineAResponse(BaseModel):
         ge=0, le=100, description="Win probability estimate 0-100"
     )
     riskLevel: str = Field(description="Low, Medium, or High")
+    style_ratings: Optional[dict] = Field(
+        default=None,
+        description="Per-style ratings: {scalp: {grade, edgeProbability, riskLevel}, intraday: {...}, swing: {...}}",
+    )
 
 
 class EngineBResponse(BaseModel):
@@ -58,6 +72,10 @@ class EngineBResponse(BaseModel):
     )
     riskLevel: str = Field(description="LOW, MEDIUM, or HIGH")
     verdict: str = Field(description="Concise structural analysis")
+    style_ratings: Optional[dict] = Field(
+        default=None,
+        description="Per-style ratings: {scalp: {grade, edgeProbability, riskLevel}, intraday: {...}, swing: {...}}",
+    )
 
 
 class DebateCaseResponse(BaseModel):

@@ -271,20 +271,43 @@ def classify_conviction(conviction: float) -> tuple:
     return "SKIP", 0.0
 
 
+def _parse_style_ratings_from_text(text: str) -> dict:
+    """Extract per-style vision ratings from chart-analysis text.
+
+    Looks for patterns like:
+        SCALP RATING: STRONG
+        INTRADAY RATING: MODERATE
+        SWING RATING: AVOID
+    """
+    import re
+    ratings = {}
+    valid = {"STRONG", "MODERATE", "WEAK", "AVOID", "CONTRADICTS"}
+    for style in ("SCALP", "INTRADAY", "SWING"):
+        pattern = rf"{style}\s+RATING\s*:\s*(STRONG|MODERATE|WEAK|AVOID|CONTRADICTS?)"
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            val = m.group(1).upper()
+            if val == "CONTRADICT":
+                val = "CONTRADICTS"
+            if val in valid:
+                ratings[style.lower()] = val
+    return ratings
+
+
 def apply_vision(consensus: dict, vision_result: dict) -> dict:
     """Apply AI Vision verdict to modify consensus conviction.
 
-    Vision modes (from ChatGPT architecture):
+    Vision modes:
     - CONFIRM: boosts conviction (STRONG/MODERATE)
     - WEAKEN: reduces conviction (WEAK)
     - CONTRADICT: kills the trade
     - OVERRIDE/AVOID: hard veto regardless of engines
 
-    Vision structured output (from Gemini):
-    - rating: STRONG/MODERATE/WEAK/AVOID
-    - confirms_direction: true/false
-    - sl_flag: ok/too_tight/too_wide
-    - tp_flag: ok/too_ambitious/too_conservative
+    Per-style ratings (parsed from text):
+    - SCALP RATING: STRONG/MODERATE/WEAK/AVOID/CONTRADICTS
+    - INTRADAY RATING: ...
+    - SWING RATING: ...
+    Stored in vision_style_ratings for per-button gating.
     """
     if not vision_result:
         return consensus
@@ -298,20 +321,31 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
     sl_flag = structured.get("sl_flag", "ok") if structured else "ok"
     tp_flag = structured.get("tp_flag", "ok") if structured else "ok"
 
-    # If no structured data, try to extract rating from text
+    text = (vision_result.get("analysis") or "").upper()
+
+    # Parse per-style ratings from Vision text
+    style_ratings = _parse_style_ratings_from_text(text)
+
+    # If no structured rating, extract the overall rating from text
     if not rating:
-        text = (vision_result.get("analysis") or "").upper()
         for r in ["AVOID", "STRONG", "MODERATE", "WEAK", "CONTRADICTS"]:
             if r in text:
                 rating = r
                 break
-        # Check for direction contradiction in text
         if "CONTRADICT" in text:
             confirms_dir = False
             rating = "CONTRADICTS"
 
+    # If we have per-style ratings but no overall, derive overall from best style
+    if not rating and style_ratings:
+        priority = ["STRONG", "MODERATE", "WEAK", "AVOID", "CONTRADICTS"]
+        for p in priority:
+            if p in style_ratings.values():
+                rating = p
+                break
+
     if not rating:
-        rating = "MODERATE"  # default if unparseable
+        rating = "MODERATE"
 
     # Handle explicit direction contradiction
     if not confirms_dir and rating not in ("AVOID", "CONTRADICTS"):
@@ -336,17 +370,18 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
     updated["vision_rating"] = rating
     updated["vision_sl_flag"] = sl_flag
     updated["vision_tp_flag"] = tp_flag
+    updated["vision_style_ratings"] = style_ratings or {
+        "scalp": rating, "intraday": rating, "swing": rating,
+    }
 
     # If Vision flags SL as too tight, check if we can widen
     if sl_flag == "too_tight" and updated.get("sl_method") != "atr":
-        # Switch to Engine A's wider ATR-based SL if available
         if updated.get("sl_a") and updated.get("sl"):
             a_dist = abs(updated.get("entry", 0) - updated["sl_a"])
             c_dist = abs(updated.get("entry", 0) - updated["sl"])
             if a_dist > c_dist:
                 updated["sl"] = updated["sl_a"]
                 updated["sl_method"] = "atr_vision_override"
-                # Recalculate RR
                 risk = abs(updated["entry"] - updated["sl"])
                 if risk > 0 and updated.get("tp"):
                     reward = abs(updated["tp"] - updated["entry"])
@@ -364,7 +399,7 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
 
     log.warning(
         f"[ENGINE C] Vision {action}: {rating} → conviction {old_conviction:.2f} → {new_conviction:.2f} "
-        f"(tier={tier}, sl_flag={sl_flag})"
+        f"(tier={tier}, sl_flag={sl_flag}, styles={style_ratings})"
     )
 
     return updated

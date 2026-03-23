@@ -92,6 +92,7 @@ CONFIG: dict = {
         "stock": {"dead": 16, "dead_pen": 1.5, "choppy": 21, "choppy_pen": 0.5},
         "index": {"dead": 16, "dead_pen": 1.5, "choppy": 21, "choppy_pen": 0.5},
     },
+    # ATR_CLASS: fallback when no style is set. Primary path is STYLE_ATR_MULTS below.
     "ATR_CLASS": {
         "forex": {"sl": 1.2, "tp1": 2.0, "tp2": 3.0},
         "commodity": {"sl": 1.5, "tp1": 2.5, "tp2": 4.0},
@@ -99,24 +100,34 @@ CONFIG: dict = {
         "stock": {"sl": 1.5, "tp1": 2.5, "tp2": 4.0},
         "crypto": {"sl": 2.0, "tp1": 3.5, "tp2": 5.0},
     },
-    # Style-specific ATR multipliers — researched from 2025-2026 industry sources.
-    # Scalp: 5-10p forex SL, $0.15-0.30 stock SL. Target 1:1.8 RR. Hold minutes to hours.
-    # Intraday: 8-15p forex SL, $0.50-1.00 stock SL. Target 1:2.0 RR. Hold hours to 1-2 days.
-    # Swing: not listed — falls through to ATR_CLASS (unchanged, proven for multi-day holds).
+    # Style-specific ATR multipliers — calibrated to industry benchmarks:
+    #   quantstock.org, bestmt4ea.com, atrindicator.com, luxalgo.com, fxnx.com,
+    #   cryptotrading-guide.com (2026), fxpremiere.com (XAU/USD), tapbit.com (2026).
+    # SL: lower edge of viable industry range (tight but survivable against noise).
+    # TP1: quick partial exit — slightly below industry floor (take 50-70% here).
+    # TP2: industry standard runner — let remainder ride (move SL to breakeven).
+    # Scalp uses H1 ATR, Intraday uses H4 ATR, Swing uses D1 (crypto: H4).
     "STYLE_ATR_MULTS": {
         "scalp": {
-            "forex":     {"sl": 0.27, "tp1": 0.47, "tp2": 0.67},
-            "crypto":    {"sl": 0.16, "tp1": 0.31, "tp2": 0.50},
-            "stock":     {"sl": 0.17, "tp1": 0.33, "tp2": 0.53},
-            "commodity": {"sl": 0.38, "tp1": 0.69, "tp2": 1.00},
-            "index":     {"sl": 0.27, "tp1": 0.50, "tp2": 0.73},
+            "forex":     {"sl": 0.50, "tp1": 0.75, "tp2": 1.25},
+            "crypto":    {"sl": 0.50, "tp1": 0.75, "tp2": 1.25},
+            "stock":     {"sl": 0.50, "tp1": 0.75, "tp2": 1.25},
+            "commodity": {"sl": 0.65, "tp1": 1.00, "tp2": 1.50},
+            "index":     {"sl": 0.50, "tp1": 0.75, "tp2": 1.25},
         },
         "intraday": {
-            "forex":     {"sl": 0.20, "tp1": 0.40, "tp2": 0.67},
-            "crypto":    {"sl": 0.27, "tp1": 0.53, "tp2": 0.80},
-            "stock":     {"sl": 0.25, "tp1": 0.50, "tp2": 0.75},
-            "commodity": {"sl": 0.50, "tp1": 1.00, "tp2": 1.47},
-            "index":     {"sl": 0.33, "tp1": 0.67, "tp2": 0.92},
+            "forex":     {"sl": 0.75, "tp1": 1.50, "tp2": 2.50},
+            "crypto":    {"sl": 0.75, "tp1": 1.50, "tp2": 2.50},
+            "stock":     {"sl": 0.75, "tp1": 1.50, "tp2": 2.50},
+            "commodity": {"sl": 1.00, "tp1": 2.00, "tp2": 3.00},
+            "index":     {"sl": 0.75, "tp1": 1.50, "tp2": 2.50},
+        },
+        "swing": {
+            "forex":     {"sl": 1.20, "tp1": 2.00, "tp2": 3.00},
+            "crypto":    {"sl": 2.00, "tp1": 3.50, "tp2": 5.00},
+            "stock":     {"sl": 1.50, "tp1": 2.50, "tp2": 4.00},
+            "commodity": {"sl": 1.50, "tp1": 2.50, "tp2": 4.00},
+            "index":     {"sl": 1.50, "tp1": 2.50, "tp2": 4.00},
         },
     },
     "LEVEL_ATR_PRIORITY": {

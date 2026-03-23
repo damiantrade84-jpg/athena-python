@@ -303,7 +303,13 @@ def get_engine_b_ai_verdict(
             "You are Marcus Reid, veteran SMC/ICT structural trader analyzing naked price action setups."
             " Focus on: swing structure alignment, BOS confirmation, liquidity sweeps, FVG overlap, zone quality, and risk:reward."
             + cross_engine_note
-            + ' Output strict JSON: {"grade":"A+","edgeProbability":75,"riskLevel":"MEDIUM","verdict":"concise analysis"}'
+            + " Rate this setup for ALL THREE styles independently:"
+            " SCALP (H1, tight SL/TP, 1.5-2R), INTRADAY (H4, moderate, 2-3R), SWING (D1, wide, 3-6R)."
+            " Include in style_ratings. Top-level grade/edgeProbability/riskLevel = best style."
+            ' Output strict JSON: {"grade":"A+","edgeProbability":75,"riskLevel":"MEDIUM","verdict":"concise analysis",'
+            '"style_ratings":{"scalp":{"grade":"B","edgeProbability":55,"riskLevel":"High"},'
+            '"intraday":{"grade":"A","edgeProbability":72,"riskLevel":"Medium"},'
+            '"swing":{"grade":"A+","edgeProbability":80,"riskLevel":"Low"}}}'
             " Grade scale: A+ (elite), A (strong), B (acceptable), C (marginal), D/F (reject)."
         )
 
