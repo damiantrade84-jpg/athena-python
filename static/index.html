@@ -1579,13 +1579,7 @@ async function runScan() {
     var acFilter = document.getElementById('assetClassFilter').value || undefined;
     var payload = {style:scanStyle};
     if (acFilter) payload.asset_class = acFilter;
-    var resp=await fetch('/api/scan',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(payload)
-    });
-    if(!resp.ok) throw new Error('Server error: HTTP '+resp.status);
-    var data=await resp.json();
+    var data = await window.apiClient.postJson('/api/scan', payload);
     if(!data.success) throw new Error(data.error||'Scan failed');
 
     var tradeSignals=data.tradeSignals||data.signals||[];
@@ -2589,10 +2583,31 @@ function buildExecButton(s) {
   var isForce = s.signalTier === 'watchlist' && window._testMode;
   var btnClass = isForce ? 'exec-btn force' : 'exec-btn '+dir;
   var label = isForce ? 'FORCE EXECUTE '+dir+via : 'EXECUTE '+dir+via;
+  var styleExecHtml = buildStyleExecButtons(s);
   return '<button class="'+btnClass+'" id="execbtn-'+sid+'" onclick="confirmExecute(\''+s.symbol+'\', '+isForce+')" '+(disabled?'disabled title="'+disTitle+'"':'')+'>'+
     label+
     '<span class="exec-detail" id="execdetail-'+sid+'">'+s.display+' @ '+fmtPrice(entryPrice)+' | SL: '+fmtPrice(s.sl)+' | TP: '+fmtPrice(s.tp1)+'</span>'+
-  '</button>';
+  '</button>'+styleExecHtml;
+}
+
+function buildStyleExecButtons(s) {
+  if (!s || !s.symbol) return '';
+  var sid=(s.symbol||'').replace(/[\/=^.]/g,'_');
+  var ai = s.aiAnalysis || s.ai_analysis || {};
+  var sr = ai.style_ratings || {};
+  function warn(style) {
+    var r = sr[style];
+    var val = (r && typeof r === 'object' ? r.grade : r || '');
+    val = String(val || '').toUpperCase();
+    if (val === 'AVOID' || val === 'CONTRADICTS' || val === 'CONTRADICT') return ' ⚠';
+    return '';
+  }
+  var row = '<div style="display:flex;gap:6px;margin-top:8px;">';
+  row += '<button class="exec-btn force" id="exec-style-scalp-'+sid+'" style="flex:1;font-size:11px;" onclick="executeSignalStyle(\''+s.symbol+'\',\'scalp\',\'exec-style-scalp-'+sid+'\')">⚡ SCALP'+warn('scalp')+'</button>';
+  row += '<button class="exec-btn force" id="exec-style-intraday-'+sid+'" style="flex:1;font-size:11px;" onclick="executeSignalStyle(\''+s.symbol+'\',\'intraday\',\'exec-style-intraday-'+sid+'\')">📊 INTRADAY'+warn('intraday')+'</button>';
+  row += '<button class="exec-btn force" id="exec-style-swing-'+sid+'" style="flex:1;font-size:11px;" onclick="executeSignalStyle(\''+s.symbol+'\',\'swing\',\'exec-style-swing-'+sid+'\')">🌊 SWING'+warn('swing')+'</button>';
+  row += '</div>';
+  return row;
 }
 
 function updateAcct(val) {
@@ -2626,10 +2641,15 @@ function _buildStyleRatingStrip(sr) {
       var vr = grade.toUpperCase();
       gradeColor = (vr==='STRONG')?'var(--bull)':(vr==='MODERATE')?'var(--accent)':'var(--bear)';
     }
+    var caution = '';
+    var gNorm = String(grade || '').toUpperCase();
+    if (gNorm === 'AVOID' || gNorm === 'CONTRADICTS' || gNorm === 'CONTRADICT') {
+      caution = '⚠';
+    }
     var riskColor = riskNorm==='low'?'var(--bull)':riskNorm==='high'?'var(--bear)':'var(--accent)';
     html += '<div style="flex:1;text-align:center;background:rgba(168,85,247,0.06);border:1px solid rgba(168,85,247,0.15);border-radius:4px;padding:4px 2px;">';
     html += '<div style="font-weight:700;font-size:9px;color:var(--muted);margin-bottom:2px;">'+labels[s]+'</div>';
-    html += '<div style="color:'+gradeColor+';font-weight:800;font-size:13px;">'+grade+'</div>';
+    html += '<div style="color:'+gradeColor+';font-weight:800;font-size:13px;">'+grade+(caution?' '+caution:'')+'</div>';
     if (prob!=null) html += '<div style="font-size:9px;color:var(--text-secondary);">'+prob+'%</div>';
     if (risk) html += '<div style="font-size:8px;color:'+riskColor+';">'+risk+'</div>';
     html += '</div>';
@@ -2774,31 +2794,16 @@ async function analyzeNakedSignal(symbol, buttonId) {
 }
 
 // -- Naked Scalp Scan & Compare --
+async function _postQuickExecute(payload, btn, successMsg) {
+  return window.ExecutionFeature.postQuickExecute(payload, btn, successMsg);
+}
+
+async function executeSignalStyle(symbol, pipMode, buttonId) {
+  return window.ExecutionFeature.executeSignalStyle(symbol, pipMode, buttonId);
+}
+
 async function quickExecute(symbol, engineBData, buttonId, pipMode) {
-  var sid=(symbol||'').replace(/[\/=^.]/g,'_');
-  var sig=allSignals.find(function(s){return s.symbol===symbol;});
-  if(!sig) return;
-  var btn = document.getElementById(buttonId || ('qexecbtn-'+(pipMode||'swing')+'-'+sid));
-  var execSig = buildLiveSignalPayload(sig);
-  if(btn){btn.disabled=true;btn.textContent='Executing...';}
-  
-  try {
-    var payload = {signal:execSig, engine_b: engineBData};
-    if (pipMode) payload.pip_mode = pipMode;
-    var resp=await fetch('/api/quick-execute', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(payload)
-    });
-    var resData=await resp.json();
-    if(!resp.ok || resData.error) throw new Error(resData.error || 'Execution failed');
-    
-    if(btn){btn.disabled=true;btn.textContent='Success! '+resData.ticket; setTimeout(function(){btn.style.display='none';},2000);}
-    showToast('Quick executed ' + symbol + ' successfully! Ticket: ' + resData.ticket);
-  } catch(err) {
-    if(btn){btn.disabled=false;btn.textContent='⚡ RETRY QUICK EXEC';}
-    showToast('Execute Error: '+err.message, true);
-  }
+  return window.ExecutionFeature.quickExecute(symbol, engineBData, buttonId, pipMode);
 }
 
 async function runNakedScan(symbol) {
@@ -3687,6 +3692,10 @@ document.getElementById('tv-chart-modal').addEventListener('click', function(e) 
   if (e.target === this) closeTVChart();
 });
 </script>
+<script src="/static/js/core/state.js"></script>
+<script src="/static/js/core/utils.js"></script>
+<script src="/static/js/core/apiClient.js"></script>
+<script src="/static/js/features/execution.js"></script>
 <script>
 // ═══════════════════════════════════════════════════════
 // ATHENA CHART MODAL (ACM) — Fullscreen Professional Chart
@@ -4559,17 +4568,13 @@ function buildECExecButtons(c, sid) {
   ];
   var html = '<div style="display:flex;gap:6px;">';
   styles.forEach(function(s) {
-    var blocked = _ecStyleBlocked(c, s.key);
-    if (blocked) {
-      html += '<button disabled class="exec-btn" ' +
-        'style="flex:1;font-size:11px;opacity:0.35;cursor:not-allowed;" ' +
-        'title="Vision rated '+s.key+' as AVOID/CONTRADICTS">&#128683; '+s.label+'</button>';
-    } else {
-      html += '<button onclick="executeEngineC(\''+sid+'\',\''+s.key+'\')" class="exec-btn force" ' +
-        'style="flex:1;font-size:11px;">'+s.icon+' '+s.label+' ('+sizeLabel+')</button>';
-    }
+    var risky = _ecStyleBlocked(c, s.key);
+    html += '<button onclick="executeEngineC(\''+sid+'\',\''+s.key+'\')" class="exec-btn force" ' +
+      'style="flex:1;font-size:11px;" title="'+(risky?'Vision caution: '+s.key:'Execute '+s.key)+'">'+
+      s.icon+' '+s.label+' ('+sizeLabel+')'+(risky?' ⚠':'')+'</button>';
   });
   html += '</div>';
+  html += '<div style="margin-top:5px;font-size:9px;color:var(--muted);font-family:Space Mono,monospace;">⚠ Warning-only: styles flagged AVOID/CONTRADICTS stay executable by request.</div>';
   return html;
 }
 
@@ -4729,63 +4734,7 @@ async function runECVisionConfirm(sid) {
 }
 
 async function executeEngineC(sid, pipMode) {
-  // Find consensus data
-  var consensus = null;
-  ['aligned', 'a_only', 'b_only'].forEach(function(cat) {
-    (_ecResults[cat] || []).forEach(function(c) {
-      var cSid = (c.symbol || c.display || '').replace(/[\/=^.]/g, '_');
-      if (cSid === sid) consensus = c;
-    });
-  });
-
-  if (!consensus || !consensus.trade) {
-    showToast('Cannot execute — no valid consensus signal', true);
-    return;
-  }
-
-  // Build signal for quick-execute
-  var signal = {
-    pair: consensus.display,
-    display: consensus.display,
-    symbol: consensus.symbol,
-    type: consensus.type,
-    direction: consensus.direction,
-    price: consensus.entry,
-    sl: consensus.sl,
-    tp1: consensus.tp,
-    tp2: consensus.tp,
-    confluenceScore: consensus.conviction,
-    ts: new Date().toISOString(),
-  };
-
-  // Use Engine B raw data for the quick-execute call
-  var engineB = consensus.engine_b_raw || {};
-  engineB.recommended_stop_loss = consensus.sl;
-  engineB.recommended_take_profit = consensus.tp;
-
-  // Call existing quick-execute with sizing override
-  try {
-    var resp = await fetch('/api/quick-execute', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        signal: signal,
-        engine_b: engineB,
-        pip_mode: pipMode === 'swing' ? null : pipMode,
-        sizing_override: consensus.sizing_override,
-      }),
-    });
-    var result = await resp.json();
-
-    if (result.success) {
-      showToast('Engine C: ' + consensus.direction + ' ' + consensus.display +
-        ' executed (' + (consensus.tier || '') + ')');
-    } else {
-      showToast('Execution failed: ' + (result.error || result.reason || 'unknown'), true);
-    }
-  } catch(err) {
-    showToast('Execution error: ' + err.message, true);
-  }
+  return window.ExecutionFeature.executeEngineC(sid, pipMode);
 }
 
 // ── Market Hours ──────────────────────────────────────────────────────────────

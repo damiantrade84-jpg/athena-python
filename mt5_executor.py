@@ -769,6 +769,28 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         f"[MT5] ORDER FILLED: ticket={result.order} | {direction} {result.volume} {mt5_symbol} @ {result.price}"
     )
 
+    # audit_log + outcome monitor must use POSITION ticket (history_deals_get(position=...)).
+    # result.order is the *order* ticket; closing deals use different order ids, so ticket=order
+    # often misses the exit deal and Performance never gets exit_price / pnl.
+    position_ticket = int(result.order)
+    try:
+        import time as _time
+
+        _time.sleep(0.15)
+        plist = mt5.positions_get(symbol=mt5_symbol)
+        if plist:
+            for pos in plist:
+                if getattr(pos, "magic", 0) == 240601 and abs(
+                    float(pos.volume) - float(result.volume)
+                ) < 1e-8:
+                    position_ticket = int(pos.ticket)
+                    log.info(
+                        f"[MT5] Resolved position ticket={position_ticket} (order_ticket={result.order})"
+                    )
+                    break
+    except Exception as _pt_err:
+        log.debug(f"[MT5] position ticket lookup skipped: {_pt_err}")
+
     # Send Telegram notification for trade opened
     try:
         telegram_notify.notify_trade_opened(
@@ -836,7 +858,8 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
 
     return {
         "success": True,
-        "ticket": result.order,
+        "ticket": position_ticket,
+        "order_ticket": int(result.order),
         "volume": result.volume,
         "entryPrice": result.price,
         "symbol": mt5_symbol,

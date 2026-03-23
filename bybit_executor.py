@@ -9,6 +9,8 @@ All orders must arrive as a pre-validated RiskApproval from risk_engine.py.
 import os
 import logging
 import time
+from datetime import datetime, timezone
+
 import telegram_notify
 
 log = logging.getLogger("sentinel")
@@ -352,6 +354,217 @@ def bybit_get_positions() -> dict:
                 continue
             log.error(f"[BYBIT] Failed to fetch positions: {e}")
             return {"error": True, "symbol": "Bybit", "detail": str(e), "positions": []}
+
+
+def bybit_audit_ts_to_ms(ts_iso: str | None) -> int:
+    if not ts_iso:
+        return 0
+    try:
+        dt = datetime.fromisoformat(ts_iso.replace("Z", "+00:00"))
+        return int(dt.timestamp() * 1000)
+    except Exception:
+        return 0
+
+
+def bybit_fetch_closed_positions_history(
+    exchange,
+    ccxt_symbol: str,
+    since_ms: int,
+    until_ms: int | None = None,
+    limit: int = 100,
+) -> list:
+    """Closed USDT-linear rows from Bybit v5 /position/closed-pnl (via CCXT).
+
+    Bybit allows at most ~7 days per start/end window; span is clamped here.
+    """
+    if not exchange:
+        return []
+    if until_ms is None:
+        until_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    max_span_ms = 7 * 24 * 3600 * 1000
+    if until_ms - since_ms > max_span_ms:
+        since_ms = until_ms - max_span_ms
+    try:
+        rows = exchange.fetch_positions_history(
+            [ccxt_symbol],
+            since=since_ms,
+            limit=limit,
+            params={"until": until_ms},
+        )
+        return list(rows or [])
+    except Exception as e:
+        log.debug(f"[BYBIT] fetch_positions_history({ccxt_symbol}) failed: {e}")
+        return []
+
+
+def bybit_audit_row_still_open(row: dict, open_positions_on_symbol: list) -> bool:
+    """True if an open Bybit position matches this audit row (entry + size)."""
+    try:
+        entry = float(row.get("entry_price") or 0)
+        vol = float(row.get("volume") or 0)
+    except (TypeError, ValueError):
+        return False
+    if entry <= 0 or vol <= 0:
+        return False
+    for p in open_positions_on_symbol or []:
+        pe = float(p.get("entryPrice", 0) or 0)
+        pv = float(p.get("contracts", 0) or 0)
+        if pe <= 0 or pv <= 0:
+            continue
+        if abs(pe - entry) / entry <= 0.008 and abs(pv - vol) / max(vol, 1e-12) <= 0.06:
+            return True
+    return False
+
+
+def bybit_match_closed_history_row(
+    row: dict,
+    history_rows: list,
+    used_keys: set,
+    entry_tol: float = 0.02,
+    vol_tol: float = 0.06,
+) -> dict | None:
+    """Match one audit_log open to a closed-PnL history row (CCXT parsed position)."""
+    try:
+        audit_entry = float(row.get("entry_price") or 0)
+        audit_vol = float(row.get("volume") or 0)
+    except (TypeError, ValueError):
+        return None
+    if audit_entry <= 0 or audit_vol <= 0:
+        return None
+    direction = (row.get("direction") or "").upper()
+    want_side = "long" if direction == "LONG" else "short"
+    entry_ts_ms = bybit_audit_ts_to_ms(row.get("ts"))
+
+    best = None
+    best_score = None
+    for pos in history_rows:
+        info = pos.get("info") or {}
+        oid = str(info.get("orderId") or "")
+        ut = str(info.get("updatedTime") or "")
+        key = f"{oid}|{ut}|{info.get('avgEntryPrice')}|{info.get('qty')}"
+        if key in used_keys:
+            continue
+        ps = (pos.get("side") or "").lower()
+        if ps != want_side:
+            continue
+        ep = float(pos.get("entryPrice") or 0)
+        ct = float(pos.get("contracts") or 0)
+        if ep <= 0 or ct <= 0:
+            continue
+        lut = pos.get("lastUpdateTimestamp")
+        if lut is None:
+            try:
+                lut = int(info.get("updatedTime") or 0)
+            except (TypeError, ValueError):
+                lut = 0
+        if isinstance(lut, float):
+            lut = int(lut)
+        if entry_ts_ms and lut and lut < entry_ts_ms - 180_000:
+            continue
+        if abs(ep - audit_entry) / audit_entry > entry_tol:
+            continue
+        rel = abs(ct - audit_vol) / max(audit_vol, 1e-12)
+        if rel > vol_tol and abs(ct - audit_vol) > 1e-6:
+            continue
+        score = abs(ep - audit_entry) / audit_entry + rel
+        if best_score is None or score < best_score:
+            best_score = score
+            best = (pos, key)
+
+    if not best:
+        return None
+    pos, key = best
+    used_keys.add(key)
+    return pos
+
+
+def bybit_closed_row_to_outcome(pos: dict) -> tuple[float, str, float]:
+    """Return (exit_price, exit_time_iso, pnl) from a matched closed-history position dict."""
+    info = pos.get("info") or {}
+    exit_px = float(
+        pos.get("lastPrice")
+        or info.get("avgExitPrice")
+        or info.get("avg_exit_price")
+        or 0
+    )
+    pnl = float(pos.get("realizedPnl") or info.get("closedPnl") or 0)
+    lut = pos.get("lastUpdateTimestamp")
+    if lut is None:
+        try:
+            lut = int(info.get("updatedTime") or 0)
+        except (TypeError, ValueError):
+            lut = 0
+    if isinstance(lut, float):
+        lut = int(lut)
+    if lut > 1_000_000_000_000:  # ms
+        exit_iso = datetime.fromtimestamp(lut / 1000.0, tz=timezone.utc).isoformat()
+    elif lut > 1_000_000_000:
+        exit_iso = datetime.fromtimestamp(float(lut), tz=timezone.utc).isoformat()
+    else:
+        exit_iso = (
+            pos.get("datetime")
+            or datetime.now(timezone.utc).isoformat()
+        )
+    return exit_px, exit_iso, pnl
+
+
+def bybit_fallback_outcome_from_trades(
+    exchange, ccxt_symbol: str, row: dict
+) -> tuple[float, str, float] | None:
+    """Last-resort: infer close from user trades after entry (no closed-pnl match)."""
+    if not exchange:
+        return None
+    since_ms = bybit_audit_ts_to_ms(row.get("ts"))
+    try:
+        trades = exchange.fetch_my_trades(
+            ccxt_symbol, since=max(0, since_ms - 120_000), limit=200
+        )
+    except Exception as e:
+        log.debug(f"[BYBIT] fetch_my_trades fallback {ccxt_symbol}: {e}")
+        return None
+    if not trades:
+        return None
+    direction = (row.get("direction") or "").upper()
+    need_side = "sell" if direction == "LONG" else "buy"
+    try:
+        vol = float(row.get("volume") or 0)
+        entry = float(row.get("entry_price") or 0)
+    except (TypeError, ValueError):
+        return None
+    last_t = None
+    last_pnl = None
+    last_px = None
+    for t in sorted(trades, key=lambda x: x.get("timestamp") or 0):
+        if (t.get("side") or "").lower() != need_side:
+            continue
+        ts = int(t.get("timestamp") or 0)
+        if since_ms and ts + 10_000 < since_ms:
+            continue
+        amt = float(t.get("amount") or 0)
+        if vol > 0 and abs(amt - vol) / max(vol, 1e-12) > 0.12:
+            continue
+        px = float(t.get("price") or 0)
+        info = t.get("info") or {}
+        rp = info.get("closedPnl")
+        if rp is not None:
+            try:
+                pnl = float(rp)
+            except (TypeError, ValueError):
+                pnl = None
+        else:
+            pnl = None
+        if pnl is None and entry > 0 and px > 0 and amt > 0:
+            pnl = (px - entry) * amt if direction == "LONG" else (entry - px) * amt
+        if pnl is None:
+            continue
+        last_t = t
+        last_pnl = pnl
+        last_px = px
+    if not last_t or last_px is None or last_pnl is None:
+        return None
+    ts = int(last_t.get("timestamp") or 0)
+    exit_iso = datetime.fromtimestamp(ts / 1000.0, tz=timezone.utc).isoformat()
+    return last_px, exit_iso, float(last_pnl)
 
 
 def bybit_close_position(pair: str, direction: str, volume: float) -> dict:

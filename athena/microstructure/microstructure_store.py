@@ -7,14 +7,65 @@ import sqlite3
 import logging
 import time
 import threading
+import os
+import shutil
 from typing import Dict, List
 from pathlib import Path
 
 log = logging.getLogger("sentinel")
 
-DB_PATH = Path(__file__).parent.parent.parent / "microstructure.db"
+LEGACY_DB_PATH = Path(__file__).parent.parent.parent / "microstructure.db"
+
+
+def _resolve_db_path() -> Path:
+    """Resolve DB path with OneDrive-safe default on Windows.
+
+    Priority:
+    1) MICROSTRUCTURE_DB_PATH env var (explicit override)
+    2) Windows LOCALAPPDATA\\Athena\\microstructure.db (outside OneDrive sync)
+    3) Legacy repo-root path (non-Windows fallback)
+    """
+    env_path = os.environ.get("MICROSTRUCTURE_DB_PATH", "").strip()
+    if env_path:
+        p = Path(env_path).expanduser()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+
+    if os.name == "nt":
+        local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+        if local_app_data:
+            p = Path(local_app_data) / "Athena" / "microstructure.db"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            return p
+
+    return LEGACY_DB_PATH
+
+
+DB_PATH = _resolve_db_path()
+
+_KEEP_HOURS = int(os.environ.get("MICROSTRUCTURE_KEEP_HOURS", "72"))
+_MAINTENANCE_INTERVAL_SEC = int(
+    os.environ.get("MICROSTRUCTURE_MAINT_INTERVAL_SEC", "1800")
+)
+_last_maintenance_ts = 0.0
 
 _db_lock = threading.Lock()
+
+
+def _maybe_migrate_legacy_db() -> None:
+    """One-time copy from legacy repo DB to new DB path if needed."""
+    try:
+        if DB_PATH == LEGACY_DB_PATH:
+            return
+        if DB_PATH.exists():
+            return
+        if LEGACY_DB_PATH.exists():
+            shutil.copy2(LEGACY_DB_PATH, DB_PATH)
+            log.warning(
+                f"[MicroStore] Migrated legacy DB to local path: {DB_PATH}"
+            )
+    except Exception as _e:
+        log.warning(f"[MicroStore] Legacy migration warning: {_e}")
 
 
 # Ensure table exists on first import
@@ -23,6 +74,7 @@ def _ensure_db() -> None:
         with sqlite3.connect(DB_PATH, timeout=15.0) as con:
             # Enable WAL mode for better concurrent write performance
             con.execute("PRAGMA journal_mode=WAL")
+            con.execute("PRAGMA synchronous=NORMAL")
             con.execute("""
                 CREATE TABLE IF NOT EXISTS metrics (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,6 +98,25 @@ def _ensure_db() -> None:
         log.warning(f"[MicroStore] DB init warning: {_e}")
 
 
+def _maybe_maintain() -> None:
+    """Periodic retention + WAL checkpoint to keep DB footprint bounded."""
+    global _last_maintenance_ts
+    now = time.time()
+    if now - _last_maintenance_ts < _MAINTENANCE_INTERVAL_SEC:
+        return
+    _last_maintenance_ts = now
+
+    try:
+        cutoff = now - (_KEEP_HOURS * 3600)
+        with sqlite3.connect(DB_PATH, timeout=15.0) as con:
+            con.execute("DELETE FROM metrics WHERE timestamp < ?", (cutoff,))
+            # Reclaim WAL growth for cloud/local backup friendliness.
+            con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except Exception as _e:
+        log.warning(f"[MicroStore] Maintenance warning: {_e}")
+
+
+_maybe_migrate_legacy_db()
 _ensure_db()
 
 
@@ -114,6 +185,7 @@ def store_metrics(metrics: Dict) -> None:
                         metrics["liquidity_pressure"],
                     ),
                 )
+                _maybe_maintain()
     except Exception as e:
         log.error(f"[MicroStore] Failed to store metrics: {e}")
 

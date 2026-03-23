@@ -44,6 +44,15 @@ import telegram_notify
 from datetime import datetime, timezone, timedelta
 
 from flask import Flask, jsonify, request, send_from_directory
+from athena_app.api.routes_scan import api_scan_impl
+from athena_app.api.routes_backtest import api_backtest_impl
+from athena_app.api.routes_execution import normalize_pip_mode
+from athena_app.services.scan_backtest_service import (
+    handle_scan_request,
+    handle_backtest_request,
+)
+from athena_app.services.candle_service import recompute_levels_for_style
+from athena_app.repositories.audit_repo import insert_manual_error
 
 import requests as _requests_mod
 from requests.adapters import HTTPAdapter
@@ -7768,11 +7777,12 @@ def index():
 
 @app.route("/api/scan", methods=["POST"])
 def api_scan():
-
     d = request.get_json(force=True, silent=True) or {}
-
-    result = run_full_scan(
-        style=d.get("style", "auto"), asset_class=d.get("asset_class")
+    result = api_scan_impl(
+        d,
+        scan_service_handle=lambda payload: handle_scan_request(
+            payload, run_full_scan=run_full_scan
+        ),
     )
     global _last_scan_results
     _last_scan_results = result
@@ -8429,70 +8439,45 @@ def api_compare_engines():
 @app.route("/api/quick-execute", methods=["POST"])
 def api_quick_execute():
     d = request.json
-    if not d or "signal" not in d or "engine_b" not in d:
+    if not d or "signal" not in d:
         return jsonify({"error": "Invalid payload"}), 400
 
     sig = d["signal"]
-    engine_b = d["engine_b"]
+    engine_b = d.get("engine_b") or {}
 
-    pip_mode = d.get("pip_mode")  # "scalp", "intraday", or None (use Engine B structural)
+    pip_mode = normalize_pip_mode(d.get("pip_mode"))
     _sizing_override = float(d.get("sizing_override", 1.0))
-    
-    if pip_mode in ("scalp", "intraday"):
-        # Override with Engine A researched pip logic — tight SL/TP for fast execution
-        pair_obj = _resolve_pair_from_signal(sig)
-        _ptype = pair_obj.get("type", "") if pair_obj else ""
-        d1 = fetch_candles(pair_obj, "D1", CONFIG.get("D1_CANDLES", 250))
-        h4 = fetch_candles(pair_obj, "H4", CONFIG.get("H4_CANDLES", 250))
-        h1 = fetch_candles(pair_obj, "H1", CONFIG.get("H1_CANDLES", 250))
-        d1i = calc_indicators(d1) if d1 else {}
-        h4i = calc_indicators(h4) if h4 else {}
-        h1i = calc_indicators(h1) if h1 else {}
-        _exec_atr = _atr_for_levels(d1i, h4i, h1i, pair=pair_obj, style=pip_mode)
-        if _exec_atr and _exec_atr > 0:
-            _exec_price = float(sig.get("price", 0))
-            _exec_dir = sig.get("direction", "LONG")
-            lvl = calc_levels(_exec_price, _exec_atr, _exec_dir, _ptype, 
-                              regime_state=None, style=pip_mode)
-            sig["sl"] = lvl["sl"]
-            sig["tp1"] = lvl["tp1"]
-            sig["tp2"] = lvl["tp2"]
-            log.warning(f"[QUICK EXEC] {sig.get('pair')}: pip_mode={pip_mode}, "
-                     f"ATR={_exec_atr:.6f}, SL={lvl['sl']:.6f}, TP1={lvl['tp1']:.6f}")
-        else:
-            log.warning(f"[QUICK EXEC] {sig.get('pair')}: pip_mode={pip_mode} but ATR unavailable, falling back to Engine B levels")
-            pip_mode = None
-    
-    if not pip_mode:
-        # SWING: use ATR_CLASS (same as backtest) — proven, bar-appropriate widths
-        pair_obj = pair_obj if pair_obj else _resolve_pair_from_signal(sig)
-        _ptype = pair_obj.get("type", "") if pair_obj else ""
-        if not d1i:
-            d1 = fetch_candles(pair_obj, "D1", CONFIG.get("D1_CANDLES", 250))
-            h4 = fetch_candles(pair_obj, "H4", CONFIG.get("H4_CANDLES", 250))
-            h1 = fetch_candles(pair_obj, "H1", CONFIG.get("H1_CANDLES", 250))
-            d1i = calc_indicators(d1) if d1 else {}
-            h4i = calc_indicators(h4) if h4 else {}
-            h1i = calc_indicators(h1) if h1 else {}
-        _exec_atr = _atr_for_levels(d1i, h4i, h1i, pair=pair_obj)
-        if _exec_atr and _exec_atr > 0:
-            _exec_price = float(sig.get("price", 0))
-            _exec_dir = sig.get("direction", "LONG")
-            lvl = calc_levels(_exec_price, _exec_atr, _exec_dir, _ptype,
-                              regime_state=None)  # No style = ATR_CLASS defaults
-            sig["sl"] = lvl["sl"]
-            sig["tp1"] = lvl["tp1"]
-            sig["tp2"] = lvl["tp2"]
-            log.warning(f"[QUICK EXEC] {sig.get('pair')}: SWING mode (ATR_CLASS), "
-                     f"ATR={_exec_atr:.6f}, SL={lvl['sl']:.6f}, TP1={lvl['tp1']:.6f}")
-        else:
-            # Last resort fallback to Engine B structural
-            if "recommended_stop_loss" in engine_b and engine_b["recommended_stop_loss"]:
-                sig["sl"] = engine_b["recommended_stop_loss"]
-            if "recommended_take_profit" in engine_b and engine_b["recommended_take_profit"]:
-                sig["tp1"] = engine_b["recommended_take_profit"]
-                sig["tp2"] = engine_b["recommended_take_profit"]
-            log.warning(f"[QUICK EXEC] {sig.get('pair')}: SWING fallback to Engine B structural (ATR unavailable)")
+
+    # Recompute execution levels for selected style using extracted candle service.
+    try:
+        recomputed = recompute_levels_for_style(
+            sig,
+            pip_mode,
+            resolve_pair_from_signal=_resolve_pair_from_signal,
+            fetch_candles=fetch_candles,
+            calc_indicators=calc_indicators,
+            atr_for_levels=_atr_for_levels,
+            calc_levels=calc_levels,
+            config=CONFIG,
+        )
+        lvl = recomputed["levels"]
+        sig["sl"] = lvl["sl"]
+        sig["tp1"] = lvl["tp1"]
+        sig["tp2"] = lvl["tp2"]
+        log.warning(
+            f"[QUICK EXEC] {sig.get('pair')}: style={recomputed['pip_mode']}, "
+            f"ATR={recomputed['atr']:.6f}, SL={lvl['sl']:.6f}, TP1={lvl['tp1']:.6f}"
+        )
+    except ValueError as _svc_err:
+        # Last resort fallback to Engine B structural levels when ATR cannot be derived.
+        if "recommended_stop_loss" in engine_b and engine_b["recommended_stop_loss"]:
+            sig["sl"] = engine_b["recommended_stop_loss"]
+        if "recommended_take_profit" in engine_b and engine_b["recommended_take_profit"]:
+            sig["tp1"] = engine_b["recommended_take_profit"]
+            sig["tp2"] = engine_b["recommended_take_profit"]
+        log.warning(
+            f"[QUICK EXEC] {sig.get('pair')}: style={pip_mode} level service fallback ({_svc_err})"
+        )
 
     is_crypto = sig.get("type") == "crypto"
 
@@ -8581,19 +8566,15 @@ def api_quick_execute():
                 except Exception:
                     pass
             try:
-                with sqlite3.connect(_AUDIT_DB, timeout=15.0) as _con:
-                    _con.execute(
-                        "INSERT INTO audit_log(ts,pair,score,direction,style,grade,error_tag) VALUES(?,?,?,?,?,?,?)",
-                        (
-                            datetime.now(timezone.utc).isoformat(),
-                            pair_name,
-                            sig.get("confluenceScore", 0),
-                            sig.get("direction"),
-                            pip_mode or "structural",
-                            "MANUAL-ERR",
-                            approval.reason,
-                        ),
-                    )
+                insert_manual_error(
+                    _AUDIT_DB,
+                    ts=datetime.now(timezone.utc).isoformat(),
+                    pair=pair_name,
+                    score=sig.get("confluenceScore", 0),
+                    direction=sig.get("direction"),
+                    style=pip_mode or "structural",
+                    error_tag=approval.reason,
+                )
             except Exception as _e:
                 log.warning(f"[QUICK EXEC] Failed to log rejection to audit_db: {_e}")
             return jsonify({"error": err_msg}), 400
@@ -10328,59 +10309,22 @@ def api_backtest():
 
     try:
         d = request.get_json(force=True, silent=True) or {}
-
-        # S1: Validate symbol if provided
-
-        sym = d.get("symbol")
-
-        _bt_style = _normalize_style(d.get("style", "auto"))
-
-        _allow_bt_toggle = bool(CONFIG.get("BT_AUTO_TOGGLE", False))
-
-        if sym:
-            if not isinstance(sym, str):
-                return jsonify({"error": "Invalid symbol"}), 400
-
-            pair = next((p for p in ALL_PAIRS if p["symbol"] == sym), None)
-
-            if not pair:
-                return jsonify({"error": "Unknown symbol"}), 404
-
-            result = backtest_pair(pair, style=_bt_style)
-
-            if _allow_bt_toggle:
-                toggle = _auto_toggle_pair(pair, result)
-
-                if toggle:
-                    result["autoToggle"] = toggle
-
-            result["activePairs"] = len(ACTIVE_PAIRS)
-
-            return jsonify(_json_safe(result))
-
-        # Full backtest â€” optional asset_class filter (crypto/forex/stock/commodity/index)
-
-        full = run_full_backtest(style=_bt_style, asset_class=d.get("asset_class"))
-
-        toggles = []
-
-        if _allow_bt_toggle:
-            for r in full.get("results", []):
-                p = next((p for p in ALL_PAIRS if p["symbol"] == r.get("symbol")), None)
-
-                if p:
-                    t = _auto_toggle_pair(p, r)
-
-                    if t:
-                        toggles.append(
-                            {"pair": r["pair"], "action": t, "sqn": r["sqn"]}
-                        )
-
-        full["autoToggles"] = toggles
-
-        full["activePairs"] = len(ACTIVE_PAIRS)
-
-        return jsonify(_json_safe(full))
+        out = api_backtest_impl(
+            d,
+            service_handle=lambda payload: handle_backtest_request(
+                payload,
+                normalize_style=_normalize_style,
+                all_pairs=ALL_PAIRS,
+                backtest_pair=backtest_pair,
+                run_full_backtest=run_full_backtest,
+                auto_toggle_pair=_auto_toggle_pair,
+                active_pairs=ACTIVE_PAIRS,
+                allow_auto_toggle=bool(CONFIG.get("BT_AUTO_TOGGLE", False)),
+            ),
+        )
+        if out.get("error"):
+            return jsonify({"error": out["error"]}), out.get("status", 400)
+        return jsonify(_json_safe(out.get("data", {}))), out.get("status", 200)
 
     except Exception as e:
         # S2: Sanitise exception
@@ -12048,6 +11992,57 @@ def _outcome_monitor_loop() -> None:
             log.debug(f"[MONITOR] loop error: {e}")
 
 
+def _mt5_deals_for_audit_ticket(_mt5_lib, ticket_int: int):
+    """All history deals for a closed row. Prefer position= (stable across partials/closes).
+
+    Stored ticket may be position id (preferred) or legacy opening *order* id — both are handled.
+    """
+
+    deals = _mt5_lib.history_deals_get(position=ticket_int)
+    if not deals:
+        by_order = _mt5_lib.history_deals_get(ticket=ticket_int)
+        if by_order:
+            pids = {
+                int(d.position_id)
+                for d in by_order
+                if getattr(d, "position_id", 0) not in (None, 0)
+            }
+            for pid in pids:
+                expanded = _mt5_lib.history_deals_get(position=pid)
+                if expanded:
+                    deals = expanded
+                    break
+            if not deals and pids:
+                pid = max(pids)
+                deals = _mt5_lib.history_deals_get(position=pid)
+    if not deals:
+        from_dt = datetime.now(timezone.utc) - timedelta(days=90)
+        to_dt = datetime.now(timezone.utc)
+        raw = _mt5_lib.history_deals_get(
+            int(from_dt.timestamp()),
+            int(to_dt.timestamp()),
+        )
+        if raw:
+            related = [
+                d
+                for d in raw
+                if int(getattr(d, "position_id", 0) or 0) == ticket_int
+                or int(getattr(d, "order", 0) or 0) == ticket_int
+            ]
+            if related:
+                pids = {
+                    int(d.position_id)
+                    for d in related
+                    if getattr(d, "position_id", 0) not in (None, 0)
+                }
+                if len(pids) == 1:
+                    pid = next(iter(pids))
+                    deals = _mt5_lib.history_deals_get(position=pid) or related
+                else:
+                    deals = related
+    return list(deals) if deals else []
+
+
 def _check_mt5_outcomes() -> None:
     """Check MT5 for positions that have closed since last check."""
 
@@ -12085,35 +12080,25 @@ def _check_mt5_outcomes() -> None:
             if ticket_str in open_tickets:
                 continue  # still open
 
-            # Position closed â€” look up deal history
+            # Position closed — look up deal history
 
             try:
                 ticket_int = int(ticket_str)
 
-                deals = _mt5_lib.history_deals_get(ticket=ticket_int)
-
-                if not deals:
-                    # Broader search: last 30 days
-
-                    from_dt = datetime.now(timezone.utc) - timedelta(days=30)
-
-                    deals = _mt5_lib.history_deals_get(
-                        int(from_dt.timestamp()),
-                        int(datetime.now(timezone.utc).timestamp()),
-                    )
-
-                    deals = [d for d in (deals or []) if d.position_id == ticket_int]
+                deals = _mt5_deals_for_audit_ticket(_mt5_lib, ticket_int)
 
                 if deals:
-                    close_deal = sorted(deals, key=lambda d: d.time)[-1]
+                    deals_sorted = sorted(deals, key=lambda d: d.time)
+                    close_deal = deals_sorted[-1]
+                    total_profit = sum(float(d.profit) for d in deals_sorted)
 
                     _update_trade_outcome(
                         ticket=ticket_str,
-                        exit_price=close_deal.price,
+                        exit_price=float(close_deal.price),
                         exit_time=datetime.fromtimestamp(
                             close_deal.time, tz=timezone.utc
                         ).isoformat(),
-                        pnl=close_deal.profit,
+                        pnl=total_profit,
                         entry_price=row["entry_price"],
                         sl=row["sl"],
                         tp=row["tp"],
@@ -12156,8 +12141,6 @@ def _check_ccxt_outcomes() -> None:
             if isinstance(_pos_resp, dict)
             else (_pos_resp or [])
         )
-
-        open_symbols = {p["symbol"] for p in positions}
 
         # ── Breakeven trailing stop at 1R ──────────────────────────────────
 
@@ -12235,6 +12218,8 @@ def _check_ccxt_outcomes() -> None:
             except Exception as e:
                 log.debug(f"[MONITOR] breakeven check error: {e}")
 
+        from collections import defaultdict
+
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
 
@@ -12244,70 +12229,89 @@ def _check_ccxt_outcomes() -> None:
                 "AND pair LIKE '%USDT%'"
             ).fetchall()
 
+        by_sym: dict = defaultdict(list)
         for row in pending:
-            # pair is stored as "BTC/USDT"; map to ccxt format via internal map
-
             pair_raw = row["pair"] or ""
-
             ccxt_sym = _bybit_mod.bybit_map_symbol(
                 pair_raw
             ) or _bybit_mod.bybit_map_symbol(pair_raw.replace("/", ""))
-
             if not ccxt_sym:
                 continue
+            by_sym[ccxt_sym].append({k: row[k] for k in row.keys()})
 
-            if ccxt_sym in open_symbols:
-                continue  # still holding
+        until_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
-            try:
-                trades = exchange.fetch_my_trades(ccxt_sym, limit=10)
+        for ccxt_sym, rows in by_sym.items():
+            sym_open = [p for p in positions if p.get("symbol") == ccxt_sym]
+            rows_to_close = []
+            for row in rows:
+                if _bybit_mod.bybit_audit_row_still_open(row, sym_open):
+                    continue
+                rows_to_close.append(row)
+            if not rows_to_close:
+                continue
 
-                if trades:
-                    last_trade = sorted(trades, key=lambda t: t["timestamp"])[-1]
+            min_ts = min(
+                _bybit_mod.bybit_audit_ts_to_ms(r.get("ts")) or 0
+                for r in rows_to_close
+            )
+            since_ms = max(0, min_ts - 120_000)
+            history = _bybit_mod.bybit_fetch_closed_positions_history(
+                exchange, ccxt_sym, since_ms, until_ms, limit=100
+            )
+            used_keys: set = set()
 
-                    # P&L: (exit - entry) * size for LONG, (entry - exit) * size for SHORT
-
-                    exit_px = float(last_trade.get("price") or 0)
-
-                    entry_px = float(row["entry_price"] or 0)
-
-                    vol = float(row["volume"] or last_trade.get("amount") or 0)
-
-                    direction = (row["direction"] or "").upper()
-
-                    if exit_px and entry_px and vol:
-                        if direction == "SHORT":
-                            pnl_est = (entry_px - exit_px) * vol
-
-                        else:  # LONG or unknown
-                            pnl_est = (exit_px - entry_px) * vol
-
-                        pnl_est = round(pnl_est, 4)
-
-                    else:
-                        pnl_est = round(
-                            float(last_trade.get("info", {}).get("realizedPnl") or 0), 4
-                        )
-
-                    _update_trade_outcome(
-                        ticket=str(row["ticket"]),
-                        exit_price=exit_px,
-                        exit_time=last_trade.get(
-                            "datetime", datetime.now(timezone.utc).isoformat()
-                        ),
-                        pnl=pnl_est,
-                        entry_price=row["entry_price"],
-                        sl=row["sl"],
-                        tp=row["tp"],
-                        volume=row["volume"],
-                        entry_ts=row["ts"],
-                        risk_amount=float(row["risk_amount"])
-                        if row["risk_amount"]
-                        else None,
+            for row in sorted(rows_to_close, key=lambda r: r.get("ts") or ""):
+                try:
+                    matched = _bybit_mod.bybit_match_closed_history_row(
+                        row, history, used_keys
                     )
-
-            except Exception as e:
-                log.debug(f"[MONITOR] Bybit trade lookup failed for {row['pair']}: {e}")
+                    if not matched:
+                        matched = _bybit_mod.bybit_match_closed_history_row(
+                            row,
+                            history,
+                            used_keys,
+                            entry_tol=0.035,
+                            vol_tol=0.09,
+                        )
+                    exit_px = 0.0
+                    exit_iso = ""
+                    pnl_est = 0.0
+                    if matched:
+                        exit_px, exit_iso, pnl_est = (
+                            _bybit_mod.bybit_closed_row_to_outcome(matched)
+                        )
+                    if (not matched) or exit_px <= 0:
+                        fb = _bybit_mod.bybit_fallback_outcome_from_trades(
+                            exchange, ccxt_sym, row
+                        )
+                        if fb:
+                            exit_px, exit_iso, pnl_est = fb
+                    if exit_px > 0 and exit_iso:
+                        _update_trade_outcome(
+                            ticket=str(row["ticket"]),
+                            exit_price=exit_px,
+                            exit_time=exit_iso,
+                            pnl=round(float(pnl_est), 4),
+                            entry_price=row["entry_price"],
+                            sl=row["sl"],
+                            tp=row["tp"],
+                            volume=row["volume"],
+                            entry_ts=row["ts"],
+                            risk_amount=float(row["risk_amount"])
+                            if row["risk_amount"]
+                            else None,
+                        )
+                        log.info(
+                            "[MONITOR] Bybit outcome: %s ticket=%s pnl=%s",
+                            row.get("pair"),
+                            row.get("ticket"),
+                            round(float(pnl_est), 4),
+                        )
+                except Exception as e:
+                    log.debug(
+                        f"[MONITOR] Bybit outcome failed for {row.get('pair')}: {e}"
+                    )
 
     except Exception as e:
         log.debug(f"[MONITOR] Bybit outcome check failed: {e}")

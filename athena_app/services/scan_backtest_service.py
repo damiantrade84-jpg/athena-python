@@ -1,0 +1,58 @@
+"""Scan/backtest request orchestration extracted from athena.py."""
+
+from __future__ import annotations
+
+from typing import Callable
+
+
+def handle_scan_request(payload: dict, *, run_full_scan: Callable) -> dict:
+    """Build scan request contract and run scan."""
+    return run_full_scan(
+        style=payload.get("style", "auto"),
+        asset_class=payload.get("asset_class"),
+    )
+
+
+def handle_backtest_request(
+    payload: dict,
+    *,
+    normalize_style: Callable[[str], str],
+    all_pairs: list,
+    backtest_pair: Callable,
+    run_full_backtest: Callable,
+    auto_toggle_pair: Callable,
+    active_pairs: list,
+    allow_auto_toggle: bool,
+) -> dict:
+    """Run pair or full backtest with unchanged output semantics."""
+    bt_style = normalize_style(payload.get("style", "auto"))
+    sym = payload.get("symbol")
+
+    if sym:
+        if not isinstance(sym, str):
+            return {"error": "Invalid symbol", "status": 400}
+        pair = next((p for p in all_pairs if p["symbol"] == sym), None)
+        if not pair:
+            return {"error": "Unknown symbol", "status": 404}
+        result = backtest_pair(pair, style=bt_style)
+        if allow_auto_toggle:
+            toggle = auto_toggle_pair(pair, result)
+            if toggle:
+                result["autoToggle"] = toggle
+        result["activePairs"] = len(active_pairs)
+        return {"data": result, "status": 200}
+
+    full = run_full_backtest(style=bt_style, asset_class=payload.get("asset_class"))
+    toggles = []
+    if allow_auto_toggle:
+        for r in full.get("results", []):
+            p = next((p for p in all_pairs if p["symbol"] == r.get("symbol")), None)
+            if not p:
+                continue
+            t = auto_toggle_pair(p, r)
+            if t:
+                toggles.append({"pair": r["pair"], "action": t, "sqn": r["sqn"]})
+    full["autoToggles"] = toggles
+    full["activePairs"] = len(active_pairs)
+    return {"data": full, "status": 200}
+
