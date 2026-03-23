@@ -13,11 +13,115 @@ from indicators import (
 
 log = logging.getLogger("athena")
 
+_MAJOR_FOREX = {
+    "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"
+}
+_FOREX_CROSSES = {
+    "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/AUD", "GBP/AUD", "EUR/CHF", "USD/SGD"
+}
+_EXOTIC_FOREX = {"USD/ZAR", "USD/MXN"}
+_PRECIOUS_TRACKERS = {"XAU/USD", "XAG/USD", "GLD", "SLV"}
+_ENERGY_OIL = {"WTI Oil", "Brent Oil", "USO", "XLE"}
+_US_INDICES_TRACKERS = {"NASDAQ-100", "S&P 500", "Dow Jones", "SPY", "QQQ"}
+_EU_INDICES = {"DAX 40", "UK100"}
+_ASIAN_INDICES = {"ASX 200", "Nikkei 225", "Hang Seng"}
+_US_STOCK_CUSTOM = {
+    "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "GOOG", "JPM", "V", "XOM",
+    "NFLX", "AMD", "CRM", "DIS", "BA", "COIN", "PYPL", "INTC", "UBER", "PLTR"
+}
+_ALTCOIN_MAJORS = {
+    "SOL/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT", "MATIC/USDT", "BNB/USDT",
+    "DOT/USDT", "LTC/USDT", "SUI/USDT", "NEAR/USDT", "APT/USDT", "INJ/USDT",
+    "FET/USDT", "RENDER/USDT"
+}
+
 
 def get_pair_profile(pair: dict) -> dict:
     """Return pair-specific profile overrides keyed by display or symbol."""
     profiles = CONFIG.get("PAIR_PROFILES", {}) or {}
     return profiles.get(pair.get("display")) or profiles.get(pair.get("symbol")) or {}
+
+
+def get_pair_score_group(pair: dict) -> str:
+    """Resolve subgroup used for scoring and confluence routing."""
+    if pair.get("score_group"):
+        return str(pair.get("score_group"))
+    profile = get_pair_profile(pair)
+    if profile.get("score_group"):
+        return str(profile.get("score_group"))
+
+    display = pair.get("display", "")
+    ptype = pair.get("type", "")
+
+    if ptype == "forex":
+        if display in _MAJOR_FOREX:
+            return "forex_majors"
+        if display in _FOREX_CROSSES:
+            return "forex_crosses"
+        if display in _EXOTIC_FOREX:
+            return "forex_exotics"
+        return "forex_other"
+    if ptype == "crypto":
+        if display == "BTC/USDT":
+            return "crypto_btc"
+        if display == "ETH/USDT":
+            return "crypto_eth"
+        if display == "DOGE/USDT":
+            return "crypto_doge"
+        if display in _ALTCOIN_MAJORS:
+            return "crypto_alt_majors"
+        return "crypto_other"
+    if ptype == "commodity":
+        if display in _PRECIOUS_TRACKERS:
+            return "precious_trackers"
+        if display in _ENERGY_OIL:
+            return "energy_oil"
+        if display == "Nat Gas":
+            return "nat_gas"
+        if display == "Copper":
+            return "copper"
+        if display in {"XPT/USD", "XPD/USD"}:
+            return "pgm_metals"
+        return "commodity_other"
+    if ptype == "index":
+        if display in _US_INDICES_TRACKERS:
+            return "us_indices_trackers"
+        if display in _EU_INDICES:
+            return "eu_indices"
+        if display in _ASIAN_INDICES:
+            return "asian_indices"
+        return "index_other"
+    if ptype == "stock":
+        if display in _US_STOCK_CUSTOM:
+            return "us_stock_single"
+        if display == "TLT":
+            return "bond_tlt"
+        if display in {"IWM", "EEM"}:
+            return "smallcap_em_etf"
+        if display in _PRECIOUS_TRACKERS:
+            return "precious_trackers"
+        if display in _ENERGY_OIL:
+            return "energy_oil"
+        if display in _US_INDICES_TRACKERS:
+            return "us_indices_trackers"
+        return "stock_other"
+    return f"{ptype}_other" if ptype else "unknown"
+
+
+def get_min_confluence_threshold(pair: dict) -> float:
+    """Resolve scan threshold with pair profile, then score-group, then class defaults."""
+    profile = get_pair_profile(pair)
+    if profile.get("min_confluence") is not None:
+        return float(profile.get("min_confluence"))
+
+    ptype = pair.get("type", "")
+    score_group = get_pair_score_group(pair)
+    group_cfg = CONFIG.get("MIN_CONFLUENCE_GROUP", {}) or {}
+    group_threshold = (group_cfg.get(ptype, {}) or {}).get(score_group)
+    if group_threshold is not None:
+        return float(group_threshold)
+
+    return float(CONFIG["MIN_CONFLUENCE_CLASS"].get(ptype, CONFIG["MIN_CONFLUENCE"]))
 
 
 def pair_filter_enabled(pair: dict, filter_name: str) -> bool:
@@ -378,12 +482,7 @@ def _build_event_risk(
 
 def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
     """Return (tier, reason) where tier is 'trade' | 'watchlist' | 'skip'."""
-    threshold = signal.get(
-        "scanThreshold",
-        CONFIG["MIN_CONFLUENCE_CLASS"].get(
-            pair.get("type", ""), CONFIG["MIN_CONFLUENCE"]
-        ),
-    )
+    threshold = signal.get("scanThreshold", get_min_confluence_threshold(pair))
     score = signal.get("confluenceScore", 0)
     hard_event = signal.get("eventRisk", {}).get("hardBlock", False)
     exchange_closed = signal.get("exchangeClosed", False)

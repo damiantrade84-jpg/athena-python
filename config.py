@@ -209,6 +209,37 @@ CONFIG: dict = {
         "stock": 0.70,
         "index": 0.70,
     },
+    # Optional subgroup thresholds (used when score_group is available on a pair).
+    "MIN_CONFLUENCE_GROUP": {
+        "forex": {
+            "forex_majors": 0.60,
+            "forex_crosses": 0.60,
+            "forex_exotics": 0.65,
+        },
+        "crypto": {
+            "crypto_btc": 0.80,
+            "crypto_eth": 0.78,
+            "crypto_doge": 0.85,
+            "crypto_alt_majors": 0.75,
+        },
+        "commodity": {
+            "nat_gas": 0.80,
+            "copper": 0.72,
+            "pgm_metals": 0.75,
+            "precious_trackers": 0.70,
+            "energy_oil": 0.70,
+        },
+        "index": {
+            "asian_indices": 0.75,
+            "us_indices_trackers": 0.70,
+            "eu_indices": 0.70,
+        },
+        "stock": {
+            "us_stock_single": 0.80,
+            "bond_tlt": 0.72,
+            "smallcap_em_etf": 0.75,
+        },
+    },
     # Factor scoring gates — see factor_scoring.py
     "FACTOR_MIN_DIRECTIONAL": 0.25,  # Skip if abs(dir_score) < this (near-directionless signal)
     "REGIME_SMOOTHING_BARS": 3,  # Consecutive bars required before committing to a regime change
@@ -264,6 +295,22 @@ CONFIG: dict = {
             "microstructure": 0.75,
             "carry": 1.0,
         },
+    },
+    # Optional subgroup multipliers for factor-group weights (Engine A non-forex).
+    "FACTOR_SCORE_GROUP_MULTIPLIERS": {
+        "us_stock_single": {"volatility": 1.2, "volume": 1.2, "momentum": 0.9},
+        "bond_tlt": {"trend": 0.8, "volatility": 1.2, "carry": 1.3},
+        "smallcap_em_etf": {"volatility": 1.2, "momentum": 1.1},
+        "asian_indices": {"volatility": 1.15, "momentum": 1.1},
+        "energy_oil": {"volatility": 1.15, "structure": 1.1},
+        "precious_trackers": {"structure": 1.1, "volatility": 1.1},
+        "nat_gas": {"volatility": 1.35, "structure": 1.15},
+        "copper": {"trend": 1.1, "structure": 1.15},
+        "pgm_metals": {"volatility": 1.2, "structure": 1.15},
+        "crypto_btc": {"derivatives": 1.2, "microstructure": 1.15},
+        "crypto_eth": {"derivatives": 1.15, "microstructure": 1.1},
+        "crypto_doge": {"volatility": 1.4, "microstructure": 1.25},
+        "crypto_alt_majors": {"derivatives": 1.1, "microstructure": 1.1},
     },
     # Regime-aware factor weight overrides
     "REGIME_WEIGHTS": {
@@ -430,6 +477,24 @@ CONFIG: dict = {
                 "require_macro_align": True,
             },
         },
+        # Optional subgroup-level Engine B strictness overrides by style.
+        "score_group_overrides": {
+            "forex_exotics": {
+                "scalp": {"min_room_atr": 0.5, "min_rr": 1.2},
+                "intraday": {"min_room_atr": 0.85, "min_rr": 1.35},
+                "swing": {"min_room_atr": 1.2, "min_rr": 1.8},
+            },
+            "nat_gas": {
+                "scalp": {"min_rr": 1.4},
+                "intraday": {"min_rr": 1.6},
+                "swing": {"min_rr": 2.0},
+            },
+            "crypto_doge": {
+                "scalp": {"min_room_atr": 0.5, "min_rr": 1.3},
+                "intraday": {"min_room_atr": 0.9, "min_rr": 1.5},
+                "swing": {"min_room_atr": 1.2, "min_rr": 1.9},
+            },
+        },
     },
     "FOREX_ENGINE": {
         "trend_gate_adx_min": 20.0,
@@ -439,6 +504,26 @@ CONFIG: dict = {
             "momentum": 0.15,
             "adx": 0.10,
             "carry": 0.05,
+        },
+        "score_group_adjustments": {
+            "forex_majors": {
+                "momentum_mult": 1.0,
+                "adx_mult": 1.0,
+                "carry_mult": 1.0,
+                "score_mult": 1.0,
+            },
+            "forex_crosses": {
+                "momentum_mult": 1.1,
+                "adx_mult": 1.05,
+                "carry_mult": 0.85,
+                "score_mult": 1.0,
+            },
+            "forex_exotics": {
+                "momentum_mult": 1.15,
+                "adx_mult": 1.15,
+                "carry_mult": 0.9,
+                "score_mult": 0.95,
+            },
         },
     },
 }

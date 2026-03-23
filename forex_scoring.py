@@ -472,6 +472,7 @@ def compute_forex_score(
     backtest_mode: bool = False,
     h4_candles: Optional[list] = None,
     rsi_history_override: Optional[list] = None,
+    score_group: Optional[str] = None,
 ) -> ForexScoreResult:
     """
     Updated with 3 new 2026 SMC edges:
@@ -518,10 +519,25 @@ def compute_forex_score(
         fx_cfg = CONFIG.get("FOREX_ENGINE", {}) or {}
         trend_support_weights = fx_cfg.get("trend_support_weights", {}) or {}
     except Exception:
+        fx_cfg = {}
         trend_support_weights = {}
     momentum_w = float(trend_support_weights.get("momentum", 0.15))
     adx_w = float(trend_support_weights.get("adx", 0.10))
     carry_w = float(trend_support_weights.get("carry", 0.05))
+
+    # Optional subgroup-level scoring adjustments.
+    _sg = score_group or pair.get("score_group")
+    _sg_cfg = (
+        ((fx_cfg or {}).get("score_group_adjustments", {}) or {}).get(_sg, {})
+        if isinstance(_sg, str) and _sg
+        else {}
+    )
+    try:
+        momentum_w *= float(_sg_cfg.get("momentum_mult", 1.0))
+        adx_w *= float(_sg_cfg.get("adx_mult", 1.0))
+        carry_w *= float(_sg_cfg.get("carry_mult", 1.0))
+    except Exception:
+        pass
 
     if not session_ok:
         log.info(
@@ -620,6 +636,12 @@ def compute_forex_score(
         result.signal_type = "LONDON_BREAKOUT"
 
     result.final_score = min(1.0, final_score)  # keep 0–1 scale
+    try:
+        result.final_score = max(
+            0.0, min(1.0, float(result.final_score) * float(_sg_cfg.get("score_mult", 1.0)))
+        )
+    except Exception:
+        pass
 
     result.components = {
         "trend_gate": trend_ok,

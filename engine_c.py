@@ -100,7 +100,7 @@ def normalise_engine_a(signal_a: dict) -> dict:
         and signal_a.get("direction") in ("LONG", "SHORT"),
         "cot_active": bool(signal_a.get("votes", {}).get("derivatives")),
         "carry_active": bool(signal_a.get("votes", {}).get("carry")),
-        "style": signal_a.get("tradeStyle", "swing"),
+        "style": signal_a.get("style", signal_a.get("tradeStyle", "swing")),
     }
 
 

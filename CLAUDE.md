@@ -1,5 +1,55 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-23) — Scoring Group Audit (Engine A + B + C)
+
+**Scoring subgroup routing (separate from ATR style):**
+- Added `get_pair_score_group(pair)` in `scoring.py` to resolve subgroup identity used for confluence/scoring routing.
+- Added `get_min_confluence_threshold(pair)` in `scoring.py` with priority:
+  1) `PAIR_PROFILES[...].min_confluence`
+  2) `MIN_CONFLUENCE_GROUP[type][score_group]`
+  3) `MIN_CONFLUENCE_CLASS[type]`
+- `run_full_scan()` now uses `get_min_confluence_threshold(pair)` (instead of class-only fallback), and `_classify_signal()` uses the same resolver when `scanThreshold` is missing.
+
+**Engine A subgroup alignment:**
+- `analyze_pair()` now computes `scoreGroup` per pair and includes it in returned signals.
+- Forex path now passes `score_group` into `compute_forex_score(...)`.
+- Forex scoring failure no longer falls back to factor scoring; the pair is skipped to avoid cross-engine contamination.
+- Forex regime for TP/SL is now detected from H4 snapshots (`detect_regime`) and used in `res["regime"]["state"]` so style ATR widening/tightening is not hardcoded to ranging.
+
+**Factor engine subgroup controls:**
+- Added `_apply_pair_profile_weight_rules(...)` in `factor_scoring.py`:
+  - Maps legacy pair-profile vote overrides (`h4_fib`, `h1_bb`, etc.) into factor-group weight adjustments.
+  - Applies optional `FACTOR_SCORE_GROUP_MULTIPLIERS[score_group]`.
+- This restores practical influence of pair profile weighting on the current factor engine.
+
+**Engine B subgroup controls:**
+- `_naked_scan_style_profile(style, score_group=None)` now supports subgroup-specific strictness overrides via:
+  - `CONFIG["NAKED_ENGINE"]["score_group_overrides"][score_group][style]`.
+- Major Engine B call paths now pass subgroup context (scan, compare, naked analysis, backtest, overlay, Engine C scan).
+- Engine B scalp remains a distinct backend profile (not auto-promoted to intraday in the generic style resolver).
+
+**New config defaults (config.py):**
+- Added `MIN_CONFLUENCE_GROUP` for subgroup-specific scan gates.
+- Added `FACTOR_SCORE_GROUP_MULTIPLIERS` for subgroup-specific factor weighting.
+- Added `FOREX_ENGINE.score_group_adjustments` for subgroup multipliers on forex scoring components.
+- Added `NAKED_ENGINE.score_group_overrides` for subgroup/style-specific Engine B checklist strictness.
+
+**Tests added:**
+- `tests/test_scoring_group_routing.py` — subgroup mapping + threshold resolution + forex scorer source hooks.
+- `tests/test_factor_group_overrides.py` — pair-profile and subgroup factor-weight adjustments.
+- `tests/test_style_level_consistency.py` — style-level recompute parity and Engine C style metadata.
+- `tests/test_market_specific_contracts.py` — TP1/TP2 ordering and subgroup guardrails.
+
+**Migration checklist (config-only rollout):**
+- **Step 1 — Assign subgroups:** In `PAIR_PROFILES`, set `score_group` for pairs that need explicit routing (or rely on built-in defaults from `get_pair_score_group`).
+- **Step 2 — Gate thresholds first:** Populate `MIN_CONFLUENCE_GROUP` by asset class + subgroup; keep values close to existing `MIN_CONFLUENCE_CLASS` on day one, then tune incrementally.
+- **Step 3 — Tune Engine A weights:** Use `FACTOR_SCORE_GROUP_MULTIPLIERS` to adjust factor groups per subgroup before changing core factor logic.
+- **Step 4 — Tune forex subgroup behavior:** Use `FOREX_ENGINE.score_group_adjustments` for majors/crosses/exotics rather than hardcoding pair-level branches.
+- **Step 5 — Tune Engine B strictness:** Use `NAKED_ENGINE.score_group_overrides` per subgroup and style (`scalp`/`intraday`/`swing`) for `min_score`, `min_rr`, `min_room_atr`.
+- **Step 6 — Keep ATR logic separate:** Style ATR (`STYLE_ATR_MULTS` / `LEVEL_ATR_PRIORITY`) should be tuned independently from scoring subgroup thresholds.
+- **Step 7 — Validate before widening:** Run targeted tests (`test_scoring_group_routing.py`, `test_factor_group_overrides.py`, style/contract suites) before enabling broad live changes.
+- **Step 8 — Observe and iterate:** Start with stricter gates for noisy subgroups (exotics, DOGE, nat gas), then relax only with evidence from audit/backtest logs.
+
 ## Recent Changes (2026-03-23) — ATR Recalibration & Per-Style AI Ratings
 
 **ATR TP/SL Benchmark Recalibration:**

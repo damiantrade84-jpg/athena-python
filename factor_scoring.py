@@ -24,6 +24,65 @@ from regime import detect_regime
 log = logging.getLogger("athena")
 
 
+def _pair_profile(pair: dict) -> dict:
+    profiles = CONFIG.get("PAIR_PROFILES", {}) or {}
+    return profiles.get(pair.get("display")) or profiles.get(pair.get("symbol")) or {}
+
+
+def _legacy_vote_to_factor(vote_key: str) -> str | None:
+    mapping = {
+        "d1_trend": "trend",
+        "h1_ema": "trend",
+        "d1_adx": "trend_strength",
+        "h4_macd": "momentum",
+        "h4_oscillator": "momentum",
+        "volume": "volume",
+        "funding": "derivatives",
+        "h4_fib": "structure",
+        "h1_bb": "volatility",
+        "divergence": "momentum",
+    }
+    return mapping.get(str(vote_key).strip().lower())
+
+
+def _apply_pair_profile_weight_rules(pair: dict, weights: dict) -> dict:
+    profile = _pair_profile(pair)
+    out = dict(weights)
+
+    # Disabled legacy votes become zero-weight factor groups.
+    for vote in set(profile.get("disabled_votes", []) or []):
+        factor = _legacy_vote_to_factor(vote)
+        if factor and factor in out:
+            out[factor] = 0.0
+
+    # Legacy overrides are interpreted as multipliers on factor-group weights.
+    for vote, mult in (profile.get("weight_overrides", {}) or {}).items():
+        factor = _legacy_vote_to_factor(vote)
+        if not factor or factor not in out:
+            continue
+        try:
+            out[factor] = max(0.0, float(out[factor]) * float(mult))
+        except (TypeError, ValueError):
+            continue
+
+    # Optional direct factor-group multipliers by score subgroup.
+    score_group = pair.get("score_group")
+    if score_group:
+        group_mults = (
+            (CONFIG.get("FACTOR_SCORE_GROUP_MULTIPLIERS", {}) or {}).get(score_group, {})
+            or {}
+        )
+        for factor, mult in group_mults.items():
+            if factor not in out:
+                continue
+            try:
+                out[factor] = max(0.0, float(out[factor]) * float(mult))
+            except (TypeError, ValueError):
+                continue
+
+    return out
+
+
 def _dynamic_regime_weights(
     factor_scores: dict, recent_momentum: float, regime: str
 ) -> dict:
@@ -541,6 +600,8 @@ def compute_factor_scores(
         base_w = base_weights.get(wk, 1.0)
         # If base weight is 0 (asset class disables this factor), regime cannot override
         weights[factor] = 0.0 if base_w == 0 else regime_weights.get(wk, base_w)
+
+    weights = _apply_pair_profile_weight_rules(pair, weights)
 
     # Adaptive weight blending — adjust weights based on empirical factor performance
     # Only applies when learning_log has enough data (30+ trades for the asset class).

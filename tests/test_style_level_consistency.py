@@ -1,0 +1,97 @@
+"""Unit tests for style-aware TP/SL consistency paths."""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from athena_app.services.candle_service import recompute_levels_for_style
+from engine_c import normalise_engine_a
+from indicators import calc_levels
+
+
+def test_calc_levels_uses_style_multipliers():
+    price = 100.0
+    atr = 2.0
+    pair_type = "forex"
+
+    scalp = calc_levels(price, atr, "LONG", pair_type, regime_state=1, style="scalp")
+    intraday = calc_levels(
+        price, atr, "LONG", pair_type, regime_state=1, style="intraday"
+    )
+    swing = calc_levels(price, atr, "LONG", pair_type, regime_state=1, style="swing")
+
+    scalp_risk = abs(price - scalp["sl"])
+    intraday_risk = abs(price - intraday["sl"])
+    swing_risk = abs(price - swing["sl"])
+
+    assert scalp_risk < intraday_risk < swing_risk
+    assert scalp["tp2"] < intraday["tp2"] < swing["tp2"]
+
+
+def test_recompute_levels_for_style_trims_forming_bars_and_maps_regime():
+    pair_obj = {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}
+    sig = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "price": 1.1000,
+        "regime": {"label": "HIGH_VOLATILITY"},
+    }
+
+    d1 = [{"close": 1.0}] * 10
+    h4 = [{"close": 1.0}] * 10
+    h1 = [{"close": 1.0}] * 10
+
+    captured = {"indicator_calls": [], "atr_style": None, "regime_state": None}
+
+    def _resolve_pair(_sig):
+        return pair_obj
+
+    def _fetch(_pair, tf, _limit):
+        return {"D1": d1, "H4": h4, "H1": h1}[tf]
+
+    def _calc_indicators_with_normalized(candles, pair_type):
+        captured["indicator_calls"].append((len(candles), pair_type))
+        return {"snap": {"atr": 0.0012, "close": candles[-1]["close"]}}
+
+    def _atr_for_levels(_d1i, _h4i, _h1i, **kwargs):
+        captured["atr_style"] = kwargs.get("style")
+        return 0.0012
+
+    def _calc_levels(_price, _atr, _direction, _ptype, regime_state=None, style="swing"):
+        captured["regime_state"] = regime_state
+        return {"sl": 1.09, "tp1": 1.11, "tp2": 1.12, "rr1": 1.0, "rr2": 2.0}
+
+    out = recompute_levels_for_style(
+        sig,
+        "intraday",
+        resolve_pair_from_signal=_resolve_pair,
+        fetch_candles=_fetch,
+        calc_indicators_with_normalized=_calc_indicators_with_normalized,
+        atr_for_levels=_atr_for_levels,
+        calc_levels=_calc_levels,
+        config={"D1_CANDLES": 10, "H4_CANDLES": 10, "H1_CANDLES": 10},
+    )
+
+    assert out["pip_mode"] == "intraday"
+    assert captured["atr_style"] == "intraday"
+    assert captured["regime_state"] == 2  # HIGH_VOLATILITY
+    assert captured["indicator_calls"] == [
+        (9, "forex"),
+        (9, "forex"),
+        (9, "forex"),
+    ]
+
+
+def test_engine_c_normalise_engine_a_prefers_style_field():
+    norm = normalise_engine_a(
+        {
+            "confluenceScore": 1.2,
+            "maxScore": 3.0,
+            "confluencePct": 40,
+            "direction": "LONG",
+            "style": "intraday",
+            "tradeStyle": "swing",
+        }
+    )
+    assert norm["style"] == "intraday"

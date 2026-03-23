@@ -3352,6 +3352,8 @@ from scoring import (  # noqa: E402
     detect_div,
     apply_correlation_cap,
     get_pair_profile,
+    get_pair_score_group,
+    get_min_confluence_threshold,
     pair_filter_enabled,
     _pair_exchange_closed,
     _build_event_risk,
@@ -3593,10 +3595,15 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
                 # ── Run Engine B for combined scoring ──
                 ptype = pair.get("type", "")
                 try:
-                    resolved_style_b, style_profile_b = _naked_scan_style_profile(_pair_style)
+                    _pair_score_group = get_pair_score_group(pair)
+                    resolved_style_b, style_profile_b = _naked_scan_style_profile(
+                        _pair_style, score_group=_pair_score_group
+                    )
                     _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
                     if ptype == "forex" and _forex_struct_tf == "D1" and resolved_style_b == "intraday":
-                        resolved_style_b, style_profile_b = _naked_scan_style_profile("swing")
+                        resolved_style_b, style_profile_b = _naked_scan_style_profile(
+                            "swing", score_group=_pair_score_group
+                        )
 
                     d1 = fetch_candles(pair, "D1", CONFIG.get("D1_CANDLES", 250))
                     h4 = fetch_candles(pair, "H4", CONFIG.get("H4_CANDLES", 250))
@@ -3711,12 +3718,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict:
 
                     continue
 
-                threshold = get_pair_profile(pair).get(
-                    "min_confluence",
-                    CONFIG["MIN_CONFLUENCE_CLASS"].get(
-                        pair["type"], CONFIG["MIN_CONFLUENCE"]
-                    ),
-                )
+                threshold = get_min_confluence_threshold(pair)
 
                 if _test_mode:
                     threshold = max(
@@ -7072,11 +7074,16 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
     candles_h1 = candles_h1[:-1] if len(candles_h1) > 1 else candles_h1
 
     requested_style = "auto" if style == "naked" else style
-    resolved_style, style_profile = _naked_scan_style_profile(requested_style)
+    _pair_score_group = get_pair_score_group(pair)
+    resolved_style, style_profile = _naked_scan_style_profile(
+        requested_style, score_group=_pair_score_group
+    )
     _pair_type = pair.get("type", "stock")
     _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
     if _pair_type == "forex" and _forex_struct_tf == "D1" and resolved_style == "intraday":
-        resolved_style, style_profile = _naked_scan_style_profile("swing")
+        resolved_style, style_profile = _naked_scan_style_profile(
+            "swing", score_group=_pair_score_group
+        )
         log.info(f"[ENGINE B BT] {pair['display']}: forex D1 structure → auto-promoted to swing style")
     log.info(
         f"[ENGINE B BT] {pair['display']} running: "
@@ -8019,15 +8026,12 @@ def _resolve_pair_from_signal(sig: dict) -> dict | None:
     }
 
 
-def _naked_scan_style_profile(style: str | None) -> tuple[str, dict]:
+def _naked_scan_style_profile(
+    style: str | None, score_group: str | None = None
+) -> tuple[str, dict]:
     resolved = _normalize_style(style)
     if resolved == "auto":
         resolved = "intraday"  # Engine B walks H4 bars — intraday is the natural default
-    # Engine B uses structural SL behind swing highs/lows — true scalping not viable
-    # on H1/H4 structure (swings are 30-60 pips apart). Promote to intraday.
-    if resolved == "scalp":
-        resolved = "intraday"
-        log.info("[NAKED] Scalp promoted to intraday — Engine B structural stops too wide for scalp targets")
     profiles = {
         "scalp": {
             "min_score": 0.9,
@@ -8067,7 +8071,20 @@ def _naked_scan_style_profile(style: str | None) -> tuple[str, dict]:
         cfg_override = cfg_profiles.get(profile_name, {})
         if isinstance(cfg_override, dict):
             merged_profiles[profile_name].update(cfg_override)
-    return resolved, merged_profiles.get(resolved, merged_profiles["scalp"])
+    resolved_profile = merged_profiles.get(resolved, merged_profiles["scalp"])
+
+    # Optional subgroup-level profile overrides for Engine B strictness.
+    if score_group:
+        group_overrides = (
+            ((CONFIG.get("NAKED_ENGINE", {}) or {}).get("score_group_overrides", {}) or {})
+            .get(score_group, {})
+        )
+        if isinstance(group_overrides, dict):
+            style_override = group_overrides.get(resolved, {})
+            if isinstance(style_override, dict):
+                resolved_profile = {**resolved_profile, **style_override}
+
+    return resolved, resolved_profile
 
 
 def _engine_b_regime_label(
@@ -8272,11 +8289,16 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             log.warning(f"Failed to fetch AI learning context for Naked Analysis: {e}")
             learning_ctx = None
 
-        resolved_style, style_profile = _naked_scan_style_profile(sig.get("style", "auto"))
+        _pair_score_group = get_pair_score_group(pair_obj)
+        resolved_style, style_profile = _naked_scan_style_profile(
+            sig.get("style", "auto"), score_group=_pair_score_group
+        )
         _pair_type = pair_obj.get("type", "")
         _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
         if _pair_type == "forex" and _forex_struct_tf == "D1" and resolved_style == "intraday":
-            resolved_style, style_profile = _naked_scan_style_profile("swing")
+            resolved_style, style_profile = _naked_scan_style_profile(
+                "swing", score_group=_pair_score_group
+            )
         # Determine correct entry candles based on forex structure timeframe
         _entry_candles = h4 if (_pair_type == "forex" and _forex_struct_tf == "D1") else h1
         conf = engine.calculate_confidence(
@@ -8397,7 +8419,10 @@ def api_compare_engines():
 
     requested_style = d.get("style") or sig.get("style") or "auto"
     engine_a_style = _resolve_scan_style(_normalize_style(requested_style), pair_obj)
-    engine_b_style, engine_b_profile = _naked_scan_style_profile(requested_style)
+    _pair_score_group = get_pair_score_group(pair_obj)
+    engine_b_style, engine_b_profile = _naked_scan_style_profile(
+        requested_style, score_group=_pair_score_group
+    )
 
     try:
         btc_bias = (
@@ -8480,7 +8505,7 @@ def api_quick_execute():
             pip_mode,
             resolve_pair_from_signal=_resolve_pair_from_signal,
             fetch_candles=fetch_candles,
-            calc_indicators=calc_indicators,
+            calc_indicators_with_normalized=calc_indicators_with_normalized,
             atr_for_levels=_atr_for_levels,
             calc_levels=calc_levels,
             config=CONFIG,
@@ -8678,10 +8703,8 @@ def api_quick_execute():
 def api_scan_naked():
     d = request.json or {}
     asset_class = d.get("assetClass", "crypto").lower()
-    resolved_style, style_profile = _naked_scan_style_profile(d.get("style", "auto"))
+    requested_style = d.get("style", "auto")
     _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
-    if asset_class == "forex" and _forex_struct_tf == "D1" and resolved_style == "intraday":
-        resolved_style, style_profile = _naked_scan_style_profile("swing")
 
     candidate_pairs = [
         p
@@ -8713,18 +8736,29 @@ def api_scan_naked():
         # Cache miss — call normal fetch_candles (will populate cache for next time)
         return fetch_candles(pair, tf, limit)
 
-    # Determine which timeframes this style needs
-    _zone_tf = style_profile.get("zone_tf", "H4")
-    _entry_tf = style_profile.get("entry_tf", "H1")
-    _atr_tf = style_profile.get("atr_tf", "H4")
-    _needed_tfs = list(
-        {_zone_tf, _entry_tf, _atr_tf, "D1"}
-    )  # always fetch D1 as fallback
-
     for pair in candidate_pairs:
         try:
             # Yield CPU to prevent Flask thread locking during synchronous scan
             time.sleep(0.1)
+
+            _pair_score_group = get_pair_score_group(pair)
+            resolved_style, style_profile = _naked_scan_style_profile(
+                requested_style, score_group=_pair_score_group
+            )
+            if (
+                pair.get("type", "") == "forex"
+                and _forex_struct_tf == "D1"
+                and resolved_style == "intraday"
+            ):
+                resolved_style, style_profile = _naked_scan_style_profile(
+                    "swing", score_group=_pair_score_group
+                )
+
+            # Determine which timeframes this pair/style needs
+            _zone_tf = style_profile.get("zone_tf", "H4")
+            _entry_tf = style_profile.get("entry_tf", "H1")
+            _atr_tf = style_profile.get("atr_tf", "H4")
+            _needed_tfs = list({_zone_tf, _entry_tf, _atr_tf, "D1"})
 
             # Fetch all needed timeframes
             _tf_map = {}
@@ -8815,6 +8849,7 @@ def api_scan_naked():
                     res["symbol"] = pair.get("symbol")
                     res["display"] = pair.get("display")
                     res["type"] = pair.get("type")
+                    res["scoreGroup"] = _pair_score_group
                     res["direction"] = direction
                     res["style"] = resolved_style
                     res["regime"] = regime_label
@@ -8853,6 +8888,7 @@ def api_scan_naked():
                         "display": pair.get("display"),
                         "symbol": pair.get("symbol"),
                         "type": pair.get("type"),
+                        "scoreGroup": _pair_score_group,
                         "direction": direction,
                         "price": current_price,
                         "confluenceScore": conf_data["score"],
@@ -8952,6 +8988,7 @@ def api_engine_c_scan():
             symbol = pair.get("symbol", pair.get("display"))
             display = pair.get("display", symbol)
             ptype = pair.get("type", "")
+            _pair_score_group = get_pair_score_group(pair)
 
             # ── Run Engine A ──
             engine_a_style = _resolve_scan_style(
@@ -8962,10 +8999,14 @@ def api_engine_c_scan():
                 sig_a = {}
 
             # ── Run Engine B ──
-            resolved_style_b, style_profile_b = _naked_scan_style_profile(requested_style)
+            resolved_style_b, style_profile_b = _naked_scan_style_profile(
+                requested_style, score_group=_pair_score_group
+            )
             _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
             if ptype == "forex" and _forex_struct_tf == "D1" and resolved_style_b == "intraday":
-                resolved_style_b, style_profile_b = _naked_scan_style_profile("swing")
+                resolved_style_b, style_profile_b = _naked_scan_style_profile(
+                    "swing", score_group=_pair_score_group
+                )
 
             d1 = fetch_candles(pair, "D1", CONFIG.get("D1_CANDLES", 250))
             h4 = fetch_candles(pair, "H4", CONFIG.get("H4_CANDLES", 250))
@@ -8987,19 +9028,22 @@ def api_engine_c_scan():
                 results["skipped"].append({"display": display, "reason": "insufficient_data"})
                 continue
 
-            # ATR
-            from indicators import calc_atr
-            _highs = [float(c["high"]) for c in h4]
-            _lows = [float(c["low"]) for c in h4]
-            _closes = [float(c["close"]) for c in h4]
-            atr_series = calc_atr(_highs, _lows, _closes, 14)
-            atr = float(atr_series[-1]) if atr_series else 0.0
+            # Keep consensus anchored to Engine A levels when available.
+            current_price = float(sig_a.get("price") or h4[-1]["close"])
+            atr = float(sig_a.get("atr") or 0.0)
+            if not atr or atr <= 0:
+                # Fallback to H4 ATR if Engine A signal is missing or incomplete.
+                from indicators import calc_atr
+
+                _highs = [float(c["high"]) for c in h4]
+                _lows = [float(c["low"]) for c in h4]
+                _closes = [float(c["close"]) for c in h4]
+                atr_series = calc_atr(_highs, _lows, _closes, 14)
+                atr = float(atr_series[-1]) if atr_series else 0.0
 
             if not atr or atr <= 0:
                 results["skipped"].append({"display": display, "reason": "zero_atr"})
                 continue
-
-            current_price = float(h4[-1]["close"])
 
             # Regime for Engine B zones + Engine C A/B blend: H4 detect_regime, with Engine A hint (forex signal_type mapped).
             regime_label = _engine_b_regime_label(h4, ptype, sig_a.get("regime"))
@@ -9055,7 +9099,8 @@ def api_engine_c_scan():
             consensus["display"] = display
             consensus["symbol"] = symbol
             consensus["type"] = ptype
-            consensus["style"] = resolved_style_b
+            consensus["scoreGroup"] = _pair_score_group
+            consensus["style"] = engine_a_style
             consensus["atr"] = round(atr, 6)
             consensus["engine_a_raw"] = {
                 "direction": sig_a.get("direction"),
@@ -9064,7 +9109,7 @@ def api_engine_c_scan():
                 "sl": sig_a.get("sl"),
                 "tp1": sig_a.get("tp1"),
                 "regime": sig_a.get("regime"),
-                "style": sig_a.get("tradeStyle"),
+                "style": sig_a.get("style", sig_a.get("tradeStyle")),
                 "cot": sig_a.get("votes", {}).get("derivatives"),
                 "carry": sig_a.get("votes", {}).get("carry"),
             }
@@ -11306,6 +11351,9 @@ def fetch_eodhd_indicators(pair):
 def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
 
     pair_profile = get_pair_profile(pair)
+    _score_group = get_pair_score_group(pair)
+    _pair_ctx = dict(pair or {})
+    _pair_ctx["score_group"] = _score_group
 
     d1 = fetch_candles(pair, "D1", CONFIG["D1_CANDLES"])
 
@@ -11470,15 +11518,23 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
     if pair.get("type") == "forex":
         try:
             from forex_scoring import compute_forex_score
+            from regime import detect_regime
 
             _forex_result = compute_forex_score(
                 d1_snap=_cf_d1i["snap"],
                 h4_snap=_cf_h4i["snap"],
                 h1_snap=_cf_h1i["snap"],
                 h1_candles=_cf_h1c,
-                pair=pair,
+                pair=_pair_ctx,
                 bar_time=str(d1[-1].get("time", "") or d1[-1].get("datetime", "")),
                 h4_candles=_cf_h4c,
+                score_group=_score_group,
+            )
+            _fx_regime = detect_regime(
+                _cf_h4i["snap"],
+                pair.get("type", "forex"),
+                bb_width_pct=_cf_h4i["snap"].get("bbWidth_pct")
+                or _cf_h4i["snap"].get("bb_width_pct"),
             )
             # Map forex factor_scores to UI-compatible votes format (MUST be flat for AI consumption)
             fx_votes = {}
@@ -11502,7 +11558,10 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
                 "final_score": _forex_result.final_score,
                 "direction": _forex_result.direction,
                 "factor_scores": _forex_result.components,
-                "regime": {"state": 1, "label": _forex_result.signal_type},
+                "regime": {
+                    "state": _fx_regime.get("state", 1),
+                    "label": _fx_regime.get("label", "RANGING"),
+                },
                 "signal_type": _forex_result.signal_type,
                 "score": _forex_result.final_score,
                 "trendState": _forex_result.signal_type,
@@ -11515,9 +11574,9 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
             }
         except Exception as _fx_err:
             log.error(
-                f"[FOREX] {pair.get('display')} forex_scoring FAILED: {_fx_err} — falling back to calc_confluence"
+                f"[FOREX] {pair.get('display')} forex_scoring FAILED: {_fx_err} — skipping pair to avoid factor-engine fallback"
             )
-            res = None  # force fallback
+            return None
 
     if res is None or pair.get("type") != "forex":
         res = calc_confluence(
@@ -11526,7 +11585,7 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
             _cf_h1i,
             vr,
             stoch,
-            pair,
+            _pair_ctx,
             btc_bias,
             d1_candles=_cf_d1c,
             h4_candles=_cf_h4c,
@@ -11614,11 +11673,16 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
     # --- ENGINE B: NAKED MARKET STRUCTURE OVERLAY ---
     structure_data = None
     if use_naked_engine and res["score"] >= get_pair_profile(pair).get(
-        "min_score", CONFIG.get("MIN_CONFLUENCE", 0.6)
+        "min_score",
+        CONFIG["MIN_CONFLUENCE_CLASS"].get(
+            pair.get("type", ""), CONFIG.get("MIN_CONFLUENCE", 0.6)
+        ),
     ):
         try:
             from market_structure import engine as naked_engine
-            _overlay_style, _overlay_profile = _naked_scan_style_profile(_style)
+            _overlay_style, _overlay_profile = _naked_scan_style_profile(
+                _style, score_group=_score_group
+            )
 
             _regime_label = _engine_b_regime_label(
                 h4,
@@ -11703,6 +11767,7 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
         "display": pair["display"],
         "symbol": pair["symbol"],
         "type": pair["type"],
+        "scoreGroup": _score_group,
         "direction": direction,
         "confluenceScore": round(res["score"], 4),
         "confluencePct": min(100, round(res["score"] / max_score * 100)),

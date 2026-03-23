@@ -115,6 +115,7 @@
       sl: consensus.sl,
       tp1: consensus.tp,
       tp2: consensus.tp,
+      style: pipMode || consensus.style || "swing",
       confluenceScore: consensus.conviction,
       ts: new Date().toISOString(),
     };
