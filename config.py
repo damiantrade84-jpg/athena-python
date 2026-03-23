@@ -247,6 +247,7 @@ CONFIG: dict = {
     "FACTOR_WEIGHTS": {
         "crypto": {
             "trend": 2.0,
+            "trend_strength": 1.0,
             "momentum": 1.5,
             "volatility": 1.0,
             "volume": 1.0,
@@ -257,6 +258,7 @@ CONFIG: dict = {
         },
         "forex": {
             "trend": 2.0,
+            "trend_strength": 1.0,
             "momentum": 1.0,
             "volatility": 1.0,
             "volume": 0.5,
@@ -267,6 +269,7 @@ CONFIG: dict = {
         },
         "stock": {
             "trend": 2.0,
+            "trend_strength": 1.0,
             "momentum": 1.5,
             "volatility": 1.0,
             "volume": 1.5,
@@ -277,6 +280,7 @@ CONFIG: dict = {
         },
         "commodity": {
             "trend": 2.0,
+            "trend_strength": 1.0,
             "momentum": 1.3,
             "volatility": 1.5,
             "volume": 1.0,
@@ -287,6 +291,7 @@ CONFIG: dict = {
         },
         "index": {
             "trend": 2.0,
+            "trend_strength": 1.0,
             "momentum": 1.4,
             "volatility": 1.2,
             "volume": 0.8,
@@ -316,6 +321,7 @@ CONFIG: dict = {
     "REGIME_WEIGHTS": {
         "TRENDING": {
             "trend": 2.0,
+            "trend_strength": 1.5,
             "momentum": 1.5,
             "volatility": 1.0,
             "volume": 1.0,
@@ -326,6 +332,7 @@ CONFIG: dict = {
         },
         "RANGING": {
             "trend": 0.5,
+            "trend_strength": 0.5,
             "momentum": 1.5,
             "volatility": 1.0,
             "volume": 1.0,
@@ -336,6 +343,7 @@ CONFIG: dict = {
         },
         "HIGH_VOLATILITY": {
             "trend": 1.0,
+            "trend_strength": 1.0,
             "momentum": 1.0,
             "volatility": 2.0,
             "volume": 1.5,
@@ -346,6 +354,7 @@ CONFIG: dict = {
         },
         "LOW_VOLATILITY": {
             "trend": 1.2,
+            "trend_strength": 0.8,
             "momentum": 1.0,
             "volatility": 0.5,
             "volume": 1.0,
