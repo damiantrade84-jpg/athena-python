@@ -4528,8 +4528,25 @@ async function runECVisionConfirm(sid) {
   // Open chart modal for this pair
   openAcm(consensus.symbol, 'H4', consensus);
 
-  // Wait for chart to render
-  await new Promise(function(r) { setTimeout(r, 2000); });
+  // Wait until chart actually renders (poll for candle data, max 15s)
+  btn.textContent = '&#129504; Waiting for chart...';
+  var _chartReady = false;
+  for (var _poll = 0; _poll < 30; _poll++) {
+    await new Promise(function(r) { setTimeout(r, 500); });
+    if (_acm.lastData && _acm.lastData.length > 0 && _acm.candle) {
+      _chartReady = true;
+      break;
+    }
+  }
+  if (!_chartReady) {
+    btn.textContent = '&#129504; AI CONFIRM';
+    btn.disabled = false;
+    closeAcm();
+    showToast('Chart failed to load — try again', true);
+    return;
+  }
+  // Extra settle time for EMAs / price lines to draw
+  await new Promise(function(r) { setTimeout(r, 800); });
 
   // Trigger AI read
   btn.textContent = '&#129504; Reading chart...';
