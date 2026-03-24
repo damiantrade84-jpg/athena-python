@@ -51,7 +51,12 @@ def detect_regime(
             ranging_penalty = _rng["choppy_pen"]
 
     # Crypto-specific transition penalty on top of range penalty (capped at 2.0 total)
-    if pair_type == "crypto" and adx_mom in ("collapsing", "exhausting"):
+    # Can be disabled via config.yaml to reduce over-filtering.
+    if (
+        pair_type == "crypto"
+        and cfg.get("CRYPTO_TRANSITION_PENALTY_ENABLED", True)
+        and adx_mom in ("collapsing", "exhausting")
+    ):
         _trans_pen = 1.5 if adx_mom == "collapsing" else 0.8
         ranging_penalty = min(ranging_penalty + _trans_pen, 2.0)
 
