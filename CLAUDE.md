@@ -1,5 +1,32 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-24) — Monolith extraction (`candles_cache`, `candle_feeds`, `athena_runtime`)
+
+**Goal:** Move candle cache, live feeds / WebSockets / `CandleBuilder`, execution routes, and scan/backtest entrypoints out of `athena.py` without changing runtime behavior.
+
+**`candles_cache.py`**
+- In-memory TTL candle cache (`_candle_cache` / lock), `extract_candles`, `candle_time_epoch_utc`, `merge_forex_forming_ws`, and `fetch_candles(...)` routing (live path + REST sources; injects `fetch_candles_live`, `fetch_binance`, `fetch_eodhd`, etc. from the monolith).
+- `/api/flush-candle-cache` and scan paths use the **same** cache dict imported from this module.
+
+**`candle_feeds.py`**
+- `_live_prices` / lock, EODHD REST price poller for non-WS pairs, `BinanceLivePriceWS`, `EODHDWebSocketManager`, `CandleBuilder` (SQLite `candle_cache.db` next to project root), `fetch_candles_live`, `get_candle_builder` / `set_candle_builder`.
+- Pair-dependent logic uses **`athena_runtime.rt()`** at **call time** (threads and seed): `ALL_PAIRS`, `CRYPTO_PAIRS`, `NON_WS_EODHD`, `eodhd_ticker_for_pair`, `get_eodhd_client` — all bound via `set_runtime(...)` at the end of `athena.py`.
+
+**`athena_runtime.py`**
+- `set_runtime(deps)` / `rt()` for split modules; **`executed_signals`** set shared with `/api/webhook` duplicate guard and execute path.
+
+**Other split modules**
+- `execution.py` — `register_execution_routes(app)` (quick execute, engine C scan/confirm, main execute, healthcheck).
+- `scanner.py` — `run_full_scan` and scan helpers; `analyze_pair` still resolves via `rt()` / monolith.
+- `backtest_runner.py` / `backtest.py` — Engine A/B backtest loops moved from the monolith; wired through `rt()`.
+- `data_feeds.py` — shared `http_requests`, `_get_eodhd_client`, funding/OI helpers; feed **start** helpers may still delegate to the monolith where noted in code.
+- `candle_manager.py` — thin facade over `athena_legacy.load()` for tools that should not import `athena.py` directly.
+- `athena_legacy.py` — loads `athena.py` as a **file** module (`athena_monolith`) so imports never resolve to the `athena/` **package** by mistake.
+- `app.py` — `create_app()` returns the Flask app from the legacy loader + optional `/healthz`.
+
+**`athena.py`**
+- Imports the above; **`set_runtime(SimpleNamespace(...))`** must include `NON_WS_EODHD`, `CRYPTO_PAIRS`, `eodhd_ticker_for_pair`, `get_eodhd_client` so `candle_feeds` works after import. Startup under `if __name__ == "__main__"` uses `set_candle_builder(CandleBuilder())`.
+
 ## Recent Changes (2026-03-24) — H1 Triple-Screen Upgrade
 
 **Change 1 — H1 EMA alignment in forex entry quality (`forex_scoring.py`):**
@@ -332,7 +359,18 @@ Multi-asset algorithmic trading system: Flask dashboard, Engine A confluence/fac
 
 | File | Purpose | Size |
 |------|---------|------|
-| `athena.py` | Flask app, scan engine, all API routes, backtest | ~11500 lines — use offset/limit |
+| `athena.py` | Flask app, most API routes, `analyze_pair`, pair lists, core orchestration | ~6500 lines — use offset/limit |
+| `candles_cache.py` | TTL candle cache, `fetch_candles` routing, `extract_candles`, forex WS bar merge | |
+| `candle_feeds.py` | Live prices, EODHD/Binance WebSockets, `CandleBuilder`, `fetch_candles_live` | |
+| `athena_runtime.py` | `set_runtime` / `rt()` bindings; `executed_signals` dedupe set | |
+| `execution.py` | Execution-related Flask routes (`register_execution_routes`) | |
+| `scanner.py` | `run_full_scan` and scan pipeline wiring | |
+| `backtest_runner.py` | Engine A/B backtest implementations (pulled from monolith) | |
+| `backtest.py` | Re-exports backtest entrypoints from `backtest_runner` | |
+| `data_feeds.py` | HTTP session, EODHD client, funding/OI fetch helpers | |
+| `candle_manager.py` | Facade → `athena_legacy` for external candle access | |
+| `athena_legacy.py` | Loads monolith file module as `athena_monolith` | |
+| `app.py` | `create_app()` Flask factory | |
 | `indicators.py` | Pure indicator functions (EMA, RSI, MACD, ATR, ADX, BB, Stochastic, Weinstein, Fib, OBV, Squeeze) | |
 | `scoring.py` | Confluence engine, vote weights, session, pair profiles, signal classification | |
 | `factor_scoring.py` | Z-score factor engine — directional (trend, momentum, microstructure, derivatives) + non-directional (trend_strength, volatility, volume, structure). Candle-based microstructure proxies for all asset types. | |
