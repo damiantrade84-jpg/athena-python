@@ -326,13 +326,20 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
     # Parse per-style ratings from Vision text
     style_ratings = _parse_style_ratings_from_text(text)
 
+    # Dual-TF: if AI reports TF ALIGNMENT: CONFLICTED, treat as hard contradiction
+    import re as _re
+    tf_align_match = _re.search(r"TF\s+ALIGNMENT\s*:\s*(ALIGNED|CONFLICTED)", text)
+    if tf_align_match and tf_align_match.group(1) == "CONFLICTED":
+        confirms_dir = False
+        rating = "CONTRADICTS"
+
     # If no structured rating, extract the overall rating from text
     if not rating:
         for r in ["AVOID", "STRONG", "MODERATE", "WEAK", "CONTRADICTS"]:
             if r in text:
                 rating = r
                 break
-        if "CONTRADICT" in text:
+        if "CONTRADICT" in text or "CONFLICTED" in text:
             confirms_dir = False
             rating = "CONTRADICTS"
 

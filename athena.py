@@ -10857,32 +10857,77 @@ def api_chart_analysis():
 
         client = _anthropic_mod.Anthropic(api_key=api_key)
 
-        # Strip data URL prefix if present
-        img_data = data["image"]
-        if img_data.startswith("data:"):
-            img_data = img_data.split(",", 1)[1]
+        # Strip data URL prefix if present (H4 primary image)
+        img_h4 = data["image"]
+        if img_h4.startswith("data:"):
+            img_h4 = img_h4.split(",", 1)[1]
+
+        # Optional D1 bias image
+        img_d1 = data.get("image_d1")
+        if img_d1 and img_d1.startswith("data:"):
+            img_d1 = img_d1.split(",", 1)[1]
+
+        dual_mode = bool(img_d1)
+
+        if dual_mode:
+            # ── Dual-TF prompt: D1 for bias, H4 for entry ──────────────────
+            dual_prompt = (
+                f"You are reviewing TWO charts for {asset_type.upper()} — {symbol}.\n"
+                "IMAGE 1 is the D1 (daily) chart — tells you the macro TREND and BIAS.\n"
+                "IMAGE 2 is the H4 (4-hour) chart — tells you the ENTRY TIMING and structure.\n\n"
+                f"ALGORITHMIC CONTEXT:\n{algo_context}\n\n"
+                "CHART ANNOTATIONS (same in both images):\n"
+                "- Green/red candles · EMA 21 (cyan) · EMA 50 (purple) · EMA 200 (gold dashed)\n"
+                "- Entry (grey dashed) · SL (red solid) · TP (green solid) lines\n"
+                "- Engine B zones may be visible: support (green), resistance (red), "
+                "BOS (amber), CHoCH (purple), OB (labelled)\n\n"
+                "ANSWER THESE 5 QUESTIONS:\n"
+                f"1. D1 BIAS: What is the clear trend on D1? Does it CONFIRM or CONTRADICT "
+                f"the algorithmic {direction_str} signal? One sentence.\n"
+                f"2. H4 ENTRY: Does H4 show a valid {direction_str} entry setup right now? "
+                "Describe structure, momentum, and EMA positioning.\n"
+                "3. TF ALIGNMENT: Do D1 and H4 BOTH support the same direction? "
+                "Answer ALIGNED or CONFLICTED with one-line justification. "
+                "This is the most important question — a CONFLICTED answer means the trade should be skipped.\n"
+                "4. SL/TP ASSESSMENT: Based on H4 structure, are SL and TP well-placed? "
+                "Would you adjust either? Be specific with price levels.\n"
+                "5. PER-STYLE RATINGS (weight both timeframes — D1 for swing, H4 for scalp/intraday):\n"
+                "SCALP RATING: STRONG / MODERATE / WEAK / AVOID\n"
+                "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID\n"
+                "SWING RATING: STRONG / MODERATE / WEAK / AVOID\n"
+                "(use CONTRADICTS if the combined picture clearly opposes the algorithmic direction)\n\n"
+                "Keep total response under 420 words. Be direct."
+            )
+            content = [
+                {"type": "text", "text": "IMAGE 1 — D1 DAILY BIAS CHART:"},
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png", "data": img_d1},
+                },
+                {"type": "text", "text": "IMAGE 2 — H4 ENTRY CHART:"},
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png", "data": img_h4},
+                },
+                {"type": "text", "text": dual_prompt},
+            ]
+            log.info(f"[AI CHART] Dual-TF D1+H4 analysis for {symbol}")
+        else:
+            # ── Single-TF fallback (H4 only) ───────────────────────────────
+            content = [
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png", "data": img_h4},
+                },
+                {"type": "text", "text": user_prompt},
+            ]
+            log.info(f"[AI CHART] Single-TF {tf} analysis for {symbol}")
 
         message = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=700,
+            max_tokens=800,
             system=system_prompt,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/png",
-                            "data": img_data,
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": user_prompt,
-                    },
-                ],
-            }],
+            messages=[{"role": "user", "content": content}],
         )
 
         analysis = message.content[0].text if message.content else "No analysis returned."
@@ -10891,7 +10936,8 @@ def api_chart_analysis():
             "analysis": analysis,
             "model": "claude-sonnet-4-6",
             "symbol": symbol,
-            "tf": tf,
+            "tf": "D1+H4" if dual_mode else tf,
+            "dual_tf": dual_mode,
         })
 
     except Exception as e:

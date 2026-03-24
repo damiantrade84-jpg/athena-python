@@ -422,30 +422,41 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
   flex: 1;
   position: relative;
   overflow: hidden;
+  background: #131722;
 }
 #acm-legend {
   position: absolute;
-  top: 12px;
-  left: 16px;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  gap: 14px;
+  font-size: 11px;
+  font-family: 'Space Mono', monospace;
+  z-index: 10;
+  pointer-events: none;
+  opacity: 0.95;
+  background: rgba(19,23,34,0.85);
+  border: 1px solid rgba(42,56,74,0.6);
+  border-radius: 4px;
+  padding: 5px 10px;
+  text-shadow: 0 1px 0 rgba(0,0,0,0.45);
+}
+#acm-info-panel {
+  position: absolute;
+  bottom: 36px;
+  left: 8px;
   display: flex;
   gap: 14px;
   font-size: 10px;
   font-family: 'Space Mono', monospace;
   z-index: 10;
   pointer-events: none;
-  opacity: 0.6;
-}
-#acm-info-panel {
-  position: absolute;
-  bottom: 12px;
-  left: 16px;
-  display: flex;
-  gap: 16px;
-  font-size: 10px;
-  font-family: 'Space Mono', monospace;
-  z-index: 10;
-  pointer-events: none;
-  opacity: 0.5;
+  opacity: 0.92;
+  background: rgba(19,23,34,0.82);
+  border: 1px solid rgba(42,56,74,0.5);
+  border-radius: 4px;
+  padding: 4px 9px;
+  text-shadow: 0 1px 0 rgba(0,0,0,0.45);
 }
 #acm-ai-panel {
   display: none;
@@ -3718,7 +3729,7 @@ var _acm = {
   sig: null,
   pairType: '',
   priceDisplay: '',
-  show: { vol: true, ema: true, levels: true, zones: true },
+  show: { vol: true, ema: true, levels: true, zones: false },
   liveInterval: null,
   lastData: [],
 };
@@ -3727,6 +3738,13 @@ function openAcm(symbol, tf, fallbackSig) {
   _acm.symbol = symbol;
   _acm.tf = tf || 'H4';
   _acm.lastData = [];
+  _acm.show = { vol: true, ema: true, levels: true, zones: _acm.tf === 'H4' ? false : true };
+  [['vol','acm-vol-btn'], ['ema','acm-ema-btn'], ['levels','acm-levels-btn'], ['zones','acm-zones-btn']].forEach(function(row) {
+    var el = document.getElementById(row[1]);
+    if (!el) return;
+    el.classList.toggle('on', !!_acm.show[row[0]]);
+    el.classList.toggle('off', !_acm.show[row[0]]);
+  });
   var fromList = allSignals.find(function(s) { return s.symbol === symbol; });
   // Engine C AI CONFIRM passes consensus as fallback — prefer it over a same-symbol Engine A card
   // so ENTRY/SL/TP lines match the consensus snapshot (sl_method is EC-only).
@@ -3793,8 +3811,14 @@ function closeAcm() {
 
 function acmSetTF(tf, el) {
   _acm.tf = tf;
+  if (tf === 'H4') _acm.show.zones = false;
   document.querySelectorAll('.acm-tf-btn').forEach(function(b) { b.classList.remove('active'); });
   if (el) el.classList.add('active');
+  var _zonesBtn = document.getElementById('acm-zones-btn');
+  if (_zonesBtn) {
+    _zonesBtn.classList.toggle('on', !!_acm.show.zones);
+    _zonesBtn.classList.toggle('off', !_acm.show.zones);
+  }
   _acmRender(_acm.symbol, tf);
 }
 
@@ -3895,6 +3919,53 @@ function _acmSanitizeCandlesForChart(rows, isForex) {
   return dedup;
 }
 
+ function _acmVolumeDisplayData(data, tf) {
+   var rows = (data || []).map(function(c) {
+     var raw = isFinite(c.vol) ? Math.max(0, Number(c.vol)) : 0;
+     var spread = Math.max(0, Math.abs((c.high || 0) - (c.low || 0)));
+     var body = Math.max(0, Math.abs((c.close || 0) - (c.open || 0)));
+     return {
+       time: c.time,
+       raw: raw,
+       proxy: Math.max(spread, body, 0),
+       color: c.close >= c.open ? 'rgba(38,166,154,0.85)' : 'rgba(239,83,80,0.85)',
+     };
+   });
+   if (!rows.length) return [];
+
+   var nonZeroRaw = rows.filter(function(r) { return r.raw > 0; }).length;
+   var rawMax = rows.reduce(function(m, r) { return Math.max(m, r.raw); }, 0);
+   var rawMinPositive = rows.reduce(function(m, r) {
+     return r.raw > 0 ? Math.min(m, r.raw) : m;
+   }, Number.POSITIVE_INFINITY);
+   var useProxy = nonZeroRaw < Math.max(6, Math.floor(rows.length * 0.2)) || rawMax <= 0;
+
+   if (!useProxy && isFinite(rawMinPositive) && rawMinPositive > 0) {
+     useProxy = rawMax / rawMinPositive > 180;
+   }
+
+   var baseVals = rows.map(function(r) { return useProxy ? r.proxy : r.raw; });
+   var positiveVals = baseVals.filter(function(v) { return v > 0; }).sort(function(a, b) { return a - b; });
+   var baseMax = positiveVals.length
+     ? positiveVals[Math.max(0, Math.floor(positiveVals.length * 0.95) - 1)]
+     : 0;
+   if (!(baseMax > 0)) {
+     baseMax = baseVals.reduce(function(m, v) { return Math.max(m, v); }, 0);
+   }
+   if (!(baseMax > 0)) baseMax = 1;
+
+   return rows.map(function(r) {
+     var base = useProxy ? r.proxy : r.raw;
+     var clipped = Math.min(base, baseMax);
+     var scaled = (clipped / baseMax) * 100;
+     return {
+       time: r.time,
+       value: Math.max(scaled, tf === 'H4' ? 0.8 : 0.5),
+       color: r.color,
+     };
+   });
+ }
+
 async function _acmRender(symbol, tf) {
   var body = document.getElementById('acm-chart-body');
   _acm.lastData = [];
@@ -3904,7 +3975,7 @@ async function _acmRender(symbol, tf) {
   body.style.display = 'flex';
   body.innerHTML = '<div id="acm-legend"></div><div id="acm-info-panel"></div>' +
     '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;' +
-    'color:#3a4d60;font-family:Space Mono,monospace;font-size:13px;z-index:5;" id="acm-loading">' +
+    'color:#4a5568;font-family:Space Mono,monospace;font-size:13px;z-index:5;" id="acm-loading">' +
     'Loading ' + tf + ' candles...</div>';
 
   try {
@@ -3924,14 +3995,14 @@ async function _acmRender(symbol, tf) {
       width: body.clientWidth,
       height: body.clientHeight,
       layout: {
-        background: { type: 'solid', color: '#0c1017' },
-        textColor: '#4a5568',
-        fontSize: 10,
+        background: { type: 'solid', color: '#131722' },
+        textColor: '#9598a1',
+        fontSize: 11,
         fontFamily: 'Space Mono, monospace',
       },
       grid: {
-        vertLines: { color: 'rgba(42,56,74,0.15)', style: 1 },
-        horzLines: { color: 'rgba(42,56,74,0.15)', style: 1 },
+        vertLines: { color: 'rgba(42,56,74,0.25)', style: 1 },
+        horzLines: { color: 'rgba(42,56,74,0.25)', style: 1 },
       },
       crosshair: {
         mode: LightweightCharts.CrosshairMode.Normal,
@@ -3941,17 +4012,17 @@ async function _acmRender(symbol, tf) {
                     labelBackgroundColor: '#1a2332' },
       },
       rightPriceScale: {
-        borderColor: '#1a2332',
-        scaleMargins: { top: 0.05, bottom: 0.15 },
+        borderColor: '#2a3850',
+        scaleMargins: { top: 0.05, bottom: 0.28 },
         entireTextOnly: true,
       },
       timeScale: {
-        borderColor: '#1a2332',
+        borderColor: '#2a3850',
         timeVisible: true,
         secondsVisible: false,
-        rightOffset: 12,
-        barSpacing: 10,
-        minBarSpacing: 4,
+        rightOffset: tf === 'H4' ? 10 : (tf === 'D1' ? 8 : 12),
+        barSpacing: tf === 'H4' ? 12 : (tf === 'D1' ? 15 : 10),
+        minBarSpacing: tf === 'H4' ? 6 : (tf === 'D1' ? 10 : 4),
       },
       handleScroll: { mouseWheel: true, pressedMouseMove: true },
       handleScale: { mouseWheel: true, pinch: true },
@@ -3963,14 +4034,13 @@ async function _acmRender(symbol, tf) {
       downColor: '#ef5350',
       borderDownColor: '#ef5350',
       borderUpColor: '#26a69a',
-      wickDownColor: 'rgba(239,83,80,0.5)',
-      wickUpColor: 'rgba(38,166,154,0.5)',
+      wickDownColor: 'rgba(239,83,80,0.9)',
+      wickUpColor: 'rgba(38,166,154,0.9)',
     });
 
     var isFxChart = _acm.pairType === 'forex' || (_acm.sig && _acm.sig.type === 'forex');
     var data = _acmSanitizeCandlesForChart(candles, isFxChart);
     if (!data.length) throw new Error('No valid candles after sanitize');
-    _acm.lastData = data;
     _acm.candle.setData(data);
 
     // Volume
@@ -3979,15 +4049,9 @@ async function _acmRender(symbol, tf) {
       priceScaleId: 'vol',
     });
     _acm.chart.priceScale('vol').applyOptions({
-      scaleMargins: { top: 0.85, bottom: 0 },
+      scaleMargins: { top: 0.75, bottom: 0 },
     });
-    _acm.volume.setData(data.map(function(c) {
-      return {
-        time: c.time,
-        value: c.vol,
-        color: c.close >= c.open ? 'rgba(38,166,154,0.12)' : 'rgba(239,83,80,0.12)',
-      };
-    }));
+    _acm.volume.setData(_acmVolumeDisplayData(data, tf));
     _acm.volume.applyOptions({ visible: _acm.show.vol });
 
     // EMAs
@@ -3995,14 +4059,14 @@ async function _acmRender(symbol, tf) {
 
     var e21 = _acmEMA(closes, 21);
     _acm.ema21 = _acm.chart.addLineSeries({
-      color: 'rgba(0,188,212,0.7)', lineWidth: 1,
+      color: '#00bcd4', lineWidth: 2,
       priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
     });
     _acm.ema21.setData(data.map(function(c, i) { return { time: c.time, value: e21[i] }; }));
 
     var e50 = _acmEMA(closes, 50);
     _acm.ema50 = _acm.chart.addLineSeries({
-      color: 'rgba(149,117,205,0.6)', lineWidth: 1,
+      color: '#8b5cf6', lineWidth: 2,
       priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
     });
     _acm.ema50.setData(data.map(function(c, i) {
@@ -4011,7 +4075,7 @@ async function _acmRender(symbol, tf) {
 
     var e200 = _acmEMA(closes, 200);
     _acm.ema200 = _acm.chart.addLineSeries({
-      color: 'rgba(255,183,77,0.3)', lineWidth: 1, lineStyle: 2,
+      color: 'rgba(255,183,77,0.78)', lineWidth: 2, lineStyle: 2,
       priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
     });
     _acm.ema200.setData(data.map(function(c, i) {
@@ -4073,7 +4137,24 @@ async function _acmRender(symbol, tf) {
     }
     document.getElementById('acm-info-panel').innerHTML = infoHtml;
 
-    _acm.chart.timeScale().fitContent();
+    if (tf === 'H4') {
+      var _visibleBars = Math.min(120, Math.max(70, data.length));
+      _acm.chart.timeScale().setVisibleLogicalRange({
+        from: Math.max(0, data.length - _visibleBars),
+        to: data.length + 6,
+      });
+    } else if (tf === 'D1') {
+      var _d1VisibleBars = Math.min(85, Math.max(45, data.length));
+      _acm.chart.timeScale().setVisibleLogicalRange({
+        from: Math.max(0, data.length - _d1VisibleBars),
+        to: data.length + 4,
+      });
+    } else {
+      _acm.chart.timeScale().fitContent();
+    }
+
+    // Signal that the chart is fully rendered (EMAs + levels + zoom all applied)
+    _acm.lastData = data;
 
     // Resize
     var _ro = new ResizeObserver(function() {
@@ -4094,11 +4175,11 @@ function _acmDrawLevels() {
 
   var entry = parseFloat(sig.price || sig.entryPrice || sig.entry || 0);
   if (entry > 0) _acm.levelLines.push(_acm.candle.createPriceLine({
-    price: entry, color: 'rgba(148,163,184,0.6)', lineWidth: 1, lineStyle: 2,
+    price: entry, color: 'rgba(226,232,240,0.95)', lineWidth: 2, lineStyle: 2,
     axisLabelVisible: true, title: 'ENTRY',
   }));
   if (sig.sl) _acm.levelLines.push(_acm.candle.createPriceLine({
-    price: parseFloat(sig.sl), color: '#ef5350', lineWidth: 1, lineStyle: 2,
+    price: parseFloat(sig.sl), color: '#ef5350', lineWidth: 2, lineStyle: 0,
     axisLabelVisible: true, title: 'SL',
   }));
   var tpPrimary = sig.tp1 != null ? sig.tp1 : sig.tp;
@@ -4106,12 +4187,12 @@ function _acmDrawLevels() {
     var tp2 = sig.tp2;
     var tpTitle = (tp2 != null && parseFloat(tp2) !== parseFloat(tpPrimary)) ? 'TP1' : 'TP';
     _acm.levelLines.push(_acm.candle.createPriceLine({
-      price: parseFloat(tpPrimary), color: '#26a69a', lineWidth: 1, lineStyle: 2,
+      price: parseFloat(tpPrimary), color: '#26a69a', lineWidth: 2, lineStyle: 0,
       axisLabelVisible: true, title: tpTitle,
     }));
   }
   if (sig.tp2 && sig.tp2 !== sig.tp1) _acm.levelLines.push(_acm.candle.createPriceLine({
-    price: parseFloat(sig.tp2), color: 'rgba(38,166,154,0.4)', lineWidth: 1, lineStyle: 2,
+    price: parseFloat(sig.tp2), color: 'rgba(38,166,154,0.72)', lineWidth: 2, lineStyle: 2,
     axisLabelVisible: true, title: 'TP2',
   }));
 }
@@ -4128,11 +4209,11 @@ function _acmDrawZones() {
   var sup = eb.nearest_support_zone;
   if (sup && sup.upper && sup.lower) {
     _acm.zoneLines.push(_acm.candle.createPriceLine({
-      price: parseFloat(sup.upper), color: 'rgba(0,230,118,0.35)', lineWidth: 1,
+      price: parseFloat(sup.upper), color: 'rgba(0,230,118,0.24)', lineWidth: 1,
       lineStyle: 1, axisLabelVisible: true, title: 'SUP ▲',
     }));
     _acm.zoneLines.push(_acm.candle.createPriceLine({
-      price: parseFloat(sup.lower), color: 'rgba(0,230,118,0.35)', lineWidth: 1,
+      price: parseFloat(sup.lower), color: 'rgba(0,230,118,0.24)', lineWidth: 1,
       lineStyle: 1, axisLabelVisible: false, title: '',
     }));
   }
@@ -4140,11 +4221,11 @@ function _acmDrawZones() {
   var res = eb.nearest_resistance_zone;
   if (res && res.upper && res.lower) {
     _acm.zoneLines.push(_acm.candle.createPriceLine({
-      price: parseFloat(res.lower), color: 'rgba(255,59,92,0.35)', lineWidth: 1,
+      price: parseFloat(res.lower), color: 'rgba(255,59,92,0.24)', lineWidth: 1,
       lineStyle: 1, axisLabelVisible: true, title: 'RES ▼',
     }));
     _acm.zoneLines.push(_acm.candle.createPriceLine({
-      price: parseFloat(res.upper), color: 'rgba(255,59,92,0.35)', lineWidth: 1,
+      price: parseFloat(res.upper), color: 'rgba(255,59,92,0.24)', lineWidth: 1,
       lineStyle: 1, axisLabelVisible: false, title: '',
     }));
   }
@@ -4250,7 +4331,7 @@ async function acmAIRead() {
     var chartBody = document.getElementById('acm-chart-body');
     var canvas = await html2canvas(chartBody, {
       backgroundColor: '#060a10',
-      scale: 1.5,
+      scale: 2.25,
       logging: false,
       useCORS: true,
     });
@@ -4541,10 +4622,15 @@ function buildECVisionResult(c) {
               c.vision_action === 'weaken' ? '#f59e0b' : 'var(--bear)';
   var icon = c.vision_action === 'confirm' ? '&#9989;' :
              c.vision_action === 'weaken' ? '&#9888;&#65039;' : '&#128683;';
+  var tfBadge = c.vision_dual_tf
+    ? '<span style="font-size:9px;background:rgba(0,212,255,0.12);color:#00d4ff;' +
+      'border:1px solid rgba(0,212,255,0.3);border-radius:3px;padding:1px 5px;margin-left:6px;' +
+      'vertical-align:middle;">D1+H4</span>'
+    : '';
   var html = '<div style="background:rgba(168,85,247,0.05);border:1px solid rgba(168,85,247,0.2);' +
     'border-radius:6px;padding:8px;font-size:11px;font-family:Space Mono,monospace;">' +
     '<span style="color:' + color + ';font-weight:700;">' + icon + ' ' +
-    (c.vision_rating || '?') + '</span>' +
+    (c.vision_rating || '?') + '</span>' + tfBadge +
     (c.vision_sl_flag && c.vision_sl_flag !== 'ok' ?
       ' | SL: <span style="color:#f59e0b;">' + c.vision_sl_flag + '</span>' : '') +
     (c.vision_tp_flag && c.vision_tp_flag !== 'ok' ?
@@ -4585,7 +4671,7 @@ function buildECExecButtons(c, sid) {
 async function runECVisionConfirm(sid) {
   var btn = document.getElementById('ec-vision-btn-' + sid);
   if (!btn) return;
-  btn.textContent = '&#129504; Opening chart...';
+  btn.textContent = '&#129504; Starting...';
   btn.disabled = true;
 
   // Find the consensus data for this symbol
@@ -4603,49 +4689,69 @@ async function runECVisionConfirm(sid) {
     return;
   }
 
-  // Open chart modal for this pair
-  openAcm(consensus.symbol, 'H4', consensus);
-
-  // Wait until chart actually renders (poll for candle data + loading overlay gone, max 15s)
-  btn.textContent = '&#129504; Waiting for chart...';
-  var _chartReady = false;
-  for (var _poll = 0; _poll < 30; _poll++) {
-    await new Promise(function(r) { setTimeout(r, 500); });
-    var _loadingEl = document.getElementById('acm-loading');
-    var _loadingVisible = !!(_loadingEl && _loadingEl.parentElement);
-    if (_acm.lastData && _acm.lastData.length >= 20 && _acm.candle && !_loadingVisible) {
-      _chartReady = true;
-      break;
+  // Helper: wait for acm-chart-body to be ready
+  async function _waitChartReady(minBars) {
+    for (var _p = 0; _p < 30; _p++) {
+      await new Promise(function(r) { setTimeout(r, 500); });
+      var _l = document.getElementById('acm-loading');
+      if (_acm.lastData && _acm.lastData.length >= minBars && _acm.candle && !(_l && _l.parentElement)) {
+        return true;
+      }
     }
+    return false;
   }
-  if (!_chartReady) {
-    btn.textContent = '&#129504; AI CONFIRM';
-    btn.disabled = false;
-    closeAcm();
-    showToast('Chart failed to load — try again', true);
-    return;
-  }
-  // Extra settle time for EMAs / price lines to draw
-  await new Promise(function(r) { setTimeout(r, 800); });
 
-  // Trigger AI read
-  btn.textContent = '&#129504; Reading chart...';
+  // Helper: capture current chart body as base64 PNG
+  async function _captureChart() {
+    var _body = document.getElementById('acm-chart-body');
+    // Double rAF: guarantees browser has painted at least one full frame before capture
+    await new Promise(function(r) { requestAnimationFrame(function() { requestAnimationFrame(r); }); });
+    var _c = await html2canvas(_body, {
+      backgroundColor: '#131722', scale: 2.25, logging: false, useCORS: true,
+    });
+    return _c.toDataURL('image/png');
+  }
+
+  // ── Step 1: D1 bias screenshot ─────────────────────────────────────────────
+  btn.textContent = '&#129504; Loading D1 bias...';
+  openAcm(consensus.symbol, 'D1', consensus);
+  var _d1Ready = await _waitChartReady(10);
+  if (!_d1Ready) {
+    btn.textContent = '&#129504; AI CONFIRM'; btn.disabled = false;
+    closeAcm(); showToast('D1 chart failed to load — try again', true); return;
+  }
+  await new Promise(function(r) { setTimeout(r, 1000); });
+  btn.textContent = '&#129504; Capturing D1...';
+  var d1Base64 = await _captureChart();
+  closeAcm();
+
+  // Brief pause between renders
+  await new Promise(function(r) { setTimeout(r, 400); });
+
+  // ── Step 2: H4 entry screenshot ────────────────────────────────────────────
+  btn.textContent = '&#129504; Loading H4 entry...';
+  openAcm(consensus.symbol, 'H4', consensus);
+  var _h4Ready = await _waitChartReady(20);
+  if (!_h4Ready) {
+    btn.textContent = '&#129504; AI CONFIRM'; btn.disabled = false;
+    closeAcm(); showToast('H4 chart failed to load — try again', true); return;
+  }
+  await new Promise(function(r) { setTimeout(r, 1000); });
+  btn.textContent = '&#129504; Capturing H4...';
+  var h4Base64 = await _captureChart();
+  closeAcm();
+
+  // ── Step 3: Send D1 + H4 to AI ────────────────────────────────────────────
+  btn.textContent = '&#129504; Analysing D1+H4...';
 
   try {
-    var chartBody = document.getElementById('acm-chart-body');
-    var canvas = await html2canvas(chartBody, {
-      backgroundColor: '#060a10', scale: 1.5, logging: false, useCORS: true,
-    });
-    var base64 = canvas.toDataURL('image/png');
-
-    btn.textContent = '&#129504; Analysing...';
-
-    // Get AI Vision analysis
+    // Get AI Vision analysis (dual-timeframe)
     var visionResp = await fetch('/api/chart-analysis', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        image: base64,
+        image: h4Base64,
+        image_d1: d1Base64,
         symbol: consensus.symbol,
         tf: 'H4',
         signal: {
@@ -4660,9 +4766,6 @@ async function runECVisionConfirm(sid) {
         engineB: consensus.engine_b_raw || {},
       }),
     });
-
-    // Close chart modal before parsing — ensures modal closes even on error
-    closeAcm();
 
     if (!visionResp.ok) {
       var errText = await visionResp.text();
@@ -4691,6 +4794,9 @@ async function runECVisionConfirm(sid) {
         confErrText.substring(0, 200));
     }
     var updated = await confirmResp.json();
+
+    // Carry dual_tf flag from vision response to the updated object for display
+    if (vision.dual_tf) updated.vision_dual_tf = true;
 
     // Update the card
     var visionDiv = document.getElementById('ec-vision-' + sid);
