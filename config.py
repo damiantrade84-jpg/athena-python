@@ -201,14 +201,14 @@ CONFIG: dict = {
         "index": 150,
     },
     "BT_MIN": {
-        "crypto": 0.70,
+        "crypto": 0.55,
         "commodity": 0.70,
         "forex": 0.60,
         "stock": 0.70,
         "index": 0.70,
     },
     "MIN_CONFLUENCE_CLASS": {
-        "crypto": 0.70,
+        "crypto": 0.55,
         "commodity": 0.70,
         "forex": 0.60,
         "stock": 0.70,
@@ -222,10 +222,10 @@ CONFIG: dict = {
             "forex_exotics": 0.65,
         },
         "crypto": {
-            "crypto_btc": 0.80,
-            "crypto_eth": 0.78,
-            "crypto_doge": 0.85,
-            "crypto_alt_majors": 0.75,
+            "crypto_btc": 0.60,
+            "crypto_eth": 0.58,
+            "crypto_doge": 0.65,
+            "crypto_alt_majors": 0.55,
         },
         "commodity": {
             "nat_gas": 0.80,
@@ -247,6 +247,7 @@ CONFIG: dict = {
     },
     # Factor scoring gates — see factor_scoring.py
     "FACTOR_MIN_DIRECTIONAL": 0.25,  # Skip if abs(dir_score) < this (near-directionless signal)
+    "CRYPTO_TRANSITION_PENALTY_ENABLED": True,
     "REGIME_SMOOTHING_BARS": 3,  # Consecutive bars required before committing to a regime change
     # Factor weights per asset class (base, before regime overrides)
     "FACTOR_WEIGHTS": {
