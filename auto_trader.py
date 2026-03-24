@@ -183,8 +183,10 @@ class AutoTrader:
 
                 self._reset_daily_counter(now)
 
-                # Weekly meta-analysis: run once per week (Sunday 22:00 UTC)
-                if now.weekday() == 6 and now.hour == 22:
+                cfg_early = self._config_fn() if self._config_fn else {}
+
+                # Weekly meta-analysis: Sunday 22:00 UTC (xAI). Respects META_ANALYSIS_ENABLED.
+                if cfg_early.get("META_ANALYSIS_ENABLED", True) and now.weekday() == 6 and now.hour == 22:
                     if (
                         self._last_meta_analysis is None
                         or (now - self._last_meta_analysis).days >= 6
@@ -193,11 +195,10 @@ class AutoTrader:
                         try:
                             from ai_learning import run_meta_analysis
 
-                            cfg = self._config_fn() if self._config_fn else {}
                             _meta_result = run_meta_analysis(
                                 self._audit_db,
-                                cfg.get("XAI_API_KEY", ""),
-                                cfg.get("XAI_MODEL", "grok-4.20-0309-reasoning"),
+                                cfg_early.get("XAI_API_KEY", ""),
+                                cfg_early.get("XAI_MODEL", "grok-4.20-0309-reasoning"),
                             )
                             log.info(
                                 f"[AUTO] Weekly meta-analysis complete: {_meta_result.get('summary', '')[:100]}"

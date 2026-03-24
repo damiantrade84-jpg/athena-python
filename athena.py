@@ -11953,7 +11953,9 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
         "adxSlope": res.get("adxSlope"),
         "spread": res.get("spread", 0),
         "warnings": warn_list,
-        "session": get_session(h4[-1].get("time") if h4 else None),
+        # Session badge = current FX liquidity window (UTC now). Do not use h4[-1]
+        # time — vendor bar timestamps can lag or parse oddly vs wall clock at scan time.
+        "session": get_session(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "aiAnalysis": None,
         "oiDivergence": _oi_divergence,

@@ -191,10 +191,10 @@ def classify_signal_setup(
 
 
 def get_session(bar_time: str | None = None) -> dict:
-    """Determine forex session from UTC hour.
+    """Determine forex session label from UTC hour (liquidity buckets for UI).
 
-    bar_time: ISO timestamp string of the bar being evaluated (for backtesting).
-              If None, uses current wall-clock time (live mode).
+    bar_time: ISO timestamp of a specific bar (e.g. backtests). If omitted, uses
+              current UTC — use this for live scans so the badge matches scan time.
     """
     if bar_time:
         try:
