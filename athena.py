@@ -1733,7 +1733,7 @@ def fetch_eodhd(pair, tf, limit):
 
                 df = pd.DataFrame(candles)
 
-                df["time"] = pd.to_datetime(df["time"])
+                df["time"] = pd.to_datetime(df["time"], utc=True)
 
                 df = df.set_index("time")
 
