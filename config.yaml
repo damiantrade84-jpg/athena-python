@@ -128,7 +128,7 @@ AUTO_TRADE_MIN_SCORE:
   stock:     0.85   # factor engine: higher bar — single stocks more volatile/gappy
   index:     0.80   # factor engine
   forex:     0.65   # forex engine (0–1): ~65% of max, above scan gate of 0.60
-AUTO_TRADE_MAX_DAILY: 3            # Max auto-executions per day
+AUTO_TRADE_MAX_DAILY: 10           # Demo mode: max auto-executions per day
 AUTO_TRADE_MAX_PER_SCAN: 1         # Max per scan cycle; raise to 2 only with >10 active pairs
 AUTO_TRADE_SCAN_INTERVAL_MIN: 30   # Scan every 30 minutes
 MAX_PORTFOLIO_HEAT: 0.06      # 6% total risk across all positions

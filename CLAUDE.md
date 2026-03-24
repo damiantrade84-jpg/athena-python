@@ -637,7 +637,7 @@ AUTO_TRADE_MIN_SCORE:
   stock:     0.85
   commodity: 0.80
   index:     0.80
-AUTO_TRADE_MAX_DAILY: 3
+AUTO_TRADE_MAX_DAILY: 10  # demo mode cap
 AUTO_TRADE_MAX_PER_SCAN: 1
 AUTO_TRADE_SCAN_INTERVAL_MIN: 30
 ```
