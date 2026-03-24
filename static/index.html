@@ -1581,6 +1581,25 @@ function updateSession() {
 }
 updateSession(); setInterval(updateSession,60000);
 
+// -- Score Decay Monitor (polls /api/score-decay every 5 min) --
+var _lastDecayAlerts = {};
+async function checkScoreDecay() {
+  try {
+    var resp = await fetch('/api/score-decay');
+    if (!resp.ok) return;
+    var data = await resp.json();
+    for (var pair in data) {
+      var d = data[pair];
+      if (d.decay >= 3 && !_lastDecayAlerts[pair]) {
+        _lastDecayAlerts[pair] = true;
+        showToast('⚠ DECAY ' + pair + ': score ' + d.entryScore + ' → ' + d.currentScore + ' (Δ' + d.decay + ') — consider exit', true);
+      }
+    }
+  } catch(e) {}
+}
+setInterval(checkScoreDecay, 300000);
+setTimeout(checkScoreDecay, 10000);
+
 // -- Scan --
 async function runScan() {
   var btn=document.getElementById('scanBtn');

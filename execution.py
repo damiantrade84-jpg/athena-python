@@ -6,6 +6,7 @@ import json
 import sqlite3
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone
 
 from flask import Flask, jsonify, request
@@ -260,8 +261,10 @@ def api_engine_c_scan():
     btc_bias = _r.current_btc_bias() if asset_class == "crypto" else "neutral"
 
     engine_b = NakedEngine()
+    _EC_PAIR_TIMEOUT = 30  # seconds max per pair
 
     for pair in candidate_pairs:
+        _pair_start = time.time()
         try:
             time.sleep(0.1)
 
@@ -290,15 +293,13 @@ def api_engine_c_scan():
             h4 = _r.fetch_candles(pair, "H4", _r.CONFIG.get("H4_CANDLES", 250))
             h1 = _r.fetch_candles(pair, "H1", _r.CONFIG.get("H1_CANDLES", 250))
 
-            if ptype == "forex":
-                _h4_n = min(int(_r.CONFIG.get("H4_CANDLES", 250)), 500)
-                _h1_n = min(int(_r.CONFIG.get("H1_CANDLES", 250)), 500)
-                e4 = _r.extract_candles(_r.fetch_eodhd(pair, "H4", _h4_n))
-                if e4 and len(e4) >= 20:
-                    h4, _ = _r.merge_forex_forming_ws(e4, display, "H4", _h4_n)
-                e1 = _r.extract_candles(_r.fetch_eodhd(pair, "H1", _h1_n))
-                if e1 and len(e1) >= 20:
-                    h1, _ = _r.merge_forex_forming_ws(e1, display, "H1", _h1_n)
+            # fetch_candles already routes through CandleBuilder (WS) first,
+            # then EODHD REST as fallback — no need for separate EODHD calls.
+
+            if (time.time() - _pair_start) > _EC_PAIR_TIMEOUT:
+                _r.log.warning(f"[ENGINE C] {display}: timeout after candle fetch ({_EC_PAIR_TIMEOUT}s)")
+                results["skipped"].append({"display": display, "reason": "timeout"})
+                continue
 
             if not h4 or len(h4) < 20:
                 results["skipped"].append({"display": display, "reason": "insufficient_data"})
