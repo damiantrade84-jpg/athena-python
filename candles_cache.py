@@ -166,11 +166,19 @@ def fetch_candles(
 
     TTL: H1=55 min, H4=3h55m, D1=23h — expires just before the next bar closes.
     """
-    if pair.get("type") != "crypto":
+    # Skip CandleBuilder for H4/D1 when using Polygon source (native data available)
+    # CandleBuilder only provides H1 data for forex
+    use_candle_builder = (
+        pair.get("type") != "crypto" and 
+        tf == "H1" and 
+        pair.get("source") != "polygon"
+    )
+    
+    if use_candle_builder:
         live_resp = fetch_candles_live(pair.get("display", ""), tf, limit)
         live_candles = extract_candles(live_resp)
 
-        _min_live_bars = {"D1": 120, "H4": 20, "H1": 20}.get(tf, limit)
+        _min_live_bars = {"H1": 20}.get(tf, limit)
 
         if live_candles and len(live_candles) >= min(limit, _min_live_bars):
             return live_candles[-limit:] if len(live_candles) > limit else live_candles
