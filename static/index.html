@@ -4310,6 +4310,39 @@ async function _acmRender(symbol, tf) {
       _acm.chart.timeScale().fitContent();
     }
 
+    // Clamp price scale to visible candle range so SL/TP lines that sit far from
+    // current price don't blow out the chart scale and push candles to a tiny strip.
+    (function() {
+      var _visCount = tf === 'H4' ? Math.min(120, Math.max(70, data.length))
+                   : tf === 'D1' ? Math.min(85, Math.max(45, data.length))
+                   : data.length;
+      var _slice = data.slice(Math.max(0, data.length - _visCount));
+      if (!_slice.length) return;
+      var _lo = _slice.reduce(function(m, c) { return Math.min(m, c.low);  }, Infinity);
+      var _hi = _slice.reduce(function(m, c) { return Math.max(m, c.high); }, -Infinity);
+      var _pad = (_hi - _lo) * 0.12;
+      // Also include SL/TP if they are within 3x the candle range from midpoint
+      var _mid = (_hi + _lo) / 2;
+      var _range3 = (_hi - _lo) * 3;
+      var _sig = _acm.sig;
+      if (_sig) {
+        var _cands = [
+          parseFloat(_sig.sl  || 0),
+          parseFloat(_sig.tp1 || _sig.tp || 0),
+          parseFloat(_sig.tp2 || 0),
+        ].filter(function(v) { return v > 0 && Math.abs(v - _mid) <= _range3; });
+        _cands.forEach(function(v) {
+          if (v < _lo) _lo = v;
+          if (v > _hi) _hi = v;
+        });
+      }
+      _acm.chart.priceScale('right').applyOptions({
+        autoScale: false,
+        minValue: _lo - _pad,
+        maxValue: _hi + _pad,
+      });
+    })();
+
     // Signal that the chart is fully rendered (EMAs + levels + zoom all applied)
     _acm.lastData = data;
 
