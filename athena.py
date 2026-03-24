@@ -6335,6 +6335,11 @@ def api_candles():
     source_q = (request.args.get("source") or "").strip().lower()
     chart_source = "live" if source_q == "live" else "shared"
     candles = fetch_candles(pair, tf, limit)
+    
+    # Skip forming bar merge for Polygon (provides completed bars only)
+    if candles and pair.get("source") != "polygon":
+        # Only merge forming bars for EODHD/yfinance sources
+        candles, _ = _merge_forex_forming_ws(candles, pair.get("display", ""), tf, limit)
 
     if not candles:
         return jsonify({"error": f"No candle data for {symbol} {tf}"}), 404
