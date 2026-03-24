@@ -3889,6 +3889,7 @@ var _acm = {
   show: { vol: true, ema: true, levels: true, zones: false },
   liveInterval: null,
   lastData: [],
+  snapshotCandles: { H1: null, H4: null, D1: null },
 };
 
 function openAcm(symbol, tf, fallbackSig) {
@@ -3909,6 +3910,11 @@ function openAcm(symbol, tf, fallbackSig) {
     ? fallbackSig
     : (fromList || fallbackSig || null);
   _acm.sig = _acmNormalizeSig(useSig);
+  _acm.snapshotCandles = {
+    H1: _acm.sig && _acm.sig.h1Candles ? _acm.sig.h1Candles : null,
+    H4: _acm.sig && _acm.sig.h4Candles ? _acm.sig.h4Candles : null,
+    D1: _acm.sig && _acm.sig.d1Candles ? _acm.sig.d1Candles : null,
+  };
 
   var sig = _acm.sig;
   var display = sig ? (sig.display || sig.pair || symbol) : symbol;
@@ -4136,11 +4142,21 @@ async function _acmRender(symbol, tf) {
     'Loading ' + tf + ' candles...</div>';
 
   try {
-    var resp = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&tf=' + tf + '&limit=300');
-    var json = await resp.json();
-    var candles = json.candles || json;
-    _acm.pairType = json.pairType || '';
-    _acm.priceDisplay = json.display || '';
+    var snapshotCandles = (tf === 'H1' || tf === 'H4' || tf === 'D1') ? (_acm.snapshotCandles[tf] || null) : null;
+    var candles = null;
+    var json = {};
+    if (snapshotCandles && snapshotCandles.length) {
+      candles = snapshotCandles;
+      _acm.pairType = (_acm.sig && _acm.sig.type) || '';
+      _acm.priceDisplay = (_acm.sig && (_acm.sig.display || _acm.sig.pair)) || symbol;
+    } else {
+      var resp = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&tf=' + tf + '&limit=300');
+      json = await resp.json();
+      candles = json.candles || json;
+      _acm.pairType = json.pairType || ((_acm.sig && _acm.sig.type) || '');
+      _acm.priceDisplay = json.display || ((_acm.sig && (_acm.sig.display || _acm.sig.pair)) || '');
+      if (!resp.ok) throw new Error(json.error || 'Failed to load candles');
+    }
     if (!candles || !candles.length) throw new Error('No candle data');
 
     // Remove loading

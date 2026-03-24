@@ -6295,34 +6295,11 @@ def api_candles():
     # ?source=live uses fetch_candles only (debug / compare WS+cache series).
     ptype = pair.get("type") or ""
     source_q = (request.args.get("source") or "").strip().lower()
-    chart_source = "cache"
-    used_eodhd_forex = False
-
-    if ptype == "forex" and tf in ("H1", "H4"):
-        if source_q == "live":
-            candles = fetch_candles(pair, tf, limit)
-            chart_source = "live"
-        else:
-            eod = fetch_eodhd(pair, tf, limit)
-            candles = _extract_candles(eod)
-            if candles:
-                used_eodhd_forex = True
-                chart_source = "eodhd"
-            if not candles:
-                candles = fetch_candles(pair, tf, limit)
-                chart_source = "cache"
-    else:
-        candles = fetch_candles(pair, tf, limit)
+    chart_source = "live" if source_q == "live" else "shared"
+    candles = fetch_candles(pair, tf, limit)
 
     if not candles:
         return jsonify({"error": f"No candle data for {symbol} {tf}"}), 404
-
-    if used_eodhd_forex and source_q != "live":
-        candles, _ws_note = _merge_forex_forming_ws(
-            candles, pair.get("display", ""), tf, limit
-        )
-        if _ws_note:
-            chart_source = "eodhd+ws"
 
     _naive_iso_utc = re.compile(
         r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$"
@@ -6954,6 +6931,17 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
         "factorDiagnostics": res.get("factorDiagnostics", {}),
         "pairProfile": pair_profile,
         "style": _style,
+        "h1Candles": [
+            {
+                "t": c.get("time", ""),
+                "o": round(c["open"], 6),
+                "h": round(c["high"], 6),
+                "l": round(c["low"], 6),
+                "c": round(c["close"], 6),
+                "v": round(float(c.get("vol", c.get("volume", 0)) or 0), 2),
+            }
+            for c in h1[-120:]
+        ],
         "h4Candles": [
             {
                 "t": c.get("time", ""),
@@ -6961,8 +6949,20 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
                 "h": round(c["high"], 6),
                 "l": round(c["low"], 6),
                 "c": round(c["close"], 6),
+                "v": round(float(c.get("vol", c.get("volume", 0)) or 0), 2),
             }
             for c in h4[-80:]
+        ],
+        "d1Candles": [
+            {
+                "t": c.get("time", ""),
+                "o": round(c["open"], 6),
+                "h": round(c["high"], 6),
+                "l": round(c["low"], 6),
+                "c": round(c["close"], 6),
+                "v": round(float(c.get("vol", c.get("volume", 0)) or 0), 2),
+            }
+            for c in d1[-120:]
         ],
         "style_levels": _build_style_levels(
             price=float(price),
