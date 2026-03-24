@@ -6964,6 +6964,12 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
             }
             for c in h4[-80:]
         ],
+        "style_levels": _build_style_levels(
+            price=float(price),
+            atr=float(atr),
+            direction=direction,
+            pair_type=pair.get("type", "stock"),
+        ),
     }
 
 
@@ -6971,6 +6977,29 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
 
 
 # _classify_signal imported from scoring.py — see that module for implementation
+
+
+def _build_style_levels(price: float, atr: float, direction: str, pair_type: str) -> dict:
+    """Compute SL/TP1/TP2/RR for scalp, intraday, and swing styles from ATR multipliers.
+    Returns a dict keyed by style for frontend display on signal cards.
+    """
+    from indicators import calc_levels as _calc_levels
+    result = {}
+    if not price or not atr or price <= 0 or atr <= 0:
+        return result
+    for _style in ("scalp", "intraday", "swing"):
+        try:
+            lvl = _calc_levels(price, atr, direction, pair_type, style=_style)
+            result[_style] = {
+                "sl":  round(float(lvl["sl"]),  6),
+                "tp1": round(float(lvl["tp1"]), 6),
+                "tp2": round(float(lvl["tp2"]), 6),
+                "rr1": round(float(lvl["rr1"]), 2),
+                "rr2": round(float(lvl["rr2"]), 2),
+            }
+        except Exception:
+            pass
+    return result
 
 
 # â"€â"€ Task 1: Trade Outcome Monitor â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
