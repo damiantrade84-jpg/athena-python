@@ -124,7 +124,7 @@ AUTO_TRADE_MAX_DAILY: 3            # Max auto-executions per day
 AUTO_TRADE_MAX_PER_SCAN: 1         # Max per scan cycle; raise to 2 only with >10 active pairs
 AUTO_TRADE_SCAN_INTERVAL_MIN: 30   # Scan every 30 minutes
 MAX_PORTFOLIO_HEAT: 0.06      # 6% total risk across all positions
-MAX_OPEN_POSITIONS: 5          # Production setting
+MAX_OPEN_POSITIONS: 40         # Demo/testing — revert to 5 before live
 MAX_CORRELATED_POSITIONS: 10   # Testing: allow broader same-cluster exposure
 SIGNAL_MAX_AGE_SEC: 300       # 5 min freshness window
 FOREX_SESSION_FILTER: true    # true = London+NY+Asian only; false = 24h (disable for testing)
@@ -162,6 +162,7 @@ AI_VISION_TEMPERATURE: 0.6
 LEARNING_ENABLED: true             # Enable AI self-learning (outcome extraction + prompt injection)
 LEARNING_LOOKBACK_DAYS: 90         # How many days of trade history to use for learning context
 LEARNING_MIN_TRADES: 30            # Minimum trades required before injecting learning context into AI prompts
+META_ANALYSIS_ENABLED: true        # false = skip auto-trader weekly xAI meta-analysis (manual POST still works)
 
 # ── EODHD Insider / Fundamentals Enrichment ───────────────
 INSIDER_TRADING_ENABLED: true      # Check SEC Form 4 insider activity for stock signals
