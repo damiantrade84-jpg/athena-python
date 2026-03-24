@@ -666,11 +666,11 @@ ADX_TREND_MIN_CLASS:
 ### AI Settings
 
 ```yaml
-ANTHROPIC_MODEL: "claude-sonnet-4-6"   # AI model for analysis
+ANTHROPIC_MODEL: "claude-opus-4-6"   # AI model for chart analysis
 LEARNING_ENABLED: true                  # Extract learning from closed trades
 LEARNING_MIN_TRADES: 5                  # Min trades before learning injected
 LEARNING_LOOKBACK_DAYS: 90             # Days of history for learning context
-META_ANALYSIS_ENABLED: true            # Weekly meta-analysis via Claude
+META_ANALYSIS_ENABLED: true            # Weekly meta-analysis via xAI
 ```
 
 ---

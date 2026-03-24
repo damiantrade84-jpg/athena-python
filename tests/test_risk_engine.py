@@ -106,8 +106,8 @@ class TestDrawdown:
 
 class TestMaxPositions:
     def test_rejects_at_max_positions(self):
-        # Default MAX_OPEN_POSITIONS=5
-        positions = [{"pair": f"P{i}", "risk_amount": 10} for i in range(5)]
+        max_pos = int(_cfg("MAX_OPEN_POSITIONS", 5))
+        positions = [{"pair": f"P{i}", "risk_amount": 10} for i in range(max_pos)]
         result = risk_check(_make_signal(), 100000, 100000, positions)
         assert result.approved is False
         assert result.reason == "MAX_POSITIONS_REACHED"

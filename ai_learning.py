@@ -10,6 +10,9 @@ import logging
 import sqlite3
 from datetime import datetime, timezone, timedelta
 
+from ai_schemas import MetaAnalysisResponse
+from ai_utils import parse_json_object
+
 log = logging.getLogger("sentinel.learning")
 
 # ── DB schema ────────────────────────────────────────────────────────────────
@@ -368,7 +371,7 @@ def get_ai_learning_context(
 
 
 def get_meta_analysis_context(db_path: str, days: int = 7) -> str:
-    """Build a plain-text summary of recent outcomes for Claude meta-analysis."""
+    """Build a plain-text summary of recent outcomes for xAI meta-analysis."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     try:
         with sqlite3.connect(db_path, timeout=15.0) as con:
@@ -483,25 +486,43 @@ def run_meta_analysis(db_path: str, xai_key: str, model: str, days: int = 7) -> 
 
     try:
         import openai
+        from config import CONFIG
 
         client = openai.OpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
-        resp = client.responses.create(
-            model=model,
-            max_output_tokens=800,
-            input=[
-                {"role": "system", "content": _META_SYSTEM},
-                {"role": "user", "content": _META_USER_TMPL.format(context=context)},
-            ],
-        )
-        raw = resp.output_text.strip()
-        import re
-        import json as _json
+        _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
+        _json = json
+        raw = ""
 
+        result = None
         try:
-            result = _json.loads(raw)
-        except Exception:
-            m = re.search(r"\{.*\}", raw, re.DOTALL)
-            result = _json.loads(m.group()) if m else {"summary": raw}
+            completion = client.beta.chat.completions.parse(
+                model=model,
+                max_tokens=900,
+                temperature=_temp,
+                messages=[
+                    {"role": "system", "content": _META_SYSTEM},
+                    {"role": "user", "content": _META_USER_TMPL.format(context=context)},
+                ],
+                response_format=MetaAnalysisResponse,
+            )
+            if completion.choices[0].message.parsed:
+                result = completion.choices[0].message.parsed.model_dump()
+                raw = _json.dumps(result)
+        except Exception as _so_err:
+            log.debug(f"[LEARN] Structured meta-analysis failed: {_so_err}")
+
+        if result is None:
+            resp = client.responses.create(
+                model=model,
+                max_output_tokens=900,
+                temperature=_temp,
+                input=[
+                    {"role": "system", "content": _META_SYSTEM},
+                    {"role": "user", "content": _META_USER_TMPL.format(context=context)},
+                ],
+            )
+            raw = resp.output_text.strip()
+            result = parse_json_object(raw) or {"summary": raw}
 
         # Persist to meta_analysis_log
         try:

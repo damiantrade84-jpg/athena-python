@@ -1,5 +1,39 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-24) — H1 Triple-Screen Upgrade
+
+**Change 1 — H1 EMA alignment in forex entry quality (`forex_scoring.py`):**
+- `_entry_quality(h1_snap, direction, rsi_history=None)` now applies an H1 EMA alignment modifier after the RSI quality score is computed.
+- Uses existing H1 snapshot fields from `calc_indicators()` (`close`, `ema21`, `ema50`) — no new data fetch and no new indicator calculation.
+- LONG logic:  
+  - `close < ema21` → entry-quality penalty (pullback still in progress)  
+  - `close > ema21 > ema50` → entry-quality confirmation bonus (anchor reclaimed)
+- SHORT logic mirrors LONG:
+  - `close > ema21` → penalty
+  - `close < ema21 < ema50` → bonus
+- Modifier is controlled by `FOREX_ENGINE.h1_ema_entry_filter` in `config.yaml` (default `true`) so the behavior can be disabled without code edits.
+
+**Change 2 — Triple-screen AI Vision (`static/index.html` + `athena.py`):**
+- `runECVisionConfirm` now captures three chart timeframes in sequence: D1 → H4 → H1.
+- Frontend sends all three screenshots to `/api/chart-analysis`:
+  - `image_d1` (D1)
+  - `image` (H4, backward-compatible field)
+  - `image_h1` (H1)
+- Vision status text updated to reflect the D1+H4+H1 capture pipeline.
+
+**`/api/chart-analysis` triple-screen mode (`athena.py`):**
+- Endpoint now reads `img_h1 = data.get("image_h1")` and strips any data-URL prefix the same way as other image fields.
+- `triple_mode = bool(img_d1 and img_h1)`:
+  - If `true`, prompt follows Elder triple-screen structure:
+    1) D1 strategic bias  
+    2) H4 structure confirmation (momentum/EMA/MACD context)  
+    3) H1 immediate entry quality (RSI pullback depth, EMA21 reclaim, trigger candle)  
+    4) Three-way timeframe alignment (D1/H4/H1)  
+    5) Per-style ratings mapped to TF intent (scalp=H1, intraday=H4, swing=D1)
+  - If `false`, dual-timeframe behavior remains unchanged (backward compatible).
+- Vision `max_tokens` increased from 800 to 950 for triple-screen analysis.
+- Triple-screen responses include `tf: "D1+H4+H1"` and `triple_tf: True`.
+
 ## Recent Changes — Deep Engine Audit Fixes
 
 **CRITICAL — Backtest calc_levels missing style (ATR1):**
@@ -503,7 +537,7 @@ Routes pairs to EODHD WS endpoints (`us`, `forex`). Skips any pair with `"ws": F
 - To re-allocate WS slots: run backtests → query `backtest_results` by SQN → update `"ws"` flags in pair lists
 
 ### `/api/chart-analysis` endpoint — athena.py
-POST endpoint. Sends a chart screenshot (base64 PNG) to Claude Vision (`claude-sonnet-4-6`) for professional TA review.
+POST endpoint. Sends a chart screenshot (base64 PNG) to Claude Vision (`claude-opus-4-6`) for professional TA review.
 
 **Request body:**
 ```json
@@ -518,7 +552,7 @@ POST endpoint. Sends a chart screenshot (base64 PNG) to Claude Vision (`claude-s
 - `signal` and `engineB` are optional — endpoint prefers POST body over scan cache (`_last_scan_results` / `_engine_b_cache`)
 - `regime` in `signal` can be a **dict** `{"label": "TRENDING"}` (Engine A) or a **plain string** `"TRENDING"` (Engine C) — both handled
 - Context builder is **outside** the try/except — any crash there returns HTML 500 (known risk area; keep context code simple)
-- Returns `{analysis: "<text>", model: "claude-sonnet-4-6", symbol, tf}` or `{error: "<msg>"}`
+- Returns `{analysis: "<text>", structured: {...}, model: "claude-opus-4-6", symbol, tf}` or `{error: "<msg>"}`
 - Requires `ANTHROPIC_API_KEY` env var; returns 500 if missing
 
 ### `/api/pairs` endpoint — athena.py

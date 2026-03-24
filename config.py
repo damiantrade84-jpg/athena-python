@@ -54,7 +54,12 @@ except Exception as _e:
 # ── Default CONFIG ───────────────────────────────────────────────────────────
 CONFIG: dict = {
     "XAI_API_KEY": os.environ.get("XAI_API_KEY", "YOUR_XAI_API_KEY"),
-    "XAI_MODEL": "grok-4-1-fast-reasoning",
+    "XAI_MODEL": "grok-4.20-0309-reasoning",
+    "DEBATE_MODEL": "grok-4.20-0309-reasoning",
+    "VISION_MODEL": "claude-opus-4-6",
+    "AI_STRUCTURED_OUTPUTS": True,
+    "AI_TEMPERATURE": 0.3,
+    "AI_VISION_TEMPERATURE": 0.6,
     "CRYPTOPANIC_KEY": os.environ.get("CRYPTOPANIC_KEY", ""),
     "FINNHUB_KEY": os.environ.get("FINNHUB_KEY", ""),
     "RISK_PCT": 0.01,
@@ -451,7 +456,7 @@ CONFIG: dict = {
     "LEARNING_ENABLED": True,  # Extract learning data after each trade closes
     "LEARNING_MIN_TRADES": 5,  # Min trades before context injected into AI
     "LEARNING_LOOKBACK_DAYS": 90,  # Days of history to query for context
-    "META_ANALYSIS_ENABLED": True,  # Weekly meta-analysis via Claude
+    "META_ANALYSIS_ENABLED": True,  # Weekly meta-analysis via xAI
     # ── Engine B AI Controls ─────────────────────────────────────────────────
     "ENGINE_B_NEWS_CONTEXT_ENABLED": True,  # Feed news into Engine B AI advisory (not checklist)
     "AI_ON_DEMAND_ONLY": True,  # AI runs on user-initiated actions only, not auto-scans

@@ -7,6 +7,9 @@ Adapts Engine A's AI design pattern for Engine B structural analysis.
 import logging
 from typing import Optional
 
+from ai_utils import parse_json_object
+from config import CONFIG
+
 log = logging.getLogger("athena")
 
 
@@ -256,7 +259,7 @@ def get_engine_b_ai_verdict(
     confidence_result: dict,
     learning_ctx: Optional[dict] = None,
     xai_api_key: str = None,
-    xai_model: str = "grok-beta",
+    xai_model: str = "grok-4.20-0309-reasoning",
     engine_a_ctx: Optional[dict] = None,
     news_ctx: Optional[dict] = None,
 ) -> dict:
@@ -300,18 +303,21 @@ def get_engine_b_ai_verdict(
         )
 
         expert_prompt = (
-            "You are Marcus Reid, veteran SMC/ICT structural trader analyzing naked price action setups."
-            " Focus on: swing structure alignment, BOS confirmation, liquidity sweeps, FVG overlap, zone quality, and risk:reward."
+            "You are Marcus Reid, veteran SMC/ICT structural trader analyzing naked price action setups. "
+            "Focus only on structure and liquidity evidence: swing alignment, BOS, sweeps, FVG overlap, zone quality, "
+            "trigger quality, and risk:reward."
             + cross_engine_note
-            + " Rate this setup for ALL THREE styles independently:"
-            " SCALP (H1, tight SL/TP, 1.5-2R), INTRADAY (H4, moderate, 2-3R), SWING (D1, wide, 3-6R)."
-            " Include in style_ratings. Top-level grade/edgeProbability/riskLevel = best style."
-            ' Output strict JSON: {"grade":"A+","edgeProbability":75,"riskLevel":"MEDIUM","verdict":"concise analysis",'
-            '"style_ratings":{"scalp":{"grade":"B","edgeProbability":55,"riskLevel":"High"},'
-            '"intraday":{"grade":"A","edgeProbability":72,"riskLevel":"Medium"},'
-            '"swing":{"grade":"A+","edgeProbability":80,"riskLevel":"Low"}}}'
-            " Grade scale: A+ (elite), A (strong), B (acceptable), C (marginal), D/F (reject)."
+            + " Grade rubric: "
+            "A+=BOS aligned + clean zone + clear trigger + RR>=2.5 + multi-TF alignment; "
+            "A=strong structure with minor weakness and RR>=2.0; "
+            "B=tradable but mixed structure or RR>=1.5; "
+            "C=marginal/incomplete setup; "
+            "D/F=reject."
+            " Rate all three styles independently: SCALP(H1, 1.5-2R), INTRADAY(H4, 2-3R), SWING(D1, 3-6R). "
+            "Top-level grade/edgeProbability/riskLevel must represent the best style. "
+            "Output strict JSON only."
         )
+        _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
 
         parsed = None
 
@@ -322,6 +328,7 @@ def get_engine_b_ai_verdict(
             completion = client.beta.chat.completions.parse(
                 model=xai_model,
                 max_tokens=800,
+                temperature=_temp,
                 messages=[
                     {"role": "system", "content": expert_prompt},
                     {"role": "user", "content": message},
@@ -341,6 +348,7 @@ def get_engine_b_ai_verdict(
             response = client.responses.create(
                 model=xai_model,
                 max_output_tokens=800,
+                temperature=_temp,
                 input=[
                     {"role": "system", "content": expert_prompt},
                     {"role": "user", "content": message},
@@ -348,40 +356,7 @@ def get_engine_b_ai_verdict(
             )
 
             text = response.output_text.strip()
-            import re
-            import json
-
-            # Try code fence
-            if "```" in text:
-                for p in text.split("```"):
-                    p = p.strip()
-                    if p.startswith("json"):
-                        p = p[4:].strip()
-                    if p.startswith("{"):
-                        try:
-                            parsed = json.loads(p[: p.rfind("}") + 1])
-                            break
-                        except json.JSONDecodeError:
-                            pass
-
-            # Try regex
-            if parsed is None:
-                match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text)
-                if match:
-                    try:
-                        parsed = json.loads(match.group())
-                    except json.JSONDecodeError:
-                        pass
-
-            # Fallback to brace matching
-            if parsed is None:
-                start = text.find("{")
-                end = text.rfind("}") + 1
-                if start >= 0 and end > start:
-                    try:
-                        parsed = json.loads(text[start:end])
-                    except json.JSONDecodeError:
-                        pass
+            parsed = parse_json_object(text)
 
         if parsed is None:
             log.error(f"[ENGINE_B_AI] {pair}: Failed to parse JSON from AI response")
@@ -392,6 +367,28 @@ def get_engine_b_ai_verdict(
         missing = required - set(parsed.keys())
         if missing:
             log.warning(f"[ENGINE_B_AI] {pair}: Missing keys {missing} in AI response")
+            parsed.setdefault("grade", "C")
+            parsed.setdefault("edgeProbability", 50)
+            parsed.setdefault("riskLevel", "Medium")
+            parsed.setdefault("verdict", "Model response missing fields; using safe defaults.")
+        parsed["riskLevel"] = str(parsed.get("riskLevel", "Medium")).title()
+        parsed["style_ratings"] = parsed.get("style_ratings") or {
+            "scalp": {
+                "grade": parsed.get("grade", "C"),
+                "edgeProbability": parsed.get("edgeProbability", 50),
+                "riskLevel": parsed.get("riskLevel", "Medium"),
+            },
+            "intraday": {
+                "grade": parsed.get("grade", "C"),
+                "edgeProbability": parsed.get("edgeProbability", 50),
+                "riskLevel": parsed.get("riskLevel", "Medium"),
+            },
+            "swing": {
+                "grade": parsed.get("grade", "C"),
+                "edgeProbability": parsed.get("edgeProbability", 50),
+                "riskLevel": parsed.get("riskLevel", "Medium"),
+            },
+        }
 
         log.info(
             f"[ENGINE_B_AI] {pair} => Grade:{parsed.get('grade', '?')} "

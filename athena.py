@@ -3950,7 +3950,7 @@ ENGINE B (NAKED) RULES:
 
 
 
-edgeProbability: Base = Score% × 0.95. +10 if conviction HIGH and TRENDING. -15 if counter-trend or DEAD RANGING. -10 if high-impact news. Cap 20-95.
+edgeProbability: Estimate a realistic win probability from 20-95 based on score%, regime quality, structural alignment, and risk factors. Use score% as an anchor, not a fixed formula.
 
 
 
@@ -4563,7 +4563,7 @@ def _build_signal_message(
     drawdown_pct: float = 0.0,
     learning_ctx: dict | None = None,
 ) -> str:
-    """Build sectioned signal string sent to Marcus Reid (Claude) for analysis.
+    """Build sectioned signal string sent to Marcus Reid (xAI Grok) for analysis.
 
 
 
@@ -4948,43 +4948,10 @@ def _build_signal_message(
 
 def _parse_ai_json(text: str, pair: str = "?") -> dict | None:
     """Parse JSON from AI response using multiple fallback strategies."""
-    import re as _re
+    from ai_utils import parse_json_object
 
-    _parsed = None
-
-    # Attempt 1: code-fence extraction
-    if "```" in text:
-        for p in text.split("```"):
-            p = p.strip()
-            if p.startswith("json"):
-                p = p[4:].strip()
-            if p.startswith("{"):
-                try:
-                    _parsed = json.loads(p[: p.rfind("}") + 1])
-                    break
-                except json.JSONDecodeError:
-                    pass
-
-    # Attempt 2: regex for outermost JSON object
-    if _parsed is None:
-        _m = _re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text)
-        if _m:
-            try:
-                _parsed = json.loads(_m.group())
-            except json.JSONDecodeError:
-                pass
-
-    # Attempt 3: first { to last }
-    if _parsed is None:
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if start >= 0 and end > start:
-            try:
-                _parsed = json.loads(text[start:end])
-            except json.JSONDecodeError:
-                pass
-
-    return _parsed
+    _ = pair  # kept for backward-compatible signature and logging call sites
+    return parse_json_object(text)
 
 
 def run_ai(
@@ -5008,6 +4975,7 @@ def run_ai(
         import openai
 
         c = openai.OpenAI(api_key=CONFIG["XAI_API_KEY"], base_url="https://api.x.ai/v1")
+        _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
 
         style_labels = {
             "scalp": "SCALP â€” focus on H1 exhaustion, tight 1.5R, quick execution",
@@ -5042,7 +5010,8 @@ def run_ai(
 
                 completion = c.beta.chat.completions.parse(
                     model=CONFIG["XAI_MODEL"],
-                    max_tokens=900,
+                    max_tokens=1100,
+                    temperature=_temp,
                     messages=[
                         {"role": "system", "content": EXPERT_PROMPT},
                         {"role": "user", "content": msg},
@@ -5061,7 +5030,8 @@ def run_ai(
         if result is None:
             r = c.responses.create(
                 model=CONFIG["XAI_MODEL"],
-                max_output_tokens=900,
+                max_output_tokens=1100,
+                temperature=_temp,
                 input=[
                     {"role": "system", "content": EXPERT_PROMPT},
                     {"role": "user", "content": msg},
@@ -8350,7 +8320,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                     confidence_result=conf,
                     learning_ctx=learning_ctx,
                     xai_api_key=CONFIG.get("XAI_API_KEY"),
-                    xai_model=CONFIG.get("XAI_MODEL", "grok-beta"),
+                    xai_model=CONFIG.get("XAI_MODEL", "grok-4.20-0309-reasoning"),
                     engine_a_ctx=engine_a_ctx,
                     news_ctx=_news_ctx,
                 )
@@ -10649,7 +10619,7 @@ def api_meta_analysis():
         result = run_meta_analysis(
             _AUDIT_DB,
             CONFIG.get("XAI_API_KEY", ""),
-            CONFIG.get("XAI_MODEL", "grok-4-1-fast-reasoning"),
+            CONFIG.get("XAI_MODEL", "grok-4.20-0309-reasoning"),
         )
 
         return jsonify(result)
@@ -10828,6 +10798,60 @@ def api_chart_analysis():
     )
 
     direction_str = sig.get("direction", "UNKNOWN") if sig else "UNKNOWN"
+
+    def _extract_vision_structured(analysis_text: str, direction_hint: str) -> dict:
+        """Extract structured Vision fields from free-text analysis."""
+        import re as _re
+
+        txt = analysis_text or ""
+        up = txt.upper()
+        out = {
+            "rating": "",
+            "confirms_direction": True,
+            "sl_flag": "ok",
+            "tp_flag": "ok",
+            "style_ratings": {},
+        }
+        for style in ("SCALP", "INTRADAY", "SWING"):
+            m = _re.search(
+                rf"{style}\s+RATING\s*:\s*(STRONG|MODERATE|WEAK|AVOID|CONTRADICTS?)",
+                up,
+            )
+            if m:
+                val = m.group(1).upper()
+                if val == "CONTRADICT":
+                    val = "CONTRADICTS"
+                out["style_ratings"][style.lower()] = val
+
+        if out["style_ratings"]:
+            for label in ("STRONG", "MODERATE", "WEAK", "AVOID", "CONTRADICTS"):
+                if label in out["style_ratings"].values():
+                    out["rating"] = label
+                    break
+        if not out["rating"]:
+            for label in ("CONTRADICTS", "AVOID", "STRONG", "MODERATE", "WEAK"):
+                if label in up:
+                    out["rating"] = label
+                    break
+
+        if "CONFLICTED" in up or "CONTRADICT" in up:
+            out["confirms_direction"] = False
+            out["rating"] = "CONTRADICTS"
+        elif direction_hint and direction_hint.upper() in ("LONG", "SHORT"):
+            _oppose = _re.search(r"(OPPOSES|AGAINST)\s+THE\s+ALGORITHMIC", up)
+            if _oppose:
+                out["confirms_direction"] = False
+                out["rating"] = "CONTRADICTS"
+
+        if _re.search(r"\bSL\b.*(TOO\s+TIGHT|TIGHT)", up):
+            out["sl_flag"] = "too_tight"
+        if _re.search(r"\bTP\b.*(TOO\s+FAR|UNREALISTIC)", up):
+            out["tp_flag"] = "too_far"
+
+        if not out["rating"]:
+            out["rating"] = "MODERATE"
+        return out
+
     user_prompt = (
         f"Analyse this {asset_type.upper()} chart ({tf} timeframe).\n\n"
         f"ALGORITHMIC CONTEXT:\n{algo_context}\n\n"
@@ -10847,6 +10871,11 @@ def api_chart_analysis():
         "SWING RATING: STRONG / MODERATE / WEAK / AVOID\n"
         "(use CONTRADICTS instead if the chart clearly opposes the algorithmic direction for that style) "
         "— one sentence justification per style.\n\n"
+        "You MUST end with exactly these 4 lines:\n"
+        "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
+        "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+        "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+        "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n\n"
         "Keep total response under 350 words. Be direct."
     )
 
@@ -10904,6 +10933,11 @@ def api_chart_analysis():
                 "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID\n"
                 "SWING RATING: STRONG / MODERATE / WEAK / AVOID\n"
                 "(use CONTRADICTS if that timeframe clearly opposes the algorithmic direction)\n\n"
+                "You MUST end with exactly these 4 lines:\n"
+                "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
+                "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n\n"
                 "Keep total response under 480 words. Be direct."
             )
             content = [
@@ -10952,6 +10986,11 @@ def api_chart_analysis():
                 "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID\n"
                 "SWING RATING: STRONG / MODERATE / WEAK / AVOID\n"
                 "(use CONTRADICTS if the combined picture clearly opposes the algorithmic direction)\n\n"
+                "You MUST end with exactly these 4 lines:\n"
+                "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
+                "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n\n"
                 "Keep total response under 420 words. Be direct."
             )
             content = [
@@ -10979,20 +11018,25 @@ def api_chart_analysis():
             ]
             log.info(f"[AI CHART] Single-TF {tf} analysis for {symbol}")
 
-        _max_tokens = 950 if triple_mode else 800
+        _max_tokens = 1100 if triple_mode else 800
+        _vision_model = CONFIG.get("VISION_MODEL", "claude-opus-4-6")
+        _vision_temp = float(CONFIG.get("AI_VISION_TEMPERATURE", 0.6))
         message = client.messages.create(
-            model="claude-sonnet-4-6",
+            model=_vision_model,
             max_tokens=_max_tokens,
+            temperature=_vision_temp,
             system=system_prompt,
             messages=[{"role": "user", "content": content}],
         )
 
         analysis = message.content[0].text if message.content else "No analysis returned."
+        structured = _extract_vision_structured(analysis, direction_str)
 
         _tf_label = "D1+H4+H1" if triple_mode else ("D1+H4" if dual_mode else tf)
         return jsonify({
             "analysis": analysis,
-            "model": "claude-sonnet-4-6",
+            "structured": structured,
+            "model": _vision_model,
             "symbol": symbol,
             "tf": _tf_label,
             "dual_tf": dual_mode,
