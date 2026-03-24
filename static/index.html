@@ -1818,11 +1818,15 @@ function buildCard(s,idx) {
   if (isNaked) {
     aiSection='<div class="ai-panel" id="ai-'+sid+'">'+
       '<div class="ai-header" onclick="toggleAI(\''+sid+'\')">'+
-        '<span class="ai-label"><span class="ai-dot"></span> Cross-Engine AI Review</span>'+
-        '<span style="font-size:11px;color:var(--muted)">A+B</span>'+
+        '<span class="ai-label"><span class="ai-dot"></span> Engine B AI</span>'+
+        '<span style="font-size:11px;color:var(--muted)">choose mode</span>'+
       '</div>'+
-      '<div class="ai-content" id="aic-'+sid+'">'+
-        '<button class="analyze-btn" id="abtn-compare-'+sid+'" onclick="runCompare(\''+s.symbol+'\')">Run Compare A&B Review</button>'+
+      '<div class="ai-content open" id="aic-'+sid+'">'+
+        '<p style="font-size:10px;color:var(--muted);margin:0 0 8px;line-height:1.45;font-family:Space Mono,monospace">'+
+        '<strong style="color:var(--accent)">B only</strong> — Grok reads structure only (no Engine A in prompt). '+
+        '<strong style="color:#f59e0b">A+B</strong> — fresh Engine A + B; AI sees both (mentions conflicts like “A SHORT”).</p>'+
+        '<button class="analyze-btn" id="abtn-engb-only-'+sid+'" onclick="runEngineBOnlyAI(\''+s.symbol+'\')" style="margin-bottom:6px">Engine B AI only</button>'+
+        '<button class="analyze-btn" id="abtn-compare-'+sid+'" onclick="runCompare(\''+s.symbol+'\')" style="background:rgba(245,158,11,0.12);border-color:#f59e0b;color:#f59e0b">Compare A+B review</button>'+
       '</div>'+
     '</div>';
   } else if (s.aiAnalysis) {
@@ -2804,6 +2808,44 @@ async function analyzeNakedSignal(symbol, buttonId) {
     var aiDiv = document.getElementById('ai-nres-'+sid);
     if(aiDiv) aiDiv.innerHTML = '<span style="color:var(--bear)">AI Error: '+err.message+'</span>';
     showToast('AI Error: '+err.message, true);
+  }
+}
+
+// -- Engine B AI only (AI tab on naked cards): /api/naked-analysis — no Engine A in Grok prompt --
+async function runEngineBOnlyAI(symbol) {
+  var sid = (symbol || '').replace(/[\/=^.]/g, '_');
+  var sig = window['_nakedSig_' + sid] ||
+    allSignals.find(function(s) { return s.symbol === symbol; });
+  if (!sig) {
+    showToast('Signal not found for ' + symbol, true);
+    return;
+  }
+  var btn = document.getElementById('abtn-engb-only-' + sid);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Analyzing B only...';
+  }
+  try {
+    var resp = await fetch('/api/naked-analysis', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({signal: buildLiveSignalPayload(sig)})
+    });
+    if (!resp.ok) throw new Error('Server error: HTTP ' + resp.status);
+    var data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    window['_engineB_' + sid] = data;
+    var aiPayload = data.ai_analysis || data.aiAnalysis;
+    if (!aiPayload) throw new Error('Engine B AI review unavailable');
+    var panel = document.getElementById('ai-' + sid);
+    if (panel) panel.outerHTML = buildAIContent(aiPayload, symbol, 'engb-only');
+    showToast('Engine B AI (no Engine A context) complete');
+  } catch (err) {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Engine B AI only';
+    }
+    showToast('Error: ' + err.message, true);
   }
 }
 
