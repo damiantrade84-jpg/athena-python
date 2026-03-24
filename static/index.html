@@ -4142,21 +4142,16 @@ async function _acmRender(symbol, tf) {
     'Loading ' + tf + ' candles...</div>';
 
   try {
-    var snapshotCandles = (tf === 'H1' || tf === 'H4' || tf === 'D1') ? (_acm.snapshotCandles[tf] || null) : null;
+    // Always fetch fresh candles from API - snapshot candles can be stale and cause
+    // SL/TP lines to appear at wrong price levels relative to current market.
     var candles = null;
     var json = {};
-    if (snapshotCandles && snapshotCandles.length) {
-      candles = snapshotCandles;
-      _acm.pairType = (_acm.sig && _acm.sig.type) || '';
-      _acm.priceDisplay = (_acm.sig && (_acm.sig.display || _acm.sig.pair)) || symbol;
-    } else {
-      var resp = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&tf=' + tf + '&limit=300');
-      json = await resp.json();
-      candles = json.candles || json;
-      _acm.pairType = json.pairType || ((_acm.sig && _acm.sig.type) || '');
-      _acm.priceDisplay = json.display || ((_acm.sig && (_acm.sig.display || _acm.sig.pair)) || '');
-      if (!resp.ok) throw new Error(json.error || 'Failed to load candles');
-    }
+    var resp = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&tf=' + tf + '&limit=300');
+    json = await resp.json();
+    candles = json.candles || json;
+    _acm.pairType = json.pairType || ((_acm.sig && _acm.sig.type) || '');
+    _acm.priceDisplay = json.display || ((_acm.sig && (_acm.sig.display || _acm.sig.pair)) || '');
+    if (!resp.ok) throw new Error(json.error || 'Failed to load candles');
     if (!candles || !candles.length) throw new Error('No candle data');
 
     // Remove loading
@@ -4378,7 +4373,6 @@ function _acmDrawLevels() {
   if (!_acm.candle || !_acm.sig) return;
   var sig = _acm.sig;
   _acm.levelLines = [];
-
   var entry = parseFloat(sig.price || sig.entryPrice || sig.entry || 0);
   if (entry > 0) _acm.levelLines.push(_acm.candle.createPriceLine({
     price: entry, color: 'rgba(226,232,240,0.95)', lineWidth: 2, lineStyle: 2,
