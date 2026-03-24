@@ -287,6 +287,9 @@ INDICATOR_WEIGHTS:
 # FACTOR_MIN_DIRECTIONAL: if abs(dir_score) < this, score=0 regardless of quality.
 # Prevents trades where direction is near-random but volatility/ADX inflates the total score.
 FACTOR_MIN_DIRECTIONAL: 0.25
+# Soft transition width around FACTOR_MIN_DIRECTIONAL for smooth confidence scaling
+# (removes binary cliff while preserving directional preference).
+FACTOR_DIRECTIONAL_SOFT_SPAN: 0.20
 
 # Regime smoothing: number of consecutive H4 bars that must agree on a new regime
 # before the committed regime switches. Prevents regime whipsawing from bar to bar.
@@ -298,6 +301,14 @@ REGIME_WEIGHTS:
   RANGING:        { trend: 0.5, momentum: 1.5, volatility: 1.0, volume: 1.0, structure: 2.0, derivatives: 1.0, microstructure: 1.5, carry: 1.0 }
   HIGH_VOLATILITY: { trend: 1.0, momentum: 1.0, volatility: 2.0, volume: 1.5, structure: 1.0, derivatives: 1.5, microstructure: 1.5, carry: 1.0 }
   LOW_VOLATILITY: { trend: 1.2, momentum: 1.0, volatility: 0.5, volume: 1.0, structure: 1.0, derivatives: 1.0, microstructure: 1.5, carry: 1.0 }
+
+# Crypto subgroup factor behavior (Engine A)
+FACTOR_SCORE_GROUP_MULTIPLIERS:
+  crypto_btc: { derivatives: 1.2, microstructure: 1.15 }
+  crypto_eth: { derivatives: 1.15, microstructure: 1.1 }
+  crypto_doge: { volatility: 1.4, microstructure: 1.25 }
+  crypto_alt_majors: { derivatives: 1.1, microstructure: 1.1 }
+  crypto_other: { trend: 1.05, momentum: 1.05, microstructure: 1.05 }
 
 # Normalization
 NORMALIZATION_LOOKBACK:
@@ -441,3 +452,12 @@ ENGINE_B_BT_SL_MODE: "atr"
 # AI usage control — when true, AI only runs on explicit user actions
 # (manual analysis clicks, compare engines) — NOT on automatic scans
 AI_ON_DEMAND_ONLY: true
+
+# Engine C B-side fallback controls:
+# Allow strong Engine B setups to be scored/tradeable even when Engine A is missing
+# or weakly opposing, instead of hard-discarding on mismatch.
+ENGINE_C_B_ONLY_MULT: 0.65
+ENGINE_C_B_CONFLICT_OVERRIDE_ENABLED: true
+ENGINE_C_B_CONFLICT_MIN_SCORE: 0.70
+ENGINE_C_A_CONFLICT_MAX_SCORE: 0.45
+ENGINE_C_B_CONFLICT_PENALTY: 0.85

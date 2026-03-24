@@ -489,6 +489,20 @@ def calc_confluence(
         # Factor diagnostics
         "correlationAdjustments": factor_result.get("correlation_adjustments", {}),
         "disabledFactors": factor_result.get("disabled_factors", []),
+        "factorDiagnostics": {
+            "directionalScore": factor_result.get("directional_score"),
+            "nondirectionalScore": factor_result.get("nondirectional_score"),
+            "directionalConfidenceMultiplier": factor_result.get("directional_confidence_multiplier"),
+            "minDirectionalThreshold": factor_result.get("min_directional_threshold"),
+            "effectiveMinDirectional": factor_result.get("effective_min_directional"),
+            "minDirectionalFailed": factor_result.get("min_directional_failed", False),
+            "activeDirectionalFactors": factor_result.get("active_directional_factors", []),
+            "activeNondirectionalFactors": factor_result.get("active_nondirectional_factors", []),
+            "trendCoherence": factor_result.get("trend_coherence", {}),
+            "missingDirectionalOptionalCount": factor_result.get("missing_directional_optional_count"),
+            "optionalFactorCoverage": factor_result.get("optional_factor_coverage"),
+            "insufficientFactors": factor_result.get("insufficient_factors", False),
+        },
     }
 
 

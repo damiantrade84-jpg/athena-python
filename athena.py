@@ -9107,7 +9107,7 @@ def api_engine_c_scan():
                 results["aligned"].append(consensus)
             elif verdict == "A_ONLY":
                 results["a_only"].append(consensus)
-            elif verdict in ("B_ONLY", "B_ONLY_VISION_CONFIRMED"):
+            elif verdict in ("B_ONLY", "B_ONLY_SCORED", "B_ONLY_VISION_CONFIRMED", "B_OVERRIDE_CONFLICT"):
                 results["b_only"].append(consensus)
             elif verdict in (
                 "DIRECTION_CONFLICT",
@@ -11961,6 +11961,12 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
         "oiDivergence": _oi_divergence,
         "fundingRate": res.get("fundingRate"),
         "regime": res.get("regime"),
+        "factorScores": res.get("factorScores"),
+        "factorWeights": res.get("factorWeights"),
+        "regimeName": res.get("regimeName"),
+        "correlationAdjustments": res.get("correlationAdjustments", {}),
+        "disabledFactors": res.get("disabledFactors", []),
+        "factorDiagnostics": res.get("factorDiagnostics", {}),
         "pairProfile": pair_profile,
         "style": _style,
         "h4Candles": [

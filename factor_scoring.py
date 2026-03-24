@@ -312,6 +312,83 @@ def _weighted_factor_score(
     return sum(v * w / w_sum for v, w in zip(vals, wgts))
 
 
+def _coherent_trend_score(indicators: Dict[str, Optional[float]]) -> tuple[Optional[float], dict]:
+    """Build a coherence-aware multi-timeframe trend score.
+
+    Uses weighted direction votes from D1/H4/H1 EMA alignment but avoids collapsing to
+    near-zero when one timeframe is in pullback against the dominant trend.
+    """
+    tf_weights = {
+        "d1_ema_trend": 0.50,
+        "h4_ema_trend": 0.30,
+        "ema_trend": 0.20,  # H1 entry TF
+    }
+    votes = []
+    for key, w in tf_weights.items():
+        v = indicators.get(key)
+        if v is not None:
+            votes.append((key, 1.0 if v > 0 else -1.0, w))
+
+    if not votes:
+        return None, {
+            "agreement_count": 0,
+            "total_count": 0,
+            "coherence_ratio": 0.0,
+            "dominant_direction": None,
+            "weighted_balance": 0.0,
+        }
+
+    long_w = sum(w for _, d, w in votes if d > 0)
+    short_w = sum(w for _, d, w in votes if d < 0)
+    total_w = long_w + short_w
+    if total_w <= 0:
+        return None, {
+            "agreement_count": 0,
+            "total_count": len(votes),
+            "coherence_ratio": 0.0,
+            "dominant_direction": None,
+            "weighted_balance": 0.0,
+        }
+
+    if long_w == short_w:
+        # Tie-break by D1 if available, otherwise default LONG for consistency.
+        d1 = indicators.get("d1_ema_trend")
+        dominant_sign = 1.0 if d1 is None or d1 > 0 else -1.0
+    else:
+        dominant_sign = 1.0 if long_w > short_w else -1.0
+
+    dominant_w = long_w if dominant_sign > 0 else short_w
+    coherence_ratio = max(0.5, min(1.0, dominant_w / total_w))
+    agreement_count = sum(1 for _, d, _ in votes if d == dominant_sign)
+    # Floor keeps trend signal alive on 2-of-3 alignment while still penalizing mixed TFs.
+    magnitude = 0.35 + (0.65 * coherence_ratio)
+    trend_score = dominant_sign * magnitude
+    weighted_balance = (long_w - short_w) / total_w
+
+    return trend_score, {
+        "agreement_count": agreement_count,
+        "total_count": len(votes),
+        "coherence_ratio": round(coherence_ratio, 4),
+        "dominant_direction": "LONG" if dominant_sign > 0 else "SHORT",
+        "weighted_balance": round(weighted_balance, 4),
+    }
+
+
+def _directional_confidence_multiplier(abs_dir: float, min_dir: float, soft_span: float) -> float:
+    """Smooth confidence curve replacing hard directional cliff.
+
+    abs_dir: absolute directional score (0..~1)
+    min_dir: directional threshold center point
+    soft_span: smooth transition width
+    """
+    if soft_span <= 0:
+        return 1.0 if abs_dir >= min_dir else 0.0
+    # Logistic centered at min_dir. 0.5 at threshold, smooth tails.
+    x = (abs_dir - min_dir) / soft_span
+    k = 4.0
+    return 1.0 / (1.0 + math.exp(-k * x))
+
+
 def compute_factor_scores(
     d1_snap: Dict,
     h4_snap: Dict,
@@ -529,6 +606,16 @@ def compute_factor_scores(
             factor_name=factor,
             asset_type=asset_type,
         )
+    trend_coherence = {
+        "agreement_count": 0,
+        "total_count": 0,
+        "coherence_ratio": 0.0,
+        "dominant_direction": None,
+        "weighted_balance": 0.0,
+    }
+    _trend_score, trend_coherence = _coherent_trend_score(indicators)
+    if _trend_score is not None:
+        factor_scores["trend"] = _trend_score
 
     # ── Determine direction from directional factors ─────────────────────
     dir_signals = []
@@ -625,6 +712,15 @@ def compute_factor_scores(
             "nondirectional_score": 0.0,
             "correlation_adjustments": {},
             "insufficient_factors": True,
+            "min_directional_failed": True,
+            "active_directional_factors": [],
+            "active_nondirectional_factors": list(active_nondir.keys()),
+            "min_directional_threshold": float(CONFIG.get("FACTOR_MIN_DIRECTIONAL", 0.0)),
+            "directional_confidence_multiplier": 0.0,
+            "effective_min_directional": float(CONFIG.get("FACTOR_MIN_DIRECTIONAL", 0.0)),
+            "trend_coherence": trend_coherence,
+            "missing_directional_optional_count": 3,
+            "optional_factor_coverage": 0.0,
         }
 
     dir_score = 0.0
@@ -647,17 +743,22 @@ def compute_factor_scores(
         for f, s in active_nondir.items():
             nondir_score += (weights.get(f, 1.0) / nondir_w_sum) * s
 
-    # Multiplicative combination: quality amplifies direction, cannot substitute for it.
-    # nondir_score normalized to [0,1] (max theoretical is 3.0) then scales the dir contribution
-    # from 0.6 (no quality) up to 1.0 (perfect quality), preserving 0–3.0 output range.
-    # A minimum directional conviction gate prevents near-directionless setups from passing.
+    # Optional directional context coverage.
+    optional_directional_keys = ("funding_rate", "cot_z", "carry_z")
+    optional_present = sum(1 for k in optional_directional_keys if indicators.get(k) is not None)
+    optional_coverage = optional_present / float(len(optional_directional_keys))
+    missing_optional = len(optional_directional_keys) - optional_present
+
+    # Multiplicative combination with smooth directional confidence (no hard cliff).
+    # As optional directional context gets sparse, use a slightly softer effective threshold
+    # so missing feeds do not collapse otherwise-valid directional setups.
     _min_dir = CONFIG.get("FACTOR_MIN_DIRECTIONAL", 0.0)
-    if abs(dir_score) < _min_dir:
-        # Signal is directionless — score too low to qualify regardless of quality
-        final_score = 0.0
-    else:
-        _nondir_norm = min(nondir_score / 3.0, 1.0)  # normalize quality to [0, 1]
-        final_score = abs(dir_score) * (0.6 + _nondir_norm * 0.4)
+    _soft_span = float(CONFIG.get("FACTOR_DIRECTIONAL_SOFT_SPAN", 0.20))
+    _effective_min_dir = float(_min_dir) * (0.75 + (0.25 * optional_coverage))
+    _dir_conf = _directional_confidence_multiplier(abs(dir_score), _effective_min_dir, _soft_span)
+    _nondir_norm = min(nondir_score / 3.0, 1.0)  # normalize quality to [0, 1]
+    _quality_mult = 0.6 + (_nondir_norm * 0.4)
+    final_score = abs(dir_score) * _quality_mult * _dir_conf
 
     return {
         "final_score": final_score,
@@ -671,4 +772,13 @@ def compute_factor_scores(
         "nondirectional_score": nondir_score,
         "correlation_adjustments": {k: v for k, v in corr_weights.items() if v < 1.0},
         "insufficient_factors": False,
+        "min_directional_failed": abs(dir_score) < float(_min_dir),
+        "active_directional_factors": list(active_dir.keys()),
+        "active_nondirectional_factors": list(active_nondir.keys()),
+        "min_directional_threshold": float(_min_dir),
+        "directional_confidence_multiplier": _dir_conf,
+        "effective_min_directional": _effective_min_dir,
+        "trend_coherence": trend_coherence,
+        "missing_directional_optional_count": missing_optional,
+        "optional_factor_coverage": round(optional_coverage, 4),
     }

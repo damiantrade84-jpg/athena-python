@@ -22,6 +22,8 @@ Sources:
 import logging
 from typing import Optional
 
+from config import CONFIG
+
 log = logging.getLogger("sentinel")
 
 
@@ -482,31 +484,35 @@ def compute_consensus(
         return result
 
     if b_has and not a_has:
-        # Engine B only — watchlist, no auto-execute
+        # Engine B only — score it directly with conservative scaling.
         direction = b["direction"]
-        conviction = b["score_norm"] * 0.5  # 50% of B score (no A confirmation)
+        b_only_mult = float(CONFIG.get("ENGINE_C_B_ONLY_MULT", 0.65))
+        conviction = b["score_norm"] * b_only_mult
         tier, sizing = classify_conviction(conviction)
 
         sl_resolved = resolve_sl(entry, None, b["sl"], direction, atr)
         tp_resolved = resolve_tp(entry, sl_resolved["sl"], None, b["tp"], direction)
+        if tp_resolved["rr"] < 1.0:
+            tier = "SKIP"
+            sizing = 0.0
 
         result = _build_result(
-            trade=False,  # B-only never auto-trades
-            verdict="B_ONLY",
+            trade=tier != "SKIP",
+            verdict="B_ONLY_SCORED" if tier != "SKIP" else "B_ONLY",
             direction=direction,
             conviction=conviction,
-            tier="LOW",  # cap at LOW for B-only
-            sizing=0.35,
+            tier=tier,
+            sizing=sizing,
             a_norm=a, b_norm=b, entry=entry,
             sl=sl_resolved["sl"], sl_method=sl_resolved["method"],
             tp=tp_resolved["tp"], tp_method=tp_resolved["method"],
+            weights={"A": 0.0, "B": 1.0},
             rr=tp_resolved["rr"],
         )
         if ai_vision:
             result = apply_vision(result, ai_vision)
-            # Vision CONFIRMS on B-only can upgrade to tradeable
-            if result.get("vision_action") == "confirm" and result["conviction"] >= 0.50:
-                result["trade"] = True
+            # Preserve explicit upgraded label when vision confirms an already-valid B-only setup.
+            if result.get("vision_action") == "confirm" and result["trade"]:
                 result["verdict"] = "B_ONLY_VISION_CONFIRMED"
         return result
 
@@ -514,6 +520,44 @@ def compute_consensus(
     if a["direction"] != b["direction"]:
         # Both engines strongly disagree (high normalised scores, opposite directions) — not a proven regime change.
         opposing_high_confidence = a["score_norm"] > 0.70 and b["score_norm"] > 0.70
+        allow_b_override = bool(CONFIG.get("ENGINE_C_B_CONFLICT_OVERRIDE_ENABLED", True))
+        b_override_min = float(CONFIG.get("ENGINE_C_B_CONFLICT_MIN_SCORE", 0.70))
+        a_override_max = float(CONFIG.get("ENGINE_C_A_CONFLICT_MAX_SCORE", 0.45))
+        b_override_penalty = float(CONFIG.get("ENGINE_C_B_CONFLICT_PENALTY", 0.85))
+
+        # If B is clearly strong while A is weak/opposed, let Engine C score B with a penalty
+        # instead of discarding to zero-conviction conflict.
+        if (
+            allow_b_override
+            and not opposing_high_confidence
+            and b["score_norm"] >= b_override_min
+            and a["score_norm"] <= a_override_max
+        ):
+            direction = b["direction"]
+            conviction = min(1.0, b["score_norm"] * b_override_penalty)
+            tier, sizing = classify_conviction(conviction)
+
+            sl_resolved = resolve_sl(entry, None, b["sl"], direction, atr)
+            tp_resolved = resolve_tp(entry, sl_resolved["sl"], None, b["tp"], direction)
+            if tp_resolved["rr"] < 1.0:
+                tier = "SKIP"
+                sizing = 0.0
+
+            return _build_result(
+                trade=tier != "SKIP",
+                verdict="B_OVERRIDE_CONFLICT",
+                direction=direction,
+                conviction=conviction,
+                tier=tier,
+                sizing=sizing,
+                a_norm=a, b_norm=b, entry=entry,
+                sl=sl_resolved["sl"], sl_method=sl_resolved["method"],
+                tp=tp_resolved["tp"], tp_method=tp_resolved["method"],
+                rr=tp_resolved["rr"],
+                weights={"A": 0.0, "B": 1.0},
+                regime=regime,
+                opposing_high_confidence=opposing_high_confidence,
+            )
 
         return _build_result(
             trade=False,

@@ -247,6 +247,7 @@ CONFIG: dict = {
     },
     # Factor scoring gates — see factor_scoring.py
     "FACTOR_MIN_DIRECTIONAL": 0.25,  # Skip if abs(dir_score) < this (near-directionless signal)
+    "FACTOR_DIRECTIONAL_SOFT_SPAN": 0.20,  # Smooth transition width for directional confidence
     "CRYPTO_TRANSITION_PENALTY_ENABLED": True,
     "REGIME_SMOOTHING_BARS": 3,  # Consecutive bars required before committing to a regime change
     # Factor weights per asset class (base, before regime overrides)
@@ -322,6 +323,7 @@ CONFIG: dict = {
         "crypto_eth": {"derivatives": 1.15, "microstructure": 1.1},
         "crypto_doge": {"volatility": 1.4, "microstructure": 1.25},
         "crypto_alt_majors": {"derivatives": 1.1, "microstructure": 1.1},
+        "crypto_other": {"trend": 1.05, "momentum": 1.05, "microstructure": 1.05},
     },
     # Regime-aware factor weight overrides
     "REGIME_WEIGHTS": {
@@ -461,6 +463,12 @@ CONFIG: dict = {
     # ── Engine B AI Controls ─────────────────────────────────────────────────
     "ENGINE_B_NEWS_CONTEXT_ENABLED": True,  # Feed news into Engine B AI advisory (not checklist)
     "AI_ON_DEMAND_ONLY": True,  # AI runs on user-initiated actions only, not auto-scans
+    # ── Engine C B-side fallback controls ─────────────────────────────────────
+    "ENGINE_C_B_ONLY_MULT": 0.65,  # Scale B-only conviction when A has no signal
+    "ENGINE_C_B_CONFLICT_OVERRIDE_ENABLED": True,  # Allow strong B to override weak opposing A
+    "ENGINE_C_B_CONFLICT_MIN_SCORE": 0.70,  # Minimum B normalized score for conflict override
+    "ENGINE_C_A_CONFLICT_MAX_SCORE": 0.45,  # Max opposing A normalized score for B override
+    "ENGINE_C_B_CONFLICT_PENALTY": 0.85,  # Penalty applied to B score during conflict override
     # ── Engine B (Naked Scalp) ────────────────────────────────────────────────
     "NAKED_ENGINE": {
         "zone_multipliers": {
