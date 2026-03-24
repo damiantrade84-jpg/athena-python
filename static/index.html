@@ -4254,23 +4254,9 @@ async function _acmRender(symbol, tf) {
       if (s) s.applyOptions({ visible: _acm.show.ema });
     });
 
-    // Rebase entry to fresh H4 close so the ENTRY line sits on the chart's current bar.
-    // SL and TP are structural — they stay fixed. RR is recalculated.
+    // Keep original scan price/SL/TP values - don't rebase entry.
+    // Rebasing caused mismatch when market moved significantly from scan time.
     var lastClose = data[data.length - 1].close;
-    if (_acm.sig && lastClose > 0) {
-      _acm.sig.price = lastClose;
-      _acm.sig.entryPrice = lastClose;
-      _acm.sig.entry = lastClose;
-      var _sl = parseFloat(_acm.sig.sl || 0);
-      var _tp = parseFloat(_acm.sig.tp1 || _acm.sig.tp || 0);
-      if (_sl > 0 && _tp > 0) {
-        var _risk = Math.abs(lastClose - _sl);
-        var _reward = Math.abs(_tp - lastClose);
-        var _newRR = _risk > 0 ? (_reward / _risk) : 0;
-        if (_acm.sig.rr != null) _acm.sig.rr = Math.round(_newRR * 100) / 100;
-        if (_acm.sig.rr1 != null) _acm.sig.rr1 = Math.round(_newRR * 100) / 100;
-      }
-    }
 
     // Draw signal levels and zones
     _acm.levelLines = [];
