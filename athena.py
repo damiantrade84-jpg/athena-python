@@ -139,7 +139,7 @@ FOREX_PAIRS = [
         "symbol": "GBPUSD=X",
         "type": "forex",
         "display": "GBP/USD",
-        "source": "eodhd",
+        "source": "polygon",  # TEST: Using Polygon native H4/D1 for Engine C comparison
         "enabled": True,
     },  # SQN -1.62 (post-fix BT 2026-03-13): 7 trades/730d, WR 14%, OOS:-10 — no edge confirmed # re-enabled for ATR-fix retest
     {
@@ -1789,6 +1789,9 @@ def fetch_polygon(pair, tf, limit):
     Returns dict with standardized error format."""
 
     symbol = pair.get("display", pair.get("symbol", "unknown"))
+    
+    # DEBUG: Log Polygon data fetch for comparison test
+    log.info(f"[PG] FETCH {symbol} {tf} limit={limit}")
 
     with _polygon_lock:
         global _polygon_last_request
@@ -1890,6 +1893,21 @@ def fetch_polygon(pair, tf, limit):
                 }
                 for bar in results
             ]
+            
+            # DEBUG: Log Polygon data quality for comparison
+            if candles:
+                last_bar = candles[-1]
+                first_bar = candles[0]
+                log.info(f"[PG] {symbol} {tf}: {len(candles)} bars, first={first_bar['time']}, last={last_bar['time']}")
+                if tf in ("H4", "D1"):
+                    # Check if timestamps align with proper boundaries
+                    last_time = datetime.fromisoformat(last_bar['time'].replace('Z', '+00:00'))
+                    if tf == "H4":
+                        hour_ok = last_time.hour % 4 == 0 and last_time.minute == 0
+                        log.info(f"[PG] {symbol} {tf}: H4 boundary check - hour={last_time.hour}, aligned={hour_ok}")
+                    elif tf == "D1":
+                        day_ok = last_time.hour == 0 and last_time.minute == 0
+                        log.info(f"[PG] {symbol} {tf}: D1 boundary check - hour={last_time.hour}, aligned={day_ok}")
 
             final_candles = candles[-limit:] if len(candles) > limit else candles
 
