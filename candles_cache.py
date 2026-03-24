@@ -170,7 +170,7 @@ def fetch_candles(
         live_resp = fetch_candles_live(pair.get("display", ""), tf, limit)
         live_candles = extract_candles(live_resp)
 
-        _min_live_bars = {"D1": 220, "H4": 50, "H1": 50}.get(tf, limit)
+        _min_live_bars = {"D1": 120, "H4": 20, "H1": 20}.get(tf, limit)
 
         if live_candles and len(live_candles) >= min(limit, _min_live_bars):
             return live_candles[-limit:] if len(live_candles) > limit else live_candles

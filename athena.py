@@ -1569,12 +1569,22 @@ def _fetch_eodhd_intraday_bt(pair, days=730):
         return None, None
 
 
+_eodhd_cooldown_until = 0.0  # global cooldown timestamp for 402 errors
+
 def fetch_eodhd(pair, tf, limit):
-    """Download OHLCV candles via EODHD SDK (APIClient). Covers forex, stocks, indices â€” 1000 req/min.
+    """Download OHLCV candles via EODHD SDK (APIClient). Covers forex, stocks, indices â€“ 1000 req/min.
 
     Returns dict with standardized error format."""
+    global _eodhd_cooldown_until
 
     symbol = pair.get("display", pair.get("symbol", "unknown"))
+
+    # Fast-fail if EODHD recently returned 402 (Payment Required / rate limit)
+    if time.time() < _eodhd_cooldown_until:
+        fallback = _fetch_fallback_candles(pair, tf, limit, reason="EODHD cooldown (402)")
+        if fallback:
+            return {"error": True, "symbol": symbol, "detail": "EODHD cooldown", "candles": fallback}
+        return {"error": True, "symbol": symbol, "detail": "EODHD cooldown"}
 
     try:
         api = _get_eodhd_client()
@@ -1606,7 +1616,7 @@ def fetch_eodhd(pair, tf, limit):
                 "%Y-%m-%d"
             )
 
-            # Retry D1 SDK call with backoff
+            # Retry D1 SDK call with backoff (skip retries on 402/429)
             bars = None
             for attempt in range(1, 4):
                 try:
@@ -1615,6 +1625,10 @@ def fetch_eodhd(pair, tf, limit):
                     )
                     break
                 except Exception as e:
+                    if "402" in str(e) or "429" in str(e) or "Payment Required" in str(e):
+                        log.warning(f"[EODHD] {ticker} D1: 402/429 — cooldown 10 min")
+                        _eodhd_cooldown_until = time.time() + 600
+                        raise
                     if attempt == 3:
                         log.warning(f"[EODHD] {ticker} D1 failed after 3 attempts: {e}")
                         raise
@@ -1660,7 +1674,7 @@ def fetch_eodhd(pair, tf, limit):
                 (datetime.now(timezone.utc) - timedelta(days=365)).timestamp()
             )
 
-            # Retry intraday SDK call with backoff
+            # Retry intraday SDK call with backoff (skip retries on 402/429)
             bars = None
             for attempt in range(1, 4):
                 try:
@@ -1669,6 +1683,10 @@ def fetch_eodhd(pair, tf, limit):
                     )
                     break
                 except Exception as e:
+                    if "402" in str(e) or "429" in str(e) or "Payment Required" in str(e):
+                        log.warning(f"[EODHD] {ticker} intraday: 402/429 — cooldown 10 min")
+                        _eodhd_cooldown_until = time.time() + 600
+                        raise
                     if attempt == 3:
                         log.warning(f"[EODHD] {ticker} intraday failed after 3 attempts: {e}")
                         raise
@@ -1754,7 +1772,9 @@ def fetch_eodhd(pair, tf, limit):
 
     except Exception as e:
         log.error(f"[EODHD] {pair['display']}: {e}")
-
+        fallback = _fetch_fallback_candles(pair, tf, limit, reason=f"EODHD error: {e}")
+        if fallback:
+            return {"error": True, "symbol": symbol, "detail": str(e), "candles": fallback}
         return {"error": True, "symbol": symbol, "detail": str(e)}
 
 
