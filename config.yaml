@@ -49,7 +49,7 @@ WEINSTEIN_LOOKBACK:
 # the old additive formula which produced higher raw scores; 0.70 here ≈ 0.95 old-formula gate).
 # Tune up per-class after running backtests to find first-profitable threshold.
 BT_MIN:
-  crypto:    0.70   # must equal MIN_CONFLUENCE_CLASS.crypto
+  crypto:    0.55   # must equal MIN_CONFLUENCE_CLASS.crypto
   commodity: 0.70   # must equal MIN_CONFLUENCE_CLASS.commodity
   forex:     0.60   # must equal MIN_CONFLUENCE_CLASS.forex — forex engine 0–1 scale
   stock:     0.70   # must equal MIN_CONFLUENCE_CLASS.stock
@@ -72,7 +72,7 @@ NAKED_MAX_DAILY: 3
 # BT_MIN is set equal to MIN_CONFLUENCE_CLASS so backtest and live scan use identical gates.
 # Set to 0.70 to match new formula scale; tune up after data-driven threshold analysis.
 MIN_CONFLUENCE_CLASS:
-  crypto:    0.70   # factor engine (0–3 scale): ~23% of max — moderate conviction
+  crypto:    0.55   # factor engine (0–3 scale): ~18% of max — recalibrated to offset compounding penalties
   commodity: 0.70   # factor engine (0–3 scale)
   forex:     0.60   # forex engine (0–1 scale): 60% of max — matches MIN_FOREX_CONFLUENCE
   stock:     0.70   # factor engine (0–3 scale)
@@ -82,6 +82,14 @@ MIN_CONFLUENCE_CLASS:
 # 0.60 = 60% of max; a TREND_PULLBACK with good RSI pullback and no COT boost scores ~0.60–0.75
 # MIN_CONFLUENCE_CLASS.forex must match this — they are the same gate
 MIN_FOREX_CONFLUENCE: 0.60      # used as MIN_CONFLUENCE_CLASS.forex below — keep in sync
+
+# Optional subgroup thresholds (used when score_group is available on a pair)
+MIN_CONFLUENCE_GROUP:
+  crypto:
+    crypto_btc: 0.60
+    crypto_eth: 0.58
+    crypto_doge: 0.65
+    crypto_alt_majors: 0.55
 
 # Risk settings
 RISK_PCT: 0.01
@@ -115,7 +123,7 @@ AUTO_TRADE_ENABLED: true          # Start auto-trader on server boot
 # Factor engine (crypto/stock/commodity/index) outputs 0–3.0
 # Forex engine outputs 0–1.0  — threshold must be calibrated to its own scale
 AUTO_TRADE_MIN_SCORE:
-  crypto:    0.80   # factor engine: strong directional + moderate quality required
+  crypto:    0.65   # factor engine: recalibrated — was 0.80 (too strict with ranging + transition penalties)
   commodity: 0.80   # factor engine
   stock:     0.85   # factor engine: higher bar — single stocks more volatile/gappy
   index:     0.80   # factor engine
@@ -170,9 +178,9 @@ FUNDAMENTALS_ENABLED: true         # Enrich stock signals with fundamental data
 # Ranging penalties — halved (ADX vote=0 already penalises, one penalty per condition)
 RANGING:
   crypto:
-    dead: 14
-    dead_pen: 1.5
-    choppy: 18
+    dead: 18
+    dead_pen: 1.0
+    choppy: 23
     choppy_pen: 0.5
   forex:
     dead: 18
@@ -194,6 +202,14 @@ RANGING:
     dead_pen: 1.5
     choppy: 21
     choppy_pen: 0.5
+
+# Crypto transition penalty — disabled by default (was always-on, adding up to -2.0 only for crypto)
+# Enable and tune if crypto signals become too noisy after RANGING recalibration
+CRYPTO_TRANSITION_PENALTY:
+  enabled: false
+  collapsing: 1.5
+  exhausting: 0.8
+  cap: 2.0
 
 # Factor weights per asset class (base)
 # microstructure weight reduced for non-crypto: candle-based proxies (body ratios) are correlated
@@ -313,6 +329,11 @@ MICROSTRUCTURE:
 
 # Indicator correlation
 INDICATOR_CORRELATION_WINDOW: 200
+
+# Regime detection overrides
+# When false, crypto no longer receives an extra ADX-momentum transition penalty on top of
+# the normal ranging penalty.
+CRYPTO_TRANSITION_PENALTY_ENABLED: false
 
 # Confidence engine
 CONFIDENCE_THRESHOLD: 0.55
