@@ -224,7 +224,48 @@ def _check_trend_gate(d1_snap: dict, h4_snap: dict) -> tuple[bool, str]:
     return False, "LONG"  # mixed
 
 
-# ─── Entry quality (RSI pullback) ────────────────────────────────────────────
+# ─── Entry quality (RSI pullback + H1 EMA21 anchor) ─────────────────────────
+
+
+def _apply_h1_ema_entry_quality_modifier(
+    score: float, h1_snap: dict, direction: str
+) -> float:
+    """Elder-style H1 screen: penalise if price has not reclaimed ema21; boost if stacked."""
+    try:
+        from config import CONFIG
+
+        fx_cfg = CONFIG.get("FOREX_ENGINE", {}) or {}
+        if not fx_cfg.get("h1_ema_entry_filter", True):
+            return score
+    except Exception:
+        pass
+
+    ema21 = h1_snap.get("ema21")
+    ema50 = h1_snap.get("ema50")
+    close = h1_snap.get("close")
+    if ema21 is None or ema50 is None or close is None:
+        return score
+    try:
+        ema21_f = float(ema21)
+        ema50_f = float(ema50)
+        close_f = float(close)
+    except (TypeError, ValueError):
+        return score
+    if ema50_f == 0:
+        return score
+
+    if direction == "LONG":
+        h1_ema_aligned = close_f > ema21_f > ema50_f
+        h1_ema_opposing = close_f < ema21_f
+    else:
+        h1_ema_aligned = close_f < ema21_f < ema50_f
+        h1_ema_opposing = close_f > ema21_f
+
+    if h1_ema_aligned:
+        return min(1.0, score * 1.15)
+    if h1_ema_opposing:
+        return score * 0.50
+    return score
 
 
 def _entry_quality(h1_snap: dict, direction: str, rsi_history: list = None) -> float:
@@ -236,41 +277,43 @@ def _entry_quality(h1_snap: dict, direction: str, rsi_history: list = None) -> f
         rsi_z = _mad_zscore(rsi, rsi_history)
         if direction == "LONG":
             if rsi_z <= -0.5:
-                return 1.0
+                score = 1.0
             elif rsi_z <= 0.0:
-                return 0.6
+                score = 0.6
             elif rsi_z <= 0.5:
-                return 0.3
+                score = 0.3
             else:
-                return 0.0
+                score = 0.0
         else:
             if rsi_z >= 0.5:
-                return 1.0
+                score = 1.0
             elif rsi_z >= 0.0:
-                return 0.6
+                score = 0.6
             elif rsi_z >= -0.5:
-                return 0.3
+                score = 0.3
             else:
-                return 0.0
+                score = 0.0
+        return _apply_h1_ema_entry_quality_modifier(score, h1_snap, direction)
 
     if direction == "LONG":
         if 35 <= rsi <= 55:
-            return 1.0
+            score = 1.0
         elif 55 < rsi <= 65:
-            return 0.5
+            score = 0.5
         elif rsi < 35:
-            return 0.2
+            score = 0.2
         else:
-            return 0.0
+            score = 0.0
     else:
         if 45 <= rsi <= 65:
-            return 1.0
+            score = 1.0
         elif 35 <= rsi < 45:
-            return 0.5
+            score = 0.5
         elif rsi > 65:
-            return 0.2
+            score = 0.2
         else:
-            return 0.0
+            score = 0.0
+    return _apply_h1_ema_entry_quality_modifier(score, h1_snap, direction)
 
 
 # ─── Momentum confirmation ───────────────────────────────────────────────────────

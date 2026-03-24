@@ -10867,9 +10867,65 @@ def api_chart_analysis():
         if img_d1 and img_d1.startswith("data:"):
             img_d1 = img_d1.split(",", 1)[1]
 
-        dual_mode = bool(img_d1)
+        # Optional H1 entry image (Engine C triple-screen)
+        img_h1 = data.get("image_h1")
+        if img_h1 and img_h1.startswith("data:"):
+            img_h1 = img_h1.split(",", 1)[1]
 
-        if dual_mode:
+        dual_mode = bool(img_d1)
+        triple_mode = bool(img_d1 and img_h1)
+
+        if triple_mode:
+            # ── Triple-screen (Elder): D1 bias, H4 tactical, H1 entry quality ──
+            triple_prompt = (
+                f"You are reviewing THREE charts for {asset_type.upper()} — {symbol}.\n"
+                "IMAGE 1 is D1 (daily) — strategic TREND / BIAS filter.\n"
+                "IMAGE 2 is H4 (4-hour) — intermediate structure, momentum, EMA stack.\n"
+                "IMAGE 3 is H1 (1-hour) — entry timing: RSI zone, EMA21 reclaim, trigger candle.\n\n"
+                f"ALGORITHMIC CONTEXT:\n{algo_context}\n\n"
+                "CHART ANNOTATIONS (same in all three images):\n"
+                "- Green/red candles · EMA 21 (cyan) · EMA 50 (purple) · EMA 200 (gold dashed)\n"
+                "- Entry (grey dashed) · SL (red solid) · TP (green solid) lines\n"
+                "- Engine B zones may be visible: support (green), resistance (red), "
+                "BOS (amber), CHoCH (purple), OB (labelled)\n\n"
+                "ANSWER THESE 5 QUESTIONS:\n"
+                f"1. D1 BIAS: What is the clear trend on D1? Does it CONFIRM or CONTRADICT "
+                f"the algorithmic {direction_str} signal? One sentence.\n"
+                f"2. H4 STRUCTURE: Does H4 show valid intermediate {direction_str} alignment? "
+                "Momentum, swing structure, EMA positioning.\n"
+                f"3. H1 ENTRY: Is this a clean {direction_str} entry on H1 now? "
+                "Comment on pullback depth vs EMA21, candle quality, and whether to wait.\n"
+                "4. TF ALIGNMENT: Do D1, H4, and H1 ALL support the same direction? "
+                "Answer ALIGNED or CONFLICTED with one-line justification. "
+                "CONFLICTED means the trade should be skipped. "
+                "Also: are SL and TP well-placed vs H1/H4 structure? Name price levels.\n"
+                "5. PER-STYLE RATINGS (H1 primary for SCALP, H4 for INTRADAY, D1 for SWING):\n"
+                "SCALP RATING: STRONG / MODERATE / WEAK / AVOID\n"
+                "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID\n"
+                "SWING RATING: STRONG / MODERATE / WEAK / AVOID\n"
+                "(use CONTRADICTS if that timeframe clearly opposes the algorithmic direction)\n\n"
+                "Keep total response under 480 words. Be direct."
+            )
+            content = [
+                {"type": "text", "text": "IMAGE 1 — D1 DAILY BIAS CHART:"},
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png", "data": img_d1},
+                },
+                {"type": "text", "text": "IMAGE 2 — H4 INTERMEDIATE CHART:"},
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png", "data": img_h4},
+                },
+                {"type": "text", "text": "IMAGE 3 — H1 ENTRY TIMING CHART:"},
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png", "data": img_h1},
+                },
+                {"type": "text", "text": triple_prompt},
+            ]
+            log.info(f"[AI CHART] Triple-screen D1+H4+H1 analysis for {symbol}")
+        elif dual_mode:
             # ── Dual-TF prompt: D1 for bias, H4 for entry ──────────────────
             dual_prompt = (
                 f"You are reviewing TWO charts for {asset_type.upper()} — {symbol}.\n"
@@ -10923,21 +10979,24 @@ def api_chart_analysis():
             ]
             log.info(f"[AI CHART] Single-TF {tf} analysis for {symbol}")
 
+        _max_tokens = 950 if triple_mode else 800
         message = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=800,
+            max_tokens=_max_tokens,
             system=system_prompt,
             messages=[{"role": "user", "content": content}],
         )
 
         analysis = message.content[0].text if message.content else "No analysis returned."
 
+        _tf_label = "D1+H4+H1" if triple_mode else ("D1+H4" if dual_mode else tf)
         return jsonify({
             "analysis": analysis,
             "model": "claude-sonnet-4-6",
             "symbol": symbol,
-            "tf": "D1+H4" if dual_mode else tf,
+            "tf": _tf_label,
             "dual_tf": dual_mode,
+            "triple_tf": triple_mode,
         })
 
     except Exception as e:

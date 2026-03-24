@@ -4622,11 +4622,16 @@ function buildECVisionResult(c) {
               c.vision_action === 'weaken' ? '#f59e0b' : 'var(--bear)';
   var icon = c.vision_action === 'confirm' ? '&#9989;' :
              c.vision_action === 'weaken' ? '&#9888;&#65039;' : '&#128683;';
-  var tfBadge = c.vision_dual_tf
-    ? '<span style="font-size:9px;background:rgba(0,212,255,0.12);color:#00d4ff;' +
+  var tfBadge = '';
+  if (c.vision_triple_tf) {
+    tfBadge = '<span style="font-size:9px;background:rgba(0,212,255,0.12);color:#00d4ff;' +
       'border:1px solid rgba(0,212,255,0.3);border-radius:3px;padding:1px 5px;margin-left:6px;' +
-      'vertical-align:middle;">D1+H4</span>'
-    : '';
+      'vertical-align:middle;">D1+H4+H1</span>';
+  } else if (c.vision_dual_tf) {
+    tfBadge = '<span style="font-size:9px;background:rgba(0,212,255,0.12);color:#00d4ff;' +
+      'border:1px solid rgba(0,212,255,0.3);border-radius:3px;padding:1px 5px;margin-left:6px;' +
+      'vertical-align:middle;">D1+H4</span>';
+  }
   var html = '<div style="background:rgba(168,85,247,0.05);border:1px solid rgba(168,85,247,0.2);' +
     'border-radius:6px;padding:8px;font-size:11px;font-family:Space Mono,monospace;">' +
     '<span style="color:' + color + ';font-weight:700;">' + icon + ' ' +
@@ -4741,17 +4746,32 @@ async function runECVisionConfirm(sid) {
   var h4Base64 = await _captureChart();
   closeAcm();
 
-  // ── Step 3: Send D1 + H4 to AI ────────────────────────────────────────────
-  btn.textContent = '&#129504; Analysing D1+H4...';
+  await new Promise(function(r) { setTimeout(r, 400); });
+
+  // ── Step 3: H1 entry screenshot (triple-screen) ────────────────────────────
+  btn.textContent = '&#129504; Loading H1 entry...';
+  openAcm(consensus.symbol, 'H1', consensus);
+  var _h1Ready = await _waitChartReady(30);
+  if (!_h1Ready) {
+    btn.textContent = '&#129504; AI CONFIRM'; btn.disabled = false;
+    closeAcm(); showToast('H1 chart failed to load — try again', true); return;
+  }
+  await new Promise(function(r) { setTimeout(r, 1000); });
+  btn.textContent = '&#129504; Capturing H1...';
+  var h1Base64 = await _captureChart();
+  closeAcm();
+
+  // ── Step 4: Send D1 + H4 + H1 to AI ────────────────────────────────────────
+  btn.textContent = '&#129504; Analysing D1+H4+H1...';
 
   try {
-    // Get AI Vision analysis (dual-timeframe)
     var visionResp = await fetch('/api/chart-analysis', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
         image: h4Base64,
         image_d1: d1Base64,
+        image_h1: h1Base64,
         symbol: consensus.symbol,
         tf: 'H4',
         signal: {
@@ -4795,8 +4815,8 @@ async function runECVisionConfirm(sid) {
     }
     var updated = await confirmResp.json();
 
-    // Carry dual_tf flag from vision response to the updated object for display
-    if (vision.dual_tf) updated.vision_dual_tf = true;
+    if (vision.triple_tf) updated.vision_triple_tf = true;
+    else if (vision.dual_tf) updated.vision_dual_tf = true;
 
     // Update the card
     var visionDiv = document.getElementById('ec-vision-' + sid);

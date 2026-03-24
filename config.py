@@ -509,6 +509,7 @@ CONFIG: dict = {
         "trend_gate_adx_min": 20.0,
         "trend_margin_min": 0.003,
         "adx_confirm_min": 22.0,
+        "h1_ema_entry_filter": True,
         "trend_support_weights": {
             "momentum": 0.15,
             "adx": 0.10,
