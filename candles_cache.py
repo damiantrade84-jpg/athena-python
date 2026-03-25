@@ -93,7 +93,8 @@ def resample_from_h1(
         return None
     df = df.set_index("time")
 
-    # Use epoch-anchored right-closed buckets for stable 4h/day boundaries.
+    # Epoch-anchored right-closed buckets (same as ed2f395 / pre-NY-origin).
+    # Keeps H4/D1 bar edges stable vs TradingView when paired with utc=True H1 parse.
     agg = (
         df.resample(freq, origin="epoch", label="right", closed="right")
         .agg(
