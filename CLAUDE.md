@@ -1,5 +1,24 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-25) — EMA200 Display Fix & Forex Data Source Testing
+
+**EMA200 Chart Display Fix (`static/index.html`):**
+- Fixed EMA200 line rendering bug that caused undefined values and gaps
+- Added proper bounds checking to prevent array overflow when chart index exceeds EMA array length
+- Improved EMA calculation accuracy with proper SMA seeding and null handling for initial periods
+- Ensures consistent EMA200 display across all forex, crypto, and commodity charts
+
+**Forex Data Source Testing (`athena.py`, `candles_cache.py`):**
+- Enabled Polygon as primary source for GBP/USD test pair to compare native H4/D1 data vs resampled H1
+- Added debug logging to track Polygon data quality and timestamp alignment
+- Fixed CandleBuilder routing to skip H4/D1 for Polygon sources (prevents mixed data paths)
+- Implemented deterministic H1 resampling for forex chart consistency with epoch-anchored boundaries
+
+**Chart Data Improvements:**
+- Skip forming bar merge for Polygon sources (provides completed bars only)
+- Added canonical H1 timeline approach for EODHD forex pairs
+- Prevents candle spikes and gaps from mixed provider data sources
+
 ## Recent Changes (2026-03-28) — Backtest `_rt()` fix, live-threshold parity, full-scan `sqn`, sticky toasts, scan quantile
 
 **`backtest_runner.py` — runtime accessor**
