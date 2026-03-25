@@ -6579,8 +6579,11 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
 
     # Inject live microstructure signals if WS feed has data for this symbol
     _msig = _micro_cache.get(pair.get("symbol", ""), {})
-    if _msig:
-        h4i["snap"].update({k: v for k, v in _msig.items() if v is not None})
+    _msig_age = time.time() - _msig.get("_updated_ts", 0) if _msig else 999.0
+    if _msig and _msig_age < 45.0:
+        h4i["snap"].update(
+            {k: v for k, v in _msig.items() if v is not None and k != "_updated_ts"}
+        )
 
     h1i = calc_indicators_with_normalized(h1, pair.get("type", "stock"))
 
@@ -6994,7 +6997,7 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
         "oiDivergence": _oi_divergence,
         "fundingRate": res.get("fundingRate"),
         "regime": res.get("regime"),
-        "factorScores": res.get("factorScores"),
+        "factorScores": res.get("factor_scores"),
         "factorWeights": res.get("factorWeights"),
         "regimeName": res.get("regimeName"),
         "correlationAdjustments": res.get("correlationAdjustments", {}),

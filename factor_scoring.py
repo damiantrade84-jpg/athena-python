@@ -694,6 +694,19 @@ def compute_factor_scores(
     }
     disabled_factors = [f for f, s in factor_scores.items() if s is None]
 
+    _base_min_dir = float(
+        CONFIG.get(
+            f"FACTOR_MIN_DIRECTIONAL_{asset_type.upper()}",
+            CONFIG.get("FACTOR_MIN_DIRECTIONAL", 0.0),
+        )
+    )
+    _base_soft_span = float(
+        CONFIG.get(
+            f"FACTOR_DIRECTIONAL_SOFT_SPAN_{asset_type.upper()}",
+            CONFIG.get("FACTOR_DIRECTIONAL_SOFT_SPAN", 0.20),
+        )
+    )
+
     # Minimum active factors guard: require at least 1 directional factor.
     # Prevents inflated scores driven solely by volatility (e.g. JSE stocks with no H4/H1 data).
     if not active_dir:
@@ -715,9 +728,9 @@ def compute_factor_scores(
             "min_directional_failed": True,
             "active_directional_factors": [],
             "active_nondirectional_factors": list(active_nondir.keys()),
-            "min_directional_threshold": float(CONFIG.get("FACTOR_MIN_DIRECTIONAL", 0.0)),
+            "min_directional_threshold": _base_min_dir,
             "directional_confidence_multiplier": 0.0,
-            "effective_min_directional": float(CONFIG.get("FACTOR_MIN_DIRECTIONAL", 0.0)),
+            "effective_min_directional": _base_min_dir,
             "trend_coherence": trend_coherence,
             "missing_directional_optional_count": 3,
             "optional_factor_coverage": 0.0,
@@ -752,8 +765,8 @@ def compute_factor_scores(
     # Multiplicative combination with smooth directional confidence (no hard cliff).
     # As optional directional context gets sparse, use a slightly softer effective threshold
     # so missing feeds do not collapse otherwise-valid directional setups.
-    _min_dir = CONFIG.get("FACTOR_MIN_DIRECTIONAL", 0.0)
-    _soft_span = float(CONFIG.get("FACTOR_DIRECTIONAL_SOFT_SPAN", 0.20))
+    _min_dir = _base_min_dir
+    _soft_span = _base_soft_span
     _effective_min_dir = float(_min_dir) * (0.75 + (0.25 * optional_coverage))
     _dir_conf = _directional_confidence_multiplier(abs(dir_score), _effective_min_dir, _soft_span)
     _nondir_norm = min(nondir_score / 3.0, 1.0)  # normalize quality to [0, 1]

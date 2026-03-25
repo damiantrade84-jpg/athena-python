@@ -248,6 +248,8 @@ CONFIG: dict = {
     # Factor scoring gates — see factor_scoring.py
     "FACTOR_MIN_DIRECTIONAL": 0.25,  # Skip if abs(dir_score) < this (near-directionless signal)
     "FACTOR_DIRECTIONAL_SOFT_SPAN": 0.20,  # Smooth transition width for directional confidence
+    "FACTOR_MIN_DIRECTIONAL_CRYPTO": 0.15,
+    "FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO": 0.30,
     "CRYPTO_TRANSITION_PENALTY_ENABLED": True,
     "REGIME_SMOOTHING_BARS": 3,  # Consecutive bars required before committing to a regime change
     # Factor weights per asset class (base, before regime overrides)

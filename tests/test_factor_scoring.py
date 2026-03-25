@@ -6,6 +6,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from factor_scoring import compute_factor_scores, _factor_score
+from config import CONFIG
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -162,3 +163,40 @@ class TestReturnStructure:
             "insufficient_factors",
         }
         assert expected_keys.issubset(result.keys())
+
+
+class TestCryptoDirectionalOverrides:
+    def test_crypto_uses_asset_specific_directional_settings(self):
+        snap = _make_snap(
+            ema21=None,
+            ema50=None,
+            rsi_z=0.2,
+            macdLine_z=0.2,
+            order_book_imbalance=None,
+            orderflow_delta=None,
+            liquidity_pressure=None,
+            fib_proximity=None,
+            obv_trend=None,
+        )
+        original_min = CONFIG.get("FACTOR_MIN_DIRECTIONAL_CRYPTO")
+        original_span = CONFIG.get("FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO")
+        try:
+            CONFIG["FACTOR_MIN_DIRECTIONAL_CRYPTO"] = 0.15
+            CONFIG["FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO"] = 0.30
+            result = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair=_make_pair(),
+                d1_candles=_make_candles(200),
+                h4_candles=_make_candles(200),
+                h1_candles=_make_candles(200),
+                volume_ratio=1.5,
+            )
+        finally:
+            CONFIG["FACTOR_MIN_DIRECTIONAL_CRYPTO"] = original_min
+            CONFIG["FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO"] = original_span
+
+        assert result["min_directional_threshold"] == 0.15
+        assert result["effective_min_directional"] == 0.125
+        assert result["directional_confidence_multiplier"] > 0.5

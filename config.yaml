@@ -290,6 +290,8 @@ FACTOR_MIN_DIRECTIONAL: 0.25
 # Soft transition width around FACTOR_MIN_DIRECTIONAL for smooth confidence scaling
 # (removes binary cliff while preserving directional preference).
 FACTOR_DIRECTIONAL_SOFT_SPAN: 0.20
+FACTOR_MIN_DIRECTIONAL_CRYPTO: 0.15
+FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO: 0.30
 
 # Regime smoothing: number of consecutive H4 bars that must agree on a new regime
 # before the committed regime switches. Prevents regime whipsawing from bar to bar.
