@@ -4266,7 +4266,7 @@ async function _acmRender(symbol, tf) {
       priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
     });
     _acm.ema200.setData(data.map(function(c, i) {
-      return { time: c.time, value: i >= 199 ? e200[i] : null };
+      return { time: c.time, value: i >= 199 ? e200[Math.min(i, e200.length - 1)] : null };
     }).filter(function(d) { return d.value !== null; }));
 
     [_acm.ema21, _acm.ema50, _acm.ema200].forEach(function(s) {
