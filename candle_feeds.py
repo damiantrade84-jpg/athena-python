@@ -16,6 +16,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from athena_runtime import rt
+from candles_cache import forex_h4_resample_offset_hours
 from data_feeds import _get_eodhd_client, http_requests
 
 log = logging.getLogger("sentinel")
@@ -1038,6 +1039,17 @@ class CandleBuilder:
 
                     df = df.set_index("time")
 
+                    offset_hours = (
+                        forex_h4_resample_offset_hours()
+                        if p.get("type") == "forex"
+                        else 0.0
+                    )
+                    if abs(offset_hours) > 1e-9:
+                        offset = pd.to_timedelta(offset_hours, unit="h")
+                        df.index = df.index - offset
+                    else:
+                        offset = None
+
                     h4 = (
                         df.resample("4h", origin="epoch", label="left", closed="left")
                         .agg(
@@ -1051,6 +1063,9 @@ class CandleBuilder:
                         )
                         .dropna(subset=["open", "close"])
                     )
+
+                    if offset is not None:
+                        h4.index = h4.index + offset
 
                     h4_rows = [
                         (

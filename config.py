@@ -75,6 +75,7 @@ CONFIG: dict = {
     "D1_CANDLES": 1001,
     "H4_CANDLES": 1000,
     "H1_CANDLES": 1000,
+    "FOREX_H4_RESAMPLE_OFFSET_HOURS": 0.0,
     "MIN_CONFLUENCE": 1.0,
     "RISK_MULT": {
         "commodity": 1.2,
@@ -607,6 +608,10 @@ def validate_config(cfg: dict) -> None:
         v = cfg.get(k)
         if not isinstance(v, int) or v < 10:
             log.warning(f"[CFG] {k}={v} is too low — minimum 10 candles required")
+    try:
+        float(cfg.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        log.warning("[CFG] FOREX_H4_RESAMPLE_OFFSET_HOURS must be numeric")
     if cfg.get("RISK_PCT", 0) > 0.05:
         log.warning(
             f"[CFG] RISK_PCT={cfg['RISK_PCT']:.1%} exceeds 5% — verify this is intentional"

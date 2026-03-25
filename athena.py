@@ -84,6 +84,7 @@ from candles_cache import (  # noqa: E402
     _candle_cache_lock,
     extract_candles as _extract_candles,
     fetch_candles as _fetch_candles_routed,
+    forex_h4_resample_offset_hours as _forex_h4_resample_offset_hours,
     merge_forex_forming_ws as _merge_forex_forming_ws_core,
     resample_from_h1 as _resample_from_h1,
 )
@@ -1724,7 +1725,16 @@ def fetch_eodhd(pair, tf, limit):
             ]
 
             if tf == "H4" and len(candles) >= 4:
-                _resampled = _resample_from_h1(candles, "H4", len(candles))
+                _resampled = _resample_from_h1(
+                    candles,
+                    "H4",
+                    len(candles),
+                    alignment_offset_hours=(
+                        _forex_h4_resample_offset_hours()
+                        if pair.get("type") == "forex"
+                        else 0.0
+                    ),
+                )
                 if _resampled:
                     candles = _resampled
                 else:
@@ -6321,7 +6331,14 @@ def api_candles():
             h1_series, ws_note = _merge_forex_forming_ws(
                 h1_series, pair.get("display", ""), "H1", base_limit
             )
-            candles = _resample_from_h1(h1_series, tf, limit)
+            candles = _resample_from_h1(
+                h1_series,
+                tf,
+                limit,
+                alignment_offset_hours=(
+                    _forex_h4_resample_offset_hours() if ptype == "forex" else 0.0
+                ),
+            )
             if candles:
                 chart_source = "eodhd_h1_resampled"
                 if ws_note:

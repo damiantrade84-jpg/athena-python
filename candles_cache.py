@@ -11,6 +11,8 @@ import threading
 import time
 from typing import Any, Callable
 
+from config import CONFIG
+
 log = logging.getLogger("sentinel")
 
 _candle_cache: dict = {}
@@ -35,8 +37,20 @@ def extract_candles(resp) -> list | None:
     return None
 
 
+def forex_h4_resample_offset_hours() -> float:
+    """Project-configured H4 bucket offset for forex feeds."""
+    try:
+        return float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def resample_from_h1(
-    h1_candles: list[dict] | None, target_tf: str, limit: int
+    h1_candles: list[dict] | None,
+    target_tf: str,
+    limit: int,
+    *,
+    alignment_offset_hours: float = 0.0,
 ) -> list[dict] | None:
     """Build H4/D1 candles from a canonical H1 series.
 
@@ -93,12 +107,25 @@ def resample_from_h1(
         return None
     df = df.set_index("time")
 
-    # Epoch-anchored left-closed buckets matching TradingView's open-time bar labelling.
-    # H4 boundaries: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC.
-    # label="left" stamps bars with their open time (same as TradingView).
-    # closed="left" means the 00:00 H1 bar goes into the 00:00 H4 bucket (not the 20:00 one).
+    resample_df = df
+    offset_hours = 0.0
+    try:
+        offset_hours = float(alignment_offset_hours or 0.0)
+    except (TypeError, ValueError):
+        offset_hours = 0.0
+
+    if tf == "H4" and abs(offset_hours) > 1e-9:
+        offset = pd.to_timedelta(offset_hours, unit="h")
+        resample_df = df.copy()
+        # Shift to epoch boundaries, resample, then shift labels back to the broker/session grid.
+        resample_df.index = resample_df.index - offset
+    else:
+        offset = None
+
+    # Epoch-anchored left-closed buckets matching open-time bar labelling.
+    # H4 can optionally be shifted to match broker/session-aligned forex grids (e.g. 01/05/09... UTC).
     agg = (
-        df.resample(freq, origin="epoch", label="left", closed="left")
+        resample_df.resample(freq, origin="epoch", label="left", closed="left")
         .agg(
             {
                 "open": "first",
@@ -110,6 +137,9 @@ def resample_from_h1(
         )
         .dropna(subset=["open", "close"])
     )
+
+    if offset is not None:
+        agg.index = agg.index + offset
 
     if agg.empty:
         return None
