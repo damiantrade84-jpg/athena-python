@@ -431,7 +431,7 @@ You already have 2 positions in the same correlation cluster. Clusters include:
 - `metals`: XAU/USD, XAG/USD, GLD
 - `jse`: all JSE stocks
 - `us_tech`: AAPL, TSLA, NVDA, MSFT, AMZN, META, GOOG
-- `ai_crypto`: FET, RENDER
+- `ai_crypto`: RENDER (and other alt majors per `scoring.py`)
 
 **STALE_SIGNAL**
 The signal was generated more than 5 minutes ago. Re-run the scan to get a fresh signal.

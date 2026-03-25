@@ -134,7 +134,6 @@ _PAIR_CARRY_FORMULA: dict[str, list[tuple[float, str]]] = {
     "LTC/USDT": [],
     "NEAR/USDT": [],
     "INJ/USDT": [],
-    "FET/USDT": [],
     "RENDER/USDT": [],
     "ATOM/USDT": [],
     "OP/USDT": [],

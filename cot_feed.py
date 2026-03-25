@@ -119,7 +119,6 @@ _PAIR_FORMULA: dict[str, list[tuple[float, str]]] = {
     "LTC/USDT": [],
     "NEAR/USDT": [],
     "INJ/USDT": [],
-    "FET/USDT": [],
     "RENDER/USDT": [],
     "ATOM/USDT": [],
     "S&P 500": [(1.0, "SP500")],

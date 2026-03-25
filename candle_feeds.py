@@ -297,8 +297,8 @@ class BinanceCandleWS:
     """Binance Futures kline WebSocket — feeds H1 OHLCV into CandleBuilder for crypto.
 
     Subscribes to @kline_1h for each enabled crypto pair via the combined stream
-    endpoint so a single WS connection covers all pairs.  CandleBuilder accumulates
-    H1 ticks and rolls them up to H4/D1 automatically.
+    endpoint. Full kline O/H/L/C/V is applied via CandleBuilder.on_kline (H1 only);
+    H4/D1 for crypto come from Binance REST in fetch_candles.
     """
 
     def __init__(self):
@@ -357,11 +357,15 @@ class BinanceCandleWS:
                                     continue
                                 _cb = get_candle_builder()
                                 if _cb:
-                                    _cb.on_tick(
+                                    _cb.on_kline(
                                         display,
+                                        float(k["o"]),
+                                        float(k["h"]),
+                                        float(k["l"]),
                                         float(k["c"]),
                                         float(k.get("v", 0)),
                                         int(k.get("t", 0)),
+                                        bool(k.get("x", False)),
                                     )
                             except asyncio.TimeoutError:
                                 log.warning("[BN-KLINE-WS] Receive timeout, reconnecting...")
@@ -627,7 +631,7 @@ class EODHDWebSocketManager:
             # us=17:  COIN,AAPL,PLTR,GOOG,MSFT,NFLX,PYPL,UBER,INTC,AMD + SLV,SPY,EEM,IWM,USO + GSPC.INDX,DJI.INDX
             # forex=19: EURUSD,GBPJPY,AUDUSD,USDJPY,GBPAUD,USDCHF,EURGBP,USDCAD + XAU,XPT,NatGas,WTI,XAG,Brent,XPD
             #           + FTSE.INDX,AXJO.INDX,HSI.INDX,N225.INDX
-            # crypto=14: ETH,LINK,XRP,APT,NEAR,DOGE,ADA,SOL,FET,DOT,INJ,BNB,MATIC,SUI
+            # crypto list size varies; see CRYPTO_PAIRS in athena.py
             # Pairs with ws:False use REST cache (H1:55m, H4:3h55m, D1:23h TTL) — scan/backtest/execute unaffected
 
             try:
@@ -757,6 +761,49 @@ class CandleBuilder:
                     bar["vol"] += vol
 
                     bar["ticks"] += 1
+
+    def on_kline(self, display, o, h, l, c, vol, ts_ms, is_closed):
+        """Apply Binance @kline_1h snapshot: full OHLCV for crypto H1 only (not close-only ticks).
+
+        Kline fields are the running bar OHLCV; overwrite each update. Flush when is_closed.
+        tick_count=0 marks DB rows as kline-sourced (vs on_tick accumulation).
+        """
+
+        if not c or c <= 0 or not o or o <= 0:
+            return
+
+        ts_s = (
+            ts_ms / 1000.0
+            if ts_ms > 1e12
+            else float(ts_ms)
+            if ts_ms > 0
+            else time.time()
+        )
+
+        tf_sec = self._TFS["H1"]
+        key = (display, "H1")
+
+        with self._lock:
+            start = self._bar_start(ts_s, tf_sec)
+
+            bar = self._bars.get(key)
+
+            if bar and bar["start"] != start:
+                self._flush(display, "H1", bar)
+
+            self._bars[key] = {
+                "start": start,
+                "o": float(o),
+                "h": float(h),
+                "l": float(l),
+                "c": float(c),
+                "vol": float(vol or 0),
+                "ticks": 0,
+            }
+
+            if is_closed:
+                self._flush(display, "H1", self._bars[key])
+                del self._bars[key]
 
     def _flush(self, pair, tf, bar):
         """Write a completed bar to SQLite."""
@@ -1041,11 +1088,22 @@ class CandleBuilder:
         log.info(f"[CB] Seed complete: {seeded}/{len(pairs)} pairs")
 
     def _seed_crypto(self, pair: dict):
-        """Seed candle_cache for a single crypto pair from Binance REST klines."""
+        """Seed candle_cache H1 for a single crypto pair from Binance REST klines.
+
+        Crypto H4/D1 are served from REST in fetch_candles, not CandleBuilder.
+        """
         disp = pair["display"]
         bn_sym = pair["symbol"].replace("/", "")
 
         with sqlite3.connect(self._db, timeout=15.0) as con:
+            deleted = con.execute(
+                "DELETE FROM candle_cache WHERE pair=? AND timeframe='H1' AND tick_count > 0",
+                (disp,),
+            ).rowcount
+            if deleted:
+                log.info(
+                    f"[CB] {disp}: purged {deleted} WS-corrupted H1 rows (tick_count>0) for re-seed"
+                )
             cnt = con.execute(
                 "SELECT COUNT(*) FROM candle_cache WHERE pair=? AND timeframe='H1'",
                 (disp,),
@@ -1053,7 +1111,7 @@ class CandleBuilder:
         if cnt >= 100:
             return
 
-        for tf_label, interval, limit in [("D1", "1d", 365), ("H4", "4h", 500), ("H1", "1h", 500)]:
+        for tf_label, interval, limit in [("H1", "1h", 500)]:
             try:
                 resp = http_requests.get(
                     "https://api.binance.com/api/v3/klines",

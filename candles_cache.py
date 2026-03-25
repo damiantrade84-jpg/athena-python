@@ -256,14 +256,9 @@ def fetch_candles(
 
     TTL: H1=55 min, H4=3h55m, D1=23h — expires just before the next bar closes.
     """
-    # Try CandleBuilder first for live WS-built candles.
-    # Crypto: CandleBuilder has all TFs (seeded from Binance REST, live from @kline_1h WS).
-    # Non-crypto: CandleBuilder only provides H1 (EODHD WS ticks).
-    _is_crypto = pair.get("type") == "crypto"
-    use_candle_builder = (
-        (_is_crypto or tf == "H1") and
-        pair.get("source") != "polygon"
-    )
+    # Try CandleBuilder first for live WS-built H1 only (EODHD ticks + Binance @kline_1h).
+    # Crypto H4/D1 use Binance REST native intervals (not rolled up from H1).
+    use_candle_builder = tf == "H1" and pair.get("source") != "polygon"
 
     if use_candle_builder:
         live_resp = fetch_candles_live(pair.get("display", ""), tf, limit)

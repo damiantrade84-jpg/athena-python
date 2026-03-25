@@ -809,13 +809,6 @@ CRYPTO_PAIRS = [
         "enabled": True,
     },  # SQN -2.01 # re-enabled for ATR-fix retest
     {
-        "symbol": "FETUSDT",
-        "type": "crypto",
-        "display": "FET/USDT",
-        "source": "binance",
-        "enabled": False,  # DISABLED: FETUSDT contract delisted on Bybit (retCode 110074)
-    },  # SQN +0.14 # re-enabled for ATR-fix retest
-    {
         "symbol": "RENDERUSDT",
         "type": "crypto",
         "display": "RENDER/USDT",
