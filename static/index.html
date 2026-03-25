@@ -2398,6 +2398,17 @@ function _acmCalcEMA(data, period) {
   return ema;
 }
 
+/** Lightweight Charts line series: only finite points (no nulls). Aligns with TradingView-style EMA plots. */
+function _acmEmaLineData(candles, emaArr) {
+  var out = [];
+  for (var i = 0; i < candles.length && i < emaArr.length; i++) {
+    var v = emaArr[i];
+    if (v != null && typeof v === 'number' && isFinite(v))
+      out.push({ time: candles[i].time, value: v });
+  }
+  return out;
+}
+
 function _acmLegendHtml(hasEngineB) {
   return '<span style="color:#00d4ff">EMA 21</span>' +
     '<span style="color:#a78bfa">EMA 50</span>' +
@@ -2429,7 +2440,7 @@ async function _acmFetchAndRender(symbol, tf) {
   }
 
   try {
-    var resp = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&tf=' + tf + '&limit=300');
+    var resp = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&tf=' + tf + '&limit=500');
     var json = await resp.json();
     if (!resp.ok) throw new Error(json.error || 'Failed to load candles');
 
@@ -2529,7 +2540,7 @@ async function _acmFetchAndRender(symbol, tf) {
       lastValueVisible: false,
       crosshairMarkerVisible: false
     });
-    _acmEma21Series.setData(data.map(function(c, i) { return { time: c.time, value: ema21[i] }; }));
+    _acmEma21Series.setData(_acmEmaLineData(data, ema21));
 
     _acmEma50Series = _acmChart.addLineSeries({
       color: '#a78bfa',
@@ -2538,7 +2549,7 @@ async function _acmFetchAndRender(symbol, tf) {
       lastValueVisible: false,
       crosshairMarkerVisible: false
     });
-    _acmEma50Series.setData(data.map(function(c, i) { return { time: c.time, value: ema50[Math.min(i, ema50.length - 1)] }; }));
+    _acmEma50Series.setData(_acmEmaLineData(data, ema50));
 
     _acmEma200Series = _acmChart.addLineSeries({
       color: 'rgba(245,158,11,0.75)',
@@ -2548,7 +2559,7 @@ async function _acmFetchAndRender(symbol, tf) {
       lastValueVisible: false,
       crosshairMarkerVisible: false
     });
-    _acmEma200Series.setData(data.map(function(c, i) { return { time: c.time, value: ema200[Math.min(i, ema200.length - 1)] }; }));
+    _acmEma200Series.setData(_acmEmaLineData(data, ema200));
 
     [_acmEma21Series, _acmEma50Series, _acmEma200Series].forEach(function(series) {
       if (series) series.applyOptions({ visible: _acmShowEMA });
@@ -4184,7 +4195,7 @@ async function _acmRender(symbol, tf) {
     // SL/TP lines to appear at wrong price levels relative to current market.
     var candles = null;
     var json = {};
-    var resp = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&tf=' + tf + '&limit=300');
+    var resp = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&tf=' + tf + '&limit=500');
     json = await resp.json();
     candles = json.candles || json;
     _acm.pairType = json.pairType || ((_acm.sig && _acm.sig.type) || '');
@@ -4268,25 +4279,21 @@ async function _acmRender(symbol, tf) {
       color: '#00bcd4', lineWidth: 2,
       priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
     });
-    _acm.ema21.setData(data.map(function(c, i) { return { time: c.time, value: e21[i] }; }));
+    _acm.ema21.setData(_acmEmaLineData(data, e21));
 
     var e50 = _acmEMA(closes, 50);
     _acm.ema50 = _acm.chart.addLineSeries({
       color: '#8b5cf6', lineWidth: 2,
       priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
     });
-    _acm.ema50.setData(data.map(function(c, i) {
-      return { time: c.time, value: i >= 49 ? e50[i] : null };
-    }).filter(function(d) { return d.value !== null; }));
+    _acm.ema50.setData(_acmEmaLineData(data, e50));
 
     var e200 = _acmEMA(closes, 200);
     _acm.ema200 = _acm.chart.addLineSeries({
       color: 'rgba(255,183,77,0.78)', lineWidth: 2, lineStyle: 2,
       priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
     });
-    _acm.ema200.setData(data.map(function(c, i) {
-      return { time: c.time, value: i >= 199 ? e200[Math.min(i, e200.length - 1)] : null };
-    }).filter(function(d) { return d.value !== null; }));
+    _acm.ema200.setData(_acmEmaLineData(data, e200));
 
     [_acm.ema21, _acm.ema50, _acm.ema200].forEach(function(s) {
       if (s) s.applyOptions({ visible: _acm.show.ema });
