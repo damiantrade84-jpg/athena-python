@@ -256,19 +256,20 @@ def fetch_candles(
 
     TTL: H1=55 min, H4=3h55m, D1=23h — expires just before the next bar closes.
     """
-    # Skip CandleBuilder for H4/D1 when using Polygon source (native data available)
-    # CandleBuilder only provides H1 data for forex
+    # Try CandleBuilder first for live WS-built candles.
+    # Crypto: CandleBuilder has all TFs (seeded from Binance REST, live from @kline_1h WS).
+    # Non-crypto: CandleBuilder only provides H1 (EODHD WS ticks).
+    _is_crypto = pair.get("type") == "crypto"
     use_candle_builder = (
-        pair.get("type") != "crypto" and 
-        tf == "H1" and 
+        (_is_crypto or tf == "H1") and
         pair.get("source") != "polygon"
     )
-    
+
     if use_candle_builder:
         live_resp = fetch_candles_live(pair.get("display", ""), tf, limit)
         live_candles = extract_candles(live_resp)
 
-        _min_live_bars = {"H1": 20}.get(tf, limit)
+        _min_live_bars = {"H1": 20, "H4": 50, "D1": 50}.get(tf, limit)
 
         if live_candles and len(live_candles) >= min(limit, _min_live_bars):
             return live_candles[-limit:] if len(live_candles) > limit else live_candles

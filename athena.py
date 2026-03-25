@@ -94,6 +94,7 @@ _engine_b_cache: dict = {}  # sid/symbol -> naked analysis result dict
 
 
 from candle_feeds import (  # noqa: E402
+    BinanceCandleWS,
     BinanceLivePriceWS,
     CandleBuilder,
     EODHDWebSocketManager,
@@ -6582,8 +6583,14 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
     _msig_age = time.time() - _msig.get("_updated_ts", 0) if _msig else 999.0
     if _msig and _msig_age < 45.0:
         h4i["snap"].update(
-            {k: v for k, v in _msig.items() if v is not None and k != "_updated_ts"}
+            {
+                k: v
+                for k, v in _msig.items()
+                if v is not None and k not in {"_updated_ts", "_exchange"}
+            }
         )
+        h4i["snap"]["microstructure_exchange"] = _msig.get("_exchange")
+        h4i["snap"]["microstructure_age_sec"] = round(_msig_age, 3)
 
     h1i = calc_indicators_with_normalized(h1, pair.get("type", "stock"))
 
@@ -6997,7 +7004,7 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
         "oiDivergence": _oi_divergence,
         "fundingRate": res.get("fundingRate"),
         "regime": res.get("regime"),
-        "factorScores": res.get("factor_scores"),
+        "factorScores": res.get("factorScores"),
         "factorWeights": res.get("factorWeights"),
         "regimeName": res.get("regimeName"),
         "correlationAdjustments": res.get("correlationAdjustments", {}),
@@ -8195,12 +8202,14 @@ if __name__ == "__main__":
     else:
         log.warning("[WS] No EODHD_KEY â€” WebSocket prices disabled")
 
-    # Start Binance Futures WebSocket for crypto live prices
+    # Start Binance Futures WebSocket for crypto live prices + kline candles
     crypto_enabled = [p for p in CRYPTO_PAIRS if p.get("enabled", True)]
     if crypto_enabled:
         _binance_ws = BinanceLivePriceWS()
         _binance_ws.start()
-        log.info(f"[BINANCE-WS] Started for {len(crypto_enabled)} enabled crypto pairs")
+        _binance_candle_ws = BinanceCandleWS()
+        _binance_candle_ws.start()
+        log.info(f"[BINANCE-WS] Started price + kline feeds for {len(crypto_enabled)} enabled crypto pairs")
     else:
         log.info("[BINANCE-WS] No enabled crypto pairs - Binance Futures WS disabled")
 
@@ -8220,6 +8229,28 @@ if __name__ == "__main__":
 
             def _make_cb(sym):
                 def _cb(metrics):
+                    incoming_exchange = str(metrics.get("exchange", "")).lower()
+                    now_ts = time.time()
+                    existing = _micro_cache.get(sym, {})
+                    existing_exchange = str(existing.get("_exchange", "")).lower()
+                    existing_age = now_ts - float(existing.get("_updated_ts", 0) or 0)
+
+                    # Prefer Binance for crypto microstructure because the candle/live-price
+                    # path also uses Binance Futures. Fall back to Bybit only when the Binance
+                    # slot is absent or stale.
+                    use_update = False
+                    if incoming_exchange == "binance":
+                        use_update = True
+                    elif not existing:
+                        use_update = True
+                    elif existing_exchange == "binance" and existing_age > 5.0:
+                        use_update = True
+                    elif existing_exchange != "binance":
+                        use_update = True
+
+                    if not use_update:
+                        return
+
                     _micro_cache[sym] = {
                         k: metrics.get(k)
                         for k in (
@@ -8229,7 +8260,8 @@ if __name__ == "__main__":
                             "liquidity_pressure",
                         )
                     }
-                    _micro_cache[sym]["_updated_ts"] = time.time()
+                    _micro_cache[sym]["_updated_ts"] = now_ts
+                    _micro_cache[sym]["_exchange"] = incoming_exchange
 
                 return _cb
 
@@ -8394,6 +8426,12 @@ if __name__ == "__main__":
 
             mt5_disconnect()
 
+        except Exception:
+            pass
+
+        # Stop Binance candle WS
+        try:
+            _binance_candle_ws.stop()
         except Exception:
             pass
 

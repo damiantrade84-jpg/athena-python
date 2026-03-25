@@ -52,4 +52,5 @@ def test_score_group_multipliers_apply_to_weights():
     }
     out = _apply_pair_profile_weight_rules({"score_group": "crypto_doge"}, base)
     assert out["volatility"] > base["volatility"]
-    assert out["microstructure"] > base["microstructure"]
+    # microstructure multiplier removed for crypto_doge (zeroed at FACTOR_WEIGHTS level)
+    assert out["microstructure"] == base["microstructure"]

@@ -261,9 +261,9 @@ CONFIG: dict = {
             "volatility": 1.0,
             "volume": 1.0,
             "structure": 1.0,
-            "derivatives": 1.5,
-            "microstructure": 1.5,
-            "carry": 1.0,
+            "derivatives": 1.0,
+            "microstructure": 0.75,
+            "carry": 0.0,
         },
         "forex": {
             "trend": 2.0,
@@ -321,11 +321,11 @@ CONFIG: dict = {
         "nat_gas": {"volatility": 1.35, "structure": 1.15},
         "copper": {"trend": 1.1, "structure": 1.15},
         "pgm_metals": {"volatility": 1.2, "structure": 1.15},
-        "crypto_btc": {"derivatives": 1.2, "microstructure": 1.15},
-        "crypto_eth": {"derivatives": 1.15, "microstructure": 1.1},
-        "crypto_doge": {"volatility": 1.4, "microstructure": 1.25},
-        "crypto_alt_majors": {"derivatives": 1.1, "microstructure": 1.1},
-        "crypto_other": {"trend": 1.05, "momentum": 1.05, "microstructure": 1.05},
+        "crypto_btc": {"derivatives": 1.1},
+        "crypto_eth": {"derivatives": 1.05},
+        "crypto_doge": {"volatility": 1.35},
+        "crypto_alt_majors": {"trend": 1.05, "momentum": 1.05},
+        "crypto_other": {"trend": 1.05, "momentum": 1.05},
     },
     # Regime-aware factor weight overrides
     "REGIME_WEIGHTS": {
@@ -389,7 +389,10 @@ CONFIG: dict = {
             "index": {"d1_ema_trend": 0.4, "h4_ema_trend": 0.35, "ema_trend": 0.25},
         },
         "momentum": {"rsi_z": 0.6, "macdLine_z": 0.4},
-        "derivatives": {"cot_z": 0.6, "funding_rate": 0.4},
+        "derivatives": {
+            "default": {"cot_z": 0.6, "funding_rate": 0.4},
+            "crypto": {"funding_rate": 0.75, "cot_z": 0.25},
+        },
         "microstructure": {
             "order_book_imbalance": 0.4,
             "liquidity_wall_detection": 0.25,
@@ -398,6 +401,11 @@ CONFIG: dict = {
         },
         "volatility": {"atr_z": 0.5, "bbWidth_z": 0.3, "realized_vol_z": 0.2},
         "volume": {"volume_ratio": 0.7, "obv_trend": 0.3},
+    },
+    "CRYPTO_FACTOR_WEIGHT_CAPS": {
+        "derivatives": 1.0,
+        "microstructure": 0.75,
+        "carry": 0.0,
     },
     # Indicator correlation control
     "INDICATOR_CORRELATION_ENABLED": False,  # Expensive O(n²); enable manually for live deep analysis

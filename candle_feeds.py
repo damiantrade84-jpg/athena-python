@@ -293,6 +293,114 @@ class BinanceLivePriceWS:
         log.info("[BINANCE-WS] Stopped Binance Futures price feed thread")
 
 
+class BinanceCandleWS:
+    """Binance Futures kline WebSocket — feeds H1 OHLCV into CandleBuilder for crypto.
+
+    Subscribes to @kline_1h for each enabled crypto pair via the combined stream
+    endpoint so a single WS connection covers all pairs.  CandleBuilder accumulates
+    H1 ticks and rolls them up to H4/D1 automatically.
+    """
+
+    def __init__(self):
+        self._running = True
+        self._thread = None
+
+    def _connect_and_stream(self):
+        import websockets
+        import json
+        import asyncio
+
+        try:
+            _cp = rt().CRYPTO_PAIRS
+        except RuntimeError:
+            _cp = []
+        enabled = [p for p in _cp if p.get("enabled", True)]
+        if not enabled:
+            log.info("[BN-KLINE-WS] No enabled crypto pairs, exiting")
+            return
+
+        symbol_map = {
+            p["symbol"].replace("/", "").lower(): p["display"]
+            for p in enabled
+        }
+
+        streams = "/".join(f"{sym}@kline_1h" for sym in symbol_map)
+        url = f"wss://fstream.binance.com/stream?streams={streams}"
+
+        while self._running:
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+                async def _stream():
+                    async with websockets.connect(
+                        url,
+                        ping_interval=None,
+                        ping_timeout=None,
+                        open_timeout=45,
+                        close_timeout=10,
+                    ) as ws:
+                        log.info(
+                            f"[BN-KLINE-WS] Connected — {len(symbol_map)} crypto pairs on @kline_1h"
+                        )
+                        while self._running:
+                            try:
+                                raw = await asyncio.wait_for(ws.recv(), timeout=90)
+                                msg = json.loads(raw)
+                                data = msg.get("data", {})
+                                k = data.get("k")
+                                if not k:
+                                    continue
+                                sym_lower = data.get("s", "").lower()
+                                display = symbol_map.get(sym_lower)
+                                if not display:
+                                    continue
+                                _cb = get_candle_builder()
+                                if _cb:
+                                    _cb.on_tick(
+                                        display,
+                                        float(k["c"]),
+                                        float(k.get("v", 0)),
+                                        int(k.get("t", 0)),
+                                    )
+                            except asyncio.TimeoutError:
+                                log.warning("[BN-KLINE-WS] Receive timeout, reconnecting...")
+                                break
+                            except json.JSONDecodeError as e:
+                                log.warning(f"[BN-KLINE-WS] JSON error: {e}")
+                                break
+                            except Exception as e:
+                                log.error(f"[BN-KLINE-WS] Process error: {e}")
+                                break
+
+                loop.run_until_complete(_stream())
+
+            except Exception as e:
+                log.error(f"[BN-KLINE-WS] Connection error: {e}")
+                if self._running:
+                    time.sleep(5)
+            finally:
+                try:
+                    loop.close()
+                except Exception:
+                    pass
+
+    def start(self):
+        if self._thread is None or not self._thread.is_alive():
+            self._running = True
+            self._thread = threading.Thread(
+                target=self._connect_and_stream, daemon=True, name="BinanceCandleWS"
+            )
+            self._thread.start()
+            log.info("[BN-KLINE-WS] Started Binance Futures kline feed thread")
+
+    def stop(self):
+        self._running = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
+        log.info("[BN-KLINE-WS] Stopped")
+
+
 class EODHDWebSocketManager:
     """Manages 3 persistent WebSocket connections (US, Forex, Crypto) for real-time prices."""
 
@@ -747,9 +855,10 @@ class CandleBuilder:
                 if not p.get("enabled", True):
                     continue
 
-                # Crypto candles come from Binance — skip EODHD seed for crypto
-
+                # Crypto: seed from Binance REST klines instead of EODHD
                 if p.get("type") == "crypto":
+                    self._seed_crypto(p)
+                    seeded += 1
                     continue
 
                 ticker = rt().eodhd_ticker_for_pair(p)
@@ -930,6 +1039,51 @@ class CandleBuilder:
                 log.warning(f"[CB] Seed {p['display']}: {e}")
 
         log.info(f"[CB] Seed complete: {seeded}/{len(pairs)} pairs")
+
+    def _seed_crypto(self, pair: dict):
+        """Seed candle_cache for a single crypto pair from Binance REST klines."""
+        disp = pair["display"]
+        bn_sym = pair["symbol"].replace("/", "")
+
+        with sqlite3.connect(self._db, timeout=15.0) as con:
+            cnt = con.execute(
+                "SELECT COUNT(*) FROM candle_cache WHERE pair=? AND timeframe='H1'",
+                (disp,),
+            ).fetchone()[0]
+        if cnt >= 100:
+            return
+
+        for tf_label, interval, limit in [("D1", "1d", 365), ("H4", "4h", 500), ("H1", "1h", 500)]:
+            try:
+                resp = http_requests.get(
+                    "https://api.binance.com/api/v3/klines",
+                    params={"symbol": bn_sym, "interval": interval, "limit": limit},
+                    timeout=15,
+                )
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                rows = [
+                    (
+                        disp, tf_label,
+                        datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                        float(k[1]), float(k[2]), float(k[3]), float(k[4]),
+                        float(k[5]), 0,
+                    )
+                    for k in data
+                ]
+                if rows:
+                    with sqlite3.connect(self._db, timeout=15.0) as con:
+                        con.executemany(
+                            "INSERT OR IGNORE INTO candle_cache "
+                            "(pair,timeframe,bar_time,open,high,low,close,volume,tick_count) "
+                            "VALUES(?,?,?,?,?,?,?,?,?)",
+                            rows,
+                        )
+                    log.info(f"[CB] {disp}: seeded {len(rows)} {tf_label} from Binance REST")
+            except Exception as e:
+                log.warning(f"[CB] Crypto seed {disp} {tf_label}: {e}")
+            time.sleep(0.3)
 
     def bulk_update_d1(self):
         """Use EODHD Bulk EOD API to update D1 candles for all active pairs in ~5 API calls.

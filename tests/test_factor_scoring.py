@@ -2,6 +2,9 @@
 
 import sys
 import os
+from unittest.mock import patch
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -187,7 +190,7 @@ class TestCryptoDirectionalOverrides:
                 d1_snap=snap,
                 h4_snap=snap,
                 h1_snap=snap,
-                pair=_make_pair(),
+                pair=_make_pair(display="SOL/USDT"),
                 d1_candles=_make_candles(200),
                 h4_candles=_make_candles(200),
                 h1_candles=_make_candles(200),
@@ -198,5 +201,166 @@ class TestCryptoDirectionalOverrides:
             CONFIG["FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO"] = original_span
 
         assert result["min_directional_threshold"] == 0.15
-        assert result["effective_min_directional"] == 0.125
+        assert result["effective_min_directional"] == pytest.approx(0.1125)
         assert result["directional_confidence_multiplier"] > 0.5
+
+    def test_crypto_optional_coverage_uses_live_funding_only_for_alts(self):
+        snap = _make_snap(
+            order_book_imbalance=None,
+            orderflow_delta=None,
+            liquidity_pressure=None,
+            fib_proximity=None,
+        )
+        result = compute_factor_scores(
+            d1_snap=snap,
+            h4_snap=snap,
+            h1_snap=snap,
+            pair=_make_pair(display="SOL/USDT"),
+            d1_candles=_make_candles(200),
+            h4_candles=_make_candles(200),
+            h1_candles=_make_candles(200),
+            volume_ratio=1.5,
+            funding_rate=0.0001,
+        )
+        assert result["optional_factor_coverage"] == 1.0
+        assert result["missing_directional_optional_count"] == 0
+
+    def test_crypto_disables_candle_proxy_microstructure(self):
+        snap = _make_snap(
+            order_book_imbalance=None,
+            orderflow_delta=None,
+            liquidity_pressure=None,
+            liquidity_wall_detection=None,
+        )
+        result = compute_factor_scores(
+            d1_snap=snap,
+            h4_snap=snap,
+            h1_snap=snap,
+            pair=_make_pair(display="SOL/USDT"),
+            d1_candles=_make_candles(200),
+            h4_candles=_make_candles(200),
+            h1_candles=_make_candles(200),
+            volume_ratio=1.5,
+        )
+        assert result["factor_scores"]["microstructure"] is None
+        assert "microstructure" in result["disabled_factors"]
+
+    @patch("carry_feed.get_carry_z", return_value=2.0)
+    @patch("cot_feed.get_cot_z", return_value=1.2)
+    def test_crypto_cot_only_applies_to_btc_eth_and_carry_is_removed(self, *_mocks):
+        snap = _make_snap()
+        btc_result = compute_factor_scores(
+            d1_snap=snap,
+            h4_snap=snap,
+            h1_snap=snap,
+            pair=_make_pair(display="BTC/USDT"),
+            d1_candles=_make_candles(200),
+            h4_candles=_make_candles(200),
+            h1_candles=_make_candles(200),
+            volume_ratio=1.5,
+            funding_rate=0.0001,
+        )
+        alt_result = compute_factor_scores(
+            d1_snap=snap,
+            h4_snap=snap,
+            h1_snap=snap,
+            pair=_make_pair(display="SOL/USDT"),
+            d1_candles=_make_candles(200),
+            h4_candles=_make_candles(200),
+            h1_candles=_make_candles(200),
+            volume_ratio=1.5,
+            funding_rate=0.0001,
+        )
+        assert btc_result["filtered_indicators"]["cot_z"] == 1.2
+        assert alt_result["filtered_indicators"]["cot_z"] is None
+        assert btc_result["filtered_indicators"]["carry_z"] is None
+        assert "carry" not in btc_result["factor_scores"]
+
+    def test_crypto_short_horizon_weights_are_capped(self):
+        snap = _make_snap()
+        result = compute_factor_scores(
+            d1_snap=snap,
+            h4_snap=snap,
+            h1_snap=snap,
+            pair=_make_pair(display="BTC/USDT", score_group="crypto_btc"),
+            d1_candles=_make_candles(200),
+            h4_candles=_make_candles(200),
+            h1_candles=_make_candles(200),
+            volume_ratio=1.5,
+            funding_rate=0.0001,
+        )
+        assert result["weights"]["derivatives"] <= CONFIG["CRYPTO_FACTOR_WEIGHT_CAPS"]["derivatives"]
+        assert result["weights"]["microstructure"] <= CONFIG["CRYPTO_FACTOR_WEIGHT_CAPS"]["microstructure"]
+
+
+# ── Crypto simplification tests ──────────────────────────────────────────────
+
+
+class TestCryptoOptionalCoverage:
+    """optional_directional_keys for crypto should only include funding_rate,
+    not cot_z/carry_z which are permanently absent for most alts."""
+
+    def test_crypto_alt_optional_coverage_funding_only(self):
+        from factor_scoring import _optional_directional_keys
+
+        keys = _optional_directional_keys("crypto", {"display": "SOL/USDT"})
+        assert keys == ("funding_rate",)
+
+    def test_crypto_btc_includes_cot(self):
+        from factor_scoring import _optional_directional_keys
+
+        keys = _optional_directional_keys("crypto", {"display": "BTC/USDT"})
+        assert "funding_rate" in keys
+        assert "cot_z" in keys
+        assert "carry_z" not in keys
+
+    def test_forex_keeps_all_optional_keys(self):
+        from factor_scoring import _optional_directional_keys
+
+        keys = _optional_directional_keys("forex", {"display": "EUR/USD"})
+        assert set(keys) == {"funding_rate", "cot_z", "carry_z"}
+
+    def test_crypto_alt_full_coverage_when_funding_present(self):
+        snap = _make_snap()
+        result = compute_factor_scores(
+            d1_snap=snap, h4_snap=snap, h1_snap=snap,
+            pair=_make_pair(display="DOGE/USDT"),
+            d1_candles=_make_candles(200),
+            h4_candles=_make_candles(200),
+            h1_candles=_make_candles(200),
+            volume_ratio=1.5,
+            funding_rate=0.0002,
+        )
+        assert result["optional_factor_coverage"] == 1.0
+        assert result["missing_directional_optional_count"] == 0
+
+
+class TestCryptoMicrostructureZeroWeight:
+    """With microstructure weight=0 in config, scores should still aggregate and resolve direction."""
+
+    def test_score_nonzero_with_zero_micro_weight(self):
+        snap = _make_snap()
+        result = compute_factor_scores(
+            d1_snap=snap, h4_snap=snap, h1_snap=snap,
+            pair=_make_pair(display="SOL/USDT"),
+            d1_candles=_make_candles(200),
+            h4_candles=_make_candles(200),
+            h1_candles=_make_candles(200),
+            volume_ratio=1.5,
+            funding_rate=0.0001,
+        )
+        assert result["weights"].get("microstructure", 0) == 0
+        assert result["final_score"] > 0
+        assert result["direction"] in ("LONG", "SHORT")
+
+    def test_carry_not_in_crypto_factors(self):
+        snap = _make_snap()
+        result = compute_factor_scores(
+            d1_snap=snap, h4_snap=snap, h1_snap=snap,
+            pair=_make_pair(display="ETH/USDT"),
+            d1_candles=_make_candles(200),
+            h4_candles=_make_candles(200),
+            h1_candles=_make_candles(200),
+            volume_ratio=1.5,
+        )
+        assert "carry" not in result["factor_scores"]

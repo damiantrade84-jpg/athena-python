@@ -1,5 +1,32 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-25) — Crypto Engine A Simplification
+
+**Goal:** Reduce crypto factor overload — fewer redundant/correlated indicators, live candle data from Binance WS, fix phantom "missing data" penalty.
+
+**Binance Kline WebSocket (`candle_feeds.py`):**
+- Added `BinanceCandleWS` class — subscribes to `@kline_1h` combined stream for all enabled crypto pairs on `fstream.binance.com`.
+- Feeds kline OHLCV ticks into `CandleBuilder.on_tick()` — same interface EODHD WS uses for forex.
+- Removed crypto exclusion guards: `candles_cache.py` line 262 (`type != crypto`), `candle_feeds.py` line 473 (`endpoint != crypto`), `candle_feeds.py` seed() skip.
+- Added `CandleBuilder._seed_crypto()` — seeds H1/H4/D1 from Binance REST klines on cold start (replaces EODHD seed skip).
+- Crypto now uses CandleBuilder path in `fetch_candles()` for all TFs (was REST-only with 55-min H1 TTL staleness).
+- `BinanceLivePriceWS` (`!ticker@arr`) still runs for live execution price — `BinanceCandleWS` is candle OHLCV only.
+- Started alongside price WS in `athena.py` startup; stopped in graceful shutdown.
+
+**Factor Weight Simplification (`config.yaml`):**
+- `FACTOR_WEIGHTS.crypto`: microstructure zeroed (0 — candle proxies redundant with momentum/volume), carry zeroed (0 — never fires), structure reduced (0.5 — fib noisy on perps), derivatives tuned (1.2 — funding primary), volatility reduced (0.8), trend_strength explicit (1.0).
+- `CRYPTO_FACTOR_WEIGHT_CAPS`: microstructure cap 0, derivatives cap 1.2.
+- `INDICATOR_WEIGHTS.derivatives.crypto`: funding_rate 1.0 (up from 0.75), cot_z 0.2 (down from 0.25).
+- Subgroup multipliers (`FACTOR_SCORE_GROUP_MULTIPLIERS`): removed microstructure boosts for all crypto subgroups.
+- Effective active factor groups reduced from 7 to 6 for crypto.
+
+**Code Guards (already existed in `factor_scoring.py` from prior work, now aligned with config):**
+- `_crypto_supports_cot(pair)` — returns True only for BTC/ETH; all other crypto alts skip COT lookup entirely.
+- `_optional_directional_keys("crypto", pair)` — returns `("funding_rate",)` for alts, `("funding_rate", "cot_z")` for BTC/ETH. No `carry_z` for any crypto.
+- Carry factor excluded from crypto's `nondirectional_factors` mapping (line 640).
+- Microstructure: crypto without live WS orderbook data gets all micro indicators as `None` (no candle-proxy fallback).
+- `optional_coverage` = 1.0 when funding present for crypto alts (was 0.33 due to phantom missing carry/COT).
+
 ## Recent Changes (2026-03-24) — Monolith extraction (`candles_cache`, `candle_feeds`, `athena_runtime`)
 
 **Goal:** Move candle cache, live feeds / WebSockets / `CandleBuilder`, execution routes, and scan/backtest entrypoints out of `athena.py` without changing runtime behavior.

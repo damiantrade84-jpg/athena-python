@@ -23,6 +23,14 @@ from regime import detect_regime
 
 log = logging.getLogger("athena")
 
+_CRYPTO_COT_PAIRS = {"BTC/USDT", "ETH/USDT"}
+_MICROSTRUCTURE_KEYS = (
+    "order_book_imbalance",
+    "liquidity_wall_detection",
+    "orderflow_delta",
+    "liquidity_pressure",
+)
+
 
 def _pair_profile(pair: dict) -> dict:
     profiles = CONFIG.get("PAIR_PROFILES", {}) or {}
@@ -81,6 +89,29 @@ def _apply_pair_profile_weight_rules(pair: dict, weights: dict) -> dict:
                 continue
 
     return out
+
+
+def _crypto_supports_cot(pair: dict) -> bool:
+    return pair.get("display") in _CRYPTO_COT_PAIRS
+
+
+def _optional_directional_keys(asset_type: str, pair: dict) -> tuple[str, ...]:
+    if asset_type != "crypto":
+        return ("funding_rate", "cot_z", "carry_z")
+    keys = ["funding_rate"]
+    if _crypto_supports_cot(pair):
+        keys.append("cot_z")
+    return tuple(keys)
+
+
+def _has_live_microstructure(h4_snap: Dict) -> bool:
+    age = h4_snap.get("microstructure_age_sec")
+    try:
+        if age is not None and float(age) > 45.0:
+            return False
+    except (TypeError, ValueError):
+        pass
+    return any(h4_snap.get(k) is not None for k in _MICROSTRUCTURE_KEYS)
 
 
 # ── Regime smoothing state ────────────────────────────────────────────────────
@@ -290,7 +321,7 @@ def _weighted_factor_score(
     # Per-indicator weights from config (empty dict = equal weighting)
     _iw_cfg = CONFIG.get("INDICATOR_WEIGHTS", {}).get(factor_name, {})
     if _iw_cfg and isinstance(next(iter(_iw_cfg.values()), None), dict):
-        ind_weights = _iw_cfg.get(asset_type, _iw_cfg.get("crypto", {}))
+        ind_weights = _iw_cfg.get(asset_type, _iw_cfg.get("default", {}))
     else:
         ind_weights = _iw_cfg
 
@@ -406,6 +437,7 @@ def compute_factor_scores(
     Returns dict with final_score (always >= 0), direction, factor_scores, weights, regime, etc.
     """
     asset_type = pair.get("type", "stock")
+    is_crypto = asset_type == "crypto"
 
     # ── Data quality guard ───────────────────────────────────────────────
     # Detect near-zero prices or zero ATR that indicate a data feed issue
@@ -506,36 +538,42 @@ def compute_factor_scores(
     # COT positioning — CFTC net speculator z-score (directional, weekly)
     # Covers: all forex, BTC/ETH (CME), S&P/Nasdaq futures, gold/silver
     # NOTE: Now supports historical lookup during backtest using bar_time
-    try:
-        from cot_feed import get_cot_z as _get_cot_z
-
-        _as_of = bar_time[:10] if bar_time else None
-        _cot = _get_cot_z(pair.get("display", ""), as_of_date=_as_of)
-
-        # Fade the herd for Forex and Commodities: Speculators are trapped at extremes
-        if pair.get("type", "stock") in ("forex", "commodity") and _cot != 0.0:
-            if abs(_cot) >= 2.0:
-                # Extreme overcrowded positioning -> Reverse the signal (fade the herd)
-                _cot = max(-3.0, min(3.0, -_cot * 1.5))
-            elif abs(_cot) < 1.0:
-                # Insignificant positioning -> ignore lagged data
-                _cot = 0.0
-
-        indicators["cot_z"] = float(_cot) if _cot != 0.0 else None
-    except Exception:
+    if is_crypto and not _crypto_supports_cot(pair):
         indicators["cot_z"] = None
+    else:
+        try:
+            from cot_feed import get_cot_z as _get_cot_z
+
+            _as_of = bar_time[:10] if bar_time else None
+            _cot = _get_cot_z(pair.get("display", ""), as_of_date=_as_of)
+
+            # Fade the herd for Forex and Commodities: Speculators are trapped at extremes
+            if pair.get("type", "stock") in ("forex", "commodity") and _cot != 0.0:
+                if abs(_cot) >= 2.0:
+                    # Extreme overcrowded positioning -> Reverse the signal (fade the herd)
+                    _cot = max(-3.0, min(3.0, -_cot * 1.5))
+                elif abs(_cot) < 1.0:
+                    # Insignificant positioning -> ignore lagged data
+                    _cot = 0.0
+
+            indicators["cot_z"] = float(_cot) if _cot != 0.0 else None
+        except Exception:
+            indicators["cot_z"] = None
 
     # Carry — interest rate differential z-score (directional, monthly)
     # Forex: base_rate - quote_rate; Indices/gold: inverted 10Y yield
     # NOTE: Now supports historical lookup during backtest using bar_time
-    try:
-        from carry_feed import get_carry_z as _get_carry_z
-
-        _as_of = bar_time[:10] if bar_time else None
-        _carry = _get_carry_z(pair.get("display", ""), as_of_date=_as_of)
-        indicators["carry_z"] = float(_carry) if _carry != 0.0 else None
-    except Exception:
+    if is_crypto:
         indicators["carry_z"] = None
+    else:
+        try:
+            from carry_feed import get_carry_z as _get_carry_z
+
+            _as_of = bar_time[:10] if bar_time else None
+            _carry = _get_carry_z(pair.get("display", ""), as_of_date=_as_of)
+            indicators["carry_z"] = float(_carry) if _carry != 0.0 else None
+        except Exception:
+            indicators["carry_z"] = None
 
     # Microstructure (directional if available)
     # Crypto: values injected from Binance/Bybit WS feeds via _micro_cache in athena.py
@@ -545,7 +583,18 @@ def compute_factor_scores(
     _ws_ofd = h4_snap.get("orderflow_delta")
     _ws_lp = h4_snap.get("liquidity_pressure")
 
-    if _ws_obi is None and _ws_ofd is None and _ws_lp is None:
+    if is_crypto:
+        if _has_live_microstructure(h4_snap):
+            indicators["order_book_imbalance"] = _ws_obi
+            indicators["liquidity_wall_detection"] = _ws_lwl
+            indicators["orderflow_delta"] = _ws_ofd
+            indicators["liquidity_pressure"] = _ws_lp
+        else:
+            indicators["order_book_imbalance"] = None
+            indicators["liquidity_wall_detection"] = None
+            indicators["orderflow_delta"] = None
+            indicators["liquidity_pressure"] = None
+    elif _ws_obi is None and _ws_ofd is None and _ws_lp is None:
         # No WS data — compute candle-based proxies
         _cm = _candle_microstructure(h4_candles)
         indicators["order_book_imbalance"] = _cm["order_book_imbalance"]
@@ -564,12 +613,16 @@ def compute_factor_scores(
 
     # ── Factor mappings ──────────────────────────────────────────────────
     # Directional factors: sign matters (positive = bullish)
+    derivative_keys = ["funding_rate"]
+    if not is_crypto or _crypto_supports_cot(pair):
+        derivative_keys.append("cot_z")
+
     directional_factors = {
         # Multi-timeframe EMA alignment: D1 tide + H4 momentum + H1 entry
         # All 3 aligned → ±1.0 (high conviction); mixed → near 0 (conflicting)
         "trend": ["ema_trend", "h4_ema_trend", "d1_ema_trend"],
         "momentum": ["rsi_z", "macdLine_z"],
-        "derivatives": ["funding_rate", "cot_z"],
+        "derivatives": derivative_keys,
         "microstructure": [
             "order_book_imbalance",
             "liquidity_wall_detection",
@@ -583,8 +636,9 @@ def compute_factor_scores(
         "volatility": ["atr_z", "bbWidth_z", "realized_vol_z"],
         "volume": ["volume_ratio", "obv_trend"],
         "structure": ["fib_proximity"],
-        "carry": ["carry_z"],
     }
+    if not is_crypto:
+        nondirectional_factors["carry"] = ["carry_z"]
 
     # ── Compute factor scores (correlation-adjusted × indicator-weighted) ────
     factor_scores: Dict[str, Optional[float]] = {}
@@ -659,6 +713,14 @@ def compute_factor_scores(
         weights[factor] = 0.0 if base_w == 0 else regime_weights.get(wk, base_w)
 
     weights = _apply_pair_profile_weight_rules(pair, weights)
+    if is_crypto:
+        for factor, cap in (CONFIG.get("CRYPTO_FACTOR_WEIGHT_CAPS", {}) or {}).items():
+            if factor not in weights:
+                continue
+            try:
+                weights[factor] = min(float(weights[factor]), float(cap))
+            except (TypeError, ValueError):
+                continue
 
     # Adaptive weight blending — adjust weights based on empirical factor performance
     # Only applies when learning_log has enough data (30+ trades for the asset class).
@@ -682,6 +744,15 @@ def compute_factor_scores(
         pass  # Graceful degradation — use base weights if adaptive fails
 
     # ── Final aggregation ────────────────────────────────────────────────
+    if is_crypto:
+        for factor, cap in (CONFIG.get("CRYPTO_FACTOR_WEIGHT_CAPS", {}) or {}).items():
+            if factor not in weights:
+                continue
+            try:
+                weights[factor] = min(float(weights[factor]), float(cap))
+            except (TypeError, ValueError):
+                continue
+
     active_dir = {
         f: s
         for f, s in factor_scores.items()
@@ -757,10 +828,16 @@ def compute_factor_scores(
             nondir_score += (weights.get(f, 1.0) / nondir_w_sum) * s
 
     # Optional directional context coverage.
-    optional_directional_keys = ("funding_rate", "cot_z", "carry_z")
-    optional_present = sum(1 for k in optional_directional_keys if indicators.get(k) is not None)
-    optional_coverage = optional_present / float(len(optional_directional_keys))
-    missing_optional = len(optional_directional_keys) - optional_present
+    optional_directional_keys = _optional_directional_keys(asset_type, pair)
+    optional_present = sum(
+        1 for k in optional_directional_keys if indicators.get(k) is not None
+    )
+    optional_coverage = (
+        optional_present / float(len(optional_directional_keys))
+        if optional_directional_keys
+        else 1.0
+    )
+    missing_optional = max(0, len(optional_directional_keys) - optional_present)
 
     # Multiplicative combination with smooth directional confidence (no hard cliff).
     # As optional directional context gets sparse, use a slightly softer effective threshold
