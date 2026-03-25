@@ -392,7 +392,8 @@ def _coherent_trend_score(indicators: Dict[str, Optional[float]]) -> tuple[Optio
     coherence_ratio = max(0.5, min(1.0, dominant_w / total_w))
     agreement_count = sum(1 for _, d, _ in votes if d == dominant_sign)
     # Floor keeps trend signal alive on 2-of-3 alignment while still penalizing mixed TFs.
-    magnitude = 0.35 + (0.65 * coherence_ratio)
+    # Scaled by 3.0 to align mathematically with z-score bounded indicators (±3.0)
+    magnitude = (0.35 + (0.65 * coherence_ratio)) * 3.0
     trend_score = dominant_sign * magnitude
     weighted_balance = (long_w - short_w) / total_w
 
@@ -530,8 +531,11 @@ def compute_factor_scores(
 
     # Derivatives — funding rate (directional: negative funding = bullish for longs)
     if funding_rate is not None and funding_rate != 0:
-        # Scale to z-score range: 0.01% funding → ±0.3, 0.1% → ±3.0
-        indicators["funding_rate"] = max(-3.0, min(3.0, -funding_rate * 3000))
+        # Scale to z-score range. 
+        # Standard neutral Binance funding is 0.01% (0.0001). Offset so neutral = 0.0.
+        # Scale remaining deviation: 0.03% deviation translates to ±3.0.
+        adjusted_funding = funding_rate - 0.0001
+        indicators["funding_rate"] = max(-3.0, min(3.0, -adjusted_funding * 15000))
     else:
         indicators["funding_rate"] = None  # No funding data — exclude
 

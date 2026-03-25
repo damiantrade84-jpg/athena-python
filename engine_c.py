@@ -543,7 +543,7 @@ def compute_consensus(
                 tier = "SKIP"
                 sizing = 0.0
 
-            return _build_result(
+            result = _build_result(
                 trade=tier != "SKIP",
                 verdict="B_OVERRIDE_CONFLICT",
                 direction=direction,
@@ -558,6 +558,9 @@ def compute_consensus(
                 regime=regime,
                 opposing_high_confidence=opposing_high_confidence,
             )
+            if ai_vision:
+                result = apply_vision(result, ai_vision)
+            return result
 
         return _build_result(
             trade=False,

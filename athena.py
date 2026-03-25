@@ -1728,37 +1728,7 @@ def fetch_eodhd(pair, tf, limit):
                 if _resampled:
                     candles = _resampled
                 else:
-                    import pandas as pd
-
-                    df = pd.DataFrame(candles)
-
-                    df["time"] = pd.to_datetime(df["time"], utc=True)
-
-                    df = df.set_index("time")
-
-                # Column-by-column resample â€” avoids pandas version issues with .agg(dict)
-
-                    df = pd.DataFrame(
-                    {
-                            "open": df["open"].resample("4h").first(),
-                            "high": df["high"].resample("4h").max(),
-                            "low": df["low"].resample("4h").min(),
-                            "close": df["close"].resample("4h").last(),
-                            "vol": df["vol"].resample("4h").sum(),
-                        }
-                    ).dropna()
-
-                    candles = [
-                        {
-                            "time": k.isoformat(),
-                            "open": float(v["open"]),
-                            "high": float(v["high"]),
-                            "low": float(v["low"]),
-                            "close": float(v["close"]),
-                            "vol": float(v["vol"]),
-                        }
-                        for k, v in df.iterrows()
-                    ]
+                    log.warning(f"[EODHD] {ticker} _resample_from_h1 failed, returning raw H1 candles")
 
         final_candles = candles[-limit:] if len(candles) > limit else candles
 
@@ -6955,6 +6925,12 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
             log.error(f"[ENGINE-B] Error on {pair['display']}: {e}")
     # ------------------------------------------------
 
+    # Dynamic Confluence Scaling: Anchor the UI 67% mark to the actual pair threshold.
+    # This prevents strong Crypto signals (e.g. 1.88) from looking 'WEAK' just because 3.0 is impossible.
+    _threshold = get_min_confluence_threshold(pair)
+    _raw_pct = (res["score"] / _threshold) * 67 if _threshold > 0 else 0
+    _confluence_pct = min(100, max(0, round(_raw_pct)))
+
     return {
         "pair": pair["display"],
         "display": pair["display"],
@@ -6963,7 +6939,7 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
         "scoreGroup": _score_group,
         "direction": direction,
         "confluenceScore": round(res["score"], 4),
-        "confluencePct": min(100, round(res["score"] / max_score * 100)),
+        "confluencePct": _confluence_pct,
         "votes": res["votes"],
         "maxScore": max_score,
         "price": round(float(price), 6),
