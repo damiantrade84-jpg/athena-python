@@ -2386,9 +2386,15 @@ function acmToggle(kind, el) {
 
 function _acmCalcEMA(data, period) {
   if (!data.length) return [];
+  var ema = new Array(data.length).fill(null);
+  if (data.length < period) return ema;
   var k = 2 / (period + 1);
-  var ema = [data[0]];
-  for (var i = 1; i < data.length; i++) ema.push(data[i] * k + ema[i - 1] * (1 - k));
+  var seed = 0;
+  for (var i = 0; i < period; i++) seed += data[i];
+  ema[period - 1] = seed / period;
+  for (var j = period; j < data.length; j++) {
+    ema[j] = data[j] * k + ema[j - 1] * (1 - k);
+  }
   return ema;
 }
 
@@ -2696,16 +2702,25 @@ function toggleChart(sid) {
   data.sort(function(a,b){ return a.time - b.time; });
   candleSeries.setData(data);
 
-  // EMA 21 line
-  if (levels.ema21) {
-    var ema21s = chart.addLineSeries({ color: '#00d4ff', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-    ema21s.setData(data.map(function(c) { return { time: c.time, value: levels.ema21 }; }));
-  }
-  // EMA 50 line
-  if (levels.ema50) {
-    var ema50s = chart.addLineSeries({ color: '#7c3aed', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-    ema50s.setData(data.map(function(c) { return { time: c.time, value: levels.ema50 }; }));
-  }
+  var closes = data.map(function(c) { return c.close; });
+  var ema21 = _acmEMA(closes, 21);
+  var ema50 = _acmEMA(closes, 50);
+  var ema200 = _acmEMA(closes, 200);
+
+  var ema21s = chart.addLineSeries({ color: '#00d4ff', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+  ema21s.setData(data.map(function(c, i) {
+    return { time: c.time, value: ema21[i] };
+  }).filter(function(d) { return d.value !== null; }));
+
+  var ema50s = chart.addLineSeries({ color: '#7c3aed', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+  ema50s.setData(data.map(function(c, i) {
+    return { time: c.time, value: ema50[i] };
+  }).filter(function(d) { return d.value !== null; }));
+
+  var ema200s = chart.addLineSeries({ color: 'rgba(255,183,77,0.78)', lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+  ema200s.setData(data.map(function(c, i) {
+    return { time: c.time, value: ema200[i] };
+  }).filter(function(d) { return d.value !== null; }));
 
   // Entry, SL, TP lines
   if (levels.entry) _chartData[sid].entryLine = candleSeries.createPriceLine({ price: levels.entry, color: '#9fb0c5', lineWidth: 1, lineStyle: 2, title: 'Entry' });
@@ -4025,10 +4040,14 @@ function acmToggle(what, el) {
 
 function _acmEMA(data, period) {
   if (!data.length) return [];
+  var ema = new Array(data.length).fill(null);
+  if (data.length < period) return ema;
   var k = 2 / (period + 1);
-  var ema = [data[0]];
-  for (var i = 1; i < data.length; i++)
-    ema.push(data[i] * k + ema[i - 1] * (1 - k));
+  var seed = 0;
+  for (var i = 0; i < period; i++) seed += data[i];
+  ema[period - 1] = seed / period;
+  for (var j = period; j < data.length; j++)
+    ema[j] = data[j] * k + ema[j - 1] * (1 - k);
   return ema;
 }
 

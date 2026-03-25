@@ -1730,37 +1730,41 @@ def fetch_eodhd(pair, tf, limit):
             ]
 
             if tf == "H4" and len(candles) >= 4:
-                import pandas as pd
+                _resampled = _resample_from_h1(candles, "H4", len(candles))
+                if _resampled:
+                    candles = _resampled
+                else:
+                    import pandas as pd
 
-                df = pd.DataFrame(candles)
+                    df = pd.DataFrame(candles)
 
-                df["time"] = pd.to_datetime(df["time"], utc=True)
+                    df["time"] = pd.to_datetime(df["time"], utc=True)
 
-                df = df.set_index("time")
+                    df = df.set_index("time")
 
                 # Column-by-column resample â€” avoids pandas version issues with .agg(dict)
 
-                df = pd.DataFrame(
+                    df = pd.DataFrame(
                     {
-                        "open": df["open"].resample("4h").first(),
-                        "high": df["high"].resample("4h").max(),
-                        "low": df["low"].resample("4h").min(),
-                        "close": df["close"].resample("4h").last(),
-                        "vol": df["vol"].resample("4h").sum(),
-                    }
-                ).dropna()
+                            "open": df["open"].resample("4h").first(),
+                            "high": df["high"].resample("4h").max(),
+                            "low": df["low"].resample("4h").min(),
+                            "close": df["close"].resample("4h").last(),
+                            "vol": df["vol"].resample("4h").sum(),
+                        }
+                    ).dropna()
 
-                candles = [
-                    {
-                        "time": k.isoformat(),
-                        "open": float(v["open"]),
-                        "high": float(v["high"]),
-                        "low": float(v["low"]),
-                        "close": float(v["close"]),
-                        "vol": float(v["vol"]),
-                    }
-                    for k, v in df.iterrows()
-                ]
+                    candles = [
+                        {
+                            "time": k.isoformat(),
+                            "open": float(v["open"]),
+                            "high": float(v["high"]),
+                            "low": float(v["low"]),
+                            "close": float(v["close"]),
+                            "vol": float(v["vol"]),
+                        }
+                        for k, v in df.iterrows()
+                    ]
 
         final_candles = candles[-limit:] if len(candles) > limit else candles
 
