@@ -1,5 +1,24 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-28) — Backtest `_rt()` fix, live-threshold parity, full-scan `sqn`, sticky toasts, scan quantile
+
+**`backtest_runner.py` — runtime accessor**
+- **`_rt()`** must call **`_art_rt()`** where `_art_rt` is `athena_runtime.rt` (the function). **`_art_rt.rt()`** was wrong (`'function' object has no attribute 'rt'`) and broke crypto/all Engine A backtests after fetch; **`/api/backtest`** could return generic **500** when **`_pair_max_score`** ran outside the fetch `try`.
+
+**`backtest_runner.py` — Engine A gate matches live scan**
+- **`bt_min = get_min_confluence_threshold(pair)`** once per run for all styles and forex. Chain: **`PAIR_PROFILES.min_confluence` → `MIN_CONFLUENCE_GROUP` → `MIN_CONFLUENCE_CLASS`**. Profile **`bt_min`** is no longer the Engine A backtest score floor.
+
+**`backtest_runner.py` — full backtest `KeyError: 'sqn'`**
+- **Zero-trade** pairs used to **`return {}`**, which was treated as success and broke **`results.sort(key=… x['sqn'])`**. Now returns a **full zero-trade payload** (`sqn: 0`, `equityCurve: [1.0]`, `funnel`, `wfSplit`, etc.). Sort uses **`x.get("sqn")`**.
+
+**Dashboard (`static/index.html`) — sticky toasts**
+- **`showToast(msg, isErr, opts)`** — **`opts.sticky`** or **auto-sticky** when the message matches **SIGNAL_FLIPPED**, **STALE**, **DUPLICATE**, **DECAY**, or direction **flip / changed / conflict**. **Dismiss** + **Escape**; other toasts still auto-hide ~3.5s.
+
+**Scan quantile (`scanner.py`, `config.py` / `config.yaml`)**
+- Optional **cross-sectional** effective floors per asset type from the **current scan** (`SCAN_QUANTILE_*`). **`SCAN_QUANTILE_EXCLUDE_TYPES`** (e.g. **`crypto`**) skips quantile for those types. Scan JSON includes **`scanQuantileFloors`**. Tests: **`tests/test_scan_quantile.py`**.
+
+**Also in this batch:** **`forex_scoring.py`**, **`tests/test_scoring_group_routing.py`**, and **config** edits — see git diff for line-level threshold / routing tweaks.
+
 ## Recent Changes (2026-03-27) — Live scoring candle depth, `scan_candle_limits`, chart max 1000
 
 **Goal:** One source of truth for D1/H4/H1 bar counts used by Engine A (`analyze_pair`), naked analysis, Engine C B-leg fetches, compare/scan helpers, and style level recompute — aligned with deeper dashboard candles and EMA200 vs TradingView.
@@ -13,6 +32,32 @@
 **Cache keys:** In-memory TTL cache includes **`limit`** in the key (`candles_cache.py`) so chart `limit=1000` does not collide with scan entries; naked scan `_fetch_cached_only` key includes **`limit`** too.
 
 **Dashboard:** **`GET /api/candles`** clamps `limit` to **1000** (was 500); ACM **`static/index.html`** requests **`limit=1000`** for chart loads.
+
+## Debugging & audit playbook — cross-layer bugs (scoring, UI, candles)
+
+**Why deep “scoring only” audits can miss real user-visible bugs**
+
+- **Backend math** (`factor_scoring.py`, `scoring.py`, `calc_confluence`, thresholds) can be **correct** while **another layer** lies: **`analyze_pair` JSON fields**, **dashboard meters/labels** (`static/index.html`), or **a different API** (`/api/candles` vs scan fetch). Audits that only re-read scoring modules never touch the **mapping** from score → bar % → “WEAK / BUILDING / STRONG”.
+- **Engine A vs Engine B** will often **disagree by design** (different inputs, gates, scales). Treat “huge gap” as **hypothesis**: part **real**, part **presentation** (e.g. confluence % denominator), part **data parity** (candle windows). Do **not** rationalize the full gap as architecture without **tracing one concrete signal** through every layer.
+
+**When fixes in “the obvious file” do not resolve the symptom — pivot (do not loop the same audit)**
+
+1. **Enumerate layers** for that symptom: data feed → cache → `fetch_candles` / `/api/candles` → `analyze_pair` → **response fields** → **UI formula** → TradingView/vendor reference.
+2. **Pick one golden pair + TF** and trace **numbers**: raw `confluenceScore`, `confluencePct`, `maxScore`, `get_min_confluence_threshold(pair)`, scan tier from `_classify_signal`, and (if relevant) factor `final_score`. They must tell one coherent story; if not, the bug is in **wiring or display**, not necessarily in the core formula.
+3. **Candle / EMA mismatches**: compare **`scan_candle_limits()`** vs chart **`limit`**, **forming-bar drop** in `analyze_pair`, **venue** (crypto: spot REST vs futures WS for H1), **forex**: canonical H1 + `resample_from_h1` in `candles_cache.py` (`utc=True` parse, **`origin="epoch"`** for stable H4/D1 buckets unless explicitly changing session policy). Check **TTL cache key** includes **`limit`** so chart and scan do not share the wrong series.
+4. **Add a guardrail** after root cause: small **unit test** or **logged assert** on the invariant (e.g. “at scan threshold, UI % crosses strong band”; “closed bar count after drop ≥ X”).
+
+**Mandatory checks when the user asks to “verify scoring / confluence”**
+
+- [ ] **Display**: how `confluencePct` is computed vs **trade gate** — use **`get_min_confluence_threshold(pair)`** for scan-relevant display scaling (see commit **`20fd03a`** — fixes the **theoretical-max / optical illusion** bar where strong scores looked weak).
+- [ ] **Do not conflate**: `MIN_CONFLUENCE_CLASS`, per-pair / subgroup overrides, **`get_min_confluence_threshold`**, and **`AUTO_TRADE_MIN_SCORE`** (auto-trader uses **`max`** of class and auto floor — see `auto_trader.py` / `CLAUDE.md` Signal Flow).
+- [ ] **Crypto**: factor path vs vote/confluence path — **scales differ**; compare like with like.
+- [ ] **Charts vs engine**: same symbol, TF, **bar count**, and **forming-bar rule** before blaming “EMA vs TradingView”.
+
+**Lessons (2026-03)**
+
+- **UI confluence “optical illusion”**: Bar used **`score / max_score`** (theoretical ceiling ~3); elite setups sat mid-bar. **Fix**: anchor display to **pair threshold** so ~**67%** aligns with “passing” intent — **`20fd03a`**.
+- **Candle depth**: Low `*_CANDLES` + chart pulling more bars → **EMA / TV drift**; unify with **`scan_candle_limits()`** and documented chart **`limit`**.
 
 ## Recent Changes (2026-03-26) — Crypto H1 OHLCV fix, fetch routing, chart EMA, EMA200 slope clarity
 
@@ -460,7 +505,7 @@ Multi-asset algorithmic trading system: Flask dashboard, Engine A confluence/fac
 | `duka_volume.py` | Dukascopy tick volume for forex — non-blocking during scans (returns 1.0 if cache not ready) | |
 | `forex_scoring.py` | Dedicated forex scoring engine (rules-based, 0–1 scale) — trend gate + session filter + RSI pullback + COT boost | |
 | `auto_trader.py` | Autonomous trade executor with per-class auto-trade thresholds (dict-based, per CONFIG) | |
-| `static/index.html` | Dashboard UI: signals, backtest, screener; ACM charts (`/api/candles` `limit=500`, `_acmEmaLineData` for EMAs); pair list from `/api/pairs` | ~2550 lines |
+| `static/index.html` | Dashboard UI: signals, backtest, screener; ACM charts (`/api/candles` `limit=1000`, `_acmEmaLineData` for EMAs); pair list from `/api/pairs` | ~2550 lines |
 | `tests/test_athena.py` | Main test suite (56+ tests) | |
 | `tests/test_factor_scoring.py` | Factor scoring unit tests | |
 | `test_indicators.py` | Pure indicator unit tests (imports from `indicators` only) | |
@@ -885,6 +930,7 @@ claude
 
 **Preferred workflow:**
 - Use Claude Code primarily to review code paths, understand logic, inspect persistence, and then make safe, explicit edits from verified callsites
+- For **persistent or “impossible” bugs** after a plausible fix: **switch layer** (API JSON → UI → cache → alternate fetch path) per **Debugging & audit playbook** in this file; do not repeat the same module-only review
 - Keep DB/reset/restore safeguards untouched unless the user explicitly requests those exact changes
 - To paste long logs or output: use a file (`log.txt`) and ask Claude to read it, rather than pasting directly
 - To share a server log: save to a temp file and say "read log.txt"
@@ -917,3 +963,4 @@ claude
 15. `"ws": False` on a pair dict opts it out of WS subscription only — scan/backtest/execute are unaffected. Default is `True` (backward-compatible). EODHD plan cap is 50 tickers total; do not add `ws:True` pairs without removing others first
 16. BybitWS (`athena/datafeeds/bybit_ws.py`): `ping_interval=None` in `websockets.connect()` is required — disables library-level keepalive and lets app-level `{"op":"ping"}` handling prevent 1011 keepalive errors
 17. Engine B AI is review-only — do not reintroduce AI as a hidden pass/fail gate for naked signals unless the user explicitly requests that design change
+18. **Cross-layer verification:** scoring/confluence/candle complaints require tracing **data → engine → API fields → dashboard display** (and chart `/api/candles` vs `analyze_pair`). Never conclude “engine is wrong” from UI alone without matching **thresholds, denominators, bar counts, and forming-bar rules** across layers

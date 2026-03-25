@@ -238,8 +238,10 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 .empty-state .icon{font-size:40px;margin-bottom:16px;}
 .empty-state h3{font-size:16px;color:var(--text);margin-bottom:6px;}
 .empty-state p{font-size:13px;}
-.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(100px);padding:12px 24px;border-radius:8px;background:var(--surface);border:1px solid var(--accent);font-size:12px;font-family:'Space Mono',monospace;transition:transform 0.3s;z-index:999;}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(100px);padding:12px 24px;border-radius:8px;background:var(--surface);border:1px solid var(--accent);font-size:12px;font-family:'Space Mono',monospace;transition:transform 0.3s;z-index:999;max-width:min(92vw,560px);box-shadow:0 8px 32px rgba(0,0,0,0.45);}
 .toast.show{transform:translateX(-50%) translateY(0);}
+.toast.toast-sticky{padding:14px 16px;}
+.toast.toast-sticky .toast-dismiss:hover{background:rgba(255,255,255,0.08);border-color:var(--accent);}
 .skeleton{background:linear-gradient(90deg,var(--border) 25%,rgba(255,255,255,0.04) 50%,var(--border) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:4px;}
 @keyframes shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
 .config-banner{background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:8px;padding:12px 16px;margin-bottom:24px;display:flex;align-items:center;gap:10px;font-size:12px;color:var(--warn);}
@@ -3808,12 +3810,74 @@ async function doExecute(symbol, btn, forceMode) {
   }
 }
 
-function showToast(msg,isErr) {
-  var t=document.getElementById('toast');
-  t.textContent=msg;
-  t.style.borderColor=isErr?'var(--bear)':'var(--accent)';
+var _toastHideTimer = null;
+
+/** Alerts that need reading (stale / direction flip / duplicate execute / score decay) stay until dismissed. */
+function _toastShouldStayOpen(msg) {
+  if (msg == null) return false;
+  var m = String(msg).toUpperCase();
+  if (m.indexOf('SIGNAL_FLIPPED') !== -1) return true;
+  if (m.indexOf('STALE') !== -1) return true;
+  if (m.indexOf('DUPLICATE:') !== -1 || m.indexOf('DUPLICATE :') !== -1) return true;
+  if (m.indexOf('DECAY') !== -1) return true;
+  if (m.indexOf('DIRECTION') !== -1 && (m.indexOf('FLIP') !== -1 || m.indexOf('CHANGED') !== -1 || m.indexOf('CONFLICT') !== -1)) return true;
+  return false;
+}
+
+function dismissToast() {
+  var t = document.getElementById('toast');
+  if (_toastHideTimer) {
+    clearTimeout(_toastHideTimer);
+    _toastHideTimer = null;
+  }
+  t.classList.remove('show', 'toast-sticky');
+  t.innerHTML = '';
+  t.textContent = '';
+}
+
+/**
+ * @param msg {string}
+ * @param isErr {boolean}
+ * @param opts {{sticky?: boolean}|undefined} force sticky, or omit to auto-detect from msg
+ */
+function showToast(msg, isErr, opts) {
+  opts = opts || {};
+  var sticky = opts.sticky === true || _toastShouldStayOpen(String(msg));
+  var t = document.getElementById('toast');
+  if (_toastHideTimer) {
+    clearTimeout(_toastHideTimer);
+    _toastHideTimer = null;
+  }
+  t.classList.remove('toast-sticky');
+  t.innerHTML = '';
+  if (sticky) {
+    t.classList.add('toast-sticky');
+    var row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:flex-start;gap:12px;';
+    var textEl = document.createElement('div');
+    textEl.style.cssText = 'flex:1;white-space:pre-wrap;word-break:break-word;line-height:1.45;';
+    textEl.textContent = msg;
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'toast-dismiss';
+    btn.setAttribute('aria-label', 'Dismiss notification');
+    btn.textContent = 'Dismiss';
+    btn.style.cssText = 'flex-shrink:0;align-self:center;background:transparent;border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;letter-spacing:0.04em;';
+    btn.onclick = function (e) {
+      e.stopPropagation();
+      dismissToast();
+    };
+    row.appendChild(textEl);
+    row.appendChild(btn);
+    t.appendChild(row);
+  } else {
+    t.textContent = msg;
+  }
+  t.style.borderColor = isErr ? 'var(--bear)' : 'var(--accent)';
   t.classList.add('show');
-  setTimeout(function(){t.classList.remove('show');},3500);
+  if (!sticky) {
+    _toastHideTimer = setTimeout(dismissToast, 3500);
+  }
 }
 
 document.addEventListener('keydown', function(e) {
@@ -3822,6 +3886,12 @@ document.addEventListener('keydown', function(e) {
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape' && document.getElementById('athena-chart-modal').style.display === 'flex') {
     closeAthenaChart();
+  }
+  if (e.key === 'Escape') {
+    var toastEl = document.getElementById('toast');
+    if (toastEl && toastEl.classList.contains('show') && toastEl.classList.contains('toast-sticky')) {
+      dismissToast();
+    }
   }
 });
 

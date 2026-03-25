@@ -25,6 +25,65 @@ from market_structure import NakedEngine
 log = logging.getLogger("sentinel")
 
 
+def _linear_percentile(values: list[float], p: float) -> float | None:
+    """Return the p-th percentile (0–100) with linear interpolation. ``values`` may be unsorted."""
+    if not values:
+        return None
+    xs = sorted(float(x) for x in values)
+    if len(xs) == 1:
+        return xs[0]
+    p = max(0.0, min(100.0, p))
+    k = (len(xs) - 1) * (p / 100.0)
+    f = int(k)
+    c = min(f + 1, len(xs) - 1)
+    if f == c:
+        return xs[f]
+    return xs[f] + (k - f) * (xs[c] - xs[f])
+
+
+def compute_scan_quantile_floors(
+    scores_by_type: dict[str, list[float]],
+    *,
+    enabled: bool,
+    min_samples: int,
+    top_fraction_cfg: dict,
+) -> dict[str, float | None]:
+    """Per asset class, score floor such that ~top ``top_fraction`` of *this scan* sit above it.
+
+    ``top_fraction`` 0.2 → use the (1 - 0.2) × 100 = 80th percentile of cross-sectional scores.
+    Returns ``None`` for a class when disabled, too few samples, or missing/invalid fraction.
+    """
+    out: dict[str, float | None] = {}
+    if not enabled:
+        for k in scores_by_type:
+            out[k] = None
+        return out
+
+    default_frac = top_fraction_cfg.get("default")
+
+    for ptype, scores in scores_by_type.items():
+        if len(scores) < min_samples:
+            out[ptype] = None
+            continue
+        raw = top_fraction_cfg.get(ptype, default_frac)
+        if raw is None:
+            out[ptype] = None
+            continue
+        try:
+            frac = float(raw)
+        except (TypeError, ValueError):
+            out[ptype] = None
+            continue
+        if frac <= 0.0 or frac >= 1.0:
+            out[ptype] = None
+            continue
+        pct = 100.0 * (1.0 - frac)
+        cut = _linear_percentile(scores, pct)
+        out[ptype] = cut
+
+    return out
+
+
 def _normalize_style(style: str | None) -> str:
     s = (style or "auto").lower()
     return s if s in ("auto", "swing", "intraday", "scalp") else "auto"
@@ -377,6 +436,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             except Exception as e:
                 return pair, None, str(e)
 
+        buffered_ok: list[tuple[Any, dict]] = []
+
         with ThreadPoolExecutor(max_workers=3) as pool:
             futures = {pool.submit(_analyse, pair): pair for pair in candidate_pairs}
 
@@ -408,86 +469,146 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
                     continue
 
-                threshold = get_min_confluence_threshold(pair)
+                buffered_ok.append((pair, sig))
 
-                if r.test_mode():
-                    threshold = max(0.1, threshold * 0.5)
+        # Cross-sectional quantile floors per asset class (this scan only).
+        scores_by_type: dict[str, list[float]] = {}
+        for pair, sig in buffered_ok:
+            ptype = pair.get("type") or "stock"
+            scores_by_type.setdefault(ptype, []).append(float(sig.get("confluenceScore", 0)))
 
-                sig = annotate_signal_for_scan(
-                    sig,
-                    pair,
-                    threshold,
-                    ds_ctx,
-                    earnings_ctx,
-                    _closed_exchanges,
-                    news_ctx,
+        _q_enabled = bool(CONFIG.get("SCAN_QUANTILE_ENABLED", False))
+        _q_min_n = int(CONFIG.get("SCAN_QUANTILE_MIN_SAMPLES", 5))
+        _q_frac = CONFIG.get("SCAN_QUANTILE_TOP_FRACTION") or {}
+        if not isinstance(_q_frac, dict):
+            _q_frac = {}
+
+        quantile_floors = compute_scan_quantile_floors(
+            scores_by_type,
+            enabled=_q_enabled,
+            min_samples=_q_min_n,
+            top_fraction_cfg=_q_frac,
+        )
+
+        _q_excl = CONFIG.get("SCAN_QUANTILE_EXCLUDE_TYPES") or []
+        if not isinstance(_q_excl, (list, tuple, set)):
+            _q_excl = []
+        _q_excl_set = {str(x).strip().lower() for x in _q_excl if x is not None}
+        for _pt in _q_excl_set:
+            if _pt in quantile_floors:
+                quantile_floors[_pt] = None
+
+        if _q_enabled and any(v is not None for v in quantile_floors.values()):
+            log.info(f"[SCAN-Q] Per-type quantile floors: {quantile_floors}")
+
+        for pair, sig in buffered_ok:
+            static_threshold = get_min_confluence_threshold(pair)
+
+            if r.test_mode():
+                static_threshold = max(0.1, static_threshold * 0.5)
+
+            q_cut = quantile_floors.get(pair.get("type") or "stock")
+            effective_threshold = static_threshold
+            if q_cut is not None:
+                effective_threshold = max(static_threshold, float(q_cut))
+
+            sig["scanThresholdStatic"] = static_threshold
+            sig["scanQuantileCut"] = q_cut
+            sig["scanThresholdEffective"] = effective_threshold
+
+            if (
+                q_cut is not None
+                and effective_threshold > static_threshold
+                and sig.get("confluenceScore", 0) >= static_threshold
+                and sig.get("confluenceScore", 0) < effective_threshold
+            ):
+                sig.setdefault("warnings", []).append(
+                    f"SCAN QUANTILE: cross-section floor {effective_threshold:.3f} "
+                    f"(static {static_threshold:.3f}, top-fraction cut {q_cut:.3f})"
                 )
 
-                tier, tier_reason = _classify_signal(sig, pair)
+            sig = annotate_signal_for_scan(
+                sig,
+                pair,
+                effective_threshold,
+                ds_ctx,
+                earnings_ctx,
+                _closed_exchanges,
+                news_ctx,
+            )
 
-                sig["signalTier"] = tier
+            # analyze_pair anchored confluencePct to static threshold only — re-anchor to scan gate
+            if effective_threshold and effective_threshold > 0:
+                _cs = float(sig.get("confluenceScore", 0))
+                sig["confluencePct"] = min(
+                    100, max(0, round((_cs / effective_threshold) * 67))
+                )
 
-                sig["watchlistReason"] = tier_reason if tier == "watchlist" else None
+            tier, tier_reason = _classify_signal(sig, pair)
 
-                codes = {d.get("code") for d in sig.get("scanDiagnostics", [])}
+            sig["signalTier"] = tier
 
-                if "low_confluence" in codes:
-                    scan_funnel["low_score"] += 1
+            sig["watchlistReason"] = tier_reason if tier == "watchlist" else None
 
-                if "closed_exchange" in codes:
-                    scan_funnel["closed_exchange"] += 1
+            codes = {d.get("code") for d in sig.get("scanDiagnostics", [])}
 
-                if "event_risk" in codes:
-                    scan_funnel["event_block"] += 1
+            if "low_confluence" in codes:
+                scan_funnel["low_score"] += 1
 
-                if "inactive_pair" in codes:
-                    scan_funnel["inactive_pair"] += 1
+            if "closed_exchange" in codes:
+                scan_funnel["closed_exchange"] += 1
 
-                if "counter_trend" in codes:
-                    scan_funnel["counter_trend"] += 1
+            if "event_risk" in codes:
+                scan_funnel["event_block"] += 1
 
-                if "dead_ranging" in codes:
-                    scan_funnel["dead_ranging"] += 1
+            if "inactive_pair" in codes:
+                scan_funnel["inactive_pair"] += 1
 
-                if tier == "trade":
-                    try:
-                        sig["serverIndicators"] = r.fetch_eodhd_indicators(pair)
+            if "counter_trend" in codes:
+                scan_funnel["counter_trend"] += 1
 
-                    except Exception as _e:
-                        log.debug(
-                            f"[IND] {pair['display']} server indicators skipped: {_e}"
-                        )
+            if "dead_ranging" in codes:
+                scan_funnel["dead_ranging"] += 1
 
-                    results.append(sig)
+            if tier == "trade":
+                try:
+                    sig["serverIndicators"] = r.fetch_eodhd_indicators(pair)
 
-                    scan_funnel["passed"] += 1
-
-                    log.info(
-                        f"{pair['display']:12s} {sig['direction']:5s} {sig['confluenceScore']}/{sig.get('maxScore', 3)} [{sig.get('trendState', '?')}]"
+                except Exception as _e:
+                    log.debug(
+                        f"[IND] {pair['display']} server indicators skipped: {_e}"
                     )
 
-                elif tier == "watchlist":
-                    watchlist.append(sig)
+                results.append(sig)
 
-                    scan_funnel["watchlist"] += 1
+                scan_funnel["passed"] += 1
 
-                    log.info(
-                        f"{pair['display']:12s} WATCH {sig['confluenceScore']}/{sig.get('maxScore', 3)} :: {tier_reason}"
-                    )
+                log.info(
+                    f"{pair['display']:12s} {sig['direction']:5s} {sig['confluenceScore']}/{sig.get('maxScore', 3)} [{sig.get('trendState', '?')}]"
+                )
 
-                else:
-                    skipped.append(
-                        {
-                            "pair": pair["display"],
-                            "reason": tier_reason,
-                            "tier": "skip",
-                            "diagnostics": sig.get("scanDiagnostics", []),
-                        }
-                    )
+            elif tier == "watchlist":
+                watchlist.append(sig)
 
-                    log.info(
-                        f"{pair['display']:12s} SKIP  {sig['confluenceScore']}/{sig.get('maxScore', 3)} :: {tier_reason}"
-                    )
+                scan_funnel["watchlist"] += 1
+
+                log.info(
+                    f"{pair['display']:12s} WATCH {sig['confluenceScore']}/{sig.get('maxScore', 3)} :: {tier_reason}"
+                )
+
+            else:
+                skipped.append(
+                    {
+                        "pair": pair["display"],
+                        "reason": tier_reason,
+                        "tier": "skip",
+                        "diagnostics": sig.get("scanDiagnostics", []),
+                    }
+                )
+
+                log.info(
+                    f"{pair['display']:12s} SKIP  {sig['confluenceScore']}/{sig.get('maxScore', 3)} :: {tier_reason}"
+                )
 
         log.info(f"Scan funnel: {scan_funnel}")
 
@@ -524,6 +645,9 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             "styleRequested": _requested_style,
             "style": _requested_style,
             "testMode": r.test_mode(),
+            "scanQuantileEnabled": _q_enabled,
+            "scanQuantileFloors": quantile_floors,
+            "scanQuantileMinSamples": _q_min_n,
         }
 
     finally:

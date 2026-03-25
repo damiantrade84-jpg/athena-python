@@ -52,18 +52,14 @@ WEINSTEIN_LOOKBACK:
   index: 150
 
 # Per-class backtest minimum score
-# Recalibrated for multiplicative factor formula (score = abs(dir) * (0.6 + nondir/3 * 0.4))
 # BT_MIN MUST equal MIN_CONFLUENCE_CLASS — lower BT_MIN counts trades the live system rejects,
 # inflating trade count and distorting SQN.
-# Threshold set to 0.70 to match multiplicative formula scale (old 0.90–0.95 was calibrated for
-# the old additive formula which produced higher raw scores; 0.70 here ≈ 0.95 old-formula gate).
-# Tune up per-class after running backtests to find first-profitable threshold.
 BT_MIN:
-  crypto:    0.55   # must equal MIN_CONFLUENCE_CLASS.crypto
-  commodity: 0.70   # must equal MIN_CONFLUENCE_CLASS.commodity
-  forex:     0.60   # must equal MIN_CONFLUENCE_CLASS.forex — forex engine 0–1 scale
-  stock:     0.70   # must equal MIN_CONFLUENCE_CLASS.stock
-  index:     0.70   # must equal MIN_CONFLUENCE_CLASS.index
+  crypto:    1.50   # must equal MIN_CONFLUENCE_CLASS.crypto (factor 0–3 scale)
+  commodity: 1.65   # must equal MIN_CONFLUENCE_CLASS.commodity
+  forex:     0.70   # must equal MIN_CONFLUENCE_CLASS.forex — forex engine 0–1 scale
+  stock:     1.85   # must equal MIN_CONFLUENCE_CLASS.stock
+  index:     1.85   # must equal MIN_CONFLUENCE_CLASS.index
 
 # Backtest must not alter live pair enable/disable state
 BT_AUTO_TOGGLE: false
@@ -76,30 +72,66 @@ BT_PERCENTILE_FILTER: false
 NAKED_MAX_DAILY: 3
 
 
-# Per-class live scan minimum confluence — execute button threshold
-# Recalibrated for multiplicative factor formula. Old additive thresholds (1.10–1.20) mapped
-# to ~0.88–0.96 in the new formula (multiplicative compresses inflated quality-driven scores).
-# BT_MIN is set equal to MIN_CONFLUENCE_CLASS so backtest and live scan use identical gates.
-# Set to 0.70 to match new formula scale; tune up after data-driven threshold analysis.
+# Per-class live scan minimum confluence — execute / tradeSignals tier threshold
+# Crypto/forex gates tightened per operator table (midpoints of recommended bands on each scale).
+# BT_MIN must match MIN_CONFLUENCE_CLASS per class.
 MIN_CONFLUENCE_CLASS:
-  crypto:    0.55   # factor engine (0–3 scale): ~18% of max — recalibrated to offset compounding penalties
-  commodity: 0.70   # factor engine (0–3 scale)
-  forex:     0.60   # forex engine (0–1 scale): 60% of max — matches MIN_FOREX_CONFLUENCE
-  stock:     0.70   # factor engine (0–3 scale)
-  index:     0.70   # factor engine (0–3 scale)
+  crypto:    1.50   # factor 0–3: class + backtest floor (subgroups stricter in MIN_CONFLUENCE_GROUP)
+  commodity: 1.65   # factor 0–3: mid of operator band 1.55–1.75
+  forex:     0.70   # forex engine (0–1): ~mid of 0.68–0.72 band for majors/exotics
+  stock:     1.85   # factor 0–3: mid of operator band 1.75–1.95 (ETFs typically type stock)
+  index:     1.85   # factor 0–3: same band as stocks/ETFs
 
 # Forex scan threshold — forex_scoring engine outputs 0–1.0 (not 0–3.0)
-# 0.60 = 60% of max; a TREND_PULLBACK with good RSI pullback and no COT boost scores ~0.60–0.75
-# MIN_CONFLUENCE_CLASS.forex must match this — they are the same gate
-MIN_FOREX_CONFLUENCE: 0.60      # used as MIN_CONFLUENCE_CLASS.forex below — keep in sync
+# MIN_CONFLUENCE_CLASS.forex must match this — keep in sync
+MIN_FOREX_CONFLUENCE: 0.70
 
 # Optional subgroup thresholds (used when score_group is available on a pair)
 MIN_CONFLUENCE_GROUP:
+  forex:
+    forex_majors: 0.70      # ~mid of 0.68–0.72 band (majors / crosses / exotics)
+    forex_crosses: 0.70
+    forex_exotics: 0.70
   crypto:
-    crypto_btc: 0.60
-    crypto_eth: 0.58
-    crypto_doge: 0.65
-    crypto_alt_majors: 0.55
+    crypto_btc: 1.60
+    crypto_eth: 1.60
+    crypto_alt_majors: 1.50
+    crypto_doge: 1.50
+    crypto_other: 1.50
+  commodity:
+    nat_gas: 1.75           # noisy — top of 1.55–1.75 band
+    pgm_metals: 1.70
+    copper: 1.62
+    precious_trackers: 1.58
+    energy_oil: 1.55
+    commodity_other: 1.65   # class fallback
+  index:
+    asian_indices: 1.95     # higher vol — top of 1.75–1.95 band
+    us_indices_trackers: 1.85
+    eu_indices: 1.75
+    index_other: 1.85
+  stock:
+    us_stock_single: 1.95   # single names — top of band
+    smallcap_em_etf: 1.85
+    bond_tlt: 1.75
+    stock_other: 1.85
+
+# Per-scan cross-sectional quantile gate (optional). When enabled, effective threshold =
+# max(static MIN_CONFLUENCE_*, percentile cut) per asset class so only ~top fraction of
+# that scan’s scores can clear trade tier (self-scales with regime).
+SCAN_QUANTILE_ENABLED: true
+SCAN_QUANTILE_MIN_SAMPLES: 5
+# Asset types that skip quantile (static MIN_CONFLUENCE_* only). Crypto often fails when
+# max(static, percentile_cut) lifts the bar above tight subgroup floors after a few high scores.
+SCAN_QUANTILE_EXCLUDE_TYPES:
+  - crypto
+SCAN_QUANTILE_TOP_FRACTION:
+  default: 0.20
+  crypto: 0.18
+  forex: 0.22
+  stock: 0.15
+  index: 0.15
+  commodity: 0.18
 
 # Risk settings
 RISK_PCT: 0.01
@@ -133,11 +165,11 @@ AUTO_TRADE_ENABLED: true          # Start auto-trader on server boot
 # Factor engine (crypto/stock/commodity/index) outputs 0–3.0
 # Forex engine outputs 0–1.0  — threshold must be calibrated to its own scale
 AUTO_TRADE_MIN_SCORE:
-  crypto:    0.65   # factor engine: recalibrated — was 0.80 (too strict with ranging + transition penalties)
-  commodity: 0.80   # factor engine
-  stock:     0.85   # factor engine: higher bar — single stocks more volatile/gappy
-  index:     0.80   # factor engine
-  forex:     0.65   # forex engine (0–1): ~65% of max, above scan gate of 0.60
+  crypto:    1.50   # factor 0–3: align with class (not used by auto_trader._can_execute)
+  commodity: 1.65   # factor 0–3: align with class
+  stock:     1.85   # factor 0–3: align with class
+  index:     1.85   # factor 0–3: align with class
+  forex:     0.70   # forex 0–1: align with scan gate
 AUTO_TRADE_MAX_DAILY: 10           # Demo mode: max auto-executions per day
 AUTO_TRADE_MAX_PER_SCAN: 1         # Max per scan cycle; raise to 2 only with >10 active pairs
 AUTO_TRADE_SCAN_INTERVAL_MIN: 30   # Scan every 30 minutes
@@ -386,14 +418,14 @@ PAIR_PROFILES:
     weight_overrides:
       h4_fib: 1.5
       h1_bb: 0.5
-    min_confluence: 0.55
-    bt_min: 0.55
+    min_confluence: 1.58   # precious_trackers subgroup scale (factor 0–3)
+    bt_min: 1.58
   XAG/USD:
     disable_filters: [obv, session]
     weight_overrides:
       h4_fib: 1.5
-    min_confluence: 0.55
-    bt_min: 0.55
+    min_confluence: 1.58
+    bt_min: 1.58
   LINK/USDT:
     disable_filters: [mean_revert]
     weight_overrides:

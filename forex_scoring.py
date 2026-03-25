@@ -10,7 +10,7 @@ calibrated to how forex actually moves:
   - London breakout: Asian range breakout at session open
 
 Output: ForexScoreResult with final_score, direction, signal_type, components
-Threshold: MIN_FOREX_CONFLUENCE (default 0.60) in config.yaml
+Threshold: MIN_FOREX_CONFLUENCE / MIN_CONFLUENCE_CLASS.forex (see config.yaml)
 """
 
 from __future__ import annotations

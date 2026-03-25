@@ -1,6 +1,6 @@
 """Engine A and Engine B backtest loops (extracted from athena.py).
 
-Uses ``athena_runtime.rt()`` for candle fetch and monolith helpers. Call only
+Uses ``athena_runtime.rt`` (the runtime accessor) for candle fetch and monolith helpers. Call only
 after ``set_runtime()`` has run (normal app / CLI load order).
 """
 from __future__ import annotations
@@ -29,13 +29,18 @@ from indicators import (
     calc_sma,
     calc_stochastic,
 )
-from scoring import calc_confluence, get_pair_profile, get_pair_score_group
+from scoring import (
+    calc_confluence,
+    get_min_confluence_threshold,
+    get_pair_profile,
+    get_pair_score_group,
+)
 
 log = logging.getLogger("sentinel")
 
 
 def _rt():
-    return _art_rt.rt()
+    return _art_rt()
 
 
 def _normalize_style(style: str | None) -> str:
@@ -280,6 +285,9 @@ def backtest_pair(pair, style="auto"):
 
     _ptype = pair["type"]
 
+    # Same threshold chain as live scan: PAIR_PROFILES min_confluence → MIN_CONFLUENCE_GROUP → class
+    bt_min = get_min_confluence_threshold(pair)
+
     _h4_need = max(50, CONFIG["H4_CANDLES"])
 
     _h1_need = max(50, CONFIG["H1_CANDLES"])
@@ -389,7 +397,6 @@ def backtest_pair(pair, style="auto"):
                 if pair.get("type") == "forex":
                     from forex_scoring import compute_forex_score
 
-                    _min_forex = CONFIG["MIN_CONFLUENCE_CLASS"].get("forex", CONFIG.get("MIN_FOREX_CONFLUENCE", 0.60))
                     _fx = compute_forex_score(
                         d1_snap=d1i["snap"],
                         h4_snap=h4i["snap"],
@@ -415,7 +422,6 @@ def backtest_pair(pair, style="auto"):
                         "trendState": _fx.signal_type,  # Add compatibility field
                     }
                     direction = _fx.direction
-                    bt_min = _min_forex
                 else:
                     res = calc_confluence(
                         d1i,
@@ -444,13 +450,6 @@ def backtest_pair(pair, style="auto"):
             funnel["total_setups"] += 1
 
             _ts = res.get("trendState", "UNKNOWN")
-
-            # F2: Use MIN_CONFLUENCE_CLASS as BT threshold — same gate as live scan.
-            # Forex bt_min already set by routing block — do not overwrite.
-            if pair.get("type") != "forex":
-                bt_min = get_pair_profile(pair).get(
-                    "bt_min", CONFIG["MIN_CONFLUENCE_CLASS"].get(_ptype, CONFIG.get("MIN_CONFLUENCE", 1.0))
-                )
 
             _recent_scores.append(res["score"])
 
@@ -820,11 +819,6 @@ def backtest_pair(pair, style="auto"):
 
             _ts = res.get("trendState", "UNKNOWN")
 
-            # F2: Use MIN_CONFLUENCE_CLASS as BT threshold — same gate as live scan.
-            bt_min = get_pair_profile(pair).get(
-                "bt_min", CONFIG["MIN_CONFLUENCE_CLASS"].get(_ptype, CONFIG.get("MIN_CONFLUENCE", 1.0))
-            )
-
             _recent_scores.append(res["score"])
 
             if res["score"] < bt_min:
@@ -1172,11 +1166,6 @@ def backtest_pair(pair, style="auto"):
 
             _ts = res.get("trendState", "UNKNOWN")
 
-            # F2: Use MIN_CONFLUENCE_CLASS as BT threshold — same gate as live scan.
-            bt_min = get_pair_profile(pair).get(
-                "bt_min", CONFIG["MIN_CONFLUENCE_CLASS"].get(_ptype, CONFIG.get("MIN_CONFLUENCE", 1.0))
-            )
-
             _recent_scores.append(res["score"])
 
             if res["score"] < bt_min:
@@ -1411,9 +1400,7 @@ def backtest_pair(pair, style="auto"):
 
     if not trades:
         _max_score_seen = round(max(_recent_scores), 3) if _recent_scores else 0
-        _bt_min_used = get_pair_profile(pair).get(
-            "bt_min", CONFIG["MIN_CONFLUENCE_CLASS"].get(_ptype, CONFIG.get("MIN_CONFLUENCE", 1.0))
-        )
+        _bt_min_used = bt_min
         _h4_bars = len(h4_raw) if h4_raw else 0
         _h1_bars = len(h1_raw) if h1_raw else 0
         log.warning(
@@ -1423,7 +1410,56 @@ def backtest_pair(pair, style="auto"):
             f"max_score_seen={_max_score_seen} "
             f"d1={len(d1_raw)} h4={len(h4_raw)} h1={len(h1_raw)}"
         )
-        return {}
+        try:
+            _bh = (
+                round((d1_raw[-1]["close"] / d1_raw[0]["close"] - 1) * 100, 2)
+                if d1_raw and d1_raw[0].get("close")
+                else None
+            )
+        except Exception:
+            _bh = None
+        return {
+            "pair": pair["display"],
+            "symbol": pair["symbol"],
+            "type": pair.get("type", ""),
+            "totalTrades": 0,
+            "wins": 0,
+            "losses": 0,
+            "winRate": 0,
+            "profitFactor": None,
+            "totalR": 0,
+            "expectancy": 0,
+            "sqn": 0,
+            "sharpe": 0,
+            "sortino": 0,
+            "avgWin": 0,
+            "avgLoss": 0,
+            "rSkew": None,
+            "maxDrawdownPct": 0,
+            "maxRecoveryBars": 0,
+            "mcDD": {"p5": 0, "p50": 0, "p95": 0},
+            "scoreBands": {},
+            "regimeStats": {},
+            "wfSplit": {
+                "is_trades": 0,
+                "oos_trades": 0,
+                "is_sqn": None,
+                "oos_sqn": 0,
+                "overfit_flag": False,
+                "wf_note": "No trades — walk-forward not applicable",
+            },
+            "funnel": funnel,
+            "btStyle": effective_style,
+            "btStyleRequested": requested_style,
+            "bhReturn": _bh,
+            "volumeThreshold": {
+                "bt": CONFIG.get("VOLUME_THRESHOLD_BACKTEST", 1.2),
+                "live": CONFIG.get("VOLUME_THRESHOLD", 1.5),
+            },
+            "pairMaxScore": _pair_max_score,
+            "equityCurve": [1.0],
+            "trades": [],
+        }
 
     wins = [
         t
@@ -2420,7 +2456,10 @@ def run_full_backtest(style="auto", asset_class: str | None = None):
             else:
                 results.append(r)
 
-    results.sort(key=lambda x: x["sqn"] if x["sqn"] is not None else -999, reverse=True)
+    results.sort(
+        key=lambda x: x.get("sqn") if x.get("sqn") is not None else -999,
+        reverse=True,
+    )
 
     return {
         "success": True,
