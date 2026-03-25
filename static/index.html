@@ -2440,7 +2440,7 @@ async function _acmFetchAndRender(symbol, tf) {
   }
 
   try {
-    var resp = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&tf=' + tf + '&limit=500');
+    var resp = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&tf=' + tf + '&limit=1000');
     var json = await resp.json();
     if (!resp.ok) throw new Error(json.error || 'Failed to load candles');
 
@@ -4195,7 +4195,7 @@ async function _acmRender(symbol, tf) {
     // SL/TP lines to appear at wrong price levels relative to current market.
     var candles = null;
     var json = {};
-    var resp = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&tf=' + tf + '&limit=500');
+    var resp = await fetch('/api/candles?symbol=' + encodeURIComponent(symbol) + '&tf=' + tf + '&limit=1000');
     json = await resp.json();
     candles = json.candles || json;
     _acm.pairType = json.pairType || ((_acm.sig && _acm.sig.type) || '');

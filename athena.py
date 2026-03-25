@@ -119,7 +119,7 @@ def _merge_forex_forming_ws(candles: list, display: str, tf: str, limit: int):
 
 # N1: CONFIG loaded from config.py (YAML overrides + validation happen there)
 
-from config import CONFIG  # noqa: E402
+from config import CONFIG, scan_candle_limits  # noqa: E402
 
 # twelvedata_feed imported lazily inside backtest block to avoid startup cost
 # (The lazy import inside the try block handles this — no top-level import needed)
@@ -4005,9 +4005,10 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
         return enriched
 
     try:
-        d1 = fetch_candles(pair_obj, "D1", CONFIG.get("D1_CANDLES", 220))
-        h4 = fetch_candles(pair_obj, "H4", CONFIG.get("H4_CANDLES", 220))
-        h1 = fetch_candles(pair_obj, "H1", CONFIG.get("H1_CANDLES", 220))
+        _clim = scan_candle_limits()
+        d1 = fetch_candles(pair_obj, "D1", _clim["D1"])
+        h4 = fetch_candles(pair_obj, "H4", _clim["H4"])
+        h1 = fetch_candles(pair_obj, "H1", _clim["H1"])
 
         if not d1 or not h4 or not h1:
             return None, pair_obj, "Failed to fetch D1/H4/H1 candles"
@@ -4297,7 +4298,7 @@ def api_scan_naked():
 
     def _fetch_cached_only(pair, tf, limit):
         """For naked scan: check in-memory TTL cache first, only call live if truly expired."""
-        key = (pair.get("symbol", pair.get("display")), tf)
+        key = (pair.get("symbol", pair.get("display")), tf, int(limit))
         now = time.time()
         with _candle_cache_lock:
             entry = _candle_cache.get(key)
@@ -4335,8 +4336,10 @@ def api_scan_naked():
             # Fetch all needed timeframes
             _tf_map = {}
             for tf in _needed_tfs:
-                cfg_key = f"{tf.upper().replace('H', 'H').replace('D', 'D')}_CANDLES"
-                limit = CONFIG.get(cfg_key, 220)
+                cfg_key = f"{tf.upper()}_CANDLES"
+                if cfg_key not in CONFIG:
+                    cfg_key = "H4_CANDLES"
+                limit = int(CONFIG[cfg_key])
                 raw = _fetch_cached_only(pair, tf, limit)
                 if raw and len(raw) > 1:
                     _tf_map[tf] = raw[:-1]  # drop incomplete current bar
@@ -6312,8 +6315,9 @@ def api_candles():
     """Return OHLCV candles for the chart widget."""
     symbol = request.args.get("symbol")
     tf = request.args.get("tf", "H4").upper()
+    # Binance klines allow up to 1000; extra history lets H4/D1 EMA200 start further left vs TradingView.
     try:
-        limit = min(int(request.args.get("limit", 300)), 500)
+        limit = min(int(request.args.get("limit", 300)), 1000)
     except (TypeError, ValueError):
         limit = 300
 
@@ -6534,11 +6538,12 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
     _pair_ctx = dict(pair or {})
     _pair_ctx["score_group"] = _score_group
 
-    d1 = fetch_candles(pair, "D1", CONFIG["D1_CANDLES"])
+    _lim = scan_candle_limits()
+    d1 = fetch_candles(pair, "D1", _lim["D1"])
 
-    h4 = fetch_candles(pair, "H4", CONFIG["H4_CANDLES"])
+    h4 = fetch_candles(pair, "H4", _lim["H4"])
 
-    h1 = fetch_candles(pair, "H1", CONFIG["H1_CANDLES"])
+    h1 = fetch_candles(pair, "H1", _lim["H1"])
 
     if not d1 or not h4 or not h1:
         return None

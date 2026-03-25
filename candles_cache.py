@@ -269,7 +269,9 @@ def fetch_candles(
         if live_candles and len(live_candles) >= min(limit, _min_live_bars):
             return live_candles[-limit:] if len(live_candles) > limit else live_candles
 
-    key = (pair.get("symbol", pair.get("display")), tf)
+    # Include limit in key so chart (e.g. 1000 bars for EMA200) does not share TTL
+    # entry with scans using a smaller limit.
+    key = (pair.get("symbol", pair.get("display")), tf, int(limit))
 
     now = time.time()
 

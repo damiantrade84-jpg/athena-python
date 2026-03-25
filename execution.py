@@ -15,7 +15,7 @@ from athena_app.api.routes_execution import normalize_pip_mode
 from athena_app.repositories.audit_repo import insert_manual_error
 from athena_app.services.candle_service import recompute_levels_for_style
 from athena_runtime import executed_signals, rt
-from config import _json_safe
+from config import _json_safe, scan_candle_limits
 from engine_c import compute_consensus
 from market_structure import NakedEngine
 from scoring import CORR_CLUSTERS, get_pair_score_group
@@ -289,9 +289,16 @@ def api_engine_c_scan():
                     "swing", score_group=_pair_score_group
                 )
 
-            d1 = _r.fetch_candles(pair, "D1", _r.CONFIG.get("D1_CANDLES", 250))
-            h4 = _r.fetch_candles(pair, "H4", _r.CONFIG.get("H4_CANDLES", 250))
-            h1 = _r.fetch_candles(pair, "H1", _r.CONFIG.get("H1_CANDLES", 250))
+            _lim = scan_candle_limits()
+            d1 = _r.fetch_candles(pair, "D1", _lim["D1"])
+            h4 = _r.fetch_candles(pair, "H4", _lim["H4"])
+            h1 = _r.fetch_candles(pair, "H1", _lim["H1"])
+            if d1 and len(d1) > 1:
+                d1 = d1[:-1]
+            if h4 and len(h4) > 1:
+                h4 = h4[:-1]
+            if h1 and len(h1) > 1:
+                h1 = h1[:-1]
 
             # fetch_candles already routes through CandleBuilder (WS) first,
             # then EODHD REST as fallback — no need for separate EODHD calls.

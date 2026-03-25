@@ -1,5 +1,19 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-27) — Live scoring candle depth, `scan_candle_limits`, chart max 1000
+
+**Goal:** One source of truth for D1/H4/H1 bar counts used by Engine A (`analyze_pair`), naked analysis, Engine C B-leg fetches, compare/scan helpers, and style level recompute — aligned with deeper dashboard candles and EMA200 vs TradingView.
+
+**`scan_candle_limits()` (`config.py`):** returns `{"D1","H4","H1"}` from **`CONFIG["D1_CANDLES"]`**, **`H4_CANDLES`**, **`H1_CANDLES`** (yaml-overridable). Docstring notes all asset classes route through **`fetch_candles`** by pair `source`.
+
+**Defaults (`config.yaml` / `config.py`):** **`D1_CANDLES: 1001`**, **`H4_CANDLES: 1000`**, **`H1_CANDLES: 1000`** — after **`analyze_pair`** forming-bar drop, ~**1000 / 999 / 999** closed bars. Replaces older **`250/250/250`** defaults (see git history: `b46dca19` introduced 250-wide windows).
+
+**Call sites wired to `scan_candle_limits()`:** `analyze_pair`, `_compute_naked_analysis` (`athena.py`); **`/api/scan-naked`** per-TF `CONFIG["{TF}_CANDLES"]` with sane fallback; **`scanner.py`** (compare path); **`execution.py`** (Engine C candle fetch); **`athena_app/services/candle_service.py`** (`recompute_levels_for_style`).
+
+**Cache keys:** In-memory TTL cache includes **`limit`** in the key (`candles_cache.py`) so chart `limit=1000` does not collide with scan entries; naked scan `_fetch_cached_only` key includes **`limit`** too.
+
+**Dashboard:** **`GET /api/candles`** clamps `limit` to **1000** (was 500); ACM **`static/index.html`** requests **`limit=1000`** for chart loads.
+
 ## Recent Changes (2026-03-26) — Crypto H1 OHLCV fix, fetch routing, chart EMA, EMA200 slope clarity
 
 **Goal:** Correct crypto H1 charts/indicators (full kline OHLCV, not close-only ticks); keep H4/D1 on native Binance REST; improve dashboard EMA vs TradingView; document EMA200 slope fields.
@@ -19,7 +33,7 @@
 **`BinanceLivePriceWS` (`!ticker@arr`):** execution/live header prices. **`BinanceCandleWS`:** H1 OHLCV for crypto cache. Both started/stopped with app lifecycle in `athena.py`.
 
 **Dashboard chart (`static/index.html` — ACM / `_acmFetchAndRender`):**
-- `/api/candles` **`limit=500`** (server max) for chart loads — longer history so **EMA 200** warm-up is closer to TradingView (still won’t match left-edge TV if TV has more off-screen bars).
+- `/api/candles` **`limit=1000`** (server max) for chart loads — **EMA 200** starts further left vs 300–500 bars; TV may still have more off-screen history.
 - **`_acmEmaLineData(candles, emaArr)`** — EMA 21/50/200 line series get only **finite** `{time, value}` points (no `null`s); avoids Lightweight Charts glitches. Legacy `Math.min(i, length-1)` on EMA arrays removed.
 
 **EMA200 slope — two different metrics (`athena.py`, `indicators.py`):**
@@ -28,6 +42,10 @@
 - Comparing the chip to **H4** TradingView EMA200 slope is misleading — different TF and lookback.
 
 **Pair cleanup:** `FET/USDT` removed from pair lists, feeds, `static/index.html` TV map, `legacy/ccxt_executor.py`, `MANUAL.md`.
+
+**Scoring vs chart candle depth (`config.py` / `config.yaml` + `CLAUDE.md` Signal Flow):**
+- **`D1_CANDLES` / `H4_CANDLES` / `H1_CANDLES`** defaults **1001 / 1000 / 1000** so Engine A `analyze_pair` uses ~1000 closed D1 bars after drop and matches ACM **`/api/candles?limit=1000`** depth on H4/H1 (EMA values align at the right edge). **`analyze_pair`** still **drops the last (forming) bar** per TF before indicators.
+- See **Signal Flow → “Scoring vs dashboard chart — candle windows”** for the full table and tradeoffs.
 
 ## Recent Changes (2026-03-25) — Crypto Engine A Simplification
 
@@ -474,6 +492,20 @@ run_full_scan(style, asset_class)
   └─ apply_correlation_cap(results)
   └─ _json_safe(result)                                       ← strips NaN/Inf before jsonify
 ```
+
+### Scoring vs dashboard chart — candle windows (EMA reference)
+
+**Engine A (`analyze_pair` in `athena.py`):** loads D1/H4/H1 via **`scan_candle_limits()`** (same keys as **`CONFIG["D1_CANDLES"]`**, **`H4_CANDLES`**, **`H1_CANDLES`**) and **`fetch_candles`** (routes by pair: crypto → Binance, EODHD pairs → EODHD/live cache, etc.), then **drops the last bar** on each series (forming candle) before `calc_indicators_with_normalized`. Defaults are in **`config.py`** and overridable in **`config.yaml`** — **D1=1001**, **H4=1000**, **H1=1000** (after drop: ~1000 / ~999 / ~999 closed bars). **Minimums after drop:** `len(d1) >= 220`, `len(h4) >= 50`, `len(h1) >= 50` or the pair is skipped.
+
+**Engine B (live paths):** `/api/scan-naked`, `/api/naked-analysis`, compare-engines, and Engine C’s own `analyze_structure` fetch use the **same limits** (`scan_candle_limits` + CONFIG keys) and the **same forming-bar drop** where they fetch their own series, so naked structure sees the **same closed-bar windows as Engine A** per asset class. **`fetch_candles`** remains the single routing layer to Binance vs EODHD vs cache for all pair types (forex, crypto, stocks, indices, ETFs, commodities).
+
+All votes, `h4.snap` / `d1.snap` / `h1.snap` EMAs, forex engine inputs, and factor snapshots are computed from **these series only** — not from the chart’s internal array.
+
+**Dashboard (`GET /api/candles`):** max **`limit=1000`**; ACM client requests **1000**. Candlestick + client-drawn EMA 21/50/200 use that payload.
+
+**Why this matters:** EMA is recursive over the **whole** series; different lengths → different **last-bar EMA values**. After alignment, **H4/H1 `snap.ema200`** should match the **right-edge** ACM line for the same symbol/TF (same forming-bar rule: chart may still include a forming bar depending on path — minor edge case). **Lowering** `H4_CANDLES` / `H1_CANDLES` in yaml saves API/CPU per scan but diverges from the chart again.
+
+**Tradeoffs of 1000-bar intraday windows:** larger REST payloads, more memory, TTL cache entries keyed by `(symbol, tf, limit)` (see `candles_cache.py`). **D1 at 1001** (≈1000 closed after drop) gives D1 EMA200 + margin; larger D1 windows increase REST payload per pair.
 
 **Engine B flow:**
 ```

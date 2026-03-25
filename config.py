@@ -70,9 +70,11 @@ CONFIG: dict = {
     "VOLUME_THRESHOLD": 1.5,
     "VOLUME_THRESHOLD_BACKTEST": 1.2,
     "ADX_TREND_MIN": 25,
-    "D1_CANDLES": 250,
-    "H4_CANDLES": 250,
-    "H1_CANDLES": 250,
+    # analyze_pair: fetch then drop last (forming) bar. H4/H1 align with /api/candles max (1000).
+    # D1=1001 so closed D1 bars after drop ≈1000; tune in config.yaml. Lower = faster scans, chart diverges.
+    "D1_CANDLES": 1001,
+    "H4_CANDLES": 1000,
+    "H1_CANDLES": 1000,
     "MIN_CONFLUENCE": 1.0,
     "RISK_MULT": {
         "commodity": 1.2,
@@ -662,6 +664,21 @@ def validate_config(cfg: dict) -> None:
 
 
 validate_config(CONFIG)
+
+
+def scan_candle_limits() -> dict[str, int]:
+    """Bar counts for Engine A (`analyze_pair`), Engine B, Engine C B-leg, and naked scans.
+
+    Single source of truth: ``D1_CANDLES``, ``H4_CANDLES``, ``H1_CANDLES`` in CONFIG / config.yaml.
+    ``fetch_candles`` (athena) routes by pair ``source`` to Binance (crypto), EODHD (forex/stocks/
+    commodities/indices/ETFs), Polygon, or yfinance — same limits apply to every asset class.
+    Callers should drop the last possibly-forming bar after fetch, matching ``analyze_pair``.
+    """
+    return {
+        "D1": int(CONFIG["D1_CANDLES"]),
+        "H4": int(CONFIG["H4_CANDLES"]),
+        "H1": int(CONFIG["H1_CANDLES"]),
+    }
 
 
 def _json_safe(value):

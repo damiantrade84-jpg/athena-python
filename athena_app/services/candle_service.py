@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Callable, Dict, Any
 
+from config import scan_candle_limits
+
 
 def _resolve_regime_state(sig: Dict[str, Any]) -> int | None:
     regime = sig.get("regime")
@@ -51,9 +53,10 @@ def recompute_levels_for_style(
         raise ValueError("Pair not found for quick execute")
 
     ptype = pair_obj.get("type", "")
-    d1 = fetch_candles(pair_obj, "D1", config.get("D1_CANDLES", 250))
-    h4 = fetch_candles(pair_obj, "H4", config.get("H4_CANDLES", 250))
-    h1 = fetch_candles(pair_obj, "H1", config.get("H1_CANDLES", 250))
+    _lim = scan_candle_limits()
+    d1 = fetch_candles(pair_obj, "D1", _lim["D1"])
+    h4 = fetch_candles(pair_obj, "H4", _lim["H4"])
+    h1 = fetch_candles(pair_obj, "H1", _lim["H1"])
     if not d1 or not h4 or not h1:
         raise ValueError("Candles unavailable")
 

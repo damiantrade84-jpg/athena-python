@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from athena_runtime import rt
-from config import CONFIG
+from config import CONFIG, scan_candle_limits
 from data_feeds import http_requests
 from indicators import calc_atr, calc_indicators
 from scoring import (
@@ -287,9 +287,16 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                             "swing", score_group=_pair_score_group
                         )
 
-                    d1 = r.fetch_candles(pair, "D1", CONFIG.get("D1_CANDLES", 250))
-                    h4 = r.fetch_candles(pair, "H4", CONFIG.get("H4_CANDLES", 250))
-                    h1 = r.fetch_candles(pair, "H1", CONFIG.get("H1_CANDLES", 250))
+                    _lim = scan_candle_limits()
+                    d1 = r.fetch_candles(pair, "D1", _lim["D1"])
+                    h4 = r.fetch_candles(pair, "H4", _lim["H4"])
+                    h1 = r.fetch_candles(pair, "H1", _lim["H1"])
+                    if d1 and len(d1) > 1:
+                        d1 = d1[:-1]
+                    if h4 and len(h4) > 1:
+                        h4 = h4[:-1]
+                    if h1 and len(h1) > 1:
+                        h1 = h1[:-1]
 
                     if h4 and len(h4) >= 20:
                         _highs = [float(c["high"]) for c in h4]

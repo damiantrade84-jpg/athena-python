@@ -1,6 +1,16 @@
 # Athena v3.0 — Tunable thresholds (override CONFIG defaults)
 # Edit this file and restart to apply changes — no code deploy needed.
 
+# ── Candle depth for analyze_pair / scans (Engine A indicators) ─────────────
+# Fetched per TF, then last bar dropped (forming). Must satisfy analyze_pair mins:
+# len(d1)>=220, len(h4)>=50, len(h1)>=50 after drop.
+# H4/H1 default 1000 matches GET /api/candles max + ACM chart — EMAs align with dashboard.
+# D1=1001 so after forming-bar drop scoring uses ~1000 closed D1 bars (aligns with chart depth).
+# Reduce for lighter scans (EMA on chart vs signal.snap will diverge).
+D1_CANDLES: 1001
+H4_CANDLES: 1000
+H1_CANDLES: 1000
+
 # Per-class D1 ADX trend minimum
 ADX_TREND_MIN_CLASS:
   crypto: 15
