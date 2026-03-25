@@ -108,6 +108,7 @@ _MT5_SYMBOL_MAP = {
     # Indices
     "S&P 500": "US500",
     "Nasdaq": "USTEC",
+    "NASDAQ-100": "USTEC",
     "Dow Jones": "US30",
     "DAX 40": "GER40",
     "UK100": "UK100",

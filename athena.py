@@ -135,7 +135,7 @@ FOREX_PAIRS = [
         "symbol": "EURUSD=X",
         "type": "forex",
         "display": "EUR/USD",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +0.16 — enabled; score gate filters low-conviction setups
     {
@@ -163,14 +163,14 @@ FOREX_PAIRS = [
         "symbol": "NZDUSD=X",
         "type": "forex",
         "display": "NZD/USD",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN 0.00 — enabled; zero trades was data gap not signal failure
     {
         "symbol": "EURGBP=X",
         "type": "forex",
         "display": "EUR/GBP",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +1.54, WR 59.1%, IS:+1.48/OOS:+1.61 (2026-03-15 confirmed)
     {
@@ -191,63 +191,63 @@ FOREX_PAIRS = [
         "symbol": "EURJPY=X",
         "type": "forex",
         "display": "EUR/JPY",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +1.06
     {
         "symbol": "GBPJPY=X",
         "type": "forex",
         "display": "GBP/JPY",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN -0.72
     {
         "symbol": "AUDJPY=X",
         "type": "forex",
         "display": "AUD/JPY",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +0.22
     {
         "symbol": "EURAUD=X",
         "type": "forex",
         "display": "EUR/AUD",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN -1.43 (old look-ahead bias) — re-evaluate post-formula fix
     {
         "symbol": "GBPAUD=X",
         "type": "forex",
         "display": "GBP/AUD",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +0.91
     {
         "symbol": "USDZAR=X",
         "type": "forex",
         "display": "USD/ZAR",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN -0.32
     {
         "symbol": "EURCHF=X",
         "type": "forex",
         "display": "EUR/CHF",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN -0.83
     {
         "symbol": "USDMXN=X",
         "type": "forex",
         "display": "USD/MXN",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +0.85, OOS +0.60 ✓
     {
         "symbol": "USDSGD=X",
         "type": "forex",
         "display": "USD/SGD",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +0.43
 ]
@@ -257,56 +257,56 @@ COMMODITY_PAIRS = [
         "symbol": "GC=F",
         "type": "commodity",
         "display": "XAU/USD",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +1.92, WR 64.7%, 17 trades (2026-03-15 ATR-fix confirmed)
     {
         "symbol": "SI=F",
         "type": "commodity",
         "display": "XAG/USD",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN -0.07 — DISABLE (borderline, no edge confirmed)
     {
         "symbol": "CL=F",
         "type": "commodity",
         "display": "WTI Oil",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN not retested with correct ATR — monitor only
     {
         "symbol": "BZ=F",
         "type": "commodity",
         "display": "Brent Oil",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # Pepperstone: SPOTBRENT
     {
         "symbol": "NG.US",
         "type": "commodity",
         "display": "Nat Gas",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # EODHD: NG.US; Pepperstone: NATGAS
     {
         "symbol": "HG=F",
         "type": "commodity",
         "display": "Copper",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # Pepperstone: COPPER - WebSocket enabled
     {
         "symbol": "PL=F",
         "type": "commodity",
         "display": "XPT/USD",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # Pepperstone: XPTUSD
     {
         "symbol": "PA=F",
         "type": "commodity",
         "display": "XPD/USD",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # Pepperstone: XPDUSD
 ]
@@ -316,7 +316,7 @@ INDEX_PAIRS = [
         "symbol": "^IXIC",
         "type": "index",
         "display": "NASDAQ-100",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
         "ws": False,
     },  # NAS100 index via EODHD REST
@@ -324,21 +324,21 @@ INDEX_PAIRS = [
         "symbol": "^GSPC",
         "type": "index",
         "display": "S&P 500",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +1.23 WR 60.0% (10T) ← WS: us endpoint GSPC.INDX
     {
         "symbol": "^DJI",
         "type": "index",
         "display": "Dow Jones",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +0.61 WR 55.6% (9T) ← WS: us endpoint DJI.INDX
     {
         "symbol": "^GDAXI",
         "type": "index",
         "display": "DAX 40",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
         "ws": False,
     },  # SQN -1.89 WR 23.1% (13T) Pepperstone: GER40
@@ -346,28 +346,28 @@ INDEX_PAIRS = [
         "symbol": "^FTSE",
         "type": "index",
         "display": "UK100",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +0.67 WR 50.0% (12T) Pepperstone: UK100 ← WS: forex ep
     {
         "symbol": "^AXJO",
         "type": "index",
         "display": "ASX 200",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +0.12 WR 40.0% (10T) Pepperstone: AUS200 ← WS: forex ep
     {
         "symbol": "^N225",
         "type": "index",
         "display": "Nikkei 225",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN -0.39 WR 33.3% (9T) Pepperstone: JPN225 ← WS: forex ep
     {
         "symbol": "^HSI",
         "type": "index",
         "display": "Hang Seng",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN -0.38 WR 33.3% (9T) Pepperstone: HK50 ← WS: forex ep
 ]
@@ -377,35 +377,35 @@ US_STOCK_PAIRS = [
         "symbol": "AAPL.US",
         "type": "stock",
         "display": "AAPL",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN -0.30 — score gate filters
     {
         "symbol": "TSLA.US",
         "type": "stock",
         "display": "TSLA",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +0.10
     {
         "symbol": "NVDA.US",
         "type": "stock",
         "display": "NVDA",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +1.44 ✓
     {
         "symbol": "MSFT.US",
         "type": "stock",
         "display": "MSFT",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +0.49
     {
         "symbol": "AMZN.US",
         "type": "stock",
         "display": "AMZN",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
         "ws": False,
     },  # SQN +0.27
@@ -413,21 +413,21 @@ US_STOCK_PAIRS = [
         "symbol": "META.US",
         "type": "stock",
         "display": "META",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN -0.29
     {
         "symbol": "GOOG.US",
         "type": "stock",
         "display": "GOOG",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +1.61, OOS:+1.01 ✓
     {
         "symbol": "JPM.US",
         "type": "stock",
         "display": "JPM",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
         "ws": False,
     },  # SQN +0.26
@@ -435,7 +435,7 @@ US_STOCK_PAIRS = [
         "symbol": "V.US",
         "type": "stock",
         "display": "V",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
         "ws": False,
     },  # SQN -1.39
@@ -443,7 +443,7 @@ US_STOCK_PAIRS = [
         "symbol": "XOM.US",
         "type": "stock",
         "display": "XOM",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
         "ws": False,
     },  # SQN -0.03
@@ -451,21 +451,21 @@ US_STOCK_PAIRS = [
         "symbol": "NFLX.US",
         "type": "stock",
         "display": "NFLX",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # Pepperstone CFD
     {
         "symbol": "AMD.US",
         "type": "stock",
         "display": "AMD",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # Pepperstone CFD
     {
         "symbol": "CRM.US",
         "type": "stock",
         "display": "CRM",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
         "ws": False,
     },  # Pepperstone CFD
@@ -473,7 +473,7 @@ US_STOCK_PAIRS = [
         "symbol": "DIS.US",
         "type": "stock",
         "display": "DIS",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
         "ws": False,
     },  # Pepperstone CFD
@@ -481,7 +481,7 @@ US_STOCK_PAIRS = [
         "symbol": "BA.US",
         "type": "stock",
         "display": "BA",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
         "ws": False,
     },  # Pepperstone CFD
@@ -489,35 +489,35 @@ US_STOCK_PAIRS = [
         "symbol": "COIN.US",
         "type": "stock",
         "display": "COIN",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # Pepperstone CFD
     {
         "symbol": "PYPL.US",
         "type": "stock",
         "display": "PYPL",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # Pepperstone CFD
     {
         "symbol": "INTC.US",
         "type": "stock",
         "display": "INTC",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # Pepperstone CFD
     {
         "symbol": "UBER.US",
         "type": "stock",
         "display": "UBER",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # Pepperstone CFD
     {
         "symbol": "PLTR.US",
         "type": "stock",
         "display": "PLTR",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # Pepperstone CFD
 ]
@@ -527,14 +527,14 @@ ETF_PAIRS = [
         "symbol": "SPY.US",
         "type": "stock",
         "display": "SPY",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +1.03 ✓
     {
         "symbol": "QQQ.US",
         "type": "stock",
         "display": "QQQ",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
         "ws": False,
     },  # SQN +0.38
@@ -542,7 +542,7 @@ ETF_PAIRS = [
         "symbol": "GLD.US",
         "type": "stock",
         "display": "GLD",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
         "ws": False,
     },  # SQN +2.08, OOS:+2.98 ✓
@@ -550,7 +550,7 @@ ETF_PAIRS = [
         "symbol": "TLT.US",
         "type": "stock",
         "display": "TLT",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
         "ws": False,
     },  # Treasury ETF
@@ -558,21 +558,21 @@ ETF_PAIRS = [
         "symbol": "IWM.US",
         "type": "stock",
         "display": "IWM",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # Russell 2000 ETF
     {
         "symbol": "EEM.US",
         "type": "stock",
         "display": "EEM",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # Emerging Markets ETF
     {
         "symbol": "XLE.US",
         "type": "stock",
         "display": "XLE",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
         "ws": False,
     },  # Energy Sector ETF
@@ -580,14 +580,14 @@ ETF_PAIRS = [
         "symbol": "SLV.US",
         "type": "stock",
         "display": "SLV",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # Silver ETF
     {
         "symbol": "USO.US",
         "type": "stock",
         "display": "USO",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # Oil ETF
 ]
@@ -1808,12 +1808,19 @@ def fetch_polygon(pair, tf, limit):
 
             end = datetime.now(timezone.utc)
 
-            start = end - timedelta(days=730)
+            # Reduce start range for intraday to prevent pagination from truncating recent data
+            if tf == "H1":
+                start = end - timedelta(days=60)
+            elif tf == "H4":
+                start = end - timedelta(days=120)
+            else:
+                start = end - timedelta(days=730)
 
             url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{mult}/{span}/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
 
+            # Fetch descending to ensure we get the most recent bars if constrained, then reverse later
             r = http_requests.get(
-                url, params={"apiKey": key, "limit": 50000, "sort": "asc"}, timeout=20
+                url, params={"apiKey": key, "limit": 50000, "sort": "desc"}, timeout=20
             )
 
             if r.status_code == 403:
@@ -1856,9 +1863,10 @@ def fetch_polygon(pair, tf, limit):
 
             if not results:
                 log.warning(f"[PG] {ticker}: no results")
-
                 return {"error": True, "symbol": symbol, "detail": "no results"}
 
+            # Reverse the results because we fetched with sort=desc to guarantee the latest data
+            results = list(reversed(results))
             candles = [
                 {
                     "time": datetime.fromtimestamp(
@@ -1902,6 +1910,83 @@ def fetch_polygon(pair, tf, limit):
 
             return {"error": True, "symbol": symbol, "detail": str(e)}
 
+def fetch_mt5(pair: dict, tf: str, limit: int):
+    """Download OHLCV candles directly from the live MT5 broker terminal. Fast, accurate, real-time."""
+    import mt5_executor
+    import time
+    from datetime import datetime, timezone
+    
+    symbol = pair.get("display", pair.get("symbol", ""))
+    
+    if not mt5_executor.mt5_connect():
+        return {"error": True, "symbol": symbol, "detail": "MT5 not connected"}
+        
+    mt5 = mt5_executor._get_mt5()
+    mt5_symbol = mt5_executor.mt5_map_symbol(symbol)
+    
+    if not mt5_symbol:
+        return {"error": True, "symbol": symbol, "detail": "no MT5 symbol mapping"}
+        
+    if not mt5.symbol_select(mt5_symbol, True):
+        return {"error": True, "symbol": symbol, "detail": "symbol not found in MT5"}
+        
+    # Map timeframe
+    tf_map = {
+        "M1": mt5.TIMEFRAME_M1,
+        "M5": mt5.TIMEFRAME_M5,
+        "M15": mt5.TIMEFRAME_M15,
+        "M30": mt5.TIMEFRAME_M30,
+        "H1": mt5.TIMEFRAME_H1,
+        "H4": mt5.TIMEFRAME_H4,
+        "D1": mt5.TIMEFRAME_D1,
+    }
+    mt5_tf = tf_map.get(tf, mt5.TIMEFRAME_H1)
+    
+    request_limit = limit + 100
+    
+    bars = mt5.copy_rates_from_pos(mt5_symbol, mt5_tf, 0, request_limit)
+    
+    if bars is None or len(bars) == 0:
+        err = mt5.last_error()
+        return {"error": True, "symbol": symbol, "detail": f"MT5 failed: {err}"}
+        
+    # Dynamic timezone detection to align broker integers to perfect UTC strings
+    tick = mt5.symbol_info_tick(mt5_symbol)
+    offset_seconds = 0
+    if tick and tick.time > 0:
+        utc_now = time.time()
+        diff_sec = tick.time - utc_now
+        offset_hours = round(diff_sec / 3600.0)
+        offset_seconds = int(offset_hours * 3600)
+    
+    candles = []
+    for b in bars:
+        shifted_ts = b['time'] - offset_seconds
+        dt = datetime.fromtimestamp(shifted_ts, tz=timezone.utc)
+        candles.append({
+            "time": dt.isoformat(),
+            "open": float(b['open']),
+            "high": float(b['high']),
+            "low": float(b['low']),
+            "close": float(b['close']),
+            "vol": float(b['tick_volume'])
+        })
+    # Bridge to global _live_prices cache for execution levels
+    if candles:
+        last = candles[-1]
+        with _live_prices_lock:
+            _live_prices[symbol] = {
+                "price": float(last["close"]),
+                "ts": time.time(),
+                "source": "mt5"
+            }
+        
+    return {
+        "error": False,
+        "symbol": symbol,
+        "detail": "",
+        "candles": candles[-limit:] if len(candles) > limit else candles,
+    }
 
 def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
     """Route candle fetch to correct source with in-memory TTL cache (see candles_cache)."""
@@ -1914,6 +1999,7 @@ def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
         fetch_eodhd=fetch_eodhd,
         fetch_polygon=fetch_polygon,
         fetch_yfinance=fetch_yfinance,
+        fetch_mt5=fetch_mt5,
         yfinance_symbol_for_pair=_yfinance_symbol_for_pair,
         tf_b=TF_B,
     )
@@ -8172,7 +8258,8 @@ if __name__ == "__main__":
     if _ws_key:
         _ws_mgr = EODHDWebSocketManager(_ws_key)
 
-        _ws_mgr.start(ACTIVE_PAIRS)
+        _eodhd_pairs = [p for p in ACTIVE_PAIRS if p.get("source") == "eodhd"]
+        _ws_mgr.start(_eodhd_pairs)
 
         set_candle_builder(CandleBuilder())
 
@@ -8180,7 +8267,8 @@ if __name__ == "__main__":
 
             cb = get_candle_builder()
 
-            cb.seed(ALL_PAIRS)  # seed 6mo H1/H4/D1
+            _seed_pairs = [p for p in ALL_PAIRS if p.get("source") == "eodhd"]
+            cb.seed(_seed_pairs)  # seed 6mo H1/H4/D1
 
             cb.bulk_update_d1()  # fresh D1 from Bulk API
 
@@ -8188,7 +8276,7 @@ if __name__ == "__main__":
 
         threading.Thread(target=_cb_startup, daemon=True, name="candle-seed").start()
 
-        log.info("[CB] Candle builder started (WS ticks + 6mo seed + Bulk D1 every 4h)")
+        log.info("[CB] Candle builder started (WS ticks + 6mo seed + Bulk D1 for EODHD sources)")
 
     else:
         log.warning("[WS] No EODHD_KEY â€” WebSocket prices disabled")

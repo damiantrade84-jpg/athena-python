@@ -131,6 +131,13 @@ def backtest_pair(pair, style="auto"):
                         h4_raw = h4_raw or _yf_h4
                         h1_raw = h1_raw or _yf_h1
 
+        elif pair["source"] == "mt5":
+            # MT5: Use direct terminal fetch for backtest history
+            # request 600 D1, 5000 H4, 5000 H1 (MT5 is fast enough)
+            d1_raw = _rt().fetch_candles(pair, "D1", 600)
+            h4_raw = _rt().fetch_candles(pair, "H4", 5000)
+            h1_raw = _rt().fetch_candles(pair, "H1", 5000)
+
         elif _ptype in ("stock", "commodity", "index"):
             # Stocks/Commodities/Indices: EODHD D1 + EODHD intraday (730d)
             # Fallback chain: EODHD → Polygon (commodities) → yfinance
@@ -180,8 +187,6 @@ def backtest_pair(pair, style="auto"):
                         )
 
                 # yfinance as final fallback — also triggers when Polygon returns thin data (<500 H4 bars)
-                # Polygon free plan caps H4 history for C:XAUUSD etc. at ~38 days, which is
-                # unusable: all 228 bars postdate most D1 entries, indicators compute out-of-context.
                 _h4_thin = not h4_raw or len(h4_raw or []) < 500
                 _h1_thin = not h1_raw or len(h1_raw or []) < 500
                 if _h4_thin or _h1_thin:

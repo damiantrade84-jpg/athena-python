@@ -180,6 +180,7 @@ MAX_CORRELATED_POSITIONS: 10   # Testing: allow broader same-cluster exposure
 SIGNAL_MAX_AGE_SEC: 300       # 5 min freshness window
 FOREX_SESSION_FILTER: true    # true = London+NY+Asian only; false = 24h (disable for testing)
 SERVER_TZ_OFFSET_HOURS: 2    # Your local timezone UTC offset — SAST = 2 (GMT+2)
+FOREX_H4_RESAMPLE_OFFSET_HOURS: 1.0  # Align H4 grid to 01/05/09/13/17/21 UTC (matches TV NY-aligned brokers)
 
 # Forex scoring engine (merged into CONFIG["FOREX_ENGINE"] — see config.py for full defaults)
 FOREX_ENGINE:

@@ -279,7 +279,8 @@ def fetch_candles(
     fetch_eodhd: Callable[..., Any],
     fetch_polygon: Callable[..., Any],
     fetch_yfinance: Callable[..., Any],
-    yfinance_symbol_for_pair: Callable[[dict], str | None],
+    fetch_mt5: Callable[..., Any] = None,
+    yfinance_symbol_for_pair: Callable[[dict], str | None] = None,
     tf_b: dict[str, str],
 ) -> list | None:
     """Route candle fetch to correct source with in-memory TTL cache.
@@ -325,6 +326,9 @@ def fetch_candles(
 
     elif pair["source"] == "polygon":
         candles = fetch_polygon(pair, tf, limit)
+
+    elif pair["source"] == "mt5" and fetch_mt5:
+        candles = fetch_mt5(pair, tf, limit)
 
     elif pair["source"] == "yfinance":
         candles = fetch_yfinance(yfinance_symbol_for_pair(pair), tf, limit)
