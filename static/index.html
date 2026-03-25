@@ -1753,11 +1753,15 @@ function getConfluencePct(data) {
   if(!data) return 0;
   var pct = data.confluencePct;
   if (pct == null) pct = data.score_pct;
-  if (pct == null && typeof data.confluenceScore === 'number' && (data.maxScore||0) > 0) {
-    pct = (data.confluenceScore / data.maxScore) * 100;
+  if (pct == null && typeof data.confluenceScore === 'number') {
+    // Use the scan threshold if available (same formula as backend: score/threshold * 67)
+    var denom = data.scanThresholdEffective || data.scanThresholdStatic || null;
+    if (!denom && (data.maxScore||0) > 0) denom = data.maxScore;
+    if (denom && denom > 0) pct = (data.confluenceScore / denom) * 67;
   }
-  if (pct == null && typeof data.score === 'number' && (data.max_possible||0) > 0) {
-    pct = (data.score / data.max_possible) * 100;
+  if (pct == null && typeof data.score === 'number') {
+    var denom2 = (data.max_possible||0) > 0 ? data.max_possible : null;
+    if (denom2) pct = (data.score / denom2) * 67;
   }
   pct = Number(pct);
   if (!Number.isFinite(pct)) return 0;

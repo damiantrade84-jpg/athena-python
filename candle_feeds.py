@@ -1034,19 +1034,23 @@ class CandleBuilder:
                 h4_rows = []
 
                 if len(df) >= 4:
-                    df["time"] = pd.to_datetime(df["time"])
+                    df["time"] = pd.to_datetime(df["time"], utc=True)
 
                     df = df.set_index("time")
 
-                    h4 = pd.DataFrame(
-                        {
-                            "open": df["open"].resample("4h").first(),
-                            "high": df["high"].resample("4h").max(),
-                            "low": df["low"].resample("4h").min(),
-                            "close": df["close"].resample("4h").last(),
-                            "vol": df["vol"].resample("4h").sum(),
-                        }
-                    ).dropna(subset=["open", "close"])
+                    h4 = (
+                        df.resample("4h", origin="epoch", label="left", closed="left")
+                        .agg(
+                            {
+                                "open": "first",
+                                "high": "max",
+                                "low": "min",
+                                "close": "last",
+                                "vol": "sum",
+                            }
+                        )
+                        .dropna(subset=["open", "close"])
+                    )
 
                     h4_rows = [
                         (

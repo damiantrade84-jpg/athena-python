@@ -93,10 +93,12 @@ def resample_from_h1(
         return None
     df = df.set_index("time")
 
-    # Epoch-anchored right-closed buckets (same as ed2f395 / pre-NY-origin).
-    # Keeps H4/D1 bar edges stable vs TradingView when paired with utc=True H1 parse.
+    # Epoch-anchored left-closed buckets matching TradingView's open-time bar labelling.
+    # H4 boundaries: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC.
+    # label="left" stamps bars with their open time (same as TradingView).
+    # closed="left" means the 00:00 H1 bar goes into the 00:00 H4 bucket (not the 20:00 one).
     agg = (
-        df.resample(freq, origin="epoch", label="right", closed="right")
+        df.resample(freq, origin="epoch", label="left", closed="left")
         .agg(
             {
                 "open": "first",
