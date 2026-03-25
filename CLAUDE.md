@@ -1,17 +1,39 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-26) — Crypto H1 OHLCV fix, fetch routing, chart EMA, EMA200 slope clarity
+
+**Goal:** Correct crypto H1 charts/indicators (full kline OHLCV, not close-only ticks); keep H4/D1 on native Binance REST; improve dashboard EMA vs TradingView; document EMA200 slope fields.
+
+**Binance kline → CandleBuilder (`candle_feeds.py`):**
+- `BinanceCandleWS` (`fstream.binance.com`, combined `@kline_1h`) calls **`CandleBuilder.on_kline(display, o, h, l, c, vol, t_ms, is_closed)`** — uses full Binance `k` fields (`o/h/l/c/v/x`). **Do not** feed klines through `on_tick(close)` only; that corrupted H/L, broke volume, and `INSERT OR REPLACE` overwrote good seed bars.
+- `on_kline` maintains **H1 only** inside CandleBuilder; completed bars flush with **`tick_count=0`** (kline path).
+
+**`fetch_candles` (`candles_cache.py`):**
+- **`use_candle_builder = (tf == "H1" and source != "polygon")`** for all pairs (including crypto). **H4/D1** for crypto come from **`fetch_binance`** native intervals, not SQLite rollups.
+
+**Crypto seed (`candle_feeds.py` `_seed_crypto`):**
+- Seeds **H1 only** (500 × `1h` from Binance REST). Before count guard: **`DELETE FROM candle_cache WHERE pair=? AND timeframe='H1' AND tick_count > 0`** to purge old WS-corrupted rows, then re-seed if `COUNT < 100`.
+
+**Forex/non-crypto H1:** unchanged — EODHD WS ticks still use `CandleBuilder.on_tick()` for price/volume.
+
+**`BinanceLivePriceWS` (`!ticker@arr`):** execution/live header prices. **`BinanceCandleWS`:** H1 OHLCV for crypto cache. Both started/stopped with app lifecycle in `athena.py`.
+
+**Dashboard chart (`static/index.html` — ACM / `_acmFetchAndRender`):**
+- `/api/candles` **`limit=500`** (server max) for chart loads — longer history so **EMA 200** warm-up is closer to TradingView (still won’t match left-edge TV if TV has more off-screen bars).
+- **`_acmEmaLineData(candles, emaArr)`** — EMA 21/50/200 line series get only **finite** `{time, value}` points (no `null`s); avoids Lightweight Charts glitches. Legacy `Math.min(i, length-1)` on EMA arrays removed.
+
+**EMA200 slope — two different metrics (`athena.py`, `indicators.py`):**
+- **`signal["ema200Slope"]`** (UI meta chip): **D1** closes → `calc_ema(..., 200)` → **percent change over 20 daily bars**: `(e[-1]-e[-21])/e[-21]*100`. **Not** passed into `calc_confluence` (see F11 comment in `analyze_pair`).
+- **`snap["ema200Slope10"]`** from `calc_indicators(candles)`: **10 bars** on **whatever timeframe** those candles are (10× H4 on H4 series, 10× D1 on D1 series). **Forex** trend gate uses **`d1_snap["ema200Slope10"]`**, not the chip value.
+- Comparing the chip to **H4** TradingView EMA200 slope is misleading — different TF and lookback.
+
+**Pair cleanup:** `FET/USDT` removed from pair lists, feeds, `static/index.html` TV map, `legacy/ccxt_executor.py`, `MANUAL.md`.
+
 ## Recent Changes (2026-03-25) — Crypto Engine A Simplification
 
-**Goal:** Reduce crypto factor overload — fewer redundant/correlated indicators, live candle data from Binance WS, fix phantom "missing data" penalty.
+**Goal:** Reduce crypto factor overload — fewer redundant/correlated indicators, live H1 candle data from Binance kline WS, fix phantom "missing data" penalty.
 
-**Binance Kline WebSocket (`candle_feeds.py`):**
-- Added `BinanceCandleWS` class — subscribes to `@kline_1h` combined stream for all enabled crypto pairs on `fstream.binance.com`.
-- Feeds kline OHLCV ticks into `CandleBuilder.on_tick()` — same interface EODHD WS uses for forex.
-- Removed crypto exclusion guards: `candles_cache.py` line 262 (`type != crypto`), `candle_feeds.py` line 473 (`endpoint != crypto`), `candle_feeds.py` seed() skip.
-- Added `CandleBuilder._seed_crypto()` — seeds H1/H4/D1 from Binance REST klines on cold start (replaces EODHD seed skip).
-- Crypto now uses CandleBuilder path in `fetch_candles()` for all TFs (was REST-only with 55-min H1 TTL staleness).
-- `BinanceLivePriceWS` (`!ticker@arr`) still runs for live execution price — `BinanceCandleWS` is candle OHLCV only.
-- Started alongside price WS in `athena.py` startup; stopped in graceful shutdown.
+**Live crypto H1 + routing (superseded detail 2026-03-26):** `BinanceCandleWS` + `on_kline`, `fetch_candles` H1-only CandleBuilder for crypto, H4/D1 REST, `_seed_crypto` H1-only + `tick_count` purge — see **Recent Changes (2026-03-26)** above.
 
 **Factor Weight Simplification (`config.yaml`):**
 - `FACTOR_WEIGHTS.crypto`: microstructure zeroed (0 — candle proxies redundant with momentum/volume), carry zeroed (0 — never fires), structure reduced (0.5 — fib noisy on perps), derivatives tuned (1.2 — funding primary), volatility reduced (0.8), trend_strength explicit (1.0).
@@ -387,8 +409,8 @@ Multi-asset algorithmic trading system: Flask dashboard, Engine A confluence/fac
 | File | Purpose | Size |
 |------|---------|------|
 | `athena.py` | Flask app, most API routes, `analyze_pair`, pair lists, core orchestration | ~6500 lines — use offset/limit |
-| `candles_cache.py` | TTL candle cache, `fetch_candles` routing, `extract_candles`, forex WS bar merge | |
-| `candle_feeds.py` | Live prices, EODHD/Binance WebSockets, `CandleBuilder`, `fetch_candles_live` | |
+| `candles_cache.py` | TTL candle cache, `fetch_candles` (H1→`fetch_candles_live` first; crypto H4/D1→Binance REST), `extract_candles`, forex WS bar merge | |
+| `candle_feeds.py` | Live prices, EODHD/Binance WS, `CandleBuilder` (`on_tick` forex H1; `on_kline` crypto H1 from `BinanceCandleWS`), `fetch_candles_live` | |
 | `athena_runtime.py` | `set_runtime` / `rt()` bindings; `executed_signals` dedupe set | |
 | `execution.py` | Execution-related Flask routes (`register_execution_routes`) | |
 | `scanner.py` | `run_full_scan` and scan pipeline wiring | |
@@ -420,7 +442,7 @@ Multi-asset algorithmic trading system: Flask dashboard, Engine A confluence/fac
 | `duka_volume.py` | Dukascopy tick volume for forex — non-blocking during scans (returns 1.0 if cache not ready) | |
 | `forex_scoring.py` | Dedicated forex scoring engine (rules-based, 0–1 scale) — trend gate + session filter + RSI pullback + COT boost | |
 | `auto_trader.py` | Autonomous trade executor with per-class auto-trade thresholds (dict-based, per CONFIG) | |
-| `static/index.html` | Dashboard UI: signals, backtest, screener tabs — pair selector populated dynamically from `/api/pairs` | ~2550 lines |
+| `static/index.html` | Dashboard UI: signals, backtest, screener; ACM charts (`/api/candles` `limit=500`, `_acmEmaLineData` for EMAs); pair list from `/api/pairs` | ~2550 lines |
 | `tests/test_athena.py` | Main test suite (56+ tests) | |
 | `tests/test_factor_scoring.py` | Factor scoring unit tests | |
 | `test_indicators.py` | Pure indicator unit tests (imports from `indicators` only) | |
@@ -436,7 +458,7 @@ Multi-asset algorithmic trading system: Flask dashboard, Engine A confluence/fac
 run_full_scan(style, asset_class)
   └─ for each active pair (ThreadPoolExecutor, 3 workers)
        └─ analyze_pair(pair, btc_bias, style)
-            ├─ fetch_candles(pair, "D1"/"H4"/"H1", limit)   ← TTL cache + live bypass for non-crypto
+            ├─ fetch_candles(pair, "D1"/"H4"/"H1", limit)   ← H1: CandleBuilder if enough bars; crypto H4/D1: Binance REST; else TTL + REST fallbacks
             ├─ calc_indicators(candles)                       ← returns {snap: {...}} dict
             ├─ calc_confluence(d1i, h4i, h1i, vr, stoch, pair, btc_bias, ...)
             │    ├─ get_pair_vote_weights(pair)               ← merges class weights + pair profile
@@ -585,9 +607,10 @@ Post-fill failure triggers emergency market close (1 retry on SL/TP set before e
 ### `_max_score_for_pair(pair)` — athena.py
 Computes theoretical max score using `get_pair_vote_weights(pair)`, subtracts `W_SESS×0.5` to match `calc_confluence` accounting.
 
-### `fetch_candles(pair, tf, limit)` — athena.py
-- **Crypto pairs**: Routes to Binance REST API (cached with TTL)
-- **Non-crypto pairs**: Tries `fetch_candles_live()` first (EODHD WebSocket-built cache); falls back to TTL cache
+### `fetch_candles(pair, tf, limit)` — `candles_cache.py` (injected from monolith)
+- **H1 (all pairs, not polygon):** Tries `fetch_candles_live()` / `CandleBuilder.get_candles` first if bar count ≥ min (crypto H1: Binance `@kline_1h` + seed); else TTL then REST.
+- **Crypto H4/D1:** Binance REST native intervals (not rolled up from CandleBuilder).
+- **Non-crypto H4/D1:** Source-specific REST / cache (EODHD, etc.) per `pair["source"]`.
 - **Cache TTL keys**: Uppercase `"H1"`, `"H4"`, `"D1"` (not lowercase)
 - **TTL**: H1=55 min, H4=3h55m, D1=23h
 - **Fallback chain**: EODHD → YFinance (TwelveData removed due to rate limits)
