@@ -6,51 +6,16 @@
 - Fixed EMA200 line rendering bug that caused undefined values and gaps
 - Added proper bounds checking to prevent array overflow when chart index exceeds EMA array length
 - Improved EMA calculation accuracy with proper SMA seeding and null handling for initial periods
-- Ensures consistent EMA200 display across all forex, crypto, and commodity charts
 
 **Forex Data Source Testing (`athena.py`, `candles_cache.py`):**
 - Enabled Polygon as primary source for GBP/USD test pair to compare native H4/D1 data vs resampled H1
-- Added debug logging to track Polygon data quality and timestamp alignment
-- Fixed CandleBuilder routing to skip H4/D1 for Polygon sources (prevents mixed data paths)
-- Implemented deterministic H1 resampling for forex chart consistency with epoch-anchored boundaries
+- Fixed CandleBuilder routing to skip H4/D1 for Polygon sources
+- Implemented deterministic H1 resampling for forex chart consistency
 
-**Chart Data Improvements:**
-- Skip forming bar merge for Polygon sources (provides completed bars only)
-- Added canonical H1 timeline approach for EODHD forex pairs
-- Prevents candle spikes and gaps from mixed provider data sources
-
-## Recent Changes (2026-03-28) — Backtest `_rt()` fix, live-threshold parity, full-scan `sqn`, sticky toasts, scan quantile
-
-**`backtest_runner.py` — runtime accessor**
-- **`_rt()`** must call **`_art_rt()`** where `_art_rt` is `athena_runtime.rt` (the function). **`_art_rt.rt()`** was wrong (`'function' object has no attribute 'rt'`) and broke crypto/all Engine A backtests after fetch; **`/api/backtest`** could return generic **500** when **`_pair_max_score`** ran outside the fetch `try`.
-
-**`backtest_runner.py` — Engine A gate matches live scan**
-- **`bt_min = get_min_confluence_threshold(pair)`** once per run for all styles and forex. Chain: **`PAIR_PROFILES.min_confluence` → `MIN_CONFLUENCE_GROUP` → `MIN_CONFLUENCE_CLASS`**. Profile **`bt_min`** is no longer the Engine A backtest score floor.
-
-**`backtest_runner.py` — full backtest `KeyError: 'sqn'`**
-- **Zero-trade** pairs used to **`return {}`**, which was treated as success and broke **`results.sort(key=… x['sqn'])`**. Now returns a **full zero-trade payload** (`sqn: 0`, `equityCurve: [1.0]`, `funnel`, `wfSplit`, etc.). Sort uses **`x.get("sqn")`**.
-
-**Dashboard (`static/index.html`) — sticky toasts**
-- **`showToast(msg, isErr, opts)`** — **`opts.sticky`** or **auto-sticky** when the message matches **SIGNAL_FLIPPED**, **STALE**, **DUPLICATE**, **DECAY**, or direction **flip / changed / conflict**. **Dismiss** + **Escape**; other toasts still auto-hide ~3.5s.
-
-**Scan quantile (`scanner.py`, `config.py` / `config.yaml`)**
-- Optional **cross-sectional** effective floors per asset type from the **current scan** (`SCAN_QUANTILE_*`). **`SCAN_QUANTILE_EXCLUDE_TYPES`** (e.g. **`crypto`**) skips quantile for those types. Scan JSON includes **`scanQuantileFloors`**. Tests: **`tests/test_scan_quantile.py`**.
-
-**Also in this batch:** **`forex_scoring.py`**, **`tests/test_scoring_group_routing.py`**, and **config** edits — see git diff for line-level threshold / routing tweaks.
-
-## Recent Changes (2026-03-27) — Live scoring candle depth, `scan_candle_limits`, chart max 1000
-
-**Goal:** One source of truth for D1/H4/H1 bar counts used by Engine A (`analyze_pair`), naked analysis, Engine C B-leg fetches, compare/scan helpers, and style level recompute — aligned with deeper dashboard candles and EMA200 vs TradingView.
-
-**`scan_candle_limits()` (`config.py`):** returns `{"D1","H4","H1"}` from **`CONFIG["D1_CANDLES"]`**, **`H4_CANDLES`**, **`H1_CANDLES`** (yaml-overridable). Docstring notes all asset classes route through **`fetch_candles`** by pair `source`.
-
-**Defaults (`config.yaml` / `config.py`):** **`D1_CANDLES: 1001`**, **`H4_CANDLES: 1000`**, **`H1_CANDLES: 1000`** — after **`analyze_pair`** forming-bar drop, ~**1000 / 999 / 999** closed bars. Replaces older **`250/250/250`** defaults (see git history: `b46dca19` introduced 250-wide windows).
-
-**Call sites wired to `scan_candle_limits()`:** `analyze_pair`, `_compute_naked_analysis` (`athena.py`); **`/api/scan-naked`** per-TF `CONFIG["{TF}_CANDLES"]` with sane fallback; **`scanner.py`** (compare path); **`execution.py`** (Engine C candle fetch); **`athena_app/services/candle_service.py`** (`recompute_levels_for_style`).
-
-**Cache keys:** In-memory TTL cache includes **`limit`** in the key (`candles_cache.py`) so chart `limit=1000` does not collide with scan entries; naked scan `_fetch_cached_only` key includes **`limit`** too.
-
-**Dashboard:** **`GET /api/candles`** clamps `limit` to **1000** (was 500); ACM **`static/index.html`** requests **`limit=1000`** for chart loads.
+**Factor Scoring Simplification (`factor_scoring.py`):**
+- Removed correlation filter complexity from factor scoring
+- Simplified function to return all indicators with full weights
+- Reduces computational overhead and scoring complexity
 
 ## Debugging & audit playbook — cross-layer bugs (scoring, UI, candles)
 
