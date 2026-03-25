@@ -189,55 +189,8 @@ def _build_indicator_series(
 def _apply_correlation_filter(
     indicator_scalars: Dict[str, Optional[float]], h4_candles: List[dict], window: int
 ) -> Dict[str, float]:
-    """Per-blueprint correlation filter:
-    1. Compute pairwise rolling correlation between indicator time series.
-    2. If abs(correlation) > 0.8, reduce the weaker indicator's effective weight by 50%.
-    3. Cap total weight reduction per indicator at 50%.
-
-    Returns dict of indicator_name → weight_multiplier (0.5–1.0).
-    Disabled when INDICATOR_CORRELATION_ENABLED=false (default) to avoid O(n²) cost in backtest.
-    """
-    weight_mult: Dict[str, float] = {k: 1.0 for k in indicator_scalars}
-    if not CONFIG.get("INDICATOR_CORRELATION_ENABLED", False):
-        return weight_mult
-    series = _build_indicator_series(h4_candles, window)
-    if not series:
-        return weight_mult
-
-    # Only correlate indicators we have both scalar and series for
-    corr_keys = [
-        k for k in series if k in indicator_scalars and indicator_scalars[k] is not None
-    ]
-    checked = set()
-    for i, k1 in enumerate(corr_keys):
-        for k2 in corr_keys[i + 1 :]:
-            pair_key = tuple(sorted([k1, k2]))
-            if pair_key in checked:
-                continue
-            checked.add(pair_key)
-            corr_raw = _pearson(series[k1], series[k2])
-
-            if corr_raw is not None:
-                corr = corr_raw
-
-                if abs(corr) > 0.8:
-                    v1 = (
-                        abs(indicator_scalars[k1])
-                        if indicator_scalars[k1] is not None
-                        else 0.0
-                    )
-                    v2 = (
-                        abs(indicator_scalars[k2])
-                        if indicator_scalars[k2] is not None
-                        else 0.0
-                    )
-                    weaker = k2 if v1 >= v2 else k1
-                    # Reduce by 50% but cap total reduction at 50%
-                    weight_mult[weaker] = max(0.5, weight_mult[weaker] - 0.5)
-                    log.debug(
-                        f"[CORR] {k1}<->{k2} r={corr:.2f}, reducing {weaker} weight to {weight_mult[weaker]:.2f}"
-                    )
-    return weight_mult
+    """Return all indicators with full weights - correlation filter removed."""
+    return {k: 1.0 for k in indicator_scalars}
 
 
 # ── Factor scoring ───────────────────────────────────────────────────────────
