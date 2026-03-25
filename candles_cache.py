@@ -35,6 +35,96 @@ def extract_candles(resp) -> list | None:
     return None
 
 
+def resample_from_h1(
+    h1_candles: list[dict] | None, target_tf: str, limit: int
+) -> list[dict] | None:
+    """Build H4/D1 candles from a canonical H1 series.
+
+    This is used for forex chart consistency (Vision/screenshots) so H1/H4/D1
+    come from one timeline instead of mixed provider paths.
+    """
+    if not h1_candles:
+        return None
+
+    tf = (target_tf or "").upper()
+    if tf == "H1":
+        out = list(h1_candles)
+        return out[-limit:] if len(out) > limit else out
+
+    freq = {"H4": "4h", "D1": "1D"}.get(tf)
+    if not freq:
+        return None
+
+    try:
+        import pandas as pd
+    except Exception:
+        return None
+
+    rows = []
+    for c in h1_candles:
+        ts = c.get("time", c.get("datetime"))
+        if ts is None:
+            continue
+        try:
+            o = float(c.get("open"))
+            h = float(c.get("high"))
+            l = float(c.get("low"))
+            cl = float(c.get("close"))
+        except (TypeError, ValueError):
+            continue
+        rows.append(
+            {
+                "time": ts,
+                "open": o,
+                "high": h,
+                "low": l,
+                "close": cl,
+                "vol": float(c.get("vol", c.get("volume", 0)) or 0),
+            }
+        )
+
+    if not rows:
+        return None
+
+    df = pd.DataFrame(rows)
+    df["time"] = pd.to_datetime(df["time"], utc=True, errors="coerce")
+    df = df.dropna(subset=["time"]).sort_values("time").drop_duplicates(subset=["time"])
+    if df.empty:
+        return None
+    df = df.set_index("time")
+
+    # Use epoch-anchored right-closed buckets for stable 4h/day boundaries.
+    agg = (
+        df.resample(freq, origin="epoch", label="right", closed="right")
+        .agg(
+            {
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "vol": "sum",
+            }
+        )
+        .dropna(subset=["open", "close"])
+    )
+
+    if agg.empty:
+        return None
+
+    out = [
+        {
+            "time": idx.isoformat(),
+            "open": float(r["open"]),
+            "high": float(r["high"]),
+            "low": float(r["low"]),
+            "close": float(r["close"]),
+            "vol": float(r["vol"]),
+        }
+        for idx, r in agg.iterrows()
+    ]
+    return out[-limit:] if len(out) > limit else out
+
+
 def candle_time_epoch_utc(val) -> int | None:
     """Normalize candle timestamp to UTC unix seconds (for bar alignment compare)."""
     from datetime import datetime, timezone

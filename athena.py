@@ -85,6 +85,7 @@ from candles_cache import (  # noqa: E402
     extract_candles as _extract_candles,
     fetch_candles as _fetch_candles_routed,
     merge_forex_forming_ws as _merge_forex_forming_ws_core,
+    resample_from_h1 as _resample_from_h1,
 )
 
 
@@ -6328,18 +6329,41 @@ def api_candles():
     if not pair:
         return jsonify({"error": f"Unknown symbol: {symbol}"}), 404
 
-    # Dashboard chart: forex H1/H4 default = EODHD intraday resample (matches vendor charts),
-    # then merge only the forming bar from CandleBuilder (EODHD WS) — no mixed-history cache.
-    # ?source=live uses fetch_candles only (debug / compare WS+cache series).
+    # Dashboard chart: use a forex-only aligned candle path so H1/H4/D1 for Vision
+    # come from one canonical H1 timeline (EODHD + optional forming WS merge).
+    # ?source=live keeps the generic shared fetch path for debugging.
     ptype = pair.get("type") or ""
     source_q = (request.args.get("source") or "").strip().lower()
     chart_source = "live" if source_q == "live" else "shared"
-    candles = fetch_candles(pair, tf, limit)
-    
-    # Skip forming bar merge for Polygon (provides completed bars only)
-    if candles and pair.get("source") != "polygon":
-        # Only merge forming bars for EODHD/yfinance sources
-        candles, _ = _merge_forex_forming_ws(candles, pair.get("display", ""), tf, limit)
+    candles = None
+
+    if ptype == "forex" and pair.get("source") == "eodhd" and source_q != "live":
+        # Fetch one canonical H1 stream and resample deterministically for H4/D1.
+        base_limit = {
+            "H1": limit,
+            "H4": min(max(limit * 4 + 8, 80), 9000),
+            "D1": min(max(limit * 24 + 24, 240), 9000),
+        }.get(tf, limit)
+        h1_series = _extract_candles(fetch_eodhd(pair, "H1", base_limit))
+        if h1_series:
+            h1_series, ws_note = _merge_forex_forming_ws(
+                h1_series, pair.get("display", ""), "H1", base_limit
+            )
+            candles = _resample_from_h1(h1_series, tf, limit)
+            if candles:
+                chart_source = "eodhd_h1_resampled"
+                if ws_note:
+                    chart_source += "+ws"
+
+    if not candles:
+        candles = fetch_candles(pair, tf, limit)
+        # Optional forming-bar merge for forex on generic/shared path.
+        if candles and ptype == "forex" and pair.get("source") != "polygon":
+            candles, ws_note = _merge_forex_forming_ws(
+                candles, pair.get("display", ""), tf, limit
+            )
+            if ws_note and chart_source == "shared":
+                chart_source = "shared+ws"
 
     if not candles:
         return jsonify({"error": f"No candle data for {symbol} {tf}"}), 404
