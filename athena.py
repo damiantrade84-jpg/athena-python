@@ -4260,7 +4260,7 @@ def api_naked_analysis():
 
 @app.route("/api/compare-engines", methods=["POST"])
 def api_compare_engines():
-    d = request.json or {}
+    d = request.get_json(silent=True) or {}
     sig = d.get("signal")
     if not isinstance(sig, dict):
         return jsonify({"error": "Invalid payload"}), 400
@@ -4340,7 +4340,7 @@ def api_compare_engines():
 
 @app.route("/api/scan-naked", methods=["POST"])
 def api_scan_naked():
-    d = request.json or {}
+    d = request.get_json(silent=True) or {}
     asset_class = d.get("assetClass", "crypto").lower()
     requested_style = d.get("style", "auto")
     _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
@@ -5533,7 +5533,7 @@ def api_killswitch():
 
     global _kill_switch
 
-    d = request.json or {}
+    d = request.get_json(silent=True) or {}
 
     action = d.get("action", "toggle")
 
@@ -5557,7 +5557,7 @@ def api_killswitch_pair(display: str):
 
     global _disabled_pairs, ACTIVE_PAIRS
 
-    d = request.json or {}
+    d = request.get_json(silent=True) or {}
 
     enabled = d.get("enabled", True)
 
@@ -5621,7 +5621,7 @@ def _update_yaml_toggle(state: bool):
 def api_test_mode():
     """Toggle test mode: drops score thresholds, enables force-execute on all signals. For demo accounts only."""
     global _test_mode
-    d = request.json or {}
+    d = request.get_json(silent=True) or {}
     action = d.get("action", "toggle")
     if action == "on":
         _test_mode = True
@@ -5807,7 +5807,7 @@ def api_auto_trade_status():
 @app.route("/api/auto-trade", methods=["POST"])
 def api_auto_trade_toggle():
 
-    d = request.json or {}
+    d = request.get_json(silent=True) or {}
 
     action = d.get("action", "toggle")
 
@@ -5871,7 +5871,7 @@ def api_meta_analysis():
 def api_inject_sentiment():
     """Inject external sentiment score (from LunarCrush, Crypto.com, etc.)"""
 
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
 
     pair = data.get("pair", "")
 
