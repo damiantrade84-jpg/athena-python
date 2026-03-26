@@ -699,8 +699,9 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
     <button class="tab-btn" id="tab-trades" onclick="switchTab('trades')">TRADES <span id="tradesTabCount" class="tab-badge"></span></button>
     <button class="tab-btn" id="tab-backtest" onclick="switchTab('backtest')">BACKTEST</button>
     <button class="tab-btn" id="tab-screener" onclick="switchTab('screener')">SCREENER</button>
-    <button class="tab-btn" id="tab-performance" onclick="switchTab('performance');loadPerformance();loadAutoTradeLog();loadFailedExecutions()">PERFORMANCE</button>
     <button class="tab-btn" id="tab-enginec" onclick="switchTab('enginec')">ENGINE C</button>
+    <button class="tab-btn" id="tab-scalp" onclick="switchTab('scalp')">⚡ SCALP</button>
+    <button class="tab-btn" id="tab-performance" onclick="switchTab('performance');loadPerformance();loadAutoTradeLog();loadFailedExecutions()">PERFORMANCE</button>
     <button class="tab-btn" id="tab-markets" onclick="switchTab('markets');loadMarketHours()">MARKETS</button>
   </div>
 
@@ -888,6 +889,28 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
       </div>
     </div>
   </div><!-- /panel-enginec -->
+
+  <div class="tab-panel" id="panel-scalp">
+    <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px;flex-wrap:wrap;">
+      <h2 style="margin:0;font-size:18px;font-family:'Syne',sans-serif;color:var(--text);">
+        ⚡ Scalp Engine <span style="font-size:12px;color:var(--muted);font-weight:400">M15 Structure + M5 Tactical</span>
+      </h2>
+      <button onclick="runScalpScan()" id="scalpScanBtn" style="background:var(--accent);
+        border:none;color:#000;padding:8px 20px;border-radius:6px;cursor:pointer;
+        font-family:'Syne',sans-serif;font-size:12px;font-weight:800;">
+        SCAN SCALPS
+      </button>
+      <span id="scalpStatus" style="font-size:11px;color:var(--muted);font-family:'Space Mono',monospace;"></span>
+    </div>
+
+    <div id="scalpSignals" class="signal-grid">
+      <div class="empty-state">
+        <div class="icon">⚡</div>
+        <h3>Ready to Scalp</h3>
+        <p>Click SCAN SCALPS to find high-probability M15 zones with M5 entry confirmation.</p>
+      </div>
+    </div>
+  </div>
 
   <div class="tab-panel" id="panel-markets">
     <div class="mh-panel">
@@ -5022,52 +5045,21 @@ async function runECVisionConfirm(sid) {
     return _c.toDataURL('image/png');
   }
 
-  // ── Step 1: D1 bias screenshot ─────────────────────────────────────────────
-  btn.textContent = '&#129504; Loading D1 bias...';
-  openAcm(consensus.symbol, 'D1', consensus);
-  var _d1Ready = await _waitChartReady(10);
-  if (!_d1Ready) {
-    btn.textContent = '&#129504; AI CONFIRM'; btn.disabled = false;
-    closeAcm(); showToast('D1 chart failed to load — try again', true); return;
-  }
-  await new Promise(function(r) { setTimeout(r, 1000); });
-  btn.textContent = '&#129504; Capturing D1...';
-  var d1Base64 = await _captureChart();
-  closeAcm();
-
-  // Brief pause between renders
-  await new Promise(function(r) { setTimeout(r, 400); });
-
-  // ── Step 2: H4 entry screenshot ────────────────────────────────────────────
-  btn.textContent = '&#129504; Loading H4 entry...';
+  // ── Step 1: H4 entry screenshot ────────────────────────────────────────────
+  btn.textContent = '&#129504; Loading H4 chart...';
   openAcm(consensus.symbol, 'H4', consensus);
   var _h4Ready = await _waitChartReady(20);
   if (!_h4Ready) {
     btn.textContent = '&#129504; AI CONFIRM'; btn.disabled = false;
     closeAcm(); showToast('H4 chart failed to load — try again', true); return;
   }
-  await new Promise(function(r) { setTimeout(r, 1000); });
+  await new Promise(function(r) { setTimeout(r, 1200); });
   btn.textContent = '&#129504; Capturing H4...';
   var h4Base64 = await _captureChart();
   closeAcm();
 
-  await new Promise(function(r) { setTimeout(r, 400); });
-
-  // ── Step 3: H1 entry screenshot (triple-screen) ────────────────────────────
-  btn.textContent = '&#129504; Loading H1 entry...';
-  openAcm(consensus.symbol, 'H1', consensus);
-  var _h1Ready = await _waitChartReady(30);
-  if (!_h1Ready) {
-    btn.textContent = '&#129504; AI CONFIRM'; btn.disabled = false;
-    closeAcm(); showToast('H1 chart failed to load — try again', true); return;
-  }
-  await new Promise(function(r) { setTimeout(r, 1000); });
-  btn.textContent = '&#129504; Capturing H1...';
-  var h1Base64 = await _captureChart();
-  closeAcm();
-
-  // ── Step 4: Send D1 + H4 + H1 to AI ────────────────────────────────────────
-  btn.textContent = '&#129504; Analysing D1+H4+H1...';
+  // ── Step 2: Send H4 to AI ──────────────────────────────────────────────────
+  btn.textContent = '&#129504; Analysing H4...';
 
   try {
     var visionResp = await fetch('/api/chart-analysis', {
@@ -5075,8 +5067,6 @@ async function runECVisionConfirm(sid) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
         image: h4Base64,
-        image_d1: d1Base64,
-        image_h1: h1Base64,
         symbol: consensus.symbol,
         tf: 'H4',
         signal: {
@@ -5294,6 +5284,144 @@ document.addEventListener('DOMContentLoaded', function() {
   loadMarketHours();
   _mhRefreshTimer = setInterval(loadMarketHours, 60000);
 });
+
+// ── Scalp Engine (Engine D) ──────────────────────────────────────────────────
+async function runScalpScan() {
+  var btn = document.getElementById('scalpScanBtn');
+  var status = document.getElementById('scalpStatus');
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning...'; }
+  if (status) status.textContent = 'M15/M5 structural check...';
+  try {
+    var resp = await fetch('/api/scalp-scan', {method:'POST'});
+    var data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    renderScalpSignals(data.signals || []);
+    if (status) status.textContent = 'Found ' + (data.signals || []).length + ' scalps | ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    if (status) status.textContent = 'Error: ' + e.message;
+    showToast('Scalp Scan: ' + e.message, true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'SCAN SCALPS'; }
+  }
+}
+
+function renderScalpSignals(signals) {
+  var grid = document.getElementById('scalpSignals');
+  if (!grid) return;
+  if (!signals || signals.length === 0) {
+    grid.innerHTML = '<div class="empty-state"><div class="icon">⚡</div><h3>No Scalps Found</h3><p>Try again later or check MT5 connection.</p></div>';
+    return;
+  }
+  grid.innerHTML = signals.map(function(s, i) { return buildScalpCard(s, i); }).join('');
+}
+
+function buildScalpCard(s, idx) {
+  var sid = (s.symbol||'').replace(/[\/=^.]/g, '_');
+  var gk = s.ai_grade || 'C';
+  var dirCls = s.direction === 'LONG' ? 'LONG' : 'SHORT';
+  var riskColor = s.risk_level === 'LOW' ? 'var(--bull)' : (s.risk_level === 'HIGH' ? 'var(--bear)' : 'var(--warn)');
+  
+  return '<div class="signal-card scalp-card" id="scalp-card-'+sid+'" style="animation-delay:'+(idx*60)+'ms; border-left:4px solid '+riskColor+'">'+
+    '<div class="card-header">'+
+      '<div class="pair-info">'+
+        '<div class="pair-icon forex" style="background:rgba(0,212,255,0.1); color:var(--accent)">⚡</div>'+
+        '<div><div class="pair-name">'+s.symbol+'</div><div class="pair-type">Scalp M15/M5</div></div>'+
+      '</div>'+
+      '<span class="direction-badge '+dirCls+'">'+s.direction+'</span>'+
+      '<span class="ai-grade grade-'+gk+'" style="margin-left:8px">'+gk+' ('+s.ai_score+')</span>'+
+    '</div>'+
+    '<div class="card-body">'+
+      '<div style="font-size:11px; margin-bottom:10px; padding:10px; background:rgba(255,255,255,0.03); border-radius:8px; border:1px solid var(--border)">'+
+        '<div style="color:var(--accent); font-weight:800; font-size:10px; margin-bottom:6px; letter-spacing:0.05em">M15 STRUCTURE</div>'+
+        '<div style="color:var(--text); line-height:1.45; margin-bottom:10px">'+s.zone_desc+'</div>'+
+        '<div style="color:var(--bull); font-weight:800; font-size:10px; margin-bottom:6px; letter-spacing:0.05em; border-top:1px solid var(--border); padding-top:8px">M5 TRIGGER</div>'+
+        '<div style="color:var(--text); line-height:1.45">'+s.trigger_desc+'</div>'+
+      '</div>'+
+      '<div class="levels-grid">'+
+        '<div class="level-box"><div class="level-label">Entry</div><div class="level-val">'+fmtPrice(s.entry)+'</div></div>'+
+        '<div class="level-box"><div class="level-label">SL</div><div class="level-val bear">'+fmtPrice(s.sl)+'</div></div>'+
+        '<div class="level-box"><div class="level-label">TP1</div><div class="level-val bull">'+fmtPrice(s.tp1)+'</div></div>'+
+      '</div>'+
+      '<div class="rr-row" style="border:none; margin-bottom:4px"><span class="conf-label">Risk/Reward</span><span class="rr-val">1:'+s.rr.toFixed(2)+'</span></div>'+
+      '<div id="scalp-vision-res-'+sid+'"></div>'+
+      '<div style="display:flex; gap:8px; margin-top:12px">'+
+        '<button class="analyze-btn" style="flex:1" onclick="runScalpVisionConfirm(this, \''+s.symbol+'\')">🧠 VISION</button>'+
+        '<button class="exec-btn '+dirCls+'" style="flex:2; margin-top:0" onclick="executeScalp(this, \''+s.symbol+'\')">EXECUTE SCALP</button>'+
+      '</div>'+
+    '</div>'+
+  '</div>';
+}
+
+async function executeScalp(btn, symbol) {
+  if (!confirm('Execute M5 Scalp trade for ' + symbol + '? Risk engine will be checked.')) return;
+  btn.disabled = true; btn.textContent = 'EXECUTING...';
+  try {
+    var resp = await fetch('/api/scalp-execute', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({symbol: symbol})
+    });
+    var data = await resp.json();
+    if (data.success) {
+      showToast('SCALP ORDER PLACED: ' + symbol + ' | Ticket: ' + data.ticket);
+      btn.textContent = 'EXECUTED - #' + data.ticket;
+      btn.classList.add('executed');
+    } else {
+      var err = data.error || 'Check Risk Engine';
+      if (data.approval && !data.approval.approved) err = 'Risk: ' + data.approval.reason;
+      showToast('SCALP REJECTED: ' + err, true);
+      btn.disabled = false; btn.textContent = 'RETRY EXECUTE';
+    }
+  } catch(e) {
+    showToast('Scalp Execution failed: ' + e.message, true);
+    btn.disabled = false; btn.textContent = 'RETRY';
+  }
+}
+
+async function runScalpVisionConfirm(btn, symbol) {
+    if (btn.disabled) return;
+    btn.disabled = true; btn.textContent = '📸...';
+    // Re-use ACM to take M15 screenshot
+    openAcm(symbol, 'M15'); 
+    await new Promise(function(r) { setTimeout(r, 2000); }); 
+    var img;
+    try {
+        img = await _captureChart();
+    } catch(e) {
+        showToast('Screenshot failed: ' + e.message, true);
+        btn.disabled = false; btn.textContent = '🧠 VISION';
+        closeAcm();
+        return;
+    }
+    closeAcm();
+    
+    btn.textContent = '🧠 Analyzing...';
+    try {
+        var resp = await fetch('/api/chart-analysis', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                image: img,
+                symbol: symbol,
+                tf: 'M15',
+                signal: { direction: 'SCALP M15/M5' } 
+            })
+        });
+        var data = await resp.json();
+        if (data.error) throw new Error(data.error);
+        
+        var sid = symbol.replace(/[\/=^.]/g, '_');
+        var resDiv = document.getElementById('scalp-vision-res-' + sid);
+        if (resDiv) {
+            resDiv.innerHTML = '<div style="margin-top:8px; padding:10px; background:rgba(0,212,255,0.04); border:1px solid rgba(0,212,255,0.2); border-radius:8px; font-size:10px; color:var(--text-secondary); line-height:1.5">'+
+                '<b style="color:var(--accent)">AI VISION VERDICT:</b> ' + (data.analysis || 'Analysis complete').substring(0, 400) + '...</div>';
+        }
+        btn.innerHTML = '🧠 REVIEWED';
+    } catch(e) {
+        showToast('Vision failed: ' + e.message, true);
+        btn.disabled = false; btn.textContent = '🧠 VISION';
+    }
+}
 </script>
 </body>
 </html>

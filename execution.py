@@ -811,3 +811,126 @@ def register_execution_routes(app: Flask) -> None:
         )
     if "/api/execute" not in rules:
         app.add_url_rule("/api/execute", "api_execute", api_execute, methods=["POST"])
+    if "/api/scalp-scan" not in rules:
+        app.add_url_rule(
+            "/api/scalp-scan",
+            "api_scalp_scan",
+            api_scalp_scan,
+            methods=["POST"],
+        )
+    if "/api/scalp-execute" not in rules:
+        app.add_url_rule(
+            "/api/scalp-execute",
+            "api_scalp_execute",
+            api_scalp_execute,
+            methods=["POST"],
+        )
+
+
+def api_scalp_scan():
+    """Engine D scalp scan — M15 zones + M5 entry triggers via MT5."""
+    from scalp_engine import get_scalp_pairs, run_scalp_scan
+    
+    d = request.get_json() or {}
+    requested_pairs = d.get("pairs")
+    
+    if not requested_pairs or requested_pairs == "all":
+        pairs = get_scalp_pairs()
+    elif isinstance(requested_pairs, list):
+        pairs = requested_pairs
+    else:
+        return jsonify({"error": "Invalid pairs list"}), 400
+        
+    try:
+        results = run_scalp_scan(pairs)
+        return jsonify(results)
+    except Exception as e:
+        rt().log.error(f"[SCALP API] Scan error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+def api_scalp_execute():
+    """Execute a scalp signal after passing risk check."""
+    _r = rt()
+    d = request.get_json() or {}
+    sig = d.get("signal")
+    _sizing_override = float(d.get("sizing_override", 1.0))
+    
+    if not sig:
+        return jsonify({"error": "Missing signal data"}), 400
+        
+    try:
+        from risk_engine import risk_check
+        from mt5_executor import (
+            mt5_execute,
+            mt5_get_account,
+            mt5_get_positions,
+            mt5_get_symbol_info,
+        )
+
+        account = mt5_get_account()
+        if not account or account.get("error"):
+            return jsonify({"error": "MT5 not connected"}), 503
+            
+        pos_result = mt5_get_positions()
+        positions = pos_result.get("positions", []) if isinstance(pos_result, dict) else (pos_result or [])
+        
+        symbol_info = mt5_get_symbol_info(sig.get("pair"))
+        if not symbol_info or symbol_info.get("error"):
+            return jsonify({"error": f"Symbol {sig.get('pair')} not available on MT5"}), 400
+            
+        # Format signal for risk engine
+        approval = risk_check(
+            signal=sig,
+            account_balance=account["balance"],
+            account_equity=account["equity"],
+            open_positions=positions,
+            symbol_info=symbol_info,
+            kill_switch=_r.kill_switch(),
+            sizing_override=_sizing_override,
+            is_manual_override=True
+        )
+        
+        if not approval.approved:
+            _r.log.warning(f"[SCALP EXEC] {sig['pair']} REJECTED: {approval.reason}")
+            return jsonify({"error": f"Risk Blocked: {approval.reason}"}), 400
+            
+        result = mt5_execute(sig, approval)
+        if result.get("success"):
+            # Log to audit_db
+            try:
+                with sqlite3.connect(_r.AUDIT_DB, timeout=15.0) as con:
+                    con.execute(
+                        "INSERT INTO audit_log(ts,pair,score,direction,grade,risk,style,entry_price,sl,tp,volume,ticket,risk_amount,risk_pct) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (
+                            datetime.now(timezone.utc).isoformat(),
+                            sig["pair"],
+                            sig.get("ai_score", 0),
+                            sig.get("direction"),
+                            "SCALP",
+                            f"${approval.risk_amount}",
+                            "scalp",
+                            result.get("entryPrice"),
+                            sig.get("sl"),
+                            sig.get("tp1"),
+                            result.get("volume"),
+                            str(result.get("ticket", "")),
+                            approval.risk_amount,
+                            approval.risk_pct
+                        )
+                    )
+            except Exception as ae:
+                _r.log.warning(f"[SCALP API] Audit log failed: {ae}")
+                
+            return jsonify({
+                "success": True, 
+                "ticket": result.get("ticket"),
+                "message": "Scalp order filled!"
+            })
+        else:
+            return jsonify({"error": result.get("error", "MT5 execution failed")}), 400
+            
+    except Exception as e:
+        _r.log.error(f"[SCALP API] Execute error: {e}")
+        return jsonify({"error": str(e)}), 500
