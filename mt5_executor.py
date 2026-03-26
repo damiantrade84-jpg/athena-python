@@ -191,7 +191,7 @@ def mt5_map_symbol(athena_display: str) -> str | None:
 
 
 def mt5_connect() -> bool:
-    """Initialize MT5 terminal connection. Uses env vars for credentials."""
+    """Initialize MT5 terminal connection. Uses env vars for terminal path and credentials."""
 
     global _connected, _last_connect_attempt
 
@@ -215,12 +215,27 @@ def mt5_connect() -> bool:
 
     _last_connect_attempt = now
 
-    if not mt5.initialize():
-        log.error(f"[MT5] initialize() failed: {mt5.last_error()}")
+    terminal_path = os.environ.get("MT5_PATH", "").strip()
+
+    if terminal_path and not os.path.exists(terminal_path):
+        log.error(f"[MT5] MT5_PATH does not exist: {terminal_path}")
 
         _connected = False
 
         return False
+
+    init_kwargs = {"path": terminal_path} if terminal_path else {}
+
+    if not mt5.initialize(**init_kwargs):
+        target = terminal_path or "default active terminal"
+        log.error(f"[MT5] initialize() failed for {target}: {mt5.last_error()}")
+
+        _connected = False
+
+        return False
+
+    if terminal_path:
+        log.info(f"[MT5] Connected via pinned terminal: {terminal_path}")
 
     # Login if credentials provided
 
