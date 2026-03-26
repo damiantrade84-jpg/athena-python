@@ -5649,6 +5649,155 @@ def api_test_mode_status():
 # ── Auto-Trade Bot endpoints ──────────────────────────────────────────────────
 
 
+def _scalp_ui_signal(raw_signal: dict) -> dict:
+    """Normalize Engine D output to the shape expected by the scalp tab."""
+    ai_grade = str(raw_signal.get("ai_grade", "C") or "C").upper()
+    risk_level = (
+        "LOW"
+        if ai_grade == "A"
+        else "MEDIUM"
+        if ai_grade == "B"
+        else "HIGH"
+    )
+    zone_conditions = raw_signal.get("zone_conditions", []) or []
+    zone_desc = (
+        f"{raw_signal.get('zone_type', 'zone').upper()} near {raw_signal.get('zone_level')} "
+        f"with {len(zone_conditions)} condition(s): {', '.join(zone_conditions) or 'none'}"
+    )
+    trigger_desc = (
+        f"{raw_signal.get('trigger_type', 'trigger')} + "
+        f"{raw_signal.get('momentum_method', 'momentum confirmation')}"
+    )
+    return {
+        "symbol": raw_signal.get("pair", ""),
+        "pair": raw_signal.get("pair", ""),
+        "direction": raw_signal.get("direction", ""),
+        "entry": raw_signal.get("price"),
+        "price": raw_signal.get("price"),
+        "sl": raw_signal.get("sl"),
+        "tp1": raw_signal.get("tp1"),
+        "tp2": raw_signal.get("tp2"),
+        "rr": float(raw_signal.get("rr1", 0.0) or 0.0),
+        "ai_grade": ai_grade,
+        "ai_score": raw_signal.get("ai_score", 0),
+        "risk_level": risk_level,
+        "zone_desc": zone_desc,
+        "trigger_desc": trigger_desc,
+        "engine": raw_signal.get("engine", "SCALP"),
+        "session": raw_signal.get("session"),
+        "spread_pips": raw_signal.get("spread_pips"),
+        "timestamp": raw_signal.get("timestamp"),
+    }
+
+
+@app.route("/api/scalp-scan", methods=["POST"])
+def api_scalp_scan():
+    """Run Engine D scalp scan and return frontend-friendly JSON."""
+    try:
+        from scalp_engine import get_scalp_pairs, run_scalp_scan
+
+        payload = request.get_json(silent=True) or {}
+        pairs = payload.get("pairs")
+        if not isinstance(pairs, list) or not pairs:
+            pairs = get_scalp_pairs()
+
+        result = run_scalp_scan(pairs)
+        signals = [_scalp_ui_signal(s) for s in (result.get("signals", []) or [])]
+        return jsonify(
+            {
+                "signals": signals,
+                "skipped": result.get("skipped", []),
+                "scanned": result.get("scanned", len(pairs)),
+                "session": result.get("session"),
+                "sessions_active": result.get("sessions_active", []),
+                "reason": result.get("reason"),
+            }
+        )
+    except Exception as e:
+        log.error(f"api_scalp_scan error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/scalp-execute", methods=["POST"])
+def api_scalp_execute():
+    """Execute a single Engine D scalp setup through the normal MT5 risk path."""
+    try:
+        from scalp_engine import run_scalp_scan
+        from risk_engine import risk_check
+        from mt5_executor import (
+            mt5_execute,
+            mt5_get_account,
+            mt5_get_positions,
+            mt5_get_symbol_info,
+        )
+
+        payload = request.get_json(silent=True) or {}
+        symbol = (payload.get("symbol") or "").strip()
+        if not symbol:
+            return jsonify({"error": "Missing symbol"}), 400
+
+        scan = run_scalp_scan([symbol])
+        raw_signals = scan.get("signals", []) or []
+        if not raw_signals:
+            reason = scan.get("reason") or "No valid scalp setup found"
+            skipped = scan.get("skipped", []) or []
+            if skipped:
+                reason = skipped[0].get("reason", reason)
+            return jsonify({"success": False, "error": reason}), 200
+
+        signal = raw_signals[0]
+        account = mt5_get_account()
+        if not account or account.get("error"):
+            return jsonify({"error": "MT5 not connected"}), 503
+
+        positions_resp = mt5_get_positions()
+        positions = (
+            positions_resp.get("positions", [])
+            if isinstance(positions_resp, dict)
+            else (positions_resp or [])
+        )
+
+        symbol_info = mt5_get_symbol_info(symbol)
+        if not symbol_info or symbol_info.get("error"):
+            return jsonify({"error": f"Symbol '{symbol}' not available on MT5"}), 200
+
+        approval = risk_check(
+            signal=signal,
+            account_balance=account["balance"],
+            account_equity=account["equity"],
+            open_positions=positions,
+            symbol_info=symbol_info,
+            kill_switch=_kill_switch,
+        )
+        if not approval.approved:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": f"Risk engine rejected: {approval.reason}",
+                    "approval": approval.to_dict(),
+                }
+            ), 200
+
+        result = mt5_execute(signal, approval)
+        if not result.get("success"):
+            return jsonify(
+                {"success": False, "error": result.get("error", "Execution failed")}
+            ), 200
+
+        return jsonify(
+            {
+                "success": True,
+                "ticket": result.get("ticket"),
+                "volume": result.get("volume"),
+                "entry_price": result.get("entry_price"),
+                "approval": approval.to_dict(),
+            }
+        )
+    except Exception as e:
+        log.error(f"api_scalp_execute error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/auto-trade", methods=["GET"])
 def api_auto_trade_status():
 
