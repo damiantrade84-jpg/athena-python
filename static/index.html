@@ -714,7 +714,8 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
   <div class="test-banner auto-banner" id="autoTradeBanner">
     AUTO-TRADE BOT ACTIVE — Next scan: <span id="autoNextScan">--:--</span> UTC &nbsp;|&nbsp;
     Today: <span id="autoTradesToday">0</span>/<span id="autoTradesMax">3</span> trades &nbsp;|&nbsp;
-    Last: <span id="autoLastExec">none</span>
+    Last: <span id="autoLastExec">none</span> &nbsp;|&nbsp;
+    Gate: <span id="autoGateDisplay">--</span>
   </div>
   <div class="stats-bar" id="statsBar" style="display:none">
     <div class="stat-chip">Scanned: <span id="statScanned">0</span> pairs</div>
@@ -3339,6 +3340,7 @@ function _updateAutoTradeUI(d) {
       ? d.lastExecutionPair + ' ' + (d.lastExecutionDir||'')
       : 'none';
     document.getElementById('autoLastExec').textContent = last;
+    document.getElementById('autoGateDisplay').textContent = d.liveGateDisplay || '--';
   } else {
     tog.classList.remove('active');
     banner.classList.remove('visible');
@@ -3355,7 +3357,7 @@ async function toggleAutoTrade() {
     if (!resp.ok) throw new Error(d.error || ('HTTP ' + resp.status));
     _updateAutoTradeUI(d);
     showToast(d.enabled
-      ? 'AUTO-TRADE ON — Bot fires at H4 closes. Min score: ' + d.minScore + ' | Max/day: ' + d.maxDaily
+      ? 'AUTO-TRADE ON — Live gate: ' + (d.liveGateDisplay || 'combinedConviction') + ' | Max/day: ' + d.maxDaily
       : 'AUTO-TRADE OFF — Manual only.');
   } catch(e) { showToast('Auto-trade toggle failed: '+e.message, true); }
 }
@@ -4982,17 +4984,41 @@ function buildECVisionResult(c) {
       'border:1px solid rgba(0,212,255,0.3);border-radius:3px;padding:1px 5px;margin-left:6px;' +
       'vertical-align:middle;">D1+H4</span>';
   }
+  function esc(text) {
+    return String(text == null ? '' : text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
   var html = '<div style="background:rgba(168,85,247,0.05);border:1px solid rgba(168,85,247,0.2);' +
-    'border-radius:6px;padding:8px;font-size:11px;font-family:Space Mono,monospace;">' +
-    '<span style="color:' + color + ';font-weight:700;">' + icon + ' ' +
-    (c.vision_rating || '?') + '</span>' + tfBadge +
-    (c.vision_sl_flag && c.vision_sl_flag !== 'ok' ?
-      ' | SL: <span style="color:#f59e0b;">' + c.vision_sl_flag + '</span>' : '') +
-    (c.vision_tp_flag && c.vision_tp_flag !== 'ok' ?
-      ' | TP: <span style="color:#f59e0b;">' + c.vision_tp_flag + '</span>' : '');
+    'border-radius:6px;padding:8px;font-size:11px;font-family:Space Mono,monospace;">';
+  html += '<div style="display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;' +
+    'line-height:1.5;word-break:break-word;overflow-wrap:anywhere;">';
+  html += '<span style="color:' + color + ';font-weight:700;">' + icon + ' ' +
+    esc(c.vision_rating || '?') + '</span>' + tfBadge;
+  if (c.vision_sl_flag && c.vision_sl_flag !== 'ok') {
+    html += '<span style="color:var(--muted);">SL: <span style="color:#f59e0b;">' +
+      esc(c.vision_sl_flag) + '</span></span>';
+  }
+  if (c.vision_tp_flag && c.vision_tp_flag !== 'ok') {
+    html += '<span style="color:var(--muted);">TP: <span style="color:#f59e0b;">' +
+      esc(c.vision_tp_flag) + '</span></span>';
+  }
+  html += '</div>';
   var vsr = c.vision_style_ratings;
   if (vsr) {
     html += _buildStyleRatingStrip(vsr);
+  }
+  if (c.vision_analysis) {
+    html += '<details style="margin-top:6px;">' +
+      '<summary style="cursor:pointer;color:var(--accent);font-size:10px;font-weight:700;">' +
+      'AI feedback</summary>' +
+      '<div style="margin-top:6px;font-size:10px;color:var(--muted);font-family:Space Mono,monospace;' +
+      'line-height:1.6;max-height:220px;overflow-y:auto;white-space:pre-wrap;' +
+      'word-break:break-word;overflow-wrap:anywhere;">' + esc(c.vision_analysis) + '</div>' +
+      '</details>';
   }
   html += '</div>';
   return html;
@@ -5135,17 +5161,12 @@ async function runECVisionConfirm(sid) {
 
     if (vision.triple_tf) updated.vision_triple_tf = true;
     else if (vision.dual_tf) updated.vision_dual_tf = true;
+    if (vision.analysis) updated.vision_analysis = vision.analysis;
 
     // Update the card
     var visionDiv = document.getElementById('ec-vision-' + sid);
     if (visionDiv) {
       visionDiv.innerHTML = buildECVisionResult(updated);
-      // Show AI analysis text if available
-      if (vision.analysis) {
-        visionDiv.innerHTML += '<div style="margin-top:6px;font-size:10px;color:var(--muted);' +
-          'font-family:Space Mono,monospace;line-height:1.6;max-height:100px;overflow-y:auto;">' +
-          vision.analysis.substring(0, 500) + '</div>';
-      }
     }
 
     // Show or hide execute buttons based on result

@@ -594,11 +594,15 @@ def compute_forex_score(
         _d1e200 = d1_snap.get("ema200")
         _h4e50 = h4_snap.get("ema50")
         _h4e200 = h4_snap.get("ema200")
-        log.info(
+        _trend_msg = (
             f"[FOREX] {pair.get('display', '?')} trend_gate=False "
             f"adx={_adx_val} d1_close={_d1c} d1_ema200={_d1e200} "
             f"h4_ema50={_h4e50} h4_ema200={_h4e200}"
         )
+        if backtest_mode:
+            log.debug(_trend_msg)
+        else:
+            log.info(_trend_msg)
 
     trend_score = 0.0
     if trend_ok and session_ok:

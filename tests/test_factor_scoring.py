@@ -60,6 +60,32 @@ def _make_candles(n=200, base=100):
     ]
 
 
+def _make_volume_candles(n=200, base=100):
+    """Generate candles with real volume and a late bullish conviction acceleration."""
+    candles = []
+    for i in range(n):
+        open_price = base + i * 0.1
+        if i < n - 10:
+            body = 0.4
+            wick = 0.2
+            vol = 20
+        else:
+            body = 1.8
+            wick = 0.3
+            vol = 120
+        close_price = open_price + body
+        candles.append(
+            {
+                "open": open_price,
+                "high": close_price + wick,
+                "low": open_price - wick,
+                "close": close_price,
+                "vol": vol,
+            }
+        )
+    return candles
+
+
 # ── Factor score computation ────────────────────────────────────────────────
 
 
@@ -249,6 +275,31 @@ class TestCryptoDirectionalOverrides:
         )
         assert result["factor_scores"]["microstructure"] is None
         assert "microstructure" in result["disabled_factors"]
+
+    def test_crypto_routes_vms_into_momentum_without_reenabling_microstructure(self):
+        snap = _make_snap(
+            rsi_z=0.0,
+            macdLine_z=0.0,
+            order_book_imbalance=None,
+            orderflow_delta=None,
+            liquidity_pressure=None,
+            liquidity_wall_detection=None,
+        )
+        candles = _make_volume_candles(200)
+        result = compute_factor_scores(
+            d1_snap=snap,
+            h4_snap=snap,
+            h1_snap=snap,
+            pair=_make_pair(display="SOL/USDT"),
+            d1_candles=candles,
+            h4_candles=candles,
+            h1_candles=candles,
+            volume_ratio=1.5,
+        )
+        assert result["filtered_indicators"]["volume_momentum_spread"] is not None
+        assert result["factor_scores"]["momentum"] > 0
+        assert result["factor_scores"]["microstructure"] is None
+        assert result["weights"]["microstructure"] == 0
 
     @patch("carry_feed.get_carry_z", return_value=2.0)
     @patch("cot_feed.get_cot_z", return_value=1.2)

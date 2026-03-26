@@ -789,11 +789,15 @@ def calc_levels(
 
     rf = _REGIME_FACTOR.get(regime_state, 1.0)
 
-    sl_mult = m["sl"] * rf
+    mults_base = {"sl": float(m["sl"]), "tp1": float(m["tp1"]), "tp2": float(m["tp2"])}
 
-    tp1_mult = m["tp1"] * rf
+    sl_mult = mults_base["sl"] * rf
 
-    tp2_mult = m["tp2"] * rf
+    tp1_mult = mults_base["tp1"] * rf
+
+    tp2_mult = mults_base["tp2"] * rf
+
+    mults_effective = {"sl": sl_mult, "tp1": tp1_mult, "tp2": tp2_mult}
 
     sl = price - atr * sl_mult if direction == "LONG" else price + atr * sl_mult
 
@@ -811,7 +815,9 @@ def calc_levels(
         "tp2": tp2,
         "rr1": rr1,
         "rr2": rr2,
-        "mults": m,
+        "mults": mults_effective,
+        "mults_base": mults_base,
+        "mults_effective": mults_effective,
         "regimeFactor": rf,
     }
 

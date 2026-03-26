@@ -24,6 +24,25 @@ _DEFAULT_WEIGHTS = {
     "liquidity_quality": 0.15,
 }
 
+# Mirror the live Engine A factor taxonomy for indicator-agreement checks.
+# Missing keys are ignored at runtime, so listing all supported indicators is safe.
+_DEFAULT_FACTOR_MAP = {
+    "trend": ["ema_trend", "h4_ema_trend", "d1_ema_trend"],
+    "momentum": ["rsi_z", "macdLine_z"],
+    "derivatives": ["funding_rate", "cot_z", "carry_z"],
+    "microstructure": [
+        "order_book_imbalance",
+        "liquidity_wall_detection",
+        "orderflow_delta",
+        "liquidity_pressure",
+        "volume_momentum_spread",
+    ],
+    "trend_strength": ["adx_z"],
+    "volatility": ["atr_z", "bbWidth_z", "realized_vol_z"],
+    "volume": ["volume_ratio", "obv_trend"],
+    "structure": ["fib_proximity"],
+}
+
 # Regime-signal affinity matrix: regime → signal_type → fit score
 _REGIME_FIT_MATRIX = {
     "TRENDING": {"trend": 1.0, "momentum": 0.8, "mean_reversion": 0.3, "breakout": 0.7},
@@ -193,15 +212,7 @@ def compute_confidence(
     Returns dict with confidence (0-1), component scores, and diagnostics.
     """
     if factor_map is None:
-        factor_map = {
-            "trend": ["ema_trend", "adx_z"],
-            "momentum": ["rsi_z", "macdLine_z"],
-            "volatility": ["atr_z", "bbWidth_z", "realized_vol_z"],
-            "volume": ["volume_ratio", "obv_trend"],
-            "structure": ["fib_proximity"],
-            "derivatives": ["funding_rate"],
-            "microstructure": ["liquidity_wall_detection", "liquidity_pressure"],
-        }
+        factor_map = _DEFAULT_FACTOR_MAP
 
     regime = factor_result.get("regime", "UNKNOWN")
     filtered = factor_result.get("filtered_indicators", {})

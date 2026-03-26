@@ -6,6 +6,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from athena_app.services.candle_service import recompute_levels_for_style
+from config import CONFIG
 from engine_c import normalise_engine_a
 from indicators import calc_levels
 
@@ -27,6 +28,36 @@ def test_calc_levels_uses_style_multipliers():
 
     assert scalp_risk < intraday_risk < swing_risk
     assert scalp["tp2"] < intraday["tp2"] < swing["tp2"]
+
+
+def test_calc_levels_exposes_base_and_effective_multipliers():
+    price = 100.0
+    atr = 2.0
+    pair_type = "forex"
+    style = "intraday"
+    regime_state = 2
+
+    levels = calc_levels(
+        price, atr, "LONG", pair_type, regime_state=regime_state, style=style
+    )
+
+    base = CONFIG["STYLE_ATR_MULTS"][style][pair_type]
+    regime_factor = levels["regimeFactor"]
+
+    assert levels["mults_base"] == {
+        "sl": float(base["sl"]),
+        "tp1": float(base["tp1"]),
+        "tp2": float(base["tp2"]),
+    }
+    assert levels["mults_effective"] == {
+        "sl": float(base["sl"]) * regime_factor,
+        "tp1": float(base["tp1"]) * regime_factor,
+        "tp2": float(base["tp2"]) * regime_factor,
+    }
+    assert levels["mults"] == levels["mults_effective"]
+    assert levels["sl"] == price - atr * levels["mults_effective"]["sl"]
+    assert levels["tp1"] == price + atr * levels["mults_effective"]["tp1"]
+    assert levels["tp2"] == price + atr * levels["mults_effective"]["tp2"]
 
 
 def test_recompute_levels_for_style_trims_forming_bars_and_maps_regime():

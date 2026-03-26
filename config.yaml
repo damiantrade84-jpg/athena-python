@@ -159,18 +159,21 @@ AUTO_EXECUTE: false            # Manual click only (no auto-fire)
 
 # ── Auto-Trader ────────────────────────────────────────────
 AUTO_TRADE_ENABLED: true          # Start auto-trader on server boot
-# Effective gate = max(AUTO_TRADE_MIN_SCORE, MIN_CONFLUENCE_CLASS[asset_type])
-# With all MIN_CONFLUENCE_CLASS set to 0.90–0.95, this 0.90 floor is functionally
-# overridden by the per-class MIN_CONFLUENCE_CLASS for most asset types.
-# Per-class auto-trade minimum score (must be >= matching MIN_CONFLUENCE_CLASS)
-# Factor engine (crypto/stock/commodity/index) outputs 0–3.0
-# Forex engine outputs 0–1.0  — threshold must be calibrated to its own scale
+# AUTO_TRADE_MIN_SCORE is the scan floor that decides which signals reach the
+# auto-trader candidate list. It is not the final live execute gate.
+# Factor engine (crypto/stock/commodity/index) outputs 0–3.0.
+# Forex engine outputs 0–1.0, so its threshold must stay on the forex scale.
 AUTO_TRADE_MIN_SCORE:
-  crypto:    1.50   # factor 0–3: align with class (not used by auto_trader._can_execute)
+  crypto:    1.50   # factor 0–3 scan floor
   commodity: 1.65   # factor 0–3: align with class
   stock:     1.85   # factor 0–3: align with class
   index:     1.85   # factor 0–3: align with class
   forex:     0.70   # forex 0–1: align with scan gate
+# AUTO_TRADE_MIN_CONVICTION is the real live gate used inside auto_trader.py.
+# Metric: combinedConviction on a 0–1 scale. When Engine A + B align, the live
+# gate gets a 15% discount (effective min = configured min * 0.85).
+AUTO_TRADE_MIN_CONVICTION:
+  default: 0.50
 AUTO_TRADE_MAX_DAILY: 10           # Demo mode: max auto-executions per day
 AUTO_TRADE_MAX_PER_SCAN: 1         # Max per scan cycle; raise to 2 only with >10 active pairs
 AUTO_TRADE_SCAN_INTERVAL_MIN: 30   # Scan every 30 minutes
@@ -256,8 +259,9 @@ CRYPTO_TRANSITION_PENALTY:
   cap: 2.0
 
 # Factor weights per asset class (base)
-# Crypto microstructure zeroed: candle-based proxies overlap momentum/volume; real WS orderbook
-# data is unreliable. Carry zeroed (never fires for crypto). Structure reduced (fib noisy on perps).
+# Crypto microstructure zeroed: WS order-book signals stay disabled at factor-weight level.
+# Candle-derived VMS is routed through crypto momentum instead of microstructure.
+# Carry zeroed (never fires for crypto). Structure reduced (fib noisy on perps).
 # Forex trend raised to 2.0 (primary edge) and momentum to 1.0 (was under-weighted).
 FACTOR_WEIGHTS:
   crypto:    { trend: 2.0, momentum: 1.5, volatility: 0.8, volume: 1.0, structure: 0.5, derivatives: 1.2, microstructure: 0, carry: 0, trend_strength: 1.0 }
@@ -295,10 +299,16 @@ INDICATOR_WEIGHTS:
       d1_ema_trend: 0.4
       h4_ema_trend: 0.35
       ema_trend: 0.25
-  # MOMENTUM: RSI is more responsive for forex; MACD lags but confirms
+  # MOMENTUM: RSI is more responsive for forex; MACD lags but confirms.
+  # Crypto also routes VMS here with a small weight instead of re-enabling microstructure.
   momentum:
-    rsi_z: 0.6
-    macdLine_z: 0.4
+    default:
+      rsi_z: 0.6
+      macdLine_z: 0.4
+    crypto:
+      rsi_z: 0.5
+      macdLine_z: 0.3
+      volume_momentum_spread: 0.2
   # DERIVATIVES: COT is weekly (lagging), funding is crypto-only
   # When only one fires (e.g. funding only for crypto), it gets full weight automatically.
   derivatives:

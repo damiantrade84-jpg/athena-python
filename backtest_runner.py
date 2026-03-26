@@ -19,6 +19,7 @@ from datetime import datetime, timezone, timedelta
 import pandas as pd
 
 from athena_runtime import rt as _art_rt
+from calibration import calibration_report
 from config import CONFIG, _json_safe
 from indicators import (
     calc_atr,
@@ -35,6 +36,9 @@ from scoring import (
     get_pair_profile,
     get_pair_score_group,
 )
+from meta_learner import meta_report
+from research_metrics import build_research_metrics, enrich_backtest_summary
+from stability_monitor import record_backtest_summary
 
 log = logging.getLogger("sentinel")
 
@@ -58,6 +62,52 @@ def _effective_backtest_style(pair: dict, requested_style: str) -> str:
         return "swing"
     else:
         return "swing"
+
+
+def _records_for_calibration(
+    trades: list[dict],
+    *,
+    engine: str,
+    asset_class: str,
+    style: str,
+    default_max_score: float | None = None,
+) -> list[dict]:
+    records = []
+    for trade in trades or []:
+        records.append(
+            {
+                "engine": engine,
+                "asset_class": asset_class,
+                "style": style,
+                "raw_score": trade.get("score"),
+                "max_score": trade.get("max_score", default_max_score),
+                "won": (trade.get("resultR", trade.get("r_multiple", 0)) or 0) > 0,
+            }
+        )
+    return records
+
+
+def _records_for_meta(
+    trades: list[dict],
+    *,
+    engine: str,
+    asset_class: str,
+    style: str,
+) -> list[dict]:
+    records = []
+    for trade in trades or []:
+        records.append(
+            {
+                "engine": engine,
+                "asset_class": asset_class,
+                "style": style,
+                "won": (trade.get("resultR", trade.get("r_multiple", 0)) or 0) > 0,
+                "expectancy_r": trade.get("resultR", trade.get("r_multiple")),
+                "slippage_bps": trade.get("slippage_bps"),
+                "regime": trade.get("regime"),
+            }
+        )
+    return records
 
 
 def backtest_pair(pair, style="auto"):
@@ -1423,6 +1473,26 @@ def backtest_pair(pair, style="auto"):
             )
         except Exception:
             _bh = None
+        _calibration_report = calibration_report(
+            records=[],
+            engine="engine_a",
+            asset_class=pair.get("type", ""),
+            style=effective_style,
+            default_max_score=_pair_max_score,
+        )
+        _research_metrics = build_research_metrics(
+            [],
+            observed_sharpe=0.0,
+        )
+        _meta_report = meta_report(
+            {
+                "engine": "engine_a",
+                "type": pair.get("type"),
+                "style": effective_style,
+                "regime": None,
+            },
+            records=[],
+        )
         return {
             "pair": pair["display"],
             "symbol": pair["symbol"],
@@ -1457,6 +1527,9 @@ def backtest_pair(pair, style="auto"):
             "btStyle": effective_style,
             "btStyleRequested": requested_style,
             "bhReturn": _bh,
+            "calibrationReport": _calibration_report,
+            "researchMetrics": _research_metrics,
+            "metaReport": _meta_report,
             "volumeThreshold": {
                 "bt": CONFIG.get("VOLUME_THRESHOLD_BACKTEST", 1.2),
                 "live": CONFIG.get("VOLUME_THRESHOLD", 1.5),
@@ -1752,6 +1825,64 @@ def backtest_pair(pair, style="auto"):
     except Exception as _dbe:
         log.debug(f"[BT-DB] Failed to save result: {_dbe}")
 
+    try:
+        _pass_rate = None
+        if funnel.get("total_setups", 0):
+            _pass_rate = funnel.get("taken", 0) / float(funnel["total_setups"])
+        record_backtest_summary(
+            engine="engine_a",
+            pass_rate=_pass_rate,
+            expectancy_r=avg_r,
+            score=min(1.0, max(0.0, win_rate / 100.0)),
+            max_score=1.0,
+            feature_map={
+                "win_rate": win_rate / 100.0,
+                "sqn": sqn,
+                "profit_factor": profit_factor,
+            },
+            db_path=_rt().AUDIT_DB,
+            meta={
+                "pair": pair.get("display"),
+                "style": effective_style,
+                "asset_type": pair.get("type"),
+                "runtime_only_metric": False,
+            },
+        )
+    except Exception as _ssi_err:
+        log.debug(f"[SSI] Engine A backtest sample skipped: {_ssi_err}")
+
+    calibration_summary = calibration_report(
+        records=_records_for_calibration(
+            trades,
+            engine="engine_a",
+            asset_class=pair.get("type", ""),
+            style=effective_style,
+            default_max_score=_pair_max_score,
+        ),
+        engine="engine_a",
+        asset_class=pair.get("type", ""),
+        style=effective_style,
+        default_max_score=_pair_max_score,
+    )
+    research_metrics = build_research_metrics(
+        r_values,
+        observed_sharpe=sharpe,
+    )
+    meta_summary = meta_report(
+        {
+            "engine": "engine_a",
+            "type": pair.get("type"),
+            "style": effective_style,
+            "regime": trades[-1].get("regime") if trades else None,
+        },
+        records=_records_for_meta(
+            trades,
+            engine="engine_a",
+            asset_class=pair.get("type", ""),
+            style=effective_style,
+        ),
+    )
+
     return {
         "pair": pair["display"],
         "symbol": pair["symbol"],
@@ -1779,6 +1910,9 @@ def backtest_pair(pair, style="auto"):
         "btStyle": effective_style,
         "btStyleRequested": requested_style,
         "bhReturn": bh_return,
+        "calibrationReport": calibration_summary,
+        "researchMetrics": research_metrics,
+        "metaReport": meta_summary,
         "volumeThreshold": {
             "bt": CONFIG.get("VOLUME_THRESHOLD_BACKTEST", 1.2),
             "live": CONFIG.get("VOLUME_THRESHOLD", 1.5),
@@ -2030,7 +2164,7 @@ def _format_backtest_results(trades, pair, engine_type="NAKED"):
             }
         )
 
-    return result
+    return enrich_backtest_summary(result, returns=r_values)
 
 
 # ── NEW: Engine B (Naked) Backtest Function ───────────────────────────────
@@ -2409,6 +2543,55 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 _con.commit()
         except Exception as _e:
             log.warning(f"[ENGINE B BT] backtest_results write failed: {_e}")
+        try:
+            record_backtest_summary(
+                engine="engine_b",
+                pass_rate=None,
+                expectancy_r=result.get("expectancy"),
+                score=min(1.0, max(0.0, (result.get("winRate", 0) or 0) / 100.0)),
+                max_score=1.0,
+                feature_map={
+                    "win_rate": (result.get("winRate", 0) or 0) / 100.0,
+                    "profit_factor": result.get("profitFactor"),
+                    "sqn": result.get("sqn"),
+                    "min_score": style_profile.get("min_score"),
+                },
+                db_path=_rt().AUDIT_DB,
+                meta={
+                    "pair": pair.get("display"),
+                    "style": resolved_style,
+                    "runtime_only_metric": False,
+                },
+            )
+        except Exception as _ssi_err:
+            log.debug(f"[SSI] Engine B backtest sample skipped: {_ssi_err}")
+        result["calibrationReport"] = calibration_report(
+            records=_records_for_calibration(
+                trades,
+                engine="engine_b",
+                asset_class=pair.get("type", ""),
+                style=resolved_style,
+                default_max_score=5.0,
+            ),
+            engine="engine_b",
+            asset_class=pair.get("type", ""),
+            style=resolved_style,
+            default_max_score=5.0,
+        )
+        result["metaReport"] = meta_report(
+            {
+                "engine": "engine_b",
+                "type": pair.get("type"),
+                "style": resolved_style,
+                "regime": trades[-1].get("regime") if trades else None,
+            },
+            records=_records_for_meta(
+                trades,
+                engine="engine_b",
+                asset_class=pair.get("type", ""),
+                style=resolved_style,
+            ),
+        )
     return result
 
 

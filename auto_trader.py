@@ -24,8 +24,85 @@ import time
 
 from datetime import datetime, timezone, timedelta
 
+from calibration import predict_calibrated_prob
+from meta_learner import apply_meta_policy, meta_report
+from stability_monitor import get_signal_stability_index, record_execution_event
 
 log = logging.getLogger("athena.auto_trader")
+
+
+def _auto_trade_min_conviction_config(cfg: dict) -> dict:
+    """Return normalized live auto-trade conviction config."""
+    raw = cfg.get("AUTO_TRADE_MIN_CONVICTION", {"default": 0.50})
+    if isinstance(raw, dict):
+        out = {}
+        for key, value in raw.items():
+            try:
+                out[str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+        if not out:
+            out["default"] = 0.50
+        elif "default" not in out:
+            out["default"] = 0.50
+        return out
+    try:
+        return {"default": float(raw)}
+    except (TypeError, ValueError):
+        return {"default": 0.50}
+
+
+def _auto_trade_min_conviction(cfg: dict, asset_type: str) -> float:
+    conf = _auto_trade_min_conviction_config(cfg)
+    return conf.get(asset_type, conf.get("default", 0.50))
+
+
+def _auto_trade_live_gate_display(cfg: dict) -> str:
+    conf = _auto_trade_min_conviction_config(cfg)
+    if list(conf.keys()) == ["default"]:
+        base = conf["default"]
+        return (
+            f"combinedConviction >= {base:.2f} "
+            f"(aligned >= {base * 0.85:.3f})"
+        )
+
+    parts = []
+    for key, value in conf.items():
+        if key == "default":
+            continue
+        parts.append(f"{key} {value:.2f}")
+    if "default" in conf:
+        parts.append(f"default {conf['default']:.2f}")
+    return "combinedConviction by asset (" + ", ".join(parts) + "; aligned x0.85)"
+
+
+def _signal_engine(signal: dict) -> str:
+    engine = str(signal.get("engine") or "").strip().lower()
+    if engine == "scalp":
+        return "scalp"
+    if engine in ("engine_c", "consensus"):
+        return "engine_c"
+    return "engine_a"
+
+
+def _signal_expected_prob(signal: dict) -> float | None:
+    """Best-effort normalized expectancy proxy for SSI execution samples."""
+    pct = signal.get("confluencePct")
+    if pct is not None:
+        try:
+            return max(0.0, min(1.0, float(pct) / 100.0))
+        except (TypeError, ValueError):
+            pass
+    try:
+        score = float(signal.get("confluenceScore"))
+        max_score = float(signal.get("maxScore", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if max_score > 0:
+        return max(0.0, min(1.0, score / max_score))
+    if 0.0 <= score <= 1.0:
+        return score
+    return None
 
 
 # ── H4 + D1 schedule: (hour, minute) UTC ─────────────────────────────────────
@@ -139,12 +216,19 @@ class AutoTrader:
     def get_status(self) -> dict:
 
         cfg = self._config_fn() if self._config_fn else {}
+        scan_min_score = cfg.get("AUTO_TRADE_MIN_SCORE", {})
+        min_conviction = _auto_trade_min_conviction_config(cfg)
 
         return {
             "enabled": self._enabled,
             "tradesToday": self._trades_today,
             "maxDaily": cfg.get("AUTO_TRADE_MAX_DAILY", 3),
-            "minScore": cfg.get("AUTO_TRADE_MIN_SCORE", {}),  # per-class dict
+            "minScore": scan_min_score,
+            "scanMinScore": scan_min_score,
+            "minConviction": min_conviction,
+            "liveGateMetric": "combinedConviction",
+            "liveGateAlignedDiscount": 0.85,
+            "liveGateDisplay": _auto_trade_live_gate_display(cfg),
             "lastScanAt": self._last_scan_at.isoformat()
             if self._last_scan_at
             else None,
@@ -154,6 +238,9 @@ class AutoTrader:
             "lastExecutionPair": self._last_exec_pair,
             "lastExecutionDir": self._last_exec_dir,
             "nextScanAt": self._next_scan_time().isoformat(),
+            "signalStability": get_signal_stability_index(db_path=self._audit_db)
+            if self._audit_db
+            else None,
         }
 
     # ── Internal ──────────────────────────────────────────────────────────────
@@ -390,11 +477,7 @@ class AutoTrader:
         # Auto-trade minimum conviction (0-1 scale)
         # Default: 0.50 = requires decent Engine A score OR Engine A+B alignment
         # Higher values (0.60-0.70) = stricter, prefer aligned signals
-        _auto_min_cfg = cfg.get("AUTO_TRADE_MIN_CONVICTION", {})
-        if isinstance(_auto_min_cfg, dict):
-            auto_min_conviction = _auto_min_cfg.get(asset_type, _auto_min_cfg.get("default", 0.50))
-        else:
-            auto_min_conviction = float(_auto_min_cfg) if _auto_min_cfg else 0.50
+        auto_min_conviction = _auto_trade_min_conviction(cfg, asset_type)
 
         # Bonus threshold for aligned signals (both engines agree)
         # Aligned signals can pass at lower conviction since structure confirms
@@ -405,12 +488,33 @@ class AutoTrader:
         b_score = signal.get("engine_b_score", 0)
         b_max = signal.get("engine_b_max", 5)
         b_verdict = signal.get("engine_b_verdict", "N/A")
+        calibration = predict_calibrated_prob(
+            combined_conviction,
+            engine=_signal_engine(signal),
+            asset_class=asset_type,
+            style=signal.get("style"),
+            max_score=1.0,
+            db_path=self._audit_db,
+        )
+        signal["calibratedProbability"] = calibration.get("calibrated_prob")
+        signal["calibration"] = calibration
+        meta = meta_report(signal, db_path=self._audit_db) if self._audit_db else meta_report(signal, records=[])
+        signal.update(apply_meta_policy(signal, meta))
+        meta_delta = float(signal.get("metaThresholdDelta", 0.0) or 0.0)
+        auto_min_conviction = max(0.0, min(1.0, auto_min_conviction + meta_delta))
 
         log.info(
             f"[AUTO] {signal.get('pair')} candidate: conviction={combined_conviction:.3f} min={auto_min_conviction:.3f} "
+            f"cal={calibration.get('calibrated_prob')} scope={calibration.get('scope_used')} "
+            f"fallback={calibration.get('fallback_reason')} "
+            f"meta_w={signal.get('metaEngineWeight')} meta_d={signal.get('metaThresholdDelta')} "
+            f"meta_suspend={signal.get('metaSuspended')} "
             f"aligned={engines_aligned} A={signal.get('confluenceScore', 0):.2f}/{signal.get('maxScore', 3)} "
             f"B={b_score}/{b_max} ({b_verdict}) dir={signal.get('direction')}"
         )
+
+        if signal.get("metaSuspended"):
+            return False, "meta policy suspended this engine bucket"
 
         if combined_conviction < auto_min_conviction:
             return False, f"conviction {combined_conviction:.3f} < min {auto_min_conviction:.3f}"
@@ -555,6 +659,7 @@ class AutoTrader:
         direction = signal.get("direction", "")
 
         is_crypto = signal.get("type") == "crypto"
+        ssi_engine = _signal_engine(signal)
 
         try:
             from risk_engine import risk_check
@@ -645,6 +750,21 @@ class AutoTrader:
                 self._last_exec_dir = direction
 
                 self._write_audit(signal, approval, result, cfg)
+                record_execution_event(
+                    engine=ssi_engine,
+                    success=True,
+                    score=signal.get("confluenceScore"),
+                    max_score=signal.get("maxScore", 1.0),
+                    expected_prob=_signal_expected_prob(signal),
+                    slippage_bps=result.get("slippageBps"),
+                    db_path=self._audit_db,
+                    meta={
+                        "pair": pair,
+                        "direction": direction,
+                        "calibrated_probability": signal.get("calibratedProbability"),
+                        "runtime_only_metric": True,
+                    },
+                )
 
                 # Send Telegram notification for successful auto-execution
                 try:
@@ -748,6 +868,25 @@ class AutoTrader:
         is_demo = self._test_mode_fn() if self._test_mode_fn else False
 
         log.warning(f"[AUTO] {signal.get('pair')} FAILED — {error_tag}")
+
+        try:
+            record_execution_event(
+                engine=_signal_engine(signal),
+                success=False,
+                score=signal.get("confluenceScore"),
+                max_score=signal.get("maxScore", 1.0),
+                expected_prob=_signal_expected_prob(signal),
+                db_path=self._audit_db,
+                meta={
+                    "pair": signal.get("pair"),
+                    "direction": signal.get("direction"),
+                    "error": error_tag,
+                    "calibrated_probability": signal.get("calibratedProbability"),
+                    "runtime_only_metric": True,
+                },
+            )
+        except Exception as _ssi_err:
+            log.debug(f"[SSI] auto-trader failure sample skipped: {_ssi_err}")
 
         try:
             with sqlite3.connect(self._audit_db, timeout=15.0) as con:

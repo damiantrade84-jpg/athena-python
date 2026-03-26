@@ -1,8 +1,14 @@
 import sys
 import types
+from datetime import datetime, timezone
 
 import scalp_engine
-from scalp_engine import infer_bias_from_ema_stack, mt5_fetch_scalp_candles
+from scalp_engine import (
+    get_current_sessions,
+    infer_bias_from_ema_stack,
+    is_valid_session,
+    mt5_fetch_scalp_candles,
+)
 
 
 class _FakeRateRow:
@@ -47,6 +53,34 @@ def test_infer_bias_from_ema_stack_detects_long_bias():
     candles = [{"close": float(i)} for i in range(1, 260)]
 
     assert infer_bias_from_ema_stack(candles) == "LONG"
+
+
+def test_get_current_sessions_uses_timezone_aware_utc(monkeypatch):
+    monkeypatch.setattr(
+        scalp_engine,
+        "_current_utc_datetime",
+        lambda: datetime(2026, 3, 26, 13, 0, tzinfo=timezone.utc),
+    )
+
+    assert get_current_sessions() == ["london", "new_york"]
+
+
+def test_is_valid_session_returns_off_hours_outside_utc_windows(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "SESSION_FILTER": True,
+        },
+    )
+    monkeypatch.setattr(
+        scalp_engine,
+        "_current_utc_datetime",
+        lambda: datetime(2026, 3, 26, 22, 0, tzinfo=timezone.utc),
+    )
+
+    assert is_valid_session() == (False, "off_hours")
 
 
 def test_run_scalp_scan_skips_counter_trend_signal(monkeypatch):

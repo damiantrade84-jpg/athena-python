@@ -64,11 +64,13 @@ _CONTRACT_FRAGMENTS: dict[str, str] = {
     "GBP": "BRITISH POUND",
     "JPY": "JAPANESE YEN",
     "AUD": "AUSTRALIAN DOLLAR",
-    "NZD": "NEW ZEALAND DOLLAR",
+    # CFTC contract naming uses the abbreviated "NZ DOLLAR".
+    "NZD": "NZ DOLLAR",
     "CAD": "CANADIAN DOLLAR",
     "CHF": "SWISS FRANC",
     "MXN": "MEXICAN PESO",
-    "ZAR": "SOUTH AFRICAN RAND",
+    # CFTC contract naming uses the abbreviated "S AFRICAN RAND".
+    "ZAR": "S AFRICAN RAND",
     "BTC": "BITCOIN",
     "ETH": "ETHER",
     "SP500": "E-MINI S&P 500",
@@ -517,8 +519,6 @@ def _asset_z(asset: str, as_of_date: str = None) -> Optional[float]:
         # Not enough data yet — background seed hasn't completed.
         # Do NOT call refresh_cot() here: it blocks the scan thread for 30-60s
         # downloading CFTC ZIPs. Let the background COTSeed thread populate the DB.
-        if not as_of_date:
-            _mem_cache[asset] = (None, now)
         return None
 
     z = _zscore(series)

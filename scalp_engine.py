@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from config import CONFIG
+from stability_monitor import record_signal_event
 
 log = logging.getLogger("sentinel.scalp")
 
@@ -148,11 +149,14 @@ def infer_bias_from_ema_stack(candles: list) -> Optional[str]:
 
 # ── Session filter ────────────────────────────────────────────────────────────
 
+def _current_utc_datetime() -> datetime:
+    """Return a timezone-aware UTC timestamp for session gating."""
+    return datetime.now(timezone.utc)
+
+
 def get_current_sessions() -> list:
     """Return active session names based on current UTC hour."""
-    cfg = CONFIG.get("SCALP_ENGINE", {})
-    tz_offset = CONFIG.get("SERVER_TZ_OFFSET_HOURS", 0)
-    now_utc_h = (datetime.now().hour - int(tz_offset)) % 24
+    now_utc_h = _current_utc_datetime().hour
     active = []
     for name, (start, end) in _SESSIONS.items():
         if start <= now_utc_h < end:
@@ -620,11 +624,42 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
     bias_tf = str(cfg.get("BIAS_TIMEFRAME", "H1")).upper()
     use_bias_filter = bool(cfg.get("WITH_TREND_ONLY", True))
 
+    def _record_stability_sample(
+        display: str,
+        asset_type: str,
+        passed: bool,
+        score_norm: float | None = None,
+        feature_map: dict | None = None,
+        reason: str | None = None,
+    ) -> None:
+        try:
+            meta = {"pair": display}
+            if reason:
+                meta["reason"] = reason
+            record_signal_event(
+                engine="scalp",
+                score=score_norm,
+                max_score=1.0 if score_norm is not None else None,
+                passed=passed,
+                expected_prob=score_norm,
+                feature_map=feature_map,
+                meta=meta,
+            )
+        except Exception as exc:
+            log.debug(f"[SSI] Scalp sample skipped for {display}: {exc}")
+
     # Session gate
     session_ok, session_name = is_valid_session()
     sessions = get_current_sessions()
 
     if not session_ok:
+        for display in pairs_or_symbols:
+            _record_stability_sample(
+                display=display,
+                asset_type=_guess_asset_type(display),
+                passed=False,
+                reason="OUTSIDE_SESSION",
+            )
         return {
             "signals": [],
             "skipped": len(pairs_or_symbols),
@@ -634,6 +669,13 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
         }
 
     if not mt5_connect():
+        for display in pairs_or_symbols:
+            _record_stability_sample(
+                display=display,
+                asset_type=_guess_asset_type(display),
+                passed=False,
+                reason="MT5_NOT_CONNECTED",
+            )
         return {
             "signals": [],
             "skipped": len(pairs_or_symbols),
@@ -649,12 +691,18 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
         try:
             mt5_sym = mt5_map_symbol(display)
             if not mt5_sym:
+                _record_stability_sample(
+                    display, _guess_asset_type(display), False, reason="no_mt5_mapping"
+                )
                 skipped.append({"pair": display, "reason": "no_mt5_mapping"})
                 continue
 
             # Get symbol info (includes spread, point, digits, tick values)
             sym_info = mt5_get_symbol_info(display)
             if not sym_info or sym_info.get("error"):
+                _record_stability_sample(
+                    display, _guess_asset_type(display), False, reason="symbol_not_available"
+                )
                 skipped.append({"pair": display, "reason": "symbol_not_available"})
                 continue
 
@@ -664,17 +712,30 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             # Spread filter
             spread_ok, spread_pips = check_spread(sym_info, asset_type)
             if not spread_ok:
+                _record_stability_sample(
+                    display,
+                    asset_type,
+                    False,
+                    feature_map={"spread_pips": spread_pips},
+                    reason=f"spread_too_wide_{spread_pips}pips",
+                )
                 skipped.append({"pair": display, "reason": f"spread_too_wide_{spread_pips}pips"})
                 continue
 
             # Fetch candles
             candles_m15 = mt5_fetch_scalp_candles(mt5_sym, "M15", m15_count)
             if len(candles_m15) < 30:
+                _record_stability_sample(
+                    display, asset_type, False, reason="insufficient_m15_candles"
+                )
                 skipped.append({"pair": display, "reason": "insufficient_m15_candles"})
                 continue
 
             candles_m5 = mt5_fetch_scalp_candles(mt5_sym, "M5", m5_count)
             if len(candles_m5) < 10:
+                _record_stability_sample(
+                    display, asset_type, False, reason="insufficient_m5_candles"
+                )
                 skipped.append({"pair": display, "reason": "insufficient_m5_candles"})
                 continue
 
@@ -684,6 +745,12 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             if use_bias_filter:
                 candles_bias = mt5_fetch_scalp_candles(mt5_sym, bias_tf, h1_count)
                 if len(candles_bias) < 200:
+                    _record_stability_sample(
+                        display,
+                        asset_type,
+                        False,
+                        reason=f"insufficient_{bias_tf.lower()}_candles",
+                    )
                     skipped.append({"pair": display, "reason": f"insufficient_{bias_tf.lower()}_candles"})
                     continue
                 htf_bias = infer_bias_from_ema_stack(candles_bias)
@@ -691,15 +758,28 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             # Pipeline
             zone     = detect_m15_zone(candles_m15, current_price)
             if not zone["valid"]:
+                _record_stability_sample(
+                    display, asset_type, False, reason=f"no_zone:{zone.get('reason', '?')}"
+                )
                 skipped.append({"pair": display, "reason": f"no_zone:{zone.get('reason', '?')}"})
                 continue
 
             trigger  = detect_m5_trigger(candles_m5, zone, current_price)
             if not trigger["valid"]:
+                _record_stability_sample(
+                    display, asset_type, False, reason=f"no_trigger:{trigger.get('reason', '?')}"
+                )
                 skipped.append({"pair": display, "reason": f"no_trigger:{trigger.get('reason', '?')}"})
                 continue
 
             if use_bias_filter and htf_bias and trigger["direction"] != htf_bias:
+                _record_stability_sample(
+                    display,
+                    asset_type,
+                    False,
+                    feature_map={"bias_aligned": False},
+                    reason=f"counter_trend:{trigger['direction']}_vs_{bias_tf}_{htf_bias}",
+                )
                 skipped.append(
                     {
                         "pair": display,
@@ -710,6 +790,9 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
 
             momentum = confirm_momentum(candles_m5, trigger)
             if not momentum["valid"]:
+                _record_stability_sample(
+                    display, asset_type, False, reason=f"no_momentum:{momentum.get('reason', '?')}"
+                )
                 skipped.append({"pair": display, "reason": f"no_momentum:{momentum.get('reason', '?')}"})
                 continue
 
@@ -750,9 +833,26 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "maxScore":        1.0,
             }
             signals.append(signal)
+            _record_stability_sample(
+                display,
+                asset_type,
+                True,
+                score_norm=quality["score"] / 100.0,
+                feature_map={
+                    "zone_conditions": zone.get("conditions_count", 0) / 3.0,
+                    "liquidity_sweep": "liquidity_sweep" in zone.get("conditions_met", []),
+                    "trigger_rejection": trigger.get("trigger_type") == "rejection",
+                    "momentum_structure_break": momentum.get("method") == "structure_break",
+                    "spread_pips": spread_pips,
+                    "bias_aligned": False if (use_bias_filter and htf_bias and trigger["direction"] != htf_bias) else True,
+                },
+            )
 
         except Exception as e:
             log.error(f"[SCALP] Error on {display}: {e}")
+            _record_stability_sample(
+                display, _guess_asset_type(display), False, reason=f"error:{str(e)[:60]}"
+            )
             skipped.append({"pair": display, "reason": f"error:{str(e)[:60]}"})
 
     # Sort by AI score descending

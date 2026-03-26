@@ -53,6 +53,12 @@ from athena_app.services.scan_backtest_service import (
 )
 from athena_app.services.candle_service import recompute_levels_for_style
 from athena_app.repositories.audit_repo import insert_manual_error
+from stability_monitor import (
+    get_signal_stability_index,
+    init_stability_store,
+    record_outcome_event,
+    record_signal_event,
+)
 
 from data_feeds import (  # noqa: E402
     http_requests,
@@ -3506,6 +3512,22 @@ def _init_audit_db(db_path: str) -> None:
 _AUDIT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
 
 _init_audit_db(_AUDIT_DB)
+init_stability_store(_AUDIT_DB)
+
+
+def _stability_engine_from_audit_row(style: str | None, max_score: float | None) -> str | None:
+    style_norm = str(style or "").strip().lower()
+    if style_norm == "scalp":
+        return "scalp"
+    if style_norm in ("engine_c", "consensus"):
+        return "engine_c"
+    try:
+        max_score_f = float(max_score) if max_score is not None else None
+    except (TypeError, ValueError):
+        max_score_f = None
+    if max_score_f is not None:
+        return "engine_a"
+    return None
 
 
 def _insert_shadow_from_engine_c(consensus: dict) -> None:
@@ -4175,6 +4197,35 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
         res["direction"] = direction
         res["style"] = resolved_style
         res["regime"] = regime_label
+
+        try:
+            record_signal_event(
+                engine="engine_b",
+                score=conf.get("score"),
+                max_score=conf.get("max_possible"),
+                passed=bool(conf.get("passed")) and float(conf.get("score", 0) or 0) >= float(_min_score_scaled),
+                expected_prob=(conf.get("pct", 0) or 0) / 100.0,
+                feature_map={
+                    "structure_ok": conf.get("structure_ok"),
+                    "location_ok": conf.get("location_ok"),
+                    "trigger_ok": conf.get("trigger_ok"),
+                    "rr_ok": conf.get("rr_ok"),
+                    "room_ok": conf.get("room_ok"),
+                    "macro_ok": conf.get("macro_ok"),
+                    "bos_mtf_confirmed": conf.get("bos_mtf_confirmed"),
+                    "ob_at_zone": conf.get("ob_at_zone"),
+                    "rr": conf.get("rr"),
+                },
+                db_path=_AUDIT_DB,
+                meta={
+                    "pair": pair_obj.get("display"),
+                    "style": resolved_style,
+                    "regime": regime_label,
+                    "min_score_used": round(_min_score_scaled, 4),
+                },
+            )
+        except Exception as _ssi_err:
+            log.debug(f"[SSI] Engine B sample skipped: {_ssi_err}")
 
         # AI execution control
         _run_ai = force_ai or not CONFIG.get("AI_ON_DEMAND_ONLY", True)
@@ -6688,6 +6739,13 @@ def health():
     )
 
 
+@app.route("/api/signal-stability")
+def api_signal_stability():
+
+    engine = request.args.get("engine")
+    return jsonify(get_signal_stability_index(engine=engine, db_path=_AUDIT_DB))
+
+
 @app.route("/api/audit")
 def api_audit():
     """Return last N audit log entries from SQLite."""
@@ -7233,6 +7291,26 @@ def analyze_pair(
     _raw_pct = (res["score"] / _threshold) * 67 if _threshold > 0 else 0
     _confluence_pct = min(100, max(0, round(_raw_pct)))
 
+    try:
+        record_signal_event(
+            engine="engine_a",
+            score=res.get("score"),
+            max_score=max_score,
+            passed=bool(res.get("score", 0) >= _threshold),
+            expected_prob=_confluence_pct / 100.0,
+            feature_map=res.get("factor_scores") if isinstance(res.get("factor_scores"), dict) else {},
+            db_path=_AUDIT_DB,
+            meta={
+                "asset_type": pair.get("type"),
+                "pair": pair.get("display"),
+                "threshold": _threshold,
+                "style": _style,
+                "runtime_only_metric": False,
+            },
+        )
+    except Exception as _ssi_err:
+        log.debug(f"[SSI] Engine A sample skipped: {_ssi_err}")
+
     return {
         "pair": pair["display"],
         "display": pair["display"],
@@ -7433,6 +7511,17 @@ def _update_trade_outcome(
         except Exception as _hp_err:
             log.debug(f"[AUDIT] holding period calc failed: {_hp_err}")
 
+    _ssi_row = None
+    try:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as _ssi_con:
+            _ssi_con.row_factory = sqlite3.Row
+            _ssi_row = _ssi_con.execute(
+                "SELECT style, max_score, score FROM audit_log WHERE ticket=? ORDER BY id DESC LIMIT 1",
+                (ticket,),
+            ).fetchone()
+    except Exception as _ssi_lookup_err:
+        log.debug(f"[SSI] audit lookup failed for {ticket}: {_ssi_lookup_err}")
+
     try:
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.execute(
@@ -7506,6 +7595,28 @@ def _update_trade_outcome(
 
             except Exception as _dpnl_err:
                 log.debug(f"[DAILY-PNL] record failed: {_dpnl_err}")
+
+        try:
+            _ssi_engine = _stability_engine_from_audit_row(
+                _ssi_row["style"] if _ssi_row else None,
+                _ssi_row["max_score"] if _ssi_row else None,
+            )
+            if _ssi_engine:
+                record_outcome_event(
+                    engine=_ssi_engine,
+                    won=(pnl is not None and pnl > 0),
+                    expectancy_r=r_multiple,
+                    score=_ssi_row["score"] if _ssi_row else None,
+                    max_score=_ssi_row["max_score"] if _ssi_row else None,
+                    db_path=_AUDIT_DB,
+                    meta={
+                        "ticket": ticket,
+                        "runtime_only_metric": True,
+                        "exit_reason": exit_reason,
+                    },
+                )
+        except Exception as _ssi_err:
+            log.debug(f"[SSI] outcome sample skipped for {ticket}: {_ssi_err}")
 
     except Exception as e:
         log.warning(f"[MONITOR] DB write failed for ticket {ticket}: {e}")

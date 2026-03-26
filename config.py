@@ -418,7 +418,14 @@ CONFIG: dict = {
             "stock": {"d1_ema_trend": 0.4, "h4_ema_trend": 0.35, "ema_trend": 0.25},
             "index": {"d1_ema_trend": 0.4, "h4_ema_trend": 0.35, "ema_trend": 0.25},
         },
-        "momentum": {"rsi_z": 0.6, "macdLine_z": 0.4},
+        "momentum": {
+            "default": {"rsi_z": 0.6, "macdLine_z": 0.4},
+            "crypto": {
+                "rsi_z": 0.5,
+                "macdLine_z": 0.3,
+                "volume_momentum_spread": 0.2,
+            },
+        },
         "derivatives": {
             "default": {"cot_z": 0.6, "funding_rate": 0.4},
             "crypto": {"funding_rate": 0.75, "cot_z": 0.25},
@@ -467,7 +474,16 @@ CONFIG: dict = {
     "DRAWDOWN_STOP_THRESHOLD": 0.15,  # At 15% drawdown, reject ALL new trades
     # ── Auto-Trade Bot ────────────────────────────────────────────────────────
     "AUTO_TRADE_ENABLED": False,  # Master toggle (also togglable via UI/API)
-    "AUTO_TRADE_MIN_SCORE": 0.70,  # Min confluence score to auto-execute (z-score scale)
+    "AUTO_TRADE_MIN_SCORE": {  # Scan floor that determines which signals reach the auto-trader candidate list
+        "crypto": 1.50,
+        "commodity": 1.65,
+        "stock": 1.85,
+        "index": 1.85,
+        "forex": 0.70,
+    },
+    "AUTO_TRADE_MIN_CONVICTION": {  # Live auto-execute gate on combinedConviction (0-1 scale)
+        "default": 0.50,
+    },
     "AUTO_TRADE_MAX_DAILY": 3,  # Max auto-trades per calendar day (UTC)
     "AUTO_TRADE_MAX_PER_SCAN": 1,  # Max executions per single scan run
     "AUTO_TRADE_SIZING_OVERRIDE": 1.0,  # Full live-level sizing on demo

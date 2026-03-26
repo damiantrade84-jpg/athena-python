@@ -22,7 +22,10 @@ Sources:
 import logging
 from typing import Optional
 
+from calibration import predict_calibrated_prob
 from config import CONFIG
+from meta_learner import apply_meta_policy, get_dynamic_engine_weights, get_engine_context
+from stability_monitor import record_signal_event
 
 log = logging.getLogger("sentinel")
 
@@ -37,6 +40,7 @@ ENGINE_C_AB_WEIGHTS = {
     "HIGH_VOLATILITY": {"A": 0.50, "B": 0.50},
     "LOW_VOLATILITY":  {"A": 0.45, "B": 0.55},
 }
+ENGINE_C_META_BLEND = 0.20
 
 # ── Conviction tier thresholds ────────────────────────────────────────────────
 CONVICTION_TIERS = {
@@ -273,6 +277,27 @@ def classify_conviction(conviction: float) -> tuple:
     return "SKIP", 0.0
 
 
+def _blend_consensus_weights(base_weights: dict, meta_weights: dict | None) -> dict:
+    """Conservatively tilt A/B consensus weights toward recent meta trust."""
+    meta = meta_weights or {}
+    a_meta = float(meta.get("engine_a", 0.0) or 0.0)
+    b_meta = float(meta.get("engine_b", 0.0) or 0.0)
+    total = a_meta + b_meta
+    if total <= 0:
+        return dict(base_weights)
+    meta_ratio_a = a_meta / total
+    meta_ratio_b = b_meta / total
+    blended = {
+        "A": (base_weights["A"] * (1.0 - ENGINE_C_META_BLEND)) + (meta_ratio_a * ENGINE_C_META_BLEND),
+        "B": (base_weights["B"] * (1.0 - ENGINE_C_META_BLEND)) + (meta_ratio_b * ENGINE_C_META_BLEND),
+    }
+    total_blended = blended["A"] + blended["B"]
+    return {
+        "A": round(blended["A"] / total_blended, 4) if total_blended else round(base_weights["A"], 4),
+        "B": round(blended["B"] / total_blended, 4) if total_blended else round(base_weights["B"], 4),
+    }
+
+
 def _parse_style_ratings_from_text(text: str) -> dict:
     """Extract per-style vision ratings from chart-analysis text.
 
@@ -414,6 +439,48 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
     return updated
 
 
+def _finalize_consensus(result: dict, asset_type: str) -> dict:
+    calibrated = predict_calibrated_prob(
+        result.get("conviction"),
+        engine="engine_c",
+        asset_class=asset_type,
+        style=result.get("style"),
+        max_score=1.0,
+    )
+    result["calibratedProbability"] = calibrated.get("calibrated_prob")
+    result["calibration"] = calibrated
+    if isinstance(result.get("metaPolicy"), dict):
+        result = apply_meta_policy(result, result.get("metaPolicy"))
+
+    try:
+        comps = result.get("components", {}) if isinstance(result, dict) else {}
+        record_signal_event(
+            engine="engine_c",
+            score=result.get("conviction"),
+            max_score=1.0,
+            passed=bool(result.get("trade")),
+            expected_prob=result.get("calibratedProbability", result.get("conviction")),
+            feature_map={
+                "a_norm": comps.get("a_norm"),
+                "b_norm": comps.get("b_norm"),
+                "a_has_signal": comps.get("a_has_signal"),
+                "b_has_signal": comps.get("b_has_signal"),
+                "b_bos": comps.get("b_bos"),
+                "b_ob_at_zone": comps.get("b_ob_at_zone"),
+                "rr": result.get("rr"),
+            },
+            meta={
+                "asset_type": asset_type,
+                "tier": result.get("tier"),
+                "verdict": result.get("verdict"),
+                "runtime_only_metric": False,
+            },
+        )
+    except Exception as exc:
+        log.debug(f"[SSI] Engine C sample skipped: {exc}")
+    return result
+
+
 def compute_consensus(
     signal_a: dict,
     signal_b: dict,
@@ -451,11 +518,11 @@ def compute_consensus(
 
     # Neither engine has a signal
     if not a_has and not b_has:
-        return _build_result(
+        return _finalize_consensus(_build_result(
             trade=False, verdict="NO_SIGNAL", direction=None,
             conviction=0.0, tier="SKIP", sizing=0.0,
             a_norm=a, b_norm=b, entry=entry,
-        )
+        ), asset_type)
 
     # Only one engine has signal
     if a_has and not b_has:
@@ -481,7 +548,7 @@ def compute_consensus(
         )
         if ai_vision:
             result = apply_vision(result, ai_vision)
-        return result
+        return _finalize_consensus(result, asset_type)
 
     if b_has and not a_has:
         # Engine B only — score it directly with conservative scaling.
@@ -514,7 +581,7 @@ def compute_consensus(
             # Preserve explicit upgraded label when vision confirms an already-valid B-only setup.
             if result.get("vision_action") == "confirm" and result["trade"]:
                 result["verdict"] = "B_ONLY_VISION_CONFIRMED"
-        return result
+        return _finalize_consensus(result, asset_type)
 
     # Step 3: Both engines have signals — check direction agreement
     if a["direction"] != b["direction"]:
@@ -560,9 +627,9 @@ def compute_consensus(
             )
             if ai_vision:
                 result = apply_vision(result, ai_vision)
-            return result
+            return _finalize_consensus(result, asset_type)
 
-        return _build_result(
+        return _finalize_consensus(_build_result(
             trade=False,
             verdict="OPPOSING_HIGH_CONFIDENCE" if opposing_high_confidence else "DIRECTION_CONFLICT",
             direction=None,
@@ -571,13 +638,37 @@ def compute_consensus(
             sizing=0.0,
             a_norm=a, b_norm=b, entry=entry,
             opposing_high_confidence=opposing_high_confidence,
-        )
+        ), asset_type)
 
     # Step 4: Direction agrees — compute weighted conviction
     direction = a["direction"]
 
     # Get regime-conditional A/B blend (see ENGINE_C_AB_WEIGHTS; distinct from CONFIG REGIME_WEIGHTS).
-    weights = ENGINE_C_AB_WEIGHTS.get(regime, {"A": 0.50, "B": 0.50})
+    base_weights = ENGINE_C_AB_WEIGHTS.get(regime, {"A": 0.50, "B": 0.50})
+    meta_context = get_engine_context(
+        {
+            "engine": "engine_c",
+            "type": asset_type,
+            "style": a.get("style"),
+            "regime": regime,
+            "direction": direction,
+            "volume_momentum_spread": signal_a.get("volume_momentum_spread"),
+        }
+    )
+    meta_policy = {
+        "context": {
+            "signal_engine": meta_context.get("signal_engine"),
+            "asset_class": meta_context.get("asset_class"),
+            "style": meta_context.get("style"),
+            "regime": meta_context.get("regime"),
+            "system_ssi": (meta_context.get("signal_stability_index") or {}).get("system"),
+            "spread_slippage_percentile": meta_context.get("spread_slippage_percentile"),
+            "calibration_quality": meta_context.get("calibration_quality"),
+            "vms_state": meta_context.get("vms_state"),
+        },
+        **get_dynamic_engine_weights(meta_context),
+    }
+    weights = _blend_consensus_weights(base_weights, meta_policy.get("weights"))
 
     conviction = (a["score_norm"] * weights["A"]) + (b["score_norm"] * weights["B"])
     conviction = min(1.0, conviction)
@@ -620,6 +711,8 @@ def compute_consensus(
         rr=tp_resolved["rr"],
         weights=weights,
         regime=regime,
+        meta_policy=meta_policy,
+        meta_base_weights=base_weights,
     )
 
     # Step 6: Apply Vision if available
@@ -633,7 +726,7 @@ def compute_consensus(
         f"weights={weights} verdict={result['verdict']}"
     )
 
-    return result
+    return _finalize_consensus(result, asset_type)
 
 
 def _build_result(
@@ -673,8 +766,11 @@ def _build_result(
         "tier": tier,
         "sizing_override": round(sizing, 4),
         "engine_weights": weights or {},
+        "engine_base_weights": kwargs.get("meta_base_weights") or {},
         "regime": regime,
+        "style": a_norm.get("style") if a_norm else None,
         "opposing_high_confidence": opposing_high_confidence,
+        "metaPolicy": kwargs.get("meta_policy"),
         "components": {
             "a_norm": round(a_norm["score_norm"], 4) if a_norm else 0.0,
             "a_direction": a_norm.get("direction") if a_norm else None,

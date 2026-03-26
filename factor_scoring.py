@@ -618,8 +618,10 @@ def compute_factor_scores(
             indicators["liquidity_wall_detection"] = None
             indicators["orderflow_delta"] = None
             indicators["liquidity_pressure"] = None
-        # VMS is candle-based; microstructure weight=0 for crypto so this will be excluded
-        indicators["volume_momentum_spread"] = None
+        # VMS is candle-derived directional conviction. For crypto we route it into
+        # momentum instead of the disabled microstructure bucket so it has controlled impact.
+        _cm_vms = _candle_microstructure(h4_candles)
+        indicators["volume_momentum_spread"] = _cm_vms["volume_momentum_spread"]
     elif _ws_obi is None and _ws_ofd is None and _ws_lp is None:
         # No WS data — compute candle-based proxies (includes VMS)
         _cm = _candle_microstructure(h4_candles)
@@ -647,19 +649,25 @@ def compute_factor_scores(
     if not is_crypto or _crypto_supports_cot(pair):
         derivative_keys.append("cot_z")
 
+    momentum_keys = ["rsi_z", "macdLine_z"]
+    microstructure_keys = [
+        "order_book_imbalance",
+        "liquidity_wall_detection",
+        "orderflow_delta",
+        "liquidity_pressure",
+    ]
+    if is_crypto:
+        momentum_keys.append("volume_momentum_spread")
+    else:
+        microstructure_keys.append("volume_momentum_spread")
+
     directional_factors = {
         # Multi-timeframe EMA alignment: D1 tide + H4 momentum + H1 entry
         # All 3 aligned → ±1.0 (high conviction); mixed → near 0 (conflicting)
         "trend": ["ema_trend", "h4_ema_trend", "d1_ema_trend"],
-        "momentum": ["rsi_z", "macdLine_z"],
+        "momentum": momentum_keys,
         "derivatives": derivative_keys,
-        "microstructure": [
-            "order_book_imbalance",
-            "liquidity_wall_detection",
-            "orderflow_delta",
-            "liquidity_pressure",
-            "volume_momentum_spread",
-        ],
+        "microstructure": microstructure_keys,
     }
     # Non-directional factors: abs value = quality/strength (always positive)
     nondirectional_factors = {
