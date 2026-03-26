@@ -548,12 +548,12 @@ def get_cot_z(display: str, as_of_date: str = None) -> float:
             count += 1
 
     if count == 0 and formula:
-        log.warning(
+        log.debug(
             f"[COT] {display}: formula has {len(formula)} legs but no data resolved. "
             f"Keys: {[k for _, k in formula]}"
         )
     elif count < len(formula):
-        log.warning(
+        log.debug(
             f"[COT] {display}: only {count}/{len(formula)} legs resolved. "
             f"Result={round(total/count if count else 0, 3)}"
         )
