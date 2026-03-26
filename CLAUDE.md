@@ -1,5 +1,29 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-26) — MT5 Data Migration & Pipeline Hardening
+
+**Goal:** Finalize the migration of all traditional assets to direct MT5 broker integration, ensuring real-time data persistence and NY Close grid alignment.
+
+**Full MT5 Asset Migration (`athena.py`, `config.yaml`):**
+- Moved all **Forex, Commodities, Indices, US Stocks, and ETFs** to `"source": "mt5"`.
+- Bypassed EODHD/Polygon/yfinance for these assets to eliminate REST API latency and data staleness.
+- Refined `athena.py` startup to filter out EODHD WebSocket and seeding processes for MT5-sourced pairs.
+
+**Live Price Bridging (`athena.py`):**
+- Updated `fetch_mt5()` to populate the global `_live_prices` cache.
+- Ensures that real-time execution levels for MT5-migrated assets are synchronized with terminal prices during scans and manual execution.
+
+**H4/D1 Resample Alignment (`candles_cache.py`, `config.yaml`):**
+- Implemented **`FOREX_H4_RESAMPLE_OFFSET_HOURS: 1.0`** to align H1 -> H4/D1 buckets with NY Close (5pm EST) brokers.
+- This fixes the "disjoint candles" issue where local H4 buckets didn't match TradingView/Broker charts.
+
+**Backtest Pipeline Hardening (`backtest_runner.py`):**
+- Added native `mt5` source support to the backtest engine.
+- MT5 assets now pull high-quality historical data directly from the broker terminal instead of falling back to EODHD REST, ensuring backtest/live parity.
+
+**1000-Candle Depth Audit:**
+- Confirmed that all MT5 requests use a 1000-candle depth to ensure EMA200 stability.
+
 ## Recent Changes (2026-03-25) — EMA200 Display Fix & Forex Data Source Testing
 
 **EMA200 Chart Display Fix (`static/index.html`):**
@@ -447,7 +471,7 @@ Hardcoded DB/reset/restore safeguards must remain untouched unless the user expl
 Do not silently change backup, restore, reset, or destructive maintenance behavior.
 
 ## Project Overview
-Multi-asset algorithmic trading system: Flask dashboard, Engine A confluence/factor scoring, Engine B naked price-action structure engine, AI review/explanation, live execution on MT5 (forex/stocks/commodities/indices) and Bybit Linear Futures (crypto LONG+SHORT).
+Multi-asset algorithmic trading system: Flask dashboard, Engine A (MFQS: Multi-Factor Quantitative Scoring), Engine B (Naked price-action), Engine C (Consensus), AI review, live execution on MT5 and Bybit.
 
 ---
 
@@ -455,7 +479,7 @@ Multi-asset algorithmic trading system: Flask dashboard, Engine A confluence/fac
 
 | File | Purpose | Size |
 |------|---------|------|
-| `athena.py` | Flask app, most API routes, `analyze_pair`, pair lists, core orchestration | ~6500 lines — use offset/limit |
+| `athena.py` | Flask app, most API routes, `analyze_pair`, pair lists, core orchestration | ~8500 lines |
 | `candles_cache.py` | TTL candle cache, `fetch_candles` (H1→`fetch_candles_live` first; crypto H4/D1→Binance REST), `extract_candles`, forex WS bar merge | |
 | `candle_feeds.py` | Live prices, EODHD/Binance WS, `CandleBuilder` (`on_tick` forex H1; `on_kline` crypto H1 from `BinanceCandleWS`), `fetch_candles_live` | |
 | `athena_runtime.py` | `set_runtime` / `rt()` bindings; `executed_signals` dedupe set | |
