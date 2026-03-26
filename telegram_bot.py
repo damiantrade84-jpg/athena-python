@@ -33,6 +33,28 @@ log = logging.getLogger("sentinel")
 _pending_signals = {}  # message_id -> consensus dict
 
 
+def _safe_response_json(resp):
+    """Parse JSON from local API calls without exploding on HTML error pages."""
+    try:
+        data = resp.json()
+    except Exception:
+        text = ""
+        try:
+            text = (resp.text or "").strip()
+        except Exception:
+            text = ""
+        detail = text[:200] if text else f"HTTP {getattr(resp, 'status_code', '?')}"
+        return {
+            "error": f"Invalid JSON response: {detail}",
+            "_http_status": getattr(resp, "status_code", None),
+        }
+
+    if not getattr(resp, "ok", True) and isinstance(data, dict):
+        data.setdefault("error", f"HTTP {resp.status_code}")
+        data.setdefault("_http_status", resp.status_code)
+    return data
+
+
 def start_telegram_bot():
     """Start the Telegram bot in a background thread.
     Called from athena.py on startup."""
@@ -124,7 +146,7 @@ def _build_and_run(token: str, chat_id: str):
                 json={"assetClass": asset_class, "style": "auto"},
                 timeout=180,
             )
-            data = resp.json()
+            data = _safe_response_json(resp)
             
             if data.get("error"):
                 await update.message.reply_text(f"❌ Error: {data['error']}")
@@ -160,8 +182,8 @@ def _build_and_run(token: str, chat_id: str):
         import requests as req
         try:
             # Get MT5 status
-            mt5 = req.get("http://127.0.0.1:5000/api/mt5-status", timeout=10).json()
-            bybit = req.get("http://127.0.0.1:5000/api/bybit-status", timeout=10).json()
+            mt5 = _safe_response_json(req.get("http://127.0.0.1:5000/api/mt5-status", timeout=10))
+            bybit = _safe_response_json(req.get("http://127.0.0.1:5000/api/bybit-status", timeout=10))
             
             mt5_bal = mt5.get("balance", 0)
             mt5_eq = mt5.get("equity", 0)
@@ -214,8 +236,8 @@ def _build_and_run(token: str, chat_id: str):
     async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         import requests as req
         try:
-            mt5 = req.get("http://127.0.0.1:5000/api/mt5-status", timeout=10).json()
-            bybit = req.get("http://127.0.0.1:5000/api/bybit-status", timeout=10).json()
+            mt5 = _safe_response_json(req.get("http://127.0.0.1:5000/api/mt5-status", timeout=10))
+            bybit = _safe_response_json(req.get("http://127.0.0.1:5000/api/bybit-status", timeout=10))
             text = (
                 f"💰 *Balance*\n"
                 f"MT5: `${mt5.get('balance', 0):,.2f}`\n"
@@ -259,10 +281,10 @@ def _build_and_run(token: str, chat_id: str):
                 from chart_renderer import render_chart_image
                 
                 pair_display = consensus.get("display", "")
-                candle_resp = req.get(
+                candle_resp = _safe_response_json(req.get(
                     f"http://127.0.0.1:5000/api/candles?symbol={consensus.get('symbol', '')}&tf=H4&limit=150",
                     timeout=30,
-                ).json()
+                ))
                 candles = candle_resp.get("candles", [])
                 
                 if candles:
@@ -286,7 +308,7 @@ def _build_and_run(token: str, chat_id: str):
                     )
                     
                     # Run AI Vision
-                    vision_resp = req.post(
+                    vision_resp = _safe_response_json(req.post(
                         "http://127.0.0.1:5000/api/chart-analysis",
                         json={
                             "image": f"data:image/png;base64,{img_base64}",
@@ -304,16 +326,20 @@ def _build_and_run(token: str, chat_id: str):
                             "engineB": consensus.get("engine_b_raw", {}),
                         },
                         timeout=60,
-                    ).json()
+                    ))
+                    if vision_resp.get("error"):
+                        raise RuntimeError(vision_resp["error"])
                     
                     analysis = vision_resp.get("analysis", "No analysis")
                     
                     # Apply vision to consensus
-                    confirm_resp = req.post(
+                    confirm_resp = _safe_response_json(req.post(
                         "http://127.0.0.1:5000/api/engine-c-confirm",
                         json={"consensus": consensus, "vision": vision_resp},
                         timeout=30,
-                    ).json()
+                    ))
+                    if confirm_resp.get("error"):
+                        raise RuntimeError(confirm_resp["error"])
                     
                     # Update pending signal
                     _pending_signals[signal_key] = confirm_resp
@@ -385,7 +411,7 @@ def _build_and_run(token: str, chat_id: str):
                 engine_b_raw["recommended_stop_loss"] = consensus.get("sl")
                 engine_b_raw["recommended_take_profit"] = consensus.get("tp")
                 
-                resp = req.post(
+                resp = _safe_response_json(req.post(
                     "http://127.0.0.1:5000/api/quick-execute",
                     json={
                         "signal": signal,
@@ -394,7 +420,7 @@ def _build_and_run(token: str, chat_id: str):
                         "sizing_override": consensus.get("sizing_override", 1.0),
                     },
                     timeout=30,
-                ).json()
+                ))
                 
                 if resp.get("success"):
                     ticket = resp.get("ticket", "?")

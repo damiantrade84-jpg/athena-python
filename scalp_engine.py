@@ -25,6 +25,16 @@ from config import CONFIG
 log = logging.getLogger("sentinel.scalp")
 
 
+def _rate_value(rate, field: str, default=0.0):
+    """Read a field from MT5 rate rows or dict-like test doubles."""
+    if isinstance(rate, dict):
+        return rate.get(field, default)
+    try:
+        return rate[field]
+    except Exception:
+        return default
+
+
 # ── Session windows (UTC) ─────────────────────────────────────────────────────
 _SESSIONS = {
     "london":   (7, 16),    # 07:00–16:00 UTC
@@ -73,12 +83,12 @@ def mt5_fetch_scalp_candles(mt5_symbol: str, timeframe_str: str, count: int) -> 
         candles = []
         for r in rates:
             candles.append({
-                "time":  r["time"],
-                "open":  float(r["open"]),
-                "high":  float(r["high"]),
-                "low":   float(r["low"]),
-                "close": float(r["close"]),
-                "vol":   float(r.get("tick_volume", 0)),
+                "time":  _rate_value(r, "time"),
+                "open":  float(_rate_value(r, "open")),
+                "high":  float(_rate_value(r, "high")),
+                "low":   float(_rate_value(r, "low")),
+                "close": float(_rate_value(r, "close")),
+                "vol":   float(_rate_value(r, "tick_volume", 0)),
             })
 
         # Drop the forming (last) bar
