@@ -5686,6 +5686,8 @@ def _scalp_ui_signal(raw_signal: dict) -> dict:
         "engine": raw_signal.get("engine", "SCALP"),
         "session": raw_signal.get("session"),
         "spread_pips": raw_signal.get("spread_pips"),
+        "htf_bias": raw_signal.get("htf_bias"),
+        "htf_bias_tf": raw_signal.get("htf_bias_tf"),
         "timestamp": raw_signal.get("timestamp"),
     }
 
@@ -5733,6 +5735,7 @@ def api_scalp_execute():
 
         payload = request.get_json(silent=True) or {}
         symbol = (payload.get("symbol") or "").strip()
+        client_signal = payload.get("signal") if isinstance(payload.get("signal"), dict) else None
         if not symbol:
             return jsonify({"error": "Missing symbol"}), 400
 
@@ -5745,7 +5748,51 @@ def api_scalp_execute():
                 reason = skipped[0].get("reason", reason)
             return jsonify({"success": False, "error": reason}), 200
 
-        signal = raw_signals[0]
+        if client_signal:
+            requested_symbol = (
+                client_signal.get("symbol")
+                or client_signal.get("pair")
+                or client_signal.get("display")
+                or ""
+            ).strip()
+            requested_direction = (client_signal.get("direction") or "").upper()
+            if requested_symbol and requested_symbol != symbol:
+                return jsonify({"success": False, "error": "Signal symbol mismatch"}), 200
+            if requested_direction not in ("LONG", "SHORT"):
+                return jsonify({"success": False, "error": "Signal direction missing"}), 200
+
+            signal = next(
+                (
+                    s
+                    for s in raw_signals
+                    if (s.get("pair") or "").strip() == symbol
+                    and (s.get("direction") or "").upper() == requested_direction
+                ),
+                None,
+            )
+            if signal is None:
+                fresh_dirs = sorted(
+                    {str((s.get("direction") or "")).upper() for s in raw_signals if s.get("direction")}
+                )
+                if fresh_dirs:
+                    return jsonify(
+                        {
+                            "success": False,
+                            "error": (
+                                f"SIGNAL_FLIPPED: {symbol} is now {'/'.join(fresh_dirs)} "
+                                f"(was {requested_direction})"
+                            ),
+                            "newDirection": fresh_dirs[0] if len(fresh_dirs) == 1 else fresh_dirs,
+                        }
+                    ), 200
+                return jsonify(
+                    {
+                        "success": False,
+                        "error": f"SETUP_INVALIDATED: {symbol} {requested_direction} is no longer a valid scalp setup",
+                    }
+                ), 200
+        else:
+            signal = raw_signals[0]
         account = mt5_get_account()
         if not account or account.get("error"):
             return jsonify({"error": "MT5 not connected"}), 503

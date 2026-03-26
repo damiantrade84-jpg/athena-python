@@ -19,6 +19,20 @@
     return window["_nakedSig_" + sid] || null;
   }
 
+  function _resolveSignalRef(signalRef) {
+    var ref = String(signalRef || "");
+    var exact = (window._execSignalsByKey || {})[ref];
+    if (exact) return exact;
+    if (window["_nakedSig_" + ref]) return window["_nakedSig_" + ref];
+    return _resolveSignal(signalRef);
+  }
+
+  function _signalSid(sig, fallback) {
+    var base =
+      (sig && (sig.symbol || sig.display || sig.pair)) || String(fallback || "");
+    return String(base).replace(/[\/=^.]/g, "_");
+  }
+
   async function postQuickExecute(payload, btn, successMsg) {
     const old = btn ? btn.textContent : "";
     if (btn) {
@@ -48,13 +62,14 @@
     }
   }
 
-  async function executeSignalStyle(symbol, pipMode, buttonId) {
-    var sid = (symbol || "").replace(/[\/=^.]/g, "_");
-    var sig = _resolveSignal(symbol);
+  async function executeSignalStyle(signalRef, pipMode, buttonId) {
+    var sig = _resolveSignalRef(signalRef);
     if (!sig) {
-      window.showToast("Signal not found for " + symbol, true);
+      window.showToast("Signal not found for " + signalRef, true);
       return;
     }
+    var sid = _signalSid(sig, signalRef);
+    var symbol = sig.display || sig.pair || sig.symbol || signalRef;
     var btn = document.getElementById(
       buttonId || "exec-style-" + (pipMode || "swing") + "-" + sid
     );
@@ -70,10 +85,11 @@
     );
   }
 
-  async function quickExecute(symbol, engineBData, buttonId, pipMode) {
-    var sid = (symbol || "").replace(/[\/=^.]/g, "_");
-    var sig = _resolveSignal(symbol);
+  async function quickExecute(signalRef, engineBData, buttonId, pipMode) {
+    var sig = _resolveSignalRef(signalRef);
     if (!sig) return;
+    var sid = _signalSid(sig, signalRef);
+    var symbol = sig.display || sig.pair || sig.symbol || signalRef;
     var btn = document.getElementById(
       buttonId || "qexecbtn-" + (pipMode || "swing") + "-" + sid
     );

@@ -66,6 +66,7 @@ def mt5_fetch_scalp_candles(mt5_symbol: str, timeframe_str: str, count: int) -> 
         tf_map = {
             "M5":  mt5.TIMEFRAME_M5,
             "M15": mt5.TIMEFRAME_M15,
+            "H1":  mt5.TIMEFRAME_H1,
         }
         tf = tf_map.get(timeframe_str.upper())
         if tf is None:
@@ -116,6 +117,33 @@ def _calc_ema(values: list, period: int) -> list:
     for v in values[period:]:
         ema.append(v * k + ema[-1] * (1 - k))
     return ema
+
+
+def infer_bias_from_ema_stack(candles: list) -> Optional[str]:
+    """Infer directional bias from an EMA stack on a higher timeframe."""
+    if len(candles) < 200:
+        return None
+
+    closes = [float(c.get("close", 0.0)) for c in candles if c.get("close") is not None]
+    if len(closes) < 200:
+        return None
+
+    ema21_series = _calc_ema(closes, 21)
+    ema50_series = _calc_ema(closes, 50)
+    ema200_series = _calc_ema(closes, 200)
+    if not ema21_series or not ema50_series or not ema200_series:
+        return None
+
+    ema21 = ema21_series[-1]
+    ema50 = ema50_series[-1]
+    ema200 = ema200_series[-1]
+    last_close = closes[-1]
+
+    if ema21 > ema50 > ema200 and last_close >= ema21:
+        return "LONG"
+    if ema21 < ema50 < ema200 and last_close <= ema21:
+        return "SHORT"
+    return None
 
 
 # ── Session filter ────────────────────────────────────────────────────────────
@@ -588,6 +616,9 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
     cfg = CONFIG.get("SCALP_ENGINE", {})
     m15_count = int(cfg.get("M15_CANDLES", 500))
     m5_count  = int(cfg.get("M5_CANDLES", 1000))
+    h1_count = int(cfg.get("H1_CANDLES", 300))
+    bias_tf = str(cfg.get("BIAS_TIMEFRAME", "H1")).upper()
+    use_bias_filter = bool(cfg.get("WITH_TREND_ONLY", True))
 
     # Session gate
     session_ok, session_name = is_valid_session()
@@ -648,6 +679,14 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 continue
 
             current_price = candles_m5[-1]["close"]
+            htf_bias = None
+
+            if use_bias_filter:
+                candles_bias = mt5_fetch_scalp_candles(mt5_sym, bias_tf, h1_count)
+                if len(candles_bias) < 200:
+                    skipped.append({"pair": display, "reason": f"insufficient_{bias_tf.lower()}_candles"})
+                    continue
+                htf_bias = infer_bias_from_ema_stack(candles_bias)
 
             # Pipeline
             zone     = detect_m15_zone(candles_m15, current_price)
@@ -658,6 +697,15 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             trigger  = detect_m5_trigger(candles_m5, zone, current_price)
             if not trigger["valid"]:
                 skipped.append({"pair": display, "reason": f"no_trigger:{trigger.get('reason', '?')}"})
+                continue
+
+            if use_bias_filter and htf_bias and trigger["direction"] != htf_bias:
+                skipped.append(
+                    {
+                        "pair": display,
+                        "reason": f"counter_trend:{trigger['direction']}_vs_{bias_tf}_{htf_bias}",
+                    }
+                )
                 continue
 
             momentum = confirm_momentum(candles_m5, trigger)
@@ -693,6 +741,8 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "spread_pips":   spread_pips,
                 "session":       session_name,
                 "ema21":         zone.get("ema21"),
+                "htf_bias":      htf_bias,
+                "htf_bias_tf":   bias_tf if use_bias_filter else None,
                 "timestamp":     datetime.now(timezone.utc).isoformat(),
                 "engine":        "SCALP",
                 # Fields required by risk_engine.risk_check()

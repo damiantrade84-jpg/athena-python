@@ -1760,11 +1760,17 @@ function applyFilter(f,el) {
 // -- Render --
 function renderSignals(signals){
   var grid=document.getElementById('signalGrid');
+  window._execSignalsByKey = {};
   if(!signals||signals.length===0){
     grid.innerHTML='<div class="empty-state"><div class="icon">⟢</div><h3>No Signals</h3><p>No setups matched current filters.</p></div>';
     return;
   }
   grid.innerHTML=signals.map(function(s,i){ 
+    var keyBase = (s.symbol || s.display || s.pair || 'sig').replace(/[^A-Za-z0-9]/g, '_');
+    var keyDir = (s.direction || 'NA').replace(/[^A-Za-z0-9]/g, '_');
+    var keyTs = String(s.timestamp || s.ts || i).replace(/[^A-Za-z0-9]/g, '_');
+    s._execKey = keyBase + '__' + keyDir + '__' + keyTs + '__' + i;
+    window._execSignalsByKey[s._execKey] = s;
     var card = buildCard(s,i);
     // Store naked scan signals for fallback lookup
     if(s.is_naked) {
@@ -2793,7 +2799,7 @@ function buildExecButton(s) {
   var btnClass = isForce ? 'exec-btn force' : 'exec-btn '+dir;
   var label = isForce ? 'FORCE EXECUTE '+dir+via : 'EXECUTE '+dir+via;
   var styleExecHtml = buildStyleExecButtons(s);
-  return '<button class="'+btnClass+'" id="execbtn-'+sid+'" onclick="confirmExecute(\''+s.symbol+'\', '+isForce+')" '+(disabled?'disabled title="'+disTitle+'"':'')+'>'+
+  return '<button class="'+btnClass+'" id="execbtn-'+sid+'" onclick="confirmExecute(\''+s._execKey+'\', '+isForce+')" '+(disabled?'disabled title="'+disTitle+'"':'')+'>'+
     label+
     '<span class="exec-detail" id="execdetail-'+sid+'">'+s.display+' @ '+fmtPrice(entryPrice)+' | SL: '+fmtPrice(s.sl)+' | TP: '+fmtPrice(s.tp1)+'</span>'+
   '</button>'+styleExecHtml;
@@ -2812,9 +2818,9 @@ function buildStyleExecButtons(s) {
     return '';
   }
   var row = '<div style="display:flex;gap:6px;margin-top:8px;">';
-  row += '<button class="exec-btn force" id="exec-style-scalp-'+sid+'" style="flex:1;font-size:11px;" onclick="executeSignalStyle(\''+s.symbol+'\',\'scalp\',\'exec-style-scalp-'+sid+'\')">⚡ SCALP'+warn('scalp')+'</button>';
-  row += '<button class="exec-btn force" id="exec-style-intraday-'+sid+'" style="flex:1;font-size:11px;" onclick="executeSignalStyle(\''+s.symbol+'\',\'intraday\',\'exec-style-intraday-'+sid+'\')">📊 INTRADAY'+warn('intraday')+'</button>';
-  row += '<button class="exec-btn force" id="exec-style-swing-'+sid+'" style="flex:1;font-size:11px;" onclick="executeSignalStyle(\''+s.symbol+'\',\'swing\',\'exec-style-swing-'+sid+'\')">🌊 SWING'+warn('swing')+'</button>';
+  row += '<button class="exec-btn force" id="exec-style-scalp-'+sid+'" style="flex:1;font-size:11px;" onclick="executeSignalStyle(\''+s._execKey+'\',\'scalp\',\'exec-style-scalp-'+sid+'\')">⚡ SCALP'+warn('scalp')+'</button>';
+  row += '<button class="exec-btn force" id="exec-style-intraday-'+sid+'" style="flex:1;font-size:11px;" onclick="executeSignalStyle(\''+s._execKey+'\',\'intraday\',\'exec-style-intraday-'+sid+'\')">📊 INTRADAY'+warn('intraday')+'</button>';
+  row += '<button class="exec-btn force" id="exec-style-swing-'+sid+'" style="flex:1;font-size:11px;" onclick="executeSignalStyle(\''+s._execKey+'\',\'swing\',\'exec-style-swing-'+sid+'\')">🌊 SWING'+warn('swing')+'</button>';
   row += '</div>';
   return row;
 }
@@ -3062,6 +3068,7 @@ async function runNakedScan(symbol) {
     sig = window['_nakedSig_'+(symbol||'').replace(/[\/=^.]/g,'_')];
   }
   if(!sig) { showToast('Signal not found for '+symbol, true); return; }
+  var execRef = sig._execKey || sid;
   var liveSig = buildLiveSignalPayload(sig);
   var btn=document.getElementById('nbtn-'+sid);
   if(btn){btn.disabled=true;btn.textContent='Scanning...';}
@@ -3118,9 +3125,9 @@ async function runNakedScan(symbol) {
     var htmlContent = out.replace(/\n/g, '<br>');
     
     var execBtnHTML = '<div style="display:flex;gap:4px;margin-top:8px">' +
-      '<button class="exec-btn force" style="flex:1;font-size:11px" id="qexecbtn-scalp-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'], null, \'scalp\')" '+exeDisabled+'>⚡ SCALP</button>' +
-      '<button class="exec-btn force" style="flex:1;font-size:11px" id="qexecbtn-intraday-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'], null, \'intraday\')" '+exeDisabled+'>📊 INTRADAY</button>' +
-      '<button class="exec-btn force" style="flex:1;font-size:11px" id="qexecbtn-swing-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'])" '+exeDisabled+'>🌊 SWING</button>' +
+      '<button class="exec-btn force" style="flex:1;font-size:11px" id="qexecbtn-scalp-'+sid+'" onclick="quickExecute(\''+execRef+'\', window[\'_engineB_'+sid+'\'], null, \'scalp\')" '+exeDisabled+'>⚡ SCALP</button>' +
+      '<button class="exec-btn force" style="flex:1;font-size:11px" id="qexecbtn-intraday-'+sid+'" onclick="quickExecute(\''+execRef+'\', window[\'_engineB_'+sid+'\'], null, \'intraday\')" '+exeDisabled+'>📊 INTRADAY</button>' +
+      '<button class="exec-btn force" style="flex:1;font-size:11px" id="qexecbtn-swing-'+sid+'" onclick="quickExecute(\''+execRef+'\', window[\'_engineB_'+sid+'\'])" '+exeDisabled+'>🌊 SWING</button>' +
       '</div>';
     var aiBtnHTML = '<button class="exec-btn" style="margin-top:8px;width:100%;background-color:var(--accent);color:#0a0e17" id="abtn-naked-'+sid+'" onclick="analyzeNakedSignal(\''+symbol+'\')">🤖 ANALYZE ENGINE B</button>';
     
@@ -3139,6 +3146,7 @@ async function runCompare(symbol) {
   var sid=(symbol||'').replace(/[\/=^.]/g,'_');
   var sig=allSignals.find(function(s){return s.symbol===symbol;}) || window['_nakedSig_'+sid];
   if(!sig) return;
+  var execRef = sig._execKey || sid;
   var liveSig = buildLiveSignalPayload(sig);
   var btn=document.getElementById('cbtn-'+sid);
   if(btn){btn.disabled=true;btn.textContent='Comparing...';}
@@ -3205,17 +3213,17 @@ async function runCompare(symbol) {
         '<div style="margin:8px 0 4px;font-size:10px;font-weight:700;color:#f59e0b;letter-spacing:1px;font-family:monospace">⚖️ CROSS-ENGINE AI REVIEW (A+B aware)</div>'+
         buildAIContent(engineB.ai_analysis, symbol, 'compare-card')+
         '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px">'+
-          '<button class="exec-btn force" style="flex:1;min-width:100px;font-size:11px" id="qexecbtn-scalp-'+sid+'-compare" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'], \'qexecbtn-scalp-'+sid+'-compare\', \'scalp\')" '+exeDisabled+'>⚡ SCALP</button>'+
-          '<button class="exec-btn force" style="flex:1;min-width:100px;font-size:11px" id="qexecbtn-intraday-'+sid+'-compare" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'], \'qexecbtn-intraday-'+sid+'-compare\', \'intraday\')" '+exeDisabled+'>📊 INTRADAY</button>'+
-          '<button class="exec-btn force" style="flex:1;min-width:100px;font-size:11px" id="qexecbtn-swing-'+sid+'-compare" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'], \'qexecbtn-swing-'+sid+'-compare\')" '+exeDisabled+'>🌊 SWING</button>'+
+          '<button class="exec-btn force" style="flex:1;min-width:100px;font-size:11px" id="qexecbtn-scalp-'+sid+'-compare" onclick="quickExecute(\''+execRef+'\', window[\'_engineB_'+sid+'\'], \'qexecbtn-scalp-'+sid+'-compare\', \'scalp\')" '+exeDisabled+'>⚡ SCALP</button>'+
+          '<button class="exec-btn force" style="flex:1;min-width:100px;font-size:11px" id="qexecbtn-intraday-'+sid+'-compare" onclick="quickExecute(\''+execRef+'\', window[\'_engineB_'+sid+'\'], \'qexecbtn-intraday-'+sid+'-compare\', \'intraday\')" '+exeDisabled+'>📊 INTRADAY</button>'+
+          '<button class="exec-btn force" style="flex:1;min-width:100px;font-size:11px" id="qexecbtn-swing-'+sid+'-compare" onclick="quickExecute(\''+execRef+'\', window[\'_engineB_'+sid+'\'], \'qexecbtn-swing-'+sid+'-compare\')" '+exeDisabled+'>🌊 SWING</button>'+
           '<button class="exec-btn" style="flex:1;min-width:160px;background-color:var(--accent);color:#0a0e17" id="'+compareAnalyzeBtnId+'" onclick="analyzeNakedSignal(\''+symbol+'\', \''+compareAnalyzeBtnId+'\')">🤖 REFRESH AI</button>'+
         '</div>';
     }
 
     var execBtnHTML = '<div style="display:flex;gap:4px;margin-top:4px">' +
-      '<button class="exec-btn force" style="flex:1;font-size:11px" id="qexecbtn-scalp-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'], null, \'scalp\')" '+exeDisabled+'>⚡ SCALP</button>' +
-      '<button class="exec-btn force" style="flex:1;font-size:11px" id="qexecbtn-intraday-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'], null, \'intraday\')" '+exeDisabled+'>📊 INTRADAY</button>' +
-      '<button class="exec-btn force" style="flex:1;font-size:11px" id="qexecbtn-swing-'+sid+'" onclick="quickExecute(\''+symbol+'\', window[\'_engineB_'+sid+'\'])" '+exeDisabled+'>🌊 SWING</button>' +
+      '<button class="exec-btn force" style="flex:1;font-size:11px" id="qexecbtn-scalp-'+sid+'" onclick="quickExecute(\''+execRef+'\', window[\'_engineB_'+sid+'\'], null, \'scalp\')" '+exeDisabled+'>⚡ SCALP</button>' +
+      '<button class="exec-btn force" style="flex:1;font-size:11px" id="qexecbtn-intraday-'+sid+'" onclick="quickExecute(\''+execRef+'\', window[\'_engineB_'+sid+'\'], null, \'intraday\')" '+exeDisabled+'>📊 INTRADAY</button>' +
+      '<button class="exec-btn force" style="flex:1;font-size:11px" id="qexecbtn-swing-'+sid+'" onclick="quickExecute(\''+execRef+'\', window[\'_engineB_'+sid+'\'])" '+exeDisabled+'>🌊 SWING</button>' +
       '</div>';
     
     if(resDiv) resDiv.innerHTML = html + execBtnHTML;
@@ -3762,8 +3770,16 @@ async function toggleTestMode() {
   } catch(e) { showToast('Error toggling test mode: '+e.message); }
 }
 
-function confirmExecute(symbol, forceMode) {
-  var sig = allSignals.find(function(s){ return s.symbol === symbol; });
+function resolveExecSignal(signalRef) {
+  return (window._execSignalsByKey || {})[signalRef] ||
+    window['_nakedSig_' + signalRef] ||
+    allSignals.find(function(s){
+      return s.symbol === signalRef || s.display === signalRef || s.pair === signalRef;
+    });
+}
+
+function confirmExecute(signalRef, forceMode) {
+  var sig = resolveExecSignal(signalRef);
   if (!sig) return;
   var execSig = buildLiveSignalPayload(sig);
   var isCrypto = sig.type === 'crypto';
@@ -3797,14 +3813,14 @@ function confirmExecute(symbol, forceMode) {
     '</div>' +
     '<div class="exec-actions">' +
       '<button class="exec-cancel" onclick="this.closest(\'.exec-modal-overlay\').remove()">CANCEL</button>' +
-      '<button class="exec-confirm ' + dir + '" onclick="doExecute(\'' + symbol + '\', this, ' + isForce + ')">CONFIRM ' + dir + '</button>' +
+      '<button class="exec-confirm ' + dir + '" onclick="doExecute(\'' + signalRef + '\', this, ' + isForce + ')">CONFIRM ' + dir + '</button>' +
     '</div>' +
   '</div>';
   document.body.appendChild(overlay);
 }
 
-async function doExecute(symbol, btn, forceMode) {
-  var sig = allSignals.find(function(s){ return s.symbol === symbol; });
+async function doExecute(signalRef, btn, forceMode) {
+  var sig = resolveExecSignal(signalRef);
   if (!sig) return;
   btn.disabled = true; btn.textContent = 'SENDING...';
   try {
@@ -5007,6 +5023,30 @@ function buildECExecButtons(c, sid) {
   return html;
 }
 
+async function _waitChartReady(minBars) {
+  for (var _p = 0; _p < 30; _p++) {
+    await new Promise(function(r) { setTimeout(r, 500); });
+    var _l = document.getElementById('acm-loading');
+    if (_acm.lastData && _acm.lastData.length >= minBars && _acm.candle && !(_l && _l.parentElement)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function _captureChart() {
+  var _body = document.getElementById('acm-chart-body');
+  if (!_body) {
+    throw new Error('chart container not found');
+  }
+  // Double rAF: guarantees browser has painted at least one full frame before capture
+  await new Promise(function(r) { requestAnimationFrame(function() { requestAnimationFrame(r); }); });
+  var _c = await html2canvas(_body, {
+    backgroundColor: '#131722', scale: 2.25, logging: false, useCORS: true,
+  });
+  return _c.toDataURL('image/png');
+}
+
 async function runECVisionConfirm(sid) {
   var btn = document.getElementById('ec-vision-btn-' + sid);
   if (!btn) return;
@@ -5026,29 +5066,6 @@ async function runECVisionConfirm(sid) {
     btn.textContent = '&#129504; AI CONFIRM';
     btn.disabled = false;
     return;
-  }
-
-  // Helper: wait for acm-chart-body to be ready
-  async function _waitChartReady(minBars) {
-    for (var _p = 0; _p < 30; _p++) {
-      await new Promise(function(r) { setTimeout(r, 500); });
-      var _l = document.getElementById('acm-loading');
-      if (_acm.lastData && _acm.lastData.length >= minBars && _acm.candle && !(_l && _l.parentElement)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  // Helper: capture current chart body as base64 PNG
-  async function _captureChart() {
-    var _body = document.getElementById('acm-chart-body');
-    // Double rAF: guarantees browser has painted at least one full frame before capture
-    await new Promise(function(r) { requestAnimationFrame(function() { requestAnimationFrame(r); }); });
-    var _c = await html2canvas(_body, {
-      backgroundColor: '#131722', scale: 2.25, logging: false, useCORS: true,
-    });
-    return _c.toDataURL('image/png');
   }
 
   // ── Step 1: H4 entry screenshot ────────────────────────────────────────────
@@ -5314,10 +5331,15 @@ async function runScalpScan() {
 function renderScalpSignals(signals) {
   var grid = document.getElementById('scalpSignals');
   if (!grid) return;
+  window._scalpSignalsById = {};
   if (!signals || signals.length === 0) {
     grid.innerHTML = '<div class="empty-state"><div class="icon">⚡</div><h3>No Scalps Found</h3><p>Try again later or check MT5 connection.</p></div>';
     return;
   }
+  signals.forEach(function(s) {
+    var sid = (s.symbol||'').replace(/[\/=^.]/g, '_');
+    window._scalpSignalsById[sid] = s;
+  });
   grid.innerHTML = signals.map(function(s, i) { return buildScalpCard(s, i); }).join('');
 }
 
@@ -5352,20 +5374,26 @@ function buildScalpCard(s, idx) {
       '<div id="scalp-vision-res-'+sid+'"></div>'+
       '<div style="display:flex; gap:8px; margin-top:12px">'+
         '<button class="analyze-btn" style="flex:1" onclick="runScalpVisionConfirm(this, \''+s.symbol+'\')">🧠 VISION</button>'+
-        '<button class="exec-btn '+dirCls+'" style="flex:2; margin-top:0" onclick="executeScalp(this, \''+s.symbol+'\')">EXECUTE SCALP</button>'+
+        '<button class="exec-btn '+dirCls+'" style="flex:2; margin-top:0" onclick="executeScalp(this, \''+sid+'\')">EXECUTE SCALP</button>'+
       '</div>'+
     '</div>'+
   '</div>';
 }
 
-async function executeScalp(btn, symbol) {
-  if (!confirm('Execute M5 Scalp trade for ' + symbol + '? Risk engine will be checked.')) return;
+async function executeScalp(btn, sid) {
+  var signal = (window._scalpSignalsById || {})[sid];
+  if (!signal) {
+    showToast('Scalp signal expired - run scan again', true);
+    return;
+  }
+  var symbol = signal.symbol || signal.pair || '';
+  if (!confirm('Execute M5 Scalp trade for ' + symbol + ' ' + signal.direction + '? Risk engine will be checked.')) return;
   btn.disabled = true; btn.textContent = 'EXECUTING...';
   try {
     var resp = await fetch('/api/scalp-execute', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({symbol: symbol})
+      body: JSON.stringify({symbol: symbol, signal: signal})
     });
     var data = await resp.json();
     if (data.success) {
@@ -5389,13 +5417,20 @@ async function runScalpVisionConfirm(btn, symbol) {
     btn.disabled = true; btn.textContent = '📸...';
     // Re-use ACM to take M15 screenshot
     openAcm(symbol, 'M15'); 
-    await new Promise(function(r) { setTimeout(r, 2000); }); 
+    var ready = await _waitChartReady(20);
+    if (!ready) {
+        showToast('M15 chart failed to load - try again', true);
+        btn.disabled = false; btn.textContent = 'VISION';
+        closeAcm();
+        return;
+    }
+    await new Promise(function(r) { setTimeout(r, 1200); }); 
     var img;
     try {
         img = await _captureChart();
     } catch(e) {
         showToast('Screenshot failed: ' + e.message, true);
-        btn.disabled = false; btn.textContent = '🧠 VISION';
+        btn.disabled = false; btn.textContent = 'VISION';
         closeAcm();
         return;
     }

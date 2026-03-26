@@ -521,7 +521,10 @@ SCALP_ENGINE:
   enabled: true
   M15_CANDLES: 500
   M5_CANDLES: 1000
+  H1_CANDLES: 300
   SESSION_FILTER: true          # London/NY only
+  WITH_TREND_ONLY: true         # Reject counter-trend scalp setups
+  BIAS_TIMEFRAME: "H1"          # Higher-TF direction gate for scalp signals
   MAX_SPREAD_PIPS:              # Per asset class
     forex: 4
     commodity: 8

@@ -37,6 +37,50 @@ def api_quick_execute():
 
     pip_mode = normalize_pip_mode(d.get("pip_mode"))
     _sizing_override = float(d.get("sizing_override", 1.0))
+    sig["style"] = pip_mode or sig.get("style", "swing")
+
+    _sig_age = 9999
+    _ts_str = sig.get("timestamp", "")
+    if _ts_str:
+        try:
+            _sig_age = (
+                datetime.now(timezone.utc)
+                - datetime.fromisoformat(_ts_str.replace("Z", "+00:00"))
+            ).total_seconds()
+        except Exception:
+            _sig_age = 9999
+
+    _max_age = _r.CONFIG.get("SIGNAL_MAX_AGE_SEC", 300)
+    if _sig_age > _max_age / 2:
+        pair = sig.get("pair", "")
+        _pair_obj = next((p for p in _r.ALL_PAIRS if p["display"] == pair), None)
+        if _pair_obj:
+            try:
+                _fresh = _r.analyze_pair(_pair_obj, "neutral", style=sig["style"])
+                if _fresh:
+                    _orig_dir = sig.get("direction", "")
+                    if _fresh["direction"] != _orig_dir:
+                        return jsonify(
+                            {
+                                "error": f"SIGNAL_FLIPPED: {pair} is now {_fresh['direction']} (was {_orig_dir})",
+                                "newDirection": _fresh["direction"],
+                                "refreshedAt": _fresh["timestamp"],
+                            }
+                        ), 409
+                    sig["price"] = _fresh["price"]
+                    sig["atr"] = _fresh.get("atr", sig.get("atr", 0))
+                    sig["confluenceScore"] = _fresh.get(
+                        "confluenceScore", sig.get("confluenceScore")
+                    )
+                    sig["maxScore"] = _fresh.get("maxScore", sig.get("maxScore", 3))
+                    sig["trendState"] = _fresh.get(
+                        "trendState", sig.get("trendState")
+                    )
+                    sig["timestamp"] = _fresh["timestamp"]
+            except Exception as _fresh_err:
+                _r.log.warning(
+                    f"[QUICK EXEC] {pair}: refresh failed ({_fresh_err}) - continuing with original direction"
+                )
 
     try:
         recomputed = recompute_levels_for_style(
