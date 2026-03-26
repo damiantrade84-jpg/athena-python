@@ -765,7 +765,7 @@ def compute_factor_scores(
         _adaptive = get_adaptive_weights(_db, asset_type, regime)
         if _adaptive:
             import logging as _logging
-            _logging.getLogger(__name__).info(
+            _logging.getLogger(__name__).debug(
                 f"[ADAPTIVE] applying learned weights for {asset_type}/{regime}"
             )
             for factor in weights:

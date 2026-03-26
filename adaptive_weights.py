@@ -74,7 +74,7 @@ def _compute_adaptive_weights(db_path: str, asset_type: str, regime: str) -> dic
         con.close()
 
         if len(rows) < 10:
-            log.info(
+            log.debug(
                 f"[ADAPT] {asset_type}: only {len(rows)} trades, using base weights"
             )
             return _BASE_WEIGHTS.copy()
@@ -164,7 +164,7 @@ def _compute_adaptive_weights(db_path: str, asset_type: str, regime: str) -> dic
             weights = {k: round(v * scale, 3) for k, v in weights.items()}
 
         if adjustments:
-            log.info(f"[ADAPT] {asset_type} weights adjusted: {adjustments}")
+            log.debug(f"[ADAPT] {asset_type} weights adjusted: {adjustments}")
 
         return weights
 
