@@ -338,6 +338,7 @@ def calc_confluence(
     funding_rate: float | None = None,
     volume_threshold: float | None = None,
     bar_time: str | None = None,
+    regime_context: dict | None = None,
 ) -> dict:
     """Factor-based confluence using normalized indicators, regime-aware weights, and correlation filtering.
     Preserves legacy API and raw-threshold warnings for human readability.
@@ -357,6 +358,7 @@ def calc_confluence(
         vr,
         funding_rate,
         bar_time,
+        regime_context,
     )
 
     # Fix 2 — btcBias penalty: when BTC bias opposes direction, apply mild conviction reduction

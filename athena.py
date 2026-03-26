@@ -6604,7 +6604,9 @@ def fetch_eodhd_indicators(pair):
         return None
 
 
-def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
+def analyze_pair(
+    pair, btc_bias, style="swing", use_naked_engine=False, regime_context=None
+):
 
     pair_profile = get_pair_profile(pair)
     _score_group = get_pair_score_group(pair)
@@ -6860,6 +6862,7 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
             volume_threshold=pair_profile.get(
                 "volume_threshold", CONFIG["VOLUME_THRESHOLD"]
             ),
+            regime_context=regime_context,
         )
 
     # For SCALP: warn if D1 trend disagrees with signal direction

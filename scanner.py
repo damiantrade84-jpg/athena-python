@@ -21,6 +21,7 @@ from scoring import (
     get_pair_score_group,
 )
 from market_structure import NakedEngine
+from factor_scoring import make_regime_smoothing_context
 
 log = logging.getLogger("sentinel")
 
@@ -325,11 +326,14 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             log.error(f"BTC err: {e}")
 
         _engine_b = NakedEngine()
+        _regime_context = make_regime_smoothing_context()
 
         def _analyse(pair):
             try:
                 _pair_style = r.resolve_scan_style(_requested_style, pair)
-                sig_a = r.analyze_pair(pair, btc_bias, style=_pair_style)
+                sig_a = r.analyze_pair(
+                    pair, btc_bias, style=_pair_style, regime_context=_regime_context
+                )
 
                 if not sig_a:
                     return pair, None, None

@@ -9,6 +9,17 @@ import logging
 
 log = logging.getLogger("sentinel")
 
+
+def _deep_merge_dict(base: dict, overrides: dict) -> dict:
+    """Recursively merge nested dicts while preserving unspecified defaults."""
+    merged = dict(base)
+    for key, value in overrides.items():
+        if isinstance(merged.get(key), dict) and isinstance(value, dict):
+            merged[key] = _deep_merge_dict(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
 PAIR_PROFILE_VOTES = {
     "d1_trend",
     "h1_ema",
@@ -584,7 +595,7 @@ CONFIG: dict = {
 # Apply YAML overrides — deep-merge dicts, overwrite scalars
 for _k, _v in _yaml_overrides.items():
     if _k in CONFIG and isinstance(CONFIG[_k], dict) and isinstance(_v, dict):
-        CONFIG[_k].update(_v)
+        CONFIG[_k] = _deep_merge_dict(CONFIG[_k], _v)
     else:
         CONFIG[_k] = _v
 

@@ -8,8 +8,13 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from factor_scoring import compute_factor_scores, _factor_score
-from config import CONFIG
+from factor_scoring import (
+    compute_factor_scores,
+    _factor_score,
+    make_regime_smoothing_context,
+)
+from config import CONFIG, _deep_merge_dict
+from scoring import calc_confluence
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -364,3 +369,284 @@ class TestCryptoMicrostructureZeroWeight:
             volume_ratio=1.5,
         )
         assert "carry" not in result["factor_scores"]
+
+
+class TestAdaptiveWeights:
+    def test_neutral_adaptive_weights_leave_resolved_weights_unchanged(self):
+        snap = _make_snap()
+        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
+            baseline = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair={"type": "forex", "display": "EUR/USD"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+            )
+        neutral = {
+            "trend": 1.0,
+            "momentum": 1.0,
+            "volatility": 1.0,
+            "volume": 1.0,
+            "structure": 1.0,
+            "derivatives": 1.0,
+            "microstructure": 1.0,
+            "carry": 1.0,
+            "trend_strength": 1.0,
+        }
+        with patch("adaptive_weights.get_adaptive_weights", return_value=neutral):
+            result = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair={"type": "forex", "display": "EUR/USD"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+            )
+        assert result["weights"] == pytest.approx(baseline["weights"])
+
+    def test_adaptive_weights_scale_runtime_weights_instead_of_replacing_them(self):
+        snap = _make_snap()
+        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
+            baseline = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair={"type": "forex", "display": "EUR/USD"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+            )
+        adaptive = {
+            "trend": 1.1,
+            "momentum": 0.8,
+            "volatility": 1.0,
+            "volume": 1.0,
+            "structure": 1.0,
+            "derivatives": 1.0,
+            "microstructure": 1.0,
+            "carry": 1.0,
+            "trend_strength": 1.25,
+        }
+        with patch("adaptive_weights.get_adaptive_weights", return_value=adaptive):
+            result = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair={"type": "forex", "display": "EUR/USD"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+            )
+        assert result["weights"]["trend"] == pytest.approx(baseline["weights"]["trend"] * 1.1)
+        assert result["weights"]["momentum"] == pytest.approx(
+            baseline["weights"]["momentum"] * 0.8
+        )
+        assert result["weights"]["trend_strength"] == pytest.approx(
+            baseline["weights"]["trend_strength"] * 1.25
+        )
+
+    def test_adaptive_weights_do_not_reenable_zero_weight_factors(self):
+        snap = _make_snap()
+        adaptive = {
+            "trend": 1.0,
+            "momentum": 1.0,
+            "volatility": 1.0,
+            "volume": 1.0,
+            "structure": 1.0,
+            "derivatives": 1.5,
+            "microstructure": 2.0,
+            "carry": 3.0,
+            "trend_strength": 1.0,
+        }
+        with patch("adaptive_weights.get_adaptive_weights", return_value=adaptive):
+            result = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair=_make_pair(display="BTC/USDT"),
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+                funding_rate=0.0001,
+            )
+        assert result["weights"]["microstructure"] == 0
+        assert "carry" not in result["weights"] or result["weights"].get("carry", 0) == 0
+
+
+class TestDirectionUsesEffectiveWeights:
+    def test_zero_weight_directional_factor_cannot_flip_direction(self):
+        snap = _make_snap(
+            order_book_imbalance=-3.0,
+            liquidity_wall_detection=-3.0,
+            orderflow_delta=-3.0,
+            liquidity_pressure=-3.0,
+            microstructure_age_sec=1.0,
+        )
+        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
+            result = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair=_make_pair(display="BTC/USDT", score_group="crypto_btc"),
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+                funding_rate=0.0001,
+            )
+        assert result["weights"]["microstructure"] == 0
+        assert result["factor_scores"]["microstructure"] == -3.0
+        assert result["direction"] == "LONG"
+        assert "microstructure" not in result["active_directional_factors"]
+        assert result["directional_score"] > 0
+
+
+class TestRegimeSmoothing:
+    def test_default_calls_are_stateless(self):
+        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
+            first = compute_factor_scores(
+                d1_snap=_make_snap(adx=40, bbWidth_pct=70, adxMomentum="stable"),
+                h4_snap=_make_snap(adx=40, bbWidth_pct=70, adxMomentum="stable"),
+                h1_snap=_make_snap(adx=40, bbWidth_pct=70, adxMomentum="stable"),
+                pair={"type": "stock", "display": "AAPL"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+            )
+            second = compute_factor_scores(
+                d1_snap=_make_snap(adx=10, bbWidth_pct=10, adxMomentum="collapsing"),
+                h4_snap=_make_snap(adx=10, bbWidth_pct=10, adxMomentum="collapsing"),
+                h1_snap=_make_snap(adx=10, bbWidth_pct=10, adxMomentum="collapsing"),
+                pair={"type": "stock", "display": "AAPL"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+            )
+        assert first["regime"] == "TRENDING"
+        assert second["regime"] == "LOW_VOLATILITY"
+
+    def test_explicit_context_preserves_smoothing(self):
+        regime_context = make_regime_smoothing_context()
+        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
+            first = compute_factor_scores(
+                d1_snap=_make_snap(adx=40, bbWidth_pct=70, adxMomentum="stable"),
+                h4_snap=_make_snap(adx=40, bbWidth_pct=70, adxMomentum="stable"),
+                h1_snap=_make_snap(adx=40, bbWidth_pct=70, adxMomentum="stable"),
+                pair={"type": "stock", "display": "AAPL"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+                regime_context=regime_context,
+            )
+            second = compute_factor_scores(
+                d1_snap=_make_snap(adx=10, bbWidth_pct=10, adxMomentum="collapsing"),
+                h4_snap=_make_snap(adx=10, bbWidth_pct=10, adxMomentum="collapsing"),
+                h1_snap=_make_snap(adx=10, bbWidth_pct=10, adxMomentum="collapsing"),
+                pair={"type": "stock", "display": "AAPL"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+                regime_context=regime_context,
+            )
+        assert first["regime"] == "TRENDING"
+        assert second["regime"] == "TRENDING"
+
+
+class TestConfigDeepMerge:
+    def test_deep_merge_preserves_unspecified_nested_defaults(self):
+        merged = _deep_merge_dict(
+            {"REGIME_WEIGHTS": {"TRENDING": {"trend": 2.0, "trend_strength": 1.5}}},
+            {"REGIME_WEIGHTS": {"TRENDING": {"trend": 2.5}}},
+        )
+        assert merged["REGIME_WEIGHTS"]["TRENDING"]["trend"] == 2.5
+        assert merged["REGIME_WEIGHTS"]["TRENDING"]["trend_strength"] == 1.5
+
+    def test_deep_merge_overwrites_scalars(self):
+        merged = _deep_merge_dict({"FACTOR_MIN_DIRECTIONAL": 0.25}, {"FACTOR_MIN_DIRECTIONAL": 0.4})
+        assert merged["FACTOR_MIN_DIRECTIONAL"] == 0.4
+
+
+class TestTrendWeights:
+    def test_asset_specific_trend_weights_affect_trend_score(self):
+        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
+            stock = compute_factor_scores(
+                d1_snap=_make_snap(ema21=105, ema50=100),
+                h4_snap=_make_snap(ema21=105, ema50=100),
+                h1_snap=_make_snap(ema21=95, ema50=100),
+                pair={"type": "stock", "display": "AAPL"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+            )
+            commodity = compute_factor_scores(
+                d1_snap=_make_snap(ema21=105, ema50=100),
+                h4_snap=_make_snap(ema21=105, ema50=100),
+                h1_snap=_make_snap(ema21=95, ema50=100),
+                pair={"type": "commodity", "display": "XAU/USD"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+            )
+        assert stock["factor_scores"]["trend"] != commodity["factor_scores"]["trend"]
+
+    def test_missing_trend_weight_config_falls_back_safely(self):
+        original = CONFIG["INDICATOR_WEIGHTS"].get("trend")
+        try:
+            CONFIG["INDICATOR_WEIGHTS"]["trend"] = {}
+            with patch("adaptive_weights.get_adaptive_weights", return_value={}):
+                result = compute_factor_scores(
+                    d1_snap=_make_snap(ema21=105, ema50=100),
+                    h4_snap=_make_snap(ema21=105, ema50=100),
+                    h1_snap=_make_snap(ema21=95, ema50=100),
+                    pair={"type": "stock", "display": "AAPL"},
+                    d1_candles=_make_candles(220),
+                    h4_candles=_make_candles(220),
+                    h1_candles=_make_candles(220),
+                    volume_ratio=1.5,
+                )
+        finally:
+            CONFIG["INDICATOR_WEIGHTS"]["trend"] = original
+        assert isinstance(result["factor_scores"]["trend"], float)
+
+
+class TestCalcConfluenceIntegration:
+    def test_calc_confluence_preserves_effective_direction_diagnostics(self):
+        snap = _make_snap(
+            order_book_imbalance=-3.0,
+            liquidity_wall_detection=-3.0,
+            orderflow_delta=-3.0,
+            liquidity_pressure=-3.0,
+            microstructure_age_sec=1.0,
+        )
+        tf = {"snap": snap}
+        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
+            result = calc_confluence(
+                d1=tf,
+                h4=tf,
+                h1=tf,
+                vr=1.5,
+                stoch={},
+                pair={"type": "crypto", "display": "BTC/USDT", "score_group": "crypto_btc"},
+                btc_bias="neutral",
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                funding_rate=0.0001,
+            )
+        assert result["direction"] == "LONG"
+        assert "microstructure" not in result["factorDiagnostics"]["activeDirectionalFactors"]
+        assert result["factor_scores"]["microstructure"] == -3.0

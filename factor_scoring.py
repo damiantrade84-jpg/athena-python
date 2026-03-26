@@ -115,35 +115,37 @@ def _has_live_microstructure(h4_snap: Dict) -> bool:
 
 
 # ── Regime smoothing state ────────────────────────────────────────────────────
-# Tracks the last N raw regime labels per pair to prevent whipsawing.
-# Only updates the committed regime once N consecutive bars agree on the new label.
-_regime_history: Dict[
-    str, list
-] = {}  # pair_display -> rolling list of raw regime labels
-_regime_committed: Dict[
-    str, str
-] = {}  # pair_display -> currently committed (smoothed) regime
-_regime_lock = threading.Lock()
+# Callers can pass explicit smoothing state when they want regime memory across scans.
+def make_regime_smoothing_context() -> dict:
+    return {"history": {}, "committed": {}, "lock": threading.Lock()}
 
 
-def _get_smoothed_regime(pair_id: str, raw_regime: str) -> str:
+def _get_smoothed_regime(
+    regime_context: Optional[dict], pair_id: str, raw_regime: str
+) -> str:
     """Return smoothed regime: only switch if new regime holds for REGIME_SMOOTHING_BARS bars."""
+    if regime_context is None:
+        return raw_regime
+
     min_bars = CONFIG.get("REGIME_SMOOTHING_BARS", 3)
-    with _regime_lock:
-        hist = _regime_history.setdefault(pair_id, [])
-        committed = _regime_committed.get(pair_id)
+    history = regime_context.setdefault("history", {})
+    committed_map = regime_context.setdefault("committed", {})
+    lock = regime_context.setdefault("lock", threading.Lock())
+    with lock:
+        hist = history.setdefault(pair_id, [])
+        committed = committed_map.get(pair_id)
         hist.append(raw_regime)
         # Keep only the last min_bars entries
         if len(hist) > min_bars:
             hist[:] = hist[-min_bars:]
         # Bootstrap: first observation commits immediately
         if committed is None:
-            _regime_committed[pair_id] = raw_regime
+            committed_map[pair_id] = raw_regime
             return raw_regime
         # Switch only when all of the last min_bars bars agree on the new regime
         if len(hist) >= min_bars and len(set(hist[-min_bars:])) == 1:
-            _regime_committed[pair_id] = hist[-1]
-        return _regime_committed[pair_id]
+            committed_map[pair_id] = hist[-1]
+        return committed_map[pair_id]
 
 
 # ── Correlation filter ───────────────────────────────────────────────────────
@@ -337,21 +339,44 @@ def _weighted_factor_score(
     return sum(v * w / w_sum for v, w in zip(vals, wgts))
 
 
-def _coherent_trend_score(indicators: Dict[str, Optional[float]]) -> tuple[Optional[float], dict]:
+def _trend_indicator_weights(asset_type: str) -> Dict[str, float]:
+    trend_cfg = (CONFIG.get("INDICATOR_WEIGHTS", {}) or {}).get("trend", {}) or {}
+    configured = {}
+    if isinstance(trend_cfg, dict):
+        raw = trend_cfg.get(asset_type, trend_cfg.get("default", {}))
+        if isinstance(raw, dict):
+            configured = raw
+
+    fallback = {
+        "d1_ema_trend": 0.50,
+        "h4_ema_trend": 0.30,
+        "ema_trend": 0.20,
+    }
+    weights = {}
+    for key, default_weight in fallback.items():
+        try:
+            weights[key] = float(configured.get(key, default_weight))
+        except (TypeError, ValueError):
+            weights[key] = default_weight
+    total = sum(max(0.0, w) for w in weights.values())
+    if total <= 0:
+        return fallback
+    return {k: max(0.0, v) / total for k, v in weights.items()}
+
+
+def _coherent_trend_score(
+    indicators: Dict[str, Optional[float]], asset_type: str
+) -> tuple[Optional[float], dict]:
     """Build a coherence-aware multi-timeframe trend score.
 
     Uses weighted direction votes from D1/H4/H1 EMA alignment but avoids collapsing to
     near-zero when one timeframe is in pullback against the dominant trend.
     """
-    tf_weights = {
-        "d1_ema_trend": 0.50,
-        "h4_ema_trend": 0.30,
-        "ema_trend": 0.20,  # H1 entry TF
-    }
+    tf_weights = _trend_indicator_weights(asset_type)
     votes = []
     for key, w in tf_weights.items():
         v = indicators.get(key)
-        if v is not None:
+        if v is not None and w > 0:
             votes.append((key, 1.0 if v > 0 else -1.0, w))
 
     if not votes:
@@ -426,6 +451,7 @@ def compute_factor_scores(
     volume_ratio: float,
     funding_rate: Optional[float] = None,
     bar_time: Optional[str] = None,
+    regime_context: Optional[dict] = None,
 ) -> Dict:
     """Compute factor scores, apply regime weights, and aggregate to final score.
 
@@ -672,19 +698,11 @@ def compute_factor_scores(
         "dominant_direction": None,
         "weighted_balance": 0.0,
     }
-    _trend_score, trend_coherence = _coherent_trend_score(indicators)
+    _trend_score, trend_coherence = _coherent_trend_score(indicators, asset_type)
     if _trend_score is not None:
         factor_scores["trend"] = _trend_score
 
     # ── Determine direction from directional factors ─────────────────────
-    dir_signals = []
-    for factor in directional_factors:
-        s = factor_scores.get(factor)
-        if s is not None:
-            dir_signals.append(s)
-    dir_sum = sum(dir_signals) if dir_signals else 0.0
-    direction = "LONG" if dir_sum >= 0 else "SHORT"
-
     # ── Regime detection ─────────────────────────────────────────────────
     _bbw_pct = h4_snap.get("bbWidth_pct") or h4_snap.get("bb_width_pct")
     _raw_regime = detect_regime(h4_snap, asset_type, bb_width_pct=_bbw_pct).get(
@@ -692,7 +710,7 @@ def compute_factor_scores(
     )
     # Apply smoothing: require REGIME_SMOOTHING_BARS consecutive bars before accepting regime switch
     _pair_id = pair.get("display", pair.get("symbol", "unknown"))
-    regime = _get_smoothed_regime(_pair_id, _raw_regime)
+    regime = _get_smoothed_regime(regime_context, _pair_id, _raw_regime)
     regime_weights = CONFIG.get("REGIME_WEIGHTS", {}).get(regime.upper(), {})
     base_weights = CONFIG.get("FACTOR_WEIGHTS", {}).get(asset_type, {})
 
@@ -744,7 +762,12 @@ def compute_factor_scores(
             )
             for factor in weights:
                 if weights[factor] > 0 and factor in _adaptive:
-                    weights[factor] = _adaptive[factor]
+                    try:
+                        weights[factor] = max(
+                            0.0, float(weights[factor]) * float(_adaptive[factor])
+                        )
+                    except (TypeError, ValueError):
+                        continue
     except Exception:
         pass  # Graceful degradation — use base weights if adaptive fails
 
@@ -761,12 +784,12 @@ def compute_factor_scores(
     active_dir = {
         f: s
         for f, s in factor_scores.items()
-        if s is not None and f in directional_factors
+        if s is not None and f in directional_factors and weights.get(f, 1.0) > 0
     }
     active_nondir = {
         f: s
         for f, s in factor_scores.items()
-        if s is not None and f in nondirectional_factors
+        if s is not None and f in nondirectional_factors and weights.get(f, 1.0) > 0
     }
     disabled_factors = [f for f, s in factor_scores.items() if s is None]
 
@@ -782,6 +805,8 @@ def compute_factor_scores(
             CONFIG.get("FACTOR_DIRECTIONAL_SOFT_SPAN", 0.20),
         )
     )
+    dir_sum = sum(active_dir.values()) if active_dir else 0.0
+    direction = "LONG" if dir_sum >= 0 else "SHORT"
 
     # Minimum active factors guard: require at least 1 directional factor.
     # Prevents inflated scores driven solely by volatility (e.g. JSE stocks with no H4/H1 data).
@@ -808,25 +833,21 @@ def compute_factor_scores(
             "directional_confidence_multiplier": 0.0,
             "effective_min_directional": _base_min_dir,
             "trend_coherence": trend_coherence,
-            "missing_directional_optional_count": 3,
-            "optional_factor_coverage": 0.0,
+            "missing_directional_optional_count": max(
+                0, len(_optional_directional_keys(asset_type, pair))
+            ),
+            "optional_factor_coverage": 0.0
+            if _optional_directional_keys(asset_type, pair)
+            else 1.0,
         }
 
     dir_score = 0.0
-    if active_dir:
-        # Exclude factors with 0 weight
-        active_dir = {f: s for f, s in active_dir.items() if weights.get(f, 1.0) > 0}
     if active_dir:
         dir_w_sum = sum(weights.get(f, 1.0) for f in active_dir)
         for f, s in active_dir.items():
             dir_score += (weights.get(f, 1.0) / dir_w_sum) * s
 
     nondir_score = 0.0
-    if active_nondir:
-        # Exclude factors with 0 weight
-        active_nondir = {
-            f: s for f, s in active_nondir.items() if weights.get(f, 1.0) > 0
-        }
     if active_nondir:
         nondir_w_sum = sum(weights.get(f, 1.0) for f in active_nondir)
         for f, s in active_nondir.items():

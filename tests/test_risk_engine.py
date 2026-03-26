@@ -14,12 +14,24 @@ import risk_engine
 
 @pytest.fixture(autouse=True)
 def _reset_peak_equity():
-    """Reset peak equity before each test so drawdown state doesn't leak."""
+    """Reset persisted risk state before each test so local DB state doesn't leak in."""
     with risk_engine._peak_lock:
         old = risk_engine._peak_equity
+        risk_engine._peak_equity = 0.0
+    with risk_engine._daily_lock:
+        old_daily_pnl = risk_engine._daily_pnl
+        old_daily_pnl_date = risk_engine._daily_pnl_date
+        old_daily_start_balance = risk_engine._daily_start_balance
+        risk_engine._daily_pnl = 0.0
+        risk_engine._daily_pnl_date = ""
+        risk_engine._daily_start_balance = 0.0
     yield
     with risk_engine._peak_lock:
         risk_engine._peak_equity = old
+    with risk_engine._daily_lock:
+        risk_engine._daily_pnl = old_daily_pnl
+        risk_engine._daily_pnl_date = old_daily_pnl_date
+        risk_engine._daily_start_balance = old_daily_start_balance
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────

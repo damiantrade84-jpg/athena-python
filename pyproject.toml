@@ -5,3 +5,15 @@ name = "athena-python"
 version = "0.0.0"
 requires-python = ">=3.11,<3.14"
 description = "Sentinel / Athena trading stack"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+norecursedirs = [
+    "refs",
+    ".git",
+    ".venv",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+]
