@@ -733,8 +733,8 @@ def api_execute():
             try:
                 with sqlite3.connect(_r.AUDIT_DB, timeout=15.0) as con:
                     _factors = {
-                        "scores": sig.get("factorScores"),
-                        "weights": sig.get("factorWeights"),
+                        "scores": sig.get("factor_scores"),
+                        "weights": sig.get("factor_weights"),
                         "disabled": sig.get("disabledFactors"),
                         "regime": sig.get("regimeName"),
                     }

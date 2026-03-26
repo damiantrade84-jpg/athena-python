@@ -358,6 +358,25 @@ def calc_confluence(
         funding_rate,
         bar_time,
     )
+
+    # Fix 2 — btcBias penalty: when BTC bias opposes direction, apply mild conviction reduction
+    # Only applies to crypto — BTC is the tide for all crypto alts
+    _btc_mult = 1.0
+    if pair.get("type") == "crypto" and btc_bias and btc_bias != "neutral":
+        _dir = factor_result.get("direction", "LONG")
+        if (btc_bias == "bearish" and _dir == "LONG") or \
+           (btc_bias == "bullish" and _dir == "SHORT"):
+            _btc_mult = 0.85  # 15% penalty when BTC opposes direction
+        elif (btc_bias == "bullish" and _dir == "LONG") or \
+             (btc_bias == "bearish" and _dir == "SHORT"):
+            _btc_mult = 1.10  # 10% boost when BTC confirms direction (capped by final clamp)
+
+    _fs = factor_result.get("final_score", 0.0)
+    if _btc_mult != 1.0:
+        factor_result = dict(factor_result)
+        factor_result["final_score"] = round(min(3.0, _fs * _btc_mult), 4)
+        factor_result["btc_bias_applied"] = _btc_mult
+
     # Preserve warnings for readability (raw thresholds)
     w = []
     d1["snap"]
@@ -479,9 +498,9 @@ def calc_confluence(
         "regime": _regime,
         "fundingRate": funding_rate,
         "maxScoreOverride": 3.0,  # Z-score clamp cap — final_score is a weighted average of clamped z-scores
-        # New fields for factor diagnostics
-        "factorScores": factor_result["factor_scores"],
-        "factorWeights": factor_result["weights"],
+        # New fields for factor diagnostics (Unified to snake_case)
+        "factor_scores": factor_result["factor_scores"],
+        "factor_weights": factor_result["weights"],
         "regimeName": factor_result["regime"],
         # Confidence diagnostics
         "confidence": confidence_val,

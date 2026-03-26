@@ -73,7 +73,7 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
     asset_type = signal.get("type", "unknown")
 
     # Factor scores for AI context
-    _factor_scores = signal.get("factorScores", {})
+    _factor_scores = signal.get("factor_scores", {})
     _factor_str = (
         " | ".join(
             f"{k}={v:.2f}" if v is not None else f"{k}=None"

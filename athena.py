@@ -3787,8 +3787,8 @@ def api_analyze():
 
             with sqlite3.connect(_AUDIT_DB, timeout=15.0) as _con:
                 _factors = {
-                    "scores": sig.get("factorScores"),
-                    "weights": sig.get("factorWeights"),
+                    "scores": sig.get("factor_scores"),
+                    "weights": sig.get("factor_weights"),
                     "disabled": sig.get("disabledFactors"),
                     "regime": sig.get("regimeName"),
                 }
@@ -4798,8 +4798,8 @@ def api_webhook():
             try:
                 with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
                     _factors = {
-                        "scores": sig.get("factorScores"),
-                        "weights": sig.get("factorWeights"),
+                        "scores": sig.get("factor_scores"),
+                        "weights": sig.get("factor_weights"),
                         "disabled": sig.get("disabledFactors"),
                         "regime": sig.get("regimeName"),
                     }
@@ -7081,8 +7081,8 @@ def analyze_pair(pair, btc_bias, style="swing", use_naked_engine=False):
         "oiDivergence": _oi_divergence,
         "fundingRate": res.get("fundingRate"),
         "regime": res.get("regime"),
-        "factorScores": res.get("factorScores"),
-        "factorWeights": res.get("factorWeights"),
+        "factorScores": res.get("factor_scores"),
+        "factorWeights": res.get("factor_weights"),
         "regimeName": res.get("regimeName"),
         "correlationAdjustments": res.get("correlationAdjustments", {}),
         "disabledFactors": res.get("disabledFactors", []),
