@@ -211,6 +211,7 @@ def _candle_microstructure(h4_candles: List[dict]) -> Dict[str, Optional[float]]
             "order_book_imbalance": None,
             "orderflow_delta": None,
             "liquidity_pressure": None,
+            "volume_momentum_spread": None,
         }
 
     recent10 = h4_candles[-10:]
@@ -240,10 +241,50 @@ def _candle_microstructure(h4_candles: List[dict]) -> Dict[str, Optional[float]]
             lp_vals.append((c["close"] - c["low"]) / rng - 0.5)
     lp = max(-3.0, min(3.0, (sum(lp_vals) / len(lp_vals)) * 6.0)) if lp_vals else None
 
+    # volume_momentum_spread: momentum of volume-weighted directional conviction
+    # Measures whether conviction is accelerating or fading (Swift Algo X concept)
+    # Works for all asset classes with volume data. Returns None if vol absent.
+    vms = None
+    try:
+        if len(h4_candles) >= 30:
+            vms_bars = h4_candles[-30:]
+            total_vol = sum(float(c.get("vol", 0) or 0) for c in vms_bars)
+            if total_vol > 0:
+                pressure = []
+                for c in vms_bars:
+                    rng = c["high"] - c["low"]
+                    vol = float(c.get("vol", 0) or 0)
+                    if rng > 0 and vol > 0:
+                        signed = rng if c["close"] >= c["open"] else -rng
+                        pressure.append((signed * vol) / total_vol)
+                    else:
+                        pressure.append(0.0)
+                # Fast(5) minus slow(14) EMA of pressure = momentum of conviction
+                def _ema_s(vals, p):
+                    if len(vals) < p:
+                        return []
+                    k = 2.0 / (p + 1)
+                    r = [sum(vals[:p]) / p]
+                    for v in vals[p:]:
+                        r.append(v * k + r[-1] * (1 - k))
+                    return r
+                fast = _ema_s(pressure, 5)
+                slow = _ema_s(pressure, 14)
+                if fast and slow:
+                    spread = [f - s for f, s in zip(fast[-len(slow):], slow)]
+                    if len(spread) >= 3:
+                        mean_s = sum(spread) / len(spread)
+                        std_s = (sum((x - mean_s)**2 for x in spread) / len(spread)) ** 0.5
+                        if std_s > 1e-10:
+                            vms = max(-3.0, min(3.0, (spread[-1] - mean_s) / std_s))
+    except Exception:
+        pass
+
     return {
         "order_book_imbalance": obi,
         "orderflow_delta": ofd,
         "liquidity_pressure": lp,
+        "volume_momentum_spread": vms,
     }
 
 
@@ -551,18 +592,24 @@ def compute_factor_scores(
             indicators["liquidity_wall_detection"] = None
             indicators["orderflow_delta"] = None
             indicators["liquidity_pressure"] = None
+        # VMS is candle-based; microstructure weight=0 for crypto so this will be excluded
+        indicators["volume_momentum_spread"] = None
     elif _ws_obi is None and _ws_ofd is None and _ws_lp is None:
-        # No WS data — compute candle-based proxies
+        # No WS data — compute candle-based proxies (includes VMS)
         _cm = _candle_microstructure(h4_candles)
         indicators["order_book_imbalance"] = _cm["order_book_imbalance"]
         indicators["orderflow_delta"] = _cm["orderflow_delta"]
         indicators["liquidity_pressure"] = _cm["liquidity_pressure"]
         indicators["liquidity_wall_detection"] = None  # requires real order book
+        indicators["volume_momentum_spread"] = _cm["volume_momentum_spread"]
     else:
         indicators["order_book_imbalance"] = _ws_obi
         indicators["liquidity_wall_detection"] = _ws_lwl
         indicators["orderflow_delta"] = _ws_ofd
         indicators["liquidity_pressure"] = _ws_lp
+        # VMS is always candle-based even when WS data is available for other keys
+        _cm_vms = _candle_microstructure(h4_candles)
+        indicators["volume_momentum_spread"] = _cm_vms["volume_momentum_spread"]
 
     # ── Correlation filter (blueprint: abs(corr) > 0.8 → reduce weaker by 50%) ──
     corr_window = CONFIG.get("INDICATOR_CORRELATION_WINDOW", 200)
@@ -585,6 +632,7 @@ def compute_factor_scores(
             "liquidity_wall_detection",
             "orderflow_delta",
             "liquidity_pressure",
+            "volume_momentum_spread",
         ],
     }
     # Non-directional factors: abs value = quality/strength (always positive)
