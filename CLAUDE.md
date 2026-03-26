@@ -36,10 +36,25 @@
 - Fixed CandleBuilder routing to skip H4/D1 for Polygon sources
 - Implemented deterministic H1 resampling for forex chart consistency
 
-**Factor Scoring Simplification (`factor_scoring.py`):**
-- Removed correlation filter complexity from factor scoring
-- Simplified function to return all indicators with full weights
-- Reduces computational overhead and scoring complexity
+**Factor Scoring Enhancements (`factor_scoring.py`):**
+- Added **`volume_momentum_spread` (VMS)** to microstructure directional factors.
+- Measures the acceleration of volume-weighted directional conviction (Swift Algo X concept).
+- Removed correlation filter complexity; simplified function to return all indicators with full weights.
+
+**Scalp Trading Engine (Engine D) Implementation (`scalp_engine.py`, `execution.py`, `static/index.html`):**
+- **Core Logic**: High-probability M15 structural zone detection + M5 tactical rejection/engulfing triggers.
+- **AI Quality Grade**: Instant rule-based scoring (0-100, A-D grades) based on session, zone strength, and momentum.
+- **UI Integration**: Added a dedicated **⚡ SCALP** tab to the dashboard for high-frequency setups.
+- **Execution Safety**: Integrated with `risk_engine.risk_check()` for drawdown and sizing protection before hitting MT5.
+
+**Desktop Control & Background Mode (`start_sentinel.bat`, `stop_sentinel.bat`, `run_background.vbs`):**
+- **`run_background.vbs`**: Launches Sentinel Pro in windowless mode to prevent laptop sleep/minimization throttling.
+- **`stop_sentinel.bat`**: Safely terminates background Python and Flask processes.
+- Generated desktop shortcuts for **Start Background** and **Stop** for easy environment management.
+
+**AI Vision Tuning (Engine C):**
+- Simplified AI Vision confirmation to use **H4-only screenshots** (removed redundant D1/H1 captures).
+- Reduces screenshot capture time and AI analysis latency while focusing on the primary execution timeframe.
 
 ## Debugging & audit playbook — cross-layer bugs (scoring, UI, candles)
 
@@ -493,7 +508,8 @@ Multi-asset algorithmic trading system: Flask dashboard, Engine A (MFQS: Multi-F
 | `app.py` | `create_app()` Flask factory | |
 | `indicators.py` | Pure indicator functions (EMA, RSI, MACD, ATR, ADX, BB, Stochastic, Weinstein, Fib, OBV, Squeeze) | |
 | `scoring.py` | Confluence engine, vote weights, session, pair profiles, signal classification | |
-| `factor_scoring.py` | Z-score factor engine — directional (trend, momentum, microstructure, derivatives) + non-directional (trend_strength, volatility, volume, structure). Candle-based microstructure proxies for all asset types. | |
+| `factor_scoring.py` | Z-score factor engine — directional (trend, momentum, microstructure, derivatives) + non-directional (trend_strength, volatility, volume, structure). Includes `volume_momentum_spread` (VMS). | |
+| `scalp_engine.py` | Engine D: Independent M15/M5 scalping module focusing on structural rejection and high-frequency execution. | |
 | `confidence_engine.py` | 4-component confidence scoring (indicator agreement, timeframe alignment, regime fit, liquidity) | |
 | `feature_normalizer.py` | Rolling z-score, percentile rank, min-max normalization | |
 | `market_structure.py` | Engine B naked price-action engine: structure, zones, trigger patterns, and shared checklist pass/fail logic | |
@@ -507,6 +523,7 @@ Multi-asset algorithmic trading system: Flask dashboard, Engine A (MFQS: Multi-F
 | `auto_trader.py` | Autonomous scheduler: scan every 30 min, auto-execute | |
 | `ai_learning.py` | Outcome extraction → learning_log in audit.db; factor-level analysis for AI calibration | |
 | `backup_db.py` | Safe SQLite backup/restore helper for `audit.db` and `candle_cache.db` | |
+| `stop_sentinel.bat` | Background process killer for all Sentinel Pro Python and Flask threads. | |
 | `regime.py` | Market regime detection (TRENDING/DEVELOPING/RANGING/DEAD RANGING) | |
 | `carry_feed.py` | Interest rate carry data — FRED static fallback, 1h cooldown on failure, non-blocking | |
 | `cot_feed.py` | CFTC Commitment of Traders z-scores — non-blocking, cache-first during scans | |
