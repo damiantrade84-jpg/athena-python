@@ -1,5 +1,35 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-27) — News sentiment feed (EODHD + Claude) and scan hook
+
+**Goal:** Optional News AI pipeline for structured sentiment, manual API, and configurable blend into Engine A scan scores.
+
+**New module (`news_sentiment_feed.py`):**
+- Resolves EODHD tickers via caller-injected **`_eodhd_ticker_for_pair(pair)`** (no duplicate static map). Asset prompt context uses **`pair["type"]`** (forex/crypto/stock/commodity/index).
+- **`fetch_news`** / **`fetch_eodhd_sentiment`** use shared **`data_feeds.http_requests`**; sentiment JSON parsing matches **`fetch_news_context`** (dict vs list).
+- **`get_news_sentiment`** → Claude JSON; **`news_to_confluence_vote`** maps to a scalar vote (skipped when confidence is under **0.4**).
+- **`get_cached_news_confluence_vote`**: per-display TTL cache + per-symbol lock for parallel scans.
+- **`apply_news_sentiment_to_scan_result`**: mutates **`res["score"]`** after Engine B so the naked gate still uses the pre-news technical score.
+
+**Flask (`athena.py`):**
+- **`GET` / `POST` `/api/news-sentiment`**: `symbol` or `pair` body/query; requires **`EODHD_KEY`** and **`ANTHROPIC_API_KEY`** from the **environment** (not yaml). Returns structured JSON + **`confluenceVote`**.
+
+**Scan integration (`analyze_pair`):**
+- Calls **`apply_news_sentiment_to_scan_result`** when **`NEWS_SENTIMENT_CONFLUENCE_ENABLED`** is true in config. Signal payload adds **`newsSentimentVote`**, **`newsSentimentDelta`**, **`newsSentimentSummary`** (if enabled).
+
+**Config (`config.yaml` / `config.py`):**
+- **`NEWS_SENTIMENT_MODEL`**: default **`claude-opus-4-6`** (same family as **`VISION_MODEL`**). Resolution: **`NEWS_SENTIMENT_MODEL` or `VISION_MODEL` or fallback**.
+- **`NEWS_SENTIMENT_CONFLUENCE_ENABLED`**: default **`false`** (opt-in; first fetch per pair per TTL is latency/cost heavy).
+- **`NEWS_SENTIMENT_CACHE_TTL_SEC`**, **`NEWS_SENTIMENT_SCORE_IMPACT`**, **`NEWS_SENTIMENT_ATTACH_SUMMARY`**.
+
+**Tests:** `tests/test_news_sentiment_feed.py`
+
+## Recent Changes (2026-03-27) — Forex majors MT5 source alignment
+
+**Goal:** Route remaining liquid majors through MT5 for candles/live parity with other MT5 forex.
+
+**`athena.py` `FOREX_PAIRS`:** **`GBP/USD`**, **`USD/JPY`**, **`AUD/USD`**, **`USD/CAD`**, **`USD/CHF`** set to **`"source": "mt5"`** (removed Polygon test path on GBP/USD). Symbol maps unchanged in **`mt5_executor._MT5_SYMBOL_MAP`**.
+
 ## Recent Changes (2026-03-27) — Engine C normalization and forex backtest regime payload fix
 
 **Goal:** Remove Engine C dependence on threshold-relative display scaling and keep forex backtest regime payloads aligned with true regime labels.
@@ -539,6 +569,7 @@ Multi-asset algorithmic trading system: Flask dashboard, Engine A (MFQS: Multi-F
 | `backtest_runner.py` | Engine A/B backtest implementations (pulled from monolith) | |
 | `backtest.py` | Re-exports backtest entrypoints from `backtest_runner` | |
 | `data_feeds.py` | HTTP session, EODHD client, funding/OI fetch helpers | |
+| `news_sentiment_feed.py` | EODHD news + sentiments + Claude structured score; `/api/news-sentiment`; optional scan blend via `apply_news_sentiment_to_scan_result` (TTL cache; keys from env) | |
 | `candle_manager.py` | Facade → `athena_legacy` for external candle access | |
 | `athena_legacy.py` | Loads monolith file module as `athena_monolith` | |
 | `app.py` | `create_app()` Flask factory | |
@@ -571,6 +602,7 @@ Multi-asset algorithmic trading system: Flask dashboard, Engine A (MFQS: Multi-F
 | `static/index.html` | Dashboard UI: signals, backtest, screener; ACM charts (`/api/candles` `limit=1000`, `_acmEmaLineData` for EMAs); pair list from `/api/pairs` | ~2550 lines |
 | `tests/test_athena.py` | Main test suite (56+ tests) | |
 | `tests/test_factor_scoring.py` | Factor scoring unit tests | |
+| `tests/test_news_sentiment_feed.py` | News sentiment helpers, EODHD sentiment parsing, scan blend unit tests | |
 | `test_indicators.py` | Pure indicator unit tests (imports from `indicators` only) | |
 | `audit.db` | SQLite runtime DB — **never commit** (gitignored) | |
 | `candle_cache.db` | SQLite candle cache — **never commit** (gitignored) | |

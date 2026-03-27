@@ -210,6 +210,12 @@ SIGNAL_DEBATE_ENABLED: true        # Run LLM debate before auto-trades (needs XA
 XAI_MODEL: "grok-4.20-0309-reasoning"
 DEBATE_MODEL: "grok-4.20-0309-reasoning"
 VISION_MODEL: "claude-opus-4-6"
+NEWS_SENTIMENT_MODEL: "claude-opus-4-6"           # match VISION_MODEL; keys from env (EODHD_KEY, ANTHROPIC_API_KEY)
+# Blend News AI into Engine A scan score (EODHD news + Claude). Heavy: uses TTL cache per pair.
+NEWS_SENTIMENT_CONFLUENCE_ENABLED: false
+NEWS_SENTIMENT_CACHE_TTL_SEC: 900                # seconds; same pair reuses vote until expiry
+NEWS_SENTIMENT_SCORE_IMPACT: 0.06               # delta = impact * maxScore * vote (vote ~ -1..1)
+NEWS_SENTIMENT_ATTACH_SUMMARY: true             # attach short summary on each signal JSON
 AI_STRUCTURED_OUTPUTS: true
 AI_TEMPERATURE: 0.3
 AI_VISION_TEMPERATURE: 0.6

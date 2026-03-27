@@ -200,21 +200,21 @@ FOREX_PAIRS = [
         "symbol": "GBPUSD=X",
         "type": "forex",
         "display": "GBP/USD",
-        "source": "polygon",  # TEST: Using Polygon native H4/D1 for Engine C comparison
+        "source": "mt5",
         "enabled": True,
     },  # SQN -1.62 (post-fix BT 2026-03-13): 7 trades/730d, WR 14%, OOS:-10 — no edge confirmed # re-enabled for ATR-fix retest
     {
         "symbol": "USDJPY=X",
         "type": "forex",
         "display": "USD/JPY",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN -2.33 — enabled; re-evaluate post-formula fix
     {
         "symbol": "AUDUSD=X",
         "type": "forex",
         "display": "AUD/USD",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +1.00, WR 53.3%, IS:+0.45/OOS:+0.88 (2026-03-15 confirmed)
     {
@@ -235,14 +235,14 @@ FOREX_PAIRS = [
         "symbol": "USDCAD=X",
         "type": "forex",
         "display": "USD/CAD",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +0.27
     {
         "symbol": "USDCHF=X",
         "type": "forex",
         "display": "USD/CHF",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # v3.1 SQN +0.61, OOS +1.22 ✓
     {
@@ -6810,6 +6810,78 @@ def api_candles():
     )
 
 
+@app.route("/api/news-sentiment", methods=["GET", "POST"])
+def api_news_sentiment():
+    """EODHD news + Claude structured sentiment for one pair (display or Yahoo symbol).
+
+    Uses ``EODHD_KEY`` and ``ANTHROPIC_API_KEY`` from the environment. Model: ``NEWS_SENTIMENT_MODEL``
+    or falls back to ``VISION_MODEL`` (default Opus 4.6 family).
+    """
+    from news_sentiment_feed import get_news_sentiment, news_to_confluence_vote
+
+    sym = request.args.get("symbol")
+    if not sym and request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        sym = body.get("symbol") or body.get("pair")
+    if not sym:
+        return jsonify({"error": "Missing symbol parameter"}), 400
+
+    pair = next(
+        (p for p in ALL_PAIRS if p.get("symbol") == sym or p.get("display") == sym),
+        None,
+    )
+    if not pair:
+        return jsonify({"error": f"Unknown symbol: {sym}"}), 404
+
+    eod_key = os.environ.get("EODHD_KEY", "").strip()
+    if not eod_key:
+        return jsonify({"error": "EODHD_KEY not set"}), 503
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        return jsonify({"error": "ANTHROPIC_API_KEY not set"}), 500
+
+    price = None
+    disp = pair.get("display", "")
+    try:
+        with _live_prices_lock:
+            lp = _live_prices.get(disp)
+            if lp:
+                price = lp.get("price")
+    except Exception:
+        pass
+
+    model = CONFIG.get("NEWS_SENTIMENT_MODEL") or CONFIG.get(
+        "VISION_MODEL", "claude-opus-4-6"
+    )
+    result = get_news_sentiment(
+        pair,
+        eodhd_api_key=eod_key,
+        anthropic_api_key=api_key,
+        eodhd_ticker_for_pair=_eodhd_ticker_for_pair,
+        current_price=price,
+        model=model,
+    )
+    if not result:
+        return (
+            jsonify(
+                {
+                    "error": "No sentiment result (no news, API error, or parse failure)",
+                }
+            ),
+            502,
+        )
+
+    vote = news_to_confluence_vote(result)
+    out = {
+        "pair": disp,
+        "eodhdTicker": _eodhd_ticker_for_pair(pair),
+        "structured": result,
+        "confluenceVote": vote,
+    }
+    return jsonify(_json_safe(out))
+
+
 @app.route("/api/health")
 def health():
 
@@ -7372,6 +7444,20 @@ def analyze_pair(
             log.error(f"[ENGINE-B] Error on {pair['display']}: {e}")
     # ------------------------------------------------
 
+    # News AI sentiment (optional): adjusts score for scan tiering / UI after Engine B gate
+    try:
+        from news_sentiment_feed import apply_news_sentiment_to_scan_result
+
+        apply_news_sentiment_to_scan_result(
+            res,
+            pair,
+            config=CONFIG,
+            eodhd_ticker_for_pair=_eodhd_ticker_for_pair,
+            current_price=float(price),
+        )
+    except Exception as _ns_err:
+        log.debug("[NewsAI] scan blend skipped: %s", _ns_err)
+
     # Dynamic Confluence Scaling: Anchor the UI 67% mark to the actual pair threshold.
     # This prevents strong Crypto signals (e.g. 1.88) from looking 'WEAK' just because 3.0 is impossible.
     _threshold = get_min_confluence_threshold(pair)
@@ -7451,6 +7537,9 @@ def analyze_pair(
         "correlationAdjustments": res.get("correlationAdjustments", {}),
         "disabledFactors": res.get("disabledFactors", []),
         "factorDiagnostics": res.get("factorDiagnostics", {}),
+        "newsSentimentVote": res.get("newsSentimentVote"),
+        "newsSentimentDelta": res.get("newsSentimentDelta"),
+        "newsSentimentSummary": res.get("newsSentimentSummary"),
         "pairProfile": pair_profile,
         "style": _style,
         "h1Candles": [
