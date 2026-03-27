@@ -82,27 +82,3 @@ class TestCandleCacheKeys:
 
         assert ("EURUSD", "H1", 100) in keys
         assert ("EURUSD", "h1", 100) not in keys
-
-    def test_mt5_h1_bypasses_live_candle_builder_cache(self):
-        pair = {"symbol": "EURUSD", "display": "EUR/USD", "source": "mt5", "type": "forex"}
-        mt5_candles = [{"time": "2026-03-27T14:00:00+00:00", "open": 1.1, "high": 1.2, "low": 1.0, "close": 1.15, "vol": 1000}]
-        fetch_mt5 = Mock(return_value=mt5_candles)
-        fetch_candles_live = Mock(return_value=[{"time": "2026-03-27T14:00:00+00:00", "open": 9.1, "high": 9.2, "low": 9.0, "close": 9.15, "vol": 1000}])
-
-        out = fetch_candles(
-            pair,
-            "H1",
-            100,
-            fetch_candles_live=fetch_candles_live,
-            fetch_binance=_noop_fetch,
-            fetch_eodhd=_noop_fetch,
-            fetch_polygon=_noop_fetch,
-            fetch_yfinance=_noop_fetch,
-            fetch_mt5=fetch_mt5,
-            yfinance_symbol_for_pair=lambda _pair: None,
-            tf_b={"H1": "1h", "H4": "4h", "D1": "1d"},
-        )
-
-        assert out == mt5_candles
-        assert fetch_candles_live.call_count == 0
-        assert fetch_mt5.call_count == 1

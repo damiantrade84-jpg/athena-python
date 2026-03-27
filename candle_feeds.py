@@ -886,7 +886,11 @@ class CandleBuilder:
         time.sleep(3)
 
         _key = os.environ.get("EODHD_KEY", "")
-        api = _get_eodhd_client() if _key else None
+
+        if not _key:
+            log.warning("[CB] No EODHD_KEY, skip seed")
+
+            return
 
         log.info(f"[CB] Seeding candle cache for {len(pairs)} pairs...")
 
@@ -924,6 +928,8 @@ class CandleBuilder:
                 d1_n = 0
 
                 # D1 from EOD historical (365 days)
+
+                api = _get_eodhd_client()
 
                 if api:
                     d1_start = (
