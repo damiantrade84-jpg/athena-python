@@ -200,21 +200,21 @@ FOREX_PAIRS = [
         "symbol": "GBPUSD=X",
         "type": "forex",
         "display": "GBP/USD",
-        "source": "polygon",  # TEST: Using Polygon native H4/D1 for Engine C comparison
+        "source": "mt5",
         "enabled": True,
     },  # SQN -1.62 (post-fix BT 2026-03-13): 7 trades/730d, WR 14%, OOS:-10 — no edge confirmed # re-enabled for ATR-fix retest
     {
         "symbol": "USDJPY=X",
         "type": "forex",
         "display": "USD/JPY",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN -2.33 — enabled; re-evaluate post-formula fix
     {
         "symbol": "AUDUSD=X",
         "type": "forex",
         "display": "AUD/USD",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +1.00, WR 53.3%, IS:+0.45/OOS:+0.88 (2026-03-15 confirmed)
     {
@@ -235,14 +235,14 @@ FOREX_PAIRS = [
         "symbol": "USDCAD=X",
         "type": "forex",
         "display": "USD/CAD",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # SQN +0.27
     {
         "symbol": "USDCHF=X",
         "type": "forex",
         "display": "USD/CHF",
-        "source": "eodhd",
+        "source": "mt5",
         "enabled": True,
     },  # v3.1 SQN +0.61, OOS +1.22 ✓
     {
@@ -947,6 +947,23 @@ def _load_toggle_state():
 ACTIVE_PAIRS = [p for p in ALL_PAIRS if p.get("enabled", True)]
 
 _load_toggle_state()
+
+
+def _active_live_eodhd_pairs(pairs: list[dict] | None = None) -> list[dict]:
+    """Enabled runtime pairs that still require live EODHD transport."""
+    source_pairs = ACTIVE_PAIRS if pairs is None else pairs
+    return [p for p in source_pairs if p.get("source") == "eodhd"]
+
+
+def _candle_builder_seed_pairs(pairs: list[dict] | None = None) -> list[dict]:
+    """Pairs that still need CandleBuilder history seeding at startup."""
+    source_pairs = ALL_PAIRS if pairs is None else pairs
+    return [
+        p
+        for p in source_pairs
+        if p.get("enabled", True)
+        and (p.get("type") == "crypto" or p.get("source") == "eodhd")
+    ]
 
 TF_B = {"D1": "1d", "H4": "4h", "H1": "1h"}
 
@@ -9444,38 +9461,42 @@ if __name__ == "__main__":
 
         sys.exit(0)
 
-    # Start EODHD WebSocket real-time price streaming + candle builder
+    # Start EODHD WebSocket only when live runtime still has EODHD-sourced pairs.
 
     _ws_key = os.environ.get("EODHD_KEY", "")
+    _eodhd_pairs = _active_live_eodhd_pairs()
+    crypto_enabled = [p for p in CRYPTO_PAIRS if p.get("enabled", True)]
 
-    if _ws_key:
+    if _eodhd_pairs and _ws_key:
         _ws_mgr = EODHDWebSocketManager(_ws_key)
-
-        _eodhd_pairs = [p for p in ACTIVE_PAIRS if p.get("source") == "eodhd"]
         _ws_mgr.start(_eodhd_pairs)
+    elif _eodhd_pairs:
+        log.warning("[WS] No EODHD_KEY — WebSocket prices disabled for EODHD live pairs")
 
+    if _eodhd_pairs or crypto_enabled:
         set_candle_builder(CandleBuilder())
 
         def _cb_startup():
 
             cb = get_candle_builder()
 
-            _seed_pairs = [p for p in ALL_PAIRS if p.get("source") == "eodhd"]
-            cb.seed(_seed_pairs)  # seed 6mo H1/H4/D1
+            _seed_pairs = _candle_builder_seed_pairs()
+            cb.seed(_seed_pairs)
 
-            cb.bulk_update_d1()  # fresh D1 from Bulk API
+            if _eodhd_pairs:
+                cb.bulk_update_d1()  # fresh D1 from Bulk API
 
-            cb.start_refresh_loop()  # bulk D1 every 4h
+                cb.start_refresh_loop()  # bulk D1 every 4h
 
         threading.Thread(target=_cb_startup, daemon=True, name="candle-seed").start()
 
-        log.info("[CB] Candle builder started (WS ticks + 6mo seed + Bulk D1 for EODHD sources)")
+        if _eodhd_pairs:
+            log.info("[CB] Candle builder started (crypto seed + EODHD live history)")
+        else:
+            log.info("[CB] Candle builder started (crypto seed only)")
 
-    else:
-        log.warning("[WS] No EODHD_KEY â€” WebSocket prices disabled")
 
     # Start Binance Futures WebSocket for crypto live prices + kline candles
-    crypto_enabled = [p for p in CRYPTO_PAIRS if p.get("enabled", True)]
     if crypto_enabled:
         _binance_ws = BinanceLivePriceWS()
         _binance_ws.start()

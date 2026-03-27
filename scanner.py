@@ -584,14 +584,6 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 scan_funnel["dead_ranging"] += 1
 
             if tier == "trade":
-                try:
-                    sig["serverIndicators"] = r.fetch_eodhd_indicators(pair)
-
-                except Exception as _e:
-                    log.debug(
-                        f"[IND] {pair['display']} server indicators skipped: {_e}"
-                    )
-
                 results.append(sig)
 
                 scan_funnel["passed"] += 1

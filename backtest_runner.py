@@ -216,6 +216,40 @@ def backtest_pair(pair, style="auto"):
 
             h1_raw = _rt().fetch_binance_paginated(sym, "1h", 2000)
 
+        elif pair["source"] == "mt5":
+            # MT5: Use direct terminal fetch for backtest history first.
+            d1_raw = _rt().fetch_candles(pair, "D1", 600)
+            h4_raw = _rt().fetch_candles(pair, "H4", 5000)
+            h1_raw = _rt().fetch_candles(pair, "H1", 5000)
+
+            if _ptype == "forex" and (not d1_raw or not h4_raw or not h1_raw):
+                # Retain EODHD/Polygon/yfinance fallback for forex history when MT5 is thin/unavailable.
+                d1_raw = d1_raw or _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 600)) or _rt().fetch_candles(
+                    pair, "D1", 600
+                )
+
+                _eodhd_h4, _eodhd_h1 = _rt().fetch_eodhd_intraday_bt(pair, days=730)
+                h4_raw = h4_raw or _eodhd_h4
+                h1_raw = h1_raw or _eodhd_h1
+
+                if not h4_raw or not h1_raw:
+                    _pg_ticker = _rt().polygon_ticker_for_pair(pair)
+                    if _pg_ticker:
+                        log.info(
+                            f"[BT] {pair['display']}: EODHD intraday failed, trying Polygon"
+                        )
+                        _pg_h4 = _rt().extract_candles(_rt().fetch_polygon(pair, "H4", 5000))
+                        _pg_h1 = _rt().extract_candles(_rt().fetch_polygon(pair, "H1", 5000))
+                        h4_raw = h4_raw or _pg_h4
+                        h1_raw = h1_raw or _pg_h1
+                    if not h4_raw or not h1_raw:
+                        _yf_sym = _rt().yfinance_symbol_for_pair(pair)
+                        if _yf_sym:
+                            log.info(f"[BT] {pair['display']}: trying yfinance fallback")
+                            _yf_h4, _yf_h1 = _rt().fetch_bt_yfinance(_yf_sym)
+                            h4_raw = h4_raw or _yf_h4
+                            h1_raw = h1_raw or _yf_h1
+
         elif _ptype == "forex":
             # Forex: EODHD D1 + EODHD intraday H1 (from/to 730d) → use D1 directly, yfinance fallback
 
@@ -242,13 +276,6 @@ def backtest_pair(pair, style="auto"):
                         _yf_h4, _yf_h1 = _rt().fetch_bt_yfinance(_yf_sym)
                         h4_raw = h4_raw or _yf_h4
                         h1_raw = h1_raw or _yf_h1
-
-        elif pair["source"] == "mt5":
-            # MT5: Use direct terminal fetch for backtest history
-            # request 600 D1, 5000 H4, 5000 H1 (MT5 is fast enough)
-            d1_raw = _rt().fetch_candles(pair, "D1", 600)
-            h4_raw = _rt().fetch_candles(pair, "H4", 5000)
-            h1_raw = _rt().fetch_candles(pair, "H1", 5000)
 
         elif _ptype in ("stock", "commodity", "index"):
             # Stocks/Commodities/Indices: EODHD D1 + EODHD intraday (730d)

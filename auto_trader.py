@@ -601,36 +601,6 @@ class AutoTrader:
             if not any(s in current_sessions for s in allowed_sessions):
                 return False, f"outside trading session ({current_sessions})"
 
-        if cfg.get("SENTIMENT_GATE_ENABLED", True):
-            try:
-                from sentiment_gate import check_sentiment
-
-                sent = check_sentiment(
-                    signal.get("pair", ""), signal.get("direction", ""), asset_type
-                )
-
-                if not sent.get("allowed", True):
-                    return False, sent.get("reason", "Sentiment block")
-
-            except ImportError:
-                pass
-
-        if cfg.get("EVENT_RISK_ENABLED", True):
-            try:
-                from event_risk import check_event_risk
-
-                ev_risk = check_event_risk(
-                    signal.get("pair", ""),
-                    asset_type,
-                    lookahead_hours=cfg.get("EVENT_RISK_HOURS", 4),
-                )
-
-                if not ev_risk.get("allowed", True):
-                    return False, ev_risk.get("reason", "Event risk block")
-
-            except ImportError:
-                pass
-
         # Signal debate gate — AI Bull/Bear/Judge evaluation before auto-execution
         if cfg.get("SIGNAL_DEBATE_ENABLED", True):
             try:

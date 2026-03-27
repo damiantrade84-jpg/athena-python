@@ -1,4 +1,6 @@
 from auto_trader import AutoTrader
+import sys
+from types import SimpleNamespace
 
 
 def _base_cfg():
@@ -179,3 +181,44 @@ def test_can_execute_prefers_explicit_regime_name_over_trend_state_for_filtering
 
     assert not ok
     assert "TREND_PULLBACK/RANGING blocked" in reason
+
+
+def test_can_execute_no_longer_calls_eodhd_sentiment_or_event_risk(monkeypatch):
+    trader = AutoTrader()
+    cfg = _base_cfg()
+    cfg["SENTIMENT_GATE_ENABLED"] = True
+    cfg["EVENT_RISK_ENABLED"] = True
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sentiment_gate",
+        SimpleNamespace(
+            check_sentiment=lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("sentiment gate should not be called")
+            )
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "event_risk",
+        SimpleNamespace(
+            check_event_risk=lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("event risk gate should not be called")
+            )
+        ),
+    )
+
+    signal = {
+        "pair": "EUR/USD",
+        "type": "forex",
+        "direction": "LONG",
+        "trendState": "TREND_PULLBACK",
+        "regimeName": "TRENDING",
+        "combinedConviction": 0.9,
+        "confluenceScore": 0.9,
+        "maxScore": 1.0,
+    }
+    ok, reason = trader._can_execute(signal, cfg)
+
+    assert ok
+    assert reason == ""
