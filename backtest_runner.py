@@ -464,6 +464,13 @@ def backtest_pair(pair, style="auto"):
                         backtest_mode=True,  # bypass session filter in backtest
                         h4_candles=h4_window,
                     )
+                    # Derive proper regime label for forex backtest (not signal_type)
+                    try:
+                        from regime import detect_regime
+                        _fx_regime_det = detect_regime(h4i["snap"], "forex")
+                        _fx_trend_state = _fx_regime_det.get("label", "RANGING")
+                    except Exception:
+                        _fx_trend_state = "RANGING"
                     res = {
                         "final_score": _fx.final_score,
                         "direction": _fx.direction,
@@ -474,7 +481,7 @@ def backtest_pair(pair, style="auto"):
                         },  # Match calc_confluence format
                         "signal_type": _fx.signal_type,
                         "score": _fx.final_score,  # Add compatibility field for backtest
-                        "trendState": _fx.signal_type,  # Add compatibility field
+                        "trendState": _fx_trend_state,  # Add compatibility field
                     }
                     direction = _fx.direction
                 else:
@@ -498,7 +505,11 @@ def backtest_pair(pair, style="auto"):
                         bar_time=h4_window[-1].get("time") if h4_window else None,
                     )
 
-            except Exception:
+            except Exception as _bt_bar_err:
+                log.debug(
+                    f"[BT] {pair['display']} bar {i} skipped: {_bt_bar_err}",
+                    exc_info=False
+                )
                 i += 1
                 continue
 
@@ -586,6 +597,15 @@ def backtest_pair(pair, style="auto"):
                         sl = swing_sl
 
                 rr1 = abs(tp1 - entry) / abs(sl - entry) if abs(sl - entry) > 0 else 0
+                # Guard: skip if structural SL has degraded RR below minimum
+                _min_rr = float(CONFIG.get("STYLE_ATR_MULTS", {}).get(
+                    effective_style, {}).get(_ptype, {}).get("tp1", 1.5)) / float(
+                    CONFIG.get("STYLE_ATR_MULTS", {}).get(
+                    effective_style, {}).get(_ptype, {}).get("sl", 1.0))
+                if rr1 < max(0.8, _min_rr * 0.7):   # allow 30% degradation before skipping
+                    funnel["fail_score"] += 1
+                    i += 1
+                    continue
 
             # T1: Volatility-adjusted sizing â€” if ATR > 1.5x its 20-bar SMA, reduce size 30%
 
@@ -709,6 +729,11 @@ def backtest_pair(pair, style="auto"):
 
             # T1: Apply volatility adjustment and score-based sizing to position size
 
+            # NOTE: risk_mult (RISK_MULT config) scales BT equity by asset class
+            # (forex=0.6, crypto=0.8). Live risk_engine does NOT apply RISK_MULT —
+            # it uses asset_risk_map in _adaptive_risk_pct() instead.
+            # BT equity curves are therefore ~40% smaller than live for forex.
+            # Do not compare BT Sharpe/SQN directly to live P&L without adjusting.
             equity_change = (
                 result_r * CONFIG["RISK_PCT"] * risk_mult * _vol_adj * _score_factor
             )
@@ -866,7 +891,11 @@ def backtest_pair(pair, style="auto"):
                     bar_time=h4_window[-1].get("time") if h4_window else None,
                 )
 
-            except Exception:
+            except Exception as _bt_bar_err:
+                log.debug(
+                    f"[BT] {pair['display']} bar {i} skipped: {_bt_bar_err}",
+                    exc_info=False
+                )
                 i += 1
                 continue
 
@@ -948,6 +977,15 @@ def backtest_pair(pair, style="auto"):
                         sl = swing_sl
 
                 rr1 = abs(tp1 - entry) / abs(sl - entry) if abs(sl - entry) > 0 else 0
+                # Guard: skip if structural SL has degraded RR below minimum
+                _min_rr = float(CONFIG.get("STYLE_ATR_MULTS", {}).get(
+                    effective_style, {}).get(_ptype, {}).get("tp1", 1.5)) / float(
+                    CONFIG.get("STYLE_ATR_MULTS", {}).get(
+                    effective_style, {}).get(_ptype, {}).get("sl", 1.0))
+                if rr1 < max(0.8, _min_rr * 0.7):   # allow 30% degradation before skipping
+                    funnel["fail_score"] += 1
+                    i += 1
+                    continue
 
             _atr_series = calc_atr(
                 [c["high"] for c in h4_window],
@@ -1065,6 +1103,11 @@ def backtest_pair(pair, style="auto"):
 
                 result_r = round(result_r - _fee_r_id, 4)
 
+            # NOTE: risk_mult (RISK_MULT config) scales BT equity by asset class
+            # (forex=0.6, crypto=0.8). Live risk_engine does NOT apply RISK_MULT —
+            # it uses asset_risk_map in _adaptive_risk_pct() instead.
+            # BT equity curves are therefore ~40% smaller than live for forex.
+            # Do not compare BT Sharpe/SQN directly to live P&L without adjusting.
             equity_change = (
                 result_r * CONFIG["RISK_PCT"] * risk_mult * _vol_adj * _score_factor
             )
@@ -1213,7 +1256,11 @@ def backtest_pair(pair, style="auto"):
                     bar_time=h1_window[-1].get("time") if h1_window else None,
                 )
 
-            except Exception:
+            except Exception as _bt_bar_err:
+                log.debug(
+                    f"[BT] {pair['display']} bar {i} skipped: {_bt_bar_err}",
+                    exc_info=False
+                )
                 i += 1
                 continue
 
@@ -1293,6 +1340,15 @@ def backtest_pair(pair, style="auto"):
                         sl = swing_sl
 
                 rr1 = abs(tp1 - entry) / abs(sl - entry) if abs(sl - entry) > 0 else 0
+                # Guard: skip if structural SL has degraded RR below minimum
+                _min_rr = float(CONFIG.get("STYLE_ATR_MULTS", {}).get(
+                    effective_style, {}).get(_ptype, {}).get("tp1", 1.5)) / float(
+                    CONFIG.get("STYLE_ATR_MULTS", {}).get(
+                    effective_style, {}).get(_ptype, {}).get("sl", 1.0))
+                if rr1 < max(0.8, _min_rr * 0.7):   # allow 30% degradation before skipping
+                    funnel["fail_score"] += 1
+                    i += 1
+                    continue
 
             _atr_series = calc_atr(
                 [c["high"] for c in h1_window],
@@ -1410,6 +1466,11 @@ def backtest_pair(pair, style="auto"):
 
                 result_r = round(result_r - _fee_r_sc, 4)
 
+            # NOTE: risk_mult (RISK_MULT config) scales BT equity by asset class
+            # (forex=0.6, crypto=0.8). Live risk_engine does NOT apply RISK_MULT —
+            # it uses asset_risk_map in _adaptive_risk_pct() instead.
+            # BT equity curves are therefore ~40% smaller than live for forex.
+            # Do not compare BT Sharpe/SQN directly to live P&L without adjusting.
             equity_change = (
                 result_r * CONFIG["RISK_PCT"] * risk_mult * _vol_adj * _score_factor
             )
@@ -1526,6 +1587,15 @@ def backtest_pair(pair, style="auto"):
             "funnel": funnel,
             "btStyle": effective_style,
             "btStyleRequested": requested_style,
+            "quantileGateNote": (
+                "Backtest uses static bt_min threshold only. Live scans also apply "
+                "SCAN_QUANTILE_ENABLED cross-sectional filter (top fraction per class). "
+                "Live trade frequency will be lower than BT in trending markets."
+                if CONFIG.get("SCAN_QUANTILE_ENABLED", True)
+                else "SCAN_QUANTILE_ENABLED is off — BT and live thresholds match."
+            ),
+            "btMinUsed": bt_min,
+            "scanQuantileEnabled": CONFIG.get("SCAN_QUANTILE_ENABLED", True),
             "bhReturn": _bh,
             "calibrationReport": _calibration_report,
             "researchMetrics": _research_metrics,
@@ -1909,6 +1979,15 @@ def backtest_pair(pair, style="auto"):
         "funnel": funnel,
         "btStyle": effective_style,
         "btStyleRequested": requested_style,
+        "quantileGateNote": (
+            "Backtest uses static bt_min threshold only. Live scans also apply "
+            "SCAN_QUANTILE_ENABLED cross-sectional filter (top fraction per class). "
+            "Live trade frequency will be lower than BT in trending markets."
+            if CONFIG.get("SCAN_QUANTILE_ENABLED", True)
+            else "SCAN_QUANTILE_ENABLED is off — BT and live thresholds match."
+        ),
+        "btMinUsed": bt_min,
+        "scanQuantileEnabled": CONFIG.get("SCAN_QUANTILE_ENABLED", True),
         "bhReturn": bh_return,
         "calibrationReport": calibration_summary,
         "researchMetrics": research_metrics,

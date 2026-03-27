@@ -120,7 +120,7 @@ MIN_CONFLUENCE_GROUP:
 # Per-scan cross-sectional quantile gate (optional). When enabled, effective threshold =
 # max(static MIN_CONFLUENCE_*, percentile cut) per asset class so only ~top fraction of
 # that scan’s scores can clear trade tier (self-scales with regime).
-SCAN_QUANTILE_ENABLED: true
+SCAN_QUANTILE_ENABLED: false
 SCAN_QUANTILE_MIN_SAMPLES: 5
 # Asset types that skip quantile (static MIN_CONFLUENCE_* only). Crypto often fails when
 # max(static, percentile_cut) lifts the bar above tight subgroup floors after a few high scores.
@@ -178,8 +178,8 @@ AUTO_TRADE_MAX_DAILY: 10           # Demo mode: max auto-executions per day
 AUTO_TRADE_MAX_PER_SCAN: 1         # Max per scan cycle; raise to 2 only with >10 active pairs
 AUTO_TRADE_SCAN_INTERVAL_MIN: 30   # Scan every 30 minutes
 MAX_PORTFOLIO_HEAT: 0.06      # 6% total risk across all positions
-MAX_OPEN_POSITIONS: 40         # Demo/testing — revert to 5 before live
-MAX_CORRELATED_POSITIONS: 10   # Testing: allow broader same-cluster exposure
+MAX_OPEN_POSITIONS: 5         # Demo/testing — revert to 5 before live
+MAX_CORRELATED_POSITIONS: 2   # Testing: allow broader same-cluster exposure
 SIGNAL_MAX_AGE_SEC: 300       # 5 min freshness window
 FOREX_SESSION_FILTER: true    # true = London+NY+Asian only; false = 24h (disable for testing)
 SERVER_TZ_OFFSET_HOURS: 2    # Your local timezone UTC offset — SAST = 2 (GMT+2)
@@ -188,6 +188,7 @@ FOREX_H4_RESAMPLE_OFFSET_HOURS: 1.0  # Align H4 grid to 01/05/09/13/17/21 UTC (m
 # Forex scoring engine (merged into CONFIG["FOREX_ENGINE"] — see config.py for full defaults)
 FOREX_ENGINE:
   h1_ema_entry_filter: true   # H1 ema21/50 alignment modifier on RSI entry quality; false = RSI only
+  trend_gate_adx_min: 25   # Match ADX_TREND_MIN_CLASS.forex — must stay in sync
 MAX_RISK_PER_TRADE: 0.03      # Hard cap 3% per trade
 DRAWDOWN_REDUCE_THRESHOLD: 0.10   # Halve size at 10% drawdown
 DRAWDOWN_STOP_THRESHOLD: 0.15     # Stop all trading at 15% drawdown
@@ -218,6 +219,7 @@ LEARNING_ENABLED: true             # Enable AI self-learning (outcome extraction
 LEARNING_LOOKBACK_DAYS: 90         # How many days of trade history to use for learning context
 LEARNING_MIN_TRADES: 30            # Minimum trades required before injecting learning context into AI prompts
 META_ANALYSIS_ENABLED: true        # false = skip auto-trader weekly xAI meta-analysis (manual POST still works)
+EODHD_EARNINGS_CALENDAR_ENABLED: false   # false = skip unsupported EODHD earnings calendar endpoint entirely
 
 # ── EODHD Insider / Fundamentals Enrichment ───────────────
 INSIDER_TRADING_ENABLED: true      # Check SEC Form 4 insider activity for stock signals
@@ -408,7 +410,7 @@ INDICATOR_CORRELATION_WINDOW: 200
 # Regime detection overrides
 # When false, crypto no longer receives an extra ADX-momentum transition penalty on top of
 # the normal ranging penalty.
-CRYPTO_TRANSITION_PENALTY_ENABLED: false
+CRYPTO_TRANSITION_PENALTY_ENABLED: false  # NOTE: no effect on scores currently — see regime.py
 
 # Confidence engine
 CONFIDENCE_THRESHOLD: 0.55
@@ -467,7 +469,7 @@ TELEGRAM:
   enabled: true
 
 # ── External API Keys ────────────────────────────────────────────────
-TWELVEDATA_KEY: "9087d0ff6aeb49d1a0c5eaffce5d81a0"
+TWELVEDATA_KEY: ""   # Set via TWELVEDATA_KEY environment variable — never commit a real key here
 
 # ── Auto-Exit ────────────────────────────────────────────────────────
 # Automatically close passing trades if their confluence score decays significantly (e.g. drop from 3.0 to 0.0)

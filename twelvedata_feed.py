@@ -46,11 +46,11 @@ _RATE_LIMIT_PAUSE = 0.5  # seconds between calls — stay under 8/min limit
 
 
 def _get_api_key() -> str:
+    import os
     from config import CONFIG
-
-    key = CONFIG.get("TWELVEDATA_KEY", "")
+    key = os.environ.get("TWELVEDATA_KEY", "") or CONFIG.get("TWELVEDATA_KEY", "")
     if not key:
-        raise ValueError("TWELVEDATA_KEY not set in config.yaml")
+        raise ValueError("TWELVEDATA_KEY not set. Set the TWELVEDATA_KEY environment variable.")
     return key
 
 

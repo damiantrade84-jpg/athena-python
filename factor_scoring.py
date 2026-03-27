@@ -5,7 +5,7 @@ and aggregates to final signal score.
 
 Blueprint compliance:
   - Regime detection (TRENDING/RANGING/HIGH_VOLATILITY/LOW_VOLATILITY) dynamically selects weights.
-  - Indicator correlation filter: abs(corr) > 0.8 → reduce weaker indicator weight by 50% (capped).
+  - Indicator correlation filter: DISABLED (stub returns 1.0). Implementation in _pearson/_build_indicator_series ready for future re-enable.
   - Missing factors excluded from scoring (not treated as 0).
   - Raw thresholds for warnings only; scoring uses normalized z-scores/percentiles.
   - DIRECTIONAL indicators (ema_trend, rsi_z, macdLine_z, funding_rate, microstructure)
@@ -151,6 +151,8 @@ def _get_smoothed_regime(
 # ── Correlation filter ───────────────────────────────────────────────────────
 
 
+# The following two functions are complete implementations used by _apply_correlation_filter()
+# when the correlation filter is re-enabled. They are not called in the current codebase.
 def _pearson(x: List[float], y: List[float]) -> Optional[float]:
     """Pearson correlation between two equal-length float lists. Returns None if insufficient data."""
     pairs = [(a, b) for a, b in zip(x, y) if a is not None and b is not None]
@@ -191,7 +193,16 @@ def _build_indicator_series(
 def _apply_correlation_filter(
     indicator_scalars: Dict[str, Optional[float]], h4_candles: List[dict], window: int
 ) -> Dict[str, float]:
-    """Return all indicators with full weights - correlation filter removed."""
+    """Correlation filter — CURRENTLY DISABLED (returns uniform weights of 1.0).
+
+    The Pearson correlation implementation (_pearson, _build_indicator_series) is
+    complete and ready to re-enable. To activate: replace the return statement with
+    calls to those functions using the pattern from the original blueprint.
+
+    Disabled because the multiplicative scoring formula already handles indicator
+    redundancy through regime-weight dampening. Re-evaluate after collecting 6+
+    months of live factor performance data via ai_learning.py.
+    """
     return {k: 1.0 for k in indicator_scalars}
 
 
@@ -669,6 +680,8 @@ def compute_factor_scores(
         "derivatives": derivative_keys,
         "microstructure": microstructure_keys,
     }
+    if not is_crypto:
+        directional_factors["carry"] = ["carry_z"]
     # Non-directional factors: abs value = quality/strength (always positive)
     nondirectional_factors = {
         "trend_strength": ["adx_z"],
@@ -676,9 +689,6 @@ def compute_factor_scores(
         "volume": ["volume_ratio", "obv_trend"],
         "structure": ["fib_proximity"],
     }
-    if not is_crypto:
-        nondirectional_factors["carry"] = ["carry_z"]
-
     # ── Compute factor scores (correlation-adjusted × indicator-weighted) ────
     factor_scores: Dict[str, Optional[float]] = {}
     for factor, keys in directional_factors.items():

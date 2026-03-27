@@ -4,8 +4,8 @@ Provides z-score, percentile rank, and min-max scaling with configurable lookbac
 All z-scores are clamped to [-3, +3] to prevent extreme influence.
 """
 
-import math
 import logging
+import pandas as pd
 from typing import List, Optional
 from config import CONFIG
 
@@ -13,31 +13,21 @@ log = logging.getLogger("sentinel")
 
 
 def _rolling_mean(series: List[float], window: int) -> List[Optional[float]]:
-    """Rolling mean with None padding."""
-    n = len(series)
-    out = [None] * n
-    if window <= 0:
-        return out
-    for i in range(window - 1, n):
-        window_vals = [v for v in series[i - window + 1 : i + 1] if v is not None]
-        if len(window_vals) == window:
-            out[i] = sum(window_vals) / window
-    return out
+    """Rolling mean using pandas for speed. None-safe."""
+    if window <= 0 or len(series) < window:
+        return [None] * len(series)
+    s = pd.Series(series, dtype=float)
+    result = s.rolling(window=window, min_periods=window).mean()
+    return [None if pd.isna(v) else float(v) for v in result]
 
 
 def _rolling_std(series: List[float], window: int) -> List[Optional[float]]:
-    """Rolling sample standard deviation with None padding."""
-    n = len(series)
-    out = [None] * n
-    if window <= 0:
-        return out
-    for i in range(window - 1, n):
-        window_vals = [v for v in series[i - window + 1 : i + 1] if v is not None]
-        if len(window_vals) == window:
-            mean = sum(window_vals) / window
-            var = sum((v - mean) ** 2 for v in window_vals) / (window - 1)
-            out[i] = math.sqrt(var) if var > 0 else 0.0
-    return out
+    """Rolling sample std (ddof=1) using pandas for speed. None-safe."""
+    if window <= 0 or len(series) < window:
+        return [None] * len(series)
+    s = pd.Series(series, dtype=float)
+    result = s.rolling(window=window, min_periods=window).std(ddof=1)
+    return [None if pd.isna(v) else float(v) for v in result]
 
 
 def zscore_normalize(series: List[float], window: int) -> List[Optional[float]]:

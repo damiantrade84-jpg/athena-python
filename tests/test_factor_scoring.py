@@ -701,3 +701,66 @@ class TestCalcConfluenceIntegration:
         assert result["direction"] == "LONG"
         assert "microstructure" not in result["factorDiagnostics"]["activeDirectionalFactors"]
         assert result["factor_scores"]["microstructure"] == -3.0
+
+
+class TestCarryZDirectional:
+    @patch("carry_feed.get_carry_z", return_value=2.0)
+    @patch("cot_feed.get_cot_z", return_value=0.0)
+    def test_positive_carry_supports_long_directionally(self, *_mocks):
+        snap = _make_snap()
+        result = compute_factor_scores(
+            d1_snap=snap,
+            h4_snap=snap,
+            h1_snap=snap,
+            pair={"type": "forex", "display": "EUR/USD"},
+            d1_candles=_make_candles(220),
+            h4_candles=_make_candles(220),
+            h1_candles=_make_candles(220),
+            volume_ratio=1.5,
+        )
+
+        assert result["direction"] == "LONG"
+        assert result["filtered_indicators"]["carry_z"] == 2.0
+        assert result["factor_scores"]["carry"] > 0
+        assert "carry" in result["active_directional_factors"]
+        assert "carry" not in result["active_nondirectional_factors"]
+
+    @patch("carry_feed.get_carry_z", return_value=-2.0)
+    @patch("cot_feed.get_cot_z", return_value=0.0)
+    def test_negative_carry_opposes_long_directionally(self, *_mocks):
+        snap = _make_snap()
+        result = compute_factor_scores(
+            d1_snap=snap,
+            h4_snap=snap,
+            h1_snap=snap,
+            pair={"type": "forex", "display": "EUR/USD"},
+            d1_candles=_make_candles(220),
+            h4_candles=_make_candles(220),
+            h1_candles=_make_candles(220),
+            volume_ratio=1.5,
+        )
+
+        assert result["direction"] == "LONG"
+        assert result["filtered_indicators"]["carry_z"] == -2.0
+        assert result["factor_scores"]["carry"] < 0
+        assert "carry" in result["active_directional_factors"]
+        assert "carry" not in result["active_nondirectional_factors"]
+
+    @patch("carry_feed.get_carry_z", return_value=2.0)
+    @patch("cot_feed.get_cot_z", return_value=0.0)
+    def test_crypto_still_excludes_carry(self, *_mocks):
+        snap = _make_snap()
+        result = compute_factor_scores(
+            d1_snap=snap,
+            h4_snap=snap,
+            h1_snap=snap,
+            pair=_make_pair(display="ETH/USDT"),
+            d1_candles=_make_candles(220),
+            h4_candles=_make_candles(220),
+            h1_candles=_make_candles(220),
+            volume_ratio=1.5,
+            funding_rate=0.0001,
+        )
+
+        assert result["filtered_indicators"]["carry_z"] is None
+        assert "carry" not in result["factor_scores"]

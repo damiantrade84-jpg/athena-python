@@ -42,6 +42,11 @@ def detect_regime(
 
     adx_val = h4_snap.get("adx")
     adx_mom = h4_snap.get("adxMomentum", "stable")
+    # NOTE: ranging_penalty is computed but currently NOT consumed by factor_scoring.py.
+    # The new multiplicative scoring formula uses REGIME_WEIGHTS instead.
+    # CRYPTO_TRANSITION_PENALTY_ENABLED has no effect on live scores.
+    # Keep in return dict for potential future reintroduction.
+    # TODO: Either reconnect to scoring pipeline or remove in a future cleanup.
     ranging_penalty = 0.0
 
     if adx_val is not None:

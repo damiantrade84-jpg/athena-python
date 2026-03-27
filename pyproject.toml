@@ -15,5 +15,6 @@ norecursedirs = [
     ".venv",
     ".pytest_cache",
     ".ruff_cache",
+    "tests/.tmp",
     "__pycache__",
 ]

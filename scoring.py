@@ -305,22 +305,29 @@ CORR_CLUSTERS: dict = {
     "us_sp500": ["SPY", "QQQ", "S&P 500", "Nasdaq"],
 }
 
+# Reverse lookup: pair_display → cluster_name (built once at import time)
+_PAIR_TO_CLUSTER: dict = {
+    pair: cluster
+    for cluster, members in CORR_CLUSTERS.items()
+    for pair in members
+}
+
 
 def apply_correlation_cap(signals: list) -> list:
     """Tag signals with correlationWarning if cluster already has 2+ active signals."""
     cluster_counts: dict = {}
     for sig in signals:
         pair_name = sig["pair"]
-        for cluster, members in CORR_CLUSTERS.items():
-            if pair_name in members:
-                cluster_counts[cluster] = cluster_counts.get(cluster, 0) + 1
-                if cluster_counts[cluster] >= 2:
-                    sig.setdefault("warnings", [])
-                    sig["warnings"].append(
-                        f"CORR CAP: {cluster} cluster already has {cluster_counts[cluster] - 1}"
-                        f" signal(s) — halve size to cap USD exposure"
-                    )
-                    sig["correlationWarning"] = cluster
+        cluster = _PAIR_TO_CLUSTER.get(pair_name)
+        if cluster is not None:
+            cluster_counts[cluster] = cluster_counts.get(cluster, 0) + 1
+            if cluster_counts[cluster] >= 2:
+                sig.setdefault("warnings", [])
+                sig["warnings"].append(
+                    f"CORR CAP: {cluster} cluster already has {cluster_counts[cluster] - 1}"
+                    f" signal(s) — halve size to cap USD exposure"
+                )
+                sig["correlationWarning"] = cluster
     return signals
 
 

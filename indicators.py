@@ -936,8 +936,6 @@ def calc_indicators_with_normalized(candles: list, asset_type: str = "crypto") -
 
     macd_line = calc_macd(close_series)["macd"]
 
-    calc_macd(close_series)["hist"]
-
     atr_series = calc_atr(
         [c["high"] for c in candles], [c["low"] for c in candles], close_series, 14
     )

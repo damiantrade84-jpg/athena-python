@@ -544,6 +544,8 @@ Multi-asset algorithmic trading system: Flask dashboard, Engine A (MFQS: Multi-F
 | `config.py` | Hard-coded CONFIG defaults + YAML loader + validation | |
 | `config.yaml` | All tunable thresholds — edit this, not config.py | |
 | `risk_engine.py` | Risk gateway: kill switch, drawdown, position sizing, portfolio heat | |
+| `lottery_engine.py` | Core analytics engine — frequency, overdue, hot/cold, pair/triplet stats, sum/odd-even/low-high/consecutive distributions, ticket generation (7 modes: pure_random/hot_bias/cold_bias/overdue_bias/balanced_mix/pair_bias/anti_crowd), ticket scoring, simulation, multi-mode comparison, CSV export | ~1350 lines |
+| `lottery_service.py` | DB schema (ensure_lottery_schema), CSV import/parse, fetch_lottery_draws, clear_lottery_draws, lottery_stats | ~250 lines |
 | `mt5_executor.py` | MetaTrader 5 execution | |
 | `bybit_executor.py` | Bybit Linear Futures execution | |
 | `auto_trader.py` | Autonomous scheduler: scan every 30 min, auto-execute | |
@@ -962,6 +964,33 @@ Schema auto-migrated on startup — adding a new column: add it to both `CREATE 
 
 ---
 
+## Lottery Lab
+
+### Supported games
+| Key | Format | Bonus |
+|-----|--------|-------|
+| lotto | 6/52 | Yes (1–52) |
+| powerball | 5/50 | Yes (1–20) |
+| daily_lotto | 5/36 | No |
+
+### Generator modes
+pure_random · hot_bias · cold_bias · overdue_bias · balanced_mix · pair_bias · anti_crowd
+
+### Analytics functions
+`compute_recommended_sum_range()` · `compute_positional_distribution()` · `compute_rolling_frequency()` · `compute_pair_lift()` · `flag_anomalous_draws()` · `generate_wheel()`
+
+### Performance benchmarks (post hang-fix 2026-03-27)
+- Full Lotto history (~2576 draws), 1 ticket/draw: ~1.6s
+- Full Lotto history, 5 tickets/draw: ~6.3s
+
+### Critical invariants
+- generate_tickets() draw_context path: rules, universe, main_numbers must be initialised before the if draw_context is not None branch
+- simulate_generator() updates counters AFTER ticket generation per loop — never before (look-ahead prevention)
+- Per-ticket retry cap: max(25, min(400, len(main_numbers) * 4)) — never remove
+- DB calls always go through _connect() which calls ensure_lottery_schema(con) on every connection
+
+---
+
 ## Python Environment
 
 - **Python**: prefer the project virtualenv on Windows: `.\.venv\Scripts\python.exe`
@@ -1015,3 +1044,7 @@ claude
 16. BybitWS (`athena/datafeeds/bybit_ws.py`): `ping_interval=None` in `websockets.connect()` is required — disables library-level keepalive and lets app-level `{"op":"ping"}` handling prevent 1011 keepalive errors
 17. Engine B AI is review-only — do not reintroduce AI as a hidden pass/fail gate for naked signals unless the user explicitly requests that design change
 18. **Cross-layer verification:** scoring/confluence/candle complaints require tracing **data → engine → API fields → dashboard display** (and chart `/api/candles` vs `analyze_pair`). Never conclude “engine is wrong” from UI alone without matching **thresholds, denominators, bar counts, and forming-bar rules** across layers
+19. Lottery Lab — `lottery_engine.py` must never bypass `_normalize_game()` before any DB or analytics call
+20. Lottery Lab — `simulate_generator()` uses incremental counters (`main_counter`, `pair_counter`, `last_seen`) — never revert to full-history rescan per draw (quadratic slowdown regression)
+21. Lottery Lab — `generate_tickets()` draw_context path requires `rules`, `universe`, `main_numbers` initialised before the `if draw_context is not None` branch (BUG-001 prevention)
+22. Lottery Lab — new games must be added to BOTH `LOTTERY_GAME_RULES` (`lottery_engine.py`) AND `LOTTERY_GAME_SPECS` (`lottery_service.py`)

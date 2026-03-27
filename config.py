@@ -229,7 +229,7 @@ CONFIG: dict = {
         "index": 1.85,
     },
     # Full-scan cross-sectional quantile (see scanner.compute_scan_quantile_floors).
-    "SCAN_QUANTILE_ENABLED": True,
+    "SCAN_QUANTILE_ENABLED": False,
     "SCAN_QUANTILE_MIN_SAMPLES": 5,
     "SCAN_QUANTILE_EXCLUDE_TYPES": ["crypto"],
     "SCAN_QUANTILE_TOP_FRACTION": {
@@ -516,6 +516,7 @@ CONFIG: dict = {
     "LEARNING_MIN_TRADES": 5,  # Min trades before context injected into AI
     "LEARNING_LOOKBACK_DAYS": 90,  # Days of history to query for context
     "META_ANALYSIS_ENABLED": True,  # Weekly meta-analysis via xAI
+    "EODHD_EARNINGS_CALENDAR_ENABLED": False,  # Disabled by default; unsupported on many EODHD plans
     # ── Engine B AI Controls ─────────────────────────────────────────────────
     "ENGINE_B_NEWS_CONTEXT_ENABLED": True,  # Feed news into Engine B AI advisory (not checklist)
     "AI_ON_DEMAND_ONLY": True,  # AI runs on user-initiated actions only, not auto-scans

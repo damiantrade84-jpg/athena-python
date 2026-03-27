@@ -9,11 +9,12 @@ import math
 import os
 import sqlite3
 import threading
+import time as _time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 
 from config import CONFIG
-from scoring import CORR_CLUSTERS
+from scoring import CORR_CLUSTERS, _PAIR_TO_CLUSTER
 
 log = logging.getLogger("sentinel")
 
@@ -108,12 +109,15 @@ def _save_peak_equity(value: float):
 _init_peak_table()
 _peak_equity = _load_peak_equity()
 _peak_lock = threading.Lock()
+_peak_last_saved: float = 0.0   # epoch seconds of last _save_peak_equity call
 
 # ── Daily loss tracker ───────────────────────────────────────────────────────
 _daily_pnl: float = 0.0
 _daily_pnl_date: str = ""
 _daily_start_balance: float = 0.0
 _daily_lock = threading.Lock()
+_kelly_cache: dict = {}           # asset_type → (adaptive_risk_pct, cached_at)
+_KELLY_TTL_SECONDS: float = 300.0  # 5 minutes
 
 
 def record_daily_pnl(pnl: float, account_balance: float) -> None:
@@ -154,11 +158,15 @@ def _check_daily_loss(account_balance: float) -> tuple[bool, float]:
 
 def _update_peak(equity: float) -> float:
     """Track peak equity for drawdown calculation. Thread-safe. Persists to SQLite on new highs."""
-    global _peak_equity
+    global _peak_equity, _peak_last_saved
     with _peak_lock:
         if equity > _peak_equity:
             _peak_equity = equity
-            _save_peak_equity(_peak_equity)
+            import time as _time
+            now_ts = _time.time()
+            if now_ts - _peak_last_saved >= 60.0:
+                _save_peak_equity(_peak_equity)
+                _peak_last_saved = now_ts
         return _peak_equity
 
 
@@ -172,10 +180,7 @@ def _current_drawdown(equity: float) -> float:
 
 def _cluster_for_pair(pair_display: str) -> str | None:
     """Find which correlation cluster a pair belongs to."""
-    for cluster_name, members in CORR_CLUSTERS.items():
-        if pair_display in members:
-            return cluster_name
-    return None
+    return _PAIR_TO_CLUSTER.get(pair_display)
 
 
 def _count_correlated(pair_display: str, open_positions: list) -> int:
@@ -213,6 +218,11 @@ def _adaptive_risk_pct(asset_type: str, regime: str = "") -> float:
         return base_risk
 
     try:
+        now_ts = _time.time()
+        _cached = _kelly_cache.get(asset_type)
+        if _cached and (now_ts - _cached[1]) < _KELLY_TTL_SECONDS:
+            return _cached[0]
+
         db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
         con = sqlite3.connect(db_path, timeout=15.0)
         con.execute("PRAGMA journal_mode=WAL")
@@ -253,6 +263,8 @@ def _adaptive_risk_pct(asset_type: str, regime: str = "") -> float:
         # Regime adjustment: reduce in HIGH_VOLATILITY
         if regime == "HIGH_VOLATILITY":
             adaptive_risk *= 0.7
+
+        _kelly_cache[asset_type] = (adaptive_risk, now_ts)
 
         log.info(
             f"[KELLY] {asset_type}: WR={win_rate:.0%}, W/L={win_loss_ratio:.2f}, "

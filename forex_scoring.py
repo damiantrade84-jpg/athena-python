@@ -486,21 +486,15 @@ def _london_breakout_score(h1_candles: list, utc_hour: int) -> tuple[float, str]
 
 
 def _local_to_utc_hour() -> int:
-    """
-    Derive UTC hour from local system clock + SERVER_TZ_OFFSET_HOURS config.
-    Uses datetime.now() (local time) to avoid relying on the OS timezone
-    database, which can be misconfigured on Windows machines.
-    Set SERVER_TZ_OFFSET_HOURS = 2 for SAST (GMT+2).
-    """
-    try:
-        from config import CONFIG
+    """Return current UTC hour directly from the system clock.
 
-        offset = int(CONFIG.get("SERVER_TZ_OFFSET_HOURS", 2))
-    except Exception:
-        offset = 2
-    local_hour = datetime.now().hour
-    utc_h = (local_hour - offset) % 24
-    log.debug(f"[FOREX-TZ] local_hour={local_hour} offset={offset} utc_hour={utc_h}")
+    Uses datetime.now(timezone.utc) so the result is always correct regardless
+    of the OS timezone setting or SERVER_TZ_OFFSET_HOURS. The offset config is
+    no longer needed for session detection and is kept only for backward compat.
+    """
+    from datetime import datetime, timezone
+    utc_h = datetime.now(timezone.utc).hour
+    log.debug(f"[FOREX-TZ] utc_hour={utc_h} (direct UTC clock)")
     return utc_h
 
 
@@ -546,6 +540,10 @@ def compute_forex_score(
     _dfw.update(_hurst, backtest_mode)
 
     trend_ok, trend_dir = _check_trend_gate(d1_snap, h4_snap)
+    # Pre-compute COT boost for both direction cases to avoid double DB queries
+    _cot_trend = _cot_boost(pair, trend_dir, bar_time)
+    # For breakout: direction may differ — only fetch if different from trend_dir
+    # (avoids a second DB hit in the common case where directions agree)
     session_ok = (
         True if backtest_mode else _in_session(utc_hour, pair.get("display", ""))
     )
@@ -585,7 +583,7 @@ def compute_forex_score(
         pass
 
     if not session_ok:
-        log.info(
+        log.debug(
             f"[FOREX] {pair.get('display', '?')} session closed (utc_hour={utc_hour})"
         )
     if not trend_ok:
@@ -599,16 +597,13 @@ def compute_forex_score(
             f"adx={_adx_val} d1_close={_d1c} d1_ema200={_d1e200} "
             f"h4_ema50={_h4e50} h4_ema200={_h4e200}"
         )
-        if backtest_mode:
-            log.debug(_trend_msg)
-        else:
-            log.info(_trend_msg)
+        log.debug(_trend_msg)
 
     trend_score = 0.0
     if trend_ok and session_ok:
         rsi_history = rsi_history_override if rsi_history_override else None
         eq = _entry_quality(h1_snap, trend_dir, rsi_history)
-        cot = _cot_boost(pair, trend_dir, bar_time)
+        cot = _cot_trend
         trend_score = min(
             1.0,
             _dfw.score(eq, cot)
@@ -623,7 +618,7 @@ def compute_forex_score(
     # ── Signal 2: London breakout ─────────────────────────────────────────
     bo_score, bo_dir = _london_breakout_score(h1_candles, utc_hour)
     if bo_score > 0:
-        cot_bo = _cot_boost(pair, bo_dir, bar_time)
+        cot_bo = _cot_boost(pair, bo_dir, bar_time) if bo_dir != trend_dir else _cot_trend
         bo_final = bo_score * (1.0 + cot_bo * 0.3)
         result.breakout_score = bo_score
     else:

@@ -283,6 +283,7 @@ def fetch_candles(
     yfinance_symbol_for_pair: Callable[[dict], str | None] = None,
     tf_b: dict[str, str],
 ) -> list | None:
+    tf = tf.upper()
     """Route candle fetch to correct source with in-memory TTL cache.
 
     Caches candle lists per (symbol, tf) so repeated scans within the same bar

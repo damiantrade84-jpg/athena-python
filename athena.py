@@ -67,8 +67,11 @@ from lottery_service import (
 from lottery_engine import (
     build_lottery_dashboard,
     compare_generator_modes,
-    generate_tickets,
+    compute_pair_lift,
     compute_number_frequency,
+    compute_positional_distribution,
+    compute_recommended_sum_range,
+    compute_rolling_frequency,
     compute_overdue_numbers,
     compute_pair_frequency,
     compute_repeat_from_last_draw_stats,
@@ -77,6 +80,9 @@ from lottery_engine import (
     compute_odd_even_distribution,
     compute_sum_distribution,
     compute_triplet_frequency,
+    flag_anomalous_draws,
+    generate_tickets,
+    generate_wheel,
     history_rows as lottery_history_rows,
     score_ticket,
     set_lottery_db_path,
@@ -7143,7 +7149,7 @@ def analyze_pair(
                 },
                 "signal_type": _forex_result.signal_type,
                 "score": _forex_result.final_score,
-                "trendState": _forex_result.signal_type,
+                "trendState": _forex_result.signal_type,  # forex: signal_type not regime label — see auto_trader regime filter note
                 # Keys required by signal dict construction below
                 "votes": fx_votes,
                 "warnings": [],
@@ -8311,6 +8317,102 @@ def api_lottery_distributions():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/lottery/sum-range")
+def api_lottery_sum_range():
+    try:
+        game, start_date, end_date, _include_bonus, _limit = _lottery_filter_args()
+        return jsonify(
+            compute_recommended_sum_range(
+                game,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/positional")
+def api_lottery_positional():
+    try:
+        game, start_date, end_date, _include_bonus, _limit = _lottery_filter_args()
+        return jsonify(
+            compute_positional_distribution(
+                game,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/rolling-frequency")
+def api_lottery_rolling_frequency():
+    try:
+        game, start_date, end_date, _include_bonus, _limit = _lottery_filter_args()
+        try:
+            window = int(request.args.get("window", 50))
+        except (TypeError, ValueError):
+            window = 50
+        return jsonify(
+            compute_rolling_frequency(
+                game,
+                window=window,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/pair-lift")
+def api_lottery_pair_lift():
+    try:
+        game, start_date, end_date, _include_bonus, limit = _lottery_filter_args()
+        return jsonify(
+            compute_pair_lift(
+                game,
+                start_date=start_date,
+                end_date=end_date,
+                limit=limit,
+            )
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/anomalous-draws")
+def api_lottery_anomalous_draws():
+    try:
+        game, start_date, end_date, _include_bonus, _limit = _lottery_filter_args()
+        try:
+            z_threshold = float(request.args.get("z_threshold", 2.5))
+        except (TypeError, ValueError):
+            z_threshold = 2.5
+        return jsonify(
+            flag_anomalous_draws(
+                game,
+                z_threshold=z_threshold,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/lottery/draws")
 def api_lottery_draws():
     """Backward-compatible alias for phase-1 draws endpoint."""
@@ -8381,6 +8483,26 @@ def api_lottery_generate():
             end_date=end_date,
         )
         return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/wheel", methods=["POST"])
+def api_lottery_wheel():
+    try:
+        payload = request.get_json(silent=True) or {}
+        game = str(payload.get("game") or "").strip().lower()
+        chosen_numbers = payload.get("chosen_numbers") or []
+        guarantee_if = payload.get("guarantee_if")
+        return jsonify(
+            generate_wheel(
+                game,
+                chosen_numbers=chosen_numbers,
+                guarantee_if=guarantee_if,
+            )
+        )
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:

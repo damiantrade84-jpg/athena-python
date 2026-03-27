@@ -2,6 +2,7 @@ import csv
 import io
 import itertools
 import logging
+import math
 import os
 import random
 import sqlite3
@@ -191,6 +192,39 @@ def _average_gap_by_number(draws: list[dict], universe: list[int]) -> dict[int, 
         gaps = [b - a for a, b in zip(idxs, idxs[1:])]
         output[number] = round(mean(gaps), 3) if gaps else None
     return output
+
+
+def _percentile(values: list[float | int], pct: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(float(v) for v in values)
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = max(0.0, min(100.0, float(pct))) / 100.0 * (len(ordered) - 1)
+    low = int(math.floor(rank))
+    high = int(math.ceil(rank))
+    if low == high:
+        return ordered[low]
+    fraction = rank - low
+    return ordered[low] + (ordered[high] - ordered[low]) * fraction
+
+
+def _rounded_metric(value: float | int | None, digits: int = 3) -> float | int | None:
+    if value is None:
+        return None
+    rounded = round(float(value), digits)
+    if float(rounded).is_integer():
+        return int(rounded)
+    return rounded
+
+
+def _mean_stddev(values: list[float | int]) -> tuple[float | None, float | None]:
+    if not values:
+        return None, None
+    numeric = [float(v) for v in values]
+    avg = sum(numeric) / len(numeric)
+    variance = sum((v - avg) ** 2 for v in numeric) / len(numeric)
+    return avg, math.sqrt(variance)
 
 
 def _decade_bucket(number: int) -> str:
@@ -411,6 +445,114 @@ def compute_sum_distribution(
     }
 
 
+def compute_recommended_sum_range(
+    game: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    db_path: str | None = None,
+) -> dict:
+    loaded = load_lottery_draws(game, start_date=start_date, end_date=end_date, db_path=db_path)
+    sums = [sum(draw["numbers"]) for draw in loaded["draws"]]
+    p15 = _rounded_metric(_percentile(sums, 15), 3)
+    p85 = _rounded_metric(_percentile(sums, 85), 3)
+    return {
+        "game": loaded["game"],
+        "draw_count": len(loaded["draws"]),
+        "min_sum": min(sums) if sums else None,
+        "max_sum": max(sums) if sums else None,
+        "p15": p15,
+        "p85": p85,
+        "recommended_min": p15,
+        "recommended_max": p85,
+        "coverage_pct": 70,
+    }
+
+
+def compute_positional_distribution(
+    game: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    db_path: str | None = None,
+) -> dict:
+    loaded = load_lottery_draws(game, start_date=start_date, end_date=end_date, db_path=db_path)
+    rules = LOTTERY_GAME_RULES[loaded["game"]]
+    positions = []
+    for idx in range(rules["main_count"]):
+        values = [draw["numbers"][idx] for draw in loaded["draws"] if len(draw["numbers"]) > idx]
+        positions.append(
+            {
+                "position": idx + 1,
+                "min": min(values) if values else None,
+                "max": max(values) if values else None,
+                "mean": _rounded_metric(mean(values), 3) if values else None,
+                "median": _rounded_metric(median(values), 3) if values else None,
+                "p10": _rounded_metric(_percentile(values, 10), 3),
+                "p25": _rounded_metric(_percentile(values, 25), 3),
+                "p75": _rounded_metric(_percentile(values, 75), 3),
+                "p90": _rounded_metric(_percentile(values, 90), 3),
+            }
+        )
+    return {
+        "game": loaded["game"],
+        "draw_count": len(loaded["draws"]),
+        "positions": positions,
+    }
+
+
+def compute_rolling_frequency(
+    game: str,
+    window: int = 50,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    db_path: str | None = None,
+) -> dict:
+    loaded = load_lottery_draws(game, start_date=start_date, end_date=end_date, db_path=db_path)
+    draws = loaded["draws"]
+    window_used = max(1, min(int(window or 50), len(draws))) if draws else 0
+    recent_draws = draws[-window_used:] if window_used else []
+    all_counter = _main_counter(draws)
+    recent_counter = _main_counter(recent_draws)
+    universe = _number_universe(loaded["game"])
+
+    rows = []
+    for number in universe["main_numbers"]:
+        recent_count = int(recent_counter.get(number, 0))
+        alltime_count = int(all_counter.get(number, 0))
+        expected_recent = ((alltime_count / len(draws)) * window_used) if draws and window_used else 0.0
+        z_score = None
+        if expected_recent > 0:
+            z_score = (recent_count - expected_recent) / math.sqrt(expected_recent)
+        trend = "neutral"
+        if z_score is not None and z_score > 1.5:
+            trend = "heating"
+        elif z_score is not None and z_score < -1.5:
+            trend = "cooling"
+        rows.append(
+            {
+                "number": number,
+                "recent_count": recent_count,
+                "alltime_count": alltime_count,
+                "expected_recent": _rounded_metric(expected_recent, 4),
+                "z_score": _rounded_metric(z_score, 4) if z_score is not None else None,
+                "trend": trend,
+            }
+        )
+
+    return {
+        "game": loaded["game"],
+        "draw_count": len(draws),
+        "window_used": window_used,
+        "numbers": sorted(
+            rows,
+            key=lambda row: (
+                row["z_score"] is None,
+                -(float(row["z_score"]) if row["z_score"] is not None else 0.0),
+                row["number"],
+            ),
+        ),
+    }
+
+
 def compute_odd_even_distribution(
     game: str,
     start_date: str | None = None,
@@ -539,6 +681,124 @@ def compute_repeat_from_last_draw_stats(
     }
 
 
+def compute_pair_lift(
+    game: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 100,
+    db_path: str | None = None,
+) -> dict:
+    loaded = load_lottery_draws(game, start_date=start_date, end_date=end_date, db_path=db_path)
+    draws = loaded["draws"]
+    draw_count = len(draws)
+    main_counter = _main_counter(draws)
+    pair_counter = Counter()
+    for draw in draws:
+        for pair in itertools.combinations(draw["numbers"], 2):
+            pair_counter[pair] += 1
+
+    pairs = []
+    for (a, b), observed in pair_counter.items():
+        freq_a = int(main_counter.get(a, 0))
+        freq_b = int(main_counter.get(b, 0))
+        if freq_a < 5 or freq_b < 5 or draw_count <= 0:
+            continue
+        expected = (freq_a * freq_b) / draw_count
+        if expected <= 0:
+            continue
+        pairs.append(
+            {
+                "pair": [int(a), int(b)],
+                "observed": int(observed),
+                "freq_a": freq_a,
+                "freq_b": freq_b,
+                "expected": _rounded_metric(expected, 4),
+                "lift": _rounded_metric(observed / expected, 4),
+                "confidence_ab": _rounded_metric(observed / freq_a, 4),
+                "confidence_ba": _rounded_metric(observed / freq_b, 4),
+            }
+        )
+
+    return {
+        "game": loaded["game"],
+        "draw_count": draw_count,
+        "pairs": sorted(
+            pairs,
+            key=lambda row: (-float(row["lift"]), -int(row["observed"]), row["pair"]),
+        )[: max(1, min(int(limit or 100), 2000))],
+    }
+
+
+def flag_anomalous_draws(
+    game: str,
+    z_threshold: float = 2.5,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    db_path: str | None = None,
+) -> dict:
+    loaded = load_lottery_draws(game, start_date=start_date, end_date=end_date, db_path=db_path)
+    draws = loaded["draws"]
+    rules = LOTTERY_GAME_RULES[loaded["game"]]
+    threshold = float(z_threshold or 2.5)
+    low_cutoff = rules["main_max"] // 2
+
+    metric_rows = []
+    for draw in draws:
+        numbers = draw["numbers"]
+        odd_count = sum(1 for number in numbers if number % 2 == 1)
+        low_count = sum(1 for number in numbers if number <= low_cutoff)
+        metric_rows.append(
+            {
+                "draw_sum": sum(numbers),
+                "odd_ratio": odd_count / rules["main_count"],
+                "low_ratio": low_count / rules["main_count"],
+                "spread": max(numbers) - min(numbers),
+            }
+        )
+
+    metric_stats = {}
+    for metric in ("draw_sum", "odd_ratio", "low_ratio", "spread"):
+        avg, stddev = _mean_stddev([row[metric] for row in metric_rows])
+        metric_stats[metric] = {
+            "mean": _rounded_metric(avg, 4),
+            "stddev": _rounded_metric(stddev, 4),
+        }
+
+    anomalous = []
+    for draw, metrics in zip(draws, metric_rows):
+        z_scores = {}
+        flags = []
+        for metric, value in metrics.items():
+            stat = metric_stats[metric]
+            stddev = stat["stddev"]
+            z_score = 0.0
+            if stddev not in (None, 0):
+                z_score = (float(value) - float(stat["mean"])) / float(stddev)
+            z_scores[metric] = _rounded_metric(z_score, 4)
+            if abs(float(z_scores[metric])) >= threshold:
+                flags.append(metric)
+        if flags:
+            anomalous.append(
+                {
+                    "draw_date": draw["draw_date"],
+                    "numbers": draw["numbers"],
+                    "bonus": draw["bonus"],
+                    "metrics": {key: _rounded_metric(val, 4) for key, val in metrics.items()},
+                    "z_scores": z_scores,
+                    "flags": flags,
+                }
+            )
+
+    return {
+        "game": loaded["game"],
+        "draw_count": len(draws),
+        "z_threshold": threshold,
+        "anomalous_count": len(anomalous),
+        "anomalous_draws": anomalous,
+        "metric_stats": metric_stats,
+    }
+
+
 def _safe_hot_cold(game: str, start_date: str | None, end_date: str | None, include_bonus: bool, db_path: str | None) -> dict:
     try:
         return compute_hot_cold_numbers(
@@ -580,6 +840,15 @@ def build_lottery_dashboard(
     odd_even = compute_odd_even_distribution(loaded["game"], start_date=start_date, end_date=end_date, db_path=db_path)
     low_high = compute_low_high_distribution(loaded["game"], start_date=start_date, end_date=end_date, db_path=db_path)
     sums = compute_sum_distribution(loaded["game"], start_date=start_date, end_date=end_date, db_path=db_path)
+    recommended_sum_range = compute_recommended_sum_range(
+        loaded["game"], start_date=start_date, end_date=end_date, db_path=db_path
+    )
+    positional_distribution = compute_positional_distribution(
+        loaded["game"], start_date=start_date, end_date=end_date, db_path=db_path
+    )
+    rolling_frequency = compute_rolling_frequency(
+        loaded["game"], window=50, start_date=start_date, end_date=end_date, db_path=db_path
+    )
     consecutive = compute_consecutive_stats(loaded["game"], start_date=start_date, end_date=end_date, db_path=db_path)
     repeat_stats = compute_repeat_from_last_draw_stats(loaded["game"], start_date=start_date, end_date=end_date, db_path=db_path)
 
@@ -609,6 +878,13 @@ def build_lottery_dashboard(
         "low_high_distribution": low_high["patterns"],
         "sum_distribution_summary": sums["summary"],
         "sum_distribution": sums["distribution"],
+        "recommended_sum_range": {
+            "min": recommended_sum_range["recommended_min"],
+            "max": recommended_sum_range["recommended_max"],
+            "coverage_pct": 70,
+        },
+        "positional_distribution": positional_distribution["positions"],
+        "rolling_frequency": rolling_frequency["numbers"],
         "consecutive_summary": {
             "draws_with_consecutive": consecutive["draws_with_consecutive"],
             "draws_with_consecutive_pct": consecutive["draws_with_consecutive_pct"],
@@ -785,6 +1061,25 @@ def _ticket_matches_constraints(ticket: dict, rules: dict, filters: dict | None,
                 return False
         except (TypeError, ValueError):
             pass
+
+    if bool(filters.get("enforce_positional_bands")):
+        positional_bands = filters.get("positional_bands")
+        if isinstance(positional_bands, list):
+            for idx, number in enumerate(numbers):
+                if idx >= len(positional_bands):
+                    break
+                band = positional_bands[idx]
+                if not isinstance(band, dict):
+                    continue
+                band_min = band.get("min")
+                band_max = band.get("max")
+                try:
+                    if band_min is not None and number < int(band_min):
+                        return False
+                    if band_max is not None and number > int(band_max):
+                        return False
+                except (TypeError, ValueError):
+                    continue
     return True
 
 
@@ -1192,6 +1487,9 @@ def generate_tickets(
     if mode_key not in valid_modes:
         raise ValueError(f"Unsupported generator mode: {mode}")
     count = max(1, min(int(ticket_count or 1), 200))
+    rules = LOTTERY_GAME_RULES[game_key]
+    universe = _number_universe(game_key, include_bonus=include_bonus)
+    main_numbers = universe["main_numbers"]
 
     if draw_context is None:
         loaded = load_lottery_draws(game_key, start_date=start_date, end_date=end_date, db_path=db_path)
@@ -1369,7 +1667,7 @@ def simulate_generator(
             "overdue": [
                 {
                     "number": n,
-                    "draws_since_seen": (idx if last_seen[n] is None else (idx - 1 - last_seen[n])),
+                    "draws_since_seen": (idx + 1 if last_seen[n] is None else max(0, idx - last_seen[n])),
                 }
                 for n in main_numbers
             ],
@@ -1383,7 +1681,7 @@ def simulate_generator(
             overdue_payload["bonus_overdue"] = [
                 {
                     "number": n,
-                    "draws_since_seen": (idx if bonus_last_seen[n] is None else (idx - 1 - bonus_last_seen[n])),
+                    "draws_since_seen": (idx + 1 if bonus_last_seen[n] is None else max(0, idx - bonus_last_seen[n])),
                 }
                 for n in bonus_numbers
             ]
@@ -1549,6 +1847,86 @@ def compare_generator_modes(
         "modes": summaries,
         "tickets_per_draw": max(1, int(tickets_per_draw or 1)),
         "include_bonus": bool(include_bonus),
+    }
+
+
+def generate_wheel(
+    game: str,
+    chosen_numbers: list[int],
+    guarantee_if: int,
+    db_path: str | None = None,
+) -> dict:
+    game_key = _normalize_game(game)
+    rules = LOTTERY_GAME_RULES[game_key]
+    main_count = rules["main_count"]
+    universe = set(_number_universe(game_key)["main_numbers"])
+
+    if not isinstance(chosen_numbers, list):
+        raise ValueError("chosen_numbers must be a list of integers")
+    try:
+        pool = sorted({int(x) for x in chosen_numbers})
+    except (TypeError, ValueError):
+        raise ValueError("chosen_numbers must contain only integers")
+
+    if len(pool) != len(chosen_numbers):
+        raise ValueError("chosen_numbers must not contain duplicates")
+    if len(pool) < main_count:
+        raise ValueError(f"chosen_numbers must contain at least {main_count} numbers")
+    if len(pool) > 20:
+        raise ValueError("chosen_numbers must contain no more than 20 numbers")
+    if any(number not in universe for number in pool):
+        raise ValueError("chosen_numbers contains number(s) outside the valid game range")
+
+    try:
+        guarantee = int(guarantee_if)
+    except (TypeError, ValueError):
+        raise ValueError("guarantee_if must be an integer")
+    if guarantee < 2 or guarantee > main_count:
+        raise ValueError(f"guarantee_if must be between 2 and {main_count}")
+
+    targets = {tuple(target) for target in itertools.combinations(pool, guarantee)}
+    candidates = [tuple(ticket) for ticket in itertools.combinations(pool, main_count)]
+    if not targets or not candidates:
+        raise ValueError("Unable to generate wheel candidates from the supplied inputs")
+
+    candidate_coverages = [
+        {tuple(subset) for subset in itertools.combinations(candidate, guarantee)}
+        for candidate in candidates
+    ]
+
+    uncovered = set(targets)
+    selected: list[tuple[int, ...]] = []
+    remaining_candidates = list(range(len(candidates)))
+
+    while uncovered:
+        best_idx = None
+        best_score = -1
+        for idx in remaining_candidates:
+            score = sum(1 for subset in candidate_coverages[idx] if subset in uncovered)
+            if score > best_score:
+                best_score = score
+                best_idx = idx
+        if best_idx is None or best_score <= 0:
+            raise ValueError("Unable to complete valid wheel coverage with supplied inputs")
+        selected.append(candidates[best_idx])
+        uncovered.difference_update(candidate_coverages[best_idx])
+        remaining_candidates.remove(best_idx)
+
+    selected_sets = [set(ticket) for ticket in selected]
+    coverage_verified = all(
+        any(set(target).issubset(ticket_set) for ticket_set in selected_sets)
+        for target in targets
+    )
+
+    return {
+        "game": game_key,
+        "chosen_numbers": pool,
+        "guarantee_if": guarantee,
+        "main_count": main_count,
+        "ticket_count": len(selected),
+        "tickets": [list(ticket) for ticket in selected],
+        "coverage_verified": coverage_verified,
+        "note": "Abbreviated wheel — greedy set cover. Not mathematically minimal but guaranteed valid.",
     }
 
 
