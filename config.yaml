@@ -527,6 +527,12 @@ ENGINE_C_B_CONFLICT_OVERRIDE_ENABLED: true
 ENGINE_C_B_CONFLICT_MIN_SCORE: 0.70
 ENGINE_C_A_CONFLICT_MAX_SCORE: 0.45
 ENGINE_C_B_CONFLICT_PENALTY: 0.85
+VISION_MODIFIERS:
+  STRONG: {action: "confirm", conviction_mult: 1.15}
+  MODERATE: {action: "confirm", conviction_mult: 1.0}
+  WEAK: {action: "weaken", conviction_mult: 0.70}
+  AVOID: {action: "override", conviction_mult: 0.0}
+  CONTRADICTS: {action: "contradict", conviction_mult: 0.0}
 
 # ── Scalp Engine (Engine D) ───────────────────────────────────────────
 SCALP_ENGINE:

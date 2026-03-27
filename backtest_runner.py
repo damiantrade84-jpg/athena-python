@@ -47,6 +47,68 @@ def _rt():
     return _art_rt()
 
 
+_BASE_BACKTEST_SLIP = {
+    "forex": 0.0001,
+    "crypto": 0.002,
+    "commodity": 0.001,
+    "stock": 0.001,
+    "index": 0.001,
+}
+
+
+def _get_slippage_for_bar(bar: dict, ptype: str) -> float:
+    """Deterministic per-bar slippage model shared by all backtest engines."""
+    base = _BASE_BACKTEST_SLIP.get(ptype, 0.001)
+
+    if ptype == "forex":
+        t = bar.get("time", "")
+        try:
+            h = int(t[11:13]) if len(t) > 13 else -1
+        except (ValueError, IndexError):
+            h = -1
+
+        if 0 <= h < 7 or h >= 22:
+            return base * 1.8
+        if 13 <= h < 16:
+            return base * 0.7
+
+    return base
+
+
+def _resolve_barrier_exit(
+    bar: dict,
+    *,
+    direction: str,
+    sl: float,
+    tp1: float | None = None,
+    tp2: float | None = None,
+    sl_outcome: str = "SL",
+) -> tuple[str | None, bool]:
+    """Resolve TP/SL touches on a single OHLC bar conservatively."""
+    bar_high = float(bar["high"])
+    bar_low = float(bar["low"])
+
+    if direction == "LONG":
+        hit_sl = bar_low <= sl
+        hit_tp2 = tp2 is not None and bar_high >= tp2
+        hit_tp1 = tp1 is not None and bar_high >= tp1
+    else:
+        hit_sl = bar_high >= sl
+        hit_tp2 = tp2 is not None and bar_low <= tp2
+        hit_tp1 = tp1 is not None and bar_low <= tp1
+
+    same_bar_both_hit = hit_sl and (hit_tp2 or hit_tp1)
+    if same_bar_both_hit:
+        return sl_outcome, True
+    if hit_tp2:
+        return "TP2", False
+    if hit_tp1:
+        return "TP1", False
+    if hit_sl:
+        return sl_outcome, False
+    return None, False
+
+
 def _normalize_style(style: str | None) -> str:
     s = (style or "auto").lower()
     return s if s in ("auto", "swing", "intraday", "scalp") else "auto"
@@ -301,37 +363,6 @@ def backtest_pair(pair, style="auto"):
 
     # N8: Session-variable slippage â€” forex widens during Asian/off-hours
 
-    _BASE_SLIP = {
-        "forex": 0.0001,
-        "crypto": 0.002,
-        "commodity": 0.001,
-        "stock": 0.001,
-        "index": 0.001,
-    }
-
-    def _get_slippage(bar, ptype):
-
-        base = _BASE_SLIP.get(ptype, 0.001)
-
-        if ptype == "forex":
-            # Estimate session from bar time string (D1 bars don't have hour, use base)
-
-            t = bar.get("time", "")
-
-            try:
-                h = int(t[11:13]) if len(t) > 13 else -1
-
-            except (ValueError, IndexError):
-                h = -1
-
-            if 0 <= h < 7 or h >= 22:  # Asian / off-hours
-                return base * 1.8  # wider spread
-
-            elif 13 <= h < 16:  # London/NY overlap
-                return base * 0.7  # tightest spread
-
-        return base
-
     # Shared init
 
     trades = []
@@ -359,6 +390,7 @@ def backtest_pair(pair, style="auto"):
     _recent_scores = []  # CR3: rolling score history for adaptive percentile threshold
 
     _pair_max_score = _rt().max_score_for_pair(pair)  # Pre-compute for score-based sizing
+    same_bar_both_hit = 0
 
     if effective_style == "swing":
         # --- SWING D1 LOOP â€” UNCHANGED ---
@@ -536,7 +568,7 @@ def backtest_pair(pair, style="auto"):
 
             raw_entry = entry_bar.get("open", entry_bar["close"])
 
-            slip = raw_entry * _get_slippage(entry_bar, _ptype)
+            slip = raw_entry * _get_slippage_for_bar(entry_bar, _ptype)
 
             entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
@@ -638,6 +670,35 @@ def backtest_pair(pair, style="auto"):
 
             for j in range(i + 1, min(i + 21, total_bars)):
                 bar = d1_raw[j]
+                _bar_outcome, _both_hit = _resolve_barrier_exit(
+                    bar,
+                    direction=direction,
+                    sl=sl,
+                    tp1=tp1,
+                    tp2=tp2,
+                )
+                if _both_hit:
+                    same_bar_both_hit += 1
+                if _bar_outcome == "TP2":
+                    outcome = "TP2"
+                    result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult))
+                    exit_bar = j
+                    break
+                if _bar_outcome == "TP1":
+                    outcome = "TP1"
+                    result_r = rr1 - (slip / (atr * sl_mult))
+                    exit_bar = j
+                    break
+                if _bar_outcome == "SL":
+                    _sl_slip_r = (
+                        _get_slippage_for_bar(bar, _ptype) * sl / (atr * sl_mult)
+                        if atr and sl_mult
+                        else 0
+                    )
+                    outcome = "SL"
+                    result_r = round(-1.0 - _sl_slip_r, 4)
+                    exit_bar = j
+                    break
 
                 if direction == "LONG":
                     # TP checked first — if both hit on same bar, TP wins
@@ -656,7 +717,7 @@ def backtest_pair(pair, style="auto"):
 
                     if bar["low"] <= sl:
                         _sl_slip_r = (
-                            _get_slippage(bar, _ptype) * sl / (atr * sl_mult)
+                            _get_slippage_for_bar(bar, _ptype) * sl / (atr * sl_mult)
                             if atr and sl_mult
                             else 0
                         )
@@ -683,7 +744,7 @@ def backtest_pair(pair, style="auto"):
 
                     if bar["high"] >= sl:
                         _sl_slip_r = (
-                            _get_slippage(bar, _ptype) * sl / (atr * sl_mult)
+                            _get_slippage_for_bar(bar, _ptype) * sl / (atr * sl_mult)
                             if atr and sl_mult
                             else 0
                         )
@@ -922,7 +983,7 @@ def backtest_pair(pair, style="auto"):
 
             raw_entry = entry_bar.get("open", entry_bar["close"])
 
-            slip = raw_entry * _get_slippage(entry_bar, _ptype)
+            slip = raw_entry * _get_slippage_for_bar(entry_bar, _ptype)
 
             entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
@@ -1016,6 +1077,35 @@ def backtest_pair(pair, style="auto"):
 
             for j in range(i + 1, min(i + MAX_HOLD + 1, total_h4)):
                 bar = h4_raw[j]
+                _bar_outcome, _both_hit = _resolve_barrier_exit(
+                    bar,
+                    direction=direction,
+                    sl=sl,
+                    tp1=tp1,
+                    tp2=tp2,
+                )
+                if _both_hit:
+                    same_bar_both_hit += 1
+                if _bar_outcome == "TP2":
+                    outcome = "TP2"
+                    result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult))
+                    exit_bar = j
+                    break
+                if _bar_outcome == "TP1":
+                    outcome = "TP1"
+                    result_r = rr1 - (slip / (atr * sl_mult))
+                    exit_bar = j
+                    break
+                if _bar_outcome == "SL":
+                    _sl_slip_r = (
+                        _get_slippage_for_bar(bar, _ptype) * sl / (atr * sl_mult)
+                        if atr and sl_mult
+                        else 0
+                    )
+                    outcome = "SL"
+                    result_r = round(-1.0 - _sl_slip_r, 4)
+                    exit_bar = j
+                    break
 
                 if direction == "LONG":
                     # TP checked first — if both hit on same bar, TP wins
@@ -1034,7 +1124,7 @@ def backtest_pair(pair, style="auto"):
 
                     if bar["low"] <= sl:
                         _sl_slip_r = (
-                            _get_slippage(bar, _ptype) * sl / (atr * sl_mult)
+                            _get_slippage_for_bar(bar, _ptype) * sl / (atr * sl_mult)
                             if atr and sl_mult
                             else 0
                         )
@@ -1061,7 +1151,7 @@ def backtest_pair(pair, style="auto"):
 
                     if bar["high"] >= sl:
                         _sl_slip_r = (
-                            _get_slippage(bar, _ptype) * sl / (atr * sl_mult)
+                            _get_slippage_for_bar(bar, _ptype) * sl / (atr * sl_mult)
                             if atr and sl_mult
                             else 0
                         )
@@ -1285,7 +1375,7 @@ def backtest_pair(pair, style="auto"):
 
             raw_entry = entry_bar.get("open", entry_bar["close"])
 
-            slip = raw_entry * _get_slippage(entry_bar, _ptype)
+            slip = raw_entry * _get_slippage_for_bar(entry_bar, _ptype)
 
             entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
@@ -1379,6 +1469,35 @@ def backtest_pair(pair, style="auto"):
 
             for j in range(i + 1, min(i + MAX_HOLD + 1, total_h1)):
                 bar = h1_raw[j]
+                _bar_outcome, _both_hit = _resolve_barrier_exit(
+                    bar,
+                    direction=direction,
+                    sl=sl,
+                    tp1=tp1,
+                    tp2=tp2,
+                )
+                if _both_hit:
+                    same_bar_both_hit += 1
+                if _bar_outcome == "TP2":
+                    outcome = "TP2"
+                    result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult))
+                    exit_bar = j
+                    break
+                if _bar_outcome == "TP1":
+                    outcome = "TP1"
+                    result_r = rr1 - (slip / (atr * sl_mult))
+                    exit_bar = j
+                    break
+                if _bar_outcome == "SL":
+                    _sl_slip_r = (
+                        _get_slippage_for_bar(bar, _ptype) * sl / (atr * sl_mult)
+                        if atr and sl_mult
+                        else 0
+                    )
+                    outcome = "SL"
+                    result_r = round(-1.0 - _sl_slip_r, 4)
+                    exit_bar = j
+                    break
 
                 if direction == "LONG":
                     # TP checked first — if both hit on same bar, TP wins
@@ -1397,7 +1516,7 @@ def backtest_pair(pair, style="auto"):
 
                     if bar["low"] <= sl:
                         _sl_slip_r = (
-                            _get_slippage(bar, _ptype) * sl / (atr * sl_mult)
+                            _get_slippage_for_bar(bar, _ptype) * sl / (atr * sl_mult)
                             if atr and sl_mult
                             else 0
                         )
@@ -1424,7 +1543,7 @@ def backtest_pair(pair, style="auto"):
 
                     if bar["high"] >= sl:
                         _sl_slip_r = (
-                            _get_slippage(bar, _ptype) * sl / (atr * sl_mult)
+                            _get_slippage_for_bar(bar, _ptype) * sl / (atr * sl_mult)
                             if atr and sl_mult
                             else 0
                         )
@@ -1604,6 +1723,7 @@ def backtest_pair(pair, style="auto"):
                 "bt": CONFIG.get("VOLUME_THRESHOLD_BACKTEST", 1.2),
                 "live": CONFIG.get("VOLUME_THRESHOLD", 1.5),
             },
+            "same_bar_both_hit": same_bar_both_hit,
             "pairMaxScore": _pair_max_score,
             "equityCurve": [1.0],
             "trades": [],
@@ -1996,16 +2116,22 @@ def backtest_pair(pair, style="auto"):
             "bt": CONFIG.get("VOLUME_THRESHOLD_BACKTEST", 1.2),
             "live": CONFIG.get("VOLUME_THRESHOLD", 1.5),
         },
+        "same_bar_both_hit": same_bar_both_hit,
         "pairMaxScore": _pair_max_score,
         "equityCurve": equity_curve,
         "trades": trades[-50:],
     }
 
 
-def _format_backtest_results(trades, pair, engine_type="NAKED"):
+def _format_backtest_results(
+    trades, pair, engine_type="NAKED", same_bar_both_hit: int = 0
+):
     """Format Engine B backtest results to match Engine A's response schema exactly."""
     if not trades:
-        return {"error": f"No signals generated for {pair['display']} in NAKED mode"}
+        return {
+            "error": f"No signals generated for {pair['display']} in NAKED mode",
+            "same_bar_both_hit": same_bar_both_hit,
+        }
 
     # Use resultR as primary (Engine A schema); fall back to r_multiple for older records
     def _r(t):
@@ -2181,6 +2307,7 @@ def _format_backtest_results(trades, pair, engine_type="NAKED"):
         "btStyle": "naked",
         "btStyleRequested": "naked",
         "engine": engine_type,
+        "same_bar_both_hit": same_bar_both_hit,
         # ── Benchmarks ────────────────────────────────────────────────────────
         "bhReturn": None,
         "pairMaxScore": None,
@@ -2310,6 +2437,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
 
     COOLDOWN = 2  # H4 bars to skip after a trade resolves (prevents overlapping entries)
     trades = []
+    same_bar_both_hit = 0
     i = 50
     while i < len(candles_h4) - 5:
         h4_time = candles_h4[i].get("time") or candles_h4[i].get("datetime")
@@ -2453,18 +2581,47 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
             i += 1
             continue
 
+        if i + 1 >= len(candles_h4):
+            break
+
         best = max(candidates, key=lambda x: (x["score"], x["rr"], x["pct"]))
         direction = best["direction"]
-        entry = best["entry"]
-        sl = best["sl"]
-        tp = best["tp"]
-        target_rr = best["rr"]
+        entry_bar = candles_h4[i + 1]
+        raw_entry = float(entry_bar.get("open", entry_bar["close"]))
+        _ptype = pair.get("type", "stock")
+        slip = raw_entry * _get_slippage_for_bar(entry_bar, _ptype)
+        entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
+
+        _lvl = calc_levels(
+            entry,
+            atr,
+            direction,
+            _ptype,
+            regime_state=best["res"].get("regime_state"),
+            style=resolved_style,
+        )
+        sl = _lvl["sl"]
+        tp = _lvl["tp1"]
+        target_rr = _lvl.get("rr1", 0.0)
+
+        if sl is None or tp is None:
+            i += 1
+            continue
+        if target_rr <= 0:
+            _sl_dist = abs(entry - sl)
+            _tp_dist = abs(tp - entry)
+            target_rr = (_tp_dist / _sl_dist) if _sl_dist > 0 else 0.0
+        if target_rr <= 0:
+            i += 1
+            continue
+        if target_rr < float(style_profile.get("min_rr", 1.0)):
+            i += 1
+            continue
 
         outcome = "TIMEOUT"
         r_multiple = 0.0
         exit_bar_offset = 0
         # Per-asset-class backtest parameters
-        _ptype = pair.get("type", "stock")
         _bt_params = {
             "forex":     {"hold": {"scalp": 12, "intraday": 30, "swing": 60}, "be_min_rr": 2.0},
             "crypto":    {"hold": {"scalp": 12, "intraday": 40, "swing": 80}, "be_min_rr": 2.0},
@@ -2483,6 +2640,23 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         future_window = candles_h4[i + 1 : min(i + max_hold_bars + 1, len(candles_h4))]
         for fi, future in enumerate(future_window):
             exit_bar_offset = fi
+            _bar_outcome, _both_hit = _resolve_barrier_exit(
+                future,
+                direction=direction,
+                sl=_active_sl,
+                tp1=tp,
+                sl_outcome="BE" if _be_triggered else "SL",
+            )
+            if _both_hit:
+                same_bar_both_hit += 1
+            if _bar_outcome == "TP1":
+                outcome = "TP1"
+                r_multiple = round(target_rr, 2)
+                break
+            if _bar_outcome in ("SL", "BE"):
+                outcome = _bar_outcome
+                r_multiple = 0.0 if outcome == "BE" else -1.0
+                break
             f_high = float(future["high"])
             f_low = float(future["low"])
 
@@ -2532,7 +2706,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
             _fee_r = _fee_pct * entry / _sl_dist_fee
             r_multiple = round(r_multiple - _fee_r, 4)
 
-        bar_date = candles_h4[i].get("time", "")[:10] if candles_h4[i].get("time") else ""
+        bar_date = entry_bar.get("time", "")[:10] if entry_bar.get("time") else ""
         trades.append(
             {
                 "date": bar_date,
@@ -2568,7 +2742,9 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         # Advance past the resolved exit bar plus the configured cooldown gap.
         i = i + 2 + exit_bar_offset + COOLDOWN
 
-    result = _format_backtest_results(trades, pair, engine_type="NAKED")
+    result = _format_backtest_results(
+        trades, pair, engine_type="NAKED", same_bar_both_hit=same_bar_both_hit
+    )
     _tp_count = sum(1 for t in trades if t.get("outcome") == "TP1")
     _sl_count = sum(1 for t in trades if t.get("outcome") == "SL")
     _be_count = sum(1 for t in trades if t.get("outcome") == "BE")

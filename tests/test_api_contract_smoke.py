@@ -105,3 +105,15 @@ def test_execute_payload_contract_strings_present():
     assert "Invalid payload" in src
     assert "SIGNAL_FLIPPED" in src
 
+
+def test_execution_uses_aware_utc_timestamp_and_no_dead_macro_expression():
+    src = EXECUTION_PATH.read_text(encoding="utf-8")
+    assert "datetime.utcnow().isoformat()" not in src
+    assert "datetime.now(timezone.utc).isoformat()" in src
+    assert 'engine_b.get("macro_swing_sequence", "RANGING")' not in src
+
+
+def test_live_forex_payload_exposes_explicit_regime_name():
+    src = ATHENA_PATH.read_text(encoding="utf-8")
+    assert '"regimeName": _fx_regime.get("label", "RANGING")' in src
+

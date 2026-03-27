@@ -129,6 +129,27 @@ from candles_cache import (  # noqa: E402
 
 _last_scan_results: dict = {"signals": []}  # latest run_full_scan output for chart-analysis context
 _engine_b_cache: dict = {}  # sid/symbol -> naked analysis result dict
+_ENGINE_B_CACHE_TTL = 300.0
+
+
+def _engine_b_cache_put(key: str, value: dict) -> None:
+    if key and value:
+        _engine_b_cache[key] = {"data": value, "ts": time.time()}
+
+
+def _engine_b_cache_get(key: str) -> dict | None:
+    if not key:
+        return None
+    entry = _engine_b_cache.get(key)
+    if not entry:
+        return None
+    # Backward-compatible fallback if older plain dict entries already exist in memory.
+    if not isinstance(entry, dict) or "ts" not in entry or "data" not in entry:
+        return entry
+    if (time.time() - float(entry["ts"])) > _ENGINE_B_CACHE_TTL:
+        _engine_b_cache.pop(key, None)
+        return None
+    return entry.get("data")
 
 
 from candle_feeds import (  # noqa: E402
@@ -4362,8 +4383,8 @@ def api_naked_analysis():
     _sym = sig.get("symbol") or sig.get("display") or ""
     if _sym and res:
         _sid = _sym.replace("/", "_").replace("=", "_").replace("^", "_").replace(".", "_")
-        _engine_b_cache[_sid] = res
-        _engine_b_cache[_sym] = res
+        _engine_b_cache_put(_sid, res)
+        _engine_b_cache_put(_sym, res)
     return jsonify(_json_safe(res))
 
 
@@ -6157,7 +6178,7 @@ def api_chart_analysis():
 
     # Engine B context — prefer POST body (frontend state), fall back to server-side cache
     sid = symbol.replace("/", "_").replace("=", "_").replace("^", "_").replace(".", "_")
-    eb = data.get("engineB") or _engine_b_cache.get(sid) or _engine_b_cache.get(symbol)
+    eb = data.get("engineB") or _engine_b_cache_get(sid) or _engine_b_cache_get(symbol)
     if eb:
         context_parts.append(
             f"ENGINE B: swing_sequence={eb.get('current_swing_sequence')}, "
@@ -7149,6 +7170,7 @@ def analyze_pair(
                     "state": _fx_regime.get("state", 1),
                     "label": _fx_regime.get("label", "RANGING"),
                 },
+                "regimeName": _fx_regime.get("label", "RANGING"),
                 "signal_type": _forex_result.signal_type,
                 "score": _forex_result.final_score,
                 "trendState": _forex_result.signal_type,  # forex: signal_type not regime label — see auto_trader regime filter note

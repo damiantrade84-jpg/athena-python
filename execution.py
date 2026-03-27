@@ -215,7 +215,6 @@ def api_quick_execute():
                 bos = engine_b.get("bos_data", {})
                 sweep = engine_b.get("sweep_data", {})
                 seq = engine_b.get("current_swing_sequence", "RANGING")
-                engine_b.get("macro_swing_sequence", "RANGING")
 
                 _b_factors["Naked_BOS_Bull"] = 1.0 if bos.get("bos_bull") else 0.0
                 _b_factors["Naked_BOS_Bear"] = 1.0 if bos.get("bos_bear") else 0.0
@@ -310,8 +309,6 @@ def api_engine_c_scan():
     for pair in candidate_pairs:
         _pair_start = time.time()
         try:
-            time.sleep(0.1)
-
             symbol = pair.get("symbol", pair.get("display"))
             display = pair.get("display", symbol)
             ptype = pair.get("type", "")
@@ -746,7 +743,7 @@ def api_execute():
                     _con.execute(
                         "INSERT INTO audit_log(ts,pair,score,direction,style,grade,error_tag) VALUES(?,?,?,?,?,?,?)",
                         (
-                            datetime.utcnow().isoformat(),
+                            datetime.now(timezone.utc).isoformat(),
                             pair,
                             sig.get("score"),
                             sig.get("direction"),

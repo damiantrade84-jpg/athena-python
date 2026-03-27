@@ -52,13 +52,35 @@ CONVICTION_TIERS = {
 
 # ── AI Vision verdict mapping ─────────────────────────────────────────────────
 # Vision is NOT a voter. It modifies conviction after consensus is established.
-VISION_MODIFIERS = {
+_DEFAULT_VISION_MODIFIERS = {
     "STRONG":    {"action": "confirm",     "conviction_mult": 1.15},  # boost
     "MODERATE":  {"action": "confirm",     "conviction_mult": 1.0},   # neutral
     "WEAK":      {"action": "weaken",      "conviction_mult": 0.70},  # reduce
     "AVOID":     {"action": "override",    "conviction_mult": 0.0},   # hard veto
     "CONTRADICTS": {"action": "contradict", "conviction_mult": 0.0},  # hard veto
 }
+
+
+def _vision_modifiers() -> dict:
+    raw = CONFIG.get("VISION_MODIFIERS")
+    if not isinstance(raw, dict):
+        return _DEFAULT_VISION_MODIFIERS
+
+    out = {}
+    for key, default in _DEFAULT_VISION_MODIFIERS.items():
+        entry = raw.get(key, default)
+        if not isinstance(entry, dict):
+            out[key] = default
+            continue
+        action = str(entry.get("action", default["action"]))
+        try:
+            conviction_mult = float(
+                entry.get("conviction_mult", default["conviction_mult"])
+            )
+        except (TypeError, ValueError):
+            conviction_mult = float(default["conviction_mult"])
+        out[key] = {"action": action, "conviction_mult": conviction_mult}
+    return out
 
 
 def normalise_engine_a(signal_a: dict) -> dict:
@@ -380,7 +402,8 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
         rating = "CONTRADICTS"
 
     # Apply modifier
-    modifier = VISION_MODIFIERS.get(rating, VISION_MODIFIERS["MODERATE"])
+    modifiers = _vision_modifiers()
+    modifier = modifiers.get(rating, modifiers["MODERATE"])
     action = modifier["action"]
     mult = modifier["conviction_mult"]
 

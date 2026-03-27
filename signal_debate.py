@@ -22,6 +22,27 @@ from ai_utils import parse_json_object
 log = logging.getLogger("sentinel.debate")
 
 
+def _signal_max_score(signal: dict) -> float:
+    """Best-effort current-system max score fallback for debate context."""
+    raw = signal.get("maxScore")
+    if raw is not None:
+        try:
+            val = float(raw)
+            if val > 0:
+                return val
+        except (TypeError, ValueError):
+            pass
+
+    try:
+        score = float(signal.get("confluenceScore", 0) or 0)
+    except (TypeError, ValueError):
+        score = 0.0
+
+    if 0.0 <= score <= 1.0:
+        return 1.0
+    return 3.0
+
+
 def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
     """Run a Bull/Bear/Judge debate for a trade signal.
 
@@ -67,7 +88,7 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
     pair = signal.get("display", signal.get("pair", "?"))
     direction = signal.get("direction", "?")
     score = signal.get("confluenceScore", 0)
-    max_score = signal.get("maxScore", 13)
+    max_score = _signal_max_score(signal)
     regime = signal.get("trendState", "UNKNOWN")
     votes = signal.get("votes", {})
     asset_type = signal.get("type", "unknown")

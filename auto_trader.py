@@ -225,6 +225,11 @@ class AutoTrader:
             "maxDaily": cfg.get("AUTO_TRADE_MAX_DAILY", 3),
             "minScore": scan_min_score,
             "scanMinScore": scan_min_score,
+            "minScoreExecutionNote": (
+                "Informational only; live execution uses combinedConviction and "
+                "AUTO_TRADE_MIN_CONVICTION."
+            ),
+            "minScoreDeprecatedForExecution": True,
             "minConviction": min_conviction,
             "liveGateMetric": "combinedConviction",
             "liveGateAlignedDiscount": 0.85,

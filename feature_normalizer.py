@@ -5,6 +5,7 @@ All z-scores are clamped to [-3, +3] to prevent extreme influence.
 """
 
 import logging
+from bisect import bisect_left, insort
 import pandas as pd
 from typing import List, Optional
 from config import CONFIG
@@ -53,12 +54,28 @@ def percentile_rank(series: List[float], window: int) -> List[Optional[float]]:
     out = [None] * n
     if window <= 0:
         return out
-    for i in range(window - 1, n):
-        window_vals = [v for v in series[i - window + 1 : i + 1] if v is not None]
-        if len(window_vals) == window:
-            sorted_vals = sorted(window_vals)
-            rank = sum(1 for v in sorted_vals if v < series[i])
-            out[i] = rank / window
+
+    sorted_window: List[float] = []
+    none_count = 0
+
+    for i, val in enumerate(series):
+        if val is None:
+            none_count += 1
+        else:
+            insort(sorted_window, val)
+
+        if i >= window:
+            old = series[i - window]
+            if old is None:
+                none_count -= 1
+            else:
+                old_idx = bisect_left(sorted_window, old)
+                if old_idx < len(sorted_window):
+                    sorted_window.pop(old_idx)
+
+        if i >= window - 1 and none_count == 0 and len(sorted_window) == window:
+            current = series[i]
+            out[i] = bisect_left(sorted_window, current) / window
     return out
 
 

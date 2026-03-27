@@ -47,6 +47,8 @@ def test_status_reports_real_live_gate():
     status = trader.get_status()
 
     assert status["scanMinScore"] == cfg["AUTO_TRADE_MIN_SCORE"]
+    assert status["minScoreDeprecatedForExecution"] is True
+    assert "Informational only" in status["minScoreExecutionNote"]
     assert status["minConviction"] == {"default": 0.55}
     assert status["liveGateMetric"] == "combinedConviction"
     assert "combinedConviction >= 0.55" in status["liveGateDisplay"]
@@ -156,3 +158,24 @@ def test_can_execute_rejects_when_meta_policy_suspends_bucket(monkeypatch):
 
     assert not ok
     assert reason == "meta policy suspended this engine bucket"
+
+
+def test_can_execute_prefers_explicit_regime_name_over_trend_state_for_filtering():
+    trader = AutoTrader()
+    cfg = _base_cfg()
+    cfg["AUTO_TRADE_BLOCKED_REGIMES"] = {"default": ["RANGING"]}
+
+    signal = {
+        "pair": "EUR/USD",
+        "type": "forex",
+        "direction": "LONG",
+        "trendState": "TREND_PULLBACK",
+        "regimeName": "RANGING",
+        "combinedConviction": 0.9,
+        "confluenceScore": 0.9,
+        "maxScore": 1.0,
+    }
+    ok, reason = trader._can_execute(signal, cfg)
+
+    assert not ok
+    assert "TREND_PULLBACK/RANGING blocked" in reason

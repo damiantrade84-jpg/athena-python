@@ -151,6 +151,40 @@ class TestApproval:
         assert result.volume > 0
         assert result.risk_pct > 0
 
+    def test_risk_check_passes_explicit_regime_to_sizing(self, monkeypatch):
+        captured = {}
+
+        def _fake_calc_volume(
+            account_balance,
+            entry_price,
+            sl_price,
+            symbol_info,
+            asset_type,
+            pair=None,
+            regime="",
+        ):
+            captured["regime"] = regime
+            return 1.0
+
+        monkeypatch.setattr(risk_engine, "_calc_volume", _fake_calc_volume)
+        result = risk_check(
+            _make_signal(
+                pair="EUR/USD",
+                type="forex",
+                price=1.1000,
+                sl=1.0900,
+                tp1=1.1200,
+                tp2=1.1400,
+                regimeName="HIGH_VOLATILITY",
+            ),
+            100000,
+            100000,
+            [],
+        )
+
+        assert result.approved is True
+        assert captured["regime"] == "HIGH_VOLATILITY"
+
 
 # ── Peak equity thread safety ───────────────────────────────────────────────
 

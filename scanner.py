@@ -139,6 +139,14 @@ def annotate_signal_for_scan(
             }
         )
 
+    if signal.get("engine_b_error"):
+        diagnostics.append(
+            {
+                "code": "engine_b_error",
+                "detail": str(signal.get("engine_b_error")),
+            }
+        )
+
     if not pair.get("enabled", True):
         diagnostics.append(
             {
@@ -434,6 +442,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     a_norm = min(a_score / a_max, 1.0) if a_max else 0
                     sig_a["combinedConviction"] = round(a_norm * 0.6, 4)
                     sig_a["enginesAligned"] = False
+                    sig_a["engine_b_error"] = str(_b_err)
 
                 return pair, sig_a, None
 

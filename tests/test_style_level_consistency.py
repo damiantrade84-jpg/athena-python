@@ -7,7 +7,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from athena_app.services.candle_service import recompute_levels_for_style
 from config import CONFIG
-from engine_c import normalise_engine_a
+import engine_c
+from engine_c import compute_consensus, normalise_engine_a, normalise_engine_b
 from indicators import calc_levels
 
 
@@ -126,3 +127,80 @@ def test_engine_c_normalise_engine_a_prefers_style_field():
         }
     )
     assert norm["style"] == "intraday"
+
+
+def test_engine_c_normalise_engine_a_uses_raw_score_ratio_not_confluence_pct():
+    norm = normalise_engine_a(
+        {
+            "confluenceScore": 1.5,
+            "maxScore": 3.0,
+            "confluencePct": 100,
+            "direction": "LONG",
+        }
+    )
+    assert norm["score_norm"] == 0.5
+
+
+def test_engine_c_normalise_engine_b_uses_checklist_ratio_when_pct_missing():
+    norm = normalise_engine_b(
+        {
+            "structural_verdict": "CLEAR",
+            "direction": "LONG",
+            "recommended_stop_loss": 99.0,
+            "recommended_take_profit": 103.0,
+        },
+        confidence_b={"score": 4.0, "max_possible": 5.0, "pct": 0.0},
+    )
+    assert norm["score_norm"] == 0.8
+
+
+def test_engine_c_consensus_blends_normalized_engine_scores(monkeypatch):
+    monkeypatch.setattr(engine_c, "get_engine_context", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        engine_c, "get_dynamic_engine_weights", lambda *_args, **_kwargs: {"weights": None}
+    )
+    monkeypatch.setattr(
+        engine_c,
+        "predict_calibrated_prob",
+        lambda *_args, **_kwargs: {"calibrated_prob": None},
+    )
+    monkeypatch.setattr(engine_c, "record_signal_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine_c, "apply_meta_policy", lambda result, _meta: result)
+
+    result = compute_consensus(
+        signal_a={
+            "confluenceScore": 1.5,
+            "maxScore": 3.0,
+            "direction": "LONG",
+            "sl": 99.0,
+            "tp1": 103.0,
+            "tp2": 105.0,
+            "rr1": 2.0,
+            "price": 100.0,
+            "style": "swing",
+        },
+        signal_b={
+            "structural_verdict": "CLEAR",
+            "direction": "LONG",
+            "recommended_stop_loss": 98.5,
+            "recommended_take_profit": 104.0,
+            "order_blocks": [],
+        },
+        confidence_b={
+            "score": 4.0,
+            "max_possible": 5.0,
+            "pct": 0.0,
+            "rr": 2.0,
+            "structure_ok": True,
+            "zone_ok": True,
+            "trigger_ok": True,
+        },
+        asset_type="forex",
+        regime="TRENDING",
+        entry_price=100.0,
+        atr=1.0,
+    )
+
+    assert result["components"]["a_norm"] == 0.5
+    assert result["components"]["b_norm"] == 0.8
+    assert result["conviction"] == 0.605

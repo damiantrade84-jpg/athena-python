@@ -544,8 +544,34 @@ def risk_check(
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "INVALID_LEVELS")
 
     asset_type = signal.get("type", "")
+    _risk_regime = signal.get("regimeName")
+    if not _risk_regime:
+        _regime_payload = signal.get("regime")
+        if isinstance(_regime_payload, dict):
+            _risk_regime = _regime_payload.get("label") or _regime_payload.get(
+                "regime"
+            )
+        elif isinstance(_regime_payload, str):
+            _risk_regime = _regime_payload
+    if not _risk_regime:
+        _trend_state = signal.get("trendState", "")
+        if _trend_state in (
+            "TRENDING",
+            "DEVELOPING",
+            "RANGING",
+            "DEAD RANGING",
+            "HIGH_VOLATILITY",
+            "LOW_VOLATILITY",
+        ):
+            _risk_regime = _trend_state
     volume = _calc_volume(
-        account_balance, entry, sl, symbol_info, asset_type, pair=signal
+        account_balance,
+        entry,
+        sl,
+        symbol_info,
+        asset_type,
+        pair=signal,
+        regime=_risk_regime or "",
     )
     is_crypto = asset_type == "crypto"
     is_stock = asset_type == "stock"
