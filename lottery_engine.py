@@ -799,6 +799,118 @@ def flag_anomalous_draws(
     }
 
 
+def compute_bonus_intelligence(
+    game: str,
+    window: int = 50,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    db_path: str | None = None,
+) -> dict:
+    game_key = _normalize_game(game)
+    rules = LOTTERY_GAME_RULES[game_key]
+    if not rules["has_bonus"]:
+        return {"game": game_key, "has_bonus": False}
+
+    loaded = load_lottery_draws(
+        game_key,
+        start_date=start_date,
+        end_date=end_date,
+        db_path=db_path,
+    )
+    draws = loaded["draws"]
+    bonus_draws = [d for d in draws if d.get("bonus") is not None]
+    total = len(bonus_draws)
+    if not bonus_draws:
+        return {"game": game_key, "has_bonus": True, "draw_count": 0}
+
+    bonus_universe = list(range(rules["bonus_min"], rules["bonus_max"] + 1))
+    freq_counter = Counter()
+    for draw in bonus_draws:
+        freq_counter[int(draw["bonus"])] += 1
+
+    last_seen = {n: None for n in bonus_universe}
+    for idx, draw in enumerate(bonus_draws):
+        last_seen[int(draw["bonus"])] = idx
+
+    overdue = []
+    overdue_map = {}
+    for number in bonus_universe:
+        idx = last_seen[number]
+        since = total if idx is None else (total - 1 - idx)
+        seen_date = bonus_draws[idx]["draw_date"] if idx is not None else None
+        row = {
+            "number": number,
+            "draws_since_seen": since,
+            "last_seen_date": seen_date,
+            "count": int(freq_counter.get(number, 0)),
+        }
+        overdue.append(row)
+        overdue_map[number] = row
+    overdue_sorted = sorted(overdue, key=lambda x: (-x["draws_since_seen"], x["number"]))
+
+    window_draws = bonus_draws[-max(1, min(int(window or 50), total)):]
+    window_counter = Counter()
+    for draw in window_draws:
+        window_counter[int(draw["bonus"])] += 1
+
+    rolling = []
+    for number in bonus_universe:
+        alltime_count = int(freq_counter.get(number, 0))
+        recent_count = int(window_counter.get(number, 0))
+        expected = (alltime_count / total) * len(window_draws) if total > 0 else 0
+        z_score = round((recent_count - expected) / (expected ** 0.5), 3) if expected > 0 else None
+        trend = "heating" if z_score is not None and z_score > 1.5 else "cooling" if z_score is not None and z_score < -1.5 else "neutral"
+        rolling.append(
+            {
+                "number": number,
+                "recent_count": recent_count,
+                "alltime_count": alltime_count,
+                "expected_recent": round(expected, 3),
+                "z_score": z_score,
+                "trend": trend,
+                "draws_since_seen": overdue_map[number]["draws_since_seen"],
+            }
+        )
+    rolling_sorted = sorted(rolling, key=lambda x: (-(x["z_score"] or 0), x["number"]))
+
+    max_overdue = max(x["draws_since_seen"] for x in overdue) or 1
+    recommendations = []
+    for item in rolling:
+        number = item["number"]
+        overdue_score = overdue_map[number]["draws_since_seen"] / max_overdue
+        z_score = item["z_score"] or 0
+        z_score_bonus = 0.3 if 0.5 <= z_score <= 2.0 else 0.1 if 0 < z_score <= 0.5 else 0
+        penalty = 0.2 if z_score > 3.0 else 0
+        score = round((overdue_score * 0.7) + z_score_bonus - penalty, 4)
+        recommendations.append(
+            {
+                "number": number,
+                "score": score,
+                "z_score": z_score,
+                "draws_since_seen": overdue_map[number]["draws_since_seen"],
+            }
+        )
+    top_picks = sorted(recommendations, key=lambda x: (-x["score"], x["number"]))[:5]
+
+    return {
+        "game": game_key,
+        "has_bonus": True,
+        "draw_count": total,
+        "window_used": len(window_draws),
+        "bonus_min": rules["bonus_min"],
+        "bonus_max": rules["bonus_max"],
+        "frequency": [
+            {"number": number, "count": int(freq_counter.get(number, 0))}
+            for number in bonus_universe
+        ],
+        "overdue": overdue_sorted,
+        "rolling": rolling_sorted,
+        "top_picks": top_picks,
+        "most_recent_bonus": int(bonus_draws[-1]["bonus"]) if bonus_draws else None,
+        "last_draw_date": bonus_draws[-1]["draw_date"] if bonus_draws else None,
+    }
+
+
 def _safe_hot_cold(game: str, start_date: str | None, end_date: str | None, include_bonus: bool, db_path: str | None) -> dict:
     try:
         return compute_hot_cold_numbers(

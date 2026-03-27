@@ -65,8 +65,10 @@ from lottery_service import (
     import_lottery_csv,
 )
 from lottery_engine import (
+    LOTTERY_GAME_RULES,
     build_lottery_dashboard,
     compare_generator_modes,
+    compute_bonus_intelligence,
     compute_pair_lift,
     compute_number_frequency,
     compute_positional_distribution,
@@ -8183,6 +8185,212 @@ def _lottery_filter_args():
     return game, start_date, end_date, include_bonus, max(1, min(limit, 2000))
 
 
+def _lottery_ai_extract_json(raw_text: str) -> dict:
+    text = str(raw_text or "").strip()
+    if not text:
+        return {}
+    fenced = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+    candidates = [fenced, text]
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except Exception:
+            pass
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        return json.loads(text[start : end + 1])
+    raise ValueError("Claude response was not valid JSON")
+
+
+def _lottery_ai_content_text(message) -> str:
+    parts = []
+    for block in getattr(message, "content", []) or []:
+        text = getattr(block, "text", None)
+        if text:
+            parts.append(text)
+    return "\n".join(parts).strip()
+
+
+def _lottery_ai_prompt_payload(game: str, start_date=None, end_date=None, window: int = 50, z_threshold: float = 2.5):
+    game_key = str(game or "").strip().lower()
+    rules = LOTTERY_GAME_RULES[game_key]
+    board = build_lottery_dashboard(
+        game_key,
+        start_date=start_date,
+        end_date=end_date,
+        include_bonus=True,
+    )
+    if not board.get("total_draws"):
+        raise ValueError("No draw history found — please import draws first")
+
+    rolling = compute_rolling_frequency(game_key, window=window, start_date=start_date, end_date=end_date)
+    pair_lift = compute_pair_lift(game_key, start_date=start_date, end_date=end_date, limit=50)
+    anomalies = flag_anomalous_draws(game_key, z_threshold=z_threshold, start_date=start_date, end_date=end_date)
+    bonus = compute_bonus_intelligence(game_key, window=window, start_date=start_date, end_date=end_date)
+    recent = lottery_history_rows(game_key, start_date=start_date, end_date=end_date, limit=10)
+
+    recent_draws = "\n".join(
+        [
+            f"- {row.get('draw_date')}: {', '.join(str(n) for n in row.get('numbers', []))}"
+            + (f" | bonus {row.get('bonus')}" if row.get("bonus") is not None else "")
+            for row in recent.get("history", [])
+        ]
+    ) or "No recent draws"
+    anomalous_rows = anomalies.get("anomalous_draws", [])
+    anomalous_summary = (
+        "\n".join(
+            [
+                f"- {row.get('draw_date')}: flags={', '.join(row.get('flags', []))}; "
+                f"sum={row.get('metrics', {}).get('draw_sum')}"
+                for row in anomalous_rows[:5]
+            ]
+        )
+        if anomalous_rows
+        else "No anomalous draws at this threshold."
+    )
+    most_recent_flag = ", ".join((anomalous_rows[-1].get("flags") or [])) if anomalous_rows else "None"
+
+    rolling_rows = rolling.get("numbers", [])
+    heating_numbers = [row["number"] for row in rolling_rows if row.get("z_score") is not None and float(row["z_score"]) > 1.5][:12]
+    cooling_numbers = [row["number"] for row in rolling_rows if row.get("z_score") is not None and float(row["z_score"]) < -1.5][:12]
+    overdue_lookup = {row["number"]: row for row in board.get("overdue_numbers", [])}
+    overdue_neutral = [
+        row["number"]
+        for row in rolling_rows
+        if row.get("trend") == "neutral" and row["number"] in overdue_lookup
+    ][:12]
+    overdue_list = "\n".join(
+        [
+            f"- {row['number']}: {row['draws_since_seen']} draws since seen (last seen {row.get('last_seen_date') or 'never'})"
+            for row in board.get("overdue_numbers", [])[:10]
+        ]
+    ) or "None"
+    pair_lift_list = "\n".join(
+        [
+            f"- {row['pair'][0]}-{row['pair'][1]}: lift {row['lift']}, conf {row['confidence_ab']}, count {row['observed']}"
+            for row in pair_lift.get("pairs", [])
+            if float(row.get("lift") or 0) > 1.5
+        ][:10]
+    ) or "None above 1.5"
+    positional_ranges = "\n".join(
+        [
+            f"- Ball {row['position']}: min {row['min']}, p10 {row['p10']}, mean {row['mean']}, p90 {row['p90']}, max {row['max']}"
+            for row in board.get("positional_distribution", [])
+        ]
+    ) or "Unavailable"
+    bonus_top_picks = ", ".join(str(row["number"]) for row in bonus.get("top_picks", [])[:5]) if bonus.get("has_bonus") else "N/A"
+    bonus_overdue = ", ".join(str(row["number"]) for row in bonus.get("overdue", [])[:5]) if bonus.get("has_bonus") else "N/A"
+    bonus_heating = ", ".join(
+        str(row["number"]) for row in bonus.get("rolling", []) if row.get("trend") == "heating"
+    ) if bonus.get("has_bonus") else "N/A"
+    rules_text = json.dumps(
+        {
+            "game": game_key,
+            "main_count": rules["main_count"],
+            "main_min": rules["main_min"],
+            "main_max": rules["main_max"],
+            "has_bonus": rules["has_bonus"],
+            "bonus_min": rules.get("bonus_min"),
+            "bonus_max": rules.get("bonus_max"),
+        },
+        indent=2,
+    )
+    sum_range = board.get("recommended_sum_range", {}) or {}
+    sum_summary = board.get("sum_distribution_summary", {}) or {}
+    prompt = f"""
+You are a lottery number analyst. Analyse the following data for {game_key} 
+and recommend exactly which numbers to add to a wheeling system for 
+tonight's draw. Be precise and data-driven.
+
+GAME RULES:
+{rules_text}
+
+RECENT DRAW HISTORY (last 10 draws):
+{recent_draws}
+
+ANOMALOUS DRAWS DETECTED:
+{anomalous_summary}
+Most recent anomaly flag: {most_recent_flag}
+
+SMART SUM RANGE:
+Recommended: {sum_range.get("min")} to {sum_range.get("max")} (covers 70% of historical draws)
+Average sum: {sum_summary.get("avg_sum")}
+
+NUMBER TEMPERATURE (rolling {window} draws):
+Heating numbers (z > 1.5): {heating_numbers}
+Cooling numbers (z < -1.5): {cooling_numbers}
+Neutral but overdue: {overdue_neutral}
+
+TOP OVERDUE NUMBERS:
+{overdue_list}
+
+TOP PAIR AFFINITIES (lift > 1.5):
+{pair_lift_list}
+
+BALL POSITION RANGES:
+{positional_ranges}
+
+BONUS BALL DATA (if applicable):
+Top picks: {bonus_top_picks}
+Most overdue bonus: {bonus_overdue}
+Heating bonus balls: {bonus_heating}
+
+Based on ALL of the above data, provide:
+
+1. RECOMMENDED POOL (10-12 numbers for the wheel):
+   List exactly 10-12 main numbers with a one-line reason for each.
+   Ensure coverage across all ball positions.
+   Prioritise: overdue + heating > pair anchors > positional fillers.
+
+2. NUMBERS TO AVOID TONIGHT:
+   List 3-5 numbers to exclude and why.
+
+3. GENERATOR MODE RECOMMENDATION:
+   Which mode to use: pure_random / hot_bias / cold_bias / 
+   overdue_bias / balanced_mix / pair_bias / anti_crowd
+   And why.
+
+4. BONUS BALL PICK (if applicable):
+   Top 2 bonus ball recommendations with reasoning.
+
+5. SUM FILTER:
+   Recommended min_sum and max_sum for scoring tonight 
+   based on anomaly context.
+
+6. CONFIDENCE LEVEL:
+   Rate your confidence in this selection: Low / Medium / High
+   And explain what is driving or limiting confidence.
+
+Respond in this exact JSON format:
+{{
+  "recommended_pool": [list of 10-12 integers],
+  "avoid_numbers": [list of 3-5 integers],
+  "generator_mode": "mode_name",
+  "bonus_picks": [list of 2 integers or empty if no bonus],
+  "sum_filter": {{"min": integer, "max": integer}},
+  "confidence": "Low/Medium/High",
+  "reasoning": {{
+    "pool_reasoning": "explanation per number",
+    "avoid_reasoning": "why avoid these",
+    "mode_reasoning": "why this mode",
+    "bonus_reasoning": "why these bonus balls",
+    "confidence_reasoning": "what drives or limits confidence"
+  }}
+}}
+""".strip()
+    return {
+        "prompt": prompt,
+        "board": board,
+        "rolling": rolling,
+        "pair_lift": pair_lift,
+        "anomalies": anomalies,
+        "bonus": bonus,
+        "recent": recent,
+        "rules": rules,
+    }
+
+
 @app.route("/api/lottery/dashboard")
 def api_lottery_dashboard():
     try:
@@ -8413,6 +8621,90 @@ def api_lottery_anomalous_draws():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/lottery/bonus-intelligence")
+def api_lottery_bonus_intelligence():
+    try:
+        game, start_date, end_date, _include_bonus, _limit = _lottery_filter_args()
+        try:
+            window = int(request.args.get("window", 50))
+        except (TypeError, ValueError):
+            window = 50
+        return jsonify(
+            compute_bonus_intelligence(
+                game,
+                window=window,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/ai-analysis", methods=["POST"])
+def api_lottery_ai_analysis():
+    try:
+        if _anthropic_mod is None:
+            return jsonify({"error": "anthropic library not installed"}), 500
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not api_key:
+            return jsonify({"error": "Anthropic API key not configured"}), 500
+
+        data = request.get_json(silent=True) or {}
+        game = str(data.get("game") or "").strip().lower()
+        if not game:
+            return jsonify({"error": "Missing game"}), 400
+        start_date = str(data.get("start_date") or "").strip() or None
+        end_date = str(data.get("end_date") or "").strip() or None
+        try:
+            window = int(data.get("window", 50))
+        except (TypeError, ValueError):
+            window = 50
+        try:
+            z_threshold = float(data.get("z_threshold", 2.5))
+        except (TypeError, ValueError):
+            z_threshold = 2.5
+
+        analytics = _lottery_ai_prompt_payload(
+            game,
+            start_date=start_date,
+            end_date=end_date,
+            window=window,
+            z_threshold=z_threshold,
+        )
+        client = _anthropic_mod.Anthropic(api_key=api_key)
+        message = client.messages.create(
+            model="claude-opus-4-5",
+            max_tokens=1800,
+            temperature=0.3,
+            messages=[{"role": "user", "content": analytics["prompt"]}],
+        )
+        raw_text = _lottery_ai_content_text(message)
+        parsed = _lottery_ai_extract_json(raw_text)
+        recommended_pool = [int(x) for x in (parsed.get("recommended_pool") or []) if str(x).strip()]
+        avoid_numbers = [int(x) for x in (parsed.get("avoid_numbers") or []) if str(x).strip()]
+        bonus_picks = [int(x) for x in (parsed.get("bonus_picks") or []) if str(x).strip()]
+        return jsonify(
+            {
+                "analysis": parsed,
+                "raw_analysis_text": raw_text,
+                "recommended_pool": recommended_pool,
+                "avoid_numbers": avoid_numbers,
+                "generator_mode": str(parsed.get("generator_mode") or ""),
+                "bonus_picks": bonus_picks[:2],
+                "sum_filter": parsed.get("sum_filter", {}),
+                "confidence": str(parsed.get("confidence") or ""),
+                "reasoning": parsed.get("reasoning", {}),
+            }
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/lottery/draws")
 def api_lottery_draws():
     """Backward-compatible alias for phase-1 draws endpoint."""
@@ -8501,6 +8793,30 @@ def api_lottery_wheel():
                 game,
                 chosen_numbers=chosen_numbers,
                 guarantee_if=guarantee_if,
+            )
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/score-ticket", methods=["POST"])
+def api_lottery_score_ticket():
+    try:
+        payload = request.get_json(silent=True) or {}
+        game = str(payload.get("game") or "").strip().lower()
+        ticket = payload.get("ticket") or {}
+        start_date = payload.get("start_date")
+        end_date = payload.get("end_date")
+        include_bonus = bool(payload.get("include_bonus", False))
+        return jsonify(
+            score_ticket(
+                game,
+                ticket=ticket,
+                include_bonus=include_bonus,
+                start_date=start_date,
+                end_date=end_date,
             )
         )
     except ValueError as e:

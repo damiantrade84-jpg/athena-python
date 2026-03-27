@@ -6,6 +6,7 @@ from lottery_engine import (
     _ticket_matches_constraints,
     build_lottery_dashboard,
     compare_generator_modes,
+    compute_bonus_intelligence,
     compute_pair_lift,
     compute_number_frequency,
     compute_positional_distribution,
@@ -212,6 +213,22 @@ def test_new_lottery_analytics_and_wheel():
         assert False, "Expected ValueError for too few chosen numbers"
     except ValueError:
         pass
+
+
+def test_bonus_intelligence_handles_bonus_and_no_bonus_games():
+    db_path = _db_path()
+    _seed_draws(db_path)
+
+    bonus = compute_bonus_intelligence("lotto", window=5, db_path=str(db_path))
+    assert bonus["has_bonus"] is True
+    assert bonus["draw_count"] == 10
+    assert bonus["window_used"] == 5
+    assert len(bonus["rolling"]) == 52
+    assert len(bonus["top_picks"]) <= 5
+    assert all(row["trend"] in {"heating", "cooling", "neutral"} for row in bonus["rolling"])
+
+    no_bonus = compute_bonus_intelligence("daily_lotto", db_path=str(db_path))
+    assert no_bonus == {"game": "daily_lotto", "has_bonus": False}
 
     try:
         generate_wheel("lotto", chosen_numbers=[1, 2, 3, 4, 5, 6], guarantee_if=7)

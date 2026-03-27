@@ -977,7 +977,10 @@ Schema auto-migrated on startup — adding a new column: add it to both `CREATE 
 pure_random · hot_bias · cold_bias · overdue_bias · balanced_mix · pair_bias · anti_crowd
 
 ### Analytics functions
-`compute_recommended_sum_range()` · `compute_positional_distribution()` · `compute_rolling_frequency()` · `compute_pair_lift()` · `flag_anomalous_draws()` · `generate_wheel()`
+`compute_recommended_sum_range()` · `compute_positional_distribution()` · `compute_rolling_frequency()` · `compute_pair_lift()` · `flag_anomalous_draws()` · `compute_bonus_intelligence()` · `generate_wheel()`
+
+### Flask routes
+`/api/lottery/sum-range` · `/api/lottery/positional` · `/api/lottery/rolling-frequency` · `/api/lottery/pair-lift` · `/api/lottery/anomalous-draws` · `/api/lottery/bonus-intelligence` · `/api/lottery/score-ticket` · `/api/lottery/wheel`
 
 ### Performance benchmarks (post hang-fix 2026-03-27)
 - Full Lotto history (~2576 draws), 1 ticket/draw: ~1.6s
