@@ -260,8 +260,13 @@ def detect_m15_zone(candles: list, current_price: float) -> dict:
         return {"valid": False, "reason": "no_levels"}
 
     nearest_level, zone_type = all_levels[0]
-    # Zone band: ±0.25% of price (wider for commodities/indices)
-    band = current_price * 0.0025
+    # Asset-aware zone tolerance bands
+    if current_price > 5000:        # indices like NAS100, S&P 500
+        band = current_price * 0.008   # 0.8% — ~160 pts on NAS100
+    elif current_price > 500:       # XAU/USD, high-price commodities
+        band = current_price * 0.005   # 0.5% — ~15 pts on gold
+    else:                           # forex, low-price assets
+        band = current_price * 0.003   # 0.3% — 30 pips on EURUSD
     zone_high = nearest_level + band
     zone_low  = nearest_level - band
 
@@ -292,7 +297,9 @@ def detect_m15_zone(candles: list, current_price: float) -> dict:
     # De-duplicate
     conditions_met = list(dict.fromkeys(conditions_met))
 
-    valid = len(conditions_met) >= min_conditions
+    # Zone is valid if price is at the level OR if 2+ structural conditions exist.
+    # price_in_zone alone is sufficient — the trigger/momentum pipeline handles quality.
+    valid = price_in_zone or len(conditions_met) >= min_conditions
 
     return {
         "valid": valid,
@@ -319,8 +326,8 @@ def detect_m5_trigger(candles_m5: list, zone: dict, current_price: float) -> dic
 
     Returns trigger dict with direction.
     """
-    if not zone.get("valid") or not zone.get("price_in_zone"):
-        return {"valid": False, "reason": "price_not_in_zone"}
+    if not zone.get("valid"):
+        return {"valid": False, "reason": "zone_not_valid"}
 
     if len(candles_m5) < 5:
         return {"valid": False, "reason": "insufficient_m5_data"}
@@ -349,12 +356,12 @@ def detect_m5_trigger(candles_m5: list, zone: dict, current_price: float) -> dic
     # Check rejection candle: long wick ≥ 2x body, closes in direction
     if zone_type == "support":
         # Bullish rejection: lower wick ≥ 2x body AND close > open
-        if lower_wick >= 1.5 * body and close_p > open_p:
+        if lower_wick >= 1.2 * body and close_p > open_p:
             trigger_type = "rejection"
             trigger_valid = True
     else:
         # Bearish rejection: upper wick ≥ 2x body AND close < open
-        if upper_wick >= 1.5 * body and close_p < open_p:
+        if upper_wick >= 1.2 * body and close_p < open_p:
             trigger_type = "rejection"
             trigger_valid = True
 
@@ -362,19 +369,20 @@ def detect_m5_trigger(candles_m5: list, zone: dict, current_price: float) -> dic
     if not trigger_valid:
         prev_body = abs(prev["close"] - prev["open"])
         if zone_type == "support":
-            # Bullish engulfing: current body > prev body AND current close > prev open
-            if (close_p > open_p and
-                    close_p > prev["open"] and
-                    open_p < prev["close"] and
-                    body > prev_body * 0.8):
+            # Practical M5 bullish engulf: prev bearish (sellers), curr bullish (buyers)
+            # with curr body >= 80% of prev body — no full spanning required
+            prev_bearish = prev["close"] < prev["open"]
+            if (close_p > open_p and          # current bar bullish
+                    prev_bearish and           # previous bar was bearish (selling into zone)
+                    body > prev_body * 0.8):   # current body absorbs prior selling
                 trigger_type = "engulfing"
                 trigger_valid = True
         else:
-            # Bearish engulfing
-            if (close_p < open_p and
-                    close_p < prev["open"] and
-                    open_p > prev["close"] and
-                    body > prev_body * 0.8):
+            # Practical M5 bearish engulf: prev bullish (buyers), curr bearish (sellers)
+            prev_bullish = prev["close"] > prev["open"]
+            if (close_p < open_p and          # current bar bearish
+                    prev_bullish and           # previous bar was bullish (buying into zone)
+                    body > prev_body * 0.8):   # current body absorbs prior buying
                 trigger_type = "engulfing"
                 trigger_valid = True
 
@@ -428,7 +436,7 @@ def confirm_momentum(candles_m5: list, trigger: dict) -> dict:
     if recent:
         avg_body = sum(abs(c["close"] - c["open"]) for c in recent) / len(recent)
         last_body = abs(last["close"] - last["open"])
-        if avg_body > 0 and last_body > avg_body * 1.1:
+        if avg_body > 0 and last_body >= avg_body * 1.0:
             return {"valid": True, "method": "strong_body", "detail": f"body {last_body:.5f} > {avg_body:.5f} avg"}
 
     return {"valid": False, "reason": "no_momentum", "detail": "no structure break or strong body"}
@@ -754,6 +762,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     skipped.append({"pair": display, "reason": f"insufficient_{bias_tf.lower()}_candles"})
                     continue
                 htf_bias = infer_bias_from_ema_stack(candles_bias)
+                log.debug(
+                    f"[SCALP] {display} HTF bias ({bias_tf}): "
+                    f"{htf_bias or 'None — mixed EMA, bias filter inactive'}"
+                )
 
             # Pipeline
             zone     = detect_m15_zone(candles_m15, current_price)
