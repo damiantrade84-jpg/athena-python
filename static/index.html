@@ -252,6 +252,54 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
 .style-btn.active.scalp{background:rgba(255,59,92,0.15);color:var(--bear);border-color:rgba(255,59,92,0.3);}
 .style-btn.active.intraday{background:rgba(0,212,255,0.15);color:var(--accent);border-color:rgba(0,212,255,0.3);}
 .style-btn.active.swing{background:rgba(0,230,118,0.15);color:var(--bull);border-color:rgba(0,230,118,0.3);}
+.lottery-panel{padding-top:4px;}
+.lottery-controls{
+  display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:18px;
+  background:linear-gradient(180deg,rgba(0,212,255,0.05),rgba(124,58,237,0.04));
+  border:1px solid rgba(0,212,255,0.15);border-radius:12px;padding:12px;
+}
+.lottery-input,.lottery-select{
+  background:rgba(8,11,15,0.82);border:1px solid rgba(159,176,197,0.28);border-radius:8px;color:var(--text);
+  padding:9px 12px;font-family:'Space Mono',monospace;font-size:11px;min-height:36px;
+}
+.lottery-input:focus,.lottery-select:focus{outline:none;border-color:rgba(0,212,255,0.7);box-shadow:0 0 0 2px rgba(0,212,255,0.16);}
+.lottery-status{display:block;width:100%;padding-top:2px;}
+.lottery-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-bottom:16px;}
+.lottery-card{
+  background:linear-gradient(160deg,rgba(16,24,34,0.9),rgba(11,18,27,0.92));
+  border:1px solid rgba(159,176,197,0.2);border-radius:14px;padding:14px 14px 12px;
+  box-shadow:0 6px 20px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.03);
+}
+.lottery-card:hover{border-color:rgba(0,212,255,0.3);}
+.lottery-card h3{
+  font-size:12px;letter-spacing:0.08em;font-family:'Space Mono',monospace;color:#7cecff;
+  margin-bottom:10px;padding-bottom:7px;border-bottom:1px solid rgba(159,176,197,0.16);
+}
+.lottery-table{width:100%;border-collapse:collapse;font-family:'Space Mono',monospace;font-size:11px;}
+.lottery-table th,.lottery-table td{padding:8px;border-bottom:1px solid rgba(159,176,197,0.14);text-align:left;}
+.lottery-table th{font-size:10px;letter-spacing:0.07em;color:#a9c8e4;text-transform:uppercase;}
+.lottery-pill-row{display:flex;gap:8px;flex-wrap:wrap;}
+.lottery-pill{
+  padding:6px 10px;border-radius:999px;background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.23);
+  font-family:'Space Mono',monospace;font-size:11px;color:#d8f7ff;
+}
+.lottery-muted{font-size:11px;color:var(--muted);font-family:'Space Mono',monospace;line-height:1.55;}
+.lottery-chart{width:100%;height:250px;max-height:250px;}
+.lottery-kv{display:grid;grid-template-columns:1fr auto;gap:8px;font-family:'Space Mono',monospace;font-size:11px;line-height:1.8;}
+.lottery-table-wrap{max-height:320px;overflow:auto;border:1px solid rgba(159,176,197,0.14);border-radius:10px;}
+.lottery-section{margin-bottom:16px;}
+.lottery-subtitle{font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:#9fd6ef;font-family:'Space Mono',monospace;margin-bottom:8px;}
+.lottery-textarea{width:100%;min-height:86px;resize:vertical;background:rgba(8,11,15,0.82);border:1px solid rgba(159,176,197,0.28);border-radius:8px;color:var(--text);padding:10px 12px;font-family:'Space Mono',monospace;font-size:11px;line-height:1.5;}
+.lottery-summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;}
+.lottery-summary-item{padding:9px;border:1px solid rgba(159,176,197,0.16);border-radius:8px;background:rgba(0,0,0,0.15);}
+.lottery-summary-item .k{font-size:10px;color:#9fb0c5;font-family:'Space Mono',monospace;}
+.lottery-summary-item .v{font-size:14px;font-weight:700;color:#eaf6ff;font-family:'Space Mono',monospace;margin-top:3px;}
+@media (max-width: 860px){
+  .lottery-grid{grid-template-columns:1fr;}
+  .lottery-controls{gap:8px;padding:10px;}
+  .lottery-input,.lottery-select{width:100%;}
+  .lottery-chart{height:220px;max-height:220px;}
+}
 .style-label{font-size:9px;color:var(--muted);font-family:'Space Mono',monospace;margin-right:2px;white-space:nowrap;}
 /* Signal Card Tabs */
 .sig-tabs{display:flex;gap:2px;padding:6px 0 0;border-bottom:1px solid var(--border);margin-bottom:8px;}
@@ -701,6 +749,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
     <button class="tab-btn" id="tab-screener" onclick="switchTab('screener')">SCREENER</button>
     <button class="tab-btn" id="tab-enginec" onclick="switchTab('enginec')">ENGINE C</button>
     <button class="tab-btn" id="tab-scalp" onclick="switchTab('scalp')">⚡ SCALP</button>
+    <button class="tab-btn" id="tab-lottery" onclick="switchTab('lottery');loadLotteryLab()">LOTTERY LAB</button>
     <button class="tab-btn" id="tab-performance" onclick="switchTab('performance');loadPerformance();loadAutoTradeLog();loadFailedExecutions()">PERFORMANCE</button>
     <button class="tab-btn" id="tab-markets" onclick="switchTab('markets');loadMarketHours()">MARKETS</button>
   </div>
@@ -910,6 +959,167 @@ header{display:flex;align-items:center;justify-content:space-between;padding:24p
         <h3>Ready to Scalp</h3>
         <p>Click SCAN SCALPS to find high-probability M15 zones with M5 entry confirmation.</p>
       </div>
+    </div>
+  </div>
+
+  <div class="tab-panel lottery-panel" id="panel-lottery">
+    <div class="lottery-controls">
+      <select id="lotteryGame" class="lottery-select" onchange="loadLotteryLab(true)">
+        <option value="lotto">LOTTO</option>
+        <option value="powerball">POWERBALL</option>
+        <option value="daily_lotto">DAILY LOTTO</option>
+      </select>
+      <select id="lotteryMode" class="lottery-select">
+        <option value="append">APPEND</option>
+        <option value="replace">REPLACE EXISTING GAME DATA</option>
+      </select>
+      <input id="lotteryFile" class="lottery-input" type="file" accept=".csv,text/csv" />
+      <button class="bt-btn" onclick="previewLotteryImport()">PREVIEW</button>
+      <button class="bt-btn" onclick="importLotteryData()">IMPORT</button>
+      <button class="bt-btn bt-btn-sm" onclick="clearLotteryData()">CLEAR GAME</button>
+      <input id="lotteryStartDate" class="lottery-input" type="date" />
+      <input id="lotteryEndDate" class="lottery-input" type="date" />
+      <label class="lottery-muted" style="display:flex;align-items:center;gap:6px;">
+        <input id="lotteryIncludeBonus" type="checkbox" />
+        INCLUDE BONUS
+      </label>
+      <button class="bt-btn bt-btn-sm" onclick="applyLotteryFilters()">APPLY FILTERS</button>
+      <button class="bt-btn bt-btn-sm" onclick="exportLotteryDashboardCsv()">EXPORT DASHBOARD CSV</button>
+      <button class="bt-btn bt-btn-sm" onclick="exportLotteryPairsTripletsCsv()">EXPORT PAIRS/TRIPLETS CSV</button>
+      <span id="lotteryStatus" class="lottery-muted lottery-status">Select a game to load stored draw history.</span>
+    </div>
+
+    <div class="lottery-grid">
+      <div class="lottery-card">
+        <h3>IMPORT SUMMARY</h3>
+        <div id="lotteryImportSummary" class="lottery-muted">No import run yet.</div>
+      </div>
+      <div class="lottery-card">
+        <h3>DASHBOARD</h3>
+        <div id="lotteryDashboard" class="lottery-muted">No stored draws loaded yet.</div>
+      </div>
+    </div>
+
+    <div class="lottery-grid">
+      <div class="lottery-card">
+        <h3>FREQUENCY</h3>
+        <canvas id="lotteryFrequencyChart" class="lottery-chart"></canvas>
+      </div>
+      <div class="lottery-card">
+        <h3>OVERDUE</h3>
+        <canvas id="lotteryOverdueChart" class="lottery-chart"></canvas>
+      </div>
+    </div>
+
+    <div class="lottery-grid">
+      <div class="lottery-card">
+        <h3>ODD / EVEN</h3>
+        <canvas id="lotteryOddEvenChart" class="lottery-chart"></canvas>
+      </div>
+      <div class="lottery-card">
+        <h3>LOW / HIGH</h3>
+        <canvas id="lotteryLowHighChart" class="lottery-chart"></canvas>
+      </div>
+    </div>
+
+    <div class="lottery-grid">
+      <div class="lottery-card">
+        <h3>SUM DISTRIBUTION</h3>
+        <canvas id="lotterySumChart" class="lottery-chart"></canvas>
+      </div>
+      <div class="lottery-card">
+        <h3>CONSECUTIVE + REPEAT</h3>
+        <div id="lotteryConsecutiveSummary" class="lottery-muted">No stats loaded yet.</div>
+      </div>
+    </div>
+
+    <div class="lottery-grid">
+      <div class="lottery-card">
+        <h3>PARSED PREVIEW</h3>
+        <div id="lotteryPreview" class="lottery-muted">Upload a CSV and click PREVIEW.</div>
+      </div>
+      <div class="lottery-card">
+        <h3>PATTERNS</h3>
+        <div id="lotteryPatterns" class="lottery-muted">Stored-number frequency patterns will appear here.</div>
+      </div>
+    </div>
+
+    <div class="lottery-grid">
+      <div class="lottery-card">
+        <h3>PAIR FREQUENCY</h3>
+        <div id="lotteryPairsTable" class="lottery-muted">No pair data loaded yet.</div>
+      </div>
+      <div class="lottery-card">
+        <h3>TRIPLET LEADERBOARD</h3>
+        <div id="lotteryTripletsTable" class="lottery-muted">No triplet data loaded yet.</div>
+      </div>
+    </div>
+
+    <div class="lottery-section lottery-card">
+      <h3>GENERATOR</h3>
+      <div class="lottery-controls" style="margin-bottom:10px;">
+        <select id="lotteryGenMode" class="lottery-select">
+          <option value="pure_random">PURE RANDOM</option>
+          <option value="hot_bias">HOT BIAS</option>
+          <option value="cold_bias">COLD BIAS</option>
+          <option value="overdue_bias">OVERDUE BIAS</option>
+          <option value="balanced_mix">BALANCED MIX</option>
+          <option value="pair_bias">PAIR BIAS</option>
+          <option value="anti_crowd">ANTI CROWD</option>
+        </select>
+        <input id="lotteryGenCount" class="lottery-input" type="number" min="1" max="30" value="6" />
+        <label class="lottery-muted" style="display:flex;align-items:center;gap:6px;">
+          <input id="lotteryGenIncludeBonus" type="checkbox" />
+          INCLUDE BONUS
+        </label>
+        <button class="bt-btn bt-btn-sm" onclick="runLotteryGenerator()">GENERATE</button>
+        <button class="bt-btn bt-btn-sm" onclick="exportGeneratedTicketsCsv()">EXPORT TICKETS CSV</button>
+      </div>
+      <div class="lottery-subtitle">Optional constraints</div>
+      <div class="lottery-controls">
+        <input id="lotteryConstraintOddEven" class="lottery-input" placeholder="odd:even e.g. 3:2" />
+        <input id="lotteryConstraintLowHigh" class="lottery-input" placeholder="low:high e.g. 2:3" />
+        <input id="lotteryConstraintMinSum" class="lottery-input" type="number" placeholder="min sum" />
+        <input id="lotteryConstraintMaxSum" class="lottery-input" type="number" placeholder="max sum" />
+        <input id="lotteryConstraintMaxRun" class="lottery-input" type="number" placeholder="max consecutive run" />
+        <input id="lotteryConstraintRecentOverlap" class="lottery-input" type="number" placeholder="max recent overlap" />
+      </div>
+      <div id="lotteryGeneratedTickets" class="lottery-muted">No generated tickets yet.</div>
+    </div>
+
+    <div class="lottery-section lottery-card">
+      <h3>SIMULATOR / BACKTEST</h3>
+      <div class="lottery-controls" style="margin-bottom:10px;">
+        <select id="lotterySimMode" class="lottery-select">
+          <option value="pure_random">PURE RANDOM</option>
+          <option value="hot_bias">HOT BIAS</option>
+          <option value="cold_bias">COLD BIAS</option>
+          <option value="overdue_bias">OVERDUE BIAS</option>
+          <option value="balanced_mix">BALANCED MIX</option>
+          <option value="pair_bias">PAIR BIAS</option>
+          <option value="anti_crowd">ANTI CROWD</option>
+        </select>
+        <input id="lotterySimTicketsPerDraw" class="lottery-input" type="number" min="1" max="100" value="5" />
+        <input id="lotterySimTicketCost" class="lottery-input" type="number" min="0" step="0.01" value="0" />
+        <label class="lottery-muted" style="display:flex;align-items:center;gap:6px;">
+          <input id="lotterySimIncludeBonus" type="checkbox" />
+          INCLUDE BONUS
+        </label>
+        <button id="lotterySimRunBtn" class="bt-btn bt-btn-sm" type="button">SIMULATE</button>
+        <button id="lotterySimCompareBtn" class="bt-btn bt-btn-sm" type="button">COMPARE MODES</button>
+        <button id="lotterySimExportBtn" class="bt-btn bt-btn-sm" type="button">EXPORT SIM CSV</button>
+      </div>
+      <div id="lotterySimStatus" class="lottery-muted" style="margin-top:-2px;margin-bottom:10px;">Ready to simulate stored draws.</div>
+      <div class="lottery-subtitle">Payout table JSON (optional)</div>
+      <textarea id="lotteryPayoutJson" class="lottery-textarea" placeholder='{"3":10,"4":120,"5":1500,"5+B":30000}'></textarea>
+      <div id="lotterySimSummary" class="lottery-muted" style="margin-top:10px;">Run a simulation to view summary metrics.</div>
+      <canvas id="lotteryHitDistChart" class="lottery-chart" style="margin-top:10px;"></canvas>
+      <div id="lotteryModeComparison" class="lottery-muted" style="margin-top:12px;">Mode comparison will appear here.</div>
+    </div>
+
+    <div class="lottery-card">
+      <h3>STORED HISTORY</h3>
+      <div id="lotteryHistory" class="lottery-muted">No draws loaded yet.</div>
     </div>
   </div>
 
@@ -1218,6 +1428,857 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.remove('active');});
   document.getElementById('tab-'+tab).classList.add('active');
   document.getElementById('panel-'+tab).classList.add('active');
+  if (tab === 'lottery') {
+    bindLotteryLabActions();
+    loadLotteryLab();
+  }
+}
+
+function lotteryGameSpec(game) {
+  return {
+    lotto: { mainCount: 6, hasBonus: true },
+    powerball: { mainCount: 5, hasBonus: true },
+    daily_lotto: { mainCount: 5, hasBonus: false }
+  }[game] || { mainCount: 6, hasBonus: true };
+}
+
+function getLotteryGame() {
+  var el = document.getElementById('lotteryGame');
+  return el ? el.value : 'lotto';
+}
+
+function setLotteryStatus(text) {
+  var el = document.getElementById('lotteryStatus');
+  if (el) el.textContent = text;
+}
+
+function setLotterySimulationStatus(text, isError) {
+  var el = document.getElementById('lotterySimStatus');
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = isError ? 'var(--bear)' : 'var(--muted)';
+}
+
+function bindLotteryLabActions() {
+  var panel = document.getElementById('panel-lottery');
+  if (!panel) return;
+  var bindings = [
+    ['lotterySimRunBtn', runLotterySimulation],
+    ['lotterySimCompareBtn', runLotteryModeComparison],
+    ['lotterySimExportBtn', exportSimulationCsv]
+  ];
+  bindings.forEach(function(entry) {
+    var el = document.getElementById(entry[0]);
+    if (!el || el.dataset.boundLottery === '1') return;
+    el.addEventListener('click', function(ev) {
+      ev.preventDefault();
+      try {
+        entry[1]();
+      } catch (err) {
+        setLotterySimulationStatus('Simulation failed: ' + ((err && err.message) || err || 'Unknown error'), true);
+        setLotteryStatus('Simulation failed: ' + ((err && err.message) || err || 'Unknown error'));
+        showToast('Lottery Lab: ' + (((err && err.message) || err || 'Unknown error')), true);
+      }
+    });
+    el.dataset.boundLottery = '1';
+  });
+}
+
+function getLotteryFilters() {
+  var game = getLotteryGame();
+  var startDate = (document.getElementById('lotteryStartDate') || {}).value || '';
+  var endDate = (document.getElementById('lotteryEndDate') || {}).value || '';
+  var includeBonus = !!((document.getElementById('lotteryIncludeBonus') || {}).checked);
+  return { game: game, startDate: startDate, endDate: endDate, includeBonus: includeBonus };
+}
+
+function lotteryQueryString(filters, extra) {
+  var p = new URLSearchParams();
+  p.set('game', filters.game);
+  if (filters.startDate) p.set('start_date', filters.startDate);
+  if (filters.endDate) p.set('end_date', filters.endDate);
+  p.set('include_bonus', filters.includeBonus ? 'true' : 'false');
+  if (extra) {
+    Object.keys(extra).forEach(function(k) {
+      if (extra[k] != null && extra[k] !== '') p.set(k, String(extra[k]));
+    });
+  }
+  return p.toString();
+}
+
+function persistLotteryFilters() {
+  try {
+    var f = getLotteryFilters();
+    localStorage.setItem('lottery_lab_filters', JSON.stringify(f));
+  } catch (e) {}
+}
+
+function restoreLotteryFilters() {
+  if (window._lotteryFiltersRestored) return;
+  window._lotteryFiltersRestored = true;
+  try {
+    var raw = localStorage.getItem('lottery_lab_filters');
+    if (!raw) return;
+    var f = JSON.parse(raw);
+    if (f.game && document.getElementById('lotteryGame')) document.getElementById('lotteryGame').value = f.game;
+    if (typeof f.startDate === 'string' && document.getElementById('lotteryStartDate')) document.getElementById('lotteryStartDate').value = f.startDate;
+    if (typeof f.endDate === 'string' && document.getElementById('lotteryEndDate')) document.getElementById('lotteryEndDate').value = f.endDate;
+    if (document.getElementById('lotteryIncludeBonus')) document.getElementById('lotteryIncludeBonus').checked = !!f.includeBonus;
+  } catch (e) {}
+}
+
+function renderLotterySummary(result) {
+  var el = document.getElementById('lotteryImportSummary');
+  if (!el || !result) return;
+  var counts = result.error_counts || {};
+  var errorKeys = Object.keys(counts);
+  var html = '<div class="lottery-pill-row">' +
+    '<div class="lottery-pill">Imported: ' + (result.imported_rows || 0) + '</div>' +
+    '<div class="lottery-pill">Duplicates skipped: ' + (result.duplicates_skipped || 0) + '</div>' +
+    '<div class="lottery-pill">Invalid rows: ' + (result.invalid_rows || 0) + '</div>' +
+    '</div>';
+  if (result.deleted_rows) {
+    html += '<div class="lottery-muted" style="margin-top:10px">Replace mode deleted ' + result.deleted_rows + ' existing rows for this game before import.</div>';
+  }
+  if (errorKeys.length) {
+    html += '<div class="lottery-muted" style="margin-top:10px">Error counts: ' + errorKeys.map(function(key) {
+      return key + ' = ' + counts[key];
+    }).join(' | ') + '</div>';
+  }
+  if (result.errors && result.errors.length) {
+    html += '<div class="lottery-muted" style="margin-top:10px">Examples: ' + result.errors.slice(0, 5).map(function(err) {
+      return 'row ' + err.row + ' ' + err.message;
+    }).join(' ; ') + '</div>';
+  }
+  el.innerHTML = html;
+}
+
+function renderLotteryPreview(rows) {
+  var el = document.getElementById('lotteryPreview');
+  if (!el) return;
+  if (!rows || !rows.length) {
+    el.innerHTML = '<div class="lottery-muted">No valid parsed rows to preview.</div>';
+    return;
+  }
+  var game = getLotteryGame();
+  var spec = lotteryGameSpec(game);
+  var head = ['draw_date', 'n1', 'n2', 'n3', 'n4', 'n5'];
+  if (spec.mainCount === 6) head.push('n6');
+  if (spec.hasBonus) head.push('bonus');
+  var html = '<div class="lottery-table-wrap"><table class="lottery-table"><thead><tr>' + head.map(function(col) {
+    return '<th>' + col.toUpperCase() + '</th>';
+  }).join('') + '</tr></thead><tbody>' + rows.map(function(row) {
+    return '<tr>' + head.map(function(col) {
+      return '<td>' + (row[col] != null ? row[col] : '-') + '</td>';
+    }).join('') + '</tr>';
+  }).join('') + '</tbody></table></div>';
+  el.innerHTML = html;
+}
+
+function renderLotteryDashboard(board) {
+  var el = document.getElementById('lotteryDashboard');
+  if (!el) return;
+  if (!board || !board.total_draws) {
+    el.innerHTML = '<div class="lottery-muted">No stored draws for this game and date range yet.</div>';
+    return;
+  }
+  el.innerHTML = '<div class="lottery-pill-row">' +
+    '<div class="lottery-pill">Draws: ' + board.total_draws + '</div>' +
+    '<div class="lottery-pill">First: ' + (board.first_draw_date || '-') + '</div>' +
+    '<div class="lottery-pill">Last: ' + (board.last_draw_date || '-') + '</div>' +
+    '<div class="lottery-pill">Skipped rows: ' + (board.invalid_rows_skipped || 0) + '</div>' +
+    '</div>';
+}
+
+function renderLotteryPatterns(board, frequencyPayload) {
+  var el = document.getElementById('lotteryPatterns');
+  if (!el) return;
+  if (!board || !board.total_draws) {
+    el.innerHTML = '<div class="lottery-muted">Import history to compute patterns.</div>';
+    return;
+  }
+  var hot = (board.hot_numbers || []).slice(0, 8).map(function(x){ return '<div class="lottery-pill">' + x.number + ' (' + x.count + ')</div>'; }).join('');
+  var cold = (board.cold_numbers || []).slice(0, 8).map(function(x){ return '<div class="lottery-pill">' + x.number + ' (' + x.count + ')</div>'; }).join('');
+  var overdue = (board.overdue_numbers || []).slice(0, 8).map(function(x){ return '<div class="lottery-pill">' + x.number + ' (' + x.draws_since_seen + ')</div>'; }).join('');
+  var decades = ((frequencyPayload || {}).decade_groups || []).map(function(x){ return '<div class="lottery-pill">' + x.bucket + ': ' + x.count + '</div>'; }).join('');
+  el.innerHTML = '<div class="lottery-muted">Hot numbers</div><div class="lottery-pill-row" style="margin:8px 0 10px;">' + (hot || '<div class="lottery-muted">-</div>') + '</div>' +
+    '<div class="lottery-muted">Cold numbers</div><div class="lottery-pill-row" style="margin:8px 0 10px;">' + (cold || '<div class="lottery-muted">-</div>') + '</div>' +
+    '<div class="lottery-muted">Overdue numbers</div><div class="lottery-pill-row" style="margin:8px 0 10px;">' + (overdue || '<div class="lottery-muted">-</div>') + '</div>' +
+    '<div class="lottery-muted">Decade groups</div><div class="lottery-pill-row" style="margin-top:8px;">' + (decades || '<div class="lottery-muted">-</div>') + '</div>';
+}
+
+function renderLotteryHistory(historyRows) {
+  var el = document.getElementById('lotteryHistory');
+  if (!el) return;
+  if (!historyRows || !historyRows.length) {
+    el.innerHTML = '<div class="lottery-muted">No stored draws for this game yet.</div>';
+    return;
+  }
+  var spec = lotteryGameSpec(getLotteryGame());
+  var head = ['draw_date', 'numbers'];
+  if (spec.hasBonus) head.push('bonus');
+  head.push('source_file');
+  head.push('imported_at');
+  var html = '<div class="lottery-table-wrap"><table class="lottery-table"><thead><tr>' + head.map(function(col) {
+    return '<th>' + col.toUpperCase() + '</th>';
+  }).join('') + '</tr></thead><tbody>' + historyRows.map(function(row) {
+    var imported = row.imported_at ? String(row.imported_at).replace('T', ' ').slice(0, 19) : '-';
+    var nums = (row.numbers || []).join(', ');
+    var cells = [
+      '<td>' + (row.draw_date || '-') + '</td>',
+      '<td>' + (nums || '-') + '</td>'
+    ];
+    if (spec.hasBonus) cells.push('<td>' + (row.bonus != null ? row.bonus : '-') + '</td>');
+    cells.push('<td>' + (row.source_file || '-') + '</td>');
+    cells.push('<td>' + imported + '</td>');
+    return '<tr>' + cells.join('') + '</tr>';
+  }).join('') + '</tbody></table></div>';
+  el.innerHTML = html;
+}
+
+function destroyLotteryCharts() {
+  var charts = window._lotteryCharts || {};
+  Object.keys(charts).forEach(function(key) {
+    try { charts[key].destroy(); } catch (e) {}
+  });
+  window._lotteryCharts = {};
+}
+
+function renderLotteryBarChart(key, canvasId, labels, values, label, color) {
+  var canvas = document.getElementById(canvasId);
+  if (!canvas || typeof Chart === 'undefined') return;
+  var ctx = canvas.getContext('2d');
+  if (!window._lotteryCharts) window._lotteryCharts = {};
+  if (window._lotteryCharts[key]) {
+    try { window._lotteryCharts[key].destroy(); } catch (e) {}
+  }
+  window._lotteryCharts[key] = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{
+        label: label,
+        data: values,
+        backgroundColor: color || 'rgba(0,212,255,0.55)',
+        borderColor: 'rgba(0,212,255,1)',
+        borderWidth: 1,
+        borderRadius: 4,
+        maxBarThickness: 24
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      layout: { padding: { top: 6, right: 8, bottom: 0, left: 2 } },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(8,11,15,0.95)',
+          borderColor: 'rgba(0,212,255,0.35)',
+          borderWidth: 1,
+          titleColor: '#dff9ff',
+          bodyColor: '#dff9ff',
+          callbacks: {
+            label: function(context) {
+              return label + ': ' + context.raw;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: '#b7c8dc', maxRotation: 0, autoSkip: true, maxTicksLimit: 10 },
+          grid: { color: 'rgba(255,255,255,0.04)' }
+        },
+        y: {
+          beginAtZero: true,
+          ticks: { color: '#b7c8dc', precision: 0 },
+          grid: { color: 'rgba(255,255,255,0.08)' }
+        }
+      }
+    }
+  });
+}
+
+function renderDistributionCharts(freqPayload, distPayload) {
+  var freq = (freqPayload || {}).number_frequency || [];
+  var overdue = (freqPayload || {}).overdue || [];
+  var oddEven = ((distPayload || {}).odd_even_distribution || {}).patterns || [];
+  var lowHigh = ((distPayload || {}).low_high_distribution || {}).patterns || [];
+  var sumDist = ((distPayload || {}).sum_distribution || {}).distribution || [];
+
+  var topFreq = freq.slice().sort(function(a, b){ return b.count - a.count || a.number - b.number; }).slice(0, 15);
+  renderLotteryBarChart(
+    'freq',
+    'lotteryFrequencyChart',
+    topFreq.map(function(x){ return String(x.number); }),
+    topFreq.map(function(x){ return x.count; }),
+    'Frequency',
+    'rgba(0,212,255,0.6)'
+  );
+
+  var topOver = overdue.slice(0, 15);
+  renderLotteryBarChart(
+    'overdue',
+    'lotteryOverdueChart',
+    topOver.map(function(x){ return String(x.number); }),
+    topOver.map(function(x){ return x.draws_since_seen; }),
+    'Draws Since Seen',
+    'rgba(245,158,11,0.65)'
+  );
+
+  renderLotteryBarChart(
+    'oddEven',
+    'lotteryOddEvenChart',
+    oddEven.map(function(x){ return x.pattern; }),
+    oddEven.map(function(x){ return x.count; }),
+    'Odd:Even Pattern',
+    'rgba(124,58,237,0.65)'
+  );
+
+  renderLotteryBarChart(
+    'lowHigh',
+    'lotteryLowHighChart',
+    lowHigh.map(function(x){ return x.pattern; }),
+    lowHigh.map(function(x){ return x.count; }),
+    'Low:High Pattern',
+    'rgba(0,230,118,0.65)'
+  );
+
+  renderLotteryBarChart(
+    'sum',
+    'lotterySumChart',
+    sumDist.map(function(x){ return String(x.sum); }),
+    sumDist.map(function(x){ return x.count; }),
+    'Sum Count',
+    'rgba(255,59,92,0.65)'
+  );
+}
+
+function renderConsecutiveRepeat(distPayload) {
+  var el = document.getElementById('lotteryConsecutiveSummary');
+  if (!el) return;
+  var con = (distPayload || {}).consecutive || {};
+  var rep = (distPayload || {}).repeat_from_last_draw || {};
+  el.innerHTML = '<div class="lottery-kv">' +
+    '<div>Draws with consecutive numbers</div><div>' + (con.draws_with_consecutive || 0) + '</div>' +
+    '<div>Consecutive draw percentage</div><div>' + (con.draws_with_consecutive_pct || 0) + '%</div>' +
+    '<div>Average consecutive pairs</div><div>' + (con.average_consecutive_pairs || 0) + '</div>' +
+    '<div>Max consecutive streak</div><div>' + (con.max_consecutive_streak || 0) + '</div>' +
+    '<div>Average repeats from previous draw</div><div>' + (rep.average_repeat_count || 0) + '</div>' +
+    '<div>Comparisons</div><div>' + (rep.comparisons || 0) + '</div>' +
+    '</div>';
+}
+
+function renderPairTripletTables(pairsPayload, tripletsPayload) {
+  var pairsEl = document.getElementById('lotteryPairsTable');
+  var tripEl = document.getElementById('lotteryTripletsTable');
+  var pairs = (pairsPayload || {}).pairs || [];
+  var triplets = (tripletsPayload || {}).triplets || [];
+  if (pairsEl) {
+    if (!pairs.length) {
+      pairsEl.innerHTML = '<div class="lottery-muted">No pair stats yet.</div>';
+    } else {
+      pairsEl.innerHTML = '<div class="lottery-table-wrap"><table class="lottery-table"><thead><tr><th>PAIR</th><th>COUNT</th></tr></thead><tbody>' +
+        pairs.slice(0, 40).map(function(row){
+          return '<tr><td>' + row.pair.join(', ') + '</td><td>' + row.count + '</td></tr>';
+        }).join('') +
+        '</tbody></table></div>';
+    }
+  }
+  if (tripEl) {
+    if (!triplets.length) {
+      tripEl.innerHTML = '<div class="lottery-muted">No triplet stats yet.</div>';
+    } else {
+      tripEl.innerHTML = '<div class="lottery-table-wrap"><table class="lottery-table"><thead><tr><th>TRIPLET</th><th>COUNT</th></tr></thead><tbody>' +
+        triplets.slice(0, 40).map(function(row){
+          return '<tr><td>' + row.triplet.join(', ') + '</td><td>' + row.count + '</td></tr>';
+        }).join('') +
+        '</tbody></table></div>';
+    }
+  }
+}
+
+async function loadLotteryLab(force) {
+  bindLotteryLabActions();
+  restoreLotteryFilters();
+  if (window._lotteryLoading && !force) return;
+  var filters = getLotteryFilters();
+  persistLotteryFilters();
+  window._lotteryLoading = true;
+  setLotteryStatus('Loading analytics for ' + filters.game + '...');
+  try {
+    var qs = lotteryQueryString(filters);
+    var results = await Promise.all([
+      fetch('/api/lottery/dashboard?' + qs).then(function(r){ return r.json(); }),
+      fetch('/api/lottery/frequency?' + qs).then(function(r){ return r.json(); }),
+      fetch('/api/lottery/distributions?' + qs).then(function(r){ return r.json(); }),
+      fetch('/api/lottery/pairs?' + qs + '&limit=200').then(function(r){ return r.json(); }),
+      fetch('/api/lottery/triplets?' + qs + '&limit=200').then(function(r){ return r.json(); }),
+      fetch('/api/lottery/history?' + qs + '&limit=250').then(function(r){ return r.json(); })
+    ]);
+    var board = results[0], freq = results[1], dist = results[2], pairs = results[3], triplets = results[4], hist = results[5];
+    [board, freq, dist, pairs, triplets, hist].forEach(function(x){ if (x && x.error) throw new Error(x.error); });
+
+    window._lotteryLabCache = {
+      dashboard: board,
+      frequency: freq,
+      distributions: dist,
+      pairs: pairs,
+      triplets: triplets,
+      history: hist
+    };
+
+    renderLotteryDashboard(board);
+    renderLotteryPatterns(board, freq);
+    renderLotteryHistory(hist.history || []);
+    renderDistributionCharts(freq, dist);
+    renderConsecutiveRepeat(dist);
+    renderPairTripletTables(pairs, triplets);
+    setLotteryStatus('Loaded ' + (board.total_draws || 0) + ' draw(s) for ' + filters.game + '.');
+  } catch (e) {
+    destroyLotteryCharts();
+    setLotteryStatus('Lottery Lab error: ' + e.message);
+    showToast('Lottery Lab: ' + e.message, true);
+  } finally {
+    window._lotteryLoading = false;
+  }
+}
+
+function applyLotteryFilters() {
+  loadLotteryLab(true);
+}
+
+async function runLotteryImport(previewOnly) {
+  var fileEl = document.getElementById('lotteryFile');
+  var modeEl = document.getElementById('lotteryMode');
+  var file = fileEl && fileEl.files ? fileEl.files[0] : null;
+  if (!file) {
+    showToast('Choose a CSV file first.', true);
+    return null;
+  }
+  var form = new FormData();
+  form.append('file', file);
+  form.append('game', getLotteryGame());
+  form.append('mode', modeEl ? modeEl.value : 'append');
+  form.append('preview_only', previewOnly ? 'true' : 'false');
+  setLotteryStatus((previewOnly ? 'Previewing ' : 'Importing ') + file.name + ' ...');
+  var resp = await fetch('/api/lottery/import', { method: 'POST', body: form });
+  var data = await resp.json();
+  if (!resp.ok || data.error) throw new Error(data.error || 'Lottery import failed');
+  renderLotteryPreview(data.preview || []);
+  renderLotterySummary(data);
+  return data;
+}
+
+async function previewLotteryImport() {
+  try {
+    var data = await runLotteryImport(true);
+    if (data) setLotteryStatus('Preview ready: ' + (data.valid_rows || 0) + ' valid row(s), ' + (data.invalid_rows || 0) + ' invalid.');
+  } catch (e) {
+    setLotteryStatus('Preview failed: ' + e.message);
+    showToast('Lottery preview failed: ' + e.message, true);
+  }
+}
+
+async function importLotteryData() {
+  try {
+    var data = await runLotteryImport(false);
+    if (data) {
+      setLotteryStatus('Import complete: ' + (data.imported_rows || 0) + ' imported, ' + (data.duplicates_skipped || 0) + ' duplicate(s), ' + (data.invalid_rows || 0) + ' invalid.');
+      showToast('Lottery import complete for ' + getLotteryGame() + '.');
+      await loadLotteryLab(true);
+    }
+  } catch (e) {
+    setLotteryStatus('Import failed: ' + e.message);
+    showToast('Lottery import failed: ' + e.message, true);
+  }
+}
+
+async function clearLotteryData() {
+  var game = getLotteryGame();
+  if (!confirm('Clear all stored ' + game + ' draws from the database?')) return;
+  try {
+    setLotteryStatus('Clearing stored ' + game + ' draws...');
+    var resp = await fetch('/api/lottery/clear', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ game: game })
+    });
+    var data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || 'Clear failed');
+    renderLotteryPreview([]);
+    renderLotterySummary({ imported_rows: 0, duplicates_skipped: 0, invalid_rows: 0, deleted_rows: data.deleted_rows || 0, error_counts: {}, errors: [] });
+    await loadLotteryLab(true);
+    showToast('Cleared ' + (data.deleted_rows || 0) + ' ' + game + ' draw(s).');
+  } catch (e) {
+    setLotteryStatus('Clear failed: ' + e.message);
+    showToast('Lottery clear failed: ' + e.message, true);
+  }
+}
+
+function _downloadCsv(filename, rows, headers) {
+  if (!rows || !rows.length) {
+    showToast('No data to export.', true);
+    return;
+  }
+  var esc = function(v) {
+    var s = String(v == null ? '' : v);
+    if (s.indexOf('"') >= 0 || s.indexOf(',') >= 0 || s.indexOf('\n') >= 0) return '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  };
+  var csv = headers.join(',') + '\n' + rows.map(function(row) {
+    return headers.map(function(h){ return esc(row[h]); }).join(',');
+  }).join('\n');
+  var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+function exportLotteryDashboardCsv() {
+  var cache = window._lotteryLabCache || {};
+  var b = cache.dashboard || {};
+  if (!b.total_draws) {
+    showToast('No dashboard data to export.', true);
+    return;
+  }
+  var rows = [];
+  (b.number_frequency || []).forEach(function(row) {
+    rows.push({
+      metric: 'number_frequency',
+      key: row.number,
+      value: row.count
+    });
+  });
+  (b.overdue_numbers || []).forEach(function(row) {
+    rows.push({
+      metric: 'overdue',
+      key: row.number,
+      value: row.draws_since_seen
+    });
+  });
+  _downloadCsv(
+    'lottery-dashboard-' + (b.game || 'game') + '.csv',
+    rows,
+    ['metric', 'key', 'value']
+  );
+}
+
+function exportLotteryPairsTripletsCsv() {
+  var cache = window._lotteryLabCache || {};
+  var pairRows = ((cache.pairs || {}).pairs || []).map(function(row) {
+    return { type: 'pair', combo: row.pair.join('-'), count: row.count };
+  });
+  var tripRows = ((cache.triplets || {}).triplets || []).map(function(row) {
+    return { type: 'triplet', combo: row.triplet.join('-'), count: row.count };
+  });
+  _downloadCsv(
+    'lottery-patterns-' + getLotteryGame() + '.csv',
+    pairRows.concat(tripRows),
+    ['type', 'combo', 'count']
+  );
+}
+
+function _lotteryGeneratorFiltersFromUI() {
+  var payload = {};
+  var oddEven = (document.getElementById('lotteryConstraintOddEven') || {}).value || '';
+  var lowHigh = (document.getElementById('lotteryConstraintLowHigh') || {}).value || '';
+  var minSum = (document.getElementById('lotteryConstraintMinSum') || {}).value || '';
+  var maxSum = (document.getElementById('lotteryConstraintMaxSum') || {}).value || '';
+  var maxRun = (document.getElementById('lotteryConstraintMaxRun') || {}).value || '';
+  var maxOverlap = (document.getElementById('lotteryConstraintRecentOverlap') || {}).value || '';
+  if (oddEven.trim()) payload.odd_even_target = oddEven.trim();
+  if (lowHigh.trim()) payload.low_high_target = lowHigh.trim();
+  if (minSum !== '') payload.min_sum = Number(minSum);
+  if (maxSum !== '') payload.max_sum = Number(maxSum);
+  if (maxRun !== '') payload.max_consecutive_run = Number(maxRun);
+  if (maxOverlap !== '') payload.avoid_recent_overlap_above = Number(maxOverlap);
+  return payload;
+}
+
+function _lotteryPayoutTableFromUI() {
+  var raw = (document.getElementById('lotteryPayoutJson') || {}).value || '';
+  if (!raw.trim()) return {};
+  try {
+    var parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  } catch (e) {
+    showToast('Invalid payout JSON. Example: {\"3\":10,\"4\":120}', true);
+    return null;
+  }
+}
+
+function renderGeneratedTickets(payload) {
+  var el = document.getElementById('lotteryGeneratedTickets');
+  if (!el) return;
+  var tickets = (payload || {}).tickets || [];
+  if (!tickets.length) {
+    el.innerHTML = '<div class="lottery-muted">No generated tickets yet.</div>';
+    return;
+  }
+  var hasBonus = !!payload.include_bonus;
+  var html = '<div class="lottery-table-wrap"><table class="lottery-table"><thead><tr>' +
+    '<th>#</th><th>NUMBERS</th>' + (hasBonus ? '<th>BONUS</th>' : '') +
+    '<th>LABELS</th><th>SUM</th><th>ODD/EVEN</th><th>LOW/HIGH</th><th>PAIR</th><th>ANTI</th>' +
+    '</tr></thead><tbody>' +
+    tickets.map(function(t) {
+      return '<tr>' +
+        '<td>' + (t.ticket_id || '-') + '</td>' +
+        '<td>' + (t.numbers || []).join(', ') + '</td>' +
+        (hasBonus ? '<td>' + (t.bonus != null ? t.bonus : '-') + '</td>' : '') +
+        '<td>' + ((t.labels || []).join(', ') || '-') + '</td>' +
+        '<td>' + (t.sum != null ? t.sum : '-') + '</td>' +
+        '<td>' + (t.odd_count != null ? (t.odd_count + '/' + t.even_count) : '-') + '</td>' +
+        '<td>' + (t.low_count != null ? (t.low_count + '/' + t.high_count) : '-') + '</td>' +
+        '<td>' + (t.pair_strength != null ? t.pair_strength : '-') + '</td>' +
+        '<td>' + (t.anti_crowd_score != null ? t.anti_crowd_score : '-') + '</td>' +
+        '</tr>';
+    }).join('') +
+    '</tbody></table></div>';
+  el.innerHTML = html;
+}
+
+async function runLotteryGenerator() {
+  var filters = getLotteryFilters();
+  var mode = ((document.getElementById('lotteryGenMode') || {}).value || 'pure_random');
+  var ticketCount = Number((document.getElementById('lotteryGenCount') || {}).value || 6);
+  var includeBonus = !!((document.getElementById('lotteryGenIncludeBonus') || {}).checked);
+  var constraints = _lotteryGeneratorFiltersFromUI();
+  setLotteryStatus('Generating tickets (' + mode + ')...');
+  try {
+    var resp = await fetch('/api/lottery/generate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        game: filters.game,
+        mode: mode,
+        ticket_count: ticketCount,
+        include_bonus: includeBonus,
+        start_date: filters.startDate || null,
+        end_date: filters.endDate || null,
+        filters: constraints
+      })
+    });
+    var data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || 'Generator failed');
+    window._lotteryGeneratedCache = data;
+    renderGeneratedTickets(data);
+    setLotteryStatus('Generated ' + (data.ticket_count || 0) + ' ticket(s) using ' + mode + '.');
+  } catch (e) {
+    setLotteryStatus('Generator failed: ' + e.message);
+    showToast('Lottery generator failed: ' + e.message, true);
+  }
+}
+
+function exportGeneratedTicketsCsv() {
+  var data = window._lotteryGeneratedCache || {};
+  var rows = (data.tickets || []).map(function(t) {
+    return {
+      ticket_id: t.ticket_id,
+      numbers: (t.numbers || []).join('-'),
+      bonus: t.bonus,
+      labels: (t.labels || []).join('|'),
+      sum: t.sum,
+      odd_count: t.odd_count,
+      even_count: t.even_count,
+      low_count: t.low_count,
+      high_count: t.high_count,
+      consecutive_count: t.consecutive_count,
+      pair_strength: t.pair_strength,
+      anti_crowd_score: t.anti_crowd_score,
+      recent_overlap: t.recent_overlap
+    };
+  });
+  _downloadCsv(
+    'lottery-generated-' + getLotteryGame() + '.csv',
+    rows,
+    ['ticket_id','numbers','bonus','labels','sum','odd_count','even_count','low_count','high_count','consecutive_count','pair_strength','anti_crowd_score','recent_overlap']
+  );
+}
+
+function renderSimulationSummary(data) {
+  var el = document.getElementById('lotterySimSummary');
+  if (!el) return;
+  if (!data || !data.draws_simulated) {
+    el.innerHTML = '<div class="lottery-muted">No simulation results yet.</div>';
+    return;
+  }
+  el.innerHTML = '<div class="lottery-summary-grid">' +
+    '<div class="lottery-summary-item"><div class="k">Draws</div><div class="v">' + data.draws_simulated + '</div></div>' +
+    '<div class="lottery-summary-item"><div class="k">Tickets</div><div class="v">' + data.tickets_generated + '</div></div>' +
+    '<div class="lottery-summary-item"><div class="k">Total Cost</div><div class="v">' + data.total_cost + '</div></div>' +
+    '<div class="lottery-summary-item"><div class="k">Total Return</div><div class="v">' + data.total_return + '</div></div>' +
+    '<div class="lottery-summary-item"><div class="k">ROI</div><div class="v">' + (data.roi != null ? (data.roi * 100).toFixed(2) + '%' : 'n/a') + '</div></div>' +
+    '<div class="lottery-summary-item"><div class="k">Avg Hits/Draw</div><div class="v">' + (data.average_hits_per_draw != null ? data.average_hits_per_draw : '-') + '</div></div>' +
+    '</div>';
+}
+
+function renderSimulationHitChart(data) {
+  var dist = data && data.hit_distribution ? data.hit_distribution : {};
+  var labels = Object.keys(dist);
+  var values = labels.map(function(k){ return dist[k]; });
+  renderLotteryBarChart(
+    'simHits',
+    'lotteryHitDistChart',
+    labels,
+    values,
+    'Hit Distribution',
+    'rgba(56,189,248,0.62)'
+  );
+}
+
+function renderModeComparison(data) {
+  var el = document.getElementById('lotteryModeComparison');
+  if (!el) return;
+  var modes = (data || {}).modes || [];
+  if (!modes.length) {
+    el.innerHTML = '<div class="lottery-muted">Mode comparison will appear here.</div>';
+    return;
+  }
+  el.innerHTML = '<div class="lottery-table-wrap"><table class="lottery-table"><thead><tr>' +
+    '<th>MODE</th><th>DRAWS</th><th>TICKETS</th><th>COST</th><th>RETURN</th><th>ROI</th><th>AVG HITS/DRAW</th><th>BEST HIT</th>' +
+    '</tr></thead><tbody>' +
+    modes.map(function(row) {
+      var best = row.best_hit || {};
+      return '<tr>' +
+        '<td>' + row.mode + '</td>' +
+        '<td>' + row.draws_simulated + '</td>' +
+        '<td>' + row.tickets_generated + '</td>' +
+        '<td>' + row.total_cost + '</td>' +
+        '<td>' + row.total_return + '</td>' +
+        '<td>' + (row.roi != null ? (row.roi * 100).toFixed(2) + '%' : 'n/a') + '</td>' +
+        '<td>' + (row.average_hits_per_draw != null ? row.average_hits_per_draw : '-') + '</td>' +
+        '<td>' + ((best.main_hits != null ? best.main_hits : 0) + (best.bonus_hit ? '+B' : '')) + '</td>' +
+        '</tr>';
+    }).join('') +
+    '</tbody></table></div>';
+}
+
+async function runLotterySimulation() {
+  bindLotteryLabActions();
+  var filters = getLotteryFilters();
+  var mode = ((document.getElementById('lotterySimMode') || {}).value || 'pure_random');
+  var ticketsPerDraw = Number((document.getElementById('lotterySimTicketsPerDraw') || {}).value || 5);
+  var ticketCost = Number((document.getElementById('lotterySimTicketCost') || {}).value || 0);
+  var includeBonus = !!((document.getElementById('lotterySimIncludeBonus') || {}).checked);
+  var constraints = _lotteryGeneratorFiltersFromUI();
+  var payoutTable = _lotteryPayoutTableFromUI();
+  var btn = document.getElementById('lotterySimRunBtn');
+  var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  var timeoutMs = 45000;
+  var timeoutId = null;
+  if (payoutTable === null) return;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'SIMULATING...';
+  }
+  setLotterySimulationStatus('Running simulation...', false);
+  setLotteryStatus('Running simulation...');
+  try {
+    if (controller) {
+      timeoutId = setTimeout(function() {
+        controller.abort();
+      }, timeoutMs);
+    }
+    var resp = await fetch('/api/lottery/simulate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      signal: controller ? controller.signal : undefined,
+      body: JSON.stringify({
+        game: filters.game,
+        mode: mode,
+        tickets_per_draw: ticketsPerDraw,
+        start_date: filters.startDate || null,
+        end_date: filters.endDate || null,
+        include_bonus: includeBonus,
+        ticket_cost: ticketCost,
+        payout_table: payoutTable,
+        filters: constraints
+      })
+    });
+    var data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || 'Simulation failed');
+    window._lotterySimulationCache = data;
+    renderSimulationSummary(data);
+    renderSimulationHitChart(data);
+    setLotterySimulationStatus('Simulation complete', false);
+    setLotteryStatus('Simulation complete');
+  } catch (e) {
+    var msg = (e && e.name === 'AbortError')
+      ? ('Simulation timed out after ' + Math.round(timeoutMs / 1000) + 's')
+      : ((e && e.message) || 'Simulation failed');
+    setLotterySimulationStatus('Simulation failed: ' + msg, true);
+    setLotteryStatus('Simulation failed: ' + msg);
+    showToast('Lottery simulation failed: ' + msg, true);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'SIMULATE';
+    }
+  }
+}
+
+async function runLotteryModeComparison() {
+  var filters = getLotteryFilters();
+  var ticketsPerDraw = Number((document.getElementById('lotterySimTicketsPerDraw') || {}).value || 5);
+  var ticketCost = Number((document.getElementById('lotterySimTicketCost') || {}).value || 0);
+  var includeBonus = !!((document.getElementById('lotterySimIncludeBonus') || {}).checked);
+  var constraints = _lotteryGeneratorFiltersFromUI();
+  var payoutTable = _lotteryPayoutTableFromUI();
+  if (payoutTable === null) return;
+  setLotteryStatus('Comparing generator modes...');
+  try {
+    var resp = await fetch('/api/lottery/compare-modes', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        game: filters.game,
+        modes: ['pure_random','hot_bias','cold_bias','overdue_bias','balanced_mix','pair_bias','anti_crowd'],
+        tickets_per_draw: ticketsPerDraw,
+        start_date: filters.startDate || null,
+        end_date: filters.endDate || null,
+        include_bonus: includeBonus,
+        ticket_cost: ticketCost,
+        payout_table: payoutTable,
+        filters: constraints
+      })
+    });
+    var data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || 'Comparison failed');
+    window._lotteryModeCompareCache = data;
+    renderModeComparison(data);
+    setLotteryStatus('Mode comparison complete for ' + data.modes.length + ' mode(s).');
+  } catch (e) {
+    setLotteryStatus('Mode comparison failed: ' + e.message);
+    showToast('Lottery compare failed: ' + e.message, true);
+  }
+}
+
+function exportSimulationCsv() {
+  var sim = window._lotterySimulationCache || {};
+  if (!sim || !sim.draws_simulated) {
+    showToast('Run a simulation first.', true);
+    return;
+  }
+  var rows = Object.keys(sim.hit_distribution || {}).map(function(k) {
+    return { metric: 'hit_distribution', key: k, value: sim.hit_distribution[k] };
+  });
+  rows.push({ metric: 'summary', key: 'draws_simulated', value: sim.draws_simulated });
+  rows.push({ metric: 'summary', key: 'tickets_generated', value: sim.tickets_generated });
+  rows.push({ metric: 'summary', key: 'total_cost', value: sim.total_cost });
+  rows.push({ metric: 'summary', key: 'total_return', value: sim.total_return });
+  rows.push({ metric: 'summary', key: 'roi', value: sim.roi });
+  rows.push({ metric: 'summary', key: 'average_hits_per_draw', value: sim.average_hits_per_draw });
+  _downloadCsv(
+    'lottery-simulation-' + getLotteryGame() + '.csv',
+    rows,
+    ['metric', 'key', 'value']
+  );
 }
 
 function buildPerfCockpit(d, micro, sh) {
@@ -1784,6 +2845,8 @@ function renderSignals(signals){
 function getConfluencePct(data) {
   if(!data) return 0;
   var pct = data.confluencePct;
+  if (pct == null) pct = data.pct;
+  if (pct == null) pct = data.confidence_pct;
   if (pct == null) pct = data.score_pct;
   if (pct == null && typeof data.confluenceScore === 'number') {
     // Use the scan threshold if available (same formula as backend: score/threshold * 67)
@@ -1809,7 +2872,7 @@ function getConfluenceLabel(pct) {
 
 function formatConfluenceText(data) {
   var pct = getConfluencePct(data);
-  return getConfluenceLabel(pct);
+  return getConfluenceLabel(pct) + ' (' + pct + '%)';
 }
 
 // -- Style Levels Tab --
@@ -2892,7 +3955,7 @@ function buildAIContent(ai,symbol,idSuffix) {
     '<div class="ai-header" onclick="toggleAI(\''+sid+'\')" style="cursor:pointer">'+
       '<span class="ai-label"><span class="ai-dot"></span> Marcus Reid</span>'+
       '<span class="ai-grade grade-'+gk+'">'+(ai.grade||'N/A')+'</span>'+
-      '<span style="color:'+edgeColor+';font-size:13px;font-weight:600;margin-left:auto">'+edgeVal+'</span>'+
+      '<span title="AI estimated win probability. This is separate from raw signal confluence." style="color:'+edgeColor+';font-size:13px;font-weight:600;margin-left:auto">AI Edge '+edgeVal+'</span>'+
       '<span style="color:'+riskColor+';font-size:11px;margin-left:6px">'+riskLevelText+'</span>'+
     '</div>'+
     styleStrip+
@@ -5324,6 +6387,7 @@ function startMhClock() {
 
 // Auto-refresh every 60s, clock every 1s
 document.addEventListener('DOMContentLoaded', function() {
+  bindLotteryLabActions();
   startMhClock();
   loadMarketHours();
   _mhRefreshTimer = setInterval(loadMarketHours, 60000);
@@ -5487,4 +6551,5 @@ async function runScalpVisionConfirm(btn, symbol) {
 </script>
 </body>
 </html>
+
 

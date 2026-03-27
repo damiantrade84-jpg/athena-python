@@ -59,6 +59,29 @@ from stability_monitor import (
     record_outcome_event,
     record_signal_event,
 )
+from lottery_service import (
+    clear_lottery_draws,
+    ensure_lottery_schema,
+    import_lottery_csv,
+)
+from lottery_engine import (
+    build_lottery_dashboard,
+    compare_generator_modes,
+    generate_tickets,
+    compute_number_frequency,
+    compute_overdue_numbers,
+    compute_pair_frequency,
+    compute_repeat_from_last_draw_stats,
+    compute_consecutive_stats,
+    compute_low_high_distribution,
+    compute_odd_even_distribution,
+    compute_sum_distribution,
+    compute_triplet_frequency,
+    history_rows as lottery_history_rows,
+    score_ticket,
+    set_lottery_db_path,
+    simulate_generator,
+)
 
 from data_feeds import (  # noqa: E402
     http_requests,
@@ -2513,6 +2536,10 @@ def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
 
     global _earnings_cache, _EARNINGS_AVAILABLE
 
+    if not CONFIG.get("EODHD_EARNINGS_CALENDAR_ENABLED", False):
+        _EARNINGS_AVAILABLE = False
+        return {}
+
     now = time.time()
 
     if _earnings_cache["data"] and (now - _earnings_cache["ts"]) < _EARNINGS_TTL:
@@ -2726,9 +2753,30 @@ def fetch_news_context(pairs: list | None = None):
                     f"https://eodhd.com/api/sentiments?s={tickers_csv}&api_token={_eodhd_key}&fmt=json",
                     timeout=12,
                 ).json()
+                sentiment_by_ticker = {}
+                if isinstance(sdata, dict):
+                    sentiment_by_ticker = sdata
+                elif isinstance(sdata, list):
+                    for row in sdata:
+                        if not isinstance(row, dict):
+                            continue
+                        key = (
+                            row.get("code")
+                            or row.get("symbol")
+                            or row.get("ticker")
+                            or row.get("s")
+                        )
+                        if key:
+                            sentiment_by_ticker[str(key)] = row
 
                 for sticker, display in ticker_map.items():
-                    scores = sdata.get(sticker, [])
+                    raw_scores = sentiment_by_ticker.get(sticker, [])
+                    if isinstance(raw_scores, dict):
+                        scores = [raw_scores]
+                    elif isinstance(raw_scores, list):
+                        scores = raw_scores
+                    else:
+                        scores = []
 
                     if scores and scores[0].get("normalized") is not None:
                         sc = scores[0]["normalized"]
@@ -3503,6 +3551,7 @@ def _init_audit_db(db_path: str) -> None:
         """
     )
     con.execute("CREATE INDEX IF NOT EXISTS idx_shadow_ts ON shadow_signals (ts)")
+    ensure_lottery_schema(con)
 
     con.commit()
 
@@ -3512,6 +3561,7 @@ def _init_audit_db(db_path: str) -> None:
 _AUDIT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
 
 _init_audit_db(_AUDIT_DB)
+set_lottery_db_path(_AUDIT_DB)
 init_stability_store(_AUDIT_DB)
 
 
@@ -4597,6 +4647,7 @@ def api_scan_naked():
                         "score_pct": conf_data["pct"],
                         "is_naked": True,
                         "style": resolved_style,
+                        "atr": atr,
                         "sl": sl,
                         "slPct": round(
                             abs(current_price - sl) / current_price * 100, 2
@@ -4608,6 +4659,12 @@ def api_scan_naked():
                         "rr1": round(rr, 2) if rr else style_profile["fallback_rr"],
                         "rr2": round(rr, 2) if rr else style_profile["fallback_rr"],
                         "fib": {"fib618": 0.0, "fib500": 0.0},
+                        "style_levels": _build_style_levels(
+                            price=float(current_price),
+                            atr=float(atr),
+                            direction=direction,
+                            pair_type=pair.get("type", "stock"),
+                        ),
                         "naked_data": res,
                     }
                     
@@ -8060,6 +8117,372 @@ def api_score_decay():
 
 
 # â"€â"€ Task 2: Performance Dashboard Endpoint â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+
+@app.route("/api/lottery/import", methods=["POST"])
+def api_lottery_import():
+    try:
+        payload = request.get_json(silent=True) or {}
+        game = str(request.form.get("game") or payload.get("game") or "").strip().lower()
+        mode = str(request.form.get("mode") or payload.get("mode") or "append").strip().lower()
+        preview_flag = request.form.get("preview_only")
+        if preview_flag is None:
+            preview_flag = payload.get("preview_only")
+        preview_only = str(preview_flag or "").strip().lower() in ("1", "true", "yes", "on")
+
+        if mode not in ("append", "replace"):
+            return jsonify({"error": "Invalid import mode"}), 400
+
+        file_obj = request.files.get("file")
+        csv_text = ""
+        source_file = ""
+        if file_obj:
+            csv_text = file_obj.read().decode("utf-8-sig", errors="replace")
+            source_file = file_obj.filename or ""
+        else:
+            csv_text = str(payload.get("csv_text") or "")
+            source_file = str(payload.get("source_file") or "")
+
+        if not game:
+            return jsonify({"error": "Missing game"}), 400
+        if not csv_text.strip():
+            return jsonify({"error": "Missing CSV file"}), 400
+
+        result = import_lottery_csv(
+            _AUDIT_DB,
+            game=game,
+            csv_text=csv_text,
+            source_file=source_file,
+            mode=mode,
+            preview_only=preview_only,
+        )
+        return jsonify(result), (400 if result.get("error") else 200)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def _lottery_filter_args():
+    game = str(request.args.get("game") or "").strip().lower()
+    if not game:
+        raise ValueError("Missing game")
+    start_date = str(request.args.get("start_date") or "").strip() or None
+    end_date = str(request.args.get("end_date") or "").strip() or None
+    include_bonus_raw = str(request.args.get("include_bonus") or "false").strip().lower()
+    include_bonus = include_bonus_raw in ("1", "true", "yes", "on")
+    limit_raw = request.args.get("limit", 200)
+    try:
+        limit = int(limit_raw)
+    except (TypeError, ValueError):
+        limit = 200
+    return game, start_date, end_date, include_bonus, max(1, min(limit, 2000))
+
+
+@app.route("/api/lottery/dashboard")
+def api_lottery_dashboard():
+    try:
+        game, start_date, end_date, include_bonus, _limit = _lottery_filter_args()
+        payload = build_lottery_dashboard(
+            game,
+            start_date=start_date,
+            end_date=end_date,
+            include_bonus=include_bonus,
+        )
+        return jsonify(payload)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/frequency")
+def api_lottery_frequency():
+    try:
+        game, start_date, end_date, include_bonus, _limit = _lottery_filter_args()
+        freq = compute_number_frequency(
+            game,
+            start_date=start_date,
+            end_date=end_date,
+            include_bonus=include_bonus,
+        )
+        overdue = compute_overdue_numbers(
+            game,
+            start_date=start_date,
+            end_date=end_date,
+            include_bonus=include_bonus,
+        )
+        return jsonify(
+            {
+                "game": game,
+                "draw_count": freq.get("draw_count", 0),
+                "number_frequency": freq.get("main_number_frequency", []),
+                "overdue": overdue.get("overdue", []),
+                "decade_groups": freq.get("decade_groups", []),
+                "bonus_frequency": freq.get("bonus_frequency", []),
+                "bonus_overdue": overdue.get("bonus_overdue", []),
+            }
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/pairs")
+def api_lottery_pairs():
+    try:
+        game, start_date, end_date, _include_bonus, limit = _lottery_filter_args()
+        return jsonify(
+            compute_pair_frequency(
+                game,
+                start_date=start_date,
+                end_date=end_date,
+                limit=limit,
+            )
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/triplets")
+def api_lottery_triplets():
+    try:
+        game, start_date, end_date, _include_bonus, limit = _lottery_filter_args()
+        return jsonify(
+            compute_triplet_frequency(
+                game,
+                start_date=start_date,
+                end_date=end_date,
+                limit=limit,
+            )
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/history")
+def api_lottery_history():
+    try:
+        game, start_date, end_date, _include_bonus, limit = _lottery_filter_args()
+        return jsonify(
+            lottery_history_rows(
+                game,
+                start_date=start_date,
+                end_date=end_date,
+                limit=limit,
+            )
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/distributions")
+def api_lottery_distributions():
+    try:
+        game, start_date, end_date, _include_bonus, _limit = _lottery_filter_args()
+        return jsonify(
+            {
+                "game": game,
+                "sum_distribution": compute_sum_distribution(
+                    game, start_date=start_date, end_date=end_date
+                ),
+                "odd_even_distribution": compute_odd_even_distribution(
+                    game, start_date=start_date, end_date=end_date
+                ),
+                "low_high_distribution": compute_low_high_distribution(
+                    game, start_date=start_date, end_date=end_date
+                ),
+                "consecutive": compute_consecutive_stats(
+                    game, start_date=start_date, end_date=end_date
+                ),
+                "repeat_from_last_draw": compute_repeat_from_last_draw_stats(
+                    game, start_date=start_date, end_date=end_date
+                ),
+            }
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/draws")
+def api_lottery_draws():
+    """Backward-compatible alias for phase-1 draws endpoint."""
+    try:
+        game, start_date, end_date, _include_bonus, limit = _lottery_filter_args()
+        return jsonify(
+            lottery_history_rows(
+                game,
+                start_date=start_date,
+                end_date=end_date,
+                limit=limit,
+            )
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/stats")
+def api_lottery_stats():
+    """Backward-compatible alias for phase-1 stats endpoint."""
+    try:
+        game, start_date, end_date, include_bonus, _limit = _lottery_filter_args()
+        return jsonify(
+            build_lottery_dashboard(
+                game,
+                start_date=start_date,
+                end_date=end_date,
+                include_bonus=include_bonus,
+            )
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/clear", methods=["POST"])
+def api_lottery_clear():
+    try:
+        payload = request.get_json(silent=True) or {}
+        game = str(payload.get("game") or request.form.get("game") or "").strip().lower() or None
+        return jsonify(clear_lottery_draws(_AUDIT_DB, game=game))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/generate", methods=["POST"])
+def api_lottery_generate():
+    try:
+        payload = request.get_json(silent=True) or {}
+        game = str(payload.get("game") or "").strip().lower()
+        mode = str(payload.get("mode") or "pure_random").strip().lower()
+        ticket_count = int(payload.get("ticket_count") or 5)
+        include_bonus = bool(payload.get("include_bonus", False))
+        start_date = payload.get("start_date")
+        end_date = payload.get("end_date")
+        filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
+
+        result = generate_tickets(
+            game,
+            mode=mode,
+            ticket_count=ticket_count,
+            include_bonus=include_bonus,
+            filters=filters,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/simulate", methods=["POST"])
+def api_lottery_simulate():
+    req_started = time.perf_counter()
+    try:
+        payload = request.get_json(silent=True) or {}
+        game = str(payload.get("game") or "").strip().lower()
+        mode = str(payload.get("mode") or "pure_random").strip().lower()
+        tickets_per_draw = int(payload.get("tickets_per_draw") or 1)
+        include_bonus = bool(payload.get("include_bonus", False))
+        start_date = payload.get("start_date")
+        end_date = payload.get("end_date")
+        filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
+        ticket_cost = payload.get("ticket_cost")
+        payout_table = payload.get("payout_table") or {}
+        if isinstance(payout_table, str):
+            payout_table = json.loads(payout_table or "{}")
+        if not isinstance(payout_table, dict):
+            payout_table = {}
+
+        log.info(
+            "[LotterySimAPI] request received game=%s mode=%s tickets_per_draw=%s start=%s end=%s include_bonus=%s",
+            game,
+            mode,
+            tickets_per_draw,
+            start_date,
+            end_date,
+            include_bonus,
+        )
+
+        result = simulate_generator(
+            game,
+            mode=mode,
+            tickets_per_draw=tickets_per_draw,
+            start_date=start_date,
+            end_date=end_date,
+            include_bonus=include_bonus,
+            ticket_cost=ticket_cost,
+            payout_table=payout_table,
+            filters=filters,
+        )
+        serialize_started = time.perf_counter()
+        response = jsonify(result)
+        log.info(
+            "[LotterySimAPI] response serialization complete game=%s mode=%s total_ms=%.1f serialize_ms=%.1f",
+            game,
+            mode,
+            (time.perf_counter() - req_started) * 1000.0,
+            (time.perf_counter() - serialize_started) * 1000.0,
+        )
+        return response
+    except ValueError as e:
+        log.warning("[LotterySimAPI] value error after %.1f ms: %s", (time.perf_counter() - req_started) * 1000.0, e)
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        log.exception("[LotterySimAPI] failure after %.1f ms", (time.perf_counter() - req_started) * 1000.0)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/compare-modes", methods=["POST"])
+def api_lottery_compare_modes():
+    try:
+        payload = request.get_json(silent=True) or {}
+        game = str(payload.get("game") or "").strip().lower()
+        modes = payload.get("modes") or []
+        if isinstance(modes, str):
+            modes = [m.strip() for m in modes.split(",") if m.strip()]
+        if not isinstance(modes, list):
+            modes = []
+        tickets_per_draw = int(payload.get("tickets_per_draw") or 1)
+        include_bonus = bool(payload.get("include_bonus", False))
+        start_date = payload.get("start_date")
+        end_date = payload.get("end_date")
+        filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
+        ticket_cost = payload.get("ticket_cost")
+        payout_table = payload.get("payout_table") or {}
+        if isinstance(payout_table, str):
+            payout_table = json.loads(payout_table or "{}")
+        if not isinstance(payout_table, dict):
+            payout_table = {}
+
+        result = compare_generator_modes(
+            game,
+            modes=modes,
+            tickets_per_draw=tickets_per_draw,
+            start_date=start_date,
+            end_date=end_date,
+            include_bonus=include_bonus,
+            ticket_cost=ticket_cost,
+            payout_table=payout_table,
+            filters=filters,
+        )
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/performance")

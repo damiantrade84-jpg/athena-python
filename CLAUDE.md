@@ -1,5 +1,31 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-27) — Lottery Lab simulator hang fix
+
+**Goal:** Fix Lottery Lab simulations that appeared to hang on Lotto history after clicking **SIMULATE**, while preserving the existing generator/simulator behavior and UI layout.
+
+**Root cause (`lottery_engine.py`):**
+- The simulator was not stuck in Flask or the frontend click path. The real bottleneck was backend CPU work:
+  - `simulate_generator(...)` rebuilt historical generator analytics from scratch for every simulated draw.
+  - `generate_tickets(...)` then rescored every generated ticket through the full analytics path again.
+- On full Lotto history this created severe quadratic slowdown, so the UI sat on **"Simulating..."** even though the request was still running.
+
+**Fixes applied (`lottery_engine.py`, `athena.py`, `static/index.html`):**
+- Added a shared internal ticket-generation path that works from precomputed analytics signals instead of reloading/recomputing everything per ticket.
+- Updated `simulate_generator(...)` to reuse incremental counters for frequency, overdue, pair stats, and recent overlap across the historical loop instead of rescanning all prior draws each iteration.
+- Added a **hard per-ticket retry cap** with graceful fallback ticket generation if constraints or bias modes cannot produce a valid candidate in time.
+- Added timing logs around:
+  - request received
+  - draw history loaded
+  - ticket generation / simulation loop progress
+  - response serialization
+- Added frontend timeout/error handling so the UI cannot remain stuck on **"Simulating..."** forever if the request exceeds a safe window.
+
+**Verified runtime after fix:**
+- Full Lotto history (~2576 draws), `pure_random`, `1` ticket per draw: ~1.6s
+- Full Lotto history, `pure_random`, `5` tickets per draw: ~6.3s
+- Small Lotto date range (Jan-Mar 2026), `pure_random`, `5` tickets per draw: ~0.01s
+
 ## Recent Changes (2026-03-26) — MT5 Data Migration & Pipeline Hardening
 
 **Goal:** Finalize the migration of all traditional assets to direct MT5 broker integration, ensuring real-time data persistence and NY Close grid alignment.
