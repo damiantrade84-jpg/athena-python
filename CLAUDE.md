@@ -1,5 +1,15 @@
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-27) — Engine C normalization and forex backtest regime payload fix
+
+**Goal:** Remove Engine C dependence on threshold-relative display scaling and keep forex backtest regime payloads aligned with true regime labels.
+
+**Fixes applied (`engine_c.py`, `backtest_runner.py`):**
+- `engine_c.normalise_engine_a(...)` now normalizes Engine A strength from raw `confluenceScore / maxScore` only.
+- `confluencePct` remains available for UI/display paths, but is no longer used by Engine C blending.
+- Forex backtest payloads now set `res["regime"]["label"]` from the detected regime label instead of `signal_type`.
+- `signal_type` remains its own payload field for compatibility.
+
 ## Recent Changes (2026-03-27) — Lottery Lab simulator hang fix
 
 **Goal:** Fix Lottery Lab simulations that appeared to hang on Lotto history after clicking **SIMULATE**, while preserving the existing generator/simulator behavior and UI layout.
