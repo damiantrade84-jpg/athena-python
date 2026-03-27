@@ -70,17 +70,11 @@ def normalise_engine_a(signal_a: dict) -> dict:
       - direction: LONG/SHORT
       - regime: dict with label, state
       - sl, tp1, tp2: ATR-based levels
-      - confluencePct: already 0-100 percentage
+      - confluencePct: threshold-relative display percentage (UI only)
     """
     score = float(signal_a.get("confluenceScore", 0))
     max_score = float(signal_a.get("maxScore", 3.0)) or 3.0
-    pct = float(signal_a.get("confluencePct", 0))
-
-    # Use percentage if available (already normalised 0-100), else compute
-    if pct > 0:
-        norm = min(1.0, pct / 100.0)
-    else:
-        norm = min(1.0, score / max_score) if max_score > 0 else 0.0
+    norm = min(1.0, score / max_score) if max_score > 0 else 0.0
 
     regime_data = signal_a.get("regime", {})
     if isinstance(regime_data, dict):

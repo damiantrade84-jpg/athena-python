@@ -477,7 +477,7 @@ def backtest_pair(pair, style="auto"):
                         "factor_scores": _fx.components,
                         "regime": {
                             "state": 1,
-                            "label": _fx.signal_type,
+                            "label": _fx_trend_state,
                         },  # Match calc_confluence format
                         "signal_type": _fx.signal_type,
                         "score": _fx.final_score,  # Add compatibility field for backtest
