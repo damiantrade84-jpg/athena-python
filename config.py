@@ -516,6 +516,13 @@ CONFIG: dict = {
     "MAX_CORRELATED_POSITIONS": 2,  # Max positions in same correlation cluster
     "SIGNAL_MAX_AGE_SEC": 1800,  # Reject signals older than 30 minutes
     "MAX_RISK_PER_TRADE": 0.03,  # Hard cap: never risk > 3% on single trade
+    "MAX_SL_PCT": {
+        "forex":     0.025,
+        "crypto":    0.08,
+        "commodity": 0.04,
+        "index":     0.04,
+        "stock":     0.08,
+    },
     "DRAWDOWN_REDUCE_THRESHOLD": 0.10,  # At 10% drawdown, halve position sizes
     "DRAWDOWN_STOP_THRESHOLD": 0.15,  # At 15% drawdown, reject ALL new trades
     # ── Auto-Trade Bot ────────────────────────────────────────────────────────

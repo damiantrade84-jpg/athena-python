@@ -7496,6 +7496,31 @@ def analyze_pair(
                         else min(_math_sl, _struct_sl)
                     )
 
+                    # Hard SL distance cap — prevents runaway structural overrides
+                    _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(pair.get("type", ""), 0.05)
+                    _sl_dist_pct = abs(float(price) - float(lvl["sl"])) / float(price)
+                    if _sl_dist_pct > _max_sl_pct:
+                        log.warning(
+                            f"[SL-CAP] {pair['display']} {direction} SL distance {_sl_dist_pct:.1%} "
+                            f"exceeds cap {_max_sl_pct:.1%} — clamping"
+                        )
+                        lvl["sl"] = (
+                            float(price) * (1 - _max_sl_pct)
+                            if direction == "LONG"
+                            else float(price) * (1 + _max_sl_pct)
+                        )
+                        _sl_dist = abs(float(price) - float(lvl["sl"]))
+                        lvl["tp1"] = (
+                            float(price) + _sl_dist * 1.5
+                            if direction == "LONG"
+                            else float(price) - _sl_dist * 1.5
+                        )
+                        lvl["tp2"] = (
+                            float(price) + _sl_dist * 2.5
+                            if direction == "LONG"
+                            else float(price) - _sl_dist * 2.5
+                        )
+
                 # Take Profit Override to sit safely inside structural walls
                 if structure_data.get("recommended_take_profit"):
                     _struct_tp = float(structure_data["recommended_take_profit"])
