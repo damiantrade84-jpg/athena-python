@@ -8294,8 +8294,16 @@ def _check_score_decay() -> None:
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             open_trades = con.execute(
-                "SELECT pair, score, direction FROM audit_log WHERE exit_price IS NULL"
+                "SELECT pair, score, direction, ticket FROM audit_log "
+                "WHERE exit_price IS NULL AND ticket IS NOT NULL AND ticket != '' "
+                "AND (error_tag IS NULL OR error_tag = '')"
             ).fetchall()
+
+        # Remove closed trades from decay results before early-exit check
+        open_pairs = {row["pair"] for row in open_trades}
+        stale_keys = [k for k in _score_decay_results if k not in open_pairs]
+        for k in stale_keys:
+            del _score_decay_results[k]
 
         if not open_trades:
             return

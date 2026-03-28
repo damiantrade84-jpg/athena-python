@@ -4248,10 +4248,20 @@ async function checkScoreDecay() {
     var resp = await fetch('/api/score-decay');
     if (!resp.ok) return;
     var data = await resp.json();
+
+    // Clear alerts for pairs no longer in results (trade closed)
+    for (var alertPair in _lastDecayAlerts) {
+      if (!data[alertPair]) {
+        delete _lastDecayAlerts[alertPair];
+      }
+    }
+
     for (var pair in data) {
       var d = data[pair];
-      if (d.decay >= 3 && !_lastDecayAlerts[pair]) {
-        _lastDecayAlerts[pair] = true;
+      // Only fire toast if decay >= 3 AND worsening beyond what we last alerted
+      var lastAlerted = _lastDecayAlerts[pair] || 0;
+      if (d.decay >= 3 && d.decay > lastAlerted) {
+        _lastDecayAlerts[pair] = d.decay;
         showToast('⚠ DECAY ' + pair + ': score ' + d.entryScore + ' → ' + d.currentScore + ' (Δ' + d.decay + ') — consider exit', true);
       }
     }
