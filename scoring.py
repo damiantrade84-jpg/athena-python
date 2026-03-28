@@ -261,18 +261,27 @@ def detect_div(d1c: list, h4c: list, h1c: list) -> list:
 
 # ── Correlation clusters ─────────────────────────────────────────────────────
 CORR_CLUSTERS: dict = {
+    "crypto_major": [
+        "BTC/USDT",
+        "ETH/USDT",
+        "XRP/USDT",
+        "BNB/USDT",
+        "SOL/USDT",
+        "ADA/USDT",
+        "DOGE/USDT",
+        "AVAX/USDT",
+        "DOT/USDT",
+        "MATIC/USDT",
+        "LTC/USDT",
+        "LINK/USDT",
+        "SUI/USDT",
+        "APT/USDT",
+        "NEAR/USDT",
+        "INJ/USDT",
+        "RENDER/USDT",
+    ],
     "metals": ["XAU/USD", "XAG/USD", "GLD", "SLV"],
     "energy": ["XOM", "XLE", "USO", "WTI Oil", "Brent Oil"],
-    "defi": [
-        "SOL/USDT",
-        "AVAX/USDT",
-        "LINK/USDT",
-        "BNB/USDT",
-        "ETH/USDT",
-        "INJ/USDT",
-        "NEAR/USDT",
-    ],
-    "ai_crypto": ["RENDER/USDT"],
     "forex_usd": [
         "EUR/USD",
         "GBP/USD",

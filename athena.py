@@ -7760,6 +7760,7 @@ def _update_trade_outcome(
     volume: float | None,
     entry_ts: str | None,
     risk_amount: float | None = None,
+    asset_type: str = "",
 ) -> None:
     """Write outcome columns for a closed trade in audit_log."""
 
@@ -7847,28 +7848,15 @@ def _update_trade_outcome(
             except Exception as _le:
                 log.debug(f"[LEARN] extraction failed for {ticket}: {_le}")
 
-        # Feed realized P&L to daily loss tracker
+        # Feed realized P&L to daily loss tracker (per-account: crypto→Bybit, rest→MT5)
 
         if pnl is not None:
             try:
                 from risk_engine import record_daily_pnl
 
-                # Get current balance for reference
-
                 _bal = 0.0
 
-                try:
-                    from mt5_executor import mt5_get_account
-
-                    _acc = mt5_get_account()
-
-                    if _acc:
-                        _bal = _acc.get("balance", 0)
-
-                except Exception as _mt5e:
-                    log.debug(f"[DAILY-PNL] MT5 balance fetch: {_mt5e}")
-
-                if _bal <= 0:
+                if asset_type == "crypto":
                     try:
                         import bybit_executor as _bm
 
@@ -7881,6 +7869,18 @@ def _update_trade_outcome(
 
                     except Exception as _bbe:
                         log.debug(f"[DAILY-PNL] Bybit balance fetch: {_bbe}")
+
+                else:
+                    try:
+                        from mt5_executor import mt5_get_account
+
+                        _acc = mt5_get_account()
+
+                        if _acc:
+                            _bal = _acc.get("balance", 0)
+
+                    except Exception as _mt5e:
+                        log.debug(f"[DAILY-PNL] MT5 balance fetch: {_mt5e}")
 
                 if _bal > 0:
                     record_daily_pnl(pnl, _bal)
@@ -8021,7 +8021,7 @@ def _check_mt5_outcomes() -> None:
             con.row_factory = sqlite3.Row
 
             pending = con.execute(
-                "SELECT id, ticket, entry_price, sl, tp, volume, ts, risk_amount FROM audit_log "
+                "SELECT id, ticket, entry_price, sl, tp, volume, ts, risk_amount, asset_class FROM audit_log "
                 "WHERE ticket IS NOT NULL AND ticket != '' AND exit_price IS NULL"
             ).fetchall()
 
@@ -8058,6 +8058,7 @@ def _check_mt5_outcomes() -> None:
                         risk_amount=float(row["risk_amount"])
                         if row["risk_amount"]
                         else None,
+                        asset_type=row["asset_class"] or "",
                     )
 
             except Exception as e:
@@ -8252,6 +8253,7 @@ def _check_ccxt_outcomes() -> None:
                             risk_amount=float(row["risk_amount"])
                             if row["risk_amount"]
                             else None,
+                            asset_type="crypto",
                         )
                         log.info(
                             "[MONITOR] Bybit outcome: %s ticket=%s pnl=%s",
@@ -8292,8 +8294,16 @@ def _check_score_decay() -> None:
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             open_trades = con.execute(
-                "SELECT pair, score, direction FROM audit_log WHERE exit_price IS NULL"
+                "SELECT pair, score, direction, ticket FROM audit_log "
+                "WHERE exit_price IS NULL AND ticket IS NOT NULL AND ticket != '' "
+                "AND (error_tag IS NULL OR error_tag = '')"
             ).fetchall()
+
+        # Remove closed trades from decay results before early-exit check
+        open_pairs = {row["pair"] for row in open_trades}
+        stale_keys = [k for k in _score_decay_results if k not in open_pairs]
+        for k in stale_keys:
+            del _score_decay_results[k]
 
         if not open_trades:
             return
@@ -9954,14 +9964,7 @@ if __name__ == "__main__":
 
     else:
         # Start the scheduler thread in standby — it does nothing until enabled
-
-        _auto_trader._running = True
-
-        import threading as _t
-
-        _t.Thread(
-            target=_auto_trader._scheduler_loop, name="AutoTrader", daemon=True
-        ).start()
+        _auto_trader._start_thread()
 
         log.info("[AUTO] Auto-trader standby (toggle via UI)")
 
