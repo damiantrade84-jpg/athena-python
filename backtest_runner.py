@@ -283,7 +283,7 @@ def backtest_pair(pair, style="auto"):
             # request 600 D1, 5000 H4, 5000 H1 (MT5 is fast enough)
             d1_raw = _rt().fetch_candles(pair, "D1", 600)
             h4_raw = _rt().fetch_candles(pair, "H4", 5000)
-            h1_raw = _rt().fetch_candles(pair, "H1", 5000)
+            h1_raw = _rt().fetch_candles(pair, "H1", 15000)  # ~3.5 years forex H1
 
         elif _ptype in ("stock", "commodity", "index"):
             # Stocks/Commodities/Indices: EODHD D1 + EODHD intraday (730d)

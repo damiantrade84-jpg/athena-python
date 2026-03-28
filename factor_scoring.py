@@ -771,27 +771,28 @@ def compute_factor_scores(
     # Only applies when learning_log has enough data (30+ trades for the asset class).
     # Blend rate is 30% (research-backed optimal range 0.25-0.35).
     # Disabled factors (weight=0) are never adjusted — adaptive cannot override explicit disable.
-    try:
-        from adaptive_weights import get_adaptive_weights
-        import os
+    if CONFIG.get("ADAPTIVE_WEIGHTS_ENABLED", False):
+        try:
+            from adaptive_weights import get_adaptive_weights
+            import os
 
-        _db = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
-        _adaptive = get_adaptive_weights(_db, asset_type, regime)
-        if _adaptive:
-            import logging as _logging
-            _logging.getLogger(__name__).debug(
-                f"[ADAPTIVE] applying learned weights for {asset_type}/{regime}"
-            )
-            for factor in weights:
-                if weights[factor] > 0 and factor in _adaptive:
-                    try:
-                        weights[factor] = max(
-                            0.0, float(weights[factor]) * float(_adaptive[factor])
-                        )
-                    except (TypeError, ValueError):
-                        continue
-    except Exception:
-        pass  # Graceful degradation — use base weights if adaptive fails
+            _db = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
+            _adaptive = get_adaptive_weights(_db, asset_type, regime)
+            if _adaptive:
+                import logging as _logging
+                _logging.getLogger(__name__).debug(
+                    f"[ADAPTIVE] applying learned weights for {asset_type}/{regime}"
+                )
+                for factor in weights:
+                    if weights[factor] > 0 and factor in _adaptive:
+                        try:
+                            weights[factor] = max(
+                                0.0, float(weights[factor]) * float(_adaptive[factor])
+                            )
+                        except (TypeError, ValueError):
+                            continue
+        except Exception:
+            pass  # Graceful degradation — use base weights if adaptive fails
 
     # ── Final aggregation ────────────────────────────────────────────────
     if is_crypto:

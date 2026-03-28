@@ -58,11 +58,11 @@ WEINSTEIN_LOOKBACK:
 # BT_MIN MUST equal MIN_CONFLUENCE_CLASS — lower BT_MIN counts trades the live system rejects,
 # inflating trade count and distorting SQN.
 BT_MIN:
-  crypto:    1.50   # must equal MIN_CONFLUENCE_CLASS.crypto (factor 0–3 scale)
-  commodity: 1.65   # must equal MIN_CONFLUENCE_CLASS.commodity
-  forex:     0.70   # must equal MIN_CONFLUENCE_CLASS.forex — forex engine 0–1 scale
-  stock:     1.85   # must equal MIN_CONFLUENCE_CLASS.stock
-  index:     1.85   # must equal MIN_CONFLUENCE_CLASS.index
+  forex:     0.65
+  crypto:    0.70
+  commodity: 0.80
+  stock:     0.90
+  index:     0.90
 
 # Backtest must not alter live pair enable/disable state
 BT_AUTO_TOGGLE: false
@@ -79,15 +79,15 @@ NAKED_MAX_DAILY: 3
 # Crypto/forex gates tightened per operator table (midpoints of recommended bands on each scale).
 # BT_MIN must match MIN_CONFLUENCE_CLASS per class.
 MIN_CONFLUENCE_CLASS:
-  crypto:    1.50   # factor 0–3: class + backtest floor (subgroups stricter in MIN_CONFLUENCE_GROUP)
-  commodity: 1.65   # factor 0–3: mid of operator band 1.55–1.75
-  forex:     0.70   # forex engine (0–1): ~mid of 0.68–0.72 band for majors/exotics
-  stock:     1.85   # factor 0–3: mid of operator band 1.75–1.95 (ETFs typically type stock)
-  index:     1.85   # factor 0–3: same band as stocks/ETFs
+  forex:     0.65
+  crypto:    0.70
+  commodity: 0.80
+  stock:     0.90
+  index:     0.90
 
 # Forex scan threshold — forex_scoring engine outputs 0–1.0 (not 0–3.0)
 # MIN_CONFLUENCE_CLASS.forex must match this — keep in sync
-MIN_FOREX_CONFLUENCE: 0.70
+MIN_FOREX_CONFLUENCE: 0.65
 
 # Optional subgroup thresholds (used when score_group is available on a pair)
 MIN_CONFLUENCE_GROUP:
@@ -202,6 +202,9 @@ SENTIMENT_BLOCK_THRESHOLD: 0.4     # Block if sentiment opposes direction by >0.
 # ── EODHD Event Risk Filter ──────────────────────────────
 EVENT_RISK_ENABLED: true           # Block trades near high-impact events (NFP/CPI/FOMC)
 EVENT_RISK_HOURS: 4                # Hours ahead to check for events
+
+# ── Adaptive factor weights (factor_scoring.py) ─────────────
+ADAPTIVE_WEIGHTS_ENABLED: false
 
 # ── Adaptive Kelly Position Sizing ────────────────────────
 ADAPTIVE_KELLY_ENABLED: true       # Use fractional Kelly for dynamic position sizing
@@ -490,14 +493,15 @@ NAKED_ENGINE:
   # Hold limits (H4 bars): scalp=12 (48h), intraday=24 (4d), swing=60 (10d)
   style_profiles:
     scalp:
-      min_score: 1.5
-      min_rr: 1.5
+      min_score: 0.9
+      min_rr: 1.2
     intraday:
-      min_score: 2.0
-      min_rr: 1.5
+      min_score: 0.9
+      min_rr: 1.2
     swing:
-      min_score: 2.5
-      min_rr: 1.8
+      min_score: 1.8
+      min_rr: 1.5
+      require_macro_align: false
 
   zone_multipliers:
     TRENDING:        {upper: 0.3, lower: 1.0, sl: 1.5}

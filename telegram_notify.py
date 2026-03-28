@@ -89,6 +89,40 @@ def _send_message_async(message: str) -> None:
     threading.Thread(target=_send, daemon=True).start()
 
 
+def send_signal_alert(signal: Dict[str, Any]) -> None:
+    """Send a proactive Telegram alert for a trade signal (e.g. auto-executed).
+    Honours TELEGRAM.enabled and token/chat from config.yaml or env.
+    """
+    if not _is_enabled():
+        return
+    pair = signal.get("pair", "?")
+    direction = signal.get("direction", "?")
+    score = float(signal.get("confluenceScore", 0) or 0)
+    max_score = float(signal.get("maxScore", 3.0) or 3.0)
+    entry = signal.get("price", "?")
+    sl = signal.get("sl", "?")
+    tp1 = signal.get("tp1", "?")
+    rr = signal.get("rr1", "?")
+    dir_emoji = "🟢" if direction == "LONG" else "🔴"
+
+    text = (
+        f"{dir_emoji} *AUTO-EXECUTED: {pair} {direction}*\n"
+        f"Score: `{score:.2f}/{max_score:.1f}` | Entry: `{entry}`\n"
+        f"SL: `{sl}` | TP: `{tp1}` | RR `1:{rr}`"
+    )
+    if signal.get("regime"):
+        text += f"\nRegime: `{signal['regime']}`"
+    meta_bits = []
+    if signal.get("ai_edge_prob") is not None:
+        meta_bits.append(f"Edge: `{signal['ai_edge_prob']}%`")
+    if signal.get("ai_risk"):
+        meta_bits.append(f"Risk: `{signal['ai_risk']}`")
+    if meta_bits:
+        text += "\n" + " | ".join(meta_bits)
+
+    _send_message_async(text)
+
+
 def notify_signal_fired(
     pair: str,
     direction: str,
@@ -148,27 +182,26 @@ def notify_signal_with_ai(
     # Only notify if auto-executed AND high confluence (70%+ score)
     if not is_auto_executed:
         return
-    
+
     score_pct = round(score / max_score * 100) if max_score else 0
     if score_pct < 70:
         return
 
-    arrow = "LONG" if direction == "LONG" else "SHORT"
-    score_pct = round(score / max_score * 100) if max_score else 0
-
-    # Format price levels — strip trailing zeros
-    def _fmt(v: float) -> str:
-        s = f"{v:.5f}".rstrip("0").rstrip(".")
-        return s if "." in s else s
-
-    message = (
-        f"🚀 *AUTO-EXECUTED — {arrow} {pair}*\n"
-        f"Score: `{score:.2f}/{max_score:.1f}` ({score_pct}%) | `{regime}`\n"
-        f"Entry `{_fmt(entry)}` | SL `{_fmt(sl)}` | TP `{_fmt(tp1)}` ({rr1:.1f}R)\n"
-        f"Edge: `{ai_edge_prob}%` | Risk: `{ai_risk}`"
+    send_signal_alert(
+        {
+            "pair": pair,
+            "direction": direction,
+            "confluenceScore": score,
+            "maxScore": max_score,
+            "price": entry,
+            "sl": sl,
+            "tp1": tp1,
+            "rr1": rr1,
+            "regime": regime,
+            "ai_edge_prob": ai_edge_prob,
+            "ai_risk": ai_risk,
+        }
     )
-
-    _send_message_async(message)
     _daily_stats["signals_fired"].append(
         {
             "pair": pair,
