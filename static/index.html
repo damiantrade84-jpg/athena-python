@@ -1296,7 +1296,28 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       </select>
       <button class="bt-btn" id="btRunBtn" onclick="runBacktest()">&#9654; RUN BACKTEST</button>
       <span class="ctrl-note" id="btNote">Engine A = Quantitative Factor Model</span>
+      <button class="bt-btn" id="btMinToggleBtn" onclick="toggleBtMinPanel()" title="Adjust BT_MIN score thresholds for Engine A backtest" style="background:linear-gradient(135deg,#374151,#4b5563);margin-left:auto;">&#9881; BT THRESHOLDS</button>
     </div>
+
+    <!-- BT_MIN fine-tuning panel (collapsed by default) -->
+    <div id="btMinPanel" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px 22px 14px;margin-bottom:18px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+        <div>
+          <span style="font-size:13px;font-weight:700;color:var(--text);">BT_MIN — Backtest Score Floor (Engine A only)</span>
+          <span style="font-size:11px;color:var(--muted);margin-left:10px;">Live trading thresholds are NOT affected</span>
+        </div>
+        <button onclick="loadBtMinValues()" title="Reload from server" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:18px;padding:2px 6px;">&#8635;</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:14px;" id="btMinInputs">
+        <!-- populated by loadBtMinValues() -->
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <button class="bt-btn" onclick="saveBtMin()" id="btMinSaveBtn" style="padding:8px 20px;font-size:12px;">&#10003; SAVE THRESHOLDS</button>
+        <span id="btMinStatus" style="font-size:11px;color:var(--muted);"></span>
+        <span style="font-size:11px;color:var(--muted);margin-left:auto;">Factor engine scale: crypto/commodity/stock/index = 0–3.0 &nbsp;|&nbsp; Forex = 0–1.0</span>
+      </div>
+    </div>
+
     <div id="btContent">
       <div class="empty-state">
         <div class="icon">&#128202;</div>
@@ -4013,6 +4034,105 @@ function selectBacktestEngine(engine) {
     note.textContent = "Engine B = Pure Market Structure (FVG + Liquidity + Volume)";
   }
 }
+
+// ── BT_MIN fine-tuning ──────────────────────────────────────────────────────
+var _btMinOpen = false;
+var _btMinLive = {};
+
+function toggleBtMinPanel() {
+  _btMinOpen = !_btMinOpen;
+  document.getElementById('btMinPanel').style.display = _btMinOpen ? 'block' : 'none';
+  if (_btMinOpen) loadBtMinValues();
+}
+
+async function loadBtMinValues() {
+  var container = document.getElementById('btMinInputs');
+  container.innerHTML = '<span style="color:var(--muted);font-size:12px;">Loading…</span>';
+  try {
+    var r = await fetch('/api/bt-min');
+    var data = await r.json();
+    var bt = data.bt_min || {};
+    var live = data.live_class || {};
+    _btMinLive = live;
+
+    var LABELS = {crypto:'Crypto (0–3 scale)',forex:'Forex (0–1 scale)',commodity:'Commodity (0–3)',stock:'Stock (0–3)',index:'Index (0–3)'};
+    var STEPS  = {crypto:0.05,forex:0.01,commodity:0.05,stock:0.05,index:0.05};
+    var MAXES  = {crypto:3.0,forex:1.0,commodity:3.0,stock:3.0,index:3.0};
+
+    container.innerHTML = '';
+    for (var cls of ['crypto','forex','commodity','stock','index']) {
+      var curVal  = bt[cls] !== undefined ? bt[cls] : '';
+      var liveVal = live[cls] !== undefined ? Number(live[cls]).toFixed(2) : '—';
+      var step = STEPS[cls]; var max = MAXES[cls];
+      container.innerHTML += `
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;">
+          <div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;margin-bottom:4px;">${cls}</div>
+          <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">${LABELS[cls]}</div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <input type="number" id="btmin-${cls}" value="${curVal}" min="0" max="${max}" step="${step}"
+              style="width:72px;padding:6px 8px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:inherit;"
+              oninput="updateBtMinSlider('${cls}')" />
+            <input type="range" id="btmin-range-${cls}" value="${curVal}" min="0" max="${max}" step="${step}"
+              style="flex:1;accent-color:var(--accent);"
+              oninput="syncBtMinInput('${cls}')" />
+          </div>
+          <div style="font-size:10px;color:var(--muted);margin-top:5px;">
+            Live gate: <span style="color:#f59e0b;font-weight:600;">${liveVal}</span>
+            <span style="color:var(--muted);margin-left:6px;">· BT runs below live gate are possible here</span>
+          </div>
+        </div>`;
+    }
+  } catch(e) {
+    container.innerHTML = '<span style="color:#ef4444;font-size:12px;">Failed to load: ' + e.message + '</span>';
+  }
+}
+
+function updateBtMinSlider(cls) {
+  var inp = document.getElementById('btmin-' + cls);
+  var rng = document.getElementById('btmin-range-' + cls);
+  if (rng) rng.value = inp.value;
+}
+
+function syncBtMinInput(cls) {
+  var inp = document.getElementById('btmin-' + cls);
+  var rng = document.getElementById('btmin-range-' + cls);
+  if (inp) inp.value = rng.value;
+}
+
+async function saveBtMin() {
+  var btn = document.getElementById('btMinSaveBtn');
+  var status = document.getElementById('btMinStatus');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  status.textContent = '';
+
+  var payload = {};
+  for (var cls of ['crypto','forex','commodity','stock','index']) {
+    var inp = document.getElementById('btmin-' + cls);
+    if (inp && inp.value !== '') payload[cls] = parseFloat(inp.value);
+  }
+
+  try {
+    var r = await fetch('/api/bt-min', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    var data = await r.json();
+    if (data.saved) {
+      status.textContent = '✓ Saved to config.yaml';
+      status.style.color = '#22c55e';
+    } else {
+      status.textContent = '✗ ' + (data.error || 'Save failed');
+      status.style.color = '#ef4444';
+    }
+  } catch(e) {
+    status.textContent = '✗ ' + e.message;
+    status.style.color = '#ef4444';
+  }
+  btn.disabled = false; btn.textContent = '✓ SAVE THRESHOLDS';
+  setTimeout(function(){ status.textContent = ''; }, 4000);
+}
+// ────────────────────────────────────────────────────────────────────────────
 
 async function runBacktest() {
   var sym = document.getElementById('btPairSelect').value;

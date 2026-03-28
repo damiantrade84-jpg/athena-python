@@ -7,7 +7,11 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from config import CONFIG
-from scoring import get_pair_score_group, get_min_confluence_threshold
+from scoring import (
+    get_backtest_min_score_threshold,
+    get_min_confluence_threshold,
+    get_pair_score_group,
+)
 
 
 def test_pair_score_group_mapping_examples():
@@ -40,6 +44,39 @@ def test_pair_profile_can_override_score_group_and_threshold():
         assert get_min_confluence_threshold(pair) == 0.77
     finally:
         CONFIG["PAIR_PROFILES"] = original
+
+
+def test_backtest_min_score_uses_bt_min_not_live_chain():
+    """Engine A backtest gate must not follow min_confluence / MIN_CONFLUENCE_GROUP."""
+    original_profiles = CONFIG.get("PAIR_PROFILES")
+    original_bt = dict(CONFIG.get("BT_MIN") or {})
+    try:
+        CONFIG["PAIR_PROFILES"] = {
+            "BTC/USDT": {
+                "score_group": "crypto_btc",
+                "min_confluence": 0.99,
+            }
+        }
+        CONFIG["BT_MIN"] = {**original_bt, "crypto": 0.12}
+        pair = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"}
+        assert get_min_confluence_threshold(pair) == 0.99
+        assert get_backtest_min_score_threshold(pair) == 0.12
+    finally:
+        CONFIG["PAIR_PROFILES"] = original_profiles
+        CONFIG["BT_MIN"] = original_bt
+
+
+def test_backtest_min_score_pair_profile_bt_min_override():
+    original = CONFIG.get("PAIR_PROFILES")
+    original_bt = dict(CONFIG.get("BT_MIN") or {})
+    try:
+        CONFIG["PAIR_PROFILES"] = {"XAU/USD": {"bt_min": 1.58, "min_confluence": 5.8}}
+        CONFIG["BT_MIN"] = {**original_bt, "commodity": 0.70}
+        pair = {"display": "XAU/USD", "symbol": "XAUUSD", "type": "commodity"}
+        assert get_backtest_min_score_threshold(pair) == 1.58
+    finally:
+        CONFIG["PAIR_PROFILES"] = original
+        CONFIG["BT_MIN"] = original_bt
 
 
 def test_forex_scoring_source_exposes_score_group_adjustments():

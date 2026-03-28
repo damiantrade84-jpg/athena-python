@@ -261,11 +261,11 @@ CONFIG: dict = {
         "index": 150,
     },
     "BT_MIN": {
-        "crypto": 1.50,
-        "commodity": 1.65,
-        "forex": 0.70,
-        "stock": 1.85,
-        "index": 1.85,
+        "crypto": 0.55,
+        "commodity": 0.70,
+        "forex": 0.60,
+        "stock": 0.70,
+        "index": 0.70,
     },
     "MIN_CONFLUENCE_CLASS": {
         "crypto": 1.50,

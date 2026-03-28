@@ -54,15 +54,15 @@ WEINSTEIN_LOOKBACK:
   stock: 150
   index: 150
 
-# Per-class backtest minimum score
-# BT_MIN MUST equal MIN_CONFLUENCE_CLASS — lower BT_MIN counts trades the live system rejects,
-# inflating trade count and distorting SQN.
+# Engine A backtest score gate only (get_backtest_min_score_threshold in scoring.py).
+# Live scan / trade tier uses PAIR_PROFILES.min_confluence → MIN_CONFLUENCE_GROUP → MIN_CONFLUENCE_CLASS.
+# Optional per-pair override: PAIR_PROFILES.bt_min (backtest only).
 BT_MIN:
-  forex:     0.65
-  crypto:    0.70
-  commodity: 0.80
-  stock:     0.90
-  index:     0.90
+  crypto:    0.55
+  commodity: 0.70
+  forex:     0.60
+  stock:     0.70
+  index:     0.70
 
 # Backtest must not alter live pair enable/disable state
 BT_AUTO_TOGGLE: false
@@ -77,17 +77,16 @@ NAKED_MAX_DAILY: 3
 
 # Per-class live scan minimum confluence — execute / tradeSignals tier threshold
 # Crypto/forex gates tightened per operator table (midpoints of recommended bands on each scale).
-# BT_MIN must match MIN_CONFLUENCE_CLASS per class.
 MIN_CONFLUENCE_CLASS:
-  forex:     0.65
-  crypto:    0.70
-  commodity: 0.80
-  stock:     0.90
-  index:     0.90
+  forex:     0.70
+  crypto:    1.35
+  commodity: 1.05
+  stock:     1.05
+  index:     1.05
 
 # Forex scan threshold — forex_scoring engine outputs 0–1.0 (not 0–3.0)
 # MIN_CONFLUENCE_CLASS.forex must match this — keep in sync
-MIN_FOREX_CONFLUENCE: 0.65
+MIN_FOREX_CONFLUENCE: 0.70
 
 # Optional subgroup thresholds (used when score_group is available on a pair)
 MIN_CONFLUENCE_GROUP:

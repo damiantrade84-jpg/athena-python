@@ -32,7 +32,7 @@ from indicators import (
 )
 from scoring import (
     calc_confluence,
-    get_min_confluence_threshold,
+    get_backtest_min_score_threshold,
     get_pair_profile,
     get_pair_score_group,
 )
@@ -249,7 +249,7 @@ def backtest_pair(pair, style="auto"):
 
             h4_raw = _rt().fetch_binance_paginated(sym, "4h", 5000)
 
-            h1_raw = _rt().fetch_binance_paginated(sym, "1h", 26280)
+            h1_raw = _rt().fetch_binance_paginated(sym, "1h", 2000)
 
         elif _ptype == "forex":
             # Forex: EODHD D1 + EODHD intraday H1 (from/to 730d) → use D1 directly, yfinance fallback
@@ -279,11 +279,12 @@ def backtest_pair(pair, style="auto"):
                         h1_raw = h1_raw or _yf_h1
 
         elif pair["source"] == "mt5":
-            # MT5: Use direct terminal fetch for backtest history
-            # request 600 D1, 5000 H4, 5000 H1 (MT5 is fast enough)
+            # D1 from terminal; H4/H1 match calibrated EODHD intraday window when available
             d1_raw = _rt().fetch_candles(pair, "D1", 600)
-            h4_raw = _rt().fetch_candles(pair, "H4", 5000)
-            h1_raw = _rt().fetch_candles(pair, "H1", 15000)  # ~3.5 years forex H1
+            h4_raw, h1_raw = _rt().fetch_eodhd_intraday_bt(pair, days=730)
+            if not h4_raw or not h1_raw:
+                h4_raw = h4_raw or _rt().fetch_candles(pair, "H4", 5000)
+                h1_raw = h1_raw or _rt().fetch_candles(pair, "H1", 5000)
 
         elif _ptype in ("stock", "commodity", "index"):
             # Stocks/Commodities/Indices: EODHD D1 + EODHD intraday (730d)
@@ -357,7 +358,7 @@ def backtest_pair(pair, style="auto"):
 
             h4_raw = _rt().fetch_candles(pair, "H4", 1000)
 
-            h1_raw = _rt().fetch_candles(pair, "H1", 15000)
+            h1_raw = _rt().fetch_candles(pair, "H1", 1000)
 
         if not d1_raw:
             return {"error": f"No D1 data for {pair['display']}"}
@@ -408,8 +409,8 @@ def backtest_pair(pair, style="auto"):
 
     _ptype = pair["type"]
 
-    # Same threshold chain as live scan: PAIR_PROFILES min_confluence → MIN_CONFLUENCE_GROUP → class
-    bt_min = get_min_confluence_threshold(pair)
+    # Engine A BT only: PAIR_PROFILES bt_min → CONFIG BT_MIN (live uses get_min_confluence_threshold)
+    bt_min = get_backtest_min_score_threshold(pair)
 
     _h4_need = max(50, CONFIG["H4_CANDLES"])
 
@@ -1886,11 +1887,11 @@ def backtest_pair(pair, style="auto"):
             "btStyle": effective_style,
             "btStyleRequested": requested_style,
             "quantileGateNote": (
-                "Backtest uses static bt_min threshold only. Live scans also apply "
-                "SCAN_QUANTILE_ENABLED cross-sectional filter (top fraction per class). "
-                "Live trade frequency will be lower than BT in trending markets."
+                "Backtest gates on CONFIG BT_MIN / pair bt_min (not live confluence chain). "
+                "Live uses get_min_confluence_threshold plus optional SCAN_QUANTILE_ENABLED."
                 if CONFIG.get("SCAN_QUANTILE_ENABLED", True)
-                else "SCAN_QUANTILE_ENABLED is off — BT and live thresholds match."
+                else "Backtest uses BT_MIN / pair bt_min; live uses get_min_confluence_threshold. "
+                "SCAN_QUANTILE_ENABLED is off."
             ),
             "btMinUsed": bt_min,
             "scanQuantileEnabled": CONFIG.get("SCAN_QUANTILE_ENABLED", True),
@@ -2279,11 +2280,11 @@ def backtest_pair(pair, style="auto"):
         "btStyle": effective_style,
         "btStyleRequested": requested_style,
         "quantileGateNote": (
-            "Backtest uses static bt_min threshold only. Live scans also apply "
-            "SCAN_QUANTILE_ENABLED cross-sectional filter (top fraction per class). "
-            "Live trade frequency will be lower than BT in trending markets."
+            "Backtest gates on CONFIG BT_MIN / pair bt_min (not live confluence chain). "
+            "Live uses get_min_confluence_threshold plus optional SCAN_QUANTILE_ENABLED."
             if CONFIG.get("SCAN_QUANTILE_ENABLED", True)
-            else "SCAN_QUANTILE_ENABLED is off — BT and live thresholds match."
+            else "Backtest uses BT_MIN / pair bt_min; live uses get_min_confluence_threshold. "
+            "SCAN_QUANTILE_ENABLED is off."
         ),
         "btMinUsed": bt_min,
         "scanQuantileEnabled": CONFIG.get("SCAN_QUANTILE_ENABLED", True),
@@ -2567,7 +2568,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         sym = pair["symbol"]
         candles_d1 = _rt().fetch_binance(sym, "1d", 1000)
         candles_h4 = _rt().fetch_binance_paginated(sym, "4h", 5000)
-        candles_h1 = _rt().fetch_binance_paginated(sym, "1h", 26280)
+        candles_h1 = _rt().fetch_binance_paginated(sym, "1h", 2000)
     else:
         candles_d1 = _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 600)) or _rt().fetch_candles(
             pair, "D1", CONFIG.get("D1_CANDLES", 600)

@@ -5790,6 +5790,71 @@ def _update_yaml_toggle(state: bool):
         log.error(f"Failed to update config.yaml: {e}")
 
 
+@app.route("/api/bt-min", methods=["GET", "POST"])
+def api_bt_min():
+    """GET: return current BT_MIN values + live MIN_CONFLUENCE_CLASS for comparison.
+    POST: update BT_MIN in memory and persist to config.yaml.
+    Body: {"crypto": 0.55, "forex": 0.60, "commodity": 0.70, "stock": 0.70, "index": 0.70}
+    """
+    ASSET_CLASSES = ("crypto", "forex", "commodity", "stock", "index")
+    if request.method == "GET":
+        return jsonify({
+            "bt_min": dict(CONFIG.get("BT_MIN") or {}),
+            "live_class": dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {}),
+        })
+
+    data = request.get_json(silent=True) or {}
+    new_vals = {}
+    for cls in ASSET_CLASSES:
+        if cls in data:
+            try:
+                val = float(data[cls])
+            except (TypeError, ValueError):
+                return jsonify({"error": f"Invalid value for {cls}"}), 400
+            if val < 0 or val > 10:
+                return jsonify({"error": f"Value for {cls} out of range (0–10)"}), 400
+            new_vals[cls] = round(val, 4)
+
+    if not new_vals:
+        return jsonify({"error": "No valid keys provided"}), 400
+
+    current = dict(CONFIG.get("BT_MIN") or {})
+    current.update(new_vals)
+    CONFIG["BT_MIN"] = current
+
+    try:
+        import os as _os
+        import re as _re
+        cfg_path = _os.path.join(_os.path.dirname(__file__), "config.yaml")
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        def _bt_block_replacer(m):
+            block = m.group(0)
+            for cls, val in current.items():
+                block = _re.sub(
+                    rf"^({_re.escape(cls)}\s*:\s*)[\d.]+",
+                    lambda mm, v=val: f"{mm.group(1)}{v}",
+                    block, flags=_re.MULTILINE
+                )
+            return block
+
+        content = _re.sub(
+            r"^BT_MIN\s*:\s*\n(?:[ \t]+\S[^\n]*\n)+",
+            _bt_block_replacer,
+            content,
+            flags=_re.MULTILINE,
+        )
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        log.info(f"[BT_MIN] Updated via UI: {current}")
+    except Exception as e:
+        log.error(f"Failed to persist BT_MIN to config.yaml: {e}")
+        return jsonify({"saved": False, "error": str(e), "bt_min": current}), 500
+
+    return jsonify({"saved": True, "bt_min": current})
+
+
 @app.route("/api/test-mode", methods=["POST"])
 def api_test_mode():
     """Toggle test mode: drops score thresholds, enables force-execute on all signals. For demo accounts only."""
