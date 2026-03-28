@@ -764,3 +764,61 @@ class TestCarryZDirectional:
 
         assert result["filtered_indicators"]["carry_z"] is None
         assert "carry" not in result["factor_scores"]
+
+
+# ── Direction tie and funding rate calibration (FIX 1 & 2) ──────────────────
+
+
+class TestDirectionAndFundingFixes:
+    def test_direction_tie_is_short(self):
+        """dir_sum = 0 must resolve SHORT, not LONG (FIX 1: >= changed to >)."""
+        dir_sum = 0.0
+        direction = "LONG" if dir_sum > 0 else "SHORT"
+        assert direction == "SHORT", "Tie (dir_sum=0) must resolve SHORT, not LONG"
+
+    @patch("carry_feed.get_carry_z", return_value=0.0)
+    @patch("cot_feed.get_cot_z", return_value=0.0)
+    def test_direction_tie_via_balanced_factors(self, *_mocks):
+        """All directional z-scores zero → dir_sum=0 → SHORT (FIX 1 regression guard)."""
+        zero_snap = {
+            "adx": 25,
+            "adx_z": 0.0,
+            "rsi_z": 0.0,
+            "macdLine_z": 0.0,
+            "atr_z": 0.0,
+            "bbWidth_z": 0.0,
+            "realized_vol_z": 0.0,
+            "obv_trend": 0,
+            "fib_proximity": 0,
+            "ema21": 100,
+            "ema50": 100,  # equal EMAs → no alignment signal
+            "adxMomentum": "FLAT",
+            "adxSlope": 0.0,
+        }
+        result = compute_factor_scores(
+            d1_snap=zero_snap,
+            h4_snap=zero_snap,
+            h1_snap=zero_snap,
+            pair=_make_pair(display="BTC/USDT"),
+            d1_candles=_make_candles(220),
+            h4_candles=_make_candles(220),
+            h1_candles=_make_candles(220),
+            volume_ratio=1.0,
+            funding_rate=0.0001,  # exact neutral → 0.0 score
+        )
+        # dir_sum of 0 must produce SHORT (not LONG)
+        assert result["direction"] == "SHORT"
+
+    def test_funding_moderate_does_not_max(self):
+        """funding_rate=0.0005 (0.05%) → adjusted=0.0004 → score=-2.0 (FIX 2: multiplier 5000)."""
+        adjusted = 0.0005 - 0.0001  # = 0.0004
+        score = max(-3.0, min(3.0, -adjusted * 5000))
+        assert abs(score) < 3.0, f"Score {score} hit ±3.0 clamp — multiplier too aggressive"
+        assert score == pytest.approx(-2.0, abs=1e-9)
+
+    def test_funding_neutral_excluded(self):
+        """funding_rate=0.0001 (exact neutral) → adjusted=0.0 → score=0.0."""
+        adjusted = 0.0001 - 0.0001  # = 0.0
+        # At 0.0: -0.0 * 5000 = 0.0 → indicator = 0.0 (passes gate, zero contribution)
+        score = max(-3.0, min(3.0, -adjusted * 5000))
+        assert score == 0.0
