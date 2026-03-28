@@ -9954,14 +9954,7 @@ if __name__ == "__main__":
 
     else:
         # Start the scheduler thread in standby — it does nothing until enabled
-
-        _auto_trader._running = True
-
-        import threading as _t
-
-        _t.Thread(
-            target=_auto_trader._scheduler_loop, name="AutoTrader", daemon=True
-        ).start()
+        _auto_trader._start_thread()
 
         log.info("[AUTO] Auto-trader standby (toggle via UI)")
 
