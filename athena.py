@@ -7499,11 +7499,38 @@ def analyze_pair(
                 if structure_data.get("recommended_stop_loss"):
                     _struct_sl = float(structure_data["recommended_stop_loss"])
                     _math_sl = float(lvl["sl"])
+                    # LONG: SL below price — max() picks closer (higher) = tighter
+                    # SHORT: SL above price — min() picks closer (lower) = tighter
                     lvl["sl"] = (
-                        min(_math_sl, _struct_sl)
+                        max(_math_sl, _struct_sl)
                         if direction == "LONG"
-                        else max(_math_sl, _struct_sl)
+                        else min(_math_sl, _struct_sl)
                     )
+
+                    # Hard SL distance cap — prevents runaway structural overrides
+                    _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(pair.get("type", ""), 0.05)
+                    _sl_dist_pct = abs(float(price) - float(lvl["sl"])) / float(price)
+                    if _sl_dist_pct > _max_sl_pct:
+                        log.warning(
+                            f"[SL-CAP] {pair['display']} {direction} SL distance {_sl_dist_pct:.1%} "
+                            f"exceeds cap {_max_sl_pct:.1%} — clamping"
+                        )
+                        lvl["sl"] = (
+                            float(price) * (1 - _max_sl_pct)
+                            if direction == "LONG"
+                            else float(price) * (1 + _max_sl_pct)
+                        )
+                        _sl_dist = abs(float(price) - float(lvl["sl"]))
+                        lvl["tp1"] = (
+                            float(price) + _sl_dist * 1.5
+                            if direction == "LONG"
+                            else float(price) - _sl_dist * 1.5
+                        )
+                        lvl["tp2"] = (
+                            float(price) + _sl_dist * 2.5
+                            if direction == "LONG"
+                            else float(price) - _sl_dist * 2.5
+                        )
 
                 # Take Profit Override to sit safely inside structural walls
                 if structure_data.get("recommended_take_profit"):

@@ -47,6 +47,29 @@ def _rt():
     return _art_rt()
 
 
+def _bt_btc_bias(d1_window: list, pair: dict) -> str:
+    """Derive BTC bias from the D1 window available at this bar.
+
+    Uses EMA21/50/200 alignment on the supplied D1 series — no precompute needed,
+    point-in-time correct.  Returns 'neutral' for non-crypto or short windows.
+    """
+    if pair.get("type") != "crypto":
+        return "neutral"
+    try:
+        from indicators import calc_indicators
+        if len(d1_window) < 200:
+            return "neutral"
+        s = calc_indicators(d1_window)["snap"]
+        if s.get("ema21") and s.get("ema50") and s.get("ema200"):
+            if s["ema21"] > s["ema50"] > s["ema200"]:
+                return "bullish"
+            elif s["ema21"] < s["ema50"] < s["ema200"]:
+                return "bearish"
+    except Exception:
+        pass
+    return "neutral"
+
+
 _BASE_BACKTEST_SLIP = {
     "forex": 0.0001,
     "crypto": 0.002,
@@ -375,7 +398,7 @@ def backtest_pair(pair, style="auto"):
     except Exception as e:
         return {"error": f"Data fetch failed: {e}"}
 
-    # N8: Session-variable slippage â€” forex widens during Asian/off-hours
+    # N8: Session-variable slippage â€" forex widens during Asian/off-hours
 
     # Shared init
 
@@ -433,8 +456,27 @@ def backtest_pair(pair, style="auto"):
     _pair_max_score = _rt().max_score_for_pair(pair)  # Pre-compute for score-based sizing
     same_bar_both_hit = 0
 
+    # BUG 1 fix: BTC bias is derived point-in-time per bar via _bt_btc_bias(d1_window, pair).
+    # No precompute needed — each call reads the D1 window available at that bar.
+
+    # BUG 3 fix: funding rate was never passed to backtest calc_confluence() calls.
+    # Live scan fetches it via _fetch_funding_rate() and passes it; backtest silently
+    # excluded it (funding_rate=None). Fetch current rate once as a proxy — not
+    # perfectly historical but eliminates the systematic None divergence for all bars.
+    _bt_funding_rate = None
+    if _ptype == "crypto":
+        try:
+            from data_feeds import _fetch_funding_rate as _dfr
+            _bn_sym = pair.get("symbol", "").replace("/", "")
+            _fr_resp = _dfr(_bn_sym)
+            if isinstance(_fr_resp, dict) and not _fr_resp.get("error"):
+                _bt_funding_rate = _fr_resp.get("rate")
+                log.debug(f"[BT-FUNDING] {pair['display']} funding rate: {_bt_funding_rate}")
+        except Exception as _fr_err:
+            log.debug(f"[BT-FUNDING] {pair['display']} funding rate fetch failed: {_fr_err}")
+
     if effective_style == "swing":
-        # --- SWING D1 LOOP â€” UNCHANGED ---
+        # --- SWING D1 LOOP â€" UNCHANGED ---
 
         MIN_BARS = 220
         COOLDOWN = 3
@@ -446,7 +488,7 @@ def backtest_pair(pair, style="auto"):
         last_exit_bar = 0
         open_positions = 0
 
-        # R4: Walk-forward split â€” 70% in-sample, 30% out-of-sample
+        # R4: Walk-forward split â€" 70% in-sample, 30% out-of-sample
 
         _oos_start = MIN_BARS + int((total_bars - MIN_BARS) * 0.7)
 
@@ -521,6 +563,9 @@ def backtest_pair(pair, style="auto"):
                     h4_window, 5, 3, 3
                 )  # TA-Lib STOCH standard: fastK=5, slowK=3, slowD=3
 
+                # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
+                btc_bias = _bt_btc_bias(d1_window, pair)
+
                 # Route forex pairs to dedicated forex scoring engine in backtest
                 if pair.get("type") == "forex":
                     from forex_scoring import compute_forex_score
@@ -565,7 +610,7 @@ def backtest_pair(pair, style="auto"):
                         vr,
                         stoch,
                         pair,
-                        "neutral",
+                        btc_bias,
                         d1_candles=d1_window,
                         h4_candles=h4_window,
                         h1_candles=h1_window,
@@ -576,6 +621,7 @@ def backtest_pair(pair, style="auto"):
                             ),
                         ),
                         bar_time=h4_window[-1].get("time") if h4_window else None,
+                        funding_rate=_bt_funding_rate,
                     )
 
             except Exception as _bt_bar_err:
@@ -658,15 +704,15 @@ def backtest_pair(pair, style="auto"):
                 _recent = d1_window[-10:]
 
                 if direction == "LONG":
+                    # BUG 5 fix: LONG SL is below price — only tighten (use swing if higher/closer)
                     swing_sl = min(c["low"] for c in _recent)
-
-                    if swing_sl < sl:
-                        sl = swing_sl  # wider stop lets noise breathe
+                    if swing_sl > sl:
+                        sl = swing_sl
 
                 else:
+                    # BUG 5 fix: SHORT SL is above price — only tighten (use swing if lower/closer)
                     swing_sl = max(c["high"] for c in _recent)
-
-                    if swing_sl > sl:
+                    if swing_sl < sl:
                         sl = swing_sl
 
                 rr1 = abs(tp1 - entry) / abs(sl - entry) if abs(sl - entry) > 0 else 0
@@ -680,7 +726,34 @@ def backtest_pair(pair, style="auto"):
                     i += 1
                     continue
 
-            # T1: Volatility-adjusted sizing â€” if ATR > 1.5x its 20-bar SMA, reduce size 30%
+            # BUG 6 fix: apply MAX_SL_PCT distance cap — mirrors live athena.py Fix 6.
+            # Applies to all asset types so backtest stops match the live hard cap.
+            _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
+            _sl_dist_pct = abs(float(entry) - float(sl)) / float(entry)
+            if _sl_dist_pct > _max_sl_pct:
+                log.debug(
+                    f"[BT-SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct:.1%} "
+                    f"exceeds cap {_max_sl_pct:.1%} — clamping"
+                )
+                sl = (
+                    float(entry) * (1 - _max_sl_pct)
+                    if direction == "LONG"
+                    else float(entry) * (1 + _max_sl_pct)
+                )
+                _sl_dist = abs(float(entry) - sl)
+                tp1 = (
+                    float(entry) + _sl_dist * 1.5
+                    if direction == "LONG"
+                    else float(entry) - _sl_dist * 1.5
+                )
+                tp2 = (
+                    float(entry) + _sl_dist * 2.5
+                    if direction == "LONG"
+                    else float(entry) - _sl_dist * 2.5
+                )
+                rr1 = 1.5
+
+            # T1: Volatility-adjusted sizing â€" if ATR > 1.5x its 20-bar SMA, reduce size 30%
 
             _atr_series = calc_atr(
                 [c["high"] for c in d1_window],
@@ -796,7 +869,7 @@ def backtest_pair(pair, style="auto"):
                         break
 
             if outcome == "OPEN":
-                # Force-close at last forward bar â€” record actual P&L vs recording a ghost 0R
+                # Force-close at last forward bar â€" record actual P&L vs recording a ghost 0R
 
                 _last_fwd = d1_raw[min(i + 20, total_bars - 1)]
 
@@ -973,6 +1046,9 @@ def backtest_pair(pair, style="auto"):
                     h1_window, 5, 3, 3
                 )  # TA-Lib STOCH standard: fastK=5, slowK=3, slowD=3
 
+                # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
+                btc_bias = _bt_btc_bias(d1_ctx, pair)
+
                 res = calc_confluence(
                     d1i_ctx,
                     h4i,
@@ -980,7 +1056,7 @@ def backtest_pair(pair, style="auto"):
                     vr,
                     stoch,
                     pair,
-                    "neutral",
+                    btc_bias,
                     d1_candles=d1_ctx,
                     h4_candles=h4_window,
                     h1_candles=h1_window,
@@ -991,6 +1067,7 @@ def backtest_pair(pair, style="auto"):
                         ),
                     ),
                     bar_time=h4_window[-1].get("time") if h4_window else None,
+                    funding_rate=_bt_funding_rate,
                 )
 
             except Exception as _bt_bar_err:
@@ -1063,19 +1140,21 @@ def backtest_pair(pair, style="auto"):
                 i += 1
                 continue
 
+            # BUG 2 fix: 10 H4 bars = 40 hours — too short, produces noisy swing points.
+            # Use 20 H4 bars (80 hours) to match the time depth of swing's 10 D1 bars (10 days).
             if _ptype == "crypto":
-                _recent = h4_window[-10:]
+                _recent = h4_window[-20:]
 
                 if direction == "LONG":
+                    # BUG 5 fix: LONG SL is below price — only tighten (use swing if higher/closer)
                     swing_sl = min(c["low"] for c in _recent)
-
-                    if swing_sl < sl:
+                    if swing_sl > sl:
                         sl = swing_sl
 
                 else:
+                    # BUG 5 fix: SHORT SL is above price — only tighten (use swing if lower/closer)
                     swing_sl = max(c["high"] for c in _recent)
-
-                    if swing_sl > sl:
+                    if swing_sl < sl:
                         sl = swing_sl
 
                 rr1 = abs(tp1 - entry) / abs(sl - entry) if abs(sl - entry) > 0 else 0
@@ -1088,6 +1167,32 @@ def backtest_pair(pair, style="auto"):
                     funnel["fail_score"] += 1
                     i += 1
                     continue
+
+            # BUG 6 fix: apply MAX_SL_PCT distance cap — mirrors live athena.py Fix 6.
+            _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
+            _sl_dist_pct = abs(float(entry) - float(sl)) / float(entry)
+            if _sl_dist_pct > _max_sl_pct:
+                log.debug(
+                    f"[BT-SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct:.1%} "
+                    f"exceeds cap {_max_sl_pct:.1%} — clamping"
+                )
+                sl = (
+                    float(entry) * (1 - _max_sl_pct)
+                    if direction == "LONG"
+                    else float(entry) * (1 + _max_sl_pct)
+                )
+                _sl_dist = abs(float(entry) - sl)
+                tp1 = (
+                    float(entry) + _sl_dist * 1.5
+                    if direction == "LONG"
+                    else float(entry) - _sl_dist * 1.5
+                )
+                tp2 = (
+                    float(entry) + _sl_dist * 2.5
+                    if direction == "LONG"
+                    else float(entry) - _sl_dist * 2.5
+                )
+                rr1 = 1.5
 
             _atr_series = calc_atr(
                 [c["high"] for c in h4_window],
@@ -1367,6 +1472,10 @@ def backtest_pair(pair, style="auto"):
                     h1_window, 5, 3, 3
                 )  # TA-Lib STOCH standard: fastK=5, slowK=3, slowD=3
 
+                # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
+                # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
+                btc_bias = _bt_btc_bias(d1_ctx, pair)
+
                 res = calc_confluence(
                     d1i_ctx,
                     h4i_ctx,
@@ -1374,7 +1483,7 @@ def backtest_pair(pair, style="auto"):
                     vr,
                     stoch,
                     pair,
-                    "neutral",
+                    btc_bias,
                     d1_candles=d1_ctx,
                     h4_candles=h4_ctx,
                     h1_candles=h1_window,
@@ -1385,6 +1494,7 @@ def backtest_pair(pair, style="auto"):
                         ),
                     ),
                     bar_time=h1_window[-1].get("time") if h1_window else None,
+                    funding_rate=_bt_funding_rate,
                 )
 
             except Exception as _bt_bar_err:
@@ -1455,19 +1565,21 @@ def backtest_pair(pair, style="auto"):
                 i += 1
                 continue
 
+            # BUG 2 fix: 10 H1 bars = 10 hours — too short, produces noisy swing points.
+            # Use 24 H1 bars (24 hours) to match the time depth of swing's 10 D1 bars (10 days).
             if _ptype == "crypto":
-                _recent = h1_window[-10:]
+                _recent = h1_window[-24:]
 
                 if direction == "LONG":
+                    # BUG 5 fix: LONG SL is below price — only tighten (use swing if higher/closer)
                     swing_sl = min(c["low"] for c in _recent)
-
-                    if swing_sl < sl:
+                    if swing_sl > sl:
                         sl = swing_sl
 
                 else:
+                    # BUG 5 fix: SHORT SL is above price — only tighten (use swing if lower/closer)
                     swing_sl = max(c["high"] for c in _recent)
-
-                    if swing_sl > sl:
+                    if swing_sl < sl:
                         sl = swing_sl
 
                 rr1 = abs(tp1 - entry) / abs(sl - entry) if abs(sl - entry) > 0 else 0
@@ -1480,6 +1592,32 @@ def backtest_pair(pair, style="auto"):
                     funnel["fail_score"] += 1
                     i += 1
                     continue
+
+            # BUG 6 fix: apply MAX_SL_PCT distance cap — mirrors live athena.py Fix 6.
+            _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
+            _sl_dist_pct = abs(float(entry) - float(sl)) / float(entry)
+            if _sl_dist_pct > _max_sl_pct:
+                log.debug(
+                    f"[BT-SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct:.1%} "
+                    f"exceeds cap {_max_sl_pct:.1%} — clamping"
+                )
+                sl = (
+                    float(entry) * (1 - _max_sl_pct)
+                    if direction == "LONG"
+                    else float(entry) * (1 + _max_sl_pct)
+                )
+                _sl_dist = abs(float(entry) - sl)
+                tp1 = (
+                    float(entry) + _sl_dist * 1.5
+                    if direction == "LONG"
+                    else float(entry) - _sl_dist * 1.5
+                )
+                tp2 = (
+                    float(entry) + _sl_dist * 2.5
+                    if direction == "LONG"
+                    else float(entry) - _sl_dist * 2.5
+                )
+                rr1 = 1.5
 
             _atr_series = calc_atr(
                 [c["high"] for c in h1_window],
@@ -1885,7 +2023,7 @@ def backtest_pair(pair, style="auto"):
         round(avg_r / _down_std * (_trades_per_year**0.5), 2) if _down_std > 0 else 0
     )
 
-    # B2: Monte Carlo drawdown simulation â€” 500 random shuffles of trade sequence
+    # B2: Monte Carlo drawdown simulation â€" 500 random shuffles of trade sequence
 
     # Transforms single-path DD into distribution: P5=best case, P95=worst case
 
@@ -1925,15 +2063,15 @@ def backtest_pair(pair, style="auto"):
         "p95": round(_mc_dds[int(_nc * 0.95)] * 100, 1),
     }
 
-    # B3: Score band win rate tracking â€” which confluence scores actually deliver edge?
+    # B3: Score band win rate tracking â€" which confluence scores actually deliver edge?
 
     score_bands = {}
 
     for band_label, lo_b, hi_b in [
-        ("6-7", 6, 7),
-        ("7-8", 7, 8),
-        ("8-9", 8, 9),
-        ("9+", 9, 99),
+        ("<1.2", 0.0, 1.2),
+        ("1.2-1.6", 1.2, 1.6),
+        ("1.6-2.0", 1.6, 2.0),
+        ("2.0+", 2.0, 99),
     ]:
         band_trades = [t for t in trades if lo_b <= t["score"] < hi_b]
 
@@ -1945,7 +2083,7 @@ def backtest_pair(pair, style="auto"):
                 "wr": round(bw / len(band_trades) * 100, 1),
             }
 
-    # R2: Regime segmentation stats â€” track performance by market regime
+    # R2: Regime segmentation stats â€" track performance by market regime
 
     regime_stats = {}
 
@@ -1961,7 +2099,7 @@ def backtest_pair(pair, style="auto"):
                 "expectancy": round(sum(t["resultR"] for t in rt) / len(rt), 3),
             }
 
-    # R4: Walk-forward split â€” in-sample vs out-of-sample SQN comparison
+    # R4: Walk-forward split â€" in-sample vs out-of-sample SQN comparison
 
     is_trades = [t for t in trades if not t.get("oos", False)]
 
@@ -2532,8 +2670,27 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         _pair_type = pair.get("type", "stock")
         _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
         _bt_entry_candles = h4_ctx if (_pair_type == "forex" and _forex_struct_tf == "D1") else h1_ctx
+
+        # BUG 7 fix: live Engine B receives direction from Engine A's confluence score.
+        # Evaluating both LONG and SHORT and picking the highest scorer inflates BT
+        # results — Engine B is a structural validator, not a direction picker.
+        # Derive single direction from dual-TF D1+H4 EMA21>EMA50 alignment — both TFs
+        # must agree; skip the bar if they conflict (mirrors Engine A's trend gate).
+        _d1_snap_dir = calc_indicators_with_normalized(d1_ctx, pair.get("type", "stock"))["snap"]
+        _h4_snap_dir = calc_indicators_with_normalized(h4_ctx, pair.get("type", "stock"))["snap"]
+        _d1_bull = (_d1_snap_dir.get("ema21") or 0) > (_d1_snap_dir.get("ema50") or 0)
+        _h4_bull = (_h4_snap_dir.get("ema21") or 0) > (_h4_snap_dir.get("ema50") or 0)
+        _bt_direction = (
+            "LONG" if (_d1_bull and _h4_bull)
+            else "SHORT" if (not _d1_bull and not _h4_bull)
+            else None
+        )
+        if _bt_direction is None:
+            i += 1
+            continue  # conflicting timeframes — skip
+
         candidates = []
-        for direction in ["LONG", "SHORT"]:
+        for direction in [_bt_direction]:  # single direction only
             res = naked_engine.set_registry_context(
                 pair.get("symbol") or pair.get("display")
             ).analyze_structure(
@@ -2660,6 +2817,26 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         if target_rr < float(style_profile.get("min_rr", 1.0)):
             i += 1
             continue
+
+        # BUG 6 fix: apply MAX_SL_PCT distance cap for Engine B — mirrors live Fix 6.
+        _max_sl_pct_b = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
+        _sl_dist_pct_b = abs(float(entry) - float(sl)) / float(entry)
+        if _sl_dist_pct_b > _max_sl_pct_b:
+            log.debug(
+                f"[BT-SL-CAP-B] {pair['display']} {direction} SL {_sl_dist_pct_b:.1%} "
+                f"exceeds cap {_max_sl_pct_b:.1%} — clamping"
+            )
+            sl = (
+                float(entry) * (1 - _max_sl_pct_b)
+                if direction == "LONG"
+                else float(entry) * (1 + _max_sl_pct_b)
+            )
+            _sl_dist_b = abs(float(entry) - sl)
+            tp = (
+                float(entry) + _sl_dist_b * 1.5
+                if direction == "LONG"
+                else float(entry) - _sl_dist_b * 1.5
+            )
 
         outcome = "TIMEOUT"
         r_multiple = 0.0

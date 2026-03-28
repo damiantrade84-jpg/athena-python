@@ -733,6 +733,19 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         if level_error:
             return {"success": False, "error": level_error}
 
+        # Hard SL cap before sending to exchange
+        try:
+            from config import CONFIG as _cfg
+            _max_sl_pct = _cfg.get("MAX_SL_PCT", {}).get("crypto", 0.08)
+            _sl_dist_pct = abs(float(price) - float(sl)) / float(price)
+            if _sl_dist_pct > _max_sl_pct:
+                return {
+                    "success": False,
+                    "error": f"SL_TOO_WIDE: {_sl_dist_pct:.1%} exceeds {_max_sl_pct:.0%} crypto cap"
+                }
+        except Exception:
+            pass  # graceful degradation — do not block execution on config error
+
         # Recalculate volume in base units if needed (risk_amount / SL distance)
         # Clamp to approved volume so we never exceed the risk-approved position size
         if volume < 1 and price > 100 and sl:

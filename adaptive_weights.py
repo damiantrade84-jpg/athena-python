@@ -114,6 +114,11 @@ def _compute_adaptive_weights(db_path: str, asset_type: str, regime: str) -> dic
                 factor_scores: dict = {}
                 for vote_key, vote_val in votes.items():
                     factor = factor_map.get(vote_key)
+                    # Direct passthrough for factor-engine keys (FACTOR_TREND → trend, etc.)
+                    if factor is None:
+                        _direct = vote_key.lower().replace("factor_", "")
+                        if _direct in _BASE_WEIGHTS:
+                            factor = _direct
                     if factor:
                         factor_scores.setdefault(factor, [])
                         factor_scores[factor].append(vote_val or 0)

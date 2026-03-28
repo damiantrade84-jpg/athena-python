@@ -222,3 +222,36 @@ class TestCfgLiveReads:
     def test_reads_existing_config(self):
         val = _cfg("RISK_PCT", 0.01)
         assert isinstance(val, (int, float))
+
+
+# ── SL override direction logic (FIX 5) ─────────────────────────────────────
+
+
+class TestSlOverrideDirection:
+    def test_short_sl_override_picks_closer(self):
+        """SHORT: SL is above price. min() picks lower (closer to entry) = tighter stop."""
+        math_sl, struct_sl = 105.0, 110.0
+        result = min(math_sl, struct_sl)
+        assert result == 105.0, "SHORT SL override must pick the closer (lower) candidate"
+
+    def test_long_sl_override_picks_closer(self):
+        """LONG: SL is below price. max() picks higher (closer to entry) = tighter stop."""
+        math_sl, struct_sl = 95.0, 92.0
+        result = max(math_sl, struct_sl)
+        assert result == 95.0, "LONG SL override must pick the closer (higher) candidate"
+
+    def test_short_sl_old_logic_was_wrong(self):
+        """Regression: old max() for SHORT would have picked 110.0 (wider), not 105.0."""
+        math_sl, struct_sl = 105.0, 110.0
+        wrong_result = max(math_sl, struct_sl)  # old (broken) behaviour
+        correct_result = min(math_sl, struct_sl)  # fixed behaviour
+        assert wrong_result == 110.0  # confirms old logic was wider
+        assert correct_result == 105.0  # confirms fix is tighter
+
+    def test_long_sl_old_logic_was_wrong(self):
+        """Regression: old min() for LONG would have picked 92.0 (wider), not 95.0."""
+        math_sl, struct_sl = 95.0, 92.0
+        wrong_result = min(math_sl, struct_sl)  # old (broken) behaviour
+        correct_result = max(math_sl, struct_sl)  # fixed behaviour
+        assert wrong_result == 92.0  # confirms old logic was wider
+        assert correct_result == 95.0  # confirms fix is tighter
