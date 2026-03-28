@@ -15,6 +15,7 @@ import execution
 def create_app() -> Flask:
     """Return the configured Flask application instance."""
     _athena = _load_legacy()
+    _athena.ensure_runtime_services_started()
 
     app = _athena.app
 

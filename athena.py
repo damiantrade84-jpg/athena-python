@@ -9490,110 +9490,46 @@ set_runtime(
 )
 register_execution_routes(app)
 
+_runtime_services_lock = threading.Lock()
+_runtime_services_started = False
+_binance_ws = None
+_binance_candle_ws = None
 
-if __name__ == "__main__":
-    log.info("=" * 60)
 
-    log.info("Sentinel Pro v4.0 - Python Edition")
+def ensure_runtime_services_started() -> None:
+    """Start background feed/runtime services once for both script and app-factory boot."""
+    global _runtime_services_started, _binance_ws, _binance_candle_ws
 
-    log.info("=" * 60)
-
-    _check_api_keys()
-
-    active_fx = sum(1 for p in FOREX_PAIRS if p.get("enabled", True))
-
-    active_cr = sum(1 for p in CRYPTO_PAIRS if p.get("enabled", True))
-
-    active_cmd = sum(1 for p in COMMODITY_PAIRS if p.get("enabled", True))
-
-    active_idx = sum(1 for p in INDEX_PAIRS if p.get("enabled", True))
-
-    active_stock = sum(
-        1 for p in (US_STOCK_PAIRS + ETF_PAIRS) if p.get("enabled", True)
-    )
-
-    active_jse = sum(1 for p in JSE_PAIRS if p.get("enabled", True))
-
-    log.info(
-        f"Pairs: {len(ACTIVE_PAIRS)} active / {len(ALL_PAIRS)} total "
-        f"({active_fx}fx {active_cmd}cmd {active_idx}idx {active_stock}us {active_jse}jse {active_cr}crypto)"
-    )
-
-    log.info("Data: EODHD + Polygon + yfinance + Binance")
-
-    log.info("Est. scan time: ~30s")
-
-    if "--scan" in sys.argv:
-        log.info("[SCAN MODE] Running full scan...")
-
-        scan_result = run_full_scan()
-
-        log.warning(
-            f"Scan complete: {scan_result['totalPairs']} pairs, {len(scan_result['signals'])} signals"
-        )
-
-        if scan_result["errors"]:
-            log.warning(
-                f"Errors ({len(scan_result['errors'])}): {[e['pair'] + ': ' + e['error'] for e in scan_result['errors']]}"
-            )
-
-        if scan_result["skipped"]:
-            log.info(
-                f"Skipped ({len(scan_result['skipped'])}): {[s['pair'] for s in scan_result['skipped']]}"
-            )
-
-        if scan_result["signals"]:
-            if CONFIG.get("AI_ON_DEMAND_ONLY", False):
-                log.info("[AI TEST] Skipped -- AI_ON_DEMAND_ONLY is enabled")
-            else:
-                log.info("[AI TEST] Testing AI on top signal...")
-
-                top = scan_result["signals"][0]
-
-                ai_result = run_ai(top)
-
-                if "error" in ai_result:
-                    log.error(f"[AI TEST] FAILED: {ai_result['error']}")
-
-                else:
-                    log.info(
-                        f"[AI TEST] OK => Grade:{ai_result.get('grade', '?')} Prob:{ai_result.get('edgeProbability', '?')}%"
-                    )
-
-        else:
-            log.info("[AI TEST] Skipped -- no signals to test")
-
-        sys.exit(0)
+    with _runtime_services_lock:
+        if _runtime_services_started:
+            return
+        _runtime_services_started = True
 
     # Start EODHD WebSocket real-time price streaming + candle builder
-
     _ws_key = os.environ.get("EODHD_KEY", "")
-
     if _ws_key:
         _ws_mgr = EODHDWebSocketManager(_ws_key)
-
         _eodhd_pairs = [p for p in ACTIVE_PAIRS if p.get("source") == "eodhd"]
         _ws_mgr.start(_eodhd_pairs)
 
-        set_candle_builder(CandleBuilder())
+        if get_candle_builder() is None:
+            set_candle_builder(CandleBuilder())
 
         def _cb_startup():
-
             cb = get_candle_builder()
-
+            if cb is None:
+                return
             _seed_pairs = [p for p in ALL_PAIRS if p.get("source") == "eodhd"]
             cb.seed(_seed_pairs)  # seed 6mo H1/H4/D1
-
             cb.bulk_update_d1()  # fresh D1 from Bulk API
-
             cb.start_refresh_loop()  # bulk D1 every 4h
 
         threading.Thread(target=_cb_startup, daemon=True, name="candle-seed").start()
-
-        log.info("[CB] Candle builder started (WS ticks + 6mo seed + Bulk D1 for EODHD sources)")
-
+        log.info(
+            "[CB] Candle builder started (WS ticks + 6mo seed + Bulk D1 for EODHD sources)"
+        )
     else:
-        log.warning("[WS] No EODHD_KEY â€” WebSocket prices disabled")
+        log.warning("[WS] No EODHD_KEY - WebSocket prices disabled")
 
     # Start Binance Futures WebSocket for crypto live prices + kline candles
     crypto_enabled = [p for p in CRYPTO_PAIRS if p.get("enabled", True)]
@@ -9602,7 +9538,9 @@ if __name__ == "__main__":
         _binance_ws.start()
         _binance_candle_ws = BinanceCandleWS()
         _binance_candle_ws.start()
-        log.info(f"[BINANCE-WS] Started price + kline feeds for {len(crypto_enabled)} enabled crypto pairs")
+        log.info(
+            f"[BINANCE-WS] Started price + kline feeds for {len(crypto_enabled)} enabled crypto pairs"
+        )
     else:
         log.info("[BINANCE-WS] No enabled crypto pairs - Binance Futures WS disabled")
 
@@ -9692,6 +9630,83 @@ if __name__ == "__main__":
         log.info(
             "[MICRO] Microstructure feeds disabled (set MICROSTRUCTURE_FEEDS_ENABLED: true to enable)"
         )
+
+
+if __name__ == "__main__":
+    log.info("=" * 60)
+
+    log.info("Sentinel Pro v4.0 - Python Edition")
+
+    log.info("=" * 60)
+
+    _check_api_keys()
+
+    active_fx = sum(1 for p in FOREX_PAIRS if p.get("enabled", True))
+
+    active_cr = sum(1 for p in CRYPTO_PAIRS if p.get("enabled", True))
+
+    active_cmd = sum(1 for p in COMMODITY_PAIRS if p.get("enabled", True))
+
+    active_idx = sum(1 for p in INDEX_PAIRS if p.get("enabled", True))
+
+    active_stock = sum(
+        1 for p in (US_STOCK_PAIRS + ETF_PAIRS) if p.get("enabled", True)
+    )
+
+    active_jse = sum(1 for p in JSE_PAIRS if p.get("enabled", True))
+
+    log.info(
+        f"Pairs: {len(ACTIVE_PAIRS)} active / {len(ALL_PAIRS)} total "
+        f"({active_fx}fx {active_cmd}cmd {active_idx}idx {active_stock}us {active_jse}jse {active_cr}crypto)"
+    )
+
+    log.info("Data: EODHD + Polygon + yfinance + Binance")
+
+    log.info("Est. scan time: ~30s")
+
+    if "--scan" in sys.argv:
+        log.info("[SCAN MODE] Running full scan...")
+
+        scan_result = run_full_scan()
+
+        log.warning(
+            f"Scan complete: {scan_result['totalPairs']} pairs, {len(scan_result['signals'])} signals"
+        )
+
+        if scan_result["errors"]:
+            log.warning(
+                f"Errors ({len(scan_result['errors'])}): {[e['pair'] + ': ' + e['error'] for e in scan_result['errors']]}"
+            )
+
+        if scan_result["skipped"]:
+            log.info(
+                f"Skipped ({len(scan_result['skipped'])}): {[s['pair'] for s in scan_result['skipped']]}"
+            )
+
+        if scan_result["signals"]:
+            if CONFIG.get("AI_ON_DEMAND_ONLY", False):
+                log.info("[AI TEST] Skipped -- AI_ON_DEMAND_ONLY is enabled")
+            else:
+                log.info("[AI TEST] Testing AI on top signal...")
+
+                top = scan_result["signals"][0]
+
+                ai_result = run_ai(top)
+
+                if "error" in ai_result:
+                    log.error(f"[AI TEST] FAILED: {ai_result['error']}")
+
+                else:
+                    log.info(
+                        f"[AI TEST] OK => Grade:{ai_result.get('grade', '?')} Prob:{ai_result.get('edgeProbability', '?')}%"
+                    )
+
+        else:
+            log.info("[AI TEST] Skipped -- no signals to test")
+
+        sys.exit(0)
+
+    ensure_runtime_services_started()
 
     # Startup position reconciliation — check for open positions on restart
 
