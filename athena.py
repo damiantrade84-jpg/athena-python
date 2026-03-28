@@ -122,6 +122,7 @@ from candles_cache import (  # noqa: E402
     extract_candles as _extract_candles,
     fetch_candles as _fetch_candles_routed,
     forex_h4_resample_offset_hours as _forex_h4_resample_offset_hours,
+    get_candle_fetch_meta as _get_candle_fetch_meta,
     merge_forex_forming_ws as _merge_forex_forming_ws_core,
     resample_from_h1 as _resample_from_h1,
 )
@@ -7017,7 +7018,13 @@ def fetch_eodhd_indicators(pair):
 
 
 def analyze_pair(
-    pair, btc_bias, style="swing", use_naked_engine=False, regime_context=None
+    pair,
+    btc_bias,
+    style="swing",
+    use_naked_engine=False,
+    regime_context=None,
+    preloaded_candles=None,
+    preloaded_fetch_meta=None,
 ):
 
     pair_profile = get_pair_profile(pair)
@@ -7026,11 +7033,20 @@ def analyze_pair(
     _pair_ctx["score_group"] = _score_group
 
     _lim = scan_candle_limits()
-    d1 = fetch_candles(pair, "D1", _lim["D1"])
+    preloaded_candles = preloaded_candles or {}
+    preloaded_fetch_meta = preloaded_fetch_meta or {}
 
-    h4 = fetch_candles(pair, "H4", _lim["H4"])
+    d1 = preloaded_candles.get("D1")
+    if d1 is None:
+        d1 = fetch_candles(pair, "D1", _lim["D1"])
 
-    h1 = fetch_candles(pair, "H1", _lim["H1"])
+    h4 = preloaded_candles.get("H4")
+    if h4 is None:
+        h4 = fetch_candles(pair, "H4", _lim["H4"])
+
+    h1 = preloaded_candles.get("H1")
+    if h1 is None:
+        h1 = fetch_candles(pair, "H1", _lim["H1"])
 
     if not d1 or not h4 or not h1:
         return None
@@ -7351,6 +7367,11 @@ def analyze_pair(
         res["maxScoreOverride"] = 3.0
     
     max_score = res.get("maxScoreOverride") or _max_score_for_pair(pair)
+    score_norm = (
+        min(1.0, float(res["score"]) / float(max_score))
+        if max_score and float(max_score) > 0
+        else 0.0
+    )
 
     # --- ENGINE B: NAKED MARKET STRUCTURE OVERLAY ---
     structure_data = None
@@ -7484,7 +7505,7 @@ def analyze_pair(
     except Exception as _ssi_err:
         log.debug(f"[SSI] Engine A sample skipped: {_ssi_err}")
 
-    return {
+    signal = {
         "pair": pair["display"],
         "display": pair["display"],
         "symbol": pair["symbol"],
@@ -7493,6 +7514,7 @@ def analyze_pair(
         "direction": direction,
         "confluenceScore": round(res["score"], 4),
         "confluencePct": _confluence_pct,
+        "scoreNorm": round(score_norm, 4),
         "votes": res["votes"],
         "maxScore": max_score,
         "price": round(float(price), 6),
@@ -7582,6 +7604,16 @@ def analyze_pair(
             pair_type=pair.get("type", "stock"),
         ),
     }
+    if CONFIG.get("SCAN_DEBUG_CANDLE_META", False):
+        signal["candleMeta"] = {
+            "D1": preloaded_fetch_meta.get("D1")
+            or _get_candle_fetch_meta(pair, "D1", _lim["D1"]),
+            "H4": preloaded_fetch_meta.get("H4")
+            or _get_candle_fetch_meta(pair, "H4", _lim["H4"]),
+            "H1": preloaded_fetch_meta.get("H1")
+            or _get_candle_fetch_meta(pair, "H1", _lim["H1"]),
+        }
+    return signal
 
 
 # _build_event_risk imported from scoring.py

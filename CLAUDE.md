@@ -5,6 +5,37 @@ alwaysApply: true
 
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-28) — Scan/runtime observability, dedupe, and backtest timestamp hardening
+
+**Goal:** Improve scan efficiency and debugging clarity without changing any live feed path, venue routing, websocket subscription, or provider precedence for any pair.
+
+**Candle routing / cache (`candles_cache.py`):**
+- Added per-key **single-flight** request deduplication so concurrent `fetch_candles(...)` misses for the same `(symbol, tf, limit)` share one upstream fetch instead of stampeding REST/MT5.
+- Added internal fetch provenance metadata via **`get_candle_fetch_meta(pair, tf, limit)`**. Metadata tracks upstream resolver (`candle_builder`, `binance_futures`, `eodhd`, `mt5`, `polygon`, `yfinance`), TTL cache hits, fallback usage, and crypto live-merge state.
+- No live routing changes: Binance futures, MT5, EODHD, Polygon, yfinance fallback, and CandleBuilder precedence remain unchanged.
+
+**Scan / Engine A (`scanner.py`, `athena.py`, `engine_c.py`):**
+- `run_full_scan()` now reuses one D1/H4/H1 fetch set per pair for both Engine A and Engine B inside `_analyse`, avoiding duplicate fetch work.
+- Added **`scoreNorm`** to Engine A signal payloads as `confluenceScore / maxScore` (clamped 0..1). Keep using raw `confluenceScore` + `maxScore` for engine-specific logic; `scoreNorm` is for cross-scale comparability/debugging.
+- `engine_c.normalise_engine_a(...)` now honors `signal["scoreNorm"]` when present, otherwise falls back to recomputing from `confluenceScore / maxScore`.
+- Optional scan/debug candle provenance can be attached to Engine A signals when **`SCAN_DEBUG_CANDLE_META`** is enabled in config.
+
+**Backtest hardening (`backtest_runner.py`):**
+- Added timestamp-quality reporting for H4/H1 series: parse failures, duplicate timestamps, monotonic ordering flags, and `timeAlignmentWarnings` surfaced in the backtest `funnel`.
+- This is defensive observability only; entry/exit logic and feed sourcing were not changed.
+
+**Indicator reuse (`indicators.py`):**
+- Refactored `calc_indicators()` / `calc_indicators_with_normalized()` to share a single raw indicator bundle so RSI/MACD/ATR/ADX/BB are not recalculated twice per timeframe.
+- Intended to preserve identical outputs while reducing scan/backtest overhead.
+
+**Config (`config.py`, `config.yaml`):**
+- Added **`SCAN_MAX_WORKERS`** for configurable scan parallelism. Current yaml test value is **`6`**; prior hardcoded `3` safety history still applies, so monitor CPU/UI responsiveness on this machine before raising further.
+- Added **`SCAN_DEBUG_CANDLE_META`** (default `false`) to keep provenance fields optional.
+
+**Tests added/updated:**
+- `tests/test_candle_cache_keys.py` — fetch metadata coverage + single-flight dedupe.
+- `tests/test_backtest_integrity.py` — timestamp-quality helper coverage.
+
 ## Recent Changes (2026-03-27) — News sentiment feed (EODHD + Claude) and scan hook
 
 **Goal:** Optional News AI pipeline for structured sentiment, manual API, and configurable blend into Engine A scan scores.

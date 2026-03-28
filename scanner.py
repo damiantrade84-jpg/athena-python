@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from athena_runtime import rt
+from candles_cache import get_candle_fetch_meta
 from config import CONFIG, scan_candle_limits
 from data_feeds import http_requests
 from indicators import calc_atr, calc_indicators
@@ -335,12 +336,29 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
         _engine_b = NakedEngine()
         _regime_context = make_regime_smoothing_context()
+        _max_workers = max(1, int(CONFIG.get("SCAN_MAX_WORKERS", 3) or 3))
 
         def _analyse(pair):
             try:
                 _pair_style = r.resolve_scan_style(_requested_style, pair)
+                _lim = scan_candle_limits()
+                raw_candles = {
+                    "D1": r.fetch_candles(pair, "D1", _lim["D1"]),
+                    "H4": r.fetch_candles(pair, "H4", _lim["H4"]),
+                    "H1": r.fetch_candles(pair, "H1", _lim["H1"]),
+                }
+                fetch_meta = {
+                    "D1": get_candle_fetch_meta(pair, "D1", _lim["D1"]),
+                    "H4": get_candle_fetch_meta(pair, "H4", _lim["H4"]),
+                    "H1": get_candle_fetch_meta(pair, "H1", _lim["H1"]),
+                }
                 sig_a = r.analyze_pair(
-                    pair, btc_bias, style=_pair_style, regime_context=_regime_context
+                    pair,
+                    btc_bias,
+                    style=_pair_style,
+                    regime_context=_regime_context,
+                    preloaded_candles=raw_candles,
+                    preloaded_fetch_meta=fetch_meta,
                 )
 
                 if not sig_a:
@@ -358,10 +376,9 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                             "swing", score_group=_pair_score_group
                         )
 
-                    _lim = scan_candle_limits()
-                    d1 = r.fetch_candles(pair, "D1", _lim["D1"])
-                    h4 = r.fetch_candles(pair, "H4", _lim["H4"])
-                    h1 = r.fetch_candles(pair, "H1", _lim["H1"])
+                    d1 = raw_candles.get("D1")
+                    h4 = raw_candles.get("H4")
+                    h1 = raw_candles.get("H1")
                     if d1 and len(d1) > 1:
                         d1 = d1[:-1]
                     if h4 and len(h4) > 1:
@@ -416,11 +433,12 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
                                     a_max = sig_a.get("maxScore", 3.0)
                                     a_score = sig_a.get("confluenceScore", 0)
-                                    a_norm = min(a_score / a_max, 1.0) if a_max else 0
+                                    a_norm = float(sig_a.get("scoreNorm", 0))
                                     b_norm = min(b_score / b_max, 1.0) if b_max else 0
 
                                     combined_conviction = (a_norm * 0.6) + (b_norm * 0.4)
                                     sig_a["combinedConviction"] = round(combined_conviction, 4)
+                                    sig_a["engine_b_scoreNorm"] = round(b_norm, 4)
                                     sig_a["enginesAligned"] = True
 
                                     log.debug(
@@ -430,7 +448,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                 else:
                                     a_max = sig_a.get("maxScore", 3.0)
                                     a_score = sig_a.get("confluenceScore", 0)
-                                    a_norm = min(a_score / a_max, 1.0) if a_max else 0
+                                    a_norm = float(sig_a.get("scoreNorm", 0))
                                     sig_a["combinedConviction"] = round(a_norm * 0.6, 4)
                                     sig_a["enginesAligned"] = False
                                     sig_a["engine_b_verdict"] = res_b.get("structural_verdict", "UNCLEAR")
@@ -439,7 +457,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     log.debug(f"[SCAN+B] {pair.get('display')} Engine B failed: {_b_err}")
                     a_max = sig_a.get("maxScore", 3.0)
                     a_score = sig_a.get("confluenceScore", 0)
-                    a_norm = min(a_score / a_max, 1.0) if a_max else 0
+                    a_norm = float(sig_a.get("scoreNorm", 0))
                     sig_a["combinedConviction"] = round(a_norm * 0.6, 4)
                     sig_a["enginesAligned"] = False
                     sig_a["engine_b_error"] = str(_b_err)
@@ -451,7 +469,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
         buffered_ok: list[tuple[Any, dict]] = []
 
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=_max_workers) as pool:
             futures = {pool.submit(_analyse, pair): pair for pair in candidate_pairs}
 
             for fut in as_completed(futures):
@@ -658,6 +676,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             "styleRequested": _requested_style,
             "style": _requested_style,
             "testMode": r.test_mode(),
+            "scanMaxWorkersUsed": _max_workers,
             "scanQuantileEnabled": _q_enabled,
             "scanQuantileFloors": quantile_floors,
             "scanQuantileMinSamples": _q_min_n,
@@ -676,13 +695,30 @@ def analyze_pair(
     btc_bias: str,
     style: str = "swing",
     use_naked_engine: bool = False,
+    regime_context: dict[str, Any] | None = None,
+    preloaded_candles: dict[str, Any] | None = None,
+    preloaded_fetch_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Single-pair analysis; implementation remains on the monolith until further split."""
     try:
-        return rt().analyze_pair(pair, btc_bias, style=style, use_naked_engine=use_naked_engine)
+        return rt().analyze_pair(
+            pair,
+            btc_bias,
+            style=style,
+            use_naked_engine=use_naked_engine,
+            regime_context=regime_context,
+            preloaded_candles=preloaded_candles,
+            preloaded_fetch_meta=preloaded_fetch_meta,
+        )
     except RuntimeError:
         from athena_legacy import load as _load_legacy
 
         return _load_legacy().analyze_pair(
-            pair, btc_bias, style=style, use_naked_engine=use_naked_engine
+            pair,
+            btc_bias,
+            style=style,
+            use_naked_engine=use_naked_engine,
+            regime_context=regime_context,
+            preloaded_candles=preloaded_candles,
+            preloaded_fetch_meta=preloaded_fetch_meta,
         )

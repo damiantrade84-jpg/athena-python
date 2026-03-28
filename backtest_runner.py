@@ -109,6 +109,18 @@ def _resolve_barrier_exit(
     return None, False
 
 
+def _time_series_quality(label: str, times) -> dict:
+    """Summarize parse quality and ordering for a timestamp series."""
+    valid = times.dropna()
+    return {
+        "label": label,
+        "total": int(len(times)),
+        "parse_fail": int(times.isna().sum()),
+        "duplicate": int(valid.duplicated().sum()),
+        "monotonic": bool(valid.is_monotonic_increasing),
+    }
+
+
 def _normalize_style(style: str | None) -> str:
     s = (style or "auto").lower()
     return s if s in ("auto", "swing", "intraday", "scalp") else "auto"
@@ -357,6 +369,8 @@ def backtest_pair(pair, style="auto"):
         h1_times = pd.to_datetime(
             [c["time"] for c in h1_raw], utc=True, errors="coerce"
         )
+        h4_time_quality = _time_series_quality("H4", h4_times)
+        h1_time_quality = _time_series_quality("H1", h1_times)
 
     except Exception as e:
         return {"error": f"Data fetch failed: {e}"}
@@ -385,7 +399,34 @@ def backtest_pair(pair, style="auto"):
         "fail_regime": 0,
         "taken": 0,
         "skip_window": 0,
+        "h4ParseFail": h4_time_quality["parse_fail"],
+        "h1ParseFail": h1_time_quality["parse_fail"],
+        "h4DuplicateTs": h4_time_quality["duplicate"],
+        "h1DuplicateTs": h1_time_quality["duplicate"],
+        "h4Monotonic": h4_time_quality["monotonic"],
+        "h1Monotonic": h1_time_quality["monotonic"],
     }
+    time_alignment_warnings = []
+    for quality in (h4_time_quality, h1_time_quality):
+        if quality["parse_fail"]:
+            time_alignment_warnings.append(
+                f"{quality['label']} parse failures: {quality['parse_fail']}/{quality['total']}"
+            )
+        if quality["duplicate"]:
+            time_alignment_warnings.append(
+                f"{quality['label']} duplicate timestamps: {quality['duplicate']}"
+            )
+        if not quality["monotonic"]:
+            time_alignment_warnings.append(
+                f"{quality['label']} timestamps are not monotonic"
+            )
+    funnel["timeAlignmentWarnings"] = time_alignment_warnings
+    if time_alignment_warnings:
+        log.warning(
+            "[BT] %s timestamp quality warnings: %s",
+            pair["display"],
+            "; ".join(time_alignment_warnings),
+        )
 
     _recent_scores = []  # CR3: rolling score history for adaptive percentile threshold
 

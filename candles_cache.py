@@ -17,8 +17,25 @@ log = logging.getLogger("sentinel")
 
 _candle_cache: dict = {}
 _candle_cache_lock = threading.Lock()
+_candle_fetch_meta: dict = {}
+_candle_fetch_inflight: dict = {}
 
 _CANDLE_CACHE_TTL = {"H1": 55 * 60, "H4": 235 * 60, "D1": 23 * 3600}
+
+
+def _cache_key(pair: dict, tf: str, limit: int) -> tuple[str, str, int]:
+    return (pair.get("symbol", pair.get("display")), tf.upper(), int(limit))
+
+
+def _store_fetch_meta(key: tuple[str, str, int], meta: dict) -> None:
+    _candle_fetch_meta[key] = dict(meta)
+
+
+def get_candle_fetch_meta(pair: dict, tf: str, limit: int) -> dict | None:
+    key = _cache_key(pair, tf, limit)
+    with _candle_cache_lock:
+        meta = _candle_fetch_meta.get(key)
+        return dict(meta) if isinstance(meta, dict) else None
 
 
 def extract_candles(resp) -> list | None:
@@ -292,6 +309,20 @@ def fetch_candles(
     TTL: H1=55 min, H4=3h55m, D1=23h — expires just before the next bar closes.
     """
     crypto_live_tf = pair.get("type") == "crypto" and tf in {"H1", "H4", "D1"}
+    display = pair.get("display", pair.get("symbol", ""))
+    key = _cache_key(pair, tf, limit)
+    fetch_meta = {
+        "symbol": pair.get("symbol", display),
+        "display": display,
+        "tf": tf,
+        "limit": int(limit),
+        "requestedSource": pair.get("source"),
+        "resolution": None,
+        "upstream": None,
+        "fallback": None,
+        "liveMerge": False,
+        "cacheHit": False,
+    }
     # CandleBuilder remains the live source for non-polygon H1 generally, and now
     # also for crypto H4/D1 via Binance futures kline streams.
     use_candle_builder = pair.get("source") != "polygon" and (
@@ -310,14 +341,31 @@ def fetch_candles(
             and len(live_candles) >= min(limit, _min_live_bars)
             and not crypto_live_tf
         ):
-            return live_candles[-limit:] if len(live_candles) > limit else live_candles
+            fetch_meta.update(
+                {
+                    "resolution": "live",
+                    "upstream": "candle_builder",
+                    "liveBars": len(live_candles),
+                }
+            )
+            out = live_candles[-limit:] if len(live_candles) > limit else live_candles
+            with _candle_cache_lock:
+                _store_fetch_meta(key, fetch_meta)
+            log.debug(
+                "[CANDLE] %s %s resolved via live CandleBuilder (%s bars)",
+                display,
+                tf,
+                len(out),
+            )
+            return out
 
     # Include limit in key so chart (e.g. 1000 bars for EMA200) does not share TTL
     # entry with scans using a smaller limit.
-    key = (pair.get("symbol", pair.get("display")), tf, int(limit))
     candles = None
 
     now = time.time()
+    inflight = None
+    is_owner = False
 
     with _candle_cache_lock:
         entry = _candle_cache.get(key)
@@ -328,64 +376,136 @@ def fetch_candles(
             if now < expiry:
                 if crypto_live_tf and live_candles:
                     candles = cached_candles
+                    cached_meta = dict(_candle_fetch_meta.get(key, {}))
+                    fetch_meta.update(cached_meta)
+                    fetch_meta.update(
+                        {
+                            "resolution": "ttl_cache",
+                            "cacheHit": True,
+                            "cacheUpstream": cached_meta.get("upstream"),
+                        }
+                    )
                 else:
+                    cached_meta = dict(_candle_fetch_meta.get(key, {}))
+                    cached_meta.update(
+                        {
+                            "resolution": "ttl_cache",
+                            "cacheHit": True,
+                            "cacheUpstream": cached_meta.get("upstream"),
+                        }
+                    )
+                    _store_fetch_meta(key, cached_meta)
                     return cached_candles
+        if candles is None:
+            inflight = _candle_fetch_inflight.get(key)
+            if inflight is None:
+                inflight = threading.Event()
+                _candle_fetch_inflight[key] = inflight
+                is_owner = True
 
-    if candles is None and pair["source"] == "binance":
-        candles = fetch_binance(pair["symbol"], tf_b[tf], limit)
+    if inflight is not None and not is_owner:
+        inflight.wait(timeout=30)
+        with _candle_cache_lock:
+            entry = _candle_cache.get(key)
+            if entry is not None:
+                cached_candles, expiry = entry
+                if time.time() < expiry:
+                    cached_meta = dict(_candle_fetch_meta.get(key, {}))
+                    cached_meta.update(
+                        {
+                            "resolution": "ttl_cache",
+                            "cacheHit": True,
+                            "cacheUpstream": cached_meta.get("upstream"),
+                        }
+                    )
+                    _store_fetch_meta(key, cached_meta)
+                    return cached_candles
+            inflight = threading.Event()
+            _candle_fetch_inflight[key] = inflight
+            is_owner = True
 
-    elif candles is None and pair["source"] == "eodhd":
-        candles = fetch_eodhd(pair, tf, limit)
+    try:
+        if candles is None and pair["source"] == "binance":
+            fetch_meta.update({"resolution": "rest", "upstream": "binance_futures"})
+            candles = fetch_binance(pair["symbol"], tf_b[tf], limit)
 
-    elif candles is None and pair["source"] == "polygon":
-        candles = fetch_polygon(pair, tf, limit)
+        elif candles is None and pair["source"] == "eodhd":
+            fetch_meta.update({"resolution": "rest", "upstream": "eodhd"})
+            candles = fetch_eodhd(pair, tf, limit)
 
-    elif candles is None and pair["source"] == "mt5" and fetch_mt5:
-        candles = fetch_mt5(pair, tf, limit)
+        elif candles is None and pair["source"] == "polygon":
+            fetch_meta.update({"resolution": "rest", "upstream": "polygon"})
+            candles = fetch_polygon(pair, tf, limit)
 
-    elif candles is None and pair["source"] == "yfinance":
-        candles = fetch_yfinance(yfinance_symbol_for_pair(pair), tf, limit)
+        elif candles is None and pair["source"] == "mt5" and fetch_mt5:
+            fetch_meta.update({"resolution": "rest", "upstream": "mt5"})
+            candles = fetch_mt5(pair, tf, limit)
 
-    elif candles is None:
-        candles = None
+        elif candles is None and pair["source"] == "yfinance":
+            fetch_meta.update({"resolution": "rest", "upstream": "yfinance"})
+            candles = fetch_yfinance(yfinance_symbol_for_pair(pair), tf, limit)
 
-    if not candles and pair.get("type") != "crypto" and pair.get("source") == "eodhd":
-        _yf_sym = yfinance_symbol_for_pair(pair)
-        if _yf_sym:
-            log.info(
-                f"[CANDLE] {pair.get('display')} EODHD failed, trying yfinance ({_yf_sym})"
-            )
-            candles = fetch_yfinance(_yf_sym, tf, limit)
-
-    candles = extract_candles(candles)
-
-    if crypto_live_tf and live_candles:
-        merged = {}
-        for candle in candles or []:
-            ts = candle_time_epoch_utc(candle.get("time", candle.get("datetime")))
-            if ts is not None:
-                merged[ts] = candle
-        for candle in live_candles:
-            ts = candle_time_epoch_utc(candle.get("time", candle.get("datetime")))
-            if ts is not None:
-                merged[ts] = candle
-        if merged:
-            candles = [merged[ts] for ts in sorted(merged)]
-            if len(candles) > limit:
-                candles = candles[-limit:]
-
-    if candles:
-        _bad = sum(1 for c in candles[-10:] if c.get("close", 0) <= 0)
-        if _bad > 0:
-            log.warning(
-                f"[CANDLE] {pair.get('display')} {tf}: {_bad}/10 recent bars have close <= 0 — discarding"
-            )
+        elif candles is None:
             candles = None
 
-    if candles:
-        ttl = _CANDLE_CACHE_TTL.get(tf, 55 * 60)
+        if not candles and pair.get("type") != "crypto" and pair.get("source") == "eodhd":
+            _yf_sym = yfinance_symbol_for_pair(pair)
+            if _yf_sym:
+                log.info(
+                    f"[CANDLE] {pair.get('display')} EODHD failed, trying yfinance ({_yf_sym})"
+                )
+                fetch_meta["fallback"] = "yfinance"
+                candles = fetch_yfinance(_yf_sym, tf, limit)
 
-        with _candle_cache_lock:
-            _candle_cache[key] = (candles, now + ttl)
+        candles = extract_candles(candles)
 
-    return candles
+        if crypto_live_tf and live_candles:
+            merged = {}
+            for candle in candles or []:
+                ts = candle_time_epoch_utc(candle.get("time", candle.get("datetime")))
+                if ts is not None:
+                    merged[ts] = candle
+            for candle in live_candles:
+                ts = candle_time_epoch_utc(candle.get("time", candle.get("datetime")))
+                if ts is not None:
+                    merged[ts] = candle
+            if merged:
+                candles = [merged[ts] for ts in sorted(merged)]
+                if len(candles) > limit:
+                    candles = candles[-limit:]
+                fetch_meta["liveMerge"] = True
+
+        if candles:
+            _bad = sum(1 for c in candles[-10:] if c.get("close", 0) <= 0)
+            if _bad > 0:
+                log.warning(
+                    f"[CANDLE] {pair.get('display')} {tf}: {_bad}/10 recent bars have close <= 0 — discarding"
+                )
+                candles = None
+
+        if candles:
+            ttl = _CANDLE_CACHE_TTL.get(tf, 55 * 60)
+
+            fetch_meta["bars"] = len(candles)
+            with _candle_cache_lock:
+                _candle_cache[key] = (candles, now + ttl)
+                _store_fetch_meta(key, fetch_meta)
+            log.debug(
+                "[CANDLE] %s %s resolved via %s fallback=%s live_merge=%s bars=%s",
+                display,
+                tf,
+                fetch_meta.get("upstream"),
+                fetch_meta.get("fallback"),
+                fetch_meta.get("liveMerge"),
+                len(candles),
+            )
+        else:
+            fetch_meta["bars"] = 0
+            with _candle_cache_lock:
+                _store_fetch_meta(key, fetch_meta)
+        return candles
+    finally:
+        if is_owner and inflight is not None:
+            with _candle_cache_lock:
+                _candle_fetch_inflight.pop(key, None)
+                inflight.set()

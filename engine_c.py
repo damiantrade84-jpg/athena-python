@@ -96,7 +96,14 @@ def normalise_engine_a(signal_a: dict) -> dict:
     """
     score = float(signal_a.get("confluenceScore", 0))
     max_score = float(signal_a.get("maxScore", 3.0)) or 3.0
-    norm = min(1.0, score / max_score) if max_score > 0 else 0.0
+    score_norm = signal_a.get("scoreNorm")
+    try:
+        norm = float(score_norm) if score_norm is not None else None
+    except (TypeError, ValueError):
+        norm = None
+    if norm is None:
+        norm = min(1.0, score / max_score) if max_score > 0 else 0.0
+    norm = max(0.0, min(1.0, norm))
 
     regime_data = signal_a.get("regime", {})
     if isinstance(regime_data, dict):

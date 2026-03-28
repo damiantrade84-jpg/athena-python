@@ -149,3 +149,23 @@ def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
     assert trade["entry"] == 101.101
     assert trade["outcome"] == "TP1"
     assert result["same_bar_both_hit"] == 0
+
+
+def test_time_series_quality_reports_parse_failures_duplicates_and_order():
+    times = backtest_runner.pd.to_datetime(
+        [
+            "2026-03-27T00:00:00+00:00",
+            "bad-ts",
+            "2026-03-27T00:00:00+00:00",
+            "2026-03-26T20:00:00+00:00",
+        ],
+        utc=True,
+        errors="coerce",
+    )
+
+    quality = backtest_runner._time_series_quality("H4", times)
+
+    assert quality["label"] == "H4"
+    assert quality["parse_fail"] == 1
+    assert quality["duplicate"] == 1
+    assert quality["monotonic"] is False

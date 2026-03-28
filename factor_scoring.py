@@ -115,7 +115,10 @@ def _has_live_microstructure(h4_snap: Dict) -> bool:
 
 
 # ── Regime smoothing state ────────────────────────────────────────────────────
-# Callers can pass explicit smoothing state when they want regime memory across scans.
+# Regime smoothing is opt-in: callers only get multi-bar regime memory when they pass
+# the same explicit regime_context object across successive analyses (for example, the
+# shared full-scan context). Single ad-hoc analyze_pair() calls with regime_context=None
+# intentionally use the raw regime for that one evaluation.
 def make_regime_smoothing_context() -> dict:
     return {"history": {}, "committed": {}, "lock": threading.Lock()}
 

@@ -845,26 +845,18 @@ def calc_fib(candles: list) -> dict:
     }
 
 
-def calc_indicators(candles: list) -> dict:
+def calc_indicators(candles: list, *, _bundle: dict | None = None) -> dict:
     """Compute all indicators for a candle series. Returns dict with 'snap' of latest values."""
-
-    cl = [c["close"] for c in candles]
-
-    hi = [c["high"] for c in candles]
-
-    lo = [c["low"] for c in candles]
-
-    e21, e50, e200 = calc_ema(cl, 21), calc_ema(cl, 50), calc_ema(cl, 200)
-
-    rsi = calc_rsi(cl, 14)
-
-    macd = calc_macd(cl)
-
-    atr = calc_atr(hi, lo, cl, 14)
-
-    adx = calc_adx(hi, lo, cl, 14)
-
-    bb = calc_bb(cl, 20, 2)
+    bundle = _bundle or _calc_indicator_bundle(candles)
+    cl = bundle["close"]
+    e21 = bundle["ema21"]
+    e50 = bundle["ema50"]
+    e200 = bundle["ema200"]
+    rsi = bundle["rsi"]
+    macd = bundle["macd"]
+    atr = bundle["atr"]
+    adx = bundle["adx"]
+    bb = bundle["bb"]
 
     L = len(cl) - 1
 
@@ -919,10 +911,31 @@ def calc_indicators(candles: list) -> dict:
     }
 
 
+def _calc_indicator_bundle(candles: list) -> dict:
+    """Shared raw-series calculation used by calc_indicators* helpers."""
+    cl = [c["close"] for c in candles]
+    hi = [c["high"] for c in candles]
+    lo = [c["low"] for c in candles]
+    return {
+        "close": cl,
+        "high": hi,
+        "low": lo,
+        "ema21": calc_ema(cl, 21),
+        "ema50": calc_ema(cl, 50),
+        "ema200": calc_ema(cl, 200),
+        "rsi": calc_rsi(cl, 14),
+        "macd": calc_macd(cl),
+        "atr": calc_atr(hi, lo, cl, 14),
+        "adx": calc_adx(hi, lo, cl, 14),
+        "bb": calc_bb(cl, 20, 2),
+    }
+
+
 def calc_indicators_with_normalized(candles: list, asset_type: str = "crypto") -> dict:
     """Compute indicators and return raw + normalized fields for factor scoring."""
 
-    base = calc_indicators(candles)
+    bundle = _calc_indicator_bundle(candles)
+    base = calc_indicators(candles, _bundle=bundle)
 
     # Prepare raw series for normalization
 
@@ -930,23 +943,15 @@ def calc_indicators_with_normalized(candles: list, asset_type: str = "crypto") -
 
     # Build series aligned with candles (None-padded)
 
-    close_series = [c["close"] for c in candles]
-
-    rsi_series = calc_rsi(close_series, 14)
-
-    macd_line = calc_macd(close_series)["macd"]
-
-    atr_series = calc_atr(
-        [c["high"] for c in candles], [c["low"] for c in candles], close_series, 14
-    )
-
-    adx_series = calc_adx(
-        [c["high"] for c in candles], [c["low"] for c in candles], close_series, 14
-    )["adx"]
+    close_series = bundle["close"]
+    rsi_series = bundle["rsi"]
+    macd_line = bundle["macd"]["macd"]
+    atr_series = bundle["atr"]
+    adx_series = bundle["adx"]["adx"]
 
     # BB width
 
-    bb = calc_bb(close_series, 20, 2)
+    bb = bundle["bb"]
 
     bb_width = [None] * len(close_series)
 
