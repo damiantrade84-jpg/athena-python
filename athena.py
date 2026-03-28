@@ -7488,10 +7488,12 @@ def analyze_pair(
                 if structure_data.get("recommended_stop_loss"):
                     _struct_sl = float(structure_data["recommended_stop_loss"])
                     _math_sl = float(lvl["sl"])
+                    # LONG: SL below price — max() picks closer (higher) = tighter
+                    # SHORT: SL above price — min() picks closer (lower) = tighter
                     lvl["sl"] = (
-                        min(_math_sl, _struct_sl)
+                        max(_math_sl, _struct_sl)
                         if direction == "LONG"
-                        else max(_math_sl, _struct_sl)
+                        else min(_math_sl, _struct_sl)
                     )
 
                 # Take Profit Override to sit safely inside structural walls
