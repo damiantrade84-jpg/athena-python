@@ -5855,6 +5855,126 @@ def api_bt_min():
     return jsonify({"saved": True, "bt_min": current})
 
 
+def _persist_naked_style_profiles_yaml(cfg_path: str, full_profiles: dict) -> None:
+    """Rewrite NAKED_ENGINE.style_profiles min_score/min_rr lines in config.yaml (block-preserving)."""
+    import re as _re
+
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    m = _re.search(
+        r"(^  style_profiles:\n)(.*?)(^  zone_multipliers:\n)",
+        content,
+        _re.MULTILINE | _re.DOTALL,
+    )
+    if not m:
+        raise ValueError("config.yaml: NAKED_ENGINE style_profiles block not found")
+    block = m.group(2)
+    for style in ("scalp", "intraday", "swing"):
+        sp = full_profiles.get(style) or {}
+        if "min_score" in sp:
+            ms = float(sp["min_score"])
+            block = _re.sub(
+                rf"(^    {_re.escape(style)}:\n      min_score: )[\d.]+",
+                lambda mm, v=ms: f"{mm.group(1)}{v}",
+                block,
+                count=1,
+                flags=_re.MULTILINE,
+            )
+        if "min_rr" in sp:
+            mr = float(sp["min_rr"])
+            block = _re.sub(
+                rf"(^    {_re.escape(style)}:\n      min_score: [\d.]+\n      min_rr: )[\d.]+",
+                lambda mm, v=mr: f"{mm.group(1)}{v}",
+                block,
+                count=1,
+                flags=_re.MULTILINE,
+            )
+    new_content = content[: m.start()] + m.group(1) + block + m.group(3) + content[m.end() :]
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write(new_content)
+
+
+@app.route("/api/naked-style-thresholds", methods=["GET", "POST"])
+def api_naked_style_thresholds():
+    """GET: NAKED_ENGINE.style_profiles (Engine B live + backtest).
+    POST: update min_score / min_rr per style; merge into CONFIG and config.yaml.
+    Body: {"scalp": {"min_score": 1.5, "min_rr": 1.4}, "intraday": {...}, "swing": {...}}
+    """
+    STYLES = ("scalp", "intraday", "swing")
+    if request.method == "GET":
+        ne = CONFIG.get("NAKED_ENGINE") or {}
+        profiles = dict(ne.get("style_profiles") or {})
+        out = {}
+        for s in STYLES:
+            p = dict(profiles.get(s) or {})
+            out[s] = {
+                "min_score": p.get("min_score"),
+                "min_rr": p.get("min_rr"),
+            }
+        return jsonify({"style_profiles": out, "note": "Used by Engine B naked scan and Engine B backtest"})
+
+    data = request.get_json(silent=True) or {}
+    ne = CONFIG.setdefault("NAKED_ENGINE", {})
+    styles = ne.setdefault("style_profiles", {})
+    any_change = False
+    for style in STYLES:
+        payload = data.get(style)
+        if not isinstance(payload, dict):
+            continue
+        cur = dict(styles.get(style) or {})
+        changed = False
+        if "min_score" in payload:
+            try:
+                ms = float(payload["min_score"])
+            except (TypeError, ValueError):
+                return jsonify({"error": f"Invalid min_score for {style}"}), 400
+            if ms < 0 or ms > 20:
+                return jsonify({"error": f"min_score for {style} out of range (0–20)"}), 400
+            cur["min_score"] = round(ms, 4)
+            changed = True
+        if "min_rr" in payload:
+            try:
+                mr = float(payload["min_rr"])
+            except (TypeError, ValueError):
+                return jsonify({"error": f"Invalid min_rr for {style}"}), 400
+            if mr < 0.1 or mr > 10:
+                return jsonify({"error": f"min_rr for {style} out of range (0.1–10)"}), 400
+            cur["min_rr"] = round(mr, 4)
+            changed = True
+        if changed:
+            styles[style] = {**dict(styles.get(style) or {}), **cur}
+            any_change = True
+
+    if not any_change:
+        return jsonify({"error": "No valid style keys (scalp/intraday/swing) with min_score or min_rr"}), 400
+
+    full_for_yaml = {}
+    for s in STYLES:
+        p = dict(styles.get(s) or {})
+        entry = {}
+        if p.get("min_score") is not None:
+            entry["min_score"] = p["min_score"]
+        if p.get("min_rr") is not None:
+            entry["min_rr"] = p["min_rr"]
+        full_for_yaml[s] = entry
+
+    try:
+        import os as _os
+
+        cfg_path = _os.path.join(_os.path.dirname(__file__), "config.yaml")
+        _persist_naked_style_profiles_yaml(cfg_path, full_for_yaml)
+        log.info(f"[NAKED_ENGINE] style_profiles updated via UI: {full_for_yaml}")
+    except Exception as e:
+        log.error(f"Failed to persist NAKED_ENGINE.style_profiles: {e}")
+        return jsonify({"saved": False, "error": str(e), "style_profiles": full_for_yaml}), 500
+
+    out = {}
+    for s in STYLES:
+        p = dict(styles.get(s) or {})
+        out[s] = {"min_score": p.get("min_score"), "min_rr": p.get("min_rr")}
+    return jsonify({"saved": True, "style_profiles": out})
+
+
 @app.route("/api/test-mode", methods=["POST"])
 def api_test_mode():
     """Toggle test mode: drops score thresholds, enables force-execute on all signals. For demo accounts only."""

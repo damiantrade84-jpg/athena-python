@@ -1296,7 +1296,10 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       </select>
       <button class="bt-btn" id="btRunBtn" onclick="runBacktest()">&#9654; RUN BACKTEST</button>
       <span class="ctrl-note" id="btNote">Engine A = Quantitative Factor Model</span>
-      <button class="bt-btn" id="btMinToggleBtn" onclick="toggleBtMinPanel()" title="Adjust BT_MIN score thresholds for Engine A backtest" style="background:linear-gradient(135deg,#374151,#4b5563);margin-left:auto;">&#9881; BT THRESHOLDS</button>
+      <div style="display:flex;gap:8px;margin-left:auto;flex-wrap:wrap;align-items:center;">
+        <button class="bt-btn" id="btMinToggleBtn" onclick="toggleBtMinPanel()" title="Adjust BT_MIN score thresholds for Engine A backtest" style="background:linear-gradient(135deg,#374151,#4b5563);">&#9881; BT THRESHOLDS</button>
+        <button class="bt-btn" id="nakedStyleToggleBtn" onclick="toggleNakedStylePanel()" title="Adjust Engine B naked min_score / min_rr (live scan + backtest)" style="background:linear-gradient(135deg,#1e3a5f,#0f766e);">&#9881; ENGINE B THRESHOLDS</button>
+      </div>
     </div>
 
     <!-- BT_MIN fine-tuning panel (collapsed by default) -->
@@ -1315,6 +1318,23 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
         <button class="bt-btn" onclick="saveBtMin()" id="btMinSaveBtn" style="padding:8px 20px;font-size:12px;">&#10003; SAVE THRESHOLDS</button>
         <span id="btMinStatus" style="font-size:11px;color:var(--muted);"></span>
         <span style="font-size:11px;color:var(--muted);margin-left:auto;">Factor engine scale: crypto/commodity/stock/index = 0–3.0 &nbsp;|&nbsp; Forex = 0–1.0</span>
+      </div>
+    </div>
+
+    <!-- Engine B (NAKED_ENGINE.style_profiles) — live + backtest -->
+    <div id="nakedStylePanel" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px 22px 14px;margin-bottom:18px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+        <div>
+          <span style="font-size:13px;font-weight:700;color:var(--text);">Engine B — Naked checklist gates (per style)</span>
+          <span style="font-size:11px;color:var(--muted);margin-left:10px;">Live naked scan &amp; Engine B backtest &middot; Not Engine A</span>
+        </div>
+        <button onclick="loadNakedStyleValues()" title="Reload from server" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:18px;padding:2px 6px;">&#8635;</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;margin-bottom:14px;" id="nakedStyleInputs"></div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <button class="bt-btn" onclick="saveNakedStyleThresholds()" id="nakedStyleSaveBtn" style="padding:8px 20px;font-size:12px;background:linear-gradient(135deg,#1e3a5f,#0f766e);">&#10003; SAVE ENGINE B THRESHOLDS</button>
+        <span id="nakedStyleStatus" style="font-size:11px;color:var(--muted);"></span>
+        <span style="font-size:11px;color:var(--muted);margin-left:auto;">Higher min_score = fewer passes. Regime scaling still applies in backtest.</span>
       </div>
     </div>
 
@@ -4131,6 +4151,89 @@ async function saveBtMin() {
   }
   btn.disabled = false; btn.textContent = '✓ SAVE THRESHOLDS';
   setTimeout(function(){ status.textContent = ''; }, 4000);
+}
+
+// ── Engine B (NAKED_ENGINE.style_profiles) ─────────────────────────────────
+var _nakedStyleOpen = false;
+function toggleNakedStylePanel() {
+  _nakedStyleOpen = !_nakedStyleOpen;
+  document.getElementById('nakedStylePanel').style.display = _nakedStyleOpen ? 'block' : 'none';
+  if (_nakedStyleOpen) loadNakedStyleValues();
+}
+
+async function loadNakedStyleValues() {
+  var container = document.getElementById('nakedStyleInputs');
+  container.innerHTML = '<span style="color:var(--muted);font-size:12px;">Loading…</span>';
+  try {
+    var r = await fetch('/api/naked-style-thresholds');
+    var data = await r.json();
+    var sp = data.style_profiles || {};
+    var STYLES = [
+      { key: 'scalp', label: 'Scalp', msMax: 12, rrMax: 4, msStep: 0.05, rrStep: 0.05 },
+      { key: 'intraday', label: 'Intraday', msMax: 12, rrMax: 4, msStep: 0.05, rrStep: 0.05 },
+      { key: 'swing', label: 'Swing', msMax: 12, rrMax: 4, msStep: 0.05, rrStep: 0.05 }
+    ];
+    container.innerHTML = '';
+    for (var i = 0; i < STYLES.length; i++) {
+      var st = STYLES[i];
+      var row = sp[st.key] || {};
+      var ms = row.min_score != null ? row.min_score : '';
+      var mrr = row.min_rr != null ? row.min_rr : '';
+      var k = st.key;
+      container.innerHTML +=
+        '<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;">' +
+        '<div style="font-size:12px;font-weight:700;color:#14b8a6;margin-bottom:10px;">' + st.label + '</div>' +
+        '<div style="margin-bottom:8px;"><span style="font-size:10px;color:var(--muted);">min_score</span>' +
+        '<div style="display:flex;align-items:center;gap:6px;margin-top:4px;">' +
+        '<input type="number" id="naked-' + k + '-ms" value="' + ms + '" min="0" max="20" step="' + st.msStep + '" style="width:64px;padding:5px 6px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;" oninput="document.getElementById(\'naked-' + k + '-ms-r\').value=this.value" />' +
+        '<input type="range" id="naked-' + k + '-ms-r" value="' + ms + '" min="0" max="' + st.msMax + '" step="' + st.msStep + '" style="flex:1;accent-color:#14b8a6;" oninput="document.getElementById(\'naked-' + k + '-ms\').value=this.value" />' +
+        '</div></div>' +
+        '<div><span style="font-size:10px;color:var(--muted);">min_rr</span>' +
+        '<div style="display:flex;align-items:center;gap:6px;margin-top:4px;">' +
+        '<input type="number" id="naked-' + k + '-rr" value="' + mrr + '" min="0.1" max="10" step="' + st.rrStep + '" style="width:64px;padding:5px 6px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;" oninput="document.getElementById(\'naked-' + k + '-rr-r\').value=this.value" />' +
+        '<input type="range" id="naked-' + k + '-rr-r" value="' + mrr + '" min="0.1" max="' + st.rrMax + '" step="' + st.rrStep + '" style="flex:1;accent-color:#14b8a6;" oninput="document.getElementById(\'naked-' + k + '-rr\').value=this.value" />' +
+        '</div></div></div>';
+    }
+  } catch (e) {
+    container.innerHTML = '<span style="color:#ef4444;font-size:12px;">Failed: ' + e.message + '</span>';
+  }
+}
+
+async function saveNakedStyleThresholds() {
+  var btn = document.getElementById('nakedStyleSaveBtn');
+  var status = document.getElementById('nakedStyleStatus');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  status.textContent = '';
+  var payload = {};
+  ['scalp', 'intraday', 'swing'].forEach(function(key) {
+    var ims = document.getElementById('naked-' + key + '-ms');
+    var irr = document.getElementById('naked-' + key + '-rr');
+    if (ims && irr && ims.value !== '' && irr.value !== '') {
+      payload[key] = { min_score: parseFloat(ims.value), min_rr: parseFloat(irr.value) };
+    }
+  });
+  try {
+    var r = await fetch('/api/naked-style-thresholds', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    var data = await r.json();
+    if (data.saved) {
+      status.textContent = '✓ Saved to config.yaml (restart not required)';
+      status.style.color = '#22c55e';
+    } else {
+      status.textContent = '✗ ' + (data.error || 'Save failed');
+      status.style.color = '#ef4444';
+    }
+  } catch (e) {
+    status.textContent = '✗ ' + e.message;
+    status.style.color = '#ef4444';
+  }
+  btn.disabled = false;
+  btn.textContent = '✓ SAVE ENGINE B THRESHOLDS';
+  setTimeout(function() { status.textContent = ''; }, 5000);
 }
 // ────────────────────────────────────────────────────────────────────────────
 

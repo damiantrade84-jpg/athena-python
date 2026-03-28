@@ -95,6 +95,9 @@ def test_key_endpoints_exist_with_methods():
     assert "/api/execute" in ep and "POST" in ep["/api/execute"]
     assert "/api/quick-execute" in ep and "POST" in ep["/api/quick-execute"]
     assert "/api/backtest" in ep and "POST" in ep["/api/backtest"]
+    assert "/api/bt-min" in ep and "GET" in ep["/api/bt-min"] and "POST" in ep["/api/bt-min"]
+    assert "/api/naked-style-thresholds" in ep and "GET" in ep["/api/naked-style-thresholds"]
+    assert "POST" in ep["/api/naked-style-thresholds"]
 
 
 def test_execute_payload_contract_strings_present():

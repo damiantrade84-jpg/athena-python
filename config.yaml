@@ -490,6 +490,7 @@ NAKED_ENGINE:
   # Per-style min_score thresholds — tune here after backtesting.
   # These override the hardcoded defaults in _naked_scan_style_profile().
   # Hold limits (H4 bars): scalp=12 (48h), intraday=24 (4d), swing=60 (10d)
+  # Dashboard: Backtest tab → ENGINE B THRESHOLDS → saves via POST /api/naked-style-thresholds (no restart).
   style_profiles:
     scalp:
       min_score: 1.5
