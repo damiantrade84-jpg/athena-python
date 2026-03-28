@@ -425,56 +425,57 @@ class TestCryptoMicrostructureZeroWeight:
 class TestAdaptiveWeights:
     def test_neutral_adaptive_weights_leave_resolved_weights_unchanged(self):
         snap = _make_snap()
-        with patch.dict(CONFIG, {"ADAPTIVE_WEIGHTS_ENABLED": True}):
-            with patch("adaptive_weights.get_adaptive_weights", return_value={}):
-                baseline = compute_factor_scores(
-                    d1_snap=snap,
-                    h4_snap=snap,
-                    h1_snap=snap,
-                    pair={"type": "forex", "display": "EUR/USD"},
-                    d1_candles=_make_candles(220),
-                    h4_candles=_make_candles(220),
-                    h1_candles=_make_candles(220),
-                    volume_ratio=1.5,
-                )
-            neutral = {
-                "trend": 1.0,
-                "momentum": 1.0,
-                "volatility": 1.0,
-                "volume": 1.0,
-                "structure": 1.0,
-                "derivatives": 1.0,
-                "microstructure": 1.0,
-                "carry": 1.0,
-                "trend_strength": 1.0,
-            }
-            with patch("adaptive_weights.get_adaptive_weights", return_value=neutral):
-                result = compute_factor_scores(
-                    d1_snap=snap,
-                    h4_snap=snap,
-                    h1_snap=snap,
-                    pair={"type": "forex", "display": "EUR/USD"},
-                    d1_candles=_make_candles(220),
-                    h4_candles=_make_candles(220),
-                    h1_candles=_make_candles(220),
-                    volume_ratio=1.5,
-                )
+        with patch.dict(CONFIG, {"ADAPTIVE_WEIGHTS_ENABLED": True}), \
+             patch("adaptive_weights.get_adaptive_weights", return_value={}):
+            baseline = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair={"type": "forex", "display": "EUR/USD"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+            )
+        neutral = {
+            "trend": 1.0,
+            "momentum": 1.0,
+            "volatility": 1.0,
+            "volume": 1.0,
+            "structure": 1.0,
+            "derivatives": 1.0,
+            "microstructure": 1.0,
+            "carry": 1.0,
+            "trend_strength": 1.0,
+        }
+        with patch.dict(CONFIG, {"ADAPTIVE_WEIGHTS_ENABLED": True}), \
+             patch("adaptive_weights.get_adaptive_weights", return_value=neutral):
+            result = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair={"type": "forex", "display": "EUR/USD"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+            )
         assert result["weights"] == pytest.approx(baseline["weights"])
 
     def test_adaptive_weights_scale_runtime_weights_instead_of_replacing_them(self):
         snap = _make_snap()
-        with patch.dict(CONFIG, {"ADAPTIVE_WEIGHTS_ENABLED": True}):
-            with patch("adaptive_weights.get_adaptive_weights", return_value={}):
-                baseline = compute_factor_scores(
-                    d1_snap=snap,
-                    h4_snap=snap,
-                    h1_snap=snap,
-                    pair={"type": "forex", "display": "EUR/USD"},
-                    d1_candles=_make_candles(220),
-                    h4_candles=_make_candles(220),
-                    h1_candles=_make_candles(220),
-                    volume_ratio=1.5,
-                )
+        with patch.dict(CONFIG, {"ADAPTIVE_WEIGHTS_ENABLED": True}), \
+             patch("adaptive_weights.get_adaptive_weights", return_value={}):
+            baseline = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair={"type": "forex", "display": "EUR/USD"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+            )
         adaptive = {
             "trend": 1.1,
             "momentum": 0.8,
@@ -486,18 +487,18 @@ class TestAdaptiveWeights:
             "carry": 1.0,
             "trend_strength": 1.25,
         }
-        with patch.dict(CONFIG, {"ADAPTIVE_WEIGHTS_ENABLED": True}):
-            with patch("adaptive_weights.get_adaptive_weights", return_value=adaptive):
-                result = compute_factor_scores(
-                    d1_snap=snap,
-                    h4_snap=snap,
-                    h1_snap=snap,
-                    pair={"type": "forex", "display": "EUR/USD"},
-                    d1_candles=_make_candles(220),
-                    h4_candles=_make_candles(220),
-                    h1_candles=_make_candles(220),
-                    volume_ratio=1.5,
-                )
+        with patch.dict(CONFIG, {"ADAPTIVE_WEIGHTS_ENABLED": True}), \
+             patch("adaptive_weights.get_adaptive_weights", return_value=adaptive):
+            result = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair={"type": "forex", "display": "EUR/USD"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+            )
         assert result["weights"]["trend"] == pytest.approx(baseline["weights"]["trend"] * 1.1)
         assert result["weights"]["momentum"] == pytest.approx(
             baseline["weights"]["momentum"] * 0.8
@@ -519,19 +520,19 @@ class TestAdaptiveWeights:
             "carry": 3.0,
             "trend_strength": 1.0,
         }
-        with patch.dict(CONFIG, {"ADAPTIVE_WEIGHTS_ENABLED": True}):
-            with patch("adaptive_weights.get_adaptive_weights", return_value=adaptive):
-                result = compute_factor_scores(
-                    d1_snap=snap,
-                    h4_snap=snap,
-                    h1_snap=snap,
-                    pair=_make_pair(display="BTC/USDT"),
-                    d1_candles=_make_candles(220),
-                    h4_candles=_make_candles(220),
-                    h1_candles=_make_candles(220),
-                    volume_ratio=1.5,
-                    funding_rate=0.0001,
-                )
+        with patch.dict(CONFIG, {"ADAPTIVE_WEIGHTS_ENABLED": True}), \
+             patch("adaptive_weights.get_adaptive_weights", return_value=adaptive):
+            result = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair=_make_pair(display="BTC/USDT"),
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+                funding_rate=0.0001,
+            )
         assert result["weights"]["microstructure"] == 0
         assert "carry" not in result["weights"] or result["weights"].get("carry", 0) == 0
 
