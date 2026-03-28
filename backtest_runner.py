@@ -23,7 +23,6 @@ from calibration import calibration_report
 from config import CONFIG, _json_safe
 from indicators import (
     calc_atr,
-    calc_ema,
     calc_fib,
     calc_fib_proximity,
     calc_indicators_with_normalized,
@@ -48,24 +47,27 @@ def _rt():
     return _art_rt()
 
 
-def _lookup_btc_bias(entry_ts, bias_ts_list, bias_values):
-    """Return historical BTC bias at or before entry_ts using binary search.
+def _bt_btc_bias(d1_window: list, pair: dict) -> str:
+    """Derive BTC bias from the D1 window available at this bar.
 
-    bias_ts_list must be a sorted list of pd.Timestamp values (UTC-aware).
-    Falls back to 'neutral' if the list is empty or entry_ts precedes all entries.
+    Uses EMA21/50/200 alignment on the supplied D1 series — no precompute needed,
+    point-in-time correct.  Returns 'neutral' for non-crypto or short windows.
     """
-    if not bias_ts_list:
+    if pair.get("type") != "crypto":
         return "neutral"
-    lo, hi = 0, len(bias_ts_list) - 1
-    idx = -1
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        if bias_ts_list[mid] <= entry_ts:
-            idx = mid
-            lo = mid + 1
-        else:
-            hi = mid - 1
-    return bias_values[idx] if idx >= 0 else "neutral"
+    try:
+        from indicators import calc_indicators
+        if len(d1_window) < 200:
+            return "neutral"
+        s = calc_indicators(d1_window)["snap"]
+        if s.get("ema21") and s.get("ema50") and s.get("ema200"):
+            if s["ema21"] > s["ema50"] > s["ema200"]:
+                return "bullish"
+            elif s["ema21"] < s["ema50"] < s["ema200"]:
+                return "bearish"
+    except Exception:
+        pass
+    return "neutral"
 
 
 _BASE_BACKTEST_SLIP = {
@@ -454,46 +456,8 @@ def backtest_pair(pair, style="auto"):
     _pair_max_score = _rt().max_score_for_pair(pair)  # Pre-compute for score-based sizing
     same_bar_both_hit = 0
 
-    # BUG 1 fix: precompute historical BTC D1 bias for each bar in the backtest.
-    # Live scanning calls _current_btc_bias() which applies a ±15%/10% btc_bias
-    # modifier for crypto pairs. Hardcoding "neutral" makes BT systematically
-    # optimistic for crypto pairs where BTC opposed direction.
-    _btc_bias_ts: list = []     # sorted pd.Timestamp list
-    _btc_bias_values: list = []  # parallel bias strings
-    if _ptype == "crypto":
-        try:
-            _btc_d1_src = (
-                d1_raw
-                if pair.get("symbol") == "BTCUSDT"
-                else _rt().fetch_binance("BTCUSDT", "1d", 1000)
-            )
-            if _btc_d1_src and len(_btc_d1_src) >= 200:
-                _btc_closes = [c["close"] for c in _btc_d1_src]
-                _btc_ema21 = calc_ema(_btc_closes, 21)
-                _btc_ema50 = calc_ema(_btc_closes, 50)
-                _btc_ema200 = calc_ema(_btc_closes, 200)
-                for _bi, _bc in enumerate(_btc_d1_src):
-                    _bt_ts = pd.to_datetime(_bc.get("time", ""), utc=True, errors="coerce")
-                    if pd.isna(_bt_ts):
-                        continue
-                    _btc_bias_ts.append(_bt_ts)
-                    e21 = _btc_ema21[_bi] if _bi < len(_btc_ema21) else None
-                    e50 = _btc_ema50[_bi] if _bi < len(_btc_ema50) else None
-                    e200 = _btc_ema200[_bi] if _bi < len(_btc_ema200) else None
-                    if e21 and e50 and e200:
-                        if e21 > e50 > e200:
-                            _btc_bias_values.append("bullish")
-                        elif e21 < e50 < e200:
-                            _btc_bias_values.append("bearish")
-                        else:
-                            _btc_bias_values.append("neutral")
-                    else:
-                        _btc_bias_values.append("neutral")
-                log.debug(
-                    f"[BT-BTC-BIAS] {pair['display']} precomputed {len(_btc_bias_ts)} BTC D1 bias points"
-                )
-        except Exception as _btc_err:
-            log.debug(f"[BT-BTC-BIAS] {pair['display']} BTC D1 precompute failed: {_btc_err}")
+    # BUG 1 fix: BTC bias is derived point-in-time per bar via _bt_btc_bias(d1_window, pair).
+    # No precompute needed — each call reads the D1 window available at that bar.
 
     # BUG 3 fix: funding rate was never passed to backtest calc_confluence() calls.
     # Live scan fetches it via _fetch_funding_rate() and passes it; backtest silently
@@ -600,11 +564,7 @@ def backtest_pair(pair, style="auto"):
                 )  # TA-Lib STOCH standard: fastK=5, slowK=3, slowD=3
 
                 # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
-                btc_bias = (
-                    _lookup_btc_bias(entry_ts, _btc_bias_ts, _btc_bias_values)
-                    if _ptype == "crypto"
-                    else "neutral"
-                )
+                btc_bias = _bt_btc_bias(d1_window, pair)
 
                 # Route forex pairs to dedicated forex scoring engine in backtest
                 if pair.get("type") == "forex":
@@ -791,6 +751,7 @@ def backtest_pair(pair, style="auto"):
                     if direction == "LONG"
                     else float(entry) - _sl_dist * 2.5
                 )
+                rr1 = 1.5
 
             # T1: Volatility-adjusted sizing â€" if ATR > 1.5x its 20-bar SMA, reduce size 30%
 
@@ -1086,11 +1047,7 @@ def backtest_pair(pair, style="auto"):
                 )  # TA-Lib STOCH standard: fastK=5, slowK=3, slowD=3
 
                 # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
-                btc_bias = (
-                    _lookup_btc_bias(entry_ts, _btc_bias_ts, _btc_bias_values)
-                    if _ptype == "crypto"
-                    else "neutral"
-                )
+                btc_bias = _bt_btc_bias(d1_ctx, pair)
 
                 res = calc_confluence(
                     d1i_ctx,
@@ -1235,6 +1192,7 @@ def backtest_pair(pair, style="auto"):
                     if direction == "LONG"
                     else float(entry) - _sl_dist * 2.5
                 )
+                rr1 = 1.5
 
             _atr_series = calc_atr(
                 [c["high"] for c in h4_window],
@@ -1515,11 +1473,8 @@ def backtest_pair(pair, style="auto"):
                 )  # TA-Lib STOCH standard: fastK=5, slowK=3, slowD=3
 
                 # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
-                btc_bias = (
-                    _lookup_btc_bias(entry_ts, _btc_bias_ts, _btc_bias_values)
-                    if _ptype == "crypto"
-                    else "neutral"
-                )
+                # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
+                btc_bias = _bt_btc_bias(d1_ctx, pair)
 
                 res = calc_confluence(
                     d1i_ctx,
@@ -1662,6 +1617,7 @@ def backtest_pair(pair, style="auto"):
                     if direction == "LONG"
                     else float(entry) - _sl_dist * 2.5
                 )
+                rr1 = 1.5
 
             _atr_series = calc_atr(
                 [c["high"] for c in h1_window],
@@ -2112,7 +2068,7 @@ def backtest_pair(pair, style="auto"):
     score_bands = {}
 
     for band_label, lo_b, hi_b in [
-        ("0.8-1.2", 0.8, 1.2),
+        ("<1.2", 0.0, 1.2),
         ("1.2-1.6", 1.2, 1.6),
         ("1.6-2.0", 1.6, 2.0),
         ("2.0+", 2.0, 99),
@@ -2718,12 +2674,20 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         # BUG 7 fix: live Engine B receives direction from Engine A's confluence score.
         # Evaluating both LONG and SHORT and picking the highest scorer inflates BT
         # results — Engine B is a structural validator, not a direction picker.
-        # Derive single direction from H4 EMA21 alignment (proxy for Engine A output).
-        _h4_closes_b = [c["close"] for c in h4_ctx]
-        _h4_ema21_b = calc_ema(_h4_closes_b, 21) if len(_h4_closes_b) >= 21 else None
+        # Derive single direction from dual-TF D1+H4 EMA21>EMA50 alignment — both TFs
+        # must agree; skip the bar if they conflict (mirrors Engine A's trend gate).
+        _d1_snap_dir = calc_indicators_with_normalized(d1_ctx, pair.get("type", "stock"))["snap"]
+        _h4_snap_dir = calc_indicators_with_normalized(h4_ctx, pair.get("type", "stock"))["snap"]
+        _d1_bull = (_d1_snap_dir.get("ema21") or 0) > (_d1_snap_dir.get("ema50") or 0)
+        _h4_bull = (_h4_snap_dir.get("ema21") or 0) > (_h4_snap_dir.get("ema50") or 0)
         _bt_direction = (
-            "LONG" if (_h4_ema21_b and current_price >= _h4_ema21_b[-1]) else "SHORT"
+            "LONG" if (_d1_bull and _h4_bull)
+            else "SHORT" if (not _d1_bull and not _h4_bull)
+            else None
         )
+        if _bt_direction is None:
+            i += 1
+            continue  # conflicting timeframes — skip
 
         candidates = []
         for direction in [_bt_direction]:  # single direction only
