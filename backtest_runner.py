@@ -23,6 +23,7 @@ from calibration import calibration_report
 from config import CONFIG, _json_safe
 from indicators import (
     calc_atr,
+    calc_ema,
     calc_fib,
     calc_fib_proximity,
     calc_indicators_with_normalized,
@@ -45,6 +46,26 @@ log = logging.getLogger("sentinel")
 
 def _rt():
     return _art_rt()
+
+
+def _lookup_btc_bias(entry_ts, bias_ts_list, bias_values):
+    """Return historical BTC bias at or before entry_ts using binary search.
+
+    bias_ts_list must be a sorted list of pd.Timestamp values (UTC-aware).
+    Falls back to 'neutral' if the list is empty or entry_ts precedes all entries.
+    """
+    if not bias_ts_list:
+        return "neutral"
+    lo, hi = 0, len(bias_ts_list) - 1
+    idx = -1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if bias_ts_list[mid] <= entry_ts:
+            idx = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return bias_values[idx] if idx >= 0 else "neutral"
 
 
 _BASE_BACKTEST_SLIP = {
@@ -433,6 +454,47 @@ def backtest_pair(pair, style="auto"):
     _pair_max_score = _rt().max_score_for_pair(pair)  # Pre-compute for score-based sizing
     same_bar_both_hit = 0
 
+    # BUG 1 fix: precompute historical BTC D1 bias for each bar in the backtest.
+    # Live scanning calls _current_btc_bias() which applies a ±15%/10% btc_bias
+    # modifier for crypto pairs. Hardcoding "neutral" makes BT systematically
+    # optimistic for crypto pairs where BTC opposed direction.
+    _btc_bias_ts: list = []     # sorted pd.Timestamp list
+    _btc_bias_values: list = []  # parallel bias strings
+    if _ptype == "crypto":
+        try:
+            _btc_d1_src = (
+                d1_raw
+                if pair.get("symbol") == "BTCUSDT"
+                else _rt().fetch_binance("BTCUSDT", "1d", 1000)
+            )
+            if _btc_d1_src and len(_btc_d1_src) >= 200:
+                _btc_closes = [c["close"] for c in _btc_d1_src]
+                _btc_ema21 = calc_ema(_btc_closes, 21)
+                _btc_ema50 = calc_ema(_btc_closes, 50)
+                _btc_ema200 = calc_ema(_btc_closes, 200)
+                for _bi, _bc in enumerate(_btc_d1_src):
+                    _bt_ts = pd.to_datetime(_bc.get("time", ""), utc=True, errors="coerce")
+                    if pd.isna(_bt_ts):
+                        continue
+                    _btc_bias_ts.append(_bt_ts)
+                    e21 = _btc_ema21[_bi] if _bi < len(_btc_ema21) else None
+                    e50 = _btc_ema50[_bi] if _bi < len(_btc_ema50) else None
+                    e200 = _btc_ema200[_bi] if _bi < len(_btc_ema200) else None
+                    if e21 and e50 and e200:
+                        if e21 > e50 > e200:
+                            _btc_bias_values.append("bullish")
+                        elif e21 < e50 < e200:
+                            _btc_bias_values.append("bearish")
+                        else:
+                            _btc_bias_values.append("neutral")
+                    else:
+                        _btc_bias_values.append("neutral")
+                log.debug(
+                    f"[BT-BTC-BIAS] {pair['display']} precomputed {len(_btc_bias_ts)} BTC D1 bias points"
+                )
+        except Exception as _btc_err:
+            log.debug(f"[BT-BTC-BIAS] {pair['display']} BTC D1 precompute failed: {_btc_err}")
+
     if effective_style == "swing":
         # --- SWING D1 LOOP â€” UNCHANGED ---
 
@@ -521,6 +583,13 @@ def backtest_pair(pair, style="auto"):
                     h4_window, 5, 3, 3
                 )  # TA-Lib STOCH standard: fastK=5, slowK=3, slowD=3
 
+                # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
+                btc_bias = (
+                    _lookup_btc_bias(entry_ts, _btc_bias_ts, _btc_bias_values)
+                    if _ptype == "crypto"
+                    else "neutral"
+                )
+
                 # Route forex pairs to dedicated forex scoring engine in backtest
                 if pair.get("type") == "forex":
                     from forex_scoring import compute_forex_score
@@ -565,7 +634,7 @@ def backtest_pair(pair, style="auto"):
                         vr,
                         stoch,
                         pair,
-                        "neutral",
+                        btc_bias,
                         d1_candles=d1_window,
                         h4_candles=h4_window,
                         h1_candles=h1_window,
@@ -973,6 +1042,13 @@ def backtest_pair(pair, style="auto"):
                     h1_window, 5, 3, 3
                 )  # TA-Lib STOCH standard: fastK=5, slowK=3, slowD=3
 
+                # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
+                btc_bias = (
+                    _lookup_btc_bias(entry_ts, _btc_bias_ts, _btc_bias_values)
+                    if _ptype == "crypto"
+                    else "neutral"
+                )
+
                 res = calc_confluence(
                     d1i_ctx,
                     h4i,
@@ -980,7 +1056,7 @@ def backtest_pair(pair, style="auto"):
                     vr,
                     stoch,
                     pair,
-                    "neutral",
+                    btc_bias,
                     d1_candles=d1_ctx,
                     h4_candles=h4_window,
                     h1_candles=h1_window,
@@ -1063,8 +1139,10 @@ def backtest_pair(pair, style="auto"):
                 i += 1
                 continue
 
+            # BUG 2 fix: 10 H4 bars = 40 hours — too short, produces noisy swing points.
+            # Use 20 H4 bars (80 hours) to match the time depth of swing's 10 D1 bars (10 days).
             if _ptype == "crypto":
-                _recent = h4_window[-10:]
+                _recent = h4_window[-20:]
 
                 if direction == "LONG":
                     swing_sl = min(c["low"] for c in _recent)
@@ -1367,6 +1445,13 @@ def backtest_pair(pair, style="auto"):
                     h1_window, 5, 3, 3
                 )  # TA-Lib STOCH standard: fastK=5, slowK=3, slowD=3
 
+                # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
+                btc_bias = (
+                    _lookup_btc_bias(entry_ts, _btc_bias_ts, _btc_bias_values)
+                    if _ptype == "crypto"
+                    else "neutral"
+                )
+
                 res = calc_confluence(
                     d1i_ctx,
                     h4i_ctx,
@@ -1374,7 +1459,7 @@ def backtest_pair(pair, style="auto"):
                     vr,
                     stoch,
                     pair,
-                    "neutral",
+                    btc_bias,
                     d1_candles=d1_ctx,
                     h4_candles=h4_ctx,
                     h1_candles=h1_window,
@@ -1455,8 +1540,10 @@ def backtest_pair(pair, style="auto"):
                 i += 1
                 continue
 
+            # BUG 2 fix: 10 H1 bars = 10 hours — too short, produces noisy swing points.
+            # Use 24 H1 bars (24 hours) to match the time depth of swing's 10 D1 bars (10 days).
             if _ptype == "crypto":
-                _recent = h1_window[-10:]
+                _recent = h1_window[-24:]
 
                 if direction == "LONG":
                     swing_sl = min(c["low"] for c in _recent)
