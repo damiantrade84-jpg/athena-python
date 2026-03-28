@@ -1,4 +1,4 @@
-"""HTTP session, EODHD client singleton, Binance funding/OI helpers."""
+"""HTTP session, EODHD client singleton, Binance/Bybit funding + OI helpers."""
 
 from __future__ import annotations
 
@@ -42,6 +42,9 @@ def _get_eodhd_client():
 
 _funding_rate_cache: dict = {}
 _FUNDING_CACHE_TTL = 300
+
+_bybit_funding_cache: dict = {}
+_BYBIT_FUNDING_CACHE_TTL = 300  # 5 minutes, same as Binance
 
 _oi_cache: dict = {}
 _OI_CACHE_TTL = 300
@@ -89,6 +92,43 @@ def _fetch_funding_rate(binance_symbol: str) -> dict:
         log.debug(f"[FUNDING] {binance_symbol} fetch failed: {_e}")
 
         return {"error": True, "symbol": binance_symbol, "detail": str(_e)}
+
+
+def _fetch_bybit_funding_rate(symbol: str) -> dict:
+    """Fetch current perpetual funding rate from Bybit public API.
+    Uses /v5/market/tickers — no auth required. Cached 5 min.
+    Symbol format: BTCUSDT (no slash).
+    """
+    now = time.time()
+    cached = _bybit_funding_cache.get(symbol)
+    if cached and now - cached[1] < _BYBIT_FUNDING_CACHE_TTL:
+        return {
+            "error": False,
+            "symbol": symbol,
+            "detail": "",
+            "rate": cached[0],
+        }
+
+    try:
+        url = f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={symbol}"
+        r = http_requests.get(url, timeout=4)
+        if r.status_code == 200:
+            data = r.json()
+            items = data.get("result", {}).get("list", [])
+            if items:
+                rate = float(items[0].get("fundingRate", 0))
+                _bybit_funding_cache[symbol] = (rate, now)
+                return {
+                    "error": False,
+                    "symbol": symbol,
+                    "detail": "",
+                    "rate": rate,
+                }
+            return {"error": True, "symbol": symbol, "detail": "empty tickers"}
+        return {"error": True, "symbol": symbol, "detail": f"HTTP {r.status_code}"}
+    except Exception as _e:
+        log.debug(f"[FUNDING-BYBIT] {symbol} fetch failed: {_e}")
+        return {"error": True, "symbol": symbol, "detail": str(_e)}
 
 
 def _fetch_open_interest(binance_symbol: str) -> dict:

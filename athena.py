@@ -95,6 +95,7 @@ from data_feeds import (  # noqa: E402
     http_requests,
     _get_eodhd_client,
     _fetch_funding_rate,
+    _fetch_bybit_funding_rate,
     _fetch_open_interest,
     _calc_oi_divergence,
 )
@@ -7237,12 +7238,22 @@ def analyze_pair(
     if pair.get("type") == "crypto":
         _bn_sym = pair.get("symbol", "").replace("/", "")  # e.g. BTCUSDT
 
-        _fr_resp = _fetch_funding_rate(_bn_sym)
-        _funding_rate = (
-            _fr_resp.get("rate")
-            if isinstance(_fr_resp, dict) and not _fr_resp.get("error")
-            else None
-        )
+        # Bybit funding rate — execution is on Bybit; fall back to Binance if Bybit fails
+        _fr_resp = _fetch_bybit_funding_rate(_bn_sym)
+        if isinstance(_fr_resp, dict) and not _fr_resp.get("error"):
+            _funding_rate = _fr_resp.get("rate")
+        else:
+            _fr_resp = _fetch_funding_rate(_bn_sym)
+            _funding_rate = (
+                _fr_resp.get("rate")
+                if isinstance(_fr_resp, dict) and not _fr_resp.get("error")
+                else None
+            )
+            if _funding_rate is not None:
+                log.debug(
+                    "[FUNDING] %s: using Binance fallback rate",
+                    pair.get("display", _bn_sym),
+                )
 
         _oi_data = _fetch_open_interest(_bn_sym)
 
