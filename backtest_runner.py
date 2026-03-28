@@ -495,6 +495,22 @@ def backtest_pair(pair, style="auto"):
         except Exception as _btc_err:
             log.debug(f"[BT-BTC-BIAS] {pair['display']} BTC D1 precompute failed: {_btc_err}")
 
+    # BUG 3 fix: funding rate was never passed to backtest calc_confluence() calls.
+    # Live scan fetches it via _fetch_funding_rate() and passes it; backtest silently
+    # excluded it (funding_rate=None). Fetch current rate once as a proxy — not
+    # perfectly historical but eliminates the systematic None divergence for all bars.
+    _bt_funding_rate = None
+    if _ptype == "crypto":
+        try:
+            from data_feeds import _fetch_funding_rate as _dfr
+            _bn_sym = pair.get("symbol", "").replace("/", "")
+            _fr_resp = _dfr(_bn_sym)
+            if isinstance(_fr_resp, dict) and not _fr_resp.get("error"):
+                _bt_funding_rate = _fr_resp.get("rate")
+                log.debug(f"[BT-FUNDING] {pair['display']} funding rate: {_bt_funding_rate}")
+        except Exception as _fr_err:
+            log.debug(f"[BT-FUNDING] {pair['display']} funding rate fetch failed: {_fr_err}")
+
     if effective_style == "swing":
         # --- SWING D1 LOOP â€” UNCHANGED ---
 
@@ -645,6 +661,7 @@ def backtest_pair(pair, style="auto"):
                             ),
                         ),
                         bar_time=h4_window[-1].get("time") if h4_window else None,
+                        funding_rate=_bt_funding_rate,
                     )
 
             except Exception as _bt_bar_err:
@@ -727,15 +744,15 @@ def backtest_pair(pair, style="auto"):
                 _recent = d1_window[-10:]
 
                 if direction == "LONG":
+                    # BUG 5 fix: LONG SL is below price — only tighten (use swing if higher/closer)
                     swing_sl = min(c["low"] for c in _recent)
-
-                    if swing_sl < sl:
-                        sl = swing_sl  # wider stop lets noise breathe
+                    if swing_sl > sl:
+                        sl = swing_sl
 
                 else:
+                    # BUG 5 fix: SHORT SL is above price — only tighten (use swing if lower/closer)
                     swing_sl = max(c["high"] for c in _recent)
-
-                    if swing_sl > sl:
+                    if swing_sl < sl:
                         sl = swing_sl
 
                 rr1 = abs(tp1 - entry) / abs(sl - entry) if abs(sl - entry) > 0 else 0
@@ -1067,6 +1084,7 @@ def backtest_pair(pair, style="auto"):
                         ),
                     ),
                     bar_time=h4_window[-1].get("time") if h4_window else None,
+                    funding_rate=_bt_funding_rate,
                 )
 
             except Exception as _bt_bar_err:
@@ -1145,15 +1163,15 @@ def backtest_pair(pair, style="auto"):
                 _recent = h4_window[-20:]
 
                 if direction == "LONG":
+                    # BUG 5 fix: LONG SL is below price — only tighten (use swing if higher/closer)
                     swing_sl = min(c["low"] for c in _recent)
-
-                    if swing_sl < sl:
+                    if swing_sl > sl:
                         sl = swing_sl
 
                 else:
+                    # BUG 5 fix: SHORT SL is above price — only tighten (use swing if lower/closer)
                     swing_sl = max(c["high"] for c in _recent)
-
-                    if swing_sl > sl:
+                    if swing_sl < sl:
                         sl = swing_sl
 
                 rr1 = abs(tp1 - entry) / abs(sl - entry) if abs(sl - entry) > 0 else 0
@@ -1470,6 +1488,7 @@ def backtest_pair(pair, style="auto"):
                         ),
                     ),
                     bar_time=h1_window[-1].get("time") if h1_window else None,
+                    funding_rate=_bt_funding_rate,
                 )
 
             except Exception as _bt_bar_err:
@@ -1546,15 +1565,15 @@ def backtest_pair(pair, style="auto"):
                 _recent = h1_window[-24:]
 
                 if direction == "LONG":
+                    # BUG 5 fix: LONG SL is below price — only tighten (use swing if higher/closer)
                     swing_sl = min(c["low"] for c in _recent)
-
-                    if swing_sl < sl:
+                    if swing_sl > sl:
                         sl = swing_sl
 
                 else:
+                    # BUG 5 fix: SHORT SL is above price — only tighten (use swing if lower/closer)
                     swing_sl = max(c["high"] for c in _recent)
-
-                    if swing_sl > sl:
+                    if swing_sl < sl:
                         sl = swing_sl
 
                 rr1 = abs(tp1 - entry) / abs(sl - entry) if abs(sl - entry) > 0 else 0
