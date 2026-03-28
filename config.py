@@ -564,6 +564,10 @@ CONFIG: dict = {
         "stock": ["RANGING"],
         "index": ["RANGING"],
     },
+    "SIGNAL_DEBATE_ENABLED": True,
+    "SENTIMENT_GATE_ENABLED": True,
+    "EVENT_RISK_ENABLED": True,
+    "EVENT_RISK_HOURS": 4,
     # ── AI Self-Learning ──────────────────────────────────────────────────────
     "LEARNING_ENABLED": True,  # Extract learning data after each trade closes
     "LEARNING_MIN_TRADES": 5,  # Min trades before context injected into AI
