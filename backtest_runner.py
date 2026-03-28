@@ -396,7 +396,7 @@ def backtest_pair(pair, style="auto"):
     except Exception as e:
         return {"error": f"Data fetch failed: {e}"}
 
-    # N8: Session-variable slippage â€” forex widens during Asian/off-hours
+    # N8: Session-variable slippage â€" forex widens during Asian/off-hours
 
     # Shared init
 
@@ -512,7 +512,7 @@ def backtest_pair(pair, style="auto"):
             log.debug(f"[BT-FUNDING] {pair['display']} funding rate fetch failed: {_fr_err}")
 
     if effective_style == "swing":
-        # --- SWING D1 LOOP â€” UNCHANGED ---
+        # --- SWING D1 LOOP â€" UNCHANGED ---
 
         MIN_BARS = 220
         COOLDOWN = 3
@@ -524,7 +524,7 @@ def backtest_pair(pair, style="auto"):
         last_exit_bar = 0
         open_positions = 0
 
-        # R4: Walk-forward split â€” 70% in-sample, 30% out-of-sample
+        # R4: Walk-forward split â€" 70% in-sample, 30% out-of-sample
 
         _oos_start = MIN_BARS + int((total_bars - MIN_BARS) * 0.7)
 
@@ -766,7 +766,33 @@ def backtest_pair(pair, style="auto"):
                     i += 1
                     continue
 
-            # T1: Volatility-adjusted sizing â€” if ATR > 1.5x its 20-bar SMA, reduce size 30%
+            # BUG 6 fix: apply MAX_SL_PCT distance cap — mirrors live athena.py Fix 6.
+            # Applies to all asset types so backtest stops match the live hard cap.
+            _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
+            _sl_dist_pct = abs(float(entry) - float(sl)) / float(entry)
+            if _sl_dist_pct > _max_sl_pct:
+                log.debug(
+                    f"[BT-SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct:.1%} "
+                    f"exceeds cap {_max_sl_pct:.1%} — clamping"
+                )
+                sl = (
+                    float(entry) * (1 - _max_sl_pct)
+                    if direction == "LONG"
+                    else float(entry) * (1 + _max_sl_pct)
+                )
+                _sl_dist = abs(float(entry) - sl)
+                tp1 = (
+                    float(entry) + _sl_dist * 1.5
+                    if direction == "LONG"
+                    else float(entry) - _sl_dist * 1.5
+                )
+                tp2 = (
+                    float(entry) + _sl_dist * 2.5
+                    if direction == "LONG"
+                    else float(entry) - _sl_dist * 2.5
+                )
+
+            # T1: Volatility-adjusted sizing â€" if ATR > 1.5x its 20-bar SMA, reduce size 30%
 
             _atr_series = calc_atr(
                 [c["high"] for c in d1_window],
@@ -882,7 +908,7 @@ def backtest_pair(pair, style="auto"):
                         break
 
             if outcome == "OPEN":
-                # Force-close at last forward bar â€” record actual P&L vs recording a ghost 0R
+                # Force-close at last forward bar â€" record actual P&L vs recording a ghost 0R
 
                 _last_fwd = d1_raw[min(i + 20, total_bars - 1)]
 
@@ -1184,6 +1210,31 @@ def backtest_pair(pair, style="auto"):
                     funnel["fail_score"] += 1
                     i += 1
                     continue
+
+            # BUG 6 fix: apply MAX_SL_PCT distance cap — mirrors live athena.py Fix 6.
+            _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
+            _sl_dist_pct = abs(float(entry) - float(sl)) / float(entry)
+            if _sl_dist_pct > _max_sl_pct:
+                log.debug(
+                    f"[BT-SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct:.1%} "
+                    f"exceeds cap {_max_sl_pct:.1%} — clamping"
+                )
+                sl = (
+                    float(entry) * (1 - _max_sl_pct)
+                    if direction == "LONG"
+                    else float(entry) * (1 + _max_sl_pct)
+                )
+                _sl_dist = abs(float(entry) - sl)
+                tp1 = (
+                    float(entry) + _sl_dist * 1.5
+                    if direction == "LONG"
+                    else float(entry) - _sl_dist * 1.5
+                )
+                tp2 = (
+                    float(entry) + _sl_dist * 2.5
+                    if direction == "LONG"
+                    else float(entry) - _sl_dist * 2.5
+                )
 
             _atr_series = calc_atr(
                 [c["high"] for c in h4_window],
@@ -1586,6 +1637,31 @@ def backtest_pair(pair, style="auto"):
                     funnel["fail_score"] += 1
                     i += 1
                     continue
+
+            # BUG 6 fix: apply MAX_SL_PCT distance cap — mirrors live athena.py Fix 6.
+            _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
+            _sl_dist_pct = abs(float(entry) - float(sl)) / float(entry)
+            if _sl_dist_pct > _max_sl_pct:
+                log.debug(
+                    f"[BT-SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct:.1%} "
+                    f"exceeds cap {_max_sl_pct:.1%} — clamping"
+                )
+                sl = (
+                    float(entry) * (1 - _max_sl_pct)
+                    if direction == "LONG"
+                    else float(entry) * (1 + _max_sl_pct)
+                )
+                _sl_dist = abs(float(entry) - sl)
+                tp1 = (
+                    float(entry) + _sl_dist * 1.5
+                    if direction == "LONG"
+                    else float(entry) - _sl_dist * 1.5
+                )
+                tp2 = (
+                    float(entry) + _sl_dist * 2.5
+                    if direction == "LONG"
+                    else float(entry) - _sl_dist * 2.5
+                )
 
             _atr_series = calc_atr(
                 [c["high"] for c in h1_window],
@@ -1991,7 +2067,7 @@ def backtest_pair(pair, style="auto"):
         round(avg_r / _down_std * (_trades_per_year**0.5), 2) if _down_std > 0 else 0
     )
 
-    # B2: Monte Carlo drawdown simulation â€” 500 random shuffles of trade sequence
+    # B2: Monte Carlo drawdown simulation â€" 500 random shuffles of trade sequence
 
     # Transforms single-path DD into distribution: P5=best case, P95=worst case
 
@@ -2031,15 +2107,15 @@ def backtest_pair(pair, style="auto"):
         "p95": round(_mc_dds[int(_nc * 0.95)] * 100, 1),
     }
 
-    # B3: Score band win rate tracking â€” which confluence scores actually deliver edge?
+    # B3: Score band win rate tracking â€" which confluence scores actually deliver edge?
 
     score_bands = {}
 
     for band_label, lo_b, hi_b in [
-        ("6-7", 6, 7),
-        ("7-8", 7, 8),
-        ("8-9", 8, 9),
-        ("9+", 9, 99),
+        ("0.8-1.2", 0.8, 1.2),
+        ("1.2-1.6", 1.2, 1.6),
+        ("1.6-2.0", 1.6, 2.0),
+        ("2.0+", 2.0, 99),
     ]:
         band_trades = [t for t in trades if lo_b <= t["score"] < hi_b]
 
@@ -2051,7 +2127,7 @@ def backtest_pair(pair, style="auto"):
                 "wr": round(bw / len(band_trades) * 100, 1),
             }
 
-    # R2: Regime segmentation stats â€” track performance by market regime
+    # R2: Regime segmentation stats â€" track performance by market regime
 
     regime_stats = {}
 
@@ -2067,7 +2143,7 @@ def backtest_pair(pair, style="auto"):
                 "expectancy": round(sum(t["resultR"] for t in rt) / len(rt), 3),
             }
 
-    # R4: Walk-forward split â€” in-sample vs out-of-sample SQN comparison
+    # R4: Walk-forward split â€" in-sample vs out-of-sample SQN comparison
 
     is_trades = [t for t in trades if not t.get("oos", False)]
 
@@ -2638,8 +2714,19 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         _pair_type = pair.get("type", "stock")
         _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
         _bt_entry_candles = h4_ctx if (_pair_type == "forex" and _forex_struct_tf == "D1") else h1_ctx
+
+        # BUG 7 fix: live Engine B receives direction from Engine A's confluence score.
+        # Evaluating both LONG and SHORT and picking the highest scorer inflates BT
+        # results — Engine B is a structural validator, not a direction picker.
+        # Derive single direction from H4 EMA21 alignment (proxy for Engine A output).
+        _h4_closes_b = [c["close"] for c in h4_ctx]
+        _h4_ema21_b = calc_ema(_h4_closes_b, 21) if len(_h4_closes_b) >= 21 else None
+        _bt_direction = (
+            "LONG" if (_h4_ema21_b and current_price >= _h4_ema21_b[-1]) else "SHORT"
+        )
+
         candidates = []
-        for direction in ["LONG", "SHORT"]:
+        for direction in [_bt_direction]:  # single direction only
             res = naked_engine.set_registry_context(
                 pair.get("symbol") or pair.get("display")
             ).analyze_structure(
@@ -2766,6 +2853,26 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         if target_rr < float(style_profile.get("min_rr", 1.0)):
             i += 1
             continue
+
+        # BUG 6 fix: apply MAX_SL_PCT distance cap for Engine B — mirrors live Fix 6.
+        _max_sl_pct_b = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
+        _sl_dist_pct_b = abs(float(entry) - float(sl)) / float(entry)
+        if _sl_dist_pct_b > _max_sl_pct_b:
+            log.debug(
+                f"[BT-SL-CAP-B] {pair['display']} {direction} SL {_sl_dist_pct_b:.1%} "
+                f"exceeds cap {_max_sl_pct_b:.1%} — clamping"
+            )
+            sl = (
+                float(entry) * (1 - _max_sl_pct_b)
+                if direction == "LONG"
+                else float(entry) * (1 + _max_sl_pct_b)
+            )
+            _sl_dist_b = abs(float(entry) - sl)
+            tp = (
+                float(entry) + _sl_dist_b * 1.5
+                if direction == "LONG"
+                else float(entry) - _sl_dist_b * 1.5
+            )
 
         outcome = "TIMEOUT"
         r_multiple = 0.0

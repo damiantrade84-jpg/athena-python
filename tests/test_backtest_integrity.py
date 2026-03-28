@@ -55,7 +55,9 @@ def test_resolve_barrier_exit_prefers_sl_when_short_bar_hits_tp_and_sl():
 def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
     pair = {"display": "AAPL", "symbol": "AAPL", "type": "stock", "source": "eodhd"}
     d1 = _make_bars(datetime(2024, 1, 1, tzinfo=timezone.utc), 100, 24, base=90.0)
-    h4 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 70, 4, base=100.0)
+    # base=99.0 so bars 0-49 close at 99.00-99.49; bar 50 overridden to 100.0.
+    # EMA21 at bar 50 ≈ 99.33 < 100.0 → H4 EMA alignment picks LONG direction (BUG 7 fix).
+    h4 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 70, 4, base=99.0)
     h1 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 400, 1, base=100.0)
 
     h4[50]["close"] = 100.0
