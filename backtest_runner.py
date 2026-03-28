@@ -249,7 +249,7 @@ def backtest_pair(pair, style="auto"):
 
             h4_raw = _rt().fetch_binance_paginated(sym, "4h", 5000)
 
-            h1_raw = _rt().fetch_binance_paginated(sym, "1h", 2000)
+            h1_raw = _rt().fetch_binance_paginated(sym, "1h", 26280)
 
         elif _ptype == "forex":
             # Forex: EODHD D1 + EODHD intraday H1 (from/to 730d) → use D1 directly, yfinance fallback
@@ -357,7 +357,7 @@ def backtest_pair(pair, style="auto"):
 
             h4_raw = _rt().fetch_candles(pair, "H4", 1000)
 
-            h1_raw = _rt().fetch_candles(pair, "H1", 1000)
+            h1_raw = _rt().fetch_candles(pair, "H1", 15000)
 
         if not d1_raw:
             return {"error": f"No D1 data for {pair['display']}"}
@@ -2567,7 +2567,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         sym = pair["symbol"]
         candles_d1 = _rt().fetch_binance(sym, "1d", 1000)
         candles_h4 = _rt().fetch_binance_paginated(sym, "4h", 5000)
-        candles_h1 = _rt().fetch_binance_paginated(sym, "1h", 2000)
+        candles_h1 = _rt().fetch_binance_paginated(sym, "1h", 26280)
     else:
         candles_d1 = _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 600)) or _rt().fetch_candles(
             pair, "D1", CONFIG.get("D1_CANDLES", 600)
