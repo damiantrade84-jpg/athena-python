@@ -295,12 +295,9 @@ class BinanceLivePriceWS:
 
 
 class BinanceCandleWS:
-    """Binance Futures kline WebSocket — feeds H1 OHLCV into CandleBuilder for crypto.
+    """Binance Futures kline WebSocket for live crypto H1/H4/D1 candles."""
 
-    Subscribes to @kline_1h for each enabled crypto pair via the combined stream
-    endpoint. Full kline O/H/L/C/V is applied via CandleBuilder.on_kline (H1 only);
-    H4/D1 for crypto come from Binance REST in fetch_candles.
-    """
+    _STREAM_TFS = {"1h": "H1", "4h": "H4", "1d": "D1"}
 
     def __init__(self):
         self._running = True
@@ -325,7 +322,11 @@ class BinanceCandleWS:
             for p in enabled
         }
 
-        streams = "/".join(f"{sym}@kline_1h" for sym in symbol_map)
+        streams = "/".join(
+            f"{sym}@kline_{interval}"
+            for sym in symbol_map
+            for interval in self._STREAM_TFS
+        )
         url = f"wss://fstream.binance.com/stream?streams={streams}"
 
         while self._running:
@@ -342,7 +343,9 @@ class BinanceCandleWS:
                         close_timeout=10,
                     ) as ws:
                         log.info(
-                            f"[BN-KLINE-WS] Connected — {len(symbol_map)} crypto pairs on @kline_1h"
+                            "[BN-KLINE-WS] Connected — %s crypto pairs on %s",
+                            len(symbol_map),
+                            ", ".join(f"@kline_{interval}" for interval in self._STREAM_TFS),
                         )
                         while self._running:
                             try:
@@ -356,10 +359,14 @@ class BinanceCandleWS:
                                 display = symbol_map.get(sym_lower)
                                 if not display:
                                     continue
+                                tf = self._STREAM_TFS.get(str(k.get("i", "")).lower())
+                                if not tf:
+                                    continue
                                 _cb = get_candle_builder()
                                 if _cb:
                                     _cb.on_kline(
                                         display,
+                                        tf,
                                         float(k["o"]),
                                         float(k["h"]),
                                         float(k["l"]),
@@ -763,14 +770,19 @@ class CandleBuilder:
 
                     bar["ticks"] += 1
 
-    def on_kline(self, display, o, h, l, c, vol, ts_ms, is_closed):
-        """Apply Binance @kline_1h snapshot: full OHLCV for crypto H1 only (not close-only ticks).
+    def on_kline(self, display, tf, o, h, l, c, vol, ts_ms, is_closed):
+        """Apply Binance futures kline snapshot for crypto H1/H4/D1.
 
         Kline fields are the running bar OHLCV; overwrite each update. Flush when is_closed.
         tick_count=0 marks DB rows as kline-sourced (vs on_tick accumulation).
         """
 
         if not c or c <= 0 or not o or o <= 0:
+            return
+
+        tf = (tf or "").upper()
+        tf_sec = self._TFS.get(tf)
+        if not tf_sec:
             return
 
         ts_s = (
@@ -781,8 +793,7 @@ class CandleBuilder:
             else time.time()
         )
 
-        tf_sec = self._TFS["H1"]
-        key = (display, "H1")
+        key = (display, tf)
 
         with self._lock:
             start = self._bar_start(ts_s, tf_sec)
@@ -790,7 +801,7 @@ class CandleBuilder:
             bar = self._bars.get(key)
 
             if bar and bar["start"] != start:
-                self._flush(display, "H1", bar)
+                self._flush(display, tf, bar)
 
             self._bars[key] = {
                 "start": start,
@@ -803,7 +814,7 @@ class CandleBuilder:
             }
 
             if is_closed:
-                self._flush(display, "H1", self._bars[key])
+                self._flush(display, tf, self._bars[key])
                 del self._bars[key]
 
     def _flush(self, pair, tf, bar):
@@ -1107,45 +1118,76 @@ class CandleBuilder:
         log.info(f"[CB] Seed complete: {seeded}/{len(pairs)} pairs")
 
     def _seed_crypto(self, pair: dict):
-        """Seed candle_cache H1 for a single crypto pair from Binance REST klines.
-
-        Crypto H4/D1 are served from REST in fetch_candles, not CandleBuilder.
-        """
+        """Seed candle_cache H1/H4/D1 for one crypto pair from Binance futures REST."""
         disp = pair["display"]
         bn_sym = pair["symbol"].replace("/", "")
 
         with sqlite3.connect(self._db, timeout=15.0) as con:
             deleted = con.execute(
-                "DELETE FROM candle_cache WHERE pair=? AND timeframe='H1' AND tick_count > 0",
+                "DELETE FROM candle_cache "
+                "WHERE pair=? AND timeframe IN ('H1','H4','D1') AND tick_count > 0",
                 (disp,),
             ).rowcount
             if deleted:
                 log.info(
-                    f"[CB] {disp}: purged {deleted} WS-corrupted H1 rows (tick_count>0) for re-seed"
+                    f"[CB] {disp}: purged {deleted} WS-built rows flagged with tick_count>0 before re-seed"
                 )
-            cnt = con.execute(
-                "SELECT COUNT(*) FROM candle_cache WHERE pair=? AND timeframe='H1'",
-                (disp,),
-            ).fetchone()[0]
-        if cnt >= 100:
+            counts = {
+                tf: con.execute(
+                    "SELECT COUNT(*) FROM candle_cache WHERE pair=? AND timeframe=?",
+                    (disp, tf),
+                ).fetchone()[0]
+                for tf in ("H1", "H4", "D1")
+            }
+            if (
+                counts.get("H1", 0) >= 100
+                and (counts.get("H4", 0) < 100 or counts.get("D1", 0) < 100)
+            ):
+                migrated = con.execute(
+                    "DELETE FROM candle_cache "
+                    "WHERE pair=? AND timeframe IN ('H1','H4','D1')",
+                    (disp,),
+                ).rowcount
+                if migrated:
+                    log.info(
+                        f"[CB] {disp}: cleared {migrated} crypto seed rows for futures H1/H4/D1 migration"
+                    )
+                counts = {"H1": 0, "H4": 0, "D1": 0}
+        if all(counts.get(tf, 0) >= 100 for tf in ("H1", "H4", "D1")):
             return
 
-        for tf_label, interval, limit in [("H1", "1h", 500)]:
+        for tf_label, interval, limit in [
+            ("H1", "1h", 1000),
+            ("H4", "4h", 1000),
+            ("D1", "1d", 1000),
+        ]:
             try:
+                if counts.get(tf_label, 0) >= 100:
+                    continue
                 resp = http_requests.get(
-                    "https://api.binance.com/api/v3/klines",
+                    "https://fapi.binance.com/fapi/v1/klines",
                     params={"symbol": bn_sym, "interval": interval, "limit": limit},
                     timeout=15,
                 )
                 if resp.status_code != 200:
+                    log.warning(
+                        f"[CB] Crypto seed {disp} {tf_label}: HTTP {resp.status_code}"
+                    )
                     continue
                 data = resp.json()
                 rows = [
                     (
-                        disp, tf_label,
-                        datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                        float(k[1]), float(k[2]), float(k[3]), float(k[4]),
-                        float(k[5]), 0,
+                        disp,
+                        tf_label,
+                        datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc).strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        ),
+                        float(k[1]),
+                        float(k[2]),
+                        float(k[3]),
+                        float(k[4]),
+                        float(k[5]),
+                        0,
                     )
                     for k in data
                 ]

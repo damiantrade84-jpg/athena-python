@@ -36,6 +36,15 @@ def _rate_value(rate, field: str, default=0.0):
         return default
 
 
+def _tick_value(tick, field: str, default=0.0):
+    """Read a field from an MT5 tick struct or dict-like test double."""
+    if tick is None:
+        return default
+    if isinstance(tick, dict):
+        return tick.get(field, default)
+    return getattr(tick, field, default)
+
+
 # ── Session windows (UTC) ─────────────────────────────────────────────────────
 _SESSIONS = {
     "london":   (7, 16),    # 07:00–16:00 UTC
@@ -45,8 +54,10 @@ _SESSIONS = {
 
 # ── MT5 candle fetching ───────────────────────────────────────────────────────
 
-def mt5_fetch_scalp_candles(mt5_symbol: str, timeframe_str: str, count: int) -> list:
-    """Fetch OHLCV candles from MT5 terminal for M15 or M5 timeframes.
+def mt5_fetch_scalp_candles(
+    mt5_symbol: str, timeframe_str: str, count: int, *, include_forming: bool = False
+) -> list:
+    """Fetch OHLCV candles from MT5 terminal for M15/M5/H1 scalp logic.
 
     Args:
         mt5_symbol: MT5 symbol string (e.g. 'EURUSD', 'XAUUSD')
@@ -93,8 +104,8 @@ def mt5_fetch_scalp_candles(mt5_symbol: str, timeframe_str: str, count: int) -> 
                 "vol":   float(_rate_value(r, "tick_volume", 0)),
             })
 
-        # Drop the forming (last) bar
-        if len(candles) > 1:
+        # Default behavior stays conservative for callers that want only closed bars.
+        if not include_forming and len(candles) > 1:
             candles = candles[:-1]
 
         return candles
@@ -105,6 +116,44 @@ def mt5_fetch_scalp_candles(mt5_symbol: str, timeframe_str: str, count: int) -> 
     except Exception as e:
         log.error(f"[SCALP] mt5_fetch_scalp_candles error: {e}")
         return []
+
+
+def mt5_get_live_price(mt5_symbol: str) -> float | None:
+    """Return a live MT5 price for scalp entry checks.
+
+    Prefers bid/ask midpoint for two-sided markets, otherwise falls back to `last`.
+    """
+    try:
+        import MetaTrader5 as mt5
+
+        if not mt5.terminal_info():
+            if not mt5.initialize():
+                return None
+
+        mt5.symbol_select(mt5_symbol, True)
+        tick = mt5.symbol_info_tick(mt5_symbol)
+        if not tick:
+            return None
+
+        bid = float(_tick_value(tick, "bid", 0) or 0)
+        ask = float(_tick_value(tick, "ask", 0) or 0)
+        last = float(_tick_value(tick, "last", 0) or 0)
+
+        if bid > 0 and ask > 0:
+            return (bid + ask) / 2.0
+        if last > 0:
+            return last
+        if bid > 0:
+            return bid
+        if ask > 0:
+            return ask
+        return None
+    except ImportError:
+        log.error("[SCALP] MetaTrader5 package not installed")
+        return None
+    except Exception as e:
+        log.error(f"[SCALP] mt5_get_live_price error: {e}")
+        return None
 
 
 # ── EMA helper ────────────────────────────────────────────────────────────────
@@ -731,7 +780,9 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 continue
 
             # Fetch candles
-            candles_m15 = mt5_fetch_scalp_candles(mt5_sym, "M15", m15_count)
+            candles_m15 = mt5_fetch_scalp_candles(
+                mt5_sym, "M15", m15_count, include_forming=True
+            )
             if len(candles_m15) < 30:
                 _record_stability_sample(
                     display, asset_type, False, reason="insufficient_m15_candles"
@@ -739,7 +790,9 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 skipped.append({"pair": display, "reason": "insufficient_m15_candles"})
                 continue
 
-            candles_m5 = mt5_fetch_scalp_candles(mt5_sym, "M5", m5_count)
+            candles_m5 = mt5_fetch_scalp_candles(
+                mt5_sym, "M5", m5_count, include_forming=True
+            )
             if len(candles_m5) < 10:
                 _record_stability_sample(
                     display, asset_type, False, reason="insufficient_m5_candles"
@@ -747,11 +800,16 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 skipped.append({"pair": display, "reason": "insufficient_m5_candles"})
                 continue
 
-            current_price = candles_m5[-1]["close"]
+            live_price = mt5_get_live_price(mt5_sym)
+            current_price = (
+                live_price if live_price and live_price > 0 else candles_m5[-1]["close"]
+            )
             htf_bias = None
 
             if use_bias_filter:
-                candles_bias = mt5_fetch_scalp_candles(mt5_sym, bias_tf, h1_count)
+                candles_bias = mt5_fetch_scalp_candles(
+                    mt5_sym, bias_tf, h1_count, include_forming=True
+                )
                 if len(candles_bias) < 200:
                     _record_stability_sample(
                         display,

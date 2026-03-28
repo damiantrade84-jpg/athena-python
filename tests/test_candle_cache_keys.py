@@ -82,3 +82,71 @@ class TestCandleCacheKeys:
 
         assert ("EURUSD", "H1", 100) in keys
         assert ("EURUSD", "h1", 100) not in keys
+
+    def test_crypto_h4_merges_live_candlebuilder_bar_over_rest_fallback(self):
+        pair = {
+            "symbol": "BTCUSDT",
+            "display": "BTC/USDT",
+            "source": "binance",
+            "type": "crypto",
+        }
+        live_h4 = [
+            {
+                "time": "2026-03-27T00:00:00+00:00",
+                "open": 87000,
+                "high": 87500,
+                "low": 86800,
+                "close": 87250,
+                "vol": 100,
+            },
+            {
+                "time": "2026-03-27T04:00:00+00:00",
+                "open": 87250,
+                "high": 87950,
+                "low": 87150,
+                "close": 87880,
+                "vol": 120,
+            },
+        ]
+        rest_h4 = [
+            {
+                "time": "2026-03-26T20:00:00+00:00",
+                "open": 86500,
+                "high": 87100,
+                "low": 86300,
+                "close": 87000,
+                "vol": 90,
+            },
+            {
+                "time": "2026-03-27T00:00:00+00:00",
+                "open": 87000,
+                "high": 87400,
+                "low": 86750,
+                "close": 87180,
+                "vol": 95,
+            },
+        ]
+        fetch_binance = Mock(return_value=rest_h4)
+
+        candles = fetch_candles(
+            pair,
+            "H4",
+            10,
+            fetch_candles_live=Mock(return_value={"candles": live_h4}),
+            fetch_binance=fetch_binance,
+            fetch_eodhd=_noop_fetch,
+            fetch_polygon=_noop_fetch,
+            fetch_yfinance=_noop_fetch,
+            fetch_mt5=None,
+            yfinance_symbol_for_pair=lambda _pair: None,
+            tf_b={"H1": "1h", "H4": "4h", "D1": "1d"},
+        )
+
+        assert fetch_binance.call_count == 1
+        assert [c["time"] for c in candles] == [
+            "2026-03-26T20:00:00+00:00",
+            "2026-03-27T00:00:00+00:00",
+            "2026-03-27T04:00:00+00:00",
+        ]
+        assert candles[-2]["close"] == 87250
+        assert candles[-1]["close"] == 87880

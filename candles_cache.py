@@ -291,9 +291,13 @@ def fetch_candles(
 
     TTL: H1=55 min, H4=3h55m, D1=23h — expires just before the next bar closes.
     """
-    # Try CandleBuilder first for live WS-built H1 only (EODHD ticks + Binance @kline_1h).
-    # Crypto H4/D1 use Binance REST native intervals (not rolled up from H1).
-    use_candle_builder = tf == "H1" and pair.get("source") != "polygon"
+    crypto_live_tf = pair.get("type") == "crypto" and tf in {"H1", "H4", "D1"}
+    # CandleBuilder remains the live source for non-polygon H1 generally, and now
+    # also for crypto H4/D1 via Binance futures kline streams.
+    use_candle_builder = pair.get("source") != "polygon" and (
+        tf == "H1" or crypto_live_tf
+    )
+    live_candles = None
 
     if use_candle_builder:
         live_resp = fetch_candles_live(pair.get("display", ""), tf, limit)
@@ -301,12 +305,17 @@ def fetch_candles(
 
         _min_live_bars = {"H1": 20, "H4": 50, "D1": 50}.get(tf, limit)
 
-        if live_candles and len(live_candles) >= min(limit, _min_live_bars):
+        if (
+            live_candles
+            and len(live_candles) >= min(limit, _min_live_bars)
+            and not crypto_live_tf
+        ):
             return live_candles[-limit:] if len(live_candles) > limit else live_candles
 
     # Include limit in key so chart (e.g. 1000 bars for EMA200) does not share TTL
     # entry with scans using a smaller limit.
     key = (pair.get("symbol", pair.get("display")), tf, int(limit))
+    candles = None
 
     now = time.time()
 
@@ -314,27 +323,30 @@ def fetch_candles(
         entry = _candle_cache.get(key)
 
         if entry is not None:
-            candles, expiry = entry
+            cached_candles, expiry = entry
 
             if now < expiry:
-                return candles
+                if crypto_live_tf and live_candles:
+                    candles = cached_candles
+                else:
+                    return cached_candles
 
-    if pair["source"] == "binance":
+    if candles is None and pair["source"] == "binance":
         candles = fetch_binance(pair["symbol"], tf_b[tf], limit)
 
-    elif pair["source"] == "eodhd":
+    elif candles is None and pair["source"] == "eodhd":
         candles = fetch_eodhd(pair, tf, limit)
 
-    elif pair["source"] == "polygon":
+    elif candles is None and pair["source"] == "polygon":
         candles = fetch_polygon(pair, tf, limit)
 
-    elif pair["source"] == "mt5" and fetch_mt5:
+    elif candles is None and pair["source"] == "mt5" and fetch_mt5:
         candles = fetch_mt5(pair, tf, limit)
 
-    elif pair["source"] == "yfinance":
+    elif candles is None and pair["source"] == "yfinance":
         candles = fetch_yfinance(yfinance_symbol_for_pair(pair), tf, limit)
 
-    else:
+    elif candles is None:
         candles = None
 
     if not candles and pair.get("type") != "crypto" and pair.get("source") == "eodhd":
@@ -346,6 +358,21 @@ def fetch_candles(
             candles = fetch_yfinance(_yf_sym, tf, limit)
 
     candles = extract_candles(candles)
+
+    if crypto_live_tf and live_candles:
+        merged = {}
+        for candle in candles or []:
+            ts = candle_time_epoch_utc(candle.get("time", candle.get("datetime")))
+            if ts is not None:
+                merged[ts] = candle
+        for candle in live_candles:
+            ts = candle_time_epoch_utc(candle.get("time", candle.get("datetime")))
+            if ts is not None:
+                merged[ts] = candle
+        if merged:
+            candles = [merged[ts] for ts in sorted(merged)]
+            if len(candles) > limit:
+                candles = candles[-limit:]
 
     if candles:
         _bad = sum(1 for c in candles[-10:] if c.get("close", 0) <= 0)

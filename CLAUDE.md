@@ -1,3 +1,8 @@
+---
+description: 
+alwaysApply: true
+---
+
 # Sentinel Pro v4.0 — Claude Code Instructions
 
 ## Recent Changes (2026-03-27) — News sentiment feed (EODHD + Claude) and scan hook
@@ -1093,3 +1098,4 @@ claude
 20. Lottery Lab — `simulate_generator()` uses incremental counters (`main_counter`, `pair_counter`, `last_seen`) — never revert to full-history rescan per draw (quadratic slowdown regression)
 21. Lottery Lab — `generate_tickets()` draw_context path requires `rules`, `universe`, `main_numbers` initialised before the `if draw_context is not None` branch (BUG-001 prevention)
 22. Lottery Lab — new games must be added to BOTH `LOTTERY_GAME_RULES` (`lottery_engine.py`) AND `LOTTERY_GAME_SPECS` (`lottery_service.py`)
+23. Live data feeds for any pair are production-critical — never change a pair’s live feed path, venue, websocket subscription behavior, or fallback chain unless the user explicitly asks for that exact feed change

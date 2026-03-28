@@ -1279,12 +1279,12 @@ def fetch_yfinance(sym, tf, limit):
 
 
 def fetch_binance(sym, interval, limit):
-    """Download OHLCV candles from Binance REST API with failover endpoint."""
+    """Download OHLCV candles from Binance USD-M futures REST with failover."""
 
     try:
-        for base in ["https://api.binance.com", "https://api1.binance.com"]:
+        for base in ["https://fapi.binance.com", "https://fapi1.binance.com"]:
             r = http_requests.get(
-                f"{base}/api/v3/klines",
+                f"{base}/fapi/v1/klines",
                 params={"symbol": sym, "interval": interval, "limit": limit},
                 timeout=15,
             )
@@ -1304,17 +1304,17 @@ def fetch_binance(sym, interval, limit):
                     for k in r.json()
                 ]
 
-            log.warning(f"[BN] {sym} HTTP {r.status_code}: {r.text[:120]}")
+            log.warning(f"[BN-FUT] {sym} HTTP {r.status_code}: {r.text[:120]}")
 
         return None
 
     except Exception as e:
-        log.error(f"[BN] {sym}: {e}")
+        log.error(f"[BN-FUT] {sym}: {e}")
         return None
 
 
 def fetch_binance_paginated(sym, interval, total_bars):
-    """Paginate Binance klines to fetch more than 1000 bars. Used by backtest only."""
+    """Paginate Binance USD-M futures klines to fetch more than 1000 bars."""
 
     all_candles = []
 
@@ -1329,9 +1329,9 @@ def fetch_binance_paginated(sym, interval, total_bars):
             if end_time:
                 params["endTime"] = end_time
 
-            for base in ["https://api.binance.com", "https://api1.binance.com"]:
+            for base in ["https://fapi.binance.com", "https://fapi1.binance.com"]:
                 r = http_requests.get(
-                    f"{base}/api/v3/klines", params=params, timeout=15
+                    f"{base}/fapi/v1/klines", params=params, timeout=15
                 )
 
                 if r.status_code == 200:
@@ -1360,7 +1360,7 @@ def fetch_binance_paginated(sym, interval, total_bars):
 
                     break
 
-                log.warning(f"[BN-PAG] {sym} HTTP {r.status_code}: {r.text[:120]}")
+                log.warning(f"[BN-FUT-PAG] {sym} HTTP {r.status_code}: {r.text[:120]}")
 
             else:
                 break  # both endpoints failed
@@ -1369,11 +1369,11 @@ def fetch_binance_paginated(sym, interval, total_bars):
                 time.sleep(1)
 
         except Exception as e:
-            log.error(f"[BN-PAG] {sym} page {page}: {e}")
+            log.error(f"[BN-FUT-PAG] {sym} page {page}: {e}")
 
             break
 
-    log.info(f"[BN-PAG] {sym} {interval}: {len(all_candles)} bars ({pages} pages)")
+    log.info(f"[BN-FUT-PAG] {sym} {interval}: {len(all_candles)} bars ({pages} pages)")
 
     return all_candles if all_candles else None
 

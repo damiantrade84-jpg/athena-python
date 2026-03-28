@@ -4,12 +4,12 @@
 # ── Candle depth for analyze_pair / scans (Engine A indicators) ─────────────
 # Fetched per TF, then last bar dropped (forming). Must satisfy analyze_pair mins:
 # len(d1)>=220, len(h4)>=50, len(h1)>=50 after drop.
-# H4/H1 default 1000 matches GET /api/candles max + ACM chart — EMAs align with dashboard.
-# D1=1001 so after forming-bar drop scoring uses ~1000 closed D1 bars (aligns with chart depth).
+# H4/H1/D1 default 1001 means after the forming-bar drop scoring still uses ~1000
+# closed bars while charts can keep the live bar for visibility.
 # Reduce for lighter scans (EMA on chart vs signal.snap will diverge).
 D1_CANDLES: 1001
-H4_CANDLES: 1000
-H1_CANDLES: 1000
+H4_CANDLES: 1001
+H1_CANDLES: 1001
 FOREX_H4_RESAMPLE_OFFSET_HOURS: 1   # EURAUD/TradingView-aligned forex H4 grid: 01/05/09/13/17/21 UTC
 
 # Per-class D1 ADX trend minimum
