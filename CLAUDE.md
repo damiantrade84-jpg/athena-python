@@ -5,6 +5,16 @@ alwaysApply: true
 
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Policy (strict) — scoring gates: live and backtest
+
+**Do not change anything that alters live or backtest scoring behaviour unless the user explicitly instructs that change.** This includes (non-exhaustive):
+
+- **Live Engine A:** `MIN_CONFLUENCE_CLASS`, `MIN_CONFLUENCE_GROUP`, `MIN_FOREX_CONFLUENCE`, `PAIR_PROFILES.min_confluence` / vote overrides, `AUTO_TRADE_MIN_SCORE`, `SCAN_QUANTILE_*`, confluence logic in `scoring.py` / `factor_scoring.py` / `forex_scoring.py`, or `analyze_pair` tiering.
+- **Backtest Engine A:** `BT_MIN`, `PAIR_PROFILES.bt_min`, `get_backtest_min_score_threshold`, or Engine A backtest score gates in `backtest_runner.py`.
+- **Engine B (live + backtest):** `NAKED_ENGINE.style_profiles` (`min_score`, `min_rr`, etc.), zone multipliers, and naked checklist gates in `market_structure.py` / backtest naked loop.
+
+Cosmetic UI copy is fine; **do not “tune”, “align”, or “simplify” thresholds** in passing. If a task does not mention scoring, leave scoring config and code untouched.
+
 ## Recent Changes (2026-03-28) — Non-crypto candle and live price routing locked to MT5
 
 **Goal:** Ensure all non-crypto H1/H4/D1 candles and live prices come exclusively from the MT5 broker terminal, eliminating any EODHD-fed CandleBuilder data from the scoring path for MT5-sourced pairs.
@@ -1154,4 +1164,6 @@ claude
 22. Lottery Lab — new games must be added to BOTH `LOTTERY_GAME_RULES` (`lottery_engine.py`) AND `LOTTERY_GAME_SPECS` (`lottery_service.py`)
 23. Live data feeds for any pair are production-critical — never change a pair’s live feed path, venue, websocket subscription behavior, or fallback chain unless the user explicitly asks for that exact feed change
 
-24. **Feed routing is locked** — non-crypto H1/H4/D1 candles must come from etch_mt5() only; non-crypto live prices must use symbol_info_tick() bid/ask mid from MT5. Never route MT5-sourced pairs through CandleBuilder or EODHD REST for candles. Never write a stale bar close into _live_prices for any MT5 pair.
+24. **Feed routing is locked** — non-crypto H1/H4/D1 candles must come from `fetch_mt5()` only; non-crypto live prices must use `symbol_info_tick()` bid/ask mid from MT5. Never route MT5-sourced pairs through CandleBuilder or EODHD REST for candles. Never write a stale bar close into `_live_prices` for any MT5 pair.
+
+25. **Scoring gates are locked unless the user says otherwise** — do not modify live or backtest scoring thresholds, weights, or gate logic (Engine A/B, `config.yaml` keys listed under **Policy — scoring gates**, or equivalent Python) unless the user **explicitly** requests that change. No drive-by “calibration” or coupling unrelated refactors to score floors.
