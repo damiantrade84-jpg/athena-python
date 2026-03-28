@@ -781,11 +781,16 @@ def calc_levels(
             },
         )
 
-    _REGIME_FACTOR = {0: 1.25, 1: 1.0, 2: 1.35, 3: 0.9}
-    # 0=TRENDING: wider stops (1.25x) — let trend breathe
-    # 1=RANGING: default (1.0x)
-    # 2=HIGH_VOLATILITY: wider stops (1.35x) — avoid noise stop-outs
-    # 3=LOW_VOLATILITY: slightly tighter (0.9x) — low noise environment
+    # Read from config so values can be overridden in config.yaml.
+    # Defaults mirror CALC_LEVELS_REGIME_FACTOR in config.py.
+    _REGIME_FACTOR = CONFIG.get(
+        "CALC_LEVELS_REGIME_FACTOR",
+        {0: 1.10, 1: 1.0, 2: 1.15, 3: 0.90},
+    )
+    # 0=TRENDING: slight breathing room (1.10x)
+    # 1=RANGING: base multipliers unchanged (1.0x)
+    # 2=HIGH_VOLATILITY: modest widening (1.15x) — was 1.35x, too aggressive for altcoins
+    # 3=LOW_VOLATILITY: slightly tighter (0.90x) — compressed environment
 
     rf = _REGIME_FACTOR.get(regime_state, 1.0)
 

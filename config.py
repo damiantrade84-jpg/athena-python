@@ -129,31 +129,55 @@ CONFIG: dict = {
     # Style-specific ATR multipliers — calibrated to industry benchmarks:
     #   quantstock.org, bestmt4ea.com, atrindicator.com, luxalgo.com, fxnx.com,
     #   cryptotrading-guide.com (2026), fxpremiere.com (XAU/USD), tapbit.com (2026).
-    # SL: lower edge of viable industry range (tight but survivable against noise).
-    # TP1: quick partial exit — slightly below industry floor (take 50-70% here).
-    # TP2: industry standard runner — let remainder ride (move SL to breakeven).
-    # Scalp uses H1 ATR, Intraday uses H4 ATR, Swing uses D1 (crypto: H4).
+    #
+    # ATR timeframe reference per style:
+    #   Scalp   → H1 ATR  (EUR/USD H1 ATR ≈ 12 pips)
+    #   Intraday → H4 ATR  (EUR/USD H4 ATR ≈ 40 pips)
+    #   Swing    → D1 ATR  (EUR/USD D1 ATR ≈ 70-90 pips; crypto also D1)
+    #
+    # Industry benchmark SL ranges:
+    #   Scalp (H1):     1.0–1.5× ATR minimum
+    #   Intraday (H4):  1.5–2.0× ATR minimum
+    #   Swing (D1):     1.5–2.0× ATR (forex/stock); 1.5–2.5× ATR (crypto/commodity)
+    #
+    # RR ratios maintained across all styles:
+    #   Scalp:    tp1/sl = 1.5:1, tp2/sl = 2.5:1
+    #   Intraday: tp1/sl = 2.0:1, tp2/sl = 3.33:1
+    #   Swing:    tp1/sl = 1.67:1, tp2/sl = 2.67:1
+    #
+    # TP1: quick partial exit at ~1.5–2× risk (take 50–70% here).
+    # TP2: runner target — move SL to breakeven after TP1 fills.
     "STYLE_ATR_MULTS": {
         "scalp": {
-            "forex":     {"sl": 0.50, "tp1": 0.75, "tp2": 1.25},
-            "crypto":    {"sl": 0.50, "tp1": 0.75, "tp2": 1.25},
-            "stock":     {"sl": 0.50, "tp1": 0.75, "tp2": 1.25},
-            "commodity": {"sl": 0.65, "tp1": 1.00, "tp2": 1.50},
-            "index":     {"sl": 0.50, "tp1": 0.75, "tp2": 1.25},
+            # H1 ATR ref. Industry min 1.0–1.5× ATR. Previous 0.50 (6 pip SL on EURUSD) was
+            # sub-spread on ECN brokers and guaranteed noise stop-outs.
+            "forex":     {"sl": 1.00, "tp1": 1.50, "tp2": 2.50},
+            "crypto":    {"sl": 1.20, "tp1": 1.80, "tp2": 3.00},
+            "stock":     {"sl": 1.00, "tp1": 1.50, "tp2": 2.50},
+            "commodity": {"sl": 1.20, "tp1": 1.80, "tp2": 3.00},
+            "index":     {"sl": 1.00, "tp1": 1.50, "tp2": 2.50},
         },
         "intraday": {
-            "forex":     {"sl": 0.75, "tp1": 1.50, "tp2": 2.50},
-            "crypto":    {"sl": 0.75, "tp1": 1.50, "tp2": 2.50},
-            "stock":     {"sl": 0.75, "tp1": 1.50, "tp2": 2.50},
-            "commodity": {"sl": 1.00, "tp1": 2.00, "tp2": 3.00},
-            "index":     {"sl": 0.75, "tp1": 1.50, "tp2": 2.50},
+            # H4 ATR ref. Industry min 1.5–2.0× ATR. Previous 0.75 (30 pip SL on EURUSD)
+            # absorbable by a single 5-minute news spike.
+            # tp2 set to 4.50 (3.0 RR with sl=1.50) so swing tp2 is strictly wider.
+            "forex":     {"sl": 1.50, "tp1": 3.00, "tp2": 4.50},
+            "crypto":    {"sl": 1.50, "tp1": 3.00, "tp2": 4.50},
+            "stock":     {"sl": 1.50, "tp1": 3.00, "tp2": 4.50},
+            "commodity": {"sl": 2.00, "tp1": 4.00, "tp2": 6.00},
+            "index":     {"sl": 1.50, "tp1": 3.00, "tp2": 4.50},
         },
         "swing": {
-            "forex":     {"sl": 1.20, "tp1": 2.00, "tp2": 3.00},
-            "crypto":    {"sl": 2.00, "tp1": 3.50, "tp2": 5.00},
-            "stock":     {"sl": 1.50, "tp1": 2.50, "tp2": 4.00},
-            "commodity": {"sl": 1.50, "tp1": 2.50, "tp2": 4.00},
-            "index":     {"sl": 1.50, "tp1": 2.50, "tp2": 4.00},
+            # D1 ATR ref for all (crypto now also D1 — see LEVEL_ATR_PRIORITY below).
+            # Crypto sl reduced from 2.0 to 1.5 because previous H4-based 2.0× produced
+            # SLs of 400–600+ pips on altcoins (e.g. XRP ~$0.57 with H4 ATR ~$0.022).
+            # All swing sl values ≥ 1.80 to keep scalp < intraday < swing ordering
+            # with the same atr reference (intraday sl = 1.50).
+            "forex":     {"sl": 1.80, "tp1": 3.00, "tp2": 5.00},
+            "crypto":    {"sl": 1.50, "tp1": 2.50, "tp2": 4.00},
+            "stock":     {"sl": 1.80, "tp1": 3.00, "tp2": 5.00},
+            "commodity": {"sl": 1.80, "tp1": 3.00, "tp2": 5.00},
+            "index":     {"sl": 1.80, "tp1": 3.00, "tp2": 5.00},
         },
     },
     "LEVEL_ATR_PRIORITY": {
@@ -165,8 +189,23 @@ CONFIG: dict = {
         "crypto": {
             "scalp": ["H1", "H4", "D1"],
             "intraday": ["H4", "H1", "D1"],
-            "swing": ["H4", "D1", "H1"],
+            # Changed from ["H4","D1","H1"]: crypto swing now uses D1 ATR first,
+            # consistent with all other asset classes. Coordinated with sl reduction
+            # from 2.0→1.5 so the wider D1 ATR doesn't produce larger stops.
+            "swing": ["D1", "H4", "H1"],
         },
+    },
+    # Regime scaling factors applied inside calc_levels (indicators.py).
+    # Applied multiplicatively to sl_mult, tp1_mult, tp2_mult.
+    # Reduced HIGH_VOLATILITY from 1.35 to 1.15 — the old 35% SL inflation compounded
+    # with wide base multipliers to produce structurally absurd SL distances on altcoins.
+    # Reduced TRENDING from 1.25 to 1.10 — slight breathing room is sufficient.
+    # Exposed here (not hardcoded in indicators.py) so yaml overrides are possible.
+    "CALC_LEVELS_REGIME_FACTOR": {
+        0: 1.10,   # TRENDING — slight breathing room for trend continuation
+        1: 1.00,   # RANGING — base multipliers apply unchanged
+        2: 1.15,   # HIGH_VOLATILITY — modest widening; was 1.35 (too aggressive)
+        3: 0.90,   # LOW_VOLATILITY — tighter stops in compressed environments
     },
     # Rolling windows for normalization (bars)
     "NORMALIZATION_LOOKBACK": {
