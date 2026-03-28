@@ -27,6 +27,22 @@ def handle_backtest_request(
     """Run pair or full backtest with unchanged output semantics."""
     bt_style = normalize_style(payload.get("style", "auto"))
     sym = payload.get("symbol")
+    # Clients (e.g. telegram_bot /bt) often send ``pair`` (display) not ``symbol``.
+    # Without this, missing ``symbol`` triggers a full-universe leaderboard backtest.
+    if not sym and payload.get("pair") is not None:
+        raw = str(payload.get("pair") or "").strip()
+        if raw:
+            _match = next(
+                (
+                    p
+                    for p in all_pairs
+                    if p.get("display") == raw or p.get("symbol") == raw
+                ),
+                None,
+            )
+            if not _match:
+                return {"error": f"Unknown pair {raw!r}", "status": 404}
+            sym = _match["symbol"]
 
     if sym:
         if not isinstance(sym, str):
