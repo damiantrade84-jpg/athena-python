@@ -4390,7 +4390,8 @@ def api_naked_analysis():
     if not d or "signal" not in d:
         return jsonify({"error": "Invalid payload"}), 400
 
-    res, _pair_obj, err = _compute_naked_analysis(d["signal"], force_ai=True)
+    force_ai = bool(d.get("force_ai", True))
+    res, _pair_obj, err = _compute_naked_analysis(d["signal"], force_ai=force_ai)
     if err:
         return jsonify({"error": err}), 500
     # Cache for chart-analysis context lookup

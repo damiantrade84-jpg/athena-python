@@ -4672,6 +4672,7 @@ function _acmEmaLineData(candles, emaArr) {
 function _acmLegendHtml(hasEngineB) {
   return '<span style="color:#00d4ff">EMA 21</span>' +
     '<span style="color:#a78bfa">EMA 50</span>' +
+    '<span style="color:rgba(0,188,212,0.7)">KELT 1.5 ATR</span>' +
     '<span style="color:rgba(245,158,11,0.75)">EMA 200</span>' +
     '<span style="color:#ff3b5c">SL</span>' +
     '<span style="color:#00e676">TP</span>' +
@@ -6217,6 +6218,7 @@ function confirmClosePosition(exchange, pair, direction, volume, ticket, btn) {
       <span class="acm-divider"></span>
       <button class="acm-toggle-btn on" id="acm-vol-btn" onclick="acmToggle('vol',this)">VOL</button>
       <button class="acm-toggle-btn on" id="acm-ema-btn" onclick="acmToggle('ema',this)">EMA</button>
+      <button class="acm-toggle-btn on" id="acm-kelt-btn" onclick="acmToggle('kelt',this)">KELT</button>
       <button class="acm-toggle-btn on" id="acm-levels-btn" onclick="acmToggle('levels',this)">LEVELS</button>
       <button class="acm-toggle-btn on" id="acm-zones-btn" onclick="acmToggle('zones',this)">ZONES</button>
       <span class="acm-divider"></span>
@@ -6267,6 +6269,8 @@ var _acm = {
   ema21: null,
   ema50: null,
   ema200: null,
+  keltUpper: null,
+  keltLower: null,
   levelLines: [],
   zoneLines: [],
   symbol: '',
@@ -6274,7 +6278,7 @@ var _acm = {
   sig: null,
   pairType: '',
   priceDisplay: '',
-  show: { vol: true, ema: true, levels: true, zones: false },
+  show: { vol: true, ema: true, kelt: true, levels: true, zones: true },
   liveInterval: null,
   lastData: [],
   snapshotCandles: { H1: null, H4: null, D1: null },
@@ -6284,8 +6288,8 @@ function openAcm(symbol, tf, fallbackSig) {
   _acm.symbol = symbol;
   _acm.tf = tf || 'H4';
   _acm.lastData = [];
-  _acm.show = { vol: true, ema: true, levels: true, zones: _acm.tf === 'H4' ? false : true };
-  [['vol','acm-vol-btn'], ['ema','acm-ema-btn'], ['levels','acm-levels-btn'], ['zones','acm-zones-btn']].forEach(function(row) {
+  _acm.show = { vol: true, ema: true, kelt: true, levels: true, zones: true };
+  [['vol','acm-vol-btn'], ['ema','acm-ema-btn'], ['kelt','acm-kelt-btn'], ['levels','acm-levels-btn'], ['zones','acm-zones-btn']].forEach(function(row) {
     var el = document.getElementById(row[1]);
     if (!el) return;
     el.classList.toggle('on', !!_acm.show[row[0]]);
@@ -6362,14 +6366,14 @@ function closeAcm() {
 
 function acmSetTF(tf, el) {
   _acm.tf = tf;
-  if (tf === 'H4') _acm.show.zones = false;
   document.querySelectorAll('.acm-tf-btn').forEach(function(b) { b.classList.remove('active'); });
   if (el) el.classList.add('active');
-  var _zonesBtn = document.getElementById('acm-zones-btn');
-  if (_zonesBtn) {
-    _zonesBtn.classList.toggle('on', !!_acm.show.zones);
-    _zonesBtn.classList.toggle('off', !_acm.show.zones);
-  }
+  [['kelt','acm-kelt-btn'], ['zones','acm-zones-btn']].forEach(function(row) {
+    var btn = document.getElementById(row[1]);
+    if (!btn) return;
+    btn.classList.toggle('on', !!_acm.show[row[0]]);
+    btn.classList.toggle('off', !_acm.show[row[0]]);
+  });
   _acmRender(_acm.symbol, tf);
 }
 
@@ -6383,6 +6387,10 @@ function acmToggle(what, el) {
   if (what === 'ema')
     [_acm.ema21, _acm.ema50, _acm.ema200].forEach(function(s) {
       if (s) s.applyOptions({ visible: _acm.show.ema });
+    });
+  if (what === 'kelt')
+    [_acm.keltUpper, _acm.keltLower].forEach(function(s) {
+      if (s) s.applyOptions({ visible: _acm.show.kelt });
     });
   if (what === 'levels')
     _acm.levelLines.forEach(function(l) { try { _acm.candle.removePriceLine(l); } catch(e){} });
@@ -6405,6 +6413,62 @@ function _acmEMA(data, period) {
   for (var j = period; j < data.length; j++)
     ema[j] = data[j] * k + ema[j - 1] * (1 - k);
   return ema;
+}
+
+function _acmKeltnerData(candles, ema21) {
+  if (!candles || candles.length < 21 || !ema21 || ema21.length < 21) {
+    return { upper: [], lower: [] };
+  }
+  var tr = new Array(candles.length).fill(null);
+  for (var i = 0; i < candles.length; i++) {
+    var cur = candles[i];
+    var prevClose = i > 0 ? candles[i - 1].close : cur.close;
+    var highLow = Math.abs(cur.high - cur.low);
+    var highClose = Math.abs(cur.high - prevClose);
+    var lowClose = Math.abs(cur.low - prevClose);
+    tr[i] = Math.max(highLow, highClose, lowClose);
+  }
+  var atr14 = new Array(candles.length).fill(null);
+  var alpha = 2 / 15;
+  if (tr.length) atr14[0] = tr[0];
+  for (var j = 1; j < tr.length; j++) {
+    atr14[j] = (tr[j] * alpha) + (atr14[j - 1] * (1 - alpha));
+  }
+  var upper = [];
+  var lower = [];
+  for (var k = 0; k < candles.length; k++) {
+    if (k < 20) continue;
+    var mid = ema21[k];
+    var atr = atr14[k];
+    if (mid == null || atr == null || !isFinite(mid) || !isFinite(atr)) continue;
+    upper.push({ time: candles[k].time, value: mid + (atr * 1.5) });
+    lower.push({ time: candles[k].time, value: mid - (atr * 1.5) });
+  }
+  return { upper: upper, lower: lower };
+}
+
+async function _acmEnsureEngineB(symbol) {
+  var sid = (symbol || '').replace(/[\/=^.]/g, '_');
+  if (window['_engineB_' + sid]) return window['_engineB_' + sid];
+
+  var sig = _acm.sig || window['_nakedSig_' + sid] || allSignals.find(function(s) {
+    return s.symbol === symbol || s.display === symbol || s.pair === symbol;
+  });
+  if (!sig) return null;
+
+  try {
+    var resp = await fetch('/api/naked-analysis', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ signal: buildLiveSignalPayload(sig), force_ai: false })
+    });
+    var data = await resp.json();
+    if (!resp.ok || data.error) return null;
+    window['_engineB_' + sid] = data;
+    return data;
+  } catch (e) {
+    return null;
+  }
 }
 
 /** Athena chart modal: bar time as UTC (server stores UTC without Z). */
@@ -6526,6 +6590,7 @@ function _acmSanitizeCandlesForChart(rows, isForex) {
 async function _acmRender(symbol, tf) {
   var body = document.getElementById('acm-chart-body');
   _acm.lastData = [];
+  await _acmEnsureEngineB(symbol);
 
   // Loading state
   if (_acm.chart) { _acm.chart.remove(); _acm.chart = null; }
@@ -6640,13 +6705,29 @@ async function _acmRender(symbol, tf) {
     });
     _acm.ema200.setData(_acmEmaLineData(data, e200));
 
+    var kc = _acmKeltnerData(data, e21);
+    _acm.keltUpper = _acm.chart.addLineSeries({
+      color: 'rgba(0,188,212,0.35)', lineWidth: 1, lineStyle: 2,
+      priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    });
+    _acm.keltUpper.setData(kc.upper);
+    _acm.keltLower = _acm.chart.addLineSeries({
+      color: 'rgba(0,188,212,0.35)', lineWidth: 1, lineStyle: 2,
+      priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    });
+    _acm.keltLower.setData(kc.lower);
+
     [_acm.ema21, _acm.ema50, _acm.ema200].forEach(function(s) {
       if (s) s.applyOptions({ visible: _acm.show.ema });
+    });
+    [_acm.keltUpper, _acm.keltLower].forEach(function(s) {
+      if (s) s.applyOptions({ visible: _acm.show.kelt });
     });
 
     // Keep original scan price/SL/TP values - don't rebase entry.
     // Rebasing caused mismatch when market moved significantly from scan time.
     var lastClose = data[data.length - 1].close;
+    _acm.lastData = data;
 
     // Draw signal levels and zones
     _acm.levelLines = [];
@@ -6663,6 +6744,7 @@ async function _acmRender(symbol, tf) {
     document.getElementById('acm-legend').innerHTML =
       '<span style="color:#00d4ff">━ EMA 21</span>' +
       '<span style="color:#a78bfa">━ EMA 50</span>' +
+      '<span style="color:rgba(0,188,212,0.6)">╌ KELT 1.5 ATR</span>' +
       '<span style="color:rgba(245,158,11,0.6)">╌ EMA 200</span>' +
       (_acm.sig && _acm.sig.sl_method ? '<span style="color:#475569;font-size:9px;margin-left:8px;">· SL/TP fixed · Entry rebased to H4 close</span>' : '');
 
@@ -6731,7 +6813,6 @@ async function _acmRender(symbol, tf) {
     })();
 
     // Signal that the chart is fully rendered (EMAs + levels + zoom all applied)
-    _acm.lastData = data;
 
     // Resize
     var _ro = new ResizeObserver(function() {
@@ -6776,6 +6857,7 @@ function _acmDrawLevels() {
 function _acmDrawZones() {
   if (!_acm.candle) return;
   _acm.zoneLines = [];
+  _acm.candle.setMarkers([]);
 
   var sid = (_acm.symbol || '').replace(/[\/=^.]/g, '_');
   var eb = window['_engineB_' + sid];
@@ -6870,7 +6952,7 @@ function _acmDrawZones() {
       shape: 'circle', text: 'SL ' + parseFloat(bos.last_broken_low).toFixed(4),
     });
   }
-  if (markers.length) _acm.candle.setMarkers(markers);
+  _acm.candle.setMarkers(markers);
 }
 
 // Live price updates on chart
