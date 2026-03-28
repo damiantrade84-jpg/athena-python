@@ -3,6 +3,7 @@ import types
 from datetime import datetime, timezone
 
 import scalp_engine
+import mt5_executor
 from scalp_engine import (
     get_current_sessions,
     infer_bias_from_ema_stack,
@@ -35,6 +36,7 @@ def test_mt5_fetch_scalp_candles_accepts_structured_rows(monkeypatch):
     )
 
     monkeypatch.setitem(sys.modules, "MetaTrader5", fake_mt5)
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
 
     candles = mt5_fetch_scalp_candles("EURUSD", "M15", 2)
 
@@ -65,6 +67,7 @@ def test_mt5_fetch_scalp_candles_can_keep_forming_bar(monkeypatch):
     )
 
     monkeypatch.setitem(sys.modules, "MetaTrader5", fake_mt5)
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
 
     candles = mt5_fetch_scalp_candles("EURUSD", "M15", 2, include_forming=True)
 
@@ -98,6 +101,7 @@ def test_mt5_get_live_price_prefers_bid_ask_mid(monkeypatch):
     )
 
     monkeypatch.setitem(sys.modules, "MetaTrader5", fake_mt5)
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
 
     assert mt5_get_live_price("EURUSD") == 1.2346
 

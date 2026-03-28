@@ -68,12 +68,12 @@ def mt5_fetch_scalp_candles(
         list of dicts: {time, open, high, low, close, vol}
     """
     try:
+        from mt5_executor import mt5_connect
         import MetaTrader5 as mt5
 
-        if not mt5.terminal_info():
-            if not mt5.initialize():
-                log.error(f"[SCALP] MT5 not initialised — cannot fetch {mt5_symbol}")
-                return []
+        if not mt5_connect():
+            log.error(f"[SCALP] MT5 not connected - cannot fetch {mt5_symbol}")
+            return []
 
         tf_map = {
             "M5":  mt5.TIMEFRAME_M5,
@@ -124,11 +124,11 @@ def mt5_get_live_price(mt5_symbol: str) -> float | None:
     Prefers bid/ask midpoint for two-sided markets, otherwise falls back to `last`.
     """
     try:
+        from mt5_executor import mt5_connect
         import MetaTrader5 as mt5
 
-        if not mt5.terminal_info():
-            if not mt5.initialize():
-                return None
+        if not mt5_connect():
+            return None
 
         mt5.symbol_select(mt5_symbol, True)
         tick = mt5.symbol_info_tick(mt5_symbol)
