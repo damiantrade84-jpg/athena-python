@@ -2534,7 +2534,9 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         _bt_entry_candles = h4_ctx if (_pair_type == "forex" and _forex_struct_tf == "D1") else h1_ctx
         candidates = []
         for direction in ["LONG", "SHORT"]:
-            res = naked_engine.analyze_structure(
+            res = naked_engine.set_registry_context(
+                pair.get("symbol") or pair.get("display")
+            ).analyze_structure(
                 d1_ctx,
                 h4_ctx,
                 h1_ctx,

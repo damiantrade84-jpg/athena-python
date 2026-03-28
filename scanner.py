@@ -399,7 +399,9 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                             direction = sig_a.get("direction")
 
                             if direction in ("LONG", "SHORT"):
-                                res_b = _engine_b.analyze_structure(
+                                res_b = _engine_b.set_registry_context(
+                                    pair.get("symbol") or pair.get("display")
+                                ).analyze_structure(
                                     d1 or [],
                                     h4,
                                     h1 or [],

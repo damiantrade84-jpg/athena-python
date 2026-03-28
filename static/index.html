@@ -6388,6 +6388,8 @@ function acmToggle(what, el) {
     _acm.levelLines.forEach(function(l) { try { _acm.candle.removePriceLine(l); } catch(e){} });
   if (what === 'levels' && _acm.show.levels) _acmDrawLevels();
   if (what === 'zones')
+    _acm.candle.setMarkers([]);
+  if (what === 'zones')
     _acm.zoneLines.forEach(function(l) { try { _acm.candle.removePriceLine(l); } catch(e){} });
   if (what === 'zones' && _acm.show.zones) _acmDrawZones();
 }
@@ -6839,6 +6841,36 @@ function _acmDrawZones() {
     price: parseFloat(brk.level), color: '#06b6d4', lineWidth: 1,
     lineStyle: 3, axisLabelVisible: true, title: 'BREAKER',
   }));
+  // Fair Value Gaps
+  (eb.active_fvgs || []).forEach(function(fvg) {
+    if (fvg.mitigated) return;
+    var c = fvg.type === 'bullish' ? 'rgba(0,200,83,0.6)' : 'rgba(255,59,92,0.6)';
+    var label = fvg.type === 'bullish' ? 'FVG ▲' : 'FVG ▼';
+    _acm.zoneLines.push(_acm.candle.createPriceLine({
+      price: parseFloat(fvg.top), color: c, lineWidth: 1,
+      lineStyle: 2, axisLabelVisible: true, title: label,
+    }));
+    _acm.zoneLines.push(_acm.candle.createPriceLine({
+      price: parseFloat(fvg.bottom), color: c, lineWidth: 1,
+      lineStyle: 2, axisLabelVisible: false, title: '',
+    }));
+  });
+  // Swing high/low structural anchors
+  var markers = [];
+  var lastBar = _acm.lastData && _acm.lastData.length ? _acm.lastData[_acm.lastData.length - 1] : null;
+  if (lastBar) {
+    var t = lastBar.time;
+    var bos = eb.bos_data || {};
+    if (bos.last_broken_high) markers.push({
+      time: t, position: 'aboveBar', color: '#f59e0b',
+      shape: 'circle', text: 'SH ' + parseFloat(bos.last_broken_high).toFixed(4),
+    });
+    if (bos.last_broken_low) markers.push({
+      time: t, position: 'belowBar', color: '#f59e0b',
+      shape: 'circle', text: 'SL ' + parseFloat(bos.last_broken_low).toFixed(4),
+    });
+  }
+  if (markers.length) _acm.candle.setMarkers(markers);
 }
 
 // Live price updates on chart

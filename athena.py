@@ -4241,7 +4241,9 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             pair_obj.get("type", "stock"),
             engine_a_ctx.get("regime") if isinstance(engine_a_ctx, dict) else None,
         )
-        res = engine.analyze_structure(
+        res = engine.set_registry_context(
+            pair_obj.get("symbol") or pair_obj.get("display")
+        ).analyze_structure(
             d1, h4, h1, current_price, direction, atr, regime_label, asset_type=pair_obj.get("type", "")
         )
 
@@ -4398,6 +4400,23 @@ def api_naked_analysis():
         _sid = _sym.replace("/", "_").replace("=", "_").replace("^", "_").replace(".", "_")
         _engine_b_cache_put(_sid, res)
         _engine_b_cache_put(_sym, res)
+    if isinstance(res, dict):
+        active_fvgs = []
+        for fvg in res.get("active_fvgs", []) or []:
+            if not isinstance(fvg, dict):
+                continue
+            active_fvgs.append(
+                {
+                    **fvg,
+                    "top": float(fvg.get("top", 0.0)),
+                    "bottom": float(fvg.get("bottom", 0.0)),
+                    "size": float(fvg.get("size", 0.0)),
+                    "mitigated": bool(fvg.get("mitigated", False)),
+                    "strength": float(fvg.get("strength", 0.0)),
+                    "scan_count": int(fvg.get("scan_count", 1)),
+                }
+            )
+        res = {**res, "active_fvgs": active_fvgs}
     return jsonify(_json_safe(res))
 
 
@@ -4589,7 +4608,9 @@ def api_scan_naked():
             # analyze_structure uses: arg2 (h4 slot) for zones/macro, arg3 (h1 slot) for micro/BOS/sweep
             regime_label = _engine_b_regime_label(zone_candles, pair.get("type", "stock"))
             for direction in ["LONG", "SHORT"]:
-                res = engine.analyze_structure(
+                res = engine.set_registry_context(
+                    pair.get("symbol") or pair.get("display")
+                ).analyze_structure(
                     d1_candles,
                     zone_candles,
                     entry_candles,
@@ -6206,6 +6227,13 @@ def api_chart_analysis():
                 [f"{ob['type']} str={ob.get('strength', 0)}%" for ob in eb["order_blocks"]]
             )
             context_parts.append(f"ORDER BLOCKS: {obs_str}")
+        active_fvgs = [f for f in (eb.get("active_fvgs") or []) if not f.get("mitigated")]
+        if active_fvgs:
+            fvg_str = ", ".join(
+                f"{f['type']} {float(f['bottom']):.5f}-{float(f['top']):.5f}"
+                for f in active_fvgs
+            )
+            context_parts.append(f"ACTIVE FVGs (unmitigated imbalances): {fvg_str}")
         if eb.get("nearest_support_zone"):
             z = eb["nearest_support_zone"]
             context_parts.append(f"SUPPORT ZONE: {z.get('lower')}-{z.get('upper')}")
@@ -6294,11 +6322,12 @@ def api_chart_analysis():
         "CHART ANNOTATIONS VISIBLE:\n"
         "- Green/red candles with EMA 21 (cyan), EMA 50 (purple), EMA 200 (gold dashed)\n"
         "- Entry (grey dashed), SL (red solid), TP1/TP2 (green solid) horizontal lines\n"
+        "- FVG imbalance zones visible as cyan dashed lines (bullish=green, bearish=red)\n"
         "- Engine B zones may be visible (support green, resistance red, BOS amber, CHoCH purple, OB labelled)\n\n"
         "ANSWER THESE 5 QUESTIONS:\n"
         "1. PATTERN: What price action pattern is forming? (flag, wedge, channel, H&S, double top/bottom, breakout, pullback, range, etc.)\n"
         f"2. STRUCTURE: Does the visible price structure CONFIRM or CONTRADICT the algorithmic {direction_str} bias? Why?\n"
-        "3. MISSED: Are there any patterns or levels the algorithm may have missed? (unfilled gaps, hidden divergence, liquidity pools above/below current price, trendline breaks)\n"
+        "3. MISSED: Are there any patterns or levels the algorithm may have missed? (unmitigated FVGs, hidden divergence, liquidity pools above/below current price, equal highs/lows, trendline breaks)\n"
         "4. SL/TP ASSESSMENT: Based on what you see, are the SL and TP levels well-placed? Would you adjust either? Be specific with price levels.\n"
         "5. PER-STYLE RATINGS: Rate this chart setup for EACH trade style independently. "
         "Consider whether the visible structure, momentum, and levels suit that holding period.\n"
@@ -6351,6 +6380,7 @@ def api_chart_analysis():
                 "CHART ANNOTATIONS (same in all three images):\n"
                 "- Green/red candles · EMA 21 (cyan) · EMA 50 (purple) · EMA 200 (gold dashed)\n"
                 "- Entry (grey dashed) · SL (red solid) · TP (green solid) lines\n"
+                "- FVG imbalance zones visible as cyan dashed lines (bullish=green, bearish=red)\n"
                 "- Engine B zones may be visible: support (green), resistance (red), "
                 "BOS (amber), CHoCH (purple), OB (labelled)\n\n"
                 "ANSWER THESE 5 QUESTIONS:\n"
@@ -6403,6 +6433,7 @@ def api_chart_analysis():
                 "IMAGE 2 is the H4 (4-hour) chart — tells you the ENTRY TIMING and structure.\n\n"
                 f"ALGORITHMIC CONTEXT:\n{algo_context}\n\n"
                 "CHART ANNOTATIONS (same in both images):\n"
+                "- FVG imbalance zones visible as cyan dashed lines (bullish=green, bearish=red)\n"
                 "- Green/red candles · EMA 21 (cyan) · EMA 50 (purple) · EMA 200 (gold dashed)\n"
                 "- Entry (grey dashed) · SL (red solid) · TP (green solid) lines\n"
                 "- Engine B zones may be visible: support (green), resistance (red), "
@@ -7404,7 +7435,9 @@ def analyze_pair(
                 pair.get("type", "stock"),
                 res.get("regime"),
             )
-            structure_data = naked_engine.analyze_structure(
+            structure_data = naked_engine.set_registry_context(
+                pair.get("symbol") or pair.get("display")
+            ).analyze_structure(
                 d1, h4, h1, float(price), direction, float(atr), _regime_label, asset_type=pair.get("type", "")
             )
 

@@ -381,7 +381,9 @@ def api_engine_c_scan():
                 test_directions = ["LONG", "SHORT"]
 
             for test_dir in test_directions:
-                res_b = engine_b.analyze_structure(
+                res_b = engine_b.set_registry_context(
+                    pair.get("symbol") or display
+                ).analyze_structure(
                     d1 or [],
                     h4,
                     h1 or [],

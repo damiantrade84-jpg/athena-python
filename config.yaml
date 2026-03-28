@@ -511,6 +511,7 @@ NAKED_ENGINE:
 
 # Engine B AI news context — feeds news into AI advisory review (not checklist)
 ENGINE_B_NEWS_CONTEXT_ENABLED: true
+ENGINE_B_ZONE_PERSISTENCE: false
 
 # Forex structure timeframe for Engine B naked trading.
 # "D1" = use daily candles for swing/BOS/CHoCH detection (filters H1 noise).

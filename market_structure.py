@@ -2,14 +2,64 @@ import pandas as pd
 import numpy as np
 from scipy.signal import find_peaks
 import logging
+import threading
 import config
+from zone_registry import get_zone_registry
 
 log = logging.getLogger(__name__)
 
 
 class NakedEngine:
     def __init__(self):
-        pass
+        self._registry_context = threading.local()
+
+    def set_registry_context(self, symbol: str | None):
+        self._registry_context.symbol = (
+            str(symbol).upper() if symbol is not None and str(symbol).strip() else None
+        )
+        return self
+
+    def _consume_registry_symbol(self) -> str | None:
+        symbol = getattr(self._registry_context, "symbol", None)
+        self._registry_context.symbol = None
+        return symbol
+
+    def _registry_order_blocks(self, entries: list[dict]) -> list[dict]:
+        obs = []
+        for entry in entries:
+            if entry.get("type") != "OB":
+                continue
+            obs.append({
+                "type": entry.get("direction"),
+                "top": float(entry.get("top", 0.0)),
+                "bottom": float(entry.get("bottom", 0.0)),
+                "strength": int(round(float(entry.get("strength", 0.0)))),
+                "mitigated": bool(entry.get("mitigated", False)),
+                "created_at": entry.get("created_at"),
+                "mitigated_at": entry.get("mitigated_at"),
+                "scan_count": int(entry.get("scan_count", 1)),
+            })
+        return obs
+
+    def _registry_fvgs(self, entries: list[dict]) -> list[dict]:
+        fvgs = []
+        for entry in entries:
+            if entry.get("type") != "FVG":
+                continue
+            top = float(entry.get("top", 0.0))
+            bottom = float(entry.get("bottom", 0.0))
+            fvgs.append({
+                "type": entry.get("direction"),
+                "top": top,
+                "bottom": bottom,
+                "size": round(abs(top - bottom), 6),
+                "strength": float(entry.get("strength", abs(top - bottom))),
+                "mitigated": bool(entry.get("mitigated", False)),
+                "created_at": entry.get("created_at"),
+                "mitigated_at": entry.get("mitigated_at"),
+                "scan_count": int(entry.get("scan_count", 1)),
+            })
+        return fvgs
 
     def _find_zones(
         self,
@@ -667,9 +717,12 @@ class NakedEngine:
                 "reason": "Missing data or valid ATR",
             }
 
+        registry_symbol = self._consume_registry_symbol()
+
         # Forex structure timeframe selection
         _forex_struct_tf = config.CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
         _use_d1_structure = (asset_type == "forex" and _forex_struct_tf == "D1")
+        structure_tf = "D1" if _use_d1_structure else "H1"
         if _use_d1_structure:
             struct_candles = d1_candles
             trigger_candles = h4_candles
@@ -694,18 +747,6 @@ class NakedEngine:
         # Determine FVG overlap with zones — graded by quality
         fvgs = self._detect_fvg(h4_candles)
         active_fvgs = [f for f in fvgs if not f.get("mitigated", False)]
-        for zone in res_zones + sup_zones:
-            overlapping_fvgs = [
-                fvg for fvg in active_fvgs
-                if not (zone["upper"] < fvg["bottom"] or zone["lower"] > fvg["top"])
-            ]
-            zone["fvg_overlap"] = len(overlapping_fvgs) > 0
-            # FVG quality: size relative to ATR (larger = more significant)
-            if overlapping_fvgs and atr > 0:
-                largest_fvg = max(overlapping_fvgs, key=lambda f: abs(f["top"] - f["bottom"]))
-                zone["fvg_size_atr"] = round(abs(largest_fvg["top"] - largest_fvg["bottom"]) / atr, 2)
-            else:
-                zone["fvg_size_atr"] = 0.0
 
         # 2. Immediate Structure Sequence and Macro H4 Sequence
         sequence_data = self._determine_sequence(struct_highs, struct_lows, atr, direction)
@@ -748,6 +789,36 @@ class NakedEngine:
             (bos_data.get("bos_bull") and d1_bos.get("bos_bull")) or
             (bos_data.get("bos_bear") and d1_bos.get("bos_bear"))
         )
+
+        order_blocks = self._detect_order_blocks(struct_candles, bos_data, atr)
+        if registry_symbol:
+            zone_registry = get_zone_registry()
+            zone_registry.upsert_zones(registry_symbol, structure_tf, order_blocks, [], atr=atr)
+            zone_registry.upsert_zones(registry_symbol, "H4", [], fvgs, atr=atr)
+            zone_registry.mark_mitigated(registry_symbol, structure_tf, current_price, atr)
+            zone_registry.mark_mitigated(registry_symbol, "H4", current_price, atr)
+            zone_registry.prune_old_zones()
+
+            if zone_registry.has_zones(registry_symbol, structure_tf):
+                order_blocks = self._registry_order_blocks(
+                    zone_registry.get_active_zones(registry_symbol, structure_tf)
+                )
+            if zone_registry.has_zones(registry_symbol, "H4"):
+                active_fvgs = self._registry_fvgs(
+                    zone_registry.get_active_zones(registry_symbol, "H4")
+                )
+
+        for zone in res_zones + sup_zones:
+            overlapping_fvgs = [
+                fvg for fvg in active_fvgs
+                if not (zone["upper"] < fvg["bottom"] or zone["lower"] > fvg["top"])
+            ]
+            zone["fvg_overlap"] = len(overlapping_fvgs) > 0
+            if overlapping_fvgs and atr > 0:
+                largest_fvg = max(overlapping_fvgs, key=lambda f: abs(f["top"] - f["bottom"]))
+                zone["fvg_size_atr"] = round(abs(largest_fvg["top"] - largest_fvg["bottom"]) / atr, 2)
+            else:
+                zone["fvg_size_atr"] = 0.0
 
         # 3b. CHoCH Detection (structural reversal)
         choch_data = self._detect_choch(struct_highs, struct_lows, atr)
@@ -827,8 +898,6 @@ class NakedEngine:
         sup_zones = [z for z in sup_zones if z["upper"] < current_close + (atr * 0.1)]
 
         # 3c. Order Block Detection — last opposing candle before BOS
-        order_blocks = self._detect_order_blocks(struct_candles, bos_data, atr)
-
         # 4. Find Nearest Zones Relative to Current Price
         # Nearest resistance above price
         valid_res = [z for z in res_zones if z["upper"] >= current_price]
@@ -976,6 +1045,7 @@ class NakedEngine:
             "order_blocks": order_blocks,
             "ob_at_zone": _ob_at_zone,
             "fvg_overlap": fvg_overlap,
+            "active_fvgs": active_fvgs,
             "liquidity_sweep": sequence_data.get("liquidity_sweep", False),
             "active_zone_distance": zone_ctx["distance"],
             "near_active_zone": zone_ctx["near_zone"],
@@ -986,7 +1056,7 @@ class NakedEngine:
             "engulfing_candle": trigger_ctx["engulfing"],
             "inside_break_candle": trigger_ctx["inside_break"],
             "strong_close": trigger_ctx["strong_close"],
-            "structure_tf": "D1" if _use_d1_structure else "H1",
+            "structure_tf": structure_tf,
         }
 
     def calculate_confidence(

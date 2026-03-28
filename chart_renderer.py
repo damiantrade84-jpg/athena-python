@@ -108,6 +108,29 @@ def render_chart_image(
     if len(df) >= 21:
         ema21 = df["Close"].ewm(span=21).mean()
         addplots.append(mpf.make_addplot(ema21, color="#00bcd4", width=0.8))
+        high_low = df["High"] - df["Low"]
+        high_close = (df["High"] - df["Close"].shift()).abs()
+        low_close = (df["Low"] - df["Close"].shift()).abs()
+        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        atr14 = tr.ewm(span=14, adjust=False).mean()
+        kelt_upper = ema21 + (atr14 * 1.5)
+        kelt_lower = ema21 - (atr14 * 1.5)
+        addplots.append(
+            mpf.make_addplot(
+                kelt_upper,
+                color="rgba(0,188,212,0.25)",
+                width=0.5,
+                linestyle="--",
+            )
+        )
+        addplots.append(
+            mpf.make_addplot(
+                kelt_lower,
+                color="rgba(0,188,212,0.25)",
+                width=0.5,
+                linestyle="--",
+            )
+        )
     if len(df) >= 50:
         ema50 = df["Close"].ewm(span=50).mean()
         addplots.append(mpf.make_addplot(ema50, color="#9575cd", width=0.8))

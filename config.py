@@ -526,6 +526,7 @@ CONFIG: dict = {
     "EODHD_EARNINGS_CALENDAR_ENABLED": False,  # Disabled by default; unsupported on many EODHD plans
     # ── Engine B AI Controls ─────────────────────────────────────────────────
     "ENGINE_B_NEWS_CONTEXT_ENABLED": True,  # Feed news into Engine B AI advisory (not checklist)
+    "ENGINE_B_ZONE_PERSISTENCE": False,  # Persist Engine B OB/FVG registry to zones.db
     "AI_ON_DEMAND_ONLY": True,  # AI runs on user-initiated actions only, not auto-scans
     # ── Engine C B-side fallback controls ─────────────────────────────────────
     "ENGINE_C_B_ONLY_MULT": 0.65,  # Scale B-only conviction when A has no signal
