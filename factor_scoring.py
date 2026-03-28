@@ -569,7 +569,8 @@ def compute_factor_scores(
         # Standard neutral Binance funding is 0.01% (0.0001). Offset so neutral = 0.0.
         # Scale remaining deviation: 0.03% deviation translates to ±3.0.
         adjusted_funding = funding_rate - 0.0001
-        indicators["funding_rate"] = max(-3.0, min(3.0, -adjusted_funding * 15000))
+        # Recalibrated: 0.04% above neutral → score of 2.0 (was maxing at 0.02%)
+        indicators["funding_rate"] = max(-3.0, min(3.0, -adjusted_funding * 5000))
     else:
         indicators["funding_rate"] = None  # No funding data — exclude
 
@@ -827,7 +828,7 @@ def compute_factor_scores(
         )
     )
     dir_sum = sum(active_dir.values()) if active_dir else 0.0
-    direction = "LONG" if dir_sum >= 0 else "SHORT"
+    direction = "LONG" if dir_sum > 0 else "SHORT"
 
     # Minimum active factors guard: require at least 1 directional factor.
     # Prevents inflated scores driven solely by volatility (e.g. JSE stocks with no H4/H1 data).
