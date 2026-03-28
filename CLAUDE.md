@@ -5,6 +5,29 @@ alwaysApply: true
 
 # Sentinel Pro v4.0 — Claude Code Instructions
 
+## Recent Changes (2026-03-28) — Non-crypto candle and live price routing locked to MT5
+
+**Goal:** Ensure all non-crypto H1/H4/D1 candles and live prices come exclusively from the MT5 broker terminal, eliminating any EODHD-fed CandleBuilder data from the scoring path for MT5-sourced pairs.
+
+**`candles_cache.py` — H1 routing fix:**
+- `use_candle_builder` condition now excludes `source == "mt5"` pairs in addition to `source == "polygon"`.
+- Previously, MT5-sourced H1 candles were routed through CandleBuilder (EODHD-fed) if ≥20 bars were available there, resulting in EODHD data being used for scoring instead of MT5 data.
+- Now all three timeframes (H1, H4, D1) for `source: "mt5"` pairs go directly to `fetch_mt5()` — consistent with how H4/D1 already worked.
+
+**`athena.py` — `fetch_mt5()` live price fix:**
+- Replaced stale last-bar-close write into `_live_prices` with a proper `mt5.symbol_info_tick()` call.
+- Live price is now the **bid/ask midpoint** from the broker terminal, with `last` price as fallback and bar close as final fallback.
+- `bid` and `ask` fields also stored in `_live_prices` entry for spread visibility.
+- This ensures entry price checks, drift detection, and dashboard price display all reflect the broker's current market price, not a price that could be up to 1 hour stale.
+
+**Confirmed feed routing contract (do not change without explicit user approval):**
+- **Non-crypto H1/H4/D1 candles**: `fetch_mt5()` only — no CandleBuilder, no EODHD REST fallback.
+- **Non-crypto live prices (`_live_prices`)**: `symbol_info_tick()` from MT5 — bid/ask mid.
+- **Crypto H1/H4/D1 candles**: `BinanceCandleWS` kline streams + Binance futures REST seed.
+- **Crypto live prices**: `BinanceLivePriceWS` (`!ticker@arr` stream).
+- **EODHD WS**: remains running for EODHD-sourced pairs only (e.g. JSE disabled pairs); must not build candles for MT5-sourced pairs.
+- **Candle depth**: `D1_CANDLES: 1001`, `H4_CANDLES: 1001`, `H1_CANDLES: 1001` — yields 1000 closed bars after forming bar is dropped. `fetch_mt5()` requests `limit + 100` to ensure full depth.
+
 ## Recent Changes (2026-03-28) — Scan/runtime observability, dedupe, and backtest timestamp hardening
 
 **Goal:** Improve scan efficiency and debugging clarity without changing any live feed path, venue routing, websocket subscription, or provider precedence for any pair.
@@ -1130,3 +1153,5 @@ claude
 21. Lottery Lab — `generate_tickets()` draw_context path requires `rules`, `universe`, `main_numbers` initialised before the `if draw_context is not None` branch (BUG-001 prevention)
 22. Lottery Lab — new games must be added to BOTH `LOTTERY_GAME_RULES` (`lottery_engine.py`) AND `LOTTERY_GAME_SPECS` (`lottery_service.py`)
 23. Live data feeds for any pair are production-critical — never change a pair’s live feed path, venue, websocket subscription behavior, or fallback chain unless the user explicitly asks for that exact feed change
+
+24. **Feed routing is locked** — non-crypto H1/H4/D1 candles must come from etch_mt5() only; non-crypto live prices must use symbol_info_tick() bid/ask mid from MT5. Never route MT5-sourced pairs through CandleBuilder or EODHD REST for candles. Never write a stale bar close into _live_prices for any MT5 pair.

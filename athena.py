@@ -2030,14 +2030,26 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
             "close": float(b['close']),
             "vol": float(b['tick_volume'])
         })
-    # Bridge to global _live_prices cache for execution levels
-    if candles:
-        last = candles[-1]
+    # Bridge to global _live_prices using a live MT5 tick (bid/ask mid) so the
+    # price shown in the dashboard and used for execution drift checks is the
+    # broker's current market price, not a stale bar close.
+    tick = mt5.symbol_info_tick(mt5_symbol)
+    if tick and tick.bid > 0 and tick.ask > 0:
+        live_px = (tick.bid + tick.ask) / 2.0
+    elif tick and tick.last > 0:
+        live_px = float(tick.last)
+    elif candles:
+        live_px = float(candles[-1]["close"])
+    else:
+        live_px = None
+    if live_px is not None:
         with _live_prices_lock:
             _live_prices[symbol] = {
-                "price": float(last["close"]),
+                "price": live_px,
+                "bid": float(tick.bid) if tick and tick.bid > 0 else None,
+                "ask": float(tick.ask) if tick and tick.ask > 0 else None,
                 "ts": time.time(),
-                "source": "mt5"
+                "source": "mt5",
             }
         
     return {

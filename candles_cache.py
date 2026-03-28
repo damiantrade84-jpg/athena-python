@@ -323,10 +323,13 @@ def fetch_candles(
         "liveMerge": False,
         "cacheHit": False,
     }
-    # CandleBuilder remains the live source for non-polygon H1 generally, and now
-    # also for crypto H4/D1 via Binance futures kline streams.
-    use_candle_builder = pair.get("source") != "polygon" and (
-        tf == "H1" or crypto_live_tf
+    # CandleBuilder is the live H1 source for EODHD-fed pairs only.
+    # MT5-sourced pairs (forex, commodities, indices, stocks) bypass CandleBuilder
+    # for all timeframes and go directly to fetch_mt5() — same as H4/D1 already do.
+    # Crypto H4/D1 use Binance futures kline streams via CandleBuilder.
+    use_candle_builder = (
+        pair.get("source") not in ("polygon", "mt5")
+        and (tf == "H1" or crypto_live_tf)
     )
     live_candles = None
 
