@@ -915,7 +915,7 @@ def backtest_pair(pair, style="auto"):
     elif effective_style == "intraday":  # walk H4 bars
         MIN_H4 = 250
         COOLDOWN = 2
-        MAX_HOLD = 12
+        MAX_HOLD = 24
         MAX_OPEN = 3
 
         total_h4 = len(h4_raw)
@@ -1328,7 +1328,7 @@ def backtest_pair(pair, style="auto"):
     elif effective_style == "scalp":  # H1 bar walk-forward
         MIN_H1 = 250
         COOLDOWN = 1
-        MAX_HOLD = 6
+        MAX_HOLD = 12
         MAX_OPEN = 3
 
         total_h1 = len(h1_raw)
