@@ -200,7 +200,8 @@ def _check_risk_check_before_executors() -> tuple[bool, str]:
                "def " not in stripped and "import" not in stripped and "#" not in stripped:
                 # Look backwards for risk_check in the last 30 lines
                 found_risk = False
-                for j in range(max(0, i - 30), i):
+                # Rejection/logging between risk_check and execute can exceed 30 lines.
+                for j in range(max(0, i - 55), i):
                     if "risk_check(" in lines[j]:
                         found_risk = True
                         break

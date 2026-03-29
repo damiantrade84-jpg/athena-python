@@ -3843,11 +3843,14 @@ def api_analyze():
 
                 _pos_resp = bybit_get_positions()
 
-                _pos = (
-                    _pos_resp.get("positions", [])
-                    if isinstance(_pos_resp, dict)
-                    else (_pos_resp or [])
-                )
+                if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
+                    _pos = []
+                else:
+                    _pos = (
+                        _pos_resp.get("positions", [])
+                        if isinstance(_pos_resp, dict)
+                        else (_pos_resp or [])
+                    )
 
             else:
                 from mt5_executor import mt5_get_account, mt5_get_positions
@@ -3856,11 +3859,14 @@ def api_analyze():
 
                 _pos_resp = mt5_get_positions()
 
-                _pos = (
-                    _pos_resp.get("positions", [])
-                    if isinstance(_pos_resp, dict)
-                    else (_pos_resp or [])
-                )
+                if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
+                    _pos = []
+                else:
+                    _pos = (
+                        _pos_resp.get("positions", [])
+                        if isinstance(_pos_resp, dict)
+                        else (_pos_resp or [])
+                    )
 
             if _acct and not _acct.get("error"):
                 _p_heat = _calc_portfolio_heat(_pos, _acct["balance"])
@@ -4913,6 +4919,9 @@ def api_webhook():
 
             _pos_resp = bybit_get_positions()
 
+            if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
+                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
+
             positions = (
                 _pos_resp.get("positions", [])
                 if isinstance(_pos_resp, dict)
@@ -4938,6 +4947,9 @@ def api_webhook():
                 return jsonify({"error": "MT5 not connected"}), 503
 
             _pos_resp = mt5_get_positions()
+
+            if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
+                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
 
             positions = (
                 _pos_resp.get("positions", [])
@@ -5059,11 +5071,14 @@ def api_mt5_status():
 
         _pos_resp = mt5_get_positions()
 
-        positions = (
-            _pos_resp.get("positions", [])
-            if isinstance(_pos_resp, dict)
-            else (_pos_resp or [])
-        )
+        if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
+            positions = []
+        else:
+            positions = (
+                _pos_resp.get("positions", [])
+                if isinstance(_pos_resp, dict)
+                else (_pos_resp or [])
+            )
 
         return jsonify(
             {
@@ -5087,6 +5102,14 @@ def api_mt5_positions():
         from mt5_executor import mt5_get_positions
 
         _pos_resp = mt5_get_positions()
+
+        if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
+            return jsonify(
+                {
+                    "positions": [],
+                    "error": _pos_resp.get("detail", "Positions unavailable"),
+                }
+            ), 503
 
         return jsonify(
             {
@@ -5121,11 +5144,14 @@ def api_bybit_status():
 
         _pos_resp = bybit_get_positions()
 
-        positions = (
-            _pos_resp.get("positions", [])
-            if isinstance(_pos_resp, dict)
-            else (_pos_resp or [])
-        )
+        if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
+            positions = []
+        else:
+            positions = (
+                _pos_resp.get("positions", [])
+                if isinstance(_pos_resp, dict)
+                else (_pos_resp or [])
+            )
 
         return jsonify(
             {
@@ -8390,6 +8416,9 @@ def _check_mt5_outcomes() -> None:
 
         _pos_resp = mt5_get_positions()
 
+        if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
+            return
+
         _pos_list = (
             _pos_resp.get("positions", [])
             if isinstance(_pos_resp, dict)
@@ -8470,6 +8499,9 @@ def _check_ccxt_outcomes() -> None:
             return
 
         _pos_resp = _bybit_mod.bybit_get_positions()
+
+        if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
+            return
 
         positions = (
             _pos_resp.get("positions", [])
@@ -10265,11 +10297,14 @@ if __name__ == "__main__":
             if mt5_connect():
                 _pos_resp = mt5_get_positions()
 
-                mt5_pos = (
-                    _pos_resp.get("positions", [])
-                    if isinstance(_pos_resp, dict)
-                    else (_pos_resp or [])
-                )
+                if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
+                    mt5_pos = []
+                else:
+                    mt5_pos = (
+                        _pos_resp.get("positions", [])
+                        if isinstance(_pos_resp, dict)
+                        else (_pos_resp or [])
+                    )
 
                 if mt5_pos:
                     log.info(f"[STARTUP] MT5: {len(mt5_pos)} open position(s)")
@@ -10287,11 +10322,14 @@ if __name__ == "__main__":
 
             _pos_resp = _bm.bybit_get_positions()
 
-            bpos = (
-                _pos_resp.get("positions", [])
-                if isinstance(_pos_resp, dict)
-                else (_pos_resp or [])
-            )
+            if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
+                bpos = []
+            else:
+                bpos = (
+                    _pos_resp.get("positions", [])
+                    if isinstance(_pos_resp, dict)
+                    else (_pos_resp or [])
+                )
 
             if bpos:
                 log.info(f"[STARTUP] Bybit: {len(bpos)} open position(s)")

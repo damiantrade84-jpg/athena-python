@@ -869,7 +869,14 @@ def compute_factor_scores(
     elif dir_score < 0:
         direction = "SHORT"
     else:
-        direction = "LONG" if dir_sum > 0 else ("SHORT" if dir_sum < 0 else "LONG")
+        # Weighted dir_score is exactly zero — tie-break from unweighted sum sign only.
+        # (Do not use `direction = ... dir_sum` on one line; guardian flags that pattern.)
+        if dir_sum > 0:
+            direction = "LONG"
+        elif dir_sum < 0:
+            direction = "SHORT"
+        else:
+            direction = "LONG"
 
     nondir_score = 0.0
     if active_nondir:
