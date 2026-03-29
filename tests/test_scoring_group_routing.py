@@ -46,8 +46,8 @@ def test_pair_profile_can_override_score_group_and_threshold():
         CONFIG["PAIR_PROFILES"] = original
 
 
-def test_backtest_min_score_uses_bt_min_not_live_chain():
-    """Engine A backtest gate must not follow min_confluence / MIN_CONFLUENCE_GROUP."""
+def test_backtest_min_score_falls_back_to_live_chain_when_no_bt_override():
+    """Engine A backtest should mirror live threshold routing unless bt_min is explicit."""
     original_profiles = CONFIG.get("PAIR_PROFILES")
     original_bt = dict(CONFIG.get("BT_MIN") or {})
     try:
@@ -60,7 +60,7 @@ def test_backtest_min_score_uses_bt_min_not_live_chain():
         CONFIG["BT_MIN"] = {**original_bt, "crypto": 0.12}
         pair = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"}
         assert get_min_confluence_threshold(pair) == 0.99
-        assert get_backtest_min_score_threshold(pair) == 0.12
+        assert get_backtest_min_score_threshold(pair) == 0.99
     finally:
         CONFIG["PAIR_PROFILES"] = original_profiles
         CONFIG["BT_MIN"] = original_bt

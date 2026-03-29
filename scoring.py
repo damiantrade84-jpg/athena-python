@@ -160,17 +160,16 @@ def get_min_confluence_threshold(pair: dict) -> float:
 
 
 def get_backtest_min_score_threshold(pair: dict) -> float:
-    """Engine A backtest score gate only — ignores live MIN_CONFLUENCE_CLASS / MIN_CONFLUENCE_GROUP.
+    """Resolve Engine A backtest gate.
 
-    Resolution: PAIR_PROFILES ``bt_min`` if set, else CONFIG ``BT_MIN`` for the pair type,
-    else CONFIG ``MIN_CONFLUENCE``.
+    Explicit per-pair ``bt_min`` still wins for research overrides. Otherwise the backtest
+    falls back to the same resolver used by live scans so audit runs stay comparable to
+    production thresholds.
     """
     profile = get_pair_profile(pair)
     if profile.get("bt_min") is not None:
         return float(profile["bt_min"])
-    ptype = pair.get("type", "") or "crypto"
-    bt_map = CONFIG.get("BT_MIN") or {}
-    return float(bt_map.get(ptype, CONFIG.get("MIN_CONFLUENCE", 1.0)))
+    return get_min_confluence_threshold(pair)
 
 
 def pair_filter_enabled(pair: dict, filter_name: str) -> bool:

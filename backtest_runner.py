@@ -2473,7 +2473,7 @@ def _format_backtest_results(
 def backtest_pair_naked(pair: dict, style: str = "naked"):
     """Separate backtest loop for NakedEngine (Engine B).
     Completely isolated from Engine A backtest_pair()."""
-    from market_structure import engine as naked_engine
+    from market_structure import engine as naked_engine, engine_b_confidence_passes
     from indicators import calc_atr
 
     log.info(f"[ENGINE B BT] {pair['display']} fetching data... style={style}")
@@ -2523,6 +2523,10 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
             "swing", score_group=_pair_score_group
         )
         log.info(f"[ENGINE B BT] {pair['display']}: forex D1 structure → auto-promoted to swing style")
+    _zone_tf = style_profile.get("zone_tf", "H4")
+    _entry_tf = style_profile.get("entry_tf", "H1")
+    _atr_tf = style_profile.get("atr_tf", "H4")
+    _bt_sl_mode = str(CONFIG.get("ENGINE_B_BT_SL_MODE", "atr") or "atr").lower()
     log.info(
         f"[ENGINE B BT] {pair['display']} running: "
         f"D1={len(candles_d1)} H4={len(candles_h4)} H1={len(candles_h1)} bars, style={resolved_style}"
@@ -2563,12 +2567,23 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
 
         d1_ctx = candles_d1[:d1_slice_end]
         h1_ctx = candles_h1[:h1_slice_end]
-        current_price = float(candles_h4[i]["close"])
+        tf_ctx = {
+            "D1": d1_ctx,
+            "H4": h4_ctx,
+            "H1": h1_ctx,
+        }
+        zone_ctx = tf_ctx.get(_zone_tf, h4_ctx)
+        entry_ctx = tf_ctx.get(_entry_tf, h1_ctx)
+        atr_ctx = tf_ctx.get(_atr_tf, zone_ctx)
+        if len(zone_ctx) < 20 or len(entry_ctx) < 20 or len(atr_ctx) < 20:
+            i += 1
+            continue
+        current_price = float(entry_ctx[-1]["close"])
 
         atr_list = calc_atr(
-            [c["high"] for c in h4_ctx],
-            [c["low"] for c in h4_ctx],
-            [c["close"] for c in h4_ctx],
+            [c["high"] for c in atr_ctx],
+            [c["low"] for c in atr_ctx],
+            [c["close"] for c in atr_ctx],
             14,
         )
         atr = atr_list[-1] if atr_list and atr_list[-1] else (current_price * 0.01)
@@ -2582,38 +2597,15 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 i += 1
                 continue
 
-        regime_label = _rt().engine_b_regime_label(h4_ctx, pair.get("type", "stock"))
-        # Determine correct entry candles based on forex structure timeframe
-        _pair_type = pair.get("type", "stock")
-        _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
-        _bt_entry_candles = h4_ctx if (_pair_type == "forex" and _forex_struct_tf == "D1") else h1_ctx
-
-        # BUG 7 fix: live Engine B receives direction from Engine A's confluence score.
-        # Evaluating both LONG and SHORT and picking the highest scorer inflates BT
-        # results — Engine B is a structural validator, not a direction picker.
-        # Derive single direction from dual-TF D1+H4 EMA21>EMA50 alignment — both TFs
-        # must agree; skip the bar if they conflict (mirrors Engine A's trend gate).
-        _d1_snap_dir = calc_indicators_with_normalized(d1_ctx, pair.get("type", "stock"))["snap"]
-        _h4_snap_dir = calc_indicators_with_normalized(h4_ctx, pair.get("type", "stock"))["snap"]
-        _d1_bull = (_d1_snap_dir.get("ema21") or 0) > (_d1_snap_dir.get("ema50") or 0)
-        _h4_bull = (_h4_snap_dir.get("ema21") or 0) > (_h4_snap_dir.get("ema50") or 0)
-        _bt_direction = (
-            "LONG" if (_d1_bull and _h4_bull)
-            else "SHORT" if (not _d1_bull and not _h4_bull)
-            else None
-        )
-        if _bt_direction is None:
-            i += 1
-            continue  # conflicting timeframes — skip
-
+        regime_label = _rt().engine_b_regime_label(zone_ctx, pair.get("type", "stock"))
         candidates = []
-        for direction in [_bt_direction]:  # single direction only
+        for direction in ["LONG", "SHORT"]:
             res = naked_engine.set_registry_context(
                 pair.get("symbol") or pair.get("display")
             ).analyze_structure(
                 d1_ctx,
-                h4_ctx,
-                h1_ctx,
+                zone_ctx,
+                entry_ctx,
                 current_price,
                 direction,
                 atr,
@@ -2621,40 +2613,21 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 fallback_rr=style_profile.get("fallback_rr", 2.0),
                 asset_type=pair.get("type", ""),
             )
+            if res.get("structural_verdict") != "CLEAR":
+                continue
             conf_data = naked_engine.calculate_confidence(
                 res,
                 current_price,
                 direction,
-                entry_candles=_bt_entry_candles,
+                entry_candles=entry_ctx,
                 style_profile=style_profile,
             )
-            # Regime-scale the min_score: tighter gate in ranging/choppy, looser in trending
-            _regime_gate = {
-                "TRENDING": 0.85,        # trend does the work — slightly easier entry
-                "RANGING": 1.2,          # need more conviction in chop
-                "HIGH_VOLATILITY": 1.3,  # noise kills — require strong structure
-                "LOW_VOLATILITY": 1.0,   # default — calm market, standard gate
-            }
-            _min_score_scaled = style_profile["min_score"] * _regime_gate.get(regime_label, 1.0)
-
-            # Drawdown penalty: tighten gate when equity is underwater
-            if len(trades) >= 10:
-                _recent_r = [t.get("resultR", 0) for t in trades[-20:]]
-                _recent_eq = 1.0
-                _recent_peak = 1.0
-                for _rv in _recent_r:
-                    _recent_eq *= (1 + _rv * 0.01)
-                    if _recent_eq > _recent_peak:
-                        _recent_peak = _recent_eq
-                _dd_pct = (_recent_peak - _recent_eq) / _recent_peak if _recent_peak > 0 else 0
-                if _dd_pct > 0.10:
-                    _min_score_scaled *= 1.5  # 50% harder to enter in >10% drawdown
-                elif _dd_pct > 0.05:
-                    _min_score_scaled *= 1.2  # 20% harder in >5% drawdown
-
-            if conf_data["score"] < _min_score_scaled:
-                continue
-            if not conf_data.get("passed"):
+            _gate_ok, _min_score_scaled = engine_b_confidence_passes(
+                conf_data,
+                style_profile,
+                regime_label,
+            )
+            if not _gate_ok:
                 continue
 
             entry = current_price
@@ -2663,10 +2636,26 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 _bt_regime = res.get("regime_state")
             except Exception:
                 pass
-            _lvl = calc_levels(entry, atr, direction, pair.get("type", "stock"),
-                               regime_state=_bt_regime, style=resolved_style)
-            sl = _lvl["sl"]
-            tp = _lvl["tp1"]
+            if _bt_sl_mode == "structural":
+                sl = res.get("recommended_stop_loss")
+                tp = res.get("recommended_take_profit")
+                if not tp and sl:
+                    sl_dist = abs(entry - sl)
+                    if direction == "LONG":
+                        tp = entry + (sl_dist * style_profile.get("fallback_rr", 2.0))
+                    else:
+                        tp = entry - (sl_dist * style_profile.get("fallback_rr", 2.0))
+            else:
+                _lvl = calc_levels(
+                    entry,
+                    atr,
+                    direction,
+                    pair.get("type", "stock"),
+                    regime_state=_bt_regime,
+                    style=resolved_style,
+                )
+                sl = _lvl["sl"]
+                tp = _lvl["tp1"]
 
             if sl is None or tp is None:
                 continue
@@ -2693,6 +2682,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                     "res": res,
                     "conf": conf_data,
                     "regime_label": regime_label,
+                    "level_mode": _bt_sl_mode,
                 }
             )
 
@@ -2711,17 +2701,24 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         slip = raw_entry * _get_slippage_for_bar(entry_bar, _ptype)
         entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
-        _lvl = calc_levels(
-            entry,
-            atr,
-            direction,
-            _ptype,
-            regime_state=best["res"].get("regime_state"),
-            style=resolved_style,
-        )
-        sl = _lvl["sl"]
-        tp = _lvl["tp1"]
-        target_rr = _lvl.get("rr1", 0.0)
+        if best.get("level_mode") == "structural":
+            sl = best["sl"]
+            tp = best["tp"]
+            _sl_dist = abs(entry - sl)
+            _tp_dist = abs(tp - entry)
+            target_rr = (_tp_dist / _sl_dist) if _sl_dist > 0 else 0.0
+        else:
+            _lvl = calc_levels(
+                entry,
+                atr,
+                direction,
+                _ptype,
+                regime_state=best["res"].get("regime_state"),
+                style=resolved_style,
+            )
+            sl = _lvl["sl"]
+            tp = _lvl["tp1"]
+            target_rr = _lvl.get("rr1", 0.0)
 
         if sl is None or tp is None:
             i += 1
@@ -2926,7 +2923,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                         round(_oos_sqn, 4) if _oos_sqn is not None else None,
                         result.get("maxDrawdownPct"),
                         style_profile.get("min_score"),
-                        f"{style_profile.get('atr_tf', 'H4')}_ATR",
+                        f"{_atr_tf}_ATR",
                         (
                             f"style={resolved_style};requested={requested_style}"
                             f";bos_vol_confirmed={sum(1 for t in trades if t.get('bos_volume_confirmed', True))}"

@@ -4523,7 +4523,7 @@ def api_scan_naked():
     results = []
     _best_per_pair = {}
 
-    from market_structure import NakedEngine
+    from market_structure import NakedEngine, engine_b_confidence_passes
 
     engine = NakedEngine()
 
@@ -4637,16 +4637,13 @@ def api_scan_naked():
                         entry_candles=entry_candles,
                         style_profile=style_profile,
                     )
-                    # Regime-scale the min_score: tighter gate in ranging/choppy, looser in trending
-                    _regime_gate = {
-                        "TRENDING": 0.85,        # trend does the work — slightly easier entry
-                        "RANGING": 1.2,          # need more conviction in chop
-                        "HIGH_VOLATILITY": 1.3,  # noise kills — require strong structure
-                        "LOW_VOLATILITY": 1.0,   # default — calm market, standard gate
-                    }
-                    _min_score_scaled = style_profile["min_score"] * _regime_gate.get(regime_label, 1.0)
+                    _gate_ok, _min_score_scaled = engine_b_confidence_passes(
+                        conf_data,
+                        style_profile,
+                        regime_label,
+                    )
 
-                    if conf_data["score"] < _min_score_scaled:
+                    if not _gate_ok:
                         log.warning(
                             f"[NAKED-DBG] {pair['display']} {direction}: "
                             f"score={conf_data['score']:.1f} vs min={_min_score_scaled:.1f}, "

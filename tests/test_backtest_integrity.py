@@ -52,11 +52,31 @@ def test_resolve_barrier_exit_prefers_sl_when_short_bar_hits_tp_and_sl():
     assert outcome == "SL"
 
 
+def test_engine_b_confidence_gate_requires_passed_and_score_floor():
+    from market_structure import engine_b_confidence_passes
+
+    style_profile = {"min_score": 1.1}
+
+    gate_ok, scaled_min = engine_b_confidence_passes(
+        {"score": 1.0, "passed": False},
+        style_profile,
+        "TRENDING",
+    )
+    assert round(scaled_min, 3) == 0.935
+    assert gate_ok is False
+
+    gate_ok, scaled_min = engine_b_confidence_passes(
+        {"score": 1.0, "passed": True},
+        style_profile,
+        "TRENDING",
+    )
+    assert round(scaled_min, 3) == 0.935
+    assert gate_ok is True
+
+
 def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
     pair = {"display": "AAPL", "symbol": "AAPL", "type": "stock", "source": "eodhd"}
     d1 = _make_bars(datetime(2024, 1, 1, tzinfo=timezone.utc), 100, 24, base=90.0)
-    # base=99.0 so bars 0-49 close at 99.00-99.49; bar 50 overridden to 100.0.
-    # EMA21 at bar 50 ≈ 99.33 < 100.0 → H4 EMA alignment picks LONG direction (BUG 7 fix).
     h4 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 70, 4, base=99.0)
     h1 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 400, 1, base=100.0)
 
@@ -139,6 +159,7 @@ def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
             "score": 1.0 if direction == "LONG" else 0.0,
             "pct": 80.0 if direction == "LONG" else 0.0,
             "rr": 2.0,
+            "passed": direction == "LONG",
             "trigger_pattern": "NONE",
             "max_possible": 5.0,
         },

@@ -9,6 +9,33 @@ from zone_registry import get_zone_registry
 log = logging.getLogger(__name__)
 
 
+ENGINE_B_REGIME_GATE = {
+    "TRENDING": 0.85,
+    "RANGING": 1.2,
+    "HIGH_VOLATILITY": 1.3,
+    "LOW_VOLATILITY": 1.0,
+}
+
+
+def engine_b_min_score_threshold(style_profile: dict | None, regime_label: str | None) -> float:
+    """Return the scaled Engine B score floor for a style/regime combination."""
+    profile = style_profile if isinstance(style_profile, dict) else {}
+    base_min = float(profile.get("min_score", 0.0) or 0.0)
+    regime_key = str(regime_label or "").upper()
+    return base_min * ENGINE_B_REGIME_GATE.get(regime_key, 1.0)
+
+
+def engine_b_confidence_passes(
+    conf_data: dict | None, style_profile: dict | None, regime_label: str | None
+) -> tuple[bool, float]:
+    """Require both the score floor and the checklist verdict to pass."""
+    min_score_scaled = engine_b_min_score_threshold(style_profile, regime_label)
+    conf = conf_data if isinstance(conf_data, dict) else {}
+    score = float(conf.get("score", 0.0) or 0.0)
+    passed = bool(conf.get("passed", False))
+    return passed and score >= min_score_scaled, min_score_scaled
+
+
 class NakedEngine:
     def __init__(self):
         self._registry_context = threading.local()
