@@ -7105,6 +7105,67 @@ async function runMetaAnalysis() {
 
 // -- Open Positions Renderer --
 window._openPositions = [];
+window._openPositionSources = {
+  mt5: { positions: [], updatedAt: 0, connected: false },
+  bybit: { positions: [], updatedAt: 0, connected: false }
+};
+window._openPositionGraceMs = 30000;
+window._openPositionMaxStaleMs = 120000;
+
+function normalizeOpenPositions(source, positions) {
+  return (positions || []).map(function(p) {
+    var row = Object.assign({}, p);
+    if (source === 'bybit') row._bybit = true;
+    return row;
+  });
+}
+
+function openPositionKey(p) {
+  return [
+    p && p._bybit ? 'bybit' : 'mt5',
+    p && (p.ticket || ''),
+    p && (p.pair || p.symbol || ''),
+    p && (p.direction || p.side || ''),
+    p && (p.volume || '')
+  ].join('|');
+}
+
+function mergedOpenPositions() {
+  var now = Date.now();
+  var out = [];
+  var seen = {};
+  ['mt5', 'bybit'].forEach(function(source) {
+    var state = window._openPositionSources[source] || {};
+    var ageMs = state.updatedAt ? (now - state.updatedAt) : Number.MAX_SAFE_INTEGER;
+    var recent = ageMs <= window._openPositionGraceMs;
+    var tolerableStale = ageMs <= window._openPositionMaxStaleMs;
+    if (!recent && !(state.connected && tolerableStale)) return;
+    (state.positions || []).forEach(function(pos) {
+      var key = openPositionKey(pos);
+      if (!seen[key]) {
+        seen[key] = true;
+        out.push(pos);
+      }
+    });
+  });
+  return out;
+}
+
+function setOpenPositionSource(source, positions, meta) {
+  meta = meta || {};
+  var state = window._openPositionSources[source] || { positions: [], updatedAt: 0, connected: false };
+  if (Array.isArray(positions)) {
+    state.positions = normalizeOpenPositions(source, positions);
+    state.updatedAt = Date.now();
+  }
+  if (meta.connected !== undefined) state.connected = !!meta.connected;
+  window._openPositionSources[source] = state;
+}
+
+function renderMergedOpenPositions() {
+  renderOpenPositions(mergedOpenPositions());
+}
+
 function renderOpenPositions(positions) {
   console.log('renderOpenPositions called with:', positions);
   window._openPositions = positions || [];
@@ -7173,7 +7234,8 @@ function renderOpenPositions(positions) {
   }
 }
 
-function refreshTradesTab() {
+function refreshTradesTab(opts) {
+  opts = opts || {};
   console.log('refreshTradesTab called');
   Promise.all([
     fetch('/api/bybit-status').then(function(r){ return r.json(); }).catch(function(e){ console.error('Bybit status error:', e); return {}; }),
@@ -7187,8 +7249,10 @@ function refreshTradesTab() {
     console.log('Positions - Bybit:', bybitPos, 'MT5:', mt5Pos);
     var allPositions = mt5Pos.concat(bybitPos);
     console.log('All positions:', allPositions);
-    renderOpenPositions(allPositions);
-    showToast('Positions refreshed');
+    setOpenPositionSource('bybit', bybitData.connected ? (bybitData.positions || []) : null, { connected: !!bybitData.connected });
+    setOpenPositionSource('mt5', mt5Data.connected ? (mt5Data.positions || []) : null, { connected: !!mt5Data.connected });
+    renderMergedOpenPositions();
+    if (!opts.silent) showToast('Positions refreshed');
   }).catch(function(e) {
     console.error('Refresh trades error:', e);
     showToast('Error refreshing positions', true);
@@ -7217,10 +7281,8 @@ window._bybitAccount = null;
       document.querySelectorAll('.exec-btn').forEach(function(b){
         if (b.textContent.indexOf('Bybit') > -1) { b.disabled = false; b.removeAttribute('title'); }
       });
-      // Merge Bybit positions with any existing MT5 positions
-      var mt5Pos = window._openPositions.filter(function(p){ return !p._bybit; });
-      var bybitPos = (d.positions || []).map(function(p){ return Object.assign({_bybit:true}, p); });
-      renderOpenPositions(mt5Pos.concat(bybitPos));
+      setOpenPositionSource('bybit', d.positions || [], { connected: true });
+      renderMergedOpenPositions();
       if (bybitSL) bybitSL.textContent = label.textContent.replace(/^Bybit:\s*/, '') || 'OK';
     } else {
       window._bybitConnected = false;
@@ -7228,11 +7290,13 @@ window._bybitAccount = null;
       dot.className = 'bybit-dot off';
       label.textContent = 'Bybit: OFF';
       badge.title = 'Bybit not connected - check BYBIT_API_KEY in .env';
+      setOpenPositionSource('bybit', null, { connected: false });
+      renderMergedOpenPositions();
       if (bybitSL) bybitSL.textContent = 'OFF';
     }
     if (typeof updateConnDots === 'function') updateConnDots();
   }).catch(function(){});
-  setTimeout(pollBybit, 15000);
+  setTimeout(pollBybit, 5000);
 })();
 
 // Sync test mode state on page load
@@ -7260,7 +7324,8 @@ fetch('/api/test-mode').then(function(r){return r.json();}).then(function(d){
       document.querySelectorAll('.exec-btn').forEach(function(b){
         if (b.textContent.indexOf('Bybit') === -1) { b.disabled = false; b.removeAttribute('title'); }
       });
-      renderOpenPositions(d.positions || []);
+      setOpenPositionSource('mt5', d.positions || [], { connected: true });
+      renderMergedOpenPositions();
       if (mt5SL) mt5SL.textContent = label.textContent.replace(/^MT5:\s*/, '') || 'OK';
     } else {
       window._mt5Connected = false;
@@ -7271,12 +7336,13 @@ fetch('/api/test-mode').then(function(r){return r.json();}).then(function(d){
       document.querySelectorAll('.exec-btn').forEach(function(b){
         if (b.textContent.indexOf('Bybit') === -1) { b.disabled = true; b.title = 'MT5 not connected'; }
       });
-      renderOpenPositions([]);
+      setOpenPositionSource('mt5', null, { connected: false });
+      renderMergedOpenPositions();
       if (mt5SL) mt5SL.textContent = 'OFF';
     }
     if (typeof updateConnDots === 'function') updateConnDots();
   }).catch(function(){});
-  setTimeout(pollMT5, 10000);
+  setTimeout(pollMT5, 5000);
 })();
 
 // -- Wake-up recovery: reload page if hidden > 60s --
@@ -7406,10 +7472,7 @@ async function doExecute(signalRef, btn, forceMode) {
       if (execBtn) { execBtn.disabled = true; execBtn.innerHTML = 'EXECUTED - Ticket #' + data.ticket; }
       // Refresh open positions panel immediately
       setTimeout(function() {
-        var statusUrl = sig.type === 'crypto' ? '/api/bybit-status' : '/api/mt5-status';
-        fetch(statusUrl).then(function(r){ return r.json(); }).then(function(d){
-          if (d.positions) renderOpenPositions(d.positions);
-        }).catch(function(){});
+        refreshTradesTab({ silent: true });
       }, 1500);
     } else {
       var errMsg = data.error || 'Unknown error';
@@ -7520,13 +7583,7 @@ function confirmClosePosition(exchange, pair, direction, volume, ticket, btn) {
       showToast('Closed ' + pair + ' ' + direction);
       // Refresh positions after short delay
       setTimeout(function(){
-        fetch('/api/bybit-status').then(function(r){return r.json();}).then(function(bd){
-          var bybitPos = (bd.positions||[]).map(function(p){return Object.assign({_bybit:true},p);});
-          fetch('/api/mt5-status').then(function(r){return r.json();}).then(function(md){
-            var mt5Pos = md.connected ? (md.positions||[]) : [];
-            renderOpenPositions(mt5Pos.concat(bybitPos));
-          }).catch(function(){ renderOpenPositions(bybitPos); });
-        }).catch(function(){});
+        refreshTradesTab({ silent: true });
       }, 1500);
     } else {
       showToast('Close failed: ' + (d.error || 'unknown'), true);
