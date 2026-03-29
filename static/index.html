@@ -1494,18 +1494,18 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
             Numbers <span id="addDrawNumHint" style="color:var(--accent);">(6 balls, 1–52)</span>
           </label>
           <div style="display:flex;gap:6px;flex-wrap:wrap;" id="addDrawNumbersRow">
-            <input class="lottery-input add-draw-num" type="number" min="1" max="52" placeholder="N1" style="width:52px;" />
-            <input class="lottery-input add-draw-num" type="number" min="1" max="52" placeholder="N2" style="width:52px;" />
-            <input class="lottery-input add-draw-num" type="number" min="1" max="52" placeholder="N3" style="width:52px;" />
-            <input class="lottery-input add-draw-num" type="number" min="1" max="52" placeholder="N4" style="width:52px;" />
-            <input class="lottery-input add-draw-num" type="number" min="1" max="52" placeholder="N5" style="width:52px;" />
-            <input class="lottery-input add-draw-num" type="number" min="1" max="52" placeholder="N6" style="width:52px;" id="addDrawN6" />
+            <input class="lottery-input add-draw-num" type="number" min="1" max="55" placeholder="N1" style="width:52px;" />
+            <input class="lottery-input add-draw-num" type="number" min="1" max="55" placeholder="N2" style="width:52px;" />
+            <input class="lottery-input add-draw-num" type="number" min="1" max="55" placeholder="N3" style="width:52px;" />
+            <input class="lottery-input add-draw-num" type="number" min="1" max="55" placeholder="N4" style="width:52px;" />
+            <input class="lottery-input add-draw-num" type="number" min="1" max="55" placeholder="N5" style="width:52px;" />
+            <input class="lottery-input add-draw-num" type="number" min="1" max="55" placeholder="N6" style="width:55px;" id="addDrawN6" />
           </div>
         </div>
 
         <div style="display:flex;flex-direction:column;gap:4px;" id="addDrawBonusWrap">
           <label style="font-size:9px;color:var(--muted);font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:0.1em;">Bonus Ball</label>
-          <input id="addDrawBonus" type="number" min="1" max="52" placeholder="Bonus" class="lottery-input" style="width:68px;" />
+          <input id="addDrawBonus" type="number" min="1" max="55" placeholder="Bonus" class="lottery-input" style="width:68px;" />
         </div>
 
         <button class="bt-btn" onclick="submitAddDraw()" style="height:36px;align-self:flex-end;">SAVE DRAW</button>
@@ -2121,10 +2121,10 @@ function switchTab(tab) {
 
 function lotteryGameSpec(game) {
   return {
-    lotto: { mainCount: 6, hasBonus: true, mainMin: 1, mainMax: 52 },
+    lotto: { mainCount: 6, hasBonus: true, mainMin: 1, mainMax: 55 },
     powerball: { mainCount: 5, hasBonus: true, mainMin: 1, mainMax: 50 },
     daily_lotto: { mainCount: 5, hasBonus: false, mainMin: 1, mainMax: 36 }
-  }[game] || { mainCount: 6, hasBonus: true, mainMin: 1, mainMax: 52 };
+  }[game] || { mainCount: 6, hasBonus: true, mainMin: 1, mainMax: 55 };
 }
 
 function getLotteryGame() {

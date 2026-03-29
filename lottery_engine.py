@@ -22,9 +22,9 @@ LOTTERY_GAME_RULES = {
         "main_count": 6,
         "has_bonus": True,
         "main_min": 1,
-        "main_max": 52,
+        "main_max": 55,
         "bonus_min": 1,
-        "bonus_max": 52,
+        "bonus_max": 55,
     },
     "powerball": {
         "main_count": 5,
