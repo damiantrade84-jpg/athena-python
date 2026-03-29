@@ -690,6 +690,9 @@ class AutoTrader:
                     return False
 
                 pos_result = bybit_get_positions()
+                if isinstance(pos_result, dict) and pos_result.get("error"):
+                    self._write_error(signal, "BYBIT_POSITIONS_UNAVAILABLE")
+                    return False
                 positions = (
                     pos_result.get("positions", [])
                     if isinstance(pos_result, dict)
@@ -716,6 +719,9 @@ class AutoTrader:
                     return False
 
                 pos_result = mt5_get_positions()
+                if isinstance(pos_result, dict) and pos_result.get("error"):
+                    self._write_error(signal, "MT5_POSITIONS_UNAVAILABLE")
+                    return False
                 positions = (
                     pos_result.get("positions", [])
                     if isinstance(pos_result, dict)

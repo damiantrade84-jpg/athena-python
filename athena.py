@@ -6156,6 +6156,8 @@ def api_scalp_execute():
             return jsonify({"error": "MT5 not connected"}), 503
 
         positions_resp = mt5_get_positions()
+        if isinstance(positions_resp, dict) and positions_resp.get("error"):
+            return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
         positions = (
             positions_resp.get("positions", [])
             if isinstance(positions_resp, dict)

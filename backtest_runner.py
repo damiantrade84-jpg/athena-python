@@ -826,61 +826,6 @@ def backtest_pair(pair, style="auto"):
                     result_r = round(-1.0 - _sl_slip_r, 4)
                     exit_bar = j
                     break
-
-                if direction == "LONG":
-                    # TP checked first — if both hit on same bar, TP wins
-
-                    if bar["high"] >= tp2:
-                        outcome = "TP2"
-                        result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult))
-                        exit_bar = j
-                        break
-
-                    if bar["high"] >= tp1:
-                        outcome = "TP1"
-                        result_r = rr1 - (slip / (atr * sl_mult))
-                        exit_bar = j
-                        break
-
-                    if bar["low"] <= sl:
-                        _sl_slip_r = (
-                            _get_slippage_for_bar(bar, _ptype) * sl / (atr * sl_mult)
-                            if atr and sl_mult
-                            else 0
-                        )
-
-                        outcome = "SL"
-                        result_r = round(-1.0 - _sl_slip_r, 4)
-                        exit_bar = j
-                        break
-
-                else:
-                    # TP checked first — if both hit on same bar, TP wins
-
-                    if bar["low"] <= tp2:
-                        outcome = "TP2"
-                        result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult))
-                        exit_bar = j
-                        break
-
-                    if bar["low"] <= tp1:
-                        outcome = "TP1"
-                        result_r = rr1 - (slip / (atr * sl_mult))
-                        exit_bar = j
-                        break
-
-                    if bar["high"] >= sl:
-                        _sl_slip_r = (
-                            _get_slippage_for_bar(bar, _ptype) * sl / (atr * sl_mult)
-                            if atr and sl_mult
-                            else 0
-                        )
-
-                        outcome = "SL"
-                        result_r = round(-1.0 - _sl_slip_r, 4)
-                        exit_bar = j
-                        break
-
             if outcome == "OPEN":
                 # Force-close at last forward bar â€" record actual P&L vs recording a ghost 0R
 
@@ -1300,61 +1245,6 @@ def backtest_pair(pair, style="auto"):
                     result_r = round(-1.0 - _sl_slip_r, 4)
                     exit_bar = j
                     break
-
-                if direction == "LONG":
-                    # TP checked first — if both hit on same bar, TP wins
-
-                    if bar["high"] >= tp2:
-                        outcome = "TP2"
-                        result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult))
-                        exit_bar = j
-                        break
-
-                    if bar["high"] >= tp1:
-                        outcome = "TP1"
-                        result_r = rr1 - (slip / (atr * sl_mult))
-                        exit_bar = j
-                        break
-
-                    if bar["low"] <= sl:
-                        _sl_slip_r = (
-                            _get_slippage_for_bar(bar, _ptype) * sl / (atr * sl_mult)
-                            if atr and sl_mult
-                            else 0
-                        )
-
-                        outcome = "SL"
-                        result_r = round(-1.0 - _sl_slip_r, 4)
-                        exit_bar = j
-                        break
-
-                else:
-                    # TP checked first — if both hit on same bar, TP wins
-
-                    if bar["low"] <= tp2:
-                        outcome = "TP2"
-                        result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult))
-                        exit_bar = j
-                        break
-
-                    if bar["low"] <= tp1:
-                        outcome = "TP1"
-                        result_r = rr1 - (slip / (atr * sl_mult))
-                        exit_bar = j
-                        break
-
-                    if bar["high"] >= sl:
-                        _sl_slip_r = (
-                            _get_slippage_for_bar(bar, _ptype) * sl / (atr * sl_mult)
-                            if atr and sl_mult
-                            else 0
-                        )
-
-                        outcome = "SL"
-                        result_r = round(-1.0 - _sl_slip_r, 4)
-                        exit_bar = j
-                        break
-
             if outcome == "OPEN":
                 _last_fwd = h4_raw[min(i + MAX_HOLD, total_h4 - 1)]
 
@@ -1759,61 +1649,6 @@ def backtest_pair(pair, style="auto"):
                     result_r = round(-1.0 - _sl_slip_r, 4)
                     exit_bar = j
                     break
-
-                if direction == "LONG":
-                    # TP checked first — if both hit on same bar, TP wins
-
-                    if bar["high"] >= tp2:
-                        outcome = "TP2"
-                        result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult))
-                        exit_bar = j
-                        break
-
-                    if bar["high"] >= tp1:
-                        outcome = "TP1"
-                        result_r = rr1 - (slip / (atr * sl_mult))
-                        exit_bar = j
-                        break
-
-                    if bar["low"] <= sl:
-                        _sl_slip_r = (
-                            _get_slippage_for_bar(bar, _ptype) * sl / (atr * sl_mult)
-                            if atr and sl_mult
-                            else 0
-                        )
-
-                        outcome = "SL"
-                        result_r = round(-1.0 - _sl_slip_r, 4)
-                        exit_bar = j
-                        break
-
-                else:
-                    # TP checked first — if both hit on same bar, TP wins
-
-                    if bar["low"] <= tp2:
-                        outcome = "TP2"
-                        result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult))
-                        exit_bar = j
-                        break
-
-                    if bar["low"] <= tp1:
-                        outcome = "TP1"
-                        result_r = rr1 - (slip / (atr * sl_mult))
-                        exit_bar = j
-                        break
-
-                    if bar["high"] >= sl:
-                        _sl_slip_r = (
-                            _get_slippage_for_bar(bar, _ptype) * sl / (atr * sl_mult)
-                            if atr and sl_mult
-                            else 0
-                        )
-
-                        outcome = "SL"
-                        result_r = round(-1.0 - _sl_slip_r, 4)
-                        exit_bar = j
-                        break
-
             if outcome == "OPEN":
                 _last_fwd = h1_raw[min(i + MAX_HOLD, total_h1 - 1)]
 

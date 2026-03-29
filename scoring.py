@@ -299,6 +299,7 @@ CORR_CLUSTERS: dict = {
     "forex_usd": [
         "EUR/USD",
         "GBP/USD",
+        "USD/JPY",
         "AUD/USD",
         "NZD/USD",
         "USD/CHF",

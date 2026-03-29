@@ -128,6 +128,8 @@ def api_quick_execute():
             if not account:
                 return jsonify({"error": "Bybit not connected"}), 400
             pos_result = bybit_get_positions()
+            if isinstance(pos_result, dict) and pos_result.get("error"):
+                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
             positions = (
                 pos_result.get("positions", [])
                 if isinstance(pos_result, dict)
@@ -147,6 +149,8 @@ def api_quick_execute():
             if not account:
                 return jsonify({"error": "MT5 not connected"}), 400
             pos_result = mt5_get_positions()
+            if isinstance(pos_result, dict) and pos_result.get("error"):
+                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
             positions = (
                 pos_result.get("positions", [])
                 if isinstance(pos_result, dict)
@@ -664,6 +668,8 @@ def api_execute():
                 ), 503
 
             _pos_resp = bybit_get_positions()
+            if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
+                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
 
             positions = (
                 _pos_resp.get("positions", [])
@@ -694,6 +700,8 @@ def api_execute():
                 ), 503
 
             _pos_resp = mt5_get_positions()
+            if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
+                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
 
             positions = (
                 _pos_resp.get("positions", [])
@@ -916,8 +924,10 @@ def api_scalp_execute():
             return jsonify({"error": "MT5 not connected"}), 503
             
         pos_result = mt5_get_positions()
+        if isinstance(pos_result, dict) and pos_result.get("error"):
+            return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
         positions = pos_result.get("positions", []) if isinstance(pos_result, dict) else (pos_result or [])
-        
+
         symbol_info = mt5_get_symbol_info(sig.get("pair"))
         if not symbol_info or symbol_info.get("error"):
             return jsonify({"error": f"Symbol {sig.get('pair')} not available on MT5"}), 400
