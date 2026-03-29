@@ -676,11 +676,15 @@ def set_candle_builder(builder) -> None:
 
 
 class CandleBuilder:
-    """Accumulates WebSocket ticks into H1/H4/D1 candles, persists completed bars to SQLite.
+    """EODHD/US tick stream → H1/H4/D1 bars; Binance futures kline WS → M5/M15/H1/H4/D1 for crypto.
 
-    On startup, seeds the cache with EODHD historical so scans have instant history."""
+    Tick path is non-crypto only (see EODHD handler). Kline path uses Binance `t` (UTC open ms)
+    with the same bucket alignment as H1/H4/D1."""
 
-    _TFS = {"H1": 3600, "H4": 14400, "D1": 86400}
+    # EODHD on_tick: do not add M5/M15 here — would spam SQLite from tick noise and wrong semantics.
+    _TFS_TICK = {"H1": 3600, "H4": 14400, "D1": 86400}
+    # Binance on_kline: all futures kline intervals we subscribe to.
+    _TFS_KLINE = {"M5": 300, "M15": 900, "H1": 3600, "H4": 14400, "D1": 86400}
 
     def __init__(self):
 
@@ -736,7 +740,7 @@ class CandleBuilder:
         vol = volume or 0
 
         with self._lock:
-            for tf, tf_sec in self._TFS.items():
+            for tf, tf_sec in self._TFS_TICK.items():
                 key = (display, tf)
 
                 start = self._bar_start(ts_s, tf_sec)
@@ -771,7 +775,7 @@ class CandleBuilder:
                     bar["ticks"] += 1
 
     def on_kline(self, display, tf, o, h, l, c, vol, ts_ms, is_closed):
-        """Apply Binance futures kline snapshot for crypto H1/H4/D1.
+        """Apply Binance futures kline snapshot for crypto M5/M15/H1/H4/D1.
 
         Kline fields are the running bar OHLCV; overwrite each update. Flush when is_closed.
         tick_count=0 marks DB rows as kline-sourced (vs on_tick accumulation).
@@ -781,7 +785,7 @@ class CandleBuilder:
             return
 
         tf = (tf or "").upper()
-        tf_sec = self._TFS.get(tf)
+        tf_sec = self._TFS_KLINE.get(tf)
         if not tf_sec:
             return
 

@@ -503,6 +503,10 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
 .sidebar .conn-dot.live{background:var(--bull);animation:pulse 2s infinite;}
 .sidebar .conn-dot.off{background:var(--bear);}
 .sidebar .conn-dot.bz-on{background:#f3ba2f;animation:pulse 2s infinite;}
+.guardian-header-badge .conn-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+.guardian-header-badge .conn-dot.on{background:var(--bull);animation:pulse 2s infinite;}
+.guardian-header-badge .conn-dot.off{background:var(--bear);}
+.guardian-header-badge .conn-dot.bz-on{background:#f3ba2f;animation:pulse 2s infinite;}
 .tab-panel,.panel{display:none;}
 .tab-panel.active,.panel.active{display:block;}
 .bt-controls,.bt-ctrl{display:flex;align-items:center;gap:12px;margin-bottom:24px;flex-wrap:wrap;}
@@ -1097,6 +1101,10 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
         <span class="bybit-dot off" id="bybitDot"></span>
         <span id="bybitLabel">Bybit: OFF</span>
       </div>
+      <div class="guardian-header-badge" id="guardianHeaderBadge" title="System Guardian — health" onclick="switchPanel('guardian')" style="cursor:pointer;display:flex;align-items:center;gap:6px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);font-family:var(--mono);">
+        <span class="conn-dot off" id="guardian-header-dot" aria-hidden="true"></span>
+        <span style="font-size:10px;color:var(--muted);letter-spacing:0.06em;">GUARD</span>
+      </div>
       <div class="yield-badge" id="yieldBadge" style="display:none" title="UST Yield Curve - 2Y/10Y spread. Inverted = recession risk">
         <span class="yield-lbl">YIELD</span>
         <span class="yield-shape" id="yieldShape">-</span>
@@ -1175,6 +1183,10 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
     </div>
     <div class="nav-item" id="nav-markets" role="button" tabindex="0" onclick="switchPanel('markets')">
       <div class="nav-left"><span class="nav-ico">🌐</span>Markets</div>
+    </div>
+    <div class="nav-item" id="nav-guardian" role="button" tabindex="0" onclick="switchPanel('guardian')">
+      <div class="nav-left"><span class="nav-ico">⛊</span>Guardian</div>
+      <span class="conn-dot off" id="guardian-dot" aria-hidden="true"></span>
     </div>
   </div>
 
@@ -1805,6 +1817,70 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
     </div>
   </div><!-- /panel-markets -->
 
+  <div class="panel tab-panel" id="panel-guardian">
+    <div class="panel-row" style="margin-bottom:20px;">
+      <div class="panel-row-title">⛊ SYSTEM GUARDIAN</div>
+      <div class="panel-row-actions">
+        <button class="scan-btn btn-outline" onclick="guardianRefresh()" id="guardian-refresh-btn">REFRESH</button>
+        <button class="scan-btn btn-outline" style="border-color:var(--bear);" onclick="shieldReset()" id="shield-reset-btn">RESET BREAKER</button>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:24px;" id="guardian-cards">
+      <div class="stat-chip" style="padding:16px;border-radius:10px;border:1px solid rgba(255,255,255,0.06);" id="g-boot-card">
+        <div style="font-size:10px;color:var(--muted);margin-bottom:6px;font-family:var(--mono);">BOOT CHECKS</div>
+        <div style="font-size:28px;font-weight:800;font-family:var(--mono);" id="g-boot-score">—</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:4px;" id="g-boot-detail">Loading...</div>
+      </div>
+      <div class="stat-chip" style="padding:16px;border-radius:10px;border:1px solid rgba(255,255,255,0.06);" id="g-breaker-card">
+        <div style="font-size:10px;color:var(--muted);margin-bottom:6px;font-family:var(--mono);">CIRCUIT BREAKER</div>
+        <div style="font-size:28px;font-weight:800;font-family:var(--mono);" id="g-breaker-status">—</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:4px;" id="g-breaker-detail">Loading...</div>
+      </div>
+      <div class="stat-chip" style="padding:16px;border-radius:10px;border:1px solid rgba(255,255,255,0.06);" id="g-div-card">
+        <div style="font-size:10px;color:var(--muted);margin-bottom:6px;font-family:var(--mono);">DIVERGENCE (24H)</div>
+        <div style="font-size:28px;font-weight:800;font-family:var(--mono);" id="g-div-count">—</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:4px;" id="g-div-detail">Loading...</div>
+      </div>
+      <div class="stat-chip" style="padding:16px;border-radius:10px;border:1px solid rgba(255,255,255,0.06);" id="g-overall-card">
+        <div style="font-size:10px;color:var(--muted);margin-bottom:6px;font-family:var(--mono);">OVERALL HEALTH</div>
+        <div style="font-size:28px;font-weight:800;font-family:var(--mono);" id="g-overall-status">—</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:4px;" id="g-overall-detail">Loading...</div>
+      </div>
+    </div>
+
+    <div style="margin-bottom:24px;">
+      <div class="panel-row-title" style="margin-bottom:10px;">INVARIANT CHECKS</div>
+      <div id="g-checks-list" style="display:flex;flex-direction:column;gap:4px;font-family:var(--mono);font-size:11px;">
+        <div style="color:var(--muted);">Loading boot checks...</div>
+      </div>
+    </div>
+
+    <div style="margin-bottom:24px;">
+      <div class="panel-row" style="margin-bottom:10px;">
+        <div class="panel-row-title">FACTOR LEADERBOARD</div>
+        <select class="sort-sel" id="g-factor-asset" onchange="guardianRefreshFactors()">
+          <option value="">All Assets</option>
+          <option value="crypto">Crypto</option>
+          <option value="forex">Forex</option>
+          <option value="stock">Stock</option>
+          <option value="commodity">Commodity</option>
+          <option value="index">Index</option>
+        </select>
+      </div>
+      <div id="g-factor-table" style="font-family:var(--mono);font-size:11px;">
+        <div style="color:var(--muted);">Loading factor data...</div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel-row-title" style="margin-bottom:10px;">RECENT DIVERGENCE EVENTS</div>
+      <div id="g-div-feed" style="display:flex;flex-direction:column;gap:6px;font-family:var(--mono);font-size:11px;max-height:300px;overflow-y:auto;">
+        <div style="color:var(--muted);">Loading divergence feed...</div>
+      </div>
+    </div>
+  </div><!-- /panel-guardian -->
+
   <div class="panel tab-panel" id="panel-tv">
     <div class="ch">
       <div class="ch-title">📺 TRADINGVIEW CHART <span class="ch-badge">LIVE</span></div>
@@ -2141,6 +2217,17 @@ function switchTab(tab) {
     if (typeof loadPerformance === 'function') loadPerformance();
     if (typeof loadAutoTradeLog === 'function') loadAutoTradeLog();
     if (typeof loadFailedExecutions === 'function') loadFailedExecutions();
+  }
+  if (tab === 'guardian') {
+    if (typeof guardianRefresh === 'function') guardianRefresh();
+    if (!window._guardianInterval) {
+      window._guardianInterval = setInterval(function() {
+        if (typeof guardianRefresh === 'function') guardianRefresh();
+      }, 30000);
+    }
+  } else if (window._guardianInterval) {
+    clearInterval(window._guardianInterval);
+    window._guardianInterval = null;
   }
 }
 
@@ -9216,6 +9303,249 @@ async function runScalpVisionConfirm(btn, symbol) {
         btn.disabled = false; btn.textContent = '🧠 VISION';
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// GUARDIAN PANEL — Ultra Instinct Dashboard
+// ═══════════════════════════════════════════════════════════════════════
+
+function guardianSyncHealthDots(overall) {
+  var cls = overall === 'healthy' ? 'on' : (overall === 'warning' ? 'bz-on' : 'off');
+  var dot = document.getElementById('guardian-dot');
+  if (dot) dot.className = 'conn-dot ' + cls;
+  var hd = document.getElementById('guardian-header-dot');
+  if (hd) hd.className = 'conn-dot ' + cls;
+}
+
+function guardianRefresh() {
+  var btn = document.getElementById('guardian-refresh-btn');
+  if (btn) btn.disabled = true;
+
+  fetch('/api/guardian/status')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var g = d.guardian || {};
+      var bootEl = document.getElementById('g-boot-score');
+      var bootDetail = document.getElementById('g-boot-detail');
+      var bootCard = document.getElementById('g-boot-card');
+      if (g.passed === true) {
+        bootEl.textContent = g.total_checks + '/' + g.total_checks;
+        bootEl.style.color = 'var(--bull)';
+        var ems = g.elapsed_ms != null ? Number(g.elapsed_ms).toFixed(0) : '—';
+        bootDetail.textContent = 'All checks passed (' + ems + 'ms)';
+        if (bootCard) bootCard.style.borderColor = 'var(--bull)';
+      } else if (g.passed === false) {
+        var fails = (g.failures || []).length;
+        var tot = g.total_checks || 0;
+        bootEl.textContent = (tot ? (tot - fails) : 0) + '/' + (tot || '—');
+        bootEl.style.color = 'var(--bear)';
+        bootDetail.textContent = fails + ' check(s) FAILED';
+        if (bootCard) bootCard.style.borderColor = 'var(--bear)';
+      } else {
+        bootEl.textContent = '—';
+        bootDetail.textContent = 'Not installed';
+        if (bootCard) bootCard.style.borderColor = '';
+      }
+
+      var s = d.shield || {};
+      var breakerEl = document.getElementById('g-breaker-status');
+      var breakerDetail = document.getElementById('g-breaker-detail');
+      var breakerCard = document.getElementById('g-breaker-card');
+      if (s.circuit_breaker_open === true) {
+        breakerEl.textContent = 'TRIPPED';
+        breakerEl.style.color = 'var(--bear)';
+        breakerDetail.textContent = (s.cooldown_remaining || 0) + 's cooldown | ' + (s.failure_count || 0) + ' failures';
+        if (breakerCard) breakerCard.style.borderColor = 'var(--bear)';
+      } else if (s.circuit_breaker_open === false) {
+        breakerEl.textContent = 'ARMED';
+        breakerEl.style.color = 'var(--bull)';
+        var th = s.breaker_threshold != null ? s.breaker_threshold : '—';
+        breakerDetail.textContent = (s.failure_count || 0) + '/' + th + ' failures';
+        if (breakerCard) breakerCard.style.borderColor = 'var(--bull)';
+      } else {
+        breakerEl.textContent = '—';
+        breakerDetail.textContent = s.error ? String(s.error) : 'Not installed';
+        if (breakerCard) breakerCard.style.borderColor = '';
+      }
+
+      var dv = d.divergence || {};
+      var divEl = document.getElementById('g-div-count');
+      var divDetail = document.getElementById('g-div-detail');
+      var divCard = document.getElementById('g-div-card');
+      var divCount = dv.divergence_count || 0;
+      var critCount = dv.critical_count || 0;
+      divEl.textContent = divCount;
+      if (critCount > 0) {
+        divEl.style.color = 'var(--bear)';
+        divDetail.textContent = critCount + ' critical | ' + (dv.total_checks || 0) + ' total checks';
+        if (divCard) divCard.style.borderColor = 'var(--bear)';
+      } else if (divCount > 0) {
+        divEl.style.color = 'var(--warn)';
+        divDetail.textContent = divCount + ' warnings | ' + (dv.total_checks || 0) + ' checks';
+        if (divCard) divCard.style.borderColor = 'var(--warn)';
+      } else {
+        divEl.style.color = 'var(--bull)';
+        divDetail.textContent = (dv.total_checks || 0) + ' checks — all clear';
+        if (divCard) divCard.style.borderColor = 'var(--bull)';
+      }
+
+      var overallEl = document.getElementById('g-overall-status');
+      var overallDetail = document.getElementById('g-overall-detail');
+      var overallCard = document.getElementById('g-overall-card');
+      var overall = d.overall || 'unknown';
+      if (overall === 'healthy') {
+        overallEl.textContent = 'HEALTHY';
+        overallEl.style.color = 'var(--bull)';
+        if (overallCard) overallCard.style.borderColor = 'var(--bull)';
+        overallDetail.textContent = 'All systems nominal';
+      } else if (overall === 'warning') {
+        overallEl.textContent = 'WARNING';
+        overallEl.style.color = 'var(--warn)';
+        if (overallCard) overallCard.style.borderColor = 'var(--warn)';
+        overallDetail.textContent = 'Non-critical issues detected';
+      } else if (overall === 'critical') {
+        overallEl.textContent = 'CRITICAL';
+        overallEl.style.color = 'var(--bear)';
+        if (overallCard) overallCard.style.borderColor = 'var(--bear)';
+        overallDetail.textContent = 'System integrity compromised';
+      } else {
+        overallEl.textContent = '—';
+        overallDetail.textContent = 'Status unknown';
+        if (overallCard) overallCard.style.borderColor = '';
+      }
+
+      guardianSyncHealthDots(overall);
+
+      var checksList = document.getElementById('g-checks-list');
+      if (checksList) {
+        if (g.checks) {
+          var html = '';
+          Object.keys(g.checks).forEach(function(name) {
+            var c = g.checks[name];
+            var icon = c.passed ? '<span style="color:var(--bull);">✓</span>' : '<span style="color:var(--bear);">✗</span>';
+            var det = (c.detail != null ? String(c.detail) : '').replace(/</g, '&lt;');
+            html += '<div style="display:flex;gap:8px;padding:4px 8px;background:rgba(255,255,255,0.02);border-radius:4px;">' +
+              icon + ' <span style="color:var(--text);min-width:180px;">' + name + '</span>' +
+              '<span style="color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + det + '</span></div>';
+          });
+          checksList.innerHTML = html || '<div style="color:var(--muted);">No checks available</div>';
+        } else if ((g.failures || []).length) {
+          checksList.innerHTML = (g.failures || []).map(function(f) {
+            var t = String(f).replace(/</g, '&lt;');
+            return '<div style="color:var(--bear);padding:4px 8px;">✗ ' + t + '</div>';
+          }).join('');
+        } else {
+          checksList.innerHTML = '<div style="color:var(--muted);">No checks available</div>';
+        }
+      }
+
+      var feed = document.getElementById('g-div-feed');
+      if (feed) {
+        var evs = dv.recent_events || [];
+        if (evs.length) {
+          var fhtml = '';
+          evs.forEach(function(ev) {
+            var sev = (ev.severity || '').toLowerCase();
+            var sevColor = sev === 'critical' ? 'var(--bear)' : (sev === 'warning' ? 'var(--warn)' : 'var(--muted)');
+            var ts = (ev.ts != null ? String(ev.ts) : '');
+            var tshort = ts.length >= 19 ? ts.substring(11, 19) : ts;
+            var sum = (ev.summary != null ? String(ev.summary) : '').replace(/</g, '&lt;');
+            fhtml += '<div style="display:flex;gap:8px;padding:6px 8px;background:rgba(255,255,255,0.02);border-radius:4px;border-left:3px solid ' + sevColor + ';">' +
+              '<span style="color:' + sevColor + ';min-width:60px;font-weight:700;">' + String(ev.severity || '').toUpperCase() + '</span>' +
+              '<span style="color:var(--text);min-width:80px;">' + (ev.pair || '') + '</span>' +
+              '<span style="color:var(--muted);flex:1;">' + sum + '</span>' +
+              '<span style="color:var(--muted);font-size:10px;">' + tshort + '</span></div>';
+          });
+          feed.innerHTML = fhtml;
+        } else {
+          feed.innerHTML = '<div style="color:var(--bull);">No divergence events in the last 24 hours</div>';
+        }
+      }
+    })
+    .catch(function(e) {
+      console.error('Guardian fetch error:', e);
+      var overallEl = document.getElementById('g-overall-status');
+      if (overallEl) { overallEl.textContent = 'ERROR'; overallEl.style.color = 'var(--bear)'; }
+      guardianSyncHealthDots('critical');
+    })
+    .finally(function() {
+      if (btn) btn.disabled = false;
+    });
+
+  guardianRefreshFactors();
+}
+
+function guardianRefreshFactors() {
+  var asset = document.getElementById('g-factor-asset');
+  var assetVal = asset ? asset.value : '';
+  var url = '/api/factor-attribution' + (assetVal ? '?asset_type=' + encodeURIComponent(assetVal) : '');
+
+  fetch(url)
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var container = document.getElementById('g-factor-table');
+      if (!container) return;
+      if (d.error) {
+        container.innerHTML = '<div style="color:var(--bear);padding:8px;">' + String(d.error) + '</div>';
+        return;
+      }
+      var lb = d.leaderboard || [];
+      if (lb.length === 0) {
+        container.innerHTML = '<div style="color:var(--muted);padding:8px;">Insufficient trade data — need more closed trades with factor snapshots</div>';
+        return;
+      }
+
+      var html = '<div style="display:grid;grid-template-columns:120px 60px 70px 70px 60px 80px;gap:2px;padding:4px 8px;color:var(--muted);font-weight:700;font-size:10px;">' +
+        '<span>FACTOR</span><span>IC</span><span>SPREAD</span><span>WIN%</span><span>N</span><span>VERDICT</span></div>';
+
+      lb.forEach(function(f) {
+        var ic = f.ic !== null && f.ic !== undefined ? Number(f.ic).toFixed(3) : '—';
+        var icColor = (f.ic || 0) > 0.1 ? 'var(--bull)' : (f.ic || 0) < -0.05 ? 'var(--bear)' : 'var(--text2)';
+        var recColor = f.recommendation === 'keep' ? 'var(--bull)' : f.recommendation === 'reduce' ? 'var(--bear)' : f.recommendation === 'investigate' ? 'var(--warn)' : 'var(--muted)';
+        var recLabel = (f.recommendation || '').toUpperCase();
+        var sp = f.spread !== null && f.spread !== undefined ? Number(f.spread).toFixed(3) : '—';
+        var wr = f.win_rate !== null && f.win_rate !== undefined ? (Number(f.win_rate) * 100).toFixed(0) + '%' : '—';
+
+        html += '<div style="display:grid;grid-template-columns:120px 60px 70px 70px 60px 80px;gap:2px;padding:6px 8px;background:rgba(255,255,255,0.02);border-radius:4px;">' +
+          '<span style="color:var(--text);font-weight:600;">' + f.factor + '</span>' +
+          '<span style="color:' + icColor + ';">' + ic + '</span>' +
+          '<span style="color:var(--text2);">' + sp + '</span>' +
+          '<span style="color:var(--text2);">' + wr + '</span>' +
+          '<span style="color:var(--muted);">' + (f.samples || 0) + '</span>' +
+          '<span style="color:' + recColor + ';font-weight:700;">' + recLabel + '</span></div>';
+      });
+
+      container.innerHTML = html;
+    })
+    .catch(function() {
+      var container = document.getElementById('g-factor-table');
+      if (container) container.innerHTML = '<div style="color:var(--bear);">Error loading factor data</div>';
+    });
+}
+
+function shieldReset() {
+  if (!confirm('Reset circuit breaker? This will allow trading to resume immediately.')) return;
+  fetch('/api/shield/reset', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.success && typeof guardianRefresh === 'function') guardianRefresh();
+    })
+    .catch(function(e) { console.error('Shield reset error:', e); });
+}
+
+(function guardianHeaderPoll() {
+  function poll() {
+    fetch('/api/guardian/status')
+      .then(function(r) { return r.json(); })
+      .then(function(d) { guardianSyncHealthDots(d.overall || 'unknown'); })
+      .catch(function() { guardianSyncHealthDots('critical'); });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function() { poll(); setInterval(poll, 45000); });
+  } else {
+    poll();
+    setInterval(poll, 45000);
+  }
+})();
 </script>
 
 <div class="watermark" aria-hidden="true">

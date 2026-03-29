@@ -3698,6 +3698,12 @@ app = Flask(__name__, static_folder="static")
 
 app.config["PERMANENT_SESSION_LIFETIME"] = 86400  # 24 hours
 
+try:
+    from guardian_routes import guardian_bp
+
+    app.register_blueprint(guardian_bp)
+except ImportError:
+    pass
 
 # ── API authentication (shared-secret header) ────────────────────────────
 
