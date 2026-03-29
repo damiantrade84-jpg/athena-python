@@ -1454,7 +1454,7 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
 
   <div class="panel tab-panel lottery-panel" id="panel-lottery">
     <div class="lottery-controls">
-      <select id="lotteryGame" class="lottery-select" onchange="loadLotteryLab(true)">
+      <select id="lotteryGame" class="lottery-select" onchange="loadLotteryLab(true); updateAddDrawForm();">
         <option value="lotto">LOTTO</option>
         <option value="powerball">POWERBALL</option>
         <option value="daily_lotto">DAILY LOTTO</option>
@@ -1478,6 +1478,50 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       <button class="bt-btn bt-btn-sm" onclick="exportLotteryPairsTripletsCsv()">EXPORT PAIRS/TRIPLETS CSV</button>
       <span id="lotteryStatus" class="lottery-muted lottery-status">Select a game to load stored draw history.</span>
     </div>
+
+    <!-- ── MANUAL DRAW ENTRY ───────────────────────────────────────── -->
+    <div class="lottery-card" id="lotteryAddDrawCard" style="border:1px solid rgba(240,185,11,0.25);background:rgba(240,185,11,0.03);">
+      <h3 style="margin-bottom:12px;">➕ ADD LATEST DRAW RESULT</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
+
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          <label style="font-size:9px;color:var(--muted);font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:0.1em;">Draw Date</label>
+          <input id="addDrawDate" type="date" class="lottery-input" style="width:140px;" />
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:4px;" id="addDrawNumbersWrap">
+          <label style="font-size:9px;color:var(--muted);font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:0.1em;">
+            Numbers <span id="addDrawNumHint" style="color:var(--accent);">(6 balls, 1–52)</span>
+          </label>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;" id="addDrawNumbersRow">
+            <input class="lottery-input add-draw-num" type="number" min="1" max="52" placeholder="N1" style="width:52px;" />
+            <input class="lottery-input add-draw-num" type="number" min="1" max="52" placeholder="N2" style="width:52px;" />
+            <input class="lottery-input add-draw-num" type="number" min="1" max="52" placeholder="N3" style="width:52px;" />
+            <input class="lottery-input add-draw-num" type="number" min="1" max="52" placeholder="N4" style="width:52px;" />
+            <input class="lottery-input add-draw-num" type="number" min="1" max="52" placeholder="N5" style="width:52px;" />
+            <input class="lottery-input add-draw-num" type="number" min="1" max="52" placeholder="N6" style="width:52px;" id="addDrawN6" />
+          </div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:4px;" id="addDrawBonusWrap">
+          <label style="font-size:9px;color:var(--muted);font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:0.1em;">Bonus Ball</label>
+          <input id="addDrawBonus" type="number" min="1" max="52" placeholder="Bonus" class="lottery-input" style="width:68px;" />
+        </div>
+
+        <button class="bt-btn" onclick="submitAddDraw()" style="height:36px;align-self:flex-end;">SAVE DRAW</button>
+        <span id="addDrawStatus" style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--muted);align-self:flex-end;"></span>
+      </div>
+
+      <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border);display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;">
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          <label style="font-size:9px;color:var(--muted);font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:0.1em;">Delete Draw by Date</label>
+          <input id="deleteDrawDate" type="date" class="lottery-input" style="width:140px;" />
+        </div>
+        <button class="bt-btn" onclick="submitDeleteDraw()" style="height:36px;background:rgba(246,70,93,0.15);border:1px solid rgba(246,70,93,0.35);color:var(--bear);">DELETE DRAW</button>
+        <span id="deleteDrawStatus" style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--muted);align-self:flex-end;"></span>
+      </div>
+    </div>
+    <!-- ── END MANUAL DRAW ENTRY ──────────────────────────────────── -->
 
     <div class="lottery-card lottery-ai-cta">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -2086,6 +2130,91 @@ function lotteryGameSpec(game) {
 function getLotteryGame() {
   var el = document.getElementById('lotteryGame');
   return el ? el.value : 'lotto';
+}
+
+function updateAddDrawForm() {
+  var game = getLotteryGame();
+  var spec = lotteryGameSpec(game);
+  var hint = document.getElementById('addDrawNumHint');
+  var n6 = document.getElementById('addDrawN6');
+  var bonusWrap = document.getElementById('addDrawBonusWrap');
+  var bonusInput = document.getElementById('addDrawBonus');
+  var numInputs = document.querySelectorAll('.add-draw-num');
+  numInputs.forEach(function(inp) {
+    inp.max = spec.mainMax;
+    inp.placeholder = inp.placeholder;
+  });
+  if (hint) hint.textContent = '(' + spec.mainCount + ' balls, 1\u2013' + spec.mainMax + ')';
+  if (n6) n6.style.display = spec.mainCount === 6 ? '' : 'none';
+  if (bonusWrap) bonusWrap.style.display = spec.hasBonus ? '' : 'none';
+  if (bonusInput) { bonusInput.max = spec.hasBonus ? (game === 'powerball' ? 20 : spec.mainMax) : 52; }
+}
+
+async function submitAddDraw() {
+  var game = getLotteryGame();
+  var spec = lotteryGameSpec(game);
+  var dateVal = (document.getElementById('addDrawDate') || {}).value || '';
+  var numInputs = Array.from(document.querySelectorAll('.add-draw-num'));
+  var activeInputs = spec.mainCount === 6 ? numInputs : numInputs.slice(0, 5);
+  var numbers = activeInputs.map(function(inp) { return parseInt(inp.value, 10); });
+  var bonusVal = spec.hasBonus ? parseInt((document.getElementById('addDrawBonus') || {}).value || '', 10) : null;
+  var statusEl = document.getElementById('addDrawStatus');
+
+  if (!dateVal) { if (statusEl) { statusEl.style.color='var(--bear)'; statusEl.textContent='Date required'; } return; }
+  if (numbers.some(isNaN)) { if (statusEl) { statusEl.style.color='var(--bear)'; statusEl.textContent='Fill all ' + spec.mainCount + ' numbers'; } return; }
+  if (spec.hasBonus && isNaN(bonusVal)) { if (statusEl) { statusEl.style.color='var(--bear)'; statusEl.textContent='Bonus ball required'; } return; }
+
+  if (statusEl) { statusEl.style.color='var(--muted)'; statusEl.textContent='Saving…'; }
+  try {
+    var body = { game: game, draw_date: dateVal, numbers: numbers };
+    if (spec.hasBonus) body.bonus = bonusVal;
+    var resp = await fetch('/api/lottery/add-draw', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    var data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    if (data.duplicate) {
+      if (statusEl) { statusEl.style.color='var(--warn)'; statusEl.textContent='Duplicate — draw for ' + dateVal + ' already exists'; }
+      showToast('Draw already exists for ' + dateVal, true);
+    } else {
+      if (statusEl) { statusEl.style.color='var(--bull)'; statusEl.textContent='✓ Saved ' + data.draw_date + ' → [' + data.numbers.join(', ') + ']' + (data.bonus != null ? ' + ' + data.bonus : ''); }
+      showToast('Draw saved: ' + data.draw_date);
+      loadLotteryLab(true);
+    }
+  } catch(e) {
+    if (statusEl) { statusEl.style.color='var(--bear)'; statusEl.textContent='Error: ' + e.message; }
+    showToast('Add draw failed: ' + e.message, true);
+  }
+}
+
+async function submitDeleteDraw() {
+  var game = getLotteryGame();
+  var dateVal = (document.getElementById('deleteDrawDate') || {}).value || '';
+  var statusEl = document.getElementById('deleteDrawStatus');
+  if (!dateVal) { if (statusEl) { statusEl.style.color='var(--bear)'; statusEl.textContent='Date required'; } return; }
+  if (!confirm('Delete ' + game.toUpperCase() + ' draw for ' + dateVal + '?')) return;
+  if (statusEl) { statusEl.style.color='var(--muted)'; statusEl.textContent='Deleting…'; }
+  try {
+    var resp = await fetch('/api/lottery/delete-draw', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ game: game, draw_date: dateVal })
+    });
+    var data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    if (data.deleted_rows === 0) {
+      if (statusEl) { statusEl.style.color='var(--warn)'; statusEl.textContent='No draw found for ' + dateVal; }
+    } else {
+      if (statusEl) { statusEl.style.color='var(--bull)'; statusEl.textContent='✓ Deleted draw for ' + dateVal; }
+      showToast('Draw deleted: ' + dateVal);
+      loadLotteryLab(true);
+    }
+  } catch(e) {
+    if (statusEl) { statusEl.style.color='var(--bear)'; statusEl.textContent='Error: ' + e.message; }
+    showToast('Delete draw failed: ' + e.message, true);
+  }
 }
 
 function setLotteryStatus(text) {
@@ -3383,6 +3512,7 @@ function refreshLotteryBonusIntelligence() {
 async function loadLotteryLab(force) {
   bindLotteryLabActions();
   restoreLotteryFilters();
+  updateAddDrawForm();
   if (window._lotteryLoading && !force) return;
   var filters = getLotteryFilters();
   persistLotteryFilters();
