@@ -68,60 +68,7 @@ _CRYPTO_SCALP_PAIRS = [
 ]
 
 
-# ── Bybit candle fetching (crypto M15/M5 via ccxt) ──────────────────────────
-
-def bybit_fetch_scalp_candles(
-    symbol: str, timeframe_str: str, count: int
-) -> list:
-    """Fetch OHLCV candles from Bybit for crypto scalp logic via ccxt.
-
-    Args:
-        symbol: Athena display name e.g. 'BTC/USDT'
-        timeframe_str: 'M5' or 'M15'
-        count: number of closed bars to return
-
-    Returns:
-        list of dicts: {time, open, high, low, close, vol}
-    """
-    _TF_MAP = {"M5": "5m", "M15": "15m", "H1": "1h"}
-    tf = _TF_MAP.get(timeframe_str.upper())
-    if not tf:
-        log.error(f"[SCALP] Unknown timeframe for Bybit: {timeframe_str}")
-        return []
-
-    # ccxt symbol format for Bybit linear perps
-    from bybit_executor import _SYMBOL_MAP
-    ccxt_symbol = _SYMBOL_MAP.get(symbol)
-    if not ccxt_symbol:
-        log.warning(f"[SCALP] No Bybit mapping for {symbol}")
-        return []
-
-    try:
-        import ccxt
-        exchange = ccxt.bybit({"options": {"defaultType": "linear"}})
-        # fetch extra to account for forming bar
-        raw = exchange.fetch_ohlcv(ccxt_symbol, timeframe=tf, limit=count + 1)
-        if not raw:
-            return []
-        candles = [
-            {
-                "time":  int(r[0] / 1000),
-                "open":  float(r[1]),
-                "high":  float(r[2]),
-                "low":   float(r[3]),
-                "close": float(r[4]),
-                "vol":   float(r[5]),
-            }
-            for r in raw
-        ]
-        # Drop forming (last) bar
-        return candles[:-1]
-    except ImportError:
-        log.error("[SCALP] ccxt not installed — cannot fetch Bybit candles")
-        return []
-    except Exception as e:
-        log.error(f"[SCALP] bybit_fetch_scalp_candles error for {symbol}: {e}")
-        return []
+# Bybit candle fetching removed - crypto now uses Binance WebSocket for all timeframes
 
 
 # ── MT5 candle fetching ───────────────────────────────────────────────────────
@@ -832,21 +779,25 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
         try:
             asset_type = _guess_asset_type(display)
 
-            # ── Crypto path: Bybit candles ─────────────────────────────────
+            # ── Crypto path: Binance WebSocket candles ───────────────────────────
             if asset_type == "crypto":
                 # Session gate: crypto always allowed but note peak sessions
                 _cs_ok, _cs_name = is_valid_session("crypto")
 
-                candles_m15 = bybit_fetch_scalp_candles(display, "M15", m15_count)
-                if len(candles_m15) < 30:
+                # Use standard candle fetching (now routes through Binance WebSocket)
+                from candles_cache import fetch_candles
+                pair_dict = {"display": display, "type": "crypto", "source": "binance"}
+                
+                candles_m15 = fetch_candles(pair_dict, "M15", m15_count)
+                if not candles_m15 or len(candles_m15) < 30:
                     _record_stability_sample(
                         display, asset_type, False, reason="insufficient_m15_candles"
                     )
                     skipped.append({"pair": display, "reason": "insufficient_m15_candles"})
                     continue
 
-                candles_m5 = bybit_fetch_scalp_candles(display, "M5", m5_count)
-                if len(candles_m5) < 10:
+                candles_m5 = fetch_candles(pair_dict, "M5", m5_count)
+                if not candles_m5 or len(candles_m5) < 10:
                     _record_stability_sample(
                         display, asset_type, False, reason="insufficient_m5_candles"
                     )
@@ -859,8 +810,8 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 htf_bias = None
 
                 if use_bias_filter:
-                    candles_bias = bybit_fetch_scalp_candles(display, bias_tf, h1_count)
-                    if len(candles_bias) >= 200:
+                    candles_bias = fetch_candles(pair_dict, bias_tf, h1_count)
+                    if candles_bias and len(candles_bias) >= 200:
                         htf_bias = infer_bias_from_ema_stack(candles_bias)
                     log.debug(
                         f"[SCALP] {display} HTF bias ({bias_tf}): "

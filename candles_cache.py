@@ -20,7 +20,7 @@ _candle_cache_lock = threading.Lock()
 _candle_fetch_meta: dict = {}
 _candle_fetch_inflight: dict = {}
 
-_CANDLE_CACHE_TTL = {"H1": 55 * 60, "H4": 235 * 60, "D1": 23 * 3600}
+_CANDLE_CACHE_TTL = {"M5": 5 * 60, "M15": 15 * 60, "H1": 55 * 60, "H4": 235 * 60, "D1": 23 * 3600}
 
 
 def _cache_key(pair: dict, tf: str, limit: int) -> tuple[str, str, int]:
@@ -306,9 +306,9 @@ def fetch_candles(
     Caches candle lists per (symbol, tf) so repeated scans within the same bar
     window reuse data instead of hammering the REST API on every scan.
 
-    TTL: H1=55 min, H4=3h55m, D1=23h — expires just before the next bar closes.
+    TTL: M5=5 min, M15=15 min, H1=55 min, H4=3h55m, D1=23h — expires just before the next bar closes.
     """
-    crypto_live_tf = pair.get("type") == "crypto" and tf in {"H1", "H4", "D1"}
+    crypto_live_tf = pair.get("type") == "crypto" and tf in {"M5", "M15", "H1", "H4", "D1"}
     display = pair.get("display", pair.get("symbol", ""))
     key = _cache_key(pair, tf, limit)
     fetch_meta = {
@@ -337,12 +337,11 @@ def fetch_candles(
         live_resp = fetch_candles_live(pair.get("display", ""), tf, limit)
         live_candles = extract_candles(live_resp)
 
-        _min_live_bars = {"H1": 20, "H4": 50, "D1": 50}.get(tf, limit)
+        _min_live_bars = {"M5": 20, "M15": 20, "H1": 20, "H4": 50, "D1": 50}.get(tf, limit)
 
         if (
             live_candles
             and len(live_candles) >= min(limit, _min_live_bars)
-            and not crypto_live_tf
         ):
             fetch_meta.update(
                 {

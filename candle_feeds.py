@@ -295,9 +295,9 @@ class BinanceLivePriceWS:
 
 
 class BinanceCandleWS:
-    """Binance Futures kline WebSocket for live crypto H1/H4/D1 candles."""
+    """Binance Futures kline WebSocket for live crypto M5/M15/H1/H4/D1 candles."""
 
-    _STREAM_TFS = {"1h": "H1", "4h": "H4", "1d": "D1"}
+    _STREAM_TFS = {"5m": "M5", "15m": "M15", "1h": "H1", "4h": "H4", "1d": "D1"}
 
     def __init__(self):
         self._running = True
@@ -1118,26 +1118,26 @@ class CandleBuilder:
         log.info(f"[CB] Seed complete: {seeded}/{len(pairs)} pairs")
 
     def _seed_crypto(self, pair: dict):
-        """Seed candle_cache H1/H4/D1 for one crypto pair from Binance futures REST."""
+        """Seed candle_cache M5/M15/H1/H4/D1 for one crypto pair from Binance futures REST."""
         disp = pair["display"]
         bn_sym = pair["symbol"].replace("/", "")
 
         with sqlite3.connect(self._db, timeout=15.0) as con:
             deleted = con.execute(
                 "DELETE FROM candle_cache "
-                "WHERE pair=? AND timeframe IN ('H1','H4','D1') AND tick_count > 0",
+                "WHERE pair=? AND timeframe IN ('M5','M15','H1','H4','D1') AND tick_count > 0",
                 (disp,),
             ).rowcount
             if deleted:
                 log.info(
-                    f"[CB] {disp}: purged {deleted} WS-built rows flagged with tick_count>0 before re-seed"
+                    f"[CB] {disp}: purged {deleted} WS-corrupted rows flagged with tick_count>0 before re-seed"
                 )
             counts = {
                 tf: con.execute(
                     "SELECT COUNT(*) FROM candle_cache WHERE pair=? AND timeframe=?",
                     (disp, tf),
                 ).fetchone()[0]
-                for tf in ("H1", "H4", "D1")
+                for tf in ("M5", "M15", "H1", "H4", "D1")
             }
             if (
                 counts.get("H1", 0) >= 100
@@ -1145,18 +1145,20 @@ class CandleBuilder:
             ):
                 migrated = con.execute(
                     "DELETE FROM candle_cache "
-                    "WHERE pair=? AND timeframe IN ('H1','H4','D1')",
+                    "WHERE pair=? AND timeframe IN ('M5','M15','H1','H4','D1')",
                     (disp,),
                 ).rowcount
                 if migrated:
                     log.info(
-                        f"[CB] {disp}: cleared {migrated} crypto seed rows for futures H1/H4/D1 migration"
+                        f"[CB] {disp}: cleared {migrated} crypto seed rows for futures M5/M15/H1/H4/D1 migration"
                     )
-                counts = {"H1": 0, "H4": 0, "D1": 0}
-        if all(counts.get(tf, 0) >= 100 for tf in ("H1", "H4", "D1")):
+                counts = {"M5": 0, "M15": 0, "H1": 0, "H4": 0, "D1": 0}
+        if all(counts.get(tf, 0) >= 100 for tf in ("M5", "M15", "H1", "H4", "D1")):
             return
 
         for tf_label, interval, limit in [
+            ("M5", "5m", 1000),
+            ("M15", "15m", 1000),
             ("H1", "1h", 1000),
             ("H4", "4h", 1000),
             ("D1", "1d", 1000),
