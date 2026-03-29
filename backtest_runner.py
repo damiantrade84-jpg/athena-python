@@ -600,15 +600,16 @@ def backtest_pair(pair, style="auto"):
                         _fx_regime_det = detect_regime(h4i["snap"], "forex")
                         _fx_trend_state = _fx_regime_det.get("label", "RANGING")
                     except Exception:
+                        _fx_regime_det = {"state": 1}
                         _fx_trend_state = "RANGING"
                     res = {
                         "final_score": _fx.final_score,
                         "direction": _fx.direction,
                         "factor_scores": _fx.components,
                         "regime": {
-                            "state": 1,
+                            "state": _fx_regime_det.get("state", 1),
                             "label": _fx_trend_state,
-                        },  # Match calc_confluence format
+                        },  # Match calc_confluence format — use detected regime state, not hardcoded RANGING
                         "signal_type": _fx.signal_type,
                         "score": _fx.final_score,  # Add compatibility field for backtest
                         "trendState": _fx_trend_state,  # Add compatibility field
@@ -1061,26 +1062,61 @@ def backtest_pair(pair, style="auto"):
                 # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
                 btc_bias = _bt_btc_bias(d1_ctx, pair)
 
-                res = calc_confluence(
-                    d1i_ctx,
-                    h4i,
-                    h1i,
-                    vr,
-                    stoch,
-                    pair,
-                    btc_bias,
-                    d1_candles=d1_ctx,
-                    h4_candles=h4_window,
-                    h1_candles=h1_window,
-                    volume_threshold=get_pair_profile(pair).get(
-                        "volume_threshold",
-                        CONFIG.get(
-                            "VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"]
+                # Route forex pairs to dedicated forex scoring engine (matches D1 BT + live scan)
+                if pair.get("type") == "forex":
+                    from forex_scoring import compute_forex_score
+
+                    _fx = compute_forex_score(
+                        d1_snap=d1i_ctx["snap"],
+                        h4_snap=h4i["snap"],
+                        h1_snap=h1i["snap"],
+                        h1_candles=h1_window,
+                        pair=pair,
+                        bar_time=h4_window[-1].get("time") if h4_window else None,
+                        backtest_mode=True,
+                        h4_candles=h4_window,
+                    )
+                    try:
+                        from regime import detect_regime
+                        _fx_regime_det = detect_regime(h4i["snap"], "forex")
+                        _fx_trend_state = _fx_regime_det.get("label", "RANGING")
+                    except Exception:
+                        _fx_regime_det = {"state": 1}
+                        _fx_trend_state = "RANGING"
+                    res = {
+                        "final_score": _fx.final_score,
+                        "direction": _fx.direction,
+                        "factor_scores": _fx.components,
+                        "regime": {
+                            "state": _fx_regime_det.get("state", 1),
+                            "label": _fx_trend_state,
+                        },
+                        "signal_type": _fx.signal_type,
+                        "score": _fx.final_score,
+                        "trendState": _fx_trend_state,
+                    }
+                    direction = _fx.direction
+                else:
+                    res = calc_confluence(
+                        d1i_ctx,
+                        h4i,
+                        h1i,
+                        vr,
+                        stoch,
+                        pair,
+                        btc_bias,
+                        d1_candles=d1_ctx,
+                        h4_candles=h4_window,
+                        h1_candles=h1_window,
+                        volume_threshold=get_pair_profile(pair).get(
+                            "volume_threshold",
+                            CONFIG.get(
+                                "VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"]
+                            ),
                         ),
-                    ),
-                    bar_time=h4_window[-1].get("time") if h4_window else None,
-                    funding_rate=_bt_funding_rate,
-                )
+                        bar_time=h4_window[-1].get("time") if h4_window else None,
+                        funding_rate=_bt_funding_rate,
+                    )
 
             except Exception as _bt_bar_err:
                 log.debug(
@@ -1485,29 +1521,63 @@ def backtest_pair(pair, style="auto"):
                 )  # TA-Lib STOCH standard: fastK=5, slowK=3, slowD=3
 
                 # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
-                # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
                 btc_bias = _bt_btc_bias(d1_ctx, pair)
 
-                res = calc_confluence(
-                    d1i_ctx,
-                    h4i_ctx,
-                    h1i,
-                    vr,
-                    stoch,
-                    pair,
-                    btc_bias,
-                    d1_candles=d1_ctx,
-                    h4_candles=h4_ctx,
-                    h1_candles=h1_window,
-                    volume_threshold=get_pair_profile(pair).get(
-                        "volume_threshold",
-                        CONFIG.get(
-                            "VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"]
+                # Route forex pairs to dedicated forex scoring engine (matches D1 BT + live scan)
+                if pair.get("type") == "forex":
+                    from forex_scoring import compute_forex_score
+
+                    _fx = compute_forex_score(
+                        d1_snap=d1i_ctx["snap"],
+                        h4_snap=h4i_ctx["snap"],
+                        h1_snap=h1i["snap"],
+                        h1_candles=h1_window,
+                        pair=pair,
+                        bar_time=h1_window[-1].get("time") if h1_window else None,
+                        backtest_mode=True,
+                        h4_candles=h4_ctx,
+                    )
+                    try:
+                        from regime import detect_regime
+                        _fx_regime_det = detect_regime(h4i_ctx["snap"], "forex")
+                        _fx_trend_state = _fx_regime_det.get("label", "RANGING")
+                    except Exception:
+                        _fx_regime_det = {"state": 1}
+                        _fx_trend_state = "RANGING"
+                    res = {
+                        "final_score": _fx.final_score,
+                        "direction": _fx.direction,
+                        "factor_scores": _fx.components,
+                        "regime": {
+                            "state": _fx_regime_det.get("state", 1),
+                            "label": _fx_trend_state,
+                        },
+                        "signal_type": _fx.signal_type,
+                        "score": _fx.final_score,
+                        "trendState": _fx_trend_state,
+                    }
+                    direction = _fx.direction
+                else:
+                    res = calc_confluence(
+                        d1i_ctx,
+                        h4i_ctx,
+                        h1i,
+                        vr,
+                        stoch,
+                        pair,
+                        btc_bias,
+                        d1_candles=d1_ctx,
+                        h4_candles=h4_ctx,
+                        h1_candles=h1_window,
+                        volume_threshold=get_pair_profile(pair).get(
+                            "volume_threshold",
+                            CONFIG.get(
+                                "VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"]
+                            ),
                         ),
-                    ),
-                    bar_time=h1_window[-1].get("time") if h1_window else None,
-                    funding_rate=_bt_funding_rate,
-                )
+                        bar_time=h1_window[-1].get("time") if h1_window else None,
+                        funding_rate=_bt_funding_rate,
+                    )
 
             except Exception as _bt_bar_err:
                 log.debug(
