@@ -843,17 +843,18 @@ class AutoTrader:
                 con.execute(
                     """INSERT INTO audit_log
 
-                       (ts, pair, score, direction, asset_class, regime,
+                       (ts, pair, score, engine, direction, asset_class, regime,
 
                         entry_price, sl, tp, volume, risk_amount, risk_pct,
 
                         ticket, grade, signal_price_ref, slippage_bps)
 
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         datetime.now(timezone.utc).isoformat(),
                         signal.get("pair"),
                         signal.get("confluenceScore"),
+                        _signal_engine(signal),
                         signal.get("direction"),
                         signal.get("type"),
                         signal.get("trendState"),
@@ -909,15 +910,16 @@ class AutoTrader:
                 con.execute(
                     """INSERT INTO audit_log
 
-                       (ts, pair, score, direction, asset_class, regime,
+                       (ts, pair, score, engine, direction, asset_class, regime,
 
                         entry_price, sl, tp, grade, error_tag)
 
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         datetime.now(timezone.utc).isoformat(),
                         signal.get("pair"),
                         signal.get("confluenceScore"),
+                        _signal_engine(signal),
                         signal.get("direction"),
                         signal.get("type"),
                         signal.get("trendState"),

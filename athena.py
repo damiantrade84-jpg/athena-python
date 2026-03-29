@@ -3442,6 +3442,8 @@ def _init_audit_db(db_path: str) -> None:
 
             score                 REAL,
 
+            engine                TEXT,
+
             direction             TEXT,
 
             trend                 TEXT,
@@ -3544,6 +3546,7 @@ def _init_audit_db(db_path: str) -> None:
 
     for col, defn in [
         ("entry_price", "REAL"),
+        ("engine", "TEXT"),
         ("sl", "REAL"),
         ("tp", "REAL"),
         ("volume", "REAL"),
@@ -3616,7 +3619,12 @@ set_lottery_db_path(_AUDIT_DB)
 init_stability_store(_AUDIT_DB)
 
 
-def _stability_engine_from_audit_row(style: str | None, max_score: float | None) -> str | None:
+def _stability_engine_from_audit_row(
+    style: str | None, max_score: float | None, engine: str | None = None
+) -> str | None:
+    engine_norm = str(engine or "").strip().lower()
+    if engine_norm in ("engine_a", "engine_b", "engine_c", "scalp"):
+        return engine_norm
     style_norm = str(style or "").strip().lower()
     if style_norm == "scalp":
         return "scalp"
@@ -3929,14 +3937,15 @@ def api_analyze():
                     "regime": sig.get("regimeName"),
                 }
                 _con.execute(
-                    "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style,"
+                    "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
                     "asset_class,score_pct,max_score,votes_json,warnings_json,"
                     "weinstein,trend_state,adx_pct,btc_bias,session_name,regime,factors_json) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         datetime.now(timezone.utc).isoformat(),
                         sig.get("pair"),
                         sig.get("confluenceScore"),
+                        "engine_a",
                         sig.get("direction"),
                         sig.get("trendState"),
                         result.get("grade"),
@@ -5005,14 +5014,15 @@ def api_webhook():
                         "regime": sig.get("regimeName"),
                     }
                     con.execute(
-                        "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style,"
+                        "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
                         "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,factors_json,"
                         "signal_price_ref,slippage_bps) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             datetime.now(timezone.utc).isoformat(),
                             pair_name,
                             sig.get("confluenceScore"),
+                            "external",
                             direction,
                             sig.get("trendState"),
                             "WEBHOOK",
@@ -8301,6 +8311,7 @@ def _update_trade_outcome(
             _ssi_engine = _stability_engine_from_audit_row(
                 _ssi_row["style"] if _ssi_row else None,
                 _ssi_row["max_score"] if _ssi_row else None,
+                _ssi_row["engine"] if _ssi_row else None,
             )
             if _ssi_engine:
                 record_outcome_event(
@@ -9644,6 +9655,55 @@ def api_performance():
     """Return performance statistics for all completed trades."""
 
     try:
+        def _safe_float(val):
+            try:
+                if val is None:
+                    return None
+                return float(val)
+            except (TypeError, ValueError):
+                return None
+
+        def _load_json_dict(raw):
+            if isinstance(raw, dict):
+                return raw
+            if raw in (None, ""):
+                return {}
+            try:
+                parsed = json.loads(str(raw))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+
+        def _infer_perf_engine(row: dict) -> str:
+            engine = str(row.get("engine") or "").strip().lower()
+            if engine in ("engine_a", "engine_b", "engine_c", "scalp", "external"):
+                return engine
+            style = str(row.get("style") or "").strip().lower()
+            grade = str(row.get("grade") or "").strip().upper()
+            if style == "scalp" or grade == "SCALP":
+                return "scalp"
+            if grade == "WEBHOOK":
+                return "external"
+            factors = _load_json_dict(row.get("factors_json"))
+            scores = factors.get("scores") if isinstance(factors.get("scores"), dict) else {}
+            if any(str(key).startswith("Naked_") for key in scores.keys()):
+                return "engine_b"
+            if scores:
+                return "engine_a"
+            if row.get("max_score") is not None:
+                return "engine_a"
+            return "unknown"
+
+        def _sqn_from_r_values(values):
+            clean = [float(v) for v in values if v is not None]
+            if len(clean) < 2:
+                return None
+            mean = sum(clean) / len(clean)
+            variance = sum((v - mean) ** 2 for v in clean) / (len(clean) - 1)
+            if variance <= 0:
+                return None
+            return round(mean / (variance**0.5) * (len(clean) ** 0.5), 2)
+
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
 
@@ -9928,6 +9988,27 @@ def api_performance():
                     "total_r": round(v["r_sum"], 2),
                 }
 
+        engine_raw: dict = defaultdict(list)
+        for t in trades:
+            engine_raw[_infer_perf_engine(t)].append(t)
+
+        performance_by_engine = {}
+        for engine_name, subset in engine_raw.items():
+            if not subset:
+                continue
+            engine_r_vals = [_safe_float(t.get("r_multiple")) for t in subset]
+            engine_r_vals = [v for v in engine_r_vals if v is not None]
+            engine_wins = sum(1 for t in subset if (_safe_float(t.get("pnl")) or 0) > 0)
+            engine_slip = [abs(_safe_float(t.get("slippage_bps")) or 0.0) for t in subset if t.get("slippage_bps") is not None]
+            performance_by_engine[engine_name] = {
+                "trades": len(subset),
+                "win_rate_pct": round(engine_wins / len(subset) * 100, 1) if subset else 0.0,
+                "avg_r": round(sum(engine_r_vals) / len(engine_r_vals), 2) if engine_r_vals else None,
+                "total_r": round(sum(engine_r_vals), 2) if engine_r_vals else 0.0,
+                "sqn": _sqn_from_r_values(engine_r_vals),
+                "avg_slippage_bps": round(sum(engine_slip) / len(engine_slip), 2) if engine_slip else None,
+            }
+
         return jsonify(
             {
                 "total_trades": total,
@@ -9950,6 +10031,7 @@ def api_performance():
                 "last_20_trades": last_20,
                 "execution_quality": execution_quality,
                 "attribution_by_source": attribution_by_source,
+                "performance_by_engine": performance_by_engine,
             }
         )
 

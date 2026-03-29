@@ -4236,6 +4236,34 @@ async function loadPerformance() {
       return '<tr><td>' + e[0] + '</td><td>' + fmtWr(e[1]) + '</td></tr>';
     }).join('');
 
+    var engineOrder = ['engine_a', 'engine_b', 'scalp', 'engine_c', 'external', 'unknown'];
+    var engineLabels = {
+      engine_a: 'Engine A',
+      engine_b: 'Engine B',
+      scalp: 'Scalp',
+      engine_c: 'Engine C',
+      external: 'Webhook/External',
+      unknown: 'Unknown'
+    };
+    var enginePerf = d.performance_by_engine || {};
+    var engineRows = engineOrder.filter(function(key) { return enginePerf[key]; }).map(function(key) {
+      var row = enginePerf[key] || {};
+      var wr = row.win_rate_pct != null ? fmtWr(row.win_rate_pct) : '-';
+      var avgR = row.avg_r != null ? row.avg_r.toFixed(2) + 'R' : '-';
+      var totalR = row.total_r != null ? row.total_r.toFixed(2) + 'R' : '-';
+      var sqn = row.sqn != null ? row.sqn.toFixed(2) : '-';
+      var slip = row.avg_slippage_bps != null ? row.avg_slippage_bps.toFixed(1) : '-';
+      return '<tr>' +
+        '<td>' + (engineLabels[key] || key) + '</td>' +
+        '<td>' + row.trades + '</td>' +
+        '<td>' + wr + '</td>' +
+        '<td>' + avgR + '</td>' +
+        '<td>' + totalR + '</td>' +
+        '<td>' + sqn + '</td>' +
+        '<td>' + slip + '</td>' +
+        '</tr>';
+    }).join('');
+
     // Last 20 trades table
     var tradeRows = (d.last_20_trades || []).map(function(t) {
       var pnlColor = (t.pnl || 0) >= 0 ? '#22c55e' : '#f6465d';
@@ -4263,6 +4291,10 @@ async function loadPerformance() {
         '<div class="perf-stat"><div class="perf-stat-val">' + (d.average_holding_period_hours != null ? d.average_holding_period_hours + 'h' : '-') + '</div><div class="perf-stat-lbl">Avg Hold</div></div>' +
         '<div class="perf-stat"><div class="perf-stat-val" style="font-size:14px">' + (d.best_pair || '-') + '</div><div class="perf-stat-lbl">Best Pair</div></div>' +
       '</div>' +
+      '<div class="perf-section"><h4>Live Performance by Engine</h4>' +
+        '<table class="perf-table"><thead><tr><th>Engine</th><th>Trades</th><th>WR%</th><th>Avg R</th><th>Total R</th><th>SQN</th><th>Avg Slip</th></tr></thead><tbody>' +
+        (engineRows || '<tr><td colspan="7" style="color:var(--muted)">No engine-tagged live outcomes yet</td></tr>') +
+        '</tbody></table></div>' +
       '<div class="perf-section"><h4>Equity Curve (Cumulative R)</h4>' + (curveSvg || '<p style="color:var(--muted);font-size:11px">Need more trades</p>') + '</div>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px">' +
         '<div class="perf-section"><h4>Win Rate by Regime</h4><table class="perf-table"><thead><tr><th>Regime</th><th>WR%</th></tr></thead><tbody>' + (regimeRows || '<tr><td colspan="2" style="color:var(--muted)">-</td></tr>') + '</tbody></table></div>' +

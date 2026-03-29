@@ -26,6 +26,18 @@ def healthcheck():
     return jsonify({"ok": True, "route": request.path})
 
 
+def _audit_engine_from_signal(sig: dict) -> str:
+    engine = str((sig or {}).get("engine") or "").strip().lower()
+    if engine in ("engine_a", "engine_b", "engine_c", "scalp"):
+        return engine
+    if bool((sig or {}).get("is_naked")) or (sig or {}).get("naked_data"):
+        return "engine_b"
+    style = str((sig or {}).get("style") or "").strip().lower()
+    if style == "scalp":
+        return "scalp"
+    return "engine_a"
+
+
 def api_quick_execute():
     d = request.json
     if not d or "signal" not in d:
@@ -236,13 +248,14 @@ def api_quick_execute():
             try:
                 with sqlite3.connect(_r.AUDIT_DB, timeout=15.0) as con:
                     con.execute(
-                        "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style,"
+                        "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
                         "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             datetime.now(timezone.utc).isoformat(),
                             pair_name,
                             sig.get("confluenceScore", 0),
+                            "engine_b",
                             sig.get("direction"),
                             engine_b.get("current_swing_sequence", "RANGING"),
                             "EXECUTED",
@@ -789,21 +802,23 @@ def api_execute():
                         "disabled": sig.get("disabledFactors"),
                         "regime": sig.get("regimeName"),
                     }
+                    _audit_engine = _audit_engine_from_signal(sig)
                     con.execute(
-                        "INSERT INTO audit_log(ts,pair,score,direction,trend,grade,edge_prob,risk,style,"
+                        "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
                         "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
                         "signal_price_ref,slippage_bps) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             datetime.now(timezone.utc).isoformat(),
                             pair,
                             sig.get("confluenceScore"),
+                            _audit_engine,
                             sig.get("direction"),
                             sig.get("trendState"),
                             "EXECUTED",
                             None,
                             f"${approval.risk_amount}",
-                            "execution",
+                            sig.get("style") or "execution",
                             result.get("entryPrice"),
                             sig.get("sl"),
                             sig.get("tp1"),
@@ -954,12 +969,13 @@ def api_scalp_execute():
             try:
                 with sqlite3.connect(_r.AUDIT_DB, timeout=15.0) as con:
                     con.execute(
-                        "INSERT INTO audit_log(ts,pair,score,direction,grade,risk,style,entry_price,sl,tp,volume,ticket,risk_amount,risk_pct) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "INSERT INTO audit_log(ts,pair,score,engine,direction,grade,risk,style,entry_price,sl,tp,volume,ticket,risk_amount,risk_pct) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             datetime.now(timezone.utc).isoformat(),
                             sig["pair"],
                             sig.get("ai_score", 0),
+                            "scalp",
                             sig.get("direction"),
                             "SCALP",
                             f"${approval.risk_amount}",

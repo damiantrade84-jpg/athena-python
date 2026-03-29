@@ -1,7 +1,7 @@
 """Advisory threshold recommendations for dashboard review and approval.
 
 This module is intentionally conservative:
-- Recommendations are derived from the latest backtest results already stored in audit.db.
+- Recommendations combine the latest backtest cohorts with closed live trade outcomes already stored in audit.db.
 - Approvals and rejections are tracked in SQLite for auditability.
 - Live application of an approved recommendation is handled by the caller.
 """
@@ -67,6 +67,10 @@ _ENGINE_B_STYLE_LIMITS = {
     "intraday": (3.0, 6.0),
     "swing": (3.0, 6.0),
 }
+_LIVE_ENGINE_A_MIN_TRADES = 5
+_LIVE_ENGINE_A_LOOSEN_MIN_TRADES = 8
+_LIVE_ENGINE_B_MIN_TRADES = 5
+_LIVE_ENGINE_B_LOOSEN_MIN_TRADES = 8
 
 
 def _default_db_path() -> str:
@@ -138,6 +142,168 @@ def _latest_backtest_rows(db_path: str | None = None) -> list[dict[str, Any]]:
             """
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _load_json_dict(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if raw in (None, ""):
+        return {}
+    try:
+        parsed = json.loads(str(raw))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _infer_asset_type_from_pair(pair: str | None) -> str:
+    p = str(pair or "").upper()
+    if not p:
+        return "unknown"
+    if "USDT" in p:
+        return "crypto"
+    if any(tok in p for tok in ("XAU", "XAG", "WTI", "BRENT", "NATGAS", "OIL", "GLD")):
+        return "commodity"
+    if any(tok in p for tok in ("SPY", "QQQ", "S&P", "NASDAQ", "NAS", "DAX", "FTSE", "NIKKEI", "HSI")):
+        return "index"
+    if any(tok in p for tok in ("EUR", "GBP", "USD", "JPY", "AUD", "NZD", "CHF", "CAD", "ZAR", "MXN", "SGD")):
+        return "forex"
+    return "stock"
+
+
+def _infer_live_engine(row: dict[str, Any]) -> str | None:
+    engine = str(row.get("engine") or "").strip().lower()
+    if engine in ("engine_a", "engine_b", "engine_c", "scalp", "external"):
+        return engine
+
+    style = str(row.get("style") or "").strip().lower()
+    grade = str(row.get("grade") or "").strip().upper()
+    if style == "scalp" or grade == "SCALP":
+        return "scalp"
+    if grade == "WEBHOOK":
+        return "external"
+
+    factors = _load_json_dict(row.get("factors_json"))
+    scores = factors.get("scores") if isinstance(factors.get("scores"), dict) else {}
+    if any(str(key).startswith("Naked_") for key in scores.keys()):
+        return "engine_b"
+    if scores:
+        return "engine_a"
+
+    max_score = _safe_float(row.get("max_score"))
+    if max_score is not None:
+        return "engine_a"
+
+    if style in ("intraday", "swing") and row.get("pair") and row.get("score") is not None:
+        return "engine_b"
+
+    if row.get("asset_class") and row.get("score") is not None:
+        return "engine_a"
+    return None
+
+
+def _closed_live_trade_rows(db_path: str | None = None) -> list[dict[str, Any]]:
+    path = db_path or _default_db_path()
+    with sqlite3.connect(path, timeout=15.0) as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            """
+            SELECT *
+            FROM audit_log
+            WHERE exit_price IS NOT NULL
+              AND pnl IS NOT NULL
+            ORDER BY COALESCE(exit_time, ts) DESC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _sqn_from_r_values(values: list[float]) -> float | None:
+    clean = [float(v) for v in values if v is not None]
+    if len(clean) < 2:
+        return None
+    mean = sum(clean) / len(clean)
+    variance = sum((v - mean) ** 2 for v in clean) / (len(clean) - 1)
+    if variance <= 0:
+        return None
+    return round(mean / (variance**0.5) * (len(clean) ** 0.5), 2)
+
+
+def _summarize_live_bucket(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    pair_count = len({str(row.get("pair") or "") for row in rows if row.get("pair")})
+    trade_count = len(rows)
+    wins = sum(1 for row in rows if (_safe_float(row.get("pnl")) or 0.0) > 0)
+    r_vals = [_safe_float(row.get("r_multiple")) for row in rows]
+    r_vals = [value for value in r_vals if value is not None]
+    avg_r = round(sum(r_vals) / len(r_vals), 2) if r_vals else None
+    sqn = _sqn_from_r_values(r_vals)
+    slippage = [abs(_safe_float(row.get("slippage_bps")) or 0.0) for row in rows if row.get("slippage_bps") is not None]
+    return {
+        "pairs": pair_count,
+        "trades": trade_count,
+        "avg_trades": round(trade_count / pair_count, 2) if pair_count else float(trade_count),
+        "avg_sqn": sqn,
+        "avg_r": avg_r,
+        "avg_win_rate": round(wins / trade_count * 100, 1) if trade_count else 0.0,
+        "avg_slippage_bps": round(sum(slippage) / len(slippage), 2) if slippage else None,
+    }
+
+
+def _live_engine_a_signal(summary: dict[str, Any]) -> str | None:
+    trades = int(summary.get("trades") or 0)
+    sqn = _safe_float(summary.get("avg_sqn"))
+    avg_r = _safe_float(summary.get("avg_r"))
+    win_rate = _safe_float(summary.get("avg_win_rate"))
+    if trades >= _LIVE_ENGINE_A_MIN_TRADES and ((sqn is not None and sqn <= -0.25) or (avg_r is not None and avg_r <= -0.10)):
+        return "tighten"
+    if trades >= _LIVE_ENGINE_A_LOOSEN_MIN_TRADES and sqn is not None and sqn >= 1.0 and avg_r is not None and avg_r >= 0.20 and (win_rate or 0.0) >= 55.0:
+        return "loosen"
+    return None
+
+
+def _live_engine_b_signal(summary: dict[str, Any]) -> str | None:
+    trades = int(summary.get("trades") or 0)
+    sqn = _safe_float(summary.get("avg_sqn"))
+    avg_r = _safe_float(summary.get("avg_r"))
+    win_rate = _safe_float(summary.get("avg_win_rate"))
+    if trades >= _LIVE_ENGINE_B_MIN_TRADES and ((sqn is not None and sqn <= -0.20) or (avg_r is not None and avg_r <= -0.08)):
+        return "tighten"
+    if trades >= _LIVE_ENGINE_B_LOOSEN_MIN_TRADES and sqn is not None and sqn >= 1.0 and avg_r is not None and avg_r >= 0.20 and (win_rate or 0.0) >= 55.0:
+        return "loosen"
+    return None
+
+
+def _summarize_live_engine_a(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        if _infer_live_engine(row) != "engine_a":
+            continue
+        asset = str(row.get("asset_class") or _infer_asset_type_from_pair(row.get("pair"))).strip().lower()
+        if asset not in _ASSET_LABELS:
+            continue
+        buckets.setdefault(asset, []).append(row)
+    return {asset: _summarize_live_bucket(bucket) for asset, bucket in buckets.items()}
+
+
+def _summarize_live_engine_b(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        if _infer_live_engine(row) != "engine_b":
+            continue
+        style = str(row.get("style") or "").strip().lower()
+        if style not in ("scalp", "intraday", "swing"):
+            continue
+        buckets.setdefault(style, []).append(row)
+    return {style: _summarize_live_bucket(bucket) for style, bucket in buckets.items()}
 
 
 def _current_policy_snapshot() -> dict[str, Any]:
@@ -327,10 +493,169 @@ def _build_engine_b_recommendations(rows: list[dict[str, Any]]) -> list[dict[str
     return out
 
 
+def _confidence_rank(value: str) -> int:
+    return {"low": 0, "medium": 1, "high": 2}.get(str(value or "").lower(), 0)
+
+
+def _confidence_from_rank(rank: int) -> str:
+    return {0: "low", 1: "medium", 2: "high"}.get(max(0, min(2, rank)), "low")
+
+
+def _format_live_reason(summary: dict[str, Any], label: str) -> str:
+    return (
+        f"Live {label} closed trades: {int(summary.get('trades') or 0)} trades, "
+        f"SQN {summary.get('avg_sqn') if summary.get('avg_sqn') is not None else 'n/a'}, "
+        f"avg R {summary.get('avg_r') if summary.get('avg_r') is not None else 'n/a'}, "
+        f"win rate {(summary.get('avg_win_rate') or 0):.1f}%."
+    )
+
+
+def _merge_live_evidence(
+    recommendations: list[dict[str, Any]],
+    live_a: dict[str, dict[str, Any]],
+    live_b: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for rec in recommendations:
+        merged = dict(rec)
+        reasons = list(merged.get("reasons") or [])
+        confidence_rank = _confidence_rank(merged.get("confidence"))
+        if merged.get("scope_type") == "engine_a_live_class":
+            summary = live_a.get(str(merged.get("scope_key") or ""))
+            if summary:
+                reasons.append(_format_live_reason(summary, "Engine A"))
+                live_dir = _live_engine_a_signal(summary)
+                if live_dir == merged.get("direction"):
+                    reasons.append("Live closed trade outcomes support the same threshold direction.")
+                    confidence_rank += 1
+                elif live_dir and live_dir != merged.get("direction"):
+                    reasons.append("Live closed trade outcomes currently oppose this threshold direction.")
+                    confidence_rank -= 1
+                merged["metrics"] = {
+                    **dict(merged.get("metrics") or {}),
+                    "live_pairs": summary.get("pairs"),
+                    "live_trades": summary.get("trades"),
+                }
+        elif merged.get("scope_type") == "engine_b_style":
+            summary = live_b.get(str(merged.get("scope_key") or ""))
+            if summary:
+                reasons.append(_format_live_reason(summary, f"Engine B {merged.get('scope_key')}"))
+                live_dir = _live_engine_b_signal(summary)
+                if live_dir == merged.get("direction"):
+                    reasons.append("Live closed trade outcomes support the same checklist gate direction.")
+                    confidence_rank += 1
+                elif live_dir and live_dir != merged.get("direction"):
+                    reasons.append("Live closed trade outcomes currently oppose this checklist gate direction.")
+                    confidence_rank -= 1
+                merged["metrics"] = {
+                    **dict(merged.get("metrics") or {}),
+                    "live_pairs": summary.get("pairs"),
+                    "live_trades": summary.get("trades"),
+                }
+        merged["reasons"] = reasons
+        merged["confidence"] = _confidence_from_rank(confidence_rank)
+        out.append(merged)
+    return out
+
+
+def _build_live_engine_a_recommendations(live_a: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    current_live = dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {})
+    for asset_type, summary in live_a.items():
+        cur_live = float(current_live.get(asset_type, 0.0) or 0.0)
+        live_low, live_high = _LIVE_LIMITS.get(asset_type, (0.60, 2.50))
+        direction = _live_engine_a_signal(summary)
+        if not direction:
+            continue
+        if direction == "tighten":
+            proposed = _clamp(_round_to_step(cur_live + _LIVE_STEP, _LIVE_STEP), live_low, live_high)
+        else:
+            proposed = _clamp(_round_to_step(cur_live - _LIVE_STEP, _LIVE_STEP), live_low, live_high)
+        if abs(proposed - cur_live) < 0.0001:
+            continue
+        out.append(
+            {
+                "id": _recommendation_id("engine_a_live_class", asset_type, cur_live, proposed),
+                "scope_type": "engine_a_live_class",
+                "scope_key": asset_type,
+                "engine": "engine_a",
+                "environment": "live",
+                "title": f"Engine A Live | {_ASSET_LABELS.get(asset_type, asset_type.title())}",
+                "subtitle": "Class-level MIN_CONFLUENCE_CLASS update from live outcomes",
+                "current_value": round(cur_live, 4),
+                "proposed_value": round(proposed, 4),
+                "delta": round(proposed - cur_live, 4),
+                "direction": direction,
+                "confidence": _confidence_from_count(int(summary.get("trades") or 0)),
+                "metrics": dict(summary),
+                "reasons": [
+                    _format_live_reason(summary, "Engine A"),
+                    "This recommendation is driven by closed live trade outcomes from the Performance ledger.",
+                ],
+            }
+        )
+    return out
+
+
+def _build_live_engine_b_recommendations(live_b: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    styles = ((CONFIG.get("NAKED_ENGINE") or {}).get("style_profiles") or {})
+    for style, summary in live_b.items():
+        cur_min = float((dict(styles.get(style) or {})).get("min_score", 0.0) or 0.0)
+        min_low, min_high = _ENGINE_B_STYLE_LIMITS.get(style, (2.0, 6.0))
+        direction = _live_engine_b_signal(summary)
+        if not direction:
+            continue
+        proposed = _clamp(cur_min + 1.0, min_low, min_high) if direction == "tighten" else _clamp(cur_min - 1.0, min_low, min_high)
+        if abs(proposed - cur_min) < 0.0001:
+            continue
+        out.append(
+            {
+                "id": _recommendation_id("engine_b_style", style, cur_min, proposed),
+                "scope_type": "engine_b_style",
+                "scope_key": style,
+                "engine": "engine_b",
+                "environment": "live+backtest",
+                "title": f"Engine B | {style.title()}",
+                "subtitle": "NAKED_ENGINE.style_profiles min_score update from live outcomes",
+                "current_value": round(cur_min, 4),
+                "proposed_value": round(proposed, 4),
+                "delta": round(proposed - cur_min, 4),
+                "direction": direction,
+                "confidence": _confidence_from_count(int(summary.get("trades") or 0)),
+                "metrics": dict(summary),
+                "reasons": [
+                    _format_live_reason(summary, f"Engine B {style}"),
+                    "This recommendation is driven by closed live trade outcomes from the Performance ledger.",
+                    "Engine B score gates remain whole checklist points.",
+                ],
+            }
+        )
+    return out
+
+
 def build_threshold_recommendations(db_path: str | None = None) -> list[dict[str, Any]]:
     rows = _latest_backtest_rows(db_path=db_path)
+    live_rows = _closed_live_trade_rows(db_path=db_path)
+    live_a = _summarize_live_engine_a(live_rows)
+    live_b = _summarize_live_engine_b(live_rows)
+
     recommendations = _build_engine_a_recommendations(rows)
     recommendations.extend(_build_engine_b_recommendations(rows))
+    recommendations = _merge_live_evidence(recommendations, live_a, live_b)
+
+    existing_scopes = {
+        (str(rec.get("scope_type") or ""), str(rec.get("scope_key") or "")) for rec in recommendations
+    }
+    for rec in _build_live_engine_a_recommendations(live_a):
+        key = (str(rec.get("scope_type") or ""), str(rec.get("scope_key") or ""))
+        if key not in existing_scopes:
+            recommendations.append(rec)
+    for rec in _build_live_engine_b_recommendations(live_b):
+        key = (str(rec.get("scope_type") or ""), str(rec.get("scope_key") or ""))
+        if key not in existing_scopes:
+            recommendations.append(rec)
+
     recommendations.sort(key=lambda rec: (rec.get("environment"), rec.get("title")))
     return recommendations
 
