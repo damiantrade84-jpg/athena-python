@@ -660,16 +660,13 @@ SCALP_ENGINE:
   MAX_SPREAD_PIPS:              # Per asset class
     forex: 4
     commodity: 8
-    crypto: 0                   # disabled (spread not applicable)
+    crypto: 0                   # disabled — spread not applicable for crypto perpetuals
     index: 6
+    stock: 5
   MIN_RR: 1.5
   TP2_ENABLED: true             # Second TP at next M15 swing
   AI_GRADING: true              # Enable rule-based AI quality score
   MIN_GRADE_AUTO_EXECUTE: "B"   # Don't auto-execute below B grade
   ZONE_MIN_CONDITIONS: 2        # Valid zone needs >= N conditions
-  SCALP_PAIRS:                  # Override to scan specific pairs only
-    - "EUR/USD"
-    - "GBP/USD"
-    - "XAU/USD"
-    - "USD/JPY"
-    - "NASDAQ-100"
+  # SCALP_PAIRS: []             # Uncomment + list pairs to restrict scan to specific pairs only
+  #                             # Leave commented/empty to scan ALL pairs (default full set)

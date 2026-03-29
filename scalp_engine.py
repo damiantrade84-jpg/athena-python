@@ -1,11 +1,13 @@
 """scalp_engine.py — Engine D: Independent M15/M5 Scalping Module
 
 Fully independent from Engine A (MFQS), Engine B (Naked), Engine C (Consensus).
-Data source: MT5 only (copy_rates_from_pos).
+Data sources:
+  - MT5 (copy_rates_from_pos) — forex, commodities, indices, stocks
+  - Bybit REST kline API via ccxt — crypto USDT perpetuals
 
 Logic flow:
-  1. Session filter (London/NY only)
-  2. Spread filter
+  1. Session filter (London/NY for MT5 pairs; Asia/London/NY for crypto)
+  2. Spread filter (skipped for crypto)
   3. M15 zone detection (≥2 conditions: S/R, sweep, EMA21)
   4. M5 entry trigger (rejection/engulfing + close direction + inside zone)
   5. Momentum confirmation (M5 structure break OR strong body)
@@ -50,6 +52,76 @@ _SESSIONS = {
     "london":   (7, 16),    # 07:00–16:00 UTC
     "new_york": (13, 21),   # 13:00–21:00 UTC
 }
+
+# Crypto trades 24/7 — use Asia open + London/NY overlaps for higher liquidity
+_CRYPTO_SESSIONS = {
+    "asia":        (1, 9),   # 01:00–09:00 UTC (Tokyo/Singapore open)
+    "london":      (7, 16),  # 07:00–16:00 UTC
+    "new_york":    (13, 22), # 13:00–22:00 UTC
+}
+
+# Crypto pairs list — Bybit USDT perpetuals supported on M5/M15
+_CRYPTO_SCALP_PAIRS = [
+    "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT",
+    "ADA/USDT", "DOGE/USDT", "AVAX/USDT", "LINK/USDT",
+    "BNB/USDT", "SUI/USDT",
+]
+
+
+# ── Bybit candle fetching (crypto M15/M5 via ccxt) ──────────────────────────
+
+def bybit_fetch_scalp_candles(
+    symbol: str, timeframe_str: str, count: int
+) -> list:
+    """Fetch OHLCV candles from Bybit for crypto scalp logic via ccxt.
+
+    Args:
+        symbol: Athena display name e.g. 'BTC/USDT'
+        timeframe_str: 'M5' or 'M15'
+        count: number of closed bars to return
+
+    Returns:
+        list of dicts: {time, open, high, low, close, vol}
+    """
+    _TF_MAP = {"M5": "5m", "M15": "15m", "H1": "1h"}
+    tf = _TF_MAP.get(timeframe_str.upper())
+    if not tf:
+        log.error(f"[SCALP] Unknown timeframe for Bybit: {timeframe_str}")
+        return []
+
+    # ccxt symbol format for Bybit linear perps
+    from bybit_executor import _SYMBOL_MAP
+    ccxt_symbol = _SYMBOL_MAP.get(symbol)
+    if not ccxt_symbol:
+        log.warning(f"[SCALP] No Bybit mapping for {symbol}")
+        return []
+
+    try:
+        import ccxt
+        exchange = ccxt.bybit({"options": {"defaultType": "linear"}})
+        # fetch extra to account for forming bar
+        raw = exchange.fetch_ohlcv(ccxt_symbol, timeframe=tf, limit=count + 1)
+        if not raw:
+            return []
+        candles = [
+            {
+                "time":  int(r[0] / 1000),
+                "open":  float(r[1]),
+                "high":  float(r[2]),
+                "low":   float(r[3]),
+                "close": float(r[4]),
+                "vol":   float(r[5]),
+            }
+            for r in raw
+        ]
+        # Drop forming (last) bar
+        return candles[:-1]
+    except ImportError:
+        log.error("[SCALP] ccxt not installed — cannot fetch Bybit candles")
+        return []
+    except Exception as e:
+        log.error(f"[SCALP] bybit_fetch_scalp_candles error for {symbol}: {e}")
+        return []
 
 
 # ── MT5 candle fetching ───────────────────────────────────────────────────────
@@ -213,8 +285,11 @@ def get_current_sessions() -> list:
     return active or ["off_hours"]
 
 
-def is_valid_session() -> tuple:
-    """Check if current time is London or NY session.
+def is_valid_session(asset_type: str = "forex") -> tuple:
+    """Check if current time is a valid session for the given asset type.
+
+    Forex/commodities/indices/stocks: London or NY only.
+    Crypto: Asia, London, or NY (24/7 market but higher-liquidity windows preferred).
 
     Returns:
         (valid: bool, session_name: str)
@@ -222,6 +297,14 @@ def is_valid_session() -> tuple:
     cfg = CONFIG.get("SCALP_ENGINE", {})
     if not cfg.get("SESSION_FILTER", True):
         return True, "all"
+
+    now_h = _current_utc_datetime().hour
+
+    if asset_type == "crypto":
+        for name, (start, end) in _CRYPTO_SESSIONS.items():
+            if start <= now_h < end:
+                return True, name
+        return True, "off_hours_crypto"  # crypto allowed 24/7 — off_hours is advisory only
 
     sessions = get_current_sessions()
     for s in sessions:
@@ -705,11 +788,17 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
         except Exception as exc:
             log.debug(f"[SSI] Scalp sample skipped for {display}: {exc}")
 
-    # Session gate
-    session_ok, session_name = is_valid_session()
+    # Session gate — evaluated per pair (crypto uses different windows)
     sessions = get_current_sessions()
+    # Check MT5 session once for non-crypto gate
+    mt5_session_ok, session_name = is_valid_session("forex")
+    _, crypto_session_name = is_valid_session("crypto")
 
-    if not session_ok:
+    # Split pairs by data source
+    mt5_pairs = [p for p in pairs_or_symbols if _guess_asset_type(p) != "crypto"]
+    crypto_pairs = [p for p in pairs_or_symbols if _guess_asset_type(p) == "crypto"]
+
+    if not mt5_session_ok and not crypto_pairs:
         for display in pairs_or_symbols:
             _record_stability_sample(
                 display=display,
@@ -725,105 +814,141 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             "reason": "OUTSIDE_SESSION",
         }
 
-    if not mt5_connect():
-        for display in pairs_or_symbols:
+    signals = []
+    skipped = []
+
+    if not mt5_connect() and mt5_pairs:
+        for display in mt5_pairs:
             _record_stability_sample(
                 display=display,
                 asset_type=_guess_asset_type(display),
                 passed=False,
                 reason="MT5_NOT_CONNECTED",
             )
-        return {
-            "signals": [],
-            "skipped": len(pairs_or_symbols),
-            "scanned": 0,
-            "session": session_name,
-            "reason": "MT5_NOT_CONNECTED",
-        }
-
-    signals = []
-    skipped = []
+            skipped.append({"pair": display, "reason": "MT5_NOT_CONNECTED"})
+        mt5_pairs = []  # skip MT5 pairs but still process crypto
 
     for display in pairs_or_symbols:
         try:
-            mt5_sym = mt5_map_symbol(display)
-            if not mt5_sym:
-                _record_stability_sample(
-                    display, _guess_asset_type(display), False, reason="no_mt5_mapping"
-                )
-                skipped.append({"pair": display, "reason": "no_mt5_mapping"})
-                continue
-
-            # Get symbol info (includes spread, point, digits, tick values)
-            sym_info = mt5_get_symbol_info(display)
-            if not sym_info or sym_info.get("error"):
-                _record_stability_sample(
-                    display, _guess_asset_type(display), False, reason="symbol_not_available"
-                )
-                skipped.append({"pair": display, "reason": "symbol_not_available"})
-                continue
-
-            # Determine asset type from MT5 symbol map
             asset_type = _guess_asset_type(display)
 
-            # Spread filter
-            spread_ok, spread_pips = check_spread(sym_info, asset_type)
-            if not spread_ok:
-                _record_stability_sample(
-                    display,
-                    asset_type,
-                    False,
-                    feature_map={"spread_pips": spread_pips},
-                    reason=f"spread_too_wide_{spread_pips}pips",
-                )
-                skipped.append({"pair": display, "reason": f"spread_too_wide_{spread_pips}pips"})
-                continue
+            # ── Crypto path: Bybit candles ─────────────────────────────────
+            if asset_type == "crypto":
+                # Session gate: crypto always allowed but note peak sessions
+                _cs_ok, _cs_name = is_valid_session("crypto")
 
-            # Fetch candles
-            candles_m15 = mt5_fetch_scalp_candles(
-                mt5_sym, "M15", m15_count, include_forming=True
-            )
-            if len(candles_m15) < 30:
-                _record_stability_sample(
-                    display, asset_type, False, reason="insufficient_m15_candles"
-                )
-                skipped.append({"pair": display, "reason": "insufficient_m15_candles"})
-                continue
+                candles_m15 = bybit_fetch_scalp_candles(display, "M15", m15_count)
+                if len(candles_m15) < 30:
+                    _record_stability_sample(
+                        display, asset_type, False, reason="insufficient_m15_candles"
+                    )
+                    skipped.append({"pair": display, "reason": "insufficient_m15_candles"})
+                    continue
 
-            candles_m5 = mt5_fetch_scalp_candles(
-                mt5_sym, "M5", m5_count, include_forming=True
-            )
-            if len(candles_m5) < 10:
-                _record_stability_sample(
-                    display, asset_type, False, reason="insufficient_m5_candles"
-                )
-                skipped.append({"pair": display, "reason": "insufficient_m5_candles"})
-                continue
+                candles_m5 = bybit_fetch_scalp_candles(display, "M5", m5_count)
+                if len(candles_m5) < 10:
+                    _record_stability_sample(
+                        display, asset_type, False, reason="insufficient_m5_candles"
+                    )
+                    skipped.append({"pair": display, "reason": "insufficient_m5_candles"})
+                    continue
 
-            live_price = mt5_get_live_price(mt5_sym)
-            current_price = (
-                live_price if live_price and live_price > 0 else candles_m5[-1]["close"]
-            )
-            htf_bias = None
+                current_price = candles_m5[-1]["close"]
+                sym_info = {"spread": 0, "point": 0.01, "digits": 2}  # placeholder for crypto
+                spread_pips = 0.0
+                htf_bias = None
 
-            if use_bias_filter:
-                candles_bias = mt5_fetch_scalp_candles(
-                    mt5_sym, bias_tf, h1_count, include_forming=True
-                )
-                if len(candles_bias) < 200:
+                if use_bias_filter:
+                    candles_bias = bybit_fetch_scalp_candles(display, bias_tf, h1_count)
+                    if len(candles_bias) >= 200:
+                        htf_bias = infer_bias_from_ema_stack(candles_bias)
+                    log.debug(
+                        f"[SCALP] {display} HTF bias ({bias_tf}): "
+                        f"{htf_bias or 'None — mixed EMA, bias filter inactive'}"
+                    )
+
+            # ── MT5 path: forex / commodities / indices / stocks ───────────
+            else:
+                # Session gate for MT5 pairs
+                if not mt5_session_ok:
+                    _record_stability_sample(
+                        display, asset_type, False, reason="OUTSIDE_SESSION"
+                    )
+                    skipped.append({"pair": display, "reason": "OUTSIDE_SESSION"})
+                    continue
+
+                mt5_sym = mt5_map_symbol(display)
+                if not mt5_sym:
+                    _record_stability_sample(
+                        display, asset_type, False, reason="no_mt5_mapping"
+                    )
+                    skipped.append({"pair": display, "reason": "no_mt5_mapping"})
+                    continue
+
+                sym_info = mt5_get_symbol_info(display)
+                if not sym_info or sym_info.get("error"):
+                    _record_stability_sample(
+                        display, asset_type, False, reason="symbol_not_available"
+                    )
+                    skipped.append({"pair": display, "reason": "symbol_not_available"})
+                    continue
+
+                spread_ok, spread_pips = check_spread(sym_info, asset_type)
+                if not spread_ok:
                     _record_stability_sample(
                         display,
                         asset_type,
                         False,
-                        reason=f"insufficient_{bias_tf.lower()}_candles",
+                        feature_map={"spread_pips": spread_pips},
+                        reason=f"spread_too_wide_{spread_pips}pips",
                     )
-                    skipped.append({"pair": display, "reason": f"insufficient_{bias_tf.lower()}_candles"})
+                    skipped.append({"pair": display, "reason": f"spread_too_wide_{spread_pips}pips"})
                     continue
-                htf_bias = infer_bias_from_ema_stack(candles_bias)
-                log.debug(
-                    f"[SCALP] {display} HTF bias ({bias_tf}): "
-                    f"{htf_bias or 'None — mixed EMA, bias filter inactive'}"
+
+                candles_m15 = mt5_fetch_scalp_candles(
+                    mt5_sym, "M15", m15_count, include_forming=True
                 )
+                if len(candles_m15) < 30:
+                    _record_stability_sample(
+                        display, asset_type, False, reason="insufficient_m15_candles"
+                    )
+                    skipped.append({"pair": display, "reason": "insufficient_m15_candles"})
+                    continue
+
+                candles_m5 = mt5_fetch_scalp_candles(
+                    mt5_sym, "M5", m5_count, include_forming=True
+                )
+                if len(candles_m5) < 10:
+                    _record_stability_sample(
+                        display, asset_type, False, reason="insufficient_m5_candles"
+                    )
+                    skipped.append({"pair": display, "reason": "insufficient_m5_candles"})
+                    continue
+
+                live_price = mt5_get_live_price(mt5_sym)
+                current_price = (
+                    live_price if live_price and live_price > 0 else candles_m5[-1]["close"]
+                )
+                htf_bias = None
+
+                if use_bias_filter:
+                    candles_bias = mt5_fetch_scalp_candles(
+                        mt5_sym, bias_tf, h1_count, include_forming=True
+                    )
+                    if len(candles_bias) < 200:
+                        _record_stability_sample(
+                            display,
+                            asset_type,
+                            False,
+                            reason=f"insufficient_{bias_tf.lower()}_candles",
+                        )
+                        skipped.append({"pair": display, "reason": f"insufficient_{bias_tf.lower()}_candles"})
+                        continue
+                    htf_bias = infer_bias_from_ema_stack(candles_bias)
+                    log.debug(
+                        f"[SCALP] {display} HTF bias ({bias_tf}): "
+                        f"{htf_bias or 'None — mixed EMA, bias filter inactive'}"
+                    )
 
             # Pipeline
             zone     = detect_m15_zone(candles_m15, current_price)
@@ -962,15 +1087,44 @@ def _guess_asset_type(display: str) -> str:
 # ── Scalp pairs list ──────────────────────────────────────────────────────────
 
 def get_scalp_pairs() -> list:
-    """Return the list of pairs to scan. Reads from config or uses default set."""
+    """Return the list of pairs to scan. Reads from config or uses full default set.
+
+    MT5 pairs: all mapped forex, commodities, indices (session-gated London/NY).
+    Crypto pairs: Bybit USDT perps via ccxt (Asia/London/NY sessions, 24/7 allowed).
+    Config SCALP_PAIRS overrides the full list if explicitly set.
+    """
     cfg = CONFIG.get("SCALP_ENGINE", {})
     configured = cfg.get("SCALP_PAIRS", [])
     if configured:
-        return configured
+        return list(configured)
 
-    # Default: major forex + commodities that trade cleanly on MT5 during London/NY
-    return [
+    # Full MT5 forex majors + minors
+    mt5_forex = [
         "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "NZD/USD",
-        "USD/CAD", "USD/CHF", "EUR/JPY", "GBP/JPY", "EUR/GBP",
-        "XAU/USD", "XAG/USD", "S&P 500", "Nasdaq",
+        "USD/CAD", "USD/CHF", "EUR/JPY", "GBP/JPY", "EUR/AUD",
+        "EUR/GBP", "AUD/JPY", "GBP/AUD", "EUR/CHF",
     ]
+    # Exotic forex (wider spreads — spread filter handles rejection)
+    mt5_exotic = [
+        "USD/ZAR", "USD/MXN", "USD/SGD",
+    ]
+    # Commodities
+    mt5_commodities = [
+        "XAU/USD", "XAG/USD", "WTI Oil", "Brent Oil", "Nat Gas",
+        "Copper", "XPT/USD", "XPD/USD",
+    ]
+    # Indices
+    mt5_indices = [
+        "S&P 500", "Nasdaq", "Dow Jones", "DAX 40", "UK100",
+        "ASX 200", "Nikkei 225", "Euro Stoxx 50",
+    ]
+    # US Stocks (CFDs)
+    mt5_stocks = [
+        "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META",
+        "GOOG", "JPM", "NFLX", "AMD", "COIN", "PLTR",
+    ]
+
+    return (
+        mt5_forex + mt5_exotic + mt5_commodities + mt5_indices + mt5_stocks
+        + _CRYPTO_SCALP_PAIRS
+    )
