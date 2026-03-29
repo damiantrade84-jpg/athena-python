@@ -419,9 +419,12 @@ def backtest_pair(pair, style="auto"):
     equity_curve = [1.0]
 
     _ptype = pair["type"]
+    _pair_score_group = get_pair_score_group(pair)
+    _pair_ctx = dict(pair)
+    _pair_ctx["score_group"] = _pair_score_group
 
-    # Engine A BT only: PAIR_PROFILES bt_min → CONFIG BT_MIN (live uses get_min_confluence_threshold)
-    bt_min = get_backtest_min_score_threshold(pair)
+    # Engine A backtest gate: pair bt_min override → subgroup BT_MIN_GROUP → class BT_MIN.
+    bt_min = get_backtest_min_score_threshold(_pair_ctx)
 
     _h4_need = max(50, CONFIG["H4_CANDLES"])
 
@@ -576,7 +579,7 @@ def backtest_pair(pair, style="auto"):
                 )  # TA-Lib STOCH standard: fastK=5, slowK=3, slowD=3
 
                 # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
-                btc_bias = _bt_btc_bias(d1_window, pair)
+                btc_bias = _bt_btc_bias(d1_window, _pair_ctx)
 
                 # Route forex pairs to dedicated forex scoring engine in backtest
                 if pair.get("type") == "forex":
@@ -587,12 +590,13 @@ def backtest_pair(pair, style="auto"):
                         h4_snap=h4i["snap"],
                         h1_snap=h1i["snap"],
                         h1_candles=h1_window,
-                        pair=pair,
+                        pair=_pair_ctx,
                         bar_time=d1_raw[i][
                             "time"
                         ],  # use actual current D1 bar datetime
                         backtest_mode=True,  # bypass session filter in backtest
                         h4_candles=h4_window,
+                        score_group=_pair_score_group,
                     )
                     # Derive proper regime label for forex backtest (not signal_type)
                     try:
@@ -622,12 +626,12 @@ def backtest_pair(pair, style="auto"):
                         h1i,
                         vr,
                         stoch,
-                        pair,
+                        _pair_ctx,
                         btc_bias,
                         d1_candles=d1_window,
                         h4_candles=h4_window,
                         h1_candles=h1_window,
-                        volume_threshold=get_pair_profile(pair).get(
+                        volume_threshold=get_pair_profile(_pair_ctx).get(
                             "volume_threshold",
                             CONFIG.get(
                                 "VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"]
@@ -1005,7 +1009,7 @@ def backtest_pair(pair, style="auto"):
                 )  # TA-Lib STOCH standard: fastK=5, slowK=3, slowD=3
 
                 # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
-                btc_bias = _bt_btc_bias(d1_ctx, pair)
+                btc_bias = _bt_btc_bias(d1_ctx, _pair_ctx)
 
                 # Route forex pairs to dedicated forex scoring engine (matches D1 BT + live scan)
                 if pair.get("type") == "forex":
@@ -1016,10 +1020,11 @@ def backtest_pair(pair, style="auto"):
                         h4_snap=h4i["snap"],
                         h1_snap=h1i["snap"],
                         h1_candles=h1_window,
-                        pair=pair,
+                        pair=_pair_ctx,
                         bar_time=h4_window[-1].get("time") if h4_window else None,
                         backtest_mode=True,
                         h4_candles=h4_window,
+                        score_group=_pair_score_group,
                     )
                     try:
                         from regime import detect_regime
@@ -1048,12 +1053,12 @@ def backtest_pair(pair, style="auto"):
                         h1i,
                         vr,
                         stoch,
-                        pair,
+                        _pair_ctx,
                         btc_bias,
                         d1_candles=d1_ctx,
                         h4_candles=h4_window,
                         h1_candles=h1_window,
-                        volume_threshold=get_pair_profile(pair).get(
+                        volume_threshold=get_pair_profile(_pair_ctx).get(
                             "volume_threshold",
                             CONFIG.get(
                                 "VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"]
@@ -1411,7 +1416,7 @@ def backtest_pair(pair, style="auto"):
                 )  # TA-Lib STOCH standard: fastK=5, slowK=3, slowD=3
 
                 # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
-                btc_bias = _bt_btc_bias(d1_ctx, pair)
+                btc_bias = _bt_btc_bias(d1_ctx, _pair_ctx)
 
                 # Route forex pairs to dedicated forex scoring engine (matches D1 BT + live scan)
                 if pair.get("type") == "forex":
@@ -1422,10 +1427,11 @@ def backtest_pair(pair, style="auto"):
                         h4_snap=h4i_ctx["snap"],
                         h1_snap=h1i["snap"],
                         h1_candles=h1_window,
-                        pair=pair,
+                        pair=_pair_ctx,
                         bar_time=h1_window[-1].get("time") if h1_window else None,
                         backtest_mode=True,
                         h4_candles=h4_ctx,
+                        score_group=_pair_score_group,
                     )
                     try:
                         from regime import detect_regime
@@ -1454,12 +1460,12 @@ def backtest_pair(pair, style="auto"):
                         h1i,
                         vr,
                         stoch,
-                        pair,
+                        _pair_ctx,
                         btc_bias,
                         d1_candles=d1_ctx,
                         h4_candles=h4_ctx,
                         h1_candles=h1_window,
-                        volume_threshold=get_pair_profile(pair).get(
+                        volume_threshold=get_pair_profile(_pair_ctx).get(
                             "volume_threshold",
                             CONFIG.get(
                                 "VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"]
@@ -1803,10 +1809,11 @@ def backtest_pair(pair, style="auto"):
             "btStyle": effective_style,
             "btStyleRequested": requested_style,
             "quantileGateNote": (
-                "Backtest gates on CONFIG BT_MIN / pair bt_min (not live confluence chain). "
+                "Backtest gates on pair bt_min → BT_MIN_GROUP → BT_MIN. "
                 "Live uses get_min_confluence_threshold plus optional SCAN_QUANTILE_ENABLED."
                 if CONFIG.get("SCAN_QUANTILE_ENABLED", True)
-                else "Backtest uses BT_MIN / pair bt_min; live uses get_min_confluence_threshold. "
+                else "Backtest uses pair bt_min → BT_MIN_GROUP → BT_MIN; "
+                "live uses get_min_confluence_threshold. "
                 "SCAN_QUANTILE_ENABLED is off."
             ),
             "btMinUsed": bt_min,
@@ -2196,10 +2203,11 @@ def backtest_pair(pair, style="auto"):
         "btStyle": effective_style,
         "btStyleRequested": requested_style,
         "quantileGateNote": (
-            "Backtest gates on CONFIG BT_MIN / pair bt_min (not live confluence chain). "
+            "Backtest gates on pair bt_min → BT_MIN_GROUP → BT_MIN. "
             "Live uses get_min_confluence_threshold plus optional SCAN_QUANTILE_ENABLED."
             if CONFIG.get("SCAN_QUANTILE_ENABLED", True)
-            else "Backtest uses BT_MIN / pair bt_min; live uses get_min_confluence_threshold. "
+            else "Backtest uses pair bt_min → BT_MIN_GROUP → BT_MIN; "
+            "live uses get_min_confluence_threshold. "
             "SCAN_QUANTILE_ENABLED is off."
         ),
         "btMinUsed": bt_min,

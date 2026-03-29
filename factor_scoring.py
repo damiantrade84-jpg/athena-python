@@ -97,7 +97,9 @@ def _crypto_supports_cot(pair: dict) -> bool:
 
 def _optional_directional_keys(asset_type: str, pair: dict) -> tuple[str, ...]:
     if asset_type != "crypto":
-        return ("funding_rate", "cot_z", "carry_z")
+        # Non-crypto never supplies funding_rate, so only count optional feeds that
+        # can materially appear when softening the directional threshold.
+        return ("cot_z", "carry_z")
     keys = ["funding_rate"]
     if _crypto_supports_cot(pair):
         keys.append("cot_z")

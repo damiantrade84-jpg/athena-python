@@ -1299,6 +1299,7 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       <div style="display:flex;gap:8px;margin-left:auto;flex-wrap:wrap;align-items:center;">
         <button class="bt-btn" id="btMinToggleBtn" onclick="toggleBtMinPanel()" title="Adjust BT_MIN score thresholds for Engine A backtest" style="background:linear-gradient(135deg,#374151,#4b5563);">&#9881; BT THRESHOLDS</button>
         <button class="bt-btn" id="nakedStyleToggleBtn" onclick="toggleNakedStylePanel()" title="Adjust Engine B naked min_score / min_rr (live scan + backtest)" style="background:linear-gradient(135deg,#1e3a5f,#0f766e);">&#9881; ENGINE B THRESHOLDS</button>
+        <button class="bt-btn" id="advisoryToggleBtn" onclick="toggleAdvisoryPanel()" title="Review and approve threshold recommendations" style="background:linear-gradient(135deg,#7c3aed,#0ea5e9);position:relative;padding-right:44px;">&#9889; ADVISORY<span id="advisoryCountBadge" style="position:absolute;top:7px;right:10px;min-width:18px;height:18px;border-radius:999px;background:#f97316;color:#fff;font-size:10px;font-weight:700;display:none;align-items:center;justify-content:center;padding:0 5px;line-height:18px;">0</span></button>
       </div>
     </div>
 
@@ -1335,6 +1336,30 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
         <button class="bt-btn" onclick="saveNakedStyleThresholds()" id="nakedStyleSaveBtn" style="padding:8px 20px;font-size:12px;background:linear-gradient(135deg,#1e3a5f,#0f766e);">&#10003; SAVE ENGINE B THRESHOLDS</button>
         <span id="nakedStyleStatus" style="font-size:11px;color:var(--muted);"></span>
         <span style="font-size:11px;color:var(--muted);margin-left:auto;">Higher min_score = fewer passes. Regime scaling still applies in backtest.</span>
+      </div>
+    </div>
+
+    <div id="advisoryPanel" style="display:none;background:linear-gradient(180deg,rgba(124,58,237,0.08),rgba(14,165,233,0.04));border:1px solid rgba(14,165,233,0.25);border-radius:12px;padding:18px 22px 16px;margin-bottom:18px;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
+        <div style="max-width:760px;">
+          <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:4px;">Threshold Recommendations</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.5;">Advisory recommendations are derived from stored backtest cohorts. Approval writes the recommended policy into the active runtime config and persists it to <code>config.yaml</code>.</div>
+        </div>
+        <button onclick="loadAdvisoryThresholds()" title="Reload advisory recommendations" style="background:none;border:none;color:#38bdf8;cursor:pointer;font-size:18px;padding:2px 6px;">&#8635;</button>
+      </div>
+
+      <div id="advisorySummaryBand" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px;"></div>
+      <div id="advisoryPolicyStrip" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:14px;"></div>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
+        <button id="advisoryTab-pending" onclick="setAdvisoryTab('pending')" style="padding:7px 12px;border-radius:999px;border:1px solid var(--border);background:rgba(124,58,237,0.16);color:var(--text);font-size:11px;font-weight:700;cursor:pointer;">Pending</button>
+        <button id="advisoryTab-approved" onclick="setAdvisoryTab('approved')" style="padding:7px 12px;border-radius:999px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:11px;font-weight:700;cursor:pointer;">Approved</button>
+        <button id="advisoryTab-rejected" onclick="setAdvisoryTab('rejected')" style="padding:7px 12px;border-radius:999px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:11px;font-weight:700;cursor:pointer;">Rejected</button>
+        <span id="advisoryPanelStatus" style="font-size:11px;color:var(--muted);margin-left:auto;"></span>
+      </div>
+
+      <div id="advisoryContent">
+        <div style="font-size:12px;color:var(--muted);padding:12px 0;">Open the panel to load advisory recommendations.</div>
       </div>
     </div>
 
@@ -4363,8 +4388,321 @@ async function saveNakedStyleThresholds() {
   }
   btn.disabled = false;
   btn.textContent = '✓ SAVE ENGINE B THRESHOLDS';
-  setTimeout(function() { status.textContent = ''; }, 5000);
+setTimeout(function() { status.textContent = ''; }, 5000);
 }
+
+// Threshold advisory approvals
+var _advisoryOpen = false;
+var _advisoryTab = 'pending';
+var _advisorySnapshot = null;
+
+function advisoryEscape(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function advisoryFormatNumber(value, digits) {
+  var num = Number(value);
+  if (!isFinite(num)) return 'n/a';
+  var fixed = num.toFixed(digits == null ? 2 : digits);
+  return fixed.replace(/\.?0+$/, '');
+}
+
+function advisoryFormatSigned(value) {
+  var num = Number(value);
+  if (!isFinite(num) || Math.abs(num) < 0.0001) return 'No change';
+  return (num > 0 ? '+' : '') + advisoryFormatNumber(num, 2);
+}
+
+function advisoryEnvironmentColor(environment) {
+  if (environment === 'live') return '#f59e0b';
+  if (environment === 'backtest') return '#94a3b8';
+  return '#38bdf8';
+}
+
+function advisoryDirectionColor(direction) {
+  return direction === 'tighten' ? '#ef4444' : '#22c55e';
+}
+
+function updateAdvisoryBadge(count) {
+  var badge = document.getElementById('advisoryCountBadge');
+  if (!badge) return;
+  var total = Number(count) || 0;
+  badge.textContent = String(total);
+  badge.style.display = total > 0 ? 'inline-flex' : 'none';
+}
+
+function toggleAdvisoryPanel() {
+  _advisoryOpen = !_advisoryOpen;
+  document.getElementById('advisoryPanel').style.display = _advisoryOpen ? 'block' : 'none';
+  if (_advisoryOpen) loadAdvisoryThresholds();
+}
+
+function setAdvisoryTab(tab) {
+  _advisoryTab = tab || 'pending';
+  renderAdvisoryPanel();
+}
+
+function renderAdvisorySummary(summary, pendingList) {
+  var band = document.getElementById('advisorySummaryBand');
+  if (!band) return;
+  var pending = pendingList || [];
+  var highConfidence = pending.filter(function(rec){ return rec.confidence === 'high'; }).length;
+  var liveImpact = pending.filter(function(rec){
+    return rec.environment === 'live' || rec.environment === 'live+backtest';
+  }).length;
+  var lastRecomputed = summary && summary.last_recomputed ? advisoryEscape(summary.last_recomputed.replace('T', ' ').replace('Z', ' UTC')) : 'n/a';
+  var items = [
+    { label: 'Pending', value: summary && summary.pending != null ? summary.pending : 0, tone: '#f97316' },
+    { label: 'High Confidence', value: highConfidence, tone: '#22c55e' },
+    { label: 'Affects Live', value: liveImpact, tone: '#f59e0b' },
+    { label: 'Last Recompute', value: lastRecomputed, tone: '#38bdf8', small: true }
+  ];
+  band.innerHTML = items.map(function(item){
+    return '' +
+      '<div style="border:1px solid rgba(148,163,184,0.24);background:rgba(15,23,42,0.28);border-radius:10px;padding:12px 14px;min-height:64px;">' +
+      '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">' + item.label + '</div>' +
+      '<div style="font-size:' + (item.small ? '12px' : '22px') + ';font-weight:700;color:' + item.tone + ';line-height:1.2;">' + item.value + '</div>' +
+      '</div>';
+  }).join('');
+}
+
+function renderAdvisoryPolicies(currentPolicies) {
+  var container = document.getElementById('advisoryPolicyStrip');
+  if (!container) return;
+  var assetOrder = ['forex', 'crypto', 'commodity', 'stock', 'index'];
+  var assetLabels = { forex: 'Forex', crypto: 'Crypto', commodity: 'Commodity', stock: 'Stock', index: 'Index' };
+  var styleOrder = ['scalp', 'intraday', 'swing'];
+  var sections = [];
+
+  function renderRow(label, value, tone) {
+    return '' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid rgba(148,163,184,0.10);">' +
+      '<span style="font-size:11px;color:var(--muted);">' + advisoryEscape(label) + '</span>' +
+      '<span style="font-size:12px;font-weight:700;color:' + (tone || 'var(--text)') + ';">' + advisoryEscape(value) + '</span>' +
+      '</div>';
+  }
+
+  sections.push(
+    '<div style="border:1px solid rgba(148,163,184,0.24);background:rgba(15,23,42,0.22);border-radius:10px;padding:12px 14px;">' +
+    '<div style="font-size:11px;font-weight:700;color:#f59e0b;margin-bottom:8px;">Engine A Live</div>' +
+    assetOrder.map(function(key){
+      return renderRow(assetLabels[key] || key, advisoryFormatNumber((currentPolicies.engine_a_live || {})[key], 2));
+    }).join('') +
+    '</div>'
+  );
+
+  sections.push(
+    '<div style="border:1px solid rgba(148,163,184,0.24);background:rgba(15,23,42,0.22);border-radius:10px;padding:12px 14px;">' +
+    '<div style="font-size:11px;font-weight:700;color:#94a3b8;margin-bottom:8px;">Engine A Backtest</div>' +
+    assetOrder.map(function(key){
+      return renderRow(assetLabels[key] || key, advisoryFormatNumber((currentPolicies.engine_a_backtest || {})[key], 2));
+    }).join('') +
+    '</div>'
+  );
+
+  sections.push(
+    '<div style="border:1px solid rgba(148,163,184,0.24);background:rgba(15,23,42,0.22);border-radius:10px;padding:12px 14px;">' +
+    '<div style="font-size:11px;font-weight:700;color:#14b8a6;margin-bottom:8px;">Engine B Styles</div>' +
+    styleOrder.map(function(key){
+      var row = ((currentPolicies.engine_b_styles || {})[key]) || {};
+      return renderRow(key.charAt(0).toUpperCase() + key.slice(1), 'score ' + advisoryFormatNumber(row.min_score, 2) + ' | RR ' + advisoryFormatNumber(row.min_rr, 2), '#d1fae5');
+    }).join('') +
+    '</div>'
+  );
+
+  container.innerHTML = sections.join('');
+}
+
+function advisoryCardHtml(rec, isPending) {
+  var envColor = advisoryEnvironmentColor(rec.environment);
+  var dirColor = advisoryDirectionColor(rec.direction);
+  var confidenceTone = rec.confidence === 'high' ? '#22c55e' : (rec.confidence === 'medium' ? '#f59e0b' : '#ef4444');
+  var metrics = rec.metrics || {};
+  var reasons = Array.isArray(rec.reasons) ? rec.reasons : [];
+  var currentLabel = advisoryFormatNumber(rec.current_value, 2);
+  var proposedLabel = advisoryFormatNumber(rec.proposed_value, 2);
+  var deltaLabel = advisoryFormatSigned(rec.delta);
+  var statusMeta = '';
+
+  if (!isPending) {
+    var actionLabel = rec.status === 'approved' ? 'Approved' : 'Rejected';
+    var metaBits = [actionLabel];
+    if (rec.action_at) metaBits.push(String(rec.action_at).replace('T', ' ').replace('Z', ' UTC'));
+    if (rec.action_note) metaBits.push(rec.action_note);
+    statusMeta = '<div style="margin-top:12px;font-size:11px;color:var(--muted);">' + advisoryEscape(metaBits.join(' | ')) + '</div>';
+  }
+
+  return '' +
+    '<section style="border:1px solid rgba(148,163,184,0.24);border-left:4px solid ' + dirColor + ';background:rgba(2,6,23,0.28);border-radius:12px;padding:14px 16px;">' +
+      '<div style="display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;align-items:flex-start;">' +
+        '<div style="flex:1;min-width:240px;">' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">' +
+            '<span style="padding:4px 8px;border-radius:999px;background:' + envColor + '22;color:' + envColor + ';font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;">' + advisoryEscape(rec.environment || 'unknown') + '</span>' +
+            '<span style="padding:4px 8px;border-radius:999px;background:' + confidenceTone + '22;color:' + confidenceTone + ';font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;">' + advisoryEscape(rec.confidence || 'low') + ' conf</span>' +
+            '<span style="padding:4px 8px;border-radius:999px;background:' + dirColor + '22;color:' + dirColor + ';font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;">' + advisoryEscape(rec.direction || 'review') + '</span>' +
+          '</div>' +
+          '<div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px;">' + advisoryEscape(rec.title || 'Recommendation') + '</div>' +
+          '<div style="font-size:11px;color:var(--muted);line-height:1.45;">' + advisoryEscape(rec.subtitle || '') + '</div>' +
+        '</div>' +
+        '<div style="min-width:180px;text-align:right;">' +
+          '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px;">Current to proposed</div>' +
+          '<div style="font-size:24px;font-weight:700;color:var(--text);line-height:1.05;">' + currentLabel + '<span style="color:#38bdf8;margin:0 8px;">&rarr;</span>' + proposedLabel + '</div>' +
+          '<div style="font-size:11px;color:' + dirColor + ';margin-top:5px;">' + advisoryEscape(deltaLabel) + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-top:12px;">' +
+        '<div style="padding:10px 12px;border-radius:8px;background:rgba(15,23,42,0.4);"><div style="font-size:10px;color:var(--muted);text-transform:uppercase;">Pairs</div><div style="font-size:16px;font-weight:700;color:var(--text);">' + advisoryEscape(String(metrics.pairs != null ? metrics.pairs : 'n/a')) + '</div></div>' +
+        '<div style="padding:10px 12px;border-radius:8px;background:rgba(15,23,42,0.4);"><div style="font-size:10px;color:var(--muted);text-transform:uppercase;">Avg Trades</div><div style="font-size:16px;font-weight:700;color:var(--text);">' + advisoryEscape(advisoryFormatNumber(metrics.avg_trades, 1)) + '</div></div>' +
+        '<div style="padding:10px 12px;border-radius:8px;background:rgba(15,23,42,0.4);"><div style="font-size:10px;color:var(--muted);text-transform:uppercase;">Avg SQN</div><div style="font-size:16px;font-weight:700;color:' + (Number(metrics.avg_sqn) >= 0 ? '#22c55e' : '#ef4444') + ';">' + advisoryEscape(advisoryFormatNumber(metrics.avg_sqn, 2)) + '</div></div>' +
+        '<div style="padding:10px 12px;border-radius:8px;background:rgba(15,23,42,0.4);"><div style="font-size:10px;color:var(--muted);text-transform:uppercase;">Avg Win Rate</div><div style="font-size:16px;font-weight:700;color:var(--text);">' + advisoryEscape(advisoryFormatNumber(metrics.avg_win_rate, 1)) + '%</div></div>' +
+      '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px;margin-top:12px;">' +
+        reasons.map(function(reason){
+          return '<div style="font-size:11px;color:var(--muted);line-height:1.45;">' + advisoryEscape(reason) + '</div>';
+        }).join('') +
+      '</div>' +
+      (isPending
+        ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">' +
+            '<button class="bt-btn" onclick="approveAdvisoryRecommendation(\'' + advisoryEscape(rec.id) + '\')" style="padding:8px 16px;font-size:11px;background:linear-gradient(135deg,#16a34a,#0f766e);">&#10003; APPROVE</button>' +
+            '<button class="bt-btn" onclick="rejectAdvisoryRecommendation(\'' + advisoryEscape(rec.id) + '\')" style="padding:8px 16px;font-size:11px;background:linear-gradient(135deg,#7f1d1d,#b91c1c);">REJECT</button>' +
+          '</div>'
+        : statusMeta) +
+    '</section>';
+}
+
+function renderAdvisoryCards(list, emptyMessage, isPending) {
+  var container = document.getElementById('advisoryContent');
+  if (!container) return;
+  if (!list || !list.length) {
+    container.innerHTML = '<div style="padding:18px 14px;border:1px dashed rgba(148,163,184,0.26);border-radius:10px;color:var(--muted);font-size:12px;">' + advisoryEscape(emptyMessage) + '</div>';
+    return;
+  }
+  container.innerHTML = '<div style="display:flex;flex-direction:column;gap:12px;">' + list.map(function(rec){
+    return advisoryCardHtml(rec, !!isPending);
+  }).join('') + '</div>';
+}
+
+function renderAdvisoryPanel() {
+  if (!_advisorySnapshot) return;
+  var snapshot = _advisorySnapshot;
+  var summary = snapshot.summary || {};
+  var currentPolicies = snapshot.current_policies || {};
+  var pending = snapshot.pending || [];
+  var approved = snapshot.approved || [];
+  var rejected = snapshot.rejected || [];
+  var status = document.getElementById('advisoryPanelStatus');
+
+  updateAdvisoryBadge(summary.pending || pending.length || 0);
+  renderAdvisorySummary(summary, pending);
+  renderAdvisoryPolicies(currentPolicies);
+
+  ['pending', 'approved', 'rejected'].forEach(function(tab){
+    var btn = document.getElementById('advisoryTab-' + tab);
+    if (!btn) return;
+    var active = tab === _advisoryTab;
+    btn.style.background = active ? 'rgba(124,58,237,0.16)' : 'transparent';
+    btn.style.color = active ? 'var(--text)' : 'var(--muted)';
+    btn.style.borderColor = active ? 'rgba(124,58,237,0.45)' : 'var(--border)';
+  });
+
+  if (status) {
+    status.textContent = 'Approvals persist immediately. Recompute cadence follows the latest stored backtest cohort.';
+  }
+
+  if (_advisoryTab === 'approved') {
+    renderAdvisoryCards(approved, 'No approved recommendations yet.', false);
+  } else if (_advisoryTab === 'rejected') {
+    renderAdvisoryCards(rejected, 'No rejected recommendations yet.', false);
+  } else {
+    renderAdvisoryCards(pending, 'No pending recommendations. Current thresholds are in line with the latest stored cohort.', true);
+  }
+}
+
+async function loadAdvisoryThresholds(opts) {
+  opts = opts || {};
+  var container = document.getElementById('advisoryContent');
+  if (_advisoryOpen && container) {
+    container.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:12px 0;">Loading recommendations...</div>';
+  }
+  try {
+    var resp = await fetch('/api/advisory-thresholds');
+    var data = await (window.safeJson ? window.safeJson(resp) : resp.json());
+    if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+    _advisorySnapshot = data || {};
+    renderAdvisoryPanel();
+  } catch (e) {
+    updateAdvisoryBadge(0);
+    if (_advisoryOpen && container) {
+      container.innerHTML = '<div style="padding:14px;border:1px solid rgba(239,68,68,0.28);border-radius:10px;color:#fca5a5;font-size:12px;">Failed to load advisory data: ' + advisoryEscape(e.message) + '</div>';
+    }
+    if (!opts.silent) showToast('Advisory load failed: ' + e.message, true);
+  }
+}
+
+function advisoryFindPending(recId) {
+  var pending = ((_advisorySnapshot || {}).pending) || [];
+  for (var i = 0; i < pending.length; i++) {
+    if (pending[i] && pending[i].id === recId) return pending[i];
+  }
+  return null;
+}
+
+async function approveAdvisoryRecommendation(recId) {
+  var rec = advisoryFindPending(recId);
+  if (!rec) {
+    showToast('Recommendation is no longer pending.', true);
+    loadAdvisoryThresholds({ silent: true });
+    return;
+  }
+  var ok = confirm('Approve ' + rec.title + '?\n\nCurrent: ' + advisoryFormatNumber(rec.current_value, 2) + '\nProposed: ' + advisoryFormatNumber(rec.proposed_value, 2));
+  if (!ok) return;
+  try {
+    var resp = await fetch('/api/advisory-thresholds/' + encodeURIComponent(recId) + '/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    var data = await (window.safeJson ? window.safeJson(resp) : resp.json());
+    if (!resp.ok || !data.saved) throw new Error((data && data.error) || ('HTTP ' + resp.status));
+    showToast('Approved: ' + rec.title);
+    await loadAdvisoryThresholds({ silent: true });
+    if (_btMinOpen) loadBtMinValues();
+    if (_nakedStyleOpen) loadNakedStyleValues();
+  } catch (e) {
+    showToast('Approval failed: ' + e.message, true);
+  }
+}
+
+async function rejectAdvisoryRecommendation(recId) {
+  var rec = advisoryFindPending(recId);
+  if (!rec) {
+    showToast('Recommendation is no longer pending.', true);
+    loadAdvisoryThresholds({ silent: true });
+    return;
+  }
+  var note = prompt('Reject ' + rec.title + '. Add an optional note:', '');
+  if (note === null) return;
+  try {
+    var resp = await fetch('/api/advisory-thresholds/' + encodeURIComponent(recId) + '/reject', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note: note })
+    });
+    var data = await (window.safeJson ? window.safeJson(resp) : resp.json());
+    if (!resp.ok || !data.saved) throw new Error((data && data.error) || ('HTTP ' + resp.status));
+    showToast('Rejected: ' + rec.title);
+    await loadAdvisoryThresholds({ silent: true });
+  } catch (e) {
+    showToast('Reject failed: ' + e.message, true);
+  }
+}
+
+setTimeout(function(){ loadAdvisoryThresholds({ silent: true }); }, 0);
 // ────────────────────────────────────────────────────────────────────────────
 
 async function runBacktest() {

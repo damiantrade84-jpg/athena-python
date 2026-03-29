@@ -162,14 +162,22 @@ def get_min_confluence_threshold(pair: dict) -> float:
 def get_backtest_min_score_threshold(pair: dict) -> float:
     """Resolve Engine A backtest gate.
 
-    Explicit per-pair ``bt_min`` still wins for research overrides. Otherwise the backtest
-    falls back to the same resolver used by live scans so audit runs stay comparable to
-    production thresholds.
+    Resolution: per-pair ``bt_min`` override, then subgroup ``BT_MIN_GROUP``,
+    then class-level ``BT_MIN``, then global ``MIN_CONFLUENCE``.
     """
     profile = get_pair_profile(pair)
     if profile.get("bt_min") is not None:
         return float(profile["bt_min"])
-    return get_min_confluence_threshold(pair)
+
+    ptype = pair.get("type", "") or "crypto"
+    score_group = get_pair_score_group(pair)
+    group_cfg = CONFIG.get("BT_MIN_GROUP", {}) or {}
+    group_threshold = (group_cfg.get(ptype, {}) or {}).get(score_group)
+    if group_threshold is not None:
+        return float(group_threshold)
+
+    bt_map = CONFIG.get("BT_MIN") or {}
+    return float(bt_map.get(ptype, CONFIG.get("MIN_CONFLUENCE", 1.0)))
 
 
 def pair_filter_enabled(pair: dict, filter_name: str) -> bool:
@@ -472,7 +480,8 @@ def calc_confluence(
     # Legacy compatibility values
     bull = max(0.0, score)
     bear = max(0.0, score) if direction == "SHORT" else 0.0
-    # Spread = abs directional score (0–1 z-score scale): drives conviction label in AI prompt
+    # Spread = abs directional score on the engine-native scale: factor engine runs
+    # up to ~3.0 while forex_scoring caps at 1.0.
     spread = round(abs(factor_result.get("directional_score", 0.0)), 2)
     # Rebuild regime as dict so callers can do res['regime'].get('state')
     _regime_str = factor_result.get("regime", "UNKNOWN") or "UNKNOWN"

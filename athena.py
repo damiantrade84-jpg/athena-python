@@ -59,6 +59,12 @@ from stability_monitor import (
     record_outcome_event,
     record_signal_event,
 )
+from advisory_thresholds import (
+    ensure_advisory_store,
+    find_pending_recommendation,
+    get_recommendation_snapshot,
+    record_action,
+)
 from lottery_service import (
     add_lottery_draw,
     clear_lottery_draws,
@@ -3670,6 +3676,7 @@ def _insert_shadow_from_engine_c(consensus: dict) -> None:
 from ai_learning import init_learning_db  # noqa: E402
 
 init_learning_db(_AUDIT_DB)
+ensure_advisory_store(_AUDIT_DB)
 
 
 from scanner import run_full_scan  # noqa: E402
@@ -4002,7 +4009,7 @@ def _naked_scan_style_profile(
         resolved = "intraday"  # Engine B walks H4 bars — intraday is the natural default
     profiles = {
         "scalp": {
-            "min_score": 0.9,
+            "min_score": 3.0,
             "min_room_atr": 0.35,
             "min_rr": 1.0,
             "fallback_rr": 1.4,
@@ -4012,7 +4019,7 @@ def _naked_scan_style_profile(
             "atr_tf": "H4",
         },
         "intraday": {
-            "min_score": 1.5,
+            "min_score": 4.0,
             "min_room_atr": 0.7,
             "min_rr": 1.2,
             "fallback_rr": 1.8,
@@ -4022,11 +4029,11 @@ def _naked_scan_style_profile(
             "atr_tf": "H4",
         },
         "swing": {
-            "min_score": 1.8,
+            "min_score": 4.0,
             "min_room_atr": 1.0,
             "min_rr": 1.6,
             "fallback_rr": 2.2,
-            "require_macro_align": True,
+            "require_macro_align": False,
             "zone_tf": "D1",
             "entry_tf": "H4",
             "atr_tf": "D1",
@@ -4236,7 +4243,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
 
         current_price = float(sig.get("price") or h1[-1]["close"])
 
-        from market_structure import NakedEngine
+        from market_structure import NakedEngine, engine_b_confidence_passes
 
         engine = NakedEngine()
         regime_label = _engine_b_regime_label(
@@ -4281,16 +4288,19 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             entry_candles=_entry_candles,
             style_profile=style_profile,
         )
-        _regime_gate = {
-            "TRENDING": 0.85,
-            "RANGING": 1.2,
-            "HIGH_VOLATILITY": 1.3,
-            "LOW_VOLATILITY": 1.0,
-        }
-        _min_score_scaled = style_profile["min_score"] * _regime_gate.get(regime_label, 1.0)
-        res["min_score_used"] = round(_min_score_scaled, 2)
-        res["regime_gate"] = _regime_gate.get(regime_label, 1.0)
+        _gate_ok, _min_score_scaled = engine_b_confidence_passes(
+            conf, style_profile, regime_label
+        )
+        _regime_gate_cfg = CONFIG.get("ENGINE_B_REGIME_MULTIPLIERS", {}) or {}
+        try:
+            _regime_gate = float(_regime_gate_cfg.get(regime_label, 1.0))
+        except (TypeError, ValueError):
+            _regime_gate = 1.0
+        res["min_score_used"] = int(_min_score_scaled)
+        res["regime_gate"] = _regime_gate
         res.update(conf)
+        res["checklist_passed"] = bool(conf.get("passed"))
+        res["passed"] = bool(_gate_ok)
         res["current_price"] = current_price
         res["direction"] = direction
         res["style"] = resolved_style
@@ -4301,7 +4311,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                 engine="engine_b",
                 score=conf.get("score"),
                 max_score=conf.get("max_possible"),
-                passed=bool(conf.get("passed")) and float(conf.get("score", 0) or 0) >= float(_min_score_scaled),
+                passed=bool(_gate_ok),
                 expected_prob=(conf.get("pct", 0) or 0) / 100.0,
                 feature_map={
                     "structure_ok": conf.get("structure_ok"),
@@ -4319,7 +4329,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                     "pair": pair_obj.get("display"),
                     "style": resolved_style,
                     "regime": regime_label,
-                    "min_score_used": round(_min_score_scaled, 4),
+                    "min_score_used": int(_min_score_scaled),
                 },
             )
         except Exception as _ssi_err:
@@ -5790,67 +5800,150 @@ def _update_yaml_toggle(state: bool):
         log.error(f"Failed to update config.yaml: {e}")
 
 
+def _persist_bt_min_yaml(cfg_path: str, current: dict) -> None:
+    import re as _re
+
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    def _bt_block_replacer(m):
+        block = m.group(0)
+        for cls, val in current.items():
+            block = _re.sub(
+                rf"^({_re.escape(cls)}\s*:\s*)[\d.]+",
+                lambda mm, v=val: f"{mm.group(1)}{v}",
+                block,
+                flags=_re.MULTILINE,
+            )
+        return block
+
+    content = _re.sub(
+        r"^BT_MIN\s*:\s*\n(?:[ \t]+\S[^\n]*\n)+",
+        _bt_block_replacer,
+        content,
+        flags=_re.MULTILINE,
+    )
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def _persist_live_confluence_yaml(cfg_path: str, current: dict) -> None:
+    import re as _re
+
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    def _live_block_replacer(m):
+        block = m.group(0)
+        for cls, val in current.items():
+            block = _re.sub(
+                rf"^([ \t]+{_re.escape(cls)}\s*:\s*)[\d.]+",
+                lambda mm, v=val: f"{mm.group(1)}{v}",
+                block,
+                flags=_re.MULTILINE,
+            )
+        return block
+
+    content = _re.sub(
+        r"^MIN_CONFLUENCE_CLASS\s*:\s*\n(?:[ \t]+\S[^\n]*\n)+",
+        _live_block_replacer,
+        content,
+        flags=_re.MULTILINE,
+    )
+    if "forex" in current:
+        content = _re.sub(
+            r"^(MIN_FOREX_CONFLUENCE\s*:\s*)[\d.]+",
+            lambda mm, v=current["forex"]: f"{mm.group(1)}{v}",
+            content,
+            count=1,
+            flags=_re.MULTILINE,
+        )
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def _apply_bt_min_updates(new_vals: dict) -> dict:
+    current = dict(CONFIG.get("BT_MIN") or {})
+    current.update({k: round(float(v), 4) for k, v in (new_vals or {}).items()})
+    CONFIG["BT_MIN"] = current
+    cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+    _persist_bt_min_yaml(cfg_path, current)
+    log.info(f"[BT_MIN] Updated via UI: {current}")
+    return current
+
+
+def _apply_live_confluence_updates(new_vals: dict) -> dict:
+    current = dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {})
+    current.update({k: round(float(v), 4) for k, v in (new_vals or {}).items()})
+    CONFIG["MIN_CONFLUENCE_CLASS"] = current
+    if "forex" in current:
+        CONFIG["MIN_FOREX_CONFLUENCE"] = round(float(current["forex"]), 4)
+    cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+    _persist_live_confluence_yaml(cfg_path, current)
+    log.info(f"[LIVE_THRESHOLD] Updated via UI: {current}")
+    return current
+
+
+def _apply_naked_style_score_updates(new_vals: dict) -> dict:
+    ne = CONFIG.setdefault("NAKED_ENGINE", {})
+    styles = ne.setdefault("style_profiles", {})
+    for style, value in (new_vals or {}).items():
+        cur = dict(styles.get(style) or {})
+        cur["min_score"] = round(float(value), 4)
+        styles[style] = {**dict(styles.get(style) or {}), **cur}
+
+    full_for_yaml = {}
+    for style in ("scalp", "intraday", "swing"):
+        profile = dict(styles.get(style) or {})
+        entry = {}
+        if profile.get("min_score") is not None:
+            entry["min_score"] = profile["min_score"]
+        if profile.get("min_rr") is not None:
+            entry["min_rr"] = profile["min_rr"]
+        full_for_yaml[style] = entry
+
+    cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+    _persist_naked_style_profiles_yaml(cfg_path, full_for_yaml)
+    log.info(f"[NAKED_ENGINE] min_score updated via advisory: {new_vals}")
+    return {style: dict(styles.get(style) or {}) for style in ("scalp", "intraday", "swing")}
+
+
 @app.route("/api/bt-min", methods=["GET", "POST"])
 def api_bt_min():
     """GET: return current BT_MIN values + live MIN_CONFLUENCE_CLASS for comparison.
     POST: update BT_MIN in memory and persist to config.yaml.
     Body: {"crypto": 0.55, "forex": 0.60, "commodity": 0.70, "stock": 0.70, "index": 0.70}
     """
-    ASSET_CLASSES = ("crypto", "forex", "commodity", "stock", "index")
+    asset_classes = ("crypto", "forex", "commodity", "stock", "index")
     if request.method == "GET":
-        return jsonify({
-            "bt_min": dict(CONFIG.get("BT_MIN") or {}),
-            "live_class": dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {}),
-        })
+        return jsonify(
+            {
+                "bt_min": dict(CONFIG.get("BT_MIN") or {}),
+                "live_class": dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {}),
+            }
+        )
 
     data = request.get_json(silent=True) or {}
     new_vals = {}
-    for cls in ASSET_CLASSES:
-        if cls in data:
-            try:
-                val = float(data[cls])
-            except (TypeError, ValueError):
-                return jsonify({"error": f"Invalid value for {cls}"}), 400
-            if val < 0 or val > 10:
-                return jsonify({"error": f"Value for {cls} out of range (0–10)"}), 400
-            new_vals[cls] = round(val, 4)
+    for cls in asset_classes:
+        if cls not in data:
+            continue
+        try:
+            val = float(data[cls])
+        except (TypeError, ValueError):
+            return jsonify({"error": f"Invalid value for {cls}"}), 400
+        if val < 0 or val > 10:
+            return jsonify({"error": f"Value for {cls} out of range (0–10)"}), 400
+        new_vals[cls] = round(val, 4)
 
     if not new_vals:
         return jsonify({"error": "No valid keys provided"}), 400
 
-    current = dict(CONFIG.get("BT_MIN") or {})
-    current.update(new_vals)
-    CONFIG["BT_MIN"] = current
-
     try:
-        import os as _os
-        import re as _re
-        cfg_path = _os.path.join(_os.path.dirname(__file__), "config.yaml")
-        with open(cfg_path, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        def _bt_block_replacer(m):
-            block = m.group(0)
-            for cls, val in current.items():
-                block = _re.sub(
-                    rf"^({_re.escape(cls)}\s*:\s*)[\d.]+",
-                    lambda mm, v=val: f"{mm.group(1)}{v}",
-                    block, flags=_re.MULTILINE
-                )
-            return block
-
-        content = _re.sub(
-            r"^BT_MIN\s*:\s*\n(?:[ \t]+\S[^\n]*\n)+",
-            _bt_block_replacer,
-            content,
-            flags=_re.MULTILINE,
-        )
-        with open(cfg_path, "w", encoding="utf-8") as f:
-            f.write(content)
-        log.info(f"[BT_MIN] Updated via UI: {current}")
+        current = _apply_bt_min_updates(new_vals)
     except Exception as e:
         log.error(f"Failed to persist BT_MIN to config.yaml: {e}")
-        return jsonify({"saved": False, "error": str(e), "bt_min": current}), 500
+        return jsonify({"saved": False, "error": str(e), "bt_min": dict(CONFIG.get('BT_MIN') or {})}), 500
 
     return jsonify({"saved": True, "bt_min": current})
 
@@ -5973,6 +6066,103 @@ def api_naked_style_thresholds():
         p = dict(styles.get(s) or {})
         out[s] = {"min_score": p.get("min_score"), "min_rr": p.get("min_rr")}
     return jsonify({"saved": True, "style_profiles": out})
+
+
+@app.route("/api/live-confluence-thresholds", methods=["GET", "POST"])
+def api_live_confluence_thresholds():
+    """GET/POST MIN_CONFLUENCE_CLASS thresholds used by Engine A live scan tiering."""
+    asset_classes = ("crypto", "forex", "commodity", "stock", "index")
+    if request.method == "GET":
+        return jsonify(
+            {
+                "live_class": dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {}),
+                "min_forex_confluence": CONFIG.get("MIN_FOREX_CONFLUENCE"),
+            }
+        )
+
+    data = request.get_json(silent=True) or {}
+    new_vals = {}
+    for cls in asset_classes:
+        if cls not in data:
+            continue
+        try:
+            val = float(data[cls])
+        except (TypeError, ValueError):
+            return jsonify({"error": f"Invalid value for {cls}"}), 400
+        if val < 0 or val > 10:
+            return jsonify({"error": f"Value for {cls} out of range (0–10)"}), 400
+        new_vals[cls] = round(val, 4)
+
+    if not new_vals:
+        return jsonify({"error": "No valid keys provided"}), 400
+
+    try:
+        current = _apply_live_confluence_updates(new_vals)
+    except Exception as e:
+        log.error(f"Failed to persist MIN_CONFLUENCE_CLASS to config.yaml: {e}")
+        return jsonify(
+            {
+                "saved": False,
+                "error": str(e),
+                "live_class": dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {}),
+            }
+        ), 500
+
+    return jsonify({"saved": True, "live_class": current})
+
+
+@app.route("/api/advisory-thresholds")
+def api_advisory_thresholds():
+    """Return pending/approved/rejected threshold recommendations for dashboard review."""
+    try:
+        return jsonify(get_recommendation_snapshot(_AUDIT_DB))
+    except Exception as e:
+        log.error(f"api_advisory_thresholds error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/advisory-thresholds/<rec_id>/approve", methods=["POST"])
+def api_advisory_threshold_approve(rec_id):
+    data = request.get_json(silent=True) or {}
+    note = (str(data.get("note") or "").strip() or None)
+    recommendation = find_pending_recommendation(rec_id, _AUDIT_DB)
+    if not recommendation:
+        return jsonify({"error": "Recommendation not found or no longer pending"}), 404
+
+    try:
+        scope_type = recommendation.get("scope_type")
+        scope_key = recommendation.get("scope_key")
+        proposed_value = float(recommendation.get("proposed_value"))
+        if scope_type == "engine_a_bt_class":
+            applied = {"bt_min": _apply_bt_min_updates({scope_key: proposed_value})}
+        elif scope_type == "engine_a_live_class":
+            applied = {"live_class": _apply_live_confluence_updates({scope_key: proposed_value})}
+        elif scope_type == "engine_b_style":
+            applied = {"style_profiles": _apply_naked_style_score_updates({scope_key: proposed_value})}
+        else:
+            return jsonify({"error": f"Unsupported recommendation type: {scope_type}"}), 400
+
+        record_action(rec_id, "approved", recommendation, note=note, db_path=_AUDIT_DB)
+        return jsonify({"saved": True, "recommendation": recommendation, "applied": applied})
+    except Exception as e:
+        log.error(f"api_advisory_threshold_approve error: {e}")
+        return jsonify({"saved": False, "error": str(e)}), 500
+
+
+@app.route("/api/advisory-thresholds/<rec_id>/reject", methods=["POST"])
+def api_advisory_threshold_reject(rec_id):
+    data = request.get_json(silent=True) or {}
+    note = (str(data.get("note") or "").strip() or None)
+    recommendation = find_pending_recommendation(rec_id, _AUDIT_DB)
+    if not recommendation:
+        return jsonify({"error": "Recommendation not found or no longer pending"}), 404
+
+    try:
+        record_action(rec_id, "rejected", recommendation, note=note, db_path=_AUDIT_DB)
+        return jsonify({"saved": True, "recommendation": recommendation})
+    except Exception as e:
+        log.error(f"api_advisory_threshold_reject error: {e}")
+        return jsonify({"saved": False, "error": str(e)}), 500
 
 
 @app.route("/api/test-mode", methods=["POST"])
@@ -9801,6 +9991,9 @@ set_runtime(
         analyze_pair=analyze_pair,
         fetch_candles=fetch_candles,
         fetch_eodhd=fetch_eodhd,
+        fetch_polygon=fetch_polygon,
+        fetch_yfinance=fetch_yfinance,
+        fetch_mt5=fetch_mt5,
         extract_candles=_extract_candles,
         merge_forex_forming_ws=_merge_forex_forming_ws,
         current_btc_bias=_current_btc_bias,

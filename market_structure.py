@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import math
 from scipy.signal import find_peaks
 import logging
 import threading
@@ -9,20 +10,32 @@ from zone_registry import get_zone_registry
 log = logging.getLogger(__name__)
 
 
-ENGINE_B_REGIME_GATE = {
+ENGINE_B_REGIME_GATE_DEFAULTS = {
     "TRENDING": 0.85,
-    "RANGING": 1.2,
-    "HIGH_VOLATILITY": 1.3,
+    "RANGING": 1.15,
+    "HIGH_VOLATILITY": 1.20,
     "LOW_VOLATILITY": 1.0,
 }
+
+
+def _engine_b_regime_gate(regime_label: str | None) -> float:
+    regime_key = str(regime_label or "").upper()
+    cfg_gate = config.CONFIG.get("ENGINE_B_REGIME_MULTIPLIERS", {}) or {}
+    try:
+        return float(cfg_gate.get(regime_key, ENGINE_B_REGIME_GATE_DEFAULTS.get(regime_key, 1.0)))
+    except (TypeError, ValueError):
+        return float(ENGINE_B_REGIME_GATE_DEFAULTS.get(regime_key, 1.0))
 
 
 def engine_b_min_score_threshold(style_profile: dict | None, regime_label: str | None) -> float:
     """Return the scaled Engine B score floor for a style/regime combination."""
     profile = style_profile if isinstance(style_profile, dict) else {}
     base_min = float(profile.get("min_score", 0.0) or 0.0)
-    regime_key = str(regime_label or "").upper()
-    return base_min * ENGINE_B_REGIME_GATE.get(regime_key, 1.0)
+    scaled = base_min * _engine_b_regime_gate(regime_label)
+    if scaled <= 0:
+        return 0.0
+    # Engine B scores in whole checklist points, so make the discrete gate explicit.
+    return float(math.ceil(scaled - 1e-12))
 
 
 def engine_b_confidence_passes(
@@ -1282,7 +1295,15 @@ class NakedEngine:
             entry_candles=_entry_candles,
             style_profile=style_profile,
         )
-        if confidence["score"] < confidence_threshold or not confidence.get("passed"):
+        if isinstance(style_profile, dict):
+            gate_ok, _ = engine_b_confidence_passes(
+                confidence,
+                style_profile,
+                regime_label,
+            )
+            if not gate_ok:
+                return None  # No trade signal
+        elif confidence["score"] < confidence_threshold or not confidence.get("passed"):
             return None  # No trade signal
 
         return {
