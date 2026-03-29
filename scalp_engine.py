@@ -3,7 +3,7 @@
 Fully independent from Engine A (MFQS), Engine B (Naked), Engine C (Consensus).
 Data sources:
   - MT5 (copy_rates_from_pos) — forex, commodities, indices, stocks
-  - Bybit REST kline API via ccxt — crypto USDT perpetuals
+  - Crypto: app `fetch_candles` (Binance futures + CandleBuilder WS) via `athena_runtime`
 
 Logic flow:
   1. Session filter (London/NY for MT5 pairs; Asia/London/NY for crypto)
@@ -26,6 +26,21 @@ from config import CONFIG
 from stability_monitor import record_signal_event
 
 log = logging.getLogger("sentinel.scalp")
+
+
+def _scalp_fetch_candles(pair: dict, tf: str, limit: int):
+    """Route through monolith `fetch_candles` — `candles_cache.fetch_candles` requires injected callables."""
+    try:
+        from athena_runtime import rt
+
+        return rt().fetch_candles(pair, tf, limit)
+    except RuntimeError:
+        log.error(
+            "[SCALP] fetch_candles unavailable — athena runtime not initialized (start via athena.py / app)"
+        )
+    except Exception as e:
+        log.error("[SCALP] fetch_candles error: %s", e)
+    return None
 
 
 def _rate_value(rate, field: str, default=0.0):
@@ -66,9 +81,6 @@ _CRYPTO_SCALP_PAIRS = [
     "ADA/USDT", "DOGE/USDT", "AVAX/USDT", "LINK/USDT",
     "BNB/USDT", "SUI/USDT",
 ]
-
-
-# Bybit candle fetching removed - crypto now uses Binance WebSocket for all timeframes
 
 
 # ── MT5 candle fetching ───────────────────────────────────────────────────────
@@ -784,11 +796,14 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 # Session gate: crypto always allowed but note peak sessions
                 _cs_ok, _cs_name = is_valid_session("crypto")
 
-                # Use standard candle fetching (now routes through Binance WebSocket)
-                from candles_cache import fetch_candles
-                pair_dict = {"display": display, "type": "crypto", "source": "binance"}
-                
-                candles_m15 = fetch_candles(pair_dict, "M15", m15_count)
+                pair_dict = {
+                    "display": display,
+                    "symbol": display.replace("/", ""),  # Binance REST expects "BTCUSDT", not "BTC/USDT"
+                    "type": "crypto",
+                    "source": "binance",
+                }
+
+                candles_m15 = _scalp_fetch_candles(pair_dict, "M15", m15_count)
                 if not candles_m15 or len(candles_m15) < 30:
                     _record_stability_sample(
                         display, asset_type, False, reason="insufficient_m15_candles"
@@ -796,7 +811,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     skipped.append({"pair": display, "reason": "insufficient_m15_candles"})
                     continue
 
-                candles_m5 = fetch_candles(pair_dict, "M5", m5_count)
+                candles_m5 = _scalp_fetch_candles(pair_dict, "M5", m5_count)
                 if not candles_m5 or len(candles_m5) < 10:
                     _record_stability_sample(
                         display, asset_type, False, reason="insufficient_m5_candles"
@@ -810,7 +825,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 htf_bias = None
 
                 if use_bias_filter:
-                    candles_bias = fetch_candles(pair_dict, bias_tf, h1_count)
+                    candles_bias = _scalp_fetch_candles(pair_dict, bias_tf, h1_count)
                     if candles_bias and len(candles_bias) >= 200:
                         htf_bias = infer_bias_from_ema_stack(candles_bias)
                     log.debug(

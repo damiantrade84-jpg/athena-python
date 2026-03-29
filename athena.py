@@ -958,7 +958,7 @@ ACTIVE_PAIRS = [p for p in ALL_PAIRS if p.get("enabled", True)]
 
 _load_toggle_state()
 
-TF_B = {"D1": "1d", "H4": "4h", "H1": "1h"}
+TF_B = {"D1": "1d", "H4": "4h", "H1": "1h", "M15": "15m", "M5": "5m"}
 
 _YF_INTRADAY_PERIOD = "180d"
 
