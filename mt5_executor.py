@@ -108,8 +108,8 @@ _MT5_SYMBOL_MAP = {
     "Copper": "COPPER",  # Pepperstone Copper CFD
     # Indices
     "S&P 500": "US500",
-    "Nasdaq": "USTEC",
-    "NASDAQ-100": "USTEC",
+    "Nasdaq": "NAS100",
+    "NASDAQ-100": "NAS100",
     "Dow Jones": "US30",
     "DAX 40": "GER40",
     "UK100": "UK100",

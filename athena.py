@@ -350,19 +350,19 @@ COMMODITY_PAIRS = [
         "enabled": True,
     },  # Pepperstone: SPOTBRENT
     {
-        "symbol": "NG.US",
+        "symbol": "NATGAS",
         "type": "commodity",
         "display": "Nat Gas",
         "source": "mt5",
         "enabled": True,
-    },  # EODHD: NG.US; Pepperstone: NATGAS
+    },  # MT5: NATGAS
     {
-        "symbol": "HG=F",
+        "symbol": "COPPER",
         "type": "commodity",
         "display": "Copper",
         "source": "mt5",
         "enabled": True,
-    },  # Pepperstone: COPPER - WebSocket enabled
+    },  # MT5: COPPER
     {
         "symbol": "PL=F",
         "type": "commodity",
@@ -381,13 +381,13 @@ COMMODITY_PAIRS = [
 
 INDEX_PAIRS = [
     {
-        "symbol": "^IXIC",
+        "symbol": "NAS100",
         "type": "index",
         "display": "NASDAQ-100",
         "source": "mt5",
         "enabled": True,
         "ws": False,
-    },  # NAS100 index via EODHD REST
+    },  # MT5: NAS100
     {
         "symbol": "^GSPC",
         "type": "index",
@@ -9925,7 +9925,16 @@ def api_performance():
 
         # Last 20 completed trades
 
-        last_20 = sorted(trades, key=lambda t: t.get("ts") or "", reverse=True)[:20]
+        def _trade_closed_sort_key(trade: dict):
+            return (
+                trade.get("exit_time")
+                or trade.get("closed_at")
+                or trade.get("close_time")
+                or trade.get("ts")
+                or ""
+            )
+
+        last_20 = sorted(trades, key=_trade_closed_sort_key, reverse=True)[:20]
 
         # Equity curve: cumulative R list for charting
 
