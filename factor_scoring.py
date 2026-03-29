@@ -758,14 +758,6 @@ def compute_factor_scores(
         weights[factor] = 0.0 if base_w == 0 else regime_weights.get(wk, base_w)
 
     weights = _apply_pair_profile_weight_rules(pair, weights)
-    if is_crypto:
-        for factor, cap in (CONFIG.get("CRYPTO_FACTOR_WEIGHT_CAPS", {}) or {}).items():
-            if factor not in weights:
-                continue
-            try:
-                weights[factor] = min(float(weights[factor]), float(cap))
-            except (TypeError, ValueError):
-                continue
 
     # Adaptive weight blending — adjust weights based on empirical factor performance
     # Only applies when learning_log has enough data (30+ trades for the asset class).
