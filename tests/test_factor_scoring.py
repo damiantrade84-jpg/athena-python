@@ -827,3 +827,72 @@ class TestDirectionAndFundingFixes:
         # At 0.0: -0.0 * 5000 = 0.0 → indicator = 0.0 (passes gate, zero contribution)
         score = max(-3.0, min(3.0, -adjusted * 5000))
         assert score == 0.0
+
+
+def test_direction_uses_weighted_score_not_unweighted_sum():
+    """BUG[1] regression: direction must follow the weighted dir_score sign,
+    not the unweighted sum. trend=+0.6 (w=2.0) + momentum=-0.7 (w=1.5)
+    has unweighted sum=-0.1 (SHORT) but weighted avg=+0.043 (LONG)."""
+    from unittest.mock import patch
+    from factor_scoring import compute_factor_scores
+
+    # Minimal snaps with EMA alignment for trend and RSI/MACD for momentum
+    d1_snap = {"ema21": 101, "ema50": 100, "close": 102, "adx": 30, "atr": 1.0,
+               "rsi": 55, "macdLine": 0.5, "macdHist": 0.1, "macdSignal": 0.4,
+               "ema200": 99, "adxMomentum": "stable"}
+    h4_snap = dict(d1_snap)
+    h1_snap = dict(d1_snap)
+    pair = {"display": "TEST/USD", "type": "stock", "symbol": "TEST.US"}
+    # We need to control factor_scores directly, so patch _weighted_factor_score
+    # and _coherent_trend_score to return controlled values
+    def mock_weighted(indicators, keys, corr_weights, use_abs=False, factor_name="", asset_type=""):
+        if factor_name == "trend":
+            return None  # let _coherent_trend_score override
+        if factor_name == "momentum":
+            return -0.7
+        if factor_name == "derivatives":
+            return None
+        if factor_name == "microstructure":
+            return None
+        if factor_name == "carry":
+            return None
+        # non-directional
+        if factor_name == "trend_strength":
+            return 1.0
+        if factor_name == "volatility":
+            return 1.0
+        if factor_name == "volume":
+            return None
+        if factor_name == "structure":
+            return None
+        return None
+
+    def mock_coherent_trend(indicators, asset_type):
+        return 0.6, {"agreement_count": 3, "total_count": 3,
+                      "coherence_ratio": 1.0, "dominant_direction": "LONG",
+                      "weighted_balance": 1.0}
+
+    with patch("factor_scoring._weighted_factor_score", side_effect=mock_weighted), \
+         patch("factor_scoring._coherent_trend_score", side_effect=mock_coherent_trend), \
+         patch("factor_scoring.CONFIG", {
+             "REGIME_WEIGHTS": {},
+             "FACTOR_WEIGHTS": {"stock": {"trend": 2.0, "momentum": 1.5, "trend_strength": 1.0, "volatility": 1.0, "volume": 1.0, "structure": 1.0, "derivatives": 0.5, "microstructure": 0.75, "carry": 1.0}},
+             "CRYPTO_FACTOR_WEIGHT_CAPS": {},
+             "INDICATOR_WEIGHTS": {},
+             "INDICATOR_CORRELATION_WINDOW": 200,
+             "FACTOR_MIN_DIRECTIONAL": 0.0,
+             "FACTOR_DIRECTIONAL_SOFT_SPAN": 0.20,
+             "NORMALIZATION_LOOKBACK": {"stock": 350},
+             "ADAPTIVE_WEIGHTS_ENABLED": False,
+             "REGIME_SMOOTHING_BARS": 3,
+             "PAIR_PROFILES": {},
+             "FACTOR_SCORE_GROUP_MULTIPLIERS": {},
+         }):
+        result = compute_factor_scores(
+            d1_snap, h4_snap, h1_snap, pair,
+            [], [], [], 1.0,
+        )
+        # Weighted: trend=+0.6 (w=2.0), momentum=-0.7 (w=1.5)
+        # dir_score = (2.0/3.5)*0.6 + (1.5/3.5)*(-0.7) = 0.3429 - 0.3 = +0.0429
+        assert result["directional_score"] > 0, f"Expected positive dir_score, got {result['directional_score']}"
+        assert result["direction"] == "LONG", f"Expected LONG, got {result['direction']}"

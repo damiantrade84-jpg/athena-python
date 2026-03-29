@@ -829,7 +829,6 @@ def compute_factor_scores(
         )
     )
     dir_sum = sum(active_dir.values()) if active_dir else 0.0
-    direction = "LONG" if dir_sum > 0 else "SHORT"
 
     # Minimum active factors guard: require at least 1 directional factor.
     # Prevents inflated scores driven solely by volatility (e.g. JSE stocks with no H4/H1 data).
@@ -869,6 +868,14 @@ def compute_factor_scores(
         dir_w_sum = sum(weights.get(f, 1.0) for f in active_dir)
         for f, s in active_dir.items():
             dir_score += (weights.get(f, 1.0) / dir_w_sum) * s
+    # Direction from WEIGHTED dir_score (not unweighted sum) — prevents direction flip
+    # Tie-break: if weighted score is exactly 0.0, fall back to unweighted sum sign, then default LONG
+    if dir_score > 0:
+        direction = "LONG"
+    elif dir_score < 0:
+        direction = "SHORT"
+    else:
+        direction = "LONG" if dir_sum > 0 else "LONG"
 
     nondir_score = 0.0
     if active_nondir:
