@@ -493,14 +493,14 @@ NAKED_ENGINE:
   # Dashboard: Backtest tab → ENGINE B THRESHOLDS → saves via POST /api/naked-style-thresholds (no restart).
   style_profiles:
     scalp:
-      min_score: 1.5
-      min_rr: 1.5
+      min_score: 1.1
+      min_rr: 1.2
     intraday:
-      min_score: 2.0
-      min_rr: 1.5
+      min_score: 1.1
+      min_rr: 1.2
     swing:
-      min_score: 2.5
-      min_rr: 1.8
+      min_score: 2.0
+      min_rr: 1.6
       require_macro_align: false
 
   zone_multipliers:
