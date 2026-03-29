@@ -60,7 +60,7 @@ WEINSTEIN_LOOKBACK:
 BT_MIN:
   crypto:    0.50
   commodity: 0.65
-  forex:     0.50
+  forex:     0.35
   stock:     0.60
   index:     0.65
 
