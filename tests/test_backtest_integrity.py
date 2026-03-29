@@ -171,3 +171,8 @@ def test_time_series_quality_reports_parse_failures_duplicates_and_order():
     assert quality["parse_fail"] == 1
     assert quality["duplicate"] == 1
     assert quality["monotonic"] is False
+
+
+def test_live_base_risk_pct_matches_live_gateway_defaults():
+    assert backtest_runner._live_base_risk_pct("forex") == 0.005
+    assert backtest_runner._live_base_risk_pct("crypto") == 0.01

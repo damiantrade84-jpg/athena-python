@@ -746,14 +746,6 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         except Exception:
             pass  # graceful degradation — do not block execution on config error
 
-        # Recalculate volume in base units if needed (risk_amount / SL distance)
-        # Clamp to approved volume so we never exceed the risk-approved position size
-        if volume < 1 and price > 100 and sl:
-            sl_dist = abs(price - sl)
-            if sl_dist > 0:
-                recalc = round(approval.risk_amount / sl_dist, 6)
-                volume = min(recalc, approval.volume) if approval.volume else recalc
-
         side = "buy" if direction == "LONG" else "sell"
         log.info(
             f"[BYBIT] Placing {side.upper()} market order: {volume} {ccxt_symbol} @ ~{price}"
@@ -777,7 +769,7 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                 _oe_name = type(_oe).__name__
                 if any(
                     s in _oe_name
-                    for s in ("NetworkError", "RequestTimeout", "ExchangeNotAvailable")
+                    for s in ("NetworkError", "RequestTimeout")
                 ):
                     _last_err = _oe
                     log.warning(

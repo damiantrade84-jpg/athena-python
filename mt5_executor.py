@@ -16,6 +16,7 @@ import logging
 
 import time
 
+from config import CONFIG
 import telegram_notify
 
 
@@ -711,7 +712,15 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
 
     sl_dist_pct = abs(price - sl) / price
 
-    if sl_dist_pct > 0.30:
+    _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(signal.get("type", ""), 0.05)
+    if sl_dist_pct > _max_sl_pct:
+        log.error(
+            f"[MT5] {mt5_symbol}: SL distance {sl_dist_pct:.1%} exceeds configured cap {_max_sl_pct:.1%}"
+        )
+        return {
+            "success": False,
+            "error": f"SL_TOO_FAR: SL is {sl_dist_pct:.0%} from entry (max {_max_sl_pct:.0%})",
+        }
         log.error(
             f"[MT5] {mt5_symbol}: SL distance {sl_dist_pct:.1%} of price — likely data scale mismatch"
         )

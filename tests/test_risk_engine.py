@@ -75,7 +75,12 @@ class TestDirectionValidation:
         assert result.approved is True
 
     def test_accepts_short(self):
-        result = risk_check(_make_signal(direction="SHORT"), 10000, 10000, [])
+        result = risk_check(
+            _make_signal(direction="SHORT", sl=61000, tp1=58000, tp2=56000),
+            10000,
+            10000,
+            [],
+        )
         assert result.approved is True
 
     def test_accepts_lowercase(self):
@@ -136,6 +141,34 @@ class TestInvalidLevels:
 
     def test_rejects_entry_equals_sl(self):
         result = risk_check(_make_signal(price=100, sl=100), 10000, 10000, [])
+        assert result.approved is False
+        assert result.reason == "INVALID_LEVELS"
+
+    def test_rejects_long_stop_above_entry(self):
+        result = risk_check(
+            _make_signal(pair="EUR/USD", type="forex", price=1.1000, sl=1.1200),
+            100000,
+            100000,
+            [],
+        )
+        assert result.approved is False
+        assert result.reason == "INVALID_LEVELS"
+
+    def test_rejects_short_stop_below_entry(self):
+        result = risk_check(
+            _make_signal(
+                pair="EUR/USD",
+                type="forex",
+                direction="SHORT",
+                price=1.1000,
+                sl=1.0900,
+                tp1=1.0800,
+                tp2=1.0600,
+            ),
+            100000,
+            100000,
+            [],
+        )
         assert result.approved is False
         assert result.reason == "INVALID_LEVELS"
 
@@ -222,6 +255,21 @@ class TestCfgLiveReads:
     def test_reads_existing_config(self):
         val = _cfg("RISK_PCT", 0.01)
         assert isinstance(val, (int, float))
+
+
+class TestAdaptiveKellyCache:
+    def test_cache_is_regime_sensitive(self):
+        import time
+
+        risk_engine._kelly_cache.clear()
+        now = time.time()
+        risk_engine._kelly_cache[("crypto", "")] = (0.01, now)
+        risk_engine._kelly_cache[("crypto", "HIGH_VOLATILITY")] = (0.007, now)
+        try:
+            assert risk_engine._adaptive_risk_pct("crypto", "") == 0.01
+            assert risk_engine._adaptive_risk_pct("crypto", "HIGH_VOLATILITY") == 0.007
+        finally:
+            risk_engine._kelly_cache.clear()
 
 
 # ── SL override direction logic (FIX 5) ─────────────────────────────────────

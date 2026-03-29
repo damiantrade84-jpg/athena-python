@@ -47,6 +47,17 @@ def _rt():
     return _art_rt()
 
 
+def _live_base_risk_pct(asset_type: str) -> float:
+    """Mirror the live risk_engine base per-asset risk percentages."""
+    return {
+        "forex": 0.005,
+        "crypto": 0.010,
+        "stock": 0.010,
+        "commodity": 0.010,
+        "index": 0.010,
+    }.get(asset_type, CONFIG["RISK_PCT"])
+
+
 def _bt_btc_bias(d1_window: list, pair: dict) -> str:
     """Derive BTC bias from the D1 window available at this bar.
 
@@ -892,7 +903,7 @@ def backtest_pair(pair, style="auto"):
 
                 outcome = "TIMEOUT"
 
-            risk_mult = CONFIG["RISK_MULT"].get(_ptype, 1.0)
+            live_risk_pct = _live_base_risk_pct(_ptype)
 
             # F3: Deduct round-trip exchange fee (entry + exit commission) from result_r
 
@@ -905,13 +916,13 @@ def backtest_pair(pair, style="auto"):
 
             # T1: Apply volatility adjustment and score-based sizing to position size
 
-            # NOTE: risk_mult (RISK_MULT config) scales BT equity by asset class
+            # Apply the same base per-asset risk percentages as the live risk gateway.
             # (forex=0.6, crypto=0.8). Live risk_engine does NOT apply RISK_MULT —
             # it uses asset_risk_map in _adaptive_risk_pct() instead.
             # BT equity curves are therefore ~40% smaller than live for forex.
             # Do not compare BT Sharpe/SQN directly to live P&L without adjusting.
             equity_change = (
-                result_r * CONFIG["RISK_PCT"] * risk_mult * _vol_adj * _score_factor
+                result_r * live_risk_pct * _vol_adj * _score_factor
             )
 
             equity = round(equity * (1 + equity_change), 6)
@@ -1329,7 +1340,7 @@ def backtest_pair(pair, style="auto"):
 
                 outcome = "TIMEOUT"
 
-            risk_mult = CONFIG["RISK_MULT"].get(_ptype, 1.0)
+            live_risk_pct = _live_base_risk_pct(_ptype)
 
             # F3: Deduct round-trip exchange fee from result_r
 
@@ -1340,13 +1351,13 @@ def backtest_pair(pair, style="auto"):
 
                 result_r = round(result_r - _fee_r_id, 4)
 
-            # NOTE: risk_mult (RISK_MULT config) scales BT equity by asset class
+            # Apply the same base per-asset risk percentages as the live risk gateway.
             # (forex=0.6, crypto=0.8). Live risk_engine does NOT apply RISK_MULT —
             # it uses asset_risk_map in _adaptive_risk_pct() instead.
             # BT equity curves are therefore ~40% smaller than live for forex.
             # Do not compare BT Sharpe/SQN directly to live P&L without adjusting.
             equity_change = (
-                result_r * CONFIG["RISK_PCT"] * risk_mult * _vol_adj * _score_factor
+                result_r * live_risk_pct * _vol_adj * _score_factor
             )
 
             equity = round(equity * (1 + equity_change), 6)
@@ -1754,7 +1765,7 @@ def backtest_pair(pair, style="auto"):
 
                 outcome = "TIMEOUT"
 
-            risk_mult = CONFIG["RISK_MULT"].get(_ptype, 1.0)
+            live_risk_pct = _live_base_risk_pct(_ptype)
 
             # F3: Deduct round-trip exchange fee from result_r
 
@@ -1765,13 +1776,13 @@ def backtest_pair(pair, style="auto"):
 
                 result_r = round(result_r - _fee_r_sc, 4)
 
-            # NOTE: risk_mult (RISK_MULT config) scales BT equity by asset class
+            # Apply the same base per-asset risk percentages as the live risk gateway.
             # (forex=0.6, crypto=0.8). Live risk_engine does NOT apply RISK_MULT —
             # it uses asset_risk_map in _adaptive_risk_pct() instead.
             # BT equity curves are therefore ~40% smaller than live for forex.
             # Do not compare BT Sharpe/SQN directly to live P&L without adjusting.
             equity_change = (
-                result_r * CONFIG["RISK_PCT"] * risk_mult * _vol_adj * _score_factor
+                result_r * live_risk_pct * _vol_adj * _score_factor
             )
 
             equity = round(equity * (1 + equity_change), 6)
@@ -2030,7 +2041,7 @@ def backtest_pair(pair, style="auto"):
 
     import random as _rnd
 
-    _risk_mult = CONFIG["RISK_MULT"].get(pair["type"], 1.0)
+    _risk_pct = _live_base_risk_pct(pair["type"])
 
     _mc_dds = []
 
@@ -2043,7 +2054,7 @@ def backtest_pair(pair, style="auto"):
         _mdd = 0.0
 
         for _r in _shuffled:
-            _eq *= 1 + _r * CONFIG["RISK_PCT"] * _risk_mult
+            _eq *= 1 + _r * _risk_pct
 
             if _eq > _pk:
                 _pk = _eq

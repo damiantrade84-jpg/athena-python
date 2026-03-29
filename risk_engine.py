@@ -116,7 +116,7 @@ _daily_pnl: float = 0.0
 _daily_pnl_date: str = ""
 _daily_start_balance: float = 0.0
 _daily_lock = threading.Lock()
-_kelly_cache: dict = {}           # asset_type → (adaptive_risk_pct, cached_at)
+_kelly_cache: dict = {}           # (asset_type, regime) → (adaptive_risk_pct, cached_at)
 _KELLY_TTL_SECONDS: float = 300.0  # 5 minutes
 
 
@@ -219,7 +219,8 @@ def _adaptive_risk_pct(asset_type: str, regime: str = "") -> float:
 
     try:
         now_ts = _time.time()
-        _cached = _kelly_cache.get(asset_type)
+        _cache_key = (asset_type, regime or "")
+        _cached = _kelly_cache.get(_cache_key)
         if _cached and (now_ts - _cached[1]) < _KELLY_TTL_SECONDS:
             return _cached[0]
 
@@ -264,7 +265,7 @@ def _adaptive_risk_pct(asset_type: str, regime: str = "") -> float:
         if regime == "HIGH_VOLATILITY":
             adaptive_risk *= 0.7
 
-        _kelly_cache[asset_type] = (adaptive_risk, now_ts)
+        _kelly_cache[_cache_key] = (adaptive_risk, now_ts)
 
         log.info(
             f"[KELLY] {asset_type}: WR={win_rate:.0%}, W/L={win_loss_ratio:.2f}, "
@@ -541,6 +542,12 @@ def risk_check(
     sl = signal.get("sl", 0)
     if not entry or not sl or entry == sl:
         log.warning(f"{prefix} REJECTED: invalid entry={entry} or sl={sl}")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "INVALID_LEVELS")
+    if direction == "LONG" and sl >= entry:
+        log.warning(f"{prefix} REJECTED: LONG stop {sl} must be below entry {entry}")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "INVALID_LEVELS")
+    if direction == "SHORT" and sl <= entry:
+        log.warning(f"{prefix} REJECTED: SHORT stop {sl} must be above entry {entry}")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "INVALID_LEVELS")
 
     asset_type = signal.get("type", "")
