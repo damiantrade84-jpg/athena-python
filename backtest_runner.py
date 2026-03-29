@@ -296,6 +296,49 @@ def backtest_pair(pair, style="auto"):
             if not h4_raw or not h1_raw:
                 h4_raw = h4_raw or _rt().fetch_candles(pair, "H4", 5000)
                 h1_raw = h1_raw or _rt().fetch_candles(pair, "H1", 5000)
+            _h4_thin = not h4_raw or len(h4_raw or []) < 500
+            _h1_thin = not h1_raw or len(h1_raw or []) < 500
+            if (_h4_thin or _h1_thin) and _ptype == "commodity":
+                try:
+                    from twelvedata_feed import fetch_twelvedata_bt
+
+                    _td_h4, _td_h1 = fetch_twelvedata_bt(pair["display"], days=730)
+                    if _td_h4 and len(_td_h4) > len(h4_raw or []):
+                        h4_raw = _td_h4
+                        log.info(
+                            f"[BT] {pair['display']}: Twelvedata H4 {len(h4_raw)} bars"
+                        )
+                    elif not h4_raw:
+                        h4_raw = _td_h4
+                    if _td_h1 and len(_td_h1) > len(h1_raw or []):
+                        h1_raw = _td_h1
+                        log.info(
+                            f"[BT] {pair['display']}: Twelvedata H1 {len(h1_raw)} bars"
+                        )
+                    elif not h1_raw:
+                        h1_raw = _td_h1
+                except Exception as _td_err:
+                    log.debug(
+                        f"[BT] Twelvedata failed for {pair['display']}: {_td_err}"
+                    )
+
+                _h4_thin = not h4_raw or len(h4_raw or []) < 500
+                _h1_thin = not h1_raw or len(h1_raw or []) < 500
+                if _h4_thin or _h1_thin:
+                    _yf_sym = _rt().yfinance_symbol_for_pair(pair)
+                    if _yf_sym:
+                        log.info(
+                            f"[BT] {pair['display']}: H4={len(h4_raw or [])} H1={len(h1_raw or [])} bars - trying yfinance for better coverage"
+                        )
+                        _yf_h4, _yf_h1 = _rt().fetch_bt_yfinance(_yf_sym)
+                        if _yf_h4 and len(_yf_h4) > len(h4_raw or []):
+                            h4_raw = _yf_h4
+                        elif not h4_raw:
+                            h4_raw = _yf_h4
+                        if _yf_h1 and len(_yf_h1) > len(h1_raw or []):
+                            h1_raw = _yf_h1
+                        elif not h1_raw:
+                            h1_raw = _yf_h1
 
         elif _ptype in ("stock", "commodity", "index"):
             # Stocks/Commodities/Indices: EODHD D1 + EODHD intraday (730d)

@@ -1534,7 +1534,12 @@ def _fetch_eodhd_intraday_bt(pair, days=730):
         ticker = _eodhd_intraday_ticker_for_pair(pair)
 
         if not ticker:
-            log.warning(f"[EODHD-BT] {pair['display']}: no valid intraday ticker")
+            if pair.get("source") == "mt5" and pair.get("type") == "commodity":
+                log.info(
+                    f"[EODHD-BT] {pair['display']}: no EODHD intraday override - using MT5/fallback history"
+                )
+            else:
+                log.warning(f"[EODHD-BT] {pair['display']}: no valid intraday ticker")
 
             return None, None
 
