@@ -222,14 +222,17 @@ def _mean_stddev(values: list[float | int]) -> tuple[float | None, float | None]
     if not values:
         return None, None
     numeric = [float(v) for v in values]
-    avg = sum(numeric) / len(numeric)
-    variance = sum((v - avg) ** 2 for v in numeric) / len(numeric)
+    n = len(numeric)
+    avg = sum(numeric) / n
+    if n < 2:
+        return avg, 0.0
+    variance = sum((v - avg) ** 2 for v in numeric) / (n - 1)
     return avg, math.sqrt(variance)
 
 
 def _decade_bucket(number: int) -> str:
-    if number < 10:
-        return "1-9"
+    if number <= 10:
+        return "1-10"
     low = (number // 10) * 10
     return f"{low}-{low + 9}"
 
@@ -324,6 +327,12 @@ def compute_overdue_numbers(
 
     total = len(draws)
     overdue = []
+    if total == 0:
+        return {
+            "game": loaded["game"],
+            "draw_count": 0,
+            "overdue": [],
+        }
     for number in universe["main_numbers"]:
         idx = last_seen[number]
         if idx is None:
@@ -450,21 +459,24 @@ def compute_recommended_sum_range(
     start_date: str | None = None,
     end_date: str | None = None,
     db_path: str | None = None,
+    pct_low: float = 15.0,
+    pct_high: float = 85.0,
 ) -> dict:
     loaded = load_lottery_draws(game, start_date=start_date, end_date=end_date, db_path=db_path)
     sums = [sum(draw["numbers"]) for draw in loaded["draws"]]
-    p15 = _rounded_metric(_percentile(sums, 15), 3)
-    p85 = _rounded_metric(_percentile(sums, 85), 3)
+    p_low = _rounded_metric(_percentile(sums, pct_low), 3)
+    p_high = _rounded_metric(_percentile(sums, pct_high), 3)
+    coverage_pct = round(pct_high - pct_low, 1)
     return {
         "game": loaded["game"],
         "draw_count": len(loaded["draws"]),
         "min_sum": min(sums) if sums else None,
         "max_sum": max(sums) if sums else None,
-        "p15": p15,
-        "p85": p85,
-        "recommended_min": p15,
-        "recommended_max": p85,
-        "coverage_pct": 70,
+        "p_low": p_low,
+        "p_high": p_high,
+        "recommended_min": p_low,
+        "recommended_max": p_high,
+        "coverage_pct": coverage_pct,
     }
 
 
@@ -520,8 +532,11 @@ def compute_rolling_frequency(
         alltime_count = int(all_counter.get(number, 0))
         expected_recent = ((alltime_count / len(draws)) * window_used) if draws and window_used else 0.0
         z_score = None
-        if expected_recent > 0:
-            z_score = (recent_count - expected_recent) / math.sqrt(expected_recent)
+        if expected_recent > 0 and window_used > 0:
+            p = alltime_count / len(draws)
+            binom_stddev = math.sqrt(window_used * p * (1.0 - p))
+            if binom_stddev > 0:
+                z_score = (recent_count - expected_recent) / binom_stddev
         trend = "neutral"
         if z_score is not None and z_score > 1.5:
             trend = "heating"
@@ -858,7 +873,9 @@ def compute_bonus_intelligence(
         alltime_count = int(freq_counter.get(number, 0))
         recent_count = int(window_counter.get(number, 0))
         expected = (alltime_count / total) * len(window_draws) if total > 0 else 0
-        z_score = round((recent_count - expected) / (expected ** 0.5), 3) if expected > 0 else None
+        p_hat = alltime_count / total if total > 0 else 0
+        binom_std = math.sqrt(len(window_draws) * p_hat * (1.0 - p_hat)) if len(window_draws) > 0 and 0 < p_hat < 1 else (expected ** 0.5 if expected > 0 else 0)
+        z_score = round((recent_count - expected) / binom_std, 3) if binom_std > 0 else None
         trend = "heating" if z_score is not None and z_score > 1.5 else "cooling" if z_score is not None and z_score < -1.5 else "neutral"
         rolling.append(
             {
@@ -1099,12 +1116,12 @@ def _weighted_sample_without_replacement(population: list[int], weights: list[fl
         if total <= 0:
             idx = random.randrange(len(pool))
         else:
-            r = random.random() * total
+            r = random.uniform(0.0, total)
             acc = 0.0
-            idx = 0
+            idx = len(pool) - 1
             for i, val in enumerate(w):
                 acc += max(0.0, val)
-                if acc >= r:
+                if acc > r:
                     idx = i
                     break
         picks.append(pool.pop(idx))
@@ -1236,14 +1253,18 @@ def _choose_ticket_numbers(
     if mode == "balanced_mix":
         sorted_hot = sorted(universe, key=lambda n: (-hot_counts.get(n, 0), n))
         sorted_cold = sorted(universe, key=lambda n: (hot_counts.get(n, 0), n))
-        half = count // 2
-        hot_pick = sorted_hot[: max(1, half)]
-        cold_pick = sorted_cold[: max(1, count - len(hot_pick))]
+        half = max(1, count // 2)
+        hot_pool = sorted_hot[:half * 2]
+        cold_pool = [n for n in sorted_cold if n not in set(hot_pool)][:half * 2]
+        hot_pick = random.sample(hot_pool, min(half, len(hot_pool)))
+        need_cold = count - len(hot_pick)
+        cold_pick = random.sample(cold_pool, min(need_cold, len(cold_pool))) if cold_pool else []
         base = list(dict.fromkeys(hot_pick + cold_pick))
-        while len(base) < count:
-            cand = random.choice(universe)
-            if cand not in base:
-                base.append(cand)
+        remaining = [n for n in universe if n not in set(base)]
+        while len(base) < count and remaining:
+            pick = random.choice(remaining)
+            base.append(pick)
+            remaining.remove(pick)
         return sorted(base[:count])
 
     weights = _mode_weights(game, universe, mode, hot_counts, overdue_counts)
@@ -1767,7 +1788,26 @@ def simulate_generator(
     recent_draw_numbers = set()
 
     for idx, draw in enumerate(draws):
+        # Seed counters from draw 0 before generating any tickets.
+        # Generating tickets on draw 0 with empty counters forces pure_random
+        # regardless of mode — skip generation until draw 1 (F12 fix).
+        if idx == 0:
+            recent_draw_numbers = set(draw["numbers"])
+            for n in draw["numbers"]:
+                main_counter[n] += 1
+                last_seen[n] = idx
+            for p in itertools.combinations(draw["numbers"], 2):
+                pair_counter[p] += 1
+            if include_bonus and rules["has_bonus"] and draw.get("bonus") is not None:
+                _bv = int(draw["bonus"])
+                bonus_counter[_bv] += 1
+                bonus_last_seen[_bv] = idx
+            continue
+
         gen_started = time.perf_counter()
+        # draws_since_seen = (current_idx - 1) - last_seen_idx, matching the
+        # formula used in compute_overdue_numbers: (total-1) - last_seen_idx (F1 fix)
+        _prior_idx = idx - 1
         freq_payload = {
             "main_number_frequency": [
                 {"number": n, "count": int(main_counter.get(n, 0))}
@@ -1779,7 +1819,7 @@ def simulate_generator(
             "overdue": [
                 {
                     "number": n,
-                    "draws_since_seen": (idx + 1 if last_seen[n] is None else max(0, idx - last_seen[n])),
+                    "draws_since_seen": (_prior_idx + 1 if last_seen[n] is None else max(0, _prior_idx - last_seen[n])),
                 }
                 for n in main_numbers
             ],
@@ -1793,7 +1833,7 @@ def simulate_generator(
             overdue_payload["bonus_overdue"] = [
                 {
                     "number": n,
-                    "draws_since_seen": (idx + 1 if bonus_last_seen[n] is None else max(0, idx - bonus_last_seen[n])),
+                    "draws_since_seen": (_prior_idx + 1 if bonus_last_seen[n] is None else max(0, _prior_idx - bonus_last_seen[n])),
                 }
                 for n in bonus_numbers
             ]
@@ -1846,12 +1886,12 @@ def simulate_generator(
                     "draw_date": draw["draw_date"],
                 }
         draw_best_hits.append(best_for_draw)
-        if idx in (0, len(draws) - 1) or ((idx + 1) % 250 == 0):
+        if idx in (1, len(draws) - 1) or (idx % 250 == 0):
             log.info(
                 "[LotterySim] simulation loop progress game=%s mode=%s draw=%s/%s ticket_gen_ms=%.1f",
                 game_key,
                 mode,
-                idx + 1,
+                idx,
                 len(draws),
                 generation_ms,
             )
@@ -1866,7 +1906,8 @@ def simulate_generator(
             bonus_counter[bonus_value] += 1
             bonus_last_seen[bonus_value] = idx
 
-    tickets_generated = len(draws) * ticket_n
+    draws_with_tickets = max(0, len(draws) - 1)
+    tickets_generated = draws_with_tickets * ticket_n
     total_cost = round(tickets_generated * parsed_cost, 4)
     total_return = round(total_return, 4)
     roi = None
@@ -2039,6 +2080,7 @@ def generate_wheel(
         "tickets": [list(ticket) for ticket in selected],
         "coverage_verified": coverage_verified,
         "note": "Abbreviated wheel — greedy set cover. Not mathematically minimal but guaranteed valid.",
+        "is_minimal": False,
     }
 
 

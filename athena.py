@@ -60,7 +60,9 @@ from stability_monitor import (
     record_signal_event,
 )
 from lottery_service import (
+    add_lottery_draw,
     clear_lottery_draws,
+    delete_lottery_draw,
     ensure_lottery_schema,
     import_lottery_csv,
 )
@@ -9174,6 +9176,70 @@ def api_lottery_clear():
         payload = request.get_json(silent=True) or {}
         game = str(payload.get("game") or request.form.get("game") or "").strip().lower() or None
         return jsonify(clear_lottery_draws(_AUDIT_DB, game=game))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/add-draw", methods=["POST"])
+def api_lottery_add_draw():
+    """Manually enter a single draw result without uploading a CSV.
+
+    POST JSON body:
+      {
+        "game":      "lotto" | "powerball" | "daily_lotto",
+        "draw_date": "YYYY-MM-DD",
+        "numbers":   [7, 14, 22, 31, 40, 51],   // main numbers (unsorted is fine)
+        "bonus":     12                           // required for lotto/powerball, omit for daily_lotto
+      }
+    """
+    try:
+        payload = request.get_json(silent=True) or {}
+        game = str(payload.get("game") or "").strip().lower()
+        draw_date = str(payload.get("draw_date") or "").strip()
+        numbers = payload.get("numbers")
+        bonus = payload.get("bonus")
+
+        if not game:
+            return jsonify({"error": "Missing game"}), 400
+        if not draw_date:
+            return jsonify({"error": "Missing draw_date"}), 400
+        if not numbers or not isinstance(numbers, list):
+            return jsonify({"error": "numbers must be a non-empty list"}), 400
+
+        result = add_lottery_draw(
+            _AUDIT_DB,
+            game=game,
+            draw_date=draw_date,
+            numbers=numbers,
+            bonus=bonus,
+            source_file="manual",
+        )
+        status = 200 if result["inserted"] else 409
+        return jsonify(result), status
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lottery/delete-draw", methods=["POST"])
+def api_lottery_delete_draw():
+    """Delete a specific draw by game + date.
+
+    POST JSON body:
+      { "game": "lotto", "draw_date": "2024-06-01" }
+    """
+    try:
+        payload = request.get_json(silent=True) or {}
+        game = str(payload.get("game") or "").strip().lower()
+        draw_date = str(payload.get("draw_date") or "").strip()
+        if not game:
+            return jsonify({"error": "Missing game"}), 400
+        if not draw_date:
+            return jsonify({"error": "Missing draw_date"}), 400
+        return jsonify(delete_lottery_draw(_AUDIT_DB, game=game, draw_date=draw_date))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

@@ -280,6 +280,117 @@ def fetch_lottery_draws(db_path: str, game: str | None = None, limit: int = 200)
     return {"draws": [dict(row) for row in rows]}
 
 
+def add_lottery_draw(
+    db_path: str,
+    game: str,
+    draw_date: str,
+    numbers: list[int],
+    bonus: int | None = None,
+    source_file: str = "manual",
+) -> dict:
+    """Insert a single draw result manually, without CSV upload.
+
+    Returns a result dict with keys: inserted (bool), duplicate (bool), error (str|None).
+    """
+    spec = LOTTERY_GAME_SPECS.get(game)
+    if not spec:
+        raise ValueError(f"Unsupported lottery game: {game}")
+
+    parsed_date = _parse_date(str(draw_date or "").strip())
+    if not parsed_date:
+        raise ValueError(f"Invalid draw_date: {draw_date!r} — expected YYYY-MM-DD")
+
+    main_count = spec["main_count"]
+    clean = []
+    for raw in (numbers or []):
+        n = _parse_int(str(raw))
+        if n is None:
+            raise ValueError(f"Invalid number value: {raw!r}")
+        clean.append(n)
+
+    if len(clean) != main_count:
+        raise ValueError(f"Expected {main_count} main numbers, got {len(clean)}")
+    if len(set(clean)) != len(clean):
+        raise ValueError("Duplicate main numbers in draw")
+
+    sorted_main = sorted(clean)
+
+    if spec["has_bonus"]:
+        if bonus is None:
+            raise ValueError("bonus is required for this game")
+        bonus = _parse_int(str(bonus))
+        if bonus is None:
+            raise ValueError("Invalid bonus value")
+    else:
+        bonus = None
+
+    imported_at = datetime.now(timezone.utc).isoformat()
+
+    row = {
+        "n1": sorted_main[0],
+        "n2": sorted_main[1],
+        "n3": sorted_main[2],
+        "n4": sorted_main[3],
+        "n5": sorted_main[4],
+        "n6": sorted_main[5] if main_count == 6 else None,
+        "bonus": bonus,
+    }
+
+    with sqlite3.connect(db_path, timeout=15.0) as con:
+        con.execute("PRAGMA journal_mode=WAL")
+        ensure_lottery_schema(con)
+        cur = con.execute(
+            """
+            INSERT OR IGNORE INTO lottery_draws
+                (game, draw_date, n1, n2, n3, n4, n5, n6, bonus, source_file, imported_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                game,
+                parsed_date,
+                row["n1"], row["n2"], row["n3"], row["n4"], row["n5"], row["n6"],
+                row["bonus"],
+                source_file,
+                imported_at,
+            ),
+        )
+        inserted = cur.rowcount > 0
+        con.commit()
+
+    return {
+        "game": game,
+        "draw_date": parsed_date,
+        "numbers": sorted_main,
+        "bonus": bonus,
+        "inserted": inserted,
+        "duplicate": not inserted,
+        "error": None,
+    }
+
+
+def delete_lottery_draw(
+    db_path: str,
+    game: str,
+    draw_date: str,
+) -> dict:
+    """Delete a single draw by game + date. Returns deleted count."""
+    parsed_date = _parse_date(str(draw_date or "").strip())
+    if not parsed_date:
+        raise ValueError(f"Invalid draw_date: {draw_date!r}")
+
+    with sqlite3.connect(db_path, timeout=15.0) as con:
+        con.execute("PRAGMA journal_mode=WAL")
+        ensure_lottery_schema(con)
+        cur = con.execute(
+            "DELETE FROM lottery_draws WHERE game = ? AND draw_date = ?",
+            (game, parsed_date),
+        )
+        deleted = max(cur.rowcount, 0)
+        con.commit()
+
+    return {"game": game, "draw_date": parsed_date, "deleted_rows": deleted}
+
+
 def clear_lottery_draws(db_path: str, game: str | None = None) -> dict:
     with sqlite3.connect(db_path, timeout=15.0) as con:
         con.execute("PRAGMA journal_mode=WAL")
