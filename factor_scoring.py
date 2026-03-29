@@ -867,7 +867,7 @@ def compute_factor_scores(
     elif dir_score < 0:
         direction = "SHORT"
     else:
-        direction = "LONG" if dir_sum > 0 else "LONG"
+        direction = "LONG" if dir_sum > 0 else ("SHORT" if dir_sum < 0 else "LONG")
 
     nondir_score = 0.0
     if active_nondir:

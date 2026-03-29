@@ -2518,7 +2518,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
     )
     _pair_type = pair.get("type", "stock")
     _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
-    if _pair_type == "forex" and _forex_struct_tf == "D1" and resolved_style == "intraday":
+    if _pair_type == "forex" and _forex_struct_tf == "D1" and resolved_style == "intraday" and requested_style in ("auto", "naked"):
         resolved_style, style_profile = _rt().naked_scan_style_profile(
             "swing", score_group=_pair_score_group
         )
@@ -2653,6 +2653,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                     _min_score_scaled *= 1.2  # 20% harder in >5% drawdown
 
             if conf_data["score"] < _min_score_scaled:
+                continue
+            if not conf_data.get("passed"):
                 continue
 
             entry = current_price

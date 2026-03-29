@@ -4259,12 +4259,13 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             learning_ctx = None
 
         _pair_score_group = get_pair_score_group(pair_obj)
+        _requested_style_naked = sig.get("style", "auto")
         resolved_style, style_profile = _naked_scan_style_profile(
-            sig.get("style", "auto"), score_group=_pair_score_group
+            _requested_style_naked, score_group=_pair_score_group
         )
         _pair_type = pair_obj.get("type", "")
         _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
-        if _pair_type == "forex" and _forex_struct_tf == "D1" and resolved_style == "intraday":
+        if _pair_type == "forex" and _forex_struct_tf == "D1" and resolved_style == "intraday" and _requested_style_naked in ("auto", "naked"):
             resolved_style, style_profile = _naked_scan_style_profile(
                 "swing", score_group=_pair_score_group
             )
