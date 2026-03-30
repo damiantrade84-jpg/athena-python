@@ -5342,8 +5342,9 @@ async function runNakedGlobalScan() {
   btn.disabled=true; btn.innerHTML='<div class="spinner"></div> SCANNING...';
   showSkeletons();
   try {
-    var acFilter = document.getElementById('assetClassFilter').value || 'crypto';
-    var payload = {assetClass: acFilter, style: tradeStylePref === 'auto' ? 'auto' : tradeStylePref};
+    var acFilter = document.getElementById('assetClassFilter').value || '';
+    var payload = {style: tradeStylePref === 'auto' ? 'auto' : tradeStylePref};
+    if (acFilter) payload.assetClass = acFilter;
     var resp=await fetch('/api/scan-naked',{
       method:'POST',
       headers:{'Content-Type':'application/json'},

@@ -4544,17 +4544,19 @@ def api_compare_engines():
 @app.route("/api/scan-naked", methods=["POST"])
 def api_scan_naked():
     d = request.get_json(silent=True) or {}
-    asset_class = d.get("assetClass", "crypto").lower()
+    asset_class = str(d.get("assetClass") or "").strip().lower()
     requested_style = d.get("style", "auto")
     _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
 
-    candidate_pairs = [
-        p
-        for p in ALL_PAIRS
-        if p.get("type", "").lower() == asset_class
-        and p.get("enabled", True)
-        and p["display"] not in _disabled_pairs
-    ]
+    candidate_pairs = []
+    for p in ALL_PAIRS:
+        if not p.get("enabled", True):
+            continue
+        if p["display"] in _disabled_pairs:
+            continue
+        if asset_class and p.get("type", "").lower() != asset_class:
+            continue
+        candidate_pairs.append(p)
 
     results = []
     _best_per_pair = {}
