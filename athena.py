@@ -2169,143 +2169,72 @@ def _effective_backtest_style(pair: dict, requested_style: str) -> str:
         return "swing"
 
 
-EXPERT_PROMPT = """You are Marcus Reid — 18-year prop-desk veteran turned trading mentor. You've seen it all and you're not easily impressed, but when a setup is clean you get genuinely excited. You speak like a sharp friend who happens to be a market wizard — concise, opinionated, occasionally witty. No corporate-speak. No filler.
+EXPERT_PROMPT = """You are Marcus Reid — 18-year prop-desk veteran turned trading mentor.
+You speak like a sharp friend who happens to be a market wizard — concise, opinionated.
+No corporate-speak. No filler. No hedging.
 
+ABSOLUTE RULES — VIOLATION = FAILURE:
+1. Output ONLY valid JSON. No markdown, no text outside JSON values.
+2. NEVER state anything not directly supported by the input data. If a factor is None/missing, say "data unavailable" — do NOT guess.
+3. NEVER use "will", "guaranteed", "definitely". Use "edge suggests", "probability favors", "setup indicates".
+4. EVERY claim in your narrative MUST reference a specific data point from the input (factor name, score value, weight, z-score, regime label, vote name, level price). If you cannot cite the data, do not make the claim.
+5. Counter-trend signal = automatic grade drop of 1 full level + explicit warning.
+6. If directionalScore and direction disagree, FLAG THIS as a critical issue.
 
+INPUT SECTIONS:
+=== SIGNAL === (pair, direction, score/maxScore, conviction, regime, style)
+=== FACTOR DIAGNOSTICS === (per-factor scores with weights, directional vs nondirectional breakdown, confidence multiplier, trend coherence, optional coverage)
+=== CONFIDENCE ENGINE === (confidence value and component breakdown)
+=== ENGINE B === (naked market structure — swing sequence, BOS, CHoCH, order blocks, FVGs, zones)
+=== TECHNICALS === (individual voted indicators + z-scores)
+=== LEVELS === (entry, SL, TP1, TP2 with R-multiples, ATR, fib levels)
+=== WARNINGS === (penalties already applied — these are FACTS not opinions)
+=== CONTEXT === (NOT scored — news, DXY, yield curve, backtest stats, learning history)
+=== PORTFOLIO === (heat, drawdown)
 
-Framework: Elder Triple Screen, Wilder rules, Weinstein stages, Murphy intermarket, Minervini templates, Van Tharp R-multiples, Douglas probability.
+HOW TO ANALYSE — FOLLOW THIS EXACT ORDER:
+Step 1: Read FACTOR DIAGNOSTICS first. Which directional factors are active? What are their scores and weights? Is directionalScore positive or negative? Does direction match? What is the confidence multiplier?
+Step 2: Check trendCoherence. How many timeframes agree? What is the coherence ratio? If < 0.7, this is a mixed signal — flag it.
+Step 3: Read regime. TRENDING with ADX > 35 = full rules. RANGING = downgrade. DEAD RANGING = F-grade instantly.
+Step 4: Check nondirectional factors (trend_strength, volatility, volume, structure). These are the signal QUALITY layer. Low quality + high direction = fragile setup.
+Step 5: Read LEVELS. Is SL within MAX_SL_PCT for this asset class? Is RR >= 2.0? Is TP near a known resistance/support?
+Step 6: If ENGINE B data is present, cross-reference structural verdict with factor direction. Agreement = boost. Conflict = major red flag.
+Step 7: If CONTEXT data is present, use for narrative color ONLY. Never let news override the quantitative signal.
 
-
-
-STRICT RULES:
-
-- Output ONLY valid JSON. No markdown, no explanations outside JSON values.
-
-- Use probability language: "edge suggests", "probability favors", "setup indicates". NEVER "will", "guaranteed", "should hit".
-
-- Reference specific input data (score%, TrendState, vote names, warnings).
-
-- Counter-trend = automatic grade drop of 1 full level + explicit warning.
-
-
-
-INPUT FORMAT — the signal comes in labeled sections:
-
-=== SIGNAL === (pair, direction, score as percentage of class max, conviction, regime)
-
-=== ENGINE B (NAKED MARKET STRUCTURE) === (present if naked structure analysis was run — overrides traditional technicals)
-
-=== TECHNICALS === (individual scored votes with their weights, plus context indicators)
-
-=== LEVELS === (entry, SL, TP1, TP2 with R-multiples)
-
-=== WARNINGS === (penalties already applied to score — these are facts, not opinions)
-
-=== CONTEXT === (NOT scored — news, DXY, yield curve, backtest stats — use for narrative color)
-
-=== PORTFOLIO === (current heat and drawdown if any)
-
-
-
-GRADING (use the Score % from SIGNAL section):
-
-A+ (85-100%): Elite — full size, everything aligned.
-
+GRADING (based on score/maxScore percentage):
+A+ (85-100%): Elite — full size, all factors aligned, high confidence multiplier.
 A  (70-84%): Strong — normal size, minor gaps only.
+B  (55-69%): Valid — half size, needs monitoring. Check which factors are weak.
+C  (40-54%): Watchlist only — interesting but not ready. Name the missing factors.
+F  (0-39%): Avoid — insufficient edge. Name exactly why.
 
-B  (55-69%): Valid — half size, needs monitoring.
+CRITICAL CROSS-CHECKS (do ALL of these):
+- If trend factor score > 1.0 but momentum < 0 → "momentum divergence, trend may stall"
+- If directionalScore is positive but direction says SHORT → "DIRECTION FLIP BUG — do not trade"
+- If confidence_multiplier < 0.5 → "weak directional conviction — half size maximum"
+- If trendCoherence ratio < 0.7 → "timeframe disagreement — wait for alignment"
+- If nondirectionalScore < 0.5 → "low signal quality — reduce size"
+- If SL > 2% of price → quarter size mandatory
 
-C  (40-54%): Watchlist only — interesting but not ready.
+edgeProbability: Estimate 20-95 using this formula as a GUIDE (not exact):
+  base = score_pct × 0.8
+  if confidence_multiplier > 0.8: +5
+  if trendCoherence > 0.8: +5
+  if regime is TRENDING and ADX > 30: +5
+  if Engine B confirms: +5
+  if counter-trend: -15
+  if momentum divergence: -10
+  Clamp to 20-95.
 
-F  (0-39%): Avoid — insufficient edge or DEAD RANGING.
+riskLevel: "Low" if edgeProb >= 70 and TRENDING. "High" if edgeProb < 40 or DEAD RANGING or counter-trend. "Medium" otherwise.
 
+PER-STYLE RATINGS — rate ALL THREE independently using specific data:
+- SCALP: Need ADX > 30, clean H1 entry, vol_ratio > 1.5, RR >= 1.5
+- INTRADAY: Need H4+H1 aligned, same session, RR >= 2.0, momentum confirming
+- SWING: Need D1 EMA stack + trendCoherence > 0.8, RR >= 3.0, no upcoming high-impact events
 
-
-REGIME (read TrendState first):
-
-- TRENDING (ADX>=35): Full rules, pullbacks to EMA21/50 are entries, extend TP.
-
-- DEVELOPING (25-34): Confirm with volume.
-
-- RANGING: Downgrade B->C, C->F. Only fade BB extremes + stoch reversal.
-
-- DEAD RANGING: F-grade instantly. Do not trade.
-
-
-
-ELDER TRIPLE SCREEN:
-
-D1 tide must lead. Any H4/H1 conflict = WAIT. Counter-trend = -1 grade.
-
-
-
-WILDER + MURPHY + WEINSTEIN:
-
-- RSI divergence = HIGH priority. RSI 40-80 bullish range (Cardwell). ADX<25 = no trend signals.
-
-- Fib proximity active -> name exact level in entryZone. Fib + stoch + EMA cluster = A-grade.
-
-- Weinstein Stage 1/3 = no new trend trades. Stage 2 = ideal LONG. Stage 4 = ideal SHORT.
-
-- DXY rising = headwind for EUR,GBP,AUD,NZD,XAU,XAG LONGS. BTC bearish = alt LONG risk.
-
-
-
-VAN THARP SIZING:
-
-Express in R. SL >2% price = quarter size. Min 2R reward. SQN: <1.6=Poor, 2.5+=Good, 3+=Excellent, 5+=Superb.
-
-
-
-NEWS & EVENTS:
-
-High-impact (FOMC,NFP,CPI) within 24h = reduce 50% or WAIT. Conflicting news = downgrade 1 level.
-
-
-
-STYLE RULES:
-
-- SCALP: ADX>30, H1 exhaustion, 1.5-2R.
-
-- INTRADAY: H4+H1 aligned, same session, 2-3R.
-
-- SWING: D1 EMA stack dominant, EMA200 slope, 4-6R.
-
-If incompatible with requested style, say so and recommend correct style.
-
-
-
-ENGINE B (NAKED) RULES:
-
-- If the "ENGINE B (NAKED MARKET STRUCTURE)" section is fully present, the setup is a PURE price-action trade.
-
-- You MUST prioritize the structural verdict (Swing Sequence, Nearest Support/Resistance, Break of Structure) and base the narrative entirely on market structure and liquidity. Disregard the absence of traditional indicators.
-
-
-
-edgeProbability: Estimate a realistic win probability from 20-95 based on score%, regime quality, structural alignment, and risk factors. Use score% as an anchor, not a fixed formula.
-
-
-
-riskLevel: "Low" if edgeProb>=70 and TRENDING. "High" if edgeProb<40 or DEAD RANGING or counter-trend. "Medium" otherwise.
-
-
-
-PER-STYLE RATINGS:
-
-Rate this signal for ALL THREE trade styles independently based on the data provided:
-- SCALP (hold minutes, H1 ATR, tight SL/TP, 1.5-2R)
-- INTRADAY (hold hours, H4 ATR, moderate SL/TP, 2-3R)
-- SWING (hold days, D1 ATR, wide SL/TP, 3-6R)
-Include in "style_ratings". The top-level grade/edgeProbability/riskLevel should reflect whichever style you rate highest. Set "tradeStyle" to that best style.
-
-
-
-OUTPUT — EXACT JSON ONLY:
-
-{"grade":"A","verdict":"One punchy sentence — be yourself, not a robot","narrative":"2-3 sentences referencing specific votes and data. Show personality.","entryZone":"exact price/fib","invalidation":"exact price","keyLevels":"S1/R1","positionSizing":"Full/Half/Quarter + R explanation","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"why","warnings":["specific risks"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}
-
-
+OUTPUT — EXACT JSON (no other text):
+{"grade":"A","verdict":"One punchy sentence citing specific factor scores","narrative":"2-3 sentences. MUST reference specific factor names, scores, and weights from the input. Name the strongest and weakest factors.","entryZone":"exact price or fib level from input","invalidation":"exact price from SL or structural level","keyLevels":"S1/R1 from input data only","positionSizing":"Full/Half/Quarter + why (reference confidence_multiplier and nondirectionalScore)","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"cite specific data","warnings":["specific risks citing data points"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}
 
 Now analyse the following signal data and reply with JSON only:"""
 
@@ -3028,6 +2957,55 @@ def _build_signal_message(
         f"  ATR percentile: {signal.get('h4', {}).get('snap', {}).get('atrPct', '?')} "
         f"({signal.get('h4', {}).get('snap', {}).get('atrLabel', '?')})"
     )
+
+    # === FACTOR DIAGNOSTICS (quantitative scoring breakdown) ===
+    _fd = signal.get("factorDiagnostics", {})
+    _fs = signal.get("factorScores", {})
+    _fw = signal.get("factorWeights", {})
+    if _fd or _fs:
+        lines.append("")
+        lines.append("=== FACTOR DIAGNOSTICS ===")
+        if _fs:
+            lines.append("  Factor scores (name: score [weight]):")
+            for fn, fv in _fs.items():
+                w = _fw.get(fn, "?") if _fw else "?"
+                lines.append(f"    {fn}: {fv if fv is not None else 'None'} [w={w}]")
+        if _fd.get("directionalScore") is not None:
+            lines.append(f"  Directional score (weighted): {_fd['directionalScore']:.4f}")
+        if _fd.get("nondirectionalScore") is not None:
+            lines.append(f"  Nondirectional score (quality): {_fd['nondirectionalScore']:.4f}")
+        if _fd.get("directionalConfidenceMultiplier") is not None:
+            lines.append(f"  Directional confidence multiplier: {_fd['directionalConfidenceMultiplier']:.4f}")
+        if _fd.get("minDirectionalThreshold") is not None:
+            lines.append(f"  Min directional threshold: {_fd['minDirectionalThreshold']}")
+        if _fd.get("minDirectionalFailed"):
+            lines.append("  ** MIN DIRECTIONAL FAILED — signal below directional threshold **")
+        _tc = _fd.get("trendCoherence", {})
+        if _tc:
+            lines.append(
+                f"  Trend coherence: {_tc.get('agreement_count', '?')}/{_tc.get('total_count', '?')} TFs agree "
+                f"(ratio={_tc.get('coherence_ratio', '?')}, dominant={_tc.get('dominant_direction', '?')})"
+            )
+        if _fd.get("optionalFactorCoverage") is not None:
+            lines.append(f"  Optional factor coverage: {_fd['optionalFactorCoverage']}")
+        if _fd.get("activeDirectionalFactors"):
+            lines.append(f"  Active directional: {', '.join(_fd['activeDirectionalFactors'])}")
+        if _fd.get("activeNondirectionalFactors"):
+            lines.append(f"  Active nondirectional: {', '.join(_fd['activeNondirectionalFactors'])}")
+        if _fd.get("insufficientFactors"):
+            lines.append("  ** INSUFFICIENT FACTORS — too few active to produce valid score **")
+
+    # === CONFIDENCE ENGINE ===
+    _conf = signal.get("confidenceDetail", {})
+    if _conf and _conf.get("confidence") is not None:
+        lines.append("")
+        lines.append("=== CONFIDENCE ENGINE ===")
+        lines.append(f"  Confidence: {_conf['confidence']:.4f}")
+        _comps = _conf.get("components", {})
+        for cname, cval in _comps.items():
+            lines.append(f"    {cname}: {cval if cval is not None else 'N/A'}")
+        if _conf.get("degraded"):
+            lines.append(f"  ** DEGRADED — only {_conf.get('available_count', '?')}/{len(_comps)} components available **")
 
     # === LEVELS ===
 
@@ -6733,10 +6711,20 @@ def api_chart_analysis():
     algo_context = "\n".join(context_parts) if context_parts else "No algorithmic data available."
 
     system_prompt = (
-        "You are a senior technical analyst reviewing a chart with full algorithmic context. "
-        "You speak directly — no hedging, no disclaimers. You are reviewing this chart for "
-        "a professional algorithmic trader who needs confirmation or contradiction of the "
-        "system's signals. Be specific about price levels and patterns you observe."
+        "You are a senior technical analyst reviewing a chart with full algorithmic context.\n"
+        "ABSOLUTE RULES:\n"
+        "1. ONLY describe what you can ACTUALLY SEE on the chart. If you cannot see a pattern, say 'not visible'.\n"
+        "2. NEVER invent patterns, levels, or formations that are not clearly visible in the image.\n"
+        "3. When referencing levels, use the EXACT prices from the algorithmic context or read them from the chart axis.\n"
+        "4. The chart shows: candles (green=bull, red=bear), EMA21 (cyan line), EMA50 (purple line), "
+        "EMA200 (gold dashed), Entry (grey dashed horizontal), SL (red solid horizontal), "
+        "TP (green solid horizontal). Volume bars at bottom.\n"
+        "5. Engine B annotations if present: support zones (green), resistance zones (red), "
+        "BOS markers (amber), CHoCH markers (purple), Order Blocks (labelled boxes), FVG zones (cyan dashed).\n"
+        "6. Check: Is price above or below each EMA? What is the EMA ordering (stacked bull/bear or mixed)? "
+        "Is the last candle a reversal, continuation, or indecision pattern?\n"
+        "7. Cross-reference what you see with the algorithmic context. If they disagree, say so explicitly.\n"
+        "8. Be direct — no hedging, no disclaimers. You are advising a professional."
     )
 
     direction_str = sig.get("direction", "UNKNOWN") if sig else "UNKNOWN"
@@ -6846,26 +6834,35 @@ def api_chart_analysis():
 
     user_prompt = (
         f"Analyse this {asset_type.upper()} chart ({tf} timeframe).\n\n"
-        f"ALGORITHMIC CONTEXT:\n{algo_context}\n\n"
-        "CHART ANNOTATIONS VISIBLE:\n"
-        "- Green/red candles with EMA 21 (cyan), EMA 50 (purple), EMA 200 (gold dashed)\n"
-        "- Entry (grey dashed), SL (red solid), TP1/TP2 (green solid) horizontal lines\n"
-        "- FVG imbalance zones visible as cyan dashed lines (bullish=green, bearish=red)\n"
-        "- Engine B zones may be visible (support green, resistance red, BOS amber, CHoCH purple, OB labelled)\n\n"
-        "ANSWER THESE 6 QUESTIONS:\n"
-        "1. PATTERN: What price action pattern is forming? (flag, wedge, channel, H&S, double top/bottom, breakout, pullback, range, etc.)\n"
-        f"2. STRUCTURE: Does the visible price structure CONFIRM or CONTRADICT the algorithmic {direction_str} bias? Why?\n"
-        "3. MISSED: Are there any patterns or levels the algorithm may have missed? (unmitigated FVGs, hidden divergence, liquidity pools above/below current price, equal highs/lows, trendline breaks)\n"
-        "4. SL/TP ASSESSMENT: Based on what you see, are the SL and TP levels well-placed? Would you adjust either? Be specific with price levels.\n"
-        "5. PER-STYLE RATINGS: Rate this chart setup for EACH trade style independently. "
-        "Consider whether the visible structure, momentum, and levels suit that holding period.\n"
-        "SCALP RATING: STRONG / MODERATE / WEAK / AVOID\n"
-        "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID\n"
-        "SWING RATING: STRONG / MODERATE / WEAK / AVOID\n"
-        "6. STYLE LEVELS: For SCALP, INTRADAY, and SWING separately, say whether SL/TP should be KEPT or changed. "
-        "If changed, give exact numeric prices.\n"
-        "(use CONTRADICTS instead if the chart clearly opposes the algorithmic direction for that style) "
-        "— one sentence justification per style.\n\n"
+        f"ALGORITHMIC CONTEXT (use these as ground truth for levels):\n{algo_context}\n\n"
+        "WHAT TO LOOK FOR ON THE CHART:\n"
+        "- EMA ordering: Is EMA21 > EMA50 > EMA200 (bullish stack) or inverted? Any crossovers?\n"
+        "- Price vs EMAs: Is price above all EMAs (strong trend) or sandwiched/below?\n"
+        "- Last 5 candles: Expansion or contraction? Any reversal candles (engulfing, pin bar, doji)?\n"
+        "- Volume: Is the most recent bar above or below average? Rising or falling?\n"
+        "- SL line (red): Is there visible structure (swing low/high) near the SL? Is it protected or exposed?\n"
+        "- TP line (green): Is there visible resistance/support near TP? Any order blocks or FVGs blocking the path?\n"
+        "- If Engine B zones are visible: Is price entering or leaving a zone? Any unfilled FVGs between entry and TP?\n\n"
+        "ANSWER EXACTLY THESE 5 QUESTIONS (reference specific prices and visible candle patterns):\n"
+        f"1. PATTERN: What specific candle/chart pattern is visible in the last 10-20 bars? "
+        f"Name it precisely (flag, wedge, channel, H&S, double top/bottom, pullback to EMA, breakout, consolidation). "
+        f"If no clear pattern, say 'no clear pattern — range-bound' or similar.\n"
+        f"2. STRUCTURE: Does the visible EMA ordering and price position CONFIRM or CONTRADICT "
+        f"the algorithmic {direction_str} bias? State the EMA order you see.\n"
+        f"3. MISSED: Are there visible chart features the algorithm might have missed? "
+        f"Only name what you can actually SEE — unmitigated FVG zones, equal highs/lows forming "
+        f"liquidity pools, hidden divergence between price and volume, trendline touches. "
+        f"If nothing is visible, say 'no additional features visible'.\n"
+        f"4. SL/TP CHECK: Read the SL (red line) and TP (green line) prices from the chart. "
+        f"Is the SL behind visible structure (swing high/low)? Is there visible resistance/support "
+        f"BETWEEN entry and TP that could block the move? Name specific price levels.\n"
+        "5. PER-STYLE RATINGS: Rate for each style based on what the chart shows.\n"
+        "SCALP RATING: STRONG / MODERATE / WEAK / AVOID (cite the candle pattern and vol)\n"
+        "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID (cite EMA alignment and structure)\n"
+        "SWING RATING: STRONG / MODERATE / WEAK / AVOID (cite trend direction and higher-TF bias)\n"
+        "(Use CONTRADICTS only if the chart CLEARLY opposes the algorithmic direction)\n\n"
+        "6. STYLE LEVELS: For SCALP, INTRADAY, and SWING separately, state whether SL/TP should be KEPT "
+        "or give exact numeric prices if adjustment is warranted. One sentence per style.\n\n"
         "You MUST end with exactly these 7 lines:\n"
         "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
         "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
@@ -6874,7 +6871,7 @@ def api_chart_analysis():
         "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
         "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
         "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-        "Keep total response under 350 words. Be direct."
+        "Keep total response under 380 words. Reference specific prices. No speculation."
     )
 
     try:
@@ -6908,32 +6905,30 @@ def api_chart_analysis():
                 f"You are reviewing THREE charts for {asset_type.upper()} — {symbol}.\n"
                 "IMAGE 1 is D1 (daily) — strategic TREND / BIAS filter.\n"
                 "IMAGE 2 is H4 (4-hour) — intermediate structure, momentum, EMA stack.\n"
-                "IMAGE 3 is H1 (1-hour) — entry timing: RSI zone, EMA21 reclaim, trigger candle.\n\n"
-                f"ALGORITHMIC CONTEXT:\n{algo_context}\n\n"
+                "IMAGE 3 is H1 (1-hour) — entry timing: EMA21 reclaim, trigger candle.\n\n"
+                f"ALGORITHMIC CONTEXT (use as ground truth for levels):\n{algo_context}\n\n"
                 "CHART ANNOTATIONS (same in all three images):\n"
-                "- Green/red candles · EMA 21 (cyan) · EMA 50 (purple) · EMA 200 (gold dashed)\n"
-                "- Entry (grey dashed) · SL (red solid) · TP (green solid) lines\n"
-                "- FVG imbalance zones visible as cyan dashed lines (bullish=green, bearish=red)\n"
-                "- Engine B zones may be visible: support (green), resistance (red), "
-                "BOS (amber), CHoCH (purple), OB (labelled)\n\n"
-                "ANSWER THESE 6 QUESTIONS:\n"
-                f"1. D1 BIAS: What is the clear trend on D1? Does it CONFIRM or CONTRADICT "
-                f"the algorithmic {direction_str} signal? One sentence.\n"
-                f"2. H4 STRUCTURE: Does H4 show valid intermediate {direction_str} alignment? "
-                "Momentum, swing structure, EMA positioning.\n"
-                f"3. H1 ENTRY: Is this a clean {direction_str} entry on H1 now? "
-                "Comment on pullback depth vs EMA21, candle quality, and whether to wait.\n"
-                "4. TF ALIGNMENT: Do D1, H4, and H1 ALL support the same direction? "
-                "Answer ALIGNED or CONFLICTED with one-line justification. "
-                "CONFLICTED means the trade should be skipped. "
-                "Also: are SL and TP well-placed vs H1/H4 structure? Name price levels.\n"
-                "5. PER-STYLE RATINGS (H1 primary for SCALP, H4 for INTRADAY, D1 for SWING):\n"
-                "SCALP RATING: STRONG / MODERATE / WEAK / AVOID\n"
-                "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID\n"
-                "SWING RATING: STRONG / MODERATE / WEAK / AVOID\n"
-                "6. STYLE LEVELS: For SCALP, INTRADAY, and SWING separately, say whether SL/TP should be KEPT or changed. "
-                "If changed, give exact numeric prices.\n"
-                "(use CONTRADICTS if that timeframe clearly opposes the algorithmic direction)\n\n"
+                "- Candles (green=bull, red=bear) · EMA21 (cyan) · EMA50 (purple) · EMA200 (gold dashed)\n"
+                "- Entry (grey dashed) · SL (red solid) · TP (green solid) horizontal lines\n"
+                "- Engine B zones if present: support (green), resistance (red), BOS (amber), CHoCH (purple), OB (labelled), FVG (cyan dashed)\n\n"
+                "ABSOLUTE RULES: ONLY describe what you can ACTUALLY SEE. Do not invent patterns. "
+                "Reference exact prices from the algorithmic context or chart axis.\n\n"
+                "ANSWER THESE 6 QUESTIONS (cite specific prices and visible candle patterns):\n"
+                f"1. D1 BIAS: What EMA ordering and trend structure is visible on D1? Does it CONFIRM or CONTRADICT "
+                f"the algorithmic {direction_str} signal? State the EMA order you see.\n"
+                f"2. H4 STRUCTURE: What EMA stack and swing structure is visible on H4? Does it confirm {direction_str}? "
+                "Name any visible BOS, order blocks, or FVGs between entry and TP.\n"
+                f"3. H1 ENTRY: What does H1 show for entry quality? Is price near EMA21? "
+                "Describe the last 3 candles — reversal, continuation, or indecision?\n"
+                "4. TF ALIGNMENT: Do all three TFs support the same direction based on what you SEE? "
+                "Answer ALIGNED or CONFLICTED. CONFLICTED = skip the trade. "
+                "Are SL and TP behind visible structure? Name price levels.\n"
+                "5. PER-STYLE RATINGS (cite visible evidence — H1 for SCALP, H4 for INTRADAY, D1 for SWING):\n"
+                "SCALP RATING: STRONG / MODERATE / WEAK / AVOID (cite H1 candle + volume)\n"
+                "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID (cite H4 EMA + structure)\n"
+                "SWING RATING: STRONG / MODERATE / WEAK / AVOID (cite D1 trend + EMA stack)\n"
+                "(Use CONTRADICTS only if that TF clearly opposes the algorithmic direction)\n"
+                "6. STYLE LEVELS: For each style state KEEP or give exact numeric prices if adjustment is warranted.\n\n"
                 "You MUST end with exactly these 7 lines:\n"
                 "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
                 "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
@@ -6942,7 +6937,7 @@ def api_chart_analysis():
                 "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
                 "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
                 "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-                "Keep total response under 480 words. Be direct."
+                "Keep total response under 480 words. Reference specific prices. No speculation."
             )
             content = [
                 {"type": "text", "text": "IMAGE 1 — D1 DAILY BIAS CHART:"},
@@ -6967,32 +6962,30 @@ def api_chart_analysis():
             # ── Dual-TF prompt: D1 for bias, H4 for entry ──────────────────
             dual_prompt = (
                 f"You are reviewing TWO charts for {asset_type.upper()} — {symbol}.\n"
-                "IMAGE 1 is the D1 (daily) chart — tells you the macro TREND and BIAS.\n"
-                "IMAGE 2 is the H4 (4-hour) chart — tells you the ENTRY TIMING and structure.\n\n"
-                f"ALGORITHMIC CONTEXT:\n{algo_context}\n\n"
+                "IMAGE 1 is the D1 (daily) chart — macro TREND and BIAS.\n"
+                "IMAGE 2 is the H4 (4-hour) chart — entry TIMING and structure.\n\n"
+                f"ALGORITHMIC CONTEXT (use as ground truth for levels):\n{algo_context}\n\n"
                 "CHART ANNOTATIONS (same in both images):\n"
-                "- FVG imbalance zones visible as cyan dashed lines (bullish=green, bearish=red)\n"
-                "- Green/red candles · EMA 21 (cyan) · EMA 50 (purple) · EMA 200 (gold dashed)\n"
-                "- Entry (grey dashed) · SL (red solid) · TP (green solid) lines\n"
-                "- Engine B zones may be visible: support (green), resistance (red), "
-                "BOS (amber), CHoCH (purple), OB (labelled)\n\n"
-                "ANSWER THESE 6 QUESTIONS:\n"
-                f"1. D1 BIAS: What is the clear trend on D1? Does it CONFIRM or CONTRADICT "
-                f"the algorithmic {direction_str} signal? One sentence.\n"
-                f"2. H4 ENTRY: Does H4 show a valid {direction_str} entry setup right now? "
-                "Describe structure, momentum, and EMA positioning.\n"
-                "3. TF ALIGNMENT: Do D1 and H4 BOTH support the same direction? "
-                "Answer ALIGNED or CONFLICTED with one-line justification. "
-                "This is the most important question — a CONFLICTED answer means the trade should be skipped.\n"
-                "4. SL/TP ASSESSMENT: Based on H4 structure, are SL and TP well-placed? "
-                "Would you adjust either? Be specific with price levels.\n"
-                "5. PER-STYLE RATINGS (weight both timeframes — D1 for swing, H4 for scalp/intraday):\n"
-                "SCALP RATING: STRONG / MODERATE / WEAK / AVOID\n"
-                "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID\n"
-                "SWING RATING: STRONG / MODERATE / WEAK / AVOID\n"
-                "6. STYLE LEVELS: For SCALP, INTRADAY, and SWING separately, say whether SL/TP should be KEPT or changed. "
-                "If changed, give exact numeric prices.\n"
-                "(use CONTRADICTS if the combined picture clearly opposes the algorithmic direction)\n\n"
+                "- Candles (green=bull, red=bear) · EMA21 (cyan) · EMA50 (purple) · EMA200 (gold dashed)\n"
+                "- Entry (grey dashed) · SL (red solid) · TP (green solid) horizontal lines\n"
+                "- Engine B zones if present: support (green), resistance (red), BOS (amber), CHoCH (purple), OB (labelled), FVG (cyan dashed)\n\n"
+                "ABSOLUTE RULES: ONLY describe what you can ACTUALLY SEE. Do not invent patterns. "
+                "Reference exact prices from the algorithmic context or chart axis.\n\n"
+                "ANSWER THESE 6 QUESTIONS (cite specific prices and visible candle patterns):\n"
+                f"1. D1 BIAS: What EMA ordering and trend structure is visible on D1? Does it CONFIRM or CONTRADICT "
+                f"the algorithmic {direction_str} signal? State the EMA order you see.\n"
+                f"2. H4 ENTRY: What is the visible EMA stack and structure on H4? Does it support a {direction_str} entry? "
+                "Name any visible BOS, order blocks, or FVGs between entry and TP.\n"
+                "3. TF ALIGNMENT: Do D1 and H4 BOTH support the same direction based on what you SEE? "
+                "Answer ALIGNED or CONFLICTED. CONFLICTED = skip the trade.\n"
+                "4. SL/TP CHECK: Read the SL (red) and TP (green) prices from the H4 chart. "
+                "Is there visible structure behind SL? Any resistance/support BETWEEN entry and TP? Name exact levels.\n"
+                "5. PER-STYLE RATINGS (cite visible evidence — D1 for SWING, H4 for SCALP/INTRADAY):\n"
+                "SCALP RATING: STRONG / MODERATE / WEAK / AVOID (cite H4 candle + volume)\n"
+                "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID (cite H4 EMA + momentum)\n"
+                "SWING RATING: STRONG / MODERATE / WEAK / AVOID (cite D1 trend + EMA stack)\n"
+                "(Use CONTRADICTS only if that TF clearly opposes the algorithmic direction)\n"
+                "6. STYLE LEVELS: For each style state KEEP or give exact numeric prices if adjustment is warranted.\n\n"
                 "You MUST end with exactly these 7 lines:\n"
                 "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
                 "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
@@ -7001,7 +6994,7 @@ def api_chart_analysis():
                 "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
                 "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
                 "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-                "Keep total response under 420 words. Be direct."
+                "Keep total response under 420 words. Reference specific prices. No speculation."
             )
             content = [
                 {"type": "text", "text": "IMAGE 1 — D1 DAILY BIAS CHART:"},
@@ -7030,7 +7023,7 @@ def api_chart_analysis():
 
         _max_tokens = 1100 if triple_mode else 800
         _vision_model = CONFIG.get("VISION_MODEL", "claude-opus-4-6")
-        _vision_temp = float(CONFIG.get("AI_VISION_TEMPERATURE", 0.6))
+        _vision_temp = float(CONFIG.get("AI_VISION_TEMPERATURE", 0.2))
         message = client.messages.create(
             model=_vision_model,
             max_tokens=_max_tokens,
@@ -8198,6 +8191,7 @@ def analyze_pair(
         "correlationAdjustments": res.get("correlationAdjustments", {}),
         "disabledFactors": res.get("disabledFactors", []),
         "factorDiagnostics": res.get("factorDiagnostics", {}),
+        "confidenceDetail": res.get("confidenceDetail", {}),
         "newsSentimentVote": res.get("newsSentimentVote"),
         "newsSentimentDelta": res.get("newsSentimentDelta"),
         "newsSentimentSummary": res.get("newsSentimentSummary"),

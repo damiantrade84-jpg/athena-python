@@ -251,7 +251,7 @@ NEWS_SENTIMENT_SCORE_IMPACT: 0.06               # delta = impact * maxScore * vo
 NEWS_SENTIMENT_ATTACH_SUMMARY: true             # attach short summary on each signal JSON
 AI_STRUCTURED_OUTPUTS: true
 AI_TEMPERATURE: 0.3
-AI_VISION_TEMPERATURE: 0.6
+AI_VISION_TEMPERATURE: 0.2
 
 # ── AI Learning ───────────────────────────────────────────
 LEARNING_ENABLED: true             # Enable AI self-learning (outcome extraction + prompt injection)
