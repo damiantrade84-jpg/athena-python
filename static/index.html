@@ -2051,6 +2051,7 @@ function _getExecProfiles(sig) {
     var tp1 = _coerceExecNum(row && (row.tp1 != null ? row.tp1 : row.tp));
     var tp2 = _coerceExecNum(row && (row.tp2 != null ? row.tp2 : (row && (row.tp1 != null ? row.tp1 : row.tp))));
     if (sl == null || tp1 == null) return;
+    var anchorEntry = _coerceExecNum(row && (row.entry_anchor != null ? row.entry_anchor : row.entry));
     profiles['ai_' + style] = {
       key: 'ai_' + style,
       label: 'AI ' + _styleLabel(style),
@@ -2059,6 +2060,7 @@ function _getExecProfiles(sig) {
       sl: sl,
       tp1: tp1,
       tp2: tp2 != null ? tp2 : tp1,
+      anchor_entry: anchorEntry,
       rr: row && row.rr != null ? row.rr : null,
       model: sig.chart_ai && sig.chart_ai.model,
       tf: sig.chart_ai && sig.chart_ai.tf
@@ -2067,11 +2069,26 @@ function _getExecProfiles(sig) {
   return profiles;
 }
 
-function _metricsForProfile(sig, profile) {
-  var entry = getSignalLivePrice(sig);
+function _resolveProfileLevels(sig, profile, entryOverride) {
+  var entry = entryOverride != null ? entryOverride : getSignalLivePrice(sig);
   var sl = _coerceExecNum(profile && profile.sl);
   var tp1 = _coerceExecNum(profile && profile.tp1);
   var tp2 = _coerceExecNum(profile && profile.tp2);
+  var anchor = _coerceExecNum(profile && profile.anchor_entry);
+  if (profile && profile.source === 'chart_ai' && entry != null && anchor != null) {
+    if (sl != null) sl = entry + (sl - anchor);
+    if (tp1 != null) tp1 = entry + (tp1 - anchor);
+    if (tp2 != null) tp2 = entry + (tp2 - anchor);
+  }
+  return { entry: entry, sl: sl, tp1: tp1, tp2: tp2 };
+}
+
+function _metricsForProfile(sig, profile) {
+  var levels = _resolveProfileLevels(sig, profile);
+  var entry = levels.entry;
+  var sl = levels.sl;
+  var tp1 = levels.tp1;
+  var tp2 = levels.tp2;
   var riskPct = (entry && sl) ? (Math.abs(entry - sl) / entry * 100) : null;
   var rr1 = (entry && sl && tp1 && Math.abs(entry - sl) > 0) ? (Math.abs(tp1 - entry) / Math.abs(entry - sl)) : null;
   var rr2 = (entry && sl && tp2 && Math.abs(entry - sl) > 0) ? (Math.abs(tp2 - entry) / Math.abs(entry - sl)) : null;
@@ -7728,7 +7745,7 @@ function _renderExecModalSummary(overlay) {
   if (profile && profile.source === 'chart_ai') {
     profileNote =
       '<div style="margin-top:8px;padding:8px;border:1px solid rgba(168,85,247,0.26);border-radius:8px;background:rgba(168,85,247,0.06);font-size:10px;color:#c4b5fd;">' +
-      'Using chart AI levels · ' + _styleLabel(profile.style) +
+      'Using chart AI levels · ' + _styleLabel(profile.style) + ' · rebased to live entry' +
       (profile.model ? ' · ' + profile.model : '') +
       (profile.tf ? ' · ' + profile.tf : '') +
       '</div>';
@@ -7809,6 +7826,7 @@ async function doExecute(signalRef, btn, forceMode) {
         sl: profile.sl,
         tp1: profile.tp1,
         tp2: profile.tp2,
+        anchor_entry: profile.anchor_entry,
         style: profile.style,
         source: profile.source,
         model: profile.model,

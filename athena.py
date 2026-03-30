@@ -6834,6 +6834,7 @@ def api_chart_analysis():
                 "sl": round(float(sl_val), 6),
                 "tp1": round(float(tp1_val), 6),
                 "tp2": round(float(tp1_val), 6),
+                "entry_anchor": round(float(entry_price), 6) if entry_price else None,
                 "rr": round((reward / risk), 2) if risk > 0 else None,
             }
 

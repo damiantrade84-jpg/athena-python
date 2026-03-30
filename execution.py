@@ -53,6 +53,11 @@ def _apply_level_override(sig: dict, override: dict) -> str | None:
     except (TypeError, ValueError):
         tp2 = tp1
 
+    try:
+        anchor_entry = float(override.get("anchor_entry") or 0)
+    except (TypeError, ValueError):
+        anchor_entry = 0.0
+
     direction = str(sig.get("direction") or "").upper()
     try:
         entry = float(sig.get("price") or sig.get("livePrice") or 0)
@@ -65,6 +70,18 @@ def _apply_level_override(sig: dict, override: dict) -> str | None:
         return "signal entry price missing"
     if sl <= 0 or tp1 <= 0:
         return "override prices must be positive"
+
+    sl_offset = None
+    tp1_offset = None
+    tp2_offset = None
+    if anchor_entry > 0:
+        sl_offset = sl - anchor_entry
+        tp1_offset = tp1 - anchor_entry
+        tp2_offset = tp2 - anchor_entry
+        sl = entry + sl_offset
+        tp1 = entry + tp1_offset
+        tp2 = entry + tp2_offset
+
     if direction == "LONG" and not (sl < entry < tp1):
         return "LONG override must satisfy SL < entry < TP"
     if direction == "SHORT" and not (sl > entry > tp1):
@@ -82,6 +99,16 @@ def _apply_level_override(sig: dict, override: dict) -> str | None:
         "model": override.get("model"),
         "tf": override.get("tf"),
     }
+    if anchor_entry > 0 and sl_offset is not None and tp1_offset is not None:
+        sig["level_override"].update(
+            {
+                "entry_rebase": True,
+                "anchor_entry": anchor_entry,
+                "sl_offset": sl_offset,
+                "tp1_offset": tp1_offset,
+                "tp2_offset": tp2_offset if tp2_offset is not None else tp1_offset,
+            }
+        )
     return None
 
 

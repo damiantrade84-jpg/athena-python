@@ -714,9 +714,30 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         sl = signal.get("sl", 0)
         tp1 = signal.get("tp1", 0)
         signal_price = float(signal.get("price", 0) or 0)
+        override_meta = signal.get("level_override")
+        if not isinstance(override_meta, dict):
+            override_meta = {}
+
+        # Chart-AI execution keeps the live fill as entry and shifts AI levels by the same offset.
+        if override_meta.get("entry_rebase") and sl and tp1:
+            try:
+                anchor_entry = float(override_meta.get("anchor_entry") or 0)
+                sl_offset = float(override_meta.get("sl_offset"))
+                tp_offset = float(override_meta.get("tp1_offset"))
+            except (TypeError, ValueError):
+                anchor_entry = 0.0
+                sl_offset = None
+                tp_offset = None
+            if anchor_entry > 0 and sl_offset is not None and tp_offset is not None:
+                sl = round(price + sl_offset, 8)
+                tp1 = round(price + tp_offset, 8)
+                log.info(
+                    f"[BYBIT] {ccxt_symbol}: rebased AI levels from anchor {anchor_entry} to live entry {price} "
+                    f"-> SL={sl} TP={tp1}"
+                )
 
         # Rebase levels when the scanned price is materially stale versus the live fill price.
-        if signal_price > 0 and sl and tp1:
+        elif signal_price > 0 and sl and tp1:
             drift = abs(price - signal_price) / signal_price
             if drift > 0.01:
                 sl_offset = float(sl) - signal_price
