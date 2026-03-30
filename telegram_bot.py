@@ -563,6 +563,16 @@ def _build_and_run(token: str, chat_id: str):
                     f"{emoji} *{pair_name}*: `{d.get('entryScore', 0):.2f}` → `{d.get('currentScore', 0):.2f}` "
                     f"(Δ{decay_val:.2f}){flip}"
                 )
+                ai_verdict = d.get("aiVerdict")
+                if ai_verdict:
+                    v_emoji = "🚨" if ai_verdict == "EXIT" else "👁" if ai_verdict == "WATCH" else "✋"
+                    urgency = d.get("aiUrgency", "")
+                    reasoning = d.get("aiReasoning", "")
+                    lines.append(
+                        f"   {v_emoji} AI: *{ai_verdict}*"
+                        + (f" `[{urgency}]`" if urgency else "")
+                        + (f" — _{reasoning}_" if reasoning else "")
+                    )
             await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
         except Exception:
             await update.message.reply_text("⚠️ Athena offline — check server")

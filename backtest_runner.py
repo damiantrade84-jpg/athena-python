@@ -292,6 +292,14 @@ def backtest_pair(pair, style="auto"):
         elif pair["source"] == "mt5":
             # D1 from terminal; H4/H1 match calibrated EODHD intraday window when available
             d1_raw = _rt().fetch_candles(pair, "D1", 600)
+            _yf_sym = _rt().yfinance_symbol_for_pair(pair)
+            if (not d1_raw or len(d1_raw or []) < 230) and _yf_sym:
+                log.info(
+                    f"[BT] {pair['display']}: MT5 D1 unavailable/thin ({len(d1_raw or [])} bars) - trying yfinance D1"
+                )
+                _yf_d1 = _rt().fetch_yfinance(_yf_sym, "D1", 600)
+                if _yf_d1 and len(_yf_d1) > len(d1_raw or []):
+                    d1_raw = _yf_d1
             h4_raw, h1_raw = _rt().fetch_eodhd_intraday_bt(pair, days=730)
             if not h4_raw or not h1_raw:
                 h4_raw = h4_raw or _rt().fetch_candles(pair, "H4", 5000)
@@ -2537,14 +2545,74 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         candles_h4 = _rt().fetch_binance_paginated(sym, "4h", 5000)
         candles_h1 = _rt().fetch_binance_paginated(sym, "1h", 2000)
     else:
-        candles_d1 = _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 600)) or _rt().fetch_candles(
-            pair, "D1", CONFIG.get("D1_CANDLES", 600)
-        )
-        candles_h4, candles_h1 = _rt().fetch_eodhd_intraday_bt(pair, days=730)
-        if not candles_h4 or not candles_h1:
-            log.warning(f"[ENGINE B BT] {pair['display']} EODHD intraday failed, trying live cache")
-            candles_h4 = _rt().fetch_candles(pair, "H4", CONFIG.get("H4_CANDLES", 1000))
-            candles_h1 = _rt().fetch_candles(pair, "H1", CONFIG.get("H1_CANDLES", 2000))
+        if pair.get("source") == "mt5":
+            candles_d1 = _rt().fetch_candles(pair, "D1", 600)
+            _yf_sym = _rt().yfinance_symbol_for_pair(pair)
+            if (not candles_d1 or len(candles_d1 or []) < 230) and _yf_sym:
+                log.info(
+                    f"[ENGINE B BT] {pair['display']}: MT5 D1 unavailable/thin ({len(candles_d1 or [])} bars) - trying yfinance D1"
+                )
+                _yf_d1 = _rt().fetch_yfinance(_yf_sym, "D1", 600)
+                if _yf_d1 and len(_yf_d1) > len(candles_d1 or []):
+                    candles_d1 = _yf_d1
+            candles_h4, candles_h1 = _rt().fetch_eodhd_intraday_bt(pair, days=730)
+            if not candles_h4 or not candles_h1:
+                log.warning(f"[ENGINE B BT] {pair['display']} EODHD intraday failed, trying live cache")
+                candles_h4 = candles_h4 or _rt().fetch_candles(pair, "H4", 5000)
+                candles_h1 = candles_h1 or _rt().fetch_candles(pair, "H1", 5000)
+
+            _h4_thin = not candles_h4 or len(candles_h4 or []) < 500
+            _h1_thin = not candles_h1 or len(candles_h1 or []) < 500
+            if (_h4_thin or _h1_thin) and pair.get("type") == "commodity":
+                try:
+                    from twelvedata_feed import fetch_twelvedata_bt
+
+                    _td_h4, _td_h1 = fetch_twelvedata_bt(pair["display"], days=730)
+                    if _td_h4 and len(_td_h4) > len(candles_h4 or []):
+                        candles_h4 = _td_h4
+                        log.info(
+                            f"[ENGINE B BT] {pair['display']}: Twelvedata H4 {len(candles_h4)} bars"
+                        )
+                    elif not candles_h4:
+                        candles_h4 = _td_h4
+                    if _td_h1 and len(_td_h1) > len(candles_h1 or []):
+                        candles_h1 = _td_h1
+                        log.info(
+                            f"[ENGINE B BT] {pair['display']}: Twelvedata H1 {len(candles_h1)} bars"
+                        )
+                    elif not candles_h1:
+                        candles_h1 = _td_h1
+                except Exception as _td_err:
+                    log.debug(
+                        f"[ENGINE B BT] Twelvedata failed for {pair['display']}: {_td_err}"
+                    )
+
+                _h4_thin = not candles_h4 or len(candles_h4 or []) < 500
+                _h1_thin = not candles_h1 or len(candles_h1 or []) < 500
+                if _h4_thin or _h1_thin:
+                    _yf_sym = _rt().yfinance_symbol_for_pair(pair)
+                    if _yf_sym:
+                        log.info(
+                            f"[ENGINE B BT] {pair['display']}: H4={len(candles_h4 or [])} H1={len(candles_h1 or [])} bars - trying yfinance for better coverage"
+                        )
+                        _yf_h4, _yf_h1 = _rt().fetch_bt_yfinance(_yf_sym)
+                        if _yf_h4 and len(_yf_h4) > len(candles_h4 or []):
+                            candles_h4 = _yf_h4
+                        elif not candles_h4:
+                            candles_h4 = _yf_h4
+                        if _yf_h1 and len(_yf_h1) > len(candles_h1 or []):
+                            candles_h1 = _yf_h1
+                        elif not candles_h1:
+                            candles_h1 = _yf_h1
+        else:
+            candles_d1 = _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 600)) or _rt().fetch_candles(
+                pair, "D1", CONFIG.get("D1_CANDLES", 600)
+            )
+            candles_h4, candles_h1 = _rt().fetch_eodhd_intraday_bt(pair, days=730)
+            if not candles_h4 or not candles_h1:
+                log.warning(f"[ENGINE B BT] {pair['display']} EODHD intraday failed, trying live cache")
+                candles_h4 = _rt().fetch_candles(pair, "H4", CONFIG.get("H4_CANDLES", 1000))
+                candles_h1 = _rt().fetch_candles(pair, "H1", CONFIG.get("H1_CANDLES", 2000))
 
     if not candles_d1 or not candles_h4 or not candles_h1:
         log.warning(

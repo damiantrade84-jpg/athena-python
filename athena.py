@@ -8845,6 +8845,124 @@ def _start_outcome_monitor() -> None:
 # ── Score Decay Monitor — recalculate confluence for open positions ────────
 
 _score_decay_results: dict = {}  # pair -> {"score": float, "entryScore": float, "ts": str}
+_decay_ai_cache: dict = {}  # pair -> {"decay_at_call": float, "ts": str, "result": dict}
+
+
+def _get_decay_ai_verdict(
+    pair_name: str,
+    direction: str,
+    entry_score: float,
+    cur_score: float,
+    decay: float,
+    direction_flip: bool,
+    signal_context: dict,
+) -> dict:
+    """Ask Grok to assess whether a decaying position should be EXIT / HOLD / WATCH.
+
+    Returns {"verdict": "EXIT"|"HOLD"|"WATCH", "urgency": "HIGH"|"MEDIUM"|"LOW", "reasoning": str}
+    Skips gracefully if XAI_API_KEY is not configured.
+    Results are cached 30 min per pair unless decay worsens by >= 0.5.
+    """
+    api_key = os.environ.get("XAI_API_KEY", "")
+    if not api_key:
+        try:
+            api_key = CONFIG.get("XAI_API_KEY", "")
+            if api_key == "YOUR_XAI_API_KEY":
+                api_key = ""
+        except Exception:
+            pass
+    if not api_key:
+        return {}
+
+    # Cache check — skip re-call if recent and decay hasn't worsened significantly
+    cached = _decay_ai_cache.get(pair_name)
+    if cached:
+        try:
+            age_secs = (
+                datetime.now(timezone.utc)
+                - datetime.fromisoformat(cached["ts"])
+            ).total_seconds()
+            if age_secs < 1800 and (decay - cached["decay_at_call"]) < 0.5:
+                return cached["result"]
+        except Exception:
+            pass
+
+    trend = signal_context.get("trendState", "UNKNOWN")
+    vol_ratio = signal_context.get("volRatio", "?")
+    rr = signal_context.get("rr1", "?")
+    flip_note = (
+        " WARNING: Current signal direction has FLIPPED vs entry direction — original thesis may be invalidated."
+        if direction_flip
+        else ""
+    )
+
+    prompt = (
+        f"You are a risk management advisor reviewing an OPEN TRADE showing score decay.\n\n"
+        f"Trade: {pair_name} | Entry Direction: {direction} | Market Regime: {trend}\n"
+        f"Entry Score: {entry_score:.2f} → Current Score: {cur_score:.2f} | Decay: Δ{decay:.2f}\n"
+        f"Vol Ratio: {vol_ratio} | R:R at entry: 1:{rr}\n"
+        f"{flip_note}\n\n"
+        f"Assess whether the trader should EXIT now, continue HOLDING, or place on WATCH (monitor closely).\n"
+        f"Consider: magnitude of score drop, direction flip risk, regime context, and whether the original trade thesis remains valid.\n\n"
+        f'Return ONLY valid JSON: {{"verdict":"<EXIT|HOLD|WATCH>","urgency":"<HIGH|MEDIUM|LOW>","reasoning":"<1-2 sentences max>"}}'
+    )
+
+    try:
+        import openai
+        from ai_utils import parse_json_object
+
+        client = openai.OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
+        _model = CONFIG.get("DEBATE_MODEL") or CONFIG.get("XAI_MODEL", "grok-3-mini")
+        _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
+
+        result = None
+        try:
+            completion = client.chat.completions.create(
+                model=_model,
+                max_tokens=220,
+                temperature=_temp,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a concise trading risk manager. "
+                            "Give direct EXIT/HOLD/WATCH verdicts based on signal decay evidence. "
+                            "Return strict JSON only."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+            )
+            raw = completion.choices[0].message.content or ""
+            result = parse_json_object(raw)
+        except Exception as _ce:
+            log.debug(f"[DECAY-AI] {pair_name} chat.completions failed: {_ce}")
+
+        if result is None:
+            return {}
+
+        verdict = str(result.get("verdict", "WATCH")).upper()
+        if verdict not in ("EXIT", "HOLD", "WATCH"):
+            verdict = "WATCH"
+        result["verdict"] = verdict
+        result["urgency"] = str(result.get("urgency", "MEDIUM")).upper()
+
+        _decay_ai_cache[pair_name] = {
+            "decay_at_call": decay,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "result": result,
+        }
+
+        log.info(
+            f"[DECAY-AI] {pair_name}: verdict={verdict} urgency={result.get('urgency')} | "
+            f"{result.get('reasoning', '')[:100]}"
+        )
+        return result
+
+    except Exception as e:
+        log.debug(f"[DECAY-AI] {pair_name} failed: {e}")
+        return {}
 
 
 def _check_score_decay() -> None:
@@ -8889,12 +9007,18 @@ def _check_score_decay() -> None:
 
                 decay = entry_score - cur_score
 
+                direction_flip = bool(
+                    row["direction"] and result.get("direction")
+                    and row["direction"] != result.get("direction")
+                )
+
                 _score_decay_results[pair_name] = {
                     "currentScore": cur_score,
                     "entryScore": entry_score,
                     "decay": round(decay, 2),
                     "direction": row["direction"],
                     "currentDirection": result.get("direction"),
+                    "directionFlip": direction_flip,
                     "ts": datetime.now(timezone.utc).isoformat(),
                 }
 
@@ -8906,6 +9030,21 @@ def _check_score_decay() -> None:
                     log.info(
                         f"[DECAY] {pair_name}: score softened {entry_score:.1f} → {cur_score:.1f} (Δ{decay:.1f})"
                     )
+
+                # AI assessment — only for meaningful decay, runs in background to avoid blocking
+                if decay >= 1.5:
+                    def _run_ai_verdict(_pn=pair_name, _dir=row["direction"] or "",
+                                        _es=entry_score, _cs=cur_score, _d=decay,
+                                        _flip=direction_flip, _ctx=result):
+                        ai_v = _get_decay_ai_verdict(_pn, _dir, _es, _cs, _d, _flip, _ctx)
+                        if ai_v:
+                            _score_decay_results.get(_pn, {}).update({
+                                "aiVerdict": ai_v.get("verdict"),
+                                "aiUrgency": ai_v.get("urgency"),
+                                "aiReasoning": ai_v.get("reasoning"),
+                                "aiTs": datetime.now(timezone.utc).isoformat(),
+                            })
+                    threading.Thread(target=_run_ai_verdict, daemon=True).start()
 
             except Exception as e:
                 log.debug(f"[DECAY] {pair_name} re-eval failed: {e}")

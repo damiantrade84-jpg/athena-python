@@ -5267,11 +5267,20 @@ async function checkScoreDecay() {
 
     for (var pair in data) {
       var d = data[pair];
-      // Only fire toast if decay >= 3 AND worsening beyond what we last alerted
       var lastAlerted = _lastDecayAlerts[pair] || 0;
-      if (d.decay >= 3 && d.decay > lastAlerted) {
+      // Fire toast if: decay >= 3  OR  AI says EXIT and decay >= 1.5 — only when worsening
+      var shouldAlert = (d.decay >= 3 || (d.aiVerdict === 'EXIT' && d.decay >= 1.5)) && d.decay > lastAlerted;
+      if (shouldAlert) {
         _lastDecayAlerts[pair] = d.decay;
-        showToast('⚠ DECAY ' + pair + ': score ' + d.entryScore + ' → ' + d.currentScore + ' (Δ' + d.decay + ') — consider exit', true);
+        var aiPart = '';
+        if (d.aiVerdict) {
+          var vEmoji = d.aiVerdict === 'EXIT' ? '🚨 EXIT' : d.aiVerdict === 'WATCH' ? '👁 WATCH' : '✋ HOLD';
+          var urgency = d.aiUrgency ? ' [' + d.aiUrgency + ']' : '';
+          var reason = d.aiReasoning ? ' — ' + d.aiReasoning.substring(0, 90) : '';
+          aiPart = ' | AI: ' + vEmoji + urgency + reason;
+        }
+        var prefix = d.aiVerdict === 'EXIT' ? '🚨 DECAY EXIT — ' : '⚠ DECAY — ';
+        showToast(prefix + pair + ': score ' + d.entryScore + ' → ' + d.currentScore + ' (Δ' + d.decay + ')' + aiPart, true);
       }
     }
   } catch(e) {}
