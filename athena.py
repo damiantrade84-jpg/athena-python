@@ -6670,6 +6670,36 @@ def api_chart_analysis():
                 f"CONFIDENCE: score={conf.get('score')}, "
                 f"passed={conf.get('passed')}, rr={conf.get('rr')}"
             )
+        if eb.get("prev_session_profile_valid"):
+            context_parts.append(
+                f"PREVIOUS SESSION PROFILE: valid=True, "
+                f"source_tf={eb.get('prev_session_profile_source_tf', '?')}, "
+                f"poc={eb.get('prev_session_poc')}, "
+                f"vah={eb.get('prev_session_vah')}, "
+                f"val={eb.get('prev_session_val')}"
+            )
+            context_parts.append(
+                f"PROFILE STATE: in_play={eb.get('profile_in_play')}, "
+                f"level_in_play={eb.get('profile_level_in_play')}, "
+                f"inside_value={eb.get('inside_prev_value_area')}, "
+                f"above_value={eb.get('above_prev_value_area')}, "
+                f"below_value={eb.get('below_prev_value_area')}"
+            )
+            context_parts.append(
+                f"PROFILE REACTION: "
+                f"rejected_poc={eb.get('rejected_from_poc')}, "
+                f"rejected_vah={eb.get('rejected_from_vah')}, "
+                f"rejected_val={eb.get('rejected_from_val')}, "
+                f"accepted_poc={eb.get('accepted_at_poc')}, "
+                f"returned_value={eb.get('returned_to_value')}, "
+                f"failed_return_to_value={eb.get('failed_return_to_value')}"
+            )
+            context_parts.append(
+                f"PROFILE BIAS: {eb.get('profile_bias')} | "
+                f"PROFILE STRENGTH: {eb.get('profile_reaction_strength')}"
+            )
+            if eb.get("profile_notes"):
+                context_parts.append(f"PROFILE NOTES: {eb.get('profile_notes')}")
 
     def _chart_level_sets(sig_payload: dict) -> dict:
         def _to_num(value):
@@ -6734,11 +6764,15 @@ def api_chart_analysis():
         "EMA200 (gold dashed), Entry (grey dashed horizontal), SL (red solid horizontal), "
         "TP (green solid horizontal). Volume bars at bottom.\n"
         "5. Engine B annotations if present: support zones (green), resistance zones (red), "
-        "BOS markers (amber), CHoCH markers (purple), Order Blocks (labelled boxes), FVG zones (cyan dashed).\n"
+        "BOS markers (amber), CHoCH markers (purple), Order Blocks (labelled boxes), FVG zones (cyan dashed), "
+        "previous-session POC (amber), VAH (violet dashed), VAL (violet dashed).\n"
         "6. Check: Is price above or below each EMA? What is the EMA ordering (stacked bull/bear or mixed)? "
         "Is the last candle a reversal, continuation, or indecision pattern?\n"
         "7. Cross-reference what you see with the algorithmic context. If they disagree, say so explicitly.\n"
-        "8. Be direct — no hedging, no disclaimers. You are advising a professional."
+        "8. If PREVIOUS SESSION PROFILE context is provided: note whether price is above, inside, or below the prior "
+        "value area, identify whether price is reacting at POC, VAH, or VAL, and state whether that reaction confirms "
+        "or contradicts the trade direction.\n"
+        "9. Be direct — no hedging, no disclaimers. You are advising a professional."
     )
 
     direction_str = sig.get("direction", "UNKNOWN") if sig else "UNKNOWN"
@@ -6856,6 +6890,7 @@ def api_chart_analysis():
         "- Volume: Is the most recent bar above or below average? Rising or falling?\n"
         "- SL line (red): Is there visible structure (swing low/high) near the SL? Is it protected or exposed?\n"
         "- TP line (green): Is there visible resistance/support near TP? Any order blocks or FVGs blocking the path?\n"
+        "- Previous-session profile if visible: Is price above, inside, or below the VAH/VAL band? Is it reacting at POC?\n"
         "- If Engine B zones are visible: Is price entering or leaving a zone? Any unfilled FVGs between entry and TP?\n\n"
         "ANSWER EXACTLY THESE 5 QUESTIONS (reference specific prices and visible candle patterns):\n"
         f"1. PATTERN: What specific candle/chart pattern is visible in the last 10-20 bars? "
@@ -6924,7 +6959,7 @@ def api_chart_analysis():
                 "CHART ANNOTATIONS (same in all three images):\n"
                 "- Candles (green=bull, red=bear) · EMA21 (cyan) · EMA50 (purple) · EMA200 (gold dashed)\n"
                 "- Entry (grey dashed) · SL (red solid) · TP (green solid) horizontal lines\n"
-                "- Engine B zones if present: support (green), resistance (red), BOS (amber), CHoCH (purple), OB (labelled), FVG (cyan dashed)\n\n"
+                "- Engine B zones if present: support (green), resistance (red), BOS (amber), CHoCH (purple), OB (labelled), FVG (cyan dashed), POC (amber), VAH/VAL (violet dashed)\n\n"
                 "ABSOLUTE RULES: ONLY describe what you can ACTUALLY SEE. Do not invent patterns. "
                 "Reference exact prices from the algorithmic context or chart axis.\n\n"
                 "ANSWER THESE 6 QUESTIONS (cite specific prices and visible candle patterns):\n"
@@ -6936,7 +6971,7 @@ def api_chart_analysis():
                 "Describe the last 3 candles — reversal, continuation, or indecision?\n"
                 "4. TF ALIGNMENT: Do all three TFs support the same direction based on what you SEE? "
                 "Answer ALIGNED or CONFLICTED. CONFLICTED = skip the trade. "
-                "Are SL and TP behind visible structure? Name price levels.\n"
+                "Are SL and TP behind visible structure? If POC/VAH/VAL are visible, say whether price is accepting or rejecting prior value. Name price levels.\n"
                 "5. PER-STYLE RATINGS (cite visible evidence — H1 for SCALP, H4 for INTRADAY, D1 for SWING):\n"
                 "SCALP RATING: STRONG / MODERATE / WEAK / AVOID (cite H1 candle + volume)\n"
                 "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID (cite H4 EMA + structure)\n"
@@ -6982,7 +7017,7 @@ def api_chart_analysis():
                 "CHART ANNOTATIONS (same in both images):\n"
                 "- Candles (green=bull, red=bear) · EMA21 (cyan) · EMA50 (purple) · EMA200 (gold dashed)\n"
                 "- Entry (grey dashed) · SL (red solid) · TP (green solid) horizontal lines\n"
-                "- Engine B zones if present: support (green), resistance (red), BOS (amber), CHoCH (purple), OB (labelled), FVG (cyan dashed)\n\n"
+                "- Engine B zones if present: support (green), resistance (red), BOS (amber), CHoCH (purple), OB (labelled), FVG (cyan dashed), POC (amber), VAH/VAL (violet dashed)\n\n"
                 "ABSOLUTE RULES: ONLY describe what you can ACTUALLY SEE. Do not invent patterns. "
                 "Reference exact prices from the algorithmic context or chart axis.\n\n"
                 "ANSWER THESE 6 QUESTIONS (cite specific prices and visible candle patterns):\n"
@@ -6993,7 +7028,7 @@ def api_chart_analysis():
                 "3. TF ALIGNMENT: Do D1 and H4 BOTH support the same direction based on what you SEE? "
                 "Answer ALIGNED or CONFLICTED. CONFLICTED = skip the trade.\n"
                 "4. SL/TP CHECK: Read the SL (red) and TP (green) prices from the H4 chart. "
-                "Is there visible structure behind SL? Any resistance/support BETWEEN entry and TP? Name exact levels.\n"
+                "Is there visible structure behind SL? Any resistance/support BETWEEN entry and TP? If POC/VAH/VAL are visible, say whether price is accepting or rejecting prior value. Name exact levels.\n"
                 "5. PER-STYLE RATINGS (cite visible evidence — D1 for SWING, H4 for SCALP/INTRADAY):\n"
                 "SCALP RATING: STRONG / MODERATE / WEAK / AVOID (cite H4 candle + volume)\n"
                 "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID (cite H4 EMA + momentum)\n"

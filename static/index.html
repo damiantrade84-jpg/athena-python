@@ -6611,6 +6611,17 @@ async function _acmFetchAndRender(symbol, tf) {
       if (engineB.breaker_block && engineB.breaker_block.level) {
         _acmCandleSeries.createPriceLine({ price: parseFloat(engineB.breaker_block.level), color: '#06b6d4', lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: 'BREAKER' });
       }
+      if (engineB.prev_session_profile_valid) {
+        if (engineB.prev_session_poc) {
+          _acmCandleSeries.createPriceLine({ price: parseFloat(engineB.prev_session_poc), color: '#f59e0b', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: 'POC' });
+        }
+        if (engineB.prev_session_vah) {
+          _acmCandleSeries.createPriceLine({ price: parseFloat(engineB.prev_session_vah), color: '#a78bfa', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'VAH' });
+        }
+        if (engineB.prev_session_val) {
+          _acmCandleSeries.createPriceLine({ price: parseFloat(engineB.prev_session_val), color: '#a78bfa', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'VAL' });
+        }
+      }
     }
 
     document.getElementById('acm-legend').innerHTML = _acmLegendHtml(!!engineB);
@@ -8667,6 +8678,18 @@ async function _acmRender(symbol, tf) {
           if (v > _hi) _hi = v;
         });
       }
+      var _ebSid = (_acm.symbol || '').replace(/[\/=^.]/g, '_');
+      var _eb = window['_engineB_' + _ebSid];
+      if (_eb && _eb.prev_session_profile_valid) {
+        [
+          parseFloat(_eb.prev_session_poc || 0),
+          parseFloat(_eb.prev_session_vah || 0),
+          parseFloat(_eb.prev_session_val || 0),
+        ].filter(function(v) { return v > 0 && Math.abs(v - _mid) <= _range3; }).forEach(function(v) {
+          if (v < _lo) _lo = v;
+          if (v > _hi) _hi = v;
+        });
+      }
       _acm.chart.priceScale('right').applyOptions({
         autoScale: false,
         minValue: _lo - _pad,
@@ -8785,6 +8808,20 @@ function _acmDrawZones() {
     price: parseFloat(brk.level), color: '#06b6d4', lineWidth: 1,
     lineStyle: 3, axisLabelVisible: true, title: 'BREAKER',
   }));
+  if (eb.prev_session_profile_valid) {
+    if (eb.prev_session_poc) _acm.zoneLines.push(_acm.candle.createPriceLine({
+      price: parseFloat(eb.prev_session_poc), color: '#f59e0b', lineWidth: 2,
+      lineStyle: 0, axisLabelVisible: true, title: 'POC',
+    }));
+    if (eb.prev_session_vah) _acm.zoneLines.push(_acm.candle.createPriceLine({
+      price: parseFloat(eb.prev_session_vah), color: '#a78bfa', lineWidth: 1,
+      lineStyle: 2, axisLabelVisible: true, title: 'VAH',
+    }));
+    if (eb.prev_session_val) _acm.zoneLines.push(_acm.candle.createPriceLine({
+      price: parseFloat(eb.prev_session_val), color: '#a78bfa', lineWidth: 1,
+      lineStyle: 2, axisLabelVisible: true, title: 'VAL',
+    }));
+  }
   // Fair Value Gaps
   (eb.active_fvgs || []).forEach(function(fvg) {
     if (fvg.mitigated) return;

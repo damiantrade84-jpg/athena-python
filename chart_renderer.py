@@ -23,6 +23,9 @@ def render_chart_image(
     title: str = "H4 Chart",
     width: int = 12,
     height: int = 6,
+    poc: Optional[float] = None,
+    vah: Optional[float] = None,
+    val: Optional[float] = None,
 ) -> str:
     """Render a candle chart as base64 PNG string.
     
@@ -35,6 +38,7 @@ def render_chart_image(
     Returns:
         base64-encoded PNG string
     """
+    import matplotlib.pyplot as plt
     import mplfinance as mpf
     import pandas as pd
     
@@ -102,6 +106,24 @@ def render_chart_image(
         hlines["colors"].append("#26a69a")
         hlines["linestyle"].append("-")
         hlines["linewidths"].append(1.2)
+
+    if poc and poc > 0:
+        hlines["hlines"].append(poc)
+        hlines["colors"].append("#f59e0b")
+        hlines["linestyle"].append("-")
+        hlines["linewidths"].append(1.5)
+
+    if vah and vah > 0:
+        hlines["hlines"].append(vah)
+        hlines["colors"].append("#a78bfa")
+        hlines["linestyle"].append("--")
+        hlines["linewidths"].append(1.0)
+
+    if val and val > 0:
+        hlines["hlines"].append(val)
+        hlines["colors"].append("#a78bfa")
+        hlines["linestyle"].append("--")
+        hlines["linewidths"].append(1.0)
     
     # Calculate EMAs
     addplots = []
@@ -147,7 +169,7 @@ def render_chart_image(
         "title": title,
         "volume": True,
         "figsize": (width, height),
-        "savefig": dict(fname=buf, dpi=150, bbox_inches="tight", facecolor="#0c1017"),
+        "returnfig": True,
     }
     
     if addplots:
@@ -156,8 +178,46 @@ def render_chart_image(
     if hlines["hlines"]:
         kwargs["hlines"] = hlines
     
-    mpf.plot(df, **kwargs)
-    
+    fig, axes = mpf.plot(df, **kwargs)
+    try:
+        if axes and (poc or vah or val):
+            ax = axes[0]
+            x_pos = df.index[-1]
+            if poc and poc > 0:
+                ax.annotate(
+                    "POC",
+                    xy=(x_pos, poc),
+                    xytext=(-6, 5),
+                    textcoords="offset points",
+                    ha="right",
+                    fontsize=6,
+                    color="#f59e0b",
+                )
+            if vah and vah > 0:
+                ax.annotate(
+                    "VAH",
+                    xy=(x_pos, vah),
+                    xytext=(-6, 5),
+                    textcoords="offset points",
+                    ha="right",
+                    fontsize=6,
+                    color="#a78bfa",
+                )
+            if val and val > 0:
+                ax.annotate(
+                    "VAL",
+                    xy=(x_pos, val),
+                    xytext=(-6, -8),
+                    textcoords="offset points",
+                    ha="right",
+                    fontsize=6,
+                    color="#a78bfa",
+                )
+    except Exception:
+        pass
+    fig.savefig(buf, dpi=150, bbox_inches="tight", facecolor="#0c1017")
+    plt.close(fig)
+
     buf.seek(0)
     img_base64 = base64.b64encode(buf.read()).decode("utf-8")
     buf.close()

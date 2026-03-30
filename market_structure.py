@@ -1058,6 +1058,95 @@ class NakedEngine:
             bos_confirmed,
         )
 
+        # Previous-session fixed-range profile from the latest completed UTC session.
+        _profile_result = {
+            "prev_session_profile_valid": False,
+            "prev_session_profile_source_tf": None,
+            "prev_session_poc": None,
+            "prev_session_vah": None,
+            "prev_session_val": None,
+            "prev_session_profile_high": None,
+            "prev_session_profile_low": None,
+            "prev_session_total_volume": None,
+            "prev_session_start": None,
+            "prev_session_end": None,
+            "profile_in_play": False,
+            "profile_level_in_play": None,
+            "inside_prev_value_area": False,
+            "above_prev_value_area": False,
+            "below_prev_value_area": False,
+            "touched_poc": False,
+            "touched_vah": False,
+            "touched_val": False,
+            "rejected_from_poc": False,
+            "rejected_from_vah": False,
+            "rejected_from_val": False,
+            "accepted_at_poc": False,
+            "accepted_inside_value": False,
+            "returned_to_value": False,
+            "failed_return_to_value": False,
+            "profile_bias": "neutral",
+            "profile_reaction_strength": 0.0,
+            "profile_notes": "",
+        }
+        try:
+            from volume_profile import (
+                classify_profile_interaction,
+                compute_fixed_range_volume_profile,
+                split_completed_sessions,
+            )
+
+            _profile_candles = h1_candles if len(h1_candles or []) >= 24 else h4_candles
+            _profile_source_tf = "H1" if len(h1_candles or []) >= 24 else "H4"
+            _sessions = split_completed_sessions(_profile_candles or [], asset_type)
+            _prev_session = _sessions.get("prev_session_candles", [])
+            if _prev_session:
+                _profile = compute_fixed_range_volume_profile(_prev_session)
+                if _profile.get("profile_valid"):
+                    _interaction = classify_profile_interaction(
+                        current_price=current_price,
+                        recent_candles=(trigger_candles or struct_candles or [])[-10:],
+                        direction=direction,
+                        poc=_profile["poc"],
+                        vah=_profile["vah"],
+                        val=_profile["val"],
+                        atr=atr,
+                    )
+                    _profile_result.update({
+                        "prev_session_profile_valid": True,
+                        "prev_session_profile_source_tf": _profile_source_tf,
+                        "prev_session_poc": _profile["poc"],
+                        "prev_session_vah": _profile["vah"],
+                        "prev_session_val": _profile["val"],
+                        "prev_session_profile_high": _profile["session_high"],
+                        "prev_session_profile_low": _profile["session_low"],
+                        "prev_session_total_volume": _profile["total_volume"],
+                        "prev_session_start": _profile["session_start"],
+                        "prev_session_end": _profile["session_end"],
+                        **_interaction,
+                    })
+                    log.debug(
+                        "[PROFILE] %s %s profile computed (%s POC=%s VAH=%s VAL=%s)",
+                        registry_symbol or asset_type or "unknown",
+                        direction,
+                        _profile_source_tf,
+                        _profile["poc"],
+                        _profile["vah"],
+                        _profile["val"],
+                    )
+                else:
+                    log.debug(
+                        "[PROFILE] %s profile skipped: unusable prior-session volume",
+                        registry_symbol or asset_type or "unknown",
+                    )
+            else:
+                log.debug(
+                    "[PROFILE] %s profile skipped: no completed prior session",
+                    registry_symbol or asset_type or "unknown",
+                )
+        except Exception as _pe:
+            log.debug(f"[PROFILE] {registry_symbol or asset_type or 'unknown'} profile skipped: {_pe}")
+
         return {
             "structural_verdict": "CLEAR",
             "nearest_resistance_zone": nearest_res,
@@ -1097,6 +1186,7 @@ class NakedEngine:
             "inside_break_candle": trigger_ctx["inside_break"],
             "strong_close": trigger_ctx["strong_close"],
             "structure_tf": structure_tf,
+            **_profile_result,
         }
 
     def calculate_confidence(
@@ -1182,6 +1272,34 @@ class NakedEngine:
 
         total_score = float(sum(1 for passed in confirmations if passed))
         max_possible = float(len(confirmations)) if confirmations else 1.0
+        _profile_points = 0.0
+        _profile_ok = False
+        _profile_alignment = "none"
+        _profile_context = str(res.get("profile_notes") or "")
+        if config.CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED", False):
+            _profile_valid = bool(res.get("prev_session_profile_valid", False))
+            _profile_in_play = bool(res.get("profile_in_play", False))
+            try:
+                _profile_react = float(res.get("profile_reaction_strength", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                _profile_react = 0.0
+            _profile_bias = str(res.get("profile_bias") or "neutral").lower()
+            _profile_bias_aligned = (
+                (_profile_bias == "bullish" and direction == "LONG")
+                or (_profile_bias == "bearish" and direction == "SHORT")
+            )
+            if _profile_valid and _profile_in_play and _profile_react > 0:
+                max_possible += 1.0
+                if _profile_bias_aligned and _profile_react >= 0.6:
+                    _profile_points = min(1.0, _profile_react)
+                    _profile_ok = True
+                    _profile_alignment = "strong"
+                elif _profile_bias_aligned and _profile_react >= 0.3:
+                    _profile_points = round(_profile_react * 0.5, 2)
+                    _profile_alignment = "moderate"
+                else:
+                    _profile_alignment = "weak"
+                total_score += _profile_points
         pct = min(100, int((total_score / max_possible) * 100))
 
         if checklist_mode == "strict":
@@ -1225,6 +1343,10 @@ class NakedEngine:
             "ob_at_zone": ob_at_zone,
             "bos_mtf_confirmed": bos_mtf,
             "breaker_active": bool(res.get("breaker_block")),
+            "profile_points": round(_profile_points, 2),
+            "profile_ok": _profile_ok,
+            "profile_alignment": _profile_alignment,
+            "profile_context": _profile_context,
         }
 
     def check_macro_correlation(

@@ -76,6 +76,7 @@ CONFIG: dict = {
     "AI_STRUCTURED_OUTPUTS": True,
     "AI_TEMPERATURE": 0.3,
     "AI_VISION_TEMPERATURE": 0.6,
+    "ENGINE_B_PROFILE_SCORING_ENABLED": False,
     "CRYPTOPANIC_KEY": os.environ.get("CRYPTOPANIC_KEY", ""),
     "FINNHUB_KEY": os.environ.get("FINNHUB_KEY", ""),
     "RISK_PCT": 0.01,

@@ -252,6 +252,7 @@ NEWS_SENTIMENT_ATTACH_SUMMARY: true             # attach short summary on each s
 AI_STRUCTURED_OUTPUTS: true
 AI_TEMPERATURE: 0.3
 AI_VISION_TEMPERATURE: 0.2
+ENGINE_B_PROFILE_SCORING_ENABLED: false
 
 # ── AI Learning ───────────────────────────────────────────
 LEARNING_ENABLED: true             # Enable AI self-learning (outcome extraction + prompt injection)
