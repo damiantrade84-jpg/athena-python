@@ -2096,6 +2096,82 @@ function _metricsForProfile(sig, profile) {
   return { entry: entry, sl: sl, tp1: tp1, tp2: tp2, riskPct: riskPct, rr1: rr1, rr2: rr2, riskAmt: riskAmt };
 }
 
+function _buildVerdictBanner(result) {
+  var structured = (result && result.structured) || {};
+  var styleRatings = structured.style_ratings || {};
+  var overall = structured.rating || '';
+  var confirms = structured.confirms_direction !== false;
+
+  if (!overall && !Object.keys(styleRatings).length) return '';
+
+  var ratingColor = {
+    'STRONG':     '#0ecb81',
+    'MODERATE':   '#f59e0b',
+    'WEAK':       '#f6465d',
+    'AVOID':      '#f6465d',
+    'CONTRADICTS':'#f6465d'
+  };
+  var ratingBg = {
+    'STRONG':     'rgba(14,203,129,0.12)',
+    'MODERATE':   'rgba(245,158,11,0.12)',
+    'WEAK':       'rgba(246,70,93,0.10)',
+    'AVOID':      'rgba(246,70,93,0.15)',
+    'CONTRADICTS':'rgba(246,70,93,0.15)'
+  };
+  var ratingIcon = {
+    'STRONG': '✅', 'MODERATE': '⚡', 'WEAK': '⚠️', 'AVOID': '🚫', 'CONTRADICTS': '❌'
+  };
+
+  var overallHtml = '';
+  if (overall) {
+    var oc = ratingColor[overall] || '#8ea2b7';
+    var obg = ratingBg[overall] || 'rgba(255,255,255,0.05)';
+    var oic = ratingIcon[overall] || '';
+    overallHtml = '<div style="display:inline-flex;align-items:center;gap:8px;background:' + obg + ';border:1px solid ' + oc + ';border-radius:10px;padding:7px 14px;margin-right:10px;">' +
+      '<span style="font-size:15px;">' + oic + '</span>' +
+      '<div>' +
+        '<div style="font-size:9px;color:#8ea2b7;font-family:IBM Plex Mono,monospace;letter-spacing:1px;">OVERALL</div>' +
+        '<div style="font-size:14px;font-weight:900;color:' + oc + ';font-family:IBM Plex Mono,monospace;">' + overall + '</div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  var dirHtml = '<div style="display:inline-flex;align-items:center;gap:6px;background:' +
+    (confirms ? 'rgba(14,203,129,0.10)' : 'rgba(246,70,93,0.10)') +
+    ';border:1px solid ' + (confirms ? '#0ecb81' : '#f6465d') + ';border-radius:10px;padding:7px 14px;margin-right:10px;">' +
+    '<span style="font-size:14px;">' + (confirms ? '✅' : '❌') + '</span>' +
+    '<div>' +
+      '<div style="font-size:9px;color:#8ea2b7;font-family:IBM Plex Mono,monospace;letter-spacing:1px;">DIRECTION</div>' +
+      '<div style="font-size:12px;font-weight:700;color:' + (confirms ? '#0ecb81' : '#f6465d') + ';font-family:IBM Plex Mono,monospace;">' +
+        (confirms ? 'CONFIRMS' : 'CONTRADICTS') +
+      '</div>' +
+    '</div>' +
+  '</div>';
+
+  var styleOrder = ['scalp', 'intraday', 'swing'];
+  var styleLabels = {scalp: 'SCALP', intraday: 'INTRADAY', swing: 'SWING'};
+  var stylePillsHtml = '';
+  styleOrder.forEach(function(s) {
+    var r = (styleRatings[s] || '').toUpperCase();
+    if (!r) return;
+    var sc = ratingColor[r] || '#8ea2b7';
+    var sbg = ratingBg[r] || 'rgba(255,255,255,0.05)';
+    stylePillsHtml += '<div style="display:inline-flex;flex-direction:column;align-items:center;background:' + sbg +
+      ';border:1px solid ' + sc + ';border-radius:8px;padding:5px 10px;margin-right:6px;min-width:62px;">' +
+      '<span style="font-size:9px;color:#8ea2b7;font-family:IBM Plex Mono,monospace;letter-spacing:0.5px;">' + styleLabels[s] + '</span>' +
+      '<span style="font-size:11px;font-weight:800;color:' + sc + ';font-family:IBM Plex Mono,monospace;">' + r + '</span>' +
+    '</div>';
+  });
+
+  return '<div style="margin-bottom:14px;padding:12px;background:rgba(10,20,30,0.6);border:1px solid rgba(168,85,247,0.25);border-radius:12px;">' +
+    '<div style="font-size:9px;color:#a855f7;font-family:IBM Plex Mono,monospace;letter-spacing:1.5px;font-weight:700;margin-bottom:8px;">AI TRADE VERDICT</div>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px;">' +
+      overallHtml + dirHtml +
+    '</div>' +
+    (stylePillsHtml ? '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">' + stylePillsHtml + '</div>' : '') +
+  '</div>';
+}
+
 function _buildChartAiLevelHtml(sig, result) {
   var levels = (result && result.structured && result.structured.level_suggestions) || {};
   var rows = ['scalp', 'intraday', 'swing'].filter(function(style) {
@@ -2143,6 +2219,7 @@ function _renderAcmAnalysisPanel(sig, result, tfLabel) {
   panel.style.display = 'block';
   panel.innerHTML = '<h4>🧠 AI CHART ANALYSIS — ' + (tfLabel || _acm.tf) + ' ' +
     (sig ? sig.display || sig.pair || '' : '') + '</h4>' +
+    _buildVerdictBanner(result) +
     '<div style="line-height:1.8;">' + text + '</div>' +
     _buildChartAiLevelHtml(sig, result) +
     '<div style="margin-top:10px;font-size:9px;color:#3a4d60;">Model: ' +
@@ -8852,6 +8929,7 @@ async function acmAIRead() {
 
       panel.innerHTML = '<h4>🧠 AI CHART ANALYSIS — ' + _acm.tf + ' ' +
         (_acm.sig ? _acm.sig.display || '' : '') + '</h4>' +
+        _buildVerdictBanner(result) +
         '<div style="line-height:1.8;">' + text + '</div>' +
         _buildChartAiLevelHtml(_acm.sig, result) +
         '<div style="margin-top:10px;font-size:9px;color:#3a4d60;">Model: ' +
