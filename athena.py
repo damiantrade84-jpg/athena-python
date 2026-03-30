@@ -2885,7 +2885,8 @@ def _build_signal_message(
         f"{signal.get('h4', {}).get('snap', {}).get('adxLabel', '?')})",
     ]
     # === ENGINE B (NAKED MARKET STRUCTURE) ===
-    eng_b = signal.get("engine_b")
+    # Engine A signals store naked overlay in "engine_b"; Engine B scan signals store it in "naked_data"
+    eng_b = signal.get("engine_b") or signal.get("naked_data")
     if eng_b:
         lines.append("")
         lines.append("=== ENGINE B (NAKED MARKET STRUCTURE) ===")
@@ -2962,7 +2963,9 @@ def _build_signal_message(
     _fd = signal.get("factorDiagnostics", {})
     _fs = signal.get("factorScores", {})
     _fw = signal.get("factorWeights", {})
-    if _fd or _fs:
+    _naked = signal.get("naked_data", {})
+    _is_naked = bool(signal.get("is_naked"))
+    if _fd or _fs or (_is_naked and _naked):
         lines.append("")
         lines.append("=== FACTOR DIAGNOSTICS ===")
         if _fs:
@@ -2994,6 +2997,17 @@ def _build_signal_message(
             lines.append(f"  Active nondirectional: {', '.join(_fd['activeNondirectionalFactors'])}")
         if _fd.get("insufficientFactors"):
             lines.append("  ** INSUFFICIENT FACTORS — too few active to produce valid score **")
+
+    # Engine B signals: emit naked scoring summary in place of factor diagnostics
+    if _is_naked and _naked and not _fs:
+        lines.append("")
+        lines.append("=== ENGINE B SCORING DIAGNOSTICS ===")
+        lines.append(f"  Score: {_naked.get('score', 'N/A')} / {_naked.get('max_possible', 'N/A')} ({_naked.get('score_pct', 'N/A')}%)")
+        lines.append(f"  Structural Verdict: {_naked.get('structural_verdict', 'N/A')}")
+        lines.append(f"  Room-to-move bonus: {_naked.get('room_to_move_bonus', 0)}")
+        lines.append(f"  Catalyst bonus: {_naked.get('catalyst_bonus', 0)}")
+        lines.append(f"  AI stats adjustment: {_naked.get('ai_adjustment', 0)}")
+        lines.append(f"  Actionable: {'YES' if _naked.get('is_actionable') else 'NO'}")
 
     # === CONFIDENCE ENGINE ===
     _conf = signal.get("confidenceDetail", {})
