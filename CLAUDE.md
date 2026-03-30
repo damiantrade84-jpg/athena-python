@@ -15,6 +15,78 @@ alwaysApply: true
 
 Cosmetic UI copy is fine; **do not “tune”, “align”, or “simplify” thresholds** in passing. If a task does not mention scoring, leave scoring config and code untouched.
 
+## Recent Changes (2026-03-30) — AI Vision + AI Analysis accuracy upgrade
+
+**Goal:** Eliminate hallucination, vagueness, and missing quantitative data from both the Marcus Reid AI analysis (Grok) and the Claude AI Vision (chart reader).
+
+### Change 1 — EXPERT_PROMPT replaced (`athena.py`)
+
+Complete rewrite of the Marcus Reid system prompt:
+- **6 absolute rules**: cite specific data or don't claim it; no "will/guaranteed/definitely"; every narrative claim must reference a factor name, score, weight, or level from the input.
+- **Step-by-step analysis order**: factor diagnostics → trend coherence → regime → nondirectional quality → levels → Engine B cross-check → context color only.
+- **Critical cross-checks** (all mandatory): momentum divergence detection, direction flip bug flag, confidence multiplier threshold, trendCoherence ratio < 0.7, nondirectional quality < 0.5, SL > 2% size cap.
+- **Anchored `edgeProbability` formula**: `base = score_pct × 0.8` with explicit modifiers for confidence multiplier, coherence, regime, Engine B confirmation, counter-trend, and divergence.
+- **Per-style criteria**: specific thresholds per style (ADX > 30 for scalp, RR ≥ 3.0 for swing, etc.).
+- Dropped: loose Elder/Wilder/Murphy/Weinstein/Douglas references (replaced by explicit step-by-step instructions).
+
+### Change 2 — Factor diagnostics added to `_build_signal_message` (`athena.py`)
+
+The AI input message now includes two new sections for both Engine A and Engine B signals:
+
+**`=== FACTOR DIAGNOSTICS ===`** (Engine A signals):
+- Per-factor scores with weights (`factorScores`, `factorWeights` — camelCase, matching actual signal dict keys)
+- Directional score (weighted), nondirectional score (quality)
+- Directional confidence multiplier
+- Min directional threshold + failed flag
+- Trend coherence (agreement count, ratio, dominant direction)
+- Optional factor coverage, active directional/nondirectional factor lists
+- Insufficient factors flag
+
+**`=== ENGINE B SCORING DIAGNOSTICS ===`** (Engine B / naked scan signals):
+- Score / max_possible / score_pct
+- Structural verdict, room-to-move bonus, catalyst bonus, AI stats adjustment, actionable flag
+
+**`=== CONFIDENCE ENGINE ===`** (Engine A signals):
+- `confidenceDetail` components breakdown
+- Degraded flag with available count
+
+**Key bug fixes applied during implementation:**
+- Wrong key names corrected: `factorScores`/`factorWeights` (camelCase) not `factor_scores`/`factor_weights`
+- `confidenceDetail` was not passed through to the signal dict — added to `analyze_pair()` return at line ~8194
+- Engine B signals store naked result under `"naked_data"` not `"engine_b"` — fixed: `eng_b = signal.get("engine_b") or signal.get("naked_data")`
+- Engine B signals have no `factorScores`/`factorDiagnostics` — added `is_naked` + `naked_data` guard to emit ENGINE B SCORING DIAGNOSTICS block instead
+
+### Change 3 — Vision system prompt replaced (`athena.py`)
+
+Applies to all three modes (single-TF, dual-TF, triple-TF):
+- **"ONLY describe what you can ACTUALLY SEE"** absolute rule added to all prompts
+- Full annotation legend listed: candles, EMA21/50/200, Entry/SL/TP lines, Engine B zones (support, resistance, BOS, CHoCH, OB, FVG)
+- Requires EMA ordering check and explicit cross-reference with algorithmic context
+- "If they disagree, say so explicitly" rule enforced
+
+### Change 4 — Vision user prompts replaced (`athena.py`)
+
+**Single-TF prompt:**
+- Added `WHAT TO LOOK FOR ON THE CHART` checklist (EMA ordering, price vs EMAs, last 5 candles, volume, SL/TP structural placement, Engine B zones)
+- 5 specific cite-what-you-see questions replace open-ended analysis
+- `ALGORITHMIC CONTEXT (use as ground truth for levels)` label added
+- **7-line footer preserved** (`TF ALIGNMENT`, `SCALP/INTRADAY/SWING RATING`, `SCALP/INTRADAY/SWING LEVELS`) — required by `_extract_vision_structured()` parser for level extraction
+
+**Dual-TF and Triple-TF prompts:**
+- Same anti-hallucination `ABSOLUTE RULES` header added
+- Questions reframed to cite specific visible EMA order and candle patterns
+- Style ratings now require explicit evidence citation per timeframe
+- 7-line footer unchanged
+
+### Change 5 — Vision temperature lowered (`athena.py`, `config.yaml`)
+
+- `AI_VISION_TEMPERATURE`: `0.6` → `0.2` in both `athena.py` default and `config.yaml`
+- Lower temperature = factual observation mode; reduces invented patterns and speculative claims
+
+**Commits:** `93ed01b` (main upgrade), `b74c620` (Engine B fix)
+
+---
+
 ## Recent Changes (2026-03-28) — Non-crypto candle and live price routing locked to MT5
 
 **Goal:** Ensure all non-crypto H1/H4/D1 candles and live prices come exclusively from the MT5 broker terminal, eliminating any EODHD-fed CandleBuilder data from the scoring path for MT5-sourced pairs.
