@@ -350,19 +350,19 @@ COMMODITY_PAIRS = [
         "enabled": True,
     },  # Pepperstone: SPOTBRENT
     {
-        "symbol": "NATGAS",
+        "symbol": "NatGas",
         "type": "commodity",
         "display": "Nat Gas",
         "source": "mt5",
         "enabled": True,
-    },  # MT5: NATGAS
+    },  # MT5: NatGas
     {
-        "symbol": "COPPER",
+        "symbol": "Copper",
         "type": "commodity",
         "display": "Copper",
         "source": "mt5",
         "enabled": True,
-    },  # MT5: COPPER
+    },  # MT5: Copper
     {
         "symbol": "PL=F",
         "type": "commodity",

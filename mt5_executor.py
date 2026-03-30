@@ -102,10 +102,10 @@ _MT5_SYMBOL_MAP = {
     "XAG/USD": "XAGUSD",
     "WTI Oil": "SpotCrude",  # Pepperstone WTI CFD — user verified 'SpotCrude'
     "Brent Oil": "SpotBrent",  # Pepperstone Brent Crude CFD
-    "Nat Gas": "NATGAS",  # Pepperstone Natural Gas CFD
+    "Nat Gas": "NatGas",  # Pepperstone Natural Gas CFD
     "XPT/USD": "XPTUSD",  # Pepperstone Platinum CFD
     "XPD/USD": "XPDUSD",  # Pepperstone Palladium CFD
-    "Copper": "COPPER",  # Pepperstone Copper CFD
+    "Copper": "Copper",  # Pepperstone Copper CFD
     # Indices
     "S&P 500": "US500",
     "Nasdaq": "NAS100",
