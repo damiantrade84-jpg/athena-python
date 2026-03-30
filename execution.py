@@ -38,6 +38,53 @@ def _audit_engine_from_signal(sig: dict) -> str:
     return "engine_a"
 
 
+def _apply_level_override(sig: dict, override: dict) -> str | None:
+    if not isinstance(override, dict):
+        return "override payload must be an object"
+
+    try:
+        sl = float(override.get("sl"))
+        tp1 = float(override.get("tp1"))
+    except (TypeError, ValueError):
+        return "override requires numeric sl and tp1"
+
+    try:
+        tp2 = float(override.get("tp2", tp1))
+    except (TypeError, ValueError):
+        tp2 = tp1
+
+    direction = str(sig.get("direction") or "").upper()
+    try:
+        entry = float(sig.get("price") or sig.get("livePrice") or 0)
+    except (TypeError, ValueError):
+        entry = 0.0
+
+    if direction not in ("LONG", "SHORT"):
+        return "signal direction missing"
+    if entry <= 0:
+        return "signal entry price missing"
+    if sl <= 0 or tp1 <= 0:
+        return "override prices must be positive"
+    if direction == "LONG" and not (sl < entry < tp1):
+        return "LONG override must satisfy SL < entry < TP"
+    if direction == "SHORT" and not (sl > entry > tp1):
+        return "SHORT override must satisfy SL > entry > TP"
+
+    sig["sl"] = sl
+    sig["tp1"] = tp1
+    sig["tp2"] = tp2
+    if override.get("style"):
+        sig["style"] = normalize_pip_mode(override.get("style")) or sig.get("style")
+    sig["level_source"] = str(override.get("source") or "manual_override")
+    sig["level_override"] = {
+        "style": sig.get("style"),
+        "source": sig.get("level_source"),
+        "model": override.get("model"),
+        "tf": override.get("tf"),
+    }
+    return None
+
+
 def api_quick_execute():
     d = request.json
     if not d or "signal" not in d:
@@ -46,6 +93,7 @@ def api_quick_execute():
     _r = rt()
     sig = d["signal"]
     engine_b = d.get("engine_b") or {}
+    level_override = d.get("level_override") or sig.get("level_override")
 
     pip_mode = normalize_pip_mode(d.get("pip_mode"))
     _sizing_override = float(d.get("sizing_override", 1.0))
@@ -121,6 +169,15 @@ def api_quick_execute():
             sig["tp2"] = engine_b["recommended_take_profit"]
         _r.log.warning(
             f"[QUICK EXEC] {sig.get('pair')}: style={pip_mode} level service fallback ({_svc_err})"
+        )
+
+    if level_override:
+        _override_err = _apply_level_override(sig, level_override)
+        if _override_err:
+            return jsonify({"error": f"Invalid AI level override: {_override_err}"}), 400
+        _r.log.warning(
+            f"[QUICK EXEC] {sig.get('pair')}: applied {sig.get('level_source')} levels "
+            f"for style={sig.get('style')} SL={sig.get('sl')} TP1={sig.get('tp1')}"
         )
 
     is_crypto = sig.get("type") == "crypto"
@@ -568,6 +625,7 @@ def api_execute():
         return jsonify({"error": "Invalid payload: expected {signal: {...}}"}), 400
 
     sig = d["signal"]
+    level_override = d.get("level_override") or sig.get("level_override")
 
     pair = sig.get("pair", "")
 
@@ -655,6 +713,15 @@ def api_execute():
 
         else:
             sig["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+    if level_override:
+        _override_err = _apply_level_override(sig, level_override)
+        if _override_err:
+            return jsonify({"error": f"Invalid AI level override: {_override_err}"}), 400
+        _r.log.warning(
+            f"[EXEC] {pair}: applied {sig.get('level_source')} levels "
+            f"for style={sig.get('style')} SL={sig.get('sl')} TP1={sig.get('tp1')}"
+        )
 
     try:
         from risk_engine import risk_check

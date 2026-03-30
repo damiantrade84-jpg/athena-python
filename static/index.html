@@ -45,7 +45,7 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
 .logo-text p,.logo-sub{font-size:9px;color:var(--muted);letter-spacing:0.12em;text-transform:uppercase;font-family:'IBM Plex Mono',monospace;max-width:min(42vw,280px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .topbar .ticker-bar{flex:1;min-width:180px;max-width:min(100%,560px);margin:0 auto;overflow:hidden;position:relative;}
 .topbar .ticker-strip,.topbar .ticker-bar,.topbar .ticker-scroll{margin-bottom:0;}
-.topbar .ticker-scroll{display:flex;gap:0;padding:6px 0;margin:0;white-space:nowrap;overflow:visible;width:max-content;animation:tickerMove 50s linear infinite;will-change:transform;}
+.topbar .ticker-scroll{display:flex;gap:0;padding:6px 0;margin:0;white-space:nowrap;overflow:visible;width:max-content;animation:tickerMove 80s linear infinite;will-change:transform;}
 .topbar .ticker-scroll:not(.has-ticks){animation:none;width:auto;max-width:100%;}
 .header-right,.topbar-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;flex-shrink:0;margin-left:auto;justify-content:flex-end;}
 .sort-sel,.asset-filter{padding:8px 10px;border-radius:8px;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:pointer;}
@@ -1951,7 +1951,189 @@ function buildLiveSignalPayload(sig) {
     payload.price = livePrice;
     payload.livePrice = livePrice;
   }
+  var display = payload.display || payload.pair || payload.symbol || '';
+  if (!payload.pair && display) payload.pair = display;
+  if (!payload.display && display) payload.display = display;
   return payload;
+}
+
+function _coerceExecNum(value) {
+  if (value == null || value === '') return null;
+  var n = parseFloat(value);
+  return isNaN(n) ? null : n;
+}
+
+function _styleLabel(style) {
+  var key = String(style || '').toLowerCase();
+  if (key === 'scalp') return 'SCALP';
+  if (key === 'intraday') return 'INTRADAY';
+  return 'SWING';
+}
+
+function _signalStyleLevels(sig, style) {
+  style = String(style || 'swing').toLowerCase();
+  var styleLevels = sig && sig.style_levels;
+  if (styleLevels && styleLevels[style]) {
+    return {
+      sl: _coerceExecNum(styleLevels[style].sl),
+      tp1: _coerceExecNum(styleLevels[style].tp1 || styleLevels[style].tp),
+      tp2: _coerceExecNum(styleLevels[style].tp2 || styleLevels[style].tp1 || styleLevels[style].tp)
+    };
+  }
+  var explicitSl = _coerceExecNum(sig && sig[style + '_sl']);
+  var explicitTp = _coerceExecNum(sig && sig[style + '_tp']);
+  if (explicitSl != null && explicitTp != null) {
+    return { sl: explicitSl, tp1: explicitTp, tp2: explicitTp };
+  }
+  return {
+    sl: _coerceExecNum(sig && sig.sl),
+    tp1: _coerceExecNum(sig && (sig.tp1 != null ? sig.tp1 : sig.tp)),
+    tp2: _coerceExecNum(sig && (sig.tp2 != null ? sig.tp2 : (sig.tp1 != null ? sig.tp1 : sig.tp)))
+  };
+}
+
+function _chartAiLevels(sig) {
+  if (!sig) return {};
+  if (sig.chart_ai_levels) return sig.chart_ai_levels;
+  if (sig.chart_ai && sig.chart_ai.structured && sig.chart_ai.structured.level_suggestions) {
+    return sig.chart_ai.structured.level_suggestions;
+  }
+  return {};
+}
+
+function _persistChartAiResult(sig, result) {
+  if (!sig || !result) return;
+  var levels = ((result.structured || {}).level_suggestions) || {};
+  var sid = String(sig.symbol || sig.display || sig.pair || '').replace(/[\/=^.]/g, '_');
+  function apply(target) {
+    if (!target) return;
+    target.chart_ai = result;
+    target.chart_ai_levels = levels;
+  }
+  apply(sig);
+  (window.allSignals || []).forEach(function(row) {
+    if (!row) return;
+    if (row === sig) return apply(row);
+    if ((row.symbol && row.symbol === sig.symbol) ||
+        (row.display && row.display === (sig.display || sig.pair)) ||
+        (row.pair && row.pair === (sig.pair || sig.display))) {
+      apply(row);
+    }
+  });
+  if (sid && window['_nakedSig_' + sid]) apply(window['_nakedSig_' + sid]);
+  if (window._ecResults) {
+    ['aligned', 'a_only', 'b_only', 'conflict', 'skipped'].forEach(function(cat) {
+      (window._ecResults[cat] || []).forEach(function(row) {
+        if (!row) return;
+        var rowSid = String(row.symbol || row.display || '').replace(/[\/=^.]/g, '_');
+        if (rowSid === sid) apply(row);
+      });
+    });
+  }
+}
+
+function _getExecProfiles(sig) {
+  var profiles = {};
+  if (!sig) return profiles;
+  profiles.current = {
+    key: 'current',
+    label: 'Current Levels',
+    style: String(sig.style || 'swing').toLowerCase(),
+    source: 'signal',
+    sl: _coerceExecNum(sig.sl),
+    tp1: _coerceExecNum(sig.tp1 != null ? sig.tp1 : sig.tp),
+    tp2: _coerceExecNum(sig.tp2 != null ? sig.tp2 : (sig.tp1 != null ? sig.tp1 : sig.tp))
+  };
+  var aiLevels = _chartAiLevels(sig);
+  ['scalp', 'intraday', 'swing'].forEach(function(style) {
+    var row = aiLevels && aiLevels[style];
+    var sl = _coerceExecNum(row && row.sl);
+    var tp1 = _coerceExecNum(row && (row.tp1 != null ? row.tp1 : row.tp));
+    var tp2 = _coerceExecNum(row && (row.tp2 != null ? row.tp2 : (row && (row.tp1 != null ? row.tp1 : row.tp))));
+    if (sl == null || tp1 == null) return;
+    profiles['ai_' + style] = {
+      key: 'ai_' + style,
+      label: 'AI ' + _styleLabel(style),
+      style: style,
+      source: 'chart_ai',
+      sl: sl,
+      tp1: tp1,
+      tp2: tp2 != null ? tp2 : tp1,
+      rr: row && row.rr != null ? row.rr : null,
+      model: sig.chart_ai && sig.chart_ai.model,
+      tf: sig.chart_ai && sig.chart_ai.tf
+    };
+  });
+  return profiles;
+}
+
+function _metricsForProfile(sig, profile) {
+  var entry = getSignalLivePrice(sig);
+  var sl = _coerceExecNum(profile && profile.sl);
+  var tp1 = _coerceExecNum(profile && profile.tp1);
+  var tp2 = _coerceExecNum(profile && profile.tp2);
+  var riskPct = (entry && sl) ? (Math.abs(entry - sl) / entry * 100) : null;
+  var rr1 = (entry && sl && tp1 && Math.abs(entry - sl) > 0) ? (Math.abs(tp1 - entry) / Math.abs(entry - sl)) : null;
+  var rr2 = (entry && sl && tp2 && Math.abs(entry - sl) > 0) ? (Math.abs(tp2 - entry) / Math.abs(entry - sl)) : null;
+  var riskAmt = riskPct != null ? accountSize * 0.01 : null;
+  return { entry: entry, sl: sl, tp1: tp1, tp2: tp2, riskPct: riskPct, rr1: rr1, rr2: rr2, riskAmt: riskAmt };
+}
+
+function _buildChartAiLevelHtml(sig, result) {
+  var levels = (result && result.structured && result.structured.level_suggestions) || {};
+  var rows = ['scalp', 'intraday', 'swing'].filter(function(style) {
+    var row = levels[style] || {};
+    return _coerceExecNum(row.sl) != null && _coerceExecNum(row.tp1) != null;
+  });
+  if (!rows.length) {
+    return '<div style="margin-top:12px;padding:10px;border:1px dashed rgba(168,85,247,0.22);border-radius:10px;color:#8ea2b7;font-size:11px;">AI did not return executable SL/TP updates for this chart.</div>';
+  }
+  var html = '<div style="margin-top:14px;border-top:1px solid rgba(34,51,68,0.9);padding-top:12px;">' +
+    '<div style="font-size:11px;font-weight:700;color:#a855f7;margin-bottom:8px;">AI LEVEL SUGGESTIONS</div>';
+  rows.forEach(function(style) {
+    var ai = levels[style] || {};
+    var cur = _signalStyleLevels(sig, style);
+    html += '<div style="margin-bottom:8px;padding:10px;border:1px solid rgba(168,85,247,0.18);border-radius:10px;background:rgba(168,85,247,0.05);">' +
+      '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:6px;">' +
+      '<div style="font-size:11px;font-weight:800;color:#e6eef8;">' + _styleLabel(style) + '</div>' +
+      '<button class="exec-btn force" style="padding:6px 10px;font-size:10px;" onclick="confirmExecute(\'__acm__\', false, \'ai_' + style + '\')">EXECUTE AI ' + _styleLabel(style) + '</button>' +
+      '</div>' +
+      '<div style="font-size:10px;color:#8ea2b7;line-height:1.7;">' +
+      'Current SL <span style="color:var(--bear)">' + fmtPrice(cur.sl) + '</span> · TP <span style="color:var(--bull)">' + fmtPrice(cur.tp1) + '</span><br>' +
+      'AI SL <span style="color:var(--bear)">' + fmtPrice(ai.sl) + '</span> · TP <span style="color:var(--bull)">' + fmtPrice(ai.tp1) + '</span>' +
+      (ai.rr != null ? ' · <span style="color:var(--accent)">' + ai.rr + 'R</span>' : '') +
+      '</div>' +
+      '</div>';
+  });
+  html += '<div style="font-size:10px;color:#5a6d80;">These levels will also appear in the manual execute popup for this signal after chart review.</div></div>';
+  return html;
+}
+
+function _renderAcmAnalysisPanel(sig, result, tfLabel) {
+  var panel = document.getElementById('acm-ai-panel');
+  var btn = document.getElementById('acm-ai-btn');
+  if (!panel || !result) return;
+  var text = result.analysis || '';
+  text = text.replace(/(\d\.\s*(?:PATTERN|STRUCTURE|MISSED|SL\/TP|RATING)[:\s]*)/gi,
+    '<br><span style="color:#f0b90b;font-weight:700;">$1</span>');
+  text = text.replace(/\bSTRONG\b/g, '<span style="color:#0ecb81;font-weight:700;">STRONG</span>');
+  text = text.replace(/\bMODERATE\b/g, '<span style="color:#f59e0b;font-weight:700;">MODERATE</span>');
+  text = text.replace(/\bWEAK\b/g, '<span style="color:#f6465d;font-weight:700;">WEAK</span>');
+  text = text.replace(/\bAVOID\b/g, '<span style="color:#f6465d;font-weight:900;text-decoration:underline;">AVOID</span>');
+  text = text.replace(/\bCONFIRM[S]?\b/gi, '<span style="color:#0ecb81;font-weight:700;">CONFIRMS</span>');
+  text = text.replace(/\bCONTRADICT[S]?\b/gi, '<span style="color:#f6465d;font-weight:700;">CONTRADICTS</span>');
+
+  panel.style.display = 'block';
+  panel.innerHTML = '<h4>🧠 AI CHART ANALYSIS — ' + (tfLabel || _acm.tf) + ' ' +
+    (sig ? sig.display || sig.pair || '' : '') + '</h4>' +
+    '<div style="line-height:1.8;">' + text + '</div>' +
+    _buildChartAiLevelHtml(sig, result) +
+    '<div style="margin-top:10px;font-size:9px;color:#3a4d60;">Model: ' +
+    (result.model || 'claude-sonnet') + ' | ' + new Date().toLocaleTimeString() + '</div>';
+  if (btn) {
+    btn.classList.add('on');
+    btn.classList.remove('off');
+  }
 }
 
 function getLiveSignalMetrics(sig) {
@@ -7519,6 +7701,7 @@ async function toggleTestMode() {
 }
 
 function resolveExecSignal(signalRef) {
+  if (signalRef === '__acm__' && window._acm && _acm.sig) return _acm.sig;
   return (window._execSignalsByKey || {})[signalRef] ||
     window['_nakedSig_' + signalRef] ||
     allSignals.find(function(s){
@@ -7526,10 +7709,49 @@ function resolveExecSignal(signalRef) {
     });
 }
 
-function confirmExecute(signalRef, forceMode) {
+function _renderExecModalSummary(overlay) {
+  if (!overlay) return;
+  var sig = resolveExecSignal(overlay._signalRef);
+  if (!sig) return;
+  var select = overlay.querySelector('.exec-profile-select');
+  var key = select ? select.value : 'current';
+  var profile = (overlay._profiles || {})[key] || (overlay._profiles || {}).current;
+  overlay._selectedProfile = profile;
+
+  var isCrypto = sig.type === 'crypto';
+  var acct = isCrypto ? (window._bybitAccount || {}) : (window._mt5Account || {});
+  var metrics = _metricsForProfile(sig, profile || {});
+  var summary = overlay.querySelector('.exec-summary');
+  if (!summary) return;
+
+  var profileNote = '';
+  if (profile && profile.source === 'chart_ai') {
+    profileNote =
+      '<div style="margin-top:8px;padding:8px;border:1px solid rgba(168,85,247,0.26);border-radius:8px;background:rgba(168,85,247,0.06);font-size:10px;color:#c4b5fd;">' +
+      'Using chart AI levels · ' + _styleLabel(profile.style) +
+      (profile.model ? ' · ' + profile.model : '') +
+      (profile.tf ? ' · ' + profile.tf : '') +
+      '</div>';
+  }
+
+  summary.innerHTML =
+      '<div>Pair: <strong>' + sig.display + '</strong></div>' +
+      '<div>Direction: <strong style="color:' + (sig.direction === 'LONG' ? 'var(--bull)' : 'var(--bear)') + '">' + sig.direction + '</strong></div>' +
+      '<div>Entry: <strong>' + fmtPrice(metrics.entry) + '</strong></div>' +
+      '<div>Stop Loss: <strong style="color:var(--bear)">' + fmtPrice(metrics.sl) + '</strong></div>' +
+      '<div>Take Profit: <strong style="color:var(--bull)">' + fmtPrice(metrics.tp1) + '</strong></div>' +
+      '<div>SL Risk: <strong>' + (metrics.riskPct != null ? metrics.riskPct.toFixed(2) : '?') + '%</strong></div>' +
+      '<div>R:R: <strong>' + (metrics.rr1 != null ? metrics.rr1.toFixed(2) + 'R' : '?') + '</strong></div>' +
+      '<div>Confluence: <strong>' + formatConfluenceText(sig) + '</strong></div>' +
+      '<div>Account: <strong>$' + (acct.balance||0).toLocaleString() + '</strong></div>' +
+      '<div>Risk (1%): <strong style="color:var(--accent)">$' + (metrics.riskAmt != null ? metrics.riskAmt.toFixed(2) : ((acct.balance || 500) * 0.01).toFixed(2)) + '</strong></div>' +
+      profileNote +
+      '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);color:var(--warn);font-size:10px">Position size will be calculated by the risk engine from current account balance and the selected SL distance.</div>';
+}
+
+function confirmExecute(signalRef, forceMode, preselectedProfileKey) {
   var sig = resolveExecSignal(signalRef);
   if (!sig) return;
-  var execSig = buildLiveSignalPayload(sig);
   var isCrypto = sig.type === 'crypto';
   if (isCrypto && !window._bybitConnected) { showToast('Bybit not connected', true); return; }
   if (!isCrypto && !window._mt5Connected) { showToast('MT5 not connected', true); return; }
@@ -7537,34 +7759,41 @@ function confirmExecute(signalRef, forceMode) {
   var dirColor = dir === 'LONG' ? 'var(--bull)' : 'var(--bear)';
   var acct = isCrypto ? (window._bybitAccount || {}) : (window._mt5Account || {});
   var via = isCrypto ? 'Bybit Futures' : 'MT5';
-  var riskAmt = ((acct.balance || 500) * 0.01).toFixed(2);
+  var profiles = _getExecProfiles(sig);
+  var selectedKey = preselectedProfileKey && profiles[preselectedProfileKey] ? preselectedProfileKey : 'current';
   var overlay = document.createElement('div');
   overlay.className = 'exec-modal-overlay';
   overlay.onclick = function(e) { if (e.target === overlay) document.body.removeChild(overlay); };
   var isForce = forceMode || false;
   var modalTitle = isForce ? 'FORCE EXECUTE ' + dir + ' - ' + sig.display + ' (' + via + ')' : 'EXECUTE ' + dir + ' - ' + sig.display + ' (' + via + ')';
   var forceWarn = isForce ? '<div style="margin:8px 0;padding:8px;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.3);border-radius:6px;color:var(--warn);font-size:11px">TEST MODE: Force-executing watchlist signal (score below normal threshold). Risk engine checks still apply.</div>' : '';
-  var metrics = getLiveSignalMetrics(sig);
+  var profileOptions = Object.keys(profiles).map(function(key) {
+    return '<option value="' + key + '"' + (key === selectedKey ? ' selected' : '') + '>' + profiles[key].label + '</option>';
+  }).join('');
+  var selectorHtml = Object.keys(profiles).length > 1
+    ? '<div style="margin-bottom:12px;">' +
+      '<div style="font-size:10px;color:#8ea2b7;margin-bottom:6px;">Execution levels</div>' +
+      '<select class="exec-profile-select" style="width:100%;padding:10px;border-radius:8px;background:#0d1420;color:#e6eef8;border:1px solid var(--border);font-family:IBM Plex Mono,monospace;font-size:11px;">' +
+      profileOptions +
+      '</select></div>'
+    : '';
   overlay.innerHTML = '<div class="exec-modal">' +
     '<h3 style="color:' + (isForce ? 'var(--warn)' : dirColor) + '">' + modalTitle + '</h3>' + forceWarn +
-    '<div class="exec-summary">' +
-      '<div>Pair: <strong>' + sig.display + '</strong></div>' +
-      '<div>Direction: <strong style="color:' + dirColor + '">' + dir + '</strong></div>' +
-      '<div>Entry: <strong>' + fmtPrice(execSig.price) + '</strong></div>' +
-      '<div>Stop Loss: <strong style="color:var(--bear)">' + fmtPrice(execSig.sl) + '</strong></div>' +
-      '<div>Take Profit: <strong style="color:var(--bull)">' + fmtPrice(execSig.tp1) + '</strong></div>' +
-      '<div>SL Risk: <strong>' + (metrics.riskPct != null ? metrics.riskPct.toFixed(2) : '?') + '%</strong></div>' +
-      '<div>Confluence: <strong>' + formatConfluenceText(sig) + '</strong></div>' +
-      '<div>Account: <strong>$' + (acct.balance||0).toLocaleString() + '</strong></div>' +
-      '<div>Risk (1%): <strong style="color:var(--accent)">$' + (metrics.riskAmt != null ? metrics.riskAmt.toFixed(2) : riskAmt) + '</strong></div>' +
-      '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);color:var(--warn);font-size:10px">Position size will be calculated by the risk engine based on your ' + via + ' account balance and SL distance.</div>' +
-    '</div>' +
+    selectorHtml +
+    '<div class="exec-summary"></div>' +
     '<div class="exec-actions">' +
       '<button class="exec-cancel" onclick="this.closest(\'.exec-modal-overlay\').remove()">CANCEL</button>' +
       '<button class="exec-confirm ' + dir + '" onclick="doExecute(\'' + signalRef + '\', this, ' + isForce + ')">CONFIRM ' + dir + '</button>' +
     '</div>' +
   '</div>';
+  overlay._signalRef = signalRef;
+  overlay._profiles = profiles;
   document.body.appendChild(overlay);
+  var selector = overlay.querySelector('.exec-profile-select');
+  if (selector) {
+    selector.addEventListener('change', function() { _renderExecModalSummary(overlay); });
+  }
+  _renderExecModalSummary(overlay);
 }
 
 async function doExecute(signalRef, btn, forceMode) {
@@ -7572,7 +7801,21 @@ async function doExecute(signalRef, btn, forceMode) {
   if (!sig) return;
   btn.disabled = true; btn.textContent = 'SENDING...';
   try {
+    var overlay = btn.closest('.exec-modal-overlay');
     var payload = { signal: buildLiveSignalPayload(sig) };
+    var profile = overlay && overlay._selectedProfile;
+    if (profile && profile.source === 'chart_ai') {
+      payload.level_override = {
+        sl: profile.sl,
+        tp1: profile.tp1,
+        tp2: profile.tp2,
+        style: profile.style,
+        source: profile.source,
+        model: profile.model,
+        tf: profile.tf
+      };
+      payload.signal.style = profile.style || payload.signal.style;
+    }
     if (forceMode) payload.force = true;
     var resp = await fetch('/api/execute', {
       method: 'POST',
@@ -8564,6 +8807,7 @@ async function acmAIRead() {
       panel.innerHTML = '<h4>🧠 AI CHART ANALYSIS</h4>' +
         '<div style="color:#f6465d;">Error: ' + result.error + '</div>';
     } else {
+      _persistChartAiResult(_acm.sig, result);
       // Format the analysis nicely
       var text = result.analysis || '';
       // Bold the section headers
@@ -8581,6 +8825,7 @@ async function acmAIRead() {
       panel.innerHTML = '<h4>🧠 AI CHART ANALYSIS — ' + _acm.tf + ' ' +
         (_acm.sig ? _acm.sig.display || '' : '') + '</h4>' +
         '<div style="line-height:1.8;">' + text + '</div>' +
+        _buildChartAiLevelHtml(_acm.sig, result) +
         '<div style="margin-top:10px;font-size:9px;color:#3a4d60;">Model: ' +
         (result.model || 'claude-sonnet') + ' | ' + new Date().toLocaleTimeString() + '</div>';
     }
@@ -8861,6 +9106,22 @@ function buildECVisionResult(c) {
   if (vsr) {
     html += _buildStyleRatingStrip(vsr);
   }
+  var vls = c.vision_level_suggestions || {};
+  var levelRows = ['scalp', 'intraday', 'swing'].filter(function(style) {
+    var row = vls[style] || {};
+    return row.sl != null && row.tp1 != null;
+  });
+  if (levelRows.length) {
+    html += '<div style="margin-top:6px;padding:8px;border:1px dashed rgba(168,85,247,0.22);border-radius:6px;font-size:10px;color:var(--text-secondary);line-height:1.6;">' +
+      '<div style="font-weight:700;color:#c4b5fd;margin-bottom:4px;">AI level suggestions</div>';
+    levelRows.forEach(function(style) {
+      var row = vls[style];
+      html += '<div>' + _styleLabel(style) + ': SL <span style="color:var(--bear)">' + fmtPrice(row.sl) +
+        '</span> · TP <span style="color:var(--bull)">' + fmtPrice(row.tp1) + '</span>' +
+        (row.rr != null ? ' · ' + row.rr + 'R' : '') + '</div>';
+    });
+    html += '</div>';
+  }
   if (c.vision_analysis) {
     html += '<details style="margin-top:6px;">' +
       '<summary style="cursor:pointer;color:var(--accent);font-size:10px;font-weight:700;">' +
@@ -8890,7 +9151,7 @@ function buildECExecButtons(c, sid) {
   var html = '<div style="display:flex;gap:6px;">';
   styles.forEach(function(s) {
     var risky = _ecStyleBlocked(c, s.key);
-    html += '<button onclick="executeEngineC(\''+sid+'\',\''+s.key+'\')" class="exec-btn force" ' +
+    html += '<button onclick="confirmExecuteEngineC(\''+sid+'\',\''+s.key+'\')" class="exec-btn force" ' +
       'style="flex:1;font-size:11px;" title="'+(risky?'Vision caution: '+s.key:'Execute '+s.key)+'">'+
       s.icon+' '+s.label+' ('+sizeLabel+')'+(risky?' ⚠':'')+'</button>';
   });
@@ -8944,6 +9205,12 @@ async function runECVisionConfirm(sid) {
     return;
   }
 
+  var panel = document.getElementById('acm-ai-panel');
+  if (panel) {
+    panel.style.display = 'block';
+    panel.innerHTML = '<h4>🧠 ENGINE C VISION</h4><div style="color:#5a6d80;">Loading H4 chart...</div>';
+  }
+
   // ── Step 1: H4 entry screenshot ────────────────────────────────────────────
   btn.textContent = '&#129504; Loading H4 chart...';
   openAcm(consensus.symbol, 'H4', consensus);
@@ -8954,11 +9221,12 @@ async function runECVisionConfirm(sid) {
   }
   await new Promise(function(r) { setTimeout(r, 1200); });
   btn.textContent = '&#129504; Capturing H4...';
+  if (panel) panel.innerHTML = '<h4>🧠 ENGINE C VISION</h4><div style="color:#5a6d80;">Capturing chart screenshot...</div>';
   var h4Base64 = await _captureChart();
-  closeAcm();
 
   // ── Step 2: Send H4 to AI ──────────────────────────────────────────────────
   btn.textContent = '&#129504; Analysing H4...';
+  if (panel) panel.innerHTML = '<h4>🧠 ENGINE C VISION</h4><div style="color:#5a6d80;">Sending to Claude Vision for analysis...</div>';
 
   try {
     var visionResp = await fetch('/api/chart-analysis', {
@@ -9041,15 +9309,62 @@ async function runECVisionConfirm(sid) {
       });
     });
 
+    if (_acm && _acm.symbol === consensus.symbol) {
+      _acm.sig = _acmNormalizeSig(updated);
+      _persistChartAiResult(_acm.sig, vision);
+      _renderAcmAnalysisPanel(_acm.sig, vision, 'H4');
+    }
+
   } catch(err) {
     var visionDiv2 = document.getElementById('ec-vision-' + sid);
     if (visionDiv2) {
       visionDiv2.innerHTML = '<div style="color:var(--bear);font-size:11px;">Error: ' +
         err.message + '</div>';
     }
+    if (panel) {
+      panel.style.display = 'block';
+      panel.innerHTML = '<h4>🧠 ENGINE C VISION</h4><div style="color:#f6465d;">Error: ' + err.message + '</div>';
+    }
     btn.textContent = '&#129504; AI CONFIRM';
     btn.disabled = false;
   }
+}
+
+function confirmExecuteEngineC(sid, pipMode) {
+  var consensus = null;
+  ['aligned', 'a_only', 'b_only'].forEach(function(cat) {
+    (window._ecResults && window._ecResults[cat] || []).forEach(function(c) {
+      var cSid = (c.symbol || c.display || '').replace(/[\/=^.]/g, '_');
+      if (cSid === sid) consensus = c;
+    });
+  });
+  if (!consensus || !consensus.trade) {
+    showToast('Cannot execute — no valid consensus signal', true);
+    return;
+  }
+  var ref = 'ec:' + sid + ':' + (pipMode || 'swing');
+  window._execSignalsByKey = window._execSignalsByKey || {};
+  window._execSignalsByKey[ref] = {
+    pair: consensus.display,
+    display: consensus.display,
+    symbol: consensus.symbol,
+    type: consensus.type,
+    direction: consensus.direction,
+    price: consensus.entry,
+    sl: consensus.sl,
+    tp1: consensus.tp,
+    tp2: consensus.tp,
+    style: pipMode || consensus.style || 'swing',
+    confluenceScore: consensus.conviction,
+    timestamp: new Date().toISOString(),
+    chart_ai_levels: consensus.vision_level_suggestions || {},
+    chart_ai: {
+      model: 'chart-ai',
+      tf: consensus.vision_triple_tf ? 'D1+H4+H1' : (consensus.vision_dual_tf ? 'D1+H4' : 'H4'),
+      structured: { level_suggestions: consensus.vision_level_suggestions || {} }
+    }
+  };
+  confirmExecute(ref, false, (consensus.vision_level_suggestions || {})[pipMode || 'swing'] ? ('ai_' + (pipMode || 'swing')) : 'current');
 }
 
 async function executeEngineC(sid, pipMode) {

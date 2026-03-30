@@ -6677,7 +6677,57 @@ def api_chart_analysis():
                 f"passed={conf.get('passed')}, rr={conf.get('rr')}"
             )
 
+    def _chart_level_sets(sig_payload: dict) -> dict:
+        def _to_num(value):
+            try:
+                if value is None or value == "":
+                    return None
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        out = {}
+        sig_payload = sig_payload or {}
+        style_levels = sig_payload.get("style_levels")
+        if isinstance(style_levels, dict):
+            for _style in ("scalp", "intraday", "swing"):
+                row = style_levels.get(_style) or {}
+                sl = _to_num(row.get("sl"))
+                tp1 = _to_num(row.get("tp1") or row.get("tp"))
+                tp2 = _to_num(row.get("tp2") or row.get("tp1") or row.get("tp"))
+                if sl is not None and tp1 is not None:
+                    out[_style] = {
+                        "sl": sl,
+                        "tp1": tp1,
+                        "tp2": tp2 if tp2 is not None else tp1,
+                    }
+
+        base_sl = _to_num(sig_payload.get("sl"))
+        base_tp1 = _to_num(sig_payload.get("tp1") or sig_payload.get("tp"))
+        base_tp2 = _to_num(sig_payload.get("tp2") or sig_payload.get("tp1") or sig_payload.get("tp"))
+        if base_sl is not None and base_tp1 is not None:
+            base = {
+                "sl": base_sl,
+                "tp1": base_tp1,
+                "tp2": base_tp2 if base_tp2 is not None else base_tp1,
+            }
+            for _style in ("scalp", "intraday", "swing"):
+                out.setdefault(_style, dict(base))
+        return out
+
     asset_type = pair.get("type", "unknown") if pair else "unknown"
+    current_levels = _chart_level_sets(sig or {})
+    if current_levels:
+        _level_lines = []
+        for _style in ("scalp", "intraday", "swing"):
+            row = current_levels.get(_style) or {}
+            if row.get("sl") is None or row.get("tp1") is None:
+                continue
+            _level_lines.append(
+                f"{_style.upper()} CURRENT LEVELS: SL={row['sl']:.6f} TP={row['tp1']:.6f}"
+            )
+        if _level_lines:
+            context_parts.append("STYLE LEVELS:\n" + "\n".join(_level_lines))
     algo_context = "\n".join(context_parts) if context_parts else "No algorithmic data available."
 
     system_prompt = (
@@ -6689,7 +6739,12 @@ def api_chart_analysis():
 
     direction_str = sig.get("direction", "UNKNOWN") if sig else "UNKNOWN"
 
-    def _extract_vision_structured(analysis_text: str, direction_hint: str) -> dict:
+    def _extract_vision_structured(
+        analysis_text: str,
+        direction_hint: str,
+        entry_price: float | None = None,
+        current_level_sets: dict | None = None,
+    ) -> dict:
         """Extract structured Vision fields from free-text analysis."""
         import re as _re
 
@@ -6701,6 +6756,7 @@ def api_chart_analysis():
             "sl_flag": "ok",
             "tp_flag": "ok",
             "style_ratings": {},
+            "level_suggestions": {},
         }
         for style in ("SCALP", "INTRADAY", "SWING"):
             m = _re.search(
@@ -6738,6 +6794,49 @@ def api_chart_analysis():
         if _re.search(r"\bTP\b.*(TOO\s+FAR|UNREALISTIC)", up):
             out["tp_flag"] = "too_far"
 
+        def _parse_level_token(token: str, fallback: float | None) -> float | None:
+            raw = str(token or "").strip().upper().rstrip(",.;")
+            if raw in ("", "KEEP", "CURRENT", "SAME", "UNCHANGED", "-", "N/A", "NA"):
+                return fallback
+            m = _re.search(r"-?\d+(?:\.\d+)?", raw)
+            if not m:
+                return None
+            try:
+                return float(m.group(0))
+            except (TypeError, ValueError):
+                return None
+
+        def _levels_valid(entry: float | None, direction: str, sl: float | None, tp1: float | None) -> bool:
+            if entry is None or entry <= 0 or sl is None or tp1 is None:
+                return False
+            if direction == "LONG":
+                return sl < entry < tp1
+            if direction == "SHORT":
+                return sl > entry > tp1
+            return False
+
+        _current_sets = current_level_sets or {}
+        for style in ("SCALP", "INTRADAY", "SWING"):
+            m = _re.search(
+                rf"{style}\s+LEVELS?\s*:\s*SL\s*=\s*([^\s,;]+)\s+TP(?:1)?\s*=\s*([^\s,;]+)",
+                up,
+            )
+            if not m:
+                continue
+            _current = _current_sets.get(style.lower(), {})
+            sl_val = _parse_level_token(m.group(1), _current.get("sl"))
+            tp1_val = _parse_level_token(m.group(2), _current.get("tp1"))
+            if not _levels_valid(entry_price, direction_hint.upper(), sl_val, tp1_val):
+                continue
+            risk = abs(float(entry_price) - float(sl_val)) if entry_price else 0.0
+            reward = abs(float(tp1_val) - float(entry_price)) if entry_price else 0.0
+            out["level_suggestions"][style.lower()] = {
+                "sl": round(float(sl_val), 6),
+                "tp1": round(float(tp1_val), 6),
+                "tp2": round(float(tp1_val), 6),
+                "rr": round((reward / risk), 2) if risk > 0 else None,
+            }
+
         if not out["rating"]:
             out["rating"] = "MODERATE"
         return out
@@ -6750,7 +6849,7 @@ def api_chart_analysis():
         "- Entry (grey dashed), SL (red solid), TP1/TP2 (green solid) horizontal lines\n"
         "- FVG imbalance zones visible as cyan dashed lines (bullish=green, bearish=red)\n"
         "- Engine B zones may be visible (support green, resistance red, BOS amber, CHoCH purple, OB labelled)\n\n"
-        "ANSWER THESE 5 QUESTIONS:\n"
+        "ANSWER THESE 6 QUESTIONS:\n"
         "1. PATTERN: What price action pattern is forming? (flag, wedge, channel, H&S, double top/bottom, breakout, pullback, range, etc.)\n"
         f"2. STRUCTURE: Does the visible price structure CONFIRM or CONTRADICT the algorithmic {direction_str} bias? Why?\n"
         "3. MISSED: Are there any patterns or levels the algorithm may have missed? (unmitigated FVGs, hidden divergence, liquidity pools above/below current price, equal highs/lows, trendline breaks)\n"
@@ -6760,13 +6859,18 @@ def api_chart_analysis():
         "SCALP RATING: STRONG / MODERATE / WEAK / AVOID\n"
         "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID\n"
         "SWING RATING: STRONG / MODERATE / WEAK / AVOID\n"
+        "6. STYLE LEVELS: For SCALP, INTRADAY, and SWING separately, say whether SL/TP should be KEPT or changed. "
+        "If changed, give exact numeric prices.\n"
         "(use CONTRADICTS instead if the chart clearly opposes the algorithmic direction for that style) "
         "— one sentence justification per style.\n\n"
-        "You MUST end with exactly these 4 lines:\n"
+        "You MUST end with exactly these 7 lines:\n"
         "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
         "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+        "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
         "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-        "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n\n"
+        "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
+        "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+        "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
         "Keep total response under 350 words. Be direct."
     )
 
@@ -6809,7 +6913,7 @@ def api_chart_analysis():
                 "- FVG imbalance zones visible as cyan dashed lines (bullish=green, bearish=red)\n"
                 "- Engine B zones may be visible: support (green), resistance (red), "
                 "BOS (amber), CHoCH (purple), OB (labelled)\n\n"
-                "ANSWER THESE 5 QUESTIONS:\n"
+                "ANSWER THESE 6 QUESTIONS:\n"
                 f"1. D1 BIAS: What is the clear trend on D1? Does it CONFIRM or CONTRADICT "
                 f"the algorithmic {direction_str} signal? One sentence.\n"
                 f"2. H4 STRUCTURE: Does H4 show valid intermediate {direction_str} alignment? "
@@ -6824,12 +6928,17 @@ def api_chart_analysis():
                 "SCALP RATING: STRONG / MODERATE / WEAK / AVOID\n"
                 "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID\n"
                 "SWING RATING: STRONG / MODERATE / WEAK / AVOID\n"
+                "6. STYLE LEVELS: For SCALP, INTRADAY, and SWING separately, say whether SL/TP should be KEPT or changed. "
+                "If changed, give exact numeric prices.\n"
                 "(use CONTRADICTS if that timeframe clearly opposes the algorithmic direction)\n\n"
-                "You MUST end with exactly these 4 lines:\n"
+                "You MUST end with exactly these 7 lines:\n"
                 "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
                 "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
                 "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n\n"
+                "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
+                "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
                 "Keep total response under 480 words. Be direct."
             )
             content = [
@@ -6864,7 +6973,7 @@ def api_chart_analysis():
                 "- Entry (grey dashed) · SL (red solid) · TP (green solid) lines\n"
                 "- Engine B zones may be visible: support (green), resistance (red), "
                 "BOS (amber), CHoCH (purple), OB (labelled)\n\n"
-                "ANSWER THESE 5 QUESTIONS:\n"
+                "ANSWER THESE 6 QUESTIONS:\n"
                 f"1. D1 BIAS: What is the clear trend on D1? Does it CONFIRM or CONTRADICT "
                 f"the algorithmic {direction_str} signal? One sentence.\n"
                 f"2. H4 ENTRY: Does H4 show a valid {direction_str} entry setup right now? "
@@ -6878,12 +6987,17 @@ def api_chart_analysis():
                 "SCALP RATING: STRONG / MODERATE / WEAK / AVOID\n"
                 "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID\n"
                 "SWING RATING: STRONG / MODERATE / WEAK / AVOID\n"
+                "6. STYLE LEVELS: For SCALP, INTRADAY, and SWING separately, say whether SL/TP should be KEPT or changed. "
+                "If changed, give exact numeric prices.\n"
                 "(use CONTRADICTS if the combined picture clearly opposes the algorithmic direction)\n\n"
-                "You MUST end with exactly these 4 lines:\n"
+                "You MUST end with exactly these 7 lines:\n"
                 "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
                 "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
                 "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n\n"
+                "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
+                "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
                 "Keep total response under 420 words. Be direct."
             )
             content = [
@@ -6923,7 +7037,21 @@ def api_chart_analysis():
         )
 
         analysis = message.content[0].text if message.content else "No analysis returned."
-        structured = _extract_vision_structured(analysis, direction_str)
+        try:
+            _entry_hint = float(
+                (sig or {}).get("price")
+                or (sig or {}).get("entry")
+                or (eb or {}).get("current_price")
+                or 0
+            )
+        except (TypeError, ValueError):
+            _entry_hint = None
+        structured = _extract_vision_structured(
+            analysis,
+            direction_str,
+            entry_price=_entry_hint,
+            current_level_sets=current_levels,
+        )
 
         _tf_label = "D1+H4+H1" if triple_mode else ("D1+H4" if dual_mode else tf)
         return jsonify({

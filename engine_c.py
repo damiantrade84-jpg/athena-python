@@ -431,6 +431,7 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
     updated["vision_style_ratings"] = style_ratings or {
         "scalp": rating, "intraday": rating, "swing": rating,
     }
+    updated["vision_level_suggestions"] = structured.get("level_suggestions") or {}
 
     # If Vision flags SL as too tight, check if we can widen
     if sl_flag == "too_tight" and updated.get("sl_method") != "atr":
