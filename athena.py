@@ -107,6 +107,12 @@ from data_feeds import (  # noqa: E402
     _fetch_open_interest,
     _calc_oi_divergence,
 )
+from eodhd_volume_overlay import (  # noqa: E402
+    is_eodhd_volume_whitelisted as _is_eodhd_volume_whitelisted,
+    overlay_candle_volumes as _overlay_candle_volumes,
+    resample_eodhd_volume_bars as _resample_eodhd_volume_bars,
+    supports_eodhd_volume_overlay as _supports_eodhd_volume_overlay,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -140,6 +146,9 @@ from candles_cache import (  # noqa: E402
 _last_scan_results: dict = {"signals": []}  # latest run_full_scan output for chart-analysis context
 _engine_b_cache: dict = {}  # sid/symbol -> naked analysis result dict
 _ENGINE_B_CACHE_TTL = 300.0
+_eodhd_volume_cache: dict = {}
+_eodhd_volume_cache_lock = threading.Lock()
+_EODHD_VOLUME_TTL = {"H1": 55 * 60, "H4": 235 * 60, "D1": 23 * 3600}
 
 
 def _engine_b_cache_put(key: str, value: dict) -> None:
@@ -1518,6 +1527,215 @@ def _eodhd_intraday_ticker_for_pair(pair: dict) -> str | None:
     return _eodhd_ticker_for_pair(pair)
 
 
+def _eodhd_volume_cache_key(pair: dict, tf: str, limit: int) -> tuple[str, str, int]:
+    return (pair.get("symbol", pair.get("display", "")), str(tf or "").upper(), int(limit))
+
+
+def _get_cached_eodhd_volume_only(pair: dict, tf: str, limit: int):
+    key = _eodhd_volume_cache_key(pair, tf, limit)
+    now = time.time()
+    with _eodhd_volume_cache_lock:
+        entry = _eodhd_volume_cache.get(key)
+        if not entry:
+            return None
+        payload, expiry = entry
+        if now >= expiry:
+            _eodhd_volume_cache.pop(key, None)
+            return None
+        return payload
+
+
+def _store_cached_eodhd_volume_only(pair: dict, tf: str, limit: int, payload: dict) -> None:
+    key = _eodhd_volume_cache_key(pair, tf, limit)
+    ttl = _EODHD_VOLUME_TTL.get(str(tf or "").upper(), 15 * 60)
+    with _eodhd_volume_cache_lock:
+        _eodhd_volume_cache[key] = (payload, time.time() + ttl)
+
+
+def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int) -> dict:
+    """Best-effort EODHD volume fetch for MT5 stocks/commodities/indices only.
+
+    This never changes OHLC routing. It is used only to overlay `vol` when EODHD
+    returns matching bars; otherwise the MT5 candles remain untouched.
+    """
+    tf_key = str(tf or "").upper()
+    cached = _get_cached_eodhd_volume_only(pair, tf_key, limit)
+    if cached is not None:
+        return cached
+
+    display = pair.get("display", pair.get("symbol", "unknown"))
+    payload = {
+        "error": True,
+        "symbol": display,
+        "detail": "",
+        "candles": None,
+        "ticker": None,
+        "request_tf": tf_key,
+        "source_tf": None,
+    }
+
+    if not _supports_eodhd_volume_overlay(pair):
+        payload["detail"] = "unsupported asset type"
+        _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+        return payload
+
+    if tf_key not in {"H1", "H4", "D1"}:
+        payload["detail"] = f"unsupported timeframe: {tf_key}"
+        _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+        return payload
+
+    if not _is_eodhd_volume_whitelisted(pair, tf_key):
+        payload["detail"] = f"pair/timeframe not whitelisted: {tf_key}"
+        _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+        return payload
+
+    _key = os.environ.get("EODHD_KEY", "").strip()
+    if not _key:
+        payload["detail"] = "EODHD_KEY not set"
+        _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+        return payload
+
+    try:
+        if tf_key == "D1":
+            ticker = _eodhd_ticker_for_pair(pair)
+            payload["ticker"] = ticker
+            payload["source_tf"] = "D1"
+            if not ticker:
+                payload["detail"] = "no valid EODHD daily ticker"
+                _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+                return payload
+
+            api = _get_eodhd_client()
+            if not api:
+                payload["detail"] = "EODHD client unavailable"
+                _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+                return payload
+
+            days = max(90, int(limit) + 10)
+            start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+            bars = api.get_eod_historical_stock_market_data(
+                ticker, period="d", from_date=start, order="a"
+            )
+            candles = [
+                {
+                    "time": b["date"],
+                    "open": float(b["open"]),
+                    "high": float(b["high"]),
+                    "low": float(b["low"]),
+                    "close": float(b["close"]),
+                    "vol": float(b.get("volume") or 0),
+                }
+                for b in (bars or [])
+                if b.get("open") is not None and b.get("close") is not None
+            ]
+            candles = candles[-limit:] if len(candles) > limit else candles
+        else:
+            ticker = _eodhd_intraday_ticker_for_pair(pair)
+            payload["ticker"] = ticker
+            payload["source_tf"] = "H1"
+            if not ticker:
+                payload["detail"] = "no valid EODHD intraday ticker"
+                _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+                return payload
+
+            now_ts = int(datetime.now(timezone.utc).timestamp())
+            hours_needed = (int(limit) * 4) if tf_key == "H4" else int(limit)
+            days = max(7, min(365, math.ceil((hours_needed + 24) / 24.0) + 3))
+            from_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+            resp = http_requests.get(
+                f"https://eodhd.com/api/intraday/{ticker}",
+                params={
+                    "api_token": _key,
+                    "fmt": "json",
+                    "from": from_ts,
+                    "to": now_ts,
+                    "interval": "1h",
+                },
+                timeout=20,
+            )
+            if resp.status_code != 200:
+                payload["detail"] = f"HTTP {resp.status_code}"
+                _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+                return payload
+
+            bars = resp.json()
+            if not isinstance(bars, list) or not bars:
+                payload["detail"] = "no intraday data"
+                _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+                return payload
+
+            h1_candles = [
+                {
+                    "time": b["datetime"],
+                    "open": float(b["open"]),
+                    "high": float(b["high"]),
+                    "low": float(b["low"]),
+                    "close": float(b["close"]),
+                    "vol": float(b.get("volume") or 0),
+                }
+                for b in bars
+                if b.get("open") is not None and b.get("close") is not None
+            ]
+            candles = _resample_eodhd_volume_bars(h1_candles, tf_key, int(limit))
+
+        usable = [c for c in (candles or []) if float(c.get("vol", 0) or 0) > 0]
+        if usable:
+            payload.update({"error": False, "detail": "", "candles": candles})
+        else:
+            payload["detail"] = "no usable EODHD volume bars"
+    except Exception as e:
+        payload["detail"] = str(e)
+
+    _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+    return payload
+
+
+def _overlay_mt5_candles_with_eodhd_volume(pair: dict, tf: str, mt5_resp: dict) -> dict:
+    """Overlay EODHD volume onto MT5 candles without altering OHLC or live price source."""
+    if not isinstance(mt5_resp, dict):
+        return mt5_resp
+    if mt5_resp.get("error"):
+        return mt5_resp
+    if not _supports_eodhd_volume_overlay(pair):
+        return mt5_resp
+
+    candles = _extract_candles(mt5_resp)
+    if not candles:
+        return mt5_resp
+
+    tf_key = str(tf or "").upper()
+    if tf_key not in {"H1", "H4", "D1"}:
+        return mt5_resp
+
+    volume_resp = _fetch_eodhd_volume_only(pair, tf_key, len(candles))
+    volume_candles = _extract_candles(volume_resp)
+    if not volume_candles:
+        if volume_resp.get("detail"):
+            log.info(
+                f"[EODHD-VOL] {pair.get('display')} {tf_key}: overlay skipped - {volume_resp.get('detail')}"
+            )
+        return mt5_resp
+
+    merged, matched = _overlay_candle_volumes(candles, volume_candles, tf_key)
+    if matched <= 0:
+        log.info(f"[EODHD-VOL] {pair.get('display')} {tf_key}: overlay found no matching bars")
+        return mt5_resp
+
+    out = dict(mt5_resp)
+    out["candles"] = merged
+    out["volumeOverlay"] = {
+        "source": "eodhd",
+        "ticker": volume_resp.get("ticker"),
+        "source_tf": volume_resp.get("source_tf"),
+        "matched": matched,
+        "requested": len(candles),
+    }
+    log.info(
+        f"[EODHD-VOL] {pair.get('display')} {tf_key}: applied EODHD volume to {matched}/{len(candles)} candles"
+    )
+    return out
+
+
 def _fetch_eodhd_intraday_bt(pair, days=730):
     """Fetch extended intraday H1 data from EODHD REST API with from/to params for backtest.
 
@@ -2066,12 +2284,13 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
                 "source": "mt5",
             }
         
-    return {
+    resp = {
         "error": False,
         "symbol": symbol,
         "detail": "",
         "candles": candles[-limit:] if len(candles) > limit else candles,
     }
+    return _overlay_mt5_candles_with_eodhd_volume(pair, tf, resp)
 
 def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
     """Route candle fetch to correct source with in-memory TTL cache (see candles_cache)."""
@@ -6830,6 +7049,26 @@ def api_chart_analysis():
         "TF ALIGNMENT: ALIGNED / CONFLICTED"
     )
 
+    system_prompt = (
+        "You are a professional trading analyst reviewing chart screenshots with full algorithmic context.\n"
+        "Your job is to produce a concise trade review grounded entirely in what is visible on the chart and the supplied context.\n\n"
+        "ABSOLUTE RULES:\n"
+        "1. ONLY describe what you can ACTUALLY SEE on the chart. If something is unclear, say 'not clearly visible'.\n"
+        "2. NEVER invent patterns, levels, formations, barriers, or price behavior not clearly visible in the image or supplied context.\n"
+        "3. When referencing levels, use exact prices from the algorithmic context first; use the chart axis only if clearly readable.\n"
+        "4. The chart shows candles, EMA21, EMA50, EMA200, Keltner Channel, entry, SL, TP, volume, and Engine B annotations when present.\n"
+        "5. Cross-reference what you see with the algorithmic context. If they disagree, say so explicitly.\n"
+        "6. If PREVIOUS SESSION PROFILE context is provided, note whether price is above, inside, or below prior value, and whether POC/VAH/VAL reaction confirms or contradicts the trade.\n"
+        "7. Be direct. No filler, no hedging, no disclaimers.\n\n"
+        "CRITICAL - RIGHT EDGE ANALYSIS:\n"
+        "- Before issuing any verdict, inspect the last 5 candles on the right edge of the chart.\n"
+        "- If the last 3 or more candles are counter-trend with rising volume, classify this as RIGHT EDGE: POTENTIAL REVERSAL even if prior structure was supportive.\n"
+        "- If price has reclaimed EMA21, EMA50, or EMA200 against the trade since the entry, HOLD is no longer allowed.\n"
+        "- HOLD is only allowed if the right edge still confirms the trade direction.\n"
+        "- If the right edge does not confirm the trade direction, the verdict must be ADJUST or CLOSE.\n"
+        "- Include one explicit line immediately before the existing parser footer: RIGHT EDGE: CONFIRMS | REVIEW | POTENTIAL REVERSAL."
+    )
+
     direction_str = sig.get("direction", "UNKNOWN") if sig else "UNKNOWN"
 
     def _extract_vision_structured(
@@ -6850,6 +7089,10 @@ def api_chart_analysis():
             "tp_flag": "ok",
             "style_ratings": {},
             "level_suggestions": {},
+            "right_edge_status": "",
+            "final_verdict": "",
+            "ema_reclaim_flag": None,
+            "countertrend_volume_flag": None,
         }
         for style in ("SCALP", "INTRADAY", "SWING"):
             m = _re.search(
@@ -6886,6 +7129,35 @@ def api_chart_analysis():
             out["sl_flag"] = "too_tight"
         if _re.search(r"\bTP\b.*(TOO\s+FAR|UNREALISTIC)", up):
             out["tp_flag"] = "too_far"
+        _right_edge = _re.search(
+            r"RIGHT\s+EDGE\s*:\s*(CONFIRMS|REVIEW|POTENTIAL\s+REVERSAL)",
+            up,
+        )
+        if _right_edge:
+            out["right_edge_status"] = _right_edge.group(1).replace(" ", "_")
+        _verdict = _re.search(r"FINAL\s+VERDICT\s*:\s*(HOLD|CLOSE|ADJUST)", up)
+        if _verdict:
+            out["final_verdict"] = _verdict.group(1)
+        if _re.search(
+            r"(RECLAIM(?:ED|ING)?|RETAKEN|RECOVERED).{0,40}(EMA\s*21|EMA21|EMA\s*50|EMA50|EMA\s*200|EMA200)",
+            up,
+        ):
+            out["ema_reclaim_flag"] = True
+        elif _re.search(
+            r"(HAS\s+NOT|DID\s+NOT|NO).{0,24}(RECLAIM(?:ED|ING)?|RETAKEN|RECOVERED).{0,40}(EMA\s*21|EMA21|EMA\s*50|EMA50|EMA\s*200|EMA200)",
+            up,
+        ):
+            out["ema_reclaim_flag"] = False
+        if _re.search(
+            r"((COUNTER[-\s]?TREND).{0,60}(RISING\s+VOLUME|VOLUME\s+RISING))|((RISING\s+VOLUME|VOLUME\s+RISING).{0,60}(COUNTER[-\s]?TREND))",
+            up,
+        ):
+            out["countertrend_volume_flag"] = True
+        elif _re.search(
+            r"(NO\s+COUNTER[-\s]?TREND\s+VOLUME|RIGHT\s+EDGE\s+STILL\s+CONFIRMS)",
+            up,
+        ):
+            out["countertrend_volume_flag"] = False
 
         def _parse_level_token(token: str, fallback: float | None) -> float | None:
             raw = str(token or "").strip().upper().rstrip(",.;")
@@ -6949,6 +7221,12 @@ def api_chart_analysis():
                 "entry_anchor": round(float(entry_price), 6) if entry_price else None,
                 "rr": round((reward / risk), 2) if risk > 0 else None,
             }
+
+        if out["final_verdict"] == "HOLD" and out["right_edge_status"] in (
+            "REVIEW",
+            "POTENTIAL_REVERSAL",
+        ):
+            out["final_verdict"] = "ADJUST"
 
         if not out["rating"]:
             out["rating"] = "MODERATE"
@@ -7029,6 +7307,50 @@ def api_chart_analysis():
         "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
         "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
         "Keep total response under 360 words. Reference specific prices. No speculation."
+    )
+
+    user_prompt = (
+        f"Analyse this {asset_type.upper()} chart ({tf} timeframe).\n\n"
+        f"ALGORITHMIC CONTEXT (use these as ground truth for levels):\n{algo_context}\n\n"
+        "Keep the analysis concise, structured, and easy to scan.\n\n"
+        "Use this exact body order:\n"
+        "TRADE SNAPSHOT:\n"
+        "- instrument, timeframe, direction, entry, SL, TP, and RR if inferable\n"
+        "- if unclear, say 'not clearly visible' or 'not clearly inferable'\n\n"
+        "MARKET STRUCTURE:\n"
+        "- EMA order and trend alignment vs the algorithmic direction\n"
+        "- whether the setup looks like a re-test, breakout, continuation, range, or failed breakout\n"
+        "- mention the nearest obstacle between entry and TP first\n\n"
+        "RIGHT EDGE:\n"
+        "- inspect the last 5 candles on the right edge specifically\n"
+        "- state whether the last 3 candles are counter-trend\n"
+        "- state whether volume is rising or falling on that counter-trend move\n"
+        "- state whether price has reclaimed EMA21, EMA50, or EMA200 since entry\n"
+        "- state whether the right edge still confirms the trade direction\n\n"
+        "BULLISH FACTORS:\n"
+        "- only visible/chart-context evidence\n\n"
+        "BEARISH FACTORS:\n"
+        "- only visible/chart-context evidence\n\n"
+        "KEY RISKS:\n"
+        "- include SL logic, TP realism, and profile/value-area issues if visible\n\n"
+        "FINAL VERDICT:\n"
+        "- HOLD / ADJUST / CLOSE with one sentence justification\n"
+        "- HOLD is only allowed if the right edge still confirms the trade direction\n\n"
+        "ACTIONABLE IMPROVEMENT:\n"
+        "- one specific concrete action\n\n"
+        "Then output one machine-readable line immediately before the parser footer:\n"
+        "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n\n"
+        "Use the existing footer for style ratings and AI levels. The final 8 lines must be the RIGHT EDGE line plus the exact 7 footer lines, with nothing after them.\n"
+        "You MUST end with exactly these 8 lines:\n"
+        "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
+        "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
+        "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+        "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
+        "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+        "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
+        "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+        "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
+        "Keep total response under 430 words. Reference specific prices. No speculation."
     )
 
     try:
@@ -7131,6 +7453,110 @@ def api_chart_analysis():
                 "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
                 "Keep total response under 420 words. Reference specific prices. No speculation."
             )
+            triple_prompt = (
+                f"You are reviewing THREE charts for {asset_type.upper()} - {symbol}.\n"
+                "IMAGE 1 is D1 (daily) - dominant bias and swing trend quality.\n"
+                "IMAGE 2 is H4 (4-hour) - tactical structure, support/resistance path, FVG/OB context.\n"
+                "IMAGE 3 is H1 (1-hour) - decisive right-edge trigger check, candle behavior, and short-horizon invalidation quality.\n\n"
+                f"ALGORITHMIC CONTEXT (use as ground truth for levels):\n{algo_context}\n\n"
+                "Keep the analysis concise and easy to scan.\n\n"
+                "Use this exact body order:\n"
+                "TRADE SNAPSHOT\n"
+                "MARKET STRUCTURE\n"
+                "RIGHT EDGE\n"
+                "BULLISH FACTORS\n"
+                "BEARISH FACTORS\n"
+                "KEY RISKS\n"
+                "FINAL VERDICT\n"
+                "ACTIONABLE IMPROVEMENT\n\n"
+                "Instructions:\n"
+                f"- D1: dominant bias vs the algorithmic {direction_str} direction.\n"
+                "- H4: tactical structure, nearest obstacle between entry and TP, re-test / breakout / continuation / range / failed breakout.\n"
+                "- H1: inspect the last 5 candles on the right edge first. State whether the last 3 candles are counter-trend, whether volume is rising, whether price reclaimed EMA21/EMA50/EMA200 since entry, and whether the right edge still confirms the trade.\n"
+                "- If H1 right edge shows counter-trend candles with rising volume or EMA reclaim against the trade, the verdict must be ADJUST or CLOSE.\n"
+                "- HOLD is only allowed if the H1 right edge still confirms the trade direction.\n\n"
+                "Then output one machine-readable line immediately before the parser footer:\n"
+                "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
+                "The final 8 lines must be that RIGHT EDGE line plus the exact 7 parser footer lines, with nothing after them.\n\n"
+                "You MUST end with exactly these 8 lines:\n"
+                "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
+                "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
+                "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
+                "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
+                "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
+                "Keep total response under 460 words. Reference specific prices. No speculation."
+            )
+            dual_prompt = (
+                f"You are reviewing TWO charts for {asset_type.upper()} - {symbol}.\n"
+                "IMAGE 1 is D1 (daily) - dominant bias, macro EMA structure, swing-quality context.\n"
+                "IMAGE 2 is H4 (4-hour) - tactical entry chart, obstacle map, and decisive right-edge review.\n\n"
+                f"ALGORITHMIC CONTEXT (use as ground truth for levels):\n{algo_context}\n\n"
+                "Keep the analysis concise and easy to scan.\n\n"
+                "Use this exact body order:\n"
+                "TRADE SNAPSHOT\n"
+                "MARKET STRUCTURE\n"
+                "RIGHT EDGE\n"
+                "BULLISH FACTORS\n"
+                "BEARISH FACTORS\n"
+                "KEY RISKS\n"
+                "FINAL VERDICT\n"
+                "ACTIONABLE IMPROVEMENT\n\n"
+                "Instructions:\n"
+                f"- D1: macro bias vs the algorithmic {direction_str} direction.\n"
+                "- H4: tactical structure, nearest obstacle between entry and TP, re-test / breakout / continuation / range / failed breakout.\n"
+                "- RIGHT EDGE must be based on the H4 right edge specifically: inspect the last 5 candles, state whether the last 3 candles are counter-trend, whether volume is rising on that move, whether price reclaimed EMA21/EMA50/EMA200 since entry, and whether the right edge still confirms the trade.\n"
+                "- If the H4 right edge does not confirm the trade, FINAL VERDICT cannot be HOLD.\n\n"
+                "Then output one machine-readable line immediately before the parser footer:\n"
+                "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
+                "The final 8 lines must be that RIGHT EDGE line plus the exact 7 parser footer lines, with nothing after them.\n\n"
+                "You MUST end with exactly these 8 lines:\n"
+                "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
+                "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
+                "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
+                "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
+                "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
+                "Keep total response under 420 words. Reference specific prices. No speculation."
+            )
+            dual_prompt = (
+                f"You are reviewing TWO charts for {asset_type.upper()} - {symbol}.\n"
+                "IMAGE 1 is D1 (daily) - dominant bias, macro EMA structure, swing-quality context.\n"
+                "IMAGE 2 is H4 (4-hour) - tactical entry chart, obstacle map, and decisive right-edge review.\n\n"
+                f"ALGORITHMIC CONTEXT (use as ground truth for levels):\n{algo_context}\n\n"
+                "Keep the analysis concise and easy to scan.\n\n"
+                "Use this exact body order:\n"
+                "TRADE SNAPSHOT\n"
+                "MARKET STRUCTURE\n"
+                "RIGHT EDGE\n"
+                "BULLISH FACTORS\n"
+                "BEARISH FACTORS\n"
+                "KEY RISKS\n"
+                "FINAL VERDICT\n"
+                "ACTIONABLE IMPROVEMENT\n\n"
+                "Instructions:\n"
+                f"- D1: macro bias vs the algorithmic {direction_str} direction.\n"
+                "- H4: tactical structure, nearest obstacle between entry and TP, re-test / breakout / continuation / range / failed breakout.\n"
+                "- RIGHT EDGE must be based on the H4 right edge specifically: inspect the last 5 candles, state whether the last 3 candles are counter-trend, whether volume is rising on that move, whether price reclaimed EMA21/EMA50/EMA200 since entry, and whether the right edge still confirms the trade.\n"
+                "- If the H4 right edge does not confirm the trade, FINAL VERDICT cannot be HOLD.\n\n"
+                "Then output one machine-readable line immediately before the parser footer:\n"
+                "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
+                "The final 8 lines must be that RIGHT EDGE line plus the exact 7 parser footer lines, with nothing after them.\n\n"
+                "You MUST end with exactly these 8 lines:\n"
+                "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
+                "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
+                "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
+                "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
+                "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
+                "Keep total response under 420 words. Reference specific prices. No speculation."
+            )
             content = [
                 {"type": "text", "text": "IMAGE 1 — D1 DAILY BIAS CHART:"},
                 {
@@ -7221,6 +7647,40 @@ def api_chart_analysis():
                 "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
                 "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
                 "Keep total response under 380 words. Reference specific prices. No speculation."
+            )
+            dual_prompt = (
+                f"You are reviewing TWO charts for {asset_type.upper()} - {symbol}.\n"
+                "IMAGE 1 is D1 (daily) - dominant bias, macro EMA structure, swing-quality context.\n"
+                "IMAGE 2 is H4 (4-hour) - tactical entry chart, obstacle map, and decisive right-edge review.\n\n"
+                f"ALGORITHMIC CONTEXT (use as ground truth for levels):\n{algo_context}\n\n"
+                "Keep the analysis concise and easy to scan.\n\n"
+                "Use this exact body order:\n"
+                "TRADE SNAPSHOT\n"
+                "MARKET STRUCTURE\n"
+                "RIGHT EDGE\n"
+                "BULLISH FACTORS\n"
+                "BEARISH FACTORS\n"
+                "KEY RISKS\n"
+                "FINAL VERDICT\n"
+                "ACTIONABLE IMPROVEMENT\n\n"
+                "Instructions:\n"
+                f"- D1: macro bias vs the algorithmic {direction_str} direction.\n"
+                "- H4: tactical structure, nearest obstacle between entry and TP, re-test / breakout / continuation / range / failed breakout.\n"
+                "- RIGHT EDGE must be based on the H4 right edge specifically: inspect the last 5 candles, state whether the last 3 candles are counter-trend, whether volume is rising on that move, whether price reclaimed EMA21/EMA50/EMA200 since entry, and whether the right edge still confirms the trade.\n"
+                "- If the H4 right edge does not confirm the trade, FINAL VERDICT cannot be HOLD.\n\n"
+                "Then output one machine-readable line immediately before the parser footer:\n"
+                "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
+                "The final 8 lines must be that RIGHT EDGE line plus the exact 7 parser footer lines, with nothing after them.\n\n"
+                "You MUST end with exactly these 8 lines:\n"
+                "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
+                "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
+                "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
+                "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
+                "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
+                "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
+                "Keep total response under 420 words. Reference specific prices. No speculation."
             )
             content = [
                 {"type": "text", "text": "IMAGE 1 — D1 DAILY BIAS CHART:"},
