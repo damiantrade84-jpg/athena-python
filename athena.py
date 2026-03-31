@@ -9275,7 +9275,7 @@ def _check_score_decay() -> None:
                 if decay_pct >= 25:
                     def _run_ai_verdict(_pn=pair_name, _dir=row["direction"] or "",
                                         _es=entry_score, _cs=cur_score, _d=decay,
-                                        _flip=direction_flip, _ctx=result):
+                                        _dpct=decay_pct, _flip=direction_flip, _ctx=result):
                         ai_v = _get_decay_ai_verdict(_pn, _dir, _es, _cs, _d, _flip, _ctx)
                         if ai_v:
                             _score_decay_results.get(_pn, {}).update({
@@ -9284,7 +9284,7 @@ def _check_score_decay() -> None:
                                 "aiReasoning": ai_v.get("reasoning"),
                                 "aiTs": datetime.now(timezone.utc).isoformat(),
                             })
-                            if _d >= 3:
+                            if _dpct >= 40:
                                 try:
                                     from telegram_notify import notify_score_decay
                                     notify_score_decay(
