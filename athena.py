@@ -6903,6 +6903,25 @@ def api_chart_analysis():
                 "rr": round((reward / risk), 2) if risk > 0 else None,
             }
 
+        # Keep the AI execution path resilient when the model omits explicit KEEP lines.
+        for style_key in ("scalp", "intraday", "swing"):
+            if out["level_suggestions"].get(style_key):
+                continue
+            _current = _current_sets.get(style_key, {})
+            sl_cur = _current.get("sl")
+            tp1_cur = _current.get("tp1")
+            if not _levels_valid(entry_price, direction_hint.upper(), sl_cur, tp1_cur):
+                continue
+            risk = abs(float(entry_price) - float(sl_cur)) if entry_price else 0.0
+            reward = abs(float(tp1_cur) - float(entry_price)) if entry_price else 0.0
+            out["level_suggestions"][style_key] = {
+                "sl": round(float(sl_cur), 6),
+                "tp1": round(float(tp1_cur), 6),
+                "tp2": round(float(_current.get("tp2") if _current.get("tp2") is not None else tp1_cur), 6),
+                "entry_anchor": round(float(entry_price), 6) if entry_price else None,
+                "rr": round((reward / risk), 2) if risk > 0 else None,
+            }
+
         if not out["rating"]:
             out["rating"] = "MODERATE"
         return out
@@ -6953,40 +6972,26 @@ def api_chart_analysis():
     user_prompt = (
         f"Analyse this {asset_type.upper()} chart ({tf} timeframe).\n\n"
         f"ALGORITHMIC CONTEXT (use these as ground truth for levels):\n{algo_context}\n\n"
-        "Produce a structured professional trade review in this exact body order:\n"
-        "1. TRADE PARAMETERS\n"
-        "2. MARKET STRUCTURE\n"
-        "3. BULLISH FACTORS\n"
-        "4. BEARISH FACTORS\n"
-        "5. KEY RISKS\n"
-        "6. FINAL VERDICT\n"
-        "7. SETUP QUALITY\n"
-        "8. ACTIONABLE IMPROVEMENT\n\n"
-        "WHAT TO REVIEW ON THE CHART:\n"
-        "- Trade parameters: instrument, timeframe, direction, entry, SL, TP, and RR if inferable from visible/provided levels\n"
-        "- Trend structure: with trend or against trend, based on price vs EMA21/EMA50/EMA200 and their ordering/slope bias\n"
-        "- Setup state: re-test, breakout, continuation, range, or failed breakout only if clearly visible\n"
-        "- Last 5 candles: expansion/contraction, reversal/continuation/indecision\n"
-        "- Volume: whether it supports the trade direction\n"
-        "- Profile context if visible: is price above, inside, or below VAH/VAL, and is it reacting at POC?\n"
-        "- Path to target: nearest obstacle between entry and TP first\n"
-        "- Risk logic: whether SL is behind logical invalidation or sitting inside noise; whether TP is realistic\n\n"
-        "BODY REQUIREMENTS:\n"
-        "- If entry/SL/TP are not clearly inferable from chart/context, say 'not clearly visible'.\n"
-        "- If RR cannot be inferred, say 'not clearly inferable'.\n"
-        "- Under BULLISH FACTORS and BEARISH FACTORS, use short bullets citing visible/chart-context evidence only.\n"
-        "- In MARKET STRUCTURE, explicitly state whether the setup looks like a re-test, breakout, continuation, range, or failed breakout.\n"
-        "- In KEY RISKS, mention the nearest obstacle between entry and TP first.\n"
-        "- FINAL VERDICT must be exactly one of: HOLD, CLOSE, ADJUST, with a short justification.\n"
-        "- SETUP QUALITY must be a 1-10 score with a one-line justification.\n"
-        "- ACTIONABLE IMPROVEMENT must give one specific improvement only.\n\n"
+        "Keep the analysis concise, structured, and easy to scan. Do not turn it into a long report.\n\n"
+        "ANSWER EXACTLY THESE 6 QUESTIONS using short paragraphs or short bullet lists where helpful:\n"
+        "1. TRADE SNAPSHOT: instrument, timeframe, direction, entry, SL, TP, and RR if inferable. "
+        "If any are unclear, say 'not clearly visible' or 'not clearly inferable'.\n"
+        f"2. STRUCTURE: Does the visible EMA ordering and price position CONFIRM or CONTRADICT the algorithmic {direction_str} bias? "
+        "State the EMA order, whether price is with or against trend, and whether the setup looks like a re-test, breakout, continuation, range, or failed breakout.\n"
+        "3. CONFLUENCE: What visible support/resistance, OB, FVG, BOS/CHoCH, or previous-session profile levels matter most here? "
+        "Mention the nearest obstacle between entry and TP first.\n"
+        "4. RISK CHECK: Is the SL behind logical invalidation or sitting inside noise? Is the TP realistic? "
+        "Does volume support the move? If price is inside prior value area, say so clearly.\n"
+        "5. BULL VS BEAR: Give one short 'Bullish factors' line and one short 'Bearish factors' line using only visible/chart-context evidence.\n"
+        "6. FINAL REVIEW: Give key risk, a final verdict of HOLD / CLOSE / ADJUST, a setup quality score from 1-10, and one actionable improvement.\n\n"
         "PER-STYLE RATINGS:\n"
         "SCALP RATING: STRONG / MODERATE / WEAK / AVOID (cite the candle pattern and volume)\n"
         "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID (cite EMA alignment and structure)\n"
         "SWING RATING: STRONG / MODERATE / WEAK / AVOID (cite trend direction and higher-TF bias)\n"
         "(Use CONTRADICTS only if the chart CLEARLY opposes the algorithmic direction)\n\n"
         "STYLE LEVELS:\n"
-        "For SCALP, INTRADAY, and SWING separately, state whether SL/TP should be KEPT or give exact numeric prices if adjustment is warranted.\n\n"
+        "For SCALP, INTRADAY, and SWING separately, ALWAYS output SL/TP lines. Use KEEP if unchanged, otherwise give exact numeric prices.\n"
+        "The final 7 lines must be the LAST 7 lines of the response, with nothing after them.\n\n"
         "You MUST end with exactly these 7 lines:\n"
         "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
         "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
@@ -6995,7 +7000,7 @@ def api_chart_analysis():
         "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
         "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
         "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-        "Keep total response under 450 words. Reference specific prices. No speculation."
+        "Keep total response under 360 words. Reference specific prices. No speculation."
     )
 
     try:
@@ -7073,31 +7078,21 @@ def api_chart_analysis():
                 "- Candles (green=bull, red=bear) · EMA21 (cyan) · EMA50 (purple) · EMA200 (gold dashed)\n"
                 "- Entry (grey dashed) · SL (red solid) · TP (green solid) horizontal lines\n"
                 "- Engine B zones if present: support (green), resistance (red), BOS (amber), CHoCH (purple), OB (labelled), FVG (cyan dashed), POC (amber), VAH/VAL (violet dashed)\n\n"
-                "Produce a structured professional trade review in this exact body order:\n"
-                "1. TRADE PARAMETERS\n"
-                "2. MARKET STRUCTURE\n"
-                "3. BULLISH FACTORS\n"
-                "4. BEARISH FACTORS\n"
-                "5. KEY RISKS\n"
-                "6. FINAL VERDICT\n"
-                "7. SETUP QUALITY\n"
-                "8. ACTIONABLE IMPROVEMENT\n\n"
-                "TRIPLE-TF REVIEW REQUIREMENTS:\n"
-                f"- D1: state dominant bias, EMA order, and whether it confirms or contradicts the algorithmic {direction_str} direction.\n"
-                "- H4: assess tactical structure, nearest barriers, and whether the setup looks like a re-test, breakout, continuation, range, or failed breakout.\n"
-                "- H1: assess immediate trigger quality, last 3 candles, and whether SL appears beyond short-horizon invalidation.\n"
-                "- If profile levels are visible, say whether price is above, inside, or below prior value and whether price is accepting or rejecting POC/VAH/VAL.\n"
-                "- In KEY RISKS, mention the nearest obstacle between entry and TP first.\n"
-                "- FINAL VERDICT must be exactly one of HOLD, CLOSE, ADJUST with a short justification.\n"
-                "- SETUP QUALITY must be a 1-10 score with a one-line justification.\n"
-                "- ACTIONABLE IMPROVEMENT must give one specific improvement only.\n"
-                "- If entry/SL/TP are unclear, say 'not clearly visible'. If RR is unclear, say 'not clearly inferable'.\n\n"
+                "Keep the analysis concise and easy to scan.\n\n"
+                "ANSWER EXACTLY THESE 6 QUESTIONS using short paragraphs:\n"
+                "1. TRADE SNAPSHOT: instrument, direction, entry, SL, TP, and RR if inferable. If unclear, say 'not clearly visible' or 'not clearly inferable'.\n"
+                f"2. D1 BIAS: what EMA order and dominant trend are visible on D1, and do they confirm or contradict the algorithmic {direction_str} direction?\n"
+                "3. H4 STRUCTURE: what tactical structure is visible on H4, does it look like a re-test, breakout, continuation, range, or failed breakout, and what is the nearest obstacle between entry and TP?\n"
+                "4. H1 ENTRY: what do the last 3 H1 candles show, and does the trigger quality support the trade? If profile levels are visible, state whether price is above, inside, or below prior value and whether it is accepting or rejecting POC/VAH/VAL.\n"
+                "5. BULL VS BEAR: give one short 'Bullish factors' line and one short 'Bearish factors' line using only visible/chart-context evidence.\n"
+                "6. FINAL REVIEW: give key risk, final verdict HOLD / CLOSE / ADJUST, setup quality 1-10, and one actionable improvement.\n\n"
                 "PER-STYLE RATINGS (cite visible evidence - H1 for SCALP, H4 for INTRADAY, D1 for SWING):\n"
                 "SCALP RATING: STRONG / MODERATE / WEAK / AVOID\n"
                 "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID\n"
                 "SWING RATING: STRONG / MODERATE / WEAK / AVOID\n"
                 "(Use CONTRADICTS only if that TF clearly opposes the algorithmic direction)\n\n"
-                "STYLE LEVELS: For each style state KEEP or give exact numeric prices if adjustment is warranted.\n\n"
+                "STYLE LEVELS: For each style ALWAYS output SL/TP lines. Use KEEP if unchanged, otherwise give exact numeric prices.\n"
+                "The final 7 lines must be the LAST 7 lines of the response, with nothing after them.\n\n"
                 "You MUST end with exactly these 7 lines:\n"
                 "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
                 "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
@@ -7106,7 +7101,7 @@ def api_chart_analysis():
                 "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
                 "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
                 "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-                "Keep total response under 560 words. Reference specific prices. No speculation."
+                "Keep total response under 420 words. Reference specific prices. No speculation."
             )
             content = [
                 {"type": "text", "text": "IMAGE 1 — D1 DAILY BIAS CHART:"},
@@ -7174,30 +7169,21 @@ def api_chart_analysis():
                 "- Candles (green=bull, red=bear) · EMA21 (cyan) · EMA50 (purple) · EMA200 (gold dashed)\n"
                 "- Entry (grey dashed) · SL (red solid) · TP (green solid) horizontal lines\n"
                 "- Engine B zones if present: support (green), resistance (red), BOS (amber), CHoCH (purple), OB (labelled), FVG (cyan dashed), POC (amber), VAH/VAL (violet dashed)\n\n"
-                "Produce a structured professional trade review in this exact body order:\n"
-                "1. TRADE PARAMETERS\n"
-                "2. MARKET STRUCTURE\n"
-                "3. BULLISH FACTORS\n"
-                "4. BEARISH FACTORS\n"
-                "5. KEY RISKS\n"
-                "6. FINAL VERDICT\n"
-                "7. SETUP QUALITY\n"
-                "8. ACTIONABLE IMPROVEMENT\n\n"
-                "DUAL-TF REVIEW REQUIREMENTS:\n"
-                f"- D1: state macro bias, EMA order, and whether it confirms or contradicts the algorithmic {direction_str} direction.\n"
-                "- H4: assess the visible entry structure, whether the setup looks like a re-test, breakout, continuation, range, or failed breakout, and name the nearest obstacle between entry and TP.\n"
-                "- Review whether SL is behind visible invalidation and whether TP is realistic.\n"
-                "- If POC/VAH/VAL are visible, say whether price is above, inside, or below prior value and whether price is accepting or rejecting prior value.\n"
-                "- FINAL VERDICT must be exactly one of HOLD, CLOSE, ADJUST with a short justification.\n"
-                "- SETUP QUALITY must be a 1-10 score with a one-line justification.\n"
-                "- ACTIONABLE IMPROVEMENT must give one specific improvement only.\n"
-                "- If entry/SL/TP are unclear, say 'not clearly visible'. If RR is unclear, say 'not clearly inferable'.\n\n"
+                "Keep the analysis concise and easy to scan.\n\n"
+                "ANSWER EXACTLY THESE 6 QUESTIONS using short paragraphs:\n"
+                "1. TRADE SNAPSHOT: instrument, direction, entry, SL, TP, and RR if inferable. If unclear, say 'not clearly visible' or 'not clearly inferable'.\n"
+                f"2. D1 BIAS: what EMA order and macro trend are visible on D1, and do they confirm or contradict the algorithmic {direction_str} direction?\n"
+                "3. H4 STRUCTURE: what entry structure is visible on H4, does it look like a re-test, breakout, continuation, range, or failed breakout, and what is the nearest obstacle between entry and TP?\n"
+                "4. RISK CHECK: is SL behind visible invalidation, is TP realistic, and if POC/VAH/VAL are visible is price above, inside, or below prior value and accepting or rejecting it?\n"
+                "5. BULL VS BEAR: give one short 'Bullish factors' line and one short 'Bearish factors' line using only visible/chart-context evidence.\n"
+                "6. FINAL REVIEW: give key risk, final verdict HOLD / CLOSE / ADJUST, setup quality 1-10, and one actionable improvement.\n\n"
                 "PER-STYLE RATINGS (cite visible evidence - D1 for SWING, H4 for SCALP/INTRADAY):\n"
                 "SCALP RATING: STRONG / MODERATE / WEAK / AVOID\n"
                 "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID\n"
                 "SWING RATING: STRONG / MODERATE / WEAK / AVOID\n"
                 "(Use CONTRADICTS only if that TF clearly opposes the algorithmic direction)\n\n"
-                "STYLE LEVELS: For each style state KEEP or give exact numeric prices if adjustment is warranted.\n\n"
+                "STYLE LEVELS: For each style ALWAYS output SL/TP lines. Use KEEP if unchanged, otherwise give exact numeric prices.\n"
+                "The final 7 lines must be the LAST 7 lines of the response, with nothing after them.\n\n"
                 "You MUST end with exactly these 7 lines:\n"
                 "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
                 "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
@@ -7206,7 +7192,7 @@ def api_chart_analysis():
                 "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
                 "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
                 "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-                "Keep total response under 500 words. Reference specific prices. No speculation."
+                "Keep total response under 380 words. Reference specific prices. No speculation."
             )
             content = [
                 {"type": "text", "text": "IMAGE 1 — D1 DAILY BIAS CHART:"},
