@@ -2202,6 +2202,23 @@ function _buildChartAiLevelHtml(sig, result) {
   return html;
 }
 
+function _buildRightEdgeBadge(result) {
+  var status = ((((result || {}).structured || {}).right_edge_status) || '').toUpperCase();
+  if (!status) return '';
+  var label = 'RIGHT EDGE ' + status.replace(/_/g, ' ');
+  var color = '#0ecb81';
+  var bg = 'rgba(14,203,129,0.10)';
+  if (status === 'REVIEW') {
+    color = '#f59e0b';
+    bg = 'rgba(245,158,11,0.10)';
+  } else if (status === 'POTENTIAL_REVERSAL') {
+    color = '#f6465d';
+    bg = 'rgba(246,70,93,0.10)';
+    label = 'RIGHT EDGE REVERSAL';
+  }
+  return '<div style="margin-bottom:12px;display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;border:1px solid ' + color + ';background:' + bg + ';font-size:10px;font-weight:800;letter-spacing:0.8px;color:' + color + ';font-family:IBM Plex Mono,monospace;">' + label + '</div>';
+}
+
 function _renderAcmAnalysisPanel(sig, result, tfLabel) {
   var panel = document.getElementById('acm-ai-panel');
   var btn = document.getElementById('acm-ai-btn');
@@ -2220,6 +2237,7 @@ function _renderAcmAnalysisPanel(sig, result, tfLabel) {
   panel.innerHTML = '<h4>🧠 AI CHART ANALYSIS — ' + (tfLabel || _acm.tf) + ' ' +
     (sig ? sig.display || sig.pair || '' : '') + '</h4>' +
     _buildVerdictBanner(result) +
+    _buildRightEdgeBadge(result) +
     '<div style="line-height:1.8;">' + text + '</div>' +
     _buildChartAiLevelHtml(sig, result) +
     '<div style="margin-top:10px;font-size:9px;color:#3a4d60;">Model: ' +
