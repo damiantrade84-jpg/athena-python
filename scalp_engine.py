@@ -3,7 +3,7 @@
 Fully independent from Engine A (MFQS), Engine B (Naked), Engine C (Consensus).
 Data sources:
   - MT5 (copy_rates_from_pos) — forex, commodities, indices, stocks
-  - Crypto: app `fetch_candles` (Binance futures + CandleBuilder WS) via `athena_runtime`
+  - Crypto: `fetch_candles` → Binance futures (CandleBuilder WS + REST) via `athena_runtime` — data only; orders go to Bybit (`/api/scalp-execute` → `bybit_execute` when `type == "crypto"`)
 
 Logic flow:
   1. Session filter (London/NY for MT5 pairs; Asia/London/NY for crypto)
@@ -788,6 +788,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
         mt5_pairs = []  # skip MT5 pairs but still process crypto
 
     for display in pairs_or_symbols:
+        mt5_sym = None  # set only on MT5 branch; crypto uses Binance candles, not MT5 symbol
         try:
             asset_type = _guess_asset_type(display)
 
@@ -962,6 +963,8 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
 
             signal = {
                 "pair":          display,
+                "display":       display,
+                "symbol":        display.replace("/", "") if asset_type == "crypto" else None,
                 "mt5_symbol":    mt5_sym,
                 "type":          asset_type,
                 "direction":     trigger["direction"],

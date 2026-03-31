@@ -6530,16 +6530,10 @@ def api_scalp_scan():
 
 @app.route("/api/scalp-execute", methods=["POST"])
 def api_scalp_execute():
-    """Execute a single Engine D scalp setup through the normal MT5 risk path."""
+    """Execute a single Engine D scalp setup: MT5 (forex/commodities/stocks) or Bybit (crypto)."""
     try:
         from scalp_engine import run_scalp_scan
         from risk_engine import risk_check
-        from mt5_executor import (
-            mt5_execute,
-            mt5_get_account,
-            mt5_get_positions,
-            mt5_get_symbol_info,
-        )
 
         payload = request.get_json(silent=True) or {}
         symbol = (payload.get("symbol") or "").strip()
@@ -6601,22 +6595,59 @@ def api_scalp_execute():
                 ), 200
         else:
             signal = raw_signals[0]
-        account = mt5_get_account()
-        if not account or account.get("error"):
-            return jsonify({"error": "MT5 not connected"}), 503
 
-        positions_resp = mt5_get_positions()
-        if isinstance(positions_resp, dict) and positions_resp.get("error"):
-            return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
-        positions = (
-            positions_resp.get("positions", [])
-            if isinstance(positions_resp, dict)
-            else (positions_resp or [])
-        )
+        is_crypto = (signal.get("type") == "crypto")
 
-        symbol_info = mt5_get_symbol_info(symbol)
-        if not symbol_info or symbol_info.get("error"):
-            return jsonify({"error": f"Symbol '{symbol}' not available on MT5"}), 200
+        if is_crypto:
+            from bybit_executor import (
+                bybit_execute,
+                bybit_get_account,
+                bybit_get_positions,
+                bybit_get_symbol_info,
+            )
+
+            account = bybit_get_account()
+            if not account or account.get("error"):
+                return jsonify({"error": "Bybit not connected"}), 503
+
+            positions_resp = bybit_get_positions()
+            if isinstance(positions_resp, dict) and positions_resp.get("error"):
+                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
+            positions = (
+                positions_resp.get("positions", [])
+                if isinstance(positions_resp, dict)
+                else (positions_resp or [])
+            )
+
+            symbol_info = bybit_get_symbol_info(symbol)
+            if not symbol_info or symbol_info.get("error"):
+                return jsonify(
+                    {"success": False, "error": f"Symbol '{symbol}' not available on Bybit"}
+                ), 200
+        else:
+            from mt5_executor import (
+                mt5_execute,
+                mt5_get_account,
+                mt5_get_positions,
+                mt5_get_symbol_info,
+            )
+
+            account = mt5_get_account()
+            if not account or account.get("error"):
+                return jsonify({"error": "MT5 not connected"}), 503
+
+            positions_resp = mt5_get_positions()
+            if isinstance(positions_resp, dict) and positions_resp.get("error"):
+                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
+            positions = (
+                positions_resp.get("positions", [])
+                if isinstance(positions_resp, dict)
+                else (positions_resp or [])
+            )
+
+            symbol_info = mt5_get_symbol_info(symbol)
+            if not symbol_info or symbol_info.get("error"):
+                return jsonify({"error": f"Symbol '{symbol}' not available on MT5"}), 200
 
         approval = risk_check(
             signal=signal,
@@ -6635,7 +6666,10 @@ def api_scalp_execute():
                 }
             ), 200
 
-        result = mt5_execute(signal, approval)
+        if is_crypto:
+            result = bybit_execute(signal, approval)
+        else:
+            result = mt5_execute(signal, approval)
         if not result.get("success"):
             return jsonify(
                 {"success": False, "error": result.get("error", "Execution failed")}
@@ -6646,7 +6680,7 @@ def api_scalp_execute():
                 "success": True,
                 "ticket": result.get("ticket"),
                 "volume": result.get("volume"),
-                "entry_price": result.get("entry_price"),
+                "entry_price": result.get("entry_price") or result.get("entryPrice"),
                 "approval": approval.to_dict(),
             }
         )
@@ -6795,6 +6829,44 @@ def api_failed_executions():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+def _anthropic_messages_create_retry(client, *, max_attempts: int = 4, base_delay_sec: float = 2.5, **kwargs):
+    """Call ``client.messages.create`` with exponential backoff on 529 / overloaded_error."""
+    last_exc: BaseException | None = None
+    for attempt in range(max_attempts):
+        try:
+            return client.messages.create(**kwargs)
+        except Exception as e:
+            last_exc = e
+            code = getattr(e, "status_code", None)
+            err_type = ""
+            try:
+                body = getattr(e, "body", None)
+                if isinstance(body, dict):
+                    err_type = str((body.get("error") or {}).get("type") or "")
+            except Exception:
+                pass
+            msg = str(e).lower()
+            retryable = (
+                code == 529
+                or err_type == "overloaded_error"
+                or "overloaded" in msg
+                or "529" in msg
+            )
+            if not retryable or attempt >= max_attempts - 1:
+                raise
+            delay = base_delay_sec * (2**attempt)
+            log.warning(
+                "[ANTHROPIC] overloaded — retry %s/%s after %.1fs (%s)",
+                attempt + 1,
+                max_attempts,
+                delay,
+                e,
+            )
+            time.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
 
 
 @app.route("/api/chart-analysis", methods=["POST"])
@@ -7757,9 +7829,17 @@ def api_chart_analysis():
             log.info(f"[AI CHART] Single-TF {tf} analysis for {symbol}")
 
         _max_tokens = 1100 if triple_mode else 800
-        _vision_model = CONFIG.get("VISION_MODEL", "claude-opus-4-6")
+        # Chart vision: Anthropic Claude only (Lottery AI uses Grok on xAI separately).
+        _vision_model = str(CONFIG.get("VISION_MODEL") or "claude-opus-4-6").strip() or "claude-opus-4-6"
+        if "grok" in _vision_model.lower():
+            log.warning(
+                "[AI CHART] VISION_MODEL %r is not valid for Anthropic vision — using claude-opus-4-6",
+                _vision_model,
+            )
+            _vision_model = "claude-opus-4-6"
         _vision_temp = float(CONFIG.get("AI_VISION_TEMPERATURE", 0.2))
-        message = client.messages.create(
+        message = _anthropic_messages_create_retry(
+            client,
             model=_vision_model,
             max_tokens=_max_tokens,
             temperature=_vision_temp,
@@ -9900,15 +9980,24 @@ def _lottery_ai_extract_json(raw_text: str) -> dict:
     end = text.rfind("}")
     if start >= 0 and end > start:
         return json.loads(text[start : end + 1])
-    raise ValueError("Claude response was not valid JSON")
+    raise ValueError("AI response was not valid JSON")
 
 
-def _lottery_ai_content_text(message) -> str:
+def _lottery_ai_openai_message_text(content) -> str:
+    """Extract assistant text from OpenAI/xAI chat completion ``message.content`` (str or parts)."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
     parts = []
-    for block in getattr(message, "content", []) or []:
-        text = getattr(block, "text", None)
-        if text:
-            parts.append(text)
+    for block in content:
+        if isinstance(block, dict):
+            if block.get("type") == "text" and block.get("text"):
+                parts.append(str(block["text"]))
+        else:
+            t = getattr(block, "text", None)
+            if t:
+                parts.append(str(t))
     return "\n".join(parts).strip()
 
 
@@ -10346,11 +10435,16 @@ def api_lottery_bonus_intelligence():
 @app.route("/api/lottery/ai-analysis", methods=["POST"])
 def api_lottery_ai_analysis():
     try:
-        if _anthropic_mod is None:
-            return jsonify({"error": "anthropic library not installed"}), 500
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-        if not api_key:
-            return jsonify({"error": "Anthropic API key not configured"}), 500
+        xai_key = os.environ.get("XAI_API_KEY", "").strip() or str(
+            CONFIG.get("XAI_API_KEY") or ""
+        ).strip()
+        if not xai_key or xai_key == "YOUR_XAI_API_KEY":
+            return jsonify({"error": "XAI_API_KEY not configured (Grok / xAI)"}), 500
+
+        try:
+            import openai
+        except ImportError:
+            return jsonify({"error": "openai library not installed (required for xAI Grok)"}), 500
 
         data = request.get_json(silent=True) or {}
         game = str(data.get("game") or "").strip().lower()
@@ -10374,14 +10468,31 @@ def api_lottery_ai_analysis():
             window=window,
             z_threshold=z_threshold,
         )
-        client = _anthropic_mod.Anthropic(api_key=api_key)
-        message = client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=1800,
-            temperature=0.3,
-            messages=[{"role": "user", "content": analytics["prompt"]}],
+        _lottery_model = (
+            str(CONFIG.get("LOTTERY_AI_MODEL") or "").strip()
+            or CONFIG.get("XAI_MODEL", "grok-4.20-0309-reasoning")
         )
-        raw_text = _lottery_ai_content_text(message)
+        _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
+        client = openai.OpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
+        completion = client.chat.completions.create(
+            model=_lottery_model,
+            max_tokens=1800,
+            temperature=_temp,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a lottery number analyst. Reply with a single valid JSON object "
+                        "exactly matching the schema the user requested. No markdown fences, no preamble."
+                    ),
+                },
+                {"role": "user", "content": analytics["prompt"]},
+            ],
+        )
+        choice = completion.choices[0].message if completion.choices else None
+        raw_text = _lottery_ai_openai_message_text(
+            getattr(choice, "content", None) if choice else None
+        )
         parsed = _lottery_ai_extract_json(raw_text)
         recommended_pool = [int(x) for x in (parsed.get("recommended_pool") or []) if str(x).strip()]
         avoid_numbers = [int(x) for x in (parsed.get("avoid_numbers") or []) if str(x).strip()]
@@ -10390,6 +10501,7 @@ def api_lottery_ai_analysis():
             {
                 "analysis": parsed,
                 "raw_analysis_text": raw_text,
+                "model": _lottery_model,
                 "recommended_pool": recommended_pool,
                 "avoid_numbers": avoid_numbers,
                 "generator_mode": str(parsed.get("generator_mode") or ""),

@@ -66,6 +66,7 @@ except Exception as _e:
 CONFIG: dict = {
     "XAI_API_KEY": os.environ.get("XAI_API_KEY", "YOUR_XAI_API_KEY"),
     "XAI_MODEL": "grok-4.20-0309-reasoning",
+    "LOTTERY_AI_MODEL": "",  # empty → use XAI_MODEL for /api/lottery/ai-analysis
     "DEBATE_MODEL": "grok-4.20-0309-reasoning",
     "VISION_MODEL": "claude-opus-4-6",
     "NEWS_SENTIMENT_MODEL": "claude-opus-4-6",
@@ -75,7 +76,7 @@ CONFIG: dict = {
     "NEWS_SENTIMENT_ATTACH_SUMMARY": True,
     "AI_STRUCTURED_OUTPUTS": True,
     "AI_TEMPERATURE": 0.3,
-    "AI_VISION_TEMPERATURE": 0.6,
+    "AI_VISION_TEMPERATURE": 0.2,  # /api/chart-analysis factual mode (override in config.yaml if needed)
     "ENGINE_B_PROFILE_SCORING_ENABLED": False,
     "CRYPTOPANIC_KEY": os.environ.get("CRYPTOPANIC_KEY", ""),
     "FINNHUB_KEY": os.environ.get("FINNHUB_KEY", ""),

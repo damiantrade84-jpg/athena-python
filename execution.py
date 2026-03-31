@@ -988,7 +988,7 @@ def register_execution_routes(app: Flask) -> None:
 
 
 def api_scalp_scan():
-    """Engine D scalp scan — M15 zones + M5 entry triggers via MT5."""
+    """Engine D scalp scan — M15 zones + M5 entry triggers (MT5 non-crypto, Binance/crypto path for USDT pairs)."""
     from scalp_engine import get_scalp_pairs, run_scalp_scan
     
     d = request.get_json() or {}
@@ -1010,7 +1010,7 @@ def api_scalp_scan():
 
 
 def api_scalp_execute():
-    """Execute a scalp signal after passing risk check."""
+    """Execute a scalp signal after passing risk check (MT5 or Bybit for crypto)."""
     _r = rt()
     d = request.get_json() or {}
     sig = d.get("signal")
@@ -1021,25 +1021,50 @@ def api_scalp_execute():
         
     try:
         from risk_engine import risk_check
-        from mt5_executor import (
-            mt5_execute,
-            mt5_get_account,
-            mt5_get_positions,
-            mt5_get_symbol_info,
-        )
 
-        account = mt5_get_account()
-        if not account or account.get("error"):
-            return jsonify({"error": "MT5 not connected"}), 503
+        is_crypto = (sig.get("type") == "crypto")
+        pair_key = sig.get("pair") or sig.get("display") or ""
+
+        if is_crypto:
+            from bybit_executor import (
+                bybit_execute,
+                bybit_get_account,
+                bybit_get_positions,
+                bybit_get_symbol_info,
+            )
+
+            account = bybit_get_account()
+            if not account or account.get("error"):
+                return jsonify({"error": "Bybit not connected"}), 503
+
+            pos_result = bybit_get_positions()
+            if isinstance(pos_result, dict) and pos_result.get("error"):
+                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
+            positions = pos_result.get("positions", []) if isinstance(pos_result, dict) else (pos_result or [])
+
+            symbol_info = bybit_get_symbol_info(pair_key)
+            if not symbol_info or symbol_info.get("error"):
+                return jsonify({"error": f"Symbol {pair_key} not available on Bybit"}), 400
+        else:
+            from mt5_executor import (
+                mt5_execute,
+                mt5_get_account,
+                mt5_get_positions,
+                mt5_get_symbol_info,
+            )
+
+            account = mt5_get_account()
+            if not account or account.get("error"):
+                return jsonify({"error": "MT5 not connected"}), 503
             
-        pos_result = mt5_get_positions()
-        if isinstance(pos_result, dict) and pos_result.get("error"):
-            return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
-        positions = pos_result.get("positions", []) if isinstance(pos_result, dict) else (pos_result or [])
+            pos_result = mt5_get_positions()
+            if isinstance(pos_result, dict) and pos_result.get("error"):
+                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
+            positions = pos_result.get("positions", []) if isinstance(pos_result, dict) else (pos_result or [])
 
-        symbol_info = mt5_get_symbol_info(sig.get("pair"))
-        if not symbol_info or symbol_info.get("error"):
-            return jsonify({"error": f"Symbol {sig.get('pair')} not available on MT5"}), 400
+            symbol_info = mt5_get_symbol_info(pair_key)
+            if not symbol_info or symbol_info.get("error"):
+                return jsonify({"error": f"Symbol {pair_key} not available on MT5"}), 400
             
         # Format signal for risk engine
         approval = risk_check(
@@ -1054,10 +1079,13 @@ def api_scalp_execute():
         )
         
         if not approval.approved:
-            _r.log.warning(f"[SCALP EXEC] {sig['pair']} REJECTED: {approval.reason}")
+            _r.log.warning(f"[SCALP EXEC] {sig.get('pair')} REJECTED: {approval.reason}")
             return jsonify({"error": f"Risk Blocked: {approval.reason}"}), 400
             
-        result = mt5_execute(sig, approval)
+        if is_crypto:
+            result = bybit_execute(sig, approval)
+        else:
+            result = mt5_execute(sig, approval)
         if result.get("success"):
             # Log to audit_db
             try:
@@ -1092,7 +1120,7 @@ def api_scalp_execute():
                 "message": "Scalp order filled!"
             })
         else:
-            return jsonify({"error": result.get("error", "MT5 execution failed")}), 400
+            return jsonify({"error": result.get("error", "Execution failed")}), 400
             
     except Exception as e:
         _r.log.error(f"[SCALP API] Execute error: {e}")

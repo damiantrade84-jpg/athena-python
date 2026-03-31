@@ -40,10 +40,11 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 **Execution:** MT5 for forex/stocks/commodities; Bybit Linear Futures for crypto.
 
 **AI Review:**
-- **Marcus Reid (Grok/xAI)** — AI analysis of Engine A + B signals, JSON output with grade/verdict/edgeProbability/style_ratings
-- **Claude Vision** — chart screenshot analysis (`/api/chart-analysis`), single/dual/triple TF, structured 7-line footer parsed by `_extract_vision_structured()`
+- **Marcus Reid (Grok/xAI)** — AI analysis of Engine A + B signals (`EXPERT_PROMPT`), JSON output with grade/verdict/edgeProbability/style_ratings
+- **Claude Vision** — chart screenshot analysis (`/api/chart-analysis`) only: Anthropic + **`VISION_MODEL`** (default **`claude-opus-4-6`** in `config.yaml`). Single/dual/triple TF; structured footer parsed by `_extract_vision_structured()`. **Not Grok** — if `VISION_MODEL` accidentally contains `grok`, the route logs a warning and forces **`claude-opus-4-6`**.
+- **Lottery AI** — `POST /api/lottery/ai-analysis`: Grok (xAI) via OpenAI-compatible client; see **Lottery Lab** below.
 
-**API Keys required (env only, not yaml):** `EODHD_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`
+**API Keys (secrets via env):** `EODHD_KEY`, `ANTHROPIC_API_KEY` (Claude Vision, news sentiment), `XAI_API_KEY` (Marcus Reid, signal debate, Engine B AI, Lottery AI). **Lottery AI** also requires the **`openai`** PyPI package (`base_url=https://api.x.ai/v1`).
 
 ---
 
@@ -72,7 +73,7 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 | `risk_engine.py` | Kill switch, drawdown, position sizing, portfolio heat |
 | `config.py` | Hardcoded defaults + YAML loader + `_json_safe()` |
 | `config.yaml` | All tunable thresholds — edit here, not `config.py` |
-| `scalp_engine.py` | Engine D: M15/M5 structural scalping |
+| `scalp_engine.py` | Engine D: M15/M5 structural scalping — MT5 data for non-crypto, `fetch_candles`/Binance path for crypto; signals set `mt5_symbol=None` on crypto |
 | `ai_schemas.py` | Pydantic schemas for AI JSON output (`EngineAResponse`, `EngineBResponse`, `StyleRating`) |
 | `mt5_executor.py` | MetaTrader 5 execution |
 | `bybit_executor.py` | Bybit Linear (USDT-M) Futures execution |
@@ -84,13 +85,22 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 
 ---
 
+## Venues (canonical — execution vs data)
+
+- **Crypto — execution:** **Bybit** USDT-M linear futures only (`bybit_executor.py`). All live crypto **orders** go here (including Engine D `/api/scalp-execute` when `signal.type == "crypto"`). **Binance is not a crypto execution broker in this codebase** — it is market data only.
+- **Crypto — market data:** **Binance Futures** WebSocket klines (`candle_feeds.BinanceCandleWS`) → `CandleBuilder.on_kline()` for **M5, M15, H1, H4, D1**, plus REST fallback / merge via `fetch_candles()` when `pair["source"] == "binance"`. Live crypto quote stream: `BinanceLivePriceWS` `!ticker@arr`.
+- **Non-crypto — execution and OHLC:** **MT5** only (`mt5_executor.py`, `fetch_mt5()` for candles). Forex, commodities, indices, stocks as configured with `source: mt5`.
+- **EODHD — volume overlay (not primary price):** For **stocks, commodities, indices** only, EODHD can **overlay volume** onto existing candles without changing OHLC (`eodhd_volume_overlay.py`, whitelist per symbol/TF). This is separate from MT5 price feeds and separate from crypto (crypto volume comes from Binance bars).
+
+---
+
 ## Live Data Feed Routing (LOCKED — do not change without explicit approval)
 
 | Asset class | Candles | Live price |
 |---|---|---|
 | Forex / Stocks / Commodities / Indices | `fetch_mt5()` only — H1/H4/D1 | `symbol_info_tick()` bid/ask mid |
-| Crypto H1 | `BinanceCandleWS` `@kline_1h` → `CandleBuilder.on_kline()` | `BinanceLivePriceWS` `!ticker@arr` |
-| Crypto H4/D1 | Binance REST native intervals | — |
+| Crypto M5/M15/H1/H4/D1 | `BinanceCandleWS` futures `@kline_*` → `CandleBuilder.on_kline()`; REST merge/fallback `binance_futures` | `BinanceLivePriceWS` `!ticker@arr` |
+| Crypto (other TFs) | Binance REST via `fetch_binance` / `tf_b` map when `source == binance` | — |
 | EODHD WS | EODHD-sourced pairs only (JSE disabled pairs etc.) | — |
 
 **Candle depth:** `D1_CANDLES: 1001`, `H4_CANDLES: 1001`, `H1_CANDLES: 1001` → ~1000 closed bars after forming bar is dropped. `fetch_mt5()` requests `limit + 100`.
@@ -122,8 +132,9 @@ Builds the text input sent to Marcus Reid. Sections emitted:
 - `naked_data` (Engine B scan signals only — contains full naked result)
 
 ### Claude Vision — `/api/chart-analysis` in `athena.py`
-- Model: `claude-opus-4-6`, temperature: `0.2` (low — factual observation mode)
-- Config key: `AI_VISION_TEMPERATURE: 0.2`
+- Model id: **`VISION_MODEL`** in `config.yaml` (default **`claude-opus-4-6`**). `config.py` default matches; empty yaml value falls back to Opus 4.6.
+- Temperature: **`AI_VISION_TEMPERATURE`** — default **`0.2`** in `config.py` / yaml (factual observation mode).
+- **Grok guard:** `VISION_MODEL` must be an Anthropic Claude id for this route. If the string contains **`grok`**, the handler overrides to **`claude-opus-4-6`** and logs a warning (Lottery uses Grok separately — do not point `VISION_MODEL` at xAI).
 - Three modes: single-TF (H4), dual-TF (D1+H4), triple-TF (D1+H4+H1)
 - **Read order (2026-03-31):** Prompts enforce **image-first**: read chart(s); instrument + timeframe from **chart top-left** (no guessing from request); **right edge** = last 5 candles on authoritative TF (single/H4, dual/H4, triple/H1); **then** algorithmic context for cross-check. If chart and context conflict, **the image wins**. Prefer prices from chart axis/overlays; use context numbers only when the same level is unreadable on the image.
 - **RIGHT EDGE (2026-03-31):** Model must lead with **interpretation** (momentum, control of last closes, continuation vs pullback vs reversal risk, confirm vs threaten algorithmic LONG/SHORT). Avoid long candle-by-colour play-by-play without meaning; optional one compact oldest→newest fact sentence as evidence.
@@ -234,6 +245,9 @@ Effective min = `max(AUTO_TRADE_MIN_SCORE[type], MIN_CONFLUENCE_CLASS[type])`. `
 
 ### `/api/chart-analysis` — `athena.py`
 Requires `ANTHROPIC_API_KEY` env var. `regime` in signal can be dict `{"label":"TRENDING"}` (Engine A) or string `"TRENDING"` (Engine C) — both handled. Context builder is **outside** try/except — keep it simple.
+
+### `/api/scalp-execute` — `athena.py` (and `execution.py`)
+Routes by `signal.type`: **`crypto` → Bybit** (`bybit_get_*`, `bybit_execute`); **otherwise → MT5**. Scan uses Binance candles for crypto but execution was previously MT5-only — that mismatch caused failures for `BTC/USDT` et al.
 
 ---
 
@@ -354,6 +368,9 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 
 **Games:** `lotto` (6/52+bonus), `powerball` (5/50+bonus), `daily_lotto` (5/36)
 **Generator modes:** `pure_random · hot_bias · cold_bias · overdue_bias · balanced_mix · pair_bias · anti_crowd`
+
+**Lottery AI:** `POST /api/lottery/ai-analysis` uses **Grok (xAI)** only — not Anthropic. Set **`XAI_API_KEY`** in env; **`openai`** package with **`base_url=https://api.x.ai/v1`**; model from **`LOTTERY_AI_MODEL`** (optional) or **`XAI_MODEL`** in `config.yaml`. Response JSON includes **`model`** echo.
+
 **Critical invariants:**
 - `simulate_generator()` uses incremental counters — never revert to full-history rescan per draw (quadratic regression)
 - `generate_tickets()` requires `rules`, `universe`, `main_numbers` initialised before `if draw_context is not None`
@@ -406,3 +423,4 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 23. `confidenceDetail` and `factorDiagnostics` keys are camelCase on the signal dict — do not use snake_case when reading from signal
 24. Lottery Lab — never bypass `_normalize_game()` before any DB or analytics call
 25. Lottery Lab — `simulate_generator()` incremental counters must never revert to full-history rescan per draw
+26. **Chart Vision vs Lottery AI:** `/api/chart-analysis` = **Anthropic** (`VISION_MODEL`, `ANTHROPIC_API_KEY`). `/api/lottery/ai-analysis` = **xAI Grok** (`XAI_API_KEY`, `openai` SDK → `api.x.ai`). Do not use `VISION_MODEL` for lottery or `XAI_MODEL` for chart vision.
