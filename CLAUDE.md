@@ -125,13 +125,13 @@ Builds the text input sent to Marcus Reid. Sections emitted:
 - Model: `claude-opus-4-6`, temperature: `0.2` (low — factual observation mode)
 - Config key: `AI_VISION_TEMPERATURE: 0.2`
 - Three modes: single-TF (H4), dual-TF (D1+H4), triple-TF (D1+H4+H1)
-- **System prompt (2026-03-31 upgrade):** Structured trade review with 8-point analysis framework
-  - **EXTRACT section:** instrument, TF, direction, entry/SL/TP/RR, all visible indicators (EMA21/50/200, Keltner Channel 1.5 ATR, volume), key levels (S/R, OB, FVG, POC, VAH, VAL)
-  - **8-point ANALYZE:** trend structure, EMA alignment, level confluence, Keltner Channel state, stop logic, target viability, volume confirmation, RR ≥ 1:2 check
-  - **Formatted OUTPUT:** trade parameters table → supporting factors → concerns & risks → Hold/Close/Adjust verdict → one actionable suggestion
-  - **STRUCTURED FOOTER (required — do not remove):** `SCALP/INTRADAY/SWING RATING` + `TF ALIGNMENT` — parsed by `_extract_vision_structured()` for Engine C conviction modification
-- **Anti-hallucination rules:** ONLY describe what you can ACTUALLY SEE; use exact prices from algorithmic context; never invent patterns; cross-reference with algo context; full annotation legend for Engine B elements
-- **Footer parsing:** The structured footer is parsed by `_extract_vision_structured()` and used by `apply_vision()` to modify Engine C conviction. Removing it breaks Engine C Vision integration and UI level extraction.
+- **Read order (2026-03-31):** Prompts enforce **image-first**: read chart(s); instrument + timeframe from **chart top-left** (no guessing from request); **right edge** = last 5 candles on authoritative TF (single/H4, dual/H4, triple/H1); **then** algorithmic context for cross-check. If chart and context conflict, **the image wins**. Prefer prices from chart axis/overlays; use context numbers only when the same level is unreadable on the image.
+- **RIGHT EDGE (2026-03-31):** Model must lead with **interpretation** (momentum, control of last closes, continuation vs pullback vs reversal risk, confirm vs threaten algorithmic LONG/SHORT). Avoid long candle-by-colour play-by-play without meaning; optional one compact oldest→newest fact sentence as evidence.
+- **Body structure:** Concise sections (e.g. TRADE SNAPSHOT, MARKET STRUCTURE, RIGHT EDGE, factors, verdict) plus required machine footer below.
+- **STRUCTURED FOOTER (required — do not remove):** Line `RIGHT EDGE: CONFIRMS | REVIEW | POTENTIAL REVERSAL` immediately before `TF ALIGNMENT` + three `*_RATING` + three `*_LEVELS` — parsed by `_extract_vision_structured()` for Engine C conviction modification.
+- **Anti-hallucination rules:** ONLY describe what you can ACTUALLY SEE; never invent patterns; cross-reference algo context **after** the visual read; full annotation legend for Engine B elements.
+- **Footer parsing:** Parsed by `_extract_vision_structured()` and used by `apply_vision()` to modify Engine C conviction. Removing or rewording parser tokens breaks Engine C Vision integration and UI level extraction.
+- **EODHD news (same file, `fetch_news_context`):** Per-pair `/api/news` and `/api/news-word-weights` use `timeout=15` (was 8s) to reduce read timeouts on slow EODHD responses; failures stay non-fatal.
 
 ---
 
@@ -402,7 +402,7 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 19. Feed routing is **locked** — MT5 sources use `fetch_mt5()` only; no CandleBuilder/EODHD REST for MT5 pairs; no stale bar close into `_live_prices`
 20. Scoring gates are **locked** — do not modify thresholds, weights, or gate logic unless user explicitly requests it
 21. `_build_signal_message` reads `"engine_b"` first then `"naked_data"` for ENGINE B section (Engine A signals use `"engine_b"`, Engine B scan signals use `"naked_data"`)
-22. Vision 7-line footer (`TF ALIGNMENT` + 3× `RATING` + 3× `LEVELS`) must be preserved in all three prompt modes — required by `_extract_vision_structured()` parser
+22. Vision structured footer: preserve machine-readable lines — `RIGHT EDGE: CONFIRMS|REVIEW|POTENTIAL REVERSAL` (line immediately before `TF ALIGNMENT`) plus `TF ALIGNMENT` + 3× `RATING` + 3× `LEVELS` in single/dual/triple modes — required by `_extract_vision_structured()` parser; do not reword tokens
 23. `confidenceDetail` and `factorDiagnostics` keys are camelCase on the signal dict — do not use snake_case when reading from signal
 24. Lottery Lab — never bypass `_normalize_game()` before any DB or analytics call
 25. Lottery Lab — `simulate_generator()` incremental counters must never revert to full-history rescan per draw

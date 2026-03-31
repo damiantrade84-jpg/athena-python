@@ -3006,7 +3006,7 @@ def fetch_news_context(pairs: list | None = None):
                 try:
                     ndata = http_requests.get(
                         f"https://eodhd.com/api/news?s={sticker}&limit=3&api_token={_eodhd_key}&fmt=json",
-                        timeout=8,
+                        timeout=15,
                     ).json()
 
                     if ndata and isinstance(ndata, list):
@@ -3036,7 +3036,7 @@ def fetch_news_context(pairs: list | None = None):
                 try:
                     wdata = http_requests.get(
                         f"https://eodhd.com/api/news-word-weights?s={sticker}&page[limit]=5&api_token={_eodhd_key}&fmt=json",
-                        timeout=8,
+                        timeout=15,
                     ).json()
 
                     if wdata and isinstance(wdata, dict) and wdata.get("data"):
@@ -7050,18 +7050,32 @@ def api_chart_analysis():
     )
 
     system_prompt = (
-        "You are a professional trading analyst reviewing chart screenshots with full algorithmic context.\n"
-        "Your job is to produce a concise trade review grounded entirely in what is visible on the chart and the supplied context.\n\n"
+        "You are a professional trading analyst reviewing chart screenshots.\n"
+        "Algorithmic context is supplied for cross-check only after you have visually read the chart(s).\n\n"
+        "WORKFLOW (mandatory order):\n"
+        "1. Examine the chart image(s) first. Do not let algorithmic text pre-label what you see.\n"
+        "2. Read instrument and timeframe from each chart's top-left (or say 'not legible'). "
+        "If supplied context implies a different symbol than the label you read, trust the chart label.\n"
+        "3. Read the last 5 candles on the right edge of the authoritative chart (single/H4-only: that chart; dual: H4; triple: H1). "
+        "Lead with what they MEAN for the trade (momentum, control, continuation vs stall vs reversal risk), not a decorative colour-by-colour inventory. "
+        "At most one short factual summary of the five closes (oldest→newest) after that, only as evidence.\n"
+        "4. Only then read and compare to the algorithmic context.\n"
+        "5. If chart-visible facts conflict with algorithmic context (direction, structure, instrument identity, right-edge read), "
+        "the image is authoritative — state the conflict explicitly; verdict and ratings must reflect what you see.\n\n"
         "ABSOLUTE RULES:\n"
         "1. ONLY describe what you can ACTUALLY SEE on the chart. If something is unclear, say 'not clearly visible'.\n"
-        "2. NEVER invent patterns, levels, formations, barriers, or price behavior not clearly visible in the image or supplied context.\n"
-        "3. When referencing levels, use exact prices from the algorithmic context first; use the chart axis only if clearly readable.\n"
+        "2. NEVER invent patterns, levels, formations, barriers, or price behavior not clearly visible in the image.\n"
+        "3. Prefer prices from the chart (axis and overlay lines). Use algorithmic context numbers only when the same level "
+        "is unreadable on the chart; if context disagrees with what you see, trust the chart.\n"
         "4. The chart shows candles, EMA21, EMA50, EMA200, Keltner Channel, entry, SL, TP, volume, and Engine B annotations when present.\n"
-        "5. Cross-reference what you see with the algorithmic context. If they disagree, say so explicitly.\n"
+        "5. After your visual read, cross-reference algorithmic context. If they disagree, say so explicitly and apply the image-wins rule above.\n"
         "6. If PREVIOUS SESSION PROFILE context is provided, note whether price is above, inside, or below prior value, and whether POC/VAH/VAL reaction confirms or contradicts the trade.\n"
         "7. Be direct. No filler, no hedging, no disclaimers.\n\n"
         "CRITICAL - RIGHT EDGE ANALYSIS:\n"
         "- Before issuing any verdict, inspect the last 5 candles on the right edge of the chart.\n"
+        "- Do NOT output a long play-by-play of each candle (e.g. 'small green, then red, then doji…') as your main answer. "
+        "That is useless without interpretation. Always answer: what does the sequence imply for pressure, momentum, and invalidation vs the trade?\n"
+        "- REQUIRED: explicitly say whether the right edge CONFIRMS the algorithmic direction, is NEUTRAL/unclear, or THREATENS / opposes it, with one sentence of why.\n"
         "- If the last 3 or more candles are counter-trend with rising volume, classify this as RIGHT EDGE: POTENTIAL REVERSAL even if prior structure was supportive.\n"
         "- If price has reclaimed EMA21, EMA50, or EMA200 against the trade since the entry, HOLD is no longer allowed.\n"
         "- HOLD is only allowed if the right edge still confirms the trade direction.\n"
@@ -7234,7 +7248,7 @@ def api_chart_analysis():
 
     user_prompt = (
         f"Analyse this {asset_type.upper()} chart ({tf} timeframe).\n\n"
-        f"ALGORITHMIC CONTEXT (use these as ground truth for levels):\n{algo_context}\n\n"
+        f"ALGORITHMIC CONTEXT (cross-check after chart read; image wins on conflict):\n{algo_context}\n\n"
         "WHAT TO LOOK FOR ON THE CHART:\n"
         "- EMA ordering: Is EMA21 > EMA50 > EMA200 (bullish stack) or inverted? Any crossovers?\n"
         "- Price vs EMAs: Is price above all EMAs (strong trend) or sandwiched/below?\n"
@@ -7277,7 +7291,7 @@ def api_chart_analysis():
 
     user_prompt = (
         f"Analyse this {asset_type.upper()} chart ({tf} timeframe).\n\n"
-        f"ALGORITHMIC CONTEXT (use these as ground truth for levels):\n{algo_context}\n\n"
+        f"ALGORITHMIC CONTEXT (cross-check after chart read; image wins on conflict):\n{algo_context}\n\n"
         "Keep the analysis concise, structured, and easy to scan. Do not turn it into a long report.\n\n"
         "ANSWER EXACTLY THESE 6 QUESTIONS using short paragraphs or short bullet lists where helpful:\n"
         "1. TRADE SNAPSHOT: instrument, timeframe, direction, entry, SL, TP, and RR if inferable. "
@@ -7310,27 +7324,34 @@ def api_chart_analysis():
     )
 
     user_prompt = (
-        f"Analyse this {asset_type.upper()} chart ({tf} timeframe).\n\n"
-        f"ALGORITHMIC CONTEXT (use these as ground truth for levels):\n{algo_context}\n\n"
+        "The chart screenshot is attached above this message.\n\n"
+        "STEP 1 — VISUAL READ FIRST (complete this before reading algorithmic context in STEP 2):\n"
+        "- Examine the full chart image.\n"
+        "- Read the instrument name and timeframe from the top-left of the chart only (say 'not legible' if unclear). Do not infer from elsewhere.\n"
+        f"- On the right edge of this {tf} chart: lead with INTERPRETATION (2–4 sentences): bullish vs bearish pressure, momentum building/fading/mixed, "
+        "who controls the last 1–2 closes, continuation vs pullback vs reversal risk — and whether that confirms or threatens the algorithmic direction "
+        "(use STEP 2 below for LONG/SHORT). Then at most ONE compact sentence of fact (oldest→newest closes) as evidence if needed. "
+        "Do not write a decorative candle-by-candle colour story without stating what it means for the trade.\n\n"
+        "STEP 2 — ALGORITHMIC CONTEXT (for cross-check after STEP 1; if anything here conflicts with the image, the image wins):\n"
+        + algo_context
+        + "\n\n"
         "Keep the analysis concise, structured, and easy to scan.\n\n"
         "Use this exact body order:\n"
         "TRADE SNAPSHOT:\n"
-        "- instrument, timeframe, direction, entry, SL, TP, and RR if inferable\n"
+        "- instrument and timeframe from the chart top-left; then direction, entry, SL, TP, RR if inferable\n"
         "- if unclear, say 'not clearly visible' or 'not clearly inferable'\n\n"
         "MARKET STRUCTURE:\n"
-        "- EMA order and trend alignment vs the algorithmic direction\n"
+        "- EMA order and trend alignment; compare to algorithmic direction — if chart and context conflict, state that the chart governs\n"
         "- whether the setup looks like a re-test, breakout, continuation, range, or failed breakout\n"
         "- mention the nearest obstacle between entry and TP first\n\n"
         "RIGHT EDGE:\n"
-        "- inspect the last 5 candles on the right edge specifically\n"
-        "- state whether the last 3 candles are counter-trend\n"
-        "- state whether volume is rising or falling on that counter-trend move\n"
-        "- state whether price has reclaimed EMA21, EMA50, or EMA200 since entry\n"
-        "- state whether the right edge still confirms the trade direction\n\n"
+        "- First line: plain verdict — right edge confirms the trade / warns (choppy or unclear) / actively threatens or opposes the trade — and why (meaning, not colours).\n"
+        "- Then: counter-trend check on the last 3 candles, volume on that leg (rising/falling), any EMA21/50/200 reclaim against the trade since entry.\n"
+        "- Optional: one short oldest→newest fact line only; no extended per-candle narration.\n\n"
         "BULLISH FACTORS:\n"
-        "- only visible/chart-context evidence\n\n"
+        "- only visible evidence from the chart\n\n"
         "BEARISH FACTORS:\n"
-        "- only visible/chart-context evidence\n\n"
+        "- only visible evidence from the chart\n\n"
         "KEY RISKS:\n"
         "- include SL logic, TP realism, and profile/value-area issues if visible\n\n"
         "FINAL VERDICT:\n"
@@ -7385,7 +7406,7 @@ def api_chart_analysis():
                 "IMAGE 1 is D1 (daily) — strategic TREND / BIAS filter.\n"
                 "IMAGE 2 is H4 (4-hour) — intermediate structure, momentum, EMA stack.\n"
                 "IMAGE 3 is H1 (1-hour) — entry timing: EMA21 reclaim, trigger candle.\n\n"
-                f"ALGORITHMIC CONTEXT (use as ground truth for levels):\n{algo_context}\n\n"
+                f"ALGORITHMIC CONTEXT (cross-check after chart read; image wins on conflict):\n{algo_context}\n\n"
                 "CHART ANNOTATIONS (same in all three images):\n"
                 "- Candles (green=bull, red=bear) · EMA21 (cyan) · EMA50 (purple) · EMA200 (gold dashed)\n"
                 "- Entry (grey dashed) · SL (red solid) · TP (green solid) horizontal lines\n"
@@ -7423,7 +7444,7 @@ def api_chart_analysis():
                 "IMAGE 1 is D1 (daily) - dominant bias and swing trend quality.\n"
                 "IMAGE 2 is H4 (4-hour) - tactical structure, support/resistance path, FVG/OB context.\n"
                 "IMAGE 3 is H1 (1-hour) - immediate trigger quality, candle behavior, short-horizon invalidation quality.\n\n"
-                f"ALGORITHMIC CONTEXT (use as ground truth for levels):\n{algo_context}\n\n"
+                f"ALGORITHMIC CONTEXT (cross-check after chart read; image wins on conflict):\n{algo_context}\n\n"
                 "CHART ANNOTATIONS (same in all three images):\n"
                 "- Candles (green=bull, red=bear) · EMA21 (cyan) · EMA50 (purple) · EMA200 (gold dashed)\n"
                 "- Entry (grey dashed) · SL (red solid) · TP (green solid) horizontal lines\n"
@@ -7454,11 +7475,18 @@ def api_chart_analysis():
                 "Keep total response under 420 words. Reference specific prices. No speculation."
             )
             triple_prompt = (
-                f"You are reviewing THREE charts for {asset_type.upper()} - {symbol}.\n"
+                "Three chart images are attached above this text: IMAGE 1 = D1, IMAGE 2 = H4, IMAGE 3 = H1.\n\n"
+                "STEP 1 — VISUAL READ FIRST (before algorithmic context in STEP 2):\n"
+                "- For each image, read instrument and timeframe from the chart top-left (say 'not legible' if unclear). Do not guess from elsewhere.\n"
+                "- On IMAGE 3 (H1) right edge: same as single-TF rules — lead with INTERPRETATION (pressure, momentum, control of last closes, continuation vs pullback vs reversal risk; confirm vs threaten algorithmic direction from STEP 2). "
+                "Then at most one compact oldest→newest fact sentence. No decorative candle-by-candle colour play-by-play.\n\n"
+                "STEP 2 — ALGORITHMIC CONTEXT (cross-check after STEP 1; if it conflicts with the image, the image wins):\n"
+                + algo_context
+                + "\n\n"
+                "IMAGE ROLES (for your narrative after the read above):\n"
                 "IMAGE 1 is D1 (daily) - dominant bias and swing trend quality.\n"
                 "IMAGE 2 is H4 (4-hour) - tactical structure, support/resistance path, FVG/OB context.\n"
-                "IMAGE 3 is H1 (1-hour) - decisive right-edge trigger check, candle behavior, and short-horizon invalidation quality.\n\n"
-                f"ALGORITHMIC CONTEXT (use as ground truth for levels):\n{algo_context}\n\n"
+                "IMAGE 3 is H1 (1-hour) - decisive right-edge trigger check, candle behavior, short-horizon invalidation.\n\n"
                 "Keep the analysis concise and easy to scan.\n\n"
                 "Use this exact body order:\n"
                 "TRADE SNAPSHOT\n"
@@ -7470,9 +7498,9 @@ def api_chart_analysis():
                 "FINAL VERDICT\n"
                 "ACTIONABLE IMPROVEMENT\n\n"
                 "Instructions:\n"
-                f"- D1: dominant bias vs the algorithmic {direction_str} direction.\n"
+                f"- D1: dominant bias vs the algorithmic {direction_str} direction; if chart contradicts context, chart governs.\n"
                 "- H4: tactical structure, nearest obstacle between entry and TP, re-test / breakout / continuation / range / failed breakout.\n"
-                "- H1: inspect the last 5 candles on the right edge first. State whether the last 3 candles are counter-trend, whether volume is rising, whether price reclaimed EMA21/EMA50/EMA200 since entry, and whether the right edge still confirms the trade.\n"
+                "- H1 RIGHT EDGE: open with what the last 5 H1 candles MEAN for the trade (confirm / warn / oppose), then counter-trend on last 3, volume on that leg, EMA21/50/200 reclaim against the trade if visible — not a long per-candle description.\n"
                 "- If H1 right edge shows counter-trend candles with rising volume or EMA reclaim against the trade, the verdict must be ADJUST or CLOSE.\n"
                 "- HOLD is only allowed if the H1 right edge still confirms the trade direction.\n\n"
                 "Then output one machine-readable line immediately before the parser footer:\n"
@@ -7490,10 +7518,17 @@ def api_chart_analysis():
                 "Keep total response under 460 words. Reference specific prices. No speculation."
             )
             dual_prompt = (
-                f"You are reviewing TWO charts for {asset_type.upper()} - {symbol}.\n"
+                "Two chart images are attached above this text: IMAGE 1 = D1, IMAGE 2 = H4.\n\n"
+                "STEP 1 — VISUAL READ FIRST (before algorithmic context in STEP 2):\n"
+                "- For each image, read instrument and timeframe from the chart top-left (say 'not legible' if unclear). Do not guess from elsewhere.\n"
+                "- On IMAGE 2 (H4) right edge: lead with INTERPRETATION (pressure, momentum, control of last closes, continuation vs pullback vs reversal risk; confirm vs threaten direction from STEP 2). "
+                "Then at most one compact oldest→newest fact sentence. No decorative candle-by-candle play-by-play.\n\n"
+                "STEP 2 — ALGORITHMIC CONTEXT (cross-check after STEP 1; if it conflicts with the image, the image wins):\n"
+                + algo_context
+                + "\n\n"
+                "IMAGE ROLES:\n"
                 "IMAGE 1 is D1 (daily) - dominant bias, macro EMA structure, swing-quality context.\n"
-                "IMAGE 2 is H4 (4-hour) - tactical entry chart, obstacle map, and decisive right-edge review.\n\n"
-                f"ALGORITHMIC CONTEXT (use as ground truth for levels):\n{algo_context}\n\n"
+                "IMAGE 2 is H4 (4-hour) - tactical entry chart, obstacle map, decisive right-edge review.\n\n"
                 "Keep the analysis concise and easy to scan.\n\n"
                 "Use this exact body order:\n"
                 "TRADE SNAPSHOT\n"
@@ -7505,9 +7540,9 @@ def api_chart_analysis():
                 "FINAL VERDICT\n"
                 "ACTIONABLE IMPROVEMENT\n\n"
                 "Instructions:\n"
-                f"- D1: macro bias vs the algorithmic {direction_str} direction.\n"
+                f"- D1: macro bias vs the algorithmic {direction_str} direction; if chart contradicts context, chart governs.\n"
                 "- H4: tactical structure, nearest obstacle between entry and TP, re-test / breakout / continuation / range / failed breakout.\n"
-                "- RIGHT EDGE must be based on the H4 right edge specifically: inspect the last 5 candles, state whether the last 3 candles are counter-trend, whether volume is rising on that move, whether price reclaimed EMA21/EMA50/EMA200 since entry, and whether the right edge still confirms the trade.\n"
+                "- RIGHT EDGE (H4): open with what the last 5 H4 candles MEAN for the trade (confirm / warn / oppose), then counter-trend on last 3, volume on that leg, EMA reclaim against the trade if visible — avoid extended colour-by-colour narration.\n"
                 "- If the H4 right edge does not confirm the trade, FINAL VERDICT cannot be HOLD.\n\n"
                 "Then output one machine-readable line immediately before the parser footer:\n"
                 "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
@@ -7524,10 +7559,17 @@ def api_chart_analysis():
                 "Keep total response under 420 words. Reference specific prices. No speculation."
             )
             dual_prompt = (
-                f"You are reviewing TWO charts for {asset_type.upper()} - {symbol}.\n"
+                "Two chart images are attached above this text: IMAGE 1 = D1, IMAGE 2 = H4.\n\n"
+                "STEP 1 — VISUAL READ FIRST (before algorithmic context in STEP 2):\n"
+                "- For each image, read instrument and timeframe from the chart top-left (say 'not legible' if unclear). Do not guess from elsewhere.\n"
+                "- On IMAGE 2 (H4) right edge: lead with INTERPRETATION (pressure, momentum, control of last closes, continuation vs pullback vs reversal risk; confirm vs threaten direction from STEP 2). "
+                "Then at most one compact oldest→newest fact sentence. No decorative candle-by-candle play-by-play.\n\n"
+                "STEP 2 — ALGORITHMIC CONTEXT (cross-check after STEP 1; if it conflicts with the image, the image wins):\n"
+                + algo_context
+                + "\n\n"
+                "IMAGE ROLES:\n"
                 "IMAGE 1 is D1 (daily) - dominant bias, macro EMA structure, swing-quality context.\n"
-                "IMAGE 2 is H4 (4-hour) - tactical entry chart, obstacle map, and decisive right-edge review.\n\n"
-                f"ALGORITHMIC CONTEXT (use as ground truth for levels):\n{algo_context}\n\n"
+                "IMAGE 2 is H4 (4-hour) - tactical entry chart, obstacle map, decisive right-edge review.\n\n"
                 "Keep the analysis concise and easy to scan.\n\n"
                 "Use this exact body order:\n"
                 "TRADE SNAPSHOT\n"
@@ -7539,9 +7581,9 @@ def api_chart_analysis():
                 "FINAL VERDICT\n"
                 "ACTIONABLE IMPROVEMENT\n\n"
                 "Instructions:\n"
-                f"- D1: macro bias vs the algorithmic {direction_str} direction.\n"
+                f"- D1: macro bias vs the algorithmic {direction_str} direction; if chart contradicts context, chart governs.\n"
                 "- H4: tactical structure, nearest obstacle between entry and TP, re-test / breakout / continuation / range / failed breakout.\n"
-                "- RIGHT EDGE must be based on the H4 right edge specifically: inspect the last 5 candles, state whether the last 3 candles are counter-trend, whether volume is rising on that move, whether price reclaimed EMA21/EMA50/EMA200 since entry, and whether the right edge still confirms the trade.\n"
+                "- RIGHT EDGE (H4): open with what the last 5 H4 candles MEAN for the trade (confirm / warn / oppose), then counter-trend on last 3, volume on that leg, EMA reclaim against the trade if visible — avoid extended colour-by-colour narration.\n"
                 "- If the H4 right edge does not confirm the trade, FINAL VERDICT cannot be HOLD.\n\n"
                 "Then output one machine-readable line immediately before the parser footer:\n"
                 "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
@@ -7582,7 +7624,7 @@ def api_chart_analysis():
                 f"You are reviewing TWO charts for {asset_type.upper()} — {symbol}.\n"
                 "IMAGE 1 is the D1 (daily) chart — macro TREND and BIAS.\n"
                 "IMAGE 2 is the H4 (4-hour) chart — entry TIMING and structure.\n\n"
-                f"ALGORITHMIC CONTEXT (use as ground truth for levels):\n{algo_context}\n\n"
+                f"ALGORITHMIC CONTEXT (cross-check after chart read; image wins on conflict):\n{algo_context}\n\n"
                 "CHART ANNOTATIONS (same in both images):\n"
                 "- Candles (green=bull, red=bear) · EMA21 (cyan) · EMA50 (purple) · EMA200 (gold dashed)\n"
                 "- Entry (grey dashed) · SL (red solid) · TP (green solid) horizontal lines\n"
@@ -7618,7 +7660,7 @@ def api_chart_analysis():
                 f"You are reviewing TWO charts for {asset_type.upper()} - {symbol}.\n"
                 "IMAGE 1 is the D1 (daily) chart - dominant bias, macro EMA structure, swing-quality context.\n"
                 "IMAGE 2 is the H4 (4-hour) chart - entry quality, obstacle map, stop/target review, re-test or breakout framing.\n\n"
-                f"ALGORITHMIC CONTEXT (use as ground truth for levels):\n{algo_context}\n\n"
+                f"ALGORITHMIC CONTEXT (cross-check after chart read; image wins on conflict):\n{algo_context}\n\n"
                 "CHART ANNOTATIONS (same in both images):\n"
                 "- Candles (green=bull, red=bear) · EMA21 (cyan) · EMA50 (purple) · EMA200 (gold dashed)\n"
                 "- Entry (grey dashed) · SL (red solid) · TP (green solid) horizontal lines\n"
@@ -7649,10 +7691,17 @@ def api_chart_analysis():
                 "Keep total response under 380 words. Reference specific prices. No speculation."
             )
             dual_prompt = (
-                f"You are reviewing TWO charts for {asset_type.upper()} - {symbol}.\n"
+                "Two chart images are attached above this text: IMAGE 1 = D1, IMAGE 2 = H4.\n\n"
+                "STEP 1 — VISUAL READ FIRST (before algorithmic context in STEP 2):\n"
+                "- For each image, read instrument and timeframe from the chart top-left (say 'not legible' if unclear). Do not guess from elsewhere.\n"
+                "- On IMAGE 2 (H4) right edge: lead with INTERPRETATION (pressure, momentum, control of last closes, continuation vs pullback vs reversal risk; confirm vs threaten direction from STEP 2). "
+                "Then at most one compact oldest→newest fact sentence. No decorative candle-by-candle play-by-play.\n\n"
+                "STEP 2 — ALGORITHMIC CONTEXT (cross-check after STEP 1; if it conflicts with the image, the image wins):\n"
+                + algo_context
+                + "\n\n"
+                "IMAGE ROLES:\n"
                 "IMAGE 1 is D1 (daily) - dominant bias, macro EMA structure, swing-quality context.\n"
-                "IMAGE 2 is H4 (4-hour) - tactical entry chart, obstacle map, and decisive right-edge review.\n\n"
-                f"ALGORITHMIC CONTEXT (use as ground truth for levels):\n{algo_context}\n\n"
+                "IMAGE 2 is H4 (4-hour) - tactical entry chart, obstacle map, decisive right-edge review.\n\n"
                 "Keep the analysis concise and easy to scan.\n\n"
                 "Use this exact body order:\n"
                 "TRADE SNAPSHOT\n"
@@ -7664,9 +7713,9 @@ def api_chart_analysis():
                 "FINAL VERDICT\n"
                 "ACTIONABLE IMPROVEMENT\n\n"
                 "Instructions:\n"
-                f"- D1: macro bias vs the algorithmic {direction_str} direction.\n"
+                f"- D1: macro bias vs the algorithmic {direction_str} direction; if chart contradicts context, chart governs.\n"
                 "- H4: tactical structure, nearest obstacle between entry and TP, re-test / breakout / continuation / range / failed breakout.\n"
-                "- RIGHT EDGE must be based on the H4 right edge specifically: inspect the last 5 candles, state whether the last 3 candles are counter-trend, whether volume is rising on that move, whether price reclaimed EMA21/EMA50/EMA200 since entry, and whether the right edge still confirms the trade.\n"
+                "- RIGHT EDGE (H4): open with what the last 5 H4 candles MEAN for the trade (confirm / warn / oppose), then counter-trend on last 3, volume on that leg, EMA reclaim against the trade if visible — avoid extended colour-by-colour narration.\n"
                 "- If the H4 right edge does not confirm the trade, FINAL VERDICT cannot be HOLD.\n\n"
                 "Then output one machine-readable line immediately before the parser footer:\n"
                 "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
