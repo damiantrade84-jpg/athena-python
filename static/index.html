@@ -5345,10 +5345,12 @@ async function checkScoreDecay() {
     for (var pair in data) {
       var d = data[pair];
       var lastAlerted = _lastDecayAlerts[pair] || 0;
-      // Fire toast if: decay >= 3  OR  AI says EXIT and decay >= 1.5 — only when worsening
-      var shouldAlert = (d.decay >= 3 || (d.aiVerdict === 'EXIT' && d.decay >= 1.5)) && d.decay > lastAlerted;
+      // Use decayPct (scale-neutral %) so forex (0-1) and factor (0-3) pairs both alert.
+      // Fire toast if: 40%+ drop  OR  direction flip  OR  AI says EXIT with 25%+ drop — only when worsening
+      var pct = d.decayPct || 0;
+      var shouldAlert = (pct >= 40 || d.directionFlip || (d.aiVerdict === 'EXIT' && pct >= 25)) && pct > lastAlerted;
       if (shouldAlert) {
-        _lastDecayAlerts[pair] = d.decay;
+        _lastDecayAlerts[pair] = pct;
         var aiPart = '';
         if (d.aiVerdict) {
           var vEmoji = d.aiVerdict === 'EXIT' ? '🚨 EXIT' : d.aiVerdict === 'WATCH' ? '👁 WATCH' : '✋ HOLD';
@@ -5356,8 +5358,9 @@ async function checkScoreDecay() {
           var reason = d.aiReasoning ? ' — ' + d.aiReasoning.substring(0, 90) : '';
           aiPart = ' | AI: ' + vEmoji + urgency + reason;
         }
+        var flipPart = d.directionFlip ? ' ⚠ DIRECTION FLIP' : '';
         var prefix = d.aiVerdict === 'EXIT' ? '🚨 DECAY EXIT — ' : '⚠ DECAY — ';
-        showToast(prefix + pair + ': score ' + d.entryScore + ' → ' + d.currentScore + ' (Δ' + d.decay + ')' + aiPart, true);
+        showToast(prefix + pair + ': score ' + d.entryScore + ' → ' + d.currentScore + ' (' + pct + '% drop)' + flipPart + aiPart, true);
       }
     }
   } catch(e) {}

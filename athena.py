@@ -9229,6 +9229,10 @@ def _check_score_decay() -> None:
 
                 decay = entry_score - cur_score
 
+                # Normalise decay as % of entry score so forex (0–1) and
+                # factor engine (0–3) pairs use the same relative threshold.
+                decay_pct = (decay / entry_score * 100) if entry_score > 0 else 0
+
                 direction_flip = bool(
                     row["direction"] and result.get("direction")
                     and row["direction"] != result.get("direction")
@@ -9237,24 +9241,38 @@ def _check_score_decay() -> None:
                 _score_decay_results[pair_name] = {
                     "currentScore": cur_score,
                     "entryScore": entry_score,
-                    "decay": round(decay, 2),
+                    "decay": round(decay, 4),
+                    "decayPct": round(decay_pct, 1),
                     "direction": row["direction"],
                     "currentDirection": result.get("direction"),
                     "directionFlip": direction_flip,
                     "ts": datetime.now(timezone.utc).isoformat(),
                 }
 
-                if decay >= 3:
+                # Warn at 40%+ drop from entry score (works for both forex 0-1 and factor 0-3 scales)
+                if decay_pct >= 40 or direction_flip:
                     log.warning(
-                        f"[DECAY] {pair_name}: score dropped {entry_score:.1f} → {cur_score:.1f} (Δ{decay:.1f}) — consider exit"
+                        f"[DECAY] {pair_name}: score dropped {entry_score:.3f} → {cur_score:.3f} ({decay_pct:.0f}% drop) — consider exit"
                     )
-                elif decay >= 1.5:
+                    try:
+                        from telegram_notify import notify_score_decay
+                        notify_score_decay(
+                            pair=pair_name,
+                            direction=row["direction"] or "",
+                            entry_score=entry_score,
+                            cur_score=cur_score,
+                            decay=decay,
+                            direction_flip=direction_flip,
+                        )
+                    except Exception:
+                        pass
+                elif decay_pct >= 25:
                     log.info(
-                        f"[DECAY] {pair_name}: score softened {entry_score:.1f} → {cur_score:.1f} (Δ{decay:.1f})"
+                        f"[DECAY] {pair_name}: score softened {entry_score:.3f} → {cur_score:.3f} ({decay_pct:.0f}% drop)"
                     )
 
                 # AI assessment — only for meaningful decay, runs in background to avoid blocking
-                if decay >= 1.5:
+                if decay_pct >= 25:
                     def _run_ai_verdict(_pn=pair_name, _dir=row["direction"] or "",
                                         _es=entry_score, _cs=cur_score, _d=decay,
                                         _flip=direction_flip, _ctx=result):
@@ -9266,6 +9284,21 @@ def _check_score_decay() -> None:
                                 "aiReasoning": ai_v.get("reasoning"),
                                 "aiTs": datetime.now(timezone.utc).isoformat(),
                             })
+                            if _d >= 3:
+                                try:
+                                    from telegram_notify import notify_score_decay
+                                    notify_score_decay(
+                                        pair=_pn,
+                                        direction=_dir,
+                                        entry_score=_es,
+                                        cur_score=_cs,
+                                        decay=_d,
+                                        direction_flip=_flip,
+                                        ai_verdict=ai_v.get("verdict"),
+                                        ai_urgency=ai_v.get("urgency"),
+                                    )
+                                except Exception:
+                                    pass
                     threading.Thread(target=_run_ai_verdict, daemon=True).start()
 
             except Exception as e:

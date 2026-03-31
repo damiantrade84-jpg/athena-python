@@ -320,6 +320,37 @@ def notify_daily_summary() -> None:
     _daily_stats["open_positions"] = []
 
 
+def notify_score_decay(
+    pair: str,
+    direction: str,
+    entry_score: float,
+    cur_score: float,
+    decay: float,
+    direction_flip: bool = False,
+    ai_verdict: Optional[str] = None,
+    ai_urgency: Optional[str] = None,
+) -> None:
+    """Send Telegram alert when an open position's score decays significantly."""
+    if not _is_enabled():
+        return
+
+    emoji = "🔴" if decay >= 3.0 else "🟡"
+    flip_note = "\n⚠️ *DIRECTION FLIP — consider exiting*" if direction_flip else ""
+    ai_note = ""
+    if ai_verdict:
+        urgency_emoji = {"HIGH": "🚨", "MEDIUM": "⚠️", "LOW": "ℹ️"}.get(ai_urgency or "", "")
+        ai_note = f"\nAI: {urgency_emoji} `{ai_verdict}`"
+
+    message = (
+        f"{emoji} *Score Decay Alert — {pair}*\n"
+        f"Direction: `{direction}` | Decay: `Δ{decay:.1f}`\n"
+        f"Entry Score: `{entry_score:.2f}` → Now: `{cur_score:.2f}`"
+        f"{flip_note}{ai_note}"
+    )
+
+    _send_message_async(message)
+
+
 def update_open_positions(positions: List[Dict[str, Any]]) -> None:
     """Update current open positions for daily summary"""
     _daily_stats["open_positions"] = positions
