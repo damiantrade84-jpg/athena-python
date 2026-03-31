@@ -125,19 +125,13 @@ Builds the text input sent to Marcus Reid. Sections emitted:
 - Model: `claude-opus-4-6`, temperature: `0.2` (low — factual observation mode)
 - Config key: `AI_VISION_TEMPERATURE: 0.2`
 - Three modes: single-TF (H4), dual-TF (D1+H4), triple-TF (D1+H4+H1)
-- **System prompt:** ONLY describe what you can ACTUALLY SEE; full annotation legend; cross-reference algo context
-- **User prompts:** anchored WHAT TO LOOK FOR checklist; 5-6 cite-what-you-see questions
-- **All three prompts share:** `ABSOLUTE RULES` anti-hallucination header, `ALGORITHMIC CONTEXT (use as ground truth for levels)` label, **7-line footer (required — do not remove):**
-  ```
-  TF ALIGNMENT: ALIGNED or CONFLICTED
-  SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>
-  SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>
-  INTRADAY RATING: ...
-  INTRADAY LEVELS: ...
-  SWING RATING: ...
-  SWING LEVELS: ...
-  ```
-  This footer is parsed by `_extract_vision_structured()` for level extraction. Removing it breaks `_buildChartAiLevelHtml()` in the UI.
+- **System prompt (2026-03-31 upgrade):** Structured trade review with 8-point analysis framework
+  - **EXTRACT section:** instrument, TF, direction, entry/SL/TP/RR, all visible indicators (EMA21/50/200, Keltner Channel 1.5 ATR, volume), key levels (S/R, OB, FVG, POC, VAH, VAL)
+  - **8-point ANALYZE:** trend structure, EMA alignment, level confluence, Keltner Channel state, stop logic, target viability, volume confirmation, RR ≥ 1:2 check
+  - **Formatted OUTPUT:** trade parameters table → supporting factors → concerns & risks → Hold/Close/Adjust verdict → one actionable suggestion
+  - **STRUCTURED FOOTER (required — do not remove):** `SCALP/INTRADAY/SWING RATING` + `TF ALIGNMENT` — parsed by `_extract_vision_structured()` for Engine C conviction modification
+- **Anti-hallucination rules:** ONLY describe what you can ACTUALLY SEE; use exact prices from algorithmic context; never invent patterns; cross-reference with algo context; full annotation legend for Engine B elements
+- **Footer parsing:** The structured footer is parsed by `_extract_vision_structured()` and used by `apply_vision()` to modify Engine C conviction. Removing it breaks Engine C Vision integration and UI level extraction.
 
 ---
 
