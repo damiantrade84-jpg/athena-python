@@ -4480,7 +4480,7 @@ async function loadPerformance() {
       }).catch(function() { return { error: 'network' }; });
     }
     var results = await Promise.all([
-      fetchJsonSafe('/api/performance'),
+      fetchJsonSafe('/api/performance?_=' + Date.now()),
       fetchJsonSafe('/api/microstructure-health'),
       fetchJsonSafe('/api/shadow-signals?limit=40')
     ]);

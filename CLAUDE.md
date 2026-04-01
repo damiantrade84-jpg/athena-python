@@ -136,7 +136,8 @@ Builds the text input sent to Marcus Reid. Sections emitted:
 - Temperature: **`AI_VISION_TEMPERATURE`** — default **`0.2`** in `config.py` / yaml (factual observation mode).
 - **Grok guard:** `VISION_MODEL` must be an Anthropic Claude id for this route. If the string contains **`grok`**, the handler overrides to **`claude-opus-4-6`** and logs a warning (Lottery uses Grok separately — do not point `VISION_MODEL` at xAI).
 - Three modes: single-TF (H4), dual-TF (D1+H4), triple-TF (D1+H4+H1)
-- **Read order (2026-03-31):** Prompts enforce **image-first**: read chart(s); instrument + timeframe from **chart top-left** (no guessing from request); **right edge** = last 5 candles on authoritative TF (single/H4, dual/H4, triple/H1); **then** algorithmic context for cross-check. If chart and context conflict, **the image wins**. Prefer prices from chart axis/overlays; use context numbers only when the same level is unreadable on the image.
+- **Read order (2026-03-31):** Prompts enforce **image-first** for structure and prices; **right edge** = last 5 candles on authoritative TF (single/H4, dual/H4, triple/H1); **then** algorithmic context for cross-check. If chart and context conflict on **structure/direction**, **the image wins**.
+- **TRADE SNAPSHOT instrument/TF:** Prefer any **visible chart UI** (watermark, symbol strip, title bar — not only top-left). If the label is still illegible in the screenshot, prompts should direct the model to fill **pair + timeframe from the chart-analysis request** (`symbol`, `tf` / D1+H4+H1 in multi-TF) and state *chart label not legible — from request* so the section is never empty. This fallback is **metadata only**; it does not override visible price action.
 - **RIGHT EDGE (2026-03-31):** Model must lead with **interpretation** (momentum, control of last closes, continuation vs pullback vs reversal risk, confirm vs threaten algorithmic LONG/SHORT). Avoid long candle-by-colour play-by-play without meaning; optional one compact oldest→newest fact sentence as evidence.
 - **Body structure:** Concise sections (e.g. TRADE SNAPSHOT, MARKET STRUCTURE, RIGHT EDGE, factors, verdict) plus required machine footer below.
 - **STRUCTURED FOOTER (required — do not remove):** Line `RIGHT EDGE: CONFIRMS | REVIEW | POTENTIAL REVERSAL` immediately before `TF ALIGNMENT` + three `*_RATING` + three `*_LEVELS` — parsed by `_extract_vision_structured()` for Engine C conviction modification.
@@ -363,6 +364,12 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 - Uses `_engine_b_regime_label()` for zone multipliers
 
 ---
+
+## Advisory thresholds (backtest + live suggestions)
+
+- **Module:** [advisory_thresholds.py](advisory_thresholds.py) — builds suggestions from latest `backtest_results` per (pair, engine) and closed `audit_log` trades.
+- **No auto-apply:** `BT_MIN`, `MIN_CONFLUENCE_CLASS`, and `NAKED_ENGINE.style_profiles.min_score` change **only** after **POST** `/api/advisory-thresholds/<rec_id>/approve` (human action). GET `/api/advisory-thresholds` is read-only for gates.
+- **Audit:** Approvals/rejections stored in `advisory_threshold_actions` in `audit.db`.
 
 ## Lottery Lab
 

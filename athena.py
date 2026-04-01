@@ -7399,7 +7399,9 @@ def api_chart_analysis():
         "The chart screenshot is attached above this message.\n\n"
         "STEP 1 — VISUAL READ FIRST (complete this before reading algorithmic context in STEP 2):\n"
         "- Examine the full chart image.\n"
-        "- Read the instrument name and timeframe from the top-left of the chart only (say 'not legible' if unclear). Do not infer from elsewhere.\n"
+        "- Find instrument + timeframe from visible chart UI (top-left watermark, symbol strip, title bar — not only one corner).\n"
+        f"- If the symbol/TF text is still unreadable in the image, you MUST still fill TRADE SNAPSHOT using request metadata: pair={symbol!r}, timeframe={tf!r} "
+        "(state explicitly: 'from request — chart label not legible'). Metadata fallback only; price/structure rules unchanged.\n"
         f"- On the right edge of this {tf} chart: lead with INTERPRETATION (2–4 sentences): bullish vs bearish pressure, momentum building/fading/mixed, "
         "who controls the last 1–2 closes, continuation vs pullback vs reversal risk — and whether that confirms or threatens the algorithmic direction "
         "(use STEP 2 below for LONG/SHORT). Then at most ONE compact sentence of fact (oldest→newest closes) as evidence if needed. "
@@ -7410,8 +7412,8 @@ def api_chart_analysis():
         "Keep the analysis concise, structured, and easy to scan.\n\n"
         "Use this exact body order:\n"
         "TRADE SNAPSHOT:\n"
-        "- instrument and timeframe from the chart top-left; then direction, entry, SL, TP, RR if inferable\n"
-        "- if unclear, say 'not clearly visible' or 'not clearly inferable'\n\n"
+        f"- instrument + timeframe: prefer visible chart label; if illegible use pair={symbol!r}, TF={tf!r} from request and note 'chart label not legible'\n"
+        "- then direction, entry, SL, TP, RR if inferable; if those are unclear say 'not clearly visible' or 'not clearly inferable'\n\n"
         "MARKET STRUCTURE:\n"
         "- EMA order and trend alignment; compare to algorithmic direction — if chart and context conflict, state that the chart governs\n"
         "- whether the setup looks like a re-test, breakout, continuation, range, or failed breakout\n"
@@ -7549,7 +7551,7 @@ def api_chart_analysis():
             triple_prompt = (
                 "Three chart images are attached above this text: IMAGE 1 = D1, IMAGE 2 = H4, IMAGE 3 = H1.\n\n"
                 "STEP 1 — VISUAL READ FIRST (before algorithmic context in STEP 2):\n"
-                "- For each image, read instrument and timeframe from the chart top-left (say 'not legible' if unclear). Do not guess from elsewhere.\n"
+                f"- For each image, read instrument + timeframe from visible chart UI (watermark, symbol strip, title area). If unreadable, use request pair={symbol!r} with TF D1, H4, or H1 per image and state 'chart label not legible — from request'.\n"
                 "- On IMAGE 3 (H1) right edge: same as single-TF rules — lead with INTERPRETATION (pressure, momentum, control of last closes, continuation vs pullback vs reversal risk; confirm vs threaten algorithmic direction from STEP 2). "
                 "Then at most one compact oldest→newest fact sentence. No decorative candle-by-candle colour play-by-play.\n\n"
                 "STEP 2 — ALGORITHMIC CONTEXT (cross-check after STEP 1; if it conflicts with the image, the image wins):\n"
@@ -7570,6 +7572,7 @@ def api_chart_analysis():
                 "FINAL VERDICT\n"
                 "ACTIONABLE IMPROVEMENT\n\n"
                 "Instructions:\n"
+                f"- TRADE SNAPSHOT: one line for instrument + each TF (D1/H4/H1); use visible labels or, if illegible, pair={symbol!r} + D1/H4/H1 from request with 'chart label not legible'.\n"
                 f"- D1: dominant bias vs the algorithmic {direction_str} direction; if chart contradicts context, chart governs.\n"
                 "- H4: tactical structure, nearest obstacle between entry and TP, re-test / breakout / continuation / range / failed breakout.\n"
                 "- H1 RIGHT EDGE: open with what the last 5 H1 candles MEAN for the trade (confirm / warn / oppose), then counter-trend on last 3, volume on that leg, EMA21/50/200 reclaim against the trade if visible — not a long per-candle description.\n"
@@ -7653,6 +7656,7 @@ def api_chart_analysis():
                 "FINAL VERDICT\n"
                 "ACTIONABLE IMPROVEMENT\n\n"
                 "Instructions:\n"
+                f"- TRADE SNAPSHOT: instrument + D1 and H4 timeframes; use visible labels or pair={symbol!r} + D1/H4 from request if chart text illegible.\n"
                 f"- D1: macro bias vs the algorithmic {direction_str} direction; if chart contradicts context, chart governs.\n"
                 "- H4: tactical structure, nearest obstacle between entry and TP, re-test / breakout / continuation / range / failed breakout.\n"
                 "- RIGHT EDGE (H4): open with what the last 5 H4 candles MEAN for the trade (confirm / warn / oppose), then counter-trend on last 3, volume on that leg, EMA reclaim against the trade if visible — avoid extended colour-by-colour narration.\n"
@@ -7765,7 +7769,7 @@ def api_chart_analysis():
             dual_prompt = (
                 "Two chart images are attached above this text: IMAGE 1 = D1, IMAGE 2 = H4.\n\n"
                 "STEP 1 — VISUAL READ FIRST (before algorithmic context in STEP 2):\n"
-                "- For each image, read instrument and timeframe from the chart top-left (say 'not legible' if unclear). Do not guess from elsewhere.\n"
+                f"- For each image, read instrument + timeframe from visible chart UI (watermark, symbol strip, title area). If unreadable, use request pair={symbol!r} with TF D1 or H4 per image and state 'chart label not legible — from request'.\n"
                 "- On IMAGE 2 (H4) right edge: lead with INTERPRETATION (pressure, momentum, control of last closes, continuation vs pullback vs reversal risk; confirm vs threaten direction from STEP 2). "
                 "Then at most one compact oldest→newest fact sentence. No decorative candle-by-candle play-by-play.\n\n"
                 "STEP 2 — ALGORITHMIC CONTEXT (cross-check after STEP 1; if it conflicts with the image, the image wins):\n"
@@ -10857,13 +10861,13 @@ def api_performance():
             con.row_factory = sqlite3.Row
 
             rows = con.execute(
-                "SELECT * FROM audit_log WHERE exit_price IS NOT NULL ORDER BY ts ASC"
+                "SELECT * FROM audit_log WHERE exit_price IS NOT NULL ORDER BY id ASC"
             ).fetchall()
 
         trades = [dict(r) for r in rows]
 
         if not trades:
-            return jsonify(
+            _empty = jsonify(
                 {
                     "total_trades": 0,
                     "message": "No completed trades yet",
@@ -10875,6 +10879,9 @@ def api_performance():
                     "attribution_by_source": {},
                 }
             )
+            _empty.headers["Cache-Control"] = "no-store, max-age=0, must-revalidate"
+            _empty.headers["Pragma"] = "no-cache"
+            return _empty
 
         wins = [t for t in trades if (t.get("pnl") or 0) > 0]
 
@@ -11072,16 +11079,23 @@ def api_performance():
 
         avg_holding = round(sum(hp_vals) / len(hp_vals), 1) if hp_vals else None
 
-        # Last 20 completed trades
+        # Last 20 completed trades — parsed close time + id (string sort breaks on ISO variants)
+
+        _epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+        def _parse_close_dt(trade: dict):
+            for key in ("exit_time", "closed_at", "close_time", "ts"):
+                raw = trade.get(key)
+                if raw is None or raw == "":
+                    continue
+                try:
+                    return datetime.fromisoformat(str(raw).strip().replace("Z", "+00:00"))
+                except Exception:
+                    continue
+            return _epoch
 
         def _trade_closed_sort_key(trade: dict):
-            return (
-                trade.get("exit_time")
-                or trade.get("closed_at")
-                or trade.get("close_time")
-                or trade.get("ts")
-                or ""
-            )
+            return (_parse_close_dt(trade), int(trade.get("id") or 0))
 
         last_20 = sorted(trades, key=_trade_closed_sort_key, reverse=True)[:20]
 
@@ -11167,7 +11181,7 @@ def api_performance():
                 "avg_slippage_bps": round(sum(engine_slip) / len(engine_slip), 2) if engine_slip else None,
             }
 
-        return jsonify(
+        _resp = jsonify(
             {
                 "total_trades": total,
                 "win_count": win_count,
@@ -11192,6 +11206,9 @@ def api_performance():
                 "performance_by_engine": performance_by_engine,
             }
         )
+        _resp.headers["Cache-Control"] = "no-store, max-age=0, must-revalidate"
+        _resp.headers["Pragma"] = "no-cache"
+        return _resp
 
     except Exception as e:
         log.error(f"api_performance error: {e}")
