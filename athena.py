@@ -7439,6 +7439,12 @@ def api_chart_analysis():
         "- only visible evidence from the chart\n\n"
         "KEY RISKS:\n"
         "- include SL logic, TP realism, and profile/value-area issues if visible\n\n"
+        "ENTRY QUALITY:\n"
+        "- Is this entry at a tactical pullback/retest, or is it chasing into a support/resistance cluster?\n"
+        "- If multiple levels (POC, VAH, VAL, SUP/RES, FVG) are stacked near entry, flag as congestion — low-probability entry zone\n"
+        "- How far has the trend already moved vs how far TP needs to go? Flag if the move looks exhausted\n"
+        "- Does the volatility regime (from algo context) suit this type of entry? Low-vol breakdowns/breakouts often fail\n"
+        "- Verify RR independently: compare actual SL pip distance vs TP1 pip distance; flag if TP1 RR < 1:1.5 or if TP1 ≈ TP2\n\n"
         "FINAL VERDICT:\n"
         "- HOLD / ADJUST / CLOSE with one sentence justification\n"
         "- HOLD is only allowed if the right edge still confirms the trade direction\n\n"
@@ -7456,7 +7462,7 @@ def api_chart_analysis():
         "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
         "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
         "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-        "Keep total response under 430 words. Reference specific prices. No speculation."
+        "Keep total response under 500 words. Reference specific prices. No speculation."
     )
 
     try:
