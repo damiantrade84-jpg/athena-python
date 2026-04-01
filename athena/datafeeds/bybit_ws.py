@@ -19,12 +19,17 @@ from athena.microstructure.orderbook_metrics import (  # noqa: E402
     liquidity_pressure as _liq_pressure,
 )
 
+_BYBIT_SYMBOL_MAP = {
+    "MATICUSDT": "POLUSDT",  # Bybit rebranded MATIC perpetual to POL
+}
+
 
 class BybitWS:
     """Bybit WebSocket client for orderbook.50 and publicTrade streams."""
 
     def __init__(self, symbol: str = "BTCUSDT", emit_interval: float = 1.0):
         self.symbol = symbol.upper()
+        self.stream_symbol = _BYBIT_SYMBOL_MAP.get(self.symbol, self.symbol)
         self.base_url = "wss://stream.bybit.com/v5/public/linear"
         self.emit_interval = emit_interval
         self.orderbook: Dict[str, List[Tuple[float, float]]] = {"bids": [], "asks": []}
@@ -51,8 +56,8 @@ class BybitWS:
                 "req_id": str(int(time.time() * 1000)),
                 "op": "subscribe",
                 "args": [
-                    f"orderbook.50.{self.symbol}",
-                    f"publicTrade.{self.symbol}",
+                    f"orderbook.50.{self.stream_symbol}",
+                    f"publicTrade.{self.stream_symbol}",
                 ],
             }
             await self._ws.send(json.dumps(subscribe_msg))
@@ -124,18 +129,20 @@ class BybitWS:
 
     async def _handle_message(self, msg: Dict) -> None:
         """Route message to appropriate handler."""
+        if msg.get("op") == "subscribe" and msg.get("success"):
+            log.info(f"[BybitWS] Subscription confirmation: {msg}")
+            return
+        if msg.get("op") == "subscribe" and not msg.get("success"):
+            log.error(f"[BybitWS] Subscription failed: {msg}")
+            return
         if "topic" not in msg:
             return
         topic = msg["topic"]
         data = msg.get("data", {})
-        if topic == f"orderbook.50.{self.symbol}":
+        if topic == f"orderbook.50.{self.stream_symbol}":
             self._handle_orderbook(data)
-        elif topic == f"publicTrade.{self.symbol}":
+        elif topic == f"publicTrade.{self.stream_symbol}":
             self._handle_trade(data)
-        elif msg.get("op") == "subscribe" and msg.get("success"):
-            log.info(f"[BybitWS] Subscription confirmation: {msg}")
-        elif msg.get("op") == "subscribe" and not msg.get("success"):
-            log.error(f"[BybitWS] Subscription failed: {msg}")
 
     def _handle_orderbook(self, data: Dict) -> None:
         """Update local order book with orderbook.50 snapshot."""

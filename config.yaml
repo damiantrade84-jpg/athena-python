@@ -107,15 +107,15 @@ NAKED_MAX_DAILY: 3
 # Per-class live scan minimum confluence — execute / tradeSignals tier threshold.
 # Forex remains on the dedicated 0–1 forex_scoring scale; all other classes use their engine scale.
 MIN_CONFLUENCE_CLASS:
-  forex:     0.75
-  crypto:    1.50
-  commodity: 1.35
-  stock:     1.45
+  forex:     0.8
+  crypto:    1.5
+  commodity: 1.4
+  stock:     1.55
   index:     1.35
 
 # Forex scan threshold — forex_scoring engine outputs 0–1.0 (not 0–3.0)
 # MIN_CONFLUENCE_CLASS.forex must match this — keep in sync
-MIN_FOREX_CONFLUENCE: 0.75
+MIN_FOREX_CONFLUENCE: 0.8
 
 # Optional subgroup thresholds (used when score_group is available on a pair)
 MIN_CONFLUENCE_GROUP:
@@ -528,10 +528,10 @@ NAKED_ENGINE:
       min_score: 3.0
       min_rr: 1.5
     intraday:
-      min_score: 4.0
+      min_score: 5.0
       min_rr: 1.5
     swing:
-      min_score: 5.0
+      min_score: 6.0
       min_rr: 1.5
       require_macro_align: false
 
