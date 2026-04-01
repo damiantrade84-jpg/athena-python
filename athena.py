@@ -7807,13 +7807,17 @@ def api_chart_analysis():
                 "BULLISH FACTORS\n"
                 "BEARISH FACTORS\n"
                 "KEY RISKS\n"
+                "ENTRY QUALITY\n"
                 "FINAL VERDICT\n"
                 "ACTIONABLE IMPROVEMENT\n\n"
                 "Instructions:\n"
                 f"- D1: macro bias vs the algorithmic {direction_str} direction; if chart contradicts context, chart governs.\n"
                 "- H4: tactical structure, nearest obstacle between entry and TP, re-test / breakout / continuation / range / failed breakout.\n"
                 "- RIGHT EDGE (H4): open with what the last 5 H4 candles MEAN for the trade (confirm / warn / oppose), then counter-trend on last 3, volume on that leg, EMA reclaim against the trade if visible — avoid extended colour-by-colour narration.\n"
-                "- If the H4 right edge does not confirm the trade, FINAL VERDICT cannot be HOLD.\n\n"
+                "- If the H4 right edge does not confirm the trade, FINAL VERDICT cannot be HOLD.\n"
+                "- ENTRY QUALITY: Is the entry at a tactical pullback/retest or chasing into stacked S/R? "
+                "Flag congestion zones (POC+VAH+VAL+SUP clustered near entry). Flag if the trend is extended and TP is a small fraction of the move done. "
+                "Flag if regime is LOW_VOLATILITY and trade is a breakdown/breakout. Verify TP1 RR independently.\n\n"
                 "Then output one machine-readable line immediately before the parser footer:\n"
                 "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
                 "The final 8 lines must be that RIGHT EDGE line plus the exact 7 parser footer lines, with nothing after them.\n\n"
@@ -7826,7 +7830,7 @@ def api_chart_analysis():
                 "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
                 "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
                 "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-                "Keep total response under 420 words. Reference specific prices. No speculation."
+                "Keep total response under 490 words. Reference specific prices. No speculation."
             )
             content = [
                 {"type": "text", "text": "IMAGE 1 — D1 DAILY BIAS CHART:"},
