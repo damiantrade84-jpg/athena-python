@@ -1,5 +1,8 @@
 """Research-integrity metrics for Athena backtests.
 
+See also ``research_validation`` for explicit validation modes (walk-forward,
+embargo, live-parity stress) and the ``researchValidation`` API payload.
+
 The goal here is to keep the implementation:
 - lightweight (stdlib only)
 - auditable

@@ -26,6 +26,15 @@ def handle_backtest_request(
 ) -> dict:
     """Run pair or full backtest with unchanged output semantics."""
     bt_style = normalize_style(payload.get("style", "auto"))
+    _vm = str(payload.get("validation_mode") or "standard").strip().lower()
+    try:
+        _pg = int(payload.get("purge_gap", 200))
+    except (TypeError, ValueError):
+        _pg = 200
+    try:
+        _fd = int(payload.get("folds", 3))
+    except (TypeError, ValueError):
+        _fd = 3
     sym = payload.get("symbol")
     # Clients (e.g. telegram_bot /bt) often send ``pair`` (display) not ``symbol``.
     # Without this, missing ``symbol`` triggers a full-universe leaderboard backtest.
@@ -50,7 +59,13 @@ def handle_backtest_request(
         pair = next((p for p in all_pairs if p["symbol"] == sym), None)
         if not pair:
             return {"error": "Unknown symbol", "status": 404}
-        result = backtest_pair(pair, style=bt_style)
+        result = backtest_pair(
+            pair,
+            style=bt_style,
+            validation_mode=_vm,
+            purge_gap=_pg,
+            folds=max(1, _fd),
+        )
         if allow_auto_toggle:
             toggle = auto_toggle_pair(pair, result)
             if toggle:

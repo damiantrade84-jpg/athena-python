@@ -448,6 +448,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     sig_a["engine_b_ob"] = res_b.get("ob_at_zone", False)
                                     sig_a["engine_b_sl"] = res_b.get("recommended_stop_loss")
                                     sig_a["engine_b_tp"] = res_b.get("recommended_take_profit")
+                                    sig_a["engine_b_lifecycle_state"] = conf_b.get("lifecycle_state", "unknown")
+                                    sig_a["engine_b_lifecycle_reason"] = conf_b.get("lifecycle_reason", "")
 
                                     a_max = sig_a.get("maxScore", 3.0)
                                     a_score = sig_a.get("confluenceScore", 0)

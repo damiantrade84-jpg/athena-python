@@ -38,6 +38,13 @@ from scoring import (
 )
 from meta_learner import meta_report
 from research_metrics import build_research_metrics, enrich_backtest_summary
+from research_validation import (
+    backtest_bar_validation_state,
+    build_validation_report,
+    normalize_validation_mode,
+    temporal_validation_mode,
+    volume_threshold_for_backtest,
+)
 from stability_monitor import record_backtest_summary
 
 log = logging.getLogger("sentinel")
@@ -193,6 +200,41 @@ def _records_for_calibration(
             }
         )
     return records
+
+
+def _engine_a_volume_threshold(pair_ctx: dict, canonical_validation_mode: str) -> float:
+    return volume_threshold_for_backtest(
+        get_pair_profile(pair_ctx).get("volume_threshold"),
+        validation_mode=canonical_validation_mode,
+        default_live=float(CONFIG.get("VOLUME_THRESHOLD", 1.5)),
+        default_bt=float(
+            CONFIG.get(
+                "VOLUME_THRESHOLD_BACKTEST", CONFIG.get("VOLUME_THRESHOLD", 1.5)
+            )
+        ),
+    )
+
+
+def _attach_research_validation_payload(
+    result: dict,
+    trades: list,
+    *,
+    canonical_vm: str,
+    temporal_vm: str,
+    purge_gap: int,
+    folds: int,
+    mode_warning: str | None,
+) -> None:
+    result["validationMode"] = canonical_vm
+    result["researchValidation"] = build_validation_report(
+        trades,
+        validation_mode=canonical_vm,
+        temporal_mode=temporal_vm,
+        purge_gap=purge_gap,
+        folds=folds,
+        mode_warning=mode_warning,
+        wf_split=result.get("wfSplit"),
+    )
 
 
 def _records_for_meta(
@@ -480,6 +522,12 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     # By default matches live scan thresholds for parity unless RESEARCH_MODE is enabled.
     bt_min = get_score_threshold(_pair_ctx, is_backtest=True)
 
+    _canonical_vm, _vm_mode_warning = normalize_validation_mode(validation_mode)
+    _temporal_vm = temporal_validation_mode(_canonical_vm)
+    _bt_volume_threshold = _engine_a_volume_threshold(_pair_ctx, _canonical_vm)
+    if _vm_mode_warning:
+        log.warning("[BT] %s: %s", pair.get("display"), _vm_mode_warning)
+
     _h4_need = max(50, CONFIG["H4_CANDLES"])
 
     _h1_need = max(50, CONFIG["H1_CANDLES"])
@@ -512,6 +560,9 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             time_alignment_warnings.append(
                 f"{quality['label']} timestamps are not monotonic"
             )
+    funnel["validationMode"] = _canonical_vm
+    funnel["temporalValidationMode"] = _temporal_vm
+    funnel["liveParityExecutionStress"] = _canonical_vm == "live_parity"
     funnel["timeAlignmentWarnings"] = time_alignment_warnings
     if time_alignment_warnings:
         log.warning(
@@ -550,23 +601,18 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         last_exit_bar = 0
         open_positions = 0
 
-        # R4: Walk-forward split â€" 70% in-sample, 30% out-of-sample        _oos_start = MIN_BARS + int((total_bars - MIN_BARS) * 0.7)
-        _purge_start = _oos_start - (purge_gap if validation_mode == "embargoed" else 0)
-        _fold_size = int((total_bars - MIN_BARS) / max(1, folds)) if validation_mode in ("walk_forward", "walk_forward_cv") else 0
-
         while i < total_bars - 1:
-            if validation_mode == "embargoed" and _purge_start <= i < _oos_start:
+            _vf = backtest_bar_validation_state(
+                i,
+                min_bars=MIN_BARS,
+                total_bars=total_bars,
+                temporal_mode=_temporal_vm,
+                purge_gap=purge_gap,
+                folds=folds,
+            )
+            if _vf["skip"]:
                 i += 1
                 continue
-            
-            if validation_mode == "walk_forward" and _fold_size > 0:
-                _current_fold = min(folds - 1, int((i - MIN_BARS) / _fold_size))
-                _fold_oos_start = MIN_BARS + _current_fold * _fold_size + int(_fold_size * 0.7)
-                _purge_fold_start = _fold_oos_start - purge_gap
-                if _purge_fold_start <= i < _fold_oos_start:
-                    i += 1
-                    continue
-                _oos_start = _fold_oos_start
             if i - last_exit_bar < COOLDOWN:
                 i += 1
                 continue
@@ -687,12 +733,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         d1_candles=d1_window,
                         h4_candles=h4_window,
                         h1_candles=h1_window,
-                        volume_threshold=get_pair_profile(_pair_ctx).get(
-                            "volume_threshold",
-                            CONFIG.get(
-                                "VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"]
-                            ),
-                        ),
+                        volume_threshold=_bt_volume_threshold,
                         bar_time=h4_window[-1].get("time") if h4_window else None,
                         funding_rate=_bt_funding_rate,
                     )
@@ -728,7 +769,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             raw_entry = entry_bar.get("open", entry_bar["close"])
 
-            _slip_mult = 3.0 if validation_mode == "live_parity" else 1.0
+            _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
             slip = raw_entry * _get_slippage_for_bar(entry_bar, _ptype) * _slip_mult
             entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
@@ -945,8 +986,9 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     "outcome": outcome,
                     "resultR": round(result_r, 2),
                     "regime": _regime,
-                    "oos": i >= _oos_start,
-                "validation_mode": validation_mode,
+                    "oos": _vf["oos_label"],
+                    "wf_fold": _vf["wf_fold"],
+                    "validation_mode": _canonical_vm,
                     "volAdj": _vol_adj,
                 }
             )
@@ -970,8 +1012,6 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         last_exit_bar = 0
         open_positions = 0
 
-        _oos_start = MIN_H4 + int((total_h4 - MIN_H4) * 0.7)
-
         # Pre-parse timestamps once
 
         h4_ts = pd.to_datetime([c["time"] for c in h4_raw], utc=True, errors="coerce")
@@ -979,6 +1019,17 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         d1_ts = pd.to_datetime([c["time"] for c in d1_raw], utc=True, errors="coerce")
 
         while i < total_h4 - 1:
+            _vf = backtest_bar_validation_state(
+                i,
+                min_bars=MIN_H4,
+                total_bars=total_h4,
+                temporal_mode=_temporal_vm,
+                purge_gap=purge_gap,
+                folds=folds,
+            )
+            if _vf["skip"]:
+                i += 1
+                continue
             if i - last_exit_bar < COOLDOWN:
                 i += 1
                 continue
@@ -1097,12 +1148,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         d1_candles=d1_ctx,
                         h4_candles=h4_window,
                         h1_candles=h1_window,
-                        volume_threshold=get_pair_profile(_pair_ctx).get(
-                            "volume_threshold",
-                            CONFIG.get(
-                                "VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"]
-                            ),
-                        ),
+                        volume_threshold=_bt_volume_threshold,
                         bar_time=h4_window[-1].get("time") if h4_window else None,
                         funding_rate=_bt_funding_rate,
                     )
@@ -1138,7 +1184,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             raw_entry = entry_bar.get("open", entry_bar["close"])
 
-            _slip_mult = 3.0 if validation_mode == "live_parity" else 1.0
+            _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
             slip = raw_entry * _get_slippage_for_bar(entry_bar, _ptype) * _slip_mult
             entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
@@ -1343,8 +1389,9 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     "outcome": outcome,
                     "resultR": round(result_r, 2),
                     "regime": _regime,
-                    "oos": i >= _oos_start,
-                "validation_mode": validation_mode,
+                    "oos": _vf["oos_label"],
+                    "wf_fold": _vf["wf_fold"],
+                    "validation_mode": _canonical_vm,
                     "volAdj": _vol_adj,
                 }
             )
@@ -1368,8 +1415,6 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         last_exit_bar = 0
         open_positions = 0
 
-        _oos_start = MIN_H1 + int((total_h1 - MIN_H1) * 0.7)
-
         h1_ts_sc = pd.to_datetime(
             [c["time"] for c in h1_raw], utc=True, errors="coerce"
         )
@@ -1383,6 +1428,17 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         )
 
         while i < total_h1 - 1:
+            _vf = backtest_bar_validation_state(
+                i,
+                min_bars=MIN_H1,
+                total_bars=total_h1,
+                temporal_mode=_temporal_vm,
+                purge_gap=purge_gap,
+                folds=folds,
+            )
+            if _vf["skip"]:
+                i += 1
+                continue
             if i - last_exit_bar < COOLDOWN:
                 i += 1
                 continue
@@ -1486,12 +1542,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         d1_candles=d1_ctx,
                         h4_candles=h4_ctx,
                         h1_candles=h1_window,
-                        volume_threshold=get_pair_profile(_pair_ctx).get(
-                            "volume_threshold",
-                            CONFIG.get(
-                                "VOLUME_THRESHOLD_BACKTEST", CONFIG["VOLUME_THRESHOLD"]
-                            ),
-                        ),
+                        volume_threshold=_bt_volume_threshold,
                         bar_time=h1_window[-1].get("time") if h1_window else None,
                         funding_rate=_bt_funding_rate,
                     )
@@ -1525,7 +1576,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             raw_entry = entry_bar.get("open", entry_bar["close"])
 
-            _slip_mult = 3.0 if validation_mode == "live_parity" else 1.0
+            _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
             slip = raw_entry * _get_slippage_for_bar(entry_bar, _ptype) * _slip_mult
             entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
@@ -1730,8 +1781,9 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     "outcome": outcome,
                     "resultR": round(result_r, 2),
                     "regime": _regime,
-                    "oos": i >= _oos_start,
-                "validation_mode": validation_mode,
+                    "oos": _vf["oos_label"],
+                    "wf_fold": _vf["wf_fold"],
+                    "validation_mode": _canonical_vm,
                     "volAdj": _vol_adj,
                 }
             )
@@ -1783,7 +1835,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             },
             records=[],
         )
-        return {
+        _empty_out = {
             "pair": pair["display"],
             "symbol": pair["symbol"],
             "type": pair.get("type", ""),
@@ -1839,6 +1891,16 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             "equityCurve": [1.0],
             "trades": [],
         }
+        _attach_research_validation_payload(
+            _empty_out,
+            [],
+            canonical_vm=_canonical_vm,
+            temporal_vm=_temporal_vm,
+            purge_gap=purge_gap,
+            folds=folds,
+            mode_warning=_vm_mode_warning,
+        )
+        return _empty_out
 
     wins = [
         t
@@ -2184,7 +2246,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         ),
     )
 
-    return {
+    _bt_result = {
         "pair": pair["display"],
         "symbol": pair["symbol"],
         "type": pair["type"],
@@ -2233,10 +2295,24 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         "equityCurve": equity_curve,
         "trades": trades[-50:],
     }
+    _attach_research_validation_payload(
+        _bt_result,
+        trades,
+        canonical_vm=_canonical_vm,
+        temporal_vm=_temporal_vm,
+        purge_gap=purge_gap,
+        folds=folds,
+        mode_warning=_vm_mode_warning,
+    )
+    return _bt_result
 
 
 def _format_backtest_results(
-    trades, pair, engine_type="NAKED", same_bar_both_hit: int = 0
+    trades,
+    pair,
+    engine_type="NAKED",
+    same_bar_both_hit: int = 0,
+    validation_mode: str = "standard",
 ):
     """Format Engine B backtest results to match Engine A's response schema exactly."""
     if not trades:
@@ -2508,7 +2584,13 @@ def _format_backtest_results(
     result["regime_performance"] = regimes
     result["validation_mode"] = validation_mode
 
-    return enrich_backtest_summary(result, returns=r_values, in_sample_scores=is_vals, out_of_sample_scores=oos_vals, chosen_index=0)
+    return enrich_backtest_summary(
+        result,
+        returns=r_values,
+        in_sample_scores=is_vals,
+        out_of_sample_scores=oos_vals,
+        chosen_index=0,
+    )
 
 
 
@@ -2603,16 +2685,34 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             f"[ENGINE B BT] {pair['display']} insufficient candle data "
             f"(D1={len(candles_d1 or [])}, H4={len(candles_h4 or [])}, H1={len(candles_h1 or [])})"
         )
-        return {
+        _cv, _mw = normalize_validation_mode(validation_mode)
+        _tv = temporal_validation_mode(_cv)
+        _early = {
             "success": False,
             "error": "Insufficient candle data (D1, H4, or H1 missing).",
             "trades": [],
             "totalTrades": 0,
         }
+        _attach_research_validation_payload(
+            _early,
+            [],
+            canonical_vm=_cv,
+            temporal_vm=_tv,
+            purge_gap=purge_gap,
+            folds=folds,
+            mode_warning=_mw,
+        )
+        return _early
 
     candles_d1 = candles_d1[:-1] if len(candles_d1) > 1 else candles_d1
     candles_h4 = candles_h4[:-1] if len(candles_h4) > 1 else candles_h4
     candles_h1 = candles_h1[:-1] if len(candles_h1) > 1 else candles_h1
+
+    _canonical_vm, _vm_mode_warning = normalize_validation_mode(validation_mode)
+    _temporal_vm = temporal_validation_mode(_canonical_vm)
+    _min_entry_bt = 50
+    if _vm_mode_warning:
+        log.warning("[ENGINE B BT] %s: %s", pair.get("display"), _vm_mode_warning)
 
     requested_style = "auto" if style == "naked" else style
     _pair_score_group = get_pair_score_group(pair)
@@ -2679,6 +2779,18 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                     continue
             except Exception:
                 pass  # if time parsing fails, don't block the trade
+
+        _vf = backtest_bar_validation_state(
+            i,
+            min_bars=_min_entry_bt,
+            total_bars=len(entry_raw),
+            temporal_mode=_temporal_vm,
+            purge_gap=purge_gap,
+            folds=folds,
+        )
+        if _vf["skip"]:
+            i += 1
+            continue
 
         h4_ctx = candles_h4[:bisect.bisect_left(h4_times, entry_time)]
         d1_ctx = candles_d1[:bisect.bisect_left(d1_times, entry_time)]
@@ -2814,12 +2926,15 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             i += 1
             continue
 
+        best = max(candidates, key=lambda x: x["score"])
+        direction = best["direction"]
+
         # Execute at the open of the very next candle in the entry timeframe.
         # This matches live discovery where fill is immediate, not delayed to next H4.
         entry_bar = entry_raw[i + 1]
         raw_entry = float(entry_bar.get("open", entry_bar["close"]))
         _ptype = pair.get("type", "stock")
-        _slip_mult = 3.0 if validation_mode == "live_parity" else 1.0
+        _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
         slip = raw_entry * _get_slippage_for_bar(entry_bar, _ptype) * _slip_mult
         entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
         
@@ -2976,7 +3091,9 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 "outcome": outcome,
                 "resultR": round(r_multiple, 2),
                 "regime": best.get("regime_label", "RANGING"),
-                "oos": i >= oos_start,
+                "oos": _vf["oos_label"],
+                "wf_fold": _vf["wf_fold"],
+                "validation_mode": _canonical_vm,
                 "volAdj": 1.0,
                 "r_multiple": r_multiple,
                 "liquidity_sweep": best["res"].get("liquidity_sweep", False),
@@ -2999,7 +3116,20 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         i = i + 2 + exit_bar_offset + COOLDOWN
 
     result = _format_backtest_results(
-        trades, pair, engine_type="NAKED", same_bar_both_hit=same_bar_both_hit
+        trades,
+        pair,
+        engine_type="NAKED",
+        same_bar_both_hit=same_bar_both_hit,
+        validation_mode=_canonical_vm,
+    )
+    _attach_research_validation_payload(
+        result,
+        trades,
+        canonical_vm=_canonical_vm,
+        temporal_vm=_temporal_vm,
+        purge_gap=purge_gap,
+        folds=folds,
+        mode_warning=_vm_mode_warning,
     )
     _tp_count = sum(1 for t in trades if t.get("outcome") == "TP1")
     _sl_count = sum(1 for t in trades if t.get("outcome") == "SL")

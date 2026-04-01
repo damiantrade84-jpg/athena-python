@@ -12,12 +12,14 @@ from backtest_runner import (
 from research_metrics import enrich_backtest_summary
 
 
-def backtest_pair(pair: dict[str, Any], style: str = "auto") -> dict[str, Any]:
-    return _runner_backtest_pair(pair, style=style)
+def backtest_pair(pair: dict[str, Any], style: str = "auto", **kwargs: Any) -> dict[str, Any]:
+    return _runner_backtest_pair(pair, style=style, **kwargs)
 
 
-def backtest_pair_naked(pair: dict[str, Any], style: str = "naked") -> dict[str, Any]:
-    return _runner_backtest_pair_naked(pair, style=style)
+def backtest_pair_naked(
+    pair: dict[str, Any], style: str = "naked", **kwargs: Any
+) -> dict[str, Any]:
+    return _runner_backtest_pair_naked(pair, style=style, **kwargs)
 
 
 def run_full_backtest(style: str = "auto", asset_class: str | None = None) -> dict[str, Any]:

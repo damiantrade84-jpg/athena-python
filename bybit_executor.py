@@ -602,6 +602,104 @@ def bybit_close_position(pair: str, direction: str, volume: float) -> dict:
         return {"success": False, "error": str(e)}
 
 
+def bybit_cancel_stale_entry_orders(ccxt_symbol: str | None) -> dict:
+    """Cancel open non-reduce orders for the symbol (stale entry pendings).
+
+    Live entries are market orders; anything left open here is typically a failed
+    or abandoned entry child and should not sit alongside a new parent lifecycle.
+    """
+    if not ccxt_symbol:
+        return {"skipped": True, "cancelled": 0}
+    exchange = _get_exchange()
+    if not exchange:
+        return {"error": True, "detail": "BYBIT_NOT_CONNECTED", "cancelled": 0}
+    cancelled = 0
+    try:
+        exchange.load_markets()
+        open_orders = exchange.fetch_open_orders(ccxt_symbol) or []
+        for o in open_orders:
+            if (o.get("status") or "").lower() not in ("open", "new", "live"):
+                continue
+            info = o.get("info") or {}
+            reduce_only = bool(
+                o.get("reduceOnly")
+                or info.get("reduceOnly")
+                or info.get("reduce_only")
+            )
+            if reduce_only:
+                continue
+            try:
+                exchange.cancel_order(o["id"], ccxt_symbol)
+                cancelled += 1
+                log.info(
+                    f"[BYBIT] Cancelled stale entry order id={o.get('id')} on {ccxt_symbol}"
+                )
+            except Exception as _ce:
+                log.warning(f"[BYBIT] Could not cancel order {o.get('id')}: {_ce}")
+    except Exception as e:
+        log.debug(f"[BYBIT] stale entry order scan: {e}")
+    return {"error": False, "cancelled": cancelled, "symbol": ccxt_symbol}
+
+
+def bybit_reconcile_after_open(exec_result: dict, signal: dict) -> dict:
+    """Re-fetch position; if SL/TP missing on the open position, re-apply trading-stop.
+
+    Prevents an unmanaged child state after a successful market fill.
+    """
+    if not exec_result.get("success"):
+        return {"skipped": True}
+    exchange = _get_exchange()
+    if not exchange:
+        return {"error": True, "detail": "BYBIT_NOT_CONNECTED"}
+    ccxt_symbol = exec_result.get("symbol") or bybit_map_symbol(
+        signal.get("pair") or signal.get("symbol") or ""
+    )
+    if not ccxt_symbol:
+        return {"error": True, "detail": "no_symbol"}
+    sl = float(exec_result.get("sl") or signal.get("sl") or 0)
+    tp = float(exec_result.get("tp") or signal.get("tp1") or 0)
+    if sl <= 0 or tp <= 0:
+        return {"error": False, "note": "no_levels_to_verify", "repaired": False}
+    try:
+        raw = exchange.fetch_positions(
+            params={"category": "linear", "settleCoin": "USDT"}
+        )
+        want = ccxt_symbol
+        cur_sl, cur_tp = 0.0, 0.0
+        for p in raw or []:
+            if (p.get("symbol") or "") != want:
+                continue
+            size = abs(float(p.get("contracts", 0) or 0))
+            if size <= 0:
+                continue
+            info = p.get("info") or {}
+            cur_sl = float(info.get("stopLoss", 0) or 0)
+            cur_tp = float(info.get("takeProfit", 0) or 0)
+            break
+        if cur_sl > 0 and cur_tp > 0:
+            return {
+                "error": False,
+                "hadProtections": True,
+                "repaired": False,
+                "stopLoss": cur_sl,
+                "takeProfit": cur_tp,
+            }
+        log.warning(
+            f"[BYBIT] RECONCILE: open position on {ccxt_symbol} missing SL/TP — reapplying"
+        )
+        _set_trading_stop(exchange, ccxt_symbol, sl=sl, tp=tp)
+        return {
+            "error": False,
+            "hadProtections": False,
+            "repaired": True,
+            "stopLoss": sl,
+            "takeProfit": tp,
+        }
+    except Exception as e:
+        log.error(f"[BYBIT] reconcile_after_open failed: {e}")
+        return {"error": True, "detail": str(e)}
+
+
 def bybit_get_symbol_info(athena_display: str) -> dict:
     """Get Bybit symbol info for risk engine calculations.
     Returns dict with standardized error format."""

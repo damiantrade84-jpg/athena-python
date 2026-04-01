@@ -10,6 +10,8 @@ from typing import Any
 
 from athena_legacy import load as _load_legacy
 
+from athena_app.services.market_state import split_market_state, MarketState
+
 def _backend():
     return _load_legacy()
 
@@ -17,6 +19,22 @@ def _backend():
 def fetch_candles(pair: dict[str, Any], tf: str, limit: int) -> list[dict[str, Any]] | None:
     """Fetch candles via the active production data path."""
     return _backend().fetch_candles(pair, tf, limit)
+
+
+def fetch_market_state(pair: dict[str, Any], tf: str, limit: int) -> MarketState:
+    """Fetch structured market state (confirmed + forming) for a pair/timeframe.
+    
+    Use this when you need metadata about whether the latest bar is still 'open'.
+    """
+    candles = fetch_candles(pair, tf, limit)
+    display = pair.get("display") or pair.get("symbol") or ""
+    return split_market_state(candles or [], tf, display)
+
+
+def fetch_confirmed_candles(pair: dict[str, Any], tf: str, limit: int) -> list[dict[str, Any]]:
+    """Fetch only confirmed (closed) candles for stable scoring when required."""
+    state = fetch_market_state(pair, tf, limit)
+    return state["confirmed"]
 
 
 def fetch_eodhd(pair: dict[str, Any], tf: str, limit: int) -> list[dict[str, Any]] | None:

@@ -10,6 +10,7 @@ All orders must arrive as a pre-validated RiskApproval from risk_engine.py.
 
 """
 
+import math
 import os
 
 import logging
@@ -557,6 +558,134 @@ def _send_order_with_filling_fallback(request: dict):
     return result
 
 
+def _mt5_resolve_position_ticket(
+    mt5,
+    mt5_symbol: str,
+    *,
+    magic: int,
+    volume: float,
+    order_ticket: int,
+) -> int:
+    """Map a fresh market deal to the holding position ticket (best-effort)."""
+    try:
+        time.sleep(0.15)
+        plist = mt5.positions_get(symbol=mt5_symbol) or []
+        vol_f = float(volume)
+        for pos in plist:
+            if getattr(pos, "magic", 0) != magic:
+                continue
+            if abs(float(pos.volume) - vol_f) < 1e-8:
+                return int(pos.ticket)
+        for pos in plist:
+            if getattr(pos, "magic", 0) == magic:
+                return int(pos.ticket)
+    except Exception as _e:
+        log.debug(f"[MT5] position ticket resolve: {_e}")
+    return int(order_ticket)
+
+
+def mt5_cancel_pending_athena_orders(
+    athena_display: str, magic: int = 240601
+) -> dict:
+    """Remove stale pending orders (limits/stops) tagged with Athena magic for this symbol.
+
+    Prevents orphaned child pendings before a new parent entry on the same instrument.
+    """
+    mt5 = _get_mt5()
+    if not mt5 or not mt5_connect():
+        return {"error": True, "detail": "MT5 not connected", "cancelled": 0}
+    mt5_sym = mt5_map_symbol(athena_display)
+    if not mt5_sym:
+        return {"error": True, "detail": "no_symbol_mapping", "cancelled": 0}
+    if not mt5.symbol_select(mt5_sym, True):
+        return {"error": True, "detail": "symbol_unavailable", "cancelled": 0}
+    pending_types = (
+        mt5.ORDER_TYPE_BUY_LIMIT,
+        mt5.ORDER_TYPE_SELL_LIMIT,
+        mt5.ORDER_TYPE_BUY_STOP,
+        mt5.ORDER_TYPE_SELL_STOP,
+        mt5.ORDER_TYPE_BUY_STOP_LIMIT,
+        mt5.ORDER_TYPE_SELL_STOP_LIMIT,
+    )
+    cancelled = 0
+    try:
+        for o in mt5.orders_get(symbol=mt5_sym) or []:
+            if getattr(o, "magic", 0) != magic:
+                continue
+            if o.type not in pending_types:
+                continue
+            r2 = mt5.order_send(
+                {
+                    "action": mt5.TRADE_ACTION_REMOVE,
+                    "order": o.ticket,
+                    "symbol": mt5_sym,
+                }
+            )
+            if r2 and r2.retcode == mt5.TRADE_RETCODE_DONE:
+                cancelled += 1
+                log.info(
+                    f"[MT5] Cancelled stale pending order ticket={o.ticket} type={o.type} on {mt5_sym}"
+                )
+    except Exception as e:
+        log.warning(f"[MT5] pending order cleanup failed for {mt5_sym}: {e}")
+    return {"error": False, "cancelled": cancelled, "mt5_symbol": mt5_sym}
+
+
+def mt5_reconcile_after_open(exec_result: dict, signal: dict) -> dict:
+    """Verify open position(s) still have SL/TP attached after fill (child hygiene).
+
+    Does not modify MT5 state here — reports only so callers can act. (Repairs are
+    broker-specific and risk mis-clicks; log loudly if missing.)
+    """
+    if not exec_result.get("success"):
+        return {"skipped": True}
+    mt5 = _get_mt5()
+    if not mt5 or not mt5_connect():
+        return {"error": True, "detail": "MT5 not connected"}
+    pair = signal.get("pair", "")
+    mt5_sym = mt5_map_symbol(pair)
+    if not mt5_sym:
+        return {"error": True, "detail": "no_mapping"}
+    legs = []
+    try:
+        plist = mt5.positions_get(symbol=mt5_sym) or []
+        magic = 240601
+        want_vol = float(exec_result.get("volume") or 0)
+        for pos in plist:
+            if getattr(pos, "magic", 0) != magic:
+                continue
+            legs.append(
+                {
+                    "ticket": int(pos.ticket),
+                    "volume": float(pos.volume),
+                    "sl": float(pos.sl or 0),
+                    "tp": float(pos.tp or 0),
+                    "ok": (pos.sl or 0) > 0 and (pos.tp or 0) > 0,
+                }
+            )
+        if not legs:
+            return {
+                "error": False,
+                "legs": [],
+                "note": "no_magic_positions_found_after_fill",
+                "expectedVolumeApprox": want_vol,
+            }
+        all_ok = all(x["ok"] for x in legs)
+        if not all_ok:
+            log.warning(
+                f"[MT5] RECONCILE: {mt5_sym} position(s) missing SL/TP after open: {legs}"
+            )
+        return {
+            "error": False,
+            "legs": legs,
+            "allProtectionsPresent": all_ok,
+            "expectedVolumeApprox": want_vol,
+        }
+    except Exception as e:
+        log.warning(f"[MT5] reconcile_after_open failed: {e}")
+        return {"error": True, "detail": str(e)}
+
+
 def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
     """Execute a trade on MT5. ONLY accepts a pre-validated RiskApproval.
 
@@ -815,10 +944,31 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
 
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             log.error(f"[MT5] Order rejected: retcode={result.retcode} comment={result.comment}")
+            if results:
+                log.error(
+                    f"[MT5] Multi-leg: earlier leg(s) filled but this leg failed — "
+                    f"rolling back {len(results)} open position(s) on {mt5_symbol}"
+                )
+                for rb in results:
+                    try:
+                        _tk = _mt5_resolve_position_ticket(
+                            mt5,
+                            mt5_symbol,
+                            magic=240601,
+                            volume=float(rb.volume),
+                            order_ticket=int(rb.order),
+                        )
+                        _cr = mt5_close_position(_tk)
+                        log.warning(
+                            f"[MT5] Rollback leg order_ticket={rb.order} position_ticket={_tk} -> {_cr}"
+                        )
+                    except Exception as _rb_e:
+                        log.error(f"[MT5] Rollback failed for partial leg: {_rb_e}")
             return {
                 "success": False,
                 "error": f"ORDER_REJECTED: {result.comment}",
                 "retcode": result.retcode,
+                "partialLegsRolledBack": len(results),
             }
 
         log.info(f"[MT5] ORDER FILLED: ticket={result.order} | {direction} {result.volume} {mt5_symbol} @ {result.price}")
@@ -826,19 +976,20 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
 
     # Secondary operations for the primary position
     result = results[0]
-    position_ticket = int(result.order)
+    position_ticket = _mt5_resolve_position_ticket(
+        mt5,
+        mt5_symbol,
+        magic=240601,
+        volume=float(result.volume),
+        order_ticket=int(result.order),
+    )
     try:
-        import time as _time
-        _time.sleep(0.15)
-        plist = mt5.positions_get(symbol=mt5_symbol)
-        if plist:
-            for pos in plist:
-                if getattr(pos, "magic", 0) == 240601 and abs(float(pos.volume) - float(result.volume)) < 1e-8:
-                    position_ticket = int(pos.ticket)
-                    log.info(f"[MT5] Resolved position ticket={position_ticket} (order_ticket={result.order})")
-                    break
+        if position_ticket != int(result.order):
+            log.info(
+                f"[MT5] Resolved position ticket={position_ticket} (order_ticket={result.order})"
+            )
     except Exception as _pt_err:
-        log.debug(f"[MT5] position ticket lookup skipped: {_pt_err}")
+        log.debug(f"[MT5] position ticket lookup note: {_pt_err}")
 
     # Send Telegram notification for trade opened
     try:

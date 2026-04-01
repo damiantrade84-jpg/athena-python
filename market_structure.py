@@ -1210,6 +1210,62 @@ class NakedEngine:
             **_profile_result,
         }
 
+    def _determine_lifecycle_state(self, res: dict, current_price: float, direction: str, trigger_ok: bool) -> tuple[str, str]:
+        bos_confirmed = res.get("bos_confirmed", False)
+        choch_confirmed = res.get("choch_confirmed", False)
+        sweep = res.get("liquidity_sweep", False)
+
+        zone_touched = res.get("zone_touched", False)
+        near_zone = res.get("near_active_zone", False)
+
+        sl = res.get("recommended_stop_loss")
+        tp = res.get("recommended_take_profit")
+
+        # 1. Invalidated checking
+        if sl is not None:
+            if direction == "LONG" and current_price < sl:
+                return "invalidated", "Price breached Stop Loss level"
+            elif direction == "SHORT" and current_price > sl:
+                return "invalidated", "Price breached Stop Loss level"
+
+        # 2. Expired checking
+        if tp is not None:
+            if direction == "LONG" and current_price >= tp:
+                return "expired", "Target level already reached prior to entry"
+            elif direction == "SHORT" and current_price <= tp:
+                return "expired", "Target level already reached prior to entry"
+
+        structural_setup = bos_confirmed or choch_confirmed or sweep
+
+        # 3. Candidate
+        if not structural_setup:
+            return "candidate", "Awaiting structural confirmation (BOS/CHoCH/Sweep)"
+
+        # 4. Triggered
+        if trigger_ok and (zone_touched or near_zone):
+            return "triggered", "Valid trigger pattern printed at the key entry zone"
+
+        # 5. Armed
+        if zone_touched or near_zone:
+            return "armed", "Price is actively testing the key structural entry zone"
+
+        # 6. Retracing (Pullback)
+        nearest_sup = res.get("nearest_support_zone")
+        nearest_res = res.get("nearest_resistance_zone")
+        
+        if direction == "LONG" and nearest_sup:
+            center = nearest_sup.get("center", nearest_sup.get("upper", current_price))
+            if current_price > center:
+                return "retracing", "Price pulling back towards support zone"
+        elif direction == "SHORT" and nearest_res:
+            center = nearest_res.get("center", nearest_res.get("lower", current_price))
+            if current_price < center:
+                return "retracing", "Price pulling back towards resistance zone"
+
+        # 7. Confirmed default
+        return "confirmed", "Structural break confirmed, awaiting retracement to zone"
+
+
     def calculate_confidence(
         self,
         res: dict,
@@ -1337,6 +1393,10 @@ class NakedEngine:
                 and macro_ok
             )
 
+        lifecycle_state, lifecycle_reason = self._determine_lifecycle_state(
+            res, current_price, direction, trigger_ok
+        )
+
         return {
             "score": total_score,
             "pct": pct,
@@ -1368,6 +1428,8 @@ class NakedEngine:
             "profile_ok": _profile_ok,
             "profile_alignment": _profile_alignment,
             "profile_context": _profile_context,
+            "lifecycle_state": lifecycle_state,
+            "lifecycle_reason": lifecycle_reason,
         }
 
     def check_macro_correlation(

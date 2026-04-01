@@ -327,6 +327,9 @@ def notify_score_decay(
     cur_score: float,
     decay: float,
     direction_flip: bool = False,
+    engine: str = "engine_a",
+    entry_pct: Optional[float] = None,
+    cur_pct: Optional[float] = None,
     ai_verdict: Optional[str] = None,
     ai_urgency: Optional[str] = None,
 ) -> None:
@@ -334,7 +337,20 @@ def notify_score_decay(
     if not _is_enabled():
         return
 
-    emoji = "🔴" if decay >= 3.0 else "🟡"
+    # Determine display scale and labels based on engine
+    is_engine_b = str(engine).lower() == "engine_b"
+    _engine_label = "Engine B" if is_engine_b else "Engine A"
+    
+    if is_engine_b and entry_pct is not None and cur_pct is not None:
+        _emoji = "🔴" if (entry_pct - cur_pct) >= 30 else "🟡"
+        _score_path = f"`{entry_pct:.0f}%` → Now: `{cur_pct:.0f}%`"
+        _decay_val = entry_pct - cur_pct
+        _decay_label = f"Δ{_decay_val:.1f}%"
+    else:
+        _emoji = "🔴" if decay >= 3.0 else "🟡"
+        _score_path = f"`{entry_score:.2f}` → Now: `{cur_score:.2f}`"
+        _decay_label = f"Δ{decay:.1f}"
+
     flip_note = "\n⚠️ *DIRECTION FLIP — consider exiting*" if direction_flip else ""
     ai_note = ""
     if ai_verdict:
@@ -342,9 +358,9 @@ def notify_score_decay(
         ai_note = f"\nAI: {urgency_emoji} `{ai_verdict}`"
 
     message = (
-        f"{emoji} *Score Decay Alert — {pair}*\n"
-        f"Direction: `{direction}` | Decay: `Δ{decay:.1f}`\n"
-        f"Entry Score: `{entry_score:.2f}` → Now: `{cur_score:.2f}`"
+        f"{_emoji} *Score Decay Alert — {pair}*\n"
+        f"Source: `{_engine_label}` | Direction: `{direction}`\n"
+        f"Decay: `{_decay_label}` | Context: {_score_path}"
         f"{flip_note}{ai_note}"
     )
 

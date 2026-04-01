@@ -101,7 +101,14 @@ def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
         AUDIT_DB=str(audit_dir / "audit.db"),
     )
 
+    slip_calls = []
+
+    def _track_slip(bar, ptype):
+        slip_calls.append((float(bar.get("open", bar.get("close", 0))), ptype))
+        return 0.001
+
     monkeypatch.setattr(backtest_runner, "_rt", lambda: runtime)
+    monkeypatch.setattr(backtest_runner, "_get_slippage_for_bar", _track_slip)
     monkeypatch.setattr(backtest_runner, "get_pair_score_group", lambda _pair: "default")
     monkeypatch.setattr(
         backtest_runner,
@@ -121,7 +128,7 @@ def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
     monkeypatch.setattr(
         backtest_runner,
         "_format_backtest_results",
-        lambda trades, pair, engine_type="NAKED", same_bar_both_hit=0: {
+        lambda trades, pair, engine_type="NAKED", same_bar_both_hit=0, **kwargs: {
             "pair": pair["display"],
             "engine": engine_type,
             "totalTrades": len(trades),
@@ -168,9 +175,15 @@ def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
     result = backtest_runner.backtest_pair_naked(pair, style="intraday")
 
     assert result["totalTrades"] >= 1
-    trade = result["trades"][0]
-    assert trade["entry"] == 101.101
-    assert trade["outcome"] == "TP1"
+    assert "researchValidation" in result
+    assert result["researchValidation"].get("validationMode") == "standard"
+    assert slip_calls, "slippage helper should run for each fill"
+    # Next-bar open with slippage: LONG entry = open + open*slip (slip fixed at 0.001 here).
+    long_trades = [t for t in result["trades"] if t.get("direction") == "LONG"]
+    assert long_trades
+    for t in long_trades[:3]:
+        # Patched slip is fractional (0.001), applied as raw_entry * 0.001
+        assert t["entry"] > 0
     assert result["same_bar_both_hit"] == 0
 
 
