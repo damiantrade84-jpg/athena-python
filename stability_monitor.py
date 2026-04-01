@@ -771,11 +771,16 @@ def _engine_ssi(db_path: str, engine: str) -> dict:
     available_scores = [
         comp["score"] for comp in components.values() if comp.get("available") and comp.get("score") is not None
     ]
-    ssi = round(sum(available_scores) / len(available_scores), 2) if available_scores else 50.0
+    if available_scores:
+        ssi = round(sum(available_scores) / len(available_scores), 2)
+        band = _band_for_ssi(ssi)
+    else:
+        ssi = None
+        band = "NO_DATA"
     return {
         "engine": engine,
         "ssi": ssi,
-        "band": _band_for_ssi(ssi),
+        "band": band,
         "components": components,
         "warnings": warnings,
         "updatedAt": updated_at,
@@ -791,7 +796,7 @@ def _system_ssi(db_path: str) -> dict:
     component_scores: dict[str, list[float]] = {}
     warnings = []
     for result in engine_results:
-        if result["band"] in ("ORANGE", "RED"):
+        if result["band"] in ("ORANGE", "RED") and result["ssi"] is not None:
             warnings.append(f"{result['engine']} stability {result['band'].lower()} ({result['ssi']:.1f})")
         for name, comp in result["components"].items():
             if comp.get("available") and comp.get("score") is not None:
@@ -806,11 +811,16 @@ def _system_ssi(db_path: str) -> dict:
             "runtime_only": name in {"calibration_drift", "execution_drift"},
         }
 
-    available_engine_ssi = [result["ssi"] for result in engine_results]
-    ssi = round(sum(available_engine_ssi) / len(available_engine_ssi), 2) if available_engine_ssi else 50.0
+    available_engine_ssi = [result["ssi"] for result in engine_results if result["ssi"] is not None]
+    if available_engine_ssi:
+        ssi = round(sum(available_engine_ssi) / len(available_engine_ssi), 2)
+        band = _band_for_ssi(ssi)
+    else:
+        ssi = None
+        band = "NO_DATA"
     return {
         "ssi": ssi,
-        "band": _band_for_ssi(ssi),
+        "band": band,
         "components": components,
         "warnings": warnings,
         "engines": {result["engine"]: {"ssi": result["ssi"], "band": result["band"]} for result in engine_results},

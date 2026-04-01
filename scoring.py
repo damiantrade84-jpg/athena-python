@@ -439,9 +439,7 @@ def calc_confluence(
 
     # Preserve warnings for readability (raw thresholds)
     w = []
-    d1["snap"]
     s4 = h4["snap"]
-    h1["snap"]
     _ptype = pair["type"]
     _rsi_b = CONFIG["RSI_BOUNDS"].get(_ptype, {"ob": 70, "os": 30})
     r4 = s4.get("rsi")
@@ -498,7 +496,7 @@ def calc_confluence(
         else:
             trend_state = "DEAD RANGING"
     # Legacy compatibility values
-    bull = max(0.0, score)
+    bull = max(0.0, score) if direction != "SHORT" else 0.0
     bear = max(0.0, score) if direction == "SHORT" else 0.0
     # Spread = abs directional score on the engine-native scale: factor engine runs
     # up to ~3.0 while forex_scoring caps at 1.0.

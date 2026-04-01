@@ -220,17 +220,21 @@ def _recent_slippage_samples(engine: str, db_path: str, limit: int = 80) -> list
     if not db_path or not os.path.exists(db_path):
         return []
 
-    def _infer_engine(style: Any, max_score: Any) -> str | None:
+    def _infer_engine(row_engine: Any, style: Any, max_score: Any) -> str | None:
+        # Prefer the explicit engine column; fall back to heuristics for older rows
+        eng_norm = _norm_text(row_engine)
+        if eng_norm in ("engine_a", "engine_b", "engine_c", "scalp"):
+            return eng_norm
         style_norm = _norm_text(style)
         if style_norm == "scalp":
             return "scalp"
         if style_norm in ("engine_c", "consensus"):
             return "engine_c"
+        if style_norm in ("structural", "naked"):
+            return "engine_b"
         max_f = _safe_float(max_score)
         if max_f is not None:
             return "engine_a"
-        if style_norm in ("structural", "naked"):
-            return "engine_b"
         return None
 
     try:
@@ -238,7 +242,7 @@ def _recent_slippage_samples(engine: str, db_path: str, limit: int = 80) -> list
             con.row_factory = sqlite3.Row
             rows = con.execute(
                 """
-                SELECT style, max_score, slippage_bps
+                SELECT engine, style, max_score, slippage_bps
                 FROM audit_log
                 WHERE slippage_bps IS NOT NULL
                 ORDER BY id DESC
@@ -251,7 +255,7 @@ def _recent_slippage_samples(engine: str, db_path: str, limit: int = 80) -> list
 
     values = []
     for row in rows:
-        if _infer_engine(row["style"], row["max_score"]) != engine:
+        if _infer_engine(row["engine"], row["style"], row["max_score"]) != engine:
             continue
         slip = _safe_float(row["slippage_bps"])
         if slip is None:

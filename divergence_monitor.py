@@ -220,20 +220,19 @@ def check_divergence(
     try:
         ts = datetime.now(timezone.utc).isoformat()
         with _db_lock:
-            con = sqlite3.connect(_DB_PATH, timeout=15.0)
-            con.execute("""
-                INSERT INTO divergence_log (
-                    ts, pair, asset_type, live_score, bt_score, score_diff,
-                    live_direction, bt_direction, direction_match,
-                    live_regime, bt_regime, regime_match, severity, summary
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                ts, display, asset_type, live_score, bt_score, score_diff,
-                live_dir, bt_dir, int(dir_match),
-                live_regime, bt_regime, int(regime_match), severity, summary,
-            ))
-            con.commit()
-            con.close()
+            with sqlite3.connect(_DB_PATH, timeout=15.0) as con:
+                con.execute("""
+                    INSERT INTO divergence_log (
+                        ts, pair, asset_type, live_score, bt_score, score_diff,
+                        live_direction, bt_direction, direction_match,
+                        live_regime, bt_regime, regime_match, severity, summary
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    ts, display, asset_type, live_score, bt_score, score_diff,
+                    live_dir, bt_dir, int(dir_match),
+                    live_regime, bt_regime, int(regime_match), severity, summary,
+                ))
+                con.commit()
     except Exception as e:
         log.debug(f"[DIVERGENCE] DB write failed: {e}")
 
@@ -268,14 +267,13 @@ def divergence_report(lookback_hours: int = 24, min_severity: str = "warning") -
     try:
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).isoformat()
         with _db_lock:
-            con = sqlite3.connect(_DB_PATH, timeout=15.0)
-            con.row_factory = sqlite3.Row
-            rows = con.execute("""
-                SELECT * FROM divergence_log
-                WHERE ts >= ?
-                ORDER BY ts DESC
-            """, (cutoff,)).fetchall()
-            con.close()
+            with sqlite3.connect(_DB_PATH, timeout=15.0) as con:
+                con.row_factory = sqlite3.Row
+                rows = con.execute("""
+                    SELECT * FROM divergence_log
+                    WHERE ts >= ?
+                    ORDER BY ts DESC
+                """, (cutoff,)).fetchall()
 
         total = len(rows)
         critical = sum(1 for r in rows if r["severity"] == "critical")

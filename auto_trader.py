@@ -14,6 +14,8 @@ avoid circular imports (auto_trader is imported BY athena, not the reverse).
 
 """
 
+import json
+
 import logging
 
 import sqlite3
@@ -421,14 +423,28 @@ class AutoTrader:
 
             return
 
-        # Re-stamp all signals with the scan-completion time.
+        # Re-stamp signals generated during this scan cycle to scan-completion time.
         # analyze_pair() timestamps each signal individually; with 90 pairs / 3 workers,
         # the first pairs in the queue can be 3-5 min old by the time the scan returns.
-        # These signals are still current — they were generated this scan cycle — so we
-        # align all timestamps to now to prevent STALE_SIGNAL rejections in risk_check.
-        _scan_ts = datetime.now(timezone.utc).isoformat()
+        # Guard: only re-stamp signals within AUTO_TRADE_MAX_SCAN_AGE_SEC of scan start;
+        # anything older was not produced in this cycle and must not bypass freshness checks.
+        _scan_ts = datetime.now(timezone.utc)
+        _scan_ts_iso = _scan_ts.isoformat()
+        _max_scan_window = cfg.get("AUTO_TRADE_MAX_SCAN_AGE_SEC", 900)  # 15 min hard cap
         for _s in signals:
-            _s["timestamp"] = _scan_ts
+            try:
+                _sig_age = (_scan_ts - datetime.fromisoformat(
+                    _s["timestamp"].replace("Z", "+00:00")
+                )).total_seconds()
+            except Exception:
+                _sig_age = 0
+            if _sig_age <= _max_scan_window:
+                _s["timestamp"] = _scan_ts_iso
+            else:
+                log.warning(
+                    f"[AUTO] Signal {_s.get('pair')} is {_sig_age:.0f}s old "
+                    f"(> {_max_scan_window}s cap) — not re-stamping; will be rejected by risk_check"
+                )
 
         # Sort by combined conviction (Engine A+B) descending — best signal first
         # Falls back to normalized confluenceScore if combinedConviction not present
@@ -759,6 +775,13 @@ class AutoTrader:
 
                 return False
 
+            from guardian import pre_trade_check as _guardian_pre_trade
+            _ptc_ok, _ptc_reason = _guardian_pre_trade(signal, positions, account, pos_result)
+            if not _ptc_ok:
+                self._log.warning(f"[AUTO] {pair} GUARDIAN BLOCKED: {_ptc_reason}")
+                self._write_error(signal, f"GUARDIAN:{_ptc_reason}")
+                return False
+
             result = run_managed_execution(_exec_venue, signal, approval)
 
             if result.get("success"):
@@ -844,22 +867,41 @@ class AutoTrader:
         is_demo = self._test_mode_fn() if self._test_mode_fn else False
 
         try:
+            _audit_engine = _signal_engine(signal)
+            _eng_b_data = signal.get("engine_b") or signal.get("naked_data") or {}
+            _factors = {
+                "scores": signal.get("factor_scores"),
+                "weights": signal.get("factor_weights"),
+                "disabled": signal.get("disabledFactors"),
+                "regime": signal.get("regimeName"),
+            }
+            _max_score = (
+                _eng_b_data.get("max_possible")
+                if _audit_engine == "engine_b"
+                else signal.get("maxScore")
+            )
+            _score_pct = (
+                _eng_b_data.get("pct")
+                if _audit_engine == "engine_b"
+                else (
+                    signal.get("confluenceScore") / _max_score
+                    if _max_score and _max_score > 0
+                    else None
+                )
+            )
             with sqlite3.connect(self._audit_db, timeout=15.0) as con:
                 con.execute(
-                    """INSERT INTO audit_log
-
-                       (ts, pair, score, engine, direction, asset_class, regime,
-
-                        entry_price, sl, tp, volume, risk_amount, risk_pct,
-
-                        ticket, grade, signal_price_ref, slippage_bps)
-
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    "INSERT INTO audit_log"
+                    "(ts, pair, score, engine, direction, asset_class, regime,"
+                    " entry_price, sl, tp, volume, risk_amount, risk_pct,"
+                    " ticket, grade, signal_price_ref, slippage_bps,"
+                    " max_score, score_pct, factors_json, edge_prob, style, fee_cost)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         datetime.now(timezone.utc).isoformat(),
                         signal.get("pair"),
                         signal.get("confluenceScore"),
-                        _signal_engine(signal),
+                        _audit_engine,
                         signal.get("direction"),
                         signal.get("type"),
                         signal.get("trendState"),
@@ -873,6 +915,12 @@ class AutoTrader:
                         "AUTO" + ("-DEMO" if is_demo else ""),
                         result.get("signalPriceRef"),
                         result.get("slippageBps"),
+                        _max_score,
+                        _score_pct,
+                        json.dumps(_factors),
+                        signal.get("edgeProbability"),
+                        signal.get("style"),
+                        result.get("feeCost"),
                     ),
                 )
 
