@@ -385,6 +385,7 @@ def _build_engine_a_recommendations(rows: list[dict[str, Any]]) -> list[dict[str
                         "avg_win_rate": avg_wr,
                     },
                     "reasons": reasons,
+                    "requires_human_approval": True,
                 }
             )
 
@@ -417,6 +418,7 @@ def _build_engine_a_recommendations(rows: list[dict[str, Any]]) -> list[dict[str
                         + [
                             f"Live threshold is scaled from the current live/backtest ratio ({ratio:.2f}x)."
                         ],
+                        "requires_human_approval": True,
                     }
                 )
 
@@ -487,6 +489,7 @@ def _build_engine_b_recommendations(rows: list[dict[str, Any]]) -> list[dict[str
                     + [
                         "Engine B score gates are whole checklist points, so approvals move in integer steps."
                     ],
+                    "requires_human_approval": True,
                 }
             )
 
@@ -520,6 +523,7 @@ def _merge_live_evidence(
         merged = dict(rec)
         reasons = list(merged.get("reasons") or [])
         confidence_rank = _confidence_rank(merged.get("confidence"))
+        live_evidence_conflict = False
         if merged.get("scope_type") == "engine_a_live_class":
             summary = live_a.get(str(merged.get("scope_key") or ""))
             if summary:
@@ -531,6 +535,7 @@ def _merge_live_evidence(
                 elif live_dir and live_dir != merged.get("direction"):
                     reasons.append("Live closed trade outcomes currently oppose this threshold direction.")
                     confidence_rank -= 1
+                    live_evidence_conflict = True
                 merged["metrics"] = {
                     **dict(merged.get("metrics") or {}),
                     "live_pairs": summary.get("pairs"),
@@ -547,6 +552,7 @@ def _merge_live_evidence(
                 elif live_dir and live_dir != merged.get("direction"):
                     reasons.append("Live closed trade outcomes currently oppose this checklist gate direction.")
                     confidence_rank -= 1
+                    live_evidence_conflict = True
                 merged["metrics"] = {
                     **dict(merged.get("metrics") or {}),
                     "live_pairs": summary.get("pairs"),
@@ -554,6 +560,8 @@ def _merge_live_evidence(
                 }
         merged["reasons"] = reasons
         merged["confidence"] = _confidence_from_rank(confidence_rank)
+        merged["live_evidence_conflict"] = live_evidence_conflict
+        merged["requires_human_approval"] = True
         out.append(merged)
     return out
 
@@ -592,6 +600,7 @@ def _build_live_engine_a_recommendations(live_a: dict[str, dict[str, Any]]) -> l
                     _format_live_reason(summary, "Engine A"),
                     "This recommendation is driven by closed live trade outcomes from the Performance ledger.",
                 ],
+                "requires_human_approval": True,
             }
         )
     return out
@@ -629,6 +638,7 @@ def _build_live_engine_b_recommendations(live_b: dict[str, dict[str, Any]]) -> l
                     "This recommendation is driven by closed live trade outcomes from the Performance ledger.",
                     "Engine B score gates remain whole checklist points.",
                 ],
+                "requires_human_approval": True,
             }
         )
     return out
@@ -709,6 +719,9 @@ def get_recommendation_snapshot(db_path: str | None = None) -> dict[str, Any]:
             "approved": len(approved),
             "rejected": len(rejected),
             "last_recomputed": _utc_now(),
+            "requires_human_approval_to_apply": True,
+            "apply_path_pattern": "/api/advisory-thresholds/{rec_id}/approve",
+            "disclaimer": "Threshold changes apply only after explicit POST approval. GET endpoints are read-only.",
         },
         "current_policies": _current_policy_snapshot(),
         "pending": pending_out,

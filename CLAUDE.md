@@ -14,6 +14,7 @@ alwaysApply: true
 - **Engine A live:** `MIN_CONFLUENCE_CLASS`, `MIN_CONFLUENCE_GROUP`, `MIN_FOREX_CONFLUENCE`, `PAIR_PROFILES.min_confluence`, `AUTO_TRADE_MIN_SCORE`, `SCAN_QUANTILE_*`, confluence logic in `scoring.py` / `factor_scoring.py` / `forex_scoring.py`, `analyze_pair` tiering.
 - **Engine A backtest:** `BT_MIN`, `PAIR_PROFILES.bt_min`, `get_backtest_min_score_threshold`, backtest score gates in `backtest_runner.py`.
 - **Engine B live + backtest:** `NAKED_ENGINE.style_profiles` (`min_score`, `min_rr`), zone multipliers, naked checklist gates in `market_structure.py`.
+- **Engine D (Scalp Lab):** `SCALP_ENGINE` in `config.yaml` (`MIN_RR`, `MAX_SPREAD_PIPS`, `ZONE_MIN_CONDITIONS`, `WITH_TREND_ONLY`, `BIAS_TIMEFRAME`, candle limits, `AI_GRADING` / `MIN_GRADE_AUTO_EXECUTE`, optional `SCALP_PAIRS`) and core pass/fail logic in `scalp_engine.py` (session filter, zone detection, M5 trigger, momentum, level math).
 
 Cosmetic UI copy is fine. **Do not "tune", "align", or "simplify" thresholds** in passing.
 
@@ -32,10 +33,11 @@ Cosmetic UI copy is fine. **Do not "tune", "align", or "simplify" thresholds** i
 
 Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, stocks, commodities, indices.
 
-**Three trading engines:**
+**Four trading engines:**
 - **Engine A** — Multi-Factor Quantitative Scoring (MFQS): z-score factor engine + forex rule-based scorer
 - **Engine B** — Naked price-action (market structure, zones, BOS/CHoCH, FVG, swing sequence)
 - **Engine C** — Consensus layer: blends A + B + AI Vision confirmation into a conviction-tiered signal
+- **Engine D (Scalp Lab)** — Standalone M15 structure + M5 tactical scalping (`scalp_engine.py`); not part of A/B/C consensus. Dashboard **Scalp Lab** panel (`static/index.html`): `POST /api/scalp-scan`, manual `POST /api/scalp-execute`.
 
 **Execution:** MT5 for forex/stocks/commodities; Bybit Linear Futures for crypto.
 
@@ -198,6 +200,29 @@ run_full_scan(style, asset_class)
        └─ AVOID/CONTRADICT → trade=False, tier=SKIP
 ```
 
+**Scalp Lab / Engine D flow:**
+```
+Dashboard Scalp Lab (panel-scalp) → runScalpScan()
+  POST /api/scalp-scan
+    └─ get_scalp_pairs()  ← CONFIG SCALP_ENGINE.SCALP_PAIRS or default universe (MT5 lists + crypto USDT perps)
+    └─ scalp_engine.run_scalp_scan(pairs)
+         ├─ Session filter (London/NY for MT5; Asia/London/NY windows for crypto)
+         ├─ Spread filter (per MAX_SPREAD_PIPS; skipped for crypto)
+         ├─ M15 zone (≥ ZONE_MIN_CONDITIONS among S/R, sweep, EMA21, etc.)
+         ├─ M5 entry trigger (rejection/engulfing + direction + inside zone)
+         ├─ Momentum confirmation (M5 structure break or strong body)
+         ├─ H1 bias gate when WITH_TREND_ONLY + BIAS_TIMEFRAME
+         ├─ calculate_scalp_levels → SL, TP1 (~MIN_RR), optional TP2 (M15 swing)
+         └─ ai_quality_grade — rule-based 0–100 score, A/B/C/D (no external API)
+    └─ _scalp_ui_signal() per row → JSON for UI
+
+POST /api/scalp-execute  (symbol + optional client signal for direction match)
+  └─ run_scalp_scan([symbol]) — fresh setup required
+  └─ risk_check() → mt5_execute() OR bybit_execute() (crypto)
+```
+
+Signals use `engine: "SCALP"`; `confluenceScore` is derived from the rule-based `ai_score` for risk sizing compatibility.
+
 **Execution path:**
 ```
 api_execute()
@@ -247,8 +272,8 @@ Effective min = `max(AUTO_TRADE_MIN_SCORE[type], MIN_CONFLUENCE_CLASS[type])`. `
 ### `/api/chart-analysis` — `athena.py`
 Requires `ANTHROPIC_API_KEY` env var. `regime` in signal can be dict `{"label":"TRENDING"}` (Engine A) or string `"TRENDING"` (Engine C) — both handled. Context builder is **outside** try/except — keep it simple.
 
-### `/api/scalp-execute` — `athena.py` (and `execution.py`)
-Routes by `signal.type`: **`crypto` → Bybit** (`bybit_get_*`, `bybit_execute`); **otherwise → MT5**. Scan uses Binance candles for crypto but execution was previously MT5-only — that mismatch caused failures for `BTC/USDT` et al.
+### `/api/scalp-scan` / `/api/scalp-execute` — `athena.py`
+See **Scalp Lab / Engine D flow** above. Execute path: **`signal.type == "crypto"` → Bybit**; **else → MT5**. Crypto candles for Engine D come from Binance futures (`fetch_candles` / `CandleBuilder`); orders are **never** sent to Binance.
 
 ---
 
@@ -260,6 +285,7 @@ Routes by `signal.type`: **`crypto` → Bybit** (`bybit_get_*`, `bybit_execute`)
 | Engine A — forex | `forex_scoring.py` rules-based | 0–1.0 | `MIN_FOREX_CONFLUENCE` |
 | Engine B | `market_structure.py` naked checklist | 0–100 pct | `NAKED_ENGINE.style_profiles.min_score` |
 | Engine C | `engine_c.py` A+B blend | 0–1 conviction | `ENGINE_C_AB_WEIGHTS` |
+| Engine D (Scalp Lab) | `scalp_engine.py` zones + triggers + rule-based `ai_quality_grade` | 0–100 (`ai_score`), letter `ai_grade` | `SCALP_ENGINE` (`MIN_RR`, spread/session/zone gates, `MIN_GRADE_AUTO_EXECUTE`, etc.) |
 
 **Two different REGIME_WEIGHTS exist — do not confuse:**
 - `CONFIG["REGIME_WEIGHTS"]` — adjusts **factor group weights** inside Engine A
@@ -431,3 +457,4 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 24. Lottery Lab — never bypass `_normalize_game()` before any DB or analytics call
 25. Lottery Lab — `simulate_generator()` incremental counters must never revert to full-history rescan per draw
 26. **Chart Vision vs Lottery AI:** `/api/chart-analysis` = **Anthropic** (`VISION_MODEL`, `ANTHROPIC_API_KEY`). `/api/lottery/ai-analysis` = **xAI Grok** (`XAI_API_KEY`, `openai` SDK → `api.x.ai`). Do not use `VISION_MODEL` for lottery or `XAI_MODEL` for chart vision.
+27. **Scalp Lab (Engine D)** is a separate pipeline (`scalp_engine.py`, `/api/scalp-scan`, `/api/scalp-execute`) — not produced by `analyze_pair()` and not blended in Engine C unless you explicitly add that integration.
