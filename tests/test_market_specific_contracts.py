@@ -66,5 +66,6 @@ def test_athena_source_keeps_engine_b_scalp_as_distinct_profile():
 
 
 def test_athena_source_uses_class_specific_engine_b_overlay_gate():
+    """Engine B overlay is gated by resolved scan score vs get_min_confluence_threshold (class/group routing)."""
     src = ATHENA_PATH.read_text(encoding="utf-8")
-    assert 'CONFIG["MIN_CONFLUENCE_CLASS"].get(' in src
+    assert "get_min_confluence_threshold(pair)" in src

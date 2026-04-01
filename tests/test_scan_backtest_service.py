@@ -14,7 +14,7 @@ def test_backtest_pair_field_runs_single_pair_not_full():
     ]
     seen = []
 
-    def bt_pair(p, style="auto"):
+    def bt_pair(p, style="auto", **kwargs):
         seen.append((p["symbol"], style))
         return {"symbol": p["symbol"], "sqn": 1.0}
 

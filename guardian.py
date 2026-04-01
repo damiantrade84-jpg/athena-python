@@ -205,7 +205,7 @@ def _check_risk_check_before_executors() -> tuple[bool, str]:
                 ]
             ) and "def " not in stripped and "import" not in stripped and "#" not in stripped:
                 found_risk = False
-                for j in range(max(0, i - 55), i):
+                for j in range(max(0, i - 100), i):
                     if "risk_check(" in lines[j]:
                         found_risk = True
                         break

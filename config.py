@@ -364,6 +364,7 @@ CONFIG: dict = {
     "FACTOR_MIN_DIRECTIONAL_CRYPTO": 0.20,
     "FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO": 0.30,
     "CRYPTO_TRANSITION_PENALTY_ENABLED": True,
+    "CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": True,
     "REGIME_SMOOTHING_BARS": 3,  # Consecutive bars required before committing to a regime change
     # Factor weights per asset class (base, before regime overrides)
     "FACTOR_WEIGHTS": {

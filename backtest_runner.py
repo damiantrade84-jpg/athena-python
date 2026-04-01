@@ -30,6 +30,7 @@ from indicators import (
     calc_sma,
     calc_stochastic,
 )
+from factor_scoring import build_oi_context_for_factor_scoring
 from scoring import (
     calc_confluence,
     get_score_threshold,
@@ -86,6 +87,35 @@ def _bt_btc_bias(d1_window: list, pair: dict) -> str:
     except Exception:
         pass
     return "neutral"
+
+
+def _bt_crypto_funding_oi_for_bar(
+    ptype: str,
+    funding_rows: list | None,
+    oi_rows: list | None,
+    entry_ts,
+    prev_bar_ts,
+) -> tuple[float | None, dict | None]:
+    """Point-in-time funding rate and OI context for crypto Engine A backtests."""
+    if ptype != "crypto" or entry_ts is None or pd.isna(entry_ts):
+        return None, None
+    from data_feeds import build_oi_data_for_divergence, point_in_time_funding_rate
+
+    bar_ms = int(entry_ts.timestamp() * 1000)
+    fr = (
+        point_in_time_funding_rate(funding_rows or [], bar_ms)
+        if funding_rows
+        else None
+    )
+    prev_ms = None
+    if prev_bar_ts is not None and not pd.isna(prev_bar_ts):
+        prev_ms = int(prev_bar_ts.timestamp() * 1000)
+    oi_data = (
+        build_oi_data_for_divergence(oi_rows or [], bar_ms, prev_ms)
+        if oi_rows
+        else None
+    )
+    return fr, oi_data
 
 
 _BASE_BACKTEST_SLIP = {
@@ -579,14 +609,30 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     # BUG 1 fix: BTC bias is derived point-in-time per bar via _bt_btc_bias(d1_window, pair).
     # No precompute needed — each call reads the D1 window available at that bar.
 
-    # BUG 3 fix: funding rate was never passed to backtest calc_confluence() calls.
-    # Live scan fetches it via _fetch_funding_rate() and passes it; backtest silently
-    # excluded it (funding_rate=None). Fetch current rate once as a proxy — not
-    # perfectly historical but eliminates the systematic None divergence for all bars.
-    # BUG 1 fix: funding rate is disabled in backtest to avoid present-day leakage.
-    _bt_funding_rate = None
+    # Crypto: historical funding + OI series (Bybit, Binance fallback) for point-in-time bars.
+    _bt_crypto_funding_rows: list | None = None
+    _bt_crypto_oi_rows: list | None = None
     if _ptype == "crypto":
-        log.info(f"[BT-FUNDING] {pair['display']} funding rate input disabled (historical integrity).")
+        try:
+            from data_feeds import prepare_crypto_backtest_derivative_series
+
+            _bt_crypto_funding_rows, _bt_crypto_oi_rows = (
+                prepare_crypto_backtest_derivative_series(
+                    pair, d1_raw, h4_raw, h1_raw
+                )
+            )
+            log.info(
+                "[BT-DERIV] %s: historical funding_rows=%d oi_rows=%d",
+                pair.get("display"),
+                len(_bt_crypto_funding_rows or []),
+                len(_bt_crypto_oi_rows or []),
+            )
+        except Exception as _deriv_err:
+            log.warning(
+                "[BT-DERIV] %s: derivative series load failed: %s",
+                pair.get("display"),
+                _deriv_err,
+            )
 
     if effective_style == "swing":
         # --- SWING D1 LOOP â€" UNCHANGED ---
@@ -722,6 +768,26 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     }
                     direction = _fx.direction
                 else:
+                    _bt_funding_rate = None
+                    _bt_oi_data = None
+                    if _ptype == "crypto":
+                        _prev_bt = (
+                            pd.to_datetime(
+                                d1_raw[i - 1]["time"], utc=True, errors="coerce"
+                            )
+                            if i >= 1
+                            else None
+                        )
+                        _bt_funding_rate, _bt_oi_data = _bt_crypto_funding_oi_for_bar(
+                            _ptype,
+                            _bt_crypto_funding_rows,
+                            _bt_crypto_oi_rows,
+                            entry_ts,
+                            _prev_bt,
+                        )
+                    _bt_oi_ctx = build_oi_context_for_factor_scoring(
+                        _bt_oi_data, d1_window, h1i.get("snap")
+                    )
                     res = calc_confluence(
                         d1i,
                         h4i,
@@ -736,6 +802,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         volume_threshold=_bt_volume_threshold,
                         bar_time=h4_window[-1].get("time") if h4_window else None,
                         funding_rate=_bt_funding_rate,
+                        oi_data=_bt_oi_data,
+                        oi_context=_bt_oi_ctx,
                     )
 
             except Exception as _bt_bar_err:
@@ -1137,6 +1205,20 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     }
                     direction = _fx.direction
                 else:
+                    _bt_funding_rate = None
+                    _bt_oi_data = None
+                    if _ptype == "crypto":
+                        _prev_bt = h4_ts[i - 1] if i >= 1 else None
+                        _bt_funding_rate, _bt_oi_data = _bt_crypto_funding_oi_for_bar(
+                            _ptype,
+                            _bt_crypto_funding_rows,
+                            _bt_crypto_oi_rows,
+                            entry_ts,
+                            _prev_bt,
+                        )
+                    _bt_oi_ctx = build_oi_context_for_factor_scoring(
+                        _bt_oi_data, d1_ctx, h1i.get("snap")
+                    )
                     res = calc_confluence(
                         d1i_ctx,
                         h4i,
@@ -1151,6 +1233,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         volume_threshold=_bt_volume_threshold,
                         bar_time=h4_window[-1].get("time") if h4_window else None,
                         funding_rate=_bt_funding_rate,
+                        oi_data=_bt_oi_data,
+                        oi_context=_bt_oi_ctx,
                     )
 
             except Exception as _bt_bar_err:
@@ -1531,6 +1615,20 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     }
                     direction = _fx.direction
                 else:
+                    _bt_funding_rate = None
+                    _bt_oi_data = None
+                    if _ptype == "crypto":
+                        _prev_bt = h1_ts_sc[i - 1] if i >= 1 else None
+                        _bt_funding_rate, _bt_oi_data = _bt_crypto_funding_oi_for_bar(
+                            _ptype,
+                            _bt_crypto_funding_rows,
+                            _bt_crypto_oi_rows,
+                            entry_ts,
+                            _prev_bt,
+                        )
+                    _bt_oi_ctx = build_oi_context_for_factor_scoring(
+                        _bt_oi_data, d1_ctx, h1i.get("snap")
+                    )
                     res = calc_confluence(
                         d1i_ctx,
                         h4i_ctx,
@@ -1545,6 +1643,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         volume_threshold=_bt_volume_threshold,
                         bar_time=h1_window[-1].get("time") if h1_window else None,
                         funding_rate=_bt_funding_rate,
+                        oi_data=_bt_oi_data,
+                        oi_context=_bt_oi_ctx,
                     )
 
             except Exception as _bt_bar_err:

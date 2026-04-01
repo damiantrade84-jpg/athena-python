@@ -17,6 +17,12 @@ ENGINE_B_REGIME_GATE_DEFAULTS = {
     "LOW_VOLATILITY": 1.0,
 }
 
+# Observability only — stable codes for logs/diagnostics (no scoring side effects).
+ENGINE_B_REASON_RESISTANCE_TOO_CLOSE = "resistance_too_close"
+ENGINE_B_REASON_SUPPORT_TOO_CLOSE = "support_too_close"
+ENGINE_B_REASON_ADVERSE_DXY = "adverse_dxy_correlation"
+ENGINE_B_REASON_STRUCTURAL_SL_HARD_CAP = "structural_sl_rejected_hard_cap"
+
 
 def _engine_b_regime_gate(regime_label: str | None) -> float:
     regime_key = str(regime_label or "").upper()
@@ -1397,6 +1403,13 @@ class NakedEngine:
             res, current_price, direction, trigger_ok
         )
 
+        _diag_codes: list[str] = []
+        if not room_ok:
+            if direction == "LONG":
+                _diag_codes.append(ENGINE_B_REASON_RESISTANCE_TOO_CLOSE)
+            elif direction == "SHORT":
+                _diag_codes.append(ENGINE_B_REASON_SUPPORT_TOO_CLOSE)
+
         return {
             "score": total_score,
             "pct": pct,
@@ -1430,7 +1443,33 @@ class NakedEngine:
             "profile_context": _profile_context,
             "lifecycle_state": lifecycle_state,
             "lifecycle_reason": lifecycle_reason,
+            "engine_b_diagnostics": {"reason_codes": _diag_codes},
         }
+
+    def check_macro_correlation_detail(
+        self, asset_close_series: list, dxy_close_series: list, direction: str
+    ) -> tuple[bool, str | None]:
+        """Same gate as check_macro_correlation; returns optional block reason code when False."""
+        if len(asset_close_series) < 30 or len(dxy_close_series) < 30:
+            return True, None
+
+        min_len = min(len(asset_close_series), len(dxy_close_series), 30)
+        a_series = pd.Series(asset_close_series[-min_len:])
+        d_series = pd.Series(dxy_close_series[-min_len:])
+
+        correlation = a_series.corr(d_series)
+
+        dxy_recent = d_series.iloc[-5:].mean()
+        dxy_past = d_series.iloc[-15:-5].mean()
+        dxy_rising = dxy_recent > dxy_past
+
+        if correlation and not pd.isna(correlation) and correlation < -0.6:
+            if direction == "LONG" and dxy_rising:
+                return False, ENGINE_B_REASON_ADVERSE_DXY
+            if direction == "SHORT" and not dxy_rising:
+                return False, ENGINE_B_REASON_ADVERSE_DXY
+
+        return True, None
 
     def check_macro_correlation(
         self, asset_close_series: list, dxy_close_series: list, direction: str
@@ -1439,29 +1478,10 @@ class NakedEngine:
         Calculates 30-period rolling Pearson correlation.
         Returns False (Block) if dynamically inversely correlated AND DXY moving against the trade.
         """
-        if len(asset_close_series) < 30 or len(dxy_close_series) < 30:
-            return True  # Not enough data to block
-
-        # Align lengths
-        min_len = min(len(asset_close_series), len(dxy_close_series), 30)
-        a_series = pd.Series(asset_close_series[-min_len:])
-        d_series = pd.Series(dxy_close_series[-min_len:])
-
-        correlation = a_series.corr(d_series)
-
-        # Determine DXY short-term trend (last 5 periods vs 15 periods ago)
-        dxy_recent = d_series.iloc[-5:].mean()
-        dxy_past = d_series.iloc[-15:-5].mean()
-        dxy_rising = dxy_recent > dxy_past
-
-        # If mathematically highly inversely correlated (< -0.6)
-        if correlation and not pd.isna(correlation) and correlation < -0.6:
-            if direction == "LONG" and dxy_rising:
-                return False  # DXY is surging, blocking LONG
-            if direction == "SHORT" and not dxy_rising:
-                return False  # DXY is falling, blocking SHORT
-
-        return True  # Clear
+        ok, _reason = self.check_macro_correlation_detail(
+            asset_close_series, dxy_close_series, direction
+        )
+        return ok
 
     def simulate_trade(
         self,

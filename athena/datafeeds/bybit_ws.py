@@ -17,11 +17,109 @@ from athena.microstructure.microstructure_store import store_metrics  # noqa: E4
 from athena.microstructure.orderbook_metrics import (  # noqa: E402
     liquidity_wall_detection as _liq_wall,
     liquidity_pressure as _liq_pressure,
+    orderflow_delta as _taker_imbalance_ratio,
 )
 
 _BYBIT_SYMBOL_MAP = {
     "MATICUSDT": "POLUSDT",  # Bybit rebranded MATIC perpetual to POL
 }
+
+
+def _normalize_orderbook_rows(rows: List) -> List[Tuple[float, float]]:
+    """Parse Bybit [price, size] rows to (float, float) tuples."""
+    out: List[Tuple[float, float]] = []
+    for row in rows or []:
+        if not row or len(row) < 2:
+            continue
+        out.append((float(row[0]), float(row[1])))
+    return out
+
+
+def _sort_bids_desc(levels: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    return sorted(levels, key=lambda x: x[0], reverse=True)
+
+
+def _sort_asks_asc(levels: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    return sorted(levels, key=lambda x: x[0], reverse=False)
+
+
+def _orderbook_data_dict(msg: Dict) -> Dict:
+    """Extract orderbook `data` object from a v5 public topic message."""
+    data = msg.get("data")
+    if isinstance(data, list):
+        return data[0] if data else {}
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
+def apply_bybit_orderbook_envelope(
+    orderbook: Dict[str, List[Tuple[float, float]]], msg: Dict
+) -> None:
+    """Apply a full Bybit orderbook.50 websocket message (snapshot or delta).
+
+    Mutates ``orderbook`` in place (keys ``bids``, ``asks``). Used by :class:`BybitWS`
+    and unit tests. Does not persist anything to the database.
+
+    Rules:
+    - ``type`` == ``snapshot`` (or missing / unknown): replace local book from ``b``/``a``.
+    - ``data['u']`` == 1: full reset from this message's ``b``/``a`` (Bybit sequence reset).
+    - ``type`` == ``delta``: merge changes — size 0 removes a level; else insert/update.
+    - Bids sorted descending, asks ascending after each update.
+    """
+    data = _orderbook_data_dict(msg)
+    bids_raw = data.get("b", [])
+    asks_raw = data.get("a", [])
+
+    raw_type = msg.get("type")
+    if raw_type is None:
+        msg_type = "snapshot"
+    else:
+        msg_type = str(raw_type).lower()
+
+    u_val = data.get("u")
+    u_int: Optional[int]
+    try:
+        u_int = int(float(u_val)) if u_val is not None else None
+    except (TypeError, ValueError):
+        u_int = None
+
+    # Unknown/malformed type: treat as snapshot (full replace) for safe recovery.
+    reset = (
+        msg_type == "snapshot"
+        or u_int == 1
+        or msg_type not in ("snapshot", "delta")
+    )
+
+    if reset:
+        orderbook["bids"] = _sort_bids_desc(_normalize_orderbook_rows(bids_raw))
+        orderbook["asks"] = _sort_asks_asc(_normalize_orderbook_rows(asks_raw))
+        return
+
+    # delta
+    bid_map = {p: s for p, s in orderbook["bids"]}
+    ask_map = {p: s for p, s in orderbook["asks"]}
+
+    for row in bids_raw or []:
+        if not row or len(row) < 2:
+            continue
+        price_f, size_f = float(row[0]), float(row[1])
+        if size_f == 0.0:
+            bid_map.pop(price_f, None)
+        else:
+            bid_map[price_f] = size_f
+
+    for row in asks_raw or []:
+        if not row or len(row) < 2:
+            continue
+        price_f, size_f = float(row[0]), float(row[1])
+        if size_f == 0.0:
+            ask_map.pop(price_f, None)
+        else:
+            ask_map[price_f] = size_f
+
+    orderbook["bids"] = _sort_bids_desc(list(bid_map.items()))
+    orderbook["asks"] = _sort_asks_asc(list(ask_map.items()))
 
 
 class BybitWS:
@@ -33,6 +131,8 @@ class BybitWS:
         self.base_url = "wss://stream.bybit.com/v5/public/linear"
         self.emit_interval = emit_interval
         self.orderbook: Dict[str, List[Tuple[float, float]]] = {"bids": [], "asks": []}
+        self.buy_taker_volume: float = 0.0
+        self.sell_taker_volume: float = 0.0
         self.orderflow_delta: float = 0.0
         self._running = False
         self._ws: Optional[websockets.WebSocketServerProtocol] = None
@@ -140,29 +240,26 @@ class BybitWS:
         topic = msg["topic"]
         data = msg.get("data", {})
         if topic == f"orderbook.50.{self.stream_symbol}":
-            self._handle_orderbook(data)
+            self._handle_orderbook(msg)
         elif topic == f"publicTrade.{self.stream_symbol}":
             self._handle_trade(data)
 
-    def _handle_orderbook(self, data: Dict) -> None:
-        """Update local order book with orderbook.50 snapshot."""
-        # Bybit orderbook.50 provides bids/asks as lists of [price, size]
-        bids = data.get("b", [])
-        asks = data.get("a", [])
-        # Convert to (price, size) tuples as floats
-        self.orderbook["bids"] = [(float(p), float(s)) for p, s in bids]
-        self.orderbook["asks"] = [(float(p), float(s)) for p, s in asks]
+    def _handle_orderbook(self, msg: Dict) -> None:
+        """Apply orderbook.50 message (snapshot or delta) from full websocket envelope."""
+        apply_bybit_orderbook_envelope(self.orderbook, msg)
 
     def _handle_trade(self, data: Dict) -> None:
-        """Update orderflow delta from publicTrade stream."""
+        """Accumulate taker volume from publicTrade (S=Buy / S=Sell)."""
         # Bybit V5 publicTrade fields: v=size, S=side (Buy/Sell), s=symbol (string)
         trades = data if isinstance(data, list) else [data]
         for trade in trades:
             size = float(trade.get("v", 0))
             side = trade.get("S")
             if side == "Buy":
+                self.buy_taker_volume += size
                 self.orderflow_delta += size
             elif side == "Sell":
+                self.sell_taker_volume += size
                 self.orderflow_delta -= size
 
     def _compute_imbalance(self) -> float:
@@ -185,10 +282,8 @@ class BybitWS:
             asks = self.orderbook["asks"]
             mid = (bids[0][0] + asks[0][0]) / 2.0 if bids and asks else 0.0
             wall = _liq_wall(bids, asks, mid) if mid > 0 else 0.0
-            norm_delta = (
-                self.orderflow_delta / max(abs(self.orderflow_delta), 1e-9)
-                if self.orderflow_delta != 0
-                else 0.0
+            norm_delta = _taker_imbalance_ratio(
+                self.buy_taker_volume, self.sell_taker_volume
             )
             pressure = _liq_pressure(imbalance, norm_delta)
             metrics = {
@@ -209,7 +304,8 @@ class BybitWS:
                     self.on_metrics(metrics)
                 except Exception as e:
                     log.error(f"[BybitWS] Metrics callback error: {e}")
-            # Reset orderflow delta for next interval
+            self.buy_taker_volume = 0.0
+            self.sell_taker_volume = 0.0
             self.orderflow_delta = 0.0
 
     async def start(self, on_metrics: Optional[callable] = None) -> None:

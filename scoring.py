@@ -397,12 +397,20 @@ def calc_confluence(
     volume_threshold: float | None = None,
     bar_time: str | None = None,
     regime_context: dict | None = None,
+    oi_data: dict | None = None,
+    oi_context: dict | None = None,
 ) -> dict:
     """Factor-based confluence using normalized indicators, regime-aware weights, and correlation filtering.
     Preserves legacy API and raw-threshold warnings for human readability.
     """
-    from factor_scoring import compute_factor_scores
+    from factor_scoring import compute_factor_scores, build_oi_context_for_factor_scoring
     from confidence_engine import compute_confidence
+
+    _oi_ctx_eff = oi_context
+    if _oi_ctx_eff is None and oi_data is not None and pair.get("type") == "crypto":
+        _oi_ctx_eff = build_oi_context_for_factor_scoring(
+            oi_data, d1_candles or [], (h1.get("snap") if h1 else None) or {}
+        )
 
     # Compute factor scores
     factor_result = compute_factor_scores(
@@ -417,6 +425,7 @@ def calc_confluence(
         funding_rate,
         bar_time,
         regime_context,
+        oi_context=_oi_ctx_eff,
     )
 
     # Fix 2 — btcBias penalty: when BTC bias opposes direction, apply mild conviction reduction
@@ -450,6 +459,20 @@ def calc_confluence(
             )
         elif r4 <= _rsi_b["os"]:
             w.append(f"H4 RSI oversold ({r4:.0f} <= {_rsi_b['os']}) — wait for bounce")
+    # Crypto OI divergence (parity with analyze_pair — uses D1[-2] vs H1 close)
+    if oi_data is not None and pair.get("type") == "crypto":
+        from data_feeds import _calc_oi_divergence
+
+        d1c = d1_candles or []
+        h1_snap = h1.get("snap") if h1 else {}
+        _prev_close = float(d1c[-2]["close"]) if len(d1c) >= 2 else None
+        _cur_close = h1_snap.get("close") if h1_snap else None
+        if _cur_close is None and d1c:
+            _cur_close = float(d1c[-1]["close"])
+        if _prev_close and _cur_close is not None:
+            div = _calc_oi_divergence(oi_data, float(_cur_close), _prev_close)
+            if div and div.get("warning"):
+                w.append(div["warning"])
     # Map final_score to legacy 'score' field
     score = factor_result["final_score"]
     direction = factor_result["direction"]
@@ -581,6 +604,7 @@ def calc_confluence(
             "optionalFactorCoverage": factor_result.get("optional_factor_coverage"),
             "feedStatus": factor_result.get("feed_status", {}),
             "insufficientFactors": factor_result.get("insufficient_factors", False),
+            "cryptoEngineADiagnostics": factor_result.get("crypto_engine_a_diagnostics"),
         },
     }
 

@@ -8,7 +8,8 @@ Blueprint compliance:
   - Indicator correlation filter: DISABLED (stub returns 1.0). Implementation in _pearson/_build_indicator_series ready for future re-enable.
   - Missing factors excluded from scoring (not treated as 0).
   - Raw thresholds for warnings only; scoring uses normalized z-scores/percentiles.
-  - DIRECTIONAL indicators (ema_trend, rsi_z, macdLine_z, funding_rate, microstructure)
+  - DIRECTIONAL indicators (ema_trend, rsi_z, macdLine_z, funding_rate, oi_change_z,
+    oi_price_divergence [crypto], microstructure)
     determine trade direction and contribute signed scores.
   - NON-DIRECTIONAL indicators (adx_z, atr_z, bbWidth_z, realized_vol_z, volume_ratio,
     fib_proximity) measure signal quality/strength — contribute via abs().
@@ -100,10 +101,77 @@ def _optional_directional_keys(asset_type: str, pair: dict) -> tuple[str, ...]:
         # Non-crypto never supplies funding_rate, so only count optional feeds that
         # can materially appear when softening the directional threshold.
         return ("cot_z", "carry_z")
-    keys = ["funding_rate"]
+    # "oi" is one optional slot covering oi_change_z + oi_price_divergence (same feed).
+    keys = ["funding_rate", "oi"]
     if _crypto_supports_cot(pair):
         keys.append("cot_z")
     return tuple(keys)
+
+
+def build_oi_context_for_factor_scoring(
+    oi_data: Optional[dict],
+    d1_candles: List,
+    h1_snap: Optional[dict],
+) -> Optional[dict]:
+    """Build ``oi_context`` for derivatives scoring (parity with OI divergence price window).
+
+    Uses D1[-2] vs H1 close when available — same as ``_calc_oi_divergence`` inputs in athena.
+    """
+    if not oi_data or oi_data.get("oiChange") is None:
+        return None
+    d1c = d1_candles or []
+    if len(d1c) < 2:
+        return None
+    try:
+        prev = float(d1c[-2]["close"])
+        cur = (h1_snap or {}).get("close")
+        if cur is None:
+            cur = float(d1c[-1]["close"])
+        else:
+            cur = float(cur)
+    except (TypeError, ValueError):
+        return None
+    if not prev:
+        return None
+    return {
+        "oi_change_pct": float(oi_data["oiChange"]),
+        "price_change_pct": (cur - prev) / prev * 100.0,
+    }
+
+
+def _crypto_oi_indicators_from_context(
+    oi_context: Optional[dict],
+) -> tuple[Optional[float], Optional[float]]:
+    """Map OI + price changes to bounded directional indicators (derivatives subfactor, crypto only).
+
+    Returns (oi_change_z, oi_price_divergence). Either may be None when inputs are absent/noisy.
+    """
+    if not oi_context:
+        return None, None
+    raw_o = oi_context.get("oi_change_pct")
+    if raw_o is None:
+        return None, None
+    try:
+        o = float(raw_o)
+    except (TypeError, ValueError):
+        return None, None
+    # Crowding / flow magnitude (signed): ~6% OI change → ±3.0 (conservative vs funding)
+    oi_change_z = max(-3.0, min(3.0, o / 2.0))
+
+    raw_p = oi_context.get("price_change_pct")
+    if raw_p is None:
+        return oi_change_z, None
+    try:
+        p = float(raw_p)
+    except (TypeError, ValueError):
+        return oi_change_z, None
+    # Interaction: same-direction OI+price → conviction; opposite → stress / exhaustion
+    if abs(o) < 0.2 and abs(p) < 0.2:
+        return oi_change_z, None
+    sign_align = 1.0 if o * p > 0 else -1.0
+    mag = min(abs(o), abs(p), 12.0) / 3.0
+    oi_price_divergence = max(-3.0, min(3.0, sign_align * mag))
+    return oi_change_z, oi_price_divergence
 
 
 def _has_live_microstructure(h4_snap: Dict) -> bool:
@@ -114,6 +182,54 @@ def _has_live_microstructure(h4_snap: Dict) -> bool:
     except (TypeError, ValueError):
         pass
     return any(h4_snap.get(k) is not None for k in _MICROSTRUCTURE_KEYS)
+
+
+def _crypto_live_ws_unavailable_reason(h4_snap: Dict) -> str:
+    """Human-readable reason live WS microstructure was not used (caller: not _has_live_microstructure)."""
+    age = h4_snap.get("microstructure_age_sec")
+    try:
+        if age is not None and float(age) > 45.0:
+            return "stale_ws"
+    except (TypeError, ValueError):
+        pass
+    return "missing_live_ws"
+
+
+def _build_crypto_engine_a_diagnostics(
+    pair: dict,
+    h4_snap: Dict,
+    indicators: Dict,
+    factor_scores: Dict[str, Optional[float]],
+    weights: Dict[str, float],
+    feed_status: Dict[str, str],
+) -> Dict[str, object]:
+    """Lightweight scan/API diagnostics for crypto Engine A (no formula changes)."""
+    gate = bool(CONFIG.get("CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED", False))
+    live_ok = _has_live_microstructure(h4_snap)
+    skip_reason: Optional[str] = None
+    if not gate:
+        skip_reason = "microstructure_gate_disabled"
+    elif not live_ok:
+        skip_reason = _crypto_live_ws_unavailable_reason(h4_snap)
+
+    micro_active = (
+        gate
+        and float(weights.get("microstructure", 0) or 0) > 0
+        and factor_scores.get("microstructure") is not None
+    )
+    oi_active = feed_status.get("oi") == "ok"
+
+    return {
+        "microstructureGateEnabled": gate,
+        "liveMicrostructureSkippedReason": skip_reason,
+        "microstructureActiveInScore": micro_active,
+        "microstructureFactorScore": factor_scores.get("microstructure"),
+        "derivativesFactorScore": factor_scores.get("derivatives"),
+        "oiSubfactorsActive": oi_active,
+        "oiFeedStatus": feed_status.get("oi"),
+        "microstructureAgeSec": h4_snap.get("microstructure_age_sec"),
+        "microstructureLiveDataPresent": live_ok,
+    }
 
 
 # ── Regime smoothing state ────────────────────────────────────────────────────
@@ -505,6 +621,7 @@ def compute_factor_scores(
     funding_rate: Optional[float] = None,
     bar_time: Optional[str] = None,
     regime_context: Optional[dict] = None,
+    oi_context: Optional[dict] = None,
 ) -> Dict:
     """Compute factor scores, apply regime weights, and aggregate to final score.
 
@@ -537,6 +654,7 @@ def compute_factor_scores(
         "cot": "ok",
         "carry": "ok",
         "microstructure": "ok",
+        "oi": "ok",
     }
 
     # Trend direction — EMA crossover across all three timeframes (directional: +1/-1)
@@ -619,6 +737,19 @@ def compute_factor_scores(
     else:
         indicators["funding_rate"] = None  # No funding data — exclude
 
+    # Open interest — crypto-only derivatives sub-indicators (bounded, conservative vs funding)
+    indicators["oi_change_z"] = None
+    indicators["oi_price_divergence"] = None
+    if is_crypto:
+        feed_status["oi"] = "missing"
+        _oi_zz, _oi_pd = _crypto_oi_indicators_from_context(oi_context)
+        indicators["oi_change_z"] = _oi_zz
+        indicators["oi_price_divergence"] = _oi_pd
+        if _oi_zz is not None or _oi_pd is not None:
+            feed_status["oi"] = "ok"
+    else:
+        feed_status["oi"] = "unsupported"
+
     # COT positioning — CFTC net speculator z-score (directional, weekly)
     # Covers: all forex, BTC/ETH (CME), S&P/Nasdaq futures, gold/silver
     # NOTE: Now supports historical lookup during backtest using bar_time
@@ -687,7 +818,8 @@ def compute_factor_scores(
             feed_status["carry"] = "error"
 
     # Microstructure (directional if available)
-    # Crypto: values injected from Binance/Bybit WS feeds via _micro_cache in athena.py
+    # Crypto: live WS values only (no candle proxies). Factor weight is gated by
+    # CONFIG["CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED"] after regime/profile merge.
     # All others: computed from H4 OHLC price action (no order book required)
     _ws_obi = h4_snap.get("order_book_imbalance")
     _ws_lwl = h4_snap.get("liquidity_wall_detection")
@@ -733,6 +865,8 @@ def compute_factor_scores(
     # ── Factor mappings ──────────────────────────────────────────────────
     # Directional factors: sign matters (positive = bullish)
     derivative_keys = ["funding_rate"]
+    if is_crypto:
+        derivative_keys.extend(["oi_change_z", "oi_price_divergence"])
     if not is_crypto or _crypto_supports_cot(pair):
         derivative_keys.append("cot_z")
 
@@ -867,6 +1001,9 @@ def compute_factor_scores(
                 weights[factor] = min(float(weights[factor]), float(cap))
             except (TypeError, ValueError):
                 continue
+        # Live WS microstructure scoring is opt-in — keep weight 0 when disabled (production default).
+        if not CONFIG.get("CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED", False):
+            weights["microstructure"] = 0.0
 
     active_dir = {
         f: s
@@ -900,6 +1037,19 @@ def compute_factor_scores(
         log.debug(
             f"[FACTOR] {pair.get('display')} no active directional factors — score=0"
         )
+        _crypto_diag = (
+            _build_crypto_engine_a_diagnostics(
+                pair, h4_snap, indicators, factor_scores, weights, feed_status
+            )
+            if is_crypto
+            else None
+        )
+        if _crypto_diag is not None:
+            log.debug(
+                "[CRYPTO-EA] %s engine_a=%s",
+                pair.get("display"),
+                _crypto_diag,
+            )
         return {
             "final_score": 0.0,
             "direction": "LONG",
@@ -925,6 +1075,7 @@ def compute_factor_scores(
             "optional_factor_coverage": 0.0
             if _optional_directional_keys(asset_type, pair)
             else 1.0,
+            "crypto_engine_a_diagnostics": _crypto_diag,
         }
 
     dir_score = 0.0
@@ -956,9 +1107,16 @@ def compute_factor_scores(
 
     # Optional directional context coverage.
     optional_directional_keys = _optional_directional_keys(asset_type, pair)
-    optional_present = sum(
-        1 for k in optional_directional_keys if indicators.get(k) is not None
-    )
+    optional_present = 0
+    for _ok in optional_directional_keys:
+        if _ok == "oi":
+            if is_crypto and (
+                indicators.get("oi_change_z") is not None
+                or indicators.get("oi_price_divergence") is not None
+            ):
+                optional_present += 1
+        elif indicators.get(_ok) is not None:
+            optional_present += 1
     optional_coverage = (
         optional_present / float(len(optional_directional_keys))
         if optional_directional_keys
@@ -976,6 +1134,20 @@ def compute_factor_scores(
     _nondir_norm = min(nondir_score / 3.0, 1.0)  # normalize quality to [0, 1]
     _quality_mult = 0.6 + (_nondir_norm * 0.4)
     final_score = abs(dir_score) * _quality_mult * _dir_conf
+
+    _crypto_diag = (
+        _build_crypto_engine_a_diagnostics(
+            pair, h4_snap, indicators, factor_scores, weights, feed_status
+        )
+        if is_crypto
+        else None
+    )
+    if _crypto_diag is not None:
+        log.debug(
+            "[CRYPTO-EA] %s engine_a=%s",
+            pair.get("display"),
+            _crypto_diag,
+        )
 
     return {
         "final_score": final_score,
@@ -999,4 +1171,5 @@ def compute_factor_scores(
         "missing_directional_optional_count": missing_optional,
         "optional_factor_coverage": round(optional_coverage, 4),
         "feed_status": feed_status,
+        "crypto_engine_a_diagnostics": _crypto_diag,
     }

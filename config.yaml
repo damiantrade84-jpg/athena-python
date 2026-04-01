@@ -314,13 +314,17 @@ CRYPTO_TRANSITION_PENALTY:
   exhausting: 0.8
   cap: 2.0
 
+# Live crypto microstructure (WS-injected order book / flow) as an Engine A factor.
+# Research validation: enabled — factor_scoring applies FACTOR_WEIGHTS.crypto.microstructure
+# and CRYPTO_FACTOR_WEIGHT_CAPS.microstructure when live WS data passes age checks.
+CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED: true
+
 # Factor weights per asset class (base)
-# Crypto microstructure zeroed: WS order-book signals stay disabled at factor-weight level.
-# Candle-derived VMS is routed through crypto momentum instead of microstructure.
+# Crypto: VMS stays in momentum; live WS microstructure scores only when the gate above is true.
 # Carry zeroed (never fires for crypto). Structure reduced (fib noisy on perps).
 # Forex trend raised to 2.0 (primary edge) and momentum to 1.0 (was under-weighted).
 FACTOR_WEIGHTS:
-  crypto:    { trend: 2.0, momentum: 1.5, volatility: 0.8, volume: 1.0, structure: 0.5, derivatives: 1.2, microstructure: 0, carry: 0, trend_strength: 1.0 }
+  crypto:    { trend: 2.0, momentum: 1.5, volatility: 0.8, volume: 1.0, structure: 0.5, derivatives: 1.2, microstructure: 0.6, carry: 0, trend_strength: 1.0 }
   forex:     { trend: 2.0, momentum: 1.0, volatility: 1.0, volume: 0.5, structure: 1.5, derivatives: 0.5, microstructure: 0.5, carry: 0.7 }
   stock:     { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.5, structure: 1.0, derivatives: 0.5, microstructure: 0.75, carry: 1.0 }
   commodity: { trend: 2.0, momentum: 1.3, volatility: 1.5, volume: 1.0, structure: 1.3, derivatives: 0.7, microstructure: 0.75, carry: 0.5 }
@@ -356,7 +360,7 @@ INDICATOR_WEIGHTS:
       h4_ema_trend: 0.35
       ema_trend: 0.25
   # MOMENTUM: RSI is more responsive for forex; MACD lags but confirms.
-  # Crypto also routes VMS here with a small weight instead of re-enabling microstructure.
+  # Crypto: VMS stays here; live WS microstructure is a separate factor (gated).
   momentum:
     default:
       rsi_z: 0.6
@@ -366,14 +370,17 @@ INDICATOR_WEIGHTS:
       macdLine_z: 0.3
       volume_momentum_spread: 0.2
   # DERIVATIVES: COT is weekly (lagging), funding is crypto-only
+  # Crypto OI sub-indicators (oi_change_z, oi_price_divergence) are small vs funding — conservative.
   # When only one fires (e.g. funding only for crypto), it gets full weight automatically.
   derivatives:
     default:
       cot_z: 0.6
       funding_rate: 0.4
     crypto:
-      funding_rate: 1.0
-      cot_z: 0.2
+      funding_rate: 0.70
+      oi_change_z: 0.15
+      oi_price_divergence: 0.15
+      cot_z: 0.20
   # MICROSTRUCTURE: For non-crypto (candle proxies), OBI is the strongest signal.
   # OFD and LP are derived from the same OHLC data — correlated, so down-weighted.
   # For crypto (real WS orderbook), liquidity_wall_detection gets meaningful weight.
@@ -427,7 +434,7 @@ FACTOR_SCORE_GROUP_MULTIPLIERS:
 
 CRYPTO_FACTOR_WEIGHT_CAPS:
   derivatives: 1.2
-  microstructure: 0
+  microstructure: 0.8
   carry: 0
 
 # Normalization
@@ -531,6 +538,9 @@ AUTO_EXIT_ON_DECAY: false
 
 # ── Engine B (Naked Scalp) ───────────────────────────────────────────
 NAKED_ENGINE:
+  # Overlay observability (logs / engine_b_overlay / calculate_confidence.engine_b_diagnostics):
+  # stable reason codes in market_structure — resistance_too_close, support_too_close,
+  # adverse_dxy_correlation, structural_sl_rejected_hard_cap (no extra alpha weights).
   # Per-style min_score thresholds — tune here after backtesting.
   # These override the hardcoded defaults in _naked_scan_style_profile().
   # Hold limits (H4 bars): scalp=12 (48h), intraday=24 (4d), swing=60 (10d)

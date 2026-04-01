@@ -253,8 +253,9 @@ class TestCryptoDirectionalOverrides:
             volume_ratio=1.5,
             funding_rate=0.0001,
         )
-        assert result["optional_factor_coverage"] == 1.0
-        assert result["missing_directional_optional_count"] == 0
+        # Optional slots: funding + OI feed; funding present, OI absent.
+        assert result["optional_factor_coverage"] == 0.5
+        assert result["missing_directional_optional_count"] == 1
 
     def test_crypto_disables_candle_proxy_microstructure(self):
         snap = _make_snap(
@@ -286,16 +287,20 @@ class TestCryptoDirectionalOverrides:
             liquidity_wall_detection=None,
         )
         candles = _make_volume_candles(200)
-        result = compute_factor_scores(
-            d1_snap=snap,
-            h4_snap=snap,
-            h1_snap=snap,
-            pair=_make_pair(display="SOL/USDT"),
-            d1_candles=candles,
-            h4_candles=candles,
-            h1_candles=candles,
-            volume_ratio=1.5,
-        )
+        with patch.dict(
+            CONFIG,
+            {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": False},
+        ):
+            result = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair=_make_pair(display="SOL/USDT"),
+                d1_candles=candles,
+                h4_candles=candles,
+                h1_candles=candles,
+                volume_ratio=1.5,
+            )
         assert result["filtered_indicators"]["volume_momentum_spread"] is not None
         assert result["factor_scores"]["momentum"] > 0
         assert result["factor_scores"]["microstructure"] is None
@@ -353,20 +358,20 @@ class TestCryptoDirectionalOverrides:
 
 
 class TestCryptoOptionalCoverage:
-    """optional_directional_keys for crypto should only include funding_rate,
-    not cot_z/carry_z which are permanently absent for most alts."""
+    """optional_directional_keys for crypto: funding + OI feed slot + optional cot for BTC/ETH."""
 
     def test_crypto_alt_optional_coverage_funding_only(self):
         from factor_scoring import _optional_directional_keys
 
         keys = _optional_directional_keys("crypto", {"display": "SOL/USDT"})
-        assert keys == ("funding_rate",)
+        assert keys == ("funding_rate", "oi")
 
     def test_crypto_btc_includes_cot(self):
         from factor_scoring import _optional_directional_keys
 
         keys = _optional_directional_keys("crypto", {"display": "BTC/USDT"})
         assert "funding_rate" in keys
+        assert "oi" in keys
         assert "cot_z" in keys
         assert "carry_z" not in keys
 
@@ -374,7 +379,7 @@ class TestCryptoOptionalCoverage:
         from factor_scoring import _optional_directional_keys
 
         keys = _optional_directional_keys("forex", {"display": "EUR/USD"})
-        assert set(keys) == {"funding_rate", "cot_z", "carry_z"}
+        assert set(keys) == {"cot_z", "carry_z"}
 
     def test_crypto_alt_full_coverage_when_funding_present(self):
         snap = _make_snap()
@@ -386,25 +391,285 @@ class TestCryptoOptionalCoverage:
             h1_candles=_make_candles(200),
             volume_ratio=1.5,
             funding_rate=0.0002,
+            oi_context={"oi_change_pct": 2.0, "price_change_pct": 1.0},
         )
         assert result["optional_factor_coverage"] == 1.0
         assert result["missing_directional_optional_count"] == 0
 
 
-class TestCryptoMicrostructureZeroWeight:
-    """With microstructure weight=0 in config, scores should still aggregate and resolve direction."""
+class TestCryptoOiDerivativesIndicators:
+    """OI sub-indicators inside derivatives factor (crypto only)."""
 
-    def test_score_nonzero_with_zero_micro_weight(self):
+    def test_oi_rising_price_rising_bullish_conviction(self):
+        from factor_scoring import _crypto_oi_indicators_from_context
+
+        zz, pd = _crypto_oi_indicators_from_context(
+            {"oi_change_pct": 6.0, "price_change_pct": 4.0}
+        )
+        assert zz is not None and zz > 0
+        assert pd is not None and pd > 0
+
+    def test_oi_rising_price_falling_bearish_divergence(self):
+        from factor_scoring import _crypto_oi_indicators_from_context
+
+        zz, pd = _crypto_oi_indicators_from_context(
+            {"oi_change_pct": 6.0, "price_change_pct": -4.0}
+        )
+        assert pd is not None and pd < 0
+
+    def test_oi_falling_price_rising_exhaustion_fade(self):
+        from factor_scoring import _crypto_oi_indicators_from_context
+
+        zz, pd = _crypto_oi_indicators_from_context(
+            {"oi_change_pct": -6.0, "price_change_pct": 4.0}
+        )
+        assert pd is not None and pd < 0
+
+    def test_oi_absent_no_oi_indicators(self):
+        from factor_scoring import _crypto_oi_indicators_from_context
+
+        assert _crypto_oi_indicators_from_context(None) == (None, None)
+        assert _crypto_oi_indicators_from_context({}) == (None, None)
+
+    def test_derivatives_funding_only_still_aggregates(self):
         snap = _make_snap()
         result = compute_factor_scores(
-            d1_snap=snap, h4_snap=snap, h1_snap=snap,
-            pair=_make_pair(display="SOL/USDT"),
+            d1_snap=snap,
+            h4_snap=snap,
+            h1_snap=snap,
+            pair=_make_pair(display="DOGE/USDT"),
             d1_candles=_make_candles(200),
             h4_candles=_make_candles(200),
             h1_candles=_make_candles(200),
             volume_ratio=1.5,
-            funding_rate=0.0001,
+            funding_rate=0.0002,
+            oi_context=None,
         )
+        assert result["factor_scores"]["derivatives"] is not None
+        assert result["filtered_indicators"]["funding_rate"] is not None
+        assert result["filtered_indicators"]["oi_change_z"] is None
+        assert result["filtered_indicators"]["oi_price_divergence"] is None
+
+
+class TestCryptoLiveMicrostructureGate:
+    """CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED controls crypto microstructure *weight* (not indicator math)."""
+
+    def test_gate_false_forces_microstructure_weight_zero_with_live_snap(self):
+        snap = _make_snap(
+            order_book_imbalance=-3.0,
+            liquidity_wall_detection=-3.0,
+            orderflow_delta=-3.0,
+            liquidity_pressure=-3.0,
+            microstructure_age_sec=1.0,
+        )
+        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
+            with patch.dict(
+                CONFIG,
+                {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": False},
+            ):
+                result = compute_factor_scores(
+                    d1_snap=snap,
+                    h4_snap=snap,
+                    h1_snap=snap,
+                    pair=_make_pair(display="BTC/USDT"),
+                    d1_candles=_make_candles(220),
+                    h4_candles=_make_candles(220),
+                    h1_candles=_make_candles(220),
+                    volume_ratio=1.5,
+                    funding_rate=0.0001,
+                )
+        assert result["weights"]["microstructure"] == 0
+        assert result["factor_scores"]["microstructure"] == -3.0
+        assert "microstructure" not in result["active_directional_factors"]
+
+    def test_gate_true_enables_live_microstructure_in_active_factors_when_fresh(self):
+        snap = _make_snap(
+            order_book_imbalance=-3.0,
+            liquidity_wall_detection=-3.0,
+            orderflow_delta=-3.0,
+            liquidity_pressure=-3.0,
+            microstructure_age_sec=1.0,
+        )
+        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
+            with patch.dict(
+                CONFIG,
+                {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": True},
+            ):
+                result = compute_factor_scores(
+                    d1_snap=snap,
+                    h4_snap=snap,
+                    h1_snap=snap,
+                    pair=_make_pair(display="BTC/USDT"),
+                    d1_candles=_make_candles(220),
+                    h4_candles=_make_candles(220),
+                    h1_candles=_make_candles(220),
+                    volume_ratio=1.5,
+                    funding_rate=0.0001,
+                )
+        assert result["weights"]["microstructure"] > 0
+        assert result["weights"]["microstructure"] <= CONFIG["CRYPTO_FACTOR_WEIGHT_CAPS"]["microstructure"]
+        assert "microstructure" in result["active_directional_factors"]
+        assert result["factor_scores"]["microstructure"] == -3.0
+
+    def test_gate_true_stale_ws_does_not_score_microstructure(self):
+        snap = _make_snap(
+            order_book_imbalance=-3.0,
+            liquidity_wall_detection=-3.0,
+            orderflow_delta=-3.0,
+            liquidity_pressure=-3.0,
+            microstructure_age_sec=120.0,
+        )
+        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
+            with patch.dict(
+                CONFIG,
+                {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": True},
+            ):
+                result = compute_factor_scores(
+                    d1_snap=snap,
+                    h4_snap=snap,
+                    h1_snap=snap,
+                    pair=_make_pair(display="BTC/USDT"),
+                    d1_candles=_make_candles(220),
+                    h4_candles=_make_candles(220),
+                    h1_candles=_make_candles(220),
+                    volume_ratio=1.5,
+                    funding_rate=0.0001,
+                )
+        assert result["factor_scores"]["microstructure"] is None
+        assert "microstructure" not in result["active_directional_factors"]
+
+
+class TestCryptoEngineADiagnostics:
+    """crypto_engine_a_diagnostics on compute_factor_scores (scan/API visibility)."""
+
+    def test_non_crypto_returns_none_diagnostics(self):
+        snap = _make_snap()
+        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
+            result = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair={"type": "stock", "display": "AAPL"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+            )
+        assert result.get("crypto_engine_a_diagnostics") is None
+
+    def test_gate_off_skip_reason_and_inactive(self):
+        snap = _make_snap(
+            order_book_imbalance=-3.0,
+            liquidity_wall_detection=-3.0,
+            orderflow_delta=-3.0,
+            liquidity_pressure=-3.0,
+            microstructure_age_sec=1.0,
+        )
+        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
+            with patch.dict(
+                CONFIG,
+                {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": False},
+            ):
+                result = compute_factor_scores(
+                    d1_snap=snap,
+                    h4_snap=snap,
+                    h1_snap=snap,
+                    pair=_make_pair(display="BTC/USDT"),
+                    d1_candles=_make_candles(220),
+                    h4_candles=_make_candles(220),
+                    h1_candles=_make_candles(220),
+                    volume_ratio=1.5,
+                    funding_rate=0.0001,
+                )
+        d = result["crypto_engine_a_diagnostics"]
+        assert d["microstructureGateEnabled"] is False
+        assert d["liveMicrostructureSkippedReason"] == "microstructure_gate_disabled"
+        assert d["microstructureActiveInScore"] is False
+        assert d["microstructureLiveDataPresent"] is True
+
+    def test_gate_on_fresh_live_active_scores(self):
+        snap = _make_snap(
+            order_book_imbalance=-3.0,
+            liquidity_wall_detection=-3.0,
+            orderflow_delta=-3.0,
+            liquidity_pressure=-3.0,
+            microstructure_age_sec=1.0,
+        )
+        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
+            with patch.dict(
+                CONFIG,
+                {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": True},
+            ):
+                result = compute_factor_scores(
+                    d1_snap=snap,
+                    h4_snap=snap,
+                    h1_snap=snap,
+                    pair=_make_pair(display="BTC/USDT"),
+                    d1_candles=_make_candles(220),
+                    h4_candles=_make_candles(220),
+                    h1_candles=_make_candles(220),
+                    volume_ratio=1.5,
+                    funding_rate=0.0001,
+                    oi_context={"oi_change_pct": 2.0, "price_change_pct": 1.0},
+                )
+        d = result["crypto_engine_a_diagnostics"]
+        assert d["microstructureGateEnabled"] is True
+        assert d["liveMicrostructureSkippedReason"] is None
+        assert d["microstructureLiveDataPresent"] is True
+        assert d["microstructureActiveInScore"] is True
+        assert d["microstructureFactorScore"] == -3.0
+        assert d["derivativesFactorScore"] is not None
+        assert d["oiSubfactorsActive"] is True
+        assert d["oiFeedStatus"] == "ok"
+
+    def test_stale_ws_skip_reason_not_active(self):
+        snap = _make_snap(
+            order_book_imbalance=-3.0,
+            liquidity_wall_detection=-3.0,
+            orderflow_delta=-3.0,
+            liquidity_pressure=-3.0,
+            microstructure_age_sec=120.0,
+        )
+        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
+            with patch.dict(
+                CONFIG,
+                {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": True},
+            ):
+                result = compute_factor_scores(
+                    d1_snap=snap,
+                    h4_snap=snap,
+                    h1_snap=snap,
+                    pair=_make_pair(display="BTC/USDT"),
+                    d1_candles=_make_candles(220),
+                    h4_candles=_make_candles(220),
+                    h1_candles=_make_candles(220),
+                    volume_ratio=1.5,
+                    funding_rate=0.0001,
+                )
+        d = result["crypto_engine_a_diagnostics"]
+        assert d["liveMicrostructureSkippedReason"] == "stale_ws"
+        assert d["microstructureLiveDataPresent"] is False
+        assert d["microstructureActiveInScore"] is False
+
+
+class TestCryptoMicrostructureZeroWeight:
+    """When the live microstructure gate is off, crypto microstructure weight is forced to 0."""
+
+    def test_score_nonzero_with_zero_micro_weight(self):
+        snap = _make_snap()
+        with patch.dict(
+            CONFIG,
+            {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": False},
+        ):
+            result = compute_factor_scores(
+                d1_snap=snap, h4_snap=snap, h1_snap=snap,
+                pair=_make_pair(display="SOL/USDT"),
+                d1_candles=_make_candles(200),
+                h4_candles=_make_candles(200),
+                h1_candles=_make_candles(200),
+                volume_ratio=1.5,
+                funding_rate=0.0001,
+            )
         assert result["weights"].get("microstructure", 0) == 0
         assert result["final_score"] > 0
         assert result["direction"] in ("LONG", "SHORT")
@@ -520,8 +785,13 @@ class TestAdaptiveWeights:
             "carry": 3.0,
             "trend_strength": 1.0,
         }
-        with patch.dict(CONFIG, {"ADAPTIVE_WEIGHTS_ENABLED": True}), \
-             patch("adaptive_weights.get_adaptive_weights", return_value=adaptive):
+        with patch.dict(
+            CONFIG,
+            {
+                "ADAPTIVE_WEIGHTS_ENABLED": True,
+                "CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": False,
+            },
+        ), patch("adaptive_weights.get_adaptive_weights", return_value=adaptive):
             result = compute_factor_scores(
                 d1_snap=snap,
                 h4_snap=snap,
@@ -546,7 +816,10 @@ class TestDirectionUsesEffectiveWeights:
             liquidity_pressure=-3.0,
             microstructure_age_sec=1.0,
         )
-        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
+        with patch("adaptive_weights.get_adaptive_weights", return_value={}), patch.dict(
+            CONFIG,
+            {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": False},
+        ):
             result = compute_factor_scores(
                 d1_snap=snap,
                 h4_snap=snap,
@@ -690,22 +963,63 @@ class TestCalcConfluenceIntegration:
         )
         tf = {"snap": snap}
         with patch("adaptive_weights.get_adaptive_weights", return_value={}):
-            result = calc_confluence(
-                d1=tf,
-                h4=tf,
-                h1=tf,
-                vr=1.5,
-                stoch={},
-                pair={"type": "crypto", "display": "BTC/USDT", "score_group": "crypto_btc"},
-                btc_bias="neutral",
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                funding_rate=0.0001,
-            )
+            with patch.dict(
+                CONFIG,
+                {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": False},
+            ):
+                result = calc_confluence(
+                    d1=tf,
+                    h4=tf,
+                    h1=tf,
+                    vr=1.5,
+                    stoch={},
+                    pair={"type": "crypto", "display": "BTC/USDT", "score_group": "crypto_btc"},
+                    btc_bias="neutral",
+                    d1_candles=_make_candles(220),
+                    h4_candles=_make_candles(220),
+                    h1_candles=_make_candles(220),
+                    funding_rate=0.0001,
+                )
         assert result["direction"] == "LONG"
         assert "microstructure" not in result["factorDiagnostics"]["activeDirectionalFactors"]
         assert result["factor_scores"]["microstructure"] == -3.0
+        fd = result["factorDiagnostics"].get("cryptoEngineADiagnostics") or {}
+        assert fd.get("microstructureGateEnabled") is False
+        assert fd.get("microstructureActiveInScore") is False
+
+    def test_calc_confluence_gate_true_includes_microstructure_when_live_fresh(self):
+        snap = _make_snap(
+            order_book_imbalance=-3.0,
+            liquidity_wall_detection=-3.0,
+            orderflow_delta=-3.0,
+            liquidity_pressure=-3.0,
+            microstructure_age_sec=1.0,
+        )
+        tf = {"snap": snap}
+        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
+            with patch.dict(
+                CONFIG,
+                {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": True},
+            ):
+                result = calc_confluence(
+                    d1=tf,
+                    h4=tf,
+                    h1=tf,
+                    vr=1.5,
+                    stoch={},
+                    pair={"type": "crypto", "display": "BTC/USDT", "score_group": "crypto_btc"},
+                    btc_bias="neutral",
+                    d1_candles=_make_candles(220),
+                    h4_candles=_make_candles(220),
+                    h1_candles=_make_candles(220),
+                    funding_rate=0.0001,
+                )
+        assert "microstructure" in result["factorDiagnostics"]["activeDirectionalFactors"]
+        assert result["factor_scores"]["microstructure"] == -3.0
+        fd = result["factorDiagnostics"].get("cryptoEngineADiagnostics") or {}
+        assert fd.get("microstructureGateEnabled") is True
+        assert fd.get("microstructureActiveInScore") is True
+        assert fd.get("liveMicrostructureSkippedReason") is None
 
 
 class TestCarryZDirectional:

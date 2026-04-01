@@ -68,8 +68,11 @@ def liquidity_wall_detection(
 
 
 def orderflow_delta(market_buy_volume: float, market_sell_volume: float) -> float:
-    """Compute orderflow delta: market_buy - market_sell.
-    Returns normalized delta in [-1, 1]."""
+    """Taker imbalance ratio: (buy_volume − sell_volume) / (buy_volume + sell_volume).
+
+    Used by Binance/Bybit WS emitters as ``orderflow_delta`` metrics (bounded [-1, 1],
+    magnitude-preserving vs sign-only). Zero total volume ⇒ 0.0.
+    """
     raw_delta = market_buy_volume - market_sell_volume
     total_volume = market_buy_volume + market_sell_volume
     if total_volume == 0:

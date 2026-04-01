@@ -29,7 +29,9 @@ def test_stability_index_degrades_gracefully_with_no_data():
     result = get_signal_stability_index(engine="engine_a", db_path=db_path)
 
     assert result["engine"] == "engine_a"
-    assert isinstance(result["ssi"], float)
+    # No stability_events yet: _engine_ssi has no component scores → ssi None, band NO_DATA
+    assert result["ssi"] is None
+    assert result["band"] == "NO_DATA"
     assert "components" in result
     assert "warnings" in result
     assert result["components"]["score_drift"]["available"] is False

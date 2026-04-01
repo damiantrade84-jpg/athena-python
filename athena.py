@@ -8750,6 +8750,10 @@ def analyze_pair(
 
     _oi_divergence = None
 
+    _oi_data = None
+
+    _oi_context = None
+
     if pair.get("type") == "crypto":
         _bn_sym = pair.get("symbol", "").replace("/", "")  # e.g. BTCUSDT
 
@@ -8778,6 +8782,11 @@ def analyze_pair(
 
         if _cur_close and _prev_close:
             _oi_divergence = _calc_oi_divergence(_oi_data, _cur_close, _prev_close)
+            if _oi_data.get("oiChange") is not None:
+                _oi_context = {
+                    "oi_change_pct": float(_oi_data["oiChange"]),
+                    "price_change_pct": (_cur_close - _prev_close) / _prev_close * 100.0,
+                }
 
     res = None
     # Route forex pairs to dedicated forex scoring engine
@@ -8862,6 +8871,8 @@ def analyze_pair(
                 "volume_threshold", CONFIG["VOLUME_THRESHOLD"]
             ),
             regime_context=regime_context,
+            oi_data=_oi_data,
+            oi_context=_oi_context,
         )
 
     # For SCALP: warn if D1 trend disagrees with signal direction
@@ -8926,8 +8937,7 @@ def analyze_pair(
             if w not in warn_list:
                 warn_list.append(w)
 
-    if _oi_divergence and _oi_divergence.get("warning"):
-        warn_list.append(_oi_divergence["warning"])
+    # OI divergence warnings are appended inside calc_confluence when oi_data is passed (no duplicate here).
 
     # Max possible final_score depends on scoring engine:
     # - Forex: 0-1 scale (forex_scoring.py caps at 1.0)
@@ -8944,10 +8954,17 @@ def analyze_pair(
     )
 
     # --- ENGINE B: NAKED MARKET STRUCTURE OVERLAY ---
+    _engine_b_overlay_meta = None
     structure_data = None
     if use_naked_engine and res["score"] >= get_min_confluence_threshold(pair):
         try:
-            from market_structure import engine as naked_engine
+            from market_structure import (
+                ENGINE_B_REASON_ADVERSE_DXY,
+                ENGINE_B_REASON_RESISTANCE_TOO_CLOSE,
+                ENGINE_B_REASON_STRUCTURAL_SL_HARD_CAP,
+                ENGINE_B_REASON_SUPPORT_TOO_CLOSE,
+                engine as naked_engine,
+            )
             _overlay_style, _overlay_profile = _naked_scan_style_profile(
                 _style, score_group=_score_group
             )
@@ -8970,7 +8987,11 @@ def analyze_pair(
                     and structure_data.get("distance_to_res", float("inf")) < _min_room
                 ):
                     log.warning(
-                        f"[ENGINE-B] {pair['display']} LONG blocked: nearest resistance too close"
+                        "[ENGINE-B] pair=%s block_code=%s min_room_atr=%.4f dist_res=%s",
+                        pair["display"],
+                        ENGINE_B_REASON_RESISTANCE_TOO_CLOSE,
+                        float(_overlay_profile.get("min_room_atr", 1.0)),
+                        structure_data.get("distance_to_res"),
                     )
                     return None
                 if (
@@ -8978,7 +8999,11 @@ def analyze_pair(
                     and structure_data.get("distance_to_sup", float("inf")) < _min_room
                 ):
                     log.warning(
-                        f"[ENGINE-B] {pair['display']} SHORT blocked: nearest support too close"
+                        "[ENGINE-B] pair=%s block_code=%s min_room_atr=%.4f dist_sup=%s",
+                        pair["display"],
+                        ENGINE_B_REASON_SUPPORT_TOO_CLOSE,
+                        float(_overlay_profile.get("min_room_atr", 1.0)),
+                        structure_data.get("distance_to_sup"),
                     )
                     return None
 
@@ -8997,11 +9022,15 @@ def analyze_pair(
                     if _dxy:
                         _dxy_c = [float(c["close"]) for c in _dxy]
                         _asset_c = [float(c["close"]) for c in h4]
-                        if not naked_engine.check_macro_correlation(
+                        _dxy_ok, _dxy_reason = naked_engine.check_macro_correlation_detail(
                             _asset_c, _dxy_c, direction
-                        ):
+                        )
+                        if not _dxy_ok:
                             log.warning(
-                                f"[ENGINE-B] {pair['display']} {direction} blocked: adverse DXY correlation"
+                                "[ENGINE-B] pair=%s block_code=%s direction=%s",
+                                pair["display"],
+                                _dxy_reason or ENGINE_B_REASON_ADVERSE_DXY,
+                                direction,
                             )
                             return None
 
@@ -9022,8 +9051,12 @@ def analyze_pair(
                     _sl_dist_pct = abs(float(price) - float(lvl["sl"])) / float(price)
                     if _sl_dist_pct > _max_sl_pct:
                         log.warning(
-                            f"[SL-CAP] {pair['display']} {direction} SL distance {_sl_dist_pct:.1%} "
-                            f"exceeds cap {_max_sl_pct:.1%} — REJECTED"
+                            "[ENGINE-B] pair=%s block_code=%s direction=%s sl_dist_pct=%.4f max_sl_pct=%.4f",
+                            pair["display"],
+                            ENGINE_B_REASON_STRUCTURAL_SL_HARD_CAP,
+                            direction,
+                            _sl_dist_pct,
+                            _max_sl_pct,
                         )
                         return None
 
@@ -9040,6 +9073,11 @@ def analyze_pair(
                 risk_pct = round(
                     abs(float(price) - float(lvl["sl"])) / float(price) * 100, 2
                 )
+                _engine_b_overlay_meta = {
+                    "applied": True,
+                    "reason_codes": [],
+                    "structural_verdict": structure_data.get("structural_verdict"),
+                }
         except Exception as e:
             log.error(f"[ENGINE-B] Error on {pair['display']}: {e}")
     # ------------------------------------------------
@@ -9184,6 +9222,7 @@ def analyze_pair(
             direction=direction,
             pair_type=pair.get("type", "stock"),
         ),
+        "engine_b_overlay": _engine_b_overlay_meta,
     }
     if CONFIG.get("SCAN_DEBUG_CANDLE_META", False):
         signal["candleMeta"] = {

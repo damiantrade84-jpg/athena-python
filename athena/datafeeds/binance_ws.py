@@ -16,6 +16,7 @@ from athena.microstructure.microstructure_store import store_metrics  # noqa: E4
 from athena.microstructure.orderbook_metrics import (  # noqa: E402
     liquidity_wall_detection as _liq_wall,
     liquidity_pressure as _liq_pressure,
+    orderflow_delta as _taker_imbalance_ratio,
 )
 
 
@@ -30,6 +31,10 @@ class BinanceWS:
         self.emit_interval = emit_interval
         self.orderbook: Dict[str, List[Tuple[float, float]]] = {"bids": [], "asks": []}
         self.last_update_id: Optional[int] = None
+        # Per emit-interval taker volumes (futures trade stream: m = buyer is maker)
+        self.buy_taker_volume: float = 0.0
+        self.sell_taker_volume: float = 0.0
+        # Signed net taker flow for the interval (buy taker − sell taker); mirrors buy/sell split
         self.orderflow_delta: float = 0.0
         self._running = False
         self._tasks: List[asyncio.Task] = []
@@ -103,15 +108,15 @@ class BinanceWS:
         self.last_update_id = data.get("lastUpdateId")
 
     def _handle_trade(self, data: Dict) -> None:
-        """Update orderflow delta from trade stream."""
-        float(data.get("p", 0))
+        """Accumulate taker volume from trade stream (taker side from ``m``)."""
         size = float(data.get("q", 0))
         is_buyer_maker = data.get("m")  # true if buyer is maker (seller is taker)
-        # Binance trade: if m is True, buyer is the maker (seller is taker)
-        # We want taker direction: if seller is taker (m is False), it's a buy taker
+        # Binance: m True → seller taker (sell aggressor); m False → buyer taker
         if not is_buyer_maker:
+            self.buy_taker_volume += size
             self.orderflow_delta += size
         else:
+            self.sell_taker_volume += size
             self.orderflow_delta -= size
 
     def _compute_imbalance(self) -> float:
@@ -134,10 +139,9 @@ class BinanceWS:
             asks = self.orderbook["asks"]
             mid = (bids[0][0] + asks[0][0]) / 2.0 if bids and asks else 0.0
             wall = _liq_wall(bids, asks, mid) if mid > 0 else 0.0
-            norm_delta = (
-                self.orderflow_delta / max(abs(self.orderflow_delta), 1e-9)
-                if self.orderflow_delta != 0
-                else 0.0
+            # Bounded [-1, 1] taker imbalance preserving magnitude within the interval
+            norm_delta = _taker_imbalance_ratio(
+                self.buy_taker_volume, self.sell_taker_volume
             )
             pressure = _liq_pressure(imbalance, norm_delta)
             metrics = {
@@ -158,7 +162,9 @@ class BinanceWS:
                     self.on_metrics(metrics)
                 except Exception as e:
                     log.error(f"[BinanceWS] Metrics callback error: {e}")
-            # Reset orderflow delta for next interval
+            # Reset interval accumulators
+            self.buy_taker_volume = 0.0
+            self.sell_taker_volume = 0.0
             self.orderflow_delta = 0.0
 
     async def start(self, on_metrics: Optional[callable] = None) -> None:

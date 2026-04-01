@@ -29,8 +29,8 @@ def test_pair_score_group_mapping_examples():
 
 def test_min_confluence_uses_group_threshold_when_no_pair_override():
     pair = {"display": "USD/ZAR", "symbol": "USDZAR=X", "type": "forex"}
-    # forex_exotics uses MIN_CONFLUENCE_GROUP.forex.forex_exotics (aligned with class gate 0.70)
-    assert get_min_confluence_threshold(pair) == 0.70
+    # forex_exotics: MIN_CONFLUENCE_GROUP.forex.forex_exotics in config.yaml
+    assert get_min_confluence_threshold(pair) == 0.90
 
 
 def test_pair_profile_can_override_score_group_and_threshold():
@@ -69,14 +69,17 @@ def test_backtest_min_score_falls_back_to_live_chain_when_no_bt_override():
 def test_backtest_min_score_pair_profile_bt_min_override():
     original = CONFIG.get("PAIR_PROFILES")
     original_bt = dict(CONFIG.get("BT_MIN") or {})
+    original_rm = CONFIG.get("RESEARCH_MODE", False)
     try:
         CONFIG["PAIR_PROFILES"] = {"XAU/USD": {"bt_min": 1.58, "min_confluence": 5.8}}
         CONFIG["BT_MIN"] = {**original_bt, "commodity": 0.70}
+        CONFIG["RESEARCH_MODE"] = True
         pair = {"display": "XAU/USD", "symbol": "XAUUSD", "type": "commodity"}
         assert get_backtest_min_score_threshold(pair) == 1.58
     finally:
         CONFIG["PAIR_PROFILES"] = original
         CONFIG["BT_MIN"] = original_bt
+        CONFIG["RESEARCH_MODE"] = original_rm
 
 
 def test_forex_scoring_source_exposes_score_group_adjustments():

@@ -62,7 +62,8 @@ def test_engine_b_confidence_gate_requires_passed_and_score_floor():
         style_profile,
         "TRENDING",
     )
-    assert round(scaled_min, 3) == 0.935
+    # engine_b_min_score_threshold applies regime gate then math.ceil (discrete checklist floor)
+    assert round(scaled_min, 3) == 1.0
     assert gate_ok is False
 
     gate_ok, scaled_min = engine_b_confidence_passes(
@@ -70,7 +71,7 @@ def test_engine_b_confidence_gate_requires_passed_and_score_floor():
         style_profile,
         "TRENDING",
     )
-    assert round(scaled_min, 3) == 0.935
+    assert round(scaled_min, 3) == 1.0
     assert gate_ok is True
 
 
