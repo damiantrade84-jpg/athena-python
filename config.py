@@ -74,6 +74,7 @@ CONFIG: dict = {
     "NEWS_SENTIMENT_CACHE_TTL_SEC": 900,
     "NEWS_SENTIMENT_SCORE_IMPACT": 0.06,
     "NEWS_SENTIMENT_ATTACH_SUMMARY": True,
+    "NEWS_PAIR_CAP": 40,  # Max pairs for EODHD per-pair news + word-weights in news cache refresh
     "AI_STRUCTURED_OUTPUTS": True,
     "AI_TEMPERATURE": 0.3,
     "AI_VISION_TEMPERATURE": 0.2,  # /api/chart-analysis factual mode (override in config.yaml if needed)

@@ -3019,8 +3019,9 @@ def _refresh_news_cache(pairs: list | None = None) -> dict:
                     ctx["pairSentiment"] = sentiments
 
             pair_news = {}
+            _NEWS_PAIR_CAP = int(CONFIG.get("NEWS_PAIR_CAP", 40))
 
-            for sticker, display in list(ticker_map.items())[:10]:
+            for sticker, display in list(ticker_map.items())[:_NEWS_PAIR_CAP]:
                 try:
                     ndata = http_requests.get(
                         f"https://eodhd.com/api/news?s={sticker}&limit=3&api_token={_eodhd_key}&fmt=json",
@@ -3050,7 +3051,7 @@ def _refresh_news_cache(pairs: list | None = None) -> dict:
 
             word_weights = {}
 
-            for sticker, display in list(ticker_map.items())[:10]:
+            for sticker, display in list(ticker_map.items())[:_NEWS_PAIR_CAP]:
                 try:
                     wdata = http_requests.get(
                         f"https://eodhd.com/api/news-word-weights?s={sticker}&page[limit]=5&api_token={_eodhd_key}&fmt=json",
