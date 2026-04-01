@@ -4,6 +4,7 @@ Register with: app.register_blueprint(guardian_bp)
 """
 
 import logging
+import os
 
 from flask import Blueprint, jsonify, request
 
@@ -40,7 +41,13 @@ def _leaderboard_from_report(report: dict) -> list:
 @guardian_bp.route("/api/guardian/status")
 def api_guardian_status():
     """Boot check results + shield status + divergence summary."""
-    result = {"guardian": {}, "shield": {}, "divergence": {}, "overall": "unknown"}
+    result = {
+        "guardian": {},
+        "shield": {},
+        "divergence": {},
+        "forensics": {},
+        "overall": "unknown",
+    }
 
     try:
         from guardian import boot_check
@@ -73,16 +80,29 @@ def api_guardian_status():
     except Exception as e:
         result["divergence"] = {"total_checks": 0, "error": str(e)}
 
-    g_ok = result["guardian"].get("passed", True) is not False
-    s_ok = result["shield"].get("circuit_breaker_open") is not True
-    d_ok = result["divergence"].get("critical_count", 0) == 0
+    try:
+        from forensic_observability import build_forensic_summary
 
-    if g_ok and s_ok and d_ok:
-        result["overall"] = "healthy"
-    elif not g_ok or not s_ok:
-        result["overall"] = "critical"
-    else:
-        result["overall"] = "warning"
+        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
+        result["forensics"] = build_forensic_summary(
+            guardian=result["guardian"],
+            shield=result["shield"],
+            divergence=result["divergence"],
+            db_path=db_path,
+            lookback_hours=24,
+        )
+        result["overall"] = result["forensics"].get("overall", "unknown")
+    except Exception as e:
+        result["forensics"] = {"error": str(e)}
+        g_ok = result["guardian"].get("passed", True) is not False
+        s_ok = result["shield"].get("circuit_breaker_open") is not True
+        d_ok = result["divergence"].get("critical_count", 0) == 0
+        if g_ok and s_ok and d_ok:
+            result["overall"] = "healthy"
+        elif not g_ok or not s_ok:
+            result["overall"] = "critical"
+        else:
+            result["overall"] = "warning"
 
     return jsonify(_json_safe(result))
 
@@ -132,6 +152,31 @@ def api_divergence():
         return jsonify(_json_safe(divergence_report(lookback_hours=hours)))
     except ImportError:
         return jsonify({"error": "divergence_monitor.py not installed"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@guardian_bp.route("/api/forensics/summary")
+def api_forensics_summary():
+    """Unified forensic observability summary for UI and Telegram."""
+    try:
+        from divergence_monitor import divergence_report
+        from forensic_observability import build_forensic_summary
+        from guardian import boot_check
+        from risk_shield import shield_status
+
+        hours = int(request.args.get("hours", 24))
+        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
+        payload = build_forensic_summary(
+            guardian=boot_check(),
+            shield=shield_status(),
+            divergence=divergence_report(lookback_hours=hours),
+            db_path=db_path,
+            lookback_hours=hours,
+        )
+        return jsonify(_json_safe(payload))
+    except ImportError as e:
+        return jsonify({"error": f"forensics dependency missing: {e}"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

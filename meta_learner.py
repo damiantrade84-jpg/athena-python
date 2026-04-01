@@ -18,6 +18,23 @@ _ENGINES = ("engine_a", "engine_b", "engine_c", "scalp")
 _MIN_SAMPLES_FOR_ADAPTATION = 8
 _MIN_SAMPLES_FOR_SUSPENSION = 12
 _MAX_WEIGHT_STEP = 0.08
+_MIN_CAL_EXPECTANCY_WEIGHT = 0.20
+_MAX_CAL_EXPECTANCY_WEIGHT = 0.75
+
+# Explicit boundary: these are the only adaptive alpha surfaces this module controls.
+_ADAPTIVE_ALPHA_SURFACES = (
+    "engine_trust",
+    "regime_style_weighting",
+    "calibrated_expectancy_weighting",
+)
+
+# Explicit boundary: these safety surfaces are fixed and must NOT be adapted here.
+FIXED_SAFETY_INVARIANTS = (
+    "risk_caps",
+    "timing_bar_state_invariants",
+    "lookahead_protections",
+    "order_lifecycle_safety",
+)
 
 _BASE_WEIGHTS_BY_STYLE = {
     "auto": {"engine_a": 0.30, "engine_b": 0.25, "engine_c": 0.35, "scalp": 0.10},
@@ -83,6 +100,61 @@ def _signal_regime(signal: dict | None) -> str | None:
 def _signal_asset_class(signal: dict | None) -> str | None:
     sig = signal if isinstance(signal, dict) else {}
     return _norm_text(sig.get("type") or sig.get("asset_class") or sig.get("assetClass"))
+
+
+def _regime_style_weight_multipliers(context: dict, qualities: dict[str, dict]) -> dict[str, Any]:
+    regime = _norm_text((context or {}).get("regime"))
+    style = _norm_text((context or {}).get("style")) or "auto"
+    base = {engine: 1.0 for engine in _ENGINES}
+
+    regime_map = {
+        "trending": {"engine_a": 1.05, "engine_b": 0.95, "engine_c": 1.04, "scalp": 0.96},
+        "ranging": {"engine_a": 0.95, "engine_b": 1.05, "engine_c": 1.03, "scalp": 0.97},
+        "high_volatility": {"engine_a": 0.95, "engine_b": 0.96, "engine_c": 1.07, "scalp": 1.04},
+        "low_volatility": {"engine_a": 1.02, "engine_b": 1.03, "engine_c": 0.98, "scalp": 0.90},
+    }
+    if regime in regime_map:
+        base.update(regime_map[regime])
+
+    if style == "scalp":
+        base["scalp"] = min(1.12, base["scalp"] * 1.06)
+        base["engine_c"] = max(0.92, base["engine_c"] * 0.97)
+    elif style == "swing":
+        base["engine_c"] = min(1.10, base["engine_c"] * 1.03)
+        base["scalp"] = max(0.86, base["scalp"] * 0.92)
+
+    adaptive_count = sum(1 for e in _ENGINES if (qualities.get(e) or {}).get("adaptive"))
+    strength = 0.0 if adaptive_count == 0 else (0.40 + 0.15 * adaptive_count)
+    strength = _clamp(strength, 0.0, 1.0)
+    multipliers = {}
+    for engine in _ENGINES:
+        raw = float(base.get(engine, 1.0))
+        centered = 1.0 + ((raw - 1.0) * strength)
+        multipliers[engine] = round(_clamp(centered, 0.90, 1.10), 6)
+
+    return {
+        "regime": regime,
+        "style": style,
+        "strength": round(strength, 6),
+        "multipliers": multipliers,
+        "adaptive": adaptive_count > 0,
+    }
+
+
+def _engine_calibrated_expectancy_weight(engine: str, context: dict, adaptive: bool) -> float:
+    if not adaptive or engine != (context or {}).get("signal_engine"):
+        return 0.0
+    cal_q = _safe_float(((context or {}).get("calibration_quality") or {}).get("quality_score"))
+    cal = (context or {}).get("calibration") or {}
+    bucket_samples = _safe_float(cal.get("bucket_samples")) or 0.0
+    sample_count = _safe_float(cal.get("sample_count")) or 0.0
+    quality = _clamp(cal_q if cal_q is not None else 0.5, 0.0, 1.0)
+
+    # More calibration trust only when scope is empirically supported.
+    sample_boost = min(0.12, (sample_count / 100.0) * 0.12)
+    bucket_boost = min(0.08, (bucket_samples / 25.0) * 0.08)
+    weight = 0.30 + (quality * 0.25) + sample_boost + bucket_boost
+    return round(_clamp(weight, _MIN_CAL_EXPECTANCY_WEIGHT, _MAX_CAL_EXPECTANCY_WEIGHT), 6)
 
 
 def _signal_raw_score(signal: dict | None, engine: str) -> tuple[float | None, float | None]:
@@ -352,8 +424,13 @@ def compute_engine_quality(engine: str, context: dict, records: list[dict[str, A
         adjustments["win_rate"] = round(_clamp((win_rate - 0.5) / 0.20, -1.0, 1.0) * 0.12, 6)
     else:
         adjustments["win_rate"] = 0.0
-    if adaptive and expectancy is not None:
-        adjustments["expectancy"] = round(_clamp(expectancy / 0.50, -1.0, 1.0) * 0.10, 6)
+    cal_prob = _safe_float(((context or {}).get("calibration") or {}).get("calibrated_prob"))
+    cal_weight = _engine_calibrated_expectancy_weight(engine, context, adaptive)
+    if adaptive and (expectancy is not None or cal_prob is not None):
+        exp_component = _clamp((expectancy or 0.0) / 0.50, -1.0, 1.0)
+        cal_component = _clamp(((cal_prob - 0.5) / 0.35), -1.0, 1.0) if cal_prob is not None else exp_component
+        blended_component = ((1.0 - cal_weight) * exp_component) + (cal_weight * cal_component)
+        adjustments["expectancy"] = round(blended_component * 0.10, 6)
     else:
         adjustments["expectancy"] = 0.0
     adjustments["friction"] = round((-friction_score * 0.10) if adaptive else 0.0, 6)
@@ -410,6 +487,7 @@ def compute_engine_quality(engine: str, context: dict, records: list[dict[str, A
         "quality_score": quality_score,
         "adjustments": adjustments,
         "threshold_delta": round(_clamp(threshold_delta, -0.03, 0.05), 6),
+        "calibrated_expectancy_weight": cal_weight,
         "suspended": suspended,
         "win_rate": win_rate,
         "expectancy": expectancy,
@@ -456,6 +534,7 @@ def get_dynamic_engine_weights(context: dict, records: list[dict[str, Any]] | No
     style = (context or {}).get("style") or "auto"
     base_weights = dict(_BASE_WEIGHTS_BY_STYLE.get(style, _BASE_WEIGHTS_BY_STYLE["auto"]))
     qualities = {engine: compute_engine_quality(engine, context, records) for engine in _ENGINES}
+    regime_style_weighting = _regime_style_weight_multipliers(context, qualities)
 
     raw_weights = {}
     for engine in _ENGINES:
@@ -464,25 +543,48 @@ def get_dynamic_engine_weights(context: dict, records: list[dict[str, Any]] | No
         multiplier = 1.0 + ((quality - 0.5) * 0.5) if adaptive else 1.0
         if qualities[engine]["suspended"]:
             multiplier *= 0.50
+        multiplier *= float((regime_style_weighting.get("multipliers") or {}).get(engine, 1.0))
         raw_weights[engine] = base_weights[engine] * multiplier
 
     weights = _allocate_bounded_weights(raw_weights, base_weights)
+    cal_expectancy_weighting = {
+        engine: qualities[engine].get("calibrated_expectancy_weight", 0.0) for engine in _ENGINES
+    }
     return {
         "weights": weights,
         "baseWeights": base_weights,
         "engineQualities": qualities,
+        "regimeStyleWeighting": regime_style_weighting,
+        "calibratedExpectancyWeighting": cal_expectancy_weighting,
         "thresholdAdjustments": {engine: qualities[engine]["threshold_delta"] for engine in _ENGINES},
         "suspensionFlags": {engine: qualities[engine]["suspended"] for engine in _ENGINES},
+        "adaptiveAlpha": {
+            "surfaces": list(_ADAPTIVE_ALPHA_SURFACES),
+            "enabled": True,
+        },
+        "fixedSafetyBoundary": {
+            "nonAdaptiveInvariants": list(FIXED_SAFETY_INVARIANTS),
+            "guardian_enforced": True,
+            "notes": [
+                "risk controls and execution safety are fixed outside meta policy",
+                "adaptive policy can tune trust/weighting but not safety caps",
+            ],
+        },
         "constraints": {
             "minWeightCaps": dict(_MIN_WEIGHT_CAPS),
             "maxWeightCaps": dict(_MAX_WEIGHT_CAPS),
             "minSamplesForAdaptation": _MIN_SAMPLES_FOR_ADAPTATION,
             "maxWeightStep": _MAX_WEIGHT_STEP,
+            "calibratedExpectancyWeightRange": [
+                _MIN_CAL_EXPECTANCY_WEIGHT,
+                _MAX_CAL_EXPECTANCY_WEIGHT,
+            ],
         },
         "notes": [
             "bounded_explainable_policy",
             "no_black_box_model",
             "engine_c_remains_consensus_engine",
+            "adaptive_alpha_and_fixed_safety_explicitly_separated",
         ],
     }
 

@@ -88,3 +88,55 @@ def test_apply_meta_policy_adds_controller_fields():
     assert "metaDynamicWeights" in updated
     assert "metaThresholdDelta" in updated
     assert "metaSuspended" in updated
+
+
+def test_meta_policy_explicitly_separates_adaptive_alpha_from_fixed_safety():
+    signal = {
+        "engine": "engine_a",
+        "type": "forex",
+        "style": "intraday",
+        "direction": "LONG",
+        "combinedConviction": 0.63,
+    }
+    records = [{"engine": "engine_a", "won": True, "expectancy_r": 0.3, "slippage_bps": 2.0} for _ in range(12)]
+    context = get_engine_context(signal, records=records)
+    policy = get_dynamic_engine_weights(context, records=records)
+
+    assert policy["adaptiveAlpha"]["enabled"] is True
+    assert set(policy["adaptiveAlpha"]["surfaces"]) == {
+        "engine_trust",
+        "regime_style_weighting",
+        "calibrated_expectancy_weighting",
+    }
+    assert "fixedSafetyBoundary" in policy
+    assert set(policy["fixedSafetyBoundary"]["nonAdaptiveInvariants"]) == {
+        "risk_caps",
+        "timing_bar_state_invariants",
+        "lookahead_protections",
+        "order_lifecycle_safety",
+    }
+
+
+def test_meta_policy_exposes_regime_style_and_calibrated_expectancy_weights():
+    signal = {
+        "engine": "engine_a",
+        "type": "crypto",
+        "style": "intraday",
+        "direction": "LONG",
+        "regime": {"label": "TRENDING"},
+        "combinedConviction": 0.66,
+        "calibration": {"available": True, "calibrated_prob": 0.64, "sample_count": 40, "bucket_samples": 12},
+    }
+    records = [{"engine": "engine_a", "won": True, "expectancy_r": 0.35, "slippage_bps": 1.5} for _ in range(12)]
+    context = get_engine_context(signal, records=records)
+    policy = get_dynamic_engine_weights(context, records=records)
+
+    r = policy["regimeStyleWeighting"]
+    assert r["style"] == "intraday"
+    assert 0.0 <= r["strength"] <= 1.0
+    assert set(r["multipliers"].keys()) == {"engine_a", "engine_b", "engine_c", "scalp"}
+
+    cew = policy["calibratedExpectancyWeighting"]
+    assert set(cew.keys()) == {"engine_a", "engine_b", "engine_c", "scalp"}
+    assert 0.20 <= cew["engine_a"] <= 0.75
+    assert cew["engine_b"] == 0.0

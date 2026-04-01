@@ -1850,6 +1850,13 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
     </div>
 
     <div style="margin-bottom:24px;">
+      <div class="panel-row-title" style="margin-bottom:10px;">FORENSIC OBSERVABILITY</div>
+      <div id="g-forensic-views" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;font-family:var(--mono);font-size:11px;">
+        <div style="color:var(--muted);">Loading forensic views...</div>
+      </div>
+    </div>
+
+    <div style="margin-bottom:24px;">
       <div class="panel-row-title" style="margin-bottom:10px;">INVARIANT CHECKS</div>
       <div id="g-checks-list" style="display:flex;flex-direction:column;gap:4px;font-family:var(--mono);font-size:11px;">
         <div style="color:var(--muted);">Loading boot checks...</div>
@@ -5378,7 +5385,11 @@ async function checkScoreDecay() {
         }
         var flipPart = d.directionFlip ? ' ⚠ DIRECTION FLIP' : '';
         var prefix = d.aiVerdict === 'EXIT' ? '🚨 DECAY EXIT — ' : '⚠ DECAY — ';
-        showToast(prefix + pair + ': score ' + d.entryScore + ' → ' + d.currentScore + ' (' + pct + '% drop)' + flipPart + aiPart, true);
+        
+        var scorePart = d.scoreNote || (d.entryScore + ' → ' + d.currentScore);
+        var enginePart = d.engine ? '[' + (d.engine === 'engine_b' ? 'Engine B' : 'Engine A') + '] ' : '';
+        
+        showToast(prefix + enginePart + pair + ': ' + scorePart + ' (' + pct + '% drop)' + flipPart + aiPart, true);
       }
     }
   } catch(e) {}
@@ -9823,7 +9834,7 @@ async function runScalpVisionConfirm(btn, symbol) {
 // ═══════════════════════════════════════════════════════════════════════
 
 function guardianSyncHealthDots(overall) {
-  var cls = overall === 'healthy' ? 'on' : (overall === 'warning' ? 'bz-on' : 'off');
+  var cls = overall === 'healthy' ? 'on' : ((overall === 'warning' || overall === 'watch') ? 'bz-on' : 'off');
   var dot = document.getElementById('guardian-dot');
   if (dot) dot.className = 'conn-dot ' + cls;
   var hd = document.getElementById('guardian-header-dot');
@@ -9916,6 +9927,11 @@ function guardianRefresh() {
         overallEl.style.color = 'var(--warn)';
         if (overallCard) overallCard.style.borderColor = 'var(--warn)';
         overallDetail.textContent = 'Non-critical issues detected';
+      } else if (overall === 'watch') {
+        overallEl.textContent = 'WATCH';
+        overallEl.style.color = 'var(--warn)';
+        if (overallCard) overallCard.style.borderColor = 'var(--warn)';
+        overallDetail.textContent = 'Early drift detected';
       } else if (overall === 'critical') {
         overallEl.textContent = 'CRITICAL';
         overallEl.style.color = 'var(--bear)';
@@ -9928,6 +9944,42 @@ function guardianRefresh() {
       }
 
       guardianSyncHealthDots(overall);
+
+      var forensicWrap = document.getElementById('g-forensic-views');
+      if (forensicWrap) {
+        var f = d.forensics || {};
+        var fv = f.views || {};
+        var order = [
+          ['signal_truth', 'Signal Truth'],
+          ['drift_degradation', 'Drift / Degradation'],
+          ['execution_hygiene', 'Execution Hygiene']
+        ];
+        var cards = [];
+        order.forEach(function(it) {
+          var key = it[0], label = it[1];
+          var view = fv[key] || {};
+          var status = String(view.status || 'unknown').toUpperCase();
+          var score = Number(view.score || 0);
+          var color = status === 'HEALTHY' ? 'var(--bull)' : (status === 'CRITICAL' ? 'var(--bear)' : 'var(--warn)');
+          var issues = Array.isArray(view.issues) ? view.issues.slice(0, 2) : [];
+          var issueHtml = issues.length
+            ? issues.map(function(s) {
+                return '<div style="color:var(--muted);line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">• ' + String(s).replace(/</g, '&lt;') + '</div>';
+              }).join('')
+            : '<div style="color:var(--muted);">• no active issues</div>';
+          cards.push(
+            '<div class="stat-chip" style="padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);">' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
+                '<span style="font-size:10px;color:var(--muted);">' + label + '</span>' +
+                '<span style="font-size:10px;color:' + color + ';font-weight:700;">' + status + '</span>' +
+              '</div>' +
+              '<div style="font-size:22px;color:' + color + ';font-weight:800;">' + (isNaN(score) ? '—' : score.toFixed(1)) + '</div>' +
+              '<div style="margin-top:6px;display:flex;flex-direction:column;gap:3px;">' + issueHtml + '</div>' +
+            '</div>'
+          );
+        });
+        forensicWrap.innerHTML = cards.join('') || '<div style="color:var(--muted);">Forensic summary unavailable</div>';
+      }
 
       var checksList = document.getElementById('g-checks-list');
       if (checksList) {

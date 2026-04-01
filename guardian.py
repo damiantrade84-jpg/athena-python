@@ -192,24 +192,30 @@ def _check_risk_check_before_executors() -> tuple[bool, str]:
         src = _read_file(filename)
         if "__READ_ERROR__" in src:
             continue
-        # Check that bybit_execute / mt5_execute calls are preceded by risk_check
+        # Check that live execution paths are preceded by risk_check
         lines = src.split("\n")
         for i, line in enumerate(lines):
             stripped = line.strip()
-            if any(ex in stripped for ex in ["bybit_execute(", "mt5_execute("]) and \
-               "def " not in stripped and "import" not in stripped and "#" not in stripped:
-                # Look backwards for risk_check in the last 30 lines
+            if any(
+                ex in stripped
+                for ex in [
+                    "bybit_execute(",
+                    "mt5_execute(",
+                    "run_managed_execution(",
+                ]
+            ) and "def " not in stripped and "import" not in stripped and "#" not in stripped:
                 found_risk = False
-                # Rejection/logging between risk_check and execute can exceed 30 lines.
                 for j in range(max(0, i - 55), i):
                     if "risk_check(" in lines[j]:
                         found_risk = True
                         break
                 if not found_risk:
-                    failures.append(f"{filename} line {i + 1}: executor call without preceding risk_check")
+                    failures.append(
+                        f"{filename} line {i + 1}: execution call without preceding risk_check"
+                    )
     if failures:
         return False, "; ".join(failures)
-    return True, "All executor calls preceded by risk_check"
+    return True, "All execution calls preceded by risk_check"
 
 
 def _check_executors_use_approval_volume() -> tuple[bool, str]:
@@ -221,6 +227,63 @@ def _check_executors_use_approval_volume() -> tuple[bool, str]:
         if "approval.volume" not in src:
             return False, f"{filename}: does not reference approval.volume — may be self-sizing"
     return True, "Both executors use approval.volume"
+
+
+def _check_audit_log_schema_decay_aware() -> tuple[bool, str]:
+    """Guard: audit_log table must have max_score and score_pct for Engine B decay monitoring."""
+    import sqlite3
+    db_path = os.path.join(_PROJECT_ROOT, "audit.db")
+    if not os.path.exists(db_path):
+        return True, "audit.db not found yet (first run?)"
+    try:
+        with sqlite3.connect(db_path, timeout=1.0) as con:
+            cur = con.cursor()
+            cur.execute("PRAGMA table_info(audit_log)")
+            cols = [row[1] for row in cur.fetchall()]
+            missing = [c for c in ["max_score", "score_pct"] if c not in cols]
+            if missing:
+                return False, f"audit_log table missing columns: {', '.join(missing)}"
+            return True, "audit_log schema is decay-aware"
+    except Exception as e:
+        return False, f"Failed to check audit_log schema: {e}"
+
+
+def _check_meta_adaptation_safety_boundary() -> tuple[bool, str]:
+    """Guard: adaptive alpha surfaces must stay separated from fixed safety invariants."""
+    src = _read_file("meta_learner.py")
+    if "__READ_ERROR__" in src:
+        return False, f"Cannot read meta_learner.py: {src}"
+
+    required_tokens = [
+        "_ADAPTIVE_ALPHA_SURFACES",
+        "FIXED_SAFETY_INVARIANTS",
+        "fixedSafetyBoundary",
+        "calibratedExpectancyWeighting",
+        "regimeStyleWeighting",
+    ]
+    missing = [tok for tok in required_tokens if tok not in src]
+    if missing:
+        return False, (
+            "meta_learner.py missing explicit adaptive/safety boundary markers: "
+            + ", ".join(missing)
+        )
+
+    # Adaptive policy is not allowed to directly mutate hard safety controls.
+    forbidden_safety_knobs = [
+        "MAX_SL_PCT",
+        "DRAWDOWN_STOP_THRESHOLD",
+        "SIGNAL_MAX_AGE_SEC",
+        "risk_check(",
+        "run_managed_execution(",
+    ]
+    touched = [k for k in forbidden_safety_knobs if k in src]
+    if touched:
+        return False, (
+            "meta_learner.py references safety-critical controls that must remain non-adaptive: "
+            + ", ".join(touched)
+        )
+
+    return True, "Adaptive alpha and fixed safety boundary is explicit and locked"
 
 
 # ── Master boot check ───────────────────────────────────────────────────
@@ -235,6 +298,8 @@ _BOOT_CHECKS = [
     ("regime_not_hardcoded", _check_regime_state_not_hardcoded),
     ("risk_check_before_exec", _check_risk_check_before_executors),
     ("executors_approval_vol", _check_executors_use_approval_volume),
+    ("audit_log_decay_schema", _check_audit_log_schema_decay_aware),
+    ("meta_adaptation_safety_boundary", _check_meta_adaptation_safety_boundary),
 ]
 
 

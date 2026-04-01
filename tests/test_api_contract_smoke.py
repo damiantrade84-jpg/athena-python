@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ATHENA_PATH = ROOT / "athena.py"
 EXECUTION_PATH = ROOT / "execution.py"
+GUARDIAN_ROUTES_PATH = ROOT / "guardian_routes.py"
 
 
 def _endpoint_map_from_add_url_rule(src: str) -> dict[str, set[str]]:
@@ -74,7 +75,7 @@ def _endpoint_map_from_source(src: str) -> dict[str, set[str]]:
 def _endpoint_map() -> dict[str, set[str]]:
     """Merge @app.route decorators from monolith and split route modules."""
     merged: dict[str, set[str]] = {}
-    for path in (ATHENA_PATH, EXECUTION_PATH):
+    for path in (ATHENA_PATH, EXECUTION_PATH, GUARDIAN_ROUTES_PATH):
         if not path.exists():
             continue
         text = path.read_text(encoding="utf-8")
@@ -98,6 +99,8 @@ def test_key_endpoints_exist_with_methods():
     assert "/api/bt-min" in ep and "GET" in ep["/api/bt-min"] and "POST" in ep["/api/bt-min"]
     assert "/api/naked-style-thresholds" in ep and "GET" in ep["/api/naked-style-thresholds"]
     assert "POST" in ep["/api/naked-style-thresholds"]
+    assert "/api/guardian/status" in ep and "GET" in ep["/api/guardian/status"]
+    assert "/api/forensics/summary" in ep and "GET" in ep["/api/forensics/summary"]
 
 
 def test_execute_payload_contract_strings_present():

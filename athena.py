@@ -2323,6 +2323,12 @@ def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
     )
 
 
+def fetch_market_state(pair: dict, tf: str, limit: int) -> dict:
+    """Detailed market state for a pair/tf, identifying if the last bar is forming."""
+    from candle_manager import fetch_market_state as _fms
+    return _fms(pair, tf, limit)
+
+
 from indicators import (  # noqa: E402
     calc_ema,
     calc_sma,
@@ -4504,17 +4510,22 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
         return enriched
 
     try:
+        from candle_manager import fetch_market_state as _fms
         _clim = scan_candle_limits()
+        
+        # Determine for H4 (naked engine primary TF)
+        h4_state = _fms(pair_obj, "H4", _clim["H4"])
+        h4 = h4_state["confirmed"] + ([h4_state["forming"]] if h4_state["forming"] else [])
+        is_forming_b = h1_state["is_live"] if "h1_state" in locals() else h4_state["is_live"]
+
         d1 = fetch_candles(pair_obj, "D1", _clim["D1"])
-        h4 = fetch_candles(pair_obj, "H4", _clim["H4"])
         h1 = fetch_candles(pair_obj, "H1", _clim["H1"])
 
         if not d1 or not h4 or not h1:
             return None, pair_obj, "Failed to fetch D1/H4/H1 candles"
 
-        d1 = d1[:-1] if len(d1) > 1 else d1
-        h4 = h4[:-1] if len(h4) > 1 else h4
-        h1 = h1[:-1] if len(h1) > 1 else h1
+        # F8: As requested, we no longer drop the last (forming) bar automatically.
+        # This provides live-bar scoring for maximum accuracy.
 
         h4_highs = [float(c["high"]) for c in h4]
         h4_lows = [float(c["low"]) for c in h4]
@@ -4614,6 +4625,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
         res["direction"] = direction
         res["style"] = resolved_style
         res["regime"] = regime_label
+        res["is_forming"] = is_forming_b
 
         try:
             record_signal_event(
@@ -4639,6 +4651,8 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                     "style": resolved_style,
                     "regime": regime_label,
                     "min_score_used": int(_min_score_scaled),
+                    "lifecycle_state": conf.get("lifecycle_state", "unknown"),
+                    "lifecycle_reason": conf.get("lifecycle_reason", ""),
                 },
             )
         except Exception as _ssi_err:
@@ -5208,7 +5222,6 @@ def api_webhook():
                 bybit_get_account,
                 bybit_get_positions,
                 bybit_get_symbol_info,
-                bybit_execute,
             )
 
             account = bybit_get_account()
@@ -5232,12 +5245,13 @@ def api_webhook():
             if symbol_info and symbol_info.get("error"):
                 symbol_info = None
 
+            _exec_venue = "bybit"
+
         else:
             from mt5_executor import (
                 mt5_get_account,
                 mt5_get_positions,
                 mt5_get_symbol_info,
-                mt5_execute,
             )
 
             account = mt5_get_account()
@@ -5266,6 +5280,10 @@ def api_webhook():
                     }
                 ), 200
 
+            _exec_venue = "mt5"
+
+        from execution_lifecycle import run_managed_execution
+
         approval = risk_check(
             signal=sig,
             account_balance=account["balance"],
@@ -5286,11 +5304,7 @@ def api_webhook():
                 }
             ), 200
 
-        if is_crypto:
-            result = bybit_execute(sig, approval)
-
-        else:
-            result = mt5_execute(sig, approval)
+        result = run_managed_execution(_exec_venue, sig, approval)
 
         if result.get("success"):
             executed_signals.add(sig_id)
@@ -5930,7 +5944,22 @@ def api_backtest_naked():
                 }
             ), 404
 
-        result = backtest_pair_naked(pair, style=requested_style)
+        _vm = str(data.get("validation_mode") or "standard").strip().lower()
+        try:
+            _pg = int(data.get("purge_gap", 200))
+        except (TypeError, ValueError):
+            _pg = 200
+        try:
+            _fd = int(data.get("folds", 3))
+        except (TypeError, ValueError):
+            _fd = 3
+        result = backtest_pair_naked(
+            pair,
+            style=requested_style,
+            validation_mode=_vm,
+            purge_gap=_pg,
+            folds=max(1, _fd),
+        )
 
         if result is None:
             return jsonify(
@@ -6672,7 +6701,6 @@ def api_scalp_execute():
 
         if is_crypto:
             from bybit_executor import (
-                bybit_execute,
                 bybit_get_account,
                 bybit_get_positions,
                 bybit_get_symbol_info,
@@ -6696,9 +6724,9 @@ def api_scalp_execute():
                 return jsonify(
                     {"success": False, "error": f"Symbol '{symbol}' not available on Bybit"}
                 ), 200
+            _exec_venue = "bybit"
         else:
             from mt5_executor import (
-                mt5_execute,
                 mt5_get_account,
                 mt5_get_positions,
                 mt5_get_symbol_info,
@@ -6720,6 +6748,9 @@ def api_scalp_execute():
             symbol_info = mt5_get_symbol_info(symbol)
             if not symbol_info or symbol_info.get("error"):
                 return jsonify({"error": f"Symbol '{symbol}' not available on MT5"}), 200
+            _exec_venue = "mt5"
+
+        from execution_lifecycle import run_managed_execution
 
         approval = risk_check(
             signal=signal,
@@ -6738,10 +6769,7 @@ def api_scalp_execute():
                 }
             ), 200
 
-        if is_crypto:
-            result = bybit_execute(signal, approval)
-        else:
-            result = mt5_execute(signal, approval)
+        result = run_managed_execution(_exec_venue, signal, approval)
         if not result.get("success"):
             return jsonify(
                 {"success": False, "error": result.get("error", "Execution failed")}
@@ -8570,6 +8598,16 @@ def analyze_pair(
     preloaded_candles = preloaded_candles or {}
     preloaded_fetch_meta = preloaded_fetch_meta or {}
 
+    # Determine if the primary timeframe (H1) is currently forming.
+    try:
+        from candle_manager import fetch_market_state as _fms
+        h1_state = _fms(pair, "H1", _lim["H1"])
+        h1 = h1_state["confirmed"] + ([h1_state["forming"]] if h1_state["forming"] else [])
+        is_forming = h1_state["is_live"]
+    except Exception:
+        h1 = fetch_candles(pair, "H1", _lim["H1"])
+        is_forming = False
+
     d1 = preloaded_candles.get("D1")
     if d1 is None:
         d1 = fetch_candles(pair, "D1", _lim["D1"])
@@ -8578,24 +8616,12 @@ def analyze_pair(
     if h4 is None:
         h4 = fetch_candles(pair, "H4", _lim["H4"])
 
-    h1 = preloaded_candles.get("H1")
-    if h1 is None:
-        h1 = fetch_candles(pair, "H1", _lim["H1"])
-
     if not d1 or not h4 or not h1:
         return None
 
-    # F8: Drop the last (potentially still-forming) bar from each timeframe.
-
-    # EODHD REST returns the current open bar — using it inflates indicators with
-
-    # partial candle data. Matches freqtrade's process_only_new_candles=True.
-
-    d1 = d1[:-1] if len(d1) > 1 else d1
-
-    h4 = h4[:-1] if len(h4) > 1 else h4
-
-    h1 = h1[:-1] if len(h1) > 1 else h1
+    # F8: As requested, we no longer drop the last (forming) bar automatically.
+    # This provides live-bar scoring for maximum accuracy.
+    # Indicators are now calculated on the full live series.
 
     if len(d1) < 220 or len(h4) < 50 or len(h1) < 50:
         return None
@@ -9118,6 +9144,7 @@ def analyze_pair(
         "newsSentimentSummary": res.get("newsSentimentSummary"),
         "pairProfile": pair_profile,
         "style": _style,
+        "isForming": is_forming,
         "h1Candles": [
             {
                 "t": c.get("time", ""),
@@ -9882,14 +9909,65 @@ def _get_decay_ai_verdict(
         return {}
 
 
+def _refresh_trade_score(pair_obj, engine, style, direction):
+    """
+    Refresh score context for an open trade based on its originating engine.
+    Returns (score, max_possible, pct, result_dict)
+    """
+    _engine = str(engine or "engine_a").lower()
+    _style = str(style or "swing").lower()
+    _direction = str(direction or "LONG").upper()
+    
+    # Engine B (Naked Market Structure) re-evaluation path
+    if _engine == "engine_b":
+        try:
+            # Construct minimal signal context for Engine B
+            sig = {
+                "symbol": pair_obj.get("symbol"),
+                "display": pair_obj.get("display"),
+                "direction": _direction,
+                "style": _style,
+                "price": None # Let engine fetch latest
+            }
+            # force_ai=False to avoid expensive LLM calls during monitor loop
+            res, _, err = _compute_naked_analysis(sig, force_ai=False)
+            if res and not err:
+                return (
+                    res.get("score", 0),
+                    res.get("max_possible", 1.0),
+                    res.get("pct", 0.0),
+                    res
+                )
+        except Exception as e:
+            log.debug(f"[DECAY-REFRESH] {pair_obj.get('display')} engine_b refresh failed: {e}")
+
+    # Default/Engine A (Confluence) re-evaluation path
+    try:
+        btc_bias = "neutral"
+        if pair_obj.get("type") == "crypto":
+            btc_bias = _current_btc_bias()
+            
+        res = analyze_pair(pair_obj, btc_bias, style=_style)
+        if res:
+            cur_score = res.get("confluenceScore", 0)
+            max_score = res.get("maxScore", 3.0)
+            pct = (cur_score / max_score * 100) if max_score > 0 else 0
+            return (cur_score, max_score, pct, res)
+    except Exception as e:
+        log.debug(f"[DECAY-REFRESH] {pair_obj.get('display')} engine_a refresh failed: {e}")
+
+    return 0, 1.0, 0, None
+
+
 def _check_score_decay() -> None:
     """Re-evaluate confluence for open positions; log warnings if score has decayed."""
 
     try:
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
+            # engine_b trades context: engine, max_score, score_pct
             open_trades = con.execute(
-                "SELECT pair, score, direction, ticket FROM audit_log "
+                "SELECT pair, score, direction, ticket, engine, max_score, score_pct, style FROM audit_log "
                 "WHERE exit_price IS NULL AND ticket IS NOT NULL AND ticket != '' "
                 "AND (error_tag IS NULL OR error_tag = '')"
             ).fetchall()
@@ -9908,25 +9986,34 @@ def _check_score_decay() -> None:
         for row in open_trades:
             pair_name = row["pair"]
             entry_score = row["score"] or 0
+            entry_max = row["max_score"]
+            entry_pct = row["score_pct"]
+            engine = row["engine"] or "engine_a"
+            style = row["style"] or "swing"
 
             pair = all_pairs.get(pair_name)
-
             if not pair:
                 continue
 
             try:
-                result = analyze_pair(pair, "neutral", style="swing")
+                cur_score, cur_max, cur_pct, result = _refresh_trade_score(
+                    pair, engine, style, row["direction"]
+                )
 
                 if not result:
                     continue
 
-                cur_score = result.get("confluenceScore", 0)
-
-                decay = entry_score - cur_score
-
-                # Normalise decay as % of entry score so forex (0–1) and
-                # factor engine (0–3) pairs use the same relative threshold.
-                decay_pct = (decay / entry_score * 100) if entry_score > 0 else 0
+                # Decay calculation is engine-specific
+                if engine == "engine_b" and entry_pct is not None:
+                    # Engine B uses percentage-of-max (e.g. 85% -> 40%)
+                    decay = entry_pct - cur_pct
+                    decay_pct = (decay / entry_pct * 100) if entry_pct > 0 else 0
+                    score_note = f"pct {entry_pct:.0f}% → {cur_pct:.0f}%"
+                else:
+                    # Engine A / Legacy uses raw score scale (e.g. 2.15 -> 0.80)
+                    decay = entry_score - cur_score
+                    decay_pct = (decay / entry_score * 100) if entry_score > 0 else 0
+                    score_note = f"score {entry_score:.2f} → {cur_score:.2f}"
 
                 direction_flip = bool(
                     row["direction"] and result.get("direction")
@@ -9934,20 +10021,24 @@ def _check_score_decay() -> None:
                 )
 
                 _score_decay_results[pair_name] = {
+                    "engine": engine,
                     "currentScore": cur_score,
                     "entryScore": entry_score,
+                    "currentPct": cur_pct,
+                    "entryPct": entry_pct,
                     "decay": round(decay, 4),
                     "decayPct": round(decay_pct, 1),
                     "direction": row["direction"],
                     "currentDirection": result.get("direction"),
                     "directionFlip": direction_flip,
+                    "scoreNote": score_note,
                     "ts": datetime.now(timezone.utc).isoformat(),
                 }
 
                 # Warn at 40%+ drop from entry score (works for both forex 0-1 and factor 0-3 scales)
                 if decay_pct >= 40 or direction_flip:
                     log.warning(
-                        f"[DECAY] {pair_name}: score dropped {entry_score:.3f} → {cur_score:.3f} ({decay_pct:.0f}% drop) — consider exit"
+                        f"[DECAY] {pair_name} ({engine}): {score_note} ({decay_pct:.0f}% drop) — consider exit"
                     )
                     try:
                         from telegram_notify import notify_score_decay
@@ -9958,19 +10049,23 @@ def _check_score_decay() -> None:
                             cur_score=cur_score,
                             decay=decay,
                             direction_flip=direction_flip,
+                            engine=engine,
+                            entry_pct=entry_pct,
+                            cur_pct=cur_pct
                         )
                     except Exception:
                         pass
                 elif decay_pct >= 25:
                     log.info(
-                        f"[DECAY] {pair_name}: score softened {entry_score:.3f} → {cur_score:.3f} ({decay_pct:.0f}% drop)"
+                        f"[DECAY] {pair_name} ({engine}): {score_note} ({decay_pct:.0f}% drop)"
                     )
 
                 # AI assessment — only for meaningful decay, runs in background to avoid blocking
                 if decay_pct >= 25:
                     def _run_ai_verdict(_pn=pair_name, _dir=row["direction"] or "",
                                         _es=entry_score, _cs=cur_score, _d=decay,
-                                        _dpct=decay_pct, _flip=direction_flip, _ctx=result):
+                                        _dpct=decay_pct, _flip=direction_flip, 
+                                        _engine=engine, _epct=entry_pct, _cpct=cur_pct, _ctx=result):
                         ai_v = _get_decay_ai_verdict(_pn, _dir, _es, _cs, _d, _flip, _ctx)
                         if ai_v:
                             _score_decay_results.get(_pn, {}).update({
@@ -9989,6 +10084,9 @@ def _check_score_decay() -> None:
                                         cur_score=_cs,
                                         decay=_d,
                                         direction_flip=_flip,
+                                        engine=_engine,
+                                        entry_pct=_epct,
+                                        cur_pct=_cpct,
                                         ai_verdict=ai_v.get("verdict"),
                                         ai_urgency=ai_v.get("urgency"),
                                     )

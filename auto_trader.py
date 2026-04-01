@@ -679,7 +679,6 @@ class AutoTrader:
                     bybit_get_account,
                     bybit_get_positions,
                     bybit_get_symbol_info,
-                    bybit_execute,
                 )
 
                 account = bybit_get_account()
@@ -701,14 +700,18 @@ class AutoTrader:
 
                 symbol_info = bybit_get_symbol_info(pair)
 
-                executor = bybit_execute
+                if not symbol_info or symbol_info.get("error"):
+                    self._write_error(signal, "BYBIT_SYMBOL_UNAVAILABLE")
+
+                    return False
+
+                _exec_venue = "bybit"
 
             else:
                 from mt5_executor import (
                     mt5_get_account,
                     mt5_get_positions,
                     mt5_get_symbol_info,
-                    mt5_execute,
                 )
 
                 account = mt5_get_account()
@@ -735,7 +738,9 @@ class AutoTrader:
 
                     return False
 
-                executor = mt5_execute
+                _exec_venue = "mt5"
+
+            from execution_lifecycle import run_managed_execution
 
             sizing_override = cfg.get("AUTO_TRADE_SIZING_OVERRIDE", 1.0)
 
@@ -754,7 +759,7 @@ class AutoTrader:
 
                 return False
 
-            result = executor(signal, approval)
+            result = run_managed_execution(_exec_venue, signal, approval)
 
             if result.get("success"):
                 self._trades_today += 1

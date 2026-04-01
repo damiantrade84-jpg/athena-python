@@ -17,6 +17,7 @@ from athena_app.services.candle_service import recompute_levels_for_style
 from athena_runtime import executed_signals, rt
 from config import _json_safe, scan_candle_limits
 from engine_c import compute_consensus
+from execution_lifecycle import run_managed_execution
 from market_structure import NakedEngine
 from scoring import CORR_CLUSTERS, get_pair_score_group
 
@@ -214,7 +215,6 @@ def api_quick_execute():
 
         if is_crypto:
             from bybit_executor import (
-                bybit_execute,
                 bybit_get_account,
                 bybit_get_positions,
                 bybit_get_symbol_info,
@@ -232,10 +232,9 @@ def api_quick_execute():
                 else (pos_result or [])
             )
             symbol_info = bybit_get_symbol_info(sig.get("pair") or sig.get("symbol"))
-            executor = bybit_execute
+            _exec_venue = "bybit"
         else:
             from mt5_executor import (
-                mt5_execute,
                 mt5_get_account,
                 mt5_get_positions,
                 mt5_get_symbol_info,
@@ -255,7 +254,7 @@ def api_quick_execute():
             symbol_info = mt5_get_symbol_info(sig.get("display") or sig.get("pair"))
             if not symbol_info or symbol_info.get("error"):
                 return jsonify({"error": "Symbol not on broker"}), 400
-            executor = mt5_execute
+            _exec_venue = "mt5"
 
         approval = risk_check(
             signal=sig,
@@ -308,7 +307,7 @@ def api_quick_execute():
                 _r.log.warning(f"[QUICK EXEC] Failed to log rejection to audit_db: {_e}")
             return jsonify({"error": err_msg}), 400
 
-        result = executor(sig, approval)
+        result = run_managed_execution(_exec_venue, sig, approval)
         if result.get("success"):
             _b_factors = {}
             if "structural_verdict" in engine_b:
@@ -333,8 +332,9 @@ def api_quick_execute():
                 with sqlite3.connect(_r.AUDIT_DB, timeout=15.0) as con:
                     con.execute(
                         "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
-                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
+                        "max_score,score_pct) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             datetime.now(timezone.utc).isoformat(),
                             pair_name,
@@ -358,6 +358,8 @@ def api_quick_execute():
                             str(result.get("ticket", "")),
                             result.get("feeCost"),
                             json.dumps(_factors),
+                            engine_b.get("max_possible"),
+                            engine_b.get("pct"),
                         ),
                     )
                     con.commit()
@@ -759,7 +761,6 @@ def api_execute():
 
         if is_crypto:
             from bybit_executor import (
-                bybit_execute,
                 bybit_get_account,
                 bybit_get_positions,
                 bybit_get_symbol_info,
@@ -789,9 +790,10 @@ def api_execute():
             if symbol_info and symbol_info.get("error"):
                 symbol_info = None
 
+            _exec_venue = "bybit"
+
         else:
             from mt5_executor import (
-                mt5_execute,
                 mt5_get_account,
                 mt5_get_positions,
                 mt5_get_symbol_info,
@@ -825,6 +827,8 @@ def api_execute():
                         f"Check Market Watch or use a broker that offers this instrument."
                     }
                 ), 200
+
+            _exec_venue = "mt5"
 
         _grade = d.get("grade", "")
 
@@ -879,11 +883,7 @@ def api_execute():
                 }
             ), 200
 
-        if is_crypto:
-            result = bybit_execute(sig, approval)
-
-        else:
-            result = mt5_execute(sig, approval)
+        result = run_managed_execution(_exec_venue, sig, approval)
 
         if result.get("success"):
             executed_signals.add(sig_id)
@@ -895,13 +895,17 @@ def api_execute():
                         "weights": sig.get("factor_weights"),
                         "disabled": sig.get("disabledFactors"),
                         "regime": sig.get("regimeName"),
+                        "lifecycle_state": sig.get("engine_b_lifecycle_state", sig.get("lifecycle_state", "unknown")),
+                        "lifecycle_reason": sig.get("engine_b_lifecycle_reason", sig.get("lifecycle_reason", "")),
                     }
                     _audit_engine = _audit_engine_from_signal(sig)
+                    _eng_b_data = sig.get("engine_b") or sig.get("naked_data") or {}
+                    
                     con.execute(
                         "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
                         "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
-                        "signal_price_ref,slippage_bps) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "signal_price_ref,slippage_bps,max_score,score_pct) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             datetime.now(timezone.utc).isoformat(),
                             pair,
@@ -925,6 +929,8 @@ def api_execute():
                             json.dumps(_factors),
                             result.get("signalPriceRef"),
                             result.get("slippageBps"),
+                            _eng_b_data.get("max_possible") if _audit_engine == "engine_b" else sig.get("maxScore"),
+                            _eng_b_data.get("pct") if _audit_engine == "engine_b" else None,
                         ),
                     )
 
@@ -1027,7 +1033,6 @@ def api_scalp_execute():
 
         if is_crypto:
             from bybit_executor import (
-                bybit_execute,
                 bybit_get_account,
                 bybit_get_positions,
                 bybit_get_symbol_info,
@@ -1045,9 +1050,9 @@ def api_scalp_execute():
             symbol_info = bybit_get_symbol_info(pair_key)
             if not symbol_info or symbol_info.get("error"):
                 return jsonify({"error": f"Symbol {pair_key} not available on Bybit"}), 400
+            _exec_venue = "bybit"
         else:
             from mt5_executor import (
-                mt5_execute,
                 mt5_get_account,
                 mt5_get_positions,
                 mt5_get_symbol_info,
@@ -1065,6 +1070,7 @@ def api_scalp_execute():
             symbol_info = mt5_get_symbol_info(pair_key)
             if not symbol_info or symbol_info.get("error"):
                 return jsonify({"error": f"Symbol {pair_key} not available on MT5"}), 400
+            _exec_venue = "mt5"
             
         # Format signal for risk engine
         approval = risk_check(
@@ -1082,10 +1088,7 @@ def api_scalp_execute():
             _r.log.warning(f"[SCALP EXEC] {sig.get('pair')} REJECTED: {approval.reason}")
             return jsonify({"error": f"Risk Blocked: {approval.reason}"}), 400
             
-        if is_crypto:
-            result = bybit_execute(sig, approval)
-        else:
-            result = mt5_execute(sig, approval)
+        result = run_managed_execution(_exec_venue, sig, approval)
         if result.get("success"):
             # Log to audit_db
             try:

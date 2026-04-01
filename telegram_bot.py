@@ -7,6 +7,7 @@ Commands:
   /positions       — All open positions (MT5 + Bybit) with P&L
   /close <pair>    — Close a position (with confirmation)
   /status          — System health: connections, auto-trader, kill switch
+  /forensics       — Signal truth, drift, and execution hygiene summary
   /balance         — MT5 + Bybit balances
   /pnl             — Performance stats from completed trades
   /auto on|off     — Toggle auto-trader
@@ -207,6 +208,7 @@ def _build_and_run(token: str, chat_id: str):
             "`/positions`         Open positions + P&L\n"
             "`/close ETH/USDT`    Close a position\n"
             "`/status`            System health\n"
+            "`/forensics`         Trust/degradation summary\n"
             "`/balance`           MT5 + Bybit balances\n"
             "`/pnl`               Performance stats\n"
             "`/auto on|off`       Toggle auto-trader\n"
@@ -241,16 +243,44 @@ def _build_and_run(token: str, chat_id: str):
             mt5_bal = (mt5.get("account") or {}).get("balance", 0)
             bybit_bal = (bybit.get("account") or {}).get("balance", 0)
 
+            forensic = await _run_in_thread(lambda: _safe_json(req.get(f"{_BASE}/api/forensics/summary", timeout=_TIMEOUT_FAST)))
+            f_overall = str(forensic.get("overall", "unknown")).upper()
+            f_icon = "🟢" if f_overall == "HEALTHY" else ("🔴" if f_overall == "CRITICAL" else "🟡")
+
             text = (
                 f"📊 *Sentinel Pro Status*\n\n"
                 f"{mt5_icon} *MT5*: `{mt5_bal:,.2f}` | {mt5_pos} pos\n"
                 f"{bybit_icon} *Bybit*: `{bybit_bal:,.2f} USDT` | {bybit_pos} pos\n\n"
                 f"🤖 Auto-trader: *{auto_icon}*\n"
-                f"📅 Trades today: `{trades_today}/{max_daily}`{ks_note}"
+                f"📅 Trades today: `{trades_today}/{max_daily}`\n"
+                f"{f_icon} Forensics: *{f_overall}*{ks_note}"
             )
             await update.message.reply_text(text, parse_mode="Markdown")
         except Exception as e:
             await update.message.reply_text(f"⚠️ Athena offline — check server\n`{str(e)[:100]}`", parse_mode="Markdown")
+
+    # ── /forensics ────────────────────────────────────────────────────────────
+
+    async def cmd_forensics(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not _guard(update):
+            return
+        try:
+            resp = await _run_in_thread(lambda: _safe_json(req.get(f"{_BASE}/api/forensics/summary?hours=24", timeout=_TIMEOUT_FAST)))
+            if resp.get("error"):
+                await update.message.reply_text(f"⚠️ Forensics unavailable: {resp['error']}")
+                return
+            overall = str(resp.get("overall", "unknown")).upper()
+            overall_icon = "🟢" if overall == "HEALTHY" else ("🔴" if overall == "CRITICAL" else "🟡")
+            lines = resp.get("telegram_brief") or []
+            if not lines:
+                lines = ["No forensic detail available"]
+            msg = (
+                f"{overall_icon} *Forensic Observability — {overall}*\n\n"
+                + "\n".join(lines[:4])
+            )
+            await update.message.reply_text(msg, parse_mode="Markdown")
+        except Exception:
+            await update.message.reply_text("⚠️ Athena offline — check server")
 
     # ── /balance ──────────────────────────────────────────────────────────────
 
@@ -559,9 +589,14 @@ def _build_and_run(token: str, chat_id: str):
                 flip = " ⚠️ DIRECTION FLIP" if entry_dir != cur_dir else ""
                 decay_val = d.get("decay", 0)
                 emoji = "🔴" if decay_val >= 1.5 else "🟡"
+                
+                engine = d.get("engine", "engine_a")
+                engine_label = " [Eng B]" if engine == "engine_b" else ""
+                score_path = d.get("scoreNote") or f"{d.get('entryScore', 0):.2f} → {d.get('currentScore', 0):.2f}"
+                
                 lines.append(
-                    f"{emoji} *{pair_name}*: `{d.get('entryScore', 0):.2f}` → `{d.get('currentScore', 0):.2f}` "
-                    f"(Δ{decay_val:.2f}){flip}"
+                    f"{emoji} *{pair_name}*{engine_label}: `{score_path}` "
+                    f"(Δ{decay_val:.1f}){flip}"
                 )
                 ai_verdict = d.get("aiVerdict")
                 if ai_verdict:
@@ -837,6 +872,7 @@ def _build_and_run(token: str, chat_id: str):
     app.add_handler(CommandHandler("pos", cmd_positions))
     app.add_handler(CommandHandler("close", cmd_close))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("forensics", cmd_forensics))
     app.add_handler(CommandHandler("balance", cmd_balance))
     app.add_handler(CommandHandler("bal", cmd_balance))
     app.add_handler(CommandHandler("pnl", cmd_pnl))
