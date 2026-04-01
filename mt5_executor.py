@@ -764,69 +764,78 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                 "error": f"SL_TOO_CLOSE: distance {abs(price - sl):.{digits}f} < broker min {min_stop_price:.{digits}f}",
             }
 
-    # Build order request
+    # ── Multi-Target Volume Splitting ──────────────────────────────────────
+    # To prevent orphaned pending TP2 orders, we split the total approved volume
+    # into two separate positions, each with its own attached TP.
+    # This ensures MT5 natively clears all orders on SL or manual close.
 
-    request = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": mt5_symbol,
-        "volume": approval.volume,
-        "type": order_type,
-        "price": price,
-        "sl": sl,
-        "tp": tp,
-        "deviation": 20,  # Max slippage in points
-        "magic": 240601,  # Athena magic number for trade identification
-        "comment": f"Ath|{pair[:12]}|{signal.get('confluenceScore', 0):.2f}"[:31],
-        "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": _SYMBOL_FILLING_MODES.get(mt5_symbol, mt5.ORDER_FILLING_IOC),
-    }
+    total_vol = approval.volume
+    tp2_raw = signal.get("tp2", 0)
+    tp2 = round(float(tp2_raw), digits) if tp2_raw else 0
+    vol_step = sym_info.volume_step if sym_info else 0.01
+    vol_min = sym_info.volume_min if sym_info else 0.01
 
-    log.info(
-        f"[MT5] Sending order: {direction} {approval.volume} {mt5_symbol} @ {price} | SL: {sl} | TP: {tp}"
-    )
+    # Only split if TP2 is distinct and total volume allows for at least 2 units of min_step
+    do_split = tp2 > 0 and abs(tp2 - tp) > (10 * sym_info.point) and total_vol >= (vol_min * 2)
 
-    result = _send_order_with_filling_fallback(request)
+    if do_split:
+        vol1 = round(math.floor((total_vol / 2) / vol_step) * vol_step, 2)
+        if vol1 < vol_min: vol1 = vol_min
+        vol2 = round(total_vol - vol1, 2)
+        vols = [(vol1, tp), (vol2, tp2)]
+        log.info(f"[MT5] {mt5_symbol}: splitting {total_vol} lots into targets TP1={tp} ({vol1}) and TP2={tp2} ({vol2})")
+    else:
+        vols = [(total_vol, tp)]
 
-    if result is None:
-        error = mt5.last_error()
-
-        log.error(f"[MT5] order_send returned None: {error}")
-
-        return {"success": False, "error": f"ORDER_SEND_FAILED: {error}"}
-
-    if result.retcode != mt5.TRADE_RETCODE_DONE:
-        log.error(
-            f"[MT5] Order rejected: retcode={result.retcode} comment={result.comment}"
-        )
-
-        return {
-            "success": False,
-            "error": f"ORDER_REJECTED: {result.comment}",
-            "retcode": result.retcode,
+    # ── Execution Loop ─────────────────────────────────────────────────────
+    results = []
+    for v_size, v_tp in vols:
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": mt5_symbol,
+            "volume": v_size,
+            "type": order_type,
+            "price": price,
+            "sl": sl,
+            "tp": v_tp,
+            "deviation": 20,
+            "magic": 240601,
+            "comment": f"Ath|{pair[:12]}|{signal.get('confluenceScore', 0):.2f}"[:31],
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": _SYMBOL_FILLING_MODES.get(mt5_symbol, mt5.ORDER_FILLING_IOC),
         }
 
-    log.info(
-        f"[MT5] ORDER FILLED: ticket={result.order} | {direction} {result.volume} {mt5_symbol} @ {result.price}"
-    )
+        log.info(f"[MT5] Sending order: {direction} {v_size} {mt5_symbol} @ {price} | SL: {sl} | TP: {v_tp}")
+        result = _send_order_with_filling_fallback(request)
 
-    # audit_log + outcome monitor must use POSITION ticket (history_deals_get(position=...)).
-    # result.order is the *order* ticket; closing deals use different order ids, so ticket=order
-    # often misses the exit deal and Performance never gets exit_price / pnl.
+        if result is None:
+            error = mt5.last_error()
+            log.error(f"[MT5] order_send returned None: {error}")
+            return {"success": False, "error": f"ORDER_SEND_FAILED: {error}"}
+
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            log.error(f"[MT5] Order rejected: retcode={result.retcode} comment={result.comment}")
+            return {
+                "success": False,
+                "error": f"ORDER_REJECTED: {result.comment}",
+                "retcode": result.retcode,
+            }
+
+        log.info(f"[MT5] ORDER FILLED: ticket={result.order} | {direction} {result.volume} {mt5_symbol} @ {result.price}")
+        results.append(result)
+
+    # Secondary operations for the primary position
+    result = results[0]
     position_ticket = int(result.order)
     try:
         import time as _time
-
         _time.sleep(0.15)
         plist = mt5.positions_get(symbol=mt5_symbol)
         if plist:
             for pos in plist:
-                if getattr(pos, "magic", 0) == 240601 and abs(
-                    float(pos.volume) - float(result.volume)
-                ) < 1e-8:
+                if getattr(pos, "magic", 0) == 240601 and abs(float(pos.volume) - float(result.volume)) < 1e-8:
                     position_ticket = int(pos.ticket)
-                    log.info(
-                        f"[MT5] Resolved position ticket={position_ticket} (order_ticket={result.order})"
-                    )
+                    log.info(f"[MT5] Resolved position ticket={position_ticket} (order_ticket={result.order})")
                     break
     except Exception as _pt_err:
         log.debug(f"[MT5] position ticket lookup skipped: {_pt_err}")
@@ -843,71 +852,24 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
     except Exception as _tn_e:
         log.debug(f"[TELEGRAM] Trade open notification failed: {_tn_e}")
 
-    # Place TP2 as a separate pending limit order at half the volume (second target)
-
-    tp2_ticket = None
-
-    tp2_raw = signal.get("tp2", 0)
-
-    tp2 = round(float(tp2_raw), digits) if tp2_raw else 0
-
-    if tp2 and tp2 != tp and result.volume > 0:
-        half_vol = round(result.volume / 2, 2)
-
-        if half_vol >= 0.01:
-            tp2_type = (
-                mt5.ORDER_TYPE_SELL_LIMIT
-                if direction == "LONG"
-                else mt5.ORDER_TYPE_BUY_LIMIT
-            )
-
-            tp2_req = {
-                "action": mt5.TRADE_ACTION_PENDING,
-                "symbol": mt5_symbol,
-                "volume": half_vol,
-                "type": tp2_type,
-                "price": tp2,
-                "sl": sl,
-                "deviation": 20,
-                "magic": 240601,
-                "comment": f"Athena|{pair}|TP2",
-                "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": _SYMBOL_FILLING_MODES.get(
-                    mt5_symbol, mt5.ORDER_FILLING_IOC
-                ),
-            }
-
-            tp2_result = _send_order_with_filling_fallback(tp2_req)
-
-            if tp2_result and tp2_result.retcode == mt5.TRADE_RETCODE_DONE:
-                tp2_ticket = tp2_result.order
-
-                log.info(
-                    f"[MT5] TP2 pending order placed: ticket={tp2_ticket} @ {tp2} ({half_vol} lots)"
-                )
-
-            else:
-                _rc = tp2_result.retcode if tp2_result else "None"
-
-                log.warning(
-                    f"[MT5] TP2 order failed (retcode={_rc}) — manage TP2 manually at {tp2}"
-                )
-
     _ref_slip = float(signal_price) if signal_price > 0 else float(price)
     _sref, _sbps = _mt5_entry_slippage_bps(direction, _ref_slip, float(result.price))
+
+    # Calculate total volume from all partial fills
+    total_filled_vol = sum(float(r.volume) for r in results)
 
     return {
         "success": True,
         "ticket": position_ticket,
         "order_ticket": int(result.order),
-        "volume": result.volume,
+        "volume": total_filled_vol,
         "entryPrice": result.price,
         "symbol": mt5_symbol,
         "direction": direction,
         "sl": sl,
         "tp": tp,
-        "tp2": tp2,
-        "tp2Ticket": tp2_ticket,
+        "tp2": tp2 if do_split else None,
+        "tp2Ticket": int(results[1].order) if len(results) > 1 else None,
         "riskAmount": approval.risk_amount,
         "riskPct": approval.risk_pct,
         "signalPriceRef": _sref,

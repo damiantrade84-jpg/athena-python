@@ -19,6 +19,8 @@ _candle_cache: dict = {}
 _candle_cache_lock = threading.Lock()
 _candle_fetch_meta: dict = {}
 _candle_fetch_inflight: dict = {}
+_last_cleanup_time = 0.0
+_CLEANUP_INTERVAL = 600.0  # seconds (10 mins)
 
 _CANDLE_CACHE_TTL = {"M5": 5 * 60, "M15": 15 * 60, "H1": 55 * 60, "H4": 235 * 60, "D1": 23 * 3600}
 
@@ -36,6 +38,39 @@ def get_candle_fetch_meta(pair: dict, tf: str, limit: int) -> dict | None:
     with _candle_cache_lock:
         meta = _candle_fetch_meta.get(key)
         return dict(meta) if isinstance(meta, dict) else None
+
+
+def _cleanup_stale_cache(now: float) -> None:
+    """Prune expired entries and metadata. Must be called while holding _candle_cache_lock."""
+    global _last_cleanup_time
+    _last_cleanup_time = now
+
+    # 1. Prune expired candle data and their metadata
+    expired_keys = [k for k, v in _candle_cache.items() if now > v[1]]
+    for k in expired_keys:
+        _candle_cache.pop(k, None)
+        _candle_fetch_meta.pop(k, None)
+
+    # 2. Prune metadata with no corresponding cache entry (consistency check)
+    orphan_meta_keys = [k for k in _candle_fetch_meta if k not in _candle_cache]
+    for k in orphan_meta_keys:
+        _candle_fetch_meta.pop(k, None)
+
+    # 3. Prune stale in-flight markers (older than 60s) to prevent permanent blocks
+    # Ordinarily, these are cleared in finally:, but we prune defensively.
+    # Note: Since _candle_fetch_inflight stores Event objects, not timestamps,
+    # we only prune if they are already set (completed) but somehow stuck in the dict.
+    stale_inflight = [k for k, ev in _candle_fetch_inflight.items() if ev.is_set()]
+    for k in stale_inflight:
+        _candle_fetch_inflight.pop(k, None)
+
+    if expired_keys or orphan_meta_keys or stale_inflight:
+        log.debug(
+            "[CACHE] Cleanup complete: removed %d expired, %d orphan meta, %d stale inflight",
+            len(expired_keys),
+            len(orphan_meta_keys),
+            len(stale_inflight),
+        )
 
 
 def extract_candles(resp) -> list | None:
@@ -370,6 +405,10 @@ def fetch_candles(
     is_owner = False
 
     with _candle_cache_lock:
+        # Periodic bounded cleanup to prevent memory leaks
+        if now - _last_cleanup_time > _CLEANUP_INTERVAL:
+            _cleanup_stale_cache(now)
+
         entry = _candle_cache.get(key)
 
         if entry is not None:

@@ -544,9 +544,14 @@ def compute_forex_score(
     _cot_trend = _cot_boost(pair, trend_dir, bar_time)
     # For breakout: direction may differ — only fetch if different from trend_dir
     # (avoids a second DB hit in the common case where directions agree)
-    session_ok = (
-        True if backtest_mode else _in_session(utc_hour, pair.get("display", ""))
-    )
+    # BUG 3 fix: Restore parity between forex backtest and live scoring for session validation.
+    # Default to parity (respect sessions). Opt-in to bypass via BACKTEST_IGNORE_SESSIONS.
+    from config import CONFIG
+    _ignore_sessions = CONFIG.get("BACKTEST_IGNORE_SESSIONS", False)
+    if backtest_mode and _ignore_sessions:
+        session_ok = True
+    else:
+        session_ok = _in_session(utc_hour, pair.get("display", ""))
     momentum_score = _momentum_confirm(h4_snap, trend_dir)
     adx_score = _adx_filter(h4_snap)
     carry_score = _carry_tilt(pair, trend_dir, bar_time)

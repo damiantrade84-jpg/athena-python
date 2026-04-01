@@ -55,8 +55,10 @@ WEINSTEIN_LOOKBACK:
   index: 150
 
 # Engine A backtest score gate only (get_backtest_min_score_threshold in scoring.py).
-# Resolution: PAIR_PROFILES.bt_min → BT_MIN_GROUP → BT_MIN.
-# Live scan / trade tier uses PAIR_PROFILES.min_confluence → MIN_CONFLUENCE_GROUP → MIN_CONFLUENCE_CLASS.
+# If RESEARCH_MODE is false (default), backtest uses live scan thresholds for parity.
+# If RESEARCH_MODE is true, backtest uses the legacy overrides below.
+RESEARCH_MODE: false
+
 BT_MIN:
   crypto:    0.90
   commodity: 0.85

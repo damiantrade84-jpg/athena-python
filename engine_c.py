@@ -113,6 +113,21 @@ def normalise_engine_a(signal_a: dict) -> dict:
     else:
         regime_label = "RANGING"
 
+    votes = signal_a.get("votes", {})
+    factor_scores = signal_a.get("factor_scores", {})
+    cot_active = any([
+        votes.get("FACTOR_DERIVATIVES"),
+        votes.get("COT Boost"),
+        factor_scores.get("derivatives"),
+        factor_scores.get("cot_boost")
+    ])
+    carry_active = any([
+        votes.get("FACTOR_CARRY"),
+        votes.get("Carry Tilt"),
+        factor_scores.get("carry"),
+        factor_scores.get("carry_tilt")
+    ])
+
     # Forex (and any engine with maxScore ~1.0): slightly lower floor so marginal A-side signals still participate in C.
     _a_has_floor = 0.25 if max_score <= 1.01 else 0.30
     return {
@@ -127,8 +142,8 @@ def normalise_engine_a(signal_a: dict) -> dict:
         "max_score": max_score,
         "has_signal": norm > _a_has_floor
         and signal_a.get("direction") in ("LONG", "SHORT"),
-        "cot_active": bool(signal_a.get("votes", {}).get("derivatives")),
-        "carry_active": bool(signal_a.get("votes", {}).get("carry")),
+        "cot_active": bool(cot_active),
+        "carry_active": bool(carry_active),
         "style": signal_a.get("style", signal_a.get("tradeStyle", "swing")),
     }
 

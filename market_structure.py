@@ -216,17 +216,17 @@ class NakedEngine:
             and abs(last_troughs[-1] - last_troughs[-2]) < atr * 0.3
         )
 
-        liquidity_sweep = False
+        has_equal_extrema = False
         if equal_highs and direction == "SHORT":
-            liquidity_sweep = True
+            has_equal_extrema = True
         elif equal_lows and direction == "LONG":
-            liquidity_sweep = True
-
+            has_equal_extrema = True
+ 
         return {
             "state": sequence,
             "recent_high": recent_swing_high,
             "recent_low": recent_swing_low,
-            "liquidity_sweep": liquidity_sweep,
+            "has_equal_extrema": has_equal_extrema,
         }
 
     def _detect_bos(self, highs: np.ndarray, lows: np.ndarray, atr: float,
@@ -376,7 +376,17 @@ class NakedEngine:
         try:
             # Bullish OB: find last bearish candle before the bullish BOS
             if bos_data.get("bos_bull") and bos_data.get("last_broken_high") is not None:
-                for i in range(len(candles) - 2, max(len(candles) - 20, 0), -1):
+                broken_high = float(bos_data["last_broken_high"])
+                # Find the actual bar that initiated the break (the earliest bar in the current breakout run)
+                bos_index = len(candles) - 1
+                for j in range(len(candles) - 1, max(0, len(candles) - 20), -1):
+                    if float(candles[j]["close"]) > broken_high:
+                        bos_index = j
+                    else:
+                        break  # Found the point before the breakout began
+                
+                # Scan backward from bos_index - 1 for the last opposite candle
+                for i in range(bos_index - 1, max(0, bos_index - 20), -1):
                     c = candles[i]
                     if float(c["close"]) < float(c["open"]):  # bearish candle
                         ob_top = float(c["open"])
@@ -406,7 +416,17 @@ class NakedEngine:
 
             # Bearish OB: find last bullish candle before the bearish BOS
             if bos_data.get("bos_bear") and bos_data.get("last_broken_low") is not None:
-                for i in range(len(candles) - 2, max(len(candles) - 20, 0), -1):
+                broken_low = float(bos_data["last_broken_low"])
+                # Find the actual bar that initiated the break (earliest bar in current breakdown run)
+                bos_index = len(candles) - 1
+                for j in range(len(candles) - 1, max(0, len(candles) - 20), -1):
+                    if float(candles[j]["close"]) < broken_low:
+                        bos_index = j
+                    else:
+                        break
+                
+                # Scan backward from bos_index - 1 for the last opposite candle
+                for i in range(bos_index - 1, max(0, bos_index - 20), -1):
                     c = candles[i]
                     if float(c["close"]) > float(c["open"]):  # bullish candle
                         ob_top = float(c["high"])
@@ -1144,6 +1164,9 @@ class NakedEngine:
         except Exception as _pe:
             log.debug(f"[PROFILE] {registry_symbol or asset_type or 'unknown'} profile skipped: {_pe}")
 
+        is_sweep_event = (direction == "LONG" and sweep_data["bull_sweep"]) or \
+                         (direction == "SHORT" and sweep_data["bear_sweep"])
+ 
         return {
             "structural_verdict": "CLEAR",
             "nearest_resistance_zone": nearest_res,
@@ -1172,7 +1195,8 @@ class NakedEngine:
             "ob_at_zone": _ob_at_zone,
             "fvg_overlap": fvg_overlap,
             "active_fvgs": active_fvgs,
-            "liquidity_sweep": sequence_data.get("liquidity_sweep", False),
+            "liquidity_sweep": is_sweep_event,
+            "has_equal_extrema": sequence_data.get("has_equal_extrema", False),
             "active_zone_distance": zone_ctx["distance"],
             "near_active_zone": zone_ctx["near_zone"],
             "zone_touched": zone_ctx["zone_touched"],
@@ -1248,13 +1272,13 @@ class NakedEngine:
                 rr = tp_dist / sl_dist
                 rr_ok = rr >= min_rr
 
-        # Entry requires a candle pattern trigger OR a confirmed structural event.
-        # BOS/CHoCH alone without a trigger candle is not a valid entry.
+        # Entry requires a candle pattern trigger OR a confirmed structural breakout
+        # OR a professional technical catalyst (Sweep/CHoCH) at a key zone.
         entry_ok = (
             trigger_ok
             or (breakout_ok and bool(res.get("bos_volume_confirmed", False)))
-            or (bool(res.get("liquidity_sweep")) and trigger_ok)
-            or (bool(res.get("choch_confirmed")) and (trigger_ok or zone_ok))
+            or (bool(res.get("liquidity_sweep")) and zone_ok)
+            or (bool(res.get("choch_confirmed")) and zone_ok)
         )
         space_ok = room_ok or rr_ok
 

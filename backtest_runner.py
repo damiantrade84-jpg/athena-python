@@ -32,7 +32,7 @@ from indicators import (
 )
 from scoring import (
     calc_confluence,
-    get_backtest_min_score_threshold,
+    get_score_threshold,
     get_pair_profile,
     get_pair_score_group,
 )
@@ -476,8 +476,9 @@ def backtest_pair(pair, style="auto"):
         _pair_ctx.pop(_k, None)
     _pair_ctx["score_group"] = _pair_score_group
 
-    # Engine A backtest gate: pair bt_min override → subgroup BT_MIN_GROUP → class BT_MIN.
-    bt_min = get_backtest_min_score_threshold(_pair_ctx)
+    # Engine A backtest gate: pair profile → group → class hierarchy.
+    # By default matches live scan thresholds for parity unless RESEARCH_MODE is enabled.
+    bt_min = get_score_threshold(_pair_ctx, is_backtest=True)
 
     _h4_need = max(50, CONFIG["H4_CANDLES"])
 
@@ -531,17 +532,10 @@ def backtest_pair(pair, style="auto"):
     # Live scan fetches it via _fetch_funding_rate() and passes it; backtest silently
     # excluded it (funding_rate=None). Fetch current rate once as a proxy — not
     # perfectly historical but eliminates the systematic None divergence for all bars.
+    # BUG 1 fix: funding rate is disabled in backtest to avoid present-day leakage.
     _bt_funding_rate = None
     if _ptype == "crypto":
-        try:
-            from data_feeds import _fetch_funding_rate as _dfr
-            _bn_sym = pair.get("symbol", "").replace("/", "")
-            _fr_resp = _dfr(_bn_sym)
-            if isinstance(_fr_resp, dict) and not _fr_resp.get("error"):
-                _bt_funding_rate = _fr_resp.get("rate")
-                log.debug(f"[BT-FUNDING] {pair['display']} funding rate: {_bt_funding_rate}")
-        except Exception as _fr_err:
-            log.debug(f"[BT-FUNDING] {pair['display']} funding rate fetch failed: {_fr_err}")
+        log.info(f"[BT-FUNDING] {pair['display']} funding rate input disabled (historical integrity).")
 
     if effective_style == "swing":
         # --- SWING D1 LOOP â€" UNCHANGED ---
@@ -579,19 +573,16 @@ def backtest_pair(pair, style="auto"):
                 i += 1
                 continue
 
-            intraday_cutoff = entry_ts + pd.Timedelta(days=1)
+            # BUG 8 fix: Align H4/H1 windows to the same decision timestamp (entry_ts).
+            # Do not allow bars from the entry day to leak into the confluence math.
+            intraday_cutoff = entry_ts
 
-            h4_window = [
-                bar
-                for bar, ts in zip(h4_raw, h4_times)
-                if not pd.isna(ts) and ts < intraday_cutoff
-            ][-_h4_need:]
+            # BUG 9 fix: Optimize window construction with binary search (O(log N) vs O(N))
+            h4_idx = bisect.bisect_left(h4_times, intraday_cutoff)
+            h4_window = h4_raw[max(0, h4_idx - _h4_need) : h4_idx]
 
-            h1_window = [
-                bar
-                for bar, ts in zip(h1_raw, h1_times)
-                if not pd.isna(ts) and ts < intraday_cutoff
-            ][-_h1_need:]
+            h1_idx = bisect.bisect_left(h1_times, intraday_cutoff)
+            h1_window = h1_raw[max(0, h1_idx - _h1_need) : h1_idx]
 
             if len(h4_window) < 50 or len(h1_window) < 50:
                 funnel["skip_window"] += 1
@@ -647,7 +638,7 @@ def backtest_pair(pair, style="auto"):
                         bar_time=d1_raw[i][
                             "time"
                         ],  # use actual current D1 bar datetime
-                        backtest_mode=True,  # bypass session filter in backtest
+                        backtest_mode=True,  # respect session gate (parity)
                         h4_candles=h4_window,
                         score_group=_pair_score_group,
                     )
@@ -796,13 +787,13 @@ def backtest_pair(pair, style="auto"):
                     i += 1
                     continue
 
-            # BUG 6 fix: MAX_SL_PCT — reject over-wide stops (matches live risk_check / executors).
+            # MAX_SL_PCT rejection — Ensuring backtest results reflect the same risk thresholds as live trading.
             _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
             _sl_dist_pct = abs(float(entry) - float(sl)) / float(entry)
             if _sl_dist_pct > _max_sl_pct:
                 log.debug(
-                    f"[BT-SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct:.1%} "
-                    f"exceeds cap {_max_sl_pct:.1%} — rejecting"
+                    f"[SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct:.1%} "
+                    f"exceeds cap {_max_sl_pct:.1%} — REJECTED"
                 )
                 funnel["fail_score"] += 1
                 i += 1
@@ -993,21 +984,16 @@ def backtest_pair(pair, style="auto"):
 
             # H1 alignment: all H1 bars before this H4 bar's timestamp + 4h
 
-            h1_cutoff = entry_ts + pd.Timedelta(hours=4)
+            # BUG 8 fix: Align H1 window to the H4 decision timestamp (entry_ts).
+            h1_cutoff = entry_ts
 
-            h1_window = [
-                bar
-                for bar, ts in zip(h1_raw, h1_times)
-                if not pd.isna(ts) and ts < h1_cutoff
-            ][-_h1_need:]
+            h1_idx = bisect.bisect_left(h1_times, h1_cutoff)
+            h1_window = h1_raw[max(0, h1_idx - _h1_need) : h1_idx]
 
             # D1 context: real D1 data up to this point for Weinstein/regime
 
-            d1_ctx = [
-                bar
-                for bar, ts in zip(d1_raw, d1_ts)
-                if not pd.isna(ts) and ts <= entry_ts
-            ][-220:]
+            d1_idx = bisect.bisect_left(d1_ts, entry_ts)
+            d1_ctx = d1_raw[max(0, d1_idx - 220) : d1_idx]
 
             if len(h1_window) < 50 or len(d1_ctx) < 50:
                 i += 1
@@ -1059,8 +1045,10 @@ def backtest_pair(pair, style="auto"):
                         h1_snap=h1i["snap"],
                         h1_candles=h1_window,
                         pair=_pair_ctx,
-                        bar_time=h4_window[-1].get("time") if h4_window else None,
-                        backtest_mode=True,
+                        bar_time=h4_raw[i][
+                            "time"
+                        ],  # use actual current H4 bar datetime
+                        backtest_mode=True,  # respect session gate (parity)
                         h4_candles=h4_window,
                         score_group=_pair_score_group,
                     )
@@ -1204,13 +1192,13 @@ def backtest_pair(pair, style="auto"):
                     i += 1
                     continue
 
-            # BUG 6 fix: MAX_SL_PCT — reject over-wide stops (matches live risk_check / executors).
+            # MAX_SL_PCT rejection — Ensuring backtest results reflect the same risk thresholds as live trading.
             _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
             _sl_dist_pct = abs(float(entry) - float(sl)) / float(entry)
             if _sl_dist_pct > _max_sl_pct:
                 log.debug(
-                    f"[BT-SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct:.1%} "
-                    f"exceeds cap {_max_sl_pct:.1%} — rejecting"
+                    f"[SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct:.1%} "
+                    f"exceeds cap {_max_sl_pct:.1%} — REJECTED"
                 )
                 funnel["fail_score"] += 1
                 i += 1
@@ -1399,19 +1387,13 @@ def backtest_pair(pair, style="auto"):
 
             # H4 context: all H4 bars before this H1 bar
 
-            h4_ctx = [
-                bar
-                for bar, ts in zip(h4_raw, h4_ts_sc)
-                if not pd.isna(ts) and ts <= entry_ts
-            ][-250:]
+            h4_idx = bisect.bisect_left(h4_ts_sc, entry_ts)
+            h4_ctx = h4_raw[max(0, h4_idx - 250) : h4_idx]
 
             # D1 context: real D1 data up to this point for Weinstein/regime
 
-            d1_ctx = [
-                bar
-                for bar, ts in zip(d1_raw, d1_ts_sc)
-                if not pd.isna(ts) and ts <= entry_ts
-            ][-220:]
+            d1_idx = bisect.bisect_left(d1_ts_sc, entry_ts)
+            d1_ctx = d1_raw[max(0, d1_idx - 220) : d1_idx]
 
             if len(h4_ctx) < 50 or len(d1_ctx) < 50:
                 i += 1
@@ -1451,9 +1433,10 @@ def backtest_pair(pair, style="auto"):
                         h4_snap=h4i_ctx["snap"],
                         h1_snap=h1i["snap"],
                         h1_candles=h1_window,
-                        pair=_pair_ctx,
-                        bar_time=h1_window[-1].get("time") if h1_window else None,
-                        backtest_mode=True,
+                        bar_time=h1_raw[i][
+                            "time"
+                        ],  # use actual current H1 bar datetime
+                        backtest_mode=True,  # respect session gate (parity)
                         h4_candles=h4_ctx,
                         score_group=_pair_score_group,
                     )
@@ -1595,13 +1578,13 @@ def backtest_pair(pair, style="auto"):
                     i += 1
                     continue
 
-            # BUG 6 fix: MAX_SL_PCT — reject over-wide stops (matches live risk_check / executors).
+            # MAX_SL_PCT rejection — Ensuring backtest results reflect the same risk thresholds as live trading.
             _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
             _sl_dist_pct = abs(float(entry) - float(sl)) / float(entry)
             if _sl_dist_pct > _max_sl_pct:
                 log.debug(
-                    f"[BT-SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct:.1%} "
-                    f"exceeds cap {_max_sl_pct:.1%} — rejecting"
+                    f"[SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct:.1%} "
+                    f"exceeds cap {_max_sl_pct:.1%} — REJECTED"
                 )
                 funnel["fail_score"] += 1
                 i += 1
@@ -2610,24 +2593,43 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         f"D1={len(candles_d1)} H4={len(candles_h4)} H1={len(candles_h1)} bars, style={resolved_style}"
     )
     d1_times = [c.get("time", c.get("datetime", "")) for c in candles_d1]
-    h1_times = [c.get("time", c.get("datetime", "")) for c in candles_h1]
-    oos_start = 50 + int(max(0, len(candles_h4) - 50) * 0.7)
+    h4_times = [c.get("time", c.get("datetime", "")) for c in candles_h4]
+    
+    # NEW: Loop over the specific Entry Timeframe (H1 vs H4) configured for this style
+    # This matches live discovery where signals are detected and filled on the entry candle.
+    entry_raw = candles_h1 if _entry_tf == "H1" else candles_h4
+    entry_times = [c.get("time", c.get("datetime", "")) for c in entry_raw]
 
-    COOLDOWN = 2  # H4 bars to skip after a trade resolves (prevents overlapping entries)
+    # PRECOMPUTE ATR SERIES: Compute the full ATR array once per timeframe to avoid O(N^2) complexity.
+    # We compute for all three timeframes to ensure we can resolve the _atr_tf at any scan index.
+    def _full_atr(cnds):
+        if not cnds: return []
+        return calc_atr(
+            [c["high"] for c in cnds],
+            [c["low"] for c in cnds],
+            [c["close"] for c in cnds],
+            14
+        )
+    atr_map = {
+        "D1": _full_atr(candles_d1),
+        "H4": _full_atr(candles_h4),
+        "H1": _full_atr(candles_h1)
+    }
+
+    COOLDOWN = 8 if _entry_tf == "H1" else 2  # entries to skip after a trade (H1 vs H4 bars)
     trades = []
     same_bar_both_hit = 0
     i = 50
-    while i < len(candles_h4) - 5:
-        h4_time = candles_h4[i].get("time") or candles_h4[i].get("datetime")
-        if not h4_time:
+    while i < len(entry_raw) - 5:
+        entry_time = entry_times[i]
+        if not entry_time:
             i += 1
             continue
-
         # Session filter: skip forex trades outside London (07-16 UTC) and NY (13-22 UTC)
-        if pair.get("type") == "forex" and h4_time:
+        if pair.get("type") == "forex" and entry_time:
             try:
                 from datetime import datetime as _dt
-                _bar_dt = _dt.fromisoformat(str(h4_time).replace("Z", "+00:00"))
+                _bar_dt = _dt.fromisoformat(str(entry_time).replace("Z", "+00:00"))
                 _bar_hour = _bar_dt.hour
                 # Skip Asian session (22:00 - 07:00 UTC) — low liquidity, wide spreads
                 if _bar_hour >= 22 or _bar_hour < 7:
@@ -2636,45 +2638,47 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
             except Exception:
                 pass  # if time parsing fails, don't block the trade
 
-        h4_ctx = candles_h4[: i + 1]
-        d1_slice_end = bisect.bisect_right(d1_times, h4_time)
-        h1_slice_end = bisect.bisect_right(h1_times, h4_time)
-        if d1_slice_end < 20 or h1_slice_end < 20:
+        h4_ctx = candles_h4[:bisect.bisect_left(h4_times, entry_time)]
+        d1_ctx = candles_d1[:bisect.bisect_left(d1_times, entry_time)]
+        # entry_ctx is exactly where we are in the entry loop
+        entry_ctx = entry_raw[:i + 1]
+
+        if len(d1_ctx) < 20 or len(h4_ctx) < 20 or len(entry_ctx) < 20:
             i += 1
             continue
+        current_price = float(entry_raw[i]["close"])
+        
+        # O(1) ATR LOOKUP: Select precomputed ATR value based on the current bar and _atr_tf
+        _atr_full = atr_map.get(_atr_tf, atr_map["H4"])
+        if _atr_tf == "D1":
+            _idx = bisect.bisect_left(d1_times, entry_time)
+        elif _atr_tf == "H4":
+            _idx = bisect.bisect_left(h4_times, entry_time)
+        else: # H1 (entry_tf usually)
+            _idx = i + 1 # Align to the context end bar
 
-        d1_ctx = candles_d1[:d1_slice_end]
-        h1_ctx = candles_h1[:h1_slice_end]
-        tf_ctx = {
-            "D1": d1_ctx,
-            "H4": h4_ctx,
-            "H1": h1_ctx,
-        }
-        zone_ctx = tf_ctx.get(_zone_tf, h4_ctx)
-        entry_ctx = tf_ctx.get(_entry_tf, h1_ctx)
-        atr_ctx = tf_ctx.get(_atr_tf, zone_ctx)
-        if len(zone_ctx) < 20 or len(entry_ctx) < 20 or len(atr_ctx) < 20:
-            i += 1
-            continue
-        current_price = float(entry_ctx[-1]["close"])
-
-        atr_list = calc_atr(
-            [c["high"] for c in atr_ctx],
-            [c["low"] for c in atr_ctx],
-            [c["close"] for c in atr_ctx],
-            14,
-        )
-        atr = atr_list[-1] if atr_list and atr_list[-1] else (current_price * 0.01)
+        # Pull ATR and the slice needed for the volatility gate
+        atr = _atr_full[_idx - 1] if _idx > 0 and _idx <= len(_atr_full) else None
+        if atr is None:
+            atr = (current_price * 0.01)
+            atr_list_50 = []
+        else:
+            # Reconstruct the last 50 bars from the precomputed series for the volatility gate
+            atr_list_50 = _atr_full[max(0, _idx - 50) : _idx]
 
         # Volatility gate: skip trades when ATR is below 60% of its 50-bar average
-        # Dead markets produce false signals — BOS/CHoCH fire on noise
-        if len(atr_list) >= 50:
-            _valid_atrs = [a for a in atr_list[-50:] if a]
+        # Matches live logic but uses the precomputed slice.
+        if len(atr_list_50) >= 50:
+            _valid_atrs = [a for a in atr_list_50 if a]
             _atr_avg_50 = sum(_valid_atrs) / len(_valid_atrs) if _valid_atrs else 0
             if _atr_avg_50 > 0 and atr < _atr_avg_50 * 0.6:
                 i += 1
                 continue
 
+        # Zone context always uses the configured zone_tf (usually H4)
+
+        # Zone context always uses the configured zone_tf (usually H4)
+        zone_ctx = h4_ctx if _zone_tf == "H4" else d1_ctx
         regime_label = _rt().engine_b_regime_label(zone_ctx, pair.get("type", "stock"))
         candidates = []
         for direction in ["LONG", "SHORT"]:
@@ -2768,16 +2772,16 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
             i += 1
             continue
 
-        if i + 1 >= len(candles_h4):
-            break
-
-        best = max(candidates, key=lambda x: (x["score"], x["rr"], x["pct"]))
-        direction = best["direction"]
-        entry_bar = candles_h4[i + 1]
+        # Execute at the open of the very next candle in the entry timeframe.
+        # This matches live discovery where fill is immediate, not delayed to next H4.
+        entry_bar = entry_raw[i + 1]
         raw_entry = float(entry_bar.get("open", entry_bar["close"]))
         _ptype = pair.get("type", "stock")
         slip = raw_entry * _get_slippage_for_bar(entry_bar, _ptype)
         entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
+        
+        # Synchronize future_window to the correct H4 starting position
+        _h4_fill_index = bisect.bisect_left(h4_times, entry_bar["time"])
 
         if best.get("level_mode") == "structural":
             sl = best["sl"]
@@ -2812,13 +2816,13 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
             i += 1
             continue
 
-        # BUG 6 fix: MAX_SL_PCT — reject over-wide stops (matches live risk_check / executors).
+        # MAX_SL_PCT rejection — Ensuring backtest results reflect the same risk thresholds as live trading.
         _max_sl_pct_b = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
         _sl_dist_pct_b = abs(float(entry) - float(sl)) / float(entry)
         if _sl_dist_pct_b > _max_sl_pct_b:
             log.debug(
-                f"[BT-SL-CAP-B] {pair['display']} {direction} SL {_sl_dist_pct_b:.1%} "
-                f"exceeds cap {_max_sl_pct_b:.1%} — rejecting"
+                f"[SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct_b:.1%} "
+                f"exceeds cap {_max_sl_pct_b:.1%} — REJECTED"
             )
             i += 1
             continue
@@ -2842,7 +2846,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
         _active_sl = sl
         _be_triggered = False
 
-        future_window = candles_h4[i + 1 : min(i + max_hold_bars + 1, len(candles_h4))]
+        # Forward monitoring continues on H4 for performance, aligned to the entry bar's H4 index
+        future_window = candles_h4[_h4_fill_index : min(_h4_fill_index + max_hold_bars + 1, len(candles_h4))]
         for fi, future in enumerate(future_window):
             exit_bar_offset = fi
             _bar_outcome, _both_hit = _resolve_barrier_exit(
@@ -2862,6 +2867,9 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
                 outcome = _bar_outcome
                 r_multiple = 0.0 if outcome == "BE" else -1.0
                 break
+            
+            # Use H1 granularity for barrier checks if we need more precision than H4 (optional enhancement)
+            # For now, H4 мониторинг on H1 entry is a reasonable compromise for performance.
             f_high = float(future["high"])
             f_low = float(future["low"])
 

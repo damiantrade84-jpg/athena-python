@@ -118,13 +118,20 @@ class TestDrawdown:
             with risk_engine._peak_lock:
                 risk_engine._peak_equity = old
 
-    def test_drawdown_peaks_are_independent_per_asset_type(self):
+    def test_drawdown_peaks_are_shared_across_domain_assets(self):
+        """MT5 assets (forex, stock) must share a peak equity bucket; crypto is separate."""
         import risk_engine
 
         with risk_engine._peak_lock:
-            risk_engine._peak_equity = {"crypto": 10000.0, "forex": 50000.0}
+            # Setting peak for 'forex' domain
+            risk_engine._peak_equity = {"forex": 50000.0, "crypto": 10000.0}
+
+        # Forex drawdown
+        assert abs(risk_engine._current_drawdown(40000, "forex") - 0.2) < 1e-9
+        # Stock drawdown (maps to 'forex' domain) — should see the SAME peak
+        assert abs(risk_engine._current_drawdown(45000, "stock") - 0.1) < 1e-9
+        # Crypto drawdown — independent
         assert abs(risk_engine._current_drawdown(8000, "crypto") - 0.2) < 1e-9
-        assert abs(risk_engine._current_drawdown(48000, "forex") - 0.04) < 1e-9
 
 
 # ── Max positions ────────────────────────────────────────────────────────────
@@ -266,20 +273,32 @@ class TestPeakEquityThreadSafety:
             assert risk_engine._peak_equity.get("unknown") == 1900.0
 
 
-class TestDailyLossPerAssetType:
-    def test_independent_daily_loss_buckets(self):
+    def test_domain_level_daily_loss_grouping(self):
+        """Losses in 'stock' must affect 'forex' limit (same account); crypto remains isolated."""
         from datetime import datetime, timezone
-
         import risk_engine
 
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         with risk_engine._daily_lock:
             risk_engine._daily_pnl_date = today
-            risk_engine._daily_pnl = {"forex": -6000.0}
+            # A loss in forex
+            risk_engine._daily_pnl = {"forex": -4000.0}
             risk_engine._daily_start_balance = {"forex": 100000.0, "crypto": 10000.0}
+
+        # Check stock (maps to forex) — should see the 4% loss
+        blocked_stock, pct_stock = risk_engine._check_daily_loss(100000.0, "stock")
+        assert blocked_stock is False
+        assert abs(pct_stock - 0.04) < 1e-9
+
+        # Add more loss via stock
+        risk_engine.record_daily_pnl(-2000.0, 100000.0, "stock")
+
+        # Now forex domain should be blocked (6% total loss > 5% limit)
         blocked_fx, pct_fx = risk_engine._check_daily_loss(100000.0, "forex")
         assert blocked_fx is True
-        assert pct_fx >= _cfg("DAILY_LOSS_LIMIT", 0.05)
+        assert abs(pct_fx - 0.06) < 1e-9
+
+        # Crypto remains clean
         blocked_crypto, _ = risk_engine._check_daily_loss(10000.0, "crypto")
         assert blocked_crypto is False
 

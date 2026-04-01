@@ -18,7 +18,7 @@ from scoring import (
     _classify_signal,
     _pair_exchange_closed,
     apply_correlation_cap,
-    get_min_confluence_threshold,
+    get_score_threshold,
     get_pair_score_group,
 )
 from market_structure import NakedEngine
@@ -572,7 +572,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             log.info(f"[SCAN-Q] Per-type quantile floors: {quantile_floors}")
 
         for pair, sig in buffered_ok:
-            static_threshold = get_min_confluence_threshold(pair)
+            # Unify threshold resolution — ensures live scan and backtest parity (BUG 7)
+            static_threshold = get_score_threshold(pair, is_backtest=False)
 
             if r.test_mode():
                 static_threshold = max(0.1, static_threshold * 0.5)

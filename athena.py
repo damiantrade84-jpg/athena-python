@@ -7276,19 +7276,36 @@ def api_chart_analysis():
                 out["style_ratings"][style.lower()] = val
 
         if out["style_ratings"]:
-            for label in ("STRONG", "MODERATE", "WEAK", "AVOID", "CONTRADICTS"):
-                if label in out["style_ratings"].values():
-                    out["rating"] = label
-                    break
+            vals = set(out["style_ratings"].values())
+            # BUG 10 fix: Handle mixed supportive/negative sentiments without total blocking.
+            # If both exist, downgrade to MODERATE so the signal remains available.
+            supportive = {"STRONG", "MODERATE"}
+            negative = {"CONTRADICTS", "AVOID"}
+            
+            if (vals & supportive) and (vals & negative):
+                out["rating"] = "MODERATE"
+                out["confirms_direction"] = False  # Conflicted results should not fully confirm
+            else:
+                # Normal severity-first precedence logic
+                for label in ("CONTRADICTS", "AVOID", "STRONG", "MODERATE", "WEAK"):
+                    if label in vals:
+                        out["rating"] = label
+                        break
+
         if not out["rating"]:
-            for label in ("CONTRADICTS", "AVOID", "STRONG", "MODERATE", "WEAK"):
+            # Fallback free-text search with same severity-first precedence
+            for label in ("CONTRADICTS", "AVOID", "WEAK", "MODERATE", "STRONG"):
                 if label in up:
                     out["rating"] = label
                     break
 
+        # Explicitly handle 'CONFLICTED' or 'CONTRADICT' in free-text for safety
         if "CONFLICTED" in up or "CONTRADICT" in up:
+            if out["rating"] in ("STRONG", "MODERATE"):
+                out["rating"] = "MODERATE"  # Hold at MODERATE if conflict exist
+            else:
+                out["rating"] = out["rating"] or "CONTRADICTS"
             out["confirms_direction"] = False
-            out["rating"] = "CONTRADICTS"
         elif direction_hint and direction_hint.upper() in ("LONG", "SHORT"):
             _oppose = _re.search(r"(OPPOSES|AGAINST)\s+THE\s+ALGORITHMIC", up)
             if _oppose:
@@ -8902,12 +8919,7 @@ def analyze_pair(
 
     # --- ENGINE B: NAKED MARKET STRUCTURE OVERLAY ---
     structure_data = None
-    if use_naked_engine and res["score"] >= get_pair_profile(pair).get(
-        "min_score",
-        CONFIG["MIN_CONFLUENCE_CLASS"].get(
-            pair.get("type", ""), CONFIG.get("MIN_CONFLUENCE", 0.6)
-        ),
-    ):
+    if use_naked_engine and res["score"] >= get_min_confluence_threshold(pair):
         try:
             from market_structure import engine as naked_engine
             _overlay_style, _overlay_profile = _naked_scan_style_profile(
@@ -8985,24 +8997,9 @@ def analyze_pair(
                     if _sl_dist_pct > _max_sl_pct:
                         log.warning(
                             f"[SL-CAP] {pair['display']} {direction} SL distance {_sl_dist_pct:.1%} "
-                            f"exceeds cap {_max_sl_pct:.1%} — clamping"
+                            f"exceeds cap {_max_sl_pct:.1%} — REJECTED"
                         )
-                        lvl["sl"] = (
-                            float(price) * (1 - _max_sl_pct)
-                            if direction == "LONG"
-                            else float(price) * (1 + _max_sl_pct)
-                        )
-                        _sl_dist = abs(float(price) - float(lvl["sl"]))
-                        lvl["tp1"] = (
-                            float(price) + _sl_dist * 1.5
-                            if direction == "LONG"
-                            else float(price) - _sl_dist * 1.5
-                        )
-                        lvl["tp2"] = (
-                            float(price) + _sl_dist * 2.5
-                            if direction == "LONG"
-                            else float(price) - _sl_dist * 2.5
-                        )
+                        return None
 
                 # Take Profit Override to sit safely inside structural walls
                 if structure_data.get("recommended_take_profit"):

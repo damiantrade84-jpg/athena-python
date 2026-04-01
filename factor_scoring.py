@@ -532,6 +532,12 @@ def compute_factor_scores(
 
     # ── Gather indicators ────────────────────────────────────────────────
     indicators: Dict[str, Optional[float]] = {}
+    feed_status: Dict[str, str] = {
+        "funding": "ok",
+        "cot": "ok",
+        "carry": "ok",
+        "microstructure": "ok",
+    }
 
     # Trend direction — EMA crossover across all three timeframes (directional: +1/-1)
     # H1 entry timeframe
@@ -618,40 +624,67 @@ def compute_factor_scores(
     # NOTE: Now supports historical lookup during backtest using bar_time
     if is_crypto and not _crypto_supports_cot(pair):
         indicators["cot_z"] = None
+        feed_status["cot"] = "unsupported"
     else:
         try:
             from cot_feed import get_cot_z as _get_cot_z
+            from cot_feed import _PAIR_FORMULA as _COT_FORMULA
 
-            _as_of = bar_time[:10] if bar_time else None
-            _cot = _get_cot_z(pair.get("display", ""), as_of_date=_as_of)
+            if pair.get("display") not in _COT_FORMULA:
+                indicators["cot_z"] = None
+                feed_status["cot"] = "no_coverage"
+            else:
+                _as_of = bar_time[:10] if bar_time else None
+                _cot = _get_cot_z(pair.get("display", ""), as_of_date=_as_of)
 
-            # Fade the herd for Forex and Commodities: Speculators are trapped at extremes
-            if pair.get("type", "stock") in ("forex", "commodity") and _cot != 0.0:
-                if abs(_cot) >= 2.0:
-                    # Extreme overcrowded positioning -> Reverse the signal (fade the herd)
-                    _cot = max(-3.0, min(3.0, -_cot * 1.5))
-                elif abs(_cot) < 1.0:
-                    # Insignificant positioning -> ignore lagged data
-                    _cot = 0.0
+                # Fade the herd for Forex and Commodities: Speculators are trapped at extremes
+                if pair.get("type", "stock") in ("forex", "commodity") and _cot != 0.0:
+                    if abs(_cot) >= 2.0:
+                        # Extreme overcrowded positioning -> Reverse the signal (fade the herd)
+                        _cot = max(-3.0, min(3.0, -_cot * 1.5))
+                    elif abs(_cot) < 1.0:
+                        # Insignificant positioning -> ignore lagged data
+                        _cot = 0.0
 
-            indicators["cot_z"] = float(_cot) if _cot != 0.0 else None
-        except Exception:
+                if _cot != 0.0:
+                    indicators["cot_z"] = float(_cot)
+                    feed_status["cot"] = "ok"
+                else:
+                    indicators["cot_z"] = None
+                    feed_status["cot"] = "no_data"
+        except Exception as _cot_err:
+            log.error(f"[CARRY] COT feed failure for {pair.get('display')}: {_cot_err}")
             indicators["cot_z"] = None
+            feed_status["cot"] = "error"
 
     # Carry — interest rate differential z-score (directional, monthly)
     # Forex: base_rate - quote_rate; Indices/gold: inverted 10Y yield
     # NOTE: Now supports historical lookup during backtest using bar_time
     if is_crypto:
         indicators["carry_z"] = None
+        feed_status["carry"] = "unsupported"
     else:
         try:
             from carry_feed import get_carry_z as _get_carry_z
+            from carry_feed import _PAIR_CARRY_FORMULA as _CARRY_FORMULA
 
-            _as_of = bar_time[:10] if bar_time else None
-            _carry = _get_carry_z(pair.get("display", ""), as_of_date=_as_of)
-            indicators["carry_z"] = float(_carry) if _carry != 0.0 else None
-        except Exception:
+            if pair.get("display") not in _CARRY_FORMULA:
+                indicators["carry_z"] = None
+                feed_status["carry"] = "no_coverage"
+            else:
+                _as_of = bar_time[:10] if bar_time else None
+                _carry = _get_carry_z(pair.get("display", ""), as_of_date=_as_of)
+                
+                if _carry != 0.0:
+                    indicators["carry_z"] = float(_carry)
+                    feed_status["carry"] = "ok"
+                else:
+                    indicators["carry_z"] = None
+                    feed_status["carry"] = "no_data"
+        except Exception as _carry_err:
+            log.error(f"[CARRY] Carry feed failure for {pair.get('display')}: {_carry_err}")
             indicators["carry_z"] = None
+            feed_status["carry"] = "error"
 
     # Microstructure (directional if available)
     # Crypto: values injected from Binance/Bybit WS feeds via _micro_cache in athena.py
@@ -965,4 +998,5 @@ def compute_factor_scores(
         "trend_coherence": trend_coherence,
         "missing_directional_optional_count": missing_optional,
         "optional_factor_coverage": round(optional_coverage, 4),
+        "feed_status": feed_status,
     }

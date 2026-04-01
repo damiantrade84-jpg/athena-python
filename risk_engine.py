@@ -99,7 +99,7 @@ def _init_peak_table():
 
 
 def _load_peak_equity() -> dict[str, float]:
-    """Restore per–asset-class peak equity from SQLite on startup."""
+    """Restore per–account-domain peak equity from SQLite on startup."""
     out: dict[str, float] = {}
     try:
         with sqlite3.connect(_RISK_DB, timeout=15.0) as con:
@@ -207,7 +207,20 @@ def _save_peak_equity(asset_type: str, value: float):
 _init_peak_table()
 _peak_equity: dict[str, float] = _load_peak_equity()
 _peak_lock = threading.Lock()
-_peak_last_saved: float = 0.0  # epoch seconds of last _save_peak_equity call (any asset)
+_peak_last_saved: float = 0.0  # epoch seconds of last _save_peak_equity call (any domain)
+
+
+def _resolve_domain(asset_type: str = "") -> str:
+    """Map granular asset types to account domains to prevent state mixing (BUG 2).
+    - crypto -> 'crypto' (Bybit)
+    - forex, stock, commodity, index -> 'forex' (MT5/forex domain)
+    """
+    at = (asset_type or "unknown").lower()
+    if at == "crypto":
+        return "crypto"
+    if at in ("forex", "stock", "commodity", "index"):
+        return "forex"
+    return at  # Fallback for others (bond_tlt, etc.)
 
 # ── Daily loss tracker ───────────────────────────────────────────────────────
 _daily_pnl: dict[str, float] = {}
@@ -221,23 +234,23 @@ _KELLY_TTL_SECONDS: float = 300.0  # 5 minutes
 def record_daily_pnl(
     pnl: float, account_balance: float, asset_type: str = ""
 ) -> None:
-    """Record realized P&L for daily loss tracking (per asset class). Called by outcome monitor."""
+    """Record realized P&L for daily loss tracking (per account domain). Called by outcome monitor."""
     global _daily_pnl, _daily_pnl_date, _daily_start_balance
-    at = asset_type or "unknown"
+    domain = _resolve_domain(asset_type)
     with _daily_lock:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if today != _daily_pnl_date:
             _daily_pnl = {}
             _daily_start_balance = {}
             _daily_pnl_date = today
-        if at not in _daily_start_balance or _daily_start_balance[at] <= 0:
-            _daily_start_balance[at] = account_balance
-        _daily_pnl[at] = _daily_pnl.get(at, 0.0) + pnl
-        if _daily_start_balance[at] > 0 and _daily_pnl[at] < 0:
-            loss_pct = abs(_daily_pnl[at]) / _daily_start_balance[at]
+        if domain not in _daily_start_balance or _daily_start_balance[domain] <= 0:
+            _daily_start_balance[domain] = account_balance
+        _daily_pnl[domain] = _daily_pnl.get(domain, 0.0) + pnl
+        if _daily_start_balance[domain] > 0 and _daily_pnl[domain] < 0:
+            loss_pct = abs(_daily_pnl[domain]) / _daily_start_balance[domain]
             if loss_pct >= _cfg("DAILY_LOSS_LIMIT", 0.05):
                 log.warning(
-                    f"[RISK] DAILY LOSS LIMIT [{at}]: lost ${abs(_daily_pnl[at]):.2f} "
+                    f"[RISK] DAILY LOSS LIMIT [{domain}]: lost ${abs(_daily_pnl[domain]):.2f} "
                     f"({loss_pct:.1%}) today — blocking new trades"
                 )
 
@@ -245,9 +258,9 @@ def record_daily_pnl(
 def _check_daily_loss(
     account_balance: float, asset_type: str = ""
 ) -> tuple[bool, float]:
-    """Check if daily loss limit is breached for this asset class. Returns (blocked, loss_pct)."""
+    """Check if daily loss limit is breached for this domain. Returns (blocked, loss_pct)."""
     global _daily_pnl_date, _daily_pnl, _daily_start_balance
-    at = asset_type or "unknown"
+    domain = _resolve_domain(asset_type)
     with _daily_lock:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if today != _daily_pnl_date:
@@ -255,28 +268,28 @@ def _check_daily_loss(
             _daily_start_balance = {}
             _daily_pnl_date = today
             return False, 0.0
-        if at not in _daily_start_balance or _daily_start_balance[at] <= 0:
-            _daily_start_balance[at] = account_balance
-        pnl = _daily_pnl.get(at, 0.0)
+        if domain not in _daily_start_balance or _daily_start_balance[domain] <= 0:
+            _daily_start_balance[domain] = account_balance
+        pnl = _daily_pnl.get(domain, 0.0)
         if pnl >= 0:
             return False, 0.0
-        loss_pct = abs(pnl) / _daily_start_balance[at]
+        loss_pct = abs(pnl) / _daily_start_balance[domain]
         return loss_pct >= _cfg("DAILY_LOSS_LIMIT", 0.05), loss_pct
 
 
 def _update_peak(equity: float, asset_type: str = "") -> float:
-    """Track peak equity for drawdown calculation (per asset class). Thread-safe. Persists on new highs."""
+    """Track peak equity for drawdown calculation (per account domain). Thread-safe. Persists on new highs."""
     global _peak_equity, _peak_last_saved
-    at = asset_type or "unknown"
+    domain = _resolve_domain(asset_type)
     with _peak_lock:
-        cur = _peak_equity.get(at)
+        cur = _peak_equity.get(domain)
         if cur is None or equity > cur:
-            _peak_equity[at] = equity
+            _peak_equity[domain] = equity
             now_ts = _time.time()
             if now_ts - _peak_last_saved >= 60.0:
-                _save_peak_equity(at, _peak_equity[at])
+                _save_peak_equity(domain, _peak_equity[domain])
                 _peak_last_saved = now_ts
-        return _peak_equity[at]
+        return _peak_equity[domain]
 
 
 def _current_drawdown(equity: float, asset_type: str = "") -> float:
@@ -661,7 +674,12 @@ def risk_check(
         log.warning(f"{prefix} REJECTED: SHORT stop {sl} must be above entry {entry}")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
 
-    max_sl_pct = _cfg("MAX_SL_PCT", {}).get(asset_type, 0.05)
+    # ── Check 5: SL distance within MAX_SL_PCT ──────────────────────────────
+    # BUG 4 fix: Enforce hard rejection for over-wide stops before volume calc.
+    # Matches implementation in executors to prevent late-stage rejections.
+    _caps = CONFIG.get("MAX_SL_PCT") or {}
+    max_sl_pct = _caps.get(asset_type, 0.05)
+    
     if entry != 0:
         sl_pct = abs(entry - sl) / abs(entry)
         if sl_pct > max_sl_pct:
