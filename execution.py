@@ -19,6 +19,7 @@ from config import _json_safe, scan_candle_limits
 from engine_c import compute_consensus
 from execution_lifecycle import run_managed_execution
 from market_structure import NakedEngine
+from guardian import pre_trade_check as _guardian_pre_trade
 from scoring import CORR_CLUSTERS, get_pair_score_group
 
 
@@ -262,7 +263,7 @@ def api_quick_execute():
             account_equity=account["equity"],
             open_positions=positions,
             symbol_info=symbol_info,
-            kill_switch=False,
+            kill_switch=_r.kill_switch(),
             sizing_override=_sizing_override,
             is_manual_override=True,
         )
@@ -307,6 +308,11 @@ def api_quick_execute():
                 _r.log.warning(f"[QUICK EXEC] Failed to log rejection to audit_db: {_e}")
             return jsonify({"error": err_msg}), 400
 
+        _ptc_ok, _ptc_reason = _guardian_pre_trade(sig, positions, account, pos_result)
+        if not _ptc_ok:
+            _r.log.warning(f"[QUICK EXEC] {pair_name} GUARDIAN BLOCKED: {_ptc_reason}")
+            return jsonify({"error": f"Guardian: {_ptc_reason}"}), 400
+
         result = run_managed_execution(_exec_venue, sig, approval)
         if result.get("success"):
             _b_factors = {}
@@ -338,7 +344,7 @@ def api_quick_execute():
                         (
                             datetime.now(timezone.utc).isoformat(),
                             pair_name,
-                            sig.get("confluenceScore", 0),
+                            engine_b.get("score", 0),
                             "engine_b",
                             sig.get("direction"),
                             engine_b.get("current_swing_sequence", "RANGING"),
@@ -883,6 +889,11 @@ def api_execute():
                 }
             ), 200
 
+        _ptc_ok, _ptc_reason = _guardian_pre_trade(sig, positions, account, _pos_resp)
+        if not _ptc_ok:
+            _r.log.warning(f"[EXEC] {pair} GUARDIAN BLOCKED: {_ptc_reason}")
+            return jsonify({"error": f"Guardian: {_ptc_reason}"}), 400
+
         result = run_managed_execution(_exec_venue, sig, approval)
 
         if result.get("success"):
@@ -1087,7 +1098,12 @@ def api_scalp_execute():
         if not approval.approved:
             _r.log.warning(f"[SCALP EXEC] {sig.get('pair')} REJECTED: {approval.reason}")
             return jsonify({"error": f"Risk Blocked: {approval.reason}"}), 400
-            
+
+        _ptc_ok, _ptc_reason = _guardian_pre_trade(sig, positions, account, pos_result)
+        if not _ptc_ok:
+            _r.log.warning(f"[SCALP EXEC] {sig.get('pair')} GUARDIAN BLOCKED: {_ptc_reason}")
+            return jsonify({"error": f"Guardian: {_ptc_reason}"}), 400
+
         result = run_managed_execution(_exec_venue, sig, approval)
         if result.get("success"):
             # Log to audit_db

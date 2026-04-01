@@ -442,8 +442,8 @@ def _london_breakout_score(h1_candles: list, utc_hour: int) -> tuple[float, str]
             dt = datetime.fromisoformat(c.get("time", ""))  # candles use "time" key
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
-            utc_hour = dt.utctimetuple().tm_hour if dt.tzinfo else dt.hour
-            if 0 <= utc_hour < 7:
+            _bar_hour = dt.utctimetuple().tm_hour if dt.tzinfo else dt.hour
+            if 0 <= _bar_hour < 7:
                 asian_candles.append(c)
         except Exception:
             continue
