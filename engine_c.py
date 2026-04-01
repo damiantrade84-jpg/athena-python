@@ -145,6 +145,7 @@ def normalise_engine_a(signal_a: dict) -> dict:
         "cot_active": bool(cot_active),
         "carry_active": bool(carry_active),
         "style": signal_a.get("style", signal_a.get("tradeStyle", "swing")),
+        "confidence": float(signal_a.get("confidenceDetail", {}).get("confidence", 0.5)),
     }
 
 
@@ -470,6 +471,7 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
         updated["verdict"] = f"VISION_{action.upper()}"
         updated["tier"] = "SKIP"
         updated["sizing_override"] = 0.0
+        updated["decision_state"] = "blocked"
 
     log.warning(
         f"[ENGINE C] Vision {action}: {rating} → conviction {old_conviction:.2f} → {new_conviction:.2f} "
@@ -574,8 +576,27 @@ def compute_consensus(
         sl_resolved = resolve_sl(entry, a["sl"], None, direction, atr)
         tp_resolved = resolve_tp(entry, sl_resolved["sl"], a["tp"], None, direction)
 
+        # Reliability Layer for A_ONLY
+        a_quality = 0.50 # fallback
+        a_reliability = (a.get("confidence", 0.5) * 0.5) + (a_quality * 0.5)
+        c_reliability = a_reliability # 100% allocation to A
+        
+        decision_state = "blocked"
+        if tier != "SKIP":
+            if c_reliability >= 0.60 and conviction >= 0.65:
+                decision_state = "execute"
+            elif c_reliability >= 0.45 and conviction >= 0.50:
+                decision_state = "reduced_risk"
+                sizing = max(0.0, sizing - 0.25)
+            elif conviction >= 0.40:
+                decision_state = "watchlist"
+        
+        if decision_state in ("blocked", "watchlist"):
+            tier = "SKIP"
+            sizing = 0.0
+            
         result = _build_result(
-            trade=conviction >= CONVICTION_TIERS["LOW"]["min"],
+            trade=decision_state in ("execute", "reduced_risk"),
             verdict="A_ONLY",
             direction=direction,
             conviction=conviction,
@@ -585,6 +606,10 @@ def compute_consensus(
             sl=sl_resolved["sl"], sl_method=sl_resolved["method"],
             tp=tp_resolved["tp"], tp_method=tp_resolved["method"],
             rr=tp_resolved["rr"],
+            decision_state=decision_state,
+            a_reliability=a_reliability,
+            b_reliability=0.0,
+            c_reliability=c_reliability,
         )
         if ai_vision:
             result = apply_vision(result, ai_vision)
@@ -603,8 +628,31 @@ def compute_consensus(
             tier = "SKIP"
             sizing = 0.0
 
+        # Reliability Layer for B_ONLY
+        b_quality = 0.50 # fallback
+        b_struct_rel = 0.5
+        if b.get("structure_ok"): b_struct_rel += 0.2
+        if b.get("zone_ok"): b_struct_rel += 0.15
+        if b.get("trigger_ok"): b_struct_rel += 0.15
+        b_reliability = (b_struct_rel * 0.5) + (b_quality * 0.5)
+        c_reliability = b_reliability
+        
+        decision_state = "blocked"
+        if tier != "SKIP":
+            if c_reliability >= 0.60 and conviction >= 0.65:
+                decision_state = "execute"
+            elif c_reliability >= 0.45 and conviction >= 0.50:
+                decision_state = "reduced_risk"
+                sizing = max(0.0, sizing - 0.25)
+            elif conviction >= 0.40:
+                decision_state = "watchlist"
+                
+        if decision_state in ("blocked", "watchlist"):
+            tier = "SKIP"
+            sizing = 0.0
+            
         result = _build_result(
-            trade=tier != "SKIP",
+            trade=decision_state in ("execute", "reduced_risk"),
             verdict="B_ONLY_SCORED" if tier != "SKIP" else "B_ONLY",
             direction=direction,
             conviction=conviction,
@@ -615,6 +663,10 @@ def compute_consensus(
             tp=tp_resolved["tp"], tp_method=tp_resolved["method"],
             weights={"A": 0.0, "B": 1.0},
             rr=tp_resolved["rr"],
+            decision_state=decision_state,
+            a_reliability=0.0,
+            b_reliability=b_reliability,
+            c_reliability=c_reliability,
         )
         if ai_vision:
             result = apply_vision(result, ai_vision)
@@ -650,8 +702,30 @@ def compute_consensus(
                 tier = "SKIP"
                 sizing = 0.0
 
+            b_quality = 0.50
+            b_struct_rel = 0.5
+            if b.get("structure_ok"): b_struct_rel += 0.2
+            if b.get("zone_ok"): b_struct_rel += 0.15
+            if b.get("trigger_ok"): b_struct_rel += 0.15
+            b_reliability = (b_struct_rel * 0.5) + (b_quality * 0.5)
+            c_reliability = b_reliability
+
+            decision_state = "blocked"
+            if tier != "SKIP":
+                if c_reliability >= 0.60 and conviction >= 0.65:
+                    decision_state = "execute"
+                elif c_reliability >= 0.45 and conviction >= 0.50:
+                    decision_state = "reduced_risk"
+                    sizing = max(0.0, sizing - 0.25)
+                elif conviction >= 0.40:
+                    decision_state = "watchlist"
+                    
+            if decision_state in ("blocked", "watchlist"):
+                tier = "SKIP"
+                sizing = 0.0
+
             result = _build_result(
-                trade=tier != "SKIP",
+                trade=decision_state in ("execute", "reduced_risk"),
                 verdict="B_OVERRIDE_CONFLICT",
                 direction=direction,
                 conviction=conviction,
@@ -664,6 +738,10 @@ def compute_consensus(
                 weights={"A": 0.0, "B": 1.0},
                 regime=regime,
                 opposing_high_confidence=opposing_high_confidence,
+                decision_state=decision_state,
+                a_reliability=0.0,
+                b_reliability=b_reliability,
+                c_reliability=c_reliability,
             )
             if ai_vision:
                 result = apply_vision(result, ai_vision)
@@ -738,8 +816,36 @@ def compute_consensus(
         tier = "SKIP"
         sizing = 0.0
 
+    # --- Reliability Layer ---
+    a_quality = meta_policy.get("engineQualities", {}).get("engine_a", {}).get("quality_score", 0.50)
+    b_quality = meta_policy.get("engineQualities", {}).get("engine_b", {}).get("quality_score", 0.50)
+    
+    a_reliability = (a.get("confidence", 0.5) * 0.5) + (a_quality * 0.5)
+    
+    b_struct_rel = 0.5
+    if b.get("structure_ok"): b_struct_rel += 0.2
+    if b.get("zone_ok"): b_struct_rel += 0.15
+    if b.get("trigger_ok"): b_struct_rel += 0.15
+    b_reliability = (b_struct_rel * 0.5) + (b_quality * 0.5)
+    
+    c_reliability = (a_reliability * weights["A"]) + (b_reliability * weights["B"])
+
+    decision_state = "blocked"
+    if tier != "SKIP":
+        if c_reliability >= 0.60 and conviction >= 0.65:
+            decision_state = "execute"
+        elif c_reliability >= 0.45 and conviction >= 0.50:
+            decision_state = "reduced_risk"
+            sizing = max(0.0, sizing - 0.25)
+        elif conviction >= 0.50:
+            decision_state = "watchlist"
+
+    if decision_state in ("blocked", "watchlist"):
+        tier = "SKIP"
+        sizing = 0.0
+
     result = _build_result(
-        trade=tier != "SKIP",
+        trade=decision_state in ("execute", "reduced_risk"),
         verdict="ALIGNED",
         direction=direction,
         conviction=conviction,
@@ -753,6 +859,10 @@ def compute_consensus(
         regime=regime,
         meta_policy=meta_policy,
         meta_base_weights=base_weights,
+        decision_state=decision_state,
+        a_reliability=a_reliability,
+        b_reliability=b_reliability,
+        c_reliability=c_reliability,
     )
 
     # Step 6: Apply Vision if available
@@ -787,6 +897,10 @@ def _build_result(
     weights: dict = None,
     regime: str = "",
     opposing_high_confidence: bool = False,
+    decision_state: str = "blocked",
+    a_reliability: float = 0.0,
+    b_reliability: float = 0.0,
+    c_reliability: float = 0.0,
     **kwargs,
 ) -> dict:
     """Build standardised consensus result dict."""
