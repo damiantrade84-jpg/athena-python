@@ -7586,6 +7586,7 @@ def api_chart_analysis():
                 "BULLISH FACTORS\n"
                 "BEARISH FACTORS\n"
                 "KEY RISKS\n"
+                "ENTRY QUALITY\n"
                 "FINAL VERDICT\n"
                 "ACTIONABLE IMPROVEMENT\n\n"
                 "Instructions:\n"
@@ -7594,7 +7595,10 @@ def api_chart_analysis():
                 "- H4: tactical structure, nearest obstacle between entry and TP, re-test / breakout / continuation / range / failed breakout.\n"
                 "- H1 RIGHT EDGE: open with what the last 5 H1 candles MEAN for the trade (confirm / warn / oppose), then counter-trend on last 3, volume on that leg, EMA21/50/200 reclaim against the trade if visible — not a long per-candle description.\n"
                 "- If H1 right edge shows counter-trend candles with rising volume or EMA reclaim against the trade, the verdict must be ADJUST or CLOSE.\n"
-                "- HOLD is only allowed if the H1 right edge still confirms the trade direction.\n\n"
+                "- HOLD is only allowed if the H1 right edge still confirms the trade direction.\n"
+                "- ENTRY QUALITY: Is the entry at a tactical pullback/retest or chasing into stacked S/R? "
+                "Flag congestion zones (POC+VAH+VAL+SUP clustered near entry). Flag if the trend is extended and TP is a small fraction of the move done. "
+                "Flag if regime is LOW_VOLATILITY and trade is a breakdown/breakout. Verify TP1 RR independently.\n\n"
                 "Then output one machine-readable line immediately before the parser footer:\n"
                 "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
                 "The final 8 lines must be that RIGHT EDGE line plus the exact 7 parser footer lines, with nothing after them.\n\n"
@@ -7607,7 +7611,7 @@ def api_chart_analysis():
                 "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
                 "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
                 "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-                "Keep total response under 460 words. Reference specific prices. No speculation."
+                "Keep total response under 530 words. Reference specific prices. No speculation."
             )
             dual_prompt = (
                 "Two chart images are attached above this text: IMAGE 1 = D1, IMAGE 2 = H4.\n\n"
