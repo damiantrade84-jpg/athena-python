@@ -235,6 +235,8 @@ api_execute()
   └─ mt5_execute() OR bybit_execute()
 ```
 
+**Risk engine scope:** Peak equity, drawdown, and daily realized P&L are tracked **per** `signal["type"]` (asset class: `crypto`, `forex`, `stock`, etc.) so Bybit vs MT5 equity is not mixed. `risk_check` enforces `MAX_SL_PCT` per class from the config dict (`config.yaml` / `config.py`).
+
 ---
 
 ## Key Functions

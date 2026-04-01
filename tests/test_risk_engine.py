@@ -16,15 +16,15 @@ import risk_engine
 def _reset_peak_equity():
     """Reset persisted risk state before each test so local DB state doesn't leak in."""
     with risk_engine._peak_lock:
-        old = risk_engine._peak_equity
-        risk_engine._peak_equity = 0.0
+        old = dict(risk_engine._peak_equity)
+        risk_engine._peak_equity = {}
     with risk_engine._daily_lock:
-        old_daily_pnl = risk_engine._daily_pnl
+        old_daily_pnl = dict(risk_engine._daily_pnl)
         old_daily_pnl_date = risk_engine._daily_pnl_date
-        old_daily_start_balance = risk_engine._daily_start_balance
-        risk_engine._daily_pnl = 0.0
+        old_daily_start_balance = dict(risk_engine._daily_start_balance)
+        risk_engine._daily_pnl = {}
         risk_engine._daily_pnl_date = ""
-        risk_engine._daily_start_balance = 0.0
+        risk_engine._daily_start_balance = {}
     yield
     with risk_engine._peak_lock:
         risk_engine._peak_equity = old
@@ -103,19 +103,27 @@ class TestKillSwitch:
 
 class TestDrawdown:
     def test_severe_drawdown_rejects(self):
-        # Simulate 20% drawdown: peak was 10000, equity is 8000
+        # Simulate 20% drawdown: peak was 10000, equity is 8000 (crypto signal)
         import risk_engine
 
         with risk_engine._peak_lock:
-            old = risk_engine._peak_equity
-            risk_engine._peak_equity = 10000.0
+            old = dict(risk_engine._peak_equity)
+            risk_engine._peak_equity["crypto"] = 10000.0
         try:
-            result = risk_check(_make_signal(), 8000, 8000, [])
+            result = risk_check(_make_signal(type="crypto"), 8000, 8000, [])
             assert result.approved is False
             assert result.reason == "DRAWDOWN_CIRCUIT_BREAKER"
         finally:
             with risk_engine._peak_lock:
                 risk_engine._peak_equity = old
+
+    def test_drawdown_peaks_are_independent_per_asset_type(self):
+        import risk_engine
+
+        with risk_engine._peak_lock:
+            risk_engine._peak_equity = {"crypto": 10000.0, "forex": 50000.0}
+        assert abs(risk_engine._current_drawdown(8000, "crypto") - 0.2) < 1e-9
+        assert abs(risk_engine._current_drawdown(48000, "forex") - 0.04) < 1e-9
 
 
 # ── Max positions ────────────────────────────────────────────────────────────
@@ -131,6 +139,19 @@ class TestMaxPositions:
 
 
 # ── Invalid levels ───────────────────────────────────────────────────────────
+
+
+class TestMaxSlPct:
+    def test_rejects_when_sl_distance_exceeds_cap(self):
+        """Crypto MAX_SL_PCT default 8% — 33% wide stop must fail in risk_check."""
+        result = risk_check(
+            _make_signal(price=60000, sl=40000, tp1=65000, tp2=68000),
+            100000,
+            100000,
+            [],
+        )
+        assert result.approved is False
+        assert result.reason == "MAX_SL_EXCEEDED"
 
 
 class TestInvalidLevels:
@@ -227,11 +248,11 @@ class TestPeakEquityThreadSafety:
         import risk_engine
 
         with risk_engine._peak_lock:
-            risk_engine._peak_equity = 0.0
+            risk_engine._peak_equity = {}
         results = []
 
         def updater(val):
-            peak = _update_peak(val)
+            peak = _update_peak(val, "unknown")
             results.append(peak)
 
         threads = [threading.Thread(target=updater, args=(i * 100,)) for i in range(20)]
@@ -241,7 +262,35 @@ class TestPeakEquityThreadSafety:
             t.join()
         # Final peak should be the max value
         with risk_engine._peak_lock:
-            assert risk_engine._peak_equity == 1900.0
+            assert risk_engine._peak_equity.get("unknown") == 1900.0
+
+
+class TestDailyLossPerAssetType:
+    def test_independent_daily_loss_buckets(self):
+        from datetime import datetime, timezone
+
+        import risk_engine
+
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with risk_engine._daily_lock:
+            risk_engine._daily_pnl_date = today
+            risk_engine._daily_pnl = {"forex": -6000.0}
+            risk_engine._daily_start_balance = {"forex": 100000.0, "crypto": 10000.0}
+        blocked_fx, pct_fx = risk_engine._check_daily_loss(100000.0, "forex")
+        assert blocked_fx is True
+        assert pct_fx >= _cfg("DAILY_LOSS_LIMIT", 0.05)
+        blocked_crypto, _ = risk_engine._check_daily_loss(10000.0, "crypto")
+        assert blocked_crypto is False
+
+    def test_fresh_day_resets_counters(self):
+        import risk_engine
+
+        with risk_engine._daily_lock:
+            risk_engine._daily_pnl_date = "1999-01-01"
+            risk_engine._daily_pnl = {"forex": -99999.0}
+            risk_engine._daily_start_balance = {"forex": 1.0}
+        blocked, _ = risk_engine._check_daily_loss(100000.0, "forex")
+        assert blocked is False
 
 
 # ── _cfg live reads ──────────────────────────────────────────────────────────

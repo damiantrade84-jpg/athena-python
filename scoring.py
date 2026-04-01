@@ -242,6 +242,7 @@ def detect_div(d1c: list, h4c: list, h1c: list) -> list:
     try:
         h4 = h4c[-20:]
         cl = [c["close"] for c in h4]
+        lows = [c["low"] for c in h4]
         rsi = calc_rsi(cl, 14)
         pr = [c["high"] for c in h4]
         n = len(pr)
@@ -249,7 +250,7 @@ def detect_div(d1c: list, h4c: list, h1c: list) -> list:
             t = n // 3
             # Find prior price peak/trough index and get RSI at that exact bar
             prior_highs = pr[t : 2 * t]
-            prior_lows = cl[t : 2 * t]
+            prior_lows = lows[t : 2 * t]
             prior_rsi = rsi[t : 2 * t]
             if prior_highs and prior_rsi:
                 peak_idx = prior_highs.index(max(prior_highs))
@@ -260,7 +261,7 @@ def detect_div(d1c: list, h4c: list, h1c: list) -> list:
                 if rsi_at_peak is not None and pr[-1] > max(prior_highs) and rsi[-1] < rsi_at_peak:
                     w.append("H4 RSI Bearish Divergence")
                 # Bullish div: lower low in price, higher RSI at the trough
-                if rsi_at_trough is not None and cl[-1] < min(prior_lows) and rsi[-1] > rsi_at_trough:
+                if rsi_at_trough is not None and lows[-1] < min(prior_lows) and rsi[-1] > rsi_at_trough:
                     w.append("H4 RSI Bullish Divergence")
     except Exception as e:
         log.warning(f"detect_div H4: {e}")

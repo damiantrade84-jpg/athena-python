@@ -60,44 +60,59 @@ _RISK_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
 
 
 def _init_peak_table():
-    """Create peak_equity table if it doesn't exist."""
+    """Create peak_equity table if it doesn't exist; migrate legacy single-row schema."""
     try:
         with sqlite3.connect(_RISK_DB, timeout=15.0) as con:
             con.execute("PRAGMA journal_mode=WAL")
+            cur = con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='peak_equity'"
+            ).fetchone()
+            if cur:
+                cols = [
+                    r[1]
+                    for r in con.execute("PRAGMA table_info(peak_equity)").fetchall()
+                ]
+                if "id" in cols and "asset_type" not in cols:
+                    con.execute("DROP TABLE peak_equity")
+                    log.info(
+                        "[RISK] Migrated peak_equity to per–asset-class schema (legacy row dropped)"
+                    )
             con.execute(
-                "CREATE TABLE IF NOT EXISTS peak_equity (id INTEGER PRIMARY KEY CHECK(id=1), value REAL NOT NULL, updated_at TEXT NOT NULL)"
+                "CREATE TABLE IF NOT EXISTS peak_equity ("
+                "asset_type TEXT PRIMARY KEY, value REAL NOT NULL, updated_at TEXT NOT NULL)"
             )
             con.commit()
     except Exception as e:
         log.error(f"[RISK] Failed to init peak_equity table: {e}")
 
 
-def _load_peak_equity() -> float:
-    """Restore peak equity from SQLite on startup."""
+def _load_peak_equity() -> dict[str, float]:
+    """Restore per–asset-class peak equity from SQLite on startup."""
+    out: dict[str, float] = {}
     try:
         with sqlite3.connect(_RISK_DB, timeout=15.0) as con:
-            row = con.execute(
-                "SELECT value, updated_at FROM peak_equity WHERE id=1"
-            ).fetchone()
-            if row:
+            rows = con.execute(
+                "SELECT asset_type, value, updated_at FROM peak_equity"
+            ).fetchall()
+            for r in rows:
+                out[str(r[0])] = float(r[1])
                 log.info(
-                    f"[RISK] Restored peak equity: ${row[0]:,.2f} (saved {row[1]})"
+                    f"[RISK] Restored peak equity [{r[0]}]: ${float(r[1]):,.2f} (saved {r[2]})"
                 )
-                return float(row[0])
     except Exception as e:
         log.warning(f"[RISK] Could not load peak equity: {e}")
-    return 0.0
+    return out
 
 
-def _save_peak_equity(value: float):
-    """Persist peak equity to SQLite."""
+def _save_peak_equity(asset_type: str, value: float):
+    """Persist peak equity for one asset class to SQLite."""
     try:
         ts = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(_RISK_DB, timeout=15.0) as con:
             con.execute(
-                "INSERT INTO peak_equity (id, value, updated_at) VALUES (1, ?, ?) "
-                "ON CONFLICT(id) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-                (value, ts),
+                "INSERT INTO peak_equity (asset_type, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(asset_type) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                (asset_type, value, ts),
             )
             con.commit()
     except Exception as e:
@@ -107,72 +122,83 @@ def _save_peak_equity(value: float):
 
 
 _init_peak_table()
-_peak_equity = _load_peak_equity()
+_peak_equity: dict[str, float] = _load_peak_equity()
 _peak_lock = threading.Lock()
-_peak_last_saved: float = 0.0   # epoch seconds of last _save_peak_equity call
+_peak_last_saved: float = 0.0  # epoch seconds of last _save_peak_equity call (any asset)
 
 # ── Daily loss tracker ───────────────────────────────────────────────────────
-_daily_pnl: float = 0.0
+_daily_pnl: dict[str, float] = {}
 _daily_pnl_date: str = ""
-_daily_start_balance: float = 0.0
+_daily_start_balance: dict[str, float] = {}
 _daily_lock = threading.Lock()
 _kelly_cache: dict = {}           # (asset_type, regime) → (adaptive_risk_pct, cached_at)
 _KELLY_TTL_SECONDS: float = 300.0  # 5 minutes
 
 
-def record_daily_pnl(pnl: float, account_balance: float) -> None:
-    """Record realized P&L for daily loss tracking. Called by outcome monitor."""
+def record_daily_pnl(
+    pnl: float, account_balance: float, asset_type: str = ""
+) -> None:
+    """Record realized P&L for daily loss tracking (per asset class). Called by outcome monitor."""
     global _daily_pnl, _daily_pnl_date, _daily_start_balance
+    at = asset_type or "unknown"
     with _daily_lock:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if today != _daily_pnl_date:
-            _daily_pnl = 0.0
+            _daily_pnl = {}
+            _daily_start_balance = {}
             _daily_pnl_date = today
-            _daily_start_balance = account_balance
-        _daily_pnl += pnl
-        if _daily_start_balance > 0 and _daily_pnl < 0:
-            loss_pct = abs(_daily_pnl) / _daily_start_balance
+        if at not in _daily_start_balance or _daily_start_balance[at] <= 0:
+            _daily_start_balance[at] = account_balance
+        _daily_pnl[at] = _daily_pnl.get(at, 0.0) + pnl
+        if _daily_start_balance[at] > 0 and _daily_pnl[at] < 0:
+            loss_pct = abs(_daily_pnl[at]) / _daily_start_balance[at]
             if loss_pct >= _cfg("DAILY_LOSS_LIMIT", 0.05):
                 log.warning(
-                    f"[RISK] DAILY LOSS LIMIT: lost ${abs(_daily_pnl):.2f} ({loss_pct:.1%}) today — blocking new trades"
+                    f"[RISK] DAILY LOSS LIMIT [{at}]: lost ${abs(_daily_pnl[at]):.2f} "
+                    f"({loss_pct:.1%}) today — blocking new trades"
                 )
 
 
-def _check_daily_loss(account_balance: float) -> tuple[bool, float]:
-    """Check if daily loss limit is breached. Returns (blocked, loss_pct)."""
+def _check_daily_loss(
+    account_balance: float, asset_type: str = ""
+) -> tuple[bool, float]:
+    """Check if daily loss limit is breached for this asset class. Returns (blocked, loss_pct)."""
     global _daily_pnl_date, _daily_pnl, _daily_start_balance
+    at = asset_type or "unknown"
     with _daily_lock:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if today != _daily_pnl_date:
-            _daily_pnl = 0.0
+            _daily_pnl = {}
+            _daily_start_balance = {}
             _daily_pnl_date = today
-            _daily_start_balance = account_balance
             return False, 0.0
-        if _daily_start_balance <= 0:
-            _daily_start_balance = account_balance
-        if _daily_pnl >= 0:
+        if at not in _daily_start_balance or _daily_start_balance[at] <= 0:
+            _daily_start_balance[at] = account_balance
+        pnl = _daily_pnl.get(at, 0.0)
+        if pnl >= 0:
             return False, 0.0
-        loss_pct = abs(_daily_pnl) / _daily_start_balance
+        loss_pct = abs(pnl) / _daily_start_balance[at]
         return loss_pct >= _cfg("DAILY_LOSS_LIMIT", 0.05), loss_pct
 
 
-def _update_peak(equity: float) -> float:
-    """Track peak equity for drawdown calculation. Thread-safe. Persists to SQLite on new highs."""
+def _update_peak(equity: float, asset_type: str = "") -> float:
+    """Track peak equity for drawdown calculation (per asset class). Thread-safe. Persists on new highs."""
     global _peak_equity, _peak_last_saved
+    at = asset_type or "unknown"
     with _peak_lock:
-        if equity > _peak_equity:
-            _peak_equity = equity
-            import time as _time
+        cur = _peak_equity.get(at)
+        if cur is None or equity > cur:
+            _peak_equity[at] = equity
             now_ts = _time.time()
             if now_ts - _peak_last_saved >= 60.0:
-                _save_peak_equity(_peak_equity)
+                _save_peak_equity(at, _peak_equity[at])
                 _peak_last_saved = now_ts
-        return _peak_equity
+        return _peak_equity[at]
 
 
-def _current_drawdown(equity: float) -> float:
+def _current_drawdown(equity: float, asset_type: str = "") -> float:
     """Calculate current drawdown from peak as a fraction (0.0 = no drawdown)."""
-    peak = _update_peak(equity)
+    peak = _update_peak(equity, asset_type)
     if peak <= 0:
         return 0.0
     return max(0.0, (peak - equity) / peak)
@@ -469,13 +495,15 @@ def risk_check(
         log.warning(f"{prefix} REJECTED: invalid direction '{signal.get('direction')}'")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "INVALID_DIRECTION")
 
+    asset_type = signal.get("type", "") or "unknown"
+
     # ── Check 0: Kill switch ────────────────────────────────────────────────
     if kill_switch:
         log.warning(f"{prefix} REJECTED: kill switch active")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "KILL_SWITCH_ACTIVE")
 
     # ── Check 0.5: Daily loss limit ────────────────────────────────────────
-    daily_blocked, daily_loss_pct = _check_daily_loss(account_balance)
+    daily_blocked, daily_loss_pct = _check_daily_loss(account_balance, asset_type)
     if daily_blocked:
         log.warning(
             f"{prefix} REJECTED: daily loss {daily_loss_pct:.1%} exceeds {_cfg('DAILY_LOSS_LIMIT', 0.05):.0%} limit"
@@ -500,7 +528,7 @@ def risk_check(
             return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "UNPARSEABLE_TIMESTAMP")
 
     # ── Check 2: Drawdown circuit breaker ───────────────────────────────────
-    dd = _current_drawdown(account_equity)
+    dd = _current_drawdown(account_equity, asset_type)
     dd_factor = 1.0
     if dd >= _cfg("DRAWDOWN_STOP_THRESHOLD", 0.15):
         log.warning(
@@ -550,7 +578,16 @@ def risk_check(
         log.warning(f"{prefix} REJECTED: SHORT stop {sl} must be above entry {entry}")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "INVALID_LEVELS")
 
-    asset_type = signal.get("type", "")
+    max_sl_pct = _cfg("MAX_SL_PCT", {}).get(asset_type, 0.05)
+    if entry != 0:
+        sl_pct = abs(entry - sl) / abs(entry)
+        if sl_pct > max_sl_pct:
+            log.warning(
+                f"{prefix} REJECTED: SL distance {sl_pct:.1%} exceeds MAX_SL_PCT "
+                f"{max_sl_pct:.1%} for {asset_type}"
+            )
+            return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "MAX_SL_EXCEEDED")
+
     _risk_regime = signal.get("regimeName")
     if not _risk_regime:
         _regime_payload = signal.get("regime")

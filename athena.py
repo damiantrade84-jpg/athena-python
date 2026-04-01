@@ -4095,7 +4095,9 @@ def api_analyze():
             if _acct and not _acct.get("error"):
                 _p_heat = _calc_portfolio_heat(_pos, _acct["balance"])
 
-                _dd_pct = _current_drawdown(_acct["equity"])
+                _dd_pct = _current_drawdown(
+                    _acct["equity"], _sig_type or "unknown"
+                )
 
         except Exception as _ph_err:
             log.debug(f"[AI] portfolio heat/drawdown fetch failed: {_ph_err}")
@@ -9276,7 +9278,7 @@ def _update_trade_outcome(
                         log.debug(f"[DAILY-PNL] MT5 balance fetch: {_mt5e}")
 
                 if _bal > 0:
-                    record_daily_pnl(pnl, _bal)
+                    record_daily_pnl(pnl, _bal, asset_type or "unknown")
 
             except Exception as _dpnl_err:
                 log.debug(f"[DAILY-PNL] record failed: {_dpnl_err}")
