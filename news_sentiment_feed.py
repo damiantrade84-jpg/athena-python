@@ -268,6 +268,61 @@ def _strip_json_fences(raw: str) -> str:
     return text
 
 
+def _anthropic_message_text(response: Any) -> str:
+    """Concatenate all text blocks — first block can be empty while later blocks hold JSON."""
+    parts: list[str] = []
+    for block in getattr(response, "content", None) or []:
+        if getattr(block, "type", None) == "text":
+            t = getattr(block, "text", None)
+            if t:
+                parts.append(str(t))
+    return "".join(parts).strip()
+
+
+def _extract_balanced_json_object(text: str) -> Optional[str]:
+    """First top-level `{` … `}` slice, respecting JSON string escapes (nested `{` inside strings)."""
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_string = False
+        else:
+            if c == '"':
+                in_string = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+    return None
+
+
+def _parse_news_ai_json(raw: str) -> dict:
+    """Parse model output: fenced JSON, raw JSON, or prose + trailing JSON object."""
+    s = _strip_json_fences(raw.strip())
+    if not s:
+        raise ValueError("empty model text")
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        pass
+    extracted = _extract_balanced_json_object(s)
+    if extracted:
+        return json.loads(extracted)
+    raise json.JSONDecodeError("no JSON object in model output", s, 0)
+
+
 def get_news_sentiment(
     pair: dict,
     *,
@@ -316,9 +371,28 @@ def get_news_sentiment(
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
         )
-        raw = response.content[0].text.strip()
-        raw = _strip_json_fences(raw)
-        result = json.loads(raw)
+        raw = _anthropic_message_text(response)
+        try:
+            result = _parse_news_ai_json(raw)
+        # JSONDecodeError must precede ValueError (JSONDecodeError subclasses ValueError).
+        except json.JSONDecodeError as e:
+            preview = (raw[:280] + "…") if len(raw) > 280 else raw
+            log.error(
+                "[NewsAI] JSON parse failed for %s: %s preview=%r",
+                display,
+                e,
+                preview,
+            )
+            return None
+        except ValueError as e:
+            if "empty model text" in str(e).lower():
+                log.warning(
+                    "[NewsAI] empty Claude text for %s (check response.content blocks)",
+                    display,
+                )
+            else:
+                log.warning("[NewsAI] unexpected parse error for %s: %s", display, e)
+            return None
         log.info(
             "[NewsAI] %s: score=%s dir=%s conf=%s major=%s",
             display,
@@ -328,9 +402,6 @@ def get_news_sentiment(
             result.get("major_event_detected"),
         )
         return result
-    except json.JSONDecodeError as e:
-        log.error("[NewsAI] JSON parse failed for %s: %s", display, e)
-        return None
     except Exception as e:
         log.error("[NewsAI] Claude API error for %s: %s", display, e)
         return None

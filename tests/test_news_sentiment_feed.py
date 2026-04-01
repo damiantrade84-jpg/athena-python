@@ -7,6 +7,7 @@ import pytest
 import news_sentiment_feed as nsf
 from news_sentiment_feed import (
     _latest_normalized_sentiment,
+    _parse_news_ai_json,
     _strip_json_fences,
     apply_news_sentiment_to_scan_result,
     build_news_block,
@@ -41,6 +42,24 @@ def test_latest_normalized_sentiment_single_dict():
 def test_strip_json_fences():
     raw = '```json\n{"a": 1}\n```'
     assert json.loads(_strip_json_fences(raw)) == {"a": 1}
+
+
+def test_parse_news_ai_json_plain():
+    assert _parse_news_ai_json('{"pair": "X", "sentiment_score": 0.1}')["sentiment_score"] == 0.1
+
+
+def test_parse_news_ai_json_after_prose():
+    raw = 'Here is the analysis.\n\n{"pair": "EUR/USD", "sentiment_score": 0.0, "confidence": 0.5, "direction": "neutral", "key_themes": [], "major_event_detected": false, "major_event_description": null, "reasoning_summary": "x", "article_count_used": 1, "eodhd_pre_score": null, "eodhd_agreement": "unavailable"}'
+    out = _parse_news_ai_json(raw)
+    assert out["pair"] == "EUR/USD"
+    assert out["direction"] == "neutral"
+
+
+def test_parse_news_ai_json_empty_raises():
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="empty"):
+        _parse_news_ai_json("   ")
 
 
 def test_build_news_block_skips_non_dict():
