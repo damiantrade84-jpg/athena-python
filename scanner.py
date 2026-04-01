@@ -352,6 +352,22 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     "H4": get_candle_fetch_meta(pair, "H4", _lim["H4"]),
                     "H1": get_candle_fetch_meta(pair, "H1", _lim["H1"]),
                 }
+                rate_limited_tfs = [
+                    tf
+                    for tf, meta in fetch_meta.items()
+                    if isinstance(meta, dict)
+                    and (
+                        meta.get("rateLimited") is True
+                        or meta.get("detail") == "rate_limited"
+                    )
+                    and not raw_candles.get(tf)
+                ]
+                if rate_limited_tfs:
+                    return pair, {
+                        "skipReason": "Rate limited",
+                        "skipCode": "rate_limited",
+                        "skipDetail": f"Rate limited on {', '.join(rate_limited_tfs)}",
+                    }, None
                 sig_a = r.analyze_pair(
                     pair,
                     btc_bias,
@@ -483,6 +499,27 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     scan_funnel["errors"] += 1
 
                     log.error(f"{pair['display']:12s} ERR: {err}")
+
+                    continue
+
+                if isinstance(sig, dict) and sig.get("skipCode") == "rate_limited":
+                    skipped.append(
+                        {
+                            "pair": pair["display"],
+                            "reason": sig.get("skipReason", "Rate limited"),
+                            "tier": "skip",
+                            "diagnostics": [
+                                {
+                                    "code": sig.get("skipCode", "rate_limited"),
+                                    "detail": sig.get("skipDetail", "Rate limited"),
+                                }
+                            ],
+                        }
+                    )
+
+                    scan_funnel["no_data"] += 1
+
+                    log.info(f"{pair['display']:12s} SKIP: rate limited")
 
                     continue
 

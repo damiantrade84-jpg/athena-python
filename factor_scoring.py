@@ -208,6 +208,43 @@ def _apply_correlation_filter(
     redundancy through regime-weight dampening. Re-evaluate after collecting 6+
     months of live factor performance data via ai_learning.py.
     """
+    try:
+        series_map = _build_indicator_series(h4_candles, window)
+        keys = [
+            k
+            for k, v in indicator_scalars.items()
+            if v is not None and k in series_map and series_map.get(k)
+        ]
+        if len(keys) >= 2:
+            pairwise = []
+            max_abs_corr: Dict[str, float] = {k: 0.0 for k in keys}
+            for i, left in enumerate(keys):
+                for right in keys[i + 1:]:
+                    corr = _pearson(series_map.get(left, []), series_map.get(right, []))
+                    if corr is None:
+                        continue
+                    abs_corr = abs(float(corr))
+                    max_abs_corr[left] = max(max_abs_corr[left], abs_corr)
+                    max_abs_corr[right] = max(max_abs_corr[right], abs_corr)
+                    pairwise.append(f"{left}/{right}={corr:.3f}")
+
+            if pairwise:
+                theoretical = {
+                    k: round(max(0.5, 1.0 - max_abs_corr.get(k, 0.0) * 0.5), 4)
+                    for k in keys
+                }
+                log.debug(
+                    "[SHADOW CORRELATION] pairs=%s theoretical_weights=%s",
+                    ", ".join(pairwise),
+                    theoretical,
+                )
+        elif keys:
+            log.debug(
+                "[SHADOW CORRELATION] insufficient overlapping indicators for matrix: %s",
+                keys,
+            )
+    except Exception as exc:
+        log.debug(f"[SHADOW CORRELATION] fail-open: {exc}")
     return {k: 1.0 for k in indicator_scalars}
 
 

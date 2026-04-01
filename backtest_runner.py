@@ -472,6 +472,8 @@ def backtest_pair(pair, style="auto"):
     _ptype = pair["type"]
     _pair_score_group = get_pair_score_group(pair)
     _pair_ctx = dict(pair)
+    for _k in ["votes", "sentiment", "eventRisk", "fundingRate", "confluenceScore"]:
+        _pair_ctx.pop(_k, None)
     _pair_ctx["score_group"] = _pair_score_group
 
     # Engine A backtest gate: pair bt_min override → subgroup BT_MIN_GROUP → class BT_MIN.
@@ -794,32 +796,17 @@ def backtest_pair(pair, style="auto"):
                     i += 1
                     continue
 
-            # BUG 6 fix: apply MAX_SL_PCT distance cap — mirrors live athena.py Fix 6.
-            # Applies to all asset types so backtest stops match the live hard cap.
+            # BUG 6 fix: MAX_SL_PCT — reject over-wide stops (matches live risk_check / executors).
             _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
             _sl_dist_pct = abs(float(entry) - float(sl)) / float(entry)
             if _sl_dist_pct > _max_sl_pct:
                 log.debug(
                     f"[BT-SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct:.1%} "
-                    f"exceeds cap {_max_sl_pct:.1%} — clamping"
+                    f"exceeds cap {_max_sl_pct:.1%} — rejecting"
                 )
-                sl = (
-                    float(entry) * (1 - _max_sl_pct)
-                    if direction == "LONG"
-                    else float(entry) * (1 + _max_sl_pct)
-                )
-                _sl_dist = abs(float(entry) - sl)
-                tp1 = (
-                    float(entry) + _sl_dist * 1.5
-                    if direction == "LONG"
-                    else float(entry) - _sl_dist * 1.5
-                )
-                tp2 = (
-                    float(entry) + _sl_dist * 2.5
-                    if direction == "LONG"
-                    else float(entry) - _sl_dist * 2.5
-                )
-                rr1 = 1.5
+                funnel["fail_score"] += 1
+                i += 1
+                continue
 
             # T1: Volatility-adjusted sizing â€" if ATR > 1.5x its 20-bar SMA, reduce size 30%
 
@@ -1217,31 +1204,17 @@ def backtest_pair(pair, style="auto"):
                     i += 1
                     continue
 
-            # BUG 6 fix: apply MAX_SL_PCT distance cap — mirrors live athena.py Fix 6.
+            # BUG 6 fix: MAX_SL_PCT — reject over-wide stops (matches live risk_check / executors).
             _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
             _sl_dist_pct = abs(float(entry) - float(sl)) / float(entry)
             if _sl_dist_pct > _max_sl_pct:
                 log.debug(
                     f"[BT-SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct:.1%} "
-                    f"exceeds cap {_max_sl_pct:.1%} — clamping"
+                    f"exceeds cap {_max_sl_pct:.1%} — rejecting"
                 )
-                sl = (
-                    float(entry) * (1 - _max_sl_pct)
-                    if direction == "LONG"
-                    else float(entry) * (1 + _max_sl_pct)
-                )
-                _sl_dist = abs(float(entry) - sl)
-                tp1 = (
-                    float(entry) + _sl_dist * 1.5
-                    if direction == "LONG"
-                    else float(entry) - _sl_dist * 1.5
-                )
-                tp2 = (
-                    float(entry) + _sl_dist * 2.5
-                    if direction == "LONG"
-                    else float(entry) - _sl_dist * 2.5
-                )
-                rr1 = 1.5
+                funnel["fail_score"] += 1
+                i += 1
+                continue
 
             _atr_series = calc_atr(
                 [c["high"] for c in h4_window],
@@ -1622,31 +1595,17 @@ def backtest_pair(pair, style="auto"):
                     i += 1
                     continue
 
-            # BUG 6 fix: apply MAX_SL_PCT distance cap — mirrors live athena.py Fix 6.
+            # BUG 6 fix: MAX_SL_PCT — reject over-wide stops (matches live risk_check / executors).
             _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
             _sl_dist_pct = abs(float(entry) - float(sl)) / float(entry)
             if _sl_dist_pct > _max_sl_pct:
                 log.debug(
                     f"[BT-SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct:.1%} "
-                    f"exceeds cap {_max_sl_pct:.1%} — clamping"
+                    f"exceeds cap {_max_sl_pct:.1%} — rejecting"
                 )
-                sl = (
-                    float(entry) * (1 - _max_sl_pct)
-                    if direction == "LONG"
-                    else float(entry) * (1 + _max_sl_pct)
-                )
-                _sl_dist = abs(float(entry) - sl)
-                tp1 = (
-                    float(entry) + _sl_dist * 1.5
-                    if direction == "LONG"
-                    else float(entry) - _sl_dist * 1.5
-                )
-                tp2 = (
-                    float(entry) + _sl_dist * 2.5
-                    if direction == "LONG"
-                    else float(entry) - _sl_dist * 2.5
-                )
-                rr1 = 1.5
+                funnel["fail_score"] += 1
+                i += 1
+                continue
 
             _atr_series = calc_atr(
                 [c["high"] for c in h1_window],
@@ -2853,25 +2812,16 @@ def backtest_pair_naked(pair: dict, style: str = "naked"):
             i += 1
             continue
 
-        # BUG 6 fix: apply MAX_SL_PCT distance cap for Engine B — mirrors live Fix 6.
+        # BUG 6 fix: MAX_SL_PCT — reject over-wide stops (matches live risk_check / executors).
         _max_sl_pct_b = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
         _sl_dist_pct_b = abs(float(entry) - float(sl)) / float(entry)
         if _sl_dist_pct_b > _max_sl_pct_b:
             log.debug(
                 f"[BT-SL-CAP-B] {pair['display']} {direction} SL {_sl_dist_pct_b:.1%} "
-                f"exceeds cap {_max_sl_pct_b:.1%} — clamping"
+                f"exceeds cap {_max_sl_pct_b:.1%} — rejecting"
             )
-            sl = (
-                float(entry) * (1 - _max_sl_pct_b)
-                if direction == "LONG"
-                else float(entry) * (1 + _max_sl_pct_b)
-            )
-            _sl_dist_b = abs(float(entry) - sl)
-            tp = (
-                float(entry) + _sl_dist_b * 1.5
-                if direction == "LONG"
-                else float(entry) - _sl_dist_b * 1.5
-            )
+            i += 1
+            continue
 
         outcome = "TIMEOUT"
         r_multiple = 0.0

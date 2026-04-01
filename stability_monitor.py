@@ -9,7 +9,10 @@ import json
 import logging
 import math
 import os
+import queue
 import sqlite3
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -20,6 +23,21 @@ _CURRENT_WINDOW = 50
 _BASELINE_WINDOW = 200
 _MIN_CURRENT = 5
 _MIN_BASELINE = 10
+
+_audit_queue: queue.Queue = queue.Queue()
+_audit_pending = 0
+_audit_pending_lock = threading.Lock()
+_audit_worker_started = False
+_audit_worker_lock = threading.Lock()
+
+_AUDIT_BATCH_MAX = 64
+
+_INSERT_STABILITY_EVENT_SQL = """
+                INSERT INTO stability_events
+                (ts, engine, source, event_type, score_norm, passed, expected_prob,
+                 realized_win, execution_ok, slippage_bps, expectancy_r, feature_json, meta_json)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """
 
 
 def _default_db_path() -> str:
@@ -161,6 +179,95 @@ def init_stability_store(db_path: str | None = None) -> None:
             con.commit()
     except Exception as exc:
         log.debug(f"[SSI] init failed: {exc}")
+
+
+def _audit_worker_loop() -> None:
+    """Daemon thread: batch INSERT stability_events and refresh summaries per engine."""
+    global _audit_pending
+    while True:
+        try:
+            first = _audit_queue.get()
+        except Exception:
+            continue
+        batch = [first]
+        try:
+            while len(batch) < _AUDIT_BATCH_MAX:
+                batch.append(_audit_queue.get_nowait())
+        except queue.Empty:
+            pass
+
+        n_batch = len(batch)
+        try:
+            by_path: dict[str, list[dict[str, Any]]] = {}
+            for row in batch:
+                if not isinstance(row, dict) or "vals" not in row or "db_path" not in row:
+                    log.debug("[SSI] audit worker: skipping bad payload")
+                    continue
+                path = row["db_path"]
+                by_path.setdefault(path, []).append(row)
+
+            for path, rows in by_path.items():
+                if not rows:
+                    continue
+                try:
+                    init_stability_store(path)
+                    tuples = [r["vals"] for r in rows]
+                    engines = {r["engine"] for r in rows}
+                    with sqlite3.connect(path, timeout=15.0) as con:
+                        try:
+                            con.executemany(_INSERT_STABILITY_EVENT_SQL, tuples)
+                        except Exception as exc:
+                            log.warning(f"[SSI] batch insert failed, row-by-row: {exc}")
+                            for t in tuples:
+                                try:
+                                    con.execute(_INSERT_STABILITY_EVENT_SQL, t)
+                                except Exception as row_exc:
+                                    log.debug(f"[SSI] row insert failed: {row_exc}")
+                        con.commit()
+                    for eng in engines:
+                        _refresh_engine_summary(path, eng)
+                except Exception as exc:
+                    log.debug(f"[SSI] audit worker batch failed for {path}: {exc}")
+        finally:
+            with _audit_pending_lock:
+                _audit_pending -= n_batch
+
+
+def join_stability_audit_queue(timeout: float | None = None) -> None:
+    """Block until queued stability events are persisted (for tests / deterministic reads)."""
+    deadline = float("inf") if timeout is None else time.time() + timeout
+    while True:
+        with _audit_pending_lock:
+            pending = _audit_pending
+        if pending == 0 and _audit_queue.empty():
+            time.sleep(0.03)
+            with _audit_pending_lock:
+                pending2 = _audit_pending
+            if pending2 == 0 and _audit_queue.empty():
+                return
+        if time.time() >= deadline:
+            with _audit_pending_lock:
+                pend = _audit_pending
+            raise TimeoutError(
+                f"stability audit queue not drained within {timeout}s ({pend} pending)"
+            )
+        time.sleep(0.02)
+
+
+def _ensure_audit_worker() -> None:
+    global _audit_worker_started
+    if _audit_worker_started:
+        return
+    with _audit_worker_lock:
+        if _audit_worker_started:
+            return
+        _t = threading.Thread(
+            target=_audit_worker_loop,
+            daemon=True,
+            name="stability-audit-worker",
+        )
+        _t.start()
+        _audit_worker_started = True
 
 
 def record_signal_event(
@@ -338,40 +445,38 @@ def _record_event(
     db_path: str | None = None,
     meta: dict | None = None,
 ) -> None:
+    global _audit_pending
     norm_engine = _normalize_engine_name(engine)
     if not norm_engine:
         return
     path = db_path or _default_db_path()
-    init_stability_store(path)
+    vals = (
+        _utc_now(),
+        norm_engine,
+        str(source or "runtime"),
+        str(event_type or "signal"),
+        _clamp01(score_norm),
+        None if passed is None else (1 if bool(passed) else 0),
+        _normalize_expected_prob(expected_prob),
+        None if realized_win is None else (1 if bool(realized_win) else 0),
+        None if execution_ok is None else (1 if bool(execution_ok) else 0),
+        _safe_float(slippage_bps),
+        _safe_float(expectancy_r),
+        json.dumps(_sanitize_feature_map(feature_map), sort_keys=True),
+        json.dumps(meta or {}, sort_keys=True),
+    )
     try:
-        with sqlite3.connect(path, timeout=15.0) as con:
-            con.execute(
-                """
-                INSERT INTO stability_events
-                (ts, engine, source, event_type, score_norm, passed, expected_prob,
-                 realized_win, execution_ok, slippage_bps, expectancy_r, feature_json, meta_json)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    _utc_now(),
-                    norm_engine,
-                    str(source or "runtime"),
-                    str(event_type or "signal"),
-                    _clamp01(score_norm),
-                    None if passed is None else (1 if bool(passed) else 0),
-                    _normalize_expected_prob(expected_prob),
-                    None if realized_win is None else (1 if bool(realized_win) else 0),
-                    None if execution_ok is None else (1 if bool(execution_ok) else 0),
-                    _safe_float(slippage_bps),
-                    _safe_float(expectancy_r),
-                    json.dumps(_sanitize_feature_map(feature_map), sort_keys=True),
-                    json.dumps(meta or {}, sort_keys=True),
-                ),
-            )
-            con.commit()
-        _refresh_engine_summary(path, norm_engine)
+        _ensure_audit_worker()
+        with _audit_pending_lock:
+            _audit_pending += 1
+        _audit_queue.put(
+            {"db_path": path, "engine": norm_engine, "vals": vals},
+            block=False,
+        )
     except Exception as exc:
-        log.debug(f"[SSI] record failed for {norm_engine}: {exc}")
+        with _audit_pending_lock:
+            _audit_pending -= 1
+        log.debug(f"[SSI] audit queue put failed for {norm_engine}: {exc}")
 
 
 def _refresh_engine_summary(db_path: str, engine: str) -> None:

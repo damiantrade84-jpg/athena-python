@@ -450,6 +450,13 @@ def fetch_candles(
         elif candles is None:
             candles = None
 
+        if isinstance(candles, dict):
+            fetch_meta["error"] = bool(candles.get("error"))
+            if candles.get("detail"):
+                fetch_meta["detail"] = candles.get("detail")
+            if candles.get("detail") == "rate_limited":
+                fetch_meta["rateLimited"] = True
+
         if not candles and pair.get("type") != "crypto" and pair.get("source") == "eodhd":
             _yf_sym = yfinance_symbol_for_pair(pair)
             if _yf_sym:

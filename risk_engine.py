@@ -7,6 +7,7 @@ No code path bypasses this module. Even on demo. Even for manual clicks.
 import logging
 import math
 import os
+import queue
 import sqlite3
 import threading
 import time as _time
@@ -49,6 +50,7 @@ class RiskApproval:
     risk_amount: float  # Dollar risk for this trade
     risk_pct: float  # As fraction of account (0.01 = 1%)
     portfolio_heat: float  # Total portfolio risk after this trade (fraction)
+    drawdown_pct: float  # Current drawdown at decision time (fraction)
     reason: str  # "OK" or rejection reason code
 
     def to_dict(self) -> dict:
@@ -57,6 +59,16 @@ class RiskApproval:
 
 # ── Peak equity persistence (survives restarts) ─────────────────────────────
 _RISK_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
+_PEAK_UPSERT_SQL = (
+    "INSERT INTO peak_equity (asset_type, value, updated_at) VALUES (?, ?, ?) "
+    "ON CONFLICT(asset_type) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at"
+)
+_peak_audit_queue: queue.Queue = queue.Queue()
+_peak_audit_pending = 0
+_peak_audit_pending_lock = threading.Lock()
+_peak_audit_worker_started = False
+_peak_audit_worker_lock = threading.Lock()
+_PEAK_AUDIT_BATCH_MAX = 32
 
 
 def _init_peak_table():
@@ -104,18 +116,89 @@ def _load_peak_equity() -> dict[str, float]:
     return out
 
 
+def _peak_audit_worker_loop() -> None:
+    """Daemon worker: persist peak_equity upserts off the caller thread."""
+    global _peak_audit_pending
+    while True:
+        try:
+            first = _peak_audit_queue.get()
+        except Exception:
+            continue
+        batch = [first]
+        try:
+            while len(batch) < _PEAK_AUDIT_BATCH_MAX:
+                batch.append(_peak_audit_queue.get_nowait())
+        except queue.Empty:
+            pass
+
+        n_batch = len(batch)
+        try:
+            rows = []
+            for row in batch:
+                if not isinstance(row, tuple) or len(row) != 3:
+                    log.debug(f"[RISK] peak worker skipping invalid payload: {row!r}")
+                    continue
+                rows.append(row)
+            if rows:
+                with sqlite3.connect(_RISK_DB, timeout=15.0) as con:
+                    con.executemany(_PEAK_UPSERT_SQL, rows)
+                    con.commit()
+        except Exception as e:
+            log.warning(f"[RISK] peak equity worker batch failed: {e}")
+        finally:
+            with _peak_audit_pending_lock:
+                _peak_audit_pending -= n_batch
+
+
+def _ensure_peak_audit_worker() -> None:
+    global _peak_audit_worker_started
+    if _peak_audit_worker_started:
+        return
+    with _peak_audit_worker_lock:
+        if _peak_audit_worker_started:
+            return
+        _t = threading.Thread(
+            target=_peak_audit_worker_loop,
+            daemon=True,
+            name="risk-peak-audit-worker",
+        )
+        _t.start()
+        _peak_audit_worker_started = True
+
+
+def join_peak_audit_queue(timeout: float | None = None) -> None:
+    """Block until queued peak_equity writes are persisted (for tests)."""
+    deadline = float("inf") if timeout is None else (_time.time() + timeout)
+    while True:
+        with _peak_audit_pending_lock:
+            pending = _peak_audit_pending
+        if pending == 0 and _peak_audit_queue.empty():
+            _time.sleep(0.03)
+            with _peak_audit_pending_lock:
+                pending2 = _peak_audit_pending
+            if pending2 == 0 and _peak_audit_queue.empty():
+                return
+        if _time.time() >= deadline:
+            with _peak_audit_pending_lock:
+                pend = _peak_audit_pending
+            raise TimeoutError(
+                f"peak audit queue not drained within {timeout}s ({pend} pending)"
+            )
+        _time.sleep(0.02)
+
+
 def _save_peak_equity(asset_type: str, value: float):
-    """Persist peak equity for one asset class to SQLite."""
+    """Enqueue peak equity persistence for one asset class."""
+    global _peak_audit_pending
     try:
         ts = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(_RISK_DB, timeout=15.0) as con:
-            con.execute(
-                "INSERT INTO peak_equity (asset_type, value, updated_at) VALUES (?, ?, ?) "
-                "ON CONFLICT(asset_type) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-                (asset_type, value, ts),
-            )
-            con.commit()
+        _ensure_peak_audit_worker()
+        with _peak_audit_pending_lock:
+            _peak_audit_pending += 1
+        _peak_audit_queue.put((asset_type, value, ts), block=False)
     except Exception as e:
+        with _peak_audit_pending_lock:
+            _peak_audit_pending -= 1
         log.warning(
             f"[RISK] peak equity save failed: {e}"
         )  # non-fatal — next update will retry
@@ -493,14 +576,14 @@ def risk_check(
     direction = signal.get("direction", "").upper()
     if direction not in ("LONG", "SHORT"):
         log.warning(f"{prefix} REJECTED: invalid direction '{signal.get('direction')}'")
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "INVALID_DIRECTION")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "INVALID_DIRECTION")
 
     asset_type = signal.get("type", "") or "unknown"
 
     # ── Check 0: Kill switch ────────────────────────────────────────────────
     if kill_switch:
         log.warning(f"{prefix} REJECTED: kill switch active")
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "KILL_SWITCH_ACTIVE")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "KILL_SWITCH_ACTIVE")
 
     # ── Check 0.5: Daily loss limit ────────────────────────────────────────
     daily_blocked, daily_loss_pct = _check_daily_loss(account_balance, asset_type)
@@ -508,7 +591,7 @@ def risk_check(
         log.warning(
             f"{prefix} REJECTED: daily loss {daily_loss_pct:.1%} exceeds {_cfg('DAILY_LOSS_LIMIT', 0.05):.0%} limit"
         )
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "DAILY_LOSS_LIMIT")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "DAILY_LOSS_LIMIT")
 
     # ── Check 1: Signal freshness ───────────────────────────────────────────
     ts_str = signal.get("timestamp")
@@ -520,12 +603,12 @@ def risk_check(
                 log.warning(
                     f"{prefix} REJECTED: signal is {age:.0f}s old (max {_cfg('SIGNAL_MAX_AGE_SEC', 300)}s)"
                 )
-                return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "STALE_SIGNAL")
+                return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "STALE_SIGNAL")
         except (ValueError, TypeError):
             log.warning(
                 f"{prefix} REJECTED: could not parse signal timestamp: {ts_str}"
             )
-            return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "UNPARSEABLE_TIMESTAMP")
+            return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "UNPARSEABLE_TIMESTAMP")
 
     # ── Check 2: Drawdown circuit breaker ───────────────────────────────────
     dd = _current_drawdown(account_equity, asset_type)
@@ -534,7 +617,7 @@ def risk_check(
         log.warning(
             f"{prefix} REJECTED: drawdown {dd:.1%} exceeds stop threshold {_cfg('DRAWDOWN_STOP_THRESHOLD', 0.15):.0%}"
         )
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "DRAWDOWN_CIRCUIT_BREAKER")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "DRAWDOWN_CIRCUIT_BREAKER")
     if dd >= _cfg("DRAWDOWN_REDUCE_THRESHOLD", 0.10):
         dd_factor = 0.5
         log.info(f"{prefix} drawdown {dd:.1%} — halving position size")
@@ -544,7 +627,7 @@ def risk_check(
         log.warning(
             f"{prefix} REJECTED: {len(open_positions)} open positions (max {_cfg('MAX_OPEN_POSITIONS', 5)})"
         )
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "MAX_POSITIONS_REACHED")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "MAX_POSITIONS_REACHED")
 
     # ── Check 4: Correlation guard ──────────────────────────────────────────
     corr_count = _count_correlated(pair, open_positions)
@@ -553,7 +636,7 @@ def risk_check(
         log.warning(
             f"{prefix} REJECTED: {corr_count} positions in '{cluster}' cluster (max {_cfg('MAX_CORRELATED_POSITIONS', 2)})"
         )
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "CORRELATED_CLUSTER_FULL")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "CORRELATED_CLUSTER_FULL")
 
     # ── Check 4b: Same-pair duplicate guard ─────────────────────────────────
     # Block opening a second position on a pair we already hold.
@@ -563,20 +646,20 @@ def risk_check(
         log.warning(
             f"{prefix} REJECTED: already holding {_existing_same_pair} position(s) on {pair}"
         )
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "DUPLICATE_PAIR")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "DUPLICATE_PAIR")
 
     # ── Check 5: Calculate position size ────────────────────────────────────
-    entry = signal.get("price", 0)
-    sl = signal.get("sl", 0)
+    entry = float(signal.get("price") or signal.get("livePrice") or 0)
+    sl = float(signal.get("sl") or 0)
     if not entry or not sl or entry == sl:
         log.warning(f"{prefix} REJECTED: invalid entry={entry} or sl={sl}")
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "INVALID_LEVELS")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
     if direction == "LONG" and sl >= entry:
         log.warning(f"{prefix} REJECTED: LONG stop {sl} must be below entry {entry}")
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "INVALID_LEVELS")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
     if direction == "SHORT" and sl <= entry:
         log.warning(f"{prefix} REJECTED: SHORT stop {sl} must be above entry {entry}")
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "INVALID_LEVELS")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
 
     max_sl_pct = _cfg("MAX_SL_PCT", {}).get(asset_type, 0.05)
     if entry != 0:
@@ -586,7 +669,7 @@ def risk_check(
                 f"{prefix} REJECTED: SL distance {sl_pct:.1%} exceeds MAX_SL_PCT "
                 f"{max_sl_pct:.1%} for {asset_type}"
             )
-            return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "MAX_SL_EXCEEDED")
+            return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "MAX_SL_EXCEEDED")
 
     _risk_regime = signal.get("regimeName")
     if not _risk_regime:
@@ -651,7 +734,7 @@ def risk_check(
             f"balance={account_balance}, entry={entry}, SL={sl}, dist={abs(entry - sl):.6f}, asset={asset_type}, "
             f"symbol_info={'yes' if symbol_info else 'no'}"
         )
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "ZERO_VOLUME")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "ZERO_VOLUME")
 
     # ── Check 6: Risk amount validation ─────────────────────────────────────
     sl_distance = abs(entry - sl)
@@ -691,7 +774,7 @@ def risk_check(
         log.warning(
             f"{prefix} REJECTED: risk {risk_pct:.1%} exceeds max {_cfg('MAX_RISK_PER_TRADE', 0.03):.0%}"
         )
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, "RISK_TOO_HIGH")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "RISK_TOO_HIGH")
 
     # ── Check 7: Portfolio heat ─────────────────────────────────────────────
     current_heat = _calc_portfolio_heat(open_positions, account_balance)
@@ -700,7 +783,7 @@ def risk_check(
         log.warning(
             f"{prefix} REJECTED: portfolio heat would be {new_heat:.1%} (max {_cfg('MAX_PORTFOLIO_HEAT', 0.06):.0%})"
         )
-        return RiskApproval(False, 0.0, 0.0, 0.0, new_heat, "PORTFOLIO_HEAT_EXCEEDED")
+        return RiskApproval(False, 0.0, 0.0, 0.0, new_heat, dd, "PORTFOLIO_HEAT_EXCEEDED")
 
     # ── ALL CHECKS PASSED ───────────────────────────────────────────────────
     log.info(
@@ -712,5 +795,6 @@ def risk_check(
         risk_amount=round(risk_amount, 2),
         risk_pct=round(risk_pct, 4),
         portfolio_heat=round(new_heat, 4),
+        drawdown_pct=round(dd, 4),
         reason="OK",
     )

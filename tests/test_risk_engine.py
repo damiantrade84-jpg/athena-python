@@ -8,7 +8,7 @@ import pytest
 # Ensure project root is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from risk_engine import risk_check, _cfg, _update_peak
+from risk_engine import join_peak_audit_queue, risk_check, _cfg, _update_peak
 import risk_engine
 
 
@@ -32,6 +32,7 @@ def _reset_peak_equity():
         risk_engine._daily_pnl = old_daily_pnl
         risk_engine._daily_pnl_date = old_daily_pnl_date
         risk_engine._daily_start_balance = old_daily_start_balance
+    join_peak_audit_queue(timeout=5.0)
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────

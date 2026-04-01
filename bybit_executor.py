@@ -713,7 +713,7 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
 
         sl = signal.get("sl", 0)
         tp1 = signal.get("tp1", 0)
-        signal_price = float(signal.get("price", 0) or 0)
+        signal_price = float(signal.get("price") or signal.get("livePrice") or 0)
         override_meta = signal.get("level_override")
         if not isinstance(override_meta, dict):
             override_meta = {}

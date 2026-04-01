@@ -644,7 +644,7 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
 
     # Handles data-source mismatch (e.g. EODHD vs MT5 live feed for commodities)
 
-    signal_price = float(signal.get("price", 0))
+    signal_price = float(signal.get("price") or signal.get("livePrice") or 0)
     override_meta = signal.get("level_override")
     if not isinstance(override_meta, dict):
         override_meta = {}
@@ -731,7 +731,7 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                 "error": f"INVALID_TP: TP {tp} is above entry {price} for SHORT",
             }
 
-    # Ensure SL distance is reasonable (not more than 30% of price — data scale mismatch guard)
+    # Ensure SL distance within MAX_SL_PCT for asset class (config — possible mismatch if scale wrong)
 
     sl_dist_pct = abs(price - sl) / price
 
@@ -743,14 +743,6 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         return {
             "success": False,
             "error": f"SL_TOO_FAR: SL is {sl_dist_pct:.0%} from entry (max {_max_sl_pct:.0%})",
-        }
-        log.error(
-            f"[MT5] {mt5_symbol}: SL distance {sl_dist_pct:.1%} of price — likely data scale mismatch"
-        )
-
-        return {
-            "success": False,
-            "error": f"SL_TOO_FAR: SL is {sl_dist_pct:.0%} from entry (max 30%) — possible data mismatch",
         }
 
     # Check broker minimum stop distance

@@ -34,7 +34,7 @@ def test_mt5_execute_rejects_stop_beyond_configured_cap(monkeypatch):
         "tp1": 1.1500,
         "type": "forex",
     }
-    approval = RiskApproval(True, 1.0, 100.0, 0.01, 0.01, "OK")
+    approval = RiskApproval(True, 1.0, 100.0, 0.01, 0.01, 0.0, "OK")
 
     result = mt5_executor.mt5_execute(signal, approval)
 
@@ -78,7 +78,7 @@ def test_bybit_execute_uses_risk_approved_volume(monkeypatch):
         "tp1": 1100.0,
         "type": "crypto",
     }
-    approval = RiskApproval(True, 0.5, 25.0, 0.01, 0.01, "OK")
+    approval = RiskApproval(True, 0.5, 25.0, 0.01, 0.01, 0.0, "OK")
 
     result = bybit_executor.bybit_execute(signal, approval)
 
@@ -116,7 +116,7 @@ def test_bybit_execute_does_not_retry_exchange_not_available(monkeypatch):
         "tp1": 110.0,
         "type": "crypto",
     }
-    approval = RiskApproval(True, 1.0, 5.0, 0.01, 0.01, "OK")
+    approval = RiskApproval(True, 1.0, 5.0, 0.01, 0.01, 0.0, "OK")
 
     result = bybit_executor.bybit_execute(signal, approval)
 

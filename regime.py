@@ -79,7 +79,7 @@ def detect_regime(
     elif adx_val >= _rng["choppy"] and adx_mom in ("stable", "strengthening"):
         state = 0
         label = "TRENDING"
-        confidence = "high" if adx_val >= 35 else "medium"
+        confidence = "high" if adx_val >= CONFIG.get("TRENDING_ADX", 35) else "medium"
     else:
         state = 1
         label = "RANGING"

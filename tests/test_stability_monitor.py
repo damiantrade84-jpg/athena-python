@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from stability_monitor import (
     get_signal_stability_index,
     init_stability_store,
+    join_stability_audit_queue,
     record_execution_event,
     record_outcome_event,
     record_signal_event,
@@ -98,6 +99,8 @@ def test_stability_index_tracks_drift_and_runtime_components():
             max_score=1.0,
             db_path=db_path,
         )
+
+    join_stability_audit_queue(timeout=30.0)
 
     result = get_signal_stability_index(engine="engine_a", db_path=db_path)
 

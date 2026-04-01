@@ -123,23 +123,24 @@ class NakedEngine:
         )
 
         # Calculate recent average volume for normalisation
-        vols = [float(c.get("vol", 0)) for c in candles]
+        vols = np.array([float(c.get("vol", 0)) for c in candles], dtype=float)
         avg_volume_20 = (
             np.mean(vols[-20:]) if len(vols) >= 20 else (np.mean(vols) if vols else 1.0)
         )
         if avg_volume_20 <= 0:
             avg_volume_20 = 1.0
+        zone_vol_means = (
+            pd.Series(vols).rolling(window=3, center=True, min_periods=1).mean().to_numpy()
+            if len(vols) > 0
+            else np.array([], dtype=float)
+        )
 
         res_zones = []
         for idx in peak_idx:
             peak_price = highs[idx]
 
             # Average vol of 3 bars around the peak
-            start_i = max(0, idx - 1)
-            end_i = min(len(candles), idx + 2)
-            zone_vol = np.mean(
-                [float(candles[i].get("vol", 0)) for i in range(start_i, end_i)]
-            )
+            zone_vol = float(zone_vol_means[idx]) if idx < len(zone_vol_means) else 0.0
             vol_strength = min(1.0, zone_vol / avg_volume_20)
 
             # Zone expands below the peak (ceiling)
@@ -159,11 +160,7 @@ class NakedEngine:
             trough_price = lows[idx]
 
             # Average vol of 3 bars around the trough
-            start_i = max(0, idx - 1)
-            end_i = min(len(candles), idx + 2)
-            zone_vol = np.mean(
-                [float(candles[i].get("vol", 0)) for i in range(start_i, end_i)]
-            )
+            zone_vol = float(zone_vol_means[idx]) if idx < len(zone_vol_means) else 0.0
             vol_strength = min(1.0, zone_vol / avg_volume_20)
 
             # Zone expands above the trough (floor)

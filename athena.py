@@ -20,6 +20,7 @@ import math
 import re
 import time
 import threading
+import copy
 import webbrowser
 import logging
 import sqlite3
@@ -1866,12 +1867,12 @@ def fetch_eodhd(pair, tf, limit):
 
     symbol = pair.get("display", pair.get("symbol", "unknown"))
 
-    # Fast-fail if EODHD recently returned 402 (Payment Required / rate limit)
+    # Fast-fail if EODHD recently returned 402/429; never sleep in scan worker paths.
     if time.time() < _eodhd_cooldown_until:
         fallback = _fetch_fallback_candles(pair, tf, limit, reason="EODHD cooldown (402)")
         if fallback:
-            return {"error": True, "symbol": symbol, "detail": "EODHD cooldown", "candles": fallback}
-        return {"error": True, "symbol": symbol, "detail": "EODHD cooldown"}
+            return {"error": True, "symbol": symbol, "detail": "rate_limited", "candles": fallback}
+        return {"error": True, "symbol": symbol, "detail": "rate_limited"}
 
     try:
         api = _get_eodhd_client()
@@ -1903,7 +1904,7 @@ def fetch_eodhd(pair, tf, limit):
                 "%Y-%m-%d"
             )
 
-            # Retry D1 SDK call with backoff (skip retries on 402/429)
+            # Never sleep in scan worker paths; return immediately on transient/rate-limit failures.
             bars = None
             for attempt in range(1, 4):
                 try:
@@ -1915,13 +1916,14 @@ def fetch_eodhd(pair, tf, limit):
                     if "402" in str(e) or "429" in str(e) or "Payment Required" in str(e):
                         log.warning(f"[EODHD] {ticker} D1: 402/429 — cooldown 10 min")
                         _eodhd_cooldown_until = time.time() + 600
-                        raise
+                        return {"error": True, "symbol": symbol, "detail": "rate_limited"}
                     if attempt == 3:
                         log.warning(f"[EODHD] {ticker} D1 failed after 3 attempts: {e}")
                         raise
-                    backoff = 1.5 * attempt
-                    log.warning(f"[EODHD] {ticker} D1 attempt {attempt} failed, retry in {backoff}s: {e}")
-                    time.sleep(backoff)
+                    log.warning(
+                        f"[EODHD] {ticker} D1 attempt {attempt} failed — fast-fail without retry sleep: {e}"
+                    )
+                    return {"error": True, "symbol": symbol, "detail": "rate_limited"}
 
             if not bars:
                 log.warning(f"[EODHD] {ticker} D1: no data")
@@ -1961,7 +1963,7 @@ def fetch_eodhd(pair, tf, limit):
                 (datetime.now(timezone.utc) - timedelta(days=365)).timestamp()
             )
 
-            # Retry intraday SDK call with backoff (skip retries on 402/429)
+            # Never sleep in scan worker paths; return immediately on transient/rate-limit failures.
             bars = None
             for attempt in range(1, 4):
                 try:
@@ -1973,13 +1975,14 @@ def fetch_eodhd(pair, tf, limit):
                     if "402" in str(e) or "429" in str(e) or "Payment Required" in str(e):
                         log.warning(f"[EODHD] {ticker} intraday: 402/429 — cooldown 10 min")
                         _eodhd_cooldown_until = time.time() + 600
-                        raise
+                        return {"error": True, "symbol": symbol, "detail": "rate_limited"}
                     if attempt == 3:
                         log.warning(f"[EODHD] {ticker} intraday failed after 3 attempts: {e}")
                         raise
-                    backoff = 1.5 * attempt
-                    log.warning(f"[EODHD] {ticker} intraday attempt {attempt} failed, retry in {backoff}s: {e}")
-                    time.sleep(backoff)
+                    log.warning(
+                        f"[EODHD] {ticker} intraday attempt {attempt} failed — fast-fail without retry sleep: {e}"
+                    )
+                    return {"error": True, "symbol": symbol, "detail": "rate_limited"}
 
             if not bars:
                 fallback = _fetch_fallback_candles(
@@ -2066,140 +2069,151 @@ def fetch_polygon(pair, tf, limit):
     with _polygon_lock:
         global _polygon_last_request
 
-        # Pre-request throttle: enforce minimum interval regardless of success or error.
-        # Old approach (sleep after success only) left 429/error paths unthrottled,
-        # causing immediate follow-up calls that triggered further 429s on best pairs (XAU, XAG).
+        # Pre-request throttle: minimum interval between Polygon HTTP calls. Never sleep here
+        # (would starve scan thread pool); return 429-style payload for fetch_candles fallback.
         elapsed = time.time() - _polygon_last_request
         if elapsed < _POLYGON_MIN_INTERVAL:
-            time.sleep(_POLYGON_MIN_INTERVAL - elapsed)
-        _polygon_last_request = time.time()
+            _polygon_throttle_reject = True
+        else:
+            _polygon_throttle_reject = False
+            _polygon_last_request = time.time()
 
-        try:
-            key = os.environ.get("POLYGON_KEY", CONFIG.get("POLYGON_KEY", ""))
+    if _polygon_throttle_reject:
+        log.warning(
+            f"[PG] {symbol}: client throttle — min interval {_POLYGON_MIN_INTERVAL}s not elapsed"
+        )
+        return {
+            "error": True,
+            "symbol": symbol,
+            "detail": "HTTP 429 rate limited",
+        }
 
-            if not key:
-                log.warning("[PG] No POLYGON_KEY set")
+    try:
+        key = os.environ.get("POLYGON_KEY", CONFIG.get("POLYGON_KEY", ""))
 
-                return {"error": True, "symbol": symbol, "detail": "No POLYGON_KEY set"}
+        if not key:
+            log.warning("[PG] No POLYGON_KEY set")
 
-            ticker = _polygon_ticker_for_pair(pair)
+            return {"error": True, "symbol": symbol, "detail": "No POLYGON_KEY set"}
 
-            if not ticker:
-                log.info(f"[PG] {pair['display']}: no Polygon ticker mapping")
+        ticker = _polygon_ticker_for_pair(pair)
 
-                return {
-                    "error": True,
-                    "symbol": symbol,
-                    "detail": "no Polygon ticker mapping",
-                }
-
-            mult, span = {"D1": (1, "day"), "H4": (4, "hour"), "H1": (1, "hour")}.get(
-                tf, (1, "day")
-            )
-
-            end = datetime.now(timezone.utc)
-
-            # Reduce start range for intraday to prevent pagination from truncating recent data
-            if tf == "H1":
-                start = end - timedelta(days=60)
-            elif tf == "H4":
-                start = end - timedelta(days=120)
-            else:
-                start = end - timedelta(days=730)
-
-            url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{mult}/{span}/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
-
-            # Fetch descending to ensure we get the most recent bars if constrained, then reverse later
-            r = http_requests.get(
-                url, params={"apiKey": key, "limit": 50000, "sort": "desc"}, timeout=20
-            )
-
-            if r.status_code == 403:
-                log.warning(f"[PG] {ticker}: 403 Forbidden — check API key or plan")
-
-                return {
-                    "error": True,
-                    "symbol": symbol,
-                    "detail": "403 Forbidden - check API key or plan",
-                }
-
-            if r.status_code == 429:
-                log.warning(
-                    f"[PG] {ticker}: 429 rate limited — throttle will apply before next request"
-                )
-
-                # Log Polygon rate limit error (no Telegram notification)
-                log.warning(
-                    f"[POLYGON] Rate limited (429) - backing off requests"
-                )
-
-                return {
-                    "error": True,
-                    "symbol": symbol,
-                    "detail": "HTTP 429 rate limited",
-                }
-
-            if r.status_code != 200:
-                log.warning(f"[PG] {ticker} HTTP {r.status_code}: {r.text[:120]}")
-
-                return {
-                    "error": True,
-                    "symbol": symbol,
-                    "detail": f"HTTP {r.status_code}",
-                }
-
-            data = r.json()
-
-            results = data.get("results", [])
-
-            if not results:
-                log.warning(f"[PG] {ticker}: no results")
-                return {"error": True, "symbol": symbol, "detail": "no results"}
-
-            # Reverse the results because we fetched with sort=desc to guarantee the latest data
-            results = list(reversed(results))
-            candles = [
-                {
-                    "time": datetime.fromtimestamp(
-                        bar["t"] / 1000, tz=timezone.utc
-                    ).isoformat(),
-                    "open": float(bar["o"]),
-                    "high": float(bar["h"]),
-                    "low": float(bar["l"]),
-                    "close": float(bar["c"]),
-                    "vol": float(bar.get("v", 0)),
-                }
-                for bar in results
-            ]
-            
-            # DEBUG: Log Polygon data quality for comparison
-            if candles:
-                last_bar = candles[-1]
-                first_bar = candles[0]
-                log.info(f"[PG] {symbol} {tf}: {len(candles)} bars, first={first_bar['time']}, last={last_bar['time']}")
-                if tf in ("H4", "D1"):
-                    # Check if timestamps align with proper boundaries
-                    last_time = datetime.fromisoformat(last_bar['time'].replace('Z', '+00:00'))
-                    if tf == "H4":
-                        hour_ok = last_time.hour % 4 == 0 and last_time.minute == 0
-                        log.info(f"[PG] {symbol} {tf}: H4 boundary check - hour={last_time.hour}, aligned={hour_ok}")
-                    elif tf == "D1":
-                        day_ok = last_time.hour == 0 and last_time.minute == 0
-                        log.info(f"[PG] {symbol} {tf}: D1 boundary check - hour={last_time.hour}, aligned={day_ok}")
-
-            final_candles = candles[-limit:] if len(candles) > limit else candles
+        if not ticker:
+            log.info(f"[PG] {pair['display']}: no Polygon ticker mapping")
 
             return {
-                "error": False,
+                "error": True,
                 "symbol": symbol,
-                "detail": "",
-                "candles": final_candles,
+                "detail": "no Polygon ticker mapping",
             }
 
-        except Exception as e:
-            log.error(f"[PG] {pair['display']}: {e}")
+        mult, span = {"D1": (1, "day"), "H4": (4, "hour"), "H1": (1, "hour")}.get(
+            tf, (1, "day")
+        )
 
-            return {"error": True, "symbol": symbol, "detail": str(e)}
+        end = datetime.now(timezone.utc)
+
+        # Reduce start range for intraday to prevent pagination from truncating recent data
+        if tf == "H1":
+            start = end - timedelta(days=60)
+        elif tf == "H4":
+            start = end - timedelta(days=120)
+        else:
+            start = end - timedelta(days=730)
+
+        url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{mult}/{span}/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
+
+        # Fetch descending to ensure we get the most recent bars if constrained, then reverse later
+        r = http_requests.get(
+            url, params={"apiKey": key, "limit": 50000, "sort": "desc"}, timeout=20
+        )
+
+        if r.status_code == 403:
+            log.warning(f"[PG] {ticker}: 403 Forbidden — check API key or plan")
+
+            return {
+                "error": True,
+                "symbol": symbol,
+                "detail": "403 Forbidden - check API key or plan",
+            }
+
+        if r.status_code == 429:
+            log.warning(
+                f"[PG] {ticker}: 429 rate limited — throttle will apply before next request"
+            )
+
+            # Log Polygon rate limit error (no Telegram notification)
+            log.warning(
+                f"[POLYGON] Rate limited (429) - backing off requests"
+            )
+
+            return {
+                "error": True,
+                "symbol": symbol,
+                "detail": "HTTP 429 rate limited",
+            }
+
+        if r.status_code != 200:
+            log.warning(f"[PG] {ticker} HTTP {r.status_code}: {r.text[:120]}")
+
+            return {
+                "error": True,
+                "symbol": symbol,
+                "detail": f"HTTP {r.status_code}",
+            }
+
+        data = r.json()
+
+        results = data.get("results", [])
+
+        if not results:
+            log.warning(f"[PG] {ticker}: no results")
+            return {"error": True, "symbol": symbol, "detail": "no results"}
+
+        # Reverse the results because we fetched with sort=desc to guarantee the latest data
+        results = list(reversed(results))
+        candles = [
+            {
+                "time": datetime.fromtimestamp(
+                    bar["t"] / 1000, tz=timezone.utc
+                ).isoformat(),
+                "open": float(bar["o"]),
+                "high": float(bar["h"]),
+                "low": float(bar["l"]),
+                "close": float(bar["c"]),
+                "vol": float(bar.get("v", 0)),
+            }
+            for bar in results
+        ]
+
+        # DEBUG: Log Polygon data quality for comparison
+        if candles:
+            last_bar = candles[-1]
+            first_bar = candles[0]
+            log.info(f"[PG] {symbol} {tf}: {len(candles)} bars, first={first_bar['time']}, last={last_bar['time']}")
+            if tf in ("H4", "D1"):
+                # Check if timestamps align with proper boundaries
+                last_time = datetime.fromisoformat(last_bar['time'].replace('Z', '+00:00'))
+                if tf == "H4":
+                    hour_ok = last_time.hour % 4 == 0 and last_time.minute == 0
+                    log.info(f"[PG] {symbol} {tf}: H4 boundary check - hour={last_time.hour}, aligned={hour_ok}")
+                elif tf == "D1":
+                    day_ok = last_time.hour == 0 and last_time.minute == 0
+                    log.info(f"[PG] {symbol} {tf}: D1 boundary check - hour={last_time.hour}, aligned={day_ok}")
+
+        final_candles = candles[-limit:] if len(candles) > limit else candles
+
+        return {
+            "error": False,
+            "symbol": symbol,
+            "detail": "",
+            "candles": final_candles,
+        }
+
+    except Exception as e:
+        log.error(f"[PG] {pair['display']}: {e}")
+
+        return {"error": True, "symbol": symbol, "detail": str(e)}
 
 def fetch_mt5(pair: dict, tf: str, limit: int):
     """Download OHLCV candles directly from the live MT5 broker terminal. Fast, accurate, real-time."""
@@ -2839,23 +2853,21 @@ def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
     return result
 
 
-# P2: 5-minute TTL cache for news context â€” avoid redundant API calls during rapid scans
+# P2: Background news refresh (5m); fetch_news_context() reads cache only (non-blocking for scans).
 
-_news_cache = {"data": None, "ts": 0}
+_news_cache = {"data": None, "ts": 0.0}
+_news_lock = threading.Lock()
+_news_thread_started = False
+_news_thread_lock = threading.Lock()
 
-_NEWS_TTL = 300  # 5 minutes
+_NEWS_BG_INTERVAL_SEC = 300.0  # 5 minutes
+
+_NEWS_EMPTY: dict = {"forexEvents": [], "cryptoNews": [], "marketNews": []}
 
 
-def fetch_news_context(pairs: list | None = None):
-
-    now = time.time()
-
-    if _news_cache["data"] and (now - _news_cache["ts"]) < _NEWS_TTL:
-        log.info("[NEWS] Using cached context")
-
-        return _news_cache["data"]
-
-    ctx = {"forexEvents": [], "cryptoNews": [], "marketNews": []}
+def _refresh_news_cache(pairs: list | None = None) -> dict:
+    """Fetch Finnhub / CryptoPanic / EODHD and update _news_cache."""
+    ctx: dict = {"forexEvents": [], "cryptoNews": [], "marketNews": []}
 
     try:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -3053,11 +3065,69 @@ def fetch_news_context(pairs: list | None = None):
     except Exception as e:
         log.warning(f"[NEWS] EODHD sentiment/news failed: {e}")
 
-    _news_cache["data"] = ctx
-
-    _news_cache["ts"] = time.time()
+    with _news_lock:
+        _news_cache["data"] = ctx
+        _news_cache["ts"] = time.time()
 
     return ctx
+
+
+def _news_updater_loop():
+    while True:
+        try:
+            _refresh_news_cache(None)
+        except Exception as e:
+            log.warning(f"[NEWS] Background refresh failed: {e}")
+        time.sleep(_NEWS_BG_INTERVAL_SEC)
+
+
+def _ensure_news_background_started():
+    global _news_thread_started
+    if _news_thread_started:
+        return
+    with _news_thread_lock:
+        if _news_thread_started:
+            return
+        _t = threading.Thread(
+            target=_news_updater_loop,
+            daemon=True,
+            name="news-updater",
+        )
+        _t.start()
+        _news_thread_started = True
+        log.info(
+            f"[NEWS] Background updater started (interval {_NEWS_BG_INTERVAL_SEC / 60:.1f} min)"
+        )
+
+
+def _filter_news_ctx_for_pairs(data: dict, pairs: list | None) -> dict:
+    """Restrict pair-keyed EODHD fields to the given pair list (scanner / Engine B)."""
+    if not data:
+        return copy.deepcopy(_NEWS_EMPTY)
+    if not pairs:
+        return copy.deepcopy(data)
+    displays = {
+        p.get("display") or p.get("pair")
+        for p in pairs
+        if isinstance(p, dict)
+    }
+    displays.discard(None)
+    if not displays:
+        return data
+    out = copy.deepcopy(data)
+    for key in ("pairSentiment", "pairNews", "wordWeights"):
+        if key in out and isinstance(out[key], dict):
+            out[key] = {
+                k: v for k, v in out[key].items() if k in displays
+            }
+    return out
+
+
+def fetch_news_context(pairs: list | None = None):
+    """Return cached news context immediately (populated by background thread)."""
+    with _news_lock:
+        data = _news_cache["data"]
+    return _filter_news_ctx_for_pairs(data if data is not None else {}, pairs)
 
 
 def _build_signal_message(
@@ -11376,6 +11446,7 @@ def ensure_runtime_services_started() -> None:
             set_candle_builder(CandleBuilder())
 
         def _cb_startup():
+            _ensure_news_background_started()
             cb = get_candle_builder()
             if cb is None:
                 return

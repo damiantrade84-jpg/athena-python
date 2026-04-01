@@ -19,6 +19,7 @@ All trades route through risk_engine.risk_check() before execution.
 
 import logging
 import math
+import pandas as pd
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -193,11 +194,7 @@ def _calc_ema(values: list, period: int) -> list:
     """Calculate EMA over a list of floats."""
     if len(values) < period:
         return []
-    k = 2.0 / (period + 1)
-    ema = [sum(values[:period]) / period]
-    for v in values[period:]:
-        ema.append(v * k + ema[-1] * (1 - k))
-    return ema
+    return pd.Series(values).ewm(span=period, adjust=False).mean().tolist()
 
 
 def infer_bias_from_ema_stack(candles: list) -> Optional[str]:

@@ -470,9 +470,9 @@ def calc_confluence(
     _rng = CONFIG["RANGING"].get(pair["type"], CONFIG["RANGING"]["commodity"])
     trend_state = "UNKNOWN"
     if adx_val is not None:
-        if adx_val >= 35:
+        if adx_val >= CONFIG.get("TRENDING_ADX", 35):
             trend_state = "TRENDING"
-        elif adx_val >= 25:
+        elif adx_val >= CONFIG.get("DEVELOPING_ADX", 25):
             trend_state = "DEVELOPING"
         elif adx_val >= _rng["dead"]:
             trend_state = "RANGING"
