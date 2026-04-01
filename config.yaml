@@ -31,10 +31,15 @@ COUNTER_TREND_PEN:
   index: -1.0
 
 # Per-class RSI bounds
+# Crypto: 80/20 — PMC9920669 (2023) + practitioner consensus; BTC/alts regularly sustain
+#   RSI 70–90 in bull markets — standard 70/30 causes premature false-reversal warnings.
+# Commodity: 80/20 — gold/silver specific research (Metalorix, Kinesis, OpoFinance);
+#   precious metals frequently hold RSI 70–80 during trending phases; 70/30 over-signals.
+# Forex/stock/index: 70/30 — Wilder standard; well-supported by backtesting literature.
 RSI_BOUNDS:
-  crypto:    { ob: 70, os: 30 }
+  crypto:    { ob: 80, os: 20 }
   forex:     { ob: 70, os: 30 }
-  commodity: { ob: 70, os: 30 }
+  commodity: { ob: 80, os: 20 }
   stock:     { ob: 70, os: 30 }
   index:     { ob: 70, os: 30 }
 
@@ -108,9 +113,12 @@ NAKED_MAX_DAILY: 3
 
 # Per-class live scan minimum confluence — execute / tradeSignals tier threshold.
 # Forex remains on the dedicated 0–1 forex_scoring scale; all other classes use their engine scale.
+# Crypto raised from 1.50 → 1.60: research (Springer 2025, MDPI 2025, arXiv 2404.04962) shows
+# crypto has the highest noise/SNR ratio of all asset classes — threshold must exceed equities,
+# not be below them. Stocks remain at 1.55 (51.7%); crypto at 1.60 (53.3%) restores correct ordering.
 MIN_CONFLUENCE_CLASS:
   forex:     0.8
-  crypto:    1.5
+  crypto:    1.60
   commodity: 1.4
   stock:     1.55
   index:     1.35
@@ -126,11 +134,13 @@ MIN_CONFLUENCE_GROUP:
     forex_crosses: 0.80
     forex_exotics: 0.90
   crypto:
-    crypto_btc: 1.35
-    crypto_eth: 1.40
-    crypto_alt_majors: 1.50
-    crypto_doge: 1.60
-    crypto_other: 1.55
+    # Scaled proportionally with MIN_CONFLUENCE_CLASS.crypto raise (1.50→1.60, ×1.067).
+    # BTC/ETH retain lower sub-floors vs alts (higher liquidity, better trend reliability).
+    crypto_btc: 1.45
+    crypto_eth: 1.50
+    crypto_alt_majors: 1.60
+    crypto_doge: 1.70
+    crypto_other: 1.65
   commodity:
     nat_gas: 1.45
     pgm_metals: 1.40
@@ -534,7 +544,11 @@ NAKED_ENGINE:
       min_rr: 1.5
     swing:
       min_score: 6.0
-      min_rr: 1.5
+      # Raised from 1.5 → 2.0: Van Tharp expectancy framework — at 40% win rate, 1.5 RR
+      # gives only +0.02R/trade with zero margin for slippage/spread. Literature consensus
+      # (Van Tharp, FP Markets, P&L Ledger) places swing minimum at 2.0:1 or higher.
+      # Score-group overrides already used 1.8–2.0 for specific setups — base now matches.
+      min_rr: 2.0
       require_macro_align: false
 
   zone_multipliers:
