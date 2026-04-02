@@ -179,3 +179,49 @@ def test_can_execute_prefers_explicit_regime_name_over_trend_state_for_filtering
 
     assert not ok
     assert "TREND_PULLBACK/RANGING blocked" in reason
+
+
+def test_run_auto_scan_skips_already_open_pair(monkeypatch):
+    trader = AutoTrader()
+    cfg = _base_cfg()
+    signal = {
+        "pair": "BTC/USDT",
+        "type": "crypto",
+        "direction": "LONG",
+        "combinedConviction": 0.9,
+        "confluenceScore": 2.7,
+        "maxScore": 3.0,
+        "timestamp": "2026-04-02T12:00:00+00:00",
+    }
+
+    trader.configure(
+        lambda style="auto": {
+            "success": True,
+            "tradeSignals": [dict(signal)],
+            "watchlist": [],
+            "scanFunnel": {},
+        },
+        lambda: False,
+        lambda: False,
+        "",
+        lambda: cfg,
+    )
+
+    monkeypatch.setattr(trader, "_can_execute", lambda sig, _cfg: (True, ""))
+    monkeypatch.setattr(
+        trader,
+        "_get_cached_open_positions",
+        lambda asset_type, cache: [{"pair": "BTC/USDT:USDT", "symbol": "BTC/USDT"}],
+    )
+
+    called = {"execute": False}
+
+    def _fake_execute(sig, _cfg):
+        called["execute"] = True
+        return True
+
+    monkeypatch.setattr(trader, "_execute_signal", _fake_execute)
+
+    trader._run_auto_scan()
+
+    assert called["execute"] is False

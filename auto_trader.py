@@ -107,6 +107,28 @@ def _signal_expected_prob(signal: dict) -> float | None:
     return None
 
 
+def _normalize_pair_key(value: str | None) -> str:
+    """Normalize pair or symbol identifiers for duplicate-position matching."""
+    if value is None:
+        return ""
+    return "".join(ch for ch in str(value).upper() if ch.isalnum())
+
+
+def _signal_matches_position(signal: dict, position: dict) -> bool:
+    """Return True when a broker position refers to the same instrument."""
+    signal_keys = {
+        _normalize_pair_key(signal.get("pair")),
+        _normalize_pair_key(signal.get("symbol")),
+    }
+    position_keys = {
+        _normalize_pair_key(position.get("pair")),
+        _normalize_pair_key(position.get("symbol")),
+    }
+    signal_keys.discard("")
+    position_keys.discard("")
+    return bool(signal_keys & position_keys)
+
+
 # ── H4 + D1 schedule: (hour, minute) UTC ─────────────────────────────────────
 
 _SCHEDULE = [(0, 5), (4, 5), (8, 5), (12, 5), (16, 5), (20, 5)]
@@ -456,6 +478,7 @@ class AutoTrader:
         max_per_scan = cfg.get("AUTO_TRADE_MAX_PER_SCAN", 1)
 
         executed = 0
+        positions_cache: dict[str, list[dict] | None] = {}
 
         for sig in signals:
             if executed >= max_per_scan:
@@ -469,6 +492,17 @@ class AutoTrader:
             if not ok:
                 log.info(f"[AUTO] {sig.get('pair')} skipped: {reason}")
 
+                continue
+
+            open_positions = self._get_cached_open_positions(
+                sig.get("type", ""), positions_cache
+            )
+            if open_positions is not None and any(
+                _signal_matches_position(sig, pos) for pos in open_positions
+            ):
+                log.info(
+                    f"[AUTO] {sig.get('pair')} skipped: already holding open position"
+                )
                 continue
 
             success = self._execute_signal(sig, cfg)
@@ -673,6 +707,49 @@ class AutoTrader:
 
         return True, ""
 
+    def _get_cached_open_positions(
+        self, asset_type: str, positions_cache: dict[str, list[dict] | None]
+    ) -> list[dict] | None:
+        """Load broker open positions once per venue during a scan.
+
+        Returns None when positions cannot be confirmed. Execution still fails
+        closed downstream in that case, so this precheck only suppresses known
+        duplicate-pair attempts.
+        """
+        venue = "bybit" if asset_type == "crypto" else "mt5"
+        if venue in positions_cache:
+            return positions_cache[venue]
+
+        try:
+            if venue == "bybit":
+                from bybit_executor import bybit_get_positions
+
+                pos_result = bybit_get_positions()
+            else:
+                from mt5_executor import mt5_get_positions
+
+                pos_result = mt5_get_positions()
+        except Exception as e:
+            log.warning(f"[AUTO] {venue.upper()} positions precheck failed: {e}")
+            positions_cache[venue] = None
+            return None
+
+        if isinstance(pos_result, dict) and pos_result.get("error"):
+            log.warning(
+                f"[AUTO] {venue.upper()} positions precheck unavailable: "
+                f"{pos_result.get('detail', 'unknown')}"
+            )
+            positions_cache[venue] = None
+            return None
+
+        positions = (
+            pos_result.get("positions", [])
+            if isinstance(pos_result, dict)
+            else (pos_result or [])
+        )
+        positions_cache[venue] = positions
+        return positions
+
     def _execute_signal(self, signal: dict, cfg: dict) -> bool:
         """Execute a single signal through the normal risk → executor path.
 
@@ -778,7 +855,7 @@ class AutoTrader:
             from guardian import pre_trade_check as _guardian_pre_trade
             _ptc_ok, _ptc_reason = _guardian_pre_trade(signal, positions, account, pos_result)
             if not _ptc_ok:
-                self._log.warning(f"[AUTO] {pair} GUARDIAN BLOCKED: {_ptc_reason}")
+                log.warning(f"[AUTO] {pair} GUARDIAN BLOCKED: {_ptc_reason}")
                 self._write_error(signal, f"GUARDIAN:{_ptc_reason}")
                 return False
 
