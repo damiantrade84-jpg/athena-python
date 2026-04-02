@@ -2914,6 +2914,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
     _entry_tf = style_profile.get("entry_tf", "H1")
     _atr_tf = style_profile.get("atr_tf", "H4")
     _bt_sl_mode = str(CONFIG.get("ENGINE_B_BT_SL_MODE", "atr") or "atr").lower()
+    _bt_enable_profile_context = bool(CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED", False))
     log.info(
         f"[ENGINE B BT] {pair['display']} running: "
         f"D1={len(candles_d1)} H4={len(candles_h4)} H1={len(candles_h1)} bars, style={resolved_style}"
@@ -3020,9 +3021,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         regime_label = _rt().engine_b_regime_label(zone_ctx, pair.get("type", "stock"))
         candidates = []
         for direction in ["LONG", "SHORT"]:
-            res = naked_engine.set_registry_context(
-                pair.get("symbol") or pair.get("display")
-            ).analyze_structure(
+            res = naked_engine.analyze_structure(
                 d1_ctx,
                 zone_ctx,
                 entry_ctx,
@@ -3032,6 +3031,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 regime_label,
                 fallback_rr=style_profile.get("fallback_rr", 2.0),
                 asset_type=pair.get("type", ""),
+                enable_profile_context=_bt_enable_profile_context,
             )
             if res.get("structural_verdict") != "CLEAR":
                 continue

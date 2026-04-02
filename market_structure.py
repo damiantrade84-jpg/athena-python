@@ -769,6 +769,8 @@ class NakedEngine:
         regime: str = "RANGING",
         fallback_rr: float = 2.0,
         asset_type: str = "",
+        enable_zone_registry: bool = True,
+        enable_profile_context: bool = True,
     ) -> dict:
         """
         Analyzes raw candle data to find Support/Resistance zones and trend sequence.
@@ -780,7 +782,7 @@ class NakedEngine:
                 "reason": "Missing data or valid ATR",
             }
 
-        registry_symbol = self._consume_registry_symbol()
+        registry_symbol = self._consume_registry_symbol() if enable_zone_registry else None
 
         # Forex structure timeframe selection
         _forex_struct_tf = config.CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
@@ -1112,63 +1114,64 @@ class NakedEngine:
             "profile_reaction_strength": 0.0,
             "profile_notes": "",
         }
-        try:
-            from volume_profile import (
-                classify_profile_interaction,
-                compute_fixed_range_volume_profile,
-                split_completed_sessions,
-            )
+        if enable_profile_context:
+            try:
+                from volume_profile import (
+                    classify_profile_interaction,
+                    compute_fixed_range_volume_profile,
+                    split_completed_sessions,
+                )
 
-            _profile_candles = h1_candles if len(h1_candles or []) >= 24 else h4_candles
-            _profile_source_tf = "H1" if len(h1_candles or []) >= 24 else "H4"
-            _sessions = split_completed_sessions(_profile_candles or [], asset_type)
-            _prev_session = _sessions.get("prev_session_candles", [])
-            if _prev_session:
-                _profile = compute_fixed_range_volume_profile(_prev_session)
-                if _profile.get("profile_valid"):
-                    _interaction = classify_profile_interaction(
-                        current_price=current_price,
-                        recent_candles=(trigger_candles or struct_candles or [])[-10:],
-                        direction=direction,
-                        poc=_profile["poc"],
-                        vah=_profile["vah"],
-                        val=_profile["val"],
-                        atr=atr,
-                    )
-                    _profile_result.update({
-                        "prev_session_profile_valid": True,
-                        "prev_session_profile_source_tf": _profile_source_tf,
-                        "prev_session_poc": _profile["poc"],
-                        "prev_session_vah": _profile["vah"],
-                        "prev_session_val": _profile["val"],
-                        "prev_session_profile_high": _profile["session_high"],
-                        "prev_session_profile_low": _profile["session_low"],
-                        "prev_session_total_volume": _profile["total_volume"],
-                        "prev_session_start": _profile["session_start"],
-                        "prev_session_end": _profile["session_end"],
-                        **_interaction,
-                    })
-                    log.debug(
-                        "[PROFILE] %s %s profile computed (%s POC=%s VAH=%s VAL=%s)",
-                        registry_symbol or asset_type or "unknown",
-                        direction,
-                        _profile_source_tf,
-                        _profile["poc"],
-                        _profile["vah"],
-                        _profile["val"],
-                    )
+                _profile_candles = h1_candles if len(h1_candles or []) >= 24 else h4_candles
+                _profile_source_tf = "H1" if len(h1_candles or []) >= 24 else "H4"
+                _sessions = split_completed_sessions(_profile_candles or [], asset_type)
+                _prev_session = _sessions.get("prev_session_candles", [])
+                if _prev_session:
+                    _profile = compute_fixed_range_volume_profile(_prev_session)
+                    if _profile.get("profile_valid"):
+                        _interaction = classify_profile_interaction(
+                            current_price=current_price,
+                            recent_candles=(trigger_candles or struct_candles or [])[-10:],
+                            direction=direction,
+                            poc=_profile["poc"],
+                            vah=_profile["vah"],
+                            val=_profile["val"],
+                            atr=atr,
+                        )
+                        _profile_result.update({
+                            "prev_session_profile_valid": True,
+                            "prev_session_profile_source_tf": _profile_source_tf,
+                            "prev_session_poc": _profile["poc"],
+                            "prev_session_vah": _profile["vah"],
+                            "prev_session_val": _profile["val"],
+                            "prev_session_profile_high": _profile["session_high"],
+                            "prev_session_profile_low": _profile["session_low"],
+                            "prev_session_total_volume": _profile["total_volume"],
+                            "prev_session_start": _profile["session_start"],
+                            "prev_session_end": _profile["session_end"],
+                            **_interaction,
+                        })
+                        log.debug(
+                            "[PROFILE] %s %s profile computed (%s POC=%s VAH=%s VAL=%s)",
+                            registry_symbol or asset_type or "unknown",
+                            direction,
+                            _profile_source_tf,
+                            _profile["poc"],
+                            _profile["vah"],
+                            _profile["val"],
+                        )
+                    else:
+                        log.debug(
+                            "[PROFILE] %s profile skipped: unusable prior-session volume",
+                            registry_symbol or asset_type or "unknown",
+                        )
                 else:
                     log.debug(
-                        "[PROFILE] %s profile skipped: unusable prior-session volume",
+                        "[PROFILE] %s profile skipped: no completed prior session",
                         registry_symbol or asset_type or "unknown",
                     )
-            else:
-                log.debug(
-                    "[PROFILE] %s profile skipped: no completed prior session",
-                    registry_symbol or asset_type or "unknown",
-                )
-        except Exception as _pe:
-            log.debug(f"[PROFILE] {registry_symbol or asset_type or 'unknown'} profile skipped: {_pe}")
+            except Exception as _pe:
+                log.debug(f"[PROFILE] {registry_symbol or asset_type or 'unknown'} profile skipped: {_pe}")
 
         is_sweep_event = (direction == "LONG" and sweep_data["bull_sweep"]) or \
                          (direction == "SHORT" and sweep_data["bear_sweep"])

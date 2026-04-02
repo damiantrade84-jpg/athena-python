@@ -196,6 +196,89 @@ def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
     assert result["same_bar_both_hit"] == 0
 
 
+def test_backtest_pair_naked_skips_profile_context_when_profile_scoring_disabled(monkeypatch):
+    pair = {"display": "AAPL", "symbol": "AAPL", "type": "stock", "source": "eodhd"}
+    d1 = _make_bars(datetime(2024, 1, 1, tzinfo=timezone.utc), 100, 24, base=90.0)
+    h4 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 70, 4, base=99.0)
+    h1 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 400, 1, base=100.0)
+
+    audit_dir = Path(os.path.dirname(__file__)) / "_artifacts"
+    audit_dir.mkdir(exist_ok=True)
+    runtime = SimpleNamespace(
+        fetch_eodhd=lambda *_args, **_kwargs: d1,
+        extract_candles=lambda candles: candles,
+        fetch_candles=lambda *_args, **_kwargs: d1,
+        fetch_eodhd_intraday_bt=lambda *_args, **_kwargs: (h4, h1),
+        naked_scan_style_profile=lambda style, score_group=None: (
+            "intraday",
+            {"min_score": 0.5, "fallback_rr": 2.0, "min_rr": 1.0, "atr_tf": "H4"},
+        ),
+        engine_b_regime_label=lambda *_args, **_kwargs: "TRENDING",
+        AUDIT_DB=str(audit_dir / "audit.db"),
+    )
+
+    captured = []
+
+    monkeypatch.setattr(backtest_runner, "_rt", lambda: runtime)
+    monkeypatch.setattr(backtest_runner, "get_pair_score_group", lambda _pair: "default")
+    monkeypatch.setattr(backtest_runner, "enrich_backtest_summary", lambda result, returns: result)
+    monkeypatch.setattr(backtest_runner, "record_backtest_summary", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backtest_runner, "calibration_report", lambda *args, **kwargs: {})
+    monkeypatch.setattr(backtest_runner, "meta_report", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        backtest_runner,
+        "_format_backtest_results",
+        lambda trades, pair, engine_type="NAKED", same_bar_both_hit=0, **kwargs: {
+            "pair": pair["display"],
+            "engine": engine_type,
+            "totalTrades": len(trades),
+            "trades": trades,
+            "same_bar_both_hit": same_bar_both_hit,
+            "winRate": 0.0,
+            "profitFactor": 0.0,
+            "expectancy": 0.0,
+            "sqn": 0.0,
+        },
+    )
+    monkeypatch.setitem(backtest_runner.CONFIG, "ENGINE_B_PROFILE_SCORING_ENABLED", False)
+
+    import market_structure
+
+    def _capture_analyze(*_args, **kwargs):
+        captured.append(kwargs)
+        return {
+            "structural_verdict": "CLEAR",
+            "order_blocks": [],
+            "liquidity_sweep": False,
+            "fvg_overlap": False,
+            "bos_volume_confirmed": True,
+            "choch_confirmed": False,
+            "ob_at_zone": False,
+            "bos_mtf_confirmed": False,
+            "fvg_bonus": 0.0,
+            "volume_strength": 0.0,
+        }
+
+    monkeypatch.setattr(market_structure.engine, "analyze_structure", _capture_analyze)
+    monkeypatch.setattr(
+        market_structure.engine,
+        "calculate_confidence",
+        lambda _res, _px, direction, **_kwargs: {
+            "score": 1.0 if direction == "LONG" else 0.0,
+            "pct": 80.0 if direction == "LONG" else 0.0,
+            "rr": 2.0,
+            "passed": direction == "LONG",
+            "trigger_pattern": "NONE",
+            "max_possible": 5.0,
+        },
+    )
+
+    backtest_runner.backtest_pair_naked(pair, style="intraday")
+
+    assert captured
+    assert all(call.get("enable_profile_context") is False for call in captured)
+
+
 def test_time_series_quality_reports_parse_failures_duplicates_and_order():
     times = backtest_runner.pd.to_datetime(
         [
