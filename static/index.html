@@ -6007,6 +6007,7 @@ function buildStyleLevelsTab(s) {
 function buildRow(s, idx, tierClass) {
   var sid = (s.symbol || '').replace(/[\/=^.]/g, '_');
   var symJs = String(s.symbol || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  var execKeyJs = String(s._execKey || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   var pct = getConfluencePct(s);
   var confText = formatConfluenceText(s);
   var fillCls = pct < 42 ? 'l' : pct < 67 ? 'm' : 'h';
@@ -6040,7 +6041,7 @@ function buildRow(s, idx, tierClass) {
     + '<div class="sr-col-reg"><div class="reg-b ' + regimeCls + '">' + escSigHtml(regime.replace(/_/g, ' ').slice(0, 10)) + '</div></div>'
     + '<div class="sr-col-rr"><span class="rr" id="rrval-' + sid + '">' + (_m.rr1 != null ? _m.rr1.toFixed(1) + 'R' : '—') + '</span></div>'
     + '<div class="act-cell" onclick="event.stopPropagation()">'
-    +   '<button type="button" class="ab ch2" onclick="openAcm(\'' + symJs + '\',\'H4\')">CHART</button>'
+    +   '<button type="button" class="ab ch2" onclick="openAcmByExecKey(\'' + execKeyJs + '\',\'H4\',\'' + symJs + '\')">CHART</button>'
     +   '<button type="button" class="ab eb" onclick="runNakedScan(\'' + symJs + '\')">B</button>'
     +   '<button type="button" class="ab ai" onclick="analyzeSignal(\'' + symJs + '\',false)">AI</button>'
     +   execBtn
@@ -6074,6 +6075,8 @@ function buildCardInner(s, idx) {
   var confScoreCls = confScoreClassFromEdge(edgeClass);
   var confText = formatConfluenceText(s);
   var sid = (s.symbol || '').replace(/[\/=^.]/g, '_');
+  var symJs = String(s.symbol || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  var execKeyJs = String(s._execKey || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   var isNaked = !!(s.is_naked || s.naked_data);
   var tier = s.signalTier || 'trade';
   var watchReasonHtml = (tier === 'watchlist' && s.watchlistReason)
@@ -6189,7 +6192,7 @@ function buildCardInner(s, idx) {
       '</div>' +
       '<div class="sig-tab-content" data-tab="chart">' +
         '<div style="display:flex;gap:6px;margin-bottom:8px;">' +
-          '<button class="chart-toggle-btn" id="chartbtn-' + sid + '" onclick="openAcm(\'' + s.symbol + '\', \'H4\')" style="flex:1">' +
+          '<button class="chart-toggle-btn" id="chartbtn-' + sid + '" onclick="openAcmByExecKey(\'' + execKeyJs + '\',\'H4\',\'' + symJs + '\')" style="flex:1">' +
             '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> CHART</button>' +
           '<button class="chart-toggle-btn" onclick="openTVChart(\'' + s.display + '\', \'240\')" style="flex:1;border-color:#7b61ff;color:#7b61ff">📈 TV CHART</button>' +
         '</div>' +
@@ -6842,6 +6845,8 @@ async function _acmFetchAndRender(symbol, tf) {
 
 function buildChartSection(s) {
   var sid = (s.symbol||'').replace(/[\/=^.]/g,'_');
+  var symJs = String(s.symbol || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  var execKeyJs = String(s._execKey || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   var candles = s.h4Candles;
   if (candles && candles.length) {
     _chartData[sid] = {
@@ -6863,7 +6868,7 @@ function buildChartSection(s) {
     }
   }
   return '<div style="display:flex;gap:8px;margin-bottom:8px;">' +
-    '<button class="chart-toggle-btn" id="chartbtn-'+sid+'" onclick="openAcm(\''+s.symbol+'\', \'H4\')" style="flex:1">' +
+    '<button class="chart-toggle-btn" id="chartbtn-'+sid+'" onclick="openAcmByExecKey(\''+execKeyJs+'\',\'H4\',\''+symJs+'\')" style="flex:1">' +
     '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' +
     ' CHART</button>' +
     '<button class="chart-toggle-btn" onclick="openTVChart(\''+s.display+'\', \'240\')" style="flex:1;border-color:#7b61ff;color:#7b61ff">📈 TV CHART</button>' +
@@ -8368,11 +8373,9 @@ function openAcm(symbol, tf, fallbackSig) {
     el.classList.toggle('off', !_acm.show[row[0]]);
   });
   var fromList = allSignals.find(function(s) { return s.symbol === symbol; });
-  // Engine C AI CONFIRM passes consensus as fallback — prefer it over a same-symbol Engine A card
-  // so ENTRY/SL/TP lines match the consensus snapshot (sl_method is EC-only).
-  var useSig = (fallbackSig && fallbackSig.sl_method != null)
-    ? fallbackSig
-    : (fromList || fallbackSig || null);
+  // If caller passes an explicit signal object (Engine A/B exec-key or Engine C consensus),
+  // keep that exact context instead of replacing it with first same-symbol match.
+  var useSig = fallbackSig || fromList || null;
   _acm.sig = _acmNormalizeSig(useSig);
   _acm.snapshotCandles = {
     H1: _acm.sig && _acm.sig.h1Candles ? _acm.sig.h1Candles : null,
@@ -8428,6 +8431,21 @@ function openAcm(symbol, tf, fallbackSig) {
 
   // Start live price updates on chart
   _acmStartLive();
+}
+
+function openAcmByExecKey(execKey, tf, fallbackSymbol) {
+  var sig = null;
+  if (execKey) sig = resolveExecSignal(execKey) || null;
+  if (!sig && fallbackSymbol) {
+    var sid = String(fallbackSymbol || '').replace(/[\/=^.]/g, '_');
+    sig = window['_nakedSig_' + sid] || null;
+  }
+  var symbol = (sig && (sig.symbol || sig.display || sig.pair)) || fallbackSymbol || '';
+  if (!symbol) {
+    showToast('Chart open failed: symbol missing', true);
+    return;
+  }
+  openAcm(symbol, tf || 'H4', sig || null);
 }
 
 function closeAcm() {
@@ -9102,33 +9120,47 @@ function _acmStopLive() {
   if (_acm.liveInterval) { clearInterval(_acm.liveInterval); _acm.liveInterval = null; }
 }
 
+function _acmBuildChartAiSignalPayload() {
+  var payload = buildLiveSignalPayload(_acm.sig || null);
+  if (!payload) return null;
+  return {
+    direction: payload.direction,
+    confluenceScore: payload.confluenceScore != null ? payload.confluenceScore : payload.conviction,
+    price: payload.price != null ? payload.price : (payload.entryPrice != null ? payload.entryPrice : payload.entry),
+    sl: payload.sl,
+    tp1: payload.tp1 != null ? payload.tp1 : payload.tp,
+    type: payload.type,
+    regime: payload.regime || payload.trendState || null,
+  };
+}
+
 async function acmAIRead() {
   var btn = document.getElementById('acm-ai-btn');
   var panel = document.getElementById('acm-ai-panel');
 
-  btn.textContent = '🧠 Capturing...';
+  btn.textContent = '🧠 Loading chart...';
   btn.disabled = true;
   panel.style.display = 'block';
   panel.innerHTML = '<h4>🧠 AI CHART ANALYSIS</h4>' +
-    '<div style="color:#5a6d80;">Capturing chart screenshot...</div>';
+    '<div style="color:#5a6d80;">Waiting for chart to finish loading...</div>';
 
   try {
-    // Screenshot the chart body
-    var chartBody = document.getElementById('acm-chart-body');
-    var canvas = await html2canvas(chartBody, {
-      backgroundColor: '#060a10',
-      scale: 2.25,
-      logging: false,
-      useCORS: true,
-    });
+    var ready = await _waitChartReady(20);
+    if (!ready) throw new Error((_acm.tf || 'H4') + ' chart failed to load');
+    await new Promise(function(r) { setTimeout(r, 1200); });
 
-    var base64 = canvas.toDataURL('image/png');
+    btn.textContent = '🧠 Capturing...';
+    panel.innerHTML = '<h4>🧠 AI CHART ANALYSIS</h4>' +
+      '<div style="color:#5a6d80;">Capturing chart screenshot...</div>';
+
+    var base64 = await _captureChart();
+    var signalPayload = _acmBuildChartAiSignalPayload();
 
     panel.innerHTML = '<h4>🧠 AI CHART ANALYSIS</h4>' +
       '<div style="color:#5a6d80;">Sending to Claude Vision for analysis...</div>';
     btn.textContent = '🧠 Analysing...';
 
-    // Send to backend — include Engine B + signal from frontend state as fallback
+    // Send to backend (Engine C-style request shape)
     var sid = (_acm.symbol || '').replace(/[\/=^.]/g, '_');
     var resp = await fetch('/api/chart-analysis', {
       method: 'POST',
@@ -9138,7 +9170,7 @@ async function acmAIRead() {
         symbol: _acm.symbol,
         tf: _acm.tf,
         engineB: window['_engineB_' + sid] || null,
-        signal: _acm.sig || null,
+        signal: signalPayload,
       }),
     });
 
