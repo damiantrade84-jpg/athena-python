@@ -3,6 +3,8 @@
 Run: python -m pytest tests/ -v
 """
 
+from pathlib import Path
+
 import pytest
 
 # ── Indicator unit tests ─────────────────────────────────────────────────────
@@ -299,3 +301,19 @@ class TestJsonSafety:
         assert cleaned["atr"] is None
         assert cleaned["score"] is None
         assert cleaned["signals"][0]["ema200Slope"] is None
+
+
+def test_athena_source_exposes_intermarket_payload_and_route():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "athena.py").read_text(encoding="utf-8")
+
+    assert '@app.route("/api/intermarket-matrix")' in source
+    assert '"intermarketConfirmation": res.get("intermarketConfirmation", {})' in source
+
+
+def test_ui_source_renders_intermarket_confirmation_box():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "static" / "index.html").read_text(encoding="utf-8")
+
+    assert "function buildIntermarketConfirmationBox(s)" in source
+    assert "buildIntermarketConfirmationBox(s)" in source

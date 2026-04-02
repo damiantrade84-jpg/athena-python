@@ -5826,6 +5826,53 @@ function buildUsdRelativeStrengthBox(s) {
   '</div>';
 }
 
+function buildIntermarketConfirmationBox(s) {
+  var im = s && s.intermarketConfirmation;
+  if (!im || !im.verdict) return '';
+
+  var verdict = String(im.verdict || 'neutral').toLowerCase();
+  var tone = verdict === 'supportive'
+    ? 'var(--bull)'
+    : verdict === 'contradictory'
+      ? 'var(--bear)'
+      : 'var(--accent)';
+  var title = verdict === 'supportive'
+    ? 'INTERMARKET SUPPORTIVE'
+    : verdict === 'contradictory'
+      ? 'INTERMARKET CONTRADICTORY'
+      : 'INTERMARKET MIXED';
+  var sup = (im.topSupporting || []).map(function(x){ return x.driver; }).filter(Boolean).join(', ') || 'None';
+  var con = (im.topContradictory || []).map(function(x){ return x.driver; }).filter(Boolean).join(', ') || 'None';
+  var stability = im.stable ? 'stable' : (im.flippedRecently ? 'flipped' : 'unstable');
+  var effect = 'empirical';
+  var hasStructural = (im.topSupporting || []).concat(im.topContradictory || []).some(function(x){
+    return x && (x.sourceType === 'structural' || x.sourceType === 'both');
+  });
+  var hasEmpirical = (im.topSupporting || []).concat(im.topContradictory || []).some(function(x){
+    return x && (x.sourceType === 'empirical' || x.sourceType === 'both');
+  });
+  if (hasStructural && hasEmpirical) effect = 'structural + empirical';
+  else if (hasStructural) effect = 'structural';
+
+  return '<div style="margin:10px 0;padding:10px 12px;background:rgba(14,165,233,0.07);border:1px solid rgba(14,165,233,0.20);border-radius:8px;">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;">' +
+      '<div style="font-size:11px;font-weight:700;color:#38bdf8;font-family:IBM Plex Mono,monospace;">' + escSigHtml(title) + '</div>' +
+      '<div style="font-size:11px;font-weight:700;color:' + tone + ';font-family:IBM Plex Mono,monospace;">' + escSigHtml((im.supportStrength || 'weak').toUpperCase()) + '</div>' +
+    '</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;">' +
+      '<div class="meta-chip">Score<br><span class="val" style="color:' + tone + '">' + (Number(im.score || 0).toFixed ? Number(im.score || 0).toFixed(2) : im.score) + '</span></div>' +
+      '<div class="meta-chip">Window<br><span class="val">' + escSigHtml(String(im.activeWindow || 'n/a')) + '</span></div>' +
+      '<div class="meta-chip">Stability<br><span class="val">' + escSigHtml(stability) + '</span></div>' +
+      '<div class="meta-chip">Effect<br><span class="val">' + escSigHtml(effect) + '</span></div>' +
+    '</div>' +
+    '<div style="margin-top:8px;font-size:10px;color:#cbd5e1;line-height:1.45;">' +
+      '<strong style="color:var(--bull)">Support:</strong> ' + escSigHtml(sup) + '<br>' +
+      '<strong style="color:var(--bear)">Contradict:</strong> ' + escSigHtml(con) +
+    '</div>' +
+    (im.explanation ? '<div style="margin-top:8px;font-size:10px;color:var(--muted);line-height:1.45;">' + escSigHtml(im.explanation) + '</div>' : '') +
+  '</div>';
+}
+
 /** Left border + conf label tier: high ≥ threshold, medium ≥ 85% of threshold (or pct bands if no threshold). */
 function signalCardEdgeClass(s) {
   var thr = s.scanThresholdEffective != null ? Number(s.scanThresholdEffective) : (s.scanThresholdStatic != null ? Number(s.scanThresholdStatic) : NaN);
@@ -6127,7 +6174,7 @@ function buildCardInner(s, idx) {
         '<button class="sig-tab" onclick="switchSigTab(this,\'execute\',\'' + sid + '\')">EXECUTE</button>' +
       '</div>' +
       '<div class="sig-tab-content active" data-tab="overview">' +
-        metaHtml + buildUsdRelativeStrengthBox(s) + votesHtml + corrWarn + watchReasonHtml + warnHtml +
+        metaHtml + buildUsdRelativeStrengthBox(s) + buildIntermarketConfirmationBox(s) + votesHtml + corrWarn + watchReasonHtml + warnHtml +
       '</div>' +
       '<div class="sig-tab-content" data-tab="levels">' + buildStyleLevelsTab(s) + '</div>' +
       '<div class="sig-tab-content" data-tab="ai">' +

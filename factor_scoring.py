@@ -20,6 +20,7 @@ import logging
 import threading
 from typing import List, Dict, Optional
 from config import CONFIG
+from intermarket import apply_confirmation_to_score
 from regime import detect_regime
 
 log = logging.getLogger("athena")
@@ -630,6 +631,7 @@ def compute_factor_scores(
     regime_context: Optional[dict] = None,
     oi_context: Optional[dict] = None,
     macro_context: Optional[dict] = None,
+    intermarket_context: Optional[dict] = None,
 ) -> Dict:
     """Compute factor scores, apply regime weights, and aggregate to final score.
 
@@ -664,6 +666,7 @@ def compute_factor_scores(
         "microstructure": "ok",
         "oi": "ok",
         "usd_proxy": "ok",
+        "intermarket": "disabled",
     }
 
     # Trend direction — EMA crossover across all three timeframes (directional: +1/-1)
@@ -1104,6 +1107,8 @@ def compute_factor_scores(
             if _optional_directional_keys(asset_type, pair)
             else 1.0,
             "crypto_engine_a_diagnostics": _crypto_diag,
+            "intermarket_confirmation": None,
+            "intermarket_engine_a_delta": 0.0,
         }
 
     dir_score = 0.0
@@ -1162,6 +1167,24 @@ def compute_factor_scores(
     _nondir_norm = min(nondir_score / 3.0, 1.0)  # normalize quality to [0, 1]
     _quality_mult = 0.6 + (_nondir_norm * 0.4)
     final_score = abs(dir_score) * _quality_mult * _dir_conf
+    _intermarket_apply = apply_confirmation_to_score(
+        final_score,
+        direction,
+        pair,
+        intermarket_context,
+        max_score=3.0,
+        config=CONFIG,
+    )
+    final_score = float(_intermarket_apply.get("adjusted_score", final_score))
+    _intermarket_confirmation = _intermarket_apply.get("confirmation")
+    if intermarket_context is not None:
+        feed_status["intermarket"] = "ok"
+    if (
+        _intermarket_confirmation
+        and _intermarket_confirmation.get("verdict") == "neutral"
+        and not CONFIG.get("INTERMARKET_CONFIRMATION", {}).get("engine_a_enabled", False)
+    ):
+        feed_status["intermarket"] = "disabled"
 
     _crypto_diag = (
         _build_crypto_engine_a_diagnostics(
@@ -1200,4 +1223,8 @@ def compute_factor_scores(
         "optional_factor_coverage": round(optional_coverage, 4),
         "feed_status": feed_status,
         "crypto_engine_a_diagnostics": _crypto_diag,
+        "intermarket_confirmation": _intermarket_confirmation,
+        "intermarket_engine_a_delta": float(
+            (_intermarket_confirmation or {}).get("engineADelta", 0.0) or 0.0
+        ),
     }

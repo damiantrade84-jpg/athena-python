@@ -406,6 +406,7 @@ def calc_confluence(
     oi_data: dict | None = None,
     oi_context: dict | None = None,
     macro_context: dict | None = None,
+    intermarket_context: dict | None = None,
 ) -> dict:
     """Factor-based confluence using normalized indicators, regime-aware weights, and correlation filtering.
     Preserves legacy API and raw-threshold warnings for human readability.
@@ -434,6 +435,7 @@ def calc_confluence(
         regime_context,
         oi_context=_oi_ctx_eff,
         macro_context=macro_context,
+        intermarket_context=intermarket_context,
     )
 
     # Fix 2 — btcBias penalty: when BTC bias opposes direction, apply mild conviction reduction
@@ -612,9 +614,11 @@ def calc_confluence(
             "optionalFactorCoverage": factor_result.get("optional_factor_coverage"),
             "feedStatus": factor_result.get("feed_status", {}),
             "macroContext": macro_context or {},
+            "intermarket": factor_result.get("intermarket_confirmation") or {},
             "insufficientFactors": factor_result.get("insufficient_factors", False),
             "cryptoEngineADiagnostics": factor_result.get("crypto_engine_a_diagnostics"),
         },
+        "intermarketConfirmation": factor_result.get("intermarket_confirmation") or {},
     }
 
 

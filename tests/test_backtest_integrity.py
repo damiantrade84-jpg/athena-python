@@ -6,11 +6,17 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import backtest_runner
+from intermarket import (
+    build_point_in_time_context,
+    discover_active_universe,
+    prepare_series_store,
+)
 
 
 def _make_bars(start_dt, count, hours, base=100.0):
@@ -288,3 +294,59 @@ def test_backtest_pair_naked_mt5_commodity_uses_mt5_intraday_fallback(monkeypatc
 
     assert mt5_calls.count("H4") == 1
     assert mt5_calls.count("H1") == 1
+
+
+def test_intermarket_point_in_time_context_excludes_future_bars():
+    pair = {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex", "enabled": True}
+    driver = {"display": "SPY", "symbol": "SPY", "type": "stock", "enabled": True}
+    all_pairs = [pair, driver]
+
+    h4_target = _make_bars(
+        datetime(2024, 1, 1, tzinfo=timezone.utc),
+        180,
+        4,
+        base=100.0,
+    )
+    h4_driver = _make_bars(
+        datetime(2024, 1, 1, tzinfo=timezone.utc),
+        180,
+        4,
+        base=100.0,
+    )
+    for i in range(100, 140):
+        h4_driver[i]["close"] = 99.0 - ((i - 100) * 0.05)
+    for i in range(140, 180):
+        h4_driver[i]["close"] = 97.0 + ((i - 140) * 0.20)
+
+    universe = discover_active_universe(all_pairs)
+
+    def _fetch(_pair, _tf, _limit):
+        if _pair["display"] == "EUR/USD":
+            return h4_target
+        if _pair["display"] == "SPY":
+            return h4_driver
+        return None
+
+    store = prepare_series_store(
+        universe,
+        fetch_candles=_fetch,
+        timeframe="H4",
+        limit=220,
+        config={"INTERMARKET_CONFIRMATION": {"enabled": True}},
+        preloaded_candles={"EUR/USD": h4_target, "SPY": h4_driver},
+    )
+    cutoff_ts = pd.to_datetime(h4_driver[140]["time"], utc=True)
+    ctx = build_point_in_time_context(
+        pair,
+        all_pairs=all_pairs,
+        disabled_pairs=set(),
+        etf_pairs=[],
+        series_store=store,
+        cutoff_ts=cutoff_ts,
+        config={"INTERMARKET_CONFIRMATION": {"enabled": True}},
+    )
+
+    assert ctx is not None
+    assert ctx["drivers"]
+    spy_driver = next(d for d in ctx["drivers"] if d["driver"] == "SPY")
+    assert spy_driver["summary"]["current"]["driverRecentChangePct"] < 0

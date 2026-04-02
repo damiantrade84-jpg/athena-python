@@ -13,6 +13,7 @@ from candles_cache import get_candle_fetch_meta
 from config import CONFIG, scan_candle_limits
 from data_feeds import http_requests
 from indicators import calc_atr, calc_indicators
+from intermarket import build_scan_snapshot
 from scoring import (
     _build_event_risk,
     _classify_signal,
@@ -334,6 +335,35 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
         except Exception as e:
             log.error(f"BTC err: {e}")
 
+        _scan_limits = scan_candle_limits()
+        intermarket_snapshot = None
+        _im_cfg = CONFIG.get("INTERMARKET_CONFIRMATION", {}) or {}
+        if bool(_im_cfg.get("enabled")) and bool(_im_cfg.get("full_scan_time_matrix", True)):
+            try:
+                _im_h4_limit = max(int(_scan_limits["H4"]), 220)
+                _im_preloaded_h4 = {}
+                for _pair in active_pairs:
+                    _candles = r.fetch_candles(_pair, "H4", _im_h4_limit)
+                    if _candles:
+                        _im_preloaded_h4[_pair["display"]] = _candles
+                intermarket_snapshot = build_scan_snapshot(
+                    r.ALL_PAIRS,
+                    disabled_pairs=r.disabled_pairs,
+                    etf_pairs=getattr(r, "ETF_PAIRS", []),
+                    fetch_candles=r.fetch_candles,
+                    config=CONFIG,
+                    preloaded_h4_candles=_im_preloaded_h4,
+                    force=True,
+                )
+                if intermarket_snapshot:
+                    log.info(
+                        "[INTERMARKET] prewarmed snapshot: %d symbols",
+                        len((intermarket_snapshot.get("universe") or {}).get("pairs", [])),
+                    )
+            except Exception as _im_err:
+                intermarket_snapshot = None
+                log.warning("[INTERMARKET] scan snapshot build failed: %s", _im_err)
+
         _engine_b = NakedEngine()
         _regime_context = make_regime_smoothing_context()
         _max_workers = max(1, int(CONFIG.get("SCAN_MAX_WORKERS", 3) or 3))
@@ -342,9 +372,14 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             try:
                 _pair_style = r.resolve_scan_style(_requested_style, pair)
                 _lim = scan_candle_limits()
+                _im_h4 = (
+                    ((intermarket_snapshot or {}).get("seriesStore", {}) or {})
+                    .get(pair.get("display"), {})
+                    .get("candles")
+                )
                 raw_candles = {
                     "D1": r.fetch_candles(pair, "D1", _lim["D1"]),
-                    "H4": r.fetch_candles(pair, "H4", _lim["H4"]),
+                    "H4": _im_h4 or r.fetch_candles(pair, "H4", _lim["H4"]),
                     "H1": r.fetch_candles(pair, "H1", _lim["H1"]),
                 }
                 fetch_meta = {
@@ -375,6 +410,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     regime_context=_regime_context,
                     preloaded_candles=raw_candles,
                     preloaded_fetch_meta=fetch_meta,
+                    intermarket_snapshot=intermarket_snapshot,
                 )
 
                 if not sig_a:
@@ -740,6 +776,7 @@ def analyze_pair(
     regime_context: dict[str, Any] | None = None,
     preloaded_candles: dict[str, Any] | None = None,
     preloaded_fetch_meta: dict[str, Any] | None = None,
+    intermarket_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Single-pair analysis; implementation remains on the monolith until further split."""
     try:
@@ -751,6 +788,7 @@ def analyze_pair(
             regime_context=regime_context,
             preloaded_candles=preloaded_candles,
             preloaded_fetch_meta=preloaded_fetch_meta,
+            intermarket_snapshot=intermarket_snapshot,
         )
     except RuntimeError:
         from athena_legacy import load as _load_legacy
@@ -763,4 +801,5 @@ def analyze_pair(
             regime_context=regime_context,
             preloaded_candles=preloaded_candles,
             preloaded_fetch_meta=preloaded_fetch_meta,
+            intermarket_snapshot=intermarket_snapshot,
         )

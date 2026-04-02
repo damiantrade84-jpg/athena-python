@@ -32,6 +32,12 @@ from indicators import (
     calc_usd_relative_strength_context,
 )
 from factor_scoring import build_oi_context_for_factor_scoring
+from intermarket import (
+    apply_confirmation_to_score,
+    build_point_in_time_context,
+    discover_active_universe,
+    prepare_series_store,
+)
 from scoring import (
     calc_confluence,
     get_score_threshold,
@@ -644,6 +650,34 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 _macro_err,
             )
 
+    _bt_intermarket_series_store = None
+    if bool((CONFIG.get("INTERMARKET_CONFIRMATION", {}) or {}).get("enabled", False)):
+        try:
+            _bt_im_universe = discover_active_universe(
+                getattr(_rt(), "ALL_PAIRS", []),
+                disabled_pairs=getattr(_rt(), "disabled_pairs", []),
+                etf_pairs=getattr(_rt(), "ETF_PAIRS", []),
+            )
+            _bt_im_limit = max(
+                int(CONFIG.get("H4_CANDLES", 1000) or 1000),
+                220,
+            )
+            _bt_intermarket_series_store = prepare_series_store(
+                _bt_im_universe,
+                fetch_candles=_rt().fetch_candles,
+                timeframe="H4",
+                limit=_bt_im_limit,
+                config=CONFIG,
+                preloaded_candles={pair.get("display"): h4_raw},
+            )
+        except Exception as _bt_im_err:
+            _bt_intermarket_series_store = None
+            log.warning(
+                "[BT-INTERMARKET] %s: history store build failed: %s",
+                pair.get("display"),
+                _bt_im_err,
+            )
+
     if effective_style == "swing":
         # --- SWING D1 LOOP â€" UNCHANGED ---
 
@@ -738,6 +772,17 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
                 # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
                 btc_bias = _bt_btc_bias(d1_window, _pair_ctx)
+                _bt_intermarket_ctx = None
+                if _bt_intermarket_series_store is not None:
+                    _bt_intermarket_ctx = build_point_in_time_context(
+                        _pair_ctx,
+                        all_pairs=getattr(_rt(), "ALL_PAIRS", []),
+                        disabled_pairs=getattr(_rt(), "disabled_pairs", []),
+                        etf_pairs=getattr(_rt(), "ETF_PAIRS", []),
+                        series_store=_bt_intermarket_series_store,
+                        cutoff_ts=intraday_cutoff,
+                        config=CONFIG,
+                    )
 
                 # Route forex pairs to dedicated forex scoring engine in backtest
                 if pair.get("type") == "forex":
@@ -776,6 +821,16 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         "score": _fx.final_score,  # Add compatibility field for backtest
                         "trendState": _fx_trend_state,  # Add compatibility field
                     }
+                    _fx_im = apply_confirmation_to_score(
+                        float(res.get("score", 0.0) or 0.0),
+                        str(res.get("direction") or "LONG"),
+                        _pair_ctx,
+                        _bt_intermarket_ctx,
+                        max_score=1.0,
+                        config=CONFIG,
+                    )
+                    res["score"] = float(_fx_im.get("adjusted_score", res["score"]))
+                    res["intermarketConfirmation"] = _fx_im.get("confirmation") or {}
                     direction = _fx.direction
                 else:
                     _bt_funding_rate = None
@@ -822,6 +877,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         oi_data=_bt_oi_data,
                         oi_context=_bt_oi_ctx,
                         macro_context=_bt_macro_ctx,
+                        intermarket_context=_bt_intermarket_ctx,
                     )
 
             except Exception as _bt_bar_err:
@@ -1184,6 +1240,17 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
                 # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
                 btc_bias = _bt_btc_bias(d1_ctx, _pair_ctx)
+                _bt_intermarket_ctx = None
+                if _bt_intermarket_series_store is not None:
+                    _bt_intermarket_ctx = build_point_in_time_context(
+                        _pair_ctx,
+                        all_pairs=getattr(_rt(), "ALL_PAIRS", []),
+                        disabled_pairs=getattr(_rt(), "disabled_pairs", []),
+                        etf_pairs=getattr(_rt(), "ETF_PAIRS", []),
+                        series_store=_bt_intermarket_series_store,
+                        cutoff_ts=entry_ts,
+                        config=CONFIG,
+                    )
 
                 # Route forex pairs to dedicated forex scoring engine (matches D1 BT + live scan)
                 if pair.get("type") == "forex":
@@ -1221,6 +1288,16 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         "score": _fx.final_score,
                         "trendState": _fx_trend_state,
                     }
+                    _fx_im = apply_confirmation_to_score(
+                        float(res.get("score", 0.0) or 0.0),
+                        str(res.get("direction") or "LONG"),
+                        _pair_ctx,
+                        _bt_intermarket_ctx,
+                        max_score=1.0,
+                        config=CONFIG,
+                    )
+                    res["score"] = float(_fx_im.get("adjusted_score", res["score"]))
+                    res["intermarketConfirmation"] = _fx_im.get("confirmation") or {}
                     direction = _fx.direction
                 else:
                     _bt_funding_rate = None
@@ -1261,6 +1338,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         oi_data=_bt_oi_data,
                         oi_context=_bt_oi_ctx,
                         macro_context=_bt_macro_ctx,
+                        intermarket_context=_bt_intermarket_ctx,
                     )
 
             except Exception as _bt_bar_err:
@@ -1603,6 +1681,17 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
                 # BUG 1 fix: use historical BTC bias at this bar (not hardcoded "neutral")
                 btc_bias = _bt_btc_bias(d1_ctx, _pair_ctx)
+                _bt_intermarket_ctx = None
+                if _bt_intermarket_series_store is not None:
+                    _bt_intermarket_ctx = build_point_in_time_context(
+                        _pair_ctx,
+                        all_pairs=getattr(_rt(), "ALL_PAIRS", []),
+                        disabled_pairs=getattr(_rt(), "disabled_pairs", []),
+                        etf_pairs=getattr(_rt(), "ETF_PAIRS", []),
+                        series_store=_bt_intermarket_series_store,
+                        cutoff_ts=entry_ts,
+                        config=CONFIG,
+                    )
 
                 # Route forex pairs to dedicated forex scoring engine (matches D1 BT + live scan)
                 if pair.get("type") == "forex":
@@ -1639,6 +1728,16 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         "score": _fx.final_score,
                         "trendState": _fx_trend_state,
                     }
+                    _fx_im = apply_confirmation_to_score(
+                        float(res.get("score", 0.0) or 0.0),
+                        str(res.get("direction") or "LONG"),
+                        _pair_ctx,
+                        _bt_intermarket_ctx,
+                        max_score=1.0,
+                        config=CONFIG,
+                    )
+                    res["score"] = float(_fx_im.get("adjusted_score", res["score"]))
+                    res["intermarketConfirmation"] = _fx_im.get("confirmation") or {}
                     direction = _fx.direction
                 else:
                     _bt_funding_rate = None
@@ -1679,6 +1778,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         oi_data=_bt_oi_data,
                         oi_context=_bt_oi_ctx,
                         macro_context=_bt_macro_ctx,
+                        intermarket_context=_bt_intermarket_ctx,
                     )
 
             except Exception as _bt_bar_err:

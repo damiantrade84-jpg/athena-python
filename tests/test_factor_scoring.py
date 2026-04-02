@@ -1135,6 +1135,201 @@ class TestXauUsdMacroProxy:
         assert result["factorDiagnostics"]["macroContext"]["usd_proxy_score"] == -1.4
 
 
+def _make_intermarket_context(driver_recent_change_pct: float, *, flipped=False):
+    return {
+        "target": "EUR/USD",
+        "drivers": [
+            {
+                "driver": "DXY",
+                "driverAssetClass": "macro",
+                "sourceType": "both",
+                "priorRelation": "inverse",
+                "effectivePriorRelation": "inverse",
+                "summary": {
+                    "regime": {
+                        "relation": "inverse",
+                        "label": "flipped recently" if flipped else "strongly inverse",
+                    },
+                    "current": {
+                        "correlation": -0.82,
+                        "stability": 0.90,
+                        "signPersistence": 0.88,
+                        "volAdjustedScore": -0.70,
+                        "driverRecentChangePct": driver_recent_change_pct,
+                        "targetRecentChangePct": 1.10,
+                        "window": 50,
+                        "flippedRecently": flipped,
+                        "lastBarContradiction": False,
+                        "leadLag": {"leader": "driver", "evidence": "moderate"},
+                    },
+                },
+            }
+        ],
+        "unavailablePriors": [],
+    }
+
+
+class TestIntermarketConfirmationFactor:
+    @patch("carry_feed.get_carry_z", return_value=0.0)
+    @patch("cot_feed.get_cot_z", return_value=0.0)
+    def test_intermarket_delta_is_zero_when_disabled(self, *_mocks):
+        snap = _make_snap()
+        base = compute_factor_scores(
+            d1_snap=snap,
+            h4_snap=snap,
+            h1_snap=snap,
+            pair={"type": "forex", "display": "EUR/USD"},
+            d1_candles=_make_candles(220),
+            h4_candles=_make_candles(220),
+            h1_candles=_make_candles(220),
+            volume_ratio=1.5,
+        )
+        with patch.dict(
+            CONFIG,
+            _deep_merge_dict(
+                CONFIG,
+                {
+                    "INTERMARKET_CONFIRMATION": {
+                        "enabled": False,
+                        "engine_a_enabled": False,
+                    }
+                },
+            ),
+            clear=True,
+        ):
+            result = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair={"type": "forex", "display": "EUR/USD"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+                intermarket_context=_make_intermarket_context(-1.2),
+            )
+        assert result["final_score"] == pytest.approx(base["final_score"])
+        assert result["intermarket_engine_a_delta"] == 0.0
+
+    @patch("carry_feed.get_carry_z", return_value=0.0)
+    @patch("cot_feed.get_cot_z", return_value=0.0)
+    def test_supportive_intermarket_bonus_is_bounded(self, *_mocks):
+        snap = _make_snap()
+        with patch.dict(
+            CONFIG,
+            _deep_merge_dict(
+                CONFIG,
+                {
+                    "INTERMARKET_CONFIRMATION": {
+                        "enabled": True,
+                        "engine_a_enabled": True,
+                        "engine_a_score_cap": 0.12,
+                        "lead_lag_enabled": True,
+                    }
+                },
+            ),
+            clear=True,
+        ):
+            base = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair={"type": "forex", "display": "EUR/USD"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+            )
+            result = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair={"type": "forex", "display": "EUR/USD"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+                intermarket_context=_make_intermarket_context(-1.2),
+            )
+        assert result["final_score"] > base["final_score"]
+        assert 0 < result["intermarket_engine_a_delta"] <= 0.12
+        assert result["intermarket_confirmation"]["verdict"] == "supportive"
+
+    @patch("carry_feed.get_carry_z", return_value=0.0)
+    @patch("cot_feed.get_cot_z", return_value=0.0)
+    def test_contradictory_intermarket_penalty_is_bounded(self, *_mocks):
+        snap = _make_snap()
+        with patch.dict(
+            CONFIG,
+            _deep_merge_dict(
+                CONFIG,
+                {
+                    "INTERMARKET_CONFIRMATION": {
+                        "enabled": True,
+                        "engine_a_enabled": True,
+                        "engine_a_score_cap": 0.10,
+                    }
+                },
+            ),
+            clear=True,
+        ):
+            base = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair={"type": "forex", "display": "EUR/USD"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+            )
+            result = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair={"type": "forex", "display": "EUR/USD"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+                intermarket_context=_make_intermarket_context(1.3),
+            )
+        assert result["final_score"] < base["final_score"]
+        assert -0.10 <= result["intermarket_engine_a_delta"] < 0
+        assert result["intermarket_confirmation"]["verdict"] == "contradictory"
+
+    @patch("carry_feed.get_carry_z", return_value=0.0)
+    @patch("cot_feed.get_cot_z", return_value=0.0)
+    def test_flipped_intermarket_context_stays_near_neutral(self, *_mocks):
+        snap = _make_snap()
+        with patch.dict(
+            CONFIG,
+            _deep_merge_dict(
+                CONFIG,
+                {
+                    "INTERMARKET_CONFIRMATION": {
+                        "enabled": True,
+                        "engine_a_enabled": True,
+                        "engine_a_score_cap": 0.15,
+                    }
+                },
+            ),
+            clear=True,
+        ):
+            result = compute_factor_scores(
+                d1_snap=snap,
+                h4_snap=snap,
+                h1_snap=snap,
+                pair={"type": "forex", "display": "EUR/USD"},
+                d1_candles=_make_candles(220),
+                h4_candles=_make_candles(220),
+                h1_candles=_make_candles(220),
+                volume_ratio=1.5,
+                intermarket_context=_make_intermarket_context(-1.0, flipped=True),
+            )
+        assert abs(result["intermarket_engine_a_delta"]) < 0.08
+
+
 # ── Direction tie and funding rate calibration (FIX 1 & 2) ──────────────────
 
 

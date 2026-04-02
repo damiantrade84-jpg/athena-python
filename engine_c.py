@@ -24,6 +24,7 @@ from typing import Optional
 
 from calibration import predict_calibrated_prob
 from config import CONFIG
+from intermarket import engine_c_conviction_multiplier
 from meta_learner import apply_meta_policy, get_dynamic_engine_weights, get_engine_context
 from stability_monitor import record_signal_event
 
@@ -790,6 +791,22 @@ def compute_consensus(
 
     conviction = (a["score_norm"] * weights["A"]) + (b["score_norm"] * weights["B"])
     conviction = min(1.0, conviction)
+    _intermarket_confirmation = signal_a.get("intermarketConfirmation") or {}
+    _intermarket_mult = engine_c_conviction_multiplier(
+        _intermarket_confirmation,
+        config=CONFIG,
+    )
+    conviction = max(0.0, min(1.0, conviction * _intermarket_mult))
+    _intermarket_confirmation_payload = (
+        dict(_intermarket_confirmation)
+        if isinstance(_intermarket_confirmation, dict)
+        else {}
+    )
+    if _intermarket_confirmation_payload:
+        _intermarket_confirmation_payload["engineCMultiplier"] = round(
+            float(_intermarket_mult),
+            6,
+        )
 
     # Extra emphasis when B shows MTF BOS / strong OB. Note: calculate_confidence() may already
     # count these as extra checklist rows (raising B_norm); multipliers here are deliberate stacking.
@@ -832,7 +849,16 @@ def compute_consensus(
 
     decision_state = "blocked"
     if tier != "SKIP":
-        if c_reliability >= 0.60 and conviction >= 0.65:
+        _intermarket_blocks = bool(
+            CONFIG.get("INTERMARKET_CONFIRMATION", {}).get(
+                "severe_contradiction_blocks", False
+            )
+        ) and (_intermarket_confirmation.get("contradictionFlags") or {}).get(
+            "severeContradiction"
+        )
+        if _intermarket_blocks:
+            decision_state = "blocked"
+        elif c_reliability >= 0.60 and conviction >= 0.65:
             decision_state = "execute"
         elif c_reliability >= 0.45 and conviction >= 0.50:
             decision_state = "reduced_risk"
@@ -863,6 +889,8 @@ def compute_consensus(
         a_reliability=a_reliability,
         b_reliability=b_reliability,
         c_reliability=c_reliability,
+        intermarket_confirmation=_intermarket_confirmation_payload,
+        intermarket_multiplier=_intermarket_mult,
     )
 
     # Step 6: Apply Vision if available
@@ -942,4 +970,9 @@ def _build_result(
         "vision_rating": None,
         "vision_sl_flag": None,
         "vision_tp_flag": None,
+        "intermarket_confirmation": kwargs.get("intermarket_confirmation") or {},
+        "intermarket_multiplier": round(
+            float(kwargs.get("intermarket_multiplier", 1.0) or 1.0),
+            6,
+        ),
     }

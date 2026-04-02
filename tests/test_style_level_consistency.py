@@ -204,3 +204,69 @@ def test_engine_c_consensus_blends_normalized_engine_scores(monkeypatch):
     assert result["components"]["a_norm"] == 0.5
     assert result["components"]["b_norm"] == 0.8
     assert result["conviction"] == 0.605
+
+
+def test_engine_c_exposes_intermarket_multiplier_in_confirmation_payload(monkeypatch):
+    monkeypatch.setattr(engine_c, "get_engine_context", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        engine_c, "get_dynamic_engine_weights", lambda *_args, **_kwargs: {"weights": None}
+    )
+    monkeypatch.setattr(
+        engine_c,
+        "predict_calibrated_prob",
+        lambda *_args, **_kwargs: {"calibrated_prob": None},
+    )
+    monkeypatch.setattr(engine_c, "record_signal_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine_c, "apply_meta_policy", lambda result, _meta: result)
+    monkeypatch.setitem(
+        CONFIG,
+        "INTERMARKET_CONFIRMATION",
+        {
+            **(CONFIG.get("INTERMARKET_CONFIRMATION", {}) or {}),
+            "enabled": True,
+            "engine_c_enabled": True,
+            "engine_c_conviction_cap": 0.08,
+        },
+    )
+
+    result = compute_consensus(
+        signal_a={
+            "confluenceScore": 1.5,
+            "maxScore": 3.0,
+            "direction": "LONG",
+            "sl": 99.0,
+            "tp1": 103.0,
+            "tp2": 105.0,
+            "rr1": 2.0,
+            "price": 100.0,
+            "style": "swing",
+            "intermarketConfirmation": {
+                "score": 0.5,
+                "stable": True,
+                "supportStrength": "moderate",
+            },
+        },
+        signal_b={
+            "structural_verdict": "CLEAR",
+            "direction": "LONG",
+            "recommended_stop_loss": 98.5,
+            "recommended_take_profit": 104.0,
+            "order_blocks": [],
+        },
+        confidence_b={
+            "score": 4.0,
+            "max_possible": 5.0,
+            "pct": 0.0,
+            "rr": 2.0,
+            "structure_ok": True,
+            "zone_ok": True,
+            "trigger_ok": True,
+        },
+        asset_type="forex",
+        regime="TRENDING",
+        entry_price=100.0,
+        atr=1.0,
+    )
+
+    assert result["intermarket_multiplier"] == 1.04
+    assert result["intermarket_confirmation"]["engineCMultiplier"] == 1.04

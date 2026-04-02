@@ -3327,6 +3327,35 @@ def _build_signal_message(
             lines.append(f"  Active directional: {', '.join(_fd['activeDirectionalFactors'])}")
         if _fd.get("activeNondirectionalFactors"):
             lines.append(f"  Active nondirectional: {', '.join(_fd['activeNondirectionalFactors'])}")
+        _im = signal.get("intermarketConfirmation") or _fd.get("intermarket") or {}
+        if _im:
+            lines.append("  Intermarket confirmation:")
+            lines.append(
+                f"    verdict={_im.get('verdict', 'neutral')} "
+                f"score={_im.get('score', 0)} delta={_im.get('engineADelta', 0)} "
+                f"window={_im.get('activeWindow', 'n/a')}"
+            )
+            if _im.get("topSupporting"):
+                lines.append(
+                    "    supporting: "
+                    + ", ".join(
+                        str(x.get("driver"))
+                        for x in (_im.get("topSupporting") or [])
+                    )
+                )
+            if _im.get("topContradictory"):
+                lines.append(
+                    "    contradictory: "
+                    + ", ".join(
+                        str(x.get("driver"))
+                        for x in (_im.get("topContradictory") or [])
+                    )
+                )
+            if _im.get("unavailablePriors"):
+                lines.append(
+                    "    unavailable priors: "
+                    + ", ".join(str(x) for x in (_im.get("unavailablePriors") or []))
+                )
         if _fd.get("insufficientFactors"):
             lines.append("  ** INSUFFICIENT FACTORS — too few active to produce valid score **")
 
@@ -8456,6 +8485,39 @@ def api_pairs():
     return jsonify({"groups": groups, "total": bt_total, "active": len(ACTIVE_PAIRS)})
 
 
+@app.route("/api/intermarket-matrix")
+def api_intermarket_matrix():
+    """Inspect the current H4 intermarket relationship matrix."""
+
+    try:
+        from intermarket import build_public_matrix_payload, build_scan_snapshot
+
+        asset_filter = request.args.get("asset_filter") or request.args.get(
+            "assetClassFilter"
+        )
+        try:
+            limit = max(1, min(int(request.args.get("limit", 40)), 200))
+        except (TypeError, ValueError):
+            limit = 40
+
+        snapshot = build_scan_snapshot(
+            ALL_PAIRS,
+            disabled_pairs=_disabled_pairs,
+            etf_pairs=ETF_PAIRS,
+            fetch_candles=fetch_candles,
+            config=CONFIG,
+        )
+        payload = build_public_matrix_payload(
+            snapshot,
+            asset_class_filter=asset_filter,
+            limit=limit,
+        )
+        return jsonify(_json_safe(payload))
+    except Exception as e:
+        log.error(f"api_intermarket_matrix error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/candles", methods=["GET"])
 def api_candles():
     """Return OHLCV candles for the chart widget."""
@@ -8772,6 +8834,7 @@ def analyze_pair(
     regime_context=None,
     preloaded_candles=None,
     preloaded_fetch_meta=None,
+    intermarket_snapshot=None,
 ):
 
     pair_profile = get_pair_profile(pair)
@@ -9040,6 +9103,22 @@ def analyze_pair(
             return None
 
     _usd_relative_strength = fetch_usd_relative_strength_context(pair, _cf_h4c, tf="H4")
+    _intermarket_raw_context = None
+    try:
+        if intermarket_snapshot:
+            from intermarket import build_symbol_context
+
+            _intermarket_raw_context = build_symbol_context(
+                _pair_ctx,
+                intermarket_snapshot,
+                config=CONFIG,
+            )
+    except Exception as _im_ctx_err:
+        log.debug(
+            "[INTERMARKET] %s context build skipped: %s",
+            pair.get("display"),
+            _im_ctx_err,
+        )
 
     if res is None or pair.get("type") != "forex":
         res = calc_confluence(
@@ -9061,7 +9140,31 @@ def analyze_pair(
             oi_data=_oi_data,
             oi_context=_oi_context,
             macro_context=_usd_relative_strength,
+            intermarket_context=_intermarket_raw_context,
         )
+    elif pair.get("type") == "forex":
+        try:
+            from intermarket import apply_confirmation_to_score
+
+            _fx_im = apply_confirmation_to_score(
+                float(res.get("score", 0.0) or 0.0),
+                str(res.get("direction") or "LONG"),
+                _pair_ctx,
+                _intermarket_raw_context,
+                max_score=1.0,
+                config=CONFIG,
+            )
+            res["score"] = float(_fx_im.get("adjusted_score", res.get("score", 0.0)))
+            res["intermarketConfirmation"] = _fx_im.get("confirmation") or {}
+            _fx_fd = dict(res.get("factorDiagnostics") or {})
+            _fx_fd["intermarket"] = res["intermarketConfirmation"]
+            res["factorDiagnostics"] = _fx_fd
+        except Exception as _fx_im_err:
+            log.debug(
+                "[INTERMARKET] %s forex integration skipped: %s",
+                pair.get("display"),
+                _fx_im_err,
+            )
 
     # For SCALP: warn if D1 trend disagrees with signal direction
 
@@ -9369,6 +9472,7 @@ def analyze_pair(
         "newsSentimentDelta": res.get("newsSentimentDelta"),
         "newsSentimentSummary": res.get("newsSentimentSummary"),
         "usdRelativeStrength": _usd_relative_strength,
+        "intermarketConfirmation": res.get("intermarketConfirmation", {}),
         "pairProfile": pair_profile,
         "style": _style,
         "isForming": is_forming,
@@ -11736,6 +11840,7 @@ set_runtime(
         fetch_upcoming_earnings_context=fetch_upcoming_earnings_context,
         fetch_eodhd_indicators=fetch_eodhd_indicators,
         JSE_PAIRS=JSE_PAIRS,
+        ETF_PAIRS=ETF_PAIRS,
         fetch_binance=fetch_binance,
         fetch_binance_paginated=fetch_binance_paginated,
         fetch_eodhd_intraday_bt=_fetch_eodhd_intraday_bt,

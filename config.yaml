@@ -439,6 +439,57 @@ CRYPTO_FACTOR_WEIGHT_CAPS:
   microstructure: 0.8
   carry: 0
 
+INTERMARKET_CONFIRMATION:
+  enabled: false
+  analysis_tf: H4
+  windows: [20, 50, 90]
+  min_overlap_bars: 100
+  max_lag_bars: 5
+  lead_lag_enabled: false
+  full_scan_time_matrix: true
+  max_pairs_per_symbol: 12
+  strong_corr: 0.65
+  moderate_corr: 0.35
+  neutral_corr: 0.20
+  broken_stability: 0.45
+  flip_lookback_bars: 10
+  engine_a_enabled: false
+  engine_a_score_cap: 0.18
+  engine_c_enabled: false
+  engine_c_conviction_cap: 0.08
+  severe_contradiction_blocks: false
+  asset_class_filters:
+    forex: [forex, commodity, index, stock]
+    commodity: [forex, commodity, index, stock]
+    index: [index, stock, etf, commodity, forex]
+    stock: [stock, etf, index, commodity]
+    crypto: [crypto, index, stock]
+  macro_priors:
+    - pair: XAU/USD
+      driver: DXY
+      relation: inverse
+    - pair: XAU/USD
+      driver: US10Y_REAL_YIELD_PROXY
+      relation: inverse
+    - pair: EUR/USD
+      driver: DXY
+      relation: inverse
+    - pair: GBP/USD
+      driver: DXY
+      relation: inverse
+    - pair: USD/JPY
+      driver: US10Y_NOMINAL_PROXY
+      relation: positive
+    - pair: USD/CAD
+      driver: WTI_OIL_PROXY
+      relation: inverse
+    - pair: AUD/USD
+      driver: COMMODITY_BASKET_PROXY
+      relation: positive
+    - pair: AUD/USD
+      driver: RISK_SENTIMENT_PROXY
+      relation: positive
+
 # Normalization
 NORMALIZATION_LOOKBACK:
   crypto:    300
@@ -552,10 +603,10 @@ NAKED_ENGINE:
       min_score: 3.0
       min_rr: 1.5
     intraday:
-      min_score: 5.0
+      min_score: 4.0
       min_rr: 1.5
     swing:
-      min_score: 6.0
+      min_score: 5.0
       # Raised from 1.5 → 2.0: Van Tharp expectancy framework — at 40% win rate, 1.5 RR
       # gives only +0.02R/trade with zero margin for slippage/spread. Literature consensus
       # (Van Tharp, FP Markets, P&L Ledger) places swing minimum at 2.0:1 or higher.
