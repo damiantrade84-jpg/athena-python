@@ -1,0 +1,10 @@
+97d657e Merge pull request #53 from damiantrade84-jpg/claude/audit-trading-platform-OPCFf
+8bdbd01 config: research-backed threshold calibration for Engine A and Engine B
+3efffc7 fix: implement all audit findings (Bugs 1–12, 14)
+c93d010 feat: add market-state and research validation hardening
+ad8c8e8 feat: unify execution lifecycle and forensic trust controls
+c99c696 feat: upgrade Engine C as Decision Governor & extend backtest research validation modes
+d467dd2 Sentinel Pro v4.0 Hardening: Resolved BUG 1-20 (Risk, Parity, MT5, Performance)
+644f1ea Vision prompts: read instrument from Sentinel Pro header (single/dual/triple + system)
+f28dc5e Fix Bybit websocket symbol mapping and include config update.
+5ca529f Implement audit fixes for risk, scanning, and performance.
