@@ -88,7 +88,7 @@ def test_apply_news_sentiment_disabled_noop(monkeypatch):
 
 def test_apply_news_sentiment_blends_score(monkeypatch):
     monkeypatch.setenv("EODHD_KEY", "test")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setenv("XAI_API_KEY", "test")
     # Room below maxScore cap (forex scale 0–1)
     res = {"score": 0.5, "maxScoreOverride": 1.0, "warnings": []}
 

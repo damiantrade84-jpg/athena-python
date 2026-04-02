@@ -68,8 +68,8 @@ CONFIG: dict = {
     "XAI_MODEL": "grok-4.20-0309-reasoning",
     "LOTTERY_AI_MODEL": "",  # empty → use XAI_MODEL for /api/lottery/ai-analysis
     "DEBATE_MODEL": "grok-4.20-0309-reasoning",
-    "VISION_MODEL": "claude-opus-4-6",
-    "NEWS_SENTIMENT_MODEL": "claude-opus-4-6",
+    "VISION_MODEL": "grok-4.20-reasoning",
+    "NEWS_SENTIMENT_MODEL": "grok-4.20-0309-reasoning",
     "NEWS_SENTIMENT_CONFLUENCE_ENABLED": False,
     "NEWS_SENTIMENT_CACHE_TTL_SEC": 900,
     "NEWS_SENTIMENT_SCORE_IMPACT": 0.06,

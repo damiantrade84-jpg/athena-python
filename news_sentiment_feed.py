@@ -1,4 +1,4 @@
-"""EODHD news + sentiment, Claude-structured score for optional confluence use.
+"""EODHD news + Grok (xAI) structured sentiment score for optional confluence use.
 
 Tickers must come from the caller via ``eodhd_ticker_for_pair(pair)`` (e.g. athena's
 ``_eodhd_ticker_for_pair``) so vendor overrides and display/symbol rules stay single-sourced.
@@ -15,6 +15,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+from config import CONFIG
 from data_feeds import http_requests
 
 log = logging.getLogger("athena")
@@ -268,17 +269,6 @@ def _strip_json_fences(raw: str) -> str:
     return text
 
 
-def _anthropic_message_text(response: Any) -> str:
-    """Concatenate all text blocks — first block can be empty while later blocks hold JSON."""
-    parts: list[str] = []
-    for block in getattr(response, "content", None) or []:
-        if getattr(block, "type", None) == "text":
-            t = getattr(block, "text", None)
-            if t:
-                parts.append(str(t))
-    return "".join(parts).strip()
-
-
 def _extract_balanced_json_object(text: str) -> Optional[str]:
     """First top-level `{` … `}` slice, respecting JSON string escapes (nested `{` inside strings)."""
     start = text.find("{")
@@ -327,21 +317,21 @@ def get_news_sentiment(
     pair: dict,
     *,
     eodhd_api_key: str,
-    anthropic_api_key: str,
+    xai_api_key: str,
     eodhd_ticker_for_pair: Callable[[dict], Optional[str]],
     current_price: Optional[float] = None,
     news_limit: int = 8,
-    model: str = "claude-opus-4-6",
+    model: str = "grok-4.20-0309-reasoning",
 ) -> Optional[dict]:
     """
-    Full pipeline: resolve EODHD ticker → news → optional EODHD sentiment → Claude JSON.
+    Full pipeline: resolve EODHD ticker → news → optional EODHD sentiment → Grok JSON.
 
     Returns parsed result dict or None on failure / no articles.
     """
     try:
-        import anthropic
+        import openai
     except ImportError:
-        log.error("[NewsAI] anthropic package not installed")
+        log.error("[NewsAI] openai package not installed (required for xAI Grok)")
         return None
 
     ticker = eodhd_ticker_for_pair(pair)
@@ -364,14 +354,18 @@ def get_news_sentiment(
     )
 
     try:
-        client = anthropic.Anthropic(api_key=anthropic_api_key)
-        response = client.messages.create(
+        client = openai.OpenAI(api_key=xai_api_key, base_url="https://api.x.ai/v1")
+        _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
+        response = client.chat.completions.create(
             model=model,
             max_tokens=1200,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}],
+            temperature=_temp,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
         )
-        raw = _anthropic_message_text(response)
+        raw = (response.choices[0].message.content or "").strip()
         try:
             result = _parse_news_ai_json(raw)
         # JSONDecodeError must precede ValueError (JSONDecodeError subclasses ValueError).
@@ -387,7 +381,7 @@ def get_news_sentiment(
         except ValueError as e:
             if "empty model text" in str(e).lower():
                 log.warning(
-                    "[NewsAI] empty Claude text for %s (check response.content blocks)",
+                    "[NewsAI] empty Grok text for %s",
                     display,
                 )
             else:
@@ -403,7 +397,7 @@ def get_news_sentiment(
         )
         return result
     except Exception as e:
-        log.error("[NewsAI] Claude API error for %s: %s", display, e)
+        log.error("[NewsAI] xAI Grok API error for %s: %s", display, e)
         return None
 
 
@@ -439,7 +433,7 @@ def get_cached_news_confluence_vote(
     pair: dict,
     *,
     eodhd_api_key: str,
-    anthropic_api_key: str,
+    xai_api_key: str,
     eodhd_ticker_for_pair: Callable[[dict], Optional[str]],
     ttl_sec: float,
     model: str,
@@ -468,7 +462,7 @@ def get_cached_news_confluence_vote(
         result = get_news_sentiment(
             pair,
             eodhd_api_key=eodhd_api_key,
-            anthropic_api_key=anthropic_api_key,
+            xai_api_key=xai_api_key,
             eodhd_ticker_for_pair=eodhd_ticker_for_pair,
             current_price=current_price,
             model=model,
@@ -490,25 +484,28 @@ def apply_news_sentiment_to_scan_result(
     """If enabled and keys present, blend cached News AI vote into ``res['score']`` (mutates ``res``).
 
     Applied after structural gates so Engine B uses the pre-news technical score.
-    Requires ``EODHD_KEY`` and ``ANTHROPIC_API_KEY`` in the process environment (not yaml).
+    Requires ``EODHD_KEY`` and ``XAI_API_KEY`` (env or config).
     """
     if not config.get("NEWS_SENTIMENT_CONFLUENCE_ENABLED"):
         return
 
     eod = os.environ.get("EODHD_KEY", "").strip()
-    anth = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not eod or not anth:
+    xai = os.environ.get("XAI_API_KEY", "").strip() or str(
+        config.get("XAI_API_KEY") or ""
+    ).strip()
+    if not eod or not xai or xai == "YOUR_XAI_API_KEY":
         return
 
     ttl = float(config.get("NEWS_SENTIMENT_CACHE_TTL_SEC", 900))
     model = str(
         config.get("NEWS_SENTIMENT_MODEL")
-        or config.get("VISION_MODEL", "claude-opus-4-6")
+        or config.get("XAI_MODEL")
+        or config.get("VISION_MODEL", "grok-4.20-0309-reasoning")
     )
     vote, detail = get_cached_news_confluence_vote(
         pair,
         eodhd_api_key=eod,
-        anthropic_api_key=anth,
+        xai_api_key=xai,
         eodhd_ticker_for_pair=eodhd_ticker_for_pair,
         ttl_sec=ttl,
         model=model,

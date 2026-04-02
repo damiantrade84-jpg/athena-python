@@ -35,11 +35,6 @@ try:
 except ImportError:
     pass  # dotenv optional — falls back to os.environ
 
-try:
-    import anthropic as _anthropic_mod
-except ImportError:
-    _anthropic_mod = None
-
 import telegram_notify
 
 from datetime import datetime, timezone, timedelta
@@ -4009,7 +4004,6 @@ except ImportError:
 # ── API authentication (shared-secret header) ────────────────────────────
 
 _ATHENA_API_KEY = os.environ.get("ATHENA_API_KEY", "")  # set in .env to enable auth
-_ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")  # set in .env for Claude Vision
 
 _AUTH_EXEMPT = {"/", "/favicon.ico"}  # paths that don't require auth
 
@@ -4126,7 +4120,7 @@ def api_analyze():
 
         style_pref = d.get("stylePreference", "auto")
 
-        # Fetch live portfolio context so Claude knows current risk exposure
+        # Fetch live portfolio context so the AI knows current risk exposure
 
         _p_heat = 0.0
 
@@ -7030,26 +7024,21 @@ def api_failed_executions():
         return jsonify({"error": str(e)}), 500
 
 
-def _anthropic_messages_create_retry(client, *, max_attempts: int = 4, base_delay_sec: float = 2.5, **kwargs):
-    """Call ``client.messages.create`` with exponential backoff on 529 / overloaded_error."""
+def _xai_chat_completions_retry(client, *, max_attempts: int = 4, base_delay_sec: float = 2.5, **kwargs):
+    """OpenAI-compatible ``chat.completions.create`` with backoff on rate limits / overload."""
     last_exc: BaseException | None = None
     for attempt in range(max_attempts):
         try:
-            return client.messages.create(**kwargs)
+            return client.chat.completions.create(**kwargs)
         except Exception as e:
             last_exc = e
             code = getattr(e, "status_code", None)
-            err_type = ""
-            try:
-                body = getattr(e, "body", None)
-                if isinstance(body, dict):
-                    err_type = str((body.get("error") or {}).get("type") or "")
-            except Exception:
-                pass
             msg = str(e).lower()
             retryable = (
-                code == 529
-                or err_type == "overloaded_error"
+                code == 429
+                or code == 503
+                or code == 529
+                or "rate" in msg
                 or "overloaded" in msg
                 or "529" in msg
             )
@@ -7057,7 +7046,7 @@ def _anthropic_messages_create_retry(client, *, max_attempts: int = 4, base_dela
                 raise
             delay = base_delay_sec * (2**attempt)
             log.warning(
-                "[ANTHROPIC] overloaded — retry %s/%s after %.1fs (%s)",
+                "[XAI] retry %s/%s after %.1fs (%s)",
                 attempt + 1,
                 max_attempts,
                 delay,
@@ -7068,11 +7057,34 @@ def _anthropic_messages_create_retry(client, *, max_attempts: int = 4, base_dela
     raise last_exc
 
 
+def _chart_blocks_to_openai_user_content(blocks: list) -> list:
+    """Anthropic-style content blocks → OpenAI multimodal user content (xAI Grok vision)."""
+    out: list = []
+    for block in blocks or []:
+        btype = block.get("type")
+        if btype == "text":
+            out.append({"type": "text", "text": block.get("text", "")})
+        elif btype == "image":
+            src = block.get("source") or {}
+            b64 = src.get("data", "")
+            mime = str(src.get("media_type", "image/png"))
+            if b64:
+                out.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{b64}"},
+                    }
+                )
+    return out
+
+
 @app.route("/api/chart-analysis", methods=["POST"])
 def api_chart_analysis():
-    """Send chart screenshot to Claude Vision for professional TA reading."""
-    if _anthropic_mod is None:
-        return jsonify({"error": "anthropic library not installed"}), 500
+    """Send chart screenshot to Grok vision (xAI) for professional TA reading."""
+    try:
+        import openai as _openai_chart
+    except ImportError:
+        return jsonify({"error": "openai library not installed (pip install openai)"}), 500
 
     data = request.get_json()
     if not data or not data.get("image"):
@@ -7692,11 +7704,13 @@ def api_chart_analysis():
     )
 
     try:
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not api_key:
-            return jsonify({"error": "ANTHROPIC_API_KEY not set"}), 500
+        _xai_key = os.environ.get("XAI_API_KEY", "").strip() or str(
+            CONFIG.get("XAI_API_KEY") or ""
+        ).strip()
+        if not _xai_key or _xai_key == "YOUR_XAI_API_KEY":
+            return jsonify({"error": "XAI_API_KEY not set"}), 500
 
-        client = _anthropic_mod.Anthropic(api_key=api_key)
+        client = _openai_chart.OpenAI(api_key=_xai_key, base_url="https://api.x.ai/v1")
 
         # Strip data URL prefix if present (H4 primary image)
         img_h4 = data["image"]
@@ -8093,25 +8107,26 @@ def api_chart_analysis():
             log.info(f"[AI CHART] Single-TF {tf} analysis for {symbol}")
 
         _max_tokens = 1100 if triple_mode else 800
-        # Chart vision: Anthropic Claude only (Lottery AI uses Grok on xAI separately).
-        _vision_model = str(CONFIG.get("VISION_MODEL") or "claude-opus-4-6").strip() or "claude-opus-4-6"
-        if "grok" in _vision_model.lower():
-            log.warning(
-                "[AI CHART] VISION_MODEL %r is not valid for Anthropic vision — using claude-opus-4-6",
-                _vision_model,
-            )
-            _vision_model = "claude-opus-4-6"
+        _vision_model = str(
+            CONFIG.get("VISION_MODEL") or "grok-4.20-reasoning"
+        ).strip() or "grok-4.20-reasoning"
         _vision_temp = float(CONFIG.get("AI_VISION_TEMPERATURE", 0.2))
-        message = _anthropic_messages_create_retry(
+        _user_parts = _chart_blocks_to_openai_user_content(content)
+        _completion = _xai_chat_completions_retry(
             client,
             model=_vision_model,
             max_tokens=_max_tokens,
             temperature=_vision_temp,
-            system=system_prompt,
-            messages=[{"role": "user", "content": content}],
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": _user_parts},
+            ],
         )
 
-        analysis = message.content[0].text if message.content else "No analysis returned."
+        analysis = (
+            (_completion.choices[0].message.content or "").strip()
+            or "No analysis returned."
+        )
         try:
             _entry_hint = float(
                 (sig or {}).get("price")
@@ -8485,10 +8500,9 @@ def api_candles():
 
 @app.route("/api/news-sentiment", methods=["GET", "POST"])
 def api_news_sentiment():
-    """EODHD news + Claude structured sentiment for one pair (display or Yahoo symbol).
+    """EODHD news + Grok structured sentiment for one pair (display or Yahoo symbol).
 
-    Uses ``EODHD_KEY`` and ``ANTHROPIC_API_KEY`` from the environment. Model: ``NEWS_SENTIMENT_MODEL``
-    or falls back to ``VISION_MODEL`` (default Opus 4.6 family).
+    Uses ``EODHD_KEY`` and ``XAI_API_KEY``. Model: ``NEWS_SENTIMENT_MODEL`` or ``XAI_MODEL``.
     """
     from news_sentiment_feed import get_news_sentiment, news_to_confluence_vote
 
@@ -8510,9 +8524,11 @@ def api_news_sentiment():
     if not eod_key:
         return jsonify({"error": "EODHD_KEY not set"}), 503
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not api_key:
-        return jsonify({"error": "ANTHROPIC_API_KEY not set"}), 500
+    xai_key = os.environ.get("XAI_API_KEY", "").strip() or str(
+        CONFIG.get("XAI_API_KEY") or ""
+    ).strip()
+    if not xai_key or xai_key == "YOUR_XAI_API_KEY":
+        return jsonify({"error": "XAI_API_KEY not set"}), 500
 
     price = None
     disp = pair.get("display", "")
@@ -8525,12 +8541,12 @@ def api_news_sentiment():
         pass
 
     model = CONFIG.get("NEWS_SENTIMENT_MODEL") or CONFIG.get(
-        "VISION_MODEL", "claude-opus-4-6"
+        "XAI_MODEL", "grok-4.20-0309-reasoning"
     )
     result = get_news_sentiment(
         pair,
         eodhd_api_key=eod_key,
-        anthropic_api_key=api_key,
+        xai_api_key=xai_key,
         eodhd_ticker_for_pair=_eodhd_ticker_for_pair,
         current_price=price,
         model=model,

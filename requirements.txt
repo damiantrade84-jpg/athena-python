@@ -23,7 +23,6 @@ ccxt==4.5.42
 pytest==8.4.2
 scipy>=1.15.0
 python-telegram-bot>=20.0
-anthropic>=0.20.0
 customtkinter>=5.2.2
 darkdetect>=0.8.0
 mplfinance>=0.12.10b0

@@ -257,9 +257,9 @@ XAI_MODEL: "grok-4.20-0309-reasoning"
 # Optional: POST /api/lottery/ai-analysis model (defaults to XAI_MODEL). Same OpenAI SDK + https://api.x.ai/v1
 # LOTTERY_AI_MODEL: "grok-4.20-0309-reasoning"
 DEBATE_MODEL: "grok-4.20-0309-reasoning"
-VISION_MODEL: "claude-opus-4-6"                  # /api/chart-analysis (Claude Vision, Engine C footer) — not Grok
-NEWS_SENTIMENT_MODEL: "claude-opus-4-6"           # match VISION_MODEL; keys from env (EODHD_KEY, ANTHROPIC_API_KEY)
-# Blend News AI into Engine A scan score (EODHD news + Claude). Heavy: uses TTL cache per pair.
+VISION_MODEL: "grok-4.20-reasoning"              # /api/chart-analysis — Grok 4.20 reasoning (not grok-2-vision)
+NEWS_SENTIMENT_MODEL: "grok-4.20-0309-reasoning" # News AI text; defaults to XAI_MODEL if empty — uses XAI_API_KEY
+# Blend News AI into Engine A scan score (EODHD news + Grok). Heavy: uses TTL cache per pair.
 NEWS_SENTIMENT_CONFLUENCE_ENABLED: false
 NEWS_SENTIMENT_CACHE_TTL_SEC: 900                # seconds; same pair reuses vote until expiry
 NEWS_SENTIMENT_SCORE_IMPACT: 0.06               # delta = impact * maxScore * vote (vote ~ -1..1)
