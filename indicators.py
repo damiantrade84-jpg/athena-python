@@ -1033,6 +1033,133 @@ def calc_indicators_with_normalized(candles: list, asset_type: str = "crypto") -
     return result
 
 
+def _pct_change(series: list, lookback: int) -> float | None:
+    """Percent change between the latest value and N bars back."""
+    if len(series) <= lookback:
+        return None
+    base = series[-(lookback + 1)]
+    last = series[-1]
+    if base in (None, 0) or last is None:
+        return None
+    return ((last - base) / abs(base)) * 100.0
+
+
+def _pearson_corr(a: list, b: list) -> float | None:
+    """Small pure-Python Pearson correlation for aligned numeric series."""
+    if len(a) != len(b) or len(a) < 2:
+        return None
+
+    mean_a = sum(a) / len(a)
+    mean_b = sum(b) / len(b)
+    cov = sum((x - mean_a) * (y - mean_b) for x, y in zip(a, b))
+    var_a = sum((x - mean_a) ** 2 for x in a)
+    var_b = sum((y - mean_b) ** 2 for y in b)
+
+    if var_a <= 0 or var_b <= 0:
+        return None
+
+    return cov / math.sqrt(var_a * var_b)
+
+
+def calc_usd_relative_strength_context(
+    asset_candles: list,
+    usd_proxy_candles: list,
+    asset_label: str = "Asset",
+    proxy_label: str = "DXY",
+    tf: str = "H4",
+) -> dict | None:
+    """Build a read-only relative-strength summary for an asset vs a USD proxy."""
+    asset_close = []
+    for candle in asset_candles or []:
+        try:
+            asset_close.append(float(candle["close"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    proxy_close = []
+    for candle in usd_proxy_candles or []:
+        try:
+            proxy_close.append(float(candle["close"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    if len(asset_close) < 6 or len(proxy_close) < 6:
+        return None
+
+    asset_change = _pct_change(asset_close, 5)
+    proxy_change = _pct_change(proxy_close, 5)
+    if asset_change is None or proxy_change is None:
+        return None
+
+    corr_window = min(len(asset_close), len(proxy_close), 30)
+    corr = _pearson_corr(asset_close[-corr_window:], proxy_close[-corr_window:])
+    spread = asset_change - proxy_change
+    composite = (asset_change * 0.65) + ((-proxy_change) * 0.35)
+
+    if spread > 0:
+        bias = "asset_stronger"
+        bias_label = f"{asset_label} stronger"
+    elif spread < 0:
+        bias = "usd_stronger"
+        bias_label = "USD stronger"
+    else:
+        bias = "balanced"
+        bias_label = "Balanced"
+
+    if corr is None:
+        relationship = "unknown"
+        relationship_label = "unknown"
+    elif corr <= -0.35:
+        relationship = "inverse"
+        relationship_label = "inverse"
+    elif corr >= 0.35:
+        relationship = "positive"
+        relationship_label = "positive"
+    else:
+        relationship = "mixed"
+        relationship_label = "mixed"
+
+    if corr is None:
+        corr_mult = 0.6
+    elif corr <= -0.35:
+        corr_mult = 1.0
+    elif corr < 0.35:
+        corr_mult = 0.75
+    else:
+        corr_mult = 0.4
+
+    score = max(-3.0, min(3.0, (composite / 0.5) * corr_mult))
+    proxy_trend = (
+        "rising" if proxy_change > 0 else "falling" if proxy_change < 0 else "flat"
+    )
+    corr_text = f"{corr:+.2f}" if corr is not None else "n/a"
+
+    return {
+        "assetLabel": asset_label,
+        "proxyLabel": proxy_label,
+        "timeframe": tf,
+        "lookbackBars": 5,
+        "correlationWindow": corr_window,
+        "assetChangePct": round(asset_change, 2),
+        "usdProxyChangePct": round(proxy_change, 2),
+        "spreadPct": round(spread, 2),
+        "correlation": round(corr, 3) if corr is not None else None,
+        "relationship": relationship,
+        "relationshipLabel": relationship_label,
+        "usdProxyTrend": proxy_trend,
+        "score": round(score, 3),
+        "usd_proxy_score": round(score, 3),
+        "bias": bias,
+        "biasLabel": bias_label,
+        "summary": (
+            f"{bias_label} vs USD proxy ({proxy_label}) | "
+            f"{asset_label} 5x{tf} {asset_change:+.2f}% | "
+            f"{proxy_label} 5x{tf} {proxy_change:+.2f}% | "
+            f"corr{corr_window}={corr_text}"
+        ),
+    }
+
+
 # ── Forex-specific helpers (safe, optional, never called by other engines) ──
 
 

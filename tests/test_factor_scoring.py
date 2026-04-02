@@ -1085,6 +1085,56 @@ class TestCarryZDirectional:
         assert "carry" not in result["factor_scores"]
 
 
+# XAU/USD DXY macro proxy
+
+
+class TestXauUsdMacroProxy:
+    @patch("carry_feed.get_carry_z", return_value=0.0)
+    @patch("cot_feed.get_cot_z", return_value=0.0)
+    def test_xau_macro_proxy_contributes_to_carry_factor(self, *_mocks):
+        snap = _make_snap()
+        result = compute_factor_scores(
+            d1_snap=snap,
+            h4_snap=snap,
+            h1_snap=snap,
+            pair={"type": "commodity", "display": "XAU/USD"},
+            d1_candles=_make_candles(220),
+            h4_candles=_make_candles(220),
+            h1_candles=_make_candles(220),
+            volume_ratio=1.5,
+            macro_context={"usd_proxy_score": 1.8},
+        )
+
+        assert result["filtered_indicators"]["usd_proxy_score"] == 1.8
+        assert result["factor_scores"]["carry"] == pytest.approx(1.8)
+        assert "carry" in result["active_directional_factors"]
+        assert result["feed_status"]["usd_proxy"] == "ok"
+
+    @patch("carry_feed.get_carry_z", return_value=0.0)
+    @patch("cot_feed.get_cot_z", return_value=0.0)
+    def test_calc_confluence_surfaces_xau_macro_context(self, *_mocks):
+        tf = {"snap": _make_snap()}
+        macro_context = {"usd_proxy_score": -1.4, "biasLabel": "USD stronger"}
+
+        result = calc_confluence(
+            d1=tf,
+            h4=tf,
+            h1=tf,
+            vr=1.5,
+            stoch={},
+            pair={"type": "commodity", "display": "XAU/USD"},
+            btc_bias="neutral",
+            d1_candles=_make_candles(220),
+            h4_candles=_make_candles(220),
+            h1_candles=_make_candles(220),
+            macro_context=macro_context,
+        )
+
+        assert result["factor_scores"]["carry"] == pytest.approx(-1.4)
+        assert result["factorDiagnostics"]["feedStatus"]["usd_proxy"] == "ok"
+        assert result["factorDiagnostics"]["macroContext"]["usd_proxy_score"] == -1.4
+
+
 # ── Direction tie and funding rate calibration (FIX 1 & 2) ──────────────────
 
 

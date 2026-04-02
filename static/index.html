@@ -5788,6 +5788,44 @@ function formatConfluenceText(data) {
   return getConfluenceLabel(pct) + ' (' + pct + '%)';
 }
 
+function fmtSignedPct(val) {
+  var num = Number(val);
+  if (!Number.isFinite(num)) return 'n/a';
+  return (num > 0 ? '+' : '') + num.toFixed(2) + '%';
+}
+
+function buildUsdRelativeStrengthBox(s) {
+  var rs = s && s.usdRelativeStrength;
+  if (!rs) return '';
+
+  var biasColor = rs.bias === 'asset_stronger'
+    ? 'var(--bull)'
+    : rs.bias === 'usd_stronger'
+      ? 'var(--bear)'
+      : 'var(--accent)';
+  var relationColor = rs.relationship === 'inverse'
+    ? 'var(--bull)'
+    : rs.relationship === 'positive'
+      ? 'var(--bear)'
+      : 'var(--accent)';
+  var title = (rs.assetLabel || 'Asset') + ' VS USD PROXY';
+
+  return '<div style="margin:10px 0;padding:10px 12px;background:rgba(123,97,255,0.08);border:1px solid rgba(123,97,255,0.22);border-radius:8px;">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;">' +
+      '<div style="font-size:11px;font-weight:700;color:#a78bfa;font-family:IBM Plex Mono,monospace;">' + escSigHtml(title) + '</div>' +
+      '<div style="font-size:11px;font-weight:700;color:' + biasColor + ';font-family:IBM Plex Mono,monospace;">' + escSigHtml(rs.biasLabel || 'Macro read') + '</div>' +
+    '</div>' +
+    '<div style="font-size:10px;color:var(--muted);line-height:1.45;margin-bottom:8px;">Uses ' + escSigHtml(rs.proxyLabel || 'DXY') + ' as the USD proxy on ' + escSigHtml(rs.timeframe || 'H4') + ' bars. Included in the XAU macro read when available.</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;">' +
+      '<div class="meta-chip">' + escSigHtml(rs.assetLabel || 'Asset') + '<br><span class="val" style="color:' + biasColor + '">' + fmtSignedPct(rs.assetChangePct) + '</span></div>' +
+      '<div class="meta-chip">' + escSigHtml(rs.proxyLabel || 'DXY') + '<br><span class="val" style="color:' + (rs.usdProxyTrend === 'rising' ? 'var(--bear)' : rs.usdProxyTrend === 'falling' ? 'var(--bull)' : 'var(--accent)') + '">' + fmtSignedPct(rs.usdProxyChangePct) + '</span></div>' +
+      '<div class="meta-chip">Spread<br><span class="val" style="color:' + biasColor + '">' + fmtSignedPct(rs.spreadPct) + '</span></div>' +
+      '<div class="meta-chip">Corr<br><span class="val" style="color:' + relationColor + '">' + (rs.correlation != null ? Number(rs.correlation).toFixed(2) : 'n/a') + '</span></div>' +
+    '</div>' +
+    '<div style="margin-top:8px;font-size:10px;color:#cbd5e1;line-height:1.45;">' + escSigHtml(rs.summary || '') + '</div>' +
+  '</div>';
+}
+
 /** Left border + conf label tier: high ≥ threshold, medium ≥ 85% of threshold (or pct bands if no threshold). */
 function signalCardEdgeClass(s) {
   var thr = s.scanThresholdEffective != null ? Number(s.scanThresholdEffective) : (s.scanThresholdStatic != null ? Number(s.scanThresholdStatic) : NaN);
@@ -6089,7 +6127,7 @@ function buildCardInner(s, idx) {
         '<button class="sig-tab" onclick="switchSigTab(this,\'execute\',\'' + sid + '\')">EXECUTE</button>' +
       '</div>' +
       '<div class="sig-tab-content active" data-tab="overview">' +
-        metaHtml + votesHtml + corrWarn + watchReasonHtml + warnHtml +
+        metaHtml + buildUsdRelativeStrengthBox(s) + votesHtml + corrWarn + watchReasonHtml + warnHtml +
       '</div>' +
       '<div class="sig-tab-content" data-tab="levels">' + buildStyleLevelsTab(s) + '</div>' +
       '<div class="sig-tab-content" data-tab="ai">' +

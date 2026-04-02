@@ -33,6 +33,10 @@ _MICROSTRUCTURE_KEYS = (
 )
 
 
+def _uses_usd_proxy_macro(pair: dict) -> bool:
+    return (pair or {}).get("display") == "XAU/USD"
+
+
 def _pair_profile(pair: dict) -> dict:
     profiles = CONFIG.get("PAIR_PROFILES", {}) or {}
     return profiles.get(pair.get("display")) or profiles.get(pair.get("symbol")) or {}
@@ -100,7 +104,10 @@ def _optional_directional_keys(asset_type: str, pair: dict) -> tuple[str, ...]:
     if asset_type != "crypto":
         # Non-crypto never supplies funding_rate, so only count optional feeds that
         # can materially appear when softening the directional threshold.
-        return ("cot_z", "carry_z")
+        keys = ["cot_z", "carry_z"]
+        if _uses_usd_proxy_macro(pair):
+            keys.append("usd_proxy_score")
+        return tuple(keys)
     # "oi" is one optional slot covering oi_change_z + oi_price_divergence (same feed).
     keys = ["funding_rate", "oi"]
     if _crypto_supports_cot(pair):
@@ -622,6 +629,7 @@ def compute_factor_scores(
     bar_time: Optional[str] = None,
     regime_context: Optional[dict] = None,
     oi_context: Optional[dict] = None,
+    macro_context: Optional[dict] = None,
 ) -> Dict:
     """Compute factor scores, apply regime weights, and aggregate to final score.
 
@@ -655,6 +663,7 @@ def compute_factor_scores(
         "carry": "ok",
         "microstructure": "ok",
         "oi": "ok",
+        "usd_proxy": "ok",
     }
 
     # Trend direction — EMA crossover across all three timeframes (directional: +1/-1)
@@ -817,6 +826,22 @@ def compute_factor_scores(
             indicators["carry_z"] = None
             feed_status["carry"] = "error"
 
+    if _uses_usd_proxy_macro(pair):
+        _usd_proxy_score = (macro_context or {}).get("usd_proxy_score")
+        try:
+            indicators["usd_proxy_score"] = (
+                float(_usd_proxy_score) if _usd_proxy_score is not None else None
+            )
+            feed_status["usd_proxy"] = (
+                "ok" if indicators["usd_proxy_score"] is not None else "missing"
+            )
+        except (TypeError, ValueError):
+            indicators["usd_proxy_score"] = None
+            feed_status["usd_proxy"] = "error"
+    else:
+        indicators["usd_proxy_score"] = None
+        feed_status["usd_proxy"] = "unsupported"
+
     # Microstructure (directional if available)
     # Crypto: live WS values only (no candle proxies). Factor weight is gated by
     # CONFIG["CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED"] after regime/profile merge.
@@ -891,7 +916,10 @@ def compute_factor_scores(
         "microstructure": microstructure_keys,
     }
     if not is_crypto:
-        directional_factors["carry"] = ["carry_z"]
+        carry_keys = ["carry_z"]
+        if _uses_usd_proxy_macro(pair):
+            carry_keys.append("usd_proxy_score")
+        directional_factors["carry"] = carry_keys
     # Non-directional factors: abs value = quality/strength (always positive)
     nondirectional_factors = {
         "trend_strength": ["adx_z"],

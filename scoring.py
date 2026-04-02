@@ -405,6 +405,7 @@ def calc_confluence(
     regime_context: dict | None = None,
     oi_data: dict | None = None,
     oi_context: dict | None = None,
+    macro_context: dict | None = None,
 ) -> dict:
     """Factor-based confluence using normalized indicators, regime-aware weights, and correlation filtering.
     Preserves legacy API and raw-threshold warnings for human readability.
@@ -432,6 +433,7 @@ def calc_confluence(
         bar_time,
         regime_context,
         oi_context=_oi_ctx_eff,
+        macro_context=macro_context,
     )
 
     # Fix 2 — btcBias penalty: when BTC bias opposes direction, apply mild conviction reduction
@@ -609,6 +611,7 @@ def calc_confluence(
             "missingDirectionalOptionalCount": factor_result.get("missing_directional_optional_count"),
             "optionalFactorCoverage": factor_result.get("optional_factor_coverage"),
             "feedStatus": factor_result.get("feed_status", {}),
+            "macroContext": macro_context or {},
             "insufficientFactors": factor_result.get("insufficient_factors", False),
             "cryptoEngineADiagnostics": factor_result.get("crypto_engine_a_diagnostics"),
         },

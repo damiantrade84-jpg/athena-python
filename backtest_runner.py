@@ -29,6 +29,7 @@ from indicators import (
     calc_levels,
     calc_sma,
     calc_stochastic,
+    calc_usd_relative_strength_context,
 )
 from factor_scoring import build_oi_context_for_factor_scoring
 from scoring import (
@@ -109,6 +110,33 @@ def _bt_btc_bias(d1_window: list, pair: dict) -> str:
     except Exception:
         pass
     return "neutral"
+
+
+def _bt_gold_macro_context(
+    pair: dict,
+    cutoff_ts,
+    asset_h4_window: list,
+    dxy_h4_raw: list | None,
+    dxy_h4_times,
+) -> dict | None:
+    """Point-in-time DXY macro context for XAU/USD backtests."""
+    if pair.get("display") != "XAU/USD" or cutoff_ts is None or pd.isna(cutoff_ts):
+        return None
+    if not asset_h4_window or not dxy_h4_raw or dxy_h4_times is None:
+        return None
+
+    dxy_idx = bisect.bisect_left(dxy_h4_times, cutoff_ts)
+    dxy_window = dxy_h4_raw[max(0, dxy_idx - 100) : dxy_idx]
+    if len(dxy_window) < 6:
+        return None
+
+    return calc_usd_relative_strength_context(
+        asset_h4_window,
+        dxy_window,
+        asset_label="XAU",
+        proxy_label="DXY",
+        tf="H4",
+    )
 
 
 def _bt_crypto_funding_oi_for_bar(
@@ -384,7 +412,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         h1_raw = h1_raw or _yf_h1
 
         elif pair["source"] == "mt5":
-            # D1 from terminal; H4/H1 match calibrated EODHD intraday window when available
+            # D1 from terminal; H4/H1 use EODHD intraday when available, then fall back to MT5.
             d1_raw = _rt().fetch_candles(pair, "D1", 600)
             _yf_sym = _rt().yfinance_symbol_for_pair(pair)
             if (not d1_raw or len(d1_raw or []) < 230) and _yf_sym:
@@ -396,59 +424,11 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     d1_raw = _yf_d1
             h4_raw, h1_raw = _rt().fetch_eodhd_intraday_bt(pair, days=730)
             if not h4_raw or not h1_raw:
-                _pg_ticker = _rt().polygon_ticker_for_pair(pair)
-                if _pg_ticker and _ptype == "commodity":
-                    log.info(f"[BT] {pair['display']}: EODHD intraday failed, trying Polygon")
-                    _pg_h4 = _rt().extract_candles(_rt().fetch_polygon(pair, "H4", 5000))
-                    _pg_h1 = _rt().extract_candles(_rt().fetch_polygon(pair, "H1", 5000))
-                    h4_raw = h4_raw or _pg_h4
-                    h1_raw = h1_raw or _pg_h1
-                if not h4_raw or not h1_raw:
-                    h4_raw = h4_raw or _rt().fetch_candles(pair, "H4", 5000)
-                    h1_raw = h1_raw or _rt().fetch_candles(pair, "H1", 5000)
-            _h4_thin = not h4_raw or len(h4_raw or []) < 500
-            _h1_thin = not h1_raw or len(h1_raw or []) < 500
-            if (_h4_thin or _h1_thin) and _ptype == "commodity":
-                try:
-                    from twelvedata_feed import fetch_twelvedata_bt
-
-                    _td_h4, _td_h1 = fetch_twelvedata_bt(pair["display"], days=730)
-                    if _td_h4 and len(_td_h4) > len(h4_raw or []):
-                        h4_raw = _td_h4
-                        log.info(
-                            f"[BT] {pair['display']}: Twelvedata H4 {len(h4_raw)} bars"
-                        )
-                    elif not h4_raw:
-                        h4_raw = _td_h4
-                    if _td_h1 and len(_td_h1) > len(h1_raw or []):
-                        h1_raw = _td_h1
-                        log.info(
-                            f"[BT] {pair['display']}: Twelvedata H1 {len(h1_raw)} bars"
-                        )
-                    elif not h1_raw:
-                        h1_raw = _td_h1
-                except Exception as _td_err:
-                    log.debug(
-                        f"[BT] Twelvedata failed for {pair['display']}: {_td_err}"
-                    )
-
-                _h4_thin = not h4_raw or len(h4_raw or []) < 500
-                _h1_thin = not h1_raw or len(h1_raw or []) < 500
-                if _h4_thin or _h1_thin:
-                    _yf_sym = _rt().yfinance_symbol_for_pair(pair)
-                    if _yf_sym:
-                        log.info(
-                            f"[BT] {pair['display']}: H4={len(h4_raw or [])} H1={len(h1_raw or [])} bars - trying yfinance for better coverage"
-                        )
-                        _yf_h4, _yf_h1 = _rt().fetch_bt_yfinance(_yf_sym)
-                        if _yf_h4 and len(_yf_h4) > len(h4_raw or []):
-                            h4_raw = _yf_h4
-                        elif not h4_raw:
-                            h4_raw = _yf_h4
-                        if _yf_h1 and len(_yf_h1) > len(h1_raw or []):
-                            h1_raw = _yf_h1
-                        elif not h1_raw:
-                            h1_raw = _yf_h1
+                log.info(
+                    f"[BT] {pair['display']}: EODHD intraday failed, fetching from MT5"
+                )
+                h4_raw = h4_raw or _rt().fetch_candles(pair, "H4", 5000)
+                h1_raw = h1_raw or _rt().fetch_candles(pair, "H1", 5000)
 
         elif _ptype in ("stock", "commodity", "index"):
             # Stocks/Commodities/Indices: EODHD D1 + EODHD intraday (730d)
@@ -470,33 +450,11 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     _pg_h1 = _rt().extract_candles(_rt().fetch_polygon(pair, "H1", 5000))
                     h4_raw = h4_raw or _pg_h4
                     h1_raw = h1_raw or _pg_h1
-                # Twelvedata — better commodity/metal history than yfinance (free, reliable)
-                # Only fires for commodity pairs that have a Twelvedata symbol mapping
+                # Legacy vendor fallback removed.
                 _h4_thin = not h4_raw or len(h4_raw or []) < 500
                 _h1_thin = not h1_raw or len(h1_raw or []) < 500
-                if (_h4_thin or _h1_thin) and _ptype == "commodity":
-                    try:
-                        from twelvedata_feed import fetch_twelvedata_bt
-
-                        _td_h4, _td_h1 = fetch_twelvedata_bt(pair["display"], days=730)
-                        if _td_h4 and len(_td_h4) > len(h4_raw or []):
-                            h4_raw = _td_h4
-                            log.info(
-                                f"[BT] {pair['display']}: Twelvedata H4 {len(h4_raw)} bars"
-                            )
-                        elif not h4_raw:
-                            h4_raw = _td_h4
-                        if _td_h1 and len(_td_h1) > len(h1_raw or []):
-                            h1_raw = _td_h1
-                            log.info(
-                                f"[BT] {pair['display']}: Twelvedata H1 {len(h1_raw)} bars"
-                            )
-                        elif not h1_raw:
-                            h1_raw = _td_h1
-                    except Exception as _td_err:
-                        log.debug(
-                            f"[BT] Twelvedata failed for {pair['display']}: {_td_err}"
-                        )
+                if False and (_h4_thin or _h1_thin) and _ptype == "commodity":
+                    pass
 
                 # yfinance as final fallback — also triggers when Polygon returns thin data (<500 H4 bars)
                 _h4_thin = not h4_raw or len(h4_raw or []) < 500
@@ -665,6 +623,27 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 _deriv_err,
             )
 
+    _bt_dxy_h4_raw: list | None = None
+    _bt_dxy_h4_times = None
+    if pair.get("display") == "XAU/USD":
+        try:
+            _bt_dxy_h4_raw, _ = _rt().fetch_bt_yfinance("DX-Y.NYB")
+            if _bt_dxy_h4_raw:
+                _bt_dxy_h4_times = pd.to_datetime(
+                    [c["time"] for c in _bt_dxy_h4_raw], utc=True, errors="coerce"
+                )
+                log.info(
+                    "[BT-MACRO] %s: loaded %d DXY H4 bars for gold macro context",
+                    pair.get("display"),
+                    len(_bt_dxy_h4_raw),
+                )
+        except Exception as _macro_err:
+            log.warning(
+                "[BT-MACRO] %s: DXY history load failed: %s",
+                pair.get("display"),
+                _macro_err,
+            )
+
     if effective_style == "swing":
         # --- SWING D1 LOOP â€" UNCHANGED ---
 
@@ -819,6 +798,13 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     _bt_oi_ctx = build_oi_context_for_factor_scoring(
                         _bt_oi_data, d1_window, h1i.get("snap")
                     )
+                    _bt_macro_ctx = _bt_gold_macro_context(
+                        _pair_ctx,
+                        intraday_cutoff,
+                        h4_window,
+                        _bt_dxy_h4_raw,
+                        _bt_dxy_h4_times,
+                    )
                     res = calc_confluence(
                         d1i,
                         h4i,
@@ -835,6 +821,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         funding_rate=_bt_funding_rate,
                         oi_data=_bt_oi_data,
                         oi_context=_bt_oi_ctx,
+                        macro_context=_bt_macro_ctx,
                     )
 
             except Exception as _bt_bar_err:
@@ -1250,6 +1237,13 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     _bt_oi_ctx = build_oi_context_for_factor_scoring(
                         _bt_oi_data, d1_ctx, h1i.get("snap")
                     )
+                    _bt_macro_ctx = _bt_gold_macro_context(
+                        _pair_ctx,
+                        entry_ts,
+                        h4_window,
+                        _bt_dxy_h4_raw,
+                        _bt_dxy_h4_times,
+                    )
                     res = calc_confluence(
                         d1i_ctx,
                         h4i,
@@ -1266,6 +1260,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         funding_rate=_bt_funding_rate,
                         oi_data=_bt_oi_data,
                         oi_context=_bt_oi_ctx,
+                        macro_context=_bt_macro_ctx,
                     )
 
             except Exception as _bt_bar_err:
@@ -1660,6 +1655,13 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     _bt_oi_ctx = build_oi_context_for_factor_scoring(
                         _bt_oi_data, d1_ctx, h1i.get("snap")
                     )
+                    _bt_macro_ctx = _bt_gold_macro_context(
+                        _pair_ctx,
+                        entry_ts,
+                        h4_ctx,
+                        _bt_dxy_h4_raw,
+                        _bt_dxy_h4_times,
+                    )
                     res = calc_confluence(
                         d1i_ctx,
                         h4i_ctx,
@@ -1676,6 +1678,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         funding_rate=_bt_funding_rate,
                         oi_data=_bt_oi_data,
                         oi_context=_bt_oi_ctx,
+                        macro_context=_bt_macro_ctx,
                     )
 
             except Exception as _bt_bar_err:
@@ -2749,47 +2752,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
 
             _h4_thin = not candles_h4 or len(candles_h4 or []) < 500
             _h1_thin = not candles_h1 or len(candles_h1 or []) < 500
-            if (_h4_thin or _h1_thin) and pair.get("type") == "commodity":
-                try:
-                    from twelvedata_feed import fetch_twelvedata_bt
-
-                    _td_h4, _td_h1 = fetch_twelvedata_bt(pair["display"], days=730)
-                    if _td_h4 and len(_td_h4) > len(candles_h4 or []):
-                        candles_h4 = _td_h4
-                        log.info(
-                            f"[ENGINE B BT] {pair['display']}: Twelvedata H4 {len(candles_h4)} bars"
-                        )
-                    elif not candles_h4:
-                        candles_h4 = _td_h4
-                    if _td_h1 and len(_td_h1) > len(candles_h1 or []):
-                        candles_h1 = _td_h1
-                        log.info(
-                            f"[ENGINE B BT] {pair['display']}: Twelvedata H1 {len(candles_h1)} bars"
-                        )
-                    elif not candles_h1:
-                        candles_h1 = _td_h1
-                except Exception as _td_err:
-                    log.debug(
-                        f"[ENGINE B BT] Twelvedata failed for {pair['display']}: {_td_err}"
-                    )
-
-                _h4_thin = not candles_h4 or len(candles_h4 or []) < 500
-                _h1_thin = not candles_h1 or len(candles_h1 or []) < 500
-                if _h4_thin or _h1_thin:
-                    _yf_sym = _rt().yfinance_symbol_for_pair(pair)
-                    if _yf_sym:
-                        log.info(
-                            f"[ENGINE B BT] {pair['display']}: H4={len(candles_h4 or [])} H1={len(candles_h1 or [])} bars - trying yfinance for better coverage"
-                        )
-                        _yf_h4, _yf_h1 = _rt().fetch_bt_yfinance(_yf_sym)
-                        if _yf_h4 and len(_yf_h4) > len(candles_h4 or []):
-                            candles_h4 = _yf_h4
-                        elif not candles_h4:
-                            candles_h4 = _yf_h4
-                        if _yf_h1 and len(_yf_h1) > len(candles_h1 or []):
-                            candles_h1 = _yf_h1
-                        elif not candles_h1:
-                            candles_h1 = _yf_h1
+            if False and (_h4_thin or _h1_thin) and pair.get("type") == "commodity":
+                pass
         else:
             candles_d1 = _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 600)) or _rt().fetch_candles(
                 pair, "D1", CONFIG.get("D1_CANDLES", 600)

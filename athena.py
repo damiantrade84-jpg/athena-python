@@ -195,9 +195,6 @@ def _merge_forex_forming_ws(candles: list, display: str, tf: str, limit: int):
 
 from config import CONFIG, scan_candle_limits  # noqa: E402
 
-# twelvedata_feed imported lazily inside backtest block to avoid startup cost
-# (The lazy import inside the try block handles this — no top-level import needed)
-
 
 # enabled=True  = included in live scan; confluence score is the execution gate
 # enabled=False = JSE-only pairs (no trading platform) or instruments with no viable data source
@@ -1141,7 +1138,7 @@ def _fallback_source_for_pair(pair: dict) -> str | None:
 
 def _fetch_fallback_candles(pair: dict, tf: str, limit: int, reason: str = ""):
     """Try fallback sources in order: Polygon → yfinance.
-    Twelvedata re-enabled once upgraded to Grow/Venture plan.
+    Uses only Polygon and yfinance.
     Returns candle list or None if all sources fail."""
 
     tag = f" ({reason})" if reason else ""
@@ -2334,6 +2331,7 @@ from indicators import (  # noqa: E402
     calc_indicators,
     calc_fib,
     calc_indicators_with_normalized,
+    calc_usd_relative_strength_context,
 )
 
 
@@ -2477,7 +2475,16 @@ def fetch_dxy_context():
     """Fetch DXY (US Dollar Index) 5-day trend for Murphy intermarket context."""
 
     try:
-        d = fetch_yfinance("DX-Y.NYB", "D1", 10)
+        d = fetch_candles(
+            {
+                "symbol": "DX-Y.NYB",
+                "display": "DXY",
+                "source": "yfinance",
+                "type": "index",
+            },
+            "D1",
+            10,
+        )
 
         if not d or len(d) < 5:
             return None
@@ -2491,6 +2498,40 @@ def fetch_dxy_context():
         return f"trend={trend} 5d_chg={chg}% price={round(cl[-1], 2)}"
 
     except Exception:
+        return None
+
+
+def fetch_usd_relative_strength_context(
+    pair: dict, asset_candles: list | None, tf: str = "H4"
+) -> dict | None:
+    """USD macro context for XAU/USD using DXY as the USD proxy."""
+    if not pair or pair.get("display") != "XAU/USD" or not asset_candles:
+        return None
+
+    try:
+        dxy_candles = fetch_candles(
+            {
+                "symbol": "DX-Y.NYB",
+                "display": "DXY",
+                "source": "yfinance",
+                "type": "index",
+            },
+            tf,
+            100,
+        )
+        if not dxy_candles:
+            return None
+
+        asset_label = (pair.get("display") or "Asset").split("/")[0].strip() or "Asset"
+        return calc_usd_relative_strength_context(
+            asset_candles,
+            dxy_candles,
+            asset_label=asset_label,
+            proxy_label="DXY",
+            tf=tf,
+        )
+    except Exception as exc:
+        log.debug("[MACRO] USD relative strength unavailable for %s: %s", pair.get("display"), exc)
         return None
 
 
@@ -8998,6 +9039,8 @@ def analyze_pair(
             )
             return None
 
+    _usd_relative_strength = fetch_usd_relative_strength_context(pair, _cf_h4c, tf="H4")
+
     if res is None or pair.get("type") != "forex":
         res = calc_confluence(
             _cf_d1i,
@@ -9017,6 +9060,7 @@ def analyze_pair(
             regime_context=regime_context,
             oi_data=_oi_data,
             oi_context=_oi_context,
+            macro_context=_usd_relative_strength,
         )
 
     # For SCALP: warn if D1 trend disagrees with signal direction
@@ -9155,9 +9199,9 @@ def analyze_pair(
                     # Light fetch for DXY correlation
                     _dxy = fetch_candles(
                         {
-                            "symbol": "USDollar",
+                            "symbol": "DX-Y.NYB",
                             "display": "DXY",
-                            "source": "twelvedata",
+                            "source": "yfinance",
                             "type": "index",
                         },
                         "H4",
@@ -9324,6 +9368,7 @@ def analyze_pair(
         "newsSentimentVote": res.get("newsSentimentVote"),
         "newsSentimentDelta": res.get("newsSentimentDelta"),
         "newsSentimentSummary": res.get("newsSentimentSummary"),
+        "usdRelativeStrength": _usd_relative_strength,
         "pairProfile": pair_profile,
         "style": _style,
         "isForming": is_forming,

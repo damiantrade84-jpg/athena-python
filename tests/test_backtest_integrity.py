@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import backtest_runner
@@ -63,15 +65,15 @@ def test_engine_b_confidence_gate_requires_passed_and_score_floor():
         "TRENDING",
     )
     # engine_b_min_score_threshold applies regime gate then math.ceil (discrete checklist floor)
-    assert round(scaled_min, 3) == 1.0
+    assert round(scaled_min, 3) == 2.0
     assert gate_ok is False
 
     gate_ok, scaled_min = engine_b_confidence_passes(
-        {"score": 1.0, "passed": True},
+        {"score": 2.0, "passed": True},
         style_profile,
         "TRENDING",
     )
-    assert round(scaled_min, 3) == 1.0
+    assert round(scaled_min, 3) == 2.0
     assert gate_ok is True
 
 
@@ -211,3 +213,78 @@ def test_time_series_quality_reports_parse_failures_duplicates_and_order():
 def test_live_base_risk_pct_matches_live_gateway_defaults():
     assert backtest_runner._live_base_risk_pct("forex") == 0.005
     assert backtest_runner._live_base_risk_pct("crypto") == 0.01
+
+
+def test_backtest_pair_mt5_commodity_uses_mt5_intraday_fallback(monkeypatch):
+    pair = {"display": "XAG/USD", "symbol": "XAGUSD", "type": "commodity", "source": "mt5"}
+    d1 = _make_bars(datetime(2024, 1, 1, tzinfo=timezone.utc), 240, 24, base=24.0)
+    h4 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 320, 4, base=25.0)
+    h1 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 320, 1, base=25.0)
+    mt5_calls = []
+
+    def _fetch_candles(_pair, tf, _limit):
+        mt5_calls.append(tf)
+        return {"D1": d1, "H4": h4, "H1": h1}[tf]
+
+    runtime = SimpleNamespace(
+        fetch_candles=_fetch_candles,
+        yfinance_symbol_for_pair=lambda *_args, **_kwargs: "XAGUSD.FOREX",
+        fetch_yfinance=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("D1 yfinance fallback should not run")
+        ),
+        fetch_bt_yfinance=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Intraday yfinance fallback should not run")
+        ),
+        fetch_eodhd_intraday_bt=lambda *_args, **_kwargs: (None, None),
+        polygon_ticker_for_pair=lambda *_args, **_kwargs: "C:XAGUSD",
+        fetch_polygon=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Polygon should not run for MT5-sourced backtests")
+        ),
+        extract_candles=lambda candles: candles,
+        max_score_for_pair=lambda _pair: (_ for _ in ()).throw(RuntimeError("stop_after_fetch")),
+    )
+
+    monkeypatch.setattr(backtest_runner, "_rt", lambda: runtime)
+    monkeypatch.setattr(backtest_runner, "get_pair_score_group", lambda _pair: "default")
+
+    with pytest.raises(RuntimeError, match="stop_after_fetch"):
+        backtest_runner.backtest_pair(pair, style="intraday")
+
+    assert mt5_calls.count("H4") == 1
+    assert mt5_calls.count("H1") == 1
+
+
+def test_backtest_pair_naked_mt5_commodity_uses_mt5_intraday_fallback(monkeypatch):
+    pair = {"display": "XAG/USD", "symbol": "XAGUSD", "type": "commodity", "source": "mt5"}
+    d1 = _make_bars(datetime(2024, 1, 1, tzinfo=timezone.utc), 240, 24, base=24.0)
+    h4 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 320, 4, base=25.0)
+    h1 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 320, 1, base=25.0)
+    mt5_calls = []
+
+    def _fetch_candles(_pair, tf, _limit):
+        mt5_calls.append(tf)
+        return {"D1": d1, "H4": h4, "H1": h1}[tf]
+
+    runtime = SimpleNamespace(
+        fetch_candles=_fetch_candles,
+        yfinance_symbol_for_pair=lambda *_args, **_kwargs: "XAGUSD.FOREX",
+        fetch_yfinance=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("D1 yfinance fallback should not run")
+        ),
+        fetch_bt_yfinance=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Intraday yfinance fallback should not run")
+        ),
+        fetch_eodhd_intraday_bt=lambda *_args, **_kwargs: (None, None),
+        naked_scan_style_profile=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("stop_after_fetch")
+        ),
+    )
+
+    monkeypatch.setattr(backtest_runner, "_rt", lambda: runtime)
+    monkeypatch.setattr(backtest_runner, "get_pair_score_group", lambda _pair: "default")
+
+    with pytest.raises(RuntimeError, match="stop_after_fetch"):
+        backtest_runner.backtest_pair_naked(pair, style="intraday")
+
+    assert mt5_calls.count("H4") == 1
+    assert mt5_calls.count("H1") == 1
