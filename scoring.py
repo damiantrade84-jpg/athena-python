@@ -145,38 +145,43 @@ def get_pair_score_group(pair: dict) -> str:
 
 def get_score_threshold(pair: dict, is_backtest: bool = False) -> float:
     """Resolve score threshold with pair profile -> group -> asset-class hierarchy.
-    Ensures parity between live and backtest unless RESEARCH_MODE is enabled.
+
+    Live scans always use MIN_CONFLUENCE_* / pair ``min_confluence``.
+
+    Backtests mirror live by default (parity). When ``BACKTEST_USE_BT_MIN_THRESHOLDS``
+    or ``RESEARCH_MODE`` is true, backtest uses pair ``bt_min`` → ``BT_MIN_GROUP`` →
+    ``BT_MIN`` instead of the live chain — live thresholds unchanged.
     """
     profile = get_pair_profile(pair)
     ptype = pair.get("type", "")
     score_group = get_pair_score_group(pair)
-    research_mode = CONFIG.get("RESEARCH_MODE", False)
+    use_bt_chain = bool(
+        CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
+        or CONFIG.get("RESEARCH_MODE", False)
+    )
 
     # 1. Pair Profile overrides
-    # If is_backtest and research_mode, prefer bt_min; otherwise prefer min_confluence.
-    if is_backtest and research_mode:
+    # If backtest + BT chain: prefer bt_min first; else min_confluence for both live & BT-parity backtest.
+    if is_backtest and use_bt_chain:
         if profile.get("bt_min") is not None:
             return float(profile["bt_min"])
     if profile.get("min_confluence") is not None:
         return float(profile.get("min_confluence"))
-    # Fallback to bt_min if specifically in backtest even without research_mode?
-    # No, the requirement is "unify unless research_mode is enabled".
-    # So if research_mode=false, we ignore bt_min and use min_confluence etc.
 
     # 2. Score Group defaults
-    if is_backtest and research_mode:
+    if is_backtest and use_bt_chain:
         group_cfg = CONFIG.get("BT_MIN_GROUP", {}) or {}
         group_threshold = (group_cfg.get(ptype, {}) or {}).get(score_group)
         if group_threshold is not None:
             return float(group_threshold)
-    
+
     group_cfg = CONFIG.get("MIN_CONFLUENCE_GROUP", {}) or {}
     group_threshold = (group_cfg.get(ptype, {}) or {}).get(score_group)
     if group_threshold is not None:
         return float(group_threshold)
 
     # 3. Asset-Class defaults
-    if is_backtest and research_mode:
+    if is_backtest and use_bt_chain:
         bt_map = CONFIG.get("BT_MIN") or {}
         if ptype in bt_map:
             return float(bt_map[ptype])

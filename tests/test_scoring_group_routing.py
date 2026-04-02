@@ -70,16 +70,40 @@ def test_backtest_min_score_pair_profile_bt_min_override():
     original = CONFIG.get("PAIR_PROFILES")
     original_bt = dict(CONFIG.get("BT_MIN") or {})
     original_rm = CONFIG.get("RESEARCH_MODE", False)
+    original_btf = CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
     try:
         CONFIG["PAIR_PROFILES"] = {"XAU/USD": {"bt_min": 1.58, "min_confluence": 5.8}}
         CONFIG["BT_MIN"] = {**original_bt, "commodity": 0.70}
         CONFIG["RESEARCH_MODE"] = True
+        CONFIG["BACKTEST_USE_BT_MIN_THRESHOLDS"] = False
         pair = {"display": "XAU/USD", "symbol": "XAUUSD", "type": "commodity"}
         assert get_backtest_min_score_threshold(pair) == 1.58
     finally:
         CONFIG["PAIR_PROFILES"] = original
         CONFIG["BT_MIN"] = original_bt
         CONFIG["RESEARCH_MODE"] = original_rm
+        CONFIG["BACKTEST_USE_BT_MIN_THRESHOLDS"] = original_btf
+
+
+def test_backtest_min_score_uses_bt_chain_when_backtest_flag_only():
+    """BACKTEST_USE_BT_MIN_THRESHOLDS enables BT path without RESEARCH_MODE."""
+    original = CONFIG.get("PAIR_PROFILES")
+    original_bt = dict(CONFIG.get("BT_MIN") or {})
+    original_rm = CONFIG.get("RESEARCH_MODE", False)
+    original_btf = CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
+    try:
+        CONFIG["PAIR_PROFILES"] = {"XAU/USD": {"bt_min": 1.58, "min_confluence": 5.8}}
+        CONFIG["BT_MIN"] = {**original_bt, "commodity": 0.70}
+        CONFIG["RESEARCH_MODE"] = False
+        CONFIG["BACKTEST_USE_BT_MIN_THRESHOLDS"] = True
+        pair = {"display": "XAU/USD", "symbol": "XAUUSD", "type": "commodity"}
+        assert get_backtest_min_score_threshold(pair) == 1.58
+        assert get_min_confluence_threshold(pair) == 5.8
+    finally:
+        CONFIG["PAIR_PROFILES"] = original
+        CONFIG["BT_MIN"] = original_bt
+        CONFIG["RESEARCH_MODE"] = original_rm
+        CONFIG["BACKTEST_USE_BT_MIN_THRESHOLDS"] = original_btf
 
 
 def test_forex_scoring_source_exposes_score_group_adjustments():

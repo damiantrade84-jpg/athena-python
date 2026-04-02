@@ -1324,6 +1324,13 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
         </div>
         <button onclick="loadBtMinValues()" title="Reload from server" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:18px;padding:2px 6px;">&#8635;</button>
       </div>
+      <div style="margin-bottom:14px;padding:12px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;">
+        <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:12px;color:var(--text);line-height:1.45;">
+          <input type="checkbox" id="btUseBtChain" style="margin-top:3px;accent-color:var(--accent);" onchange="saveBtChainFlag()" />
+          <span><strong>Use BT_MIN chain for backtest</strong> — When on, Engine A backtest gates on pair <code>bt_min</code> → <code>BT_MIN_GROUP</code> → <code>BT_MIN</code> (below). When off (default), backtest mirrors live <code>MIN_CONFLUENCE_*</code> for parity. Live scans never use BT_MIN.</span>
+        </label>
+        <div id="btChainHint" style="font-size:10px;color:var(--muted);margin-top:8px;display:none;"></div>
+      </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:14px;" id="btMinInputs">
         <!-- populated by loadBtMinValues() -->
       </div>
@@ -4650,6 +4657,22 @@ async function loadBtMinValues() {
     var live = data.live_class || {};
     _btMinLive = live;
 
+    var chk = document.getElementById('btUseBtChain');
+    if (chk) {
+      chk.checked = !!data.backtest_use_bt_min_thresholds;
+      chk.disabled = false;
+    }
+    var hint = document.getElementById('btChainHint');
+    if (hint) {
+      if (data.research_mode) {
+        hint.style.display = 'block';
+        hint.textContent = 'Note: RESEARCH_MODE is also on in config.yaml — it enables the same BT routing. Prefer BACKTEST_USE_BT_MIN_THRESHOLDS for backtest-only tuning.';
+      } else {
+        hint.style.display = 'none';
+        hint.textContent = '';
+      }
+    }
+
     var LABELS = {crypto:'Crypto (0–3 scale)',forex:'Forex (0–1 scale)',commodity:'Commodity (0–3)',stock:'Stock (0–3)',index:'Index (0–3)'};
     var STEPS  = {crypto:0.05,forex:0.01,commodity:0.05,stock:0.05,index:0.05};
     var MAXES  = {crypto:3.0,forex:1.0,commodity:3.0,stock:3.0,index:3.0};
@@ -4692,6 +4715,27 @@ function syncBtMinInput(cls) {
   var inp = document.getElementById('btmin-' + cls);
   var rng = document.getElementById('btmin-range-' + cls);
   if (inp) inp.value = rng.value;
+}
+
+async function saveBtChainFlag() {
+  var chk = document.getElementById('btUseBtChain');
+  if (!chk) return;
+  chk.disabled = true;
+  try {
+    var r = await fetch('/api/bt-min', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ backtest_use_bt_min_thresholds: chk.checked })
+    });
+    var data = await r.json();
+    if (!data.saved && r.status !== 200) {
+      chk.checked = !chk.checked;
+    }
+    await loadBtMinValues();
+  } catch (e) {
+    chk.checked = !chk.checked;
+  }
+  chk.disabled = false;
 }
 
 async function saveBtMin() {

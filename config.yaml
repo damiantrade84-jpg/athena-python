@@ -59,10 +59,12 @@ WEINSTEIN_LOOKBACK:
   stock: 150
   index: 150
 
-# Engine A backtest score gate only (get_backtest_min_score_threshold in scoring.py).
-# If RESEARCH_MODE is false (default), backtest uses live scan thresholds for parity.
-# If RESEARCH_MODE is true, backtest uses the legacy overrides below.
+# Engine A backtest score gate (get_score_threshold in scoring.py).
+# Default: backtest mirrors live (MIN_CONFLUENCE_* / pair min_confluence) for parity.
+# Set BACKTEST_USE_BT_MIN_THRESHOLDS: true (or RESEARCH_MODE: true) so backtest uses
+# pair bt_min → BT_MIN_GROUP → BT_MIN below — live trading thresholds are unchanged.
 RESEARCH_MODE: false
+BACKTEST_USE_BT_MIN_THRESHOLDS: false
 
 BT_MIN:
   crypto:    0.90
@@ -145,7 +147,7 @@ MIN_CONFLUENCE_GROUP:
     nat_gas: 1.45
     pgm_metals: 1.40
     copper: 1.35
-    precious_trackers: 1.30
+    precious_trackers: 1.10
     energy_oil: 1.25
     commodity_other: 1.35
   index:
@@ -494,8 +496,8 @@ PAIR_PROFILES:
     weight_overrides:
       h4_fib: 1.5
       h1_bb: 0.5
-    min_confluence: 1.30
-    bt_min: 0.78
+    min_confluence: 1.05
+    bt_min: 0.65
   XAG/USD:
     disable_filters: [obv, session]
     weight_overrides:

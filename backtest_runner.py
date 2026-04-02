@@ -66,6 +66,28 @@ def _live_base_risk_pct(asset_type: str) -> float:
     }.get(asset_type, CONFIG["RISK_PCT"])
 
 
+def _engine_a_bt_gate_note() -> str:
+    """Explain Engine A backtest threshold routing for API payload (matches scoring.get_score_threshold)."""
+    use_bt = bool(
+        CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
+        or CONFIG.get("RESEARCH_MODE", False)
+    )
+    sq_on = bool(CONFIG.get("SCAN_QUANTILE_ENABLED", False))
+    if not use_bt:
+        return (
+            "Engine A backtest mirrors live thresholds (pair min_confluence → "
+            "MIN_CONFLUENCE_GROUP → MIN_CONFLUENCE_CLASS). "
+            "Set BACKTEST_USE_BT_MIN_THRESHOLDS to use BT_MIN / BT_MIN_GROUP / pair bt_min for backtest only. "
+            "Live scan: get_min_confluence_threshold plus optional SCAN_QUANTILE_ENABLED."
+            + ("" if sq_on else " SCAN_QUANTILE_ENABLED is off.")
+        )
+    return (
+        "Backtest gates on pair bt_min → BT_MIN_GROUP → BT_MIN. "
+        "Live scan: get_min_confluence_threshold plus optional SCAN_QUANTILE_ENABLED."
+        + ("" if sq_on else " SCAN_QUANTILE_ENABLED is off.")
+    )
+
+
 def _bt_btc_bias(d1_window: list, pair: dict) -> str:
     """Derive BTC bias from the D1 window available at this bar.
 
@@ -374,8 +396,16 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     d1_raw = _yf_d1
             h4_raw, h1_raw = _rt().fetch_eodhd_intraday_bt(pair, days=730)
             if not h4_raw or not h1_raw:
-                h4_raw = h4_raw or _rt().fetch_candles(pair, "H4", 5000)
-                h1_raw = h1_raw or _rt().fetch_candles(pair, "H1", 5000)
+                _pg_ticker = _rt().polygon_ticker_for_pair(pair)
+                if _pg_ticker and _ptype == "commodity":
+                    log.info(f"[BT] {pair['display']}: EODHD intraday failed, trying Polygon")
+                    _pg_h4 = _rt().extract_candles(_rt().fetch_polygon(pair, "H4", 5000))
+                    _pg_h1 = _rt().extract_candles(_rt().fetch_polygon(pair, "H1", 5000))
+                    h4_raw = h4_raw or _pg_h4
+                    h1_raw = h1_raw or _pg_h1
+                if not h4_raw or not h1_raw:
+                    h4_raw = h4_raw or _rt().fetch_candles(pair, "H4", 5000)
+                    h1_raw = h1_raw or _rt().fetch_candles(pair, "H1", 5000)
             _h4_thin = not h4_raw or len(h4_raw or []) < 500
             _h1_thin = not h1_raw or len(h1_raw or []) < 500
             if (_h4_thin or _h1_thin) and _ptype == "commodity":
@@ -549,7 +579,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     _pair_ctx["score_group"] = _pair_score_group
 
     # Engine A backtest gate: pair profile → group → class hierarchy.
-    # By default matches live scan thresholds for parity unless RESEARCH_MODE is enabled.
+    # Default: same as live (MIN_CONFLUENCE_*). If BACKTEST_USE_BT_MIN_THRESHOLDS or
+    # RESEARCH_MODE is true in config, uses BT_MIN / BT_MIN_GROUP / pair bt_min instead.
     bt_min = get_score_threshold(_pair_ctx, is_backtest=True)
 
     _canonical_vm, _vm_mode_warning = normalize_validation_mode(validation_mode)
@@ -1968,14 +1999,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             "funnel": funnel,
             "btStyle": effective_style,
             "btStyleRequested": requested_style,
-            "quantileGateNote": (
-                "Backtest gates on pair bt_min → BT_MIN_GROUP → BT_MIN. "
-                "Live uses get_min_confluence_threshold plus optional SCAN_QUANTILE_ENABLED."
-                if CONFIG.get("SCAN_QUANTILE_ENABLED", True)
-                else "Backtest uses pair bt_min → BT_MIN_GROUP → BT_MIN; "
-                "live uses get_min_confluence_threshold. "
-                "SCAN_QUANTILE_ENABLED is off."
-            ),
+            "quantileGateNote": _engine_a_bt_gate_note(),
             "btMinUsed": bt_min,
             "scanQuantileEnabled": CONFIG.get("SCAN_QUANTILE_ENABLED", True),
             "bhReturn": _bh,
@@ -2372,14 +2396,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         "funnel": funnel,
         "btStyle": effective_style,
         "btStyleRequested": requested_style,
-        "quantileGateNote": (
-            "Backtest gates on pair bt_min → BT_MIN_GROUP → BT_MIN. "
-            "Live uses get_min_confluence_threshold plus optional SCAN_QUANTILE_ENABLED."
-            if CONFIG.get("SCAN_QUANTILE_ENABLED", True)
-            else "Backtest uses pair bt_min → BT_MIN_GROUP → BT_MIN; "
-            "live uses get_min_confluence_threshold. "
-            "SCAN_QUANTILE_ENABLED is off."
-        ),
+        "quantileGateNote": _engine_a_bt_gate_note(),
         "btMinUsed": bt_min,
         "scanQuantileEnabled": CONFIG.get("SCAN_QUANTILE_ENABLED", True),
         "bhReturn": bh_return,
@@ -2723,9 +2740,19 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                     candles_d1 = _yf_d1
             candles_h4, candles_h1 = _rt().fetch_eodhd_intraday_bt(pair, days=730)
             if not candles_h4 or not candles_h1:
-                log.warning(f"[ENGINE B BT] {pair['display']} EODHD intraday failed, trying live cache")
-                candles_h4 = candles_h4 or _rt().fetch_candles(pair, "H4", 5000)
-                candles_h1 = candles_h1 or _rt().fetch_candles(pair, "H1", 5000)
+                _pg_ticker = _rt().polygon_ticker_for_pair(pair)
+                if _pg_ticker and pair.get("type") == "commodity":
+                    log.info(f"[ENGINE B BT] {pair['display']}: EODHD intraday failed, trying Polygon")
+                    _pg_h4 = _rt().extract_candles(_rt().fetch_polygon(pair, "H4", 5000))
+                    _pg_h1 = _rt().extract_candles(_rt().fetch_polygon(pair, "H1", 5000))
+                    candles_h4 = candles_h4 or _pg_h4
+                    candles_h1 = candles_h1 or _pg_h1
+                if not candles_h4 or not candles_h1:
+                    log.warning(
+                        f"[ENGINE B BT] {pair['display']}: Polygon thin/failed, falling back to live cache"
+                    )
+                    candles_h4 = candles_h4 or _rt().fetch_candles(pair, "H4", 5000)
+                    candles_h1 = candles_h1 or _rt().fetch_candles(pair, "H1", 5000)
 
             _h4_thin = not candles_h4 or len(candles_h4 or []) < 500
             _h1_thin = not candles_h1 or len(candles_h1 or []) < 500

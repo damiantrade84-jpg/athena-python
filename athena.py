@@ -6224,6 +6224,38 @@ def _persist_live_confluence_yaml(cfg_path: str, current: dict) -> None:
         f.write(content)
 
 
+def _persist_backtest_bt_chain_flag_yaml(cfg_path: str, value: bool) -> None:
+    """Write BACKTEST_USE_BT_MIN_THRESHOLDS: true|false in config.yaml."""
+    import re as _re
+
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    repl = "true" if value else "false"
+    new_content, n = _re.subn(
+        r"^(BACKTEST_USE_BT_MIN_THRESHOLDS\s*:\s*)(true|false)\s*$",
+        lambda m: f"{m.group(1)}{repl}",
+        content,
+        count=1,
+        flags=_re.MULTILINE | _re.IGNORECASE,
+    )
+    if n:
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        return
+    m = _re.search(
+        r"^(RESEARCH_MODE\s*:\s*(?:true|false))\s*$",
+        content,
+        _re.MULTILINE | _re.IGNORECASE,
+    )
+    if m:
+        insert = f"\nBACKTEST_USE_BT_MIN_THRESHOLDS: {repl}"
+        content = content[: m.end()] + insert + content[m.end() :]
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return
+    raise ValueError("config.yaml: RESEARCH_MODE / BACKTEST_USE_BT_MIN_THRESHOLDS not found")
+
+
 def _apply_bt_min_updates(new_vals: dict) -> dict:
     current = dict(CONFIG.get("BT_MIN") or {})
     current.update({k: round(float(v), 4) for k, v in (new_vals or {}).items()})
@@ -6272,20 +6304,56 @@ def _apply_naked_style_score_updates(new_vals: dict) -> dict:
 
 @app.route("/api/bt-min", methods=["GET", "POST"])
 def api_bt_min():
-    """GET: return current BT_MIN values + live MIN_CONFLUENCE_CLASS for comparison.
-    POST: update BT_MIN in memory and persist to config.yaml.
-    Body: {"crypto": 0.55, "forex": 0.60, "commodity": 0.70, "stock": 0.70, "index": 0.70}
+    """GET: BT_MIN + live MIN_CONFLUENCE_CLASS + flags for Engine A backtest routing.
+    POST: update BT_MIN class floors and/or backtest_use_bt_min_thresholds (backtest only).
+    Body: {"crypto": 0.55, ...} and optional {"backtest_use_bt_min_thresholds": true}
     """
     asset_classes = ("crypto", "forex", "commodity", "stock", "index")
+    cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+
     if request.method == "GET":
+        use_bt = bool(
+            CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
+            or CONFIG.get("RESEARCH_MODE", False)
+        )
         return jsonify(
             {
                 "bt_min": dict(CONFIG.get("BT_MIN") or {}),
                 "live_class": dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {}),
+                "backtest_use_bt_min_thresholds": bool(
+                    CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
+                ),
+                "research_mode": bool(CONFIG.get("RESEARCH_MODE", False)),
+                "backtest_uses_bt_min_chain": use_bt,
             }
         )
 
     data = request.get_json(silent=True) or {}
+
+    if "backtest_use_bt_min_thresholds" in data:
+        try:
+            CONFIG["BACKTEST_USE_BT_MIN_THRESHOLDS"] = bool(
+                data["backtest_use_bt_min_thresholds"]
+            )
+            _persist_backtest_bt_chain_flag_yaml(
+                cfg_path, CONFIG["BACKTEST_USE_BT_MIN_THRESHOLDS"]
+            )
+            log.info(
+                "[BT_MIN] BACKTEST_USE_BT_MIN_THRESHOLDS=%s (persisted)",
+                CONFIG["BACKTEST_USE_BT_MIN_THRESHOLDS"],
+            )
+        except Exception as e:
+            log.error(f"Failed to persist BACKTEST_USE_BT_MIN_THRESHOLDS: {e}")
+            return jsonify(
+                {
+                    "saved": False,
+                    "error": str(e),
+                    "backtest_use_bt_min_thresholds": bool(
+                        CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
+                    ),
+                }
+            ), 500
+
     new_vals = {}
     for cls in asset_classes:
         if cls not in data:
@@ -6299,6 +6367,22 @@ def api_bt_min():
         new_vals[cls] = round(val, 4)
 
     if not new_vals:
+        if "backtest_use_bt_min_thresholds" in data:
+            use_bt = bool(
+                CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
+                or CONFIG.get("RESEARCH_MODE", False)
+            )
+            return jsonify(
+                {
+                    "saved": True,
+                    "bt_min": dict(CONFIG.get("BT_MIN") or {}),
+                    "backtest_use_bt_min_thresholds": bool(
+                        CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
+                    ),
+                    "research_mode": bool(CONFIG.get("RESEARCH_MODE", False)),
+                    "backtest_uses_bt_min_chain": use_bt,
+                }
+            )
         return jsonify({"error": "No valid keys provided"}), 400
 
     try:
@@ -6307,7 +6391,21 @@ def api_bt_min():
         log.error(f"Failed to persist BT_MIN to config.yaml: {e}")
         return jsonify({"saved": False, "error": str(e), "bt_min": dict(CONFIG.get('BT_MIN') or {})}), 500
 
-    return jsonify({"saved": True, "bt_min": current})
+    use_bt = bool(
+        CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
+        or CONFIG.get("RESEARCH_MODE", False)
+    )
+    return jsonify(
+        {
+            "saved": True,
+            "bt_min": current,
+            "backtest_use_bt_min_thresholds": bool(
+                CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
+            ),
+            "research_mode": bool(CONFIG.get("RESEARCH_MODE", False)),
+            "backtest_uses_bt_min_chain": use_bt,
+        }
+    )
 
 
 def _persist_naked_style_profiles_yaml(cfg_path: str, full_profiles: dict) -> None:
