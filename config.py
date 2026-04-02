@@ -307,7 +307,7 @@ CONFIG: dict = {
     # Engine A backtest: use BT_MIN / BT_MIN_GROUP / pair bt_min when True (live unchanged).
     # RESEARCH_MODE also enables the same BT chain (legacy alias).
     "RESEARCH_MODE": False,
-    "BACKTEST_USE_BT_MIN_THRESHOLDS": False,
+    "BACKTEST_USE_BT_MIN_THRESHOLDS": True,
     "MIN_CONFLUENCE_CLASS": {
         "crypto": 1.50,
         "commodity": 1.35,

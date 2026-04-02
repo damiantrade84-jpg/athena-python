@@ -2740,19 +2740,12 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                     candles_d1 = _yf_d1
             candles_h4, candles_h1 = _rt().fetch_eodhd_intraday_bt(pair, days=730)
             if not candles_h4 or not candles_h1:
-                _pg_ticker = _rt().polygon_ticker_for_pair(pair)
-                if _pg_ticker and pair.get("type") == "commodity":
-                    log.info(f"[ENGINE B BT] {pair['display']}: EODHD intraday failed, trying Polygon")
-                    _pg_h4 = _rt().extract_candles(_rt().fetch_polygon(pair, "H4", 5000))
-                    _pg_h1 = _rt().extract_candles(_rt().fetch_polygon(pair, "H1", 5000))
-                    candles_h4 = candles_h4 or _pg_h4
-                    candles_h1 = candles_h1 or _pg_h1
-                if not candles_h4 or not candles_h1:
-                    log.warning(
-                        f"[ENGINE B BT] {pair['display']}: Polygon thin/failed, falling back to live cache"
-                    )
-                    candles_h4 = candles_h4 or _rt().fetch_candles(pair, "H4", 5000)
-                    candles_h1 = candles_h1 or _rt().fetch_candles(pair, "H1", 5000)
+                # MT5-sourced pairs: skip Polygon; pull H4/H1 from the terminal via fetch_candles.
+                log.info(
+                    f"[ENGINE B BT] {pair['display']}: EODHD intraday failed, fetching from MT5"
+                )
+                candles_h4 = candles_h4 or _rt().fetch_candles(pair, "H4", 5000)
+                candles_h1 = candles_h1 or _rt().fetch_candles(pair, "H1", 5000)
 
             _h4_thin = not candles_h4 or len(candles_h4 or []) < 500
             _h1_thin = not candles_h1 or len(candles_h1 or []) < 500

@@ -60,12 +60,11 @@ WEINSTEIN_LOOKBACK:
   index: 150
 
 # Engine A backtest score gate (get_score_threshold in scoring.py).
-# Default: backtest mirrors live (MIN_CONFLUENCE_* / pair min_confluence) for parity.
-# Set BACKTEST_USE_BT_MIN_THRESHOLDS: true (or RESEARCH_MODE: true) so backtest uses
-# pair bt_min → BT_MIN_GROUP → BT_MIN below — live trading thresholds are unchanged.
+# BACKTEST_USE_BT_MIN_THRESHOLDS true = backtest uses pair bt_min → BT_MIN_GROUP → BT_MIN.
+# false = backtest mirrors live MIN_CONFLUENCE_* (parity). Live scans always use live gates.
+# RESEARCH_MODE also enables the BT chain (legacy); prefer BACKTEST_USE_BT_MIN_THRESHOLDS.
 RESEARCH_MODE: false
 BACKTEST_USE_BT_MIN_THRESHOLDS: false
-
 BT_MIN:
   crypto:    0.90
   commodity: 0.85
@@ -502,8 +501,8 @@ PAIR_PROFILES:
     disable_filters: [obv, session]
     weight_overrides:
       h4_fib: 1.5
-    min_confluence: 1.30
-    bt_min: 0.78
+    min_confluence: 1.05
+    bt_min: 0.65
   LINK/USDT:
     disable_filters: [mean_revert]
     weight_overrides:

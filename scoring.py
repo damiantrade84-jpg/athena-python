@@ -148,9 +148,10 @@ def get_score_threshold(pair: dict, is_backtest: bool = False) -> float:
 
     Live scans always use MIN_CONFLUENCE_* / pair ``min_confluence``.
 
-    Backtests mirror live by default (parity). When ``BACKTEST_USE_BT_MIN_THRESHOLDS``
-    or ``RESEARCH_MODE`` is true, backtest uses pair ``bt_min`` → ``BT_MIN_GROUP`` →
-    ``BT_MIN`` instead of the live chain — live thresholds unchanged.
+    When ``BACKTEST_USE_BT_MIN_THRESHOLDS`` or ``RESEARCH_MODE`` is true (default in
+    config: use BT presets), backtest uses pair ``bt_min`` → ``BT_MIN_GROUP`` →
+    ``BT_MIN``. Set ``BACKTEST_USE_BT_MIN_THRESHOLDS`` false to mirror live
+    thresholds in backtest only. Live scans are unchanged either way.
     """
     profile = get_pair_profile(pair)
     ptype = pair.get("type", "")
