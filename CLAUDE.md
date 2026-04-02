@@ -13,7 +13,7 @@ alwaysApply: true
 
 - **Engine A live:** `MIN_CONFLUENCE_CLASS`, `MIN_CONFLUENCE_GROUP`, `MIN_FOREX_CONFLUENCE`, `PAIR_PROFILES.min_confluence`, `AUTO_TRADE_MIN_SCORE`, `SCAN_QUANTILE_*`, confluence logic in `scoring.py` / `factor_scoring.py` / `forex_scoring.py`, `analyze_pair` tiering.
 - **Engine A backtest:** `BT_MIN`, `PAIR_PROFILES.bt_min`, `get_backtest_min_score_threshold`, backtest score gates in `backtest_runner.py`.
-- **Engine B live + backtest:** `NAKED_ENGINE.style_profiles` (`min_score`, `min_rr`), zone multipliers, naked checklist gates in `market_structure.py`.
+- **Engine B live + backtest:** `NAKED_ENGINE.style_profiles` (`min_score`, `min_rr`), `ENGINE_B_REGIME_MULTIPLIERS` (score scaling — currently neutralized to 1.0), `zone_multipliers` (structural width), naked checklist gates in `market_structure.py`.
 - **Engine D (Scalp Lab):** `SCALP_ENGINE` in `config.yaml` (`MIN_RR`, `MAX_SPREAD_PIPS`, `ZONE_MIN_CONDITIONS`, `WITH_TREND_ONLY`, `BIAS_TIMEFRAME`, candle limits, `AI_GRADING` / `MIN_GRADE_AUTO_EXECUTE`, optional `SCALP_PAIRS`) and core pass/fail logic in `scalp_engine.py` (session filter, zone detection, M5 trigger, momentum, level math).
 
 Cosmetic UI copy is fine. **Do not "tune", "align", or "simplify" thresholds** in passing.
@@ -261,7 +261,10 @@ Theoretical max score using `get_pair_vote_weights(pair)`, minus `W_SESS×0.5`.
 - TTL: H1=55 min, H4=3h55m, D1=23h
 
 ### `NakedEngine.calculate_confidence(...)` — `market_structure.py`
-Shared Engine B checklist for live scan, analysis, compare, backtest. Score = checklist count / UI measure. `passed` = naked price-action rules only — not AI-driven.
+Shared Engine B checklist for live scan, analysis, compare, backtest. Score = checklist count / UI measure. `passed` = naked price-action rules only — not AI-driven. **Note:** `ENGINE_B_REGIME_MULTIPLIERS` (set to 1.0) ensures the `min_score` from UI or `score_group_overrides` is used directly without hidden regime inflation.
+
+### `_naked_scan_style_profile(style, score_group)` — `athena.py`
+Resolves effective Engine B thresholds. Logic: Hardcoded defaults → `style_profiles` (global UI) → `score_group_overrides` (per-pair BT MIN). Per-group overrides take priority and are displayed in the **"Per-Group BT MIN Overrides"** table in the dashboard's Engine B panel.
 
 ### `_engine_b_regime_label(h4_candles, pair_type, regime_hint)` — `athena.py`
 Shared regime resolver for all Engine B paths. Returns: `TRENDING`, `RANGING`, `HIGH_VOLATILITY`, `LOW_VOLATILITY`.
@@ -368,6 +371,7 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 - `cache TTL keys must be uppercase "H1"/"H4"/"D1"`
 - Engine C `regime` can be string or dict — handle both
 - `confidenceDetail` lives on the signal dict (`analyze_pair` sets it); `naked_data` holds the Engine B naked result for Engine B scan signals
+- `[NAKED-DBG]` logs in `athena.py` show specific checklist failures (e.g., `fails=[struct,loc,trigger,rr=0.8]`) for immediate diagnostic visibility.
 
 ---
 
