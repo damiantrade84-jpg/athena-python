@@ -4974,10 +4974,23 @@ def api_scan_naked():
                     )
 
                     if not _gate_ok:
+                        _fail_gates = []
+                        if not conf_data.get("structure_ok"):
+                            _fail_gates.append("struct")
+                        if not conf_data.get("location_ok"):
+                            _fail_gates.append("loc")
+                        if not conf_data.get("passed"):
+                            # Check trigger/catalyst
+                            _has_trigger = bool(conf_data.get("catalyst_bonus", 0))
+                            if not _has_trigger:
+                                _fail_gates.append("trigger")
+                        if not conf_data.get("rr_points", 0):
+                            _fail_gates.append(f"rr={conf_data.get('rr', 0):.1f}")
                         log.warning(
                             f"[NAKED-DBG] {pair['display']} {direction}: "
                             f"score={conf_data['score']:.1f} vs min={_min_score_scaled:.1f}, "
-                            f"passed={conf_data.get('passed')}, regime={regime_label} — REJECTED"
+                            f"passed={conf_data.get('passed')}, regime={regime_label}, "
+                            f"fails=[{','.join(_fail_gates)}] — REJECTED"
                         )
                         continue
 
@@ -6458,7 +6471,12 @@ def api_naked_style_thresholds():
                 "min_score": p.get("min_score"),
                 "min_rr": p.get("min_rr"),
             }
-        return jsonify({"style_profiles": out, "note": "Used by Engine B naked scan and Engine B backtest"})
+        group_overrides = dict(ne.get("score_group_overrides") or {})
+        return jsonify({
+            "style_profiles": out,
+            "score_group_overrides": group_overrides,
+            "note": "Used by Engine B naked scan and Engine B backtest",
+        })
 
     data = request.get_json(silent=True) or {}
     ne = CONFIG.setdefault("NAKED_ENGINE", {})

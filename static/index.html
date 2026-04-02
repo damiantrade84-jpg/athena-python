@@ -1354,7 +1354,7 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
         <button class="bt-btn" onclick="saveNakedStyleThresholds()" id="nakedStyleSaveBtn" style="padding:8px 20px;font-size:12px;background:linear-gradient(135deg,#1e3a5f,#0f766e);">&#10003; SAVE ENGINE B THRESHOLDS</button>
         <span id="nakedStyleStatus" style="font-size:11px;color:var(--muted);"></span>
-        <span style="font-size:11px;color:var(--muted);margin-left:auto;">Higher min_score = fewer passes. Regime scaling still applies in backtest.</span>
+        <span style="font-size:11px;color:var(--muted);margin-left:auto;">Global defaults — per-group overrides (shown below) take precedence when set.</span>
       </div>
     </div>
 
@@ -4787,6 +4787,7 @@ async function loadNakedStyleValues() {
     var r = await fetch('/api/naked-style-thresholds');
     var data = await r.json();
     var sp = data.style_profiles || {};
+    var groupOverrides = data.score_group_overrides || {};
     var STYLES = [
       { key: 'scalp', label: 'Scalp', msMax: 12, rrMax: 4, msStep: 0.05, rrStep: 0.05 },
       { key: 'intraday', label: 'Intraday', msMax: 12, rrMax: 4, msStep: 0.05, rrStep: 0.05 },
@@ -4812,6 +4813,40 @@ async function loadNakedStyleValues() {
         '<input type="number" id="naked-' + k + '-rr" value="' + mrr + '" min="0.1" max="10" step="' + st.rrStep + '" style="width:64px;padding:5px 6px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;" oninput="document.getElementById(\'naked-' + k + '-rr-r\').value=this.value" />' +
         '<input type="range" id="naked-' + k + '-rr-r" value="' + mrr + '" min="0.1" max="' + st.rrMax + '" step="' + st.rrStep + '" style="flex:1;accent-color:#14b8a6;" oninput="document.getElementById(\'naked-' + k + '-rr\').value=this.value" />' +
         '</div></div></div>';
+    }
+    // Per-group overrides table
+    var groupKeys = Object.keys(groupOverrides);
+    if (groupKeys.length > 0) {
+      var tbl = '<div style="grid-column:1/-1;margin-top:6px;">' +
+        '<div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:8px;">Per-Group BT MIN Overrides <span style="font-weight:400;color:var(--muted);font-size:10px;">(applied on top of global defaults above)</span></div>' +
+        '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">' +
+        '<thead><tr style="border-bottom:1px solid var(--border);">' +
+        '<th style="text-align:left;padding:6px 10px;color:var(--muted);font-weight:600;">Group</th>' +
+        '<th style="text-align:center;padding:6px 8px;color:#14b8a6;font-weight:600;">Scalp min</th>' +
+        '<th style="text-align:center;padding:6px 8px;color:#f59e0b;font-weight:600;">Intra min</th>' +
+        '<th style="text-align:center;padding:6px 8px;color:#8b5cf6;font-weight:600;">Swing min</th>' +
+        '</tr></thead><tbody>';
+      for (var gi = 0; gi < groupKeys.length; gi++) {
+        var gk = groupKeys[gi];
+        var go = groupOverrides[gk] || {};
+        var sMin = (go.scalp || {}).min_score;
+        var iMin = (go.intraday || {}).min_score;
+        var wMin = (go.swing || {}).min_score;
+        var sGlobal = sp.scalp ? sp.scalp.min_score : null;
+        var iGlobal = sp.intraday ? sp.intraday.min_score : null;
+        var wGlobal = sp.swing ? sp.swing.min_score : null;
+        var sStyle = (sMin != null && sGlobal != null && sMin != sGlobal) ? 'color:#f59e0b;font-weight:700;' : 'color:var(--text);';
+        var iStyle = (iMin != null && iGlobal != null && iMin != iGlobal) ? 'color:#f59e0b;font-weight:700;' : 'color:var(--text);';
+        var wStyle = (wMin != null && wGlobal != null && wMin != wGlobal) ? 'color:#f59e0b;font-weight:700;' : 'color:var(--text);';
+        tbl += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04);">' +
+          '<td style="padding:5px 10px;color:var(--text);font-weight:500;">' + gk.replace(/_/g, ' ') + '</td>' +
+          '<td style="text-align:center;padding:5px 8px;' + sStyle + '">' + (sMin != null ? sMin : '–') + '</td>' +
+          '<td style="text-align:center;padding:5px 8px;' + iStyle + '">' + (iMin != null ? iMin : '–') + '</td>' +
+          '<td style="text-align:center;padding:5px 8px;' + wStyle + '">' + (wMin != null ? wMin : '–') + '</td>' +
+          '</tr>';
+      }
+      tbl += '</tbody></table></div></div>';
+      container.innerHTML += tbl;
     }
   } catch (e) {
     container.innerHTML = '<span style="color:#ef4444;font-size:12px;">Failed: ' + e.message + '</span>';
