@@ -1022,20 +1022,24 @@ class NakedEngine:
         ):
             sl = sweep_data["sweep_high"] + (atr * sl_mult)
 
-        # TP tied to nearest opposing zone, but fallback to RR if it's uncomfortably close or inverted
+        # TP is structurally constrained by the nearest opposing zone whenever one exists.
+        # Only project a fallback RR target when the market is genuinely in "blue sky"
+        # with no opposing structural zone on the chart.
         tp = None
+        tp_source = "fallback_rr"
+        tp_structural_limited = False
         if direction == "LONG" and nearest_res:
             tp = nearest_res["lower"] - (atr * sl_mult)
-            # If TP is below or within 0.5 ATR of entry, discard and use RR fallback
+            tp_source = "structural_zone"
             if tp <= current_price + (atr * 0.5):
-                tp = None
+                tp_structural_limited = True
         elif direction == "SHORT" and nearest_sup:
             tp = nearest_sup["upper"] + (atr * sl_mult)
-            # If TP is above or within 0.5 ATR of entry, discard and use RR fallback
+            tp_source = "structural_zone"
             if tp >= current_price - (atr * 0.5):
-                tp = None
+                tp_structural_limited = True
 
-        # Generate TP from fallback_rr if no valid opposing structural zone exists
+        # Generate TP from fallback_rr only when there is no opposing structural zone.
         if tp is None:
             sl_dist = abs(current_price - sl) if (sl is not None) else (atr * sl_mult)
             if sl_dist == 0:
@@ -1184,6 +1188,8 @@ class NakedEngine:
             "macro_swing_sequence": macro_seq_data["state"],
             "recommended_stop_loss": sl,
             "recommended_take_profit": tp,
+            "tp_source": tp_source,
+            "tp_structural_limited": tp_structural_limited,
             "distance_to_res": (nearest_res["lower"] - current_price)
             if nearest_res
             else None,
@@ -1330,10 +1336,15 @@ class NakedEngine:
         tp = res.get("recommended_take_profit")
         rr = 0.0
         rr_ok = False
+        tp_side_ok = False
         if sl and tp:
             sl_dist = abs(current_price - sl)
-            tp_dist = abs(tp - current_price)
-            if sl_dist > 0:
+            if direction == "LONG":
+                tp_side_ok = tp > current_price
+            else:
+                tp_side_ok = tp < current_price
+            tp_dist = abs(tp - current_price) if tp_side_ok else 0.0
+            if sl_dist > 0 and tp_side_ok:
                 rr = tp_dist / sl_dist
                 rr_ok = rr >= min_rr
 
@@ -1435,6 +1446,7 @@ class NakedEngine:
             "entry_ok": entry_ok,
             "room_ok": room_ok,
             "rr_ok": rr_ok,
+            "tp_side_ok": tp_side_ok,
             "space_ok": space_ok,
             "trigger_pattern": res.get("trigger_pattern", "NONE"),
             "ob_at_zone": ob_at_zone,

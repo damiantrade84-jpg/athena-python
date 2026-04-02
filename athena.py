@@ -2321,6 +2321,40 @@ def fetch_market_state(pair: dict, tf: str, limit: int) -> dict:
     return _fms(pair, tf, limit)
 
 
+def _market_state_series(state: dict | None) -> list:
+    """Flatten a market-state payload into confirmed bars plus optional forming bar."""
+    if not isinstance(state, dict):
+        return []
+    confirmed = list(state.get("confirmed") or [])
+    forming = state.get("forming")
+    return confirmed + ([forming] if forming else [])
+
+
+def _engine_b_live_market_state(pair: dict, tf: str, limit: int) -> dict:
+    """Live Engine B market-state fetch.
+
+    MT5 pairs bypass TTL candle cache so naked-chart scans read fresh broker candles,
+    including the current forming bar when present. Other sources reuse the shared
+    market-state path.
+    """
+    if pair.get("source") == "mt5":
+        try:
+            from athena_app.services.market_state import split_market_state
+
+            raw = fetch_mt5(pair, tf, limit)
+            candles = _extract_candles(raw) or []
+            return split_market_state(
+                candles,
+                tf,
+                pair.get("display") or pair.get("symbol") or "",
+            )
+        except Exception as e:
+            log.debug(
+                f"[ENGINE B LIVE] {pair.get('display')} {tf}: MT5 direct state failed, falling back to shared market state: {e}"
+            )
+    return fetch_market_state(pair, tf, limit)
+
+
 from indicators import (  # noqa: E402
     calc_ema,
     calc_sma,
@@ -4575,16 +4609,28 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
         return enriched
 
     try:
-        from candle_manager import fetch_market_state as _fms
         _clim = scan_candle_limits()
-        
-        # Determine for H4 (naked engine primary TF)
-        h4_state = _fms(pair_obj, "H4", _clim["H4"])
-        h4 = h4_state["confirmed"] + ([h4_state["forming"]] if h4_state["forming"] else [])
-        is_forming_b = h1_state["is_live"] if "h1_state" in locals() else h4_state["is_live"]
+        if pair_obj.get("source") == "mt5":
+            d1_state = _engine_b_live_market_state(pair_obj, "D1", _clim["D1"])
+            h4_state = _engine_b_live_market_state(pair_obj, "H4", _clim["H4"])
+            h1_state = _engine_b_live_market_state(pair_obj, "H1", _clim["H1"])
+            d1 = _market_state_series(d1_state)
+            h4 = _market_state_series(h4_state)
+            h1 = _market_state_series(h1_state)
+            is_forming_b = any(
+                bool(state.get("is_live"))
+                for state in (d1_state, h4_state, h1_state)
+                if isinstance(state, dict)
+            )
+        else:
+            from candle_manager import fetch_market_state as _fms
 
-        d1 = fetch_candles(pair_obj, "D1", _clim["D1"])
-        h1 = fetch_candles(pair_obj, "H1", _clim["H1"])
+            # Determine for H4 (naked engine primary TF)
+            h4_state = _fms(pair_obj, "H4", _clim["H4"])
+            h4 = _market_state_series(h4_state)
+            is_forming_b = h1_state["is_live"] if "h1_state" in locals() else h4_state["is_live"]
+            d1 = fetch_candles(pair_obj, "D1", _clim["D1"])
+            h1 = fetch_candles(pair_obj, "H1", _clim["H1"])
 
         if not d1 or not h4 or not h1:
             return None, pair_obj, "Failed to fetch D1/H4/H1 candles"
@@ -4968,23 +5014,33 @@ def api_scan_naked():
 
             # Fetch all needed timeframes
             _tf_map = {}
+            _tf_state_map = {}
             for tf in _needed_tfs:
                 cfg_key = f"{tf.upper()}_CANDLES"
                 if cfg_key not in CONFIG:
                     cfg_key = "H4_CANDLES"
                 limit = int(CONFIG[cfg_key])
-                raw = _fetch_cached_only(pair, tf, limit)
-                if raw and len(raw) > 1:
-                    _tf_map[tf] = raw[:-1]  # drop incomplete current bar
-                elif raw:
-                    _tf_map[tf] = raw
+                if pair.get("source") == "mt5":
+                    state = _engine_b_live_market_state(pair, tf, limit)
+                    _tf_state_map[tf] = state
+                    _tf_map[tf] = _market_state_series(state)
                 else:
-                    _tf_map[tf] = []
+                    raw = _fetch_cached_only(pair, tf, limit)
+                    if raw and len(raw) > 1:
+                        _tf_map[tf] = raw[:-1]  # drop incomplete current bar
+                    elif raw:
+                        _tf_map[tf] = raw
+                    else:
+                        _tf_map[tf] = []
 
             zone_candles = _tf_map.get(_zone_tf, [])
             entry_candles = _tf_map.get(_entry_tf, [])
             d1_candles = _tf_map.get("D1", [])
             atr_candles = _tf_map.get(_atr_tf, zone_candles)
+            _engine_b_is_forming = any(
+                bool((_tf_state_map.get(tf) or {}).get("is_live"))
+                for tf in (_zone_tf, _entry_tf, _atr_tf, "D1")
+            )
 
             if len(zone_candles) < 10 or len(entry_candles) < 10:
                 continue
@@ -5076,6 +5132,7 @@ def api_scan_naked():
                     res["zone_tf"] = _zone_tf
                     res["entry_tf"] = _entry_tf
                     res["atr_tf"] = _atr_tf
+                    res["is_forming"] = _engine_b_is_forming
 
                     sl = res.get("recommended_stop_loss")
                     tp = res.get("recommended_take_profit")
@@ -5124,6 +5181,7 @@ def api_scan_naked():
                         "riskLevel": "Low",
                         "score_pct": conf_data["pct"],
                         "is_naked": True,
+                        "isForming": _engine_b_is_forming,
                         "style": resolved_style,
                         "atr": atr,
                         "sl": sl,

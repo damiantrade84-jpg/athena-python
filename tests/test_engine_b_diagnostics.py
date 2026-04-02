@@ -11,6 +11,7 @@ from market_structure import (
     ENGINE_B_REASON_ADVERSE_DXY,
     ENGINE_B_REASON_RESISTANCE_TOO_CLOSE,
     ENGINE_B_REASON_SUPPORT_TOO_CLOSE,
+    NakedEngine,
     engine,
 )
 
@@ -120,3 +121,119 @@ def test_check_macro_correlation_wrapper_matches_detail():
     d1, _ = engine.check_macro_correlation_detail(a, d, "LONG")
     d2 = engine.check_macro_correlation(a, d, "LONG")
     assert d1 == d2
+
+
+def test_analyze_structure_keeps_structural_tp_when_resistance_is_too_close(monkeypatch):
+    local_engine = NakedEngine()
+
+    monkeypatch.setattr(
+        local_engine,
+        "_find_zones",
+        lambda *_args, **_kwargs: (
+            [{"upper": 100.9, "lower": 100.8, "center": 100.85, "volume_strength": 1.0}],
+            [{"upper": 99.7, "lower": 99.5, "center": 99.6, "volume_strength": 1.0}],
+        ),
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_detect_fvg",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_determine_sequence",
+        lambda *_args, **_kwargs: {
+            "state": "HH_HL",
+            "recent_low": 99.6,
+            "recent_high": 100.6,
+            "has_equal_extrema": False,
+        },
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_detect_bos",
+        lambda *_args, **_kwargs: {
+            "bos_bull": True,
+            "bos_bear": False,
+            "bos_volume_confirmed": True,
+        },
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_detect_sweep",
+        lambda *_args, **_kwargs: {
+            "bull_sweep": False,
+            "bear_sweep": False,
+            "sweep_low": None,
+            "sweep_high": None,
+        },
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_detect_order_blocks",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_detect_choch",
+        lambda *_args, **_kwargs: {
+            "choch_bull": False,
+            "choch_bear": False,
+            "choch_level": None,
+        },
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_zone_context",
+        lambda *_args, **_kwargs: {"distance": 0.2, "near_zone": True, "zone_touched": True},
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_price_action_trigger",
+        lambda *_args, **_kwargs: {
+            "pattern": "REJECTION",
+            "trigger_ok": True,
+            "rejection": True,
+            "engulfing": False,
+            "inside_break": False,
+            "strong_close": True,
+        },
+    )
+
+    candles = [
+        {"open": 100.0, "high": 100.4, "low": 99.8, "close": 100.1, "vol": 1000.0}
+        for _ in range(40)
+    ]
+    result = local_engine.analyze_structure(
+        candles,
+        candles,
+        candles,
+        current_price=100.0,
+        direction="LONG",
+        atr=1.0,
+        regime="RANGING",
+        fallback_rr=1.8,
+        asset_type="stock",
+        enable_zone_registry=False,
+        enable_profile_context=False,
+    )
+
+    assert result["tp_source"] == "structural_zone"
+    assert result["tp_structural_limited"] is True
+    assert result["recommended_take_profit"] == 99.8
+
+
+def test_calculate_confidence_rejects_tp_on_wrong_side_of_entry():
+    res = _base_res_long()
+    res["recommended_take_profit"] = 99.8
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+    assert out["tp_side_ok"] is False
+    assert out["rr"] == 0.0
+    assert out["rr_ok"] is False

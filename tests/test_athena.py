@@ -311,6 +311,16 @@ def test_athena_source_exposes_intermarket_payload_and_route():
     assert '"intermarketConfirmation": res.get("intermarketConfirmation", {})' in source
 
 
+def test_engine_b_live_scan_uses_mt5_market_state_helper():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "athena.py").read_text(encoding="utf-8")
+
+    assert "def _engine_b_live_market_state(" in source
+    assert 'if pair.get("source") == "mt5":' in source
+    assert "state = _engine_b_live_market_state(pair, tf, limit)" in source
+    assert '_engine_b_live_market_state(pair_obj, "H4", _clim["H4"])' in source
+
+
 def test_ui_source_renders_intermarket_confirmation_box():
     root = Path(__file__).resolve().parents[1]
     source = (root / "static" / "index.html").read_text(encoding="utf-8")
