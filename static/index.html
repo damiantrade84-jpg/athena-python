@@ -1337,6 +1337,13 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
         </label>
         <div id="btChainHint" style="font-size:10px;color:var(--muted);margin-top:8px;display:none;"></div>
       </div>
+      <div id="btChainOffNotice" style="display:none;background:rgba(16,185,129,0.1);
+      border:1px solid rgba(16,185,129,0.3);border-radius:8px;padding:10px 14px;
+      margin-bottom:12px;font-size:12px;color:#10b981;">
+      BT chain is OFF — backtests use live MIN_CONFLUENCE_CLASS gates directly.
+      The values below have no effect on backtest results. Edit them only if you
+      plan to re-enable the BT chain.
+    </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:14px;" id="btMinInputs">
         <!-- populated by loadBtMinValues() -->
       </div>
@@ -4668,6 +4675,10 @@ async function loadBtMinValues() {
       chk.checked = !!data.backtest_use_bt_min_thresholds;
       chk.disabled = false;
     }
+    var notice = document.getElementById('btChainOffNotice');
+    if (notice) {
+      notice.style.display = data.backtest_use_bt_min_thresholds ? 'none' : 'block';
+    }
     var hint = document.getElementById('btChainHint');
     if (hint) {
       if (data.research_mode) {
@@ -4701,8 +4712,12 @@ async function loadBtMinValues() {
               oninput="syncBtMinInput('${cls}')" />
           </div>
           <div style="font-size:10px;color:var(--muted);margin-top:5px;">
-            Live gate: <span style="color:#f59e0b;font-weight:600;">${liveVal}</span>
-            <span style="color:var(--muted);margin-left:6px;">· BT runs below live gate are possible here</span>
+            ${data.backtest_use_bt_min_thresholds
+      ? `BT_MIN (active): <span style="color:#f59e0b;font-weight:600;">${curVal}</span>
+         <span style="color:var(--muted);margin-left:6px;">· Live gate: ${liveVal}</span>`
+      : `Active BT gate = Live gate: <span style="color:#10b981;font-weight:600;">${liveVal}</span>
+         <span style="color:var(--muted);margin-left:6px;">· BT_MIN ignored (chain off)</span>`
+    }
           </div>
         </div>`;
     }

@@ -714,7 +714,7 @@ ENGINE_B_FOREX_STRUCTURE_TF: "D1"
 # Engine B backtest SL/TP mode:
 # "atr" = use Engine A calc_levels (ATR × multiplier) — proven, matches bar resolution
 # "structural" = use Engine B naked zone placement (behind swing lows) — wider stops
-ENGINE_B_BT_SL_MODE: "structural"
+ENGINE_B_BT_SL_MODE: "atr"
 
 # AI usage control — when true, AI only runs on explicit user actions
 # (manual analysis clicks, compare engines) — NOT on automatic scans
