@@ -2915,6 +2915,19 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
     _atr_tf = style_profile.get("atr_tf", "H4")
     _bt_sl_mode = str(CONFIG.get("ENGINE_B_BT_SL_MODE", "atr") or "atr").lower()
     _bt_enable_profile_context = bool(CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED", False))
+    _b_funnel = {
+        "bars_evaluated": 0,
+        "fail_verdict":   0,
+        "fail_structure": 0,
+        "fail_location":  0,
+        "fail_entry":     0,
+        "fail_rr":        0,
+        "fail_score":     0,
+        "fail_passed":    0,
+        "fail_room":      0,
+        "fail_macro":     0,
+        "passed_gate":    0,
+    }
     log.info(
         f"[ENGINE B BT] {pair['display']} running: "
         f"D1={len(candles_d1)} H4={len(candles_h4)} H1={len(candles_h1)} bars, style={resolved_style}"
@@ -3033,7 +3046,9 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 asset_type=pair.get("type", ""),
                 enable_profile_context=_bt_enable_profile_context,
             )
+            _b_funnel["bars_evaluated"] += 1
             if res.get("structural_verdict") != "CLEAR":
+                _b_funnel["fail_verdict"] += 1
                 continue
             conf_data = naked_engine.calculate_confidence(
                 res,
@@ -3048,7 +3063,25 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 regime_label,
             )
             if not _gate_ok:
+                _cd = conf_data
+                if not _cd.get("structure_ok"):
+                    _b_funnel["fail_structure"] += 1
+                elif not _cd.get("location_ok"):
+                    _b_funnel["fail_location"] += 1
+                elif not _cd.get("entry_ok"):
+                    _b_funnel["fail_entry"] += 1
+                elif not _cd.get("rr_ok"):
+                    _b_funnel["fail_rr"] += 1
+                elif not _cd.get("passed"):
+                    _b_funnel["fail_passed"] += 1
+                else:
+                    _b_funnel["fail_score"] += 1
+                if not _cd.get("room_ok"):
+                    _b_funnel["fail_room"] += 1
+                if not _cd.get("macro_ok", True):
+                    _b_funnel["fail_macro"] += 1
                 continue
+            _b_funnel["passed_gate"] += 1
 
             entry = current_price
             _bt_regime = None
@@ -3326,6 +3359,22 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         f"Expect {result.get('expectancy', 0):.2f}R, SQN {result.get('sqn', 0):.2f}, "
         f"style={resolved_style}"
     )
+    _b_total = _b_funnel["bars_evaluated"] or 1
+    log.warning(
+        f"[ENGINE B BT FUNNEL] {pair['display']} "
+        f"bars={_b_funnel['bars_evaluated']} "
+        f"verdict_fail={_b_funnel['fail_verdict']} ({_b_funnel['fail_verdict']/_b_total*100:.1f}%) "
+        f"| struct_fail={_b_funnel['fail_structure']} ({_b_funnel['fail_structure']/_b_total*100:.1f}%) "
+        f"| loc_fail={_b_funnel['fail_location']} ({_b_funnel['fail_location']/_b_total*100:.1f}%) "
+        f"| entry_fail={_b_funnel['fail_entry']} ({_b_funnel['fail_entry']/_b_total*100:.1f}%) "
+        f"| rr_fail={_b_funnel['fail_rr']} ({_b_funnel['fail_rr']/_b_total*100:.1f}%) "
+        f"| score_fail={_b_funnel['fail_score']} ({_b_funnel['fail_score']/_b_total*100:.1f}%) "
+        f"| passed_fail={_b_funnel['fail_passed']} ({_b_funnel['fail_passed']/_b_total*100:.1f}%) "
+        f"| room_miss={_b_funnel['fail_room']} ({_b_funnel['fail_room']/_b_total*100:.1f}%) "
+        f"| passed_gate={_b_funnel['passed_gate']} ({_b_funnel['passed_gate']/_b_total*100:.1f}%)"
+    )
+    if "error" not in result:
+        result["engineBFunnel"] = _b_funnel
     if "error" not in result:
         result["btStyle"] = resolved_style
         result["btStyleRequested"] = requested_style
