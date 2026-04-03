@@ -1144,6 +1144,12 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       <div class="tog test-toggle" id="testToggle" onclick="toggleTestMode()" title="Test Mode: drops score thresholds, enables force-execute on all signals">
         <span class="tog-dot toggle-dot"></span>TEST
       </div>
+      <div class="tog" id="intermarketToggle" onclick="toggleFeature('intermarket')" title="Intermarket Confirmation: correlates pairs across asset classes to confirm/contradict direction">
+        <span class="tog-dot"></span>INTER
+      </div>
+      <div class="tog" id="newsToggle" onclick="toggleFeature('news_sentiment')" title="News Sentiment: EODHD news + Grok AI sentiment adjusts scan scores (uses API tokens)">
+        <span class="tog-dot"></span>NEWS
+      </div>
     </div>
   </header>
 
@@ -8018,6 +8024,38 @@ async function toggleTestMode() {
     if (allSignals.length > 0) renderSignals(applyStyleFilter(allSignals));
   } catch(e) { showToast('Error toggling test mode: '+e.message); }
 }
+
+async function toggleFeature(feature) {
+  try {
+    var resp = await fetch('/api/feature-toggles', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({feature: feature, action: 'toggle'})
+    });
+    var d = await resp.json();
+    if (!resp.ok) throw new Error(d.error || ('HTTP ' + resp.status));
+    _updateFeatureToggles(d);
+    var labels = {intermarket: 'INTERMARKET', news_sentiment: 'NEWS SENTIMENT'};
+    var state = d[feature];
+    showToast((labels[feature] || feature) + (state ? ' ON — active on next scan' : ' OFF'));
+  } catch(e) { showToast('Feature toggle failed: ' + e.message, true); }
+}
+
+function _updateFeatureToggles(state) {
+  var im = document.getElementById('intermarketToggle');
+  var ns = document.getElementById('newsToggle');
+  if (im) {
+    if (state.intermarket) { im.classList.add('active'); } else { im.classList.remove('active'); }
+  }
+  if (ns) {
+    if (state.news_sentiment) { ns.classList.add('active'); } else { ns.classList.remove('active'); }
+  }
+}
+
+// Sync feature toggle state on page load
+fetch('/api/feature-toggles').then(function(r){
+  return window.safeJson ? window.safeJson(r) : r.json();
+}).then(_updateFeatureToggles).catch(function(){});
 
 function resolveExecSignal(signalRef) {
   if (signalRef === '__acm__' && window._acm && _acm.sig) return _acm.sig;

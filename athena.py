@@ -33,7 +33,7 @@ try:
 
     load_dotenv()
 except ImportError:
-    pass  # dotenv optional â€” falls back to os.environ
+    pass  # dotenv optional — falls back to os.environ
 
 import telegram_notify
 
@@ -118,7 +118,7 @@ logging.basicConfig(
 
 log = logging.getLogger("sentinel")
 
-# Silence noisy HTTP and library loggers â€” reduces console flood
+# Silence noisy HTTP and library loggers — reduces console flood
 import logging as _logging
 _logging.getLogger("werkzeug").setLevel(_logging.WARNING)
 _logging.getLogger("urllib3").setLevel(_logging.WARNING)
@@ -207,21 +207,21 @@ FOREX_PAIRS = [
         "display": "EUR/USD",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +0.16 â€” enabled; score gate filters low-conviction setups
+    },  # SQN +0.16 — enabled; score gate filters low-conviction setups
     {
         "symbol": "GBPUSD=X",
         "type": "forex",
         "display": "GBP/USD",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -1.62 (post-fix BT 2026-03-13): 7 trades/730d, WR 14%, OOS:-10 â€” no edge confirmed # re-enabled for ATR-fix retest
+    },  # SQN -1.62 (post-fix BT 2026-03-13): 7 trades/730d, WR 14%, OOS:-10 — no edge confirmed # re-enabled for ATR-fix retest
     {
         "symbol": "USDJPY=X",
         "type": "forex",
         "display": "USD/JPY",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -2.33 â€” enabled; re-evaluate post-formula fix
+    },  # SQN -2.33 — enabled; re-evaluate post-formula fix
     {
         "symbol": "AUDUSD=X",
         "type": "forex",
@@ -235,7 +235,7 @@ FOREX_PAIRS = [
         "display": "NZD/USD",
         "source": "mt5",
         "enabled": True,
-    },  # SQN 0.00 â€” enabled; zero trades was data gap not signal failure
+    },  # SQN 0.00 — enabled; zero trades was data gap not signal failure
     {
         "symbol": "EURGBP=X",
         "type": "forex",
@@ -256,7 +256,7 @@ FOREX_PAIRS = [
         "display": "USD/CHF",
         "source": "mt5",
         "enabled": True,
-    },  # v3.1 SQN +0.61, OOS +1.22 âœ“
+    },  # v3.1 SQN +0.61, OOS +1.22 ✓
     {
         "symbol": "EURJPY=X",
         "type": "forex",
@@ -284,7 +284,7 @@ FOREX_PAIRS = [
         "display": "EUR/AUD",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -1.43 (old look-ahead bias) â€” re-evaluate post-formula fix
+    },  # SQN -1.43 (old look-ahead bias) — re-evaluate post-formula fix
     {
         "symbol": "GBPAUD=X",
         "type": "forex",
@@ -312,7 +312,7 @@ FOREX_PAIRS = [
         "display": "USD/MXN",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +0.85, OOS +0.60 âœ“
+    },  # SQN +0.85, OOS +0.60 ✓
     {
         "symbol": "USDSGD=X",
         "type": "forex",
@@ -336,14 +336,14 @@ COMMODITY_PAIRS = [
         "display": "XAG/USD",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -0.07 â€” DISABLE (borderline, no edge confirmed)
+    },  # SQN -0.07 — DISABLE (borderline, no edge confirmed)
     {
         "symbol": "CL=F",
         "type": "commodity",
         "display": "WTI Oil",
         "source": "mt5",
         "enabled": True,
-    },  # SQN not retested with correct ATR â€” monitor only
+    },  # SQN not retested with correct ATR — monitor only
     {
         "symbol": "BZ=F",
         "type": "commodity",
@@ -396,14 +396,14 @@ INDEX_PAIRS = [
         "display": "S&P 500",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +1.23 WR 60.0% (10T) â† WS: us endpoint GSPC.INDX
+    },  # SQN +1.23 WR 60.0% (10T) ← WS: us endpoint GSPC.INDX
     {
         "symbol": "^DJI",
         "type": "index",
         "display": "Dow Jones",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +0.61 WR 55.6% (9T) â† WS: us endpoint DJI.INDX
+    },  # SQN +0.61 WR 55.6% (9T) ← WS: us endpoint DJI.INDX
     {
         "symbol": "^GDAXI",
         "type": "index",
@@ -418,28 +418,28 @@ INDEX_PAIRS = [
         "display": "UK100",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +0.67 WR 50.0% (12T) Pepperstone: UK100 â† WS: forex ep
+    },  # SQN +0.67 WR 50.0% (12T) Pepperstone: UK100 ← WS: forex ep
     {
         "symbol": "^AXJO",
         "type": "index",
         "display": "ASX 200",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +0.12 WR 40.0% (10T) Pepperstone: AUS200 â† WS: forex ep
+    },  # SQN +0.12 WR 40.0% (10T) Pepperstone: AUS200 ← WS: forex ep
     {
         "symbol": "^N225",
         "type": "index",
         "display": "Nikkei 225",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -0.39 WR 33.3% (9T) Pepperstone: JPN225 â† WS: forex ep
+    },  # SQN -0.39 WR 33.3% (9T) Pepperstone: JPN225 ← WS: forex ep
     {
         "symbol": "^HSI",
         "type": "index",
         "display": "Hang Seng",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -0.38 WR 33.3% (9T) Pepperstone: HK50 â† WS: forex ep
+    },  # SQN -0.38 WR 33.3% (9T) Pepperstone: HK50 ← WS: forex ep
 ]
 
 US_STOCK_PAIRS = [
@@ -449,7 +449,7 @@ US_STOCK_PAIRS = [
         "display": "AAPL",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -0.30 â€” score gate filters
+    },  # SQN -0.30 — score gate filters
     {
         "symbol": "TSLA.US",
         "type": "stock",
@@ -463,7 +463,7 @@ US_STOCK_PAIRS = [
         "display": "NVDA",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +1.44 âœ“
+    },  # SQN +1.44 ✓
     {
         "symbol": "MSFT.US",
         "type": "stock",
@@ -492,7 +492,7 @@ US_STOCK_PAIRS = [
         "display": "GOOG",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +1.61, OOS:+1.01 âœ“
+    },  # SQN +1.61, OOS:+1.01 ✓
     {
         "symbol": "JPM.US",
         "type": "stock",
@@ -599,7 +599,7 @@ ETF_PAIRS = [
         "display": "SPY",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +1.03 âœ“
+    },  # SQN +1.03 ✓
     {
         "symbol": "QQQ.US",
         "type": "stock",
@@ -615,7 +615,7 @@ ETF_PAIRS = [
         "source": "mt5",
         "enabled": True,
         "ws": False,
-    },  # SQN +2.08, OOS:+2.98 âœ“
+    },  # SQN +2.08, OOS:+2.98 ✓
     {
         "symbol": "TLT.US",
         "type": "stock",
@@ -857,7 +857,7 @@ CRYPTO_PAIRS = [
         "display": "SUI/USDT",
         "source": "binance",
         "enabled": True,
-    },  # SQN +0.76, IS:+0.43/OOS:+0.82 Ã¢Å“"
+    },  # SQN +0.76, IS:+0.43/OOS:+0.82 ✓"
     {
         "symbol": "NEARUSDT",
         "type": "crypto",
@@ -871,7 +871,7 @@ CRYPTO_PAIRS = [
         "display": "APT/USDT",
         "source": "binance",
         "enabled": True,
-    },  # SQN +0.67, IS:+0.56/OOS:+0.37 Ã¢Å“"
+    },  # SQN +0.67, IS:+0.56/OOS:+0.37 ✓"
     {
         "symbol": "INJUSDT",
         "type": "crypto",
@@ -899,7 +899,7 @@ ALL_PAIRS = (
     + CRYPTO_PAIRS
 )
 
-# Pairs that opted out of WS â€” polled via REST every 60s
+# Pairs that opted out of WS — polled via REST every 60s
 _NON_WS_EODHD = [
     p for p in ALL_PAIRS if not p.get("ws", True) and p.get("source") == "eodhd"
 ]
@@ -966,7 +966,7 @@ _YF_INTRADAY_PERIOD = "180d"
 
 _VENDOR_SYMBOL_OVERRIDES = {
     # Precious metals: EODHD D1 via .FOREX suffix (confirmed 12,350 bars); Polygon C: for H4/H1
-    # EODHD has NO intraday for XAU/XAG â€” Polygon handles H4/H1 backtest fallback
+    # EODHD has NO intraday for XAU/XAG — Polygon handles H4/H1 backtest fallback
     "XAU/USD": {"eodhd": "XAUUSD.FOREX", "polygon": "C:XAUUSD"},
     "XAG/USD": {"eodhd": "XAGUSD.FOREX", "polygon": "C:XAGUSD"},
     "XPT/USD": {"polygon": "C:XPTUSD", "eodhd": "XPTUSD.FOREX", "yfinance": "PL=F"},
@@ -1048,7 +1048,7 @@ def _yfinance_symbol_for_pair(pair: dict) -> str | None:
 
 
 def _eodhd_ticker_for_pair(pair: dict) -> str | None:
-    # Check vendor override first â€” highest priority
+    # Check vendor override first — highest priority
     override = _vendor_overrides(pair).get("eodhd")
     if override:
         return override
@@ -1137,14 +1137,14 @@ def _fallback_source_for_pair(pair: dict) -> str | None:
 
 
 def _fetch_fallback_candles(pair: dict, tf: str, limit: int, reason: str = ""):
-    """Try fallback sources in order: Polygon â†’ yfinance.
+    """Try fallback sources in order: Polygon → yfinance.
     Uses only Polygon and yfinance.
     Returns candle list or None if all sources fail."""
 
     tag = f" ({reason})" if reason else ""
     disp = pair["display"]
 
-    # 1. Polygon â€” good for forex/metals, rate-limited to 5 req/min on free tier
+    # 1. Polygon — good for forex/metals, rate-limited to 5 req/min on free tier
     if _polygon_ticker_for_pair(pair):
         resp = fetch_polygon(pair, tf, limit)
         candles = _extract_candles(resp)
@@ -1152,7 +1152,7 @@ def _fetch_fallback_candles(pair: dict, tf: str, limit: int, reason: str = ""):
             log.info(f"[FALLBACK] {disp} {tf}: using Polygon{tag}")
             return candles
 
-    # 2. yfinance â€” last resort, broad coverage but lower reliability
+    # 2. yfinance — last resort, broad coverage but lower reliability
     yf_symbol = _yfinance_symbol_for_pair(pair)
     if yf_symbol:
         log.info(f"[FALLBACK] {disp} {tf}: using yfinance{tag}")
@@ -1165,16 +1165,16 @@ def _atr_for_levels(
     d1i: dict, h4i: dict, h1i: dict, pair: dict = None, style: str | None = None
 ):
     """
-    Returns ATR value for SL/TP calculation â€” correct timeframe per asset class.
+    Returns ATR value for SL/TP calculation — correct timeframe per asset class.
 
-    CRYPTO:              H4 ATR first â€” entries are H4-based, H1 too tight for
+    CRYPTO:              H4 ATR first — entries are H4-based, H1 too tight for
                          overnight crypto gaps and volatile moves
-    FOREX:               D1 ATR first â€” D1 swing trades, normal pullback 40-80
+    FOREX:               D1 ATR first — D1 swing trades, normal pullback 40-80
                          pips, H1 ATR (25-30 pips) causes premature stop-outs
-    STOCKS/ETFs:         D1 ATR first â€” stocks gap at open daily, H1 too tight
+    STOCKS/ETFs:         D1 ATR first — stocks gap at open daily, H1 too tight
                          for 5-20 day swing holds
-    COMMODITIES:         D1 ATR first â€” macro-driven, daily gaps common on news
-    INDICES:             D1 ATR first â€” daily range 0.5-1.5%, H1 only 0.1-0.3%
+    COMMODITIES:         D1 ATR first — macro-driven, daily gaps common on news
+    INDICES:             D1 ATR first — daily range 0.5-1.5%, H1 only 0.1-0.3%
     """
     ptype = (pair or {}).get("type", "")
     resolved_style = _normalize_style(style or "swing")
@@ -1253,7 +1253,7 @@ def fetch_yfinance(sym, tf, limit):
         df = df.loc[:, ~df.columns.duplicated(keep="first")]
 
         if tf == "H4":
-            # Column-by-column resample Ã¢â‚¬â€ avoids pandas version issues with .agg(dict)
+            # Column-by-column resample — avoids pandas version issues with .agg(dict)
 
             vol_col = (
                 df["Volume"]
@@ -1852,7 +1852,7 @@ def _fetch_eodhd_intraday_bt(pair, days=730):
 _eodhd_cooldown_until = 0.0  # global cooldown timestamp for 402 errors
 
 def fetch_eodhd(pair, tf, limit):
-    """Download OHLCV candles via EODHD SDK (APIClient). Covers forex, stocks, indices Ã¢â‚¬â€œ 1000 req/min.
+    """Download OHLCV candles via EODHD SDK (APIClient). Covers forex, stocks, indices – 1000 req/min.
 
     Returns dict with standardized error format."""
     global _eodhd_cooldown_until
@@ -1906,14 +1906,14 @@ def fetch_eodhd(pair, tf, limit):
                     break
                 except Exception as e:
                     if "402" in str(e) or "429" in str(e) or "Payment Required" in str(e):
-                        log.warning(f"[EODHD] {ticker} D1: 402/429 â€” cooldown 10 min")
+                        log.warning(f"[EODHD] {ticker} D1: 402/429 — cooldown 10 min")
                         _eodhd_cooldown_until = time.time() + 600
                         return {"error": True, "symbol": symbol, "detail": "rate_limited"}
                     if attempt == 3:
                         log.warning(f"[EODHD] {ticker} D1 failed after 3 attempts: {e}")
                         raise
                     log.warning(
-                        f"[EODHD] {ticker} D1 attempt {attempt} failed â€” fast-fail without retry sleep: {e}"
+                        f"[EODHD] {ticker} D1 attempt {attempt} failed — fast-fail without retry sleep: {e}"
                     )
                     return {"error": True, "symbol": symbol, "detail": "rate_limited"}
 
@@ -1965,14 +1965,14 @@ def fetch_eodhd(pair, tf, limit):
                     break
                 except Exception as e:
                     if "402" in str(e) or "429" in str(e) or "Payment Required" in str(e):
-                        log.warning(f"[EODHD] {ticker} intraday: 402/429 â€” cooldown 10 min")
+                        log.warning(f"[EODHD] {ticker} intraday: 402/429 — cooldown 10 min")
                         _eodhd_cooldown_until = time.time() + 600
                         return {"error": True, "symbol": symbol, "detail": "rate_limited"}
                     if attempt == 3:
                         log.warning(f"[EODHD] {ticker} intraday failed after 3 attempts: {e}")
                         raise
                     log.warning(
-                        f"[EODHD] {ticker} intraday attempt {attempt} failed â€” fast-fail without retry sleep: {e}"
+                        f"[EODHD] {ticker} intraday attempt {attempt} failed — fast-fail without retry sleep: {e}"
                     )
                     return {"error": True, "symbol": symbol, "detail": "rate_limited"}
 
@@ -2045,7 +2045,7 @@ def fetch_eodhd(pair, tf, limit):
 
 _polygon_lock = threading.Lock()
 _polygon_last_request: float = 0.0  # epoch seconds of last Polygon HTTP request
-_POLYGON_MIN_INTERVAL = 12.0  # 5 req/min free tier â†’ 1 request per 12 s
+_POLYGON_MIN_INTERVAL = 12.0  # 5 req/min free tier → 1 request per 12 s
 
 
 def fetch_polygon(pair, tf, limit):
@@ -2072,7 +2072,7 @@ def fetch_polygon(pair, tf, limit):
 
     if _polygon_throttle_reject:
         log.warning(
-            f"[PG] {symbol}: client throttle â€” min interval {_POLYGON_MIN_INTERVAL}s not elapsed"
+            f"[PG] {symbol}: client throttle — min interval {_POLYGON_MIN_INTERVAL}s not elapsed"
         )
         return {
             "error": True,
@@ -2121,7 +2121,7 @@ def fetch_polygon(pair, tf, limit):
         )
 
         if r.status_code == 403:
-            log.warning(f"[PG] {ticker}: 403 Forbidden â€” check API key or plan")
+            log.warning(f"[PG] {ticker}: 403 Forbidden — check API key or plan")
 
             return {
                 "error": True,
@@ -2131,7 +2131,7 @@ def fetch_polygon(pair, tf, limit):
 
         if r.status_code == 429:
             log.warning(
-                f"[PG] {ticker}: 429 rate limited â€” throttle will apply before next request"
+                f"[PG] {ticker}: 429 rate limited — throttle will apply before next request"
             )
 
             # Log Polygon rate limit error (no Telegram notification)
@@ -2409,13 +2409,13 @@ from vision_prompts import (  # noqa: E402
 
 _scan_lock = threading.Lock()  # thread-safe scan guard (replaces bare boolean)
 
-_kill_switch = False  # N4: Kill-switch â€” blocks new scans/analyses when True
+_kill_switch = False  # N4: Kill-switch — blocks new scans/analyses when True
 
 _test_mode = (
     False  # Test mode: drops score thresholds, enables force-execute on all signals
 )
 
-_disabled_pairs: set = set()  # per-pair kill-switch â€” display names of pairs to exclude
+_disabled_pairs: set = set()  # per-pair kill-switch — display names of pairs to exclude
 
 
 def _normalize_style(style: str | None) -> str:
@@ -2454,13 +2454,13 @@ def _effective_backtest_style(pair: dict, requested_style: str) -> str:
         return "swing"
 
 
-EXPERT_PROMPT = """You are Marcus Reid â€” 18-year prop-desk veteran turned trading mentor.
-You speak like a sharp friend who happens to be a market wizard â€” concise, opinionated.
+EXPERT_PROMPT = """You are Marcus Reid — 18-year prop-desk veteran turned trading mentor.
+You speak like a sharp friend who happens to be a market wizard — concise, opinionated.
 No corporate-speak. No filler. No hedging.
 
-ABSOLUTE RULES â€” VIOLATION = FAILURE:
+ABSOLUTE RULES — VIOLATION = FAILURE:
 1. Output ONLY valid JSON. No markdown, no text outside JSON values.
-2. NEVER state anything not directly supported by the input data. If a factor is None/missing, say "data unavailable" â€” do NOT guess.
+2. NEVER state anything not directly supported by the input data. If a factor is None/missing, say "data unavailable" — do NOT guess.
 3. NEVER use "will", "guaranteed", "definitely". Use "edge suggests", "probability favors", "setup indicates".
 4. EVERY claim in your narrative MUST reference a specific data point from the input (factor name, score value, weight, z-score, regime label, vote name, level price). If you cannot cite the data, do not make the claim.
 5. Counter-trend signal = automatic grade drop of 1 full level + explicit warning.
@@ -2470,16 +2470,16 @@ INPUT SECTIONS:
 === SIGNAL === (pair, direction, score/maxScore, conviction, regime, style)
 === FACTOR DIAGNOSTICS === (per-factor scores with weights, directional vs nondirectional breakdown, confidence multiplier, trend coherence, optional coverage)
 === CONFIDENCE ENGINE === (confidence value and component breakdown)
-=== ENGINE B === (naked market structure â€” swing sequence, BOS, CHoCH, order blocks, FVGs, zones)
+=== ENGINE B === (naked market structure — swing sequence, BOS, CHoCH, order blocks, FVGs, zones)
 === TECHNICALS === (individual voted indicators + z-scores)
 === LEVELS === (entry, SL, TP1, TP2 with R-multiples, ATR, fib levels)
-=== WARNINGS === (penalties already applied â€” these are FACTS not opinions)
-=== CONTEXT === (NOT scored â€” news, DXY, yield curve, backtest stats, learning history)
+=== WARNINGS === (penalties already applied — these are FACTS not opinions)
+=== CONTEXT === (NOT scored — news, DXY, yield curve, backtest stats, learning history)
 === PORTFOLIO === (heat, drawdown)
 
-HOW TO ANALYSE â€” FOLLOW THIS EXACT ORDER:
+HOW TO ANALYSE — FOLLOW THIS EXACT ORDER:
 Step 1: Read FACTOR DIAGNOSTICS first. Which directional factors are active? What are their scores and weights? Is directionalScore positive or negative? Does direction match? What is the confidence multiplier?
-Step 2: Check trendCoherence. How many timeframes agree? What is the coherence ratio? If < 0.7, this is a mixed signal â€” flag it.
+Step 2: Check trendCoherence. How many timeframes agree? What is the coherence ratio? If < 0.7, this is a mixed signal — flag it.
 Step 3: Read regime. TRENDING with ADX > 35 = full rules. RANGING = downgrade. DEAD RANGING = F-grade instantly.
 Step 4: Check nondirectional factors (trend_strength, volatility, volume, structure). These are the signal QUALITY layer. Low quality + high direction = fragile setup.
 Step 5: Read LEVELS. Is SL within MAX_SL_PCT for this asset class? Is RR >= 2.0? Is TP near a known resistance/support?
@@ -2487,22 +2487,22 @@ Step 6: If ENGINE B data is present, cross-reference structural verdict with fac
 Step 7: If CONTEXT data is present, use for narrative color ONLY. Never let news override the quantitative signal.
 
 GRADING (based on score/maxScore percentage):
-A+ (85-100%): Elite â€” full size, all factors aligned, high confidence multiplier.
-A  (70-84%): Strong â€” normal size, minor gaps only.
-B  (55-69%): Valid â€” half size, needs monitoring. Check which factors are weak.
-C  (40-54%): Watchlist only â€” interesting but not ready. Name the missing factors.
-F  (0-39%): Avoid â€” insufficient edge. Name exactly why.
+A+ (85-100%): Elite — full size, all factors aligned, high confidence multiplier.
+A  (70-84%): Strong — normal size, minor gaps only.
+B  (55-69%): Valid — half size, needs monitoring. Check which factors are weak.
+C  (40-54%): Watchlist only — interesting but not ready. Name the missing factors.
+F  (0-39%): Avoid — insufficient edge. Name exactly why.
 
 CRITICAL CROSS-CHECKS (do ALL of these):
-- If trend factor score > 1.0 but momentum < 0 â†’ "momentum divergence, trend may stall"
-- If directionalScore is positive but direction says SHORT â†’ "DIRECTION FLIP BUG â€” do not trade"
-- If confidence_multiplier < 0.5 â†’ "weak directional conviction â€” half size maximum"
-- If trendCoherence ratio < 0.7 â†’ "timeframe disagreement â€” wait for alignment"
-- If nondirectionalScore < 0.5 â†’ "low signal quality â€” reduce size"
-- If SL > 2% of price â†’ quarter size mandatory
+- If trend factor score > 1.0 but momentum < 0 → "momentum divergence, trend may stall"
+- If directionalScore is positive but direction says SHORT → "DIRECTION FLIP BUG — do not trade"
+- If confidence_multiplier < 0.5 → "weak directional conviction — half size maximum"
+- If trendCoherence ratio < 0.7 → "timeframe disagreement — wait for alignment"
+- If nondirectionalScore < 0.5 → "low signal quality — reduce size"
+- If SL > 2% of price → quarter size mandatory
 
 edgeProbability: Estimate 20-95 using this formula as a GUIDE (not exact):
-  base = score_pct Ã— 0.8
+  base = score_pct × 0.8
   if confidence_multiplier > 0.8: +5
   if trendCoherence > 0.8: +5
   if regime is TRENDING and ADX > 30: +5
@@ -2513,12 +2513,12 @@ edgeProbability: Estimate 20-95 using this formula as a GUIDE (not exact):
 
 riskLevel: "Low" if edgeProb >= 70 and TRENDING. "High" if edgeProb < 40 or DEAD RANGING or counter-trend. "Medium" otherwise.
 
-PER-STYLE RATINGS â€” rate ALL THREE independently using specific data:
+PER-STYLE RATINGS — rate ALL THREE independently using specific data:
 - SCALP: Need ADX > 30, clean H1 entry, vol_ratio > 1.5, RR >= 1.5
 - INTRADAY: Need H4+H1 aligned, same session, RR >= 2.0, momentum confirming
 - SWING: Need D1 EMA stack + trendCoherence > 0.8, RR >= 3.0, no upcoming high-impact events
 
-OUTPUT â€” EXACT JSON (no other text):
+OUTPUT — EXACT JSON (no other text):
 {"grade":"A","verdict":"One punchy sentence citing specific factor scores","narrative":"2-3 sentences. MUST reference specific factor names, scores, and weights from the input. Name the strongest and weakest factors.","entryZone":"exact price or fib level from input","invalidation":"exact price from SL or structural level","keyLevels":"S1/R1 from input data only","positionSizing":"Full/Half/Quarter + why (reference confidence_multiplier and nondirectionalScore)","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"cite specific data","warnings":["specific risks citing data points"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}
 
 Now analyse the following signal data and reply with JSON only:"""
@@ -2588,7 +2588,7 @@ def fetch_usd_relative_strength_context(
         return None
 
 
-# Phase A: UST Yield Curve cache (1hr TTL Ã¢â‚¬â€ rates change slowly)
+# Phase A: UST Yield Curve cache (1hr TTL — rates change slowly)
 
 _yield_cache = {"data": None, "ts": 0}
 
@@ -2711,7 +2711,7 @@ def fetch_div_split_context():
     now = time.time()
 
     if _divsplit_cache["ts"] > 0 and (now - _divsplit_cache["ts"]) < _DIVSPLIT_TTL:
-        log.debug(f"[DIVS] Cache hit â€” age {int(now - _divsplit_cache['ts'])}s")
+        log.debug(f"[DIVS] Cache hit — age {int(now - _divsplit_cache['ts'])}s")
         return _divsplit_cache["data"]
 
     _key = os.environ.get("EODHD_KEY", "")
@@ -2825,11 +2825,11 @@ def fetch_div_split_context():
     _divsplit_cache = {"data": result, "ts": now}
 
     log.info(
-        f"[DIVS] Checked {len(_DIV_SPLIT_PAIRS)} pairs â€” {len(result)} with upcoming events"
+        f"[DIVS] Checked {len(_DIV_SPLIT_PAIRS)} pairs — {len(result)} with upcoming events"
     )
 
     log.info(
-        f"[DIVS] Cache populated â€” {len(_DIV_SPLIT_PAIRS)} pairs, {len(result)} events found. Next refresh in 24h."
+        f"[DIVS] Cache populated — {len(_DIV_SPLIT_PAIRS)} pairs, {len(result)} events found. Next refresh in 24h."
     )
 
     return result
@@ -2859,7 +2859,7 @@ def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
         return _earnings_cache["data"]
 
     if _EARNINGS_AVAILABLE is False:
-        return {}  # Already confirmed unavailable on this EODHD plan â€” skip API call
+        return {}  # Already confirmed unavailable on this EODHD plan — skip API call
 
     api = _get_eodhd_client()
 
@@ -2892,11 +2892,11 @@ def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
     except Exception as e:
         if "403" in str(e) or "Forbidden" in str(e):
             _EARNINGS_AVAILABLE = (
-                False  # Disable for this session â€” plan doesn't include it
+                False  # Disable for this session — plan doesn't include it
             )
 
             log.warning(
-                "[EARN] 403 Forbidden â€” earnings calendar not available on this EODHD plan. Disabling for session."
+                "[EARN] 403 Forbidden — earnings calendar not available on this EODHD plan. Disabling for session."
             )
 
         else:
@@ -2942,7 +2942,7 @@ def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
     _earnings_cache = {"data": result, "ts": now}
 
     log.info(
-        f"[EARN] Checked {len(symbols)} stock symbols Ã¢â‚¬â€ {len(result)} with upcoming earnings"
+        f"[EARN] Checked {len(symbols)} stock symbols — {len(result)} with upcoming earnings"
     )
 
     return result
@@ -3367,7 +3367,7 @@ def _build_signal_message(
         if _fd.get("minDirectionalThreshold") is not None:
             lines.append(f"  Min directional threshold: {_fd['minDirectionalThreshold']}")
         if _fd.get("minDirectionalFailed"):
-            lines.append("  ** MIN DIRECTIONAL FAILED â€” signal below directional threshold **")
+            lines.append("  ** MIN DIRECTIONAL FAILED — signal below directional threshold **")
         _tc = _fd.get("trendCoherence", {})
         if _tc:
             lines.append(
@@ -3410,7 +3410,7 @@ def _build_signal_message(
                     + ", ".join(str(x) for x in (_im.get("unavailablePriors") or []))
                 )
         if _fd.get("insufficientFactors"):
-            lines.append("  ** INSUFFICIENT FACTORS â€” too few active to produce valid score **")
+            lines.append("  ** INSUFFICIENT FACTORS — too few active to produce valid score **")
 
     # Engine B signals: emit naked scoring summary in place of factor diagnostics
     if _is_naked and _naked and not _fs:
@@ -3433,7 +3433,7 @@ def _build_signal_message(
         for cname, cval in _comps.items():
             lines.append(f"    {cname}: {cval if cval is not None else 'N/A'}")
         if _conf.get("degraded"):
-            lines.append(f"  ** DEGRADED â€” only {_conf.get('available_count', '?')}/{len(_comps)} components available **")
+            lines.append(f"  ** DEGRADED — only {_conf.get('available_count', '?')}/{len(_comps)} components available **")
 
     # === LEVELS ===
 
@@ -3451,7 +3451,7 @@ def _build_signal_message(
     fib = signal.get("fib")
 
     if fib:
-        # Only send key fib levels â€” full dump is ~100 extra tokens
+        # Only send key fib levels — full dump is ~100 extra tokens
         _key_fibs = {
             k: v
             for k, v in fib.items()
@@ -3493,7 +3493,7 @@ def _build_signal_message(
     if _yc:
         lines.append(
             f"Yield curve: {_yc['shape']} (2Y-10Y spread: {_yc['spread_2_10']}%, "
-            f"3M: {_yc.get('y3m')}%, 10Y: {_yc['y10y']}%) â€” {_yc['riskContext']}"
+            f"3M: {_yc.get('y3m')}%, 10Y: {_yc['y10y']}%) — {_yc['riskContext']}"
         )
 
     _ds = fetch_div_split_context()
@@ -3507,14 +3507,14 @@ def _build_signal_message(
             _d = _ev["upcomingDiv"][0]
 
             lines.append(
-                f"Ex-div in {_d['daysTo']} days ({_d['exDate']}, amount: {_d.get('amount', '?')}) â€” gap-down risk"
+                f"Ex-div in {_d['daysTo']} days ({_d['exDate']}, amount: {_d.get('amount', '?')}) — gap-down risk"
             )
 
         if _ev.get("upcomingSplit"):
             _s = _ev["upcomingSplit"][0]
 
             lines.append(
-                f"Split in {_s['daysTo']} days ({_s['splitDate']}, ratio: {_s.get('ratio', '?')}) â€” price distortion risk"
+                f"Split in {_s['daysTo']} days ({_s['splitDate']}, ratio: {_s.get('ratio', '?')}) — price distortion risk"
             )
 
     _oi_div = signal.get("oiDivergence")
@@ -3561,7 +3561,7 @@ def _build_signal_message(
     if news_ctx:
         _ctx_parts = []
 
-        # Forex events â€” keep only event name + date (strip full object bloat)
+        # Forex events — keep only event name + date (strip full object bloat)
         if news_ctx.get("forexEvents"):
             _fe = [
                 {
@@ -3592,7 +3592,7 @@ def _build_signal_message(
             ]
 
             if relevant:
-                # Title only â€” strip full article body
+                # Title only — strip full article body
                 _ctx_parts.append(
                     f"Crypto news: {', '.join(n.get('title', '')[:80] for n in relevant[:2])}"
                 )
@@ -3742,9 +3742,9 @@ def run_ai(
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
 
         style_labels = {
-            "scalp": "SCALP Ã¢â‚¬â€ focus on H1 exhaustion, tight 1.5R, quick execution",
-            "intraday": "INTRADAY Ã¢â‚¬â€ H4+H1 alignment, same-session execution, 2-3R",
-            "swing": "SWING Ã¢â‚¬â€ D1 trend dominance, EMA200 slope, 4-6R multi-day hold",
+            "scalp": "SCALP — focus on H1 exhaustion, tight 1.5R, quick execution",
+            "intraday": "INTRADAY — H4+H1 alignment, same-session execution, 2-3R",
+            "swing": "SWING — D1 trend dominance, EMA200 slope, 4-6R multi-day hold",
         }
 
         if style_pref == "auto":
@@ -3965,7 +3965,7 @@ def _init_audit_db(db_path: str) -> None:
         ("risk_amount", "REAL"),
         ("risk_pct", "REAL"),
         ("ticket", "TEXT"),
-        # Task 1 Ã¢â‚¬â€ outcome tracking
+        # Task 1 — outcome tracking
         ("exit_price", "REAL"),
         ("exit_time", "TEXT"),
         ("pnl", "REAL"),
@@ -3983,7 +3983,7 @@ def _init_audit_db(db_path: str) -> None:
         ("adx_pct", "REAL"),
         ("btc_bias", "TEXT"),
         ("session_name", "TEXT"),
-        ("error_tag", "TEXT"),  # AUTO-ERR: reason â€” set on failed auto-trade attempts
+        ("error_tag", "TEXT"),  # AUTO-ERR: reason — set on failed auto-trade attempts
         ("fee_cost", "REAL"),  # Actual paid commission captured from exchange order
         (
             "factors_json",
@@ -4100,7 +4100,7 @@ def _insert_shadow_from_engine_c(consensus: dict) -> None:
         log.debug(f"[SHADOW] insert failed: {exc}")
 
 
-# â”€â”€ AI Learning + Auto-Trader â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── AI Learning + Auto-Trader ─────────────────────────────────────────────
 
 from ai_learning import init_learning_db  # noqa: E402
 
@@ -4134,14 +4134,14 @@ try:
 except ImportError:
     pass
 
-# â”€â”€ API authentication (shared-secret header) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── API authentication (shared-secret header) ────────────────────────────
 
 _ATHENA_API_KEY = os.environ.get("ATHENA_API_KEY", "")  # set in .env to enable auth
 
 _AUTH_EXEMPT = {"/", "/favicon.ico"}  # paths that don't require auth
 
 
-# â”€â”€ Lightweight rate limiter (no external dependency) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Lightweight rate limiter (no external dependency) ─────────────────────
 
 _rate_limits: dict = {}  # ip -> [timestamps]
 
@@ -4152,7 +4152,7 @@ _RATE_MAX_REQUESTS = 120  # max requests per window (2/sec average)
 _RATE_EXECUTE_MAX = 5  # stricter limit for execution endpoints
 
 
-# _json_safe imported from config.py â€” see that module for implementation
+# _json_safe imported from config.py — see that module for implementation
 
 
 @app.before_request
@@ -4164,17 +4164,17 @@ def _auth_and_rate_limit():
 
     ip = _req.remote_addr or "unknown"
 
-    # Auth check â€” only enforced when ATHENA_API_KEY is set in .env
+    # Auth check — only enforced when ATHENA_API_KEY is set in .env
 
     if _ATHENA_API_KEY and path not in _AUTH_EXEMPT:
         provided = _req.headers.get("X-Sentinel-Key", "")
 
         if provided != _ATHENA_API_KEY:
             log.warning(
-                f"[AUTH] {ip} rejected on {path} â€” invalid/missing X-Sentinel-Key"
+                f"[AUTH] {ip} rejected on {path} — invalid/missing X-Sentinel-Key"
             )
 
-            return jsonify({"error": "Unauthorized â€” set X-Sentinel-Key header"}), 401
+            return jsonify({"error": "Unauthorized — set X-Sentinel-Key header"}), 401
 
     # Rate limiting
 
@@ -4246,7 +4246,7 @@ def api_analyze():
         return jsonify({"error": "Invalid signal object"}), 400
 
     if _kill_switch:
-        return jsonify({"error": "Kill-switch active Ã¢â‚¬â€ system paused"}), 503
+        return jsonify({"error": "Kill-switch active — system paused"}), 503
 
     try:
         news_ctx = sig.get("newsCtx") or fetch_news_context()
@@ -4342,7 +4342,7 @@ def api_analyze():
             learning_ctx=_learning_ctx,
         )
 
-        # N9: Audit log Ã¢â‚¬â€ persist every AI analysis to SQLite
+        # N9: Audit log — persist every AI analysis to SQLite
 
         try:
             _max_s = sig.get("maxScore", 3.0)
@@ -4397,7 +4397,7 @@ def api_analyze():
         return jsonify(result)
 
     except Exception as e:
-        # S2: Sanitise exception â€” don't leak internal paths
+        # S2: Sanitise exception — don't leak internal paths
 
         log.error(f"api_analyze error: {e}")
 
@@ -4449,7 +4449,7 @@ def _naked_scan_style_profile(
 ) -> tuple[str, dict]:
     resolved = _normalize_style(style)
     if resolved == "auto":
-        resolved = "intraday"  # Engine B walks H4 bars â€” intraday is the natural default
+        resolved = "intraday"  # Engine B walks H4 bars — intraday is the natural default
     profiles = {
         "scalp": {
             "min_score": 3.0,
@@ -5014,7 +5014,7 @@ def api_scan_naked():
                 candles, expiry = entry
                 if now < expiry:
                     return candles
-        # Cache miss â€” call normal fetch_candles (will populate cache for next time)
+        # Cache miss — call normal fetch_candles (will populate cache for next time)
         return fetch_candles(pair, tf, limit)
 
     for pair in candidate_pairs:
@@ -5089,7 +5089,7 @@ def api_scan_naked():
                 _valid_atrs = [a for a in atr_series[-50:] if a and a > 0]
                 _atr_avg = sum(_valid_atrs) / len(_valid_atrs) if _valid_atrs else 0
                 if _atr_avg > 0 and atr < _atr_avg * 0.6:
-                    log.warning(f"[NAKED-DBG] {pair['display']}: ATR={atr:.6f} < 60% avg={_atr_avg:.6f} â€” VOL GATE")
+                    log.warning(f"[NAKED-DBG] {pair['display']}: ATR={atr:.6f} < 60% avg={_atr_avg:.6f} — VOL GATE")
                     continue
 
             current_price = float(entry_candles[-1]["close"])
@@ -5145,7 +5145,7 @@ def api_scan_naked():
                             f"[NAKED-DBG] {pair['display']} {direction}: "
                             f"score={conf_data['score']:.1f} vs min={_min_score_scaled:.1f}, "
                             f"passed={conf_data.get('passed')}, regime={regime_label}, "
-                            f"fails=[{','.join(_fail_gates)}] â€” REJECTED"
+                            f"fails=[{','.join(_fail_gates)}] — REJECTED"
                         )
                         continue
 
@@ -5183,7 +5183,7 @@ def api_scan_naked():
                     if rr < style_profile["min_rr"]:
                         log.warning(
                             f"[NAKED-DBG] {pair['display']} {direction}: "
-                            f"rr={rr:.2f} < min_rr={style_profile['min_rr']} â€” REJECTED"
+                            f"rr={rr:.2f} < min_rr={style_profile['min_rr']} — REJECTED"
                         )
                         continue
 
@@ -5252,7 +5252,7 @@ def api_scan_naked():
                     if _existing is None or signal["confluenceScore"] > _existing["confluenceScore"]:
                         _best_per_pair[_pair_key] = signal
                 else:
-                    log.warning(f"[NAKED-DBG] {pair['display']} {direction}: verdict={verdict} seq={seq} â€” SKIPPED")
+                    log.warning(f"[NAKED-DBG] {pair['display']} {direction}: verdict={verdict} seq={seq} — SKIPPED")
         except Exception as e:
             log.warning(f"[NAKED-SCAN] Error on {pair['display']}: {e}", exc_info=True)
             continue
@@ -5308,7 +5308,7 @@ def api_webhook():
         return jsonify({"error": "Execution disabled in config.yaml"}), 403
 
     if _kill_switch:
-        return jsonify({"error": "Kill-switch active â€” webhook blocked"}), 503
+        return jsonify({"error": "Kill-switch active — webhook blocked"}), 503
 
     d = request.get_json(force=True, silent=True) or {}
 
@@ -5317,9 +5317,9 @@ def api_webhook():
     _wh_secret = os.environ.get("WEBHOOK_SECRET", "")
 
     if _wh_secret and d.get("secret", "") != _wh_secret:
-        log.warning(f"[WEBHOOK] {request.remote_addr} rejected â€” invalid secret")
+        log.warning(f"[WEBHOOK] {request.remote_addr} rejected — invalid secret")
 
-        return jsonify({"error": "Unauthorized â€” invalid webhook secret"}), 401
+        return jsonify({"error": "Unauthorized — invalid webhook secret"}), 401
 
     # Build minimal signal dict from webhook payload
 
@@ -5364,7 +5364,7 @@ def api_webhook():
         "trendState": d.get("trendState", "DEVELOPING"),
     }
 
-    # Duplicate guard â€” webhook signals use pair+direction+minute-bucket as key
+    # Duplicate guard — webhook signals use pair+direction+minute-bucket as key
 
     _minute = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
 
@@ -5397,7 +5397,7 @@ def api_webhook():
             _pos_resp = bybit_get_positions()
 
             if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
-                return jsonify({"error": "Positions unavailable â€” cannot verify exposure"}), 503
+                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
 
             positions = (
                 _pos_resp.get("positions", [])
@@ -5427,7 +5427,7 @@ def api_webhook():
             _pos_resp = mt5_get_positions()
 
             if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
-                return jsonify({"error": "Positions unavailable â€” cannot verify exposure"}), 503
+                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
 
             positions = (
                 _pos_resp.get("positions", [])
@@ -5526,7 +5526,7 @@ def api_webhook():
     except Exception as e:
         log.error(f"[WEBHOOK] execution error: {e}")
 
-        return jsonify({"error": "Webhook execution failed â€” check logs"}), 500
+        return jsonify({"error": "Webhook execution failed — check logs"}), 500
 
 
 @app.route("/api/mt5-status")
@@ -5686,7 +5686,7 @@ def api_close_position():
 
 @app.route("/api/binance-status")
 def api_binance_status():
-    """Legacy endpoint â€” redirects to Bybit status."""
+    """Legacy endpoint — redirects to Bybit status."""
 
     return api_bybit_status()
 
@@ -5722,8 +5722,8 @@ def api_market_hours():
         m = minutes % 60
         return f"Opens in {h}h {m}m" if m else f"Opens in {h}h"
 
-    # â”€â”€ Forex (Sun 22:00 UTC â€“ Fri 22:00 UTC) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    if utc_weekday == 5:  # Saturday â€” closed all day
+    # ── Forex (Sun 22:00 UTC – Fri 22:00 UTC) ────────────────────────────────
+    if utc_weekday == 5:  # Saturday — closed all day
         forex_open = False
         forex_status = "Closed (Weekend)"
         # Opens Sun 22:00 UTC = (6-5)*24*60 - utc_total + 22*60
@@ -5742,11 +5742,11 @@ def api_market_hours():
         forex_status = "Open"
         forex_opens_in = None
 
-    # â”€â”€ Sessions (UTC) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    # Sydney:    21:00â€“06:00 UTC  (23:00â€“08:00 GMT+2)
-    # Tokyo:     00:00â€“09:00 UTC  (02:00â€“11:00 GMT+2)
-    # London:    07:00â€“16:00 UTC  (09:00â€“18:00 GMT+2)
-    # New York:  13:00â€“21:00 UTC  (15:00â€“23:00 GMT+2)
+    # ── Sessions (UTC) ─────────────────────────────────────────────────────────
+    # Sydney:    21:00–06:00 UTC  (23:00–08:00 GMT+2)
+    # Tokyo:     00:00–09:00 UTC  (02:00–11:00 GMT+2)
+    # London:    07:00–16:00 UTC  (09:00–18:00 GMT+2)
+    # New York:  13:00–21:00 UTC  (15:00–23:00 GMT+2)
 
     def session_state(start_utc, end_utc):
         """Returns (is_open, mins_to_open_or_close)."""
@@ -5776,14 +5776,14 @@ def api_market_hours():
     # London/NY overlap
     overlap_open = lon_open and ny_open
 
-    # â”€â”€ Equity markets (GMT+2 local times) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    # JSE:       09:00â€“17:00 GMT+2 (Mon-Fri)
-    # LSE/UK100: 09:00â€“17:30 GMT+2 (Mon-Fri) = 07:00â€“15:30 UTC
-    # NYSE/DAX:  NYSE 15:30â€“22:00 GMT+2 | DAX 09:00â€“17:30 GMT+2
+    # ── Equity markets (GMT+2 local times) ────────────────────────────────────
+    # JSE:       09:00–17:00 GMT+2 (Mon-Fri)
+    # LSE/UK100: 09:00–17:30 GMT+2 (Mon-Fri) = 07:00–15:30 UTC
+    # NYSE/DAX:  NYSE 15:30–22:00 GMT+2 | DAX 09:00–17:30 GMT+2
     gmt2_h = now_gmt2.hour
     gmt2_m = now_gmt2.minute
     gmt2_total = gmt2_h * 60 + gmt2_m
-    is_weekday = utc_weekday <= 4  # Monâ€“Fri
+    is_weekday = utc_weekday <= 4  # Mon–Fri
 
     def equity_state(open_gmt2, close_gmt2):
         s = open_gmt2[0] * 60 + open_gmt2[1]
@@ -5806,7 +5806,7 @@ def api_market_hours():
     dax_open, dax_status, dax_note = equity_state((9, 0), (17, 30))
     nyse_open, nyse_status, nyse_note = equity_state((15, 30), (22, 0))
 
-    # â”€â”€ Build response â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Build response ─────────────────────────────────────────────────────────
     def session_detail(is_open, mins):
         if not forex_open:
             return {"open": False, "status": "Forex Closed", "note": forex_opens_in}
@@ -5828,12 +5828,12 @@ def api_market_hours():
             "overlap":   {"open": overlap_open and forex_open, "status": "London/NY Overlap" if (overlap_open and forex_open) else "Inactive", "note": "Highest liquidity"},
         },
         "markets": {
-            "forex":  {"open": forex_open, "status": forex_status, "note": forex_opens_in or "Closes Fri 22:00 UTC", "hours": "Sun 22:00 â€“ Fri 22:00 UTC"},
+            "forex":  {"open": forex_open, "status": forex_status, "note": forex_opens_in or "Closes Fri 22:00 UTC", "hours": "Sun 22:00 – Fri 22:00 UTC"},
             "crypto": {"open": True, "status": "Open 24/7", "note": "Always open", "hours": "24/7"},
-            "jse":    {"open": jse_open, "status": jse_status, "note": jse_note, "hours": "09:00â€“17:00 GMT+2"},
-            "lse":    {"open": lse_open, "status": lse_status, "note": lse_note, "hours": "09:00â€“17:30 GMT+2"},
-            "dax":    {"open": dax_open, "status": dax_status, "note": dax_note, "hours": "09:00â€“17:30 GMT+2"},
-            "nyse":   {"open": nyse_open, "status": nyse_status, "note": nyse_note, "hours": "15:30â€“22:00 GMT+2"},
+            "jse":    {"open": jse_open, "status": jse_status, "note": jse_note, "hours": "09:00–17:00 GMT+2"},
+            "lse":    {"open": lse_open, "status": lse_status, "note": lse_note, "hours": "09:00–17:30 GMT+2"},
+            "dax":    {"open": dax_open, "status": dax_status, "note": dax_note, "hours": "09:00–17:30 GMT+2"},
+            "nyse":   {"open": nyse_open, "status": nyse_status, "note": nyse_note, "hours": "15:30–22:00 GMT+2"},
         },
     })
 
@@ -6089,7 +6089,7 @@ def api_backtest_naked():
             return jsonify(
                 {
                     "success": False,
-                    "error": "No pair selected. Engine B backtest requires a specific pair â€” select one from the dropdown.",
+                    "error": "No pair selected. Engine B backtest requires a specific pair — select one from the dropdown.",
                 }
             ), 400
 
@@ -6234,7 +6234,7 @@ def api_backtest_best():
         return jsonify({"error": str(e)}), 500
 
 
-# N4: Kill-switch API â€” immediately blocks new scans/analyses
+# N4: Kill-switch API — immediately blocks new scans/analyses
 
 
 @app.route("/api/killswitch", methods=["POST"])
@@ -6527,7 +6527,7 @@ def api_bt_min():
         except (TypeError, ValueError):
             return jsonify({"error": f"Invalid value for {cls}"}), 400
         if val < 0 or val > 10:
-            return jsonify({"error": f"Value for {cls} out of range (0â€“10)"}), 400
+            return jsonify({"error": f"Value for {cls} out of range (0–10)"}), 400
         new_vals[cls] = round(val, 4)
 
     if not new_vals:
@@ -6651,7 +6651,7 @@ def api_naked_style_thresholds():
             except (TypeError, ValueError):
                 return jsonify({"error": f"Invalid min_score for {style}"}), 400
             if ms < 0 or ms > 20:
-                return jsonify({"error": f"min_score for {style} out of range (0â€“20)"}), 400
+                return jsonify({"error": f"min_score for {style} out of range (0–20)"}), 400
             cur["min_score"] = round(ms, 4)
             changed = True
         if "min_rr" in payload:
@@ -6660,7 +6660,7 @@ def api_naked_style_thresholds():
             except (TypeError, ValueError):
                 return jsonify({"error": f"Invalid min_rr for {style}"}), 400
             if mr < 0.1 or mr > 10:
-                return jsonify({"error": f"min_rr for {style} out of range (0.1â€“10)"}), 400
+                return jsonify({"error": f"min_rr for {style} out of range (0.1–10)"}), 400
             cur["min_rr"] = round(mr, 4)
             changed = True
         if changed:
@@ -6719,7 +6719,7 @@ def api_live_confluence_thresholds():
         except (TypeError, ValueError):
             return jsonify({"error": f"Invalid value for {cls}"}), 400
         if val < 0 or val > 10:
-            return jsonify({"error": f"Value for {cls} out of range (0â€“10)"}), 400
+            return jsonify({"error": f"Value for {cls} out of range (0–10)"}), 400
         new_vals[cls] = round(val, 4)
 
     if not new_vals:
@@ -6810,7 +6810,7 @@ def api_test_mode():
         _test_mode = not _test_mode
 
     log.warning(
-        f"[TEST MODE] {'ACTIVATED' if _test_mode else 'DEACTIVATED'} â€” score thresholds {'lowered' if _test_mode else 'restored'}"
+        f"[TEST MODE] {'ACTIVATED' if _test_mode else 'DEACTIVATED'} — score thresholds {'lowered' if _test_mode else 'restored'}"
     )
 
     return jsonify({"testMode": _test_mode})
@@ -6823,7 +6823,63 @@ def api_test_mode_status():
     return jsonify({"testMode": _test_mode})
 
 
-# â”€â”€ Auto-Trade Bot endpoints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+@app.route("/api/feature-toggles", methods=["GET", "POST"])
+def api_feature_toggles():
+    """GET: return current state. POST: toggle one or more features."""
+    _features = {
+        "intermarket": {
+            "config_keys": [
+                "INTERMARKET_CONFIRMATION.enabled",
+                "INTERMARKET_CONFIRMATION.engine_a_enabled",
+                "INTERMARKET_CONFIRMATION.engine_c_enabled",
+            ],
+            "label": "Intermarket Confirmation",
+        },
+        "news_sentiment": {
+            "config_keys": ["NEWS_SENTIMENT_CONFLUENCE_ENABLED"],
+            "label": "News Sentiment Scoring",
+        },
+    }
+
+    def _get_state():
+        ic = CONFIG.get("INTERMARKET_CONFIRMATION") or {}
+        return {
+            "intermarket": bool(ic.get("enabled", False)),
+            "news_sentiment": bool(CONFIG.get("NEWS_SENTIMENT_CONFLUENCE_ENABLED", False)),
+        }
+
+    if request.method == "GET":
+        return jsonify(_get_state())
+
+    data = request.get_json(silent=True) or {}
+    feature = str(data.get("feature") or "").strip().lower()
+    action = str(data.get("action") or "toggle").strip().lower()
+
+    if feature not in _features:
+        return jsonify({"error": f"Unknown feature: {feature}. Valid: {list(_features.keys())}"}), 400
+
+    if feature == "intermarket":
+        ic = CONFIG.get("INTERMARKET_CONFIRMATION")
+        if not isinstance(ic, dict):
+            ic = {}
+            CONFIG["INTERMARKET_CONFIRMATION"] = ic
+        current = bool(ic.get("enabled", False))
+        new_val = not current if action == "toggle" else (action == "enable")
+        ic["enabled"] = new_val
+        ic["engine_a_enabled"] = new_val
+        ic["engine_c_enabled"] = new_val
+        log.warning(f"[FEATURE] Intermarket Confirmation {'ENABLED' if new_val else 'DISABLED'}")
+
+    elif feature == "news_sentiment":
+        current = bool(CONFIG.get("NEWS_SENTIMENT_CONFLUENCE_ENABLED", False))
+        new_val = not current if action == "toggle" else (action == "enable")
+        CONFIG["NEWS_SENTIMENT_CONFLUENCE_ENABLED"] = new_val
+        log.warning(f"[FEATURE] News Sentiment Scoring {'ENABLED' if new_val else 'DISABLED'}")
+
+    return jsonify(_get_state())
+
+
+# ── Auto-Trade Bot endpoints ──────────────────────────────────────────────────
 
 
 def _scalp_ui_signal(raw_signal: dict) -> dict:
@@ -6980,7 +7036,7 @@ def api_scalp_execute():
 
             positions_resp = bybit_get_positions()
             if isinstance(positions_resp, dict) and positions_resp.get("error"):
-                return jsonify({"error": "Positions unavailable â€” cannot verify exposure"}), 503
+                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
             positions = (
                 positions_resp.get("positions", [])
                 if isinstance(positions_resp, dict)
@@ -7006,7 +7062,7 @@ def api_scalp_execute():
 
             positions_resp = mt5_get_positions()
             if isinstance(positions_resp, dict) and positions_resp.get("error"):
-                return jsonify({"error": "Positions unavailable â€” cannot verify exposure"}), 503
+                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
             positions = (
                 positions_resp.get("positions", [])
                 if isinstance(positions_resp, dict)
@@ -7082,7 +7138,7 @@ def api_auto_trade_toggle():
     return jsonify(_auto_trader.get_status())
 
 
-# â”€â”€ AI Learning endpoints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── AI Learning endpoints ─────────────────────────────────────────────────────
 
 
 @app.route("/api/learning/stats")
@@ -7156,7 +7212,7 @@ def api_inject_sentiment():
 
 @app.route("/api/auto-trade/log")
 def api_auto_trade_log():
-    """Last 30 auto-trade attempts â€” both successful and failed â€” for dashboard diagnosis."""
+    """Last 30 auto-trade attempts — both successful and failed — for dashboard diagnosis."""
 
     try:
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
@@ -7233,7 +7289,7 @@ def _xai_chat_completions_retry(client, *, max_attempts: int = 4, base_delay_sec
 
 
 def _chart_blocks_to_openai_user_content(blocks: list) -> list:
-    """Anthropic-style content blocks â†’ OpenAI multimodal user content (xAI Grok vision)."""
+    """Anthropic-style content blocks → OpenAI multimodal user content (xAI Grok vision)."""
     out: list = []
     for block in blocks or []:
         btype = block.get("type")
@@ -7964,9 +8020,9 @@ def api_vision_train_v2():
 def api_candle_cache():
     """View candle builder status: stats or per-pair candles.
 
-    GET /api/candle-cache              â†’ summary stats
+    GET /api/candle-cache              → summary stats
 
-    GET /api/candle-cache?pair=EUR/USD&tf=H1&limit=20  â†’ candles for pair"""
+    GET /api/candle-cache?pair=EUR/USD&tf=H1&limit=20  → candles for pair"""
 
     pair = request.args.get("pair")
 
@@ -8443,31 +8499,31 @@ def _check_api_keys() -> None:
 
     if not os.environ.get("EODHD_KEY"):
         missing.append(
-            "EODHD_KEY Ã¢â‚¬â€ real-time WebSocket prices, indicators, screener, and news all disabled"
+            "EODHD_KEY — real-time WebSocket prices, indicators, screener, and news all disabled"
         )
 
     _ak = os.environ.get("XAI_API_KEY", CONFIG.get("XAI_API_KEY", ""))
 
     if not _ak or _ak == "YOUR_XAI_API_KEY":
-        missing.append("XAI_API_KEY Ã¢â‚¬â€ AI trade grading disabled")
+        missing.append("XAI_API_KEY — AI trade grading disabled")
 
     if not os.environ.get("CRYPTOPANIC_KEY"):
-        missing.append("CRYPTOPANIC_KEY (optional) Ã¢â‚¬â€ crypto news sentiment reduced")
+        missing.append("CRYPTOPANIC_KEY (optional) — crypto news sentiment reduced")
 
     if not os.environ.get("FINNHUB_KEY"):
-        missing.append("FINNHUB_KEY (optional) Ã¢â‚¬â€ Polygon news fallback disabled")
+        missing.append("FINNHUB_KEY (optional) — Polygon news fallback disabled")
 
     if missing:
-        log.warning("[KEYS] Running in degraded mode Ã¢â‚¬â€ set missing keys in .env:")
+        log.warning("[KEYS] Running in degraded mode — set missing keys in .env:")
 
         for m in missing:
-            log.warning(f"  â€¢ {m}")
+            log.warning(f"  • {m}")
 
     else:
         log.info("[KEYS] All API keys configured")
 
 
-# Ã¢"â‚¬Ã¢"â‚¬ Injected runtime definitions (scan helpers, analyze_pair, event risk) Ã¢"â‚¬Ã¢"â‚¬
+# ── Injected runtime definitions (scan helpers, analyze_pair, event risk) ──
 
 
 def fetch_eodhd_indicators(pair):
@@ -8584,7 +8640,7 @@ def analyze_pair(
         if _h4_fib and _h4_close:
             h4i["snap"]["fib_proximity"] = calc_fib_proximity(float(_h4_close), _h4_fib)
     except Exception:
-        pass  # gracefully degrade â€” structure factor stays None
+        pass  # gracefully degrade — structure factor stays None
 
     # Inject live microstructure signals if WS feed has data for this symbol
     _msig = _micro_cache.get(pair.get("symbol", ""), {})
@@ -8681,7 +8737,7 @@ def analyze_pair(
             h4, 5, 3, 3
         )  # TA-Lib STOCH standard: fastK=5, slowK=3, slowD=3
 
-    # F11: EMA200 slope computed once here (UI display only â€” not fed to calc_confluence)
+    # F11: EMA200 slope computed once here (UI display only — not fed to calc_confluence)
 
     _e200 = calc_ema([c["close"] for c in d1], 200)
 
@@ -8704,7 +8760,7 @@ def analyze_pair(
     if pair.get("type") == "crypto":
         _bn_sym = pair.get("symbol", "").replace("/", "")  # e.g. BTCUSDT
 
-        # Bybit funding rate â€” execution is on Bybit; fall back to Binance if Bybit fails
+        # Bybit funding rate — execution is on Bybit; fall back to Binance if Bybit fails
         _fr_resp = _fetch_bybit_funding_rate(_bn_sym)
         if isinstance(_fr_resp, dict) and not _fr_resp.get("error"):
             _funding_rate = _fr_resp.get("rate")
@@ -8787,7 +8843,7 @@ def analyze_pair(
                 "regimeName": _fx_regime.get("label", "RANGING"),
                 "signal_type": _forex_result.signal_type,
                 "score": _forex_result.final_score,
-                "trendState": _forex_result.signal_type,  # forex: signal_type not regime label â€” see auto_trader regime filter note
+                "trendState": _forex_result.signal_type,  # forex: signal_type not regime label — see auto_trader regime filter note
                 # Keys required by signal dict construction below
                 "votes": fx_votes,
                 "warnings": [],
@@ -8797,7 +8853,7 @@ def analyze_pair(
             }
         except Exception as _fx_err:
             log.error(
-                f"[FOREX] {pair.get('display')} forex_scoring FAILED: {_fx_err} â€” skipping pair to avoid factor-engine fallback"
+                f"[FOREX] {pair.get('display')} forex_scoring FAILED: {_fx_err} — skipping pair to avoid factor-engine fallback"
             )
             return None
 
@@ -8882,7 +8938,7 @@ def analyze_pair(
 
             if _d1_dir and _d1_dir != res["direction"]:
                 res["warnings"].append(
-                    f"SCALP COUNTER-TREND: D1 EMA stack is {_d1_dir} Ã¢â‚¬â€ trading against higher-TF trend, reduce size"
+                    f"SCALP COUNTER-TREND: D1 EMA stack is {_d1_dir} — trading against higher-TF trend, reduce size"
                 )
 
     direction = res["direction"]
@@ -9028,15 +9084,15 @@ def analyze_pair(
                 if structure_data.get("recommended_stop_loss"):
                     _struct_sl = float(structure_data["recommended_stop_loss"])
                     _math_sl = float(lvl["sl"])
-                    # LONG: SL below price â€” max() picks closer (higher) = tighter
-                    # SHORT: SL above price â€” min() picks closer (lower) = tighter
+                    # LONG: SL below price — max() picks closer (higher) = tighter
+                    # SHORT: SL above price — min() picks closer (lower) = tighter
                     lvl["sl"] = (
                         max(_math_sl, _struct_sl)
                         if direction == "LONG"
                         else min(_math_sl, _struct_sl)
                     )
 
-                    # Hard SL distance cap â€” prevents runaway structural overrides
+                    # Hard SL distance cap — prevents runaway structural overrides
                     _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(pair.get("type", ""), 0.05)
                     _sl_dist_pct = abs(float(price) - float(lvl["sl"])) / float(price)
                     if _sl_dist_pct > _max_sl_pct:
@@ -9153,7 +9209,7 @@ def analyze_pair(
         "spread": res.get("spread", 0),
         "warnings": warn_list,
         # Session badge = current FX liquidity window (UTC now). Do not use h4[-1]
-        # time â€” vendor bar timestamps can lag or parse oddly vs wall clock at scan time.
+        # time — vendor bar timestamps can lag or parse oddly vs wall clock at scan time.
         "session": get_session(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "aiAnalysis": None,
@@ -9231,7 +9287,7 @@ def analyze_pair(
 # _build_event_risk imported from scoring.py
 
 
-# _classify_signal imported from scoring.py â€” see that module for implementation
+# _classify_signal imported from scoring.py — see that module for implementation
 
 
 def _build_style_levels(price: float, atr: float, direction: str, pair_type: str) -> dict:
@@ -9257,7 +9313,7 @@ def _build_style_levels(price: float, atr: float, direction: str, pair_type: str
     return result
 
 
-# Ã¢"â‚¬Ã¢"â‚¬ Task 1: Trade Outcome Monitor Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬
+# ── Task 1: Trade Outcome Monitor ──────────────────────────────────────────
 
 
 def _resolve_exit_reason(exit_price: float, sl: float | None, tp: float | None) -> str:
@@ -9300,7 +9356,7 @@ def _update_trade_outcome(
 
     # asset classes including forex lots and commodity contracts).
 
-    # Fallback to price-distance Ã— volume only for crypto/stocks where volume IS
+    # Fallback to price-distance × volume only for crypto/stocks where volume IS
 
     # in base units and risk_amount may not be stored on legacy rows.
 
@@ -9376,7 +9432,7 @@ def _update_trade_outcome(
             except Exception as _le:
                 log.debug(f"[LEARN] extraction failed for {ticket}: {_le}")
 
-        # Feed realized P&L to daily loss tracker (per-account: cryptoâ†’Bybit, restâ†’MT5)
+        # Feed realized P&L to daily loss tracker (per-account: crypto→Bybit, rest→MT5)
 
         if pnl is not None:
             try:
@@ -9459,7 +9515,7 @@ def _outcome_monitor_loop() -> None:
 
             _check_ccxt_outcomes()
 
-            # Score decay check every 5 minutes (not every 60s â€” too expensive)
+            # Score decay check every 5 minutes (not every 60s — too expensive)
 
             _score_decay_counter += 1
 
@@ -9475,7 +9531,7 @@ def _outcome_monitor_loop() -> None:
 def _mt5_deals_for_audit_ticket(_mt5_lib, ticket_int: int):
     """All history deals for a closed row. Prefer position= (stable across partials/closes).
 
-    Stored ticket may be position id (preferred) or legacy opening *order* id â€” both are handled.
+    Stored ticket may be position id (preferred) or legacy opening *order* id — both are handled.
     """
 
     deals = _mt5_lib.history_deals_get(position=ticket_int)
@@ -9563,7 +9619,7 @@ def _check_mt5_outcomes() -> None:
             if ticket_str in open_tickets:
                 continue  # still open
 
-            # Position closed â€” look up deal history
+            # Position closed — look up deal history
 
             try:
                 ticket_int = int(ticket_str)
@@ -9629,7 +9685,7 @@ def _check_ccxt_outcomes() -> None:
             else (_pos_resp or [])
         )
 
-        # â”€â”€ Breakeven trailing stop at 1R â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Breakeven trailing stop at 1R ──────────────────────────────────
 
         for pos in positions:
             try:
@@ -9697,7 +9753,7 @@ def _check_ccxt_outcomes() -> None:
                             _breakeven_applied.add(ticket)
 
                             log.info(
-                                f"[MONITOR] {ccxt_sym}: reached {current_r:.1f}R â€” SL moved to breakeven @ {entry_px}"
+                                f"[MONITOR] {ccxt_sym}: reached {current_r:.1f}R — SL moved to breakeven @ {entry_px}"
                             )
 
                     break  # only match one audit row per position
@@ -9817,7 +9873,7 @@ def _start_outcome_monitor() -> None:
     log.info("[MONITOR] Trade outcome monitor started (60s interval)")
 
 
-# â”€â”€ Score Decay Monitor â€” recalculate confluence for open positions â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Score Decay Monitor — recalculate confluence for open positions ────────
 
 _score_decay_results: dict = {}  # pair -> {"score": float, "entryScore": float, "ts": str}
 _decay_ai_cache: dict = {}  # pair -> {"decay_at_call": float, "ts": str, "result": dict}
@@ -9849,7 +9905,7 @@ def _get_decay_ai_verdict(
     if not api_key:
         return {}
 
-    # Cache check â€” skip re-call if recent and decay hasn't worsened significantly
+    # Cache check — skip re-call if recent and decay hasn't worsened significantly
     cached = _decay_ai_cache.get(pair_name)
     if cached:
         try:
@@ -9866,7 +9922,7 @@ def _get_decay_ai_verdict(
     vol_ratio = signal_context.get("volRatio", "?")
     rr = signal_context.get("rr1", "?")
     flip_note = (
-        " WARNING: Current signal direction has FLIPPED vs entry direction â€” original thesis may be invalidated."
+        " WARNING: Current signal direction has FLIPPED vs entry direction — original thesis may be invalidated."
         if direction_flip
         else ""
     )
@@ -9874,7 +9930,7 @@ def _get_decay_ai_verdict(
     prompt = (
         f"You are a risk management advisor reviewing an OPEN TRADE showing score decay.\n\n"
         f"Trade: {pair_name} | Entry Direction: {direction} | Market Regime: {trend}\n"
-        f"Entry Score: {entry_score:.2f} â†’ Current Score: {cur_score:.2f} | Decay: Î”{decay:.2f}\n"
+        f"Entry Score: {entry_score:.2f} → Current Score: {cur_score:.2f} | Decay: Δ{decay:.2f}\n"
         f"Vol Ratio: {vol_ratio} | R:R at entry: 1:{rr}\n"
         f"{flip_note}\n\n"
         f"Assess whether the trader should EXIT now, continue HOLDING, or place on WATCH (monitor closely).\n"
@@ -10039,12 +10095,12 @@ def _check_score_decay() -> None:
                     # Engine B uses percentage-of-max (e.g. 85% -> 40%)
                     decay = entry_pct - cur_pct
                     decay_pct = (decay / entry_pct * 100) if entry_pct > 0 else 0
-                    score_note = f"pct {entry_pct:.0f}% â†’ {cur_pct:.0f}%"
+                    score_note = f"pct {entry_pct:.0f}% → {cur_pct:.0f}%"
                 else:
                     # Engine A / Legacy uses raw score scale (e.g. 2.15 -> 0.80)
                     decay = entry_score - cur_score
                     decay_pct = (decay / entry_score * 100) if entry_score > 0 else 0
-                    score_note = f"score {entry_score:.2f} â†’ {cur_score:.2f}"
+                    score_note = f"score {entry_score:.2f} → {cur_score:.2f}"
 
                 direction_flip = bool(
                     row["direction"] and result.get("direction")
@@ -10069,7 +10125,7 @@ def _check_score_decay() -> None:
                 # Warn at 40%+ drop from entry score (works for both forex 0-1 and factor 0-3 scales)
                 if decay_pct >= 40 or direction_flip:
                     log.warning(
-                        f"[DECAY] {pair_name} ({engine}): {score_note} ({decay_pct:.0f}% drop) â€” consider exit"
+                        f"[DECAY] {pair_name} ({engine}): {score_note} ({decay_pct:.0f}% drop) — consider exit"
                     )
                     try:
                         from telegram_notify import notify_score_decay
@@ -10091,7 +10147,7 @@ def _check_score_decay() -> None:
                         f"[DECAY] {pair_name} ({engine}): {score_note} ({decay_pct:.0f}% drop)"
                     )
 
-                # AI assessment â€” only for meaningful decay, runs in background to avoid blocking
+                # AI assessment — only for meaningful decay, runs in background to avoid blocking
                 if decay_pct >= 25:
                     def _run_ai_verdict(_pn=pair_name, _dir=row["direction"] or "",
                                         _es=entry_score, _cs=cur_score, _d=decay,
@@ -10139,7 +10195,7 @@ def api_score_decay():
     return jsonify(_score_decay_results)
 
 
-# Ã¢"â‚¬Ã¢"â‚¬ Task 2: Performance Dashboard Endpoint Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬
+# ── Task 2: Performance Dashboard Endpoint ─────────────────────────────────────────
 
 
 @app.route("/api/lottery/import", methods=["POST"])
@@ -10246,7 +10302,7 @@ def _lottery_ai_prompt_payload(game: str, start_date=None, end_date=None, window
         include_bonus=True,
     )
     if not board.get("total_draws"):
-        raise ValueError("No draw history found â€” please import draws first")
+        raise ValueError("No draw history found — please import draws first")
 
     rolling = compute_rolling_frequency(game_key, window=window, start_date=start_date, end_date=end_date)
     pair_lift = compute_pair_lift(game_key, start_date=start_date, end_date=end_date, limit=50)
@@ -11310,7 +11366,7 @@ def api_performance():
 
         avg_holding = round(sum(hp_vals) / len(hp_vals), 1) if hp_vals else None
 
-        # Last 20 completed trades â€” parsed close time + id (string sort breaks on ISO variants)
+        # Last 20 completed trades — parsed close time + id (string sort breaks on ISO variants)
 
         _epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
@@ -11341,7 +11397,7 @@ def api_performance():
 
             equity_curve.append(round(cum, 2))
 
-        # Execution quality â€” adverse slippage magnitude at entry (Bybit/MT5 when captured)
+        # Execution quality — adverse slippage magnitude at entry (Bybit/MT5 when captured)
         slip_vals = [
             abs(float(t["slippage_bps"]))
             for t in trades
@@ -11447,7 +11503,7 @@ def api_performance():
         return jsonify({"error": str(e)}), 500
 
 
-# Microstructure live cache â€” populated by WS feed callbacks, keyed by symbol (e.g. "BTCUSDT")
+# Microstructure live cache — populated by WS feed callbacks, keyed by symbol (e.g. "BTCUSDT")
 _micro_cache: dict = {}
 _ws_clients: list = []  # WS client instances for graceful shutdown
 
@@ -11774,7 +11830,7 @@ if __name__ == "__main__":
 
     ensure_runtime_services_started()
 
-    # Startup position reconciliation â€” check for open positions on restart
+    # Startup position reconciliation — check for open positions on restart
 
     def _startup_reconcile():
         """On startup, check MT5/Bybit for open positions and log them."""
@@ -11885,13 +11941,13 @@ if __name__ == "__main__":
     except Exception as e:
         log.warning(f"[CARRY] Startup seed failed: {e}")
 
-    # Graceful shutdown handler â€” clean up connections on SIGINT/SIGTERM
+    # Graceful shutdown handler — clean up connections on SIGINT/SIGTERM
 
     def _graceful_shutdown(signum, frame):
 
         sig_name = "SIGINT" if signum == _signal.SIGINT else "SIGTERM"
 
-        log.warning(f"[SHUTDOWN] {sig_name} received â€” shutting down gracefully...")
+        log.warning(f"[SHUTDOWN] {sig_name} received — shutting down gracefully...")
 
         try:
             from bybit_executor import bybit_disconnect
@@ -11941,7 +11997,7 @@ if __name__ == "__main__":
         log.info("[AUTO] Auto-trader ENABLED via config")
 
     else:
-        # Start the scheduler thread in standby â€” it does nothing until enabled
+        # Start the scheduler thread in standby — it does nothing until enabled
         _auto_trader._start_thread()
 
         log.info("[AUTO] Auto-trader standby (toggle via UI)")
@@ -11950,7 +12006,7 @@ if __name__ == "__main__":
         "ATHENA_HOST", "127.0.0.1"
     )  # default localhost; set to 0.0.0.0 in .env for LAN
 
-    # Backup databases at startup â€” protects against data loss during updates
+    # Backup databases at startup — protects against data loss during updates
     try:
         from backup_db import backup_now
 
@@ -11966,10 +12022,10 @@ if __name__ == "__main__":
     except Exception as e:
         log.warning(f"[TELEGRAM] Bot startup failed: {e}")
 
-    # Clean Ctrl-C shutdown on Windows â€” daemon threads stop automatically
+    # Clean Ctrl-C shutdown on Windows — daemon threads stop automatically
     import signal as _signal
     def _shutdown_handler(sig, frame):
-        log.info("[SHUTDOWN] Ctrl-C received â€” stopping Sentinel Pro...")
+        log.info("[SHUTDOWN] Ctrl-C received — stopping Sentinel Pro...")
         import os as _os
         _os._exit(0)
     _signal.signal(_signal.SIGINT, _shutdown_handler)
