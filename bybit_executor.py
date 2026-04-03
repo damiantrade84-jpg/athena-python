@@ -9,6 +9,7 @@ All orders must arrive as a pre-validated RiskApproval from risk_engine.py.
 import os
 import logging
 import time
+import threading
 from datetime import datetime, timezone
 
 import telegram_notify
@@ -16,6 +17,29 @@ import telegram_notify
 log = logging.getLogger("sentinel")
 
 _exchange = None
+
+# ── Periodic clock re-sync ────────────────────────────────────────────────────
+# Bybit retCode 10002 fires when local clock drifts beyond recv_window (10 000 ms).
+# adjustForTimeDifference corrects at init and on-error, but a slow-running Windows
+# clock can accumulate 12–18 s of drift during a session. Re-sync every 3 minutes
+# keeps the measured offset fresh without hammering the Bybit time endpoint.
+_RESYNC_INTERVAL_SEC = 180  # 3 minutes
+
+def _start_clock_sync_thread() -> None:
+    """Start a daemon thread that periodically calls load_time_difference()."""
+    def _sync_loop():
+        while True:
+            time.sleep(_RESYNC_INTERVAL_SEC)
+            ex = _exchange
+            if ex is not None:
+                try:
+                    ex.load_time_difference()
+                    log.debug("[BYBIT] Periodic clock re-sync OK")
+                except Exception as e:
+                    log.debug(f"[BYBIT] Periodic clock re-sync skipped: {e}")
+
+    t = threading.Thread(target=_sync_loop, name="bybit-clock-sync", daemon=True)
+    t.start()
 
 # Symbol mapping: Athena display/internal → ccxt linear futures format
 _SYMBOL_MAP = {
@@ -186,6 +210,7 @@ def _get_exchange():
 
         env_label = "DEMO" if use_demo else ("TESTNET" if use_testnet else "LIVE")
         log.info(f"[BYBIT] Bybit Linear Futures {env_label} connected")
+        _start_clock_sync_thread()
         return _exchange
 
     except Exception as e:

@@ -2394,7 +2394,7 @@ function refreshAllLivePrices() {
   fetch('/api/prices').then(function(r){ return r.json(); }).then(function(d) {
     if (d && d.prices) applyLivePriceUpdates(d.prices);
   }).catch(function(){});
-  setTimeout(pollPrices, 2500);
+  setTimeout(pollPrices, 5000);
 })();
 
 // -- Phase E: Yield Curve Widget --
@@ -7930,7 +7930,7 @@ window._bybitAccount = null;
     }
     if (typeof updateConnDots === 'function') updateConnDots();
   }).catch(function(){});
-  setTimeout(pollBybit, 5000);
+  setTimeout(pollBybit, 15000);
 })();
 
 // Sync test mode state on page load
@@ -7976,7 +7976,7 @@ fetch('/api/test-mode').then(function(r){return r.json();}).then(function(d){
     }
     if (typeof updateConnDots === 'function') updateConnDots();
   }).catch(function(){});
-  setTimeout(pollMT5, 5000);
+  setTimeout(pollMT5, 15000);
 })();
 
 // -- Wake-up recovery: reload page if hidden > 60s --
