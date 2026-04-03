@@ -5348,7 +5348,7 @@ def api_scan_naked():
                 _valid_atrs = [a for a in atr_series[-50:] if a and a > 0]
                 _atr_avg = sum(_valid_atrs) / len(_valid_atrs) if _valid_atrs else 0
                 if _atr_avg > 0 and atr < _atr_avg * 0.6:
-                    log.warning(f"[NAKED-DBG] {pair['display']}: ATR={atr:.6f} < 60% avg={_atr_avg:.6f} — VOL GATE")
+                    log.debug(f"[NAKED-DBG] {pair['display']}: ATR={atr:.6f} < 60% avg={_atr_avg:.6f} — VOL GATE")
                     continue
 
             current_price = float(entry_candles[-1]["close"])
@@ -5400,7 +5400,7 @@ def api_scan_naked():
                                 _fail_gates.append("trigger")
                         if not conf_data.get("rr_points", 0):
                             _fail_gates.append(f"rr={conf_data.get('rr', 0):.1f}")
-                        log.warning(
+                        log.debug(
                             f"[NAKED-DBG] {pair['display']} {direction}: "
                             f"score={conf_data['score']:.1f} vs min={_min_score_scaled:.1f}, "
                             f"passed={conf_data.get('passed')}, regime={regime_label}, "
@@ -5440,7 +5440,7 @@ def api_scan_naked():
                         tp_dist = abs(tp - current_price)
                         rr = (tp_dist / sl_dist) if sl_dist > 0 else 0.0
                     if rr < style_profile["min_rr"]:
-                        log.warning(
+                        log.debug(
                             f"[NAKED-DBG] {pair['display']} {direction}: "
                             f"rr={rr:.2f} < min_rr={style_profile['min_rr']} — REJECTED"
                         )
@@ -5511,7 +5511,7 @@ def api_scan_naked():
                     if _existing is None or signal["confluenceScore"] > _existing["confluenceScore"]:
                         _best_per_pair[_pair_key] = signal
                 else:
-                    log.warning(f"[NAKED-DBG] {pair['display']} {direction}: verdict={verdict} seq={seq} — SKIPPED")
+                    log.debug(f"[NAKED-DBG] {pair['display']} {direction}: verdict={verdict} seq={seq} — SKIPPED")
         except Exception as e:
             log.warning(f"[NAKED-SCAN] Error on {pair['display']}: {e}", exc_info=True)
             continue
