@@ -55,6 +55,24 @@ from research_validation import (
 )
 from stability_monitor import record_backtest_summary
 
+
+def _bt_forex_d1_bar_time(d1_ts: str) -> str:
+    """Replace D1 bar midnight UTC timestamp with 13:00 UTC for forex session check.
+
+    D1 bars carry midnight timestamps (00:00 UTC) which always fail the session
+    filter (London: 07-17, NY: 12-21). 13:00 UTC is peak London/NY overlap and
+    represents the most liquid part of the trading day -- appropriate for a D1
+    signal that spans the full day.
+    """
+    try:
+        from datetime import datetime, timezone
+
+        dt = datetime.fromisoformat(str(d1_ts).replace("Z", "+00:00"))
+        return dt.replace(hour=13, minute=0, second=0, microsecond=0).isoformat()
+    except Exception:
+        return d1_ts  # fallback: use original if parsing fails
+
+
 log = logging.getLogger("sentinel")
 
 
@@ -681,7 +699,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     if effective_style == "swing":
         # --- SWING D1 LOOP â€" UNCHANGED ---
 
-        MIN_BARS = 220
+        MIN_BARS = max(50, CONFIG.get("D1_CANDLES", 1001))
         COOLDOWN = 3
         MAX_OPEN = 3  # R5: max concurrent positions
 
@@ -794,9 +812,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         h1_snap=h1i["snap"],
                         h1_candles=h1_window,
                         pair=_pair_ctx,
-                        bar_time=d1_raw[i][
-                            "time"
-                        ],  # use actual current D1 bar datetime
+                        bar_time=_bt_forex_d1_bar_time(d1_raw[i]["time"]),
                         backtest_mode=True,  # respect session gate (parity)
                         h4_candles=h4_window,
                         score_group=_pair_score_group,
@@ -1143,7 +1159,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             i = exit_bar + 1 if outcome != "OPEN" else i + 1
 
     elif effective_style == "intraday":  # walk H4 bars
-        MIN_H4 = 250
+        MIN_H4 = max(50, CONFIG.get("H4_CANDLES", 1001))
         COOLDOWN = 2
         MAX_HOLD = 24
         MAX_OPEN = 3
@@ -1199,7 +1215,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             # D1 context: real D1 data up to this point for Weinstein/regime
 
             d1_idx = bisect.bisect_left(d1_ts, entry_ts)
-            d1_ctx = d1_raw[max(0, d1_idx - 220) : d1_idx]
+            d1_ctx = d1_raw[max(0, d1_idx - max(50, CONFIG.get("D1_CANDLES", 1001))) : d1_idx]
 
             if len(h1_window) < 50 or len(d1_ctx) < 50:
                 i += 1
@@ -1592,7 +1608,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             i = exit_bar + 1 if outcome != "OPEN" else i + 1
 
     elif effective_style == "scalp":  # H1 bar walk-forward
-        MIN_H1 = 250
+        MIN_H1 = max(50, CONFIG.get("H1_CANDLES", 1001))
         COOLDOWN = 1
         MAX_HOLD = 12
         MAX_OPEN = 3
@@ -1646,12 +1662,12 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             # H4 context: all H4 bars before this H1 bar
 
             h4_idx = bisect.bisect_left(h4_ts_sc, entry_ts)
-            h4_ctx = h4_raw[max(0, h4_idx - 250) : h4_idx]
+            h4_ctx = h4_raw[max(0, h4_idx - max(50, CONFIG.get("H4_CANDLES", 1001))) : h4_idx]
 
             # D1 context: real D1 data up to this point for Weinstein/regime
 
             d1_idx = bisect.bisect_left(d1_ts_sc, entry_ts)
-            d1_ctx = d1_raw[max(0, d1_idx - 220) : d1_idx]
+            d1_ctx = d1_raw[max(0, d1_idx - max(50, CONFIG.get("D1_CANDLES", 1001))) : d1_idx]
 
             if len(h4_ctx) < 50 or len(d1_ctx) < 50:
                 i += 1

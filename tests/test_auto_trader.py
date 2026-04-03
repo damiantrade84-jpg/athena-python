@@ -181,6 +181,72 @@ def test_can_execute_prefers_explicit_regime_name_over_trend_state_for_filtering
     assert "TREND_PULLBACK/RANGING blocked" in reason
 
 
+def test_can_execute_rechecks_conviction_after_debate_adjustment(monkeypatch):
+    trader = AutoTrader()
+    cfg = _base_cfg()
+    cfg["SIGNAL_DEBATE_ENABLED"] = True
+
+    monkeypatch.setattr(
+        "signal_debate.run_signal_debate",
+        lambda signal: {
+            "grade": "WEAK_GO",
+            "allowed": True,
+            "reasoning": "trim conviction",
+            "score_adjustment": -0.20,
+        },
+    )
+
+    signal = {
+        "pair": "BTC/USDT",
+        "type": "crypto",
+        "direction": "LONG",
+        "trendState": "TRENDING",
+        "regimeName": "TRENDING",
+        "combinedConviction": 0.57,
+        "confluenceScore": 0.95,
+        "maxScore": 1.0,
+    }
+    ok, reason = trader._can_execute(signal, cfg)
+
+    assert not ok
+    assert reason == "debate-adjusted conviction 0.450 < min 0.550"
+    assert signal["confluenceScore"] == 0.75
+    assert signal["combinedConviction"] == 0.45
+
+
+def test_can_execute_rejects_when_debate_zeroes_engine_a_score(monkeypatch):
+    trader = AutoTrader()
+    cfg = _base_cfg()
+    cfg["SIGNAL_DEBATE_ENABLED"] = True
+
+    monkeypatch.setattr(
+        "signal_debate.run_signal_debate",
+        lambda signal: {
+            "grade": "WEAK_GO",
+            "allowed": True,
+            "reasoning": "fully negate engine a",
+            "score_adjustment": -0.95,
+        },
+    )
+
+    signal = {
+        "pair": "BTC/USDT",
+        "type": "crypto",
+        "direction": "LONG",
+        "trendState": "TRENDING",
+        "regimeName": "TRENDING",
+        "combinedConviction": 0.57,
+        "confluenceScore": 0.95,
+        "maxScore": 1.0,
+    }
+    ok, reason = trader._can_execute(signal, cfg)
+
+    assert not ok
+    assert reason == "Debate reduced Engine A score to 0.0"
+    assert signal["confluenceScore"] == 0
+    assert signal["combinedConviction"] == 0.0
+
+
 def test_run_auto_scan_skips_already_open_pair(monkeypatch):
     trader = AutoTrader()
     cfg = _base_cfg()

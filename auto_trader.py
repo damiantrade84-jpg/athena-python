@@ -107,6 +107,52 @@ def _signal_expected_prob(signal: dict) -> float | None:
     return None
 
 
+def _signal_factor_scores(signal: dict) -> dict:
+    raw = signal.get("factorScores")
+    if isinstance(raw, dict):
+        return raw
+    raw = signal.get("factor_scores")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _signal_factor_weights(signal: dict) -> dict:
+    raw = signal.get("factorWeights")
+    if isinstance(raw, dict):
+        return raw
+    raw = signal.get("factor_weights")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _current_combined_conviction(signal: dict) -> float:
+    """Return the execution conviction implied by the signal's current scores."""
+    try:
+        score = float(signal.get("confluenceScore", 0) or 0)
+        max_score = float(signal.get("maxScore", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+    if max_score > 0:
+        a_norm = max(0.0, min(score / max_score, 1.0))
+    elif 0.0 <= score <= 1.0:
+        a_norm = score
+    else:
+        a_norm = 0.0
+
+    if signal.get("enginesAligned", False):
+        try:
+            b_score = float(signal.get("engine_b_score", 0) or 0)
+            b_max = float(signal.get("engine_b_max", 0) or 0)
+        except (TypeError, ValueError):
+            b_score = 0.0
+            b_max = 0.0
+        b_norm = max(0.0, min(b_score / b_max, 1.0)) if b_max > 0 else 0.0
+        return round((a_norm * 0.6) + (b_norm * 0.4), 4)
+
+    if signal.get("combinedConviction") is None:
+        return round(a_norm, 4)
+    return round(a_norm * 0.6, 4)
+
+
 def _normalize_pair_key(value: str | None) -> str:
     """Normalize pair or symbol identifiers for duplicate-position matching."""
     if value is None:
@@ -700,6 +746,14 @@ class AutoTrader:
                     signal["confluenceScore"] = max(
                         0, signal.get("confluenceScore", 0) + _adj
                     )
+                    signal["combinedConviction"] = _current_combined_conviction(signal)
+                    if float(signal.get("confluenceScore", 0) or 0) <= 0:
+                        return False, "Debate reduced Engine A score to 0.0"
+                    if signal["combinedConviction"] < auto_min_conviction:
+                        return (
+                            False,
+                            f"debate-adjusted conviction {signal['combinedConviction']:.3f} < min {auto_min_conviction:.3f}",
+                        )
             except ImportError:
                 log.debug("[AUTO] signal_debate not available — skipping")
             except Exception as _debate_err:
@@ -947,8 +1001,8 @@ class AutoTrader:
             _audit_engine = _signal_engine(signal)
             _eng_b_data = signal.get("engine_b") or signal.get("naked_data") or {}
             _factors = {
-                "scores": signal.get("factor_scores"),
-                "weights": signal.get("factor_weights"),
+                "scores": _signal_factor_scores(signal),
+                "weights": _signal_factor_weights(signal),
                 "disabled": signal.get("disabledFactors"),
                 "regime": signal.get("regimeName"),
             }
