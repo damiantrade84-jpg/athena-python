@@ -10402,18 +10402,7 @@ def _check_score_decay() -> None:
                         f"[DECAY] {pair_name} ({engine}): {score_note} ({decay_pct:.0f}% drop) — consider exit"
                     )
                     try:
-                        from telegram_notify import notify_score_decay
-                        notify_score_decay(
-                            pair=pair_name,
-                            direction=row["direction"] or "",
-                            entry_score=entry_score,
-                            cur_score=cur_score,
-                            decay=decay,
-                            direction_flip=direction_flip,
-                            engine=engine,
-                            entry_pct=entry_pct,
-                            cur_pct=cur_pct
-                        )
+                        pass  # decay telegram notifications disabled
                     except Exception:
                         pass
                 elif decay_pct >= 25:
@@ -10437,20 +10426,7 @@ def _check_score_decay() -> None:
                             })
                             if _dpct >= 40:
                                 try:
-                                    from telegram_notify import notify_score_decay
-                                    notify_score_decay(
-                                        pair=_pn,
-                                        direction=_dir,
-                                        entry_score=_es,
-                                        cur_score=_cs,
-                                        decay=_d,
-                                        direction_flip=_flip,
-                                        engine=_engine,
-                                        entry_pct=_epct,
-                                        cur_pct=_cpct,
-                                        ai_verdict=ai_v.get("verdict"),
-                                        ai_urgency=ai_v.get("urgency"),
-                                    )
+                                    pass  # decay telegram notifications disabled
                                 except Exception:
                                     pass
                     threading.Thread(target=_run_ai_verdict, daemon=True).start()
