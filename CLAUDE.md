@@ -43,10 +43,10 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 
 **AI Review:**
 - **Marcus Reid (Grok/xAI)** — AI analysis of Engine A + B signals (`EXPERT_PROMPT`), JSON output with grade/verdict/edgeProbability/style_ratings
-- **Claude Vision** — chart screenshot analysis (`/api/chart-analysis`) only: Anthropic + **`VISION_MODEL`** (default **`claude-opus-4-6`** in `config.yaml`). Single/dual/triple TF; structured footer parsed by `_extract_vision_structured()`. **Not Grok** — if `VISION_MODEL` accidentally contains `grok`, the route logs a warning and forces **`claude-opus-4-6`**.
+- **Chart Vision (xAI multimodal)** — chart screenshot analysis (`/api/chart-analysis`) via OpenAI-compatible xAI client (`base_url=https://api.x.ai/v1`) and `VISION_MODEL`. Single/dual/triple TF; structured footer parsed by `_extract_vision_structured()`.
 - **Lottery AI** — `POST /api/lottery/ai-analysis`: Grok (xAI) via OpenAI-compatible client; see **Lottery Lab** below.
 
-**API Keys (secrets via env):** `EODHD_KEY`, `ANTHROPIC_API_KEY` (Claude Vision, news sentiment), `XAI_API_KEY` (Marcus Reid, signal debate, Engine B AI, Lottery AI). **Lottery AI** also requires the **`openai`** PyPI package (`base_url=https://api.x.ai/v1`).
+**API Keys (secrets via env):** `EODHD_KEY`, `XAI_API_KEY` (Marcus Reid, chart vision, signal debate, Engine B AI, Lottery AI), `ANTHROPIC_API_KEY` (news sentiment helpers where configured). xAI-backed routes require the **`openai`** PyPI package (`base_url=https://api.x.ai/v1`).
 
 ---
 
@@ -55,6 +55,10 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 | File | Purpose |
 |------|---------|
 | `athena.py` | Flask app, all API routes, `analyze_pair`, pair lists, `EXPERT_PROMPT`, `_build_signal_message`, `_build_event_risk`, vision prompts | ~8500 lines |
+| `vision_prompts.py` | Modular chart-vision prompt builders (`build_system_prompt`, `build_single_prompt`, `build_dual_prompt`, `build_triple_prompt`) with A-E right-edge candle framework |
+| `vision_data.py` | Vision dataset schema/helpers (`vision_samples`, `vision_labels`, `vision_predictions`), artifact persistence, metrics aggregation |
+| `vision_hybrid.py` | Advisory hybrid chart-vision v2 training/inference (fusion of image + structured features) |
+| `chart_renderer.py` | Server-side chart renderer with Engine B overlays (FVG/OB/BOS/CHoCH/SR), pattern labels, configurable `bars_window` + `dpi` |
 | `candles_cache.py` | TTL candle cache, `fetch_candles` routing (H1→live first; crypto H4/D1→Binance REST), forex WS bar merge |
 | `candle_feeds.py` | Live prices, EODHD/Binance WS, `CandleBuilder` (forex H1 via `on_tick`; crypto H1 via `on_kline`), `fetch_candles_live` |
 | `athena_runtime.py` | `set_runtime`/`rt()` bindings; `executed_signals` dedupe set |
@@ -133,11 +137,18 @@ Builds the text input sent to Marcus Reid. Sections emitted:
 - `factorScores`, `factorWeights`, `factorDiagnostics`, `confidenceDetail` (all set in `analyze_pair()`)
 - `naked_data` (Engine B scan signals only — contains full naked result)
 
-### Claude Vision — `/api/chart-analysis` in `athena.py`
-- Model id: **`VISION_MODEL`** in `config.yaml` (default **`claude-opus-4-6`**). `config.py` default matches; empty yaml value falls back to Opus 4.6.
+### Chart Vision — `/api/chart-analysis` in `athena.py`
+- Transport: OpenAI-compatible xAI chat completions client (`https://api.x.ai/v1`).
+- Model id: **`VISION_MODEL`** in `config.yaml` (current runtime typically Grok reasoning multimodal model id).
 - Temperature: **`AI_VISION_TEMPERATURE`** — default **`0.2`** in `config.py` / yaml (factual observation mode).
-- **Grok guard:** `VISION_MODEL` must be an Anthropic Claude id for this route. If the string contains **`grok`**, the handler overrides to **`claude-opus-4-6`** and logs a warning (Lottery uses Grok separately — do not point `VISION_MODEL` at xAI).
 - Three modes: single-TF (H4), dual-TF (D1+H4), triple-TF (D1+H4+H1)
+- Prompt architecture is modularized in `vision_prompts.py` and used directly by `/api/chart-analysis` (single active assignment per system/single/dual/triple prompt).
+- RIGHT EDGE instructions enforce A-E candle reading:
+  - A Pattern ID + structure location
+  - B Wick analysis (direction/ratio/meaning)
+  - C Body conviction
+  - D Sequence narrative as first RIGHT EDGE line
+  - E Candle rules (engulfing requires volume confirmation; counter-trend + rising volume => `POTENTIAL REVERSAL`)
 - **Read order (2026-03-31):** Prompts enforce **image-first** for structure and prices; **right edge** = last 5 candles on authoritative TF (single/H4, dual/H4, triple/H1); **then** algorithmic context for cross-check. If chart and context conflict on **structure/direction**, **the image wins**.
 - **TRADE SNAPSHOT instrument/TF:** Prefer any **visible chart UI** (watermark, symbol strip, title bar — not only top-left). If the label is still illegible, state exactly *chart label not legible — from request* and use **only** the chart-analysis request metadata for identity: `symbol`, `tf` (single-TF), or the request symbol plus each image’s stated TF role (D1/H4 or D1/H4/H1). Do **not** substitute “algo context” wording for identity, guess alternatives, list candidate pairs, or hedge with likely / maybe / appears / possibly / or. Do not infer instrument from ENGINE A/B text. Fallback is **metadata only**; it does not override visible price action.
 - **RIGHT EDGE (2026-03-31):** Model must lead with **interpretation** (momentum, control of last closes, continuation vs pullback vs reversal risk, confirm vs threaten algorithmic LONG/SHORT). Avoid long candle-by-colour play-by-play without meaning; optional one compact oldest→newest fact sentence as evidence.
@@ -147,6 +158,12 @@ Builds the text input sent to Marcus Reid. Sections emitted:
 - **Anti-hallucination rules:** ONLY describe what you can ACTUALLY SEE; never invent patterns; cross-reference algo context **after** the visual read; full annotation legend for Engine B elements.
 - **Footer parsing:** Parsed by `_extract_vision_structured()` and used by `apply_vision()` to modify Engine C conviction. Removing or rewording parser tokens breaks Engine C Vision integration and UI level extraction.
 - **EODHD news (same file, `fetch_news_context`):** Per-pair `/api/news` and `/api/news-word-weights` use `timeout=15` (was 8s) to reduce read timeouts on slow EODHD responses; failures stay non-fatal.
+- Advisory hybrid v2 sidecar is available via:
+  - `POST /api/vision-sample`
+  - `POST /api/vision-label`
+  - `POST /api/vision-infer-v2`
+  - `GET /api/vision-metrics`
+  - `POST /api/vision-train-v2`
 
 ---
 
@@ -276,7 +293,7 @@ Recursively replaces `NaN`/`Inf` with `None`, normalizes numpy types. Applied be
 Effective min = `max(AUTO_TRADE_MIN_SCORE[type], MIN_CONFLUENCE_CLASS[type])`. `AUTO_TRADE_MIN_SCORE` is a **per-class dict** (crypto=0.80, forex=0.65, stock=0.85, etc.).
 
 ### `/api/chart-analysis` — `athena.py`
-Requires `ANTHROPIC_API_KEY` env var. `regime` in signal can be dict `{"label":"TRENDING"}` (Engine A) or string `"TRENDING"` (Engine C) — both handled. Context builder is **outside** try/except — keep it simple.
+Requires `XAI_API_KEY` env var and uses OpenAI-compatible xAI client (`base_url=https://api.x.ai/v1`). `regime` in signal can be dict `{"label":"TRENDING"}` (Engine A) or string `"TRENDING"` (Engine C) — both handled. Context builder is **outside** try/except — keep it simple.
 
 ### `/api/scalp-scan` / `/api/scalp-execute` — `athena.py`
 See **Scalp Lab / Engine D flow** above. Execute path: **`signal.type == "crypto"` → Bybit**; **else → MT5**. Crypto candles for Engine D come from Binance futures (`fetch_candles` / `CandleBuilder`); orders are **never** sent to Binance.
@@ -463,6 +480,6 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 23. `confidenceDetail` and `factorDiagnostics` keys are camelCase on the signal dict — do not use snake_case when reading from signal
 24. Lottery Lab — never bypass `_normalize_game()` before any DB or analytics call
 25. Lottery Lab — `simulate_generator()` incremental counters must never revert to full-history rescan per draw
-26. **Chart Vision vs Lottery AI:** `/api/chart-analysis` = **Anthropic** (`VISION_MODEL`, `ANTHROPIC_API_KEY`). `/api/lottery/ai-analysis` = **xAI Grok** (`XAI_API_KEY`, `openai` SDK → `api.x.ai`). Do not use `VISION_MODEL` for lottery or `XAI_MODEL` for chart vision.
+26. **Chart Vision vs Lottery AI:** both are xAI-backed via OpenAI-compatible SDK (`api.x.ai`) but use different prompts/routes. `/api/chart-analysis` uses `VISION_MODEL`; `/api/lottery/ai-analysis` uses `LOTTERY_AI_MODEL` or `XAI_MODEL`. Do not mix prompts, parser contracts, or route payload schemas between them.
 27. **Scalp Lab (Engine D)** is a separate pipeline (`scalp_engine.py`, `/api/scalp-scan`, `/api/scalp-execute`) — not produced by `analyze_pair()` and not blended in Engine C unless you explicitly add that integration.
 28. **Vision ENTRY QUALITY section:** Must appear between **KEY RISKS** and **FINAL VERDICT** in all three prompt modes (single/dual/triple). System prompt rules **9–12** (entry positioning, volatility-regime interaction, move maturity, RR reality check) are mandatory — do not remove or weaken.

@@ -230,6 +230,20 @@ FOREX_PAIRS = [
         "enabled": True,
     },  # SQN +1.00, WR 53.3%, IS:+0.45/OOS:+0.88 (2026-03-15 confirmed)
     {
+        "symbol": "AUDCHF=X",
+        "type": "forex",
+        "display": "AUD/CHF",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "AUDNZD=X",
+        "type": "forex",
+        "display": "AUD/NZD",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
+    {
         "symbol": "NZDUSD=X",
         "type": "forex",
         "display": "NZD/USD",
@@ -320,6 +334,20 @@ FOREX_PAIRS = [
         "source": "mt5",
         "enabled": True,
     },  # SQN +0.43
+    {
+        "symbol": "USDBRL=X",
+        "type": "forex",
+        "display": "USD/BRL",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "USDINR=X",
+        "type": "forex",
+        "display": "USD/INR",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
 ]
 
 COMMODITY_PAIRS = [
@@ -366,6 +394,34 @@ COMMODITY_PAIRS = [
         "enabled": True,
     },  # MT5: Copper
     {
+        "symbol": "Aluminium",
+        "type": "commodity",
+        "display": "Aluminium",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "Lead",
+        "type": "commodity",
+        "display": "Lead",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "Nickel",
+        "type": "commodity",
+        "display": "Nickel",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "Zinc",
+        "type": "commodity",
+        "display": "Zinc",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
+    {
         "symbol": "PL=F",
         "type": "commodity",
         "display": "XPT/USD",
@@ -379,6 +435,69 @@ COMMODITY_PAIRS = [
         "source": "mt5",
         "enabled": True,
     },  # Pepperstone: XPDUSD
+    {
+        "symbol": "Gasoline",
+        "type": "commodity",
+        "display": "Gasoline",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "Cattle",
+        "type": "commodity",
+        "display": "Cattle",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "Cocoa",
+        "type": "commodity",
+        "display": "Cocoa",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "Coffee",
+        "type": "commodity",
+        "display": "Coffee",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "Corn",
+        "type": "commodity",
+        "display": "Corn",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "Cotton",
+        "type": "commodity",
+        "display": "Cotton",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "Soybeans",
+        "type": "commodity",
+        "display": "Soybeans",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "Sugar",
+        "type": "commodity",
+        "display": "Sugar",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "Wheat",
+        "type": "commodity",
+        "display": "Wheat",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
 ]
 
 INDEX_PAIRS = [
@@ -440,6 +559,27 @@ INDEX_PAIRS = [
         "source": "mt5",
         "enabled": True,
     },  # SQN -0.38 WR 33.3% (9T) Pepperstone: HK50 ← WS: forex ep
+    {
+        "symbol": "EURX",
+        "type": "index",
+        "display": "EURX",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "JPYX",
+        "type": "index",
+        "display": "JPYX",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "USDX",
+        "type": "index",
+        "display": "USDX",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
 ]
 
 US_STOCK_PAIRS = [
@@ -639,6 +779,27 @@ ETF_PAIRS = [
         "enabled": True,
     },  # Emerging Markets ETF
     {
+        "symbol": "DIA.US",
+        "type": "stock",
+        "display": "DIA",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03
+    {
+        "symbol": "GDX.US",
+        "type": "stock",
+        "display": "GDX",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03
+    {
+        "symbol": "SOXX.US",
+        "type": "stock",
+        "display": "SOXX",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone MT5 verified 2026-04-03
+    {
         "symbol": "XLE.US",
         "type": "stock",
         "display": "XLE",
@@ -823,12 +984,12 @@ CRYPTO_PAIRS = [
         "enabled": True,
     },  # SQN +1.68, WR 69.2%, 13 trades (2026-03-15 confirmed)
     {
-        "symbol": "MATICUSDT",
+        "symbol": "POLUSDT",
         "type": "crypto",
-        "display": "MATIC/USDT",
+        "display": "POL/USDT",
         "source": "binance",
         "enabled": True,
-    },  # SQN +0.26 Phase A (noise) # re-enabled for ATR-fix retest
+    },  # Replaces delisted MATICUSDT on Binance/Bybit (verified 2026-04-03)
     {
         "symbol": "BNBUSDT",
         "type": "crypto",
@@ -887,6 +1048,104 @@ CRYPTO_PAIRS = [
         "enabled": True,
         "ws": False,
     },  # SQN -2.45 # re-enabled for ATR-fix retest
+    {
+        "symbol": "AAVEUSDT",
+        "type": "crypto",
+        "display": "AAVE/USDT",
+        "source": "binance",
+        "enabled": True,
+    },  # Binance + Bybit USDT perpetual verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "ALGOUSDT",
+        "type": "crypto",
+        "display": "ALGO/USDT",
+        "source": "binance",
+        "enabled": True,
+    },  # Binance + Bybit USDT perpetual verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "ATOMUSDT",
+        "type": "crypto",
+        "display": "ATOM/USDT",
+        "source": "binance",
+        "enabled": True,
+    },  # Binance + Bybit USDT perpetual verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "BCHUSDT",
+        "type": "crypto",
+        "display": "BCH/USDT",
+        "source": "binance",
+        "enabled": True,
+    },  # Binance + Bybit USDT perpetual verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "ETCUSDT",
+        "type": "crypto",
+        "display": "ETC/USDT",
+        "source": "binance",
+        "enabled": True,
+    },  # Binance + Bybit USDT perpetual verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "TRXUSDT",
+        "type": "crypto",
+        "display": "TRX/USDT",
+        "source": "binance",
+        "enabled": True,
+    },  # Binance + Bybit USDT perpetual verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "XLMUSDT",
+        "type": "crypto",
+        "display": "XLM/USDT",
+        "source": "binance",
+        "enabled": True,
+    },  # Binance + Bybit USDT perpetual verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "UNIUSDT",
+        "type": "crypto",
+        "display": "UNI/USDT",
+        "source": "binance",
+        "enabled": True,
+    },  # Binance + Bybit USDT perpetual verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "FILUSDT",
+        "type": "crypto",
+        "display": "FIL/USDT",
+        "source": "binance",
+        "enabled": True,
+    },  # Binance + Bybit USDT perpetual verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "ICPUSDT",
+        "type": "crypto",
+        "display": "ICP/USDT",
+        "source": "binance",
+        "enabled": True,
+    },  # Binance + Bybit USDT perpetual verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "HBARUSDT",
+        "type": "crypto",
+        "display": "HBAR/USDT",
+        "source": "binance",
+        "enabled": True,
+    },  # Binance + Bybit USDT perpetual verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "ARBUSDT",
+        "type": "crypto",
+        "display": "ARB/USDT",
+        "source": "binance",
+        "enabled": True,
+    },  # Binance + Bybit USDT perpetual verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "OPUSDT",
+        "type": "crypto",
+        "display": "OP/USDT",
+        "source": "binance",
+        "enabled": True,
+    },  # Binance + Bybit USDT perpetual verified 2026-04-03; Athena edge not yet audited
+    {
+        "symbol": "SEIUSDT",
+        "type": "crypto",
+        "display": "SEI/USDT",
+        "source": "binance",
+        "enabled": True,
+    },  # Binance + Bybit USDT perpetual verified 2026-04-03; Athena edge not yet audited
 ]
 
 ALL_PAIRS = (

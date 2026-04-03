@@ -45,7 +45,7 @@ _PAIR_ALIASES = {
     "xrp": "XRP/USDT", "ada": "ADA/USDT", "doge": "DOGE/USDT",
     "link": "LINK/USDT", "ltc": "LTC/USDT", "bnb": "BNB/USDT",
     "sui": "SUI/USDT", "apt": "APT/USDT", "near": "NEAR/USDT",
-    "inj": "INJ/USDT", "render": "RENDER/USDT", "matic": "MATIC/USDT",
+    "inj": "INJ/USDT", "render": "RENDER/USDT", "matic": "POL/USDT", "pol": "POL/USDT",
     "avax": "AVAX/USDT", "dot": "DOT/USDT",
     "eurusd": "EUR/USD", "gbpusd": "GBP/USD", "usdjpy": "USD/JPY",
     "audusd": "AUD/USD", "nzdusd": "NZD/USD", "usdcad": "USD/CAD",
@@ -56,6 +56,7 @@ _PAIR_ALIASES = {
     "oil": "WTI Oil", "wti": "WTI Oil",
     "spx": "S&P 500", "sp500": "S&P 500", "nas": "Nasdaq",
     "nasdaq": "Nasdaq", "dow": "Dow Jones",
+    "usdx": "USDX", "eurx": "EURX", "jpyx": "JPYX", "jpx": "JPYX",
     "aapl": "AAPL", "tsla": "TSLA", "nvda": "NVDA", "msft": "MSFT",
 }
 

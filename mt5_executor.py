@@ -85,6 +85,8 @@ _MT5_SYMBOL_MAP = {
     "GBP/USD": "GBPUSD",
     "USD/JPY": "USDJPY",
     "AUD/USD": "AUDUSD",
+    "AUD/CHF": "AUDCHF",
+    "AUD/NZD": "AUDNZD",
     "NZD/USD": "NZDUSD",
     "USD/CAD": "USDCAD",
     "USD/CHF": "USDCHF",
@@ -98,6 +100,8 @@ _MT5_SYMBOL_MAP = {
     "USD/MXN": "USDMXN",
     "EUR/CHF": "EURCHF",
     "USD/SGD": "USDSGD",
+    "USD/BRL": "USDBRL",
+    "USD/INR": "USDINR",
     # Commodities
     "XAU/USD": "XAUUSD",
     "XAG/USD": "XAGUSD",
@@ -107,6 +111,19 @@ _MT5_SYMBOL_MAP = {
     "XPT/USD": "XPTUSD",  # Pepperstone Platinum CFD
     "XPD/USD": "XPDUSD",  # Pepperstone Palladium CFD
     "Copper": "Copper",  # Pepperstone Copper CFD
+    "Aluminium": "Aluminium",  # Pepperstone Aluminium CFD
+    "Lead": "Lead",  # Pepperstone Lead CFD
+    "Nickel": "Nickel",  # Pepperstone Nickel CFD
+    "Zinc": "Zinc",  # Pepperstone Zinc CFD
+    "Gasoline": "Gasoline",  # Pepperstone Gasoline CFD
+    "Cattle": "Cattle",  # Pepperstone Live Cattle CFD
+    "Cocoa": "Cocoa",  # Pepperstone Cocoa CFD
+    "Coffee": "Coffee",  # Pepperstone Coffee CFD
+    "Corn": "Corn",  # Pepperstone Corn CFD
+    "Cotton": "Cotton",  # Pepperstone Cotton CFD
+    "Soybeans": "Soybeans",  # Pepperstone Soybeans CFD
+    "Sugar": "Sugar",  # Pepperstone Sugar CFD
+    "Wheat": "Wheat",  # Pepperstone Wheat CFD
     # Indices
     "S&P 500": "US500",
     "Nasdaq": "NAS100",
@@ -118,6 +135,9 @@ _MT5_SYMBOL_MAP = {
     "Nikkei 225": "JPN225",
     "Hang Seng": "HK50",
     "Euro Stoxx 50": "EUSTX50",
+    "EURX": "EURX",
+    "JPYX": "JPYX",
+    "USDX": "USDX",
     # US Stocks (CFDs on Pepperstone)
     "AAPL": "AAPL.US",
     "TSLA": "TSLA.US",
@@ -146,6 +166,9 @@ _MT5_SYMBOL_MAP = {
     "TLT": "TLT.US",
     "IWM": "IWM.US",
     "EEM": "EEM.US",
+    "DIA": "DIA.US",
+    "GDX": "GDX.US",
+    "SOXX": "SOXX.US",
     "XLF": "XLF.US",
     "XLE": "XLE.US",  # Common MT5 suffix for US energy ETF
     "SLV": "SLV.US",  # Common MT5 suffix for silver ETF

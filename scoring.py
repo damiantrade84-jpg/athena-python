@@ -65,7 +65,7 @@ _US_STOCK_CUSTOM = {
     "NFLX", "AMD", "CRM", "DIS", "BA", "COIN", "PYPL", "INTC", "UBER", "PLTR"
 }
 _ALTCOIN_MAJORS = {
-    "SOL/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT", "MATIC/USDT", "BNB/USDT",
+    "SOL/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT", "POL/USDT", "BNB/USDT",
     "DOT/USDT", "LTC/USDT", "SUI/USDT", "NEAR/USDT", "APT/USDT", "INJ/USDT",
     "RENDER/USDT"
 }
@@ -318,7 +318,7 @@ CORR_CLUSTERS: dict = {
         "DOGE/USDT",
         "AVAX/USDT",
         "DOT/USDT",
-        "MATIC/USDT",
+        "POL/USDT",
         "LTC/USDT",
         "LINK/USDT",
         "SUI/USDT",
@@ -326,6 +326,20 @@ CORR_CLUSTERS: dict = {
         "NEAR/USDT",
         "INJ/USDT",
         "RENDER/USDT",
+        "AAVE/USDT",
+        "ALGO/USDT",
+        "ATOM/USDT",
+        "BCH/USDT",
+        "ETC/USDT",
+        "TRX/USDT",
+        "XLM/USDT",
+        "UNI/USDT",
+        "FIL/USDT",
+        "ICP/USDT",
+        "HBAR/USDT",
+        "ARB/USDT",
+        "OP/USDT",
+        "SEI/USDT",
     ],
     "metals": ["XAU/USD", "XAG/USD", "GLD", "SLV"],
     "energy": ["XOM", "XLE", "USO", "WTI Oil", "Brent Oil"],

@@ -752,3 +752,10 @@ SCALP_ENGINE:
   ZONE_MIN_CONDITIONS: 2        # Valid zone needs >= N conditions
   # SCALP_PAIRS: []             # Uncomment + list pairs to restrict scan to specific pairs only
   #                             # Leave commented/empty to scan ALL pairs (default full set)
+
+# ── Chart Vision Dataset / V2 Shadow ────────────────────────────────────────
+# Default false: opt-in only. Dataset pipeline writes to audit.db
+# (vision_samples, vision_labels, vision_predictions) on every /api/chart-analysis
+# call; v2 shadow runs ML inference in the hot path. Enable only after validation.
+CHART_VISION_DATASET_ENABLED: false
+CHART_VISION_V2_SHADOW_ENABLED: false
