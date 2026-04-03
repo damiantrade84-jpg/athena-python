@@ -33,7 +33,7 @@ try:
 
     load_dotenv()
 except ImportError:
-    pass  # dotenv optional — falls back to os.environ
+    pass  # dotenv optional â€” falls back to os.environ
 
 import telegram_notify
 
@@ -118,7 +118,7 @@ logging.basicConfig(
 
 log = logging.getLogger("sentinel")
 
-# Silence noisy HTTP and library loggers — reduces console flood
+# Silence noisy HTTP and library loggers â€” reduces console flood
 import logging as _logging
 _logging.getLogger("werkzeug").setLevel(_logging.WARNING)
 _logging.getLogger("urllib3").setLevel(_logging.WARNING)
@@ -207,21 +207,21 @@ FOREX_PAIRS = [
         "display": "EUR/USD",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +0.16 — enabled; score gate filters low-conviction setups
+    },  # SQN +0.16 â€” enabled; score gate filters low-conviction setups
     {
         "symbol": "GBPUSD=X",
         "type": "forex",
         "display": "GBP/USD",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -1.62 (post-fix BT 2026-03-13): 7 trades/730d, WR 14%, OOS:-10 — no edge confirmed # re-enabled for ATR-fix retest
+    },  # SQN -1.62 (post-fix BT 2026-03-13): 7 trades/730d, WR 14%, OOS:-10 â€” no edge confirmed # re-enabled for ATR-fix retest
     {
         "symbol": "USDJPY=X",
         "type": "forex",
         "display": "USD/JPY",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -2.33 — enabled; re-evaluate post-formula fix
+    },  # SQN -2.33 â€” enabled; re-evaluate post-formula fix
     {
         "symbol": "AUDUSD=X",
         "type": "forex",
@@ -235,7 +235,7 @@ FOREX_PAIRS = [
         "display": "NZD/USD",
         "source": "mt5",
         "enabled": True,
-    },  # SQN 0.00 — enabled; zero trades was data gap not signal failure
+    },  # SQN 0.00 â€” enabled; zero trades was data gap not signal failure
     {
         "symbol": "EURGBP=X",
         "type": "forex",
@@ -256,7 +256,7 @@ FOREX_PAIRS = [
         "display": "USD/CHF",
         "source": "mt5",
         "enabled": True,
-    },  # v3.1 SQN +0.61, OOS +1.22 ✓
+    },  # v3.1 SQN +0.61, OOS +1.22 âœ“
     {
         "symbol": "EURJPY=X",
         "type": "forex",
@@ -284,7 +284,7 @@ FOREX_PAIRS = [
         "display": "EUR/AUD",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -1.43 (old look-ahead bias) — re-evaluate post-formula fix
+    },  # SQN -1.43 (old look-ahead bias) â€” re-evaluate post-formula fix
     {
         "symbol": "GBPAUD=X",
         "type": "forex",
@@ -312,7 +312,7 @@ FOREX_PAIRS = [
         "display": "USD/MXN",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +0.85, OOS +0.60 ✓
+    },  # SQN +0.85, OOS +0.60 âœ“
     {
         "symbol": "USDSGD=X",
         "type": "forex",
@@ -336,14 +336,14 @@ COMMODITY_PAIRS = [
         "display": "XAG/USD",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -0.07 — DISABLE (borderline, no edge confirmed)
+    },  # SQN -0.07 â€” DISABLE (borderline, no edge confirmed)
     {
         "symbol": "CL=F",
         "type": "commodity",
         "display": "WTI Oil",
         "source": "mt5",
         "enabled": True,
-    },  # SQN not retested with correct ATR — monitor only
+    },  # SQN not retested with correct ATR â€” monitor only
     {
         "symbol": "BZ=F",
         "type": "commodity",
@@ -396,14 +396,14 @@ INDEX_PAIRS = [
         "display": "S&P 500",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +1.23 WR 60.0% (10T) ← WS: us endpoint GSPC.INDX
+    },  # SQN +1.23 WR 60.0% (10T) â† WS: us endpoint GSPC.INDX
     {
         "symbol": "^DJI",
         "type": "index",
         "display": "Dow Jones",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +0.61 WR 55.6% (9T) ← WS: us endpoint DJI.INDX
+    },  # SQN +0.61 WR 55.6% (9T) â† WS: us endpoint DJI.INDX
     {
         "symbol": "^GDAXI",
         "type": "index",
@@ -418,28 +418,28 @@ INDEX_PAIRS = [
         "display": "UK100",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +0.67 WR 50.0% (12T) Pepperstone: UK100 ← WS: forex ep
+    },  # SQN +0.67 WR 50.0% (12T) Pepperstone: UK100 â† WS: forex ep
     {
         "symbol": "^AXJO",
         "type": "index",
         "display": "ASX 200",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +0.12 WR 40.0% (10T) Pepperstone: AUS200 ← WS: forex ep
+    },  # SQN +0.12 WR 40.0% (10T) Pepperstone: AUS200 â† WS: forex ep
     {
         "symbol": "^N225",
         "type": "index",
         "display": "Nikkei 225",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -0.39 WR 33.3% (9T) Pepperstone: JPN225 ← WS: forex ep
+    },  # SQN -0.39 WR 33.3% (9T) Pepperstone: JPN225 â† WS: forex ep
     {
         "symbol": "^HSI",
         "type": "index",
         "display": "Hang Seng",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -0.38 WR 33.3% (9T) Pepperstone: HK50 ← WS: forex ep
+    },  # SQN -0.38 WR 33.3% (9T) Pepperstone: HK50 â† WS: forex ep
 ]
 
 US_STOCK_PAIRS = [
@@ -449,7 +449,7 @@ US_STOCK_PAIRS = [
         "display": "AAPL",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -0.30 — score gate filters
+    },  # SQN -0.30 â€” score gate filters
     {
         "symbol": "TSLA.US",
         "type": "stock",
@@ -463,7 +463,7 @@ US_STOCK_PAIRS = [
         "display": "NVDA",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +1.44 ✓
+    },  # SQN +1.44 âœ“
     {
         "symbol": "MSFT.US",
         "type": "stock",
@@ -492,7 +492,7 @@ US_STOCK_PAIRS = [
         "display": "GOOG",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +1.61, OOS:+1.01 ✓
+    },  # SQN +1.61, OOS:+1.01 âœ“
     {
         "symbol": "JPM.US",
         "type": "stock",
@@ -599,7 +599,7 @@ ETF_PAIRS = [
         "display": "SPY",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +1.03 ✓
+    },  # SQN +1.03 âœ“
     {
         "symbol": "QQQ.US",
         "type": "stock",
@@ -615,7 +615,7 @@ ETF_PAIRS = [
         "source": "mt5",
         "enabled": True,
         "ws": False,
-    },  # SQN +2.08, OOS:+2.98 ✓
+    },  # SQN +2.08, OOS:+2.98 âœ“
     {
         "symbol": "TLT.US",
         "type": "stock",
@@ -857,7 +857,7 @@ CRYPTO_PAIRS = [
         "display": "SUI/USDT",
         "source": "binance",
         "enabled": True,
-    },  # SQN +0.76, IS:+0.43/OOS:+0.82 âœ"
+    },  # SQN +0.76, IS:+0.43/OOS:+0.82 Ã¢Å“"
     {
         "symbol": "NEARUSDT",
         "type": "crypto",
@@ -871,7 +871,7 @@ CRYPTO_PAIRS = [
         "display": "APT/USDT",
         "source": "binance",
         "enabled": True,
-    },  # SQN +0.67, IS:+0.56/OOS:+0.37 âœ"
+    },  # SQN +0.67, IS:+0.56/OOS:+0.37 Ã¢Å“"
     {
         "symbol": "INJUSDT",
         "type": "crypto",
@@ -899,7 +899,7 @@ ALL_PAIRS = (
     + CRYPTO_PAIRS
 )
 
-# Pairs that opted out of WS — polled via REST every 60s
+# Pairs that opted out of WS â€” polled via REST every 60s
 _NON_WS_EODHD = [
     p for p in ALL_PAIRS if not p.get("ws", True) and p.get("source") == "eodhd"
 ]
@@ -966,7 +966,7 @@ _YF_INTRADAY_PERIOD = "180d"
 
 _VENDOR_SYMBOL_OVERRIDES = {
     # Precious metals: EODHD D1 via .FOREX suffix (confirmed 12,350 bars); Polygon C: for H4/H1
-    # EODHD has NO intraday for XAU/XAG — Polygon handles H4/H1 backtest fallback
+    # EODHD has NO intraday for XAU/XAG â€” Polygon handles H4/H1 backtest fallback
     "XAU/USD": {"eodhd": "XAUUSD.FOREX", "polygon": "C:XAUUSD"},
     "XAG/USD": {"eodhd": "XAGUSD.FOREX", "polygon": "C:XAGUSD"},
     "XPT/USD": {"polygon": "C:XPTUSD", "eodhd": "XPTUSD.FOREX", "yfinance": "PL=F"},
@@ -1048,7 +1048,7 @@ def _yfinance_symbol_for_pair(pair: dict) -> str | None:
 
 
 def _eodhd_ticker_for_pair(pair: dict) -> str | None:
-    # Check vendor override first — highest priority
+    # Check vendor override first â€” highest priority
     override = _vendor_overrides(pair).get("eodhd")
     if override:
         return override
@@ -1137,14 +1137,14 @@ def _fallback_source_for_pair(pair: dict) -> str | None:
 
 
 def _fetch_fallback_candles(pair: dict, tf: str, limit: int, reason: str = ""):
-    """Try fallback sources in order: Polygon → yfinance.
+    """Try fallback sources in order: Polygon â†’ yfinance.
     Uses only Polygon and yfinance.
     Returns candle list or None if all sources fail."""
 
     tag = f" ({reason})" if reason else ""
     disp = pair["display"]
 
-    # 1. Polygon — good for forex/metals, rate-limited to 5 req/min on free tier
+    # 1. Polygon â€” good for forex/metals, rate-limited to 5 req/min on free tier
     if _polygon_ticker_for_pair(pair):
         resp = fetch_polygon(pair, tf, limit)
         candles = _extract_candles(resp)
@@ -1152,7 +1152,7 @@ def _fetch_fallback_candles(pair: dict, tf: str, limit: int, reason: str = ""):
             log.info(f"[FALLBACK] {disp} {tf}: using Polygon{tag}")
             return candles
 
-    # 2. yfinance — last resort, broad coverage but lower reliability
+    # 2. yfinance â€” last resort, broad coverage but lower reliability
     yf_symbol = _yfinance_symbol_for_pair(pair)
     if yf_symbol:
         log.info(f"[FALLBACK] {disp} {tf}: using yfinance{tag}")
@@ -1165,16 +1165,16 @@ def _atr_for_levels(
     d1i: dict, h4i: dict, h1i: dict, pair: dict = None, style: str | None = None
 ):
     """
-    Returns ATR value for SL/TP calculation — correct timeframe per asset class.
+    Returns ATR value for SL/TP calculation â€” correct timeframe per asset class.
 
-    CRYPTO:              H4 ATR first — entries are H4-based, H1 too tight for
+    CRYPTO:              H4 ATR first â€” entries are H4-based, H1 too tight for
                          overnight crypto gaps and volatile moves
-    FOREX:               D1 ATR first — D1 swing trades, normal pullback 40-80
+    FOREX:               D1 ATR first â€” D1 swing trades, normal pullback 40-80
                          pips, H1 ATR (25-30 pips) causes premature stop-outs
-    STOCKS/ETFs:         D1 ATR first — stocks gap at open daily, H1 too tight
+    STOCKS/ETFs:         D1 ATR first â€” stocks gap at open daily, H1 too tight
                          for 5-20 day swing holds
-    COMMODITIES:         D1 ATR first — macro-driven, daily gaps common on news
-    INDICES:             D1 ATR first — daily range 0.5-1.5%, H1 only 0.1-0.3%
+    COMMODITIES:         D1 ATR first â€” macro-driven, daily gaps common on news
+    INDICES:             D1 ATR first â€” daily range 0.5-1.5%, H1 only 0.1-0.3%
     """
     ptype = (pair or {}).get("type", "")
     resolved_style = _normalize_style(style or "swing")
@@ -1253,7 +1253,7 @@ def fetch_yfinance(sym, tf, limit):
         df = df.loc[:, ~df.columns.duplicated(keep="first")]
 
         if tf == "H4":
-            # Column-by-column resample â€” avoids pandas version issues with .agg(dict)
+            # Column-by-column resample Ã¢â‚¬â€ avoids pandas version issues with .agg(dict)
 
             vol_col = (
                 df["Volume"]
@@ -1852,7 +1852,7 @@ def _fetch_eodhd_intraday_bt(pair, days=730):
 _eodhd_cooldown_until = 0.0  # global cooldown timestamp for 402 errors
 
 def fetch_eodhd(pair, tf, limit):
-    """Download OHLCV candles via EODHD SDK (APIClient). Covers forex, stocks, indices â€“ 1000 req/min.
+    """Download OHLCV candles via EODHD SDK (APIClient). Covers forex, stocks, indices Ã¢â‚¬â€œ 1000 req/min.
 
     Returns dict with standardized error format."""
     global _eodhd_cooldown_until
@@ -1906,14 +1906,14 @@ def fetch_eodhd(pair, tf, limit):
                     break
                 except Exception as e:
                     if "402" in str(e) or "429" in str(e) or "Payment Required" in str(e):
-                        log.warning(f"[EODHD] {ticker} D1: 402/429 — cooldown 10 min")
+                        log.warning(f"[EODHD] {ticker} D1: 402/429 â€” cooldown 10 min")
                         _eodhd_cooldown_until = time.time() + 600
                         return {"error": True, "symbol": symbol, "detail": "rate_limited"}
                     if attempt == 3:
                         log.warning(f"[EODHD] {ticker} D1 failed after 3 attempts: {e}")
                         raise
                     log.warning(
-                        f"[EODHD] {ticker} D1 attempt {attempt} failed — fast-fail without retry sleep: {e}"
+                        f"[EODHD] {ticker} D1 attempt {attempt} failed â€” fast-fail without retry sleep: {e}"
                     )
                     return {"error": True, "symbol": symbol, "detail": "rate_limited"}
 
@@ -1965,14 +1965,14 @@ def fetch_eodhd(pair, tf, limit):
                     break
                 except Exception as e:
                     if "402" in str(e) or "429" in str(e) or "Payment Required" in str(e):
-                        log.warning(f"[EODHD] {ticker} intraday: 402/429 — cooldown 10 min")
+                        log.warning(f"[EODHD] {ticker} intraday: 402/429 â€” cooldown 10 min")
                         _eodhd_cooldown_until = time.time() + 600
                         return {"error": True, "symbol": symbol, "detail": "rate_limited"}
                     if attempt == 3:
                         log.warning(f"[EODHD] {ticker} intraday failed after 3 attempts: {e}")
                         raise
                     log.warning(
-                        f"[EODHD] {ticker} intraday attempt {attempt} failed — fast-fail without retry sleep: {e}"
+                        f"[EODHD] {ticker} intraday attempt {attempt} failed â€” fast-fail without retry sleep: {e}"
                     )
                     return {"error": True, "symbol": symbol, "detail": "rate_limited"}
 
@@ -2045,7 +2045,7 @@ def fetch_eodhd(pair, tf, limit):
 
 _polygon_lock = threading.Lock()
 _polygon_last_request: float = 0.0  # epoch seconds of last Polygon HTTP request
-_POLYGON_MIN_INTERVAL = 12.0  # 5 req/min free tier → 1 request per 12 s
+_POLYGON_MIN_INTERVAL = 12.0  # 5 req/min free tier â†’ 1 request per 12 s
 
 
 def fetch_polygon(pair, tf, limit):
@@ -2072,7 +2072,7 @@ def fetch_polygon(pair, tf, limit):
 
     if _polygon_throttle_reject:
         log.warning(
-            f"[PG] {symbol}: client throttle — min interval {_POLYGON_MIN_INTERVAL}s not elapsed"
+            f"[PG] {symbol}: client throttle â€” min interval {_POLYGON_MIN_INTERVAL}s not elapsed"
         )
         return {
             "error": True,
@@ -2121,7 +2121,7 @@ def fetch_polygon(pair, tf, limit):
         )
 
         if r.status_code == 403:
-            log.warning(f"[PG] {ticker}: 403 Forbidden — check API key or plan")
+            log.warning(f"[PG] {ticker}: 403 Forbidden â€” check API key or plan")
 
             return {
                 "error": True,
@@ -2131,7 +2131,7 @@ def fetch_polygon(pair, tf, limit):
 
         if r.status_code == 429:
             log.warning(
-                f"[PG] {ticker}: 429 rate limited — throttle will apply before next request"
+                f"[PG] {ticker}: 429 rate limited â€” throttle will apply before next request"
             )
 
             # Log Polygon rate limit error (no Telegram notification)
@@ -2386,17 +2386,36 @@ from scoring import (  # noqa: E402
 from config import _json_safe  # noqa: E402
 from engine_c import compute_consensus, apply_vision  # noqa: E402
 from athena_runtime import executed_signals  # noqa: E402
+from vision_data import (  # noqa: E402
+    asdict_safe as _vision_asdict_safe,
+    create_vision_label as _create_vision_label,
+    create_vision_prediction as _create_vision_prediction,
+    create_vision_sample as _create_vision_sample,
+    ensure_vision_schema as _ensure_vision_schema,
+    fetch_vision_metrics as _fetch_vision_metrics,
+    fetch_vision_sample as _fetch_vision_sample,
+)
+from vision_hybrid import (  # noqa: E402
+    infer_chart_vision_v2 as _infer_chart_vision_v2,
+    train_hybrid_model as _train_hybrid_model,
+)
+from vision_prompts import (  # noqa: E402
+    build_dual_prompt,
+    build_single_prompt,
+    build_system_prompt,
+    build_triple_prompt,
+)
 
 
 _scan_lock = threading.Lock()  # thread-safe scan guard (replaces bare boolean)
 
-_kill_switch = False  # N4: Kill-switch — blocks new scans/analyses when True
+_kill_switch = False  # N4: Kill-switch â€” blocks new scans/analyses when True
 
 _test_mode = (
     False  # Test mode: drops score thresholds, enables force-execute on all signals
 )
 
-_disabled_pairs: set = set()  # per-pair kill-switch — display names of pairs to exclude
+_disabled_pairs: set = set()  # per-pair kill-switch â€” display names of pairs to exclude
 
 
 def _normalize_style(style: str | None) -> str:
@@ -2435,13 +2454,13 @@ def _effective_backtest_style(pair: dict, requested_style: str) -> str:
         return "swing"
 
 
-EXPERT_PROMPT = """You are Marcus Reid — 18-year prop-desk veteran turned trading mentor.
-You speak like a sharp friend who happens to be a market wizard — concise, opinionated.
+EXPERT_PROMPT = """You are Marcus Reid â€” 18-year prop-desk veteran turned trading mentor.
+You speak like a sharp friend who happens to be a market wizard â€” concise, opinionated.
 No corporate-speak. No filler. No hedging.
 
-ABSOLUTE RULES — VIOLATION = FAILURE:
+ABSOLUTE RULES â€” VIOLATION = FAILURE:
 1. Output ONLY valid JSON. No markdown, no text outside JSON values.
-2. NEVER state anything not directly supported by the input data. If a factor is None/missing, say "data unavailable" — do NOT guess.
+2. NEVER state anything not directly supported by the input data. If a factor is None/missing, say "data unavailable" â€” do NOT guess.
 3. NEVER use "will", "guaranteed", "definitely". Use "edge suggests", "probability favors", "setup indicates".
 4. EVERY claim in your narrative MUST reference a specific data point from the input (factor name, score value, weight, z-score, regime label, vote name, level price). If you cannot cite the data, do not make the claim.
 5. Counter-trend signal = automatic grade drop of 1 full level + explicit warning.
@@ -2451,16 +2470,16 @@ INPUT SECTIONS:
 === SIGNAL === (pair, direction, score/maxScore, conviction, regime, style)
 === FACTOR DIAGNOSTICS === (per-factor scores with weights, directional vs nondirectional breakdown, confidence multiplier, trend coherence, optional coverage)
 === CONFIDENCE ENGINE === (confidence value and component breakdown)
-=== ENGINE B === (naked market structure — swing sequence, BOS, CHoCH, order blocks, FVGs, zones)
+=== ENGINE B === (naked market structure â€” swing sequence, BOS, CHoCH, order blocks, FVGs, zones)
 === TECHNICALS === (individual voted indicators + z-scores)
 === LEVELS === (entry, SL, TP1, TP2 with R-multiples, ATR, fib levels)
-=== WARNINGS === (penalties already applied — these are FACTS not opinions)
-=== CONTEXT === (NOT scored — news, DXY, yield curve, backtest stats, learning history)
+=== WARNINGS === (penalties already applied â€” these are FACTS not opinions)
+=== CONTEXT === (NOT scored â€” news, DXY, yield curve, backtest stats, learning history)
 === PORTFOLIO === (heat, drawdown)
 
-HOW TO ANALYSE — FOLLOW THIS EXACT ORDER:
+HOW TO ANALYSE â€” FOLLOW THIS EXACT ORDER:
 Step 1: Read FACTOR DIAGNOSTICS first. Which directional factors are active? What are their scores and weights? Is directionalScore positive or negative? Does direction match? What is the confidence multiplier?
-Step 2: Check trendCoherence. How many timeframes agree? What is the coherence ratio? If < 0.7, this is a mixed signal — flag it.
+Step 2: Check trendCoherence. How many timeframes agree? What is the coherence ratio? If < 0.7, this is a mixed signal â€” flag it.
 Step 3: Read regime. TRENDING with ADX > 35 = full rules. RANGING = downgrade. DEAD RANGING = F-grade instantly.
 Step 4: Check nondirectional factors (trend_strength, volatility, volume, structure). These are the signal QUALITY layer. Low quality + high direction = fragile setup.
 Step 5: Read LEVELS. Is SL within MAX_SL_PCT for this asset class? Is RR >= 2.0? Is TP near a known resistance/support?
@@ -2468,22 +2487,22 @@ Step 6: If ENGINE B data is present, cross-reference structural verdict with fac
 Step 7: If CONTEXT data is present, use for narrative color ONLY. Never let news override the quantitative signal.
 
 GRADING (based on score/maxScore percentage):
-A+ (85-100%): Elite — full size, all factors aligned, high confidence multiplier.
-A  (70-84%): Strong — normal size, minor gaps only.
-B  (55-69%): Valid — half size, needs monitoring. Check which factors are weak.
-C  (40-54%): Watchlist only — interesting but not ready. Name the missing factors.
-F  (0-39%): Avoid — insufficient edge. Name exactly why.
+A+ (85-100%): Elite â€” full size, all factors aligned, high confidence multiplier.
+A  (70-84%): Strong â€” normal size, minor gaps only.
+B  (55-69%): Valid â€” half size, needs monitoring. Check which factors are weak.
+C  (40-54%): Watchlist only â€” interesting but not ready. Name the missing factors.
+F  (0-39%): Avoid â€” insufficient edge. Name exactly why.
 
 CRITICAL CROSS-CHECKS (do ALL of these):
-- If trend factor score > 1.0 but momentum < 0 → "momentum divergence, trend may stall"
-- If directionalScore is positive but direction says SHORT → "DIRECTION FLIP BUG — do not trade"
-- If confidence_multiplier < 0.5 → "weak directional conviction — half size maximum"
-- If trendCoherence ratio < 0.7 → "timeframe disagreement — wait for alignment"
-- If nondirectionalScore < 0.5 → "low signal quality — reduce size"
-- If SL > 2% of price → quarter size mandatory
+- If trend factor score > 1.0 but momentum < 0 â†’ "momentum divergence, trend may stall"
+- If directionalScore is positive but direction says SHORT â†’ "DIRECTION FLIP BUG â€” do not trade"
+- If confidence_multiplier < 0.5 â†’ "weak directional conviction â€” half size maximum"
+- If trendCoherence ratio < 0.7 â†’ "timeframe disagreement â€” wait for alignment"
+- If nondirectionalScore < 0.5 â†’ "low signal quality â€” reduce size"
+- If SL > 2% of price â†’ quarter size mandatory
 
 edgeProbability: Estimate 20-95 using this formula as a GUIDE (not exact):
-  base = score_pct × 0.8
+  base = score_pct Ã— 0.8
   if confidence_multiplier > 0.8: +5
   if trendCoherence > 0.8: +5
   if regime is TRENDING and ADX > 30: +5
@@ -2494,12 +2513,12 @@ edgeProbability: Estimate 20-95 using this formula as a GUIDE (not exact):
 
 riskLevel: "Low" if edgeProb >= 70 and TRENDING. "High" if edgeProb < 40 or DEAD RANGING or counter-trend. "Medium" otherwise.
 
-PER-STYLE RATINGS — rate ALL THREE independently using specific data:
+PER-STYLE RATINGS â€” rate ALL THREE independently using specific data:
 - SCALP: Need ADX > 30, clean H1 entry, vol_ratio > 1.5, RR >= 1.5
 - INTRADAY: Need H4+H1 aligned, same session, RR >= 2.0, momentum confirming
 - SWING: Need D1 EMA stack + trendCoherence > 0.8, RR >= 3.0, no upcoming high-impact events
 
-OUTPUT — EXACT JSON (no other text):
+OUTPUT â€” EXACT JSON (no other text):
 {"grade":"A","verdict":"One punchy sentence citing specific factor scores","narrative":"2-3 sentences. MUST reference specific factor names, scores, and weights from the input. Name the strongest and weakest factors.","entryZone":"exact price or fib level from input","invalidation":"exact price from SL or structural level","keyLevels":"S1/R1 from input data only","positionSizing":"Full/Half/Quarter + why (reference confidence_multiplier and nondirectionalScore)","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"cite specific data","warnings":["specific risks citing data points"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}
 
 Now analyse the following signal data and reply with JSON only:"""
@@ -2569,7 +2588,7 @@ def fetch_usd_relative_strength_context(
         return None
 
 
-# Phase A: UST Yield Curve cache (1hr TTL â€” rates change slowly)
+# Phase A: UST Yield Curve cache (1hr TTL Ã¢â‚¬â€ rates change slowly)
 
 _yield_cache = {"data": None, "ts": 0}
 
@@ -2692,7 +2711,7 @@ def fetch_div_split_context():
     now = time.time()
 
     if _divsplit_cache["ts"] > 0 and (now - _divsplit_cache["ts"]) < _DIVSPLIT_TTL:
-        log.debug(f"[DIVS] Cache hit — age {int(now - _divsplit_cache['ts'])}s")
+        log.debug(f"[DIVS] Cache hit â€” age {int(now - _divsplit_cache['ts'])}s")
         return _divsplit_cache["data"]
 
     _key = os.environ.get("EODHD_KEY", "")
@@ -2806,11 +2825,11 @@ def fetch_div_split_context():
     _divsplit_cache = {"data": result, "ts": now}
 
     log.info(
-        f"[DIVS] Checked {len(_DIV_SPLIT_PAIRS)} pairs — {len(result)} with upcoming events"
+        f"[DIVS] Checked {len(_DIV_SPLIT_PAIRS)} pairs â€” {len(result)} with upcoming events"
     )
 
     log.info(
-        f"[DIVS] Cache populated — {len(_DIV_SPLIT_PAIRS)} pairs, {len(result)} events found. Next refresh in 24h."
+        f"[DIVS] Cache populated â€” {len(_DIV_SPLIT_PAIRS)} pairs, {len(result)} events found. Next refresh in 24h."
     )
 
     return result
@@ -2840,7 +2859,7 @@ def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
         return _earnings_cache["data"]
 
     if _EARNINGS_AVAILABLE is False:
-        return {}  # Already confirmed unavailable on this EODHD plan — skip API call
+        return {}  # Already confirmed unavailable on this EODHD plan â€” skip API call
 
     api = _get_eodhd_client()
 
@@ -2873,11 +2892,11 @@ def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
     except Exception as e:
         if "403" in str(e) or "Forbidden" in str(e):
             _EARNINGS_AVAILABLE = (
-                False  # Disable for this session — plan doesn't include it
+                False  # Disable for this session â€” plan doesn't include it
             )
 
             log.warning(
-                "[EARN] 403 Forbidden — earnings calendar not available on this EODHD plan. Disabling for session."
+                "[EARN] 403 Forbidden â€” earnings calendar not available on this EODHD plan. Disabling for session."
             )
 
         else:
@@ -2923,7 +2942,7 @@ def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
     _earnings_cache = {"data": result, "ts": now}
 
     log.info(
-        f"[EARN] Checked {len(symbols)} stock symbols â€” {len(result)} with upcoming earnings"
+        f"[EARN] Checked {len(symbols)} stock symbols Ã¢â‚¬â€ {len(result)} with upcoming earnings"
     )
 
     return result
@@ -3348,7 +3367,7 @@ def _build_signal_message(
         if _fd.get("minDirectionalThreshold") is not None:
             lines.append(f"  Min directional threshold: {_fd['minDirectionalThreshold']}")
         if _fd.get("minDirectionalFailed"):
-            lines.append("  ** MIN DIRECTIONAL FAILED — signal below directional threshold **")
+            lines.append("  ** MIN DIRECTIONAL FAILED â€” signal below directional threshold **")
         _tc = _fd.get("trendCoherence", {})
         if _tc:
             lines.append(
@@ -3391,7 +3410,7 @@ def _build_signal_message(
                     + ", ".join(str(x) for x in (_im.get("unavailablePriors") or []))
                 )
         if _fd.get("insufficientFactors"):
-            lines.append("  ** INSUFFICIENT FACTORS — too few active to produce valid score **")
+            lines.append("  ** INSUFFICIENT FACTORS â€” too few active to produce valid score **")
 
     # Engine B signals: emit naked scoring summary in place of factor diagnostics
     if _is_naked and _naked and not _fs:
@@ -3414,7 +3433,7 @@ def _build_signal_message(
         for cname, cval in _comps.items():
             lines.append(f"    {cname}: {cval if cval is not None else 'N/A'}")
         if _conf.get("degraded"):
-            lines.append(f"  ** DEGRADED — only {_conf.get('available_count', '?')}/{len(_comps)} components available **")
+            lines.append(f"  ** DEGRADED â€” only {_conf.get('available_count', '?')}/{len(_comps)} components available **")
 
     # === LEVELS ===
 
@@ -3432,7 +3451,7 @@ def _build_signal_message(
     fib = signal.get("fib")
 
     if fib:
-        # Only send key fib levels — full dump is ~100 extra tokens
+        # Only send key fib levels â€” full dump is ~100 extra tokens
         _key_fibs = {
             k: v
             for k, v in fib.items()
@@ -3474,7 +3493,7 @@ def _build_signal_message(
     if _yc:
         lines.append(
             f"Yield curve: {_yc['shape']} (2Y-10Y spread: {_yc['spread_2_10']}%, "
-            f"3M: {_yc.get('y3m')}%, 10Y: {_yc['y10y']}%) — {_yc['riskContext']}"
+            f"3M: {_yc.get('y3m')}%, 10Y: {_yc['y10y']}%) â€” {_yc['riskContext']}"
         )
 
     _ds = fetch_div_split_context()
@@ -3488,14 +3507,14 @@ def _build_signal_message(
             _d = _ev["upcomingDiv"][0]
 
             lines.append(
-                f"Ex-div in {_d['daysTo']} days ({_d['exDate']}, amount: {_d.get('amount', '?')}) — gap-down risk"
+                f"Ex-div in {_d['daysTo']} days ({_d['exDate']}, amount: {_d.get('amount', '?')}) â€” gap-down risk"
             )
 
         if _ev.get("upcomingSplit"):
             _s = _ev["upcomingSplit"][0]
 
             lines.append(
-                f"Split in {_s['daysTo']} days ({_s['splitDate']}, ratio: {_s.get('ratio', '?')}) — price distortion risk"
+                f"Split in {_s['daysTo']} days ({_s['splitDate']}, ratio: {_s.get('ratio', '?')}) â€” price distortion risk"
             )
 
     _oi_div = signal.get("oiDivergence")
@@ -3542,7 +3561,7 @@ def _build_signal_message(
     if news_ctx:
         _ctx_parts = []
 
-        # Forex events — keep only event name + date (strip full object bloat)
+        # Forex events â€” keep only event name + date (strip full object bloat)
         if news_ctx.get("forexEvents"):
             _fe = [
                 {
@@ -3573,7 +3592,7 @@ def _build_signal_message(
             ]
 
             if relevant:
-                # Title only — strip full article body
+                # Title only â€” strip full article body
                 _ctx_parts.append(
                     f"Crypto news: {', '.join(n.get('title', '')[:80] for n in relevant[:2])}"
                 )
@@ -3723,9 +3742,9 @@ def run_ai(
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
 
         style_labels = {
-            "scalp": "SCALP â€” focus on H1 exhaustion, tight 1.5R, quick execution",
-            "intraday": "INTRADAY â€” H4+H1 alignment, same-session execution, 2-3R",
-            "swing": "SWING â€” D1 trend dominance, EMA200 slope, 4-6R multi-day hold",
+            "scalp": "SCALP Ã¢â‚¬â€ focus on H1 exhaustion, tight 1.5R, quick execution",
+            "intraday": "INTRADAY Ã¢â‚¬â€ H4+H1 alignment, same-session execution, 2-3R",
+            "swing": "SWING Ã¢â‚¬â€ D1 trend dominance, EMA200 slope, 4-6R multi-day hold",
         }
 
         if style_pref == "auto":
@@ -3946,7 +3965,7 @@ def _init_audit_db(db_path: str) -> None:
         ("risk_amount", "REAL"),
         ("risk_pct", "REAL"),
         ("ticket", "TEXT"),
-        # Task 1 â€” outcome tracking
+        # Task 1 Ã¢â‚¬â€ outcome tracking
         ("exit_price", "REAL"),
         ("exit_time", "TEXT"),
         ("pnl", "REAL"),
@@ -3964,7 +3983,7 @@ def _init_audit_db(db_path: str) -> None:
         ("adx_pct", "REAL"),
         ("btc_bias", "TEXT"),
         ("session_name", "TEXT"),
-        ("error_tag", "TEXT"),  # AUTO-ERR: reason — set on failed auto-trade attempts
+        ("error_tag", "TEXT"),  # AUTO-ERR: reason â€” set on failed auto-trade attempts
         ("fee_cost", "REAL"),  # Actual paid commission captured from exchange order
         (
             "factors_json",
@@ -3997,6 +4016,7 @@ def _init_audit_db(db_path: str) -> None:
         """
     )
     con.execute("CREATE INDEX IF NOT EXISTS idx_shadow_ts ON shadow_signals (ts)")
+    _ensure_vision_schema(con)
     ensure_lottery_schema(con)
 
     con.commit()
@@ -4005,6 +4025,15 @@ def _init_audit_db(db_path: str) -> None:
 
 
 _AUDIT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
+_VISION_ARTIFACTS_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "vision_artifacts",
+)
+_VISION_MODEL_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "models",
+    "chart_vision_v2",
+)
 
 _init_audit_db(_AUDIT_DB)
 set_lottery_db_path(_AUDIT_DB)
@@ -4071,7 +4100,7 @@ def _insert_shadow_from_engine_c(consensus: dict) -> None:
         log.debug(f"[SHADOW] insert failed: {exc}")
 
 
-# ── AI Learning + Auto-Trader ─────────────────────────────────────────────
+# â”€â”€ AI Learning + Auto-Trader â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 from ai_learning import init_learning_db  # noqa: E402
 
@@ -4105,14 +4134,14 @@ try:
 except ImportError:
     pass
 
-# ── API authentication (shared-secret header) ────────────────────────────
+# â”€â”€ API authentication (shared-secret header) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _ATHENA_API_KEY = os.environ.get("ATHENA_API_KEY", "")  # set in .env to enable auth
 
 _AUTH_EXEMPT = {"/", "/favicon.ico"}  # paths that don't require auth
 
 
-# ── Lightweight rate limiter (no external dependency) ─────────────────────
+# â”€â”€ Lightweight rate limiter (no external dependency) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _rate_limits: dict = {}  # ip -> [timestamps]
 
@@ -4123,7 +4152,7 @@ _RATE_MAX_REQUESTS = 120  # max requests per window (2/sec average)
 _RATE_EXECUTE_MAX = 5  # stricter limit for execution endpoints
 
 
-# _json_safe imported from config.py — see that module for implementation
+# _json_safe imported from config.py â€” see that module for implementation
 
 
 @app.before_request
@@ -4135,17 +4164,17 @@ def _auth_and_rate_limit():
 
     ip = _req.remote_addr or "unknown"
 
-    # Auth check — only enforced when ATHENA_API_KEY is set in .env
+    # Auth check â€” only enforced when ATHENA_API_KEY is set in .env
 
     if _ATHENA_API_KEY and path not in _AUTH_EXEMPT:
         provided = _req.headers.get("X-Sentinel-Key", "")
 
         if provided != _ATHENA_API_KEY:
             log.warning(
-                f"[AUTH] {ip} rejected on {path} — invalid/missing X-Sentinel-Key"
+                f"[AUTH] {ip} rejected on {path} â€” invalid/missing X-Sentinel-Key"
             )
 
-            return jsonify({"error": "Unauthorized — set X-Sentinel-Key header"}), 401
+            return jsonify({"error": "Unauthorized â€” set X-Sentinel-Key header"}), 401
 
     # Rate limiting
 
@@ -4217,7 +4246,7 @@ def api_analyze():
         return jsonify({"error": "Invalid signal object"}), 400
 
     if _kill_switch:
-        return jsonify({"error": "Kill-switch active â€” system paused"}), 503
+        return jsonify({"error": "Kill-switch active Ã¢â‚¬â€ system paused"}), 503
 
     try:
         news_ctx = sig.get("newsCtx") or fetch_news_context()
@@ -4313,7 +4342,7 @@ def api_analyze():
             learning_ctx=_learning_ctx,
         )
 
-        # N9: Audit log â€” persist every AI analysis to SQLite
+        # N9: Audit log Ã¢â‚¬â€ persist every AI analysis to SQLite
 
         try:
             _max_s = sig.get("maxScore", 3.0)
@@ -4368,7 +4397,7 @@ def api_analyze():
         return jsonify(result)
 
     except Exception as e:
-        # S2: Sanitise exception — don't leak internal paths
+        # S2: Sanitise exception â€” don't leak internal paths
 
         log.error(f"api_analyze error: {e}")
 
@@ -4420,7 +4449,7 @@ def _naked_scan_style_profile(
 ) -> tuple[str, dict]:
     resolved = _normalize_style(style)
     if resolved == "auto":
-        resolved = "intraday"  # Engine B walks H4 bars — intraday is the natural default
+        resolved = "intraday"  # Engine B walks H4 bars â€” intraday is the natural default
     profiles = {
         "scalp": {
             "min_score": 3.0,
@@ -4985,7 +5014,7 @@ def api_scan_naked():
                 candles, expiry = entry
                 if now < expiry:
                     return candles
-        # Cache miss — call normal fetch_candles (will populate cache for next time)
+        # Cache miss â€” call normal fetch_candles (will populate cache for next time)
         return fetch_candles(pair, tf, limit)
 
     for pair in candidate_pairs:
@@ -5060,7 +5089,7 @@ def api_scan_naked():
                 _valid_atrs = [a for a in atr_series[-50:] if a and a > 0]
                 _atr_avg = sum(_valid_atrs) / len(_valid_atrs) if _valid_atrs else 0
                 if _atr_avg > 0 and atr < _atr_avg * 0.6:
-                    log.warning(f"[NAKED-DBG] {pair['display']}: ATR={atr:.6f} < 60% avg={_atr_avg:.6f} — VOL GATE")
+                    log.warning(f"[NAKED-DBG] {pair['display']}: ATR={atr:.6f} < 60% avg={_atr_avg:.6f} â€” VOL GATE")
                     continue
 
             current_price = float(entry_candles[-1]["close"])
@@ -5116,7 +5145,7 @@ def api_scan_naked():
                             f"[NAKED-DBG] {pair['display']} {direction}: "
                             f"score={conf_data['score']:.1f} vs min={_min_score_scaled:.1f}, "
                             f"passed={conf_data.get('passed')}, regime={regime_label}, "
-                            f"fails=[{','.join(_fail_gates)}] — REJECTED"
+                            f"fails=[{','.join(_fail_gates)}] â€” REJECTED"
                         )
                         continue
 
@@ -5154,7 +5183,7 @@ def api_scan_naked():
                     if rr < style_profile["min_rr"]:
                         log.warning(
                             f"[NAKED-DBG] {pair['display']} {direction}: "
-                            f"rr={rr:.2f} < min_rr={style_profile['min_rr']} — REJECTED"
+                            f"rr={rr:.2f} < min_rr={style_profile['min_rr']} â€” REJECTED"
                         )
                         continue
 
@@ -5223,7 +5252,7 @@ def api_scan_naked():
                     if _existing is None or signal["confluenceScore"] > _existing["confluenceScore"]:
                         _best_per_pair[_pair_key] = signal
                 else:
-                    log.warning(f"[NAKED-DBG] {pair['display']} {direction}: verdict={verdict} seq={seq} — SKIPPED")
+                    log.warning(f"[NAKED-DBG] {pair['display']} {direction}: verdict={verdict} seq={seq} â€” SKIPPED")
         except Exception as e:
             log.warning(f"[NAKED-SCAN] Error on {pair['display']}: {e}", exc_info=True)
             continue
@@ -5279,7 +5308,7 @@ def api_webhook():
         return jsonify({"error": "Execution disabled in config.yaml"}), 403
 
     if _kill_switch:
-        return jsonify({"error": "Kill-switch active — webhook blocked"}), 503
+        return jsonify({"error": "Kill-switch active â€” webhook blocked"}), 503
 
     d = request.get_json(force=True, silent=True) or {}
 
@@ -5288,9 +5317,9 @@ def api_webhook():
     _wh_secret = os.environ.get("WEBHOOK_SECRET", "")
 
     if _wh_secret and d.get("secret", "") != _wh_secret:
-        log.warning(f"[WEBHOOK] {request.remote_addr} rejected — invalid secret")
+        log.warning(f"[WEBHOOK] {request.remote_addr} rejected â€” invalid secret")
 
-        return jsonify({"error": "Unauthorized — invalid webhook secret"}), 401
+        return jsonify({"error": "Unauthorized â€” invalid webhook secret"}), 401
 
     # Build minimal signal dict from webhook payload
 
@@ -5335,7 +5364,7 @@ def api_webhook():
         "trendState": d.get("trendState", "DEVELOPING"),
     }
 
-    # Duplicate guard — webhook signals use pair+direction+minute-bucket as key
+    # Duplicate guard â€” webhook signals use pair+direction+minute-bucket as key
 
     _minute = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
 
@@ -5368,7 +5397,7 @@ def api_webhook():
             _pos_resp = bybit_get_positions()
 
             if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
-                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
+                return jsonify({"error": "Positions unavailable â€” cannot verify exposure"}), 503
 
             positions = (
                 _pos_resp.get("positions", [])
@@ -5398,7 +5427,7 @@ def api_webhook():
             _pos_resp = mt5_get_positions()
 
             if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
-                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
+                return jsonify({"error": "Positions unavailable â€” cannot verify exposure"}), 503
 
             positions = (
                 _pos_resp.get("positions", [])
@@ -5497,7 +5526,7 @@ def api_webhook():
     except Exception as e:
         log.error(f"[WEBHOOK] execution error: {e}")
 
-        return jsonify({"error": "Webhook execution failed — check logs"}), 500
+        return jsonify({"error": "Webhook execution failed â€” check logs"}), 500
 
 
 @app.route("/api/mt5-status")
@@ -5657,7 +5686,7 @@ def api_close_position():
 
 @app.route("/api/binance-status")
 def api_binance_status():
-    """Legacy endpoint — redirects to Bybit status."""
+    """Legacy endpoint â€” redirects to Bybit status."""
 
     return api_bybit_status()
 
@@ -5693,8 +5722,8 @@ def api_market_hours():
         m = minutes % 60
         return f"Opens in {h}h {m}m" if m else f"Opens in {h}h"
 
-    # ── Forex (Sun 22:00 UTC – Fri 22:00 UTC) ────────────────────────────────
-    if utc_weekday == 5:  # Saturday — closed all day
+    # â”€â”€ Forex (Sun 22:00 UTC â€“ Fri 22:00 UTC) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    if utc_weekday == 5:  # Saturday â€” closed all day
         forex_open = False
         forex_status = "Closed (Weekend)"
         # Opens Sun 22:00 UTC = (6-5)*24*60 - utc_total + 22*60
@@ -5713,11 +5742,11 @@ def api_market_hours():
         forex_status = "Open"
         forex_opens_in = None
 
-    # ── Sessions (UTC) ─────────────────────────────────────────────────────────
-    # Sydney:    21:00–06:00 UTC  (23:00–08:00 GMT+2)
-    # Tokyo:     00:00–09:00 UTC  (02:00–11:00 GMT+2)
-    # London:    07:00–16:00 UTC  (09:00–18:00 GMT+2)
-    # New York:  13:00–21:00 UTC  (15:00–23:00 GMT+2)
+    # â”€â”€ Sessions (UTC) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # Sydney:    21:00â€“06:00 UTC  (23:00â€“08:00 GMT+2)
+    # Tokyo:     00:00â€“09:00 UTC  (02:00â€“11:00 GMT+2)
+    # London:    07:00â€“16:00 UTC  (09:00â€“18:00 GMT+2)
+    # New York:  13:00â€“21:00 UTC  (15:00â€“23:00 GMT+2)
 
     def session_state(start_utc, end_utc):
         """Returns (is_open, mins_to_open_or_close)."""
@@ -5747,14 +5776,14 @@ def api_market_hours():
     # London/NY overlap
     overlap_open = lon_open and ny_open
 
-    # ── Equity markets (GMT+2 local times) ────────────────────────────────────
-    # JSE:       09:00–17:00 GMT+2 (Mon-Fri)
-    # LSE/UK100: 09:00–17:30 GMT+2 (Mon-Fri) = 07:00–15:30 UTC
-    # NYSE/DAX:  NYSE 15:30–22:00 GMT+2 | DAX 09:00–17:30 GMT+2
+    # â”€â”€ Equity markets (GMT+2 local times) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # JSE:       09:00â€“17:00 GMT+2 (Mon-Fri)
+    # LSE/UK100: 09:00â€“17:30 GMT+2 (Mon-Fri) = 07:00â€“15:30 UTC
+    # NYSE/DAX:  NYSE 15:30â€“22:00 GMT+2 | DAX 09:00â€“17:30 GMT+2
     gmt2_h = now_gmt2.hour
     gmt2_m = now_gmt2.minute
     gmt2_total = gmt2_h * 60 + gmt2_m
-    is_weekday = utc_weekday <= 4  # Mon–Fri
+    is_weekday = utc_weekday <= 4  # Monâ€“Fri
 
     def equity_state(open_gmt2, close_gmt2):
         s = open_gmt2[0] * 60 + open_gmt2[1]
@@ -5777,7 +5806,7 @@ def api_market_hours():
     dax_open, dax_status, dax_note = equity_state((9, 0), (17, 30))
     nyse_open, nyse_status, nyse_note = equity_state((15, 30), (22, 0))
 
-    # ── Build response ─────────────────────────────────────────────────────────
+    # â”€â”€ Build response â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def session_detail(is_open, mins):
         if not forex_open:
             return {"open": False, "status": "Forex Closed", "note": forex_opens_in}
@@ -5799,12 +5828,12 @@ def api_market_hours():
             "overlap":   {"open": overlap_open and forex_open, "status": "London/NY Overlap" if (overlap_open and forex_open) else "Inactive", "note": "Highest liquidity"},
         },
         "markets": {
-            "forex":  {"open": forex_open, "status": forex_status, "note": forex_opens_in or "Closes Fri 22:00 UTC", "hours": "Sun 22:00 – Fri 22:00 UTC"},
+            "forex":  {"open": forex_open, "status": forex_status, "note": forex_opens_in or "Closes Fri 22:00 UTC", "hours": "Sun 22:00 â€“ Fri 22:00 UTC"},
             "crypto": {"open": True, "status": "Open 24/7", "note": "Always open", "hours": "24/7"},
-            "jse":    {"open": jse_open, "status": jse_status, "note": jse_note, "hours": "09:00–17:00 GMT+2"},
-            "lse":    {"open": lse_open, "status": lse_status, "note": lse_note, "hours": "09:00–17:30 GMT+2"},
-            "dax":    {"open": dax_open, "status": dax_status, "note": dax_note, "hours": "09:00–17:30 GMT+2"},
-            "nyse":   {"open": nyse_open, "status": nyse_status, "note": nyse_note, "hours": "15:30–22:00 GMT+2"},
+            "jse":    {"open": jse_open, "status": jse_status, "note": jse_note, "hours": "09:00â€“17:00 GMT+2"},
+            "lse":    {"open": lse_open, "status": lse_status, "note": lse_note, "hours": "09:00â€“17:30 GMT+2"},
+            "dax":    {"open": dax_open, "status": dax_status, "note": dax_note, "hours": "09:00â€“17:30 GMT+2"},
+            "nyse":   {"open": nyse_open, "status": nyse_status, "note": nyse_note, "hours": "15:30â€“22:00 GMT+2"},
         },
     })
 
@@ -6060,7 +6089,7 @@ def api_backtest_naked():
             return jsonify(
                 {
                     "success": False,
-                    "error": "No pair selected. Engine B backtest requires a specific pair — select one from the dropdown.",
+                    "error": "No pair selected. Engine B backtest requires a specific pair â€” select one from the dropdown.",
                 }
             ), 400
 
@@ -6205,7 +6234,7 @@ def api_backtest_best():
         return jsonify({"error": str(e)}), 500
 
 
-# N4: Kill-switch API — immediately blocks new scans/analyses
+# N4: Kill-switch API â€” immediately blocks new scans/analyses
 
 
 @app.route("/api/killswitch", methods=["POST"])
@@ -6498,7 +6527,7 @@ def api_bt_min():
         except (TypeError, ValueError):
             return jsonify({"error": f"Invalid value for {cls}"}), 400
         if val < 0 or val > 10:
-            return jsonify({"error": f"Value for {cls} out of range (0–10)"}), 400
+            return jsonify({"error": f"Value for {cls} out of range (0â€“10)"}), 400
         new_vals[cls] = round(val, 4)
 
     if not new_vals:
@@ -6622,7 +6651,7 @@ def api_naked_style_thresholds():
             except (TypeError, ValueError):
                 return jsonify({"error": f"Invalid min_score for {style}"}), 400
             if ms < 0 or ms > 20:
-                return jsonify({"error": f"min_score for {style} out of range (0–20)"}), 400
+                return jsonify({"error": f"min_score for {style} out of range (0â€“20)"}), 400
             cur["min_score"] = round(ms, 4)
             changed = True
         if "min_rr" in payload:
@@ -6631,7 +6660,7 @@ def api_naked_style_thresholds():
             except (TypeError, ValueError):
                 return jsonify({"error": f"Invalid min_rr for {style}"}), 400
             if mr < 0.1 or mr > 10:
-                return jsonify({"error": f"min_rr for {style} out of range (0.1–10)"}), 400
+                return jsonify({"error": f"min_rr for {style} out of range (0.1â€“10)"}), 400
             cur["min_rr"] = round(mr, 4)
             changed = True
         if changed:
@@ -6690,7 +6719,7 @@ def api_live_confluence_thresholds():
         except (TypeError, ValueError):
             return jsonify({"error": f"Invalid value for {cls}"}), 400
         if val < 0 or val > 10:
-            return jsonify({"error": f"Value for {cls} out of range (0–10)"}), 400
+            return jsonify({"error": f"Value for {cls} out of range (0â€“10)"}), 400
         new_vals[cls] = round(val, 4)
 
     if not new_vals:
@@ -6781,7 +6810,7 @@ def api_test_mode():
         _test_mode = not _test_mode
 
     log.warning(
-        f"[TEST MODE] {'ACTIVATED' if _test_mode else 'DEACTIVATED'} — score thresholds {'lowered' if _test_mode else 'restored'}"
+        f"[TEST MODE] {'ACTIVATED' if _test_mode else 'DEACTIVATED'} â€” score thresholds {'lowered' if _test_mode else 'restored'}"
     )
 
     return jsonify({"testMode": _test_mode})
@@ -6794,7 +6823,7 @@ def api_test_mode_status():
     return jsonify({"testMode": _test_mode})
 
 
-# ── Auto-Trade Bot endpoints ──────────────────────────────────────────────────
+# â”€â”€ Auto-Trade Bot endpoints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def _scalp_ui_signal(raw_signal: dict) -> dict:
@@ -6951,7 +6980,7 @@ def api_scalp_execute():
 
             positions_resp = bybit_get_positions()
             if isinstance(positions_resp, dict) and positions_resp.get("error"):
-                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
+                return jsonify({"error": "Positions unavailable â€” cannot verify exposure"}), 503
             positions = (
                 positions_resp.get("positions", [])
                 if isinstance(positions_resp, dict)
@@ -6977,7 +7006,7 @@ def api_scalp_execute():
 
             positions_resp = mt5_get_positions()
             if isinstance(positions_resp, dict) and positions_resp.get("error"):
-                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
+                return jsonify({"error": "Positions unavailable â€” cannot verify exposure"}), 503
             positions = (
                 positions_resp.get("positions", [])
                 if isinstance(positions_resp, dict)
@@ -7053,7 +7082,7 @@ def api_auto_trade_toggle():
     return jsonify(_auto_trader.get_status())
 
 
-# ── AI Learning endpoints ─────────────────────────────────────────────────────
+# â”€â”€ AI Learning endpoints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 @app.route("/api/learning/stats")
@@ -7127,7 +7156,7 @@ def api_inject_sentiment():
 
 @app.route("/api/auto-trade/log")
 def api_auto_trade_log():
-    """Last 30 auto-trade attempts — both successful and failed — for dashboard diagnosis."""
+    """Last 30 auto-trade attempts â€” both successful and failed â€” for dashboard diagnosis."""
 
     try:
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
@@ -7204,7 +7233,7 @@ def _xai_chat_completions_retry(client, *, max_attempts: int = 4, base_delay_sec
 
 
 def _chart_blocks_to_openai_user_content(blocks: list) -> list:
-    """Anthropic-style content blocks → OpenAI multimodal user content (xAI Grok vision)."""
+    """Anthropic-style content blocks â†’ OpenAI multimodal user content (xAI Grok vision)."""
     out: list = []
     for block in blocks or []:
         btype = block.get("type")
@@ -7226,20 +7255,71 @@ def _chart_blocks_to_openai_user_content(blocks: list) -> list:
 
 @app.route("/api/chart-analysis", methods=["POST"])
 def api_chart_analysis():
-    """Send chart screenshot to Grok vision (xAI) for professional TA reading."""
+    """Send chart screenshot to configured vision model for professional TA reading."""
     try:
         import openai as _openai_chart
     except ImportError:
         return jsonify({"error": "openai library not installed (pip install openai)"}), 500
 
-    data = request.get_json()
-    if not data or not data.get("image"):
+    data = request.get_json(silent=True) or {}
+    if not data:
+        return jsonify({"error": "Missing request body"}), 400
+
+    symbol = str(data.get("symbol") or "").strip()
+    tf = str(data.get("tf") or "H4").strip().upper()
+    chart_source = str(data.get("chart_source") or "").strip().lower()
+
+    def _safe_float(value):
+        try:
+            if value is None or value == "":
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    if not data.get("image") and bool(data.get("server_render")) and data.get("candles"):
+        try:
+            from chart_renderer import render_chart_image
+
+            data["image"] = render_chart_image(
+                candles=data.get("candles") or [],
+                entry=_safe_float(data.get("entry")),
+                sl=_safe_float(data.get("sl")),
+                tp=_safe_float(data.get("tp")),
+                title=f"{symbol or 'UNKNOWN'} {tf}",
+                engine_b=data.get("engineB") if isinstance(data.get("engineB"), dict) else None,
+                bars_window=int(data.get("bars_window") or 80),
+                dpi=int(data.get("dpi") or 200),
+                show_pattern_labels=bool(data.get("show_pattern_labels", True)),
+                pattern_lookback=int(data.get("pattern_lookback") or 10),
+            )
+            if data.get("candles_d1"):
+                data["image_d1"] = render_chart_image(
+                    candles=data.get("candles_d1") or [],
+                    title=f"{symbol or 'UNKNOWN'} D1",
+                    engine_b=data.get("engineB") if isinstance(data.get("engineB"), dict) else None,
+                    bars_window=int(data.get("bars_window") or 80),
+                    dpi=int(data.get("dpi") or 200),
+                    show_pattern_labels=bool(data.get("show_pattern_labels", True)),
+                    pattern_lookback=int(data.get("pattern_lookback") or 10),
+                )
+            if data.get("candles_h1"):
+                data["image_h1"] = render_chart_image(
+                    candles=data.get("candles_h1") or [],
+                    title=f"{symbol or 'UNKNOWN'} H1",
+                    engine_b=data.get("engineB") if isinstance(data.get("engineB"), dict) else None,
+                    bars_window=int(data.get("bars_window") or 80),
+                    dpi=int(data.get("dpi") or 200),
+                    show_pattern_labels=bool(data.get("show_pattern_labels", True)),
+                    pattern_lookback=int(data.get("pattern_lookback") or 10),
+                )
+            chart_source = chart_source or "server_renderer"
+        except Exception as _render_err:
+            return jsonify({"error": f"Server render failed: {_render_err}"}), 400
+
+    if not data.get("image"):
         return jsonify({"error": "Missing image data"}), 400
 
-    symbol = data.get("symbol", "")
-    tf = data.get("tf", "H4")
-
-    # Find pair context
     pair = next(
         (p for p in ALL_PAIRS if p.get("symbol") == symbol or p.get("display") == symbol),
         None,
@@ -7247,7 +7327,7 @@ def api_chart_analysis():
 
     context_parts = []
 
-    # Engine A signal context — prefer POST body (fresh frontend state), fall back to last scan cache
+    # Engine A signal context - prefer POST body, then fallback cache.
     sig = data.get("signal")
     if not sig:
         for s in _last_scan_results.get("signals", []):
@@ -7256,12 +7336,11 @@ def api_chart_analysis():
                 break
 
     if sig:
-        # regime can be a dict {"label": "..."} (Engine A) or a plain string (Engine C)
-        _regime_raw = sig.get('regime', {})
+        _regime_raw = sig.get("regime", {})
         _regime_label = (
-            _regime_raw.get('label', 'UNKNOWN')
+            _regime_raw.get("label", "UNKNOWN")
             if isinstance(_regime_raw, dict)
-            else str(_regime_raw or 'UNKNOWN')
+            else str(_regime_raw or "UNKNOWN")
         )
         context_parts.append(
             f"ENGINE A: direction={sig.get('direction')}, "
@@ -7278,7 +7357,6 @@ def api_chart_analysis():
         if factors:
             context_parts.append(f"FACTOR VOTES: {factors}")
 
-    # Engine B context — prefer POST body (frontend state), fall back to server-side cache
     sid = symbol.replace("/", "_").replace("=", "_").replace("^", "_").replace(".", "_")
     eb = data.get("engineB") or _engine_b_cache_get(sid) or _engine_b_cache_get(symbol)
     if eb:
@@ -7312,42 +7390,6 @@ def api_chart_analysis():
             context_parts.append(
                 f"BREAKER: {eb['breaker_block'].get('type')} at {eb['breaker_block'].get('level')}"
             )
-        if eb.get("confidence"):
-            conf = eb["confidence"]
-            context_parts.append(
-                f"CONFIDENCE: score={conf.get('score')}, "
-                f"passed={conf.get('passed')}, rr={conf.get('rr')}"
-            )
-        if eb.get("prev_session_profile_valid"):
-            context_parts.append(
-                f"PREVIOUS SESSION PROFILE: valid=True, "
-                f"source_tf={eb.get('prev_session_profile_source_tf', '?')}, "
-                f"poc={eb.get('prev_session_poc')}, "
-                f"vah={eb.get('prev_session_vah')}, "
-                f"val={eb.get('prev_session_val')}"
-            )
-            context_parts.append(
-                f"PROFILE STATE: in_play={eb.get('profile_in_play')}, "
-                f"level_in_play={eb.get('profile_level_in_play')}, "
-                f"inside_value={eb.get('inside_prev_value_area')}, "
-                f"above_value={eb.get('above_prev_value_area')}, "
-                f"below_value={eb.get('below_prev_value_area')}"
-            )
-            context_parts.append(
-                f"PROFILE REACTION: "
-                f"rejected_poc={eb.get('rejected_from_poc')}, "
-                f"rejected_vah={eb.get('rejected_from_vah')}, "
-                f"rejected_val={eb.get('rejected_from_val')}, "
-                f"accepted_poc={eb.get('accepted_at_poc')}, "
-                f"returned_value={eb.get('returned_to_value')}, "
-                f"failed_return_to_value={eb.get('failed_return_to_value')}"
-            )
-            context_parts.append(
-                f"PROFILE BIAS: {eb.get('profile_bias')} | "
-                f"PROFILE STRENGTH: {eb.get('profile_reaction_strength')}"
-            )
-            if eb.get("profile_notes"):
-                context_parts.append(f"PROFILE NOTES: {eb.get('profile_notes')}")
 
     def _chart_level_sets(sig_payload: dict) -> dict:
         def _to_num(value):
@@ -7364,12 +7406,12 @@ def api_chart_analysis():
         if isinstance(style_levels, dict):
             for _style in ("scalp", "intraday", "swing"):
                 row = style_levels.get(_style) or {}
-                sl = _to_num(row.get("sl"))
+                slv = _to_num(row.get("sl"))
                 tp1 = _to_num(row.get("tp1") or row.get("tp"))
                 tp2 = _to_num(row.get("tp2") or row.get("tp1") or row.get("tp"))
-                if sl is not None and tp1 is not None:
+                if slv is not None and tp1 is not None:
                     out[_style] = {
-                        "sl": sl,
+                        "sl": slv,
                         "tp1": tp1,
                         "tp2": tp2 if tp2 is not None else tp1,
                     }
@@ -7402,132 +7444,7 @@ def api_chart_analysis():
             context_parts.append("STYLE LEVELS:\n" + "\n".join(_level_lines))
     algo_context = "\n".join(context_parts) if context_parts else "No algorithmic data available."
 
-    system_prompt = (
-        "You are a senior technical analyst reviewing a chart with full algorithmic context.\n"
-        "ABSOLUTE RULES:\n"
-        "1. ONLY describe what you can ACTUALLY SEE on the chart. If you cannot see a pattern, say 'not visible'.\n"
-        "2. NEVER invent patterns, levels, or formations that are not clearly visible in the image.\n"
-        "3. When referencing levels, use the EXACT prices from the algorithmic context or read them from the chart axis.\n"
-        "4. The chart shows: candles (green=bull, red=bear), EMA21 (cyan line), EMA50 (purple line), "
-        "EMA200 (gold dashed), Entry (grey dashed horizontal), SL (red solid horizontal), "
-        "TP (green solid horizontal). Volume bars at bottom.\n"
-        "5. Engine B annotations if present: support zones (green), resistance zones (red), "
-        "BOS markers (amber), CHoCH markers (purple), Order Blocks (labelled boxes), FVG zones (cyan dashed), "
-        "previous-session POC (amber), VAH (violet dashed), VAL (violet dashed).\n"
-        "6. Check: Is price above or below each EMA? What is the EMA ordering (stacked bull/bear or mixed)? "
-        "Is the last candle a reversal, continuation, or indecision pattern?\n"
-        "7. Cross-reference what you see with the algorithmic context. If they disagree, say so explicitly.\n"
-        "8. If PREVIOUS SESSION PROFILE context is provided: note whether price is above, inside, or below the prior "
-        "value area, identify whether price is reacting at POC, VAH, or VAL, and state whether that reaction confirms "
-        "or contradicts the trade direction.\n"
-        "9. Be direct — no hedging, no disclaimers. You are advising a professional."
-    )
-
-    system_prompt = (
-        "You are a professional trading analyst reviewing a chart screenshot with full algorithmic context.\n"
-        "Your job is to produce a structured trade review grounded entirely in what is visible on the chart and the supplied context.\n\n"
-        "ABSOLUTE RULES:\n"
-        "1. ONLY describe what you can ACTUALLY SEE on the chart. If something is unclear, say 'not clearly visible'.\n"
-        "2. NEVER invent patterns, levels, formations, barriers, or price behavior not clearly visible in the image or supplied context.\n"
-        "3. When referencing levels, use EXACT prices from the algorithmic context first; read from the chart axis only if clearly visible.\n"
-        "4. The chart shows: candles (green=bull, red=bear), EMA21 (cyan), EMA50 (purple), EMA200 (gold dashed), "
-        "Keltner Channel (1.5 ATR, cyan dashed bands around EMA21), Entry (grey dashed), SL (red solid), TP (green solid), volume bars at bottom.\n"
-        "5. Engine B annotations if present: support zones (green), resistance zones (red), "
-        "BOS markers (amber), CHoCH markers (purple), Order Blocks (labelled boxes), FVG zones (cyan dashed), "
-        "previous-session POC (amber), VAH (violet dashed), VAL (violet dashed).\n"
-        "6. Analyze ONLY the indicators present on this chart: EMA 21, EMA 50, EMA 200, Keltner Channel (1.5 ATR), "
-        "volume bars, and key levels (S/R, OB, FVG, POC, VAH, VAL). Do not reference any other indicator.\n"
-        "7. Cross-reference what you see with the algorithmic context. If they disagree, say so explicitly.\n"
-        "8. If PREVIOUS SESSION PROFILE context is provided: note whether price is above, inside, or below the prior "
-        "value area; identify whether price is reacting at POC, VAH, or VAL; state whether that reaction confirms or contradicts the trade direction.\n"
-        "9. Be direct. No filler, no hedging, no disclaimers. You are advising a professional.\n"
-        "10. If the chart clearly contradicts the algorithmic direction, the verdict should lean CLOSE or ADJUST and the structured footer must reflect CONTRADICTS.\n\n"
-        "EXTRACT FROM CHART:\n"
-        "- Instrument, timeframe, and direction (long/short)\n"
-        "- Entry, Stop Loss, and Take Profit levels\n"
-        "- Risk/Reward ratio (if not inferable from visible or provided levels, state 'not clearly inferable' — never fabricate)\n"
-        "- All visible indicators: EMAs, Keltner Channel position, volume\n"
-        "- Key levels visible: Support, Resistance, POC, VAH, VAL, Order Blocks, FVGs\n\n"
-        "ANALYZE (address each point):\n"
-        "1. Trend Structure — Is the trade WITH or AGAINST the dominant trend?\n"
-        "2. EMA Alignment — Are EMA21/50/200 stacked bullishly or bearishly? Only reference EMAs clearly visible on the chart.\n"
-        "3. Level Confluence — Does entry sit near meaningful S/R, OB, volume node, or FVG?\n"
-        "4. Keltner Channel — Is price extended beyond the channel, mean-reverting toward EMA21, or compressing inside the channel?\n"
-        "5. Stop Logic — Is SL placed beyond a logical invalidation point, or does it sit inside noise?\n"
-        "6. Target Viability — Is TP realistic given visible structure? Identify the nearest obstacle between entry and TP.\n"
-        "7. Volume Confirmation — Does volume support the trade direction?\n"
-        "8. Risk/Reward — Is the RR acceptable (minimum 1:2)?\n\n"
-        "OUTPUT FORMAT:\n"
-        "| Parameter | Value |\n"
-        "|---|---|\n"
-        "| Instrument | ... |\n"
-        "| Timeframe | ... |\n"
-        "| Direction | LONG / SHORT |\n"
-        "| Entry | ... |\n"
-        "| Stop Loss | ... |\n"
-        "| Take Profit | ... |\n"
-        "| Risk/Reward | ... |\n\n"
-        "SUPPORTING FACTORS: (bullet list — only evidence visible on chart/context)\n"
-        "CONCERNS & RISKS: (bullet list)\n"
-        "FINAL VERDICT: HOLD / CLOSE / ADJUST — one sentence justification.\n"
-        "ACTIONABLE SUGGESTION: One specific, concrete action.\n\n"
-        "STRUCTURED FOOTER (required — used by algorithmic engine, do not omit):\n"
-        "SCALP RATING: STRONG / MODERATE / WEAK / AVOID / CONTRADICTS\n"
-        "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID / CONTRADICTS\n"
-        "SWING RATING: STRONG / MODERATE / WEAK / AVOID / CONTRADICTS\n"
-        "TF ALIGNMENT: ALIGNED / CONFLICTED"
-    )
-
-    system_prompt = (
-        "You are a professional trading analyst reviewing chart screenshots.\n"
-        "Algorithmic context is supplied for cross-check only after you have visually read the chart(s).\n\n"
-        "WORKFLOW (mandatory order):\n"
-        "1. Examine the chart image(s) first. Do not let algorithmic text pre-label what you see.\n"
-        "2. Read instrument and timeframe from the chart — check the top-left header bar, watermark, symbol strip, and title area. "
-        "Sentinel Pro shows the pair and live price in the top-left header (e.g. 'NZD/USD 0.57557 SHORT'). "
-        "You MUST read this before checking algorithmic context. If supplied context implies a different symbol, trust the chart label.\n"
-        "3. Read the last 5 candles on the right edge of the authoritative chart (single/H4-only: that chart; dual: H4; triple: H1). "
-        "Lead with what they MEAN for the trade (momentum, control, continuation vs stall vs reversal risk), not a decorative colour-by-colour inventory. "
-        "At most one short factual summary of the five closes (oldest→newest) after that, only as evidence.\n"
-        "4. Only then read and compare to the algorithmic context.\n"
-        "5. If chart-visible facts conflict with algorithmic context (direction, structure, instrument identity, right-edge read), "
-        "the image is authoritative — state the conflict explicitly; verdict and ratings must reflect what you see.\n\n"
-        "ABSOLUTE RULES:\n"
-        "1. ONLY describe what you can ACTUALLY SEE on the chart. If something is unclear, say 'not clearly visible'.\n"
-        "2. NEVER invent patterns, levels, formations, barriers, or price behavior not clearly visible in the image.\n"
-        "3. Prefer prices from the chart (axis and overlay lines). Use algorithmic context numbers only when the same level "
-        "is unreadable on the chart; if context disagrees with what you see, trust the chart.\n"
-        "4. The chart shows candles, EMA21, EMA50, EMA200, Keltner Channel, entry, SL, TP, volume, and Engine B annotations when present.\n"
-        "5. After your visual read, cross-reference algorithmic context. If they disagree, say so explicitly and apply the image-wins rule above.\n"
-        "6. If PREVIOUS SESSION PROFILE context is provided, note whether price is above, inside, or below prior value, and whether POC/VAH/VAL reaction confirms or contradicts the trade.\n"
-        "7. Be direct. No filler, no hedging, no disclaimers.\n"
-        "8. INSTRUMENT/TIMEFRAME (metadata only when the chart label is unreadable): If after checking header, watermark, symbol strip, and title you still cannot read instrument or timeframe, "
-        "do NOT guess identity. Do NOT output multiple candidate symbols, alternate pairs, or identity hedging using: likely, maybe, appears, possibly, or. "
-        "If and only if the label is unreadable: write exactly the phrase 'chart label not legible — from request', then state instrument and timeframe using ONLY the chart-analysis request metadata in the user message (symbol + tf; multi-image: the request header and each image's stated TF role). "
-        "Do not use ENGINE A/B algorithmic text to infer or substitute instrument identity.\n\n"
-        "ENTRY POSITIONING & MOVE QUALITY RULES:\n"
-        "9. ENTRY POSITIONING: Assess whether the entry is at a tactical location (retracement to S/R, pullback to EMA, zone re-test) "
-        "or whether it is chasing the move into a support/resistance cluster. If price is at or near multiple stacked levels "
-        "(POC, VAH, VAL, support, FVG all within a tight range near entry), flag this as a congestion zone — entries INTO congestion are low-probability.\n"
-        "10. VOLATILITY-REGIME INTERACTION: If the algorithmic regime is LOW_VOLATILITY or DEAD_RANGING, assess whether the setup suits that environment. "
-        "In low volatility, breakdowns at support and breakouts at resistance are more likely to fail and mean-revert. "
-        "Flag if the trade is a breakout/breakdown in a low-vol regime.\n"
-        "11. MOVE MATURITY: Estimate where in the trend leg the entry sits. If the trend has already moved significantly "
-        "and the TP target is a small fraction of the move already completed, flag the entry as potentially late/exhausted.\n"
-        "12. RR REALITY CHECK: Independently verify the risk-reward by comparing visible SL distance vs TP distance from entry. "
-        "If TP1 and TP2 are nearly identical or the actual RR on TP1 is below 1:1.5, flag this explicitly regardless of what the algo displays.\n\n"
-        "CRITICAL - RIGHT EDGE ANALYSIS:\n"
-        "- Before issuing any verdict, inspect the last 5 candles on the right edge of the chart.\n"
-        "- Do NOT output a long play-by-play of each candle (e.g. 'small green, then red, then doji…') as your main answer. "
-        "That is useless without interpretation. Always answer: what does the sequence imply for pressure, momentum, and invalidation vs the trade?\n"
-        "- REQUIRED: explicitly say whether the right edge CONFIRMS the algorithmic direction, is NEUTRAL/unclear, or THREATENS / opposes it, with one sentence of why.\n"
-        "- If the last 3 or more candles are counter-trend with rising volume, classify this as RIGHT EDGE: POTENTIAL REVERSAL even if prior structure was supportive.\n"
-        "- If price has reclaimed EMA21, EMA50, or EMA200 against the trade since the entry, HOLD is no longer allowed.\n"
-        "- HOLD is only allowed if the right edge still confirms the trade direction.\n"
-        "- If the right edge does not confirm the trade direction, the verdict must be ADJUST or CLOSE.\n"
-        "- Include one explicit line immediately before the existing parser footer: RIGHT EDGE: CONFIRMS | REVIEW | POTENTIAL REVERSAL."
-    )
-
+    system_prompt = build_system_prompt()
     direction_str = sig.get("direction", "UNKNOWN") if sig else "UNKNOWN"
 
     def _extract_vision_structured(
@@ -7566,32 +7483,27 @@ def api_chart_analysis():
 
         if out["style_ratings"]:
             vals = set(out["style_ratings"].values())
-            # BUG 10 fix: Handle mixed supportive/negative sentiments without total blocking.
-            # If both exist, downgrade to MODERATE so the signal remains available.
             supportive = {"STRONG", "MODERATE"}
             negative = {"CONTRADICTS", "AVOID"}
-            
+
             if (vals & supportive) and (vals & negative):
                 out["rating"] = "MODERATE"
-                out["confirms_direction"] = False  # Conflicted results should not fully confirm
+                out["confirms_direction"] = False
             else:
-                # Normal severity-first precedence logic
                 for label in ("CONTRADICTS", "AVOID", "STRONG", "MODERATE", "WEAK"):
                     if label in vals:
                         out["rating"] = label
                         break
 
         if not out["rating"]:
-            # Fallback free-text search with same severity-first precedence
             for label in ("CONTRADICTS", "AVOID", "WEAK", "MODERATE", "STRONG"):
                 if label in up:
                     out["rating"] = label
                     break
 
-        # Explicitly handle 'CONFLICTED' or 'CONTRADICT' in free-text for safety
         if "CONFLICTED" in up or "CONTRADICT" in up:
             if out["rating"] in ("STRONG", "MODERATE"):
-                out["rating"] = "MODERATE"  # Hold at MODERATE if conflict exist
+                out["rating"] = "MODERATE"
             else:
                 out["rating"] = out["rating"] or "CONTRADICTS"
             out["confirms_direction"] = False
@@ -7647,13 +7559,13 @@ def api_chart_analysis():
             except (TypeError, ValueError):
                 return None
 
-        def _levels_valid(entry: float | None, direction: str, sl: float | None, tp1: float | None) -> bool:
-            if entry is None or entry <= 0 or sl is None or tp1 is None:
+        def _levels_valid(entry: float | None, direction: str, slv: float | None, tp1v: float | None) -> bool:
+            if entry is None or entry <= 0 or slv is None or tp1v is None:
                 return False
             if direction == "LONG":
-                return sl < entry < tp1
+                return slv < entry < tp1v
             if direction == "SHORT":
-                return sl > entry > tp1
+                return slv > entry > tp1v
             return False
 
         _current_sets = current_level_sets or {}
@@ -7679,7 +7591,6 @@ def api_chart_analysis():
                 "rr": round((reward / risk), 2) if risk > 0 else None,
             }
 
-        # Keep the AI execution path resilient when the model omits explicit KEEP lines.
         for style_key in ("scalp", "intraday", "swing"):
             if out["level_suggestions"].get(style_key):
                 continue
@@ -7708,145 +7619,12 @@ def api_chart_analysis():
             out["rating"] = "MODERATE"
         return out
 
-    user_prompt = (
-        f"Analyse this {asset_type.upper()} chart ({tf} timeframe).\n\n"
-        f"ALGORITHMIC CONTEXT (cross-check after chart read; image wins on conflict):\n{algo_context}\n\n"
-        "WHAT TO LOOK FOR ON THE CHART:\n"
-        "- EMA ordering: Is EMA21 > EMA50 > EMA200 (bullish stack) or inverted? Any crossovers?\n"
-        "- Price vs EMAs: Is price above all EMAs (strong trend) or sandwiched/below?\n"
-        "- Last 5 candles: Expansion or contraction? Any reversal candles (engulfing, pin bar, doji)?\n"
-        "- Volume: Is the most recent bar above or below average? Rising or falling?\n"
-        "- SL line (red): Is there visible structure (swing low/high) near the SL? Is it protected or exposed?\n"
-        "- TP line (green): Is there visible resistance/support near TP? Any order blocks or FVGs blocking the path?\n"
-        "- Previous-session profile if visible: Is price above, inside, or below the VAH/VAL band? Is it reacting at POC?\n"
-        "- If Engine B zones are visible: Is price entering or leaving a zone? Any unfilled FVGs between entry and TP?\n\n"
-        "ANSWER EXACTLY THESE 5 QUESTIONS (reference specific prices and visible candle patterns):\n"
-        f"1. PATTERN: What specific candle/chart pattern is visible in the last 10-20 bars? "
-        f"Name it precisely (flag, wedge, channel, H&S, double top/bottom, pullback to EMA, breakout, consolidation). "
-        f"If no clear pattern, say 'no clear pattern — range-bound' or similar.\n"
-        f"2. STRUCTURE: Does the visible EMA ordering and price position CONFIRM or CONTRADICT "
-        f"the algorithmic {direction_str} bias? State the EMA order you see.\n"
-        f"3. MISSED: Are there visible chart features the algorithm might have missed? "
-        f"Only name what you can actually SEE — unmitigated FVG zones, equal highs/lows forming "
-        f"liquidity pools, hidden divergence between price and volume, trendline touches. "
-        f"If nothing is visible, say 'no additional features visible'.\n"
-        f"4. SL/TP CHECK: Read the SL (red line) and TP (green line) prices from the chart. "
-        f"Is the SL behind visible structure (swing high/low)? Is there visible resistance/support "
-        f"BETWEEN entry and TP that could block the move? Name specific price levels.\n"
-        "5. PER-STYLE RATINGS: Rate for each style based on what the chart shows.\n"
-        "SCALP RATING: STRONG / MODERATE / WEAK / AVOID (cite the candle pattern and vol)\n"
-        "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID (cite EMA alignment and structure)\n"
-        "SWING RATING: STRONG / MODERATE / WEAK / AVOID (cite trend direction and higher-TF bias)\n"
-        "(Use CONTRADICTS only if the chart CLEARLY opposes the algorithmic direction)\n\n"
-        "6. STYLE LEVELS: For SCALP, INTRADAY, and SWING separately, state whether SL/TP should be KEPT "
-        "or give exact numeric prices if adjustment is warranted. One sentence per style.\n\n"
-        "You MUST end with exactly these 7 lines:\n"
-        "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
-        "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-        "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-        "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-        "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-        "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-        "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-        "Keep total response under 380 words. Reference specific prices. No speculation."
-    )
-
-    user_prompt = (
-        f"Analyse this {asset_type.upper()} chart ({tf} timeframe).\n\n"
-        f"ALGORITHMIC CONTEXT (cross-check after chart read; image wins on conflict):\n{algo_context}\n\n"
-        "Keep the analysis concise, structured, and easy to scan. Do not turn it into a long report.\n\n"
-        "ANSWER EXACTLY THESE 6 QUESTIONS using short paragraphs or short bullet lists where helpful:\n"
-        "1. TRADE SNAPSHOT: instrument, timeframe, direction, entry, SL, TP, and RR if inferable. "
-        "If any are unclear, say 'not clearly visible' or 'not clearly inferable'.\n"
-        f"2. STRUCTURE: Does the visible EMA ordering and price position CONFIRM or CONTRADICT the algorithmic {direction_str} bias? "
-        "State the EMA order, whether price is with or against trend, and whether the setup looks like a re-test, breakout, continuation, range, or failed breakout.\n"
-        "3. CONFLUENCE: What visible support/resistance, OB, FVG, BOS/CHoCH, or previous-session profile levels matter most here? "
-        "Mention the nearest obstacle between entry and TP first.\n"
-        "4. RISK CHECK: Is the SL behind logical invalidation or sitting inside noise? Is the TP realistic? "
-        "Does volume support the move? If price is inside prior value area, say so clearly.\n"
-        "5. BULL VS BEAR: Give one short 'Bullish factors' line and one short 'Bearish factors' line using only visible/chart-context evidence.\n"
-        "6. FINAL REVIEW: Give key risk, a final verdict of HOLD / CLOSE / ADJUST, a setup quality score from 1-10, and one actionable improvement.\n\n"
-        "PER-STYLE RATINGS:\n"
-        "SCALP RATING: STRONG / MODERATE / WEAK / AVOID (cite the candle pattern and volume)\n"
-        "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID (cite EMA alignment and structure)\n"
-        "SWING RATING: STRONG / MODERATE / WEAK / AVOID (cite trend direction and higher-TF bias)\n"
-        "(Use CONTRADICTS only if the chart CLEARLY opposes the algorithmic direction)\n\n"
-        "STYLE LEVELS:\n"
-        "For SCALP, INTRADAY, and SWING separately, ALWAYS output SL/TP lines. Use KEEP if unchanged, otherwise give exact numeric prices.\n"
-        "The final 7 lines must be the LAST 7 lines of the response, with nothing after them.\n\n"
-        "You MUST end with exactly these 7 lines:\n"
-        "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
-        "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-        "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-        "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-        "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-        "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-        "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-        "Keep total response under 360 words. Reference specific prices. No speculation."
-    )
-
-    user_prompt = (
-        "The chart screenshot is attached above this message.\n\n"
-        "STEP 1 — VISUAL READ FIRST (complete this before reading algorithmic context in STEP 2):\n"
-        "- Examine the full chart image.\n"
-        "- Find instrument + timeframe from visible chart UI. Check ALL of: top-left watermark, symbol strip, title bar, price axis labels. "
-        "Sentinel Pro charts show the pair name and live price in the top-left header bar (e.g. 'NZD/USD 0.57557').\n"
-        "- You MUST read the instrument from the chart. Only if you genuinely cannot find ANY text label after checking all areas, "
-        "describe the label area briefly, then state exactly 'chart label not legible — from request' and give instrument and timeframe using ONLY "
-        f"symbol={symbol!r} and timeframe={tf!r} from this chart-analysis request. Do not guess alternatives; do not list candidate pairs; "
-        "do not use likely, maybe, appears, possibly, or for instrument identity.\n"
-        f"- On the right edge of this {tf} chart: lead with INTERPRETATION (2–4 sentences): bullish vs bearish pressure, momentum building/fading/mixed, "
-        "who controls the last 1–2 closes, continuation vs pullback vs reversal risk — and whether that confirms or threatens the algorithmic direction "
-        "(use STEP 2 below for LONG/SHORT). Then at most ONE compact sentence of fact (oldest→newest closes) as evidence if needed. "
-        "Do not write a decorative candle-by-candle colour story without stating what it means for the trade.\n\n"
-        "STEP 2 — ALGORITHMIC CONTEXT (for cross-check after STEP 1; if anything here conflicts with the image, the image wins):\n"
-        + algo_context
-        + "\n\n"
-        "Keep the analysis concise, structured, and easy to scan.\n\n"
-        "Use this exact body order:\n"
-        "TRADE SNAPSHOT:\n"
-        "- instrument + timeframe: read from the chart image — the pair name and price are in the top-left header bar. "
-        f"If genuinely unreadable after checking all label areas: state 'chart label not legible — from request' then instrument={symbol!r} and timeframe={tf!r} only. "
-        "Do not infer identity from algorithmic context; do not list multiple candidate symbols.\n"
-        "- then direction, entry, SL, TP, RR if inferable; if those are unclear say 'not clearly visible' or 'not clearly inferable'\n\n"
-        "MARKET STRUCTURE:\n"
-        "- EMA order and trend alignment; compare to algorithmic direction — if chart and context conflict, state that the chart governs\n"
-        "- whether the setup looks like a re-test, breakout, continuation, range, or failed breakout\n"
-        "- mention the nearest obstacle between entry and TP first\n\n"
-        "RIGHT EDGE:\n"
-        "- First line: plain verdict — right edge confirms the trade / warns (choppy or unclear) / actively threatens or opposes the trade — and why (meaning, not colours).\n"
-        "- Then: counter-trend check on the last 3 candles, volume on that leg (rising/falling), any EMA21/50/200 reclaim against the trade since entry.\n"
-        "- Optional: one short oldest→newest fact line only; no extended per-candle narration.\n\n"
-        "BULLISH FACTORS:\n"
-        "- only visible evidence from the chart\n\n"
-        "BEARISH FACTORS:\n"
-        "- only visible evidence from the chart\n\n"
-        "KEY RISKS:\n"
-        "- include SL logic, TP realism, and profile/value-area issues if visible\n\n"
-        "ENTRY QUALITY:\n"
-        "- Is this entry at a tactical pullback/retest, or is it chasing into a support/resistance cluster?\n"
-        "- If multiple levels (POC, VAH, VAL, SUP/RES, FVG) are stacked near entry, flag as congestion — low-probability entry zone\n"
-        "- How far has the trend already moved vs how far TP needs to go? Flag if the move looks exhausted\n"
-        "- Does the volatility regime from the algorithmic context suit this type of entry? Low-vol breakdowns/breakouts often fail\n"
-        "- Verify RR independently: compare actual SL pip distance vs TP1 pip distance; flag if TP1 RR < 1:1.5 or if TP1 ≈ TP2\n\n"
-        "FINAL VERDICT:\n"
-        "- HOLD / ADJUST / CLOSE with one sentence justification\n"
-        "- HOLD is only allowed if the right edge still confirms the trade direction\n\n"
-        "ACTIONABLE IMPROVEMENT:\n"
-        "- one specific concrete action\n\n"
-        "Then output one machine-readable line immediately before the parser footer:\n"
-        "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n\n"
-        "Use the existing footer for style ratings and AI levels. The final 8 lines must be the RIGHT EDGE line plus the exact 7 footer lines, with nothing after them.\n"
-        "You MUST end with exactly these 8 lines:\n"
-        "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
-        "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
-        "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-        "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-        "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-        "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-        "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-        "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-        "Keep total response under 500 words. Reference specific prices. No speculation."
+    user_prompt = build_single_prompt(
+        symbol=symbol,
+        tf=tf,
+        direction_str=direction_str,
+        algo_context=algo_context,
+        asset_type=asset_type,
     )
 
     try:
@@ -7858,404 +7636,62 @@ def api_chart_analysis():
 
         client = _openai_chart.OpenAI(api_key=_xai_key, base_url="https://api.x.ai/v1")
 
-        # Strip data URL prefix if present (H4 primary image)
-        img_h4 = data["image"]
+        img_h4 = str(data["image"])
         if img_h4.startswith("data:"):
             img_h4 = img_h4.split(",", 1)[1]
 
-        # Optional D1 bias image
         img_d1 = data.get("image_d1")
-        if img_d1 and img_d1.startswith("data:"):
+        if isinstance(img_d1, str) and img_d1.startswith("data:"):
             img_d1 = img_d1.split(",", 1)[1]
 
-        # Optional H1 entry image (Engine C triple-screen)
         img_h1 = data.get("image_h1")
-        if img_h1 and img_h1.startswith("data:"):
+        if isinstance(img_h1, str) and img_h1.startswith("data:"):
             img_h1 = img_h1.split(",", 1)[1]
 
         dual_mode = bool(img_d1)
         triple_mode = bool(img_d1 and img_h1)
 
         if triple_mode:
-            # ── Triple-screen (Elder): D1 bias, H4 tactical, H1 entry quality ──
-            triple_prompt = (
-                f"You are reviewing THREE charts for {asset_type.upper()} — {symbol}.\n"
-                "IMAGE 1 is D1 (daily) — strategic TREND / BIAS filter.\n"
-                "IMAGE 2 is H4 (4-hour) — intermediate structure, momentum, EMA stack.\n"
-                "IMAGE 3 is H1 (1-hour) — entry timing: EMA21 reclaim, trigger candle.\n\n"
-                f"ALGORITHMIC CONTEXT (cross-check after chart read; image wins on conflict):\n{algo_context}\n\n"
-                "CHART ANNOTATIONS (same in all three images):\n"
-                "- Candles (green=bull, red=bear) · EMA21 (cyan) · EMA50 (purple) · EMA200 (gold dashed)\n"
-                "- Entry (grey dashed) · SL (red solid) · TP (green solid) horizontal lines\n"
-                "- Engine B zones if present: support (green), resistance (red), BOS (amber), CHoCH (purple), OB (labelled), FVG (cyan dashed), POC (amber), VAH/VAL (violet dashed)\n\n"
-                "ABSOLUTE RULES: ONLY describe what you can ACTUALLY SEE. Do not invent patterns. "
-                "Reference exact prices from the algorithmic context or chart axis.\n\n"
-                "ANSWER THESE 6 QUESTIONS (cite specific prices and visible candle patterns):\n"
-                f"1. D1 BIAS: What EMA ordering and trend structure is visible on D1? Does it CONFIRM or CONTRADICT "
-                f"the algorithmic {direction_str} signal? State the EMA order you see.\n"
-                f"2. H4 STRUCTURE: What EMA stack and swing structure is visible on H4? Does it confirm {direction_str}? "
-                "Name any visible BOS, order blocks, or FVGs between entry and TP.\n"
-                f"3. H1 ENTRY: What does H1 show for entry quality? Is price near EMA21? "
-                "Describe the last 3 candles — reversal, continuation, or indecision?\n"
-                "4. TF ALIGNMENT: Do all three TFs support the same direction based on what you SEE? "
-                "Answer ALIGNED or CONFLICTED. CONFLICTED = skip the trade. "
-                "Are SL and TP behind visible structure? If POC/VAH/VAL are visible, say whether price is accepting or rejecting prior value. Name price levels.\n"
-                "5. PER-STYLE RATINGS (cite visible evidence — H1 for SCALP, H4 for INTRADAY, D1 for SWING):\n"
-                "SCALP RATING: STRONG / MODERATE / WEAK / AVOID (cite H1 candle + volume)\n"
-                "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID (cite H4 EMA + structure)\n"
-                "SWING RATING: STRONG / MODERATE / WEAK / AVOID (cite D1 trend + EMA stack)\n"
-                "(Use CONTRADICTS only if that TF clearly opposes the algorithmic direction)\n"
-                "6. STYLE LEVELS: For each style state KEEP or give exact numeric prices if adjustment is warranted.\n\n"
-                "You MUST end with exactly these 7 lines:\n"
-                "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
-                "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-                "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-                "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-                "Keep total response under 480 words. Reference specific prices. No speculation."
-            )
-            triple_prompt = (
-                f"You are reviewing THREE charts for {asset_type.upper()} - {symbol}.\n"
-                "IMAGE 1 is D1 (daily) - dominant bias and swing trend quality.\n"
-                "IMAGE 2 is H4 (4-hour) - tactical structure, support/resistance path, FVG/OB context.\n"
-                "IMAGE 3 is H1 (1-hour) - immediate trigger quality, candle behavior, short-horizon invalidation quality.\n\n"
-                f"ALGORITHMIC CONTEXT (cross-check after chart read; image wins on conflict):\n{algo_context}\n\n"
-                "CHART ANNOTATIONS (same in all three images):\n"
-                "- Candles (green=bull, red=bear) · EMA21 (cyan) · EMA50 (purple) · EMA200 (gold dashed)\n"
-                "- Entry (grey dashed) · SL (red solid) · TP (green solid) horizontal lines\n"
-                "- Engine B zones if present: support (green), resistance (red), BOS (amber), CHoCH (purple), OB (labelled), FVG (cyan dashed), POC (amber), VAH/VAL (violet dashed)\n\n"
-                "Keep the analysis concise and easy to scan.\n\n"
-                "ANSWER EXACTLY THESE 6 QUESTIONS using short paragraphs:\n"
-                "1. TRADE SNAPSHOT: instrument, direction, entry, SL, TP, and RR if inferable. If unclear, say 'not clearly visible' or 'not clearly inferable'.\n"
-                f"2. D1 BIAS: what EMA order and dominant trend are visible on D1, and do they confirm or contradict the algorithmic {direction_str} direction?\n"
-                "3. H4 STRUCTURE: what tactical structure is visible on H4, does it look like a re-test, breakout, continuation, range, or failed breakout, and what is the nearest obstacle between entry and TP?\n"
-                "4. H1 ENTRY: what do the last 3 H1 candles show, and does the trigger quality support the trade? If profile levels are visible, state whether price is above, inside, or below prior value and whether it is accepting or rejecting POC/VAH/VAL.\n"
-                "5. BULL VS BEAR: give one short 'Bullish factors' line and one short 'Bearish factors' line using only visible/chart-context evidence.\n"
-                "6. FINAL REVIEW: give key risk, final verdict HOLD / CLOSE / ADJUST, setup quality 1-10, and one actionable improvement.\n\n"
-                "PER-STYLE RATINGS (cite visible evidence - H1 for SCALP, H4 for INTRADAY, D1 for SWING):\n"
-                "SCALP RATING: STRONG / MODERATE / WEAK / AVOID\n"
-                "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID\n"
-                "SWING RATING: STRONG / MODERATE / WEAK / AVOID\n"
-                "(Use CONTRADICTS only if that TF clearly opposes the algorithmic direction)\n\n"
-                "STYLE LEVELS: For each style ALWAYS output SL/TP lines. Use KEEP if unchanged, otherwise give exact numeric prices.\n"
-                "The final 7 lines must be the LAST 7 lines of the response, with nothing after them.\n\n"
-                "You MUST end with exactly these 7 lines:\n"
-                "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
-                "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-                "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-                "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-                "Keep total response under 420 words. Reference specific prices. No speculation."
-            )
-            triple_prompt = (
-                "Three chart images are attached above this text: IMAGE 1 = D1, IMAGE 2 = H4, IMAGE 3 = H1.\n\n"
-                "STEP 1 — VISUAL READ FIRST (before algorithmic context in STEP 2):\n"
-                "- For each image, read instrument + timeframe from visible chart UI. Check ALL of: top-left header bar, watermark, symbol strip, title area. "
-                "Sentinel Pro charts show the pair name and live price in the top-left header. "
-                f"If unreadable after checking all areas: state 'chart label not legible — from request' and use ONLY request symbol {symbol!r} with timeframes D1, H4, and H1 as labeled by image role (IMAGE1=D1, IMAGE2=H4, IMAGE3=H1). "
-                "Do not guess candidate pairs; do not use likely, maybe, appears, possibly, or for identity.\n"
-                "- On IMAGE 3 (H1) right edge: same as single-TF rules — lead with INTERPRETATION (pressure, momentum, control of last closes, continuation vs pullback vs reversal risk; confirm vs threaten algorithmic direction from STEP 2). "
-                "Then at most one compact oldest→newest fact sentence. No decorative candle-by-candle colour play-by-play.\n\n"
-                "STEP 2 — ALGORITHMIC CONTEXT (cross-check after STEP 1; if it conflicts with the image, the image wins):\n"
-                + algo_context
-                + "\n\n"
-                "IMAGE ROLES (for your narrative after the read above):\n"
-                "IMAGE 1 is D1 (daily) - dominant bias and swing trend quality.\n"
-                "IMAGE 2 is H4 (4-hour) - tactical structure, support/resistance path, FVG/OB context.\n"
-                "IMAGE 3 is H1 (1-hour) - decisive right-edge trigger check, candle behavior, short-horizon invalidation.\n\n"
-                "Keep the analysis concise and easy to scan.\n\n"
-                "Use this exact body order:\n"
-                "TRADE SNAPSHOT\n"
-                "MARKET STRUCTURE\n"
-                "RIGHT EDGE\n"
-                "BULLISH FACTORS\n"
-                "BEARISH FACTORS\n"
-                "KEY RISKS\n"
-                "ENTRY QUALITY\n"
-                "FINAL VERDICT\n"
-                "ACTIONABLE IMPROVEMENT\n\n"
-                "Instructions:\n"
-                "- TRADE SNAPSHOT: one line for instrument + each TF (D1/H4/H1); read from the chart image header bar. "
-                f"If unreadable: 'chart label not legible — from request' then instrument={symbol!r} with D1/H4/H1 from request roles only — not from ENGINE A/B text.\n"
-                f"- D1: dominant bias vs the algorithmic {direction_str} direction; if chart contradicts context, chart governs.\n"
-                "- H4: tactical structure, nearest obstacle between entry and TP, re-test / breakout / continuation / range / failed breakout.\n"
-                "- H1 RIGHT EDGE: open with what the last 5 H1 candles MEAN for the trade (confirm / warn / oppose), then counter-trend on last 3, volume on that leg, EMA21/50/200 reclaim against the trade if visible — not a long per-candle description.\n"
-                "- If H1 right edge shows counter-trend candles with rising volume or EMA reclaim against the trade, the verdict must be ADJUST or CLOSE.\n"
-                "- HOLD is only allowed if the H1 right edge still confirms the trade direction.\n"
-                "- ENTRY QUALITY: Is the entry at a tactical pullback/retest or chasing into stacked S/R? "
-                "Flag congestion zones (POC+VAH+VAL+SUP clustered near entry). Flag if the trend is extended and TP is a small fraction of the move done. "
-                "Flag if regime is LOW_VOLATILITY and trade is a breakdown/breakout. Verify TP1 RR independently.\n\n"
-                "Then output one machine-readable line immediately before the parser footer:\n"
-                "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
-                "The final 8 lines must be that RIGHT EDGE line plus the exact 7 parser footer lines, with nothing after them.\n\n"
-                "You MUST end with exactly these 8 lines:\n"
-                "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
-                "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
-                "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-                "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-                "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-                "Keep total response under 530 words. Reference specific prices. No speculation."
-            )
-            dual_prompt = (
-                "Two chart images are attached above this text: IMAGE 1 = D1, IMAGE 2 = H4.\n\n"
-                "STEP 1 — VISUAL READ FIRST (before algorithmic context in STEP 2):\n"
-                "- For each image, read instrument and timeframe from visible chart UI. If unreadable: 'chart label not legible — from request' then "
-                f"instrument={symbol!r} with D1/H4 per image role — no candidate pairs; no likely, maybe, appears, possibly, or for identity.\n"
-                "- On IMAGE 2 (H4) right edge: lead with INTERPRETATION (pressure, momentum, control of last closes, continuation vs pullback vs reversal risk; confirm vs threaten direction from STEP 2). "
-                "Then at most one compact oldest→newest fact sentence. No decorative candle-by-candle play-by-play.\n\n"
-                "STEP 2 — ALGORITHMIC CONTEXT (cross-check after STEP 1; if it conflicts with the image, the image wins):\n"
-                + algo_context
-                + "\n\n"
-                "IMAGE ROLES:\n"
-                "IMAGE 1 is D1 (daily) - dominant bias, macro EMA structure, swing-quality context.\n"
-                "IMAGE 2 is H4 (4-hour) - tactical entry chart, obstacle map, decisive right-edge review.\n\n"
-                "Keep the analysis concise and easy to scan.\n\n"
-                "Use this exact body order:\n"
-                "TRADE SNAPSHOT\n"
-                "MARKET STRUCTURE\n"
-                "RIGHT EDGE\n"
-                "BULLISH FACTORS\n"
-                "BEARISH FACTORS\n"
-                "KEY RISKS\n"
-                "FINAL VERDICT\n"
-                "ACTIONABLE IMPROVEMENT\n\n"
-                "Instructions:\n"
-                f"- D1: macro bias vs the algorithmic {direction_str} direction; if chart contradicts context, chart governs.\n"
-                "- H4: tactical structure, nearest obstacle between entry and TP, re-test / breakout / continuation / range / failed breakout.\n"
-                "- RIGHT EDGE (H4): open with what the last 5 H4 candles MEAN for the trade (confirm / warn / oppose), then counter-trend on last 3, volume on that leg, EMA reclaim against the trade if visible — avoid extended colour-by-colour narration.\n"
-                "- If the H4 right edge does not confirm the trade, FINAL VERDICT cannot be HOLD.\n\n"
-                "Then output one machine-readable line immediately before the parser footer:\n"
-                "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
-                "The final 8 lines must be that RIGHT EDGE line plus the exact 7 parser footer lines, with nothing after them.\n\n"
-                "You MUST end with exactly these 8 lines:\n"
-                "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
-                "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
-                "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-                "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-                "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-                "Keep total response under 420 words. Reference specific prices. No speculation."
-            )
-            dual_prompt = (
-                "Two chart images are attached above this text: IMAGE 1 = D1, IMAGE 2 = H4.\n\n"
-                "STEP 1 — VISUAL READ FIRST (before algorithmic context in STEP 2):\n"
-                "- For each image, read instrument and timeframe from the chart top-left (say 'not legible' if unclear). Do not guess from elsewhere.\n"
-                "- On IMAGE 2 (H4) right edge: lead with INTERPRETATION (pressure, momentum, control of last closes, continuation vs pullback vs reversal risk; confirm vs threaten direction from STEP 2). "
-                "Then at most one compact oldest→newest fact sentence. No decorative candle-by-candle play-by-play.\n\n"
-                "STEP 2 — ALGORITHMIC CONTEXT (cross-check after STEP 1; if it conflicts with the image, the image wins):\n"
-                + algo_context
-                + "\n\n"
-                "IMAGE ROLES:\n"
-                "IMAGE 1 is D1 (daily) - dominant bias, macro EMA structure, swing-quality context.\n"
-                "IMAGE 2 is H4 (4-hour) - tactical entry chart, obstacle map, decisive right-edge review.\n\n"
-                "Keep the analysis concise and easy to scan.\n\n"
-                "Use this exact body order:\n"
-                "TRADE SNAPSHOT\n"
-                "MARKET STRUCTURE\n"
-                "RIGHT EDGE\n"
-                "BULLISH FACTORS\n"
-                "BEARISH FACTORS\n"
-                "KEY RISKS\n"
-                "FINAL VERDICT\n"
-                "ACTIONABLE IMPROVEMENT\n\n"
-                "Instructions:\n"
-                f"- TRADE SNAPSHOT: instrument + D1 and H4 timeframes; read from chart headers. If illegible: state 'chart label not legible — from request' then instrument={symbol!r} with D1 and H4 per image role only — no candidate pairs; no likely, maybe, appears, possibly, or for identity.\n"
-                f"- D1: macro bias vs the algorithmic {direction_str} direction; if chart contradicts context, chart governs.\n"
-                "- H4: tactical structure, nearest obstacle between entry and TP, re-test / breakout / continuation / range / failed breakout.\n"
-                "- RIGHT EDGE (H4): open with what the last 5 H4 candles MEAN for the trade (confirm / warn / oppose), then counter-trend on last 3, volume on that leg, EMA reclaim against the trade if visible — avoid extended colour-by-colour narration.\n"
-                "- If the H4 right edge does not confirm the trade, FINAL VERDICT cannot be HOLD.\n\n"
-                "Then output one machine-readable line immediately before the parser footer:\n"
-                "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
-                "The final 8 lines must be that RIGHT EDGE line plus the exact 7 parser footer lines, with nothing after them.\n\n"
-                "You MUST end with exactly these 8 lines:\n"
-                "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
-                "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
-                "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-                "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-                "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-                "Keep total response under 420 words. Reference specific prices. No speculation."
+            triple_prompt = build_triple_prompt(
+                symbol=symbol,
+                direction_str=direction_str,
+                algo_context=algo_context,
+                asset_type=asset_type,
             )
             content = [
-                {"type": "text", "text": "IMAGE 1 — D1 DAILY BIAS CHART:"},
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": "image/png", "data": img_d1},
-                },
-                {"type": "text", "text": "IMAGE 2 — H4 INTERMEDIATE CHART:"},
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": "image/png", "data": img_h4},
-                },
-                {"type": "text", "text": "IMAGE 3 — H1 ENTRY TIMING CHART:"},
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": "image/png", "data": img_h1},
-                },
+                {"type": "text", "text": "IMAGE 1 - D1 DAILY BIAS CHART:"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img_d1}},
+                {"type": "text", "text": "IMAGE 2 - H4 INTERMEDIATE CHART:"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img_h4}},
+                {"type": "text", "text": "IMAGE 3 - H1 ENTRY TIMING CHART:"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img_h1}},
                 {"type": "text", "text": triple_prompt},
             ]
             log.info(f"[AI CHART] Triple-screen D1+H4+H1 analysis for {symbol}")
         elif dual_mode:
-            # ── Dual-TF prompt: D1 for bias, H4 for entry ──────────────────
-            dual_prompt = (
-                f"You are reviewing TWO charts for {asset_type.upper()} — {symbol}.\n"
-                "IMAGE 1 is the D1 (daily) chart — macro TREND and BIAS.\n"
-                "IMAGE 2 is the H4 (4-hour) chart — entry TIMING and structure.\n\n"
-                f"ALGORITHMIC CONTEXT (cross-check after chart read; image wins on conflict):\n{algo_context}\n\n"
-                "CHART ANNOTATIONS (same in both images):\n"
-                "- Candles (green=bull, red=bear) · EMA21 (cyan) · EMA50 (purple) · EMA200 (gold dashed)\n"
-                "- Entry (grey dashed) · SL (red solid) · TP (green solid) horizontal lines\n"
-                "- Engine B zones if present: support (green), resistance (red), BOS (amber), CHoCH (purple), OB (labelled), FVG (cyan dashed), POC (amber), VAH/VAL (violet dashed)\n\n"
-                "ABSOLUTE RULES: ONLY describe what you can ACTUALLY SEE. Do not invent patterns. "
-                "Reference exact prices from the algorithmic context or chart axis.\n\n"
-                "ANSWER THESE 6 QUESTIONS (cite specific prices and visible candle patterns):\n"
-                f"1. D1 BIAS: What EMA ordering and trend structure is visible on D1? Does it CONFIRM or CONTRADICT "
-                f"the algorithmic {direction_str} signal? State the EMA order you see.\n"
-                f"2. H4 ENTRY: What is the visible EMA stack and structure on H4? Does it support a {direction_str} entry? "
-                "Name any visible BOS, order blocks, or FVGs between entry and TP.\n"
-                "3. TF ALIGNMENT: Do D1 and H4 BOTH support the same direction based on what you SEE? "
-                "Answer ALIGNED or CONFLICTED. CONFLICTED = skip the trade.\n"
-                "4. SL/TP CHECK: Read the SL (red) and TP (green) prices from the H4 chart. "
-                "Is there visible structure behind SL? Any resistance/support BETWEEN entry and TP? If POC/VAH/VAL are visible, say whether price is accepting or rejecting prior value. Name exact levels.\n"
-                "5. PER-STYLE RATINGS (cite visible evidence — D1 for SWING, H4 for SCALP/INTRADAY):\n"
-                "SCALP RATING: STRONG / MODERATE / WEAK / AVOID (cite H4 candle + volume)\n"
-                "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID (cite H4 EMA + momentum)\n"
-                "SWING RATING: STRONG / MODERATE / WEAK / AVOID (cite D1 trend + EMA stack)\n"
-                "(Use CONTRADICTS only if that TF clearly opposes the algorithmic direction)\n"
-                "6. STYLE LEVELS: For each style state KEEP or give exact numeric prices if adjustment is warranted.\n\n"
-                "You MUST end with exactly these 7 lines:\n"
-                "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
-                "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-                "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-                "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-                "Keep total response under 420 words. Reference specific prices. No speculation."
-            )
-            dual_prompt = (
-                f"You are reviewing TWO charts for {asset_type.upper()} - {symbol}.\n"
-                "IMAGE 1 is the D1 (daily) chart - dominant bias, macro EMA structure, swing-quality context.\n"
-                "IMAGE 2 is the H4 (4-hour) chart - entry quality, obstacle map, stop/target review, re-test or breakout framing.\n\n"
-                f"ALGORITHMIC CONTEXT (cross-check after chart read; image wins on conflict):\n{algo_context}\n\n"
-                "CHART ANNOTATIONS (same in both images):\n"
-                "- Candles (green=bull, red=bear) · EMA21 (cyan) · EMA50 (purple) · EMA200 (gold dashed)\n"
-                "- Entry (grey dashed) · SL (red solid) · TP (green solid) horizontal lines\n"
-                "- Engine B zones if present: support (green), resistance (red), BOS (amber), CHoCH (purple), OB (labelled), FVG (cyan dashed), POC (amber), VAH/VAL (violet dashed)\n\n"
-                "Keep the analysis concise and easy to scan.\n\n"
-                "ANSWER EXACTLY THESE 6 QUESTIONS using short paragraphs:\n"
-                "1. TRADE SNAPSHOT: instrument, direction, entry, SL, TP, and RR if inferable. If unclear, say 'not clearly visible' or 'not clearly inferable'.\n"
-                f"2. D1 BIAS: what EMA order and macro trend are visible on D1, and do they confirm or contradict the algorithmic {direction_str} direction?\n"
-                "3. H4 STRUCTURE: what entry structure is visible on H4, does it look like a re-test, breakout, continuation, range, or failed breakout, and what is the nearest obstacle between entry and TP?\n"
-                "4. RISK CHECK: is SL behind visible invalidation, is TP realistic, and if POC/VAH/VAL are visible is price above, inside, or below prior value and accepting or rejecting it?\n"
-                "5. BULL VS BEAR: give one short 'Bullish factors' line and one short 'Bearish factors' line using only visible/chart-context evidence.\n"
-                "6. FINAL REVIEW: give key risk, final verdict HOLD / CLOSE / ADJUST, setup quality 1-10, and one actionable improvement.\n\n"
-                "PER-STYLE RATINGS (cite visible evidence - D1 for SWING, H4 for SCALP/INTRADAY):\n"
-                "SCALP RATING: STRONG / MODERATE / WEAK / AVOID\n"
-                "INTRADAY RATING: STRONG / MODERATE / WEAK / AVOID\n"
-                "SWING RATING: STRONG / MODERATE / WEAK / AVOID\n"
-                "(Use CONTRADICTS only if that TF clearly opposes the algorithmic direction)\n\n"
-                "STYLE LEVELS: For each style ALWAYS output SL/TP lines. Use KEEP if unchanged, otherwise give exact numeric prices.\n"
-                "The final 7 lines must be the LAST 7 lines of the response, with nothing after them.\n\n"
-                "You MUST end with exactly these 7 lines:\n"
-                "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
-                "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-                "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-                "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-                "Keep total response under 380 words. Reference specific prices. No speculation."
-            )
-            dual_prompt = (
-                "Two chart images are attached above this text: IMAGE 1 = D1, IMAGE 2 = H4.\n\n"
-                "STEP 1 — VISUAL READ FIRST (before algorithmic context in STEP 2):\n"
-                "- For each image, read instrument + timeframe from visible chart UI. Check ALL of: top-left header bar, watermark, symbol strip, title area. "
-                "Sentinel Pro charts show the pair name and live price in the top-left header. "
-                f"If unreadable after checking all areas: state 'chart label not legible — from request' and use ONLY request symbol {symbol!r} with D1 and H4 per image role (IMAGE1=D1, IMAGE2=H4). "
-                "Do not guess candidate pairs; do not use likely, maybe, appears, possibly, or for identity.\n"
-                "- On IMAGE 2 (H4) right edge: lead with INTERPRETATION (pressure, momentum, control of last closes, continuation vs pullback vs reversal risk; confirm vs threaten direction from STEP 2). "
-                "Then at most one compact oldest→newest fact sentence. No decorative candle-by-candle play-by-play.\n\n"
-                "STEP 2 — ALGORITHMIC CONTEXT (cross-check after STEP 1; if it conflicts with the image, the image wins):\n"
-                + algo_context
-                + "\n\n"
-                "IMAGE ROLES:\n"
-                "IMAGE 1 is D1 (daily) - dominant bias, macro EMA structure, swing-quality context.\n"
-                "IMAGE 2 is H4 (4-hour) - tactical entry chart, obstacle map, decisive right-edge review.\n\n"
-                "Keep the analysis concise and easy to scan.\n\n"
-                "Use this exact body order:\n"
-                "TRADE SNAPSHOT\n"
-                "MARKET STRUCTURE\n"
-                "RIGHT EDGE\n"
-                "BULLISH FACTORS\n"
-                "BEARISH FACTORS\n"
-                "KEY RISKS\n"
-                "ENTRY QUALITY\n"
-                "FINAL VERDICT\n"
-                "ACTIONABLE IMPROVEMENT\n\n"
-                "Instructions:\n"
-                f"- TRADE SNAPSHOT: instrument + D1 and H4 timeframes; read from chart headers. If illegible: state 'chart label not legible — from request' then instrument={symbol!r} with D1 and H4 per image role only — no candidate pairs; no likely, maybe, appears, possibly, or for identity.\n"
-                f"- D1: macro bias vs the algorithmic {direction_str} direction; if chart contradicts context, chart governs.\n"
-                "- H4: tactical structure, nearest obstacle between entry and TP, re-test / breakout / continuation / range / failed breakout.\n"
-                "- RIGHT EDGE (H4): open with what the last 5 H4 candles MEAN for the trade (confirm / warn / oppose), then counter-trend on last 3, volume on that leg, EMA reclaim against the trade if visible — avoid extended colour-by-colour narration.\n"
-                "- If the H4 right edge does not confirm the trade, FINAL VERDICT cannot be HOLD.\n"
-                "- ENTRY QUALITY: Is the entry at a tactical pullback/retest or chasing into stacked S/R? "
-                "Flag congestion zones (POC+VAH+VAL+SUP clustered near entry). Flag if the trend is extended and TP is a small fraction of the move done. "
-                "Flag if regime is LOW_VOLATILITY and trade is a breakdown/breakout. Verify TP1 RR independently.\n\n"
-                "Then output one machine-readable line immediately before the parser footer:\n"
-                "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
-                "The final 8 lines must be that RIGHT EDGE line plus the exact 7 parser footer lines, with nothing after them.\n\n"
-                "You MUST end with exactly these 8 lines:\n"
-                "RIGHT EDGE: <CONFIRMS|REVIEW|POTENTIAL REVERSAL>\n"
-                "TF ALIGNMENT: ALIGNED or CONFLICTED\n"
-                "SCALP RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "SCALP LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-                "INTRADAY RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "INTRADAY LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n"
-                "SWING RATING: <STRONG|MODERATE|WEAK|AVOID|CONTRADICTS>\n"
-                "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>\n\n"
-                "Keep total response under 490 words. Reference specific prices. No speculation."
+            dual_prompt = build_dual_prompt(
+                symbol=symbol,
+                direction_str=direction_str,
+                algo_context=algo_context,
+                asset_type=asset_type,
             )
             content = [
-                {"type": "text", "text": "IMAGE 1 — D1 DAILY BIAS CHART:"},
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": "image/png", "data": img_d1},
-                },
-                {"type": "text", "text": "IMAGE 2 — H4 ENTRY CHART:"},
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": "image/png", "data": img_h4},
-                },
+                {"type": "text", "text": "IMAGE 1 - D1 DAILY BIAS CHART:"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img_d1}},
+                {"type": "text", "text": "IMAGE 2 - H4 ENTRY CHART:"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img_h4}},
                 {"type": "text", "text": dual_prompt},
             ]
             log.info(f"[AI CHART] Dual-TF D1+H4 analysis for {symbol}")
         else:
-            # ── Single-TF fallback (H4 only) ───────────────────────────────
             content = [
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": "image/png", "data": img_h4},
-                },
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img_h4}},
                 {"type": "text", "text": user_prompt},
             ]
             log.info(f"[AI CHART] Single-TF {tf} analysis for {symbol}")
 
         _max_tokens = 1100 if triple_mode else 800
-        _vision_model = str(
-            CONFIG.get("VISION_MODEL") or "grok-4.20-reasoning"
-        ).strip() or "grok-4.20-reasoning"
+        _vision_model = str(CONFIG.get("VISION_MODEL") or "grok-4.20-reasoning").strip() or "grok-4.20-reasoning"
         _vision_temp = float(CONFIG.get("AI_VISION_TEMPERATURE", 0.2))
         _user_parts = _chart_blocks_to_openai_user_content(content)
         _completion = _xai_chat_completions_retry(
@@ -8269,10 +7705,11 @@ def api_chart_analysis():
             ],
         )
 
-        analysis = (
-            (_completion.choices[0].message.content or "").strip()
-            or "No analysis returned."
-        )
+        analysis = ((_completion.choices[0].message.content or "").strip() or "No analysis returned.")
+        if chart_source == "acm":
+            _id_text = f"instrument/timeframe from request metadata ({symbol}/{tf})"
+            analysis = analysis.replace("chart label not legible - from request", _id_text)
+
         try:
             _entry_hint = float(
                 (sig or {}).get("price")
@@ -8282,6 +7719,7 @@ def api_chart_analysis():
             )
         except (TypeError, ValueError):
             _entry_hint = None
+
         structured = _extract_vision_structured(
             analysis,
             direction_str,
@@ -8289,16 +7727,100 @@ def api_chart_analysis():
             current_level_sets=current_levels,
         )
 
+        try:
+            if bool(CONFIG.get("CHART_VISION_DATASET_ENABLED", True)):
+                authoritative_tf = "H1" if triple_mode else ("H4" if dual_mode else tf)
+                authoritative_image = img_h1 if triple_mode and img_h1 else img_h4
+                sample = _create_vision_sample(
+                    _AUDIT_DB,
+                    {
+                        "symbol": symbol,
+                        "timeframe": authoritative_tf,
+                        "tf_role": authoritative_tf,
+                        "asset_type": asset_type,
+                        "source": "chart-analysis",
+                        "chart_source": chart_source,
+                        "request_id": data.get("request_id"),
+                        "image": authoritative_image,
+                        "engine_b": eb or {},
+                        "structured": structured,
+                        "model_context": {
+                            "direction": direction_str,
+                            "entry_price": _entry_hint,
+                            "sl": (sig or {}).get("sl"),
+                            "tp1": (sig or {}).get("tp1"),
+                            "rr1": (sig or {}).get("rr1"),
+                        },
+                    },
+                    _VISION_ARTIFACTS_DIR,
+                )
+                auto_label = _create_vision_label(
+                    _AUDIT_DB,
+                    {
+                        "sample_id": sample.id,
+                        "label_source": "auto",
+                        "review_status": "auto",
+                        "structured": structured,
+                        "engine_b": eb or {},
+                        "confidence": 0.60,
+                    },
+                )
+                v1_pred = _create_vision_prediction(
+                    _AUDIT_DB,
+                    {
+                        "sample_id": sample.id,
+                        "model_version": "chart_vision_v1",
+                        "right_edge_status": structured.get("right_edge_status") or auto_label.right_edge_status,
+                        "tf_alignment": "ALIGNED" if structured.get("confirms_direction", True) else "CONFLICTED",
+                        "scalp_rating": (structured.get("style_ratings") or {}).get("scalp") or "MODERATE",
+                        "intraday_rating": (structured.get("style_ratings") or {}).get("intraday") or "MODERATE",
+                        "swing_rating": (structured.get("style_ratings") or {}).get("swing") or "MODERATE",
+                        "levels": structured.get("level_suggestions") or {},
+                        "confidence": 0.60,
+                        "payload": {
+                            "model": _vision_model,
+                            "analysis_excerpt": analysis[:500],
+                        },
+                    },
+                )
+                if bool(CONFIG.get("CHART_VISION_V2_SHADOW_ENABLED", True)):
+                    v2 = _infer_chart_vision_v2(
+                        sample,
+                        _VISION_MODEL_DIR,
+                        current_level_sets=current_levels,
+                    )
+                    if isinstance(v2, dict):
+                        _create_vision_prediction(
+                            _AUDIT_DB,
+                            {
+                                "sample_id": sample.id,
+                                "model_version": "chart_vision_v2",
+                                "right_edge_status": v2.get("right_edge_status"),
+                                "tf_alignment": v2.get("tf_alignment"),
+                                "scalp_rating": v2.get("scalp_rating"),
+                                "intraday_rating": v2.get("intraday_rating"),
+                                "swing_rating": v2.get("swing_rating"),
+                                "levels": v2.get("level_suggestions") or {},
+                                "confidence": v2.get("confidence", 0.5),
+                                "disagreement_score": 0.0 if v2.get("right_edge_status") == v1_pred.right_edge_status else 1.0,
+                                "payload": v2,
+                            },
+                        )
+        except Exception as _vision_log_err:
+            log.debug(f"[AI CHART] vision sample/prediction log skipped: {_vision_log_err}")
+
         _tf_label = "D1+H4+H1" if triple_mode else ("D1+H4" if dual_mode else tf)
-        return jsonify({
-            "analysis": analysis,
-            "structured": structured,
-            "model": _vision_model,
-            "symbol": symbol,
-            "tf": _tf_label,
-            "dual_tf": dual_mode,
-            "triple_tf": triple_mode,
-        })
+        return jsonify(
+            {
+                "analysis": analysis,
+                "structured": structured,
+                "model": _vision_model,
+                "symbol": symbol,
+                "tf": _tf_label,
+                "dual_tf": dual_mode,
+                "triple_tf": triple_mode,
+            }
+        )
 
     except Exception as e:
         log.error(f"[AI CHART] Error: {e}")
@@ -8307,7 +7829,6 @@ def api_chart_analysis():
 
 @app.route("/api/learning/last-meta")
 def api_last_meta():
-
     try:
         from ai_learning import get_last_meta_analysis
 
@@ -8319,13 +7840,133 @@ def api_last_meta():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/vision-sample", methods=["POST"])
+def api_vision_sample():
+    """Persist chart sample + artifacts for vision training."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        if not payload.get("image") and not payload.get("image_path"):
+            return jsonify({"error": "Missing image or image_path"}), 400
+        sample = _create_vision_sample(_AUDIT_DB, payload, _VISION_ARTIFACTS_DIR)
+        return jsonify({"sample": _vision_asdict_safe(sample)})
+    except Exception as e:
+        log.error(f"api_vision_sample error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vision-label", methods=["POST"])
+def api_vision_label():
+    """Persist labels/provenance for a stored vision sample."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        if not payload.get("sample_id"):
+            return jsonify({"error": "Missing sample_id"}), 400
+        label = _create_vision_label(_AUDIT_DB, payload)
+        return jsonify({"label": _vision_asdict_safe(label)})
+    except Exception as e:
+        log.error(f"api_vision_label error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vision-infer-v2", methods=["POST"])
+def api_vision_infer_v2():
+    """Run advisory-only hybrid chart_vision_v2 inference and log prediction."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        sample = None
+        sample_id = int(payload.get("sample_id") or 0)
+        if sample_id > 0:
+            sample = _fetch_vision_sample(_AUDIT_DB, sample_id)
+            if sample is None:
+                return jsonify({"error": f"Unknown sample_id: {sample_id}"}), 404
+        else:
+            if not payload.get("image") and not payload.get("image_path"):
+                return jsonify({"error": "Provide sample_id or image/image_path"}), 400
+            sample = _create_vision_sample(_AUDIT_DB, payload, _VISION_ARTIFACTS_DIR)
+            sample_id = sample.id
+
+        current_level_sets = payload.get("current_level_sets") or {}
+        inference = _infer_chart_vision_v2(
+            sample,
+            _VISION_MODEL_DIR,
+            current_level_sets=current_level_sets,
+        )
+        if not isinstance(inference, dict):
+            return (
+                jsonify(
+                    {
+                        "error": "chart_vision_v2 model not available",
+                        "hint": "train with: python tools/train_chart_vision_v2.py",
+                    }
+                ),
+                404,
+            )
+        prediction = _create_vision_prediction(
+            _AUDIT_DB,
+            {
+                "sample_id": sample_id,
+                "model_version": inference.get("model_version", "chart_vision_v2"),
+                "right_edge_status": inference.get("right_edge_status"),
+                "tf_alignment": inference.get("tf_alignment"),
+                "scalp_rating": inference.get("scalp_rating"),
+                "intraday_rating": inference.get("intraday_rating"),
+                "swing_rating": inference.get("swing_rating"),
+                "levels": inference.get("level_suggestions") or {},
+                "confidence": inference.get("confidence", 0.5),
+                "payload": inference,
+            },
+        )
+        return jsonify(
+            {
+                "sample_id": sample_id,
+                "inference": inference,
+                "prediction": _vision_asdict_safe(prediction),
+            }
+        )
+    except Exception as e:
+        log.error(f"api_vision_infer_v2 error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vision-metrics", methods=["GET"])
+def api_vision_metrics():
+    """Fetch shadow metrics for dataset volume, drift, disagreement, and accuracy."""
+    try:
+        try:
+            lookback_days = int(request.args.get("lookback_days", 30))
+        except (TypeError, ValueError):
+            lookback_days = 30
+        metrics = _fetch_vision_metrics(_AUDIT_DB, lookback_days=lookback_days)
+        return jsonify(_json_safe(metrics))
+    except Exception as e:
+        log.error(f"api_vision_metrics error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vision-train-v2", methods=["POST"])
+def api_vision_train_v2():
+    """Train advisory hybrid model using labeled vision_samples/labels."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        min_samples = int(payload.get("min_samples", 40))
+        result = _train_hybrid_model(
+            db_path=_AUDIT_DB,
+            model_dir=_VISION_MODEL_DIR,
+            min_samples=min_samples,
+        )
+        return jsonify({"result": _vision_asdict_safe(result)})
+    except Exception as e:
+        log.error(f"api_vision_train_v2 error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/candle-cache")
 def api_candle_cache():
     """View candle builder status: stats or per-pair candles.
 
-    GET /api/candle-cache              → summary stats
+    GET /api/candle-cache              â†’ summary stats
 
-    GET /api/candle-cache?pair=EUR/USD&tf=H1&limit=20  → candles for pair"""
+    GET /api/candle-cache?pair=EUR/USD&tf=H1&limit=20  â†’ candles for pair"""
 
     pair = request.args.get("pair")
 
@@ -8802,31 +8443,31 @@ def _check_api_keys() -> None:
 
     if not os.environ.get("EODHD_KEY"):
         missing.append(
-            "EODHD_KEY â€” real-time WebSocket prices, indicators, screener, and news all disabled"
+            "EODHD_KEY Ã¢â‚¬â€ real-time WebSocket prices, indicators, screener, and news all disabled"
         )
 
     _ak = os.environ.get("XAI_API_KEY", CONFIG.get("XAI_API_KEY", ""))
 
     if not _ak or _ak == "YOUR_XAI_API_KEY":
-        missing.append("XAI_API_KEY â€” AI trade grading disabled")
+        missing.append("XAI_API_KEY Ã¢â‚¬â€ AI trade grading disabled")
 
     if not os.environ.get("CRYPTOPANIC_KEY"):
-        missing.append("CRYPTOPANIC_KEY (optional) â€” crypto news sentiment reduced")
+        missing.append("CRYPTOPANIC_KEY (optional) Ã¢â‚¬â€ crypto news sentiment reduced")
 
     if not os.environ.get("FINNHUB_KEY"):
-        missing.append("FINNHUB_KEY (optional) â€” Polygon news fallback disabled")
+        missing.append("FINNHUB_KEY (optional) Ã¢â‚¬â€ Polygon news fallback disabled")
 
     if missing:
-        log.warning("[KEYS] Running in degraded mode â€” set missing keys in .env:")
+        log.warning("[KEYS] Running in degraded mode Ã¢â‚¬â€ set missing keys in .env:")
 
         for m in missing:
-            log.warning(f"  • {m}")
+            log.warning(f"  â€¢ {m}")
 
     else:
         log.info("[KEYS] All API keys configured")
 
 
-# â"€â"€ Injected runtime definitions (scan helpers, analyze_pair, event risk) â"€â"€
+# Ã¢"â‚¬Ã¢"â‚¬ Injected runtime definitions (scan helpers, analyze_pair, event risk) Ã¢"â‚¬Ã¢"â‚¬
 
 
 def fetch_eodhd_indicators(pair):
@@ -8943,7 +8584,7 @@ def analyze_pair(
         if _h4_fib and _h4_close:
             h4i["snap"]["fib_proximity"] = calc_fib_proximity(float(_h4_close), _h4_fib)
     except Exception:
-        pass  # gracefully degrade — structure factor stays None
+        pass  # gracefully degrade â€” structure factor stays None
 
     # Inject live microstructure signals if WS feed has data for this symbol
     _msig = _micro_cache.get(pair.get("symbol", ""), {})
@@ -9040,7 +8681,7 @@ def analyze_pair(
             h4, 5, 3, 3
         )  # TA-Lib STOCH standard: fastK=5, slowK=3, slowD=3
 
-    # F11: EMA200 slope computed once here (UI display only — not fed to calc_confluence)
+    # F11: EMA200 slope computed once here (UI display only â€” not fed to calc_confluence)
 
     _e200 = calc_ema([c["close"] for c in d1], 200)
 
@@ -9063,7 +8704,7 @@ def analyze_pair(
     if pair.get("type") == "crypto":
         _bn_sym = pair.get("symbol", "").replace("/", "")  # e.g. BTCUSDT
 
-        # Bybit funding rate — execution is on Bybit; fall back to Binance if Bybit fails
+        # Bybit funding rate â€” execution is on Bybit; fall back to Binance if Bybit fails
         _fr_resp = _fetch_bybit_funding_rate(_bn_sym)
         if isinstance(_fr_resp, dict) and not _fr_resp.get("error"):
             _funding_rate = _fr_resp.get("rate")
@@ -9146,7 +8787,7 @@ def analyze_pair(
                 "regimeName": _fx_regime.get("label", "RANGING"),
                 "signal_type": _forex_result.signal_type,
                 "score": _forex_result.final_score,
-                "trendState": _forex_result.signal_type,  # forex: signal_type not regime label — see auto_trader regime filter note
+                "trendState": _forex_result.signal_type,  # forex: signal_type not regime label â€” see auto_trader regime filter note
                 # Keys required by signal dict construction below
                 "votes": fx_votes,
                 "warnings": [],
@@ -9156,7 +8797,7 @@ def analyze_pair(
             }
         except Exception as _fx_err:
             log.error(
-                f"[FOREX] {pair.get('display')} forex_scoring FAILED: {_fx_err} — skipping pair to avoid factor-engine fallback"
+                f"[FOREX] {pair.get('display')} forex_scoring FAILED: {_fx_err} â€” skipping pair to avoid factor-engine fallback"
             )
             return None
 
@@ -9241,7 +8882,7 @@ def analyze_pair(
 
             if _d1_dir and _d1_dir != res["direction"]:
                 res["warnings"].append(
-                    f"SCALP COUNTER-TREND: D1 EMA stack is {_d1_dir} â€” trading against higher-TF trend, reduce size"
+                    f"SCALP COUNTER-TREND: D1 EMA stack is {_d1_dir} Ã¢â‚¬â€ trading against higher-TF trend, reduce size"
                 )
 
     direction = res["direction"]
@@ -9387,15 +9028,15 @@ def analyze_pair(
                 if structure_data.get("recommended_stop_loss"):
                     _struct_sl = float(structure_data["recommended_stop_loss"])
                     _math_sl = float(lvl["sl"])
-                    # LONG: SL below price — max() picks closer (higher) = tighter
-                    # SHORT: SL above price — min() picks closer (lower) = tighter
+                    # LONG: SL below price â€” max() picks closer (higher) = tighter
+                    # SHORT: SL above price â€” min() picks closer (lower) = tighter
                     lvl["sl"] = (
                         max(_math_sl, _struct_sl)
                         if direction == "LONG"
                         else min(_math_sl, _struct_sl)
                     )
 
-                    # Hard SL distance cap — prevents runaway structural overrides
+                    # Hard SL distance cap â€” prevents runaway structural overrides
                     _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(pair.get("type", ""), 0.05)
                     _sl_dist_pct = abs(float(price) - float(lvl["sl"])) / float(price)
                     if _sl_dist_pct > _max_sl_pct:
@@ -9512,7 +9153,7 @@ def analyze_pair(
         "spread": res.get("spread", 0),
         "warnings": warn_list,
         # Session badge = current FX liquidity window (UTC now). Do not use h4[-1]
-        # time — vendor bar timestamps can lag or parse oddly vs wall clock at scan time.
+        # time â€” vendor bar timestamps can lag or parse oddly vs wall clock at scan time.
         "session": get_session(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "aiAnalysis": None,
@@ -9590,7 +9231,7 @@ def analyze_pair(
 # _build_event_risk imported from scoring.py
 
 
-# _classify_signal imported from scoring.py — see that module for implementation
+# _classify_signal imported from scoring.py â€” see that module for implementation
 
 
 def _build_style_levels(price: float, atr: float, direction: str, pair_type: str) -> dict:
@@ -9616,7 +9257,7 @@ def _build_style_levels(price: float, atr: float, direction: str, pair_type: str
     return result
 
 
-# â"€â"€ Task 1: Trade Outcome Monitor â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+# Ã¢"â‚¬Ã¢"â‚¬ Task 1: Trade Outcome Monitor Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬
 
 
 def _resolve_exit_reason(exit_price: float, sl: float | None, tp: float | None) -> str:
@@ -9659,7 +9300,7 @@ def _update_trade_outcome(
 
     # asset classes including forex lots and commodity contracts).
 
-    # Fallback to price-distance × volume only for crypto/stocks where volume IS
+    # Fallback to price-distance Ã— volume only for crypto/stocks where volume IS
 
     # in base units and risk_amount may not be stored on legacy rows.
 
@@ -9735,7 +9376,7 @@ def _update_trade_outcome(
             except Exception as _le:
                 log.debug(f"[LEARN] extraction failed for {ticket}: {_le}")
 
-        # Feed realized P&L to daily loss tracker (per-account: crypto→Bybit, rest→MT5)
+        # Feed realized P&L to daily loss tracker (per-account: cryptoâ†’Bybit, restâ†’MT5)
 
         if pnl is not None:
             try:
@@ -9818,7 +9459,7 @@ def _outcome_monitor_loop() -> None:
 
             _check_ccxt_outcomes()
 
-            # Score decay check every 5 minutes (not every 60s — too expensive)
+            # Score decay check every 5 minutes (not every 60s â€” too expensive)
 
             _score_decay_counter += 1
 
@@ -9834,7 +9475,7 @@ def _outcome_monitor_loop() -> None:
 def _mt5_deals_for_audit_ticket(_mt5_lib, ticket_int: int):
     """All history deals for a closed row. Prefer position= (stable across partials/closes).
 
-    Stored ticket may be position id (preferred) or legacy opening *order* id — both are handled.
+    Stored ticket may be position id (preferred) or legacy opening *order* id â€” both are handled.
     """
 
     deals = _mt5_lib.history_deals_get(position=ticket_int)
@@ -9922,7 +9563,7 @@ def _check_mt5_outcomes() -> None:
             if ticket_str in open_tickets:
                 continue  # still open
 
-            # Position closed — look up deal history
+            # Position closed â€” look up deal history
 
             try:
                 ticket_int = int(ticket_str)
@@ -9988,7 +9629,7 @@ def _check_ccxt_outcomes() -> None:
             else (_pos_resp or [])
         )
 
-        # ── Breakeven trailing stop at 1R ──────────────────────────────────
+        # â”€â”€ Breakeven trailing stop at 1R â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         for pos in positions:
             try:
@@ -10056,7 +9697,7 @@ def _check_ccxt_outcomes() -> None:
                             _breakeven_applied.add(ticket)
 
                             log.info(
-                                f"[MONITOR] {ccxt_sym}: reached {current_r:.1f}R — SL moved to breakeven @ {entry_px}"
+                                f"[MONITOR] {ccxt_sym}: reached {current_r:.1f}R â€” SL moved to breakeven @ {entry_px}"
                             )
 
                     break  # only match one audit row per position
@@ -10176,7 +9817,7 @@ def _start_outcome_monitor() -> None:
     log.info("[MONITOR] Trade outcome monitor started (60s interval)")
 
 
-# ── Score Decay Monitor — recalculate confluence for open positions ────────
+# â”€â”€ Score Decay Monitor â€” recalculate confluence for open positions â”€â”€â”€â”€â”€â”€â”€â”€
 
 _score_decay_results: dict = {}  # pair -> {"score": float, "entryScore": float, "ts": str}
 _decay_ai_cache: dict = {}  # pair -> {"decay_at_call": float, "ts": str, "result": dict}
@@ -10208,7 +9849,7 @@ def _get_decay_ai_verdict(
     if not api_key:
         return {}
 
-    # Cache check — skip re-call if recent and decay hasn't worsened significantly
+    # Cache check â€” skip re-call if recent and decay hasn't worsened significantly
     cached = _decay_ai_cache.get(pair_name)
     if cached:
         try:
@@ -10225,7 +9866,7 @@ def _get_decay_ai_verdict(
     vol_ratio = signal_context.get("volRatio", "?")
     rr = signal_context.get("rr1", "?")
     flip_note = (
-        " WARNING: Current signal direction has FLIPPED vs entry direction — original thesis may be invalidated."
+        " WARNING: Current signal direction has FLIPPED vs entry direction â€” original thesis may be invalidated."
         if direction_flip
         else ""
     )
@@ -10233,7 +9874,7 @@ def _get_decay_ai_verdict(
     prompt = (
         f"You are a risk management advisor reviewing an OPEN TRADE showing score decay.\n\n"
         f"Trade: {pair_name} | Entry Direction: {direction} | Market Regime: {trend}\n"
-        f"Entry Score: {entry_score:.2f} → Current Score: {cur_score:.2f} | Decay: Δ{decay:.2f}\n"
+        f"Entry Score: {entry_score:.2f} â†’ Current Score: {cur_score:.2f} | Decay: Î”{decay:.2f}\n"
         f"Vol Ratio: {vol_ratio} | R:R at entry: 1:{rr}\n"
         f"{flip_note}\n\n"
         f"Assess whether the trader should EXIT now, continue HOLDING, or place on WATCH (monitor closely).\n"
@@ -10398,12 +10039,12 @@ def _check_score_decay() -> None:
                     # Engine B uses percentage-of-max (e.g. 85% -> 40%)
                     decay = entry_pct - cur_pct
                     decay_pct = (decay / entry_pct * 100) if entry_pct > 0 else 0
-                    score_note = f"pct {entry_pct:.0f}% → {cur_pct:.0f}%"
+                    score_note = f"pct {entry_pct:.0f}% â†’ {cur_pct:.0f}%"
                 else:
                     # Engine A / Legacy uses raw score scale (e.g. 2.15 -> 0.80)
                     decay = entry_score - cur_score
                     decay_pct = (decay / entry_score * 100) if entry_score > 0 else 0
-                    score_note = f"score {entry_score:.2f} → {cur_score:.2f}"
+                    score_note = f"score {entry_score:.2f} â†’ {cur_score:.2f}"
 
                 direction_flip = bool(
                     row["direction"] and result.get("direction")
@@ -10428,7 +10069,7 @@ def _check_score_decay() -> None:
                 # Warn at 40%+ drop from entry score (works for both forex 0-1 and factor 0-3 scales)
                 if decay_pct >= 40 or direction_flip:
                     log.warning(
-                        f"[DECAY] {pair_name} ({engine}): {score_note} ({decay_pct:.0f}% drop) — consider exit"
+                        f"[DECAY] {pair_name} ({engine}): {score_note} ({decay_pct:.0f}% drop) â€” consider exit"
                     )
                     try:
                         from telegram_notify import notify_score_decay
@@ -10450,7 +10091,7 @@ def _check_score_decay() -> None:
                         f"[DECAY] {pair_name} ({engine}): {score_note} ({decay_pct:.0f}% drop)"
                     )
 
-                # AI assessment — only for meaningful decay, runs in background to avoid blocking
+                # AI assessment â€” only for meaningful decay, runs in background to avoid blocking
                 if decay_pct >= 25:
                     def _run_ai_verdict(_pn=pair_name, _dir=row["direction"] or "",
                                         _es=entry_score, _cs=cur_score, _d=decay,
@@ -10498,7 +10139,7 @@ def api_score_decay():
     return jsonify(_score_decay_results)
 
 
-# â"€â"€ Task 2: Performance Dashboard Endpoint â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+# Ã¢"â‚¬Ã¢"â‚¬ Task 2: Performance Dashboard Endpoint Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬Ã¢"â‚¬
 
 
 @app.route("/api/lottery/import", methods=["POST"])
@@ -10605,7 +10246,7 @@ def _lottery_ai_prompt_payload(game: str, start_date=None, end_date=None, window
         include_bonus=True,
     )
     if not board.get("total_draws"):
-        raise ValueError("No draw history found — please import draws first")
+        raise ValueError("No draw history found â€” please import draws first")
 
     rolling = compute_rolling_frequency(game_key, window=window, start_date=start_date, end_date=end_date)
     pair_lift = compute_pair_lift(game_key, start_date=start_date, end_date=end_date, limit=50)
@@ -11669,7 +11310,7 @@ def api_performance():
 
         avg_holding = round(sum(hp_vals) / len(hp_vals), 1) if hp_vals else None
 
-        # Last 20 completed trades — parsed close time + id (string sort breaks on ISO variants)
+        # Last 20 completed trades â€” parsed close time + id (string sort breaks on ISO variants)
 
         _epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
@@ -11700,7 +11341,7 @@ def api_performance():
 
             equity_curve.append(round(cum, 2))
 
-        # Execution quality — adverse slippage magnitude at entry (Bybit/MT5 when captured)
+        # Execution quality â€” adverse slippage magnitude at entry (Bybit/MT5 when captured)
         slip_vals = [
             abs(float(t["slippage_bps"]))
             for t in trades
@@ -11806,7 +11447,7 @@ def api_performance():
         return jsonify({"error": str(e)}), 500
 
 
-# Microstructure live cache — populated by WS feed callbacks, keyed by symbol (e.g. "BTCUSDT")
+# Microstructure live cache â€” populated by WS feed callbacks, keyed by symbol (e.g. "BTCUSDT")
 _micro_cache: dict = {}
 _ws_clients: list = []  # WS client instances for graceful shutdown
 
@@ -12133,7 +11774,7 @@ if __name__ == "__main__":
 
     ensure_runtime_services_started()
 
-    # Startup position reconciliation — check for open positions on restart
+    # Startup position reconciliation â€” check for open positions on restart
 
     def _startup_reconcile():
         """On startup, check MT5/Bybit for open positions and log them."""
@@ -12244,13 +11885,13 @@ if __name__ == "__main__":
     except Exception as e:
         log.warning(f"[CARRY] Startup seed failed: {e}")
 
-    # Graceful shutdown handler — clean up connections on SIGINT/SIGTERM
+    # Graceful shutdown handler â€” clean up connections on SIGINT/SIGTERM
 
     def _graceful_shutdown(signum, frame):
 
         sig_name = "SIGINT" if signum == _signal.SIGINT else "SIGTERM"
 
-        log.warning(f"[SHUTDOWN] {sig_name} received — shutting down gracefully...")
+        log.warning(f"[SHUTDOWN] {sig_name} received â€” shutting down gracefully...")
 
         try:
             from bybit_executor import bybit_disconnect
@@ -12300,7 +11941,7 @@ if __name__ == "__main__":
         log.info("[AUTO] Auto-trader ENABLED via config")
 
     else:
-        # Start the scheduler thread in standby — it does nothing until enabled
+        # Start the scheduler thread in standby â€” it does nothing until enabled
         _auto_trader._start_thread()
 
         log.info("[AUTO] Auto-trader standby (toggle via UI)")
@@ -12309,7 +11950,7 @@ if __name__ == "__main__":
         "ATHENA_HOST", "127.0.0.1"
     )  # default localhost; set to 0.0.0.0 in .env for LAN
 
-    # Backup databases at startup — protects against data loss during updates
+    # Backup databases at startup â€” protects against data loss during updates
     try:
         from backup_db import backup_now
 
@@ -12325,13 +11966,15 @@ if __name__ == "__main__":
     except Exception as e:
         log.warning(f"[TELEGRAM] Bot startup failed: {e}")
 
-    # Clean Ctrl-C shutdown on Windows — daemon threads stop automatically
+    # Clean Ctrl-C shutdown on Windows â€” daemon threads stop automatically
     import signal as _signal
     def _shutdown_handler(sig, frame):
-        log.info("[SHUTDOWN] Ctrl-C received — stopping Sentinel Pro...")
+        log.info("[SHUTDOWN] Ctrl-C received â€” stopping Sentinel Pro...")
         import os as _os
         _os._exit(0)
     _signal.signal(_signal.SIGINT, _shutdown_handler)
     _signal.signal(_signal.SIGTERM, _shutdown_handler)
 
     app.run(host=_host, port=5000, debug=False, use_reloader=False)
+
+
