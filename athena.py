@@ -5259,8 +5259,6 @@ def api_scan_naked():
 
     from market_structure import NakedEngine, engine_b_confidence_passes
 
-    engine = NakedEngine()
-
     import time
 
     def _fetch_cached_only(pair, tf, limit):
@@ -5276,10 +5274,11 @@ def api_scan_naked():
         # Cache miss — call normal fetch_candles (will populate cache for next time)
         return fetch_candles(pair, tf, limit)
 
-    for pair in candidate_pairs:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _scan_pair(pair):
         try:
-            # Yield CPU to prevent Flask thread locking during synchronous scan
-            time.sleep(0.1)
+            engine = NakedEngine()
 
             _pair_score_group = get_pair_score_group(pair)
             resolved_style, style_profile = _naked_scan_style_profile(
@@ -5331,7 +5330,7 @@ def api_scan_naked():
             )
 
             if len(zone_candles) < 10 or len(entry_candles) < 10:
-                continue
+                return []
 
             # ATR from the style's designated timeframe
             _atr_highs = [float(c["high"]) for c in atr_candles]
@@ -5341,7 +5340,7 @@ def api_scan_naked():
             atr = float(atr_series[-1]) if atr_series else 0.0
 
             if not atr or atr <= 0:
-                continue
+                return []
 
             # Volatility gate
             if len(atr_series) >= 50:
@@ -5349,172 +5348,188 @@ def api_scan_naked():
                 _atr_avg = sum(_valid_atrs) / len(_valid_atrs) if _valid_atrs else 0
                 if _atr_avg > 0 and atr < _atr_avg * 0.6:
                     log.debug(f"[NAKED-DBG] {pair['display']}: ATR={atr:.6f} < 60% avg={_atr_avg:.6f} — VOL GATE")
-                    continue
+                    return []
 
             current_price = float(entry_candles[-1]["close"])
 
             # Test both directions
             # analyze_structure uses: arg2 (h4 slot) for zones/macro, arg3 (h1 slot) for micro/BOS/sweep
             regime_label = _engine_b_regime_label(zone_candles, pair.get("type", "stock"))
+            res = engine.set_registry_context(
+                pair.get("symbol") or pair.get("display")
+            ).analyze_structure(
+                d1_candles,
+                zone_candles,
+                entry_candles,
+                current_price,
+                "LONG",
+                atr,
+                regime_label,
+                fallback_rr=style_profile.get("fallback_rr", 2.0),
+                asset_type=pair.get("type", ""),
+            )
+
+            verdict = res.get("structural_verdict", "NONE")
+            seq = res.get("current_swing_sequence", "")
+            if verdict != "CLEAR":
+                log.debug(f"[NAKED-DBG] {pair['display']}: verdict={verdict} seq={seq} — SKIPPED")
+                return []
+
+            local_results = []
+            _best_signal = None
             for direction in ["LONG", "SHORT"]:
-                res = engine.set_registry_context(
-                    pair.get("symbol") or pair.get("display")
-                ).analyze_structure(
-                    d1_candles,
-                    zone_candles,
-                    entry_candles,
+                conf_data = engine.calculate_confidence(
+                    res,
                     current_price,
                     direction,
-                    atr,
+                    entry_candles=entry_candles,
+                    style_profile=style_profile,
+                )
+                _gate_ok, _min_score_scaled = engine_b_confidence_passes(
+                    conf_data,
+                    style_profile,
                     regime_label,
-                    fallback_rr=style_profile.get("fallback_rr", 2.0),
-                    asset_type=pair.get("type", ""),
                 )
 
-                verdict = res.get("structural_verdict", "NONE")
-                seq = res.get("current_swing_sequence", "")
-                if verdict == "CLEAR":
-                    conf_data = engine.calculate_confidence(
-                        res,
-                        current_price,
-                        direction,
-                        entry_candles=entry_candles,
-                        style_profile=style_profile,
+                if not _gate_ok:
+                    _fail_gates = []
+                    if not conf_data.get("structure_ok"):
+                        _fail_gates.append("struct")
+                    if not conf_data.get("location_ok"):
+                        _fail_gates.append("loc")
+                    if not conf_data.get("passed"):
+                        # Check trigger/catalyst
+                        _has_trigger = bool(conf_data.get("catalyst_bonus", 0))
+                        if not _has_trigger:
+                            _fail_gates.append("trigger")
+                    if not conf_data.get("rr_points", 0):
+                        _fail_gates.append(f"rr={conf_data.get('rr', 0):.1f}")
+                    log.debug(
+                        f"[NAKED-DBG] {pair['display']} {direction}: "
+                        f"score={conf_data['score']:.1f} vs min={_min_score_scaled:.1f}, "
+                        f"passed={conf_data.get('passed')}, regime={regime_label}, "
+                        f"fails=[{','.join(_fail_gates)}] — REJECTED"
                     )
-                    _gate_ok, _min_score_scaled = engine_b_confidence_passes(
-                        conf_data,
-                        style_profile,
-                        regime_label,
+                    continue
+
+                _res = dict(res)
+                _res.update(conf_data)
+                _res["current_price"] = current_price
+                _res["symbol"] = pair.get("symbol")
+                _res["display"] = pair.get("display")
+                _res["type"] = pair.get("type")
+                _res["scoreGroup"] = _pair_score_group
+                _res["direction"] = direction
+                _res["style"] = resolved_style
+                _res["regime"] = regime_label
+                _res["zone_tf"] = _zone_tf
+                _res["entry_tf"] = _entry_tf
+                _res["atr_tf"] = _atr_tf
+                _res["is_forming"] = _engine_b_is_forming
+
+                sl = _res.get("recommended_stop_loss")
+                tp = _res.get("recommended_take_profit")
+                rr = conf_data.get("rr", 0.0)
+
+                if not tp and sl:
+                    sl_dist = abs(current_price - sl)
+                    if direction == "LONG":
+                        tp = current_price + (sl_dist * style_profile["fallback_rr"])
+                    else:
+                        tp = current_price - (sl_dist * style_profile["fallback_rr"])
+                    _res["recommended_take_profit"] = tp
+                    _res["fallback_tp_applied"] = True
+
+                if sl and tp and rr <= 0:
+                    sl_dist = abs(current_price - sl)
+                    tp_dist = abs(tp - current_price)
+                    rr = (tp_dist / sl_dist) if sl_dist > 0 else 0.0
+                if rr < style_profile["min_rr"]:
+                    log.debug(
+                        f"[NAKED-DBG] {pair['display']} {direction}: "
+                        f"rr={rr:.2f} < min_rr={style_profile['min_rr']} — REJECTED"
                     )
+                    continue
 
-                    if not _gate_ok:
-                        _fail_gates = []
-                        if not conf_data.get("structure_ok"):
-                            _fail_gates.append("struct")
-                        if not conf_data.get("location_ok"):
-                            _fail_gates.append("loc")
-                        if not conf_data.get("passed"):
-                            # Check trigger/catalyst
-                            _has_trigger = bool(conf_data.get("catalyst_bonus", 0))
-                            if not _has_trigger:
-                                _fail_gates.append("trigger")
-                        if not conf_data.get("rr_points", 0):
-                            _fail_gates.append(f"rr={conf_data.get('rr', 0):.1f}")
-                        log.debug(
-                            f"[NAKED-DBG] {pair['display']} {direction}: "
-                            f"score={conf_data['score']:.1f} vs min={_min_score_scaled:.1f}, "
-                            f"passed={conf_data.get('passed')}, regime={regime_label}, "
-                            f"fails=[{','.join(_fail_gates)}] — REJECTED"
-                        )
-                        continue
-
-                    res.update(conf_data)
-                    res["current_price"] = current_price
-                    res["symbol"] = pair.get("symbol")
-                    res["display"] = pair.get("display")
-                    res["type"] = pair.get("type")
-                    res["scoreGroup"] = _pair_score_group
-                    res["direction"] = direction
-                    res["style"] = resolved_style
-                    res["regime"] = regime_label
-                    res["zone_tf"] = _zone_tf
-                    res["entry_tf"] = _entry_tf
-                    res["atr_tf"] = _atr_tf
-                    res["is_forming"] = _engine_b_is_forming
-
-                    sl = res.get("recommended_stop_loss")
-                    tp = res.get("recommended_take_profit")
-                    rr = conf_data.get("rr", 0.0)
-
-                    if not tp and sl:
-                        sl_dist = abs(current_price - sl)
-                        if direction == "LONG":
-                            tp = current_price + (sl_dist * style_profile["fallback_rr"])
-                        else:
-                            tp = current_price - (sl_dist * style_profile["fallback_rr"])
-                        res["recommended_take_profit"] = tp
-                        res["fallback_tp_applied"] = True
-
-                    if sl and tp and rr <= 0:
-                        sl_dist = abs(current_price - sl)
-                        tp_dist = abs(tp - current_price)
-                        rr = (tp_dist / sl_dist) if sl_dist > 0 else 0.0
-                    if rr < style_profile["min_rr"]:
-                        log.debug(
-                            f"[NAKED-DBG] {pair['display']} {direction}: "
-                            f"rr={rr:.2f} < min_rr={style_profile['min_rr']} — REJECTED"
-                        )
-                        continue
-
-                    signal = {
-                        "id": f"NKD_{pair['display']}_{direction}_{int(time.time())}",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "pair": pair.get("display"),
-                        "display": pair.get("display"),
-                        "symbol": pair.get("symbol"),
-                        "type": pair.get("type"),
-                        "scoreGroup": _pair_score_group,
-                        "direction": direction,
-                        "price": current_price,
-                        "confluenceScore": conf_data["score"],
-                        "confluencePct": conf_data["pct"],
-                        "volRatio": 1.0,
-                        "stochK": None,
-                        "stochD": None,
-                        "ema200Slope": 0.0,
-                        "session": {"name": "Global"},
-                        "grade": "Naked Structure",
-                        "trendState": seq,
-                        "edgeProbability": conf_data["pct"],
-                        "riskLevel": "Low",
-                        "score_pct": conf_data["pct"],
-                        "is_naked": True,
-                        "isForming": _engine_b_is_forming,
-                        "style": resolved_style,
-                        "atr": atr,
-                        "sl": sl,
-                        "slPct": round(
-                            abs(current_price - sl) / current_price * 100, 2
-                        )
-                        if sl
-                        else 0.0,
-                        "tp1": tp,
-                        "tp2": tp,
-                        "rr1": round(rr, 2) if rr else style_profile["fallback_rr"],
-                        "rr2": round(rr, 2) if rr else style_profile["fallback_rr"],
-                        "fib": {"fib618": 0.0, "fib500": 0.0},
-                        "style_levels": _build_style_levels(
-                            price=float(current_price),
-                            atr=float(atr),
-                            direction=direction,
-                            pair_type=pair.get("type", "stock"),
-                        ),
-                        "naked_data": res,
-                    }
-                    
-                    # Calculate style-specific SL/TP for display
-                    try:
-                        from indicators import calc_levels
-                        _lvl_scalp = calc_levels(current_price, atr, direction, 
-                                                  pair.get("type", "stock"), style="scalp")
-                        _lvl_intra = calc_levels(current_price, atr, direction, 
-                                                  pair.get("type", "stock"), style="intraday")
-                        signal["scalp_sl"] = _lvl_scalp["sl"]
-                        signal["scalp_tp"] = _lvl_scalp["tp1"]
-                        signal["intraday_sl"] = _lvl_intra["sl"]
-                        signal["intraday_tp"] = _lvl_intra["tp1"]
-                    except Exception:
-                        pass
-                    
-                    _pair_key = pair.get("display", "")
-                    _existing = _best_per_pair.get(_pair_key)
-                    if _existing is None or signal["confluenceScore"] > _existing["confluenceScore"]:
-                        _best_per_pair[_pair_key] = signal
-                else:
-                    log.debug(f"[NAKED-DBG] {pair['display']} {direction}: verdict={verdict} seq={seq} — SKIPPED")
+                signal = {
+                    "id": f"NKD_{pair['display']}_{direction}_{int(time.time())}",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "pair": pair.get("display"),
+                    "display": pair.get("display"),
+                    "symbol": pair.get("symbol"),
+                    "type": pair.get("type"),
+                    "scoreGroup": _pair_score_group,
+                    "direction": direction,
+                    "price": current_price,
+                    "confluenceScore": conf_data["score"],
+                    "confluencePct": conf_data["pct"],
+                    "volRatio": 1.0,
+                    "stochK": None,
+                    "stochD": None,
+                    "ema200Slope": 0.0,
+                    "session": {"name": "Global"},
+                    "grade": "Naked Structure",
+                    "trendState": seq,
+                    "edgeProbability": conf_data["pct"],
+                    "riskLevel": "Low",
+                    "score_pct": conf_data["pct"],
+                    "is_naked": True,
+                    "isForming": _engine_b_is_forming,
+                    "style": resolved_style,
+                    "atr": atr,
+                    "sl": sl,
+                    "slPct": round(
+                        abs(current_price - sl) / current_price * 100, 2
+                    )
+                    if sl
+                    else 0.0,
+                    "tp1": tp,
+                    "tp2": tp,
+                    "rr1": round(rr, 2) if rr else style_profile["fallback_rr"],
+                    "rr2": round(rr, 2) if rr else style_profile["fallback_rr"],
+                    "fib": {"fib618": 0.0, "fib500": 0.0},
+                    "style_levels": _build_style_levels(
+                        price=float(current_price),
+                        atr=float(atr),
+                        direction=direction,
+                        pair_type=pair.get("type", "stock"),
+                    ),
+                    "naked_data": _res,
+                }
+                
+                # Calculate style-specific SL/TP for display
+                try:
+                    from indicators import calc_levels
+                    _lvl_scalp = calc_levels(current_price, atr, direction, 
+                                              pair.get("type", "stock"), style="scalp")
+                    _lvl_intra = calc_levels(current_price, atr, direction, 
+                                              pair.get("type", "stock"), style="intraday")
+                    signal["scalp_sl"] = _lvl_scalp["sl"]
+                    signal["scalp_tp"] = _lvl_scalp["tp1"]
+                    signal["intraday_sl"] = _lvl_intra["sl"]
+                    signal["intraday_tp"] = _lvl_intra["tp1"]
+                except Exception:
+                    pass
+                
+                if _best_signal is None or signal["confluenceScore"] > _best_signal["confluenceScore"]:
+                    _best_signal = signal
         except Exception as e:
-            log.warning(f"[NAKED-SCAN] Error on {pair['display']}: {e}", exc_info=True)
-            continue
+            log.warning(f"[NAKED SCAN] {pair.get('display')} error: {e}")
+            return []
+        if _best_signal is not None:
+            local_results.append(_best_signal)
+        return local_results
+
+    _max_workers = max(1, int(CONFIG.get("SCAN_MAX_WORKERS", 3) or 3))
+    with ThreadPoolExecutor(max_workers=_max_workers) as pool:
+        futures = {pool.submit(_scan_pair, pair): pair for pair in candidate_pairs}
+        for future in as_completed(futures):
+            for row in (future.result() or []):
+                results.append(row)
+                _pair_key = row.get("display", "")
+                _existing = _best_per_pair.get(_pair_key)
+                if _existing is None or row["confluenceScore"] > _existing["confluenceScore"]:
+                    _best_per_pair[_pair_key] = row
 
     results = sorted(
         _best_per_pair.values(),

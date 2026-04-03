@@ -64,7 +64,7 @@ WEINSTEIN_LOOKBACK:
 # false = backtest mirrors live MIN_CONFLUENCE_* (parity). Live scans always use live gates.
 # RESEARCH_MODE also enables the BT chain (legacy); prefer BACKTEST_USE_BT_MIN_THRESHOLDS.
 RESEARCH_MODE: false
-BACKTEST_USE_BT_MIN_THRESHOLDS: true
+BACKTEST_USE_BT_MIN_THRESHOLDS: false
 BT_MIN:
   crypto:    0.90
   commodity: 0.85
@@ -232,6 +232,10 @@ FOREX_H4_RESAMPLE_OFFSET_HOURS: 1.0  # Align H4 grid to 01/05/09/13/17/21 UTC (m
 FOREX_ENGINE:
   h1_ema_entry_filter: true   # H1 ema21/50 alignment modifier on RSI entry quality; false = RSI only
   trend_gate_adx_min: 25   # Match ADX_TREND_MIN_CLASS.forex — must stay in sync
+  trend_support_weights:
+    momentum: 0.15  # H4 momentum contribution to trend score
+    adx: 0.10       # H4 ADX contribution to trend score
+    carry: 0.05     # Carry tilt contribution to trend score
 MAX_RISK_PER_TRADE: 0.03      # Hard cap 3% per trade
 DRAWDOWN_REDUCE_THRESHOLD: 0.10   # Halve size at 10% drawdown
 DRAWDOWN_STOP_THRESHOLD: 0.15     # Stop all trading at 15% drawdown
@@ -421,10 +425,10 @@ REGIME_SMOOTHING_BARS: 3
 
 # Regime-aware factor weights
 REGIME_WEIGHTS:
-  TRENDING:       { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.0, structure: 0.5, derivatives: 1.2, microstructure: 1.5, carry: 1.0 }
-  RANGING:        { trend: 0.5, momentum: 1.5, volatility: 1.0, volume: 1.0, structure: 2.0, derivatives: 1.0, microstructure: 1.5, carry: 1.0 }
-  HIGH_VOLATILITY: { trend: 1.0, momentum: 1.0, volatility: 2.0, volume: 1.5, structure: 1.0, derivatives: 1.5, microstructure: 1.5, carry: 1.0 }
-  LOW_VOLATILITY: { trend: 1.2, momentum: 1.0, volatility: 0.5, volume: 1.0, structure: 1.0, derivatives: 1.0, microstructure: 1.5, carry: 1.0 }
+  TRENDING:        { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.0, structure: 0.5, derivatives: 1.2, microstructure: 1.5, carry: 1.0, trend_strength: 1.5 }
+  RANGING:         { trend: 0.5, momentum: 1.5, volatility: 1.0, volume: 1.0, structure: 2.0, derivatives: 1.0, microstructure: 1.5, carry: 1.0, trend_strength: 0.5 }
+  HIGH_VOLATILITY: { trend: 1.0, momentum: 1.0, volatility: 2.0, volume: 1.5, structure: 1.0, derivatives: 1.5, microstructure: 1.5, carry: 1.0, trend_strength: 0.8 }
+  LOW_VOLATILITY:  { trend: 1.2, momentum: 1.0, volatility: 0.5, volume: 1.0, structure: 1.0, derivatives: 1.0, microstructure: 1.5, carry: 1.0, trend_strength: 1.0 }
 
 # Crypto subgroup factor behavior (Engine A)
 FACTOR_SCORE_GROUP_MULTIPLIERS:
@@ -438,6 +442,7 @@ CRYPTO_FACTOR_WEIGHT_CAPS:
   derivatives: 1.2
   microstructure: 0.8
   carry: 0
+  structure: 0.8
 
 INTERMARKET_CONFIRMATION:
   enabled: false
@@ -709,7 +714,7 @@ ENGINE_B_FOREX_STRUCTURE_TF: "D1"
 # Engine B backtest SL/TP mode:
 # "atr" = use Engine A calc_levels (ATR × multiplier) — proven, matches bar resolution
 # "structural" = use Engine B naked zone placement (behind swing lows) — wider stops
-ENGINE_B_BT_SL_MODE: "atr"
+ENGINE_B_BT_SL_MODE: "structural"
 
 # AI usage control — when true, AI only runs on explicit user actions
 # (manual analysis clicks, compare engines) — NOT on automatic scans
