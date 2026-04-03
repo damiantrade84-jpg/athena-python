@@ -4091,7 +4091,7 @@ def run_ai(
 
 
 
-from backtest_runner import backtest_pair, backtest_pair_naked, run_full_backtest  # noqa: E402
+from backtest_runner import backtest_pair, backtest_pair_naked, backtest_pair_consensus, run_full_backtest  # noqa: E402
 
 
 def _init_audit_db(db_path: str) -> None:
@@ -6418,6 +6418,40 @@ def api_backtest_naked():
         return jsonify(
             {"success": False, "error": f"Engine B backtest failed: {str(exc)}"}
         ), 500
+
+
+@app.route("/api/backtest-consensus", methods=["POST"])
+def api_backtest_consensus():
+    """Engine C (consensus A+B) backtest endpoint."""
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        pair_symbol = data.get("pair") or data.get("symbol")
+        if not pair_symbol:
+            return jsonify({"success": False,
+                "error": "No pair selected. Engine C backtest requires a specific pair."}), 400
+        pair = next(
+            (p for p in ALL_PAIRS if p.get("display") == pair_symbol or p.get("symbol") == pair_symbol),
+            None,
+        )
+        if not pair:
+            return jsonify({"success": False, "error": f"Pair '{pair_symbol}' not found."}), 404
+        _vm = str(data.get("validation_mode") or "standard").strip().lower()
+        try:
+            _pg = int(data.get("purge_gap", 200))
+        except (TypeError, ValueError):
+            _pg = 200
+        try:
+            _fd = int(data.get("folds", 3))
+        except (TypeError, ValueError):
+            _fd = 3
+        result = backtest_pair_consensus(pair, validation_mode=_vm, purge_gap=_pg, folds=max(1, _fd))
+        if result is None:
+            return jsonify({"success": False,
+                "error": "Insufficient candle data for Engine C backtest."}), 422
+        return jsonify(_json_safe(result))
+    except Exception as exc:
+        log.exception("[ENGINE C BT] Unhandled error in api_backtest_consensus")
+        return jsonify({"success": False, "error": f"Engine C backtest failed: {str(exc)}"}), 500
 
 
 @app.route("/api/backtest", methods=["POST"])

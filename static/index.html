@@ -814,6 +814,8 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
 .engine-btn-a.inactive{background:transparent!important;border-color:var(--border)!important;color:var(--muted)!important;}
 .engine-btn-b{font-size:12px;padding:9px 16px;flex:1;background:transparent;border:1px solid var(--border)!important;color:var(--muted)!important;}
 .engine-btn-b.active{background:rgba(14,203,129,0.15)!important;border-color:rgba(14,203,129,0.3)!important;color:var(--bull)!important;}
+.engine-btn-c{font-size:12px;padding:9px 16px;flex:1;background:transparent;border:1px solid var(--border)!important;color:var(--muted)!important;}
+.engine-btn-c.active{background:rgba(124,58,237,0.18)!important;border-color:rgba(124,58,237,0.45)!important;color:#c4b5fd!important;}
 .ctrl-note{font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;}
 .bt-btn-sm{font-size:11px;padding:7px 14px;}
 .perf-block{margin-top:20px;}
@@ -1294,6 +1296,9 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
           <button type="button" id="engineB-btn"
                   class="bt-btn engine-btn-b"
                   onclick="selectBacktestEngine('B')">Engine B (Naked)</button>
+          <button type="button" id="engineC-btn"
+                  class="bt-btn engine-btn-b"
+                  onclick="selectBacktestEngine('C')">Engine C (Consensus)</button>
         </div>
       </div>
     
@@ -4637,16 +4642,17 @@ function selectBacktestEngine(engine) {
   window.selectedBacktestEngine = engine;
   var btnA = document.getElementById('engineA-btn');
   var btnB = document.getElementById('engineB-btn');
+  var btnC = document.getElementById('engineC-btn');
   var note = document.getElementById('btNote');
-
+  btnA.classList.toggle('inactive', engine !== 'A');
+  btnB.classList.toggle('active', engine === 'B');
+  if (btnC) btnC.classList.toggle('active', engine === 'C');
   if (engine === 'A') {
-    btnA.classList.remove('inactive');
-    btnB.classList.remove('active');
     note.textContent = "Engine A = Quantitative Factor Model";
-  } else {
-    btnA.classList.add('inactive');
-    btnB.classList.add('active');
+  } else if (engine === 'B') {
     note.textContent = "Engine B = Pure Market Structure (FVG + Liquidity + Volume)";
+  } else {
+    note.textContent = "Engine C = Consensus (A + B blended, conviction-gated)";
   }
 }
 
@@ -5232,7 +5238,8 @@ async function runBacktest() {
   btn.textContent = 'Running...';
 
   var label = sym ? document.getElementById('btPairSelect').selectedOptions[0].text : 'All Pairs';
-  document.getElementById('btContent').innerHTML = '<div class="bt-progress"><div style="font-size:14px;font-weight:700">Running ' + (window.selectedBacktestEngine === 'B' ? 'Engine B (Naked)' : 'Engine A') + ': ' + label + '</div></div>';
+  var _engineLabel = window.selectedBacktestEngine === 'B' ? 'Engine B (Naked)' : window.selectedBacktestEngine === 'C' ? 'Engine C (Consensus)' : 'Engine A';
+  document.getElementById('btContent').innerHTML = '<div class="bt-progress"><div style="font-size:14px;font-weight:700">Running ' + _engineLabel + ': ' + label + '</div></div>';
 
   try {
     var API_URL = '/api/backtest';
@@ -5242,6 +5249,16 @@ async function runBacktest() {
     if (window.selectedBacktestEngine === 'B') {
         API_URL = '/api/backtest-naked';
         if (sym) payload.pair = sym;
+    } else if (window.selectedBacktestEngine === 'C') {
+        API_URL = '/api/backtest-consensus';
+        if (sym) {
+            payload.pair = sym;
+        } else {
+            document.getElementById('btContent').innerHTML = '<div style="color:var(--bear);padding:16px">Engine C requires a specific pair — select one from the dropdown.</div>';
+            btn.disabled = false;
+            btn.textContent = '▶ RUN BACKTEST';
+            return;
+        }
     } else {
         if (sym) payload.symbol = sym;
         var btClass = (document.getElementById('btClassSelect') || {}).value || '';

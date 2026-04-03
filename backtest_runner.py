@@ -3485,6 +3485,487 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
     return result
 
 
+
+
+
+def backtest_pair_consensus(
+    pair: dict,
+    style: str = "intraday",
+    validation_mode: str = "standard",
+    purge_gap: int = 200,
+    folds: int = 3,
+) -> dict:
+    """Engine C backtest — runs Engine A + Engine B point-in-time at each H4 bar,
+    feeds both into compute_consensus(), gates on conviction >= AUTO_TRADE_MIN_CONVICTION,
+    and tracks outcomes using the same exit logic as backtest_pair_naked.
+
+    Style is always intraday (H4 walk). ai_vision is never called.
+    """
+    from market_structure import NakedEngine, engine_b_confidence_passes
+    from engine_c import compute_consensus
+    from indicators import calc_atr
+
+    _ptype = pair.get("type", "stock")
+    log.info(f"[ENGINE C BT] {pair['display']} fetching data...")
+
+    if pair.get("source") == "binance":
+        sym = pair["symbol"]
+        candles_d1 = _rt().fetch_binance(sym, "1d", 1000)
+        candles_h4 = _rt().fetch_binance_paginated(sym, "4h", 5000)
+        candles_h1 = _rt().fetch_binance_paginated(sym, "1h", 2000)
+    elif pair.get("source") == "mt5":
+        candles_d1 = _rt().fetch_candles(pair, "D1", 600)
+        _yf_sym = _rt().yfinance_symbol_for_pair(pair)
+        if (not candles_d1 or len(candles_d1 or []) < 230) and _yf_sym:
+            _yf_d1 = _rt().fetch_yfinance(_yf_sym, "D1", 600)
+            if _yf_d1 and len(_yf_d1) > len(candles_d1 or []):
+                candles_d1 = _yf_d1
+        candles_h4, candles_h1 = _rt().fetch_eodhd_intraday_bt(pair, days=730)
+        if not candles_h4 or not candles_h1:
+            log.info(f"[ENGINE C BT] {pair['display']}: EODHD failed, fetching from MT5")
+            candles_h4 = candles_h4 or _rt().fetch_candles(pair, "H4", 5000)
+            candles_h1 = candles_h1 or _rt().fetch_candles(pair, "H1", 5000)
+    else:
+        candles_d1 = _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 600)) or _rt().fetch_candles(pair, "D1", 600)
+        candles_h4, candles_h1 = _rt().fetch_eodhd_intraday_bt(pair, days=730)
+        if not candles_h4 or not candles_h1:
+            candles_h4 = candles_h4 or _rt().fetch_candles(pair, "H4", 5000)
+            candles_h1 = candles_h1 or _rt().fetch_candles(pair, "H1", 5000)
+
+    if not candles_d1 or not candles_h4 or not candles_h1:
+        log.warning(f"[ENGINE C BT] {pair['display']} insufficient candle data")
+        _cv, _mw = normalize_validation_mode(validation_mode)
+        _tv = temporal_validation_mode(_canonical_vm if False else _cv)
+        early = {"success": False, "error": "Insufficient candle data.", "trades": [], "totalTrades": 0}
+        _attach_research_validation_payload(early, [], canonical_vm=_cv, temporal_vm=_tv,
+                                            purge_gap=purge_gap, folds=folds, mode_warning=_mw)
+        return early
+
+    candles_d1 = candles_d1[:-1] if len(candles_d1) > 1 else candles_d1
+    candles_h4 = candles_h4[:-1] if len(candles_h4) > 1 else candles_h4
+    candles_h1 = candles_h1[:-1] if len(candles_h1) > 1 else candles_h1
+
+    _canonical_vm, _vm_mode_warning = normalize_validation_mode(validation_mode)
+    _temporal_vm = temporal_validation_mode(_canonical_vm)
+    if _vm_mode_warning:
+        log.warning("[ENGINE C BT] %s: %s", pair.get("display"), _vm_mode_warning)
+
+    _pair_score_group = get_pair_score_group(pair)
+    _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
+    resolved_style, style_profile = _rt().naked_scan_style_profile(
+        "intraday", score_group=_pair_score_group
+    )
+    if _ptype == "forex" and _forex_struct_tf == "D1":
+        resolved_style, style_profile = _rt().naked_scan_style_profile(
+            "swing", score_group=_pair_score_group
+        )
+    _zone_tf = style_profile.get("zone_tf", "H4")
+    _entry_tf = style_profile.get("entry_tf", "H1")
+    _atr_tf = style_profile.get("atr_tf", "H4")
+    _bt_sl_mode = str(CONFIG.get("ENGINE_B_BT_SL_MODE", "atr") or "atr").lower()
+    _bt_enable_profile_context = bool(CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED", False))
+
+    _h4_need = max(50, CONFIG.get("H4_CANDLES", 1001))
+    _h1_need = max(50, CONFIG.get("H1_CANDLES", 1001))
+    _min_conviction = float(
+        (CONFIG.get("AUTO_TRADE_MIN_CONVICTION") or {}).get("default", 0.50)
+    )
+
+    h4_times = pd.to_datetime([c["time"] for c in candles_h4], utc=True, errors="coerce")
+    d1_times = pd.to_datetime([c["time"] for c in candles_d1], utc=True, errors="coerce")
+    h1_times = pd.to_datetime([c["time"] for c in candles_h1], utc=True, errors="coerce")
+
+    def _full_atr(candles):
+        highs = [float(c["high"]) for c in candles]
+        lows = [float(c["low"]) for c in candles]
+        closes = [float(c["close"]) for c in candles]
+        return calc_atr(highs, lows, closes, 14)
+
+    atr_map = {"D1": _full_atr(candles_d1), "H4": _full_atr(candles_h4), "H1": _full_atr(candles_h1)}
+
+    _bt_crypto_funding_rows = None
+    _bt_crypto_oi_rows = None
+    if _ptype == "crypto":
+        try:
+            from data_feeds import prepare_crypto_backtest_derivative_series
+            _bt_crypto_funding_rows, _bt_crypto_oi_rows = prepare_crypto_backtest_derivative_series(
+                pair, candles_d1, candles_h4, candles_h1
+            )
+        except Exception as _de:
+            log.warning("[ENGINE C BT] %s: derivative series failed: %s", pair.get("display"), _de)
+
+    naked_engine = NakedEngine()
+
+    _c_funnel = {
+        "bars_evaluated": 0, "a_no_signal": 0, "b_no_signal": 0,
+        "direction_conflict": 0, "low_conviction": 0, "passed_gate": 0,
+    }
+
+    COOLDOWN = 2
+    MAX_HOLD = {"forex": 30, "crypto": 40, "stock": 24, "commodity": 24, "index": 24}.get(_ptype, 24)
+    _be_min_rr = {"forex": 2.0, "crypto": 2.0, "stock": 1.5, "commodity": 1.8, "index": 1.8}.get(_ptype, 2.0)
+
+    trades = []
+    same_bar_both_hit = 0
+    last_exit_bar = 0
+    i = max(50, _h4_need)
+
+    while i < len(candles_h4) - 5:
+        if i - last_exit_bar < COOLDOWN:
+            i += 1
+            continue
+
+        entry_time = h4_times[i]
+        if pd.isna(entry_time):
+            i += 1
+            continue
+
+        if _ptype == "forex":
+            try:
+                from datetime import datetime as _dt
+                _bar_dt = _dt.fromisoformat(str(entry_time).replace("Z", "+00:00"))
+                if _bar_dt.hour >= 22 or _bar_dt.hour < 7:
+                    i += 1
+                    continue
+            except Exception:
+                pass
+
+        _vf = backtest_bar_validation_state(
+            i, min_bars=max(50, _h4_need), total_bars=len(candles_h4),
+            temporal_mode=_temporal_vm, purge_gap=purge_gap, folds=folds,
+        )
+        if _vf["skip"]:
+            i += 1
+            continue
+
+        h4_idx = bisect.bisect_left(h4_times, entry_time)
+        h1_idx = bisect.bisect_left(h1_times, entry_time)
+        d1_idx = bisect.bisect_left(d1_times, entry_time)
+
+        h4_window = candles_h4[max(0, h4_idx - _h4_need): h4_idx]
+        h1_window = candles_h1[max(0, h1_idx - _h1_need): h1_idx]
+        d1_ctx = candles_d1[max(0, d1_idx - max(50, CONFIG.get("D1_CANDLES", 1001))): d1_idx]
+        zone_ctx = h4_window
+
+        if len(h4_window) < 50 or len(h1_window) < 50 or len(d1_ctx) < 50:
+            i += 1
+            continue
+
+        current_price = float(candles_h4[i]["close"])
+
+        _atr_full = atr_map.get(_atr_tf, atr_map["H4"])
+        _atr_idx = h4_idx
+        atr = _atr_full[_atr_idx - 1] if _atr_idx > 0 and _atr_idx <= len(_atr_full) else current_price * 0.01
+        atr_list_50 = _atr_full[max(0, _atr_idx - 50): _atr_idx]
+        if len(atr_list_50) >= 50:
+            _valid_atrs = [a for a in atr_list_50 if a]
+            _atr_avg = sum(_valid_atrs) / len(_valid_atrs) if _valid_atrs else 0
+            if _atr_avg > 0 and atr < _atr_avg * 0.6:
+                i += 1
+                continue
+
+        regime_label = _rt().engine_b_regime_label(zone_ctx, _ptype)
+
+        try:
+            h4i = calc_indicators_with_normalized(h4_window, _ptype)
+            try:
+                _bt_fib = calc_fib(h4_window)
+                _bt_h4_close = h4_window[-1]["close"] if h4_window else None
+                if _bt_fib and _bt_h4_close:
+                    h4i["snap"]["fib_proximity"] = calc_fib_proximity(float(_bt_h4_close), _bt_fib)
+            except Exception:
+                pass
+            h1i = calc_indicators_with_normalized(h1_window, _ptype)
+            d1i = calc_indicators_with_normalized(d1_ctx, _ptype)
+
+            vols = [c["vol"] for c in h1_window]
+            vsma = calc_sma(vols, 20)
+            vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
+            stoch = calc_stochastic(h1_window, 5, 3, 3)
+            _pair_ctx = dict(pair)
+            btc_bias = _bt_btc_bias(d1_ctx, _pair_ctx)
+
+            _bt_funding_rate = None
+            _bt_oi_data = None
+            if _ptype == "crypto":
+                h4_ts_i = h4_times[i]
+                _prev_h4_ts = h4_times[i - 1] if i >= 1 else None
+                _bt_funding_rate, _bt_oi_data = _bt_crypto_funding_oi_for_bar(
+                    _ptype, _bt_crypto_funding_rows, _bt_crypto_oi_rows, h4_ts_i, _prev_h4_ts
+                )
+            _bt_oi_ctx = build_oi_context_for_factor_scoring(_bt_oi_data, d1_ctx, h1i.get("snap"))
+
+            if _ptype == "forex":
+                from forex_scoring import compute_forex_score
+                _bt_bar_time = _bt_forex_d1_bar_time(candles_h4[i].get("time", "")) if candles_h4 else ""
+                _fx = compute_forex_score(
+                    d1_snap=d1i["snap"], h4_snap=h4i["snap"], h1_snap=h1i["snap"],
+                    h1_candles=h1_window, pair=_pair_ctx,
+                    bar_time=_bt_bar_time,
+                    backtest_mode=True, h4_candles=h4_window,
+                    score_group=_pair_score_group,
+                )
+                from regime import detect_regime
+                _fx_regime = detect_regime(h4i["snap"], "forex")
+                signal_a = {
+                    "confluenceScore": _fx.final_score, "maxScore": 1.0,
+                    "direction": _fx.direction, "score": _fx.final_score,
+                    "regime": {"label": _fx_regime.get("label", "RANGING")},
+                    "sl": None, "tp1": None, "tp2": None, "rr1": 0,
+                    "factor_scores": _fx.components,
+                }
+                a_direction = _fx.direction
+            else:
+                res_a = calc_confluence(
+                    d1i, h4i, h1i, vr, stoch, _pair_ctx, btc_bias,
+                    d1_candles=d1_ctx, h4_candles=h4_window, h1_candles=h1_window,
+                    funding_rate=_bt_funding_rate, oi_data=_bt_oi_data, oi_context=_bt_oi_ctx,
+                    bar_time=candles_h4[i].get("time") if candles_h4 else None,
+                )
+                _atr_c = _rt().atr_for_levels(d1i, h4i, h1i, pair=pair, style="intraday")
+                _lvl_a = calc_levels(current_price, _atr_c or atr, res_a["direction"], _ptype,
+                                     regime_state=res_a.get("regime", {}).get("state"),
+                                     style="intraday") if _atr_c else {}
+                signal_a = {
+                    "confluenceScore": res_a["score"], "maxScore": res_a.get("maxScoreOverride", 3.0),
+                    "direction": res_a["direction"], "score": res_a["score"],
+                    "regime": res_a.get("regime", {"label": regime_label}),
+                    "sl": _lvl_a.get("sl"), "tp1": _lvl_a.get("tp1"),
+                    "tp2": _lvl_a.get("tp2"), "rr1": _lvl_a.get("rr1", 0),
+                    "factor_scores": res_a.get("factor_scores", {}),
+                }
+                a_direction = res_a["direction"]
+
+        except Exception as _ae:
+            log.debug("[ENGINE C BT] %s bar %d Engine A failed: %s", pair.get("display"), i, _ae)
+            i += 1
+            continue
+
+        best_b = None
+        try:
+            res_b = naked_engine.analyze_structure(
+                d1_ctx, zone_ctx, h1_window, current_price, a_direction, atr,
+                regime_label, fallback_rr=style_profile.get("fallback_rr", 2.0),
+                asset_type=_ptype, enable_profile_context=_bt_enable_profile_context,
+            )
+            if res_b.get("structural_verdict") == "CLEAR":
+                conf_b = naked_engine.calculate_confidence(
+                    res_b, current_price, a_direction,
+                    entry_candles=h1_window, style_profile=style_profile,
+                )
+                signal_b = {
+                    "structural_verdict": "CLEAR", "direction": a_direction,
+                    "score": conf_b["score"], "pct": conf_b["pct"],
+                    "passed": conf_b.get("passed", False),
+                    "recommended_stop_loss": res_b.get("recommended_stop_loss"),
+                    "recommended_take_profit": res_b.get("recommended_take_profit"),
+                    "structure_ok": conf_b.get("structure_ok", False),
+                    "zone_ok": conf_b.get("zone_ok", False),
+                    "trigger_ok": conf_b.get("trigger_ok", False),
+                    "entry_ok": conf_b.get("entry_ok", False),
+                    "rr_ok": conf_b.get("rr_ok", False),
+                    "rr": conf_b.get("rr", 0.0),
+                    "bos_mtf": conf_b.get("bos_mtf_confirmed", False),
+                    "ob_at_zone": conf_b.get("ob_at_zone", False),
+                    "ob_strength": max((ob.get("strength", 0) for ob in res_b.get("order_blocks", [])), default=0),
+                }
+                best_b = (signal_b, conf_b, res_b)
+        except Exception as _be:
+            log.debug("[ENGINE C BT] %s bar %d Engine B failed: %s", pair.get("display"), i, _be)
+
+        _c_funnel["bars_evaluated"] += 1
+        if best_b is None:
+            _c_funnel["b_no_signal"] += 1
+            signal_b_use = {"structural_verdict": "NONE", "direction": a_direction,
+                            "score": 0, "passed": False}
+            conf_b_use = {}
+        else:
+            signal_b_use = best_b[0]
+            conf_b_use = best_b[1]
+
+        try:
+            consensus = compute_consensus(
+                signal_a=signal_a, signal_b=signal_b_use, confidence_b=conf_b_use,
+                ai_vision=None, asset_type=_ptype, regime=regime_label,
+                entry_price=current_price, atr=atr,
+            )
+        except Exception as _ce:
+            log.debug("[ENGINE C BT] %s bar %d consensus failed: %s", pair.get("display"), i, _ce)
+            i += 1
+            continue
+
+        if not consensus.get("trade"):
+            _c_funnel["low_conviction"] += 1
+            i += 1
+            continue
+
+        conviction = float(consensus.get("conviction", 0.0))
+        if conviction < _min_conviction:
+            _c_funnel["low_conviction"] += 1
+            i += 1
+            continue
+
+        _c_funnel["passed_gate"] += 1
+        direction = consensus["direction"]
+        if not direction:
+            i += 1
+            continue
+
+        if i + 1 >= len(candles_h4):
+            i += 1
+            continue
+
+        entry_bar = candles_h4[i + 1]
+        raw_entry = float(entry_bar.get("open", entry_bar["close"]))
+        _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
+        slip = raw_entry * _get_slippage_for_bar(entry_bar, _ptype) * _slip_mult
+        entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
+
+        sl = consensus.get("sl")
+        tp = consensus.get("tp")
+        if sl is None or tp is None:
+            _lvl = calc_levels(entry, atr, direction, _ptype, style="intraday")
+            sl = sl or _lvl["sl"]
+            tp = tp or _lvl["tp1"]
+
+        if sl is None or tp is None:
+            i += 1
+            continue
+
+        target_rr = consensus.get("rr", 0.0)
+        if target_rr <= 0:
+            _sl_dist = abs(entry - sl)
+            _tp_dist = abs(tp - entry)
+            target_rr = (_tp_dist / _sl_dist) if _sl_dist > 0 else 0.0
+        if target_rr < 1.0:
+            i += 1
+            continue
+
+        _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
+        if abs(entry - sl) / entry > _max_sl_pct:
+            i += 1
+            continue
+
+        _h4_fill_index = bisect.bisect_left(h4_times, entry_bar["time"])
+        future_window = candles_h4[_h4_fill_index: min(_h4_fill_index + MAX_HOLD + 1, len(candles_h4))]
+
+        outcome = "TIMEOUT"
+        r_multiple = 0.0
+        exit_bar_offset = 0
+        risk = abs(entry - sl)
+        _active_sl = sl
+        _be_triggered = False
+
+        for fi, future in enumerate(future_window):
+            exit_bar_offset = fi
+            _bar_outcome, _both_hit = _resolve_barrier_exit(
+                future, direction=direction, sl=_active_sl, tp1=tp,
+                sl_outcome="BE" if _be_triggered else "SL",
+            )
+            if _both_hit:
+                same_bar_both_hit += 1
+            if _bar_outcome == "TP1":
+                outcome = "TP1"
+                r_multiple = round(target_rr, 2)
+                break
+            if _bar_outcome in ("SL", "BE"):
+                outcome = _bar_outcome
+                r_multiple = 0.0 if outcome == "BE" else -1.0
+                break
+            if not _be_triggered and risk > 0 and target_rr >= _be_min_rr:
+                if direction == "LONG" and float(future["high"]) >= entry + risk * 1.5:
+                    _active_sl = entry
+                    _be_triggered = True
+                elif direction == "SHORT" and float(future["low"]) <= entry - risk * 1.5:
+                    _active_sl = entry
+                    _be_triggered = True
+
+        if outcome == "TIMEOUT" and future_window:
+            last_close = float(future_window[-1]["close"])
+            if risk > 0:
+                open_r = ((last_close - entry) / risk) if direction == "LONG" else ((entry - last_close) / risk)
+                r_multiple = round(max(-1.0, min(target_rr, open_r)), 2)
+
+        _fee_pct = CONFIG.get("FEE_PCT", {}).get(_ptype, 0.0004)
+        _sl_dist_fee = abs(entry - sl)
+        if _sl_dist_fee > 0 and outcome != "TIMEOUT":
+            r_multiple = round(r_multiple - (_fee_pct * entry / _sl_dist_fee), 4)
+
+        bar_date = entry_bar.get("time", "")[:10] if entry_bar.get("time") else ""
+        trades.append({
+            "date": bar_date, "pair": pair["display"], "direction": direction,
+            "score": round(conviction, 4), "entry": round(float(entry), 6),
+            "sl": round(float(sl), 6), "tp1": round(float(tp), 6), "tp2": round(float(tp), 6),
+            "outcome": outcome, "resultR": round(r_multiple, 2), "regime": regime_label,
+            "oos": _vf["oos_label"], "wf_fold": _vf["wf_fold"],
+            "validation_mode": _canonical_vm, "volAdj": consensus.get("sizing_override", 1.0),
+            "r_multiple": r_multiple, "verdict": consensus.get("verdict", ""),
+            "tier": consensus.get("tier", ""), "conviction": round(conviction, 4),
+            "rr_target": round(target_rr, 2),
+        })
+
+        last_exit_bar = i + 1 + exit_bar_offset
+        i = last_exit_bar + COOLDOWN
+
+    result = _format_backtest_results(
+        trades, pair, engine_type="ENGINE_C",
+        same_bar_both_hit=same_bar_both_hit, validation_mode=_canonical_vm,
+    )
+    _attach_research_validation_payload(
+        result, trades, canonical_vm=_canonical_vm, temporal_vm=_temporal_vm,
+        purge_gap=purge_gap, folds=folds, mode_warning=_vm_mode_warning,
+    )
+
+    _tp_count = sum(1 for t in trades if t.get("outcome") == "TP1")
+    _sl_count = sum(1 for t in trades if t.get("outcome") == "SL")
+    _be_count = sum(1 for t in trades if t.get("outcome") == "BE")
+    _to_count = sum(1 for t in trades if t.get("outcome") == "TIMEOUT")
+    log.warning(
+        f"[ENGINE C BT] {pair['display']} done: {result.get('totalTrades', 0)} trades "
+        f"(TP1={_tp_count} SL={_sl_count} BE={_be_count} TIMEOUT={_to_count}), "
+        f"WR {result.get('winRate', 0):.1f}%, PF {result.get('profitFactor', 0):.2f}, "
+        f"SQN {result.get('sqn', 0):.2f}"
+    )
+    log.warning(
+        f"[ENGINE C BT FUNNEL] {pair['display']} "
+        f"bars={_c_funnel['bars_evaluated']} "
+        f"b_skip={_c_funnel['b_no_signal']} "
+        f"low_conv={_c_funnel['low_conviction']} "
+        f"passed={_c_funnel['passed_gate']}"
+    )
+
+    if "error" not in result:
+        result["btStyle"] = "intraday"
+        result["engine"] = "ENGINE_C"
+        result["engineCFunnel"] = _c_funnel
+        try:
+            import sqlite3 as _sq
+            _wf = result.get("wfSplit", {}) or {}
+            with _sq.connect(_rt().AUDIT_DB, timeout=15.0) as _con:
+                _con.execute(
+                    "INSERT INTO backtest_results "
+                    "(run_date,pair,asset_type,engine,trades,win_rate,profit_factor,"
+                    "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,bt_min,atr_source,notes) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        datetime.now(timezone.utc).isoformat(),
+                        pair["display"], pair.get("type", ""), "engine_c",
+                        result.get("totalTrades", 0), result.get("winRate"),
+                        result.get("profitFactor"), result.get("expectancy"),
+                        result.get("sqn"), result.get("sharpe"), result.get("sortino"),
+                        round(_wf.get("is_sqn"), 4) if _wf.get("is_sqn") is not None else None,
+                        round(_wf.get("oos_sqn"), 4) if _wf.get("oos_sqn") is not None else None,
+                        result.get("maxDrawdownPct"), _min_conviction,
+                        f"{_atr_tf}_ATR",
+                        f"engine=c;style=intraday;conviction_gate={_min_conviction}",
+                    ),
+                )
+                _con.commit()
+        except Exception as _dbe:
+            log.warning("[ENGINE C BT] backtest_results write failed: %s", _dbe)
+
+    return result
+
 def run_full_backtest(style="auto", asset_class: str | None = None):
     """Run backtest_pair in parallel. Optional asset_class filter (crypto/forex/stock/commodity/index)."""
 
