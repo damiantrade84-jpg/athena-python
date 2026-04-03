@@ -5355,29 +5355,29 @@ def api_scan_naked():
             # Test both directions
             # analyze_structure uses: arg2 (h4 slot) for zones/macro, arg3 (h1 slot) for micro/BOS/sweep
             regime_label = _engine_b_regime_label(zone_candles, pair.get("type", "stock"))
-            res = engine.set_registry_context(
-                pair.get("symbol") or pair.get("display")
-            ).analyze_structure(
-                d1_candles,
-                zone_candles,
-                entry_candles,
-                current_price,
-                "LONG",
-                atr,
-                regime_label,
-                fallback_rr=style_profile.get("fallback_rr", 2.0),
-                asset_type=pair.get("type", ""),
-            )
-
-            verdict = res.get("structural_verdict", "NONE")
-            seq = res.get("current_swing_sequence", "")
-            if verdict != "CLEAR":
-                log.debug(f"[NAKED-DBG] {pair['display']}: verdict={verdict} seq={seq} — SKIPPED")
-                return []
-
             local_results = []
             _best_signal = None
             for direction in ["LONG", "SHORT"]:
+                res = engine.set_registry_context(
+                    pair.get("symbol") or pair.get("display")
+                ).analyze_structure(
+                    d1_candles,
+                    zone_candles,
+                    entry_candles,
+                    current_price,
+                    direction,
+                    atr,
+                    regime_label,
+                    fallback_rr=style_profile.get("fallback_rr", 2.0),
+                    asset_type=pair.get("type", ""),
+                )
+
+                verdict = res.get("structural_verdict", "NONE")
+                seq = res.get("current_swing_sequence", "")
+                if verdict != "CLEAR":
+                    log.debug(f"[NAKED-DBG] {pair['display']} {direction}: verdict={verdict} seq={seq} — SKIPPED")
+                    continue
+
                 conf_data = engine.calculate_confidence(
                     res,
                     current_price,
