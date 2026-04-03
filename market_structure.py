@@ -1022,24 +1022,27 @@ class NakedEngine:
         ):
             sl = sweep_data["sweep_high"] + (atr * sl_mult)
 
-        # TP is structurally constrained by the nearest opposing zone whenever one exists.
-        # Only project a fallback RR target when the market is genuinely in "blue sky"
-        # with no opposing structural zone on the chart.
+        # Prefer the opposing structural zone, but fall back to RR projection when that
+        # zone would place TP inverted or untradeably close to the current entry.
         tp = None
         tp_source = "fallback_rr"
         tp_structural_limited = False
         if direction == "LONG" and nearest_res:
-            tp = nearest_res["lower"] - (atr * sl_mult)
-            tp_source = "structural_zone"
-            if tp <= current_price + (atr * 0.5):
+            structural_tp = nearest_res["lower"] - (atr * sl_mult)
+            if structural_tp <= current_price + (atr * 0.5):
                 tp_structural_limited = True
+            else:
+                tp = structural_tp
+                tp_source = "structural_zone"
         elif direction == "SHORT" and nearest_sup:
-            tp = nearest_sup["upper"] + (atr * sl_mult)
-            tp_source = "structural_zone"
-            if tp >= current_price - (atr * 0.5):
+            structural_tp = nearest_sup["upper"] + (atr * sl_mult)
+            if structural_tp >= current_price - (atr * 0.5):
                 tp_structural_limited = True
+            else:
+                tp = structural_tp
+                tp_source = "structural_zone"
 
-        # Generate TP from fallback_rr only when there is no opposing structural zone.
+        # Generate TP from fallback_rr when no usable opposing structural zone exists.
         if tp is None:
             sl_dist = abs(current_price - sl) if (sl is not None) else (atr * sl_mult)
             if sl_dist == 0:

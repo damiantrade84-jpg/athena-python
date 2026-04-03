@@ -1,0 +1,4 @@
+interface:
+  display_name: "ATHENA Code"
+  short_description: "Evidence-only ATHENA trading engineering"
+  default_prompt: "Use $athena-code to audit or patch this ATHENA trading-system task from verified repository evidence only."

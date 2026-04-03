@@ -4,6 +4,7 @@ import os
 import sys
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -123,7 +124,7 @@ def test_check_macro_correlation_wrapper_matches_detail():
     assert d1 == d2
 
 
-def test_analyze_structure_keeps_structural_tp_when_resistance_is_too_close(monkeypatch):
+def test_analyze_structure_falls_back_to_rr_when_resistance_is_too_close(monkeypatch):
     local_engine = NakedEngine()
 
     monkeypatch.setattr(
@@ -218,9 +219,11 @@ def test_analyze_structure_keeps_structural_tp_when_resistance_is_too_close(monk
         enable_profile_context=False,
     )
 
-    assert result["tp_source"] == "structural_zone"
+    expected_tp = 100.0 + ((100.0 - result["recommended_stop_loss"]) * 1.8)
+    assert result["tp_source"] == "fallback_rr"
     assert result["tp_structural_limited"] is True
-    assert result["recommended_take_profit"] == 99.8
+    assert result["recommended_take_profit"] == pytest.approx(expected_tp)
+    assert result["recommended_take_profit"] > 100.0
 
 
 def test_calculate_confidence_rejects_tp_on_wrong_side_of_entry():

@@ -107,11 +107,21 @@ def _check_positions_fail_closed() -> tuple[bool, str]:
             if any(fn in stripped for fn in [
                 "bybit_get_positions()", "mt5_get_positions()"
             ]) and "def " not in stripped and "#" not in stripped.split("=")[0]:
-                # Check if the NEXT non-blank line is a fail-closed guard
+                # Check for a nearby fail-closed guard before any positions coercion.
+                # Allow small control-flow wrappers (if/else/imports) used by helper functions.
                 found_guard = False
-                for j in range(i + 1, min(i + 5, len(lines))):
+                for j in range(i + 1, min(i + 12, len(lines))):
                     next_line = lines[j].strip()
                     if not next_line:
+                        continue
+                    if next_line in {"else:", "try:"}:
+                        continue
+                    if next_line.startswith("except "):
+                        found_guard = True
+                        break
+                    if next_line.startswith("from "):
+                        continue
+                    if any(fn in next_line for fn in ["bybit_get_positions()", "mt5_get_positions()"]):
                         continue
                     if '.get("error")' in next_line or "error" in next_line and "return" in next_line:
                         found_guard = True
