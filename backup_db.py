@@ -9,13 +9,22 @@ import shutil
 import sqlite3
 from datetime import datetime
 
+from runtime_paths import ensure_candle_cache_db_ready, resolve_backup_dir
+
 _DIR = os.path.dirname(os.path.abspath(__file__))
-_BACKUP_DIR = os.path.join(_DIR, "db_backups")
+_BACKUP_DIR = resolve_backup_dir()
 
 DATABASES = [
     "audit.db",
     "candle_cache.db",
 ]
+
+
+def _database_sources() -> dict[str, str]:
+    return {
+        "audit.db": os.path.join(_DIR, "audit.db"),
+        "candle_cache.db": str(ensure_candle_cache_db_ready()),
+    }
 
 
 def backup_now(reason: str = "manual") -> list:
@@ -24,8 +33,7 @@ def backup_now(reason: str = "manual") -> list:
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     backed_up = []
 
-    for db_name in DATABASES:
-        src = os.path.join(_DIR, db_name)
+    for db_name, src in _database_sources().items():
         if not os.path.exists(src):
             continue
         dst = os.path.join(_BACKUP_DIR, f"{db_name}.{ts}.{reason}.bak")
@@ -66,6 +74,11 @@ def _prune_old_backups(keep: int = 7):
 
 def restore_latest(db_name: str) -> bool:
     """Restore the most recent backup of a database."""
+    sources = _database_sources()
+    dst = sources.get(db_name)
+    if not dst:
+        print(f"[RESTORE] Unknown database: {db_name}")
+        return False
     if not os.path.exists(_BACKUP_DIR):
         print("[RESTORE] No backup directory found")
         return False
@@ -80,8 +93,8 @@ def restore_latest(db_name: str) -> bool:
         print(f"[RESTORE] No backups found for {db_name}")
         return False
     latest = os.path.join(_BACKUP_DIR, backups[-1])
-    dst = os.path.join(_DIR, db_name)
     try:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.copy2(latest, dst)
         print(f"[RESTORE] {db_name} restored from {backups[-1]}")
         return True

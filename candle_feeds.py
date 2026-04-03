@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from athena_runtime import rt
 from candles_cache import forex_h4_resample_offset_hours
 from data_feeds import _get_eodhd_client, http_requests
+from runtime_paths import ensure_candle_cache_db_ready
 
 log = logging.getLogger("sentinel")
 
@@ -692,9 +693,8 @@ class CandleBuilder:
 
         self._lock = threading.Lock()
 
-        self._db = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "candle_cache.db"
-        )
+        # Keep the high-churn candle cache off the OneDrive-synced repo on Windows.
+        self._db = str(ensure_candle_cache_db_ready())
 
         self._init_db()
 

@@ -10,7 +10,7 @@
 D1_CANDLES: 1001
 H4_CANDLES: 1001
 H1_CANDLES: 1001
-SCAN_MAX_WORKERS: 6           # Test value; raise carefully on this machine and watch CPU / UI responsiveness.
+SCAN_MAX_WORKERS: 3           # Match the code default; higher values on this machine have caused UI/browser lag during scans.
 SCAN_DEBUG_CANDLE_META: false # Optional scan/debug payload metadata about candle resolution path.
 FOREX_H4_RESAMPLE_OFFSET_HOURS: 1   # EURAUD/TradingView-aligned forex H4 grid: 01/05/09/13/17/21 UTC
 
