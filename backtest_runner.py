@@ -3846,7 +3846,8 @@ def backtest_pair_consensus(
             i += 1
             continue
 
-        _h4_fill_index = bisect.bisect_left(h4_times, entry_bar["time"])
+        # entry_bar is candles_h4[i+1]; h4_times are Timestamps — do not bisect on raw string time
+        _h4_fill_index = i + 1
         future_window = candles_h4[_h4_fill_index: min(_h4_fill_index + MAX_HOLD + 1, len(candles_h4))]
 
         outcome = "TIMEOUT"
