@@ -22,9 +22,9 @@ LOTTERY_GAME_RULES = {
         "main_count": 6,
         "has_bonus": True,
         "main_min": 1,
-        "main_max": 55,
+        "main_max": 52,
         "bonus_min": 1,
-        "bonus_max": 55,
+        "bonus_max": 52,
     },
     "powerball": {
         "main_count": 5,
@@ -553,10 +553,46 @@ def compute_rolling_frequency(
             }
         )
 
+    # Chi-squared goodness-of-fit test: does the recent window deviate
+    # from a uniform distribution across all numbers?
+    chi2_stat = None
+    chi2_p_value = None
+    universe_size = len(universe["main_numbers"])
+    total_recent_picks = sum(r["recent_count"] for r in rows)
+    if total_recent_picks > 0 and universe_size > 1:
+        expected_uniform = total_recent_picks / universe_size
+        if expected_uniform > 0:
+            chi2_stat = round(
+                sum(
+                    ((r["recent_count"] - expected_uniform) ** 2) / expected_uniform
+                    for r in rows
+                ),
+                4,
+            )
+            # Degrees of freedom = universe_size - 1
+            # Approximate p-value using the regularised incomplete gamma function
+            # For large df, use Wilson-Hilferty normal approximation
+            df = universe_size - 1
+            if df > 0 and chi2_stat >= 0:
+                try:
+                    # scipy may not be available — use the approximation
+                    z_wh = ((chi2_stat / df) ** (1.0 / 3.0) - (1.0 - 2.0 / (9.0 * df))) / math.sqrt(2.0 / (9.0 * df))
+                    # Standard normal CDF approximation
+                    chi2_p_value = round(0.5 * (1.0 + math.erf(-z_wh / math.sqrt(2.0))), 6)
+                except (ValueError, ZeroDivisionError):
+                    chi2_p_value = None
+
     return {
         "game": loaded["game"],
         "draw_count": len(draws),
         "window_used": window_used,
+        "chi2_stat": chi2_stat,
+        "chi2_p_value": chi2_p_value,
+        "chi2_interpretation": (
+            "Significant deviation from uniform (p < 0.05)" if chi2_p_value is not None and chi2_p_value < 0.05
+            else "No significant deviation from uniform" if chi2_p_value is not None
+            else None
+        ),
         "numbers": sorted(
             rows,
             key=lambda row: (
@@ -1406,6 +1442,11 @@ def _score_ticket_from_context(
         rarity_score = rarity_score / len(numbers)
     anti_crowd_score = round(min(100.0, max(0.0, rarity_score * 5 + (2 - recent_overlap) * 12 + overdue_count * 3)), 2)
 
+    # Coverage: how much of the number range the ticket spans (spread / max possible spread)
+    spread = max(numbers) - min(numbers) if len(numbers) >= 2 else 0
+    max_possible_spread = rules["main_max"] - rules["main_min"]
+    spread_ratio = round(spread / max_possible_spread, 4) if max_possible_spread > 0 else 0.0
+
     score = {
         "game": game,
         "numbers": numbers,
@@ -1422,6 +1463,8 @@ def _score_ticket_from_context(
         "pair_strength": pair_strength,
         "recent_overlap": recent_overlap,
         "anti_crowd_score": anti_crowd_score,
+        "spread": spread,
+        "spread_ratio": spread_ratio,
     }
     score["labels"] = _label_ticket(score, rules["main_count"])
     return score
@@ -1736,8 +1779,11 @@ def simulate_generator(
     payout_table: dict | None = None,
     filters: dict | None = None,
     db_path: str | None = None,
+    seed: int | None = None,
 ) -> dict:
     started_at = time.perf_counter()
+    if seed is not None:
+        random.seed(seed)
     game_key = _normalize_game(game)
     log.info("[LotterySim] request received game=%s mode=%s tickets_per_draw=%s start=%s end=%s include_bonus=%s",
              game_key, mode, tickets_per_draw, start_date, end_date, include_bonus)
@@ -1925,6 +1971,14 @@ def simulate_generator(
         (time.perf_counter() - started_at) * 1000.0,
     )
 
+    # Expected value per ticket: average return per ticket across the simulation
+    ev_per_ticket = round(total_return / tickets_generated, 4) if tickets_generated > 0 else 0.0
+    ev_net = round(ev_per_ticket - parsed_cost, 4) if parsed_cost > 0 else None
+    # Hit rate per tier: proportion of tickets that hit each tier
+    hit_rates = {}
+    for hit_key, hit_count in hit_distribution.items():
+        hit_rates[hit_key] = round(hit_count / tickets_generated, 6) if tickets_generated > 0 else 0.0
+
     return {
         "game": game_key,
         "mode": mode,
@@ -1933,7 +1987,10 @@ def simulate_generator(
         "total_cost": total_cost,
         "total_return": total_return,
         "roi": roi,
+        "ev_per_ticket": ev_per_ticket,
+        "ev_net_per_ticket": ev_net,
         "hit_distribution": dict(sorted(hit_distribution.items(), key=lambda item: item[0])),
+        "hit_rates": dict(sorted(hit_rates.items(), key=lambda item: item[0])),
         "best_hit": best if best["main_hits"] >= 0 else {"main_hits": 0, "bonus_hit": False, "ticket": None, "draw_date": None},
         "average_hits_per_draw": round(mean(draw_best_hits), 4) if draw_best_hits else 0.0,
         "mode_summary": {
@@ -1956,6 +2013,7 @@ def compare_generator_modes(
     payout_table: dict | None = None,
     filters: dict | None = None,
     db_path: str | None = None,
+    seed: int | None = None,
 ) -> dict:
     game_key = _normalize_game(game)
     mode_list = list(dict.fromkeys([str(m).strip().lower() for m in (modes or []) if str(m).strip()]))
@@ -1982,6 +2040,7 @@ def compare_generator_modes(
             payout_table=payout_table,
             filters=filters,
             db_path=db_path,
+            seed=seed,
         )
         summaries.append(
             {

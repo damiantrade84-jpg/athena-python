@@ -11288,6 +11288,13 @@ def api_lottery_simulate():
         start_date = payload.get("start_date")
         end_date = payload.get("end_date")
         filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
+        seed = None
+        raw_seed = payload.get("seed")
+        if raw_seed is not None:
+            try:
+                seed = int(raw_seed)
+            except (TypeError, ValueError):
+                seed = None
         ticket_cost = payload.get("ticket_cost")
         payout_table = payload.get("payout_table") or {}
         if isinstance(payout_table, str):
@@ -11315,6 +11322,7 @@ def api_lottery_simulate():
             ticket_cost=ticket_cost,
             payout_table=payout_table,
             filters=filters,
+            seed=seed,
         )
         serialize_started = time.perf_counter()
         response = jsonify(result)
@@ -11356,6 +11364,14 @@ def api_lottery_compare_modes():
         if not isinstance(payout_table, dict):
             payout_table = {}
 
+        seed = None
+        raw_seed = payload.get("seed")
+        if raw_seed is not None:
+            try:
+                seed = int(raw_seed)
+            except (TypeError, ValueError):
+                seed = None
+
         result = compare_generator_modes(
             game,
             modes=modes,
@@ -11366,6 +11382,7 @@ def api_lottery_compare_modes():
             ticket_cost=ticket_cost,
             payout_table=payout_table,
             filters=filters,
+            seed=seed,
         )
         return jsonify(result)
     except ValueError as e:

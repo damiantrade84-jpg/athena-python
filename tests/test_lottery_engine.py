@@ -65,10 +65,10 @@ def test_dashboard_and_frequency_pipeline():
     assert board["first_draw_date"] == "2026-01-01"
     assert board["last_draw_date"] == "2026-03-05"
     assert len(board["hot_numbers"]) > 0
-    assert len(board["number_frequency"]) == 55  # LOTTERY_GAME_RULES.lotto main_min..main_max
+    assert len(board["number_frequency"]) == 52  # LOTTERY_GAME_RULES.lotto main_min..main_max
     assert board["recommended_sum_range"]["min"] < board["recommended_sum_range"]["max"]
     assert len(board["positional_distribution"]) == 6
-    assert len(board["rolling_frequency"]) == 55
+    assert len(board["rolling_frequency"]) == 52
 
     freq = compute_number_frequency("lotto", db_path=str(db_path))
     hit_one = [x for x in freq["main_number_frequency"] if x["number"] == 1][0]
@@ -194,7 +194,7 @@ def test_new_lottery_analytics_and_wheel():
 
     rolling = compute_rolling_frequency("lotto", window=5, db_path=str(db_path))
     assert rolling["window_used"] == 5
-    assert len(rolling["numbers"]) == 55
+    assert len(rolling["numbers"]) == 52
     assert all(isinstance(row["z_score"], (int, float)) or row["z_score"] is None for row in rolling["numbers"])
 
     pair_lift = compute_pair_lift("lotto", limit=10, db_path=str(db_path))
@@ -224,7 +224,7 @@ def test_bonus_intelligence_handles_bonus_and_no_bonus_games():
     assert bonus["has_bonus"] is True
     assert bonus["draw_count"] == 10
     assert bonus["window_used"] == 5
-    assert len(bonus["rolling"]) == 55
+    assert len(bonus["rolling"]) == 52
     assert len(bonus["top_picks"]) <= 5
     assert all(row["trend"] in {"heating", "cooling", "neutral"} for row in bonus["rolling"])
 
