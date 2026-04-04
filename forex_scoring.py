@@ -296,23 +296,23 @@ def _entry_quality(h1_snap: dict, direction: str, rsi_history: list = None) -> f
         return _apply_h1_ema_entry_quality_modifier(score, h1_snap, direction)
 
     if direction == "LONG":
-        if 35 <= rsi <= 55:
-            score = 1.0
-        elif 55 < rsi <= 65:
-            score = 0.5
-        elif rsi < 35:
-            score = 0.2
+        if 30 <= rsi <= 45:
+            score = 1.0  # genuine pullback zone
+        elif 45 < rsi <= 52:
+            score = 0.5  # mild pullback — partial credit
+        elif rsi < 30:
+            score = 0.3  # deep oversold — possible reversal, not trend entry
         else:
-            score = 0.0
+            score = 0.0  # RSI > 52 is not a pullback
     else:
-        if 45 <= rsi <= 65:
-            score = 1.0
-        elif 35 <= rsi < 45:
-            score = 0.5
-        elif rsi > 65:
-            score = 0.2
+        if 55 <= rsi <= 70:
+            score = 1.0  # genuine pullback zone (for shorts)
+        elif 48 <= rsi < 55:
+            score = 0.5  # mild pullback
+        elif rsi > 70:
+            score = 0.3  # deep overbought — possible reversal
         else:
-            score = 0.0
+            score = 0.0  # RSI < 48 is not a short pullback
     return _apply_h1_ema_entry_quality_modifier(score, h1_snap, direction)
 
 
