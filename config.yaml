@@ -64,7 +64,7 @@ WEINSTEIN_LOOKBACK:
 # false = backtest mirrors live MIN_CONFLUENCE_* (parity). Live scans always use live gates.
 # RESEARCH_MODE also enables the BT chain (legacy); prefer BACKTEST_USE_BT_MIN_THRESHOLDS.
 RESEARCH_MODE: false
-BACKTEST_USE_BT_MIN_THRESHOLDS: true
+BACKTEST_USE_BT_MIN_THRESHOLDS: false
 BT_MIN:
   crypto:    0.90
   commodity: 0.85

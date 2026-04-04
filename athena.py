@@ -7233,6 +7233,19 @@ def _scalp_ui_signal(raw_signal: dict) -> dict:
     }
 
 
+@app.route("/api/scalp-pairs", methods=["GET"])
+def api_scalp_pairs():
+    """List Engine D scan universe (no candle work). Respects SCALP_PAIRS override."""
+    try:
+        from scalp_engine import get_scalp_pairs
+
+        pairs = get_scalp_pairs(ACTIVE_PAIRS)
+        return jsonify({"pairs": pairs, "count": len(pairs)})
+    except Exception as e:
+        log.error(f"api_scalp_pairs error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/scalp-scan", methods=["POST"])
 def api_scalp_scan():
     """Run Engine D scalp scan and return frontend-friendly JSON."""
@@ -7242,7 +7255,7 @@ def api_scalp_scan():
         payload = request.get_json(silent=True) or {}
         pairs = payload.get("pairs")
         if not isinstance(pairs, list) or not pairs:
-            pairs = get_scalp_pairs()
+            pairs = get_scalp_pairs(ACTIVE_PAIRS)
 
         result = run_scalp_scan(pairs)
         signals = [_scalp_ui_signal(s) for s in (result.get("signals", []) or [])]
@@ -7251,6 +7264,8 @@ def api_scalp_scan():
                 "signals": signals,
                 "skipped": result.get("skipped", []),
                 "scanned": result.get("scanned", len(pairs)),
+                "pairs": pairs,
+                "pair_count": len(pairs),
                 "session": result.get("session"),
                 "sessions_active": result.get("sessions_active", []),
                 "reason": result.get("reason"),
@@ -11867,6 +11882,7 @@ set_runtime(
         AUDIT_DB=_AUDIT_DB,
         log=log,
         ALL_PAIRS=ALL_PAIRS,
+        ACTIVE_PAIRS=ACTIVE_PAIRS,
         disabled_pairs=_disabled_pairs,
         scan_lock=_scan_lock,
         kill_switch=lambda: _kill_switch,

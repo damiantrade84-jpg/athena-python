@@ -1515,6 +1515,13 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       <span id="scalpStatus" style="font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;"></span>
     </div>
 
+    <details id="scalpUniverseWrap" style="margin-bottom:16px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:rgba(255,255,255,0.02);">
+      <summary style="cursor:pointer;font-size:11px;font-weight:700;color:var(--accent);font-family:'IBM Plex Mono',monospace;letter-spacing:0.05em;list-style-position:outside;">
+        Scan universe — <span id="scalpPairCount">…</span> pairs <span style="color:var(--muted);font-weight:400">(active MT5 + Binance crypto; override via SCALP_ENGINE.SCALP_PAIRS)</span>
+      </summary>
+      <div id="scalpPairList" style="margin-top:10px;max-height:240px;overflow-y:auto;font-size:11px;line-height:1.5;color:var(--text);display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start;"></div>
+    </details>
+
     <div id="scalpSignals" class="signal-grid">
       <div class="empty-state">
         <div class="icon">⚡</div>
@@ -1563,21 +1570,21 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
 
         <div style="display:flex;flex-direction:column;gap:4px;" id="addDrawNumbersWrap">
           <label style="font-size:9px;color:var(--muted);font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:0.1em;">
-            Numbers <span id="addDrawNumHint" style="color:var(--accent);">(6 balls, 1–52)</span>
+            Numbers <span id="addDrawNumHint" style="color:var(--accent);">(6 balls, 1–58)</span>
           </label>
           <div style="display:flex;gap:6px;flex-wrap:wrap;" id="addDrawNumbersRow">
-            <input class="lottery-input add-draw-num" type="number" min="1" max="55" placeholder="N1" style="width:52px;" />
-            <input class="lottery-input add-draw-num" type="number" min="1" max="55" placeholder="N2" style="width:52px;" />
-            <input class="lottery-input add-draw-num" type="number" min="1" max="55" placeholder="N3" style="width:52px;" />
-            <input class="lottery-input add-draw-num" type="number" min="1" max="55" placeholder="N4" style="width:52px;" />
-            <input class="lottery-input add-draw-num" type="number" min="1" max="55" placeholder="N5" style="width:52px;" />
-            <input class="lottery-input add-draw-num" type="number" min="1" max="55" placeholder="N6" style="width:55px;" id="addDrawN6" />
+            <input class="lottery-input add-draw-num" type="number" min="1" max="58" placeholder="N1" style="width:52px;" />
+            <input class="lottery-input add-draw-num" type="number" min="1" max="58" placeholder="N2" style="width:52px;" />
+            <input class="lottery-input add-draw-num" type="number" min="1" max="58" placeholder="N3" style="width:52px;" />
+            <input class="lottery-input add-draw-num" type="number" min="1" max="58" placeholder="N4" style="width:52px;" />
+            <input class="lottery-input add-draw-num" type="number" min="1" max="58" placeholder="N5" style="width:52px;" />
+            <input class="lottery-input add-draw-num" type="number" min="1" max="58" placeholder="N6" style="width:55px;" id="addDrawN6" />
           </div>
         </div>
 
         <div style="display:flex;flex-direction:column;gap:4px;" id="addDrawBonusWrap">
           <label style="font-size:9px;color:var(--muted);font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:0.1em;">Bonus Ball</label>
-          <input id="addDrawBonus" type="number" min="1" max="55" placeholder="Bonus" class="lottery-input" style="width:68px;" />
+          <input id="addDrawBonus" type="number" min="1" max="58" placeholder="Bonus" class="lottery-input" style="width:68px;" />
         </div>
 
         <button class="bt-btn" onclick="submitAddDraw()" style="height:36px;align-self:flex-end;">SAVE DRAW</button>
@@ -2528,6 +2535,7 @@ function switchPanel(name) {
   });
   var nav = document.getElementById('nav-' + name);
   if (nav) nav.classList.add('active');
+  if (name === 'scalp' && typeof loadScalpUniverse === 'function') loadScalpUniverse();
   if (name === 'tv') {
     var disp = (window.allSignals && window.allSignals[0] && (window.allSignals[0].display || window.allSignals[0].pair)) || '';
     var inp = document.getElementById('tvSymbolInput');
@@ -2569,10 +2577,10 @@ function switchTab(tab) {
 
 function lotteryGameSpec(game) {
   return {
-    lotto: { mainCount: 6, hasBonus: true, mainMin: 1, mainMax: 55 },
+    lotto: { mainCount: 6, hasBonus: true, mainMin: 1, mainMax: 58 },
     powerball: { mainCount: 5, hasBonus: true, mainMin: 1, mainMax: 50 },
     daily_lotto: { mainCount: 5, hasBonus: false, mainMin: 1, mainMax: 36 }
-  }[game] || { mainCount: 6, hasBonus: true, mainMin: 1, mainMax: 55 };
+  }[game] || { mainCount: 6, hasBonus: true, mainMin: 1, mainMax: 58 };
 }
 
 function getLotteryGame() {
@@ -9976,6 +9984,36 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // ── Scalp Engine (Engine D) ──────────────────────────────────────────────────
+function renderScalpPairChips(container, pairs) {
+  if (!container) return;
+  container.innerHTML = '';
+  (pairs || []).forEach(function(p) {
+    var span = document.createElement('span');
+    span.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-family:\'IBM Plex Mono\',monospace;font-size:10px';
+    span.textContent = p;
+    container.appendChild(span);
+  });
+}
+
+async function loadScalpUniverse() {
+  var listEl = document.getElementById('scalpPairList');
+  var cntEl = document.getElementById('scalpPairCount');
+  if (!listEl || !cntEl) return;
+  cntEl.textContent = '…';
+  listEl.innerHTML = '';
+  try {
+    var resp = await fetch('/api/scalp-pairs');
+    var data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    var pairs = data.pairs || [];
+    cntEl.textContent = String(data.count != null ? data.count : pairs.length);
+    renderScalpPairChips(listEl, pairs);
+  } catch (e) {
+    cntEl.textContent = '?';
+    listEl.textContent = 'Could not load universe: ' + e.message;
+  }
+}
+
 async function runScalpScan() {
   var btn = document.getElementById('scalpScanBtn');
   var status = document.getElementById('scalpStatus');
@@ -9985,8 +10023,16 @@ async function runScalpScan() {
     var resp = await fetch('/api/scalp-scan', {method:'POST'});
     var data = await resp.json();
     if (data.error) throw new Error(data.error);
+    if (data.pairs && data.pairs.length) {
+      var cntEl = document.getElementById('scalpPairCount');
+      var listEl = document.getElementById('scalpPairList');
+      if (cntEl) cntEl.textContent = String(data.pair_count != null ? data.pair_count : data.pairs.length);
+      renderScalpPairChips(listEl, data.pairs);
+    }
     renderScalpSignals(data.signals || []);
-    if (status) status.textContent = 'Found ' + (data.signals || []).length + ' scalps | ' + new Date().toLocaleTimeString();
+    var n = (data.signals || []).length;
+    var tot = data.scanned != null ? data.scanned : (data.pair_count || n);
+    if (status) status.textContent = 'Scanned ' + tot + ' | ' + n + ' setup(s) | ' + new Date().toLocaleTimeString();
   } catch(e) {
     if (status) status.textContent = 'Error: ' + e.message;
     showToast('Scalp Scan: ' + e.message, true);

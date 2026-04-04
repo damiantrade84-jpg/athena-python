@@ -1000,6 +1000,13 @@ def register_execution_routes(app: Flask) -> None:
         )
     if "/api/execute" not in rules:
         app.add_url_rule("/api/execute", "api_execute", api_execute, methods=["POST"])
+    if "/api/scalp-pairs" not in rules:
+        app.add_url_rule(
+            "/api/scalp-pairs",
+            "api_scalp_pairs",
+            api_scalp_pairs,
+            methods=["GET"],
+        )
     if "/api/scalp-scan" not in rules:
         app.add_url_rule(
             "/api/scalp-scan",
@@ -1016,6 +1023,18 @@ def register_execution_routes(app: Flask) -> None:
         )
 
 
+def api_scalp_pairs():
+    """List Engine D scan universe (mirrors athena when registered)."""
+    from scalp_engine import get_scalp_pairs
+
+    try:
+        pairs = get_scalp_pairs(rt().ACTIVE_PAIRS)
+        return jsonify({"pairs": pairs, "count": len(pairs)})
+    except Exception as e:
+        rt().log.error(f"[SCALP API] scalp-pairs error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 def api_scalp_scan():
     """Engine D scalp scan — M15 zones + M5 entry triggers (MT5 non-crypto, Binance/crypto path for USDT pairs)."""
     from scalp_engine import get_scalp_pairs, run_scalp_scan
@@ -1024,7 +1043,7 @@ def api_scalp_scan():
     requested_pairs = d.get("pairs")
     
     if not requested_pairs or requested_pairs == "all":
-        pairs = get_scalp_pairs()
+        pairs = get_scalp_pairs(rt().ACTIVE_PAIRS)
     elif isinstance(requested_pairs, list):
         pairs = requested_pairs
     else:
@@ -1032,7 +1051,10 @@ def api_scalp_scan():
         
     try:
         results = run_scalp_scan(pairs)
-        return jsonify(results)
+        out = dict(results)
+        out["pairs"] = list(pairs)
+        out["pair_count"] = len(pairs)
+        return jsonify(out)
     except Exception as e:
         rt().log.error(f"[SCALP API] Scan error: {e}")
         return jsonify({"error": str(e)}), 500

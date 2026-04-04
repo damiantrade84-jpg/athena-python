@@ -423,7 +423,7 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 
 ## Lottery Lab
 
-**Games:** `lotto` (6/52+bonus), `powerball` (5/50+bonus), `daily_lotto` (5/36)
+**Games:** `lotto` (6/58+bonus), `powerball` (5/50+bonus), `daily_lotto` (5/36)
 **Generator modes:** `pure_random · hot_bias · cold_bias · overdue_bias · balanced_mix · pair_bias · anti_crowd`
 
 **Lottery AI:** `POST /api/lottery/ai-analysis` uses **Grok (xAI)** only — not Anthropic. Set **`XAI_API_KEY`** in env; **`openai`** package with **`base_url=https://api.x.ai/v1`**; model from **`LOTTERY_AI_MODEL`** (optional) or **`XAI_MODEL`** in `config.yaml`. Response JSON includes **`model`** echo.
@@ -433,7 +433,7 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 - `generate_tickets()` requires `rules`, `universe`, `main_numbers` initialised before `if draw_context is not None`
 - Per-ticket retry cap: `max(25, min(400, len(main_numbers) * 4))` — never remove
 - New games must be added to both `LOTTERY_GAME_RULES` (`lottery_engine.py`) AND `LOTTERY_GAME_SPECS` (`lottery_service.py`)
-- `LOTTERY_GAME_RULES["lotto"]` uses `main_max=52, bonus_max=52` (SA Lotto 1–52 pool since Oct 2017) — do not change to 49 or 55
+- `LOTTERY_GAME_RULES["lotto"]` uses `main_max=58, bonus_max=58` (SA Lotto 1–58 pool since 21 Sep 2025) — do not revert to 52 or 55
 
 ---
 

@@ -21,7 +21,7 @@ import logging
 import math
 import pandas as pd
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from config import CONFIG
 from stability_monitor import record_signal_event
@@ -1052,17 +1052,35 @@ def _guess_asset_type(display: str) -> str:
 
 # ── Scalp pairs list ──────────────────────────────────────────────────────────
 
-def get_scalp_pairs() -> list:
-    """Return the list of pairs to scan. Reads from config or uses full default set.
+def get_scalp_pairs(active_pair_dicts: Optional[list[dict[str, Any]]] = None) -> list:
+    """Return display names to scan for Engine D.
 
-    MT5 pairs: all mapped forex, commodities, indices (session-gated London/NY).
-    Crypto pairs: Bybit USDT perps via ccxt (Asia/London/NY sessions, 24/7 allowed).
-    Config SCALP_PAIRS overrides the full list if explicitly set.
+    Priority:
+    1. ``SCALP_ENGINE.SCALP_PAIRS`` in config — explicit override.
+    2. If ``active_pair_dicts`` is provided (e.g. ``rt().ACTIVE_PAIRS``): enabled pairs
+       with ``source`` mt5 (forex/commodity/index/stock) or binance (crypto).
+    3. Legacy built-in list (~54) when no runtime list is passed.
     """
     cfg = CONFIG.get("SCALP_ENGINE", {})
     configured = cfg.get("SCALP_PAIRS", [])
     if configured:
         return list(configured)
+
+    if active_pair_dicts is not None:
+        out: list[str] = []
+        for p in active_pair_dicts:
+            if not isinstance(p, dict) or not p.get("enabled", True):
+                continue
+            src = str(p.get("source") or "").lower()
+            typ = str(p.get("type") or "").lower()
+            disp = (p.get("display") or p.get("symbol") or "").strip()
+            if not disp:
+                continue
+            if src == "mt5" and typ in ("forex", "commodity", "index", "stock"):
+                out.append(disp)
+            elif src == "binance" and typ == "crypto":
+                out.append(disp)
+        return sorted(set(out), key=str.casefold)
 
     # Full MT5 forex majors + minors
     mt5_forex = [

@@ -91,6 +91,7 @@ def test_key_endpoints_exist_with_methods():
     assert "/api/scan" in ep and "POST" in ep["/api/scan"]
     assert "/api/analyze" in ep and "POST" in ep["/api/analyze"]
     assert "/api/engine-c-scan" in ep and "POST" in ep["/api/engine-c-scan"]
+    assert "/api/scalp-pairs" in ep and "GET" in ep["/api/scalp-pairs"]
     assert "/api/scalp-scan" in ep and "POST" in ep["/api/scalp-scan"]
     assert "/api/scalp-execute" in ep and "POST" in ep["/api/scalp-execute"]
     assert "/api/execute" in ep and "POST" in ep["/api/execute"]
