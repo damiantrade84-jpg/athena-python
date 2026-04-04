@@ -1247,6 +1247,16 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       <button class="fp" onclick="applyFilter('SHORT',this)">▼ SHORT</button>
       <button class="fp" onclick="applyFilter('high',this)">HIGH CONF</button>
     </div>
+    <div class="exec-risk-toolbar" style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;font-size:11px;font-family:IBM Plex Mono,monospace;">
+      <label for="execRiskSizing" style="color:var(--muted);white-space:nowrap;">Exec position size</label>
+      <select id="execRiskSizing" title="Scales volume from the risk engine (25–100% of calculated size)" style="padding:6px 12px;border-radius:6px;background:var(--panel);color:var(--text);border:1px solid var(--border);font-size:11px;min-width:140px;">
+        <option value="1" selected>100% (full)</option>
+        <option value="0.75">75%</option>
+        <option value="0.5">50%</option>
+        <option value="0.25">25%</option>
+      </select>
+      <span style="color:var(--text2);font-size:10px;max-width:280px;line-height:1.35;">Applies before you execute (confirm modal, style buttons, Engine C, scalp).</span>
+    </div>
   </div>
   <div class="signals-body">
   <div class="test-banner" id="testBanner">TEST MODE ACTIVE — Score thresholds lowered, force-execute enabled on all signals</div>
@@ -8174,9 +8184,19 @@ function confirmExecute(signalRef, forceMode, preselectedProfileKey) {
       profileOptions +
       '</select></div>'
     : '';
+  var riskSizingHtml =
+    '<div style="margin-bottom:12px;">' +
+    '<div style="font-size:10px;color:#8ea2b7;margin-bottom:6px;">Position size (risk-engine scale)</div>' +
+    '<select class="exec-risk-sizing-modal" style="width:100%;padding:10px;border-radius:8px;background:#0d1420;color:#e6eef8;border:1px solid var(--border);font-family:IBM Plex Mono,monospace;font-size:11px;">' +
+    '<option value="1">100% (full)</option>' +
+    '<option value="0.75">75%</option>' +
+    '<option value="0.5">50%</option>' +
+    '<option value="0.25">25%</option>' +
+    '</select></div>';
   overlay.innerHTML = '<div class="exec-modal">' +
     '<h3 style="color:' + (isForce ? 'var(--warn)' : dirColor) + '">' + modalTitle + '</h3>' + forceWarn +
     selectorHtml +
+    riskSizingHtml +
     '<div class="exec-summary"></div>' +
     '<div class="exec-actions">' +
       '<button class="exec-cancel" onclick="this.closest(\'.exec-modal-overlay\').remove()">CANCEL</button>' +
@@ -8190,6 +8210,9 @@ function confirmExecute(signalRef, forceMode, preselectedProfileKey) {
   if (selector) {
     selector.addEventListener('change', function() { _renderExecModalSummary(overlay); });
   }
+  var gsz = document.getElementById('execRiskSizing');
+  var msz = overlay.querySelector('.exec-risk-sizing-modal');
+  if (gsz && msz) msz.value = gsz.value;
   _renderExecModalSummary(overlay);
 }
 
@@ -8200,6 +8223,11 @@ async function doExecute(signalRef, btn, forceMode) {
   try {
     var overlay = btn.closest('.exec-modal-overlay');
     var payload = { signal: buildLiveSignalPayload(sig) };
+    var modalSz = overlay && overlay.querySelector('.exec-risk-sizing-modal');
+    var rawSz = modalSz && modalSz.value ? modalSz.value : (document.getElementById('execRiskSizing') || {}).value;
+    var sizingOverride = parseFloat(rawSz || '1', 10);
+    if (!(sizingOverride >= 0.25 && sizingOverride <= 1)) sizingOverride = 1;
+    payload.sizing_override = sizingOverride;
     var profile = overlay && overlay._selectedProfile;
     if (profile && profile.source === 'chart_ai') {
       payload.level_override = {
@@ -10029,10 +10057,20 @@ async function executeScalp(btn, sid) {
   if (!confirm('Execute M5 Scalp trade for ' + symbol + ' ' + signal.direction + '? Risk engine will be checked.')) return;
   btn.disabled = true; btn.textContent = 'EXECUTING...';
   try {
+    var scalpSz = 1;
+    if (window.ExecutionFeature && typeof window.ExecutionFeature.getExecutionSizingOverride === 'function') {
+      scalpSz = window.ExecutionFeature.getExecutionSizingOverride();
+    } else {
+      var _g = document.getElementById('execRiskSizing');
+      if (_g) {
+        scalpSz = parseFloat(_g.value, 10);
+        if (!(scalpSz >= 0.25 && scalpSz <= 1)) scalpSz = 1;
+      }
+    }
     var resp = await fetch('/api/scalp-execute', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({symbol: symbol, signal: signal})
+      body: JSON.stringify({symbol: symbol, signal: signal, sizing_override: scalpSz})
     });
     var data = await resp.json();
     if (data.success) {

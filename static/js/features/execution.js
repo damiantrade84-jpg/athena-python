@@ -27,6 +27,13 @@
     return _resolveSignal(signalRef);
   }
 
+  function getExecutionSizingOverride() {
+    var el = document.getElementById("execRiskSizing");
+    var v = el ? parseFloat(el.value, 10) : NaN;
+    if (!(v >= 0.25 && v <= 1)) return 1.0;
+    return v;
+  }
+
   function _signalSid(sig, fallback) {
     var base =
       (sig && (sig.symbol || sig.display || sig.pair)) || String(fallback || "");
@@ -77,6 +84,7 @@
       signal: window.buildLiveSignalPayload(sig),
       engine_b: {},
       pip_mode: pipMode || "swing",
+      sizing_override: getExecutionSizingOverride(),
     };
     await postQuickExecute(
       payload,
@@ -97,6 +105,7 @@
       signal: window.buildLiveSignalPayload(sig),
       engine_b: engineBData || {},
       pip_mode: pipMode || "swing",
+      sizing_override: getExecutionSizingOverride(),
     };
     await postQuickExecute(
       payload,
@@ -138,12 +147,16 @@
     var engineB = consensus.engine_b_raw || {};
     engineB.recommended_stop_loss = consensus.sl;
     engineB.recommended_take_profit = consensus.tp;
+    var userSz = getExecutionSizingOverride();
+    var co = consensus.sizing_override;
+    var mult = co != null && !isNaN(Number(co)) ? Number(co) : 1;
+    var combined = Math.max(0.25, Math.min(1.0, userSz * mult));
     await postQuickExecute(
       {
         signal: signal,
         engine_b: engineB,
         pip_mode: pipMode || "swing",
-        sizing_override: consensus.sizing_override,
+        sizing_override: combined,
       },
       null,
       "Engine C: " +
@@ -163,6 +176,7 @@
     executeSignalStyle,
     quickExecute,
     executeEngineC,
+    getExecutionSizingOverride,
   };
 })();
 

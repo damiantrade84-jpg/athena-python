@@ -433,6 +433,7 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 - `generate_tickets()` requires `rules`, `universe`, `main_numbers` initialised before `if draw_context is not None`
 - Per-ticket retry cap: `max(25, min(400, len(main_numbers) * 4))` — never remove
 - New games must be added to both `LOTTERY_GAME_RULES` (`lottery_engine.py`) AND `LOTTERY_GAME_SPECS` (`lottery_service.py`)
+- `LOTTERY_GAME_RULES["lotto"]` uses `main_max=52, bonus_max=52` (SA Lotto 1–52 pool since Oct 2017) — do not change to 49 or 55
 
 ---
 

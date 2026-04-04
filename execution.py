@@ -125,7 +125,10 @@ def api_quick_execute():
     level_override = d.get("level_override") or sig.get("level_override")
 
     pip_mode = normalize_pip_mode(d.get("pip_mode"))
-    _sizing_override = float(d.get("sizing_override", 1.0))
+    try:
+        _sizing_override = max(0.25, min(1.0, float(d.get("sizing_override", 1.0))))
+    except (TypeError, ValueError):
+        _sizing_override = 1.0
     sig["style"] = pip_mode or sig.get("style", "swing")
 
     _sig_age = 9999
@@ -836,21 +839,30 @@ def api_execute():
 
             _exec_venue = "mt5"
 
+        _raw_so = d.get("sizing_override")
+        _sizing_override = None
+        if _raw_so is not None:
+            try:
+                _sizing_override = max(0.25, min(1.0, float(_raw_so)))
+            except (TypeError, ValueError):
+                _sizing_override = None
+
         _grade = d.get("grade", "")
 
-        _pos_size_str = d.get("positionSizing", "").lower()
+        if _sizing_override is None:
+            _pos_size_str = d.get("positionSizing", "").lower()
 
-        if "quarter" in _pos_size_str:
-            _sizing_override = 0.25
+            if "quarter" in _pos_size_str:
+                _sizing_override = 0.25
 
-        elif "half" in _pos_size_str:
-            _sizing_override = 0.5
+            elif "half" in _pos_size_str:
+                _sizing_override = 0.5
 
-        elif "normal" in _pos_size_str or _grade == "A":
-            _sizing_override = 0.75
+            elif "normal" in _pos_size_str or _grade == "A":
+                _sizing_override = 0.75
 
-        else:
-            _sizing_override = 1.0
+            else:
+                _sizing_override = 1.0
 
         approval = risk_check(
             signal=sig,
@@ -1031,8 +1043,11 @@ def api_scalp_execute():
     _r = rt()
     d = request.get_json() or {}
     sig = d.get("signal")
-    _sizing_override = float(d.get("sizing_override", 1.0))
-    
+    try:
+        _sizing_override = max(0.25, min(1.0, float(d.get("sizing_override", 1.0))))
+    except (TypeError, ValueError):
+        _sizing_override = 1.0
+
     if not sig:
         return jsonify({"error": "Missing signal data"}), 400
         
