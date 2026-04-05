@@ -1166,7 +1166,11 @@ def compute_factor_scores(
     _dir_conf = _directional_confidence_multiplier(abs(dir_score), _effective_min_dir, _soft_span)
     _nondir_norm = min(nondir_score / 3.0, 1.0)  # normalize quality to [0, 1]
     _quality_mult = 0.6 + (_nondir_norm * 0.4)
-    final_score = abs(dir_score) * _quality_mult * _dir_conf
+    # Scale to 0-3.0 range. Without scaling, the multiplicative formula caps at ~1.42
+    # because the binary trend factor (max 1.0) with highest weight drags down the
+    # weighted average. This made MIN_CONFLUENCE_CLASS gates (1.35-1.55) unreachable.
+    _SCORE_SCALE = 2.11
+    final_score = abs(dir_score) * _quality_mult * _dir_conf * _SCORE_SCALE
     _intermarket_apply = apply_confirmation_to_score(
         final_score,
         direction,

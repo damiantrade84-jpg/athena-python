@@ -479,6 +479,26 @@ These are calibrated at ~75–85% of maximum achievable to allow strong signals 
 
 ---
 
+## 2026-04-05: Engine A score scaling fix
+
+**Problem:** The multiplicative formula `dir_score × quality_mult × dir_conf` produced a maximum `final_score` of ~1.42 instead of the documented 0–3.0 range. Root cause: the trend factor is binary (max ±1.0) and has the highest weight (2.0), so the weighted average of directional factors is structurally capped at ~1.4 regardless of how strong momentum/derivatives/carry are.
+
+This made `MIN_CONFLUENCE_CLASS` gates unreachable:
+
+- stock (1.55): impossible — max was 1.42
+- commodity (1.40): only at theoretical perfect conditions
+- index (1.35): only at theoretical perfect conditions
+
+**Fix:** Added `_SCORE_SCALE = 2.11` in `factor_scoring.py` line ~1169 to stretch output to the documented 0–3.0 range. Now:
+
+- A score of 1.5 = 50% of theoretical maximum
+- A score of 2.0 = 67% of theoretical maximum
+- Gates at 1.35–1.55 are achievable with strong (but not perfect) signals
+
+**Impact:** All Engine A backtests before this fix used the unscaled 0–1.42 range. Re-run backtests after applying to get valid results. No threshold changes needed.
+
+---
+
 ## Hard Rules
 
 1. Never bypass `risk_check()` for any execution

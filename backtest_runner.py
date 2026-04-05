@@ -2972,6 +2972,16 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         "H1": _full_atr(candles_h1)
     }
 
+    _indicator_cache = {}
+
+    def _cached_calc_indicators(candles, asset_type, cache_key):
+        key = (cache_key, len(candles))
+        if key in _indicator_cache:
+            return _indicator_cache[key]
+        result = calc_indicators_with_normalized(candles, asset_type)
+        _indicator_cache[key] = result
+        return result
+
     COOLDOWN = 8 if _entry_tf == "H1" else 2  # entries to skip after a trade (H1 vs H4 bars)
     trades = []
     same_bar_both_hit = 0
@@ -3052,10 +3062,10 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         _bt_b_zone_snap = {}
         try:
             _bt_b_d1_snap = (
-                calc_indicators_with_normalized(d1_ctx, pair.get("type", "stock")) or {}
+                _cached_calc_indicators(d1_ctx, pair.get("type", "stock"), "d1") or {}
             ).get("snap") or {}
             _bt_b_zone_snap = (
-                calc_indicators_with_normalized(zone_ctx, pair.get("type", "stock")) or {}
+                _cached_calc_indicators(zone_ctx, pair.get("type", "stock"), "zone") or {}
             ).get("snap") or {}
         except Exception:
             pass
