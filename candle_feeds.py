@@ -414,6 +414,34 @@ class BinanceCandleWS:
         log.info("[BN-KLINE-WS] Stopped")
 
 
+def _format_eodhd_ws_disconnect(exc: BaseException) -> str:
+    """Readable disconnect detail for logs (websockets 16 uses rcvd/sent, not exc.code)."""
+    name = type(exc).__name__
+    text = str(exc).strip()
+    parts = [name]
+    rcvd = getattr(exc, "rcvd", None)
+    if rcvd is not None:
+        c = getattr(rcvd, "code", None)
+        r = getattr(rcvd, "reason", None) or ""
+        r = r.strip() if isinstance(r, str) else ""
+        if c is not None:
+            parts.append(f"rcv_code={c}")
+        if r:
+            parts.append(f"rcv_reason={r!r}")
+    # Fallback for exceptions that expose code/reason on self (non-websockets)
+    if len(parts) == 1:
+        c2 = getattr(exc, "code", None)
+        if c2 is not None:
+            parts.append(f"code={c2}")
+        r2 = getattr(exc, "reason", None)
+        if isinstance(r2, str) and r2.strip():
+            parts.append(f"reason={r2.strip()!r}")
+    if text and text not in parts:
+        parts.append(text)
+    out = " ".join(parts)
+    return out if len(out) > len(name) else (text or out or repr(exc))
+
+
 class EODHDWebSocketManager:
     """Manages 3 persistent WebSocket connections (US, Forex, Crypto) for real-time prices."""
 
@@ -485,6 +513,8 @@ class EODHDWebSocketManager:
         import websockets
 
         url = f"{self.WS_BASE}/{endpoint}?api_token={self._key}"
+        delay = 5.0
+        max_delay = 60.0
 
         while True:
             try:
@@ -495,6 +525,7 @@ class EODHDWebSocketManager:
                     open_timeout=45,
                     close_timeout=10,
                 ) as ws:
+                    delay = 5.0  # reset backoff after a successful handshake
                     # EODHD manages keepalive at application layer (heartbeat messages).
 
                     # WebSocket-level pings cause 1011 errors because EODHD doesn't respond
@@ -603,9 +634,12 @@ class EODHDWebSocketManager:
                             log.debug(f"[WS] msg parse error: {_e}")
 
             except Exception as e:
-                log.warning(f"[WS] {endpoint} disconnected: {e} — reconnecting in 5s")
-
-                await asyncio.sleep(5)
+                detail = _format_eodhd_ws_disconnect(e)
+                log.warning(
+                    f"[WS] {endpoint} disconnected: {detail} — reconnecting in {delay:.0f}s"
+                )
+                await asyncio.sleep(delay)
+                delay = min(max_delay, max(5.0, delay * 1.5))
 
     async def _run_all(self, pairs):
 
@@ -615,6 +649,11 @@ class EODHDWebSocketManager:
 
         for ep, tickers in [("us", ticker_info["us"]), ("forex", ticker_info["forex"])]:
             if tickers:
+                if len(tickers) > 50:
+                    log.warning(
+                        f"[WS] {ep}: {len(tickers)} symbols (EODHD plans typically cap ~50 "
+                        f"per connection; frequent drops often mean over limit or upstream reset)"
+                    )
                 tasks.append(self._connect(ep, tickers, ticker_info["map"]))
 
         if tasks:
