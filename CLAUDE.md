@@ -454,6 +454,31 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 
 ---
 
+## DECISIONS
+
+## 2026-04-05: Engine A threshold recalibration
+
+**Root cause:** `MIN_CONFLUENCE_CLASS` gates for stocks (1.55), ETFs (1.45), commodities (1.40), and indices (1.35) were above the scoring formula ceiling.
+
+The multiplicative formula with binary trend factor produces:
+
+- **Maximum achievable score:** 1.42 (all factors at theoretical peak)
+- **Typical good signal:** 0.79
+
+Previous gates made it structurally impossible for stocks/ETFs to pass, and commodities/indices could only pass under rare perfect conditions.
+
+**New gates (`config.yaml`):**
+
+- stock: **1.10** (was 1.55)
+- commodity: **1.10** (was 1.40)
+- index: **1.05** (was 1.35)
+- crypto: **1.20** (was 1.40)
+- forex: **0.80** (unchanged; uses different scale)
+
+These are calibrated at ~75–85% of maximum achievable to allow strong signals through while maintaining selectivity. Backtest **30+ trades per pair** before further adjustment.
+
+---
+
 ## Hard Rules
 
 1. Never bypass `risk_check()` for any execution
