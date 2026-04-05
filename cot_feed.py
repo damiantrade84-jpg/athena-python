@@ -16,7 +16,7 @@ Data sources (CFTC — free, no API key):
   Annual TXT history: https://www.cftc.gov/files/dea/history/fut_fin_txt_{YYYY}.zip
   Disaggregated:      https://www.cftc.gov/files/dea/history/fut_disagg_txt_{YYYY}.zip
 
-Strategy: seed 2 years of history from annual ZIPs on first run,
+Strategy: seed 3 years of history from annual ZIPs on first run,
           then update weekly from FinFutWk.txt (current week).
 
 Usage:
@@ -58,14 +58,15 @@ _HIST_FIN_URL = "https://www.cftc.gov/files/dea/history/fut_fin_txt_{year}.zip"
 _HIST_DISAGG_URL = "https://www.cftc.gov/files/dea/history/fut_disagg_txt_{year}.zip"
 
 # ── Contract fragment matching (upper-case substring in CFTC contract name) ───
-_CONTRACT_FRAGMENTS: dict[str, str] = {
+# Values may be a single substring or a tuple of alternates (e.g. NZ contract wording).
+_CONTRACT_FRAGMENTS: dict[str, str | tuple[str, ...]] = {
     # Financial futures (fin files)
     "EUR": "EURO FX",
     "GBP": "BRITISH POUND",
     "JPY": "JAPANESE YEN",
     "AUD": "AUSTRALIAN DOLLAR",
-    # CFTC contract naming uses the abbreviated "NZ DOLLAR".
-    "NZD": "NZ DOLLAR",
+    # CFTC uses "NZ DOLLAR"; some historical rows may read "NEW ZEALAND DOLLAR".
+    "NZD": ("NZ DOLLAR", "NEW ZEALAND DOLLAR"),
     "CAD": "CANADIAN DOLLAR",
     "CHF": "SWISS FRANC",
     "MXN": "MEXICAN PESO",
@@ -83,6 +84,25 @@ _CONTRACT_FRAGMENTS: dict[str, str] = {
     "HG": "COPPER",
     "PL": "PLATINUM",
 }
+
+
+def _fragment_sort_key(item: tuple[str, str | tuple[str, ...]]) -> int:
+    frag = item[1]
+    if isinstance(frag, tuple):
+        return max(len(f) for f in frag)
+    return len(frag)
+
+
+def _base_matches_fragment(base: str, frag: str | tuple[str, ...]) -> bool:
+    b = base.upper()
+    if isinstance(frag, tuple):
+        return any(f.upper() in b for f in frag)
+    return frag.upper() in b
+
+
+# Same threshold as _zscore(..., window=52): len(series) must be >= max(26, 4).
+_COT_ZSCORE_WINDOW = 52
+_MIN_WEEKS_FOR_COT = max(_COT_ZSCORE_WINDOW // 2, 4)
 
 _DISAGG_ASSETS = {"XAU", "XAG", "OIL", "NG", "HG", "PL"}
 
@@ -222,7 +242,7 @@ def _parse_fin_csv(text: str) -> dict[str, dict[str, int]]:
     fin_assets = {
         k: v for k, v in _CONTRACT_FRAGMENTS.items() if k not in _DISAGG_ASSETS
     }
-    frag_list = sorted(fin_assets.items(), key=lambda x: len(x[1]), reverse=True)
+    frag_list = sorted(fin_assets.items(), key=_fragment_sort_key, reverse=True)
     result: dict[str, dict[str, int]] = {k: {} for k in fin_assets}
 
     try:
@@ -234,7 +254,7 @@ def _parse_fin_csv(text: str) -> dict[str, dict[str, int]]:
 
             matched = None
             for key, frag in frag_list:
-                if frag.upper() in base:
+                if _base_matches_fragment(base, frag):
                     matched = key
                     break
             if not matched:
@@ -248,10 +268,16 @@ def _parse_fin_csv(text: str) -> dict[str, dict[str, int]]:
                 # Annual ZIPs use TFF (Traders in Financial Futures) format:
                 # Lev_Money = leveraged funds / hedge funds / CTAs (speculative positioning)
                 long_pos = int(
-                    row.get("Lev_Money_Positions_Long_All", "0").replace(",", "")
+                    row.get("Lev_Money_Positions_Long_All", "0")
+                    .replace(",", "")
+                    .strip()
+                    or "0"
                 )
                 short_pos = int(
-                    row.get("Lev_Money_Positions_Short_All", "0").replace(",", "")
+                    row.get("Lev_Money_Positions_Short_All", "0")
+                    .replace(",", "")
+                    .strip()
+                    or "0"
                 )
                 net = long_pos - short_pos
             except Exception:
@@ -266,7 +292,7 @@ def _parse_fin_csv(text: str) -> dict[str, dict[str, int]]:
 def _parse_disagg_csv(text: str) -> dict[str, dict[str, int]]:
     """Parse a disaggregated CSV (with header) → {asset_key: {date: net}}."""
     disagg = {k: v for k, v in _CONTRACT_FRAGMENTS.items() if k in _DISAGG_ASSETS}
-    frag_list = sorted(disagg.items(), key=lambda x: len(x[1]), reverse=True)
+    frag_list = sorted(disagg.items(), key=_fragment_sort_key, reverse=True)
     result: dict[str, dict[str, int]] = {k: {} for k in disagg}
 
     try:
@@ -278,7 +304,7 @@ def _parse_disagg_csv(text: str) -> dict[str, dict[str, int]]:
 
             matched = None
             for key, frag in frag_list:
-                if frag.upper() in base:
+                if _base_matches_fragment(base, frag):
                     matched = key
                     break
             if not matched:
@@ -290,10 +316,16 @@ def _parse_disagg_csv(text: str) -> dict[str, dict[str, int]]:
 
             try:
                 long_pos = int(
-                    row.get("M_Money_Positions_Long_All", "0").replace(",", "")
+                    row.get("M_Money_Positions_Long_All", "0")
+                    .replace(",", "")
+                    .strip()
+                    or "0"
                 )
                 short_pos = int(
-                    row.get("M_Money_Positions_Short_All", "0").replace(",", "")
+                    row.get("M_Money_Positions_Short_All", "0")
+                    .replace(",", "")
+                    .strip()
+                    or "0"
                 )
                 net = long_pos - short_pos
             except Exception:
@@ -317,7 +349,7 @@ def _parse_weekly_fin_no_header(text: str) -> dict[str, dict[str, int]]:
     fin_assets = {
         k: v for k, v in _CONTRACT_FRAGMENTS.items() if k not in _DISAGG_ASSETS
     }
-    frag_list = sorted(fin_assets.items(), key=lambda x: len(x[1]), reverse=True)
+    frag_list = sorted(fin_assets.items(), key=_fragment_sort_key, reverse=True)
     result: dict[str, dict[str, int]] = {k: {} for k in fin_assets}
 
     try:
@@ -330,7 +362,7 @@ def _parse_weekly_fin_no_header(text: str) -> dict[str, dict[str, int]]:
 
             matched = None
             for key, frag in frag_list:
-                if frag.upper() in base:
+                if _base_matches_fragment(base, frag):
                     matched = key
                     break
             if not matched:
@@ -422,8 +454,8 @@ def _fetch_zip_txt(url: str, inner_filename_hint: str = ".txt") -> Optional[str]
         return None
 
 
-def _seed_history(years: int = 2):
-    """Download annual TXT ZIPs to seed 2 years of history."""
+def _seed_history(years: int = 3):
+    """Download annual TXT ZIPs to seed ``years`` of history (default 3)."""
     current_year = datetime.date.today().year
     for year in range(current_year, current_year - years, -1):
         src = f"hist_fin_{year}"
@@ -473,7 +505,7 @@ def _update_weekly():
 
 
 def refresh_cot(force: bool = False):
-    """Seed history (2 years) and fetch current week. Safe to call repeatedly."""
+    """Seed history (3 years) and fetch current week. Safe to call repeatedly."""
     if force:
         # Clear meta to force re-download
         with _db_lock:
@@ -481,7 +513,7 @@ def refresh_cot(force: bool = False):
             con.execute("DELETE FROM cot_meta")
             con.commit()
             con.close()
-    _seed_history(years=2)
+    _seed_history()
     _update_weekly()
 
 
@@ -579,11 +611,19 @@ def get_cot_z(display: str, as_of_date: str = None) -> float:
 
 
 def get_cot_net(display: str) -> Optional[dict]:
-    """Return raw net position and z-score for display/diagnostic purposes."""
+    """Return raw net position and z-score for display/diagnostic purposes.
+
+    Keys per COT leg: ``net``, ``z``, ``weeks_of_data``. Meta:
+
+    - ``_cot_coverage``: ``\"ok\"`` | ``\"no_coverage\"`` — ``no_coverage`` when
+      any leg has fewer than ``_MIN_WEEKS_FOR_COT`` rows (unreliable z-score; same
+      bar as :func:`_zscore`).
+    - ``_cot_note``: optional human-readable reason when coverage is missing.
+    """
     formula = _PAIR_FORMULA.get(display, [])
     if not formula:
         return None
-    results = {}
+    results: dict = {}
     for _, key in formula:
         series = _get_net_series(key, weeks=1)
         results[key] = {
@@ -591,6 +631,14 @@ def get_cot_net(display: str) -> Optional[dict]:
             "z": _asset_z(key),
             "weeks_of_data": _row_count(key),
         }
+    min_weeks = min(results[k]["weeks_of_data"] for k in results)
+    if min_weeks < _MIN_WEEKS_FOR_COT:
+        results["_cot_coverage"] = "no_coverage"
+        results["_cot_note"] = (
+            f"insufficient history (min rows={min_weeks}, need >={_MIN_WEEKS_FOR_COT})"
+        )
+    else:
+        results["_cot_coverage"] = "ok"
     return results
 
 
@@ -622,12 +670,25 @@ if __name__ == "__main__":
         "S&P 500",
         "Nasdaq",
     ]
+    _meta = frozenset({"_cot_coverage", "_cot_note"})
     print("\nCOT z-scores (+ = net long = bullish base):")
     for p in pairs:
         z = get_cot_z(p)
         detail = get_cot_net(p) or {}
-        weeks = max((v.get("weeks_of_data", 0) for v in detail.values()), default=0)
+        cov = detail.get("_cot_coverage", "")
+        weeks = max(
+            (
+                v.get("weeks_of_data", 0)
+                for k, v in detail.items()
+                if k not in _meta and isinstance(v, dict)
+            ),
+            default=0,
+        )
         bar = "█" * int(abs(z) * 4)
+        tag = ""
+        if cov == "no_coverage":
+            tag = "  [no_coverage]"
         print(
-            f"  {p:18s}  z={z:+.3f}  [{weeks}wk]  {'▲ LONG' if z > 0.5 else '▼ SHORT' if z < -0.5 else '  neutral'}  {bar}"
+            f"  {p:18s}  z={z:+.3f}  [{weeks}wk]{tag}  "
+            f"{'▲ LONG' if z > 0.5 else '▼ SHORT' if z < -0.5 else '  neutral'}  {bar}"
         )

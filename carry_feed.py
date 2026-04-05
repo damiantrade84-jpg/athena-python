@@ -53,12 +53,17 @@ _MEM_TTL = 24 * 3600  # 24-hour in-memory cache (rates change slowly)
 # ── FRED series IDs per currency ──────────────────────────────────────────────
 _FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
 
-# FRED only provides clean, reliable data for USD, EUR, GBP (confirmed working).
-# AUD/JPY/NZD/CHF/ZAR/MXN/CAD are not available cleanly — use hardcoded fallback.
+# FRED policy / short-rate proxies per currency (not all are daily like DFF).
+# NZD/CAD/MXN/SGD still use _STATIC_RATES when not listed here.
 _FRED_CURRENCY_SERIES: dict[str, str] = {
-    "USD": "DFF",  # Fed Funds Rate (daily effective — most current)
+    "USD": "DFF",  # Fed Funds Rate (daily)
     "EUR": "ECBDFR",  # ECB Deposit Facility Rate
-    "GBP": "BOERUKM",  # Bank of England base rate (monthly)
+    # BOERUKM ends ~2017 on FRED; use UK 10Y gilt (monthly) — same series as _FRED_10Y_SERIES_GB.
+    "GBP": "IRLTLT01GBM156N",
+    "JPY": "IRSTCI01JPM156N",  # Japan short-term interest rate (monthly)
+    "AUD": "IRLTLT01AUM156N",  # Australia — 10Y as proxy (monthly)
+    "CHF": "IRSTCI01CHM156N",  # Switzerland short-term rate (monthly)
+    "ZAR": "IRSTCI01ZAM156N",  # South Africa short-term rate (monthly)
 }
 
 # 10Y government bond yields — for index/commodity risk signals
