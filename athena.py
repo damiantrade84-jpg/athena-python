@@ -9214,7 +9214,7 @@ def analyze_pair(
                 "warnings": [],
                 "weinsteinStage": None,
                 "weinsteinLabel": "N/A",
-                "maxScoreOverride": 1.0,
+                "maxScoreOverride": 2.0,
             }
         except Exception as _fx_err:
             log.error(
@@ -9271,7 +9271,7 @@ def analyze_pair(
                 str(res.get("direction") or "LONG"),
                 _pair_ctx,
                 _intermarket_raw_context,
-                max_score=1.0,
+                max_score=2.0,
                 config=CONFIG,
             )
             res["score"] = float(_fx_im.get("adjusted_score", res.get("score", 0.0)))
@@ -9353,7 +9353,7 @@ def analyze_pair(
     # Max possible final_score depends on scoring engine:
     # - Forex: 0-1 scale (forex_scoring.py caps at 1.0)
     # - Crypto/Stock: 0-3 scale (z-score factor engine, capped at 3.0)
-    # Only set maxScoreOverride if not already set (forex sets it to 1.0)
+    # Only set maxScoreOverride if not already set (forex sets it to 2.0)
     if res.get("maxScoreOverride") is None:
         res["maxScoreOverride"] = 3.0
     

@@ -3732,7 +3732,7 @@ def backtest_pair_consensus(
                 from regime import detect_regime
                 _fx_regime = detect_regime(h4i["snap"], "forex")
                 signal_a = {
-                    "confluenceScore": _fx.final_score, "maxScore": 1.0,
+                    "confluenceScore": _fx.final_score, "maxScore": 2.0,
                     "direction": _fx.direction, "score": _fx.final_score,
                     "regime": {"label": _fx_regime.get("label", "RANGING")},
                     "sl": None, "tp1": None, "tp2": None, "rr1": 0,

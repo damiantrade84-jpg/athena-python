@@ -268,15 +268,15 @@ CONFIG: dict = {
     "BT_MIN": {
         "crypto": 0.90,
         "commodity": 0.85,
-        "forex": 0.45,
+        "forex": 1.50,
         "stock": 0.85,
         "index": 0.80,
     },
     "BT_MIN_GROUP": {
         "forex": {
-            "forex_majors": 0.45,
-            "forex_crosses": 0.48,
-            "forex_exotics": 0.54,
+            "forex_majors": 1.50,
+            "forex_crosses": 1.55,
+            "forex_exotics": 1.65,
         },
         "crypto": {
             "crypto_btc": 0.81,
@@ -313,11 +313,11 @@ CONFIG: dict = {
     "MIN_CONFLUENCE_CLASS": {
         "crypto": 1.50,
         "commodity": 1.35,
-        "forex": 0.75,
+        "forex": 1.60,
         "stock": 1.45,
         "index": 1.35,
     },
-    "MIN_FOREX_CONFLUENCE": 0.75,
+    "MIN_FOREX_CONFLUENCE": 1.60,
     # Full-scan cross-sectional quantile (see scanner.compute_scan_quantile_floors).
     "SCAN_QUANTILE_ENABLED": False,
     "SCAN_QUANTILE_MIN_SAMPLES": 5,
@@ -333,9 +333,9 @@ CONFIG: dict = {
     # Optional subgroup thresholds (used when score_group is available on a pair).
     "MIN_CONFLUENCE_GROUP": {
         "forex": {
-            "forex_majors": 0.75,
-            "forex_crosses": 0.80,
-            "forex_exotics": 0.90,
+            "forex_majors": 1.50,
+            "forex_crosses": 1.55,
+            "forex_exotics": 1.65,
         },
         "crypto": {
             "crypto_btc": 1.35,
@@ -577,7 +577,7 @@ CONFIG: dict = {
         "commodity": 1.65,
         "stock": 1.85,
         "index": 1.85,
-        "forex": 0.70,
+        "forex": 1.60,
     },
     "AUTO_TRADE_MIN_CONVICTION": {  # Live auto-execute gate on combinedConviction (0-1 scale)
         "default": 0.50,

@@ -129,8 +129,8 @@ def normalise_engine_a(signal_a: dict) -> dict:
         factor_scores.get("carry_tilt")
     ])
 
-    # Forex (and any engine with maxScore ~1.0): slightly lower floor so marginal A-side signals still participate in C.
-    _a_has_floor = 0.25 if max_score <= 1.01 else 0.30
+    # Forex (maxScore ~2.0) and other assets (maxScore ~3.0): floor for signal participation
+    _a_has_floor = 0.25 if max_score <= 2.01 else 0.30
     return {
         "score_norm": round(norm, 4),
         "direction": signal_a.get("direction"),

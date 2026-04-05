@@ -290,7 +290,7 @@ Shared regime resolver for all Engine B paths. Returns: `TRENDING`, `RANGING`, `
 Recursively replaces `NaN`/`Inf` with `None`, normalizes numpy types. Applied before every `jsonify()`.
 
 ### `_can_execute(signal, cfg)` — `auto_trader.py`
-Effective min = `max(AUTO_TRADE_MIN_SCORE[type], MIN_CONFLUENCE_CLASS[type])`. `AUTO_TRADE_MIN_SCORE` is a **per-class dict** (crypto=0.80, forex=0.65, stock=0.85, etc.).
+Live execute gate is **`combinedConviction`** vs `AUTO_TRADE_MIN_CONVICTION` (with alignment discount and meta delta). `AUTO_TRADE_MIN_SCORE` is **informational** in `get_status()` only; keep forex on the **0–2.0** scale alongside `MIN_CONFLUENCE_CLASS.forex` / `MIN_FOREX_CONFLUENCE`.
 
 ### `/api/chart-analysis` — `athena.py`
 Requires `XAI_API_KEY` env var and uses OpenAI-compatible xAI client (`base_url=https://api.x.ai/v1`). `regime` in signal can be dict `{"label":"TRENDING"}` (Engine A) or string `"TRENDING"` (Engine C) — both handled. Context builder is **outside** try/except — keep it simple.
@@ -305,7 +305,7 @@ See **Scalp Lab / Engine D flow** above. Execute path: **`signal.type == "crypto
 | Engine | Scorer | Scale | Gate key |
 |--------|--------|-------|----------|
 | Engine A — non-forex | `factor_scoring.py` z-score factor engine | 0–3.0 | `MIN_CONFLUENCE_CLASS[type]` |
-| Engine A — forex | `forex_scoring.py` rules-based | 0–1.0 | `MIN_FOREX_CONFLUENCE` |
+| Engine A — forex | `forex_scoring.py` rules-based | 0–2.0 | `MIN_FOREX_CONFLUENCE` + `MIN_CONFLUENCE_CLASS.forex` |
 | Engine B | `market_structure.py` naked checklist | 0–100 pct | `NAKED_ENGINE.style_profiles.min_score` |
 | Engine C | `engine_c.py` A+B blend | 0–1 conviction | `ENGINE_C_AB_WEIGHTS` |
 | Engine D (Scalp Lab) | `scalp_engine.py` zones + triggers + rule-based `ai_quality_grade` | 0–100 (`ai_score`), letter `ai_grade` | `SCALP_ENGINE` (`MIN_RR`, spread/session/zone gates, `MIN_GRADE_AUTO_EXECUTE`, etc.) |
@@ -340,7 +340,7 @@ Valid filter keys: `weinstein, session, regime_transition, obv, funding, squeeze
 ## Auto-Trader (`auto_trader.py`)
 
 - Daemon thread wakes every 30s, scans every `AUTO_TRADE_SCAN_INTERVAL_MIN` minutes
-- Gate: `score >= max(AUTO_TRADE_MIN_SCORE[type], MIN_CONFLUENCE_CLASS[type])`
+- Execute gate: **`combinedConviction`** ≥ `AUTO_TRADE_MIN_CONVICTION` (adjusted for alignment / meta). `AUTO_TRADE_MIN_SCORE` is status-only; align per-class scales (forex **0–2.0**).
 - Diagnosing: `SELECT pair, score, direction, error_tag, grade FROM audit_log WHERE grade LIKE 'AUTO%' ORDER BY ts DESC LIMIT 20`
 - `grade='AUTO-DEMO'` = success. `grade='AUTO-ERR-DEMO'` = blocked (see `error_tag`)
 
@@ -473,7 +473,7 @@ Previous gates made it structurally impossible for stocks/ETFs to pass, and comm
 - commodity: **1.10** (was 1.40)
 - index: **1.05** (was 1.35)
 - crypto: **1.20** (was 1.40)
-- forex: **0.80** (unchanged; uses different scale)
+- forex: see **2026-04-07** decision (0–2.0 scale; class gate **1.60**)
 
 These are calibrated at ~75–85% of maximum achievable to allow strong signals through while maintaining selectivity. Backtest **30+ trades per pair** before further adjustment.
 
@@ -499,24 +499,27 @@ This made `MIN_CONFLUENCE_CLASS` gates unreachable:
 
 ---
 
-## 2026-04-06: Forex scoring scale fix
+## 2026-04-07: Forex scoring scale fix (0–2.0)
 
-**Problem:** Forex scoring used two `min(1.0, …)` caps compressing ~49% of the score range. True max raw was ~1.97, but any score ≥1.0 displayed as **1.0**, so strong vs elite signals could not be separated.
+**Problem:** Forex scoring had two `min(1.0, …)` caps compressing the score range. True max raw was ~1.97, but any score above 1.0 displayed as **1.0**. An intermediate fix used `_FOREX_SCORE_SCALE = 0.507` into 0–1.0 and lowered gates to **0.50** — that collapsed trade counts (e.g. USD/CHF) because the threshold drop did not fully compensate (needed raw ≥ ~0.99 vs old ≥ ~0.80).
 
-**Fix:**
+**Final fix:**
 
-1. Removed the cap on `trend_score` in `forex_scoring.py`.
-2. Added `_FOREX_SCORE_SCALE = 0.507` (≈ 1/1.97) to normalize the multiplicative final into **0–1.0**.
-3. Lowered **`MIN_CONFLUENCE_CLASS.forex`** from **0.80** to **0.50** and **`MIN_FOREX_CONFLUENCE`** to **0.50** so pass rates stay in the same ballpark after scaling.
+1. Removed caps on `trend_score` and on the multiplicative `final_score` (no 0.507 scaling).
+2. **0–2.0** display scale: `result.final_score` capped at **2.0** (matches achievable max ~1.97).
+3. Thresholds: **`MIN_CONFLUENCE_CLASS.forex`** and **`MIN_FOREX_CONFLUENCE`** → **1.60** (~80% of 2.0, similar selectivity to old **0.80** on 0–1.0). **`BT_MIN.forex`** → **1.50**; **`BT_MIN_GROUP`** forex → **1.50 / 1.55 / 1.65**; **`MIN_CONFLUENCE_GROUP`** forex aligned to the same ladder.
+4. **`advisory_thresholds.py`:** `_BT_LIMITS.forex` → **(0.80, 1.90)**; `_LIVE_LIMITS.forex` → **(1.00, 2.00)**.
+5. **`maxScoreOverride` / Engine C forex path:** **2.0** in `athena.py` and `backtest_runner.py`; **`normalize_engine_a`** treats **`max_score ≤ 2.01`** like forex for the A-side floor. Engine C **conviction** calibration / `record_signal_event` stay **`max_score=1.0`** (0–1 normalized).
+6. **`config.py` fallbacks** and **`AUTO_TRADE_MIN_SCORE.forex`** → **1.60** (informational; matches class gate on 0–2.0).
 
-**Score mapping (old displayed → new, illustrative):**
+**Score mapping (illustrative):**
 
-- Raw 0.80 → was 0.80, now ~0.41  
-- Raw 1.00 → was 1.00, now ~0.51  
-- Raw 1.50 → was 1.00 (capped), now ~0.76  
-- Raw 1.97 → was 1.00 (capped), now 1.00  
+| Old (capped 0–1) | New (0–2.0) | Meaning |
+|-------------------|-------------|---------|
+| 0.80 gate | 1.60 gate | ~same selectivity |
+| 1.00 (cap) | 1.97 | True max visible |
 
-**Impact:** Re-run forex backtests. Scores should spread across ~0.4–1.0 instead of clustering at 0.8–1.0.
+**Expected:** Trade counts closer to pre–0.507 fix; elite scores **1.8–2.0** separable from good **1.4–1.6**. Re-run forex backtests.
 
 ---
 

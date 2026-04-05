@@ -36,7 +36,7 @@ _ASSET_LABELS = {
 
 _BT_STEP = {"forex": 0.03}
 _BT_LIMITS = {
-    "forex": (0.20, 0.95),
+    "forex": (0.80, 1.90),
     "crypto": (0.30, 2.00),
     "commodity": (0.30, 2.00),
     "stock": (0.30, 2.00),
@@ -44,7 +44,7 @@ _BT_LIMITS = {
 }
 _LIVE_STEP = 0.05
 _LIVE_LIMITS = {
-    "forex": (0.30, 1.00),
+    "forex": (1.00, 2.00),
     "crypto": (0.60, 2.50),
     "commodity": (0.60, 2.50),
     "stock": (0.60, 2.50),
