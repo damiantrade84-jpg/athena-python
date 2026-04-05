@@ -499,6 +499,27 @@ This made `MIN_CONFLUENCE_CLASS` gates unreachable:
 
 ---
 
+## 2026-04-06: Forex scoring scale fix
+
+**Problem:** Forex scoring used two `min(1.0, …)` caps compressing ~49% of the score range. True max raw was ~1.97, but any score ≥1.0 displayed as **1.0**, so strong vs elite signals could not be separated.
+
+**Fix:**
+
+1. Removed the cap on `trend_score` in `forex_scoring.py`.
+2. Added `_FOREX_SCORE_SCALE = 0.507` (≈ 1/1.97) to normalize the multiplicative final into **0–1.0**.
+3. Lowered **`MIN_CONFLUENCE_CLASS.forex`** from **0.80** to **0.50** and **`MIN_FOREX_CONFLUENCE`** to **0.50** so pass rates stay in the same ballpark after scaling.
+
+**Score mapping (old displayed → new, illustrative):**
+
+- Raw 0.80 → was 0.80, now ~0.41  
+- Raw 1.00 → was 1.00, now ~0.51  
+- Raw 1.50 → was 1.00 (capped), now ~0.76  
+- Raw 1.97 → was 1.00 (capped), now 1.00  
+
+**Impact:** Re-run forex backtests. Scores should spread across ~0.4–1.0 instead of clustering at 0.8–1.0.
+
+---
+
 ## Hard Rules
 
 1. Never bypass `risk_check()` for any execution

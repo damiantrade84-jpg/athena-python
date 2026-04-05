@@ -113,20 +113,17 @@ NAKED_MAX_DAILY: 3
 
 
 # Per-class live scan minimum confluence — execute / tradeSignals tier threshold.
-# Forex: 0–1 forex_scoring scale (unchanged at 0.8). Non-forex: factor engine scale where the
-# multiplicative formula + binary trend factor caps near ~1.42; strong signals often ~0.79.
-# Prior gates (1.35–1.55) sat above that ceiling for stocks/ETFs. These floors sit ~75–85% of
-# max achievable for selectivity while allowing strong signals through.
+# Forex: 0–1 forex_scoring scale. Non-forex: factor engine (0–3.0 after _SCORE_SCALE in factor_scoring.py).
 MIN_CONFLUENCE_CLASS:
-  forex:     0.8
-  crypto:    1.20
-  commodity: 1.10
-  stock:     1.10
-  index:     1.05
+  forex:     0.50      # forex_scoring 0-1 after _FOREX_SCORE_SCALE (was 0.8 pre-scale fix)
+  crypto:    1.40      # was 1.20, restore to 1.40
+  commodity: 1.40      # was 1.10, restore to 1.40
+  stock:     1.55      # was 1.10, restore to 1.55
+  index:     1.35      # was 1.05, restore to 1.35
 
 # Forex scan threshold — forex_scoring engine outputs 0–1.0 (not 0–3.0)
 # MIN_CONFLUENCE_CLASS.forex must match this — keep in sync
-MIN_FOREX_CONFLUENCE: 0.8
+MIN_FOREX_CONFLUENCE: 0.50
 
 # Optional subgroup thresholds (used when score_group is available on a pair)
 MIN_CONFLUENCE_GROUP:

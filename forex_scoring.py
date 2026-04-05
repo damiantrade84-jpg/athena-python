@@ -635,12 +635,12 @@ def compute_forex_score(
         rsi_history = rsi_history_override if rsi_history_override else None
         eq = _entry_quality(h1_snap, trend_dir, rsi_history)
         cot = _cot_trend
-        trend_score = min(
-            1.0,
+        # Raw trend_score — no cap. Final scaling applied later.
+        trend_score = (
             _dfw.score(eq, cot)
             + momentum_score * momentum_w
             + adx_score * adx_w
-            + carry_score * carry_w,
+            + carry_score * carry_w
         )
 
         result.entry_quality = eq
@@ -709,9 +709,15 @@ def compute_forex_score(
         base_score = bo_final
         result.direction = bo_dir
         result.signal_type = "LONDON_BREAKOUT"
-    final_score = round(base_score * (1.0 + fvg_bonus) * (1.0 + liquidity_bonus) * (1.0 + volume_bonus), 4)
+    # Raw score before scaling. True max is ~1.97 (all factors + all SMC bonuses).
+    _raw_score = base_score * (1.0 + fvg_bonus) * (1.0 + liquidity_bonus) * (1.0 + volume_bonus)
 
-    result.final_score = min(1.0, final_score)  # keep 0–1 scale
+    # Scale to 0-1.0 range. Without scaling, 49% of range was lost to capping.
+    # Max raw = 1.97, so scale factor = 1/1.97 ≈ 0.507
+    _FOREX_SCORE_SCALE = 0.507
+    final_score = round(_raw_score * _FOREX_SCORE_SCALE, 4)
+
+    result.final_score = min(1.0, final_score)  # safety cap
     try:
         result.final_score = max(
             0.0, min(1.0, float(result.final_score) * float(_sg_cfg.get("score_mult", 1.0)))
