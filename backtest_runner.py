@@ -3090,6 +3090,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 conf_data,
                 style_profile,
                 regime_label,
+                pair.get("type", ""),
             )
             if not _gate_ok:
                 _cd = conf_data

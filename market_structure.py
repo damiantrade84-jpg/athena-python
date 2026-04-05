@@ -41,20 +41,36 @@ def _adx_from_indicator_snap(snap: dict | None) -> float | None:
         return None
 
 
-def _engine_b_regime_gate(regime_label: str | None) -> float:
+def _engine_b_regime_gate(regime_label: str | None, asset_type: str = "") -> float:
     regime_key = str(regime_label or "").upper()
     cfg_gate = config.CONFIG.get("ENGINE_B_REGIME_MULTIPLIERS", {}) or {}
+    # Try per-asset-class first (nested dict)
+    asset_cfg = cfg_gate.get(asset_type.lower(), None) if asset_type else None
+    if isinstance(asset_cfg, dict):
+        try:
+            return float(
+                asset_cfg.get(
+                    regime_key, ENGINE_B_REGIME_GATE_DEFAULTS.get(regime_key, 1.0)
+                )
+            )
+        except (TypeError, ValueError):
+            return float(ENGINE_B_REGIME_GATE_DEFAULTS.get(regime_key, 1.0))
+    # Fallback to flat config (backward compatible)
     try:
-        return float(cfg_gate.get(regime_key, ENGINE_B_REGIME_GATE_DEFAULTS.get(regime_key, 1.0)))
+        return float(
+            cfg_gate.get(regime_key, ENGINE_B_REGIME_GATE_DEFAULTS.get(regime_key, 1.0))
+        )
     except (TypeError, ValueError):
         return float(ENGINE_B_REGIME_GATE_DEFAULTS.get(regime_key, 1.0))
 
 
-def engine_b_min_score_threshold(style_profile: dict | None, regime_label: str | None) -> float:
+def engine_b_min_score_threshold(
+    style_profile: dict | None, regime_label: str | None, asset_type: str = ""
+) -> float:
     """Return the scaled Engine B score floor for a style/regime combination."""
     profile = style_profile if isinstance(style_profile, dict) else {}
     base_min = float(profile.get("min_score", 0.0) or 0.0)
-    scaled = base_min * _engine_b_regime_gate(regime_label)
+    scaled = base_min * _engine_b_regime_gate(regime_label, asset_type)
     if scaled <= 0:
         return 0.0
     # Engine B scores in whole checklist points, so make the discrete gate explicit.
@@ -62,10 +78,15 @@ def engine_b_min_score_threshold(style_profile: dict | None, regime_label: str |
 
 
 def engine_b_confidence_passes(
-    conf_data: dict | None, style_profile: dict | None, regime_label: str | None
+    conf_data: dict | None,
+    style_profile: dict | None,
+    regime_label: str | None,
+    asset_type: str = "",
 ) -> tuple[bool, float]:
     """Require both the score floor and the checklist verdict to pass."""
-    min_score_scaled = engine_b_min_score_threshold(style_profile, regime_label)
+    min_score_scaled = engine_b_min_score_threshold(
+        style_profile, regime_label, asset_type
+    )
     conf = conf_data if isinstance(conf_data, dict) else {}
     score = float(conf.get("score", 0.0) or 0.0)
     passed = bool(conf.get("passed", False))
@@ -1353,7 +1374,12 @@ class NakedEngine:
         profile = style_profile if isinstance(style_profile, dict) else {}
         min_room_atr = float(profile.get("min_room_atr", 0.35))
         min_rr = float(profile.get("min_rr", 1.0))
-        require_macro_align = bool(profile.get("require_macro_align", False))
+        _rma_cfg = profile.get("require_macro_align", False)
+        if isinstance(_rma_cfg, dict):
+            asset_type_lower = str(res.get("asset_type") or "").lower()
+            require_macro_align = bool(_rma_cfg.get(asset_type_lower, False))
+        else:
+            require_macro_align = bool(_rma_cfg)
         checklist_mode = str(profile.get("checklist_mode", "flexible")).lower()
         allow_breakout_entry = bool(
             profile.get("allow_breakout_entry", not require_macro_align)
@@ -1624,6 +1650,7 @@ class NakedEngine:
                 confidence,
                 style_profile,
                 regime_label,
+                asset_type,
             )
             if not gate_ok:
                 return None  # No trade signal

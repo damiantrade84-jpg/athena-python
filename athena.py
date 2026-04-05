@@ -4962,7 +4962,11 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
 
         current_price = float(sig.get("price") or h1[-1]["close"])
 
-        from market_structure import NakedEngine, engine_b_confidence_passes
+        from market_structure import (
+            NakedEngine,
+            _engine_b_regime_gate,
+            engine_b_confidence_passes,
+        )
 
         engine = NakedEngine()
         regime_label = _engine_b_regime_label(
@@ -5028,13 +5032,9 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             style_profile=style_profile,
         )
         _gate_ok, _min_score_scaled = engine_b_confidence_passes(
-            conf, style_profile, regime_label
+            conf, style_profile, regime_label, _pair_type
         )
-        _regime_gate_cfg = CONFIG.get("ENGINE_B_REGIME_MULTIPLIERS", {}) or {}
-        try:
-            _regime_gate = float(_regime_gate_cfg.get(regime_label, 1.0))
-        except (TypeError, ValueError):
-            _regime_gate = 1.0
+        _regime_gate = _engine_b_regime_gate(regime_label, _pair_type)
         res["min_score_used"] = int(_min_score_scaled)
         res["regime_gate"] = _regime_gate
         res.update(conf)
@@ -5430,6 +5430,7 @@ def api_scan_naked():
                     conf_data,
                     style_profile,
                     regime_label,
+                    pair.get("type", ""),
                 )
 
                 if not _gate_ok:
