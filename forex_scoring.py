@@ -351,9 +351,7 @@ def _momentum_confirm(h4_snap: dict, direction: str) -> float:
 def _adx_filter(h4_snap: dict) -> float:
     """
     ADX-based trend strength filter.
-    ADX >= 25 = confirmed trend (1.0)
-    ADX < 25 = no trend / choppy (0.0 — should not trade)
-    Binary filter: no partial credit for developing trends.
+    Graduated scoring: 0/0.4/0.7/1.0 based on trend strength.
     """
     adx = h4_snap.get("adx")
     if adx is None:
@@ -365,9 +363,14 @@ def _adx_filter(h4_snap: dict) -> float:
         adx_confirm_min = float(fx_cfg.get("adx_confirm_min", 22.0))
     except Exception:
         adx_confirm_min = 22.0
-    if adx >= adx_confirm_min:
-        return 1.0
-    return 0.0
+    if adx < adx_confirm_min:
+        return 0.0
+    elif adx < 25:
+        return 0.4  # weak trend — low conviction
+    elif adx < 30:
+        return 0.7  # moderate trend
+    else:
+        return 1.0  # strong trend
 
 
 # ─── Carry tilt ───────────────────────────────────────────────────────────────
@@ -411,10 +414,10 @@ def _cot_boost(pair: dict, direction: str, bar_time: Optional[str] = None) -> fl
         cot_z = get_cot_z(pair.get("display", ""), as_of_date=bar_time)
         if cot_z is None:
             return 0.0
-        if direction == "LONG" and cot_z >= 1.0:
-            return min(1.0, cot_z / 3.0)
-        elif direction == "SHORT" and cot_z <= -1.0:
-            return min(1.0, abs(cot_z) / 3.0)
+        if direction == "LONG" and cot_z > 0.3:
+            return min(1.0, cot_z / 2.5)
+        elif direction == "SHORT" and cot_z < -0.3:
+            return min(1.0, abs(cot_z) / 2.5)
         return 0.0
     except Exception:
         return 0.0
