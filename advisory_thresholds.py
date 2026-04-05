@@ -51,25 +51,25 @@ _LIVE_LIMITS = {
     "index": (0.60, 2.50),
 }
 _ENGINE_A_TRADE_FLOOR = {
-    "forex": 12.0,
-    "crypto": 18.0,
-    "commodity": 12.0,
-    "stock": 12.0,
-    "index": 12.0,
+    "forex": 25.0,
+    "crypto": 30.0,
+    "commodity": 25.0,
+    "stock": 25.0,
+    "index": 25.0,
 }
 _ENGINE_B_STYLE_FLOOR = {
     "scalp": 80.0,
-    "intraday": 24.0,
-    "swing": 12.0,
+    "intraday": 30.0,
+    "swing": 25.0,
 }
 _ENGINE_B_STYLE_LIMITS = {
     "scalp": (2.0, 6.0),
     "intraday": (3.0, 6.0),
     "swing": (3.0, 6.0),
 }
-_LIVE_ENGINE_A_MIN_TRADES = 5
+_LIVE_ENGINE_A_MIN_TRADES = 8
 _LIVE_ENGINE_A_LOOSEN_MIN_TRADES = 8
-_LIVE_ENGINE_B_MIN_TRADES = 5
+_LIVE_ENGINE_B_MIN_TRADES = 8
 _LIVE_ENGINE_B_LOOSEN_MIN_TRADES = 8
 
 
@@ -111,10 +111,11 @@ def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
-def _confidence_from_count(count: int) -> str:
-    if count >= 15:
+def _confidence_from_count(count: int, avg_trades: float = 0.0) -> str:
+    total = count * avg_trades if avg_trades > 0 else count * 10
+    if count >= 10 and total >= 300:
         return "high"
-    if count >= 8:
+    if count >= 6 and total >= 100:
         return "medium"
     return "low"
 
@@ -262,10 +263,11 @@ def _live_engine_a_signal(summary: dict[str, Any]) -> str | None:
     trades = int(summary.get("trades") or 0)
     sqn = _safe_float(summary.get("avg_sqn"))
     avg_r = _safe_float(summary.get("avg_r"))
-    win_rate = _safe_float(summary.get("avg_win_rate"))
-    if trades >= _LIVE_ENGINE_A_MIN_TRADES and ((sqn is not None and sqn <= -0.25) or (avg_r is not None and avg_r <= -0.10)):
+    if trades < 8:
+        return None
+    if sqn is not None and sqn <= -0.50:
         return "tighten"
-    if trades >= _LIVE_ENGINE_A_LOOSEN_MIN_TRADES and sqn is not None and sqn >= 1.0 and avg_r is not None and avg_r >= 0.20 and (win_rate or 0.0) >= 55.0:
+    if sqn is not None and sqn >= 0.75 and avg_r is not None and avg_r >= 0.10:
         return "loosen"
     return None
 
@@ -274,10 +276,11 @@ def _live_engine_b_signal(summary: dict[str, Any]) -> str | None:
     trades = int(summary.get("trades") or 0)
     sqn = _safe_float(summary.get("avg_sqn"))
     avg_r = _safe_float(summary.get("avg_r"))
-    win_rate = _safe_float(summary.get("avg_win_rate"))
-    if trades >= _LIVE_ENGINE_B_MIN_TRADES and ((sqn is not None and sqn <= -0.20) or (avg_r is not None and avg_r <= -0.08)):
+    if trades < 8:
+        return None
+    if sqn is not None and sqn <= -0.40:
         return "tighten"
-    if trades >= _LIVE_ENGINE_B_LOOSEN_MIN_TRADES and sqn is not None and sqn >= 1.0 and avg_r is not None and avg_r >= 0.20 and (win_rate or 0.0) >= 55.0:
+    if sqn is not None and sqn >= 0.75 and avg_r is not None and avg_r >= 0.10:
         return "loosen"
     return None
 
@@ -349,13 +352,13 @@ def _build_engine_a_recommendations(rows: list[dict[str, Any]]) -> list[dict[str
         direction = None
         reasons: list[str] = []
 
-        if avg_sqn <= -0.25 and pair_count >= 5:
+        if avg_sqn <= -0.50 and pair_count >= 5:
             proposed_bt = _clamp(_round_to_step(cur_bt + bt_step, bt_step), bt_low, bt_high)
             direction = "tighten"
             reasons.append(
                 f"Latest Engine A cohort averages SQN {avg_sqn:.2f} across {pair_count} {asset_type} pairs."
             )
-        elif avg_trades < _ENGINE_A_TRADE_FLOOR.get(asset_type, 12.0) and avg_sqn >= 0.25 and pair_count >= 4:
+        elif avg_trades < _ENGINE_A_TRADE_FLOOR.get(asset_type, 25.0) and avg_sqn >= 0.25 and pair_count >= 4:
             proposed_bt = _clamp(_round_to_step(cur_bt - bt_step, bt_step), bt_low, bt_high)
             direction = "loosen"
             reasons.append(
@@ -377,7 +380,7 @@ def _build_engine_a_recommendations(rows: list[dict[str, Any]]) -> list[dict[str
                     "proposed_value": round(proposed_bt, 4),
                     "delta": round(proposed_bt - cur_bt, 4),
                     "direction": direction,
-                    "confidence": _confidence_from_count(pair_count),
+                    "confidence": _confidence_from_count(pair_count, avg_trades),
                     "metrics": {
                         "pairs": pair_count,
                         "avg_trades": avg_trades,
@@ -407,7 +410,7 @@ def _build_engine_a_recommendations(rows: list[dict[str, Any]]) -> list[dict[str
                         "proposed_value": round(proposed_live, 4),
                         "delta": round(proposed_live - cur_live, 4),
                         "direction": direction,
-                        "confidence": _confidence_from_count(pair_count),
+                        "confidence": _confidence_from_count(pair_count, avg_trades),
                         "metrics": {
                             "pairs": pair_count,
                             "avg_trades": avg_trades,
@@ -451,13 +454,13 @@ def _build_engine_b_recommendations(rows: list[dict[str, Any]]) -> list[dict[str
         direction = None
         reasons: list[str] = []
 
-        if avg_sqn <= -0.20 and avg_trades >= _ENGINE_B_STYLE_FLOOR.get(style, 12.0) and pair_count >= 5:
+        if avg_sqn <= -0.20 and avg_trades >= _ENGINE_B_STYLE_FLOOR.get(style, 25.0) and pair_count >= 5:
             proposed = _clamp(cur_min + 1.0, min_low, min_high)
             direction = "tighten"
             reasons.append(
                 f"Latest Engine B {style} cohort averages SQN {avg_sqn:.2f} across {pair_count} pairs."
             )
-        elif avg_sqn >= 0.75 and avg_trades < _ENGINE_B_STYLE_FLOOR.get(style, 12.0) * 0.75 and pair_count >= 5:
+        elif avg_sqn >= 0.75 and avg_trades < _ENGINE_B_STYLE_FLOOR.get(style, 25.0) * 0.75 and pair_count >= 5:
             proposed = _clamp(cur_min - 1.0, min_low, min_high)
             direction = "loosen"
             reasons.append(
@@ -478,7 +481,7 @@ def _build_engine_b_recommendations(rows: list[dict[str, Any]]) -> list[dict[str
                     "proposed_value": round(proposed, 4),
                     "delta": round(proposed - cur_min, 4),
                     "direction": direction,
-                    "confidence": _confidence_from_count(pair_count),
+                    "confidence": _confidence_from_count(pair_count, avg_trades),
                     "metrics": {
                         "pairs": pair_count,
                         "avg_trades": avg_trades,
@@ -594,7 +597,10 @@ def _build_live_engine_a_recommendations(live_a: dict[str, dict[str, Any]]) -> l
                 "proposed_value": round(proposed, 4),
                 "delta": round(proposed - cur_live, 4),
                 "direction": direction,
-                "confidence": _confidence_from_count(int(summary.get("trades") or 0)),
+                "confidence": _confidence_from_count(
+                    int(summary.get("pairs") or 0),
+                    float(summary.get("avg_trades") or 0.0),
+                ),
                 "metrics": dict(summary),
                 "reasons": [
                     _format_live_reason(summary, "Engine A"),
@@ -631,7 +637,10 @@ def _build_live_engine_b_recommendations(live_b: dict[str, dict[str, Any]]) -> l
                 "proposed_value": round(proposed, 4),
                 "delta": round(proposed - cur_min, 4),
                 "direction": direction,
-                "confidence": _confidence_from_count(int(summary.get("trades") or 0)),
+                "confidence": _confidence_from_count(
+                    int(summary.get("pairs") or 0),
+                    float(summary.get("avg_trades") or 0.0),
+                ),
                 "metrics": dict(summary),
                 "reasons": [
                     _format_live_reason(summary, f"Engine B {style}"),
