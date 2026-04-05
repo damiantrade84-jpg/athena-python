@@ -22,6 +22,23 @@ ENGINE_B_REASON_RESISTANCE_TOO_CLOSE = "resistance_too_close"
 ENGINE_B_REASON_SUPPORT_TOO_CLOSE = "support_too_close"
 ENGINE_B_REASON_ADVERSE_DXY = "adverse_dxy_correlation"
 ENGINE_B_REASON_STRUCTURAL_SL_HARD_CAP = "structural_sl_rejected_hard_cap"
+ENGINE_B_REASON_FOREX_ADX_LOW = "forex_adx_below_min"
+
+
+def _adx_from_indicator_snap(snap: dict | None) -> float | None:
+    """Read ADX from calc_indicators / calc_indicators_with_normalized snap (Engine A parity)."""
+    if not isinstance(snap, dict):
+        return None
+    v = snap.get("adx")
+    if v is None:
+        return None
+    try:
+        f = float(v)
+        if f != f:  # NaN
+            return None
+        return f
+    except (TypeError, ValueError):
+        return None
 
 
 def _engine_b_regime_gate(regime_label: str | None) -> float:
@@ -771,15 +788,24 @@ class NakedEngine:
         asset_type: str = "",
         enable_zone_registry: bool = True,
         enable_profile_context: bool = True,
+        d1_snap: dict | None = None,
+        h4_snap: dict | None = None,
     ) -> dict:
         """
         Analyzes raw candle data to find Support/Resistance zones and trend sequence.
         Returns structural verdict used by the Comparator in athena.py.
+
+        Optional ``d1_snap`` / ``h4_snap``: indicator snaps (e.g. from ``calc_indicators_with_normalized``).
+        ``h4_snap`` should match the **second** candle series (zone TF, often H4). When provided,
+        ``d1_adx`` / ``h4_adx`` on the result prefer ``snap["adx"]`` over recalculating from OHLC.
         """
         if not d1_candles or not h4_candles or not h1_candles or atr <= 0:
             return {
                 "structural_verdict": "ERROR",
                 "reason": "Missing data or valid ATR",
+                "asset_type": asset_type,
+                "d1_adx": None,
+                "h4_adx": None,
             }
 
         registry_symbol = self._consume_registry_symbol() if enable_zone_registry else None
@@ -1182,7 +1208,31 @@ class NakedEngine:
 
         is_sweep_event = (direction == "LONG" and sweep_data["bull_sweep"]) or \
                          (direction == "SHORT" and sweep_data["bear_sweep"])
- 
+
+        d1_adx_val = _adx_from_indicator_snap(d1_snap)
+        h4_adx_val = _adx_from_indicator_snap(h4_snap)
+        try:
+            from indicators import calc_adx
+
+            if d1_adx_val is None:
+                _d1_hi = [float(c["high"]) for c in d1_candles]
+                _d1_lo = [float(c["low"]) for c in d1_candles]
+                _d1_cl = [float(c["close"]) for c in d1_candles]
+                for _v in reversed((calc_adx(_d1_hi, _d1_lo, _d1_cl, 14).get("adx") or [])):
+                    if _v is not None:
+                        d1_adx_val = float(_v)
+                        break
+            if h4_adx_val is None:
+                _h4_hi = [float(c["high"]) for c in h4_candles]
+                _h4_lo = [float(c["low"]) for c in h4_candles]
+                _h4_cl = [float(c["close"]) for c in h4_candles]
+                for _v in reversed((calc_adx(_h4_hi, _h4_lo, _h4_cl, 14).get("adx") or [])):
+                    if _v is not None:
+                        h4_adx_val = float(_v)
+                        break
+        except Exception:
+            pass
+
         return {
             "structural_verdict": "CLEAR",
             "nearest_resistance_zone": nearest_res,
@@ -1225,6 +1275,9 @@ class NakedEngine:
             "inside_break_candle": trigger_ctx["inside_break"],
             "strong_close": trigger_ctx["strong_close"],
             "structure_tf": structure_tf,
+            "asset_type": asset_type,
+            "d1_adx": d1_adx_val,
+            "h4_adx": h4_adx_val,
             **_profile_result,
         }
 
@@ -1322,6 +1375,31 @@ class NakedEngine:
             or res.get("bos_confirmed", False)
             or res.get("liquidity_sweep", False)
         )
+
+        # Forex ADX gate — structural signals treated as noise below min ADX (trend strength).
+        _forex_adx_gate = True
+        if str(res.get("asset_type") or "").lower() == "forex":
+            _adx_val = res.get("d1_adx")
+            if _adx_val is None:
+                _adx_val = res.get("h4_adx")
+            if _adx_val is not None:
+                try:
+                    _adx_val = float(_adx_val)
+                except (TypeError, ValueError):
+                    _adx_val = 0.0
+                _forex_adx_min = float(
+                    config.CONFIG.get("ENGINE_B_FOREX_ADX_MIN", 25.0)
+                )
+                _forex_adx_gate = _adx_val >= _forex_adx_min
+            else:
+                _forex_adx_gate = False
+
+        _diag_codes: list[str] = []
+        if not _forex_adx_gate:
+            structure_ok = False
+            if str(res.get("asset_type") or "").lower() == "forex":
+                _diag_codes.append(ENGINE_B_REASON_FOREX_ADX_LOW)
+
         macro_ok = macro_aligned or not require_macro_align
         zone_ok = bool(res.get("zone_touched") or res.get("near_active_zone"))
         trigger_ok = bool(res.get("trigger_ok"))
@@ -1420,7 +1498,6 @@ class NakedEngine:
             res, current_price, direction, trigger_ok
         )
 
-        _diag_codes: list[str] = []
         if not room_ok:
             if direction == "LONG":
                 _diag_codes.append(ENGINE_B_REASON_RESISTANCE_TOO_CLOSE)
@@ -1514,6 +1591,8 @@ class NakedEngine:
         learning_ctx=None,
         style_profile=None,
         asset_type="",
+        d1_snap=None,
+        h4_snap=None,
     ):
         """Backtest-friendly wrapper that returns entry/exit signals.
         Returns dict compatible with existing backtest reporting."""
@@ -1526,6 +1605,8 @@ class NakedEngine:
             atr,
             regime_label,
             asset_type=asset_type,
+            d1_snap=d1_snap,
+            h4_snap=h4_snap,
         )
         # For forex D1 structure, use H4 as entry candles instead of H1
         _forex_struct_tf = config.CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()

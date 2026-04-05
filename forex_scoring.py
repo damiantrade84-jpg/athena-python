@@ -539,7 +539,30 @@ def compute_forex_score(
     _dfw = DynamicForexWeights()
     _dfw.update(_hurst, backtest_mode)
 
+    # Hurst regime gate — block trend-following entries in mean-reverting markets.
+    # Only the London breakout signal (regime-neutral) bypasses this gate.
+    _hurst_gate_enabled = True
+    _hurst_threshold = 0.52
+    try:
+        from config import CONFIG
+
+        _fe = CONFIG.get("FOREX_ENGINE", {}) or {}
+        _hurst_gate_enabled = bool(_fe.get("hurst_gate_enabled", True))
+        _hurst_threshold = float(_fe.get("hurst_gate_threshold", 0.52))
+    except Exception:
+        pass
+
+    _hurst_trending = _hurst > _hurst_threshold
+
     trend_ok, trend_dir = _check_trend_gate(d1_snap, h4_snap)
+    _hurst_veto_trend = False
+    if _hurst_gate_enabled and not _hurst_trending:
+        # Market is mean-reverting or random walk — skip trend-following signals.
+        # London breakout (below) is still allowed because breakouts are regime-neutral.
+        if trend_ok:
+            _hurst_veto_trend = True
+        trend_ok = False
+
     # Pre-compute COT boost for both direction cases to avoid double DB queries
     _cot_trend = _cot_boost(pair, trend_dir, bar_time)
     # For breakout: direction may differ — only fetch if different from trend_dir
@@ -706,6 +729,10 @@ def compute_forex_score(
         "trend_score": round(trend_score, 4),
         "breakout_final": round(bo_final, 4),
         "hurst": round(_hurst, 3),
+        "hurst_trending": _hurst_trending,
+        "hurst_gate_enabled": _hurst_gate_enabled,
+        "hurst_gate_threshold": round(_hurst_threshold, 4),
+        "hurst_veto_trend": _hurst_veto_trend,
         "regime": _dfw.regime,
         # newly added visibility metrics
         "fvg_bonus": round(fvg_bonus, 3),

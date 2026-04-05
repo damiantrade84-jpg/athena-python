@@ -12,7 +12,7 @@ from athena_runtime import rt
 from candles_cache import get_candle_fetch_meta
 from config import CONFIG, scan_candle_limits
 from data_feeds import http_requests
-from indicators import calc_atr, calc_indicators
+from indicators import calc_atr, calc_indicators, calc_indicators_with_normalized
 from intermarket import build_scan_snapshot
 from scoring import (
     _build_event_risk,
@@ -451,6 +451,17 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                             direction = sig_a.get("direction")
 
                             if direction in ("LONG", "SHORT"):
+                                _sc_d1_snap = {}
+                                _sc_h4_snap = {}
+                                try:
+                                    _sc_d1_snap = (
+                                        calc_indicators_with_normalized(d1 or [], ptype) or {}
+                                    ).get("snap") or {}
+                                    _sc_h4_snap = (
+                                        calc_indicators_with_normalized(h4, ptype) or {}
+                                    ).get("snap") or {}
+                                except Exception:
+                                    pass
                                 res_b = _engine_b.set_registry_context(
                                     pair.get("symbol") or pair.get("display")
                                 ).analyze_structure(
@@ -463,6 +474,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     regime_label,
                                     fallback_rr=style_profile_b.get("fallback_rr", 2.0),
                                     asset_type=ptype,
+                                    d1_snap=_sc_d1_snap,
+                                    h4_snap=_sc_h4_snap,
                                 )
 
                                 if res_b.get("structural_verdict") == "CLEAR":

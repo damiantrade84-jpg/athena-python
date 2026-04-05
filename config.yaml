@@ -230,6 +230,8 @@ FOREX_H4_RESAMPLE_OFFSET_HOURS: 1.0  # Align H4 grid to 01/05/09/13/17/21 UTC (m
 
 # Forex scoring engine (merged into CONFIG["FOREX_ENGINE"] — see config.py for full defaults)
 FOREX_ENGINE:
+  hurst_gate_enabled: true      # Block trend signals when Hurst <= threshold
+  hurst_gate_threshold: 0.52   # Market must be trending (H > threshold) for trend-following entries
   h1_ema_entry_filter: true   # H1 ema21/50 alignment modifier on RSI entry quality; false = RSI only
   trend_gate_adx_min: 25   # Match ADX_TREND_MIN_CLASS.forex — must stay in sync
   trend_support_weights:
@@ -695,11 +697,12 @@ NAKED_ENGINE:
       intraday: {min_score: 4.0}
       swing: {min_score: 5.0}
 
+# Penalize non-trending regimes — raises effective min_score (Engine B checklist).
 ENGINE_B_REGIME_MULTIPLIERS:
-  TRENDING: 1.0
-  RANGING: 1.0
-  HIGH_VOLATILITY: 1.0
-  LOW_VOLATILITY: 1.0
+  TRENDING: 0.90          # Trending = slightly easier threshold
+  RANGING: 1.30            # Ranging = much harder (structural signals unreliable)
+  HIGH_VOLATILITY: 1.15   # High vol = wider stops, harder holds
+  LOW_VOLATILITY: 1.10    # Low vol = lower payoff potential
 
 # Engine B AI news context — feeds news into AI advisory review (not checklist)
 ENGINE_B_NEWS_CONTEXT_ENABLED: true
@@ -710,6 +713,8 @@ ENGINE_B_ZONE_PERSISTENCE: false
 # "H1" = original behaviour (noisier on forex, fine for crypto/stocks).
 # H4 is always used for zones and entry triggers regardless of this setting.
 ENGINE_B_FOREX_STRUCTURE_TF: "D1"
+# Minimum ADX for forex Engine B (D1 snap preferred, else H4/zone snap; else candle-derived). Below = structure_ok false.
+ENGINE_B_FOREX_ADX_MIN: 25.0
 
 # Engine B backtest SL/TP mode:
 # "atr" = use Engine A calc_levels (ATR × multiplier) — proven, matches bar resolution

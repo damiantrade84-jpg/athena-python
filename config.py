@@ -745,12 +745,14 @@ CONFIG: dict = {
         },
     },
     "ENGINE_B_REGIME_MULTIPLIERS": {
-        "TRENDING": 0.85,
-        "RANGING": 1.15,
-        "HIGH_VOLATILITY": 1.20,
-        "LOW_VOLATILITY": 1.00,
+        "TRENDING": 0.90,
+        "RANGING": 1.30,
+        "HIGH_VOLATILITY": 1.15,
+        "LOW_VOLATILITY": 1.10,
     },
     "FOREX_ENGINE": {
+        "hurst_gate_enabled": True,
+        "hurst_gate_threshold": 0.52,
         "trend_gate_adx_min": 20.0,
         "trend_margin_min": 0.003,
         "adx_confirm_min": 22.0,

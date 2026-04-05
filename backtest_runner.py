@@ -3048,6 +3048,17 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         # Zone context always uses the configured zone_tf (usually H4)
         zone_ctx = h4_ctx if _zone_tf == "H4" else d1_ctx
         regime_label = _rt().engine_b_regime_label(zone_ctx, pair.get("type", "stock"))
+        _bt_b_d1_snap = {}
+        _bt_b_zone_snap = {}
+        try:
+            _bt_b_d1_snap = (
+                calc_indicators_with_normalized(d1_ctx, pair.get("type", "stock")) or {}
+            ).get("snap") or {}
+            _bt_b_zone_snap = (
+                calc_indicators_with_normalized(zone_ctx, pair.get("type", "stock")) or {}
+            ).get("snap") or {}
+        except Exception:
+            pass
         candidates = []
         for direction in ["LONG", "SHORT"]:
             res = naked_engine.analyze_structure(
@@ -3061,6 +3072,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 fallback_rr=style_profile.get("fallback_rr", 2.0),
                 asset_type=pair.get("type", ""),
                 enable_profile_context=_bt_enable_profile_context,
+                d1_snap=_bt_b_d1_snap,
+                h4_snap=_bt_b_zone_snap,
             )
             _b_funnel["bars_evaluated"] += 1
             if res.get("structural_verdict") != "CLEAR":
@@ -3744,9 +3757,18 @@ def backtest_pair_consensus(
         best_b = None
         try:
             res_b = naked_engine.analyze_structure(
-                d1_ctx, zone_ctx, h1_window, current_price, a_direction, atr,
-                regime_label, fallback_rr=style_profile.get("fallback_rr", 2.0),
-                asset_type=_ptype, enable_profile_context=_bt_enable_profile_context,
+                d1_ctx,
+                zone_ctx,
+                h1_window,
+                current_price,
+                a_direction,
+                atr,
+                regime_label,
+                fallback_rr=style_profile.get("fallback_rr", 2.0),
+                asset_type=_ptype,
+                enable_profile_context=_bt_enable_profile_context,
+                d1_snap=(d1i or {}).get("snap") or {},
+                h4_snap=(h4i or {}).get("snap") or {},
             )
             if res_b.get("structural_verdict") == "CLEAR":
                 conf_b = naked_engine.calculate_confidence(

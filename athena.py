@@ -4970,10 +4970,30 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             pair_obj.get("type", "stock"),
             engine_a_ctx.get("regime") if isinstance(engine_a_ctx, dict) else None,
         )
+        _na_d1_snap = {}
+        _na_h4_snap = {}
+        try:
+            _na_d1_snap = (
+                calc_indicators_with_normalized(d1, pair_obj.get("type", "stock")) or {}
+            ).get("snap") or {}
+            _na_h4_snap = (
+                calc_indicators_with_normalized(h4, pair_obj.get("type", "stock")) or {}
+            ).get("snap") or {}
+        except Exception:
+            pass
         res = engine.set_registry_context(
             pair_obj.get("symbol") or pair_obj.get("display")
         ).analyze_structure(
-            d1, h4, h1, current_price, direction, atr, regime_label, asset_type=pair_obj.get("type", "")
+            d1,
+            h4,
+            h1,
+            current_price,
+            direction,
+            atr,
+            regime_label,
+            asset_type=pair_obj.get("type", ""),
+            d1_snap=_na_d1_snap,
+            h4_snap=_na_h4_snap,
         )
 
         try:
@@ -5355,6 +5375,25 @@ def api_scan_naked():
             # Test both directions
             # analyze_structure uses: arg2 (h4 slot) for zones/macro, arg3 (h1 slot) for micro/BOS/sweep
             regime_label = _engine_b_regime_label(zone_candles, pair.get("type", "stock"))
+            _eb_d1_snap = {}
+            _eb_zone_snap = {}
+            try:
+                if len(d1_candles) >= 20:
+                    _eb_d1_snap = (
+                        calc_indicators_with_normalized(
+                            d1_candles, pair.get("type", "stock")
+                        )
+                        or {}
+                    ).get("snap") or {}
+                if len(zone_candles) >= 20:
+                    _eb_zone_snap = (
+                        calc_indicators_with_normalized(
+                            zone_candles, pair.get("type", "stock")
+                        )
+                        or {}
+                    ).get("snap") or {}
+            except Exception:
+                pass
             local_results = []
             _best_signal = None
             for direction in ["LONG", "SHORT"]:
@@ -5370,6 +5409,8 @@ def api_scan_naked():
                     regime_label,
                     fallback_rr=style_profile.get("fallback_rr", 2.0),
                     asset_type=pair.get("type", ""),
+                    d1_snap=_eb_d1_snap,
+                    h4_snap=_eb_zone_snap,
                 )
 
                 verdict = res.get("structural_verdict", "NONE")
@@ -9346,7 +9387,16 @@ def analyze_pair(
             structure_data = naked_engine.set_registry_context(
                 pair.get("symbol") or pair.get("display")
             ).analyze_structure(
-                d1, h4, h1, float(price), direction, float(atr), _regime_label, asset_type=pair.get("type", "")
+                d1,
+                h4,
+                h1,
+                float(price),
+                direction,
+                float(atr),
+                _regime_label,
+                asset_type=pair.get("type", ""),
+                d1_snap=(d1i or {}).get("snap") or {},
+                h4_snap=(h4i or {}).get("snap") or {},
             )
 
             if structure_data and structure_data.get("structural_verdict") == "CLEAR":

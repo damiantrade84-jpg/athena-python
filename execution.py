@@ -18,6 +18,7 @@ from athena_runtime import executed_signals, rt
 from config import _json_safe, scan_candle_limits
 from engine_c import compute_consensus
 from execution_lifecycle import run_managed_execution
+from indicators import calc_indicators_with_normalized
 from market_structure import NakedEngine
 from guardian import pre_trade_check as _guardian_pre_trade
 from scoring import CORR_CLUSTERS, get_pair_score_group
@@ -480,6 +481,14 @@ def api_engine_c_scan():
                 results["skipped"].append({"display": display, "reason": "zero_atr"})
                 continue
 
+            _ec_d1_snap = {}
+            _ec_h4_snap = {}
+            try:
+                _ec_d1_snap = (calc_indicators_with_normalized(d1, ptype) or {}).get("snap") or {}
+                _ec_h4_snap = (calc_indicators_with_normalized(h4, ptype) or {}).get("snap") or {}
+            except Exception:
+                pass
+
             regime_label = _r.engine_b_regime_label(h4, ptype, sig_a.get("regime"))
 
             sig_b_best = None
@@ -505,6 +514,8 @@ def api_engine_c_scan():
                     regime_label,
                     fallback_rr=style_profile_b.get("fallback_rr", 2.0),
                     asset_type=ptype,
+                    d1_snap=_ec_d1_snap,
+                    h4_snap=_ec_h4_snap,
                 )
                 if res_b.get("structural_verdict") == "CLEAR":
                     conf_b = engine_b.calculate_confidence(
