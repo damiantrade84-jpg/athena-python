@@ -203,7 +203,7 @@ run_full_scan(style, asset_class)
 ```
 POST /api/engine-c-scan {assetClass, style}
   └─ Fetches candles ONCE per pair, shares between Engine A (full) and Engine B (last bar dropped)
-  └─ analyze_pair() with preloaded_candles   ← Engine A
+  └─ analyze_pair(preloaded_candles={D1,H4,H1})   ← Engine A (uses same data as Engine B)
   └─ NakedEngine.analyze_structure() + calculate_confidence()   ← Engine B
   └─ compute_consensus() → ALIGNED / A_ONLY / B_ONLY / CONFLICT / SKIPPED
   └─ ALIGNED results insert into shadow ledger (SHADOW_LEDGER_ENABLED must be true)
@@ -220,6 +220,9 @@ In each path the consensus logic is:
        ├─ resolve_sl() — structural → ATR-clamped → tighter
        ├─ resolve_tp() — structural if RR≥1.5, else ATR
        └─ returns {conviction, tier, sizing_override, sl, tp, rr, ...}
+
+Note: analyze_pair() logs [ANALYZE] warnings when returning None due to empty/insufficient candles
+```
 
 /api/engine-c-confirm (Vision overlay):
   └─ apply_vision(consensus, vision_result)
@@ -314,7 +317,7 @@ See **Scalp Lab / Engine D flow** above. Execute path: **`signal.type == "crypto
 | Engine | Scorer | Scale | Gate key |
 |--------|--------|-------|----------|
 | Engine A — non-forex | `factor_scoring.py` z-score factor engine | 0–3.0 | `MIN_CONFLUENCE_CLASS[type]` |
-| Engine A — forex | `forex_scoring.py` rules-based | 0–2.0 | `MIN_FOREX_CONFLUENCE` + `MIN_CONFLUENCE_CLASS.forex` |
+| Engine A — forex | `forex_scoring.py` rules-based | 0–2.0 | `MIN_FOREX_CONFLUENCE` (0.95) + `MIN_CONFLUENCE_CLASS.forex` (0.95) |
 | Engine B | `market_structure.py` naked checklist | 0–100 pct | `NAKED_ENGINE.style_profiles.min_score` |
 | Engine C | `engine_c.py` A+B blend | 0–1 conviction | `ENGINE_C_AB_WEIGHTS` |
 | Engine D (Scalp Lab) | `scalp_engine.py` zones + triggers + rule-based `ai_quality_grade` | 0–100 (`ai_score`), letter `ai_grade` | `SCALP_ENGINE` (`MIN_RR`, spread/session/zone gates, `MIN_GRADE_AUTO_EXECUTE`, etc.) |
@@ -398,6 +401,7 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 - Engine C `regime` can be string or dict — handle both
 - `confidenceDetail` lives on the signal dict (`analyze_pair` sets it); `naked_data` holds the Engine B naked result for Engine B scan signals
 - `[NAKED-DBG]` logs in `athena.py` show specific checklist failures (e.g., `fails=[struct,loc,trigger,rr=0.8]`) for immediate diagnostic visibility.
+- `[ANALYZE]` warnings in `athena.py` log when `analyze_pair()` returns None due to empty/insufficient candles — check console for D1/H4/H1 bar counts.
 
 ---
 
@@ -529,6 +533,49 @@ This made `MIN_CONFLUENCE_CLASS` gates unreachable:
 | 1.00 (cap) | 1.97 | True max visible |
 
 **Expected:** Trade counts closer to pre–0.507 fix; elite scores **1.8–2.0** separable from good **1.4–1.6**. Re-run forex backtests.
+
+---
+
+## 2026-04-07: Forex threshold correction (too high)
+
+**Problem:** After the 0–2.0 scale fix, forex thresholds remained at **80% of max** (1.60), which was unreachable without rare SMC bonuses (FVG overlap + liquidity sweep). Typical good forex signals scored 0.8–1.1, so no signals passed.
+
+**Fix:** Lowered forex thresholds to match other asset classes (~47-52% of max):
+
+| Threshold | Old | New | % of max (2.0) |
+|---|---|---|---|
+| `MIN_CONFLUENCE_CLASS.forex` | 1.60 | **0.95** | 48% |
+| `forex_majors` | 1.50 | **0.85** | 43% |
+| `forex_crosses` | 1.55 | **0.95** | 48% |
+| `forex_exotics` | 1.65 | **1.05** | 53% |
+| `BT_MIN.forex` | 1.50 | **0.85** | 43% |
+| `BT_MIN_GROUP` forex | 1.50-1.65 | **0.75-0.95** | 38-48% |
+
+**Impact:** Forex signals now appear in main scan. BT_MIN thresholds scaled proportionally to maintain BT/live ratio.
+
+---
+
+## 2026-04-07: H1 preload regression fix
+
+**Problem:** The Engine C double-fetch fix added `if h1 is not None:` in `analyze_pair()`. Empty list `[]` from `fetch_candles` satisfied this, bypassing `candle_manager` which has WebSocket data. Result: forex pairs got empty H1 → `analyze_pair()` returned None → no signals.
+
+**Fix:** Changed to truthiness check `if h1:` so empty/missing H1 falls through to `candle_manager` as before.
+
+---
+
+## 2026-04-07: Engine C double-fetch elimination
+
+**Problem:** `api_engine_c_scan()` fetched candles for Engine B, then `analyze_pair()` fetched them again internally. This caused:
+- 6 API calls per pair instead of 3 (EODHD rate limits)
+- Different H1 data between Engine A and B (different Hurst exponent → different forex scores)
+- Higher latency and cost
+
+**Fix:** Restructured per-pair loop:
+1. Fetch candles ONCE per TF (`_tf_map_full` stores full bars, `_tf_map` stores last-bar-dropped)
+2. Pass `{D1, H4, H1}` from `_tf_map_full` to `analyze_pair(preloaded_candles=...)`
+3. Use `_tf_map` for Engine B (last bar dropped as expected)
+
+**Result:** ~40% reduction in EODHD API calls per pair, identical candle data between engines.
 
 ---
 
