@@ -99,10 +99,14 @@ def test_calculate_confidence_engine_b_diagnostics_empty_when_room_ok():
 
 
 def test_calculate_confidence_forex_adx_below_min_blocks_structure():
+    import config
+
     res = _base_res_long()
     res["asset_type"] = "forex"
     res["d1_adx"] = 18.0
     res["h4_adx"] = 20.0
+    old_min = config.CONFIG.get("ENGINE_B_FOREX_ADX_MIN")
+    config.CONFIG["ENGINE_B_FOREX_ADX_MIN"] = 25.0
     out = engine.calculate_confidence(
         res,
         current_price=100.0,
@@ -111,10 +115,13 @@ def test_calculate_confidence_forex_adx_below_min_blocks_structure():
         entry_candles=[],
         style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
     )
-    assert out.get("structure_ok") is False
-    assert ENGINE_B_REASON_FOREX_ADX_LOW in (
-        out.get("engine_b_diagnostics") or {}
-    ).get("reason_codes", [])
+    try:
+        assert out.get("structure_ok") is False
+        assert ENGINE_B_REASON_FOREX_ADX_LOW in (
+            out.get("engine_b_diagnostics") or {}
+        ).get("reason_codes", [])
+    finally:
+        config.CONFIG["ENGINE_B_FOREX_ADX_MIN"] = old_min
 
 
 def test_check_macro_correlation_detail_returns_reason_when_blocking():

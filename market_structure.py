@@ -1405,20 +1405,21 @@ class NakedEngine:
         # Forex ADX gate — structural signals treated as noise below min ADX (trend strength).
         _forex_adx_gate = True
         if str(res.get("asset_type") or "").lower() == "forex":
-            _adx_val = res.get("d1_adx")
-            if _adx_val is None:
-                _adx_val = res.get("h4_adx")
-            if _adx_val is not None:
-                try:
-                    _adx_val = float(_adx_val)
-                except (TypeError, ValueError):
-                    _adx_val = 0.0
-                _forex_adx_min = float(
-                    config.CONFIG.get("ENGINE_B_FOREX_ADX_MIN", 25.0)
-                )
-                _forex_adx_gate = _adx_val >= _forex_adx_min
+            _forex_adx_min = float(config.CONFIG.get("ENGINE_B_FOREX_ADX_MIN", 25.0))
+            if _forex_adx_min <= 0:
+                _forex_adx_gate = True
             else:
-                _forex_adx_gate = False
+                _adx_val = res.get("d1_adx")
+                if _adx_val is None:
+                    _adx_val = res.get("h4_adx")
+                if _adx_val is not None:
+                    try:
+                        _adx_val = float(_adx_val)
+                    except (TypeError, ValueError):
+                        _adx_val = 0.0
+                    _forex_adx_gate = _adx_val >= _forex_adx_min
+                else:
+                    _forex_adx_gate = False
 
         _diag_codes: list[str] = []
         if not _forex_adx_gate:

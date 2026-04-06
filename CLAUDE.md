@@ -201,11 +201,16 @@ run_full_scan(style, asset_class)
 
 **Engine C flow:**
 ```
-NOTE: There is NO standalone /api/engine-c-scan route. Engine C is wired via three paths:
-  1. Full scan shadow ledger — _insert_shadow_from_engine_c() fires on every ALIGNED+tradeable
-     consensus result during run_full_scan (SHADOW_LEDGER_ENABLED must be true)
-  2. /api/compare-engines — manual per-pair A+B+C comparison on demand
-  3. /api/backtest-consensus — Engine C backtest for a specific pair
+POST /api/engine-c-scan {assetClass, style}
+  └─ Fetches candles ONCE per pair, shares between Engine A (full) and Engine B (last bar dropped)
+  └─ analyze_pair() with preloaded_candles   ← Engine A
+  └─ NakedEngine.analyze_structure() + calculate_confidence()   ← Engine B
+  └─ compute_consensus() → ALIGNED / A_ONLY / B_ONLY / CONFLICT / SKIPPED
+  └─ ALIGNED results insert into shadow ledger (SHADOW_LEDGER_ENABLED must be true)
+
+Other Engine C paths:
+  - /api/compare-engines — manual per-pair A+B+C comparison on demand
+  - /api/backtest-consensus — Engine C backtest for a specific pair
 
 In each path the consensus logic is:
   └─ compute_consensus(signal_a, signal_b, confidence_b, regime, entry, atr)

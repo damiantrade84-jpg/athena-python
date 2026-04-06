@@ -9503,9 +9503,9 @@ function buildECCard(c, category) {
       (b.bos ? ' BOS&#10003;' : '') + (b.ob_at_zone ? ' OB&#10003;' : '') + '</div>';
     if (bStatus.eligible === false) {
       var rejectParts = [];
-      if (bStatus.checklist_passed === false) rejectParts.push('checklist');
+      if (bStatus.checklist_passed === false) rejectParts.push('checklist failed');
       if (bStatus.min_score_scaled != null && b.score != null && Number(b.score) < Number(bStatus.min_score_scaled)) {
-        rejectParts.push('min ' + bStatus.min_score_scaled);
+        rejectParts.push('needs ' + bStatus.min_score_scaled);
       }
       if (bStatus.reason_codes && bStatus.reason_codes.length) {
         rejectParts.push(String(bStatus.reason_codes[0]).replace(/_/g, ' '));

@@ -457,9 +457,6 @@ def api_engine_c_scan():
             engine_a_style = _r.resolve_scan_style(
                 _r.normalize_style(requested_style), pair
             )
-            sig_a = _r.analyze_pair(pair, btc_bias, style=engine_a_style)
-            if not sig_a:
-                sig_a = {}
 
             resolved_style_b, style_profile_b = _r.naked_scan_style_profile(
                 requested_style, score_group=_pair_score_group
@@ -474,10 +471,15 @@ def api_engine_c_scan():
             _entry_tf = str(style_profile_b.get("entry_tf", "H1")).upper()
             _atr_tf = str(style_profile_b.get("atr_tf", _zone_tf)).upper()
             _lim = scan_candle_limits()
+
+            # Fetch candles ONCE — share between Engine A (full) and Engine B (last bar dropped).
+            # Eliminates double-fetching and ensures both engines score identical data.
+            _tf_map_full: dict[str, list] = {}
             _tf_map: dict[str, list] = {}
             for tf in {_zone_tf, _entry_tf, _atr_tf, "D1"}:
                 limit = _lim.get(tf, _lim.get("H4", 0))
                 raw = _r.fetch_candles(pair, tf, limit)
+                _tf_map_full[tf] = raw or []
                 if raw and len(raw) > 1:
                     _tf_map[tf] = raw[:-1]
                 else:
@@ -486,6 +488,17 @@ def api_engine_c_scan():
             zone_candles = _tf_map.get(_zone_tf, [])
             entry_candles = _tf_map.get(_entry_tf, [])
             atr_candles = _tf_map.get(_atr_tf, zone_candles)
+
+            # Engine A: pass full (undropped) candles so analyze_pair() doesn't re-fetch
+            _preloaded_for_a = {
+                "D1": _tf_map_full.get("D1"),
+                "H4": _tf_map_full.get(_zone_tf),
+                "H1": _tf_map_full.get(_entry_tf),
+            }
+            sig_a = _r.analyze_pair(pair, btc_bias, style=engine_a_style,
+                                    preloaded_candles=_preloaded_for_a)
+            if not sig_a:
+                sig_a = {}
 
             # fetch_candles already routes through CandleBuilder (WS) first,
             # then EODHD REST as fallback — no need for separate EODHD calls.
