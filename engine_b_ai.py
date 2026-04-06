@@ -70,14 +70,14 @@ def build_engine_b_signal_message(
 
     # === SIGNAL ===
     conf_score = confidence_result.get("score", 0)
-    max_score = confidence_result.get("max_possible", 3.0)
+    max_score = confidence_result.get("max_possible", 5.0)
     score_pct = round((conf_score / max_score * 100)) if max_score else 0
 
     lines.append("=== ENGINE B SIGNAL (NAKED STRUCTURE) ===")
     lines.append(f"Pair: {pair} | Direction: {direction} | Price: {current_price}")
     lines.append(f"Confidence: {conf_score:.2f} / {max_score} ({score_pct}%)")
     lines.append(f"Verdict: {structure_result.get('structural_verdict', 'UNCLEAR')}")
-    lines.append(f"Actionable: {'YES' if conf_score >= 1.8 else 'NO'}")
+    lines.append(f"Actionable: {'YES' if confidence_result.get('passed', False) else 'NO'}")
 
     # === STRUCTURE ===
     lines.append("")

@@ -73,21 +73,23 @@ BT_MIN:
   index:     0.85
 
 BT_MIN_GROUP:
+  # Values proportionally scaled to match MIN_CONFLUENCE_GROUP restore (maintains BT/live ratio).
+  # Dormant while BACKTEST_USE_BT_MIN_THRESHOLDS: false — future-proofed for re-enable.
   forex:
     forex_majors: 1.50
     forex_crosses: 1.55
     forex_exotics: 1.65
   crypto:
-    crypto_btc: 0.81
-    crypto_eth: 0.84
-    crypto_alt_majors: 0.90
-    crypto_doge: 0.96
-    crypto_other: 0.90
+    crypto_btc: 0.94      # was 0.81 × 1.167 (maintains ~74% BT/live ratio)
+    crypto_eth: 0.98      # was 0.84 × 1.167
+    crypto_alt_majors: 1.05  # was 0.90 × 1.167
+    crypto_doge: 0.96     # unchanged — no MIN_CONFLUENCE_GROUP counterpart
+    crypto_other: 1.05    # was 0.90 × 1.167
   commodity:
     nat_gas: 0.87
     pgm_metals: 0.84
     copper: 0.81
-    precious_trackers: 0.78
+    precious_trackers: 1.00  # was 0.78 × 1.273 (precious_trackers live gate restored)
     energy_oil: 0.75
     commodity_other: 0.85
   index:
@@ -96,10 +98,10 @@ BT_MIN_GROUP:
     eu_indices: 0.78
     index_other: 0.80
   stock:
-    us_stock_single: 0.90
-    smallcap_em_etf: 0.80
-    bond_tlt: 0.70
-    stock_other: 0.85
+    us_stock_single: 1.25  # was 0.90 × 1.409 (maintains ~81% BT/live ratio)
+    smallcap_em_etf: 1.13  # was 0.80 × 1.409
+    bond_tlt: 1.00         # was 0.70 × 1.409
+    stock_other: 1.20      # was 0.85 × 1.409
 
 # Backtest must not alter live pair enable/disable state
 BT_AUTO_TOGGLE: false
@@ -126,21 +128,25 @@ MIN_CONFLUENCE_CLASS:
 MIN_FOREX_CONFLUENCE: 1.60
 
 # Optional subgroup thresholds (used when score_group is available on a pair)
+# NOTE: get_score_threshold() uses GROUP value directly — no class floor check.
+# Group values must be proportionally in line with MIN_CONFLUENCE_CLASS.
+# Scale factors applied when class was restored (2026-04-05 _SCORE_SCALE fix):
+#   stock ×1.409 (class 1.10→1.55), crypto ×1.167 (class 1.20→1.40), commodity precious_trackers ×1.273
 MIN_CONFLUENCE_GROUP:
   forex:
     forex_majors: 1.50
     forex_crosses: 1.55
     forex_exotics: 1.65
   crypto:
-    crypto_btc: 1.10
-    crypto_eth: 1.15
-    crypto_alt_majors: 1.20
-    crypto_other: 1.20
+    crypto_btc: 1.28      # was 1.10 (old lowered-class era) × 1.167
+    crypto_eth: 1.34      # was 1.15 × 1.167
+    crypto_alt_majors: 1.40  # was 1.20 × 1.167 = class floor
+    crypto_other: 1.40    # was 1.20 × 1.167 = class floor
   commodity:
     nat_gas: 1.45
     pgm_metals: 1.40
     copper: 1.35
-    precious_trackers: 1.10
+    precious_trackers: 1.40  # was 1.10 (old lowered-class value) — restored to class floor
     energy_oil: 1.25
     commodity_other: 1.35
   index:
@@ -149,10 +155,10 @@ MIN_CONFLUENCE_GROUP:
     eu_indices: 1.30
     index_other: 1.35
   stock:
-    us_stock_single: 1.10
-    smallcap_em_etf: 1.00
-    bond_tlt: 0.90
-    stock_other: 1.05
+    us_stock_single: 1.55  # was 1.10 (old lowered-class era) × 1.409 = class floor
+    smallcap_em_etf: 1.40  # was 1.00 × 1.409
+    bond_tlt: 1.25         # was 0.90 × 1.409; slight allowance below class for bond ETFs
+    stock_other: 1.50      # was 1.05 × 1.409
 
 # Per-scan cross-sectional quantile gate (optional). When enabled, effective threshold =
 # max(static MIN_CONFLUENCE_*, percentile cut) per asset class so only ~top fraction of
@@ -327,7 +333,7 @@ CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED: true
 # Forex trend raised to 2.0 (primary edge) and momentum to 1.0 (was under-weighted).
 FACTOR_WEIGHTS:
   crypto:    { trend: 2.0, momentum: 1.5, volatility: 0.8, volume: 1.0, structure: 0.5, derivatives: 1.2, microstructure: 0.6, carry: 0, trend_strength: 1.0 }
-  forex:     { trend: 2.0, momentum: 1.0, volatility: 1.0, volume: 0.3, structure: 0.3, derivatives: 0.8, microstructure: 0.5, carry: 0.7 }
+  forex:     { trend: 2.0, momentum: 1.0, volatility: 1.0, volume: 0.3, structure: 0.3, derivatives: 0.8, microstructure: 0.5, carry: 0.7 }  # NOTE: not used — forex routes to forex_scoring.py, not factor_scoring.py
   stock:     { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.5, structure: 1.0, derivatives: 0.5, microstructure: 0.75, carry: 1.0 }
   commodity: { trend: 2.0, momentum: 1.3, volatility: 1.5, volume: 1.0, structure: 1.3, derivatives: 0.7, microstructure: 0.75, carry: 0.5 }
   index:     { trend: 2.0, momentum: 1.4, volatility: 1.2, volume: 0.8, structure: 1.0, derivatives: 1.2, microstructure: 0.75, carry: 1.0 }
@@ -692,12 +698,13 @@ NAKED_ENGINE:
       intraday: {min_score: 4.0}
       swing: {min_score: 5.0}
 
-# Penalize non-trending regimes — raises effective min_score (Engine B checklist).
+# Neutralized by default — use the base Engine B min_score directly unless
+# a deliberate regime-specific policy is introduced again.
 ENGINE_B_REGIME_MULTIPLIERS:
-  TRENDING: 0.90          # Trending = slightly easier threshold
-  RANGING: 1.30            # Ranging = much harder (structural signals unreliable)
-  HIGH_VOLATILITY: 1.15   # High vol = wider stops, harder holds
-  LOW_VOLATILITY: 1.10    # Low vol = lower payoff potential
+  TRENDING: 1.0
+  RANGING: 1.0
+  HIGH_VOLATILITY: 1.0
+  LOW_VOLATILITY: 1.0
 
 # Engine B AI news context — feeds news into AI advisory review (not checklist)
 ENGINE_B_NEWS_CONTEXT_ENABLED: true
@@ -708,8 +715,10 @@ ENGINE_B_ZONE_PERSISTENCE: false
 # "H1" = original behaviour (noisier on forex, fine for crypto/stocks).
 # H4 is always used for zones and entry triggers regardless of this setting.
 ENGINE_B_FOREX_STRUCTURE_TF: "D1"
-# Minimum ADX for forex Engine B (D1 snap preferred, else H4/zone snap; else candle-derived). Below = structure_ok false.
-ENGINE_B_FOREX_ADX_MIN: 25.0
+# Minimum ADX for forex Engine B (D1 snap preferred, else H4/zone snap; else
+# candle-derived). Set to 0.0 to disable the veto and restore the pre-gate
+# baseline.
+ENGINE_B_FOREX_ADX_MIN: 0.0
 
 # Engine B backtest SL/TP mode:
 # "atr" = use Engine A calc_levels (ATR × multiplier) — proven, matches bar resolution

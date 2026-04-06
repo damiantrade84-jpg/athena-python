@@ -201,18 +201,22 @@ run_full_scan(style, asset_class)
 
 **Engine C flow:**
 ```
-/api/engine-c-scan
-  └─ analyze_pair()          ← Engine A
-  └─ NakedEngine.analyze_structure() + calculate_confidence()   ← Engine B
+NOTE: There is NO standalone /api/engine-c-scan route. Engine C is wired via three paths:
+  1. Full scan shadow ledger — _insert_shadow_from_engine_c() fires on every ALIGNED+tradeable
+     consensus result during run_full_scan (SHADOW_LEDGER_ENABLED must be true)
+  2. /api/compare-engines — manual per-pair A+B+C comparison on demand
+  3. /api/backtest-consensus — Engine C backtest for a specific pair
+
+In each path the consensus logic is:
   └─ compute_consensus(signal_a, signal_b, confidence_b, regime, entry, atr)
-       ├─ normalise_engine_a() → 0–1
-       ├─ normalise_engine_b() → 0–1
+       ├─ normalise_engine_a() → 0–1  (max_score 2.0 for forex, 3.0 for non-forex)
+       ├─ normalise_engine_b() → 0–1  (max_possible from calculate_confidence, default 5.0)
        ├─ ENGINE_C_AB_WEIGHTS regime blend: TRENDING={A:0.65,B:0.35}, RANGING={A:0.35,B:0.65}
        ├─ resolve_sl() — structural → ATR-clamped → tighter
        ├─ resolve_tp() — structural if RR≥1.5, else ATR
        └─ returns {conviction, tier, sizing_override, sl, tp, rr, ...}
 
-/api/engine-c-confirm
+/api/engine-c-confirm (Vision overlay):
   └─ apply_vision(consensus, vision_result)
        ├─ CONFIRM + conviction≥0.35 → trade=True
        └─ AVOID/CONTRADICT → trade=False, tier=SKIP
