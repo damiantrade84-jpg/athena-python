@@ -68,15 +68,15 @@ BACKTEST_USE_BT_MIN_THRESHOLDS: false
 BT_MIN:
   crypto:    0.95
   commodity: 0.90
-  forex:     0.65
+  forex:     1.50
   stock:     0.90
   index:     0.85
 
 BT_MIN_GROUP:
   forex:
-    forex_majors: 0.65
-    forex_crosses: 0.70
-    forex_exotics: 0.80
+    forex_majors: 1.50
+    forex_crosses: 1.55
+    forex_exotics: 1.65
   crypto:
     crypto_btc: 0.81
     crypto_eth: 0.84
@@ -114,11 +114,8 @@ NAKED_MAX_DAILY: 3
 
 # Per-class live scan minimum confluence — execute / tradeSignals tier threshold.
 # Forex: forex_scoring 0–2.0 (true max ~1.97). Non-forex: factor engine (0–3.0 after _SCORE_SCALE).
-# Forex gate NOTE: typical good signals score 0.65–1.30 on the 0–2.0 scale (same raw values as the
-# old 0–1.0 capped system; cap rarely triggered). Gate 0.80 matches the old 0.80/1.0 selectivity.
-# Elite signals (1.5–2.0) are now visible and separable — the 0–2.0 scale improves display only.
 MIN_CONFLUENCE_CLASS:
-  forex:     0.80      # 0-2.0 scale: equivalent selectivity to old 0.80/1.0 gate
+  forex:     1.60
   crypto:    1.40      # was 1.20, restore to 1.40
   commodity: 1.40      # was 1.10, restore to 1.40
   stock:     1.55      # was 1.10, restore to 1.55
@@ -126,14 +123,14 @@ MIN_CONFLUENCE_CLASS:
 
 # Forex scan threshold — forex_scoring engine outputs 0–2.0 (not 0–3.0 factor scale)
 # MIN_CONFLUENCE_CLASS.forex must match this — keep in sync
-MIN_FOREX_CONFLUENCE: 0.80
+MIN_FOREX_CONFLUENCE: 1.60
 
 # Optional subgroup thresholds (used when score_group is available on a pair)
 MIN_CONFLUENCE_GROUP:
   forex:
-    forex_majors: 0.75
-    forex_crosses: 0.80
-    forex_exotics: 0.90
+    forex_majors: 1.50
+    forex_crosses: 1.55
+    forex_exotics: 1.65
   crypto:
     crypto_btc: 1.10
     crypto_eth: 1.15
@@ -208,7 +205,7 @@ AUTO_TRADE_MIN_SCORE:
   commodity: 1.65   # factor 0–3: align with class
   stock:     1.85   # factor 0–3: align with class
   index:     1.85   # factor 0–3: align with class
-  forex:     0.80   # forex 0–2: informational scan floor; align with class gate
+  forex:     1.60   # forex 0–2: informational scan floor; align with class gate
 # AUTO_TRADE_MIN_CONVICTION is the real live gate used inside auto_trader.py.
 # Metric: combinedConviction on a 0–1 scale. When Engine A + B align, the live
 # gate gets a 15% discount (effective min = configured min * 0.85).
@@ -613,7 +610,7 @@ NAKED_ENGINE:
       min_score: 5.0
       min_rr: 2.0
       require_macro_align:
-        forex: true
+        forex: false
         crypto: false
         stock: false
         index: false
