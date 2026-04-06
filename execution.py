@@ -46,6 +46,16 @@ def _engine_c_accepts_engine_b(
     return bool(gate_ok), float(scaled_min)
 
 
+def _engine_c_best_score(confidence_b: dict | None) -> float:
+    """Rank Engine B candidates by checklist score."""
+    if not isinstance(confidence_b, dict):
+        return 0.0
+    try:
+        return float(confidence_b.get("score", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _audit_engine_from_signal(sig: dict) -> str:
     engine = str((sig or {}).get("engine") or "").strip().lower()
     if engine in ("engine_a", "engine_b", "engine_c", "scalp"):
@@ -460,16 +470,22 @@ def api_engine_c_scan():
                     "swing", score_group=_pair_score_group
                 )
 
+            _zone_tf = str(style_profile_b.get("zone_tf", "H4")).upper()
+            _entry_tf = str(style_profile_b.get("entry_tf", "H1")).upper()
+            _atr_tf = str(style_profile_b.get("atr_tf", _zone_tf)).upper()
             _lim = scan_candle_limits()
-            d1 = _r.fetch_candles(pair, "D1", _lim["D1"])
-            h4 = _r.fetch_candles(pair, "H4", _lim["H4"])
-            h1 = _r.fetch_candles(pair, "H1", _lim["H1"])
-            if d1 and len(d1) > 1:
-                d1 = d1[:-1]
-            if h4 and len(h4) > 1:
-                h4 = h4[:-1]
-            if h1 and len(h1) > 1:
-                h1 = h1[:-1]
+            _tf_map: dict[str, list] = {}
+            for tf in {_zone_tf, _entry_tf, _atr_tf, "D1"}:
+                limit = _lim.get(tf, _lim.get("H4", 0))
+                raw = _r.fetch_candles(pair, tf, limit)
+                if raw and len(raw) > 1:
+                    _tf_map[tf] = raw[:-1]
+                else:
+                    _tf_map[tf] = raw or []
+            d1 = _tf_map.get("D1", [])
+            zone_candles = _tf_map.get(_zone_tf, [])
+            entry_candles = _tf_map.get(_entry_tf, [])
+            atr_candles = _tf_map.get(_atr_tf, zone_candles)
 
             # fetch_candles already routes through CandleBuilder (WS) first,
             # then EODHD REST as fallback — no need for separate EODHD calls.
@@ -479,18 +495,18 @@ def api_engine_c_scan():
                 results["skipped"].append({"display": display, "reason": "timeout"})
                 continue
 
-            if not h4 or len(h4) < 20:
+            if len(zone_candles) < 10 or len(entry_candles) < 10:
                 results["skipped"].append({"display": display, "reason": "insufficient_data"})
                 continue
 
-            current_price = float(sig_a.get("price") or h4[-1]["close"])
+            current_price = float(sig_a.get("price") or entry_candles[-1]["close"])
             atr = float(sig_a.get("atr") or 0.0)
             if not atr or atr <= 0:
                 from indicators import calc_atr
 
-                _highs = [float(c["high"]) for c in h4]
-                _lows = [float(c["low"]) for c in h4]
-                _closes = [float(c["close"]) for c in h4]
+                _highs = [float(c["high"]) for c in atr_candles]
+                _lows = [float(c["low"]) for c in atr_candles]
+                _closes = [float(c["close"]) for c in atr_candles]
                 atr_series = calc_atr(_highs, _lows, _closes, 14)
                 atr = float(atr_series[-1]) if atr_series else 0.0
 
@@ -502,29 +518,34 @@ def api_engine_c_scan():
             _ec_h4_snap = {}
             try:
                 _ec_d1_snap = (calc_indicators_with_normalized(d1, ptype) or {}).get("snap") or {}
-                _ec_h4_snap = (calc_indicators_with_normalized(h4, ptype) or {}).get("snap") or {}
+                _ec_h4_snap = (
+                    calc_indicators_with_normalized(zone_candles, ptype) or {}
+                ).get("snap") or {}
             except Exception:
                 pass
 
-            regime_label = _r.engine_b_regime_label(h4, ptype, sig_a.get("regime"))
+            regime_label = _r.engine_b_regime_label(
+                zone_candles, ptype, sig_a.get("regime")
+            )
 
             sig_b_best = None
             conf_b_best = None
             b_direction = None
+            min_score_scaled_best = None
 
-            test_directions = []
-            if sig_a.get("direction") in ("LONG", "SHORT"):
-                test_directions = [sig_a["direction"]]
-            else:
-                test_directions = ["LONG", "SHORT"]
+            sig_b_candidate_best = None
+            conf_b_candidate_best = None
+            b_candidate_direction = None
+            min_score_scaled_candidate = None
+            gate_ok_candidate = False
 
-            for test_dir in test_directions:
+            for test_dir in ("LONG", "SHORT"):
                 res_b = engine_b.set_registry_context(
                     pair.get("symbol") or display
                 ).analyze_structure(
                     d1 or [],
-                    h4,
-                    h1 or [],
+                    zone_candles,
+                    entry_candles or [],
                     current_price,
                     test_dir,
                     atr,
@@ -539,7 +560,7 @@ def api_engine_c_scan():
                         res_b,
                         current_price,
                         test_dir,
-                        entry_candles=h1 or h4,
+                        entry_candles=entry_candles or zone_candles,
                         style_profile=style_profile_b,
                     )
                     gate_ok, _scaled_min = _engine_c_accepts_engine_b(
@@ -548,14 +569,35 @@ def api_engine_c_scan():
                         regime_label,
                         ptype,
                     )
+                    b_score = _engine_c_best_score(conf_b)
+                    if (
+                        sig_b_candidate_best is None
+                        or b_score > _engine_c_best_score(conf_b_candidate_best)
+                    ):
+                        sig_b_candidate_best = dict(res_b)
+                        sig_b_candidate_best["direction"] = test_dir
+                        conf_b_candidate_best = dict(conf_b)
+                        b_candidate_direction = test_dir
+                        min_score_scaled_candidate = float(_scaled_min)
+                        gate_ok_candidate = bool(gate_ok)
                     if not gate_ok:
                         continue
-                    b_score = float(conf_b.get("score", 0))
-                    if sig_b_best is None or b_score > float(conf_b_best.get("score", 0)):
-                        sig_b_best = res_b
+                    if sig_b_best is None or b_score > _engine_c_best_score(conf_b_best):
+                        sig_b_best = dict(res_b)
                         sig_b_best["direction"] = test_dir
-                        conf_b_best = conf_b
+                        conf_b_best = dict(conf_b)
                         b_direction = test_dir
+                        min_score_scaled_best = float(_scaled_min)
+
+            raw_sig_b = sig_b_best if sig_b_best is not None else sig_b_candidate_best
+            raw_conf_b = conf_b_best if conf_b_best is not None else conf_b_candidate_best
+            raw_b_direction = b_direction if b_direction is not None else b_candidate_direction
+            raw_min_score_scaled = (
+                min_score_scaled_best
+                if sig_b_best is not None
+                else min_score_scaled_candidate
+            )
+            raw_gate_ok = bool(sig_b_best is not None or gate_ok_candidate)
 
             if sig_b_best is None:
                 sig_b_best = {"structural_verdict": "ERROR", "direction": None}
@@ -590,17 +632,35 @@ def api_engine_c_scan():
                 "carry": sig_a.get("votes", {}).get("carry"),
             }
             consensus["engine_b_raw"] = {
-                "direction": b_direction,
-                "score": conf_b_best.get("score"),
-                "max_possible": conf_b_best.get("max_possible"),
-                "sl": sig_b_best.get("recommended_stop_loss"),
-                "tp": sig_b_best.get("recommended_take_profit"),
-                "sequence": sig_b_best.get("current_swing_sequence"),
-                "bos": sig_b_best.get("bos_confirmed"),
-                "bos_mtf": sig_b_best.get("bos_mtf_confirmed"),
-                "ob_at_zone": sig_b_best.get("ob_at_zone"),
-                "choch": sig_b_best.get("choch_confirmed"),
-                "trigger": conf_b_best.get("trigger_pattern"),
+                "direction": raw_b_direction,
+                "score": (raw_conf_b or {}).get("score"),
+                "max_possible": (raw_conf_b or {}).get("max_possible"),
+                "sl": (raw_sig_b or {}).get("recommended_stop_loss"),
+                "tp": (raw_sig_b or {}).get("recommended_take_profit"),
+                "sequence": (raw_sig_b or {}).get("current_swing_sequence"),
+                "bos": (raw_sig_b or {}).get("bos_confirmed"),
+                "bos_mtf": (raw_sig_b or {}).get("bos_mtf_confirmed"),
+                "ob_at_zone": (raw_sig_b or {}).get("ob_at_zone"),
+                "choch": (raw_sig_b or {}).get("choch_confirmed"),
+                "trigger": (raw_conf_b or {}).get("trigger_pattern"),
+                "style": resolved_style_b,
+            }
+            consensus["engine_b_status"] = {
+                "eligible": bool(sig_b_best.get("direction")),
+                "has_candidate": bool(raw_b_direction),
+                "gate_ok": raw_gate_ok,
+                "checklist_passed": bool((raw_conf_b or {}).get("passed")),
+                "min_score_scaled": raw_min_score_scaled,
+                "reason_codes": (
+                    ((raw_conf_b or {}).get("engine_b_diagnostics") or {}).get(
+                        "reason_codes"
+                    )
+                    or []
+                ),
+                "resolved_style": resolved_style_b,
+                "zone_tf": _zone_tf,
+                "entry_tf": _entry_tf,
+                "atr_tf": _atr_tf,
             }
 
             verdict = consensus["verdict"]

@@ -5517,6 +5517,7 @@ def api_scan_naked():
                     "score_pct": conf_data["pct"],
                     "is_naked": True,
                     "isForming": _engine_b_is_forming,
+                    "requestedStyle": requested_style,
                     "style": resolved_style,
                     "atr": atr,
                     "sl": sl,

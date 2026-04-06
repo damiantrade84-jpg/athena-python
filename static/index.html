@@ -5464,11 +5464,13 @@ function setStyle(style, el) {
 
 function applyStyleFilter(signals) {
   if (tradeStylePref === 'auto') return signals;
-  // When a specific style is selected, the backend already scanned with that style.
-  // Only filter Engine B signals by their explicit style field.
+  // Naked scan may resolve a requested style to another live style (for example
+  // forex intraday -> swing when D1 structure is enforced). Keep those signals visible.
   return signals.filter(function(s) {
-    if (s.is_naked && s.style) {
-      return String(s.style).toLowerCase() === tradeStylePref;
+    if (s.is_naked) {
+      var requested = String(s.requestedStyle || '').toLowerCase();
+      var resolved = String(s.style || '').toLowerCase();
+      return requested === tradeStylePref || resolved === tradeStylePref;
     }
     return true;  // Engine A signals already scanned at the correct style
   });
@@ -9440,6 +9442,7 @@ function buildECCard(c, category) {
 
   var a = c.engine_a_raw || {};
   var b = c.engine_b_raw || {};
+  var bStatus = c.engine_b_status || {};
 
   var html = '<div style="background:var(--card);border:1px solid ' + borderColor + ';' +
     'border-radius:10px;padding:14px;margin-bottom:4px;" id="ec-' + sid + '">';
@@ -9498,6 +9501,18 @@ function buildECCard(c, category) {
       'SL ' + fmtPriceForSig(b.sl, c) + ' TP ' + fmtPriceForSig(b.tp, c) + '</div>';
     html += '<div style="font-size:9px;color:var(--muted);">' + (b.sequence || '') +
       (b.bos ? ' BOS&#10003;' : '') + (b.ob_at_zone ? ' OB&#10003;' : '') + '</div>';
+    if (bStatus.eligible === false) {
+      var rejectParts = [];
+      if (bStatus.checklist_passed === false) rejectParts.push('checklist');
+      if (bStatus.min_score_scaled != null && b.score != null && Number(b.score) < Number(bStatus.min_score_scaled)) {
+        rejectParts.push('min ' + bStatus.min_score_scaled);
+      }
+      if (bStatus.reason_codes && bStatus.reason_codes.length) {
+        rejectParts.push(String(bStatus.reason_codes[0]).replace(/_/g, ' '));
+      }
+      html += '<div style="font-size:9px;color:#f59e0b;margin-top:3px;">Rejected' +
+        (rejectParts.length ? ': ' + rejectParts.join(' | ') : '') + '</div>';
+    }
   } else {
     html += '<div style="font-size:11px;color:var(--muted);">No signal</div>';
   }
