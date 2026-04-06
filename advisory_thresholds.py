@@ -36,7 +36,7 @@ _ASSET_LABELS = {
 
 _BT_STEP = {"forex": 0.03}
 _BT_LIMITS = {
-    "forex": (0.40, 1.60),
+    "forex": (0.80, 1.90),
     "crypto": (0.30, 2.00),
     "commodity": (0.30, 2.00),
     "stock": (0.30, 2.00),
@@ -44,7 +44,7 @@ _BT_LIMITS = {
 }
 _LIVE_STEP = 0.05
 _LIVE_LIMITS = {
-    "forex": (0.50, 1.60),
+    "forex": (1.00, 2.00),
     "crypto": (0.60, 2.50),
     "commodity": (0.60, 2.50),
     "stock": (0.60, 2.50),
@@ -394,7 +394,7 @@ def _build_engine_a_recommendations(rows: list[dict[str, Any]]) -> list[dict[str
 
             cur_live = float(current_live.get(asset_type, 0.0) or 0.0)
             live_low, live_high = _LIVE_LIMITS.get(asset_type, (0.60, 2.50))
-            ratio = (cur_live / cur_bt) if cur_bt > 0 else (1.65 if asset_type != "forex" else 1.23)
+            ratio = (cur_live / cur_bt) if cur_bt > 0 else (1.65 if asset_type != "forex" else 1.60)
             proposed_live = _clamp(_round_to_step(proposed_bt * ratio, _LIVE_STEP), live_low, live_high)
             if abs(proposed_live - cur_live) >= 0.0001:
                 out.append(
