@@ -69,7 +69,7 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 | `news_sentiment_feed.py` | EODHD news + Claude sentiment; optional scan blend; TTL cache |
 | `scoring.py` | Confluence engine, vote weights, signal classification, pair profiles, `get_min_confluence_threshold` |
 | `factor_scoring.py` | Z-score factor engine — directional (trend, momentum, microstructure, derivatives) + non-directional (trend_strength, volatility, volume, structure) |
-| `forex_scoring.py` | Dedicated forex scorer (rules-based, 0–1 scale): trend gate + session + RSI pullback + COT boost |
+| `forex_scoring.py` | Dedicated forex scorer (rules-based, 0–2.0 scale): trend gate + session + RSI pullback + COT boost |
 | `market_structure.py` | Engine B: `NakedEngine`, swing analysis, BOS/CHoCH/FVG/order blocks, shared checklist pass/fail |
 | `engine_b_ai.py` | Engine B advisory AI verdict (review only — not a pass/fail gate) |
 | `engine_c.py` | Engine C consensus: `ENGINE_C_AB_WEIGHTS` blend, conviction tiers, SL/TP resolution, Vision modifier |

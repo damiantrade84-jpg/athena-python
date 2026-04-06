@@ -9351,7 +9351,7 @@ def analyze_pair(
     # OI divergence warnings are appended inside calc_confluence when oi_data is passed (no duplicate here).
 
     # Max possible final_score depends on scoring engine:
-    # - Forex: 0-1 scale (forex_scoring.py caps at 1.0)
+    # - Forex: 0-2 scale (forex_scoring.py caps at 2.0)
     # - Crypto/Stock: 0-3 scale (z-score factor engine, capped at 3.0)
     # Only set maxScoreOverride if not already set (forex sets it to 2.0)
     if res.get("maxScoreOverride") is None:
@@ -10496,7 +10496,7 @@ def _check_score_decay() -> None:
                     "ts": datetime.now(timezone.utc).isoformat(),
                 }
 
-                # Warn at 40%+ drop from entry score (works for both forex 0-1 and factor 0-3 scales)
+                # Warn at 40%+ drop from entry score (works for both forex 0-2 and factor 0-3 scales)
                 if decay_pct >= 40 or direction_flip:
                     log.warning(
                         f"[DECAY] {pair_name} ({engine}): {score_note} ({decay_pct:.0f}% drop) — consider exit"
@@ -12400,5 +12400,4 @@ if __name__ == "__main__":
     _signal.signal(_signal.SIGTERM, _shutdown_handler)
 
     app.run(host=_host, port=5000, debug=False, use_reloader=False)
-
 

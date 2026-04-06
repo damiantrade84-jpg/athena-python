@@ -19,7 +19,7 @@ from config import _json_safe, scan_candle_limits
 from engine_c import compute_consensus
 from execution_lifecycle import run_managed_execution
 from indicators import calc_indicators_with_normalized
-from market_structure import NakedEngine
+from market_structure import NakedEngine, engine_b_confidence_passes
 from guardian import pre_trade_check as _guardian_pre_trade
 from scoring import CORR_CLUSTERS, get_pair_score_group
 
@@ -27,6 +27,23 @@ from scoring import CORR_CLUSTERS, get_pair_score_group
 def healthcheck():
     """Lightweight route for modular app wiring smoke-tests."""
     return jsonify({"ok": True, "route": request.path})
+
+
+def _engine_c_accepts_engine_b(
+    confidence_b: dict, style_profile: dict, regime_label: str, pair_type: str
+) -> tuple[bool, float]:
+    """Reuse Engine B's standalone confidence gate inside Engine C.
+
+    This keeps the Engine C scan from surfacing B-only structures that the
+    dedicated naked scan would reject for the same pair/style/regime.
+    """
+    gate_ok, scaled_min = engine_b_confidence_passes(
+        confidence_b,
+        style_profile,
+        regime_label,
+        pair_type,
+    )
+    return bool(gate_ok), float(scaled_min)
 
 
 def _audit_engine_from_signal(sig: dict) -> str:
@@ -525,6 +542,14 @@ def api_engine_c_scan():
                         entry_candles=h1 or h4,
                         style_profile=style_profile_b,
                     )
+                    gate_ok, _scaled_min = _engine_c_accepts_engine_b(
+                        conf_b,
+                        style_profile_b,
+                        regime_label,
+                        ptype,
+                    )
+                    if not gate_ok:
+                        continue
                     b_score = float(conf_b.get("score", 0))
                     if sig_b_best is None or b_score > float(conf_b_best.get("score", 0)):
                         sig_b_best = res_b
