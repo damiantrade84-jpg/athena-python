@@ -507,19 +507,21 @@ This made `MIN_CONFLUENCE_CLASS` gates unreachable:
 
 1. Removed caps on `trend_score` and on the multiplicative `final_score` (no 0.507 scaling).
 2. **0–2.0** display scale: `result.final_score` capped at **2.0** (matches achievable max ~1.97).
-3. Thresholds: **`MIN_CONFLUENCE_CLASS.forex`** and **`MIN_FOREX_CONFLUENCE`** → **1.60** (~80% of 2.0, similar selectivity to old **0.80** on 0–1.0). **`BT_MIN.forex`** → **1.50**; **`BT_MIN_GROUP`** forex → **1.50 / 1.55 / 1.65**; **`MIN_CONFLUENCE_GROUP`** forex aligned to the same ladder.
-4. **`advisory_thresholds.py`:** `_BT_LIMITS.forex` → **(0.80, 1.90)**; `_LIVE_LIMITS.forex` → **(1.00, 2.00)**.
+3. Thresholds: **`MIN_CONFLUENCE_CLASS.forex`** and **`MIN_FOREX_CONFLUENCE`** → **0.80** (equivalent selectivity to old 0.80/1.0 gate — see correction note). **`BT_MIN.forex`** → **0.65**; **`BT_MIN_GROUP`** forex → **0.65 / 0.70 / 0.80**; **`MIN_CONFLUENCE_GROUP`** forex → **0.75 / 0.80 / 0.90**.
+4. **`advisory_thresholds.py`:** `_BT_LIMITS.forex` → **(0.40, 1.60)**; `_LIVE_LIMITS.forex` → **(0.50, 1.60)**.
 5. **`maxScoreOverride` / Engine C forex path:** **2.0** in `athena.py` and `backtest_runner.py`; **`normalize_engine_a`** treats **`max_score ≤ 2.01`** like forex for the A-side floor. Engine C **conviction** calibration / `record_signal_event` stay **`max_score=1.0`** (0–1 normalized).
-6. **`config.py` fallbacks** and **`AUTO_TRADE_MIN_SCORE.forex`** → **1.60** (informational; matches class gate on 0–2.0).
+6. **`config.py` fallbacks** and **`AUTO_TRADE_MIN_SCORE.forex`** → **0.80** (informational; matches class gate on 0–2.0).
 
-**Score mapping (illustrative):**
+**Score mapping (corrected — original 1.60 gate was wrong):**
+
+The initial threshold of 1.60 assumed removing `min(1.0, …)` caps would double all scores. **This is incorrect.** The scoring formula produces the same numeric values regardless — the cap only clipped rare elite signals already above 1.0. Typical good signals score **0.65–1.30** on the new 0–2.0 scale, same as on the old capped scale.
 
 | Old (capped 0–1) | New (0–2.0) | Meaning |
 |-------------------|-------------|---------|
-| 0.80 gate | 1.60 gate | ~same selectivity |
-| 1.00 (cap) | 1.97 | True max visible |
+| 0.80 gate | 0.80 gate | same selectivity (formula unchanged) |
+| 1.00 (cap) | 1.0–1.97 | previously-capped elite signals now visible |
 
-**Expected:** Trade counts closer to pre–0.507 fix; elite scores **1.8–2.0** separable from good **1.4–1.6**. Re-run forex backtests.
+**Expected:** Trade counts comparable to pre–0.507 fix; elite signals **1.5–2.0** now visible above the 0.80 pass threshold. Re-run forex backtests.
 
 ---
 

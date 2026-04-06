@@ -3,7 +3,7 @@ from auto_trader import AutoTrader
 
 def _base_cfg():
     return {
-        "AUTO_TRADE_MIN_SCORE": {"crypto": 1.5, "forex": 1.6},
+        "AUTO_TRADE_MIN_SCORE": {"crypto": 1.5, "forex": 0.8},
         "AUTO_TRADE_MIN_CONVICTION": {"default": 0.55},
         "AUTO_TRADE_MAX_DAILY": 3,
         "AUTO_TRADE_SESSIONS": {"crypto": ["always"]},
