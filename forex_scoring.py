@@ -166,18 +166,8 @@ class DynamicForexWeights:
 # ─── Trend gate ──────────────────────────────────────────────────────────────
 
 
-def _check_trend_gate(d1_snap: dict, h4_snap: dict) -> tuple[bool, str]:
-    """
-    D1 and H4 EMA alignment check with ADX trend filter.
-    ADX filter — market must be trending, not ranging
-    ADX < 20 = choppy/ranging = EMA signals are noise in forex
-    LONG: D1 close > D1 ema200 AND H4 ema50 > H4 ema200
-    SHORT: D1 close < D1 ema200 AND H4 ema50 < H4 ema200
-    Mixed = no trade.
-    Also checks ema200Slope10 for trend health — flat ema200 reduces conviction.
-    """
-    # ADX filter — market must be trending, not ranging
-    # ADX < 20 = choppy/ranging = EMA signals are noise in forex
+def _trend_gate_detail(d1_snap: dict, h4_snap: dict) -> tuple[bool, str, dict]:
+    """Return trend-gate pass/fail plus reason codes for scan diagnostics."""
     adx = d1_snap.get("adx")
     if adx is None:
         adx = 0.0
@@ -194,34 +184,89 @@ def _check_trend_gate(d1_snap: dict, h4_snap: dict) -> tuple[bool, str]:
     except Exception:
         trend_gate_adx_min = 20.0
         trend_margin_min = 0.003
+    detail = {
+        "reason": "unknown",
+        "direction_hint": "LONG",
+        "adx": adx,
+        "adx_min": trend_gate_adx_min,
+        "margin": None,
+        "margin_min": trend_margin_min,
+        "d1_bull": None,
+        "h4_bull": None,
+        "d1_slope": 0.0,
+    }
     if adx < trend_gate_adx_min:
-        return False, "LONG"  # not trending — skip regardless of EMA alignment
+        detail["reason"] = "adx_below_min"
+        return False, "LONG", detail
 
     d1_close = d1_snap.get("close")
     d1_ema200 = d1_snap.get("ema200")
     h4_ema50 = h4_snap.get("ema50")
     h4_ema200 = h4_snap.get("ema200")
     d1_slope = d1_snap.get("ema200Slope10", 0) or 0
+    try:
+        d1_slope = float(d1_slope)
+    except (TypeError, ValueError):
+        d1_slope = 0.0
+    detail["d1_slope"] = d1_slope
 
     if None in (d1_close, d1_ema200, h4_ema50, h4_ema200):
-        return False, "LONG"
+        detail["reason"] = "missing_ema_inputs"
+        return False, "LONG", detail
 
     d1_bull = d1_close > d1_ema200
     h4_bull = h4_ema50 > h4_ema200
+    detail["d1_bull"] = d1_bull
+    detail["h4_bull"] = h4_bull
 
     if d1_bull and h4_bull:
+        detail["direction_hint"] = "LONG"
         margin = (d1_close - d1_ema200) / d1_ema200 if d1_ema200 != 0 else 0.0
+        detail["margin"] = margin
         if margin > trend_margin_min or d1_slope > 0:
-            return True, "LONG"
-        return False, "LONG"
+            detail["reason"] = "passed_long"
+            return True, "LONG", detail
+        detail["reason"] = "long_margin_or_slope_failed"
+        return False, "LONG", detail
 
     if not d1_bull and not h4_bull:
+        detail["direction_hint"] = "SHORT"
         margin = (d1_ema200 - d1_close) / d1_ema200 if d1_ema200 != 0 else 0.0
+        detail["margin"] = margin
         if margin > trend_margin_min or d1_slope < 0:
-            return True, "SHORT"
-        return False, "SHORT"
+            detail["reason"] = "passed_short"
+            return True, "SHORT", detail
+        detail["reason"] = "short_margin_or_slope_failed"
+        return False, "SHORT", detail
 
-    return False, "LONG"  # mixed
+    detail["reason"] = "mixed_ema_alignment"
+    return False, "LONG", detail
+
+
+def _check_trend_gate(d1_snap: dict, h4_snap: dict) -> tuple[bool, str]:
+    """
+    D1 and H4 EMA alignment check with ADX trend filter.
+    ADX filter — market must be trending, not ranging
+    ADX < 20 = choppy/ranging = EMA signals are noise in forex
+    LONG: D1 close > D1 ema200 AND H4 ema50 > H4 ema200
+    SHORT: D1 close < D1 ema200 AND H4 ema50 < H4 ema200
+    Mixed = no trade.
+    Also checks ema200Slope10 for trend health — flat ema200 reduces conviction.
+    """
+    trend_ok, trend_dir, _detail = _trend_gate_detail(d1_snap, h4_snap)
+    return trend_ok, trend_dir
+
+
+def _unique_reason_codes(values: list[str]) -> list[str]:
+    out = []
+    seen = set()
+    for value in values:
+        key = str(value or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
 
 
 # ─── Entry quality (RSI pullback + H1 EMA21 anchor) ─────────────────────────
@@ -557,7 +602,8 @@ def compute_forex_score(
 
     _hurst_trending = _hurst > _hurst_threshold
 
-    trend_ok, trend_dir = _check_trend_gate(d1_snap, h4_snap)
+    trend_ok_raw, trend_dir, trend_detail = _trend_gate_detail(d1_snap, h4_snap)
+    trend_ok = trend_ok_raw
     _hurst_veto_trend = False
     if _hurst_gate_enabled and not _hurst_trending:
         # Market is mean-reverting or random walk — skip trend-following signals.
@@ -565,6 +611,9 @@ def compute_forex_score(
         if trend_ok:
             _hurst_veto_trend = True
         trend_ok = False
+    trend_gate_reason = (
+        "hurst_veto_trend" if _hurst_veto_trend else str(trend_detail.get("reason") or "unknown")
+    )
 
     # Pre-compute COT boost for both direction cases to avoid double DB queries
     _cot_trend = _cot_boost(pair, trend_dir, bar_time)
@@ -720,8 +769,47 @@ def compute_forex_score(
     except Exception:
         pass
 
+    zero_score_reasons = []
+    if result.final_score <= 0:
+        if not session_ok:
+            zero_score_reasons.append("session_inactive")
+        if _hurst_veto_trend:
+            zero_score_reasons.append("hurst_veto_trend")
+        elif not trend_ok_raw:
+            _raw_reason = str(trend_detail.get("reason") or "").strip()
+            if _raw_reason and not _raw_reason.startswith("passed_"):
+                zero_score_reasons.append(f"trend_gate_{_raw_reason}")
+            else:
+                zero_score_reasons.append("trend_gate_blocked")
+        if trend_score <= 0:
+            zero_score_reasons.append("trend_path_inactive")
+        if bo_score <= 0:
+            zero_score_reasons.append("breakout_inactive")
+        if not zero_score_reasons:
+            zero_score_reasons.append("zero_base_score")
+    zero_score_reasons = _unique_reason_codes(zero_score_reasons)
+
     result.components = {
         "trend_gate": trend_ok,
+        "trend_gate_raw": trend_ok_raw,
+        "trend_gate_reason": trend_gate_reason,
+        "trend_gate_reason_raw": trend_detail.get("reason"),
+        "trend_gate_direction": trend_dir,
+        "trend_gate_adx": round(float(trend_detail.get("adx", 0.0) or 0.0), 4),
+        "trend_gate_adx_min": round(float(trend_detail.get("adx_min", 0.0) or 0.0), 4),
+        "trend_gate_margin": (
+            round(float(trend_detail["margin"]), 6)
+            if trend_detail.get("margin") is not None
+            else None
+        ),
+        "trend_gate_margin_min": round(
+            float(trend_detail.get("margin_min", 0.0) or 0.0), 6
+        ),
+        "trend_gate_d1_bull": trend_detail.get("d1_bull"),
+        "trend_gate_h4_bull": trend_detail.get("h4_bull"),
+        "trend_gate_d1_slope": round(
+            float(trend_detail.get("d1_slope", 0.0) or 0.0), 6
+        ),
         "session_active": session_ok,
         "utc_hour": utc_hour,
         "entry_quality": result.entry_quality,
@@ -743,6 +831,7 @@ def compute_forex_score(
         "liquidity_sweep": liquidity_bonus > 0,
         "volume_strength": round(volume_bonus, 3),
         "fvg_overlap": fvg_overlap,
+        "zero_score_reasons": zero_score_reasons,
     }
 
     return result

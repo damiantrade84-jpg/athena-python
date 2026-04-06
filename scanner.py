@@ -92,6 +92,26 @@ def _normalize_style(style: str | None) -> str:
     return s if s in ("auto", "swing", "intraday", "scalp") else "auto"
 
 
+def _humanize_forex_zero_reason(code: str) -> str:
+    labels = {
+        "hurst_veto_trend": "Hurst veto blocked the trend path",
+        "trend_path_inactive": "Trend path produced no score",
+        "breakout_inactive": "London breakout path inactive",
+        "session_inactive": "Forex session inactive",
+        "zero_base_score": "Forex base score stayed at zero",
+        "trend_gate_adx_below_min": "Trend gate blocked: ADX below minimum",
+        "trend_gate_mixed_ema_alignment": "Trend gate blocked: D1/H4 EMA alignment mixed",
+        "trend_gate_missing_ema_inputs": "Trend gate blocked: EMA inputs missing",
+        "trend_gate_long_margin_or_slope_failed": "Trend gate blocked: long margin/slope failed",
+        "trend_gate_short_margin_or_slope_failed": "Trend gate blocked: short margin/slope failed",
+        "trend_gate_blocked": "Trend gate blocked",
+    }
+    key = str(code or "").strip()
+    if key in labels:
+        return labels[key]
+    return key.replace("_", " ")
+
+
 def annotate_signal_for_scan(
     signal: dict,
     pair: dict,
@@ -156,6 +176,22 @@ def annotate_signal_for_scan(
                 "detail": "Pair not auto-enabled for live trading",
             }
         )
+
+    if pair.get("type") == "forex":
+        factor_scores = signal.get("factorScores") or {}
+        zero_reasons = factor_scores.get("zero_score_reasons") or []
+        if (
+            isinstance(zero_reasons, list)
+            and zero_reasons
+            and float(signal.get("confluenceScore", 0) or 0) <= 0
+        ):
+            for reason_code in zero_reasons:
+                diagnostics.append(
+                    {
+                        "code": f"forex_{reason_code}",
+                        "detail": _humanize_forex_zero_reason(str(reason_code)),
+                    }
+                )
 
     signal["scanDiagnostics"] = diagnostics
 

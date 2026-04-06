@@ -5573,6 +5573,8 @@ async function runScan() {
     } else if (watchlistSignals.length>0) {
       showToast('Scan complete - 0 trade signals | '+watchlistSignals.length+' watchlist setups');
     } else { showToast('Scan complete - '+allSignals.length+' results surfaced'); }
+    var forexSkipSummary = summarizeForexSkipDiagnostics(data.skipped || []);
+    if (forexSkipSummary) showToast(forexSkipSummary);
   } catch(err) {
     console.error('Scan Error:',err);
     showToast('Warning: '+err.message,true);
@@ -5649,6 +5651,37 @@ function renderStats(data) {
   if (timeEl) timeEl.textContent=data.scannedAt ? new Date(data.scannedAt).toLocaleString('en-ZA', {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}) : '—';
   if(data.skipped&&data.skipped.length)console.log('SKIPPED:',JSON.stringify(data.skipped));
   if(data.errors&&data.errors.length)console.log('ERRORS:',JSON.stringify(data.errors));
+}
+
+function summarizeForexSkipDiagnostics(skipped) {
+  var labelMap = {
+    forex_hurst_veto_trend: 'Hurst veto',
+    forex_trend_gate_adx_below_min: 'ADX below min',
+    forex_trend_gate_mixed_ema_alignment: 'Mixed EMA alignment',
+    forex_trend_path_inactive: 'Trend path inactive',
+    forex_breakout_inactive: 'Breakout inactive',
+    forex_session_inactive: 'Session inactive',
+    forex_zero_base_score: 'Base score zero'
+  };
+  var counts = {};
+  (skipped || []).forEach(function(row) {
+    ((row && row.diagnostics) || []).forEach(function(diag) {
+      var code = diag && diag.code;
+      if (!code || !/^forex_/.test(code)) return;
+      counts[code] = (counts[code] || 0) + 1;
+    });
+  });
+  var items = Object.keys(counts).sort(function(a, b) {
+    return counts[b] - counts[a];
+  });
+  if (!items.length) return '';
+  items = items.filter(function(code) {
+    return code !== 'forex_trend_path_inactive' && code !== 'forex_breakout_inactive' && code !== 'forex_zero_base_score';
+  });
+  if (!items.length) return '';
+  return 'Forex skips: ' + items.slice(0, 3).map(function(code) {
+    return (labelMap[code] || code.replace(/^forex_/, '').replace(/_/g, ' ')) + ' x' + counts[code];
+  }).join(' | ');
 }
 
 // Connection dot updater — call from existing connection check logic
