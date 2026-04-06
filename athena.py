@@ -8969,7 +8969,7 @@ def analyze_pair(
 
     # Determine if the primary timeframe (H1) is currently forming.
     h1 = preloaded_candles.get("H1")
-    if h1 is not None:
+    if h1:
         is_forming = False
     else:
         try:
@@ -8990,6 +8990,10 @@ def analyze_pair(
         h4 = fetch_candles(pair, "H4", _lim["H4"])
 
     if not d1 or not h4 or not h1:
+        log.warning(
+            f"[ANALYZE] {pair.get('display', '?')} no candles — "
+            f"D1={len(d1) if d1 else 0} H4={len(h4) if h4 else 0} H1={len(h1) if h1 else 0}"
+        )
         return None
 
     # F8: As requested, we no longer drop the last (forming) bar automatically.
@@ -8997,6 +9001,10 @@ def analyze_pair(
     # Indicators are now calculated on the full live series.
 
     if len(d1) < 220 or len(h4) < 50 or len(h1) < 50:
+        log.warning(
+            f"[ANALYZE] {pair.get('display', '?')} insufficient bars — "
+            f"D1={len(d1)}/220 H4={len(h4)}/50 H1={len(h1)}/50"
+        )
         return None
 
     d1i = calc_indicators_with_normalized(d1, pair.get("type", "stock"))

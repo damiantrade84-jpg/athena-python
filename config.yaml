@@ -68,7 +68,7 @@ BACKTEST_USE_BT_MIN_THRESHOLDS: false
 BT_MIN:
   crypto:    0.95
   commodity: 0.90
-  forex:     1.50
+  forex:     0.85      # was 1.50; scaled to match live 0.95 (BT/live ~89%)
   stock:     0.90
   index:     0.85
 
@@ -76,9 +76,9 @@ BT_MIN_GROUP:
   # Values proportionally scaled to match MIN_CONFLUENCE_GROUP restore (maintains BT/live ratio).
   # Dormant while BACKTEST_USE_BT_MIN_THRESHOLDS: false — future-proofed for re-enable.
   forex:
-    forex_majors: 1.50
-    forex_crosses: 1.55
-    forex_exotics: 1.65
+    forex_majors: 0.75     # was 1.50; scaled with live (0.85 × ~89%)
+    forex_crosses: 0.85     # was 1.55; scaled with live (0.95 × ~89%)
+    forex_exotics: 0.95     # was 1.65; scaled with live (1.05 × ~90%)
   crypto:
     crypto_btc: 0.94      # was 0.81 × 1.167 (maintains ~74% BT/live ratio)
     crypto_eth: 0.98      # was 0.84 × 1.167
@@ -117,7 +117,7 @@ NAKED_MAX_DAILY: 3
 # Per-class live scan minimum confluence — execute / tradeSignals tier threshold.
 # Forex: forex_scoring 0–2.0 (true max ~1.97). Non-forex: factor engine (0–3.0 after _SCORE_SCALE).
 MIN_CONFLUENCE_CLASS:
-  forex:     1.60
+  forex:     0.95      # forex engine max=2.0; was 1.60 (80%!) — unreachable without rare SMC bonuses
   crypto:    1.40      # was 1.20, restore to 1.40
   commodity: 1.40      # was 1.10, restore to 1.40
   stock:     1.55      # was 1.10, restore to 1.55
@@ -125,7 +125,7 @@ MIN_CONFLUENCE_CLASS:
 
 # Forex scan threshold — forex_scoring engine outputs 0–2.0 (not 0–3.0 factor scale)
 # MIN_CONFLUENCE_CLASS.forex must match this — keep in sync
-MIN_FOREX_CONFLUENCE: 1.60
+MIN_FOREX_CONFLUENCE: 0.95
 
 # Optional subgroup thresholds (used when score_group is available on a pair)
 # NOTE: get_score_threshold() uses GROUP value directly — no class floor check.
@@ -134,9 +134,9 @@ MIN_FOREX_CONFLUENCE: 1.60
 #   stock ×1.409 (class 1.10→1.55), crypto ×1.167 (class 1.20→1.40), commodity precious_trackers ×1.273
 MIN_CONFLUENCE_GROUP:
   forex:
-    forex_majors: 1.50
-    forex_crosses: 1.55
-    forex_exotics: 1.65
+    forex_majors: 0.85     # was 1.50 — unreachable; majors most liquid, lower bar
+    forex_crosses: 0.95     # was 1.55
+    forex_exotics: 1.05     # was 1.65; exotics need higher conviction
   crypto:
     crypto_btc: 1.28      # was 1.10 (old lowered-class era) × 1.167
     crypto_eth: 1.34      # was 1.15 × 1.167
