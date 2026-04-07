@@ -3914,7 +3914,7 @@ def backtest_pair_consensus(
         sl = consensus.get("sl")
         tp = consensus.get("tp")
         if sl is None or tp is None:
-            _lvl = calc_levels(entry, atr, direction, _ptype, style="intraday")
+            _lvl = calc_levels(entry, atr, direction, _ptype, style=resolved_style)
             sl = sl or _lvl["sl"]
             tp = tp or _lvl["tp1"]
 
@@ -3927,7 +3927,8 @@ def backtest_pair_consensus(
             _sl_dist = abs(entry - sl)
             _tp_dist = abs(tp - entry)
             target_rr = (_tp_dist / _sl_dist) if _sl_dist > 0 else 0.0
-        if target_rr < 1.0:
+        # PHASE 2A: Use style-aware RR gate instead of hardcoded 1.0
+        if target_rr < style_profile.get("min_rr", 1.0):
             i += 1
             continue
 
@@ -4102,7 +4103,6 @@ def backtest_pair_consensus(
     )
 
     if "error" not in result:
-        result["btStyle"] = "intraday"
         result["engine"] = "ENGINE_C"
         result["engineCFunnel"] = _c_funnel
         try:
@@ -4124,7 +4124,7 @@ def backtest_pair_consensus(
                         round(_wf.get("oos_sqn"), 4) if _wf.get("oos_sqn") is not None else None,
                         result.get("maxDrawdownPct"), _min_conviction,
                         f"{_atr_tf}_ATR",
-                        f"engine=c;style=intraday;conviction_gate={_min_conviction}",
+                        f"engine=c;style={resolved_style};conviction_gate={_min_conviction}",
                     ),
                 )
                 _con.commit()
