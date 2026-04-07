@@ -232,7 +232,7 @@ FOREX_H4_RESAMPLE_OFFSET_HOURS: 1.0  # Align H4 grid to 01/05/09/13/17/21 UTC (m
 # Forex scoring engine (merged into CONFIG["FOREX_ENGINE"] — see config.py for full defaults)
 FOREX_ENGINE:
   hurst_gate_enabled: true      # Block trend signals when Hurst <= threshold
-  hurst_gate_threshold: 0.52   # Market must be trending (H > threshold) for trend-following entries
+  hurst_gate_threshold: 0.40   # Only block strong mean-reversion (H < 0.40); allows neutral/random-walk markets
   h1_ema_entry_filter: true   # H1 ema21/50 alignment modifier on RSI entry quality; false = RSI only
   trend_gate_adx_min: 25   # Match ADX_TREND_MIN_CLASS.forex — must stay in sync
   trend_support_weights:
