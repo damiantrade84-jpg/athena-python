@@ -260,7 +260,17 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
         }
 
     try:
-        candidate_pairs = [p for p in r.ALL_PAIRS if p["display"] not in r.disabled_pairs]
+        _disabled_jse_symbols = {
+            p.get("symbol")
+            for p in getattr(r, "JSE_PAIRS", [])
+            if not p.get("enabled", True)
+        }
+        candidate_pairs = [
+            p
+            for p in r.ALL_PAIRS
+            if p["display"] not in r.disabled_pairs
+            and p.get("symbol") not in _disabled_jse_symbols
+        ]
 
         if _ac:
             candidate_pairs = [p for p in candidate_pairs if p.get("type") == _ac]
