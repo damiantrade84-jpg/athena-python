@@ -318,6 +318,34 @@ CONFIG: dict = {
         "index": 1.35,
     },
     "MIN_FOREX_CONFLUENCE": 0.95,
+    # PHASE 3: Engine C Backtest Exit Controls - explicit config for MAX_HOLD and BE parameters
+    "ENGINE_C_BT_EXIT": {
+        "forex": {
+            "intraday": {"max_hold_bars": 30, "be_arm_rr": 1.5, "be_min_target_rr": 2.0},
+            "swing": {"max_hold_bars": 60, "be_arm_rr": 1.5, "be_min_target_rr": 2.0},
+            "scalp": {"max_hold_bars": 12, "be_arm_rr": 1.5, "be_min_target_rr": 2.0},
+        },
+        "crypto": {
+            "intraday": {"max_hold_bars": 40, "be_arm_rr": 1.5, "be_min_target_rr": 2.0},
+            "swing": {"max_hold_bars": 80, "be_arm_rr": 1.5, "be_min_target_rr": 2.0},
+            "scalp": {"max_hold_bars": 12, "be_arm_rr": 1.5, "be_min_target_rr": 2.0},
+        },
+        "stock": {
+            "intraday": {"max_hold_bars": 24, "be_arm_rr": 1.5, "be_min_target_rr": 1.5},
+            "swing": {"max_hold_bars": 50, "be_arm_rr": 1.5, "be_min_target_rr": 1.5},
+            "scalp": {"max_hold_bars": 8, "be_arm_rr": 1.5, "be_min_target_rr": 1.5},
+        },
+        "commodity": {
+            "intraday": {"max_hold_bars": 24, "be_arm_rr": 1.5, "be_min_target_rr": 1.8},
+            "swing": {"max_hold_bars": 50, "be_arm_rr": 1.5, "be_min_target_rr": 1.8},
+            "scalp": {"max_hold_bars": 10, "be_arm_rr": 1.5, "be_min_target_rr": 1.8},
+        },
+        "index": {
+            "intraday": {"max_hold_bars": 24, "be_arm_rr": 1.5, "be_min_target_rr": 1.8},
+            "swing": {"max_hold_bars": 50, "be_arm_rr": 1.5, "be_min_target_rr": 1.8},
+            "scalp": {"max_hold_bars": 10, "be_arm_rr": 1.5, "be_min_target_rr": 1.8},
+        },
+    },
     # Full-scan cross-sectional quantile (see scanner.compute_scan_quantile_floors).
     "SCAN_QUANTILE_ENABLED": False,
     "SCAN_QUANTILE_MIN_SAMPLES": 5,

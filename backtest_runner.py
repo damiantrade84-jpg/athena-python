@@ -3245,21 +3245,29 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         outcome = "TIMEOUT"
         r_multiple = 0.0
         exit_bar_offset = 0
-        # Per-asset-class backtest parameters
-        _bt_params = {
-            "forex":     {"hold": {"scalp": 12, "intraday": 30, "swing": 60}, "be_min_rr": 2.0},
-            "crypto":    {"hold": {"scalp": 12, "intraday": 40, "swing": 80}, "be_min_rr": 2.0},
-            "stock":     {"hold": {"scalp": 8,  "intraday": 24, "swing": 50}, "be_min_rr": 1.5},
-            "commodity": {"hold": {"scalp": 10, "intraday": 24, "swing": 50}, "be_min_rr": 1.8},
-            "index":     {"hold": {"scalp": 10, "intraday": 24, "swing": 50}, "be_min_rr": 1.8},
-        }
-        _params = _bt_params.get(_ptype, _bt_params["stock"])
-        max_hold_bars = _params["hold"].get(resolved_style, 24)
-        _be_min_rr = _params["be_min_rr"]
+        # PHASE 3: Use config for Engine C BT exit controls instead of hardcoded values
+        _bt_exit_config = CONFIG.get("ENGINE_C_BT_EXIT", {})
+        _asset_config = _bt_exit_config.get(_ptype, _bt_exit_config.get("stock", {}))
+        _style_config = _asset_config.get(resolved_style, _asset_config.get("intraday", {}))
+        max_hold_bars = _style_config.get("max_hold_bars", 24)
+        _be_arm_rr = _style_config.get("be_arm_rr", 1.5)
+        _be_min_rr = _style_config.get("be_min_target_rr", 2.0)
 
         risk = abs(entry - sl)
         _active_sl = sl
         _be_triggered = False
+
+        # PHASE 1E: Track additive diagnostics
+        max_favorable_excursion_r = 0.0
+        max_adverse_excursion_r = 0.0
+        bars_to_mfe = None
+        bars_to_mae = None
+        highest_r_seen = 0.0
+        lowest_r_seen = 0.0
+        price_never_reached_tp = True
+        price_never_reached_sl = True
+        be_armed = False
+        be_trigger_r = None
 
         # Forward monitoring continues on H4 for performance, aligned to the entry bar's H4 index
         future_window = candles_h4[_h4_fill_index : min(_h4_fill_index + max_hold_bars + 1, len(candles_h4))]
@@ -3287,39 +3295,83 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             # For now, H4 мониторинг on H1 entry is a reasonable compromise for performance.
             f_high = float(future["high"])
             f_low = float(future["low"])
+            f_close = float(future["close"])
+            
+            # PHASE 1E: Track MFE/MAE and TP/SL reach status
+            if risk > 0:
+                if direction == "LONG":
+                    bar_r_high = (f_high - entry) / risk
+                    bar_r_low = (f_low - entry) / risk
+                    bar_r_close = (f_close - entry) / risk
+                else:
+                    bar_r_high = (entry - f_low) / risk
+                    bar_r_low = (entry - f_high) / risk
+                    bar_r_close = (entry - f_close) / risk
+                
+                if bar_r_high > max_favorable_excursion_r:
+                    max_favorable_excursion_r = bar_r_high
+                    if bars_to_mfe is None:
+                        bars_to_mfe = fi
+                if bar_r_low < max_adverse_excursion_r:
+                    max_adverse_excursion_r = bar_r_low
+                    if bars_to_mae is None:
+                        bars_to_mae = fi
+                
+                highest_r_seen = max(highest_r_seen, bar_r_high)
+                lowest_r_seen = min(lowest_r_seen, bar_r_low)
+                
+                # Track if TP/SL were ever reached
+                if direction == "LONG":
+                    if f_high >= tp:
+                        price_never_reached_tp = False
+                    if f_low <= sl:
+                        price_never_reached_sl = False
+                else:
+                    if f_low <= tp:
+                        price_never_reached_tp = False
+                    if f_high >= sl:
+                        price_never_reached_sl = False
 
             if direction == "LONG":
                 # Check TP first — if price reached TP on this bar, it wins
                 if f_high >= tp:
                     outcome = "TP1"
                     r_multiple = round(target_rr, 2)
+                    price_never_reached_tp = False
                     break
                 # Then check SL (before any BE modification)
                 if f_low <= _active_sl:
                     outcome = "BE" if _be_triggered else "SL"
                     r_multiple = 0.0 if outcome == "BE" else -1.0
+                    price_never_reached_sl = False
                     break
-                # BE trigger — only activate if RR >= be_min_rr (enough room to TP)
+                # BE trigger — only activate if RR >= be_min_rr
                 if not _be_triggered and risk > 0 and target_rr >= _be_min_rr:
-                    if f_high >= entry + (risk * 1.5):
+                    if f_high >= entry + (risk * _be_arm_rr):
                         _active_sl = entry
                         _be_triggered = True
+                        be_armed = True
+                        be_trigger_r = _be_arm_rr
             else:
                 # Check TP first
                 if f_low <= tp:
                     outcome = "TP1"
                     r_multiple = round(target_rr, 2)
+                    price_never_reached_tp = False
                     break
                 # Then check SL
                 if f_high >= _active_sl:
                     outcome = "BE" if _be_triggered else "SL"
                     r_multiple = 0.0 if outcome == "BE" else -1.0
+                    price_never_reached_sl = False
                     break
                 # BE trigger — only if RR >= be_min_rr
                 if not _be_triggered and risk > 0 and target_rr >= _be_min_rr:
-                    if f_low <= entry - (risk * 1.5):
+                    if f_low <= entry - (risk * _be_arm_rr):
                         _active_sl = entry
                         _be_triggered = True
+                        be_armed = True
+                        be_trigger_r = _be_arm_rr
 
         if outcome == "TIMEOUT" and future_window:
             last_close = float(future_window[-1]["close"])
@@ -3626,8 +3678,13 @@ def backtest_pair_consensus(
     }
 
     COOLDOWN = 2
-    MAX_HOLD = {"forex": 30, "crypto": 40, "stock": 24, "commodity": 24, "index": 24}.get(_ptype, 24)
-    _be_min_rr = {"forex": 2.0, "crypto": 2.0, "stock": 1.5, "commodity": 1.8, "index": 1.8}.get(_ptype, 2.0)
+    # PHASE 3: Use config for Engine C BT exit controls instead of hardcoded values
+    _bt_exit_config = CONFIG.get("ENGINE_C_BT_EXIT", {})
+    _asset_config = _bt_exit_config.get(_ptype, _bt_exit_config.get("stock", {}))
+    _style_config = _asset_config.get(resolved_style, _asset_config.get("intraday", {}))
+    MAX_HOLD = _style_config.get("max_hold_bars", 24)
+    _be_min_rr = _style_config.get("be_min_target_rr", 2.0)
+    _be_arm_rr = _style_config.get("be_arm_rr", 1.5)
 
     trades = []
     same_bar_both_hit = 0
@@ -3907,18 +3964,36 @@ def backtest_pair_consensus(
                 r_multiple = 0.0 if outcome == "BE" else -1.0
                 break
             if not _be_triggered and risk > 0 and target_rr >= _be_min_rr:
-                if direction == "LONG" and float(future["high"]) >= entry + risk * 1.5:
+                if direction == "LONG" and float(future["high"]) >= entry + risk * _be_arm_rr:
                     _active_sl = entry
                     _be_triggered = True
-                elif direction == "SHORT" and float(future["low"]) <= entry - risk * 1.5:
+                elif direction == "SHORT" and float(future["low"]) <= entry - risk * _be_arm_rr:
                     _active_sl = entry
                     _be_triggered = True
 
+        # Timeout sub-classification for analytics (Phase 1A)
+        timeout_class = None
+        forced_exit_pnl_sign = None
+        forced_exit_result_r = None
+        
         if outcome == "TIMEOUT" and future_window:
             last_close = float(future_window[-1]["close"])
             if risk > 0:
                 open_r = ((last_close - entry) / risk) if direction == "LONG" else ((entry - last_close) / risk)
                 r_multiple = round(max(-1.0, min(target_rr, open_r)), 2)
+                
+                # Classify timeout outcome
+                if r_multiple > 0.01:  # Positive timeout
+                    timeout_class = "TIMEOUT_PROFIT"
+                    forced_exit_pnl_sign = "PROFIT"
+                elif r_multiple < -0.01:  # Negative timeout
+                    timeout_class = "TIMEOUT_LOSS"
+                    forced_exit_pnl_sign = "LOSS"
+                else:  # Near-zero timeout
+                    timeout_class = "TIMEOUT_FLAT"
+                    forced_exit_pnl_sign = "FLAT"
+                
+                forced_exit_result_r = r_multiple
 
         _fee_pct = CONFIG.get("FEE_PCT", {}).get(_ptype, 0.0004)
         _sl_dist_fee = abs(entry - sl)
@@ -3926,6 +4001,8 @@ def backtest_pair_consensus(
             r_multiple = round(r_multiple - (_fee_pct * entry / _sl_dist_fee), 4)
 
         bar_date = entry_bar.get("time", "")[:10] if entry_bar.get("time") else ""
+        bars_held = exit_bar_offset + 1
+        
         trades.append({
             "date": bar_date, "pair": pair["display"], "direction": direction,
             "score": round(conviction, 4), "entry": round(float(entry), 6),
@@ -3936,6 +4013,31 @@ def backtest_pair_consensus(
             "r_multiple": r_multiple, "verdict": consensus.get("verdict", ""),
             "tier": consensus.get("tier", ""), "conviction": round(conviction, 4),
             "rr_target": round(target_rr, 2),
+            # PHASE 1A: Add timeout sub-classification fields
+            "timeout_class": timeout_class,
+            "forced_exit_pnl_sign": forced_exit_pnl_sign,
+            "forced_exit_result_r": forced_exit_result_r,
+            # PHASE 1E: Add additive diagnostics
+            "resolved_style": resolved_style,
+            "zone_tf_used": _zone_tf,
+            "entry_tf_used": _entry_tf,
+            "atr_tf_used": _atr_tf,
+            "selected_tp_source": "consensus",  # TODO: Track actual TP source if available
+            "selected_target_rr": round(target_rr, 2),
+            "selected_target_price": round(float(tp), 6),
+            "selected_sl_price": round(float(sl), 6),
+            "bars_held": bars_held,
+            "max_favorable_excursion_r": round(max_favorable_excursion_r, 2),
+            "max_adverse_excursion_r": round(max_adverse_excursion_r, 2),
+            "be_armed": be_armed,
+            "be_trigger_r": be_trigger_r,
+            "max_hold_bars": max_hold_bars,
+            "price_never_reached_tp": price_never_reached_tp,
+            "price_never_reached_sl": price_never_reached_sl,
+            "highest_r_seen": round(highest_r_seen, 2),
+            "lowest_r_seen": round(lowest_r_seen, 2),
+            "bars_to_mfe": bars_to_mfe,
+            "bars_to_mae": bars_to_mae,
         })
 
         last_exit_bar = i + 1 + exit_bar_offset
@@ -3949,16 +4051,28 @@ def backtest_pair_consensus(
         result, trades, canonical_vm=_canonical_vm, temporal_vm=_temporal_vm,
         purge_gap=purge_gap, folds=folds, mode_warning=_vm_mode_warning,
     )
+    
+    # PHASE 2: Override btStyle with actual resolved style for metadata parity
+    if "error" not in result:
+        result["btStyle"] = resolved_style
+        result["btStyleRequested"] = "intraday"  # Engine C always uses intraday style
 
     _tp_count = sum(1 for t in trades if t.get("outcome") == "TP1")
     _sl_count = sum(1 for t in trades if t.get("outcome") == "SL")
     _be_count = sum(1 for t in trades if t.get("outcome") == "BE")
     _to_count = sum(1 for t in trades if t.get("outcome") == "TIMEOUT")
+    
+    # PHASE 1B: Timeout sub-counts for detailed reporting
+    _to_profit = sum(1 for t in trades if t.get("timeout_class") == "TIMEOUT_PROFIT")
+    _to_loss = sum(1 for t in trades if t.get("timeout_class") == "TIMEOUT_LOSS")
+    _to_flat = sum(1 for t in trades if t.get("timeout_class") == "TIMEOUT_FLAT")
+    
     log.warning(
         f"[ENGINE C BT] {pair['display']} done: {result.get('totalTrades', 0)} trades "
-        f"(TP1={_tp_count} SL={_sl_count} BE={_be_count} TIMEOUT={_to_count}), "
+        f"(TP1={_tp_count} SL={_sl_count} BE={_be_count} TIMEOUT={_to_count} "
+        f"PROFIT={_to_profit} LOSS={_to_loss} FLAT={_to_flat}), "
         f"WR {result.get('winRate', 0):.1f}%, PF {result.get('profitFactor', 0):.2f}, "
-        f"SQN {result.get('sqn', 0):.2f}"
+        f"SQN {result.get('sqn', 0):.2f}, style={resolved_style}"
     )
     log.warning(
         f"[ENGINE C BT FUNNEL] {pair['display']} "

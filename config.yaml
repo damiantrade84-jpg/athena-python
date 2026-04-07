@@ -115,18 +115,89 @@ BT_PERCENTILE_FILTER: false
 NAKED_MAX_DAILY: 3
 
 
+# ── Engine C Backtest Exit Controls ─────────────────────────────────────────────
+# PHASE 3: Explicit config for Engine C BT MAX_HOLD and BE parameters (was hardcoded)
+# Defaults match current hardcoded behavior in backtest_runner.py
+ENGINE_C_BT_EXIT:
+  forex:
+    intraday:
+      max_hold_bars: 30      # H4 bars for intraday style
+      be_arm_rr: 1.5         # BE triggers at 1.5R
+      be_min_target_rr: 2.0  # BE only arms if target RR >= this
+    swing:
+      max_hold_bars: 60      # H4 bars for swing style
+      be_arm_rr: 1.5
+      be_min_target_rr: 2.0
+    scalp:
+      max_hold_bars: 12      # H4 bars for scalp style
+      be_arm_rr: 1.5
+      be_min_target_rr: 2.0
+  crypto:
+    intraday:
+      max_hold_bars: 40
+      be_arm_rr: 1.5
+      be_min_target_rr: 2.0
+    swing:
+      max_hold_bars: 80
+      be_arm_rr: 1.5
+      be_min_target_rr: 2.0
+    scalp:
+      max_hold_bars: 12
+      be_arm_rr: 1.5
+      be_min_target_rr: 2.0
+  stock:
+    intraday:
+      max_hold_bars: 24
+      be_arm_rr: 1.5
+      be_min_target_rr: 1.5
+    swing:
+      max_hold_bars: 50
+      be_arm_rr: 1.5
+      be_min_target_rr: 1.5
+    scalp:
+      max_hold_bars: 8
+      be_arm_rr: 1.5
+      be_min_target_rr: 1.5
+  commodity:
+    intraday:
+      max_hold_bars: 24
+      be_arm_rr: 1.5
+      be_min_target_rr: 1.8
+    swing:
+      max_hold_bars: 50
+      be_arm_rr: 1.5
+      be_min_target_rr: 1.8
+    scalp:
+      max_hold_bars: 10
+      be_arm_rr: 1.5
+      be_min_target_rr: 1.8
+  index:
+    intraday:
+      max_hold_bars: 24
+      be_arm_rr: 1.5
+      be_min_target_rr: 1.8
+    swing:
+      max_hold_bars: 50
+      be_arm_rr: 1.5
+      be_min_target_rr: 1.8
+    scalp:
+      max_hold_bars: 10
+      be_arm_rr: 1.5
+      be_min_target_rr: 1.8
+
+
 # Per-class live scan minimum confluence — execute / tradeSignals tier threshold.
 # Forex: forex_scoring 0–2.0 (true max ~1.97). Non-forex: factor engine (true bounded 0–3.0).
 MIN_CONFLUENCE_CLASS:
-  forex:     0.95      # forex engine max=2.0; was 1.60 (80%!) — unreachable without rare SMC bonuses
-  crypto:    1.40      # was 1.20, restore to 1.40
-  commodity: 1.40      # was 1.10, restore to 1.40
+  forex:     1.0      # forex engine max=2.0; was 1.60 (80%!) — unreachable without rare SMC bonuses
+  crypto:    1.4      # was 1.20, restore to 1.40
+  commodity: 1.4      # was 1.10, restore to 1.40
   stock:     1.55      # was 1.10, restore to 1.55
   index:     1.35      # was 1.05, restore to 1.35
 
 # Forex scan threshold — forex_scoring engine outputs 0–2.0 (not 0–3.0 factor scale)
 # MIN_CONFLUENCE_CLASS.forex must match this — keep in sync
-MIN_FOREX_CONFLUENCE: 0.95
+MIN_FOREX_CONFLUENCE: 1.0
 
 # Optional subgroup thresholds (used when score_group is available on a pair)
 # NOTE: get_score_threshold() uses GROUP value directly — no class floor check.
