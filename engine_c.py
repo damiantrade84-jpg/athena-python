@@ -598,8 +598,11 @@ def compute_consensus(
             elif conviction >= 0.40:
                 decision_state = "watchlist"
         
-        if decision_state in ("blocked", "watchlist"):
+        if decision_state == "blocked":
             tier = "SKIP"
+            sizing = 0.0
+        elif decision_state == "watchlist":
+            tier = "WATCHLIST"
             sizing = 0.0
             
         result = _build_result(
@@ -654,13 +657,16 @@ def compute_consensus(
             elif conviction >= 0.40:
                 decision_state = "watchlist"
                 
-        if decision_state in ("blocked", "watchlist"):
+        if decision_state == "blocked":
             tier = "SKIP"
+            sizing = 0.0
+        elif decision_state == "watchlist":
+            tier = "WATCHLIST"
             sizing = 0.0
             
         result = _build_result(
             trade=decision_state in ("execute", "reduced_risk"),
-            verdict="B_ONLY_SCORED" if tier != "SKIP" else "B_ONLY",
+            verdict="B_ONLY_SCORED" if tier not in ("SKIP", "WATCHLIST") else "B_ONLY",
             direction=direction,
             conviction=conviction,
             tier=tier,
@@ -727,8 +733,11 @@ def compute_consensus(
                 elif conviction >= 0.40:
                     decision_state = "watchlist"
                     
-            if decision_state in ("blocked", "watchlist"):
+            if decision_state == "blocked":
                 tier = "SKIP"
+                sizing = 0.0
+            elif decision_state == "watchlist":
+                tier = "WATCHLIST"
                 sizing = 0.0
 
             result = _build_result(
@@ -872,8 +881,11 @@ def compute_consensus(
         elif conviction >= 0.50:
             decision_state = "watchlist"
 
-    if decision_state in ("blocked", "watchlist"):
+    if decision_state == "blocked":
         tier = "SKIP"
+        sizing = 0.0
+    elif decision_state == "watchlist":
+        tier = "WATCHLIST"
         sizing = 0.0
 
     result = _build_result(
@@ -938,6 +950,12 @@ def _build_result(
     **kwargs,
 ) -> dict:
     """Build standardised consensus result dict."""
+    # Derive signalTier and watchlistReason for UI compatibility
+    signal_tier = tier.lower() if tier else "skip"
+    watchlist_reason = ""
+    if decision_state == "watchlist":
+        signal_tier = "watchlist"
+        watchlist_reason = f"conviction {round(conviction, 2)} below execute threshold"
     return {
         "trade": trade,
         "verdict": verdict,
@@ -952,6 +970,9 @@ def _build_result(
         "rr": round(rr, 2),
         "conviction": round(conviction, 4),
         "tier": tier,
+        "signalTier": signal_tier,
+        "watchlistReason": watchlist_reason,
+        "decision_state": decision_state,
         "sizing_override": round(sizing, 4),
         "engine_weights": weights or {},
         "engine_base_weights": kwargs.get("meta_base_weights") or {},

@@ -474,9 +474,11 @@ def api_engine_c_scan():
 
             # Fetch candles ONCE — share between Engine A (full) and Engine B (last bar dropped).
             # Eliminates double-fetching and ensures both engines score identical data.
+            # Engine A always needs real D1/H4/H1; Engine B uses style-resolved TFs.
+            _all_tfs_needed = {"D1", "H4", "H1", _zone_tf, _entry_tf, _atr_tf}
             _tf_map_full: dict[str, list] = {}
             _tf_map: dict[str, list] = {}
-            for tf in {_zone_tf, _entry_tf, _atr_tf, "D1"}:
+            for tf in _all_tfs_needed:
                 limit = _lim.get(tf, _lim.get("H4", 0))
                 raw = _r.fetch_candles(pair, tf, limit)
                 _tf_map_full[tf] = raw or []
@@ -489,11 +491,11 @@ def api_engine_c_scan():
             entry_candles = _tf_map.get(_entry_tf, [])
             atr_candles = _tf_map.get(_atr_tf, zone_candles)
 
-            # Engine A: pass full (undropped) candles so analyze_pair() doesn't re-fetch
+            # Engine A: pass full (undropped) candles — always real D1/H4/H1, not style TFs
             _preloaded_for_a = {
-                "D1": _tf_map_full.get("D1"),
-                "H4": _tf_map_full.get(_zone_tf),
-                "H1": _tf_map_full.get(_entry_tf),
+                "D1": _tf_map_full.get("D1", []),
+                "H4": _tf_map_full.get("H4", []),
+                "H1": _tf_map_full.get("H1", []),
             }
             sig_a = _r.analyze_pair(pair, btc_bias, style=engine_a_style,
                                     preloaded_candles=_preloaded_for_a)
@@ -640,7 +642,11 @@ def api_engine_c_scan():
                 a_norm = float(sig_a.get("scoreNorm"))
             except (TypeError, ValueError):
                 a_norm = min(1.0, (a_score / a_max_score)) if a_max_score > 0 else 0.0
-            a_floor = 0.25 if a_max_score <= 2.01 else 0.30
+            # Rescale forex norms to match engine_c.normalise_engine_a() logic
+            if a_max_score <= 2.01 and a_max_score > 0:
+                a_norm = min(1.0, a_norm * (3.0 / a_max_score))
+            # Uniform floor after rescale (matches engine_c._a_has_floor)
+            a_floor = 0.30
             a_has_signal = a_norm > a_floor and a_direction in ("LONG", "SHORT")
             consensus["engine_a_raw"] = {
                 "direction": a_direction if a_has_signal else None,
