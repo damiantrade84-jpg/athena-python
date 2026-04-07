@@ -589,6 +589,7 @@ def compute_forex_score(
 
     # Hurst regime gate — block trend-following entries in mean-reverting markets.
     # Only the London breakout signal (regime-neutral) bypasses this gate.
+    # F2 FIX: Now configurable per score_group to allow different behavior for majors vs exotics
     _hurst_gate_enabled = True
     _hurst_threshold = 0.52
     try:
@@ -597,6 +598,16 @@ def compute_forex_score(
         _fe = CONFIG.get("FOREX_ENGINE", {}) or {}
         _hurst_gate_enabled = bool(_fe.get("hurst_gate_enabled", True))
         _hurst_threshold = float(_fe.get("hurst_gate_threshold", 0.52))
+        
+        # F2 FIX: Per-score_group Hurst gate overrides
+        _sg = score_group or pair.get("score_group")
+        if _sg:
+            _sg_hurst_cfg = ((_fe.get("hurst_gate_by_group", {}) or {}).get(_sg, {}))
+            if isinstance(_sg_hurst_cfg, dict):
+                if "enabled" in _sg_hurst_cfg:
+                    _hurst_gate_enabled = bool(_sg_hurst_cfg.get("enabled", _hurst_gate_enabled))
+                if "threshold" in _sg_hurst_cfg:
+                    _hurst_threshold = float(_sg_hurst_cfg.get("threshold", _hurst_threshold))
     except Exception:
         pass
 
@@ -750,14 +761,31 @@ def compute_forex_score(
         fvg_bonus, liquidity_bonus, volume_bonus, fvg_overlap = 0.0, 0.0, 0.0, False
 
     # ── Final score with multiplicative bonuses (avoids 1.0 saturation) ─────
-    if trend_score >= bo_final:
+    # F1 FIX: When trend_score == bo_final, use momentum confirmation as tie-breaker
+    # instead of always favoring trend. This allows valid breakout reversals to win.
+    if trend_score > bo_final:
         base_score = trend_score
         result.direction = trend_dir
         result.signal_type = "TREND_PULLBACK" if trend_score > 0 else "NONE"
-    else:
+    elif bo_final > trend_score:
         base_score = bo_final
         result.direction = bo_dir
         result.signal_type = "LONDON_BREAKOUT"
+    else:
+        # Tie-breaker: use momentum_score to decide (positive = trend, negative = breakout)
+        # If momentum is neutral, prefer breakout as it's more time-sensitive
+        if momentum_score > 0 and trend_score > 0:
+            base_score = trend_score
+            result.direction = trend_dir
+            result.signal_type = "TREND_PULLBACK"
+        elif bo_final > 0:
+            base_score = bo_final
+            result.direction = bo_dir
+            result.signal_type = "LONDON_BREAKOUT"
+        else:
+            base_score = trend_score
+            result.direction = trend_dir
+            result.signal_type = "TREND_PULLBACK" if trend_score > 0 else "NONE"
     # Removed 1.0 cap — true max is ~1.97 with all SMC bonuses. Scale is now 0-2.0.
     final_score = round(base_score * (1.0 + fvg_bonus) * (1.0 + liquidity_bonus) * (1.0 + volume_bonus), 4)
 

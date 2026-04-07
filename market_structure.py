@@ -508,8 +508,11 @@ class NakedEngine:
         """
         Detect liquidity sweep patterns in the last 5 candles.
         Uses swing highs/lows (from find_peaks) as reference levels where
-        stop losses cluster per SMC methodology. Falls back to closes[-6]
-        only when swing data is unavailable.
+        stop losses cluster per SMC methodology.
+        
+        B4 FIX: Improved fallback logic - instead of using closes[-6] which can
+        produce false positives in choppy markets, we now compute local min/max
+        of the lookback window as a more robust reference level.
         """
         _empty = {
             "bull_sweep": False,
@@ -521,10 +524,21 @@ class NakedEngine:
             return _empty
 
         try:
-            # Reference levels: use swing highs/lows (structural levels where
-            # retail stops cluster) when available, else fall back to closes[-6]
-            ref_low = swing_low if swing_low is not None else float(closes[-6])
-            ref_high = swing_high if swing_high is not None else float(closes[-6])
+            # B4 FIX: Improved fallback - use local extremes from lookback window
+            # instead of arbitrary closes[-6] which can be misleading in choppy markets
+            if swing_low is not None:
+                ref_low = swing_low
+            else:
+                # Use the minimum low from bars 6-15 as reference (avoids recent noise)
+                lookback_lows = lows[-15:-5] if len(lows) >= 15 else lows[:-5]
+                ref_low = float(np.min(lookback_lows)) if len(lookback_lows) > 0 else float(lows[-6])
+            
+            if swing_high is not None:
+                ref_high = swing_high
+            else:
+                # Use the maximum high from bars 6-15 as reference
+                lookback_highs = highs[-15:-5] if len(highs) >= 15 else highs[:-5]
+                ref_high = float(np.max(lookback_highs)) if len(lookback_highs) > 0 else float(highs[-6])
 
             last_5_highs = highs[-5:]
             last_5_lows = lows[-5:]

@@ -9413,6 +9413,9 @@ def analyze_pair(
                 h4_snap=(h4i or {}).get("snap") or {},
             )
 
+            # 5.3 FIX: Engine B issues now add warnings instead of full block (return None).
+            # This allows signals to be downgraded to watchlist instead of being filtered out.
+            _engine_b_block_reasons = []
             if structure_data and structure_data.get("structural_verdict") == "CLEAR":
                 _min_room = float(atr) * float(_overlay_profile.get("min_room_atr", 1.0))
                 if (
@@ -9426,7 +9429,7 @@ def analyze_pair(
                         float(_overlay_profile.get("min_room_atr", 1.0)),
                         structure_data.get("distance_to_res"),
                     )
-                    return None
+                    _engine_b_block_reasons.append(f"ENGINE-B: {ENGINE_B_REASON_RESISTANCE_TOO_CLOSE}")
                 if (
                     direction == "SHORT"
                     and structure_data.get("distance_to_sup", float("inf")) < _min_room
@@ -9438,7 +9441,7 @@ def analyze_pair(
                         float(_overlay_profile.get("min_room_atr", 1.0)),
                         structure_data.get("distance_to_sup"),
                     )
-                    return None
+                    _engine_b_block_reasons.append(f"ENGINE-B: {ENGINE_B_REASON_SUPPORT_TOO_CLOSE}")
 
                 if pair.get("type") in ("crypto", "forex", "commodity"):
                     # Light fetch for DXY correlation
@@ -9465,7 +9468,7 @@ def analyze_pair(
                                 _dxy_reason or ENGINE_B_REASON_ADVERSE_DXY,
                                 direction,
                             )
-                            return None
+                            _engine_b_block_reasons.append(f"ENGINE-B: {_dxy_reason or ENGINE_B_REASON_ADVERSE_DXY}")
 
                 # Safest Stop Loss Override (Combined Risk Management)
                 if structure_data.get("recommended_stop_loss"):
@@ -9491,7 +9494,7 @@ def analyze_pair(
                             _sl_dist_pct,
                             _max_sl_pct,
                         )
-                        return None
+                        _engine_b_block_reasons.append(f"ENGINE-B: {ENGINE_B_REASON_STRUCTURAL_SL_HARD_CAP}")
 
                 # Take Profit Override to sit safely inside structural walls
                 if structure_data.get("recommended_take_profit"):
@@ -9508,9 +9511,13 @@ def analyze_pair(
                 )
                 _engine_b_overlay_meta = {
                     "applied": True,
-                    "reason_codes": [],
+                    "reason_codes": _engine_b_block_reasons,
                     "structural_verdict": structure_data.get("structural_verdict"),
                 }
+                # 5.3 FIX: Add Engine B block reasons to warnings for watchlist classification
+                for _eb_reason in _engine_b_block_reasons:
+                    if _eb_reason not in warn_list:
+                        warn_list.append(_eb_reason)
         except Exception as e:
             log.error(f"[ENGINE-B] Error on {pair['display']}: {e}")
     # ------------------------------------------------
@@ -9638,7 +9645,7 @@ def analyze_pair(
                 "c": round(c["close"], 6),
                 "v": round(float(c.get("vol", c.get("volume", 0)) or 0), 2),
             }
-            for c in h4[-80:]
+            for c in h4[-240:]
         ],
         "d1Candles": [
             {

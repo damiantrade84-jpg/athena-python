@@ -402,63 +402,52 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         if pair["source"] == "binance":
             # Crypto: paginated H4/H1 for 2+ years of data
 
-            d1_raw = _rt().fetch_binance(sym, "1d", 1000)
+            d1_raw = _rt().fetch_binance(sym, "1d", 750)
 
-            h4_raw = _rt().fetch_binance_paginated(sym, "4h", 5000)
+            h4_raw = _rt().fetch_binance_paginated(sym, "4h", 4400)
 
-            h1_raw = _rt().fetch_binance_paginated(sym, "1h", 2000)
-
-        elif _ptype == "forex":
-            # Forex: EODHD D1 + EODHD intraday H1 (from/to 730d) → use D1 directly, yfinance fallback
-
-            d1_raw = _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 600)) or _rt().fetch_candles(
-                pair, "D1", 600
-            )
-
-            h4_raw, h1_raw = _rt().fetch_eodhd_intraday_bt(pair, days=730)
-
-            if not h4_raw or not h1_raw:
-                _pg_ticker = _rt().polygon_ticker_for_pair(pair)
-                if _pg_ticker:
-                    log.info(
-                        f"[BT] {pair['display']}: EODHD intraday failed, trying Polygon"
-                    )
-                    _pg_h4 = _rt().extract_candles(_rt().fetch_polygon(pair, "H4", 5000))
-                    _pg_h1 = _rt().extract_candles(_rt().fetch_polygon(pair, "H1", 5000))
-                    h4_raw = h4_raw or _pg_h4
-                    h1_raw = h1_raw or _pg_h1
-                if not h4_raw or not h1_raw:
-                    _yf_sym = _rt().yfinance_symbol_for_pair(pair)
-                    if _yf_sym:
-                        log.info(f"[BT] {pair['display']}: trying yfinance fallback")
-                        _yf_h4, _yf_h1 = _rt().fetch_bt_yfinance(_yf_sym)
-                        h4_raw = h4_raw or _yf_h4
-                        h1_raw = h1_raw or _yf_h1
+            h1_raw = _rt().fetch_binance_paginated(sym, "1h", 17600)
 
         elif pair["source"] == "mt5":
-            # D1 from terminal; H4/H1 use EODHD intraday when available, then fall back to MT5.
-            d1_raw = _rt().fetch_candles(pair, "D1", 600)
-            _yf_sym = _rt().yfinance_symbol_for_pair(pair)
-            if (not d1_raw or len(d1_raw or []) < 230) and _yf_sym:
+            # MT5 pairs (forex, commodities): MT5 is PRIMARY for D1/H4/H1, EODHD is fallback only
+            d1_raw = _rt().fetch_candles(pair, "D1", 750)
+            h4_raw = _rt().fetch_candles(pair, "H4", 4400)
+            h1_raw = _rt().fetch_candles(pair, "H1", 17600)
+            
+            # Fallback to EODHD only if MT5 data is insufficient
+            _d1_thin = not d1_raw or len(d1_raw or []) < 230
+            _h4_thin = not h4_raw or len(h4_raw or []) < 500
+            _h1_thin = not h1_raw or len(h1_raw or []) < 500
+            
+            if _d1_thin or _h4_thin or _h1_thin:
                 log.info(
-                    f"[BT] {pair['display']}: MT5 D1 unavailable/thin ({len(d1_raw or [])} bars) - trying yfinance D1"
+                    f"[BT] {pair['display']}: MT5 data thin (D1={len(d1_raw or [])}, H4={len(h4_raw or [])}, H1={len(h1_raw or [])}), trying EODHD fallback"
                 )
-                _yf_d1 = _rt().fetch_yfinance(_yf_sym, "D1", 600)
-                if _yf_d1 and len(_yf_d1) > len(d1_raw or []):
-                    d1_raw = _yf_d1
-            h4_raw, h1_raw = _rt().fetch_eodhd_intraday_bt(pair, days=730)
-            if not h4_raw or not h1_raw:
-                log.info(
-                    f"[BT] {pair['display']}: EODHD intraday failed, fetching from MT5"
-                )
-                h4_raw = h4_raw or _rt().fetch_candles(pair, "H4", 5000)
-                h1_raw = h1_raw or _rt().fetch_candles(pair, "H1", 5000)
+                if _d1_thin:
+                    _eodhd_d1 = _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 750))
+                    if _eodhd_d1 and len(_eodhd_d1) > len(d1_raw or []):
+                        d1_raw = _eodhd_d1
+                if _h4_thin or _h1_thin:
+                    _eodhd_h4, _eodhd_h1 = _rt().fetch_eodhd_intraday_bt(pair, days=730)
+                    if _h4_thin and _eodhd_h4 and len(_eodhd_h4) > len(h4_raw or []):
+                        h4_raw = _eodhd_h4
+                    if _h1_thin and _eodhd_h1 and len(_eodhd_h1) > len(h1_raw or []):
+                        h1_raw = _eodhd_h1
+            
+            # Final fallback to yfinance for D1 if still thin
+            if not d1_raw or len(d1_raw or []) < 230:
+                _yf_sym = _rt().yfinance_symbol_for_pair(pair)
+                if _yf_sym:
+                    log.info(f"[BT] {pair['display']}: trying yfinance D1 fallback")
+                    _yf_d1 = _rt().fetch_yfinance(_yf_sym, "D1", 750)
+                    if _yf_d1 and len(_yf_d1) > len(d1_raw or []):
+                        d1_raw = _yf_d1
 
         elif _ptype in ("stock", "commodity", "index"):
             # Stocks/Commodities/Indices: EODHD D1 + EODHD intraday (730d)
             # Fallback chain: EODHD → Polygon (commodities) → yfinance
-            d1_raw = _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 600)) or _rt().fetch_candles(
-                pair, "D1", 600
+            d1_raw = _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 750)) or _rt().fetch_candles(
+                pair, "D1", 750
             )
 
             h4_raw, h1_raw = _rt().fetch_eodhd_intraday_bt(pair, days=730)
@@ -470,8 +459,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     log.info(
                         f"[BT] {pair['display']}: EODHD intraday failed, trying Polygon"
                     )
-                    _pg_h4 = _rt().extract_candles(_rt().fetch_polygon(pair, "H4", 5000))
-                    _pg_h1 = _rt().extract_candles(_rt().fetch_polygon(pair, "H1", 5000))
+                    _pg_h4 = _rt().extract_candles(_rt().fetch_polygon(pair, "H4", 4400))
+                    _pg_h1 = _rt().extract_candles(_rt().fetch_polygon(pair, "H1", 17600))
                     h4_raw = h4_raw or _pg_h4
                     h1_raw = h1_raw or _pg_h1
                 # Legacy vendor fallback removed.
@@ -500,11 +489,11 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                             h1_raw = _yf_h1
 
         else:
-            d1_raw = _rt().fetch_candles(pair, "D1", 600)
+            d1_raw = _rt().fetch_candles(pair, "D1", 750)
 
-            h4_raw = _rt().fetch_candles(pair, "H4", 1000)
+            h4_raw = _rt().fetch_candles(pair, "H4", 4400)
 
-            h1_raw = _rt().fetch_candles(pair, "H1", 1000)
+            h1_raw = _rt().fetch_candles(pair, "H1", 17600)
 
         if not d1_raw:
             return {"error": f"No D1 data for {pair['display']}"}
@@ -2841,44 +2830,55 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
 
     # Use same extended data fetch as Engine A backtest — live cache only holds ~180d.
     if pair.get("source") == "binance":
-        # Crypto: paginated Binance fetch — same as Engine A (fetch_candles capped at 250 by config)
+        # Crypto: paginated Binance fetch — 730 days: D1=750, H4=4400, H1=17600
         sym = pair["symbol"]
-        candles_d1 = _rt().fetch_binance(sym, "1d", 1000)
-        candles_h4 = _rt().fetch_binance_paginated(sym, "4h", 5000)
-        candles_h1 = _rt().fetch_binance_paginated(sym, "1h", 2000)
-    else:
-        if pair.get("source") == "mt5":
-            candles_d1 = _rt().fetch_candles(pair, "D1", 600)
+        candles_d1 = _rt().fetch_binance(sym, "1d", 750)
+        candles_h4 = _rt().fetch_binance_paginated(sym, "4h", 4400)
+        candles_h1 = _rt().fetch_binance_paginated(sym, "1h", 17600)
+    elif pair.get("source") == "mt5":
+        # MT5 pairs (forex, commodities): MT5 is PRIMARY for D1/H4/H1, EODHD is fallback only
+        candles_d1 = _rt().fetch_candles(pair, "D1", 750)
+        candles_h4 = _rt().fetch_candles(pair, "H4", 4400)
+        candles_h1 = _rt().fetch_candles(pair, "H1", 17600)
+        
+        # Fallback to EODHD only if MT5 data is insufficient
+        _d1_thin = not candles_d1 or len(candles_d1 or []) < 230
+        _h4_thin = not candles_h4 or len(candles_h4 or []) < 500
+        _h1_thin = not candles_h1 or len(candles_h1 or []) < 500
+        
+        if _d1_thin or _h4_thin or _h1_thin:
+            log.info(
+                f"[ENGINE B BT] {pair['display']}: MT5 data thin (D1={len(candles_d1 or [])}, H4={len(candles_h4 or [])}, H1={len(candles_h1 or [])}), trying EODHD fallback"
+            )
+            if _d1_thin:
+                _eodhd_d1 = _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 750))
+                if _eodhd_d1 and len(_eodhd_d1) > len(candles_d1 or []):
+                    candles_d1 = _eodhd_d1
+            if _h4_thin or _h1_thin:
+                _eodhd_h4, _eodhd_h1 = _rt().fetch_eodhd_intraday_bt(pair, days=730)
+                if _h4_thin and _eodhd_h4 and len(_eodhd_h4) > len(candles_h4 or []):
+                    candles_h4 = _eodhd_h4
+                if _h1_thin and _eodhd_h1 and len(_eodhd_h1) > len(candles_h1 or []):
+                    candles_h1 = _eodhd_h1
+        
+        # Final fallback to yfinance for D1 if still thin
+        if not candles_d1 or len(candles_d1 or []) < 230:
             _yf_sym = _rt().yfinance_symbol_for_pair(pair)
-            if (not candles_d1 or len(candles_d1 or []) < 230) and _yf_sym:
-                log.info(
-                    f"[ENGINE B BT] {pair['display']}: MT5 D1 unavailable/thin ({len(candles_d1 or [])} bars) - trying yfinance D1"
-                )
-                _yf_d1 = _rt().fetch_yfinance(_yf_sym, "D1", 600)
+            if _yf_sym:
+                log.info(f"[ENGINE B BT] {pair['display']}: trying yfinance D1 fallback")
+                _yf_d1 = _rt().fetch_yfinance(_yf_sym, "D1", 750)
                 if _yf_d1 and len(_yf_d1) > len(candles_d1 or []):
                     candles_d1 = _yf_d1
-            candles_h4, candles_h1 = _rt().fetch_eodhd_intraday_bt(pair, days=730)
-            if not candles_h4 or not candles_h1:
-                # MT5-sourced pairs: skip Polygon; pull H4/H1 from the terminal via fetch_candles.
-                log.info(
-                    f"[ENGINE B BT] {pair['display']}: EODHD intraday failed, fetching from MT5"
-                )
-                candles_h4 = candles_h4 or _rt().fetch_candles(pair, "H4", 5000)
-                candles_h1 = candles_h1 or _rt().fetch_candles(pair, "H1", 5000)
-
-            _h4_thin = not candles_h4 or len(candles_h4 or []) < 500
-            _h1_thin = not candles_h1 or len(candles_h1 or []) < 500
-            if False and (_h4_thin or _h1_thin) and pair.get("type") == "commodity":
-                pass
-        else:
-            candles_d1 = _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 600)) or _rt().fetch_candles(
-                pair, "D1", CONFIG.get("D1_CANDLES", 600)
-            )
-            candles_h4, candles_h1 = _rt().fetch_eodhd_intraday_bt(pair, days=730)
-            if not candles_h4 or not candles_h1:
-                log.warning(f"[ENGINE B BT] {pair['display']} EODHD intraday failed, trying live cache")
-                candles_h4 = _rt().fetch_candles(pair, "H4", CONFIG.get("H4_CANDLES", 1000))
-                candles_h1 = _rt().fetch_candles(pair, "H1", CONFIG.get("H1_CANDLES", 2000))
+    else:
+        # Non-MT5, non-Binance pairs (stocks, indices, etc.): EODHD primary
+        candles_d1 = _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 750)) or _rt().fetch_candles(
+            pair, "D1", 750
+        )
+        candles_h4, candles_h1 = _rt().fetch_eodhd_intraday_bt(pair, days=730)
+        if not candles_h4 or not candles_h1:
+            log.warning(f"[ENGINE B BT] {pair['display']} EODHD intraday failed, trying live cache")
+            candles_h4 = _rt().fetch_candles(pair, "H4", 4400)
+            candles_h1 = _rt().fetch_candles(pair, "H1", 17600)
 
     if not candles_d1 or not candles_h4 or not candles_h1:
         log.warning(
@@ -4037,7 +4037,8 @@ def run_full_backtest(style="auto", asset_class: str | None = None):
         except Exception as e:
             return pair, {"error": str(e)}
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    _bt_workers = int(CONFIG.get("BACKTEST_MAX_WORKERS", 6))
+    with ThreadPoolExecutor(max_workers=_bt_workers) as pool:
         futures = {pool.submit(_bt, p): p for p in pairs_to_test}
 
         for fut in as_completed(futures):

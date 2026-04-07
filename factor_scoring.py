@@ -1130,7 +1130,34 @@ def compute_factor_scores(
         elif dir_sum < 0:
             direction = "SHORT"
         else:
-            direction = "LONG"
+            # A1 FIX: When direction is truly indeterminate (both dir_score and dir_sum are 0),
+            # return early with indeterminate_direction flag instead of defaulting to LONG.
+            return {
+                "final_score": 0.0,
+                "direction": None,
+                "factor_scores": factor_scores,
+                "weights": weights,
+                "regime": regime,
+                "filtered_indicators": indicators,
+                "disabled_factors": disabled_factors,
+                "directional_score": 0.0,
+                "nondirectional_score": 0.0,
+                "correlation_adjustments": {},
+                "insufficient_factors": False,
+                "indeterminate_direction": True,
+                "min_directional_failed": False,
+                "active_directional_factors": list(active_dir.keys()),
+                "active_nondirectional_factors": list(active_nondir.keys()),
+                "min_directional_threshold": _base_min_dir,
+                "directional_confidence_multiplier": 0.0,
+                "effective_min_directional": _base_min_dir,
+                "trend_coherence": trend_coherence,
+                "missing_directional_optional_count": 0,
+                "optional_factor_coverage": 1.0,
+                "crypto_engine_a_diagnostics": None,
+                "intermarket_confirmation": None,
+                "intermarket_engine_a_delta": 0.0,
+            }
 
     nondir_score = 0.0
     if active_nondir:
