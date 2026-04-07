@@ -281,7 +281,7 @@ AUTO_TRADE_MIN_SCORE:
   commodity: 1.40   # factor 0–3: align with MIN_CONFLUENCE_CLASS.commodity
   stock:     1.55   # factor 0–3: align with MIN_CONFLUENCE_CLASS.stock
   index:     1.35   # factor 0–3: align with MIN_CONFLUENCE_CLASS.index
-  forex:     0.95   # forex 0–2: align with MIN_CONFLUENCE_CLASS.forex
+  forex:     1.0    # forex 0–2: align with MIN_CONFLUENCE_CLASS.forex
 # AUTO_TRADE_MIN_CONVICTION is the real live gate used inside auto_trader.py.
 # Metric: combinedConviction on a 0–1 scale. When Engine A + B align, the live
 # gate gets a 15% discount (effective min = configured min * 0.85).

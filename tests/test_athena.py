@@ -188,6 +188,11 @@ class TestConfig:
         # Should not raise on valid config
         validate_config(CONFIG)
 
+    def test_forex_fallbacks_match_current_repo_contract(self):
+        assert CONFIG["MIN_CONFLUENCE_CLASS"]["forex"] == 1.0
+        assert CONFIG["MIN_FOREX_CONFLUENCE"] == 1.0
+        assert CONFIG["AUTO_TRADE_MIN_SCORE"]["forex"] == 1.0
+
 
 # ── Scoring tests ────────────────────────────────────────────────────────────
 

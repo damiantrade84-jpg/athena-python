@@ -311,13 +311,13 @@ CONFIG: dict = {
     "RESEARCH_MODE": False,
     "BACKTEST_USE_BT_MIN_THRESHOLDS": False,
     "MIN_CONFLUENCE_CLASS": {
-        "forex": 0.95,
+        "forex": 1.0,
         "crypto": 1.40,
         "commodity": 1.40,
         "stock": 1.55,
         "index": 1.35,
     },
-    "MIN_FOREX_CONFLUENCE": 0.95,
+    "MIN_FOREX_CONFLUENCE": 1.0,
     # PHASE 3: Engine C Backtest Exit Controls - explicit config for MAX_HOLD and BE parameters
     "ENGINE_C_BT_EXIT": {
         "forex": {
@@ -604,7 +604,7 @@ CONFIG: dict = {
         "commodity": 1.40,
         "stock": 1.55,
         "index": 1.35,
-        "forex": 0.95,
+        "forex": 1.0,
     },
     "AUTO_TRADE_MIN_CONVICTION": {  # Live auto-execute gate on combinedConviction (0-1 scale)
         "default": 0.50,

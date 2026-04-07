@@ -3341,6 +3341,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
 
         best = max(candidates, key=lambda x: x["score"])
         direction = best["direction"]
+        selected_tp_source = best.get("selected_tp_source", "unknown")
+        selected_sl_source = best.get("selected_sl_source", "unknown")
 
         # Execute at the open of the very next candle in the entry timeframe.
         # This matches live discovery where fill is immediate, not delayed to next H4.
@@ -3387,10 +3389,9 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             i += 1
             continue
 
-        # PHASE 2B: BT-only style-aware RR cap to prevent timeout-heavy overstretched TPs
-        # Cap TP if RR exceeds style fallback by significant margin (1.5x threshold)
+        # Engine B BT-only target relevance: cap post-fill TP to the style fallback_rr ceiling.
         _fallback_rr = style_profile.get("fallback_rr", 2.0)
-        if target_rr > _fallback_rr * 1.5:
+        if target_rr > _fallback_rr:
             _sl_dist = abs(entry - sl)
             if _sl_dist > 0:
                 if direction == "LONG":
@@ -3398,7 +3399,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 else:
                     tp = entry - (_sl_dist * _fallback_rr)
                 target_rr = _fallback_rr
-                selected_tp_source = "bt_rr_cap_fallback"
+                selected_tp_source = "capped_to_fallback_rr"
 
         # MAX_SL_PCT rejection — Ensuring backtest results reflect the same risk thresholds as live trading.
         _max_sl_pct_b = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
@@ -3609,8 +3610,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 "fvg_bonus": best["res"].get("fvg_bonus", 0.0),
                 "volume_strength": best["res"].get("volume_strength", 0.0),
                 # PHASE 1C: Level source tracking
-                "selected_tp_source": best.get("selected_tp_source", "unknown"),
-                "selected_sl_source": best.get("selected_sl_source", "unknown"),
+                "selected_tp_source": selected_tp_source,
+                "selected_sl_source": selected_sl_source,
             }
         )
         # Advance past the resolved exit bar plus the configured cooldown gap.

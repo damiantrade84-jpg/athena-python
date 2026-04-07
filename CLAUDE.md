@@ -317,7 +317,7 @@ See **Scalp Lab / Engine D flow** above. Execute path: **`signal.type == "crypto
 | Engine | Scorer | Scale | Gate key |
 |--------|--------|-------|----------|
 | Engine A — non-forex | `factor_scoring.py` z-score factor engine | 0–3.0 | `MIN_CONFLUENCE_CLASS[type]` |
-| Engine A — forex | `forex_scoring.py` rules-based | 0–2.0 | `MIN_FOREX_CONFLUENCE` (0.95) + `MIN_CONFLUENCE_CLASS.forex` (0.95) |
+| Engine A — forex | `forex_scoring.py` rules-based | 0–2.0 | `MIN_FOREX_CONFLUENCE` (1.0) + `MIN_CONFLUENCE_CLASS.forex` (1.0) |
 | Engine B | `market_structure.py` naked checklist | 0–100 pct | `NAKED_ENGINE.style_profiles.min_score` |
 | Engine C | `engine_c.py` A+B blend | 0–1 conviction | `ENGINE_C_AB_WEIGHTS` |
 | Engine D (Scalp Lab) | `scalp_engine.py` zones + triggers + rule-based `ai_quality_grade` | 0–100 (`ai_score`), letter `ai_grade` | `SCALP_ENGINE` (`MIN_RR`, spread/session/zone gates, `MIN_GRADE_AUTO_EXECUTE`, etc.) |
@@ -486,7 +486,7 @@ Previous gates made it structurally impossible for stocks/ETFs to pass, and comm
 - commodity: **1.10** (was 1.40)
 - index: **1.05** (was 1.35)
 - crypto: **1.20** (was 1.40)
-- forex: see **2026-04-07** decision (0–2.0 scale; class gate **1.60**)
+- forex: see historical **2026-04-07** decision below (superseded by the current 1.0 live class floor)
 
 These are calibrated at ~75–85% of maximum achievable to allow strong signals through while maintaining selectivity. Backtest **30+ trades per pair** before further adjustment.
 
@@ -520,10 +520,10 @@ This made `MIN_CONFLUENCE_CLASS` gates unreachable:
 
 1. Removed caps on `trend_score` and on the multiplicative `final_score` (no 0.507 scaling).
 2. **0–2.0** display scale: `result.final_score` capped at **2.0** (matches achievable max ~1.97).
-3. Thresholds: **`MIN_CONFLUENCE_CLASS.forex`** and **`MIN_FOREX_CONFLUENCE`** → **1.60** (~80% of 2.0, similar selectivity to old **0.80** on 0–1.0). **`BT_MIN.forex`** → **1.50**; **`BT_MIN_GROUP`** forex → **1.50 / 1.55 / 1.65**; **`MIN_CONFLUENCE_GROUP`** forex aligned to the same ladder.
+3. Historical thresholds at that point: **`MIN_CONFLUENCE_CLASS.forex`** and **`MIN_FOREX_CONFLUENCE`** ? **1.60** (~80% of 2.0, similar selectivity to old **0.80** on 0?1.0). **`BT_MIN.forex`** ? **1.50**; **`BT_MIN_GROUP`** forex ? **1.50 / 1.55 / 1.65**; **`MIN_CONFLUENCE_GROUP`** forex aligned to the same ladder.
 4. **`advisory_thresholds.py`:** `_BT_LIMITS.forex` → **(0.80, 1.90)**; `_LIVE_LIMITS.forex` → **(1.00, 2.00)**.
 5. **`maxScoreOverride` / Engine C forex path:** **2.0** in `athena.py` and `backtest_runner.py`; **`normalize_engine_a`** treats **`max_score ≤ 2.01`** like forex for the A-side floor. Engine C **conviction** calibration / `record_signal_event` stay **`max_score=1.0`** (0–1 normalized).
-6. **`config.py` fallbacks** and **`AUTO_TRADE_MIN_SCORE.forex`** → **1.60** (informational; matches class gate on 0–2.0).
+6. Historical fallback sync at that point: **`config.py` fallbacks** and **`AUTO_TRADE_MIN_SCORE.forex`** ? **1.60** (informational; matched the then-current class gate on 0?2.0).
 
 **Score mapping (illustrative):**
 
@@ -532,11 +532,11 @@ This made `MIN_CONFLUENCE_CLASS` gates unreachable:
 | 0.80 gate | 1.60 gate | ~same selectivity |
 | 1.00 (cap) | 1.97 | True max visible |
 
-**Expected:** Trade counts closer to pre–0.507 fix; elite scores **1.8–2.0** separable from good **1.4–1.6**. Re-run forex backtests.
+**Expected at that time:** Trade counts closer to pre?0.507 fix; elite scores **1.8?2.0** separable from good **1.4?1.6**. Re-run forex backtests.
 
 ---
 
-## 2026-04-07: Forex threshold correction (too high)
+## 2026-04-07: Forex threshold correction (too high) ? historical / superseded again later
 
 **Problem:** After the 0–2.0 scale fix, forex thresholds remained at **80% of max** (1.60), which was unreachable without rare SMC bonuses (FVG overlap + liquidity sweep). Typical good forex signals scored 0.8–1.1, so no signals passed.
 
@@ -551,7 +551,13 @@ This made `MIN_CONFLUENCE_CLASS` gates unreachable:
 | `BT_MIN.forex` | 1.50 | **0.85** | 43% |
 | `BT_MIN_GROUP` forex | 1.50-1.65 | **0.75-0.95** | 38-48% |
 
-**Impact:** Forex signals now appear in main scan. BT_MIN thresholds scaled proportionally to maintain BT/live ratio.
+**Impact at that time:** Forex signals now appear in main scan. BT_MIN thresholds scaled proportionally to maintain BT/live ratio.
+
+Current active contract:
+- Engine A forex scale is **0?2.0**
+- `MIN_CONFLUENCE_CLASS.forex` is **1.0**
+- `MIN_FOREX_CONFLUENCE` is **1.0**
+- `AUTO_TRADE_MIN_SCORE.forex` is **1.0** and remains informational/status-only
 
 ---
 
