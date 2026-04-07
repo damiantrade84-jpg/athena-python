@@ -3238,6 +3238,19 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             i += 1
             continue
 
+        # PHASE 2B: BT-only style-aware RR cap to prevent timeout-heavy overstretched TPs
+        # Cap TP if RR exceeds style fallback by significant margin (1.5x threshold)
+        _fallback_rr = style_profile.get("fallback_rr", 2.0)
+        if target_rr > _fallback_rr * 1.5:
+            _sl_dist = abs(entry - sl)
+            if _sl_dist > 0:
+                if direction == "LONG":
+                    tp = entry + (_sl_dist * _fallback_rr)
+                else:
+                    tp = entry - (_sl_dist * _fallback_rr)
+                target_rr = _fallback_rr
+                selected_tp_source = "bt_rr_cap_fallback"
+
         # MAX_SL_PCT rejection — Ensuring backtest results reflect the same risk thresholds as live trading.
         _max_sl_pct_b = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
         _sl_dist_pct_b = abs(float(entry) - float(sl)) / float(entry)
@@ -3958,6 +3971,18 @@ def backtest_pair_consensus(
         if target_rr < style_profile.get("min_rr", 1.0):
             i += 1
             continue
+
+        # PHASE 2B: BT-only style-aware RR cap to prevent timeout-heavy overstretched TPs
+        _fallback_rr = style_profile.get("fallback_rr", 2.0)
+        if target_rr > _fallback_rr * 1.5:
+            _sl_dist = abs(entry - sl)
+            if _sl_dist > 0:
+                if direction == "LONG":
+                    tp = entry + (_sl_dist * _fallback_rr)
+                else:
+                    tp = entry - (_sl_dist * _fallback_rr)
+                target_rr = _fallback_rr
+                selected_tp_source = "bt_rr_cap_fallback"
 
         _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
         if abs(entry - sl) / entry > _max_sl_pct:

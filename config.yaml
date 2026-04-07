@@ -679,12 +679,15 @@ NAKED_ENGINE:
     scalp:
       min_score: 3.0
       min_rr: 1.5
+      fallback_rr: 2.0
     intraday:
       min_score: 4.0
       min_rr: 1.5
+      fallback_rr: 2.0
     swing:
       min_score: 5.0
       min_rr: 2.0
+      fallback_rr: 3.0
       require_macro_align:
         forex: false
         crypto: false
