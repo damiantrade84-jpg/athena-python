@@ -106,6 +106,12 @@ def normalise_engine_a(signal_a: dict) -> dict:
         norm = min(1.0, score / max_score) if max_score > 0 else 0.0
     norm = max(0.0, min(1.0, norm))
 
+    # Forex scores on 0–2.0 scale produce systematically low norms (~0.4 for good
+    # signals) vs non-forex 0–3.0 scale (~0.6). Rescale so conviction math treats
+    # equivalently-good signals equally across asset classes.
+    if max_score <= 2.01 and max_score > 0:
+        norm = min(1.0, norm * (3.0 / max_score))
+
     regime_data = signal_a.get("regime", {})
     if isinstance(regime_data, dict):
         regime_label = regime_data.get("label", regime_data.get("regime", "RANGING"))
@@ -129,8 +135,8 @@ def normalise_engine_a(signal_a: dict) -> dict:
         factor_scores.get("carry_tilt")
     ])
 
-    # Forex (maxScore ~2.0) and other assets (maxScore ~3.0): floor for signal participation
-    _a_has_floor = 0.25 if max_score <= 2.01 else 0.30
+    # Floor for signal participation (uniform after forex norm rescale above)
+    _a_has_floor = 0.30
     return {
         "score_norm": round(norm, 4),
         "direction": signal_a.get("direction"),
