@@ -3294,7 +3294,11 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         _monitor_tf = _entry_tf  # Use entry_tf from style_profile (H1 for intraday, H4 for swing)
         _monitor_candles = candles_h1 if _monitor_tf == "H1" else candles_h4
         _monitor_times = h1_times if _monitor_tf == "H1" else h4_times
-        _monitor_fill_index = bisect.bisect_left(_monitor_times, entry_bar["time"]) if _monitor_times else 0
+        _monitor_fill_index = 0
+        if _monitor_times is not None and len(_monitor_times) > 0:
+            _entry_ts = pd.to_datetime(entry_bar["time"], utc=True, errors="coerce")
+            if pd.notna(_entry_ts):
+                _monitor_fill_index = int(_monitor_times.searchsorted(_entry_ts, side="left"))
         
         # Convert H4-based max_hold to monitoring TF (H4->H1 = 4x, H4->H4 = 1x)
         _tf_multiplier = 4 if _monitor_tf == "H1" else 1
@@ -3994,7 +3998,11 @@ def backtest_pair_consensus(
         _monitor_tf = _entry_tf  # Use entry_tf from style_profile (H1 for intraday, H4 for swing)
         _monitor_candles = candles_h1 if _monitor_tf == "H1" else candles_h4
         _monitor_times = h1_times if _monitor_tf == "H1" else h4_times
-        _monitor_fill_index = bisect.bisect_left(_monitor_times, entry_bar["time"]) if _monitor_times else 0
+        _monitor_fill_index = 0
+        if _monitor_times is not None and len(_monitor_times) > 0:
+            _entry_ts = pd.to_datetime(entry_bar["time"], utc=True, errors="coerce")
+            if pd.notna(_entry_ts):
+                _monitor_fill_index = int(_monitor_times.searchsorted(_entry_ts, side="left"))
         
         # Convert H4-based MAX_HOLD to monitoring TF (H4->H1 = 4x, H4->H4 = 1x)
         _tf_multiplier = 4 if _monitor_tf == "H1" else 1
