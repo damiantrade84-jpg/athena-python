@@ -3269,8 +3269,19 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         be_armed = False
         be_trigger_r = None
 
-        # Forward monitoring continues on H4 for performance, aligned to the entry bar's H4 index
-        future_window = candles_h4[_h4_fill_index : min(_h4_fill_index + max_hold_bars + 1, len(candles_h4))]
+        # PHASE 3A/B: Use entry_tf for monitoring and convert max_hold_bars from H4 to monitoring TF
+        # Config max_hold_bars is defined in H4 bars; convert to monitoring TF
+        _monitor_tf = _entry_tf  # Use entry_tf from style_profile (H1 for intraday, H4 for swing)
+        _monitor_candles = candles_h1 if _monitor_tf == "H1" else candles_h4
+        _monitor_times = h1_times if _monitor_tf == "H1" else h4_times
+        _monitor_fill_index = bisect.bisect_left(_monitor_times, entry_bar["time"]) if _monitor_times else 0
+        
+        # Convert H4-based max_hold to monitoring TF (H4->H1 = 4x, H4->H4 = 1x)
+        _tf_multiplier = 4 if _monitor_tf == "H1" else 1
+        _max_hold_monitor_bars = max_hold_bars * _tf_multiplier
+        
+        # Forward monitoring on the correct timeframe based on entry_tf
+        future_window = _monitor_candles[_monitor_fill_index : min(_monitor_fill_index + _max_hold_monitor_bars + 1, len(_monitor_candles))]
         for fi, future in enumerate(future_window):
             exit_bar_offset = fi
             _bar_outcome, _both_hit = _resolve_barrier_exit(
@@ -3937,9 +3948,19 @@ def backtest_pair_consensus(
             i += 1
             continue
 
-        # entry_bar is candles_h4[i+1]; h4_times are Timestamps — do not bisect on raw string time
-        _h4_fill_index = i + 1
-        future_window = candles_h4[_h4_fill_index: min(_h4_fill_index + MAX_HOLD + 1, len(candles_h4))]
+        # PHASE 3A/B: Use entry_tf for monitoring and convert max_hold_bars from H4 to monitoring TF
+        # Config MAX_HOLD is defined in H4 bars; convert to monitoring TF
+        _monitor_tf = _entry_tf  # Use entry_tf from style_profile (H1 for intraday, H4 for swing)
+        _monitor_candles = candles_h1 if _monitor_tf == "H1" else candles_h4
+        _monitor_times = h1_times if _monitor_tf == "H1" else h4_times
+        _monitor_fill_index = bisect.bisect_left(_monitor_times, entry_bar["time"]) if _monitor_times else 0
+        
+        # Convert H4-based MAX_HOLD to monitoring TF (H4->H1 = 4x, H4->H4 = 1x)
+        _tf_multiplier = 4 if _monitor_tf == "H1" else 1
+        _max_hold_monitor_bars = MAX_HOLD * _tf_multiplier
+        
+        # Forward monitoring on the correct timeframe based on entry_tf
+        future_window = _monitor_candles[_monitor_fill_index: min(_monitor_fill_index + _max_hold_monitor_bars + 1, len(_monitor_candles))]
 
         outcome = "TIMEOUT"
         r_multiple = 0.0
