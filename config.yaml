@@ -766,6 +766,11 @@ SCALP_ENGINE:
   ZONE_MIN_CONDITIONS: 2        # Valid zone needs >= N conditions
   # SCALP_PAIRS: []             # Uncomment + list pairs to restrict scan to specific pairs only
   #                             # Leave commented/empty to scan ALL pairs (default full set)
+  # Example: Restrict to specific crypto pairs only
+  # SCALP_PAIRS:
+  #   - "BTC/USDT"
+  #   - "ETH/USDT"
+  #   - "LTC/USDT"
 
 # ── Chart Vision Dataset / V2 Shadow ────────────────────────────────────────
 # Default false: opt-in only. Dataset pipeline writes to audit.db
