@@ -633,16 +633,27 @@ def api_engine_c_scan():
             consensus["scoreGroup"] = _pair_score_group
             consensus["style"] = engine_a_style
             consensus["atr"] = round(atr, 6)
+            a_score = float(sig_a.get("confluenceScore", 0.0) or 0.0)
+            a_max_score = float(sig_a.get("maxScore", 3.0) or 3.0)
+            a_direction = sig_a.get("direction")
+            try:
+                a_norm = float(sig_a.get("scoreNorm"))
+            except (TypeError, ValueError):
+                a_norm = min(1.0, (a_score / a_max_score)) if a_max_score > 0 else 0.0
+            a_floor = 0.25 if a_max_score <= 2.01 else 0.30
+            a_has_signal = a_norm > a_floor and a_direction in ("LONG", "SHORT")
             consensus["engine_a_raw"] = {
-                "direction": sig_a.get("direction"),
-                "score": sig_a.get("confluenceScore"),
-                "maxScore": sig_a.get("maxScore"),
+                "direction": a_direction if a_has_signal else None,
+                "score": a_score,
+                "maxScore": a_max_score,
                 "sl": sig_a.get("sl"),
                 "tp1": sig_a.get("tp1"),
                 "regime": sig_a.get("regime"),
                 "style": sig_a.get("style", sig_a.get("tradeStyle")),
                 "cot": sig_a.get("votes", {}).get("derivatives"),
                 "carry": sig_a.get("votes", {}).get("carry"),
+                "has_signal": a_has_signal,
+                "score_norm": round(a_norm, 4),
             }
             consensus["engine_b_raw"] = {
                 "direction": raw_b_direction,
