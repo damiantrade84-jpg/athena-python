@@ -36,15 +36,12 @@ def test_blended_ab_weights_fall_back_to_base_and_move_within_bound():
 def test_a_only_watchlist_preserves_watchlist_tier():
     """Regression test: A_ONLY watchlist must preserve WATCHLIST tier, not collapse to SKIP.
 
-    Forex-like A signal with conviction ~0.4275 should produce:
-    - decision_state = "watchlist"
-    - trade = False
-    - sizing_override = 0.0
-    - tier = "WATCHLIST" (not SKIP)
-    - signalTier = "watchlist"
+    A_ONLY conviction = score_norm * 0.6. For watchlist: conviction >= 0.40.
+    Need score_norm >= 0.667, so confluenceScore/maxScore >= 0.667.
+    Using confluenceScore=1.5, maxScore=2.0 → score_norm=0.75 → conviction=0.45.
     """
     signal_a = {
-        "confluenceScore": 0.95,
+        "confluenceScore": 1.5,
         "maxScore": 2.0,
         "direction": "LONG",
         "confidenceDetail": {"confidence": 0.5},
@@ -65,7 +62,7 @@ def test_a_only_watchlist_preserves_watchlist_tier():
         asset_type="forex",
     )
 
-    # A_ONLY with low conviction should be watchlist
+    # A_ONLY with conviction ~0.45 should be watchlist (>= 0.40, < 0.50)
     assert result["verdict"] == "A_ONLY"
     assert result["trade"] is False
     assert result["sizing_override"] == 0.0
@@ -105,23 +102,23 @@ def test_blocked_remains_skip():
     assert result["sizing_override"] == 0.0
 
 
-def test_normalise_engine_a_forex_rescale_matches_execution_diagnostic():
-    """Verify normalise_engine_a() forex rescale produces consistent has_signal.
+def test_normalise_engine_a_uses_raw_ratio_no_forex_rescale():
+    """Verify normalise_engine_a() uses raw bounded ratio without forex rescale.
 
-    This ensures execution.py raw diagnostic uses the same logic as engine_c.
+    After Phase 2B fix: no forex-specific 1.5x rescale. Both forex (0-2.0) and
+    non-forex (0-3.0) use the same raw bounded ratio: norm = score / max_score.
     """
     # Forex signal with max_score 2.0
     signal_forex = {
-        "confluenceScore": 1.0,
+        "confluenceScore": 0.95,
         "maxScore": 2.0,
         "direction": "LONG",
     }
     norm = normalise_engine_a(signal_forex)
 
-    # Raw norm = 1.0/2.0 = 0.5
-    # Rescaled = 0.5 * (3.0/2.0) = 0.75
+    # Raw norm = 0.95/2.0 = 0.475 (no rescale)
     # Floor = 0.30, so has_signal = True
-    assert norm["score_norm"] == 0.75
+    assert norm["score_norm"] == 0.475
     assert norm["has_signal"] is True
 
     # Non-forex signal with max_score 3.0
@@ -133,21 +130,19 @@ def test_normalise_engine_a_forex_rescale_matches_execution_diagnostic():
     norm2 = normalise_engine_a(signal_non_forex)
 
     # Raw norm = 1.0/3.0 = 0.333...
-    # No rescale (max_score > 2.01)
     # Floor = 0.30, so has_signal = True
     assert round(norm2["score_norm"], 4) == 0.3333
     assert norm2["has_signal"] is True
 
-    # Forex signal below floor after rescale
+    # Forex signal below floor (no rescale)
     signal_forex_low = {
-        "confluenceScore": 0.35,
+        "confluenceScore": 0.5,
         "maxScore": 2.0,
         "direction": "LONG",
     }
     norm3 = normalise_engine_a(signal_forex_low)
 
-    # Raw norm = 0.35/2.0 = 0.175
-    # Rescaled = 0.175 * 1.5 = 0.2625
+    # Raw norm = 0.5/2.0 = 0.25 (no rescale)
     # Floor = 0.30, so has_signal = False
-    assert norm3["score_norm"] < 0.30
+    assert norm3["score_norm"] == 0.25
     assert norm3["has_signal"] is False

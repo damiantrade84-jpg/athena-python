@@ -69,3 +69,64 @@ def test_athena_source_uses_class_specific_engine_b_overlay_gate():
     """Engine B overlay is gated by resolved scan score vs get_min_confluence_threshold (class/group routing)."""
     src = ATHENA_PATH.read_text(encoding="utf-8")
     assert "get_min_confluence_threshold(pair)" in src
+
+
+# ── Phase 1: _max_score_for_pair contract tests ──────────────────────────────
+
+
+def test_max_score_for_pair_forex_returns_2_0():
+    """Forex pairs use forex_scoring.py with 0-2.0 scale."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("athena_main", ATHENA_PATH)
+    athena_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(athena_mod)
+    _max_score_for_pair = athena_mod._max_score_for_pair
+
+    assert _max_score_for_pair({"type": "forex"}) == 2.0
+    assert _max_score_for_pair({"type": "forex", "display": "EUR/USD"}) == 2.0
+
+
+def test_max_score_for_pair_crypto_returns_3_0():
+    """Crypto pairs use factor_scoring.py with 0-3.0 scale."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("athena_main", ATHENA_PATH)
+    athena_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(athena_mod)
+    _max_score_for_pair = athena_mod._max_score_for_pair
+
+    assert _max_score_for_pair({"type": "crypto"}) == 3.0
+    assert _max_score_for_pair({"type": "crypto", "display": "BTC/USDT"}) == 3.0
+
+
+def test_max_score_for_pair_stock_returns_3_0():
+    """Stock pairs use factor_scoring.py with 0-3.0 scale."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("athena_main", ATHENA_PATH)
+    athena_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(athena_mod)
+    _max_score_for_pair = athena_mod._max_score_for_pair
+
+    assert _max_score_for_pair({"type": "stock"}) == 3.0
+    assert _max_score_for_pair({"type": "stock", "display": "AAPL"}) == 3.0
+
+
+def test_max_score_for_pair_commodity_returns_3_0():
+    """Commodity pairs use factor_scoring.py with 0-3.0 scale."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("athena_main", ATHENA_PATH)
+    athena_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(athena_mod)
+    _max_score_for_pair = athena_mod._max_score_for_pair
+
+    assert _max_score_for_pair({"type": "commodity"}) == 3.0
+
+
+def test_max_score_for_pair_index_returns_3_0():
+    """Index pairs use factor_scoring.py with 0-3.0 scale."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("athena_main", ATHENA_PATH)
+    athena_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(athena_mod)
+    _max_score_for_pair = athena_mod._max_score_for_pair
+
+    assert _max_score_for_pair({"type": "index"}) == 3.0

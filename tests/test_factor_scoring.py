@@ -1455,3 +1455,81 @@ def test_direction_uses_weighted_score_not_unweighted_sum():
         # dir_score = (2.0/3.5)*0.6 + (1.5/3.5)*(-0.7) = 0.3429 - 0.3 = +0.0429
         assert result["directional_score"] > 0, f"Expected positive dir_score, got {result['directional_score']}"
         assert result["direction"] == "LONG", f"Expected LONG, got {result['direction']}"
+
+
+# ── Phase 1 regression tests: score contract ─────────────────────────────────
+
+
+class TestScoreContractBounded:
+    """Regression tests: non-forex Engine A score must stay within 0-3.0 contract."""
+
+    def test_max_factors_do_not_exceed_3_0(self):
+        """With all factors at max-supported values, final_score must not exceed 3.0."""
+        # Build snap with maximum positive z-scores
+        max_snap = _make_snap(
+            adx=50,
+            adx_z=3.0,
+            rsi_z=3.0,
+            macdLine_z=3.0,
+            atr_z=3.0,
+            bbWidth_z=3.0,
+            realized_vol_z=3.0,
+            obv_trend=1,
+            fib_proximity=1,
+            ema21=110,
+            ema50=100,
+            adxMomentum="ACCELERATING",
+            adxSlope=1.0,
+        )
+        result = compute_factor_scores(
+            d1_snap=max_snap,
+            h4_snap=max_snap,
+            h1_snap=max_snap,
+            pair=_make_pair(type="crypto", display="BTC/USDT"),
+            d1_candles=_make_candles(300),
+            h4_candles=_make_candles(300),
+            h1_candles=_make_candles(300),
+            volume_ratio=3.0,
+            funding_rate=0.001,
+            oi_context={"oi_change_pct": 10.0, "price_change_pct": 5.0},
+        )
+        assert result["final_score"] <= 3.0, (
+            f"final_score {result['final_score']} exceeds documented 3.0 max"
+        )
+        assert result["final_score"] >= 0.0
+
+    def test_stock_score_bounded_to_3_0(self):
+        """Stock pair score must stay within 0-3.0 contract."""
+        snap = _make_snap()
+        result = compute_factor_scores(
+            d1_snap=snap,
+            h4_snap=snap,
+            h1_snap=snap,
+            pair={"type": "stock", "display": "AAPL"},
+            d1_candles=_make_candles(300),
+            h4_candles=_make_candles(300),
+            h1_candles=_make_candles(300),
+            volume_ratio=2.0,
+        )
+        assert result["final_score"] <= 3.0, (
+            f"Stock final_score {result['final_score']} exceeds 3.0"
+        )
+        assert result["final_score"] >= 0.0
+
+    def test_commodity_score_bounded_to_3_0(self):
+        """Commodity pair score must stay within 0-3.0 contract."""
+        snap = _make_snap()
+        result = compute_factor_scores(
+            d1_snap=snap,
+            h4_snap=snap,
+            h1_snap=snap,
+            pair={"type": "commodity", "display": "XAU/USD"},
+            d1_candles=_make_candles(300),
+            h4_candles=_make_candles(300),
+            h1_candles=_make_candles(300),
+            volume_ratio=2.0,
+        )
+        assert result["final_score"] <= 3.0, (
+            f"Commodity final_score {result['final_score']} exceeds 3.0"
+        )
+        assert result["final_score"] >= 0.0

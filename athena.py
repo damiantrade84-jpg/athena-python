@@ -1467,10 +1467,14 @@ def _atr_for_levels(
 
 
 def _max_score_for_pair(pair: dict) -> float:
-    """Theoretical max score for z-score factor engine.
+    """Theoretical max score for Engine A.
 
-    final_score is a weighted average of z-scores clamped to [-3, +3], so max is 3.0."""
-
+    - Forex uses forex_scoring.py (rules-based): max 2.0
+    - Non-forex uses factor_scoring.py (z-score factor engine): max 3.0
+    """
+    ptype = pair.get("type", "").lower()
+    if ptype == "forex":
+        return 2.0
     return 3.0
 
 

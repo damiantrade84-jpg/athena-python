@@ -116,7 +116,7 @@ NAKED_MAX_DAILY: 3
 
 
 # Per-class live scan minimum confluence — execute / tradeSignals tier threshold.
-# Forex: forex_scoring 0–2.0 (true max ~1.97). Non-forex: factor engine (0–3.0 after _SCORE_SCALE).
+# Forex: forex_scoring 0–2.0 (true max ~1.97). Non-forex: factor engine (true bounded 0–3.0).
 MIN_CONFLUENCE_CLASS:
   forex:     0.95      # forex engine max=2.0; was 1.60 (80%!) — unreachable without rare SMC bonuses
   crypto:    1.40      # was 1.20, restore to 1.40
@@ -131,8 +131,6 @@ MIN_FOREX_CONFLUENCE: 0.95
 # Optional subgroup thresholds (used when score_group is available on a pair)
 # NOTE: get_score_threshold() uses GROUP value directly — no class floor check.
 # Group values must be proportionally in line with MIN_CONFLUENCE_CLASS.
-# Scale factors applied when class was restored (2026-04-05 _SCORE_SCALE fix):
-#   stock ×1.409 (class 1.10→1.55), crypto ×1.167 (class 1.20→1.40), commodity precious_trackers ×1.273
 MIN_CONFLUENCE_GROUP:
   forex:
     forex_majors: 0.85     # was 1.50 — unreachable; majors most liquid, lower bar
@@ -208,11 +206,11 @@ AUTO_TRADE_ENABLED: true          # Start auto-trader on server boot
 # Factor engine (crypto/stock/commodity/index) outputs 0–3.0.
 # Forex engine outputs 0–2.0 — keep forex entry on that scale (see MIN_FOREX_CONFLUENCE).
 AUTO_TRADE_MIN_SCORE:
-  crypto:    1.50   # factor 0–3 scan floor
-  commodity: 1.65   # factor 0–3: align with class
-  stock:     1.85   # factor 0–3: align with class
-  index:     1.85   # factor 0–3: align with class
-  forex:     1.60   # forex 0–2: informational scan floor; align with class gate
+  crypto:    1.40   # factor 0–3: align with MIN_CONFLUENCE_CLASS.crypto
+  commodity: 1.40   # factor 0–3: align with MIN_CONFLUENCE_CLASS.commodity
+  stock:     1.55   # factor 0–3: align with MIN_CONFLUENCE_CLASS.stock
+  index:     1.35   # factor 0–3: align with MIN_CONFLUENCE_CLASS.index
+  forex:     0.95   # forex 0–2: align with MIN_CONFLUENCE_CLASS.forex
 # AUTO_TRADE_MIN_CONVICTION is the real live gate used inside auto_trader.py.
 # Metric: combinedConviction on a 0–1 scale. When Engine A + B align, the live
 # gate gets a 15% discount (effective min = configured min * 0.85).

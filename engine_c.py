@@ -106,11 +106,9 @@ def normalise_engine_a(signal_a: dict) -> dict:
         norm = min(1.0, score / max_score) if max_score > 0 else 0.0
     norm = max(0.0, min(1.0, norm))
 
-    # Forex scores on 0–2.0 scale produce systematically low norms (~0.4 for good
-    # signals) vs non-forex 0–3.0 scale (~0.6). Rescale so conviction math treats
-    # equivalently-good signals equally across asset classes.
-    if max_score <= 2.01 and max_score > 0:
-        norm = min(1.0, norm * (3.0 / max_score))
+    # No forex-specific rescale. Both forex (0-2.0) and non-forex (0-3.0) use
+    # the same raw bounded ratio: norm = score / max_score. This keeps the
+    # normalization simple and asset-consistent.
 
     regime_data = signal_a.get("regime", {})
     if isinstance(regime_data, dict):

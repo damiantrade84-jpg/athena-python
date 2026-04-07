@@ -16,7 +16,7 @@ from athena_app.repositories.audit_repo import insert_manual_error
 from athena_app.services.candle_service import recompute_levels_for_style
 from athena_runtime import executed_signals, rt
 from config import _json_safe, scan_candle_limits
-from engine_c import compute_consensus
+from engine_c import compute_consensus, normalise_engine_a
 from execution_lifecycle import run_managed_execution
 from indicators import calc_indicators_with_normalized
 from market_structure import NakedEngine, engine_b_confidence_passes
@@ -635,31 +635,21 @@ def api_engine_c_scan():
             consensus["scoreGroup"] = _pair_score_group
             consensus["style"] = engine_a_style
             consensus["atr"] = round(atr, 6)
-            a_score = float(sig_a.get("confluenceScore", 0.0) or 0.0)
-            a_max_score = float(sig_a.get("maxScore", 3.0) or 3.0)
+            # Reuse engine_c.normalise_engine_a() for consistent A-side diagnostics
+            a_norm_result = normalise_engine_a(sig_a)
             a_direction = sig_a.get("direction")
-            try:
-                a_norm = float(sig_a.get("scoreNorm"))
-            except (TypeError, ValueError):
-                a_norm = min(1.0, (a_score / a_max_score)) if a_max_score > 0 else 0.0
-            # Rescale forex norms to match engine_c.normalise_engine_a() logic
-            if a_max_score <= 2.01 and a_max_score > 0:
-                a_norm = min(1.0, a_norm * (3.0 / a_max_score))
-            # Uniform floor after rescale (matches engine_c._a_has_floor)
-            a_floor = 0.30
-            a_has_signal = a_norm > a_floor and a_direction in ("LONG", "SHORT")
             consensus["engine_a_raw"] = {
-                "direction": a_direction if a_has_signal else None,
-                "score": a_score,
-                "maxScore": a_max_score,
+                "direction": a_direction if a_norm_result["has_signal"] else None,
+                "score": a_norm_result["raw_score"],
+                "maxScore": a_norm_result["max_score"],
                 "sl": sig_a.get("sl"),
                 "tp1": sig_a.get("tp1"),
                 "regime": sig_a.get("regime"),
                 "style": sig_a.get("style", sig_a.get("tradeStyle")),
                 "cot": sig_a.get("votes", {}).get("derivatives"),
                 "carry": sig_a.get("votes", {}).get("carry"),
-                "has_signal": a_has_signal,
-                "score_norm": round(a_norm, 4),
+                "has_signal": a_norm_result["has_signal"],
+                "score_norm": a_norm_result["score_norm"],
             }
             consensus["engine_b_raw"] = {
                 "direction": raw_b_direction,

@@ -9463,7 +9463,9 @@ function renderEngineCResults(data) {
 
 function buildECCard(c, category) {
   var sid = (c.symbol || c.display || '').replace(/[\/=^.]/g, '_');
-  var borderColor = category === 'aligned' ? 'var(--bull)' :
+  var isWatchlist = c.tier === 'WATCHLIST' || c.signalTier === 'watchlist' || c.decision_state === 'watchlist';
+  var borderColor = isWatchlist ? '#f59e0b' :
+                    category === 'aligned' ? 'var(--bull)' :
                     category === 'conflict' ? 'var(--bear)' :
                     category === 'b_only' ? 'var(--accent)' : '#f59e0b';
 
@@ -9504,6 +9506,17 @@ function buildECCard(c, category) {
   html += '<span style="font-size:11px;font-weight:700;color:' + borderColor + ';font-family:IBM Plex Mono,monospace;">' +
     (c.tier || 'SKIP') + '</span>';
   html += '</div></div>';
+
+  // Watchlist badge and reason (if applicable)
+  if (isWatchlist) {
+    html += '<div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);' +
+      'border-radius:6px;padding:8px;margin-bottom:10px;font-size:10px;font-family:IBM Plex Mono,monospace;">';
+    html += '<span style="color:#f59e0b;font-weight:700;">&#128065; WATCHLIST</span>';
+    if (c.watchlistReason) {
+      html += '<span style="color:var(--muted);margin-left:8px;">' + c.watchlistReason + '</span>';
+    }
+    html += '</div>';
+  }
 
   // Two-column engine comparison
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">';
