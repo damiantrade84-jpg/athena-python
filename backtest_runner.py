@@ -3946,6 +3946,19 @@ def backtest_pair_consensus(
         risk = abs(entry - sl)
         _active_sl = sl
         _be_triggered = False
+        max_hold_bars = MAX_HOLD
+
+        # Additive diagnostics defaults (must exist for all trade payloads)
+        max_favorable_excursion_r = 0.0
+        max_adverse_excursion_r = 0.0
+        highest_r_seen = 0.0
+        lowest_r_seen = 0.0
+        bars_to_mfe = None
+        bars_to_mae = None
+        be_armed = False
+        be_trigger_r = None
+        price_never_reached_tp = True
+        price_never_reached_sl = True
 
         for fi, future in enumerate(future_window):
             exit_bar_offset = fi
@@ -3958,18 +3971,24 @@ def backtest_pair_consensus(
             if _bar_outcome == "TP1":
                 outcome = "TP1"
                 r_multiple = round(target_rr, 2)
+                price_never_reached_tp = False
                 break
             if _bar_outcome in ("SL", "BE"):
                 outcome = _bar_outcome
                 r_multiple = 0.0 if outcome == "BE" else -1.0
+                price_never_reached_sl = True if outcome == "BE" else False
                 break
             if not _be_triggered and risk > 0 and target_rr >= _be_min_rr:
                 if direction == "LONG" and float(future["high"]) >= entry + risk * _be_arm_rr:
                     _active_sl = entry
                     _be_triggered = True
+                    be_armed = True
+                    be_trigger_r = _be_arm_rr
                 elif direction == "SHORT" and float(future["low"]) <= entry - risk * _be_arm_rr:
                     _active_sl = entry
                     _be_triggered = True
+                    be_armed = True
+                    be_trigger_r = _be_arm_rr
 
         # Timeout sub-classification for analytics (Phase 1A)
         timeout_class = None
