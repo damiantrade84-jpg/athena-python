@@ -254,6 +254,149 @@ def _resolve_barrier_exit(
     return None, False
 
 
+def _resolve_engine_c_bt_levels_after_fill(
+    *,
+    actual_entry: float,
+    consensus: dict | None,
+    style_profile: dict | None,
+    resolved_style: str,
+    direction: str,
+    pair_type: str,
+    atr: float,
+    max_sl_pct: float,
+    regime_state=None,
+) -> dict:
+    """Resolve Engine C BT levels from the actual filled entry only."""
+
+    consensus = consensus or {}
+    style_profile = style_profile or {}
+    min_rr = float(style_profile.get("min_rr", 1.0) or 1.0)
+    fallback_rr = float(style_profile.get("fallback_rr", min_rr) or min_rr)
+    fallback_rr = max(min_rr, fallback_rr)
+
+    def _is_valid_sl(value) -> bool:
+        try:
+            px = float(value)
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(px) or px <= 0:
+            return False
+        return px < actual_entry if direction == "LONG" else px > actual_entry
+
+    def _is_valid_tp(value) -> bool:
+        try:
+            px = float(value)
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(px) or px <= 0:
+            return False
+        return px > actual_entry if direction == "LONG" else px < actual_entry
+
+    def _target_from_rr(risk_value: float, rr_value: float) -> float | None:
+        if risk_value <= 0 or rr_value <= 0:
+            return None
+        if direction == "LONG":
+            return actual_entry + (risk_value * rr_value)
+        return actual_entry - (risk_value * rr_value)
+
+    fallback_levels = None
+
+    def _get_fallback_levels():
+        nonlocal fallback_levels
+        if fallback_levels is None:
+            fallback_levels = calc_levels(
+                actual_entry,
+                atr,
+                direction,
+                pair_type,
+                regime_state=regime_state,
+                style=resolved_style,
+            ) or {}
+        return fallback_levels
+
+    raw_sl = consensus.get("sl")
+    raw_sl_method = str(consensus.get("sl_method") or "consensus")
+    if _is_valid_sl(raw_sl):
+        final_sl = float(raw_sl)
+        selected_sl_source = "structural" if raw_sl_method.startswith("structural") else "consensus"
+    else:
+        fallback = _get_fallback_levels()
+        fallback_sl = fallback.get("sl")
+        if not _is_valid_sl(fallback_sl):
+            return {
+                "final_sl": None,
+                "final_tp": None,
+                "final_rr": 0.0,
+                "selected_tp_source": "calc_levels_fallback",
+                "selected_sl_source": "calc_levels_fallback",
+                "sl_pct": None,
+            }
+        final_sl = float(fallback_sl)
+        selected_sl_source = "calc_levels_fallback"
+
+    risk = abs(actual_entry - final_sl)
+    if risk <= 0:
+        return {
+            "final_sl": None,
+            "final_tp": None,
+            "final_rr": 0.0,
+            "selected_tp_source": "calc_levels_fallback",
+            "selected_sl_source": selected_sl_source,
+            "sl_pct": None,
+        }
+
+    raw_tp = consensus.get("tp")
+    raw_tp_method = str(consensus.get("tp_method") or "consensus")
+
+    if _is_valid_tp(raw_tp):
+        final_tp = float(raw_tp)
+        actual_rr = abs(final_tp - actual_entry) / risk if risk > 0 else 0.0
+        if actual_rr < min_rr:
+            final_tp = _target_from_rr(risk, min_rr)
+            actual_rr = min_rr
+            selected_tp_source = "rebuilt_to_min_rr"
+        elif actual_rr > fallback_rr:
+            final_tp = _target_from_rr(risk, fallback_rr)
+            actual_rr = fallback_rr
+            selected_tp_source = "capped_to_fallback_rr"
+        else:
+            selected_tp_source = (
+                "structural_within_band"
+                if raw_tp_method.startswith("structural")
+                else "consensus_within_band"
+            )
+    else:
+        fallback = _get_fallback_levels()
+        fallback_tp = fallback.get("tp1")
+        if not _is_valid_tp(fallback_tp):
+            return {
+                "final_sl": round(final_sl, 6),
+                "final_tp": None,
+                "final_rr": 0.0,
+                "selected_tp_source": "calc_levels_fallback",
+                "selected_sl_source": selected_sl_source,
+                "sl_pct": abs(actual_entry - final_sl) / actual_entry if actual_entry > 0 else None,
+            }
+        final_tp = float(fallback_tp)
+        actual_rr = abs(final_tp - actual_entry) / risk if risk > 0 else 0.0
+        actual_rr = min(max(actual_rr, min_rr), fallback_rr)
+        final_tp = _target_from_rr(risk, actual_rr)
+        selected_tp_source = "calc_levels_fallback"
+
+    sl_pct = abs(actual_entry - final_sl) / actual_entry if actual_entry > 0 else None
+    if max_sl_pct and sl_pct is not None:
+        sl_pct = float(sl_pct)
+
+    return {
+        "final_sl": round(final_sl, 6),
+        "final_tp": round(float(final_tp), 6) if final_tp is not None else None,
+        "final_rr": round(float(actual_rr), 6),
+        "selected_tp_source": selected_tp_source,
+        "selected_sl_source": selected_sl_source,
+        "sl_pct": sl_pct,
+    }
+
+
 def _time_series_quality(label: str, times) -> dict:
     """Summarize parse quality and ordering for a timestamp series."""
     valid = times.dropna()
@@ -543,6 +686,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     equity_curve = [1.0]
 
     _ptype = pair["type"]
+    requested_style = _normalize_style(style)
     _pair_score_group = get_pair_score_group(pair)
     _pair_ctx = dict(pair)
     for _k in ["votes", "sentiment", "eventRisk", "fundingRate", "confluenceScore"]:
@@ -2950,7 +3094,12 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
     )
     d1_times = [c.get("time", c.get("datetime", "")) for c in candles_d1]
     h4_times = [c.get("time", c.get("datetime", "")) for c in candles_h4]
-    
+    h1_times = pd.to_datetime(
+        [c.get("time", c.get("datetime", "")) for c in candles_h1],
+        utc=True,
+        errors="coerce",
+    )
+
     # NEW: Loop over the specific Entry Timeframe (H1 vs H4) configured for this style
     # This matches live discovery where signals are detected and filled on the entry candle.
     entry_raw = candles_h1 if _entry_tf == "H1" else candles_h4
@@ -3295,10 +3444,15 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         _monitor_candles = candles_h1 if _monitor_tf == "H1" else candles_h4
         _monitor_times = h1_times if _monitor_tf == "H1" else h4_times
         _monitor_fill_index = 0
-        if _monitor_times is not None and len(_monitor_times) > 0:
-            _entry_ts = pd.to_datetime(entry_bar["time"], utc=True, errors="coerce")
-            if pd.notna(_entry_ts):
-                _monitor_fill_index = int(_monitor_times.searchsorted(_entry_ts, side="left"))
+        if _monitor_tf == "H4":
+            # entry_bar is candles_h4[i + 1] in this loop, so monitoring starts there directly.
+            _monitor_fill_index = i + 1
+        elif h1_times is not None and len(h1_times) > 0:
+            _entry_bar_ts = pd.Timestamp(entry_bar["time"])
+            if pd.notna(_entry_bar_ts):
+                if _entry_bar_ts.tzinfo is None:
+                    _entry_bar_ts = _entry_bar_ts.tz_localize("UTC")
+                _monitor_fill_index = int(bisect.bisect_left(h1_times, _entry_bar_ts))
         
         # Convert H4-based max_hold to monitoring TF (H4->H1 = 4x, H4->H4 = 1x)
         _tf_multiplier = 4 if _monitor_tf == "H1" else 1
@@ -3664,6 +3818,7 @@ def backtest_pair_consensus(
     if _vm_mode_warning:
         log.warning("[ENGINE C BT] %s: %s", pair.get("display"), _vm_mode_warning)
 
+    requested_style = _normalize_style(style)
     _pair_score_group = get_pair_score_group(pair)
     _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
     resolved_style, style_profile = _rt().naked_scan_style_profile(
@@ -3841,10 +3996,10 @@ def backtest_pair_consensus(
                     funding_rate=_bt_funding_rate, oi_data=_bt_oi_data, oi_context=_bt_oi_ctx,
                     bar_time=candles_h4[i].get("time") if candles_h4 else None,
                 )
-                _atr_c = _rt().atr_for_levels(d1i, h4i, h1i, pair=pair, style="intraday")
+                _atr_c = _rt().atr_for_levels(d1i, h4i, h1i, pair=pair, style=resolved_style)
                 _lvl_a = calc_levels(current_price, _atr_c or atr, res_a["direction"], _ptype,
                                      regime_state=res_a.get("regime", {}).get("state"),
-                                     style="intraday") if _atr_c else {}
+                                     style=resolved_style) if _atr_c else {}
                 signal_a = {
                     "confluenceScore": res_a["score"], "maxScore": res_a.get("maxScoreOverride", 3.0),
                     "direction": res_a["direction"], "score": res_a["score"],
@@ -3949,46 +4104,27 @@ def backtest_pair_consensus(
         slip = raw_entry * _get_slippage_for_bar(entry_bar, _ptype) * _slip_mult
         entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
-        sl = consensus.get("sl")
-        tp = consensus.get("tp")
-        # PHASE 1C: Track actual BT level source fields
-        selected_tp_source = consensus.get("tp_method", "consensus")
-        selected_sl_source = consensus.get("sl_method", "consensus")
-        
-        if sl is None or tp is None:
-            _lvl = calc_levels(entry, atr, direction, _ptype, style=resolved_style)
-            sl = sl or _lvl["sl"]
-            tp = tp or _lvl["tp1"]
-            selected_tp_source = selected_tp_source if tp else "calc_levels"
-            selected_sl_source = selected_sl_source if sl else "calc_levels"
-
-        if sl is None or tp is None:
-            i += 1
-            continue
-
-        target_rr = consensus.get("rr", 0.0)
-        if target_rr <= 0:
-            _sl_dist = abs(entry - sl)
-            _tp_dist = abs(tp - entry)
-            target_rr = (_tp_dist / _sl_dist) if _sl_dist > 0 else 0.0
-        # PHASE 2A: Use style-aware RR gate instead of hardcoded 1.0
-        if target_rr < style_profile.get("min_rr", 1.0):
-            i += 1
-            continue
-
-        # PHASE 2B: BT-only style-aware RR cap to prevent timeout-heavy overstretched TPs
-        _fallback_rr = style_profile.get("fallback_rr", 2.0)
-        if target_rr > _fallback_rr * 1.5:
-            _sl_dist = abs(entry - sl)
-            if _sl_dist > 0:
-                if direction == "LONG":
-                    tp = entry + (_sl_dist * _fallback_rr)
-                else:
-                    tp = entry - (_sl_dist * _fallback_rr)
-                target_rr = _fallback_rr
-                selected_tp_source = "bt_rr_cap_fallback"
-
         _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
+        _bt_levels = _resolve_engine_c_bt_levels_after_fill(
+            actual_entry=entry,
+            consensus=consensus,
+            style_profile=style_profile,
+            resolved_style=resolved_style,
+            direction=direction,
+            pair_type=_ptype,
+            atr=atr,
+            max_sl_pct=_max_sl_pct,
+            regime_state=(consensus.get("regime") or {}).get("state"),
+        )
+        sl = _bt_levels.get("final_sl")
+        tp = _bt_levels.get("final_tp")
+        target_rr = _bt_levels.get("final_rr", 0.0)
+        selected_tp_source = _bt_levels.get("selected_tp_source", "unknown")
+        selected_sl_source = _bt_levels.get("selected_sl_source", "unknown")
+
+        if sl is None or tp is None or target_rr <= 0:
+            i += 1
+            continue
         if abs(entry - sl) / entry > _max_sl_pct:
             i += 1
             continue
@@ -3999,10 +4135,15 @@ def backtest_pair_consensus(
         _monitor_candles = candles_h1 if _monitor_tf == "H1" else candles_h4
         _monitor_times = h1_times if _monitor_tf == "H1" else h4_times
         _monitor_fill_index = 0
-        if _monitor_times is not None and len(_monitor_times) > 0:
-            _entry_ts = pd.to_datetime(entry_bar["time"], utc=True, errors="coerce")
-            if pd.notna(_entry_ts):
-                _monitor_fill_index = int(_monitor_times.searchsorted(_entry_ts, side="left"))
+        if _monitor_tf == "H4":
+            # entry_bar is candles_h4[i + 1] in this loop, so monitoring starts there directly.
+            _monitor_fill_index = i + 1
+        elif h1_times is not None and len(h1_times) > 0:
+            _entry_bar_ts = pd.Timestamp(entry_bar["time"])
+            if pd.notna(_entry_bar_ts):
+                if _entry_bar_ts.tzinfo is None:
+                    _entry_bar_ts = _entry_bar_ts.tz_localize("UTC")
+                _monitor_fill_index = int(bisect.bisect_left(h1_times, _entry_bar_ts))
         
         # Convert H4-based MAX_HOLD to monitoring TF (H4->H1 = 4x, H4->H4 = 1x)
         _tf_multiplier = 4 if _monitor_tf == "H1" else 1
@@ -4146,7 +4287,7 @@ def backtest_pair_consensus(
     # PHASE 2: Override btStyle with actual resolved style for metadata parity
     if "error" not in result:
         result["btStyle"] = resolved_style
-        result["btStyleRequested"] = "intraday"  # Engine C always uses intraday style
+        result["btStyleRequested"] = requested_style
 
     _tp_count = sum(1 for t in trades if t.get("outcome") == "TP1")
     _sl_count = sum(1 for t in trades if t.get("outcome") == "SL")
