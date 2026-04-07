@@ -3129,6 +3129,10 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 _bt_regime = res.get("regime_state")
             except Exception:
                 pass
+            # PHASE 1C: Track actual BT level source fields
+            selected_tp_source = "structural" if _bt_sl_mode == "structural" else "calc_levels"
+            selected_sl_source = "structural" if _bt_sl_mode == "structural" else "calc_levels"
+            
             if _bt_sl_mode == "structural":
                 sl = res.get("recommended_stop_loss")
                 tp = res.get("recommended_take_profit")
@@ -3138,6 +3142,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                         tp = entry + (sl_dist * style_profile.get("fallback_rr", 2.0))
                     else:
                         tp = entry - (sl_dist * style_profile.get("fallback_rr", 2.0))
+                    selected_tp_source = "structural_fallback_rr"
             else:
                 _lvl = calc_levels(
                     entry,
@@ -3176,6 +3181,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                     "conf": conf_data,
                     "regime_label": regime_label,
                     "level_mode": _bt_sl_mode,
+                    "selected_tp_source": selected_tp_source,
+                    "selected_sl_source": selected_sl_source,
                 }
             )
 
@@ -3430,6 +3437,9 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 # Forex-specific fields
                 "fvg_bonus": best["res"].get("fvg_bonus", 0.0),
                 "volume_strength": best["res"].get("volume_strength", 0.0),
+                # PHASE 1C: Level source tracking
+                "selected_tp_source": best.get("selected_tp_source", "unknown"),
+                "selected_sl_source": best.get("selected_sl_source", "unknown"),
             }
         )
         # Advance past the resolved exit bar plus the configured cooldown gap.
@@ -3924,10 +3934,16 @@ def backtest_pair_consensus(
 
         sl = consensus.get("sl")
         tp = consensus.get("tp")
+        # PHASE 1C: Track actual BT level source fields
+        selected_tp_source = consensus.get("tp_method", "consensus")
+        selected_sl_source = consensus.get("sl_method", "consensus")
+        
         if sl is None or tp is None:
             _lvl = calc_levels(entry, atr, direction, _ptype, style=resolved_style)
             sl = sl or _lvl["sl"]
             tp = tp or _lvl["tp1"]
+            selected_tp_source = selected_tp_source if tp else "calc_levels"
+            selected_sl_source = selected_sl_source if sl else "calc_levels"
 
         if sl is None or tp is None:
             i += 1
@@ -4063,7 +4079,8 @@ def backtest_pair_consensus(
             "zone_tf_used": _zone_tf,
             "entry_tf_used": _entry_tf,
             "atr_tf_used": _atr_tf,
-            "selected_tp_source": "consensus",  # TODO: Track actual TP source if available
+            "selected_tp_source": selected_tp_source,
+            "selected_sl_source": selected_sl_source,
             "selected_target_rr": round(target_rr, 2),
             "selected_target_price": round(float(tp), 6),
             "selected_sl_price": round(float(sl), 6),
