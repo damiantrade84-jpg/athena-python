@@ -1,0 +1,94 @@
+import pytest
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
+import os
+
+# Test 1: Lottery Rule Consolidation
+def test_lottery_rule_consolidation():
+    from lottery_service import LOTTERY_GAME_SPECS
+    from lottery_engine import LOTTERY_GAME_RULES
+    
+    # Verify they are now identical (aliased)
+    assert LOTTERY_GAME_RULES == LOTTERY_GAME_SPECS
+    assert "lotto" in LOTTERY_GAME_SPECS
+    assert LOTTERY_GAME_SPECS["lotto"]["main_max"] == 58
+    assert LOTTERY_GAME_SPECS["powerball"]["bonus_max"] == 20
+
+# Test 2: Telegram DateTime Usage
+def test_telegram_notify_datetime_usage():
+    import telegram_notify
+    from datetime import datetime
+    
+    # We can't easily check for warnings here without capturing logs, 
+    # but we can verify the code uses timezone.utc
+    with open("telegram_notify.py", "r", encoding="utf-8") as f:
+        content = f.read()
+        assert "datetime.now(timezone.utc)" in content
+        assert "datetime.utcnow()" not in content
+
+# Test 3: Scoring Gating Logic
+def test_scoring_backtest_gating():
+    from scoring import _classify_signal
+    from config import CONFIG
+    
+    pair = {"display": "EUR/USD", "type": "forex", "enabled": True}
+    signal = {
+        "confluenceScore": 1.5,
+        "scanThreshold": 1.0,
+        "macroEventRisk": {"blocked": True, "reason": "NFP Imminent"},
+        "eventRisk": {"hardBlock": False},
+        "exchangeClosed": False,
+        "scanDiagnostics": []
+    }
+    
+    # 3a. Live mode (RESEARCH_MODE=False) -> Should block
+    with patch.dict(CONFIG, {"RESEARCH_MODE": False, "BACKTEST_RUNNING": False}):
+        tier, reason = _classify_signal(signal, pair)
+        assert tier == "watchlist"
+        assert "Blocked by Macro Event Gate" in reason
+        
+    # 3b. Backtest mode (RESEARCH_MODE=True), Gate OFF -> Should NOT block
+    with patch.dict(CONFIG, {"RESEARCH_MODE": True, "BACKTEST_EVENT_RISK_GATING": False}):
+        tier, reason = _classify_signal(signal, pair)
+        assert tier == "trade"
+        assert "Trade-ready" in reason
+
+    # 3c. Backtest mode (RESEARCH_MODE=True), Gate ON -> Should block
+    with patch.dict(CONFIG, {"RESEARCH_MODE": True, "BACKTEST_EVENT_RISK_GATING": True}):
+        tier, reason = _classify_signal(signal, pair)
+        assert tier == "watchlist"
+        assert "Blocked by Macro Event Gate" in reason
+
+# Test 4: Sentiment Gating Parity
+def test_scoring_sentiment_gating():
+    from scoring import _classify_signal
+    from config import CONFIG
+    
+    pair = {"display": "BTC/USDT", "type": "crypto", "enabled": True}
+    signal = {
+        "confluenceScore": 2.0,
+        "scanThreshold": 1.4,
+        "sentimentBlocked": True,
+        "eventRisk": {"hardBlock": False},
+        "macroEventRisk": {"blocked": False},
+        "exchangeClosed": False,
+        "scanDiagnostics": []
+    }
+    
+    # 4a. Live mode -> Should block
+    with patch.dict(CONFIG, {"RESEARCH_MODE": False, "BACKTEST_RUNNING": False}):
+        tier, reason = _classify_signal(signal, pair)
+        assert tier == "watchlist"
+        assert "Blocked by Sentiment Gate" in reason
+        
+    # 4b. Backtest mode, Gate OFF -> Should NOT block
+    with patch.dict(CONFIG, {"RESEARCH_MODE": True, "BACKTEST_SENTIMENT_GATING": False}):
+        tier, reason = _classify_signal(signal, pair)
+        assert tier == "trade"
+        assert "Trade-ready" in reason
+
+    # 4c. Backtest mode, Gate ON -> Should block
+    with patch.dict(CONFIG, {"RESEARCH_MODE": True, "BACKTEST_SENTIMENT_GATING": True}):
+        tier, reason = _classify_signal(signal, pair)
+        assert tier == "watchlist"
+        assert "Blocked by Sentiment Gate" in reason

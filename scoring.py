@@ -690,11 +690,33 @@ def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
     threshold = signal.get("scanThreshold", get_min_confluence_threshold(pair))
     score = signal.get("confluenceScore", 0)
     hard_event = signal.get("eventRisk", {}).get("hardBlock", False)
+    macro_event_blocked = signal.get("macroEventRisk", {}).get("blocked", False)
     exchange_closed = signal.get("exchangeClosed", False)
+    # Risk Gating Parity — allow backtests to skip live blockers unless config-gated ON
+    is_research = CONFIG.get("RESEARCH_MODE", False) or CONFIG.get("BACKTEST_RUNNING", False)
+    
+    event_blocked = False
+    if macro_event_blocked:
+        if is_research:
+            if CONFIG.get("BACKTEST_EVENT_RISK_GATING", False):
+                event_blocked = True
+        else:
+            event_blocked = True
+
+    # Note: Sentiment blocking is currently checked at execution level or scanner annotation,
+    # but we ensure parity here if the signal dict carries a 'sentimentBlocked' flag.
+    sentiment_blocked = signal.get("sentimentBlocked", False)
+    if sentiment_blocked:
+        if is_research:
+            if not CONFIG.get("BACKTEST_SENTIMENT_GATING", False):
+                sentiment_blocked = False
+
     if (
         pair.get("enabled", True)
         and not exchange_closed
         and not hard_event
+        and not event_blocked
+        and not sentiment_blocked
         and score >= threshold
     ):
         return "trade", "Trade-ready"
@@ -702,8 +724,15 @@ def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
     reasons = [d["detail"] for d in signal.get("scanDiagnostics", [])]
     if score >= threshold and not pair.get("enabled", True):
         return "watchlist", "; ".join(reasons) or "Strong setup, but pair is disabled"
-    if score >= threshold and (exchange_closed or hard_event):
-        return "watchlist", "; ".join(reasons) or "Blocked by exchange/event risk"
+    
+    # Update reasons if blocked by parity-gated logic
+    if score >= threshold:
+        if event_blocked:
+            return "watchlist", "; ".join(reasons) or "Blocked by Macro Event Gate"
+        if sentiment_blocked:
+            return "watchlist", "; ".join(reasons) or "Blocked by Sentiment Gate"
+        if exchange_closed or hard_event:
+            return "watchlist", "; ".join(reasons) or "Blocked by exchange/event risk"
     if signal.get("trendState") != "DEAD RANGING" and score >= watch_floor:
         return "watchlist", "; ".join(reasons) or f"Near miss ({score}/{threshold})"
     return "skip", "; ".join(reasons) or "Below discovery threshold"

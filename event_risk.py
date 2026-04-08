@@ -246,8 +246,12 @@ def check_event_risk(pair: str, asset_type: str, lookahead_hours: int = 4) -> di
         }
 
     except ImportError:
-        log.warning("[EVENT_RISK] eodhd library not installed — gate skipped")
-        return {"allowed": True, "events": [], "reason": "eodhd library not available"}
+        from config import CONFIG
+        fail_closed = CONFIG.get("EVENT_RISK_API_FAIL_CLOSED", False)
+        log.warning(f"[EVENT_RISK] eodhd library not installed — fail closed: {fail_closed}")
+        return {"allowed": not fail_closed, "events": [], "reason": "eodhd library not available"}
     except Exception as e:
-        log.error(f"[EVENT_RISK] Unexpected error: {e}")
-        return {"allowed": True, "events": [], "reason": f"Error: {e}"}
+        from config import CONFIG
+        fail_closed = CONFIG.get("EVENT_RISK_API_FAIL_CLOSED", False)
+        log.error(f"[EVENT_RISK] Unexpected error: {e} — fail closed: {fail_closed}")
+        return {"allowed": not fail_closed, "events": [], "reason": f"Error: {e}"}

@@ -46,7 +46,7 @@ def test_engine_c_scan_uses_standalone_engine_b_gate(monkeypatch):
         current_btc_bias=lambda: "neutral",
         resolve_scan_style=lambda style, _pair: style,
         normalize_style=lambda style: style,
-        analyze_pair=lambda _pair, _btc_bias, style="auto", preloaded_candles=None: {},
+        analyze_pair=lambda _pair, _btc_bias, **kwargs: {},
         naked_scan_style_profile=lambda requested_style, score_group=None: (
             requested_style,
             {"min_score": 1.1, "fallback_rr": 2.0, "min_rr": 1.0},
@@ -164,7 +164,7 @@ def test_engine_c_scan_uses_style_timeframes_and_tests_both_directions(monkeypat
         current_btc_bias=lambda: "neutral",
         resolve_scan_style=lambda style, _pair: style,
         normalize_style=lambda style: style,
-        analyze_pair=lambda _pair, _btc_bias, style="auto", preloaded_candles=None: {
+        analyze_pair=lambda _pair, _btc_bias, **kwargs: {
             "direction": "LONG",
             "price": 1.2345,
             "atr": 0.0020,
@@ -317,8 +317,8 @@ def test_engine_c_forex_intraday_engine_a_gets_real_tfs(monkeypatch):
             },
         )
 
-    def _fake_analyze_pair(_pair, _btc_bias, style="auto", preloaded_candles=None):
-        captured["preloaded_candles"] = preloaded_candles
+    def _fake_analyze_pair(_pair, _btc_bias, **kwargs):
+        captured["preloaded_candles"] = kwargs.get("preloaded_candles")
         return {
             "direction": "LONG",
             "price": 0.8850,

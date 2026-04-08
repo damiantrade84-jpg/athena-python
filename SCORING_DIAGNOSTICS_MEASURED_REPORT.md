@@ -71,7 +71,7 @@ These numbers are not suitable as global live pass rates because the stored samp
 
 ### Backtest outcome summary
 
-| Engine A branch | Runs | Pairs | Avg trades/run | Avg win rate | Trade-weighted win rate | Avg bt_min |
+| Engine A branch | Runs | Pairs | Avg trades/run | Avg win rate | Trade-weighted win rate | Avg eval_threshold |
 |---|---:|---:|---:|---:|---:|---:|
 | factor_scoring | 163 | 65 | 23.75 | 44.85% | 48.48% | 0.76 |
 | forex_scoring | 44 | 17 | 42.68 | 39.28% | 36.37% | 0.59 |
@@ -103,19 +103,19 @@ Direct raw score distribution for all Engine B scans is not stored centrally.
 What is available:
 - backtest run-level trade counts
 - backtest run-level win rates
-- configured `bt_min` captured per run
+- configured `eval_threshold` captured per run
 
 ### Backtest outcome summary
 
 Overall:
 
-| Runs | Pairs | Avg trades/run | Avg win rate | Trade-weighted win rate | Avg bt_min | Min bt_min | Max bt_min |
+| Runs | Pairs | Avg trades/run | Avg win rate | Trade-weighted win rate | Avg eval_threshold | Min eval_threshold | Max eval_threshold |
 |---:|---:|---:|---:|---:|---:|---:|---:|
 | 102 | 17 | 114.00 | 38.95% | 38.00% | 3.01 | 1.50 | 4.00 |
 
 By style:
 
-| Style | Runs | Avg trades/run | Min trades | Max trades | Avg win rate | Trade-weighted win rate | Avg bt_min |
+| Style | Runs | Avg trades/run | Min trades | Max trades | Avg win rate | Trade-weighted win rate | Avg eval_threshold |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | intraday | 62 | 78.73 | 19 | 230 | 38.55% | 37.70% | 3.24 |
 | scalp | 20 | 212.15 | 8 | 1988 | 49.73% | 42.96% | 3.00 |

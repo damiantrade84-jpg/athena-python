@@ -1851,6 +1851,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         h4_snap=h4i_ctx["snap"],
                         h1_snap=h1i["snap"],
                         h1_candles=h1_window,
+                        pair=_pair_ctx,  # HIGH-01 fix: was missing pair arg
                         bar_time=h1_raw[i][
                             "time"
                         ],  # use actual current H1 bar datetime
@@ -2186,7 +2187,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         log.warning(
             f"No signals generated for {pair['display']} — "
             f"setups={funnel['total_setups']} skip_window={funnel['skip_window']} "
-            f"fail_score={funnel['fail_score']} bt_min={_bt_min_used} "
+            f"fail_score={funnel['fail_score']} evalThreshold={_bt_min_used} "
             f"max_score_seen={_max_score_seen} "
             f"d1={len(d1_raw)} h4={len(h4_raw)} h1={len(h1_raw)}"
         )
@@ -2252,7 +2253,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             "btStyle": effective_style,
             "btStyleRequested": requested_style,
             "quantileGateNote": _engine_a_bt_gate_note(),
-            "btMinUsed": bt_min,
+            "evalThreshold": bt_min,
             "scanQuantileEnabled": CONFIG.get("SCAN_QUANTILE_ENABLED", True),
             "bhReturn": _bh,
             "calibrationReport": _calibration_report,
@@ -2535,7 +2536,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             _con.execute(
                 "INSERT INTO backtest_results "
                 "(run_date,pair,asset_type,engine,trades,win_rate,profit_factor,"
-                "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,bt_min,atr_source) "
+                "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,eval_threshold,atr_source) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     __import__("datetime").datetime.utcnow().isoformat(),
@@ -2649,7 +2650,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         "btStyle": effective_style,
         "btStyleRequested": requested_style,
         "quantileGateNote": _engine_a_bt_gate_note(),
-        "btMinUsed": bt_min,
+        "evalThreshold": bt_min,
         "scanQuantileEnabled": CONFIG.get("SCAN_QUANTILE_ENABLED", True),
         "bhReturn": bh_return,
         "calibrationReport": calibration_summary,
@@ -3673,7 +3674,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 _con.execute(
                     "INSERT INTO backtest_results "
                     "(run_date,pair,asset_type,engine,trades,win_rate,profit_factor,"
-                    "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,bt_min,atr_source,notes) "
+                    "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,eval_threshold,atr_source,notes) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         datetime.now(timezone.utc).isoformat(),
@@ -3972,7 +3973,10 @@ def backtest_pair_consensus(
 
             if _ptype == "forex":
                 from forex_scoring import compute_forex_score
-                _bt_bar_time = _bt_forex_d1_bar_time(candles_h4[i].get("time", "")) if candles_h4 else ""
+                # HIGH-06 fix: use actual H4 bar time, NOT _bt_forex_d1_bar_time.
+                # _bt_forex_d1_bar_time forces 13:00 UTC which suppresses the
+                # London breakout window (07-09 UTC) in Engine-C scan.
+                _bt_bar_time = candles_h4[i].get("time", "") if candles_h4 else ""
                 _fx = compute_forex_score(
                     d1_snap=d1i["snap"], h4_snap=h4i["snap"], h1_snap=h1i["snap"],
                     h1_candles=h1_window, pair=_pair_ctx,
@@ -4325,7 +4329,7 @@ def backtest_pair_consensus(
                 _con.execute(
                     "INSERT INTO backtest_results "
                     "(run_date,pair,asset_type,engine,trades,win_rate,profit_factor,"
-                    "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,bt_min,atr_source,notes) "
+                    "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,eval_threshold,atr_source,notes) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         datetime.now(timezone.utc).isoformat(),

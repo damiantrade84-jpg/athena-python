@@ -755,8 +755,8 @@ def api_engine_c_scan():
                 "tp1": sig_a.get("tp1"),
                 "regime": sig_a.get("regime"),
                 "style": sig_a.get("style", sig_a.get("tradeStyle")),
-                "cot": sig_a.get("votes", {}).get("derivatives"),
-                "carry": sig_a.get("votes", {}).get("carry"),
+                "cot": sig_a.get("votes", {}).get("derivatives", sig_a.get("cot_boost")),
+                "carry": sig_a.get("votes", {}).get("carry", sig_a.get("carry_boost")),
                 "has_signal": a_norm_result["has_signal"],
                 "score_norm": a_norm_result["score_norm"],
             }

@@ -7,10 +7,33 @@ from datetime import datetime, timezone
 from itertools import zip_longest
 
 
+# TODO(Audit): audit.db is currently shared across trading, vision, advisory, and lottery modules.
+# Future refactoring should decouple lottery data into its own dedicated database.
 LOTTERY_GAME_SPECS = {
-    "lotto": {"main_count": 6, "has_bonus": True},
-    "powerball": {"main_count": 5, "has_bonus": True},
-    "daily_lotto": {"main_count": 5, "has_bonus": False},
+    "lotto": {
+        "main_count": 6,
+        "has_bonus": True,
+        "main_min": 1,
+        "main_max": 58,
+        "bonus_min": 1,
+        "bonus_max": 58,
+    },
+    "powerball": {
+        "main_count": 5,
+        "has_bonus": True,
+        "main_min": 1,
+        "main_max": 50,
+        "bonus_min": 1,
+        "bonus_max": 20,
+    },
+    "daily_lotto": {
+        "main_count": 5,
+        "has_bonus": False,
+        "main_min": 1,
+        "main_max": 36,
+        "bonus_min": None,
+        "bonus_max": None,
+    },
 }
 
 

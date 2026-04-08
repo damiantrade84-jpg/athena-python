@@ -6731,14 +6731,6 @@ def _persist_live_confluence_yaml(cfg_path: str, current: dict) -> None:
         content,
         flags=_re.MULTILINE,
     )
-    if "forex" in current:
-        content = _re.sub(
-            r"^(MIN_FOREX_CONFLUENCE\s*:\s*)[\d.]+",
-            lambda mm, v=current["forex"]: f"{mm.group(1)}{v}",
-            content,
-            count=1,
-            flags=_re.MULTILINE,
-        )
     with open(cfg_path, "w", encoding="utf-8") as f:
         f.write(content)
 
@@ -6789,8 +6781,6 @@ def _apply_live_confluence_updates(new_vals: dict) -> dict:
     current = dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {})
     current.update({k: round(float(v), 4) for k, v in (new_vals or {}).items()})
     CONFIG["MIN_CONFLUENCE_CLASS"] = current
-    if "forex" in current:
-        CONFIG["MIN_FOREX_CONFLUENCE"] = round(float(current["forex"]), 4)
     cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
     _persist_live_confluence_yaml(cfg_path, current)
     log.info(f"[LIVE_THRESHOLD] Updated via UI: {current}")
@@ -7060,7 +7050,6 @@ def api_live_confluence_thresholds():
         return jsonify(
             {
                 "live_class": dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {}),
-                "min_forex_confluence": CONFIG.get("MIN_FOREX_CONFLUENCE"),
             }
         )
 
@@ -7192,7 +7181,15 @@ def api_feature_toggles():
         },
         "news_sentiment": {
             "config_keys": ["NEWS_SENTIMENT_CONFLUENCE_ENABLED"],
-            "label": "News Sentiment Scoring",
+            "label": "News Score Blend",
+        },
+        "sentiment_gate": {
+            "config_keys": ["SENTIMENT_GATE_ENABLED"],
+            "label": "Sentiment Gate",
+        },
+        "event_risk": {
+            "config_keys": ["EVENT_RISK_ENABLED"],
+            "label": "Macro Event Gate",
         },
     }
 
@@ -7201,6 +7198,8 @@ def api_feature_toggles():
         return {
             "intermarket": bool(ic.get("enabled", False)),
             "news_sentiment": bool(CONFIG.get("NEWS_SENTIMENT_CONFLUENCE_ENABLED", False)),
+            "sentiment_gate": bool(CONFIG.get("SENTIMENT_GATE_ENABLED", True)),
+            "event_risk": bool(CONFIG.get("EVENT_RISK_ENABLED", True)),
         }
 
     if request.method == "GET":
@@ -7229,7 +7228,19 @@ def api_feature_toggles():
         current = bool(CONFIG.get("NEWS_SENTIMENT_CONFLUENCE_ENABLED", False))
         new_val = not current if action == "toggle" else (action == "enable")
         CONFIG["NEWS_SENTIMENT_CONFLUENCE_ENABLED"] = new_val
-        log.warning(f"[FEATURE] News Sentiment Scoring {'ENABLED' if new_val else 'DISABLED'}")
+        log.warning(f"[FEATURE] News Score Blend {'ENABLED' if new_val else 'DISABLED'}")
+
+    elif feature == "sentiment_gate":
+        current = bool(CONFIG.get("SENTIMENT_GATE_ENABLED", True))
+        new_val = not current if action == "toggle" else (action == "enable")
+        CONFIG["SENTIMENT_GATE_ENABLED"] = new_val
+        log.warning(f"[FEATURE] Sentiment Gate {'ENABLED' if new_val else 'DISABLED'}")
+
+    elif feature == "event_risk":
+        current = bool(CONFIG.get("EVENT_RISK_ENABLED", True))
+        new_val = not current if action == "toggle" else (action == "enable")
+        CONFIG["EVENT_RISK_ENABLED"] = new_val
+        log.warning(f"[FEATURE] Macro Event Gate {'ENABLED' if new_val else 'DISABLED'}")
 
     return jsonify(_get_state())
 

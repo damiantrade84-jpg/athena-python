@@ -310,6 +310,8 @@ CONFIG: dict = {
     # RESEARCH_MODE also enables the same BT chain (legacy alias).
     "RESEARCH_MODE": False,
     "BACKTEST_USE_BT_MIN_THRESHOLDS": False,
+    "BACKTEST_EVENT_RISK_GATING": False,
+    "BACKTEST_SENTIMENT_GATING": False,
     "MIN_CONFLUENCE_CLASS": {
         "forex": 1.0,
         "crypto": 1.40,
@@ -317,7 +319,6 @@ CONFIG: dict = {
         "stock": 1.55,
         "index": 1.35,
     },
-    "MIN_FOREX_CONFLUENCE": 1.0,
     # PHASE 3: Engine C Backtest Exit Controls - explicit config for MAX_HOLD and BE parameters
     "ENGINE_C_BT_EXIT": {
         "forex": {
@@ -636,10 +637,11 @@ CONFIG: dict = {
         "stock": ["RANGING"],
         "index": ["RANGING"],
     },
-    "SIGNAL_DEBATE_ENABLED": True,
-    "SENTIMENT_GATE_ENABLED": True,
+    "SIGNAL_DEBATE_ENABLED": True,    "SENTIMENT_GATE_ENABLED": True,
+    "SENTIMENT_API_FAIL_CLOSED": False,
     "EVENT_RISK_ENABLED": True,
     "EVENT_RISK_HOURS": 4,
+    "EVENT_RISK_API_FAIL_CLOSED": False,
     # ── AI Self-Learning ──────────────────────────────────────────────────────
     "LEARNING_ENABLED": True,  # Extract learning data after each trade closes
     "LEARNING_MIN_TRADES": 5,  # Min trades before context injected into AI

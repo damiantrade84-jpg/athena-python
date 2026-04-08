@@ -14,7 +14,7 @@ If TELEGRAM.enabled is false, all notifications silently do nothing.
 import requests
 import threading
 import time
-from datetime import datetime, time as dt_time
+from datetime import datetime, timezone, time as dt_time
 from typing import Dict, List, Optional, Any
 import yaml
 from pathlib import Path
@@ -151,7 +151,7 @@ def notify_signal_fired(
             "pair": pair,
             "direction": direction,
             "score": score,
-            "timestamp": datetime.utcnow(),
+            "timestamp": datetime.now(timezone.utc),
         }
     )
 
@@ -207,7 +207,7 @@ def notify_signal_with_ai(
             "pair": pair,
             "direction": direction,
             "score": score,
-            "timestamp": datetime.utcnow(),
+            "timestamp": datetime.now(timezone.utc),
         }
     )
 
@@ -237,7 +237,7 @@ def notify_trade_opened(
             "pair": pair,
             "direction": direction,
             "entry_price": entry_price,
-            "timestamp": datetime.utcnow(),
+            "timestamp": datetime.now(timezone.utc),
         }
     )
 
@@ -267,7 +267,7 @@ def notify_trade_closed(
             "pnl_r": pnl_r,
             "is_win": is_win,
             "duration_minutes": duration_minutes,
-            "timestamp": datetime.utcnow(),
+            "timestamp": datetime.now(timezone.utc),
         }
     )
 
@@ -277,7 +277,7 @@ def notify_daily_summary() -> None:
     if not _is_enabled():
         return
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Only send at 22:00 UTC
     if now.time() < dt_time(22, 0) or now.time() >= dt_time(22, 1):

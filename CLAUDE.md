@@ -11,8 +11,8 @@ alwaysApply: true
 
 **Do not change anything that alters live or backtest scoring unless the user explicitly instructs it.**
 
-- **Engine A live:** `MIN_CONFLUENCE_CLASS`, `MIN_CONFLUENCE_GROUP`, `MIN_FOREX_CONFLUENCE`, `PAIR_PROFILES.min_confluence`, `AUTO_TRADE_MIN_SCORE`, `SCAN_QUANTILE_*`, confluence logic in `scoring.py` / `factor_scoring.py` / `forex_scoring.py`, `analyze_pair` tiering.
-- **Engine A backtest:** `BT_MIN`, `PAIR_PROFILES.bt_min`, `get_backtest_min_score_threshold`, backtest score gates in `backtest_runner.py`.
+- **Engine A live:** `MIN_CONFLUENCE_CLASS`, `MIN_CONFLUENCE_GROUP`, `MIN_CONFLUENCE_CLASS.forex`, `PAIR_PROFILES.min_confluence`, `AUTO_TRADE_MIN_SCORE`, `SCAN_QUANTILE_*`, confluence logic in `scoring.py` / `factor_scoring.py` / `forex_scoring.py`, `analyze_pair` tiering.
+- **Engine A backtest:** `BT_MIN`, `PAIR_PROFILES.eval_threshold`, `get_backtest_min_score_threshold`, backtest score gates in `backtest_runner.py`.
 - **Engine B live + backtest:** `NAKED_ENGINE.style_profiles` (`min_score`, `min_rr`), `ENGINE_B_REGIME_MULTIPLIERS` (score scaling — currently neutralized to 1.0), `zone_multipliers` (structural width), naked checklist gates in `market_structure.py`.
 - **Engine D (Scalp Lab):** `SCALP_ENGINE` in `config.yaml` (`MIN_RR`, `MAX_SPREAD_PIPS`, `ZONE_MIN_CONDITIONS`, `WITH_TREND_ONLY`, `BIAS_TIMEFRAME`, candle limits, `AI_GRADING` / `MIN_GRADE_AUTO_EXECUTE`, optional `SCALP_PAIRS`) and core pass/fail logic in `scalp_engine.py` (session filter, zone detection, M5 trigger, momentum, level math).
 
@@ -302,7 +302,7 @@ Shared regime resolver for all Engine B paths. Returns: `TRENDING`, `RANGING`, `
 Recursively replaces `NaN`/`Inf` with `None`, normalizes numpy types. Applied before every `jsonify()`.
 
 ### `_can_execute(signal, cfg)` — `auto_trader.py`
-Live execute gate is **`combinedConviction`** vs `AUTO_TRADE_MIN_CONVICTION` (with alignment discount and meta delta). `AUTO_TRADE_MIN_SCORE` is **informational** in `get_status()` only; keep forex on the **0–2.0** scale alongside `MIN_CONFLUENCE_CLASS.forex` / `MIN_FOREX_CONFLUENCE`.
+Live execute gate is **`combinedConviction`** vs `AUTO_TRADE_MIN_CONVICTION` (with alignment discount and meta delta). `AUTO_TRADE_MIN_SCORE` is **informational** in `get_status()` only; keep forex on the **0–2.0** scale alongside `MIN_CONFLUENCE_CLASS.forex` / `MIN_CONFLUENCE_CLASS.forex`.
 
 ### `/api/chart-analysis` — `athena.py`
 Requires `XAI_API_KEY` env var and uses OpenAI-compatible xAI client (`base_url=https://api.x.ai/v1`). `regime` in signal can be dict `{"label":"TRENDING"}` (Engine A) or string `"TRENDING"` (Engine C) — both handled. Context builder is **outside** try/except — keep it simple.
@@ -317,7 +317,7 @@ See **Scalp Lab / Engine D flow** above. Execute path: **`signal.type == "crypto
 | Engine | Scorer | Scale | Gate key |
 |--------|--------|-------|----------|
 | Engine A — non-forex | `factor_scoring.py` z-score factor engine | 0–3.0 | `MIN_CONFLUENCE_CLASS[type]` |
-| Engine A — forex | `forex_scoring.py` rules-based | 0–2.0 | `MIN_FOREX_CONFLUENCE` (1.0) + `MIN_CONFLUENCE_CLASS.forex` (1.0) |
+| Engine A — forex | `forex_scoring.py` rules-based | 0–2.0 | `MIN_CONFLUENCE_CLASS.forex` (1.0) + `MIN_CONFLUENCE_CLASS.forex` (1.0) |
 | Engine B | `market_structure.py` naked checklist | 0–100 pct | `NAKED_ENGINE.style_profiles.min_score` |
 | Engine C | `engine_c.py` A+B blend | 0–1 conviction | `ENGINE_C_AB_WEIGHTS` |
 | Engine D (Scalp Lab) | `scalp_engine.py` zones + triggers + rule-based `ai_quality_grade` | 0–100 (`ai_score`), letter `ai_grade` | `SCALP_ENGINE` (`MIN_RR`, spread/session/zone gates, `MIN_GRADE_AUTO_EXECUTE`, etc.) |
@@ -415,7 +415,7 @@ Any news delta must scale from the correct `maxScoreOverride`. Do not assume all
 ### Current active forex thresholds
 
 - Engine A forex scale = **0-2.0**
-- `MIN_FOREX_CONFLUENCE` = **1.0**
+- `MIN_CONFLUENCE_CLASS.forex` = **1.0**
 - `MIN_CONFLUENCE_CLASS.forex` = **1.0**
 - `AUTO_TRADE_MIN_SCORE.forex` remains informational / status-only and should stay aligned to the active forex class floor
 
@@ -431,7 +431,7 @@ PAIR_PROFILES:
     disable_filters: [obv, session]
     weight_overrides: {h4_fib: 1.5, h1_bb: 0.5}
     min_confluence: 5.8
-    bt_min: 4.6
+    eval_threshold: 4.6
   EUR/USD:
     disabled_votes: [volume]
     weight_overrides: {session: 1.25}
@@ -471,7 +471,7 @@ Key columns: `ts, pair, score, direction, grade, edge_prob, risk, style, asset_c
 - `fee_cost` — Bybit commission. NULL for MT5.
 
 ### `backtest_results`
-Columns: `id, run_date, pair, asset_type, engine, trades, win_rate, profit_factor, expectancy, sqn, sharpe, sortino, is_score, oos_score, max_dd_pct, bt_min, atr_source, notes`
+Columns: `id, run_date, pair, asset_type, engine, trades, win_rate, profit_factor, expectancy, sqn, sharpe, sortino, is_score, oos_score, max_dd_pct, eval_threshold, atr_source, notes`
 - `engine`: `"forex_scoring"` | `"factor_scoring"` | `"naked_engine"`
 - Endpoints: `GET /api/backtest-history`, `/api/backtest-history/<pair>`, `/api/backtest-best`
 
@@ -613,7 +613,7 @@ This made `MIN_CONFLUENCE_CLASS` gates unreachable:
 
 1. Removed caps on `trend_score` and on the multiplicative `final_score` (no 0.507 scaling).
 2. **0–2.0** display scale: `result.final_score` capped at **2.0** (matches achievable max ~1.97).
-3. Historical thresholds at that point: **`MIN_CONFLUENCE_CLASS.forex`** and **`MIN_FOREX_CONFLUENCE`** ? **1.60** (~80% of 2.0, similar selectivity to old **0.80** on 0?1.0). **`BT_MIN.forex`** ? **1.50**; **`BT_MIN_GROUP`** forex ? **1.50 / 1.55 / 1.65**; **`MIN_CONFLUENCE_GROUP`** forex aligned to the same ladder.
+3. Historical thresholds at that point: **`MIN_CONFLUENCE_CLASS.forex`** and **`MIN_CONFLUENCE_CLASS.forex`** ? **1.60** (~80% of 2.0, similar selectivity to old **0.80** on 0?1.0). **`BT_MIN.forex`** ? **1.50**; **`BT_MIN_GROUP`** forex ? **1.50 / 1.55 / 1.65**; **`MIN_CONFLUENCE_GROUP`** forex aligned to the same ladder.
 4. **`advisory_thresholds.py`:** `_BT_LIMITS.forex` → **(0.80, 1.90)**; `_LIVE_LIMITS.forex` → **(1.00, 2.00)**.
 5. **`maxScoreOverride` / Engine C forex path:** **2.0** in `athena.py` and `backtest_runner.py`; **`normalize_engine_a`** treats **`max_score ≤ 2.01`** like forex for the A-side floor. Engine C **conviction** calibration / `record_signal_event` stay **`max_score=1.0`** (0–1 normalized).
 6. Historical fallback sync at that point: **`config.py` fallbacks** and **`AUTO_TRADE_MIN_SCORE.forex`** ? **1.60** (informational; matched the then-current class gate on 0?2.0).
@@ -649,7 +649,7 @@ This made `MIN_CONFLUENCE_CLASS` gates unreachable:
 Current active contract:
 - Engine A forex scale is **0?2.0**
 - `MIN_CONFLUENCE_CLASS.forex` is **1.0**
-- `MIN_FOREX_CONFLUENCE` is **1.0**
+- `MIN_CONFLUENCE_CLASS.forex` is **1.0**
 - `AUTO_TRADE_MIN_SCORE.forex` is **1.0** and remains informational/status-only
 
 ---

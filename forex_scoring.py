@@ -471,12 +471,36 @@ def _cot_boost(pair: dict, direction: str, bar_time: Optional[str] = None) -> fl
 # ─── London breakout ─────────────────────────────────────────────────────────
 
 
+def _breakout_eval_hour_from_candles(h1_candles: list) -> int:
+    """Derive the UTC hour for London breakout evaluation from the last H1 candle.
+
+    This is the shared candle-state resolver: live, backtest (all loops), and
+    Engine-C scan all call this instead of relying on bar_time (which is forced
+    to 13:00 UTC for D1 sessions and would always suppress the breakout check).
+    """
+    if not h1_candles:
+        return _local_to_utc_hour()
+    try:
+        last_candle_time = h1_candles[-1].get("time", "")
+        if not last_candle_time:
+            return _local_to_utc_hour()
+        dt = datetime.fromisoformat(str(last_candle_time).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.utctimetuple().tm_hour
+    except Exception:
+        return _local_to_utc_hour()
+
+
 def _london_breakout_score(h1_candles: list, utc_hour: int) -> tuple[float, str]:
     """
     London breakout signal.
     Measures Asian session range (00:00-07:00 UTC) from recent H1 candles.
     At London open, checks if current bar breaks above/below that range.
     Returns (score 0-1, direction).
+
+    NOTE: utc_hour should be derived from _breakout_eval_hour_from_candles(h1_candles)
+    NOT from bar_time (which is forced to 13:00 UTC in D1 swing BT).
     """
     if not h1_candles or len(h1_candles) < 10:
         return 0.0, "LONG"
@@ -570,15 +594,26 @@ def compute_forex_score(
     """
     result = ForexScoreResult()
 
+    # ── Session eval hour: used for the session gate (London/NY/Asian window) ──
+    # In D1 swing backtest, bar_time is forced to 13:00 UTC so the session filter
+    # passes (peak London/NY overlap). In H4/H1 BT and live, bar_time is the
+    # actual candle timestamp.
     if backtest_mode and bar_time:
-        # In backtest, use the historical bar's timestamp (UTC) for session check
         try:
-            utc_hour = datetime.fromisoformat(bar_time).hour
+            utc_hour = datetime.fromisoformat(
+                str(bar_time).replace("Z", "+00:00")
+            ).utctimetuple().tm_hour
         except Exception:
             utc_hour = _local_to_utc_hour()
     else:
         # In live mode, D1 bar_time is always midnight UTC — use real clock instead
         utc_hour = _local_to_utc_hour()
+
+    # ── Breakout eval hour: derived from last H1 candle, NOT from bar_time ────
+    # CRIT-01 fix: D1 swing BT passes bar_time=13:00 UTC but the London breakout
+    # window (07-09 UTC) must be evaluated against the *actual* H1 candle time.
+    # Using the same shared resolver across live, BT, and Engine-C scan.
+    breakout_eval_hour = _breakout_eval_hour_from_candles(h1_candles)
 
     # Hurst Exponent from H1 close prices — determines regime weighting
     _closes = [c.get("close", 0) for c in (h1_candles or [])[-60:] if c.get("close")]
@@ -707,7 +742,9 @@ def compute_forex_score(
         result.cot_boost = cot
 
     # ── Signal 2: London breakout ─────────────────────────────────────────
-    bo_score, bo_dir = _london_breakout_score(h1_candles, utc_hour)
+    # CRIT-01: Use breakout_eval_hour (last H1 candle time) NOT utc_hour (bar_time).
+    # This ensures parity: live, D1 swing BT, intraday BT, scalp BT, Engine-C.
+    bo_score, bo_dir = _london_breakout_score(h1_candles, breakout_eval_hour)
     if bo_score > 0:
         cot_bo = _cot_boost(pair, bo_dir, bar_time) if bo_dir != trend_dir else _cot_trend
         bo_final = bo_score * (1.0 + cot_bo * 0.3)
@@ -840,6 +877,7 @@ def compute_forex_score(
         ),
         "session_active": session_ok,
         "utc_hour": utc_hour,
+        "breakout_eval_hour": breakout_eval_hour,
         "entry_quality": result.entry_quality,
         "momentum_confirm": round(result.momentum_confirm, 3),
         "adx_filter": round(result.adx_filter, 3),

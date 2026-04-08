@@ -17,33 +17,11 @@ from lottery_service import LOTTERY_GAME_SPECS, ensure_lottery_schema
 log = logging.getLogger("sentinel")
 
 
-LOTTERY_GAME_RULES = {
-    "lotto": {
-        "main_count": 6,
-        "has_bonus": True,
-        "main_min": 1,
-        "main_max": 58,
-        "bonus_min": 1,
-        "bonus_max": 58,
-    },
-    "powerball": {
-        "main_count": 5,
-        "has_bonus": True,
-        "main_min": 1,
-        "main_max": 50,
-        "bonus_min": 1,
-        "bonus_max": 20,
-    },
-    "daily_lotto": {
-        "main_count": 5,
-        "has_bonus": False,
-        "main_min": 1,
-        "main_max": 36,
-        "bonus_min": None,
-        "bonus_max": None,
-    },
-}
+# Alias for backward compatibility locally
+LOTTERY_GAME_RULES = LOTTERY_GAME_SPECS
 
+# TODO(Audit): audit.db is currently shared across trading, vision, advisory, and lottery modules.
+# Future refactoring should decouple lottery data into its own dedicated database.
 _DEFAULT_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
 
 

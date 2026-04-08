@@ -80,7 +80,7 @@ Score distribution:
 - Components are rules-based and already expressed on a `0.0` to `1.0` scale
 
 Threshold gates:
-- Live scan threshold: `MIN_FOREX_CONFLUENCE = 0.70`
+- Live scan threshold: `MIN_CONFLUENCE_CLASS.forex = 0.70`
 - Class threshold mirrors this: `MIN_CONFLUENCE_CLASS.forex = 0.70`
 - Trend gate must pass first:
   - D1/H4 EMA alignment

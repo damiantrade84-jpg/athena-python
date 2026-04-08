@@ -5848,7 +5848,7 @@ function renderSignals(signals) {
 
 function getConfluencePct(data) {
   if(!data) return 0;
-  var pct = data.confluencePct;
+  var pct = data.thresholdProgressPct != null ? data.thresholdProgressPct : data.confluencePct;
   if (pct == null) pct = data.pct;
   if (pct == null) pct = data.confidence_pct;
   if (pct == null) pct = data.score_pct;
@@ -5876,7 +5876,9 @@ function getConfluenceLabel(pct) {
 
 function formatConfluenceText(data) {
   var pct = getConfluencePct(data);
-  return getConfluenceLabel(pct) + ' (' + pct + '%)';
+  var pText = getConfluenceLabel(pct) + ' (' + pct + '% to threshold)';
+  if (data.scoreNormPct != null) { pText += ' | ' + data.scoreNormPct + '% abs score'; }
+  return pText;
 }
 
 function fmtSignedPct(val) {

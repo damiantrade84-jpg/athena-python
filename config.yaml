@@ -197,7 +197,6 @@ MIN_CONFLUENCE_CLASS:
 
 # Forex scan threshold — forex_scoring engine outputs 0–2.0 (not 0–3.0 factor scale)
 # MIN_CONFLUENCE_CLASS.forex must match this — keep in sync
-MIN_FOREX_CONFLUENCE: 1.0
 
 # Optional subgroup thresholds (used when score_group is available on a pair)
 # NOTE: get_score_threshold() uses GROUP value directly — no class floor check.
@@ -275,7 +274,6 @@ AUTO_TRADE_ENABLED: true          # Start auto-trader on server boot
 # AUTO_TRADE_MIN_SCORE is the scan floor that decides which signals reach the
 # auto-trader candidate list. It is not the final live execute gate.
 # Factor engine (crypto/stock/commodity/index) outputs 0–3.0.
-# Forex engine outputs 0–2.0 — keep forex entry on that scale (see MIN_FOREX_CONFLUENCE).
 AUTO_TRADE_MIN_SCORE:
   crypto:    1.40   # factor 0–3: align with MIN_CONFLUENCE_CLASS.crypto
   commodity: 1.40   # factor 0–3: align with MIN_CONFLUENCE_CLASS.commodity
@@ -315,13 +313,19 @@ DRAWDOWN_STOP_THRESHOLD: 0.15     # Stop all trading at 15% drawdown
 # ── EODHD Sentiment Gate ──────────────────────────────────
 SENTIMENT_GATE_ENABLED: true       # Check news sentiment before auto-trades
 SENTIMENT_BLOCK_THRESHOLD: 0.4     # Block if sentiment opposes direction by >0.4
+SENTIMENT_API_FAIL_CLOSED: false   # If true, blocks auto-execution if the sentiment API fails
 
 # ── EODHD Event Risk Filter ──────────────────────────────
 EVENT_RISK_ENABLED: true           # Block trades near high-impact events (NFP/CPI/FOMC)
 EVENT_RISK_HOURS: 4                # Hours ahead to check for events
+EVENT_RISK_API_FAIL_CLOSED: false  # If true, blocks auto-execution if the event calendar API fails
 
 # ── Adaptive factor weights (factor_scoring.py) ─────────────
 ADAPTIVE_WEIGHTS_ENABLED: false
+
+# ── Backtest Parity Controls ─────────────────────────
+BACKTEST_EVENT_RISK_GATING: false
+BACKTEST_SENTIMENT_GATING: false
 
 # ── Adaptive Kelly Position Sizing ────────────────────────
 ADAPTIVE_KELLY_ENABLED: true       # Use fractional Kelly for dynamic position sizing

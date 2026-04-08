@@ -129,6 +129,19 @@ def annotate_signal_for_scan(
     )
     signal["newsCtx"] = news_ctx
 
+    if CONFIG.get("EVENT_RISK_ENABLED", True):
+        try:
+            from event_risk import check_event_risk
+            ev_risk = check_event_risk(pair.get("display", ""), pair.get("type", ""), lookahead_hours=CONFIG.get("EVENT_RISK_HOURS", 4))
+            signal["macroEventRisk"] = {
+                "blocked": not ev_risk.get("allowed", True),
+                "reason": ev_risk.get("reason", ""),
+                "events": ev_risk.get("events", [])
+            }
+        except Exception as e:
+            log.warning(f"Error checking macro event risk for scan: {e}")
+            signal["macroEventRisk"] = {"blocked": False, "reason": "Error checking macro events", "events": []}
+
     diagnostics = []
 
     if signal["confluenceScore"] < threshold:
@@ -158,6 +171,14 @@ def annotate_signal_for_scan(
             {
                 "code": "event_risk",
                 "detail": ", ".join(signal["eventRisk"].get("reasons", [])),
+            }
+        )
+
+    if signal.get("macroEventRisk", {}).get("blocked"):
+        diagnostics.append(
+            {
+                "code": "macro_event_risk",
+                "detail": signal["macroEventRisk"].get("reason", "Blocked by macro event"),
             }
         )
 
@@ -705,12 +726,15 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 news_ctx,
             )
 
-            # analyze_pair anchored confluencePct to static threshold only — re-anchor to scan gate
+            # Backend separated UI metrics: explicit progress vs absolute score capacity
+            _cs = float(sig.get("confluenceScore", 0))
             if effective_threshold and effective_threshold > 0:
-                _cs = float(sig.get("confluenceScore", 0))
-                sig["confluencePct"] = min(
-                    100, max(0, round((_cs / effective_threshold) * 67))
-                )
+                sig["thresholdProgressPct"] = min(100, max(0, round((_cs / effective_threshold) * 67)))
+                sig["confluencePct"] = sig["thresholdProgressPct"] # backward compat
+            
+            _maxs = float(sig.get("maxScore", 2.0))
+            if _maxs > 0:
+                sig["scoreNormPct"] = min(100, max(0, round((_cs / _maxs) * 100)))
 
             tier, tier_reason = _classify_signal(sig, pair)
 

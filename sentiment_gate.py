@@ -13,7 +13,7 @@ Caches results for 30 minutes per symbol to limit API calls.
 import logging
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 log = logging.getLogger("sentinel.sentiment_gate")
 
@@ -95,8 +95,8 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
         api = APIClient(api_key)
 
         # Get news from the last 3 days
-        date_to = datetime.utcnow().strftime("%Y-%m-%d")
-        date_from = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
+        date_to = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date_from = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
 
         try:
             news = api.financial_news(
@@ -139,19 +139,21 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
             avg_score = sum(sentiments) / len(sentiments)
             count = len(sentiments)
 
+            from config import CONFIG
             # Decision logic:
-            # If direction is LONG and sentiment is very bearish (< -0.4): BLOCK
-            # If direction is SHORT and sentiment is very bullish (> 0.4): BLOCK
+            # If direction is LONG and sentiment is very bearish (< -threshold): BLOCK
+            # If direction is SHORT and sentiment is very bullish (> threshold): BLOCK
             # Otherwise: ALLOW
+            threshold = CONFIG.get("SENTIMENT_BLOCK_THRESHOLD", 0.4)
             blocked = False
             reason = ""
 
-            if direction == "LONG" and avg_score < -0.4:
+            if direction == "LONG" and avg_score < -threshold:
                 blocked = True
                 reason = (
                     f"SENTIMENT BLOCK: strongly bearish ({avg_score:.2f}) opposes LONG"
                 )
-            elif direction == "SHORT" and avg_score > 0.4:
+            elif direction == "SHORT" and avg_score > threshold:
                 blocked = True
                 reason = (
                     f"SENTIMENT BLOCK: strongly bullish ({avg_score:.2f}) opposes SHORT"
@@ -177,16 +179,20 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
         return result
 
     except ImportError:
-        log.warning("[SENTIMENT] API failed — defaulting to BLOCKED for safety")
+        from config import CONFIG
+        fail_closed = CONFIG.get("SENTIMENT_API_FAIL_CLOSED", False)
+        log.warning(f"[SENTIMENT] API failed — fail closed: {fail_closed}")
         return {
-            "allowed": False,
+            "allowed": not fail_closed,
             "score": 0.0,
             "count": 0,
-            "reason": "Sentiment API unavailable — blocking by default for safety",
+            "reason": f"Sentiment API unavailable — fail closed: {fail_closed}",
         }
     except Exception as e:
-        log.warning("[SENTIMENT] API failed — defaulting to BLOCKED for safety")
-        return {"allowed": False, "score": 0.0, "count": 0, "reason": f"Sentiment API unavailable — blocking by default for safety"}
+        from config import CONFIG
+        fail_closed = CONFIG.get("SENTIMENT_API_FAIL_CLOSED", False)
+        log.warning(f"[SENTIMENT] API error — fail closed: {fail_closed} | Error: {e}")
+        return {"allowed": not fail_closed, "score": 0.0, "count": 0, "reason": f"Sentiment API error — fail closed: {fail_closed}"}
 
 
 def inject_external_sentiment(
@@ -203,10 +209,11 @@ def inject_external_sentiment(
     # Store for both LONG and SHORT directions
     for direction in ("LONG", "SHORT"):
         cache_key = f"{pair}_{direction}"
+        from config import CONFIG
         is_aligned = (score > 0 and direction == "LONG") or (
             score < 0 and direction == "SHORT"
         )
-        threshold = 0.4  # Same as SENTIMENT_BLOCK_THRESHOLD
+        threshold = CONFIG.get("SENTIMENT_BLOCK_THRESHOLD", 0.4)
         allowed = is_aligned or abs(score) < threshold
         _cache[cache_key] = {
             "ts": time.time(),
