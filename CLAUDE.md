@@ -330,6 +330,99 @@ See **Scalp Lab / Engine D flow** above. Execute path: **`signal.type == "crypto
 
 ---
 
+## 2026-04-08: Forex London breakout / news / Engine B reality (current active guidance)
+
+### Code-verified London breakout behavior
+
+- The forex engine is London-breakout capable, but it is **not** a London-breakout-only bot.
+- `forex_scoring.py` contains a dedicated `_london_breakout_score()` path.
+- The breakout path measures the Asian range from **00:00-07:00 UTC** using H1 candles.
+- Breakout scoring is only active during the first 3 London hours: **07:00-09:00 UTC**.
+- The Hurst/trend gate can veto the trend-following path while the London breakout path still runs.
+- The forex engine remains a hybrid:
+  - trend pullback path
+  - London breakout path
+  - final score uses the stronger valid path
+
+Use this mental model when reasoning about forex:
+- **Engine A = breakout / timing detector**
+- **Engine B = structural validator**
+- **Engine C = alignment / consensus layer**
+- **news / event risk = final safety layer**
+
+Do not describe the current forex engine as a dedicated London-breakout-only system.
+
+### London breakout operator guidance (not a single code-enforced switch)
+
+Treat this as the intended review / execution flow for breakout trades:
+1. Build the Asian range (**00:00-07:00 UTC**).
+2. Let **Engine A** detect breakout quality around London open.
+3. Use **Engine B** to validate whether the breakout is structurally tradable.
+4. Let **Engine C** confirm A/B alignment.
+5. Apply event-risk / sentiment safety filters last.
+
+Interpret timing like this:
+- too early = first wick poke through the range
+- best = first confirmed H1 close outside the Asian range, ideally during **07:00-09:00 UTC**
+- too late = extended chase after multiple London impulse candles
+
+If the move is already stretched, treat it as continuation / pullback logic, not a fresh London breakout.
+
+### Engine B role in London breakout
+
+Engine B is **not** the London-session clock and should not be documented as the primary breakout detector.
+
+Use Engine B as a structure / execution-quality filter:
+- did price break structure or only wick the range?
+- is the breakout or continuation candle strong enough?
+- is there room to target?
+- is RR still valid after SL placement?
+- is price already too extended from the break area?
+
+Correct role split:
+- **Engine A finds the breakout event**
+- **Engine B checks whether the breakout is structurally tradable**
+- **Engine C checks whether A and B align**
+
+### News toggle and news architecture
+
+The UI news toggle only controls `NEWS_SENTIMENT_CONFLUENCE_ENABLED`.
+
+It does **not** automatically disable:
+- `SENTIMENT_GATE_ENABLED`
+- `EVENT_RISK_ENABLED`
+
+So current behavior is:
+- news toggle ON = news sentiment can nudge scan / confluence score
+- news toggle OFF = no news score blend
+- sentiment / event safety blockers can still remain active for auto-trading
+
+Current repo reality has **3 separate news / event layers**:
+1. background news context for UI / AI / narrative use
+2. execution safety gates (`SENTIMENT_GATE_ENABLED`, `EVENT_RISK_ENABLED`)
+3. optional scan / confluence blend via `NEWS_SENTIMENT_CONFLUENCE_ENABLED`
+
+Do not describe the current repo as having one unified news engine.
+
+### News blend scoring contract
+
+When news sentiment confluence is enabled, score blending must respect the Engine A score contract for the current path:
+- forex Engine A = **0-2.0**
+- non-forex Engine A = **0-3.0**
+
+Any news delta must scale from the correct `maxScoreOverride`. Do not assume all Engine A paths share one raw max.
+
+### Current active forex thresholds
+
+- Engine A forex scale = **0-2.0**
+- `MIN_FOREX_CONFLUENCE` = **1.0**
+- `MIN_CONFLUENCE_CLASS.forex` = **1.0**
+- `AUTO_TRADE_MIN_SCORE.forex` remains informational / status-only and should stay aligned to the active forex class floor
+
+Historical threshold notes may remain below, but they must stay clearly labeled historical / superseded.
+
+---
+
 ## Pair Profiles (`config.yaml`)
 
 ```yaml

@@ -15,10 +15,13 @@ from athena_app.api.routes_execution import normalize_pip_mode
 from athena_app.repositories.audit_repo import insert_manual_error
 from athena_app.services.candle_service import recompute_levels_for_style
 from athena_runtime import executed_signals, rt
+from candles_cache import get_candle_fetch_meta
 from config import _json_safe, scan_candle_limits
 from engine_c import compute_consensus, normalise_engine_a
 from execution_lifecycle import run_managed_execution
+from factor_scoring import make_regime_smoothing_context
 from indicators import calc_indicators_with_normalized
+from intermarket import build_scan_snapshot
 from market_structure import NakedEngine, engine_b_confidence_passes
 from guardian import pre_trade_check as _guardian_pre_trade
 from scoring import CORR_CLUSTERS, get_pair_score_group
@@ -54,6 +57,23 @@ def _engine_c_best_score(confidence_b: dict | None) -> float:
         return float(confidence_b.get("score", 0.0) or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _engine_c_skip_entry(
+    display: str | None,
+    reason: str,
+    *,
+    code: str | None = None,
+    detail: str | None = None,
+) -> dict:
+    entry = {"display": display, "reason": reason}
+    if code:
+        entry["code"] = code
+        entry["skipCode"] = code
+    if detail:
+        entry["detail"] = detail
+        entry["skipDetail"] = detail
+    return entry
 
 
 def _audit_engine_from_signal(sig: dict) -> str:
@@ -443,7 +463,37 @@ def api_engine_c_scan():
 
     btc_bias = _r.current_btc_bias() if asset_class == "crypto" else "neutral"
 
+    _scan_limits = scan_candle_limits()
+    intermarket_snapshot = None
+    _im_cfg = _r.CONFIG.get("INTERMARKET_CONFIRMATION", {}) or {}
+    if bool(_im_cfg.get("enabled")) and bool(_im_cfg.get("full_scan_time_matrix", True)):
+        try:
+            _im_h4_limit = max(int(_scan_limits["H4"]), 220)
+            _im_preloaded_h4 = {}
+            for _pair in candidate_pairs:
+                _candles = _r.fetch_candles(_pair, "H4", _im_h4_limit)
+                if _candles:
+                    _im_preloaded_h4[_pair["display"]] = _candles
+            intermarket_snapshot = build_scan_snapshot(
+                _r.ALL_PAIRS,
+                disabled_pairs=_r.disabled_pairs,
+                etf_pairs=getattr(_r, "ETF_PAIRS", []),
+                fetch_candles=_r.fetch_candles,
+                config=_r.CONFIG,
+                preloaded_h4_candles=_im_preloaded_h4,
+                force=True,
+            )
+            if intermarket_snapshot:
+                _r.log.info(
+                    "[ENGINE C][INTERMARKET] prewarmed snapshot: %d symbols",
+                    len((intermarket_snapshot.get("universe") or {}).get("pairs", [])),
+                )
+        except Exception as _im_err:
+            intermarket_snapshot = None
+            _r.log.warning("[ENGINE C][INTERMARKET] snapshot build failed: %s", _im_err)
+
     engine_b = NakedEngine()
+    _regime_context = make_regime_smoothing_context()
     _EC_PAIR_TIMEOUT = 30  # seconds max per pair
 
     for pair in candidate_pairs:
@@ -470,18 +520,54 @@ def api_engine_c_scan():
             _zone_tf = str(style_profile_b.get("zone_tf", "H4")).upper()
             _entry_tf = str(style_profile_b.get("entry_tf", "H1")).upper()
             _atr_tf = str(style_profile_b.get("atr_tf", _zone_tf)).upper()
-            _lim = scan_candle_limits()
+            _lim = _scan_limits
+            _im_h4 = (
+                ((intermarket_snapshot or {}).get("seriesStore", {}) or {})
+                .get(display, {})
+                .get("candles")
+            )
+            raw_candles = {
+                "D1": _r.fetch_candles(pair, "D1", _lim["D1"]),
+                "H4": _im_h4 or _r.fetch_candles(pair, "H4", _lim["H4"]),
+                "H1": _r.fetch_candles(pair, "H1", _lim["H1"]),
+            }
+            fetch_meta = {
+                "D1": get_candle_fetch_meta(pair, "D1", _lim["D1"]),
+                "H4": get_candle_fetch_meta(pair, "H4", _lim["H4"]),
+                "H1": get_candle_fetch_meta(pair, "H1", _lim["H1"]),
+            }
+            rate_limited_tfs = [
+                tf
+                for tf, meta in fetch_meta.items()
+                if isinstance(meta, dict)
+                and (
+                    meta.get("rateLimited") is True
+                    or meta.get("detail") == "rate_limited"
+                )
+                and not raw_candles.get(tf)
+            ]
+            if rate_limited_tfs:
+                results["skipped"].append(
+                    _engine_c_skip_entry(
+                        display,
+                        "Rate limited",
+                        code="rate_limited",
+                        detail=f"Rate limited on {', '.join(rate_limited_tfs)}",
+                    )
+                )
+                continue
 
             # Fetch candles ONCE — share between Engine A (full) and Engine B (last bar dropped).
             # Eliminates double-fetching and ensures both engines score identical data.
             # Engine A always needs real D1/H4/H1; Engine B uses style-resolved TFs.
             _all_tfs_needed = {"D1", "H4", "H1", _zone_tf, _entry_tf, _atr_tf}
-            _tf_map_full: dict[str, list] = {}
             _tf_map: dict[str, list] = {}
             for tf in _all_tfs_needed:
-                limit = _lim.get(tf, _lim.get("H4", 0))
-                raw = _r.fetch_candles(pair, tf, limit)
-                _tf_map_full[tf] = raw or []
+                if tf in raw_candles:
+                    raw = raw_candles.get(tf) or []
+                else:
+                    limit = _lim.get(tf, _lim.get("H4", 0))
+                    raw = _r.fetch_candles(pair, tf, limit)
                 if raw and len(raw) > 1:
                     _tf_map[tf] = raw[:-1]
                 else:
@@ -492,13 +578,15 @@ def api_engine_c_scan():
             atr_candles = _tf_map.get(_atr_tf, zone_candles)
 
             # Engine A: pass full (undropped) candles — always real D1/H4/H1, not style TFs
-            _preloaded_for_a = {
-                "D1": _tf_map_full.get("D1", []),
-                "H4": _tf_map_full.get("H4", []),
-                "H1": _tf_map_full.get("H1", []),
-            }
-            sig_a = _r.analyze_pair(pair, btc_bias, style=engine_a_style,
-                                    preloaded_candles=_preloaded_for_a)
+            sig_a = _r.analyze_pair(
+                pair,
+                btc_bias,
+                style=engine_a_style,
+                regime_context=_regime_context,
+                preloaded_candles=raw_candles,
+                preloaded_fetch_meta=fetch_meta,
+                intermarket_snapshot=intermarket_snapshot,
+            )
             if not sig_a:
                 sig_a = {}
 
@@ -507,11 +595,25 @@ def api_engine_c_scan():
 
             if (time.time() - _pair_start) > _EC_PAIR_TIMEOUT:
                 _r.log.warning(f"[ENGINE C] {display}: timeout after candle fetch ({_EC_PAIR_TIMEOUT}s)")
-                results["skipped"].append({"display": display, "reason": "timeout"})
+                results["skipped"].append(
+                    _engine_c_skip_entry(
+                        display,
+                        "Timeout",
+                        code="timeout",
+                        detail=f"Exceeded {_EC_PAIR_TIMEOUT}s after candle fetch",
+                    )
+                )
                 continue
 
             if len(zone_candles) < 10 or len(entry_candles) < 10:
-                results["skipped"].append({"display": display, "reason": "insufficient_data"})
+                results["skipped"].append(
+                    _engine_c_skip_entry(
+                        display,
+                        "Insufficient data",
+                        code="insufficient_data",
+                        detail=f"{_zone_tf}={len(zone_candles)}, {_entry_tf}={len(entry_candles)}",
+                    )
+                )
                 continue
 
             current_price = float(sig_a.get("price") or entry_candles[-1]["close"])
@@ -526,7 +628,14 @@ def api_engine_c_scan():
                 atr = float(atr_series[-1]) if atr_series else 0.0
 
             if not atr or atr <= 0:
-                results["skipped"].append({"display": display, "reason": "zero_atr"})
+                results["skipped"].append(
+                    _engine_c_skip_entry(
+                        display,
+                        "Zero ATR",
+                        code="zero_atr",
+                        detail=f"ATR unavailable on {_atr_tf}",
+                    )
+                )
                 continue
 
             _ec_d1_snap = {}
@@ -703,11 +812,26 @@ def api_engine_c_scan():
             ):
                 results["conflict"].append(consensus)
             else:
+                if verdict == "NO_SIGNAL":
+                    consensus.setdefault("reason", "No signal")
+                    consensus.setdefault("code", "no_signal")
+                    consensus.setdefault(
+                        "detail", "Neither engine produced an eligible signal"
+                    )
+                    consensus.setdefault("skipCode", consensus["code"])
+                    consensus.setdefault("skipDetail", consensus["detail"])
                 results["skipped"].append(consensus)
 
         except Exception as e:
             _r.log.error(f"[ENGINE C] Error on {pair.get('display')}: {e}")
-            results["skipped"].append({"display": pair.get("display"), "reason": str(e)})
+            results["skipped"].append(
+                _engine_c_skip_entry(
+                    pair.get("display"),
+                    "Error",
+                    code="exception",
+                    detail=str(e),
+                )
+            )
 
     results["aligned"].sort(key=lambda x: x.get("conviction", 0), reverse=True)
     results["a_only"].sort(key=lambda x: x.get("conviction", 0), reverse=True)
@@ -718,6 +842,7 @@ def api_engine_c_scan():
         + len(results["a_only"])
         + len(results["b_only"])
         + len(results["conflict"])
+        + len(results["skipped"])
     )
 
     _r.log.warning(

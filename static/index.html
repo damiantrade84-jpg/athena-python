@@ -9408,10 +9408,11 @@ async function runEngineCScan() {
     renderEngineCResults(data);
 
     var total = (data.aligned||[]).length + (data.a_only||[]).length +
-                (data.b_only||[]).length + (data.conflict||[]).length;
-    status.textContent = total + ' signals found (' + (data.aligned||[]).length + ' aligned, ' +
+                (data.b_only||[]).length + (data.conflict||[]).length +
+                (data.skipped||[]).length;
+    status.textContent = total + ' pairs processed (' + (data.aligned||[]).length + ' aligned, ' +
       (data.a_only||[]).length + ' A-only, ' + (data.b_only||[]).length + ' B-only, ' +
-      (data.conflict||[]).length + ' conflict)';
+      (data.conflict||[]).length + ' conflict, ' + (data.skipped||[]).length + ' skipped)';
 
   } catch(err) {
     container.innerHTML = '<div style="color:var(--bear);padding:20px;">Scan error: ' + err.message + '</div>';
@@ -9453,12 +9454,47 @@ function renderEngineCResults(data) {
     data.conflict.forEach(function(c) { html += buildECCard(c, 'conflict'); });
   }
 
+  // Skipped (muted)
+  if (data.skipped && data.skipped.length) {
+    html += '<div style="font-size:12px;color:var(--muted);font-weight:700;font-family:DM Sans,sans-serif;' +
+      'margin:16px 0 4px;letter-spacing:0.05em;">&#9208; SKIPPED (' + data.skipped.length + ')</div>';
+    data.skipped.forEach(function(c) { html += buildECSkippedCard(c); });
+  }
+
   if (!html) {
     html = '<div class="empty-state"><div class="icon">&#128528;</div><h3>No signals found</h3>' +
       '<p>No pairs met the minimum threshold for any engine.</p></div>';
   }
 
   container.innerHTML = html;
+}
+
+function buildECSkippedCard(c) {
+  function esc(text) {
+    return String(text == null ? '' : text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  var display = c.display || c.symbol || c.pair || 'Unknown';
+  var reason = c.reason || c.verdict || 'Skipped';
+  var code = c.skipCode || c.code || '';
+  var detail = c.skipDetail || c.detail || '';
+
+  return '<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:4px;">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:8px;">' +
+      '<span style="font-size:15px;font-weight:800;font-family:DM Sans,sans-serif;color:var(--text);">' + esc(display) + '</span>' +
+      '<span style="font-size:10px;font-weight:800;padding:2px 8px;border-radius:4px;background:rgba(148,163,184,0.12);color:var(--muted);">SKIPPED</span>' +
+    '</div>' +
+    '<div style="font-size:11px;color:var(--text);font-family:IBM Plex Mono,monospace;line-height:1.6;">' +
+      '<div>Reason: ' + esc(reason) + '</div>' +
+      (code ? '<div>Code: ' + esc(code) + '</div>' : '') +
+      (detail ? '<div>Detail: ' + esc(detail) + '</div>' : '') +
+    '</div>' +
+  '</div>';
 }
 
 function buildECCard(c, category) {
@@ -9523,12 +9559,12 @@ function buildECCard(c, category) {
 
   // Engine A column
   html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px;">';
-  html += '<div style="font-size:9px;color:var(--muted);font-weight:700;margin-bottom:4px;">ENGINE A</div>';
+  html += '<div style="font-size:9px;color:var(--muted);font-weight:700;margin-bottom:4px;">ENGINE A RAW</div>';
   if (a.direction) {
     var aScore = a.score != null ? (typeof a.score === 'number' ? a.score.toFixed(2) : a.score) : '?';
     var aMax = a.maxScore != null ? (typeof a.maxScore === 'number' ? a.maxScore.toFixed(1) : a.maxScore) : '3.0';
     html += '<div style="font-size:11px;font-family:IBM Plex Mono,monospace;color:var(--text);">' +
-      a.direction + ' ' + aScore + '/' + aMax + '</div>';
+      a.direction + ' RAW ' + aScore + '/' + aMax + '</div>';
     html += '<div style="font-size:10px;color:var(--muted);font-family:IBM Plex Mono,monospace;">' +
       'SL ' + fmtPriceForSig(a.sl, c) + ' TP ' + fmtPriceForSig(a.tp1, c) + '</div>';
     if (a.cot != null) html += '<div style="font-size:9px;color:var(--accent);">COT ' + a.cot + '</div>';
