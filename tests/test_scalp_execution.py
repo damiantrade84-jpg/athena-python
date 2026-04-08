@@ -93,3 +93,12 @@ def test_quick_execute_rejects_direction_flip(monkeypatch):
     data = resp.get_json()
     assert "SIGNAL_FLIPPED" in data["error"]
     assert data["newDirection"] == "LONG"
+
+
+def test_scan_style_auto_resolution_contract():
+    athena_module = _load_athena_module()
+
+    assert athena_module._resolve_scan_style("auto", {"type": "forex"}) == "intraday"
+    assert athena_module._resolve_scan_style("auto", {"type": "crypto"}) == "intraday"
+    assert athena_module._resolve_scan_style("auto", {"type": "stock"}) == "swing"
+    assert athena_module._resolve_scan_style("swing", {"type": "forex"}) == "swing"

@@ -2689,6 +2689,22 @@ def _normalize_style(style: str | None) -> str:
     return s if s in ("auto", "swing", "intraday", "scalp") else "auto"
 
 
+def resolve_auto_style(requested_style: str, pair: dict | None) -> str:
+    """Resolve auto style by asset class.
+
+    Keeps scan/backtest style routing local to athena.py to avoid runtime
+    dependency on optional helper modules.
+    """
+    requested = str(requested_style or "auto").lower()
+    if requested != "auto":
+        return requested
+
+    ptype = str((pair or {}).get("type") or "").lower()
+    if ptype in ("crypto", "forex"):
+        return "intraday"
+    return "swing"
+
+
 def _resolve_scan_style(requested_style: str, pair: dict) -> str:
     """Resolve scan style per pair. Auto favors intraday for fast-moving markets."""
 
