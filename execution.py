@@ -163,11 +163,19 @@ def _apply_level_override(sig: dict, override: dict) -> str | None:
 
 
 def api_quick_execute():
+    _r = rt()
+    # ── Execution safety guards (must match api_execute) ─────────────────
+    if not _r.CONFIG.get("EXECUTION_ENABLED", False):
+        return jsonify(
+            {"error": "Execution disabled. Set EXECUTION_ENABLED: true in config.yaml"}
+        ), 403
+    if _r.kill_switch():
+        return jsonify({"error": "Kill-switch active — execution blocked"}), 503
+    # ─────────────────────────────────────────────────────────────────────
     d = request.json
     if not d or "signal" not in d:
         return jsonify({"error": "Invalid payload"}), 400
 
-    _r = rt()
     sig = d["signal"]
     engine_b = d.get("engine_b") or {}
     level_override = d.get("level_override") or sig.get("level_override")

@@ -19,6 +19,11 @@ import pandas as pd
 
 log = logging.getLogger("athena")
 
+# Authoritative forex Engine A score contract cap (0.0–2.0).
+# Pass this as max_score= to apply_confirmation_to_score() for ALL forex paths
+# (live and backtest) so the cap cannot drift between environments.
+FOREX_ENGINE_A_MAX_SCORE: float = 2.0
+
 
 _DEFAULT_CFG = {
     "enabled": False,

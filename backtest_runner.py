@@ -34,6 +34,7 @@ from indicators import (
 from factor_scoring import build_oi_context_for_factor_scoring
 from intermarket import (
     apply_confirmation_to_score,
+    FOREX_ENGINE_A_MAX_SCORE,
     build_point_in_time_context,
     discover_active_universe,
     prepare_series_store,
@@ -975,7 +976,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         str(res.get("direction") or "LONG"),
                         _pair_ctx,
                         _bt_intermarket_ctx,
-                        max_score=1.0,
+                        max_score=FOREX_ENGINE_A_MAX_SCORE,
                         config=CONFIG,
                     )
                     res["score"] = float(_fx_im.get("adjusted_score", res["score"]))
@@ -1442,7 +1443,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         str(res.get("direction") or "LONG"),
                         _pair_ctx,
                         _bt_intermarket_ctx,
-                        max_score=1.0,
+                        max_score=FOREX_ENGINE_A_MAX_SCORE,
                         config=CONFIG,
                     )
                     res["score"] = float(_fx_im.get("adjusted_score", res["score"]))
@@ -1883,7 +1884,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         str(res.get("direction") or "LONG"),
                         _pair_ctx,
                         _bt_intermarket_ctx,
-                        max_score=1.0,
+                        max_score=FOREX_ENGINE_A_MAX_SCORE,
                         config=CONFIG,
                     )
                     res["score"] = float(_fx_im.get("adjusted_score", res["score"]))
