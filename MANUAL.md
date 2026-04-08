@@ -632,7 +632,14 @@ AUTO_EXECUTE_MIN_GRADE: "B"       # Minimum AI grade for auto-execute
 
 ```yaml
 AUTO_TRADE_ENABLED: false         # Start bot on launch (false = manual toggle only)
-AUTO_TRADE_MIN_SCORE: 7.0         # Minimum confluence score to auto-execute
+AUTO_TRADE_MIN_SCORE:             # Scan-floor map (informational for auto-trader UI)
+  crypto:    1.40
+  commodity: 1.40
+  stock:     1.55
+  index:     1.35
+  forex:     1.0
+AUTO_TRADE_MIN_CONVICTION:
+  default: 0.50                   # Live auto-execution gate uses combinedConviction
 AUTO_TRADE_MAX_DAILY: 3           # Max auto-trades per calendar day (UTC)
 AUTO_TRADE_MAX_PER_SCAN: 1        # Max executions per single scan
 AUTO_TRADE_SIZING_OVERRIDE: 1.0   # Sizing multiplier (1.0 = full live size)
@@ -649,11 +656,11 @@ AUTO_TRADE_SESSIONS:
 
 ```yaml
 MIN_CONFLUENCE_CLASS:
-  crypto: 5.0
-  forex: 5.0
-  commodity: 5.0
-  stock: 5.5
-  index: 5.0
+  crypto: 1.40
+  forex: 1.0
+  commodity: 1.40
+  stock: 1.55
+  index: 1.35
 
 ADX_TREND_MIN_CLASS:
   crypto: 20

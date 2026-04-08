@@ -56,9 +56,13 @@ def test_quick_execute_rejects_direction_flip(monkeypatch):
             return None
 
     class _FakeRt:
-        CONFIG = {"SIGNAL_MAX_AGE_SEC": 300}
+        CONFIG = {"SIGNAL_MAX_AGE_SEC": 300, "EXECUTION_ENABLED": True}
         ALL_PAIRS = [{"display": "EUR/USD"}]
         log = _FakeLog()
+
+        @staticmethod
+        def kill_switch():
+            return False
 
         @staticmethod
         def analyze_pair(pair_obj, btc_bias, style="swing"):

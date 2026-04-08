@@ -56,7 +56,7 @@
   - Check that `max_lag * 2` guard prevents insufficient data errors
 - [ ] Verify `_mad_zscore()`: check MAD < 1e-8 returns 0.0 (not NaN)
 - [ ] Verify `DynamicForexWeights.score()`: `self.base + eq * self.rsi_w + cot * self.cot_w`
-  - Check that output range is reasonable (should be 0.0-1.0 for forex)
+  - Check that output range is reasonable (should be 0.0-2.0 for forex)
 - [ ] Verify `_check_trend_gate()` ADX filter:
   - `adx < trend_gate_adx_min` returns False — check float conversion safety
   - `margin = (d1_close - d1_ema200) / d1_ema200` — division by zero if ema200 == 0?
@@ -272,7 +272,7 @@
   - votes (bull/bear/neutral for each)
   - trendState, regime, signalClass
   - warnings array
-- [ ] Verify `getConfluencePct()` handles both Engine A (0-3 scale) and forex (0-1 scale)
+- [ ] Verify `getConfluencePct()` handles both Engine A (0-3 scale) and forex (0-2 scale)
 - [ ] Verify `formatConfluenceText()` produces correct qualitative labels
 - [ ] Verify filter buttons work: all, trade, forex, crypto, commodity, index, LONG, SHORT, high
 - [ ] Verify asset class filter dropdown filters correctly

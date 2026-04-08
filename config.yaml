@@ -313,6 +313,7 @@ DRAWDOWN_STOP_THRESHOLD: 0.15     # Stop all trading at 15% drawdown
 # ── EODHD Sentiment Gate ──────────────────────────────────
 SENTIMENT_GATE_ENABLED: true       # Check news sentiment before auto-trades
 SENTIMENT_BLOCK_THRESHOLD: 0.4     # Block if sentiment opposes direction by >0.4
+SENTIMENT_ALIGN_THRESHOLD: 0.3     # Mark as aligned when sentiment supports direction beyond this level
 SENTIMENT_API_FAIL_CLOSED: false   # If true, blocks auto-execution if the sentiment API fails
 
 # ── EODHD Event Risk Filter ──────────────────────────────

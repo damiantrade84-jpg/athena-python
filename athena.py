@@ -2692,29 +2692,13 @@ def _normalize_style(style: str | None) -> str:
 def _resolve_scan_style(requested_style: str, pair: dict) -> str:
     """Resolve scan style per pair. Auto favors intraday for fast-moving markets."""
 
-    if requested_style != "auto":
-        return requested_style
-    ptype = pair.get("type", "")
-    if ptype == "crypto":
-        return "intraday"
-    elif ptype == "forex":
-        return "intraday"
-    else:
-        return "swing"  # stocks, commodities, indices, ETFs, JSE
+    return resolve_auto_style(requested_style, pair)
 
 
 def _effective_backtest_style(pair: dict, requested_style: str) -> str:
     """Resolve backtest iteration style per pair."""
 
-    if requested_style != "auto":
-        return requested_style
-    ptype = pair.get("type", "")
-    if ptype == "crypto":
-        return "intraday"
-    elif ptype == "forex":
-        return "swing"
-    else:
-        return "swing"
+    return resolve_auto_style(requested_style, pair)
 
 
 EXPERT_PROMPT = """You are Marcus Reid — 18-year prop-desk veteran turned trading mentor.
@@ -5613,9 +5597,9 @@ def api_webhook():
 
         "tp2":       71000.0,           # take-profit 2 (optional)
 
-        "score":     7.5,               # confluence score (optional, for sizing)
+        "score":     1.8,               # confluence score (optional, for sizing)
 
-        "maxScore":  10.0               # max possible score (optional)
+        "maxScore":  3.0               # max possible score (optional)
 
       }
 
@@ -6176,11 +6160,11 @@ def api_execution_config():
             }
         )
 
-    d = request.json or {}
+    d = request.get_json(silent=True) or {}
+    errors = []
 
     if "executionEnabled" in d:
         CONFIG["EXECUTION_ENABLED"] = bool(d["executionEnabled"])
-
         log.info(
             f"[EXEC] Execution {'ENABLED' if CONFIG['EXECUTION_ENABLED'] else 'DISABLED'}"
         )
@@ -6188,7 +6172,63 @@ def api_execution_config():
     if "autoExecute" in d:
         CONFIG["AUTO_EXECUTE"] = bool(d["autoExecute"])
 
-    return jsonify({"success": True})
+    if "autoExecuteMinScore" in d:
+        try:
+            _v = float(d["autoExecuteMinScore"])
+            if _v < 0 or _v > 10:
+                raise ValueError("out_of_range")
+            CONFIG["AUTO_EXECUTE_MIN_SCORE"] = round(_v, 4)
+        except (TypeError, ValueError):
+            errors.append("autoExecuteMinScore must be a number in range 0-10")
+
+    if "autoExecuteMinGrade" in d:
+        _g = str(d.get("autoExecuteMinGrade") or "").strip().upper()
+        if not _g:
+            errors.append("autoExecuteMinGrade must be a non-empty string")
+        else:
+            CONFIG["AUTO_EXECUTE_MIN_GRADE"] = _g
+
+    if "maxPortfolioHeat" in d:
+        try:
+            _v = float(d["maxPortfolioHeat"])
+            if _v <= 0 or _v > 1:
+                raise ValueError("out_of_range")
+            CONFIG["MAX_PORTFOLIO_HEAT"] = round(_v, 6)
+        except (TypeError, ValueError):
+            errors.append("maxPortfolioHeat must be a number in range (0, 1]")
+
+    if "maxOpenPositions" in d:
+        try:
+            _v = int(d["maxOpenPositions"])
+            if _v < 1 or _v > 100:
+                raise ValueError("out_of_range")
+            CONFIG["MAX_OPEN_POSITIONS"] = _v
+        except (TypeError, ValueError):
+            errors.append("maxOpenPositions must be an integer in range 1-100")
+
+    if "riskPct" in d:
+        try:
+            _v = float(d["riskPct"])
+            if _v <= 0 or _v > 0.2:
+                raise ValueError("out_of_range")
+            CONFIG["RISK_PCT"] = round(_v, 6)
+        except (TypeError, ValueError):
+            errors.append("riskPct must be a number in range (0, 0.2]")
+
+    payload = {
+        "success": len(errors) == 0,
+        "executionEnabled": CONFIG.get("EXECUTION_ENABLED", False),
+        "autoExecute": CONFIG.get("AUTO_EXECUTE", False),
+        "autoExecuteMinScore": CONFIG.get("AUTO_EXECUTE_MIN_SCORE", 8.0),
+        "autoExecuteMinGrade": CONFIG.get("AUTO_EXECUTE_MIN_GRADE", "B"),
+        "maxPortfolioHeat": CONFIG.get("MAX_PORTFOLIO_HEAT", 0.06),
+        "maxOpenPositions": CONFIG.get("MAX_OPEN_POSITIONS", 5),
+        "riskPct": CONFIG.get("RISK_PCT", 0.01),
+    }
+    if errors:
+        payload["errors"] = errors
+        return jsonify(payload), 400
+    return jsonify(payload)
 
 
 @app.route("/api/screener-scan", methods=["POST"])
@@ -6811,6 +6851,11 @@ def _apply_naked_style_score_updates(new_vals: dict) -> dict:
     return {style: dict(styles.get(style) or {}) for style in ("scalp", "intraday", "swing")}
 
 
+def _engine_a_threshold_max_for_class(asset_class: str) -> float:
+    """Return the Engine A score-cap-aligned max threshold for an asset class."""
+    return 2.0 if str(asset_class or "").lower() == "forex" else 3.0
+
+
 @app.route("/api/bt-min", methods=["GET", "POST"])
 def api_bt_min():
     """GET: BT_MIN + live MIN_CONFLUENCE_CLASS + flags for Engine A backtest routing.
@@ -6871,8 +6916,11 @@ def api_bt_min():
             val = float(data[cls])
         except (TypeError, ValueError):
             return jsonify({"error": f"Invalid value for {cls}"}), 400
-        if val < 0 or val > 10:
-            return jsonify({"error": f"Value for {cls} out of range (0–10)"}), 400
+        _max_allowed = _engine_a_threshold_max_for_class(cls)
+        if val < 0 or val > _max_allowed:
+            return jsonify(
+                {"error": f"Value for {cls} out of range (0-{_max_allowed:g})"}
+            ), 400
         new_vals[cls] = round(val, 4)
 
     if not new_vals:
@@ -7062,8 +7110,11 @@ def api_live_confluence_thresholds():
             val = float(data[cls])
         except (TypeError, ValueError):
             return jsonify({"error": f"Invalid value for {cls}"}), 400
-        if val < 0 or val > 10:
-            return jsonify({"error": f"Value for {cls} out of range (0–10)"}), 400
+        _max_allowed = _engine_a_threshold_max_for_class(cls)
+        if val < 0 or val > _max_allowed:
+            return jsonify(
+                {"error": f"Value for {cls} out of range (0-{_max_allowed:g})"}
+            ), 400
         new_vals[cls] = round(val, 4)
 
     if not new_vals:
@@ -12435,4 +12486,3 @@ if __name__ == "__main__":
     _signal.signal(_signal.SIGTERM, _shutdown_handler)
 
     app.run(host=_host, port=5000, debug=False, use_reloader=False)
-

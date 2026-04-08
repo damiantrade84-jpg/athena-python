@@ -89,8 +89,8 @@ def test_apply_news_sentiment_disabled_noop(monkeypatch):
 def test_apply_news_sentiment_blends_score(monkeypatch):
     monkeypatch.setenv("EODHD_KEY", "test")
     monkeypatch.setenv("XAI_API_KEY", "test")
-    # Room below maxScore cap (forex scale 0–1)
-    res = {"score": 0.5, "maxScoreOverride": 1.0, "warnings": []}
+    # Room below maxScore cap (forex scale 0-2)
+    res = {"score": 0.5, "maxScoreOverride": 2.0, "warnings": []}
 
     def _fake_cached(*_a, **_k):
         return (0.5, {"direction": "bullish", "confidence": 0.9})
@@ -106,8 +106,8 @@ def test_apply_news_sentiment_blends_score(monkeypatch):
         },
         eodhd_ticker_for_pair=lambda _p: "EURUSD.FOREX",
     )
-    # delta = 0.1 * 1.0 * 0.5 = 0.05 → 0.5 + 0.05 = 0.55
-    assert res["score"] == pytest.approx(0.55)
+    # delta = 0.1 * 2.0 * 0.5 = 0.1 -> 0.5 + 0.1 = 0.6
+    assert res["score"] == pytest.approx(0.6)
     assert res["newsSentimentVote"] == 0.5
-    assert res["newsSentimentDelta"] == pytest.approx(0.05)  # 0.1 * 1.0 * 0.5
+    assert res["newsSentimentDelta"] == pytest.approx(0.1)  # 0.1 * 2.0 * 0.5
     assert any("News AI" in w for w in res["warnings"])

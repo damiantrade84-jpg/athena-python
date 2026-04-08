@@ -1,6 +1,6 @@
 # Athena Scoring Engine Audit Report
 
-**Date:** 2026-04-XX  
+**Date:** 2026-04-08  
 **Scope:** Full audit of Engine A, Engine B, and Forex Scoring Engine  
 **Focus:** Signal direction logic (buy/sell) accuracy and scoring discrepancies
 

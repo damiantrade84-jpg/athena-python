@@ -546,7 +546,7 @@ def calc_confluence(
     bull = max(0.0, score) if direction != "SHORT" else 0.0
     bear = max(0.0, score) if direction == "SHORT" else 0.0
     # Spread = abs directional score on the engine-native scale: factor engine runs
-    # up to ~3.0 while forex_scoring caps at 1.0.
+    # up to ~3.0 while forex_scoring caps at 2.0.
     spread = round(abs(factor_result.get("directional_score", 0.0)), 2)
     # Rebuild regime as dict so callers can do res['regime'].get('state')
     _regime_str = factor_result.get("regime", "UNKNOWN") or "UNKNOWN"

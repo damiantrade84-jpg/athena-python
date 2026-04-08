@@ -144,7 +144,21 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
             # If direction is LONG and sentiment is very bearish (< -threshold): BLOCK
             # If direction is SHORT and sentiment is very bullish (> threshold): BLOCK
             # Otherwise: ALLOW
-            threshold = CONFIG.get("SENTIMENT_BLOCK_THRESHOLD", 0.4)
+            try:
+                threshold = float(CONFIG.get("SENTIMENT_BLOCK_THRESHOLD", 0.4) or 0.4)
+            except (TypeError, ValueError):
+                threshold = 0.4
+            try:
+                align_threshold = float(
+                    CONFIG.get(
+                        "SENTIMENT_ALIGN_THRESHOLD",
+                        max(0.0, threshold - 0.1),
+                    )
+                    or max(0.0, threshold - 0.1)
+                )
+            except (TypeError, ValueError):
+                align_threshold = max(0.0, threshold - 0.1)
+            align_threshold = max(0.0, min(threshold, align_threshold))
             blocked = False
             reason = ""
 
@@ -158,9 +172,9 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
                 reason = (
                     f"SENTIMENT BLOCK: strongly bullish ({avg_score:.2f}) opposes SHORT"
                 )
-            elif direction == "LONG" and avg_score > 0.3:
+            elif direction == "LONG" and avg_score > align_threshold:
                 reason = f"Sentiment aligned: bullish ({avg_score:.2f}) supports LONG"
-            elif direction == "SHORT" and avg_score < -0.3:
+            elif direction == "SHORT" and avg_score < -align_threshold:
                 reason = f"Sentiment aligned: bearish ({avg_score:.2f}) supports SHORT"
             else:
                 reason = f"Sentiment neutral ({avg_score:.2f}), {count} articles"
@@ -213,7 +227,10 @@ def inject_external_sentiment(
         is_aligned = (score > 0 and direction == "LONG") or (
             score < 0 and direction == "SHORT"
         )
-        threshold = CONFIG.get("SENTIMENT_BLOCK_THRESHOLD", 0.4)
+        try:
+            threshold = float(CONFIG.get("SENTIMENT_BLOCK_THRESHOLD", 0.4) or 0.4)
+        except (TypeError, ValueError):
+            threshold = 0.4
         allowed = is_aligned or abs(score) < threshold
         _cache[cache_key] = {
             "ts": time.time(),

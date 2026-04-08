@@ -422,7 +422,7 @@ def _effective_backtest_style(pair: dict, requested_style: str) -> str:
     if ptype == "crypto":
         return "intraday"
     elif ptype == "forex":
-        return "swing"
+        return "intraday"
     else:
         return "swing"
 
@@ -3767,8 +3767,8 @@ def backtest_pair_consensus(
     folds: int = 3,
 ) -> dict:
     """Engine C backtest — runs Engine A + Engine B point-in-time at each H4 bar,
-    feeds both into compute_consensus(), gates on conviction >= AUTO_TRADE_MIN_CONVICTION,
-    and tracks outcomes using the same exit logic as backtest_pair_naked.
+    feeds both into compute_consensus(), and tracks outcomes using the same
+    exit logic as backtest_pair_naked.
 
     Style is always intraday (H4 walk). ai_vision is never called.
     """
@@ -3842,6 +3842,7 @@ def backtest_pair_consensus(
     _min_conviction = float(
         (CONFIG.get("AUTO_TRADE_MIN_CONVICTION") or {}).get("default", 0.50)
     )
+    _enforce_min_conviction = bool(CONFIG.get("ENGINE_C_BT_ENFORCE_MIN_CONVICTION", False))
 
     h4_times = pd.to_datetime([c["time"] for c in candles_h4], utc=True, errors="coerce")
     d1_times = pd.to_datetime([c["time"] for c in candles_d1], utc=True, errors="coerce")
@@ -4089,7 +4090,7 @@ def backtest_pair_consensus(
             continue
 
         conviction = float(consensus.get("conviction", 0.0))
-        if conviction < _min_conviction:
+        if _enforce_min_conviction and conviction < _min_conviction:
             _c_funnel["low_conviction"] += 1
             i += 1
             continue
@@ -4340,9 +4341,14 @@ def backtest_pair_consensus(
                         result.get("sqn"), result.get("sharpe"), result.get("sortino"),
                         round(_wf.get("is_sqn"), 4) if _wf.get("is_sqn") is not None else None,
                         round(_wf.get("oos_sqn"), 4) if _wf.get("oos_sqn") is not None else None,
-                        result.get("maxDrawdownPct"), _min_conviction,
+                        result.get("maxDrawdownPct"),
+                        _min_conviction if _enforce_min_conviction else None,
                         f"{_atr_tf}_ATR",
-                        f"engine=c;style={resolved_style};conviction_gate={_min_conviction}",
+                        (
+                            f"engine=c;style={resolved_style};conviction_gate={_min_conviction}"
+                            if _enforce_min_conviction
+                            else f"engine=c;style={resolved_style};conviction_gate=none"
+                        ),
                     ),
                 )
                 _con.commit()
@@ -4413,4 +4419,3 @@ def run_full_backtest(style="auto", asset_class: str | None = None):
         "totalPairs": len(pairs_to_test),
         "assetClass": _ac or "all",
     }
-
