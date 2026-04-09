@@ -164,6 +164,86 @@ class TestCandleCacheKeys:
         assert candles[-2]["close"] == 87250
         assert candles[-1]["close"] == 87880
 
+    def test_crypto_h4_large_limit_does_not_short_circuit_on_partial_live_history(self):
+        pair = {
+            "symbol": "BTCUSDT",
+            "display": "BTC/USDT",
+            "source": "binance",
+            "type": "crypto",
+        }
+        live_h4 = []
+        base_ts = 1743148800  # 2025-03-28 08:00:00 UTC
+        for idx in range(57):
+            ts = base_ts + (idx * 4 * 3600)
+            live_h4.append(
+                {
+                    "time": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(ts)),
+                    "open": 87000 + idx,
+                    "high": 87100 + idx,
+                    "low": 86900 + idx,
+                    "close": 87050 + idx,
+                    "vol": 100 + idx,
+                }
+            )
+        rest_h4 = [
+            {
+                "time": "2025-03-27T20:00:00+00:00",
+                "open": 86880,
+                "high": 86950,
+                "low": 86790,
+                "close": 86920,
+                "vol": 88,
+            },
+            {
+                "time": "2025-03-28T00:00:00+00:00",
+                "open": 86920,
+                "high": 87010,
+                "low": 86820,
+                "close": 86980,
+                "vol": 91,
+            },
+            {
+                "time": "2025-03-28T04:00:00+00:00",
+                "open": 86980,
+                "high": 87040,
+                "low": 86870,
+                "close": 87010,
+                "vol": 95,
+            },
+            {
+                "time": "2025-03-28T08:00:00+00:00",
+                "open": 87010,
+                "high": 87110,
+                "low": 86950,
+                "close": 87030,
+                "vol": 97,
+            },
+        ]
+        fetch_binance = Mock(return_value=rest_h4)
+
+        candles = fetch_candles(
+            pair,
+            "H4",
+            1000,
+            fetch_candles_live=Mock(return_value={"candles": live_h4}),
+            fetch_binance=fetch_binance,
+            fetch_eodhd=_noop_fetch,
+            fetch_polygon=_noop_fetch,
+            fetch_yfinance=_noop_fetch,
+            fetch_mt5=None,
+            yfinance_symbol_for_pair=lambda _pair: None,
+            tf_b={"H1": "1h", "H4": "4h", "D1": "1d"},
+        )
+        meta = get_candle_fetch_meta(pair, "H4", 1000)
+
+        assert fetch_binance.call_count == 1
+        assert len(candles) == 60
+        assert candles[0]["time"] == "2025-03-27T20:00:00+00:00"
+        assert candles[3]["time"] == "2025-03-28T08:00:00+00:00"
+        assert candles[3]["close"] == 87050
+        assert meta["upstream"] == "binance_futures"
+        assert meta["liveMerge"] is True
+
     def test_fetch_meta_tracks_upstream_and_cache_hits(self):
         pair = {"symbol": "EURUSD", "display": "EUR/USD", "source": "mt5", "type": "forex"}
         candles = [{"time": "2026-03-27T14:00:00+00:00", "open": 1.1, "high": 1.2, "low": 1.0, "close": 1.15, "vol": 1000}]

@@ -373,16 +373,22 @@ def fetch_candles(
         live_candles = extract_candles(live_resp)
 
         _min_live_bars = {"M5": 20, "M15": 20, "H1": 20, "H4": 50, "D1": 50}.get(tf, limit)
+        live_bar_count = len(live_candles) if live_candles else 0
+        live_only_ready = False
+        if live_candles:
+            if crypto_live_tf:
+                # Crypto charts and scans often request deep history (for example 1000 H4 bars).
+                # Do not short-circuit to CandleBuilder unless it actually has the requested depth.
+                live_only_ready = live_bar_count >= int(limit)
+            else:
+                live_only_ready = live_bar_count >= min(limit, _min_live_bars)
 
-        if (
-            live_candles
-            and len(live_candles) >= min(limit, _min_live_bars)
-        ):
+        if live_only_ready:
             fetch_meta.update(
                 {
                     "resolution": "live",
                     "upstream": "candle_builder",
-                    "liveBars": len(live_candles),
+                    "liveBars": live_bar_count,
                 }
             )
             out = live_candles[-limit:] if len(live_candles) > limit else live_candles
