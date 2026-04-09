@@ -1,4 +1,4 @@
-from auto_trader import AutoTrader
+from auto_trader import AutoTrader, _current_combined_conviction, _signal_expected_prob
 
 
 def _base_cfg():
@@ -212,6 +212,29 @@ def test_can_execute_rechecks_conviction_after_debate_adjustment(monkeypatch):
     assert reason == "debate-adjusted conviction 0.450 < min 0.550"
     assert signal["confluenceScore"] == 0.75
     assert signal["combinedConviction"] == 0.45
+
+
+def test_signal_expected_prob_prefers_calibrated_probability_over_ui_threshold_progress():
+    signal = {
+        "calibratedProbability": 0.41,
+        "combinedConviction": 0.72,
+        "confluencePct": 100,
+        "confluenceScore": 2.4,
+        "maxScore": 3.0,
+    }
+
+    assert _signal_expected_prob(signal) == 0.41
+
+
+def test_current_combined_conviction_uses_engine_a_only_contract_when_overlay_missing():
+    signal = {
+        "confluenceScore": 1.8,
+        "maxScore": 3.0,
+        "enginesAligned": False,
+        "combinedConviction": None,
+    }
+
+    assert _current_combined_conviction(signal) == 0.36
 
 
 def test_can_execute_rejects_when_debate_zeroes_engine_a_score(monkeypatch):

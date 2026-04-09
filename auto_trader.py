@@ -89,12 +89,14 @@ def _signal_engine(signal: dict) -> str:
 
 def _signal_expected_prob(signal: dict) -> float | None:
     """Best-effort normalized expectancy proxy for SSI execution samples."""
-    pct = signal.get("confluencePct")
-    if pct is not None:
+    for key in ("calibratedProbability", "combinedConviction", "scoreNorm"):
+        raw = signal.get(key)
+        if raw is None:
+            continue
         try:
-            return max(0.0, min(1.0, float(pct) / 100.0))
+            return max(0.0, min(1.0, float(raw)))
         except (TypeError, ValueError):
-            pass
+            continue
     try:
         score = float(signal.get("confluenceScore"))
         max_score = float(signal.get("maxScore", 0) or 0)
@@ -148,8 +150,6 @@ def _current_combined_conviction(signal: dict) -> float:
         b_norm = max(0.0, min(b_score / b_max, 1.0)) if b_max > 0 else 0.0
         return round((a_norm * 0.6) + (b_norm * 0.4), 4)
 
-    if signal.get("combinedConviction") is None:
-        return round(a_norm, 4)
     return round(a_norm * 0.6, 4)
 
 
@@ -517,9 +517,7 @@ class AutoTrader:
         # Sort by combined conviction (Engine A+B) descending — best signal first
         # Falls back to normalized confluenceScore if combinedConviction not present
 
-        signals = sorted(
-            signals, key=lambda s: s.get("combinedConviction", s.get("confluenceScore", 0) / s.get("maxScore", 3.0)), reverse=True
-        )
+        signals = sorted(signals, key=_current_combined_conviction, reverse=True)
 
         max_per_scan = cfg.get("AUTO_TRADE_MAX_PER_SCAN", 1)
 
@@ -569,11 +567,9 @@ class AutoTrader:
         combined_conviction = signal.get("combinedConviction")
         engines_aligned = signal.get("enginesAligned", False)
 
-        # Legacy fallback: normalize Engine A score to 0-1 if no combined score
+        # Fallback: recompute the same execution conviction contract used elsewhere.
         if combined_conviction is None:
-            score = signal.get("confluenceScore", 0)
-            max_score = signal.get("maxScore", 3.0)
-            combined_conviction = min(score / max_score, 1.0) if max_score else 0
+            combined_conviction = _current_combined_conviction(signal)
 
         # Auto-trade minimum conviction (0-1 scale)
         # Default: 0.50 = requires decent Engine A score OR Engine A+B alignment
@@ -1005,6 +1001,8 @@ class AutoTrader:
                 "weights": _signal_factor_weights(signal),
                 "disabled": signal.get("disabledFactors"),
                 "regime": signal.get("regimeName"),
+                "combined_conviction": signal.get("combinedConviction"),
+                "calibrated_probability": signal.get("calibratedProbability"),
             }
             _max_score = (
                 _eng_b_data.get("max_possible")
@@ -1049,7 +1047,7 @@ class AutoTrader:
                         _max_score,
                         _score_pct,
                         json.dumps(_factors),
-                        signal.get("edgeProbability"),
+                        signal.get("calibratedProbability", signal.get("edgeProbability")),
                         signal.get("style"),
                         result.get("feeCost"),
                     ),

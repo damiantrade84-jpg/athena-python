@@ -41,6 +41,28 @@ _EXEC_DEFAULTS = {
 # Frozen _EXEC replaced — callers should use _cfg() or CONFIG.get() directly
 
 
+def _signal_quality_factor(signal: dict) -> float:
+    """Return the live quality multiplier used for risk sizing."""
+    try:
+        combined = signal.get("combinedConviction")
+        if combined is not None:
+            return max(0.25, min(1.0, float(combined)))
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        max_score = float(signal.get("maxScore", 0) or 0)
+        score = float(signal.get("confluenceScore", max_score) or 0)
+    except (TypeError, ValueError):
+        return 1.0
+
+    if max_score > 0:
+        return max(0.25, min(1.0, score / max_score))
+    if 0.0 <= score <= 1.0:
+        return max(0.25, min(1.0, score))
+    return 1.0
+
+
 @dataclass
 class RiskApproval:
     """Result of risk_check(). Executors receive this — they cannot size their own orders."""
@@ -722,10 +744,8 @@ def risk_check(
     is_stock = asset_type == "stock"
     is_commodity = asset_type == "commodity"
 
-    # Score-scaled sizing: scale position by signal quality (weak signals get smaller bets)
-    max_score = signal.get("maxScore", 3.0)
-    score = signal.get("confluenceScore", max_score)
-    score_factor = max(0.25, min(1.0, score / max_score)) if max_score > 0 else 1.0
+    # Score-scaled sizing: prefer the live execution conviction when available.
+    score_factor = _signal_quality_factor(signal)
     # Also apply AI sizing override (1.0=full, 0.75=normal, 0.5=half, 0.25=quarter)
     combined_factor = dd_factor * score_factor * max(0.25, min(1.0, sizing_override))
     _decimals = 6 if is_crypto else (0 if is_stock else 2)

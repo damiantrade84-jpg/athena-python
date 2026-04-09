@@ -8,7 +8,13 @@ import pytest
 # Ensure project root is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from risk_engine import join_peak_audit_queue, risk_check, _cfg, _update_peak
+from risk_engine import (
+    join_peak_audit_queue,
+    risk_check,
+    _cfg,
+    _signal_quality_factor,
+    _update_peak,
+)
 import risk_engine
 
 
@@ -246,6 +252,22 @@ class TestApproval:
 
         assert result.approved is True
         assert captured["regime"] == "HIGH_VOLATILITY"
+
+    def test_signal_quality_factor_prefers_combined_conviction(self):
+        sig = _make_signal(confluenceScore=2.7, maxScore=3.0, combinedConviction=0.4)
+        assert _signal_quality_factor(sig) == 0.4
+
+    def test_risk_check_sizes_from_combined_conviction_when_present(self, monkeypatch):
+        monkeypatch.setattr(risk_engine, "_calc_volume", lambda *args, **kwargs: 1.0)
+        result = risk_check(
+            _make_signal(confluenceScore=2.7, maxScore=3.0, combinedConviction=0.4),
+            100000,
+            100000,
+            [],
+        )
+
+        assert result.approved is True
+        assert result.volume == pytest.approx(0.4, abs=1e-9)
 
 
 # ── Peak equity thread safety ───────────────────────────────────────────────
