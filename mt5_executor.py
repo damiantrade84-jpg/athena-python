@@ -409,6 +409,7 @@ def mt5_get_positions() -> dict:
                 "tp": pos.tp,
                 "profit": pos.profit,
                 "risk_amount": round(risk_amount, 2),
+                "open_time": int(pos.time) if pos.time else 0,
             }
         )
 

@@ -8061,6 +8061,40 @@ function renderOpenPositions(positions) {
     var pnlSign = pnl >= 0 ? '+' : '';
     var exch = p._bybit ? 'bybit' : 'mt5';
     var pairSafe = (p.pair || p.symbol).replace(/'/g, "\\'");
+    var timedData = (window._timedPositions || {})[String(p.ticket || '')] || {};
+    var style = timedData.style || 'intraday';
+    var minsOpen = timedData.mins_open != null ? timedData.mins_open : null;
+    var beMins = timedData.be_trigger_min;
+    var closeMins = timedData.close_trigger_min;
+    var inProfit = timedData.in_profit;
+    var timerHtml = '';
+    if (minsOpen != null && beMins != null && closeMins != null) {
+      var formatMins = function(m) {
+        if (m >= 1440) return (m/1440).toFixed(1) + 'd';
+        if (m >= 60) return Math.floor(m/60) + 'h ' + Math.round(m%60) + 'm';
+        return Math.round(m) + 'm';
+      };
+      var beReached = timedData.be_reached;
+      var closeReached = timedData.close_reached;
+      var timerColor = inProfit ? 'var(--bull)' : 'var(--bear)';
+      var timerLabel = '';
+      var timerVal = '';
+      if (closeReached) {
+        timerLabel = inProfit ? '⏱ Closing now (profit)' : '⏱ Time elapsed — SL protecting';
+        timerColor = inProfit ? 'var(--bull)' : 'var(--muted)';
+        timerVal = '';
+      } else if (beReached) {
+        timerLabel = '🔒 BE set — closes in';
+        timerVal = formatMins(timedData.mins_to_close);
+      } else {
+        timerLabel = inProfit ? '✅ In profit — BE in' : '⏳ BE in';
+        timerVal = formatMins(timedData.mins_to_be);
+      }
+      timerHtml = '<div class="pos-card-row pos-timer" style="color:' + timerColor + ';font-size:11px;margin-top:4px;">' +
+        '<span>' + timerLabel + (timerVal ? ' <strong>' + timerVal + '</strong>' : '') + '</span>' +
+        '<span style="margin-left:8px;opacity:0.6;">[' + style + ' · open ' + formatMins(minsOpen) + ']</span>' +
+      '</div>';
+    }
     return '<div class="pos-card ' + cardClass + '">' +
       '<div class="pos-card-header">' +
         '<span class="pos-card-pair">' + (p.pair || p.symbol) + '</span>' +
@@ -8070,6 +8104,7 @@ function renderOpenPositions(positions) {
       '<div class="pos-card-row">Entry: ' + fmtPrice(p.entry) + '</div>' +
       '<div class="pos-card-row">SL: ' + fmtPrice(p.sl) + ' &nbsp; TP: ' + fmtPrice(p.tp) + '</div>' +
       '<div class="pos-card-row">Vol: ' + p.volume + (p.ticket ? ' &nbsp; #' + p.ticket : '') + '</div>' +
+      timerHtml +
       '<button class="pos-close-btn" onclick="confirmClosePosition(\'' + exch + '\',\'' + pairSafe + '\',\'' + dir + '\',' + p.volume + ',' + (p.ticket || 0) + ',this)">CLOSE</button>' +
     '</div>';
   }).join('');
@@ -8091,8 +8126,14 @@ function refreshTradesTab(opts) {
   console.log('refreshTradesTab called');
   Promise.all([
     fetch('/api/bybit-status').then(function(r){ return r.json(); }).catch(function(e){ console.error('Bybit status error:', e); return {}; }),
-    fetch('/api/mt5-status').then(function(r){ return r.json(); }).catch(function(e){ console.error('MT5 status error:', e); return {}; })
+    fetch('/api/mt5-status').then(function(r){ return r.json(); }).catch(function(e){ console.error('MT5 status error:', e); return {}; }),
+    fetch('/api/open-trades-timed').then(function(r){ return r.json(); }).catch(function(){ return {positions:[]}; })
   ]).then(function(results) {
+    var timedData = results[2] || {positions:[]};
+    window._timedPositions = {};
+    (timedData.positions || []).forEach(function(tp) {
+      window._timedPositions[String(tp.ticket)] = tp;
+    });
     console.log('Status results:', results);
     var bybitData = results[0];
     var mt5Data = results[1];

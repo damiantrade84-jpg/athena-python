@@ -9053,6 +9053,134 @@ def api_signal_stability():
     return jsonify(get_signal_stability_index(engine=engine, db_path=_AUDIT_DB))
 
 
+@app.route("/api/open-trades-timed")
+def api_open_trades_timed():
+    """
+    Returns open positions from MT5 + Bybit enriched with:
+    - open_time_iso: when the trade was opened (from MT5 pos.time or audit_log ts)
+    - style: scalp / intraday / swing (from audit_log)
+    - be_trigger_min: minutes until/since breakeven SL trigger
+    - close_trigger_min: minutes until/since timed close trigger
+    Used by the dashboard countdown timer on each position card.
+    """
+    import sqlite3 as _sq
+    from datetime import datetime, timezone as _tz
+
+    _style_windows = {
+        "scalp":    {"be_min": 5,         "close_min": 10},
+        "intraday": {"be_min": 15,        "close_min": 30},
+        "swing":    {"be_min": 2.5 * 1440, "close_min": 5.0 * 1440},
+    }
+
+    out = []
+    now_ts = datetime.now(_tz.utc).timestamp()
+
+    # -- MT5 positions --
+    try:
+        from mt5_executor import mt5_get_positions
+        mt5_res = mt5_get_positions()
+        mt5_positions = mt5_res.get("positions", [])
+    except Exception:
+        mt5_positions = []
+
+    # -- Bybit positions --
+    try:
+        from bybit_executor import bybit_get_positions
+        bybit_res = bybit_get_positions()
+        bybit_positions = bybit_res.get("positions", [])
+        for p in bybit_positions:
+            p["_bybit"] = True
+    except Exception:
+        bybit_positions = []
+
+    all_positions = mt5_positions + bybit_positions
+
+    # -- Audit lookup: ticket → {ts, style} --
+    audit_map = {}
+    try:
+        with _sq.connect(_AUDIT_DB, timeout=10.0) as con:
+            con.row_factory = _sq.Row
+            rows = con.execute(
+                "SELECT ticket, ts, style, asset_class FROM audit_log "
+                "WHERE ticket IS NOT NULL AND exit_time IS NULL "
+                "ORDER BY ts DESC LIMIT 200"
+            ).fetchall()
+            for r in rows:
+                tk = str(r["ticket"])
+                if tk not in audit_map:
+                    audit_map[tk] = {"ts": r["ts"], "style": r["style"], "asset_class": r["asset_class"]}
+    except Exception:
+        pass
+
+    cfg_te = CONFIG.get("TIMED_EXIT", {})
+
+    for p in all_positions:
+        ticket = str(p.get("ticket", ""))
+        audit  = audit_map.get(ticket, {})
+
+        # Resolve open time
+        raw_open_time = p.get("open_time", 0)  # Unix seconds from MT5
+        audit_ts_iso  = audit.get("ts", "")
+        if raw_open_time and raw_open_time > 0:
+            open_ts = float(raw_open_time)
+            open_iso = datetime.fromtimestamp(open_ts, tz=_tz.utc).isoformat()
+        elif audit_ts_iso:
+            try:
+                open_ts = datetime.fromisoformat(
+                    audit_ts_iso.replace("Z", "+00:00")
+                ).timestamp()
+                open_iso = audit_ts_iso
+            except Exception:
+                open_ts = now_ts
+                open_iso = ""
+        else:
+            open_ts = now_ts
+            open_iso = ""
+
+        mins_open = (now_ts - open_ts) / 60.0
+
+        # Resolve style
+        style = (audit.get("style") or "intraday").lower()
+        if style not in _style_windows:
+            style = "intraday"
+
+        # Override windows from config if present
+        scfg = cfg_te.get(style, {})
+        if style == "swing":
+            be_min    = float(scfg.get("breakeven_days", 2.5)) * 1440
+            close_min = float(scfg.get("close_days", 5.0)) * 1440
+        else:
+            be_min    = float(scfg.get("breakeven_min", _style_windows[style]["be_min"]))
+            close_min = float(scfg.get("close_min",     _style_windows[style]["close_min"]))
+
+        profit = float(p.get("profit", 0))
+        in_profit = profit > 0
+
+        out.append({
+            "ticket":          ticket,
+            "pair":            p.get("pair") or p.get("symbol", ""),
+            "direction":       p.get("direction", "LONG"),
+            "profit":          profit,
+            "entry":           p.get("entry", 0),
+            "sl":              p.get("sl", 0),
+            "tp":              p.get("tp", 0),
+            "volume":          p.get("volume", 0),
+            "exchange":        "bybit" if p.get("_bybit") else "mt5",
+            "open_time_iso":   open_iso,
+            "mins_open":       round(mins_open, 1),
+            "style":           style,
+            "be_trigger_min":  round(be_min, 1),
+            "close_trigger_min": round(close_min, 1),
+            "be_reached":      mins_open >= be_min,
+            "close_reached":   mins_open >= close_min,
+            "in_profit":       in_profit,
+            "mins_to_be":      round(max(0, be_min - mins_open), 1),
+            "mins_to_close":   round(max(0, close_min - mins_open), 1),
+        })
+
+    return jsonify({"positions": out, "count": len(out)})
+
+
 @app.route("/api/audit")
 def api_audit():
     """Return last N audit log entries from SQLite."""
