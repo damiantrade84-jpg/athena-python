@@ -477,6 +477,56 @@ def mt5_close_position(ticket: int) -> dict:
     return {"success": False, "error": err}
 
 
+def mt5_move_sl_to_breakeven(ticket: int, entry_price: float) -> dict:
+    """Move stop-loss to breakeven (entry price) for an open MT5 position.
+
+    Uses TRADE_ACTION_SLTP to modify SL only. Does not close the position.
+    Called by timed_exit_monitor when a position reaches the breakeven trigger window.
+    """
+    mt5 = _get_mt5()
+
+    if not mt5 or not mt5_connect():
+        return {"success": False, "error": "MT5 not connected"}
+
+    positions = mt5.positions_get(ticket=ticket)
+
+    if not positions:
+        return {"success": False, "error": f"Position {ticket} not found"}
+
+    pos = positions[0]
+
+    # Only move SL if entry_price is better than current SL
+    # (do not move SL to a worse level)
+    direction_long = pos.type == 0
+    current_sl = pos.sl
+
+    if direction_long and current_sl >= entry_price:
+        return {"success": True, "skipped": True, "reason": "SL already at or above breakeven"}
+
+    if not direction_long and current_sl > 0 and current_sl <= entry_price:
+        return {"success": True, "skipped": True, "reason": "SL already at or below breakeven"}
+
+    request = {
+        "action": mt5.TRADE_ACTION_SLTP,
+        "symbol": pos.symbol,
+        "sl": entry_price,
+        "tp": pos.tp,
+        "position": ticket,
+        "magic": 240601,
+        "comment": "Athena|BE",
+    }
+
+    result = mt5.order_send(request)
+
+    if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+        log.info(f"[MT5] BREAKEVEN SL set: ticket={ticket} sl={entry_price} (was {current_sl})")
+        return {"success": True, "newSl": entry_price}
+
+    err = result.comment if result else "order_send failed"
+    log.warning(f"[MT5] Breakeven SL failed ticket={ticket}: {err}")
+    return {"success": False, "error": err}
+
+
 def mt5_get_symbol_info(athena_display: str) -> dict:
     """Get MT5 symbol info for risk engine calculations.
 

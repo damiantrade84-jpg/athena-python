@@ -29,6 +29,7 @@ from datetime import datetime, timezone, timedelta
 from calibration import predict_calibrated_prob
 from meta_learner import apply_meta_policy, meta_report
 from stability_monitor import get_signal_stability_index, record_execution_event
+from timed_exit_monitor import start_monitor
 
 log = logging.getLogger("athena.auto_trader")
 
@@ -250,6 +251,10 @@ class AutoTrader:
         self._audit_db = audit_db
 
         self._config_fn = config_fn
+
+        # Start timed exit monitor (hybrid triple-barrier C-barrier)
+        if audit_db:
+            start_monitor(audit_db, config_fn)
 
     # ── Public control ────────────────────────────────────────────────────────
 

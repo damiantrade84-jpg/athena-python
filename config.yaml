@@ -854,5 +854,22 @@ SCALP_ENGINE:
 # Default false: opt-in only. Dataset pipeline writes to audit.db
 # (vision_samples, vision_labels, vision_predictions) on every /api/chart-analysis
 # call; v2 shadow runs ML inference in the hot path. Enable only after validation.
+# ── Timed Exit Monitor (Triple-Barrier C-barrier) ────────────────────────────
+# Hybrid exit: move SL to breakeven at 50% of window, close at full window if in profit.
+# Swing trades at >= tp_progress_exempt of TP distance are exempt from timed close.
+# Set enabled: false to disable the entire monitor without removing the config.
+TIMED_EXIT:
+  enabled: true
+  check_interval_sec: 30       # how often the monitor wakes (seconds)
+  scalp:
+    breakeven_min: 5           # move SL to entry after 5 min if in profit
+    close_min: 10              # close at market after 10 min if still in profit
+  intraday:
+    breakeven_min: 15          # move SL to entry after 15 min if in profit
+    close_min: 30              # close at market after 30 min if still in profit
+  swing:
+    breakeven_days: 2.5        # move SL to entry after 2.5 days if in profit
+    close_days: 5.0            # close at market after 5 days if still in profit
+    tp_progress_exempt: 0.50   # skip close if >= 50% toward TP — let TP manage it
 CHART_VISION_DATASET_ENABLED: false
 CHART_VISION_V2_SHADOW_ENABLED: false
