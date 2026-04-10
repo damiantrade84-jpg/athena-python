@@ -9563,6 +9563,7 @@ function buildECCard(c, category) {
   html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px;">';
   html += '<div style="font-size:9px;color:var(--muted);font-weight:700;margin-bottom:4px;">ENGINE A RAW</div>';
   if (a.direction) {
+    // has_signal=true — direction passed the floor, full signal
     var aScore = a.score != null ? (typeof a.score === 'number' ? a.score.toFixed(2) : a.score) : '?';
     var aMax = a.maxScore != null ? (typeof a.maxScore === 'number' ? a.maxScore.toFixed(1) : a.maxScore) : '3.0';
     html += '<div style="font-size:11px;font-family:IBM Plex Mono,monospace;color:var(--text);">' +
@@ -9570,6 +9571,20 @@ function buildECCard(c, category) {
     html += '<div style="font-size:10px;color:var(--muted);font-family:IBM Plex Mono,monospace;">' +
       'SL ' + fmtPriceForSig(a.sl, c) + ' TP ' + fmtPriceForSig(a.tp1, c) + '</div>';
     if (a.cot != null) html += '<div style="font-size:9px;color:var(--accent);">COT ' + a.cot + '</div>';
+  } else if (a.analyze_pair_failed) {
+    // analyze_pair() returned None — data gap or scoring exception
+    html += '<div style="font-size:11px;color:#f59e0b;font-family:IBM Plex Mono,monospace;">DATA FAIL</div>';
+    var aMax2 = a.maxScore != null ? (typeof a.maxScore === 'number' ? a.maxScore.toFixed(1) : a.maxScore) : '?';
+    html += '<div style="font-size:9px;color:var(--muted);">analyze_pair returned None (max ' + aMax2 + ')</div>';
+  } else if (a.raw_direction) {
+    // has_signal=false but Engine A did compute a directional score — below floor
+    var aScore2 = a.score != null ? (typeof a.score === 'number' ? a.score.toFixed(2) : a.score) : '?';
+    var aMax3 = a.maxScore != null ? (typeof a.maxScore === 'number' ? a.maxScore.toFixed(1) : a.maxScore) : '?';
+    var aNorm = a.score_norm != null ? Math.round(a.score_norm * 100) : null;
+    html += '<div style="font-size:11px;font-family:IBM Plex Mono,monospace;color:var(--muted);">' +
+      a.raw_direction + ' ' + aScore2 + '/' + aMax3 +
+      (aNorm != null ? ' (' + aNorm + '%)' : '') + '</div>';
+    html += '<div style="font-size:9px;color:#f59e0b;">below floor &mdash; not eligible</div>';
   } else {
     html += '<div style="font-size:11px;color:var(--muted);">No signal</div>';
   }
