@@ -998,6 +998,17 @@ class AutoTrader:
 
         is_demo = self._test_mode_fn() if self._test_mode_fn else False
 
+        def _resolve_audit_style(style: str | None, asset_class: str | None) -> str:
+            """Normalise style for audit_log. Maps 'auto' and None to a concrete style."""
+            if style in ("scalp", "intraday", "swing"):
+                return style
+            # 'auto' or None — infer from asset class
+            if (asset_class or "").lower() == "crypto":
+                return "intraday"   # crypto auto defaults to intraday
+            if (asset_class or "").lower() == "forex":
+                return "intraday"
+            return "intraday"       # safe default for commodity/index/stock
+
         try:
             _audit_engine = _signal_engine(signal)
             _eng_b_data = signal.get("engine_b") or signal.get("naked_data") or {}
@@ -1053,7 +1064,7 @@ class AutoTrader:
                         _score_pct,
                         json.dumps(_factors),
                         signal.get("calibratedProbability", signal.get("edgeProbability")),
-                        signal.get("style"),
+                        _resolve_audit_style(signal.get("style"), signal.get("type")),
                         result.get("feeCost"),
                     ),
                 )
