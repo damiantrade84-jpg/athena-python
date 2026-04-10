@@ -55,7 +55,6 @@ class BinanceWS:
                 close_timeout=10,
             ) as ws:
                 log.info(f"[BinanceWS] Connected to combined stream for {self.symbol}")
-                import websockets.exceptions
                 _last_ping = time.time()
                 while self._running:
                     try:

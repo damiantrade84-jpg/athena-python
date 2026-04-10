@@ -233,7 +233,6 @@ class BinanceLivePriceWS:
                         log.info(
                             "[BINANCE-WS] Connected to fstream.binance.com !ticker@arr"
                         )
-                        import websockets.exceptions
                         _last_ping = time.time()
                         while self._running:
                             try:
@@ -364,7 +363,6 @@ class BinanceCandleWS:
                             len(symbol_map),
                             ", ".join(f"@kline_{interval}" for interval in self._STREAM_TFS),
                         )
-                        import websockets.exceptions
                         _last_ping = time.time()
                         while self._running:
                             try:
