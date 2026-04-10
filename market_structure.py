@@ -810,6 +810,152 @@ class NakedEngine:
             "strong_close": strong_close,
         }
 
+    def _determine_independent_direction(
+        self,
+        h1_sequence: str,
+        h4_sequence: str,
+        bos_data: dict,
+        d1_bos: dict,
+        choch_data: dict,
+        sweep_data: dict,
+    ) -> dict:
+        """
+        Determine Engine B's own directional opinion from pure price-action evidence.
+
+        This is advisory only — it does NOT affect scoring, checklist pass/fail,
+        or the direction parameter passed into analyze_structure from the caller.
+        It lets Engine C distinguish genuine direction conflicts from inherited ones.
+
+        Returns:
+            dict with:
+              direction: 'LONG' | 'SHORT' | None  (None = no structural opinion)
+              confidence: 'HIGH' | 'MEDIUM' | 'LOW'
+              reason: str  human-readable rationale
+              votes: dict  evidence map used to derive the opinion
+        """
+        votes: dict[str, int] = {}  # +1 = bullish, -1 = bearish, 0 = neutral
+
+        # --- H1 micro swing sequence ---
+        if h1_sequence == "HH_HL":
+            votes["h1_swing"] = 1
+        elif h1_sequence == "LH_LL":
+            votes["h1_swing"] = -1
+        else:
+            votes["h1_swing"] = 0
+
+        # --- H4 macro swing sequence ---
+        if h4_sequence == "HH_HL":
+            votes["h4_swing"] = 1
+        elif h4_sequence == "LH_LL":
+            votes["h4_swing"] = -1
+        else:
+            votes["h4_swing"] = 0
+
+        # --- BOS direction (structural momentum) ---
+        bos_bull = bool(bos_data.get("bos_bull"))
+        bos_bear = bool(bos_data.get("bos_bear"))
+        if bos_bull and not bos_bear:
+            votes["bos"] = 1
+        elif bos_bear and not bos_bull:
+            votes["bos"] = -1
+        elif bos_bull and bos_bear:
+            votes["bos"] = 0  # both — conflicted
+        else:
+            votes["bos"] = 0  # no BOS
+
+        # --- D1 BOS (macro confirmation, higher weight) ---
+        d1_bull = bool(d1_bos.get("bos_bull"))
+        d1_bear = bool(d1_bos.get("bos_bear"))
+        if d1_bull and not d1_bear:
+            votes["d1_bos"] = 1
+        elif d1_bear and not d1_bull:
+            votes["d1_bos"] = -1
+        else:
+            votes["d1_bos"] = 0
+
+        # --- CHoCH (early reversal signal, lower weight) ---
+        if choch_data.get("choch_bull") and not choch_data.get("choch_bear"):
+            votes["choch"] = 1
+        elif choch_data.get("choch_bear") and not choch_data.get("choch_bull"):
+            votes["choch"] = -1
+        else:
+            votes["choch"] = 0
+
+        # --- Liquidity sweep direction (sweep of lows → bullish, highs → bearish) ---
+        if sweep_data.get("bull_sweep"):
+            votes["sweep"] = 1   # sweep of lows = bullish reversal context
+        elif sweep_data.get("bear_sweep"):
+            votes["sweep"] = -1  # sweep of highs = bearish reversal context
+        else:
+            votes["sweep"] = 0
+
+        # --- Weight the votes ---
+        # D1 BOS and H4 swing carry more weight than H1 or CHoCH
+        weights = {
+            "d1_bos":   3,
+            "h4_swing": 2,
+            "bos":      2,
+            "h1_swing": 1,
+            "choch":    1,
+            "sweep":    1,
+        }
+        total_weight = sum(weights.values())  # 10
+        weighted_score = sum(
+            votes.get(k, 0) * w for k, w in weights.items()
+        )
+        score_ratio = weighted_score / total_weight  # -1.0 to +1.0
+
+        # Confidence: how strongly the evidence agrees
+        active_votes = [v for v in votes.values() if v != 0]
+        if not active_votes:
+            return {
+                "direction": None,
+                "confidence": "NONE",
+                "reason": "No structural evidence available",
+                "votes": votes,
+                "weighted_score": 0.0,
+            }
+
+        positive = sum(1 for v in active_votes if v > 0)
+        negative = sum(1 for v in active_votes if v < 0)
+        agreement_ratio = max(positive, negative) / len(active_votes)
+
+        if agreement_ratio >= 0.80:
+            confidence = "HIGH"
+        elif agreement_ratio >= 0.60:
+            confidence = "MEDIUM"
+        else:
+            confidence = "LOW"
+
+        # Direction from weighted score
+        if score_ratio > 0.15:
+            direction = "LONG"
+            reason = (
+                f"Structural evidence bullish: {positive}/{len(active_votes)} indicators agree "
+                f"(h4={h4_sequence}, bos={'YES' if bos_bull else 'NO'}, d1_bos={'YES' if d1_bull else 'NO'})"
+            )
+        elif score_ratio < -0.15:
+            direction = "SHORT"
+            reason = (
+                f"Structural evidence bearish: {negative}/{len(active_votes)} indicators agree "
+                f"(h4={h4_sequence}, bos={'YES' if bos_bear else 'NO'}, d1_bos={'YES' if d1_bear else 'NO'})"
+            )
+        else:
+            direction = None
+            confidence = "LOW"
+            reason = (
+                f"Structural evidence mixed or ranging: score={score_ratio:.2f} "
+                f"(pos={positive}, neg={negative}, h4={h4_sequence})"
+            )
+
+        return {
+            "direction": direction,
+            "confidence": confidence,
+            "reason": reason,
+            "votes": votes,
+            "weighted_score": round(score_ratio, 4),
+        }
+
     def analyze_structure(
         self,
         d1_candles: list,
@@ -1313,6 +1459,17 @@ class NakedEngine:
             "asset_type": asset_type,
             "d1_adx": d1_adx_val,
             "h4_adx": h4_adx_val,
+            # Independent directional assessment from Engine B's own price-action evidence.
+            # Advisory only — does not affect scoring, checklist, or execution gates.
+            # Allows Engine C to detect genuine direction conflicts vs inherited ones.
+            "engine_b_independent_direction": self._determine_independent_direction(
+                h1_sequence=sequence_data["state"],
+                h4_sequence=macro_seq_data["state"],
+                bos_data=bos_data,
+                d1_bos=d1_bos,
+                choch_data=choch_data,
+                sweep_data=sweep_data,
+            ),
             **_profile_result,
         }
 

@@ -5274,6 +5274,26 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             log.debug(f"[NAKED] {pair_obj.get('display')}: AI skipped (AI_ON_DEMAND_ONLY=true, force_ai=false)")
             res["ai_analysis"] = None
 
+        # ── Phase 1: AI Reconciliation layer ─────────────────────────────────
+        # Compare Marcus Reid (text) vs any Vision result available for this pair.
+        # Output is display-only — no scoring effect.
+        try:
+            from ai_reconciliation import compute_ai_agreement, reconcile_style_ratings
+            _vision_cache_key = (
+                pair_obj.get("symbol") or pair_obj.get("display") or ""
+            ).replace("/", "_")
+            _cached_vision = _engine_b_cache_get(_vision_cache_key + "_vision") or {}
+            _marcus_result = res.get("ai_analysis")
+            _reconciled = compute_ai_agreement(_marcus_result, _cached_vision or None)
+            _style_reconciled = reconcile_style_ratings(_marcus_result, _cached_vision or None)
+            res["ai_reconciliation"] = {
+                **_reconciled,
+                "style_reconciliation": _style_reconciled,
+            }
+        except Exception as _rec_err:
+            log.debug(f"[AI_RECONCILE] {pair_obj.get('display')}: skipped ({_rec_err})")
+            res["ai_reconciliation"] = {"ai_agreement_label": "UNAVAILABLE"}
+
         return res, pair_obj, None
     except Exception as e:
         log.error(f"naked_analysis error: {e}")
@@ -8450,6 +8470,19 @@ def api_chart_analysis():
             log.debug(f"[AI CHART] vision sample/prediction log skipped: {_vision_log_err}")
 
         _tf_label = "D1+H4+H1" if triple_mode else ("D1+H4" if dual_mode else tf)
+        _vision_payload = {
+            "analysis": analysis,
+            "structured": structured,
+            "model": _vision_model,
+            "symbol": symbol,
+            "tf": _tf_label,
+        }
+        # Cache vision result for AI reconciliation layer (keyed by symbol with _vision suffix)
+        try:
+            _vsym_key = str(symbol or "").replace("/", "_") + "_vision"
+            _engine_b_cache_put(_vsym_key, _vision_payload)
+        except Exception:
+            pass
         return jsonify(
             {
                 "analysis": analysis,

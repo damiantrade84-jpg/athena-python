@@ -67,6 +67,57 @@ def test_mt5_map_symbol_knows_new_pepperstone_symbols(display: str, mt5_symbol: 
     assert mt5_map_symbol(display) == mt5_symbol
 
 
+@pytest.mark.parametrize(
+    ("display", "expected"),
+    [
+        ("AAPL", "AAPL"),
+        ("GLD", "GLD"),
+        ("SLV", "SLV"),
+    ],
+)
+def test_yfinance_symbol_for_us_stocks_and_etfs_strips_us_suffix(display: str, expected: str):
+    pair = next(p for p in ALL_PAIRS if p["display"] == display)
+    assert _ATHENA_MOD._yfinance_symbol_for_pair(pair) == expected
+
+
+def test_fetch_mt5_falls_back_when_symbol_missing(monkeypatch):
+    import mt5_executor
+
+    pair = next(p for p in ALL_PAIRS if p["display"] == "GLD")
+    fallback = [
+        {
+            "time": "2026-04-09T08:00:00+00:00",
+            "open": 210.0,
+            "high": 211.0,
+            "low": 209.5,
+            "close": 210.7,
+            "vol": 1000.0,
+        }
+    ]
+
+    class _FakeMT5:
+        TIMEFRAME_M1 = 1
+        TIMEFRAME_M5 = 5
+        TIMEFRAME_M15 = 15
+        TIMEFRAME_M30 = 30
+        TIMEFRAME_H1 = 60
+        TIMEFRAME_H4 = 240
+        TIMEFRAME_D1 = 1440
+
+        def symbol_select(self, _symbol, _enable):
+            return False
+
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "_get_mt5", lambda: _FakeMT5())
+    monkeypatch.setattr(_ATHENA_MOD, "_fetch_fallback_candles", lambda *_args, **_kwargs: fallback)
+
+    out = _ATHENA_MOD.fetch_mt5(pair, "H4", 10)
+
+    assert out["error"] is True
+    assert out["detail"] == "symbol not found in MT5"
+    assert out["candles"] == fallback
+
+
 def _load_literal_assignment(path: Path, name: str):
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     for node in tree.body:

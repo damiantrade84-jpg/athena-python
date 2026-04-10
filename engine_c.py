@@ -84,6 +84,172 @@ def _vision_modifiers() -> dict:
     return out
 
 
+def _build_disagreement_diagnosis(
+    verdict: str,
+    a: dict,
+    b: dict,
+    signal_a: dict,
+    signal_b: dict,
+    regime: str,
+) -> dict:
+    """
+    Build a human-readable explanation of why Engine A and Engine B disagree.
+
+    This is a diagnostic-only field — no scoring effect whatsoever.
+    Surfaces in the UI and audit log to help the user understand conflicts.
+
+    Returns:
+        dict with:
+          verdict_explanation: str   one-line summary of the verdict
+          a_summary: str             Engine A status in plain English
+          b_summary: str             Engine B status in plain English
+          b_independent_direction: dict | None   Engine B's own opinion if available
+          conflict_type: str         'genuine_direction' | 'inherited_direction' | 'missing_signal' | 'no_conflict'
+          conflict_explanation: str  why the conflict occurred
+    """
+    # ── Engine A summary ─────────────────────────────────────────────────────
+    a_dir = a.get("direction", "N/A")
+    a_norm = round(a.get("score_norm", 0.0), 3)
+    a_has  = bool(a.get("has_signal"))
+    a_regime = a.get("regime", regime)
+
+    # Top factor from signal_a if available
+    _factor_scores  = signal_a.get("factor_scores", {}) or {}
+    _top_factor     = max(_factor_scores, key=lambda k: abs(_factor_scores[k] or 0), default=None) if _factor_scores else None
+    _top_factor_val = round(_factor_scores.get(_top_factor, 0) or 0, 3) if _top_factor else None
+    _active_dir_factors = signal_a.get("active_directional_factors") or []
+    a_signal_source = (
+        f"top_factor={_top_factor}({_top_factor_val}), active={_active_dir_factors}"
+        if _top_factor
+        else "no factor detail available"
+    )
+
+    if a_has:
+        a_summary = (
+            f"A={a_dir} norm={a_norm} regime={a_regime} [{a_signal_source}]"
+        )
+    else:
+        # Why does A not have a signal?
+        _is_insuff    = signal_a.get("insufficient_factors", False)
+        _is_indet     = signal_a.get("indeterminate_direction", False)
+        _min_dir_fail = signal_a.get("min_directional_failed", False)
+        _feed_status  = signal_a.get("feed_status", {}) or {}
+        _failed_feeds = [k for k, v in _feed_status.items() if v not in ("ok", "unsupported", "disabled", "no_coverage")]
+        _reasons = []
+        if _is_insuff:
+            _reasons.append("insufficient_directional_factors")
+        if _is_indet:
+            _reasons.append("indeterminate_direction")
+        if _min_dir_fail:
+            _reasons.append(f"min_directional_threshold_failed (norm={a_norm}<=0.30)")
+        if _failed_feeds:
+            _reasons.append(f"feed_errors={_failed_feeds}")
+        a_summary = (
+            f"A=NO_SIGNAL norm={a_norm} reasons={'|'.join(_reasons) or 'low_conviction'}"
+        )
+
+    # ── Engine B summary ─────────────────────────────────────────────────────
+    b_dir        = b.get("direction", "N/A")
+    b_norm_val   = round(b.get("score_norm", 0.0), 3)
+    b_has        = bool(b.get("has_signal"))
+    b_verdict_b  = signal_b.get("structural_verdict", "?")
+    b_struct_ok  = bool(b.get("structure_ok"))
+    b_zone_ok    = bool(b.get("zone_ok"))
+    b_trigger_ok = bool(b.get("trigger_ok"))
+    b_swing      = b.get("swing_sequence", "?")
+    b_macro      = b.get("macro_sequence", "?")
+
+    # Engine B independent direction (Phase 2 addition)
+    b_ind_dir = signal_b.get("engine_b_independent_direction")
+
+    if b_has:
+        b_summary = (
+            f"B={b_dir} norm={b_norm_val} verdict={b_verdict_b} "
+            f"struct={b_struct_ok} zone={b_zone_ok} trigger={b_trigger_ok} "
+            f"H1_seq={b_swing} H4_seq={b_macro}"
+        )
+    else:
+        # Why does B not have a signal?
+        _b_missing = []
+        if b_verdict_b != "CLEAR":
+            _b_missing.append(f"verdict={b_verdict_b}")
+        if not b_struct_ok:
+            _b_reason_codes = (signal_b.get("engine_b_diagnostics") or {}).get("reason_codes", [])
+            _b_missing.append(f"structure_failed (codes={_b_reason_codes})")
+        if not b_zone_ok:
+            _b_missing.append("no_zone_touch")
+        if not b_trigger_ok:
+            _b_missing.append("no_trigger")
+        if b_norm_val <= 0.2:
+            _b_missing.append(f"low_confidence (norm={b_norm_val}<=0.20)")
+        b_summary = (
+            f"B=NO_SIGNAL norm={b_norm_val} reasons={'|'.join(_b_missing) or 'low_confidence'}"
+        )
+
+    # ── Conflict classification ───────────────────────────────────────────────
+    conflict_type = "no_conflict"
+    conflict_explanation = ""
+
+    if verdict == "ALIGNED":
+        conflict_type = "no_conflict"
+        conflict_explanation = (
+            f"Both engines agree: A={a_dir} B={b_dir} regime={regime}"
+        )
+
+    elif verdict in ("A_ONLY", "B_ONLY", "B_ONLY_SCORED", "B_ONLY_VISION_CONFIRMED"):
+        conflict_type = "missing_signal"
+        missing_engine = "B" if verdict.startswith("A") else "A"
+        conflict_explanation = (
+            f"Only one engine has a signal. Engine {missing_engine} did not produce a signal. "
+            f"{a_summary if verdict.startswith('A') else b_summary}"
+        )
+
+    elif verdict in ("DIRECTION_CONFLICT", "B_OVERRIDE_CONFLICT", "OPPOSING_HIGH_CONFIDENCE"):
+        # Determine if the conflict is genuine (both engines independently point opposite ways)
+        # vs inherited (B was run in the same direction context as A)
+        b_own_dir = (b_ind_dir or {}).get("direction")
+        b_own_conf = (b_ind_dir or {}).get("confidence", "NONE")
+
+        if b_own_dir is not None and b_own_dir != a_dir:
+            conflict_type = "genuine_direction"
+            conflict_explanation = (
+                f"GENUINE conflict: Engine A={a_dir} (indicators), "
+                f"Engine B independent opinion={b_own_dir} (confidence={b_own_conf}, H4={b_macro}). "
+                f"The engines independently read the market in opposite directions."
+            )
+        elif b_own_dir is None:
+            conflict_type = "inherited_direction"
+            conflict_explanation = (
+                f"INHERITED conflict: Engine B returned direction={b_dir} from caller context, "
+                f"but its own structural evidence is inconclusive (H4={b_macro}, H1={b_swing}). "
+                f"Engine A favors {a_dir}. This may resolve once structure clarifies."
+            )
+        else:
+            conflict_type = "inherited_direction"
+            conflict_explanation = (
+                f"INHERITED conflict: Engine B ran against {b_dir} but its own "
+                f"structural opinion ({b_own_dir}, {b_own_conf}) is inconclusive or matches A. "
+                f"Source of conflict likely candle window or zone detection boundary."
+            )
+        conflict_explanation += (
+            f" | A: norm={a_norm} | B: norm={b_norm_val} "
+            f"struct={b_struct_ok} zone={b_zone_ok} trigger={b_trigger_ok}"
+        )
+
+    elif verdict == "NO_SIGNAL":
+        conflict_type = "missing_signal"
+        conflict_explanation = "Neither engine produced a tradeable signal."
+
+    return {
+        "verdict_explanation": f"{verdict}: {conflict_explanation[:120]}" if conflict_explanation else verdict,
+        "a_summary": a_summary,
+        "b_summary": b_summary,
+        "b_independent_direction": b_ind_dir,
+        "conflict_type": conflict_type,
+        "conflict_explanation": conflict_explanation,
+    }
+
+
 def normalise_engine_a(signal_a: dict) -> dict:
     """Normalise Engine A output to 0-1 scale.
 
@@ -571,6 +737,9 @@ def compute_consensus(
             trade=False, verdict="NO_SIGNAL", direction=None,
             conviction=0.0, tier="SKIP", sizing=0.0,
             a_norm=a, b_norm=b, entry=entry,
+            disagreement_diagnosis=_build_disagreement_diagnosis(
+                "NO_SIGNAL", a, b, signal_a, signal_b, regime
+            ),
         ), asset_type)
 
     # Only one engine has signal
@@ -620,6 +789,9 @@ def compute_consensus(
             a_reliability=a_reliability,
             b_reliability=0.0,
             c_reliability=c_reliability,
+            disagreement_diagnosis=_build_disagreement_diagnosis(
+                "A_ONLY", a, b, signal_a, signal_b, regime
+            ),
         )
         if ai_vision:
             result = apply_vision(result, ai_vision)
@@ -680,6 +852,9 @@ def compute_consensus(
             a_reliability=0.0,
             b_reliability=b_reliability,
             c_reliability=c_reliability,
+            disagreement_diagnosis=_build_disagreement_diagnosis(
+                "B_ONLY", a, b, signal_a, signal_b, regime
+            ),
         )
         if ai_vision:
             result = apply_vision(result, ai_vision)
@@ -758,6 +933,9 @@ def compute_consensus(
                 a_reliability=0.0,
                 b_reliability=b_reliability,
                 c_reliability=c_reliability,
+                disagreement_diagnosis=_build_disagreement_diagnosis(
+                    "B_OVERRIDE_CONFLICT", a, b, signal_a, signal_b, regime
+                ),
             )
             if ai_vision:
                 result = apply_vision(result, ai_vision)
@@ -772,6 +950,10 @@ def compute_consensus(
             sizing=0.0,
             a_norm=a, b_norm=b, entry=entry,
             opposing_high_confidence=opposing_high_confidence,
+            disagreement_diagnosis=_build_disagreement_diagnosis(
+                "OPPOSING_HIGH_CONFIDENCE" if opposing_high_confidence else "DIRECTION_CONFLICT",
+                a, b, signal_a, signal_b, regime
+            ),
         ), asset_type)
 
     # Step 4: Direction agrees — compute weighted conviction
@@ -909,6 +1091,9 @@ def compute_consensus(
         c_reliability=c_reliability,
         intermarket_confirmation=_intermarket_confirmation_payload,
         intermarket_multiplier=_intermarket_mult,
+        disagreement_diagnosis=_build_disagreement_diagnosis(
+            "ALIGNED", a, b, signal_a, signal_b, regime
+        ),
     )
 
     # Step 6: Apply Vision if available
@@ -1002,4 +1187,6 @@ def _build_result(
             float(kwargs.get("intermarket_multiplier", 1.0) or 1.0),
             6,
         ),
+        # Phase 3: Engine C disagreement diagnostics (display-only, no scoring effect)
+        "disagreement_diagnosis": kwargs.get("disagreement_diagnosis") or {},
     }
