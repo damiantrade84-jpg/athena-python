@@ -796,7 +796,11 @@ ENGINE_B_FOREX_STRUCTURE_TF: "D1"
 # Minimum ADX for forex Engine B (D1 snap preferred, else H4/zone snap; else
 # candle-derived). Set to 0.0 to disable the veto and restore the pre-gate
 # baseline.
-ENGINE_B_FOREX_ADX_MIN: 0.0
+# 15 = dead-market floor: rejects ADX < 15 (completely flat / noise only).
+# Engine A uses D1 ADX >= 25 (hard trend gate). Engine B intentionally sits
+# lower because structural patterns (BOS/CHoCH/OB) remain valid down to ~15
+# — this preserves Engine B's independent signal in the 15-25 transition zone.
+ENGINE_B_FOREX_ADX_MIN: 15
 
 # Engine B backtest SL/TP mode:
 # "atr" = use Engine A calc_levels (ATR × multiplier) — proven, matches bar resolution
