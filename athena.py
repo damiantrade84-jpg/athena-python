@@ -9112,19 +9112,23 @@ def api_open_trades_timed():
     try:
         from mt5_executor import mt5_get_positions
         mt5_res = mt5_get_positions()
+        if mt5_res.get("error"):
+            return jsonify(mt5_res), 500
         mt5_positions = mt5_res.get("positions", [])
-    except Exception:
-        mt5_positions = []
+    except Exception as e:
+        return jsonify({"error": f"MT5 fetch failed: {e}"}), 500
 
     # -- Bybit positions --
     try:
         from bybit_executor import bybit_get_positions
         bybit_res = bybit_get_positions()
+        if bybit_res.get("error"):
+            return jsonify(bybit_res), 500
         bybit_positions = bybit_res.get("positions", [])
         for p in bybit_positions:
             p["_bybit"] = True
-    except Exception:
-        bybit_positions = []
+    except Exception as e:
+        return jsonify({"error": f"Bybit fetch failed: {e}"}), 500
 
     all_positions = mt5_positions + bybit_positions
 
