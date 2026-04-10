@@ -65,11 +65,11 @@ except Exception as _e:
 # ── Default CONFIG ───────────────────────────────────────────────────────────
 CONFIG: dict = {
     "XAI_API_KEY": os.environ.get("XAI_API_KEY", "YOUR_XAI_API_KEY"),
-    "XAI_MODEL": "grok-4.20-0309-reasoning",
+    "XAI_MODEL": "grok-4-1-fast-reasoning",
     "LOTTERY_AI_MODEL": "",  # empty → use XAI_MODEL for /api/lottery/ai-analysis
-    "DEBATE_MODEL": "grok-4.20-0309-reasoning",
-    "VISION_MODEL": "grok-4.20-reasoning",
-    "NEWS_SENTIMENT_MODEL": "grok-4.20-0309-reasoning",
+    "DEBATE_MODEL": "grok-4-1-fast-reasoning",
+    "VISION_MODEL": "grok-4-1-fast-reasoning",
+    "NEWS_SENTIMENT_MODEL": "grok-4-1-fast-reasoning",
     "NEWS_SENTIMENT_CONFLUENCE_ENABLED": False,
     "NEWS_SENTIMENT_CACHE_TTL_SEC": 900,
     "NEWS_SENTIMENT_SCORE_IMPACT": 0.06,

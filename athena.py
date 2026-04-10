@@ -5240,7 +5240,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                     confidence_result=conf,
                     learning_ctx=learning_ctx,
                     xai_api_key=CONFIG.get("XAI_API_KEY"),
-                    xai_model=CONFIG.get("XAI_MODEL", "grok-4.20-0309-reasoning"),
+                    xai_model=CONFIG.get("XAI_MODEL", "grok-4-1-fast-reasoning"),
                     engine_a_ctx=engine_a_ctx,
                     news_ctx=_news_ctx,
                 )
@@ -7777,7 +7777,7 @@ def api_meta_analysis():
         result = run_meta_analysis(
             _AUDIT_DB,
             CONFIG.get("XAI_API_KEY", ""),
-            CONFIG.get("XAI_MODEL", "grok-4.20-0309-reasoning"),
+            CONFIG.get("XAI_MODEL", "grok-4-1-fast-reasoning"),
         )
 
         return jsonify(result)
@@ -8351,7 +8351,7 @@ def api_chart_analysis():
             log.info(f"[AI CHART] Single-TF {tf} analysis for {symbol}")
 
         _max_tokens = 1100 if triple_mode else 800
-        _vision_model = str(CONFIG.get("VISION_MODEL") or "grok-4.20-reasoning").strip() or "grok-4.20-reasoning"
+        _vision_model = str(CONFIG.get("VISION_MODEL") or "grok-4-1-fast-reasoning").strip() or "grok-4-1-fast-reasoning"
         _vision_temp = float(CONFIG.get("AI_VISION_TEMPERATURE", 0.2))
         _user_parts = _chart_blocks_to_openai_user_content(content)
         _completion = _xai_chat_completions_retry(
@@ -9034,7 +9034,7 @@ def api_news_sentiment():
         pass
 
     model = CONFIG.get("NEWS_SENTIMENT_MODEL") or CONFIG.get(
-        "XAI_MODEL", "grok-4.20-0309-reasoning"
+        "XAI_MODEL", "grok-4-1-fast-reasoning"
     )
     result = get_news_sentiment(
         pair,
@@ -10718,7 +10718,7 @@ def _get_decay_ai_verdict(
         from ai_utils import parse_json_object
 
         client = openai.OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-        _model = CONFIG.get("DEBATE_MODEL") or CONFIG.get("XAI_MODEL", "grok-3-mini")
+        _model = CONFIG.get("DEBATE_MODEL") or CONFIG.get("XAI_MODEL", "grok-4-1-fast-reasoning")
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
 
         result = None
@@ -11512,7 +11512,7 @@ def api_lottery_ai_analysis():
         )
         _lottery_model = (
             str(CONFIG.get("LOTTERY_AI_MODEL") or "").strip()
-            or CONFIG.get("XAI_MODEL", "grok-4.20-0309-reasoning")
+            or CONFIG.get("XAI_MODEL", "grok-4-1-fast-reasoning")
         )
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
         client = openai.OpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")

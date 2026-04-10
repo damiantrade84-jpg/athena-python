@@ -259,7 +259,7 @@ def get_engine_b_ai_verdict(
     confidence_result: dict,
     learning_ctx: Optional[dict] = None,
     xai_api_key: str = None,
-    xai_model: str = "grok-4.20-0309-reasoning",
+    xai_model: str = "grok-4-1-fast-reasoning",
     engine_a_ctx: Optional[dict] = None,
     news_ctx: Optional[dict] = None,
 ) -> dict:
