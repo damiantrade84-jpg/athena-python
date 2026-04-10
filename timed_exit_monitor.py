@@ -49,26 +49,127 @@ def _get_timed_cfg(config_fn) -> dict:
     return merged
 
 
-def _load_open_audit_rows(db_path: str) -> list[dict]:
-    """Load audit_log rows that have no exit_time (still open trades)."""
+def _load_recent_audit_rows(db_path: str) -> list[dict]:
+    """Load recent non-error audit rows for ticket and fallback position matching."""
     try:
         with sqlite3.connect(db_path, timeout=10.0) as con:
             con.row_factory = sqlite3.Row
             rows = con.execute(
                 """
-                SELECT ticket, pair, style, ts, direction, entry_price, sl, tp, asset_class
+                SELECT ticket, pair, style, ts, direction, entry_price, sl, tp, asset_class, exit_time
                 FROM   audit_log
-                WHERE  exit_time IS NULL
-                  AND  ticket IS NOT NULL
-                  AND  grade NOT LIKE 'AUTO-ERR%'
+                WHERE  pair IS NOT NULL
+                  AND  grade NOT LIKE '%ERR%'
                 ORDER  BY ts DESC
-                LIMIT  50
+                LIMIT  400
                 """
             ).fetchall()
             return [dict(r) for r in rows]
     except Exception as e:
         log.debug(f"[TIMED_EXIT] audit read failed: {e}")
         return []
+
+
+def _safe_float(value) -> float:
+    try:
+        if value is None or value == "":
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _parse_iso_utc(ts_iso: str | None) -> datetime | None:
+    if not ts_iso:
+        return None
+    try:
+        return datetime.fromisoformat(str(ts_iso).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _match_audit_row_for_position(position: dict, audit_rows: list[dict]) -> dict | None:
+    """Best-effort audit row match for a live position.
+
+    Prefers exact ticket matches. Falls back to pair/direction/entry proximity so
+    split MT5 legs and Bybit `ticket=0` positions still inherit the correct style.
+    """
+    pos_ticket = str(position.get("ticket", "")).strip()
+    pos_pair = str(position.get("pair") or position.get("symbol") or "").upper()
+    pos_dir = str(position.get("direction") or position.get("side") or "").upper()
+    pos_entry = _safe_float(
+        position.get("entry")
+        or position.get("entryPrice")
+        or position.get("price_open")
+    )
+
+    if pos_ticket:
+        for row in audit_rows:
+            if str(row.get("ticket", "")).strip() == pos_ticket and row.get("exit_time") is None:
+                return row
+        for row in audit_rows:
+            if str(row.get("ticket", "")).strip() == pos_ticket:
+                return row
+
+    if not pos_pair or pos_entry <= 0:
+        return None
+
+    now_utc = datetime.now(timezone.utc)
+    candidates: list[tuple[float, dict]] = []
+
+    for row in audit_rows:
+        row_pair = str(row.get("pair") or "").upper()
+        if row_pair != pos_pair:
+            continue
+
+        row_dir = str(row.get("direction") or "").upper()
+        if row_dir and pos_dir and row_dir != pos_dir:
+            continue
+
+        row_entry = _safe_float(row.get("entry_price"))
+        if row_entry <= 0:
+            continue
+
+        rel_entry_diff = abs(row_entry - pos_entry) / max(abs(pos_entry), 1e-12)
+        if rel_entry_diff > 0.01:
+            continue
+
+        row_ts = _parse_iso_utc(row.get("ts"))
+        if row_ts is None:
+            continue
+        age_min = max(0.0, (now_utc - row_ts).total_seconds() / 60.0)
+        if age_min > (7 * 24 * 60):
+            continue
+
+        # Prefer still-open rows, then the closest entry, then the most recent row.
+        score = rel_entry_diff
+        if row.get("exit_time") is not None:
+            score += 0.25
+        score += min(age_min, 24 * 60) / 100000.0
+        candidates.append((score, row))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
+
+
+def _row_for_live_position(position: dict, audit_rows: list[dict]) -> dict | None:
+    audit = _match_audit_row_for_position(position, audit_rows)
+    if not audit:
+        return None
+    return {
+        "ticket": position.get("ticket"),
+        "pair": audit.get("pair") or position.get("pair") or position.get("symbol"),
+        "style": audit.get("style"),
+        "ts": audit.get("ts"),
+        "direction": audit.get("direction") or position.get("direction"),
+        "entry_price": audit.get("entry_price") or position.get("entry") or position.get("entryPrice"),
+        "sl": audit.get("sl") or position.get("sl"),
+        "tp": audit.get("tp") or position.get("tp"),
+        "asset_class": audit.get("asset_class"),
+    }
 
 
 def _minutes_open(open_ts_iso: str) -> float:
@@ -320,19 +421,43 @@ def _run_check(db_path: str, config_fn) -> None:
     if not tcfg.get("enabled", True):
         return
 
-    rows = _load_open_audit_rows(db_path)
-    if not rows:
+    audit_rows = _load_recent_audit_rows(db_path)
+    if not audit_rows:
         return
 
-    for row in rows:
+    try:
+        from mt5_executor import mt5_get_positions
+        mt5_result = mt5_get_positions()
+        mt5_positions = [] if mt5_result.get("error") else mt5_result.get("positions", [])
+    except Exception as e:
+        log.debug(f"[TIMED_EXIT] mt5 live fetch failed: {e}")
+        mt5_positions = []
+
+    for pos in mt5_positions:
+        row = _row_for_live_position(pos, audit_rows)
+        if not row:
+            continue
         try:
-            asset_class = (row.get("asset_class") or "").lower()
-            if asset_class == "crypto":
-                _handle_bybit_row(row, tcfg)
-            else:
-                _handle_mt5_row(row, tcfg)
+            _handle_mt5_row(row, tcfg)
         except Exception as e:
-            log.debug(f"[TIMED_EXIT] row error pair={row.get('pair')}: {e}")
+            log.debug(f"[TIMED_EXIT] mt5 row error pair={row.get('pair')}: {e}")
+
+    try:
+        from bybit_executor import bybit_get_positions
+        bybit_result = bybit_get_positions()
+        bybit_positions = [] if bybit_result.get("error") else bybit_result.get("positions", [])
+    except Exception as e:
+        log.debug(f"[TIMED_EXIT] bybit live fetch failed: {e}")
+        bybit_positions = []
+
+    for pos in bybit_positions:
+        row = _row_for_live_position(pos, audit_rows)
+        if not row:
+            continue
+        try:
+            _handle_bybit_row(row, tcfg)
+        except Exception as e:
+            log.debug(f"[TIMED_EXIT] bybit row error pair={row.get('pair')}: {e}")
 
 
 class TimedExitMonitor:

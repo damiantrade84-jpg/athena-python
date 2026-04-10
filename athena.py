@@ -9063,8 +9063,8 @@ def api_open_trades_timed():
     - close_trigger_min: minutes until/since timed close trigger
     Used by the dashboard countdown timer on each position card.
     """
-    import sqlite3 as _sq
     from datetime import datetime, timezone as _tz
+    from timed_exit_monitor import _load_recent_audit_rows, _match_audit_row_for_position
 
     _style_windows = {
         "scalp":    {"be_min": 5,         "close_min": 10},
@@ -9095,28 +9095,13 @@ def api_open_trades_timed():
 
     all_positions = mt5_positions + bybit_positions
 
-    # -- Audit lookup: ticket → {ts, style} --
-    audit_map = {}
-    try:
-        with _sq.connect(_AUDIT_DB, timeout=10.0) as con:
-            con.row_factory = _sq.Row
-            rows = con.execute(
-                "SELECT ticket, ts, style, asset_class FROM audit_log "
-                "WHERE ticket IS NOT NULL AND exit_time IS NULL "
-                "ORDER BY ts DESC LIMIT 200"
-            ).fetchall()
-            for r in rows:
-                tk = str(r["ticket"])
-                if tk not in audit_map:
-                    audit_map[tk] = {"ts": r["ts"], "style": r["style"], "asset_class": r["asset_class"]}
-    except Exception:
-        pass
+    audit_rows = _load_recent_audit_rows(_AUDIT_DB)
 
     cfg_te = CONFIG.get("TIMED_EXIT", {})
 
     for p in all_positions:
         ticket = str(p.get("ticket", ""))
-        audit  = audit_map.get(ticket, {})
+        audit  = _match_audit_row_for_position(p, audit_rows) or {}
 
         # Resolve open time
         raw_open_time = p.get("open_time", 0)  # Unix seconds from MT5
