@@ -233,9 +233,20 @@ class BinanceLivePriceWS:
                         log.info(
                             "[BINANCE-WS] Connected to fstream.binance.com !ticker@arr"
                         )
+                        import websockets.exceptions
+                        _last_ping = time.time()
                         while self._running:
                             try:
                                 data = await asyncio.wait_for(ws.recv(), timeout=45)
+                                
+                                # Proactive heartbeat
+                                if time.time() - _last_ping > 20:
+                                    try:
+                                        await ws.ping()
+                                        _last_ping = time.time()
+                                    except Exception:
+                                        pass
+
                                 tickers = json.loads(data)
 
                                 for ticker in tickers:
@@ -259,6 +270,11 @@ class BinanceLivePriceWS:
                             except json.JSONDecodeError as e:
                                 log.warning(
                                     f"[BINANCE-WS] Non-JSON payload, reconnecting: {e}"
+                                )
+                                break
+                            except websockets.exceptions.ConnectionClosed as e:
+                                log.warning(
+                                    f"[BINANCE-WS] Connection closed ({e}), reconnecting..."
                                 )
                                 break
                             except Exception as e:
@@ -348,9 +364,20 @@ class BinanceCandleWS:
                             len(symbol_map),
                             ", ".join(f"@kline_{interval}" for interval in self._STREAM_TFS),
                         )
+                        import websockets.exceptions
+                        _last_ping = time.time()
                         while self._running:
                             try:
                                 raw = await asyncio.wait_for(ws.recv(), timeout=90)
+                                
+                                # Proactive heartbeat
+                                if time.time() - _last_ping > 20:
+                                    try:
+                                        await ws.ping()
+                                        _last_ping = time.time()
+                                    except Exception:
+                                        pass
+
                                 msg = json.loads(raw)
                                 data = msg.get("data", {})
                                 k = data.get("k")
@@ -381,6 +408,9 @@ class BinanceCandleWS:
                                 break
                             except json.JSONDecodeError as e:
                                 log.warning(f"[BN-KLINE-WS] JSON error: {e}")
+                                break
+                            except websockets.exceptions.ConnectionClosed as e:
+                                log.warning(f"[BN-KLINE-WS] Connection closed ({e}), reconnecting...")
                                 break
                             except Exception as e:
                                 log.error(f"[BN-KLINE-WS] Process error: {e}")

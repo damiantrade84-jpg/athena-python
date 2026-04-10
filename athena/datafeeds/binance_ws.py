@@ -55,9 +55,19 @@ class BinanceWS:
                 close_timeout=10,
             ) as ws:
                 log.info(f"[BinanceWS] Connected to combined stream for {self.symbol}")
+                import websockets.exceptions
+                _last_ping = time.time()
                 while self._running:
                     try:
                         raw = await asyncio.wait_for(ws.recv(), timeout=120)
+
+                        if time.time() - _last_ping > 20:
+                            try:
+                                await ws.ping()
+                                _last_ping = time.time()
+                            except Exception:
+                                pass
+
                         if not raw:
                             continue
                         msg = json.loads(raw)
