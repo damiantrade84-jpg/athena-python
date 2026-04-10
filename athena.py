@@ -122,6 +122,7 @@ log = logging.getLogger("sentinel")
 import logging as _logging
 _logging.getLogger("werkzeug").setLevel(_logging.WARNING)
 _logging.getLogger("urllib3").setLevel(_logging.WARNING)
+_logging.getLogger("urllib3.connectionpool").setLevel(_logging.ERROR)
 _logging.getLogger("requests").setLevel(_logging.WARNING)
 _logging.getLogger("httpx").setLevel(_logging.WARNING)
 
@@ -1303,7 +1304,14 @@ def _yfinance_symbol_for_pair(pair: dict) -> str | None:
 
     override = pair.get("yfinanceSymbol") or _vendor_overrides(pair).get("yfinance")
 
-    return override or pair.get("symbol")
+    if override:
+        return override
+
+    sym = pair.get("symbol")
+    if pair.get("type") == "stock" and isinstance(sym, str) and sym.endswith(".US"):
+        return sym[:-3]
+
+    return sym
 
 
 def _eodhd_ticker_for_pair(pair: dict) -> str | None:
@@ -1485,6 +1493,14 @@ def fetch_yfinance(sym, tf, limit):
         import yfinance as yf
 
         import pandas as pd
+
+        try:
+            _yf_cache_dir = Path(__file__).resolve().parent / ".yfinance-cache"
+            _yf_cache_dir.mkdir(parents=True, exist_ok=True)
+            if hasattr(yf, "set_tz_cache_location"):
+                yf.set_tz_cache_location(str(_yf_cache_dir))
+        except Exception as _yf_cache_err:
+            log.debug(f"[YF] {sym}: cache setup skipped: {_yf_cache_err}")
 
         period = "2y" if tf == "D1" else _YF_INTRADAY_PERIOD
 
@@ -2477,18 +2493,24 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
     from datetime import datetime, timezone
     
     symbol = pair.get("display", pair.get("symbol", ""))
+
+    def _mt5_fallback(detail: str):
+        fallback = _fetch_fallback_candles(pair, tf, limit, reason=detail)
+        if fallback:
+            return {"error": True, "symbol": symbol, "detail": detail, "candles": fallback}
+        return {"error": True, "symbol": symbol, "detail": detail}
     
     if not mt5_executor.mt5_connect():
-        return {"error": True, "symbol": symbol, "detail": "MT5 not connected"}
+        return _mt5_fallback("MT5 not connected")
         
     mt5 = mt5_executor._get_mt5()
     mt5_symbol = mt5_executor.mt5_map_symbol(symbol)
     
     if not mt5_symbol:
-        return {"error": True, "symbol": symbol, "detail": "no MT5 symbol mapping"}
+        return _mt5_fallback("no MT5 symbol mapping")
         
     if not mt5.symbol_select(mt5_symbol, True):
-        return {"error": True, "symbol": symbol, "detail": "symbol not found in MT5"}
+        return _mt5_fallback("symbol not found in MT5")
         
     # Map timeframe
     tf_map = {
@@ -2508,7 +2530,7 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
     
     if bars is None or len(bars) == 0:
         err = mt5.last_error()
-        return {"error": True, "symbol": symbol, "detail": f"MT5 failed: {err}"}
+        return _mt5_fallback(f"MT5 failed: {err}")
         
     # Dynamic timezone detection to align broker integers to perfect UTC strings
     tick = mt5.symbol_info_tick(mt5_symbol)
@@ -3321,27 +3343,59 @@ def _refresh_news_cache(pairs: list | None = None) -> dict:
             sentiments = {}
 
             if ticker_map:
-                tickers_csv = ",".join(ticker_map.keys())
-
-                sdata = http_requests.get(
-                    f"https://eodhd.com/api/sentiments?s={tickers_csv}&api_token={_eodhd_key}&fmt=json",
-                    timeout=12,
-                ).json()
                 sentiment_by_ticker = {}
-                if isinstance(sdata, dict):
-                    sentiment_by_ticker = sdata
-                elif isinstance(sdata, list):
-                    for row in sdata:
-                        if not isinstance(row, dict):
-                            continue
-                        key = (
-                            row.get("code")
-                            or row.get("symbol")
-                            or row.get("ticker")
-                            or row.get("s")
+                _tickers = list(ticker_map.keys())
+                _batch_size = max(
+                    1, int(CONFIG.get("EODHD_SENTIMENT_BATCH_SIZE", 25) or 25)
+                )
+                _connect_timeout = float(
+                    CONFIG.get("EODHD_SENTIMENT_CONNECT_TIMEOUT_SEC", 5) or 5
+                )
+                _read_timeout = float(
+                    CONFIG.get("EODHD_SENTIMENT_READ_TIMEOUT_SEC", 12) or 12
+                )
+                _total_batches = max(1, math.ceil(len(_tickers) / _batch_size))
+
+                for _idx in range(0, len(_tickers), _batch_size):
+                    _batch = _tickers[_idx : _idx + _batch_size]
+                    try:
+                        _resp = http_requests.get(
+                            "https://eodhd.com/api/sentiments",
+                            params={
+                                "s": ",".join(_batch),
+                                "api_token": _eodhd_key,
+                                "fmt": "json",
+                            },
+                            timeout=(_connect_timeout, _read_timeout),
                         )
-                        if key:
-                            sentiment_by_ticker[str(key)] = row
+                        _resp.raise_for_status()
+                        sdata = _resp.json()
+                    except Exception as _sent_err:
+                        _safe_err = str(_sent_err).replace(_eodhd_key, "***")
+                        log.warning(
+                            "[SENT] EODHD batch failed (%d/%d, size=%d): %s",
+                            (_idx // _batch_size) + 1,
+                            _total_batches,
+                            len(_batch),
+                            _safe_err,
+                        )
+                        continue
+
+                    if isinstance(sdata, dict):
+                        for _k, _v in sdata.items():
+                            sentiment_by_ticker[str(_k)] = _v
+                    elif isinstance(sdata, list):
+                        for row in sdata:
+                            if not isinstance(row, dict):
+                                continue
+                            key = (
+                                row.get("code")
+                                or row.get("symbol")
+                                or row.get("ticker")
+                                or row.get("s")
+                            )
+                            if key:
+                                sentiment_by_ticker[str(key)] = row
 
                 for sticker, display in ticker_map.items():
                     raw_scores = sentiment_by_ticker.get(sticker, [])
