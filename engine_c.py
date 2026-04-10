@@ -133,7 +133,9 @@ def normalise_engine_a(signal_a: dict) -> dict:
         factor_scores.get("carry_tilt")
     ])
 
-    # Floor for signal participation (uniform after forex norm rescale above)
+    # Floor for signal participation: norm must exceed 30% of max_score.
+    # Both forex (0-2.0) and non-forex (0-3.0) use norm = score/max_score,
+    # so forex needs score > 0.60, non-forex needs score > 0.90 to participate.
     _a_has_floor = 0.30
     return {
         "score_norm": round(norm, 4),

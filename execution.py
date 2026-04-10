@@ -595,8 +595,11 @@ def api_engine_c_scan():
                 preloaded_fetch_meta=fetch_meta,
                 intermarket_snapshot=intermarket_snapshot,
             )
+            _engine_a_returned_none = not sig_a
             if not sig_a:
-                sig_a = {}
+                # Preserve correct maxScore for pair type so engine_a_raw diagnostics
+                # show 2.0 for forex (not the 3.0 default from normalise_engine_a).
+                sig_a = {"maxScore": 2.0 if ptype == "forex" else 3.0}
 
             # fetch_candles already routes through CandleBuilder (WS) first,
             # then EODHD REST as fallback — no need for separate EODHD calls.
@@ -756,7 +759,11 @@ def api_engine_c_scan():
             a_norm_result = normalise_engine_a(sig_a)
             a_direction = sig_a.get("direction")
             consensus["engine_a_raw"] = {
+                # direction is None when has_signal=False so the UI shows "no signal".
+                # raw_direction exposes what Engine A actually returned — distinguishes
+                # "Engine A had LONG but score below Engine C floor" vs "analyze_pair returned None".
                 "direction": a_direction if a_norm_result["has_signal"] else None,
+                "raw_direction": a_direction,
                 "score": a_norm_result["raw_score"],
                 "maxScore": a_norm_result["max_score"],
                 "sl": sig_a.get("sl"),
@@ -767,6 +774,8 @@ def api_engine_c_scan():
                 "carry": sig_a.get("votes", {}).get("carry", sig_a.get("carry_boost")),
                 "has_signal": a_norm_result["has_signal"],
                 "score_norm": a_norm_result["score_norm"],
+                # True when analyze_pair returned None (data gap / scoring error vs weak signal).
+                "analyze_pair_failed": bool(_engine_a_returned_none),
             }
             consensus["engine_b_raw"] = {
                 "direction": raw_b_direction,
