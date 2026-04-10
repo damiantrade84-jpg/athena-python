@@ -8104,20 +8104,24 @@ function renderOpenPositions(positions) {
       var timerColor = inProfit ? 'var(--bull)' : 'var(--bear)';
       var timerLabel = '';
       var timerVal = '';
+      var timerMeta = '';
       if (closeReached) {
         timerLabel = inProfit ? '⏱ Closing now (profit)' : '⏱ Time elapsed — SL protecting';
         timerColor = inProfit ? 'var(--bull)' : 'var(--muted)';
         timerVal = '';
-      } else if (beReached) {
-        timerLabel = '🔒 BE set — closes in';
-        timerVal = formatMins(timedData.mins_to_close);
+        timerMeta = beReached ? 'BE set' : ('BE due ' + formatMins(timedData.mins_to_be));
       } else {
-        timerLabel = inProfit ? '✅ In profit — BE in' : '⏳ BE in';
-        timerVal = formatMins(timedData.mins_to_be);
+        timerLabel = '⏱ Close in';
+        timerVal = formatMins(timedData.mins_to_close);
+        if (beReached) {
+          timerMeta = inProfit ? '🔒 BE set' : '⏳ BE due now';
+        } else {
+          timerMeta = (inProfit ? '✅ In profit' : '⏳ Not in profit') + ' · BE in ' + formatMins(timedData.mins_to_be);
+        }
       }
       timerHtml = '<div class="pos-card-row pos-timer" style="color:' + timerColor + ';font-size:11px;margin-top:4px;">' +
         '<span>' + timerLabel + (timerVal ? ' <strong>' + timerVal + '</strong>' : '') + '</span>' +
-        '<span style="margin-left:8px;opacity:0.6;">[' + style + ' · open ' + formatMins(minsOpen) + ']</span>' +
+        '<span style="margin-left:8px;opacity:0.6;">[' + style + ' · open ' + formatMins(minsOpen) + (timerMeta ? ' · ' + timerMeta : '') + ']</span>' +
       '</div>';
     }
     return '<div class="pos-card ' + cardClass + '">' +
