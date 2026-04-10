@@ -9121,8 +9121,15 @@ def api_open_trades_timed():
         # Resolve open time
         raw_open_time = p.get("open_time", 0)  # Unix seconds from MT5
         audit_ts_iso  = audit.get("ts", "")
-        if raw_open_time and raw_open_time > 0:
-            open_ts = float(raw_open_time)
+        try:
+            raw_open_ts = float(raw_open_time or 0)
+        except (TypeError, ValueError):
+            raw_open_ts = 0.0
+        # Some MT5 terminals/brokers can surface position open times that are ahead
+        # of UTC "now" from the API consumer's perspective. Ignore implausible future
+        # timestamps and fall back to audited open time instead.
+        if raw_open_ts > 0 and raw_open_ts <= (now_ts + 300):
+            open_ts = raw_open_ts
             open_iso = datetime.fromtimestamp(open_ts, tz=_tz.utc).isoformat()
         elif audit_ts_iso:
             try:

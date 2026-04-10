@@ -8018,6 +8018,31 @@ function renderMergedOpenPositions() {
   renderOpenPositions(mergedOpenPositions());
 }
 
+function applyTimedPositionsPayload(timedData) {
+  timedData = timedData || {positions:[]};
+  window._timedPositions = {};
+  (timedData.positions || []).forEach(function(tp) {
+    var ticketKey = String(tp && tp.ticket != null ? tp.ticket : '');
+    window._timedPositions[ticketKey] = tp;
+  });
+}
+
+function refreshTimedOpenPositions(opts) {
+  opts = opts || {};
+  return fetch('/api/open-trades-timed')
+    .then(function(r){ return r.json(); })
+    .then(function(timedData) {
+      applyTimedPositionsPayload(timedData);
+      if (opts.rerender) renderMergedOpenPositions();
+      return timedData;
+    })
+    .catch(function() {
+      applyTimedPositionsPayload({positions:[]});
+      if (opts.rerender) renderMergedOpenPositions();
+      return {positions:[]};
+    });
+}
+
 function renderOpenPositions(positions) {
   console.log('renderOpenPositions called with:', positions);
   window._openPositions = positions || [];
@@ -8061,7 +8086,7 @@ function renderOpenPositions(positions) {
     var pnlSign = pnl >= 0 ? '+' : '';
     var exch = p._bybit ? 'bybit' : 'mt5';
     var pairSafe = (p.pair || p.symbol).replace(/'/g, "\\'");
-    var timedData = (window._timedPositions || {})[String(p.ticket || '')] || {};
+    var timedData = (window._timedPositions || {})[String(p && p.ticket != null ? p.ticket : '')] || {};
     var style = timedData.style || 'intraday';
     var minsOpen = timedData.mins_open != null ? timedData.mins_open : null;
     var beMins = timedData.be_trigger_min;
@@ -8130,10 +8155,7 @@ function refreshTradesTab(opts) {
     fetch('/api/open-trades-timed').then(function(r){ return r.json(); }).catch(function(){ return {positions:[]}; })
   ]).then(function(results) {
     var timedData = results[2] || {positions:[]};
-    window._timedPositions = {};
-    (timedData.positions || []).forEach(function(tp) {
-      window._timedPositions[String(tp.ticket)] = tp;
-    });
+    applyTimedPositionsPayload(timedData);
     console.log('Status results:', results);
     var bybitData = results[0];
     var mt5Data = results[1];
@@ -8190,6 +8212,11 @@ window._bybitAccount = null;
     if (typeof updateConnDots === 'function') updateConnDots();
   }).catch(function(){});
   setTimeout(pollBybit, 15000);
+})();
+
+(function pollTimedOpenPositions() {
+  refreshTimedOpenPositions({ rerender: true });
+  setTimeout(pollTimedOpenPositions, 15000);
 })();
 
 // Sync test mode state on page load
