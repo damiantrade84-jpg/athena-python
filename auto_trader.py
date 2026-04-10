@@ -998,6 +998,26 @@ class AutoTrader:
 
         is_demo = self._test_mode_fn() if self._test_mode_fn else False
 
+        def _infer_asset_class(pair: str) -> str | None:
+            """Infer asset class from pair name when signal['type'] is missing."""
+            if not pair:
+                return None
+            p = pair.upper()
+            if "/USDT" in p or "/BTC" in p or "/ETH" in p:
+                return "crypto"
+            if any(p.startswith(fx) for fx in (
+                "EUR/", "GBP/", "USD/", "AUD/", "NZD/", "CAD/", "CHF/", "JPY/",
+                "EUR", "GBP", "AUD", "NZD", "CAD", "CHF"
+            )) and "/" in p:
+                return "forex"
+            if p in ("XAU/USD", "XAG/USD", "OIL", "BRENT", "SUGAR", "WHEAT",
+                     "CORN", "COFFEE", "COTTON", "NATURAL GAS", "COCOA"):
+                return "commodity"
+            if any(x in p for x in ("SPX", "NDX", "DAX", "FTSE", "NQ", "ES",
+                                      "SP500", "US30", "UK100", "GER40")):
+                return "index"
+            return "stock"
+
         def _resolve_audit_style(style: str | None, asset_class: str | None) -> str:
             """Normalise style for audit_log. Maps 'auto' and None to a concrete style."""
             if style in ("scalp", "intraday", "swing"):
@@ -1048,7 +1068,7 @@ class AutoTrader:
                         signal.get("confluenceScore"),
                         _audit_engine,
                         signal.get("direction"),
-                        signal.get("type"),
+                        signal.get("type") or _infer_asset_class(signal.get("pair", "")),
                         signal.get("trendState"),
                         result.get("entryPrice") or signal.get("price"),
                         signal.get("sl"),
