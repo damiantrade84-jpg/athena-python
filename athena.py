@@ -10081,6 +10081,7 @@ def _update_trade_outcome(
     """Write outcome columns for a closed trade in audit_log."""
 
     exit_reason = _resolve_exit_reason(exit_price, sl, tp)
+    existing_exit_reason = None
 
     # R-multiple: pnl / dollar_risk.
 
@@ -10125,11 +10126,16 @@ def _update_trade_outcome(
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as _ssi_con:
             _ssi_con.row_factory = sqlite3.Row
             _ssi_row = _ssi_con.execute(
-                "SELECT style, max_score, score FROM audit_log WHERE ticket=? ORDER BY id DESC LIMIT 1",
+                "SELECT style, max_score, score, exit_reason FROM audit_log WHERE ticket=? ORDER BY id DESC LIMIT 1",
                 (ticket,),
             ).fetchone()
+            if _ssi_row:
+                existing_exit_reason = _ssi_row["exit_reason"]
     except Exception as _ssi_lookup_err:
         log.debug(f"[SSI] audit lookup failed for {ticket}: {_ssi_lookup_err}")
+
+    if str(existing_exit_reason or "").upper() == "TIMED_CLOSE":
+        exit_reason = "TIMED_CLOSE"
 
     try:
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:

@@ -490,6 +490,9 @@ Key columns: `ts, pair, score, direction, grade, edge_prob, risk, style, asset_c
 
 - `factors_json` — `{scores, weights, disabled, regime}` from `compute_factor_scores()`. Used by `ai_learning.py`.
 - `fee_cost` — Bybit commission. NULL for MT5.
+- `exit_reason` — outcome classification written by `_update_trade_outcome()` in `athena.py`. Current live values include `SL_HIT`, `TP_HIT`, `MANUAL_CLOSE`, and `TIMED_CLOSE`.
+- Timed closes are pre-marked by `timed_exit_monitor.py` and preserved by `_update_trade_outcome()` so completed timed exits remain attributable in `audit_log` and `/api/performance`.
+- `/api/open-trades-timed` and `timed_exit_monitor.py` match live positions to audit rows by exact ticket first, then by `pair + direction + entry_price` fallback. This covers split MT5 legs and Bybit positions where the live position identifier does not match the audit ticket 1:1.
 
 ### `backtest_results`
 Columns: `id, run_date, pair, asset_type, engine, trades, win_rate, profit_factor, expectancy, sqn, sharpe, sortino, is_score, oos_score, max_dd_pct, eval_threshold, atr_source, notes`

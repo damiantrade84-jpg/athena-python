@@ -160,6 +160,8 @@ def _row_for_live_position(position: dict, audit_rows: list[dict]) -> dict | Non
     if not audit:
         return None
     return {
+        "audit_id": audit.get("id"),
+        "audit_ticket": audit.get("ticket"),
         "ticket": position.get("ticket"),
         "pair": audit.get("pair") or position.get("pair") or position.get("symbol"),
         "style": audit.get("style"),
@@ -170,6 +172,35 @@ def _row_for_live_position(position: dict, audit_rows: list[dict]) -> dict | Non
         "tp": audit.get("tp") or position.get("tp"),
         "asset_class": audit.get("asset_class"),
     }
+
+
+def _mark_timed_close(db_path: str, row: dict, venue: str) -> None:
+    """Persist a timed-close marker so outcome logging preserves exit_reason."""
+    audit_id = row.get("audit_id")
+    audit_ticket = str(row.get("audit_ticket") or "").strip()
+    live_ticket = str(row.get("ticket") or "").strip()
+
+    # MT5 split legs can map multiple live positions onto one audit row. Only mark by
+    # ticket when the audit row already belongs to this exact live position. Bybit
+    # positions commonly use a non-stable live ticket (`0`), so the matched audit row id
+    # is the safest persistent key there.
+    if venue == "mt5":
+        if not audit_ticket or audit_ticket != live_ticket:
+            return
+        query = "UPDATE audit_log SET exit_reason=? WHERE ticket=? AND exit_price IS NULL"
+        params = ("TIMED_CLOSE", audit_ticket)
+    else:
+        if audit_id is None:
+            return
+        query = "UPDATE audit_log SET exit_reason=? WHERE id=? AND exit_price IS NULL"
+        params = ("TIMED_CLOSE", audit_id)
+
+    try:
+        with sqlite3.connect(db_path, timeout=10.0) as con:
+            con.execute(query, params)
+            con.commit()
+    except Exception as e:
+        log.debug(f"[TIMED_EXIT] failed to mark timed close for {row.get('pair')}: {e}")
 
 
 def _minutes_open(open_ts_iso: str) -> float:
@@ -200,7 +231,7 @@ def _tp_progress(current_price: float, entry: float, tp: float, direction: str) 
         return 0.0
 
 
-def _handle_mt5_row(row: dict, tcfg: dict) -> None:
+def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
     """Apply timed exit logic to a single MT5 trade row."""
     try:
         from mt5_executor import (
@@ -287,6 +318,8 @@ def _handle_mt5_row(row: dict, tcfg: dict) -> None:
 
         result = mt5_close_position(ticket)
         if result.get("success"):
+            if db_path:
+                _mark_timed_close(db_path, row, "mt5")
             log.info(
                 f"[TIMED_EXIT] TIMED CLOSE: {row['pair']} ticket={ticket} "
                 f"style={style} mins={mins:.0f} profit=${profit:.2f}"
@@ -307,7 +340,7 @@ def _handle_mt5_row(row: dict, tcfg: dict) -> None:
             )
 
 
-def _handle_bybit_row(row: dict, tcfg: dict) -> None:
+def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
     """Apply timed exit logic to a single Bybit trade row."""
     try:
         from bybit_executor import (
@@ -396,6 +429,8 @@ def _handle_bybit_row(row: dict, tcfg: dict) -> None:
 
         result = bybit_close_position(pair, direction, volume)
         if result.get("success"):
+            if db_path:
+                _mark_timed_close(db_path, row, "bybit")
             log.info(
                 f"[TIMED_EXIT] TIMED CLOSE: {pair} style={style} "
                 f"mins={mins:.0f} profit=${profit:.2f}"
@@ -438,7 +473,7 @@ def _run_check(db_path: str, config_fn) -> None:
         if not row:
             continue
         try:
-            _handle_mt5_row(row, tcfg)
+            _handle_mt5_row(row, tcfg, db_path)
         except Exception as e:
             log.debug(f"[TIMED_EXIT] mt5 row error pair={row.get('pair')}: {e}")
 
@@ -455,7 +490,7 @@ def _run_check(db_path: str, config_fn) -> None:
         if not row:
             continue
         try:
-            _handle_bybit_row(row, tcfg)
+            _handle_bybit_row(row, tcfg, db_path)
         except Exception as e:
             log.debug(f"[TIMED_EXIT] bybit row error pair={row.get('pair')}: {e}")
 
