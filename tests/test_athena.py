@@ -331,3 +331,16 @@ def test_ui_source_renders_intermarket_confirmation_box():
 
     assert "function buildIntermarketConfirmationBox(s)" in source
     assert "buildIntermarketConfirmationBox(s)" in source
+
+
+def test_ui_source_exposes_pair_browser_tab_and_actions():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "static" / "index.html").read_text(encoding="utf-8")
+    feature_source = (root / "static" / "js" / "features" / "pair_browser.js").read_text(encoding="utf-8")
+
+    assert 'id="nav-pair-browser"' in source
+    assert 'id="panel-pair-browser"' in source
+    assert '/static/js/features/pair_browser.js' in source
+    assert "window.runPairBrowserEngineA = function" in feature_source
+    assert "window.runPairBrowserEngineB = async function" in feature_source
+    assert "window.runPairBrowserCompare = async function" in feature_source

@@ -509,6 +509,49 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
 .guardian-header-badge .conn-dot.bz-on{background:#f3ba2f;animation:pulse 2s infinite;}
 .tab-panel,.panel{display:none;}
 .tab-panel.active,.panel.active{display:block;}
+.pair-browser-shell{display:grid;grid-template-columns:minmax(280px,340px) minmax(0,1fr);gap:18px;align-items:start;}
+.pair-browser-side,.pair-browser-main{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;}
+.pair-browser-sticky{position:sticky;top:16px;}
+.pair-browser-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-family:'IBM Plex Mono',monospace;margin:0 0 6px;}
+.pair-browser-search,.pair-browser-side .sort-sel{width:100%;margin-bottom:12px;}
+.pair-browser-search{padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px;font-family:'IBM Plex Mono',monospace;}
+.pair-browser-filters{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;}
+.pair-browser-filter{padding:7px 10px;border-radius:999px;border:1px solid rgba(240,185,11,0.18);background:rgba(240,185,11,0.06);color:var(--muted);cursor:pointer;font-size:10px;font-weight:700;letter-spacing:.06em;font-family:'IBM Plex Mono',monospace;}
+.pair-browser-filter.active{color:var(--accent);border-color:rgba(240,185,11,0.38);background:rgba(240,185,11,0.12);}
+.pair-browser-meta{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace;}
+.pair-browser-list{display:flex;flex-direction:column;gap:8px;max-height:70vh;overflow:auto;padding-right:2px;}
+.pair-browser-item{width:100%;text-align:left;display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:12px;border-radius:10px;border:1px solid var(--border);background:rgba(255,255,255,0.01);color:var(--text);cursor:pointer;transition:border-color .15s,transform .15s,background .15s;}
+.pair-browser-item:hover{transform:translateY(-1px);border-color:rgba(240,185,11,0.22);background:rgba(240,185,11,0.04);}
+.pair-browser-item.active{border-color:rgba(240,185,11,0.42);background:rgba(240,185,11,0.08);}
+.pair-browser-item.disabled{opacity:.75;}
+.pair-browser-item-title{font-size:13px;font-weight:700;}
+.pair-browser-item-meta{font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace;margin-top:4px;line-height:1.45;}
+.pair-browser-pill{display:inline-flex;align-items:center;justify-content:center;padding:3px 8px;border-radius:999px;font-size:9px;font-weight:700;letter-spacing:.08em;font-family:'IBM Plex Mono',monospace;background:rgba(14,203,129,0.12);color:var(--bull);border:1px solid rgba(14,203,129,0.2);}
+.pair-browser-pill.watch{background:rgba(245,158,11,0.12);border-color:rgba(245,158,11,0.24);color:#f59e0b;}
+.pair-browser-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:14px 16px;border-radius:12px;border:1px solid rgba(240,185,11,0.14);background:linear-gradient(135deg,rgba(240,185,11,0.08),rgba(123,97,255,0.05));margin-bottom:14px;}
+.pair-browser-header.empty{display:block;background:rgba(255,255,255,0.01);border-style:dashed;color:var(--muted);}
+.pair-browser-title{font-size:18px;font-weight:800;color:var(--text);font-family:'DM Sans',sans-serif;}
+.pair-browser-sub{font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;margin-top:4px;line-height:1.5;}
+.pair-browser-price{font-size:22px;font-weight:800;color:var(--accent);font-family:'IBM Plex Mono',monospace;text-align:right;}
+.pair-browser-actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;}
+.pair-browser-actions .chart-toggle-btn{margin-bottom:0;flex:1 1 150px;}
+.pair-browser-status{font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;margin-bottom:14px;min-height:18px;}
+.pair-browser-sections{display:flex;flex-direction:column;gap:12px;}
+.pair-browser-section{border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:14px;}
+.pair-browser-section h3{margin:0 0 10px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--muted);letter-spacing:.08em;}
+.pair-browser-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;}
+.pair-browser-stat{padding:10px 12px;border-radius:10px;border:1px solid rgba(159,176,197,0.12);background:rgba(15,23,42,0.4);}
+.pair-browser-stat-label{font-size:9px;color:var(--muted);font-family:'IBM Plex Mono',monospace;letter-spacing:.08em;text-transform:uppercase;}
+.pair-browser-stat-val{font-size:14px;font-weight:700;color:var(--text);margin-top:6px;line-height:1.35;word-break:break-word;}
+.pair-browser-note{font-size:11px;color:var(--muted);line-height:1.6;}
+.pair-browser-table{width:100%;border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:11px;}
+.pair-browser-table th,.pair-browser-table td{padding:8px 10px;border-bottom:1px solid rgba(159,176,197,0.12);text-align:left;vertical-align:top;}
+.pair-browser-table th{font-size:9px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;}
+@media (max-width:1100px){
+  .pair-browser-shell{grid-template-columns:1fr;}
+  .pair-browser-sticky{position:static;}
+  .pair-browser-list{max-height:280px;}
+}
 .bt-controls,.bt-ctrl{display:flex;align-items:center;gap:12px;margin-bottom:24px;flex-wrap:wrap;}
 .bt-select{padding:9px 14px;background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:12px;cursor:pointer;min-width:180px;}
 .bt-btn{padding:10px 22px;border-radius:8px;background:linear-gradient(135deg,#3b82f6,#f0b90b);border:none;color:#fff;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:700;letter-spacing:0.05em;transition:all 0.2s;}
@@ -1163,6 +1206,9 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       <div class="nav-left"><span class="nav-ico">◈</span>Signals</div>
       <span class="nav-badge g" id="nav-badge-signals"></span>
     </div>
+    <div class="nav-item" id="nav-pair-browser" role="button" tabindex="0" onclick="switchPanel('pair-browser')">
+      <div class="nav-left"><span class="nav-ico">[]</span>Pair Browser</div>
+    </div>
     <div class="nav-item" id="nav-trades" role="button" tabindex="0" onclick="switchPanel('trades')">
       <div class="nav-left"><span class="nav-ico">◉</span>Trades</div>
       <span class="nav-badge" id="tradesTabCount"></span>
@@ -1276,6 +1322,90 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
   </div>
 
   </div><!-- /panel-signals -->
+
+  <div class="panel tab-panel" id="panel-pair-browser">
+    <div class="panel-row" style="margin-bottom:18px;">
+      <div class="panel-row-title">PAIR BROWSER</div>
+      <div class="panel-row-actions">
+        <span class="ctrl-note">Inspect one tracked pair at a time with Engine A, Engine B, compare, chart, and AI vision.</span>
+      </div>
+    </div>
+    <div class="pair-browser-shell">
+      <div class="pair-browser-side pair-browser-sticky">
+        <div class="pair-browser-label">Asset Class</div>
+        <select id="pairBrowserAssetClass" class="sort-sel" onchange="pairBrowserUpdateAssetFilter(this.value)">
+          <option value="">ALL ASSETS</option>
+          <option value="forex">FOREX</option>
+          <option value="crypto">CRYPTO</option>
+          <option value="commodity">COMMODITY</option>
+          <option value="index">INDEX</option>
+          <option value="stock">STOCK</option>
+          <option value="etf">ETF</option>
+        </select>
+
+        <div class="pair-browser-label">Style</div>
+        <select id="pairBrowserStyle" class="sort-sel" onchange="pairBrowserUpdateStyle(this.value)">
+          <option value="auto">AUTO</option>
+          <option value="scalp">SCALP</option>
+          <option value="intraday">INTRADAY</option>
+          <option value="swing">SWING</option>
+        </select>
+
+        <div class="pair-browser-label">Engine B Direction</div>
+        <select id="pairBrowserDirection" class="sort-sel" onchange="pairBrowserUpdateDirection(this.value)">
+          <option value="auto">AUTO FROM ENGINE A</option>
+          <option value="LONG">LONG</option>
+          <option value="SHORT">SHORT</option>
+        </select>
+
+        <div class="pair-browser-label">Section Filter</div>
+        <div class="pair-browser-filters">
+          <button type="button" id="pairBrowserFilter-news" class="pair-browser-filter active" onclick="togglePairBrowserSection('news', this)">NEWS</button>
+          <button type="button" id="pairBrowserFilter-inter" class="pair-browser-filter active" onclick="togglePairBrowserSection('inter', this)">INTER</button>
+          <button type="button" id="pairBrowserFilter-graph" class="pair-browser-filter active" onclick="togglePairBrowserSection('graph', this)">GRAPH</button>
+          <button type="button" id="pairBrowserFilter-aiVision" class="pair-browser-filter active" onclick="togglePairBrowserSection('aiVision', this)">AI VISION</button>
+        </div>
+
+        <div class="pair-browser-label">Search Pair</div>
+        <input id="pairBrowserSearch" class="pair-browser-search" type="text" placeholder="Search symbol or display" oninput="pairBrowserUpdateQuery(this.value)" />
+
+        <div class="pair-browser-meta">
+          <span id="pairBrowserCount">Loading...</span>
+          <button class="bt-btn bt-btn-sm" type="button" onclick="refreshPairBrowserPairs()">REFRESH</button>
+        </div>
+
+        <div id="pairBrowserList" class="pair-browser-list">
+          <div class="empty-msg">Loading pair universe...</div>
+        </div>
+      </div>
+
+      <div class="pair-browser-main">
+        <div id="pairBrowserHeader" class="pair-browser-header empty">
+          <div class="pair-browser-title">Select a pair</div>
+          <div class="pair-browser-note">Choose a tracked pair from the left to run Engine A, Engine B, compare both engines, open the full chart, or request AI vision feedback.</div>
+        </div>
+
+        <div class="pair-browser-actions">
+          <button id="pairBrowserRunA" type="button" class="chart-toggle-btn" onclick="runPairBrowserEngineA()" disabled>ENGINE A SCAN</button>
+          <button id="pairBrowserRunB" type="button" class="chart-toggle-btn" onclick="runPairBrowserEngineB()" disabled>ENGINE B SCAN</button>
+          <button id="pairBrowserRunCompare" type="button" class="chart-toggle-btn" onclick="runPairBrowserCompare()" disabled>COMPARE A VS B</button>
+          <button id="pairBrowserOpenChart" type="button" class="chart-toggle-btn" onclick="openPairBrowserChart('H4')" disabled>FULL CHART</button>
+          <button id="pairBrowserOpenTV" type="button" class="chart-toggle-btn" onclick="openPairBrowserTV()" disabled>TV CHART</button>
+          <button id="pairBrowserRunVision" type="button" class="chart-toggle-btn" onclick="runPairBrowserVision()" disabled>AI VISION</button>
+        </div>
+
+        <div id="pairBrowserStatus" class="pair-browser-status">Choose a pair, then run the scan path you want.</div>
+
+        <div id="pairBrowserSections" class="pair-browser-sections">
+          <div class="empty-state">
+            <div class="icon">&#9635;</div>
+            <h3>Pair Workbench Ready</h3>
+            <p>This tab lets you inspect a single pair without relying on the latest global scan state.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <div class="panel tab-panel" id="panel-trades">
       <div class="panel-row">
@@ -2556,6 +2686,7 @@ function switchTab(tab) {
     bindLotteryLabActions();
     loadLotteryLab();
   }
+  if (tab === 'pair-browser' && typeof loadPairBrowserPairs === 'function') loadPairBrowserPairs();
   if (tab === 'markets' && typeof loadMarketHours === 'function') loadMarketHours();
   if (tab === 'performance') {
     if (typeof loadPerformance === 'function') loadPerformance();
@@ -8486,6 +8617,7 @@ document.getElementById('tv-chart-modal').addEventListener('click', function(e) 
 <script src="/static/js/core/utils.js"></script>
 <script src="/static/js/core/apiClient.js"></script>
 <script src="/static/js/features/execution.js"></script>
+<script src="/static/js/features/pair_browser.js"></script>
 <script>
 // ═══════════════════════════════════════════════════════
 // ATHENA CHART MODAL (ACM) — Fullscreen Professional Chart

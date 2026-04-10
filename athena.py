@@ -4721,6 +4721,88 @@ def api_analyze():
         return jsonify({"error": "Analysis failed"}), 500
 
 
+@app.route("/api/pair-scan", methods=["POST"])
+def api_pair_scan():
+    """Run Engine A for a single pair so the UI can inspect pairs without a prior full scan."""
+
+    d = request.get_json(silent=True) or {}
+    symbol = str(d.get("symbol") or d.get("pair") or "").strip()
+    if not symbol:
+        return jsonify({"error": "Missing symbol"}), 400
+
+    pair_obj = next(
+        (
+            p
+            for p in ALL_PAIRS
+            if p.get("symbol") == symbol or p.get("display") == symbol
+        ),
+        None,
+    )
+    if not pair_obj:
+        return jsonify({"error": f"Unknown symbol: {symbol}"}), 404
+
+    requested_style = d.get("style", "auto")
+    include_intermarket = d.get("includeIntermarket")
+    if include_intermarket is None:
+        ic = CONFIG.get("INTERMARKET_CONFIRMATION") or {}
+        include_intermarket = bool(ic.get("enabled", False))
+
+    intermarket_snapshot = None
+    if include_intermarket:
+        try:
+            from intermarket import build_scan_snapshot
+
+            intermarket_snapshot = build_scan_snapshot(
+                ALL_PAIRS,
+                disabled_pairs=_disabled_pairs,
+                etf_pairs=ETF_PAIRS,
+                fetch_candles=fetch_candles,
+                config=CONFIG,
+            )
+        except Exception as e:
+            log.warning(
+                f"[PAIR-SCAN] Intermarket snapshot unavailable for {pair_obj.get('display')}: {e}"
+            )
+
+    try:
+        btc_bias = (
+            _current_btc_bias() if pair_obj.get("type") == "crypto" else "neutral"
+        )
+        resolved_style = _resolve_scan_style(
+            _normalize_style(requested_style), pair_obj
+        )
+        signal = analyze_pair(
+            pair_obj,
+            btc_bias,
+            style=resolved_style,
+            intermarket_snapshot=intermarket_snapshot,
+        )
+        if not signal:
+            return (
+                jsonify({"error": "Engine A analysis unavailable for this pair"}),
+                422,
+            )
+        return jsonify(
+            _json_safe(
+                {
+                    "pair": {
+                        "symbol": pair_obj.get("symbol"),
+                        "display": pair_obj.get("display"),
+                        "type": pair_obj.get("type"),
+                        "enabled": bool(pair_obj.get("enabled", True)),
+                        "source": pair_obj.get("source"),
+                    },
+                    "signal": signal,
+                    "style": resolved_style,
+                    "intermarketIncluded": bool(intermarket_snapshot),
+                }
+            )
+        )
+    except Exception as e:
+        log.error(f"api_pair_scan error [{pair_obj.get('display')}]: {e}")
+        return jsonify({"error": "Pair scan failed"}), 500
+
+
 def _current_btc_bias() -> str:
     btc_bias = "neutral"
     try:

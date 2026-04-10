@@ -87,7 +87,8 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 | `ai_learning.py` | Outcome extraction → `learning_log`; factor-level analysis for AI calibration |
 | `lottery_engine.py` | Lottery analytics + ticket generation (7 modes) + simulation |
 | `lottery_service.py` | DB schema, CSV import, draw history |
-| `static/index.html` | Dashboard UI: signals, Engine C tab, backtest, ACM charts | ~2550 lines |
+| `static/index.html` | Dashboard UI: signals, Pair Browser, Engine C tab, backtest, ACM charts | ~2550 lines |
+| `static/js/features/pair_browser.js` | Pair Browser tab logic: single-pair browsing, Engine A/B/compare actions, and news/intermarket/chart/AI vision sections |
 
 ---
 
@@ -229,6 +230,26 @@ Note: analyze_pair() logs [ANALYZE] warnings when returning None due to empty/in
        ├─ CONFIRM + conviction≥0.35 → trade=True
        └─ AVOID/CONTRADICT → trade=False, tier=SKIP
 ```
+
+**Pair Browser workflow:**
+```
+Dashboard Pair Browser tab (panel-pair-browser)
+  └─ loadPairBrowserPairs() → GET /api/pairs
+  └─ selectPairBrowserPair(symbol)
+  └─ Engine A button → POST /api/pair-scan
+       └─ Runs analyze_pair() for one selected symbol without requiring a full-universe scan first
+  └─ Engine B button → POST /api/naked-analysis
+       └─ Uses Engine A direction when Pair Browser direction mode is AUTO; otherwise uses operator-selected LONG/SHORT
+  └─ Compare button → POST /api/compare-engines
+  └─ News section → POST /api/news-sentiment
+  └─ Intermarket section → GET /api/intermarket-matrix
+       └─ Read-only context when the selected Engine A signal has no attached intermarketConfirmation payload
+  └─ AI Vision button → POST /api/chart-analysis (server_render=true)
+  └─ Full Chart button → openAcm(symbol, tf, fallbackSig)
+  └─ TV Chart button → openTVChart(display, "240")
+```
+
+`POST /api/pair-scan` is the dedicated single-pair Engine A browse route for the Pair Browser tab. Keep it single-pair only; do not repurpose it for full scan orchestration or scoring changes.
 
 **Scalp Lab / Engine D flow:**
 ```
