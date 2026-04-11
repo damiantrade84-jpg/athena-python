@@ -199,7 +199,15 @@ def api_quick_execute():
             _sig_age = 9999
 
     _max_age = _r.CONFIG.get("SIGNAL_MAX_AGE_SEC", 300)
-    if _sig_age > _max_age / 2:
+    
+    _missing_price = False
+    try:
+        if not sig.get("price") or float(sig.get("price")) <= 0:
+            _missing_price = True
+    except (TypeError, ValueError):
+        _missing_price = True
+
+    if _sig_age > _max_age / 2 or _missing_price:
         pair = sig.get("pair", "")
         _pair_obj = next((p for p in _r.ALL_PAIRS if p["display"] == pair), None)
         if _pair_obj:
