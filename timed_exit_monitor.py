@@ -56,7 +56,7 @@ def _load_recent_audit_rows(db_path: str) -> list[dict]:
             con.row_factory = sqlite3.Row
             rows = con.execute(
                 """
-                SELECT ticket, pair, style, ts, direction, entry_price, sl, tp, asset_class, exit_time
+                SELECT id, ticket, pair, style, ts, direction, entry_price, sl, tp, asset_class, exit_time
                 FROM   audit_log
                 WHERE  pair IS NOT NULL
                   AND  grade NOT LIKE '%ERR%'
@@ -175,22 +175,31 @@ def _row_for_live_position(position: dict, audit_rows: list[dict]) -> dict | Non
 
 
 def _mark_timed_close(db_path: str, row: dict, venue: str) -> None:
-    """Persist a timed-close marker so outcome logging preserves exit_reason."""
+    """Persist a timed-close marker so outcome logging preserves exit_reason.
+
+    MT5: prefer exact-ticket match; fall back to id-based mark when the audit row was
+    matched by proximity (split legs, fallback matching) to avoid silent no-ops.
+    Bybit: always mark by id (live ticket is not stable on Bybit).
+    """
     audit_id = row.get("audit_id")
     audit_ticket = str(row.get("audit_ticket") or "").strip()
     live_ticket = str(row.get("ticket") or "").strip()
 
-    # MT5 split legs can map multiple live positions onto one audit row. Only mark by
-    # ticket when the audit row already belongs to this exact live position. Bybit
-    # positions commonly use a non-stable live ticket (`0`), so the matched audit row id
-    # is the safest persistent key there.
     if venue == "mt5":
-        if not audit_ticket or audit_ticket != live_ticket:
+        if audit_ticket and audit_ticket == live_ticket:
+            # Exact ticket match — most reliable
+            query = "UPDATE audit_log SET exit_reason=? WHERE ticket=? AND exit_price IS NULL"
+            params = ("TIMED_CLOSE", audit_ticket)
+        elif audit_id is not None:
+            # Fallback: matched by proximity (split legs, etc.) — use stable row id
+            query = "UPDATE audit_log SET exit_reason=? WHERE id=? AND exit_price IS NULL"
+            params = ("TIMED_CLOSE", audit_id)
+        else:
+            log.debug(f"[TIMED_EXIT] _mark_timed_close: no usable key for MT5 {row.get('pair')} — skipping")
             return
-        query = "UPDATE audit_log SET exit_reason=? WHERE ticket=? AND exit_price IS NULL"
-        params = ("TIMED_CLOSE", audit_ticket)
     else:
         if audit_id is None:
+            log.debug(f"[TIMED_EXIT] _mark_timed_close: no audit_id for Bybit {row.get('pair')} — skipping")
             return
         query = "UPDATE audit_log SET exit_reason=? WHERE id=? AND exit_price IS NULL"
         params = ("TIMED_CLOSE", audit_id)
