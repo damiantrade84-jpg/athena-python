@@ -103,7 +103,7 @@ def _match_audit_row_for_position(position: dict, audit_rows: list[dict]) -> dic
         or position.get("price_open")
     )
 
-    if pos_ticket:
+    if pos_ticket and pos_ticket != "0":
         for row in audit_rows:
             if str(row.get("ticket", "")).strip() == pos_ticket and row.get("exit_time") is None:
                 return row
