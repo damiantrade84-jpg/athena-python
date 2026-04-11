@@ -941,6 +941,7 @@
       engine_b:        {},
       pip_mode:        state.manualStyle,
       sizing_override: sizing,
+      is_manual_override: true,
     };
 
     if (btn) { btn.disabled = true; btn.textContent = "Executing..."; }

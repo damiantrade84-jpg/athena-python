@@ -215,7 +215,8 @@ def api_quick_execute():
                 _fresh = _r.analyze_pair(_pair_obj, "neutral", style=sig["style"])
                 if _fresh:
                     _orig_dir = sig.get("direction", "")
-                    if _fresh["direction"] != _orig_dir:
+                    _is_manual_override = bool(d.get("is_manual_override"))
+                    if not _is_manual_override and _fresh["direction"] != _orig_dir:
                         return jsonify(
                             {
                                 "error": f"SIGNAL_FLIPPED: {pair} is now {_fresh['direction']} (was {_orig_dir})",
