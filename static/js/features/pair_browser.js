@@ -17,6 +17,8 @@
     intermarketLoading: false,
     loadedPairs: false,
     loadingPairs: false,
+    manualDir: "LONG",
+    manualStyle: "swing",
   };
 
   function json(resp) {
@@ -633,6 +635,69 @@
     );
   }
 
+  function renderExecutePanel() {
+    var pair = selectedPair();
+    if (!pair) return "";
+
+    var dir   = state.manualDir   || "LONG";
+    var style = state.manualStyle || "swing";
+    var btnId = "pb-exec-btn-" + (pair.symbol || "").replace(/[^a-z0-9]/gi, "_");
+
+    var dirBtns = ["LONG", "SHORT"].map(function (d) {
+      var active = dir === d;
+      var col    = d === "LONG" ? "var(--bull)" : "var(--bear)";
+      var bgRgb  = d === "LONG" ? "38,166,154" : "239,83,80";
+      return '<button type="button" onclick="pairBrowserSetManualDir(\'' + d + '\')" ' +
+        'style="flex:1;padding:9px 0;font-size:12px;font-weight:700;border-radius:4px;cursor:pointer;' +
+        'border:1px solid ' + (active ? col : "var(--border)") + ';' +
+        'background:' + (active ? "rgba(" + bgRgb + ",0.18)" : "var(--bg2)") + ';' +
+        'color:' + (active ? col : "var(--muted)") + ';letter-spacing:.06em;">' +
+        (d === "LONG" ? "\u25b2 LONG" : "\u25bc SHORT") +
+      '</button>';
+    }).join("");
+
+    var styleBtns = [
+      { v: "scalp",    label: "\u26a1 SCALP",    tip: "M15 timeframe \u2014 tight SL/TP" },
+      { v: "intraday", label: "\ud83d\udcca INTRADAY", tip: "H1 timeframe \u2014 medium SL/TP" },
+      { v: "swing",    label: "\ud83c\udf0a SWING",    tip: "H4/D1 timeframe \u2014 wide SL/TP" },
+    ].map(function (s) {
+      var active = style === s.v;
+      return '<button type="button" onclick="pairBrowserSetManualStyle(\'' + s.v + '\')" title="' + s.tip + '" ' +
+        'style="flex:1;padding:8px 0;font-size:10px;font-weight:700;border-radius:4px;cursor:pointer;' +
+        'border:1px solid ' + (active ? "var(--accent)" : "var(--border)") + ';' +
+        'background:' + (active ? "rgba(100,180,255,0.12)" : "var(--bg2)") + ';' +
+        'color:' + (active ? "var(--accent)" : "var(--muted)") + ';letter-spacing:.06em;">' +
+        s.label +
+      '</button>';
+    }).join("");
+
+    var execCol = dir === "LONG" ? "#26a69a" : "#ef5350";
+    var execTxt = dir === "LONG" ? "#000" : "#fff";
+
+    return section("EXECUTE",
+      '<div style="display:flex;flex-direction:column;gap:12px;">' +
+        '<div>' +
+          '<div style="font-size:10px;color:var(--muted);margin-bottom:6px;letter-spacing:.06em;">DIRECTION</div>' +
+          '<div style="display:flex;gap:6px;">' + dirBtns + '</div>' +
+        '</div>' +
+        '<div>' +
+          '<div style="font-size:10px;color:var(--muted);margin-bottom:6px;letter-spacing:.06em;">TIMEFRAME / STYLE</div>' +
+          '<div style="display:flex;gap:6px;">' + styleBtns + '</div>' +
+        '</div>' +
+        '<div style="padding:8px 10px;background:var(--bg2);border-radius:4px;border:1px solid var(--border);' +
+          'font-size:11px;color:var(--muted);line-height:1.5;">' +
+          '\u26a0 SL/TP auto-calculated from ATR for the selected style at execution time. ' +
+          'Position size uses the global risk sizing slider.' +
+        '</div>' +
+        '<button id="' + btnId + '" type="button" onclick="pairBrowserManualExecute(\'' + btnId + '\')" ' +
+          'style="width:100%;padding:13px 0;font-size:13px;font-weight:700;border-radius:4px;cursor:pointer;' +
+          'background:' + execCol + ';color:' + execTxt + ';border:none;letter-spacing:.08em;">' +
+          '\ud83d\ude80 EXECUTE ' + dir + ' \u2014 ' + style.toUpperCase() +
+        '</button>' +
+      '</div>'
+    );
+  }
+
   function renderNewsSection() {
     var pair = selectedPair();
     if (!pair || !state.filters.news) return "";
@@ -743,7 +808,7 @@
       el.innerHTML = '<div class="empty-state"><div class="icon">&#9635;</div><h3>Pair Workbench Ready</h3><p>Select a pair to inspect its individual scan path, compare the engines, open the chart, and request AI feedback.</p></div>';
       return;
     }
-    el.innerHTML = renderEngineASection() + renderEngineBSection() + renderCompareSection() + renderGraphSection() + renderNewsSection() + renderIntermarketSection() + renderVisionSection();
+    el.innerHTML = renderExecutePanel() + renderEngineASection() + renderEngineBSection() + renderCompareSection() + renderGraphSection() + renderNewsSection() + renderIntermarketSection() + renderVisionSection();
   }
 
   function renderPairBrowser() {
@@ -826,5 +891,78 @@
     if (!Object.prototype.hasOwnProperty.call(state.filters, name)) return;
     state.filters[name] = !state.filters[name];
     renderPairBrowser();
+  };
+  window.pairBrowserSetManualDir = function (val) {
+    state.manualDir = (val === "SHORT") ? "SHORT" : "LONG";
+    renderPairBrowser();
+  };
+
+  window.pairBrowserSetManualStyle = function (val) {
+    state.manualStyle = ["scalp", "intraday", "swing"].includes(val) ? val : "swing";
+    renderPairBrowser();
+  };
+
+  window.pairBrowserManualExecute = async function (btnId) {
+    var pair = selectedPair();
+    if (!pair) { window.showToast("No pair selected", true); return; }
+
+    var btn = document.getElementById(btnId);
+
+    // Grab live price from the global live price store
+    var livePrice = null;
+    try {
+      var lp = (window._livePrices || {})[pair.display] ||
+               (window._livePrices || {})[pair.symbol] || null;
+      if (lp) livePrice = lp.price || lp.bid || lp.last || null;
+    } catch (e) {}
+
+    var sig = {
+      pair:            pair.display,
+      display:         pair.display,
+      symbol:          pair.symbol || pair.display,
+      type:            pair.type   || "forex",
+      direction:       state.manualDir,
+      price:           livePrice,
+      livePrice:       livePrice,
+      style:           state.manualStyle,
+      confluenceScore: 0,
+      maxScore:        3,
+      timestamp:       new Date().toISOString(),
+      ts:              new Date().toISOString(),
+      engine:          "manual",
+    };
+
+    var sizing = (window.ExecutionFeature && typeof window.ExecutionFeature.getExecutionSizingOverride === "function")
+      ? window.ExecutionFeature.getExecutionSizingOverride()
+      : 1.0;
+
+    var payload = {
+      signal:          sig,
+      engine_b:        {},
+      pip_mode:        state.manualStyle,
+      sizing_override: sizing,
+    };
+
+    if (btn) { btn.disabled = true; btn.textContent = "Executing..."; }
+    try {
+      var res = await window.apiClient.postJson("/api/quick-execute", payload);
+      window.showToast(
+        "\u2705 " + state.manualDir + " " + pair.display +
+        " executed \u2014 Ticket: " + res.ticket
+      );
+      if (btn) {
+        btn.textContent = "\u2705 Done";
+        setTimeout(function () {
+          btn.disabled = false;
+          btn.textContent = "\ud83d\ude80 EXECUTE " + state.manualDir + " \u2014 " + state.manualStyle.toUpperCase();
+        }, 3000);
+      }
+    } catch (err) {
+      window.showToast("\u274c Execute failed: " + err.message, true);
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "\ud83d\ude80 EXECUTE " + state.manualDir + " \u2014 " + state.manualStyle.toUpperCase();
+      }
+    }
   };
 })();

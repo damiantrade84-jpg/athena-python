@@ -10,6 +10,13 @@ from typing import Any, Optional
 log = logging.getLogger("sentinel")
 
 
+def _to_naive_ts(t) -> "pd.Timestamp":
+    """Parse any timestamp string/value to a tz-naive pandas Timestamp."""
+    import pandas as pd
+    ts = pd.Timestamp(str(t).replace(" ", "T"))
+    return ts.tz_convert(None) if ts.tzinfo is not None else ts
+
+
 def _to_float(value: Any) -> float | None:
     try:
         if value is None or value == "":
@@ -160,7 +167,7 @@ def render_chart_image(
             t = c.get("t", c.get("time", c.get("datetime", "")))
             data.append(
                 {
-                    "Date": pd.Timestamp(str(t).replace(" ", "T")),
+                    "Date": _to_naive_ts(t),
                     "Open": float(c.get("o", c.get("open", 0))),
                     "High": float(c.get("h", c.get("high", 0))),
                     "Low": float(c.get("l", c.get("low", 0))),
