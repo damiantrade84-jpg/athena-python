@@ -249,7 +249,7 @@ def api_quick_execute():
             f"[QUICK EXEC] {sig.get('pair')}: style={recomputed['pip_mode']}, "
             f"ATR={recomputed['atr']:.6f}, SL={lvl['sl']:.6f}, TP1={lvl['tp1']:.6f}"
         )
-    except ValueError as _svc_err:
+    except (ValueError, TypeError) as _svc_err:
         if "recommended_stop_loss" in engine_b and engine_b["recommended_stop_loss"]:
             sig["sl"] = engine_b["recommended_stop_loss"]
         if "recommended_take_profit" in engine_b and engine_b["recommended_take_profit"]:
@@ -281,8 +281,9 @@ def api_quick_execute():
             )
 
             account = bybit_get_account()
-            if not account:
-                return jsonify({"error": "Bybit not connected"}), 400
+            if not account or account.get("error"):
+                _msg = account.get("detail", "Bybit not connected") if account else "Bybit not connected"
+                return jsonify({"error": _msg}), 400
             pos_result = bybit_get_positions()
             if isinstance(pos_result, dict) and pos_result.get("error"):
                 return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
@@ -301,8 +302,9 @@ def api_quick_execute():
             )
 
             account = mt5_get_account()
-            if not account:
-                return jsonify({"error": "MT5 not connected"}), 400
+            if not account or account.get("error"):
+                _msg = account.get("detail", "MT5 not connected") if account else "MT5 not connected"
+                return jsonify({"error": _msg}), 400
             pos_result = mt5_get_positions()
             if isinstance(pos_result, dict) and pos_result.get("error"):
                 return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503

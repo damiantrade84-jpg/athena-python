@@ -73,7 +73,7 @@ def recompute_levels_for_style(
     if not exec_atr or exec_atr <= 0:
         raise ValueError("ATR unavailable")
 
-    exec_price = float(sig.get("price", 0))
+    exec_price = float(sig.get("price") or 0.0)
     exec_dir = sig.get("direction", "LONG")
     regime_state = _resolve_regime_state(sig)
     lvl = calc_levels(
