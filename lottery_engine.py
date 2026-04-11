@@ -828,6 +828,176 @@ def flag_anomalous_draws(
     }
 
 
+# ---------------------------------------------------------------------------
+# Entropy analysis (Shannon information theory) — lotto & powerball only
+# ---------------------------------------------------------------------------
+# H(X) = -Σ p(xi) · log2(p(xi))
+# Maximum entropy = log2(pool_size) when every number is equally likely.
+# Ratio H/H_max → 1.0 = perfectly uniform; < 0.95 = notable deviation.
+# Combination entropy is intentionally omitted: with realistic draw counts
+# (~1000) vs the combination space (C(58,6) = 40M+), empirical entropy is
+# capped at log2(draws) ≈ 10 bits — far below the theoretical 25.27 bits —
+# making it mathematically uninformative (Feller, 1968).
+# ---------------------------------------------------------------------------
+
+_ENTROPY_ELIGIBLE_GAMES = {"lotto", "powerball"}
+
+
+def _shannon_entropy(counts: dict[int, int], total_observations: int) -> float | None:
+    """Compute Shannon entropy in bits from a frequency counter.
+
+    Returns None when there are no observations.
+    Convention: 0 · log2(0) = 0 (L'Hôpital).
+    """
+    if total_observations <= 0:
+        return None
+    h = 0.0
+    for count in counts.values():
+        if count > 0:
+            p = count / total_observations
+            h -= p * math.log2(p)
+    return h
+
+
+def compute_entropy_analysis(
+    game: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    rolling_windows: list[int] | None = None,
+    db_path: str | None = None,
+) -> dict | None:
+    """Compute entropy metrics for lotto / powerball draw history.
+
+    Returns None for games not in _ENTROPY_ELIGIBLE_GAMES (daily_lotto).
+
+    Metrics produced:
+      1. Per-ball (marginal) entropy — treats every drawn ball as one
+         observation from {1..pool_size}.  Compares to H_max = log2(pool).
+      2. Rolling-window entropy — entropy computed over the last W draws
+         for multiple window sizes, enabling trend detection.
+      3. Per-position entropy — entropy of each sorted ball slot
+         (1st smallest, 2nd smallest, …).  Low positional entropy means
+         certain ranges dominate a slot more than expected.
+      4. Fairness verdict — simple classification based on the entropy ratio.
+    """
+    game_key = _normalize_game(game)
+    if game_key not in _ENTROPY_ELIGIBLE_GAMES:
+        return None
+
+    loaded = load_lottery_draws(game_key, start_date=start_date, end_date=end_date, db_path=db_path)
+    draws = loaded["draws"]
+    rules = LOTTERY_GAME_RULES[game_key]
+    pool_size = rules["main_max"] - rules["main_min"] + 1
+    balls_per_draw = rules["main_count"]
+    h_max = math.log2(pool_size) if pool_size > 1 else 0.0
+
+    if not draws:
+        return {
+            "game": game_key,
+            "eligible": True,
+            "draw_count": 0,
+            "pool_size": pool_size,
+            "h_max_bits": _rounded_metric(h_max, 4),
+            "per_ball": None,
+            "rolling": [],
+            "positional": [],
+            "fairness": "insufficient_data",
+        }
+
+    # --- 1. Per-ball (marginal) entropy over all draws -----------------------
+    main_counter = _main_counter(draws)
+    total_balls = len(draws) * balls_per_draw
+    h_overall = _shannon_entropy(main_counter, total_balls)
+    h_ratio = (h_overall / h_max) if (h_overall is not None and h_max > 0) else None
+
+    per_ball = {
+        "entropy_bits": _rounded_metric(h_overall, 4),
+        "h_max_bits": _rounded_metric(h_max, 4),
+        "entropy_ratio": _rounded_metric(h_ratio, 6),
+        "total_observations": total_balls,
+    }
+
+    # --- 2. Rolling-window entropy -------------------------------------------
+    if rolling_windows is None:
+        rolling_windows = [50, 100, 200]
+    rolling = []
+    for w in rolling_windows:
+        w = max(1, min(w, len(draws)))
+        window_draws = draws[-w:]
+        w_counter = _main_counter(window_draws)
+        w_total = len(window_draws) * balls_per_draw
+        w_h = _shannon_entropy(w_counter, w_total)
+        w_ratio = (w_h / h_max) if (w_h is not None and h_max > 0) else None
+        rolling.append({
+            "window": w,
+            "draws_used": len(window_draws),
+            "entropy_bits": _rounded_metric(w_h, 4),
+            "entropy_ratio": _rounded_metric(w_ratio, 6),
+        })
+
+    # Entropy trend: compare smallest vs largest window ratio
+    trend = "stable"
+    if len(rolling) >= 2:
+        r_short = rolling[0].get("entropy_ratio")
+        r_long = rolling[-1].get("entropy_ratio")
+        if r_short is not None and r_long is not None:
+            delta = float(r_short) - float(r_long)
+            if delta < -0.005:
+                trend = "decreasing"  # recent draws less uniform
+            elif delta > 0.005:
+                trend = "increasing"  # recent draws more uniform
+
+    # --- 3. Per-position entropy ---------------------------------------------
+    positional = []
+    for pos_idx in range(balls_per_draw):
+        pos_counter: dict[int, int] = {}
+        for draw in draws:
+            if len(draw["numbers"]) > pos_idx:
+                num = draw["numbers"][pos_idx]
+                pos_counter[num] = pos_counter.get(num, 0) + 1
+        pos_total = sum(pos_counter.values())
+        pos_h = _shannon_entropy(pos_counter, pos_total)
+        # Theoretical max for this position uses the number of distinct values
+        # observed, but we compare against full pool for consistency
+        pos_ratio = (pos_h / h_max) if (pos_h is not None and h_max > 0) else None
+        positional.append({
+            "position": pos_idx + 1,
+            "distinct_values": len(pos_counter),
+            "entropy_bits": _rounded_metric(pos_h, 4),
+            "entropy_ratio": _rounded_metric(pos_ratio, 6),
+        })
+
+    # --- 4. Fairness verdict -------------------------------------------------
+    # Based on overall entropy ratio:
+    #   >= 0.99  → "highly_uniform"  (consistent with fair RNG)
+    #   >= 0.95  → "normal"          (expected statistical noise)
+    #   >= 0.90  → "notable_deviation"
+    #   <  0.90  → "significant_deviation" (warrants investigation)
+    if h_ratio is None:
+        fairness = "insufficient_data"
+    elif h_ratio >= 0.99:
+        fairness = "highly_uniform"
+    elif h_ratio >= 0.95:
+        fairness = "normal"
+    elif h_ratio >= 0.90:
+        fairness = "notable_deviation"
+    else:
+        fairness = "significant_deviation"
+
+    return {
+        "game": game_key,
+        "eligible": True,
+        "draw_count": len(draws),
+        "pool_size": pool_size,
+        "h_max_bits": _rounded_metric(h_max, 4),
+        "per_ball": per_ball,
+        "rolling": rolling,
+        "rolling_trend": trend,
+        "positional": positional,
+        "fairness": fairness,
+    }
+
+
 def compute_bonus_intelligence(
     game: str,
     window: int = 50,
@@ -994,6 +1164,7 @@ def build_lottery_dashboard(
     )
     consecutive = compute_consecutive_stats(loaded["game"], start_date=start_date, end_date=end_date, db_path=db_path)
     repeat_stats = compute_repeat_from_last_draw_stats(loaded["game"], start_date=start_date, end_date=end_date, db_path=db_path)
+    entropy = compute_entropy_analysis(loaded["game"], start_date=start_date, end_date=end_date, db_path=db_path)
 
     dashboard = {
         "game": loaded["game"],
@@ -1042,6 +1213,7 @@ def build_lottery_dashboard(
             "recent_overlap": repeat_stats["recent_overlap"],
         },
         "decade_groups": freq["decade_groups"],
+        "entropy": entropy,  # None for daily_lotto (not eligible)
         "invalid_rows_skipped": loaded["invalid_rows_skipped"],
     }
 

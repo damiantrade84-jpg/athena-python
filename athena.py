@@ -73,6 +73,7 @@ from lottery_engine import (
     build_lottery_dashboard,
     compare_generator_modes,
     compute_bonus_intelligence,
+    compute_entropy_analysis,
     compute_pair_lift,
     compute_number_frequency,
     compute_positional_distribution,
@@ -11059,6 +11060,7 @@ def _lottery_ai_prompt_payload(game: str, start_date=None, end_date=None, window
     pair_lift = compute_pair_lift(game_key, start_date=start_date, end_date=end_date, limit=50)
     anomalies = flag_anomalous_draws(game_key, z_threshold=z_threshold, start_date=start_date, end_date=end_date)
     bonus = compute_bonus_intelligence(game_key, window=window, start_date=start_date, end_date=end_date)
+    entropy = compute_entropy_analysis(game_key, start_date=start_date, end_date=end_date)
     recent = lottery_history_rows(game_key, start_date=start_date, end_date=end_date, limit=10)
 
     recent_draws = "\n".join(
@@ -11115,6 +11117,30 @@ def _lottery_ai_prompt_payload(game: str, start_date=None, end_date=None, window
     bonus_heating = ", ".join(
         str(row["number"]) for row in bonus.get("rolling", []) if row.get("trend") == "heating"
     ) if bonus.get("has_bonus") else "N/A"
+
+    # --- Entropy intelligence (lotto / powerball only) -----------------------
+    entropy_section = ""
+    if entropy and entropy.get("eligible"):
+        pb = entropy.get("per_ball") or {}
+        entropy_section = f"""
+ENTROPY ANALYSIS (Shannon information theory):
+H(X) = -Σ p(xi)·log2(p(xi)).  Max entropy (perfect uniform) = {entropy.get('h_max_bits')} bits.
+Overall: {pb.get('entropy_bits')} bits — ratio {pb.get('entropy_ratio')} of maximum ({entropy.get('draw_count')} draws, {pb.get('total_observations')} ball observations)
+Fairness verdict: {entropy.get('fairness')}
+Rolling trend: {entropy.get('rolling_trend')}"""
+        for rw in entropy.get("rolling", []):
+            entropy_section += f"\n  Window {rw['window']}: {rw['entropy_bits']} bits (ratio {rw['entropy_ratio']})"
+        low_entropy_positions = [
+            p for p in entropy.get("positional", [])
+            if p.get("entropy_ratio") is not None and float(p["entropy_ratio"]) < 0.85
+        ]
+        if low_entropy_positions:
+            entropy_section += "\nLow-entropy positions (ratio < 0.85 — concentrated ranges):"
+            for p in low_entropy_positions:
+                entropy_section += f"\n  Ball {p['position']}: {p['entropy_bits']} bits (ratio {p['entropy_ratio']}, {p['distinct_values']} distinct values)"
+        else:
+            entropy_section += "\nAll ball positions have normal entropy (≥ 0.85 ratio)."
+
     rules_text = json.dumps(
         {
             "game": game_key,
@@ -11166,6 +11192,19 @@ BONUS BALL DATA (if applicable):
 Top picks: {bonus_top_picks}
 Most overdue bonus: {bonus_overdue}
 Heating bonus balls: {bonus_heating}
+{entropy_section}
+
+IMPORTANT MATHEMATICAL CONTEXT:
+- Each lottery draw is an independent event (memoryless property).
+  Hot/cold/overdue patterns are descriptive, NOT predictive (Tversky & Kahneman, 1971).
+- The ONLY mathematically justified strategy is anti-crowd: avoiding popular numbers
+  to reduce jackpot split probability (Henze & Riedwyl, 1998 — ~20-30% higher expected
+  payout, not higher win probability).
+- Entropy ratio close to 1.0 confirms the draw is consistent with fair RNG.
+  Deviations below 0.95 warrant investigation but are expected in small samples.
+- Use entropy data to assess draw fairness and weight your confidence accordingly.
+  If entropy is highly uniform, frequency deviations are just noise.
+  If entropy shows notable deviation, frequency patterns carry more weight.
 
 Based on ALL of the above data, provide:
 
@@ -11189,9 +11228,15 @@ Based on ALL of the above data, provide:
    Recommended min_sum and max_sum for scoring tonight 
    based on anomaly context.
 
-6. CONFIDENCE LEVEL:
+6. ENTROPY ASSESSMENT (if entropy data provided):
+   Interpret the entropy ratio and rolling trend.
+   Does entropy support or undermine frequency-based selections?
+   Flag any low-entropy ball positions that suggest concentrated ranges.
+
+7. CONFIDENCE LEVEL:
    Rate your confidence in this selection: Low / Medium / High
-   And explain what is driving or limiting confidence.
+   Factor in: entropy fairness verdict, sample size, rolling trend,
+   and the mathematical reality that lottery draws are independent events.
 
 Respond in this exact JSON format:
 {{
@@ -11200,12 +11245,18 @@ Respond in this exact JSON format:
   "generator_mode": "mode_name",
   "bonus_picks": [list of 2 integers or empty if no bonus],
   "sum_filter": {{"min": integer, "max": integer}},
+  "entropy_assessment": {{
+    "fairness": "highly_uniform/normal/notable_deviation/significant_deviation",
+    "interpretation": "what the entropy tells us about this draw history",
+    "impact_on_selection": "how entropy influenced the recommended pool"
+  }},
   "confidence": "Low/Medium/High",
   "reasoning": {{
     "pool_reasoning": "explanation per number",
     "avoid_reasoning": "why avoid these",
     "mode_reasoning": "why this mode",
     "bonus_reasoning": "why these bonus balls",
+    "entropy_reasoning": "how entropy data shaped the analysis",
     "confidence_reasoning": "what drives or limits confidence"
   }}
 }}
@@ -11217,6 +11268,7 @@ Respond in this exact JSON format:
         "pair_lift": pair_lift,
         "anomalies": anomalies,
         "bonus": bonus,
+        "entropy": entropy,
         "recent": recent,
         "rules": rules,
     }
@@ -11549,6 +11601,7 @@ def api_lottery_ai_analysis():
                 "generator_mode": str(parsed.get("generator_mode") or ""),
                 "bonus_picks": bonus_picks[:2],
                 "sum_filter": parsed.get("sum_filter", {}),
+                "entropy_assessment": parsed.get("entropy_assessment", {}),
                 "confidence": str(parsed.get("confidence") or ""),
                 "reasoning": parsed.get("reasoning", {}),
             }
