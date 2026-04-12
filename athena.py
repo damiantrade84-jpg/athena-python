@@ -5440,21 +5440,6 @@ def api_scan_naked():
 
     from market_structure import NakedEngine, engine_b_confidence_passes
 
-    import time
-
-    def _fetch_cached_only(pair, tf, limit):
-        """For naked scan: check in-memory TTL cache first, only call live if truly expired."""
-        key = (pair.get("symbol", pair.get("display")), tf, int(limit))
-        now = time.time()
-        with _candle_cache_lock:
-            entry = _candle_cache.get(key)
-            if entry is not None:
-                candles, expiry = entry
-                if now < expiry:
-                    return candles
-        # Cache miss — call normal fetch_candles (will populate cache for next time)
-        return fetch_candles(pair, tf, limit)
-
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def _scan_pair(pair):
@@ -5493,7 +5478,7 @@ def api_scan_naked():
                     _tf_state_map[tf] = state
                     _tf_map[tf] = _market_state_series(state)
                 else:
-                    raw = _fetch_cached_only(pair, tf, limit)
+                    raw = fetch_candles(pair, tf, limit)
                     if raw and len(raw) > 1:
                         _tf_map[tf] = raw[:-1]  # drop incomplete current bar
                     elif raw:
