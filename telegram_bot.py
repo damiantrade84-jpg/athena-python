@@ -102,6 +102,86 @@ def _safe_json(resp) -> dict:
     return data
 
 
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _fmt_money(value, suffix: str = "") -> str:
+    n = _safe_float(value)
+    sign = "+" if n > 0 else ""
+    return f"{sign}{n:.2f}{suffix}"
+
+
+def _fmt_minutes(minutes) -> str:
+    mins = _safe_float(minutes)
+    if mins >= 1440:
+        return f"{mins / 1440:.1f}d"
+    if mins >= 60:
+        return f"{mins / 60:.1f}h"
+    return f"{mins:.0f}m"
+
+
+def _position_profit(pos: dict) -> float:
+    return _safe_float(pos.get("profit", pos.get("unrealizedPnl", 0)))
+
+
+def _position_pair(pos: dict) -> str:
+    return str(pos.get("pair") or pos.get("display") or pos.get("symbol") or "?")
+
+
+def _position_volume(pos: dict) -> float:
+    return _safe_float(pos.get("volume", pos.get("contracts", 0)))
+
+
+def _position_ticket(pos: dict) -> str:
+    return str(pos.get("ticket") or "")
+
+
+def _position_exchange(pos: dict, fallback: str = "") -> str:
+    return str(pos.get("exchange") or fallback or "").lower()
+
+
+def _position_close_key(pos: dict, exchange: str) -> str:
+    pair = _position_pair(pos)
+    direction = str(pos.get("direction") or "")
+    volume = _position_volume(pos)
+    ticket = _position_ticket(pos)
+    return f"close_{exchange}_{pair}_{direction}_{volume}_{ticket}"
+
+
+def _position_matches_pair(pos: dict, pair: str) -> bool:
+    want = (pair or "").upper()
+    return _position_pair(pos).upper() == want
+
+
+def _filter_positions(all_pos: list[tuple[dict, str]], mode: str) -> list[tuple[dict, str]]:
+    mode = (mode or "all").lower()
+    if mode in ("win", "wins", "winning", "green"):
+        return [(p, ex) for p, ex in all_pos if _position_profit(p) > 0]
+    if mode in ("loss", "losses", "losing", "red"):
+        return [(p, ex) for p, ex in all_pos if _position_profit(p) < 0]
+    if mode in ("flat", "breakeven", "be"):
+        return [(p, ex) for p, ex in all_pos if _position_profit(p) == 0]
+    return all_pos
+
+
+def _summarize_positions(all_pos: list[tuple[dict, str]]) -> dict:
+    total = sum(_position_profit(p) for p, _ in all_pos)
+    winning = sum(1 for p, _ in all_pos if _position_profit(p) > 0)
+    losing = sum(1 for p, _ in all_pos if _position_profit(p) < 0)
+    flat = max(0, len(all_pos) - winning - losing)
+    return {
+        "count": len(all_pos),
+        "total": total,
+        "winning": winning,
+        "losing": losing,
+        "flat": flat,
+    }
+
+
 def _fmt_signal_card(sig: dict) -> str:
     """Format a signal dict as a clean Telegram card."""
     pair = sig.get("pair", sig.get("display", "?"))
@@ -140,10 +220,10 @@ def _fmt_signal_card(sig: dict) -> str:
 
 def _fmt_position_card(pos: dict) -> str:
     """Format an open position as a Telegram card."""
-    pair = pos.get("pair", "?")
+    pair = _position_pair(pos)
     direction = pos.get("direction", "?")
     entry = pos.get("entry", pos.get("entryPrice", 0))
-    profit = pos.get("profit", pos.get("unrealizedPnl", 0))
+    profit = _position_profit(pos)
     sl = pos.get("sl", 0)
     tp = pos.get("tp", 0)
     vol = pos.get("volume", pos.get("contracts", 0))
@@ -159,6 +239,121 @@ def _fmt_position_card(pos: dict) -> str:
     if sl:
         lines.append(f"SL: `{sl}` | TP: `{tp}`")
     return "\n".join(lines)
+
+
+def _fmt_position_detail_card(pos: dict, exchange: str = "") -> str:
+    """Format an enriched open-trade card from /api/open-trades-timed or broker fallback."""
+    pair = _position_pair(pos)
+    direction = str(pos.get("direction") or "?")
+    exchange = (_position_exchange(pos, exchange) or "?").upper()
+    profit = _position_profit(pos)
+    result = "WINNING" if profit > 0 else "LOSING" if profit < 0 else "FLAT"
+    pnl_icon = "WIN" if profit > 0 else "LOSS" if profit < 0 else "FLAT"
+    dir_icon = "LONG" if direction == "LONG" else "SHORT"
+    entry = pos.get("entry", pos.get("entryPrice", 0))
+    current = pos.get("markPrice") or pos.get("lastPrice") or pos.get("price")
+    sl = pos.get("sl", 0)
+    tp = pos.get("tp", 0)
+    volume = _position_volume(pos)
+    risk_amount = pos.get("risk_amount")
+    style = str(pos.get("style") or "").upper()
+    ticket = _position_ticket(pos)
+
+    lines = [
+        f"*{pair}* - {dir_icon} - {result}",
+        f"Exchange: `{exchange}`" + (f" | Style: `{style}`" if style else ""),
+        f"P&L: `{_fmt_money(profit)}` ({pnl_icon})",
+        f"Entry: `{entry}` | Vol: `{volume}`",
+    ]
+
+    if current:
+        lines.append(f"Now: `{current}`")
+    if sl or tp:
+        lines.append(f"SL: `{sl}` | TP: `{tp}`")
+    if risk_amount is not None:
+        lines.append(f"Risk: `{risk_amount}`")
+    if pos.get("mins_open") is not None:
+        lines.append(f"Open: `{_fmt_minutes(pos.get('mins_open'))}`")
+    if pos.get("mins_to_be") is not None or pos.get("mins_to_close") is not None:
+        be = _fmt_minutes(pos.get("mins_to_be", 0))
+        close = _fmt_minutes(pos.get("mins_to_close", 0))
+        be_state = "hit" if pos.get("be_reached") else f"in {be}"
+        close_state = "hit" if pos.get("close_reached") else f"in {close}"
+        lines.append(f"Timed exit: BE `{be_state}` | close `{close_state}`")
+    if ticket:
+        lines.append(f"Ticket: `{ticket}`")
+    return "\n".join(lines)
+
+
+def _fmt_engine_c_card(sig: dict) -> str:
+    pair = sig.get("display") or sig.get("pair") or sig.get("symbol") or "?"
+    direction = sig.get("direction") or "?"
+    verdict = sig.get("verdict") or "?"
+    tier = sig.get("tier") or "?"
+    conviction = _safe_float(sig.get("conviction"))
+    trade = "YES" if sig.get("trade") else "NO"
+    a_raw = sig.get("engine_a_raw") or {}
+    b_raw = sig.get("engine_b_raw") or {}
+    lines = [
+        f"*{pair}* - {direction} - Engine C",
+        f"Verdict: `{verdict}` | Tier: `{tier}` | Trade: `{trade}`",
+        f"Conviction: `{conviction:.0%}`",
+    ]
+    if a_raw:
+        a_score = a_raw.get("score")
+        a_max = a_raw.get("maxScore")
+        lines.append(f"A: `{a_raw.get('direction') or '-'} {a_score}/{a_max}`")
+    if b_raw:
+        lines.append(f"B: `{b_raw.get('direction') or '-'} {b_raw.get('score')}/{b_raw.get('max_possible')}`")
+    if sig.get("sl") or sig.get("tp"):
+        lines.append(f"SL: `{sig.get('sl')}` | TP: `{sig.get('tp')}`")
+    return "\n".join(lines)
+
+
+def _fmt_scalp_card(sig: dict) -> str:
+    pair = sig.get("pair") or sig.get("display") or "?"
+    direction = sig.get("direction") or "?"
+    grade = sig.get("ai_grade") or "?"
+    score = sig.get("ai_score")
+    price = sig.get("price")
+    sl = sig.get("sl")
+    tp1 = sig.get("tp1")
+    rr = sig.get("rr1")
+    zone = sig.get("zone_type") or "?"
+    trigger = sig.get("trigger_type") or "?"
+    return "\n".join([
+        f"*{pair}* - {direction} - Scalp",
+        f"Grade: `{grade}` | Score: `{score}` | RR: `{rr}`",
+        f"Entry: `{price}` | SL: `{sl}` | TP1: `{tp1}`",
+        f"Zone: `{zone}` | Trigger: `{trigger}`",
+    ])
+
+
+def _fetch_open_positions_sync(req) -> tuple[list[tuple[dict, str]], dict]:
+    """Fetch enriched open trades, falling back to broker status endpoints if needed."""
+    meta = {"source": "open-trades-timed", "error": ""}
+    timed = _safe_json(req.get(f"{_BASE}/api/open-trades-timed", timeout=_TIMEOUT_FAST))
+    if not timed.get("error") and isinstance(timed.get("positions"), list):
+        out = []
+        for pos in timed.get("positions", []):
+            exchange = _position_exchange(pos) or "mt5"
+            out.append((pos, exchange))
+        return out, meta
+
+    meta["source"] = "broker-fallback"
+    meta["error"] = timed.get("error", "")
+    mt5_resp = _safe_json(req.get(f"{_BASE}/api/mt5-positions", timeout=_TIMEOUT_FAST))
+    bybit_resp = _safe_json(req.get(f"{_BASE}/api/bybit-status", timeout=_TIMEOUT_FAST))
+    out = []
+    for pos in mt5_resp.get("positions", []) or []:
+        pos.setdefault("exchange", "mt5")
+        out.append((pos, "mt5"))
+    for pos in bybit_resp.get("positions", []) or []:
+        pos.setdefault("exchange", "bybit")
+        out.append((pos, "bybit"))
+    if not out and (mt5_resp.get("error") or bybit_resp.get("error")):
+        meta["error"] = mt5_resp.get("error") or bybit_resp.get("error") or meta["error"]
+    return out, meta
 
 
 def start_telegram_bot():
@@ -197,6 +392,35 @@ def _build_and_run(token: str, chat_id: str):
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, fn)
 
+    async def _send_position_card(chat_id_val, pos: dict, exchange: str, context):
+        pair = _position_pair(pos)
+        direction = str(pos.get("direction") or "")
+        close_key = _position_close_key(pos, exchange)
+        _pending_confirmations[close_key] = {
+            "exchange": exchange,
+            "pair": pair,
+            "direction": direction,
+            "volume": _position_volume(pos),
+            "ticket": _position_ticket(pos),
+        }
+
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Refresh", callback_data=f"trade_refresh:{close_key}"),
+                InlineKeyboardButton("Analyze", callback_data=f"trade_analyze:{pair}"),
+            ],
+            [
+                InlineKeyboardButton("Decay", callback_data=f"decay_pair:{pair}"),
+                InlineKeyboardButton("Close", callback_data=f"close_request:{close_key}"),
+            ],
+        ])
+        await context.bot.send_message(
+            chat_id=chat_id_val,
+            text=_fmt_position_detail_card(pos, exchange),
+            parse_mode="Markdown",
+            reply_markup=keyboard,
+        )
+
     # ── /help ─────────────────────────────────────────────────────────────────
 
     async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -205,8 +429,11 @@ def _build_and_run(token: str, chat_id: str):
         text = (
             "🤖 *Sentinel Pro — Commands*\n\n"
             "`/scan crypto`       Engine A scan by class\n"
+            "`/enginec forex`      Engine C consensus scan\n"
+            "`/scalp BTC/USDT`     Engine D scalp scan\n"
             "`/signal ETH/USDT`   Analyse a single pair\n"
-            "`/positions`         Open positions + P&L\n"
+            "`/positions winning` Open trades + P&L\n"
+            "`/trade ETH/USDT`     One open trade card\n"
             "`/close ETH/USDT`    Close a position\n"
             "`/status`            System health\n"
             "`/forensics`         Trust/degradation summary\n"
@@ -303,52 +530,70 @@ def _build_and_run(token: str, chat_id: str):
             await update.message.reply_text("⚠️ Athena offline — check server", parse_mode="Markdown")
 
     # ── /positions ────────────────────────────────────────────────────────────
-
     async def cmd_positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not _guard(update):
             return
+        mode = (context.args[0].lower() if context.args else "all").strip()
+        valid_modes = (
+            "all", "win", "wins", "winning", "green",
+            "loss", "losses", "losing", "red",
+            "flat", "breakeven", "be",
+        )
+        if mode not in valid_modes:
+            await update.message.reply_text(
+                "Usage: `/positions [all|winning|losing|flat]`",
+                parse_mode="Markdown",
+            )
+            return
         try:
-            mt5_resp = await _run_in_thread(lambda: _safe_json(req.get(f"{_BASE}/api/mt5-positions", timeout=_TIMEOUT_FAST)))
-            bybit_resp = await _run_in_thread(lambda: _safe_json(req.get(f"{_BASE}/api/bybit-status", timeout=_TIMEOUT_FAST)))
-
-            mt5_pos = mt5_resp.get("positions", [])
-            bybit_pos = bybit_resp.get("positions", [])
-            all_pos = [(p, "mt5") for p in mt5_pos] + [(p, "bybit") for p in bybit_pos]
-
-            if not all_pos:
-                await update.message.reply_text("📭 No open positions")
+            all_pos, meta = await _run_in_thread(lambda: _fetch_open_positions_sync(req))
+            filtered = _filter_positions(all_pos, mode)
+            if not filtered:
+                suffix = "" if mode == "all" else f" matching `{mode}`"
+                await update.message.reply_text(f"No open positions{suffix}", parse_mode="Markdown")
                 return
 
-            total_pnl = sum(float(p.get("profit", 0) or 0) for p, _ in all_pos)
-            pnl_emoji = "📈" if total_pnl >= 0 else "📉"
+            summary = _summarize_positions(all_pos)
+            filtered_summary = _summarize_positions(filtered)
+            source_note = ""
+            if meta.get("source") == "broker-fallback":
+                source_note = "\nTimed-trade enrichment unavailable; showing broker fallback."
             await update.message.reply_text(
-                f"{pnl_emoji} *{len(all_pos)} open position(s) | Total P&L: `{'+' if total_pnl >= 0 else ''}{total_pnl:.2f}`*",
-                parse_mode="Markdown"
+                "*Open Trades*\n"
+                f"Showing: `{filtered_summary['count']}` / `{summary['count']}`\n"
+                f"Winning: `{summary['winning']}` | Losing: `{summary['losing']}` | Flat: `{summary['flat']}`\n"
+                f"Total P&L: `{_fmt_money(summary['total'])}`{source_note}",
+                parse_mode="Markdown",
             )
 
-            for pos, exchange in all_pos:
-                card = _fmt_position_card(pos)
-                pair = pos.get("pair", "?")
-                direction = pos.get("direction", "")
-                vol = pos.get("volume", pos.get("contracts", 0))
-                ticket = pos.get("ticket", "")
+            for pos, exchange in filtered:
+                await _send_position_card(update.effective_chat.id, pos, exchange, context)
+        except Exception as e:
+            await update.message.reply_text(
+                f"Athena open-trade view unavailable: `{str(e)[:120]}`",
+                parse_mode="Markdown",
+            )
 
-                close_key = f"close_{exchange}_{pair}_{direction}_{vol}_{ticket}"
-                _pending_confirmations[close_key] = {
-                    "exchange": exchange, "pair": pair,
-                    "direction": direction, "volume": vol, "ticket": ticket
-                }
-
-                keyboard = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("📉 Close Position", callback_data=f"close_confirm:{close_key}"),
-                    InlineKeyboardButton("📊 Decay", callback_data=f"decay_pair:{pair}"),
-                ]])
-                await update.message.reply_text(card, parse_mode="Markdown", reply_markup=keyboard)
-
-        except Exception:
-            await update.message.reply_text("⚠️ Athena offline — check server")
-
-    # ── /scan ─────────────────────────────────────────────────────────────────
+    async def cmd_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not _guard(update):
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: `/trade ETH/USDT`", parse_mode="Markdown")
+            return
+        pair = _resolve_pair(" ".join(context.args))
+        try:
+            all_pos, _meta = await _run_in_thread(lambda: _fetch_open_positions_sync(req))
+            matches = [(p, ex) for p, ex in all_pos if _position_matches_pair(p, pair)]
+            if not matches:
+                await update.message.reply_text(f"No open trade found for *{pair}*", parse_mode="Markdown")
+                return
+            for pos, exchange in matches:
+                await _send_position_card(update.effective_chat.id, pos, exchange, context)
+        except Exception as e:
+            await update.message.reply_text(
+                f"Athena open-trade view unavailable: `{str(e)[:120]}`",
+                parse_mode="Markdown",
+            )
 
     async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not _guard(update):
@@ -404,6 +649,86 @@ def _build_and_run(token: str, chat_id: str):
 
     # ── /signal ───────────────────────────────────────────────────────────────
 
+    async def cmd_enginec(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not _guard(update):
+            return
+        args = context.args
+        asset_class = args[0].lower() if args else ""
+        style = args[1].lower() if len(args) > 1 else "auto"
+        valid = {"crypto", "forex", "stock", "stocks", "commodity", "index"}
+        if asset_class not in valid:
+            await update.message.reply_text(
+                "Usage: `/enginec crypto|forex|commodity|stock|index [auto|scalp|intraday|swing]`",
+                parse_mode="Markdown",
+            )
+            return
+        if asset_class == "stocks":
+            asset_class = "stock"
+
+        msg = await update.message.reply_text(
+            f"Scanning Engine C *{asset_class}*...", parse_mode="Markdown"
+        )
+        try:
+            resp = await _run_in_thread(lambda: _safe_json(req.post(
+                f"{_BASE}/api/engine-c-scan",
+                json={"assetClass": asset_class, "style": style},
+                timeout=_TIMEOUT_SCAN,
+            )))
+            if resp.get("error"):
+                await msg.edit_text(f"Engine C error: {resp['error']}")
+                return
+            buckets = ["aligned", "b_only", "a_only", "conflict", "skipped"]
+            counts = {name: len(resp.get(name, []) or []) for name in buckets}
+            await msg.edit_text(
+                "*Engine C Scan*\n"
+                f"Aligned: `{counts['aligned']}` | B-only: `{counts['b_only']}` | A-only: `{counts['a_only']}`\n"
+                f"Conflict: `{counts['conflict']}` | Skipped: `{counts['skipped']}`",
+                parse_mode="Markdown",
+            )
+            top = (resp.get("aligned") or resp.get("b_only") or resp.get("a_only") or [])[:3]
+            for sig in top:
+                await update.message.reply_text(_fmt_engine_c_card(sig), parse_mode="Markdown")
+        except Exception:
+            await msg.edit_text("Athena offline - check server")
+
+    async def cmd_scalp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not _guard(update):
+            return
+        requested = "all"
+        label = "all pairs"
+        if context.args:
+            pair = _resolve_pair(" ".join(context.args))
+            requested = [pair]
+            label = pair
+
+        msg = await update.message.reply_text(f"Scanning scalp setups for *{label}*...", parse_mode="Markdown")
+        try:
+            resp = await _run_in_thread(lambda: _safe_json(req.post(
+                f"{_BASE}/api/scalp-scan",
+                json={"pairs": requested},
+                timeout=_TIMEOUT_SCAN,
+            )))
+            if resp.get("error"):
+                await msg.edit_text(f"Scalp scan error: {resp['error']}")
+                return
+            signals = resp.get("signals", []) or []
+            skipped = resp.get("skipped", []) or []
+            scanned = resp.get("scanned", resp.get("pair_count", 0))
+            await msg.edit_text(
+                "*Scalp Scan*\n"
+                f"Signals: `{len(signals)}` | Skipped: `{len(skipped)}` | Scanned: `{scanned}`\n"
+                f"Session: `{resp.get('session', '?')}`",
+                parse_mode="Markdown",
+            )
+            if not signals and skipped and requested != "all":
+                reason = skipped[0].get("reason", "?") if isinstance(skipped[0], dict) else str(skipped[0])
+                await update.message.reply_text(f"No scalp setup for *{label}*: `{reason}`", parse_mode="Markdown")
+                return
+            for sig in signals[:3]:
+                await update.message.reply_text(_fmt_scalp_card(sig), parse_mode="Markdown")
+        except Exception:
+            await msg.edit_text("Athena offline - check server")
+
     async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not _guard(update):
             return
@@ -418,8 +743,8 @@ def _build_and_run(token: str, chat_id: str):
 
         try:
             resp = await _run_in_thread(lambda: _safe_json(req.post(
-                f"{_BASE}/api/scan",
-                json={"style": "auto"},
+                f"{_BASE}/api/pair-scan",
+                json={"symbol": pair, "style": "auto"},
                 timeout=_TIMEOUT_SCAN,
             )))
 
@@ -427,16 +752,10 @@ def _build_and_run(token: str, chat_id: str):
                 await msg.edit_text(f"❌ Error: {resp['error']}")
                 return
 
-            all_sigs = resp.get("tradeSignals", []) + resp.get("watchlist", [])
-
-            def _sig_disp(s):
-                return (s.get("pair") or s.get("display") or "").upper()
-
-            want = (pair or "").upper()
-            match = next((s for s in all_sigs if _sig_disp(s) == want), None)
+            match = resp.get("signal")
 
             if not match:
-                await msg.edit_text(f"⚠️ No signal found for *{pair}* in this scan cycle.", parse_mode="Markdown")
+                await msg.edit_text(f"Signal unavailable for *{pair}*.", parse_mode="Markdown")
                 return
 
             await msg.delete()
@@ -823,6 +1142,70 @@ def _build_and_run(token: str, chat_id: str):
             return
 
         # ── Close confirm ──
+        if action == "trade_refresh":
+            conf = _pending_confirmations.get(key)
+            if not conf:
+                await query.message.reply_text("Position data expired - run /positions again")
+                return
+            try:
+                all_pos, _meta = await _run_in_thread(lambda: _fetch_open_positions_sync(req))
+                match = next(
+                    (
+                        (p, ex)
+                        for p, ex in all_pos
+                        if ex == conf["exchange"]
+                        and _position_matches_pair(p, conf["pair"])
+                        and str(p.get("direction") or "") == str(conf["direction"] or "")
+                    ),
+                    None,
+                )
+                if not match:
+                    await query.message.reply_text(f"No open trade found for *{conf['pair']}*", parse_mode="Markdown")
+                    return
+                pos, exchange = match
+                await query.message.reply_text(_fmt_position_detail_card(pos, exchange), parse_mode="Markdown")
+            except Exception:
+                await query.message.reply_text("Athena offline - check server")
+            return
+
+        if action == "trade_analyze":
+            pair_name = key
+            await query.message.reply_text(f"Analyzing *{pair_name}*...", parse_mode="Markdown")
+            try:
+                resp = await _run_in_thread(lambda: _safe_json(req.post(
+                    f"{_BASE}/api/pair-scan",
+                    json={"symbol": pair_name, "style": "auto"},
+                    timeout=_TIMEOUT_SCAN,
+                )))
+                if resp.get("error"):
+                    await query.message.reply_text(f"Pair scan failed: {resp['error']}")
+                    return
+                sig = resp.get("signal")
+                if not sig:
+                    await query.message.reply_text(f"Signal unavailable for *{pair_name}*", parse_mode="Markdown")
+                    return
+                await _send_signal_card(query.message.chat.id, sig, context)
+            except Exception:
+                await query.message.reply_text("Athena offline - check server")
+            return
+
+        if action == "close_request":
+            conf = _pending_confirmations.get(key)
+            if not conf:
+                await query.edit_message_reply_markup(reply_markup=None)
+                await query.message.reply_text("Position data expired")
+                return
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("Confirm Close", callback_data=f"close_confirm:{key}"),
+                InlineKeyboardButton("Cancel", callback_data=f"close_cancel:{key}"),
+            ]])
+            await query.message.reply_text(
+                f"Confirm close *{conf['pair']} {conf['direction']}*?",
+                parse_mode="Markdown",
+                reply_markup=keyboard,
+            )
+            return
+
         if action == "close_confirm":
             conf = _pending_confirmations.get(key)
             if not conf:
@@ -868,9 +1251,14 @@ def _build_and_run(token: str, chat_id: str):
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("start", cmd_help))
     app.add_handler(CommandHandler("scan", cmd_scan))
+    app.add_handler(CommandHandler("enginec", cmd_enginec))
+    app.add_handler(CommandHandler("scalp", cmd_scalp))
     app.add_handler(CommandHandler("signal", cmd_signal))
     app.add_handler(CommandHandler("positions", cmd_positions))
     app.add_handler(CommandHandler("pos", cmd_positions))
+    app.add_handler(CommandHandler("trades", cmd_positions))
+    app.add_handler(CommandHandler("open", cmd_positions))
+    app.add_handler(CommandHandler("trade", cmd_trade))
     app.add_handler(CommandHandler("close", cmd_close))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("forensics", cmd_forensics))
