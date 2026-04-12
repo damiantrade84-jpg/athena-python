@@ -546,13 +546,23 @@ class AutoTrader:
             open_positions = self._get_cached_open_positions(
                 sig.get("type", ""), positions_cache
             )
-            if open_positions is not None and any(
-                _signal_matches_position(sig, pos) for pos in open_positions
-            ):
-                log.info(
-                    f"[AUTO] {sig.get('pair')} skipped: already holding open position"
-                )
-                continue
+            if open_positions is not None:
+                # Block same-pair duplicates
+                if any(_signal_matches_position(sig, pos) for pos in open_positions):
+                    log.info(
+                        f"[AUTO] {sig.get('pair')} skipped: already holding open position"
+                    )
+                    continue
+
+                # Block when venue is already at max positions — avoids wasting the full
+                # execution path (AI debate, sentiment, risk_check) on a guaranteed rejection
+                _max_open = int(cfg.get("MAX_OPEN_POSITIONS", 5))
+                if len(open_positions) >= _max_open:
+                    log.info(
+                        f"[AUTO] {sig.get('pair')} skipped: {len(open_positions)} open "
+                        f"positions >= MAX_OPEN_POSITIONS {_max_open}"
+                    )
+                    continue
 
             success = self._execute_signal(sig, cfg)
 
@@ -759,6 +769,21 @@ class AutoTrader:
                 log.debug("[AUTO] signal_debate not available — skipping")
             except Exception as _debate_err:
                 log.warning(f"[AUTO] Debate failed (proceeding): {_debate_err}")
+
+        # ── SL distance pre-check (mirrors risk_engine MAX_SL_PCT gate) ──────
+        # Reject here — before AI debate, sentiment, and event-risk calls —
+        # so over-wide stops on volatile pairs (XAG/USD, Sugar) don't waste
+        # the full execution pipeline only to fail at risk_check.
+        _entry = float(signal.get("price") or signal.get("livePrice") or 0)
+        _sl = float(signal.get("sl") or 0)
+        if _entry and _sl and _entry != _sl:
+            _sl_pct = abs(_entry - _sl) / abs(_entry)
+            _max_sl_pct = float((CONFIG.get("MAX_SL_PCT") or {}).get(asset_type, 0.05))
+            if _sl_pct > _max_sl_pct:
+                return (
+                    False,
+                    f"SL distance {_sl_pct:.1%} exceeds MAX_SL_PCT {_max_sl_pct:.1%} for {asset_type}",
+                )
 
         return True, ""
 
