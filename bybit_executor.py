@@ -1093,15 +1093,45 @@ def bybit_move_sl_to_breakeven(
     """Move stop-loss to breakeven (entry price) for an open position.
 
     Called by the outcome monitor when a position reaches 1R profit.
-    Cancels existing SL orders and places a new one at entry price.
+    Validates the SL against the current mark price before submission —
+    a race condition can cause mark price to move back past entry between
+    the 1R check and the API call, which Bybit rejects (retCode 10001).
     """
     exchange = _get_exchange()
     if not exchange:
         return {"success": False, "error": "BYBIT_NOT_CONNECTED"}
     try:
+        # Validate SL against live mark price to guard against the race where
+        # price moves back past entry between the 1R check and the API call.
+        # Bybit rule: SHORT SL must be > mark_price; LONG SL must be < mark_price.
+        try:
+            ticker = exchange.fetch_ticker(ccxt_symbol)
+            mark_price = float(
+                ticker.get("markPrice") or ticker.get("last") or 0
+            )
+        except Exception as tick_err:
+            log.debug(f"[BYBIT] BREAKEVEN mark price fetch failed for {ccxt_symbol}: {tick_err}")
+            mark_price = 0.0
+
+        is_short = direction.upper() == "SHORT"
+        if mark_price > 0:
+            if is_short and entry_price <= mark_price:
+                log.warning(
+                    f"[BYBIT] BREAKEVEN skipped for {ccxt_symbol} SHORT: "
+                    f"entry {entry_price} <= mark {mark_price} — market moved back against position"
+                )
+                return {"success": False, "error": "BREAKEVEN_INVALID_MARK_PRICE", "skipped": True}
+            if not is_short and entry_price >= mark_price:
+                log.warning(
+                    f"[BYBIT] BREAKEVEN skipped for {ccxt_symbol} LONG: "
+                    f"entry {entry_price} >= mark {mark_price} — market moved back against position"
+                )
+                return {"success": False, "error": "BREAKEVEN_INVALID_MARK_PRICE", "skipped": True}
+
         _set_trading_stop(exchange, ccxt_symbol, sl=entry_price)
         log.info(
-            f"[BYBIT] BREAKEVEN SL placed: {ccxt_symbol} @ {entry_price} (was profitable at 1R)"
+            f"[BYBIT] BREAKEVEN SL placed: {ccxt_symbol} {direction} @ {entry_price} "
+            f"(mark={mark_price:.4f})"
         )
         return {"success": True, "newSl": entry_price}
     except Exception as e:
