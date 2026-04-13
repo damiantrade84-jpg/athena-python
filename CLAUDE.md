@@ -586,6 +586,27 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 
 ## DECISIONS
 
+## 2026-04-13: Engine B forex intraday D1 override removed
+
+**Problem:** All Engine B scan paths (standalone `/api/scan-naked`, Engine C `/api/engine-c-scan`, `scanner.py`, and the `simulate_trade` backtest wrapper) contained logic that silently upgraded forex intraday style to swing when `ENGINE_B_FOREX_STRUCTURE_TF = "D1"`. This meant:
+- An explicit **intraday** scan on any forex pair used **swing** thresholds: `min_score=5.0` (needs 5/5 checklist), `zone_tf=D1`, `entry_tf=H4`
+- Intraday should use: `min_score=4.0` (needs 4/5), `zone_tf=H4`, `entry_tf=H1`
+- Result: forex pairs that would pass intraday gates were rejected and surfaced as WATCHLIST in Engine C
+
+**Fix:** Removed the intraday→swing upgrade blocks from:
+- `execution.py` (Engine C scan)
+- `athena.py` `/api/scan-naked` and `/api/naked-analysis`
+- `scanner.py` (Engine A+B combined scan)
+- `market_structure.py` `simulate_trade` — entry candle selection now uses `style_profile["entry_tf"]` instead of the D1 check
+
+**`ENGINE_B_FOREX_STRUCTURE_TF`:** The config key still exists and still controls `analyze_structure` internal logic (D1 swing detection, BOS/CHoCH analysis) — that is correct and untouched. The only thing removed is the code that **upgraded the style profile thresholds** based on this config.
+
+**`backtest_runner.py`:** Retains the upgrade but only for `requested_style in ("auto", "naked")` — explicit intraday backtests are unaffected.
+
+**Intraday forex Engine B TFs (current):** `zone_tf=H4`, `entry_tf=H1`, `atr_tf=H4`, `min_score=4.0`.
+
+---
+
 ## 2026-04-05: Engine A threshold recalibration
 
 **Root cause:** `MIN_CONFLUENCE_CLASS` gates for stocks (1.55), ETFs (1.45), commodities (1.40), and indices (1.35) were above the scoring formula ceiling.

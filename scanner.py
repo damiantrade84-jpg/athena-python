@@ -489,11 +489,6 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     resolved_style_b, style_profile_b = r.naked_scan_style_profile(
                         _pair_style, score_group=_pair_score_group
                     )
-                    _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
-                    if ptype == "forex" and _forex_struct_tf == "D1" and resolved_style_b == "intraday":
-                        resolved_style_b, style_profile_b = r.naked_scan_style_profile(
-                            "swing", score_group=_pair_score_group
-                        )
 
                     d1 = raw_candles.get("D1")
                     h4 = raw_candles.get("H4")

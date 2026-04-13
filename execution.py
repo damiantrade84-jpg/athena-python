@@ -530,11 +530,6 @@ def api_engine_c_scan():
             resolved_style_b, style_profile_b = _r.naked_scan_style_profile(
                 requested_style, score_group=_pair_score_group
             )
-            _forex_struct_tf = _r.CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
-            if ptype == "forex" and _forex_struct_tf == "D1" and resolved_style_b == "intraday":
-                resolved_style_b, style_profile_b = _r.naked_scan_style_profile(
-                    "swing", score_group=_pair_score_group
-                )
 
             _zone_tf = str(style_profile_b.get("zone_tf", "H4")).upper()
             _entry_tf = str(style_profile_b.get("entry_tf", "H1")).upper()

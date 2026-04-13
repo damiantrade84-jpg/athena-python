@@ -1806,9 +1806,9 @@ class NakedEngine:
             d1_snap=d1_snap,
             h4_snap=h4_snap,
         )
-        # For forex D1 structure, use H4 as entry candles instead of H1
-        _forex_struct_tf = config.CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
-        _entry_candles = h4_candles if (asset_type == "forex" and _forex_struct_tf == "D1") else h1_candles
+        # Use entry_tf from style_profile to select entry candles (H4 for swing, H1 for intraday/scalp)
+        _entry_tf = str((style_profile or {}).get("entry_tf", "H1")).upper() if style_profile else "H1"
+        _entry_candles = h4_candles if _entry_tf == "H4" else h1_candles
         confidence = self.calculate_confidence(
             result,
             current_price,

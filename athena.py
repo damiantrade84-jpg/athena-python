@@ -1237,6 +1237,7 @@ _VENDOR_SYMBOL_OVERRIDES = {
     "Brent Oil": {"yfinance": "BZ=F", "eodhd": "BZ", "fallback": "yfinance"},
     "Nat Gas": {"yfinance": "NG=F", "eodhd": "NG", "fallback": "yfinance"},
     "Copper": {"yfinance": "HG=F", "eodhd": "HG", "fallback": "yfinance"},
+    "Coffee": {"yfinance": "KC=F", "fallback": "yfinance"},
     # Indices: EODHD plain symbol for D1; eodhd_intraday uses .INDX suffix (confirmed working)
     "UK100": {
         "yfinance": "^FTSE",
@@ -5157,13 +5158,8 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             _requested_style_naked, score_group=_pair_score_group
         )
         _pair_type = pair_obj.get("type", "")
-        _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
-        if _pair_type == "forex" and _forex_struct_tf == "D1" and resolved_style == "intraday" and _requested_style_naked in ("auto", "naked"):
-            resolved_style, style_profile = _naked_scan_style_profile(
-                "swing", score_group=_pair_score_group
-            )
-        # Determine correct entry candles based on forex structure timeframe
-        _entry_candles = h4 if (_pair_type == "forex" and _forex_struct_tf == "D1") else h1
+        # Determine correct entry candles based on style
+        _entry_candles = h1 if resolved_style in ("scalp", "intraday") else h4
         conf = engine.calculate_confidence(
             res,
             current_price,
@@ -5423,7 +5419,6 @@ def api_scan_naked():
     d = request.get_json(silent=True) or {}
     asset_class = str(d.get("assetClass") or "").strip().lower()
     requested_style = d.get("style", "auto")
-    _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
 
     candidate_pairs = []
     for p in ALL_PAIRS:
@@ -5450,14 +5445,6 @@ def api_scan_naked():
             resolved_style, style_profile = _naked_scan_style_profile(
                 requested_style, score_group=_pair_score_group
             )
-            if (
-                pair.get("type", "") == "forex"
-                and _forex_struct_tf == "D1"
-                and resolved_style == "intraday"
-            ):
-                resolved_style, style_profile = _naked_scan_style_profile(
-                    "swing", score_group=_pair_score_group
-                )
 
             # Determine which timeframes this pair/style needs
             _zone_tf = style_profile.get("zone_tf", "H4")
