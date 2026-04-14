@@ -14,7 +14,7 @@ alwaysApply: true
 - **Engine A live:** `MIN_CONFLUENCE_CLASS`, `MIN_CONFLUENCE_GROUP`, `MIN_CONFLUENCE_CLASS.forex`, `PAIR_PROFILES.min_confluence`, `AUTO_TRADE_MIN_SCORE`, `SCAN_QUANTILE_*`, confluence logic in `scoring.py` / `factor_scoring.py` / `forex_scoring.py`, `analyze_pair` tiering.
 - **Engine A backtest:** `BT_MIN`, `PAIR_PROFILES.eval_threshold`, `get_backtest_min_score_threshold`, backtest score gates in `backtest_runner.py`.
 - **Engine B live + backtest:** `NAKED_ENGINE.style_profiles` (`min_score`, `min_rr`), `ENGINE_B_REGIME_MULTIPLIERS` (score scaling — currently neutralized to 1.0), `zone_multipliers` (structural width), naked checklist gates in `market_structure.py`.
-- **Engine D (Scalp Lab):** `SCALP_ENGINE` in `config.yaml` (`MIN_RR`, `MAX_SPREAD_PIPS`, `ZONE_MIN_CONDITIONS`, `WITH_TREND_ONLY`, `BIAS_TIMEFRAME`, candle limits, `AI_GRADING` / `MIN_GRADE_AUTO_EXECUTE`, optional `SCALP_PAIRS`) and core pass/fail logic in `scalp_engine.py` (session filter, zone detection, M5 trigger, momentum, level math).
+- **Engine D (Scalp Lab):** `SCALP_ENGINE` in `config.yaml` (`MIN_RR`, `MAX_SPREAD_PIPS`, `WITH_TREND_ONLY`, `BIAS_TIMEFRAME`, `M15_CANDLES`, `M5_CANDLES`, `H1_CANDLES`, `MIN_GRADE`, `BT_ENABLED`, `BT_WALK_BARS`, `BT_MAX_CONCURRENT`, `BT_SLIPPAGE_TICKS`, optional `SCALP_PAIRS`) and core pass/fail logic in `scalp_engine.py` (session filter, spread filter, VP build, absorption/CVD/AAA, VWAP, setup classification, HTF bias gate, level math, `ai_quality_grade`).
 
 Cosmetic UI copy is fine. **Do not "tune", "align", or "simplify" thresholds** in passing.
 
@@ -37,7 +37,7 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 - **Engine A** — Multi-Factor Quantitative Scoring (MFQS): z-score factor engine + forex rule-based scorer
 - **Engine B** — Naked price-action (market structure, zones, BOS/CHoCH, FVG, swing sequence)
 - **Engine C** — Consensus layer: blends A + B + AI Vision confirmation into a conviction-tiered signal
-- **Engine D (Scalp Lab)** — Standalone M15 structure + M5 tactical scalping (`scalp_engine.py`); not part of A/B/C consensus. Dashboard **Scalp Lab** panel (`static/index.html`): `POST /api/scalp-scan`, manual `POST /api/scalp-execute`.
+- **Engine D (Scalp Lab)** — Fabio Valentini VP+OrderFlow scalping (`scalp_engine.py`, `volume_profile.py`). Pipeline: Volume Profile (POC/VAH/VAL/LVN) → Absorption/CVD/AAA → VWAP lean → setup classification (Mean Reversion / Trend Continuation) → `ai_quality_grade` (A/B/C/D). Not part of A/B/C consensus. Dashboard **Scalp Lab** panel: `POST /api/scalp-scan`, `POST /api/scalp-execute`. Backtest: `POST /api/backtest-scalp` → **Engine D (Scalp VP)** button in backtest panel.
 
 **Execution:** MT5 for forex/stocks/commodities; Bybit Linear Futures for crypto.
 
@@ -64,7 +64,7 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 | `athena_runtime.py` | `set_runtime`/`rt()` bindings; `executed_signals` dedupe set |
 | `execution.py` | Execution Flask routes (`register_execution_routes`) |
 | `scanner.py` | `run_full_scan` and scan pipeline |
-| `backtest_runner.py` | Engine A/B backtest loops |
+| `backtest_runner.py` | Engine A/B/D backtest loops: `backtest_pair`, `backtest_pair_naked`, `backtest_pair_scalp`, `run_full_backtest` |
 | `data_feeds.py` | HTTP session, EODHD client, funding/OI helpers |
 | `news_sentiment_feed.py` | EODHD news + Claude sentiment; optional scan blend; TTL cache |
 | `scoring.py` | Confluence engine, vote weights, signal classification, pair profiles, `get_min_confluence_threshold` |
@@ -74,12 +74,13 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 | `engine_b_ai.py` | Engine B advisory AI verdict (review only — not a pass/fail gate) |
 | `engine_c.py` | Engine C consensus: `ENGINE_C_AB_WEIGHTS` blend, conviction tiers, SL/TP resolution, Vision modifier |
 | `confidence_engine.py` | 4-component confidence scoring (indicator agreement, TF alignment, regime fit, liquidity) |
-| `indicators.py` | Pure indicator functions (EMA, RSI, MACD, ATR, ADX, BB, Stochastic, Fib, OBV, Squeeze) |
+| `indicators.py` | Pure indicator functions (EMA, RSI, MACD, ATR, ADX, BB, Stochastic, Fib, OBV, Squeeze) + Engine D helpers: `calc_vwap`, `detect_absorption`, `calc_cvd`, `detect_range_contraction` |
 | `regime.py` | Market regime detection: TRENDING / DEVELOPING / RANGING / DEAD_RANGING |
 | `risk_engine.py` | Kill switch, drawdown, position sizing, portfolio heat |
 | `config.py` | Hardcoded defaults + YAML loader + `_json_safe()` |
 | `config.yaml` | All tunable thresholds — edit here, not `config.py` |
-| `scalp_engine.py` | Engine D: M15/M5 structural scalping — MT5 data for non-crypto, `fetch_candles`/Binance path for crypto; signals set `mt5_symbol=None` on crypto |
+| `scalp_engine.py` | Engine D: Fabio Valentini VP+OrderFlow scalping. Functions: `run_scalp_scan`, `get_scalp_pairs`, `_build_volume_profile`, `_classify_market_state`, `_locate_price_vs_vp`, `_check_absorption`, `_check_cvd`, `_check_aaa_sequence`, `_check_vwap_lean`, `_classify_setup`, `calculate_scalp_levels`, `ai_quality_grade`. MT5 data for non-crypto; Binance/`fetch_candles` for crypto. |
+| `volume_profile.py` | Fixed-range Volume Profile computation: POC, VAH, VAL, LVN levels, session splitting. Used by `scalp_engine.py`. |
 | `ai_schemas.py` | Pydantic schemas for AI JSON output (`EngineAResponse`, `EngineBResponse`, `StyleRating`) |
 | `mt5_executor.py` | MetaTrader 5 execution |
 | `bybit_executor.py` | Bybit Linear (USDT-M) Futures execution |
@@ -255,24 +256,50 @@ Dashboard Pair Browser tab (panel-pair-browser)
 ```
 Dashboard Scalp Lab (panel-scalp) → runScalpScan()
   POST /api/scalp-scan
-    └─ get_scalp_pairs()  ← CONFIG SCALP_ENGINE.SCALP_PAIRS or default universe (MT5 lists + crypto USDT perps)
+    └─ get_scalp_pairs()  ← CONFIG SCALP_ENGINE.SCALP_PAIRS or active pairs (MT5 + Binance crypto)
     └─ scalp_engine.run_scalp_scan(pairs)
-         ├─ Session filter (London/NY for MT5; Asia/London/NY windows for crypto)
-         ├─ Spread filter (per MAX_SPREAD_PIPS; skipped for crypto)
-         ├─ M15 zone (≥ ZONE_MIN_CONDITIONS among S/R, sweep, EMA21, etc.)
-         ├─ M5 entry trigger (rejection/engulfing + direction + inside zone)
-         ├─ Momentum confirmation (M5 structure break or strong body)
-         ├─ H1 bias gate when WITH_TREND_ONLY + BIAS_TIMEFRAME
-         ├─ calculate_scalp_levels → SL, TP1 (~MIN_RR), optional TP2 (M15 swing)
-         └─ ai_quality_grade — rule-based 0–100 score, A/B/C/D (no external API)
-    └─ _scalp_ui_signal() per row → JSON for UI
+         ├─ Session filter: is_valid_session() — London/NY for MT5; any window for crypto
+         ├─ Spread filter: check_spread() per MAX_SPREAD_PIPS — skipped for crypto
+         ├─ MT5 candles: mt5_fetch_scalp_candles(M15, M5, bias_tf)
+         │  Crypto candles: _scalp_fetch_candles via fetch_candles/Binance
+         ├─ Pillar 1 — Volume Profile: _build_volume_profile(M15) → POC/VAH/VAL/LVN
+         │    _classify_market_state() → "balance" | "imbalance"
+         │    _locate_price_vs_vp() → location vs levels
+         ├─ Pillar 2 — Aggression (M5 candles):
+         │    _check_absorption() → detected, count, bars (uses indicators.detect_absorption)
+         │    _check_cvd() → direction, cvd_slope (uses indicators.calc_cvd)
+         │    _check_aaa_sequence() → complete (Absorption→Accumulation→Aggression)
+         ├─ Pillar 3 — VWAP: _check_vwap_lean(M15) → lean direction (uses indicators.calc_vwap)
+         ├─ HTF bias: infer_bias_from_ema_stack(bias_tf candles) — EMA 21/50/200 stack
+         ├─ _classify_setup() → direction, setup_type, reasons, valid
+         ├─ HTF bias gate: skip if direction != htf_bias (when WITH_TREND_ONLY)
+         ├─ calculate_scalp_levels() → SL (VP-based), TP1 (MIN_RR), TP2, sl_method, rr
+         └─ ai_quality_grade() → score 0–100, grade A/B/C/D, size_multiplier, reasons
+              Grade gate: skip grade D (MIN_GRADE=C) or C+D (MIN_GRADE=B)
 
-POST /api/scalp-execute  (symbol + optional client signal for direction match)
-  └─ run_scalp_scan([symbol]) — fresh setup required
-  └─ risk_check() → mt5_execute() OR bybit_execute() (crypto)
+Signal dict keys: pair, display, mt5_symbol, direction, price (entry), sl, tp1, tp2, rr1,
+  zone_type (setup_type), zone_conditions, trigger_type, momentum_method,
+  vp_poc, vp_vah, vp_val, vp_lvn_count, market_state,
+  absorption_count, cvd_direction, cvd_slope, aaa_complete,
+  vwap, htf_bias, htf_bias_tf, spread_pips, session,
+  ai_score, ai_grade, ai_reasons, size_multiplier,
+  confluenceScore (=ai_score/100 for risk sizing), engine="SCALP"
+
+POST /api/scalp-execute  (pair + signal)
+  └─ risk_check() → mt5_execute() OR bybit_execute() (crypto when signal.type=="crypto")
+
+POST /api/backtest-scalp  (pair)  ← Engine D backtest
+  └─ backtest_pair_scalp() in backtest_runner.py
+       ├─ Fetches M15 bars (BT_WALK_BARS), walks forward in chunks
+       ├─ Builds VP per window, runs full pipeline per bar
+       ├─ Resolves SL/TP1 hits intrabar (_resolve_barrier_exit)
+       ├─ Saves to backtest_results (engine="scalp_vp", bt_min=min_rr)
+       └─ Returns standard result dict + scalp_analysis breakdown
+            (trigger/setup/grade counts with WR and avg_r per bucket)
+  UI: renderScalpBtSingle() — grade-coloured stats + VP analysis block + trade table
 ```
 
-Signals use `engine: "SCALP"`; `confluenceScore` is derived from the rule-based `ai_score` for risk sizing compatibility.
+UI card fields used: `display||pair`, `market_state`, `zone_type`, `ai_grade`, `ai_score`, `size_multiplier`, `vp_vah`, `vp_poc`, `vp_val`, `aaa_complete`, `absorption_count`, `cvd_direction`, `htf_bias`, `htf_bias_tf`, `session`, `price`, `sl`, `tp1`, `rr1`, `spread_pips`, `sl_method`, `ai_reasons`.
 
 **Execution path:**
 ```
@@ -341,7 +368,7 @@ See **Scalp Lab / Engine D flow** above. Execute path: **`signal.type == "crypto
 | Engine A — forex | `forex_scoring.py` rules-based | 0–2.0 | `MIN_CONFLUENCE_CLASS.forex` (1.0) + `MIN_CONFLUENCE_CLASS.forex` (1.0) |
 | Engine B | `market_structure.py` naked checklist | 0–100 pct | `NAKED_ENGINE.style_profiles.min_score` |
 | Engine C | `engine_c.py` A+B blend | 0–1 conviction | `ENGINE_C_AB_WEIGHTS` |
-| Engine D (Scalp Lab) | `scalp_engine.py` zones + triggers + rule-based `ai_quality_grade` | 0–100 (`ai_score`), letter `ai_grade` | `SCALP_ENGINE` (`MIN_RR`, spread/session/zone gates, `MIN_GRADE_AUTO_EXECUTE`, etc.) |
+| Engine D (Scalp Lab) | `scalp_engine.py` VP+OrderFlow: VP build → absorption/CVD/AAA → VWAP → `_classify_setup` → `ai_quality_grade` | 0–100 (`ai_score`), letter `ai_grade` A/B/C/D, `size_multiplier` (1.0/0.5/0.25) | `SCALP_ENGINE` (`MIN_RR`, `MAX_SPREAD_PIPS`, `MIN_GRADE`, `WITH_TREND_ONLY`, `BIAS_TIMEFRAME`) |
 
 **Two different REGIME_WEIGHTS exist — do not confuse:**
 - `CONFIG["REGIME_WEIGHTS"]` — adjusts **factor group weights** inside Engine A
@@ -495,8 +522,9 @@ Key columns: `ts, pair, score, direction, grade, edge_prob, risk, style, asset_c
 - `/api/open-trades-timed` and `timed_exit_monitor.py` match live positions to audit rows by exact ticket first, then by `pair + direction + entry_price` fallback. This covers split MT5 legs and Bybit positions where the live position identifier does not match the audit ticket 1:1.
 
 ### `backtest_results`
-Columns: `id, run_date, pair, asset_type, engine, trades, win_rate, profit_factor, expectancy, sqn, sharpe, sortino, is_score, oos_score, max_dd_pct, eval_threshold, atr_source, notes`
-- `engine`: `"forex_scoring"` | `"factor_scoring"` | `"naked_engine"`
+Columns: `id, run_date, pair, asset_type, engine, trades, win_rate, profit_factor, expectancy, sqn, sharpe, sortino, is_score, oos_score, max_dd_pct, bt_min, atr_source, notes`
+- `engine`: `"forex_scoring"` | `"factor_scoring"` | `"naked_engine"` | `"scalp_vp"`
+- `bt_min`: the effective minimum threshold used for that run (Engine D stores `min_rr`)
 - Endpoints: `GET /api/backtest-history`, `/api/backtest-history/<pair>`, `/api/backtest-best`
 
 Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and migration list in `_init_audit_db()`.
@@ -542,6 +570,16 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 - Enforces same `min_score`, `passed`, `min_rr` as live scan
 - 2-bar H4 cooldown after exit bar
 - Uses `_engine_b_regime_label()` for zone multipliers
+
+### Engine D (`backtest_pair_scalp`) — `POST /api/backtest-scalp`
+- Walks forward over M15 bars (`BT_WALK_BARS` from config, default 2000)
+- Per bar: builds VP over a rolling lookback window, runs full VP→Absorption/CVD/AAA→VWAP→classify pipeline
+- Grade gate applied (skips D, or C+D if MIN_GRADE=B); HTF bias gate applied
+- Exit: `_resolve_barrier_exit()` intrabar SL/TP1 resolution; `BT_MAX_CONCURRENT` open positions cap
+- Slippage: `BT_SLIPPAGE_TICKS` applied to entry
+- DB: saved as `engine="scalp_vp"`, `bt_min=min_rr`
+- Response includes `scalp_analysis` dict: per-trigger (absorption/cvd_shift/rejection), per-setup (mean_reversion/trend), per-grade (grade_A/B/C) breakdowns with `count`, `wr`, `avg_r`
+- UI: **⚡ Engine D (Scalp VP)** button in backtest panel → `renderScalpBtSingle()` renderer
 
 ---
 
@@ -723,6 +761,49 @@ Current active contract:
 
 ---
 
+## 2026-04-14: Engine D (Scalp Lab) — Full VP+OrderFlow rebuild
+
+**Previous implementation:** Zone-based M15 structure + M5 trigger system (`detect_m15_zone`, `detect_m5_trigger`, `confirm_momentum`). Signal keys: `entry`, `rr`, `zone_desc`, `trigger_desc`, `risk_level`.
+
+**New implementation:** Fabio Valentini Pro Scalper methodology — three-pillar orderflow system.
+
+**New files/modules:**
+- `volume_profile.py` — fixed-range VP computation (POC, VAH, VAL, LVN)
+- `indicators.py` — appended: `calc_vwap`, `detect_absorption`, `calc_cvd`, `detect_range_contraction`
+- `scalp_engine.py` — fully replaced (~1327 lines)
+- `backtest_runner.py` — `backtest_pair_scalp()` inserted before `run_full_backtest`
+- `athena.py` — `/api/backtest-scalp` route added; backtest import updated
+- `tests/test_scalp_engine.py` — fully replaced to match new API
+
+**Pipeline:** VP (M15) → Absorption/CVD/AAA (M5) → VWAP lean (M15) → HTF bias (H1 EMA stack) → `_classify_setup` → `calculate_scalp_levels` → `ai_quality_grade`
+
+**Signal shape change (breaking — UI updated same session):**
+
+| Old key | New key | Notes |
+|---|---|---|
+| `s.entry` | `s.price` | entry price |
+| `s.rr` | `s.rr1` | R:R ratio |
+| `s.symbol` | `s.display \|\| s.pair` | `symbol` is null for MT5 pairs |
+| `s.zone_desc` | `s.zone_type` + `s.zone_conditions` | VP-based |
+| `s.trigger_desc` | `s.trigger_type` + `s.momentum_method` | orderflow-based |
+| `s.risk_level` | `s.ai_grade` (A/B/C/D) | grade drives card border colour |
+| — | `s.vp_poc`, `s.vp_vah`, `s.vp_val` | VP levels displayed on card |
+| — | `s.absorption_count`, `s.cvd_direction`, `s.aaa_complete` | confluence pills |
+| — | `s.size_multiplier` (1.0/0.5/0.25) | position sizing by grade |
+| — | `s.htf_bias`, `s.htf_bias_tf` | H1 EMA stack direction |
+
+**Backtest result column fix:** `eval_threshold` → `bt_min` (column name in `backtest_results` table — was mismatched causing `table backtest_results has no column named eval_threshold` error).
+
+**UI changes (`static/index.html`):**
+- Scalp Lab panel subtitle: "M15 Structure + M5 Tactical" → "VP + OrderFlow (Fabio Valentini)"
+- `buildScalpCard()` fully rewritten for new signal shape
+- `renderScalpSignals()` keyed by `display||pair` not `symbol`
+- Backtest panel: **⚡ Engine D (Scalp VP)** button (purple gradient) added
+- `selectBacktestEngine('D')` → routes to `/api/backtest-scalp`
+- `renderScalpBtSingle()` added — shows VP analysis block (trigger/setup/grade breakdowns), equity curve, trade table with scalp-specific columns
+
+---
+
 ## Hard Rules
 
 1. Never bypass `risk_check()` for any execution
@@ -751,5 +832,5 @@ Current active contract:
 24. Lottery Lab — never bypass `_normalize_game()` before any DB or analytics call
 25. Lottery Lab — `simulate_generator()` incremental counters must never revert to full-history rescan per draw
 26. **Chart Vision vs Lottery AI:** both are xAI-backed via OpenAI-compatible SDK (`api.x.ai`) but use different prompts/routes. `/api/chart-analysis` uses `VISION_MODEL`; `/api/lottery/ai-analysis` uses `LOTTERY_AI_MODEL` or `XAI_MODEL`. Do not mix prompts, parser contracts, or route payload schemas between them.
-27. **Scalp Lab (Engine D)** is a separate pipeline (`scalp_engine.py`, `/api/scalp-scan`, `/api/scalp-execute`) — not produced by `analyze_pair()` and not blended in Engine C unless you explicitly add that integration.
+27. **Scalp Lab (Engine D)** is a separate pipeline (`scalp_engine.py`, `volume_profile.py`, `/api/scalp-scan`, `/api/scalp-execute`, `/api/backtest-scalp`) — not produced by `analyze_pair()` and not blended in Engine C. Signal keys use `price` (not `entry`), `rr1` (not `rr`), `display||pair` (not `symbol` — `symbol` is null for MT5 pairs). UI card and `_scalpSignalsById` must both key by `display||pair||symbol`.
 28. **Vision ENTRY QUALITY section:** Must appear between **KEY RISKS** and **FINAL VERDICT** in all three prompt modes (single/dual/triple). System prompt rules **9–12** (entry positioning, volatility-regime interaction, move maturity, RR reality check) are mandatory — do not remove or weaken.
