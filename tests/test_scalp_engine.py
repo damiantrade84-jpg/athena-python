@@ -17,10 +17,14 @@ from datetime import datetime, timezone
 
 import scalp_engine
 import mt5_executor
+import candle_feeds
+import athena_runtime
 import indicators
 import volume_profile
 from scalp_engine import (
     get_current_sessions,
+    get_grade_sessions_for_mode,
+    get_sessions_for_time,
     infer_bias_from_ema_stack,
     is_valid_session,
     scalp_session_window,
@@ -285,6 +289,40 @@ def test_grade_a_on_full_confluence():
     assert "size_multiplier" in q
 
 
+def test_grade_a_backtest_overlap_uses_component_sessions():
+    vp = {"poc": 1.1030, "vah": 1.1060, "val": 1.0970, "lvn_levels": [], "balance_ratio": 0.6}
+    price_loc = {"location": "at_val", "nearest_level": 1.0970, "distance_pct": 0.0}
+    absorption = {"detected": True, "count": 3}
+    cvd = {"direction": "LONG"}
+    aaa = {"complete": False, "phase": "accumulation"}
+    vwap = {"lean": "LONG", "vwap_value": 1.1000}
+    setup = {"direction": "LONG", "setup_type": "mean_reversion"}
+
+    sessions = get_sessions_for_time("forex", when=datetime(2026, 3, 26, 13, 40, tzinfo=timezone.utc))
+    q = ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup,
+                         sessions, 0.0, "LONG")
+
+    assert sessions == ["london", "new_york"]
+    assert q["grade"] == "A"
+    assert q["score"] >= 80
+
+
+def test_grade_a_on_two_bar_absorption_full_alignment():
+    vp = {"poc": 1.1030, "vah": 1.1060, "val": 1.0970, "lvn_levels": [], "balance_ratio": 0.6}
+    price_loc = {"location": "at_vah", "nearest_level": 1.1060, "distance_pct": 0.0}
+    absorption = {"detected": True, "count": 2}
+    cvd = {"direction": "SHORT"}
+    aaa = {"complete": False, "phase": "accumulation"}
+    vwap = {"lean": "SHORT", "vwap_value": 1.1000}
+    setup = {"direction": "SHORT", "setup_type": "mean_reversion"}
+
+    q = ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup,
+                         ["london", "new_york"], 0.0, "SHORT")
+
+    assert q["grade"] == "A"
+    assert q["score"] >= 80
+
+
 def test_grade_d_on_weak_setup():
     vp = {"poc": 1.1030, "vah": 1.1060, "val": 1.0970, "lvn_levels": [], "balance_ratio": 0.2}
     price_loc = {"location": "inside_va", "nearest_level": 1.1030, "distance_pct": 0.5}
@@ -443,7 +481,7 @@ def test_scalp_session_window_blocks_ny_open_cooldown(monkeypatch):
     )
     allowed, reason = scalp_session_window(
         "forex",
-        when=datetime(2026, 3, 26, 13, 10, tzinfo=timezone.utc),
+        when=datetime(2026, 3, 26, 13, 40, tzinfo=timezone.utc),  # 09:40 NY (EDT)
     )
     assert allowed is False
     assert reason == "NY_OPEN_COOLDOWN"
@@ -462,10 +500,131 @@ def test_scalp_session_window_allows_after_ny_open_cooldown(monkeypatch):
     )
     allowed, reason = scalp_session_window(
         "forex",
-        when=datetime(2026, 3, 26, 13, 31, tzinfo=timezone.utc),
+        when=datetime(2026, 3, 26, 14, 1, tzinfo=timezone.utc),  # 10:01 NY (EDT)
     )
     assert allowed is True
     assert reason == "new_york"
+
+
+def test_scalp_session_window_new_york_dst_winter_vs_summer(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "SESSION_FILTER": True,
+            "SESSION_MODE": "new_york",
+            "NY_OPEN_SKIP_MINUTES": 0,
+        },
+    )
+    # Winter (EST): 08:00 local == 13:00 UTC
+    allowed_winter, reason_winter = scalp_session_window(
+        "forex",
+        when=datetime(2026, 1, 15, 13, 0, tzinfo=timezone.utc),
+    )
+    # Summer (EDT): 08:00 local == 12:00 UTC
+    allowed_summer, reason_summer = scalp_session_window(
+        "forex",
+        when=datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc),
+    )
+    assert allowed_winter is True and reason_winter == "new_york"
+    assert allowed_summer is True and reason_summer == "new_york"
+
+
+def test_scalp_session_window_london_ny_dst_summer_boundary(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "SESSION_FILTER": True,
+            "SESSION_MODE": "london_ny",
+        },
+    )
+    # During summer, London session starts 07:00 BST => 06:00 UTC.
+    allowed, reason = scalp_session_window(
+        "forex",
+        when=datetime(2026, 7, 15, 6, 5, tzinfo=timezone.utc),
+    )
+    assert allowed is True
+    assert reason == "london_ny"
+
+
+def test_scalp_session_window_london_ny_blocks_ny_open_caution(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "SESSION_FILTER": True,
+            "SESSION_MODE": "london_ny",
+            "NY_OPEN_SKIP_MINUTES": 30,
+        },
+    )
+    allowed, reason = scalp_session_window(
+        "forex",
+        when=datetime(2026, 3, 26, 13, 40, tzinfo=timezone.utc),  # 09:40 NY (EDT)
+    )
+    assert allowed is False
+    assert reason == "NY_OPEN_COOLDOWN"
+
+
+def test_scalp_session_window_london_ny_allows_after_ny_open_caution(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "SESSION_FILTER": True,
+            "SESSION_MODE": "london_ny",
+            "NY_OPEN_SKIP_MINUTES": 30,
+        },
+    )
+    allowed, reason = scalp_session_window(
+        "forex",
+        when=datetime(2026, 3, 26, 14, 5, tzinfo=timezone.utc),  # 10:05 NY (EDT)
+    )
+    assert allowed is True
+    assert reason == "london_ny"
+
+
+def test_scalp_session_window_backtest_all_mode_overrides_live_session(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "SESSION_FILTER": True,
+            "SESSION_MODE": "london_ny",
+            "BT_SESSION_MODE": "all",
+        },
+    )
+
+    when = datetime(2026, 3, 26, 23, 0, tzinfo=timezone.utc)
+    live_allowed, live_reason = scalp_session_window("forex", when=when)
+    bt_allowed, bt_reason = scalp_session_window("forex", when=when, backtest=True)
+
+    assert live_allowed is False
+    assert live_reason == "off_hours"
+    assert bt_allowed is True
+    assert bt_reason == "all"
+
+
+def test_grade_sessions_all_mode_keeps_grade_neutral_to_clock(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "SESSION_MODE": "all",
+            "BT_SESSION_MODE": "all",
+        },
+    )
+
+    when = datetime(2026, 3, 26, 23, 0, tzinfo=timezone.utc)
+
+    assert get_grade_sessions_for_mode("forex", when=when) == ["london", "new_york"]
+    assert get_grade_sessions_for_mode("forex", when=when, backtest=True) == ["london", "new_york"]
 
 
 def test_check_spread_rejects_wide_spread():
@@ -485,9 +644,13 @@ def test_check_spread_passes_crypto():
 
 def test_guess_asset_type():
     assert _guess_asset_type("EUR/USD") == "forex"
+    assert _guess_asset_type("USD/MXN") == "forex"
     assert _guess_asset_type("BTC/USDT") == "crypto"
     assert _guess_asset_type("XAU/USD") == "commodity"
+    assert _guess_asset_type("Cocoa") == "commodity"
     assert _guess_asset_type("Nasdaq") == "index"
+    assert _guess_asset_type("NASDAQ-100") == "index"
+    assert _guess_asset_type("USDX") == "index"
     assert _guess_asset_type("AAPL") == "stock"
 
 
@@ -507,6 +670,24 @@ def test_get_scalp_pairs_config_override(monkeypatch):
     monkeypatch.setitem(scalp_engine.CONFIG, "SCALP_ENGINE",
         {**scalp_engine.CONFIG.get("SCALP_ENGINE", {}), "SCALP_PAIRS": ["BTC/USDT", "ETH/USDT"]})
     assert get_scalp_pairs() == ["BTC/USDT", "ETH/USDT"]
+
+
+def test_get_scalp_pairs_preserves_active_pair_metadata_for_type_resolution():
+    pairs = [
+        {"display": "Cocoa", "symbol": "Cocoa", "type": "commodity", "source": "mt5", "enabled": True},
+        {"display": "NASDAQ-100", "symbol": "NAS100", "type": "index", "source": "mt5", "enabled": True},
+        {"display": "USD/ZAR", "symbol": "USDZAR", "type": "forex", "source": "mt5", "enabled": True},
+        {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto", "source": "binance", "enabled": True},
+        {"display": "Naspers", "symbol": "NPN.JO", "type": "stock", "source": "eodhd", "enabled": True},
+    ]
+
+    out = get_scalp_pairs(pairs)
+
+    assert "Naspers" not in out
+    assert _guess_asset_type("Cocoa") == "commodity"
+    assert _guess_asset_type("NASDAQ-100") == "index"
+    assert _guess_asset_type("USD/ZAR") == "forex"
+    assert _guess_asset_type("BTC/USDT") == "crypto"
 
 
 def test_get_scalp_pairs_fallback_has_all_types():
@@ -652,7 +833,7 @@ def test_grade_uses_explicit_config_size_multipliers(monkeypatch):
     assert q["size_multiplier"] == 0.75
 
 
-def test_run_scalp_scan_prefers_min_grade_auto_execute(monkeypatch):
+def test_run_scalp_scan_uses_min_grade_for_scan_gate(monkeypatch):
     monkeypatch.setitem(
         scalp_engine.CONFIG,
         "SCALP_ENGINE",
@@ -684,8 +865,8 @@ def test_run_scalp_scan_prefers_min_grade_auto_execute(monkeypatch):
     monkeypatch.setattr(scalp_engine, "record_signal_event", lambda **kwargs: None)
 
     result = scalp_engine.run_scalp_scan(["EUR/USD"])
-    assert result["signals"] == []
-    assert result["skipped"][0]["reason"] == "grade_C_below_min"
+    assert len(result["signals"]) == 1
+    assert result["signals"][0]["ai_grade"] == "C"
 
 
 def test_run_scalp_scan_uses_m1_execution_tf(monkeypatch):
@@ -727,5 +908,74 @@ def test_run_scalp_scan_uses_m1_execution_tf(monkeypatch):
     monkeypatch.setattr(scalp_engine, "record_signal_event", lambda **kwargs: None)
 
     result = scalp_engine.run_scalp_scan(["EUR/USD"])
-    assert result["signals"][0]["execution_tf"] == "M1"
+    sig = result["signals"][0]
+    assert sig["execution_tf"] == "M1"
+    assert isinstance(sig.get("advisory"), dict)
+    assert "summary" in sig["advisory"]
+    assert sig.get("advisory_summary") == sig["advisory"]["summary"]
+    assert sig.get("premarket_delta_cluster_type") == "proxy"
+    assert isinstance(sig.get("premarket_delta_proxy_levels"), dict)
     assert ("M1", True) in requested_tfs
+
+
+def test_premarket_delta_proxy_levels_are_explicitly_proxy():
+    candles = []
+    # 08:00-08:20 NY local on a weekday (12:00-12:20 UTC during DST)
+    for i in range(21):
+        candles.append(
+            {
+                "time": f"2026-04-13T12:{i:02d}:00+00:00",
+                "open": 100.0 + i * 0.01,
+                "high": 100.1 + i * 0.01,
+                "low": 99.9 + i * 0.01,
+                "close": 100.0 + i * 0.01,
+                "vol": 1000 + i * 20,
+            }
+        )
+    out = scalp_engine._build_premarket_delta_proxy_levels(candles, top_n=2, min_candles=10, bucket_size=0.01)
+    assert out["available"] is True
+    assert out["label"] == "premarket_delta_proxy_levels"
+    assert out["is_true_delta_cluster"] is False
+    assert out["method"] == "proxy"
+    assert len(out["levels"]) == 2
+
+
+def test_scalp_fetch_candles_crypto_m1_prefers_ws(monkeypatch):
+    ws_candles = [
+        {"time": "2026-03-26T13:35:00+00:00", "open": 1, "high": 1, "low": 1, "close": 1, "vol": 1},
+        {"time": "2026-03-26T13:36:00+00:00", "open": 1, "high": 1, "low": 1, "close": 1, "vol": 1},
+        {"time": "2026-03-26T13:37:00+00:00", "open": 1, "high": 1, "low": 1, "close": 1, "vol": 1},
+        {"time": "2026-03-26T13:38:00+00:00", "open": 1, "high": 1, "low": 1, "close": 1, "vol": 1},
+        {"time": "2026-03-26T13:39:00+00:00", "open": 1, "high": 1, "low": 1, "close": 1, "vol": 1},
+    ]
+    monkeypatch.setattr(candle_feeds, "fetch_candles_live", lambda display, tf, limit=500: {"candles": ws_candles})
+    monkeypatch.setattr(
+        scalp_engine,
+        "_current_utc_datetime",
+        lambda: datetime(2026, 3, 26, 13, 40, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(athena_runtime, "rt", lambda: types.SimpleNamespace(fetch_candles=lambda *args, **kwargs: []))
+    out = scalp_engine._scalp_fetch_candles(
+        {"display": "BTC/USDT", "type": "crypto", "source": "binance"},
+        "M1",
+        300,
+    )
+    assert out == ws_candles
+
+
+def test_scalp_fetch_candles_crypto_m1_falls_back_when_ws_stale(monkeypatch):
+    stale_ws = [{"time": "2026-03-26T13:00:00+00:00", "open": 1, "high": 1, "low": 1, "close": 1, "vol": 1}] * 5
+    routed = [{"time": "2026-03-26T13:40:00+00:00", "open": 2, "high": 2, "low": 2, "close": 2, "vol": 2}]
+    monkeypatch.setattr(candle_feeds, "fetch_candles_live", lambda display, tf, limit=500: {"candles": stale_ws})
+    monkeypatch.setattr(
+        scalp_engine,
+        "_current_utc_datetime",
+        lambda: datetime(2026, 3, 26, 13, 40, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(athena_runtime, "rt", lambda: types.SimpleNamespace(fetch_candles=lambda *args, **kwargs: routed))
+    out = scalp_engine._scalp_fetch_candles(
+        {"display": "BTC/USDT", "type": "crypto", "source": "binance"},
+        "M1",
+        300,
+    )
+    assert out == routed

@@ -194,6 +194,8 @@ _CRYPTO_SCALP_PAIRS = [
     "BNB/USDT", "SUI/USDT", "LTC/USDT",
 ]
 
+_SCALP_PAIR_META_BY_DISPLAY: dict[str, dict[str, Any]] = {}
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # MT5 CANDLE FETCHING
@@ -358,19 +360,45 @@ def _coerce_utc_datetime(value: Any) -> Optional[datetime]:
     return None
 
 
-def get_current_sessions() -> list:
+def get_sessions_for_time(asset_type: str = "forex", when: Any = None) -> list:
     """Return active session names using DST-aware local market clocks."""
-    now_utc = _current_utc_datetime()
+    now_utc = (_coerce_utc_datetime(when) or _current_utc_datetime()).astimezone(timezone.utc)
     now_london_h = now_utc.astimezone(_TZ_LONDON).hour
     now_ny_h = now_utc.astimezone(_TZ_NEW_YORK).hour
     active = []
-    lon_start, lon_end = _FOREX_LOCAL_SESSIONS["london"]
-    ny_start, ny_end = _FOREX_LOCAL_SESSIONS["new_york"]
+
+    local_defs = _CRYPTO_LOCAL_SESSIONS if asset_type == "crypto" else _FOREX_LOCAL_SESSIONS
+
+    if asset_type == "crypto":
+        asia_start, asia_end = _CRYPTO_LOCAL_SESSIONS["asia"]
+        if asia_start <= now_utc.hour < asia_end:
+            active.append("asia")
+
+    lon_start, lon_end = local_defs["london"]
+    ny_start, ny_end = local_defs["new_york"]
     if lon_start <= now_london_h < lon_end:
         active.append("london")
     if ny_start <= now_ny_h < ny_end:
         active.append("new_york")
-    return active or ["off_hours"]
+    if active:
+        return active
+    return ["off_hours_crypto"] if asset_type == "crypto" else ["off_hours"]
+
+
+def get_current_sessions() -> list:
+    """Return active forex session names for the current time."""
+    return get_sessions_for_time("forex")
+
+
+def get_grade_sessions_for_mode(asset_type: str = "forex", when: Any = None, *, backtest: bool = False) -> list:
+    """Return session labels used by quality grading under the configured mode."""
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    mode_key = "BT_SESSION_MODE" if backtest else "SESSION_MODE"
+    raw_mode = str(cfg.get(mode_key, cfg.get("SESSION_MODE", "new_york")) or "new_york").strip().lower()
+    mode = raw_mode if raw_mode not in {"inherit", "default"} else str(cfg.get("SESSION_MODE", "new_york")).strip().lower()
+    if mode in {"all", "any", "disabled", "off"}:
+        return ["london", "new_york"]
+    return get_sessions_for_time(asset_type, when=when)
 
 
 def is_valid_session(asset_type: str = "forex") -> tuple:
@@ -777,7 +805,7 @@ def _check_cvd(candles: list) -> dict:
     try:
         from indicators import calc_cvd
         result = calc_cvd(candles, smooth_period=smooth_period)
-        smoothed = (result.get("smoothed_delta") or []) if result else []
+        smoothed = (result.get("smoothed_delta") or result.get("cvd") or []) if result else []
         cvd_raw = (result.get("cvd") or []) if result else []
         if smoothed and len(smoothed) >= 6:
             slope = smoothed[-1] - smoothed[-6]
@@ -1037,14 +1065,20 @@ def _classify_setup(
             return {"valid": False, "reason": "no_direction_for_trend_continuation"}
 
         # Absorption at pullback level is a plus
-        if absorption.get("detected"):
+        has_absorption_tc = absorption.get("detected", False)
+        if has_absorption_tc:
             reasons.append("Absorption detected at pullback level")
 
-        # CVD should agree with direction
+        # CVD: hard veto only when no other confirmation exists.
+        # If absorption or VWAP already confirms, CVD conflict lowers grade instead.
         cvd_dir = cvd.get("direction")
+        vwap_confirms_tc = (vwap.get("lean") == direction)
         if cvd_dir and cvd_dir != direction:
-            return {"valid": False, "reason": f"cvd_against_trend:{cvd_dir}_vs_{direction}"}
-        if cvd_dir == direction:
+            if not has_absorption_tc and not vwap_confirms_tc:
+                return {"valid": False, "reason": f"cvd_against_trend:{cvd_dir}_vs_{direction}"}
+            override_src = "absorption" if has_absorption_tc else "VWAP"
+            reasons.append(f"CVD conflict ({cvd_dir}) — {override_src} override (grade reduced)")
+        elif cvd_dir == direction:
             reasons.append(f"CVD confirms {direction} trend")
 
         reasons.append(f"Trend continuation from {location}")
@@ -1080,9 +1114,11 @@ def _classify_setup(
         if vwap_aligned_ext:
             reasons.append(f"VWAP lean confirms {direction} breakout direction")
 
-        # CVD must not be actively against direction
+        # CVD conflict after passing the momentum check is a grade penalty, not a veto.
+        # At least one of absorption/CVD/VWAP already confirmed above.
         if cvd_dir and cvd_dir != direction:
-            return {"valid": False, "reason": f"cvd_against_trend:{cvd_dir}_vs_{direction}"}
+            override_src = "absorption" if has_absorption else "VWAP"
+            reasons.append(f"CVD conflict ({cvd_dir}) — {override_src} override (grade reduced)")
 
         reasons.append(f"Trend extension: price broke {side_label} in imbalance market")
         if has_absorption:
@@ -1182,16 +1218,34 @@ def calculate_scalp_levels(
             tp1 = val
             tp2 = (val - (poc - val)) if cfg.get("TP2_ENABLED", True) else None
 
+    # Defensive: if VP levels place SL on the wrong side of entry (e.g. price has
+    # moved outside the value area since the VP was built), clamp to entry ± buffer.
+    if direction == "LONG" and sl >= entry:
+        log.warning(f"[SCALP] SL clamp: LONG sl={sl:.5f} >= entry={entry:.5f} — forcing sl = entry - buffer")
+        sl = entry - buffer
+    elif direction == "SHORT" and sl <= entry:
+        log.warning(f"[SCALP] SL clamp: SHORT sl={sl:.5f} <= entry={entry:.5f} — forcing sl = entry + buffer")
+        sl = entry + buffer
+
     sl_distance = abs(entry - sl)
 
     # TP1 is intentionally the natural structural/profile target from setup logic.
     # Do not expand TP1 outward here to satisfy synthetic MIN_RR floors.
     actual_rr = round(abs(tp1 - entry) / sl_distance, 2) if sl_distance > 0 else 0
 
+    # TP direction check: if price has drifted past the structural target the VP
+    # is invalidated — TP would be on the wrong side of entry entirely.
+    tp_direction_ok = (direction == "LONG" and tp1 > entry) or (direction == "SHORT" and tp1 < entry)
+    if not tp_direction_ok:
+        log.warning(
+            f"[SCALP] TP direction invalid: {direction} tp1={tp1:.5f} vs entry={entry:.5f} "
+            f"(VP structure likely stale — price drifted past target)"
+        )
+
     # For mean_reversion setups, if the natural structural TP does not meet MIN_RR,
     # flag it so the caller can skip rather than distorting the level.
     # trend_extension always meets MIN_RR by construction (tp1 = entry ± sl_dist * min_rr).
-    rr_below_min = (setup_type == "mean_reversion" and actual_rr < min_rr_cfg)
+    rr_below_min = not tp_direction_ok or (setup_type == "mean_reversion" and actual_rr < min_rr_cfg)
 
     # --- Defensive Rounding Safeguard ---
     # Protect against level collapse if symbol_info.digits are too coarse (e.g. 2 digits for a 0.09 crypto pair).
@@ -1262,7 +1316,8 @@ def ai_quality_grade(
     # ── Absorption (0–20) ────────────────────────────────────────────────
     if absorption.get("detected"):
         cnt = absorption.get("count", 0)
-        if cnt >= 3:
+        strong_abs_min = max(1, int(cfg.get("GRADE_STRONG_ABSORPTION_MIN_COUNT", 2)))
+        if cnt >= strong_abs_min:
             score += 20
             reasons.append(f"Strong absorption ({cnt} bars)")
         elif cnt >= 1:
@@ -1550,7 +1605,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
         execution_tf = "M1"
     bias_tf   = str(cfg.get("BIAS_TIMEFRAME", "H1")).upper()
     use_bias  = bool(cfg.get("WITH_TREND_ONLY", True))
-    min_grade = str(cfg.get("MIN_GRADE_AUTO_EXECUTE", cfg.get("MIN_GRADE", "C"))).upper()
+    min_grade = str(cfg.get("MIN_GRADE", "C")).upper()  # scan gate; MIN_GRADE_AUTO_EXECUTE is for auto-trader only
 
     def _record_stability_sample(
         display: str,
@@ -1676,10 +1731,12 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
 
                 spread_ok, spread_pips = check_spread(sym_info, asset_type)
                 if not spread_ok:
+                    spread_unit = "pips" if asset_type == "forex" else "pts"
+                    spread_label = f"{spread_pips}{spread_unit}"
                     _record_stability_sample(display, asset_type, False,
                                              feature_map={"spread_pips": spread_pips},
-                                             reason=f"spread_too_wide_{spread_pips}pips")
-                    skipped.append({"pair": display, "reason": f"spread_too_wide_{spread_pips}pips"})
+                                             reason=f"spread_too_wide_{spread_label}")
+                    skipped.append({"pair": display, "reason": f"spread_too_wide_{spread_label}"})
                     continue
 
                 candles_m15 = mt5_fetch_scalp_candles(mt5_sym, "M15", m15_count, include_forming=True)
@@ -1729,7 +1786,8 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 _record_stability_sample(display, asset_type, False, reason="vp_disabled")
                 skipped.append({"pair": display, "reason": "vp_disabled"})
                 continue
-            vp = _build_volume_profile(candles_m15)
+            vp_lookback = max(20, int(cfg.get("VP_LOOKBACK_BARS", 50)))
+            vp = _build_volume_profile(candles_m15[-vp_lookback:])
             if not vp.get("valid"):
                 _record_stability_sample(display, asset_type, False, reason=f"vp_invalid:{vp.get('reason', '?')}")
                 skipped.append({"pair": display, "reason": f"vp_invalid:{vp.get('reason', '?')}"})
@@ -1793,7 +1851,8 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
 
             # Quality grade
             if cfg.get("AI_GRADING", True):
-                quality = ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup, sessions, spread_pips, htf_bias)
+                grade_sessions = get_grade_sessions_for_mode(asset_type)
+                quality = ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup, grade_sessions, spread_pips, htf_bias)
             else:
                 quality = {"score": 50, "grade": "C", "reasons": ["grading_disabled"], "size_multiplier": 1.0}
 
@@ -1928,15 +1987,30 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
 
 def _guess_asset_type(display: str) -> str:
     """Infer asset type from display name for buffers and spread limits."""
-    forex_currencies = {"EUR", "GBP", "USD", "JPY", "AUD", "NZD", "CAD", "CHF"}
+    meta = _SCALP_PAIR_META_BY_DISPLAY.get(display)
+    if isinstance(meta, dict) and meta.get("type"):
+        return str(meta.get("type")).lower()
+
+    forex_currencies = {
+        "EUR", "GBP", "USD", "JPY", "AUD", "NZD", "CAD", "CHF",
+        "BRL", "INR", "MXN", "SGD", "ZAR",
+    }
     parts = display.replace("/", " ").split()
     if len(parts) == 2 and all(p in forex_currencies for p in parts):
         return "forex"
-    if "XAU" in display or "XAG" in display or "Oil" in display or "Nat Gas" in display or "Copper" in display or "XPT" in display or "XPD" in display:
+    commodity_names = {
+        "Aluminium", "Lead", "Nickel", "Zinc", "Gasoline", "Cattle", "Cocoa",
+        "Coffee", "Corn", "Cotton", "Soybeans", "Sugar", "Wheat",
+    }
+    if (
+        "XAU" in display or "XAG" in display or "Oil" in display
+        or "Nat Gas" in display or "Copper" in display or "XPT" in display
+        or "XPD" in display or display in commodity_names
+    ):
         return "commodity"
     if "USDT" in display or "BTC" in display or "ETH" in display:
         return "crypto"
-    if any(x in display for x in ["S&P", "Nasdaq", "Dow", "DAX", "UK100", "ASX", "Nikkei", "Hang", "USTEC", "NAS100"]):
+    if any(x in display for x in ["S&P", "Nasdaq", "NASDAQ", "Dow", "DAX", "UK100", "ASX", "Nikkei", "Hang", "USTEC", "NAS100", "EURX", "JPYX", "USDX"]):
         return "index"
     return "stock"
 
@@ -1960,6 +2034,7 @@ def get_scalp_pairs(active_pair_dicts: Optional[list[dict[str, Any]]] = None) ->
 
     if active_pair_dicts is not None:
         out: list[str] = []
+        _SCALP_PAIR_META_BY_DISPLAY.clear()
         for p in active_pair_dicts:
             if not isinstance(p, dict) or not p.get("enabled", True):
                 continue
@@ -1969,8 +2044,10 @@ def get_scalp_pairs(active_pair_dicts: Optional[list[dict[str, Any]]] = None) ->
             if not disp:
                 continue
             if src == "mt5" and typ in ("forex", "commodity", "index", "stock"):
+                _SCALP_PAIR_META_BY_DISPLAY[disp] = dict(p)
                 out.append(disp)
             elif src == "binance" and typ == "crypto":
+                _SCALP_PAIR_META_BY_DISPLAY[disp] = dict(p)
                 out.append(disp)
         return sorted(set(out), key=str.casefold)
 

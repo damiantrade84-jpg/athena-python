@@ -1030,16 +1030,13 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                 "rolledBack": True,
             }
 
-        # TP alignment: Use blended average for scalp trades to match backtest expectancy
-        tp1_val = float(signal.get("tp1" or 0))
-        tp2_val = float(signal.get("tp2" or 0))
-        # Use Engine name from signal or fallback to style check
-        is_scalp = signal.get("engine") == "scalp" or signal.get("style") == "scalp"
-        if is_scalp and tp2_val > 0:
-            tp_exec = round((tp1_val + tp2_val) / 2, 8)
-            log.info(f"[BYBIT] Scalp blended TP: {tp_exec} (Avg of {tp1_val} and {tp2_val})")
-        else:
-            tp_exec = tp1_val
+        _engine = str(signal.get("engine", "")).strip().lower()
+        _is_scalp = _engine in ("scalp", "engine d", "scalp_vp")
+        _tp1 = float(signal.get("tp1", 0) or 0)
+        _tp2 = float(signal.get("tp2", 0) or 0)
+        # Engine D live execution: exchange TP must be TP1 (no blended / TP2-based placement).
+        # TP2 is still carried in payload/state for downstream runner management.
+        tp_exec = _tp1
 
         # Set SL/TP on the position via Bybit v5 trading-stop endpoint
         # (stop_market / take_profit_market order types are invalid in v5)
@@ -1101,6 +1098,8 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             "direction": direction,
             "sl": sl,
             "tp": tp1,
+            "tp1": _tp1,
+            "tp2": _tp2 if _tp2 > 0 else None,
             "slOrderId": sl_order_id,
             "tpOrderId": tp_order_id,
             "riskAmount": approval.risk_amount,

@@ -206,3 +206,47 @@ def test_open_trades_timed_hides_intraday_labels_for_scalp(monkeypatch):
     assert row["style"] == "scalp"
     assert row["be_trigger_min"] is None
     assert row["close_trigger_min"] is None
+
+
+def test_open_trades_timed_engine_scalp_overrides_stale_intraday_style(monkeypatch):
+    athena_module = _load_athena_module()
+
+    monkeypatch.setattr(
+        mt5_executor,
+        "mt5_get_positions",
+        lambda: {
+            "error": False,
+            "positions": [
+                {
+                    "ticket": "777",
+                    "pair": "BTC/USDT",
+                    "direction": "LONG",
+                    "profit": 12.0,
+                    "entry": 100.0,
+                    "sl": 98.0,
+                    "tp": 101.0,
+                    "volume": 0.01,
+                    "open_time": 1710000000,
+                    "engine": "scalp",
+                }
+            ],
+        },
+    )
+    import bybit_executor
+    monkeypatch.setattr(bybit_executor, "bybit_get_positions", lambda: {"error": False, "positions": []})
+    import timed_exit_monitor
+    monkeypatch.setattr(
+        timed_exit_monitor,
+        "_load_recent_audit_rows",
+        lambda _db: [{"ticket": "777", "style": "intraday", "engine": "scalp", "ts": "2026-04-14T10:00:00+00:00"}],
+    )
+    monkeypatch.setattr(timed_exit_monitor, "_match_audit_row_for_position", lambda p, rows: rows[0])
+
+    client = athena_module.app.test_client()
+    resp = client.get("/api/open-trades-timed")
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    row = payload["positions"][0]
+    assert row["style"] == "scalp"
+    assert row["be_trigger_min"] is None
+    assert row["close_trigger_min"] is None

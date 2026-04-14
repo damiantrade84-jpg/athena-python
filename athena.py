@@ -7760,6 +7760,52 @@ def api_scalp_execute():
                 {"success": False, "error": result.get("error", "Execution failed")}
             ), 200
 
+        try:
+            _factors_json = json.dumps({
+                "vp_poc":           signal.get("vp_poc"),
+                "vp_vah":           signal.get("vp_vah"),
+                "vp_val":           signal.get("vp_val"),
+                "ai_score":         signal.get("ai_score"),
+                "absorption_count": signal.get("absorption_count"),
+                "cvd_direction":    signal.get("cvd_direction"),
+                "aaa_complete":     signal.get("aaa_complete"),
+                "zone_type":        signal.get("zone_type"),
+                "htf_bias":         signal.get("htf_bias"),
+            })
+            with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
+                con.execute(
+                    "INSERT INTO audit_log("
+                    "ts,pair,score,max_score,engine,direction,grade,risk,style,"
+                    "entry_price,sl,tp,tp2,volume,ticket,risk_amount,risk_pct,"
+                    "asset_class,regime,factors_json"
+                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        datetime.now(timezone.utc).isoformat(),
+                        signal.get("pair") or symbol,
+                        signal.get("confluenceScore"),
+                        1.0,
+                        "scalp",
+                        signal.get("direction"),
+                        signal.get("ai_grade"),
+                        f"${approval.risk_amount}",
+                        "scalp",
+                        result.get("entryPrice") or result.get("entry_price"),
+                        signal.get("sl"),
+                        signal.get("tp1"),
+                        signal.get("tp2"),
+                        result.get("volume"),
+                        str(result.get("ticket", "")),
+                        approval.risk_amount,
+                        approval.risk_pct,
+                        signal.get("type"),
+                        signal.get("market_state"),
+                        _factors_json,
+                    ),
+                )
+                con.commit()
+        except Exception as audit_exc:
+            log.warning(f"[SCALP EXEC] audit_log insert failed: {audit_exc}")
+
         return jsonify(
             {
                 "success": True,
@@ -7928,9 +7974,11 @@ def _xai_chat_completions_retry(client, *, max_attempts: int = 4, base_delay_sec
             msg = str(e).lower()
             retryable = (
                 code == 429
+                or code == 500
                 or code == 503
                 or code == 529
                 or "rate" in msg
+                or "server error" in msg
                 or "overloaded" in msg
                 or "529" in msg
             )
@@ -7964,7 +8012,10 @@ def _chart_blocks_to_openai_user_content(blocks: list) -> list:
                 out.append(
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:{mime};base64,{b64}"},
+                        "image_url": {
+                            "url": f"data:{mime};base64,{b64}",
+                            "detail": "high",
+                        },
                     }
                 )
     return out
@@ -10486,12 +10537,16 @@ def _check_mt5_outcomes() -> None:
             ticket_str = str(row["ticket"])
 
             if ticket_str in open_tickets:
-                # Engine D live milestones on still-open MT5 position:
-                # +1R partial (50%), then TP1 milestone -> move SL to BE.
+                # Engine D milestone management is opt-in. Default Scalp Lab live
+                # protection is broker TP1 + SL only.
                 row_engine = str(row["engine"] or "").strip().lower()
-                row_style = str(row["style"] or "").strip().lower()
-                is_scalp_row = row_engine in ("scalp", "engine d", "scalp_vp") or row_style == "scalp"
-                if is_scalp_row:
+                is_scalp_row = row_engine in ("scalp", "engine d", "scalp_vp")
+                scalp_milestones_enabled = bool(
+                    (CONFIG.get("SCALP_ENGINE") or {}).get(
+                        "LIVE_MILESTONE_MANAGEMENT", False
+                    )
+                )
+                if is_scalp_row and scalp_milestones_enabled:
                     try:
                         pos = next((p for p in _pos_list if str(p.get("ticket")) == ticket_str), None)
                         if pos:
@@ -10624,9 +10679,16 @@ def _check_ccxt_outcomes() -> None:
                     audit_sl = float(row["sl"] or 0)
                     audit_tp1 = float(row["tp"] or 0)
                     row_engine = str(row["engine"] or "").strip().lower()
-                    row_style = str(row["style"] or "").strip().lower()
-                    is_scalp_row = row_engine in ("scalp", "engine d", "scalp_vp") or row_style == "scalp"
-                    if not is_scalp_row:
+                    is_scalp_row = row_engine in ("scalp", "engine d", "scalp_vp")
+                    scalp_milestones_enabled = bool(
+                        (CONFIG.get("SCALP_ENGINE") or {}).get(
+                            "LIVE_MILESTONE_MANAGEMENT", False
+                        )
+                    )
+                    if (
+                        not is_scalp_row
+                        or not scalp_milestones_enabled
+                    ):
                         continue
 
                     ticket = str(row["ticket"])
@@ -12091,11 +12153,11 @@ def api_performance():
 
         def _infer_perf_engine(row: dict) -> str:
             engine = str(row.get("engine") or "").strip().lower()
-            if engine in ("engine_a", "engine_b", "engine_c", "scalp", "external"):
-                return engine
             style = str(row.get("style") or "").strip().lower()
             grade = str(row.get("grade") or "").strip().upper()
-            if style == "scalp" or grade == "SCALP":
+            if engine in ("engine_a", "engine_b", "engine_c", "scalp", "external"):
+                return engine
+            if not engine and (style == "scalp" or grade == "SCALP"):
                 return "scalp"
             if grade == "WEBHOOK":
                 return "external"
@@ -12627,6 +12689,11 @@ def _select_live_crypto_symbols_for_ws() -> list[str]:
     try:
         from bybit_executor import bybit_get_positions
         _pos = bybit_get_positions() or {}
+        if isinstance(_pos, dict) and _pos.get("error"):
+            log.warning(
+                "[WS-SCOPE] Bybit positions unavailable during scope bootstrap; subscribing to all enabled crypto symbols"
+            )
+            return sorted(set(display_to_symbol.values()))
         for row in (_pos.get("positions") or []):
             pair = str(row.get("pair") or row.get("symbol") or "").strip().upper()
             if not pair:

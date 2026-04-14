@@ -259,10 +259,9 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
     style  = (row.get("style") or "intraday").lower()
     entry  = float(row.get("entry_price") or 0)
 
-    # ── Scalp Exemption ───────────────────────────────────────────────────────
-    # Engine D / scalp trades use internal TP1/TP2/SL management.
-    # The generic timed-exit monitor must NOT interfere.
-    if engine == "scalp" or style == "scalp" or engine == "engine d":
+    # Engine D / Scalp Lab trades use broker TP1/SL management.
+    # Do not treat generic Engine A/B "style=scalp" trades as Engine D.
+    if engine in ("scalp", "engine d", "scalp_vp"):
         return
 
     if style not in ("scalp", "intraday", "swing"):
@@ -377,10 +376,9 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
     style     = (row.get("style") or "intraday").lower()
     entry     = float(row.get("entry_price") or 0)
 
-    # ── Scalp Exemption ───────────────────────────────────────────────────────
-    # Engine D / scalp trades use internal TP1/TP2/SL management.
-    # The generic timed-exit monitor must NOT interfere.
-    if engine == "scalp" or style == "scalp" or engine == "engine d":
+    # Engine D / Scalp Lab trades use broker TP1/SL management.
+    # Do not treat generic Engine A/B "style=scalp" trades as Engine D.
+    if engine in ("scalp", "engine d", "scalp_vp"):
         return
 
     if style not in ("scalp", "intraday", "swing"):

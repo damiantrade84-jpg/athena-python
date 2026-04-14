@@ -64,7 +64,12 @@
       "Bash(.venv/Scripts/python.exe -m pytest tests/test_lottery_engine.py -v)",
       "Bash(tasklist /FI \"IMAGENAME eq git.exe\")",
       "Bash(tasklist /FI \"IMAGENAME eq git-remote-https.exe\")",
-      "Bash(ls -la /c/Users/damia/OneDrive/Desktop/athena-python/*.py)"
+      "Bash(ls -la /c/Users/damia/OneDrive/Desktop/athena-python/*.py)",
+      "Bash(del /f \"C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\.git\\\\index.lock\")",
+      "Bash(powershell -Command \"Remove-Item -Force 'C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\.git\\\\index.lock' -ErrorAction SilentlyContinue; exit 0\")",
+      "Bash(powershell -Command \"Remove-Item -Force 'C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\.git\\\\index.lock' -ErrorAction SilentlyContinue; Write-Host 'Lock removed'\")",
+      "Bash(powershell -Command \"Start-Sleep -Milliseconds 500; Remove-Item -Force 'C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\.git\\\\index.lock' -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500; Test-Path 'C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\.git\\\\index.lock'\")",
+      "Bash(powershell -Command ':*)"
     ]
   }
 }

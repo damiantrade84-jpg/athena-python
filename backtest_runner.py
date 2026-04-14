@@ -4359,21 +4359,34 @@ def backtest_pair_consensus(
 
 # ── Engine D (Scalp — Fabio VP+OrderFlow) Backtest ────────────────────────────
 def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict | None:
-    """Backtest Engine D scalp setups on M15 bars using Volume Profile + order flow.
+    """Backtest Engine D scalp setups with M15 structure and M1 execution.
 
     Walk-forward approach:
-      1. Fetch M15 candles (full history available from MT5 or Binance)
-      2. At each bar: compute previous-session VP, detect zone, check aggression on M5-proxy
-      3. If setup valid: enter at next bar open, walk forward for SL/TP resolution
+      1. Fetch M15 structure, M5 context, and M1 execution candles where available
+      2. At each closed M15 bar: build VP context, then run the live Engine D pipeline
+      3. If setup valid: enter at the next execution bar, resolve SL/TP on execution bars
       4. Collect trades, compute stats using _format_backtest_results()
 
-    M5 proxy: Since we walk M15 bars, we approximate M5 aggression checks using
-    the M15 bar's own OHLCV properties (body ratio, volume ratio, range contraction).
-    This is a known approximation — live scanning uses real M5 data.
+    If lower-timeframe history is unavailable, the function falls back to the legacy
+    M15 walk so older fixtures and thin broker history still produce a result.
     """
-    from volume_profile import split_completed_sessions, compute_fixed_range_volume_profile
-    from indicators import detect_absorption, calc_cvd, detect_range_contraction
-    from scalp_engine import _guess_asset_type, _calc_ema, _coerce_utc_datetime, scalp_session_window, ai_quality_grade as _ai_quality_grade
+    from scalp_engine import (
+        _build_volume_profile,
+        _check_aaa_sequence,
+        _check_absorption,
+        _check_cvd,
+        _check_vwap_lean,
+        _classify_market_state,
+        _classify_setup,
+        _coerce_utc_datetime,
+        _guess_asset_type,
+        _locate_price_vs_vp,
+        calculate_scalp_levels,
+        get_grade_sessions_for_mode,
+        infer_bias_from_ema_stack,
+        scalp_session_window,
+        ai_quality_grade as _ai_quality_grade,
+    )
 
     display = pair.get("display", pair.get("symbol", "UNKNOWN"))
     asset_type = pair.get("type", _guess_asset_type(display))
@@ -4386,10 +4399,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     max_concurrent = int(cfg.get("BT_MAX_CONCURRENT", 2))
     min_rr = float(cfg.get("MIN_RR", 2.0))
     vp_bins = int(cfg.get("VP_BINS", 64))
-    va_pct = float(cfg.get("VP_VALUE_AREA_PCT", 0.70))
     abs_vol_mult = float(cfg.get("ABSORPTION_VOL_MULT", 2.0))
-    abs_max_move = float(cfg.get("ABSORPTION_MAX_MOVE_ATR", 0.3))
-    abs_sma = int(cfg.get("ABSORPTION_SMA_PERIOD", 20))
     slippage_ticks = int(cfg.get("BT_SLIPPAGE_TICKS", 3))
     scratch_enabled = bool(cfg.get("BT_SCRATCH_ENABLED", True))
     scratch_bars = max(1, int(cfg.get("BT_SCRATCH_BARS", 3)))
@@ -4406,6 +4416,8 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
                 "type": "crypto", "source": "binance",
             }
             m15_raw = _scalp_fetch_candles(pair_dict, "M15", 2000)
+            m5_raw = _scalp_fetch_candles(pair_dict, "M5", 6000) or []
+            m1_raw = _scalp_fetch_candles(pair_dict, "M1", 20000) or []
         else:
             from scalp_engine import mt5_fetch_scalp_candles
             from mt5_executor import mt5_map_symbol
@@ -4413,6 +4425,8 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             if not mt5_sym:
                 return {"error": f"No MT5 symbol mapping for {display}"}
             m15_raw = mt5_fetch_scalp_candles(mt5_sym, "M15", 2000, include_forming=False)
+            m5_raw = mt5_fetch_scalp_candles(mt5_sym, "M5", 6000, include_forming=False) or []
+            m1_raw = mt5_fetch_scalp_candles(mt5_sym, "M1", 20000, include_forming=False) or []
     except Exception as e:
         log.error(f"[SCALP-BT] Candle fetch failed for {display}: {e}")
         return {"error": f"Candle fetch failed: {e}"}
@@ -4420,17 +4434,57 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     if not m15_raw or len(m15_raw) < 100:
         return {"error": f"Insufficient M15 data for {display}: {len(m15_raw) if m15_raw else 0} bars (need 100+)"}
 
-    # Normalize candles to ensure float types
-    candles = []
-    for c in m15_raw:
-        candles.append({
-            "time": c.get("time"),
-            "open": float(c.get("open", 0)),
-            "high": float(c.get("high", 0)),
-            "low": float(c.get("low", 0)),
-            "close": float(c.get("close", 0)),
-            "vol": float(c.get("vol", 0)),
-        })
+    def _normalize_bt_candles(raw: list | None, tf_minutes: int) -> list:
+        out = []
+        for seq, c in enumerate(raw or []):
+            dt = _coerce_utc_datetime(c.get("time"))
+            row = {
+                "time": c.get("time"),
+                "open": float(c.get("open", 0)),
+                "high": float(c.get("high", 0)),
+                "low": float(c.get("low", 0)),
+                "close": float(c.get("close", 0)),
+                "vol": float(c.get("vol", 0)),
+                "_seq": seq,
+                "_dt": dt,
+                "_close_dt": (dt + timedelta(minutes=tf_minutes)) if dt else None,
+            }
+            out.append(row)
+        return out
+
+    # Normalize candles to ensure float types and attach optional bar timestamps.
+    candles = _normalize_bt_candles(m15_raw, 15)
+    candles_m5 = _normalize_bt_candles(m5_raw, 5)
+    candles_m1 = _normalize_bt_candles(m1_raw, 1)
+
+    def _has_time_aligned_lower_tf(lower: list, higher: list, min_ratio: float) -> bool:
+        lower_times = [c.get("_dt") for c in lower if c.get("_dt") is not None]
+        higher_times = [c.get("_dt") for c in higher if c.get("_dt") is not None]
+        if len(lower_times) < 30 or len(higher_times) < 10:
+            return False
+        if len(lower) < int(len(higher) * min_ratio):
+            return False
+        return len(set(lower_times[: min(len(lower_times), 50)])) > 1
+
+    has_m5_context = _has_time_aligned_lower_tf(candles_m5, candles, 2.0)
+    has_m1_execution = _has_time_aligned_lower_tf(candles_m1, candles, 5.0)
+
+    def _closed_before(rows: list, cutoff: datetime | None, limit: int | None = None) -> list:
+        if not rows or cutoff is None:
+            return []
+        selected = [c for c in rows if c.get("_close_dt") is not None and c["_close_dt"] <= cutoff]
+        if limit and len(selected) > limit:
+            return selected[-limit:]
+        return selected
+
+    def _future_from(rows: list, cutoff: datetime | None, max_minutes: int | None = None) -> list:
+        if not rows or cutoff is None:
+            return []
+        selected = [c for c in rows if c.get("_dt") is not None and c["_dt"] >= cutoff]
+        if max_minutes is not None:
+            end = cutoff + timedelta(minutes=max_minutes)
+            selected = [c for c in selected if c.get("_dt") is not None and c["_dt"] <= end]
+        return selected
 
     # ── Volume quality check ────────────────────────────────────────────────
     raw_vols = [c["vol"] for c in candles]
@@ -4449,23 +4503,15 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     closes = [c["close"] for c in candles]
     atr_full = calc_atr(highs, lows, closes, 14)
 
-    # ── Pre-compute absorption for the full series ──────────────────────────
-    absorption_full = detect_absorption(
-        candles, vol_mult=abs_vol_mult, max_move_atr=abs_max_move, sma_period=abs_sma
-    )
-
-    # ── Pre-compute CVD for the full series ─────────────────────────────────
-    cvd_full = calc_cvd(candles, smooth_period=int(cfg.get("CVD_SMOOTH_PERIOD", 5)))
-    smoothed_delta = cvd_full.get("smoothed_delta", [])
-
-    # ── Pre-compute EMA21 for trend filter ──────────────────────────────────
-    ema21_full = _calc_ema(closes, 21)
-
     # ── Walk-forward backtest loop ──────────────────────────────────────────
     trades = []
     active_exit_indices = []
     same_bar_both_hit_count = 0
-    min_lookback = 80  # need enough bars for VP computation
+    vp_lookback = max(
+        20,
+        int(cfg.get("BT_VP_LOOKBACK_BARS", cfg.get("SCALP_VP_LOOKBACK_BARS", cfg.get("VP_LOOKBACK_BARS", 50)))),
+    )
+    min_lookback = max(80, vp_lookback + 30)  # need enough bars for VP + bias/context
 
     # OOS split: last 30% of trades flagged as out-of-sample
     total_bars = len(candles)
@@ -4476,25 +4522,32 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         if len(active_exit_indices) >= max_concurrent:
             continue
 
-        # Current bar context
-        current_price = candles[i]["close"]
+        # Current M15 structure context. A setup is only known after this M15
+        # bar is closed; lower-TF execution starts after signal_close_dt.
+        structure_bar = candles[i]
+        candle_dt = _coerce_utc_datetime(structure_bar.get("time"))
+        signal_close_dt = structure_bar.get("_close_dt") or candle_dt
+        m15_context = candles[: i + 1]
+        m5_context = _closed_before(candles_m5, signal_close_dt, 300) if has_m5_context else []
+        exec_context = _closed_before(candles_m1, signal_close_dt, 500) if has_m1_execution else []
+        if not exec_context:
+            exec_context = m5_context if m5_context else m15_context[-100:]
+        context_for_vwap = m15_context[-vp_lookback:]
+
+        current_price = exec_context[-1]["close"] if exec_context else structure_bar["close"]
         current_atr = atr_full[i] if i < len(atr_full) else 0
         if current_atr <= 0:
             continue
-        candle_dt = _coerce_utc_datetime(candles[i].get("time"))
-        session_ok, session_label = scalp_session_window(asset_type, when=candle_dt, backtest=True)
+        session_ok, session_label = scalp_session_window(asset_type, when=signal_close_dt, backtest=True)
         if not session_ok:
             continue
 
-        # ── Step 1: Compute VP from bars before current ─────────────────────
-        # Use the previous "session" worth of bars (approx 26 M15 bars = 1 trading day)
-        session_len = 26
-        if i < session_len * 2:
+        # ── Step 1: Run the same VP/setup pipeline as live scan ─────────────
+        if len(m15_context) < vp_lookback:
             continue
-
-        prev_session = candles[i - session_len * 2:i - session_len]
-        vp = compute_fixed_range_volume_profile(prev_session, bins=vp_bins, value_area_pct=va_pct)
-        if not vp.get("profile_valid") or vp.get("poc") is None:
+        vp_window = m15_context[-vp_lookback:]
+        vp = _build_volume_profile(vp_window)
+        if not vp.get("valid") or vp.get("poc") is None:
             continue
 
         poc = vp["poc"]
@@ -4504,93 +4557,52 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         if va_width <= 0:
             continue
 
-        proximity = current_price * float(cfg.get("VP_PROXIMITY_PCT", 0.30)) / 100.0
-
-        # ── Step 2: Classify price location ─────────────────────────────────
-        at_val = abs(current_price - val) <= proximity
-        at_vah = abs(current_price - vah) <= proximity
-        above_value = current_price > vah + proximity
-        below_value = current_price < val - proximity
-
-        direction = None
-        setup_type = None
-        zone_level = None
-
-        if at_val:
-            direction = "LONG"
-            setup_type = "mean_reversion"
-            zone_level = val
-        elif at_vah:
-            direction = "SHORT"
-            setup_type = "mean_reversion"
-            zone_level = vah
-        elif above_value:
-            # Trend: check if pulling back to current-session POC
-            curr_session = candles[i - session_len:i]
-            curr_vp = compute_fixed_range_volume_profile(curr_session, bins=vp_bins, value_area_pct=va_pct)
-            if curr_vp.get("profile_valid") and curr_vp.get("poc"):
-                lvn_prox = current_price * float(cfg.get("VP_PROXIMITY_PCT", 0.30)) / 100.0 * 0.5
-                if abs(current_price - curr_vp["poc"]) <= lvn_prox:
-                    direction = "LONG"
-                    setup_type = "trend"
-                    zone_level = curr_vp["poc"]
-        elif below_value:
-            curr_session = candles[i - session_len:i]
-            curr_vp = compute_fixed_range_volume_profile(curr_session, bins=vp_bins, value_area_pct=va_pct)
-            if curr_vp.get("profile_valid") and curr_vp.get("poc"):
-                lvn_prox = current_price * float(cfg.get("VP_PROXIMITY_PCT", 0.30)) / 100.0 * 0.5
-                if abs(current_price - curr_vp["poc"]) <= lvn_prox:
-                    direction = "SHORT"
-                    setup_type = "trend"
-                    zone_level = curr_vp["poc"]
-
-        if direction is None:
+        market_state = _classify_market_state(vp)
+        price_loc = _locate_price_vs_vp(current_price, vp)
+        absorption = _check_absorption(exec_context)
+        cvd = _check_cvd(exec_context)
+        aaa = _check_aaa_sequence(exec_context, absorption, cvd) if cfg.get("AAA_ENABLED", True) else {"complete": False, "phase": "disabled"}
+        vwap = _check_vwap_lean(context_for_vwap, current_price) if cfg.get("VWAP_ENABLED", True) else {"lean": None, "vwap_value": 0}
+        htf_bias = infer_bias_from_ema_stack(m15_context) if len(m15_context) >= 200 else None
+        setup = _classify_setup(market_state, price_loc, absorption, cvd, aaa, vwap, htf_bias)
+        if not setup.get("valid"):
             continue
+        direction = setup["direction"]
+        setup_type = setup["setup_type"]
 
-        # ── Step 3: Check aggression (absorption / CVD / candle pattern) ────
-        trigger_type = None
+        if absorption.get("detected"):
+            trigger_type = "absorption"
+        elif cvd.get("direction") == direction:
+            trigger_type = "cvd_shift"
+        elif aaa.get("complete"):
+            trigger_type = "aaa"
+        else:
+            trigger_type = "vwap" if vwap.get("lean") == direction else "setup"
 
-        # Check absorption on last 5 bars
-        if absorption_full:
-            for j in range(max(0, i - 4), min(i + 1, len(absorption_full))):
-                if absorption_full[j].get("absorbed"):
-                    abs_dir = absorption_full[j].get("direction", "neutral")
-                    if direction == "LONG" and abs_dir == "bullish":
-                        trigger_type = "absorption"
-                        break
-                    elif direction == "SHORT" and abs_dir == "bearish":
-                        trigger_type = "absorption"
-                        break
-
-        # Check CVD shift
-        if trigger_type is None and i < len(smoothed_delta) and i >= 2:
-            d_curr = smoothed_delta[i]
-            d_prev = smoothed_delta[i - 1]
-            if d_curr is not None and d_prev is not None:
-                if direction == "LONG" and d_curr > 0 and d_curr > d_prev:
-                    trigger_type = "cvd_shift"
-                elif direction == "SHORT" and d_curr < 0 and d_curr < d_prev:
-                    trigger_type = "cvd_shift"
-
-        # Fallback: rejection candle check on current M15 bar
-        if trigger_type is None:
-            bar = candles[i]
-            body = abs(bar["close"] - bar["open"])
-            lower_wick = min(bar["open"], bar["close"]) - bar["low"]
-            upper_wick = bar["high"] - max(bar["open"], bar["close"])
-            if direction == "LONG" and lower_wick >= 1.5 * body and bar["close"] > bar["open"]:
-                trigger_type = "rejection"
-            elif direction == "SHORT" and upper_wick >= 1.5 * body and bar["close"] < bar["open"]:
-                trigger_type = "rejection"
-
-        if trigger_type is None:
-            continue
+        zone_level = float(price_loc.get("nearest_level") or (val if direction == "LONG" else vah))
 
         # ── Step 4: Calculate entry, SL, TP1, TP2 ───────────────────────────
-        # Entry at next bar open (with slippage)
-        if i + 1 >= total_bars:
-            continue
-        entry_bar = candles[i + 1]
+        # Entry is the next execution bar after the M15 setup closes. If lower
+        # TF history is unavailable, fall back to the next M15 bar.
+        lower_future = []
+        exit_tf = "M15"
+        if has_m1_execution:
+            lower_future = _future_from(candles_m1, signal_close_dt, max_minutes=walk_bars * 15)
+            exit_tf = "M1"
+        if not lower_future and has_m5_context:
+            lower_future = _future_from(candles_m5, signal_close_dt, max_minutes=walk_bars * 15)
+            exit_tf = "M5"
+        if lower_future:
+            entry_bar = lower_future[0]
+            walk_rows = lower_future[1:]
+            entry_bar_idx = int(entry_bar.get("_seq", i + 1))
+        else:
+            if i + 1 >= total_bars:
+                continue
+            entry_bar = candles[i + 1]
+            walk_rows = candles[i + 2:i + 2 + walk_bars]
+            entry_bar_idx = i + 1
+
         point_est = current_atr * 0.001  # rough point estimate
         slippage = slippage_ticks * point_est
 
@@ -4599,37 +4611,20 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         else:
             entry = entry_bar["open"] - slippage
 
-        # SL: behind zone with buffer
-        buffer = current_atr * 0.3
-        if direction == "LONG":
-            sl = (zone_level - proximity) - buffer
-            if sl >= entry:
-                sl = entry - current_atr * 0.5
-        else:
-            sl = (zone_level + proximity) + buffer
-            if sl <= entry:
-                sl = entry + current_atr * 0.5
+        symbol_info = {
+            "digits": 6 if asset_type == "crypto" else (5 if asset_type == "forex" else 2),
+            "point": point_est if point_est > 0 else (0.00001 if asset_type == "forex" else 0.01),
+        }
+        levels = calculate_scalp_levels(direction, entry, vp, setup_type, symbol_info, asset_type)
+        if levels.get("rr_below_min"):
+            continue
+        sl = float(levels["sl"])
+        tp1 = float(levels["tp1"])
+        tp2 = levels.get("tp2")
 
         sl_distance = abs(entry - sl)
         if sl_distance <= 0:
             continue
-
-        # TP1 & TP2 Calculation
-        tp2_enabled = cfg.get("TP2_ENABLED", True)
-        if setup_type == "mean_reversion":
-            if direction == "LONG":
-                tp1 = max(poc, entry + sl_distance * min_rr) if poc > entry else entry + sl_distance * min_rr
-                tp2 = vah if tp2_enabled and vah > entry else None
-            else:
-                tp1 = min(poc, entry - sl_distance * min_rr) if poc < entry else entry - sl_distance * min_rr
-                tp2 = val if tp2_enabled and val < entry else None
-        else:  # trend
-            if direction == "LONG":
-                tp1 = entry + sl_distance * min_rr
-                tp2 = (tp1 + sl_distance) if tp2_enabled else None
-            else:
-                tp1 = entry - sl_distance * min_rr
-                tp2 = (tp1 - sl_distance) if tp2_enabled else None
 
         if not math.isfinite(tp1) or (direction == "LONG" and tp1 <= entry) or (direction == "SHORT" and tp1 >= entry):
             continue
@@ -4646,12 +4641,8 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         partial_hit = False
         tp1_hit = False
         
-        for w in range(1, walk_bars + 1):
-            walk_idx = i + 1 + w
-            if walk_idx >= total_bars:
-                break
-
-            wbar = candles[walk_idx]
+        for w, wbar in enumerate(walk_rows, start=1):
+            walk_idx = int(wbar.get("_seq", entry_bar_idx + w))
             if direction == "LONG":
                 best_favorable_r = max(best_favorable_r, max(0.0, (wbar["high"] - entry) / sl_distance))
             else:
@@ -4682,8 +4673,9 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
 
         # Timeout / End of Data fallback
         if exit_reason is None:
-            timeout_idx = min(i + 1 + walk_bars, total_bars - 1)
-            exit_price = candles[timeout_idx]["close"]
+            timeout_bar = walk_rows[-1] if walk_rows else entry_bar
+            timeout_idx = int(timeout_bar.get("_seq", entry_bar_idx))
+            exit_price = timeout_bar["close"]
             exit_reason = "TIMEOUT"
             exit_bar_idx = timeout_idx
 
@@ -4694,50 +4686,53 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
 
         r_multiple = round(max(-5.0, min(5.0, raw_r)), 3)
 
-        # Grade via live ai_quality_grade() for consistency with live scan
-        _vp_grade = {"poc": poc, "vah": vah, "val": val, "lvn_levels": [], "balance_ratio": 0.6}
-        _price_loc_grade = {
-            "location": (
-                "at_val" if (direction == "LONG" and at_val)
-                else "at_vah" if at_vah
-                else "inside_va"
-            )
-        }
-        _absorption_grade = {
-            "detected": trigger_type == "absorption",
-            "count": 1 if trigger_type == "absorption" else 0,
-        }
-        _cvd_grade = {"direction": direction if trigger_type == "cvd_shift" else None}
-        _aaa_grade = {"complete": False, "phase": "absorption_only"}
-        _vwap_grade = {"lean": None}
-        _setup_grade = {"direction": direction, "setup_type": setup_type}
+        # Grade through the same scorer as live scan, using the pipeline outputs
+        # already computed for this historical decision point.
+        _grade_sessions = get_grade_sessions_for_mode(asset_type, when=signal_close_dt, backtest=True)
         _quality = _ai_quality_grade(
-            vp=_vp_grade,
-            price_loc=_price_loc_grade,
-            absorption=_absorption_grade,
-            cvd=_cvd_grade,
-            aaa=_aaa_grade,
-            vwap=_vwap_grade,
-            setup=_setup_grade,
-            sessions=[session_label],
+            vp=vp,
+            price_loc=price_loc,
+            absorption=absorption,
+            cvd=cvd,
+            aaa=aaa,
+            vwap=vwap,
+            setup=setup,
+            sessions=_grade_sessions,
             spread_pips=0.0,
-            htf_bias=None,
+            htf_bias=htf_bias,
         )
         grade = _quality["grade"]
         grade_score = _quality["score"]
 
         # Determine OOS flag (last 30% of bars)
         oos = i > total_bars * 0.70
+        exit_structure_idx = i + 1
+        if exit_bar_idx is not None:
+            if exit_tf == "M1":
+                exit_structure_idx = i + 1 + math.ceil(max(1, exit_bar_idx - entry_bar_idx) / 15)
+            elif exit_tf == "M5":
+                exit_structure_idx = i + 1 + math.ceil(max(1, exit_bar_idx - entry_bar_idx) / 3)
+            else:
+                exit_structure_idx = exit_bar_idx
 
         trade = {
             "bar_index": i,
-            "entry_bar_index": i + 1,
+            "entry_bar_index": entry_bar_idx,
             "exit_bar_index": exit_bar_idx,
+            "structure_entry_bar_index": i + 1,
+            "structure_exit_bar_index": exit_structure_idx,
+            "execution_tf": exit_tf,
+            "context_tf": "M5" if has_m5_context else "M15",
+            "structure_tf": "M15",
             "direction": direction,
             "setup_type": setup_type,
             "trigger_type": trigger_type,
             "trigger_pattern": trigger_type.upper() if trigger_type else "NONE",
             "grade": grade,
+            "ai_grade": grade,
+            "ai_score": grade_score,
+            "ai_reasons": _quality.get("reasons", []),
+            "size_multiplier": _quality.get("size_multiplier"),
             "entry": round(entry, 6),
             "sl": round(sl, 6),
             "tp1": round(tp1, 6),
@@ -4759,6 +4754,12 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             "session": session_label,
             "oos": oos,
             "regime": "SCALP",
+            "market_state": market_state,
+            "price_location": price_loc.get("location"),
+            "absorption_count": int(absorption.get("count", 0) or 0),
+            "cvd_direction": cvd.get("direction"),
+            "aaa_complete": bool(aaa.get("complete")),
+            "vwap_lean": vwap.get("lean"),
             # Compatibility fields for _format_backtest_results
             "ob_at_zone": False,
             "bos_mtf_confirmed": False,
@@ -4771,7 +4772,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         }
         trades.append(trade)
         if exit_bar_idx is not None:
-            active_exit_indices.append(exit_bar_idx)
+            active_exit_indices.append(exit_structure_idx)
 
     # ── Format results ──────────────────────────────────────────────────────
     if not trades:
@@ -4794,13 +4795,18 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     result["engine"] = "scalp_vp"
     result["vol_quality_pct"] = vol_quality_pct
     result["vol_quality_warning"] = vol_quality_pct < 30
+    result["structure_tf"] = "M15"
+    result["context_tf"] = "M5" if has_m5_context else "M15"
+    result["execution_tf"] = "M1" if has_m1_execution else ("M5" if has_m5_context else "M15")
+    result["vp_lookback_bars"] = vp_lookback
+    result["lower_tf_fallback"] = not has_m1_execution
 
     # ── Scalp-specific analysis ─────────────────────────────────────────────
     absorption_trades = [t for t in trades if t.get("trigger_type") == "absorption"]
     cvd_trades = [t for t in trades if t.get("trigger_type") == "cvd_shift"]
     rejection_trades = [t for t in trades if t.get("trigger_type") == "rejection"]
     mr_trades = [t for t in trades if t.get("setup_type") == "mean_reversion"]
-    trend_trades = [t for t in trades if t.get("setup_type") == "trend"]
+    trend_trades = [t for t in trades if str(t.get("setup_type", "")).startswith("trend")]
 
     def _subset_wr(subset):
         if not subset:
@@ -4853,7 +4859,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
                     result.get("maxDrawdownPct"),
                     min_rr,
                     "M15_ATR",
-                    f"vp_bins={vp_bins};walk={walk_bars};abs_mult={abs_vol_mult};slippage={slippage_ticks}",
+                    f"vp_bins={vp_bins};vp_lookback={vp_lookback};exec_tf={result['execution_tf']};walk={walk_bars};abs_mult={abs_vol_mult};slippage={slippage_ticks}",
                 ),
             )
             _con.commit()

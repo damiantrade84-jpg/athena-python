@@ -13,6 +13,45 @@ from config import CONFIG
 log = logging.getLogger("athena")
 
 
+def _normalise_engine_b_ai_payload(parsed: dict) -> dict:
+    """Accept common model key aliases before falling back to safe defaults."""
+    if not isinstance(parsed, dict):
+        return parsed
+
+    out = dict(parsed)
+    aliases = {
+        "edge_probability": "edgeProbability",
+        "edge_prob": "edgeProbability",
+        "risk_level": "riskLevel",
+        "summary": "verdict",
+        "reasoning": "verdict",
+        "analysis": "verdict",
+    }
+    for src, dst in aliases.items():
+        if dst not in out and src in out:
+            out[dst] = out[src]
+
+    style_ratings = out.get("style_ratings")
+    if isinstance(style_ratings, dict):
+        normalised_styles = {}
+        for style, row in style_ratings.items():
+            if not isinstance(row, dict):
+                continue
+            item = dict(row)
+            if "edgeProbability" not in item:
+                item["edgeProbability"] = (
+                    item.get("edge_probability")
+                    or item.get("edge_prob")
+                    or out.get("edgeProbability")
+                )
+            if "riskLevel" not in item:
+                item["riskLevel"] = item.get("risk_level") or out.get("riskLevel")
+            normalised_styles[str(style).lower()] = item
+        out["style_ratings"] = normalised_styles
+
+    return out
+
+
 def build_engine_b_signal_message(
     pair: str,
     direction: str,
@@ -315,7 +354,9 @@ def get_engine_b_ai_verdict(
             "D/F=reject."
             " Rate all three styles independently: SCALP(H1, 1.5-2R), INTRADAY(H4, 2-3R), SWING(D1, 3-6R). "
             "Top-level grade/edgeProbability/riskLevel must represent the best style. "
-            "Output strict JSON only."
+            "Output strict JSON only with exactly these top-level keys: "
+            "grade, edgeProbability, riskLevel, verdict, style_ratings. "
+            "style_ratings must contain scalp, intraday, and swing objects with grade, edgeProbability, riskLevel."
         )
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
 
@@ -361,6 +402,8 @@ def get_engine_b_ai_verdict(
         if parsed is None:
             log.error(f"[ENGINE_B_AI] {pair}: Failed to parse JSON from AI response")
             return {"error": "Invalid AI response format"}
+
+        parsed = _normalise_engine_b_ai_payload(parsed)
 
         # Validate required keys
         required = {"grade", "edgeProbability", "riskLevel", "verdict"}

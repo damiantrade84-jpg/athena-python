@@ -2107,6 +2107,15 @@ let btChart = null;
 let _prevPrices = {};
 window._testMode = false;
 
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // -- Live Price Ticker --
 function fmtTickerPrice(p) {
   if (!p || isNaN(p)) return '-';
@@ -8225,14 +8234,18 @@ function renderOpenPositions(positions) {
     var exch = p._bybit ? 'bybit' : 'mt5';
     var pairSafe = (p.pair || p.symbol).replace(/'/g, "\\'");
     var timedData = (window._timedPositions || {})[String(p && p.ticket != null ? p.ticket : '')] || {};
-    var style = timedData.style || 'intraday';
+    var style = timedData.style || '';
     var minsOpen = timedData.mins_open != null ? timedData.mins_open : null;
     var beMins = timedData.be_trigger_min;
     var closeMins = timedData.close_trigger_min;
     var inProfit = timedData.in_profit;
     var timerHtml = '';
-    if (minsOpen != null && beMins != null && closeMins != null) {
+
+    var hasTimedWindow = (beMins != null && closeMins != null);
+    var styleHasTimedExit = (style === 'intraday' || style === 'swing');
+    if (minsOpen != null && hasTimedWindow && styleHasTimedExit) {
       var formatMins = function(m) {
+        if (m == null) return '';
         if (m >= 1440) return (m/1440).toFixed(1) + 'd';
         if (m >= 60) return Math.floor(m/60) + 'h ' + Math.round(m%60) + 'm';
         return Math.round(m) + 'm';
@@ -8243,23 +8256,30 @@ function renderOpenPositions(positions) {
       var timerLabel = '';
       var timerVal = '';
       var timerMeta = '';
-      if (closeReached) {
-        timerLabel = inProfit ? '⏱ Closing now (profit)' : '⏱ Time elapsed — SL protecting';
-        timerColor = inProfit ? 'var(--bull)' : 'var(--muted)';
-        timerVal = '';
-        timerMeta = beReached ? 'BE set' : ('BE due ' + formatMins(timedData.mins_to_be));
-      } else {
-        timerLabel = '⏱ Close in';
-        timerVal = formatMins(timedData.mins_to_close);
-        if (beReached) {
-          timerMeta = inProfit ? '🔒 BE set' : '⏳ BE due now';
+
+      if (beMins != null && closeMins != null) {
+        if (closeReached) {
+          timerLabel = inProfit ? '⏱ Closing now (profit)' : '⏱ Time elapsed — SL protecting';
+          timerColor = inProfit ? 'var(--bull)' : 'var(--muted)';
+          timerVal = '';
+          timerMeta = beReached ? 'BE set' : ('BE due ' + formatMins(timedData.mins_to_be));
         } else {
-          timerMeta = (inProfit ? '✅ In profit' : '⏳ Not in profit') + ' · BE in ' + formatMins(timedData.mins_to_be);
+          timerLabel = '⏱ Close in';
+          timerVal = formatMins(timedData.mins_to_close);
+          if (beReached) {
+            timerMeta = inProfit ? '🔒 BE set' : '⏳ BE due now';
+          } else {
+            timerMeta = (inProfit ? '✅ In profit' : '⏳ Not in profit') + ' · BE in ' + formatMins(timedData.mins_to_be);
+          }
         }
       }
+
+      var timerPrefix = (timerLabel && timerVal !== undefined) ? '<span>' + timerLabel + (timerVal ? ' <strong>' + timerVal + '</strong>' : '') + '</span>' : '';
+      var styleLabel = style;
+
       timerHtml = '<div class="pos-card-row pos-timer" style="color:' + timerColor + ';font-size:11px;margin-top:4px;">' +
-        '<span>' + timerLabel + (timerVal ? ' <strong>' + timerVal + '</strong>' : '') + '</span>' +
-        '<span style="margin-left:8px;opacity:0.6;">[' + style + ' · open ' + formatMins(minsOpen) + (timerMeta ? ' · ' + timerMeta : '') + ']</span>' +
+        timerPrefix +
+        '<span style="margin-left:' + (timerPrefix ? '8px' : '0') + ';opacity:0.6;">[' + styleLabel + ' · open ' + formatMins(minsOpen) + (timerMeta ? ' · ' + timerMeta : '') + ']</span>' +
       '</div>';
     }
     return '<div class="pos-card ' + cardClass + '">' +
@@ -10551,6 +10571,32 @@ function buildScalpCard(s, idx) {
       s.ai_reasons.slice(0,4).map(function(r){ return '&#8226; ' + r; }).join('<br>') +
     '</div>';
   }
+  var advisoryHtml = '';
+  if (s.advisory_summary) {
+    advisoryHtml =
+      '<div style="margin-top:8px;padding:8px 10px;border:1px solid rgba(59,130,246,0.28);background:rgba(59,130,246,0.08);border-radius:8px">' +
+        '<div style="font-size:9px;letter-spacing:.04em;color:#93c5fd;font-weight:700;margin-bottom:3px">BUILD THE STORY FIRST</div>' +
+        '<div style="font-size:10px;color:#dbeafe;line-height:1.5">' + escapeHtml(String(s.advisory_summary)) + '</div>' +
+      '</div>';
+  }
+  var pmProxyHtml = '';
+  var pmProxy = s.premarket_delta_proxy_levels || {};
+  var pmLevels = Array.isArray(pmProxy.levels) ? pmProxy.levels : [];
+  if (pmLevels.length) {
+    var pmRows = pmLevels.slice(0, 3).map(function(lv) {
+      var dcol = lv.direction === 'LONG' ? '#10b981' : (lv.direction === 'SHORT' ? '#ef4444' : '#94a3b8');
+      return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;line-height:1.35">' +
+        '<span style="color:var(--text)">@ ' + fmtPrice(lv.price) + '</span>' +
+        '<span style="color:'+dcol+'">' + escapeHtml(String(lv.direction || 'NEUTRAL')) + '</span>' +
+      '</div>';
+    }).join('');
+    pmProxyHtml =
+      '<div style="margin-top:8px;padding:8px 10px;border:1px solid rgba(148,163,184,0.24);background:rgba(148,163,184,0.08);border-radius:8px">' +
+        '<div style="font-size:9px;letter-spacing:.04em;color:#cbd5e1;font-weight:700;margin-bottom:4px">PRE-MARKET DELTA LEVELS (PROXY)</div>' +
+        '<div style="font-size:9px;color:var(--muted);margin-bottom:5px">Not true footprint cluster data.</div>' +
+        pmRows +
+      '</div>';
+  }
 
   var rr = s.rr1 != null ? s.rr1 : (s.rr || 0);
   var sizeLabel = s.size_multiplier != null ? (s.size_multiplier === 1.0 ? 'Full' : s.size_multiplier === 0.5 ? 'Half' : s.size_multiplier === 0.25 ? 'Quarter' : s.size_multiplier + 'x') : '';
@@ -10591,6 +10637,9 @@ function buildScalpCard(s, idx) {
         '<span class="conf-label">R:R</span><span class="rr-val">1:'+rr.toFixed(2)+'</span>'+
         (s.spread_pips ? '<span style="font-size:10px;color:var(--muted);margin-left:auto">Spread '+s.spread_pips.toFixed(1)+'pip &middot; '+s.sl_method+'</span>' : '')+
       '</div>'+
+
+      advisoryHtml +
+      pmProxyHtml +
 
       // Grade reasons
       reasonsHtml +

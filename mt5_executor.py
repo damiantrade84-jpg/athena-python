@@ -416,7 +416,7 @@ def mt5_get_positions() -> dict:
     return {"error": False, "symbol": "MT5", "detail": "", "positions": result}
 
 
-def mt5_close_position(ticket: int) -> dict:
+def mt5_close_position(ticket: int, volume: float | None = None) -> dict:
     """Close an open MT5 position by ticket number."""
 
     mt5 = _get_mt5()
@@ -433,6 +433,23 @@ def mt5_close_position(ticket: int) -> dict:
 
     close_type = mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY
 
+    close_volume = float(pos.volume)
+    if volume is not None:
+        try:
+            requested_volume = max(0.0, min(float(volume), float(pos.volume)))
+        except (TypeError, ValueError):
+            requested_volume = 0.0
+        sym_info = mt5.symbol_info(pos.symbol)
+        vol_step = float(getattr(sym_info, "volume_step", 0.01) or 0.01)
+        vol_min = float(getattr(sym_info, "volume_min", 0.01) or 0.01)
+        close_volume = math.floor(requested_volume / vol_step) * vol_step
+        close_volume = round(close_volume, 2)
+        if close_volume < vol_min:
+            return {
+                "success": False,
+                "error": f"INVALID_CLOSE_VOLUME: {requested_volume} below minimum {vol_min}",
+            }
+
     tick = mt5.symbol_info_tick(pos.symbol)
 
     if not tick:
@@ -443,7 +460,7 @@ def mt5_close_position(ticket: int) -> dict:
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": pos.symbol,
-        "volume": pos.volume,
+        "volume": close_volume,
         "type": close_type,
         "price": price,
         "position": ticket,
@@ -978,8 +995,14 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
     vol_step = sym_info.volume_step if sym_info else 0.01
     vol_min = sym_info.volume_min if sym_info else 0.01
 
-    # Only split if TP2 is distinct and total volume allows for at least 2 units of min_step
-    do_split = tp2 > 0 and abs(tp2 - tp) > (10 * sym_info.point) and total_vol >= (vol_min * 2)
+    _engine = str(signal.get("engine", "")).strip().lower()
+    _is_scalp = _engine in ("scalp", "engine d", "scalp_vp")
+    # Engine D / Scalp Lab uses one protected broker position with TP1 and SL.
+    if _is_scalp:
+        do_split = False
+    else:
+        # Only split if TP2 is distinct and total volume allows for at least 2 units of min_step
+        do_split = tp2 > 0 and abs(tp2 - tp) > (10 * sym_info.point) and total_vol >= (vol_min * 2)
 
     if do_split:
         vol1 = round(math.floor((total_vol / 2) / vol_step) * vol_step, 2)
@@ -1093,6 +1116,7 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         "direction": direction,
         "sl": sl,
         "tp": tp,
+        "tpPartial": None,
         "tp2": tp2 if do_split else None,
         "tp2Ticket": int(results[1].order) if len(results) > 1 else None,
         "riskAmount": approval.risk_amount,

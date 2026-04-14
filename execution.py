@@ -1203,7 +1203,7 @@ def api_execute():
                             "EXECUTED",
                             None,
                             f"${approval.risk_amount}",
-                            sig.get("style") or "execution",
+                            sig.get("style") or "intraday",
                             result.get("entryPrice"),
                             sig.get("sl"),
                             sig.get("tp1"),
@@ -1383,7 +1383,63 @@ def api_scalp_execute():
             if not symbol_info or symbol_info.get("error"):
                 return jsonify({"error": f"Symbol {pair_key} not available on MT5"}), 400
             _exec_venue = "mt5"
-            
+
+        # ── Rebase scalp levels to current live price ────────────────────────
+        # VP-based SL/TP are calculated at scan time.  By execution time the
+        # price may have drifted enough to invert or invalidate the levels.
+        # Recompute using the current broker mid-price before risk_check runs.
+        # If VP is so stale that TP ends up on the wrong side of entry, block
+        # execution and tell the user to rescan.
+        _rebase_error = None
+        try:
+            from scalp_engine import calculate_scalp_levels, _guess_asset_type
+            _bid = float(symbol_info.get("bid") or 0)
+            _ask = float(symbol_info.get("ask") or 0)
+            _live_px = (_bid + _ask) / 2 if _bid > 0 and _ask > 0 else _bid or _ask
+            _scan_px  = float(sig.get("price") or 0)
+            _vp = {
+                "poc": float(sig.get("vp_poc") or 0),
+                "vah": float(sig.get("vp_vah") or 0),
+                "val": float(sig.get("vp_val") or 0),
+                "lvn_levels": [],
+            }
+            if _live_px > 0 and _vp["poc"] > 0 and _vp["vah"] > 0 and _vp["val"] > 0:
+                _asset_type = _guess_asset_type(pair_key)
+                _rebased = calculate_scalp_levels(
+                    sig.get("direction", "LONG"),
+                    _live_px,
+                    _vp,
+                    sig.get("zone_type", "trend_continuation"),
+                    symbol_info,
+                    _asset_type,
+                )
+                drift_pct = abs(_live_px - _scan_px) / _scan_px * 100 if _scan_px else 0
+                if _rebased.get("rr_below_min"):
+                    # VP structure invalidated (TP inverted) or RR too low — do not execute
+                    _rebase_error = (
+                        f"VP structure invalidated by price drift ({drift_pct:.2f}% since scan). "
+                        f"Rescan required."
+                    )
+                    _r.log.warning(f"[SCALP EXEC] {pair_key} BLOCKED: {_rebase_error}")
+                else:
+                    _r.log.info(
+                        f"[SCALP EXEC] {pair_key} levels rebased: "
+                        f"price {_scan_px:.5f}→{_live_px:.5f} ({drift_pct:.2f}% drift), "
+                        f"sl {sig.get('sl')}→{_rebased['sl']}, "
+                        f"tp1 {sig.get('tp1')}→{_rebased['tp1']}"
+                    )
+                    sig = dict(sig)   # don't mutate caller's dict
+                    sig["price"] = _rebased["entry"]
+                    sig["sl"]    = _rebased["sl"]
+                    sig["tp1"]   = _rebased["tp1"]
+                    if _rebased.get("tp2"):
+                        sig["tp2"] = _rebased["tp2"]
+        except Exception as _re:
+            _r.log.warning(f"[SCALP EXEC] Level rebase failed ({_re}), using scan-time levels")
+
+        if _rebase_error:
+            return jsonify({"error": _rebase_error}), 400
+
         # Format signal for risk engine
         approval = risk_check(
             signal=sig,
