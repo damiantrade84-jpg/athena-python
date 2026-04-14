@@ -504,23 +504,37 @@ def scalp_session_window(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def check_spread(symbol_info: dict, asset_type: str) -> tuple:
-    """Validate spread within limits.  Returns (ok: bool, spread_pips: float)."""
-    cfg = CONFIG.get("SCALP_ENGINE", {})
-    max_spreads = cfg.get("MAX_SPREAD_PIPS", {})
+    """Validate spread within limits.  Returns (ok: bool, spread_pips: float).
 
+    Forex: spread in pips via point/pip_size conversion (standard).
+    Index/Stock/Commodity: spread in raw MT5 integer points — the pip formula
+      produces nonsense values (e.g. 47200 pips) for these instruments because
+      their point size is tiny but has no relationship to the forex pip concept.
+    Crypto: always passes (spread not applicable to perpetual futures).
+    """
+    cfg = CONFIG.get("SCALP_ENGINE", {})
     spread_raw = symbol_info.get("spread", 0)
     point = symbol_info.get("point", 0.00001)
-    spread_price = spread_raw * point
 
+    if asset_type == "crypto":
+        return True, 0.0
+
+    if asset_type in ("index", "stock", "commodity"):
+        # Use raw point count from MT5 — meaningful unit for these instruments.
+        # MAX_SPREAD_POINTS: index=100, stock=50, commodity=30 (configurable).
+        max_points_cfg = cfg.get("MAX_SPREAD_POINTS", {})
+        defaults = {"index": 100, "stock": 50, "commodity": 30}
+        max_pts = max_points_cfg.get(asset_type, defaults.get(asset_type, 100))
+        ok = spread_raw <= max_pts
+        return ok, float(spread_raw)
+
+    # Forex: convert to pips via standard formula
+    max_spreads = cfg.get("MAX_SPREAD_PIPS", {})
+    spread_price = spread_raw * point
     digits = symbol_info.get("digits", 5)
     pip_size = point * 10 if digits >= 4 else point
     spread_pips = spread_price / pip_size if pip_size > 0 else 0
-
     max_spread = max_spreads.get(asset_type, max_spreads.get("forex", 4))
-
-    if asset_type == "crypto":
-        return True, spread_pips
-
     ok = spread_pips <= max_spread
     return ok, round(spread_pips, 2)
 
@@ -693,7 +707,14 @@ def _locate_price_vs_vp(price: float, vp: dict) -> dict:
     if val <= price <= vah:
         return {"location": "inside_va", "nearest_level": poc, "distance_pct": round(abs(price - poc) / poc * 100, 3)}
 
-    return {"location": "outside_va", "nearest_level": poc, "distance_pct": round(abs(price - poc) / poc * 100, 3)}
+    # Price is outside value area — flag which side so _classify_setup can set direction
+    above_va = price > vah
+    return {
+        "location": "outside_va",
+        "above_va": above_va,
+        "nearest_level": vah if above_va else val,
+        "distance_pct": round(abs(price - (vah if above_va else val)) / (vah if above_va else val) * 100, 3),
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -919,6 +940,37 @@ def _classify_setup(
     cfg = CONFIG.get("SCALP_ENGINE", {})
     location = price_loc.get("location", "")
     reasons = []
+
+    # ── Mean Reversion — price extended beyond VA boundary (strongest signal) ─
+    # Price pushed outside the value area in a ranging market → expect reversion to POC.
+    # This is a stronger signal than being exactly at VAH/VAL (more extended = more elastic).
+    if cfg.get("SETUP_MEAN_REVERSION", True) and market_state == "balance" and location == "outside_va":
+        above_va = price_loc.get("above_va", True)
+        direction = "SHORT" if above_va else "LONG"
+        side_label = "above VAH" if above_va else "below VAL"
+
+        # Absorption still required — confirms exhaustion at the extended level
+        if not absorption.get("detected"):
+            return {"valid": False, "reason": "no_absorption_outside_va"}
+
+        cvd_dir = cvd.get("direction")
+        cvd_confirms = (cvd_dir == direction) or (cvd_dir is None)
+        if not cvd_confirms:
+            return {"valid": False, "reason": f"cvd_against_reversion:{cvd_dir}_vs_{direction}"}
+
+        reasons.append(f"Mean reversion: price extended {side_label} — revert to POC")
+        if cvd_dir == direction:
+            reasons.append(f"CVD confirms {direction} from extended level")
+        if vwap.get("lean") == direction:
+            reasons.append(f"VWAP confirms {direction}")
+
+        return {
+            "valid": True,
+            "setup_type": "mean_reversion",
+            "direction": direction,
+            "target": "POC",
+            "reasons": reasons,
+        }
 
     # ── Mean Reversion ───────────────────────────────────────────────────
     if cfg.get("SETUP_MEAN_REVERSION", True) and market_state == "balance" and location in ("at_vah", "at_val"):

@@ -842,11 +842,13 @@ SCALP_ENGINE:
   H1_CANDLES: 300               # Higher-TF bars for directional bias
   SESSION_FILTER: true          # London/NY only for non-crypto
   SESSION_MODE: "london_ny"     # London+NY combined (07:00-21:00 UTC) — full high-liquidity window
-  NY_OPEN_SKIP_MINUTES: 0       # No skip needed — london_ny starts at London open
+  NY_OPEN_SKIP_MINUTES: 30      # Caution window after NY cash open (applies inside london_ny)
+  LONDON_OPEN_SKIP_MINUTES: 20  # Avoid first 20 min of London open (07:00-07:20 UTC)
   EXECUTION_TIMEFRAME: "M1"     # 15m structure, 5m context, 1m execution
   # ── Directional Filter ────────────────────────────────────
   WITH_TREND_ONLY: true         # Reject counter-trend scalp setups
   BIAS_TIMEFRAME: "H1"          # Higher-TF direction gate for scalp signals
+  BIAS_REQUIRE_CONFIRMATION: true  # Skip pair if H1 bars insufficient for EMA stack; false = allow without bias
   # ── Spread Limits ─────────────────────────────────────────
   MAX_SPREAD_PIPS:
     forex: 4
@@ -859,6 +861,12 @@ SCALP_ENGINE:
   VP_BINS: 64                   # Price level granularity for Volume Profile histogram
   VP_VALUE_AREA_PCT: 0.70       # 70% of volume defines Value Area (standard)
   VP_LVN_THRESHOLD: 0.15        # Bins below 15% of POC volume are Low Volume Nodes
+  VP_PROXIMITY_PCT: 0.30        # % of price to classify as "at" VAH/VAL/POC (0.30 = ±0.30%)
+  # ── Spread limits for non-forex (raw MT5 points, not pip-converted) ──────
+  MAX_SPREAD_POINTS:
+    index: 100                  # NAS100/DAX/S&P: max spread in index points
+    stock: 50                   # Stocks: max spread in instrument points
+    commodity: 30               # Gold/Oil: max spread in instrument points
   # ── Absorption Detection ──────────────────────────────────
   ABSORPTION_VOL_MULT: 2.0      # Volume must exceed SMA(20) * this (range: 1.5-3.5)
   ABSORPTION_MAX_MOVE_ATR: 0.3  # Max candle body as fraction of ATR
@@ -894,8 +902,8 @@ SCALP_ENGINE:
   # ── Backtest ──────────────────────────────────────────────
   BT_ENABLED: true              # Enable scalp backtesting
   BT_SESSION_MODE: "london_ny"  # Backtest uses same London+NY window as live
-  BT_NY_OPEN_SKIP_MINUTES: 0    # No skip — matches live config
-  BT_WALK_BARS: 12              # Max M15 bars to walk for SL/TP hit
+  BT_NY_OPEN_SKIP_MINUTES: 30   # Backtest mirrors live NY-open caution window
+  BT_WALK_BARS: 20              # Max M15 bars to walk for SL/TP hit (20 bars = 5 h, reduces TIMEOUT rate on mean-reversion)
   BT_MAX_CONCURRENT: 2          # Max concurrent scalp positions in backtest
   BT_COMMISSION_PER_SIDE: 0.0   # Commission per side (set per broker)
   BT_SLIPPAGE_TICKS: 3          # Slippage assumption in ticks
