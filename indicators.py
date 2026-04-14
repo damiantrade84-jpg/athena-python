@@ -1295,7 +1295,12 @@ def detect_absorption(candles: list, *, vol_mult: float = 2.0, max_move_atr: flo
     lows = [float(c.get("low", 0)) for c in candles]
     closes = [float(c.get("close", 0)) for c in candles]
     opens = [float(c.get("open", 0)) for c in candles]
-    vols = [float(c.get("vol", 0)) for c in candles]
+    raw_vols = [float(c.get("vol", 0)) for c in candles]
+    # Fallback to range proxy if no tick volume is available (common for forex MT5 historical data)
+    if max(raw_vols) <= 0:
+        vols = [max(highs[i] - lows[i], 1e-10) for i in range(len(candles))]
+    else:
+        vols = raw_vols
 
     atr_list = calc_atr(highs, lows, closes, 14)
     vol_sma = calc_sma(vols, sma_period)
@@ -1366,11 +1371,14 @@ def calc_cvd(candles: list, *, smooth_period: int = 5) -> dict:
         vol = float(c.get("vol", 0))
 
         candle_range = h - lo
-        if candle_range <= 0 or vol <= 0:
+        if candle_range <= 0:
             deltas.append(0.0)
             cumulative += 0.0
             cvd_values.append(round(cumulative, 4))
             continue
+        # Use range as proxy volume when tick volume is zero (forex MT5 historical data)
+        if vol <= 0:
+            vol = candle_range
 
         # Buy volume: proportion of range from low to close
         buy_vol = vol * (cl - lo) / candle_range
