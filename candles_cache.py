@@ -22,7 +22,7 @@ _candle_fetch_inflight: dict = {}
 _last_cleanup_time = 0.0
 _CLEANUP_INTERVAL = 600.0  # seconds (10 mins)
 
-_CANDLE_CACHE_TTL = {"M5": 5 * 60, "M15": 15 * 60, "H1": 55 * 60, "H4": 235 * 60, "D1": 23 * 3600}
+_CANDLE_CACHE_TTL = {"M1": 60, "M5": 5 * 60, "M15": 15 * 60, "H1": 55 * 60, "H4": 235 * 60, "D1": 23 * 3600}
 
 
 def _cache_key(pair: dict, tf: str, limit: int) -> tuple[str, str, int]:
@@ -328,6 +328,7 @@ def fetch_candles(
     *,
     fetch_candles_live: Callable[..., Any],
     fetch_binance: Callable[..., Any],
+    fetch_binance_paginated: Callable[..., Any] | None = None,
     fetch_eodhd: Callable[..., Any],
     fetch_polygon: Callable[..., Any],
     fetch_yfinance: Callable[..., Any],
@@ -474,7 +475,11 @@ def fetch_candles(
     try:
         if candles is None and pair["source"] == "binance":
             fetch_meta.update({"resolution": "rest", "upstream": "binance_futures"})
-            candles = fetch_binance(pair["symbol"], tf_b[tf], limit)
+            if limit > 1000 and fetch_binance_paginated:
+                candles = fetch_binance_paginated(pair["symbol"], tf_b[tf], limit)
+                fetch_meta["pagination"] = True
+            else:
+                candles = fetch_binance(pair["symbol"], tf_b[tf], limit)
 
         elif candles is None and pair["source"] == "eodhd":
             fetch_meta.update({"resolution": "rest", "upstream": "eodhd"})

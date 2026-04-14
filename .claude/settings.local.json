@@ -59,7 +59,12 @@
       "Bash(git hash-object:*)",
       "Bash(git diff-tree:*)",
       "Bash(echo:*)",
-      "Bash(del fix_encoding.py)"
+      "Bash(del fix_encoding.py)",
+      "Bash(.venv/Scripts/python.exe -c ':*)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_lottery_engine.py -v)",
+      "Bash(tasklist /FI \"IMAGENAME eq git.exe\")",
+      "Bash(tasklist /FI \"IMAGENAME eq git-remote-https.exe\")",
+      "Bash(ls -la /c/Users/damia/OneDrive/Desktop/athena-python/*.py)"
     ]
   }
 }

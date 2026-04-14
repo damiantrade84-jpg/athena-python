@@ -244,6 +244,48 @@ class TestCandleCacheKeys:
         assert meta["upstream"] == "binance_futures"
         assert meta["liveMerge"] is True
 
+    def test_binance_large_limit_uses_paginated_fetch(self):
+        pair = {
+            "symbol": "BTCUSDT",
+            "display": "BTC/USDT",
+            "source": "binance",
+            "type": "crypto",
+        }
+        paginated = Mock(
+            return_value=[
+                {
+                    "time": "2026-03-27T00:00:00+00:00",
+                    "open": 87000,
+                    "high": 87500,
+                    "low": 86800,
+                    "close": 87250,
+                    "vol": 100,
+                }
+            ]
+        )
+        direct = Mock(return_value=None)
+
+        candles = fetch_candles(
+            pair,
+            "M15",
+            2000,
+            fetch_candles_live=_noop_fetch,
+            fetch_binance=direct,
+            fetch_binance_paginated=paginated,
+            fetch_eodhd=_noop_fetch,
+            fetch_polygon=_noop_fetch,
+            fetch_yfinance=_noop_fetch,
+            fetch_mt5=None,
+            yfinance_symbol_for_pair=lambda _pair: None,
+            tf_b={"M1": "1m", "M5": "5m", "M15": "15m", "H1": "1h", "H4": "4h", "D1": "1d"},
+        )
+        meta = get_candle_fetch_meta(pair, "M15", 2000)
+
+        assert candles[0]["close"] == 87250
+        assert paginated.call_count == 1
+        assert direct.call_count == 0
+        assert meta["pagination"] is True
+
     def test_fetch_meta_tracks_upstream_and_cache_hits(self):
         pair = {"symbol": "EURUSD", "display": "EUR/USD", "source": "mt5", "type": "forex"}
         candles = [{"time": "2026-03-27T14:00:00+00:00", "open": 1.1, "high": 1.2, "low": 1.0, "close": 1.15, "vol": 1000}]

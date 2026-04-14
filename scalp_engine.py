@@ -39,7 +39,7 @@ log = logging.getLogger("sentinel.scalp")
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _scalp_fetch_candles(pair: dict, tf: str, limit: int):
-    """Route through monolith fetch_candles for crypto M5/M15/H1."""
+    """Route through monolith fetch_candles for crypto M1/M5/M15/H1."""
     try:
         from athena_runtime import rt
         return rt().fetch_candles(pair, tf, limit)
@@ -109,6 +109,7 @@ def mt5_fetch_scalp_candles(
             return []
 
         tf_map = {
+            "M1":  mt5.TIMEFRAME_M1,
             "M5":  mt5.TIMEFRAME_M5,
             "M15": mt5.TIMEFRAME_M15,
             "H1":  mt5.TIMEFRAME_H1,
@@ -228,6 +229,28 @@ def _current_utc_datetime() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _coerce_utc_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except Exception:
+            return None
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return None
+
+
 def get_current_sessions() -> list:
     """Return active session names based on current UTC hour."""
     now_utc_h = _current_utc_datetime().hour
@@ -259,6 +282,45 @@ def is_valid_session(asset_type: str = "forex") -> tuple:
     for s in sessions:
         if s in ("london", "new_york"):
             return True, s
+    return False, "off_hours"
+
+
+def scalp_session_window(
+    asset_type: str = "forex",
+    when: Any = None,
+    *,
+    backtest: bool = False,
+) -> tuple[bool, str]:
+    """Config-driven scalp session gate with optional NY open cooldown."""
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    if not cfg.get("SESSION_FILTER", True):
+        return True, "all"
+
+    mode_key = "BT_SESSION_MODE" if backtest else "SESSION_MODE"
+    raw_mode = str(cfg.get(mode_key, cfg.get("SESSION_MODE", "new_york")) or "new_york").strip().lower()
+    mode = raw_mode if raw_mode not in {"inherit", "default"} else str(cfg.get("SESSION_MODE", "new_york")).strip().lower()
+    if mode in {"all", "any", "disabled", "off"}:
+        return True, "all"
+
+    sessions_map = _CRYPTO_SESSIONS if asset_type == "crypto" else _SESSIONS
+    if mode not in sessions_map:
+        return False, "off_hours"
+
+    current_dt = _coerce_utc_datetime(when) or _current_utc_datetime()
+    current_minute = current_dt.hour * 60 + current_dt.minute
+    start_h, end_h = sessions_map[mode]
+    start_minute = start_h * 60
+    end_minute = end_h * 60
+
+    if mode == "new_york":
+        skip_key = "BT_NY_OPEN_SKIP_MINUTES" if backtest else "NY_OPEN_SKIP_MINUTES"
+        skip_minutes = max(0, int(cfg.get(skip_key, cfg.get("NY_OPEN_SKIP_MINUTES", 0))))
+        if start_minute <= current_minute < start_minute + skip_minutes:
+            return False, "NY_OPEN_COOLDOWN"
+        start_minute += skip_minutes
+
+    if start_minute <= current_minute < end_minute:
+        return True, mode
     return False, "off_hours"
 
 
@@ -993,9 +1055,13 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
     from mt5_executor import mt5_map_symbol, mt5_get_symbol_info, mt5_connect
 
     cfg = CONFIG.get("SCALP_ENGINE", {})
+    m1_count = int(cfg.get("M1_CANDLES", 300))
     m15_count = int(cfg.get("M15_CANDLES", 500))
     m5_count  = int(cfg.get("M5_CANDLES", 1000))
     h1_count  = int(cfg.get("H1_CANDLES", 300))
+    execution_tf = str(cfg.get("EXECUTION_TIMEFRAME", "M1")).upper()
+    if execution_tf not in {"M1", "M5"}:
+        execution_tf = "M1"
     bias_tf   = str(cfg.get("BIAS_TIMEFRAME", "H1")).upper()
     use_bias  = bool(cfg.get("WITH_TREND_ONLY", True))
     min_grade = str(cfg.get("MIN_GRADE_AUTO_EXECUTE", cfg.get("MIN_GRADE", "C"))).upper()
@@ -1025,12 +1091,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             log.debug(f"[SSI] Scalp sample skipped for {display}: {exc}")
 
     sessions = get_current_sessions()
-    mt5_session_ok, session_name = is_valid_session("forex")
-    _, crypto_session_name = is_valid_session("crypto")
+    mt5_session_ok, session_name = scalp_session_window("forex")
+    crypto_session_ok, _ = scalp_session_window("crypto")
 
-    crypto_pairs = [p for p in pairs_or_symbols if _guess_asset_type(p) == "crypto"]
-
-    if not mt5_session_ok and not crypto_pairs:
+    if not mt5_session_ok and not crypto_session_ok:
         for display in pairs_or_symbols:
             _record_stability_sample(display, _guess_asset_type(display), False, reason="OUTSIDE_SESSION")
         return {
@@ -1055,6 +1119,12 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
         mt5_sym = None
         try:
             asset_type = _guess_asset_type(display)
+            session_ok, active_session = scalp_session_window(asset_type)
+            if not session_ok:
+                reason = active_session if active_session == "NY_OPEN_COOLDOWN" else "OUTSIDE_SESSION"
+                _record_stability_sample(display, asset_type, False, reason=reason)
+                skipped.append({"pair": display, "reason": reason})
+                continue
 
             # ── Fetch candles (crypto vs MT5) ────────────────────────────────
             if asset_type == "crypto":
@@ -1076,7 +1146,16 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     skipped.append({"pair": display, "reason": "insufficient_m5_candles"})
                     continue
 
-                current_price = candles_m5[-1]["close"]
+                if execution_tf == "M1":
+                    candles_exec = _scalp_fetch_candles(pair_dict, "M1", m1_count)
+                    if not candles_exec or len(candles_exec) < 30:
+                        _record_stability_sample(display, asset_type, False, reason="insufficient_m1_candles")
+                        skipped.append({"pair": display, "reason": "insufficient_m1_candles"})
+                        continue
+                else:
+                    candles_exec = candles_m5
+
+                current_price = candles_exec[-1]["close"]
                 sym_info = {"spread": 0, "point": 0.01, "digits": 2}
                 spread_pips = 0.0
                 htf_bias = None
@@ -1087,11 +1166,6 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                         htf_bias = infer_bias_from_ema_stack(candles_bias)
 
             else:
-                if not mt5_session_ok:
-                    _record_stability_sample(display, asset_type, False, reason="OUTSIDE_SESSION")
-                    skipped.append({"pair": display, "reason": "OUTSIDE_SESSION"})
-                    continue
-
                 mt5_sym = mt5_map_symbol(display)
                 if not mt5_sym:
                     _record_stability_sample(display, asset_type, False, reason="no_mt5_mapping")
@@ -1124,8 +1198,17 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     skipped.append({"pair": display, "reason": "insufficient_m5_candles"})
                     continue
 
+                if execution_tf == "M1":
+                    candles_exec = mt5_fetch_scalp_candles(mt5_sym, "M1", m1_count, include_forming=True)
+                    if len(candles_exec) < 30:
+                        _record_stability_sample(display, asset_type, False, reason="insufficient_m1_candles")
+                        skipped.append({"pair": display, "reason": "insufficient_m1_candles"})
+                        continue
+                else:
+                    candles_exec = candles_m5
+
                 live_price = mt5_get_live_price(mt5_sym)
-                current_price = live_price if live_price and live_price > 0 else candles_m5[-1]["close"]
+                current_price = live_price if live_price and live_price > 0 else candles_exec[-1]["close"]
                 htf_bias = None
 
                 if use_bias:
@@ -1152,9 +1235,9 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             price_loc = _locate_price_vs_vp(current_price, vp)
 
             # Pillar 2: Aggression — absorption, CVD, AAA
-            absorption = _check_absorption(candles_m5)
-            cvd = _check_cvd(candles_m5)
-            aaa = _check_aaa_sequence(candles_m5, absorption, cvd)
+            absorption = _check_absorption(candles_exec)
+            cvd = _check_cvd(candles_exec)
+            aaa = _check_aaa_sequence(candles_exec, absorption, cvd)
 
             # Pillar 3: VWAP directional lean
             vwap = _check_vwap_lean(candles_m15, current_price)
@@ -1225,7 +1308,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "size_multiplier": quality["size_multiplier"],
                 # Context
                 "spread_pips":     spread_pips,
-                "session":         session_name,
+                "session":         active_session,
+                "execution_tf":    execution_tf,
+                "context_tf":      "M5",
+                "structure_tf":    "M15",
                 "ema21":           None,  # replaced by VWAP
                 "vwap":            vwap.get("vwap_value"),
                 "market_state":    market_state,

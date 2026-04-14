@@ -4373,7 +4373,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     """
     from volume_profile import split_completed_sessions, compute_fixed_range_volume_profile
     from indicators import detect_absorption, calc_cvd, detect_range_contraction
-    from scalp_engine import _guess_asset_type, _calc_ema
+    from scalp_engine import _guess_asset_type, _calc_ema, _coerce_utc_datetime, scalp_session_window
 
     display = pair.get("display", pair.get("symbol", "UNKNOWN"))
     asset_type = pair.get("type", _guess_asset_type(display))
@@ -4391,6 +4391,9 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     abs_max_move = float(cfg.get("ABSORPTION_MAX_MOVE_ATR", 0.3))
     abs_sma = int(cfg.get("ABSORPTION_SMA_PERIOD", 20))
     slippage_ticks = int(cfg.get("BT_SLIPPAGE_TICKS", 3))
+    scratch_enabled = bool(cfg.get("BT_SCRATCH_ENABLED", True))
+    scratch_bars = max(1, int(cfg.get("BT_SCRATCH_BARS", 3)))
+    scratch_min_r = max(0.0, float(cfg.get("BT_SCRATCH_MIN_R", 0.10)))
 
     log.info(f"[SCALP-BT] Starting backtest for {display} (type={asset_type})")
 
@@ -4466,6 +4469,10 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         current_price = candles[i]["close"]
         current_atr = atr_full[i] if i < len(atr_full) else 0
         if current_atr <= 0:
+            continue
+        candle_dt = _coerce_utc_datetime(candles[i].get("time"))
+        session_ok, session_label = scalp_session_window(asset_type, when=candle_dt, backtest=True)
+        if not session_ok:
             continue
 
         # ── Step 1: Compute VP from bars before current ─────────────────────
@@ -4620,6 +4627,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         exit_reason = None
         exit_price = None
         exit_bar_idx = None
+        best_favorable_r = 0.0
 
         for w in range(1, walk_bars + 1):
             walk_idx = i + 1 + w
@@ -4627,6 +4635,10 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
                 break
 
             wbar = candles[walk_idx]
+            if direction == "LONG":
+                best_favorable_r = max(best_favorable_r, max(0.0, (wbar["high"] - entry) / sl_distance))
+            else:
+                best_favorable_r = max(best_favorable_r, max(0.0, (entry - wbar["low"]) / sl_distance))
             outcome, both_hit = _resolve_barrier_exit(
                 wbar, direction=direction, sl=sl, tp1=tp1, tp2=None, sl_outcome="SL"
             )
@@ -4640,6 +4652,12 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
                     exit_price = sl
                 elif outcome == "TP1":
                     exit_price = tp1
+                break
+
+            if scratch_enabled and w >= scratch_bars and best_favorable_r < scratch_min_r:
+                exit_reason = "SCRATCH_NO_FOLLOW_THROUGH"
+                exit_price = wbar["close"]
+                exit_bar_idx = walk_idx
                 break
 
         # Timeout if no SL/TP hit
@@ -4703,6 +4721,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             "val": round(val, 6),
             "zone_level": round(zone_level, 6),
             "atr": round(current_atr, 6),
+            "session": session_label,
             "oos": oos,
             "regime": "SCALP",
             # Compatibility fields for _format_backtest_results

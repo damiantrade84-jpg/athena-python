@@ -23,6 +23,7 @@ from scalp_engine import (
     get_current_sessions,
     infer_bias_from_ema_stack,
     is_valid_session,
+    scalp_session_window,
     mt5_get_live_price,
     mt5_fetch_scalp_candles,
     _build_volume_profile,
@@ -352,7 +353,7 @@ def test_signal_has_all_required_keys():
 
 def test_mt5_fetch_scalp_candles_drops_forming_bar(monkeypatch):
     fake_mt5 = types.SimpleNamespace(
-        TIMEFRAME_M5=5, TIMEFRAME_M15=15, TIMEFRAME_H1=60,
+        TIMEFRAME_M1=1, TIMEFRAME_M5=5, TIMEFRAME_M15=15, TIMEFRAME_H1=60,
         terminal_info=lambda: True, initialize=lambda: True,
         symbol_select=lambda s, e: True,
         copy_rates_from_pos=lambda s, tf, start, count: [
@@ -369,7 +370,7 @@ def test_mt5_fetch_scalp_candles_drops_forming_bar(monkeypatch):
 
 def test_mt5_fetch_scalp_candles_keeps_forming_bar(monkeypatch):
     fake_mt5 = types.SimpleNamespace(
-        TIMEFRAME_M5=5, TIMEFRAME_M15=15, TIMEFRAME_H1=60,
+        TIMEFRAME_M1=1, TIMEFRAME_M5=5, TIMEFRAME_M15=15, TIMEFRAME_H1=60,
         terminal_info=lambda: True, initialize=lambda: True,
         symbol_select=lambda s, e: True,
         copy_rates_from_pos=lambda s, tf, start, count: [
@@ -381,6 +382,26 @@ def test_mt5_fetch_scalp_candles_keeps_forming_bar(monkeypatch):
     monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
     candles = mt5_fetch_scalp_candles("EURUSD", "M15", 2, include_forming=True)
     assert len(candles) == 2
+
+
+def test_mt5_fetch_scalp_candles_supports_m1(monkeypatch):
+    captured = {}
+
+    def _copy_rates(_symbol, tf, _start, _count):
+        captured["tf"] = tf
+        return [_FakeRateRow(time=1, open=100, high=101, low=99, close=100.5, tick_volume=10)]
+
+    fake_mt5 = types.SimpleNamespace(
+        TIMEFRAME_M1=1, TIMEFRAME_M5=5, TIMEFRAME_M15=15, TIMEFRAME_H1=60,
+        terminal_info=lambda: True, initialize=lambda: True,
+        symbol_select=lambda s, e: True,
+        copy_rates_from_pos=_copy_rates,
+    )
+    monkeypatch.setitem(sys.modules, "MetaTrader5", fake_mt5)
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    candles = mt5_fetch_scalp_candles("EURUSD", "M1", 1, include_forming=True)
+    assert candles[0]["close"] == 100.5
+    assert captured["tf"] == 1
 
 
 def test_mt5_get_live_price_bid_ask_mid(monkeypatch):
@@ -407,6 +428,44 @@ def test_is_valid_session_returns_off_hours(monkeypatch):
     monkeypatch.setattr(scalp_engine, "_current_utc_datetime",
                         lambda: datetime(2026, 3, 26, 22, 0, tzinfo=timezone.utc))
     assert is_valid_session() == (False, "off_hours")
+
+
+def test_scalp_session_window_blocks_ny_open_cooldown(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "SESSION_FILTER": True,
+            "SESSION_MODE": "new_york",
+            "NY_OPEN_SKIP_MINUTES": 30,
+        },
+    )
+    allowed, reason = scalp_session_window(
+        "forex",
+        when=datetime(2026, 3, 26, 13, 10, tzinfo=timezone.utc),
+    )
+    assert allowed is False
+    assert reason == "NY_OPEN_COOLDOWN"
+
+
+def test_scalp_session_window_allows_after_ny_open_cooldown(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "SESSION_FILTER": True,
+            "SESSION_MODE": "new_york",
+            "NY_OPEN_SKIP_MINUTES": 30,
+        },
+    )
+    allowed, reason = scalp_session_window(
+        "forex",
+        when=datetime(2026, 3, 26, 13, 31, tzinfo=timezone.utc),
+    )
+    assert allowed is True
+    assert reason == "new_york"
 
 
 def test_check_spread_rejects_wide_spread():
@@ -605,6 +664,7 @@ def test_run_scalp_scan_prefers_min_grade_auto_execute(monkeypatch):
     )
     monkeypatch.setattr(scalp_engine, "get_current_sessions", lambda: ["london"])
     monkeypatch.setattr(scalp_engine, "is_valid_session", lambda asset="forex": (True, "london"))
+    monkeypatch.setattr(scalp_engine, "scalp_session_window", lambda *args, **kwargs: (True, "london"))
     monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
     monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")
     monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda display: {"digits": 5, "point": 0.00001, "spread": 10})
@@ -626,3 +686,46 @@ def test_run_scalp_scan_prefers_min_grade_auto_execute(monkeypatch):
     result = scalp_engine.run_scalp_scan(["EUR/USD"])
     assert result["signals"] == []
     assert result["skipped"][0]["reason"] == "grade_C_below_min"
+
+
+def test_run_scalp_scan_uses_m1_execution_tf(monkeypatch):
+    requested_tfs = []
+
+    def _fake_mt5_fetch(_symbol, tf, _count, include_forming=False):
+        requested_tfs.append((tf, include_forming))
+        return _candles(300)
+
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "SESSION_FILTER": True,
+            "SESSION_MODE": "new_york",
+            "EXECUTION_TIMEFRAME": "M1",
+            "MIN_GRADE_AUTO_EXECUTE": "C",
+        },
+    )
+    monkeypatch.setattr(scalp_engine, "get_current_sessions", lambda: ["new_york"])
+    monkeypatch.setattr(scalp_engine, "scalp_session_window", lambda *args, **kwargs: (True, "new_york"))
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")
+    monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda display: {"digits": 5, "point": 0.00001, "spread": 10})
+    monkeypatch.setattr(scalp_engine, "check_spread", lambda sym_info, asset_type: (True, 1.0))
+    monkeypatch.setattr(scalp_engine, "mt5_fetch_scalp_candles", _fake_mt5_fetch)
+    monkeypatch.setattr(scalp_engine, "mt5_get_live_price", lambda symbol: 100.0)
+    monkeypatch.setattr(scalp_engine, "_build_volume_profile", lambda candles: {"valid": True, "poc": 100.0, "vah": 101.0, "val": 99.0, "lvn_levels": []})
+    monkeypatch.setattr(scalp_engine, "_classify_market_state", lambda vp: "balance")
+    monkeypatch.setattr(scalp_engine, "_locate_price_vs_vp", lambda price, vp: {"location": "at_val", "nearest_level": 99.0, "distance_pct": 0.0})
+    monkeypatch.setattr(scalp_engine, "_check_absorption", lambda candles: {"detected": True, "count": 1, "bars": [{}]})
+    monkeypatch.setattr(scalp_engine, "_check_cvd", lambda candles: {"direction": "LONG", "cvd_slope": 1.0})
+    monkeypatch.setattr(scalp_engine, "_check_aaa_sequence", lambda candles, absorption, cvd: {"complete": False, "phase": "absorption_only"})
+    monkeypatch.setattr(scalp_engine, "_check_vwap_lean", lambda candles, price: {"lean": "LONG", "vwap_value": 100.0})
+    monkeypatch.setattr(scalp_engine, "_classify_setup", lambda *args, **kwargs: {"valid": True, "direction": "LONG", "setup_type": "mean_reversion", "reasons": []})
+    monkeypatch.setattr(scalp_engine, "calculate_scalp_levels", lambda *args, **kwargs: {"entry": 100.0, "sl": 99.0, "tp1": 102.0, "tp2": 103.0, "rr": 2.0, "sl_distance": 1.0, "sl_method": "vp_boundary"})
+    monkeypatch.setattr(scalp_engine, "ai_quality_grade", lambda *args, **kwargs: {"score": 75, "grade": "B", "reasons": [], "size_multiplier": 0.5})
+    monkeypatch.setattr(scalp_engine, "record_signal_event", lambda **kwargs: None)
+
+    result = scalp_engine.run_scalp_scan(["EUR/USD"])
+    assert result["signals"][0]["execution_tf"] == "M1"
+    assert ("M1", True) in requested_tfs

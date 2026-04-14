@@ -835,30 +835,73 @@ VISION_MODIFIERS:
 # ── Scalp Engine (Engine D) ───────────────────────────────────────────
 SCALP_ENGINE:
   enabled: true
-  M15_CANDLES: 500
-  M5_CANDLES: 1000
-  H1_CANDLES: 300
-  SESSION_FILTER: true          # London/NY only
+  # ── Data ──────────────────────────────────────────────────
+  M1_CANDLES: 300               # M1 bars for execution / trigger timing
+  M15_CANDLES: 500              # M15 bars for zone/profile detection
+  M5_CANDLES: 1000              # M5 bars for trigger/entry detection
+  H1_CANDLES: 300               # Higher-TF bars for directional bias
+  SESSION_FILTER: true          # London/NY only for non-crypto
+  SESSION_MODE: "new_york"      # User-supplied Fabio preference from live masterclass notes
+  NY_OPEN_SKIP_MINUTES: 30      # Avoid first 20-30 minutes of NY open
+  EXECUTION_TIMEFRAME: "M1"     # 15m structure, 5m context, 1m execution
+  # ── Directional Filter ────────────────────────────────────
   WITH_TREND_ONLY: true         # Reject counter-trend scalp setups
   BIAS_TIMEFRAME: "H1"          # Higher-TF direction gate for scalp signals
-  MAX_SPREAD_PIPS:              # Per asset class
+  # ── Spread Limits ─────────────────────────────────────────
+  MAX_SPREAD_PIPS:
     forex: 4
     commodity: 8
     crypto: 0                   # disabled — spread not applicable for crypto perpetuals
     index: 6
     stock: 5
-  MIN_RR: 1.5
-  TP2_ENABLED: true             # Second TP at next M15 swing
-  AI_GRADING: true              # Enable rule-based AI quality score
+  # ── Volume Profile (Fabio Valentini methodology) ──────────
+  VP_ENABLED: true              # Use previous-session Volume Profile for zone detection
+  VP_BINS: 64                   # Price level granularity for Volume Profile histogram
+  VP_VALUE_AREA_PCT: 0.70       # 70% of volume defines Value Area (standard)
+  VP_LVN_THRESHOLD: 0.15        # Bins below 15% of POC volume are Low Volume Nodes
+  # ── Absorption Detection ──────────────────────────────────
+  ABSORPTION_VOL_MULT: 2.0      # Volume must exceed SMA(20) * this (range: 1.5-3.5)
+  ABSORPTION_MAX_MOVE_ATR: 0.3  # Max candle body as fraction of ATR
+  ABSORPTION_SMA_PERIOD: 20     # SMA period for average volume baseline
+  # ── CVD (Cumulative Volume Delta) ─────────────────────────
+  CVD_SMOOTH_PERIOD: 5          # Smoothing period for delta signal
+  # ── AAA Framework (Absorption → Accumulation → Aggression) ─
+  AAA_ENABLED: true             # Enable Triple-A setup detection
+  AAA_ACCUMULATION_LOOKBACK: 10 # Bars to measure range contraction
+  AAA_CONTRACTION_THRESHOLD: 0.5 # ATR ratio threshold for accumulation (0.5 = 50%)
+  AAA_BREAKOUT_VOL_MULT: 1.5   # Breakout bar volume must exceed avg * this
+  # ── VWAP ──────────────────────────────────────────────────
+  VWAP_ENABLED: true            # Use VWAP for directional lean
+  VWAP_BAND_MULT: 0.5          # ATR multiplier for VWAP bands (default 0.5)
+  # ── Setup Types ───────────────────────────────────────────
+  SETUP_MEAN_REVERSION: true    # VAL→POC / VAH→POC mean reversion trades
+  SETUP_TREND: true             # LVN pullback continuation trades
+  # ── Risk & Grading ────────────────────────────────────────
+  MIN_RR: 2.0                   # Minimum reward:risk ratio (was 1.5, Fabio targets 2.0-4.0)
+  TP2_ENABLED: true             # Second TP at next structural level
+  AI_GRADING: true              # Enable A/B/C/D quality grading
   MIN_GRADE_AUTO_EXECUTE: "B"   # Don't auto-execute below B grade
   ZONE_MIN_CONDITIONS: 2        # Valid zone needs >= N conditions
-  # SCALP_PAIRS: []             # Uncomment + list pairs to restrict scan to specific pairs only
-  #                             # Leave commented/empty to scan ALL pairs (default full set)
-  # Example: Restrict to specific crypto pairs only
-  # SCALP_PAIRS:
-  #   - "BTC/USDT"
-  #   - "ETH/USDT"
-  #   - "LTC/USDT"
+  # ── Grade-Based Position Sizing (Fabio A/B/C system) ──────
+  GRADE_SIZING_ENABLED: true    # Scale position size by setup grade
+  GRADE_A_SIZE_MULT: 1.0        # Full position on A setups
+  GRADE_B_SIZE_MULT: 0.5        # Half position on B setups
+  GRADE_C_SIZE_MULT: 0.25       # Quarter position on C setups
+  # ── Session Risk Rules ────────────────────────────────────
+  MAX_DAILY_LOSSES: 3           # Hard stop after 3 consecutive losses
+  SIZE_CUT_AFTER_2R: true       # Cut size 50% after +2R on the day
+  CONSECUTIVE_LOSS_HALVE: true  # Halve size after 2 consecutive losses
+  # ── Backtest ──────────────────────────────────────────────
+  BT_ENABLED: true              # Enable scalp backtesting
+  BT_SESSION_MODE: "new_york"   # Restrict backtest entries to NY session window
+  BT_NY_OPEN_SKIP_MINUTES: 30   # Skip first 30 minutes of NY open in backtests
+  BT_WALK_BARS: 12              # Max M15 bars to walk for SL/TP hit
+  BT_MAX_CONCURRENT: 2          # Max concurrent scalp positions in backtest
+  BT_COMMISSION_PER_SIDE: 0.0   # Commission per side (set per broker)
+  BT_SLIPPAGE_TICKS: 3          # Slippage assumption in ticks
+  BT_SCRATCH_ENABLED: true      # Scratch if there is no early follow-through
+  BT_SCRATCH_BARS: 3            # Evaluate follow-through over the next 2-3 bars
+  BT_SCRATCH_MIN_R: 0.10        # Minimum favorable excursion before holding
 
 # ── Chart Vision Dataset / V2 Shadow ────────────────────────────────────────
 # Default false: opt-in only. Dataset pipeline writes to audit.db

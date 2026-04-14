@@ -1221,7 +1221,7 @@ ACTIVE_PAIRS = [p for p in ALL_PAIRS if p.get("enabled", True)]
 
 _load_toggle_state()
 
-TF_B = {"D1": "1d", "H4": "4h", "H1": "1h", "M15": "15m", "M5": "5m"}
+TF_B = {"D1": "1d", "H4": "4h", "H1": "1h", "M15": "15m", "M5": "5m", "M1": "1m"}
 
 _YF_INTRADAY_PERIOD = "180d"
 
@@ -2593,6 +2593,7 @@ def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
         limit,
         fetch_candles_live=fetch_candles_live,
         fetch_binance=fetch_binance,
+        fetch_binance_paginated=fetch_binance_paginated,
         fetch_eodhd=fetch_eodhd,
         fetch_polygon=fetch_polygon,
         fetch_yfinance=fetch_yfinance,
