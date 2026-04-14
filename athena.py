@@ -4322,6 +4322,8 @@ def _init_audit_db(db_path: str) -> None:
         ),  # Factor scores + key indicators (COT, carry, microstructure, etc.)
         ("signal_price_ref", "REAL"),  # Scan/signal price at order time (vs entry_price fill)
         ("slippage_bps", "REAL"),  # Adverse slippage in basis points (sign = bad for trader)
+        ("tp_partial", "REAL"),
+        ("tp2", "REAL"),
     ]:
         if col not in existing:
             con.execute(f"ALTER TABLE audit_log ADD COLUMN {col} {defn}")
@@ -4692,8 +4694,9 @@ def api_analyze():
                 _con.execute(
                     "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
                     "asset_class,score_pct,max_score,votes_json,warnings_json,"
-                    "weinstein,trend_state,adx_pct,btc_bias,session_name,regime,factors_json) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "weinstein,trend_state,adx_pct,btc_bias,session_name,regime,factors_json,"
+                    "entry_price,sl,tp,tp_partial,tp2) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         datetime.now(timezone.utc).isoformat(),
                         sig.get("pair"),
@@ -4717,6 +4720,11 @@ def api_analyze():
                         sig.get("session", {}).get("name"),
                         sig.get("trendState"),
                         json.dumps(_factors),
+                        sig.get("price"),
+                        sig.get("sl"),
+                        sig.get("tp1"),
+                        sig.get("tp_partial"),
+                        sig.get("tp2"),
                     ),
                 )
 
@@ -5798,6 +5806,7 @@ def api_webhook():
     tp1 = d.get("tp1") or d.get("tp") or 0
 
     tp2 = d.get("tp2", 0)
+    tp_partial = d.get("tp_partial", 0)
 
     if (
         not pair_name
@@ -5820,6 +5829,7 @@ def api_webhook():
         "sl": float(sl),
         "tp1": float(tp1),
         "tp2": float(tp2) if tp2 else float(tp1),
+        "tp_partial": float(tp_partial) if tp_partial else None,
         "confluenceScore": float(d.get("score", 0.5)),
         "maxScore": float(d.get("maxScore", 3.0)),
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -5946,9 +5956,9 @@ def api_webhook():
                     }
                     con.execute(
                         "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
-                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,factors_json,"
+                        "entry_price,sl,tp,tp_partial,tp2,volume,regime,risk_amount,risk_pct,ticket,factors_json,"
                         "signal_price_ref,slippage_bps) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             datetime.now(timezone.utc).isoformat(),
                             pair_name,
@@ -7534,6 +7544,23 @@ def _scalp_ui_signal(raw_signal: dict) -> dict:
         "risk_level": risk_level,
         "zone_desc": zone_desc,
         "trigger_desc": trigger_desc,
+        "zone_type": raw_signal.get("zone_type"),
+        "zone_level": raw_signal.get("zone_level"),
+        "market_state": raw_signal.get("market_state"),
+        "vp_poc": raw_signal.get("vp_poc"),
+        "vp_vah": raw_signal.get("vp_vah"),
+        "vp_val": raw_signal.get("vp_val"),
+        "absorption_count": raw_signal.get("absorption_count"),
+        "cvd_direction": raw_signal.get("cvd_direction"),
+        "aaa_complete": raw_signal.get("aaa_complete"),
+        "size_multiplier": raw_signal.get("size_multiplier"),
+        "sl_method": raw_signal.get("sl_method"),
+        "rr1": raw_signal.get("rr1"),
+        "ai_reasons": raw_signal.get("ai_reasons", []),
+        "advisory": raw_signal.get("advisory"),
+        "advisory_summary": raw_signal.get("advisory_summary"),
+        "premarket_delta_cluster_type": raw_signal.get("premarket_delta_cluster_type"),
+        "premarket_delta_proxy_levels": raw_signal.get("premarket_delta_proxy_levels"),
         "engine": raw_signal.get("engine", "SCALP"),
         "session": raw_signal.get("session"),
         "spread_pips": raw_signal.get("spread_pips"),
@@ -9198,24 +9225,40 @@ def api_open_trades_timed():
 
         mins_open = (now_ts - open_ts) / 60.0
 
-        # Resolve style
-        style = (audit.get("style") or "intraday").lower()
-        if style not in _style_windows:
-            style = "intraday"
+        # Resolve style safely: scalp must never degrade to generic intraday labeling.
+        style = ""
+        audit_style = str(audit.get("style") or "").strip().lower()
+        audit_engine = str(audit.get("engine") or "").strip().lower()
+        pos_engine = str(p.get("engine") or "").strip().lower()
+        engine_hint = audit_engine or pos_engine
+        if engine_hint in ("scalp", "engine d", "scalp_vp"):
+            style = "scalp"
+        elif audit_style in ("scalp", "intraday", "swing"):
+            style = audit_style
+        elif audit_style == "trend":
+            style = "swing"
+        elif engine_hint in ("intraday", "swing"):
+            style = engine_hint
 
-        # Override windows from config if present
-        scfg = cfg_te.get(style, {})
-        if style == "swing":
-            be_min    = float(scfg.get("breakeven_days", 2.5)) * 1440
-            close_min = float(scfg.get("close_days", 5.0)) * 1440
-        else:
-            be_min    = float(scfg.get("breakeven_min", _style_windows[style]["be_min"]))
-            close_min = float(scfg.get("close_min",     _style_windows[style]["close_min"]))
+        # Timed exit parameters (disabled for scalps/unknowns)
+        be_min = None
+        close_min = None
+        
+        # Only resolve timers for styles with generic timed exits (intraday and swing)
+        if style in ("intraday", "swing"):
+            scfg = cfg_te.get(style, {})
+            if style == "swing":
+                be_min = float(scfg.get("breakeven_days", 2.5)) * 1440
+                close_min = float(scfg.get("close_days", 5.0)) * 1440
+            else:
+                be_min = float(scfg.get("breakeven_min", _style_windows[style]["be_min"]))
+                close_min = float(scfg.get("close_min",   _style_windows[style]["close_min"]))
 
         profit = float(p.get("profit", 0))
         in_profit = profit > 0
 
-        out.append({
+        # Construct position data with conditional timer fields
+        res_p = {
             "ticket":          ticket,
             "pair":            p.get("pair") or p.get("symbol", ""),
             "direction":       p.get("direction", "LONG"),
@@ -9228,14 +9271,30 @@ def api_open_trades_timed():
             "open_time_iso":   open_iso,
             "mins_open":       round(mins_open, 1),
             "style":           style,
-            "be_trigger_min":  round(be_min, 1),
-            "close_trigger_min": round(close_min, 1),
-            "be_reached":      mins_open >= be_min,
-            "close_reached":   mins_open >= close_min,
             "in_profit":       in_profit,
-            "mins_to_be":      round(max(0, be_min - mins_open), 1),
-            "mins_to_close":   round(max(0, close_min - mins_open), 1),
-        })
+            "be_reached":      False,
+            "close_reached":   False,
+            "mins_to_be":      0,
+            "mins_to_close":   0,
+        }
+
+        # Attach timers only if both are resolved (hides UI timer for scalps/unknowns)
+        if be_min is not None and close_min is not None:
+            res_p.update({
+                "be_trigger_min":  round(be_min, 1),
+                "close_trigger_min": round(close_min, 1),
+                "be_reached":      mins_open >= be_min,
+                "close_reached":   mins_open >= close_min,
+                "mins_to_be":      round(max(0, be_min - mins_open), 1),
+                "mins_to_close":   round(max(0, close_min - mins_open), 1),
+            })
+        else:
+            res_p.update({
+                "be_trigger_min":  None,
+                "close_trigger_min": None,
+            })
+
+        out.append(res_p)
 
     return jsonify({"positions": out, "count": len(out)})
 
@@ -10388,7 +10447,12 @@ def _check_mt5_outcomes() -> None:
     """Check MT5 for positions that have closed since last check."""
 
     try:
-        from mt5_executor import mt5_get_positions, mt5_connect
+        from mt5_executor import (
+            mt5_get_positions,
+            mt5_connect,
+            mt5_close_position,
+            mt5_move_sl_to_breakeven,
+        )
 
         import MetaTrader5 as _mt5_lib
 
@@ -10414,7 +10478,7 @@ def _check_mt5_outcomes() -> None:
             con.row_factory = sqlite3.Row
 
             pending = con.execute(
-                "SELECT id, ticket, entry_price, sl, tp, volume, ts, risk_amount, asset_class FROM audit_log "
+                "SELECT id, ticket, pair, direction, entry_price, sl, tp, volume, ts, risk_amount, asset_class, engine, style FROM audit_log "
                 "WHERE ticket IS NOT NULL AND ticket != '' AND exit_price IS NULL"
             ).fetchall()
 
@@ -10422,6 +10486,47 @@ def _check_mt5_outcomes() -> None:
             ticket_str = str(row["ticket"])
 
             if ticket_str in open_tickets:
+                # Engine D live milestones on still-open MT5 position:
+                # +1R partial (50%), then TP1 milestone -> move SL to BE.
+                row_engine = str(row["engine"] or "").strip().lower()
+                row_style = str(row["style"] or "").strip().lower()
+                is_scalp_row = row_engine in ("scalp", "engine d", "scalp_vp") or row_style == "scalp"
+                if is_scalp_row:
+                    try:
+                        pos = next((p for p in _pos_list if str(p.get("ticket")) == ticket_str), None)
+                        if pos:
+                            entry = float(pos.get("entry") or row["entry_price"] or 0)
+                            sl = float(row["sl"] or 0)
+                            tp1 = float(row["tp"] or 0)
+                            direction = str(row["direction"] or pos.get("direction") or "").upper()
+                            vol = float(pos.get("volume") or row["volume"] or 0)
+                            sl_dist = abs(entry - sl)
+                            if entry > 0 and sl_dist > 0 and vol > 0 and direction in ("LONG", "SHORT"):
+                                tick = _mt5_lib.symbol_info_tick(pos.get("symbol", ""))
+                                bid = float(getattr(tick, "bid", 0) or 0)
+                                ask = float(getattr(tick, "ask", 0) or 0)
+                                cur_px = ((bid + ask) / 2.0) if (bid > 0 and ask > 0) else (bid or ask or 0.0)
+                                if cur_px > 0:
+                                    current_r = (cur_px - entry) / sl_dist if direction == "LONG" else (entry - cur_px) / sl_dist
+                                    if current_r >= 1.0 and ticket_str not in _scalp_partial_applied:
+                                        partial_vol = max(0.0, vol * 0.5)
+                                        close_res = mt5_close_position(int(ticket_str), volume=partial_vol)
+                                        if close_res.get("success"):
+                                            _scalp_partial_applied.add(ticket_str)
+                                            log.info(
+                                                f"[MONITOR] MT5 {pos.get('symbol')}: +1R reached - closed 50% ticket={ticket_str}"
+                                            )
+                                    tp1_hit = (cur_px >= tp1) if direction == "LONG" else (cur_px <= tp1)
+                                    if tp1 > 0 and tp1_hit and ticket_str not in _scalp_be_applied:
+                                        be_res = mt5_move_sl_to_breakeven(int(ticket_str), entry)
+                                        if be_res.get("success"):
+                                            _scalp_be_applied.add(ticket_str)
+                                            _breakeven_applied.add(ticket_str)
+                                            log.info(
+                                                f"[MONITOR] MT5 {pos.get('symbol')}: TP1 reached - SL moved to BE ticket={ticket_str}"
+                                            )
+                    except Exception as me:
+                        log.debug(f"[MONITOR] MT5 scalp management check failed for {ticket_str}: {me}")
                 continue  # still open
 
             # Position closed — look up deal history
@@ -10464,12 +10569,17 @@ def _check_mt5_outcomes() -> None:
 
 
 _breakeven_applied: set = set()  # tickets already moved to breakeven
+_scalp_partial_applied: set = set()  # Engine D: +1R partial already taken
+_scalp_be_applied: set = set()  # Engine D: BE moved after TP1 milestone
 
 
 def _check_ccxt_outcomes() -> None:
     """Check Bybit futures for crypto positions that have been fully exited.
 
-    Also checks open positions for 1R profit to move SL to breakeven."""
+    Engine D live management:
+      1) close 50% at +1R
+      2) after TP1, move SL to breakeven on remaining runner
+    """
 
     try:
         import bybit_executor as _bybit_mod
@@ -10490,82 +10600,97 @@ def _check_ccxt_outcomes() -> None:
             else (_pos_resp or [])
         )
 
-        # ── Breakeven trailing stop at 1R ──────────────────────────────────
-
         for pos in positions:
             try:
                 ccxt_sym = pos.get("symbol", "")
-
                 entry_px = float(pos.get("entryPrice", 0) or 0)
-
                 cur_px = float(pos.get("markPrice", 0) or pos.get("lastPrice", 0) or 0)
-
                 side = (pos.get("side") or "").lower()
-
                 contracts = abs(float(pos.get("contracts", 0) or 0))
 
                 if not entry_px or not cur_px or not contracts or not side:
                     continue
 
-                # Find matching audit row for SL distance
-
                 with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
                     con.row_factory = sqlite3.Row
-
                     match = con.execute(
-                        "SELECT ticket, sl, entry_price FROM audit_log "
+                        "SELECT ticket, sl, tp, entry_price, engine, style FROM audit_log "
                         "WHERE exit_price IS NULL AND ticket IS NOT NULL AND ticket != '' "
-                        "AND (pair LIKE '%USDT%') ORDER BY ts DESC LIMIT 10"
+                        "AND (pair LIKE '%USDT%') ORDER BY ts DESC LIMIT 20"
                     ).fetchall()
 
                 for row in match:
                     audit_entry = float(row["entry_price"] or 0)
-
                     audit_sl = float(row["sl"] or 0)
+                    audit_tp1 = float(row["tp"] or 0)
+                    row_engine = str(row["engine"] or "").strip().lower()
+                    row_style = str(row["style"] or "").strip().lower()
+                    is_scalp_row = row_engine in ("scalp", "engine d", "scalp_vp") or row_style == "scalp"
+                    if not is_scalp_row:
+                        continue
 
                     ticket = str(row["ticket"])
-
-                    if not audit_entry or not audit_sl or ticket in _breakeven_applied:
+                    if not audit_entry or not audit_sl:
                         continue
 
                     sl_dist = abs(audit_entry - audit_sl)
-
                     if sl_dist == 0:
                         continue
 
-                    # Check if entry matches this position (within 1%)
-
+                    # Entry anchoring guard.
                     if abs(audit_entry - entry_px) / entry_px > 0.01:
                         continue
 
-                    # Calculate current R
-
                     if side == "long":
                         current_r = (cur_px - entry_px) / sl_dist
-
                     else:
                         current_r = (entry_px - cur_px) / sl_dist
 
-                    if current_r >= 1.0:
+                    # Step 1: +1R -> pay yourself first (close 50%).
+                    if current_r >= 1.0 and ticket not in _scalp_partial_applied:
+                        try:
+                            close_side = "sell" if side == "long" else "buy"
+                            reduce_qty = float(exchange.amount_to_precision(ccxt_sym, contracts * 0.5))
+                            if reduce_qty > 0:
+                                exchange.create_market_order(
+                                    ccxt_sym,
+                                    close_side,
+                                    reduce_qty,
+                                    params={"reduceOnly": True, "positionIdx": 0},
+                                )
+                                _scalp_partial_applied.add(ticket)
+                                log.info(
+                                    f"[MONITOR] {ccxt_sym}: +1R reached - closed 50% ({reduce_qty}) ticket={ticket}"
+                                )
+                        except Exception as pe:
+                            log.warning(f"[MONITOR] {ccxt_sym}: +1R partial close failed for ticket={ticket}: {pe}")
+
+                    # Step 2: after TP1 milestone, move SL to breakeven (never widen).
+                    tp1_hit = False
+                    if audit_tp1 > 0:
+                        if side == "long":
+                            tp1_hit = cur_px >= audit_tp1
+                        else:
+                            tp1_hit = cur_px <= audit_tp1
+
+                    if tp1_hit and ticket not in _scalp_be_applied:
                         result = _bybit_mod.bybit_move_sl_to_breakeven(
                             ccxt_sym,
                             "LONG" if side == "long" else "SHORT",
                             entry_px,
                             contracts,
                         )
-
                         if result.get("success"):
+                            _scalp_be_applied.add(ticket)
                             _breakeven_applied.add(ticket)
-
                             log.info(
-                                f"[MONITOR] {ccxt_sym}: reached {current_r:.1f}R — SL moved to breakeven @ {entry_px}"
+                                f"[MONITOR] {ccxt_sym}: TP1 reached - SL moved to breakeven @ {entry_px} ticket={ticket}"
                             )
 
                     break  # only match one audit row per position
 
             except Exception as e:
                 log.debug(f"[MONITOR] breakeven check error: {e}")
-
         from collections import defaultdict
 
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
@@ -12468,6 +12593,67 @@ _binance_ws = None
 _binance_candle_ws = None
 
 
+def _select_live_crypto_symbols_for_ws() -> list[str]:
+    """Demand-driven crypto symbol scope for runtime WS feeds (uppercase, e.g. BTCUSDT)."""
+    enabled_crypto = [
+        p for p in CRYPTO_PAIRS
+        if p.get("enabled", True) and str(p.get("symbol") or "").strip()
+    ]
+    if not enabled_crypto:
+        return []
+
+    display_to_symbol = {
+        str(p.get("display") or "").strip().upper(): str(p.get("symbol") or "").replace("/", "").upper()
+        for p in enabled_crypto
+    }
+    symbol_set = set()
+
+    # 1) Active scalp symbols from explicit SCALP_PAIRS config and resolved scalp universe.
+    scalp_cfg = (CONFIG.get("SCALP_ENGINE") or {}).get("SCALP_PAIRS") or []
+    for disp in scalp_cfg:
+        sym = display_to_symbol.get(str(disp or "").strip().upper())
+        if sym:
+            symbol_set.add(sym)
+    try:
+        from scalp_engine import get_scalp_pairs
+        for disp in get_scalp_pairs(ACTIVE_PAIRS):
+            sym = display_to_symbol.get(str(disp or "").strip().upper())
+            if sym:
+                symbol_set.add(sym)
+    except Exception as exc:
+        log.debug("[WS-SCOPE] get_scalp_pairs unavailable for scope bootstrap: %s", exc)
+
+    # 2) Open crypto positions (Bybit).
+    try:
+        from bybit_executor import bybit_get_positions
+        _pos = bybit_get_positions() or {}
+        for row in (_pos.get("positions") or []):
+            pair = str(row.get("pair") or row.get("symbol") or "").strip().upper()
+            if not pair:
+                continue
+            if "/" not in pair and pair.endswith("USDT"):
+                symbol_set.add(pair)
+            else:
+                sym = display_to_symbol.get(pair)
+                if sym:
+                    symbol_set.add(sym)
+    except Exception as exc:
+        log.debug("[WS-SCOPE] bybit_get_positions unavailable for scope bootstrap: %s", exc)
+
+    # 3) Recently executed crypto signals in-process (best-effort).
+    try:
+        for sig_id in list(executed_signals):
+            sid = str(sig_id or "").upper()
+            for disp_up, sym in display_to_symbol.items():
+                if disp_up in sid or sym in sid:
+                    symbol_set.add(sym)
+    except Exception:
+        pass
+
+    selected = sorted(symbol_set)
+    return selected
+
+
 def ensure_runtime_services_started() -> None:
     """Start background feed/runtime services once for both script and app-factory boot."""
     global _runtime_services_started, _binance_ws, _binance_candle_ws
@@ -12513,13 +12699,26 @@ def ensure_runtime_services_started() -> None:
     # Start Binance Futures WebSocket for crypto live prices + kline candles
     crypto_enabled = [p for p in CRYPTO_PAIRS if p.get("enabled", True)]
     if crypto_enabled:
+        selected_symbols = _select_live_crypto_symbols_for_ws()
+        selected_intervals = ["1m", "5m", "15m", "1h"]  # live Engine D-required frames
         _binance_ws = BinanceLivePriceWS()
         _binance_ws.start()
-        _binance_candle_ws = BinanceCandleWS()
+        _binance_candle_ws = BinanceCandleWS(
+            symbols=selected_symbols,
+            intervals=selected_intervals,
+        )
         _binance_candle_ws.start()
         log.info(
-            f"[BINANCE-WS] Started price + kline feeds for {len(crypto_enabled)} enabled crypto pairs"
+            "[BINANCE-WS] Price feed active; kline scope symbols=%s tfs=%s (enabled_crypto=%s)",
+            len(selected_symbols),
+            selected_intervals,
+            len(crypto_enabled),
         )
+        if selected_symbols:
+            log.info(
+                "[BINANCE-WS] Kline symbol scope: %s",
+                ", ".join(selected_symbols),
+            )
     else:
         log.info("[BINANCE-WS] No enabled crypto pairs - Binance Futures WS disabled")
 
@@ -12535,7 +12734,14 @@ def ensure_runtime_services_started() -> None:
             except ImportError as exc:
                 log.warning(f"[MICRO] Import failed: {exc}")
                 return
-            crypto_pairs = [p for p in CRYPTO_PAIRS if p.get("enabled", False)]
+            selected_symbols = _select_live_crypto_symbols_for_ws()
+            crypto_pairs = []
+            for p in CRYPTO_PAIRS:
+                if not p.get("enabled", False):
+                    continue
+                sym = str(p.get("symbol") or "").replace("/", "").upper()
+                if sym in selected_symbols:
+                    crypto_pairs.append(p)
 
             def _make_cb(sym):
                 def _cb(metrics):
@@ -12599,7 +12805,10 @@ def ensure_runtime_services_started() -> None:
                     target=_run, args=(y, cb), daemon=True, name=f"BbtWS-{sym}"
                 ).start()
             log.info(
-                f"[MICRO] Started Binance+Bybit feeds for {len(crypto_pairs)} enabled crypto pairs"
+                "[MICRO] Started feeds: binance=%s bybit=%s symbols=%s",
+                len(crypto_pairs),
+                len(crypto_pairs),
+                ", ".join(str(p["symbol"]).replace("/", "").upper() for p in crypto_pairs) if crypto_pairs else "none",
             )
 
         threading.Thread(

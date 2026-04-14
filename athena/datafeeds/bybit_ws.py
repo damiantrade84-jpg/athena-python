@@ -7,6 +7,7 @@ computes order book imbalance and orderflow delta, and emits metrics to Athena p
 import asyncio
 import json
 import logging
+import random
 import time
 from typing import Dict, List, Tuple, Optional
 import websockets
@@ -139,6 +140,14 @@ class BybitWS:
         self._tasks: List[asyncio.Task] = []
         # Metrics callbacks
         self.on_metrics: Optional[callable] = None
+        self._reconnect_attempt: int = 0
+
+    def _next_reconnect_delay(self) -> float:
+        base = 2.0
+        cap = 60.0
+        exp = min(cap, base * (2 ** min(self._reconnect_attempt, 6)))
+        jitter = random.uniform(0.0, min(3.0, exp * 0.2))
+        return exp + jitter
 
     async def _connect(self) -> None:
         """Connect to Bybit WebSocket and subscribe to streams."""
@@ -150,6 +159,7 @@ class BybitWS:
                 open_timeout=45,
                 close_timeout=10,
             )
+            self._reconnect_attempt = 0
             log.info(f"[BybitWS] Connected to {self.base_url} for {self.symbol}")
             # Subscribe to orderbook.50 and publicTrade
             subscribe_msg = {
@@ -222,9 +232,16 @@ class BybitWS:
                     await ws.close()
                 except Exception:
                     pass
-        # Reconnect after delay
         if self._running:
-            await asyncio.sleep(5)
+            self._reconnect_attempt += 1
+            delay = self._next_reconnect_delay()
+            log.warning(
+                "[BybitWS] %s: reconnect backoff attempt=%s delay=%.1fs",
+                self.symbol,
+                self._reconnect_attempt,
+                delay,
+            )
+            await asyncio.sleep(delay)
             asyncio.create_task(self._connect())
 
     async def _handle_message(self, msg: Dict) -> None:

@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import sqlite3
 import threading
 import time
@@ -195,6 +196,14 @@ class BinanceLivePriceWS:
     def __init__(self):
         self._running = True
         self._thread = None
+        self._reconnect_attempt = 0
+
+    def _next_reconnect_delay(self) -> float:
+        base = 2.0
+        cap = 60.0
+        exp = min(cap, base * (2 ** min(self._reconnect_attempt, 6)))
+        jitter = random.uniform(0.0, min(3.0, exp * 0.2))
+        return exp + jitter
 
     def _connect_and_stream(self):
         """Connect to Binance Futures WebSocket and stream all market tickers."""
@@ -230,6 +239,7 @@ class BinanceLivePriceWS:
                         open_timeout=45,
                         close_timeout=10,
                     ) as ws:
+                        self._reconnect_attempt = 0
                         log.info(
                             "[BINANCE-WS] Connected to fstream.binance.com !ticker@arr"
                         )
@@ -285,7 +295,14 @@ class BinanceLivePriceWS:
             except Exception as e:
                 log.error(f"[BINANCE-WS] Connection error: {e}")
                 if self._running:
-                    time.sleep(5)  # Wait before reconnect
+                    self._reconnect_attempt += 1
+                    delay = self._next_reconnect_delay()
+                    log.warning(
+                        "[BINANCE-WS] Reconnect backoff attempt=%s delay=%.1fs",
+                        self._reconnect_attempt,
+                        delay,
+                    )
+                    time.sleep(delay)
             finally:
                 try:
                     loop.close()
@@ -311,13 +328,23 @@ class BinanceLivePriceWS:
 
 
 class BinanceCandleWS:
-    """Binance Futures kline WebSocket for live crypto M5/M15/H1/H4/D1 candles."""
+    """Binance Futures kline WebSocket for live crypto M1/M5/M15/H1/H4/D1 candles."""
 
-    _STREAM_TFS = {"5m": "M5", "15m": "M15", "1h": "H1", "4h": "H4", "1d": "D1"}
+    _STREAM_TFS = {"1m": "M1", "5m": "M5", "15m": "M15", "1h": "H1", "4h": "H4", "1d": "D1"}
 
-    def __init__(self):
+    def __init__(self, symbols: list[str] | None = None, intervals: list[str] | None = None):
         self._running = True
         self._thread = None
+        self._symbols = [str(s).lower() for s in (symbols or []) if s]
+        self._intervals = [str(i).lower() for i in (intervals or []) if str(i).lower() in self._STREAM_TFS]
+        self._reconnect_attempt = 0
+
+    def _next_reconnect_delay(self) -> float:
+        base = 2.0
+        cap = 60.0
+        exp = min(cap, base * (2 ** min(self._reconnect_attempt, 6)))
+        jitter = random.uniform(0.0, min(3.0, exp * 0.2))
+        return exp + jitter
 
     def _connect_and_stream(self):
         import websockets
@@ -333,15 +360,31 @@ class BinanceCandleWS:
             log.info("[BN-KLINE-WS] No enabled crypto pairs, exiting")
             return
 
-        symbol_map = {
+        enabled_symbol_map = {
             p["symbol"].replace("/", "").lower(): p["display"]
             for p in enabled
         }
+        if self._symbols:
+            symbol_map = {
+                s: enabled_symbol_map[s]
+                for s in self._symbols
+                if s in enabled_symbol_map
+            }
+        else:
+            symbol_map = dict(enabled_symbol_map)
+        if not symbol_map:
+            log.info("[BN-KLINE-WS] No selected crypto symbols matched enabled runtime pairs")
+            return
+
+        intervals = self._intervals or list(self._STREAM_TFS.keys())
+        if not intervals:
+            log.info("[BN-KLINE-WS] No selected intervals; exiting")
+            return
 
         streams = "/".join(
             f"{sym}@kline_{interval}"
             for sym in symbol_map
-            for interval in self._STREAM_TFS
+            for interval in intervals
         )
         url = f"wss://fstream.binance.com/stream?streams={streams}"
 
@@ -358,10 +401,11 @@ class BinanceCandleWS:
                         open_timeout=45,
                         close_timeout=10,
                     ) as ws:
+                        self._reconnect_attempt = 0
                         log.info(
                             "[BN-KLINE-WS] Connected — %s crypto pairs on %s",
                             len(symbol_map),
-                            ", ".join(f"@kline_{interval}" for interval in self._STREAM_TFS),
+                            ", ".join(f"@kline_{interval}" for interval in intervals),
                         )
                         _last_ping = time.time()
                         while self._running:
@@ -419,7 +463,14 @@ class BinanceCandleWS:
             except Exception as e:
                 log.error(f"[BN-KLINE-WS] Connection error: {e}")
                 if self._running:
-                    time.sleep(5)
+                    self._reconnect_attempt += 1
+                    delay = self._next_reconnect_delay()
+                    log.warning(
+                        "[BN-KLINE-WS] Reconnect backoff attempt=%s delay=%.1fs",
+                        self._reconnect_attempt,
+                        delay,
+                    )
+                    time.sleep(delay)
             finally:
                 try:
                     loop.close()
@@ -744,7 +795,7 @@ def set_candle_builder(builder) -> None:
 
 
 class CandleBuilder:
-    """EODHD/US tick stream → H1/H4/D1 bars; Binance futures kline WS → M5/M15/H1/H4/D1 for crypto.
+    """EODHD/US tick stream → H1/H4/D1 bars; Binance futures kline WS → M1/M5/M15/H1/H4/D1 for crypto.
 
     Tick path is non-crypto only (see EODHD handler). Kline path uses Binance `t` (UTC open ms)
     with the same bucket alignment as H1/H4/D1."""
@@ -752,7 +803,7 @@ class CandleBuilder:
     # EODHD on_tick: do not add M5/M15 here — would spam SQLite from tick noise and wrong semantics.
     _TFS_TICK = {"H1": 3600, "H4": 14400, "D1": 86400}
     # Binance on_kline: all futures kline intervals we subscribe to.
-    _TFS_KLINE = {"M5": 300, "M15": 900, "H1": 3600, "H4": 14400, "D1": 86400}
+    _TFS_KLINE = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400, "D1": 86400}
 
     def __init__(self):
 
@@ -842,7 +893,7 @@ class CandleBuilder:
                     bar["ticks"] += 1
 
     def on_kline(self, display, tf, o, h, l, c, vol, ts_ms, is_closed):
-        """Apply Binance futures kline snapshot for crypto M5/M15/H1/H4/D1.
+        """Apply Binance futures kline snapshot for crypto M1/M5/M15/H1/H4/D1.
 
         Kline fields are the running bar OHLCV; overwrite each update. Flush when is_closed.
         tick_count=0 marks DB rows as kline-sourced (vs on_tick accumulation).

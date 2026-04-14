@@ -7,6 +7,7 @@ order book imbalance and orderflow delta, and emits metrics to Athena pipeline.
 import asyncio
 import json
 import logging
+import random
 import time
 from typing import Dict, List, Tuple, Optional
 import websockets
@@ -40,6 +41,14 @@ class BinanceWS:
         self._tasks: List[asyncio.Task] = []
         # Metrics callbacks
         self.on_metrics: Optional[callable] = None
+        self._reconnect_attempt: int = 0
+
+    def _next_reconnect_delay(self) -> float:
+        base = 2.0
+        cap = 60.0
+        exp = min(cap, base * (2 ** min(self._reconnect_attempt, 6)))
+        jitter = random.uniform(0.0, min(3.0, exp * 0.2))
+        return exp + jitter
 
     async def _connect(self) -> None:
         """Connect to combined Binance WebSocket stream."""
@@ -54,6 +63,7 @@ class BinanceWS:
                 open_timeout=45,
                 close_timeout=10,
             ) as ws:
+                self._reconnect_attempt = 0
                 log.info(f"[BinanceWS] Connected to combined stream for {self.symbol}")
                 _last_ping = time.time()
                 while self._running:
@@ -91,10 +101,17 @@ class BinanceWS:
                         break
         except Exception as e:
             log.error(f"[BinanceWS] {self.symbol}: failed to connect: {e}")
-            # Reconnect after delay
-            await asyncio.sleep(5)
-            if self._running:
-                asyncio.create_task(self._connect())
+        if self._running:
+            self._reconnect_attempt += 1
+            delay = self._next_reconnect_delay()
+            log.warning(
+                "[BinanceWS] %s: reconnect backoff attempt=%s delay=%.1fs",
+                self.symbol,
+                self._reconnect_attempt,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            asyncio.create_task(self._connect())
 
     async def _handle_message(self, msg: Dict) -> None:
         """Route message to appropriate handler."""
