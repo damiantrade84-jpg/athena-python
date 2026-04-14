@@ -27,6 +27,7 @@ import math
 import pandas as pd
 from datetime import datetime, timezone
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from config import CONFIG
 from stability_monitor import record_signal_event
@@ -83,10 +84,53 @@ def get_scalp_session_risk_state() -> dict:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _scalp_fetch_candles(pair: dict, tf: str, limit: int):
-    """Route through monolith fetch_candles for crypto M1/M5/M15/H1."""
+    """Route through monolith fetch_candles for crypto M1/M5/M15/H1.
+
+    Engine D crypto M1 prefers verified Binance WS candles where available,
+    then falls back to the routed cache/REST path.
+    """
+    tf = str(tf or "").upper()
+    if (
+        tf == "M1"
+        and str(pair.get("type", "")).lower() == "crypto"
+        and str(pair.get("source", "")).lower() == "binance"
+    ):
+        display = str(pair.get("display") or "")
+        try:
+            from candle_feeds import fetch_candles_live
+            ws_resp = fetch_candles_live(display, "M1", limit)
+            ws_candles = (ws_resp or {}).get("candles") if isinstance(ws_resp, dict) else None
+            if ws_candles:
+                last_ts = _coerce_utc_datetime(ws_candles[-1].get("time"))
+                now_ts = _current_utc_datetime()
+                age_s = (now_ts - last_ts).total_seconds() if last_ts else 1e9
+                # "Verified WS" means bars are present and latest update is fresh enough.
+                if len(ws_candles) >= 5 and age_s <= 180:
+                    log.info(
+                        "[SCALP-DATA] %s M1 source=binance_ws bars=%s age_s=%.0f",
+                        display,
+                        len(ws_candles),
+                        age_s,
+                    )
+                    return ws_candles[-limit:] if len(ws_candles) > limit else ws_candles
+                log.info(
+                    "[SCALP-DATA] %s M1 ws_unverified bars=%s age_s=%.0f -> fallback=routed",
+                    display,
+                    len(ws_candles),
+                    age_s,
+                )
+            else:
+                log.info("[SCALP-DATA] %s M1 ws_unavailable -> fallback=routed", display)
+        except Exception as e:
+            log.warning("[SCALP-DATA] %s M1 ws_check_error=%s -> fallback=routed", display, e)
+
     try:
         from athena_runtime import rt
-        return rt().fetch_candles(pair, tf, limit)
+        candles = rt().fetch_candles(pair, tf, limit)
+        if tf == "M1" and str(pair.get("type", "")).lower() == "crypto":
+            n = len(candles) if candles else 0
+            log.info("[SCALP-DATA] %s M1 source=routed bars=%s", pair.get("display", ""), n)
+        return candles
     except RuntimeError:
         log.error("[SCALP] fetch_candles unavailable — athena runtime not initialized")
     except Exception as e:
@@ -112,7 +156,7 @@ def _tick_value(tick, field: str, default=0.0):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SESSION WINDOWS (UTC)
+# SESSION WINDOWS (LOCAL MARKET TIME)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _SESSIONS = {
@@ -126,6 +170,22 @@ _CRYPTO_SESSIONS = {
     "london":      (7, 16),
     "new_york":    (13, 22),
     "london_ny":   (7, 22),
+}
+
+_TZ_LONDON = ZoneInfo("Europe/London")
+_TZ_NEW_YORK = ZoneInfo("America/New_York")
+
+# Keep the existing session concept, but anchor clocks to local market time.
+# Derived from existing UTC windows on a winter reference date so behaviour
+# remains conceptually unchanged while becoming DST-safe.
+_FOREX_LOCAL_SESSIONS = {
+    "london": (7, 16),      # Europe/London local time
+    "new_york": (8, 16),    # America/New_York local time
+}
+_CRYPTO_LOCAL_SESSIONS = {
+    "asia": (1, 9),         # UTC (24/7 crypto Asia activity window)
+    "london": (7, 16),      # Europe/London local time
+    "new_york": (8, 17),    # America/New_York local time
 }
 
 _CRYPTO_SCALP_PAIRS = [
@@ -299,12 +359,17 @@ def _coerce_utc_datetime(value: Any) -> Optional[datetime]:
 
 
 def get_current_sessions() -> list:
-    """Return active session names based on current UTC hour."""
-    now_utc_h = _current_utc_datetime().hour
+    """Return active session names using DST-aware local market clocks."""
+    now_utc = _current_utc_datetime()
+    now_london_h = now_utc.astimezone(_TZ_LONDON).hour
+    now_ny_h = now_utc.astimezone(_TZ_NEW_YORK).hour
     active = []
-    for name, (start, end) in _SESSIONS.items():
-        if start <= now_utc_h < end:
-            active.append(name)
+    lon_start, lon_end = _FOREX_LOCAL_SESSIONS["london"]
+    ny_start, ny_end = _FOREX_LOCAL_SESSIONS["new_york"]
+    if lon_start <= now_london_h < lon_end:
+        active.append("london")
+    if ny_start <= now_ny_h < ny_end:
+        active.append("new_york")
     return active or ["off_hours"]
 
 
@@ -317,12 +382,20 @@ def is_valid_session(asset_type: str = "forex") -> tuple:
     if not cfg.get("SESSION_FILTER", True):
         return True, "all"
 
-    now_h = _current_utc_datetime().hour
+    now_utc = _current_utc_datetime()
+    now_london_h = now_utc.astimezone(_TZ_LONDON).hour
+    now_ny_h = now_utc.astimezone(_TZ_NEW_YORK).hour
 
     if asset_type == "crypto":
-        for name, (start, end) in _CRYPTO_SESSIONS.items():
-            if start <= now_h < end:
-                return True, name
+        asia_start, asia_end = _CRYPTO_LOCAL_SESSIONS["asia"]
+        if asia_start <= now_utc.hour < asia_end:
+            return True, "asia"
+        lon_start, lon_end = _CRYPTO_LOCAL_SESSIONS["london"]
+        if lon_start <= now_london_h < lon_end:
+            return True, "london"
+        ny_start, ny_end = _CRYPTO_LOCAL_SESSIONS["new_york"]
+        if ny_start <= now_ny_h < ny_end:
+            return True, "new_york"
         return True, "off_hours_crypto"
 
     sessions = get_current_sessions()
@@ -349,25 +422,80 @@ def scalp_session_window(
     if mode in {"all", "any", "disabled", "off"}:
         return True, "all"
 
-    sessions_map = _CRYPTO_SESSIONS if asset_type == "crypto" else _SESSIONS
-    if mode not in sessions_map:
+    if mode not in (_CRYPTO_SESSIONS if asset_type == "crypto" else _SESSIONS):
         return False, "off_hours"
 
     current_dt = _coerce_utc_datetime(when) or _current_utc_datetime()
-    current_minute = current_dt.hour * 60 + current_dt.minute
-    start_h, end_h = sessions_map[mode]
-    start_minute = start_h * 60
-    end_minute = end_h * 60
+    current_utc = current_dt.astimezone(timezone.utc)
+    current_london = current_utc.astimezone(_TZ_LONDON)
+    current_ny = current_utc.astimezone(_TZ_NEW_YORK)
+
+    if asset_type == "crypto":
+        local_defs = _CRYPTO_LOCAL_SESSIONS
+    else:
+        local_defs = _FOREX_LOCAL_SESSIONS
+
+    def _hour_in_range(dt_local: datetime, start_h: int, end_h: int) -> bool:
+        m = dt_local.hour * 60 + dt_local.minute
+        return (start_h * 60) <= m < (end_h * 60)
+
+    if mode == "london":
+        start_h, end_h = local_defs["london"]
+        if not _hour_in_range(current_london, start_h, end_h):
+            return False, "off_hours"
+        skip_key_lon = "BT_LONDON_OPEN_SKIP_MINUTES" if backtest else "LONDON_OPEN_SKIP_MINUTES"
+        skip_lon = max(0, int(cfg.get(skip_key_lon, cfg.get("LONDON_OPEN_SKIP_MINUTES", 20))))
+        if skip_lon > 0:
+            london_open_utc_minute = 7 * 60  # 07:00 UTC
+            now_utc_minute = current_utc.hour * 60 + current_utc.minute
+            if london_open_utc_minute <= now_utc_minute < london_open_utc_minute + skip_lon:
+                return False, "LONDON_OPEN_COOLDOWN"
+        return True, "london"
 
     if mode == "new_york":
+        start_h, end_h = local_defs["new_york"]
+        in_window = _hour_in_range(current_ny, start_h, end_h)
+        if not in_window:
+            return False, "off_hours"
         skip_key = "BT_NY_OPEN_SKIP_MINUTES" if backtest else "NY_OPEN_SKIP_MINUTES"
         skip_minutes = max(0, int(cfg.get(skip_key, cfg.get("NY_OPEN_SKIP_MINUTES", 0))))
-        if start_minute <= current_minute < start_minute + skip_minutes:
+        ny_open_minute = 9 * 60 + 30  # NY cash open 09:30 local, DST-safe via timezone conversion above.
+        now_ny_minute = current_ny.hour * 60 + current_ny.minute
+        if ny_open_minute <= now_ny_minute < ny_open_minute + skip_minutes:
             return False, "NY_OPEN_COOLDOWN"
-        start_minute += skip_minutes
+        return True, "new_york"
 
-    if start_minute <= current_minute < end_minute:
-        return True, mode
+    if mode == "london_ny":
+        lon_start, lon_end = local_defs["london"]
+        ny_start, ny_end = local_defs["new_york"]
+        in_london = _hour_in_range(current_london, lon_start, lon_end)
+        in_ny = _hour_in_range(current_ny, ny_start, ny_end)
+        if in_london or in_ny:
+            # Block fresh entries during the NY cash-open caution window.
+            skip_key = "BT_NY_OPEN_SKIP_MINUTES" if backtest else "NY_OPEN_SKIP_MINUTES"
+            skip_minutes = max(0, int(cfg.get(skip_key, cfg.get("NY_OPEN_SKIP_MINUTES", 0))))
+            if skip_minutes > 0:
+                ny_open_minute = 9 * 60 + 30
+                now_ny_minute = current_ny.hour * 60 + current_ny.minute
+                if ny_open_minute <= now_ny_minute < ny_open_minute + skip_minutes:
+                    return False, "NY_OPEN_COOLDOWN"
+            # Block fresh entries during the London open caution window.
+            skip_key_lon = "BT_LONDON_OPEN_SKIP_MINUTES" if backtest else "LONDON_OPEN_SKIP_MINUTES"
+            skip_lon = max(0, int(cfg.get(skip_key_lon, cfg.get("LONDON_OPEN_SKIP_MINUTES", 20))))
+            if skip_lon > 0:
+                london_open_utc_minute = 7 * 60  # 07:00 UTC
+                now_utc_minute = current_utc.hour * 60 + current_utc.minute
+                if london_open_utc_minute <= now_utc_minute < london_open_utc_minute + skip_lon:
+                    return False, "LONDON_OPEN_COOLDOWN"
+            return True, "london_ny"
+        return False, "off_hours"
+
+    if mode == "asia" and asset_type == "crypto":
+        start_h, end_h = local_defs["asia"]
+        if _hour_in_range(current_utc, start_h, end_h):
+            return True, "asia"
+        return False, "off_hours"
+
     return False, "off_hours"
 
 
@@ -628,13 +756,13 @@ def _check_cvd(candles: list) -> dict:
     try:
         from indicators import calc_cvd
         result = calc_cvd(candles, smooth_period=smooth_period)
-        raw = []
-        if result:
-            raw = result.get("cvd_raw") or result.get("cvd") or []
-        if raw:
-            slope = raw[-1] - raw[-6] if len(raw) >= 6 else 0
+        smoothed = (result.get("smoothed_delta") or []) if result else []
+        cvd_raw = (result.get("cvd") or []) if result else []
+        if smoothed and len(smoothed) >= 6:
+            slope = smoothed[-1] - smoothed[-6]
             direction = "LONG" if slope > 0 else "SHORT" if slope < 0 else None
-            return {"direction": direction, "cvd_value": round(raw[-1], 2), "cvd_slope": round(slope, 2)}
+            cvd_val = round(cvd_raw[-1], 2) if cvd_raw else 0
+            return {"direction": direction, "cvd_value": cvd_val, "cvd_slope": round(slope, 4)}
     except Exception as exc:
         log.debug("[SCALP] indicators.calc_cvd error: %s", exc)
 
@@ -913,8 +1041,6 @@ def calculate_scalp_levels(
     poc = vp.get("poc", entry)
     vah = vp.get("vah", entry)
     val = vp.get("val", entry)
-    min_rr = float(cfg.get("MIN_RR", 1.5))
-
     if setup_type == "mean_reversion":
         if direction == "LONG":
             sl = val - buffer
@@ -936,15 +1062,14 @@ def calculate_scalp_levels(
 
     sl_distance = abs(entry - sl)
 
-    # Enforce minimum R:R
-    tp1_rr = abs(tp1 - entry) / sl_distance if sl_distance > 0 else 0
-    if tp1_rr < min_rr and sl_distance > 0:
-        if direction == "LONG":
-            tp1 = entry + sl_distance * min_rr
-        else:
-            tp1 = entry - sl_distance * min_rr
-
+    # TP1 is intentionally the natural structural/profile target from setup logic.
+    # Do not expand TP1 outward here to satisfy synthetic MIN_RR floors.
     actual_rr = round(abs(tp1 - entry) / sl_distance, 2) if sl_distance > 0 else 0
+
+    # For mean_reversion setups, if the natural structural TP does not meet MIN_RR,
+    # flag it so the caller can skip rather than distorting the level.
+    min_rr_cfg = float(cfg.get("MIN_RR", 2.0))
+    rr_below_min = (setup_type == "mean_reversion" and actual_rr < min_rr_cfg)
 
     # --- Defensive Rounding Safeguard ---
     # Protect against level collapse if symbol_info.digits are too coarse (e.g. 2 digits for a 0.09 crypto pair).
@@ -955,14 +1080,18 @@ def calculate_scalp_levels(
             # Fallback to safe precision for crypto (min 4 decimals; min 6 if price < $1)
             digits = max(digits, 6 if entry < 1.0 else 4)
 
+    tp_partial = entry + sl_distance if direction == "LONG" else entry - sl_distance
+
     return {
-        "entry":       round(entry, digits),
-        "sl":          round(sl, digits),
-        "tp1":         round(tp1, digits),
-        "tp2":         round(tp2, digits) if tp2 else None,
-        "rr":          actual_rr,
-        "sl_distance": round(sl_distance, digits),
-        "sl_method":   "vp_boundary",
+        "entry":        round(entry, digits),
+        "sl":           round(sl, digits),
+        "tp_partial":   round(tp_partial, digits),
+        "tp1":          round(tp1, digits),
+        "tp2":          round(tp2, digits) if tp2 else None,
+        "rr":           actual_rr,
+        "rr_below_min": rr_below_min,
+        "sl_distance":  round(sl_distance, digits),
+        "sl_method":    "vp_boundary",
     }
 
 
@@ -1099,6 +1228,178 @@ def ai_quality_grade(
         "grade": grade,
         "reasons": reasons,
         "size_multiplier": size_mult,
+    }
+
+
+def _build_engine_d_advisory(
+    *,
+    market_state: str,
+    price_loc: dict,
+    setup: dict,
+    vwap: dict,
+    direction: str,
+    levels: dict,
+    absorption: dict,
+    cvd: dict,
+    aaa: dict,
+    htf_bias: Optional[str],
+) -> dict:
+    """Build an informational, non-blocking trade narrative from existing Engine D fields."""
+    location = str(price_loc.get("location") or "unknown")
+    setup_type = str(setup.get("setup_type") or "unknown")
+    trigger = "absorption" if absorption.get("detected") else "cvd_shift" if cvd.get("direction") else "rejection"
+    directional_lean = (
+        "aligned"
+        if vwap.get("lean") == direction
+        else "counter"
+        if vwap.get("lean")
+        else "neutral"
+    )
+
+    target_logic = (
+        "POC -> opposite VA"
+        if levels.get("tp2") is not None
+        else "POC only"
+    )
+    trigger_notes: list[str] = []
+    if absorption.get("detected"):
+        trigger_notes.append(f"absorption:{int(absorption.get('count', 0))}")
+    if cvd.get("direction"):
+        trigger_notes.append(f"cvd:{cvd.get('direction')}")
+    if aaa.get("complete"):
+        trigger_notes.append("aaa:complete")
+    elif aaa.get("phase"):
+        trigger_notes.append(f"aaa:{aaa.get('phase')}")
+
+    summary = (
+        f"{str(market_state).upper()} | loc={location} | setup={setup_type} | "
+        f"trigger={trigger} ({', '.join(trigger_notes) or 'none'}) | "
+        f"lean={directional_lean}:{vwap.get('lean') or 'NONE'} | "
+        f"invalidation={levels.get('sl')} | targets={target_logic}"
+    )
+
+    return {
+        "market_state": market_state,
+        "location": location,
+        "aggression_trigger": trigger,
+        "trigger_notes": trigger_notes,
+        "directional_lean": directional_lean,
+        "vwap_lean": vwap.get("lean"),
+        "setup_type": setup_type,
+        "direction": direction,
+        "invalidation": levels.get("sl"),
+        "tp1": levels.get("tp1"),
+        "tp2": levels.get("tp2"),
+        "target_logic": target_logic,
+        "htf_bias": htf_bias,
+        "summary": summary,
+    }
+
+
+def _build_premarket_delta_proxy_levels(
+    candles: list,
+    *,
+    top_n: int = 3,
+    min_candles: int = 10,
+    bucket_size: Optional[float] = None,
+) -> dict:
+    """Build pre-market proxy levels from existing candle/CVD approximation.
+
+    This is intentionally labeled proxy data (not true footprint cluster data).
+    Window: America/New_York 04:00-09:30 local time.
+    """
+    if not candles:
+        return {
+            "available": False,
+            "method": "proxy",
+            "label": "premarket_delta_proxy_levels",
+            "is_true_delta_cluster": False,
+            "reason": "no_candles",
+            "levels": [],
+        }
+
+    pre = []
+    for c in candles:
+        ts = _coerce_utc_datetime(c.get("time"))
+        if ts is None:
+            continue
+        ny = ts.astimezone(_TZ_NEW_YORK)
+        if ny.weekday() >= 5:
+            continue
+        minute = ny.hour * 60 + ny.minute
+        if 4 * 60 <= minute < 9 * 60 + 30:
+            pre.append(c)
+
+    if len(pre) < min_candles:
+        return {
+            "available": False,
+            "method": "proxy",
+            "label": "premarket_delta_proxy_levels",
+            "is_true_delta_cluster": False,
+            "reason": "insufficient_premarket_candles",
+            "levels": [],
+        }
+
+    try:
+        from indicators import calc_cvd
+        cvd = calc_cvd(pre, smooth_period=5)
+        deltas = cvd.get("delta", []) if isinstance(cvd, dict) else []
+    except Exception:
+        deltas = []
+
+    if not deltas or len(deltas) != len(pre):
+        return {
+            "available": False,
+            "method": "proxy",
+            "label": "premarket_delta_proxy_levels",
+            "is_true_delta_cluster": False,
+            "reason": "delta_proxy_unavailable",
+            "levels": [],
+        }
+
+    if bucket_size is None or bucket_size <= 0:
+        closes = [float(c.get("close", 0.0)) for c in pre if c.get("close") is not None]
+        if len(closes) >= 2:
+            span = max(closes) - min(closes)
+            bucket_size = span / 80.0 if span > 0 else max(abs(closes[-1]) * 0.0001, 1e-6)
+        else:
+            bucket_size = 1e-4
+
+    bins: dict[float, dict[str, float]] = {}
+    for c, d in zip(pre, deltas):
+        px = float(c.get("close", 0.0))
+        if bucket_size > 0:
+            key = round(round(px / bucket_size) * bucket_size, 6)
+        else:
+            key = round(px, 6)
+        row = bins.setdefault(key, {"signed": 0.0, "abs_sum": 0.0, "touches": 0.0})
+        row["signed"] += float(d)
+        row["abs_sum"] += abs(float(d))
+        row["touches"] += 1.0
+
+    ranked = sorted(bins.items(), key=lambda kv: kv[1]["abs_sum"], reverse=True)
+    levels = []
+    for price, agg in ranked[: max(1, int(top_n))]:
+        signed = float(agg["signed"])
+        levels.append(
+            {
+                "price": round(float(price), 6),
+                "signed_delta_proxy": round(signed, 2),
+                "intensity": round(float(agg["abs_sum"]), 2),
+                "touches": int(agg["touches"]),
+                "direction": "LONG" if signed > 0 else "SHORT" if signed < 0 else "NEUTRAL",
+            }
+        )
+
+    return {
+        "available": bool(levels),
+        "method": "proxy",
+        "label": "premarket_delta_proxy_levels",
+        "is_true_delta_cluster": False,
+        "window_local_tz": "America/New_York",
+        "window_local_time": "04:00-09:30",
+        "formula": "bucket(close) -> sum(delta_proxy), where delta_proxy comes from indicators.calc_cvd on premarket candles",
+        "levels": levels,
     }
 
 
@@ -1287,11 +1588,15 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 if use_bias:
                     candles_bias = mt5_fetch_scalp_candles(mt5_sym, bias_tf, h1_count, include_forming=True)
                     if len(candles_bias) < 200:
-                        _record_stability_sample(display, asset_type, False,
-                                                 reason=f"insufficient_{bias_tf.lower()}_candles")
-                        skipped.append({"pair": display, "reason": f"insufficient_{bias_tf.lower()}_candles"})
-                        continue
-                    htf_bias = infer_bias_from_ema_stack(candles_bias)
+                        bias_require = bool(cfg.get("BIAS_REQUIRE_CONFIRMATION", True))
+                        if bias_require:
+                            _record_stability_sample(display, asset_type, False,
+                                                     reason="htf_bias_unavailable: insufficient H1 bars for EMA stack")
+                            skipped.append({"pair": display, "reason": "htf_bias_unavailable: insufficient H1 bars for EMA stack"})
+                            continue
+                        # else: allow trade without bias confirmation
+                    else:
+                        htf_bias = infer_bias_from_ema_stack(candles_bias)
 
             # ══════════════════════════════════════════════════════════════
             # FABIO VALENTINI PIPELINE
@@ -1339,6 +1644,30 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
 
             # Risk levels
             levels = calculate_scalp_levels(direction, current_price, vp, setup["setup_type"], sym_info, asset_type)
+            if levels.get("rr_below_min"):
+                log.warning(f"[SCALP] {display}: mean_reversion RR {levels['rr']:.2f} < MIN_RR — skipping (natural TP too close)")
+                _record_stability_sample(display, asset_type, False, reason="rr_below_min")
+                skipped.append({"pair": display, "reason": "rr_below_min"})
+                continue
+            advisory = _build_engine_d_advisory(
+                market_state=market_state,
+                price_loc=price_loc,
+                setup=setup,
+                vwap=vwap,
+                direction=direction,
+                levels=levels,
+                absorption=absorption,
+                cvd=cvd,
+                aaa=aaa,
+                htf_bias=htf_bias,
+            )
+            proxy_cfg = CONFIG.get("SCALP_ENGINE", {})
+            premarket_delta_proxy_levels = _build_premarket_delta_proxy_levels(
+                candles_exec,
+                top_n=int(proxy_cfg.get("PREMARKET_DELTA_PROXY_TOP_LEVELS", 3)),
+                min_candles=int(proxy_cfg.get("PREMARKET_DELTA_PROXY_MIN_CANDLES", 10)),
+                bucket_size=float(sym_info.get("point") or 0.0) * 10.0 if sym_info else None,
+            )
 
             # Quality grade
             if cfg.get("AI_GRADING", True):
@@ -1406,6 +1735,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "aaa_complete":    aaa.get("complete", False),
                 "htf_bias":        htf_bias,
                 "htf_bias_tf":     bias_tf if use_bias else None,
+                "advisory":        advisory,
+                "advisory_summary": advisory.get("summary"),
+                "premarket_delta_cluster_type": "proxy",
+                "premarket_delta_proxy_levels": premarket_delta_proxy_levels,
                 "timestamp":       datetime.now(timezone.utc).isoformat(),
                 "engine":          "SCALP",
                 # Fields required by risk_engine.risk_check()
@@ -1448,6 +1781,15 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
         f"[SCALP] Scan: {len(pairs_or_symbols)} pairs | "
         f"{len(signals)} signals | {len(skipped)} skipped | session={session_name}"
     )
+
+    if skipped:
+        from collections import Counter
+        reason_counts = Counter(s.get("reason", "unknown") for s in skipped)
+        for reason, count in reason_counts.most_common():
+            log.warning(f"[SCALP] Skip reason: {reason} × {count}")
+        # Per-pair detail at debug level so it's available when needed
+        for s in skipped:
+            log.debug(f"[SCALP] Skipped {s.get('pair')} — {s.get('reason')}")
 
     return {
         "signals": signals,
