@@ -4373,7 +4373,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     """
     from volume_profile import split_completed_sessions, compute_fixed_range_volume_profile
     from indicators import detect_absorption, calc_cvd, detect_range_contraction
-    from scalp_engine import _guess_asset_type, _calc_ema, _coerce_utc_datetime, scalp_session_window
+    from scalp_engine import _guess_asset_type, _calc_ema, _coerce_utc_datetime, scalp_session_window, ai_quality_grade as _ai_quality_grade
 
     display = pair.get("display", pair.get("symbol", "UNKNOWN"))
     asset_type = pair.get("type", _guess_asset_type(display))
@@ -4431,6 +4431,17 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             "close": float(c.get("close", 0)),
             "vol": float(c.get("vol", 0)),
         })
+
+    # ── Volume quality check ────────────────────────────────────────────────
+    raw_vols = [c["vol"] for c in candles]
+    nonzero_vols = [v for v in raw_vols if v > 0]
+    vol_quality_pct = round(len(nonzero_vols) / len(candles) * 100, 1) if candles else 0
+    if vol_quality_pct < 30:
+        log.warning(
+            f"[SCALP-BT] {display}: LOW VOLUME QUALITY — only {vol_quality_pct}% of "
+            f"M15 bars have non-zero tick volume. Absorption/CVD signals may be unreliable. "
+            f"Consider using a crypto pair for orderflow backtesting."
+        )
 
     # ── Pre-compute ATR for the full series ─────────────────────────────────
     highs = [c["high"] for c in candles]
@@ -4493,7 +4504,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         if va_width <= 0:
             continue
 
-        proximity = va_width * 0.15
+        proximity = current_price * float(cfg.get("VP_PROXIMITY_PCT", 0.30)) / 100.0
 
         # ── Step 2: Classify price location ─────────────────────────────────
         at_val = abs(current_price - val) <= proximity
@@ -4518,7 +4529,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             curr_session = candles[i - session_len:i]
             curr_vp = compute_fixed_range_volume_profile(curr_session, bins=vp_bins, value_area_pct=va_pct)
             if curr_vp.get("profile_valid") and curr_vp.get("poc"):
-                lvn_prox = va_width * 0.10
+                lvn_prox = current_price * float(cfg.get("VP_PROXIMITY_PCT", 0.30)) / 100.0 * 0.5
                 if abs(current_price - curr_vp["poc"]) <= lvn_prox:
                     direction = "LONG"
                     setup_type = "trend"
@@ -4527,7 +4538,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             curr_session = candles[i - session_len:i]
             curr_vp = compute_fixed_range_volume_profile(curr_session, bins=vp_bins, value_area_pct=va_pct)
             if curr_vp.get("profile_valid") and curr_vp.get("poc"):
-                lvn_prox = va_width * 0.10
+                lvn_prox = current_price * float(cfg.get("VP_PROXIMITY_PCT", 0.30)) / 100.0 * 0.5
                 if abs(current_price - curr_vp["poc"]) <= lvn_prox:
                     direction = "SHORT"
                     setup_type = "trend"
@@ -4683,25 +4694,37 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
 
         r_multiple = round(max(-5.0, min(5.0, raw_r)), 3)
 
-        # Grade the setup for analysis
-        grade_score = 0
-        if trigger_type == "absorption":
-            grade_score += 25
-        elif trigger_type == "cvd_shift":
-            grade_score += 20
-        else:
-            grade_score += 10
-        if setup_type == "mean_reversion":
-            grade_score += 15
-        else:
-            grade_score += 12
-
-        if trigger_type == "absorption" and setup_type == "mean_reversion":
-            grade = "A"
-        elif grade_score >= 40:
-            grade = "B"
-        else:
-            grade = "C"
+        # Grade via live ai_quality_grade() for consistency with live scan
+        _vp_grade = {"poc": poc, "vah": vah, "val": val, "lvn_levels": [], "balance_ratio": 0.6}
+        _price_loc_grade = {
+            "location": (
+                "at_val" if (direction == "LONG" and at_val)
+                else "at_vah" if at_vah
+                else "inside_va"
+            )
+        }
+        _absorption_grade = {
+            "detected": trigger_type == "absorption",
+            "count": 1 if trigger_type == "absorption" else 0,
+        }
+        _cvd_grade = {"direction": direction if trigger_type == "cvd_shift" else None}
+        _aaa_grade = {"complete": False, "phase": "absorption_only"}
+        _vwap_grade = {"lean": None}
+        _setup_grade = {"direction": direction, "setup_type": setup_type}
+        _quality = _ai_quality_grade(
+            vp=_vp_grade,
+            price_loc=_price_loc_grade,
+            absorption=_absorption_grade,
+            cvd=_cvd_grade,
+            aaa=_aaa_grade,
+            vwap=_vwap_grade,
+            setup=_setup_grade,
+            sessions=[session_label],
+            spread_pips=0.0,
+            htf_bias=None,
+        )
+        grade = _quality["grade"]
+        grade_score = _quality["score"]
 
         # Determine OOS flag (last 30% of bars)
         oos = i > total_bars * 0.70
@@ -4769,6 +4792,8 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     result["btStyle"] = "scalp"
     result["btStyleRequested"] = "scalp"
     result["engine"] = "scalp_vp"
+    result["vol_quality_pct"] = vol_quality_pct
+    result["vol_quality_warning"] = vol_quality_pct < 30
 
     # ── Scalp-specific analysis ─────────────────────────────────────────────
     absorption_trades = [t for t in trades if t.get("trigger_type") == "absorption"]

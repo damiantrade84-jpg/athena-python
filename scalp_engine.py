@@ -949,13 +949,17 @@ def _classify_setup(
         direction = "SHORT" if above_va else "LONG"
         side_label = "above VAH" if above_va else "below VAL"
 
-        # Absorption still required — confirms exhaustion at the extended level
-        if not absorption.get("detected"):
+        # Need at least one confirmation: absorption OR CVD agrees OR VWAP lean agrees
+        # (MT5 tick-volume makes absorption unreliable — require any one of three)
+        cvd_dir = cvd.get("direction")
+        has_absorption = absorption.get("detected", False)
+        cvd_confirms = (cvd_dir == direction) or (cvd_dir is None)
+        vwap_confirms = (vwap.get("lean") == direction)
+        if not has_absorption and not cvd_confirms and not vwap_confirms:
             return {"valid": False, "reason": "no_absorption_outside_va"}
 
-        cvd_dir = cvd.get("direction")
-        cvd_confirms = (cvd_dir == direction) or (cvd_dir is None)
-        if not cvd_confirms:
+        # CVD must not actively oppose the reversion direction
+        if cvd_dir and cvd_dir != direction:
             return {"valid": False, "reason": f"cvd_against_reversion:{cvd_dir}_vs_{direction}"}
 
         reasons.append(f"Mean reversion: price extended {side_label} — revert to POC")
@@ -976,8 +980,12 @@ def _classify_setup(
     if cfg.get("SETUP_MEAN_REVERSION", True) and market_state == "balance" and location in ("at_vah", "at_val"):
         direction = "SHORT" if location == "at_vah" else "LONG"
 
-        # Check absorption at the level
-        if not absorption.get("detected"):
+        # Need at least one confirmation: absorption OR CVD agrees OR VWAP lean agrees
+        # (MT5 tick-volume makes absorption unreliable — require any one of three)
+        _cvd_pre = cvd.get("direction")
+        _has_abs = absorption.get("detected", False)
+        _vwap_pre = (vwap.get("lean") == direction)
+        if not _has_abs and not (_cvd_pre == direction) and not _vwap_pre:
             return {"valid": False, "reason": "no_absorption_at_va_extreme"}
 
         # CVD divergence: price at high but CVD falling (SHORT), or vice versa
@@ -1014,7 +1022,7 @@ def _classify_setup(
         }
 
     # ── Trend Continuation ───────────────────────────────────────────────
-    if cfg.get("SETUP_TREND", True) and market_state == "imbalance" and location in ("at_lvn", "at_poc", "inside_va"):
+    if cfg.get("SETUP_TREND", True) and market_state == "imbalance" and location in ("at_lvn", "at_poc", "inside_va", "at_val", "at_vah"):
         # AAA completion is the strongest signal
         if aaa.get("complete"):
             direction = aaa["direction"]
@@ -1062,12 +1070,15 @@ def _classify_setup(
         if htf_bias and htf_bias != direction:
             return {"valid": False, "reason": f"htf_bias_against_breakout:{htf_bias}_vs_{direction}"}
 
-        # Need at least one aggression confirmation
+        # Need at least one aggression confirmation: absorption OR CVD aligned OR VWAP lean
         cvd_dir = cvd.get("direction")
         has_absorption = absorption.get("detected", False)
         cvd_aligned = (cvd_dir == direction)
-        if not has_absorption and not cvd_aligned:
+        vwap_aligned_ext = (vwap.get("lean") == direction)
+        if not has_absorption and not cvd_aligned and not vwap_aligned_ext:
             return {"valid": False, "reason": "no_momentum_on_va_breakout"}
+        if vwap_aligned_ext:
+            reasons.append(f"VWAP lean confirms {direction} breakout direction")
 
         # CVD must not be actively against direction
         if cvd_dir and cvd_dir != direction:
