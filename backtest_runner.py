@@ -4357,6 +4357,471 @@ def backtest_pair_consensus(
 
     return result
 
+# ── Engine D (Scalp — Fabio VP+OrderFlow) Backtest ────────────────────────────
+def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict | None:
+    """Backtest Engine D scalp setups on M15 bars using Volume Profile + order flow.
+
+    Walk-forward approach:
+      1. Fetch M15 candles (full history available from MT5 or Binance)
+      2. At each bar: compute previous-session VP, detect zone, check aggression on M5-proxy
+      3. If setup valid: enter at next bar open, walk forward for SL/TP resolution
+      4. Collect trades, compute stats using _format_backtest_results()
+
+    M5 proxy: Since we walk M15 bars, we approximate M5 aggression checks using
+    the M15 bar's own OHLCV properties (body ratio, volume ratio, range contraction).
+    This is a known approximation — live scanning uses real M5 data.
+    """
+    from volume_profile import split_completed_sessions, compute_fixed_range_volume_profile
+    from indicators import detect_absorption, calc_cvd, detect_range_contraction
+    from scalp_engine import _guess_asset_type, _calc_ema
+
+    display = pair.get("display", pair.get("symbol", "UNKNOWN"))
+    asset_type = pair.get("type", _guess_asset_type(display))
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+
+    if not cfg.get("BT_ENABLED", True):
+        return {"error": f"Scalp backtest disabled in config for {display}"}
+
+    walk_bars = int(cfg.get("BT_WALK_BARS", 12))
+    max_concurrent = int(cfg.get("BT_MAX_CONCURRENT", 2))
+    min_rr = float(cfg.get("MIN_RR", 2.0))
+    vp_bins = int(cfg.get("VP_BINS", 64))
+    va_pct = float(cfg.get("VP_VALUE_AREA_PCT", 0.70))
+    abs_vol_mult = float(cfg.get("ABSORPTION_VOL_MULT", 2.0))
+    abs_max_move = float(cfg.get("ABSORPTION_MAX_MOVE_ATR", 0.3))
+    abs_sma = int(cfg.get("ABSORPTION_SMA_PERIOD", 20))
+    slippage_ticks = int(cfg.get("BT_SLIPPAGE_TICKS", 3))
+
+    log.info(f"[SCALP-BT] Starting backtest for {display} (type={asset_type})")
+
+    # ── Fetch M15 candles ───────────────────────────────────────────────────
+    try:
+        if asset_type == "crypto":
+            from scalp_engine import _scalp_fetch_candles
+            pair_dict = {
+                "display": display, "symbol": display.replace("/", ""),
+                "type": "crypto", "source": "binance",
+            }
+            m15_raw = _scalp_fetch_candles(pair_dict, "M15", 2000)
+        else:
+            from scalp_engine import mt5_fetch_scalp_candles
+            from mt5_executor import mt5_map_symbol
+            mt5_sym = mt5_map_symbol(display)
+            if not mt5_sym:
+                return {"error": f"No MT5 symbol mapping for {display}"}
+            m15_raw = mt5_fetch_scalp_candles(mt5_sym, "M15", 2000, include_forming=False)
+    except Exception as e:
+        log.error(f"[SCALP-BT] Candle fetch failed for {display}: {e}")
+        return {"error": f"Candle fetch failed: {e}"}
+
+    if not m15_raw or len(m15_raw) < 100:
+        return {"error": f"Insufficient M15 data for {display}: {len(m15_raw) if m15_raw else 0} bars (need 100+)"}
+
+    # Normalize candles to ensure float types
+    candles = []
+    for c in m15_raw:
+        candles.append({
+            "time": c.get("time"),
+            "open": float(c.get("open", 0)),
+            "high": float(c.get("high", 0)),
+            "low": float(c.get("low", 0)),
+            "close": float(c.get("close", 0)),
+            "vol": float(c.get("vol", 0)),
+        })
+
+    # ── Pre-compute ATR for the full series ─────────────────────────────────
+    highs = [c["high"] for c in candles]
+    lows = [c["low"] for c in candles]
+    closes = [c["close"] for c in candles]
+    atr_full = calc_atr(highs, lows, closes, 14)
+
+    # ── Pre-compute absorption for the full series ──────────────────────────
+    absorption_full = detect_absorption(
+        candles, vol_mult=abs_vol_mult, max_move_atr=abs_max_move, sma_period=abs_sma
+    )
+
+    # ── Pre-compute CVD for the full series ─────────────────────────────────
+    cvd_full = calc_cvd(candles, smooth_period=int(cfg.get("CVD_SMOOTH_PERIOD", 5)))
+    smoothed_delta = cvd_full.get("smoothed_delta", [])
+
+    # ── Pre-compute EMA21 for trend filter ──────────────────────────────────
+    ema21_full = _calc_ema(closes, 21)
+
+    # ── Walk-forward backtest loop ──────────────────────────────────────────
+    trades = []
+    open_positions = 0
+    same_bar_both_hit_count = 0
+    min_lookback = 80  # need enough bars for VP computation
+
+    # OOS split: last 30% of trades flagged as out-of-sample
+    total_bars = len(candles)
+
+    for i in range(min_lookback, total_bars - walk_bars - 1):
+        # Skip if at max concurrent positions
+        if open_positions >= max_concurrent:
+            continue
+
+        # Current bar context
+        current_price = candles[i]["close"]
+        current_atr = atr_full[i] if i < len(atr_full) else 0
+        if current_atr <= 0:
+            continue
+
+        # ── Step 1: Compute VP from bars before current ─────────────────────
+        # Use the previous "session" worth of bars (approx 26 M15 bars = 1 trading day)
+        session_len = 26
+        if i < session_len * 2:
+            continue
+
+        prev_session = candles[i - session_len * 2:i - session_len]
+        vp = compute_fixed_range_volume_profile(prev_session, bins=vp_bins, value_area_pct=va_pct)
+        if not vp.get("profile_valid") or vp.get("poc") is None:
+            continue
+
+        poc = vp["poc"]
+        vah = vp["vah"]
+        val = vp["val"]
+        va_width = abs(vah - val)
+        if va_width <= 0:
+            continue
+
+        proximity = va_width * 0.15
+
+        # ── Step 2: Classify price location ─────────────────────────────────
+        at_val = abs(current_price - val) <= proximity
+        at_vah = abs(current_price - vah) <= proximity
+        above_value = current_price > vah + proximity
+        below_value = current_price < val - proximity
+
+        direction = None
+        setup_type = None
+        zone_level = None
+
+        if at_val:
+            direction = "LONG"
+            setup_type = "mean_reversion"
+            zone_level = val
+        elif at_vah:
+            direction = "SHORT"
+            setup_type = "mean_reversion"
+            zone_level = vah
+        elif above_value:
+            # Trend: check if pulling back to current-session POC
+            curr_session = candles[i - session_len:i]
+            curr_vp = compute_fixed_range_volume_profile(curr_session, bins=vp_bins, value_area_pct=va_pct)
+            if curr_vp.get("profile_valid") and curr_vp.get("poc"):
+                lvn_prox = va_width * 0.10
+                if abs(current_price - curr_vp["poc"]) <= lvn_prox:
+                    direction = "LONG"
+                    setup_type = "trend"
+                    zone_level = curr_vp["poc"]
+        elif below_value:
+            curr_session = candles[i - session_len:i]
+            curr_vp = compute_fixed_range_volume_profile(curr_session, bins=vp_bins, value_area_pct=va_pct)
+            if curr_vp.get("profile_valid") and curr_vp.get("poc"):
+                lvn_prox = va_width * 0.10
+                if abs(current_price - curr_vp["poc"]) <= lvn_prox:
+                    direction = "SHORT"
+                    setup_type = "trend"
+                    zone_level = curr_vp["poc"]
+
+        if direction is None:
+            continue
+
+        # ── Step 3: Check aggression (absorption / CVD / candle pattern) ────
+        trigger_type = None
+
+        # Check absorption on last 5 bars
+        if absorption_full:
+            for j in range(max(0, i - 4), min(i + 1, len(absorption_full))):
+                if absorption_full[j].get("absorbed"):
+                    abs_dir = absorption_full[j].get("direction", "neutral")
+                    if direction == "LONG" and abs_dir == "bullish":
+                        trigger_type = "absorption"
+                        break
+                    elif direction == "SHORT" and abs_dir == "bearish":
+                        trigger_type = "absorption"
+                        break
+
+        # Check CVD shift
+        if trigger_type is None and i < len(smoothed_delta) and i >= 2:
+            d_curr = smoothed_delta[i]
+            d_prev = smoothed_delta[i - 1]
+            if d_curr is not None and d_prev is not None:
+                if direction == "LONG" and d_curr > 0 and d_curr > d_prev:
+                    trigger_type = "cvd_shift"
+                elif direction == "SHORT" and d_curr < 0 and d_curr < d_prev:
+                    trigger_type = "cvd_shift"
+
+        # Fallback: rejection candle check on current M15 bar
+        if trigger_type is None:
+            bar = candles[i]
+            body = abs(bar["close"] - bar["open"])
+            lower_wick = min(bar["open"], bar["close"]) - bar["low"]
+            upper_wick = bar["high"] - max(bar["open"], bar["close"])
+            if direction == "LONG" and lower_wick >= 1.5 * body and bar["close"] > bar["open"]:
+                trigger_type = "rejection"
+            elif direction == "SHORT" and upper_wick >= 1.5 * body and bar["close"] < bar["open"]:
+                trigger_type = "rejection"
+
+        if trigger_type is None:
+            continue
+
+        # ── Step 4: Calculate entry, SL, TP ─────────────────────────────────
+        # Entry at next bar open (with slippage)
+        if i + 1 >= total_bars:
+            continue
+        entry_bar = candles[i + 1]
+        point_est = current_atr * 0.001  # rough point estimate
+        slippage = slippage_ticks * point_est
+
+        if direction == "LONG":
+            entry = entry_bar["open"] + slippage
+        else:
+            entry = entry_bar["open"] - slippage
+
+        # SL: behind zone with buffer
+        buffer = current_atr * 0.3
+        if direction == "LONG":
+            sl = (zone_level - proximity) - buffer
+            if sl >= entry:
+                sl = entry - current_atr * 0.5
+        else:
+            sl = (zone_level + proximity) + buffer
+            if sl <= entry:
+                sl = entry + current_atr * 0.5
+
+        sl_distance = abs(entry - sl)
+        if sl_distance <= 0:
+            continue
+
+        # TP1: POC for mean reversion, or min R:R
+        if setup_type == "mean_reversion":
+            if direction == "LONG":
+                tp1_vp = poc
+                tp1_min = entry + sl_distance * min_rr
+                tp1 = max(tp1_vp, tp1_min) if tp1_vp > entry else tp1_min
+            else:
+                tp1_vp = poc
+                tp1_min = entry - sl_distance * min_rr
+                tp1 = min(tp1_vp, tp1_min) if tp1_vp < entry else tp1_min
+        else:
+            if direction == "LONG":
+                tp1 = entry + sl_distance * min_rr
+            else:
+                tp1 = entry - sl_distance * min_rr
+
+        actual_rr = abs(tp1 - entry) / sl_distance if sl_distance > 0 else 0
+        if actual_rr < 1.0:
+            continue  # skip trades with poor R:R
+
+        # ── Step 5: Walk forward to resolve exit ────────────────────────────
+        exit_reason = None
+        exit_price = None
+        exit_bar_idx = None
+
+        for w in range(1, walk_bars + 1):
+            walk_idx = i + 1 + w
+            if walk_idx >= total_bars:
+                break
+
+            wbar = candles[walk_idx]
+            outcome, both_hit = _resolve_barrier_exit(
+                wbar, direction=direction, sl=sl, tp1=tp1, tp2=None, sl_outcome="SL"
+            )
+            if both_hit:
+                same_bar_both_hit_count += 1
+
+            if outcome is not None:
+                exit_reason = outcome
+                exit_bar_idx = walk_idx
+                if outcome == "SL":
+                    exit_price = sl
+                elif outcome == "TP1":
+                    exit_price = tp1
+                break
+
+        # Timeout if no SL/TP hit
+        if exit_reason is None:
+            timeout_idx = min(i + 1 + walk_bars, total_bars - 1)
+            exit_price = candles[timeout_idx]["close"]
+            exit_reason = "TIMEOUT"
+            exit_bar_idx = timeout_idx
+
+        # Calculate R-multiple
+        if direction == "LONG":
+            raw_r = (exit_price - entry) / sl_distance
+        else:
+            raw_r = (entry - exit_price) / sl_distance
+
+        r_multiple = round(max(-5.0, min(5.0, raw_r)), 3)  # cap at ±5R
+
+        # Grade the setup for analysis
+        grade_score = 0
+        if trigger_type == "absorption":
+            grade_score += 25
+        elif trigger_type == "cvd_shift":
+            grade_score += 20
+        else:
+            grade_score += 10
+        if setup_type == "mean_reversion":
+            grade_score += 15
+        else:
+            grade_score += 12
+
+        if trigger_type == "absorption" and setup_type == "mean_reversion":
+            grade = "A"
+        elif grade_score >= 40:
+            grade = "B"
+        else:
+            grade = "C"
+
+        # Determine OOS flag (last 30% of bars)
+        oos = i > total_bars * 0.70
+
+        trade = {
+            "bar_index": i,
+            "entry_bar_index": i + 1,
+            "exit_bar_index": exit_bar_idx,
+            "direction": direction,
+            "setup_type": setup_type,
+            "trigger_type": trigger_type,
+            "trigger_pattern": trigger_type.upper() if trigger_type else "NONE",
+            "grade": grade,
+            "entry": round(entry, 6),
+            "sl": round(sl, 6),
+            "tp1": round(tp1, 6),
+            "exit_price": round(exit_price, 6),
+            "exit_reason": exit_reason,
+            "resultR": r_multiple,
+            "r_multiple": r_multiple,
+            "rr_planned": round(actual_rr, 2),
+            "sl_distance": round(sl_distance, 6),
+            "poc": round(poc, 6),
+            "vah": round(vah, 6),
+            "val": round(val, 6),
+            "zone_level": round(zone_level, 6),
+            "atr": round(current_atr, 6),
+            "oos": oos,
+            "regime": "SCALP",
+            # Compatibility fields for _format_backtest_results
+            "ob_at_zone": False,
+            "bos_mtf_confirmed": False,
+            "breaker_active": False,
+            "fvg_overlap": False,
+            "liquidity_sweep": False,
+            "zone_touched": True,
+            "bos_volume_confirmed": trigger_type == "absorption",
+            "choch_confirmed": False,
+        }
+        trades.append(trade)
+        open_positions += 1
+
+        # Decrement open_positions when the trade exits
+        # (simplified: since we walk sequentially, we just decrement after walk)
+        open_positions = max(0, open_positions - 1)
+
+    # ── Format results ──────────────────────────────────────────────────────
+    if not trades:
+        return {"error": f"No scalp setups found for {display} in {total_bars} M15 bars"}
+
+    log.info(
+        f"[SCALP-BT] {display}: {len(trades)} trades from {total_bars} M15 bars "
+        f"(same_bar_both_hit={same_bar_both_hit_count})"
+    )
+
+    result = _format_backtest_results(
+        trades, pair, engine_type="SCALP_VP",
+        same_bar_both_hit=same_bar_both_hit_count,
+        validation_mode=validation_mode,
+    )
+
+    # Override style fields
+    result["btStyle"] = "scalp"
+    result["btStyleRequested"] = "scalp"
+    result["engine"] = "scalp_vp"
+
+    # ── Scalp-specific analysis ─────────────────────────────────────────────
+    absorption_trades = [t for t in trades if t.get("trigger_type") == "absorption"]
+    cvd_trades = [t for t in trades if t.get("trigger_type") == "cvd_shift"]
+    rejection_trades = [t for t in trades if t.get("trigger_type") == "rejection"]
+    mr_trades = [t for t in trades if t.get("setup_type") == "mean_reversion"]
+    trend_trades = [t for t in trades if t.get("setup_type") == "trend"]
+
+    def _subset_wr(subset):
+        if not subset:
+            return None
+        wins = len([t for t in subset if t.get("r_multiple", 0) > 0])
+        return round(wins / len(subset) * 100, 1)
+
+    def _subset_avg_r(subset):
+        if not subset:
+            return None
+        return round(sum(t.get("r_multiple", 0) for t in subset) / len(subset), 3)
+
+    result["scalp_analysis"] = {
+        "absorption": {"count": len(absorption_trades), "wr": _subset_wr(absorption_trades), "avg_r": _subset_avg_r(absorption_trades)},
+        "cvd_shift": {"count": len(cvd_trades), "wr": _subset_wr(cvd_trades), "avg_r": _subset_avg_r(cvd_trades)},
+        "rejection": {"count": len(rejection_trades), "wr": _subset_wr(rejection_trades), "avg_r": _subset_avg_r(rejection_trades)},
+        "mean_reversion": {"count": len(mr_trades), "wr": _subset_wr(mr_trades), "avg_r": _subset_avg_r(mr_trades)},
+        "trend": {"count": len(trend_trades), "wr": _subset_wr(trend_trades), "avg_r": _subset_avg_r(trend_trades)},
+        "grade_A": {"count": len([t for t in trades if t.get("grade") == "A"]), "wr": _subset_wr([t for t in trades if t.get("grade") == "A"])},
+        "grade_B": {"count": len([t for t in trades if t.get("grade") == "B"]), "wr": _subset_wr([t for t in trades if t.get("grade") == "B"])},
+        "grade_C": {"count": len([t for t in trades if t.get("grade") == "C"]), "wr": _subset_wr([t for t in trades if t.get("grade") == "C"])},
+    }
+
+    # ── Save to DB ──────────────────────────────────────────────────────────
+    try:
+        import sqlite3 as _sq
+        _wf = result.get("wfSplit", {}) or {}
+        _is_sqn = _wf.get("is_sqn")
+        _oos_sqn = _wf.get("oos_sqn")
+        with _sq.connect(_rt().AUDIT_DB, timeout=15.0) as _con:
+            _con.execute(
+                "INSERT INTO backtest_results "
+                "(run_date,pair,asset_type,engine,trades,win_rate,profit_factor,"
+                "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,eval_threshold,atr_source,notes) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    datetime.now(timezone.utc).isoformat(),
+                    display,
+                    asset_type,
+                    "scalp_vp",
+                    result.get("totalTrades", 0),
+                    result.get("winRate"),
+                    result.get("profitFactor"),
+                    result.get("expectancy"),
+                    result.get("sqn"),
+                    result.get("sharpe"),
+                    result.get("sortino"),
+                    round(_is_sqn, 4) if _is_sqn is not None else None,
+                    round(_oos_sqn, 4) if _oos_sqn is not None else None,
+                    result.get("maxDrawdownPct"),
+                    min_rr,
+                    "M15_ATR",
+                    f"vp_bins={vp_bins};walk={walk_bars};abs_mult={abs_vol_mult};slippage={slippage_ticks}",
+                ),
+            )
+            _con.commit()
+        log.info(f"[SCALP-BT-DB] Saved: {display} SQN={result.get('sqn', 0):.2f} ({len(trades)} trades)")
+    except Exception as _dbe:
+        log.warning(f"[SCALP-BT-DB] Failed to save: {_dbe}")
+
+    try:
+        record_backtest_summary(
+            engine="scalp_vp",
+            pass_rate=None,
+            expectancy_r=result.get("expectancy"),
+            score=result.get("sqn"),
+            max_score=10.0,
+            meta={"pair": display, "trades": len(trades)},
+        )
+    except Exception:
+        pass
+
+    return result
+
+
 def run_full_backtest(style="auto", asset_class: str | None = None):
     """Run backtest_pair in parallel. Optional asset_class filter (crypto/forex/stock/commodity/index)."""
 

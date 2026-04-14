@@ -4150,7 +4150,7 @@ def run_ai(
 
 
 
-from backtest_runner import backtest_pair, backtest_pair_naked, backtest_pair_consensus, run_full_backtest  # noqa: E402
+from backtest_runner import backtest_pair, backtest_pair_naked, backtest_pair_consensus, backtest_pair_scalp, run_full_backtest  # noqa: E402
 
 
 def _init_audit_db(db_path: str) -> None:
@@ -6649,6 +6649,50 @@ def api_backtest_naked():
         return jsonify(
             {"success": False, "error": f"Engine B backtest failed: {str(exc)}"}
         ), 500
+
+
+@app.route("/api/backtest-scalp", methods=["POST"])
+def api_backtest_scalp():
+    """Engine D (Scalp — Fabio VP+OrderFlow) backtest endpoint."""
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        pair_symbol = data.get("pair") or data.get("symbol")
+
+        if not pair_symbol:
+            return jsonify({
+                "success": False,
+                "error": "No pair selected. Scalp backtest requires a specific pair.",
+            }), 400
+
+        pair = next(
+            (p for p in ALL_PAIRS
+             if p.get("display") == pair_symbol or p.get("symbol") == pair_symbol),
+            None,
+        )
+        if not pair:
+            return jsonify({
+                "success": False,
+                "error": f"Pair '{pair_symbol}' not found in pair list.",
+            }), 404
+
+        _vm = str(data.get("validation_mode") or "standard").strip().lower()
+        result = backtest_pair_scalp(pair, validation_mode=_vm)
+
+        if result is None:
+            return jsonify({
+                "success": False,
+                "error": "Insufficient candle data to run scalp backtest for this pair.",
+            }), 422
+
+        safe_result = _json_safe(result) if callable(globals().get("_json_safe")) else result
+        return jsonify(safe_result)
+
+    except Exception as exc:
+        log.exception("[SCALP-BT] Unhandled error in api_backtest_scalp")
+        return jsonify({
+            "success": False,
+            "error": f"Scalp backtest failed: {str(exc)}",
+        }), 500
 
 
 @app.route("/api/backtest-consensus", methods=["POST"])
