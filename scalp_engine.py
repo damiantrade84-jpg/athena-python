@@ -234,11 +234,12 @@ def _coerce_utc_datetime(value: Any) -> Optional[datetime]:
         return None
     if isinstance(value, datetime):
         return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    if isinstance(value, (int, float)):
-        try:
-            return datetime.fromtimestamp(float(value), tz=timezone.utc)
-        except Exception:
-            return None
+    # Try numeric conversion first — covers Python int/float AND numpy int64/float64
+    try:
+        ts = float(value)
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    except (TypeError, ValueError, OverflowError, OSError):
+        pass
     if isinstance(value, str):
         raw = value.strip()
         if raw.endswith("Z"):
