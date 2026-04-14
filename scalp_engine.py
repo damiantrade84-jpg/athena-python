@@ -72,14 +72,16 @@ def _tick_value(tick, field: str, default=0.0):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _SESSIONS = {
-    "london":   (7, 16),
-    "new_york": (13, 21),
+    "london":    (7, 16),
+    "new_york":  (13, 21),
+    "london_ny": (7, 21),
 }
 
 _CRYPTO_SESSIONS = {
     "asia":        (1, 9),
     "london":      (7, 16),
     "new_york":    (13, 22),
+    "london_ny":   (7, 22),
 }
 
 _CRYPTO_SCALP_PAIRS = [
