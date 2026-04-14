@@ -10,6 +10,8 @@ import indicators
 import volume_profile
 import mt5_executor
 import scalp_engine
+import bybit_executor
+from risk_engine import RiskApproval
 
 # --- 1. Startup Logic Tests ---
 
@@ -75,11 +77,12 @@ def _mock_scalp_setup(monkeypatch, candles, tp1, tp2):
     monkeypatch.setattr(backtest_runner, "_rt", lambda: types.SimpleNamespace(AUDIT_DB=":memory:"))
 
 def test_scalp_backtest_tp1_tp2_modeling(monkeypatch):
+    """Verify runner can continue to TP2 after +1R partial and TP1 BE milestone."""
     candles = [{"time": time.time(), "open": 100.0, "high": 100.1, "low": 99.9, "close": 100.0, "vol": 1000} for i in range(300)]
     
     # Entry bar i=101. Price approx 100.
     # Bar 110: Hit TP1 (110)
-    candles[110]["open"] = 111.0 # Opening ABOVE TP1 triggers hit
+    candles[110]["open"] = 111.0 
     candles[110]["high"] = 111.0 
     
     # Bar 115: Hit TP2 (120)
@@ -92,8 +95,9 @@ def test_scalp_backtest_tp1_tp2_modeling(monkeypatch):
     
     assert "trades" in result and len(result["trades"]) > 0
     trade = result["trades"][0]
+    assert trade.get("partial_taken_1r") is True
+    assert trade.get("runner_be_armed") is True
     assert trade["exit_reason"] == "TP2"
-    # Note: tp1_hit might be False if gapped or hit in same bar during walk
     assert trade["resultR"] > 1.0
 
 def test_scalp_backtest_tp1_only(monkeypatch):
@@ -107,8 +111,8 @@ def test_scalp_backtest_tp1_only(monkeypatch):
     
     assert "trades" in result and len(result["trades"]) > 0
     trade = result["trades"][0]
-    assert trade["exit_reason"] == "TP1"
-    assert trade.get("tp1_hit") is False
+    assert trade["exit_reason"] == "BE"
+    assert trade.get("tp1_hit") is True
 
 # --- 4. Precision & Level Collapse Regression Tests ---
 
@@ -138,6 +142,70 @@ def test_crypto_scalp_precision_guard():
     # The guard should push digits to 6 for entry < 1.0
     assert levels["entry"] == 0.0912
     assert levels["sl"] < 0.091 
+
+
+def test_scalp_tp1_not_forced_outward_by_min_rr(monkeypatch):
+    """TP1 should remain structural (POC/VA side), not pushed outward by synthetic MIN_RR."""
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {**scalp_engine.CONFIG.get("SCALP_ENGINE", {}), "MIN_RR": 3.0},
+    )
+    vp = {"poc": 1.1002, "vah": 1.1010, "val": 1.1000}
+    levels = scalp_engine.calculate_scalp_levels(
+        direction="LONG",
+        entry=1.1001,
+        vp=vp,
+        setup_type="mean_reversion",
+        symbol_info={"digits": 5, "point": 0.00001},
+        asset_type="forex",
+    )
+    assert levels["tp1"] == round(vp["poc"], 5)
+
+
+def test_bybit_scalp_exec_uses_tp1_for_exchange_tp(monkeypatch):
+    """Engine D Bybit protective TP should be set at TP1."""
+    captured = {"tp": None}
+
+    class _X:
+        def fetch_ticker(self, symbol):
+            return {"ask": 100.0, "bid": 100.0, "last": 100.0}
+        def create_market_order(self, symbol, side, amount, params=None):
+            return {"id": "ord-1", "average": 100.0, "price": 100.0, "filled": amount}
+
+    monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: _X())
+    monkeypatch.setattr(bybit_executor, "bybit_map_symbol", lambda pair: "BTC/USDT:USDT")
+    monkeypatch.setattr(bybit_executor, "_ensure_leverage", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bybit_executor, "_validate_exit_levels", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bybit_executor, "_entry_slippage_bps", lambda *args, **kwargs: (100.0, 0.0))
+    monkeypatch.setattr(bybit_executor.telegram_notify, "notify_trade_opened", lambda **kwargs: None)
+    monkeypatch.setattr(
+        bybit_executor,
+        "_set_trading_stop",
+        lambda exchange, ccxt_symbol, sl=0, tp=0: captured.__setitem__("tp", tp),
+    )
+
+    approval = RiskApproval(
+        approved=True,
+        volume=0.01,
+        risk_amount=10.0,
+        risk_pct=0.01,
+        portfolio_heat=0.01,
+        drawdown_pct=0.0,
+        reason="OK",
+    )
+    signal = {
+        "pair": "BTC/USDT",
+        "direction": "LONG",
+        "price": 100.0,
+        "sl": 99.0,
+        "tp1": 101.0,
+        "tp2": 103.0,
+        "engine": "scalp",
+    }
+    result = bybit_executor.bybit_execute(signal, approval)
+    assert result.get("success") is True
+    assert captured["tp"] == signal["tp1"]
 
 def test_bybit_symbol_info_precision_extraction(monkeypatch):
     """Verify that bybit_executor correctly extracts digits from float tick sizes."""
