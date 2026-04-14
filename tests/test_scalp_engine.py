@@ -29,6 +29,7 @@ from scalp_engine import (
     is_valid_session,
     scalp_session_window,
     mt5_get_live_price,
+    mt5_market_open_state,
     mt5_fetch_scalp_candles,
     _build_volume_profile,
     _locate_price_vs_vp,
@@ -454,6 +455,39 @@ def test_mt5_get_live_price_bid_ask_mid(monkeypatch):
     assert mt5_get_live_price("EURUSD") == 1.2346
 
 
+def test_mt5_market_open_state_rejects_stale_tick(monkeypatch):
+    now = datetime(2026, 4, 14, 12, 0, tzinfo=timezone.utc)
+    stale_tick = types.SimpleNamespace(
+        bid=1.2345,
+        ask=1.2347,
+        last=1.2346,
+        time=int((now.timestamp()) - 3600),
+    )
+    fake_mt5 = types.SimpleNamespace(
+        SYMBOL_TRADE_MODE_DISABLED=0,
+        symbol_select=lambda s, e: True,
+        symbol_info=lambda s: types.SimpleNamespace(trade_mode=1),
+        symbol_info_tick=lambda s: stale_tick,
+    )
+    monkeypatch.setitem(sys.modules, "MetaTrader5", fake_mt5)
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(scalp_engine, "_current_utc_datetime", lambda: now)
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "MARKET_OPEN_CHECK_ENABLED": True,
+            "MARKET_TICK_MAX_AGE_SEC": 900,
+        },
+    )
+
+    state = mt5_market_open_state("EURUSD")
+
+    assert state["open"] is False
+    assert state["reason"] == "MARKET_CLOSED_STALE_TICK"
+
+
 def test_get_current_sessions_london_ny_overlap(monkeypatch):
     monkeypatch.setattr(scalp_engine, "_current_utc_datetime",
                         lambda: datetime(2026, 3, 26, 13, 0, tzinfo=timezone.utc))
@@ -848,6 +882,7 @@ def test_run_scalp_scan_uses_min_grade_for_scan_gate(monkeypatch):
     monkeypatch.setattr(scalp_engine, "scalp_session_window", lambda *args, **kwargs: (True, "london"))
     monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
     monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")
+    monkeypatch.setattr(scalp_engine, "mt5_market_open_state", lambda symbol: {"open": True, "reason": "market_open"})
     monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda display: {"digits": 5, "point": 0.00001, "spread": 10})
     monkeypatch.setattr(scalp_engine, "check_spread", lambda sym_info, asset_type: (True, 1.0))
     monkeypatch.setattr(scalp_engine, "mt5_fetch_scalp_candles", lambda *args, **kwargs: _candles(300))
@@ -867,6 +902,33 @@ def test_run_scalp_scan_uses_min_grade_for_scan_gate(monkeypatch):
     result = scalp_engine.run_scalp_scan(["EUR/USD"])
     assert len(result["signals"]) == 1
     assert result["signals"][0]["ai_grade"] == "C"
+
+
+def test_run_scalp_scan_skips_closed_mt5_market(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "SESSION_FILTER": True,
+            "SESSION_MODE": "all",
+        },
+    )
+    monkeypatch.setattr(scalp_engine, "get_current_sessions", lambda: ["off_hours"])
+    monkeypatch.setattr(scalp_engine, "scalp_session_window", lambda *args, **kwargs: (True, "all"))
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")
+    monkeypatch.setattr(
+        scalp_engine,
+        "mt5_market_open_state",
+        lambda symbol: {"open": False, "reason": "MARKET_CLOSED_STALE_TICK", "age_sec": 3600},
+    )
+    monkeypatch.setattr(scalp_engine, "record_signal_event", lambda **kwargs: None)
+
+    result = scalp_engine.run_scalp_scan(["EUR/USD"])
+
+    assert result["signals"] == []
+    assert result["skipped"] == [{"pair": "EUR/USD", "reason": "MARKET_CLOSED_STALE_TICK"}]
 
 
 def test_run_scalp_scan_uses_m1_execution_tf(monkeypatch):
@@ -891,6 +953,7 @@ def test_run_scalp_scan_uses_m1_execution_tf(monkeypatch):
     monkeypatch.setattr(scalp_engine, "scalp_session_window", lambda *args, **kwargs: (True, "new_york"))
     monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
     monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")
+    monkeypatch.setattr(scalp_engine, "mt5_market_open_state", lambda symbol: {"open": True, "reason": "market_open"})
     monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda display: {"digits": 5, "point": 0.00001, "spread": 10})
     monkeypatch.setattr(scalp_engine, "check_spread", lambda sym_info, asset_type: (True, 1.0))
     monkeypatch.setattr(scalp_engine, "mt5_fetch_scalp_candles", _fake_mt5_fetch)

@@ -846,6 +846,9 @@ SCALP_ENGINE:
   SESSION_MODE: "all"           # Testing override: allow Engine D live scans outside London/NY session windows
   LONDON_OPEN_SKIP_MINUTES: 20  # Avoid first 20 min of London open (07:00-07:20 UTC)
   EXECUTION_TIMEFRAME: "M1"     # 15m structure, 5m context, 1m execution
+  MARKET_OPEN_CHECK_ENABLED: true  # Live scan must skip closed/stale MT5 markets even when SESSION_MODE=all
+  MARKET_TICK_MAX_AGE_SEC: 900  # Max age for broker tick before non-crypto market is treated as closed/stale
+  MARKET_CANDLE_MAX_AGE_SEC: 900  # Max age for execution candles before live scan treats data as stale
   # ── Directional Filter ────────────────────────────────────
   WITH_TREND_ONLY: true         # Reject counter-trend scalp setups
   BIAS_TIMEFRAME: "H1"          # Higher-TF direction gate for scalp signals

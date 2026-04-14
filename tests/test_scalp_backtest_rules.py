@@ -40,7 +40,7 @@ def _timed_candles(count, tf_minutes, *, start=None, close=100.005, high=100.006
     ]
 
 
-def test_backtest_pair_scalp_uses_m1_execution_clock_when_available(monkeypatch):
+def test_backtest_pair_scalp_uses_stable_m15_execution_proxy(monkeypatch):
     candles_m15 = _timed_candles(140, 15)
     candles_m5 = _timed_candles(420, 5)
     candles_m1 = _timed_candles(2100, 1)
@@ -100,9 +100,10 @@ def test_backtest_pair_scalp_uses_m1_execution_clock_when_available(monkeypatch)
 
     result = backtest_runner.backtest_pair_scalp({"display": "EUR/USD", "type": "forex"})
 
-    assert result["execution_tf"] == "M1"
+    assert result["execution_tf"] == "M15"
+    assert result["backtest_model"] == "M15_STABLE_PROXY"
     trade = result["trades"][0]
-    assert trade["execution_tf"] == "M1"
+    assert trade["execution_tf"] == "M15"
     assert trade["exit_reason"] == "SCRATCH_NO_FOLLOW_THROUGH"
     assert trade["exit_bar_index"] - trade["entry_bar_index"] == 3
 

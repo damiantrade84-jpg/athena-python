@@ -291,6 +291,81 @@ def mt5_get_live_price(mt5_symbol: str) -> float | None:
         return None
 
 
+def mt5_market_open_state(mt5_symbol: str) -> dict:
+    """Return whether MT5 has fresh tradable market data for a symbol."""
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    if not cfg.get("MARKET_OPEN_CHECK_ENABLED", True):
+        return {"open": True, "reason": "market_open_check_disabled"}
+
+    max_age = max(1, int(cfg.get("MARKET_TICK_MAX_AGE_SEC", 900)))
+    try:
+        from mt5_executor import mt5_connect
+        import MetaTrader5 as mt5
+
+        if not mt5_connect():
+            return {"open": False, "reason": "MT5_NOT_CONNECTED"}
+
+        mt5.symbol_select(mt5_symbol, True)
+        info = mt5.symbol_info(mt5_symbol)
+        disabled_mode = getattr(mt5, "SYMBOL_TRADE_MODE_DISABLED", None)
+        trade_mode = getattr(info, "trade_mode", None) if info is not None else None
+        if disabled_mode is not None and trade_mode == disabled_mode:
+            return {"open": False, "reason": "MARKET_CLOSED_TRADE_DISABLED"}
+
+        tick = mt5.symbol_info_tick(mt5_symbol)
+        if not tick:
+            return {"open": False, "reason": "MARKET_CLOSED_NO_TICK"}
+
+        bid = float(_tick_value(tick, "bid", 0) or 0)
+        ask = float(_tick_value(tick, "ask", 0) or 0)
+        last = float(_tick_value(tick, "last", 0) or 0)
+        if bid <= 0 and ask <= 0 and last <= 0:
+            return {"open": False, "reason": "MARKET_CLOSED_NO_PRICE"}
+
+        tick_time = _tick_value(tick, "time_msc", None)
+        if tick_time is None:
+            tick_time = _tick_value(tick, "time", None)
+        tick_dt = _coerce_utc_datetime(tick_time)
+        if tick_dt is not None:
+            age_s = (_current_utc_datetime() - tick_dt).total_seconds()
+            if age_s > max_age:
+                return {
+                    "open": False,
+                    "reason": "MARKET_CLOSED_STALE_TICK",
+                    "age_sec": round(age_s, 1),
+                }
+
+        return {"open": True, "reason": "market_open"}
+    except ImportError:
+        return {"open": False, "reason": "MT5_PACKAGE_UNAVAILABLE"}
+    except Exception as e:
+        log.error(f"[SCALP] mt5_market_open_state error: {e}")
+        return {"open": False, "reason": "MARKET_OPEN_CHECK_ERROR"}
+
+
+def _latest_candle_age_seconds(candles: list) -> float | None:
+    if not candles:
+        return None
+    ts = _coerce_utc_datetime((candles[-1] or {}).get("time"))
+    if ts is None:
+        return None
+    return (_current_utc_datetime() - ts).total_seconds()
+
+
+def _execution_candles_fresh(candles: list, timeframe: str) -> tuple[bool, str]:
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    max_age = max(1, int(cfg.get("MARKET_CANDLE_MAX_AGE_SEC", 900)))
+    age_s = _latest_candle_age_seconds(candles)
+    if age_s is None:
+        return True, "candle_time_unavailable"
+    # Candle timestamps are bar-open times. Allow one extra bar length before
+    # declaring live data stale.
+    tf_sec = {"M1": 60, "M5": 300, "M15": 900}.get(str(timeframe).upper(), 60)
+    if age_s > max_age + tf_sec:
+        return False, f"MARKET_DATA_STALE_{round(age_s)}s"
+    return True, "fresh"
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # EMA HELPER + BIAS INFERENCE
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1706,6 +1781,12 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 else:
                     candles_exec = candles_m5
 
+                fresh, stale_reason = _execution_candles_fresh(candles_exec, execution_tf)
+                if not fresh:
+                    _record_stability_sample(display, asset_type, False, reason=stale_reason)
+                    skipped.append({"pair": display, "reason": stale_reason})
+                    continue
+
                 current_price = candles_exec[-1]["close"]
                 sym_info = {"spread": 0, "point": 0.01, "digits": 2}
                 spread_pips = 0.0
@@ -1721,6 +1802,13 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 if not mt5_sym:
                     _record_stability_sample(display, asset_type, False, reason="no_mt5_mapping")
                     skipped.append({"pair": display, "reason": "no_mt5_mapping"})
+                    continue
+
+                market_open = mt5_market_open_state(mt5_sym)
+                if not market_open.get("open"):
+                    reason = str(market_open.get("reason") or "MARKET_CLOSED")
+                    _record_stability_sample(display, asset_type, False, reason=reason)
+                    skipped.append({"pair": display, "reason": reason})
                     continue
 
                 sym_info = mt5_get_symbol_info(display)
@@ -1760,8 +1848,18 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 else:
                     candles_exec = candles_m5
 
+                fresh, stale_reason = _execution_candles_fresh(candles_exec, execution_tf)
+                if not fresh:
+                    _record_stability_sample(display, asset_type, False, reason=stale_reason)
+                    skipped.append({"pair": display, "reason": stale_reason})
+                    continue
+
                 live_price = mt5_get_live_price(mt5_sym)
-                current_price = live_price if live_price and live_price > 0 else candles_exec[-1]["close"]
+                if not live_price or live_price <= 0:
+                    _record_stability_sample(display, asset_type, False, reason="MARKET_CLOSED_NO_LIVE_PRICE")
+                    skipped.append({"pair": display, "reason": "MARKET_CLOSED_NO_LIVE_PRICE"})
+                    continue
+                current_price = live_price
                 htf_bias = None
 
                 if use_bias:

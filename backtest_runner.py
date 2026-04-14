@@ -4359,16 +4359,16 @@ def backtest_pair_consensus(
 
 # ── Engine D (Scalp — Fabio VP+OrderFlow) Backtest ────────────────────────────
 def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict | None:
-    """Backtest Engine D scalp setups with M15 structure and M1 execution.
+    """Backtest Engine D scalp setups with a stable M15 execution proxy.
 
     Walk-forward approach:
-      1. Fetch M15 structure, M5 context, and M1 execution candles where available
-      2. At each closed M15 bar: build VP context, then run the live Engine D pipeline
-      3. If setup valid: enter at the next execution bar, resolve SL/TP on execution bars
+      1. Fetch M15 structure candles
+      2. At each closed M15 bar: build VP context, then run the Engine D setup pipeline
+      3. If setup valid: enter at the next M15 bar, resolve SL/TP on M15 bars
       4. Collect trades, compute stats using _format_backtest_results()
 
-    If lower-timeframe history is unavailable, the function falls back to the legacy
-    M15 walk so older fixtures and thin broker history still produce a result.
+    Live Engine D still executes on M1/M5. The backtest keeps the M15 proxy until
+    lower-timeframe historical execution has been validated against known-good runs.
     """
     from scalp_engine import (
         _build_volume_profile,
@@ -4381,7 +4381,6 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         _coerce_utc_datetime,
         _guess_asset_type,
         _locate_price_vs_vp,
-        calculate_scalp_levels,
         get_grade_sessions_for_mode,
         infer_bias_from_ema_stack,
         scalp_session_window,
@@ -4416,8 +4415,6 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
                 "type": "crypto", "source": "binance",
             }
             m15_raw = _scalp_fetch_candles(pair_dict, "M15", 2000)
-            m5_raw = _scalp_fetch_candles(pair_dict, "M5", 6000) or []
-            m1_raw = _scalp_fetch_candles(pair_dict, "M1", 20000) or []
         else:
             from scalp_engine import mt5_fetch_scalp_candles
             from mt5_executor import mt5_map_symbol
@@ -4425,8 +4422,6 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             if not mt5_sym:
                 return {"error": f"No MT5 symbol mapping for {display}"}
             m15_raw = mt5_fetch_scalp_candles(mt5_sym, "M15", 2000, include_forming=False)
-            m5_raw = mt5_fetch_scalp_candles(mt5_sym, "M5", 6000, include_forming=False) or []
-            m1_raw = mt5_fetch_scalp_candles(mt5_sym, "M1", 20000, include_forming=False) or []
     except Exception as e:
         log.error(f"[SCALP-BT] Candle fetch failed for {display}: {e}")
         return {"error": f"Candle fetch failed: {e}"}
@@ -4454,37 +4449,6 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
 
     # Normalize candles to ensure float types and attach optional bar timestamps.
     candles = _normalize_bt_candles(m15_raw, 15)
-    candles_m5 = _normalize_bt_candles(m5_raw, 5)
-    candles_m1 = _normalize_bt_candles(m1_raw, 1)
-
-    def _has_time_aligned_lower_tf(lower: list, higher: list, min_ratio: float) -> bool:
-        lower_times = [c.get("_dt") for c in lower if c.get("_dt") is not None]
-        higher_times = [c.get("_dt") for c in higher if c.get("_dt") is not None]
-        if len(lower_times) < 30 or len(higher_times) < 10:
-            return False
-        if len(lower) < int(len(higher) * min_ratio):
-            return False
-        return len(set(lower_times[: min(len(lower_times), 50)])) > 1
-
-    has_m5_context = _has_time_aligned_lower_tf(candles_m5, candles, 2.0)
-    has_m1_execution = _has_time_aligned_lower_tf(candles_m1, candles, 5.0)
-
-    def _closed_before(rows: list, cutoff: datetime | None, limit: int | None = None) -> list:
-        if not rows or cutoff is None:
-            return []
-        selected = [c for c in rows if c.get("_close_dt") is not None and c["_close_dt"] <= cutoff]
-        if limit and len(selected) > limit:
-            return selected[-limit:]
-        return selected
-
-    def _future_from(rows: list, cutoff: datetime | None, max_minutes: int | None = None) -> list:
-        if not rows or cutoff is None:
-            return []
-        selected = [c for c in rows if c.get("_dt") is not None and c["_dt"] >= cutoff]
-        if max_minutes is not None:
-            end = cutoff + timedelta(minutes=max_minutes)
-            selected = [c for c in selected if c.get("_dt") is not None and c["_dt"] <= end]
-        return selected
 
     # ── Volume quality check ────────────────────────────────────────────────
     raw_vols = [c["vol"] for c in candles]
@@ -4528,13 +4492,13 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         candle_dt = _coerce_utc_datetime(structure_bar.get("time"))
         signal_close_dt = structure_bar.get("_close_dt") or candle_dt
         m15_context = candles[: i + 1]
-        m5_context = _closed_before(candles_m5, signal_close_dt, 300) if has_m5_context else []
-        exec_context = _closed_before(candles_m1, signal_close_dt, 500) if has_m1_execution else []
-        if not exec_context:
-            exec_context = m5_context if m5_context else m15_context[-100:]
+        # Backtest execution intentionally remains on the M15 proxy. The M1/M5
+        # live path is not used here because it changed known-good historical
+        # results by pairing later entries with stale M15 VP targets.
+        exec_context = m15_context[-100:]
         context_for_vwap = m15_context[-vp_lookback:]
 
-        current_price = exec_context[-1]["close"] if exec_context else structure_bar["close"]
+        current_price = structure_bar["close"]
         current_atr = atr_full[i] if i < len(atr_full) else 0
         if current_atr <= 0:
             continue
@@ -4579,29 +4543,23 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         else:
             trigger_type = "vwap" if vwap.get("lean") == direction else "setup"
 
-        zone_level = float(price_loc.get("nearest_level") or (val if direction == "LONG" else vah))
+        loc = price_loc.get("location")
+        if loc == "at_val":
+            zone_level = float(val)
+        elif loc == "at_vah":
+            zone_level = float(vah)
+        elif loc == "at_poc":
+            zone_level = float(poc)
+        else:
+            zone_level = float(price_loc.get("nearest_level") or (val if direction == "LONG" else vah))
 
         # ── Step 4: Calculate entry, SL, TP1, TP2 ───────────────────────────
-        # Entry is the next execution bar after the M15 setup closes. If lower
-        # TF history is unavailable, fall back to the next M15 bar.
-        lower_future = []
         exit_tf = "M15"
-        if has_m1_execution:
-            lower_future = _future_from(candles_m1, signal_close_dt, max_minutes=walk_bars * 15)
-            exit_tf = "M1"
-        if not lower_future and has_m5_context:
-            lower_future = _future_from(candles_m5, signal_close_dt, max_minutes=walk_bars * 15)
-            exit_tf = "M5"
-        if lower_future:
-            entry_bar = lower_future[0]
-            walk_rows = lower_future[1:]
-            entry_bar_idx = int(entry_bar.get("_seq", i + 1))
-        else:
-            if i + 1 >= total_bars:
-                continue
-            entry_bar = candles[i + 1]
-            walk_rows = candles[i + 2:i + 2 + walk_bars]
-            entry_bar_idx = i + 1
+        if i + 1 >= total_bars:
+            continue
+        entry_bar = candles[i + 1]
+        walk_rows = candles[i + 2:i + 2 + walk_bars]
+        entry_bar_idx = i + 1
 
         point_est = current_atr * 0.001  # rough point estimate
         slippage = slippage_ticks * point_est
@@ -4611,18 +4569,31 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         else:
             entry = entry_bar["open"] - slippage
 
-        symbol_info = {
-            "digits": 6 if asset_type == "crypto" else (5 if asset_type == "forex" else 2),
-            "point": point_est if point_est > 0 else (0.00001 if asset_type == "forex" else 0.01),
-        }
-        levels = calculate_scalp_levels(direction, entry, vp, setup_type, symbol_info, asset_type)
-        if levels.get("rr_below_min"):
-            continue
-        sl = float(levels["sl"])
-        tp1 = float(levels["tp1"])
-        tp2 = levels.get("tp2")
+        proximity = max(va_width * 0.15, current_atr * 0.05)
+        safety_buffer = max(current_atr * 0.5, abs(entry) * 0.0005, point_est)
+        if direction == "LONG":
+            sl = zone_level - proximity - (current_atr * 0.3)
+            if sl >= entry:
+                sl = entry - safety_buffer
+            sl_distance = entry - sl
+            min_target = entry + (sl_distance * min_rr)
+            if str(setup_type).startswith("trend"):
+                tp1 = min_target
+            else:
+                tp1 = max(float(poc), min_target) if poc > entry else min_target
+            tp2 = max(float(vah), tp1 + sl_distance)
+        else:
+            sl = zone_level + proximity + (current_atr * 0.3)
+            if sl <= entry:
+                sl = entry + safety_buffer
+            sl_distance = sl - entry
+            min_target = entry - (sl_distance * min_rr)
+            if str(setup_type).startswith("trend"):
+                tp1 = min_target
+            else:
+                tp1 = min(float(poc), min_target) if poc < entry else min_target
+            tp2 = min(float(val), tp1 - sl_distance)
 
-        sl_distance = abs(entry - sl)
         if sl_distance <= 0:
             continue
 
@@ -4708,12 +4679,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         oos = i > total_bars * 0.70
         exit_structure_idx = i + 1
         if exit_bar_idx is not None:
-            if exit_tf == "M1":
-                exit_structure_idx = i + 1 + math.ceil(max(1, exit_bar_idx - entry_bar_idx) / 15)
-            elif exit_tf == "M5":
-                exit_structure_idx = i + 1 + math.ceil(max(1, exit_bar_idx - entry_bar_idx) / 3)
-            else:
-                exit_structure_idx = exit_bar_idx
+            exit_structure_idx = exit_bar_idx
 
         trade = {
             "bar_index": i,
@@ -4722,7 +4688,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             "structure_entry_bar_index": i + 1,
             "structure_exit_bar_index": exit_structure_idx,
             "execution_tf": exit_tf,
-            "context_tf": "M5" if has_m5_context else "M15",
+            "context_tf": "M15",
             "structure_tf": "M15",
             "direction": direction,
             "setup_type": setup_type,
@@ -4796,10 +4762,11 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     result["vol_quality_pct"] = vol_quality_pct
     result["vol_quality_warning"] = vol_quality_pct < 30
     result["structure_tf"] = "M15"
-    result["context_tf"] = "M5" if has_m5_context else "M15"
-    result["execution_tf"] = "M1" if has_m1_execution else ("M5" if has_m5_context else "M15")
+    result["context_tf"] = "M15"
+    result["execution_tf"] = "M15"
     result["vp_lookback_bars"] = vp_lookback
-    result["lower_tf_fallback"] = not has_m1_execution
+    result["lower_tf_fallback"] = True
+    result["backtest_model"] = "M15_STABLE_PROXY"
 
     # ── Scalp-specific analysis ─────────────────────────────────────────────
     absorption_trades = [t for t in trades if t.get("trigger_type") == "absorption"]
