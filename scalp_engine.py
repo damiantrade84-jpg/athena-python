@@ -34,6 +34,50 @@ from stability_monitor import record_signal_event
 log = logging.getLogger("sentinel.scalp")
 
 
+# =========================================================================
+# SESSION RISK STATE (resets on new UTC day)
+# =========================================================================
+_session_state = {
+    "date": None,
+    "consecutive_losses": 0,
+    "total_losses_today": 0,
+    "net_r_today": 0.0,
+    "size_cut_active": False,
+}
+
+
+def _reset_session_state_if_new_day():
+    """Reset daily counters at UTC midnight."""
+    today = _current_utc_datetime().date()
+    if _session_state["date"] != today:
+        _session_state["date"] = today
+        _session_state["consecutive_losses"] = 0
+        _session_state["total_losses_today"] = 0
+        _session_state["net_r_today"] = 0.0
+        _session_state["size_cut_active"] = False
+
+
+def record_scalp_trade_outcome(r_multiple: float):
+    """Called after a scalp trade closes to update session risk state."""
+    _reset_session_state_if_new_day()
+    _session_state["net_r_today"] += r_multiple
+    if r_multiple <= 0:
+        _session_state["consecutive_losses"] += 1
+        _session_state["total_losses_today"] += 1
+    else:
+        _session_state["consecutive_losses"] = 0
+    # Check +2R size cut
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    if cfg.get("SIZE_CUT_AFTER_2R", True) and _session_state["net_r_today"] >= 2.0:
+        _session_state["size_cut_active"] = True
+
+
+def get_scalp_session_risk_state() -> dict:
+    """Return current session risk state for UI/logging."""
+    _reset_session_state_if_new_day()
+    return dict(_session_state)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATA FETCHING — unchanged interface, MT5 + Binance/Athena runtime
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -749,7 +793,7 @@ def _classify_setup(
     reasons = []
 
     # ── Mean Reversion ───────────────────────────────────────────────────
-    if market_state == "balance" and location in ("at_vah", "at_val"):
+    if cfg.get("SETUP_MEAN_REVERSION", True) and market_state == "balance" and location in ("at_vah", "at_val"):
         direction = "SHORT" if location == "at_vah" else "LONG"
 
         # Check absorption at the level
@@ -777,16 +821,20 @@ def _classify_setup(
             reasons.append(f"VWAP confirms {direction}")
 
         reasons.append(f"Mean reversion from {location.upper()} toward POC")
+        # target = POC, not the touched VA extreme. nearest_level for at_vah/at_val
+        # returns the VA extreme itself, but mean reversion targets POC.
+        # POC is available when location is inside_va/outside_va but not at VA extremes.
+        # Use a sentinel: caller (run_scalp_scan) can resolve from vp dict.
         return {
             "valid": True,
             "setup_type": "mean_reversion",
             "direction": direction,
-            "target": price_loc.get("nearest_level"),  # POC
+            "target": "POC",
             "reasons": reasons,
         }
 
     # ── Trend Continuation ───────────────────────────────────────────────
-    if market_state == "imbalance" and location in ("at_lvn", "at_poc", "inside_va"):
+    if cfg.get("SETUP_TREND", True) and market_state == "imbalance" and location in ("at_lvn", "at_poc", "inside_va"):
         # AAA completion is the strongest signal
         if aaa.get("complete"):
             direction = aaa["direction"]
@@ -816,7 +864,7 @@ def _classify_setup(
             "valid": True,
             "setup_type": "trend_continuation",
             "direction": direction,
-            "target": price_loc.get("nearest_level"),
+            "target": "POC_OR_OPPOSITE_VA",
             "reasons": reasons,
         }
 
@@ -871,20 +919,20 @@ def calculate_scalp_levels(
         if direction == "LONG":
             sl = val - buffer
             tp1 = poc
-            tp2 = vah
+            tp2 = vah if cfg.get("TP2_ENABLED", True) else None
         else:
             sl = vah + buffer
             tp1 = poc
-            tp2 = val
+            tp2 = val if cfg.get("TP2_ENABLED", True) else None
     else:  # trend_continuation
         if direction == "LONG":
             sl = poc - buffer if poc < entry else entry - (entry * 0.003)
             tp1 = vah
-            tp2 = vah + (vah - poc)  # extension beyond VA
+            tp2 = (vah + (vah - poc)) if cfg.get("TP2_ENABLED", True) else None
         else:
             sl = poc + buffer if poc > entry else entry + (entry * 0.003)
             tp1 = val
-            tp2 = val - (poc - val)  # extension below VA
+            tp2 = (val - (poc - val)) if cfg.get("TP2_ENABLED", True) else None
 
     sl_distance = abs(entry - sl)
 
@@ -1023,16 +1071,19 @@ def ai_quality_grade(
     else:
         grade = "D"
 
-    size_map = cfg.get(
-        "GRADE_SIZE_MAP",
-        {
-            "A": float(cfg.get("GRADE_A_SIZE_MULT", 1.0)),
-            "B": float(cfg.get("GRADE_B_SIZE_MULT", 0.5)),
-            "C": float(cfg.get("GRADE_C_SIZE_MULT", 0.25)),
-            "D": float(cfg.get("GRADE_D_SIZE_MULT", 0.0)),
-        },
-    )
-    size_mult = float(size_map.get(grade, 0.0))
+    if cfg.get("GRADE_SIZING_ENABLED", True):
+        size_map = cfg.get(
+            "GRADE_SIZE_MAP",
+            {
+                "A": float(cfg.get("GRADE_A_SIZE_MULT", 1.0)),
+                "B": float(cfg.get("GRADE_B_SIZE_MULT", 0.5)),
+                "C": float(cfg.get("GRADE_C_SIZE_MULT", 0.25)),
+                "D": float(cfg.get("GRADE_D_SIZE_MULT", 0.0)),
+            },
+        )
+        size_mult = float(size_map.get(grade, 0.0))
+    else:
+        size_mult = 1.0  # full size regardless of grade
 
     return {
         "score": score,
@@ -1092,6 +1143,16 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             )
         except Exception as exc:
             log.debug(f"[SSI] Scalp sample skipped for {display}: {exc}")
+
+    # Daily risk rules check
+    _reset_session_state_if_new_day()
+    max_daily = int(cfg.get("MAX_DAILY_LOSSES", 3))
+    if cfg.get("MAX_DAILY_LOSSES") and _session_state["total_losses_today"] >= max_daily:
+        log.warning(f"[SCALP] Daily loss limit reached: {_session_state['total_losses_today']} losses")
+        return {
+            "signals": [], "skipped": len(pairs_or_symbols), "scanned": 0,
+            "session": "DAILY_LOSS_LIMIT", "reason": f"MAX_DAILY_LOSSES ({max_daily}) reached",
+        }
 
     sessions = get_current_sessions()
     mt5_session_ok, session_name = scalp_session_window("forex")
@@ -1228,6 +1289,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             # ══════════════════════════════════════════════════════════════
 
             # Pillar 1: Volume Profile — market state + location
+            if not cfg.get("VP_ENABLED", True):
+                _record_stability_sample(display, asset_type, False, reason="vp_disabled")
+                skipped.append({"pair": display, "reason": "vp_disabled"})
+                continue
             vp = _build_volume_profile(candles_m15)
             if not vp.get("valid"):
                 _record_stability_sample(display, asset_type, False, reason=f"vp_invalid:{vp.get('reason', '?')}")
@@ -1240,10 +1305,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             # Pillar 2: Aggression — absorption, CVD, AAA
             absorption = _check_absorption(candles_exec)
             cvd = _check_cvd(candles_exec)
-            aaa = _check_aaa_sequence(candles_exec, absorption, cvd)
+            aaa = _check_aaa_sequence(candles_exec, absorption, cvd) if cfg.get("AAA_ENABLED", True) else {"complete": False, "phase": "disabled"}
 
             # Pillar 3: VWAP directional lean
-            vwap = _check_vwap_lean(candles_m15, current_price)
+            vwap = _check_vwap_lean(candles_m15, current_price) if cfg.get("VWAP_ENABLED", True) else {"lean": None, "vwap_value": 0}
 
             # Setup classification
             setup = _classify_setup(market_state, price_loc, absorption, cvd, aaa, vwap, htf_bias)
@@ -1267,7 +1332,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             levels = calculate_scalp_levels(direction, current_price, vp, setup["setup_type"], sym_info, asset_type)
 
             # Quality grade
-            quality = ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup, sessions, spread_pips, htf_bias)
+            if cfg.get("AI_GRADING", True):
+                quality = ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup, sessions, spread_pips, htf_bias)
+            else:
+                quality = {"score": 50, "grade": "C", "reasons": ["grading_disabled"], "size_multiplier": 1.0}
 
             # Grade gate
             grade = quality["grade"]
@@ -1311,6 +1379,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "size_multiplier": quality["size_multiplier"],
                 # Context
                 "spread_pips":     spread_pips,
+                "session_risk_state": get_scalp_session_risk_state(),
                 "session":         active_session,
                 "execution_tf":    execution_tf,
                 "context_tf":      "M5",
@@ -1334,6 +1403,15 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "confluenceScore": quality["score"] / 100.0,
                 "maxScore":        1.0,
             }
+            
+            # Apply consecutive-loss halving and +2R size cut
+            if cfg.get("CONSECUTIVE_LOSS_HALVE", True) and _session_state["consecutive_losses"] >= 2:
+                signal["size_multiplier"] = signal.get("size_multiplier", 1.0) * 0.5
+                signal["ai_reasons"] = signal.get("ai_reasons", []) + ["size_halved:consecutive_losses"]
+            if _session_state.get("size_cut_active"):
+                signal["size_multiplier"] = min(signal.get("size_multiplier", 1.0), 0.5)
+                signal["ai_reasons"] = signal.get("ai_reasons", []) + ["size_cut:+2R_reached"]
+            
             signals.append(signal)
             _record_stability_sample(
                 display, asset_type, True,
