@@ -1439,6 +1439,10 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
           <button type="button" id="engineC-btn"
                   class="bt-btn engine-btn-b"
                   onclick="selectBacktestEngine('C')">Engine C (Consensus)</button>
+          <button type="button" id="engineD-btn"
+                  class="bt-btn"
+                  style="background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;"
+                  onclick="selectBacktestEngine('D')">&#9889; Engine D (Scalp VP)</button>
         </div>
       </div>
     
@@ -4793,15 +4797,19 @@ function selectBacktestEngine(engine) {
   var btnB = document.getElementById('engineB-btn');
   var btnC = document.getElementById('engineC-btn');
   var note = document.getElementById('btNote');
+  var btnD = document.getElementById('engineD-btn');
   btnA.classList.toggle('inactive', engine !== 'A');
   btnB.classList.toggle('active', engine === 'B');
   if (btnC) btnC.classList.toggle('active', engine === 'C');
+  if (btnD) btnD.classList.toggle('active', engine === 'D');
   if (engine === 'A') {
     note.textContent = "Engine A = Quantitative Factor Model";
   } else if (engine === 'B') {
     note.textContent = "Engine B = Pure Market Structure (FVG + Liquidity + Volume)";
-  } else {
+  } else if (engine === 'C') {
     note.textContent = "Engine C = Consensus (A + B blended, conviction-gated)";
+  } else {
+    note.textContent = "Engine D = Scalp VP+OrderFlow (Fabio Valentini) — select a specific pair first";
   }
 }
 
@@ -5387,7 +5395,7 @@ async function runBacktest() {
   btn.textContent = 'Running...';
 
   var label = sym ? document.getElementById('btPairSelect').selectedOptions[0].text : 'All Pairs';
-  var _engineLabel = window.selectedBacktestEngine === 'B' ? 'Engine B (Naked)' : window.selectedBacktestEngine === 'C' ? 'Engine C (Consensus)' : 'Engine A';
+  var _engineLabel = window.selectedBacktestEngine === 'B' ? 'Engine B (Naked)' : window.selectedBacktestEngine === 'C' ? 'Engine C (Consensus)' : window.selectedBacktestEngine === 'D' ? 'Engine D (Scalp VP)' : 'Engine A';
   document.getElementById('btContent').innerHTML = '<div class="bt-progress"><div style="font-size:14px;font-weight:700">Running ' + _engineLabel + ': ' + label + '</div></div>';
 
   try {
@@ -5408,6 +5416,16 @@ async function runBacktest() {
             btn.textContent = '▶ RUN BACKTEST';
             return;
         }
+    } else if (window.selectedBacktestEngine === 'D') {
+        API_URL = '/api/backtest-scalp';
+        if (sym) {
+            payload.pair = sym;
+        } else {
+            document.getElementById('btContent').innerHTML = '<div style="color:var(--bear);padding:16px">&#9889; Engine D (Scalp) requires a specific pair — select one from the dropdown first.</div>';
+            btn.disabled = false;
+            btn.textContent = '&#9654; RUN BACKTEST';
+            return;
+        }
     } else {
         if (sym) payload.symbol = sym;
         var btClass = (document.getElementById('btClassSelect') || {}).value || '';
@@ -5425,6 +5443,7 @@ async function runBacktest() {
     if (data.error) throw new Error(data.error);
 
     if (data.results) renderBtLeaderboard(data);
+    else if (window.selectedBacktestEngine === 'D') renderScalpBtSingle(data);
     else renderBtSingle(data);
     // Show auto-toggle notifications
     if (data.autoToggle) {
@@ -5504,6 +5523,125 @@ function renderBtSingle(d) {
     '</div>';
   document.getElementById('btContent').innerHTML=html;
   drawEquityChart('btEquityChart',d.equityCurve);
+}
+
+function renderScalpBtSingle(d) {
+  var pfColor = d.profitFactor == null ? 'green' : d.profitFactor >= 1.5 ? 'green' : d.profitFactor >= 1.0 ? 'blue' : 'red';
+  var wrColor = d.winRate >= 55 ? 'green' : d.winRate >= 45 ? 'blue' : 'red';
+  var sqnColor = d.sqn >= 3 ? 'green' : d.sqn >= 2.5 ? 'blue' : d.sqn >= 1.6 ? 'var(--accent)' : 'red';
+  var rColor   = d.totalR > 0 ? 'green' : 'red';
+  var ddColor  = d.maxDrawdownPct <= 10 ? 'green' : d.maxDrawdownPct <= 20 ? 'warn' : 'red';
+
+  var html = '<h3 style="font-size:16px;font-weight:800;margin-bottom:4px">&#9889; ' + d.pair + ' &mdash; Engine D Scalp Backtest (M15 VP+OrderFlow)</h3>';
+  html += '<p style="font-size:11px;color:var(--muted);font-family:monospace;margin-bottom:16px">Volume Profile zones &middot; Absorption / CVD / Rejection triggers &middot; Walk-forward ' + (d.btStyle || 'scalp') + '</p>';
+
+  // Core stats grid
+  html += '<div class="bt-stats-grid">' +
+    btStatCard('Win Rate', d.winRate + '%', wrColor) +
+    btStatCard('Profit Factor', d.profitFactor == null ? '&infin;' : d.profitFactor, pfColor) +
+    btStatCard('Total R', (d.totalR > 0 ? '+' : '') + d.totalR + 'R', rColor) +
+    btStatCard('Max Drawdown', d.maxDrawdownPct + '%', ddColor) +
+    btStatCard('Total Trades', d.totalTrades, 'blue') +
+    btStatCard('Wins / Losses', d.wins + ' / ' + d.losses, wrColor) +
+    btStatCard('Expectancy', (d.expectancy != null ? (d.expectancy > 0 ? '+' : '') + d.expectancy + 'R' : '-'), (d.expectancy > 0 ? 'green' : d.expectancy < 0 ? 'red' : 'blue')) +
+    btStatCard('SQN', d.sqn != null ? d.sqn : '-', sqnColor) +
+    btStatCard('Avg Win', d.avgWin != null ? '+' + d.avgWin + 'R' : '-', 'green') +
+    btStatCard('Avg Loss', d.avgLoss != null ? d.avgLoss + 'R' : '-', 'red') +
+    btStatCard('R Skew', d.rSkew != null ? d.rSkew + 'x' : '-', d.rSkew >= 1.5 ? 'green' : d.rSkew >= 1.0 ? 'blue' : 'red') +
+  '</div>';
+
+  html += '<div style="font-size:10px;color:var(--muted);font-family:monospace;margin-bottom:12px">SQN: &lt;1.6=Poor &middot; 1.6-2.49=Average &middot; 2.5-2.99=Good &middot; 3-4.99=Excellent &middot; &ge;5=Superb</div>';
+
+  // Walk-forward split
+  if (d.wfSplit) {
+    html += '<div style="font-size:10px;font-family:monospace;color:var(--muted);margin-bottom:12px">Walk-Forward: IS(' + d.wfSplit.is_trades + ' trades, SQN ' + d.wfSplit.is_sqn + ') / OOS(' + d.wfSplit.oos_trades + ' trades, SQN ' + d.wfSplit.oos_sqn + ')' + (d.wfSplit.overfit_flag ? ' <span style="color:var(--bear);font-weight:700">WARNING OVERFIT</span>' : '') + '</div>';
+  }
+
+  // Scalp-specific analysis block
+  var sa = d.scalp_analysis;
+  if (sa) {
+    html += '<div style="background:rgba(124,58,237,0.08);border:1px solid rgba(124,58,237,0.3);border-radius:10px;padding:16px;margin-bottom:16px">';
+    html += '<div style="font-size:12px;font-weight:700;color:#a78bfa;margin-bottom:12px">&#9889; SCALP ENGINE ANALYSIS</div>';
+
+    // Trigger breakdown
+    html += '<div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:8px;font-family:monospace">TRIGGER TYPE</div>';
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">';
+    var triggers = [['absorption', sa.absorption, '#10b981'], ['cvd_shift', sa.cvd_shift, '#3b82f6'], ['rejection', sa.rejection, '#f59e0b']];
+    triggers.forEach(function(t) {
+      var label = t[0], s = t[1], color = t[2];
+      if (!s || !s.count) return;
+      var wr = s.wr != null ? s.wr + '%' : '-';
+      var avgR = s.avg_r != null ? (s.avg_r > 0 ? '+' : '') + s.avg_r + 'R' : '-';
+      html += '<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 14px;min-width:120px">' +
+        '<div style="font-size:10px;color:' + color + ';font-family:monospace;font-weight:700;margin-bottom:4px">' + label.toUpperCase() + '</div>' +
+        '<div style="font-size:18px;font-weight:800;color:var(--text)">' + s.count + '</div>' +
+        '<div style="font-size:10px;color:var(--muted)">WR ' + wr + ' &middot; ' + avgR + '</div>' +
+        '</div>';
+    });
+    html += '</div>';
+
+    // Setup type breakdown
+    html += '<div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:8px;font-family:monospace">SETUP TYPE</div>';
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">';
+    var setups = [['mean_reversion', sa.mean_reversion, '#22c55e'], ['trend', sa.trend, '#0ea5e9']];
+    setups.forEach(function(t) {
+      var label = t[0], s = t[1], color = t[2];
+      if (!s || !s.count) return;
+      var wr = s.wr != null ? s.wr + '%' : '-';
+      var avgR = s.avg_r != null ? (s.avg_r > 0 ? '+' : '') + s.avg_r + 'R' : '-';
+      html += '<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 14px;min-width:140px">' +
+        '<div style="font-size:10px;color:' + color + ';font-family:monospace;font-weight:700;margin-bottom:4px">' + label.toUpperCase().replace('_',' ') + '</div>' +
+        '<div style="font-size:18px;font-weight:800;color:var(--text)">' + s.count + '</div>' +
+        '<div style="font-size:10px;color:var(--muted)">WR ' + wr + ' &middot; ' + avgR + '</div>' +
+        '</div>';
+    });
+    html += '</div>';
+
+    // Grade breakdown
+    html += '<div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:8px;font-family:monospace">SETUP GRADE</div>';
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+    var grades = [['grade_A', sa.grade_A, '#10b981', 'Full Size'], ['grade_B', sa.grade_B, '#3b82f6', 'Half Size'], ['grade_C', sa.grade_C, '#f59e0b', 'Quarter']];
+    grades.forEach(function(t) {
+      var key = t[0], s = t[1], color = t[2], size = t[3];
+      if (!s) return;
+      var wr = s.wr != null ? s.wr + '%' : '-';
+      html += '<div style="background:var(--card);border:1px solid ' + color + '33;border-radius:8px;padding:10px 14px;min-width:110px">' +
+        '<div style="font-size:10px;color:' + color + ';font-family:monospace;font-weight:700;margin-bottom:4px">' + key.replace('grade_', 'GRADE ') + ' <span style="color:var(--muted);font-weight:400">' + size + '</span></div>' +
+        '<div style="font-size:18px;font-weight:800;color:var(--text)">' + (s.count || 0) + '</div>' +
+        '<div style="font-size:10px;color:var(--muted)">WR ' + wr + '</div>' +
+        '</div>';
+    });
+    html += '</div>';
+    html += '</div>';
+  }
+
+  // Equity curve
+  html += '<div class="bt-chart-wrap"><canvas id="btEquityChart"></canvas></div>';
+
+  // Trade table
+  if (d.trades && d.trades.length) {
+    html += '<h4 style="font-size:12px;font-family:monospace;color:var(--muted);margin-bottom:10px">LAST 50 TRADES</h4>';
+    html += '<div class="bt-trade-table">';
+    html += '<div class="bt-trade-header"><span>IDX</span><span>DIR</span><span>TYPE</span><span>TRIGGER</span><span>GRADE</span><span>EXIT</span><span>RESULT</span></div>';
+    html += d.trades.slice().reverse().slice(0, 50).map(function(t) {
+      var oc = t.exit_reason === 'TP1' || t.exit_reason === 'TP2' ? 'color:var(--bull)' : t.exit_reason === 'SL' ? 'color:var(--bear)' : 'color:var(--muted)';
+      var rc = t.r_multiple > 0 ? 'color:var(--bull)' : t.r_multiple < 0 ? 'color:var(--bear)' : 'color:var(--muted)';
+      var gradeColor = t.grade === 'A' ? '#10b981' : t.grade === 'B' ? '#3b82f6' : t.grade === 'C' ? '#f59e0b' : 'var(--muted)';
+      return '<div class="bt-trade-row">' +
+        '<span style="color:var(--muted)">' + t.bar_index + '</span>' +
+        '<span style="' + (t.direction === 'LONG' ? 'color:var(--bull)' : 'color:var(--bear)') + '">' + t.direction + '</span>' +
+        '<span style="color:var(--muted);font-size:9px">' + (t.setup_type || '-').replace('_',' ') + '</span>' +
+        '<span style="color:var(--muted);font-size:9px">' + (t.trigger_type || '-') + '</span>' +
+        '<span style="color:' + gradeColor + ';font-weight:700">' + (t.grade || '-') + '</span>' +
+        '<span style="' + oc + '">' + (t.exit_reason || '-') + '</span>' +
+        '<span style="' + rc + '">' + (t.r_multiple > 0 ? '+' : '') + t.r_multiple + 'R</span>' +
+        '</div>';
+    }).join('');
+    html += '</div>';
+  }
+
+  document.getElementById('btContent').innerHTML = html;
+  if (d.equityCurve) drawEquityChart('btEquityChart', d.equityCurve);
 }
 
 function renderBtLeaderboard(data) {
