@@ -946,6 +946,15 @@ def calculate_scalp_levels(
 
     actual_rr = round(abs(tp1 - entry) / sl_distance, 2) if sl_distance > 0 else 0
 
+    # --- Defensive Rounding Safeguard ---
+    # Protect against level collapse if symbol_info.digits are too coarse (e.g. 2 digits for a 0.09 crypto pair).
+    # This prevents risk_engine from rejecting valid signals with INVALID_LEVELS.
+    # The primary fix is in bybit_get_symbol_info, but this serves as a localized safety backup.
+    if round(entry, digits) == round(sl, digits) or round(entry, digits) == round(tp1, digits):
+        if asset_type == "crypto":
+            # Fallback to safe precision for crypto (min 4 decimals; min 6 if price < $1)
+            digits = max(digits, 6 if entry < 1.0 else 4)
+
     return {
         "entry":       round(entry, digits),
         "sl":          round(sl, digits),

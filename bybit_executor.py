@@ -782,11 +782,30 @@ def bybit_get_symbol_info(athena_display: str) -> dict:
         ticker = exchange.fetch_ticker(ccxt_symbol)
         price = ticker.get("last", 0) or 0
 
-        tick_size = market["precision"].get("price", 0.01)
-        tick_value = tick_size  # For USDT pairs: 1 unit move = tick_size USDT
+        # Correctly extract price precision and tick size from Bybit/CCXT metadata.
+        # CCXT 'precision' can be TICK_SIZE (float like 0.0001) or DECIMAL_PLACES (int like 4).
+        p_prec = market["precision"].get("price", 0.01)
+        if isinstance(p_prec, int):
+            _digits = p_prec
+            _point = round(10**-_digits, 8)
+        else:
+            # TICK_SIZE mode (float like 0.0001)
+            _point = float(p_prec)
+            s_prec = f"{_point:.10f}".rstrip("0")
+            _digits = len(s_prec.split(".")[1]) if "." in s_prec else 0
+
+        # USDT Perpetual: 1 unit move = tick_size USDT
+        tick_value = _point
+
         vol_min = market["limits"]["amount"].get("min", 0.001) or 0.001
         vol_max = market["limits"]["amount"].get("max", 9999) or 9999
-        vol_step = market["precision"].get("amount", 0.001) or 0.001
+
+        # Volume precision also needs robust handling (Amount)
+        v_prec = market["precision"].get("amount", 0.001) or 0.001
+        if isinstance(v_prec, int):
+            vol_step = round(10**-v_prec, 8)
+        else:
+            vol_step = float(v_prec)
 
         return {
             "error": False,
@@ -794,16 +813,14 @@ def bybit_get_symbol_info(athena_display: str) -> dict:
             "detail": "",
             "ccxt_symbol": ccxt_symbol,
             "description": market.get("baseId", ccxt_symbol),
-            "point": tick_size,
-            "digits": len(str(tick_size).split(".")[-1])
-            if isinstance(tick_size, float)
-            else 2,
+            "point": _point,
+            "digits": _digits,
             "volume_min": vol_min,
             "volume_max": vol_max,
             "volume_step": vol_step,
             "trade_contract_size": 1,
             "trade_tick_value": tick_value,
-            "trade_tick_size": tick_size,
+            "trade_tick_size": _point,
             "bid": price,
             "ask": price,
             "spread": 0,
