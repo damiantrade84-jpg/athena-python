@@ -1639,7 +1639,7 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
   <div class="panel tab-panel" id="panel-scalp">
     <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px;flex-wrap:wrap;">
       <h2 style="margin:0;font-size:18px;font-family:'DM Sans',sans-serif;color:var(--text);">
-        ⚡ Scalp Engine <span style="font-size:12px;color:var(--muted);font-weight:400">M15 Structure + M5 Tactical</span>
+        ⚡ Scalp Engine <span style="font-size:12px;color:var(--muted);font-weight:400">VP + OrderFlow (Fabio Valentini)</span>
       </h2>
       <button onclick="runScalpScan()" id="scalpScanBtn" style="background:var(--accent);
         border:none;color:#000;padding:8px 20px;border-radius:6px;cursor:pointer;
@@ -10506,44 +10506,99 @@ function renderScalpSignals(signals) {
     return;
   }
   signals.forEach(function(s) {
-    var sid = (s.symbol||'').replace(/[\/=^.]/g, '_');
+    var display = s.display || s.pair || s.symbol || '';
+    var sid = display.replace(/[\/=^. ]/g, '_');
     window._scalpSignalsById[sid] = s;
   });
   grid.innerHTML = signals.map(function(s, i) { return buildScalpCard(s, i); }).join('');
 }
 
 function buildScalpCard(s, idx) {
-  var sid = (s.symbol||'').replace(/[\/=^.]/g, '_');
+  var display = s.display || s.pair || s.symbol || '?';
+  var sid = display.replace(/[\/=^. ]/g, '_');
   var gk = s.ai_grade || 'C';
   var dirCls = s.direction === 'LONG' ? 'LONG' : 'SHORT';
-  var riskColor = s.risk_level === 'LOW' ? 'var(--bull)' : (s.risk_level === 'HIGH' ? 'var(--bear)' : 'var(--warn)');
-  
-  return '<div class="signal-card scalp-card" id="scalp-card-'+sid+'" style="animation-delay:'+(idx*60)+'ms; border-left:4px solid '+riskColor+'">'+
+  var gradeColors = {A:'#10b981', B:'#3b82f6', C:'#f59e0b', D:'#ef4444'};
+  var borderColor = gradeColors[gk] || 'var(--border)';
+
+  // VP level badge helper
+  var zoneType = (s.zone_type || 'mean_reversion').replace('_', ' ').toUpperCase();
+  var mktState = (s.market_state || 'balance').toUpperCase();
+  var mktStateColor = s.market_state === 'balance' ? '#22c55e' : '#f59e0b';
+
+  // Confluence pills
+  var pills = '';
+  if (s.aaa_complete) pills += '<span style="background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);padding:2px 7px;border-radius:999px;font-size:9px;font-weight:700">AAA ✓</span> ';
+  if (s.absorption_count > 0) pills += '<span style="background:rgba(59,130,246,0.15);color:#60a5fa;border:1px solid rgba(59,130,246,0.3);padding:2px 7px;border-radius:999px;font-size:9px;font-weight:700">ABS ×' + s.absorption_count + '</span> ';
+  if (s.cvd_direction) { var cvdCol = s.cvd_direction === s.direction ? '#10b981' : '#f59e0b'; pills += '<span style="background:rgba(0,0,0,0.2);color:'+cvdCol+';border:1px solid '+cvdCol+'44;padding:2px 7px;border-radius:999px;font-size:9px;font-weight:700">CVD ' + s.cvd_direction + '</span> '; }
+  if (s.htf_bias) { var biasCol = s.htf_bias === s.direction ? '#10b981' : '#f97316'; pills += '<span style="background:rgba(0,0,0,0.2);color:'+biasCol+';border:1px solid '+biasCol+'44;padding:2px 7px;border-radius:999px;font-size:9px;font-weight:700">' + (s.htf_bias_tf||'H1') + ' ' + s.htf_bias + '</span> '; }
+  if (s.session) pills += '<span style="background:rgba(255,255,255,0.05);color:var(--muted);border:1px solid var(--border);padding:2px 7px;border-radius:999px;font-size:9px">' + s.session + '</span> ';
+
+  // VP levels block
+  var vpBlock = '';
+  if (s.vp_vah != null) {
+    vpBlock = '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px">' +
+      '<div style="text-align:center;padding:6px;background:rgba(246,70,93,0.08);border:1px solid rgba(246,70,93,0.2);border-radius:6px"><div style="font-size:9px;color:var(--muted);font-family:monospace">VAH</div><div style="font-size:12px;font-weight:700;color:#f6465d">' + fmtPrice(s.vp_vah) + '</div></div>' +
+      '<div style="text-align:center;padding:6px;background:rgba(240,185,11,0.08);border:1px solid rgba(240,185,11,0.2);border-radius:6px"><div style="font-size:9px;color:var(--muted);font-family:monospace">POC</div><div style="font-size:12px;font-weight:700;color:#f0b90b">' + fmtPrice(s.vp_poc) + '</div></div>' +
+      '<div style="text-align:center;padding:6px;background:rgba(14,203,129,0.08);border:1px solid rgba(14,203,129,0.2);border-radius:6px"><div style="font-size:9px;color:var(--muted);font-family:monospace">VAL</div><div style="font-size:12px;font-weight:700;color:#0ecb81">' + fmtPrice(s.vp_val) + '</div></div>' +
+    '</div>';
+  }
+
+  // Reasons list
+  var reasonsHtml = '';
+  if (s.ai_reasons && s.ai_reasons.length) {
+    reasonsHtml = '<div style="font-size:10px;color:var(--muted);margin-top:6px;line-height:1.55">' +
+      s.ai_reasons.slice(0,4).map(function(r){ return '&#8226; ' + r; }).join('<br>') +
+    '</div>';
+  }
+
+  var rr = s.rr1 != null ? s.rr1 : (s.rr || 0);
+  var sizeLabel = s.size_multiplier != null ? (s.size_multiplier === 1.0 ? 'Full' : s.size_multiplier === 0.5 ? 'Half' : s.size_multiplier === 0.25 ? 'Quarter' : s.size_multiplier + 'x') : '';
+
+  return '<div class="signal-card scalp-card" id="scalp-card-'+sid+'" style="animation-delay:'+(idx*60)+'ms;border-left:4px solid '+borderColor+'">'+
     '<div class="card-header">'+
       '<div class="pair-info">'+
-        '<div class="pair-icon forex" style="background:rgba(240,185,11,0.1); color:var(--accent)">⚡</div>'+
-        '<div><div class="pair-name">'+s.symbol+'</div><div class="pair-type">Scalp M15/M5</div></div>'+
+        '<div class="pair-icon forex" style="background:rgba(124,58,237,0.12);color:#a78bfa">&#9889;</div>'+
+        '<div>'+
+          '<div class="pair-name">'+display+'</div>'+
+          '<div class="pair-type" style="color:'+mktStateColor+'">' + mktState + ' &middot; ' + zoneType + '</div>'+
+        '</div>'+
       '</div>'+
-      '<span class="direction-badge '+dirCls+'">'+s.direction+'</span>'+
-      '<span class="ai-grade grade-'+gk+'" style="margin-left:8px">'+gk+' ('+s.ai_score+')</span>'+
+      '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">'+
+        '<span class="direction-badge '+dirCls+'">'+s.direction+'</span>'+
+        '<span style="background:'+borderColor+'22;color:'+borderColor+';border:1px solid '+borderColor+'55;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:800">'+
+          gk+' &nbsp;<span style="font-weight:400;font-size:10px">'+s.ai_score+'</span>'+(sizeLabel?' &middot; '+sizeLabel:'')+ 
+        '</span>'+
+      '</div>'+
     '</div>'+
     '<div class="card-body">'+
-      '<div style="font-size:11px; margin-bottom:10px; padding:10px; background:rgba(255,255,255,0.03); border-radius:8px; border:1px solid var(--border)">'+
-        '<div style="color:var(--accent); font-weight:800; font-size:10px; margin-bottom:6px; letter-spacing:0.05em">M15 STRUCTURE</div>'+
-        '<div style="color:var(--text); line-height:1.45; margin-bottom:10px">'+s.zone_desc+'</div>'+
-        '<div style="color:var(--bull); font-weight:800; font-size:10px; margin-bottom:6px; letter-spacing:0.05em; border-top:1px solid var(--border); padding-top:8px">M5 TRIGGER</div>'+
-        '<div style="color:var(--text); line-height:1.45">'+s.trigger_desc+'</div>'+
-      '</div>'+
+
+      // Confluence pills row
+      (pills ? '<div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:4px">'+pills+'</div>' : '') +
+
+      // VP levels
+      vpBlock +
+
+      // Entry / SL / TP levels
       '<div class="levels-grid">'+
-        '<div class="level-box"><div class="level-label">Entry</div><div class="level-val">'+fmtPrice(s.entry)+'</div></div>'+
+        '<div class="level-box"><div class="level-label">Entry</div><div class="level-val">'+fmtPrice(s.price)+'</div></div>'+
         '<div class="level-box"><div class="level-label">SL</div><div class="level-val bear">'+fmtPrice(s.sl)+'</div></div>'+
         '<div class="level-box"><div class="level-label">TP1</div><div class="level-val bull">'+fmtPrice(s.tp1)+'</div></div>'+
       '</div>'+
-      '<div class="rr-row" style="border:none; margin-bottom:4px"><span class="conf-label">Risk/Reward</span><span class="rr-val">1:'+s.rr.toFixed(2)+'</span></div>'+
+
+      // RR + spread
+      '<div class="rr-row" style="border:none;margin-bottom:4px">'+
+        '<span class="conf-label">R:R</span><span class="rr-val">1:'+rr.toFixed(2)+'</span>'+
+        (s.spread_pips ? '<span style="font-size:10px;color:var(--muted);margin-left:auto">Spread '+s.spread_pips.toFixed(1)+'pip &middot; '+s.sl_method+'</span>' : '')+
+      '</div>'+
+
+      // Grade reasons
+      reasonsHtml +
+
       '<div id="scalp-vision-res-'+sid+'"></div>'+
-      '<div style="display:flex; gap:8px; margin-top:12px">'+
-        '<button class="analyze-btn" style="flex:1" onclick="runScalpVisionConfirm(this, \''+s.symbol+'\')">🧠 VISION</button>'+
-        '<button class="exec-btn '+dirCls+'" style="flex:2; margin-top:0" onclick="executeScalp(this, \''+sid+'\')">EXECUTE SCALP</button>'+
+      '<div style="display:flex;gap:8px;margin-top:12px">'+
+        '<button class="analyze-btn" style="flex:1" onclick="runScalpVisionConfirm(this, \''+display+'\')">🧠 VISION</button>'+
+        '<button class="exec-btn '+dirCls+'" style="flex:2;margin-top:0" onclick="executeScalp(this, \''+sid+'\')">⚡ EXECUTE SCALP</button>'+
       '</div>'+
     '</div>'+
   '</div>';
