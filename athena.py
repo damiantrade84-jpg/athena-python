@@ -3235,14 +3235,15 @@ def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
     return result
 
 
-# P2: Background news refresh (5m); fetch_news_context() reads cache only (non-blocking for scans).
+# P2: Background news refresh (default 60 min); per-pair news/word-weights fetched on-demand (AI only).
 
 _news_cache = {"data": None, "ts": 0.0}
 _news_lock = threading.Lock()
 _news_thread_started = False
 _news_thread_lock = threading.Lock()
 
-_NEWS_BG_INTERVAL_SEC = 300.0  # 5 minutes
+_NEWS_BG_INTERVAL_SEC = float(CONFIG.get("NEWS_BG_INTERVAL_SEC", 3600.0) or 3600.0)  # default 60 min
+_news_pair_cache: dict = {}  # sticker -> {"news": [...], "weights": [...], "ts": float} — populated on-demand (AI only)
 
 _NEWS_EMPTY: dict = {"forexEvents": [], "cryptoNews": [], "marketNews": []}
 
@@ -3426,56 +3427,7 @@ def _refresh_news_cache(pairs: list | None = None) -> dict:
                 if sentiments:
                     ctx["pairSentiment"] = sentiments
 
-            pair_news = {}
-            _NEWS_PAIR_CAP = int(CONFIG.get("NEWS_PAIR_CAP", 40))
-
-            for sticker, display in list(ticker_map.items())[:_NEWS_PAIR_CAP]:
-                try:
-                    ndata = http_requests.get(
-                        f"https://eodhd.com/api/news?s={sticker}&limit=3&api_token={_eodhd_key}&fmt=json",
-                        timeout=15,
-                    ).json()
-
-                    if ndata and isinstance(ndata, list):
-                        pair_news[display] = [
-                            {
-                                "t": a.get("title", "")[:80],
-                                "s": round(
-                                    a.get("sentiment", {}).get("polarity", 0.5), 2
-                                ),
-                            }
-                            for a in ndata[:3]
-                        ]
-
-                except Exception as _e:
-                    log.debug(f"[NEWS] {display} news fetch error: {_e}")
-
-            if pair_news:
-                ctx["pairNews"] = pair_news
-
-                log.info(
-                    f"[NEWS] EODHD per-pair news: {len(pair_news)} pairs, {sum(len(v) for v in pair_news.values())} articles"
-                )
-
-            word_weights = {}
-
-            for sticker, display in list(ticker_map.items())[:_NEWS_PAIR_CAP]:
-                try:
-                    wdata = http_requests.get(
-                        f"https://eodhd.com/api/news-word-weights?s={sticker}&page[limit]=5&api_token={_eodhd_key}&fmt=json",
-                        timeout=15,
-                    ).json()
-
-                    if wdata and isinstance(wdata, dict) and wdata.get("data"):
-                        word_weights[display] = list(wdata["data"].keys())[:5]
-
-                except Exception as _e:
-                    log.debug(f"[NEWS] {display} word weights error: {_e}")
-
-            if word_weights:
-                ctx["wordWeights"] = word_weights
-
-                log.info(f"[NEWS] Word weights: {len(word_weights)} pairs")
+            log.info("[NEWS] EODHD per-pair news/word-weights: fetched on-demand during AI analysis only")
 
     except Exception as e:
         log.warning(f"[NEWS] EODHD sentiment/news failed: {e}")
@@ -3543,6 +3495,53 @@ def fetch_news_context(pairs: list | None = None):
     with _news_lock:
         data = _news_cache["data"]
     return _filter_news_ctx_for_pairs(data if data is not None else {}, pairs)
+
+
+def _fetch_pair_news_on_demand(display: str, sticker: str) -> tuple[list, list]:
+    """Fetch EODHD news + word-weights for one pair, called only during AI analysis.
+
+    Returns (pair_news_list, word_weights_list). Results cached for 4 hours so
+    repeated AI checks on the same pair within a session don't re-fetch.
+    """
+    _eodhd_key = os.environ.get("EODHD_KEY", "")
+    if not _eodhd_key or not sticker:
+        return [], []
+
+    _now = time.time()
+    _ttl = float(CONFIG.get("NEWS_PAIR_CACHE_TTL_SEC", 14400.0) or 14400.0)
+    cached = _news_pair_cache.get(sticker, {})
+    _age = _now - float(cached.get("ts", 0) or 0)
+    if _age < _ttl and ("news" in cached or "weights" in cached):
+        return cached.get("news", []), cached.get("weights", [])
+
+    pair_news: list = []
+    word_weights: list = []
+    try:
+        ndata = http_requests.get(
+            f"https://eodhd.com/api/news?s={sticker}&limit=3&api_token={_eodhd_key}&fmt=json",
+            timeout=10,
+        ).json()
+        if ndata and isinstance(ndata, list):
+            pair_news = [
+                {"t": a.get("title", "")[:80], "s": round(a.get("sentiment", {}).get("polarity", 0.5), 2)}
+                for a in ndata[:3]
+            ]
+    except Exception as _e:
+        log.debug(f"[NEWS-AI] {display} news fetch: {_e}")
+
+    try:
+        wdata = http_requests.get(
+            f"https://eodhd.com/api/news-word-weights?s={sticker}&page[limit]=5&api_token={_eodhd_key}&fmt=json",
+            timeout=10,
+        ).json()
+        if wdata and isinstance(wdata, dict) and wdata.get("data"):
+            word_weights = list(wdata["data"].keys())[:5]
+    except Exception as _e:
+        log.debug(f"[NEWS-AI] {display} word-weights fetch: {_e}")
+
+    _news_pair_cache[sticker] = {"news": pair_news, "weights": word_weights, "ts": _now}
+    log.info(f"[NEWS-AI] {display}: fetched {len(pair_news)} headlines, {len(word_weights)} word-weights on AI request")
+    return pair_news, word_weights
 
 
 def _build_signal_message(
@@ -3922,14 +3921,14 @@ def _build_signal_message(
                 f"Market news: {', '.join(n.get('title', n.get('headline', ''))[:80] for n in news_ctx['marketNews'][:2])}"
             )
 
-        _pnews = news_ctx.get("pairNews", {}).get(signal.get("pair", ""), [])
+        _pair_display = signal.get("pair", "")
+        _pair_sticker = _eodhd_ticker_for_pair({"display": _pair_display, "symbol": signal.get("symbol", ""), "type": signal.get("type", "")})
+        _pnews, _ww = _fetch_pair_news_on_demand(_pair_display, _pair_sticker or "")
 
         if _pnews:
             _ctx_parts.append(
-                f"Pair news: {', '.join(n.get('title', n.get('headline', ''))[:80] for n in _pnews[:2])}"
+                f"Pair news: {', '.join(n.get('t', n.get('title', ''))[:80] for n in _pnews[:2])}"
             )
-
-        _ww = news_ctx.get("wordWeights", {}).get(signal.get("pair", ""), [])
 
         if _ww:
             _ctx_parts.append(f"News drivers: {json.dumps(_ww[:5])}")
