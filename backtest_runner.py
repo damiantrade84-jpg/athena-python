@@ -4780,7 +4780,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             _con.execute(
                 "INSERT INTO backtest_results "
                 "(run_date,pair,asset_type,engine,trades,win_rate,profit_factor,"
-                "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,eval_threshold,atr_source,notes) "
+                "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,bt_min,atr_source,notes) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     datetime.now(timezone.utc).isoformat(),
