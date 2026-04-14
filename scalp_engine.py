@@ -1048,6 +1048,47 @@ def _classify_setup(
             "reasons": reasons,
         }
 
+    # ── Trend Extension — price broke through the value area in a trending market ─
+    # Imbalance market + price already outside VA = confirmed breakout.
+    # Direction: above VAH → LONG continuation, below VAL → SHORT continuation.
+    # SL sits just below the broken VA boundary (now structural support/resistance).
+    # TP1 is a fixed MIN_RR projection from entry; TP2 = one VA width extended.
+    if cfg.get("SETUP_TREND", True) and market_state == "imbalance" and location == "outside_va":
+        above_va = price_loc.get("above_va", True)
+        direction = "LONG" if above_va else "SHORT"
+        side_label = "above VAH" if above_va else "below VAL"
+
+        # HTF bias must align if available — don't enter breakout against macro trend
+        if htf_bias and htf_bias != direction:
+            return {"valid": False, "reason": f"htf_bias_against_breakout:{htf_bias}_vs_{direction}"}
+
+        # Need at least one aggression confirmation
+        cvd_dir = cvd.get("direction")
+        has_absorption = absorption.get("detected", False)
+        cvd_aligned = (cvd_dir == direction)
+        if not has_absorption and not cvd_aligned:
+            return {"valid": False, "reason": "no_momentum_on_va_breakout"}
+
+        # CVD must not be actively against direction
+        if cvd_dir and cvd_dir != direction:
+            return {"valid": False, "reason": f"cvd_against_trend:{cvd_dir}_vs_{direction}"}
+
+        reasons.append(f"Trend extension: price broke {side_label} in imbalance market")
+        if has_absorption:
+            reasons.append("Absorption confirms breakout momentum (not exhaustion)")
+        if cvd_aligned:
+            reasons.append(f"CVD confirms {direction} breakout")
+        if vwap.get("lean") == direction:
+            reasons.append(f"VWAP lean confirms {direction}")
+
+        return {
+            "valid": True,
+            "setup_type": "trend_extension",
+            "direction": direction,
+            "target": "VA_WIDTH_PROJECTION",
+            "reasons": reasons,
+        }
+
     # ── No valid setup ───────────────────────────────────────────────────
     return {"valid": False, "reason": f"no_setup:{market_state}_{location}"}
 
@@ -1093,6 +1134,9 @@ def calculate_scalp_levels(
     poc = vp.get("poc", entry)
     vah = vp.get("vah", entry)
     val = vp.get("val", entry)
+    min_rr_cfg = float(cfg.get("MIN_RR", 2.0))
+    va_width = abs(vah - val)
+
     if setup_type == "mean_reversion":
         if direction == "LONG":
             sl = val - buffer
@@ -1102,6 +1146,21 @@ def calculate_scalp_levels(
             sl = vah + buffer
             tp1 = poc
             tp2 = val if cfg.get("TP2_ENABLED", True) else None
+
+    elif setup_type == "trend_extension":
+        # Price has broken through the value area boundary — SL behind the broken
+        # level (now structural S/R). TP1 = MIN_RR projection. TP2 = one VA width.
+        if direction == "LONG":
+            sl = vah - buffer          # VAH is now support
+            sl_dist_est = max(abs(entry - sl), buffer * 2)
+            tp1 = entry + sl_dist_est * min_rr_cfg
+            tp2 = (entry + va_width) if cfg.get("TP2_ENABLED", True) else None
+        else:
+            sl = val + buffer          # VAL is now resistance
+            sl_dist_est = max(abs(entry - sl), buffer * 2)
+            tp1 = entry - sl_dist_est * min_rr_cfg
+            tp2 = (entry - va_width) if cfg.get("TP2_ENABLED", True) else None
+
     else:  # trend_continuation
         if direction == "LONG":
             sl = poc - buffer if poc < entry else entry - (entry * 0.003)
@@ -1120,7 +1179,7 @@ def calculate_scalp_levels(
 
     # For mean_reversion setups, if the natural structural TP does not meet MIN_RR,
     # flag it so the caller can skip rather than distorting the level.
-    min_rr_cfg = float(cfg.get("MIN_RR", 2.0))
+    # trend_extension always meets MIN_RR by construction (tp1 = entry ± sl_dist * min_rr).
     rr_below_min = (setup_type == "mean_reversion" and actual_rr < min_rr_cfg)
 
     # --- Defensive Rounding Safeguard ---
