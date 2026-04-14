@@ -1,18 +1,23 @@
-"""scalp_engine.py — Engine D: Independent M15/M5 Scalping Module
+"""scalp_engine.py — Engine D: Fabio Valentini Pro Scalper
 
-Fully independent from Engine A (MFQS), Engine B (Naked), Engine C (Consensus).
+Replaces legacy M15/M5 zone-trigger system with Volume Profile + Order Flow
+methodology based on Fabio Valentini's audited approach (Robbins World Cup).
+
+Three-pillar decision gate (ALL must align):
+  1. Market State — balance vs imbalance (Volume Profile distribution shape)
+  2. Location — price at VP level (VAL, VAH, POC, LVN)
+  3. Aggression — absorption, CVD confirmation, or AAA completion
+
+Two setup types:
+  - Mean Reversion: price at value area extreme → target POC
+  - Trend Continuation: price pulls back to LVN inside impulse leg → target POC/opposite VA
+
+Grading: A (full size) / B (half) / C (quarter) / D (skip)
+
 Data sources:
   - MT5 (copy_rates_from_pos) — forex, commodities, indices, stocks
-  - Crypto: `fetch_candles` → Binance futures (CandleBuilder WS + REST) via `athena_runtime` — data only; orders go to Bybit (`/api/scalp-execute` → `bybit_execute` when `type == "crypto"`)
-
-Logic flow:
-  1. Session filter (London/NY for MT5 pairs; Asia/London/NY for crypto)
-  2. Spread filter (skipped for crypto)
-  3. M15 zone detection (≥2 conditions: S/R, sweep, EMA21)
-  4. M5 entry trigger (rejection/engulfing + close direction + inside zone)
-  5. Momentum confirmation (M5 structure break OR strong body)
-  6. Risk levels (SL beyond zone, TP at 1.5R, TP2 at next M15 swing)
-  7. AI quality grade (rule-based, 0-100, A/B/C/D — instant, no API)
+  - Crypto: fetch_candles → Binance futures via athena_runtime
+  - Volume: tick_volume (MT5), real volume (Binance/EODHD/Polygon) — all stored as 'vol'
 
 All trades route through risk_engine.risk_check() before execution.
 """
@@ -29,23 +34,23 @@ from stability_monitor import record_signal_event
 log = logging.getLogger("sentinel.scalp")
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# DATA FETCHING — unchanged interface, MT5 + Binance/Athena runtime
+# ═══════════════════════════════════════════════════════════════════════════════
+
 def _scalp_fetch_candles(pair: dict, tf: str, limit: int):
-    """Route through monolith `fetch_candles` — `candles_cache.fetch_candles` requires injected callables."""
+    """Route through monolith fetch_candles for crypto M5/M15/H1."""
     try:
         from athena_runtime import rt
-
         return rt().fetch_candles(pair, tf, limit)
     except RuntimeError:
-        log.error(
-            "[SCALP] fetch_candles unavailable — athena runtime not initialized (start via athena.py / app)"
-        )
+        log.error("[SCALP] fetch_candles unavailable — athena runtime not initialized")
     except Exception as e:
         log.error("[SCALP] fetch_candles error: %s", e)
     return None
 
 
 def _rate_value(rate, field: str, default=0.0):
-    """Read a field from MT5 rate rows or dict-like test doubles."""
     if isinstance(rate, dict):
         return rate.get(field, default)
     try:
@@ -55,7 +60,6 @@ def _rate_value(rate, field: str, default=0.0):
 
 
 def _tick_value(tick, field: str, default=0.0):
-    """Read a field from an MT5 tick struct or dict-like test double."""
     if tick is None:
         return default
     if isinstance(tick, dict):
@@ -63,20 +67,21 @@ def _tick_value(tick, field: str, default=0.0):
     return getattr(tick, field, default)
 
 
-# ── Session windows (UTC) ─────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# SESSION WINDOWS (UTC)
+# ═══════════════════════════════════════════════════════════════════════════════
+
 _SESSIONS = {
-    "london":   (7, 16),    # 07:00–16:00 UTC
-    "new_york": (13, 21),   # 13:00–21:00 UTC
+    "london":   (7, 16),
+    "new_york": (13, 21),
 }
 
-# Crypto trades 24/7 — use Asia open + London/NY overlaps for higher liquidity
 _CRYPTO_SESSIONS = {
-    "asia":        (1, 9),   # 01:00–09:00 UTC (Tokyo/Singapore open)
-    "london":      (7, 16),  # 07:00–16:00 UTC
-    "new_york":    (13, 22), # 13:00–22:00 UTC
+    "asia":        (1, 9),
+    "london":      (7, 16),
+    "new_york":    (13, 22),
 }
 
-# Crypto pairs list — Bybit USDT perpetuals supported on M5/M15
 _CRYPTO_SCALP_PAIRS = [
     "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT",
     "ADA/USDT", "DOGE/USDT", "AVAX/USDT", "LINK/USDT",
@@ -84,20 +89,16 @@ _CRYPTO_SCALP_PAIRS = [
 ]
 
 
-# ── MT5 candle fetching ───────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# MT5 CANDLE FETCHING
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def mt5_fetch_scalp_candles(
     mt5_symbol: str, timeframe_str: str, count: int, *, include_forming: bool = False
 ) -> list:
-    """Fetch OHLCV candles from MT5 terminal for M15/M5/H1 scalp logic.
+    """Fetch OHLCV candles from MT5 terminal.
 
-    Args:
-        mt5_symbol: MT5 symbol string (e.g. 'EURUSD', 'XAUUSD')
-        timeframe_str: 'M15' or 'M5'
-        count: number of candles to fetch
-
-    Returns:
-        list of dicts: {time, open, high, low, close, vol}
+    Returns list of dicts: {time, open, high, low, close, vol}
     """
     try:
         from mt5_executor import mt5_connect
@@ -117,9 +118,7 @@ def mt5_fetch_scalp_candles(
             log.error(f"[SCALP] Unknown timeframe: {timeframe_str}")
             return []
 
-        # Enable symbol if not in Market Watch
         mt5.symbol_select(mt5_symbol, True)
-
         rates = mt5.copy_rates_from_pos(mt5_symbol, tf, 0, count)
         if rates is None or len(rates) == 0:
             log.warning(f"[SCALP] No {timeframe_str} data for {mt5_symbol}")
@@ -136,7 +135,6 @@ def mt5_fetch_scalp_candles(
                 "vol":   float(_rate_value(r, "tick_volume", 0)),
             })
 
-        # Default behavior stays conservative for callers that want only closed bars.
         if not include_forming and len(candles) > 1:
             candles = candles[:-1]
 
@@ -151,10 +149,7 @@ def mt5_fetch_scalp_candles(
 
 
 def mt5_get_live_price(mt5_symbol: str) -> float | None:
-    """Return a live MT5 price for scalp entry checks.
-
-    Prefers bid/ask midpoint for two-sided markets, otherwise falls back to `last`.
-    """
+    """Return a live MT5 price (bid/ask midpoint preferred)."""
     try:
         from mt5_executor import mt5_connect
         import MetaTrader5 as mt5
@@ -181,14 +176,15 @@ def mt5_get_live_price(mt5_symbol: str) -> float | None:
             return ask
         return None
     except ImportError:
-        log.error("[SCALP] MetaTrader5 package not installed")
         return None
     except Exception as e:
         log.error(f"[SCALP] mt5_get_live_price error: {e}")
         return None
 
 
-# ── EMA helper ────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# EMA HELPER + BIAS INFERENCE
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def _calc_ema(values: list, period: int) -> list:
     """Calculate EMA over a list of floats."""
@@ -198,7 +194,7 @@ def _calc_ema(values: list, period: int) -> list:
 
 
 def infer_bias_from_ema_stack(candles: list) -> Optional[str]:
-    """Infer directional bias from an EMA stack on a higher timeframe."""
+    """Infer directional bias from EMA 21/50/200 stack on higher timeframe."""
     if len(candles) < 200:
         return None
 
@@ -212,8 +208,8 @@ def infer_bias_from_ema_stack(candles: list) -> Optional[str]:
     if not ema21_series or not ema50_series or not ema200_series:
         return None
 
-    ema21 = ema21_series[-1]
-    ema50 = ema50_series[-1]
+    ema21  = ema21_series[-1]
+    ema50  = ema50_series[-1]
     ema200 = ema200_series[-1]
     last_close = closes[-1]
 
@@ -224,10 +220,11 @@ def infer_bias_from_ema_stack(candles: list) -> Optional[str]:
     return None
 
 
-# ── Session filter ────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# SESSION FILTER
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def _current_utc_datetime() -> datetime:
-    """Return a timezone-aware UTC timestamp for session gating."""
     return datetime.now(timezone.utc)
 
 
@@ -244,11 +241,7 @@ def get_current_sessions() -> list:
 def is_valid_session(asset_type: str = "forex") -> tuple:
     """Check if current time is a valid session for the given asset type.
 
-    Forex/commodities/indices/stocks: London or NY only.
-    Crypto: Asia, London, or NY (24/7 market but higher-liquidity windows preferred).
-
-    Returns:
-        (valid: bool, session_name: str)
+    Returns (valid: bool, session_name: str)
     """
     cfg = CONFIG.get("SCALP_ENGINE", {})
     if not cfg.get("SESSION_FILTER", True):
@@ -260,7 +253,7 @@ def is_valid_session(asset_type: str = "forex") -> tuple:
         for name, (start, end) in _CRYPTO_SESSIONS.items():
             if start <= now_h < end:
                 return True, name
-        return True, "off_hours_crypto"  # crypto allowed 24/7 — off_hours is advisory only
+        return True, "off_hours_crypto"
 
     sessions = get_current_sessions()
     for s in sessions:
@@ -269,22 +262,19 @@ def is_valid_session(asset_type: str = "forex") -> tuple:
     return False, "off_hours"
 
 
-# ── Spread filter ─────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# SPREAD FILTER
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def check_spread(symbol_info: dict, asset_type: str) -> tuple:
-    """Validate spread is within acceptable limits.
-
-    Returns:
-        (ok: bool, spread_pips: float)
-    """
+    """Validate spread within limits.  Returns (ok: bool, spread_pips: float)."""
     cfg = CONFIG.get("SCALP_ENGINE", {})
     max_spreads = cfg.get("MAX_SPREAD_PIPS", {})
 
-    spread_raw = symbol_info.get("spread", 0)  # MT5 spread in points
+    spread_raw = symbol_info.get("spread", 0)
     point = symbol_info.get("point", 0.00001)
     spread_price = spread_raw * point
 
-    # Convert to pips (1 pip = 10 points for 5-digit brokers)
     digits = symbol_info.get("digits", 5)
     pip_size = point * 10 if digits >= 4 else point
     spread_pips = spread_price / pip_size if pip_size > 0 else 0
@@ -292,391 +282,657 @@ def check_spread(symbol_info: dict, asset_type: str) -> tuple:
     max_spread = max_spreads.get(asset_type, max_spreads.get("forex", 4))
 
     if asset_type == "crypto":
-        return True, spread_pips  # Skip spread filter for crypto
+        return True, spread_pips
 
     ok = spread_pips <= max_spread
     return ok, round(spread_pips, 2)
 
 
-# ── M15 Zone Detection ────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# PILLAR 1 — VOLUME PROFILE: Market State + Location
+# ═══════════════════════════════════════════════════════════════════════════════
 
-def detect_m15_zone(candles: list, current_price: float) -> dict:
-    """Detect valid M15 support/resistance zone.
+def _build_volume_profile(candles: list) -> dict:
+    """Compute Volume Profile over the given candles.
 
-    A zone is valid if ≥ ZONE_MIN_CONDITIONS of these are true:
-      1. Price touched prior S/R level (swing high/low in last 50 bars)
-      2. Liquidity sweep (wick through level then close back inside)
-      3. Price is near EMA21
-
-    Returns dict with zone details and validity.
+    Returns {poc, vah, val, lvn_levels[], distribution[], balance_ratio}.
+    Uses volume_profile.compute_fixed_range_volume_profile when available,
+    otherwise falls back to a lightweight internal histogram.
     """
     cfg = CONFIG.get("SCALP_ENGINE", {})
-    min_conditions = cfg.get("ZONE_MIN_CONDITIONS", 2)
+    num_bins = int(cfg.get("VP_BINS", 100))
+    va_pct = float(cfg.get("VP_VALUE_AREA_PCT", cfg.get("VP_VA_PCT", 0.70)))
+    lvn_factor = float(cfg.get("VP_LVN_THRESHOLD", cfg.get("VP_LVN_FACTOR", 0.30)))
 
-    if len(candles) < 30:
-        return {"valid": False, "reason": "insufficient_m15_data"}
+    if len(candles) < 20:
+        return {"valid": False, "reason": "insufficient_candles_for_vp"}
 
-    closes = [c["close"] for c in candles]
-    highs  = [c["high"]  for c in candles]
-    lows   = [c["low"]   for c in candles]
+    def _internal_profile() -> dict:
+        highs = [c["high"] for c in candles]
+        lows = [c["low"] for c in candles]
+        price_min = min(lows)
+        price_max = max(highs)
+        price_range = price_max - price_min
+        if price_range <= 0:
+            return {"valid": False, "reason": "zero_price_range"}
 
-    # EMA21
-    ema21_series = _calc_ema(closes, 21)
-    ema21 = ema21_series[-1] if ema21_series else None
+        bin_size = price_range / num_bins
+        bins = [0.0] * num_bins
 
-    # Find swing highs/lows (last 50 bars, window=5)
-    lookback = min(50, len(candles))
-    window = 5
-    swing_highs, swing_lows = [], []
-    for i in range(window, lookback - window):
-        h = highs[i]
-        if h == max(highs[i - window:i + window + 1]):
-            swing_highs.append(h)
-        lo = lows[i]
-        if lo == min(lows[i - window:i + window + 1]):
-            swing_lows.append(lo)
+        for c in candles:
+            vol = float(c.get("vol", 0) or 0)
+            if vol <= 0:
+                vol = 1.0
+            lo = c["low"]
+            hi = c["high"]
+            lo_bin = max(0, int((lo - price_min) / bin_size))
+            hi_bin = min(num_bins - 1, int((hi - price_min) / bin_size))
+            bars_touched = hi_bin - lo_bin + 1
+            vol_per_bin = vol / bars_touched if bars_touched > 0 else vol
+            for b in range(lo_bin, hi_bin + 1):
+                bins[b] += vol_per_bin
 
-    if not swing_highs and not swing_lows:
-        return {"valid": False, "reason": "no_swing_levels"}
+        total_vol = sum(bins)
+        if total_vol <= 0:
+            return {"valid": False, "reason": "no_volume"}
 
-    # Find nearest S/R level to current price
-    last_bar = candles[-1]
-    all_levels = [(h, "resistance") for h in swing_highs] + [(l, "support") for l in swing_lows]
-    all_levels.sort(key=lambda x: abs(x[0] - current_price))
+        poc_bin = max(range(num_bins), key=lambda i: bins[i])
+        poc = price_min + (poc_bin + 0.5) * bin_size
 
-    if not all_levels:
-        return {"valid": False, "reason": "no_levels"}
+        target_vol = total_vol * va_pct
+        cum = bins[poc_bin]
+        lo_idx = poc_bin
+        hi_idx = poc_bin
+        while cum < target_vol and (lo_idx > 0 or hi_idx < num_bins - 1):
+            add_lo = bins[lo_idx - 1] if lo_idx > 0 else 0
+            add_hi = bins[hi_idx + 1] if hi_idx < num_bins - 1 else 0
+            if add_lo >= add_hi and lo_idx > 0:
+                lo_idx -= 1
+                cum += bins[lo_idx]
+            elif hi_idx < num_bins - 1:
+                hi_idx += 1
+                cum += bins[hi_idx]
+            else:
+                lo_idx -= 1
+                cum += bins[lo_idx]
 
-    nearest_level, zone_type = all_levels[0]
-    # Asset-aware zone tolerance bands
-    if current_price > 5000:        # indices like NAS100, S&P 500
-        band = current_price * 0.008   # 0.8% — ~160 pts on NAS100
-    elif current_price > 500:       # XAU/USD, high-price commodities
-        band = current_price * 0.005   # 0.5% — ~15 pts on gold
-    else:                           # forex, low-price assets
-        band = current_price * 0.003   # 0.3% — 30 pips on EURUSD
-    zone_high = nearest_level + band
-    zone_low  = nearest_level - band
+        val = price_min + lo_idx * bin_size
+        vah = price_min + (hi_idx + 1) * bin_size
 
-    conditions_met = []
+        lvn_threshold = bins[poc_bin] * lvn_factor
+        lvn_levels = []
+        for i in range(num_bins):
+            if bins[i] < lvn_threshold and lo_idx <= i <= hi_idx:
+                lvn_levels.append(round(price_min + (i + 0.5) * bin_size, 6))
 
-    # Condition 1: Current price is inside the zone
-    price_in_zone = zone_low <= current_price <= zone_high
-    if price_in_zone:
-        conditions_met.append("price_at_sr_level")
+        distribution = [round(b, 2) for b in bins]
+        result = {
+            "valid": True,
+            "poc": round(poc, 6),
+            "vah": round(vah, 6),
+            "val": round(val, 6),
+            "lvn_levels": lvn_levels,
+            "distribution": distribution,
+            "total_volume": round(total_vol, 2),
+            "session_high": round(price_max, 6),
+            "session_low": round(price_min, 6),
+        }
+        result["balance_ratio"] = _calc_balance_ratio(result)
+        return result
 
-    # Condition 2: Liquidity sweep on last 5 bars
-    for c in candles[-5:]:
-        if zone_type == "resistance":
-            # Wick broke above zone but close came back below
-            if c["high"] > zone_high and c["close"] < zone_high:
-                conditions_met.append("liquidity_sweep")
-                break
-        else:
-            # Wick broke below zone but close came back above
-            if c["low"] < zone_low and c["close"] > zone_low:
-                conditions_met.append("liquidity_sweep")
-                break
+    try:
+        from volume_profile import compute_fixed_range_volume_profile
 
-    # Condition 3: EMA21 touch (within 0.20% of EMA)
-    if ema21 and abs(current_price - ema21) / ema21 < 0.002:
-        conditions_met.append("ema21_proximity")
+        vp = compute_fixed_range_volume_profile(candles, bins=num_bins, value_area_pct=va_pct)
+        if vp and vp.get("profile_valid") and vp.get("poc") is not None:
+            result = dict(vp)
+            result["valid"] = True
+            if not result.get("lvn_levels") or not result.get("distribution"):
+                supplemental = _internal_profile()
+                if supplemental.get("valid"):
+                    result.setdefault("lvn_levels", supplemental.get("lvn_levels", []))
+                    result.setdefault("distribution", supplemental.get("distribution", []))
+                    result.setdefault("session_high", supplemental.get("session_high"))
+                    result.setdefault("session_low", supplemental.get("session_low"))
+            result.setdefault("lvn_levels", [])
+            result["balance_ratio"] = _calc_balance_ratio(result)
+            return result
+    except Exception as exc:
+        log.debug("[SCALP] volume_profile module error, using internal VP: %s", exc)
 
-    # De-duplicate
-    conditions_met = list(dict.fromkeys(conditions_met))
-
-    # Zone is valid if price is at the level OR if 2+ structural conditions exist.
-    # price_in_zone alone is sufficient — the trigger/momentum pipeline handles quality.
-    valid = price_in_zone or len(conditions_met) >= min_conditions
-
-    return {
-        "valid": valid,
-        "zone_type": zone_type,
-        "zone_high": round(zone_high, 6),
-        "zone_low":  round(zone_low, 6),
-        "zone_level": round(nearest_level, 6),
-        "ema21": round(ema21, 6) if ema21 else None,
-        "conditions_met": conditions_met,
-        "conditions_count": len(conditions_met),
-        "price_in_zone": price_in_zone,
-    }
+    return _internal_profile()
 
 
-# ── M5 Entry Trigger ──────────────────────────────────────────────────────────
+def _calc_balance_ratio(vp: dict) -> float:
+    """Ratio of value area width to total range.  High → balanced, low → trending."""
+    vah = vp.get("vah", 0)
+    val = vp.get("val", 0)
+    session_high = vp.get("session_high")
+    session_low = vp.get("session_low")
+    if session_high is None or session_low is None:
+        return 0.5
+    total_range = float(session_high) - float(session_low)
+    va_width = float(vah) - float(val) if vah and val else 0.0
+    ratio = va_width / total_range if total_range > 0 else 0.5
+    return round(max(0.0, min(1.0, ratio)), 3)
 
-def detect_m5_trigger(candles_m5: list, zone: dict, current_price: float) -> dict:
-    """Detect M5 entry trigger inside M15 zone.
 
-    Must ALL be true:
-      1. Price is inside M15 zone
-      2. Rejection candle (long wick ≥ 2x body) OR engulfing candle
-      3. Candle closes in trade direction
+def _classify_market_state(vp: dict) -> str:
+    """Classify market as 'balance' or 'imbalance' from VP shape."""
+    br = vp.get("balance_ratio", 0.5)
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    threshold = float(cfg.get("BALANCE_THRESHOLD", 0.40))
+    return "balance" if br >= threshold else "imbalance"
 
-    Returns trigger dict with direction.
+
+def _locate_price_vs_vp(price: float, vp: dict) -> dict:
+    """Determine price location relative to VP levels.
+
+    Returns {location: str, nearest_level: float, distance_pct: float}
+    Locations: 'at_vah', 'at_val', 'at_poc', 'at_lvn', 'inside_va', 'outside_va'
     """
-    if not zone.get("valid"):
-        return {"valid": False, "reason": "zone_not_valid"}
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    proximity_pct = float(cfg.get("VP_PROXIMITY_PCT", 0.15)) / 100.0
 
-    if len(candles_m5) < 5:
-        return {"valid": False, "reason": "insufficient_m5_data"}
+    poc = vp.get("poc", 0)
+    vah = vp.get("vah", 0)
+    val = vp.get("val", 0)
+    lvn_levels = vp.get("lvn_levels", [])
 
-    last = candles_m5[-1]
-    prev = candles_m5[-2]
+    def _near(level):
+        return abs(price - level) / level < proximity_pct if level else False
 
-    open_p  = last["open"]
-    close_p = last["close"]
-    high_p  = last["high"]
-    low_p   = last["low"]
+    if _near(vah):
+        return {"location": "at_vah", "nearest_level": vah, "distance_pct": round(abs(price - vah) / vah * 100, 3)}
+    if _near(val):
+        return {"location": "at_val", "nearest_level": val, "distance_pct": round(abs(price - val) / val * 100, 3)}
+    if _near(poc):
+        return {"location": "at_poc", "nearest_level": poc, "distance_pct": round(abs(price - poc) / poc * 100, 3)}
 
-    body = abs(close_p - open_p)
-    upper_wick = high_p - max(open_p, close_p)
-    lower_wick = min(open_p, close_p) - low_p
-    total_range = high_p - low_p or 1e-10
+    for lvn in lvn_levels:
+        if _near(lvn):
+            return {"location": "at_lvn", "nearest_level": lvn, "distance_pct": round(abs(price - lvn) / lvn * 100, 3)}
 
-    zone_type = zone.get("zone_type", "support")
+    if val <= price <= vah:
+        return {"location": "inside_va", "nearest_level": poc, "distance_pct": round(abs(price - poc) / poc * 100, 3)}
 
-    # Determine expected direction from zone type
-    direction = "LONG" if zone_type == "support" else "SHORT"
+    return {"location": "outside_va", "nearest_level": poc, "distance_pct": round(abs(price - poc) / poc * 100, 3)}
 
-    trigger_type = None
-    trigger_valid = False
 
-    # Check rejection candle: long wick ≥ 2x body, closes in direction
-    if zone_type == "support":
-        # Bullish rejection: lower wick ≥ 2x body AND close > open
-        if lower_wick >= 1.2 * body and close_p > open_p:
-            trigger_type = "rejection"
-            trigger_valid = True
-    else:
-        # Bearish rejection: upper wick ≥ 2x body AND close < open
-        if upper_wick >= 1.2 * body and close_p < open_p:
-            trigger_type = "rejection"
-            trigger_valid = True
+# ═══════════════════════════════════════════════════════════════════════════════
+# PILLAR 2 — AGGRESSION: Absorption + CVD + AAA
+# ═══════════════════════════════════════════════════════════════════════════════
 
-    # Check engulfing candle
-    if not trigger_valid:
-        prev_body = abs(prev["close"] - prev["open"])
-        if zone_type == "support":
-            # Practical M5 bullish engulf: prev bearish (sellers), curr bullish (buyers)
-            # with curr body >= 80% of prev body — no full spanning required
-            prev_bearish = prev["close"] < prev["open"]
-            if (close_p > open_p and          # current bar bullish
-                    prev_bearish and           # previous bar was bearish (selling into zone)
-                    body > prev_body * 0.8):   # current body absorbs prior selling
-                trigger_type = "engulfing"
-                trigger_valid = True
+def _check_absorption(candles: list) -> dict:
+    """Detect absorption candles (high volume, small price move).
+
+    Uses indicators.detect_absorption() when available, otherwise internal logic.
+    """
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    vol_mult = float(cfg.get("ABSORPTION_VOL_MULT", cfg.get("ABS_VOL_MULT", 2.0)))
+    max_move = float(cfg.get("ABSORPTION_MAX_MOVE_ATR", cfg.get("ABS_MAX_MOVE_ATR", 0.30)))
+    sma_period = int(cfg.get("ABSORPTION_SMA_PERIOD", cfg.get("ABS_SMA_PERIOD", 20)))
+
+    try:
+        from indicators import detect_absorption
+        rows = detect_absorption(candles, vol_mult=vol_mult, max_move_atr=max_move, sma_period=sma_period)
+        hits = []
+        for idx, row in enumerate(rows):
+            if row.get("absorbed"):
+                hits.append({"index": idx, **row})
+        return {"detected": len(hits) > 0, "count": len(hits), "bars": hits}
+    except Exception as exc:
+        log.debug("[SCALP] indicators.detect_absorption error: %s", exc)
+
+    # Internal fallback
+    if len(candles) < sma_period + 1:
+        return {"detected": False, "count": 0, "bars": []}
+
+    vols = [float(c.get("vol", 0) or 0) for c in candles]
+    sma_vol = sum(vols[-sma_period:]) / sma_period if sma_period > 0 else 1
+
+    atr_vals = []
+    for c in candles[-sma_period:]:
+        atr_vals.append(c["high"] - c["low"])
+    avg_atr = sum(atr_vals) / len(atr_vals) if atr_vals else 1
+
+    hits = []
+    for i in range(-5, 0):
+        c = candles[i]
+        vol = float(c.get("vol", 0) or 0)
+        move = abs(c["close"] - c["open"])
+        if vol >= sma_vol * vol_mult and move <= avg_atr * max_move:
+            hits.append({"index": len(candles) + i, "vol": vol, "move": move})
+
+    return {"detected": len(hits) > 0, "count": len(hits), "bars": hits}
+
+
+def _check_cvd(candles: list) -> dict:
+    """Compute CVD direction from recent candles.
+
+    Uses indicators.calc_cvd() when available, otherwise internal approximation.
+    Returns {direction: 'LONG'|'SHORT'|None, cvd_value, cvd_slope}
+    """
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    smooth_period = int(cfg.get("CVD_SMOOTH_PERIOD", 5))
+
+    try:
+        from indicators import calc_cvd
+        result = calc_cvd(candles, smooth_period=smooth_period)
+        raw = []
+        if result:
+            raw = result.get("cvd_raw") or result.get("cvd") or []
+        if raw:
+            slope = raw[-1] - raw[-6] if len(raw) >= 6 else 0
+            direction = "LONG" if slope > 0 else "SHORT" if slope < 0 else None
+            return {"direction": direction, "cvd_value": round(raw[-1], 2), "cvd_slope": round(slope, 2)}
+    except Exception as exc:
+        log.debug("[SCALP] indicators.calc_cvd error: %s", exc)
+
+    # Internal fallback — candle-based buy/sell approximation
+    if len(candles) < 10:
+        return {"direction": None, "cvd_value": 0, "cvd_slope": 0}
+
+    cvd = 0.0
+    cvd_series = []
+    for c in candles[-20:]:
+        vol = float(c.get("vol", 0) or 0)
+        rng = c["high"] - c["low"]
+        if rng > 0:
+            buy_pct = (c["close"] - c["low"]) / rng
         else:
-            # Practical M5 bearish engulf: prev bullish (buyers), curr bearish (sellers)
-            prev_bullish = prev["close"] > prev["open"]
-            if (close_p < open_p and          # current bar bearish
-                    prev_bullish and           # previous bar was bullish (buying into zone)
-                    body > prev_body * 0.8):   # current body absorbs prior buying
-                trigger_type = "engulfing"
-                trigger_valid = True
+            buy_pct = 0.5
+        cvd += vol * (2 * buy_pct - 1)
+        cvd_series.append(cvd)
 
-    if not trigger_valid:
+    slope = cvd_series[-1] - cvd_series[-6] if len(cvd_series) >= 6 else 0
+    direction = "LONG" if slope > 0 else "SHORT" if slope < 0 else None
+    return {"direction": direction, "cvd_value": round(cvd, 2), "cvd_slope": round(slope, 2)}
+
+
+def _check_aaa_sequence(candles: list, absorption: dict, cvd: dict) -> dict:
+    """Detect Absorption → Accumulation → Aggression sequence.
+
+    - Absorption: already detected (pillar)
+    - Accumulation: range contraction after absorption (narrow bars)
+    - Aggression: breakout candle with volume spike
+    """
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    lookback = int(cfg.get("AAA_ACCUMULATION_LOOKBACK", 10))
+    contraction_threshold = float(cfg.get("AAA_CONTRACTION_THRESHOLD", 0.5))
+    breakout_vol_mult = float(cfg.get("AAA_BREAKOUT_VOL_MULT", 1.5))
+
+    if not absorption.get("detected"):
+        return {"complete": False, "phase": "no_absorption"}
+
+    # Accumulation: check range contraction
+    try:
+        from indicators import detect_range_contraction
+        rc = detect_range_contraction(candles, lookback=lookback, threshold=contraction_threshold)
+        accumulating = bool(rc.get("contracting", rc.get("contracted", False)))
+    except Exception:
+        # Internal fallback
+        if len(candles) < lookback * 2:
+            return {"complete": False, "phase": "insufficient_data"}
+        recent_ranges = [c["high"] - c["low"] for c in candles[-lookback:]]
+        prior_ranges = [c["high"] - c["low"] for c in candles[-(lookback * 2):-lookback]]
+        avg_recent = sum(recent_ranges) / len(recent_ranges) if recent_ranges else 1
+        avg_prior = sum(prior_ranges) / len(prior_ranges) if prior_ranges else 1
+        accumulating = avg_recent < avg_prior * contraction_threshold
+
+    if not accumulating:
+        return {"complete": False, "phase": "absorption_only"}
+
+    # Aggression: last candle breaks out with above-average volume
+    last = candles[-1]
+    prev = candles[-2]
+    vol = float(last.get("vol", 0) or 0)
+    vol_window = candles[-20:] if len(candles) >= 20 else candles
+    avg_vol = (
+        sum(float(c.get("vol", 0) or 0) for c in vol_window) / len(vol_window)
+        if vol_window else vol
+    )
+
+    body = abs(last["close"] - last["open"])
+    prev_range = prev["high"] - prev["low"] if prev["high"] > prev["low"] else 1e-10
+
+    aggression = vol > avg_vol * breakout_vol_mult and body > prev_range * 0.8
+
+    if aggression:
+        direction = "LONG" if last["close"] > last["open"] else "SHORT"
+        return {"complete": True, "phase": "aggression", "direction": direction}
+
+    return {"complete": False, "phase": "accumulation"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PILLAR 3 — VWAP DIRECTIONAL LEAN
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _check_vwap_lean(candles: list, current_price: float) -> dict:
+    """Determine VWAP directional lean.
+
+    Uses indicators.calc_vwap() when available.
+    Returns {lean: 'LONG'|'SHORT'|None, vwap_value}
+    """
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    band_mult = float(cfg.get("VWAP_BAND_MULT", 0.5))
+
+    try:
+        from indicators import calc_vwap
+        result = calc_vwap(candles, band_mult=band_mult)
+        if result and result.get("vwap") is not None:
+            series = result["vwap"]
+            if isinstance(series, list):
+                vwap = next((float(v) for v in reversed(series) if v is not None), None)
+            else:
+                vwap = float(series)
+            if vwap is not None:
+                lean = "LONG" if current_price > vwap else "SHORT" if current_price < vwap else None
+                return {"lean": lean, "vwap_value": round(vwap, 6)}
+    except Exception as exc:
+        log.debug("[SCALP] indicators.calc_vwap error: %s", exc)
+
+    # Internal VWAP fallback
+    if len(candles) < 5:
+        return {"lean": None, "vwap_value": 0}
+
+    cum_tp_vol = 0.0
+    cum_vol = 0.0
+    for c in candles:
+        tp = (c["high"] + c["low"] + c["close"]) / 3.0
+        vol = float(c.get("vol", 0) or 0)
+        if vol <= 0:
+            vol = 1.0
+        cum_tp_vol += tp * vol
+        cum_vol += vol
+
+    vwap = cum_tp_vol / cum_vol if cum_vol > 0 else current_price
+    lean = "LONG" if current_price > vwap else "SHORT" if current_price < vwap else None
+    return {"lean": lean, "vwap_value": round(vwap, 6)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SETUP CLASSIFICATION — Mean Reversion vs Trend Continuation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _classify_setup(
+    market_state: str,
+    price_loc: dict,
+    absorption: dict,
+    cvd: dict,
+    aaa: dict,
+    vwap: dict,
+    htf_bias: Optional[str],
+) -> dict:
+    """Decide setup type and direction.
+
+    Mean Reversion (balance market):
+      - Price at VAH → SHORT toward POC
+      - Price at VAL → LONG toward POC
+      - Requires absorption + CVD divergence (price at high, CVD falling → reversal)
+
+    Trend Continuation (imbalance market):
+      - Price pulls back to LVN inside impulse → continue in trend direction
+      - AAA sequence completion preferred
+      - HTF EMA bias alignment required
+
+    Returns {valid, setup_type, direction, target, reasons[]}
+    """
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    location = price_loc.get("location", "")
+    reasons = []
+
+    # ── Mean Reversion ───────────────────────────────────────────────────
+    if market_state == "balance" and location in ("at_vah", "at_val"):
+        direction = "SHORT" if location == "at_vah" else "LONG"
+
+        # Check absorption at the level
+        if not absorption.get("detected"):
+            return {"valid": False, "reason": "no_absorption_at_va_extreme"}
+
+        # CVD divergence: price at high but CVD falling (SHORT), or vice versa
+        cvd_dir = cvd.get("direction")
+        cvd_confirms = False
+        if direction == "SHORT" and cvd_dir == "SHORT":
+            cvd_confirms = True
+            reasons.append("CVD divergence: sellers absorbing at VAH")
+        elif direction == "LONG" and cvd_dir == "LONG":
+            cvd_confirms = True
+            reasons.append("CVD divergence: buyers absorbing at VAL")
+        elif cvd_dir is None:
+            cvd_confirms = True  # neutral CVD — allow with reduced grade
+            reasons.append("CVD neutral — proceed with caution")
+
+        if not cvd_confirms:
+            return {"valid": False, "reason": f"cvd_against_reversion:{cvd_dir}_vs_{direction}"}
+
+        # VWAP lean as bonus (not required for mean reversion)
+        if vwap.get("lean") == direction:
+            reasons.append(f"VWAP confirms {direction}")
+
+        reasons.append(f"Mean reversion from {location.upper()} toward POC")
         return {
-            "valid": False,
-            "reason": "no_rejection_or_engulfing",
+            "valid": True,
+            "setup_type": "mean_reversion",
             "direction": direction,
+            "target": price_loc.get("nearest_level"),  # POC
+            "reasons": reasons,
         }
 
-    return {
-        "valid": True,
-        "direction": direction,
-        "trigger_type": trigger_type,
-        "entry_price": round(current_price, 6),
-        "last_body_pct": round(body / total_range * 100, 1) if total_range else 0,
-    }
+    # ── Trend Continuation ───────────────────────────────────────────────
+    if market_state == "imbalance" and location in ("at_lvn", "at_poc", "inside_va"):
+        # AAA completion is the strongest signal
+        if aaa.get("complete"):
+            direction = aaa["direction"]
+            reasons.append("AAA sequence complete — aggression breakout")
+        elif htf_bias:
+            direction = htf_bias
+            reasons.append(f"Trend continuation aligned with HTF bias ({htf_bias})")
+        elif vwap.get("lean"):
+            direction = vwap["lean"]
+            reasons.append(f"Trend continuation via VWAP lean ({direction})")
+        else:
+            return {"valid": False, "reason": "no_direction_for_trend_continuation"}
+
+        # Absorption at pullback level is a plus
+        if absorption.get("detected"):
+            reasons.append("Absorption detected at pullback level")
+
+        # CVD should agree with direction
+        cvd_dir = cvd.get("direction")
+        if cvd_dir and cvd_dir != direction:
+            return {"valid": False, "reason": f"cvd_against_trend:{cvd_dir}_vs_{direction}"}
+        if cvd_dir == direction:
+            reasons.append(f"CVD confirms {direction} trend")
+
+        reasons.append(f"Trend continuation from {location}")
+        return {
+            "valid": True,
+            "setup_type": "trend_continuation",
+            "direction": direction,
+            "target": price_loc.get("nearest_level"),
+            "reasons": reasons,
+        }
+
+    # ── No valid setup ───────────────────────────────────────────────────
+    return {"valid": False, "reason": f"no_setup:{market_state}_{location}"}
 
 
-# ── Momentum Confirmation ─────────────────────────────────────────────────────
-
-def confirm_momentum(candles_m5: list, trigger: dict) -> dict:
-    """Confirm momentum on M5.
-
-    ONE of:
-      1. Break of previous M5 high (LONG) / low (SHORT)
-      2. Strong candle body: body > avg of last 3 bodies
-
-    Returns: {valid, method}
-    """
-    if not trigger.get("valid"):
-        return {"valid": False, "reason": "no_trigger"}
-
-    if len(candles_m5) < 5:
-        return {"valid": False, "reason": "insufficient_m5_data"}
-
-    direction = trigger["direction"]
-    last = candles_m5[-1]
-    prev = candles_m5[-2]
-
-    # Method 1: Structure break
-    if direction == "LONG":
-        if last["close"] > prev["high"]:
-            return {"valid": True, "method": "structure_break", "detail": f"close {last['close']:.5f} > prev_high {prev['high']:.5f}"}
-    else:
-        if last["close"] < prev["low"]:
-            return {"valid": True, "method": "structure_break", "detail": f"close {last['close']:.5f} < prev_low {prev['low']:.5f}"}
-
-    # Method 2: Strong body vs avg of last 3 bodies
-    recent = candles_m5[-4:-1]
-    if recent:
-        avg_body = sum(abs(c["close"] - c["open"]) for c in recent) / len(recent)
-        last_body = abs(last["close"] - last["open"])
-        if avg_body > 0 and last_body >= avg_body * 1.0:
-            return {"valid": True, "method": "strong_body", "detail": f"body {last_body:.5f} > {avg_body:.5f} avg"}
-
-    return {"valid": False, "reason": "no_momentum", "detail": "no structure break or strong body"}
-
-
-# ── Scalp Risk Levels ─────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# RISK LEVELS — SL / TP1 / TP2
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def calculate_scalp_levels(
-    trigger: dict,
-    zone: dict,
-    candles_m15: list,
+    direction: str,
+    entry: float,
+    vp: dict,
+    setup_type: str,
     symbol_info: dict,
     asset_type: str,
 ) -> dict:
-    """Calculate SL, TP1, TP2 for scalp trade.
+    """Calculate SL, TP1, TP2 using VP levels.
 
-    SL: beyond zone boundary + asset buffer
-    TP1: entry + SL_distance * 1.5  (default 1.5R)
-    TP2: next M15 swing high/low (if enabled)
+    Mean Reversion:
+      SL: beyond VAH/VAL + buffer
+      TP1: POC
+      TP2: opposite VA boundary
+
+    Trend Continuation:
+      SL: beyond LVN/POC + buffer
+      TP1: POC or opposite VA
+      TP2: outside VA extension
     """
     cfg = CONFIG.get("SCALP_ENGINE", {})
-    entry = trigger.get("entry_price", 0)
-    direction = trigger.get("direction", "LONG")
     digits = symbol_info.get("digits", 5)
     point = symbol_info.get("point", 0.00001)
 
-    # Buffer per asset type
     _pip = point * 10 if digits >= 4 else point
     _buffers = {
-        "forex":     _pip * 3,    # ~3 pips
-        "commodity": entry * 0.002 if entry > 0 else _pip * 5,  # 0.2%
-        "crypto":    entry * 0.003 if entry > 0 else 0,         # 0.3%
-        "index":     entry * 0.002 if entry > 0 else 0,         # 0.2%
+        "forex":     _pip * 3,
+        "commodity": entry * 0.002 if entry > 0 else _pip * 5,
+        "crypto":    entry * 0.003 if entry > 0 else 0,
+        "index":     entry * 0.002 if entry > 0 else 0,
         "stock":     entry * 0.002 if entry > 0 else 0,
     }
     buffer = _buffers.get(asset_type, _buffers["forex"])
 
-    if direction == "LONG":
-        sl = zone["zone_low"] - buffer
-        if sl >= entry:
-            sl = entry - (entry * 0.003)  # fallback 0.3%
-    else:
-        sl = zone["zone_high"] + buffer
-        if sl <= entry:
-            sl = entry + (entry * 0.003)
-
-    sl_distance = abs(entry - sl)
+    poc = vp.get("poc", entry)
+    vah = vp.get("vah", entry)
+    val = vp.get("val", entry)
     min_rr = float(cfg.get("MIN_RR", 1.5))
 
-    if direction == "LONG":
-        tp1 = entry + sl_distance * min_rr
-    else:
-        tp1 = entry - sl_distance * min_rr
-
-    actual_rr = round(sl_distance * min_rr / sl_distance, 2) if sl_distance > 0 else 0
-
-    # TP2: next M15 swing in trade direction
-    tp2 = None
-    if cfg.get("TP2_ENABLED", True) and len(candles_m15) >= 20:
-        highs = [c["high"] for c in candles_m15[-30:]]
-        lows  = [c["low"]  for c in candles_m15[-30:]]
+    if setup_type == "mean_reversion":
         if direction == "LONG":
-            candidates = [h for h in highs if h > entry]
-            tp2 = min(candidates) if candidates else None
+            sl = val - buffer
+            tp1 = poc
+            tp2 = vah
         else:
-            candidates = [l for l in lows if l < entry]
-            tp2 = max(candidates) if candidates else None
+            sl = vah + buffer
+            tp1 = poc
+            tp2 = val
+    else:  # trend_continuation
+        if direction == "LONG":
+            sl = poc - buffer if poc < entry else entry - (entry * 0.003)
+            tp1 = vah
+            tp2 = vah + (vah - poc)  # extension beyond VA
+        else:
+            sl = poc + buffer if poc > entry else entry + (entry * 0.003)
+            tp1 = val
+            tp2 = val - (poc - val)  # extension below VA
+
+    sl_distance = abs(entry - sl)
+
+    # Enforce minimum R:R
+    tp1_rr = abs(tp1 - entry) / sl_distance if sl_distance > 0 else 0
+    if tp1_rr < min_rr and sl_distance > 0:
+        if direction == "LONG":
+            tp1 = entry + sl_distance * min_rr
+        else:
+            tp1 = entry - sl_distance * min_rr
+
+    actual_rr = round(abs(tp1 - entry) / sl_distance, 2) if sl_distance > 0 else 0
 
     return {
-        "entry": round(entry, digits),
-        "sl":    round(sl, digits),
-        "tp1":   round(tp1, digits),
-        "tp2":   round(tp2, digits) if tp2 else None,
-        "rr":    actual_rr,
+        "entry":       round(entry, digits),
+        "sl":          round(sl, digits),
+        "tp1":         round(tp1, digits),
+        "tp2":         round(tp2, digits) if tp2 else None,
+        "rr":          actual_rr,
         "sl_distance": round(sl_distance, digits),
-        "sl_method": "zone_boundary",
+        "sl_method":   "vp_boundary",
     }
 
 
-# ── AI Quality Grade (Rule-Based, Instant) ────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# GRADING — A/B/C/D with position sizing multiplier
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def ai_quality_grade(
-    zone: dict,
-    trigger: dict,
-    momentum: dict,
+    vp: dict,
+    price_loc: dict,
+    absorption: dict,
+    cvd: dict,
+    aaa: dict,
+    vwap: dict,
+    setup: dict,
     sessions: list,
     spread_pips: float,
-    symbol_info: dict,
+    htf_bias: Optional[str],
 ) -> dict:
     """Rule-based quality scoring (0–100). No API call — instant.
 
-    Grades:
-      A  (80–100): High-probability, take it
-      B  (60–79):  Good, acceptable
-      C  (40–59):  Marginal, caution
-      D  (<40):    Skip
-
-    Returns {score, grade, reasons[]}
+    Grades & sizing:
+      A  (80–100): Full size   (1.0x)
+      B  (60–79):  Half size   (0.5x)
+      C  (40–59):  Quarter     (0.25x)
+      D  (<40):    Skip        (0x)
     """
+    cfg = CONFIG.get("SCALP_ENGINE", {})
     score = 0
     reasons = []
 
-    # Zone quality (up to 30 points)
-    cond_count = zone.get("conditions_count", 0)
-    if cond_count >= 3:
-        score += 30
-        reasons.append("Strong zone: 3+ conditions")
-    elif cond_count == 2:
+    # ── Location quality (0–25) ──────────────────────────────────────────
+    loc = price_loc.get("location", "")
+    if loc in ("at_vah", "at_val"):
+        score += 25
+        reasons.append(f"Price at {loc.upper()} — prime location")
+    elif loc == "at_lvn":
         score += 20
-        reasons.append("Valid zone: 2 conditions")
-    else:
+        reasons.append("Price at LVN — trend continuation zone")
+    elif loc == "at_poc":
+        score += 10
+        reasons.append("Price at POC — neutral location")
+    elif loc == "inside_va":
         score += 5
 
-    if "liquidity_sweep" in zone.get("conditions_met", []):
-        score += 5
-        reasons.append("Liquidity sweep at zone")
+    # ── Absorption (0–20) ────────────────────────────────────────────────
+    if absorption.get("detected"):
+        cnt = absorption.get("count", 0)
+        if cnt >= 3:
+            score += 20
+            reasons.append(f"Strong absorption ({cnt} bars)")
+        elif cnt >= 1:
+            score += 12
+            reasons.append(f"Absorption detected ({cnt} bar(s))")
 
-    if "ema21_proximity" in zone.get("conditions_met", []):
+    # ── CVD confirmation (0–15) ──────────────────────────────────────────
+    setup_dir = setup.get("direction")
+    cvd_dir = cvd.get("direction")
+    if cvd_dir and cvd_dir == setup_dir:
+        score += 15
+        reasons.append(f"CVD confirms {setup_dir}")
+    elif cvd_dir is None:
         score += 5
-        reasons.append("EMA21 confluence")
+        reasons.append("CVD neutral")
 
-    # Session quality (up to 20 points)
+    # ── AAA sequence (0–15) ──────────────────────────────────────────────
+    if aaa.get("complete"):
+        score += 15
+        reasons.append("Full AAA sequence complete")
+    elif aaa.get("phase") == "accumulation":
+        score += 7
+        reasons.append("AAA: absorption + accumulation (no aggression yet)")
+
+    # ── VWAP alignment (0–5) ─────────────────────────────────────────────
+    if vwap.get("lean") == setup_dir:
+        score += 5
+        reasons.append(f"VWAP lean confirms {setup_dir}")
+
+    # ── Session (0–10) ───────────────────────────────────────────────────
     if "london" in sessions and "new_york" in sessions:
-        score += 20
+        score += 10
         reasons.append("London/NY overlap — peak liquidity")
-    elif "london" in sessions:
-        score += 15
-        reasons.append("London session")
-    elif "new_york" in sessions:
-        score += 15
-        reasons.append("NY session")
+    elif "london" in sessions or "new_york" in sessions:
+        score += 7
+        reasons.append("Major session active")
 
-    # Trigger quality (up to 20 points)
-    ttype = trigger.get("trigger_type", "")
-    if ttype == "rejection":
-        score += 20
-        reasons.append("Rejection candle (wicks out of zone)")
-    elif ttype == "engulfing":
-        score += 15
-        reasons.append("Engulfing candle")
+    # ── HTF bias alignment (0–5) ─────────────────────────────────────────
+    if htf_bias and htf_bias == setup_dir:
+        score += 5
+        reasons.append(f"HTF EMA bias aligned ({htf_bias})")
 
-    # Momentum quality (up to 20 points)
-    mmethod = momentum.get("method", "")
-    if mmethod == "structure_break":
-        score += 20
-        reasons.append("Structure break confirmed")
-    elif mmethod == "strong_body":
-        score += 12
-        reasons.append("Strong momentum body")
-
-    # Spread penalty (up to -10)
-    cfg = CONFIG.get("SCALP_ENGINE", {})
+    # ── Spread penalty (−5 to +5) ────────────────────────────────────────
     max_sp = cfg.get("MAX_SPREAD_PIPS", {}).get("forex", 4)
     if spread_pips > 0:
         if spread_pips <= max_sp * 0.5:
@@ -688,37 +944,61 @@ def ai_quality_grade(
 
     score = max(0, min(100, score))
 
-    if score >= 80:
+    grade_map = cfg.get("GRADE_THRESHOLDS", {"A": 80, "B": 60, "C": 40})
+    a_thresh = int(grade_map.get("A", 80))
+    b_thresh = int(grade_map.get("B", 60))
+    c_thresh = int(grade_map.get("C", 40))
+
+    if score >= a_thresh:
         grade = "A"
-    elif score >= 60:
+    elif score >= b_thresh:
         grade = "B"
-    elif score >= 40:
+    elif score >= c_thresh:
         grade = "C"
     else:
         grade = "D"
 
-    return {"score": score, "grade": grade, "reasons": reasons}
+    size_map = cfg.get(
+        "GRADE_SIZE_MAP",
+        {
+            "A": float(cfg.get("GRADE_A_SIZE_MULT", 1.0)),
+            "B": float(cfg.get("GRADE_B_SIZE_MULT", 0.5)),
+            "C": float(cfg.get("GRADE_C_SIZE_MULT", 0.25)),
+            "D": float(cfg.get("GRADE_D_SIZE_MULT", 0.0)),
+        },
+    )
+    size_mult = float(size_map.get(grade, 0.0))
+
+    return {
+        "score": score,
+        "grade": grade,
+        "reasons": reasons,
+        "size_multiplier": size_mult,
+    }
 
 
-# ── Main Scan Function ────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN SCAN — run_scalp_scan()
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def run_scalp_scan(pairs_or_symbols: list) -> dict:
-    """Scan a list of pairs for scalp setups.
+    """Scan a list of pairs for Fabio Valentini scalp setups.
 
     Args:
         pairs_or_symbols: list of Athena display names (e.g. ['EUR/USD', 'XAU/USD'])
 
     Returns:
-        {signals, skipped, session, scanned}
+        {signals, skipped, session, scanned, sessions_active}
     """
     from mt5_executor import mt5_map_symbol, mt5_get_symbol_info, mt5_connect
 
     cfg = CONFIG.get("SCALP_ENGINE", {})
     m15_count = int(cfg.get("M15_CANDLES", 500))
     m5_count  = int(cfg.get("M5_CANDLES", 1000))
-    h1_count = int(cfg.get("H1_CANDLES", 300))
-    bias_tf = str(cfg.get("BIAS_TIMEFRAME", "H1")).upper()
-    use_bias_filter = bool(cfg.get("WITH_TREND_ONLY", True))
+    h1_count  = int(cfg.get("H1_CANDLES", 300))
+    bias_tf   = str(cfg.get("BIAS_TIMEFRAME", "H1")).upper()
+    use_bias  = bool(cfg.get("WITH_TREND_ONLY", True))
+    min_grade = str(cfg.get("MIN_GRADE_AUTO_EXECUTE", cfg.get("MIN_GRADE", "C"))).upper()
 
     def _record_stability_sample(
         display: str,
@@ -744,27 +1024,18 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
         except Exception as exc:
             log.debug(f"[SSI] Scalp sample skipped for {display}: {exc}")
 
-    # Session gate — evaluated per pair (crypto uses different windows)
     sessions = get_current_sessions()
-    # Check MT5 session once for non-crypto gate
     mt5_session_ok, session_name = is_valid_session("forex")
     _, crypto_session_name = is_valid_session("crypto")
 
-    # Split pairs by data source
-    mt5_pairs = [p for p in pairs_or_symbols if _guess_asset_type(p) != "crypto"]
     crypto_pairs = [p for p in pairs_or_symbols if _guess_asset_type(p) == "crypto"]
 
     if not mt5_session_ok and not crypto_pairs:
         for display in pairs_or_symbols:
-            _record_stability_sample(
-                display=display,
-                asset_type=_guess_asset_type(display),
-                passed=False,
-                reason="OUTSIDE_SESSION",
-            )
+            _record_stability_sample(display, _guess_asset_type(display), False, reason="OUTSIDE_SESSION")
         return {
             "signals": [],
-            "skipped": len(pairs_or_symbols),
+            "skipped": [{"pair": display, "reason": "OUTSIDE_SESSION"} for display in pairs_or_symbols],
             "scanned": 0,
             "session": session_name,
             "reason": "OUTSIDE_SESSION",
@@ -773,250 +1044,228 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
     signals = []
     skipped = []
 
+    mt5_pairs = [p for p in pairs_or_symbols if _guess_asset_type(p) != "crypto"]
     if not mt5_connect() and mt5_pairs:
         for display in mt5_pairs:
-            _record_stability_sample(
-                display=display,
-                asset_type=_guess_asset_type(display),
-                passed=False,
-                reason="MT5_NOT_CONNECTED",
-            )
+            _record_stability_sample(display, _guess_asset_type(display), False, reason="MT5_NOT_CONNECTED")
             skipped.append({"pair": display, "reason": "MT5_NOT_CONNECTED"})
-        mt5_pairs = []  # skip MT5 pairs but still process crypto
+        mt5_pairs = []
 
     for display in pairs_or_symbols:
-        mt5_sym = None  # set only on MT5 branch; crypto uses Binance candles, not MT5 symbol
+        mt5_sym = None
         try:
             asset_type = _guess_asset_type(display)
 
-            # ── Crypto path: Binance WebSocket candles ───────────────────────────
+            # ── Fetch candles (crypto vs MT5) ────────────────────────────────
             if asset_type == "crypto":
-                # Session gate: crypto always allowed but note peak sessions
-                _cs_ok, _cs_name = is_valid_session("crypto")
-
                 pair_dict = {
                     "display": display,
-                    "symbol": display.replace("/", ""),  # Binance REST expects "BTCUSDT", not "BTC/USDT"
+                    "symbol": display.replace("/", ""),
                     "type": "crypto",
                     "source": "binance",
                 }
-
                 candles_m15 = _scalp_fetch_candles(pair_dict, "M15", m15_count)
                 if not candles_m15 or len(candles_m15) < 30:
-                    _record_stability_sample(
-                        display, asset_type, False, reason="insufficient_m15_candles"
-                    )
+                    _record_stability_sample(display, asset_type, False, reason="insufficient_m15_candles")
                     skipped.append({"pair": display, "reason": "insufficient_m15_candles"})
                     continue
 
                 candles_m5 = _scalp_fetch_candles(pair_dict, "M5", m5_count)
                 if not candles_m5 or len(candles_m5) < 10:
-                    _record_stability_sample(
-                        display, asset_type, False, reason="insufficient_m5_candles"
-                    )
+                    _record_stability_sample(display, asset_type, False, reason="insufficient_m5_candles")
                     skipped.append({"pair": display, "reason": "insufficient_m5_candles"})
                     continue
 
                 current_price = candles_m5[-1]["close"]
-                sym_info = {"spread": 0, "point": 0.01, "digits": 2}  # placeholder for crypto
+                sym_info = {"spread": 0, "point": 0.01, "digits": 2}
                 spread_pips = 0.0
                 htf_bias = None
 
-                if use_bias_filter:
+                if use_bias:
                     candles_bias = _scalp_fetch_candles(pair_dict, bias_tf, h1_count)
                     if candles_bias and len(candles_bias) >= 200:
                         htf_bias = infer_bias_from_ema_stack(candles_bias)
-                    log.debug(
-                        f"[SCALP] {display} HTF bias ({bias_tf}): "
-                        f"{htf_bias or 'None — mixed EMA, bias filter inactive'}"
-                    )
 
-            # ── MT5 path: forex / commodities / indices / stocks ───────────
             else:
-                # Session gate for MT5 pairs
                 if not mt5_session_ok:
-                    _record_stability_sample(
-                        display, asset_type, False, reason="OUTSIDE_SESSION"
-                    )
+                    _record_stability_sample(display, asset_type, False, reason="OUTSIDE_SESSION")
                     skipped.append({"pair": display, "reason": "OUTSIDE_SESSION"})
                     continue
 
                 mt5_sym = mt5_map_symbol(display)
                 if not mt5_sym:
-                    _record_stability_sample(
-                        display, asset_type, False, reason="no_mt5_mapping"
-                    )
+                    _record_stability_sample(display, asset_type, False, reason="no_mt5_mapping")
                     skipped.append({"pair": display, "reason": "no_mt5_mapping"})
                     continue
 
                 sym_info = mt5_get_symbol_info(display)
                 if not sym_info or sym_info.get("error"):
-                    _record_stability_sample(
-                        display, asset_type, False, reason="symbol_not_available"
-                    )
+                    _record_stability_sample(display, asset_type, False, reason="symbol_not_available")
                     skipped.append({"pair": display, "reason": "symbol_not_available"})
                     continue
 
                 spread_ok, spread_pips = check_spread(sym_info, asset_type)
                 if not spread_ok:
-                    _record_stability_sample(
-                        display,
-                        asset_type,
-                        False,
-                        feature_map={"spread_pips": spread_pips},
-                        reason=f"spread_too_wide_{spread_pips}pips",
-                    )
+                    _record_stability_sample(display, asset_type, False,
+                                             feature_map={"spread_pips": spread_pips},
+                                             reason=f"spread_too_wide_{spread_pips}pips")
                     skipped.append({"pair": display, "reason": f"spread_too_wide_{spread_pips}pips"})
                     continue
 
-                candles_m15 = mt5_fetch_scalp_candles(
-                    mt5_sym, "M15", m15_count, include_forming=True
-                )
+                candles_m15 = mt5_fetch_scalp_candles(mt5_sym, "M15", m15_count, include_forming=True)
                 if len(candles_m15) < 30:
-                    _record_stability_sample(
-                        display, asset_type, False, reason="insufficient_m15_candles"
-                    )
+                    _record_stability_sample(display, asset_type, False, reason="insufficient_m15_candles")
                     skipped.append({"pair": display, "reason": "insufficient_m15_candles"})
                     continue
 
-                candles_m5 = mt5_fetch_scalp_candles(
-                    mt5_sym, "M5", m5_count, include_forming=True
-                )
+                candles_m5 = mt5_fetch_scalp_candles(mt5_sym, "M5", m5_count, include_forming=True)
                 if len(candles_m5) < 10:
-                    _record_stability_sample(
-                        display, asset_type, False, reason="insufficient_m5_candles"
-                    )
+                    _record_stability_sample(display, asset_type, False, reason="insufficient_m5_candles")
                     skipped.append({"pair": display, "reason": "insufficient_m5_candles"})
                     continue
 
                 live_price = mt5_get_live_price(mt5_sym)
-                current_price = (
-                    live_price if live_price and live_price > 0 else candles_m5[-1]["close"]
-                )
+                current_price = live_price if live_price and live_price > 0 else candles_m5[-1]["close"]
                 htf_bias = None
 
-                if use_bias_filter:
-                    candles_bias = mt5_fetch_scalp_candles(
-                        mt5_sym, bias_tf, h1_count, include_forming=True
-                    )
+                if use_bias:
+                    candles_bias = mt5_fetch_scalp_candles(mt5_sym, bias_tf, h1_count, include_forming=True)
                     if len(candles_bias) < 200:
-                        _record_stability_sample(
-                            display,
-                            asset_type,
-                            False,
-                            reason=f"insufficient_{bias_tf.lower()}_candles",
-                        )
+                        _record_stability_sample(display, asset_type, False,
+                                                 reason=f"insufficient_{bias_tf.lower()}_candles")
                         skipped.append({"pair": display, "reason": f"insufficient_{bias_tf.lower()}_candles"})
                         continue
                     htf_bias = infer_bias_from_ema_stack(candles_bias)
-                    log.debug(
-                        f"[SCALP] {display} HTF bias ({bias_tf}): "
-                        f"{htf_bias or 'None — mixed EMA, bias filter inactive'}"
-                    )
 
-            # Pipeline
-            zone     = detect_m15_zone(candles_m15, current_price)
-            if not zone["valid"]:
-                _record_stability_sample(
-                    display, asset_type, False, reason=f"no_zone:{zone.get('reason', '?')}"
-                )
-                skipped.append({"pair": display, "reason": f"no_zone:{zone.get('reason', '?')}"})
+            # ══════════════════════════════════════════════════════════════
+            # FABIO VALENTINI PIPELINE
+            # ══════════════════════════════════════════════════════════════
+
+            # Pillar 1: Volume Profile — market state + location
+            vp = _build_volume_profile(candles_m15)
+            if not vp.get("valid"):
+                _record_stability_sample(display, asset_type, False, reason=f"vp_invalid:{vp.get('reason', '?')}")
+                skipped.append({"pair": display, "reason": f"vp_invalid:{vp.get('reason', '?')}"})
                 continue
 
-            trigger  = detect_m5_trigger(candles_m5, zone, current_price)
-            if not trigger["valid"]:
-                _record_stability_sample(
-                    display, asset_type, False, reason=f"no_trigger:{trigger.get('reason', '?')}"
-                )
-                skipped.append({"pair": display, "reason": f"no_trigger:{trigger.get('reason', '?')}"})
+            market_state = _classify_market_state(vp)
+            price_loc = _locate_price_vs_vp(current_price, vp)
+
+            # Pillar 2: Aggression — absorption, CVD, AAA
+            absorption = _check_absorption(candles_m5)
+            cvd = _check_cvd(candles_m5)
+            aaa = _check_aaa_sequence(candles_m5, absorption, cvd)
+
+            # Pillar 3: VWAP directional lean
+            vwap = _check_vwap_lean(candles_m15, current_price)
+
+            # Setup classification
+            setup = _classify_setup(market_state, price_loc, absorption, cvd, aaa, vwap, htf_bias)
+            if not setup.get("valid"):
+                _record_stability_sample(display, asset_type, False,
+                                         reason=f"no_setup:{setup.get('reason', '?')}")
+                skipped.append({"pair": display, "reason": f"no_setup:{setup.get('reason', '?')}"})
                 continue
 
-            if use_bias_filter and htf_bias and trigger["direction"] != htf_bias:
-                _record_stability_sample(
-                    display,
-                    asset_type,
-                    False,
-                    feature_map={"bias_aligned": False},
-                    reason=f"counter_trend:{trigger['direction']}_vs_{bias_tf}_{htf_bias}",
-                )
-                skipped.append(
-                    {
-                        "pair": display,
-                        "reason": f"counter_trend:{trigger['direction']}_vs_{bias_tf}_{htf_bias}",
-                    }
-                )
+            direction = setup["direction"]
+
+            # HTF bias filter
+            if use_bias and htf_bias and direction != htf_bias:
+                _record_stability_sample(display, asset_type, False,
+                                         feature_map={"bias_aligned": False},
+                                         reason=f"counter_trend:{direction}_vs_{bias_tf}_{htf_bias}")
+                skipped.append({"pair": display, "reason": f"counter_trend:{direction}_vs_{bias_tf}_{htf_bias}"})
                 continue
 
-            momentum = confirm_momentum(candles_m5, trigger)
-            if not momentum["valid"]:
-                _record_stability_sample(
-                    display, asset_type, False, reason=f"no_momentum:{momentum.get('reason', '?')}"
-                )
-                skipped.append({"pair": display, "reason": f"no_momentum:{momentum.get('reason', '?')}"})
+            # Risk levels
+            levels = calculate_scalp_levels(direction, current_price, vp, setup["setup_type"], sym_info, asset_type)
+
+            # Quality grade
+            quality = ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup, sessions, spread_pips, htf_bias)
+
+            # Grade gate
+            grade = quality["grade"]
+            if min_grade == "C" and grade == "D":
+                _record_stability_sample(display, asset_type, False, reason=f"grade_D_skip")
+                skipped.append({"pair": display, "reason": "grade_D_skip"})
+                continue
+            if min_grade == "B" and grade in ("C", "D"):
+                _record_stability_sample(display, asset_type, False, reason=f"grade_{grade}_below_min")
+                skipped.append({"pair": display, "reason": f"grade_{grade}_below_min"})
                 continue
 
-            levels   = calculate_scalp_levels(trigger, zone, candles_m15, sym_info, asset_type)
-            quality  = ai_quality_grade(zone, trigger, momentum, sessions, spread_pips, sym_info)
-
+            # ── Build signal dict (preserves keys required by athena.py) ─
             signal = {
-                "pair":          display,
-                "display":       display,
-                "symbol":        display.replace("/", "") if asset_type == "crypto" else None,
-                "mt5_symbol":    mt5_sym,
-                "type":          asset_type,
-                "direction":     trigger["direction"],
-                "price":         levels["entry"],
-                "sl":            levels["sl"],
-                "tp1":           levels["tp1"],
-                "tp2":           levels["tp2"],
-                "rr1":           levels["rr"],
-                "sl_distance":   levels["sl_distance"],
-                "sl_method":     levels["sl_method"],
-                "zone_type":     zone["zone_type"],
-                "zone_high":     zone["zone_high"],
-                "zone_low":      zone["zone_low"],
-                "zone_level":    zone["zone_level"],
-                "zone_conditions": zone["conditions_met"],
-                "trigger_type":  trigger["trigger_type"],
-                "momentum_method": momentum["method"],
-                "ai_score":      quality["score"],
-                "ai_grade":      quality["grade"],
-                "ai_reasons":    quality["reasons"],
-                "spread_pips":   spread_pips,
-                "session":       session_name,
-                "ema21":         zone.get("ema21"),
-                "htf_bias":      htf_bias,
-                "htf_bias_tf":   bias_tf if use_bias_filter else None,
-                "timestamp":     datetime.now(timezone.utc).isoformat(),
-                "engine":        "SCALP",
+                "pair":            display,
+                "display":         display,
+                "symbol":          display.replace("/", "") if asset_type == "crypto" else None,
+                "mt5_symbol":      mt5_sym,
+                "type":            asset_type,
+                "direction":       direction,
+                "price":           levels["entry"],
+                "sl":              levels["sl"],
+                "tp1":             levels["tp1"],
+                "tp2":             levels["tp2"],
+                "rr1":             levels["rr"],
+                "sl_distance":     levels["sl_distance"],
+                "sl_method":       levels["sl_method"],
+                # VP fields
+                "zone_type":       setup["setup_type"],
+                "zone_high":       vp.get("vah"),
+                "zone_low":        vp.get("val"),
+                "zone_level":      vp.get("poc"),
+                "zone_conditions": setup.get("reasons", []),
+                # Trigger/momentum fields mapped from new pipeline
+                "trigger_type":    setup["setup_type"],
+                "momentum_method": "absorption" if absorption.get("detected") else "cvd",
+                # Quality
+                "ai_score":        quality["score"],
+                "ai_grade":        quality["grade"],
+                "ai_reasons":      quality["reasons"],
+                "size_multiplier": quality["size_multiplier"],
+                # Context
+                "spread_pips":     spread_pips,
+                "session":         session_name,
+                "ema21":           None,  # replaced by VWAP
+                "vwap":            vwap.get("vwap_value"),
+                "market_state":    market_state,
+                "vp_poc":          vp.get("poc"),
+                "vp_vah":          vp.get("vah"),
+                "vp_val":          vp.get("val"),
+                "vp_lvn_count":    len(vp.get("lvn_levels", [])),
+                "absorption_count": absorption.get("count", 0),
+                "cvd_direction":   cvd.get("direction"),
+                "cvd_slope":       cvd.get("cvd_slope"),
+                "aaa_complete":    aaa.get("complete", False),
+                "htf_bias":        htf_bias,
+                "htf_bias_tf":     bias_tf if use_bias else None,
+                "timestamp":       datetime.now(timezone.utc).isoformat(),
+                "engine":          "SCALP",
                 # Fields required by risk_engine.risk_check()
                 "confluenceScore": quality["score"] / 100.0,
                 "maxScore":        1.0,
             }
             signals.append(signal)
             _record_stability_sample(
-                display,
-                asset_type,
-                True,
+                display, asset_type, True,
                 score_norm=quality["score"] / 100.0,
                 feature_map={
-                    "zone_conditions": zone.get("conditions_count", 0) / 3.0,
-                    "liquidity_sweep": "liquidity_sweep" in zone.get("conditions_met", []),
-                    "trigger_rejection": trigger.get("trigger_type") == "rejection",
-                    "momentum_structure_break": momentum.get("method") == "structure_break",
+                    "market_state": 1.0 if market_state == "balance" else 0.0,
+                    "location": price_loc.get("location", "unknown"),
+                    "absorption": absorption.get("detected", False),
+                    "cvd_aligned": cvd.get("direction") == direction,
+                    "aaa_complete": aaa.get("complete", False),
+                    "vwap_aligned": vwap.get("lean") == direction,
                     "spread_pips": spread_pips,
-                    "bias_aligned": False if (use_bias_filter and htf_bias and trigger["direction"] != htf_bias) else True,
+                    "bias_aligned": htf_bias == direction if htf_bias else True,
                 },
             )
 
         except Exception as e:
             log.error(f"[SCALP] Error on {display}: {e}")
-            _record_stability_sample(
-                display, _guess_asset_type(display), False, reason=f"error:{str(e)[:60]}"
-            )
+            _record_stability_sample(display, _guess_asset_type(display), False, reason=f"error:{str(e)[:60]}")
             skipped.append({"pair": display, "reason": f"error:{str(e)[:60]}"})
 
-    # Sort by AI score descending
     signals.sort(key=lambda s: s.get("ai_score", 0), reverse=True)
 
     log.warning(
@@ -1033,7 +1282,9 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
     }
 
 
-# ── Asset type helper ─────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# ASSET TYPE HELPER
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def _guess_asset_type(display: str) -> str:
     """Infer asset type from display name for buffers and spread limits."""
@@ -1050,15 +1301,16 @@ def _guess_asset_type(display: str) -> str:
     return "stock"
 
 
-# ── Scalp pairs list ──────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# SCALP PAIRS LIST
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def get_scalp_pairs(active_pair_dicts: Optional[list[dict[str, Any]]] = None) -> list:
     """Return display names to scan for Engine D.
 
     Priority:
-    1. ``SCALP_ENGINE.SCALP_PAIRS`` in config — explicit override.
-    2. If ``active_pair_dicts`` is provided (e.g. ``rt().ACTIVE_PAIRS``): enabled pairs
-       with ``source`` mt5 (forex/commodity/index/stock) or binance (crypto).
+    1. SCALP_ENGINE.SCALP_PAIRS in config — explicit override.
+    2. If active_pair_dicts is provided: enabled pairs with source mt5 or binance.
     3. Legacy built-in list (~54) when no runtime list is passed.
     """
     cfg = CONFIG.get("SCALP_ENGINE", {})
@@ -1082,27 +1334,22 @@ def get_scalp_pairs(active_pair_dicts: Optional[list[dict[str, Any]]] = None) ->
                 out.append(disp)
         return sorted(set(out), key=str.casefold)
 
-    # Full MT5 forex majors + minors
     mt5_forex = [
         "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "NZD/USD",
         "USD/CAD", "USD/CHF", "EUR/JPY", "GBP/JPY", "EUR/AUD",
         "EUR/GBP", "AUD/JPY", "GBP/AUD", "EUR/CHF",
     ]
-    # Exotic forex (wider spreads — spread filter handles rejection)
     mt5_exotic = [
         "USD/ZAR", "USD/MXN", "USD/SGD",
     ]
-    # Commodities
     mt5_commodities = [
         "XAU/USD", "XAG/USD", "WTI Oil", "Brent Oil", "Nat Gas",
         "Copper", "XPT/USD", "XPD/USD",
     ]
-    # Indices
     mt5_indices = [
         "S&P 500", "Nasdaq", "Dow Jones", "DAX 40", "UK100",
         "ASX 200", "Nikkei 225", "Euro Stoxx 50",
     ]
-    # US Stocks (CFDs)
     mt5_stocks = [
         "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META",
         "GOOG", "JPM", "NFLX", "AMD", "COIN", "PLTR",

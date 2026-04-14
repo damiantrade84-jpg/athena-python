@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 
 import scalp_engine
 import mt5_executor
+import indicators
+import volume_profile
 from scalp_engine import (
     get_current_sessions,
     infer_bias_from_ema_stack,
@@ -475,3 +477,152 @@ def test_vp_val_lt_vah():
     if vp["profile_valid"]:
         assert vp["val"] < vp["vah"]
         assert vp["val"] <= vp["poc"] <= vp["vah"]
+
+
+def test_build_vp_calls_external_helper_with_live_config(monkeypatch):
+    captured = {}
+
+    def _fake_vp(candles, *, bins, value_area_pct):
+        captured["bins"] = bins
+        captured["value_area_pct"] = value_area_pct
+        return {
+            "poc": 100.5,
+            "vah": 101.0,
+            "val": 100.0,
+            "profile_valid": True,
+            "session_high": 102.0,
+            "session_low": 98.0,
+        }
+
+    monkeypatch.setattr(volume_profile, "compute_fixed_range_volume_profile", _fake_vp)
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "VP_BINS": 48,
+            "VP_VALUE_AREA_PCT": 0.65,
+        },
+    )
+    vp = _build_volume_profile(_candles(60, spread=2.0))
+    assert captured == {"bins": 48, "value_area_pct": 0.65}
+    assert vp["valid"] is True
+    assert vp["balance_ratio"] == 0.25
+
+
+def test_check_absorption_does_not_false_positive_on_plain_rows():
+    r = _check_absorption(_candles(30, vol=100, spread=1.0))
+    assert r == {"detected": False, "count": 0, "bars": []}
+
+
+def test_check_cvd_uses_indicator_cvd_output_and_config(monkeypatch):
+    captured = {}
+
+    def _fake_calc_cvd(candles, *, smooth_period):
+        captured["smooth_period"] = smooth_period
+        return {"cvd": [1.0, 2.0, 3.0, 4.0, 7.0, 9.0]}
+
+    monkeypatch.setattr(indicators, "calc_cvd", _fake_calc_cvd)
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {**scalp_engine.CONFIG.get("SCALP_ENGINE", {}), "CVD_SMOOTH_PERIOD": 7},
+    )
+    r = _check_cvd(_candles(20))
+    assert captured["smooth_period"] == 7
+    assert r["direction"] == "LONG"
+    assert r["cvd_value"] == 9.0
+
+
+def test_check_aaa_sequence_honors_contracting_key(monkeypatch):
+    def _fake_contraction(candles, *, lookback, threshold):
+        return {"contracting": True, "ratio": 0.4}
+
+    monkeypatch.setattr(indicators, "detect_range_contraction", _fake_contraction)
+    candles = _candles(30, vol=100, spread=2.0)
+    candles[-1] = {
+        "time": "T29",
+        "open": 100.0,
+        "high": 102.0,
+        "low": 99.8,
+        "close": 101.9,
+        "vol": 500.0,
+    }
+    r = _check_aaa_sequence(candles, {"detected": True, "count": 1, "bars": [{}]}, {"direction": "LONG"})
+    assert r["complete"] is True
+    assert r["phase"] == "aggression"
+
+
+def test_check_vwap_lean_uses_last_indicator_value_and_config(monkeypatch):
+    captured = {}
+
+    def _fake_calc_vwap(candles, *, anchor_index=0, band_mult=0.5):
+        captured["anchor_index"] = anchor_index
+        captured["band_mult"] = band_mult
+        return {"vwap": [None, 99.5, 101.25], "upper_band": [], "lower_band": []}
+
+    monkeypatch.setattr(indicators, "calc_vwap", _fake_calc_vwap)
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {**scalp_engine.CONFIG.get("SCALP_ENGINE", {}), "VWAP_BAND_MULT": 0.8},
+    )
+    r = scalp_engine._check_vwap_lean(_candles(5), 102.0)
+    assert captured == {"anchor_index": 0, "band_mult": 0.8}
+    assert r == {"lean": "LONG", "vwap_value": 101.25}
+
+
+def test_grade_uses_explicit_config_size_multipliers(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "GRADE_B_SIZE_MULT": 0.75,
+        },
+    )
+    vp = {"poc": 1.1030, "vah": 1.1060, "val": 1.0970, "lvn_levels": [], "balance_ratio": 0.5}
+    price_loc = {"location": "at_vah", "nearest_level": 1.1060, "distance_pct": 0.0}
+    absorption = {"detected": True, "count": 1}
+    cvd = {"direction": "SHORT"}
+    aaa = {"complete": False, "phase": "absorption_only"}
+    vwap = {"lean": None}
+    setup = {"direction": "SHORT", "setup_type": "mean_reversion"}
+    q = ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup, ["london"], 1.5, None)
+    assert q["grade"] == "B"
+    assert q["size_multiplier"] == 0.75
+
+
+def test_run_scalp_scan_prefers_min_grade_auto_execute(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "MIN_GRADE_AUTO_EXECUTE": "B",
+            "MIN_GRADE": "C",
+        },
+    )
+    monkeypatch.setattr(scalp_engine, "get_current_sessions", lambda: ["london"])
+    monkeypatch.setattr(scalp_engine, "is_valid_session", lambda asset="forex": (True, "london"))
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")
+    monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda display: {"digits": 5, "point": 0.00001, "spread": 10})
+    monkeypatch.setattr(scalp_engine, "check_spread", lambda sym_info, asset_type: (True, 1.0))
+    monkeypatch.setattr(scalp_engine, "mt5_fetch_scalp_candles", lambda *args, **kwargs: _candles(300))
+    monkeypatch.setattr(scalp_engine, "mt5_get_live_price", lambda symbol: 100.0)
+    monkeypatch.setattr(scalp_engine, "_build_volume_profile", lambda candles: {"valid": True, "poc": 100.0, "vah": 101.0, "val": 99.0})
+    monkeypatch.setattr(scalp_engine, "_classify_market_state", lambda vp: "balance")
+    monkeypatch.setattr(scalp_engine, "_locate_price_vs_vp", lambda price, vp: {"location": "at_val", "nearest_level": 99.0, "distance_pct": 0.0})
+    monkeypatch.setattr(scalp_engine, "_check_absorption", lambda candles: {"detected": True, "count": 1, "bars": [{}]})
+    monkeypatch.setattr(scalp_engine, "_check_cvd", lambda candles: {"direction": "LONG", "cvd_slope": 1.0})
+    monkeypatch.setattr(scalp_engine, "_check_aaa_sequence", lambda candles, absorption, cvd: {"complete": False, "phase": "absorption_only"})
+    monkeypatch.setattr(scalp_engine, "_check_vwap_lean", lambda candles, price: {"lean": "LONG", "vwap_value": 100.0})
+    monkeypatch.setattr(scalp_engine, "_classify_setup", lambda *args, **kwargs: {"valid": True, "direction": "LONG", "setup_type": "mean_reversion", "reasons": []})
+    monkeypatch.setattr(scalp_engine, "calculate_scalp_levels", lambda *args, **kwargs: {"entry": 100.0, "sl": 99.0, "tp1": 102.0, "tp2": 103.0, "rr": 2.0, "sl_distance": 1.0, "sl_method": "vp_boundary"})
+    monkeypatch.setattr(scalp_engine, "ai_quality_grade", lambda *args, **kwargs: {"score": 55, "grade": "C", "reasons": [], "size_multiplier": 0.25})
+    monkeypatch.setattr(scalp_engine, "record_signal_event", lambda **kwargs: None)
+
+    result = scalp_engine.run_scalp_scan(["EUR/USD"])
+    assert result["signals"] == []
+    assert result["skipped"][0]["reason"] == "grade_C_below_min"

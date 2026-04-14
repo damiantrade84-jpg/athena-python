@@ -7703,6 +7703,7 @@ def api_scalp_execute():
             open_positions=positions,
             symbol_info=symbol_info,
             kill_switch=_kill_switch,
+            sizing_override=float(signal.get("size_multiplier", 1.0) or 1.0),
         )
         if not approval.approved:
             return jsonify(

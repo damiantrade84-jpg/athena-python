@@ -4449,7 +4449,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
 
     # ── Walk-forward backtest loop ──────────────────────────────────────────
     trades = []
-    open_positions = 0
+    active_exit_indices = []
     same_bar_both_hit_count = 0
     min_lookback = 80  # need enough bars for VP computation
 
@@ -4457,8 +4457,9 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     total_bars = len(candles)
 
     for i in range(min_lookback, total_bars - walk_bars - 1):
+        active_exit_indices = [exit_idx for exit_idx in active_exit_indices if exit_idx > i]
         # Skip if at max concurrent positions
-        if open_positions >= max_concurrent:
+        if len(active_exit_indices) >= max_concurrent:
             continue
 
         # Current bar context
@@ -4715,11 +4716,8 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             "choch_confirmed": False,
         }
         trades.append(trade)
-        open_positions += 1
-
-        # Decrement open_positions when the trade exits
-        # (simplified: since we walk sequentially, we just decrement after walk)
-        open_positions = max(0, open_positions - 1)
+        if exit_bar_idx is not None:
+            active_exit_indices.append(exit_bar_idx)
 
     # ── Format results ──────────────────────────────────────────────────────
     if not trades:

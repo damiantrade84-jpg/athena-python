@@ -4,6 +4,9 @@ import sys
 
 import execution
 import scalp_engine
+import mt5_executor
+import risk_engine
+import execution_lifecycle
 
 
 def _load_athena_module():
@@ -102,3 +105,56 @@ def test_scan_style_auto_resolution_contract():
     assert athena_module._resolve_scan_style("auto", {"type": "crypto"}) == "intraday"
     assert athena_module._resolve_scan_style("auto", {"type": "stock"}) == "swing"
     assert athena_module._resolve_scan_style("swing", {"type": "forex"}) == "swing"
+
+
+def test_scalp_execute_passes_size_multiplier_to_risk_engine(monkeypatch):
+    athena_module = _load_athena_module()
+    captured = {}
+
+    monkeypatch.setattr(
+        scalp_engine,
+        "run_scalp_scan",
+        lambda pairs: {
+            "signals": [
+                {
+                    "pair": "EUR/USD",
+                    "direction": "LONG",
+                    "type": "forex",
+                    "price": 1.1,
+                    "sl": 1.095,
+                    "tp1": 1.11,
+                    "size_multiplier": 0.25,
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(mt5_executor, "mt5_get_account", lambda: {"balance": 10000.0, "equity": 10000.0})
+    monkeypatch.setattr(mt5_executor, "mt5_get_positions", lambda: {"positions": []})
+    monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda symbol: {"digits": 5, "point": 0.00001})
+
+    class _Approval:
+        approved = True
+        reason = "OK"
+
+        @staticmethod
+        def to_dict():
+            return {"approved": True, "reason": "OK"}
+
+    def _fake_risk_check(**kwargs):
+        captured["sizing_override"] = kwargs["sizing_override"]
+        return _Approval()
+
+    monkeypatch.setattr(risk_engine, "risk_check", _fake_risk_check)
+    monkeypatch.setattr(
+        execution_lifecycle,
+        "run_managed_execution",
+        lambda venue, signal, approval: {"success": True, "ticket": "123", "volume": 0.01, "entry_price": 1.1},
+    )
+
+    client = athena_module.app.test_client()
+    resp = client.post("/api/scalp-execute", json={"symbol": "EUR/USD"})
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["success"] is True
+    assert captured["sizing_override"] == 0.25

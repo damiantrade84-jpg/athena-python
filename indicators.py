@@ -1214,3 +1214,224 @@ def volume_strength_at_level(candles: list, level: float, lookback: int = 20) ->
         if abs(c["close"] - level) < (c["high"] - c["low"]) * 0.5
     )
     return min(1.0, level_vol / (avg_vol * 0.6))
+
+
+def calc_vwap(candles: list, *, anchor_index: int = 0, band_mult: float = 0.5) -> dict:
+    """Session-anchored VWAP with ATR-based bands.
+
+    Args:
+        candles: list of dicts with keys: high, low, close, vol
+        anchor_index: bar index to start VWAP calculation from (0 = first bar)
+        band_mult: ATR multiplier used for the VWAP bands
+
+    Returns:
+        {vwap: list[float], upper_band: list[float], lower_band: list[float],
+         atr_band_width: float}
+    """
+    if not candles or len(candles) < 2:
+        return {"vwap": [], "upper_band": [], "lower_band": []}
+
+    vwap_values = []
+    upper_band = []
+    lower_band = []
+    cum_vol = 0.0
+    cum_tp_vol = 0.0
+
+    # ATR for band width (14-period)
+    highs = [float(c.get("high", 0)) for c in candles]
+    lows = [float(c.get("low", 0)) for c in candles]
+    closes = [float(c.get("close", 0)) for c in candles]
+    atr_list = calc_atr(highs, lows, closes, 14)
+    band_mult = float(band_mult)
+
+    for i, c in enumerate(candles):
+        if i < anchor_index:
+            vwap_values.append(None)
+            upper_band.append(None)
+            lower_band.append(None)
+            continue
+
+        typical_price = (float(c.get("high", 0)) + float(c.get("low", 0)) + float(c.get("close", 0))) / 3.0
+        vol = float(c.get("vol", 0)) or 1.0  # fallback to 1.0 to avoid div-by-zero
+        cum_tp_vol += typical_price * vol
+        cum_vol += vol
+
+        vwap_val = cum_tp_vol / cum_vol if cum_vol > 0 else typical_price
+        vwap_values.append(round(vwap_val, 8))
+
+        # ATR band
+        atr_val = atr_list[i] if i < len(atr_list) else (atr_list[-1] if atr_list else 0)
+        band_offset = atr_val * band_mult if atr_val else 0
+        upper_band.append(round(vwap_val + band_offset, 8))
+        lower_band.append(round(vwap_val - band_offset, 8))
+
+    return {
+        "vwap": vwap_values,
+        "upper_band": upper_band,
+        "lower_band": lower_band,
+        "atr_band_width": band_mult,
+    }
+
+
+def detect_absorption(candles: list, *, vol_mult: float = 2.0, max_move_atr: float = 0.3, sma_period: int = 20) -> list:
+    """Detect absorption candles: high volume + small price movement.
+
+    Based on Fabio Valentini's Pine Script absorption formula:
+        volume > SMA(volume, 20) * 2.0  AND  |close - open| / ATR < 0.3
+
+    Args:
+        candles: list of dicts with keys: open, high, low, close, vol
+        vol_mult: volume must exceed SMA * this multiplier (default 2.0, range 1.5-3.5)
+        max_move_atr: max candle body as fraction of ATR (default 0.3)
+        sma_period: SMA period for average volume (default 20)
+
+    Returns:
+        list of dicts per candle: {absorbed: bool, vol_ratio: float, move_ratio: float, direction: str}
+    """
+    if not candles or len(candles) < sma_period + 1:
+        return []
+
+    highs = [float(c.get("high", 0)) for c in candles]
+    lows = [float(c.get("low", 0)) for c in candles]
+    closes = [float(c.get("close", 0)) for c in candles]
+    opens = [float(c.get("open", 0)) for c in candles]
+    vols = [float(c.get("vol", 0)) for c in candles]
+
+    atr_list = calc_atr(highs, lows, closes, 14)
+    vol_sma = calc_sma(vols, sma_period)
+
+    results = []
+    for i in range(len(candles)):
+        if i < sma_period or i >= len(atr_list) or i >= len(vol_sma):
+            results.append({"absorbed": False, "vol_ratio": 0.0, "move_ratio": 0.0, "direction": "neutral"})
+            continue
+
+        atr_val = atr_list[i] if atr_list[i] and atr_list[i] > 0 else 1e-10
+        avg_vol = vol_sma[i] if vol_sma[i] and vol_sma[i] > 0 else 1e-10
+
+        body = abs(closes[i] - opens[i])
+        vol_ratio = vols[i] / avg_vol
+        move_ratio = body / atr_val
+
+        absorbed = vol_ratio >= vol_mult and move_ratio < max_move_atr
+
+        # Direction of absorption: which side absorbed the aggression
+        if absorbed:
+            if closes[i] >= opens[i]:
+                direction = "bullish"  # buyers absorbed selling pressure
+            else:
+                direction = "bearish"  # sellers absorbed buying pressure
+        else:
+            direction = "neutral"
+
+        results.append({
+            "absorbed": absorbed,
+            "vol_ratio": round(vol_ratio, 3),
+            "move_ratio": round(move_ratio, 3),
+            "direction": direction,
+        })
+
+    return results
+
+
+def calc_cvd(candles: list, *, smooth_period: int = 5) -> dict:
+    """Cumulative Volume Delta — candle-based buy/sell pressure approximation.
+
+    Approximation method (matches Fabio's Pine Script):
+        - Bullish candle (close > open): buy_vol = vol * (close - low) / (high - low)
+        - Bearish candle (close < open): sell_vol = vol * (high - close) / (high - low)
+        - Delta per bar = buy_vol - sell_vol
+        - CVD = cumulative sum of delta
+        - Smoothed delta = SMA(delta, smooth_period)
+
+    Args:
+        candles: list of dicts with keys: open, high, low, close, vol
+        smooth_period: smoothing period for delta (default 5)
+
+    Returns:
+        {delta: list[float], cvd: list[float], smoothed_delta: list[float]}
+    """
+    if not candles:
+        return {"delta": [], "cvd": [], "smoothed_delta": []}
+
+    deltas = []
+    cvd_values = []
+    cumulative = 0.0
+
+    for c in candles:
+        o = float(c.get("open", 0))
+        h = float(c.get("high", 0))
+        lo = float(c.get("low", 0))
+        cl = float(c.get("close", 0))
+        vol = float(c.get("vol", 0))
+
+        candle_range = h - lo
+        if candle_range <= 0 or vol <= 0:
+            deltas.append(0.0)
+            cumulative += 0.0
+            cvd_values.append(round(cumulative, 4))
+            continue
+
+        # Buy volume: proportion of range from low to close
+        buy_vol = vol * (cl - lo) / candle_range
+        # Sell volume: proportion of range from close to high (inverted)
+        sell_vol = vol * (h - cl) / candle_range
+        delta = buy_vol - sell_vol
+
+        deltas.append(round(delta, 4))
+        cumulative += delta
+        cvd_values.append(round(cumulative, 4))
+
+    # Smooth delta
+    smoothed = calc_sma(deltas, smooth_period) if len(deltas) >= smooth_period else deltas[:]
+
+    return {
+        "delta": deltas,
+        "cvd": cvd_values,
+        "smoothed_delta": smoothed,
+    }
+
+
+def detect_range_contraction(candles: list, *, lookback: int = 10, threshold: float = 0.5) -> dict:
+    """Detect range contraction (accumulation phase of AAA framework).
+
+    Compares the ATR of the last `lookback` bars to the ATR of the preceding
+    `lookback` bars. If current ATR is below `threshold` fraction of prior ATR,
+    accumulation is flagged.
+
+    Args:
+        candles: list of dicts with keys: high, low, close
+        lookback: number of bars to compare (default 10)
+        threshold: contraction ratio threshold (default 0.5 = 50% of prior ATR)
+
+    Returns:
+        {contracting: bool, ratio: float, current_atr: float, prior_atr: float}
+    """
+    if not candles or len(candles) < lookback * 2 + 14:
+        return {"contracting": False, "ratio": 1.0, "current_atr": 0.0, "prior_atr": 0.0}
+
+    highs = [float(c.get("high", 0)) for c in candles]
+    lows = [float(c.get("low", 0)) for c in candles]
+    closes = [float(c.get("close", 0)) for c in candles]
+    atr_list = calc_atr(highs, lows, closes, 14)
+
+    if len(atr_list) < lookback * 2:
+        return {"contracting": False, "ratio": 1.0, "current_atr": 0.0, "prior_atr": 0.0}
+
+    current_slice = atr_list[-lookback:]
+    prior_slice = atr_list[-(lookback * 2):-lookback]
+
+    current_avg = sum(current_slice) / len(current_slice) if current_slice else 0
+    prior_avg = sum(prior_slice) / len(prior_slice) if prior_slice else 0
+
+    if prior_avg <= 0:
+        return {"contracting": False, "ratio": 1.0, "current_atr": current_avg, "prior_atr": prior_avg}
+
+    ratio = current_avg / prior_avg
+
+    return {
+        "contracting": ratio < threshold,
+        "ratio": round(ratio, 4),
+        "current_atr": round(current_avg, 8),
+        "prior_atr": round(prior_avg, 8),
+    }
