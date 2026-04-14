@@ -3441,12 +3441,15 @@ def _refresh_news_cache(pairs: list | None = None) -> dict:
 
 
 def _news_updater_loop():
-    while True:
-        try:
-            _refresh_news_cache(None)
-        except Exception as e:
-            log.warning(f"[NEWS] Background refresh failed: {e}")
-        time.sleep(_NEWS_BG_INTERVAL_SEC)
+    """One-shot refresh for on-demand use."""
+    try:
+        _refresh_news_cache(None)
+    except Exception as e:
+        log.warning(f"[NEWS] Background refresh failed: {e}")
+    
+    global _news_thread_started
+    with _news_thread_lock:
+        _news_thread_started = False
 
 
 def _ensure_news_background_started():
@@ -3464,7 +3467,7 @@ def _ensure_news_background_started():
         _t.start()
         _news_thread_started = True
         log.info(
-            f"[NEWS] Background updater started (interval {_NEWS_BG_INTERVAL_SEC / 60:.1f} min)"
+            f"[NEWS] On-demand news refresh triggered (TTL {_NEWS_BG_INTERVAL_SEC / 60:.1f} min)"
         )
 
 
@@ -3491,8 +3494,17 @@ def _filter_news_ctx_for_pairs(data: dict, pairs: list | None) -> dict:
     return out
 
 
-def fetch_news_context(pairs: list | None = None):
-    """Return cached news context immediately (populated by background thread)."""
+def fetch_news_context(pairs: list | None = None, allow_refresh: bool = True):
+    """Return cached news context immediately. Trigger refresh if missing or expired (unless allow_refresh is False)."""
+    global _news_cache
+    now = time.time()
+    
+    with _news_lock:
+        stale = _news_cache["data"] is None or (now - _news_cache["ts"]) > _NEWS_BG_INTERVAL_SEC
+    
+    if stale and allow_refresh:
+        _ensure_news_background_started()
+        
     with _news_lock:
         data = _news_cache["data"]
     return _filter_news_ctx_for_pairs(data if data is not None else {}, pairs)
@@ -12476,12 +12488,18 @@ def ensure_runtime_services_started() -> None:
             set_candle_builder(CandleBuilder())
 
         def _cb_startup():
-            _ensure_news_background_started()
+            # Background news work removed from startup to prevent heavy load. 
+            # It will now start on-demand when fetch_news_context is called.
             cb = get_candle_builder()
             if cb is None:
                 return
-            _seed_pairs = [p for p in ALL_PAIRS if p.get("source") == "eodhd"]
-            cb.seed(_seed_pairs)  # seed 6mo H1/H4/D1
+            
+            # Heavy historical seeding removed from startup to prevent machine freeze. 
+            # fetch_candles() in candles_cache.py automatically falls back to REST 
+            # during the first scan if the cache is missing.
+            # _seed_pairs = [p for p in ALL_PAIRS if p.get("source") == "eodhd"]
+            # cb.seed(_seed_pairs) 
+
             cb.bulk_update_d1()  # fresh D1 from Bulk API
             cb.start_refresh_loop()  # bulk D1 every 4h
 
@@ -12764,7 +12782,7 @@ if __name__ == "__main__":
         except Exception as e:
             log.warning(f"[DUKA] Startup seed failed: {e}")
 
-    threading.Thread(target=_duka_seed, daemon=True, name="DukaSeed").start()
+    # threading.Thread(target=_duka_seed, daemon=True, name="DukaSeed").start()
 
     # Seed COT (CFTC) and carry (FRED) data in background
     try:

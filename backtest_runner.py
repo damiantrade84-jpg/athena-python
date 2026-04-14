@@ -4575,7 +4575,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         if trigger_type is None:
             continue
 
-        # ── Step 4: Calculate entry, SL, TP ─────────────────────────────────
+        # ── Step 4: Calculate entry, SL, TP1, TP2 ───────────────────────────
         # Entry at next bar open (with slippage)
         if i + 1 >= total_bars:
             continue
@@ -4603,32 +4603,35 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         if sl_distance <= 0:
             continue
 
-        # TP1: POC for mean reversion, or min R:R
+        # TP1 & TP2 Calculation
+        tp2_enabled = cfg.get("TP2_ENABLED", True)
         if setup_type == "mean_reversion":
             if direction == "LONG":
-                tp1_vp = poc
-                tp1_min = entry + sl_distance * min_rr
-                tp1 = max(tp1_vp, tp1_min) if tp1_vp > entry else tp1_min
+                tp1 = max(poc, entry + sl_distance * min_rr) if poc > entry else entry + sl_distance * min_rr
+                tp2 = vah if tp2_enabled else None
             else:
-                tp1_vp = poc
-                tp1_min = entry - sl_distance * min_rr
-                tp1 = min(tp1_vp, tp1_min) if tp1_vp < entry else tp1_min
-        else:
+                tp1 = min(poc, entry - sl_distance * min_rr) if poc < entry else entry - sl_distance * min_rr
+                tp2 = val if tp2_enabled else None
+        else:  # trend
             if direction == "LONG":
-                tp1 = entry + sl_distance * min_rr
+                tp1 = max(vah, entry + sl_distance * min_rr) if vah > entry else entry + sl_distance * min_rr
+                tp2 = (vah + (vah - poc)) if tp2_enabled and vah > poc else (tp1 + sl_distance) if tp2_enabled else None
             else:
-                tp1 = entry - sl_distance * min_rr
+                tp1 = min(val, entry - sl_distance * min_rr) if val < entry else entry - sl_distance * min_rr
+                tp2 = (val - (poc - val)) if tp2_enabled and poc > val else (tp1 - sl_distance) if tp2_enabled else None
 
         actual_rr = abs(tp1 - entry) / sl_distance if sl_distance > 0 else 0
-        if actual_rr < 1.0:
-            continue  # skip trades with poor R:R
+        if actual_rr < 0.8:
+            continue
 
-        # ── Step 5: Walk forward to resolve exit ────────────────────────────
+        # ── Step 5: Walk forward to resolve exit (TP1 + TP2 modeling) ───────
         exit_reason = None
         exit_price = None
         exit_bar_idx = None
         best_favorable_r = 0.0
-
+        
+        has_hit_tp1 = False
+        
         for w in range(1, walk_bars + 1):
             walk_idx = i + 1 + w
             if walk_idx >= total_bars:
@@ -4639,32 +4642,72 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
                 best_favorable_r = max(best_favorable_r, max(0.0, (wbar["high"] - entry) / sl_distance))
             else:
                 best_favorable_r = max(best_favorable_r, max(0.0, (entry - wbar["low"]) / sl_distance))
+            
+            # Monitoring logic
+            current_sl = entry if has_hit_tp1 else sl
+            
+            # Resolve barrier
             outcome, both_hit = _resolve_barrier_exit(
-                wbar, direction=direction, sl=sl, tp1=tp1, tp2=None, sl_outcome="SL"
+                wbar, direction=direction, sl=current_sl, tp1=None if has_hit_tp1 else tp1, tp2=tp2, 
+                sl_outcome="BE" if has_hit_tp1 else "SL"
             )
             if both_hit:
                 same_bar_both_hit_count += 1
 
-            if outcome is not None:
-                exit_reason = outcome
-                exit_bar_idx = walk_idx
-                if outcome == "SL":
-                    exit_price = sl
-                elif outcome == "TP1":
+            if outcome == "TP1":
+                if tp2:
+                    has_hit_tp1 = True
+                    # Check if TP2 ALSO hit in same bar
+                    hit_tp2_same = (direction == "LONG" and float(wbar["high"]) >= tp2) or \
+                                   (direction == "SHORT" and float(wbar["low"]) <= tp2)
+                    if hit_tp2_same:
+                        exit_reason = "TP2"
+                        exit_price = (tp1 + tp2) / 2
+                        exit_bar_idx = walk_idx
+                        break
+                    # Otherwise continue to walk
+                    continue
+                else:
+                    exit_reason = "TP1"
                     exit_price = tp1
+                    exit_bar_idx = walk_idx
+                    break
+            
+            if outcome == "TP2":
+                exit_reason = "TP2"
+                exit_price = (tp1 + tp2) / 2 if has_hit_tp1 else tp2
+                exit_bar_idx = walk_idx
+                break
+                
+            if outcome in ("SL", "BE"):
+                if has_hit_tp1:
+                    exit_reason = "TP1_BE" if outcome == "BE" else "TP1_SL"
+                    exit_price = (tp1 + entry) / 2
+                else:
+                    exit_reason = outcome
+                    exit_price = sl
+                exit_bar_idx = walk_idx
                 break
 
             if scratch_enabled and w >= scratch_bars and best_favorable_r < scratch_min_r:
                 exit_reason = "SCRATCH_NO_FOLLOW_THROUGH"
                 exit_price = wbar["close"]
+                if has_hit_tp1:
+                    exit_price = (tp1 + exit_price) / 2
+                    exit_reason = "TP1_SCRATCH"
                 exit_bar_idx = walk_idx
                 break
 
         # Timeout if no SL/TP hit
         if exit_reason is None:
             timeout_idx = min(i + 1 + walk_bars, total_bars - 1)
-            exit_price = candles[timeout_idx]["close"]
-            exit_reason = "TIMEOUT"
+            t_price = candles[timeout_idx]["close"]
+            if has_hit_tp1:
+                exit_price = (tp1 + t_price) / 2
+                exit_reason = "TP1_TIMEOUT"
+            else:
+                exit_price = t_price
+                exit_reason = "TIMEOUT"
             exit_bar_idx = timeout_idx
 
         # Calculate R-multiple
@@ -4710,6 +4753,8 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             "entry": round(entry, 6),
             "sl": round(sl, 6),
             "tp1": round(tp1, 6),
+            "tp2": round(tp2, 6) if tp2 else round(tp1, 6),
+            "tp1_hit": has_hit_tp1,
             "exit_price": round(exit_price, 6),
             "exit_reason": exit_reason,
             "resultR": r_multiple,

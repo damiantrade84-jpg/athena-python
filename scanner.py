@@ -353,7 +353,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
         log.info("Fetching market context...")
 
-        news_ctx = r.fetch_news_context(candidate_pairs)
+        news_ctx = r.fetch_news_context(candidate_pairs, allow_refresh=False)
 
         try:
             yield_ctx = r.fetch_yield_curve()

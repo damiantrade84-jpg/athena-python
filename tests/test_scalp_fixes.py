@@ -1,0 +1,110 @@
+import pytest
+import types
+import time
+from unittest.mock import MagicMock, patch
+
+# Modules under test
+import timed_exit_monitor
+import backtest_runner
+import indicators
+import volume_profile
+import mt5_executor
+import scalp_engine
+
+# --- 1. Startup Logic Tests ---
+
+def test_startup_does_not_launch_news_polling():
+    """Verify that the background news polling is no longer in the startup sequence."""
+    athena_path = "athena.py"
+    with open(athena_path, "r", encoding="utf-8") as f:
+        athena_source = f.read()
+    
+    if "def _cb_startup():" in athena_source:
+        cb_block = athena_source.split("def _cb_startup():")[1].split("def ")[0]
+        assert "fetch_news_context(" not in cb_block
+    else:
+        pytest.fail("_cb_startup not found")
+
+# --- 2. Timed Exit Guard Tests ---
+
+def test_scalp_trades_excluded_from_timed_exit(monkeypatch):
+    """Ensure Engine D / scalp trades are ignored by the timed-exit monitor."""
+    row = {
+        "pair": "EURUSD",
+        "direction": "long",
+        "entry_price": 1.0500,
+        "ticket": 12345,
+        "engine": "scalp", 
+        "ts": "2026-04-14T10:00:00Z" 
+    }
+    
+    cfg = {"scalp": {"breakeven_min": 5, "close_min": 10}, "intraday": {}, "swing": {}}
+    
+    with patch("mt5_executor.mt5_get_positions") as mock_get_pos:
+        timed_exit_monitor._handle_mt5_row(row, cfg)
+        mock_get_pos.assert_not_called()
+
+    with patch("bybit_executor.bybit_get_positions") as mock_get_pos:
+        timed_exit_monitor._handle_bybit_row(row, cfg)
+        mock_get_pos.assert_not_called()
+
+# --- 3. Backtest TP1+TP2 Tests ---
+
+def _mock_scalp_setup(monkeypatch, candles, tp1, tp2):
+    monkeypatch.setitem(backtest_runner.CONFIG, "SCALP_ENGINE", {
+        "BT_ENABLED": True,
+        "BT_SESSION_MODE": "all",
+        "MIN_RR": 0.5,
+        "TP2_ENABLED": (tp2 is not None),
+        "BT_SCRATCH_ENABLED": False,
+        "SCALP_VP_LOOKBACK_BARS": 20
+    })
+
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda x: "EURUSD")
+    monkeypatch.setattr(scalp_engine, "mt5_fetch_scalp_candles", lambda *args, **kwargs: candles)
+    
+    monkeypatch.setattr(backtest_runner, "calc_atr", lambda *args: [1.0]*len(candles))
+    monkeypatch.setattr(volume_profile, "compute_fixed_range_volume_profile", lambda *args, **kwargs: {
+        "profile_valid": True, "poc": tp1, "vah": 105.0, "val": 99.5, "balance_ratio": 0.5
+    })
+    monkeypatch.setattr(indicators, "detect_absorption", lambda *args, **kwargs: [{"absorbed": (i==100), "direction": "bullish"} for i in range(len(candles))])
+    monkeypatch.setattr(indicators, "calc_cvd", lambda *args, **kwargs: {"smoothed_delta": [0]*len(candles)})
+    monkeypatch.setattr(scalp_engine, "scalp_session_window", lambda *args, **kwargs: (True, "mock"))
+    monkeypatch.setattr(scalp_engine, "_classify_market_state", lambda *args: "balance")
+    monkeypatch.setattr(backtest_runner, "_format_backtest_results", lambda trades, *args, **kwargs: {"trades": trades, "summary": {}})
+    monkeypatch.setattr(backtest_runner, "_rt", lambda: types.SimpleNamespace(AUDIT_DB=":memory:"))
+
+def test_scalp_backtest_tp1_tp2_modeling(monkeypatch):
+    candles = [{"time": time.time(), "open": 100.0, "high": 100.1, "low": 99.9, "close": 100.0, "vol": 1000} for i in range(300)]
+    
+    # Entry bar i=101. Price approx 100.
+    # Bar 110: Hit TP1 (110)
+    candles[110]["open"] = 111.0 # Opening ABOVE TP1 triggers hit
+    candles[110]["high"] = 111.0 
+    
+    # Bar 115: Hit TP2 (120)
+    candles[115]["open"] = 121.0
+    candles[115]["high"] = 121.0
+    
+    _mock_scalp_setup(monkeypatch, candles, tp1=110.0, tp2=120.0)
+    
+    result = backtest_runner.backtest_pair_scalp({"display": "EUR/USD", "type": "forex"})
+    
+    assert "trades" in result and len(result["trades"]) > 0
+    trade = result["trades"][0]
+    assert trade["exit_reason"] == "TP2"
+    assert trade["tp1_hit"] is True
+
+def test_scalp_backtest_tp1_only(monkeypatch):
+    candles = [{"time": time.time(), "open": 100.0, "high": 100.1, "low": 99.9, "close": 100.0, "vol": 1000} for i in range(300)]
+    candles[110]["open"] = 111.0
+    candles[110]["high"] = 111.0
+    
+    _mock_scalp_setup(monkeypatch, candles, tp1=110.0, tp2=None)
+    
+    result = backtest_runner.backtest_pair_scalp({"display": "EUR/USD", "type": "forex"})
+    
+    assert "trades" in result and len(result["trades"]) > 0
+    trade = result["trades"][0]
+    assert trade["exit_reason"] == "TP1"
+    assert trade.get("tp1_hit") is False

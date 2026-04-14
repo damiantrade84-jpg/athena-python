@@ -1013,6 +1013,17 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                 "rolledBack": True,
             }
 
+        # TP alignment: Use blended average for scalp trades to match backtest expectancy
+        tp1_val = float(signal.get("tp1" or 0))
+        tp2_val = float(signal.get("tp2" or 0))
+        # Use Engine name from signal or fallback to style check
+        is_scalp = signal.get("engine") == "scalp" or signal.get("style") == "scalp"
+        if is_scalp and tp2_val > 0:
+            tp_exec = round((tp1_val + tp2_val) / 2, 8)
+            log.info(f"[BYBIT] Scalp blended TP: {tp_exec} (Avg of {tp1_val} and {tp2_val})")
+        else:
+            tp_exec = tp1_val
+
         # Set SL/TP on the position via Bybit v5 trading-stop endpoint
         # (stop_market / take_profit_market order types are invalid in v5)
         sl_order_id = None
@@ -1020,8 +1031,8 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         _sl_tp_err = None
         for _attempt in range(2):  # 1 retry before emergency close
             try:
-                _set_trading_stop(exchange, ccxt_symbol, sl=sl, tp=tp1)
-                log.info(f"[BYBIT] SL/TP set: SL={sl} TP={tp1}")
+                _set_trading_stop(exchange, ccxt_symbol, sl=sl, tp=tp_exec)
+                log.info(f"[BYBIT] SL/TP set: SL={sl} TP={tp_exec}")
                 _sl_tp_err = None
                 break
             except Exception as ste:

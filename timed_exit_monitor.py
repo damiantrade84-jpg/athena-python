@@ -56,7 +56,7 @@ def _load_recent_audit_rows(db_path: str) -> list[dict]:
             con.row_factory = sqlite3.Row
             rows = con.execute(
                 """
-                SELECT id, ticket, pair, style, ts, direction, entry_price, sl, tp, asset_class, exit_time
+                SELECT id, ticket, pair, engine, style, ts, direction, entry_price, sl, tp, asset_class, exit_time
                 FROM   audit_log
                 WHERE  pair IS NOT NULL
                   AND  grade NOT LIKE '%ERR%'
@@ -165,6 +165,7 @@ def _row_for_live_position(position: dict, audit_rows: list[dict]) -> dict | Non
         "ticket": position.get("ticket"),
         "pair": audit.get("pair") or position.get("pair") or position.get("symbol"),
         "style": audit.get("style"),
+        "engine": audit.get("engine"),
         "ts": audit.get("ts"),
         "direction": audit.get("direction") or position.get("direction"),
         "entry_price": audit.get("entry_price") or position.get("entry") or position.get("entryPrice"),
@@ -254,8 +255,15 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
         return
 
     ticket = int(row["ticket"])
+    engine = str(row.get("engine") or "").lower()
     style  = (row.get("style") or "intraday").lower()
     entry  = float(row.get("entry_price") or 0)
+
+    # ── Scalp Exemption ───────────────────────────────────────────────────────
+    # Engine D / scalp trades use internal TP1/TP2/SL management.
+    # The generic timed-exit monitor must NOT interfere.
+    if engine == "scalp" or style == "scalp" or engine == "engine d":
+        return
 
     if style not in ("scalp", "intraday", "swing"):
         style = "intraday"
@@ -365,8 +373,15 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
 
     ticket    = str(row["ticket"])
     pair      = row["pair"]
+    engine    = str(row.get("engine") or "").lower()
     style     = (row.get("style") or "intraday").lower()
     entry     = float(row.get("entry_price") or 0)
+
+    # ── Scalp Exemption ───────────────────────────────────────────────────────
+    # Engine D / scalp trades use internal TP1/TP2/SL management.
+    # The generic timed-exit monitor must NOT interfere.
+    if engine == "scalp" or style == "scalp" or engine == "engine d":
+        return
 
     if style not in ("scalp", "intraday", "swing"):
         style = "intraday"
