@@ -76,8 +76,8 @@ def _mock_scalp_setup(monkeypatch, candles, tp1, tp2):
     monkeypatch.setattr(backtest_runner, "_format_backtest_results", lambda trades, *args, **kwargs: {"trades": trades, "summary": {}})
     monkeypatch.setattr(backtest_runner, "_rt", lambda: types.SimpleNamespace(AUDIT_DB=":memory:"))
 
-def test_scalp_backtest_tp1_tp2_modeling(monkeypatch):
-    """Verify runner can continue to TP2 after +1R partial and TP1 BE milestone."""
+def test_scalp_backtest_exits_at_tp1_without_runner_averaging(monkeypatch):
+    """Engine D backtest uses deterministic TP1 exits (no runner continuation model)."""
     candles = [{"time": time.time(), "open": 100.0, "high": 100.1, "low": 99.9, "close": 100.0, "vol": 1000} for i in range(300)]
     
     # Entry bar i=101. Price approx 100.
@@ -85,7 +85,7 @@ def test_scalp_backtest_tp1_tp2_modeling(monkeypatch):
     candles[110]["open"] = 111.0 
     candles[110]["high"] = 111.0 
     
-    # Bar 115: Hit TP2 (120)
+    # Bar 115: Hit TP2 (120) should not matter in TP1-only backtest management.
     candles[115]["open"] = 121.0
     candles[115]["high"] = 121.0
     
@@ -95,10 +95,10 @@ def test_scalp_backtest_tp1_tp2_modeling(monkeypatch):
     
     assert "trades" in result and len(result["trades"]) > 0
     trade = result["trades"][0]
-    assert trade.get("partial_taken_1r") is True
-    assert trade.get("runner_be_armed") is True
-    assert trade["exit_reason"] == "TP2"
-    assert trade["resultR"] > 1.0
+    assert trade.get("partial_taken_1r") is False
+    assert trade.get("runner_be_armed") is False
+    assert trade["exit_reason"] == "TP1"
+    assert trade["resultR"] > 0.0
 
 def test_scalp_backtest_tp1_only(monkeypatch):
     candles = [{"time": time.time(), "open": 100.0, "high": 100.1, "low": 99.9, "close": 100.0, "vol": 1000} for i in range(300)]
@@ -111,8 +111,28 @@ def test_scalp_backtest_tp1_only(monkeypatch):
     
     assert "trades" in result and len(result["trades"]) > 0
     trade = result["trades"][0]
-    assert trade["exit_reason"] == "BE"
+    assert trade["exit_reason"] == "TP1"
     assert trade.get("tp1_hit") is True
+
+
+def test_scalp_backtest_never_records_negative_tp1_for_long(monkeypatch):
+    candles = [{"time": time.time(), "open": 100.0, "high": 100.1, "low": 99.9, "close": 100.0, "vol": 1000} for i in range(300)]
+    candles[110]["open"] = 111.0
+    candles[110]["high"] = 111.0
+
+    _mock_scalp_setup(monkeypatch, candles, tp1=98.0, tp2=None)
+    monkeypatch.setitem(
+        backtest_runner.CONFIG,
+        "SCALP_ENGINE",
+        {**backtest_runner.CONFIG.get("SCALP_ENGINE", {}), "MIN_RR": 1.0},
+    )
+
+    result = backtest_runner.backtest_pair_scalp({"display": "EUR/USD", "type": "forex"})
+
+    assert "trades" in result and len(result["trades"]) > 0
+    trade = result["trades"][0]
+    assert trade["tp1"] > trade["entry"]
+    assert not (trade["exit_reason"] == "TP1" and trade["resultR"] <= 0)
 
 # --- 4. Precision & Level Collapse Regression Tests ---
 
