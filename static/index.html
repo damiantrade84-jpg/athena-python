@@ -4686,9 +4686,12 @@ async function loadPerformance() {
   el.innerHTML = '<div class="bt-progress"><div style="font-size:14px;font-weight:700">Loading performance data...</div></div>';
   try {
     function fetchJsonSafe(url) {
-      return fetch(url).then(function(r) {
+      var ctrl = new AbortController();
+      var tid = setTimeout(function() { ctrl.abort(); }, 12000);
+      return fetch(url, { signal: ctrl.signal }).then(function(r) {
+        clearTimeout(tid);
         return r.json().catch(function() { return { error: 'json' }; });
-      }).catch(function() { return { error: 'network' }; });
+      }).catch(function(e) { clearTimeout(tid); return { error: e.name === 'AbortError' ? 'timeout' : 'network' }; });
     }
     var results = await Promise.all([
       fetchJsonSafe('/api/performance?_=' + Date.now()),
@@ -5171,12 +5174,20 @@ async function saveScalpRrValues() {
     for (var si = 0; si < STYLES.length; si++) {
       var st = STYLES[si];
       var el = document.getElementById('srr-' + grp + '-' + st);
-      if (el && el.value !== '') {
-        payload[st] = parseFloat(el.value);
+      var rr = document.getElementById('srr-r-' + grp + '-' + st);
+      var raw = el && el.value !== '' ? el.value : (rr ? rr.value : '');
+      if (raw !== '') {
+        payload[st] = parseFloat(raw);
         hasVal = true;
       }
     }
     if (!hasVal) continue;
+    // Validate all values are real numbers before saving
+    var allValid = true;
+    for (var sk = 0; sk < STYLES.length; sk++) {
+      if (STYLES[sk] in payload && isNaN(payload[STYLES[sk]])) { allValid = false; break; }
+    }
+    if (!allValid) continue;
     try {
       var r = await fetch('/api/scalp-group-rr', {
         method: 'POST',
