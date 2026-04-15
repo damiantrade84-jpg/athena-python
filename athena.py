@@ -6176,6 +6176,47 @@ def api_close_position():
 
         result = mt5_close_position(int(ticket))
 
+        # Immediately capture PnL from MT5 deal history so the audit_log
+        # is updated right away (avoids $0.00 when outcome monitor hasn't run yet)
+        if result.get("success"):
+            try:
+                import time as _time
+                _time.sleep(0.8)  # brief pause for MT5 to process the deal
+                import MetaTrader5 as _mt5_lib_close
+                from mt5_executor import mt5_connect as _mt5_connect
+                if _mt5_connect():
+                    _deals = _mt5_deals_for_audit_ticket(_mt5_lib_close, int(ticket))
+                    if _deals:
+                        _deals_s = sorted(_deals, key=lambda d: d.time)
+                        _close_deal = _deals_s[-1]
+                        _total_pnl = sum(float(d.profit) for d in _deals_s)
+                        # Fetch audit row for this ticket
+                        with sqlite3.connect(_AUDIT_DB, timeout=10.0) as _ac:
+                            _ac.row_factory = sqlite3.Row
+                            _arow = _ac.execute(
+                                "SELECT entry_price, sl, tp, volume, ts, risk_amount, asset_class "
+                                "FROM audit_log WHERE ticket=? AND exit_price IS NULL ORDER BY id DESC LIMIT 1",
+                                (str(ticket),)
+                            ).fetchone()
+                        if _arow:
+                            _update_trade_outcome(
+                                ticket=str(ticket),
+                                exit_price=float(_close_deal.price),
+                                exit_time=datetime.fromtimestamp(_close_deal.time, tz=timezone.utc).isoformat(),
+                                pnl=_total_pnl,
+                                entry_price=_arow["entry_price"],
+                                sl=_arow["sl"],
+                                tp=_arow["tp"],
+                                volume=_arow["volume"],
+                                entry_ts=_arow["ts"],
+                                risk_amount=float(_arow["risk_amount"]) if _arow["risk_amount"] else None,
+                                asset_type=_arow["asset_class"] or "",
+                            )
+                            result["pnl"] = round(_total_pnl, 4)
+                            log.info(f"[CLOSE] MT5 outcome captured immediately: ticket={ticket} pnl={_total_pnl:.4f}")
+            except Exception as _ce:
+                log.debug(f"[CLOSE] immediate MT5 outcome capture failed for ticket={ticket}: {_ce}")
+
     else:
         return jsonify({"success": False, "error": f"Unknown exchange: {exch}"}), 400
 
