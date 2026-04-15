@@ -40,6 +40,7 @@ _FOREX_METALS_1M_RESAMPLE = {
 }
 
 _INDEX_INTRADAY_AND_D1 = {
+    # US indices (originally whitelisted)
     "NAS100",
     "^GSPC",
     "^DJI",
@@ -53,6 +54,13 @@ _INDEX_INTRADAY_AND_D1 = {
     "GSPC.INDX",
     "IXIC.INDX",
     "DJI.INDX",
+    # UK / European / Asia-Pacific indices — display names as used in _overlay_eodhd_volume_for_scalp
+    # Ticker resolution via _vendor_overrides: UK100→FTSE.INDX, DAX 40→GDAXI.INDX, etc.
+    "UK100",
+    "DAX 40",
+    "ASX 200",
+    "Nikkei 225",
+    "Hang Seng",
 }
 
 _STOCK_ALL_TFS = {
