@@ -35,6 +35,47 @@ def test_binance_ws_emit_uses_ratio_from_accumulators():
     assert abs(r - (1.0 / 3.0)) < 1e-9
 
 
+def test_binance_ws_aggtrade_stores_price_bucket(monkeypatch):
+    from athena.datafeeds import binance_ws
+
+    stored = []
+    monkeypatch.setattr(binance_ws, "store_trade", lambda **kwargs: stored.append(kwargs))
+    ws = binance_ws.BinanceWS(symbol="btcusdt", emit_interval=60.0)
+
+    ws._handle_agg_trade({"p": "65000.5", "q": "0.25", "m": False, "T": 1710000000000})
+
+    assert stored == [
+        {
+            "exchange": "binance",
+            "symbol": "BTCUSDT",
+            "price": 65000.5,
+            "quantity": 0.25,
+            "is_buyer_maker": False,
+            "ts": 1710000000.0,
+        }
+    ]
+
+
+def test_bucketed_volume_profile_uses_price_level_volume():
+    from volume_profile import compute_bucketed_volume_profile
+
+    buckets = [
+        {"price_bucket": 99.0, "total_volume": 10.0, "delta": -5.0},
+        {"price_bucket": 100.0, "total_volume": 50.0, "delta": 20.0},
+        {"price_bucket": 101.0, "total_volume": 25.0, "delta": 10.0},
+        {"price_bucket": 102.0, "total_volume": 5.0, "delta": -2.0},
+    ]
+
+    vp = compute_bucketed_volume_profile(buckets, value_area_pct=0.70, lvn_threshold=0.2)
+
+    assert vp["profile_valid"] is True
+    assert vp["source"] == "trade_buckets"
+    assert vp["poc"] == 100.0
+    assert vp["val"] == 100.0
+    assert vp["vah"] == 101.0
+    assert vp["cvd_value"] == 23.0
+
+
 def test_bybit_ws_emit_uses_ratio_from_accumulators():
     from athena.datafeeds.bybit_ws import BybitWS
 

@@ -19,6 +19,7 @@ from athena.microstructure.orderbook_metrics import (  # noqa: E402
     liquidity_pressure as _liq_pressure,
     orderflow_delta as _taker_imbalance_ratio,
 )
+from athena.microstructure.trade_bucket_store import store_trade  # noqa: E402
 
 
 class BinanceWS:
@@ -54,7 +55,8 @@ class BinanceWS:
         """Connect to combined Binance WebSocket stream."""
         depth_stream = f"{self.symbol}@depth20@100ms"
         trade_stream = f"{self.symbol}@trade"
-        url = f"{self.base_url}?streams={depth_stream}/{trade_stream}"
+        agg_trade_stream = f"{self.symbol}@aggTrade"
+        url = f"{self.base_url}?streams={depth_stream}/{trade_stream}/{agg_trade_stream}"
         try:
             async with websockets.connect(
                 url,
@@ -123,6 +125,8 @@ class BinanceWS:
             self._handle_depth(data)
         elif stream.endswith("@trade"):
             self._handle_trade(data)
+        elif stream.endswith("@aggTrade"):
+            self._handle_agg_trade(data)
 
     def _handle_depth(self, data: Dict) -> None:
         """Update local order book with depth20 snapshot."""
@@ -144,6 +148,26 @@ class BinanceWS:
         else:
             self.sell_taker_volume += size
             self.orderflow_delta -= size
+
+    def _handle_agg_trade(self, data: Dict) -> None:
+        """Persist aggregate-trade volume by price bucket for Engine D orderflow."""
+        try:
+            price = float(data.get("p", 0))
+            size = float(data.get("q", 0))
+            is_buyer_maker = bool(data.get("m"))
+            event_ts = float(data.get("T") or data.get("E") or 0) / 1000.0
+            if event_ts <= 0:
+                event_ts = time.time()
+        except (TypeError, ValueError):
+            return
+        store_trade(
+            exchange="binance",
+            symbol=self.symbol.upper(),
+            price=price,
+            quantity=size,
+            is_buyer_maker=is_buyer_maker,
+            ts=event_ts,
+        )
 
     def _compute_imbalance(self) -> float:
         """Compute order book imbalance: (bid_vol - ask_vol) / (bid_vol + ask_vol)."""

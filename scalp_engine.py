@@ -24,6 +24,7 @@ All trades route through risk_engine.risk_check() before execution.
 
 import logging
 import math
+import time
 import pandas as pd
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -255,6 +256,46 @@ def mt5_fetch_scalp_candles(
     except Exception as e:
         log.error(f"[SCALP] mt5_fetch_scalp_candles error: {e}")
         return []
+
+
+def _overlay_eodhd_volume_for_scalp(
+    display: str,
+    asset_type: str,
+    tf: str,
+    candles: list,
+    *,
+    live: bool = True,
+) -> list:
+    """Overlay audited EODHD volume on MT5 scalp candles when available."""
+    if not candles or str(asset_type or "").lower() not in {"forex", "commodity", "index", "stock"}:
+        return candles
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    if live and not cfg.get("EODHD_VOLUME_OVERLAY_LIVE_ENABLED", False):
+        return candles
+    if not live and not cfg.get("EODHD_VOLUME_OVERLAY_BACKTEST_ENABLED", True):
+        return candles
+    try:
+        from athena_runtime import rt
+        from eodhd_volume_overlay import overlay_candle_volumes
+
+        symbol = f"{display}.US" if str(asset_type).lower() == "stock" and "." not in str(display) else display
+        pair = {"display": display, "symbol": symbol, "type": asset_type, "source": "mt5"}
+        volume_resp = rt().fetch_eodhd_volume_only(
+            pair,
+            tf,
+            len(candles),
+            cache_only=live,
+        )
+        volume_candles = (volume_resp or {}).get("candles") if isinstance(volume_resp, dict) else None
+        if not volume_candles:
+            return candles
+        merged, matched = overlay_candle_volumes(candles, volume_candles, tf)
+        if matched > 0:
+            log.debug("[SCALP-DATA] %s %s EODHD volume overlay matched=%s/%s", display, tf, matched, len(candles))
+            return merged
+    except Exception as exc:
+        log.debug("[SCALP-DATA] %s %s EODHD volume overlay skipped: %s", display, tf, exc)
+    return candles
 
 
 def mt5_get_live_price(mt5_symbol: str) -> float | None:
@@ -757,6 +798,50 @@ def _build_volume_profile(candles: list) -> dict:
     return _internal_profile()
 
 
+def _trade_bucket_session_id(reference_ts=None) -> str | None:
+    if reference_ts is None:
+        return None
+    dt = _coerce_utc_datetime(reference_ts)
+    return dt.strftime("%Y-%m-%d") if dt else None
+
+
+def _build_trade_bucket_volume_profile(display: str, reference_ts=None, require_fresh: bool = True) -> dict:
+    """Build crypto VP from live Binance aggregate-trade price buckets."""
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    min_buckets = int(cfg.get("TRADE_BUCKET_MIN_LEVELS", 8))
+    min_volume = float(cfg.get("TRADE_BUCKET_MIN_VOLUME", 0.0))
+    max_age_sec = int(cfg.get("TRADE_BUCKET_MAX_AGE_SEC", 300))
+    va_pct = float(cfg.get("VP_VALUE_AREA_PCT", cfg.get("VP_VA_PCT", 0.70)))
+    lvn_factor = float(cfg.get("VP_LVN_THRESHOLD", cfg.get("VP_LVN_FACTOR", 0.30)))
+    symbol = str(display or "").replace("/", "").upper()
+    try:
+        from athena.microstructure.trade_bucket_store import query_session_buckets
+        from volume_profile import compute_bucketed_volume_profile
+
+        rows = query_session_buckets(
+            symbol,
+            exchange="binance",
+            session_id=_trade_bucket_session_id(reference_ts),
+            min_last_ts=(time.time() - max_age_sec) if require_fresh else None,
+        )
+        if len(rows) < min_buckets:
+            return {"valid": False, "reason": "insufficient_trade_buckets", "bucket_count": len(rows)}
+        vp = compute_bucketed_volume_profile(rows, value_area_pct=va_pct, lvn_threshold=lvn_factor)
+        if not vp.get("profile_valid"):
+            return {"valid": False, "reason": "trade_bucket_profile_invalid", "bucket_count": len(rows)}
+        if float(vp.get("total_volume") or 0.0) < min_volume:
+            return {"valid": False, "reason": "trade_bucket_volume_too_low", "bucket_count": len(rows)}
+        out = dict(vp)
+        out["valid"] = True
+        out["volume_source"] = "binance_aggtrade"
+        out["bucket_count"] = len(rows)
+        out["balance_ratio"] = _calc_balance_ratio(out)
+        return out
+    except Exception as exc:
+        log.debug("[SCALP] trade bucket VP unavailable for %s: %s", display, exc)
+        return {"valid": False, "reason": "trade_bucket_error"}
+
+
 def _calc_balance_ratio(vp: dict) -> float:
     """Ratio of value area width to total range.  High → balanced, low → trending."""
     vah = vp.get("vah", 0)
@@ -909,6 +994,40 @@ def _check_cvd(candles: list) -> dict:
     slope = cvd_series[-1] - cvd_series[-6] if len(cvd_series) >= 6 else 0
     direction = "LONG" if slope > 0 else "SHORT" if slope < 0 else None
     return {"direction": direction, "cvd_value": round(cvd, 2), "cvd_slope": round(slope, 2)}
+
+
+def _check_trade_bucket_cvd(display: str, reference_ts=None, require_fresh: bool = True) -> dict:
+    """Compute live crypto CVD from Binance aggregate-trade buckets."""
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    max_age_sec = int(cfg.get("TRADE_BUCKET_MAX_AGE_SEC", 300))
+    min_buckets = int(cfg.get("TRADE_BUCKET_MIN_LEVELS", 8))
+    symbol = str(display or "").replace("/", "").upper()
+    try:
+        from athena.microstructure.trade_bucket_store import query_session_buckets
+
+        rows = query_session_buckets(
+            symbol,
+            exchange="binance",
+            session_id=_trade_bucket_session_id(reference_ts),
+            min_last_ts=(time.time() - max_age_sec) if require_fresh else None,
+        )
+        if len(rows) < min_buckets:
+            return {"direction": None, "cvd_value": 0, "cvd_slope": 0, "source": "unavailable"}
+        rows = sorted(rows, key=lambda r: float(r.get("price_bucket") or 0.0))
+        deltas = [float(r.get("delta") or 0.0) for r in rows]
+        cvd = sum(deltas)
+        slope = (sum(deltas[-3:]) - sum(deltas[:3])) if len(deltas) >= 6 else cvd
+        direction = "LONG" if slope > 0 else "SHORT" if slope < 0 else None
+        return {
+            "direction": direction,
+            "cvd_value": round(cvd, 2),
+            "cvd_slope": round(slope, 4),
+            "source": "binance_aggtrade",
+            "bucket_count": len(rows),
+        }
+    except Exception as exc:
+        log.debug("[SCALP] trade bucket CVD unavailable for %s: %s", display, exc)
+        return {"direction": None, "cvd_value": 0, "cvd_slope": 0, "source": "error"}
 
 
 def _check_aaa_sequence(candles: list, absorption: dict, cvd: dict) -> dict:
@@ -1828,12 +1947,14 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     continue
 
                 candles_m15 = mt5_fetch_scalp_candles(mt5_sym, "M15", m15_count, include_forming=True)
+                candles_m15 = _overlay_eodhd_volume_for_scalp(display, asset_type, "M15", candles_m15)
                 if len(candles_m15) < 30:
                     _record_stability_sample(display, asset_type, False, reason="insufficient_m15_candles")
                     skipped.append({"pair": display, "reason": "insufficient_m15_candles"})
                     continue
 
                 candles_m5 = mt5_fetch_scalp_candles(mt5_sym, "M5", m5_count, include_forming=True)
+                candles_m5 = _overlay_eodhd_volume_for_scalp(display, asset_type, "M5", candles_m5)
                 if len(candles_m5) < 10:
                     _record_stability_sample(display, asset_type, False, reason="insufficient_m5_candles")
                     skipped.append({"pair": display, "reason": "insufficient_m5_candles"})
@@ -1841,6 +1962,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
 
                 if execution_tf == "M1":
                     candles_exec = mt5_fetch_scalp_candles(mt5_sym, "M1", m1_count, include_forming=True)
+                    candles_exec = _overlay_eodhd_volume_for_scalp(display, asset_type, "M1", candles_exec)
                     if len(candles_exec) < 30:
                         _record_stability_sample(display, asset_type, False, reason="insufficient_m1_candles")
                         skipped.append({"pair": display, "reason": "insufficient_m1_candles"})
@@ -1885,7 +2007,15 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 skipped.append({"pair": display, "reason": "vp_disabled"})
                 continue
             vp_lookback = max(20, int(cfg.get("VP_LOOKBACK_BARS", 50)))
-            vp = _build_volume_profile(candles_m15[-vp_lookback:])
+            vp = (
+                _build_trade_bucket_volume_profile(display)
+                if asset_type == "crypto" and cfg.get("TRADE_BUCKET_VP_ENABLED", True)
+                else {"valid": False}
+            )
+            if not vp.get("valid"):
+                vp = _build_volume_profile(candles_m15[-vp_lookback:])
+                if vp.get("valid"):
+                    vp["volume_source"] = "candles"
             if not vp.get("valid"):
                 _record_stability_sample(display, asset_type, False, reason=f"vp_invalid:{vp.get('reason', '?')}")
                 skipped.append({"pair": display, "reason": f"vp_invalid:{vp.get('reason', '?')}"})
@@ -1896,7 +2026,14 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
 
             # Pillar 2: Aggression — absorption, CVD, AAA
             absorption = _check_absorption(candles_exec)
-            cvd = _check_cvd(candles_exec)
+            cvd = (
+                _check_trade_bucket_cvd(display)
+                if asset_type == "crypto" and cfg.get("TRADE_BUCKET_CVD_ENABLED", True)
+                else {"source": "disabled"}
+            )
+            if not cvd.get("direction"):
+                cvd = _check_cvd(candles_exec)
+                cvd["source"] = "candles"
             aaa = _check_aaa_sequence(candles_exec, absorption, cvd) if cfg.get("AAA_ENABLED", True) else {"complete": False, "phase": "disabled"}
 
             # Pillar 3: VWAP directional lean
@@ -2008,9 +2145,13 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "vp_vah":          vp.get("vah"),
                 "vp_val":          vp.get("val"),
                 "vp_lvn_count":    len(vp.get("lvn_levels", [])),
+                "vp_volume_source": vp.get("volume_source", "candles"),
+                "vp_bucket_count":  vp.get("bucket_count"),
                 "absorption_count": absorption.get("count", 0),
                 "cvd_direction":   cvd.get("direction"),
                 "cvd_slope":       cvd.get("cvd_slope"),
+                "cvd_source":      cvd.get("source", "candles"),
+                "cvd_bucket_count": cvd.get("bucket_count"),
                 "aaa_complete":    aaa.get("complete", False),
                 "htf_bias":        htf_bias,
                 "htf_bias_tf":     bias_tf if use_bias else None,

@@ -4372,15 +4372,18 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     """
     from scalp_engine import (
         _build_volume_profile,
+        _build_trade_bucket_volume_profile,
         _check_aaa_sequence,
         _check_absorption,
         _check_cvd,
+        _check_trade_bucket_cvd,
         _check_vwap_lean,
         _classify_market_state,
         _classify_setup,
         _coerce_utc_datetime,
         _guess_asset_type,
         _locate_price_vs_vp,
+        _overlay_eodhd_volume_for_scalp,
         get_grade_sessions_for_mode,
         infer_bias_from_ema_stack,
         scalp_session_window,
@@ -4422,6 +4425,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             if not mt5_sym:
                 return {"error": f"No MT5 symbol mapping for {display}"}
             m15_raw = mt5_fetch_scalp_candles(mt5_sym, "M15", 2000, include_forming=False)
+            m15_raw = _overlay_eodhd_volume_for_scalp(display, asset_type, "M15", m15_raw, live=False)
     except Exception as e:
         log.error(f"[SCALP-BT] Candle fetch failed for {display}: {e}")
         return {"error": f"Candle fetch failed: {e}"}
@@ -4510,7 +4514,15 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         if len(m15_context) < vp_lookback:
             continue
         vp_window = m15_context[-vp_lookback:]
-        vp = _build_volume_profile(vp_window)
+        vp = (
+            _build_trade_bucket_volume_profile(display, reference_ts=signal_close_dt, require_fresh=False)
+            if asset_type == "crypto" and cfg.get("TRADE_BUCKET_VP_ENABLED", True)
+            else {"valid": False}
+        )
+        if not vp.get("valid"):
+            vp = _build_volume_profile(vp_window)
+            if vp.get("valid"):
+                vp["volume_source"] = "candles"
         if not vp.get("valid") or vp.get("poc") is None:
             continue
 
@@ -4524,7 +4536,14 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         market_state = _classify_market_state(vp)
         price_loc = _locate_price_vs_vp(current_price, vp)
         absorption = _check_absorption(exec_context)
-        cvd = _check_cvd(exec_context)
+        cvd = (
+            _check_trade_bucket_cvd(display, reference_ts=signal_close_dt, require_fresh=False)
+            if asset_type == "crypto" and cfg.get("TRADE_BUCKET_CVD_ENABLED", True)
+            else {"source": "disabled"}
+        )
+        if not cvd.get("direction"):
+            cvd = _check_cvd(exec_context)
+            cvd["source"] = "candles"
         aaa = _check_aaa_sequence(exec_context, absorption, cvd) if cfg.get("AAA_ENABLED", True) else {"complete": False, "phase": "disabled"}
         vwap = _check_vwap_lean(context_for_vwap, current_price) if cfg.get("VWAP_ENABLED", True) else {"lean": None, "vwap_value": 0}
         htf_bias = infer_bias_from_ema_stack(m15_context) if len(m15_context) >= 200 else None
@@ -4722,8 +4741,12 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             "regime": "SCALP",
             "market_state": market_state,
             "price_location": price_loc.get("location"),
+            "vp_volume_source": vp.get("volume_source", "candles"),
+            "vp_bucket_count": vp.get("bucket_count"),
             "absorption_count": int(absorption.get("count", 0) or 0),
             "cvd_direction": cvd.get("direction"),
+            "cvd_source": cvd.get("source", "candles"),
+            "cvd_bucket_count": cvd.get("bucket_count"),
             "aaa_complete": bool(aaa.get("complete")),
             "vwap_lean": vwap.get("lean"),
             # Compatibility fields for _format_backtest_results

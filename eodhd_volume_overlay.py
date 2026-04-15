@@ -2,24 +2,51 @@
 
 from __future__ import annotations
 
-from candles_cache import candle_time_epoch_utc, resample_from_h1
+from candles_cache import candle_time_epoch_utc
 
-_EODHD_VOLUME_TYPES = {"stock", "commodity", "index"}
-_EODHD_VOLUME_TIMEFRAMES = {"D1", "H1", "H4"}
+_EODHD_VOLUME_TYPES = {"stock", "commodity", "index", "forex"}
+_EODHD_VOLUME_TIMEFRAMES = {"M1", "M5", "M15", "H1", "H4", "D1"}
+_INTRADAY_TFS = {"M1", "M5", "M15", "H1", "H4"}
 
 _COMMODITY_D1_ONLY = {
-    "GC=F",
+    "GC=F",  # retained for legacy mapping; current EODHD audit did not verify GC volume
+}
+
+_COMMODITY_INTRADAY_AND_D1 = {
     "SI=F",
     "CL=F",
     "BZ=F",
     "NatGas",
     "Copper",
+    "WTI Oil",
+    "Brent Oil",
+    "Nat Gas",
 }
 
-_INDEX_INTRADAY_ONLY = {
+_FOREX_1M_RESAMPLE = {
+    "EUR/USD",
+    "GBP/USD",
+    "USD/JPY",
+    "AUD/USD",
+    "USD/CHF",
+    "USD/MXN",
+}
+
+_FOREX_METALS_1M_RESAMPLE = {
+    "GC=F",
+    "SI=F",
+    "XAU/USD",
+    "XAG/USD",
+}
+
+_INDEX_INTRADAY_AND_D1 = {
     "NAS100",
     "^GSPC",
     "^DJI",
+    "S&P 500",
+    "Nasdaq",
+    "NASDAQ-100",
+    "Dow Jones",
 }
 
 _STOCK_ALL_TFS = {
@@ -56,7 +83,10 @@ _STOCK_ALL_TFS = {
 
 _EODHD_VOLUME_WHITELIST = {
     **{symbol: frozenset({"D1"}) for symbol in _COMMODITY_D1_ONLY},
-    **{symbol: frozenset({"H1", "H4"}) for symbol in _INDEX_INTRADAY_ONLY},
+    **{symbol: frozenset(_EODHD_VOLUME_TIMEFRAMES) for symbol in _COMMODITY_INTRADAY_AND_D1},
+    **{symbol: frozenset(_INTRADAY_TFS) for symbol in _FOREX_1M_RESAMPLE},
+    **{symbol: frozenset(_EODHD_VOLUME_TIMEFRAMES) for symbol in _FOREX_METALS_1M_RESAMPLE},
+    **{symbol: frozenset(_EODHD_VOLUME_TIMEFRAMES) for symbol in _INDEX_INTRADAY_AND_D1},
     **{symbol: frozenset(_EODHD_VOLUME_TIMEFRAMES) for symbol in _STOCK_ALL_TFS},
 }
 
@@ -73,27 +103,82 @@ def is_eodhd_volume_whitelisted(pair: dict | None, tf: str) -> bool:
     if not supports_eodhd_volume_overlay(pair):
         return False
     symbol = str((pair or {}).get("symbol") or "")
+    display = str((pair or {}).get("display") or "")
     tf_key = str(tf or "").upper()
-    allowed = _EODHD_VOLUME_WHITELIST.get(symbol)
+    keys = [symbol, display]
+    if str((pair or {}).get("type") or "").lower() == "stock":
+        keys.extend([f"{symbol}.US", f"{display}.US"])
+    allowed = None
+    for key in keys:
+        allowed = _EODHD_VOLUME_WHITELIST.get(key)
+        if allowed:
+            break
     if not allowed or tf_key not in _EODHD_VOLUME_TIMEFRAMES:
         return False
     return tf_key in allowed
 
 
 def resample_eodhd_volume_bars(
-    h1_candles: list[dict] | None,
+    source_candles: list[dict] | None,
     target_tf: str,
     limit: int,
 ) -> list[dict] | None:
-    """Resample H1 EODHD bars for volume-only overlays."""
+    """Resample EODHD bars for volume-only overlays."""
     tf = str(target_tf or "").upper()
-    if tf == "H1":
-        if not h1_candles:
+    if tf == "M1":
+        if not source_candles:
             return None
-        return h1_candles[-limit:] if len(h1_candles) > limit else list(h1_candles)
-    if tf == "H4":
-        return resample_from_h1(h1_candles, "H4", limit, alignment_offset_hours=0.0)
-    return None
+        return source_candles[-limit:] if len(source_candles) > limit else list(source_candles)
+    freq = {"M5": "5min", "M15": "15min", "H1": "1h", "H4": "4h", "D1": "1D"}.get(tf)
+    if not freq or not source_candles:
+        return None
+    try:
+        import pandas as pd
+    except Exception:
+        return None
+    rows = []
+    for c in source_candles:
+        ts = c.get("time", c.get("datetime"))
+        if ts is None:
+            continue
+        try:
+            rows.append(
+                {
+                    "time": ts,
+                    "open": float(c.get("open")),
+                    "high": float(c.get("high")),
+                    "low": float(c.get("low")),
+                    "close": float(c.get("close")),
+                    "vol": float(c.get("vol", c.get("volume", 0)) or 0),
+                }
+            )
+        except (TypeError, ValueError):
+            continue
+    if not rows:
+        return None
+    df = pd.DataFrame(rows)
+    df["time"] = pd.to_datetime(df["time"], utc=True, errors="coerce")
+    df = df.dropna(subset=["time"]).sort_values("time").drop_duplicates(subset=["time"])
+    if df.empty:
+        return None
+    df = df.set_index("time")
+    agg = (
+        df.resample(freq, origin="epoch", label="left", closed="left")
+        .agg({"open": "first", "high": "max", "low": "min", "close": "last", "vol": "sum"})
+        .dropna(subset=["open", "close"])
+    )
+    out = [
+        {
+            "time": idx.isoformat(),
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
+            "close": float(row["close"]),
+            "vol": float(row["vol"]),
+        }
+        for idx, row in agg.iterrows()
+    ]
+    return out[-limit:] if len(out) > limit else out
 
 
 def overlay_candle_volumes(

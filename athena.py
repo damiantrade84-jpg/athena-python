@@ -1826,8 +1826,8 @@ def _store_cached_eodhd_volume_only(pair: dict, tf: str, limit: int, payload: di
         _eodhd_volume_cache[key] = (payload, time.time() + ttl)
 
 
-def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int) -> dict:
-    """Best-effort EODHD volume fetch for MT5 stocks/commodities/indices only.
+def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: bool = False) -> dict:
+    """Best-effort EODHD volume fetch for MT5-routed symbols only.
 
     This never changes OHLC routing. It is used only to overlay `vol` when EODHD
     returns matching bars; otherwise the MT5 candles remain untouched.
@@ -1848,12 +1848,16 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int) -> dict:
         "source_tf": None,
     }
 
+    if cache_only:
+        payload["detail"] = "cache_miss"
+        return payload
+
     if not _supports_eodhd_volume_overlay(pair):
         payload["detail"] = "unsupported asset type"
         _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
         return payload
 
-    if tf_key not in {"H1", "H4", "D1"}:
+    if tf_key not in {"M1", "M5", "M15", "H1", "H4", "D1"}:
         payload["detail"] = f"unsupported timeframe: {tf_key}"
         _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
         return payload
@@ -1906,15 +1910,27 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int) -> dict:
         else:
             ticker = _eodhd_intraday_ticker_for_pair(pair)
             payload["ticker"] = ticker
-            payload["source_tf"] = "H1"
             if not ticker:
                 payload["detail"] = "no valid EODHD intraday ticker"
                 _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
                 return payload
 
             now_ts = int(datetime.now(timezone.utc).timestamp())
-            hours_needed = (int(limit) * 4) if tf_key == "H4" else int(limit)
-            days = max(7, min(365, math.ceil((hours_needed + 24) / 24.0) + 3))
+            ptype = str(pair.get("type") or "").lower()
+            display_key = str(pair.get("display") or "")
+            # Audit result: EODHD forex/metals had usable volume on 1m, while
+            # direct 5m/1h returned zero volume. Fetch 1m and resample locally.
+            use_1m_source = (
+                ptype == "forex"
+                or ticker.endswith(".FOREX")
+                or display_key in {"XAU/USD", "XAG/USD"}
+            )
+            source_interval = "1m" if use_1m_source else {"M1": "1m", "M5": "5m", "M15": "5m", "H1": "1h", "H4": "1h"}.get(tf_key, "1h")
+            payload["source_tf"] = source_interval
+            minutes_per_bar = {"M1": 1, "M5": 5, "M15": 15, "H1": 60, "H4": 240}.get(tf_key, 60)
+            source_minutes = {"1m": 1, "5m": 5, "1h": 60}.get(source_interval, 60)
+            source_bars_needed = max(int(limit) * max(1, minutes_per_bar // source_minutes), int(limit))
+            days = max(2, min(30 if source_interval == "1m" else 365, math.ceil((source_bars_needed * source_minutes) / 1440.0) + 3))
             from_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
             resp = http_requests.get(
                 f"https://eodhd.com/api/intraday/{ticker}",
@@ -1923,7 +1939,7 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int) -> dict:
                     "fmt": "json",
                     "from": from_ts,
                     "to": now_ts,
-                    "interval": "1h",
+                    "interval": source_interval,
                 },
                 timeout=20,
             )
@@ -1938,7 +1954,7 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int) -> dict:
                 _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
                 return payload
 
-            h1_candles = [
+            source_candles = [
                 {
                     "time": b["datetime"],
                     "open": float(b["open"]),
@@ -1950,7 +1966,7 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int) -> dict:
                 for b in bars
                 if b.get("open") is not None and b.get("close") is not None
             ]
-            candles = _resample_eodhd_volume_bars(h1_candles, tf_key, int(limit))
+            candles = _resample_eodhd_volume_bars(source_candles, tf_key, int(limit))
 
         usable = [c for c in (candles or []) if float(c.get("vol", 0) or 0) > 0]
         if usable:
@@ -2595,6 +2611,7 @@ def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
         fetch_binance=fetch_binance,
         fetch_binance_paginated=fetch_binance_paginated,
         fetch_eodhd=fetch_eodhd,
+        fetch_eodhd_volume_only=_fetch_eodhd_volume_only,
         fetch_polygon=fetch_polygon,
         fetch_yfinance=fetch_yfinance,
         fetch_mt5=fetch_mt5,
@@ -12721,6 +12738,69 @@ def _select_live_crypto_symbols_for_ws() -> list[str]:
     return selected
 
 
+def _select_eodhd_volume_warm_pairs() -> list[dict]:
+    """Select active non-crypto pairs that can use EODHD volume overlays."""
+    try:
+        from scalp_engine import get_scalp_pairs
+
+        scalp_names = set(get_scalp_pairs(ACTIVE_PAIRS))
+    except Exception:
+        scalp_names = {str(p.get("display") or p.get("symbol") or "") for p in ACTIVE_PAIRS}
+    selected = []
+    for pair in ACTIVE_PAIRS:
+        if pair.get("type") == "crypto":
+            continue
+        display = str(pair.get("display") or pair.get("symbol") or "")
+        if display not in scalp_names:
+            continue
+        if _supports_eodhd_volume_overlay(pair):
+            selected.append(pair)
+    return selected
+
+
+def _start_eodhd_volume_warmer() -> None:
+    """Warm EODHD volume cache off the live scan path."""
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    if not cfg.get("EODHD_VOLUME_WARMER_ENABLED", True):
+        log.info("[EODHD-VOL] Warmer disabled")
+        return
+    if not os.environ.get("EODHD_KEY", "").strip():
+        log.warning("[EODHD-VOL] Warmer disabled - EODHD_KEY not set")
+        return
+
+    tfs = [str(tf).upper() for tf in (cfg.get("EODHD_VOLUME_WARMER_TIMEFRAMES") or ["M1", "M5", "M15"])]
+    interval = max(30, int(cfg.get("EODHD_VOLUME_WARMER_INTERVAL_SEC", 60) or 60))
+    limits = {
+        "M1": int(cfg.get("M1_CANDLES", 300) or 300),
+        "M5": int(cfg.get("M5_CANDLES", 1000) or 1000),
+        "M15": int(cfg.get("M15_CANDLES", 500) or 500),
+        "H1": int(cfg.get("H1_CANDLES", 300) or 300),
+    }
+
+    def _loop():
+        while True:
+            pairs = _select_eodhd_volume_warm_pairs()
+            warmed = 0
+            skipped = 0
+            for pair in pairs:
+                for tf in tfs:
+                    if not _is_eodhd_volume_whitelisted(pair, tf):
+                        skipped += 1
+                        continue
+                    try:
+                        resp = _fetch_eodhd_volume_only(pair, tf, limits.get(tf, 300))
+                        if isinstance(resp, dict) and not resp.get("error"):
+                            warmed += 1
+                    except Exception as exc:
+                        log.debug("[EODHD-VOL] Warmer fetch failed %s %s: %s", pair.get("display"), tf, exc)
+                    # Keep EODHD request pressure modest.
+                    time.sleep(0.15)
+            log.info("[EODHD-VOL] Warmer cycle warmed=%s skipped=%s pairs=%s tfs=%s", warmed, skipped, len(pairs), tfs)
+            time.sleep(interval)
+
+    threading.Thread(target=_loop, daemon=True, name="EODHDVolumeWarmer").start()
+
+
 def ensure_runtime_services_started() -> None:
     """Start background feed/runtime services once for both script and app-factory boot."""
     global _runtime_services_started, _binance_ws, _binance_candle_ws
@@ -12762,6 +12842,8 @@ def ensure_runtime_services_started() -> None:
         )
     else:
         log.warning("[WS] No EODHD_KEY - WebSocket prices disabled")
+
+    _start_eodhd_volume_warmer()
 
     # Start Binance Futures WebSocket for crypto live prices + kline candles
     crypto_enabled = [p for p in CRYPTO_PAIRS if p.get("enabled", True)]

@@ -867,6 +867,16 @@ SCALP_ENGINE:
   VP_VALUE_AREA_PCT: 0.70       # 70% of volume defines Value Area (standard)
   VP_LVN_THRESHOLD: 0.15        # Bins below 15% of POC volume are Low Volume Nodes
   VP_PROXIMITY_PCT: 0.30        # % of price to classify as "at" VAH/VAL/POC (0.30 = ±0.30%)
+  TRADE_BUCKET_VP_ENABLED: true   # Crypto: prefer Binance aggTrade price buckets for VP when fresh
+  TRADE_BUCKET_CVD_ENABLED: true  # Crypto: prefer Binance aggTrade price buckets for CVD when fresh
+  TRADE_BUCKET_MAX_AGE_SEC: 300   # Max age of live aggTrade buckets before candle fallback
+  TRADE_BUCKET_MIN_LEVELS: 8      # Minimum price buckets required before using aggTrade VP/CVD
+  TRADE_BUCKET_MIN_VOLUME: 0.0    # Optional minimum total bucket volume before using aggTrade VP
+  EODHD_VOLUME_OVERLAY_LIVE_ENABLED: true   # Live uses warmed cache only; MT5 volume remains instant fallback
+  EODHD_VOLUME_OVERLAY_BACKTEST_ENABLED: true # Use audited EODHD intraday volume in Engine D backtests
+  EODHD_VOLUME_WARMER_ENABLED: true         # Background prefetch for live EODHD volume cache
+  EODHD_VOLUME_WARMER_INTERVAL_SEC: 60      # Refresh M1/M5/M15 cache once per minute
+  EODHD_VOLUME_WARMER_TIMEFRAMES: ["M1", "M5", "M15"]
   # ── Spread limits for non-forex (raw MT5 points, not pip-converted) ──────
   MAX_SPREAD_POINTS:
     index: 100                  # NAS100/DAX/S&P: max spread in index points

@@ -12,6 +12,102 @@ import numpy as np
 log = logging.getLogger("sentinel")
 
 
+def compute_bucketed_volume_profile(
+    buckets: list[dict],
+    value_area_pct: float = 0.70,
+    lvn_threshold: float = 0.15,
+) -> dict:
+    """Compute VP levels from price-level trade buckets.
+
+    Expected bucket keys: price_bucket, total_volume, delta, buy_volume,
+    sell_volume. This is the live/backtest orderflow path; no candle range
+    allocation is performed.
+    """
+    out = {
+        "poc": None,
+        "vah": None,
+        "val": None,
+        "profile_valid": False,
+        "total_volume": 0.0,
+        "bin_count": 0,
+        "session_high": None,
+        "session_low": None,
+        "lvn_levels": [],
+        "distribution": [],
+        "delta": 0.0,
+        "cvd_value": 0.0,
+        "source": "trade_buckets",
+    }
+    parsed = []
+    for row in buckets or []:
+        try:
+            price = float(row.get("price_bucket"))
+            volume = float(row.get("total_volume", row.get("volume", 0)) or 0)
+            delta = float(row.get("delta", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if price <= 0 or volume <= 0:
+            continue
+        parsed.append((price, volume, delta))
+    if not parsed:
+        return out
+
+    parsed.sort(key=lambda item: item[0])
+    prices = [p for p, _, _ in parsed]
+    volumes = [v for _, v, _ in parsed]
+    deltas = [d for _, _, d in parsed]
+    total_volume = float(sum(volumes))
+    if total_volume <= 0:
+        return out
+
+    poc_idx = int(np.argmax(np.asarray(volumes, dtype=float)))
+    target_volume = total_volume * float(max(0.1, min(0.95, value_area_pct)))
+    included = {poc_idx}
+    cumulative = float(volumes[poc_idx])
+    left = poc_idx - 1
+    right = poc_idx + 1
+    while cumulative < target_volume and (left >= 0 or right < len(volumes)):
+        left_vol = float(volumes[left]) if left >= 0 else -1.0
+        right_vol = float(volumes[right]) if right < len(volumes) else -1.0
+        if left_vol >= right_vol:
+            idx = left
+            left -= 1
+        else:
+            idx = right
+            right += 1
+        if 0 <= idx < len(volumes) and idx not in included:
+            included.add(idx)
+            cumulative += float(volumes[idx])
+
+    poc_vol = float(volumes[poc_idx])
+    low_idx = min(included)
+    high_idx = max(included)
+    lvn_cutoff = poc_vol * float(max(0.0, lvn_threshold))
+    lvn_levels = [
+        round(float(prices[i]), 10)
+        for i in range(low_idx, high_idx + 1)
+        if float(volumes[i]) < lvn_cutoff
+    ]
+    delta_total = float(sum(deltas))
+    out.update(
+        {
+            "poc": round(float(prices[poc_idx]), 10),
+            "vah": round(float(prices[high_idx]), 10),
+            "val": round(float(prices[low_idx]), 10),
+            "profile_valid": True,
+            "total_volume": round(total_volume, 4),
+            "bin_count": len(parsed),
+            "session_high": round(float(max(prices)), 10),
+            "session_low": round(float(min(prices)), 10),
+            "lvn_levels": lvn_levels,
+            "distribution": [round(float(v), 4) for v in volumes],
+            "delta": round(delta_total, 4),
+            "cvd_value": round(delta_total, 4),
+        }
+    )
+    return out
+
+
 def _parse_utc_timestamp(raw: Any) -> datetime | None:
     if raw is None or raw == "":
         return None

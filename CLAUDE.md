@@ -79,8 +79,12 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 | `risk_engine.py` | Kill switch, drawdown, position sizing, portfolio heat |
 | `config.py` | Hardcoded defaults + YAML loader + `_json_safe()` |
 | `config.yaml` | All tunable thresholds — edit here, not `config.py` |
-| `scalp_engine.py` | Engine D: Fabio Valentini VP+OrderFlow scalping. Functions: `run_scalp_scan`, `get_scalp_pairs`, `scalp_session_window`, `_build_volume_profile`, `_classify_market_state`, `_locate_price_vs_vp`, `_check_absorption`, `_check_cvd`, `_check_aaa_sequence`, `_check_vwap_lean`, `_classify_setup`, `calculate_scalp_levels`, `ai_quality_grade`. M1/M5/M15/H1 support. MT5 data for non-crypto; Binance/`fetch_candles` for crypto. |
-| `volume_profile.py` | Fixed-range Volume Profile computation: POC, VAH, VAL, LVN levels, session splitting. Used by `scalp_engine.py`. |
+| `scalp_engine.py` | Engine D: Fabio Valentini VP+OrderFlow scalping. Functions: `run_scalp_scan`, `get_scalp_pairs`, `scalp_session_window`, `_build_volume_profile`, `_build_trade_bucket_volume_profile`, `_overlay_eodhd_volume_for_scalp`, `_classify_market_state`, `_locate_price_vs_vp`, `_check_absorption`, `_check_cvd`, `_check_trade_bucket_cvd`, `_check_aaa_sequence`, `_check_vwap_lean`, `_classify_setup`, `calculate_scalp_levels`, `ai_quality_grade`. M1/M5/M15/H1 support. MT5 OHLC/live price for non-crypto; EODHD may overlay volume only. Binance/`fetch_candles` for crypto, with Binance aggTrade buckets preferred for VP/CVD when fresh. |
+| `volume_profile.py` | Fixed-range Volume Profile computation: POC, VAH, VAL, LVN levels, session splitting, plus `compute_bucketed_volume_profile()` for price-level trade buckets. Used by `scalp_engine.py`. |
+| `athena/microstructure/trade_bucket_store.py` | SQLite-backed Binance aggregate-trade price-bucket store used by Engine D crypto VP/CVD. |
+| `tools/preprocess_binance_aggtrades.py` | Preprocess local or downloaded Binance Futures aggTrade ZIP/CSV files into trade buckets for crypto backtests. |
+| `tools/audit_eodhd_intraday_volume.py` | Read-only EODHD intraday/EOD volume coverage audit for Athena symbols/timeframes. |
+| `tools/audit_eodhd_symbol_coverage.py` | Read-only EODHD exchange symbol-list audit for Athena candidate mappings. |
 | `ai_schemas.py` | Pydantic schemas for AI JSON output (`EngineAResponse`, `EngineBResponse`, `StyleRating`) |
 | `mt5_executor.py` | MetaTrader 5 execution |
 | `bybit_executor.py` | Bybit Linear (USDT-M) Futures execution |
@@ -96,9 +100,9 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 ## Venues (canonical — execution vs data)
 
 - **Crypto — execution:** **Bybit** USDT-M linear futures only (`bybit_executor.py`). All live crypto **orders** go here (including Engine D `/api/scalp-execute` when `signal.type == "crypto"`). **Binance is not a crypto execution broker in this codebase** — it is market data only.
-- **Crypto — market data:** **Binance Futures** WebSocket klines (`candle_feeds.BinanceCandleWS`) → `CandleBuilder.on_kline()` for **M5, M15, H1, H4, D1**, plus REST fallback / merge via `fetch_candles()` when `pair["source"] == "binance"`. Live crypto quote stream: `BinanceLivePriceWS` `!ticker@arr`.
+- **Crypto - market data:** **Binance Futures** WebSocket klines (`candle_feeds.BinanceCandleWS`) -> `CandleBuilder.on_kline()` for **M5, M15, H1, H4, D1**, plus REST fallback / merge via `fetch_candles()` when `pair["source"] == "binance"`. Live crypto quote stream: `BinanceLivePriceWS` `!ticker@arr`. Engine D crypto orderflow also subscribes to Binance **`aggTrade`** streams via `athena/datafeeds/binance_ws.py` and stores price-level buckets in `athena/microstructure/trade_bucket_store.py`; VP/CVD prefer fresh buckets and fall back to candle volume when buckets are unavailable or stale.
 - **Non-crypto — execution and OHLC:** **MT5** only (`mt5_executor.py`, `fetch_mt5()` for candles). Forex, commodities, indices, stocks as configured with `source: mt5`.
-- **EODHD — volume overlay (not primary price):** For **stocks, commodities, indices** only, EODHD can **overlay volume** onto existing candles without changing OHLC (`eodhd_volume_overlay.py`, whitelist per symbol/TF). This is separate from MT5 price feeds and separate from crypto (crypto volume comes from Binance bars).
+- **EODHD - volume overlay (not primary price):** For whitelisted **forex, stocks, commodities, and indices**, EODHD can **overlay volume** onto existing MT5 candles without changing OHLC (`eodhd_volume_overlay.py`, whitelist per symbol/TF). Live Engine D uses EODHD volume from warmed cache only, so MT5 remains the immediate live feed and fallback. Engine D backtests may fetch EODHD intraday volume directly. This path is separate from crypto, where live volume/orderflow comes from Binance bars and aggTrade buckets.
 
 ---
 
@@ -106,14 +110,14 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 
 | Asset class | Candles | Live price |
 |---|---|---|
-| Forex / Stocks / Commodities / Indices | `fetch_mt5()` only — H1/H4/D1 | `symbol_info_tick()` bid/ask mid |
+| Forex / Stocks / Commodities / Indices | `fetch_mt5()` primary; Engine D may overlay cached EODHD volume only on M1/M5/M15/H1/H4/D1 without changing OHLC | `symbol_info_tick()` bid/ask mid |
 | Crypto M5/M15/H1/H4/D1 | `BinanceCandleWS` futures `@kline_*` → `CandleBuilder.on_kline()`; REST merge/fallback `binance_futures` | `BinanceLivePriceWS` `!ticker@arr` |
 | Crypto (other TFs) | Binance REST via `fetch_binance` / `tf_b` map when `source == binance` | — |
 | EODHD WS | EODHD-sourced pairs only (JSE disabled pairs etc.) | — |
 
 **Candle depth:** `D1_CANDLES: 1001`, `H4_CANDLES: 1001`, `H1_CANDLES: 1001` → ~1000 closed bars after forming bar is dropped. `fetch_mt5()` requests `limit + 100`.
 
-**Never** route MT5-sourced pairs through CandleBuilder or EODHD REST. **Never** write a stale bar close into `_live_prices` for any MT5 pair.
+**Never** route MT5-sourced pairs through CandleBuilder. **Never** replace MT5 OHLC with EODHD OHLC on MT5-sourced pairs; EODHD is volume-only overlay. Live Engine D EODHD volume lookup must remain cache-only to avoid delaying scalping; cold cache falls back to MT5 volume. **Never** write a stale bar close into `_live_prices` for any MT5 pair.
 
 ---
 
@@ -880,7 +884,7 @@ SCALP_ENGINE:
 16. BybitWS: `ping_interval=None` in `websockets.connect()` required — disables library keepalive, prevents 1011 errors
 17. Engine B AI is **review-only** — do not reintroduce AI as a pass/fail gate without explicit user request
 18. Scoring/confluence/candle complaints require tracing data → engine → API fields → dashboard display — never conclude "engine is wrong" from UI alone
-19. Feed routing is **locked** — MT5 sources use `fetch_mt5()` only; no CandleBuilder/EODHD REST for MT5 pairs; no stale bar close into `_live_prices`
+19. Feed routing is **locked** - MT5 sources use `fetch_mt5()` for OHLC/live price; EODHD may overlay volume only and live Engine D must use cache-only EODHD volume lookups; no CandleBuilder for MT5 pairs; no stale bar close into `_live_prices`.
 20. Scoring gates are **locked** — do not modify thresholds, weights, or gate logic unless user explicitly requests it
 21. `_build_signal_message` reads `"engine_b"` first then `"naked_data"` for ENGINE B section (Engine A signals use `"engine_b"`, Engine B scan signals use `"naked_data"`)
 22. Vision structured footer: preserve machine-readable lines — `RIGHT EDGE: CONFIRMS|REVIEW|POTENTIAL REVERSAL` (line immediately before `TF ALIGNMENT`) plus `TF ALIGNMENT` + 3× `RATING` + 3× `LEVELS` in single/dual/triple modes — required by `_extract_vision_structured()` parser; do not reword tokens
