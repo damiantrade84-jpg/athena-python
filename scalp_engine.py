@@ -2207,9 +2207,14 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
         reason_counts = Counter(s.get("reason", "unknown") for s in skipped)
         for reason, count in reason_counts.most_common():
             log.warning(f"[SCALP] Skip reason: {reason} × {count}")
-        # Per-pair detail at debug level so it's available when needed
+        noisy_reasons = ("MARKET_DATA_STALE_", "MARKET_CLOSED_NO_TICK", "spread_too_wide_")
         for s in skipped:
-            log.debug(f"[SCALP] Skipped {s.get('pair')} — {s.get('reason')}")
+            reason = str(s.get("reason") or "")
+            msg = f"[SCALP] Skipped {s.get('pair')} - {reason}"
+            if reason.startswith(noisy_reasons):
+                log.warning(msg)
+            else:
+                log.debug(msg)
 
     return {
         "signals": signals,
@@ -2236,6 +2241,9 @@ def _guess_asset_type(display: str) -> str:
     }
     parts = display.replace("/", " ").split()
     if len(parts) == 2 and all(p in forex_currencies for p in parts):
+        return "forex"
+    compact = display.replace("/", "").replace(" ", "").upper()
+    if len(compact) == 6 and compact[:3] in forex_currencies and compact[3:] in forex_currencies:
         return "forex"
     commodity_names = {
         "Aluminium", "Lead", "Nickel", "Zinc", "Gasoline", "Cattle", "Cocoa",
