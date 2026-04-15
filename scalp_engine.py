@@ -1338,6 +1338,24 @@ def _classify_setup(
 # RISK LEVELS — SL / TP1 / TP2
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _scalp_min_rr_for_group(asset_type: str, score_group: str | None = None) -> float:
+    """Return the effective Engine D MIN_RR, allowing per-group override for forex."""
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    base = float(cfg.get("MIN_RR", 2.0))
+    if not score_group:
+        return base
+    group_cfg = (
+        (CONFIG.get("NAKED_ENGINE", {}) or {})
+        .get("score_group_overrides", {})
+        or {}
+    ).get(score_group, {})
+    # Use the scalp-level min_rr override if present, else base
+    scalp_override = (group_cfg.get("scalp") or {}).get("min_rr")
+    if scalp_override is not None:
+        return float(scalp_override)
+    return base
+
+
 def calculate_scalp_levels(
     direction: str,
     entry: float,
@@ -1345,6 +1363,7 @@ def calculate_scalp_levels(
     setup_type: str,
     symbol_info: dict,
     asset_type: str,
+    min_rr_override: float | None = None,
 ) -> dict:
     """Calculate SL, TP1, TP2 using VP levels.
 
@@ -1375,7 +1394,7 @@ def calculate_scalp_levels(
     poc = vp.get("poc", entry)
     vah = vp.get("vah", entry)
     val = vp.get("val", entry)
-    min_rr_cfg = float(cfg.get("MIN_RR", 2.0))
+    min_rr_cfg = float(min_rr_override) if min_rr_override is not None else float(cfg.get("MIN_RR", 2.0))
     va_width = abs(vah - val)
 
     if setup_type == "mean_reversion":
@@ -2068,8 +2087,11 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 skipped.append({"pair": display, "reason": f"counter_trend:{direction}_vs_{bias_tf}_{htf_bias}"})
                 continue
 
-            # Risk levels
-            levels = calculate_scalp_levels(direction, current_price, vp, setup["setup_type"], sym_info, asset_type)
+            # Risk levels — use per-group min_rr if available (e.g. forex_majors/crosses)
+            from scoring import get_pair_score_group as _gpsg
+            _scalp_score_group = _gpsg(pair)
+            _min_rr = _scalp_min_rr_for_group(asset_type, _scalp_score_group)
+            levels = calculate_scalp_levels(direction, current_price, vp, setup["setup_type"], sym_info, asset_type, min_rr_override=_min_rr)
             if levels.get("rr_below_min"):
                 log.warning(f"[SCALP] {display}: mean_reversion RR {levels['rr']:.2f} < MIN_RR — skipping (natural TP too close)")
                 _record_stability_sample(display, asset_type, False, reason="rr_below_min")

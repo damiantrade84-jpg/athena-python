@@ -717,6 +717,14 @@ NAKED_ENGINE:
   ob_min_strength: 50
 
   score_group_overrides:
+    forex_majors:
+      scalp: {min_rr: 1.2}
+      intraday: {min_rr: 1.3}
+      swing: {min_rr: 1.8}
+    forex_crosses:
+      scalp: {min_rr: 1.2}
+      intraday: {min_rr: 1.3}
+      swing: {min_rr: 1.8}
     forex_exotics:
       scalp: {min_room_atr: 0.5, min_rr: 1.2}
       intraday: {min_room_atr: 0.85, min_rr: 1.35}

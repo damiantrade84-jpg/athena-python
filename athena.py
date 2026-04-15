@@ -1236,70 +1236,75 @@ _VENDOR_SYMBOL_OVERRIDES = {
     "WTI Oil": {"yfinance": "CL=F", "eodhd": "CL", "fallback": "yfinance"},
     "Brent Oil": {"yfinance": "BZ=F", "eodhd": "BZ", "fallback": "yfinance"},
     "Nat Gas": {"yfinance": "NG=F", "eodhd": "NG", "fallback": "yfinance"},
-    "Copper": {"yfinance": "HG=F", "eodhd": "COPPER", "fallback": "yfinance"},
-    "Aluminium": {"yfinance": "ALI=F", "eodhd": "ALUMINUM", "fallback": "yfinance"},
-    # Agricultural commodities: EODHD D1 only
-    "Coffee": {"yfinance": "KC=F", "eodhd": "COFFEE", "fallback": "yfinance"},
+    # COPPER/ALUMINUM: no valid EODHD EOD ticker — falls back to yfinance
+    "Copper": {"yfinance": "HG=F", "eodhd": "", "fallback": "yfinance"},
+    "Aluminium": {"yfinance": "ALI=F", "eodhd": "", "fallback": "yfinance"},
+    # Agricultural commodities: COFFEE/COTTON/SUGAR/WHEAT have no valid EODHD EOD ticker
+    "Coffee": {"yfinance": "KC=F", "eodhd": "", "fallback": "yfinance"},
     "Corn": {"yfinance": "ZC=F", "eodhd": "CORN", "fallback": "yfinance"},
-    "Cotton": {"yfinance": "CT=F", "eodhd": "COTTON", "fallback": "yfinance"},
-    "Sugar": {"yfinance": "SB=F", "eodhd": "SUGAR", "fallback": "yfinance"},
-    "Wheat": {"yfinance": "ZW=F", "eodhd": "WHEAT", "fallback": "yfinance"},
-    # Indices: EODHD plain symbol for D1; eodhd_intraday uses .INDX suffix (confirmed working)
+    "Cotton": {"yfinance": "CT=F", "eodhd": "", "fallback": "yfinance"},
+    "Sugar": {"yfinance": "SB=F", "eodhd": "", "fallback": "yfinance"},
+    "Wheat": {"yfinance": "ZW=F", "eodhd": "", "fallback": "yfinance"},
+    # Indices: EODHD EOD requires .INDX suffix (plain symbol returns 404)
     "UK100": {
         "yfinance": "^FTSE",
-        "eodhd": "FTSE",
+        "eodhd": "FTSE.INDX",
         "eodhd_intraday": "FTSE.INDX",
         "polygon": "C:UK100",
         "fallback": "yfinance",
     },
     "S&P 500": {
         "yfinance": "^GSPC",
-        "eodhd": "GSPC",
+        "eodhd": "GSPC.INDX",
         "eodhd_intraday": "GSPC.INDX",
         "fallback": "yfinance",
     },
     "Nasdaq": {
         "yfinance": "^IXIC",
-        "eodhd": "IXIC",
+        "eodhd": "IXIC.INDX",
         "eodhd_intraday": "IXIC.INDX",
         "fallback": "yfinance",
     },
     "NASDAQ-100": {
         "yfinance": "^IXIC",
-        "eodhd": "IXIC",
+        "eodhd": "IXIC.INDX",
         "eodhd_intraday": "IXIC.INDX",
         "fallback": "yfinance",
     },
     "Dow Jones": {
         "yfinance": "^DJI",
-        "eodhd": "DJI",
+        "eodhd": "DJI.INDX",
         "eodhd_intraday": "DJI.INDX",
         "fallback": "yfinance",
     },
     "DAX 40": {
         "yfinance": "^GDAXI",
-        "eodhd": "GDAXI",
+        "eodhd": "GDAXI.INDX",
         "eodhd_intraday": "GDAXI.INDX",
         "fallback": "yfinance",
     },
     "ASX 200": {
         "yfinance": "^AXJO",
-        "eodhd": "AXJO",
+        "eodhd": "AXJO.INDX",
         "eodhd_intraday": "AXJO.INDX",
         "fallback": "yfinance",
     },
     "Nikkei 225": {
         "yfinance": "^N225",
-        "eodhd": "N225",
+        "eodhd": "N225.INDX",
         "eodhd_intraday": "N225.INDX",
         "fallback": "yfinance",
     },
     "Hang Seng": {
         "yfinance": "^HSI",
-        "eodhd": "HSI",
+        "eodhd": "HSI.INDX",
         "eodhd_intraday": "HSI.INDX",
         "fallback": "yfinance",
     },
+    # Currency basket indices: no valid EODHD EOD ticker — falls back to MT5
+    "EURX": {"eodhd": "", "fallback": "yfinance"},
+    "JPYX": {"eodhd": "", "fallback": "yfinance"},
+    "USDX": {"eodhd": "", "fallback": "yfinance"},
 }
 
 
@@ -1324,9 +1329,10 @@ def _yfinance_symbol_for_pair(pair: dict) -> str | None:
 
 def _eodhd_ticker_for_pair(pair: dict) -> str | None:
     # Check vendor override first — highest priority
+    # Empty string "" is an explicit block (pair confirmed to have no valid EODHD EOD ticker)
     override = _vendor_overrides(pair).get("eodhd")
-    if override:
-        return override
+    if override is not None:
+        return override if override else None
     # ... rest of existing function unchanged
 
     disp = pair.get("display", "")
@@ -7323,6 +7329,125 @@ def api_naked_style_thresholds():
     return jsonify({"saved": True, "style_profiles": out})
 
 
+def _persist_scalp_group_rr_yaml(cfg_path: str, group: str, style: str, min_rr: float) -> None:
+    """Rewrite a single min_rr value inside NAKED_ENGINE.score_group_overrides in config.yaml."""
+    import re as _re
+
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # Pattern: find the group block and update or insert min_rr for the given style line
+    # e.g.   forex_majors:\n      scalp: {min_rr: 1.2}
+    style_pat = _re.compile(
+        rf"(  score_group_overrides:.*?{_re.escape(group)}:\n(?:.*\n)*?      {_re.escape(style)}: \{{[^}}]*)min_rr: [\d.]+",
+        _re.DOTALL,
+    )
+    if style_pat.search(content):
+        content = style_pat.sub(
+            lambda m: m.group(0)[: m.start(0) - m.start(0)] + m.group(0).replace(
+                _re.search(r"min_rr: [\d.]+", m.group(0)).group(0),
+                f"min_rr: {min_rr}",
+            ),
+            content,
+            count=1,
+        )
+    else:
+        # Insert the group+style block if missing
+        insert_pat = _re.compile(r"(  score_group_overrides:\n)")
+        if insert_pat.search(content):
+            content = insert_pat.sub(
+                rf"\1    {group}:\n      {style}: {{min_rr: {min_rr}}}\n",
+                content,
+                count=1,
+            )
+
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+@app.route("/api/scalp-group-rr", methods=["GET", "POST"])
+def api_scalp_group_rr():
+    """GET: return current min_rr values for forex score groups across scalp/intraday/swing.
+    POST: update min_rr for a specific group+style combination.
+    Body: {"group": "forex_majors", "scalp": 1.2, "intraday": 1.3, "swing": 1.8}
+    """
+    FOREX_GROUPS = ("forex_majors", "forex_crosses", "forex_exotics", "forex_other")
+    STYLES = ("scalp", "intraday", "swing")
+    ne = CONFIG.get("NAKED_ENGINE") or {}
+    group_overrides = ne.get("score_group_overrides") or {}
+    global_min_rr = float((CONFIG.get("SCALP_ENGINE") or {}).get("MIN_RR", 2.0))
+
+    if request.method == "GET":
+        out = {"global_min_rr": global_min_rr, "groups": {}}
+        for grp in FOREX_GROUPS:
+            grp_cfg = group_overrides.get(grp) or {}
+            out["groups"][grp] = {
+                s: (grp_cfg.get(s) or {}).get("min_rr") for s in STYLES
+            }
+        return jsonify(out)
+
+    data = request.get_json(silent=True) or {}
+    group = data.get("group")
+    if group not in FOREX_GROUPS:
+        return jsonify({"error": f"group must be one of {FOREX_GROUPS}"}), 400
+
+    cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+    ne_mut = CONFIG.setdefault("NAKED_ENGINE", {})
+    sgo = ne_mut.setdefault("score_group_overrides", {})
+    grp_entry = sgo.setdefault(group, {})
+
+    saved = {}
+    for style in STYLES:
+        if style not in data:
+            continue
+        try:
+            val = float(data[style])
+        except (TypeError, ValueError):
+            return jsonify({"error": f"Invalid value for {style}"}), 400
+        if val < 0.5 or val > 5.0:
+            return jsonify({"error": f"{style} min_rr out of range (0.5–5.0)"}), 400
+        style_entry = grp_entry.setdefault(style, {})
+        style_entry["min_rr"] = round(val, 2)
+        saved[style] = round(val, 2)
+
+    if not saved:
+        return jsonify({"error": "No valid style keys provided"}), 400
+
+    try:
+        import re as _re
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        for style, val in saved.items():
+            # Try to replace existing min_rr for this group+style
+            pat = _re.compile(
+                rf"(  score_group_overrides:.*?{_re.escape(group)}:\n(?:(?!    \w).*\n)*?      {_re.escape(style)}: \{{[^}}]*)min_rr: [\d.]+",
+                _re.DOTALL,
+            )
+            if pat.search(content):
+                content = pat.sub(
+                    lambda m, v=val: m.group(1) + f"min_rr: {v}",
+                    content, count=1,
+                )
+            else:
+                # Group+style line exists but no min_rr yet — append it
+                line_pat = _re.compile(
+                    rf"(      {_re.escape(style)}: \{{)([^}}]*)(\}})",
+                )
+                def _inject(m, v=val):
+                    inner = m.group(2).rstrip()
+                    sep = ", " if inner else ""
+                    return m.group(1) + inner + sep + f"min_rr: {v}" + m.group(3)
+                content = line_pat.sub(_inject, content, count=1)
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        log.info("[SCALP_GROUP_RR] %s updated: %s", group, saved)
+    except Exception as e:
+        log.error("[SCALP_GROUP_RR] persist failed: %s", e)
+        return jsonify({"saved": False, "error": str(e)}), 500
+
+    return jsonify({"saved": True, "group": group, "updated": saved})
+
+
 @app.route("/api/live-confluence-thresholds", methods=["GET", "POST"])
 def api_live_confluence_thresholds():
     """GET/POST MIN_CONFLUENCE_CLASS thresholds used by Engine A live scan tiering."""
@@ -12750,7 +12875,7 @@ def _select_live_crypto_symbols_for_ws() -> list[str]:
 
 
 def _select_eodhd_volume_warm_pairs() -> list[dict]:
-    """Select active non-crypto pairs that can use EODHD volume overlays."""
+    """Select active non-crypto scalp pairs for M1/M5/M15 volume warming (Engine D)."""
     try:
         from scalp_engine import get_scalp_pairs
 
@@ -12769,8 +12894,22 @@ def _select_eodhd_volume_warm_pairs() -> list[dict]:
     return selected
 
 
+def _select_engine_a_warm_pairs() -> list[dict]:
+    """Select ALL active non-crypto pairs for H1/H4/D1 volume warming (Engine A + chart rendering)."""
+    return [
+        p for p in ACTIVE_PAIRS
+        if p.get("type") != "crypto" and _supports_eodhd_volume_overlay(p)
+    ]
+
+
 def _start_eodhd_volume_warmer() -> None:
-    """Warm EODHD volume cache off the live scan path."""
+    """Warm EODHD volume cache off the live scan path.
+
+    Two loops:
+    - Fast loop (M1/M5/M15, Engine D scalp pairs, 60s interval)
+    - Slow loop (H1/H4/D1, all Engine A non-crypto pairs, configurable slow interval)
+      Uses scan_candle_limits() for H1/H4/D1 so cache keys match analyze_pair().
+    """
     cfg = CONFIG.get("SCALP_ENGINE", {})
     if not cfg.get("EODHD_VOLUME_WARMER_ENABLED", True):
         log.info("[EODHD-VOL] Warmer disabled")
@@ -12779,37 +12918,80 @@ def _start_eodhd_volume_warmer() -> None:
         log.warning("[EODHD-VOL] Warmer disabled - EODHD_KEY not set")
         return
 
-    tfs = [str(tf).upper() for tf in (cfg.get("EODHD_VOLUME_WARMER_TIMEFRAMES") or ["M1", "M5", "M15"])]
-    interval = max(30, int(cfg.get("EODHD_VOLUME_WARMER_INTERVAL_SEC", 60) or 60))
-    limits = {
+    # ── Fast loop: scalp TFs for Engine D ────────────────────────────────
+    scalp_tfs = [str(tf).upper() for tf in (cfg.get("EODHD_VOLUME_WARMER_TIMEFRAMES") or ["M1", "M5", "M15"])]
+    scalp_interval = max(30, int(cfg.get("EODHD_VOLUME_WARMER_INTERVAL_SEC", 60) or 60))
+    scalp_limits = {
         "M1": int(cfg.get("M1_CANDLES", 300) or 300),
         "M5": int(cfg.get("M5_CANDLES", 1000) or 1000),
         "M15": int(cfg.get("M15_CANDLES", 500) or 500),
         "H1": int(cfg.get("H1_CANDLES", 300) or 300),
     }
 
-    def _loop():
+    def _scalp_loop():
         while True:
             pairs = _select_eodhd_volume_warm_pairs()
             warmed = 0
             skipped = 0
             for pair in pairs:
-                for tf in tfs:
+                for tf in scalp_tfs:
                     if not _is_eodhd_volume_whitelisted(pair, tf):
                         skipped += 1
                         continue
                     try:
-                        resp = _fetch_eodhd_volume_only(pair, tf, limits.get(tf, 300))
+                        resp = _fetch_eodhd_volume_only(pair, tf, scalp_limits.get(tf, 300))
                         if isinstance(resp, dict) and not resp.get("error"):
                             warmed += 1
                     except Exception as exc:
-                        log.debug("[EODHD-VOL] Warmer fetch failed %s %s: %s", pair.get("display"), tf, exc)
-                    # Keep EODHD request pressure modest.
+                        log.debug("[EODHD-VOL] Scalp warmer fetch failed %s %s: %s", pair.get("display"), tf, exc)
                     time.sleep(0.15)
-            log.info("[EODHD-VOL] Warmer cycle warmed=%s skipped=%s pairs=%s tfs=%s", warmed, skipped, len(pairs), tfs)
-            time.sleep(interval)
+            log.info("[EODHD-VOL] Scalp warmer cycle warmed=%s skipped=%s pairs=%s", warmed, skipped, len(pairs))
+            time.sleep(scalp_interval)
 
-    threading.Thread(target=_loop, daemon=True, name="EODHDVolumeWarmer").start()
+    threading.Thread(target=_scalp_loop, daemon=True, name="EODHDVolumeWarmer").start()
+
+    # ── Slow loop: Engine A TFs (H1/H4/D1) for all non-crypto pairs ──────
+    if not cfg.get("EODHD_VOLUME_WARMER_ENGINE_A_ENABLED", True):
+        log.info("[EODHD-VOL] Engine A slow warmer disabled")
+        return
+
+    slow_interval = max(60, int(cfg.get("EODHD_VOLUME_WARMER_SLOW_INTERVAL_SEC", 900) or 900))
+    # Use the same limits as analyze_pair() so _eodhd_volume_cache keys match exactly.
+    _scan_lim = scan_candle_limits()
+    engine_a_limits = {
+        "H1": int(_scan_lim.get("H1", 1001)),
+        "H4": int(_scan_lim.get("H4", 1001)),
+        "D1": int(_scan_lim.get("D1", 1001)),
+    }
+    engine_a_tfs = ["H1", "H4", "D1"]
+
+    def _engine_a_loop():
+        # Brief startup delay so scalp warmer and MT5 can initialise first.
+        time.sleep(30)
+        while True:
+            pairs = _select_engine_a_warm_pairs()
+            warmed = 0
+            skipped = 0
+            for pair in pairs:
+                for tf in engine_a_tfs:
+                    if not _is_eodhd_volume_whitelisted(pair, tf):
+                        skipped += 1
+                        continue
+                    try:
+                        resp = _fetch_eodhd_volume_only(pair, tf, engine_a_limits[tf])
+                        if isinstance(resp, dict) and not resp.get("error"):
+                            warmed += 1
+                    except Exception as exc:
+                        log.debug("[EODHD-VOL] Engine A warmer fetch failed %s %s: %s", pair.get("display"), tf, exc)
+                    # Modest request rate — H1/H4/D1 TTLs are long so this loop runs infrequently.
+                    time.sleep(0.2)
+            log.info(
+                "[EODHD-VOL] Engine A warmer cycle warmed=%s skipped=%s pairs=%s tfs=%s",
+                warmed, skipped, len(pairs), engine_a_tfs,
+            )
+            time.sleep(slow_interval)
+
+    threading.Thread(target=_engine_a_loop, daemon=True, name="EODHDVolumeWarmerEngineA").start()
 
 
 def ensure_runtime_services_started() -> None:

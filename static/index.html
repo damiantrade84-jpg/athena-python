@@ -1646,7 +1646,24 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
         font-family:'DM Sans',sans-serif;font-size:12px;font-weight:800;">
         SCAN SCALPS
       </button>
+      <button id="scalpRrToggleBtn" onclick="toggleScalpRrPanel()" title="Adjust forex min RR per group — prevents mean_reversion rejections" style="background:linear-gradient(135deg,#1e3a5f,#7c3aed);border:none;color:#fff;padding:7px 14px;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:11px;font-weight:700;">⚙ FOREX MIN RR</button>
       <span id="scalpStatus" style="font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;"></span>
+    </div>
+
+    <!-- Forex min_rr override panel (collapsed by default) -->
+    <div id="scalpRrPanel" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px 20px 14px;margin-bottom:18px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <div>
+          <span style="font-size:13px;font-weight:700;color:var(--text);">Forex Mean Reversion — Min RR Override</span>
+          <span style="font-size:11px;color:var(--muted);margin-left:10px;">Overrides global SCALP_ENGINE.MIN_RR (2.0) for forex groups only</span>
+        </div>
+        <button onclick="loadScalpRrValues()" title="Reload from server" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:18px;padding:2px 6px;">&#8635;</button>
+      </div>
+      <div id="scalpRrInputs"><span style="color:var(--muted);font-size:12px;">Loading…</span></div>
+      <div style="margin-top:14px;display:flex;align-items:center;gap:12px;">
+        <button id="scalpRrSaveBtn" onclick="saveScalpRrValues()" style="background:var(--accent);border:none;color:#000;padding:7px 18px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:800;">✓ SAVE</button>
+        <span id="scalpRrStatus" style="font-size:11px;"></span>
+      </div>
     </div>
 
     <details id="scalpUniverseWrap" style="margin-bottom:16px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:rgba(255,255,255,0.02);">
@@ -5085,6 +5102,100 @@ async function saveNakedStyleThresholds() {
   btn.disabled = false;
   btn.textContent = '✓ SAVE ENGINE B THRESHOLDS';
 setTimeout(function() { status.textContent = ''; }, 5000);
+}
+
+// ── Scalp Lab forex min_rr panel ──────────────────────────────────────────
+var _scalpRrOpen = false;
+
+function toggleScalpRrPanel() {
+  _scalpRrOpen = !_scalpRrOpen;
+  document.getElementById('scalpRrPanel').style.display = _scalpRrOpen ? 'block' : 'none';
+  if (_scalpRrOpen) loadScalpRrValues();
+}
+
+async function loadScalpRrValues() {
+  var container = document.getElementById('scalpRrInputs');
+  container.innerHTML = '<span style="color:var(--muted);font-size:12px;">Loading…</span>';
+  try {
+    var r = await fetch('/api/scalp-group-rr');
+    var data = await r.json();
+    var globalRr = data.global_min_rr || 2.0;
+    var groups = data.groups || {};
+    var GROUPS = [
+      { key: 'forex_majors',  label: 'Forex Majors',  hint: 'EUR/USD, GBP/USD, USD/JPY, AUD/USD…' },
+      { key: 'forex_crosses', label: 'Forex Crosses',  hint: 'EUR/JPY, GBP/JPY, EUR/GBP…' },
+      { key: 'forex_exotics', label: 'Forex Exotics',  hint: 'USD/ZAR, USD/MXN' },
+      { key: 'forex_other',   label: 'Forex Other',    hint: 'Any unclassified forex pair' }
+    ];
+    var STYLES = ['scalp', 'intraday', 'swing'];
+    var html = '<div style="font-size:11px;color:var(--muted);margin-bottom:12px;">Global MIN_RR (non-forex): <strong style="color:var(--text);">' + globalRr + '</strong> &nbsp;·&nbsp; Per-group overrides apply only to forex mean reversion (Engine D + Engine B)</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;">';
+    for (var gi = 0; gi < GROUPS.length; gi++) {
+      var grp = GROUPS[gi];
+      var grpData = groups[grp.key] || {};
+      html += '<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;">';
+      html += '<div style="font-size:12px;font-weight:700;color:#7c3aed;margin-bottom:2px;">' + grp.label + '</div>';
+      html += '<div style="font-size:10px;color:var(--muted);margin-bottom:10px;">' + grp.hint + '</div>';
+      for (var si = 0; si < STYLES.length; si++) {
+        var st = STYLES[si];
+        var cur = grpData[st] != null ? grpData[st] : '';
+        var placeholder = st === 'scalp' ? '1.2' : (st === 'intraday' ? '1.3' : '1.8');
+        html += '<div style="margin-bottom:7px;">';
+        html += '<span style="font-size:10px;color:var(--muted);text-transform:capitalize;">' + st + ' min_rr</span>';
+        html += '<div style="display:flex;align-items:center;gap:6px;margin-top:3px;">';
+        html += '<input type="number" id="srr-' + grp.key + '-' + st + '" value="' + cur + '" placeholder="' + placeholder + '" min="0.5" max="5" step="0.05" style="width:60px;padding:4px 6px;background:var(--card);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px;" oninput="document.getElementById(\'srr-r-' + grp.key + '-' + st + '\').value=this.value||' + placeholder + '" />';
+        html += '<input type="range" id="srr-r-' + grp.key + '-' + st + '" value="' + (cur || placeholder) + '" min="0.5" max="4" step="0.05" style="flex:1;accent-color:#7c3aed;" oninput="document.getElementById(\'srr-' + grp.key + '-' + st + '\').value=this.value" />';
+        html += '</div></div>';
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+    container.innerHTML = html;
+  } catch(e) {
+    container.innerHTML = '<span style="color:#ef4444;font-size:12px;">Failed: ' + e.message + '</span>';
+  }
+}
+
+async function saveScalpRrValues() {
+  var btn = document.getElementById('scalpRrSaveBtn');
+  var status = document.getElementById('scalpRrStatus');
+  btn.disabled = true; btn.textContent = 'Saving…'; status.textContent = '';
+  var GROUPS = ['forex_majors', 'forex_crosses', 'forex_exotics', 'forex_other'];
+  var STYLES = ['scalp', 'intraday', 'swing'];
+  var errors = [];
+  var saveCount = 0;
+  for (var gi = 0; gi < GROUPS.length; gi++) {
+    var grp = GROUPS[gi];
+    var payload = { group: grp };
+    var hasVal = false;
+    for (var si = 0; si < STYLES.length; si++) {
+      var st = STYLES[si];
+      var el = document.getElementById('srr-' + grp + '-' + st);
+      if (el && el.value !== '') {
+        payload[st] = parseFloat(el.value);
+        hasVal = true;
+      }
+    }
+    if (!hasVal) continue;
+    try {
+      var r = await fetch('/api/scalp-group-rr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      var d = await r.json();
+      if (d.saved) { saveCount++; } else { errors.push(grp + ': ' + (d.error || 'failed')); }
+    } catch(e) { errors.push(grp + ': ' + e.message); }
+  }
+  btn.disabled = false; btn.textContent = '✓ SAVE';
+  if (errors.length) {
+    status.textContent = '✗ ' + errors.join('; ');
+    status.style.color = '#ef4444';
+  } else {
+    status.textContent = '✓ Saved ' + saveCount + ' group(s) to config.yaml';
+    status.style.color = '#22c55e';
+    setTimeout(function() { status.textContent = ''; }, 5000);
+  }
 }
 
 // Threshold advisory approvals
