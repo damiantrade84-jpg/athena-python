@@ -10870,8 +10870,8 @@ async function runScalpVisionConfirm(btn, symbol) {
         var sid = symbol.replace(/[\/=^.]/g, '_');
         var resDiv = document.getElementById('scalp-vision-res-' + sid);
         if (resDiv) {
-            resDiv.innerHTML = '<div style="margin-top:8px; padding:10px; background:rgba(240,185,11,0.04); border:1px solid rgba(240,185,11,0.2); border-radius:8px; font-size:10px; color:var(--text-secondary); line-height:1.5">'+
-                '<b style="color:var(--accent)">AI VISION VERDICT:</b> ' + (data.analysis || 'Analysis complete').substring(0, 400) + '...</div>';
+            resDiv.innerHTML = '<div style="margin-top:8px; padding:10px; background:rgba(240,185,11,0.04); border:1px solid rgba(240,185,11,0.2); border-radius:8px; font-size:10px; color:var(--text-secondary); line-height:1.6; white-space:pre-wrap; word-break:break-word;">'+
+                '<b style="color:var(--accent)">AI VISION VERDICT:</b>\n' + (data.analysis || 'Analysis complete') + '</div>';
         }
         btn.innerHTML = '🧠 REVIEWED';
     } catch(e) {
