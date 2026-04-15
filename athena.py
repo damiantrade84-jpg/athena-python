@@ -12382,9 +12382,9 @@ def api_performance():
             ).fetchall()
             last_20 = [dict(r) for r in last_20_rows]
 
-        trades = [dict(r) for r in rows]
+        all_trades = [dict(r) for r in rows]
 
-        if not trades:
+        if not all_trades:
             _empty = jsonify(
                 {
                     "total_trades": 0,
@@ -12400,6 +12400,14 @@ def api_performance():
             _empty.headers["Cache-Control"] = "no-store, max-age=0, must-revalidate"
             _empty.headers["Pragma"] = "no-cache"
             return _empty
+
+        # Split: aggregate stats only use engine-tagged trades so legacy
+        # "unknown" rows (no engine/style tag, often from pre-tagging era)
+        # don't corrupt win rate, total R, equity curve, etc.
+        # Unknown rows still appear in the per-engine breakdown table.
+        trades = [t for t in all_trades if _infer_perf_engine(t) != "unknown"]
+        if not trades:
+            trades = all_trades  # fallback: if everything is unknown, show all
 
         wins = [t for t in trades if (t.get("pnl") or 0) > 0]
 
@@ -12679,7 +12687,7 @@ def api_performance():
                 }
 
         engine_raw: dict = defaultdict(list)
-        for t in trades:
+        for t in all_trades:
             engine_raw[_infer_perf_engine(t)].append(t)
 
         performance_by_engine = {}

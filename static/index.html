@@ -4803,6 +4803,7 @@ async function loadPerformance() {
         '<div class="perf-stat"><div class="perf-stat-val">' + (d.average_holding_period_hours != null ? d.average_holding_period_hours + 'h' : '-') + '</div><div class="perf-stat-lbl">Avg Hold</div></div>' +
         '<div class="perf-stat"><div class="perf-stat-val" style="font-size:14px">' + (d.best_pair || '-') + '</div><div class="perf-stat-lbl">Best Pair</div></div>' +
       '</div>' +
+      '<div style="font-size:10px;color:var(--muted);margin:-8px 0 14px 0">Stats above exclude legacy <em>Unknown</em> engine rows (pre-tagging era). See engine breakdown below for full picture.</div>' +
       '<div class="perf-section"><h4>Live Performance by Engine</h4>' +
         '<table class="perf-table"><thead><tr><th>Engine</th><th>Trades</th><th>WR%</th><th>Avg R</th><th>Total R</th><th>SQN</th><th>Avg Slip</th></tr></thead><tbody>' +
         (engineRows || '<tr><td colspan="7" style="color:var(--muted)">No engine-tagged live outcomes yet</td></tr>') +
