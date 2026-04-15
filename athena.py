@@ -1868,46 +1868,51 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
         "volume_source": "cache_miss",
     }
 
-    if cache_only:
-        # --- Phase 2: Try CandleBuilder WS bars for US stocks on M1/M5/M15 ---
-        # US stock ticks carry real exchange volume; CandleBuilder accumulates them.
-        # Forex uses EODHD historical 1m (.FOREX) which is ~1-2 min delayed — already best available.
-        if ptype == "stock" and tf_key in {"M1", "M5", "M15"}:
-            try:
-                cb = get_candle_builder()
-                if cb:
-                    ws_candles = cb.get_candles(display, tf_key, limit)
-                    if ws_candles and len(ws_candles) >= 5:
-                        last_ts_str = ws_candles[-1].get("time", "")
-                        if last_ts_str:
-                            last_dt = datetime.fromisoformat(str(last_ts_str).replace("Z", "+00:00"))
-                            if last_dt.tzinfo is None:
-                                last_dt = last_dt.replace(tzinfo=timezone.utc)
-                            age_s = (datetime.now(timezone.utc) - last_dt).total_seconds()
-                            tf_sec = {"M1": 60, "M5": 300, "M15": 900}.get(tf_key, 60)
-                            # Accept WS bars if last bar is within 2 bar-lengths of now
-                            if age_s < tf_sec * 2 + 30:
-                                usable = [c for c in ws_candles if float(c.get("vol", 0) or 0) > 0]
-                                if usable:
-                                    ws_payload = {
-                                        "error": False,
-                                        "symbol": display,
-                                        "detail": "",
-                                        "candles": ws_candles,
-                                        "ticker": display,
-                                        "request_tf": tf_key,
-                                        "source_tf": "ws_tick",
-                                        "volume_source": "ws_tick",
-                                    }
-                                    _store_cached_eodhd_volume_only(pair, tf_key, limit, ws_payload)
-                                    log.debug(
-                                        "[EODHD-VOL] %s %s: using CandleBuilder WS bars bars=%s age_s=%.0f",
-                                        display, tf_key, len(ws_candles), age_s,
-                                    )
-                                    return ws_payload
-            except Exception as _ws_err:
-                log.debug("[EODHD-VOL] %s %s WS candle check failed: %s", display, tf_key, _ws_err)
+    # --- CandleBuilder WS-first check for US stocks (all TFs: M1/M5/M15/H1/H4/D1) ---
+    # CandleBuilder accumulates real exchange volume from EODHD US WS ticks (msg["v"]).
+    # M1/M5/M15: added Phase 1. H1/H4/D1: seeded from EODHD REST on startup then kept
+    # live by ongoing WS tick accumulation — always fresher than REST during session.
+    # This check runs regardless of cache_only so Engine A (cache_only=False) also benefits.
+    # Forex/commodity/index excluded — no real volume in OTC ticks.
+    # Backtest: excluded via tf_key check — D1 uses EOD REST which gives full history.
+    if ptype == "stock" and tf_key in {"M1", "M5", "M15", "H1", "H4"}:
+        try:
+            cb = get_candle_builder()
+            if cb:
+                ws_candles = cb.get_candles(display, tf_key, limit)
+                _min_bars = {"M1": 5, "M5": 5, "M15": 5, "H1": 20, "H4": 10}.get(tf_key, 5)
+                if ws_candles and len(ws_candles) >= _min_bars:
+                    last_ts_str = ws_candles[-1].get("time", "")
+                    if last_ts_str:
+                        last_dt = datetime.fromisoformat(str(last_ts_str).replace("Z", "+00:00"))
+                        if last_dt.tzinfo is None:
+                            last_dt = last_dt.replace(tzinfo=timezone.utc)
+                        age_s = (datetime.now(timezone.utc) - last_dt).total_seconds()
+                        _tf_sec = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400}.get(tf_key, 3600)
+                        # Accept WS bars if last bar is within 2 bar-lengths of now
+                        if age_s < _tf_sec * 2 + 30:
+                            usable = [c for c in ws_candles if float(c.get("vol", 0) or 0) > 0]
+                            if usable:
+                                ws_payload = {
+                                    "error": False,
+                                    "symbol": display,
+                                    "detail": "",
+                                    "candles": ws_candles,
+                                    "ticker": display,
+                                    "request_tf": tf_key,
+                                    "source_tf": "ws_tick",
+                                    "volume_source": "ws_tick",
+                                }
+                                _store_cached_eodhd_volume_only(pair, tf_key, limit, ws_payload)
+                                log.debug(
+                                    "[EODHD-VOL] %s %s: WS bars used bars=%s age_s=%.0f (Engine A/D)",
+                                    display, tf_key, len(ws_candles), age_s,
+                                )
+                                return ws_payload
+        except Exception as _ws_err:
+            log.debug("[EODHD-VOL] %s %s WS candle check failed: %s", display, tf_key, _ws_err)
 
+    if cache_only:
         # cache_miss for a whitelisted pair — trigger background re-warm so next scan gets real data
         if _supports_eodhd_volume_overlay(pair) and _is_eodhd_volume_whitelisted(pair, tf_key):
             log.warning(
