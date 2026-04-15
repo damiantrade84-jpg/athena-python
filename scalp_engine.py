@@ -2089,7 +2089,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
 
             # Risk levels — use per-group min_rr if available (e.g. forex_majors/crosses)
             from scoring import get_pair_score_group as _gpsg
-            _scalp_score_group = _gpsg(pair)
+            _scalp_score_group = _gpsg({"display": display, "type": asset_type})
             _min_rr = _scalp_min_rr_for_group(asset_type, _scalp_score_group)
             levels = calculate_scalp_levels(direction, current_price, vp, setup["setup_type"], sym_info, asset_type, min_rr_override=_min_rr)
             if levels.get("rr_below_min"):
