@@ -24,12 +24,30 @@ _COMMODITY_INTRADAY_AND_D1 = {
 }
 
 _FOREX_1M_RESAMPLE = {
+    # Majors — originally audited
     "EUR/USD",
     "GBP/USD",
     "USD/JPY",
     "AUD/USD",
     "USD/CHF",
     "USD/MXN",
+    # Remaining active forex pairs — EODHD fetches as {PAIR}.FOREX via _eodhd_intraday_ticker_for_pair
+    # Falls back to MT5 tick volume silently if EODHD returns no data for a pair
+    "NZD/USD",
+    "EUR/GBP",
+    "USD/CAD",
+    "EUR/JPY",
+    "GBP/JPY",
+    "AUD/JPY",
+    "EUR/AUD",
+    "GBP/AUD",
+    "USD/ZAR",
+    "EUR/CHF",
+    "USD/SGD",
+    "AUD/CHF",
+    "AUD/NZD",
+    "USD/BRL",
+    "USD/INR",
 }
 
 _FOREX_METALS_1M_RESAMPLE = {
@@ -61,6 +79,11 @@ _INDEX_INTRADAY_AND_D1 = {
     "ASX 200",
     "Nikkei 225",
     "Hang Seng",
+    # Currency basket indices — ticker via _eodhd_ticker_for_pair: EURX→EURX.INDX, etc.
+    # Falls back to MT5 tick volume if EODHD has no data
+    "EURX",
+    "JPYX",
+    "USDX",
 }
 
 _STOCK_ALL_TFS = {
@@ -93,6 +116,10 @@ _STOCK_ALL_TFS = {
     "XLE.US",
     "SLV.US",
     "USO.US",
+    # New ETFs added to ETF_PAIRS 2026-04-03
+    "DIA.US",
+    "GDX.US",
+    "SOXX.US",
 }
 
 _EODHD_VOLUME_WHITELIST = {
