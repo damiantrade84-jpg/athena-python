@@ -848,7 +848,7 @@ SCALP_ENGINE:
   M15_CANDLES: 500              # M15 bars for zone/profile detection
   M5_CANDLES: 1000              # M5 bars for trigger/entry detection
   H1_CANDLES: 300               # Higher-TF bars for directional bias
-  SESSION_FILTER: true          # London/NY only for non-crypto
+  SESSION_FILTER: false         # London/NY only for non-crypto
   SESSION_MODE: "london_ny"     # London+NY combined (07:00-21:00 UTC) — full high-liquidity window
   NY_OPEN_SKIP_MINUTES: 30      # Caution window after NY cash open (applies inside london_ny)
   LONDON_OPEN_SKIP_MINUTES: 20  # Avoid first 20 min of London open (07:00-07:20 UTC)

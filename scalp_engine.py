@@ -265,15 +265,24 @@ def _overlay_eodhd_volume_for_scalp(
     candles: list,
     *,
     live: bool = True,
-) -> list:
-    """Overlay audited EODHD volume on MT5 scalp candles when available."""
+) -> tuple[list, str]:
+    """Overlay audited EODHD volume on MT5 scalp candles when available.
+
+    Returns (candles, volume_source) where volume_source is one of:
+      'ws_tick'      — live WS-accumulated US stock volume (near-real-time)
+      'eodhd_1m'     — EODHD intraday hist 1m resampled (~1-2 min lag, forex/metals)
+      'eodhd_1h'     — EODHD intraday hist 1h (2-3h stale for stocks during session)
+      'eodhd_hist'   — EODHD intraday hist other interval
+      'mt5_tick'     — fell back to raw MT5 tick-volume (overlay unavailable)
+      'cache_miss'   — cache empty, bg re-warm triggered for next scan
+    """
     if not candles or str(asset_type or "").lower() not in {"forex", "commodity", "index", "stock"}:
-        return candles
+        return candles, "mt5_tick"
     cfg = CONFIG.get("SCALP_ENGINE", {})
     if live and not cfg.get("EODHD_VOLUME_OVERLAY_LIVE_ENABLED", False):
-        return candles
+        return candles, "mt5_tick"
     if not live and not cfg.get("EODHD_VOLUME_OVERLAY_BACKTEST_ENABLED", True):
-        return candles
+        return candles, "mt5_tick"
     try:
         from athena_runtime import rt
         from eodhd_volume_overlay import overlay_candle_volumes
@@ -286,16 +295,17 @@ def _overlay_eodhd_volume_for_scalp(
             len(candles),
             cache_only=live,
         )
+        vol_source = (volume_resp or {}).get("volume_source", "mt5_tick") if isinstance(volume_resp, dict) else "mt5_tick"
         volume_candles = (volume_resp or {}).get("candles") if isinstance(volume_resp, dict) else None
         if not volume_candles:
-            return candles
+            return candles, vol_source
         merged, matched = overlay_candle_volumes(candles, volume_candles, tf)
         if matched > 0:
-            log.debug("[SCALP-DATA] %s %s EODHD volume overlay matched=%s/%s", display, tf, matched, len(candles))
-            return merged
+            log.debug("[SCALP-DATA] %s %s volume overlay matched=%s/%s source=%s", display, tf, matched, len(candles), vol_source)
+            return merged, vol_source
     except Exception as exc:
         log.debug("[SCALP-DATA] %s %s EODHD volume overlay skipped: %s", display, tf, exc)
-    return candles
+    return candles, "mt5_tick"
 
 
 def mt5_get_live_price(mt5_symbol: str) -> float | None:
@@ -1902,6 +1912,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 continue
 
             # ── Fetch candles (crypto vs MT5) ────────────────────────────────
+            _vol_src_dominant = "binance_ws" if asset_type == "crypto" else "mt5_tick"
             if asset_type == "crypto":
                 pair_dict = {
                     "display": display,
@@ -1976,23 +1987,26 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     skipped.append({"pair": display, "reason": f"spread_too_wide_{spread_label}"})
                     continue
 
+                _vol_src_dominant = "mt5_tick"  # updated after overlay calls below
                 candles_m15 = mt5_fetch_scalp_candles(mt5_sym, "M15", m15_count, include_forming=True)
-                candles_m15 = _overlay_eodhd_volume_for_scalp(display, asset_type, "M15", candles_m15)
+                candles_m15, _vol_src_m15 = _overlay_eodhd_volume_for_scalp(display, asset_type, "M15", candles_m15)
                 if len(candles_m15) < 30:
                     _record_stability_sample(display, asset_type, False, reason="insufficient_m15_candles")
                     skipped.append({"pair": display, "reason": "insufficient_m15_candles"})
                     continue
 
                 candles_m5 = mt5_fetch_scalp_candles(mt5_sym, "M5", m5_count, include_forming=True)
-                candles_m5 = _overlay_eodhd_volume_for_scalp(display, asset_type, "M5", candles_m5)
+                candles_m5, _vol_src_m5 = _overlay_eodhd_volume_for_scalp(display, asset_type, "M5", candles_m5)
                 if len(candles_m5) < 10:
                     _record_stability_sample(display, asset_type, False, reason="insufficient_m5_candles")
                     skipped.append({"pair": display, "reason": "insufficient_m5_candles"})
                     continue
 
+                # dominant volume source = M15 (used for VP), fallback to M5
+                _vol_src_dominant = _vol_src_m15 if _vol_src_m15 != "mt5_tick" else _vol_src_m5
                 if execution_tf == "M1":
                     candles_exec = mt5_fetch_scalp_candles(mt5_sym, "M1", m1_count, include_forming=True)
-                    candles_exec = _overlay_eodhd_volume_for_scalp(display, asset_type, "M1", candles_exec)
+                    candles_exec, _vol_src_m1 = _overlay_eodhd_volume_for_scalp(display, asset_type, "M1", candles_exec)
                     if len(candles_exec) < 30:
                         _record_stability_sample(display, asset_type, False, reason="insufficient_m1_candles")
                         skipped.append({"pair": display, "reason": "insufficient_m1_candles"})
@@ -2180,7 +2194,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "vp_vah":          vp.get("vah"),
                 "vp_val":          vp.get("val"),
                 "vp_lvn_count":    len(vp.get("lvn_levels", [])),
-                "vp_volume_source": vp.get("volume_source", "candles"),
+                "vp_volume_source": _vol_src_dominant,
                 "vp_bucket_count":  vp.get("bucket_count"),
                 "absorption_count": absorption.get("count", 0),
                 "cvd_direction":   cvd.get("direction"),

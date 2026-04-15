@@ -4425,7 +4425,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             if not mt5_sym:
                 return {"error": f"No MT5 symbol mapping for {display}"}
             m15_raw = mt5_fetch_scalp_candles(mt5_sym, "M15", 2000, include_forming=False)
-            m15_raw = _overlay_eodhd_volume_for_scalp(display, asset_type, "M15", m15_raw, live=False)
+            m15_raw, _ = _overlay_eodhd_volume_for_scalp(display, asset_type, "M15", m15_raw, live=False)
     except Exception as e:
         log.error(f"[SCALP-BT] Candle fetch failed for {display}: {e}")
         return {"error": f"Candle fetch failed: {e}"}

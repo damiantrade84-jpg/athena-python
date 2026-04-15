@@ -10680,6 +10680,11 @@ function buildScalpCard(s, idx) {
   if (s.cvd_direction) { var cvdCol = s.cvd_direction === s.direction ? '#10b981' : '#f59e0b'; pills += '<span style="background:rgba(0,0,0,0.2);color:'+cvdCol+';border:1px solid '+cvdCol+'44;padding:2px 7px;border-radius:999px;font-size:9px;font-weight:700">CVD ' + s.cvd_direction + '</span> '; }
   if (s.htf_bias) { var biasCol = s.htf_bias === s.direction ? '#10b981' : '#f97316'; pills += '<span style="background:rgba(0,0,0,0.2);color:'+biasCol+';border:1px solid '+biasCol+'44;padding:2px 7px;border-radius:999px;font-size:9px;font-weight:700">' + (s.htf_bias_tf||'H1') + ' ' + s.htf_bias + '</span> '; }
   if (s.session) pills += '<span style="background:rgba(255,255,255,0.05);color:var(--muted);border:1px solid var(--border);padding:2px 7px;border-radius:999px;font-size:9px">' + s.session + '</span> ';
+  // Volume source badge — shows data quality at a glance
+  var volSrc = s.vp_volume_source || 'mt5_tick';
+  var volBadgeColor = volSrc === 'ws_tick' ? '#10b981' : volSrc === 'eodhd_1m' ? '#3b82f6' : volSrc === 'cache_miss' ? '#ef4444' : volSrc.startsWith('eodhd') ? '#f59e0b' : '#64748b';
+  var volBadgeLabel = volSrc === 'ws_tick' ? 'VOL: WS LIVE' : volSrc === 'eodhd_1m' ? 'VOL: EODHD 1m' : volSrc === 'eodhd_1h' ? 'VOL: EODHD 1h' : volSrc === 'cache_miss' ? 'VOL: MISS' : volSrc === 'mt5_tick' ? 'VOL: TICK' : 'VOL: ' + volSrc.toUpperCase();
+  pills += '<span style="background:rgba(0,0,0,0.25);color:'+volBadgeColor+';border:1px solid '+volBadgeColor+'55;padding:2px 7px;border-radius:999px;font-size:9px;font-weight:700">'+volBadgeLabel+'</span> ';
 
   // VP levels block
   var vpBlock = '';

@@ -754,12 +754,15 @@ class EODHDWebSocketManager:
 
             asyncio.set_event_loop(self._loop)
 
-            # Subscribe WS-capable pairs only (ws:True, default) — capped at 50 tickers (EODHD plan limit)
-            # us=17:  COIN,AAPL,PLTR,GOOG,MSFT,NFLX,PYPL,UBER,INTC,AMD + SLV,SPY,EEM,IWM,USO + GSPC.INDX,DJI.INDX
-            # forex=19: EURUSD,GBPJPY,AUDUSD,USDJPY,GBPAUD,USDCHF,EURGBP,USDCAD + XAU,XPT,NatGas,WTI,XAG,Brent,XPD
-            #           + FTSE.INDX,AXJO.INDX,HSI.INDX,N225.INDX
-            # crypto list size varies; see CRYPTO_PAIRS in athena.py
-            # Pairs with ws:False use REST cache (H1:55m, H4:3h55m, D1:23h TTL) — scan/backtest/execute unaffected
+            # Subscribe WS-capable pairs only (ws:True, default) — capped at 50 tickers per endpoint (EODHD plan limit)
+            # us (~23):  AAPL,TSLA,NVDA,MSFT,META,GOOG,NFLX,AMD,COIN,PYPL,INTC,UBER,PLTR
+            #            + SPY,IWM,EEM,DIA,GDX,SOXX,SLV,USO + GSPC.INDX,DJI.INDX
+            # forex (~49): 21 forex pairs + XAU/USD,XAG/USD,XPT/USD,XPD/USD,WTI Oil,Brent Oil,Nat Gas,Copper,
+            #              Aluminium,Lead,Nickel,Zinc,Gasoline,Cattle,Cocoa,Coffee,Corn,Cotton,Soybeans,Sugar,Wheat
+            #              + UK100,ASX 200,Nikkei 225,Hang Seng,EURX,JPYX,USDX
+            # crypto: handled by BinanceLivePriceWS/BinanceCandleWS — not counted here
+            # ws:False pairs use REST cache (H1:55m, H4:3h55m, D1:23h TTL) — scan/backtest/execute unaffected
+            # US stock ticks (us endpoint) carry real exchange volume → CandleBuilder builds M1/M5/M15 bars live
 
             try:
                 ws_pairs = list(rt().ALL_PAIRS)
@@ -795,13 +798,19 @@ def set_candle_builder(builder) -> None:
 
 
 class CandleBuilder:
-    """EODHD/US tick stream → H1/H4/D1 bars; Binance futures kline WS → M1/M5/M15/H1/H4/D1 for crypto.
+    """EODHD/US tick stream → OHLCV bars; Binance futures kline WS → M1/M5/M15/H1/H4/D1 for crypto.
 
     Tick path is non-crypto only (see EODHD handler). Kline path uses Binance `t` (UTC open ms)
-    with the same bucket alignment as H1/H4/D1."""
+    with the same bucket alignment as H1/H4/D1.
 
-    # EODHD on_tick: do not add M5/M15 here — would spam SQLite from tick noise and wrong semantics.
+    US stock ticks carry real exchange volume (msg["v"]) so we accumulate M1/M5/M15 in addition
+    to H1/H4/D1. Forex/commodity/index ticks have no central-exchange volume (OTC) so those
+    remain H1/H4/D1 only to avoid misleading zero-volume intraday bars."""
+
+    # Forex/commodity/index on_tick: H1/H4/D1 only — no real volume in OTC ticks.
     _TFS_TICK = {"H1": 3600, "H4": 14400, "D1": 86400}
+    # US stock on_tick: add M1/M5/M15 since EODHD US WS carries real exchange volume per tick.
+    _TFS_TICK_US_STOCK = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400, "D1": 86400}
     # Binance on_kline: all futures kline intervals we subscribe to.
     _TFS_KLINE = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400, "D1": 86400}
 
@@ -813,6 +822,10 @@ class CandleBuilder:
 
         # Keep the high-churn candle cache off the OneDrive-synced repo on Windows.
         self._db = str(ensure_candle_cache_db_ready())
+
+        # Set of display names that are US stocks (populated lazily from ALL_PAIRS).
+        self._us_stock_displays: set[str] = set()
+        self._us_stock_displays_loaded = False
 
         self._init_db()
 
@@ -841,8 +854,29 @@ class CandleBuilder:
 
         return datetime.fromtimestamp(int(ts_s // tf_sec) * tf_sec, tz=timezone.utc)
 
+    def _get_us_stock_displays(self) -> set[str]:
+        """Lazily load the set of US stock display names from ALL_PAIRS."""
+        if self._us_stock_displays_loaded:
+            return self._us_stock_displays
+        try:
+            from athena_runtime import rt
+            pairs = rt().ALL_PAIRS
+            self._us_stock_displays = {
+                p["display"] for p in pairs
+                if p.get("type") == "stock" and str(p.get("symbol", "")).endswith(".US")
+            }
+            self._us_stock_displays_loaded = True
+        except Exception:
+            pass
+        return self._us_stock_displays
+
     def on_tick(self, display, price, volume, ts_ms):
-        """Process a tick: update in-progress bars, flush completed ones to DB."""
+        """Process a tick: update in-progress bars, flush completed ones to DB.
+
+        US stock ticks use _TFS_TICK_US_STOCK (M1/M5/M15/H1/H4/D1) because EODHD
+        US endpoint carries real exchange volume per tick.
+        Forex/commodity/index ticks use _TFS_TICK (H1/H4/D1 only) — no OTC volume.
+        """
 
         if not price or price <= 0:
             return
@@ -857,8 +891,10 @@ class CandleBuilder:
 
         vol = volume or 0
 
+        tfs = self._TFS_TICK_US_STOCK if display in self._get_us_stock_displays() else self._TFS_TICK
+
         with self._lock:
-            for tf, tf_sec in self._TFS_TICK.items():
+            for tf, tf_sec in tfs.items():
                 key = (display, tf)
 
                 start = self._bar_start(ts_s, tf_sec)
