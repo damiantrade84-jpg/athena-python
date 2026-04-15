@@ -1,0 +1,927 @@
+{
+  "generated_at": "2026-04-15T07:18:07.554170+00:00",
+  "intervals": [
+    "1m",
+    "5m",
+    "1h",
+    "D1"
+  ],
+  "symbols": [
+    {
+      "display": "EUR/USD",
+      "type": "forex",
+      "results": {
+        "1m": {
+          "ticker": "EURUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 2833,
+          "nonzero_volume_bars": 2833,
+          "nonzero_volume_pct": 100.0,
+          "latest_time": "2026-04-15 06:53:00",
+          "latest_volume": 14482.0,
+          "max_volume": 68213.0,
+          "volume_field_present": true,
+          "interval": "1m"
+        },
+        "5m": {
+          "ticker": "EURUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 1377,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": "2026-04-15 02:00:00",
+          "latest_volume": 0.0,
+          "max_volume": 0.0,
+          "volume_field_present": true,
+          "interval": "5m"
+        },
+        "1h": {
+          "ticker": "EURUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 524,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": "2026-04-15 02:00:00",
+          "latest_volume": 0.0,
+          "max_volume": 0.0,
+          "volume_field_present": true,
+          "interval": "1h"
+        },
+        "D1": {
+          "ticker": "EURUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/eod",
+          "bars": 90,
+          "nonzero_volume_bars": 82,
+          "nonzero_volume_pct": 91.11,
+          "latest_time": "2026-04-14",
+          "latest_volume": 21358154.0,
+          "max_volume": 36489370.0,
+          "volume_field_present": true,
+          "interval": "D1"
+        }
+      },
+      "mt5_comparison": {
+        "available": true,
+        "symbol": "EURUSD",
+        "intervals": {
+          "1m": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T02:42:00+00:00",
+            "latest_volume": 35.0,
+            "max_volume": 79.0,
+            "volume_field_present": true,
+            "interval": "1m"
+          },
+          "5m": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T02:40:00+00:00",
+            "latest_volume": 113.0,
+            "max_volume": 650.0,
+            "volume_field_present": true,
+            "interval": "5m"
+          },
+          "1h": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T02:00:00+00:00",
+            "latest_volume": 1083.0,
+            "max_volume": 7896.0,
+            "volume_field_present": true,
+            "interval": "1h"
+          }
+        }
+      },
+      "duka_comparison": {
+        "available": true,
+        "symbol": "EURUSD",
+        "intervals": {
+          "H1": {
+            "bars": 0,
+            "nonzero_volume_bars": 0,
+            "nonzero_volume_pct": 0.0,
+            "latest_time": null,
+            "latest_volume": null,
+            "max_volume": null,
+            "volume_field_present": false,
+            "interval": "H1"
+          },
+          "H4": {
+            "bars": 0,
+            "nonzero_volume_bars": 0,
+            "nonzero_volume_pct": 0.0,
+            "latest_time": null,
+            "latest_volume": null,
+            "max_volume": null,
+            "volume_field_present": false,
+            "interval": "H4"
+          }
+        }
+      }
+    },
+    {
+      "display": "GBP/USD",
+      "type": "forex",
+      "results": {
+        "1m": {
+          "ticker": "GBPUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 2839,
+          "nonzero_volume_bars": 2839,
+          "nonzero_volume_pct": 100.0,
+          "latest_time": "2026-04-15 06:53:00",
+          "latest_volume": 11448.0,
+          "max_volume": 59092.0,
+          "volume_field_present": true,
+          "interval": "1m"
+        },
+        "5m": {
+          "ticker": "GBPUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 1377,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": "2026-04-15 02:00:00",
+          "latest_volume": 0.0,
+          "max_volume": 0.0,
+          "volume_field_present": true,
+          "interval": "5m"
+        },
+        "1h": {
+          "ticker": "GBPUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 524,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": "2026-04-15 02:00:00",
+          "latest_volume": 0.0,
+          "max_volume": 0.0,
+          "volume_field_present": true,
+          "interval": "1h"
+        },
+        "D1": {
+          "ticker": "GBPUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/eod",
+          "bars": 90,
+          "nonzero_volume_bars": 90,
+          "nonzero_volume_pct": 100.0,
+          "latest_time": "2026-04-14",
+          "latest_volume": 26830384.0,
+          "max_volume": 41983491.0,
+          "volume_field_present": true,
+          "interval": "D1"
+        }
+      },
+      "mt5_comparison": {
+        "available": true,
+        "symbol": "GBPUSD",
+        "intervals": {
+          "1m": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T02:42:00+00:00",
+            "latest_volume": 40.0,
+            "max_volume": 114.0,
+            "volume_field_present": true,
+            "interval": "1m"
+          },
+          "5m": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T02:40:00+00:00",
+            "latest_volume": 162.0,
+            "max_volume": 740.0,
+            "volume_field_present": true,
+            "interval": "5m"
+          },
+          "1h": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T02:00:00+00:00",
+            "latest_volume": 1305.0,
+            "max_volume": 8657.0,
+            "volume_field_present": true,
+            "interval": "1h"
+          }
+        }
+      },
+      "duka_comparison": {
+        "available": true,
+        "symbol": "GBPUSD",
+        "intervals": {
+          "H1": {
+            "bars": 0,
+            "nonzero_volume_bars": 0,
+            "nonzero_volume_pct": 0.0,
+            "latest_time": null,
+            "latest_volume": null,
+            "max_volume": null,
+            "volume_field_present": false,
+            "interval": "H1"
+          },
+          "H4": {
+            "bars": 0,
+            "nonzero_volume_bars": 0,
+            "nonzero_volume_pct": 0.0,
+            "latest_time": null,
+            "latest_volume": null,
+            "max_volume": null,
+            "volume_field_present": false,
+            "interval": "H4"
+          }
+        }
+      }
+    },
+    {
+      "display": "USD/JPY",
+      "type": "forex",
+      "results": {
+        "1m": {
+          "ticker": "USDJPY.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 2854,
+          "nonzero_volume_bars": 2854,
+          "nonzero_volume_pct": 100.0,
+          "latest_time": "2026-04-15 06:55:00",
+          "latest_volume": 521.0,
+          "max_volume": 1129.0,
+          "volume_field_present": true,
+          "interval": "1m"
+        },
+        "5m": {
+          "ticker": "USDJPY.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 1378,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": "2026-04-15 02:05:00",
+          "latest_volume": 0.0,
+          "max_volume": 0.0,
+          "volume_field_present": true,
+          "interval": "5m"
+        },
+        "1h": {
+          "ticker": "USDJPY.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 524,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": "2026-04-15 02:00:00",
+          "latest_volume": 0.0,
+          "max_volume": 0.0,
+          "volume_field_present": true,
+          "interval": "1h"
+        },
+        "D1": {
+          "ticker": "USDJPY.FOREX",
+          "status": 200,
+          "endpoint": "/api/eod",
+          "bars": 90,
+          "nonzero_volume_bars": 90,
+          "nonzero_volume_pct": 100.0,
+          "latest_time": "2026-04-14",
+          "latest_volume": 762371.0,
+          "max_volume": 995582.0,
+          "volume_field_present": true,
+          "interval": "D1"
+        }
+      },
+      "mt5_comparison": {
+        "available": true,
+        "symbol": "USDJPY",
+        "intervals": {
+          "1m": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T02:42:00+00:00",
+            "latest_volume": 27.0,
+            "max_volume": 200.0,
+            "volume_field_present": true,
+            "interval": "1m"
+          },
+          "5m": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T02:40:00+00:00",
+            "latest_volume": 152.0,
+            "max_volume": 696.0,
+            "volume_field_present": true,
+            "interval": "5m"
+          },
+          "1h": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T02:00:00+00:00",
+            "latest_volume": 1703.0,
+            "max_volume": 7995.0,
+            "volume_field_present": true,
+            "interval": "1h"
+          }
+        }
+      },
+      "duka_comparison": {
+        "available": true,
+        "symbol": "USDJPY",
+        "intervals": {
+          "H1": {
+            "bars": 0,
+            "nonzero_volume_bars": 0,
+            "nonzero_volume_pct": 0.0,
+            "latest_time": null,
+            "latest_volume": null,
+            "max_volume": null,
+            "volume_field_present": false,
+            "interval": "H1"
+          },
+          "H4": {
+            "bars": 0,
+            "nonzero_volume_bars": 0,
+            "nonzero_volume_pct": 0.0,
+            "latest_time": null,
+            "latest_volume": null,
+            "max_volume": null,
+            "volume_field_present": false,
+            "interval": "H4"
+          }
+        }
+      }
+    },
+    {
+      "display": "AUD/USD",
+      "type": "forex",
+      "results": {
+        "1m": {
+          "ticker": "AUDUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 2844,
+          "nonzero_volume_bars": 2844,
+          "nonzero_volume_pct": 100.0,
+          "latest_time": "2026-04-15 06:55:00",
+          "latest_volume": 10362.0,
+          "max_volume": 71527.0,
+          "volume_field_present": true,
+          "interval": "1m"
+        },
+        "5m": {
+          "ticker": "AUDUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 1378,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": "2026-04-15 02:05:00",
+          "latest_volume": 0.0,
+          "max_volume": 0.0,
+          "volume_field_present": true,
+          "interval": "5m"
+        },
+        "1h": {
+          "ticker": "AUDUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 524,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": "2026-04-15 02:00:00",
+          "latest_volume": 0.0,
+          "max_volume": 0.0,
+          "volume_field_present": true,
+          "interval": "1h"
+        },
+        "D1": {
+          "ticker": "AUDUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/eod",
+          "bars": 78,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": "2026-04-15",
+          "latest_volume": 0.0,
+          "max_volume": 0.0,
+          "volume_field_present": true,
+          "interval": "D1"
+        }
+      },
+      "mt5_comparison": {
+        "available": true,
+        "symbol": "AUDUSD",
+        "intervals": {
+          "1m": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T02:42:00+00:00",
+            "latest_volume": 18.0,
+            "max_volume": 88.0,
+            "volume_field_present": true,
+            "interval": "1m"
+          },
+          "5m": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T02:40:00+00:00",
+            "latest_volume": 66.0,
+            "max_volume": 680.0,
+            "volume_field_present": true,
+            "interval": "5m"
+          },
+          "1h": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T02:00:00+00:00",
+            "latest_volume": 1140.0,
+            "max_volume": 8462.0,
+            "volume_field_present": true,
+            "interval": "1h"
+          }
+        }
+      },
+      "duka_comparison": {
+        "available": true,
+        "symbol": "AUDUSD",
+        "intervals": {
+          "H1": {
+            "bars": 0,
+            "nonzero_volume_bars": 0,
+            "nonzero_volume_pct": 0.0,
+            "latest_time": null,
+            "latest_volume": null,
+            "max_volume": null,
+            "volume_field_present": false,
+            "interval": "H1"
+          },
+          "H4": {
+            "bars": 0,
+            "nonzero_volume_bars": 0,
+            "nonzero_volume_pct": 0.0,
+            "latest_time": null,
+            "latest_volume": null,
+            "max_volume": null,
+            "volume_field_present": false,
+            "interval": "H4"
+          }
+        }
+      }
+    },
+    {
+      "display": "USD/CHF",
+      "type": "forex",
+      "results": {
+        "1m": {
+          "ticker": "USDCHF.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 2847,
+          "nonzero_volume_bars": 2847,
+          "nonzero_volume_pct": 100.0,
+          "latest_time": "2026-04-15 06:55:00",
+          "latest_volume": 4867.0,
+          "max_volume": 20100.0,
+          "volume_field_present": true,
+          "interval": "1m"
+        },
+        "5m": {
+          "ticker": "USDCHF.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 1378,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": "2026-04-15 02:05:00",
+          "latest_volume": 0.0,
+          "max_volume": 0.0,
+          "volume_field_present": true,
+          "interval": "5m"
+        },
+        "1h": {
+          "ticker": "USDCHF.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 524,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": "2026-04-15 02:00:00",
+          "latest_volume": 0.0,
+          "max_volume": 0.0,
+          "volume_field_present": true,
+          "interval": "1h"
+        },
+        "D1": {
+          "ticker": "USDCHF.FOREX",
+          "status": 200,
+          "endpoint": "/api/eod",
+          "bars": 78,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": "2026-04-15",
+          "latest_volume": 0.0,
+          "max_volume": 0.0,
+          "volume_field_present": true,
+          "interval": "D1"
+        }
+      },
+      "mt5_comparison": {
+        "available": true,
+        "symbol": "USDCHF",
+        "intervals": {
+          "1m": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T02:42:00+00:00",
+            "latest_volume": 47.0,
+            "max_volume": 97.0,
+            "volume_field_present": true,
+            "interval": "1m"
+          },
+          "5m": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T02:40:00+00:00",
+            "latest_volume": 107.0,
+            "max_volume": 632.0,
+            "volume_field_present": true,
+            "interval": "5m"
+          },
+          "1h": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T02:00:00+00:00",
+            "latest_volume": 1131.0,
+            "max_volume": 6231.0,
+            "volume_field_present": true,
+            "interval": "1h"
+          }
+        }
+      },
+      "duka_comparison": {
+        "available": true,
+        "symbol": "USDCHF",
+        "intervals": {
+          "H1": {
+            "bars": 0,
+            "nonzero_volume_bars": 0,
+            "nonzero_volume_pct": 0.0,
+            "latest_time": null,
+            "latest_volume": null,
+            "max_volume": null,
+            "volume_field_present": false,
+            "interval": "H1"
+          },
+          "H4": {
+            "bars": 0,
+            "nonzero_volume_bars": 0,
+            "nonzero_volume_pct": 0.0,
+            "latest_time": null,
+            "latest_volume": null,
+            "max_volume": null,
+            "volume_field_present": false,
+            "interval": "H4"
+          }
+        }
+      }
+    },
+    {
+      "display": "USD/MXN",
+      "type": "forex",
+      "results": {
+        "1m": {
+          "ticker": "USDMXN.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 1445,
+          "nonzero_volume_bars": 1445,
+          "nonzero_volume_pct": 100.0,
+          "latest_time": "2026-04-14 07:25:00",
+          "latest_volume": 790.0,
+          "max_volume": 1442.0,
+          "volume_field_present": true,
+          "interval": "1m"
+        },
+        "5m": {
+          "ticker": "USDMXN.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 1379,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": "2026-04-15 02:10:00",
+          "latest_volume": 0.0,
+          "max_volume": 0.0,
+          "volume_field_present": true,
+          "interval": "5m"
+        },
+        "1h": {
+          "ticker": "USDMXN.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 524,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": "2026-04-15 02:00:00",
+          "latest_volume": 0.0,
+          "max_volume": 0.0,
+          "volume_field_present": true,
+          "interval": "1h"
+        },
+        "D1": {
+          "ticker": "USDMXN.FOREX",
+          "status": 200,
+          "endpoint": "/api/eod",
+          "bars": 67,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": "2026-04-15",
+          "latest_volume": 0.0,
+          "max_volume": 0.0,
+          "volume_field_present": true,
+          "interval": "D1"
+        }
+      },
+      "mt5_comparison": {
+        "available": true,
+        "symbol": "USDMXN",
+        "intervals": {
+          "1m": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T10:18:00+00:00",
+            "latest_volume": 56.0,
+            "max_volume": 187.0,
+            "volume_field_present": true,
+            "interval": "1m"
+          },
+          "5m": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T10:15:00+00:00",
+            "latest_volume": 315.0,
+            "max_volume": 746.0,
+            "volume_field_present": true,
+            "interval": "5m"
+          },
+          "1h": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T10:00:00+00:00",
+            "latest_volume": 1845.0,
+            "max_volume": 11488.0,
+            "volume_field_present": true,
+            "interval": "1h"
+          }
+        }
+      },
+      "duka_comparison": {
+        "available": true,
+        "symbol": "USDMXN",
+        "intervals": {
+          "H1": {
+            "bars": 0,
+            "nonzero_volume_bars": 0,
+            "nonzero_volume_pct": 0.0,
+            "latest_time": null,
+            "latest_volume": null,
+            "max_volume": null,
+            "volume_field_present": false,
+            "interval": "H1"
+          },
+          "H4": {
+            "bars": 0,
+            "nonzero_volume_bars": 0,
+            "nonzero_volume_pct": 0.0,
+            "latest_time": null,
+            "latest_volume": null,
+            "max_volume": null,
+            "volume_field_present": false,
+            "interval": "H4"
+          }
+        }
+      }
+    },
+    {
+      "display": "XAU/USD",
+      "type": "commodity",
+      "results": {
+        "1m": {
+          "ticker": "XAUUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 2846,
+          "nonzero_volume_bars": 2846,
+          "nonzero_volume_pct": 100.0,
+          "latest_time": "2026-04-15 06:52:00",
+          "latest_volume": 1518.0,
+          "max_volume": 3434.0,
+          "volume_field_present": true,
+          "interval": "1m"
+        },
+        "5m": {
+          "ticker": "XAUUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 0,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": null,
+          "latest_volume": null,
+          "max_volume": null,
+          "volume_field_present": false,
+          "interval": "5m"
+        },
+        "1h": {
+          "ticker": "XAUUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 0,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": null,
+          "latest_volume": null,
+          "max_volume": null,
+          "volume_field_present": false,
+          "interval": "1h"
+        },
+        "D1": {
+          "ticker": "XAUUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/eod",
+          "bars": 91,
+          "nonzero_volume_bars": 91,
+          "nonzero_volume_pct": 100.0,
+          "latest_time": "2026-04-15",
+          "latest_volume": 40.0,
+          "max_volume": 2146919.0,
+          "volume_field_present": true,
+          "interval": "D1"
+        }
+      },
+      "mt5_comparison": {
+        "available": true,
+        "symbol": "XAUUSD",
+        "intervals": {
+          "1m": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T02:42:00+00:00",
+            "latest_volume": 133.0,
+            "max_volume": 236.0,
+            "volume_field_present": true,
+            "interval": "1m"
+          },
+          "5m": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T02:40:00+00:00",
+            "latest_volume": 345.0,
+            "max_volume": 1198.0,
+            "volume_field_present": true,
+            "interval": "5m"
+          },
+          "1h": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T02:00:00+00:00",
+            "latest_volume": 4845.0,
+            "max_volume": 15005.0,
+            "volume_field_present": true,
+            "interval": "1h"
+          }
+        }
+      },
+      "duka_comparison": {
+        "available": false,
+        "detail": "no Dukascopy mapping"
+      }
+    },
+    {
+      "display": "XAG/USD",
+      "type": "commodity",
+      "results": {
+        "1m": {
+          "ticker": "XAGUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 1441,
+          "nonzero_volume_bars": 1441,
+          "nonzero_volume_pct": 100.0,
+          "latest_time": "2026-04-14 07:27:00",
+          "latest_volume": 1117.0,
+          "max_volume": 2873.0,
+          "volume_field_present": true,
+          "interval": "1m"
+        },
+        "5m": {
+          "ticker": "XAGUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 0,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": null,
+          "latest_volume": null,
+          "max_volume": null,
+          "volume_field_present": false,
+          "interval": "5m"
+        },
+        "1h": {
+          "ticker": "XAGUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/intraday",
+          "bars": 0,
+          "nonzero_volume_bars": 0,
+          "nonzero_volume_pct": 0.0,
+          "latest_time": null,
+          "latest_volume": null,
+          "max_volume": null,
+          "volume_field_present": false,
+          "interval": "1h"
+        },
+        "D1": {
+          "ticker": "XAGUSD.FOREX",
+          "status": 200,
+          "endpoint": "/api/eod",
+          "bars": 86,
+          "nonzero_volume_bars": 86,
+          "nonzero_volume_pct": 100.0,
+          "latest_time": "2026-04-15",
+          "latest_volume": 279.0,
+          "max_volume": 1713793.0,
+          "volume_field_present": true,
+          "interval": "D1"
+        }
+      },
+      "mt5_comparison": {
+        "available": true,
+        "symbol": "XAGUSD",
+        "intervals": {
+          "1m": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T10:18:00+00:00",
+            "latest_volume": 102.0,
+            "max_volume": 204.0,
+            "volume_field_present": true,
+            "interval": "1m"
+          },
+          "5m": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T10:15:00+00:00",
+            "latest_volume": 484.0,
+            "max_volume": 1043.0,
+            "volume_field_present": true,
+            "interval": "5m"
+          },
+          "1h": {
+            "bars": 200,
+            "nonzero_volume_bars": 200,
+            "nonzero_volume_pct": 100.0,
+            "latest_time": "2026-04-15T10:00:00+00:00",
+            "latest_volume": 2420.0,
+            "max_volume": 12797.0,
+            "volume_field_present": true,
+            "interval": "1h"
+          }
+        }
+      },
+      "duka_comparison": {
+        "available": false,
+        "detail": "no Dukascopy mapping"
+      }
+    }
+  ]
+}

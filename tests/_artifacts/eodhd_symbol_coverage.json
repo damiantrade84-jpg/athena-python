@@ -1,0 +1,430 @@
+{
+  "generated_at": "2026-04-15T07:04:08.590024+00:00",
+  "exchanges": [
+    {
+      "exchange": "US",
+      "status": 200,
+      "count": 50875,
+      "error": null
+    },
+    {
+      "exchange": "COMM",
+      "status": 404,
+      "count": 0,
+      "error": "Exchange Not Found."
+    },
+    {
+      "exchange": "INDX",
+      "status": 200,
+      "count": 1652,
+      "error": null
+    },
+    {
+      "exchange": "FOREX",
+      "status": 200,
+      "count": 990,
+      "error": null
+    },
+    {
+      "exchange": "JSE",
+      "status": 200,
+      "count": 468,
+      "error": null
+    }
+  ],
+  "coverage": [
+    {
+      "display": "AAPL",
+      "type": "stock",
+      "symbols": [
+        "AAPL.US",
+        "AAPL"
+      ],
+      "matched": true,
+      "matches": [
+        {
+          "exchange": "US",
+          "code": "AAPL",
+          "name": "Apple Inc",
+          "type": "Common Stock"
+        },
+        {
+          "exchange": "US",
+          "code": "AAPL",
+          "name": "Apple Inc",
+          "type": "Common Stock"
+        }
+      ]
+    },
+    {
+      "display": "SPY",
+      "type": "stock",
+      "symbols": [
+        "SPY.US",
+        "SPY"
+      ],
+      "matched": true,
+      "matches": [
+        {
+          "exchange": "US",
+          "code": "SPY",
+          "name": "SPDR S&P 500 ETF Trust",
+          "type": "ETF"
+        },
+        {
+          "exchange": "US",
+          "code": "SPY",
+          "name": "SPDR S&P 500 ETF Trust",
+          "type": "ETF"
+        }
+      ]
+    },
+    {
+      "display": "QQQ",
+      "type": "stock",
+      "symbols": [
+        "QQQ.US",
+        "QQQ"
+      ],
+      "matched": true,
+      "matches": [
+        {
+          "exchange": "US",
+          "code": "QQQ",
+          "name": "Invesco QQQ Trust",
+          "type": "ETF"
+        },
+        {
+          "exchange": "US",
+          "code": "QQQ",
+          "name": "Invesco QQQ Trust",
+          "type": "ETF"
+        }
+      ]
+    },
+    {
+      "display": "XAU/USD",
+      "type": "commodity",
+      "symbols": [
+        "XAUUSD.FOREX",
+        "GC",
+        "GC.COMM"
+      ],
+      "matched": true,
+      "matches": [
+        {
+          "exchange": "FOREX",
+          "code": "XAUUSD",
+          "name": "Gold Spot US Dollar",
+          "type": "Currency"
+        }
+      ]
+    },
+    {
+      "display": "XAG/USD",
+      "type": "commodity",
+      "symbols": [
+        "XAGUSD.FOREX",
+        "SI",
+        "SI.COMM"
+      ],
+      "matched": true,
+      "matches": [
+        {
+          "exchange": "FOREX",
+          "code": "XAGUSD",
+          "name": "Silver Spot US Dollar",
+          "type": "Currency"
+        },
+        {
+          "exchange": "US",
+          "code": "SI",
+          "name": "Shoulder Innovations, Inc.",
+          "type": "Common Stock"
+        }
+      ]
+    },
+    {
+      "display": "WTI Oil",
+      "type": "commodity",
+      "symbols": [
+        "CL",
+        "CL.COMM",
+        "WTICOUSD.FOREX"
+      ],
+      "matched": true,
+      "matches": [
+        {
+          "exchange": "US",
+          "code": "CL",
+          "name": "Colgate-Palmolive Company",
+          "type": "Common Stock"
+        }
+      ]
+    },
+    {
+      "display": "Brent Oil",
+      "type": "commodity",
+      "symbols": [
+        "BZ",
+        "BZ.COMM",
+        "BRENTOIL.FOREX"
+      ],
+      "matched": true,
+      "matches": [
+        {
+          "exchange": "US",
+          "code": "BZ",
+          "name": "Kanzhun Ltd ADR",
+          "type": "Common Stock"
+        }
+      ]
+    },
+    {
+      "display": "Nat Gas",
+      "type": "commodity",
+      "symbols": [
+        "NG",
+        "NG.COMM",
+        "NATGASUSD.FOREX"
+      ],
+      "matched": true,
+      "matches": [
+        {
+          "exchange": "US",
+          "code": "NG",
+          "name": "NovaGold Resources Inc",
+          "type": "Common Stock"
+        }
+      ]
+    },
+    {
+      "display": "Copper",
+      "type": "commodity",
+      "symbols": [
+        "HG",
+        "HG.COMM",
+        "XCUUSD.FOREX"
+      ],
+      "matched": true,
+      "matches": [
+        {
+          "exchange": "US",
+          "code": "HG",
+          "name": "Hamilton Insurance Group, Ltd.",
+          "type": "Common Stock"
+        },
+        {
+          "exchange": "FOREX",
+          "code": "XCUUSD",
+          "name": "XCU/USD",
+          "type": "Currency"
+        }
+      ]
+    },
+    {
+      "display": "S&P 500",
+      "type": "index",
+      "symbols": [
+        "GSPC.INDX",
+        "GSPC",
+        "SPX.INDX"
+      ],
+      "matched": true,
+      "matches": [
+        {
+          "exchange": "INDX",
+          "code": "GSPC",
+          "name": "S&P 500 Index",
+          "type": "INDEX"
+        },
+        {
+          "exchange": "INDX",
+          "code": "GSPC",
+          "name": "S&P 500 Index",
+          "type": "INDEX"
+        }
+      ]
+    },
+    {
+      "display": "Nasdaq",
+      "type": "index",
+      "symbols": [
+        "IXIC.INDX",
+        "IXIC",
+        "NAS100.INDX"
+      ],
+      "matched": true,
+      "matches": [
+        {
+          "exchange": "INDX",
+          "code": "IXIC",
+          "name": "NASDAQ Composite",
+          "type": "INDEX"
+        },
+        {
+          "exchange": "INDX",
+          "code": "IXIC",
+          "name": "NASDAQ Composite",
+          "type": "INDEX"
+        }
+      ]
+    },
+    {
+      "display": "NASDAQ-100",
+      "type": "index",
+      "symbols": [
+        "IXIC.INDX",
+        "IXIC",
+        "NDX.INDX",
+        "NAS100.INDX"
+      ],
+      "matched": true,
+      "matches": [
+        {
+          "exchange": "INDX",
+          "code": "IXIC",
+          "name": "NASDAQ Composite",
+          "type": "INDEX"
+        },
+        {
+          "exchange": "INDX",
+          "code": "IXIC",
+          "name": "NASDAQ Composite",
+          "type": "INDEX"
+        },
+        {
+          "exchange": "INDX",
+          "code": "NDX",
+          "name": "Nasdaq 100",
+          "type": "INDEX"
+        }
+      ]
+    },
+    {
+      "display": "Dow Jones",
+      "type": "index",
+      "symbols": [
+        "DJI.INDX",
+        "DJI"
+      ],
+      "matched": true,
+      "matches": [
+        {
+          "exchange": "INDX",
+          "code": "DJI",
+          "name": "Dow Jones Industrial Average",
+          "type": "INDEX"
+        },
+        {
+          "exchange": "INDX",
+          "code": "DJI",
+          "name": "Dow Jones Industrial Average",
+          "type": "INDEX"
+        }
+      ]
+    },
+    {
+      "display": "DAX 40",
+      "type": "index",
+      "symbols": [
+        "GDAXI.INDX",
+        "GDAXI"
+      ],
+      "matched": true,
+      "matches": [
+        {
+          "exchange": "INDX",
+          "code": "GDAXI",
+          "name": "DAX Index",
+          "type": "INDEX"
+        },
+        {
+          "exchange": "INDX",
+          "code": "GDAXI",
+          "name": "DAX Index",
+          "type": "INDEX"
+        }
+      ]
+    },
+    {
+      "display": "UK100",
+      "type": "index",
+      "symbols": [
+        "FTSE.INDX",
+        "FTSE"
+      ],
+      "matched": false,
+      "matches": []
+    },
+    {
+      "display": "Nikkei 225",
+      "type": "index",
+      "symbols": [
+        "N225.INDX",
+        "N225"
+      ],
+      "matched": true,
+      "matches": [
+        {
+          "exchange": "INDX",
+          "code": "N225",
+          "name": "Nikkei 225",
+          "type": "INDEX"
+        },
+        {
+          "exchange": "INDX",
+          "code": "N225",
+          "name": "Nikkei 225",
+          "type": "INDEX"
+        }
+      ]
+    },
+    {
+      "display": "Hang Seng",
+      "type": "index",
+      "symbols": [
+        "HSI.INDX",
+        "HSI"
+      ],
+      "matched": true,
+      "matches": [
+        {
+          "exchange": "INDX",
+          "code": "HSI",
+          "name": "Hang Seng (Hong Kong)",
+          "type": "INDEX"
+        },
+        {
+          "exchange": "INDX",
+          "code": "HSI",
+          "name": "Hang Seng (Hong Kong)",
+          "type": "INDEX"
+        }
+      ]
+    },
+    {
+      "display": "ASX 200",
+      "type": "index",
+      "symbols": [
+        "AXJO.INDX",
+        "AXJO"
+      ],
+      "matched": true,
+      "matches": [
+        {
+          "exchange": "INDX",
+          "code": "AXJO",
+          "name": "S&P/ASX 200",
+          "type": "INDEX"
+        },
+        {
+          "exchange": "INDX",
+          "code": "AXJO",
+          "name": "S&P/ASX 200",
+          "type": "INDEX"
+        }
+      ]
+    }
+  ]
+}
