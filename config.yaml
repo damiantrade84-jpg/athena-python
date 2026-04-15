@@ -355,7 +355,7 @@ NEWS_PAIR_CAP: 40   # Max pairs to fetch per-pair EODHD news and word weights pe
 AI_STRUCTURED_OUTPUTS: true
 AI_TEMPERATURE: 0.3
 AI_VISION_TEMPERATURE: 0.2
-ENGINE_B_PROFILE_SCORING_ENABLED: false
+ENGINE_B_PROFILE_SCORING_ENABLED: true
 
 # ── AI Learning ───────────────────────────────────────────
 LEARNING_ENABLED: true             # Enable AI self-learning (outcome extraction + prompt injection)
@@ -874,8 +874,10 @@ SCALP_ENGINE:
   EODHD_VOLUME_OVERLAY_LIVE_ENABLED: true   # Live uses warmed cache only; MT5 volume remains instant fallback
   EODHD_VOLUME_OVERLAY_BACKTEST_ENABLED: true # Use audited EODHD intraday volume in Engine D backtests
   EODHD_VOLUME_WARMER_ENABLED: true         # Background prefetch for live EODHD volume cache
-  EODHD_VOLUME_WARMER_INTERVAL_SEC: 60      # Refresh M1/M5/M15 cache once per minute
+  EODHD_VOLUME_WARMER_INTERVAL_SEC: 60      # Refresh M1/M5/M15 cache once per minute (Engine D fast loop)
   EODHD_VOLUME_WARMER_TIMEFRAMES: ["M1", "M5", "M15"]
+  EODHD_VOLUME_WARMER_ENGINE_A_ENABLED: true      # Pre-warm H1/H4/D1 for all non-crypto pairs (Engine A + chart Vision)
+  EODHD_VOLUME_WARMER_SLOW_INTERVAL_SEC: 900      # 15 min — H1 TTL=55m, H4 TTL=235m, D1 TTL=23h; API-rate safe
   # ── Spread limits for non-forex (raw MT5 points, not pip-converted) ──────
   MAX_SPREAD_POINTS:
     index: 100                  # NAS100/DAX/S&P: max spread in index points
