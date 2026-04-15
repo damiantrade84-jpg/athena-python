@@ -47,6 +47,12 @@ _INDEX_INTRADAY_AND_D1 = {
     "Nasdaq",
     "NASDAQ-100",
     "Dow Jones",
+    "GSPC",
+    "IXIC",
+    "DJI",
+    "GSPC.INDX",
+    "IXIC.INDX",
+    "DJI.INDX",
 }
 
 _STOCK_ALL_TFS = {

@@ -2611,7 +2611,6 @@ def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
         fetch_binance=fetch_binance,
         fetch_binance_paginated=fetch_binance_paginated,
         fetch_eodhd=fetch_eodhd,
-        fetch_eodhd_volume_only=_fetch_eodhd_volume_only,
         fetch_polygon=fetch_polygon,
         fetch_yfinance=fetch_yfinance,
         fetch_mt5=fetch_mt5,
