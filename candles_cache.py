@@ -359,13 +359,11 @@ def fetch_candles(
         "liveMerge": False,
         "cacheHit": False,
     }
-    # CandleBuilder is the live H1 source for EODHD-fed pairs only.
-    # MT5-sourced pairs (forex, commodities, indices, stocks) bypass CandleBuilder
-    # for all timeframes and go directly to fetch_mt5() — same as H4/D1 already do.
-    # Crypto H4/D1 use Binance futures kline streams via CandleBuilder.
+    ptype = str(pair.get("type") or "").lower()
+    _eodhd_ws_ohlc_types = {"forex", "commodity", "index"}
     use_candle_builder = (
-        pair.get("source") not in ("polygon", "mt5")
-        and (tf == "H1" or crypto_live_tf)
+        (pair.get("source") not in ("polygon", "mt5") and (tf == "H1" or crypto_live_tf))
+        or (pair.get("source") == "mt5" and ptype in _eodhd_ws_ohlc_types and tf in {"H1", "H4", "D1"})
     )
     live_candles = None
 
@@ -373,14 +371,19 @@ def fetch_candles(
         live_resp = fetch_candles_live(pair.get("display", ""), tf, limit)
         live_candles = extract_candles(live_resp)
 
-        _min_live_bars = {"M5": 20, "M15": 20, "H1": 20, "H4": 50, "D1": 50}.get(tf, limit)
+        _min_live_bars = {"M5": 20, "M15": 20, "H1": 20, "H4": 10, "D1": 50}.get(tf, limit)
         live_bar_count = len(live_candles) if live_candles else 0
         live_only_ready = False
+        _is_forex_ws = pair.get("source") == "mt5" and ptype in _eodhd_ws_ohlc_types
         if live_candles:
             if crypto_live_tf:
                 # Crypto charts and scans often request deep history (for example 1000 H4 bars).
                 # Do not short-circuit to CandleBuilder unless it actually has the requested depth.
                 live_only_ready = live_bar_count >= int(limit)
+            elif _is_forex_ws:
+                # Forex/commodity/index: accept WS bars if we have a meaningful series.
+                # MT5 will top up below if the engine needs more history than WS has.
+                live_only_ready = live_bar_count >= _min_live_bars
             else:
                 live_only_ready = live_bar_count >= min(limit, _min_live_bars)
 
@@ -492,6 +495,16 @@ def fetch_candles(
         elif candles is None and pair["source"] == "mt5" and fetch_mt5:
             fetch_meta.update({"resolution": "rest", "upstream": "mt5"})
             candles = fetch_mt5(pair, tf, limit)
+            # For forex/commodity/index: if WS had some bars but not enough, prepend MT5
+            # history so the engine gets the full requested depth (WS bars take precedence
+            # for the most recent portion; MT5 fills the older history).
+            if live_candles and _is_forex_ws and isinstance(candles, list) and candles:
+                import bisect
+                ws_times = {c["time"] for c in live_candles if c.get("time")}
+                mt5_older = [c for c in candles if c.get("time") not in ws_times]
+                merged_all = sorted(mt5_older + live_candles, key=lambda c: c.get("time", ""))
+                candles = merged_all[-limit:] if len(merged_all) > limit else merged_all
+                fetch_meta.update({"upstream": "mt5+ws", "liveMerge": True})
 
         elif candles is None and pair["source"] == "yfinance":
             fetch_meta.update({"resolution": "rest", "upstream": "yfinance"})
