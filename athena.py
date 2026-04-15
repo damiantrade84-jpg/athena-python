@@ -1935,6 +1935,14 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
         _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
         return payload
 
+    # Skip EODHD REST for forex/commodity/index: OTC markets have no real exchange volume.
+    # Return explicit flag so overlay falls back to MT5 tick-volume without wasting API calls.
+    if ptype in {"forex", "commodity", "index"}:
+        payload["detail"] = "no_real_volume"
+        payload["volume_source"] = "mt5_tick"
+        _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+        return payload
+
     if tf_key not in {"M1", "M5", "M15", "H1", "H4", "D1"}:
         payload["detail"] = f"unsupported timeframe: {tf_key}"
         _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
