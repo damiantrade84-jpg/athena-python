@@ -9,7 +9,16 @@ _EODHD_VOLUME_TIMEFRAMES = {"M1", "M5", "M15", "H1", "H4", "D1"}
 _INTRADAY_TFS = {"M1", "M5", "M15", "H1", "H4"}
 
 _COMMODITY_D1_ONLY = {
-    "GC=F",  # retained for legacy mapping; current EODHD audit did not verify GC volume
+    "GC=F",  # retained for legacy mapping; intraday now routed via _FOREX_METALS_1M_RESAMPLE
+    # Industrial metals — EODHD D1 only (COPPER, ALUMINUM tickers confirmed)
+    "Copper",
+    "Aluminium",
+    # Agricultural — EODHD D1 only (COFFEE, CORN, COTTON, SUGAR, WHEAT tickers confirmed)
+    "Coffee",
+    "Corn",
+    "Cotton",
+    "Sugar",
+    "Wheat",
 }
 
 _COMMODITY_INTRADAY_AND_D1 = {
@@ -17,7 +26,6 @@ _COMMODITY_INTRADAY_AND_D1 = {
     "CL=F",
     "BZ=F",
     "NatGas",
-    "Copper",
     "WTI Oil",
     "Brent Oil",
     "Nat Gas",
@@ -55,6 +63,9 @@ _FOREX_METALS_1M_RESAMPLE = {
     "SI=F",
     "XAU/USD",
     "XAG/USD",
+    # Platinum and palladium — EODHD intraday confirmed (1m, XPTUSD.FOREX / XPDUSD.FOREX)
+    "XPT/USD",
+    "XPD/USD",
 }
 
 _INDEX_INTRADAY_AND_D1 = {

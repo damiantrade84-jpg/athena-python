@@ -1226,18 +1226,24 @@ TF_B = {"D1": "1d", "H4": "4h", "H1": "1h", "M15": "15m", "M5": "5m", "M1": "1m"
 _YF_INTRADAY_PERIOD = "180d"
 
 _VENDOR_SYMBOL_OVERRIDES = {
-    # Precious metals: EODHD D1 via .FOREX suffix (confirmed 12,350 bars); Polygon C: for H4/H1
-    # EODHD has NO intraday for XAU/XAG — Polygon handles H4/H1 backtest fallback
-    "XAU/USD": {"eodhd": "XAUUSD.FOREX", "polygon": "C:XAUUSD"},
-    "XAG/USD": {"eodhd": "XAGUSD.FOREX", "polygon": "C:XAGUSD"},
-    "XPT/USD": {"polygon": "C:XPTUSD", "eodhd": "XPTUSD.FOREX", "yfinance": "PL=F"},
-    "XPD/USD": {"polygon": "C:XPDUSD", "fallback": "yfinance"},
-    # Energy / base metals: EODHD D1 plain symbol; yfinance fallback for intraday
+    # Precious metals: all 4 fully supported on EODHD intraday (1m bars since ~2009)
+    # OTC spot market volume included in every bar
+    "XAU/USD": {"eodhd": "XAUUSD.FOREX", "eodhd_intraday": "XAUUSD.FOREX", "polygon": "C:XAUUSD"},
+    "XAG/USD": {"eodhd": "XAGUSD.FOREX", "eodhd_intraday": "XAGUSD.FOREX", "polygon": "C:XAGUSD"},
+    "XPT/USD": {"eodhd": "XPTUSD.FOREX", "eodhd_intraday": "XPTUSD.FOREX", "polygon": "C:XPTUSD", "yfinance": "PL=F"},
+    "XPD/USD": {"eodhd": "XPDUSD.FOREX", "eodhd_intraday": "XPDUSD.FOREX", "polygon": "C:XPDUSD", "fallback": "yfinance"},
+    # Energy / base metals: EODHD intraday for oil/gas; industrial metals D1 only
     "WTI Oil": {"yfinance": "CL=F", "eodhd": "CL", "fallback": "yfinance"},
     "Brent Oil": {"yfinance": "BZ=F", "eodhd": "BZ", "fallback": "yfinance"},
     "Nat Gas": {"yfinance": "NG=F", "eodhd": "NG", "fallback": "yfinance"},
-    "Copper": {"yfinance": "HG=F", "eodhd": "HG", "fallback": "yfinance"},
-    "Coffee": {"yfinance": "KC=F", "fallback": "yfinance"},
+    "Copper": {"yfinance": "HG=F", "eodhd": "COPPER", "fallback": "yfinance"},
+    "Aluminium": {"yfinance": "ALI=F", "eodhd": "ALUMINUM", "fallback": "yfinance"},
+    # Agricultural commodities: EODHD D1 only
+    "Coffee": {"yfinance": "KC=F", "eodhd": "COFFEE", "fallback": "yfinance"},
+    "Corn": {"yfinance": "ZC=F", "eodhd": "CORN", "fallback": "yfinance"},
+    "Cotton": {"yfinance": "CT=F", "eodhd": "COTTON", "fallback": "yfinance"},
+    "Sugar": {"yfinance": "SB=F", "eodhd": "SUGAR", "fallback": "yfinance"},
+    "Wheat": {"yfinance": "ZW=F", "eodhd": "WHEAT", "fallback": "yfinance"},
     # Indices: EODHD plain symbol for D1; eodhd_intraday uses .INDX suffix (confirmed working)
     "UK100": {
         "yfinance": "^FTSE",
