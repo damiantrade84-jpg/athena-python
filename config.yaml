@@ -323,7 +323,7 @@ SENTIMENT_ALIGN_THRESHOLD: 0.3     # Mark as aligned when sentiment supports dir
 SENTIMENT_API_FAIL_CLOSED: false   # If true, blocks auto-execution if the sentiment API fails
 
 # ── EODHD Event Risk Filter ──────────────────────────────
-EVENT_RISK_ENABLED: true           # Block trades near high-impact events (NFP/CPI/FOMC)
+EVENT_RISK_ENABLED: false          # EODHD economic-events calls disabled; do not use economic calendar API
 EVENT_RISK_HOURS: 4                # Hours ahead to check for events
 EVENT_RISK_API_FAIL_CLOSED: false  # If true, blocks auto-execution if the event calendar API fails
 
@@ -843,7 +843,6 @@ SCALP_ENGINE:
   SESSION_FILTER: true          # London/NY only for non-crypto
   SESSION_MODE: "london_ny"     # London+NY combined (07:00-21:00 UTC) — full high-liquidity window
   NY_OPEN_SKIP_MINUTES: 30      # Caution window after NY cash open (applies inside london_ny)
-  SESSION_MODE: "all"           # Testing override: allow Engine D live scans outside London/NY session windows
   LONDON_OPEN_SKIP_MINUTES: 20  # Avoid first 20 min of London open (07:00-07:20 UTC)
   EXECUTION_TIMEFRAME: "M1"     # 15m structure, 5m context, 1m execution
   MARKET_OPEN_CHECK_ENABLED: true  # Live scan must skip closed/stale MT5 markets even when SESSION_MODE=all
@@ -901,6 +900,7 @@ SCALP_ENGINE:
   SETUP_TREND: true             # LVN pullback continuation trades
   # ── Risk & Grading ────────────────────────────────────────
   MIN_RR: 2.0                   # Minimum reward:risk ratio (was 1.5, Fabio targets 2.0-4.0)
+  TP1_MAX_RR: 4.0               # Cap TP1 to this multiple of SL distance — prevents unrealistically far targets (0 = disabled)
   TP2_ENABLED: true             # Second TP at next structural level
   AI_GRADING: true              # Enable A/B/C/D quality grading
   MIN_GRADE: "C"                # Scan gate: show signals >= this grade (A/B/C; D always filtered)

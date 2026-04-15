@@ -1423,6 +1423,17 @@ def calculate_scalp_levels(
 
     sl_distance = abs(entry - sl)
 
+    # TP1 cap: if the structural target is unrealistically far (e.g. wide value area),
+    # clip TP1 to TP1_MAX_RR * sl_distance. trend_extension is already at exactly MIN_RR
+    # so the cap only applies to mean_reversion and trend_continuation.
+    tp1_max_rr = float(cfg.get("TP1_MAX_RR", 0))
+    if tp1_max_rr > 0 and sl_distance > 0 and setup_type != "trend_extension":
+        max_tp1_dist = sl_distance * tp1_max_rr
+        if direction == "LONG" and tp1 > entry + max_tp1_dist:
+            tp1 = entry + max_tp1_dist
+        elif direction == "SHORT" and tp1 < entry - max_tp1_dist:
+            tp1 = entry - max_tp1_dist
+
     # TP1 is intentionally the natural structural/profile target from setup logic.
     # Do not expand TP1 outward here to satisfy synthetic MIN_RR floors.
     actual_rr = round(abs(tp1 - entry) / sl_distance, 2) if sl_distance > 0 else 0
@@ -2207,14 +2218,15 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
         reason_counts = Counter(s.get("reason", "unknown") for s in skipped)
         for reason, count in reason_counts.most_common():
             log.warning(f"[SCALP] Skip reason: {reason} × {count}")
-        noisy_reasons = ("MARKET_DATA_STALE_", "MARKET_CLOSED_NO_TICK", "spread_too_wide_")
+        noisy_reasons = ("MARKET_DATA_STALE_", "MARKET_CLOSED_NO_TICK", "MARKET_CLOSED_STALE_",
+                          "spread_too_wide_", "OUTSIDE_SESSION", "off_hours")
         for s in skipped:
             reason = str(s.get("reason") or "")
             msg = f"[SCALP] Skipped {s.get('pair')} - {reason}"
             if reason.startswith(noisy_reasons):
-                log.warning(msg)
-            else:
                 log.debug(msg)
+            else:
+                log.warning(msg)
 
     return {
         "signals": signals,
