@@ -12209,6 +12209,12 @@ def api_performance():
             rows = con.execute(
                 "SELECT * FROM audit_log WHERE exit_price IS NOT NULL ORDER BY id ASC"
             ).fetchall()
+            # Fetch last 20 directly from DB ordered by id DESC (most recently closed first).
+            # This is more reliable than Python-sorting when exit_time is absent from the schema.
+            last_20_rows = con.execute(
+                "SELECT * FROM audit_log WHERE exit_price IS NOT NULL ORDER BY id DESC LIMIT 20"
+            ).fetchall()
+            last_20 = [dict(r) for r in last_20_rows]
 
         trades = [dict(r) for r in rows]
 
@@ -12443,7 +12449,7 @@ def api_performance():
         def _trade_closed_sort_key(trade: dict):
             return (_parse_close_dt(trade), int(trade.get("id") or 0))
 
-        last_20 = sorted(trades, key=_trade_closed_sort_key, reverse=True)[:20]
+        # last_20 is already fetched from DB with ORDER BY id DESC LIMIT 20 above.
 
         # Equity curve: cumulative R list for charting
 

@@ -1034,8 +1034,10 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         _is_scalp = _engine in ("scalp", "engine d", "scalp_vp")
         _tp1 = float(signal.get("tp1", 0) or 0)
         _tp2 = float(signal.get("tp2", 0) or 0)
-        # Engine D live execution: exchange TP must be TP1 (no blended / TP2-based placement).
-        # TP2 is still carried in payload/state for downstream runner management.
+        _tp_partial = float(signal.get("tp_partial", 0) or 0)
+        # Engine D: position TP sits at the structural target (tp1).
+        # A separate reduce-only limit at tp_partial closes the first 50% clip at +1R.
+        # Non-scalp signals use tp1 as the single full-position exit.
         tp_exec = _tp1
 
         # Set SL/TP on the position via Bybit v5 trading-stop endpoint
@@ -1087,6 +1089,52 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                 "volume": filled_amount,
             }
 
+        # ── Fabio partial exit: reduce-only limit for first 50% clip at +1R ────────
+        # For Engine D scalp signals: place a limit order that closes half the position
+        # when price hits tp_partial (+1R). The position TP (tp_exec = tp1) handles the
+        # remaining 50% runner. This is non-fatal — if it fails, the trade still runs
+        # to tp1 as a single unit.
+        partial_order_id = None
+        if _is_scalp and _tp_partial > 0:
+            try:
+                partial_side = "sell" if direction == "LONG" else "buy"
+                partial_qty = round(filled_amount * 0.5, 8)
+                # Align to exchange minimum qty step
+                try:
+                    mkt = exchange.market(ccxt_symbol)
+                    _v_prec = (mkt.get("precision") or {}).get("amount", 0.001) or 0.001
+                    _step = float(_v_prec) if not isinstance(_v_prec, int) else round(10 ** -_v_prec, 8)
+                    if _step > 0:
+                        import math as _math
+                        partial_qty = _math.floor(partial_qty / _step) * _step
+                        partial_qty = round(partial_qty, 8)
+                except Exception:
+                    pass
+                vol_min = 0.001
+                try:
+                    vol_min = float(exchange.market(ccxt_symbol)["limits"]["amount"].get("min") or 0.001)
+                except Exception:
+                    pass
+                if partial_qty >= vol_min:
+                    _partial_order = exchange.create_limit_order(
+                        ccxt_symbol,
+                        partial_side,
+                        partial_qty,
+                        _tp_partial,
+                        params={"reduceOnly": True, "positionIdx": 0},
+                    )
+                    partial_order_id = _partial_order.get("id", "")
+                    log.info(
+                        f"[BYBIT] Partial +1R order placed: {partial_side} {partial_qty} @ {_tp_partial} "
+                        f"id={partial_order_id} | runner TP={tp_exec}"
+                    )
+                else:
+                    log.warning(
+                        f"[BYBIT] Partial qty {partial_qty} < min {vol_min} — skipping partial order"
+                    )
+            except Exception as _pe:
+                log.warning(f"[BYBIT] Partial +1R order failed (non-fatal, full position runs to TP1): {_pe}")
+
         fee_info = order.get("fee") or {}
         fee_cost = float(fee_info.get("cost") or 0) or None
         return {
@@ -1100,6 +1148,8 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             "tp": tp1,
             "tp1": _tp1,
             "tp2": _tp2 if _tp2 > 0 else None,
+            "tpPartial": _tp_partial if _tp_partial > 0 else None,
+            "partialOrderId": partial_order_id,
             "slOrderId": sl_order_id,
             "tpOrderId": tp_order_id,
             "riskAmount": approval.risk_amount,

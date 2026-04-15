@@ -4757,7 +4757,11 @@ async function loadPerformance() {
       var pnlColor = (t.pnl || 0) >= 0 ? '#22c55e' : '#f6465d';
       var r = t.r_multiple != null ? t.r_multiple.toFixed(2) + 'R' : '-';
       var slip = t.slippage_bps != null ? t.slippage_bps.toFixed(1) : '-';
+      var tsRaw = t.ts || '';
+      var tsLabel = '-';
+      if (tsRaw) { try { var d2 = new Date(tsRaw); tsLabel = d2.toLocaleDateString(undefined,{month:'short',day:'numeric'}) + ' ' + d2.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}); } catch(e) { tsLabel = tsRaw.slice(0,16); } }
       return '<tr>' +
+        '<td style="font-size:10px;color:var(--muted)">' + tsLabel + '</td>' +
         '<td>' + (t.pair || '-') + '</td>' +
         '<td>' + (t.direction || '-') + '</td>' +
         '<td>' + (t.exit_reason || '-') + '</td>' +
@@ -4790,8 +4794,8 @@ async function loadPerformance() {
         '<div class="perf-section"><h4>Win Rate by Asset Type</h4><table class="perf-table"><thead><tr><th>Type</th><th>WR%</th></tr></thead><tbody>' + (assetRows || '<tr><td colspan="2" style="color:var(--muted)">-</td></tr>') + '</tbody></table></div>' +
       '</div>' +
       '<div class="perf-section"><h4>Last 20 Completed Trades</h4>' +
-        '<table class="perf-table"><thead><tr><th>Pair</th><th>Dir</th><th>Exit</th><th>PnL</th><th>R</th><th>Slip bps</th><th>Hold</th></tr></thead><tbody>' +
-        (tradeRows || '<tr><td colspan="7" style="color:var(--muted)">No completed trades</td></tr>') +
+        '<table class="perf-table"><thead><tr><th>Date</th><th>Pair</th><th>Dir</th><th>Exit</th><th>PnL</th><th>R</th><th>Slip bps</th><th>Hold</th></tr></thead><tbody>' +
+        (tradeRows || '<tr><td colspan="8" style="color:var(--muted)">No completed trades</td></tr>') +
         '</tbody></table></div>' + buildPerfCockpit(d, micro, sh);
   } catch(err) {
     el.innerHTML = '<div class="bt-errors">Failed to load performance data: ' + err.message + '</div>';
