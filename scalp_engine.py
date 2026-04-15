@@ -2123,8 +2123,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "direction":       direction,
                 "price":           levels["entry"],
                 "sl":              levels["sl"],
-                "tp1":             levels["tp1"],
-                "tp2":             levels["tp2"],
+                "tp_partial":      levels["tp_partial"],    # Fabio: first scale-out at +1R ("pay yourself first")
+                "rr_partial":      1.0,                     # always 1.0 by construction of tp_partial
+                "tp1":             levels["tp1"],            # structural target (hold after moving SL to BE)
+                "tp2":             levels["tp2"],            # runner / HTF extension
                 "rr1":             levels["rr"],
                 "sl_distance":     levels["sl_distance"],
                 "sl_method":       levels["sl_method"],

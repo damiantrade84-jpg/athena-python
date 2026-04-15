@@ -10625,16 +10625,23 @@ function buildScalpCard(s, idx) {
       // VP levels
       vpBlock +
 
-      // Entry / SL / TP levels
+      // Entry / SL / TP levels — Fabio 3-clip structure
       '<div class="levels-grid">'+
         '<div class="level-box"><div class="level-label">Entry</div><div class="level-val">'+fmtPrice(s.price)+'</div></div>'+
         '<div class="level-box"><div class="level-label">SL</div><div class="level-val bear">'+fmtPrice(s.sl)+'</div></div>'+
-        '<div class="level-box"><div class="level-label">TP1</div><div class="level-val bull">'+fmtPrice(s.tp1)+'</div></div>'+
+        '<div class="level-box"><div class="level-label" title="First scale-out +1R — move stop to BE">T1 <span style="color:var(--muted);font-size:9px">+1R</span></div><div class="level-val" style="color:#f0b90b">'+fmtPrice(s.tp_partial || s.price)+'</div></div>'+
+      '</div>'+
+      '<div class="levels-grid" style="margin-top:4px">'+
+        '<div class="level-box" style="grid-column:1/3"><div class="level-label" title="Structural target — trail after BE armed">T2 <span style="color:var(--muted);font-size:9px">structural · '+rr.toFixed(1)+'R</span></div><div class="level-val bull">'+fmtPrice(s.tp1)+'</div></div>'+
+        (s.tp2 ? '<div class="level-box"><div class="level-label" title="Runner / HTF extension">T3 <span style="color:var(--muted);font-size:9px">runner</span></div><div class="level-val" style="color:#a78bfa">'+fmtPrice(s.tp2)+'</div></div>' : '<div class="level-box"></div>')+
       '</div>'+
 
       // RR + spread
       '<div class="rr-row" style="border:none;margin-bottom:4px">'+
-        '<span class="conf-label">R:R</span><span class="rr-val">1:'+rr.toFixed(2)+'</span>'+
+        '<span class="conf-label">R:R</span>'+
+        '<span style="font-size:10px;color:#f0b90b;font-weight:700">T1 1:1R</span>'+
+        '<span style="font-size:10px;color:var(--muted);margin:0 4px">→</span>'+
+        '<span class="rr-val">T2 1:'+rr.toFixed(2)+'R</span>'+
         (s.spread_pips ? '<span style="font-size:10px;color:var(--muted);margin-left:auto">Spread '+s.spread_pips.toFixed(1)+'pip &middot; '+s.sl_method+'</span>' : '')+
       '</div>'+
 

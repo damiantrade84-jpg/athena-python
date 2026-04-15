@@ -4623,14 +4623,20 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         if actual_rr < 1.0:
             continue
 
-        # ── Step 5: Walk forward to resolve exit (deterministic TP1-only model) ─────
+        # Fabio: first scale-out is always at +1R ("pay yourself first")
+        tp_partial = entry + sl_distance if direction == "LONG" else entry - sl_distance
+
+        # ── Step 5: Walk forward — Fabio partial-exit model ──────────────────────────
+        # Sequence: hit +1R → take 50% off, move stop to BE → trail to tp1 → runner to tp2
         exit_reason = None
         exit_price = None
         exit_bar_idx = None
         best_favorable_r = 0.0
-        partial_hit = False
+        partial_hit = False   # True once +1R (tp_partial) is touched
+        be_stop = entry       # breakeven stop level (armed after partial_hit)
+        live_sl = sl          # tracks current effective SL (original → BE after partial)
         tp1_hit = False
-        
+
         for w, wbar in enumerate(walk_rows, start=1):
             walk_idx = int(wbar.get("_seq", entry_bar_idx + w))
             if direction == "LONG":
@@ -4638,8 +4644,18 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             else:
                 best_favorable_r = max(best_favorable_r, max(0.0, (entry - wbar["low"]) / sl_distance))
 
+            # Check +1R scale-out first; once hit, move stop to breakeven
+            if not partial_hit:
+                tp_partial_reached = (
+                    (direction == "LONG" and wbar["high"] >= tp_partial)
+                    or (direction == "SHORT" and wbar["low"] <= tp_partial)
+                )
+                if tp_partial_reached:
+                    partial_hit = True
+                    live_sl = be_stop  # remainder now trails with SL at BE
+
             outcome, both_hit = _resolve_barrier_exit(
-                wbar, direction=direction, sl=sl, tp1=tp1, tp2=None, sl_outcome="SL"
+                wbar, direction=direction, sl=live_sl, tp1=tp1, tp2=None, sl_outcome="SL"
             )
             if both_hit:
                 same_bar_both_hit_count += 1
@@ -4648,14 +4664,15 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
                 exit_reason = outcome
                 exit_bar_idx = walk_idx
                 if outcome == "SL":
-                    exit_price = sl
+                    exit_price = live_sl  # original SL or BE, depending on partial_hit
                 elif outcome == "TP1":
                     tp1_hit = True
                     exit_price = tp1
                 break
 
-            # 3. Invalidation clock (Engine D only): no follow-through in 2–3 bars -> scratch
-            if scratch_enabled and w >= scratch_bars and best_favorable_r < scratch_min_r:
+            # Invalidation clock: only scratch BEFORE first partial — once +1R is banked
+            # the remainder runs with zero risk (stop at BE), so no early exit needed.
+            if scratch_enabled and not partial_hit and w >= scratch_bars and best_favorable_r < scratch_min_r:
                 exit_reason = "SCRATCH_NO_FOLLOW_THROUGH"
                 exit_price = wbar["close"]
                 exit_bar_idx = walk_idx
@@ -4674,7 +4691,12 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         else:
             raw_r = (entry - exit_price) / sl_distance
 
-        r_multiple = round(max(-5.0, min(5.0, raw_r)), 3)
+        if partial_hit:
+            # 50% exited at +1R (tp_partial), 50% exits at final price (tp1, BE, or timeout)
+            # Worst case: SL hit after partial → 0.5×1R + 0.5×0R = +0.5R (locked winner)
+            r_multiple = round(max(-5.0, min(5.0, 0.5 * 1.0 + 0.5 * raw_r)), 3)
+        else:
+            r_multiple = round(max(-5.0, min(5.0, raw_r)), 3)
 
         # Grade through the same scorer as live scan, using the pipeline outputs
         # already computed for this historical decision point.
@@ -4720,11 +4742,12 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             "size_multiplier": _quality.get("size_multiplier"),
             "entry": round(entry, 6),
             "sl": round(sl, 6),
+            "tp_partial": round(tp_partial, 6),
             "tp1": round(tp1, 6),
             "tp2": round(tp2, 6) if tp2 else round(tp1, 6),
             "tp1_hit": bool(tp1_hit),
             "partial_taken_1r": bool(partial_hit),
-            "runner_be_armed": False,
+            "runner_be_armed": bool(partial_hit),  # BE is armed as soon as partial is taken
             "exit_price": round(exit_price, 6),
             "exit_reason": exit_reason,
             "resultR": r_multiple,
