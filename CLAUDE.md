@@ -772,6 +772,23 @@ Current active contract:
 
 ---
 
+## 2026-04-16: Engine A MT5 Direct Fetch (TTL Cache Bypass)
+
+**Problem:** The candles_cache TTL (H1=55min, H4=235min, D1=23h) caused Engine A to use stale data for MT5-sourced pairs. CandleBuilder WS was also overriding MT5 OHLC for forex/commodity/index pairs, creating data inconsistencies.
+
+**Fix:** Modified `candles_cache.py`:
+1. Excluded MT5 pairs from CandleBuilder WS routing (line 364-365)
+2. Bypass TTL cache entirely for MT5 pairs (lines 479-495) — MT5 IPC is fast (1-2ms)
+3. Removed MT5+WS merge logic for forex/commodity/index
+
+**Result:** Engine A/B non-crypto pairs now fetch fresh MT5 data on every scan. Crypto pairs still use Binance WS/REST via candles_cache.
+
+**Engine D (Scalp Lab):** Unaffected — already uses `mt5_fetch_scalp_candles()` directly.
+
+**Volume source badge:** Shows "mt5_tick" for forex/commodity/index (correct — OTC markets have no real exchange volume) and "binance_ws" for crypto (correct — Binance WebSocket data).
+
+---
+
 ## 2026-04-14: Engine D (Scalp Lab) — Full VP+OrderFlow rebuild
 
 **Previous implementation:** Zone-based M15 structure + M5 trigger system (`detect_m15_zone`, `detect_m5_trigger`, `confirm_momentum`). Signal keys: `entry`, `rr`, `zone_desc`, `trigger_desc`, `risk_level`.

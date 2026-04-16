@@ -833,7 +833,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     if effective_style == "swing":
         # --- SWING D1 LOOP â€" UNCHANGED ---
 
-        MIN_BARS = max(50, CONFIG.get("D1_CANDLES", 1001))
+        MIN_BARS = 220  # Fixed indicator warmup (EMA200 + buffer) — do not tie to D1_CANDLES fetch depth
         COOLDOWN = 3
         MAX_OPEN = 3  # R5: max concurrent positions
 
@@ -1293,7 +1293,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             i = exit_bar + 1 if outcome != "OPEN" else i + 1
 
     elif effective_style == "intraday":  # walk H4 bars
-        MIN_H4 = max(50, CONFIG.get("H4_CANDLES", 1001))
+        MIN_H4 = 250  # Fixed indicator warmup — do not tie to H4_CANDLES fetch depth
         COOLDOWN = 2
         MAX_HOLD = 24
         MAX_OPEN = 3
@@ -1349,7 +1349,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             # D1 context: real D1 data up to this point for Weinstein/regime
 
             d1_idx = bisect.bisect_left(d1_ts, entry_ts)
-            d1_ctx = d1_raw[max(0, d1_idx - max(50, CONFIG.get("D1_CANDLES", 1001))) : d1_idx]
+            d1_ctx = d1_raw[max(0, d1_idx - 220) : d1_idx]  # Fixed 220 bar lookback for indicators
 
             if len(h1_window) < 50 or len(d1_ctx) < 50:
                 i += 1
@@ -1742,7 +1742,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             i = exit_bar + 1 if outcome != "OPEN" else i + 1
 
     elif effective_style == "scalp":  # H1 bar walk-forward
-        MIN_H1 = max(50, CONFIG.get("H1_CANDLES", 1001))
+        MIN_H1 = 250  # Fixed indicator warmup — do not tie to H1_CANDLES fetch depth
         COOLDOWN = 1
         MAX_HOLD = 12
         MAX_OPEN = 3
@@ -1796,12 +1796,12 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             # H4 context: all H4 bars before this H1 bar
 
             h4_idx = bisect.bisect_left(h4_ts_sc, entry_ts)
-            h4_ctx = h4_raw[max(0, h4_idx - max(50, CONFIG.get("H4_CANDLES", 1001))) : h4_idx]
+            h4_ctx = h4_raw[max(0, h4_idx - 250) : h4_idx]  # Fixed 250 bar lookback for indicators
 
             # D1 context: real D1 data up to this point for Weinstein/regime
 
             d1_idx = bisect.bisect_left(d1_ts_sc, entry_ts)
-            d1_ctx = d1_raw[max(0, d1_idx - max(50, CONFIG.get("D1_CANDLES", 1001))) : d1_idx]
+            d1_ctx = d1_raw[max(0, d1_idx - 220) : d1_idx]  # Fixed 220 bar lookback for indicators
 
             if len(h4_ctx) < 50 or len(d1_ctx) < 50:
                 i += 1
@@ -3922,7 +3922,7 @@ def backtest_pair_consensus(
 
         h4_window = candles_h4[max(0, h4_idx - _h4_need): h4_idx]
         h1_window = candles_h1[max(0, h1_idx - _h1_need): h1_idx]
-        d1_ctx = candles_d1[max(0, d1_idx - max(50, CONFIG.get("D1_CANDLES", 1001))): d1_idx]
+        d1_ctx = candles_d1[max(0, d1_idx - 220): d1_idx]  # Fixed 220 bar lookback for indicators
         zone_ctx = h4_window
 
         if len(h4_window) < 50 or len(h1_window) < 50 or len(d1_ctx) < 50:
