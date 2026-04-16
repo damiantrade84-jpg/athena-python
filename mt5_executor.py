@@ -473,20 +473,76 @@ def mt5_close_position(ticket: int, volume: float | None = None) -> dict:
     result = _send_order_with_filling_fallback(request)
 
     if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-        log.info(f"[MT5] Manual close ticket={ticket} price={price}")
-
-        # Send Telegram notification for trade closed
-        try:
-            telegram_notify.notify_trade_closed(
-                pair=pos.symbol,
-                pnl_r=0.0,  # PnL not available in manual close
-                is_win=None,
-                duration_minutes=0
+        raw_fill_price = float(result.price) if result.price else price
+        deal_ticket = int(result.deal) if result.deal else None
+        live_profit = float(pos.profit) if hasattr(pos, "profit") else 0.0
+        entry_price = float(pos.price_open)
+        direction = "LONG" if pos.type == 0 else "SHORT"
+        volume = float(pos.volume)
+        
+        # Workaround: Pepperstone sometimes records entry_price as deal.price
+        # Detect when deal price equals entry price (within tick tolerance) and compute correct price
+        fill_price = raw_fill_price
+        if abs(raw_fill_price - entry_price) < 1e-8 and live_profit != 0:
+            # Deal price is wrong (equals entry), compute correct price from profit
+            # For forex: profit = (close - entry) * volume * contract_size / tick_size * tick_value
+            # Simplified: close = entry + profit / (volume * pip_value)
+            try:
+                sym_info = mt5.symbol_info(pos.symbol)
+                if sym_info:
+                    tick_value = float(sym_info.trade_tick_value or 0)
+                    tick_size = float(sym_info.trade_tick_size or 0)
+                    contract_size = float(sym_info.trade_contract_size or 1)
+                    
+                    if tick_value > 0 and tick_size > 0:
+                        # Compute price change per pip/tick
+                        pip_value = tick_value / tick_size * contract_size
+                        if pip_value > 0:
+                            price_change = live_profit / (volume * pip_value)
+                            if direction == "LONG":
+                                computed_close = entry_price + price_change
+                            else:
+                                computed_close = entry_price - price_change
+                            
+                            fill_price = computed_close
+                            log.warning(
+                                f"[MT5] Pepperstone price bug detected: ticket={ticket} "
+                                f"deal_price={raw_fill_price} (equals entry) -> computed_close={fill_price:.5f} "
+                                f"profit={live_profit} entry={entry_price}"
+                            )
+                        else:
+                            log.warning(f"[MT5] Cannot compute close price: zero pip_value for {pos.symbol}")
+                    else:
+                        log.warning(f"[MT5] Cannot compute close price: missing tick_value/tick_size for {pos.symbol}")
+                else:
+                    log.warning(f"[MT5] Cannot compute close price: no symbol_info for {pos.symbol}")
+            except Exception as e:
+                log.error(f"[MT5] Error computing correct close price: {e}")
+                # Fall back to raw fill price
+                fill_price = raw_fill_price
+        
+        if abs(fill_price - price) > 1e-8:
+            log.warning(
+                f"[MT5] Close fill price mismatch: ticket={ticket} "
+                f"requested={price} fill={fill_price} (delta={fill_price - price})"
             )
-        except Exception as _tn_e:
-            log.debug(f"[TELEGRAM] Trade close notification failed: {_tn_e}")
+        log.info(
+            f"[MT5] Close ticket={ticket} fill={fill_price} requested={price} "
+            f"deal={deal_ticket} liveProfit={live_profit}"
+        )
 
-        return {"success": True, "ticket": ticket, "closePrice": price}
+        return {
+            "success": True,
+            "ticket": ticket,
+            "closePrice": fill_price,
+            "requestedPrice": price,
+            "dealTicket": deal_ticket,
+            "liveProfit": live_profit,
+            "entryPrice": float(pos.price_open),
+            "symbol": pos.symbol,
+            "volume": close_volume,
+            "direction": "LONG" if pos.type == 0 else "SHORT",
+        }
 
     err = result.comment if result else "order_send failed"
 

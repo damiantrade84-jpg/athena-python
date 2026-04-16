@@ -6276,10 +6276,15 @@ def api_close_position():
                                 (str(ticket),)
                             ).fetchone()
                         if _arow:
+                            # Fix timezone: MT5 deal.time is broker time (UTC+3), convert to UTC
+                            broker_timestamp = int(_close_deal.time)
+                            utc_timestamp = broker_timestamp - 3 * 3600  # Pepperstone UTC+3
+                            exit_time_utc = datetime.fromtimestamp(utc_timestamp, tz=timezone.utc).isoformat()
+                            
                             _update_trade_outcome(
                                 ticket=str(ticket),
                                 exit_price=float(_close_deal.price),
-                                exit_time=datetime.fromtimestamp(_close_deal.time, tz=timezone.utc).isoformat(),
+                                exit_time=exit_time_utc,
                                 pnl=_total_pnl,
                                 entry_price=_arow["entry_price"],
                                 sl=_arow["sl"],
@@ -10522,8 +10527,25 @@ def _update_trade_outcome(
 ) -> None:
     """Write outcome columns for a closed trade in audit_log."""
 
-    exit_reason = _resolve_exit_reason(exit_price, sl, tp)
+    # Check if exit_reason was already set (e.g., TIMED_CLOSE) before resolving
     existing_exit_reason = None
+    try:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as _ssi_con:
+            _ssi_con.row_factory = sqlite3.Row
+            _ssi_row = _ssi_con.execute(
+                "SELECT exit_reason FROM audit_log WHERE ticket=? ORDER BY id DESC LIMIT 1",
+                (ticket,),
+            ).fetchone()
+            if _ssi_row:
+                existing_exit_reason = _ssi_row["exit_reason"]
+    except Exception as _ssi_lookup_err:
+        log.debug(f"[SSI] audit lookup failed for {ticket}: {_ssi_lookup_err}")
+    
+    # Preserve TIMED_CLOSE even if price matches SL/TP (after BE move)
+    if str(existing_exit_reason or "").upper() == "TIMED_CLOSE":
+        exit_reason = "TIMED_CLOSE"
+    else:
+        exit_reason = _resolve_exit_reason(exit_price, sl, tp)
 
     # R-multiple: pnl / dollar_risk.
 
@@ -10556,28 +10578,23 @@ def _update_trade_outcome(
         try:
             t_entry = datetime.fromisoformat(entry_ts.replace("Z", "+00:00"))
 
-            t_exit = datetime.fromisoformat(exit_time.replace("Z", "+00:00"))
+            # Fix timezone bug: MT5 deal timestamps are in broker time (UTC+3 for Pepperstone)
+            # but datetime.fromtimestamp treats them as UTC. Subtract 3 hours to get true UTC.
+            if exit_time and exit_time.isdigit():
+                # exit_time is a timestamp string from MT5 deal
+                broker_timestamp = int(exit_time)
+                utc_timestamp = broker_timestamp - 3 * 3600  # Subtract 3 hours for UTC+3 broker
+                t_exit = datetime.fromtimestamp(utc_timestamp, tz=timezone.utc)
+            else:
+                # ISO format (e.g., from timed exit)
+                t_exit = datetime.fromisoformat(exit_time.replace("Z", "+00:00"))
 
             holding_hours = round((t_exit - t_entry).total_seconds() / 3600, 2)
 
         except Exception as _hp_err:
             log.debug(f"[AUDIT] holding period calc failed: {_hp_err}")
 
-    _ssi_row = None
-    try:
-        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as _ssi_con:
-            _ssi_con.row_factory = sqlite3.Row
-            _ssi_row = _ssi_con.execute(
-                "SELECT style, max_score, score, exit_reason FROM audit_log WHERE ticket=? ORDER BY id DESC LIMIT 1",
-                (ticket,),
-            ).fetchone()
-            if _ssi_row:
-                existing_exit_reason = _ssi_row["exit_reason"]
-    except Exception as _ssi_lookup_err:
-        log.debug(f"[SSI] audit lookup failed for {ticket}: {_ssi_lookup_err}")
-
-    if str(existing_exit_reason or "").upper() == "TIMED_CLOSE":
-        exit_reason = "TIMED_CLOSE"
+    # existing_exit_reason already checked at top of function
 
     try:
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
@@ -10861,12 +10878,15 @@ def _check_mt5_outcomes() -> None:
                     close_deal = deals_sorted[-1]
                     total_profit = sum(float(d.profit) for d in deals_sorted)
 
+                    # Fix timezone: MT5 deal.time is broker time (UTC+3), convert to UTC
+                    broker_timestamp = int(close_deal.time)
+                    utc_timestamp = broker_timestamp - 3 * 3600  # Pepperstone UTC+3
+                    exit_time_utc = datetime.fromtimestamp(utc_timestamp, tz=timezone.utc).isoformat()
+                    
                     _update_trade_outcome(
                         ticket=ticket_str,
                         exit_price=float(close_deal.price),
-                        exit_time=datetime.fromtimestamp(
-                            close_deal.time, tz=timezone.utc
-                        ).isoformat(),
+                        exit_time=exit_time_utc,
                         pnl=total_profit,
                         entry_price=row["entry_price"],
                         sl=row["sl"],

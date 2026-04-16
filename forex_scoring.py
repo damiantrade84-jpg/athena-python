@@ -15,6 +15,7 @@ Threshold: MIN_FOREX_CONFLUENCE / MIN_CONFLUENCE_CLASS.forex (see config.yaml)
 
 from __future__ import annotations
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
@@ -839,7 +840,9 @@ def compute_forex_score(
             fvg_bonus = 0.20  # multiplicative: 1.20x
 
         # 2. Liquidity sweep
-        if detect_liquidity_sweep(h1_candles or [], atr):
+        h1_highs = [c.get("high", 0) for c in (h1_candles or []) if c.get("high")]
+        h1_lows = [c.get("low", 0) for c in (h1_candles or []) if c.get("low")]
+        if h1_highs and h1_lows and detect_liquidity_sweep(h1_candles or [], atr):
             liquidity_bonus = 0.15  # multiplicative: 1.15x
 
         # 3. Volume strength at Asian range or Fib level

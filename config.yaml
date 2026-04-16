@@ -310,7 +310,7 @@ FOREX_ENGINE:
   trend_gate_adx_min: 25   # Match ADX_TREND_MIN_CLASS.forex — must stay in sync
   trend_gate_adx_hard_fail_min: 15.0
   trend_gate_adx_soft_full_at: 25.0
-  trend_gate_adx_soft_enabled: true
+  trend_gate_adx_soft_enabled: false
   session_mode: "strict"        # strict, soft, off
   session_soft_multiplier: 0.75
   session_shoulder_enabled: true

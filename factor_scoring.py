@@ -639,6 +639,7 @@ def compute_factor_scores(
     """
     asset_type = pair.get("type", "stock")
     is_crypto = asset_type == "crypto"
+    feed_status = {"main": "ok"}
 
     # ── Data quality guard ───────────────────────────────────────────────
     # Detect near-zero prices or zero ATR that indicate a data feed issue
@@ -1109,6 +1110,7 @@ def compute_factor_scores(
             "crypto_engine_a_diagnostics": _crypto_diag,
             "intermarket_confirmation": None,
             "intermarket_engine_a_delta": 0.0,
+            "feed_status": feed_status,
         }
 
     dir_score = 0.0
@@ -1161,6 +1163,7 @@ def compute_factor_scores(
                 "crypto_engine_a_diagnostics": None,
                 "intermarket_confirmation": None,
                 "intermarket_engine_a_delta": 0.0,
+                "feed_status": feed_status,
             }
 
     nondir_score = 0.0

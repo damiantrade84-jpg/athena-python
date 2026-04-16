@@ -175,12 +175,15 @@ def _row_for_live_position(position: dict, audit_rows: list[dict]) -> dict | Non
     }
 
 
-def _mark_timed_close(db_path: str, row: dict, venue: str) -> None:
+def _mark_timed_close(db_path: str, row: dict, venue: str, *, actual_close_price: float | None = None, live_pnl: float | None = None) -> None:
     """Persist a timed-close marker so outcome logging preserves exit_reason.
 
     MT5: prefer exact-ticket match; fall back to id-based mark when the audit row was
     matched by proximity (split legs, fallback matching) to avoid silent no-ops.
     Bybit: always mark by id (live ticket is not stable on Bybit).
+    
+    When actual_close_price and live_pnl are provided (from timed exit), write them immediately
+    to prevent the outcome monitor from overwriting with incorrect deal data.
     """
     audit_id = row.get("audit_id")
     audit_ticket = str(row.get("audit_ticket") or "").strip()
@@ -189,12 +192,33 @@ def _mark_timed_close(db_path: str, row: dict, venue: str) -> None:
     if venue == "mt5":
         if audit_ticket and audit_ticket == live_ticket:
             # Exact ticket match — most reliable
-            query = "UPDATE audit_log SET exit_reason=? WHERE ticket=? AND exit_price IS NULL"
-            params = ("TIMED_CLOSE", audit_ticket)
+            if actual_close_price is not None and live_pnl is not None:
+                # Write actual close price and PnL immediately
+                query = "UPDATE audit_log SET exit_reason=?, exit_price=?, pnl=?, exit_time=? WHERE ticket=? AND exit_price IS NULL"
+                params = (
+                    "TIMED_CLOSE",
+                    actual_close_price,
+                    live_pnl,
+                    datetime.now(timezone.utc).isoformat(),
+                    audit_ticket,
+                )
+            else:
+                query = "UPDATE audit_log SET exit_reason=? WHERE ticket=? AND exit_price IS NULL"
+                params = ("TIMED_CLOSE", audit_ticket)
         elif audit_id is not None:
             # Fallback: matched by proximity (split legs, etc.) — use stable row id
-            query = "UPDATE audit_log SET exit_reason=? WHERE id=? AND exit_price IS NULL"
-            params = ("TIMED_CLOSE", audit_id)
+            if actual_close_price is not None and live_pnl is not None:
+                query = "UPDATE audit_log SET exit_reason=?, exit_price=?, pnl=?, exit_time=? WHERE id=? AND exit_price IS NULL"
+                params = (
+                    "TIMED_CLOSE",
+                    actual_close_price,
+                    live_pnl,
+                    datetime.now(timezone.utc).isoformat(),
+                    audit_id,
+                )
+            else:
+                query = "UPDATE audit_log SET exit_reason=? WHERE id=? AND exit_price IS NULL"
+                params = ("TIMED_CLOSE", audit_id)
         else:
             log.debug(f"[TIMED_EXIT] _mark_timed_close: no usable key for MT5 {row.get('pair')} — skipping")
             return
@@ -334,17 +358,35 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
 
         result = mt5_close_position(ticket)
         if result.get("success"):
+            # Use actual fill price and live profit from close result
+            actual_close_price = result.get("closePrice")
+            live_pnl = result.get("liveProfit", 0.0)
+            entry_price = result.get("entryPrice")
+            direction = result.get("direction")
+            
+            # Compute R-multiple if we have risk info
+            pnl_r = 0.0
+            if live_pnl != 0 and row.get("risk_amount") and row["risk_amount"] > 0:
+                pnl_r = round(live_pnl / float(row["risk_amount"]), 2)
+            elif live_pnl != 0 and entry_price and row.get("sl"):
+                risk_dist = abs(float(entry_price) - float(row["sl"]))
+                if risk_dist > 0:
+                    # For forex: volume is in lots, risk_amount should be used
+                    # This fallback is only for crypto/stocks where volume is in base units
+                    pnl_r = round(live_pnl / (risk_dist * float(row.get("volume", 1))), 2)
+            
             if db_path:
-                _mark_timed_close(db_path, row, "mt5")
+                _mark_timed_close(db_path, row, "mt5", actual_close_price=actual_close_price, live_pnl=live_pnl)
             log.info(
                 f"[TIMED_EXIT] TIMED CLOSE: {row['pair']} ticket={ticket} "
-                f"style={style} mins={mins:.0f} profit=${profit:.2f}"
+                f"style={style} mins={mins:.0f} profit=${live_pnl:.2f} R={pnl_r} "
+                f"fill={actual_close_price} entry={entry_price}"
             )
             try:
                 telegram_notify.notify_trade_closed(
                     pair=row["pair"],
-                    pnl_r=0.0,
-                    is_win=True,
+                    pnl_r=pnl_r,
+                    is_win=live_pnl > 0,
                     duration_minutes=mins,
                 )
             except Exception:
