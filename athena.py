@@ -12924,6 +12924,7 @@ set_runtime(
         CRYPTO_PAIRS=CRYPTO_PAIRS,
         eodhd_ticker_for_pair=_eodhd_ticker_for_pair,
         get_eodhd_client=_get_eodhd_client,
+        fetch_eodhd_volume_only=_fetch_eodhd_volume_only,
     )
 )
 register_execution_routes(app)
