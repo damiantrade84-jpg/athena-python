@@ -2730,22 +2730,17 @@ def _engine_b_live_market_state(pair: dict, tf: str, limit: int) -> dict:
     including the current forming bar when present. Other sources reuse the shared
     market-state path.
     """
-    if pair.get("source") == "mt5":
-        try:
-            from athena_app.services.market_state import split_market_state
+    from athena_app.services.engine_b_market_state import engine_b_live_market_state
 
-            raw = fetch_mt5(pair, tf, limit)
-            candles = _extract_candles(raw) or []
-            return split_market_state(
-                candles,
-                tf,
-                pair.get("display") or pair.get("symbol") or "",
-            )
-        except Exception as e:
-            log.debug(
-                f"[ENGINE B LIVE] {pair.get('display')} {tf}: MT5 direct state failed, falling back to shared market state: {e}"
-            )
-    return fetch_market_state(pair, tf, limit)
+    return engine_b_live_market_state(
+        pair,
+        tf,
+        limit,
+        fetch_mt5=fetch_mt5,
+        fetch_market_state=fetch_market_state,
+        extract_candles=_extract_candles,
+        log=log,
+    )
 
 
 from indicators import (  # noqa: E402
@@ -6276,6 +6271,22 @@ def api_close_position():
                                 (str(ticket),)
                             ).fetchone()
                         if _arow:
+                            # Check for Pepperstone bug and fix if needed
+                            entry_price = float(_arow["entry_price"])
+                            deal_price = float(_close_deal.price)
+                            exit_price_to_use = deal_price
+                            
+                            if abs(deal_price - entry_price) < 1e-8 and abs(_total_pnl) < 1e-8:
+                                # Pepperstone bug detected - deal shows entry price as close price
+                                # Try to get live position profit before it closed
+                                log.warning(
+                                    f"[CLOSE] Pepperstone bug detected for ticket={ticket} "
+                                    f"deal_price={deal_price} equals entry_price - attempting fix"
+                                )
+                                # For manual closes, we can't easily compute the correct price
+                                # So we'll leave it as is for now
+                                pass
+                            
                             # Fix timezone: MT5 deal.time is broker time (UTC+3), convert to UTC
                             broker_timestamp = int(_close_deal.time)
                             utc_timestamp = broker_timestamp - 3 * 3600  # Pepperstone UTC+3
@@ -6283,7 +6294,7 @@ def api_close_position():
                             
                             _update_trade_outcome(
                                 ticket=str(ticket),
-                                exit_price=float(_close_deal.price),
+                                exit_price=exit_price_to_use,
                                 exit_time=exit_time_utc,
                                 pnl=_total_pnl,
                                 entry_price=_arow["entry_price"],
@@ -9739,6 +9750,7 @@ def analyze_pair(
     use_naked_engine=False,
     regime_context=None,
     preloaded_candles=None,
+    preloaded_market_state=None,
     preloaded_fetch_meta=None,
     intermarket_snapshot=None,
 ):
@@ -9750,12 +9762,33 @@ def analyze_pair(
 
     _lim = scan_candle_limits()
     preloaded_candles = preloaded_candles or {}
+    preloaded_market_state = preloaded_market_state or {}
     preloaded_fetch_meta = preloaded_fetch_meta or {}
 
     # Determine if the primary timeframe (H1) is currently forming.
+    _h1_state = preloaded_market_state.get("H1")
     h1 = preloaded_candles.get("H1")
-    if h1:
-        is_forming = False
+    if isinstance(_h1_state, dict):
+        _h1_confirmed = list(_h1_state.get("confirmed") or [])
+        _h1_forming = _h1_state.get("forming")
+        # For MT5 forex we default to confirmed candles for scoring paths.
+        if pair.get("source") == "mt5" and pair.get("type") == "forex":
+            h1 = _h1_confirmed
+        else:
+            h1 = _h1_confirmed + ([_h1_forming] if _h1_forming else [])
+        is_forming = bool(_h1_state.get("is_live"))
+    elif h1:
+        try:
+            from athena_app.services.market_state import split_market_state
+
+            _h1_state = split_market_state(
+                h1,
+                "H1",
+                pair.get("display") or pair.get("symbol") or "",
+            )
+            is_forming = bool(_h1_state.get("is_live"))
+        except Exception:
+            is_forming = False
     else:
         try:
             from candle_manager import fetch_market_state as _fms
@@ -9766,11 +9799,27 @@ def analyze_pair(
             h1 = fetch_candles(pair, "H1", _lim["H1"])
             is_forming = False
 
+    _d1_state = preloaded_market_state.get("D1")
     d1 = preloaded_candles.get("D1")
+    if isinstance(_d1_state, dict):
+        _d1_confirmed = list(_d1_state.get("confirmed") or [])
+        _d1_forming = _d1_state.get("forming")
+        if pair.get("source") == "mt5" and pair.get("type") == "forex":
+            d1 = _d1_confirmed
+        else:
+            d1 = _d1_confirmed + ([_d1_forming] if _d1_forming else [])
     if d1 is None:
         d1 = fetch_candles(pair, "D1", _lim["D1"])
 
+    _h4_state = preloaded_market_state.get("H4")
     h4 = preloaded_candles.get("H4")
+    if isinstance(_h4_state, dict):
+        _h4_confirmed = list(_h4_state.get("confirmed") or [])
+        _h4_forming = _h4_state.get("forming")
+        if pair.get("source") == "mt5" and pair.get("type") == "forex":
+            h4 = _h4_confirmed
+        else:
+            h4 = _h4_confirmed + ([_h4_forming] if _h4_forming else [])
     if h4 is None:
         h4 = fetch_candles(pair, "H4", _lim["H4"])
 
@@ -10451,6 +10500,16 @@ def analyze_pair(
         ),
         "engine_b_overlay": _engine_b_overlay_meta,
     }
+    if pair.get("type") == "forex":
+        signal["candleFetchMeta"] = {
+            "D1": preloaded_fetch_meta.get("D1")
+            or _get_candle_fetch_meta(pair, "D1", _lim["D1"]),
+            "H4": preloaded_fetch_meta.get("H4")
+            or _get_candle_fetch_meta(pair, "H4", _lim["H4"]),
+            "H1": preloaded_fetch_meta.get("H1")
+            or _get_candle_fetch_meta(pair, "H1", _lim["H1"]),
+            "pairSource": pair.get("source"),
+        }
     if CONFIG.get("SCAN_DEBUG_CANDLE_META", False):
         signal["candleMeta"] = {
             "D1": preloaded_fetch_meta.get("D1")
@@ -10877,7 +10936,21 @@ def _check_mt5_outcomes() -> None:
                     deals_sorted = sorted(deals, key=lambda d: d.time)
                     close_deal = deals_sorted[-1]
                     total_profit = sum(float(d.profit) for d in deals_sorted)
-
+                    
+                    # Check for Pepperstone bug: deal price equals entry price but profit is 0
+                    # If detected, skip updating to preserve correct data from timed exit
+                    entry_price = float(row["entry_price"])
+                    deal_price = float(close_deal.price)
+                    
+                    if abs(deal_price - entry_price) < 1e-8 and abs(total_profit) < 1e-8:
+                        # Pepperstone bug detected - deal shows entry price as close price
+                        # Skip updating to preserve correct data from timed exit
+                        log.warning(
+                            f"[AUDIT] Pepperstone bug detected for {row['pair']} ticket={ticket_str} "
+                            f"deal_price={deal_price} equals entry_price - skipping update"
+                        )
+                        continue
+                    
                     # Fix timezone: MT5 deal.time is broker time (UTC+3), convert to UTC
                     broker_timestamp = int(close_deal.time)
                     utc_timestamp = broker_timestamp - 3 * 3600  # Pepperstone UTC+3

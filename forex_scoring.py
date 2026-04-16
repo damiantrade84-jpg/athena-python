@@ -196,18 +196,20 @@ class DynamicForexWeights:
 
 
 def _trend_gate_detail(d1_snap: dict, h4_snap: dict) -> tuple[bool, str, dict]:
-    """Return trend-gate pass/fail plus reason codes for scan diagnostics."""
-    adx = d1_snap.get("adx")
-    if adx is None:
-        adx = 0.0
-    try:
-        adx = float(adx)
-    except (ValueError, TypeError):
-        adx = 0.0
+    """Return trend-gate pass/fail plus reason codes for scan diagnostics.
+
+    ADX for the gate is read from D1 or H4 per ``FOREX_ENGINE.trend_gate_adx_source``.
+    Daily ADX reacts slowly; using H4 aligns the gate with the H4 momentum screen and
+    avoids mass ``adx_below_min`` skips when D1 is still compressing.
+    """
+    _adx_src = "d1"
     try:
         from config import CONFIG
 
         fx_cfg = CONFIG.get("FOREX_ENGINE", {}) or {}
+        _adx_src = str(fx_cfg.get("trend_gate_adx_source", "d1")).lower().strip()
+        if _adx_src not in ("d1", "h4"):
+            _adx_src = "d1"
         trend_gate_adx_min = float(fx_cfg.get("trend_gate_adx_min", 20.0))
         adx_hard_fail = float(fx_cfg.get("trend_gate_adx_hard_fail_min", trend_gate_adx_min))
         adx_soft_full = float(fx_cfg.get("trend_gate_adx_soft_full_at", trend_gate_adx_min))
@@ -219,6 +221,15 @@ def _trend_gate_detail(d1_snap: dict, h4_snap: dict) -> tuple[bool, str, dict]:
         adx_soft_full = 20.0
         adx_soft_enabled = False
         trend_margin_min = 0.003
+
+    _adx_snap = h4_snap if _adx_src == "h4" else d1_snap
+    adx = _adx_snap.get("adx")
+    if adx is None:
+        adx = 0.0
+    try:
+        adx = float(adx)
+    except (ValueError, TypeError):
+        adx = 0.0
         
     adx_gate_multiplier = 1.0
 
@@ -226,6 +237,7 @@ def _trend_gate_detail(d1_snap: dict, h4_snap: dict) -> tuple[bool, str, dict]:
         "reason": "unknown",
         "direction_hint": "LONG",
         "adx": adx,
+        "adx_timeframe": _adx_src.upper(),
         "adx_min": trend_gate_adx_min,
         "adx_gate_multiplier": 1.0,
         "margin": None,
@@ -666,9 +678,29 @@ def compute_forex_score(
     # Using the same shared resolver across live, BT, and Engine-C scan.
     breakout_eval_hour = _breakout_eval_hour_from_candles(h1_candles)
 
-    # Hurst Exponent from H1 close prices — determines regime weighting
-    _closes = [c.get("close", 0) for c in (h1_candles or [])[-60:] if c.get("close")]
-    _hurst = _hurst_exponent(_closes) if len(_closes) >= 20 else 0.5
+    # Hurst Exponent from CONFIRMED H1 close prices only — do not let the live
+    # forming bar distort regime classification.
+    _h1_for_hurst = h1_candles or []
+    try:
+        from athena_app.services.market_state import split_market_state
+
+        _ms = split_market_state(
+            _h1_for_hurst,
+            "H1",
+            pair.get("display", pair.get("symbol", "")),
+        )
+        if _ms.get("confirmed"):
+            _h1_for_hurst = list(_ms["confirmed"])
+    except Exception:
+        pass
+
+    # Use a slightly wider window for stability; 60 bars is too twitchy.
+    _closes = [
+        float(c["close"])
+        for c in (_h1_for_hurst or [])[-100:]
+        if c.get("close") is not None
+    ]
+    _hurst = _hurst_exponent(_closes) if len(_closes) >= 40 else 0.5
 
     _dfw = DynamicForexWeights()
     _dfw.update(_hurst, backtest_mode)
@@ -696,6 +728,15 @@ def compute_forex_score(
                     _hurst_threshold = float(_sg_hurst_cfg.get("threshold", _hurst_threshold))
     except Exception:
         pass
+
+    log.debug(
+        "[FOREX HURST] %s hurst=%.3f threshold=%.3f bars_full=%d bars_used=%d",
+        pair.get("display", "?"),
+        _hurst,
+        _hurst_threshold,
+        len(h1_candles or []),
+        len(_closes),
+    )
 
     _hurst_trending = _hurst > _hurst_threshold
 
@@ -854,7 +895,7 @@ def compute_forex_score(
         )
         volume_bonus = volume_strength_at_level(h1_candles or [], key_level) * 0.10  # up to 1.10x
     except Exception as e:
-        log.error(f"[FOREX SMC ERROR] {e}")
+        log.error(f"[FOREX SMC ERROR] {e}", exc_info=True)
         fvg_bonus, liquidity_bonus, volume_bonus, fvg_overlap = 0.0, 0.0, 0.0, False
 
     # ── Final score with multiplicative bonuses (avoids 1.0 saturation) ─────
@@ -921,6 +962,7 @@ def compute_forex_score(
         "trend_gate_reason_raw": trend_detail.get("reason"),
         "trend_gate_direction": trend_dir,
         "trend_gate_adx": round(float(trend_detail.get("adx", 0.0) or 0.0), 4),
+        "trend_gate_adx_timeframe": trend_detail.get("adx_timeframe"),
         "trend_gate_adx_min": round(float(trend_detail.get("adx_min", 0.0) or 0.0), 4),
         "trend_gate_margin": (
             round(float(trend_detail["margin"]), 6)

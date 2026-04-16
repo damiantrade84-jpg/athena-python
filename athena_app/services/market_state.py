@@ -6,7 +6,7 @@ to provide diagnostic transparency for engines without delaying detection.
 
 from __future__ import annotations
 import time
-from typing import Any, TypedDict, Optional
+from typing import Any, Callable, TypedDict, Optional
 
 
 class MarketState(TypedDict):
@@ -15,6 +15,24 @@ class MarketState(TypedDict):
     is_live: bool  # True if the series includes a forming bar
     pair_display: str
     timeframe: str
+
+
+def candle_timestamp_epoch(candle: dict[str, Any] | None) -> int:
+    """Return normalized epoch seconds for a candle timestamp field."""
+    if not candle:
+        return 0
+    t = candle.get("time", candle.get("datetime"))
+    if t is None:
+        return 0
+    if isinstance(t, (int, float)):
+        return int(t / 1000) if t > 1e12 else int(t)
+    try:
+        from datetime import datetime
+
+        dt = datetime.fromisoformat(str(t).replace("Z", "+00:00"))
+        return int(dt.timestamp())
+    except Exception:
+        return 0
 
 
 def get_bucket_start_epoch(tf: str, ts_s: float) -> int:
@@ -60,22 +78,8 @@ def split_market_state(
     now = time_now if time_now is not None else time.time()
     current_bucket = get_bucket_start_epoch(tf, now)
     
-    # helper to get normalized epoch from candle dict
-    def _ts(c):
-        t = c.get("time", c.get("datetime"))
-        if t is None: return 0
-        if isinstance(t, (int, float)):
-            return int(t / 1000) if t > 1e12 else int(t)
-        # ISO string parsing fallback (simplified)
-        try:
-            from datetime import datetime
-            dt = datetime.fromisoformat(str(t).replace("Z", "+00:00"))
-            return int(dt.timestamp())
-        except:
-            return 0
-
     last_bar = candles[-1]
-    last_ts = _ts(last_bar)
+    last_ts = candle_timestamp_epoch(last_bar)
     
     is_forming = (last_ts == current_bucket)
     
@@ -95,3 +99,28 @@ def split_market_state(
             "pair_display": pair_display,
             "timeframe": tf
         }
+
+
+def get_tf_market_state(
+    pair: dict[str, Any],
+    timeframe: str,
+    *,
+    candles: list[dict[str, Any]] | None = None,
+    limit: int | None = None,
+    fetch_candles: Callable[[dict[str, Any], str, int], Any] | None = None,
+) -> MarketState:
+    """Normalize a timeframe candle series into raw/confirmed/forming state.
+
+    If ``candles`` are provided, they are used directly. Otherwise this helper fetches
+    candles via ``fetch_candles`` and ``limit``.
+    """
+    tf = str(timeframe or "").upper()
+    display = pair.get("display") or pair.get("symbol") or ""
+    series: list[dict[str, Any]] = list(candles or [])
+    if not series and fetch_candles is not None and limit is not None:
+        raw = fetch_candles(pair, tf, int(limit))
+        if isinstance(raw, dict):
+            raw = raw.get("candles")
+        if isinstance(raw, list):
+            series = raw
+    return split_market_state(series, tf, display)

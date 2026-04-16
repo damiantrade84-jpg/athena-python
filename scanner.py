@@ -449,6 +449,44 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     "H4": _im_h4 or r.fetch_candles(pair, "H4", _lim["H4"]),
                     "H1": r.fetch_candles(pair, "H1", _lim["H1"]),
                 }
+                preloaded_market_state = {}
+                preloaded_candles_for_a = dict(raw_candles)
+                if pair.get("source") == "mt5" and pair.get("type") == "forex":
+                    try:
+                        from athena_app.services.market_state import (
+                            candle_timestamp_epoch,
+                            get_tf_market_state,
+                        )
+
+                        for _tf in ("D1", "H4", "H1"):
+                            _raw = raw_candles.get(_tf) or []
+                            _state = get_tf_market_state(
+                                pair,
+                                _tf,
+                                candles=_raw,
+                            )
+                            preloaded_market_state[_tf] = _state
+                            preloaded_candles_for_a[_tf] = list(_state.get("confirmed") or [])
+                            _confirmed = list(_state.get("confirmed") or [])
+                            _last_confirmed = _confirmed[-1] if _confirmed else None
+                            _last_raw = (_raw or [])[-1] if (_raw or []) else None
+                            log.debug(
+                                "[SCAN][STATE][A] %s %s raw=%d confirmed=%d forming=%s is_live=%s last_confirmed_ts=%s last_raw_ts=%s",
+                                pair.get("display", "?"),
+                                _tf,
+                                len(_raw),
+                                len(_confirmed),
+                                bool(_state.get("forming")),
+                                bool(_state.get("is_live")),
+                                candle_timestamp_epoch(_last_confirmed),
+                                candle_timestamp_epoch(_last_raw),
+                            )
+                    except Exception as _state_err:
+                        log.debug(
+                            "[SCAN][STATE][A] %s market-state preload failed, falling back to raw preloads: %s",
+                            pair.get("display", "?"),
+                            _state_err,
+                        )
                 fetch_meta = {
                     "D1": get_candle_fetch_meta(pair, "D1", _lim["D1"]),
                     "H4": get_candle_fetch_meta(pair, "H4", _lim["H4"]),
@@ -475,7 +513,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     btc_bias,
                     style=_pair_style,
                     regime_context=_regime_context,
-                    preloaded_candles=raw_candles,
+                    preloaded_candles=preloaded_candles_for_a,
+                    preloaded_market_state=preloaded_market_state,
                     preloaded_fetch_meta=fetch_meta,
                     intermarket_snapshot=intermarket_snapshot,
                 )
@@ -493,12 +532,88 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     d1 = raw_candles.get("D1")
                     h4 = raw_candles.get("H4")
                     h1 = raw_candles.get("H1")
-                    if d1 and len(d1) > 1:
-                        d1 = d1[:-1]
-                    if h4 and len(h4) > 1:
-                        h4 = h4[:-1]
-                    if h1 and len(h1) > 1:
-                        h1 = h1[:-1]
+                    _engine_b_overlay_state_dbg = None
+                    _engine_b_last_confirmed_ts = {}
+                    if pair.get("source") == "mt5":
+                        # Harden MT5 candle-state handling: use confirmed bars explicitly.
+                        # Avoid naive last-bar chopping; match dedicated Engine B live scan discipline.
+                        try:
+                            from athena_app.services.engine_b_market_state import (
+                                engine_b_live_market_state,
+                            )
+
+                            _engine_b_overlay_state_dbg = {}
+                            for _tf, _raw in (("D1", d1), ("H4", h4), ("H1", h1)):
+                                _raw_list = _raw or []
+                                _st = engine_b_live_market_state(
+                                    pair,
+                                    _tf,
+                                    len(_raw_list),
+                                    candles=_raw_list,
+                                )
+                                _engine_b_overlay_state_dbg[_tf] = {
+                                    "raw": len(_raw_list),
+                                    "confirmed": len(_st.get("confirmed") or []),
+                                    "forming": bool(_st.get("forming")),
+                                    "is_live": bool(_st.get("is_live")),
+                                }
+                                _b_confirmed = list(_st.get("confirmed") or [])
+                                _engine_b_last_confirmed_ts[_tf] = (
+                                    _b_confirmed[-1].get("time")
+                                    if _b_confirmed
+                                    else None
+                                )
+                                log.debug(
+                                    "[SCAN+B][STATE] %s %s raw=%d confirmed=%d forming=%s is_live=%s",
+                                    pair.get("display", "?"),
+                                    _tf,
+                                    len(_raw_list),
+                                    len(_st.get("confirmed") or []),
+                                    bool(_st.get("forming")),
+                                    bool(_st.get("is_live")),
+                                )
+                                if _tf == "D1":
+                                    d1 = list(_st.get("confirmed") or [])
+                                elif _tf == "H4":
+                                    h4 = list(_st.get("confirmed") or [])
+                                else:
+                                    h1 = list(_st.get("confirmed") or [])
+                            if pair.get("type") == "forex":
+                                _a_d1_ts = (preloaded_candles_for_a.get("D1") or [{}])[-1].get("time")
+                                _a_h4_ts = (preloaded_candles_for_a.get("H4") or [{}])[-1].get("time")
+                                _a_h1_ts = (preloaded_candles_for_a.get("H1") or [{}])[-1].get("time")
+                                log.debug(
+                                    "[SCAN][STATE][A_vs_B] %s D1_same=%s H4_same=%s H1_same=%s A_ts=(%s,%s,%s) B_ts=(%s,%s,%s)",
+                                    pair.get("display", "?"),
+                                    _a_d1_ts == _engine_b_last_confirmed_ts.get("D1"),
+                                    _a_h4_ts == _engine_b_last_confirmed_ts.get("H4"),
+                                    _a_h1_ts == _engine_b_last_confirmed_ts.get("H1"),
+                                    _a_d1_ts,
+                                    _a_h4_ts,
+                                    _a_h1_ts,
+                                    _engine_b_last_confirmed_ts.get("D1"),
+                                    _engine_b_last_confirmed_ts.get("H4"),
+                                    _engine_b_last_confirmed_ts.get("H1"),
+                                )
+                        except Exception as _ms_err:
+                            log.debug(
+                                "[SCAN+B][STATE] %s split_market_state failed, falling back to naive chop: %s",
+                                pair.get("display", "?"),
+                                _ms_err,
+                            )
+                            if d1 and len(d1) > 1:
+                                d1 = d1[:-1]
+                            if h4 and len(h4) > 1:
+                                h4 = h4[:-1]
+                            if h1 and len(h1) > 1:
+                                h1 = h1[:-1]
+                    else:
+                        if d1 and len(d1) > 1:
+                            d1 = d1[:-1]
+                        if h4 and len(h4) > 1:
+                            h4 = h4[:-1]
+                        if h1 and len(h1) > 1:
+                            h1 = h1[:-1]
 
                     if h4 and len(h4) >= 20:
                         _highs = [float(c["high"]) for c in h4]

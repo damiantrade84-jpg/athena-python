@@ -90,6 +90,7 @@ def test_forex_zero_score_reports_adx_gate_reason(monkeypatch):
 
     d1_snap, h4_snap, h1_snap, h1_candles, h4_candles, pair = _base_inputs()
     d1_snap["adx"] = 14.0
+    h4_snap["adx"] = 14.0  # gate reads H4 ADX when trend_gate_adx_source is h4
 
     result = forex_scoring.compute_forex_score(
         d1_snap=d1_snap,

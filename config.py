@@ -782,6 +782,7 @@ CONFIG: dict = {
     "FOREX_ENGINE": {
         "hurst_gate_enabled": True,
         "hurst_gate_threshold": 0.52,
+        "trend_gate_adx_source": "d1",
         "trend_gate_adx_min": 20.0,
         "trend_margin_min": 0.003,
         "adx_confirm_min": 22.0,

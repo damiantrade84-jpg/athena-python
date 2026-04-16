@@ -10,7 +10,7 @@
 D1_CANDLES: 1001
 H4_CANDLES: 1001
 H1_CANDLES: 1001
-SCAN_MAX_WORKERS: 3           # Match the code default; higher values on this machine have caused UI/browser lag during scans.
+SCAN_MAX_WORKERS: 6           # Increased scan concurrency for faster Engine A full-universe runs.
 
 # ── News / EODHD sentiment background refresh ────────────────────────────────
 # Background loop fetches: economic calendar, sentiment batch only.
@@ -311,6 +311,8 @@ FOREX_ENGINE:
   trend_gate_adx_hard_fail_min: 15.0
   trend_gate_adx_soft_full_at: 25.0
   trend_gate_adx_soft_enabled: false
+  # Which timeframe supplies Wilder ADX for the trend gate: d1 (slow) | h4 (matches H4 screen)
+  trend_gate_adx_source: h4
   session_mode: "strict"        # strict, soft, off
   session_soft_multiplier: 0.75
   session_shoulder_enabled: true
