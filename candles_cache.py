@@ -344,7 +344,7 @@ def fetch_candles(
 
     TTL: M5=5 min, M15=15 min, H1=55 min, H4=3h55m, D1=23h — expires just before the next bar closes.
     """
-    crypto_live_tf = pair.get("type") == "crypto" and tf in {"M5", "M15", "H1", "H4", "D1"}
+    crypto_live_tf = pair.get("type") == "crypto" and tf in {"M1", "M5", "M15", "H1", "H4", "D1"}
     display = pair.get("display", pair.get("symbol", ""))
     key = _cache_key(pair, tf, limit)
     fetch_meta = {
@@ -361,9 +361,9 @@ def fetch_candles(
     }
     ptype = str(pair.get("type") or "").lower()
     _eodhd_ws_ohlc_types = {"forex", "commodity", "index"}
+    # Exclude mt5 completely from CandleBuilder to prevent EODHD WS data overriding MT5 OHLC
     use_candle_builder = (
         (pair.get("source") not in ("polygon", "mt5") and (tf == "H1" or crypto_live_tf))
-        or (pair.get("source") == "mt5" and ptype in _eodhd_ws_ohlc_types and tf in {"H1", "H4", "D1"})
     )
     live_candles = None
 
@@ -471,9 +471,28 @@ def fetch_candles(
                     )
                     _store_fetch_meta(key, cached_meta)
                     return cached_candles
+            # Exception loop fallback
             inflight = threading.Event()
             _candle_fetch_inflight[key] = inflight
             is_owner = True
+
+    # ---- Stale TTL Cache Bypass for MT5 ----
+    # MT5 is a fast local terminal IPC query taking 1-2 ms. Caching it 4 hours disables Engine A updates.
+    # We bypass TTL entirely for mt5 to rely on true real-time charting.
+    if pair.get("source") == "mt5" and fetch_mt5:
+        if is_owner and inflight is not None:
+            inflight.set()
+        fetch_meta.update({"resolution": "rest", "upstream": "mt5"})
+        out_candles = fetch_mt5(pair, tf, limit)
+        if isinstance(out_candles, dict):
+            out_candles = extract_candles(out_candles)
+        
+        # We don't cache MT5 in the global slow-REST cache.
+        fetch_meta["bars"] = len(out_candles) if out_candles else 0
+        with _candle_cache_lock:
+            _store_fetch_meta(key, fetch_meta)
+
+        return out_candles
 
     try:
         if candles is None and pair["source"] == "binance":
@@ -491,20 +510,6 @@ def fetch_candles(
         elif candles is None and pair["source"] == "polygon":
             fetch_meta.update({"resolution": "rest", "upstream": "polygon"})
             candles = fetch_polygon(pair, tf, limit)
-
-        elif candles is None and pair["source"] == "mt5" and fetch_mt5:
-            fetch_meta.update({"resolution": "rest", "upstream": "mt5"})
-            candles = fetch_mt5(pair, tf, limit)
-            # For forex/commodity/index: if WS had some bars but not enough, prepend MT5
-            # history so the engine gets the full requested depth (WS bars take precedence
-            # for the most recent portion; MT5 fills the older history).
-            if live_candles and _is_forex_ws and isinstance(candles, list) and candles:
-                import bisect
-                ws_times = {c["time"] for c in live_candles if c.get("time")}
-                mt5_older = [c for c in candles if c.get("time") not in ws_times]
-                merged_all = sorted(mt5_older + live_candles, key=lambda c: c.get("time", ""))
-                candles = merged_all[-limit:] if len(merged_all) > limit else merged_all
-                fetch_meta.update({"upstream": "mt5+ws", "liveMerge": True})
 
         elif candles is None and pair["source"] == "yfinance":
             fetch_meta.update({"resolution": "rest", "upstream": "yfinance"})

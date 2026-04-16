@@ -74,7 +74,7 @@ def _base_inputs() -> tuple[dict, dict, dict, list[dict], list[dict], dict]:
 
 
 def _patch_nonessential_inputs(monkeypatch) -> None:
-    monkeypatch.setattr(forex_scoring, "_in_session", lambda _hour, _pair="": True)
+    monkeypatch.setattr(forex_scoring, "_session_state", lambda _hour, _pair="": {"is_active": True, "multiplier": 1.0})
     monkeypatch.setattr(forex_scoring, "_local_to_utc_hour", lambda: 20)
     monkeypatch.setattr(forex_scoring, "_cot_boost", lambda *_args, **_kwargs: 0.0)
     monkeypatch.setattr(forex_scoring, "_carry_tilt", lambda *_args, **_kwargs: 0.0)
@@ -89,7 +89,7 @@ def test_forex_zero_score_reports_adx_gate_reason(monkeypatch):
     monkeypatch.setattr(forex_scoring, "_hurst_exponent", lambda *_args, **_kwargs: 0.60)
 
     d1_snap, h4_snap, h1_snap, h1_candles, h4_candles, pair = _base_inputs()
-    d1_snap["adx"] = 18.0
+    d1_snap["adx"] = 14.0
 
     result = forex_scoring.compute_forex_score(
         d1_snap=d1_snap,

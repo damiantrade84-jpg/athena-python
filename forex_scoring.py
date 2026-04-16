@@ -60,32 +60,60 @@ _ASIAN_SESSION_PAIRS = {
 }
 
 
-def _in_session(utc_hour: int, pair_display: str = "") -> bool:
-    """True if current hour is inside an active session for this pair.
-
-    Asian session (00:00-08:00 UTC) only valid for JPY and AUD/NZD crosses
-    where Tokyo/Sydney volume is meaningful. All other pairs: London + NY only.
-    """
+def _session_state(utc_hour: int, pair_display: str = "") -> dict:
+    """Evaluate session state using soft/strict modes."""
     try:
         from config import CONFIG
-
+        
         if not CONFIG.get("FOREX_SESSION_FILTER", True):
-            return True  # session filter disabled — always trade
+            return {"is_active": True, "multiplier": 1.0}
+            
+        fx_cfg = CONFIG.get("FOREX_ENGINE", {}) or {}
+        mode = fx_cfg.get("session_mode", "strict")
+        if mode == "off":
+            return {"is_active": True, "multiplier": 1.0}
+        
+        soft_mult = float(fx_cfg.get("session_soft_multiplier", 0.75))
+        shoulder_enabled = bool(fx_cfg.get("session_shoulder_enabled", True))
+        shoulder_mult = float(fx_cfg.get("session_shoulder_multiplier", 0.90))
+        shoulder_hours = int(fx_cfg.get("session_shoulder_hours", 1))
     except Exception:
-        pass
-    # London and NY are valid for all forex pairs
-    if (
-        _LONDON_OPEN[0] <= utc_hour <= _LONDON_OPEN[1]
-        or _NY_OPEN[0] <= utc_hour <= _NY_OPEN[1]
-    ):
-        return True
-    # Asian session only for JPY/AUD/NZD crosses
-    if (
-        _ASIAN_OPEN[0] <= utc_hour <= _ASIAN_OPEN[1]
-        and pair_display in _ASIAN_SESSION_PAIRS
-    ):
-        return True
-    return False
+        mode = "strict"
+        soft_mult = 0.75
+        shoulder_enabled = True
+        shoulder_mult = 0.90
+        shoulder_hours = 1
+
+    in_core = False
+    in_shoulder = False
+
+    # Check London + NY
+    if _LONDON_OPEN[0] <= utc_hour <= _LONDON_OPEN[1] or _NY_OPEN[0] <= utc_hour <= _NY_OPEN[1]:
+        in_core = True
+    elif shoulder_enabled:
+        if _LONDON_OPEN[0] - shoulder_hours <= utc_hour < _LONDON_OPEN[0] or \
+           _LONDON_OPEN[1] < utc_hour <= _LONDON_OPEN[1] + shoulder_hours or \
+           _NY_OPEN[0] - shoulder_hours <= utc_hour < _NY_OPEN[0] or \
+           _NY_OPEN[1] < utc_hour <= _NY_OPEN[1] + shoulder_hours:
+            in_shoulder = True
+
+    # Asian check
+    if not in_core and not in_shoulder and pair_display in _ASIAN_SESSION_PAIRS:
+        if _ASIAN_OPEN[0] <= utc_hour <= _ASIAN_OPEN[1]:
+            in_core = True
+        elif shoulder_enabled and (_ASIAN_OPEN[0] - shoulder_hours <= utc_hour < _ASIAN_OPEN[0] or \
+                                   _ASIAN_OPEN[1] < utc_hour <= _ASIAN_OPEN[1] + shoulder_hours):
+            in_shoulder = True
+
+    if in_core:
+        return {"is_active": True, "multiplier": 1.0}
+    if in_shoulder:
+        return {"is_active": True, "multiplier": shoulder_mult}
+        
+    if mode == "soft":
+        return {"is_active": True, "multiplier": soft_mult}
+        
+    return {"is_active": False, "multiplier": 0.0}
 
 
 def _hurst_exponent(prices: list, max_lag: int = 20) -> float:
@@ -180,24 +208,46 @@ def _trend_gate_detail(d1_snap: dict, h4_snap: dict) -> tuple[bool, str, dict]:
 
         fx_cfg = CONFIG.get("FOREX_ENGINE", {}) or {}
         trend_gate_adx_min = float(fx_cfg.get("trend_gate_adx_min", 20.0))
+        adx_hard_fail = float(fx_cfg.get("trend_gate_adx_hard_fail_min", trend_gate_adx_min))
+        adx_soft_full = float(fx_cfg.get("trend_gate_adx_soft_full_at", trend_gate_adx_min))
+        adx_soft_enabled = bool(fx_cfg.get("trend_gate_adx_soft_enabled", False))
         trend_margin_min = float(fx_cfg.get("trend_margin_min", 0.003))
     except Exception:
         trend_gate_adx_min = 20.0
+        adx_hard_fail = 20.0
+        adx_soft_full = 20.0
+        adx_soft_enabled = False
         trend_margin_min = 0.003
+        
+    adx_gate_multiplier = 1.0
+
     detail = {
         "reason": "unknown",
         "direction_hint": "LONG",
         "adx": adx,
         "adx_min": trend_gate_adx_min,
+        "adx_gate_multiplier": 1.0,
         "margin": None,
         "margin_min": trend_margin_min,
         "d1_bull": None,
         "h4_bull": None,
         "d1_slope": 0.0,
     }
-    if adx < trend_gate_adx_min:
-        detail["reason"] = "adx_below_min"
-        return False, "LONG", detail
+    
+    if adx_soft_enabled:
+        if adx < adx_hard_fail:
+            detail["reason"] = "adx_below_min"
+            return False, "LONG", detail
+        elif adx < adx_soft_full:
+            span = adx_soft_full - adx_hard_fail
+            if span > 0:
+                adx_gate_multiplier = 0.40 + 0.60 * ((adx - adx_hard_fail) / span)
+    else:
+        if adx < trend_gate_adx_min:
+            detail["reason"] = "adx_below_min"
+            return False, "LONG", detail
+            
+    detail["adx_gate_multiplier"] = adx_gate_multiplier
 
     d1_close = d1_snap.get("close")
     d1_ema200 = d1_snap.get("ema200")
@@ -667,12 +717,15 @@ def compute_forex_score(
     # (avoids a second DB hit in the common case where directions agree)
     # BUG 3 fix: Restore parity between forex backtest and live scoring for session validation.
     # Default to parity (respect sessions). Opt-in to bypass via BACKTEST_IGNORE_SESSIONS.
+    _ss = _session_state(utc_hour, pair.get("display", ""))
+    session_ok = _ss["is_active"]
+    session_mult = _ss["multiplier"]
+    
     from config import CONFIG
     _ignore_sessions = CONFIG.get("BACKTEST_IGNORE_SESSIONS", False)
     if backtest_mode and _ignore_sessions:
         session_ok = True
-    else:
-        session_ok = _in_session(utc_hour, pair.get("display", ""))
+        session_mult = 1.0
     momentum_score = _momentum_confirm(h4_snap, trend_dir)
     adx_score = _adx_filter(h4_snap)
     carry_score = _carry_tilt(pair, trend_dir, bar_time)
@@ -737,6 +790,10 @@ def compute_forex_score(
             + adx_score * adx_w
             + carry_score * carry_w
         )
+        
+        # Apply Session and Soft ADX multipliers
+        trend_score *= session_mult
+        trend_score *= trend_detail.get("adx_gate_multiplier", 1.0)
 
         result.entry_quality = eq
         result.cot_boost = cot
@@ -745,9 +802,9 @@ def compute_forex_score(
     # CRIT-01: Use breakout_eval_hour (last H1 candle time) NOT utc_hour (bar_time).
     # This ensures parity: live, D1 swing BT, intraday BT, scalp BT, Engine-C.
     bo_score, bo_dir = _london_breakout_score(h1_candles, breakout_eval_hour)
-    if bo_score > 0:
+    if bo_score > 0 and session_ok:
         cot_bo = _cot_boost(pair, bo_dir, bar_time) if bo_dir != trend_dir else _cot_trend
-        bo_final = bo_score * (1.0 + cot_bo * 0.3)
+        bo_final = bo_score * (1.0 + cot_bo * 0.3) * session_mult
         result.breakout_score = bo_score
     else:
         bo_final = 0.0

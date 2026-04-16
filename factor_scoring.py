@@ -1116,6 +1116,10 @@ def compute_factor_scores(
         dir_w_sum = sum(weights.get(f, 1.0) for f in active_dir)
         for f, s in active_dir.items():
             dir_score += (weights.get(f, 1.0) / dir_w_sum) * s
+        # Restore variance lost through weighted arithmetic averaging of independent distributions
+        _n_factors = len(active_dir)
+        _variance_restorer = math.sqrt(_n_factors) if _n_factors > 1 else 1.0
+        dir_score *= _variance_restorer
     # Direction from WEIGHTED dir_score (not unweighted sum) — prevents direction flip
     # Tie-break: if weighted score is exactly 0.0, fall back to unweighted sum sign, then default LONG
     if dir_score > 0:
@@ -1191,7 +1195,7 @@ def compute_factor_scores(
     _soft_span = _base_soft_span
     _effective_min_dir = float(_min_dir) * (0.75 + (0.25 * optional_coverage))
     _dir_conf = _directional_confidence_multiplier(abs(dir_score), _effective_min_dir, _soft_span)
-    _nondir_norm = min(nondir_score / 3.0, 1.0)  # normalize quality to [0, 1]
+    _nondir_norm = min(nondir_score / 1.5, 1.0)  # normalize quality to [0, 1] — 1.5 Z-score represents top conviction.
     _quality_mult = 0.6 + (_nondir_norm * 0.4)
     # _coherent_trend_score() already scales trend to ±3.0, so no extra scaling needed.
     # Clamp to [0.0, 3.0] to enforce documented score contract.

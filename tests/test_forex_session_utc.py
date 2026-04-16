@@ -8,7 +8,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from config import CONFIG
-from forex_scoring import _in_session, _local_to_utc_hour
+from forex_scoring import _session_state, _local_to_utc_hour
 
 
 class TestForexSessionUtc:
@@ -30,7 +30,7 @@ class TestForexSessionUtc:
             CONFIG["SERVER_TZ_OFFSET_HOURS"] = original
 
     def test_in_session_true_for_major_pair_at_london_ny_overlap(self):
-        assert _in_session(14, "EUR/USD") is True
+        assert _session_state(14, "EUR/USD")["is_active"] is True
 
     def test_in_session_false_for_major_pair_in_asian_session(self):
-        assert _in_session(2, "EUR/USD") is False
+        assert _session_state(2, "EUR/USD")["is_active"] is False

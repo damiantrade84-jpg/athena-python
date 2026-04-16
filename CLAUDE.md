@@ -11,7 +11,7 @@ alwaysApply: true
 
 **Do not change anything that alters live or backtest scoring unless the user explicitly instructs it.**
 
-- **Engine A live:** `MIN_CONFLUENCE_CLASS`, `MIN_CONFLUENCE_GROUP`, `MIN_CONFLUENCE_CLASS.forex`, `PAIR_PROFILES.min_confluence`, `AUTO_TRADE_MIN_SCORE`, `SCAN_QUANTILE_*`, confluence logic in `scoring.py` / `factor_scoring.py` / `forex_scoring.py`, `analyze_pair` tiering.
+- **Engine A live:** `MIN_CONFLUENCE_CLASS`, `MIN_CONFLUENCE_GROUP`, `MIN_CONFLUENCE_CLASS.forex`, `PAIR_PROFILES.min_confluence`, `AUTO_TRADE_MIN_SCORE`, `SCAN_QUANTILE_*`, confluence logic in `scoring.py` / `factor_scoring.py` / `forex_scoring.py`, `analyze_pair` tiering. Includes Soft Gating keys: `FOREX_ENGINE.session_mode`, `FOREX_ENGINE.trend_gate_adx_soft_enabled`, `FACTOR_MIN_DIRECTIONAL`.
 - **Engine A backtest:** `BT_MIN`, `PAIR_PROFILES.eval_threshold`, `get_backtest_min_score_threshold`, backtest score gates in `backtest_runner.py`.
 - **Engine B live + backtest:** `NAKED_ENGINE.style_profiles` (`min_score`, `min_rr`), `ENGINE_B_REGIME_MULTIPLIERS` (score scaling — currently neutralized to 1.0), `zone_multipliers` (structural width), naked checklist gates in `market_structure.py`.
 - **Engine D (Scalp Lab):** `SCALP_ENGINE` in `config.yaml` (`MIN_RR`, `MAX_SPREAD_PIPS`, `WITH_TREND_ONLY`, `BIAS_TIMEFRAME`, `M1_CANDLES`, `M15_CANDLES`, `M5_CANDLES`, `H1_CANDLES`, `SESSION_MODE`, `NY_OPEN_SKIP_MINUTES`, `EXECUTION_TIMEFRAME`, `MIN_GRADE_AUTO_EXECUTE`, `BT_ENABLED`, `BT_SESSION_MODE`, `BT_NY_OPEN_SKIP_MINUTES`, `BT_WALK_BARS`, `BT_MAX_CONCURRENT`, `BT_SLIPPAGE_TICKS`, `BT_SCRATCH_ENABLED`, `BT_SCRATCH_BARS`, `BT_SCRATCH_MIN_R`, optional `SCALP_PAIRS`) and core pass/fail logic in `scalp_engine.py` (session filter via `scalp_session_window()`, spread filter, VP build, absorption/CVD/AAA, VWAP, setup classification, HTF bias gate, level math, `ai_quality_grade`).
@@ -34,7 +34,7 @@ Cosmetic UI copy is fine. **Do not "tune", "align", or "simplify" thresholds** i
 Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, stocks, commodities, indices.
 
 **Four trading engines:**
-- **Engine A** — Multi-Factor Quantitative Scoring (MFQS): z-score factor engine + forex rule-based scorer
+- **Engine A** — Multi-Factor Quantitative Scoring (MFQS): uses **Variance Sqrt-Scaling** and **1.5 Z-score normalization** for improved convicton range; includes rules-based forex scorer with **Soft Gating** (ADX/Session).
 - **Engine B** — Naked price-action (market structure, zones, BOS/CHoCH, FVG, swing sequence)
 - **Engine C** — Consensus layer: blends A + B + AI Vision confirmation into a conviction-tiered signal
 - **Engine D (Scalp Lab)** - Fabio Valentini VP+OrderFlow scalping (`scalp_engine.py`, `volume_profile.py`). Pipeline: Volume Profile (POC/VAH/VAL/LVN) -> Absorption/CVD/AAA -> VWAP lean -> setup classification (Mean Reversion / Trend Continuation) -> `ai_quality_grade` (A/B/C/D). Execution on M1 (configurable) with NY open cooldown. Session filtering via `scalp_session_window()`. Not part of A/B/C consensus. Dashboard **Scalp Lab** panel: `POST /api/scalp-scan`, `POST /api/scalp-execute`. Backtest: `POST /api/backtest-scalp` -> **Engine D (Scalp VP)** button in backtest panel.
@@ -68,8 +68,8 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 | `data_feeds.py` | HTTP session, EODHD client, funding/OI helpers |
 | `news_sentiment_feed.py` | EODHD news + Claude sentiment; optional scan blend; TTL cache |
 | `scoring.py` | Confluence engine, vote weights, signal classification, pair profiles, `get_min_confluence_threshold` |
-| `factor_scoring.py` | Z-score factor engine — directional (trend, momentum, microstructure, derivatives) + non-directional (trend_strength, volatility, volume, structure) |
-| `forex_scoring.py` | Dedicated forex scorer (rules-based, 0–2.0 scale): trend gate + session + RSI pullback + COT boost |
+| `factor_scoring.py` | Z-score factor engine with **Variance Sqrt-Scaling** to prevent score collapse; directional + non-directional factors (quality normalized to 1.5 Z-score). |
+| `forex_scoring.py` | Rules-based forex scorer with **Soft Gating** (ADX hard/soft floors and session shoulders) + boosted organic momentum/ADX weights. |
 | `market_structure.py` | Engine B: `NakedEngine`, swing analysis, BOS/CHoCH/FVG/order blocks, shared checklist pass/fail |
 | `engine_b_ai.py` | Engine B advisory AI verdict (review only — not a pass/fail gate) |
 | `engine_c.py` | Engine C consensus: `ENGINE_C_AB_WEIGHTS` blend, conviction tiers, SL/TP resolution, Vision modifier |

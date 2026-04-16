@@ -308,10 +308,18 @@ FOREX_ENGINE:
   hurst_gate_threshold: 0.40   # Only block strong mean-reversion (H < 0.40); allows neutral/random-walk markets
   h1_ema_entry_filter: true   # H1 ema21/50 alignment modifier on RSI entry quality; false = RSI only
   trend_gate_adx_min: 25   # Match ADX_TREND_MIN_CLASS.forex — must stay in sync
+  trend_gate_adx_hard_fail_min: 15.0
+  trend_gate_adx_soft_full_at: 25.0
+  trend_gate_adx_soft_enabled: true
+  session_mode: "strict"        # strict, soft, off
+  session_soft_multiplier: 0.75
+  session_shoulder_enabled: true
+  session_shoulder_multiplier: 0.90
+  session_shoulder_hours: 1
   trend_support_weights:
-    momentum: 0.15  # H4 momentum contribution to trend score
-    adx: 0.10       # H4 ADX contribution to trend score
-    carry: 0.05     # Carry tilt contribution to trend score
+    momentum: 0.30  # H4 momentum contribution to trend score
+    adx: 0.20       # H4 ADX contribution to trend score
+    carry: 0.10     # Carry tilt contribution to trend score
 MAX_RISK_PER_TRADE: 0.03      # Hard cap 3% per trade
 DRAWDOWN_REDUCE_THRESHOLD: 0.10   # Halve size at 10% drawdown
 DRAWDOWN_STOP_THRESHOLD: 0.15     # Stop all trading at 15% drawdown
