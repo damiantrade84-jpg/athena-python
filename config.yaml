@@ -82,10 +82,37 @@ BT_MIN:
   stock:     1.10   # no live data — hold at live class gate (was 0.90)
   index:     1.17   # only one live row; hold at that value (was 0.85)
 
-# Intentionally empty for the p75 diagnostic — subgroup values were lower than
-# the new class-level BT_MIN and would bind first (scoring.py:173-188),
-# bypassing the class gate. Previous values preserved in git history.
-BT_MIN_GROUP: {}
+# p75 diagnostic — subgroups populated at class p75 so the BT lookup hits
+# before the LIVE MIN_CONFLUENCE_GROUP fallback at scoring.py:179-182.
+# Previous (lower) values preserved in git history.
+BT_MIN_GROUP:
+  forex:
+    forex_majors: 1.20
+    forex_crosses: 1.20
+    forex_exotics: 1.20
+  crypto:
+    crypto_btc: 2.15
+    crypto_eth: 2.15
+    crypto_alt_majors: 2.15
+    crypto_doge: 2.15
+    crypto_other: 2.15
+  commodity:
+    nat_gas: 1.80
+    pgm_metals: 1.80
+    copper: 1.80
+    precious_trackers: 1.80
+    energy_oil: 1.80
+    commodity_other: 1.80
+  index:
+    asian_indices: 1.17
+    us_indices_trackers: 1.17
+    eu_indices: 1.17
+    index_other: 1.17
+  stock:
+    us_stock_single: 1.10
+    smallcap_em_etf: 1.10
+    bond_tlt: 1.10
+    stock_other: 1.10
 
 # Backtest must not alter live pair enable/disable state
 BT_AUTO_TOGGLE: false
