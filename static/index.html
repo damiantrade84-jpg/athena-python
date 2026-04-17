@@ -4795,6 +4795,7 @@ async function loadPerformance() {
     el.innerHTML =
       '<div class="perf-grid">' +
         '<div class="perf-stat"><div class="perf-stat-val">' + d.total_trades + '</div><div class="perf-stat-lbl">Total Trades</div></div>' +
+        '<div class="perf-stat"><div class="perf-stat-val">' + (d.breakeven_count || 0) + '</div><div class="perf-stat-lbl">Breakeven</div></div>' +
         '<div class="perf-stat"><div class="perf-stat-val ' + wrClass(d.win_rate) + '">' + d.win_rate + '%</div><div class="perf-stat-lbl">Win Rate</div></div>' +
         '<div class="perf-stat"><div class="perf-stat-val">' + (d.average_r_multiple || 0).toFixed(2) + 'R</div><div class="perf-stat-lbl">Avg R</div></div>' +
         '<div class="perf-stat"><div class="perf-stat-val">' + (d.total_r || 0).toFixed(1) + 'R</div><div class="perf-stat-lbl">Total R</div></div>' +
@@ -8369,7 +8370,7 @@ function renderOpenPositions(positions) {
     var timerHtml = '';
 
     var hasTimedWindow = (beMins != null && closeMins != null);
-    var styleHasTimedExit = (style === 'intraday' || style === 'swing');
+    var styleHasTimedExit = (style === 'scalp' || style === 'intraday' || style === 'swing');
     if (minsOpen != null && hasTimedWindow && styleHasTimedExit) {
       var formatMins = function(m) {
         if (m == null) return '';
@@ -8505,7 +8506,7 @@ window._bybitAccount = null;
 
 (function pollTimedOpenPositions() {
   refreshTimedOpenPositions({ rerender: true });
-  setTimeout(pollTimedOpenPositions, 15000);
+  setTimeout(pollTimedOpenPositions, 5000);
 })();
 
 // Sync test mode state on page load
@@ -8551,7 +8552,7 @@ fetch('/api/test-mode').then(function(r){return r.json();}).then(function(d){
     }
     if (typeof updateConnDots === 'function') updateConnDots();
   }).catch(function(){});
-  setTimeout(pollMT5, 15000);
+  setTimeout(pollMT5, 5000);
 })();
 
 // -- Wake-up recovery: reload page if hidden > 60s --

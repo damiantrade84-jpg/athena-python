@@ -32,6 +32,39 @@ def healthcheck():
     return jsonify({"ok": True, "route": request.path})
 
 
+def _execution_audit_legs(result: dict, approval) -> list[dict]:
+    """Return one audit leg per broker position while preserving legacy single-fill shape."""
+    raw_legs = result.get("legs") if isinstance(result.get("legs"), list) else []
+    if not raw_legs:
+        return [
+            {
+                "ticket": result.get("ticket"),
+                "entryPrice": result.get("entryPrice"),
+                "tp": None,
+                "volume": result.get("volume"),
+                "riskAmount": approval.risk_amount,
+                "riskPct": approval.risk_pct,
+            }
+        ]
+
+    total_volume = sum(float(leg.get("volume") or 0.0) for leg in raw_legs)
+    audit_legs = []
+    for leg in raw_legs:
+        leg_volume = float(leg.get("volume") or 0.0)
+        ratio = (leg_volume / total_volume) if total_volume > 0 else 0.0
+        audit_legs.append(
+            {
+                "ticket": leg.get("ticket"),
+                "entryPrice": leg.get("entryPrice", result.get("entryPrice")),
+                "tp": leg.get("tp"),
+                "volume": leg_volume,
+                "riskAmount": approval.risk_amount * ratio,
+                "riskPct": approval.risk_pct * ratio,
+            }
+        )
+    return audit_legs
+
+
 def _engine_c_accepts_engine_b(
     confidence_b: dict, style_profile: dict, regime_label: str, pair_type: str
 ) -> tuple[bool, float]:
@@ -82,10 +115,83 @@ def _audit_engine_from_signal(sig: dict) -> str:
         return engine
     if bool((sig or {}).get("is_naked")) or (sig or {}).get("naked_data"):
         return "engine_b"
-    style = str((sig or {}).get("style") or "").strip().lower()
-    if style == "scalp":
-        return "scalp"
     return "engine_a"
+
+
+def _quick_audit_context(sig: dict, engine_b: dict | None) -> dict:
+    """Build audit fields for quick execute without treating compare data as source."""
+    sig = sig or {}
+    engine_b = engine_b or {}
+    audit_engine = _audit_engine_from_signal(sig)
+
+    b_factors = {}
+    if "structural_verdict" in engine_b:
+        bos = engine_b.get("bos_data", {}) or {}
+        sweep = engine_b.get("sweep_data", {}) or {}
+        seq = engine_b.get("current_swing_sequence", "RANGING")
+
+        b_factors["Naked_BOS_Bull"] = 1.0 if bos.get("bos_bull") else 0.0
+        b_factors["Naked_BOS_Bear"] = 1.0 if bos.get("bos_bear") else 0.0
+        b_factors["Naked_Sweep_Bull"] = 1.0 if sweep.get("bull_sweep") else 0.0
+        b_factors["Naked_Sweep_Bear"] = 1.0 if sweep.get("bear_sweep") else 0.0
+        b_factors["Naked_Seq_Bull"] = 1.0 if seq == "HH_HL" else 0.0
+        b_factors["Naked_Seq_Bear"] = 1.0 if seq == "LH_LL" else 0.0
+
+    if audit_engine == "engine_b":
+        score = engine_b.get("score", sig.get("confluenceScore", sig.get("score", 0)))
+        max_score = engine_b.get("max_possible")
+        score_pct = engine_b.get("pct")
+        trend = engine_b.get("current_swing_sequence", sig.get("trendState", "RANGING"))
+        regime = engine_b.get("regime", sig.get("regimeName", "RANGING"))
+        edge_prob = (
+            engine_b.get("ai_analysis", {}).get("edgeProbability")
+            if isinstance(engine_b.get("ai_analysis"), dict)
+            else None
+        )
+        factors = {
+            "scores": b_factors,
+            "weights": {},
+            "disabled": [],
+            "regime": regime,
+        }
+    else:
+        score = sig.get("confluenceScore", sig.get("score", 0))
+        max_score = sig.get("maxScore")
+        score_pct = None
+        try:
+            if score is not None and max_score:
+                score_pct = (float(score) / float(max_score)) * 100.0
+        except (TypeError, ValueError, ZeroDivisionError):
+            score_pct = None
+        trend = sig.get("trendState")
+        regime = sig.get("regimeName") or sig.get("regime") or trend
+        edge_prob = None
+        factors = {
+            "scores": sig.get("factor_scores"),
+            "weights": sig.get("factor_weights"),
+            "disabled": sig.get("disabledFactors"),
+            "regime": regime,
+        }
+        if b_factors or engine_b:
+            factors["compare_engine_b"] = {
+                "score": engine_b.get("score"),
+                "max_possible": engine_b.get("max_possible"),
+                "pct": engine_b.get("pct"),
+                "regime": engine_b.get("regime"),
+                "current_swing_sequence": engine_b.get("current_swing_sequence"),
+                "scores": b_factors,
+            }
+
+    return {
+        "engine": audit_engine,
+        "score": score,
+        "trend": trend,
+        "edge_prob": edge_prob,
+        "regime": regime,
+        "factors": factors,
+        "max_score": max_score,
+        "score_pct": score_pct,
+    }
 
 
 def _apply_level_override(sig: dict, override: dict) -> str | None:
@@ -391,59 +497,40 @@ def api_quick_execute():
 
         result = run_managed_execution(_exec_venue, sig, approval)
         if result.get("success"):
-            _b_factors = {}
-            if "structural_verdict" in engine_b:
-                bos = engine_b.get("bos_data", {})
-                sweep = engine_b.get("sweep_data", {})
-                seq = engine_b.get("current_swing_sequence", "RANGING")
-
-                _b_factors["Naked_BOS_Bull"] = 1.0 if bos.get("bos_bull") else 0.0
-                _b_factors["Naked_BOS_Bear"] = 1.0 if bos.get("bos_bear") else 0.0
-                _b_factors["Naked_Sweep_Bull"] = 1.0 if sweep.get("bull_sweep") else 0.0
-                _b_factors["Naked_Sweep_Bear"] = 1.0 if sweep.get("bear_sweep") else 0.0
-                _b_factors["Naked_Seq_Bull"] = 1.0 if seq == "HH_HL" else 0.0
-                _b_factors["Naked_Seq_Bear"] = 1.0 if seq == "LH_LL" else 0.0
-
-            _factors = {
-                "scores": _b_factors,
-                "weights": {},
-                "disabled": [],
-                "regime": engine_b.get("regime", "RANGING"),
-            }
+            _audit = _quick_audit_context(sig, engine_b)
             try:
                 with sqlite3.connect(_r.AUDIT_DB, timeout=15.0) as con:
-                    con.execute(
-                        "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
-                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
-                        "max_score,score_pct) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (
-                            datetime.now(timezone.utc).isoformat(),
-                            pair_name,
-                            engine_b.get("score", 0),
-                            "engine_b",
-                            sig.get("direction"),
-                            engine_b.get("current_swing_sequence", "RANGING"),
-                            "EXECUTED",
-                            engine_b.get("ai_analysis", {}).get("edgeProbability")
-                            if isinstance(engine_b.get("ai_analysis"), dict)
-                            else None,
-                            f"${approval.risk_amount}",
-                            pip_mode or "structural",
-                            result.get("entryPrice"),
-                            sig.get("sl"),
-                            sig.get("tp1"),
-                            result.get("volume"),
-                            engine_b.get("regime", "RANGING"),
-                            approval.risk_amount,
-                            approval.risk_pct,
-                            str(result.get("ticket", "")),
-                            result.get("feeCost"),
-                            json.dumps(_factors),
-                            engine_b.get("max_possible"),
-                            engine_b.get("pct"),
-                        ),
-                    )
+                    for _leg in _execution_audit_legs(result, approval):
+                        con.execute(
+                            "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
+                            "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
+                            "max_score,score_pct) "
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (
+                                datetime.now(timezone.utc).isoformat(),
+                                pair_name,
+                                _audit["score"],
+                                _audit["engine"],
+                                sig.get("direction"),
+                                _audit["trend"],
+                                "EXECUTED",
+                                _audit["edge_prob"],
+                                f"${_leg['riskAmount']}",
+                                pip_mode or "structural",
+                                _leg.get("entryPrice"),
+                                sig.get("sl"),
+                                _leg.get("tp") or sig.get("tp1"),
+                                _leg.get("volume"),
+                                _audit["regime"],
+                                _leg.get("riskAmount"),
+                                _leg.get("riskPct"),
+                                str(_leg.get("ticket", "")),
+                                result.get("feeCost"),
+                                json.dumps(_audit["factors"]),
+                                _audit["max_score"],
+                                _audit["score_pct"],
+                            ),
+                        )
                     con.commit()
             except Exception as ae:
                 _r.log.warning(f"[QUICK EXEC] Audit DB write failed: {ae}")
@@ -1194,38 +1281,39 @@ def api_execute():
                     _audit_engine = _audit_engine_from_signal(sig)
                     _eng_b_data = sig.get("engine_b") or sig.get("naked_data") or {}
                     
-                    con.execute(
-                        "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
-                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
-                        "signal_price_ref,slippage_bps,max_score,score_pct) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (
-                            datetime.now(timezone.utc).isoformat(),
-                            pair,
-                            sig.get("confluenceScore"),
-                            _audit_engine,
-                            sig.get("direction"),
-                            sig.get("trendState"),
-                            "EXECUTED",
-                            None,
-                            f"${approval.risk_amount}",
-                            sig.get("style") or "intraday",
-                            result.get("entryPrice"),
-                            sig.get("sl"),
-                            sig.get("tp1"),
-                            result.get("volume"),
-                            sig.get("trendState"),
-                            approval.risk_amount,
-                            approval.risk_pct,
-                            str(result.get("ticket", "")),
-                            result.get("feeCost"),
-                            json.dumps(_factors),
-                            result.get("signalPriceRef"),
-                            result.get("slippageBps"),
-                            _eng_b_data.get("max_possible") if _audit_engine == "engine_b" else sig.get("maxScore"),
-                            _eng_b_data.get("pct") if _audit_engine == "engine_b" else None,
-                        ),
-                    )
+                    for _leg in _execution_audit_legs(result, approval):
+                        con.execute(
+                            "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
+                            "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
+                            "signal_price_ref,slippage_bps,max_score,score_pct) "
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (
+                                datetime.now(timezone.utc).isoformat(),
+                                pair,
+                                sig.get("confluenceScore"),
+                                _audit_engine,
+                                sig.get("direction"),
+                                sig.get("trendState"),
+                                "EXECUTED",
+                                None,
+                                f"${_leg['riskAmount']}",
+                                sig.get("style") or "intraday",
+                                _leg.get("entryPrice"),
+                                sig.get("sl"),
+                                _leg.get("tp") or sig.get("tp1"),
+                                _leg.get("volume"),
+                                sig.get("trendState"),
+                                _leg.get("riskAmount"),
+                                _leg.get("riskPct"),
+                                str(_leg.get("ticket", "")),
+                                result.get("feeCost"),
+                                json.dumps(_factors),
+                                result.get("signalPriceRef"),
+                                result.get("slippageBps"),
+                                _eng_b_data.get("max_possible") if _audit_engine == "engine_b" else sig.get("maxScore"),
+                                _eng_b_data.get("pct") if _audit_engine == "engine_b" else None,
+                            ),
+                        )
 
                     con.commit()
 
