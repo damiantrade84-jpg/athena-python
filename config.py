@@ -396,7 +396,7 @@ CONFIG: dict = {
     # Factor scoring gates — see factor_scoring.py
     "FACTOR_MIN_DIRECTIONAL": 0.25,  # Skip if abs(dir_score) < this (near-directionless signal)
     "FACTOR_DIRECTIONAL_SOFT_SPAN": 0.20,  # Smooth transition width for directional confidence
-    "FACTOR_MIN_DIRECTIONAL_CRYPTO": 0.20,
+    "FACTOR_MIN_DIRECTIONAL_CRYPTO": 0.15,
     "FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO": 0.30,
     "CRYPTO_TRANSITION_PENALTY_ENABLED": True,
     "CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": True,
