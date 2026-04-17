@@ -635,6 +635,56 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 
 ## DECISIONS
 
+## 2026-04-17: Engine A edge root-cause investigation (read-only, diagnostic)
+
+**Conclusion: the Engine A edge loss is NOT the BT score gate.** Three backtest runs on same pair set at different gates produced essentially identical WR:
+
+| Pair | Gate 1.4 (live) | Gate ~0.94 (old BT) | Gate 2.15 (p75) |
+|------|------|------|------|
+| BTC/USDT | 349 trades, WR 30.1%, PF 0.63 | 411 trades, WR 29.7%, PF 0.58 | 172 trades, WR 29.7%, PF 0.71 |
+| GBP/USD | — | 199 trades, WR 36.2%, PF 0.80 | 84 trades, WR 31.0%, PF 0.70 |
+
+WR is flat across a 2.3× gate range. Raising `BT_MIN` cannot rescue Engine A.
+
+**Code-path trap found — `scoring.py:179-182`:** `get_score_threshold` has an **unconditional** fall-through to LIVE `MIN_CONFLUENCE_GROUP` BEFORE reaching class-level `BT_MIN`. So if `BT_MIN_GROUP` is empty or missing a subgroup, the BT lookup silently uses the LIVE group value and `BT_MIN` is never read. To make `BT_MIN` class-level actually bind, **every** subgroup in `MIN_CONFLUENCE_GROUP` must have a matching entry in `BT_MIN_GROUP`. This is a policy-locked scoring file — document the trap but do **not** refactor without explicit user request.
+
+**Config changes this session (BT-only, live gates untouched):**
+- `BACKTEST_USE_BT_MIN_THRESHOLDS: false → true`
+- `BT_MIN` raised to class-level p75 of observed live Engine A scores: crypto 2.15, commodity 1.80, forex 1.20, stock 1.10, index 1.17
+- `BT_MIN_GROUP` repopulated with p75 per subgroup (prevents the `scoring.py:179-182` LIVE fallback from binding)
+- `PAIR_PROFILES.XAU/USD.bt_min` and `XAG/USD.bt_min` raised 0.65 → 1.80 (were bypassing class gate)
+
+**Real Engine A findings from `diagnose_edge.py` (read-only, n=266 closed trades):**
+- Score Q1→Q4 WR is **not monotonic** — factor scoring doesn't discriminate winners from losers at any threshold
+- SL_HIT share: **crypto 56.2%, forex 50.8%** — half the trades never reach TP
+- WR by direction: roughly symmetric (no LONG/SHORT tie-break bias)
+
+**SL-mechanics findings from `diagnose_exits.py`:**
+- Median SL-hit hold time: crypto 3.67h, forex 5.71h, stock 3.35h, commodity 3.12h — stopped out within a single H4 bar
+- TIGHT SL tercile SL_HIT rate: forex **77.3%**, crypto **66.7%** (vs MID/WIDE terciles much lower)
+- Current `STYLE_ATR_MULTS` (`config.py:155-186`) are already at industry benchmarks (scalp 1.0-1.2×, intraday 1.5-2.0×, swing 1.8×) — **not globally "too tight"**. Next hypothesis to separate: style mix (scalp dragging) vs entry timing (chasing extremes).
+
+**Data-integrity bug found — not an edge issue but pollutes ALL aggregates:**
+EUR/CHF row `ts=2026-03-16T08:18:14` has `r_multiple=-44554.48` on a normal -$106.54 loss. True math:
+- Risk: `|0.90389 - 0.90945| = 0.00556`
+- Adverse: `|0.90389 - 0.90584| = 0.00195`
+- Actual R: **-0.35** (a completely normal loser)
+
+Bug lives in `_update_trade_outcome` in `athena.py` — `risk_amount` likely recorded in wrong units (pip distance vs dollar risk). A single row at -44554R skews every WR/PF/expectancy average across `/api/performance`, `ai_learning.py`, `advisory_thresholds.py`. **Must be fixed before trusting any `audit_log` stats.**
+
+**New read-only diagnostic scripts (`mode=ro` sqlite, no writes):**
+- `diagnose_edge.py` — WR by score quartile, exit-reason mix, WR by direction per asset class
+- `diagnose_exits.py` — time-to-SL, SL% terciles, SL_HIT by regime, anomaly row dump
+
+**Open next steps for next session (in priority order):**
+1. **Write `diagnose_style.py`** (read-only) — break down SL_HIT / TP_HIT / WR / avg_r by **style** (scalp / intraday / swing) within each class. Separates two hypotheses: "scalp style is broken" vs "entry timing is broken across all styles." If scalp SL_HIT is 80% and swing is 40%, the decision is to drop or tighten scalp. If WR is flat across styles, entry timing is the real fix.
+2. **Fix `_update_trade_outcome` r_multiple bookkeeping bug** in `athena.py`. First dump all rows where `abs(r_multiple) > 10` to measure pollution scope, then patch the risk-amount unit handling. Re-compute WR/PF/expectancy aggregates after fix.
+3. **Only after #1+#2:** decide on a scoring-adjacent change (drop/tighten scalp, widen SL style-specifically, or accept that Engine A entry timing needs deeper redesign). Any of these touch policy-locked scoring files — require explicit user approval.
+
+**Branch state:** `claude/review-codebase-RjgKT` ahead of `main` with BT p75 diagnostic config + 2 read-only diagnostic scripts. **Live gates (`MIN_CONFLUENCE_*`) untouched** per locked-scoring policy. Revert BT chain by flipping `BACKTEST_USE_BT_MIN_THRESHOLDS: true → false`.
+
+---
+
 ## 2026-04-17: Engine A forex soft-gating + Engine D gate tightening
 
 **Engine A forex (Option B — session/ADX softening, breakout window extension):**
