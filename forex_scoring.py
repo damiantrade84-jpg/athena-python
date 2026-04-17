@@ -568,7 +568,16 @@ def _london_breakout_score(h1_candles: list, utc_hour: int) -> tuple[float, str]
     if not h1_candles or len(h1_candles) < 10:
         return 0.0, "LONG"
 
-    if not (_LONDON_OPEN[0] <= utc_hour <= _LONDON_OPEN[0] + 2):
+    try:
+        from config import CONFIG
+        _fx = CONFIG.get("FOREX_ENGINE", {}) or {}
+        _bw_lo = int(_fx.get("london_breakout_window_lo", _LONDON_OPEN[0]))
+        _bw_hi = int(_fx.get("london_breakout_window_hi", _LONDON_OPEN[0] + 2))
+    except Exception:
+        _bw_lo = _LONDON_OPEN[0]
+        _bw_hi = _LONDON_OPEN[0] + 2
+
+    if not (_bw_lo <= utc_hour <= _bw_hi):
         return 0.0, "LONG"
 
     asian_candles = []
