@@ -310,14 +310,19 @@ FOREX_ENGINE:
   trend_gate_adx_min: 25   # Match ADX_TREND_MIN_CLASS.forex — must stay in sync
   trend_gate_adx_hard_fail_min: 15.0
   trend_gate_adx_soft_full_at: 25.0
-  trend_gate_adx_soft_enabled: false
+  trend_gate_adx_soft_enabled: true   # 2026-04-17: ADX 15-25 now scales 0.40-1.0 instead of hard-failing
   # Which timeframe supplies Wilder ADX for the trend gate: d1 (slow) | h4 (matches H4 screen)
   trend_gate_adx_source: h4
-  session_mode: "strict"        # strict, soft, off
+  session_mode: "soft"          # 2026-04-17: was "strict" — off-session now 0.75x instead of hard-block
   session_soft_multiplier: 0.75
   session_shoulder_enabled: true
   session_shoulder_multiplier: 0.90
   session_shoulder_hours: 1
+  # 2026-04-17: London breakout evaluation window (UTC hours, inclusive).
+  # Default [7, 11] = extended window post-Option-A diagnostic. Previous hard-coded
+  # value was [7, 9] (3 hours only). Set lo=hi to disable breakout path entirely.
+  london_breakout_window_lo: 7
+  london_breakout_window_hi: 11
   trend_support_weights:
     momentum: 0.30  # H4 momentum contribution to trend score
     adx: 0.20       # H4 ADX contribution to trend score
