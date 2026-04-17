@@ -610,7 +610,7 @@ CONFIG: dict = {
     "AUTO_TRADE_MIN_CONVICTION": {  # Live auto-execute gate on combinedConviction (0-1 scale)
         "default": 0.50,
     },
-    "AUTO_TRADE_MAX_DAILY": 3,  # Max auto-trades per calendar day (UTC)
+    "AUTO_TRADE_MAX_DAILY": 20,  # Max auto-trades per calendar day (UTC)
     "AUTO_TRADE_MAX_PER_SCAN": 1,  # Max executions per single scan run
     "AUTO_TRADE_SIZING_OVERRIDE": 1.0,  # Full live-level sizing on demo
     "AUTO_TRADE_SCAN_INTERVAL_MIN": 30,  # Scan every N minutes (30 = twice per hour)

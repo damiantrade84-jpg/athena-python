@@ -1308,7 +1308,7 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
   <div class="test-banner" id="testBanner">TEST MODE ACTIVE — Score thresholds lowered, force-execute enabled on all signals</div>
   <div class="test-banner auto-banner" id="autoTradeBanner">
     AUTO-TRADE BOT ACTIVE — Next scan: <span id="autoNextScan">--:--</span> UTC &nbsp;|&nbsp;
-    Today: <span id="autoTradesToday">0</span>/<span id="autoTradesMax">3</span> trades &nbsp;|&nbsp;
+    Today: <span id="autoTradesToday">0</span>/<span id="autoTradesMax">20</span> trades &nbsp;|&nbsp;
     Last: <span id="autoLastExec">none</span> &nbsp;|&nbsp;
     Gate: <span id="autoGateDisplay">--</span>
   </div>
@@ -8015,7 +8015,7 @@ function _updateAutoTradeUI(d) {
     var next = d.nextScanAt ? d.nextScanAt.slice(11,16) : '--:--';
     document.getElementById('autoNextScan').textContent = next;
     document.getElementById('autoTradesToday').textContent = d.tradesToday || 0;
-    document.getElementById('autoTradesMax').textContent = d.maxDaily || 3;
+    document.getElementById('autoTradesMax').textContent = d.maxDaily || 20;
     var last = d.lastExecutionPair
       ? d.lastExecutionPair + ' ' + (d.lastExecutionDir||'')
       : 'none';

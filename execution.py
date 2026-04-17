@@ -373,6 +373,12 @@ def api_quick_execute():
                     direction=sig.get("direction"),
                     style=pip_mode or "structural",
                     error_tag=approval.reason,
+                    entry_price=sig.get("price"),
+                    sl=sig.get("sl"),
+                    tp=sig.get("tp1"),
+                    volume=approval.volume,
+                    risk_amount=approval.risk_amount,
+                    risk_pct=approval.risk_pct,
                 )
             except Exception as _e:
                 _r.log.warning(f"[QUICK EXEC] Failed to log rejection to audit_db: {_e}")
