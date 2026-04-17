@@ -56,7 +56,8 @@ def _load_recent_audit_rows(db_path: str) -> list[dict]:
             con.row_factory = sqlite3.Row
             rows = con.execute(
                 """
-                SELECT id, ticket, pair, engine, style, ts, direction, entry_price, sl, tp, asset_class, exit_time
+                SELECT id, ticket, pair, engine, style, ts, direction, entry_price, sl, tp,
+                       volume, risk_amount, asset_class, exit_time
                 FROM   audit_log
                 WHERE  pair IS NOT NULL
                   AND  grade NOT LIKE '%ERR%'
@@ -171,6 +172,8 @@ def _row_for_live_position(position: dict, audit_rows: list[dict]) -> dict | Non
         "entry_price": audit.get("entry_price") or position.get("entry") or position.get("entryPrice"),
         "sl": audit.get("sl") or position.get("sl"),
         "tp": audit.get("tp") or position.get("tp"),
+        "volume": audit.get("volume") or position.get("volume"),
+        "risk_amount": audit.get("risk_amount"),
         "asset_class": audit.get("asset_class"),
     }
 
@@ -188,17 +191,24 @@ def _mark_timed_close(db_path: str, row: dict, venue: str, *, actual_close_price
     audit_id = row.get("audit_id")
     audit_ticket = str(row.get("audit_ticket") or "").strip()
     live_ticket = str(row.get("ticket") or "").strip()
+    r_multiple = None
+    try:
+        if live_pnl is not None and row.get("risk_amount") and float(row["risk_amount"]) > 0:
+            r_multiple = round(float(live_pnl) / float(row["risk_amount"]), 2)
+    except (TypeError, ValueError):
+        r_multiple = None
 
     if venue == "mt5":
         if audit_ticket and audit_ticket == live_ticket:
             # Exact ticket match — most reliable
             if actual_close_price is not None and live_pnl is not None:
                 # Write actual close price and PnL immediately
-                query = "UPDATE audit_log SET exit_reason=?, exit_price=?, pnl=?, exit_time=? WHERE ticket=? AND exit_price IS NULL"
+                query = "UPDATE audit_log SET exit_reason=?, exit_price=?, pnl=?, r_multiple=?, exit_time=? WHERE ticket=? AND exit_price IS NULL"
                 params = (
                     "TIMED_CLOSE",
                     actual_close_price,
                     live_pnl,
+                    r_multiple,
                     datetime.now(timezone.utc).isoformat(),
                     audit_ticket,
                 )
@@ -208,11 +218,12 @@ def _mark_timed_close(db_path: str, row: dict, venue: str, *, actual_close_price
         elif audit_id is not None:
             # Fallback: matched by proximity (split legs, etc.) — use stable row id
             if actual_close_price is not None and live_pnl is not None:
-                query = "UPDATE audit_log SET exit_reason=?, exit_price=?, pnl=?, exit_time=? WHERE id=? AND exit_price IS NULL"
+                query = "UPDATE audit_log SET exit_reason=?, exit_price=?, pnl=?, r_multiple=?, exit_time=? WHERE id=? AND exit_price IS NULL"
                 params = (
                     "TIMED_CLOSE",
                     actual_close_price,
                     live_pnl,
+                    r_multiple,
                     datetime.now(timezone.utc).isoformat(),
                     audit_id,
                 )

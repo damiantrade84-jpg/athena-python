@@ -9576,8 +9576,8 @@ def api_open_trades_timed():
         be_min = None
         close_min = None
         
-        # Only resolve timers for styles with generic timed exits (intraday and swing)
-        if style in ("intraday", "swing"):
+        # Resolve timers for every style managed by timed_exit_monitor.
+        if style in ("scalp", "intraday", "swing"):
             scfg = cfg_te.get(style, {})
             if style == "swing":
                 be_min = float(scfg.get("breakeven_days", 2.5)) * 1440
@@ -10603,6 +10603,14 @@ def _update_trade_outcome(
     # Preserve TIMED_CLOSE even if price matches SL/TP (after BE move)
     if str(existing_exit_reason or "").upper() == "TIMED_CLOSE":
         exit_reason = "TIMED_CLOSE"
+    elif (
+        pnl is not None
+        and abs(float(pnl or 0.0)) < 1e-8
+        and entry_price is not None
+        and exit_price is not None
+        and abs(float(exit_price) - float(entry_price)) < 1e-8
+    ):
+        exit_reason = "BREAKEVEN"
     else:
         exit_reason = _resolve_exit_reason(exit_price, sl, tp)
 
@@ -10765,7 +10773,7 @@ def _outcome_monitor_loop() -> None:
 
     while True:
         try:
-            time.sleep(60)
+            time.sleep(10)
 
             _check_mt5_outcomes()
 
@@ -10937,19 +10945,17 @@ def _check_mt5_outcomes() -> None:
                     close_deal = deals_sorted[-1]
                     total_profit = sum(float(d.profit) for d in deals_sorted)
                     
-                    # Check for Pepperstone bug: deal price equals entry price but profit is 0
-                    # If detected, skip updating to preserve correct data from timed exit
+                    # Pepperstone can report a zero-PnL SL close at the breakeven entry
+                    # after Athena moves SL to BE. That is a valid close; do not leave
+                    # the audit row open just because deal.price equals entry.
                     entry_price = float(row["entry_price"])
                     deal_price = float(close_deal.price)
                     
                     if abs(deal_price - entry_price) < 1e-8 and abs(total_profit) < 1e-8:
-                        # Pepperstone bug detected - deal shows entry price as close price
-                        # Skip updating to preserve correct data from timed exit
                         log.warning(
-                            f"[AUDIT] Pepperstone bug detected for {row['pair']} ticket={ticket_str} "
-                            f"deal_price={deal_price} equals entry_price - skipping update"
+                            f"[AUDIT] Breakeven close detected for {row['pair']} ticket={ticket_str} "
+                            f"deal_price={deal_price} equals entry_price; updating audit outcome"
                         )
-                        continue
                     
                     # Fix timezone: MT5 deal.time is broker time (UTC+3), convert to UTC
                     broker_timestamp = int(close_deal.time)
@@ -11229,6 +11235,37 @@ _score_decay_results: dict = {}  # pair -> {"score": float, "entryScore": float,
 _decay_ai_cache: dict = {}  # pair -> {"decay_at_call": float, "ts": str, "result": dict}
 
 
+def _verified_open_decay_pairs() -> set[str]:
+    """Return pairs currently open at broker level for decay alert filtering."""
+    open_pairs: set[str] = set()
+
+    try:
+        from mt5_executor import mt5_get_positions
+
+        mt5_res = mt5_get_positions()
+        if not (isinstance(mt5_res, dict) and mt5_res.get("error")):
+            for pos in (mt5_res or {}).get("positions", []) or []:
+                pair = str(pos.get("pair") or "").strip()
+                if pair:
+                    open_pairs.add(pair)
+    except Exception as exc:
+        log.debug(f"[DECAY] MT5 open-position verification failed: {exc}")
+
+    try:
+        from bybit_executor import bybit_get_positions
+
+        bybit_res = bybit_get_positions()
+        if not (isinstance(bybit_res, dict) and bybit_res.get("error")):
+            for pos in (bybit_res or {}).get("positions", []) or []:
+                pair = str(pos.get("pair") or "").strip()
+                if pair:
+                    open_pairs.add(pair)
+    except Exception as exc:
+        log.debug(f"[DECAY] Bybit open-position verification failed: {exc}")
+
+    return open_pairs
+
+
 def _get_decay_ai_verdict(
     pair_name: str,
     direction: str,
@@ -11400,6 +11437,13 @@ def _check_score_decay() -> None:
     """Re-evaluate confluence for open positions; log warnings if score has decayed."""
 
     try:
+        live_open_pairs = _verified_open_decay_pairs()
+        for k in [p for p in _score_decay_results if p not in live_open_pairs]:
+            del _score_decay_results[k]
+
+        if not live_open_pairs:
+            return
+
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             # engine_b trades context: engine, max_score, score_pct
@@ -11410,7 +11454,7 @@ def _check_score_decay() -> None:
             ).fetchall()
 
         # Remove closed trades from decay results before early-exit check
-        open_pairs = {row["pair"] for row in open_trades}
+        open_pairs = {row["pair"] for row in open_trades if row["pair"] in live_open_pairs}
         stale_keys = [k for k in _score_decay_results if k not in open_pairs]
         for k in stale_keys:
             del _score_decay_results[k]
@@ -11422,6 +11466,9 @@ def _check_score_decay() -> None:
 
         for row in open_trades:
             pair_name = row["pair"]
+            if pair_name not in live_open_pairs:
+                continue
+
             entry_score = row["score"] or 0
             entry_max = row["max_score"]
             entry_pct = row["score_pct"]
@@ -11518,7 +11565,11 @@ def _check_score_decay() -> None:
 def api_score_decay():
     """Return score decay status for open positions."""
 
-    return jsonify(_score_decay_results)
+    live_open_pairs = _verified_open_decay_pairs()
+    for k in [p for p in _score_decay_results if p not in live_open_pairs]:
+        del _score_decay_results[k]
+
+    return jsonify({p: d for p, d in _score_decay_results.items() if p in live_open_pairs})
 
 
 # ── Task 2: Performance Dashboard Endpoint ─────────────────────────────────────────
@@ -12579,17 +12630,37 @@ def api_performance():
         if not trades:
             trades = all_trades  # fallback: if everything is unknown, show all
 
-        wins = [t for t in trades if (t.get("pnl") or 0) > 0]
+        def _is_breakeven_trade(t: dict) -> bool:
+            reason = str(t.get("exit_reason") or "").upper()
+            pnl = _safe_float(t.get("pnl"))
+            r_mult = _safe_float(t.get("r_multiple"))
+            return reason == "BREAKEVEN" or (
+                pnl is not None
+                and abs(pnl) < 1e-8
+                and (r_mult is None or abs(r_mult) < 1e-8)
+            )
 
-        losses = [t for t in trades if (t.get("pnl") or 0) <= 0]
+        wins = [t for t in trades if (_safe_float(t.get("pnl")) or 0) > 0]
+
+        breakevens = [t for t in trades if _is_breakeven_trade(t)]
+
+        losses = [
+            t
+            for t in trades
+            if (_safe_float(t.get("pnl")) or 0) < 0 and not _is_breakeven_trade(t)
+        ]
 
         total = len(trades)
 
         win_count = len(wins)
 
+        breakeven_count = len(breakevens)
+
         loss_count = len(losses)
 
-        win_rate = round(win_count / total * 100, 1) if total else 0
+        decisive_total = win_count + loss_count
+
+        win_rate = round(win_count / decisive_total * 100, 1) if decisive_total else 0
 
         r_vals = [
             t.get("r_multiple") for t in trades if t.get("r_multiple") is not None
@@ -12667,9 +12738,11 @@ def api_performance():
         regime_stats: dict = defaultdict(lambda: {"w": 0, "l": 0})
 
         for t in trades:
+            if _is_breakeven_trade(t):
+                continue
             k = t.get("trend") or t.get("regime") or "UNKNOWN"
 
-            if (t.get("pnl") or 0) > 0:
+            if (_safe_float(t.get("pnl")) or 0) > 0:
                 regime_stats[k]["w"] += 1
 
             else:
@@ -12694,10 +12767,14 @@ def api_performance():
         win_rate_by_score_band: dict = {}
 
         for lo, hi, label in bands:
-            bt = [t for t in trades if lo <= (t.get("score") or 0) < hi]
+            bt = [
+                t
+                for t in trades
+                if lo <= (t.get("score") or 0) < hi and not _is_breakeven_trade(t)
+            ]
 
             if bt:
-                bw = sum(1 for t in bt if (t.get("pnl") or 0) > 0)
+                bw = sum(1 for t in bt if (_safe_float(t.get("pnl")) or 0) > 0)
 
                 win_rate_by_score_band[label] = round(bw / len(bt) * 100, 1)
 
@@ -12742,9 +12819,11 @@ def api_performance():
         asset_stats: dict = defaultdict(lambda: {"w": 0, "l": 0})
 
         for t in trades:
+            if _is_breakeven_trade(t):
+                continue
             k = _pair_type(t.get("pair", ""))
 
-            if (t.get("pnl") or 0) > 0:
+            if (_safe_float(t.get("pnl")) or 0) > 0:
                 asset_stats[k]["w"] += 1
 
             else:
@@ -12832,6 +12911,10 @@ def api_performance():
         # Attribution by coarse execution / grade bucket (closed trades only)
         att_raw: dict = defaultdict(lambda: {"n": 0, "w": 0, "r_sum": 0.0})
         for t in trades:
+            if _is_breakeven_trade(t):
+                bucket = "BREAKEVEN"
+                att_raw[bucket]["n"] += 1
+                continue
             g = str(t.get("grade") or "UNKNOWN").upper()
             if g.startswith("AUTO"):
                 bucket = "AUTO_ERR" if "ERR" in g else "AUTO"
@@ -12844,7 +12927,7 @@ def api_performance():
             else:
                 bucket = "OTHER"
             att_raw[bucket]["n"] += 1
-            if (t.get("pnl") or 0) > 0:
+            if (_safe_float(t.get("pnl")) or 0) > 0:
                 att_raw[bucket]["w"] += 1
             att_raw[bucket]["r_sum"] += float(t.get("r_multiple") or 0)
         attribution_by_source = {}
@@ -12866,11 +12949,13 @@ def api_performance():
                 continue
             engine_r_vals = [_safe_float(t.get("r_multiple")) for t in subset]
             engine_r_vals = [v for v in engine_r_vals if v is not None]
-            engine_wins = sum(1 for t in subset if (_safe_float(t.get("pnl")) or 0) > 0)
+            engine_decisive = [t for t in subset if not _is_breakeven_trade(t)]
+            engine_wins = sum(1 for t in engine_decisive if (_safe_float(t.get("pnl")) or 0) > 0)
             engine_slip = [abs(_safe_float(t.get("slippage_bps")) or 0.0) for t in subset if t.get("slippage_bps") is not None]
             performance_by_engine[engine_name] = {
                 "trades": len(subset),
-                "win_rate_pct": round(engine_wins / len(subset) * 100, 1) if subset else 0.0,
+                "breakevens": sum(1 for t in subset if _is_breakeven_trade(t)),
+                "win_rate_pct": round(engine_wins / len(engine_decisive) * 100, 1) if engine_decisive else 0.0,
                 "avg_r": round(sum(engine_r_vals) / len(engine_r_vals), 2) if engine_r_vals else None,
                 "total_r": round(sum(engine_r_vals), 2) if engine_r_vals else 0.0,
                 "sqn": _sqn_from_r_values(engine_r_vals),
@@ -12882,6 +12967,7 @@ def api_performance():
                 "total_trades": total,
                 "win_count": win_count,
                 "loss_count": loss_count,
+                "breakeven_count": breakeven_count,
                 "win_rate": win_rate,
                 "average_r_multiple": avg_r,
                 "total_r": total_r,

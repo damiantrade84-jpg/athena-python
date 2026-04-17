@@ -272,7 +272,7 @@ AUTO_TRADE_MAX_DAILY: 10           # Demo mode: max auto-executions per day
 AUTO_TRADE_MAX_PER_SCAN: 1         # Max per scan cycle; raise to 2 only with >10 active pairs
 AUTO_TRADE_SCAN_INTERVAL_MIN: 30   # Scan every 30 minutes
 MAX_PORTFOLIO_HEAT: 0.06      # 6% total risk across all positions
-MAX_OPEN_POSITIONS: 5         # Demo/testing — revert to 5 before live
+MAX_OPEN_POSITIONS: 20        # Testing only — revert before live
 MAX_CORRELATED_POSITIONS: 3   # Allow up to 3 correlated positions (e.g. 3 USD pairs)
 SIGNAL_MAX_AGE_SEC: 300       # 5 min freshness window
 FOREX_SESSION_FILTER: true    # true = London+NY+Asian only; false = 24h (disable for testing)
@@ -944,7 +944,7 @@ TIMED_EXIT:
   check_interval_sec: 30       # how often the monitor wakes (seconds)
   scalp:
     breakeven_min: 5           # move SL to entry after 5 min if in profit
-    close_min: 10              # close at market after 10 min if still in profit
+    close_min: 5               # testing: close profitable scalps at first timed check instead of waiting for BE retrace
   intraday:
     breakeven_min: 15          # move SL to entry after 15 min if in profit
     close_min: 30              # close at market after 30 min if still in profit

@@ -1127,15 +1127,31 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         log.info(f"[MT5] ORDER FILLED: ticket={result.order} | {direction} {result.volume} {mt5_symbol} @ {result.price}")
         results.append(result)
 
+    # Resolve broker position tickets for every filled leg. MT5 order tickets and
+    # position tickets can differ; audit/reconciliation must track positions.
+    legs = []
+    for idx, leg_result in enumerate(results):
+        leg_position_ticket = _mt5_resolve_position_ticket(
+            mt5,
+            mt5_symbol,
+            magic=240601,
+            volume=float(leg_result.volume),
+            order_ticket=int(leg_result.order),
+        )
+        leg_tp = vols[idx][1] if idx < len(vols) else tp
+        legs.append(
+            {
+                "ticket": leg_position_ticket,
+                "order_ticket": int(leg_result.order),
+                "volume": float(leg_result.volume),
+                "entryPrice": float(leg_result.price),
+                "tp": leg_tp,
+            }
+        )
+
     # Secondary operations for the primary position
     result = results[0]
-    position_ticket = _mt5_resolve_position_ticket(
-        mt5,
-        mt5_symbol,
-        magic=240601,
-        volume=float(result.volume),
-        order_ticket=int(result.order),
-    )
+    position_ticket = legs[0]["ticket"]
     try:
         if position_ticket != int(result.order):
             log.info(
@@ -1175,6 +1191,8 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         "tpPartial": None,
         "tp2": tp2 if do_split else None,
         "tp2Ticket": int(results[1].order) if len(results) > 1 else None,
+        "tp2PositionTicket": legs[1]["ticket"] if len(legs) > 1 else None,
+        "legs": legs,
         "riskAmount": approval.risk_amount,
         "riskPct": approval.risk_pct,
         "signalPriceRef": _sref,

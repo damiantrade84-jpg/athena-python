@@ -1308,7 +1308,7 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
   <div class="test-banner" id="testBanner">TEST MODE ACTIVE — Score thresholds lowered, force-execute enabled on all signals</div>
   <div class="test-banner auto-banner" id="autoTradeBanner">
     AUTO-TRADE BOT ACTIVE — Next scan: <span id="autoNextScan">--:--</span> UTC &nbsp;|&nbsp;
-    Today: <span id="autoTradesToday">0</span>/<span id="autoTradesMax">3</span> trades &nbsp;|&nbsp;
+    Today: <span id="autoTradesToday">0</span>/<span id="autoTradesMax">20</span> trades &nbsp;|&nbsp;
     Last: <span id="autoLastExec">none</span> &nbsp;|&nbsp;
     Gate: <span id="autoGateDisplay">--</span>
   </div>
@@ -4795,6 +4795,7 @@ async function loadPerformance() {
     el.innerHTML =
       '<div class="perf-grid">' +
         '<div class="perf-stat"><div class="perf-stat-val">' + d.total_trades + '</div><div class="perf-stat-lbl">Total Trades</div></div>' +
+        '<div class="perf-stat"><div class="perf-stat-val">' + (d.breakeven_count || 0) + '</div><div class="perf-stat-lbl">Breakeven</div></div>' +
         '<div class="perf-stat"><div class="perf-stat-val ' + wrClass(d.win_rate) + '">' + d.win_rate + '%</div><div class="perf-stat-lbl">Win Rate</div></div>' +
         '<div class="perf-stat"><div class="perf-stat-val">' + (d.average_r_multiple || 0).toFixed(2) + 'R</div><div class="perf-stat-lbl">Avg R</div></div>' +
         '<div class="perf-stat"><div class="perf-stat-val">' + (d.total_r || 0).toFixed(1) + 'R</div><div class="perf-stat-lbl">Total R</div></div>' +
@@ -5911,6 +5912,11 @@ async function checkScoreDecay() {
 
     for (var pair in data) {
       var d = data[pair];
+      var isOpenOnBoard = Array.isArray(window.timedOpenPositions) && window.timedOpenPositions.some(function(p) {
+        return (p && (p.pair === pair || p.symbol === pair));
+      });
+      if (!isOpenOnBoard) continue;
+
       var lastAlerted = _lastDecayAlerts[pair] || 0;
       // Use decayPct (scale-neutral %) so forex (0-2) and factor (0-3) pairs both alert.
       // Fire toast if: 40%+ drop  OR  direction flip  OR  AI says EXIT with 25%+ drop — only when worsening
@@ -8015,7 +8021,7 @@ function _updateAutoTradeUI(d) {
     var next = d.nextScanAt ? d.nextScanAt.slice(11,16) : '--:--';
     document.getElementById('autoNextScan').textContent = next;
     document.getElementById('autoTradesToday').textContent = d.tradesToday || 0;
-    document.getElementById('autoTradesMax').textContent = d.maxDaily || 3;
+    document.getElementById('autoTradesMax').textContent = d.maxDaily || 20;
     var last = d.lastExecutionPair
       ? d.lastExecutionPair + ' ' + (d.lastExecutionDir||'')
       : 'none';
@@ -8369,7 +8375,7 @@ function renderOpenPositions(positions) {
     var timerHtml = '';
 
     var hasTimedWindow = (beMins != null && closeMins != null);
-    var styleHasTimedExit = (style === 'intraday' || style === 'swing');
+    var styleHasTimedExit = (style === 'scalp' || style === 'intraday' || style === 'swing');
     if (minsOpen != null && hasTimedWindow && styleHasTimedExit) {
       var formatMins = function(m) {
         if (m == null) return '';
@@ -8505,7 +8511,7 @@ window._bybitAccount = null;
 
 (function pollTimedOpenPositions() {
   refreshTimedOpenPositions({ rerender: true });
-  setTimeout(pollTimedOpenPositions, 15000);
+  setTimeout(pollTimedOpenPositions, 5000);
 })();
 
 // Sync test mode state on page load
@@ -8551,7 +8557,7 @@ fetch('/api/test-mode').then(function(r){return r.json();}).then(function(d){
     }
     if (typeof updateConnDots === 'function') updateConnDots();
   }).catch(function(){});
-  setTimeout(pollMT5, 15000);
+  setTimeout(pollMT5, 5000);
 })();
 
 // -- Wake-up recovery: reload page if hidden > 60s --

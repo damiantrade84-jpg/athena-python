@@ -1054,6 +1054,36 @@ class AutoTrader:
                 return "intraday"
             return "intraday"       # safe default for commodity/index/stock
 
+        def _audit_legs() -> list[dict]:
+            raw_legs = result.get("legs") if isinstance(result.get("legs"), list) else []
+            if not raw_legs:
+                return [
+                    {
+                        "ticket": result.get("ticket"),
+                        "entryPrice": result.get("entryPrice") or signal.get("price"),
+                        "tp": signal.get("tp1"),
+                        "volume": result.get("volume"),
+                        "riskAmount": approval.risk_amount,
+                        "riskPct": approval.risk_pct,
+                    }
+                ]
+            total_volume = sum(float(leg.get("volume") or 0.0) for leg in raw_legs)
+            legs = []
+            for leg in raw_legs:
+                leg_volume = float(leg.get("volume") or 0.0)
+                ratio = (leg_volume / total_volume) if total_volume > 0 else 0.0
+                legs.append(
+                    {
+                        "ticket": leg.get("ticket"),
+                        "entryPrice": leg.get("entryPrice") or result.get("entryPrice") or signal.get("price"),
+                        "tp": leg.get("tp") or signal.get("tp1"),
+                        "volume": leg_volume,
+                        "riskAmount": approval.risk_amount * ratio,
+                        "riskPct": approval.risk_pct * ratio,
+                    }
+                )
+            return legs
+
         try:
             _audit_engine = _signal_engine(signal)
             _eng_b_data = signal.get("engine_b") or signal.get("naked_data") or {}
@@ -1080,39 +1110,40 @@ class AutoTrader:
                 )
             )
             with sqlite3.connect(self._audit_db, timeout=15.0) as con:
-                con.execute(
-                    "INSERT INTO audit_log"
-                    "(ts, pair, score, engine, direction, asset_class, regime,"
-                    " entry_price, sl, tp, volume, risk_amount, risk_pct,"
-                    " ticket, grade, signal_price_ref, slippage_bps,"
-                    " max_score, score_pct, factors_json, edge_prob, style, fee_cost)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (
-                        datetime.now(timezone.utc).isoformat(),
-                        signal.get("pair"),
-                        signal.get("confluenceScore"),
-                        _audit_engine,
-                        signal.get("direction"),
-                        signal.get("type") or _infer_asset_class(signal.get("pair", "")),
-                        signal.get("trendState"),
-                        result.get("entryPrice") or signal.get("price"),
-                        signal.get("sl"),
-                        signal.get("tp1"),
-                        result.get("volume"),
-                        approval.risk_amount,
-                        approval.risk_pct,
-                        result.get("ticket"),
-                        "AUTO" + ("-DEMO" if is_demo else ""),
-                        result.get("signalPriceRef"),
-                        result.get("slippageBps"),
-                        _max_score,
-                        _score_pct,
-                        json.dumps(_factors),
-                        signal.get("calibratedProbability", signal.get("edgeProbability")),
-                        _resolve_audit_style(signal.get("style"), signal.get("type")),
-                        result.get("feeCost"),
-                    ),
-                )
+                for _leg in _audit_legs():
+                    con.execute(
+                        "INSERT INTO audit_log"
+                        "(ts, pair, score, engine, direction, asset_class, regime,"
+                        " entry_price, sl, tp, volume, risk_amount, risk_pct,"
+                        " ticket, grade, signal_price_ref, slippage_bps,"
+                        " max_score, score_pct, factors_json, edge_prob, style, fee_cost)"
+                        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (
+                            datetime.now(timezone.utc).isoformat(),
+                            signal.get("pair"),
+                            signal.get("confluenceScore"),
+                            _audit_engine,
+                            signal.get("direction"),
+                            signal.get("type") or _infer_asset_class(signal.get("pair", "")),
+                            signal.get("trendState"),
+                            _leg.get("entryPrice"),
+                            signal.get("sl"),
+                            _leg.get("tp"),
+                            _leg.get("volume"),
+                            _leg.get("riskAmount"),
+                            _leg.get("riskPct"),
+                            _leg.get("ticket"),
+                            "AUTO" + ("-DEMO" if is_demo else ""),
+                            result.get("signalPriceRef"),
+                            result.get("slippageBps"),
+                            _max_score,
+                            _score_pct,
+                            json.dumps(_factors),
+                            signal.get("calibratedProbability", signal.get("edgeProbability")),
+                            _resolve_audit_style(signal.get("style"), signal.get("type")),
+                            result.get("feeCost"),
+                        ),
+                    )
 
                 con.commit()
 
