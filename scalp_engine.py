@@ -1154,6 +1154,7 @@ def _classify_setup(
     aaa: dict,
     vwap: dict,
     htf_bias: Optional[str],
+    asset_type: Optional[str] = None,
 ) -> dict:
     """Decide setup type and direction.
 
@@ -1185,6 +1186,11 @@ def _classify_setup(
         # (MT5 tick-volume makes absorption unreliable — require any one of three)
         cvd_dir = cvd.get("direction")
         has_absorption = absorption.get("detected", False)
+        # 2026-04-17: MT5 tick-volume absorption is noisy — require >=2 bars to count as valid
+        if asset_type and asset_type != "crypto":
+            mt5_min_abs = int(cfg.get("MT5_ABSORPTION_MIN_COUNT", 2))
+            if has_absorption and int(absorption.get("count", 0)) < mt5_min_abs:
+                has_absorption = False
         cvd_confirms = (cvd_dir == direction) or (cvd_dir is None)
         vwap_confirms = (vwap.get("lean") == direction)
         if not has_absorption and not cvd_confirms and not vwap_confirms:
@@ -2057,6 +2063,11 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 else {"valid": False}
             )
             if not vp.get("valid"):
+                if asset_type == "crypto" and cfg.get("TRADE_BUCKET_VP_ENABLED", True):
+                    log.info(
+                        "[SCALP-VP] trade_bucket fallback: %s reason=%s — using candle VP",
+                        display, vp.get("reason", "?"),
+                    )
                 vp = _build_volume_profile(candles_m15[-vp_lookback:])
                 if vp.get("valid"):
                     vp["volume_source"] = "candles"
@@ -2084,7 +2095,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             vwap = _check_vwap_lean(candles_m15, current_price) if cfg.get("VWAP_ENABLED", True) else {"lean": None, "vwap_value": 0}
 
             # Setup classification
-            setup = _classify_setup(market_state, price_loc, absorption, cvd, aaa, vwap, htf_bias)
+            setup = _classify_setup(market_state, price_loc, absorption, cvd, aaa, vwap, htf_bias, asset_type=asset_type)
             if not setup.get("valid"):
                 _record_stability_sample(display, asset_type, False,
                                          reason=f"no_setup:{setup.get('reason', '?')}")

@@ -4547,7 +4547,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         aaa = _check_aaa_sequence(exec_context, absorption, cvd) if cfg.get("AAA_ENABLED", True) else {"complete": False, "phase": "disabled"}
         vwap = _check_vwap_lean(context_for_vwap, current_price) if cfg.get("VWAP_ENABLED", True) else {"lean": None, "vwap_value": 0}
         htf_bias = infer_bias_from_ema_stack(m15_context) if len(m15_context) >= 200 else None
-        setup = _classify_setup(market_state, price_loc, absorption, cvd, aaa, vwap, htf_bias)
+        setup = _classify_setup(market_state, price_loc, absorption, cvd, aaa, vwap, htf_bias, asset_type=asset_type)
         if not setup.get("valid"):
             continue
         direction = setup["direction"]
