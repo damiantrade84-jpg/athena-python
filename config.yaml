@@ -71,44 +71,21 @@ WEINSTEIN_LOOKBACK:
 # false = backtest mirrors live MIN_CONFLUENCE_* (parity). Live scans always use live gates.
 # RESEARCH_MODE also enables the BT chain (legacy); prefer BACKTEST_USE_BT_MIN_THRESHOLDS.
 RESEARCH_MODE: false
+# p75-diagnostic run (2026-04-17): BT chain enabled, class-level BT_MIN set to
+# observed live-score p75 per asset class, subgroup overrides emptied so the
+# class gate actually binds. Live gates untouched.
 BACKTEST_USE_BT_MIN_THRESHOLDS: true
 BT_MIN:
-  crypto:    0.95
-  commodity: 0.90
-  forex:     0.85      # was 1.50; scaled to match live 0.95 (BT/live ~89%)
-  stock:     0.90
-  index:     0.85
+  crypto:    2.15   # live-score p75 (was 0.95)
+  commodity: 1.80   # live-score p75 (was 0.90)
+  forex:     1.20   # live-score p75 (was 0.85)
+  stock:     1.10   # no live data — hold at live class gate (was 0.90)
+  index:     1.17   # only one live row; hold at that value (was 0.85)
 
-BT_MIN_GROUP:
-  # Values proportionally scaled to match MIN_CONFLUENCE_GROUP restore (maintains BT/live ratio).
-  # Dormant while BACKTEST_USE_BT_MIN_THRESHOLDS: false — future-proofed for re-enable.
-  forex:
-    forex_majors: 0.75     # was 1.50; scaled with live (0.85 × ~89%)
-    forex_crosses: 0.85     # was 1.55; scaled with live (0.95 × ~89%)
-    forex_exotics: 0.95     # was 1.65; scaled with live (1.05 × ~90%)
-  crypto:
-    crypto_btc: 0.94      # was 0.81 × 1.167 (maintains ~74% BT/live ratio)
-    crypto_eth: 0.98      # was 0.84 × 1.167
-    crypto_alt_majors: 1.05  # was 0.90 × 1.167
-    crypto_doge: 0.96     # unchanged — no MIN_CONFLUENCE_GROUP counterpart
-    crypto_other: 1.05    # was 0.90 × 1.167
-  commodity:
-    nat_gas: 0.87
-    pgm_metals: 0.84
-    copper: 0.81
-    precious_trackers: 1.00  # was 0.78 × 1.273 (precious_trackers live gate restored)
-    energy_oil: 0.75
-    commodity_other: 0.85
-  index:
-    asian_indices: 0.87
-    us_indices_trackers: 0.81
-    eu_indices: 0.78
-    index_other: 0.80
-  stock:
-    us_stock_single: 1.25  # was 0.90 × 1.409 (maintains ~81% BT/live ratio)
-    smallcap_em_etf: 1.13  # was 0.80 × 1.409
-    bond_tlt: 1.00         # was 0.70 × 1.409
-    stock_other: 1.20      # was 0.85 × 1.409
+# Intentionally empty for the p75 diagnostic — subgroup values were lower than
+# the new class-level BT_MIN and would bind first (scoring.py:173-188),
+# bypassing the class gate. Previous values preserved in git history.
+BT_MIN_GROUP: {}
 
 # Backtest must not alter live pair enable/disable state
 BT_AUTO_TOGGLE: false
@@ -650,13 +627,13 @@ PAIR_PROFILES:
       h4_fib: 1.5
       h1_bb: 0.5
     min_confluence: 1.05
-    bt_min: 0.65
+    bt_min: 1.80   # p75 diagnostic — was 0.65 (bypassed class BT_MIN)
   XAG/USD:
     disable_filters: [obv, session]
     weight_overrides:
       h4_fib: 1.5
     min_confluence: 1.05
-    bt_min: 0.65
+    bt_min: 1.80   # p75 diagnostic — was 0.65
   LINK/USDT:
     disable_filters: [mean_revert]
     weight_overrides:
