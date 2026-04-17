@@ -635,6 +635,31 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 
 ## DECISIONS
 
+## 2026-04-17: Engine A forex soft-gating + Engine D gate tightening
+
+**Engine A forex (Option B — session/ADX softening, breakout window extension):**
+
+Diagnostic (`diagnose_engine_a_forex.py`) showed only **3/24 UTC hours** produced signals under ideal bull conditions because of stacked hard gates (session=strict + ADX hard floor 25 + Hurst veto + 3-hour London breakout window). Applied three reversible config-level softenings in `config.yaml` `FOREX_ENGINE`:
+
+- `session_mode: "strict"` → **`"soft"`** (shoulder hours partially active, not blocked)
+- `trend_gate_adx_soft_enabled: false` → **`true`** (ADX below hard floor scales confidence, not veto)
+- New keys `london_breakout_window_lo: 7`, `london_breakout_window_hi: 11` — extend breakout path from 07:00–09:00 to **07:00–11:00 UTC**. `forex_scoring._london_breakout_score()` reads these (with safe fallback to the old `[_LONDON_OPEN[0], _LONDON_OPEN[0]+2]` window if CONFIG missing)
+
+**No scoring gate, weight, or threshold changes.** These are **soft-gate** flips — live scoring logic untouched per locked policy. Revert by flipping any of the three keys back.
+
+**Engine A forex class floor (unchanged):** `MIN_CONFLUENCE_CLASS.forex = 1.0`, scale 0–2.0. Current active contract.
+
+**Engine D (Scalp Lab) tightening:**
+
+1. **`config.py` FACTOR_MIN_DIRECTIONAL_CRYPTO drift fix:** hardcoded default was 0.20, `config.yaml` was 0.15 → aligned to **0.15**. Runtime value unchanged when yaml present; now consistent when yaml is stripped/replaced.
+2. **Crypto trade-bucket VP fallback logging** (`scalp_engine.py` ~line 2060): when Binance aggTrade buckets are stale/unavailable and VP falls back to candle volume, emit `log.info("[SCALP-VP] trade_bucket fallback: %s reason=%s — using candle VP", ...)`. Lets us measure real fallback rate without changing behavior.
+3. **`SCALP_ENGINE.MIN_GRADE: "C" → "B"`** in `config.yaml`. Scan gate now filters grade C (0.25× size) setups. `MIN_GRADE_AUTO_EXECUTE` was already "B"; this aligns the scan display to the auto-execute floor.
+4. **`MT5_ABSORPTION_MIN_COUNT: 2`** new config key + `_classify_setup(asset_type=...)` parameter. For non-crypto (MT5) pairs, mean-reversion one-of-three confluence now requires `absorption.count >= 2` to count as "absorption present" — MT5 tick-volume absorption on a single bar is too noisy. Crypto (Binance real bid/ask trade volume) unchanged. Both callers — `scalp_engine.py` live scan and `backtest_runner.py` scalp BT — pass `asset_type`.
+
+**Non-forex threshold verification (no change):** Analytical verification under variance sqrt-scaling + `_SCORE_SCALE=2.11` stretch confirms current `MIN_CONFLUENCE_CLASS` (crypto 1.20, stock 1.10, commodity 1.10, index 1.05) are reachable with 2–3 aligned factors at z≥1.5. Did **not** change any non-forex thresholds this session — previous regressions were candle-data issues, not gate level.
+
+---
+
 ## 2026-04-13: Engine B forex intraday D1 override removed
 
 **Problem:** All Engine B scan paths (standalone `/api/scan-naked`, Engine C `/api/engine-c-scan`, `scanner.py`, and the `simulate_trade` backtest wrapper) contained logic that silently upgraded forex intraday style to swing when `ENGINE_B_FOREX_STRUCTURE_TF = "D1"`. This meant:
