@@ -11235,6 +11235,37 @@ _score_decay_results: dict = {}  # pair -> {"score": float, "entryScore": float,
 _decay_ai_cache: dict = {}  # pair -> {"decay_at_call": float, "ts": str, "result": dict}
 
 
+def _verified_open_decay_pairs() -> set[str]:
+    """Return pairs currently open at broker level for decay alert filtering."""
+    open_pairs: set[str] = set()
+
+    try:
+        from mt5_executor import mt5_get_positions
+
+        mt5_res = mt5_get_positions()
+        if not (isinstance(mt5_res, dict) and mt5_res.get("error")):
+            for pos in (mt5_res or {}).get("positions", []) or []:
+                pair = str(pos.get("pair") or "").strip()
+                if pair:
+                    open_pairs.add(pair)
+    except Exception as exc:
+        log.debug(f"[DECAY] MT5 open-position verification failed: {exc}")
+
+    try:
+        from bybit_executor import bybit_get_positions
+
+        bybit_res = bybit_get_positions()
+        if not (isinstance(bybit_res, dict) and bybit_res.get("error")):
+            for pos in (bybit_res or {}).get("positions", []) or []:
+                pair = str(pos.get("pair") or "").strip()
+                if pair:
+                    open_pairs.add(pair)
+    except Exception as exc:
+        log.debug(f"[DECAY] Bybit open-position verification failed: {exc}")
+
+    return open_pairs
+
+
 def _get_decay_ai_verdict(
     pair_name: str,
     direction: str,
@@ -11406,6 +11437,13 @@ def _check_score_decay() -> None:
     """Re-evaluate confluence for open positions; log warnings if score has decayed."""
 
     try:
+        live_open_pairs = _verified_open_decay_pairs()
+        for k in [p for p in _score_decay_results if p not in live_open_pairs]:
+            del _score_decay_results[k]
+
+        if not live_open_pairs:
+            return
+
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             # engine_b trades context: engine, max_score, score_pct
@@ -11416,7 +11454,7 @@ def _check_score_decay() -> None:
             ).fetchall()
 
         # Remove closed trades from decay results before early-exit check
-        open_pairs = {row["pair"] for row in open_trades}
+        open_pairs = {row["pair"] for row in open_trades if row["pair"] in live_open_pairs}
         stale_keys = [k for k in _score_decay_results if k not in open_pairs]
         for k in stale_keys:
             del _score_decay_results[k]
@@ -11428,6 +11466,9 @@ def _check_score_decay() -> None:
 
         for row in open_trades:
             pair_name = row["pair"]
+            if pair_name not in live_open_pairs:
+                continue
+
             entry_score = row["score"] or 0
             entry_max = row["max_score"]
             entry_pct = row["score_pct"]
@@ -11524,7 +11565,11 @@ def _check_score_decay() -> None:
 def api_score_decay():
     """Return score decay status for open positions."""
 
-    return jsonify(_score_decay_results)
+    live_open_pairs = _verified_open_decay_pairs()
+    for k in [p for p in _score_decay_results if p not in live_open_pairs]:
+        del _score_decay_results[k]
+
+    return jsonify({p: d for p, d in _score_decay_results.items() if p in live_open_pairs})
 
 
 # ── Task 2: Performance Dashboard Endpoint ─────────────────────────────────────────

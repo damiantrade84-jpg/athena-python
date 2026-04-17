@@ -5912,6 +5912,11 @@ async function checkScoreDecay() {
 
     for (var pair in data) {
       var d = data[pair];
+      var isOpenOnBoard = Array.isArray(window.timedOpenPositions) && window.timedOpenPositions.some(function(p) {
+        return (p && (p.pair === pair || p.symbol === pair));
+      });
+      if (!isOpenOnBoard) continue;
+
       var lastAlerted = _lastDecayAlerts[pair] || 0;
       // Use decayPct (scale-neutral %) so forex (0-2) and factor (0-3) pairs both alert.
       // Fire toast if: 40%+ drop  OR  direction flip  OR  AI says EXIT with 25%+ drop — only when worsening
