@@ -255,6 +255,152 @@ def _resolve_barrier_exit(
     return None, False
 
 
+def _engine_a_trade_path_diagnostics(
+    future_window: list[dict],
+    *,
+    direction: str,
+    entry: float,
+    sl: float,
+    tp1: float | None = None,
+    tp2: float | None = None,
+) -> dict:
+    """Measure Engine A BT path quality without changing exit behavior."""
+    risk = abs(float(entry) - float(sl))
+    if risk <= 0 or not math.isfinite(risk):
+        return {
+            "max_favorable_excursion_r": 0.0,
+            "max_adverse_excursion_r": 0.0,
+            "highest_r_seen": 0.0,
+            "lowest_r_seen": 0.0,
+            "bars_to_mfe": None,
+            "bars_to_mae": None,
+            "reached_half_r": False,
+            "reached_one_r": False,
+            "reached_tp1": False,
+            "reached_tp2": False,
+            "reached_sl": False,
+            "tp1_rr": None,
+            "tp2_rr": None,
+        }
+
+    direction = str(direction or "").upper()
+    max_favorable_excursion_r = 0.0
+    max_adverse_excursion_r = 0.0
+    bars_to_mfe = None
+    bars_to_mae = None
+    reached_half_r = False
+    reached_one_r = False
+    reached_tp1 = False
+    reached_tp2 = False
+    reached_sl = False
+
+    def _rr(target: float | None) -> float | None:
+        if target is None:
+            return None
+        try:
+            return round(abs(float(target) - float(entry)) / risk, 3)
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    for offset, bar in enumerate(future_window or [], start=1):
+        try:
+            high = float(bar["high"])
+            low = float(bar["low"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+
+        if direction == "LONG":
+            favorable_r = (high - entry) / risk
+            adverse_r = (low - entry) / risk
+            reached_sl = reached_sl or low <= sl
+            reached_tp1 = reached_tp1 or (tp1 is not None and high >= tp1)
+            reached_tp2 = reached_tp2 or (tp2 is not None and high >= tp2)
+        else:
+            favorable_r = (entry - low) / risk
+            adverse_r = (entry - high) / risk
+            reached_sl = reached_sl or high >= sl
+            reached_tp1 = reached_tp1 or (tp1 is not None and low <= tp1)
+            reached_tp2 = reached_tp2 or (tp2 is not None and low <= tp2)
+
+        if favorable_r > max_favorable_excursion_r:
+            max_favorable_excursion_r = favorable_r
+            bars_to_mfe = offset
+        if adverse_r < max_adverse_excursion_r:
+            max_adverse_excursion_r = adverse_r
+            bars_to_mae = offset
+
+        reached_half_r = reached_half_r or favorable_r >= 0.5
+        reached_one_r = reached_one_r or favorable_r >= 1.0
+
+    return {
+        "max_favorable_excursion_r": round(max_favorable_excursion_r, 2),
+        "max_adverse_excursion_r": round(max_adverse_excursion_r, 2),
+        "highest_r_seen": round(max_favorable_excursion_r, 2),
+        "lowest_r_seen": round(max_adverse_excursion_r, 2),
+        "bars_to_mfe": bars_to_mfe,
+        "bars_to_mae": bars_to_mae,
+        "reached_half_r": reached_half_r,
+        "reached_one_r": reached_one_r,
+        "reached_tp1": reached_tp1,
+        "reached_tp2": reached_tp2,
+        "reached_sl": reached_sl,
+        "tp1_rr": _rr(tp1),
+        "tp2_rr": _rr(tp2),
+    }
+
+
+def _engine_a_exit_diagnostics_summary(
+    trades: list[dict], same_bar_both_hit: int = 0
+) -> dict:
+    """Aggregate Engine A BT path diagnostics for TP/SL investigations."""
+    trades = trades or []
+    outcome_counts: dict[str, int] = {}
+    for trade in trades:
+        outcome = str(trade.get("outcome") or "UNKNOWN")
+        outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
+
+    losses = [t for t in trades if float(t.get("resultR", 0) or 0) <= 0]
+    wins = [t for t in trades if float(t.get("resultR", 0) or 0) > 0]
+    sl_losses = [t for t in trades if t.get("outcome") == "SL"]
+    diagnostic_trades = [
+        t for t in trades if t.get("max_favorable_excursion_r") is not None
+    ]
+
+    def _pct(items: list[dict], key: str) -> float:
+        return round(
+            sum(1 for item in items if bool(item.get(key))) / len(items) * 100,
+            1,
+        ) if items else 0.0
+
+    def _avg(items: list[dict], key: str) -> float | None:
+        values = []
+        for item in items:
+            raw = item.get(key)
+            if raw is None:
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if math.isfinite(value):
+                values.append(value)
+        return round(sum(values) / len(values), 2) if values else None
+
+    return {
+        "tradesMeasured": len(diagnostic_trades),
+        "outcomes": outcome_counts,
+        "sameBarBothHit": int(same_bar_both_hit or 0),
+        "lossesReachedHalfR": _pct(losses, "reached_half_r"),
+        "lossesReachedOneR": _pct(losses, "reached_one_r"),
+        "slReachedHalfR": _pct(sl_losses, "reached_half_r"),
+        "slReachedOneR": _pct(sl_losses, "reached_one_r"),
+        "avgMfeLossesR": _avg(losses, "max_favorable_excursion_r"),
+        "avgMaeLossesR": _avg(losses, "max_adverse_excursion_r"),
+        "avgMfeWinsR": _avg(wins, "max_favorable_excursion_r"),
+        "avgMaeWinsR": _avg(wins, "max_adverse_excursion_r"),
+    }
+
+
 def _resolve_engine_c_bt_levels_after_fill(
     *,
     actual_entry: float,
@@ -1051,13 +1197,13 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             direction = res["direction"]
 
-            # Realistic entry: signal on bar i close, enter at bar i+1 open (no lookahead)
+            # Indicator windows end at i-1, so the first non-lookahead fill is bar i open.
 
-            if i + 1 >= total_bars:
+            if i >= total_bars:
                 i += 1
                 continue
 
-            entry_bar = d1_raw[i + 1]
+            entry_bar = d1_raw[i]
 
             raw_entry = entry_bar.get("open", entry_bar["close"])
 
@@ -1173,7 +1319,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             result_r = 0.0
             exit_bar = i
 
-            for j in range(i + 1, min(i + 21, total_bars)):
+            for j in range(i, min(i + 20, total_bars)):
                 bar = d1_raw[j]
                 _bar_outcome, _both_hit = _resolve_barrier_exit(
                     bar,
@@ -1207,7 +1353,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             if outcome == "OPEN":
                 # Force-close at last forward bar â€" record actual P&L vs recording a ghost 0R
 
-                _last_fwd = d1_raw[min(i + 20, total_bars - 1)]
+                exit_bar = min(i + 19, total_bars - 1)
+                _last_fwd = d1_raw[exit_bar]
 
                 _exit_px = _last_fwd["close"]
 
@@ -1226,6 +1373,15 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     result_r = 0.0
 
                 outcome = "TIMEOUT"
+
+            _exit_path = _engine_a_trade_path_diagnostics(
+                d1_raw[i : min(exit_bar + 1, total_bars)],
+                direction=direction,
+                entry=entry,
+                sl=sl,
+                tp1=tp1,
+                tp2=tp2,
+            )
 
             live_risk_pct = _live_base_risk_pct(_ptype)
 
@@ -1282,6 +1438,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     "wf_fold": _vf["wf_fold"],
                     "validation_mode": _canonical_vm,
                     "volAdj": _vol_adj,
+                    **_exit_path,
                 }
             )
 
@@ -1512,13 +1669,13 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             direction = res["direction"]
 
-            # Realistic entry: signal on bar i close, enter at bar i+1 open (no lookahead)
+            # Indicator windows end at i-1, so the first non-lookahead fill is bar i open.
 
-            if i + 1 >= total_h4:
+            if i >= total_h4:
                 i += 1
                 continue
 
-            entry_bar = h4_raw[i + 1]
+            entry_bar = h4_raw[i]
 
             raw_entry = entry_bar.get("open", entry_bar["close"])
 
@@ -1628,7 +1785,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             result_r = 0.0
             exit_bar = i
 
-            for j in range(i + 1, min(i + MAX_HOLD + 1, total_h4)):
+            for j in range(i, min(i + MAX_HOLD, total_h4)):
                 bar = h4_raw[j]
                 _bar_outcome, _both_hit = _resolve_barrier_exit(
                     bar,
@@ -1660,7 +1817,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     exit_bar = j
                     break
             if outcome == "OPEN":
-                _last_fwd = h4_raw[min(i + MAX_HOLD, total_h4 - 1)]
+                exit_bar = min(i + MAX_HOLD - 1, total_h4 - 1)
+                _last_fwd = h4_raw[exit_bar]
 
                 _exit_px = _last_fwd["close"]
 
@@ -1679,6 +1837,15 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     result_r = 0.0
 
                 outcome = "TIMEOUT"
+
+            _exit_path = _engine_a_trade_path_diagnostics(
+                h4_raw[i : min(exit_bar + 1, total_h4)],
+                direction=direction,
+                entry=entry,
+                sl=sl,
+                tp1=tp1,
+                tp2=tp2,
+            )
 
             live_risk_pct = _live_base_risk_pct(_ptype)
 
@@ -1731,6 +1898,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     "wf_fold": _vf["wf_fold"],
                     "validation_mode": _canonical_vm,
                     "volAdj": _vol_adj,
+                    **_exit_path,
                 }
             )
 
@@ -1953,11 +2121,11 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             direction = res["direction"]
 
-            if i + 1 >= total_h1:
+            if i >= total_h1:
                 i += 1
                 continue
 
-            entry_bar = h1_raw[i + 1]
+            entry_bar = h1_raw[i]
 
             raw_entry = entry_bar.get("open", entry_bar["close"])
 
@@ -2067,7 +2235,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             result_r = 0.0
             exit_bar = i
 
-            for j in range(i + 1, min(i + MAX_HOLD + 1, total_h1)):
+            for j in range(i, min(i + MAX_HOLD, total_h1)):
                 bar = h1_raw[j]
                 _bar_outcome, _both_hit = _resolve_barrier_exit(
                     bar,
@@ -2099,7 +2267,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     exit_bar = j
                     break
             if outcome == "OPEN":
-                _last_fwd = h1_raw[min(i + MAX_HOLD, total_h1 - 1)]
+                exit_bar = min(i + MAX_HOLD - 1, total_h1 - 1)
+                _last_fwd = h1_raw[exit_bar]
 
                 _exit_px = _last_fwd["close"]
 
@@ -2118,6 +2287,15 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     result_r = 0.0
 
                 outcome = "TIMEOUT"
+
+            _exit_path = _engine_a_trade_path_diagnostics(
+                h1_raw[i : min(exit_bar + 1, total_h1)],
+                direction=direction,
+                entry=entry,
+                sl=sl,
+                tp1=tp1,
+                tp2=tp2,
+            )
 
             live_risk_pct = _live_base_risk_pct(_ptype)
 
@@ -2170,6 +2348,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     "wf_fold": _vf["wf_fold"],
                     "validation_mode": _canonical_vm,
                     "volAdj": _vol_adj,
+                    **_exit_path,
                 }
             )
 
@@ -2264,6 +2443,9 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 "bt": CONFIG.get("VOLUME_THRESHOLD_BACKTEST", 1.2),
                 "live": CONFIG.get("VOLUME_THRESHOLD", 1.5),
             },
+            "exitDiagnostics": _engine_a_exit_diagnostics_summary(
+                [], same_bar_both_hit
+            ),
             "same_bar_both_hit": same_bar_both_hit,
             "pairMaxScore": _pair_max_score,
             "equityCurve": [1.0],
@@ -2661,6 +2843,9 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             "bt": CONFIG.get("VOLUME_THRESHOLD_BACKTEST", 1.2),
             "live": CONFIG.get("VOLUME_THRESHOLD", 1.5),
         },
+        "exitDiagnostics": _engine_a_exit_diagnostics_summary(
+            trades, same_bar_both_hit
+        ),
         "same_bar_both_hit": same_bar_both_hit,
         "pairMaxScore": _pair_max_score,
         "equityCurve": equity_curve,

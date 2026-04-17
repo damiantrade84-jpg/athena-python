@@ -60,6 +60,56 @@ def test_resolve_barrier_exit_prefers_sl_when_short_bar_hits_tp_and_sl():
     assert outcome == "SL"
 
 
+def test_engine_a_trade_path_diagnostics_marks_loser_that_reached_half_r():
+    diagnostics = backtest_runner._engine_a_trade_path_diagnostics(
+        [
+            {"high": 100.7, "low": 99.8},
+            {"high": 100.4, "low": 98.9},
+        ],
+        direction="LONG",
+        entry=100.0,
+        sl=99.0,
+        tp1=102.0,
+        tp2=103.0,
+    )
+
+    assert diagnostics["max_favorable_excursion_r"] == 0.7
+    assert diagnostics["max_adverse_excursion_r"] == -1.1
+    assert diagnostics["reached_half_r"] is True
+    assert diagnostics["reached_one_r"] is False
+    assert diagnostics["reached_sl"] is True
+    assert diagnostics["reached_tp1"] is False
+
+
+def test_engine_a_exit_diagnostics_summary_counts_sl_path_quality():
+    summary = backtest_runner._engine_a_exit_diagnostics_summary(
+        [
+            {
+                "outcome": "SL",
+                "resultR": -1.0,
+                "reached_half_r": True,
+                "reached_one_r": False,
+                "max_favorable_excursion_r": 0.7,
+                "max_adverse_excursion_r": -1.1,
+            },
+            {
+                "outcome": "TP1",
+                "resultR": 2.0,
+                "reached_half_r": True,
+                "reached_one_r": True,
+                "max_favorable_excursion_r": 2.1,
+                "max_adverse_excursion_r": -0.2,
+            },
+        ],
+        same_bar_both_hit=3,
+    )
+
+    assert summary["outcomes"] == {"SL": 1, "TP1": 1}
+    assert summary["sameBarBothHit"] == 3
+    assert summary["lossesReachedHalfR"] == 100.0
+    assert summary["slReachedOneR"] == 0.0
+
+
 def test_engine_b_confidence_gate_requires_passed_and_score_floor():
     from market_structure import engine_b_confidence_passes
 

@@ -10630,12 +10630,27 @@ def _update_trade_outcome(
         if risk_amount and risk_amount > 0:
             r_multiple = round(pnl / risk_amount, 2)
 
-        elif entry_price and sl and volume and abs(entry_price - sl) > 0:
-            # Fallback: only valid when volume is in base units (crypto, stocks)
+        elif (
+            entry_price and sl and volume and abs(entry_price - sl) > 0
+            and str(asset_type or "").lower() in ("crypto", "stock")
+        ):
+            # Fallback only valid when volume is in base units (crypto USDT-notional,
+            # stock shares). Forex/commodity/index use lots/contracts, so
+            # risk_dist * volume is not dollar risk — skip and leave r_multiple None.
 
             risk_dist = abs(entry_price - sl)
 
             r_multiple = round(pnl / (risk_dist * volume), 2)
+
+        # Sanity clamp: |R| > 50 indicates corrupt risk_amount units (e.g. price
+        # distance stored in $-field). Legacy forex rows produced R=-44554 on a
+        # $106 loss. Discard rather than pollute downstream aggregates.
+        if r_multiple is not None and abs(r_multiple) > 50:
+            log.warning(
+                f"[MONITOR] Discarding implausible R={r_multiple} for ticket={ticket} "
+                f"pnl={pnl} risk_amount={risk_amount} entry={entry_price} sl={sl} volume={volume}"
+            )
+            r_multiple = None
 
     # Holding period
 

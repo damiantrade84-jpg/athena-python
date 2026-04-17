@@ -405,6 +405,7 @@ def mt5_get_positions() -> dict:
                 "direction": "LONG" if pos.type == 0 else "SHORT",
                 "volume": pos.volume,
                 "entry": pos.price_open,
+                "currentPrice": getattr(pos, "price_current", 0.0),
                 "sl": pos.sl,
                 "tp": pos.tp,
                 "profit": pos.profit,

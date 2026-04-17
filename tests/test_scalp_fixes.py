@@ -1,6 +1,7 @@
 import pytest
 import types
 import time
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 # Modules under test
@@ -49,6 +50,125 @@ def test_scalp_trades_excluded_from_timed_exit(monkeypatch):
     with patch("bybit_executor.bybit_get_positions") as mock_get_pos:
         timed_exit_monitor._handle_bybit_row(row, cfg)
         mock_get_pos.assert_not_called()
+
+
+def test_swing_timed_exit_uses_live_price_for_tp_progress(monkeypatch):
+    """Swing timeout should not close when live price is already halfway to TP."""
+    timed_exit_monitor._be_done.clear()
+    row = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "entry_price": 1.1000,
+        "sl": 1.0900,
+        "tp": 1.1100,
+        "ticket": 12345,
+        "engine": "engine_a",
+        "style": "swing",
+        "ts": "2026-04-01T10:00:00+00:00",
+    }
+    cfg = {
+        "swing": {"breakeven_days": 0, "close_days": 0, "tp_progress_exempt": 0.50},
+        "intraday": {"breakeven_min": 15, "close_min": 30},
+        "scalp": {"breakeven_min": 5, "close_min": 5},
+    }
+    monkeypatch.setattr(
+        "mt5_executor.mt5_get_positions",
+        lambda: {
+            "error": False,
+            "positions": [
+                {
+                    "ticket": 12345,
+                    "pair": "EUR/USD",
+                    "direction": "LONG",
+                    "entry": 1.1000,
+                    "currentPrice": 1.1060,
+                    "sl": 1.0900,
+                    "tp": 1.1100,
+                    "profit": 10.0,
+                    "volume": 0.01,
+                }
+            ],
+        },
+    )
+    be_calls = []
+    close_calls = []
+    monkeypatch.setattr(
+        "mt5_executor.mt5_move_sl_to_breakeven",
+        lambda ticket, entry: be_calls.append((ticket, entry)) or {"success": True},
+    )
+    monkeypatch.setattr(
+        "mt5_executor.mt5_close_position",
+        lambda ticket: close_calls.append(ticket) or {"success": True},
+    )
+
+    timed_exit_monitor._handle_mt5_row(row, cfg)
+
+    assert be_calls == [(12345, 1.1000)]
+    assert close_calls == []
+
+
+def test_equal_close_and_be_window_closes_before_breakeven(monkeypatch):
+    """If close and BE are both due, bank the profitable close before arming BE."""
+    timed_exit_monitor._be_done.clear()
+    opened = datetime.now(timezone.utc) - timedelta(minutes=6)
+    row = {
+        "pair": "USD/MXN",
+        "direction": "SHORT",
+        "entry_price": 17.23455,
+        "sl": 17.25127,
+        "tp": 17.21147,
+        "ticket": 288617084,
+        "engine": "engine_b",
+        "style": "scalp",
+        "ts": opened.isoformat(),
+        "risk_amount": 100.0,
+    }
+    cfg = {
+        "scalp": {"breakeven_min": 5, "close_min": 5},
+        "intraday": {"breakeven_min": 15, "close_min": 30},
+        "swing": {"breakeven_days": 2.5, "close_days": 5.0},
+    }
+    monkeypatch.setattr(
+        "mt5_executor.mt5_get_positions",
+        lambda: {
+            "error": False,
+            "positions": [
+                {
+                    "ticket": 288617084,
+                    "pair": "USD/MXN",
+                    "direction": "SHORT",
+                    "entry": 17.23455,
+                    "currentPrice": 17.23000,
+                    "sl": 17.25127,
+                    "tp": 17.21147,
+                    "profit": 12.0,
+                    "volume": 0.01,
+                }
+            ],
+        },
+    )
+    be_calls = []
+    close_calls = []
+    monkeypatch.setattr(
+        "mt5_executor.mt5_move_sl_to_breakeven",
+        lambda ticket, entry: be_calls.append((ticket, entry)) or {"success": True},
+    )
+    monkeypatch.setattr(
+        "mt5_executor.mt5_close_position",
+        lambda ticket: close_calls.append(ticket)
+        or {
+            "success": True,
+            "closePrice": 17.23000,
+            "liveProfit": 12.0,
+            "entryPrice": 17.23455,
+            "direction": "SHORT",
+        },
+    )
+
+    timed_exit_monitor._handle_mt5_row(row, cfg)
+
+    assert close_calls == [288617084]
+    assert be_calls == []
 
 # --- 3. Backtest TP1+TP2 Tests ---
 

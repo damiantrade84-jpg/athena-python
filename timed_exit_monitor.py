@@ -276,6 +276,21 @@ def _tp_progress(current_price: float, entry: float, tp: float, direction: str) 
         return 0.0
 
 
+def _live_current_price(live: dict, fallback: float = 0.0) -> float:
+    """Return live mark/current price from a normalized broker position."""
+    for key in ("currentPrice", "markPrice", "lastPrice", "price_current", "price"):
+        try:
+            value = float(live.get(key) or 0.0)
+        except (TypeError, ValueError):
+            value = 0.0
+        if value > 0:
+            return value
+    try:
+        return float(fallback or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
     """Apply timed exit logic to a single MT5 trade row."""
     try:
@@ -317,7 +332,7 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
         return  # position already closed
 
     profit    = float(live.get("profit", 0))
-    cur_price = float(live.get("entry", entry))  # best proxy without live tick
+    cur_price = _live_current_price(live, entry)
     tp        = float(row.get("tp") or live.get("tp") or 0)
     direction = live.get("direction", row.get("direction", "LONG"))
 
@@ -330,8 +345,56 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
         close_trigger_min = float(scfg["close_min"])
         exempt_threshold  = 1.0  # not used for scalp/intraday
 
+    close_due_now = mins >= close_trigger_min
+    be_due_now = mins >= be_trigger_min
+
+    if (
+        style != "swing"
+        and close_due_now
+        and be_due_now
+        and close_trigger_min <= be_trigger_min
+        and profit > 0
+    ):
+        result = mt5_close_position(ticket)
+        if result.get("success"):
+            actual_close_price = result.get("closePrice")
+            live_pnl = result.get("liveProfit", 0.0)
+            entry_price = result.get("entryPrice")
+
+            pnl_r = 0.0
+            if live_pnl != 0 and row.get("risk_amount") and row["risk_amount"] > 0:
+                pnl_r = round(live_pnl / float(row["risk_amount"]), 2)
+
+            if db_path:
+                _mark_timed_close(
+                    db_path,
+                    row,
+                    "mt5",
+                    actual_close_price=actual_close_price,
+                    live_pnl=live_pnl,
+                )
+            log.info(
+                f"[TIMED_EXIT] TIMED CLOSE: {row['pair']} ticket={ticket} "
+                f"style={style} mins={mins:.0f} profit=${live_pnl:.2f} R={pnl_r} "
+                f"fill={actual_close_price} entry={entry_price}"
+            )
+            try:
+                telegram_notify.notify_trade_closed(
+                    pair=row["pair"],
+                    pnl_r=pnl_r,
+                    is_win=live_pnl > 0,
+                    duration_minutes=mins,
+                )
+            except Exception:
+                pass
+            return
+        log.warning(
+            f"[TIMED_EXIT] Immediate close failed before BE: {row['pair']} ticket={ticket} "
+            f"— {result.get('error')}"
+        )
+
     # ── Step 1: Breakeven trigger ─────────────────────────────────────────────
-    if mins >= be_trigger_min and ticket not in _be_done and profit > 0:
+    if be_due_now and ticket not in _be_done and profit > 0:
         result = mt5_move_sl_to_breakeven(ticket, entry)
         if result.get("success") and not result.get("skipped"):
             _be_done.add(ticket)
@@ -349,7 +412,7 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
                 pass
 
     # ── Step 2: Close trigger ─────────────────────────────────────────────────
-    if mins >= close_trigger_min:
+    if close_due_now:
         if profit <= 0:
             log.debug(
                 f"[TIMED_EXIT] {row['pair']} ticket={ticket} at {mins:.0f}min "
@@ -453,7 +516,7 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
         return  # already closed
 
     profit    = float(live.get("profit", 0))
-    cur_price = float(live.get("entry", entry))
+    cur_price = _live_current_price(live, entry)
     tp        = float(row.get("tp") or live.get("tp") or 0)
     direction = live.get("direction", row.get("direction", "LONG"))
     volume    = float(live.get("volume", 0))
@@ -469,8 +532,40 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
 
     ccxt_sym = bybit_map_symbol(pair)
 
+    close_due_now = mins >= close_trigger_min
+    be_due_now = mins >= be_trigger_min
+
+    if (
+        style != "swing"
+        and close_due_now
+        and be_due_now
+        and close_trigger_min <= be_trigger_min
+        and profit > 0
+    ):
+        result = bybit_close_position(pair, direction, volume)
+        if result.get("success"):
+            if db_path:
+                _mark_timed_close(db_path, row, "bybit")
+            log.info(
+                f"[TIMED_EXIT] TIMED CLOSE: {pair} style={style} "
+                f"mins={mins:.0f} profit=${profit:.2f}"
+            )
+            try:
+                telegram_notify.notify_trade_closed(
+                    pair=pair,
+                    pnl_r=0,
+                    is_win=profit > 0,
+                    duration_minutes=mins,
+                )
+            except Exception:
+                pass
+            return
+        log.warning(
+            f"[TIMED_EXIT] Immediate close failed before BE: {pair} — {result.get('error')}"
+        )
+
     # ── Step 1: Breakeven trigger ─────────────────────────────────────────────
-    if mins >= be_trigger_min and ticket not in _be_done and profit > 0 and ccxt_sym:
+    if be_due_now and ticket not in _be_done and profit > 0 and ccxt_sym:
         result = bybit_move_sl_to_breakeven(ccxt_sym, direction, entry, volume)
         if result.get("success"):
             _be_done.add(ticket)
@@ -487,7 +582,7 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
                 pass
 
     # ── Step 2: Close trigger ─────────────────────────────────────────────────
-    if mins >= close_trigger_min:
+    if close_due_now:
         if profit <= 0:
             log.debug(
                 f"[TIMED_EXIT] {pair} at {mins:.0f}min — not in profit (${profit:.2f}), SL protecting"
