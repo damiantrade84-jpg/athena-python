@@ -102,10 +102,40 @@ def report(rows, title, min_n=30):
         print(f"  {k:<32} {n:>5} {rho:>+8.3f} {m:>+10.3f} {s:>10.3f}{flag}")
 
 
+def _wr_hit(rows):
+    if not rows:
+        return 0.0, 0
+    r_vals = [float(r.get("resultR")) for r in rows if r.get("resultR") is not None]
+    if not r_vals:
+        return 0.0, 0
+    wins = sum(1 for v in r_vals if v > 0)
+    return wins / len(r_vals), len(r_vals)
+
+
+def _summary(rows, label):
+    wr, n = _wr_hit(rows)
+    r_vals = [float(r.get("resultR")) for r in rows if r.get("resultR") is not None]
+    if not r_vals:
+        print(f"  {label:<32} n={n:>4} (no resultR)")
+        return
+    avg = sum(r_vals) / len(r_vals)
+    print(
+        f"  {label:<32} n={n:>4}  WR={wr*100:>5.1f}%  avgR={avg:+.3f}"
+    )
+
+
 def main(argv):
     p = argparse.ArgumentParser()
     p.add_argument("dump", nargs="?", default="factor_dump.jsonl")
     p.add_argument("--min-n", type=int, default=30)
+    p.add_argument(
+        "--split",
+        default="class,class_style",
+        help=(
+            "Comma-separated splits to report. Options: class, class_style, "
+            "direction, regime, class_direction, class_regime, direction_regime."
+        ),
+    )
     args = p.parse_args(argv)
 
     path = Path(args.dump)
@@ -116,26 +146,88 @@ def main(argv):
     rows = load(path)
     print(f"Loaded {len(rows)} trades from {path}")
 
+    # Top-line WR / avgR sanity per split dimension — cheap and extremely useful
+    print("\n=== WR / avgR summary ===")
+    _summary(rows, "ALL")
+    for cls in sorted({r.get("asset_class") or "unknown" for r in rows}):
+        _summary([r for r in rows if (r.get("asset_class") or "unknown") == cls], f"class={cls}")
+    for d in sorted({r.get("direction") or "UNKNOWN" for r in rows}):
+        _summary([r for r in rows if (r.get("direction") or "UNKNOWN") == d], f"direction={d}")
+    for reg in sorted({r.get("regime") or "UNKNOWN" for r in rows}):
+        _summary([r for r in rows if (r.get("regime") or "UNKNOWN") == reg], f"regime={reg}")
+    for cls in sorted({r.get("asset_class") or "unknown" for r in rows}):
+        for d in sorted({r.get("direction") or "UNKNOWN" for r in rows}):
+            subset = [
+                r for r in rows
+                if (r.get("asset_class") or "unknown") == cls
+                and (r.get("direction") or "UNKNOWN") == d
+            ]
+            if subset:
+                _summary(subset, f"{cls}/{d}")
+
     report(rows, "ALL", min_n=args.min_n)
 
-    by_class = defaultdict(list)
-    for r in rows:
-        by_class[r.get("asset_class") or "unknown"].append(r)
-    for cls in sorted(by_class):
-        report(by_class[cls], f"CLASS={cls}", min_n=args.min_n)
+    splits = [s.strip() for s in args.split.split(",") if s.strip()]
 
-    by_cs = defaultdict(list)
-    for r in rows:
-        key = f"{r.get('asset_class')}/{r.get('style')}"
-        by_cs[key].append(r)
-    for k in sorted(by_cs):
-        report(by_cs[k], k, min_n=args.min_n)
+    if "class" in splits:
+        by_class = defaultdict(list)
+        for r in rows:
+            by_class[r.get("asset_class") or "unknown"].append(r)
+        for cls in sorted(by_class):
+            report(by_class[cls], f"CLASS={cls}", min_n=args.min_n)
+
+    if "class_style" in splits:
+        by_cs = defaultdict(list)
+        for r in rows:
+            key = f"{r.get('asset_class')}/{r.get('style')}"
+            by_cs[key].append(r)
+        for k in sorted(by_cs):
+            report(by_cs[k], k, min_n=args.min_n)
+
+    if "direction" in splits:
+        by_dir = defaultdict(list)
+        for r in rows:
+            by_dir[r.get("direction") or "UNKNOWN"].append(r)
+        for d in sorted(by_dir):
+            report(by_dir[d], f"DIRECTION={d}", min_n=args.min_n)
+
+    if "regime" in splits:
+        by_reg = defaultdict(list)
+        for r in rows:
+            by_reg[r.get("regime") or "UNKNOWN"].append(r)
+        for reg in sorted(by_reg):
+            report(by_reg[reg], f"REGIME={reg}", min_n=args.min_n)
+
+    if "class_direction" in splits:
+        by_cd = defaultdict(list)
+        for r in rows:
+            key = f"{r.get('asset_class')}/{r.get('direction')}"
+            by_cd[key].append(r)
+        for k in sorted(by_cd):
+            report(by_cd[k], f"CLASS/DIR={k}", min_n=args.min_n)
+
+    if "class_regime" in splits:
+        by_cr = defaultdict(list)
+        for r in rows:
+            key = f"{r.get('asset_class')}/{r.get('regime')}"
+            by_cr[key].append(r)
+        for k in sorted(by_cr):
+            report(by_cr[k], f"CLASS/REGIME={k}", min_n=args.min_n)
+
+    if "direction_regime" in splits:
+        by_dr = defaultdict(list)
+        for r in rows:
+            key = f"{r.get('direction')}/{r.get('regime')}"
+            by_dr[key].append(r)
+        for k in sorted(by_dr):
+            report(by_dr[k], f"DIR/REGIME={k}", min_n=args.min_n)
 
     print("\nReading guide:")
     print("  corr(R) = Pearson correlation of factor value vs trade R-multiple.")
     print("  SUSPECT    = negative corr (|rho|>=0.20, n>=min_n): factor pushes score up but aligns with losers.")
     print("  PROTECTIVE = positive corr: factor correctly ranks winners.")
-    print("  Flat factors (std=0) or low-coverage (n<min_n) are skipped.\n")
+    print("  Flat factors (std=0) or low-coverage (n<min_n) are skipped.")
+    print("  WR summary is unfiltered by min_n — use it to see if a split is worth reading.\n")
     return 0
 
 

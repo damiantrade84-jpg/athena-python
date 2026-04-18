@@ -44,6 +44,7 @@ from scoring import (
     get_score_threshold,
     get_pair_profile,
     get_pair_score_group,
+    is_trend_state_blocked,
 )
 from meta_learner import meta_report
 from research_metrics import build_research_metrics, enrich_backtest_summary
@@ -1195,6 +1196,11 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 i += 1
                 continue
 
+            if is_trend_state_blocked(_ts, _pair_ctx):
+                funnel["fail_regime"] = funnel.get("fail_regime", 0) + 1
+                i += 1
+                continue
+
             direction = res["direction"]
 
             # Indicator windows end at i-1, so the first non-lookahead fill is bar i open.
@@ -1669,6 +1675,11 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 i += 1
                 continue
 
+            if is_trend_state_blocked(_ts, _pair_ctx):
+                funnel["fail_regime"] = funnel.get("fail_regime", 0) + 1
+                i += 1
+                continue
+
             direction = res["direction"]
 
             # Indicator windows end at i-1, so the first non-lookahead fill is bar i open.
@@ -2120,6 +2131,11 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             if res["score"] < bt_min:
                 funnel["fail_score"] += 1
+                i += 1
+                continue
+
+            if is_trend_state_blocked(_ts, _pair_ctx):
+                funnel["fail_regime"] = funnel.get("fail_regime", 0) + 1
                 i += 1
                 continue
 

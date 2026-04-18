@@ -629,6 +629,12 @@ CONFIG: dict = {
         "stock": ["DEAD RANGING", "RANGING"],
         "index": ["DEAD RANGING", "RANGING"],
     },
+    # Engine A trend-state block list for live scan tier classification AND
+    # backtest entry. Research 2026-04-18 (n=393, 4 crypto + 4 forex, intraday)
+    # showed DEAD RANGING (WR 18.5%, avgR -0.59R) and DEVELOPING (WR 32.7%,
+    # avgR -0.19R) are reliably unprofitable. Accepts a flat list (global)
+    # or a per-asset-class dict with optional "default" fallback.
+    "ENGINE_A_BLOCKED_TREND_STATES": ["DEAD RANGING", "DEVELOPING"],
     "AUTO_TRADE_BLOCKED_REGIMES": {
         "default": ["RANGING"],
         "crypto": ["RANGING"],

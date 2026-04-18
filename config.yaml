@@ -71,9 +71,10 @@ WEINSTEIN_LOOKBACK:
 # false = backtest mirrors live MIN_CONFLUENCE_* (parity). Live scans always use live gates.
 # RESEARCH_MODE also enables the BT chain (legacy); prefer BACKTEST_USE_BT_MIN_THRESHOLDS.
 RESEARCH_MODE: false
-# p75-diagnostic run (2026-04-17): BT chain enabled, class-level BT_MIN set to
-# observed live-score p75 per asset class, subgroup overrides emptied so the
-# class gate actually binds. Live gates untouched.
+# Engine A backtest: false = same threshold chain as live (min_confluence →
+# MIN_CONFLUENCE_GROUP → MIN_CONFLUENCE_CLASS). True = use pair bt_min →
+# BT_MIN_GROUP → BT_MIN (research / stricter runs). p75 diagnostic values below
+# are inactive unless this flag is true.
 BACKTEST_USE_BT_MIN_THRESHOLDS: true
 BT_MIN:
   crypto:    2.15   # live-score p75 (was 0.95)
@@ -195,6 +196,20 @@ ENGINE_C_BT_EXIT:
       be_arm_rr: 1.5
       be_min_target_rr: 1.8
 
+
+# Engine A trend-state block list — applied to BOTH live scan tier classification
+# and Engine A backtest entry. Signals in a blocked regime demote from "trade" to
+# "watchlist" live, and are skipped in backtests (funnel["fail_regime"]).
+# Research 2026-04-18 (factor_dump_intra2.jsonl, n=393 intraday trades,
+# 4 crypto + 4 forex):
+#   DEAD RANGING — WR 18.5%, avgR -0.59R  (strong block)
+#   DEVELOPING   — WR 32.7%, avgR -0.19R  (clear loser)
+#   RANGING      — WR 41.3%, avgR +0.12R  (keep)
+#   TRENDING     — WR 39.3%, avgR +0.04R  (keep)
+# Flat list = global block; dict form = per-asset-class with optional "default".
+ENGINE_A_BLOCKED_TREND_STATES:
+  - "DEAD RANGING"
+  - "DEVELOPING"
 
 # Per-class live scan minimum confluence — execute / tradeSignals tier threshold.
 # Forex: forex_scoring 0–2.0 (true max ~1.97). Non-forex: factor engine (true bounded 0–3.0).
