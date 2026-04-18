@@ -635,6 +635,54 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 
 ## DECISIONS
 
+## 2026-04-18: Engine A scorer-is-noise confirmation (factor-level probe)
+
+**Conclusion:** Engine A's scorer output is statistically uncorrelated with trade outcome at both the aggregate and per-factor level. No single-factor polarity flip will rescue WR. Entry-logic redesign is the next branch, not gate/weight tuning.
+
+**Chain of evidence this session:**
+1. `diagnose_score_direction.py` (n=265 closed audit rows): Spearman(score, R) = **−0.018**. Score quintile WR is **inverted** — Q5 (highest score) WR 30.2% < Q1 37.7%. Directional hit-rate **42.3%** (worse than coin-flip).
+2. Factor-level probe via `diagnose_factors.py` showed only 41/265 audit rows had populated `factors_json` (15.5% coverage) — most historical rows pre-dated the audit-writer fix. Too sparse to trust any per-factor correlation.
+3. **camelCase `factors_json` bug found and fixed** at `athena.py:4788` and `athena.py:6050`. Both audit-write sites used `sig.get("factor_scores")` (snake_case) but the signal dict exposes `factorScores` (CLAUDE.md Hard Rule 23). New rows now populate correctly.
+4. Built `instrumented_backtest.py` (Engine A backtest with factor sidecar JSONL) + `analyze_factor_dump.py` (Pearson per factor vs R). Additive fields-only edit to `backtest_runner.py` (three `trades.append` sites: swing/intraday/scalp) — logic unchanged.
+5. Ran across BTC/USDT, ETH/USDT, EUR/USD intraday → **190 factor-populated trades**. Killed mid-run; sample adequate.
+
+**Factor-level findings (n=190, pooled; intraday):**
+- **No factor crosses |ρ|≥0.20.** GBP/USD smoke (n=32) had `fvg_bonus`/`fvg_overlap` at −0.447 but this washed to −0.091 when pooled with EUR/USD — pure small-sample noise.
+- Strongest negative: crypto `trend` factor ρ=−0.175 (mean signed value −1.35). Heaviest weight in `factor_scoring.py`. Suggestive but below threshold — needs a bigger crypto sample to confirm, and even at −0.175 it's not a polarity bug.
+- Strongest positive: crypto `volume_strength` ρ=+0.130, forex `liquidity_sweep` ρ=+0.097. Weak.
+- Verdict matches `diagnose_score_direction.py`: **SCORER-IS-NOISE branch**, not DIRECTION-IS-RANDOM. A polarity flip on any single factor will not rescue WR.
+
+**What was NOT the problem (ruled out this session + prior sessions):**
+- BT gate level (2.3× range, flat WR across gates)
+- Hurst gate (within noise — measurement revert on 2026-04-18)
+- Context propagation (funding/OI 100%/99.8% coverage)
+- External-audit `pairMaxScore=3.0` forex claim (stale JSON from 2026-04-05, pre-scale-fix)
+- External-audit `bisect` lookahead claim (all sites use `bisect_left`)
+- Individual factor sign inversion
+
+**Open next steps (in priority order):**
+1. **LONG/SHORT split** on the 190-trade dump — 42.3% dir hit-rate may be one-sided (scorer right on LONG, broken on SHORT, or vice versa). `analyze_factor_dump.py` needs a `--split direction` flag.
+2. **Regime split** on same dump — scorer may work in TRENDING and fail in RANGING.
+3. **If neither split isolates the issue:** escalate to entry-timing redesign discussion with explicit scope approval. Options include: feature engineering (new factors from orderflow/swing structure), model replacement (ML-ranked entry instead of linear weight), or style pruning (drop whichever style contributes most to random portion).
+
+**Code changes this session (non-scoring):**
+- `scoring.py:179-186` — fixed BT fall-through trap where LIVE `MIN_CONFLUENCE_GROUP` bypassed class-level `BT_MIN` when `BACKTEST_USE_BT_MIN_THRESHOLDS=true` (prior session bug).
+- `athena.py:4788-4795` + `athena.py:6050-6057` — fixed camelCase `factors_json` bug.
+- `athena.py` `_update_trade_outcome` — added |R|>50 sanity clamp + asset-typed fallback gate (prevents the −44554R EUR/CHF corruption from contaminating aggregates).
+- `forex_scoring.py` — added `BACKTEST_DISABLE_HURST_GATE` opt-in measurement flag (reversible, backtest-only).
+- `config.yaml:355` — `BACKTEST_DISABLE_HURST_GATE: false` (measurement complete, reverted).
+- `backtest_runner.py` — three `trades.append` sites now carry `factors` + `factor_weights` for sidecar analysis. Additive only; scoring logic untouched.
+
+**New read-only diagnostic scripts (no writes, `mode=ro` sqlite):**
+- `diagnose_score_direction.py` — Spearman / quintile WR / directional hit-rate
+- `diagnose_factors.py` — per-factor Pearson correlation (audit_log-based; low coverage pre-fix)
+- `diagnose_style.py` — WR/SL/TP/avgR breakdown by (class, style)
+- `probe_bt_context.py` — BTC/USDT funding/OI coverage probe
+- `instrumented_backtest.py` — runs `backtest_pair` across a pair universe, dumps `factor_dump.jsonl` sidecar (gitignored)
+- `analyze_factor_dump.py` — per-factor Pearson(factor, R), splits by class and style
+
+---
+
 ## 2026-04-17: Engine A edge root-cause investigation (read-only, diagnostic)
 
 **Conclusion: the Engine A edge loss is NOT the BT score gate.** Three backtest runs on same pair set at different gates produced essentially identical WR:

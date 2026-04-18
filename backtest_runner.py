@@ -1438,6 +1438,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     "wf_fold": _vf["wf_fold"],
                     "validation_mode": _canonical_vm,
                     "volAdj": _vol_adj,
+                    "factors": res.get("factor_scores") or {},
+                    "factor_weights": res.get("factor_weights") or {},
                     **_exit_path,
                 }
             )
@@ -1898,6 +1900,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     "wf_fold": _vf["wf_fold"],
                     "validation_mode": _canonical_vm,
                     "volAdj": _vol_adj,
+                    "factors": res.get("factor_scores") or {},
+                    "factor_weights": res.get("factor_weights") or {},
                     **_exit_path,
                 }
             )
@@ -2348,6 +2352,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     "wf_fold": _vf["wf_fold"],
                     "validation_mode": _canonical_vm,
                     "volAdj": _vol_adj,
+                    "factors": res.get("factor_scores") or {},
+                    "factor_weights": res.get("factor_weights") or {},
                     **_exit_path,
                 }
             )

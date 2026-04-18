@@ -352,6 +352,7 @@ ADAPTIVE_WEIGHTS_ENABLED: false
 # ── Backtest Parity Controls ─────────────────────────
 BACKTEST_EVENT_RISK_GATING: false
 BACKTEST_SENTIMENT_GATING: false
+BACKTEST_DISABLE_HURST_GATE: false  # Measurement complete 2026-04-18: disabling added +2 trades / +1.6pp WR on GBP/USD — within noise. Hurst gate is not the edge problem.
 
 # ── Adaptive Kelly Position Sizing ────────────────────────
 ADAPTIVE_KELLY_ENABLED: true       # Use fractional Kelly for dynamic position sizing

@@ -29,6 +29,7 @@ test_ws.py
 
 # Backtest result dumps
 bt_*.json
+factor_dump*.jsonl
 
 # Tick data folders
 tickdata_test/

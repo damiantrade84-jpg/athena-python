@@ -176,10 +176,14 @@ def get_score_threshold(pair: dict, is_backtest: bool = False) -> float:
         if group_threshold is not None:
             return float(group_threshold)
 
-    group_cfg = CONFIG.get("MIN_CONFLUENCE_GROUP", {}) or {}
-    group_threshold = (group_cfg.get(ptype, {}) or {}).get(score_group)
-    if group_threshold is not None:
-        return float(group_threshold)
+    # Live group fallback — must NOT apply to backtest-with-BT-chain, otherwise
+    # the BT path silently returns LIVE thresholds whenever BT_MIN_GROUP is missing
+    # a subgroup, making class-level BT_MIN (below) unreachable.
+    if not (is_backtest and use_bt_chain):
+        group_cfg = CONFIG.get("MIN_CONFLUENCE_GROUP", {}) or {}
+        group_threshold = (group_cfg.get(ptype, {}) or {}).get(score_group)
+        if group_threshold is not None:
+            return float(group_threshold)
 
     # 3. Asset-Class defaults
     if is_backtest and use_bt_chain:

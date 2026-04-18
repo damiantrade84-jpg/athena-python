@@ -735,6 +735,13 @@ def compute_forex_score(
                     _hurst_gate_enabled = bool(_sg_hurst_cfg.get("enabled", _hurst_gate_enabled))
                 if "threshold" in _sg_hurst_cfg:
                     _hurst_threshold = float(_sg_hurst_cfg.get("threshold", _hurst_threshold))
+
+        # Backtest-only opt-in bypass — measurement flag, reversible via config.
+        # When BACKTEST_DISABLE_HURST_GATE is true, backtests ignore the Hurst
+        # veto so we can compare WR/PF with and without the gate. Live is
+        # never affected by this flag.
+        if backtest_mode and bool(CONFIG.get("BACKTEST_DISABLE_HURST_GATE", False)):
+            _hurst_gate_enabled = False
     except Exception:
         pass
 

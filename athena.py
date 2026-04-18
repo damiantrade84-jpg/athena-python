@@ -4785,9 +4785,12 @@ def api_analyze():
             )
 
             with sqlite3.connect(_AUDIT_DB, timeout=15.0) as _con:
+                # CLAUDE.md Hard Rule 23: signal dict uses camelCase. Legacy
+                # snake_case fallback kept so any upstream caller that still
+                # sets the old keys continues to populate.
                 _factors = {
-                    "scores": sig.get("factor_scores"),
-                    "weights": sig.get("factor_weights"),
+                    "scores": sig.get("factorScores") or sig.get("factor_scores"),
+                    "weights": sig.get("factorWeights") or sig.get("factor_weights"),
                     "disabled": sig.get("disabledFactors"),
                     "regime": sig.get("regimeName"),
                 }
@@ -6048,9 +6051,10 @@ def api_webhook():
 
             try:
                 with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
+                    # CLAUDE.md Hard Rule 23: signal dict uses camelCase.
                     _factors = {
-                        "scores": sig.get("factor_scores"),
-                        "weights": sig.get("factor_weights"),
+                        "scores": sig.get("factorScores") or sig.get("factor_scores"),
+                        "weights": sig.get("factorWeights") or sig.get("factor_weights"),
                         "disabled": sig.get("disabledFactors"),
                         "regime": sig.get("regimeName"),
                     }
