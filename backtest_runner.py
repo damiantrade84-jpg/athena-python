@@ -19,6 +19,7 @@ from datetime import datetime, timezone, timedelta
 import pandas as pd
 
 from athena_runtime import rt as _art_rt
+from backtest_candle_cache import fetch_backtest_candles, fetch_backtest_eodhd_intraday
 from calibration import calibration_report
 from config import CONFIG, _json_safe
 from indicators import (
@@ -80,6 +81,41 @@ log = logging.getLogger("sentinel")
 
 def _rt():
     return _art_rt()
+
+
+def _bt_cached_fetch(
+    pair: dict,
+    tf: str,
+    limit: int,
+    fetcher,
+    *,
+    provider: str,
+    min_bars: int | None = None,
+):
+    return fetch_backtest_candles(
+        pair,
+        tf,
+        limit,
+        fetcher,
+        provider=provider,
+        min_bars=min_bars,
+    )
+
+
+def _bt_cached_eodhd_intraday(
+    pair: dict,
+    *,
+    days: int = 730,
+    h4_limit: int = 4400,
+    h1_limit: int = 17600,
+):
+    return fetch_backtest_eodhd_intraday(
+        pair,
+        days,
+        lambda fetch_days: _rt().fetch_eodhd_intraday_bt(pair, days=fetch_days),
+        h4_limit=h4_limit,
+        h1_limit=h1_limit,
+    )
 
 
 def _live_base_risk_pct(asset_type: str) -> float:
@@ -737,11 +773,23 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         elif _ptype in ("stock", "commodity", "index"):
             # Stocks/Commodities/Indices: EODHD D1 + EODHD intraday (730d)
             # Fallback chain: EODHD → Polygon (commodities) → yfinance
-            d1_raw = _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 750)) or _rt().fetch_candles(
-                pair, "D1", 750
+            d1_raw = _bt_cached_fetch(
+                pair,
+                "D1",
+                750,
+                lambda lim: _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", lim)),
+                provider="eodhd",
+                min_bars=230,
+            ) or _bt_cached_fetch(
+                pair,
+                "D1",
+                750,
+                lambda lim: _rt().fetch_candles(pair, "D1", lim),
+                provider=str(pair.get("source") or "fallback"),
+                min_bars=230,
             )
 
-            h4_raw, h1_raw = _rt().fetch_eodhd_intraday_bt(pair, days=730)
+            h4_raw, h1_raw = _bt_cached_eodhd_intraday(pair, days=730)
 
             if not h4_raw or not h1_raw:
                 # Try Polygon first for commodities (better data quality than yfinance)
@@ -780,11 +828,32 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                             h1_raw = _yf_h1
 
         else:
-            d1_raw = _rt().fetch_candles(pair, "D1", 750)
+            d1_raw = _bt_cached_fetch(
+                pair,
+                "D1",
+                750,
+                lambda lim: _rt().fetch_candles(pair, "D1", lim),
+                provider=str(pair.get("source") or "fallback"),
+                min_bars=230,
+            )
 
-            h4_raw = _rt().fetch_candles(pair, "H4", 4400)
+            h4_raw = _bt_cached_fetch(
+                pair,
+                "H4",
+                4400,
+                lambda lim: _rt().fetch_candles(pair, "H4", lim),
+                provider=str(pair.get("source") or "fallback"),
+                min_bars=500,
+            )
 
-            h1_raw = _rt().fetch_candles(pair, "H1", 17600)
+            h1_raw = _bt_cached_fetch(
+                pair,
+                "H1",
+                17600,
+                lambda lim: _rt().fetch_candles(pair, "H1", lim),
+                provider=str(pair.get("source") or "fallback"),
+                min_bars=500,
+            )
 
         if not d1_raw:
             return {"error": f"No D1 data for {pair['display']}"}
@@ -1196,7 +1265,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 i += 1
                 continue
 
-            if is_trend_state_blocked(_ts, _pair_ctx):
+            if is_trend_state_blocked(_ts, _pair_ctx, scope="backtest"):
                 funnel["fail_regime"] = funnel.get("fail_regime", 0) + 1
                 i += 1
                 continue
@@ -1675,7 +1744,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 i += 1
                 continue
 
-            if is_trend_state_blocked(_ts, _pair_ctx):
+            if is_trend_state_blocked(_ts, _pair_ctx, scope="backtest"):
                 funnel["fail_regime"] = funnel.get("fail_regime", 0) + 1
                 i += 1
                 continue
@@ -2134,7 +2203,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 i += 1
                 continue
 
-            if is_trend_state_blocked(_ts, _pair_ctx):
+            if is_trend_state_blocked(_ts, _pair_ctx, scope="backtest"):
                 funnel["fail_regime"] = funnel.get("fail_regime", 0) + 1
                 i += 1
                 continue

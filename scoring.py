@@ -689,37 +689,66 @@ def _build_event_risk(
     return risk
 
 
-def get_blocked_trend_states(pair: dict | None = None) -> set[str]:
-    """Resolve Engine A blocked trend states for live scan + backtest.
+def get_blocked_trend_states(
+    pair: dict | None = None,
+    scope: str = "backtest",
+) -> set[str]:
+    """Resolve Engine A blocked trend states for a given scope.
 
     Research 2026-04-18 (factor_dump_intra2.jsonl, n=393 trades, 4 crypto + 4 forex,
     intraday) showed DEAD RANGING (WR 18.5%, avgR -0.59) and DEVELOPING (WR 32.7%,
-    avgR -0.19) are reliably unprofitable. Gate them here so live scan tiers to
-    "watchlist" instead of "trade" and backtest skips entries in those regimes.
+    avgR -0.19) are reliably unprofitable in backtest. Live-scan tier classification
+    is kept untouched by default (scope="live" returns empty unless explicitly
+    configured).
 
     Config key: ``ENGINE_A_BLOCKED_TREND_STATES``
-        - list form:  global block list, applied to every pair
-        - dict form:  per asset-class list, ``default`` falls through if pair.type absent
+        - flat list:            treated as backtest-only (back-compat)
+        - scope dict:           {"backtest": [...], "live": [...]}
+        - scope + per-asset:    {"backtest": {"default": [...], "forex": [...]}}
+
+    ``scope`` must be "backtest" or "live".
     """
     cfg = CONFIG.get("ENGINE_A_BLOCKED_TREND_STATES")
     if cfg is None:
         return set()
+
+    scope_key = "live" if str(scope).lower() == "live" else "backtest"
+
+    # Flat list => apply to backtest only (research source), leave live untouched.
     if isinstance(cfg, list):
-        return {str(s).upper() for s in cfg if s}
-    if isinstance(cfg, dict):
+        if scope_key == "backtest":
+            return {str(s).upper() for s in cfg if s}
+        return set()
+
+    if not isinstance(cfg, dict):
+        return set()
+
+    scoped = cfg.get(scope_key)
+    if scoped is None:
+        return set()
+
+    if isinstance(scoped, list):
+        return {str(s).upper() for s in scoped if s}
+
+    if isinstance(scoped, dict):
         ptype = (pair or {}).get("type", "") if isinstance(pair, dict) else ""
-        values = cfg.get(ptype)
+        values = scoped.get(ptype)
         if values is None:
-            values = cfg.get("default", [])
+            values = scoped.get("default", [])
         return {str(s).upper() for s in (values or []) if s}
+
     return set()
 
 
-def is_trend_state_blocked(trend_state: str | None, pair: dict | None = None) -> bool:
-    """Return True if trend_state is in ENGINE_A_BLOCKED_TREND_STATES for this pair."""
+def is_trend_state_blocked(
+    trend_state: str | None,
+    pair: dict | None = None,
+    scope: str = "backtest",
+) -> bool:
+    """Return True if trend_state is in ENGINE_A_BLOCKED_TREND_STATES for this scope."""
     if not trend_state:
         return False
-    return str(trend_state).upper() in get_blocked_trend_states(pair)
+    return str(trend_state).upper() in get_blocked_trend_states(pair, scope=scope)
 
 
 def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
@@ -730,7 +759,7 @@ def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
     macro_event_blocked = signal.get("macroEventRisk", {}).get("blocked", False)
     exchange_closed = signal.get("exchangeClosed", False)
     trend_state = signal.get("trendState")
-    trend_blocked = is_trend_state_blocked(trend_state, pair)
+    trend_blocked = is_trend_state_blocked(trend_state, pair, scope="live")
     # Risk Gating Parity — allow backtests to skip live blockers unless config-gated ON
     is_research = CONFIG.get("RESEARCH_MODE", False) or CONFIG.get("BACKTEST_RUNNING", False)
     

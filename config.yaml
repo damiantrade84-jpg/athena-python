@@ -197,16 +197,29 @@ ENGINE_C_BT_EXIT:
       be_min_target_rr: 1.8
 
 
-# Engine A trend-state block list — applied to BOTH live scan tier classification
-# and Engine A backtest entry. Signals in a blocked regime demote from "trade" to
-# "watchlist" live, and are skipped in backtests (funnel["fail_regime"]).
+# Engine A trend-state block list — BACKTEST ONLY by default. Live scan tier
+# classification is NOT affected unless a "live" scope is explicitly configured.
+# Signals in a blocked regime are skipped in backtest entries (funnel["fail_regime"]).
+#
 # Research 2026-04-18 (factor_dump_intra2.jsonl, n=393 intraday trades,
 # 4 crypto + 4 forex):
 #   DEAD RANGING — WR 18.5%, avgR -0.59R  (strong block)
 #   DEVELOPING   — WR 32.7%, avgR -0.19R  (clear loser)
 #   RANGING      — WR 41.3%, avgR +0.12R  (keep)
 #   TRENDING     — WR 39.3%, avgR +0.04R  (keep)
-# Flat list = global block; dict form = per-asset-class with optional "default".
+#
+# Formats accepted:
+#   flat list:      applies to backtest only (live untouched) — this is the safe default
+#     ENGINE_A_BLOCKED_TREND_STATES: ["DEAD RANGING", "DEVELOPING"]
+#   scope dict:     choose scopes explicitly
+#     ENGINE_A_BLOCKED_TREND_STATES:
+#       backtest: ["DEAD RANGING", "DEVELOPING"]
+#       live: []                           # leave live tier classification alone
+#   scope + per-class:
+#     ENGINE_A_BLOCKED_TREND_STATES:
+#       backtest:
+#         default: ["DEAD RANGING", "DEVELOPING"]
+#         forex: ["DEAD RANGING"]
 ENGINE_A_BLOCKED_TREND_STATES:
   - "DEAD RANGING"
   - "DEVELOPING"
