@@ -4382,6 +4382,13 @@ def _init_audit_db(db_path: str) -> None:
         "CREATE INDEX IF NOT EXISTS idx_bt_pair ON backtest_results (pair, run_date)"
     )
 
+    # Migrate backtest_results: rename eval_threshold → bt_min for DBs created before the rename
+    _bt_cols = {row[1] for row in con.execute("PRAGMA table_info(backtest_results)")}
+    if "bt_min" not in _bt_cols:
+        con.execute("ALTER TABLE backtest_results ADD COLUMN bt_min REAL")
+        if "eval_threshold" in _bt_cols:
+            con.execute("UPDATE backtest_results SET bt_min = eval_threshold")
+
     # Migrate: add new columns to existing tables that lack them
 
     existing = {row[1] for row in con.execute("PRAGMA table_info(audit_log)")}

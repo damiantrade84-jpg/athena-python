@@ -2852,7 +2852,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             _con.execute(
                 "INSERT INTO backtest_results "
                 "(run_date,pair,asset_type,engine,trades,win_rate,profit_factor,"
-                "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,eval_threshold,atr_source) "
+                "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,bt_min,atr_source) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     __import__("datetime").datetime.utcnow().isoformat(),
@@ -4061,7 +4061,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 _con.execute(
                     "INSERT INTO backtest_results "
                     "(run_date,pair,asset_type,engine,trades,win_rate,profit_factor,"
-                    "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,eval_threshold,atr_source,notes) "
+                    "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,bt_min,atr_source,notes) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         datetime.now(timezone.utc).isoformat(),
@@ -4787,7 +4787,7 @@ def backtest_pair_consensus(
                 _con.execute(
                     "INSERT INTO backtest_results "
                     "(run_date,pair,asset_type,engine,trades,win_rate,profit_factor,"
-                    "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,eval_threshold,atr_source,notes) "
+                    "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,bt_min,atr_source,notes) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         datetime.now(timezone.utc).isoformat(),
