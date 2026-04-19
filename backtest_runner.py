@@ -729,17 +729,59 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         if pair["source"] == "binance":
             # Crypto: paginated H4/H1 for 2+ years of data
 
-            d1_raw = _rt().fetch_binance(sym, "1d", 750)
+            d1_raw = _bt_cached_fetch(
+                pair,
+                "D1",
+                750,
+                lambda lim: _rt().fetch_binance(sym, "1d", lim),
+                provider="binance_futures",
+                min_bars=230,
+            )
 
-            h4_raw = _rt().fetch_binance_paginated(sym, "4h", 4400)
+            h4_raw = _bt_cached_fetch(
+                pair,
+                "H4",
+                4400,
+                lambda lim: _rt().fetch_binance_paginated(sym, "4h", lim),
+                provider="binance_futures",
+                min_bars=500,
+            )
 
-            h1_raw = _rt().fetch_binance_paginated(sym, "1h", 17600)
+            h1_raw = _bt_cached_fetch(
+                pair,
+                "H1",
+                17600,
+                lambda lim: _rt().fetch_binance_paginated(sym, "1h", lim),
+                provider="binance_futures",
+                min_bars=500,
+            )
 
         elif pair["source"] == "mt5":
             # MT5 pairs (forex, commodities): MT5 is PRIMARY for D1/H4/H1, EODHD is fallback only
-            d1_raw = _rt().fetch_candles(pair, "D1", 750)
-            h4_raw = _rt().fetch_candles(pair, "H4", 4400)
-            h1_raw = _rt().fetch_candles(pair, "H1", 17600)
+            d1_raw = _bt_cached_fetch(
+                pair,
+                "D1",
+                750,
+                lambda lim: _rt().fetch_candles(pair, "D1", lim),
+                provider="mt5",
+                min_bars=230,
+            )
+            h4_raw = _bt_cached_fetch(
+                pair,
+                "H4",
+                4400,
+                lambda lim: _rt().fetch_candles(pair, "H4", lim),
+                provider="mt5",
+                min_bars=500,
+            )
+            h1_raw = _bt_cached_fetch(
+                pair,
+                "H1",
+                17600,
+                lambda lim: _rt().fetch_candles(pair, "H1", lim),
+                provider="mt5",
+                min_bars=500,
+            )
             
             # Fallback to EODHD only if MT5 data is insufficient
             _d1_thin = not d1_raw or len(d1_raw or []) < 230
@@ -755,7 +797,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     if _eodhd_d1 and len(_eodhd_d1) > len(d1_raw or []):
                         d1_raw = _eodhd_d1
                 if _h4_thin or _h1_thin:
-                    _eodhd_h4, _eodhd_h1 = _rt().fetch_eodhd_intraday_bt(pair, days=730)
+                    _eodhd_h4, _eodhd_h1 = _bt_cached_eodhd_intraday(pair, days=730)
                     if _h4_thin and _eodhd_h4 and len(_eodhd_h4) > len(h4_raw or []):
                         h4_raw = _eodhd_h4
                     if _h1_thin and _eodhd_h1 and len(_eodhd_h1) > len(h1_raw or []):
@@ -3254,14 +3296,56 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
     if pair.get("source") == "binance":
         # Crypto: paginated Binance fetch — 730 days: D1=750, H4=4400, H1=17600
         sym = pair["symbol"]
-        candles_d1 = _rt().fetch_binance(sym, "1d", 750)
-        candles_h4 = _rt().fetch_binance_paginated(sym, "4h", 4400)
-        candles_h1 = _rt().fetch_binance_paginated(sym, "1h", 17600)
+        candles_d1 = _bt_cached_fetch(
+            pair,
+            "D1",
+            750,
+            lambda lim: _rt().fetch_binance(sym, "1d", lim),
+            provider="binance_futures",
+            min_bars=230,
+        )
+        candles_h4 = _bt_cached_fetch(
+            pair,
+            "H4",
+            4400,
+            lambda lim: _rt().fetch_binance_paginated(sym, "4h", lim),
+            provider="binance_futures",
+            min_bars=500,
+        )
+        candles_h1 = _bt_cached_fetch(
+            pair,
+            "H1",
+            17600,
+            lambda lim: _rt().fetch_binance_paginated(sym, "1h", lim),
+            provider="binance_futures",
+            min_bars=500,
+        )
     elif pair.get("source") == "mt5":
         # MT5 pairs (forex, commodities): MT5 is PRIMARY for D1/H4/H1, EODHD is fallback only
-        candles_d1 = _rt().fetch_candles(pair, "D1", 750)
-        candles_h4 = _rt().fetch_candles(pair, "H4", 4400)
-        candles_h1 = _rt().fetch_candles(pair, "H1", 17600)
+        candles_d1 = _bt_cached_fetch(
+            pair,
+            "D1",
+            750,
+            lambda lim: _rt().fetch_candles(pair, "D1", lim),
+            provider="mt5",
+            min_bars=230,
+        )
+        candles_h4 = _bt_cached_fetch(
+            pair,
+            "H4",
+            4400,
+            lambda lim: _rt().fetch_candles(pair, "H4", lim),
+            provider="mt5",
+            min_bars=500,
+        )
+        candles_h1 = _bt_cached_fetch(
+            pair,
+            "H1",
+            17600,
+            lambda lim: _rt().fetch_candles(pair, "H1", lim),
+            provider="mt5",
+            min_bars=500,
+        )
         
         # Fallback to EODHD only if MT5 data is insufficient
         _d1_thin = not candles_d1 or len(candles_d1 or []) < 230
@@ -3277,7 +3361,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 if _eodhd_d1 and len(_eodhd_d1) > len(candles_d1 or []):
                     candles_d1 = _eodhd_d1
             if _h4_thin or _h1_thin:
-                _eodhd_h4, _eodhd_h1 = _rt().fetch_eodhd_intraday_bt(pair, days=730)
+                _eodhd_h4, _eodhd_h1 = _bt_cached_eodhd_intraday(pair, days=730)
                 if _h4_thin and _eodhd_h4 and len(_eodhd_h4) > len(candles_h4 or []):
                     candles_h4 = _eodhd_h4
                 if _h1_thin and _eodhd_h1 and len(_eodhd_h1) > len(candles_h1 or []):
@@ -3293,14 +3377,40 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                     candles_d1 = _yf_d1
     else:
         # Non-MT5, non-Binance pairs (stocks, indices, etc.): EODHD primary
-        candles_d1 = _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 750)) or _rt().fetch_candles(
-            pair, "D1", 750
+        candles_d1 = _bt_cached_fetch(
+            pair,
+            "D1",
+            750,
+            lambda lim: _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", lim)),
+            provider="eodhd",
+            min_bars=230,
+        ) or _bt_cached_fetch(
+            pair,
+            "D1",
+            750,
+            lambda lim: _rt().fetch_candles(pair, "D1", lim),
+            provider=str(pair.get("source") or "fallback"),
+            min_bars=230,
         )
-        candles_h4, candles_h1 = _rt().fetch_eodhd_intraday_bt(pair, days=730)
+        candles_h4, candles_h1 = _bt_cached_eodhd_intraday(pair, days=730)
         if not candles_h4 or not candles_h1:
             log.warning(f"[ENGINE B BT] {pair['display']} EODHD intraday failed, trying live cache")
-            candles_h4 = _rt().fetch_candles(pair, "H4", 4400)
-            candles_h1 = _rt().fetch_candles(pair, "H1", 17600)
+            candles_h4 = _bt_cached_fetch(
+                pair,
+                "H4",
+                4400,
+                lambda lim: _rt().fetch_candles(pair, "H4", lim),
+                provider=str(pair.get("source") or "fallback"),
+                min_bars=500,
+            )
+            candles_h1 = _bt_cached_fetch(
+                pair,
+                "H1",
+                17600,
+                lambda lim: _rt().fetch_candles(pair, "H1", lim),
+                provider=str(pair.get("source") or "fallback"),
+                min_bars=500,
+            )
 
     if not candles_d1 or not candles_h4 or not candles_h1:
         log.warning(
@@ -4057,27 +4167,97 @@ def backtest_pair_consensus(
 
     if pair.get("source") == "binance":
         sym = pair["symbol"]
-        candles_d1 = _rt().fetch_binance(sym, "1d", 1000)
-        candles_h4 = _rt().fetch_binance_paginated(sym, "4h", 5000)
-        candles_h1 = _rt().fetch_binance_paginated(sym, "1h", 2000)
+        candles_d1 = _bt_cached_fetch(
+            pair,
+            "D1",
+            1000,
+            lambda lim: _rt().fetch_binance(sym, "1d", lim),
+            provider="binance_futures",
+            min_bars=230,
+        )
+        candles_h4 = _bt_cached_fetch(
+            pair,
+            "H4",
+            5000,
+            lambda lim: _rt().fetch_binance_paginated(sym, "4h", lim),
+            provider="binance_futures",
+            min_bars=500,
+        )
+        candles_h1 = _bt_cached_fetch(
+            pair,
+            "H1",
+            2000,
+            lambda lim: _rt().fetch_binance_paginated(sym, "1h", lim),
+            provider="binance_futures",
+            min_bars=500,
+        )
     elif pair.get("source") == "mt5":
-        candles_d1 = _rt().fetch_candles(pair, "D1", 600)
+        candles_d1 = _bt_cached_fetch(
+            pair,
+            "D1",
+            600,
+            lambda lim: _rt().fetch_candles(pair, "D1", lim),
+            provider="mt5",
+            min_bars=230,
+        )
         _yf_sym = _rt().yfinance_symbol_for_pair(pair)
         if (not candles_d1 or len(candles_d1 or []) < 230) and _yf_sym:
             _yf_d1 = _rt().fetch_yfinance(_yf_sym, "D1", 600)
             if _yf_d1 and len(_yf_d1) > len(candles_d1 or []):
                 candles_d1 = _yf_d1
-        candles_h4, candles_h1 = _rt().fetch_eodhd_intraday_bt(pair, days=730)
+        candles_h4, candles_h1 = _bt_cached_eodhd_intraday(pair, days=730, h4_limit=5000, h1_limit=5000)
         if not candles_h4 or not candles_h1:
             log.info(f"[ENGINE C BT] {pair['display']}: EODHD failed, fetching from MT5")
-            candles_h4 = candles_h4 or _rt().fetch_candles(pair, "H4", 5000)
-            candles_h1 = candles_h1 or _rt().fetch_candles(pair, "H1", 5000)
+            candles_h4 = candles_h4 or _bt_cached_fetch(
+                pair,
+                "H4",
+                5000,
+                lambda lim: _rt().fetch_candles(pair, "H4", lim),
+                provider="mt5",
+                min_bars=500,
+            )
+            candles_h1 = candles_h1 or _bt_cached_fetch(
+                pair,
+                "H1",
+                5000,
+                lambda lim: _rt().fetch_candles(pair, "H1", lim),
+                provider="mt5",
+                min_bars=500,
+            )
     else:
-        candles_d1 = _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 600)) or _rt().fetch_candles(pair, "D1", 600)
-        candles_h4, candles_h1 = _rt().fetch_eodhd_intraday_bt(pair, days=730)
+        candles_d1 = _bt_cached_fetch(
+            pair,
+            "D1",
+            600,
+            lambda lim: _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", lim)),
+            provider="eodhd",
+            min_bars=230,
+        ) or _bt_cached_fetch(
+            pair,
+            "D1",
+            600,
+            lambda lim: _rt().fetch_candles(pair, "D1", lim),
+            provider=str(pair.get("source") or "fallback"),
+            min_bars=230,
+        )
+        candles_h4, candles_h1 = _bt_cached_eodhd_intraday(pair, days=730, h4_limit=5000, h1_limit=5000)
         if not candles_h4 or not candles_h1:
-            candles_h4 = candles_h4 or _rt().fetch_candles(pair, "H4", 5000)
-            candles_h1 = candles_h1 or _rt().fetch_candles(pair, "H1", 5000)
+            candles_h4 = candles_h4 or _bt_cached_fetch(
+                pair,
+                "H4",
+                5000,
+                lambda lim: _rt().fetch_candles(pair, "H4", lim),
+                provider=str(pair.get("source") or "fallback"),
+                min_bars=500,
+            )
+            candles_h1 = candles_h1 or _bt_cached_fetch(
+                pair,
+                "H1",
+                5000,
+                lambda lim: _rt().fetch_candles(pair, "H1", lim),
+                provider=str(pair.get("source") or "fallback"),
+                min_bars=500,
+            )
 
     if not candles_d1 or not candles_h4 or not candles_h1:
         log.warning(f"[ENGINE C BT] {pair['display']} insufficient candle data")

@@ -9,6 +9,7 @@ log = logging.getLogger("sentinel")
 
 _ROOT = Path(__file__).resolve().parent
 _LEGACY_CANDLE_CACHE_DB = _ROOT / "candle_cache.db"
+_LEGACY_BACKTEST_CANDLE_CACHE_DB = _ROOT / "backtest_candle_cache.db"
 _LEGACY_BACKUP_DIR = _ROOT / "db_backups"
 
 
@@ -59,6 +60,19 @@ def ensure_candle_cache_db_ready() -> Path:
         log.warning(f"[PATHS] Candle cache migration warning: {exc}")
         return _LEGACY_CANDLE_CACHE_DB
     return target
+
+
+def resolve_backtest_candle_cache_db_path() -> Path:
+    """Resolve the separate backtest candle cache path."""
+    env_path = os.environ.get("ATHENA_BACKTEST_CANDLE_CACHE_DB_PATH", "").strip()
+    if env_path:
+        target = Path(env_path).expanduser()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        return target
+    local_dir = _athena_local_dir()
+    if local_dir is not None:
+        return local_dir / "backtest_candle_cache.db"
+    return _LEGACY_BACKTEST_CANDLE_CACHE_DB
 
 
 def resolve_backup_dir() -> Path:
