@@ -474,11 +474,11 @@ class NakedEngine:
                     c = candles[i]
                     if float(c["close"]) > float(c["open"]):  # bullish candle
                         ob_top = float(c["high"])
-                        ob_bottom = float(c["close"])
+                        ob_bottom = float(c["open"])
                         # Displacement
                         if i + 1 < len(candles):
                             min_after = min(float(candles[j]["low"]) for j in range(i + 1, min(i + 6, len(candles))))
-                            displacement = (ob_bottom - min_after) / atr if atr > 0 else 0
+                            displacement = (ob_top - min_after) / atr if atr > 0 else 0
                         else:
                             displacement = 0
                         # Volume strength
@@ -496,8 +496,11 @@ class NakedEngine:
                             "mitigated": False,
                         })
                         break
-        except Exception:
-            pass
+        except Exception as _ob_err:
+            import logging
+            logging.getLogger(__name__).debug(
+                f"[OB-DETECT] exception during detection: {_ob_err}"
+            )
 
         return obs
 
