@@ -10798,6 +10798,36 @@ function buildScalpCard(s, idx) {
   '</div>';
 }
 
+function markScalpSignalRejected(sid, reason, data) {
+  var card = document.getElementById('scalp-card-' + sid);
+  if (!card) return;
+  var skipped = data && data.skipped && data.skipped.length ? data.skipped[0] : {};
+  var detail = 'Fresh scan rejected this setup: ' + (reason || 'setup invalidated');
+  if (skipped.ai_grade) {
+    detail += ' | grade ' + skipped.ai_grade;
+    if (skipped.ai_score != null) detail += ' ' + skipped.ai_score;
+    if (skipped.min_grade) detail += ' below min ' + skipped.min_grade;
+  }
+  card.style.opacity = '0.62';
+  card.style.borderLeftColor = '#ef4444';
+  var body = card.querySelector('.card-body');
+  if (body) {
+    var existing = card.querySelector('.scalp-invalid-banner');
+    if (existing) existing.parentNode.removeChild(existing);
+    var banner = document.createElement('div');
+    banner.className = 'scalp-invalid-banner';
+    banner.style.cssText = 'margin-bottom:10px;padding:9px 10px;border:1px solid rgba(239,68,68,0.35);background:rgba(239,68,68,0.10);border-radius:8px;color:#fecaca;font-size:10px;line-height:1.45;font-weight:700';
+    banner.textContent = detail;
+    body.insertBefore(banner, body.firstChild);
+  }
+  var execBtn = card.querySelector('.exec-btn');
+  if (execBtn) {
+    execBtn.disabled = true;
+    execBtn.textContent = 'STALE - RUN SCAN AGAIN';
+  }
+  if (window._scalpSignalsById) delete window._scalpSignalsById[sid];
+}
+
 async function executeScalp(btn, sid) {
   var signal = (window._scalpSignalsById || {})[sid];
   if (!signal) {
@@ -10832,7 +10862,11 @@ async function executeScalp(btn, sid) {
       var err = data.error || 'Check Risk Engine';
       if (data.approval && !data.approval.approved) err = 'Risk: ' + data.approval.reason;
       showToast('SCALP REJECTED: ' + err, true);
-      btn.disabled = false; btn.textContent = 'RETRY EXECUTE';
+      if (data.skipped && data.skipped.length) {
+        markScalpSignalRejected(sid, err, data);
+      } else {
+        btn.disabled = false; btn.textContent = 'RETRY EXECUTE';
+      }
     }
   } catch(e) {
     showToast('Scalp Execution failed: ' + e.message, true);

@@ -160,6 +160,44 @@ def test_scalp_execute_passes_size_multiplier_to_risk_engine(monkeypatch):
     assert captured["sizing_override"] == 0.25
 
 
+def test_scalp_execute_returns_fresh_skip_details(monkeypatch):
+    athena_module = _load_athena_module()
+
+    monkeypatch.setattr(
+        scalp_engine,
+        "run_scalp_scan",
+        lambda pairs: {
+            "signals": [],
+            "skipped": [
+                {
+                    "pair": "GBP/AUD",
+                    "reason": "grade_C_below_min",
+                    "ai_grade": "C",
+                    "ai_score": 58,
+                    "min_grade": "B",
+                }
+            ],
+            "session": "london",
+        },
+    )
+
+    client = athena_module.app.test_client()
+    resp = client.post(
+        "/api/scalp-execute",
+        json={
+            "symbol": "GBP/AUD",
+            "signal": {"symbol": "GBP/AUD", "direction": "SHORT", "ai_grade": "B", "ai_score": 62},
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["success"] is False
+    assert data["error"] == "grade_C_below_min"
+    assert data["skipped"][0]["ai_grade"] == "C"
+    assert data["skipped"][0]["ai_score"] == 58
+
+
 def test_open_trades_timed_hides_intraday_labels_for_scalp(monkeypatch):
     athena_module = _load_athena_module()
 

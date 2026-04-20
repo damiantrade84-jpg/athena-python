@@ -7934,7 +7934,17 @@ def api_scalp_execute():
             skipped = scan.get("skipped", []) or []
             if skipped:
                 reason = skipped[0].get("reason", reason)
-            return jsonify({"success": False, "error": reason}), 200
+            return jsonify({
+                "success": False,
+                "error": reason,
+                "skipped": skipped,
+                "fresh_scan": {
+                    "signals": [],
+                    "skipped": skipped,
+                    "session": scan.get("session"),
+                    "reason": scan.get("reason"),
+                },
+            }), 200
 
         if client_signal:
             requested_symbol = (

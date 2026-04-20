@@ -937,6 +937,23 @@ def test_run_scalp_scan_uses_min_grade_for_scan_gate(monkeypatch):
     assert len(result["signals"]) == 1
     assert result["signals"][0]["ai_grade"] == "C"
 
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "MIN_GRADE_AUTO_EXECUTE": "B",
+            "MIN_GRADE": "B",
+        },
+    )
+
+    result = scalp_engine.run_scalp_scan(["EUR/USD"])
+    assert result["signals"] == []
+    assert result["skipped"][0]["reason"] == "grade_C_below_min"
+    assert result["skipped"][0]["ai_grade"] == "C"
+    assert result["skipped"][0]["ai_score"] == 55
+    assert result["skipped"][0]["min_grade"] == "B"
+
 
 def test_run_scalp_scan_skips_closed_mt5_market(monkeypatch):
     monkeypatch.setitem(

@@ -2193,7 +2193,15 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 continue
             if min_grade == "B" and grade in ("C", "D"):
                 _record_stability_sample(display, asset_type, False, reason=f"grade_{grade}_below_min")
-                skipped.append({"pair": display, "reason": f"grade_{grade}_below_min"})
+                skipped.append({
+                    "pair": display,
+                    "reason": f"grade_{grade}_below_min",
+                    "ai_grade": grade,
+                    "ai_score": quality.get("score"),
+                    "min_grade": min_grade,
+                    "size_multiplier": quality.get("size_multiplier"),
+                    "ai_reasons": quality.get("reasons", []),
+                })
                 continue
 
             # ── Build signal dict (preserves keys required by athena.py) ─
