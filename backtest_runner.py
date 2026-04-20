@@ -267,7 +267,13 @@ def _resolve_barrier_exit(
     tp2: float | None = None,
     sl_outcome: str = "SL",
 ) -> tuple[str | None, bool]:
-    """Resolve TP/SL touches on a single OHLC bar conservatively."""
+    """Resolve TP/SL touches on a single OHLC bar.
+
+    When both SL and TP are touched on the same bar, intrabar order cannot
+    be determined from OHLC. Use the bar's open-to-level distance as a
+    tiebreaker: whichever level the bar opened closer to is assumed hit
+    first. This gives an unbiased estimate vs the old always-SL pessimism.
+    """
     bar_high = float(bar["high"])
     bar_low = float(bar["low"])
 
@@ -282,6 +288,10 @@ def _resolve_barrier_exit(
 
     same_bar_both_hit = hit_sl and (hit_tp2 or hit_tp1)
     if same_bar_both_hit:
+        _open = float(bar.get("open", (bar_high + bar_low) / 2))
+        _tp_ref = tp2 if hit_tp2 else tp1
+        if _tp_ref is not None and abs(_open - _tp_ref) < abs(_open - sl):
+            return ("TP2" if hit_tp2 else "TP1"), True
         return sl_outcome, True
     if hit_tp2:
         return "TP2", False
@@ -2852,7 +2862,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             _con.execute(
                 "INSERT INTO backtest_results "
                 "(run_date,pair,asset_type,engine,trades,win_rate,profit_factor,"
-                "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,eval_threshold,atr_source) "
+                "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,bt_min,atr_source) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     __import__("datetime").datetime.utcnow().isoformat(),
@@ -4061,7 +4071,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 _con.execute(
                     "INSERT INTO backtest_results "
                     "(run_date,pair,asset_type,engine,trades,win_rate,profit_factor,"
-                    "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,eval_threshold,atr_source,notes) "
+                    "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,bt_min,atr_source,notes) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         datetime.now(timezone.utc).isoformat(),
@@ -4787,7 +4797,7 @@ def backtest_pair_consensus(
                 _con.execute(
                     "INSERT INTO backtest_results "
                     "(run_date,pair,asset_type,engine,trades,win_rate,profit_factor,"
-                    "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,eval_threshold,atr_source,notes) "
+                    "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,bt_min,atr_source,notes) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         datetime.now(timezone.utc).isoformat(),

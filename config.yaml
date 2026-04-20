@@ -75,7 +75,7 @@ RESEARCH_MODE: false
 # MIN_CONFLUENCE_GROUP → MIN_CONFLUENCE_CLASS). True = use pair bt_min →
 # BT_MIN_GROUP → BT_MIN (research / stricter runs). p75 diagnostic values below
 # are inactive unless this flag is true.
-BACKTEST_USE_BT_MIN_THRESHOLDS: true
+BACKTEST_USE_BT_MIN_THRESHOLDS: false
 BT_MIN:
   crypto:    2.15   # live-score p75 (was 0.95)
   commodity: 1.80   # live-score p75 (was 0.90)
