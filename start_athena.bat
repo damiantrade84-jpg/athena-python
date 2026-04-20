@@ -4,6 +4,12 @@ echo.
 echo Using Python 3.13.12 for full compatibility...
 echo.
 
+if exist ".venv\Scripts\python.exe" (
+    echo Found project virtualenv
+    ".venv\Scripts\python.exe" athena.py
+    goto :end
+)
+
 REM Try multiple ways to find Python 3.13
 py -3.13 --version >nul 2>&1
 if %errorlevel% equ 0 (

@@ -16,6 +16,11 @@ import telegram_notify
 
 log = logging.getLogger("sentinel")
 
+try:
+    from config import CONFIG
+except Exception:
+    CONFIG = {}
+
 _exchange = None
 
 # ── Periodic clock re-sync ────────────────────────────────────────────────────
@@ -27,6 +32,9 @@ _RESYNC_INTERVAL_SEC = 180  # 3 minutes
 
 def _start_clock_sync_thread() -> None:
     """Start a daemon thread that periodically calls load_time_difference()."""
+    if not bool(CONFIG.get("BYBIT_TIME_SYNC_ENABLED", False)):
+        return
+
     def _sync_loop():
         while True:
             time.sleep(_RESYNC_INTERVAL_SEC)
@@ -189,8 +197,8 @@ def _get_exchange():
                 "options": {
                     "defaultType": "linear",  # USDT Perpetual
                     "defaultSettle": "USDT",
-                    "adjustForTimeDifference": True,
-                    "recvWindow": 10000,
+                    "adjustForTimeDifference": bool(CONFIG.get("BYBIT_TIME_SYNC_ENABLED", False)),
+                    "recvWindow": int(CONFIG.get("BYBIT_RECV_WINDOW_MS", 30000) or 30000),
                 },
             }
         )
@@ -203,10 +211,11 @@ def _get_exchange():
 
         # Sync local/client drift against Bybit server time to avoid retCode 10002
         # on signed requests like fetch_positions/fetch_balance during startup polling.
-        try:
-            _exchange.load_time_difference()
-        except Exception as sync_err:
-            log.debug(f"[BYBIT] time sync note: {sync_err}")
+        if bool(CONFIG.get("BYBIT_TIME_SYNC_ENABLED", False)):
+            try:
+                _exchange.load_time_difference()
+            except Exception as sync_err:
+                log.debug(f"[BYBIT] time sync note: {sync_err}")
 
         env_label = "DEMO" if use_demo else ("TESTNET" if use_testnet else "LIVE")
         log.info(f"[BYBIT] Bybit Linear Futures {env_label} connected")

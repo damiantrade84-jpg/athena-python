@@ -17,6 +17,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from athena_runtime import rt
+from athena.datafeeds.ws_ssl import default_ssl_context
 from candles_cache import forex_h4_resample_offset_hours
 from data_feeds import _get_eodhd_client, http_requests
 from runtime_paths import ensure_candle_cache_db_ready
@@ -238,6 +239,7 @@ class BinanceLivePriceWS:
                         ping_timeout=None,
                         open_timeout=45,
                         close_timeout=10,
+                        ssl=default_ssl_context(),
                     ) as ws:
                         self._reconnect_attempt = 0
                         log.info(
@@ -400,6 +402,7 @@ class BinanceCandleWS:
                         ping_timeout=None,
                         open_timeout=45,
                         close_timeout=10,
+                        ssl=default_ssl_context(),
                     ) as ws:
                         self._reconnect_attempt = 0
                         log.info(
@@ -603,6 +606,7 @@ class EODHDWebSocketManager:
                     ping_timeout=None,
                     open_timeout=45,
                     close_timeout=10,
+                    ssl=default_ssl_context(),
                 ) as ws:
                     delay = 5.0  # reset backoff after a successful handshake
                     # EODHD manages keepalive at application layer (heartbeat messages).

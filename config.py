@@ -576,6 +576,10 @@ CONFIG: dict = {
     # Log Engine C ALIGNED+tradeable rows to shadow_signals (no broker); Performance tab reads them.
     "SHADOW_LEDGER_ENABLED": True,
     "MICROSTRUCTURE_FEEDS_ENABLED": True,
+    "MICROSTRUCTURE_BYBIT_FEEDS_ENABLED": False,
+    "MARKET_DATA_WS_SSL_VERIFY": False,
+    "BYBIT_TIME_SYNC_ENABLED": False,
+    "BYBIT_RECV_WINDOW_MS": 30000,
     "PAIR_PROFILES": {},
     "BT_AUTO_TOGGLE": False,  # If False, backtest will never enable/disable live pairs
     "BT_PERCENTILE_FILTER": False,  # If False, disable rolling percentile floor in backtest

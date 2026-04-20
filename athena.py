@@ -196,7 +196,15 @@ def _merge_forex_forming_ws(candles: list, display: str, tf: str, limit: int):
 # N1: CONFIG loaded from config.py (YAML overrides + validation happen there)
 
 from config import CONFIG, scan_candle_limits  # noqa: E402
+from athena.datafeeds.ws_ssl import configure_process_ca_bundle  # noqa: E402
 from regime_shift_monitor import classify_position as _regime_classify  # noqa: E402
+
+_ca_bundle = configure_process_ca_bundle()
+if _ca_bundle:
+    log.info("[WS-SSL] CA bundle configured: %s", _ca_bundle)
+os.environ["ATHENA_MARKET_DATA_WS_SSL_VERIFY"] = (
+    "true" if CONFIG.get("MARKET_DATA_WS_SSL_VERIFY", True) else "false"
+)
 
 
 # enabled=True  = included in live scan; confluence score is the execution gate
@@ -13214,6 +13222,12 @@ def _select_live_crypto_symbols_for_ws() -> list[str]:
     except Exception as exc:
         log.debug("[WS-SCOPE] get_scalp_pairs unavailable for scope bootstrap: %s", exc)
 
+    # If the resolved live/scalp scope already covers every enabled crypto pair,
+    # avoid a signed Bybit REST call during feed bootstrap. That call is only
+    # needed to add open positions outside the selected scan universe.
+    if symbol_set and symbol_set >= set(display_to_symbol.values()):
+        return sorted(symbol_set)
+
     # 2) Open crypto positions (Bybit).
     try:
         from bybit_executor import bybit_get_positions
@@ -13510,22 +13524,26 @@ def ensure_runtime_services_started() -> None:
                 finally:
                     loop.close()
 
+            bybit_micro_enabled = bool(CONFIG.get("MICROSTRUCTURE_BYBIT_FEEDS_ENABLED", False))
+
             for pair in crypto_pairs:
                 sym = pair["symbol"]
                 cb = _make_cb(sym)
                 b = BinanceWS(sym.lower())
-                y = BybitWS(sym.upper())
-                _ws_clients.extend([b, y])
+                _ws_clients.append(b)
                 threading.Thread(
                     target=_run, args=(b, cb), daemon=True, name=f"BinWS-{sym}"
                 ).start()
-                threading.Thread(
-                    target=_run, args=(y, cb), daemon=True, name=f"BbtWS-{sym}"
-                ).start()
+                if bybit_micro_enabled:
+                    y = BybitWS(sym.upper())
+                    _ws_clients.append(y)
+                    threading.Thread(
+                        target=_run, args=(y, cb), daemon=True, name=f"BbtWS-{sym}"
+                    ).start()
             log.info(
                 "[MICRO] Started feeds: binance=%s bybit=%s symbols=%s",
                 len(crypto_pairs),
-                len(crypto_pairs),
+                len(crypto_pairs) if bybit_micro_enabled else 0,
                 ", ".join(str(p["symbol"]).replace("/", "").upper() for p in crypto_pairs) if crypto_pairs else "none",
             )
 

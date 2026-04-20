@@ -29,7 +29,11 @@ echo Press Ctrl-C to stop.
 echo.
 
 REM HIGH priority prevents Windows from throttling background console apps
-start /HIGH /B /WAIT "" py -3.13 athena.py
+if exist ".venv\Scripts\python.exe" (
+    start /HIGH /B /WAIT "" ".venv\Scripts\python.exe" athena.py
+) else (
+    start /HIGH /B /WAIT "" py -3.13 athena.py
+)
 
 echo.
 echo Sentinel Pro stopped.

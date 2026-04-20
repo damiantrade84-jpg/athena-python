@@ -14,6 +14,7 @@ import websockets
 import telegram_notify
 
 log = logging.getLogger("sentinel")
+from athena.datafeeds.ws_ssl import default_ssl_context  # noqa: E402
 from athena.microstructure.microstructure_store import store_metrics  # noqa: E402
 from athena.microstructure.orderbook_metrics import (  # noqa: E402
     liquidity_wall_detection as _liq_wall,
@@ -158,6 +159,7 @@ class BybitWS:
                 ping_timeout=None,
                 open_timeout=45,
                 close_timeout=10,
+                ssl=default_ssl_context(),
             )
             self._reconnect_attempt = 0
             log.info(f"[BybitWS] Connected to {self.base_url} for {self.symbol}")
