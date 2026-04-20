@@ -69,9 +69,9 @@ class TestCandleCacheKeys:
 
         assert lower == candles
         assert upper == candles
-        assert fetch_mt5.call_count == 1
+        assert fetch_mt5.call_count == 2
 
-    def test_ttl_cache_never_receives_lowercase_timeframe_key(self):
+    def test_mt5_direct_fetch_never_writes_ttl_cache(self):
         pair = {"symbol": "EURUSD", "display": "EUR/USD", "source": "mt5", "type": "forex"}
         candles = [{"time": "2026-03-27T14:00:00+00:00", "open": 1.1, "high": 1.2, "low": 1.0, "close": 1.15, "vol": 1000}]
         fetch_mt5 = Mock(return_value=candles)
@@ -93,8 +93,39 @@ class TestCandleCacheKeys:
         with _candle_cache_lock:
             keys = list(_candle_cache.keys())
 
-        assert ("EURUSD", "H1", 100) in keys
+        assert ("EURUSD", "H1", 100) not in keys
         assert ("EURUSD", "h1", 100) not in keys
+
+    def test_mt5_bypasses_existing_ttl_cache_entry(self):
+        pair = {"symbol": "EURUSD", "display": "EUR/USD", "source": "mt5", "type": "forex"}
+        stale = [{"time": "2026-03-27T13:00:00+00:00", "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05, "vol": 900}]
+        fresh = [{"time": "2026-03-27T14:00:00+00:00", "open": 1.1, "high": 1.2, "low": 1.0, "close": 1.15, "vol": 1000}]
+        fetch_mt5 = Mock(return_value=fresh)
+
+        with _candle_cache_lock:
+            _candle_cache[("EURUSD", "H1", 100)] = (stale, time.time() + 3600)
+
+        candles = fetch_candles(
+            pair,
+            "H1",
+            100,
+            fetch_candles_live=_noop_fetch,
+            fetch_binance=_noop_fetch,
+            fetch_eodhd=_noop_fetch,
+            fetch_polygon=_noop_fetch,
+            fetch_yfinance=_noop_fetch,
+            fetch_mt5=fetch_mt5,
+            yfinance_symbol_for_pair=lambda _pair: None,
+            tf_b={"H1": "1h", "H4": "4h", "D1": "1d"},
+        )
+        meta = get_candle_fetch_meta(pair, "H1", 100)
+
+        assert candles == fresh
+        assert fetch_mt5.call_count == 1
+        assert meta["upstream"] == "mt5"
+        assert meta["cacheHit"] is False
+        with _candle_cache_lock:
+            assert ("EURUSD", "H1", 100) not in _candle_cache
 
     def test_crypto_h4_merges_live_candlebuilder_bar_over_rest_fallback(self):
         pair = {
@@ -103,9 +134,12 @@ class TestCandleCacheKeys:
             "source": "binance",
             "type": "crypto",
         }
+        current_h4 = int(time.time() // (4 * 3600)) * (4 * 3600)
+        prev_h4 = current_h4 - (4 * 3600)
+        older_h4 = current_h4 - (8 * 3600)
         live_h4 = [
             {
-                "time": "2026-03-27T00:00:00+00:00",
+                "time": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(prev_h4)),
                 "open": 87000,
                 "high": 87500,
                 "low": 86800,
@@ -113,7 +147,7 @@ class TestCandleCacheKeys:
                 "vol": 100,
             },
             {
-                "time": "2026-03-27T04:00:00+00:00",
+                "time": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(current_h4)),
                 "open": 87250,
                 "high": 87950,
                 "low": 87150,
@@ -123,7 +157,7 @@ class TestCandleCacheKeys:
         ]
         rest_h4 = [
             {
-                "time": "2026-03-26T20:00:00+00:00",
+                "time": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(older_h4)),
                 "open": 86500,
                 "high": 87100,
                 "low": 86300,
@@ -131,7 +165,7 @@ class TestCandleCacheKeys:
                 "vol": 90,
             },
             {
-                "time": "2026-03-27T00:00:00+00:00",
+                "time": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(prev_h4)),
                 "open": 87000,
                 "high": 87400,
                 "low": 86750,
@@ -157,9 +191,9 @@ class TestCandleCacheKeys:
 
         assert fetch_binance.call_count == 1
         assert [c["time"] for c in candles] == [
-            "2026-03-26T20:00:00+00:00",
-            "2026-03-27T00:00:00+00:00",
-            "2026-03-27T04:00:00+00:00",
+            time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(older_h4)),
+            time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(prev_h4)),
+            time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(current_h4)),
         ]
         assert candles[-2]["close"] == 87250
         assert candles[-1]["close"] == 87880
@@ -172,7 +206,8 @@ class TestCandleCacheKeys:
             "type": "crypto",
         }
         live_h4 = []
-        base_ts = 1743148800  # 2025-03-28 08:00:00 UTC
+        current_h4 = int(time.time() // (4 * 3600)) * (4 * 3600)
+        base_ts = current_h4 - (56 * 4 * 3600)
         for idx in range(57):
             ts = base_ts + (idx * 4 * 3600)
             live_h4.append(
@@ -187,7 +222,7 @@ class TestCandleCacheKeys:
             )
         rest_h4 = [
             {
-                "time": "2025-03-27T20:00:00+00:00",
+                "time": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(base_ts - (12 * 3600))),
                 "open": 86880,
                 "high": 86950,
                 "low": 86790,
@@ -195,7 +230,7 @@ class TestCandleCacheKeys:
                 "vol": 88,
             },
             {
-                "time": "2025-03-28T00:00:00+00:00",
+                "time": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(base_ts - (8 * 3600))),
                 "open": 86920,
                 "high": 87010,
                 "low": 86820,
@@ -203,7 +238,7 @@ class TestCandleCacheKeys:
                 "vol": 91,
             },
             {
-                "time": "2025-03-28T04:00:00+00:00",
+                "time": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(base_ts - (4 * 3600))),
                 "open": 86980,
                 "high": 87040,
                 "low": 86870,
@@ -211,7 +246,7 @@ class TestCandleCacheKeys:
                 "vol": 95,
             },
             {
-                "time": "2025-03-28T08:00:00+00:00",
+                "time": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(base_ts)),
                 "open": 87010,
                 "high": 87110,
                 "low": 86950,
@@ -238,11 +273,77 @@ class TestCandleCacheKeys:
 
         assert fetch_binance.call_count == 1
         assert len(candles) == 60
-        assert candles[0]["time"] == "2025-03-27T20:00:00+00:00"
-        assert candles[3]["time"] == "2025-03-28T08:00:00+00:00"
+        assert candles[0]["time"] == time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(base_ts - (12 * 3600)))
+        assert candles[3]["time"] == time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(base_ts))
         assert candles[3]["close"] == 87050
         assert meta["upstream"] == "binance_futures"
         assert meta["liveMerge"] is True
+
+    def test_crypto_live_tf_ignores_cache_when_live_builder_is_stale(self):
+        pair = {
+            "symbol": "BTCUSDT",
+            "display": "BTC/USDT",
+            "source": "binance",
+            "type": "crypto",
+        }
+        current_bucket = int(time.time() // 3600) * 3600
+        stale_ts = current_bucket - 3600
+        current_ts = current_bucket
+        stale_live = [
+            {
+                "time": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(stale_ts)),
+                "open": 87000,
+                "high": 87100,
+                "low": 86900,
+                "close": 87050,
+                "vol": 100,
+            }
+        ]
+        cached = [
+            {
+                "time": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(stale_ts)),
+                "open": 1,
+                "high": 1,
+                "low": 1,
+                "close": 1,
+                "vol": 1,
+            }
+        ]
+        fresh_rest = [
+            {
+                "time": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(current_ts)),
+                "open": 87200,
+                "high": 87300,
+                "low": 87100,
+                "close": 87250,
+                "vol": 120,
+            }
+        ]
+        fetch_binance = Mock(return_value=fresh_rest)
+
+        with _candle_cache_lock:
+            _candle_cache[("BTCUSDT", "H1", 100)] = (cached, time.time() + 3600)
+
+        candles = fetch_candles(
+            pair,
+            "H1",
+            100,
+            fetch_candles_live=Mock(return_value={"candles": stale_live}),
+            fetch_binance=fetch_binance,
+            fetch_eodhd=_noop_fetch,
+            fetch_polygon=_noop_fetch,
+            fetch_yfinance=_noop_fetch,
+            fetch_mt5=None,
+            yfinance_symbol_for_pair=lambda _pair: None,
+            tf_b={"H1": "1h", "H4": "4h", "D1": "1d"},
+        )
+        meta = get_candle_fetch_meta(pair, "H1", 100)
+
+        assert candles == fresh_rest
+        assert fetch_binance.call_count == 1
+        assert meta["upstream"] == "binance_futures"
+        assert meta["liveStale"] is True
+        assert meta["ignoredCacheReason"] == "crypto_live_builder_missing_or_stale"
 
     def test_binance_large_limit_uses_paginated_fetch(self):
         pair = {
@@ -286,7 +387,7 @@ class TestCandleCacheKeys:
         assert direct.call_count == 0
         assert meta["pagination"] is True
 
-    def test_fetch_meta_tracks_upstream_and_cache_hits(self):
+    def test_fetch_meta_tracks_mt5_direct_fetches(self):
         pair = {"symbol": "EURUSD", "display": "EUR/USD", "source": "mt5", "type": "forex"}
         candles = [{"time": "2026-03-27T14:00:00+00:00", "open": 1.1, "high": 1.2, "low": 1.0, "close": 1.15, "vol": 1000}]
         fetch_mt5 = Mock(return_value=candles)
@@ -323,17 +424,18 @@ class TestCandleCacheKeys:
 
         assert first_meta["upstream"] == "mt5"
         assert first_meta["cacheHit"] is False
-        assert cached_meta["resolution"] == "ttl_cache"
-        assert cached_meta["cacheHit"] is True
-        assert cached_meta["cacheUpstream"] == "mt5"
+        assert cached_meta["resolution"] == "rest"
+        assert cached_meta["upstream"] == "mt5"
+        assert cached_meta["cacheHit"] is False
+        assert fetch_mt5.call_count == 2
 
     def test_single_flight_dedupes_parallel_fetches(self):
-        pair = {"symbol": "EURUSD", "display": "EUR/USD", "source": "mt5", "type": "forex"}
+        pair = {"symbol": "EURUSD.FOREX", "display": "EUR/USD", "source": "eodhd", "type": "forex"}
         candles = [{"time": "2026-03-27T14:00:00+00:00", "open": 1.1, "high": 1.2, "low": 1.0, "close": 1.15, "vol": 1000}]
         call_count = 0
         call_lock = threading.Lock()
 
-        def _slow_mt5(*_args, **_kwargs):
+        def _slow_eodhd(*_args, **_kwargs):
             nonlocal call_count
             with call_lock:
                 call_count += 1
@@ -350,10 +452,10 @@ class TestCandleCacheKeys:
                     100,
                     fetch_candles_live=_noop_fetch,
                     fetch_binance=_noop_fetch,
-                    fetch_eodhd=_noop_fetch,
+                    fetch_eodhd=_slow_eodhd,
                     fetch_polygon=_noop_fetch,
                     fetch_yfinance=_noop_fetch,
-                    fetch_mt5=_slow_mt5,
+                    fetch_mt5=None,
                     yfinance_symbol_for_pair=lambda _pair: None,
                     tf_b={"H1": "1h", "H4": "4h", "D1": "1d"},
                 )

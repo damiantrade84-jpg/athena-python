@@ -9596,8 +9596,8 @@ def api_open_trades_timed():
         be_min = None
         close_min = None
         
-        # Resolve timers for every style managed by timed_exit_monitor.
-        if style in ("scalp", "intraday", "swing"):
+        # Resolve display timers only for non-scalp styles shown on this endpoint.
+        if style in ("intraday", "swing"):
             scfg = cfg_te.get(style, {})
             if style == "swing":
                 be_min = float(scfg.get("breakeven_days", 2.5)) * 1440

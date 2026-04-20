@@ -13,7 +13,7 @@ Covers:
 
 import sys
 import types
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import scalp_engine
 import mt5_executor
@@ -58,6 +58,21 @@ def _candles(n, base=100.0, vol=1000.0, spread=1.0, trend=0.0):
             "time": f"T{i}", "open": round(p, 6),
             "high": round(p + spread * 0.6, 6), "low": round(p - spread * 0.4, 6),
             "close": round(p + spread * 0.1, 6), "vol": vol,
+        })
+    return out
+
+
+def _dated_candles(n, start, step_seconds=60, base=100.0, vol=1000.0, spread=1.0):
+    out = []
+    for i in range(n):
+        t = start + timedelta(seconds=i * step_seconds)
+        out.append({
+            "time": t.isoformat(),
+            "open": base,
+            "high": base + spread * 0.6,
+            "low": base - spread * 0.4,
+            "close": base + spread * 0.1,
+            "vol": vol,
         })
     return out
 
@@ -488,6 +503,25 @@ def test_mt5_market_open_state_rejects_stale_tick(monkeypatch):
     assert state["reason"] == "MARKET_CLOSED_STALE_TICK"
 
 
+def test_scalp_candles_fresh_rejects_stale_structure(monkeypatch):
+    now = datetime(2026, 4, 14, 12, 0, tzinfo=timezone.utc)
+    stale = _dated_candles(40, now - timedelta(hours=12), step_seconds=900)
+    monkeypatch.setattr(scalp_engine, "_current_utc_datetime", lambda: now)
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "MARKET_CANDLE_MAX_AGE_SEC": 900,
+        },
+    )
+
+    fresh, reason = scalp_engine._scalp_candles_fresh(stale, "M15", "structure")
+
+    assert fresh is False
+    assert reason.startswith("MARKET_DATA_STALE_STRUCTURE_")
+
+
 def test_get_current_sessions_london_ny_overlap(monkeypatch):
     monkeypatch.setattr(scalp_engine, "_current_utc_datetime",
                         lambda: datetime(2026, 3, 26, 13, 0, tzinfo=timezone.utc))
@@ -895,7 +929,7 @@ def test_run_scalp_scan_uses_min_grade_for_scan_gate(monkeypatch):
     monkeypatch.setattr(scalp_engine, "_check_aaa_sequence", lambda candles, absorption, cvd: {"complete": False, "phase": "absorption_only"})
     monkeypatch.setattr(scalp_engine, "_check_vwap_lean", lambda candles, price: {"lean": "LONG", "vwap_value": 100.0})
     monkeypatch.setattr(scalp_engine, "_classify_setup", lambda *args, **kwargs: {"valid": True, "direction": "LONG", "setup_type": "mean_reversion", "reasons": []})
-    monkeypatch.setattr(scalp_engine, "calculate_scalp_levels", lambda *args, **kwargs: {"entry": 100.0, "sl": 99.0, "tp1": 102.0, "tp2": 103.0, "rr": 2.0, "sl_distance": 1.0, "sl_method": "vp_boundary"})
+    monkeypatch.setattr(scalp_engine, "calculate_scalp_levels", lambda *args, **kwargs: {"entry": 100.0, "sl": 99.0, "tp_partial": 101.0, "tp1": 102.0, "tp2": 103.0, "rr": 2.0, "sl_distance": 1.0, "sl_method": "vp_boundary"})
     monkeypatch.setattr(scalp_engine, "ai_quality_grade", lambda *args, **kwargs: {"score": 55, "grade": "C", "reasons": [], "size_multiplier": 0.25})
     monkeypatch.setattr(scalp_engine, "record_signal_event", lambda **kwargs: None)
 
@@ -929,6 +963,39 @@ def test_run_scalp_scan_skips_closed_mt5_market(monkeypatch):
 
     assert result["signals"] == []
     assert result["skipped"] == [{"pair": "EUR/USD", "reason": "MARKET_CLOSED_STALE_TICK"}]
+
+
+def test_run_scalp_scan_skips_stale_structure_candles(monkeypatch):
+    now = datetime(2026, 4, 14, 12, 0, tzinfo=timezone.utc)
+    stale_m15 = _dated_candles(40, now - timedelta(hours=12), step_seconds=900)
+
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "SESSION_FILTER": True,
+            "SESSION_MODE": "all",
+            "MARKET_CANDLE_MAX_AGE_SEC": 900,
+        },
+    )
+    monkeypatch.setattr(scalp_engine, "_current_utc_datetime", lambda: now)
+    monkeypatch.setattr(scalp_engine, "get_current_sessions", lambda: ["london"])
+    monkeypatch.setattr(scalp_engine, "scalp_session_window", lambda *args, **kwargs: (True, "all"))
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")
+    monkeypatch.setattr(scalp_engine, "mt5_market_open_state", lambda symbol: {"open": True, "reason": "market_open"})
+    monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda display: {"digits": 5, "point": 0.00001, "spread": 10})
+    monkeypatch.setattr(scalp_engine, "check_spread", lambda sym_info, asset_type: (True, 1.0))
+    monkeypatch.setattr(scalp_engine, "mt5_fetch_scalp_candles", lambda *args, **kwargs: stale_m15)
+    monkeypatch.setattr(scalp_engine, "record_signal_event", lambda **kwargs: None)
+
+    result = scalp_engine.run_scalp_scan(["EUR/USD"])
+
+    assert result["signals"] == []
+    assert len(result["skipped"]) == 1
+    assert result["skipped"][0]["pair"] == "EUR/USD"
+    assert result["skipped"][0]["reason"].startswith("MARKET_DATA_STALE_STRUCTURE_")
 
 
 def test_run_scalp_scan_uses_m1_execution_tf(monkeypatch):
@@ -966,7 +1033,7 @@ def test_run_scalp_scan_uses_m1_execution_tf(monkeypatch):
     monkeypatch.setattr(scalp_engine, "_check_aaa_sequence", lambda candles, absorption, cvd: {"complete": False, "phase": "absorption_only"})
     monkeypatch.setattr(scalp_engine, "_check_vwap_lean", lambda candles, price: {"lean": "LONG", "vwap_value": 100.0})
     monkeypatch.setattr(scalp_engine, "_classify_setup", lambda *args, **kwargs: {"valid": True, "direction": "LONG", "setup_type": "mean_reversion", "reasons": []})
-    monkeypatch.setattr(scalp_engine, "calculate_scalp_levels", lambda *args, **kwargs: {"entry": 100.0, "sl": 99.0, "tp1": 102.0, "tp2": 103.0, "rr": 2.0, "sl_distance": 1.0, "sl_method": "vp_boundary"})
+    monkeypatch.setattr(scalp_engine, "calculate_scalp_levels", lambda *args, **kwargs: {"entry": 100.0, "sl": 99.0, "tp_partial": 101.0, "tp1": 102.0, "tp2": 103.0, "rr": 2.0, "sl_distance": 1.0, "sl_method": "vp_boundary"})
     monkeypatch.setattr(scalp_engine, "ai_quality_grade", lambda *args, **kwargs: {"score": 75, "grade": "B", "reasons": [], "size_multiplier": 0.5})
     monkeypatch.setattr(scalp_engine, "record_signal_event", lambda **kwargs: None)
 

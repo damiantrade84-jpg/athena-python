@@ -403,7 +403,7 @@ def _latest_candle_age_seconds(candles: list) -> float | None:
     return (_current_utc_datetime() - ts).total_seconds()
 
 
-def _execution_candles_fresh(candles: list, timeframe: str) -> tuple[bool, str]:
+def _scalp_candles_fresh(candles: list, timeframe: str, role: str = "execution") -> tuple[bool, str]:
     cfg = CONFIG.get("SCALP_ENGINE", {})
     max_age = max(1, int(cfg.get("MARKET_CANDLE_MAX_AGE_SEC", 900)))
     age_s = _latest_candle_age_seconds(candles)
@@ -411,10 +411,15 @@ def _execution_candles_fresh(candles: list, timeframe: str) -> tuple[bool, str]:
         return True, "candle_time_unavailable"
     # Candle timestamps are bar-open times. Allow one extra bar length before
     # declaring live data stale.
-    tf_sec = {"M1": 60, "M5": 300, "M15": 900}.get(str(timeframe).upper(), 60)
+    tf_sec = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600}.get(str(timeframe).upper(), 60)
     if age_s > max_age + tf_sec:
-        return False, f"MARKET_DATA_STALE_{round(age_s)}s"
+        role_key = str(role or "data").upper()
+        return False, f"MARKET_DATA_STALE_{role_key}_{round(age_s)}s"
     return True, "fresh"
+
+
+def _execution_candles_fresh(candles: list, timeframe: str) -> tuple[bool, str]:
+    return _scalp_candles_fresh(candles, timeframe, "execution")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -567,7 +572,8 @@ def scalp_session_window(
 ) -> tuple[bool, str]:
     """Config-driven scalp session gate with optional NY open cooldown."""
     cfg = CONFIG.get("SCALP_ENGINE", {})
-    if not cfg.get("SESSION_FILTER", True):
+    session_filter_key = "BT_SESSION_FILTER" if backtest else "SESSION_FILTER"
+    if not cfg.get(session_filter_key, True):
         return True, "all"
 
     mode_key = "BT_SESSION_MODE" if backtest else "SESSION_MODE"
@@ -1931,11 +1937,21 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     _record_stability_sample(display, asset_type, False, reason="insufficient_m15_candles")
                     skipped.append({"pair": display, "reason": "insufficient_m15_candles"})
                     continue
+                fresh, stale_reason = _scalp_candles_fresh(candles_m15, "M15", "structure")
+                if not fresh:
+                    _record_stability_sample(display, asset_type, False, reason=stale_reason)
+                    skipped.append({"pair": display, "reason": stale_reason})
+                    continue
 
                 candles_m5 = _scalp_fetch_candles(pair_dict, "M5", m5_count)
                 if not candles_m5 or len(candles_m5) < 10:
                     _record_stability_sample(display, asset_type, False, reason="insufficient_m5_candles")
                     skipped.append({"pair": display, "reason": "insufficient_m5_candles"})
+                    continue
+                fresh, stale_reason = _scalp_candles_fresh(candles_m5, "M5", "context")
+                if not fresh:
+                    _record_stability_sample(display, asset_type, False, reason=stale_reason)
+                    skipped.append({"pair": display, "reason": stale_reason})
                     continue
 
                 if execution_tf == "M1":
@@ -1961,6 +1977,11 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 if use_bias:
                     candles_bias = _scalp_fetch_candles(pair_dict, bias_tf, h1_count)
                     if candles_bias and len(candles_bias) >= 200:
+                        fresh, stale_reason = _scalp_candles_fresh(candles_bias, bias_tf, "bias")
+                        if not fresh:
+                            _record_stability_sample(display, asset_type, False, reason=stale_reason)
+                            skipped.append({"pair": display, "reason": stale_reason})
+                            continue
                         htf_bias = infer_bias_from_ema_stack(candles_bias)
 
             else:
@@ -2000,12 +2021,22 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     _record_stability_sample(display, asset_type, False, reason="insufficient_m15_candles")
                     skipped.append({"pair": display, "reason": "insufficient_m15_candles"})
                     continue
+                fresh, stale_reason = _scalp_candles_fresh(candles_m15, "M15", "structure")
+                if not fresh:
+                    _record_stability_sample(display, asset_type, False, reason=stale_reason)
+                    skipped.append({"pair": display, "reason": stale_reason})
+                    continue
 
                 candles_m5 = mt5_fetch_scalp_candles(mt5_sym, "M5", m5_count, include_forming=True)
                 candles_m5, _vol_src_m5 = _overlay_eodhd_volume_for_scalp(display, asset_type, "M5", candles_m5)
                 if len(candles_m5) < 10:
                     _record_stability_sample(display, asset_type, False, reason="insufficient_m5_candles")
                     skipped.append({"pair": display, "reason": "insufficient_m5_candles"})
+                    continue
+                fresh, stale_reason = _scalp_candles_fresh(candles_m5, "M5", "context")
+                if not fresh:
+                    _record_stability_sample(display, asset_type, False, reason=stale_reason)
+                    skipped.append({"pair": display, "reason": stale_reason})
                     continue
 
                 # dominant volume source = M15 (used for VP), fallback to M5
@@ -2045,6 +2076,11 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                             continue
                         # else: allow trade without bias confirmation
                     else:
+                        fresh, stale_reason = _scalp_candles_fresh(candles_bias, bias_tf, "bias")
+                        if not fresh:
+                            _record_stability_sample(display, asset_type, False, reason=stale_reason)
+                            skipped.append({"pair": display, "reason": stale_reason})
+                            continue
                         htf_bias = infer_bias_from_ema_stack(candles_bias)
 
             # ══════════════════════════════════════════════════════════════

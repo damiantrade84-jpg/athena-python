@@ -2951,7 +2951,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
     _bt_result = {
         "pair": pair["display"],
-        "symbol": pair["symbol"],
+        "symbol": pair.get("symbol") or pair.get("display"),
         "type": pair["type"],
         "totalTrades": len(trades),
         "wins": len(wins),
@@ -3162,7 +3162,7 @@ def _format_backtest_results(
     result = {
         # ── Core identity (matches Engine A) ──────────────────────────────────
         "pair": pair["display"],
-        "symbol": pair["symbol"],
+        "symbol": pair.get("symbol") or pair.get("display"),
         "type": pair["type"],
         # ── Trade stats ───────────────────────────────────────────────────────
         "totalTrades": len(trades),

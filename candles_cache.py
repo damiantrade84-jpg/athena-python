@@ -23,6 +23,7 @@ _last_cleanup_time = 0.0
 _CLEANUP_INTERVAL = 600.0  # seconds (10 mins)
 
 _CANDLE_CACHE_TTL = {"M1": 60, "M5": 5 * 60, "M15": 15 * 60, "H1": 55 * 60, "H4": 235 * 60, "D1": 23 * 3600}
+_TF_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400, "D1": 86400}
 
 
 def _cache_key(pair: dict, tf: str, limit: int) -> tuple[str, str, int]:
@@ -236,6 +237,21 @@ def candle_time_epoch_utc(val) -> int | None:
         return None
 
 
+def _has_current_bar(candles: list[dict] | None, tf: str, now_s: float | None = None) -> bool:
+    """True when the last candle is the currently forming timeframe bucket."""
+    if not candles:
+        return False
+    tf_sec = _TF_SECONDS.get((tf or "").upper())
+    if not tf_sec:
+        return False
+    last_ts = candle_time_epoch_utc(candles[-1].get("time", candles[-1].get("datetime")))
+    if last_ts is None:
+        return False
+    now = time.time() if now_s is None else float(now_s)
+    current_bucket = int(now // tf_sec) * tf_sec
+    return int(last_ts) >= current_bucket
+
+
 def merge_forex_forming_ws(
     candles: list,
     display: str,
@@ -370,6 +386,11 @@ def fetch_candles(
     if use_candle_builder:
         live_resp = fetch_candles_live(pair.get("display", ""), tf, limit)
         live_candles = extract_candles(live_resp)
+        if crypto_live_tf and live_candles and not _has_current_bar(live_candles, tf):
+            fetch_meta["liveStale"] = True
+            fetch_meta["liveBars"] = len(live_candles)
+            fetch_meta["liveLastTs"] = live_candles[-1].get("time", live_candles[-1].get("datetime"))
+            live_candles = None
 
         _min_live_bars = {"M5": 20, "M15": 20, "H1": 20, "H4": 10, "D1": 50}.get(tf, limit)
         live_bar_count = len(live_candles) if live_candles else 0
@@ -406,6 +427,22 @@ def fetch_candles(
             )
             return out
 
+    # ---- MT5 Direct Fetch ----
+    # MT5 is a fast local terminal IPC query. Check this before the TTL cache so
+    # any stale MT5 entries created by older code cannot feed live scoring.
+    if pair.get("source") == "mt5" and fetch_mt5:
+        fetch_meta.update({"resolution": "rest", "upstream": "mt5"})
+        out_candles = fetch_mt5(pair, tf, limit)
+        if isinstance(out_candles, dict):
+            out_candles = extract_candles(out_candles)
+
+        fetch_meta["bars"] = len(out_candles) if out_candles else 0
+        with _candle_cache_lock:
+            _candle_cache.pop(key, None)
+            _store_fetch_meta(key, fetch_meta)
+
+        return out_candles
+
     # Include limit in key so chart (e.g. 1000 bars for EMA200) does not share TTL
     # entry with scans using a smaller limit.
     candles = None
@@ -436,6 +473,8 @@ def fetch_candles(
                             "cacheUpstream": cached_meta.get("upstream"),
                         }
                     )
+                elif crypto_live_tf:
+                    fetch_meta["ignoredCacheReason"] = "crypto_live_builder_missing_or_stale"
                 else:
                     cached_meta = dict(_candle_fetch_meta.get(key, {}))
                     cached_meta.update(
@@ -475,24 +514,6 @@ def fetch_candles(
             inflight = threading.Event()
             _candle_fetch_inflight[key] = inflight
             is_owner = True
-
-    # ---- Stale TTL Cache Bypass for MT5 ----
-    # MT5 is a fast local terminal IPC query taking 1-2 ms. Caching it 4 hours disables Engine A updates.
-    # We bypass TTL entirely for mt5 to rely on true real-time charting.
-    if pair.get("source") == "mt5" and fetch_mt5:
-        if is_owner and inflight is not None:
-            inflight.set()
-        fetch_meta.update({"resolution": "rest", "upstream": "mt5"})
-        out_candles = fetch_mt5(pair, tf, limit)
-        if isinstance(out_candles, dict):
-            out_candles = extract_candles(out_candles)
-        
-        # We don't cache MT5 in the global slow-REST cache.
-        fetch_meta["bars"] = len(out_candles) if out_candles else 0
-        with _candle_cache_lock:
-            _store_fetch_meta(key, fetch_meta)
-
-        return out_candles
 
     try:
         if candles is None and pair["source"] == "binance":
