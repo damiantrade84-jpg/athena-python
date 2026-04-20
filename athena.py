@@ -196,6 +196,7 @@ def _merge_forex_forming_ws(candles: list, display: str, tf: str, limit: int):
 # N1: CONFIG loaded from config.py (YAML overrides + validation happen there)
 
 from config import CONFIG, scan_candle_limits  # noqa: E402
+from regime_shift_monitor import classify_position as _regime_classify  # noqa: E402
 
 
 # enabled=True  = included in live scan; confluence score is the execution gate
@@ -11258,6 +11259,7 @@ def _start_outcome_monitor() -> None:
 # ── Score Decay Monitor — recalculate confluence for open positions ────────
 
 _score_decay_results: dict = {}  # pair -> {"score": float, "entryScore": float, "ts": str}
+_regime_shift_results: dict = {}  # pair -> regime classification dict from regime_shift_monitor
 _decay_ai_cache: dict = {}  # pair -> {"decay_at_call": float, "ts": str, "result": dict}
 
 
@@ -11545,6 +11547,28 @@ def _check_score_decay() -> None:
                     "ts": datetime.now(timezone.utc).isoformat(),
                 }
 
+                # Regime shift classifier (advisory only — never closes trades)
+                try:
+                    def _fetch_for_classifier(_tf, _lim, _pair=pair):
+                        try:
+                            return fetch_candles(_pair, _tf, _lim)
+                        except Exception as _fe:
+                            log.debug(f"[REGIME-SHIFT] fetch wrapper error: {_fe}")
+                            return None
+
+                    _regime_result = _regime_classify(
+                        pair_display=pair_name,
+                        direction=row["direction"] or "LONG",
+                        engine=engine,
+                        style=style,
+                        fetch_candles_fn=_fetch_for_classifier,
+                        config=CONFIG,
+                    )
+                    _regime_result["ts"] = datetime.now(timezone.utc).isoformat()
+                    _regime_shift_results[pair_name] = _regime_result
+                except Exception as _rse:
+                    log.debug(f"[REGIME-SHIFT] {pair_name} classify failed: {_rse}")
+
                 # Warn at 40%+ drop from entry score (works for both forex 0-2 and factor 0-3 scales)
                 if decay_pct >= 40 or direction_flip:
                     log.warning(
@@ -11589,13 +11613,33 @@ def _check_score_decay() -> None:
 
 @app.route("/api/score-decay")
 def api_score_decay():
-    """Return score decay status for open positions."""
+    """Return score decay status for open positions, merged with regime shift classifier."""
 
     live_open_pairs = _verified_open_decay_pairs()
     for k in [p for p in _score_decay_results if p not in live_open_pairs]:
         del _score_decay_results[k]
+    for k in [p for p in _regime_shift_results if p not in live_open_pairs]:
+        del _regime_shift_results[k]
 
-    return jsonify({p: d for p, d in _score_decay_results.items() if p in live_open_pairs})
+    merged = {}
+    for p, d in _score_decay_results.items():
+        if p not in live_open_pairs:
+            continue
+        row = dict(d)
+        if p in _regime_shift_results:
+            row["regimeShift"] = _regime_shift_results[p]
+        merged[p] = row
+    return jsonify(merged)
+
+
+@app.route("/api/regime-shift")
+def api_regime_shift():
+    """Standalone endpoint for regime shift classifier results (open positions only)."""
+
+    live_open_pairs = _verified_open_decay_pairs()
+    for k in [p for p in _regime_shift_results if p not in live_open_pairs]:
+        del _regime_shift_results[k]
+    return jsonify({p: d for p, d in _regime_shift_results.items() if p in live_open_pairs})
 
 
 # ── Task 2: Performance Dashboard Endpoint ─────────────────────────────────────────
