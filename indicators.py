@@ -505,20 +505,26 @@ def calc_fib_proximity(price: float, fib: dict) -> int:
 
 def calc_stochastic(candles: list, kp: int, ks: int, ds: int) -> dict:
 
+    if not candles or len(candles) < kp:
+        return {"k": [None] * len(candles), "d": [None] * len(candles)}
+
     hi = [c["high"] for c in candles]
-
     lo = [c["low"] for c in candles]
-
     cl = [c["close"] for c in candles]
 
     n = len(cl)
-
     rawK = [None] * n
 
     for i in range(kp - 1, n):
-        hh = max(hi[i - kp + 1 : i + 1])
-
-        ll = min(lo[i - kp + 1 : i + 1])
+        window_hi = hi[i - kp + 1 : i + 1]
+        window_lo = lo[i - kp + 1 : i + 1]
+        
+        if not window_hi or not window_lo:
+            rawK[i] = 50
+            continue
+            
+        hh = max(window_hi)
+        ll = min(window_lo)
 
         rawK[i] = ((cl[i] - ll) / (hh - ll)) * 100 if hh != ll else 50
 
@@ -542,40 +548,28 @@ def calc_stochastic(candles: list, kp: int, ks: int, ds: int) -> dict:
 
 
 def calc_aroon(candles: list, period: int = 14) -> dict:
-    """Aroon Up/Down and Oscillator. TA-Lib standard, period=14.
+    """Aroon Up/Down and Oscillator. TA-Lib standard, period=14."""
 
-    Aroon Up   = ((period - bars_since_highest) / period) * 100
-
-    Aroon Down = ((period - bars_since_lowest)  / period) * 100
-
-    AROONOSC   = Aroon Up - Aroon Down
-
-    Range: Up/Down 0-100, Osc -100 to +100."""
-
-    if len(candles) < period + 1:
+    if not candles or len(candles) < period + 1:
         return {"aroonUp": None, "aroonDown": None, "aroonOsc": None}
 
-    hi = [c["high"] for c in candles[-(period + 1) :]]
+    hi = [c["high"] for c in candles[-(period + 1) :] if c.get("high") is not None]
+    lo = [c["low"] for c in candles[-(period + 1) :] if c.get("low") is not None]
 
-    lo = [c["low"] for c in candles[-(period + 1) :]]
+    if len(hi) <= 0 or len(lo) <= 0:
+        return {"aroonUp": None, "aroonDown": None, "aroonOsc": None}
 
     # Most recent occurrence of highest high / lowest low
-
     max_val = max(hi)
-
     max_idx = len(hi) - 1 - hi[::-1].index(max_val)
-
     min_val = min(lo)
-
     min_idx = len(lo) - 1 - lo[::-1].index(min_val)
 
     bars_since_high = (len(hi) - 1) - max_idx
     bars_since_low = (len(lo) - 1) - min_idx
 
     aroon_up = ((period - bars_since_high) / period) * 100
-
     aroon_down = ((period - bars_since_low) / period) * 100
-
     aroon_osc = aroon_up - aroon_down
 
     return {
@@ -588,16 +582,14 @@ def calc_aroon(candles: list, period: int = 14) -> dict:
 def calc_realized_volatility(
     candles: list, lookback: int = 30, asset_type: str = "crypto"
 ) -> dict:
-    """Realized volatility via log returns, annualized per asset class.
+    """Realized volatility via log returns, annualized per asset class."""
 
-    Returns dict with raw and normalized values.
-
-    Builds a rolling series of realized vol so z-score/percentile have enough data."""
-
-    if len(candles) < lookback + 1:
+    if not candles or len(candles) < lookback + 1:
         return {"realized_vol": None, "realized_vol_z": None, "realized_vol_pct": None}
 
-    closes = [c["close"] for c in candles]
+    closes = [float(c["close"]) for c in candles if c.get("close") is not None]
+    if len(closes) < lookback + 1:
+        return {"realized_vol": None, "realized_vol_z": None, "realized_vol_pct": None}
 
     annual_factor = CONFIG.get("REALIZED_VOL_ANNUALIZATION", {}).get(asset_type, 252)
 
@@ -634,14 +626,15 @@ def calc_realized_volatility(
 
 
 def calc_adx_momentum(adx_series: list, window: int = 5) -> tuple:
-    """Detect ADX momentum — is the trend strengthening or exhausting?
+    """Detect ADX momentum — is the trend strengthening or exhausting?"""
 
-    Returns (slope, state): 'strengthening', 'exhausting', 'collapsing', or 'stable'."""
+    if not adx_series:
+        return 0.0, "stable"
 
     valid = [v for v in adx_series if v is not None]
 
     if len(valid) < window + 2:
-        return 0, "stable"
+        return 0.0, "stable"
 
     recent = valid[-(window + 1) :]
 
@@ -830,12 +823,26 @@ def calc_levels(
 def calc_fib(candles: list) -> dict:
     """Calculate Fibonacci retracement levels from last 50 candles' high/low range."""
 
+    if not candles:
+        return {
+            "highest": 0.0, "lowest": 0.0,
+            "fib236": 0.0, "fib382": 0.0, "fib500": 0.0,
+            "fib618": 0.0, "fib786": 0.0, "ext1618": 0.0
+        }
+
     r = candles[-50:]
+    highs = [c["high"] for c in r if c.get("high") is not None]
+    lows = [c["low"] for c in r if c.get("low") is not None]
 
-    high = max(c["high"] for c in r)
+    if not highs or not lows:
+        return {
+            "highest": 0.0, "lowest": 0.0,
+            "fib236": 0.0, "fib382": 0.0, "fib500": 0.0,
+            "fib618": 0.0, "fib786": 0.0, "ext1618": 0.0
+        }
 
-    low = min(c["low"] for c in r)
-
+    high = max(highs)
+    low = min(lows)
     rng = high - low
 
     return {

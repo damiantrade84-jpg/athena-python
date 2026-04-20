@@ -11476,7 +11476,7 @@ def _refresh_trade_score(pair_obj, engine, style, direction):
     except Exception as e:
         log.debug(f"[DECAY-REFRESH] {pair_obj.get('display')} engine_a refresh failed: {e}")
 
-    return 0, 1.0, 0, None
+    return 0.0, 1.0, 0.0, None
 
 
 def _check_score_decay() -> None:
@@ -11589,9 +11589,22 @@ def _check_score_decay() -> None:
 
                 # Warn at 40%+ drop from entry score (works for both forex 0-2 and factor 0-3 scales)
                 if decay_pct >= 40 or direction_flip:
-                    log.warning(
-                        f"[DECAY] {pair_name} ({engine}): {score_note} ({decay_pct:.0f}% drop) — consider exit"
-                    )
+                    _msg = f"[DECAY] {pair_name} ({engine}): {score_note} ({decay_pct:.0f}% drop) — consider exit"
+                    if direction_flip:
+                        _msg += f" | DIRECTION FLIP: {row['direction']} → {result.get('direction')}"
+                    
+                    # Diagnostic: Check for major component shifts (Engine A)
+                    if engine == "engine_a" and result and "components" in result:
+                        comps = result["components"]
+                        _dr = []
+                        if comps.get("trend_gate") is False:
+                            _dr.append(f"trend_gate_blocked (adx={comps.get('trend_gate_adx')})")
+                        if comps.get("regime_blocked") is True:
+                            _dr.append(f"regime_blocked ({comps.get('regime_label')})")
+                        if _dr:
+                            _msg += f" | VETO: {', '.join(_dr)}"
+                            
+                    log.warning(_msg)
                     try:
                         pass  # decay telegram notifications disabled
                     except Exception:

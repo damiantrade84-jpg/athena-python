@@ -342,9 +342,12 @@ FOREX_ENGINE:
   trend_gate_adx_min: 25   # Match ADX_TREND_MIN_CLASS.forex — must stay in sync
   trend_gate_adx_hard_fail_min: 15.0
   trend_gate_adx_soft_full_at: 25.0
-  trend_gate_adx_soft_enabled: true   # 2026-04-17: ADX 15-25 now scales 0.40-1.0 instead of hard-failing
+  trend_gate_adx_soft_enabled: true   # 2026-04-20: Re-enabled — ADX 15-25 gets score penalty, not hard block
   # Which timeframe supplies Wilder ADX for the trend gate: d1 (slow) | h4 (matches H4 screen)
-  trend_gate_adx_source: h4
+  # 2026-04-20: Reverted h4 -> d1. H4 ADX is too volatile; it hard-blocks during normal
+  # D1-trend pullbacks (exactly when swing entries should fire). D1 ADX reflects the
+  # structural trend correctly and was the original working setting.
+  trend_gate_adx_source: d1
   session_mode: "soft"          # 2026-04-17: was "strict" — off-session now 0.75x instead of hard-block
   session_soft_multiplier: 0.75
   session_shoulder_enabled: true

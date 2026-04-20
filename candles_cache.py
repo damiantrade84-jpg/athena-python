@@ -22,7 +22,7 @@ _candle_fetch_inflight: dict = {}
 _last_cleanup_time = 0.0
 _CLEANUP_INTERVAL = 600.0  # seconds (10 mins)
 
-_CANDLE_CACHE_TTL = {"M1": 60, "M5": 5 * 60, "M15": 15 * 60, "H1": 55 * 60, "H4": 235 * 60, "D1": 23 * 3600}
+
 _TF_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400, "D1": 86400}
 
 
