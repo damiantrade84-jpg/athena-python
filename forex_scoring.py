@@ -962,6 +962,54 @@ def compute_forex_score(
         log.error(f"[FOREX SMC ERROR] {e}", exc_info=True)
         fvg_bonus, liquidity_bonus, volume_bonus, fvg_overlap = 0.0, 0.0, 0.0, False
 
+    # ── Counter-trend SHORT penalty ───────────────────────────────────────────
+    # Data support (2026-04-21 backtest, n=200): hurst and trend_gate_raw are
+    # SUSPECT in forex/SHORT even after direction normalization — both carry
+    # negative correlation with R in SHORT trades.
+    #
+    # Two mechanisms:
+    #   A. London breakout SHORT when EMA stack is persistently LONG and Hurst
+    #      shows trend persistence → counter-trend breakout; fail most of these.
+    #   B. Trend-path SHORT with very high Hurst (>0.65) → mature downtrend,
+    #      higher reversal risk; soft penalty so structurally strong SHORTs pass.
+    _ct_short_applied = False
+    _ct_case = ""
+    try:
+        _ct_cfg = (fx_cfg.get("counter_trend_short_gate", {}) or {})
+        if bool(_ct_cfg.get("enabled", True)):
+            # Case A: breakout SHORT while EMA stack is LONG and Hurst trending
+            if (
+                bo_final > 0
+                and bo_dir == "SHORT"
+                and trend_dir == "LONG"
+                and trend_ok_raw
+                and _hurst_trending
+            ):
+                _ct_bo_mult = float(_ct_cfg.get("bo_counter_trend_mult", 0.70))
+                bo_final = bo_final * _ct_bo_mult
+                _ct_short_applied = True
+                _ct_case = f"case_A_mult={_ct_bo_mult:.2f}"
+                log.debug(
+                    "[FOREX-CT] %s counter-trend SHORT bo x%.2f hurst=%.3f",
+                    pair.get("display", "?"), _ct_bo_mult, _hurst,
+                )
+            # Case B: trend-path SHORT with very high Hurst (mature downtrend)
+            if (
+                trend_score > 0
+                and trend_dir == "SHORT"
+                and _hurst > float(_ct_cfg.get("high_hurst_threshold", 0.65))
+            ):
+                _ct_trend_mult = float(_ct_cfg.get("trend_high_hurst_short_mult", 0.80))
+                trend_score = trend_score * _ct_trend_mult
+                _ct_short_applied = True
+                _ct_case = (_ct_case + "+case_B") if _ct_case else f"case_B_mult={_ct_trend_mult:.2f}"
+                log.debug(
+                    "[FOREX-CT] %s mature-downtrend SHORT penalty x%.2f hurst=%.3f",
+                    pair.get("display", "?"), _ct_trend_mult, _hurst,
+                )
+    except Exception as _ct_err:
+        log.debug("[FOREX-CT] penalty skipped: %s", _ct_err)
+
     # ── Final score with additive SMC bonus (capped) ──────────────────────────
     # Bonuses are additive and capped so they can only nudge near-threshold signals,
     # not rescue weak base scores. Multiplicative stacking (old: up to 1.518×) allowed
@@ -1067,6 +1115,8 @@ def compute_forex_score(
         "volume_strength": round(volume_bonus, 3),
         "fvg_overlap": fvg_overlap,
         "zero_score_reasons": zero_score_reasons,
+        "counter_trend_short_applied": _ct_short_applied,
+        "counter_trend_case": _ct_case,
     }
 
     return result

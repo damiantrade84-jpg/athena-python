@@ -203,6 +203,7 @@ def compute_confidence(
     microstructure: Optional[Dict] = None,
     session_vol_multiplier: float = 1.0,
     factor_map: Optional[Dict] = None,
+    session_quality: Optional[str] = None,
 ) -> Dict:
     """Compute signal confidence with graceful degradation.
 
@@ -239,6 +240,7 @@ def compute_confidence(
             "components": components,
             "available_count": 0,
             "degraded": True,
+            "session_quality": session_quality,
         }
 
     # Redistribute: scale weights of available components to sum to 1.0
@@ -252,10 +254,21 @@ def compute_confidence(
 
     confidence = max(0.0, min(1.0, final))
 
+    # Session quality multiplier: off-hours entries have lower conviction.
+    # Timing is the strongest PROTECTIVE factor (2026-04-18 backtest: breakout_eval_hour
+    # and utc_hour consistently PROTECTIVE across all asset classes and splits).
+    # Low-quality sessions push confidence down so Engine C's reliability gate
+    # demotes execute→reduced_risk or watchlist. London/NY overlap is unchanged.
+    _SESSION_MULTS = {"high": 1.00, "medium": 0.90, "low": 0.70}
+    if session_quality in _SESSION_MULTS:
+        confidence = round(confidence * _SESSION_MULTS[session_quality], 4)
+    confidence = max(0.0, min(1.0, confidence))
+
     return {
         "confidence": round(confidence, 4),
         "components": components,
         "weights_used": used_weights,
         "available_count": len(available),
         "degraded": len(available) < len(_DEFAULT_WEIGHTS),
+        "session_quality": session_quality,
     }

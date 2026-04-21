@@ -364,6 +364,17 @@ FOREX_ENGINE:
     momentum: 0.30  # H4 momentum contribution to trend score
     adx: 0.20       # H4 ADX contribution to trend score
     carry: 0.10     # Carry tilt contribution to trend score
+  # Counter-trend SHORT gate (data: 2026-04-21 backtest — hurst/trend_gate_raw SUSPECT in forex/SHORT).
+  # Case A: London breakout SHORT when EMA stack (trend_dir) is persistently LONG and Hurst is trending
+  #         → counter-trend breakout; bo_final multiplied down so it rarely beats trend_score or gate.
+  # Case B: Trend-path SHORT when Hurst > high_hurst_threshold (very mature downtrend, exhaustion risk)
+  #         → trend_score multiplied down.
+  # Both cases are config-driven and can be disabled independently.
+  counter_trend_short_gate:
+    enabled: true
+    bo_counter_trend_mult: 0.70       # Case A: multiply bo_final when breakout SHORT vs LONG EMA stack
+    high_hurst_threshold: 0.65        # Case B: "very strong trend" threshold for mature-downtrend penalty
+    trend_high_hurst_short_mult: 0.80 # Case B: multiply trend_score for SHORT in very strong trend
 MAX_RISK_PER_TRADE: 0.03      # Hard cap 3% per trade
 DRAWDOWN_REDUCE_THRESHOLD: 0.10   # Halve size at 10% drawdown
 DRAWDOWN_STOP_THRESHOLD: 0.15     # Stop all trading at 15% drawdown
