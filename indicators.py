@@ -484,7 +484,7 @@ def calc_fib_proximity(price: float, fib: dict) -> int:
     Returns +1 (support/bullish), -1 (resistance/bearish), or 0 (not near)."""
 
     try:
-        levels = [fib["fib382"], fib["fib500"], fib["fib618"]]
+        levels = [fib["fib236"], fib["fib382"], fib["fib500"], fib["fib618"], fib["fib786"]]
 
         rng = fib["highest"] - fib["lowest"]
 
@@ -853,7 +853,7 @@ def calc_fib(candles: list) -> dict:
         "fib500": round(high - rng * 0.5, 6),
         "fib618": round(high - rng * 0.618, 6),
         "fib786": round(high - rng * 0.786, 6),
-        "ext1618": round(high + rng * 0.618, 6),
+        "ext1618": round(high + rng * 1.618, 6),
     }
 
 
