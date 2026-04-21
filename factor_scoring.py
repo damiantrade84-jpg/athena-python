@@ -1,130 +1,95 @@
-"""factor_scoring.py — Factor-based scoring engine with regime-aware weights and correlation filtering.
+"""factor_scoring.py — Engine A v2: 3-Factor Quantitative Scoring Engine.
 
-Computes factor scores from normalized indicators, applies regime weights, filters correlated indicators,
-and aggregates to final signal score.
+Architecture (research-validated, 2026-04):
+  Factor 1 — TREND       : Multi-TF EMA alignment (D1/H4/H1). Determines direction ONLY.
+  Factor 2 — MOMENTUM    : RSI + MACD confirmation quality (0-1 scale). Sizes conviction.
+  Factor 3 — ADX GATE    : Trend-strength filter. Hard abort < 15; soft penalty 15-25; full >= 25.
+  Addon    — ASSET ADDON : One optional secondary per class (forex=carry, crypto=funding,
+                           commodity=COT). Graceful 0.0 when data unavailable — no phantom signal.
 
-Blueprint compliance:
-  - Regime detection (TRENDING/RANGING/HIGH_VOLATILITY/LOW_VOLATILITY) dynamically selects weights.
-  - Indicator correlation filter: DISABLED (stub returns 1.0). Implementation in _pearson/_build_indicator_series ready for future re-enable.
-  - Missing factors excluded from scoring (not treated as 0).
-  - Raw thresholds for warnings only; scoring uses normalized z-scores/percentiles.
-  - DIRECTIONAL indicators (ema_trend, rsi_z, macdLine_z, funding_rate, oi_change_z,
-    oi_price_divergence [crypto], microstructure)
-    determine trade direction and contribute signed scores.
-  - NON-DIRECTIONAL indicators (adx_z, atr_z, bbWidth_z, realized_vol_z, volume_ratio,
-    fib_proximity) measure signal quality/strength — contribute via abs().
+Design principles:
+  - Direction from TREND factor only — no other factor can flip direction.
+  - 3 factors max — validated by Harvey et al. (2016), Asness et al. (2012), AQR (2017).
+  - No variance restorer (sqrt(n)) — that rewarded factor quantity, not quality.
+  - No stacked regime/adaptive weight layers — single clean pass.
+  - Forex routes here (NOT forex_scoring.py) — unified engine with forex-appropriate params.
+  - Missing addon data = 0.0 (not phantom signal, not blocking).
+  - Score scale 0-3.0 preserved for backward compat with Engine C / confluence gates.
 """
 
 import math
 import logging
 import threading
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
+
 from config import CONFIG
-from intermarket import apply_confirmation_to_score
 from regime import detect_regime
 
 log = logging.getLogger("athena")
 
+# ── Constants ─────────────────────────────────────────────────────────────────
+
 _CRYPTO_COT_PAIRS = {"BTC/USDT", "ETH/USDT"}
-_MICROSTRUCTURE_KEYS = (
-    "order_book_imbalance",
-    "liquidity_wall_detection",
-    "orderflow_delta",
-    "liquidity_pressure",
-)
+
+# ADX gate thresholds (Wilder 1978 standard)
+_ADX_HARD_FAIL = 15.0   # below this → dead market, abort
+_ADX_SOFT_FULL = 25.0   # at or above this → full credit
+_ADX_SOFT_MULT = 0.65   # multiplier in soft zone (15–25)
+
+# Session multipliers (forex only — soft, not hard)
+_SESSION_CORE_MULT = 1.00    # London 07-16 UTC, NY 13-21 UTC
+_SESSION_SHOULDER_MULT = 0.90
+_SESSION_OFF_MULT = 0.75
+
+# Addon contribution bounds
+_ADDON_CONFIRM = 0.30    # confirming the trend direction
+_ADDON_NEUTRAL = 0.00    # data missing or neutral
+_ADDON_AGAINST = -0.15   # actively opposing direction
+
+# Final score formula weights
+_MOMENTUM_WEIGHT = 0.50
+_ADDON_WEIGHT = 0.30
+_BASE_WEIGHT = 0.20      # base floor contribution (always present if trend valid)
 
 
-def _uses_usd_proxy_macro(pair: dict) -> bool:
-    return (pair or {}).get("display") == "XAU/USD"
+# ── Regime smoothing (kept for scan-level stability) ──────────────────────────
+
+def make_regime_smoothing_context() -> dict:
+    return {"history": {}, "committed": {}, "lock": threading.Lock()}
 
 
-def _pair_profile(pair: dict) -> dict:
-    profiles = CONFIG.get("PAIR_PROFILES", {}) or {}
-    return profiles.get(pair.get("display")) or profiles.get(pair.get("symbol")) or {}
+def _get_smoothed_regime(
+    regime_context: Optional[dict], pair_id: str, raw_regime: str
+) -> str:
+    """Return smoothed regime: only switch if new regime holds for REGIME_SMOOTHING_BARS bars."""
+    if regime_context is None:
+        return raw_regime
+    min_bars = CONFIG.get("REGIME_SMOOTHING_BARS", 3)
+    history = regime_context.setdefault("history", {})
+    committed_map = regime_context.setdefault("committed", {})
+    lock = regime_context.setdefault("lock", threading.Lock())
+    with lock:
+        hist = history.setdefault(pair_id, [])
+        committed = committed_map.get(pair_id)
+        hist.append(raw_regime)
+        if len(hist) > min_bars:
+            hist[:] = hist[-min_bars:]
+        if committed is None:
+            committed_map[pair_id] = raw_regime
+            return raw_regime
+        if len(hist) >= min_bars and len(set(hist[-min_bars:])) == 1:
+            committed_map[pair_id] = hist[-1]
+        return committed_map[pair_id]
 
 
-def _legacy_vote_to_factor(vote_key: str) -> str | None:
-    mapping = {
-        "d1_trend": "trend",
-        "h1_ema": "trend",
-        "d1_adx": "trend_strength",
-        "h4_macd": "momentum",
-        "h4_oscillator": "momentum",
-        "volume": "volume",
-        "funding": "derivatives",
-        "h4_fib": "structure",
-        "h1_bb": "volatility",
-        "divergence": "momentum",
-    }
-    return mapping.get(str(vote_key).strip().lower())
-
-
-def _apply_pair_profile_weight_rules(pair: dict, weights: dict) -> dict:
-    profile = _pair_profile(pair)
-    out = dict(weights)
-
-    # Disabled legacy votes become zero-weight factor groups.
-    for vote in set(profile.get("disabled_votes", []) or []):
-        factor = _legacy_vote_to_factor(vote)
-        if factor and factor in out:
-            out[factor] = 0.0
-
-    # Legacy overrides are interpreted as multipliers on factor-group weights.
-    for vote, mult in (profile.get("weight_overrides", {}) or {}).items():
-        factor = _legacy_vote_to_factor(vote)
-        if not factor or factor not in out:
-            continue
-        try:
-            out[factor] = max(0.0, float(out[factor]) * float(mult))
-        except (TypeError, ValueError):
-            continue
-
-    # Optional direct factor-group multipliers by score subgroup.
-    score_group = pair.get("score_group")
-    if score_group:
-        group_mults = (
-            (CONFIG.get("FACTOR_SCORE_GROUP_MULTIPLIERS", {}) or {}).get(score_group, {})
-            or {}
-        )
-        for factor, mult in group_mults.items():
-            if factor not in out:
-                continue
-            try:
-                out[factor] = max(0.0, float(out[factor]) * float(mult))
-            except (TypeError, ValueError):
-                continue
-
-    return out
-
-
-def _crypto_supports_cot(pair: dict) -> bool:
-    return pair.get("display") in _CRYPTO_COT_PAIRS
-
-
-def _optional_directional_keys(asset_type: str, pair: dict) -> tuple[str, ...]:
-    if asset_type != "crypto":
-        # Non-crypto never supplies funding_rate, so only count optional feeds that
-        # can materially appear when softening the directional threshold.
-        keys = ["cot_z", "carry_z"]
-        if _uses_usd_proxy_macro(pair):
-            keys.append("usd_proxy_score")
-        return tuple(keys)
-    # "oi" is one optional slot covering oi_change_z + oi_price_divergence (same feed).
-    keys = ["funding_rate", "oi"]
-    if _crypto_supports_cot(pair):
-        keys.append("cot_z")
-    return tuple(keys)
-
+# ── Backward-compat stub (used by backtest_runner + scoring.py) ───────────────
 
 def build_oi_context_for_factor_scoring(
     oi_data: Optional[dict],
     d1_candles: List,
     h1_snap: Optional[dict],
 ) -> Optional[dict]:
-    """Build ``oi_context`` for derivatives scoring (parity with OI divergence price window).
-
-    Uses D1[-2] vs H1 close when available — same as ``_calc_oi_divergence`` inputs in athena.
-    """
+    """Build oi_context for crypto derivatives addon (parity with old engine)."""
     if not oi_data or oi_data.get("oiChange") is None:
         return None
     d1c = d1_candles or []
@@ -147,475 +112,349 @@ def build_oi_context_for_factor_scoring(
     }
 
 
-def _crypto_oi_indicators_from_context(
-    oi_context: Optional[dict],
-) -> tuple[Optional[float], Optional[float]]:
-    """Map OI + price changes to bounded directional indicators (derivatives subfactor, crypto only).
-
-    Returns (oi_change_z, oi_price_divergence). Either may be None when inputs are absent/noisy.
-    """
-    if not oi_context:
-        return None, None
-    raw_o = oi_context.get("oi_change_pct")
-    if raw_o is None:
-        return None, None
-    try:
-        o = float(raw_o)
-    except (TypeError, ValueError):
-        return None, None
-    # Crowding / flow magnitude (signed): ~6% OI change → ±3.0 (conservative vs funding)
-    oi_change_z = max(-3.0, min(3.0, o / 2.0))
-
-    raw_p = oi_context.get("price_change_pct")
-    if raw_p is None:
-        return oi_change_z, None
-    try:
-        p = float(raw_p)
-    except (TypeError, ValueError):
-        return oi_change_z, None
-    # Interaction: same-direction OI+price → conviction; opposite → stress / exhaustion
-    if abs(o) < 0.2 and abs(p) < 0.2:
-        return oi_change_z, None
-    sign_align = 1.0 if o * p > 0 else -1.0
-    mag = min(abs(o), abs(p), 12.0) / 3.0
-    oi_price_divergence = max(-3.0, min(3.0, sign_align * mag))
-    return oi_change_z, oi_price_divergence
-
-
-def _has_live_microstructure(h4_snap: Dict) -> bool:
-    age = h4_snap.get("microstructure_age_sec")
-    try:
-        if age is not None and float(age) > 45.0:
-            return False
-    except (TypeError, ValueError):
-        pass
-    return any(h4_snap.get(k) is not None for k in _MICROSTRUCTURE_KEYS)
-
-
-def _crypto_live_ws_unavailable_reason(h4_snap: Dict) -> str:
-    """Human-readable reason live WS microstructure was not used (caller: not _has_live_microstructure)."""
-    age = h4_snap.get("microstructure_age_sec")
-    try:
-        if age is not None and float(age) > 45.0:
-            return "stale_ws"
-    except (TypeError, ValueError):
-        pass
-    return "missing_live_ws"
-
-
-def _build_crypto_engine_a_diagnostics(
-    pair: dict,
-    h4_snap: Dict,
-    indicators: Dict,
-    factor_scores: Dict[str, Optional[float]],
-    weights: Dict[str, float],
-    feed_status: Dict[str, str],
-) -> Dict[str, object]:
-    """Lightweight scan/API diagnostics for crypto Engine A (no formula changes)."""
-    gate = bool(CONFIG.get("CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED", False))
-    live_ok = _has_live_microstructure(h4_snap)
-    skip_reason: Optional[str] = None
-    if not gate:
-        skip_reason = "microstructure_gate_disabled"
-    elif not live_ok:
-        skip_reason = _crypto_live_ws_unavailable_reason(h4_snap)
-
-    micro_active = (
-        gate
-        and float(weights.get("microstructure", 0) or 0) > 0
-        and factor_scores.get("microstructure") is not None
-    )
-    oi_active = feed_status.get("oi") == "ok"
-
-    return {
-        "microstructureGateEnabled": gate,
-        "liveMicrostructureSkippedReason": skip_reason,
-        "microstructureActiveInScore": micro_active,
-        "microstructureFactorScore": factor_scores.get("microstructure"),
-        "derivativesFactorScore": factor_scores.get("derivatives"),
-        "oiSubfactorsActive": oi_active,
-        "oiFeedStatus": feed_status.get("oi"),
-        "microstructureAgeSec": h4_snap.get("microstructure_age_sec"),
-        "microstructureLiveDataPresent": live_ok,
-    }
-
-
-# ── Regime smoothing state ────────────────────────────────────────────────────
-# Regime smoothing is opt-in: callers only get multi-bar regime memory when they pass
-# the same explicit regime_context object across successive analyses (for example, the
-# shared full-scan context). Single ad-hoc analyze_pair() calls with regime_context=None
-# intentionally use the raw regime for that one evaluation.
-def make_regime_smoothing_context() -> dict:
-    return {"history": {}, "committed": {}, "lock": threading.Lock()}
-
-
-def _get_smoothed_regime(
-    regime_context: Optional[dict], pair_id: str, raw_regime: str
-) -> str:
-    """Return smoothed regime: only switch if new regime holds for REGIME_SMOOTHING_BARS bars."""
-    if regime_context is None:
-        return raw_regime
-
-    min_bars = CONFIG.get("REGIME_SMOOTHING_BARS", 3)
-    history = regime_context.setdefault("history", {})
-    committed_map = regime_context.setdefault("committed", {})
-    lock = regime_context.setdefault("lock", threading.Lock())
-    with lock:
-        hist = history.setdefault(pair_id, [])
-        committed = committed_map.get(pair_id)
-        hist.append(raw_regime)
-        # Keep only the last min_bars entries
-        if len(hist) > min_bars:
-            hist[:] = hist[-min_bars:]
-        # Bootstrap: first observation commits immediately
-        if committed is None:
-            committed_map[pair_id] = raw_regime
-            return raw_regime
-        # Switch only when all of the last min_bars bars agree on the new regime
-        if len(hist) >= min_bars and len(set(hist[-min_bars:])) == 1:
-            committed_map[pair_id] = hist[-1]
-        return committed_map[pair_id]
-
-
-# ── Correlation filter ───────────────────────────────────────────────────────
-
-
-# The following two functions are complete implementations used by _apply_correlation_filter()
-# when the correlation filter is re-enabled. They are not called in the current codebase.
-def _pearson(x: List[float], y: List[float]) -> Optional[float]:
-    """Pearson correlation between two equal-length float lists. Returns None if insufficient data."""
-    pairs = [(a, b) for a, b in zip(x, y) if a is not None and b is not None]
-    n = len(pairs)
-    if n < 20:
-        return None
-    mx = sum(a for a, _ in pairs) / n
-    my = sum(b for _, b in pairs) / n
-    num = sum((a - mx) * (b - my) for a, b in pairs)
-    dx = sum((a - mx) ** 2 for a, _ in pairs)
-    dy = sum((b - my) ** 2 for _, b in pairs)
-    den = math.sqrt(dx) * math.sqrt(dy)
-    return num / den if den > 0 else 0.0
-
-
-def _build_indicator_series(
-    h4_candles: List[dict], window: int
-) -> Dict[str, List[float]]:
-    """Build indicator time series from H4 candles for correlation computation.
-    Only imports are lightweight — reuses the same calc functions as indicators.py.
-    """
-    from indicators import calc_rsi, calc_macd, calc_atr, calc_adx
-
-    if len(h4_candles) < max(window, 50):
-        return {}
-    candles = h4_candles[-window:]
-    closes = [c["close"] for c in candles]
-    highs = [c["high"] for c in candles]
-    lows = [c["low"] for c in candles]
-    return {
-        "rsi_z": calc_rsi(closes, 14),
-        "macdLine_z": calc_macd(closes)["macd"],
-        "atr_z": calc_atr(highs, lows, closes, 14),
-        "adx_z": calc_adx(highs, lows, closes, 14)["adx"],
-    }
-
-
-def _apply_correlation_filter(
-    indicator_scalars: Dict[str, Optional[float]], h4_candles: List[dict], window: int
-) -> Dict[str, float]:
-    """Correlation filter — CURRENTLY DISABLED (returns uniform weights of 1.0).
-
-    The Pearson correlation implementation (_pearson, _build_indicator_series) is
-    complete and ready to re-enable. To activate: replace the return statement with
-    calls to those functions using the pattern from the original blueprint.
-
-    Disabled because the multiplicative scoring formula already handles indicator
-    redundancy through regime-weight dampening. Re-evaluate after collecting 6+
-    months of live factor performance data via ai_learning.py.
-    """
-    try:
-        series_map = _build_indicator_series(h4_candles, window)
-        keys = [
-            k
-            for k, v in indicator_scalars.items()
-            if v is not None and k in series_map and series_map.get(k)
-        ]
-        if len(keys) >= 2:
-            pairwise = []
-            max_abs_corr: Dict[str, float] = {k: 0.0 for k in keys}
-            for i, left in enumerate(keys):
-                for right in keys[i + 1:]:
-                    corr = _pearson(series_map.get(left, []), series_map.get(right, []))
-                    if corr is None:
-                        continue
-                    abs_corr = abs(float(corr))
-                    max_abs_corr[left] = max(max_abs_corr[left], abs_corr)
-                    max_abs_corr[right] = max(max_abs_corr[right], abs_corr)
-                    pairwise.append(f"{left}/{right}={corr:.3f}")
-
-            if pairwise:
-                theoretical = {
-                    k: round(max(0.5, 1.0 - max_abs_corr.get(k, 0.0) * 0.5), 4)
-                    for k in keys
-                }
-                log.debug(
-                    "[SHADOW CORRELATION] pairs=%s theoretical_weights=%s",
-                    ", ".join(pairwise),
-                    theoretical,
-                )
-        elif keys:
-            log.debug(
-                "[SHADOW CORRELATION] insufficient overlapping indicators for matrix: %s",
-                keys,
-            )
-    except Exception as exc:
-        log.debug(f"[SHADOW CORRELATION] fail-open: {exc}")
-    return {k: 1.0 for k in indicator_scalars}
-
-
-# ── Factor scoring ───────────────────────────────────────────────────────────
-
-
-def _candle_microstructure(h4_candles: List[dict]) -> Dict[str, Optional[float]]:
-    """Compute microstructure proxies from H4 OHLC data (no order book required).
-
-    Works for all asset types. Crypto WS data takes priority when available.
-
-    Returns:
-        order_book_imbalance  — avg directional bar body ratio over 10 bars (signed)
-        orderflow_delta       — bull/bear bar count imbalance over 10 bars (signed)
-        liquidity_pressure    — avg close position within bar over 5 bars (signed)
-    """
-    if not h4_candles or len(h4_candles) < 5:
-        return {
-            "order_book_imbalance": None,
-            "orderflow_delta": None,
-            "liquidity_pressure": None,
-            "volume_momentum_spread": None,
-        }
-
-    recent10 = h4_candles[-10:]
-    recent5 = h4_candles[-5:]
-
-    # order_book_imbalance: mean of (close-open)/(high-low) per bar → directional body strength
-    obi_vals = []
-    for c in recent10:
-        rng = c["high"] - c["low"]
-        if rng > 0:
-            obi_vals.append((c["close"] - c["open"]) / rng)
-    obi = (
-        max(-3.0, min(3.0, (sum(obi_vals) / len(obi_vals)) * 3.0)) if obi_vals else None
-    )
-
-    # orderflow_delta: (bull bars - bear bars) / n — directional bar count balance
-    n = len(recent10)
-    bulls = sum(1 for c in recent10 if c["close"] > c["open"])
-    bears = sum(1 for c in recent10 if c["close"] < c["open"])
-    ofd = max(-3.0, min(3.0, ((bulls - bears) / n) * 3.0)) if n > 0 else None
-
-    # liquidity_pressure: avg (close-low)/(high-low) - 0.5 → where buyers/sellers end up per bar
-    lp_vals = []
-    for c in recent5:
-        rng = c["high"] - c["low"]
-        if rng > 0:
-            lp_vals.append((c["close"] - c["low"]) / rng - 0.5)
-    lp = max(-3.0, min(3.0, (sum(lp_vals) / len(lp_vals)) * 6.0)) if lp_vals else None
-
-    # volume_momentum_spread: momentum of volume-weighted directional conviction
-    # Measures whether conviction is accelerating or fading (Swift Algo X concept)
-    # Works for all asset classes with volume data. Returns None if vol absent.
-    vms = None
-    try:
-        if len(h4_candles) >= 30:
-            vms_bars = h4_candles[-30:]
-            total_vol = sum(float(c.get("vol", 0) or 0) for c in vms_bars)
-            if total_vol > 0:
-                pressure = []
-                for c in vms_bars:
-                    rng = c["high"] - c["low"]
-                    vol = float(c.get("vol", 0) or 0)
-                    if rng > 0 and vol > 0:
-                        signed = rng if c["close"] >= c["open"] else -rng
-                        pressure.append((signed * vol) / total_vol)
-                    else:
-                        pressure.append(0.0)
-                # Fast(5) minus slow(14) EMA of pressure = momentum of conviction
-                def _ema_s(vals, p):
-                    if len(vals) < p:
-                        return []
-                    k = 2.0 / (p + 1)
-                    r = [sum(vals[:p]) / p]
-                    for v in vals[p:]:
-                        r.append(v * k + r[-1] * (1 - k))
-                    return r
-                fast = _ema_s(pressure, 5)
-                slow = _ema_s(pressure, 14)
-                if fast and slow:
-                    spread = [f - s for f, s in zip(fast[-len(slow):], slow)]
-                    if len(spread) >= 3:
-                        mean_s = sum(spread) / len(spread)
-                        std_s = (sum((x - mean_s)**2 for x in spread) / len(spread)) ** 0.5
-                        if std_s > 1e-10:
-                            vms = max(-3.0, min(3.0, (spread[-1] - mean_s) / std_s))
-    except Exception:
-        pass
-
-    return {
-        "order_book_imbalance": obi,
-        "orderflow_delta": ofd,
-        "liquidity_pressure": lp,
-        "volume_momentum_spread": vms,
-    }
-
-
-def _factor_score(
-    indicators: Dict[str, Optional[float]], mapping: Dict[str, str]
-) -> Optional[float]:
-    """Simple mean of indicators whose keys appear in mapping values (legacy test API)."""
-    vals = [indicators[k] for k in mapping.values() if indicators.get(k) is not None]
-    if not vals:
-        return None
-    return sum(vals) / len(vals)
-
-
-def _weighted_factor_score(
-    indicators: Dict[str, Optional[float]],
-    keys: List[str],
-    corr_weights: Dict[str, float],
-    use_abs: bool = False,
-    factor_name: str = "",
-    asset_type: str = "",
-) -> Optional[float]:
-    """Compute factor score as indicator-weighted, correlation-adjusted mean.
-
-    Applies per-indicator weights from CONFIG["INDICATOR_WEIGHTS"][factor_name]
-    on top of correlation adjustments. Missing indicator weight keys default to 1.0.
-    use_abs=True for non-directional factors (always positive contribution).
-    """
-    # Per-indicator weights from config (empty dict = equal weighting)
-    _iw_cfg = CONFIG.get("INDICATOR_WEIGHTS", {}).get(factor_name, {})
-    if _iw_cfg and isinstance(next(iter(_iw_cfg.values()), None), dict):
-        ind_weights = _iw_cfg.get(asset_type, _iw_cfg.get("default", {}))
-    else:
-        ind_weights = _iw_cfg
-
-    vals = []
-    wgts = []
-    for k in keys:
-        v = indicators.get(k)
-        if v is not None:
-            vals.append(abs(v) if use_abs else v)
-            # Combined weight: indicator config weight × correlation adjustment
-            iw = ind_weights.get(k, 1.0)
-            cw = corr_weights.get(k, 1.0)
-            wgts.append(iw * cw)
-    if not vals:
-        return None
-    w_sum = sum(wgts)
-    if w_sum <= 0:
-        return None
-    return sum(v * w / w_sum for v, w in zip(vals, wgts))
-
-
-def _trend_indicator_weights(asset_type: str) -> Dict[str, float]:
-    trend_cfg = (CONFIG.get("INDICATOR_WEIGHTS", {}) or {}).get("trend", {}) or {}
-    configured = {}
-    if isinstance(trend_cfg, dict):
-        raw = trend_cfg.get(asset_type, trend_cfg.get("default", {}))
-        if isinstance(raw, dict):
-            configured = raw
-
-    fallback = {
-        "d1_ema_trend": 0.50,
-        "h4_ema_trend": 0.30,
-        "ema_trend": 0.20,
-    }
-    weights = {}
-    for key, default_weight in fallback.items():
-        try:
-            weights[key] = float(configured.get(key, default_weight))
-        except (TypeError, ValueError):
-            weights[key] = default_weight
-    total = sum(max(0.0, w) for w in weights.values())
-    if total <= 0:
-        return fallback
-    return {k: max(0.0, v) / total for k, v in weights.items()}
-
+# ── Factor 1: Trend (multi-TF EMA alignment) ─────────────────────────────────
 
 def _coherent_trend_score(
-    indicators: Dict[str, Optional[float]], asset_type: str
-) -> tuple[Optional[float], dict]:
-    """Build a coherence-aware multi-timeframe trend score.
+    d1_snap: dict, h4_snap: dict, h1_snap: dict, asset_type: str
+) -> tuple:
+    """Multi-TF EMA alignment trend score.
 
-    Uses weighted direction votes from D1/H4/H1 EMA alignment but avoids collapsing to
-    near-zero when one timeframe is in pullback against the dominant trend.
+    Returns (trend_score, direction, trend_detail).
+    trend_score  : float in [-3.0, +3.0]; 0.0 means indeterminate.
+    direction    : "LONG" | "SHORT" | None
+    trend_detail : dict with per-TF votes and coherence ratio.
+
+    D1 weight 0.50 (tide), H4 weight 0.30 (momentum), H1 weight 0.20 (entry).
+    All 3 aligned → ±3.0; 2-of-3 dominant → ±(0.35+0.65*coherence)*3.0.
+    All split (1.5 LONG / 1.5 SHORT with equal weights) → 0.0, direction=None.
     """
-    tf_weights = _trend_indicator_weights(asset_type)
+    tf_weights = CONFIG.get("INDICATOR_WEIGHTS", {}).get("trend", {})
+    if isinstance(tf_weights, dict):
+        raw = tf_weights.get(asset_type, tf_weights.get("default", {}))
+        if isinstance(raw, dict):
+            tf_weights = raw
+        else:
+            tf_weights = {}
+    else:
+        tf_weights = {}
+
+    fallback = {"d1_ema_trend": 0.50, "h4_ema_trend": 0.30, "ema_trend": 0.20}
+
+    def _w(key):
+        try:
+            return float(tf_weights.get(key, fallback.get(key, 0.0)))
+        except (TypeError, ValueError):
+            return fallback.get(key, 0.0)
+
     votes = []
-    for key, w in tf_weights.items():
-        v = indicators.get(key)
-        if v is not None and w > 0:
-            votes.append((key, 1.0 if v > 0 else -1.0, w))
+    detail = {}
+
+    # D1 — primary trend (EMA21 vs EMA200 for cleaner signal)
+    d1_e21 = d1_snap.get("ema21")
+    d1_e200 = d1_snap.get("ema200") or d1_snap.get("ema50")
+    if d1_e21 is not None and d1_e200 is not None and d1_e200 != 0:
+        sign = 1.0 if d1_e21 > d1_e200 else -1.0
+        votes.append(("d1_ema_trend", sign, _w("d1_ema_trend")))
+        detail["d1"] = "LONG" if sign > 0 else "SHORT"
+
+    # H4 — momentum confirmation (EMA21 vs EMA50)
+    h4_e21 = h4_snap.get("ema21")
+    h4_e50 = h4_snap.get("ema50")
+    if h4_e21 is not None and h4_e50 is not None and h4_e50 != 0:
+        sign = 1.0 if h4_e21 > h4_e50 else -1.0
+        votes.append(("h4_ema_trend", sign, _w("h4_ema_trend")))
+        detail["h4"] = "LONG" if sign > 0 else "SHORT"
+
+    # H1 — entry quality (EMA21 vs EMA50)
+    h1_e21 = h1_snap.get("ema21")
+    h1_e50 = h1_snap.get("ema50")
+    if h1_e21 is not None and h1_e50 is not None and h1_e50 != 0:
+        sign = 1.0 if h1_e21 > h1_e50 else -1.0
+        votes.append(("ema_trend", sign, _w("ema_trend")))
+        detail["h1"] = "LONG" if sign > 0 else "SHORT"
 
     if not votes:
-        return None, {
-            "agreement_count": 0,
-            "total_count": 0,
-            "coherence_ratio": 0.0,
-            "dominant_direction": None,
-            "weighted_balance": 0.0,
-        }
+        return 0.0, None, {"error": "no_ema_data", **detail}
 
     long_w = sum(w for _, d, w in votes if d > 0)
     short_w = sum(w for _, d, w in votes if d < 0)
     total_w = long_w + short_w
     if total_w <= 0:
-        return None, {
-            "agreement_count": 0,
-            "total_count": len(votes),
-            "coherence_ratio": 0.0,
-            "dominant_direction": None,
-            "weighted_balance": 0.0,
-        }
+        return 0.0, None, {"error": "zero_weight", **detail}
 
-    if long_w == short_w:
-        # Tie-break by D1 if available, otherwise default LONG for consistency.
-        d1 = indicators.get("d1_ema_trend")
-        dominant_sign = 1.0 if d1 is None or d1 > 0 else -1.0
+    if abs(long_w - short_w) < 1e-9:
+        # Perfectly tied — use D1 as tiebreaker
+        d1_vote = next((d for name, d, _ in votes if name == "d1_ema_trend"), None)
+        dominant_sign = d1_vote if d1_vote is not None else 1.0
     else:
         dominant_sign = 1.0 if long_w > short_w else -1.0
 
     dominant_w = long_w if dominant_sign > 0 else short_w
     coherence_ratio = max(0.5, min(1.0, dominant_w / total_w))
     agreement_count = sum(1 for _, d, _ in votes if d == dominant_sign)
-    # Floor keeps trend signal alive on 2-of-3 alignment while still penalizing mixed TFs.
-    # Scaled by 3.0 to align mathematically with z-score bounded indicators (±3.0)
-    magnitude = (0.35 + (0.65 * coherence_ratio)) * 3.0
+    magnitude = (0.35 + 0.65 * coherence_ratio) * 3.0
     trend_score = dominant_sign * magnitude
-    weighted_balance = (long_w - short_w) / total_w
+    direction = "LONG" if dominant_sign > 0 else "SHORT"
 
-    return trend_score, {
+    detail.update({
         "agreement_count": agreement_count,
         "total_count": len(votes),
         "coherence_ratio": round(coherence_ratio, 4),
-        "dominant_direction": "LONG" if dominant_sign > 0 else "SHORT",
-        "weighted_balance": round(weighted_balance, 4),
-    }
+        "dominant_direction": direction,
+        "weighted_balance": round((long_w - short_w) / total_w, 4),
+    })
+    return trend_score, direction, detail
 
 
-def _directional_confidence_multiplier(abs_dir: float, min_dir: float, soft_span: float) -> float:
-    """Smooth confidence curve replacing hard directional cliff.
+# ── Factor 2: Momentum quality (RSI + MACD confirmation) ─────────────────────
 
-    abs_dir: absolute directional score (0..~1)
-    min_dir: directional threshold center point
-    soft_span: smooth transition width
+def _momentum_quality(
+    h4_snap: dict, direction: str, asset_type: str
+) -> float:
+    """RSI + MACD confirmation quality score in [0.0, 1.0].
+
+    Checks whether momentum indicators confirm the trend direction.
+    Does NOT change direction — only sizes conviction.
+
+    RSI contribution (0.6 weight):
+      - Confirming zone (not extreme): +0.5
+      - Extreme overbought/oversold (overextended): -0.25 (late entry)
+      - Neutral: 0.0
+
+    MACD contribution (0.4 weight):
+      - Histogram aligned with direction: +0.5
+      - Histogram opposing direction: 0.0 (neutral — MACD lags, don't penalise hard)
+
+    Final: clamp(weighted_sum, 0.0, 1.0)
     """
-    if soft_span <= 0:
-        return 1.0 if abs_dir >= min_dir else 0.0
-    # Logistic centered at min_dir. 0.5 at threshold, smooth tails.
-    x = (abs_dir - min_dir) / soft_span
-    k = 4.0
-    return 1.0 / (1.0 + math.exp(-k * x))
+    is_long = direction == "LONG"
+    rsi_bounds = CONFIG.get("RSI_BOUNDS", {}).get(asset_type, {"ob": 70, "os": 30})
+    ob = float(rsi_bounds.get("ob", 70))
+    os_ = float(rsi_bounds.get("os", 30))
 
+    # RSI score
+    rsi_score = 0.0
+    rsi = h4_snap.get("rsi")
+    if rsi is not None:
+        try:
+            rsi = float(rsi)
+            if is_long:
+                if rsi >= ob:
+                    rsi_score = -0.25  # overbought = overextended long entry
+                elif os_ <= rsi < ob:
+                    rsi_score = 0.50   # confirming bullish zone
+            else:
+                if rsi <= os_:
+                    rsi_score = -0.25  # oversold = overextended short entry
+                elif os_ < rsi <= ob:
+                    rsi_score = 0.50   # confirming bearish zone
+        except (TypeError, ValueError):
+            pass
+
+    # MACD histogram score
+    macd_score = 0.0
+    macd_hist = h4_snap.get("macdHist") or h4_snap.get("macd_hist")
+    if macd_hist is None:
+        # Try macdLine z-score as proxy
+        macd_hist = h4_snap.get("macdLine_z")
+    if macd_hist is not None:
+        try:
+            hist = float(macd_hist)
+            if is_long and hist > 0:
+                macd_score = 0.50
+            elif not is_long and hist < 0:
+                macd_score = 0.50
+        except (TypeError, ValueError):
+            pass
+
+    # Per-indicator weights from config
+    ind_weights = CONFIG.get("INDICATOR_WEIGHTS", {}).get("momentum", {})
+    if isinstance(ind_weights, dict) and any(isinstance(v, dict) for v in ind_weights.values()):
+        ind_weights = ind_weights.get(asset_type, ind_weights.get("default", {}))
+    rsi_w = float(ind_weights.get("rsi_z", 0.6)) if isinstance(ind_weights, dict) else 0.6
+    macd_w = float(ind_weights.get("macdLine_z", 0.4)) if isinstance(ind_weights, dict) else 0.4
+    total_w = rsi_w + macd_w
+    if total_w <= 0:
+        total_w = 1.0
+
+    raw = (rsi_score * rsi_w + macd_score * macd_w) / total_w
+    return max(0.0, min(1.0, raw + 0.0))  # floor at 0
+
+
+# ── Factor 3: ADX gate ────────────────────────────────────────────────────────
+
+def _adx_gate(d1_snap: dict, h4_snap: dict, asset_type: str) -> tuple:
+    """ADX trend-strength gate.
+
+    Returns (multiplier, adx_value, adx_source).
+    multiplier = 0.0  → hard abort (ADX < 15, dead market)
+    multiplier = 0.65 → soft penalty (15 ≤ ADX < 25)
+    multiplier = 1.0  → full credit (ADX ≥ 25)
+
+    Source preference: D1 ADX (structural) first, H4 ADX fallback.
+    Per-class ADX minimum from ADX_TREND_MIN_CLASS config.
+    """
+    adx_min = float(
+        (CONFIG.get("ADX_TREND_MIN_CLASS") or {}).get(asset_type, 25)
+    )
+    hard_fail = _ADX_HARD_FAIL
+
+    adx = d1_snap.get("adx")
+    source = "d1"
+    if adx is None:
+        adx = h4_snap.get("adx")
+        source = "h4"
+    if adx is None:
+        # No ADX data — use soft penalty (can't hard abort without data)
+        return _ADX_SOFT_MULT, None, "missing"
+
+    try:
+        adx = float(adx)
+    except (TypeError, ValueError):
+        return _ADX_SOFT_MULT, None, "parse_error"
+
+    if adx < hard_fail:
+        return 0.0, adx, source  # hard abort — dead market
+    if adx < adx_min:
+        return _ADX_SOFT_MULT, adx, source  # soft penalty
+    return 1.0, adx, source  # full credit
+
+
+# ── Addon: asset-specific secondary factor ────────────────────────────────────
+
+def _carry_addon(pair_display: str, direction: str, bar_time: Optional[str]) -> float:
+    """Carry z-score addon for forex pairs. Returns _ADDON_* constant."""
+    try:
+        from carry_feed import get_carry_z as _get_carry_z
+        from carry_feed import _PAIR_CARRY_FORMULA as _CARRY_FORMULA
+        if pair_display not in _CARRY_FORMULA:
+            return _ADDON_NEUTRAL
+        _as_of = bar_time[:10] if bar_time else None
+        carry = _get_carry_z(pair_display, as_of_date=_as_of)
+        if carry is None or carry == 0.0:
+            return _ADDON_NEUTRAL
+        carry = float(carry)
+        is_long = direction == "LONG"
+        if (is_long and carry > 0.5) or (not is_long and carry < -0.5):
+            return _ADDON_CONFIRM
+        if (is_long and carry < -0.5) or (not is_long and carry > 0.5):
+            return _ADDON_AGAINST
+        return _ADDON_NEUTRAL
+    except Exception:
+        return _ADDON_NEUTRAL
+
+
+def _cot_addon(pair_display: str, asset_type: str, direction: str, bar_time: Optional[str]) -> float:
+    """COT net speculator positioning addon for commodity/forex. Returns _ADDON_* constant."""
+    try:
+        from cot_feed import get_cot_z as _get_cot_z
+        from cot_feed import _PAIR_FORMULA as _COT_FORMULA
+        if pair_display not in _COT_FORMULA:
+            return _ADDON_NEUTRAL
+        _as_of = bar_time[:10] if bar_time else None
+        cot = _get_cot_z(pair_display, as_of_date=_as_of)
+        if cot is None or cot == 0.0:
+            return _ADDON_NEUTRAL
+        cot = float(cot)
+        # Fade the herd at extremes for commodity/forex
+        if asset_type in ("forex", "commodity") and abs(cot) >= 2.0:
+            cot = -cot * 1.5  # fade overcrowded positioning
+        if abs(cot) < 1.0:
+            return _ADDON_NEUTRAL  # insignificant signal
+        is_long = direction == "LONG"
+        if (is_long and cot > 0) or (not is_long and cot < 0):
+            return _ADDON_CONFIRM
+        if (is_long and cot < 0) or (not is_long and cot > 0):
+            return _ADDON_AGAINST
+        return _ADDON_NEUTRAL
+    except Exception:
+        return _ADDON_NEUTRAL
+
+
+def _funding_addon(funding_rate: Optional[float], direction: str) -> float:
+    """Funding rate addon for crypto. Returns _ADDON_* constant."""
+    if funding_rate is None:
+        return _ADDON_NEUTRAL
+    try:
+        fr = float(funding_rate)
+        # Neutral baseline: 0.0001 (0.01%). Score from deviation.
+        adjusted = fr - 0.0001
+        if abs(adjusted) < 0.0002:
+            return _ADDON_NEUTRAL  # within noise band
+        is_long = direction == "LONG"
+        # Negative funding → bullish (longs cheap to hold); positive → shorts cheap
+        funding_bullish = adjusted < 0
+        if (is_long and funding_bullish) or (not is_long and not funding_bullish):
+            return _ADDON_CONFIRM
+        if (is_long and not funding_bullish) or (not is_long and funding_bullish):
+            return _ADDON_AGAINST
+        return _ADDON_NEUTRAL
+    except (TypeError, ValueError):
+        return _ADDON_NEUTRAL
+
+
+def _asset_addon(
+    pair: dict,
+    direction: str,
+    funding_rate: Optional[float],
+    bar_time: Optional[str],
+) -> tuple:
+    """Resolve the single asset-class-specific addon factor.
+
+    Returns (addon_value, addon_type, feed_status).
+    """
+    asset_type = pair.get("type", "stock")
+    display = pair.get("display", "")
+
+    if asset_type == "forex":
+        val = _carry_addon(display, direction, bar_time)
+        return val, "carry", "ok" if val != _ADDON_NEUTRAL else "neutral"
+
+    if asset_type == "crypto":
+        val = _funding_addon(funding_rate, direction)
+        return val, "funding", "ok" if funding_rate is not None else "missing"
+
+    if asset_type == "commodity":
+        val = _cot_addon(display, asset_type, direction, bar_time)
+        return val, "cot", "ok" if val != _ADDON_NEUTRAL else "neutral"
+
+    # stock / index — no addon
+    return _ADDON_NEUTRAL, "none", "unsupported"
+
+
+# ── Session multiplier (forex only) ──────────────────────────────────────────
+
+def _session_multiplier(bar_time: Optional[str], asset_type: str) -> float:
+    """Return session liquidity multiplier. Only applied to forex pairs."""
+    if asset_type != "forex":
+        return 1.0
+    from datetime import datetime, timezone
+    try:
+        if bar_time:
+            dt = datetime.fromisoformat(bar_time.replace("Z", "+00:00"))
+            h = dt.hour
+        else:
+            h = datetime.now(timezone.utc).hour
+    except Exception:
+        return _SESSION_CORE_MULT
+
+    cfg = CONFIG.get("FOREX_ENGINE", {}) or {}
+    soft_mult = float(cfg.get("session_soft_multiplier", _SESSION_OFF_MULT))
+    shoulder_mult = float(cfg.get("session_shoulder_multiplier", _SESSION_SHOULDER_MULT))
+    shoulder_h = int(cfg.get("session_shoulder_hours", 1))
+
+    # Core sessions: London 07-16 UTC, NY 13-21 UTC
+    if (7 <= h < 16) or (13 <= h < 21):
+        return _SESSION_CORE_MULT
+    # Shoulder zones: ±shoulder_h of core
+    shoulder_zones = list(range(7 - shoulder_h, 7)) + list(range(16, 16 + shoulder_h)) + \
+                     list(range(21, 21 + shoulder_h))
+    if h in shoulder_zones:
+        return shoulder_mult
+    return soft_mult
+
+
+# ── Main scoring function ─────────────────────────────────────────────────────
 
 def compute_factor_scores(
     d1_snap: Dict,
@@ -633,655 +472,183 @@ def compute_factor_scores(
     macro_context: Optional[dict] = None,
     intermarket_context: Optional[dict] = None,
 ) -> Dict:
-    """Compute factor scores, apply regime weights, and aggregate to final score.
+    """Compute Engine A v2 factor scores and aggregate to final conviction score.
 
-    Returns dict with final_score (always >= 0), direction, factor_scores, weights, regime, etc.
+    Returns dict with final_score (0-3.0), direction, factor_scores, regime, and diagnostics.
+    Backward-compatible keys preserved for Engine C / scoring.py / Marcus Reid AI.
     """
     asset_type = pair.get("type", "stock")
-    is_crypto = asset_type == "crypto"
-    feed_status = {"main": "ok"}
+    display = pair.get("display", pair.get("symbol", "?"))
+    pair_id = display
+    feed_status: Dict[str, str] = {}
 
-    # ── Data quality guard ───────────────────────────────────────────────
-    # Detect near-zero prices or zero ATR that indicate a data feed issue
+    # ── Data quality guard ────────────────────────────────────────────────────
     _close = h4_snap.get("close")
-    _ema21 = h1_snap.get("ema21")
-    _atr_raw = h4_snap.get("atr")
-    if _close is not None and _close > 0 and _ema21 is not None:
-        if _ema21 > 0 and _ema21 / _close < 0.001:
-            log.warning(
-                f"[FACTOR] {pair.get('display')} DATA QUALITY: EMA21={_ema21:.6f} vs close={_close:.4f} "
-                f"— ratio {_ema21 / _close:.6f} suggests stale/corrupt data"
-            )
-    if _close is not None and _close > 0 and _atr_raw is not None and _atr_raw == 0:
-        log.warning(
-            f"[FACTOR] {pair.get('display')} DATA QUALITY: ATR=0 with close={_close:.6f} "
-            f"— zero ATR indicates frozen/stale candle data"
-        )
+    _atr = h4_snap.get("atr")
+    if _close and _atr == 0:
+        log.warning("[EA2] %s ATR=0 — frozen candle data suspected", display)
 
-    # ── Gather indicators ────────────────────────────────────────────────
-    indicators: Dict[str, Optional[float]] = {}
-    feed_status: Dict[str, str] = {
-        "funding": "ok",
-        "cot": "ok",
-        "carry": "ok",
-        "microstructure": "ok",
-        "oi": "ok",
-        "usd_proxy": "ok",
-        "intermarket": "disabled",
-    }
-
-    # Trend direction — EMA crossover across all three timeframes (directional: +1/-1)
-    # H1 entry timeframe
-    ema21 = h1_snap.get("ema21")
-    ema50 = h1_snap.get("ema50")
-    if ema21 is not None and ema50 is not None and ema50 != 0:
-        indicators["ema_trend"] = 1.0 if ema21 > ema50 else -1.0
-    else:
-        indicators["ema_trend"] = None
-
-    # H4 momentum timeframe
-    h4_ema21 = h4_snap.get("ema21")
-    h4_ema50 = h4_snap.get("ema50")
-    if h4_ema21 is not None and h4_ema50 is not None and h4_ema50 != 0:
-        indicators["h4_ema_trend"] = 1.0 if h4_ema21 > h4_ema50 else -1.0
-    else:
-        indicators["h4_ema_trend"] = None
-
-    # D1 tide timeframe (highest weight — primary directional bias)
-    d1_ema21 = d1_snap.get("ema21")
-    d1_ema50 = d1_snap.get("ema50")
-    if d1_ema21 is not None and d1_ema50 is not None and d1_ema50 != 0:
-        indicators["d1_ema_trend"] = 1.0 if d1_ema21 > d1_ema50 else -1.0
-    else:
-        indicators["d1_ema_trend"] = None
-
-    # Trend strength — ADX z-score (NON-directional: high = strong trend)
-    indicators["adx_z"] = h4_snap.get("adx_z")
-
-    # Momentum (directional: positive z = bullish, negative = bearish)
-    indicators["rsi_z"] = h4_snap.get("rsi_z")
-    indicators["macdLine_z"] = h4_snap.get("macdLine_z")
-
-    # Volatility (non-directional: abs value = signal quality)
-    indicators["atr_z"] = h4_snap.get("atr_z")
-    indicators["bbWidth_z"] = h4_snap.get("bbWidth_z")
-    indicators["realized_vol_z"] = h4_snap.get("realized_vol_z")
-
-    # Volume — forex/pairs with no reliable volume get None (not 0)
-    if volume_ratio is not None and volume_ratio > 0:
-        # Accept volume if candles have real vol OR if ratio meaningfully deviates from 1.0
-        # (deviation > 0.05 indicates an external source like Dukascopy supplied real data,
-        #  vs the 1.0 fallback returned when no data is available)
-        _has_candle_vol = any(
-            c.get("vol", 0) > 0 for c in (h4_candles[-5:] if h4_candles else [])
-        )
-        _has_external_vol = asset_type == "forex" and volume_ratio != 1.0
-        if _has_candle_vol or _has_external_vol:
-            # Center around 1.0 (average), scale: 2x average → +3.0
-            indicators["volume_ratio"] = max(-3.0, min(3.0, (volume_ratio - 1.0) * 3.0))
-        else:
-            indicators["volume_ratio"] = None  # No real volume data — exclude factor
-    else:
-        indicators["volume_ratio"] = None
-    # OBV trend — only meaningful when real volume data exists (volume_ratio not None)
-    # For forex/pairs without centralized volume, OBV computed on zero-vol candles is noise
-    obv_raw = h4_snap.get("obv_trend")
-    if indicators["volume_ratio"] is not None and obv_raw is not None:
-        indicators["obv_trend"] = obv_raw
-    else:
-        indicators["obv_trend"] = None
-
-    # Structure — fib proximity (non-directional)
-    # fib_proximity returns +1/-1 when near a level, 0 when not near any level
-    # 0 means "no structural info" — exclude from scoring (not "structure is bad")
-    fib_prox = h4_snap.get("fib_proximity")
-    indicators["fib_proximity"] = (
-        fib_prox if fib_prox is not None and fib_prox != 0 else None
+    # ── FACTOR 1: Trend ───────────────────────────────────────────────────────
+    trend_score, direction, trend_detail = _coherent_trend_score(
+        d1_snap, h4_snap, h1_snap, asset_type
     )
 
-    # Derivatives — funding rate (directional: negative funding = bullish for longs)
-    if funding_rate is not None and funding_rate != 0:
-        # Scale to z-score range. 
-        # Standard neutral Binance funding is 0.01% (0.0001). Offset so neutral = 0.0.
-        # Scale remaining deviation: 0.03% deviation translates to ±3.0.
-        adjusted_funding = funding_rate - 0.0001
-        # Recalibrated: 0.04% above neutral → score of 2.0 (was maxing at 0.02%)
-        indicators["funding_rate"] = max(-3.0, min(3.0, -adjusted_funding * 5000))
-    else:
-        indicators["funding_rate"] = None  # No funding data — exclude
+    # Hard abort: no direction determinable
+    if direction is None or abs(trend_score) < 1e-9:
+        log.debug("[EA2] %s trend indeterminate — score=0", display)
+        regime_raw = detect_regime(h4_snap, asset_type).get("regime", "UNKNOWN")
+        regime = _get_smoothed_regime(regime_context, pair_id, regime_raw)
+        return _zero_result(pair, regime, trend_detail, feed_status, reason="indeterminate_trend")
 
-    # Open interest — crypto-only derivatives sub-indicators (bounded, conservative vs funding)
-    indicators["oi_change_z"] = None
-    indicators["oi_price_divergence"] = None
-    if is_crypto:
-        feed_status["oi"] = "missing"
-        _oi_zz, _oi_pd = _crypto_oi_indicators_from_context(oi_context)
-        indicators["oi_change_z"] = _oi_zz
-        indicators["oi_price_divergence"] = _oi_pd
-        if _oi_zz is not None or _oi_pd is not None:
-            feed_status["oi"] = "ok"
-    else:
-        feed_status["oi"] = "unsupported"
+    # ── FACTOR 3: ADX gate ────────────────────────────────────────────────────
+    adx_mult, adx_val, adx_source = _adx_gate(d1_snap, h4_snap, asset_type)
+    feed_status["adx"] = adx_source
 
-    # COT positioning — CFTC net speculator z-score (directional, weekly)
-    # Covers: all forex, BTC/ETH (CME), S&P/Nasdaq futures, gold/silver
-    # NOTE: Now supports historical lookup during backtest using bar_time
-    if is_crypto and not _crypto_supports_cot(pair):
-        indicators["cot_z"] = None
-        feed_status["cot"] = "unsupported"
-    else:
-        try:
-            from cot_feed import get_cot_z as _get_cot_z
-            from cot_feed import _PAIR_FORMULA as _COT_FORMULA
+    # Hard abort: dead market
+    if adx_mult == 0.0:
+        log.debug("[EA2] %s ADX=%.1f hard abort — dead market", display, adx_val or 0)
+        regime_raw = detect_regime(h4_snap, asset_type).get("regime", "UNKNOWN")
+        regime = _get_smoothed_regime(regime_context, pair_id, regime_raw)
+        return _zero_result(pair, regime, trend_detail, feed_status, reason="adx_hard_abort",
+                            adx_val=adx_val, direction=direction)
 
-            if pair.get("display") not in _COT_FORMULA:
-                indicators["cot_z"] = None
-                feed_status["cot"] = "no_coverage"
-            else:
-                _as_of = bar_time[:10] if bar_time else None
-                _cot = _get_cot_z(pair.get("display", ""), as_of_date=_as_of)
+    # ── FACTOR 2: Momentum quality ────────────────────────────────────────────
+    mom_quality = _momentum_quality(h4_snap, direction, asset_type)
 
-                # Fade the herd for Forex and Commodities: Speculators are trapped at extremes
-                if pair.get("type", "stock") in ("forex", "commodity") and _cot != 0.0:
-                    if abs(_cot) >= 2.0:
-                        # Extreme overcrowded positioning -> Reverse the signal (fade the herd)
-                        _cot = max(-3.0, min(3.0, -_cot * 1.5))
-                    elif abs(_cot) < 1.0:
-                        # Insignificant positioning -> ignore lagged data
-                        _cot = 0.0
+    # ── ADDON: Asset-specific secondary factor ────────────────────────────────
+    addon_val, addon_type, addon_status = _asset_addon(pair, direction, funding_rate, bar_time)
+    feed_status["addon"] = f"{addon_type}:{addon_status}"
 
-                if _cot != 0.0:
-                    indicators["cot_z"] = float(_cot)
-                    feed_status["cot"] = "ok"
-                else:
-                    indicators["cot_z"] = None
-                    feed_status["cot"] = "no_data"
-        except Exception as _cot_err:
-            log.error(f"[CARRY] COT feed failure for {pair.get('display')}: {_cot_err}")
-            indicators["cot_z"] = None
-            feed_status["cot"] = "error"
+    # ── Session multiplier (forex only) ───────────────────────────────────────
+    session_mult = _session_multiplier(bar_time, asset_type)
+    feed_status["session"] = f"{session_mult:.2f}"
 
-    # Carry — interest rate differential z-score (directional, monthly)
-    # Forex: base_rate - quote_rate; Indices/gold: inverted 10Y yield
-    # NOTE: Now supports historical lookup during backtest using bar_time
-    if is_crypto:
-        indicators["carry_z"] = None
-        feed_status["carry"] = "unsupported"
-    else:
-        try:
-            from carry_feed import get_carry_z as _get_carry_z
-            from carry_feed import _PAIR_CARRY_FORMULA as _CARRY_FORMULA
+    # ── Conviction score: weighted combination ────────────────────────────────
+    # conviction ∈ [0, 1] — how strongly we believe in this setup
+    # Base floor (0.20) + momentum quality contribution (0.50) + addon (0.30)
+    # addon_val ∈ {-0.15, 0.00, 0.30} so conviction ∈ [0.05, 1.0]
+    addon_norm = max(0.0, addon_val / _ADDON_CONFIRM) if _ADDON_CONFIRM > 0 else 0.0
+    conviction = (
+        _BASE_WEIGHT
+        + _MOMENTUM_WEIGHT * mom_quality
+        + _ADDON_WEIGHT * addon_norm
+    )
+    conviction = max(0.0, min(1.0, conviction))
 
-            if pair.get("display") not in _CARRY_FORMULA:
-                indicators["carry_z"] = None
-                feed_status["carry"] = "no_coverage"
-            else:
-                _as_of = bar_time[:10] if bar_time else None
-                _carry = _get_carry_z(pair.get("display", ""), as_of_date=_as_of)
-                
-                if _carry != 0.0:
-                    indicators["carry_z"] = float(_carry)
-                    feed_status["carry"] = "ok"
-                else:
-                    indicators["carry_z"] = None
-                    feed_status["carry"] = "no_data"
-        except Exception as _carry_err:
-            log.error(f"[CARRY] Carry feed failure for {pair.get('display')}: {_carry_err}")
-            indicators["carry_z"] = None
-            feed_status["carry"] = "error"
-
-    if _uses_usd_proxy_macro(pair):
-        _usd_proxy_score = (macro_context or {}).get("usd_proxy_score")
-        try:
-            indicators["usd_proxy_score"] = (
-                float(_usd_proxy_score) if _usd_proxy_score is not None else None
-            )
-            feed_status["usd_proxy"] = (
-                "ok" if indicators["usd_proxy_score"] is not None else "missing"
-            )
-        except (TypeError, ValueError):
-            indicators["usd_proxy_score"] = None
-            feed_status["usd_proxy"] = "error"
-    else:
-        indicators["usd_proxy_score"] = None
-        feed_status["usd_proxy"] = "unsupported"
-
-    # Microstructure (directional if available)
-    # Crypto: live WS values only (no candle proxies). Factor weight is gated by
-    # CONFIG["CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED"] after regime/profile merge.
-    # All others: computed from H4 OHLC price action (no order book required)
-    _ws_obi = h4_snap.get("order_book_imbalance")
-    _ws_lwl = h4_snap.get("liquidity_wall_detection")
-    _ws_ofd = h4_snap.get("orderflow_delta")
-    _ws_lp = h4_snap.get("liquidity_pressure")
-
-    if is_crypto:
-        if _has_live_microstructure(h4_snap):
-            indicators["order_book_imbalance"] = _ws_obi
-            indicators["liquidity_wall_detection"] = _ws_lwl
-            indicators["orderflow_delta"] = _ws_ofd
-            indicators["liquidity_pressure"] = _ws_lp
-        else:
-            indicators["order_book_imbalance"] = None
-            indicators["liquidity_wall_detection"] = None
-            indicators["orderflow_delta"] = None
-            indicators["liquidity_pressure"] = None
-        # VMS is candle-derived directional conviction. For crypto we route it into
-        # momentum instead of the disabled microstructure bucket so it has controlled impact.
-        _cm_vms = _candle_microstructure(h4_candles)
-        indicators["volume_momentum_spread"] = _cm_vms["volume_momentum_spread"]
-    elif _ws_obi is None and _ws_ofd is None and _ws_lp is None:
-        # No WS data — compute candle-based proxies (includes VMS)
-        _cm = _candle_microstructure(h4_candles)
-        indicators["order_book_imbalance"] = _cm["order_book_imbalance"]
-        indicators["orderflow_delta"] = _cm["orderflow_delta"]
-        indicators["liquidity_pressure"] = _cm["liquidity_pressure"]
-        indicators["liquidity_wall_detection"] = None  # requires real order book
-        indicators["volume_momentum_spread"] = _cm["volume_momentum_spread"]
-    else:
-        indicators["order_book_imbalance"] = _ws_obi
-        indicators["liquidity_wall_detection"] = _ws_lwl
-        indicators["orderflow_delta"] = _ws_ofd
-        indicators["liquidity_pressure"] = _ws_lp
-        # VMS is always candle-based even when WS data is available for other keys
-        _cm_vms = _candle_microstructure(h4_candles)
-        indicators["volume_momentum_spread"] = _cm_vms["volume_momentum_spread"]
-
-    # ── Correlation filter (blueprint: abs(corr) > 0.8 → reduce weaker by 50%) ──
-    corr_window = CONFIG.get("INDICATOR_CORRELATION_WINDOW", 200)
-    corr_weights = _apply_correlation_filter(indicators, h4_candles, corr_window)
-
-    # ── Factor mappings ──────────────────────────────────────────────────
-    # Directional factors: sign matters (positive = bullish)
-    derivative_keys = ["funding_rate"]
-    if is_crypto:
-        derivative_keys.extend(["oi_change_z", "oi_price_divergence"])
-    if not is_crypto or _crypto_supports_cot(pair):
-        derivative_keys.append("cot_z")
-
-    momentum_keys = ["rsi_z", "macdLine_z"]
-    microstructure_keys = [
-        "order_book_imbalance",
-        "liquidity_wall_detection",
-        "orderflow_delta",
-        "liquidity_pressure",
-    ]
-    if is_crypto:
-        momentum_keys.append("volume_momentum_spread")
-    else:
-        microstructure_keys.append("volume_momentum_spread")
-
-    directional_factors = {
-        # Multi-timeframe EMA alignment: D1 tide + H4 momentum + H1 entry
-        # All 3 aligned → ±1.0 (high conviction); mixed → near 0 (conflicting)
-        "trend": ["ema_trend", "h4_ema_trend", "d1_ema_trend"],
-        "momentum": momentum_keys,
-        "derivatives": derivative_keys,
-        "microstructure": microstructure_keys,
-    }
-    if not is_crypto:
-        carry_keys = ["carry_z"]
-        if _uses_usd_proxy_macro(pair):
-            carry_keys.append("usd_proxy_score")
-        directional_factors["carry"] = carry_keys
-    # Non-directional factors: abs value = quality/strength (always positive)
-    nondirectional_factors = {
-        "trend_strength": ["adx_z"],
-        "volatility": ["atr_z", "bbWidth_z", "realized_vol_z"],
-        "volume": ["volume_ratio", "obv_trend"],
-        "structure": ["fib_proximity"],
-    }
-    # ── Compute factor scores (correlation-adjusted × indicator-weighted) ────
-    factor_scores: Dict[str, Optional[float]] = {}
-    for factor, keys in directional_factors.items():
-        factor_scores[factor] = _weighted_factor_score(
-            indicators,
-            keys,
-            corr_weights,
-            use_abs=False,
-            factor_name=factor,
-            asset_type=asset_type,
-        )
-    for factor, keys in nondirectional_factors.items():
-        factor_scores[factor] = _weighted_factor_score(
-            indicators,
-            keys,
-            corr_weights,
-            use_abs=True,
-            factor_name=factor,
-            asset_type=asset_type,
-        )
-    trend_coherence = {
-        "agreement_count": 0,
-        "total_count": 0,
-        "coherence_ratio": 0.0,
-        "dominant_direction": None,
-        "weighted_balance": 0.0,
-    }
-    _trend_score, trend_coherence = _coherent_trend_score(indicators, asset_type)
-    if _trend_score is not None:
-        factor_scores["trend"] = _trend_score
-
-    # ── Determine direction from directional factors ─────────────────────
-    # ── Regime detection ─────────────────────────────────────────────────
+    # ── Regime detection (informational — not used for weight modification) ───
     _bbw_pct = h4_snap.get("bbWidth_pct") or h4_snap.get("bb_width_pct")
-    _raw_regime = detect_regime(h4_snap, asset_type, bb_width_pct=_bbw_pct).get(
-        "regime", "UNKNOWN"
-    )
-    # Apply smoothing: require REGIME_SMOOTHING_BARS consecutive bars before accepting regime switch
-    _pair_id = pair.get("display", pair.get("symbol", "unknown"))
-    regime = _get_smoothed_regime(regime_context, _pair_id, _raw_regime)
-    regime_weights = CONFIG.get("REGIME_WEIGHTS", {}).get(regime.upper(), {})
-    base_weights = CONFIG.get("FACTOR_WEIGHTS", {}).get(asset_type, {})
+    regime_raw = detect_regime(h4_snap, asset_type, bb_width_pct=_bbw_pct).get("regime", "UNKNOWN")
+    regime = _get_smoothed_regime(regime_context, pair_id, regime_raw)
 
-    # Map factor names to config weight keys
-    _weight_key_map = {
-        "trend": "trend",
-        "momentum": "momentum",
-        "derivatives": "derivatives",
-        "microstructure": "microstructure",
-        "trend_strength": "trend_strength",
-        "volatility": "volatility",
-        "volume": "volume",
-        "structure": "structure",
-        "carry": "carry",
-    }
-    weights: Dict[str, float] = {}
-    all_factors = dict(directional_factors)
-    all_factors.update(nondirectional_factors)
-    for factor in all_factors:
-        wk = _weight_key_map.get(factor, factor)
-        base_w = base_weights.get(wk, 1.0)
-        # If base weight is 0 (asset class disables this factor), regime cannot override
-        weights[factor] = 0.0 if base_w == 0 else regime_weights.get(wk, base_w)
-
-    weights = _apply_pair_profile_weight_rules(pair, weights)
-
-    # Adaptive weight blending — adjust weights based on empirical factor performance
-    # Only applies when learning_log has enough data (30+ trades for the asset class).
-    # Blend rate is 30% (research-backed optimal range 0.25-0.35).
-    # Disabled factors (weight=0) are never adjusted — adaptive cannot override explicit disable.
-    if CONFIG.get("ADAPTIVE_WEIGHTS_ENABLED", False):
-        try:
-            from adaptive_weights import get_adaptive_weights
-            import os
-
-            _db = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
-            _adaptive = get_adaptive_weights(_db, asset_type, regime)
-            if _adaptive:
-                import logging as _logging
-                _logging.getLogger(__name__).debug(
-                    f"[ADAPTIVE] applying learned weights for {asset_type}/{regime}"
-                )
-                for factor in weights:
-                    if weights[factor] > 0 and factor in _adaptive:
-                        try:
-                            weights[factor] = max(
-                                0.0, float(weights[factor]) * float(_adaptive[factor])
-                            )
-                        except (TypeError, ValueError):
-                            continue
-        except Exception:
-            pass  # Graceful degradation — use base weights if adaptive fails
-
-    # ── Final aggregation ────────────────────────────────────────────────
-    if is_crypto:
-        for factor, cap in (CONFIG.get("CRYPTO_FACTOR_WEIGHT_CAPS", {}) or {}).items():
-            if factor not in weights:
-                continue
-            try:
-                weights[factor] = min(float(weights[factor]), float(cap))
-            except (TypeError, ValueError):
-                continue
-        # Live WS microstructure scoring is opt-in — keep weight 0 when disabled (production default).
-        if not CONFIG.get("CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED", False):
-            weights["microstructure"] = 0.0
-
-    active_dir = {
-        f: s
-        for f, s in factor_scores.items()
-        if s is not None and f in directional_factors and weights.get(f, 1.0) > 0
-    }
-    active_nondir = {
-        f: s
-        for f, s in factor_scores.items()
-        if s is not None and f in nondirectional_factors and weights.get(f, 1.0) > 0
-    }
-    disabled_factors = [f for f, s in factor_scores.items() if s is None]
-
-    _base_min_dir = float(
-        CONFIG.get(
-            f"FACTOR_MIN_DIRECTIONAL_{asset_type.upper()}",
-            CONFIG.get("FACTOR_MIN_DIRECTIONAL", 0.0),
-        )
-    )
-    _base_soft_span = float(
-        CONFIG.get(
-            f"FACTOR_DIRECTIONAL_SOFT_SPAN_{asset_type.upper()}",
-            CONFIG.get("FACTOR_DIRECTIONAL_SOFT_SPAN", 0.20),
-        )
-    )
-    dir_sum = sum(active_dir.values()) if active_dir else 0.0
-
-    # Minimum active factors guard: require at least 1 directional factor.
-    # Prevents inflated scores driven solely by volatility (e.g. JSE stocks with no H4/H1 data).
-    if not active_dir:
-        log.debug(
-            f"[FACTOR] {pair.get('display')} no active directional factors — score=0"
-        )
-        _crypto_diag = (
-            _build_crypto_engine_a_diagnostics(
-                pair, h4_snap, indicators, factor_scores, weights, feed_status
-            )
-            if is_crypto
-            else None
-        )
-        if _crypto_diag is not None:
-            log.debug(
-                "[CRYPTO-EA] %s engine_a=%s",
-                pair.get("display"),
-                _crypto_diag,
-            )
-        return {
-            "final_score": 0.0,
-            "direction": None,
-            "factor_scores": factor_scores,
-            "weights": weights,
-            "regime": regime,
-            "filtered_indicators": indicators,
-            "disabled_factors": disabled_factors,
-            "directional_score": 0.0,
-            "nondirectional_score": 0.0,
-            "unweighted_directional_sum": 0.0,
-            "correlation_adjustments": {},
-            "insufficient_factors": True,
-            "min_directional_failed": True,
-            "active_directional_factors": [],
-            "active_nondirectional_factors": list(active_nondir.keys()),
-            "min_directional_threshold": _base_min_dir,
-            "directional_confidence_multiplier": 0.0,
-            "effective_min_directional": _base_min_dir,
-            "trend_coherence": trend_coherence,
-            "missing_directional_optional_count": max(
-                0, len(_optional_directional_keys(asset_type, pair))
-            ),
-            "optional_factor_coverage": 0.0
-            if _optional_directional_keys(asset_type, pair)
-            else 1.0,
-            "crypto_engine_a_diagnostics": _crypto_diag,
-            "intermarket_confirmation": None,
-            "intermarket_engine_a_delta": 0.0,
-            "feed_status": feed_status,
-        }
-
-    dir_score = 0.0
-    if active_dir:
-        dir_w_sum = sum(weights.get(f, 1.0) for f in active_dir)
-        for f, s in active_dir.items():
-            dir_score += (weights.get(f, 1.0) / dir_w_sum) * s
-        # Restore variance lost through weighted arithmetic averaging of independent distributions
-        _n_factors = len(active_dir)
-        _variance_restorer = math.sqrt(_n_factors) if _n_factors > 1 else 1.0
-        dir_score *= _variance_restorer
-    # Direction from WEIGHTED dir_score (not unweighted sum) — prevents direction flip
-    # Tie-break: if weighted score is exactly 0.0, fall back to unweighted sum sign, then default LONG
-    if dir_score > 0:
-        direction = "LONG"
-    elif dir_score < 0:
-        direction = "SHORT"
-    else:
-        # Weighted dir_score is exactly zero — tie-break from unweighted sum sign only.
-        # (Do not use `direction = ... dir_sum` on one line; guardian flags that pattern.)
-        if dir_sum > 0:
-            direction = "LONG"
-        elif dir_sum < 0:
-            direction = "SHORT"
-        else:
-            # A1 FIX: When direction is truly indeterminate (both dir_score and dir_sum are 0),
-            # return early with indeterminate_direction flag instead of defaulting to LONG.
-            return {
-                "final_score": 0.0,
-                "direction": None,
-                "factor_scores": factor_scores,
-                "weights": weights,
-                "regime": regime,
-                "filtered_indicators": indicators,
-                "disabled_factors": disabled_factors,
-                "directional_score": 0.0,
-                "nondirectional_score": 0.0,
-                "unweighted_directional_sum": dir_sum,
-                "correlation_adjustments": {},
-                "insufficient_factors": False,
-                "indeterminate_direction": True,
-                "min_directional_failed": False,
-                "active_directional_factors": list(active_dir.keys()),
-                "active_nondirectional_factors": list(active_nondir.keys()),
-                "min_directional_threshold": _base_min_dir,
-                "directional_confidence_multiplier": 0.0,
-                "effective_min_directional": _base_min_dir,
-                "trend_coherence": trend_coherence,
-                "missing_directional_optional_count": 0,
-                "optional_factor_coverage": 1.0,
-                "crypto_engine_a_diagnostics": None,
-                "intermarket_confirmation": None,
-                "intermarket_engine_a_delta": 0.0,
-                "feed_status": feed_status,
-            }
-
-    try:
-        _neutral_eps = float(
-            CONFIG.get("FACTOR_NEAR_NEUTRAL_LOG_EPS", 0.05) or 0.05
-        )
-    except (TypeError, ValueError):
-        _neutral_eps = 0.05
-    if active_dir and abs(dir_score) < _neutral_eps:
-        log.info(
-            "[FACTOR] %s near-neutral weighted_dir=%.5f unweighted_sum=%.5f resolved=%s",
-            pair.get("display", "?"),
-            dir_score,
-            dir_sum,
-            direction,
-        )
-
-    nondir_score = 0.0
-    if active_nondir:
-        nondir_w_sum = sum(weights.get(f, 1.0) for f in active_nondir)
-        for f, s in active_nondir.items():
-            nondir_score += (weights.get(f, 1.0) / nondir_w_sum) * s
-
-    # Optional directional context coverage.
-    optional_directional_keys = _optional_directional_keys(asset_type, pair)
-    optional_present = 0
-    for _ok in optional_directional_keys:
-        if _ok == "oi":
-            if is_crypto and (
-                indicators.get("oi_change_z") is not None
-                or indicators.get("oi_price_divergence") is not None
-            ):
-                optional_present += 1
-        elif indicators.get(_ok) is not None:
-            optional_present += 1
-    optional_coverage = (
-        optional_present / float(len(optional_directional_keys))
-        if optional_directional_keys
-        else 1.0
-    )
-    missing_optional = max(0, len(optional_directional_keys) - optional_present)
-
-    # Multiplicative combination with smooth directional confidence (no hard cliff).
-    # As optional directional context gets sparse, use a slightly softer effective threshold
-    # so missing feeds do not collapse otherwise-valid directional setups.
-    _min_dir = _base_min_dir
-    _soft_span = _base_soft_span
-    _effective_min_dir = float(_min_dir) * (0.75 + (0.25 * optional_coverage))
-    _dir_conf = _directional_confidence_multiplier(abs(dir_score), _effective_min_dir, _soft_span)
-    _nondir_norm = min(nondir_score / 1.5, 1.0)  # normalize quality to [0, 1] — 1.5 Z-score represents top conviction.
-    _quality_mult = 0.6 + (_nondir_norm * 0.4)
-    # _coherent_trend_score() already scales trend to ±3.0, so no extra scaling needed.
-    # Clamp to [0.0, 3.0] to enforce documented score contract.
-    final_score = abs(dir_score) * _quality_mult * _dir_conf
+    # ── Final score ───────────────────────────────────────────────────────────
+    # base_score: driven by trend coherence (0-3.0 scale from _coherent_trend_score)
+    # applied: adx_mult * session_mult * conviction blend
+    # Formula: abs(trend_score) * adx_mult * session_mult * (0.6 + 0.4*conviction)
+    # The 0.6 floor means even a flat momentum+addon still passes >50% of trend signal.
+    base_score = abs(trend_score) * adx_mult * session_mult
+    final_score = base_score * (0.6 + 0.4 * conviction)
     final_score = max(0.0, min(3.0, final_score))
-    _intermarket_apply = apply_confirmation_to_score(
-        final_score,
-        direction,
-        pair,
-        intermarket_context,
-        max_score=3.0,
-        config=CONFIG,
-    )
-    final_score = float(_intermarket_apply.get("adjusted_score", final_score))
-    # Re-clamp after intermarket adjustment to maintain 0-3.0 contract
-    final_score = max(0.0, min(3.0, final_score))
-    _intermarket_confirmation = _intermarket_apply.get("confirmation")
-    if intermarket_context is not None:
-        feed_status["intermarket"] = "ok"
-    if (
-        _intermarket_confirmation
-        and _intermarket_confirmation.get("verdict") == "neutral"
-        and not CONFIG.get("INTERMARKET_CONFIRMATION", {}).get("engine_a_enabled", False)
-    ):
-        feed_status["intermarket"] = "disabled"
 
-    _crypto_diag = (
-        _build_crypto_engine_a_diagnostics(
-            pair, h4_snap, indicators, factor_scores, weights, feed_status
-        )
-        if is_crypto
-        else None
+    # ── Factor scores dict (for UI / Marcus Reid diagnostics) ─────────────────
+    factor_scores = {
+        "trend": round(trend_score, 4),
+        "momentum": round(mom_quality, 4),
+        "addon": round(addon_val, 4),
+    }
+
+    log.debug(
+        "[EA2] %s dir=%s score=%.3f trend=%.3f adx=%.1f(%s) mom=%.3f addon=%.3f(%s) sess=%.2f regime=%s",
+        display, direction, final_score, trend_score, adx_val or 0, adx_source,
+        mom_quality, addon_val, addon_type, session_mult, regime,
     )
-    if _crypto_diag is not None:
-        log.debug(
-            "[CRYPTO-EA] %s engine_a=%s",
-            pair.get("display"),
-            _crypto_diag,
-        )
 
     return {
-        "final_score": final_score,
+        # ── Core outputs ──────────────────────────────────────────────────────
+        "final_score": round(final_score, 4),
         "direction": direction,
-        "factor_scores": factor_scores,
-        "weights": weights,
         "regime": regime,
-        "filtered_indicators": indicators,
-        "disabled_factors": disabled_factors,
-        "directional_score": dir_score,
-        "nondirectional_score": nondir_score,
-        "unweighted_directional_sum": dir_sum,
-        "correlation_adjustments": {k: v for k, v in corr_weights.items() if v < 1.0},
+        # ── Factor breakdown (UI + AI) ────────────────────────────────────────
+        "factor_scores": factor_scores,
+        "weights": {"trend": 1.0, "momentum": _MOMENTUM_WEIGHT, "addon": _ADDON_WEIGHT},
+        "trend_coherence": trend_detail,
+        # ── Diagnostic fields (backward compat with Engine C / scoring.py) ───
+        "directional_score": round(trend_score, 4),
+        "nondirectional_score": round(mom_quality, 4),
+        "unweighted_directional_sum": round(trend_score, 4),
+        "adx_value": adx_val,
+        "adx_source": adx_source,
+        "adx_multiplier": adx_mult,
+        "momentum_quality": round(mom_quality, 4),
+        "addon_type": addon_type,
+        "addon_value": round(addon_val, 4),
+        "session_multiplier": round(session_mult, 4),
+        "conviction": round(conviction, 4),
+        # ── Compatibility flags ───────────────────────────────────────────────
         "insufficient_factors": False,
-        "min_directional_failed": abs(dir_score) < float(_min_dir),
-        "active_directional_factors": list(active_dir.keys()),
-        "active_nondirectional_factors": list(active_nondir.keys()),
-        "min_directional_threshold": float(_min_dir),
-        "directional_confidence_multiplier": _dir_conf,
-        "effective_min_directional": _effective_min_dir,
-        "trend_coherence": trend_coherence,
-        "missing_directional_optional_count": missing_optional,
-        "optional_factor_coverage": round(optional_coverage, 4),
+        "indeterminate_direction": False,
+        "min_directional_failed": False,
+        "active_directional_factors": ["trend"],
+        "active_nondirectional_factors": ["momentum", "addon"],
+        "disabled_factors": [],
+        "directional_confidence_multiplier": round(conviction, 4),
+        "effective_min_directional": 0.0,
+        "min_directional_threshold": 0.0,
+        "optional_factor_coverage": 1.0,
+        "missing_directional_optional_count": 0,
+        "correlation_adjustments": {},
+        "crypto_engine_a_diagnostics": None,
+        "intermarket_confirmation": None,
+        "intermarket_engine_a_delta": 0.0,
         "feed_status": feed_status,
-        "crypto_engine_a_diagnostics": _crypto_diag,
-        "intermarket_confirmation": _intermarket_confirmation,
-        "intermarket_engine_a_delta": float(
-            (_intermarket_confirmation or {}).get("engineADelta", 0.0) or 0.0
-        ),
+        "btc_bias_applied": None,
     }
+
+
+def _zero_result(
+    pair: dict,
+    regime: str,
+    trend_detail: dict,
+    feed_status: dict,
+    reason: str = "unknown",
+    adx_val=None,
+    direction=None,
+) -> dict:
+    """Return a clean zero-score result with diagnostics."""
+    return {
+        "final_score": 0.0,
+        "direction": direction,
+        "regime": regime,
+        "factor_scores": {"trend": 0.0, "momentum": 0.0, "addon": 0.0},
+        "weights": {"trend": 1.0, "momentum": _MOMENTUM_WEIGHT, "addon": _ADDON_WEIGHT},
+        "trend_coherence": trend_detail,
+        "directional_score": 0.0,
+        "nondirectional_score": 0.0,
+        "unweighted_directional_sum": 0.0,
+        "adx_value": adx_val,
+        "adx_source": feed_status.get("adx"),
+        "adx_multiplier": 0.0,
+        "momentum_quality": 0.0,
+        "addon_type": "none",
+        "addon_value": 0.0,
+        "session_multiplier": 1.0,
+        "conviction": 0.0,
+        "insufficient_factors": True,
+        "indeterminate_direction": reason == "indeterminate_trend",
+        "min_directional_failed": False,
+        "active_directional_factors": [],
+        "active_nondirectional_factors": [],
+        "disabled_factors": [],
+        "directional_confidence_multiplier": 0.0,
+        "effective_min_directional": 0.0,
+        "min_directional_threshold": 0.0,
+        "optional_factor_coverage": 0.0,
+        "missing_directional_optional_count": 0,
+        "correlation_adjustments": {},
+        "crypto_engine_a_diagnostics": None,
+        "intermarket_confirmation": None,
+        "intermarket_engine_a_delta": 0.0,
+        "feed_status": feed_status,
+        "btc_bias_applied": None,
+        "abort_reason": reason,
+    }
+

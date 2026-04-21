@@ -11,7 +11,7 @@ alwaysApply: true
 
 **Do not change anything that alters live or backtest scoring unless the user explicitly instructs it.**
 
-- **Engine A live:** `MIN_CONFLUENCE_CLASS`, `MIN_CONFLUENCE_GROUP`, `MIN_CONFLUENCE_CLASS.forex`, `PAIR_PROFILES.min_confluence`, `AUTO_TRADE_MIN_SCORE`, `SCAN_QUANTILE_*`, confluence logic in `scoring.py` / `factor_scoring.py` / `forex_scoring.py`, `analyze_pair` tiering. Includes Soft Gating keys: `FOREX_ENGINE.session_mode`, `FOREX_ENGINE.trend_gate_adx_soft_enabled`, `FACTOR_MIN_DIRECTIONAL`.
+- **Engine A live:** `MIN_CONFLUENCE_CLASS`, `MIN_CONFLUENCE_GROUP`, `MIN_CONFLUENCE_CLASS.forex`, `PAIR_PROFILES.min_confluence`, `AUTO_TRADE_MIN_SCORE`, `SCAN_QUANTILE_*`, confluence logic in `scoring.py` / `factor_scoring.py`, `analyze_pair` tiering. Soft gating keys: `FOREX_ENGINE.session_soft_multiplier`, `FOREX_ENGINE.session_shoulder_multiplier`, `ADX_TREND_MIN_CLASS`.
 - **Engine A backtest:** `BT_MIN`, `PAIR_PROFILES.bt_min`, `get_backtest_min_score_threshold`, backtest score gates in `backtest_runner.py`.
 - **Engine B live + backtest:** `NAKED_ENGINE.style_profiles` (`min_score`, `min_rr`), `ENGINE_B_REGIME_MULTIPLIERS` (score scaling — currently neutralized to 1.0), `zone_multipliers` (structural width), naked checklist gates in `market_structure.py`.
 - **Engine D (Scalp Lab):** `SCALP_ENGINE` in `config.yaml` (`MIN_RR`, `MAX_SPREAD_PIPS`, `WITH_TREND_ONLY`, `BIAS_TIMEFRAME`, `M1_CANDLES`, `M15_CANDLES`, `M5_CANDLES`, `H1_CANDLES`, `SESSION_MODE`, `NY_OPEN_SKIP_MINUTES`, `EXECUTION_TIMEFRAME`, `MIN_GRADE_AUTO_EXECUTE`, `BT_ENABLED`, `BT_SESSION_MODE`, `BT_NY_OPEN_SKIP_MINUTES`, `BT_WALK_BARS`, `BT_MAX_CONCURRENT`, `BT_SLIPPAGE_TICKS`, `BT_SCRATCH_ENABLED`, `BT_SCRATCH_BARS`, `BT_SCRATCH_MIN_R`, optional `SCALP_PAIRS`) and core pass/fail logic in `scalp_engine.py` (session filter via `scalp_session_window()`, spread filter, VP build, absorption/CVD/AAA, VWAP, setup classification, HTF bias gate, level math, `ai_quality_grade`).
@@ -33,8 +33,8 @@ Cosmetic UI copy is fine. **Do not "tune", "align", or "simplify" thresholds** i
 
 Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, stocks, commodities, indices.
 
-**Four top-level engines plus a dedicated forex scoring branch:**
-- **Engine A** — Multi-Factor Quantitative Scoring (MFQS): uses **Variance Sqrt-Scaling** and **1.5 Z-score normalization** for improved convicton range. Non-forex uses the factor engine; forex routes to the dedicated rules-based forex scorer with **Soft Gating** (ADX/Session).
+**Four top-level engines:**
+- **Engine A v2** — 3-Factor Quantitative Scoring: **Factor 1 (Trend)** multi-TF EMA alignment D1/H4/H1 determines direction only; **Factor 2 (Momentum Quality)** RSI+MACD confirmation sizes conviction 0-1; **Factor 3 (ADX Gate)** hard abort <15, soft 0.65× at 15-25, full ≥25. One asset-class addon: forex=carry z-score, crypto=funding rate, commodity=COT z-score. Unified 0-3.0 scale for ALL asset classes including forex. Session soft multiplier for forex (0.75-1.0×). All implemented in `factor_scoring.py`.
 - **Engine B** — Naked price-action (market structure, zones, BOS/CHoCH, FVG, swing sequence)
 - **Engine C** — Consensus layer: blends A + B + AI Vision confirmation into a conviction-tiered signal
 - **Engine D (Scalp Lab)** - Fabio Valentini VP+OrderFlow scalping (`scalp_engine.py`, `volume_profile.py`). Pipeline: Volume Profile (POC/VAH/VAL/LVN) -> Absorption/CVD/AAA -> VWAP lean -> setup classification (Mean Reversion / Trend Continuation) -> `ai_quality_grade` (A/B/C/D). Execution on M1 (configurable) with NY open cooldown. Session filtering via `scalp_session_window()`. Not part of A/B/C consensus. Dashboard **Scalp Lab** panel: `POST /api/scalp-scan`, `POST /api/scalp-execute`. Backtest: `POST /api/backtest-scalp` -> **Engine D (Scalp VP)** button in backtest panel.
@@ -68,8 +68,8 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 | `data_feeds.py` | HTTP session, EODHD client, funding/OI helpers |
 | `news_sentiment_feed.py` | EODHD news + Claude sentiment; optional scan blend; TTL cache |
 | `scoring.py` | Confluence engine, vote weights, signal classification, pair profiles, `get_min_confluence_threshold` |
-| `factor_scoring.py` | Z-score factor engine with **Variance Sqrt-Scaling** to prevent score collapse; directional + non-directional factors (quality normalized to 1.5 Z-score). |
-| `forex_scoring.py` | Rules-based forex scorer with **Soft Gating** (ADX hard/soft floors and session shoulders) + boosted organic momentum/ADX weights. Counter-trend SHORT gate: Case A — breakout SHORT vs LONG EMA stack with Hurst trending → `bo_final × 0.70`; Case B — trend-path SHORT with Hurst > 0.65 → `trend_score × 0.80`. Config: `FOREX_ENGINE.counter_trend_short_gate`. |
+| `factor_scoring.py` | Engine A v2: 3-factor engine (Trend EMA coherence, Momentum Quality RSI+MACD, ADX Gate) + asset addon (carry/funding/COT). Unified 0-3.0 scale for ALL asset classes. Forex routes here — `forex_scoring.py` is no longer called. |
+| `forex_scoring.py` | Legacy forex scorer — **no longer active**. Kept on disk for reference only. All forex pairs now route through `factor_scoring.py`. |
 | `market_structure.py` | Engine B: `NakedEngine`, swing analysis, BOS/CHoCH/FVG/order blocks, shared checklist pass/fail |
 | `engine_b_ai.py` | Engine B advisory AI verdict (review only — not a pass/fail gate) |
 | `engine_c.py` | Engine C consensus: `ENGINE_C_AB_WEIGHTS` blend, conviction tiers, SL/TP resolution, Vision modifier |
@@ -327,17 +327,14 @@ api_execute()
 
 ## Key Functions
 
-### `calc_confluence(d1, h4, h1, vr, stoch, pair, btc_bias, ...)` — `scoring.py`
-12 vote slots: `d1_trend(2.0)`, `h1_ema(1.0)`, `d1_adx(1.0)`, `h4_macd(1.0)`, `h4_oscillator(0.75–1.0)`, `volume(0–1.0)`, `funding(0–1.0)`, `session(0–1.0)`, `h4_fib(0.5–1.0)`, `h1_bb(0.5–1.0)`, `weinstein(0–1.0)`, `divergence(1.0 bonus)`
-- Session vote adds `W_SESS×0.5` to BOTH sides; `_base_max` subtracts `W_SESS×0.5` to prevent overstatement
-- Tie-break: `bull >= bear → LONG` (intentional long bias)
-- Returns: `{score, votes, direction, signalClass, regime, factor_scores, factor_weights, factorDiagnostics, confidenceDetail, ...}`
+### `calc_confluence(d1, h4, h1, vr, stoch, pair, ...)` — `scoring.py`
+Calls `compute_factor_scores()` from `factor_scoring.py` (Engine A v2). Returns legacy-compatible dict with `{score, votes, direction, signalClass, regime, factor_scores, factor_weights, factorDiagnostics, confidenceDetail, ...}`. Factor scores: `trend` (±3.0), `momentum` (0-1), `addon` (-0.15/0/+0.30). Final score 0-3.0.
 
 ### `get_min_confluence_threshold(pair)` — `scoring.py`
 Priority: `PAIR_PROFILES[pair].min_confluence` → `MIN_CONFLUENCE_GROUP[type][score_group]` → `MIN_CONFLUENCE_CLASS[type]`
 
 ### `_max_score_for_pair(pair)` — `athena.py`
-Theoretical max score using `get_pair_vote_weights(pair)`, minus `W_SESS×0.5`.
+Returns 3.0 for all asset classes (Engine A v2 unified scale). No per-class fork.
 
 ### `fetch_candles(pair, tf, limit)` — `candles_cache.py`
 - H1 (eligible live feeds only): `CandleBuilder` first if bars ≥ min, else TTL then REST
@@ -359,7 +356,7 @@ Shared regime resolver for all Engine B paths. Returns: `TRENDING`, `RANGING`, `
 Recursively replaces `NaN`/`Inf` with `None`, normalizes numpy types. Applied before every `jsonify()`.
 
 ### `_can_execute(signal, cfg)` — `auto_trader.py`
-Live execute gate is **`combinedConviction`** vs `AUTO_TRADE_MIN_CONVICTION` (with alignment discount and meta delta). `AUTO_TRADE_MIN_SCORE` is **informational** in `get_status()` only; keep forex on the **0–2.0** scale alongside `MIN_CONFLUENCE_CLASS.forex` / `MIN_CONFLUENCE_CLASS.forex`.
+Live execute gate is **`combinedConviction`** vs `AUTO_TRADE_MIN_CONVICTION` (with alignment discount and meta delta). `AUTO_TRADE_MIN_SCORE` is **informational** in `get_status()` only. All asset classes now use 0–3.0 scale — `AUTO_TRADE_MIN_SCORE.forex` should be aligned to `MIN_CONFLUENCE_CLASS.forex` on the 0–3.0 scale.
 
 ### `/api/chart-analysis` — `athena.py`
 Requires `XAI_API_KEY` env var and uses OpenAI-compatible xAI client (`base_url=https://api.x.ai/v1`). `regime` in signal can be dict `{"label":"TRENDING"}` (Engine A) or string `"TRENDING"` (Engine C) — both handled. Context builder is **outside** try/except — keep it simple.
@@ -373,37 +370,29 @@ See **Scalp Lab / Engine D flow** above. Execute path: **`signal.type == "crypto
 
 | Engine | Scorer | Scale | Gate key |
 |--------|--------|-------|----------|
-| Engine A — non-forex | `factor_scoring.py` z-score factor engine | 0–3.0 | `MIN_CONFLUENCE_CLASS[type]` |
-| Engine A — forex | `forex_scoring.py` rules-based | 0–2.0 | `MIN_CONFLUENCE_CLASS.forex` (1.0) + `MIN_CONFLUENCE_CLASS.forex` (1.0) |
+| Engine A — all assets | `factor_scoring.py` v2: 3-factor (Trend+Momentum+ADX) + addon | 0–3.0 | `MIN_CONFLUENCE_CLASS[type]` |
 | Engine B | `market_structure.py` naked checklist | 0–100 pct | `NAKED_ENGINE.style_profiles.min_score` |
 | Engine C | `engine_c.py` A+B blend | 0–1 conviction | `ENGINE_C_AB_WEIGHTS` |
 | Engine D (Scalp Lab) | `scalp_engine.py` VP+OrderFlow: VP build → absorption/CVD/AAA → VWAP → `_classify_setup` → `ai_quality_grade` | 0–100 (`ai_score`), letter `ai_grade` A/B/C/D, `size_multiplier` (1.0/0.5/0.25) | `SCALP_ENGINE` (`MIN_RR`, `MAX_SPREAD_PIPS`, `MIN_GRADE`, `WITH_TREND_ONLY`, `BIAS_TIMEFRAME`) |
 
-**Two different REGIME_WEIGHTS exist — do not confuse:**
-- `CONFIG["REGIME_WEIGHTS"]` — adjusts **factor group weights** inside Engine A
-- `ENGINE_C_AB_WEIGHTS` in `engine_c.py` — controls **A vs B blend ratio** in Engine C
+**Regime in Engine A v2:** Regime is detected and smoothed (`REGIME_SMOOTHING_BARS`) but does **not** modify factor weights — it is informational/diagnostic only. Only `ENGINE_C_AB_WEIGHTS` in `engine_c.py` uses regime (to control A vs B blend ratio in Engine C).
 
-**`confluencePct` display scaling:** anchored to `get_min_confluence_threshold(pair)` so ~67% = "passing" intent. Engine C uses raw `confluenceScore / maxScore` (not `confluencePct`) for normalization.
+**`confluencePct` display scaling:** anchored to `get_min_confluence_threshold(pair)` so ~67% = "passing" intent. Engine C uses raw `confluenceScore / maxScore` (not `confluencePct`) for normalization. Engine A v2 max is 3.0 for all asset classes; `FOREX_ENGINE_A_MAX_SCORE` in `intermarket.py` updated to 3.0.
 
 ---
 
-## 2026-04-08: Forex London breakout / news / Engine B reality (current active guidance)
+## Engine A v2 / Forex / Engine B reality (current active guidance)
 
-### Code-verified London breakout behavior
+### Engine A v2 forex behavior
 
-- The forex engine is London-breakout capable, but it is **not** a London-breakout-only bot.
-- `forex_scoring.py` contains a dedicated `_london_breakout_score()` path.
-- The breakout path measures the Asian range from **00:00-07:00 UTC** using H1 candles.
-- Breakout scoring is only active during the first 3 London hours: **07:00-09:00 UTC**.
-- The Hurst/trend gate can veto the trend-following path while the London breakout path still runs.
-- The forex engine remains a hybrid:
-  - trend pullback path
-  - London breakout path
-  - final score uses the stronger valid path
+- Forex now routes through `factor_scoring.py` (Engine A v2) — **`forex_scoring.py` is no longer active**.
+- Engine A v2 uses multi-TF EMA coherence for direction, RSI+MACD momentum quality, ADX gate, and carry z-score addon for forex.
+- Session soft multiplier (0.75–1.0×) replaces the old hard session block.
+- London breakout path (`_london_breakout_score`) and Hurst gate are **removed** — Engine B handles structural breakout validation instead.
 
 Use this mental model when reasoning about forex:
-- **Engine A = breakout / timing detector**
-- **Engine B = structural validator**
+- **Engine A = trend quality detector** (3-factor: EMA coherence + RSI/MACD confirmation + ADX gate + asset addon)
+- **Engine B = structural validator** (naked price action: BOS/CHoCH/FVG/OB/swing sequence)
 - **Engine C = alignment / consensus layer**
 - **news / event risk = final safety layer**
 
@@ -463,20 +452,15 @@ Do not describe the current repo as having one unified news engine.
 
 ### News blend scoring contract
 
-When news sentiment confluence is enabled, score blending must respect the Engine A score contract for the current path:
-- forex Engine A = **0-2.0**
-- non-forex Engine A = **0-3.0**
-
-Any news delta must scale from the correct `maxScoreOverride`. Do not assume all Engine A paths share one raw max.
+When news sentiment confluence is enabled, score blending must respect the Engine A v2 score contract:
+- **All asset classes (including forex) = 0–3.0** — `maxScoreOverride` is 3.0 for every path.
+- `NEWS_SENTIMENT_SCORE_IMPACT` delta scales from 3.0 max. Do not use the old 2.0 forex cap.
 
 ### Current active forex thresholds
 
-- Engine A forex scale = **0-2.0**
-- `MIN_CONFLUENCE_CLASS.forex` = **1.0**
-- `MIN_CONFLUENCE_CLASS.forex` = **1.0**
-- `AUTO_TRADE_MIN_SCORE.forex` remains informational / status-only and should stay aligned to the active forex class floor
-
-Historical threshold notes may remain below, but they must stay clearly labeled historical / superseded.
+- Engine A forex scale = **0–3.0** (unified with all other asset classes since Engine A v2)
+- `MIN_CONFLUENCE_CLASS.forex` = **1.0** (unchanged — reasonable on 0–3.0 scale)
+- `AUTO_TRADE_MIN_SCORE.forex` = **1.0** — align to class floor on 0–3.0 scale
 
 ---
 

@@ -1204,52 +1204,9 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         config=CONFIG,
                     )
 
-                # Route forex pairs to dedicated forex scoring engine in backtest
-                if pair.get("type") == "forex":
-                    from forex_scoring import compute_forex_score
-
-                    _fx = compute_forex_score(
-                        d1_snap=d1i["snap"],
-                        h4_snap=h4i["snap"],
-                        h1_snap=h1i["snap"],
-                        h1_candles=h1_window,
-                        pair=_pair_ctx,
-                        bar_time=_bt_forex_d1_bar_time(d1_raw[i]["time"]),
-                        backtest_mode=True,  # respect session gate (parity)
-                        h4_candles=h4_window,
-                        score_group=_pair_score_group,
-                    )
-                    # Derive proper regime label for forex backtest (not signal_type)
-                    try:
-                        from regime import detect_regime
-                        _fx_regime_det = detect_regime(h4i["snap"], "forex")
-                        _fx_trend_state = _fx_regime_det.get("label", "RANGING")
-                    except Exception:
-                        _fx_regime_det = {"state": 1}
-                        _fx_trend_state = "RANGING"
-                    res = {
-                        "final_score": _fx.final_score,
-                        "direction": _fx.direction,
-                        "factor_scores": _fx.components,
-                        "regime": {
-                            "state": _fx_regime_det.get("state", 1),
-                            "label": _fx_trend_state,
-                        },  # Match calc_confluence format — use detected regime state, not hardcoded RANGING
-                        "signal_type": _fx.signal_type,
-                        "score": _fx.final_score,  # Add compatibility field for backtest
-                        "trendState": _fx_trend_state,  # Add compatibility field
-                    }
-                    _fx_im = apply_confirmation_to_score(
-                        float(res.get("score", 0.0) or 0.0),
-                        str(res.get("direction") or "LONG"),
-                        _pair_ctx,
-                        _bt_intermarket_ctx,
-                        max_score=FOREX_ENGINE_A_MAX_SCORE,
-                        config=CONFIG,
-                    )
-                    res["score"] = float(_fx_im.get("adjusted_score", res["score"]))
-                    res["intermarketConfirmation"] = _fx_im.get("confirmation") or {}
-                    direction = _fx.direction
+                # Engine A v2: all asset classes (including forex) use calc_confluence → compute_factor_scores
+                if False:  # forex branch retired — Engine A v2 handles forex natively
+                    pass
                 else:
                     _bt_funding_rate = None
                     _bt_oi_data = None
@@ -1688,53 +1645,9 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         config=CONFIG,
                     )
 
-                # Route forex pairs to dedicated forex scoring engine (matches D1 BT + live scan)
-                if pair.get("type") == "forex":
-                    from forex_scoring import compute_forex_score
-
-                    _fx = compute_forex_score(
-                        d1_snap=d1i_ctx["snap"],
-                        h4_snap=h4i["snap"],
-                        h1_snap=h1i["snap"],
-                        h1_candles=h1_window,
-                        pair=_pair_ctx,
-                        bar_time=h4_raw[i][
-                            "time"
-                        ],  # use actual current H4 bar datetime
-                        backtest_mode=True,  # respect session gate (parity)
-                        h4_candles=h4_window,
-                        score_group=_pair_score_group,
-                    )
-                    try:
-                        from regime import detect_regime
-                        _fx_regime_det = detect_regime(h4i["snap"], "forex")
-                        _fx_trend_state = _fx_regime_det.get("label", "RANGING")
-                    except Exception:
-                        _fx_regime_det = {"state": 1}
-                        _fx_trend_state = "RANGING"
-                    res = {
-                        "final_score": _fx.final_score,
-                        "direction": _fx.direction,
-                        "factor_scores": _fx.components,
-                        "regime": {
-                            "state": _fx_regime_det.get("state", 1),
-                            "label": _fx_trend_state,
-                        },
-                        "signal_type": _fx.signal_type,
-                        "score": _fx.final_score,
-                        "trendState": _fx_trend_state,
-                    }
-                    _fx_im = apply_confirmation_to_score(
-                        float(res.get("score", 0.0) or 0.0),
-                        str(res.get("direction") or "LONG"),
-                        _pair_ctx,
-                        _bt_intermarket_ctx,
-                        max_score=FOREX_ENGINE_A_MAX_SCORE,
-                        config=CONFIG,
-                    )
-                    res["score"] = float(_fx_im.get("adjusted_score", res["score"]))
-                    res["intermarketConfirmation"] = _fx_im.get("confirmation") or {}
-                    direction = _fx.direction
+                # Engine A v2: all asset classes (including forex) use calc_confluence → compute_factor_scores
+                if False:  # forex branch retired — Engine A v2 handles forex natively
+                    pass
                 else:
                     _bt_funding_rate = None
                     _bt_oi_data = None
@@ -2147,53 +2060,9 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         config=CONFIG,
                     )
 
-                # Route forex pairs to dedicated forex scoring engine (matches D1 BT + live scan)
-                if pair.get("type") == "forex":
-                    from forex_scoring import compute_forex_score
-
-                    _fx = compute_forex_score(
-                        d1_snap=d1i_ctx["snap"],
-                        h4_snap=h4i_ctx["snap"],
-                        h1_snap=h1i["snap"],
-                        h1_candles=h1_window,
-                        pair=_pair_ctx,  # HIGH-01 fix: was missing pair arg
-                        bar_time=h1_raw[i][
-                            "time"
-                        ],  # use actual current H1 bar datetime
-                        backtest_mode=True,  # respect session gate (parity)
-                        h4_candles=h4_ctx,
-                        score_group=_pair_score_group,
-                    )
-                    try:
-                        from regime import detect_regime
-                        _fx_regime_det = detect_regime(h4i_ctx["snap"], "forex")
-                        _fx_trend_state = _fx_regime_det.get("label", "RANGING")
-                    except Exception:
-                        _fx_regime_det = {"state": 1}
-                        _fx_trend_state = "RANGING"
-                    res = {
-                        "final_score": _fx.final_score,
-                        "direction": _fx.direction,
-                        "factor_scores": _fx.components,
-                        "regime": {
-                            "state": _fx_regime_det.get("state", 1),
-                            "label": _fx_trend_state,
-                        },
-                        "signal_type": _fx.signal_type,
-                        "score": _fx.final_score,
-                        "trendState": _fx_trend_state,
-                    }
-                    _fx_im = apply_confirmation_to_score(
-                        float(res.get("score", 0.0) or 0.0),
-                        str(res.get("direction") or "LONG"),
-                        _pair_ctx,
-                        _bt_intermarket_ctx,
-                        max_score=FOREX_ENGINE_A_MAX_SCORE,
-                        config=CONFIG,
-                    )
-                    res["score"] = float(_fx_im.get("adjusted_score", res["score"]))
-                    res["intermarketConfirmation"] = _fx_im.get("confirmation") or {}
-                    direction = _fx.direction
+                # Engine A v2: all asset classes (including forex) use calc_confluence → compute_factor_scores
+                if False:  # forex branch retired — Engine A v2 handles forex natively
+                    pass
                 else:
                     _bt_funding_rate = None
                     _bt_oi_data = None
@@ -4439,49 +4308,26 @@ def backtest_pair_consensus(
                 )
             _bt_oi_ctx = build_oi_context_for_factor_scoring(_bt_oi_data, d1_ctx, h1i.get("snap"))
 
-            if _ptype == "forex":
-                from forex_scoring import compute_forex_score
-                # HIGH-06 fix: use actual H4 bar time, NOT _bt_forex_d1_bar_time.
-                # _bt_forex_d1_bar_time forces 13:00 UTC which suppresses the
-                # London breakout window (07-09 UTC) in Engine-C scan.
-                _bt_bar_time = candles_h4[i].get("time", "") if candles_h4 else ""
-                _fx = compute_forex_score(
-                    d1_snap=d1i["snap"], h4_snap=h4i["snap"], h1_snap=h1i["snap"],
-                    h1_candles=h1_window, pair=_pair_ctx,
-                    bar_time=_bt_bar_time,
-                    backtest_mode=True, h4_candles=h4_window,
-                    score_group=_pair_score_group,
-                )
-                from regime import detect_regime
-                _fx_regime = detect_regime(h4i["snap"], "forex")
-                signal_a = {
-                    "confluenceScore": _fx.final_score, "maxScore": 2.0,
-                    "direction": _fx.direction, "score": _fx.final_score,
-                    "regime": {"label": _fx_regime.get("label", "RANGING")},
-                    "sl": None, "tp1": None, "tp2": None, "rr1": 0,
-                    "factor_scores": _fx.components,
-                }
-                a_direction = _fx.direction
-            else:
-                res_a = calc_confluence(
-                    d1i, h4i, h1i, vr, stoch, _pair_ctx, btc_bias,
-                    d1_candles=d1_ctx, h4_candles=h4_window, h1_candles=h1_window,
-                    funding_rate=_bt_funding_rate, oi_data=_bt_oi_data, oi_context=_bt_oi_ctx,
-                    bar_time=candles_h4[i].get("time") if candles_h4 else None,
-                )
-                _atr_c = _rt().atr_for_levels(d1i, h4i, h1i, pair=pair, style=resolved_style)
-                _lvl_a = calc_levels(current_price, _atr_c or atr, res_a["direction"], _ptype,
-                                     regime_state=res_a.get("regime", {}).get("state"),
-                                     style=resolved_style) if _atr_c else {}
-                signal_a = {
-                    "confluenceScore": res_a["score"], "maxScore": res_a.get("maxScoreOverride", 3.0),
-                    "direction": res_a["direction"], "score": res_a["score"],
-                    "regime": res_a.get("regime", {"label": regime_label}),
-                    "sl": _lvl_a.get("sl"), "tp1": _lvl_a.get("tp1"),
-                    "tp2": _lvl_a.get("tp2"), "rr1": _lvl_a.get("rr1", 0),
-                    "factor_scores": res_a.get("factor_scores", {}),
-                }
-                a_direction = res_a["direction"]
+            # Engine A v2: all asset classes (including forex) use calc_confluence
+            res_a = calc_confluence(
+                d1i, h4i, h1i, vr, stoch, _pair_ctx, btc_bias,
+                d1_candles=d1_ctx, h4_candles=h4_window, h1_candles=h1_window,
+                funding_rate=_bt_funding_rate, oi_data=_bt_oi_data, oi_context=_bt_oi_ctx,
+                bar_time=candles_h4[i].get("time") if candles_h4 else None,
+            )
+            _atr_c = _rt().atr_for_levels(d1i, h4i, h1i, pair=pair, style=resolved_style)
+            _lvl_a = calc_levels(current_price, _atr_c or atr, res_a["direction"], _ptype,
+                                 regime_state=res_a.get("regime", {}).get("state"),
+                                 style=resolved_style) if _atr_c else {}
+            signal_a = {
+                "confluenceScore": res_a["score"], "maxScore": res_a.get("maxScoreOverride", 3.0),
+                "direction": res_a["direction"], "score": res_a["score"],
+                "regime": res_a.get("regime", {"label": regime_label}),
+                "sl": _lvl_a.get("sl"), "tp1": _lvl_a.get("tp1"),
+                "tp2": _lvl_a.get("tp2"), "rr1": _lvl_a.get("rr1", 0),
+                "factor_scores": res_a.get("factor_scores", {}),
+            }
+            a_direction = res_a["direction"]
 
         except Exception as _ae:
             log.debug("[ENGINE C BT] %s bar %d Engine A failed: %s", pair.get("display"), i, _ae)

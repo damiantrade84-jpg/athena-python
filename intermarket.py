@@ -19,10 +19,10 @@ import pandas as pd
 
 log = logging.getLogger("athena")
 
-# Authoritative forex Engine A score contract cap (0.0–2.0).
-# Pass this as max_score= to apply_confirmation_to_score() for ALL forex paths
-# (live and backtest) so the cap cannot drift between environments.
-FOREX_ENGINE_A_MAX_SCORE: float = 2.0
+# Authoritative forex Engine A score contract cap (0.0–3.0).
+# Engine A v2 (factor_scoring.py) uses a unified 0-3.0 scale for ALL asset classes
+# including forex. Updated from 2.0 (old forex_scoring.py era) to 3.0.
+FOREX_ENGINE_A_MAX_SCORE: float = 3.0
 
 
 _DEFAULT_CFG = {

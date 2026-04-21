@@ -549,8 +549,7 @@ def calc_confluence(
     # Legacy compatibility values
     bull = max(0.0, score) if direction != "SHORT" else 0.0
     bear = max(0.0, score) if direction == "SHORT" else 0.0
-    # Spread = abs directional score on the engine-native scale: factor engine runs
-    # up to ~3.0 while forex_scoring caps at 2.0.
+    # Spread = abs directional score on the engine-native scale: factor engine v2 runs 0-3.0.
     spread = round(abs(factor_result.get("directional_score", 0.0)), 2)
     # Rebuild regime as dict so callers can do res['regime'].get('state')
     _regime_str = factor_result.get("regime", "UNKNOWN") or "UNKNOWN"
@@ -608,7 +607,7 @@ def calc_confluence(
         "signalClass": _signal_class,
         "regime": _regime,
         "fundingRate": funding_rate,
-        "maxScoreOverride": 3.0,  # Z-score clamp cap — final_score is a weighted average of clamped z-scores
+        "maxScoreOverride": 3.0,  # Engine A v2 score cap (trend × adx × session × conviction)
         # New fields for factor diagnostics (Unified to snake_case)
         "factor_scores": factor_result["factor_scores"],
         "factor_weights": factor_result["weights"],
