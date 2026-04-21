@@ -1506,14 +1506,10 @@ def _atr_for_levels(
 
 
 def _max_score_for_pair(pair: dict) -> float:
-    """Theoretical max score for Engine A.
+    """Theoretical max score for Engine A v2.
 
-    - Forex uses forex_scoring.py (rules-based): max 2.0
-    - Non-forex uses factor_scoring.py (z-score factor engine): max 3.0
+    All asset classes use factor_scoring.py on a unified 0-3.0 scale.
     """
-    ptype = pair.get("type", "").lower()
-    if ptype == "forex":
-        return 2.0
     return 3.0
 
 
@@ -10212,71 +10208,7 @@ def analyze_pair(
                     "price_change_pct": (_cur_close - _prev_close) / _prev_close * 100.0,
                 }
 
-    res = None
-    # Route forex pairs to dedicated forex scoring engine
-    if pair.get("type") == "forex":
-        try:
-            from forex_scoring import compute_forex_score
-            from regime import detect_regime
-
-            _forex_result = compute_forex_score(
-                d1_snap=_cf_d1i["snap"],
-                h4_snap=_cf_h4i["snap"],
-                h1_snap=_cf_h1i["snap"],
-                h1_candles=_cf_h1c,
-                pair=_pair_ctx,
-                bar_time=str(d1[-1].get("time", "") or d1[-1].get("datetime", "")),
-                h4_candles=_cf_h4c,
-                score_group=_score_group,
-            )
-            _fx_regime = detect_regime(
-                _cf_h4i["snap"],
-                pair.get("type", "forex"),
-                bb_width_pct=_cf_h4i["snap"].get("bbWidth_pct")
-                or _cf_h4i["snap"].get("bb_width_pct"),
-            )
-            # Map forex factor_scores to UI-compatible votes format (MUST be flat for AI consumption)
-            fx_votes = {}
-
-            # Map forex components to screen structure for UI display and AI logging
-            components = _forex_result.components
-            if components:
-                # Screen 1 (D1) - Trend gate and session
-                fx_votes["D1 Trend"] = 1.0 if components.get("trend_gate") else 0.0
-                fx_votes["Session"] = 1.0 if components.get("session_active") else 0.0
-
-                # Screen 2 (H4) - Momentum and ADX
-                fx_votes["H4 Momentum"] = components.get("momentum_confirm", 0.0)
-                fx_votes["H4 ADX"] = components.get("adx_filter", 0.0)
-
-                # Screen 3 (H1) - Entry quality and COT
-                fx_votes["H1 Entry"] = components.get("entry_quality", 0.0)
-                fx_votes["COT Boost"] = components.get("cot_boost", 0.0)
-
-            res = {
-                "final_score": _forex_result.final_score,
-                "direction": _forex_result.direction,
-                "factor_scores": _forex_result.components,
-                "regime": {
-                    "state": _fx_regime.get("state", 1),
-                    "label": _fx_regime.get("label", "RANGING"),
-                },
-                "regimeName": _fx_regime.get("label", "RANGING"),
-                "signal_type": _forex_result.signal_type,
-                "score": _forex_result.final_score,
-                "trendState": _forex_result.signal_type,  # forex: signal_type not regime label — see auto_trader regime filter note
-                # Keys required by signal dict construction below
-                "votes": fx_votes,
-                "warnings": [],
-                "weinsteinStage": None,
-                "weinsteinLabel": "N/A",
-                "maxScoreOverride": 2.0,
-            }
-        except Exception as _fx_err:
-            log.error(
-                f"[FOREX] {pair.get('display')} forex_scoring FAILED: {_fx_err} — skipping pair to avoid factor-engine fallback"
-            )
-            return None
+    # Engine A v2: all asset classes (including forex) route through calc_confluence
 
     _usd_relative_strength = fetch_usd_relative_strength_context(pair, _cf_h4c, tf="H4")
     _intermarket_raw_context = None
@@ -10296,51 +10228,27 @@ def analyze_pair(
             _im_ctx_err,
         )
 
-    if res is None or pair.get("type") != "forex":
-        res = calc_confluence(
-            _cf_d1i,
-            _cf_h4i,
-            _cf_h1i,
-            vr,
-            stoch,
-            _pair_ctx,
-            btc_bias,
-            d1_candles=_cf_d1c,
-            h4_candles=_cf_h4c,
-            h1_candles=_cf_h1c,
-            funding_rate=_funding_rate,
-            volume_threshold=pair_profile.get(
-                "volume_threshold", CONFIG["VOLUME_THRESHOLD"]
-            ),
-            regime_context=regime_context,
-            oi_data=_oi_data,
-            oi_context=_oi_context,
-            macro_context=_usd_relative_strength,
-            intermarket_context=_intermarket_raw_context,
-        )
-    elif pair.get("type") == "forex":
-        try:
-            from intermarket import apply_confirmation_to_score
-
-            _fx_im = apply_confirmation_to_score(
-                float(res.get("score", 0.0) or 0.0),
-                str(res.get("direction") or "LONG"),
-                _pair_ctx,
-                _intermarket_raw_context,
-                max_score=2.0,
-                config=CONFIG,
-            )
-            res["score"] = float(_fx_im.get("adjusted_score", res.get("score", 0.0)))
-            res["intermarketConfirmation"] = _fx_im.get("confirmation") or {}
-            _fx_fd = dict(res.get("factorDiagnostics") or {})
-            _fx_fd["intermarket"] = res["intermarketConfirmation"]
-            res["factorDiagnostics"] = _fx_fd
-        except Exception as _fx_im_err:
-            log.debug(
-                "[INTERMARKET] %s forex integration skipped: %s",
-                pair.get("display"),
-                _fx_im_err,
-            )
+    res = calc_confluence(
+        _cf_d1i,
+        _cf_h4i,
+        _cf_h1i,
+        vr,
+        stoch,
+        _pair_ctx,
+        btc_bias,
+        d1_candles=_cf_d1c,
+        h4_candles=_cf_h4c,
+        h1_candles=_cf_h1c,
+        funding_rate=_funding_rate,
+        volume_threshold=pair_profile.get(
+            "volume_threshold", CONFIG["VOLUME_THRESHOLD"]
+        ),
+        regime_context=regime_context,
+        oi_data=_oi_data,
+        oi_context=_oi_context,
+        macro_context=_usd_relative_strength,
+        intermarket_context=_intermarket_raw_context,
+    )
 
     # For SCALP: warn if D1 trend disagrees with signal direction
 
@@ -10378,10 +10286,7 @@ def analyze_pair(
     if price is None or not atr:
         return None
 
-    # Max possible final_score depends on scoring engine:
-    # - Forex: 0-2 scale (forex_scoring.py caps at 2.0)
-    # - Crypto/Stock: 0-3 scale (z-score factor engine, capped at 3.0)
-    # Only set maxScoreOverride if not already set (forex sets it to 2.0)
+    # Engine A v2: unified 0-3.0 scale for all asset classes including forex
     if res.get("maxScoreOverride") is None:
         res["maxScoreOverride"] = 3.0
     max_score = res.get("maxScoreOverride") or _max_score_for_pair(pair)

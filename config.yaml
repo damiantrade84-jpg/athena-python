@@ -79,7 +79,7 @@ BACKTEST_USE_BT_MIN_THRESHOLDS: false
 BT_MIN:
   crypto:    2.15   # live-score p75 (was 0.95)
   commodity: 1.80   # live-score p75 (was 0.90)
-  forex:     1.20   # live-score p75 (was 0.85)
+  forex:     1.60   # Engine A v2 scale: ~60% of practical ceiling (D1+H4+soft ADX filter). Was 1.20 on old 0-2.0 scale.
   stock:     1.10   # no live data — hold at live class gate (was 0.90)
   index:     1.17   # only one live row; hold at that value (was 0.85)
 
@@ -88,9 +88,9 @@ BT_MIN:
 # Previous (lower) values preserved in git history.
 BT_MIN_GROUP:
   forex:
-    forex_majors: 1.20
-    forex_crosses: 1.20
-    forex_exotics: 1.20
+    forex_majors: 1.50   # Engine A v2 scale (was 1.20 on old 0-2.0 forex scale)
+    forex_crosses: 1.60  # Engine A v2 scale
+    forex_exotics: 1.70  # Engine A v2 scale (exotics need higher bar)
   crypto:
     crypto_btc: 2.15
     crypto_eth: 2.15
@@ -225,24 +225,22 @@ ENGINE_A_BLOCKED_TREND_STATES:
   - "DEVELOPING"
 
 # Per-class live scan minimum confluence — execute / tradeSignals tier threshold.
-# Engine A v2: all asset classes use 0–3.0 scale. Forex threshold 1.0 is ~33% of max.
+# Engine A v2: all asset classes use 0–3.0 scale. Practical ceiling ~2.61 (D1+H4 aligned).
 MIN_CONFLUENCE_CLASS:
-  forex:     1.0      # Engine A v2 scale 0-3.0; 1.0 = ~33% of max (was 1.60 on old 0-2.0 scale — ~80%, too strict)
+  forex:     1.20     # Engine A v2 scale 0-3.0; 1.20 = ~46% of practical ceiling (~2.61 for D1+H4 aligned). Filters soft ADX + off-session borderline cases.
   crypto:    1.4      # was 1.20, restore to 1.40
   commodity: 1.4      # was 1.10, restore to 1.40
-  stock:     1.55      # was 1.10, restore to 1.55
-  index:     1.35      # was 1.05, restore to 1.35
-
-# Engine A v2: forex uses 0-3.0 scale (same as all asset classes). MIN_CONFLUENCE_CLASS.forex=1.0 is appropriate on this scale.
+  stock:     1.55     # was 1.10, restore to 1.55
+  index:     1.35     # was 1.05, restore to 1.35
 
 # Optional subgroup thresholds (used when score_group is available on a pair)
 # NOTE: get_score_threshold() uses GROUP value directly — no class floor check.
 # Group values must be proportionally in line with MIN_CONFLUENCE_CLASS.
 MIN_CONFLUENCE_GROUP:
   forex:
-    forex_majors: 0.85     # was 1.50 — unreachable; majors most liquid, lower bar
-    forex_crosses: 0.95     # was 1.55
-    forex_exotics: 1.05     # was 1.65; exotics need higher conviction
+    forex_majors: 1.05     # v2 scale: slightly below class floor (majors most liquid, lower bar)
+    forex_crosses: 1.15     # v2 scale: at class floor level
+    forex_exotics: 1.30     # v2 scale: above class floor (exotics need higher conviction)
   crypto:
     crypto_btc: 1.28      # was 1.10 (old lowered-class era) × 1.167
     crypto_eth: 1.34      # was 1.15 × 1.167
@@ -316,7 +314,7 @@ AUTO_TRADE_MIN_SCORE:
   commodity: 1.40   # factor 0–3: align with MIN_CONFLUENCE_CLASS.commodity
   stock:     1.55   # factor 0–3: align with MIN_CONFLUENCE_CLASS.stock
   index:     1.35   # factor 0–3: align with MIN_CONFLUENCE_CLASS.index
-  forex:     1.0    # forex 0–2: align with MIN_CONFLUENCE_CLASS.forex
+  forex:     1.20   # factor 0–3: align with MIN_CONFLUENCE_CLASS.forex (Engine A v2, was 1.0 on old 0-2.0 scale)
 # AUTO_TRADE_MIN_CONVICTION is the real live gate used inside auto_trader.py.
 # Metric: combinedConviction on a 0–1 scale. When Engine A + B align, the live
 # gate gets a 15% discount (effective min = configured min * 0.85).
