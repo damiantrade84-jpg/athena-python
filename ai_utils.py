@@ -8,8 +8,18 @@ import re
 
 def parse_json_object(text: str) -> dict | None:
     """Parse a JSON object from LLM output with robust fallbacks."""
-    parsed = None
+    if not text:
+        return None
 
+    # 1. Direct parse (works when response_format=json_object is used)
+    try:
+        result = json.loads(text)
+        if isinstance(result, dict):
+            return result
+    except json.JSONDecodeError:
+        pass
+
+    # 2. Strip markdown code fences
     if "```" in text:
         for part in text.split("```"):
             part = part.strip()
@@ -17,27 +27,20 @@ def parse_json_object(text: str) -> dict | None:
                 part = part[4:].strip()
             if part.startswith("{"):
                 try:
-                    parsed = json.loads(part[: part.rfind("}") + 1])
-                    break
+                    return json.loads(part)
                 except json.JSONDecodeError:
                     pass
 
-    if parsed is None:
-        match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text)
-        if match:
-            try:
-                parsed = json.loads(match.group())
-            except json.JSONDecodeError:
-                pass
+    # 3. Extract first {...} block (handles any nesting depth)
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start >= 0 and end > start:
+        try:
+            result = json.loads(text[start:end])
+            if isinstance(result, dict):
+                return result
+        except json.JSONDecodeError:
+            pass
 
-    if parsed is None:
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if start >= 0 and end > start:
-            try:
-                parsed = json.loads(text[start:end])
-            except json.JSONDecodeError:
-                pass
-
-    return parsed if isinstance(parsed, dict) else None
+    return None
 
