@@ -69,11 +69,11 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 | `news_sentiment_feed.py` | EODHD news + Claude sentiment; optional scan blend; TTL cache |
 | `scoring.py` | Confluence engine, vote weights, signal classification, pair profiles, `get_min_confluence_threshold` |
 | `factor_scoring.py` | Z-score factor engine with **Variance Sqrt-Scaling** to prevent score collapse; directional + non-directional factors (quality normalized to 1.5 Z-score). |
-| `forex_scoring.py` | Rules-based forex scorer with **Soft Gating** (ADX hard/soft floors and session shoulders) + boosted organic momentum/ADX weights. |
+| `forex_scoring.py` | Rules-based forex scorer with **Soft Gating** (ADX hard/soft floors and session shoulders) + boosted organic momentum/ADX weights. Counter-trend SHORT gate: Case A — breakout SHORT vs LONG EMA stack with Hurst trending → `bo_final × 0.70`; Case B — trend-path SHORT with Hurst > 0.65 → `trend_score × 0.80`. Config: `FOREX_ENGINE.counter_trend_short_gate`. |
 | `market_structure.py` | Engine B: `NakedEngine`, swing analysis, BOS/CHoCH/FVG/order blocks, shared checklist pass/fail |
 | `engine_b_ai.py` | Engine B advisory AI verdict (review only — not a pass/fail gate) |
 | `engine_c.py` | Engine C consensus: `ENGINE_C_AB_WEIGHTS` blend, conviction tiers, SL/TP resolution, Vision modifier |
-| `confidence_engine.py` | 4-component confidence scoring (indicator agreement, TF alignment, regime fit, liquidity) |
+| `confidence_engine.py` | 4-component confidence scoring (indicator agreement, TF alignment, regime fit, liquidity) + `session_quality` post-multiplier (high=1.0, medium=0.9, low=0.7). Off-hours signals are demoted before Engine C's reliability gate. |
 | `indicators.py` | Pure indicator functions (EMA, RSI, MACD, ATR, ADX, BB, Stochastic, Fib, OBV, Squeeze) + Engine D helpers: `calc_vwap`, `detect_absorption`, `calc_cvd`, `detect_range_contraction` |
 | `regime.py` | Market regime detection: TRENDING / DEVELOPING / RANGING / DEAD_RANGING |
 | `risk_engine.py` | Kill switch, drawdown, position sizing, portfolio heat |
@@ -634,6 +634,33 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 ---
 
 ## DECISIONS
+
+## 2026-04-21: Confidence session multiplier + forex counter-trend SHORT gate + BE fix
+
+**`confidence_engine.py` — session quality multiplier:**
+`compute_confidence()` now accepts `session_quality: Optional[str]` and post-multiplies confidence:
+- `"high"` (London Open, London-NY overlap) → **1.00** (no change)
+- `"medium"` (London solo, NY solo) → **0.90**
+- `"low"` (Asian, off-hours) → **0.70**
+
+Called from `scoring.py` via `get_session(bar_time)["quality"]`. Off-hours Engine A signals have lower confidence → Engine C's reliability gate (`confidence >= 0.60`) naturally demotes them. Does not affect scoring gates directly.
+
+**`forex_scoring.py` — counter-trend SHORT gate:**
+Two config-driven penalty cases under `FOREX_ENGINE.counter_trend_short_gate`:
+- **Case A** (`bo_counter_trend_mult: 0.70`): London breakout SHORT (`bo_dir="SHORT"`) while EMA stack is LONG (`trend_dir="LONG"`) and Hurst is trending → `bo_final × 0.70`. Prevents fading a confirmed bullish trend on the first London reversal wick.
+- **Case B** (`trend_high_hurst_short_mult: 0.80`): Trend-path SHORT with `_hurst > high_hurst_threshold (0.65)` → `trend_score × 0.80`. Mature downtrend is already extended; penalise late-SHORT entries.
+Both penalties are additive (can both apply). Result stored in `result.components["counter_trend_short_applied"]` and `"counter_trend_case"`. Config key `enabled: true`; set `false` to bypass.
+
+**`timed_exit_monitor.py` — breakeven closing at 0.00R fix:**
+Root cause: `profit > 0` armed BE on any positive P&L (even $0.01); `mt5_move_sl_to_breakeven` placed SL exactly at entry; spread immediately stopped the trade out at 0.00R.
+
+Two-part fix (both config-driven under `TIMED_EXIT`):
+1. **`breakeven_min_profit_r: 0.20`** — BE only arms when `profit >= risk_amount × 0.20`. For a $100 risk trade that's $20 minimum. Falls back to $0.01 floor for rows without `risk_amount`.
+2. **`breakeven_buffer_r: 0.05`** — BE SL placed at `entry + sl_dist × 5%` (LONG) or `entry − sl_dist × 5%` (SHORT). On a 20-pip SL that's 1 pip above entry — ensures close price > 0.00R. Applied to both MT5 and Bybit handlers.
+
+The "immediate close" path (`close_min <= be_min` case) retains `profit > 0` unchanged — that path banks profit immediately rather than setting a deferred BE stop.
+
+---
 
 ## 2026-04-18: Engine A scorer-is-noise confirmation (factor-level probe)
 
