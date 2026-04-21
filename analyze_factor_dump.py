@@ -7,12 +7,22 @@ Computes Pearson correlation of each numeric factor value vs resultR, overall
 and per (asset_class, style). Flags SUSPECT factors (negative corr, |rho|>=0.2,
 n>=30) and PROTECTIVE factors (positive corr).
 
-Also computes a direction-normalised view: for LONG trades, factor correlates
-as-is; for SHORT trades, we flip sign of signed factors so "bullish factor"
-becomes "aligned-with-direction factor".
+Direction-normalised view: for LONG trades, factor correlates as-is; for SHORT
+trades, signed (directional) factors have their sign flipped so "bearish factor
+value" maps to "factor aligned with direction." Non-directional factors (timing,
+volatility) are left as-is. Signed factors are auto-detected: a factor is signed
+if its mean in LONG trades and mean in SHORT trades have opposite signs (threshold
+±0.05). Use --no-normalize to disable and see raw correlations.
+
+WARNING: Without direction normalization, directional factors in SHORT slices
+show spurious SUSPECT flags. e.g. trend=-1.0 (bearish) on a winning SHORT
+(R=+1.0) appears as negative correlation → SUSPECT, even though the factor
+is working correctly.
 
 Usage:
     python analyze_factor_dump.py [factor_dump.jsonl]
+    python analyze_factor_dump.py --split direction,class_direction
+    python analyze_factor_dump.py --no-normalize   # raw correlations only
 """
 
 from __future__ import annotations
@@ -102,6 +112,66 @@ def report(rows, title, min_n=30):
         print(f"  {k:<32} {n:>5} {rho:>+8.3f} {m:>+10.3f} {s:>10.3f}{flag}")
 
 
+def identify_signed_factors(all_rows: list) -> set:
+    """Auto-detect directional (signed) factors.
+
+    A factor is signed if its mean in LONG trades and mean in SHORT trades have
+    opposite signs (both must exceed the ±0.05 threshold to avoid noise triggers).
+    Non-directional factors (timing ints, volatility ratios that are always
+    positive) will have the same sign in both subsets and are excluded.
+    """
+    long_rows = [r for r in all_rows if (r.get("direction") or "").upper() == "LONG"]
+    short_rows = [r for r in all_rows if (r.get("direction") or "").upper() == "SHORT"]
+    if not long_rows or not short_rows:
+        return set()
+
+    all_keys: set = set()
+    for r in all_rows:
+        all_keys.update((r.get("factors") or {}).keys())
+
+    signed: set = set()
+    for key in all_keys:
+        def _vals(rset):
+            out = []
+            for r in rset:
+                v = (r.get("factors") or {}).get(key)
+                if isinstance(v, bool):
+                    v = 1.0 if v else 0.0
+                if isinstance(v, (int, float)) and math.isfinite(float(v)):
+                    out.append(float(v))
+            return out
+
+        lv = _vals(long_rows)
+        sv = _vals(short_rows)
+        if len(lv) < 5 or len(sv) < 5:
+            continue
+        lm = sum(lv) / len(lv)
+        sm = sum(sv) / len(sv)
+        if lm > 0.05 and sm < -0.05:
+            signed.add(key)
+        elif lm < -0.05 and sm > 0.05:
+            signed.add(key)
+    return signed
+
+
+def normalize_rows(rows: list, signed_factors: set) -> list:
+    """Return new rows with directional factor signs flipped for SHORT trades."""
+    out = []
+    for r in rows:
+        direction = (r.get("direction") or "").upper()
+        if direction == "SHORT" and signed_factors:
+            new_f = {}
+            for k, v in (r.get("factors") or {}).items():
+                if k in signed_factors and isinstance(v, (int, float)) and math.isfinite(float(v)):
+                    new_f[k] = -float(v)
+                else:
+                    new_f[k] = v
+            out.append({**r, "factors": new_f})
+        else:
+            out.append(r)
+    return out
+
+
 def _wr_hit(rows):
     if not rows:
         return 0.0, 0
@@ -136,6 +206,13 @@ def main(argv):
             "direction, regime, class_direction, class_regime, direction_regime."
         ),
     )
+    p.add_argument(
+        "--no-normalize",
+        action="store_true",
+        help="Disable direction normalization (show raw correlations). "
+             "Without normalization, directional factors in SHORT slices show "
+             "spurious SUSPECT flags — see module docstring.",
+    )
     args = p.parse_args(argv)
 
     path = Path(args.dump)
@@ -145,6 +222,29 @@ def main(argv):
 
     rows = load(path)
     print(f"Loaded {len(rows)} trades from {path}")
+
+    # Direction normalization setup
+    normalize = not args.no_normalize
+    signed_factors: set = set()
+    if normalize:
+        signed_factors = identify_signed_factors(rows)
+        if signed_factors:
+            print(f"\nAuto-detected signed (directional) factors: {sorted(signed_factors)}")
+            print("  These will have sign flipped for SHORT trades in direction splits.")
+        else:
+            print("\nNo signed factors detected (or insufficient LONG/SHORT split). "
+                  "Direction normalization inactive.")
+
+    def _report(subset, title):
+        report(subset, title, min_n=args.min_n)
+
+    def _report_normalized(subset, title):
+        """Report with direction normalization applied."""
+        if normalize and signed_factors:
+            norm_subset = normalize_rows(subset, signed_factors)
+            report(norm_subset, title + " [dir-normalized]", min_n=args.min_n)
+        else:
+            report(subset, title, min_n=args.min_n)
 
     # Top-line WR / avgR sanity per split dimension — cheap and extremely useful
     print("\n=== WR / avgR summary ===")
@@ -165,7 +265,8 @@ def main(argv):
             if subset:
                 _summary(subset, f"{cls}/{d}")
 
-    report(rows, "ALL", min_n=args.min_n)
+    # Overall report — direction-normalized (direction is mixed, normalization applies on SHORT)
+    _report_normalized(rows, "ALL")
 
     splits = [s.strip() for s in args.split.split(",") if s.strip()]
 
@@ -174,7 +275,7 @@ def main(argv):
         for r in rows:
             by_class[r.get("asset_class") or "unknown"].append(r)
         for cls in sorted(by_class):
-            report(by_class[cls], f"CLASS={cls}", min_n=args.min_n)
+            _report_normalized(by_class[cls], f"CLASS={cls}")
 
     if "class_style" in splits:
         by_cs = defaultdict(list)
@@ -182,21 +283,24 @@ def main(argv):
             key = f"{r.get('asset_class')}/{r.get('style')}"
             by_cs[key].append(r)
         for k in sorted(by_cs):
-            report(by_cs[k], k, min_n=args.min_n)
+            _report_normalized(by_cs[k], k)
 
     if "direction" in splits:
         by_dir = defaultdict(list)
         for r in rows:
             by_dir[r.get("direction") or "UNKNOWN"].append(r)
+        # Direction splits: both raw and normalized side-by-side so artifacts are visible
         for d in sorted(by_dir):
-            report(by_dir[d], f"DIRECTION={d}", min_n=args.min_n)
+            _report(by_dir[d], f"DIRECTION={d} [raw]")
+            if normalize and signed_factors and d == "SHORT":
+                _report_normalized(by_dir[d], f"DIRECTION={d}")
 
     if "regime" in splits:
         by_reg = defaultdict(list)
         for r in rows:
             by_reg[r.get("regime") or "UNKNOWN"].append(r)
         for reg in sorted(by_reg):
-            report(by_reg[reg], f"REGIME={reg}", min_n=args.min_n)
+            _report_normalized(by_reg[reg], f"REGIME={reg}")
 
     if "class_direction" in splits:
         by_cd = defaultdict(list)
@@ -204,7 +308,12 @@ def main(argv):
             key = f"{r.get('asset_class')}/{r.get('direction')}"
             by_cd[key].append(r)
         for k in sorted(by_cd):
-            report(by_cd[k], f"CLASS/DIR={k}", min_n=args.min_n)
+            is_short = k.endswith("/SHORT")
+            if is_short:
+                _report(by_cd[k], f"CLASS/DIR={k} [raw]")
+                _report_normalized(by_cd[k], f"CLASS/DIR={k}")
+            else:
+                _report(by_cd[k], f"CLASS/DIR={k}")
 
     if "class_regime" in splits:
         by_cr = defaultdict(list)
@@ -212,7 +321,7 @@ def main(argv):
             key = f"{r.get('asset_class')}/{r.get('regime')}"
             by_cr[key].append(r)
         for k in sorted(by_cr):
-            report(by_cr[k], f"CLASS/REGIME={k}", min_n=args.min_n)
+            _report_normalized(by_cr[k], f"CLASS/REGIME={k}")
 
     if "direction_regime" in splits:
         by_dr = defaultdict(list)
@@ -220,12 +329,18 @@ def main(argv):
             key = f"{r.get('direction')}/{r.get('regime')}"
             by_dr[key].append(r)
         for k in sorted(by_dr):
-            report(by_dr[k], f"DIR/REGIME={k}", min_n=args.min_n)
+            is_short = k.startswith("SHORT/")
+            if is_short:
+                _report_normalized(by_dr[k], f"DIR/REGIME={k}")
+            else:
+                _report(by_dr[k], f"DIR/REGIME={k}")
 
     print("\nReading guide:")
     print("  corr(R) = Pearson correlation of factor value vs trade R-multiple.")
     print("  SUSPECT    = negative corr (|rho|>=0.20, n>=min_n): factor pushes score up but aligns with losers.")
     print("  PROTECTIVE = positive corr: factor correctly ranks winners.")
+    print("  [dir-normalized] = signed factors have sign flipped for SHORT trades.")
+    print("  [raw] = raw values without normalization (shown for SHORT slices for comparison).")
     print("  Flat factors (std=0) or low-coverage (n<min_n) are skipped.")
     print("  WR summary is unfiltered by min_n — use it to see if a split is worth reading.\n")
     return 0
