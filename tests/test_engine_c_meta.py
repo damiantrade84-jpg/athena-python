@@ -31,7 +31,10 @@ def test_blended_ab_weights_fall_back_to_base_and_move_within_bound():
     assert strongly_favor_a["B"] == expected_b
     assert strongly_favor_a["A"] > base["A"]
     assert strongly_favor_a["B"] < base["B"]
-    assert abs(strongly_favor_a["A"] - base["A"]) <= 0.08
+    # Delta = mb * (1 - base["A"]) — proportional to how far base["A"] is from 1.0.
+    # Use dynamic bound so the assertion stays valid when ENGINE_C_AB_WEIGHTS is retuned.
+    max_delta = round(mb * (1.0 - base["A"]), 4) + 0.01
+    assert abs(strongly_favor_a["A"] - base["A"]) <= max_delta
 
 
 def test_a_only_watchlist_preserves_watchlist_tier():

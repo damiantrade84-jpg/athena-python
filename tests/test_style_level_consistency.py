@@ -203,7 +203,9 @@ def test_engine_c_consensus_blends_normalized_engine_scores(monkeypatch):
 
     assert result["components"]["a_norm"] == 0.5
     assert result["components"]["b_norm"] == 0.8
-    assert result["conviction"] == 0.605
+    # TRENDING weights updated C-1: A 0.65→0.40, B 0.35→0.60 (2026-04-21 audit)
+    # conviction = 0.5*0.40 + 0.8*0.60 = 0.20 + 0.48 = 0.68
+    assert result["conviction"] == 0.68
 
 
 def test_engine_c_exposes_intermarket_multiplier_in_confirmation_payload(monkeypatch):
