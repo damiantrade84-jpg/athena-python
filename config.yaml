@@ -403,15 +403,15 @@ ADAPTIVE_KELLY_ENABLED: true       # Use fractional Kelly for dynamic position s
 KELLY_FRACTION: 0.5                # Half-Kelly (safety proven)
 
 # ── Signal Debate (Bull/Bear/Judge) ───────────────────────
-SIGNAL_DEBATE_ENABLED: true        # Run LLM debate before auto-trades (needs MOONSHOT_API_KEY)
-AI_BASE_URL: "https://api.moonshot.ai/v1"
-AI_MODEL: "kimi-k2.6"
-XAI_MODEL: "kimi-k2.6"  # Legacy alias kept aligned with AI_MODEL for compatibility.
-# Optional: POST /api/lottery/ai-analysis model (defaults to AI_MODEL). Same OpenAI SDK + Moonshot base URL.
-# LOTTERY_AI_MODEL: "kimi-k2.6"
-DEBATE_MODEL: "kimi-k2.6"
-VISION_MODEL: "kimi-k2.6"          # /api/chart-analysis
-NEWS_SENTIMENT_MODEL: "kimi-k2.6"  # News AI text; defaults to AI_MODEL if empty — uses MOONSHOT_API_KEY
+SIGNAL_DEBATE_ENABLED: true        # Run LLM debate before auto-trades (needs XAI_API_KEY)
+AI_BASE_URL: "https://api.x.ai/v1"
+AI_MODEL: "grok-4-1-fast-reasoning"
+XAI_MODEL: "grok-4-1-fast-reasoning"  # Legacy alias kept aligned with AI_MODEL for compatibility.
+# Optional: POST /api/lottery/ai-analysis model (defaults to AI_MODEL). Same OpenAI SDK + xAI base URL.
+# LOTTERY_AI_MODEL: "grok-4-1-fast-reasoning"
+DEBATE_MODEL: "grok-4-1-fast-reasoning"
+VISION_MODEL: "grok-4-1-fast-reasoning"          # /api/chart-analysis
+NEWS_SENTIMENT_MODEL: "grok-4-1-fast-reasoning"  # News AI text; defaults to AI_MODEL if empty — uses XAI_API_KEY
 # Blend News AI into Engine A scan score (EODHD news + Kimi). Heavy: uses TTL cache per pair.
 NEWS_SENTIMENT_CONFLUENCE_ENABLED: false
 NEWS_SENTIMENT_CACHE_TTL_SEC: 900                # seconds; same pair reuses vote until expiry
@@ -419,8 +419,8 @@ NEWS_SENTIMENT_SCORE_IMPACT: 0.06               # delta = impact * maxScore * vo
 NEWS_SENTIMENT_ATTACH_SUMMARY: true             # attach short summary on each signal JSON
 NEWS_PAIR_CAP: 40   # Max pairs to fetch per-pair EODHD news and word weights per refresh
 AI_STRUCTURED_OUTPUTS: true
-AI_TEMPERATURE: 1
-AI_VISION_TEMPERATURE: 1
+AI_TEMPERATURE: 0.3
+AI_VISION_TEMPERATURE: 0.2
 ENGINE_B_PROFILE_SCORING_ENABLED: true
 
 # ── AI Learning ───────────────────────────────────────────

@@ -355,7 +355,7 @@ def get_news_sentiment(
 
     try:
         client = create_ai_client(CONFIG, api_key=xai_api_key)
-        _temp = float(CONFIG.get("AI_TEMPERATURE", 1))
+        _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
         response = client.chat.completions.create(
             model=model,
             max_tokens=1200,

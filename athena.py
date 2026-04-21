@@ -4184,7 +4184,7 @@ def run_ai(
         log.info(f"[AI] Analyzing {signal['pair']}...")
 
         c = create_ai_client(CONFIG)
-        _temp = float(CONFIG.get("AI_TEMPERATURE", 1))
+        _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
 
         style_labels = {
             "scalp": "SCALP — focus on H1 exhaustion, tight 1.5R, quick execution",
@@ -8856,8 +8856,8 @@ def api_chart_analysis():
             log.info(f"[AI CHART] Single-TF {tf} analysis for {symbol}")
 
         _max_tokens = 1100 if triple_mode else 800
-        _vision_model = get_ai_model(CONFIG, "VISION_MODEL", "kimi-k2.6")
-        _vision_temp = float(CONFIG.get("AI_VISION_TEMPERATURE", 1))
+        _vision_model = get_ai_model(CONFIG, "VISION_MODEL", "grok-4-1-fast-reasoning")
+        _vision_temp = float(CONFIG.get("AI_VISION_TEMPERATURE", 0.2))
         _user_parts = _chart_blocks_to_openai_user_content(content)
         _completion = _xai_chat_completions_retry(
             client,
@@ -11615,8 +11615,8 @@ def _get_decay_ai_verdict(
         from ai_utils import parse_json_object
 
         client = create_ai_client(CONFIG, api_key=api_key)
-        _model = get_ai_model(CONFIG, "DEBATE_MODEL", "kimi-k2.6")
-        _temp = float(CONFIG.get("AI_TEMPERATURE", 1))
+        _model = get_ai_model(CONFIG, "DEBATE_MODEL", "grok-4-1-fast-reasoning")
+        _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
 
         result = None
         try:
@@ -12527,9 +12527,9 @@ def api_lottery_ai_analysis():
         )
         _lottery_model = (
             str(CONFIG.get("LOTTERY_AI_MODEL") or "").strip()
-            or get_ai_model(CONFIG, "AI_MODEL", "kimi-k2.6")
+            or get_ai_model(CONFIG, "AI_MODEL", "grok-4-1-fast-reasoning")
         )
-        _temp = float(CONFIG.get("AI_TEMPERATURE", 1))
+        _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
         client = openai.OpenAI(api_key=ai_key, base_url=get_ai_base_url(CONFIG))
         completion = client.chat.completions.create(
             model=_lottery_model,

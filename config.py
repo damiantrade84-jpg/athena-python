@@ -9,10 +9,10 @@ import logging
 
 log = logging.getLogger("sentinel")
 
-AI_API_KEY_PLACEHOLDER = "YOUR_MOONSHOT_API_KEY"
-_LEGACY_AI_API_KEY_PLACEHOLDER = "YOUR_XAI_API_KEY"
-_AI_BASE_URL_DEFAULT = "https://api.moonshot.ai/v1"
-_AI_MODEL_DEFAULT = os.environ.get("AI_MODEL", "kimi-k2.6")
+AI_API_KEY_PLACEHOLDER = "YOUR_XAI_API_KEY"
+_LEGACY_AI_API_KEY_PLACEHOLDER = "YOUR_MOONSHOT_API_KEY"
+_AI_BASE_URL_DEFAULT = "https://api.x.ai/v1"
+_AI_MODEL_DEFAULT = os.environ.get("AI_MODEL", "grok-4-1-fast-reasoning")
 
 
 def _deep_merge_dict(base: dict, overrides: dict) -> dict:
@@ -40,10 +40,10 @@ def _clean_ai_value(value: object) -> str:
 def get_ai_api_key(cfg: dict | None = None) -> str:
     cfg = cfg or CONFIG
     candidates = (
-        os.environ.get("MOONSHOT_API_KEY", ""),
-        cfg.get("MOONSHOT_API_KEY", ""),
         os.environ.get("XAI_API_KEY", ""),
         cfg.get("XAI_API_KEY", ""),
+        os.environ.get("MOONSHOT_API_KEY", ""),
+        cfg.get("MOONSHOT_API_KEY", ""),
     )
     for candidate in candidates:
         cleaned = _clean_ai_value(candidate)
@@ -68,7 +68,7 @@ def get_ai_base_url(cfg: dict | None = None) -> str:
 def get_ai_model(
     cfg: dict | None = None,
     preferred_key: str = "AI_MODEL",
-    fallback: str = "kimi-k2.6",
+    fallback: str = "grok-4-1-fast-reasoning",
 ) -> str:
     cfg = cfg or CONFIG
     candidates = []
