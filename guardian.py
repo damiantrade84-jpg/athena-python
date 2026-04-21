@@ -163,17 +163,24 @@ def _check_single_crypto_cap_application() -> tuple[bool, str]:
 
 
 def _check_forex_bt_routing() -> tuple[bool, str]:
-    """Guard: all 3 BT loops should route forex to compute_forex_score."""
+    """Guard: Engine A v2 — forex routes through calc_confluence in all BT loops.
+    compute_forex_score must NOT be present (retired). Verify calc_confluence is used."""
     src = _read_file("backtest_runner.py")
     if "__READ_ERROR__" in src:
         return False, f"Cannot read backtest_runner.py: {src}"
-    count = src.count("compute_forex_score")
-    if count < 3:
+    stale_count = src.count("compute_forex_score")
+    if stale_count > 0:
         return False, (
-            f"backtest_runner.py has {count} references to compute_forex_score (expected >= 3). "
-            f"H4 and/or H1 forex backtests may use wrong scoring engine."
+            f"backtest_runner.py still imports compute_forex_score ({stale_count} times). "
+            f"Engine A v2 routes ALL asset classes through calc_confluence — remove the stale import."
         )
-    return True, f"compute_forex_score referenced {count} times in backtest_runner.py"
+    unified_count = src.count("calc_confluence")
+    if unified_count < 3:
+        return False, (
+            f"backtest_runner.py has only {unified_count} calc_confluence calls (expected >= 3). "
+            f"Engine A v2 should use calc_confluence for all asset classes in all BT loops."
+        )
+    return True, f"Engine A v2 routing OK: calc_confluence x{unified_count}, compute_forex_score x0"
 
 
 def _check_regime_state_not_hardcoded() -> tuple[bool, str]:
