@@ -86,54 +86,54 @@ def test_api_feed_health_exposes_cached_timeframe_meta(monkeypatch):
     assert data["pairs"][0]["timeframes"]["H4"]["lastBarAgeSec"] == 1800.0
 
 
-def test_api_scan_settings_updates_runtime_config_without_restart(monkeypatch):
+def test_api_scan_settings_returns_runtime_snapshot():
     athena_module = _load_athena_module()
-
-    def _fake_apply_scan_settings_updates(new_vals):
-        current = athena_module._scan_settings_snapshot()
-        current.update(new_vals)
-        for key, value in current.items():
-            athena_module.CONFIG[key] = value
-        return athena_module._scan_settings_snapshot()
-
-    monkeypatch.setattr(
-        athena_module,
-        "_apply_scan_settings_updates",
-        _fake_apply_scan_settings_updates,
-    )
-
     client = athena_module.app.test_client()
-    resp = client.post(
-        "/api/scan-settings",
-        json={
-            "D1_CANDLES": 1200,
-            "H4_CANDLES": 900,
-            "H1_CANDLES": 700,
-            "SCAN_MAX_WORKERS": 5,
-            "SCAN_DEBUG_CANDLE_META": True,
-        },
-    )
+    resp = client.get("/api/scan-settings")
 
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data["saved"] is True
-    assert data["settings"]["D1_CANDLES"] == 1200
-    assert data["settings"]["SCAN_MAX_WORKERS"] == 5
-    assert data["settings"]["SCAN_DEBUG_CANDLE_META"] is True
-    assert athena_module.CONFIG["D1_CANDLES"] == 1200
-    assert athena_module.CONFIG["SCAN_DEBUG_CANDLE_META"] is True
+    assert "settings" in data
+    assert data["settings"]["D1_CANDLES"] == int(
+        athena_module.CONFIG.get("D1_CANDLES", 1001)
+    )
+    assert data["settings"]["SCAN_MAX_WORKERS"] == int(
+        athena_module.CONFIG.get("SCAN_MAX_WORKERS", 3)
+    )
+    assert data["unverified_scan_keys"] == ["FOREX_H4_RESAMPLE_OFFSET_HOURS"]
 
 
-def test_api_scan_settings_rejects_invalid_worker_range():
+def test_api_scan_settings_is_read_only():
     athena_module = _load_athena_module()
     client = athena_module.app.test_client()
 
-    resp = client.post(
-        "/api/scan-settings",
-        json={"SCAN_MAX_WORKERS": 0},
-    )
+    resp = client.post("/api/scan-settings", json={"SCAN_MAX_WORKERS": 0})
 
-    assert resp.status_code == 400
+    assert resp.status_code == 405
+
+
+def test_api_auto_trade_toggle_persists_runtime_and_yaml(monkeypatch):
+    athena_module = _load_athena_module()
+    persisted = []
+
+    monkeypatch.setattr(athena_module, "_update_yaml_toggle", lambda state: persisted.append(state))
+    athena_module.CONFIG["AUTO_TRADE_ENABLED"] = True
+    athena_module._auto_trader.disable()
+
+    client = athena_module.app.test_client()
+
+    resp = client.post("/api/auto-trade", json={"action": "on"})
+
+    assert resp.status_code == 200
     data = resp.get_json()
-    assert data["saved"] is False
-    assert "SCAN_MAX_WORKERS" in data["error"]
+    assert data["enabled"] is True
+    assert athena_module.CONFIG["AUTO_TRADE_ENABLED"] is True
+    assert persisted[-1] is True
+
+    resp = client.post("/api/auto-trade", json={"action": "off"})
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["enabled"] is False
+    assert athena_module.CONFIG["AUTO_TRADE_ENABLED"] is False
+    assert persisted[-1] is False

@@ -7319,41 +7319,12 @@ def _apply_scan_settings_updates(new_vals: dict) -> dict:
     return current
 
 
-@app.route("/api/scan-settings", methods=["GET", "POST"])
+@app.route("/api/scan-settings", methods=["GET"])
 def api_scan_settings():
-    """GET/POST verified live scan runtime settings exposed in the dashboard."""
-    if request.method == "GET":
-        return jsonify(
-            {
-                "settings": _scan_settings_snapshot(),
-                "unverified_scan_keys": ["FOREX_H4_RESAMPLE_OFFSET_HOURS"],
-            }
-        )
-
-    data = request.get_json(silent=True) or {}
-    allowed_keys = set(_SCAN_SETTINGS_KEYS)
-    updates = {key: data[key] for key in allowed_keys if key in data}
-    if not updates:
-        return jsonify({"error": "No valid scan settings provided"}), 400
-
-    try:
-        current = _apply_scan_settings_updates(updates)
-    except ValueError as e:
-        return jsonify({"saved": False, "error": str(e)}), 400
-    except Exception as e:
-        log.error(f"Failed to persist scan settings to config.yaml: {e}")
-        return jsonify(
-            {
-                "saved": False,
-                "error": str(e),
-                "settings": _scan_settings_snapshot(),
-            }
-        ), 500
-
+    """Read-only snapshot of verified scan runtime settings exposed in the dashboard."""
     return jsonify(
         {
-            "saved": True,
-            "settings": current,
+            "settings": _scan_settings_snapshot(),
             "unverified_scan_keys": ["FOREX_H4_RESAMPLE_OFFSET_HOURS"],
         }
     )
@@ -8262,6 +8233,10 @@ def api_auto_trade_toggle():
 
     else:
         _auto_trader.toggle()
+
+    current_state = bool(_auto_trader.get_status().get("enabled", False))
+    CONFIG["AUTO_TRADE_ENABLED"] = current_state
+    _update_yaml_toggle(current_state)
 
     return jsonify(_auto_trader.get_status())
 

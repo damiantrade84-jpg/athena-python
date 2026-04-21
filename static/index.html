@@ -1233,8 +1233,8 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
     <div class="nav-item" id="nav-pair-browser" role="button" tabindex="0" onclick="switchPanel('pair-browser')">
       <div class="nav-left"><span class="nav-ico">[]</span>Pair Browser</div>
     </div>
-    <div class="nav-item" id="nav-settings" role="button" tabindex="0" onclick="switchPanel('settings')">
-      <div class="nav-left"><span class="nav-ico">&#9881;</span>Settings</div>
+    <div class="nav-item" id="nav-scan-config" role="button" tabindex="0" onclick="switchPanel('scan-config')">
+      <div class="nav-left"><span class="nav-ico">&#9881;</span>Scan Config</div>
     </div>
     <div class="nav-item" id="nav-trades" role="button" tabindex="0" onclick="switchPanel('trades')">
       <div class="nav-left"><span class="nav-ico">◉</span>Trades</div>
@@ -1434,28 +1434,29 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
     </div>
   </div>
 
-  <div class="panel tab-panel" id="panel-settings">
+  <div class="panel tab-panel" id="panel-scan-config">
     <div class="panel-row" style="margin-bottom:18px;">
-      <div class="panel-row-title">SCAN SETTINGS</div>
+      <div class="panel-row-title">SCAN CONFIG</div>
       <div class="panel-row-actions">
-        <span class="ctrl-note">Verified live scan runtime keys from <code>config.yaml</code>. Saves apply to new scans without a server restart.</span>
+        <span class="ctrl-note">Read-only view of verified scan-runtime keys from <code>config.yaml</code>.</span>
       </div>
     </div>
     <div class="settings-shell">
       <div class="settings-banner">
-        <strong>Scope</strong>: this tab only exposes scan-runtime settings confirmed in code to affect Engine A and/or Engine B scan paths.
+        <strong>Scope</strong>: this tab only shows scan-runtime settings confirmed in code to affect Engine A and/or Engine B scan paths.
         <br />
-        <strong>Not exposed as live scan settings</strong>: <code>FOREX_H4_RESAMPLE_OFFSET_HOURS</code> still exists in <code>config.yaml</code>, but its active scan read path was not verified in the current code, so it remains read-only here.
+        <strong>Read-only</strong>: this screen does not write to <code>config.yaml</code> and does not apply runtime changes.
+        <br />
+        <strong>Not exposed as live scan settings</strong>: <code>FOREX_H4_RESAMPLE_OFFSET_HOURS</code> still exists in <code>config.yaml</code>, but its active scan read path was not verified in the current code, so it remains informational only here.
       </div>
       <div id="scanSettingsGrid" class="settings-grid">
         <div class="empty-state">
           <div class="icon">&#9881;</div>
-          <h3>Scan Settings</h3>
+          <h3>Scan Config</h3>
           <p>Open this tab to load the current scan configuration.</p>
         </div>
       </div>
       <div class="settings-actions">
-        <button class="bt-btn" id="scanSettingsSaveBtn" onclick="saveScanSettings()">&#10003; SAVE SCAN SETTINGS</button>
         <button class="bt-btn bt-btn-sm" onclick="loadScanSettings(true)">&#8635; RELOAD</button>
         <span id="scanSettingsStatus" class="settings-status"></span>
       </div>
@@ -2763,7 +2764,7 @@ function switchTab(tab) {
     loadLotteryLab();
   }
   if (tab === 'pair-browser' && typeof loadPairBrowserPairs === 'function') loadPairBrowserPairs();
-  if (tab === 'settings' && typeof loadScanSettings === 'function') loadScanSettings();
+  if (tab === 'scan-config' && typeof loadScanSettings === 'function') loadScanSettings();
   if (tab === 'markets' && typeof loadMarketHours === 'function') loadMarketHours();
   if (tab === 'performance') {
     if (typeof loadPerformance === 'function') loadPerformance();
@@ -4983,10 +4984,10 @@ function renderScanSettingCard(meta, value) {
             '<div class="settings-impact-copy">' + meta.lowEffect + '</div>' +
           '</div>' +
         '</div>' +
-        '<label class="settings-toggle">' +
-          '<div class="settings-toggle-copy">Turn this on if you want scan payloads to include candle resolution details for troubleshooting.</div>' +
-          '<input type="checkbox" id="scan-setting-' + meta.key + '"' + (value ? ' checked' : '') + ' />' +
-        '</label>' +
+        '<div class="settings-toggle">' +
+          '<div class="settings-toggle-copy">Current value</div>' +
+          '<div class="settings-card-title">' + (value ? 'Enabled' : 'Disabled') + '</div>' +
+        '</div>' +
       '</div>';
   }
 
@@ -5010,31 +5011,13 @@ function renderScanSettingCard(meta, value) {
         '</div>' +
       '</div>' +
       '<div class="settings-control">' +
-        '<div class="settings-control-row">' +
-          '<input class="settings-number" type="number" id="scan-setting-' + meta.key + '" value="' + value + '" min="' + meta.min + '" max="' + meta.max + '" step="' + meta.step + '" oninput="syncScanSettingFromInput(\'' + meta.key + '\')" />' +
-          '<input class="settings-range" type="range" id="scan-setting-range-' + meta.key + '" value="' + value + '" min="' + meta.min + '" max="' + meta.max + '" step="' + meta.step + '" oninput="syncScanSettingFromRange(\'' + meta.key + '\')" />' +
+        '<div class="settings-toggle">' +
+          '<div class="settings-toggle-copy">Current value</div>' +
+          '<div class="settings-card-title">' + value + '</div>' +
         '</div>' +
-        '<div class="settings-value">Range ' + meta.min + ' - ' + meta.max + ' | Current <span id="scan-setting-value-' + meta.key + '">' + value + '</span></div>' +
+        '<div class="settings-value">Expected range ' + meta.min + ' - ' + meta.max + '</div>' +
       '</div>' +
     '</div>';
-}
-
-function syncScanSettingFromInput(key) {
-  var input = document.getElementById('scan-setting-' + key);
-  var range = document.getElementById('scan-setting-range-' + key);
-  var valueLabel = document.getElementById('scan-setting-value-' + key);
-  if (!input || !range) return;
-  range.value = input.value;
-  if (valueLabel) valueLabel.textContent = input.value;
-}
-
-function syncScanSettingFromRange(key) {
-  var input = document.getElementById('scan-setting-' + key);
-  var range = document.getElementById('scan-setting-range-' + key);
-  var valueLabel = document.getElementById('scan-setting-value-' + key);
-  if (!input || !range) return;
-  input.value = range.value;
-  if (valueLabel) valueLabel.textContent = range.value;
 }
 
 async function loadScanSettings(force) {
@@ -5042,7 +5025,7 @@ async function loadScanSettings(force) {
   var grid = document.getElementById('scanSettingsGrid');
   var status = document.getElementById('scanSettingsStatus');
   if (!grid) return;
-  grid.innerHTML = '<div class="empty-state"><div class="icon">&#9881;</div><h3>Loading settings</h3><p>Reading live scan configuration from the server.</p></div>';
+  grid.innerHTML = '<div class="empty-state"><div class="icon">&#9881;</div><h3>Loading config</h3><p>Reading scan configuration from the server.</p></div>';
   if (status) status.textContent = '';
   try {
     var data = await window.apiClient.getJson('/api/scan-settings');
@@ -5053,44 +5036,17 @@ async function loadScanSettings(force) {
     });
     grid.innerHTML = html;
     _scanSettingsLoaded = true;
-  } catch (e) {
-    grid.innerHTML = '<div class="empty-state"><div class="icon">&#9888;</div><h3>Settings unavailable</h3><p>' + e.message + '</p></div>';
-  }
-}
-
-async function saveScanSettings() {
-  var btn = document.getElementById('scanSettingsSaveBtn');
-  var status = document.getElementById('scanSettingsStatus');
-  if (!btn) return;
-  btn.disabled = true;
-  btn.textContent = 'Saving...';
-  if (status) status.textContent = '';
-
-  var payload = {
-    D1_CANDLES: parseInt(document.getElementById('scan-setting-D1_CANDLES').value, 10),
-    H4_CANDLES: parseInt(document.getElementById('scan-setting-H4_CANDLES').value, 10),
-    H1_CANDLES: parseInt(document.getElementById('scan-setting-H1_CANDLES').value, 10),
-    SCAN_MAX_WORKERS: parseInt(document.getElementById('scan-setting-SCAN_MAX_WORKERS').value, 10),
-    SCAN_DEBUG_CANDLE_META: !!document.getElementById('scan-setting-SCAN_DEBUG_CANDLE_META').checked
-  };
-
-  try {
-    await window.apiClient.postJson('/api/scan-settings', payload);
     if (status) {
-      status.textContent = 'Saved to config.yaml and applied to new scans (restart not required)';
-      status.style.color = '#22c55e';
+      status.textContent = 'Read-only values loaded from the server';
+      status.style.color = '';
     }
-    _scanSettingsLoaded = false;
-    await loadScanSettings(true);
   } catch (e) {
+    grid.innerHTML = '<div class="empty-state"><div class="icon">&#9888;</div><h3>Config unavailable</h3><p>' + e.message + '</p></div>';
     if (status) {
       status.textContent = 'Error: ' + e.message;
       status.style.color = '#ef4444';
     }
   }
-
-  btn.disabled = false;
-  btn.textContent = 'SAVE SCAN SETTINGS';
   setTimeout(function() {
     if (status) status.textContent = '';
   }, 5000);
@@ -8810,16 +8766,22 @@ fetch('/api/test-mode').then(function(r){return r.json();}).then(function(d){
   setTimeout(pollMT5, 5000);
 })();
 
-// -- Wake-up recovery: reload page if hidden > 60s --
-// Browsers throttle setTimeout to ~1 min when the screen is off or tab is inactive.
-// The Flask server keeps running; the page just needs a fresh start on return.
+// -- Wake-up recovery: refresh key data if hidden for a long time --
+// Browsers throttle timers when the screen is off or the tab is inactive.
+// Avoid a hard page reload on resume because some environments surface that as
+// repeated refresh loops; instead, kick the key refresh paths directly.
 var _tabHiddenAt = 0;
 document.addEventListener('visibilitychange', function() {
   if (document.visibilityState === 'hidden') {
     _tabHiddenAt = Date.now();
   } else if (document.visibilityState === 'visible' && _tabHiddenAt) {
     if ((Date.now() - _tabHiddenAt) > 600000) {
-      location.reload();
+      if (typeof updateSession === 'function') updateSession();
+      if (typeof refreshAllLivePrices === 'function') setTimeout(refreshAllLivePrices, 200);
+      if (typeof loadMarketHours === 'function') loadMarketHours();
+      if (typeof showToast === 'function') {
+        showToast('Session resumed after a long pause. Live data refresh has been requested.');
+      }
     }
     _tabHiddenAt = 0;
   }
