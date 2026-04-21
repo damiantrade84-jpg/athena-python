@@ -1603,15 +1603,6 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       <h2 style="margin:0;font-size:18px;font-family:'DM Sans',sans-serif;color:var(--text);">
         Engine C &mdash; Consensus
       </h2>
-      <select id="ecAssetClass" style="background:var(--surface);border:1px solid var(--border);
-        border-radius:6px;padding:6px 12px;color:var(--text);font-family:'IBM Plex Mono',monospace;
-        font-size:11px;">
-        <option value="crypto">Crypto</option>
-        <option value="forex">Forex</option>
-        <option value="stock">Stocks</option>
-        <option value="commodity">Commodities</option>
-        <option value="index">Indices</option>
-      </select>
       <select id="ecStyle" style="background:var(--surface);border:1px solid var(--border);
         border-radius:6px;padding:6px 12px;color:var(--text);font-family:'IBM Plex Mono',monospace;
         font-size:11px;">
@@ -1631,7 +1622,7 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       <div class="empty-state">
         <div class="icon">&#9878;&#65039;</div>
         <h3>Engine C Consensus</h3>
-        <p>Select an asset class and click SCAN CONSENSUS to find signals where Engine A and B agree.</p>
+        <p>Click SCAN CONSENSUS to scan the full enabled universe and find signals where Engine A and B agree.</p>
       </div>
     </div>
   </div><!-- /panel-enginec -->
@@ -6518,6 +6509,8 @@ function buildRow(s, idx, tierClass) {
   var confColor = pct >= 67 ? 'bull' : pct >= 42 ? 'warn-c' : '';
   var iconLabel = (s.display || s.pair || s.symbol || '??').split('/')[0].slice(0, 3).toUpperCase();
   var ptype = s.type || 'stock';
+  var subtitleBits = [ptype.toUpperCase()];
+  if (s.symbol) subtitleBits.push(s.symbol);
   var _m = getLiveSignalMetrics(s);
   var regimeRaw = s.trendState || (s.regime && typeof s.regime === 'object' && s.regime.label) || (typeof s.regime === 'string' ? s.regime : '') || '—';
   var regime = typeof regimeRaw === 'string' ? regimeRaw : '—';
@@ -6530,7 +6523,7 @@ function buildRow(s, idx, tierClass) {
   return '<div class="sr sig-row ' + tierClass + '" id="row-' + sid + '" role="button" tabindex="0" onclick="toggleRowDetail(\'detail-' + sid + '\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();toggleRowDetail(\'detail-' + sid + '\');}">'
     + '<div class="pair-cell">'
     +   '<div class="pa ' + ptype + '">' + escSigHtml(iconLabel) + '</div>'
-    +   '<div class="sig-pair-txt"><div class="pn">' + escSigHtml(s.display || '') + '</div><div class="ps">' + ptype.toUpperCase() + ' · ' + escSigHtml((s.session && s.session.name) ? s.session.name : '') + '</div></div>'
+    +   '<div class="sig-pair-txt"><div class="pn">' + escSigHtml(s.display || '') + '</div><div class="ps">' + escSigHtml(subtitleBits.join(' | ')) + '</div></div>'
     + '</div>'
     + '<div class="sr-col-dir">'
     +   '<div class="dir-b ' + (s.direction === 'LONG' ? 'L' : 'S') + '">' + (s.direction === 'LONG' ? '▲ LONG' : '▼ SHORT') + '</div>'
@@ -6559,11 +6552,12 @@ function buildSignalCardHeader(s) {
   var tierBadge = tier === 'watchlist'
     ? '<span style="padding:4px 8px;border-radius:999px;border:1px solid rgba(245,158,11,0.4);background:rgba(245,158,11,0.12);color:var(--warn);font-size:10px;font-weight:700;letter-spacing:.08em">WATCHLIST</span>'
     : '';
-  var sess = (s.session && s.session.name) ? s.session.name : '—';
+  var headerMeta = [String(s.type || '').toUpperCase()];
+  if (s.symbol) headerMeta.push(s.symbol);
   return '<div class="card-header">' +
     '<div class="pair-info">' +
       '<div class="pair-icon ' + s.type + '">' + iconLabel + '</div>' +
-      '<div><div class="pair-name">' + escSigHtml(s.display) + '</div><div class="pair-type">' + escSigHtml(s.type) + ' | ' + escSigHtml(sess) + '</div></div>' +
+      '<div><div class="pair-name">' + escSigHtml(s.display) + '</div><div class="pair-type">' + escSigHtml(headerMeta.join(' | ')) + '</div></div>' +
     '</div>' +
     tierBadge +
     '<span class="direction-badge ' + s.direction + '">' + (s.direction === 'LONG' ? 'LONG' : 'SHORT') + '</span>' +
@@ -9879,20 +9873,19 @@ async function runEngineCScan() {
   var btn = document.getElementById('ecScanBtn');
   var status = document.getElementById('ecStatus');
   var container = document.getElementById('ecResults');
-  var assetClass = document.getElementById('ecAssetClass').value;
 
   btn.disabled = true;
   btn.textContent = 'SCANNING...';
-  status.textContent = 'Running Engine A + B on all ' + assetClass + ' pairs...';
+  status.textContent = 'Running Engine A + B on the full enabled universe...';
   container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted);">' +
     '<div style="font-size:24px;margin-bottom:8px;">&#9203;</div>' +
-    'Running consensus scan... this may take 1-2 minutes.</div>';
+    'Running full-universe consensus scan... this may take 1-2 minutes.</div>';
 
   try {
     var resp = await fetch('/api/engine-c-scan', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({assetClass: assetClass, style: document.getElementById('ecStyle').value || 'intraday'}),
+      body: JSON.stringify({assetClass: 'all', style: document.getElementById('ecStyle').value || 'intraday'}),
     });
     var data = await resp.json();
 

@@ -554,26 +554,26 @@ def api_engine_c_scan():
     """Engine C consensus scan — runs Engine A then Engine B on all pairs."""
     _r = rt()
     d = request.get_json() or {}
-    asset_class = d.get("assetClass", "").lower()
+    asset_class = str(d.get("assetClass", "") or "").lower()
     requested_style = d.get("style", "auto")
+    scan_all = asset_class in ("", "all")
 
-    if not asset_class:
-        return jsonify({"error": "assetClass required"}), 400
-
-    candidate_pairs = [
-        p
-        for p in _r.ALL_PAIRS
-        if p.get("type", "").lower() == asset_class
-        and p.get("enabled", True)
-        and p["display"] not in _r.disabled_pairs
-    ]
+    candidate_pairs = []
+    for p in _r.ALL_PAIRS:
+        ptype = str(p.get("type", "")).lower()
+        if not p.get("enabled", True):
+            continue
+        if p.get("display") in _r.disabled_pairs:
+            continue
+        if not scan_all and ptype != asset_class:
+            continue
+        candidate_pairs.append(p)
 
     if not candidate_pairs:
-        return jsonify({"error": f"No enabled pairs for {asset_class}"}), 404
+        label = "all enabled pairs" if scan_all else f"enabled pairs for {asset_class}"
+        return jsonify({"error": f"No {label}"}), 404
 
     results = {"aligned": [], "a_only": [], "b_only": [], "conflict": [], "skipped": []}
-
-    btc_bias = _r.current_btc_bias() if asset_class == "crypto" else "neutral"
 
     _scan_limits = scan_candle_limits()
     intermarket_snapshot = None
@@ -614,6 +614,7 @@ def api_engine_c_scan():
             symbol = pair.get("symbol", pair.get("display"))
             display = pair.get("display", symbol)
             ptype = pair.get("type", "")
+            btc_bias = _r.current_btc_bias() if ptype == "crypto" else "neutral"
             _pair_score_group = get_pair_score_group(pair)
 
             engine_a_style = _r.resolve_scan_style(
