@@ -9485,6 +9485,8 @@ def api_news_sentiment():
 
 @app.route("/api/health")
 def health():
+    data_sources = _configured_data_sources()
+    mt5_status = _mt5_connection_health()
 
     return jsonify(
         {
@@ -9492,10 +9494,101 @@ def health():
             "killSwitch": _kill_switch,
             "pairs": len(ALL_PAIRS),
             "activePairs": len(ACTIVE_PAIRS),
-            "dataSource": "yfinance+binance",
+            "dataSource": "+".join(data_sources),
+            "dataSources": data_sources,
+            "mt5": mt5_status,
+            "microstructureFeedsEnabled": bool(
+                CONFIG.get("MICROSTRUCTURE_FEEDS_ENABLED")
+            ),
             "xaiKey": CONFIG["XAI_API_KEY"] != "YOUR_XAI_API_KEY",
         }
     )
+
+
+def _configured_data_sources() -> list[str]:
+    sources = set()
+    for pair in ALL_PAIRS:
+        source = str(pair.get("source") or "").strip().lower()
+        if source:
+            sources.add(source)
+    return sorted(sources)
+
+
+def _mt5_connection_health() -> dict:
+    try:
+        import mt5_executor
+    except Exception as exc:
+        return {
+            "available": False,
+            "connected": False,
+            "detail": f"import_failed:{exc}",
+        }
+
+    try:
+        mt5 = mt5_executor._get_mt5()
+    except Exception as exc:
+        return {
+            "available": False,
+            "connected": False,
+            "detail": f"load_failed:{exc}",
+        }
+
+    if mt5 is None:
+        return {
+            "available": False,
+            "connected": False,
+            "detail": "mt5_library_unavailable",
+        }
+
+    try:
+        terminal = mt5.terminal_info()
+    except Exception as exc:
+        return {
+            "available": True,
+            "connected": False,
+            "detail": f"terminal_info_failed:{exc}",
+        }
+
+    connected = terminal is not None
+    return {
+        "available": True,
+        "connected": connected,
+        "detail": "ok" if connected else "not_initialized",
+    }
+
+
+def _feed_health_snapshot() -> dict:
+    rows = []
+    for pair in ACTIVE_PAIRS:
+        limits = scan_candle_limits(pair)
+        timeframe_meta = {}
+        for tf in ("D1", "H4", "H1"):
+            limit = limits.get(tf)
+            if not limit:
+                continue
+            meta = _get_candle_fetch_meta(pair, tf, limit)
+            if meta:
+                timeframe_meta[tf] = meta
+        rows.append(
+            {
+                "pair": pair.get("display", pair.get("symbol")),
+                "symbol": pair.get("symbol"),
+                "type": pair.get("type"),
+                "source": pair.get("source"),
+                "timeframes": timeframe_meta,
+            }
+        )
+    return {
+        "activePairCount": len(ACTIVE_PAIRS),
+        "pairsWithCachedMeta": sum(1 for row in rows if row["timeframes"]),
+        "mt5": _mt5_connection_health(),
+        "pairs": rows,
+    }
+
+
+@app.route("/api/feed-health")
+def api_feed_health():
+    return jsonify(_json_safe(_feed_health_snapshot()))
 
 
 @app.route("/api/signal-stability")
@@ -10199,6 +10292,75 @@ def analyze_pair(
     if price is None or not atr:
         return None
 
+    # Max possible final_score depends on scoring engine:
+    # - Forex: 0-2 scale (forex_scoring.py caps at 2.0)
+    # - Crypto/Stock: 0-3 scale (z-score factor engine, capped at 3.0)
+    # Only set maxScoreOverride if not already set (forex sets it to 2.0)
+    if res.get("maxScoreOverride") is None:
+        res["maxScoreOverride"] = 3.0
+    max_score = res.get("maxScoreOverride") or _max_score_for_pair(pair)
+
+    # Always derive explicit structural context from Engine B's H1/H4/D1 model so
+    # Engine A and the forex scorer both use real zones, not just fib proxies.
+    structure_data = None
+    try:
+        from market_structure import engine as _structure_engine
+        from athena_app.services.structure_context import (
+            apply_structure_context_to_score,
+        )
+
+        _structure_regime_label = _engine_b_regime_label(
+            h4,
+            pair.get("type", "stock"),
+            res.get("regime"),
+        )
+        structure_data = _structure_engine.set_registry_context(
+            pair.get("symbol") or pair.get("display")
+        ).analyze_structure(
+            d1,
+            h4,
+            h1,
+            float(price),
+            direction,
+            float(atr),
+            _structure_regime_label,
+            asset_type=pair.get("type", ""),
+            d1_snap=(d1i or {}).get("snap") or {},
+            h4_snap=(h4i or {}).get("snap") or {},
+        )
+        _structure_adjustment = apply_structure_context_to_score(
+            structure_data,
+            direction=direction,
+            base_score=float(res.get("score", 0.0) or 0.0),
+            max_score=float(max_score or 0.0),
+        )
+        res["score"] = float(_structure_adjustment["adjusted_score"])
+        _fd = dict(res.get("factorDiagnostics") or {})
+        _fd["explicitStructureContext"] = _structure_adjustment
+        res["factorDiagnostics"] = _fd
+
+        _votes = dict(res.get("votes") or {})
+        _sc = _structure_adjustment.get("components", {})
+        if _sc.get("zone_proximity"):
+            _votes["H4 Structural Zone"] = 1
+        if _sc.get("ob_at_zone"):
+            _votes["Order Block at Zone"] = 1
+        if _sc.get("fvg_overlap"):
+            _votes["FVG at Zone"] = 1
+        _align = _sc.get("independent_direction_alignment")
+        if _align == "aligned":
+            _votes["Structure Alignment"] = 1
+        elif _align == "opposed":
+            _votes["Structure Alignment"] = -1
+        if _votes:
+            res["votes"] = _votes
+    except Exception as _structure_err:
+        log.debug(
+            "[STRUCTURE-CONTEXT] %s skipped: %s",
+            pair.get("display"),
+            _structure_err,
+        )
+
     fib = calc_fib(h4)
 
     _regime_state = res.get("regime", {}).get("state") if res.get("regime") else None
@@ -10219,6 +10381,13 @@ def analyze_pair(
     )
 
     warn_list = list(res.get("warnings", []))
+    _structure_diag = (res.get("factorDiagnostics") or {}).get("explicitStructureContext") or {}
+    _structure_components = _structure_diag.get("components") or {}
+    if _structure_components.get("independent_direction_alignment") == "opposed":
+        _sdir = _structure_components.get("independent_direction")
+        _swarn = f"STRUCTURE CONTEXT OPPOSED: Engine B directional bias is {_sdir}"
+        if _swarn not in warn_list:
+            warn_list.append(_swarn)
 
     if pair_filter_enabled(pair, "divergence_warning"):
         for w in detect_div(d1, h4, h1):
@@ -10227,14 +10396,6 @@ def analyze_pair(
 
     # OI divergence warnings are appended inside calc_confluence when oi_data is passed (no duplicate here).
 
-    # Max possible final_score depends on scoring engine:
-    # - Forex: 0-2 scale (forex_scoring.py caps at 2.0)
-    # - Crypto/Stock: 0-3 scale (z-score factor engine, capped at 3.0)
-    # Only set maxScoreOverride if not already set (forex sets it to 2.0)
-    if res.get("maxScoreOverride") is None:
-        res["maxScoreOverride"] = 3.0
-    
-    max_score = res.get("maxScoreOverride") or _max_score_for_pair(pair)
     score_norm = (
         min(1.0, float(res["score"]) / float(max_score))
         if max_score and float(max_score) > 0
@@ -10243,7 +10404,6 @@ def analyze_pair(
 
     # --- ENGINE B: NAKED MARKET STRUCTURE OVERLAY ---
     _engine_b_overlay_meta = None
-    structure_data = None
     if use_naked_engine and res["score"] >= get_min_confluence_threshold(pair):
         try:
             from market_structure import (
@@ -10257,25 +10417,26 @@ def analyze_pair(
                 _style, score_group=_score_group
             )
 
-            _regime_label = _engine_b_regime_label(
-                h4,
-                pair.get("type", "stock"),
-                res.get("regime"),
-            )
-            structure_data = naked_engine.set_registry_context(
-                pair.get("symbol") or pair.get("display")
-            ).analyze_structure(
-                d1,
-                h4,
-                h1,
-                float(price),
-                direction,
-                float(atr),
-                _regime_label,
-                asset_type=pair.get("type", ""),
-                d1_snap=(d1i or {}).get("snap") or {},
-                h4_snap=(h4i or {}).get("snap") or {},
-            )
+            if structure_data is None:
+                _regime_label = _engine_b_regime_label(
+                    h4,
+                    pair.get("type", "stock"),
+                    res.get("regime"),
+                )
+                structure_data = naked_engine.set_registry_context(
+                    pair.get("symbol") or pair.get("display")
+                ).analyze_structure(
+                    d1,
+                    h4,
+                    h1,
+                    float(price),
+                    direction,
+                    float(atr),
+                    _regime_label,
+                    asset_type=pair.get("type", ""),
+                    d1_snap=(d1i or {}).get("snap") or {},
+                    h4_snap=(h4i or {}).get("snap") or {},
+                )
 
             # 5.3 FIX: Engine B issues now add warnings instead of full block (return None).
             # This allows signals to be downgraded to watchlist instead of being filtered out.

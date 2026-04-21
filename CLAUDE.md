@@ -33,8 +33,8 @@ Cosmetic UI copy is fine. **Do not "tune", "align", or "simplify" thresholds** i
 
 Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, stocks, commodities, indices.
 
-**Four trading engines:**
-- **Engine A** — Multi-Factor Quantitative Scoring (MFQS): uses **Variance Sqrt-Scaling** and **1.5 Z-score normalization** for improved convicton range; includes rules-based forex scorer with **Soft Gating** (ADX/Session).
+**Four top-level engines plus a dedicated forex scoring branch:**
+- **Engine A** — Multi-Factor Quantitative Scoring (MFQS): uses **Variance Sqrt-Scaling** and **1.5 Z-score normalization** for improved convicton range. Non-forex uses the factor engine; forex routes to the dedicated rules-based forex scorer with **Soft Gating** (ADX/Session).
 - **Engine B** — Naked price-action (market structure, zones, BOS/CHoCH, FVG, swing sequence)
 - **Engine C** — Consensus layer: blends A + B + AI Vision confirmation into a conviction-tiered signal
 - **Engine D (Scalp Lab)** - Fabio Valentini VP+OrderFlow scalping (`scalp_engine.py`, `volume_profile.py`). Pipeline: Volume Profile (POC/VAH/VAL/LVN) -> Absorption/CVD/AAA -> VWAP lean -> setup classification (Mean Reversion / Trend Continuation) -> `ai_quality_grade` (A/B/C/D). Execution on M1 (configurable) with NY open cooldown. Session filtering via `scalp_session_window()`. Not part of A/B/C consensus. Dashboard **Scalp Lab** panel: `POST /api/scalp-scan`, `POST /api/scalp-execute`. Backtest: `POST /api/backtest-scalp` -> **Engine D (Scalp VP)** button in backtest panel.
@@ -59,8 +59,8 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 | `vision_data.py` | Vision dataset schema/helpers (`vision_samples`, `vision_labels`, `vision_predictions`), artifact persistence, metrics aggregation |
 | `vision_hybrid.py` | Advisory hybrid chart-vision v2 training/inference (fusion of image + structured features) |
 | `chart_renderer.py` | Server-side chart renderer with Engine B overlays (FVG/OB/BOS/CHoCH/SR), pattern labels, configurable `bars_window` + `dpi` |
-| `candles_cache.py` | TTL candle cache, `fetch_candles` routing (H1→live first; crypto H4/D1→Binance REST), forex WS bar merge |
-| `candle_feeds.py` | Live prices, EODHD/Binance WS, `CandleBuilder` (forex H1 via `on_tick`; crypto H1 via `on_kline`), `fetch_candles_live` |
+| `candles_cache.py` | TTL candle cache, `fetch_candles` routing (H1→live first where applicable; crypto H4/D1→Binance REST). MT5 sources bypass CandleBuilder and fetch MT5 directly first. |
+| `candle_feeds.py` | Live prices, EODHD/Binance WS, `CandleBuilder` for EODHD/Binance live bars, `fetch_candles_live` |
 | `athena_runtime.py` | `set_runtime`/`rt()` bindings; `executed_signals` dedupe set |
 | `execution.py` | Execution Flask routes (`register_execution_routes`) |
 | `scanner.py` | `run_full_scan` and scan pipeline |
@@ -208,7 +208,7 @@ run_full_scan(style, asset_class)
 **Engine C flow:**
 ```
 POST /api/engine-c-scan {assetClass, style}
-  └─ Fetches candles ONCE per pair, shares between Engine A (full) and Engine B (last bar dropped)
+  └─ Fetches candles ONCE per pair, shares between Engine A and Engine B via confirmed/forming market-state splits
   └─ analyze_pair(preloaded_candles={D1,H4,H1})   ← Engine A (uses same data as Engine B)
   └─ NakedEngine.analyze_structure() + calculate_confidence()   ← Engine B
   └─ compute_consensus() → ALIGNED / A_ONLY / B_ONLY / CONFLICT / SKIPPED
@@ -340,7 +340,7 @@ Priority: `PAIR_PROFILES[pair].min_confluence` → `MIN_CONFLUENCE_GROUP[type][s
 Theoretical max score using `get_pair_vote_weights(pair)`, minus `W_SESS×0.5`.
 
 ### `fetch_candles(pair, tf, limit)` — `candles_cache.py`
-- H1 (non-polygon): `CandleBuilder` first if bars ≥ min, else TTL then REST
+- H1 (eligible live feeds only): `CandleBuilder` first if bars ≥ min, else TTL then REST
 - Crypto H4/D1: Binance REST native intervals
 - MT5 sources: `fetch_mt5()` for all TFs
 - Cache TTL keys: **uppercase** `"H1"/"H4"/"D1"` — lowercase misses cache

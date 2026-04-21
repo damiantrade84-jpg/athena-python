@@ -160,8 +160,11 @@ class TestCandleCacheKeys:
 
     def test_non_forex_crypto_can_use_existing_ttl_cache_entry(self):
         pair = {"symbol": "AAPL.US", "display": "AAPL", "source": "eodhd", "type": "stock"}
-        cached = [{"time": "2026-03-27T13:00:00+00:00", "open": 200.0, "high": 201.0, "low": 199.0, "close": 200.5, "vol": 900}]
-        fetch_eodhd = Mock(return_value=[{"time": "2026-03-27T14:00:00+00:00", "open": 201.0, "high": 202.0, "low": 200.0, "close": 201.5, "vol": 1000}])
+        current_bucket = int(time.time() // 3600) * 3600
+        cached_time = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(current_bucket))
+        next_time = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(current_bucket + 3600))
+        cached = [{"time": cached_time, "open": 200.0, "high": 201.0, "low": 199.0, "close": 200.5, "vol": 900}]
+        fetch_eodhd = Mock(return_value=[{"time": next_time, "open": 201.0, "high": 202.0, "low": 200.0, "close": 201.5, "vol": 1000}])
 
         with _candle_cache_lock:
             _candle_cache[("AAPL.US", "H1", 100)] = (cached, time.time() + 3600)
@@ -533,7 +536,9 @@ class TestCandleCacheKeys:
 
     def test_single_flight_dedupes_parallel_fetches(self):
         pair = {"symbol": "AAPL.US", "display": "AAPL", "source": "eodhd", "type": "stock"}
-        candles = [{"time": "2026-03-27T14:00:00+00:00", "open": 1.1, "high": 1.2, "low": 1.0, "close": 1.15, "vol": 1000}]
+        current_bucket = int(time.time() // 3600) * 3600
+        candle_time = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(current_bucket))
+        candles = [{"time": candle_time, "open": 1.1, "high": 1.2, "low": 1.0, "close": 1.15, "vol": 1000}]
         call_count = 0
         call_lock = threading.Lock()
 

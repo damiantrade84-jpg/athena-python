@@ -74,6 +74,37 @@ def _cleanup_stale_cache(now: float) -> None:
         )
 
 
+def _annotate_fetch_meta_with_bar_freshness(
+    fetch_meta: dict,
+    candles: list[dict] | None,
+    tf: str,
+    *,
+    now: float | None = None,
+) -> dict:
+    """Add read-only last-bar freshness fields for diagnostics and health routes."""
+    if not isinstance(fetch_meta, dict):
+        fetch_meta = {}
+    if not candles:
+        return fetch_meta
+    last_bar = candles[-1] if isinstance(candles[-1], dict) else None
+    if not last_bar:
+        return fetch_meta
+    last_ts = last_bar.get("time", last_bar.get("datetime"))
+    if last_ts is None:
+        return fetch_meta
+    fetch_meta["lastBarTime"] = last_ts
+    last_epoch = candle_time_epoch_utc(last_ts)
+    if last_epoch is None:
+        return fetch_meta
+    now_ts = time.time() if now is None else float(now)
+    age_sec = round(max(0.0, now_ts - float(last_epoch)), 1)
+    fetch_meta["lastBarAgeSec"] = age_sec
+    tf_seconds = _TF_SECONDS.get(str(tf or "").upper())
+    if tf_seconds:
+        fetch_meta["lastBarStale"] = bool(age_sec > (2 * tf_seconds))
+    return fetch_meta
+
+
 def extract_candles(resp) -> list | None:
     """Normalize candle fetch results.
 
@@ -435,6 +466,7 @@ def fetch_candles(
                 }
             )
             out = live_candles[-limit:] if len(live_candles) > limit else live_candles
+            _annotate_fetch_meta_with_bar_freshness(fetch_meta, out, tf)
             with _candle_cache_lock:
                 _store_fetch_meta(key, fetch_meta)
             log.debug(
@@ -455,6 +487,7 @@ def fetch_candles(
             out_candles = extract_candles(out_candles)
 
         fetch_meta["bars"] = len(out_candles) if out_candles else 0
+        _annotate_fetch_meta_with_bar_freshness(fetch_meta, out_candles, tf)
         with _candle_cache_lock:
             _candle_cache.pop(key, None)
             _store_fetch_meta(key, fetch_meta)
@@ -505,32 +538,39 @@ def fetch_candles(
                 is_owner = True
 
     if inflight is not None and not is_owner:
-        inflight.wait(timeout=30)
-        with _candle_cache_lock:
-            if not bypass_ttl_cache:
-                entry = _candle_cache.get(key)
-                if entry is not None:
-                    cached_candles, expiry = entry
-                    _now2 = time.time()
-                    if _now2 < expiry:
-                        if _ttl_cache_last_bar_stale(cached_candles, tf, _now2):
-                            _candle_cache.pop(key, None)
-                            _candle_fetch_meta.pop(key, None)
-                        else:
-                            cached_meta = dict(_candle_fetch_meta.get(key, {}))
-                            cached_meta.update(
-                                {
-                                    "resolution": "ttl_cache",
-                                    "cacheHit": True,
-                                    "cacheUpstream": cached_meta.get("upstream"),
-                                }
-                            )
-                            _store_fetch_meta(key, cached_meta)
-                            return cached_candles
-            # Exception loop fallback
-            inflight = threading.Event()
-            _candle_fetch_inflight[key] = inflight
-            is_owner = True
+        while True:
+            inflight.wait(timeout=30)
+            with _candle_cache_lock:
+                if not bypass_ttl_cache:
+                    entry = _candle_cache.get(key)
+                    if entry is not None:
+                        cached_candles, expiry = entry
+                        _now2 = time.time()
+                        if _now2 < expiry:
+                            if _ttl_cache_last_bar_stale(cached_candles, tf, _now2):
+                                _candle_cache.pop(key, None)
+                                _candle_fetch_meta.pop(key, None)
+                            else:
+                                cached_meta = dict(_candle_fetch_meta.get(key, {}))
+                                cached_meta.update(
+                                    {
+                                        "resolution": "ttl_cache",
+                                        "cacheHit": True,
+                                        "cacheUpstream": cached_meta.get("upstream"),
+                                    }
+                                )
+                                _store_fetch_meta(key, cached_meta)
+                                return cached_candles
+                # Only take ownership if the original in-flight fetch has genuinely
+                # disappeared without populating the cache. This preserves
+                # single-flight behavior for the normal success path while still
+                # allowing recovery from an abandoned fetch.
+                inflight = _candle_fetch_inflight.get(key)
+                if inflight is None:
+                    inflight = threading.Event()
+                    _candle_fetch_inflight[key] = inflight
+                    is_owner = True
+                    break
 
     try:
         if candles is None and pair["source"] == "binance":
@@ -600,6 +640,7 @@ def fetch_candles(
 
         if candles:
             fetch_meta["bars"] = len(candles)
+            _annotate_fetch_meta_with_bar_freshness(fetch_meta, candles, tf)
             with _candle_cache_lock:
                 if bypass_ttl_cache:
                     _candle_cache.pop(key, None)
