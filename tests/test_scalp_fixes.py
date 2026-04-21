@@ -103,7 +103,11 @@ def test_swing_timed_exit_uses_live_price_for_tp_progress(monkeypatch):
 
     timed_exit_monitor._handle_mt5_row(row, cfg)
 
-    assert be_calls == [(12345, 1.1000)]
+    # BE price includes a 5% SL-distance buffer above entry:
+    # entry=1.1000, sl=1.0900 → sl_dist=0.01, buffer=0.01*0.05=0.0005 → be_price=1.1005
+    _sl_dist = abs(row["entry_price"] - row["sl"])
+    _expected_be = round(row["entry_price"] + _sl_dist * cfg.get("breakeven_buffer_r", 0.05), 10)
+    assert be_calls == [(12345, _expected_be)]
     assert close_calls == []
 
 

@@ -32,6 +32,12 @@ _be_done: set = set()
 _DEFAULT_CFG: dict = {
     "enabled": True,
     "check_interval_sec": 30,
+    # Minimum R-fraction of risk_amount the trade must be in profit before BE is armed.
+    # Prevents arming BE on $0.01 profit where spread immediately stops out at 0.00.
+    "breakeven_min_profit_r": 0.20,
+    # Fraction of SL distance added as buffer above/below entry for the BE SL price.
+    # e.g. 0.05 on a 20-pip SL → 1 pip above entry, ensuring a small positive close.
+    "breakeven_buffer_r": 0.05,
     "scalp":    {"breakeven_min": 5,   "close_min": 10},
     "intraday": {"breakeven_min": 15,  "close_min": 30},
     "swing":    {"breakeven_days": 2.5, "close_days": 5.0, "tp_progress_exempt": 0.50},
@@ -46,6 +52,12 @@ def _get_timed_cfg(config_fn) -> dict:
         merged[style] = {**_DEFAULT_CFG[style], **(raw.get(style) or {})}
     merged["enabled"] = raw.get("enabled", True)
     merged["check_interval_sec"] = raw.get("check_interval_sec", 30)
+    merged["breakeven_min_profit_r"] = float(
+        raw.get("breakeven_min_profit_r", _DEFAULT_CFG["breakeven_min_profit_r"])
+    )
+    merged["breakeven_buffer_r"] = float(
+        raw.get("breakeven_buffer_r", _DEFAULT_CFG["breakeven_buffer_r"])
+    )
     return merged
 
 
@@ -394,13 +406,31 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
         )
 
     # ── Step 1: Breakeven trigger ─────────────────────────────────────────────
-    if be_due_now and ticket not in _be_done and profit > 0:
-        result = mt5_move_sl_to_breakeven(ticket, entry)
+    # Require meaningful profit before arming BE — avoids setting SL at entry on
+    # a $0.01 gain where spread immediately stops the trade out at 0.00R.
+    _risk_amount = float(row.get("risk_amount") or 0)
+    _sl_raw = float(row.get("sl") or 0)
+    _sl_dist = abs(entry - _sl_raw) if _sl_raw > 0 else 0.0
+    _be_min_profit_r = tcfg.get("breakeven_min_profit_r", 0.20)
+    _be_buffer_r = tcfg.get("breakeven_buffer_r", 0.05)
+    _be_min_profit = (_risk_amount * _be_min_profit_r) if _risk_amount > 0 else 0.0
+
+    # Shift the BE SL slightly in the trade's favour so close is always > 0.00R.
+    if _sl_dist > 0 and _be_buffer_r > 0:
+        _be_buffer = _sl_dist * _be_buffer_r
+        _direction_long = str(direction).upper() != "SHORT"
+        _be_price = entry + _be_buffer if _direction_long else entry - _be_buffer
+    else:
+        _be_price = entry
+
+    if be_due_now and ticket not in _be_done and profit >= max(0.01, _be_min_profit):
+        result = mt5_move_sl_to_breakeven(ticket, _be_price)
         if result.get("success") and not result.get("skipped"):
             _be_done.add(ticket)
             log.info(
                 f"[TIMED_EXIT] BE set: {row['pair']} ticket={ticket} "
-                f"style={style} mins_open={mins:.1f}"
+                f"style={style} mins_open={mins:.1f} be_price={_be_price:.5f} "
+                f"(entry={entry:.5f} buffer={_be_buffer_r:.0%} of SL dist)"
             )
             try:
                 telegram_notify._send_message_async(
@@ -565,12 +595,27 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
         )
 
     # ── Step 1: Breakeven trigger ─────────────────────────────────────────────
-    if be_due_now and ticket not in _be_done and profit > 0 and ccxt_sym:
-        result = bybit_move_sl_to_breakeven(ccxt_sym, direction, entry, volume)
+    _risk_amount = float(row.get("risk_amount") or 0)
+    _sl_raw = float(row.get("sl") or 0)
+    _sl_dist = abs(entry - _sl_raw) if _sl_raw > 0 else 0.0
+    _be_min_profit_r = tcfg.get("breakeven_min_profit_r", 0.20)
+    _be_buffer_r = tcfg.get("breakeven_buffer_r", 0.05)
+    _be_min_profit = (_risk_amount * _be_min_profit_r) if _risk_amount > 0 else 0.0
+
+    if _sl_dist > 0 and _be_buffer_r > 0:
+        _be_buffer = _sl_dist * _be_buffer_r
+        _direction_long = str(direction).upper() != "SHORT"
+        _be_price = entry + _be_buffer if _direction_long else entry - _be_buffer
+    else:
+        _be_price = entry
+
+    if be_due_now and ticket not in _be_done and profit >= max(0.01, _be_min_profit) and ccxt_sym:
+        result = bybit_move_sl_to_breakeven(ccxt_sym, direction, _be_price, volume)
         if result.get("success"):
             _be_done.add(ticket)
             log.info(
-                f"[TIMED_EXIT] BE set: {pair} style={style} mins_open={mins:.1f}"
+                f"[TIMED_EXIT] BE set: {pair} style={style} mins_open={mins:.1f} "
+                f"be_price={_be_price:.5f} (entry={entry:.5f} buffer={_be_buffer_r:.0%} of SL dist)"
             )
             try:
                 telegram_notify._send_message_async(
