@@ -237,6 +237,19 @@ def candle_time_epoch_utc(val) -> int | None:
         return None
 
 
+def _ttl_cache_last_bar_stale(candles: list[dict] | None, tf: str, now_s: float) -> bool:
+    """True when the newest cached bar is too old vs ``now_s`` for this timeframe."""
+    if not candles:
+        return True
+    tf_sec = _TF_SECONDS.get((tf or "").upper())
+    if not tf_sec:
+        return False
+    last_ts = candle_time_epoch_utc(candles[-1].get("time", candles[-1].get("datetime")))
+    if last_ts is None:
+        return True
+    return (now_s - float(last_ts)) > (2.0 * float(tf_sec))
+
+
 def _has_current_bar(candles: list[dict] | None, tf: str, now_s: float | None = None) -> bool:
     """True when the last candle is the currently forming timeframe bucket."""
     if not candles:
@@ -470,16 +483,20 @@ def fetch_candles(
                 cached_candles, expiry = entry
 
                 if now < expiry:
-                    cached_meta = dict(_candle_fetch_meta.get(key, {}))
-                    cached_meta.update(
-                        {
-                            "resolution": "ttl_cache",
-                            "cacheHit": True,
-                            "cacheUpstream": cached_meta.get("upstream"),
-                        }
-                    )
-                    _store_fetch_meta(key, cached_meta)
-                    return cached_candles
+                    if _ttl_cache_last_bar_stale(cached_candles, tf, now):
+                        _candle_cache.pop(key, None)
+                        _candle_fetch_meta.pop(key, None)
+                    else:
+                        cached_meta = dict(_candle_fetch_meta.get(key, {}))
+                        cached_meta.update(
+                            {
+                                "resolution": "ttl_cache",
+                                "cacheHit": True,
+                                "cacheUpstream": cached_meta.get("upstream"),
+                            }
+                        )
+                        _store_fetch_meta(key, cached_meta)
+                        return cached_candles
         if candles is None:
             inflight = _candle_fetch_inflight.get(key)
             if inflight is None:
@@ -494,17 +511,22 @@ def fetch_candles(
                 entry = _candle_cache.get(key)
                 if entry is not None:
                     cached_candles, expiry = entry
-                    if time.time() < expiry:
-                        cached_meta = dict(_candle_fetch_meta.get(key, {}))
-                        cached_meta.update(
-                            {
-                                "resolution": "ttl_cache",
-                                "cacheHit": True,
-                                "cacheUpstream": cached_meta.get("upstream"),
-                            }
-                        )
-                        _store_fetch_meta(key, cached_meta)
-                        return cached_candles
+                    _now2 = time.time()
+                    if _now2 < expiry:
+                        if _ttl_cache_last_bar_stale(cached_candles, tf, _now2):
+                            _candle_cache.pop(key, None)
+                            _candle_fetch_meta.pop(key, None)
+                        else:
+                            cached_meta = dict(_candle_fetch_meta.get(key, {}))
+                            cached_meta.update(
+                                {
+                                    "resolution": "ttl_cache",
+                                    "cacheHit": True,
+                                    "cacheUpstream": cached_meta.get("upstream"),
+                                }
+                            )
+                            _store_fetch_meta(key, cached_meta)
+                            return cached_candles
             # Exception loop fallback
             inflight = threading.Event()
             _candle_fetch_inflight[key] = inflight

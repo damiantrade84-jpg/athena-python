@@ -39,9 +39,9 @@ def test_meta_weights_tilt_toward_better_recent_engine_with_step_cap():
         "maxScore": 5.0,
     }
     records = []
-    for _ in range(12):
+    for _ in range(20):
         records.append({"engine": "engine_b", "won": True, "expectancy_r": 0.45, "slippage_bps": 1.0})
-    for _ in range(12):
+    for _ in range(20):
         records.append({"engine": "engine_a", "won": False, "expectancy_r": -0.25, "slippage_bps": 8.0})
 
     context = get_engine_context(signal, records=records)
@@ -61,7 +61,7 @@ def test_meta_quality_can_suspend_clearly_degraded_bucket():
         "combinedConviction": 0.51,
     }
     records = []
-    for _ in range(14):
+    for _ in range(30):
         records.append({"engine": "engine_a", "won": False, "expectancy_r": -0.35, "slippage_bps": 18.0})
 
     context = get_engine_context(signal, records=records)
@@ -98,7 +98,7 @@ def test_meta_policy_explicitly_separates_adaptive_alpha_from_fixed_safety():
         "direction": "LONG",
         "combinedConviction": 0.63,
     }
-    records = [{"engine": "engine_a", "won": True, "expectancy_r": 0.3, "slippage_bps": 2.0} for _ in range(12)]
+    records = [{"engine": "engine_a", "won": True, "expectancy_r": 0.3, "slippage_bps": 2.0} for _ in range(20)]
     context = get_engine_context(signal, records=records)
     policy = get_dynamic_engine_weights(context, records=records)
 
@@ -127,7 +127,7 @@ def test_meta_policy_exposes_regime_style_and_calibrated_expectancy_weights():
         "combinedConviction": 0.66,
         "calibration": {"available": True, "calibrated_prob": 0.64, "sample_count": 40, "bucket_samples": 12},
     }
-    records = [{"engine": "engine_a", "won": True, "expectancy_r": 0.35, "slippage_bps": 1.5} for _ in range(12)]
+    records = [{"engine": "engine_a", "won": True, "expectancy_r": 0.35, "slippage_bps": 1.5} for _ in range(20)]
     context = get_engine_context(signal, records=records)
     policy = get_dynamic_engine_weights(context, records=records)
 

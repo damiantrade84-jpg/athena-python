@@ -41,7 +41,17 @@ ENGINE_C_AB_WEIGHTS = {
     "HIGH_VOLATILITY": {"A": 0.50, "B": 0.50},
     "LOW_VOLATILITY":  {"A": 0.45, "B": 0.55},
 }
-ENGINE_C_META_BLEND = 0.20
+ENGINE_C_META_BLEND = 0.20  # Default; override with CONFIG["ENGINE_C_META_BLEND"] (0..1)
+
+
+def _engine_c_meta_blend() -> float:
+    """How much to tilt A/B weights toward meta-learner trust (bounded)."""
+    try:
+        raw = CONFIG.get("ENGINE_C_META_BLEND", ENGINE_C_META_BLEND)
+        v = float(raw)
+        return max(0.0, min(1.0, v))
+    except (TypeError, ValueError):
+        return ENGINE_C_META_BLEND
 
 # ── Conviction tier thresholds ────────────────────────────────────────────────
 CONVICTION_TIERS = {
@@ -499,9 +509,10 @@ def _blend_consensus_weights(base_weights: dict, meta_weights: dict | None) -> d
         return dict(base_weights)
     meta_ratio_a = a_meta / total
     meta_ratio_b = b_meta / total
+    _mb = _engine_c_meta_blend()
     blended = {
-        "A": (base_weights["A"] * (1.0 - ENGINE_C_META_BLEND)) + (meta_ratio_a * ENGINE_C_META_BLEND),
-        "B": (base_weights["B"] * (1.0 - ENGINE_C_META_BLEND)) + (meta_ratio_b * ENGINE_C_META_BLEND),
+        "A": (base_weights["A"] * (1.0 - _mb)) + (meta_ratio_a * _mb),
+        "B": (base_weights["B"] * (1.0 - _mb)) + (meta_ratio_b * _mb),
     }
     total_blended = blended["A"] + blended["B"]
     return {

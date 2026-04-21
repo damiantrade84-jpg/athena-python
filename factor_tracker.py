@@ -82,6 +82,14 @@ def _init_tables():
                 CREATE INDEX IF NOT EXISTS idx_fs_asset_ts
                 ON factor_snapshots(asset_type, ts)
             """)
+            _cols = {
+                row[1]
+                for row in con.execute("PRAGMA table_info(factor_snapshots)").fetchall()
+            }
+            if "unweighted_dir_sum" not in _cols:
+                con.execute(
+                    "ALTER TABLE factor_snapshots ADD COLUMN unweighted_dir_sum REAL"
+                )
             con.commit()
     except Exception as e:
         log.error(f"[FACTOR_TRACKER] Table init failed: {e}")
@@ -107,6 +115,8 @@ def record_factor_snapshot(
         fs = factor_result.get("factor_scores", {})
         ws = factor_result.get("weights", {})
         tc = factor_result.get("trend_coherence", {})
+        dir_out = direction if direction is not None else "NEUTRAL"
+        uds = factor_result.get("unweighted_directional_sum")
 
         with _db_lock:
             con = sqlite3.connect(_DB_PATH, timeout=15.0)
@@ -118,10 +128,11 @@ def record_factor_snapshot(
                     f_trend_strength, f_volatility, f_volume, f_structure,
                     w_trend, w_momentum, w_derivatives, w_microstructure, w_carry,
                     w_trend_strength, w_volatility, w_volume, w_structure,
-                    dir_confidence_mult, trend_coherence_ratio, optional_coverage
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    dir_confidence_mult, trend_coherence_ratio, optional_coverage,
+                    unweighted_dir_sum
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                ts, pair, asset_type, direction, final_score,
+                ts, pair, asset_type, dir_out, final_score,
                 factor_result.get("directional_score"),
                 factor_result.get("nondirectional_score"),
                 factor_result.get("regime"),
@@ -136,6 +147,7 @@ def record_factor_snapshot(
                 factor_result.get("directional_confidence_multiplier"),
                 tc.get("coherence_ratio"),
                 factor_result.get("optional_factor_coverage"),
+                uds,
             ))
             con.commit()
             row_id = cur.lastrowid

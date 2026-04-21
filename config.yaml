@@ -353,9 +353,11 @@ FOREX_ENGINE:
   session_shoulder_enabled: true
   session_shoulder_multiplier: 0.90
   session_shoulder_hours: 1
-  # 2026-04-17: London breakout evaluation window (UTC hours, inclusive).
-  # Default [7, 11] = extended window post-Option-A diagnostic. Previous hard-coded
-  # value was [7, 9] (3 hours only). Set lo=hi to disable breakout path entirely.
+  # London breakout eval: london_local = first hours after 08:00 Europe/London (DST-safe).
+  # Use explicit_utc + london_breakout_window_lo/hi for fixed UTC hours (backtests / brokers).
+  london_breakout_window_mode: london_local
+  london_breakout_local_start_h: 8
+  london_breakout_local_end_h: 10
   london_breakout_window_lo: 7
   london_breakout_window_hi: 11
   trend_support_weights:
@@ -876,7 +878,8 @@ ENGINE_B_FOREX_STRUCTURE_TF: "D1"
 # Engine A uses D1 ADX >= 25 (hard trend gate). Engine B intentionally sits
 # lower because structural patterns (BOS/CHoCH/OB) remain valid down to ~15
 # — this preserves Engine B's independent signal in the 15-25 transition zone.
-ENGINE_B_FOREX_ADX_MIN: 15
+# Wilder ADX < ~20 = weak trend; 18 is a compromise vs full 20 gate.
+ENGINE_B_FOREX_ADX_MIN: 18
 
 # Engine B backtest SL/TP mode:
 # "atr" = use Engine A calc_levels (ATR × multiplier) — proven, matches bar resolution
@@ -890,6 +893,8 @@ AI_ON_DEMAND_ONLY: true
 # Engine C B-side fallback controls:
 # Allow strong Engine B setups to be scored/tradeable even when Engine A is missing
 # or weakly opposing, instead of hard-discarding on mismatch.
+# Engine C: fraction of A/B blend replaced by meta-learner trust (0..1). Code default 0.20.
+ENGINE_C_META_BLEND: 0.20
 ENGINE_C_B_ONLY_MULT: 0.65
 ENGINE_C_B_CONFLICT_OVERRIDE_ENABLED: true
 ENGINE_C_B_CONFLICT_MIN_SCORE: 0.70

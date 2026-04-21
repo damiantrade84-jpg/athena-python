@@ -26,7 +26,7 @@ import logging
 import math
 import time
 import pandas as pd
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
@@ -34,6 +34,15 @@ from config import CONFIG
 from stability_monitor import record_signal_event
 
 log = logging.getLogger("sentinel.scalp")
+
+
+def _london_cash_open_utc_minute_of_day(when_utc: datetime | None = None) -> int:
+    """UTC minute-of-day (0..1439) for 08:00 Europe/London on London's calendar day of ``when_utc``."""
+    ref = (when_utc or datetime.now(timezone.utc)).astimezone(ZoneInfo("Europe/London"))
+    day = ref.date()
+    open_local = datetime.combine(day, time(8, 0), tzinfo=ZoneInfo("Europe/London"))
+    open_utc = open_local.astimezone(timezone.utc)
+    return open_utc.hour * 60 + open_utc.minute
 
 
 # =========================================================================
@@ -606,7 +615,7 @@ def scalp_session_window(
         skip_key_lon = "BT_LONDON_OPEN_SKIP_MINUTES" if backtest else "LONDON_OPEN_SKIP_MINUTES"
         skip_lon = max(0, int(cfg.get(skip_key_lon, cfg.get("LONDON_OPEN_SKIP_MINUTES", 20))))
         if skip_lon > 0:
-            london_open_utc_minute = 7 * 60  # 07:00 UTC
+            london_open_utc_minute = _london_cash_open_utc_minute_of_day(current_utc)
             now_utc_minute = current_utc.hour * 60 + current_utc.minute
             if london_open_utc_minute <= now_utc_minute < london_open_utc_minute + skip_lon:
                 return False, "LONDON_OPEN_COOLDOWN"
@@ -643,7 +652,7 @@ def scalp_session_window(
             skip_key_lon = "BT_LONDON_OPEN_SKIP_MINUTES" if backtest else "LONDON_OPEN_SKIP_MINUTES"
             skip_lon = max(0, int(cfg.get(skip_key_lon, cfg.get("LONDON_OPEN_SKIP_MINUTES", 20))))
             if skip_lon > 0:
-                london_open_utc_minute = 7 * 60  # 07:00 UTC
+                london_open_utc_minute = _london_cash_open_utc_minute_of_day(current_utc)
                 now_utc_minute = current_utc.hour * 60 + current_utc.minute
                 if london_open_utc_minute <= now_utc_minute < london_open_utc_minute + skip_lon:
                     return False, "LONDON_OPEN_COOLDOWN"

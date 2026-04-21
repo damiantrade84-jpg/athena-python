@@ -124,7 +124,11 @@ def _base_snaps():
 
 
 def _patch_nonessential(monkeypatch):
-    monkeypatch.setattr(forex_scoring, "_in_session", lambda _hour, _pair="": True)
+    monkeypatch.setattr(
+        forex_scoring,
+        "_session_state",
+        lambda *_a, **_k: {"is_active": True, "multiplier": 1.0},
+    )
     monkeypatch.setattr(forex_scoring, "_cot_boost", lambda *a, **k: 0.0)
     monkeypatch.setattr(forex_scoring, "_carry_tilt", lambda *a, **k: 0.0)
     monkeypatch.setattr(indicators, "detect_fvg", lambda _c: [])

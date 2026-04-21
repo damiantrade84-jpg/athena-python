@@ -15,8 +15,8 @@ from calibration import calibration_quality_summary, predict_calibrated_prob
 from stability_monitor import get_engine_stability_snapshot, get_signal_stability_index
 
 _ENGINES = ("engine_a", "engine_b", "engine_c", "scalp")
-_MIN_SAMPLES_FOR_ADAPTATION = 8
-_MIN_SAMPLES_FOR_SUSPENSION = 12
+_MIN_SAMPLES_FOR_ADAPTATION = 20
+_MIN_SAMPLES_FOR_SUSPENSION = 30
 _MAX_WEIGHT_STEP = 0.08
 _MIN_CAL_EXPECTANCY_WEIGHT = 0.20
 _MAX_CAL_EXPECTANCY_WEIGHT = 0.75

@@ -1,7 +1,7 @@
 from engine_c import (
     ENGINE_C_AB_WEIGHTS,
-    ENGINE_C_META_BLEND,
     _blend_consensus_weights,
+    _engine_c_meta_blend,
     compute_consensus,
     normalise_engine_a,
 )
@@ -23,8 +23,9 @@ def test_blended_ab_weights_fall_back_to_base_and_move_within_bound():
         },
     )
 
-    expected_a = round((base["A"] * (1.0 - ENGINE_C_META_BLEND)) + ENGINE_C_META_BLEND, 4)
-    expected_b = round(base["B"] * (1.0 - ENGINE_C_META_BLEND), 4)
+    mb = _engine_c_meta_blend()
+    expected_a = round((base["A"] * (1.0 - mb)) + mb, 4)
+    expected_b = round(base["B"] * (1.0 - mb), 4)
 
     assert strongly_favor_a["A"] == expected_a
     assert strongly_favor_a["B"] == expected_b

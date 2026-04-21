@@ -1084,7 +1084,7 @@ def compute_factor_scores(
             )
         return {
             "final_score": 0.0,
-            "direction": "LONG",
+            "direction": None,
             "factor_scores": factor_scores,
             "weights": weights,
             "regime": regime,
@@ -1092,6 +1092,7 @@ def compute_factor_scores(
             "disabled_factors": disabled_factors,
             "directional_score": 0.0,
             "nondirectional_score": 0.0,
+            "unweighted_directional_sum": 0.0,
             "correlation_adjustments": {},
             "insufficient_factors": True,
             "min_directional_failed": True,
@@ -1148,6 +1149,7 @@ def compute_factor_scores(
                 "disabled_factors": disabled_factors,
                 "directional_score": 0.0,
                 "nondirectional_score": 0.0,
+                "unweighted_directional_sum": dir_sum,
                 "correlation_adjustments": {},
                 "insufficient_factors": False,
                 "indeterminate_direction": True,
@@ -1165,6 +1167,21 @@ def compute_factor_scores(
                 "intermarket_engine_a_delta": 0.0,
                 "feed_status": feed_status,
             }
+
+    try:
+        _neutral_eps = float(
+            CONFIG.get("FACTOR_NEAR_NEUTRAL_LOG_EPS", 0.05) or 0.05
+        )
+    except (TypeError, ValueError):
+        _neutral_eps = 0.05
+    if active_dir and abs(dir_score) < _neutral_eps:
+        log.info(
+            "[FACTOR] %s near-neutral weighted_dir=%.5f unweighted_sum=%.5f resolved=%s",
+            pair.get("display", "?"),
+            dir_score,
+            dir_sum,
+            direction,
+        )
 
     nondir_score = 0.0
     if active_nondir:
@@ -1249,6 +1266,7 @@ def compute_factor_scores(
         "disabled_factors": disabled_factors,
         "directional_score": dir_score,
         "nondirectional_score": nondir_score,
+        "unweighted_directional_sum": dir_sum,
         "correlation_adjustments": {k: v for k, v in corr_weights.items() if v < 1.0},
         "insufficient_factors": False,
         "min_directional_failed": abs(dir_score) < float(_min_dir),

@@ -17,8 +17,9 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -534,6 +535,54 @@ def _cot_boost(pair: dict, direction: str, bar_time: Optional[str] = None) -> fl
 # ─── London breakout ─────────────────────────────────────────────────────────
 
 
+def _reference_utc_from_h1(h1_candles: list) -> datetime:
+    if not h1_candles:
+        return datetime.now(timezone.utc)
+    try:
+        last = h1_candles[-1].get("time", "")
+        if not last:
+            return datetime.now(timezone.utc)
+        dt = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return datetime.now(timezone.utc)
+
+
+def _london_breakout_utc_bounds(h1_candles: list, fx_cfg: dict) -> tuple[int, int]:
+    """UTC hour bounds (inclusive) for London breakout evaluation.
+
+    - ``london_breakout_window_mode: london_local`` (default): first hours after
+      08:00 Europe/London, converted to UTC (DST-safe).
+    - ``explicit_utc``: use ``london_breakout_window_lo`` / ``_hi`` as fixed UTC hours.
+    """
+    mode = str(fx_cfg.get("london_breakout_window_mode", "london_local")).strip().lower()
+    if mode in ("explicit_utc", "utc", "fixed_utc"):
+        lo = int(fx_cfg.get("london_breakout_window_lo", _LONDON_OPEN[0]))
+        hi = int(fx_cfg.get("london_breakout_window_hi", _LONDON_OPEN[0] + 2))
+        return lo, hi
+
+    ref_utc = _reference_utc_from_h1(h1_candles)
+    z = ZoneInfo("Europe/London")
+    local = ref_utc.astimezone(z)
+    day = local.date()
+    start_h = int(fx_cfg.get("london_breakout_local_start_h", 8))
+    end_h_exc = int(fx_cfg.get("london_breakout_local_end_h", 10))
+    t0 = datetime.combine(day, time(start_h, 0, tzinfo=z))
+    t1 = datetime.combine(day, time(end_h_exc, 0, tzinfo=z))
+    if t1 <= t0:
+        t1 = t0 + timedelta(hours=2)
+    utc_hours: list[int] = []
+    cur = t0
+    while cur < t1:
+        utc_hours.append(cur.astimezone(timezone.utc).hour)
+        cur += timedelta(hours=1)
+    if not utc_hours:
+        return 8, 9
+    return min(utc_hours), max(utc_hours)
+
+
 def _breakout_eval_hour_from_candles(h1_candles: list) -> int:
     """Derive the UTC hour for London breakout evaluation from the last H1 candle.
 
@@ -555,30 +604,29 @@ def _breakout_eval_hour_from_candles(h1_candles: list) -> int:
         return _local_to_utc_hour()
 
 
-def _london_breakout_score(h1_candles: list, utc_hour: int) -> tuple[float, str]:
+def _london_breakout_score(h1_candles: list, utc_hour: int) -> tuple[float, str | None]:
     """
     London breakout signal.
     Measures Asian session range (00:00-07:00 UTC) from recent H1 candles.
     At London open, checks if current bar breaks above/below that range.
-    Returns (score 0-1, direction).
+    Returns (score 0-1, direction LONG/SHORT or None when no breakout).
 
     NOTE: utc_hour should be derived from _breakout_eval_hour_from_candles(h1_candles)
     NOT from bar_time (which is forced to 13:00 UTC in D1 swing BT).
     """
     if not h1_candles or len(h1_candles) < 10:
-        return 0.0, "LONG"
+        return 0.0, None
 
     try:
         from config import CONFIG
+
         _fx = CONFIG.get("FOREX_ENGINE", {}) or {}
-        _bw_lo = int(_fx.get("london_breakout_window_lo", _LONDON_OPEN[0]))
-        _bw_hi = int(_fx.get("london_breakout_window_hi", _LONDON_OPEN[0] + 2))
+        _bw_lo, _bw_hi = _london_breakout_utc_bounds(h1_candles, _fx)
     except Exception:
-        _bw_lo = _LONDON_OPEN[0]
-        _bw_hi = _LONDON_OPEN[0] + 2
+        _bw_lo, _bw_hi = _LONDON_OPEN[0], _LONDON_OPEN[0] + 2
 
     if not (_bw_lo <= utc_hour <= _bw_hi):
-        return 0.0, "LONG"
+        return 0.0, None
 
     asian_candles = []
     for c in h1_candles[-20:]:
@@ -593,14 +641,14 @@ def _london_breakout_score(h1_candles: list, utc_hour: int) -> tuple[float, str]
             continue
 
     if len(asian_candles) < 3:
-        return 0.0, "LONG"
+        return 0.0, None
 
     asian_high = max(c["high"] for c in asian_candles)
     asian_low = min(c["low"] for c in asian_candles)
     asian_range = asian_high - asian_low
 
     if asian_range <= 0:
-        return 0.0, "LONG"
+        return 0.0, None
 
     current = h1_candles[-1]
     current_close = current.get("close", 0)
@@ -613,17 +661,17 @@ def _london_breakout_score(h1_candles: list, utc_hour: int) -> tuple[float, str]
 
     if current_close > asian_high:
         if body_ratio < 0.3:
-            return 0.0, "LONG"
+            return 0.0, None
         breakout_pct = (current_close - asian_high) / asian_range
         return min(1.0, breakout_pct * 3), "LONG"
 
     if current_close < asian_low:
         if body_ratio < 0.3:
-            return 0.0, "SHORT"
+            return 0.0, None
         breakout_pct = (asian_low - current_close) / asian_range
         return min(1.0, breakout_pct * 3), "SHORT"
 
-    return 0.0, "LONG"
+    return 0.0, None
 
 
 # ─── UTC hour helper ─────────────────────────────────────────────────────────
