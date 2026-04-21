@@ -336,10 +336,11 @@ def classify_position(
         classification = "FAKE"
         advisory = "Reversal forming — decay alert is real"
         confidence = min(1.0, weight / 5.0)
-    elif weight == 0 and fib_status == "inside":
+    elif weight <= 1 and fib_status == "inside":
+        # weight=0: clean retracement; weight=1: one minor signal (VWAP or absorption) — still healthy
         classification = "HEALTHY"
         advisory = "Pullback is a healthy retracement — consider holding"
-        confidence = 0.8
+        confidence = 0.8 - (weight * 0.1)
     else:
         classification = "NEUTRAL"
         advisory = "Mixed signals — use own judgement"
