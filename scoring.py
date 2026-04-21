@@ -587,6 +587,7 @@ def calc_confluence(
         h1_factor_result=_h1_proxy,
         signal_type=_signal_type,
         volume_ratio=vr,
+        session_quality=get_session(bar_time)["quality"],
     )
     confidence_val = _conf["confidence"]
     # Legacy return dict
