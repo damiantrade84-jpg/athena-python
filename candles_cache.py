@@ -22,7 +22,7 @@ _candle_fetch_inflight: dict = {}
 _last_cleanup_time = 0.0
 _CLEANUP_INTERVAL = 600.0  # seconds (10 mins)
 
-
+_CANDLE_CACHE_TTL = {"M1": 60, "M5": 5 * 60, "M15": 15 * 60, "H1": 55 * 60, "H4": 235 * 60, "D1": 23 * 3600}
 _TF_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400, "D1": 86400}
 
 
@@ -355,8 +355,9 @@ def fetch_candles(
     tf = tf.upper()
     """Route candle fetch to correct source with in-memory TTL cache.
 
-    Caches candle lists per (symbol, tf) so repeated scans within the same bar
-    window reuse data instead of hammering the REST API on every scan.
+    Caches candle lists per (symbol, tf) for non-forex/non-crypto instruments so
+    repeated scans within the same bar window reuse data instead of hammering
+    slower REST APIs. Live forex and crypto bypass the TTL cache.
 
     TTL: M5=5 min, M15=15 min, H1=55 min, H4=3h55m, D1=23h — expires just before the next bar closes.
     """
@@ -376,6 +377,10 @@ def fetch_candles(
         "cacheHit": False,
     }
     ptype = str(pair.get("type") or "").lower()
+    bypass_ttl_cache = ptype in {"forex", "crypto"}
+    if bypass_ttl_cache:
+        fetch_meta["cacheBypass"] = True
+        fetch_meta["cacheBypassReason"] = "live_forex_crypto"
     _eodhd_ws_ohlc_types = {"forex", "commodity", "index"}
     # Exclude mt5 completely from CandleBuilder to prevent EODHD WS data overriding MT5 OHLC
     use_candle_builder = (
@@ -456,26 +461,15 @@ def fetch_candles(
         if now - _last_cleanup_time > _CLEANUP_INTERVAL:
             _cleanup_stale_cache(now)
 
-        entry = _candle_cache.get(key)
+        if bypass_ttl_cache:
+            _candle_cache.pop(key, None)
+        else:
+            entry = _candle_cache.get(key)
 
-        if entry is not None:
-            cached_candles, expiry = entry
+            if entry is not None:
+                cached_candles, expiry = entry
 
-            if now < expiry:
-                if crypto_live_tf and live_candles:
-                    candles = cached_candles
-                    cached_meta = dict(_candle_fetch_meta.get(key, {}))
-                    fetch_meta.update(cached_meta)
-                    fetch_meta.update(
-                        {
-                            "resolution": "ttl_cache",
-                            "cacheHit": True,
-                            "cacheUpstream": cached_meta.get("upstream"),
-                        }
-                    )
-                elif crypto_live_tf:
-                    fetch_meta["ignoredCacheReason"] = "crypto_live_builder_missing_or_stale"
-                else:
+                if now < expiry:
                     cached_meta = dict(_candle_fetch_meta.get(key, {}))
                     cached_meta.update(
                         {
@@ -496,20 +490,21 @@ def fetch_candles(
     if inflight is not None and not is_owner:
         inflight.wait(timeout=30)
         with _candle_cache_lock:
-            entry = _candle_cache.get(key)
-            if entry is not None:
-                cached_candles, expiry = entry
-                if time.time() < expiry:
-                    cached_meta = dict(_candle_fetch_meta.get(key, {}))
-                    cached_meta.update(
-                        {
-                            "resolution": "ttl_cache",
-                            "cacheHit": True,
-                            "cacheUpstream": cached_meta.get("upstream"),
-                        }
-                    )
-                    _store_fetch_meta(key, cached_meta)
-                    return cached_candles
+            if not bypass_ttl_cache:
+                entry = _candle_cache.get(key)
+                if entry is not None:
+                    cached_candles, expiry = entry
+                    if time.time() < expiry:
+                        cached_meta = dict(_candle_fetch_meta.get(key, {}))
+                        cached_meta.update(
+                            {
+                                "resolution": "ttl_cache",
+                                "cacheHit": True,
+                                "cacheUpstream": cached_meta.get("upstream"),
+                            }
+                        )
+                        _store_fetch_meta(key, cached_meta)
+                        return cached_candles
             # Exception loop fallback
             inflight = threading.Event()
             _candle_fetch_inflight[key] = inflight
@@ -582,11 +577,14 @@ def fetch_candles(
                 candles = None
 
         if candles:
-            ttl = _CANDLE_CACHE_TTL.get(tf, 55 * 60)
-
             fetch_meta["bars"] = len(candles)
             with _candle_cache_lock:
-                _candle_cache[key] = (candles, now + ttl)
+                if bypass_ttl_cache:
+                    _candle_cache.pop(key, None)
+                    fetch_meta["cacheWriteSkipped"] = True
+                else:
+                    ttl = _CANDLE_CACHE_TTL.get(tf, 55 * 60)
+                    _candle_cache[key] = (candles, now + ttl)
                 _store_fetch_meta(key, fetch_meta)
             log.debug(
                 "[CANDLE] %s %s resolved via %s fallback=%s live_merge=%s bars=%s",

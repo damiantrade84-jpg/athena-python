@@ -127,6 +127,66 @@ class TestCandleCacheKeys:
         with _candle_cache_lock:
             assert ("EURUSD", "H1", 100) not in _candle_cache
 
+    def test_forex_eodhd_source_bypasses_existing_ttl_cache_entry(self):
+        pair = {"symbol": "EURUSD.FOREX", "display": "EUR/USD", "source": "eodhd", "type": "forex"}
+        stale = [{"time": "2026-03-27T13:00:00+00:00", "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05, "vol": 900}]
+        fresh = [{"time": "2026-03-27T14:00:00+00:00", "open": 1.1, "high": 1.2, "low": 1.0, "close": 1.15, "vol": 1000}]
+        fetch_eodhd = Mock(return_value=fresh)
+
+        with _candle_cache_lock:
+            _candle_cache[("EURUSD.FOREX", "H1", 100)] = (stale, time.time() + 3600)
+
+        candles = fetch_candles(
+            pair,
+            "H1",
+            100,
+            fetch_candles_live=_noop_fetch,
+            fetch_binance=_noop_fetch,
+            fetch_eodhd=fetch_eodhd,
+            fetch_polygon=_noop_fetch,
+            fetch_yfinance=_noop_fetch,
+            fetch_mt5=None,
+            yfinance_symbol_for_pair=lambda _pair: None,
+            tf_b={"H1": "1h", "H4": "4h", "D1": "1d"},
+        )
+        meta = get_candle_fetch_meta(pair, "H1", 100)
+
+        assert candles == fresh
+        assert fetch_eodhd.call_count == 1
+        assert meta["cacheBypass"] is True
+        assert meta["cacheHit"] is False
+        with _candle_cache_lock:
+            assert ("EURUSD.FOREX", "H1", 100) not in _candle_cache
+
+    def test_non_forex_crypto_can_use_existing_ttl_cache_entry(self):
+        pair = {"symbol": "AAPL.US", "display": "AAPL", "source": "eodhd", "type": "stock"}
+        cached = [{"time": "2026-03-27T13:00:00+00:00", "open": 200.0, "high": 201.0, "low": 199.0, "close": 200.5, "vol": 900}]
+        fetch_eodhd = Mock(return_value=[{"time": "2026-03-27T14:00:00+00:00", "open": 201.0, "high": 202.0, "low": 200.0, "close": 201.5, "vol": 1000}])
+
+        with _candle_cache_lock:
+            _candle_cache[("AAPL.US", "H1", 100)] = (cached, time.time() + 3600)
+            _candle_fetch_meta[("AAPL.US", "H1", 100)] = {"upstream": "eodhd"}
+
+        candles = fetch_candles(
+            pair,
+            "H1",
+            100,
+            fetch_candles_live=_noop_fetch,
+            fetch_binance=_noop_fetch,
+            fetch_eodhd=fetch_eodhd,
+            fetch_polygon=_noop_fetch,
+            fetch_yfinance=_noop_fetch,
+            fetch_mt5=None,
+            yfinance_symbol_for_pair=lambda _pair: None,
+            tf_b={"H1": "1h", "H4": "4h", "D1": "1d"},
+        )
+        meta = get_candle_fetch_meta(pair, "H1", 100)
+
+        assert candles == cached
+        assert fetch_eodhd.call_count == 0
+        assert meta["resolution"] == "ttl_cache"
+        assert meta["cacheHit"] is True
+
     def test_crypto_h4_merges_live_candlebuilder_bar_over_rest_fallback(self):
         pair = {
             "symbol": "BTCUSDT",
@@ -343,7 +403,49 @@ class TestCandleCacheKeys:
         assert fetch_binance.call_count == 1
         assert meta["upstream"] == "binance_futures"
         assert meta["liveStale"] is True
-        assert meta["ignoredCacheReason"] == "crypto_live_builder_missing_or_stale"
+        assert meta["cacheBypass"] is True
+        assert meta["cacheWriteSkipped"] is True
+        with _candle_cache_lock:
+            assert ("BTCUSDT", "H1", 100) not in _candle_cache
+
+    def test_crypto_live_tf_bypasses_cache_even_when_live_builder_is_current(self):
+        pair = {
+            "symbol": "BTCUSDT",
+            "display": "BTC/USDT",
+            "source": "binance",
+            "type": "crypto",
+        }
+        current_bucket = int(time.time() // 3600) * 3600
+        current_time = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(current_bucket))
+        cached = [{"time": current_time, "open": 1, "high": 1, "low": 1, "close": 1, "vol": 1}]
+        live = [{"time": current_time, "open": 2, "high": 2, "low": 2, "close": 2, "vol": 2}]
+        fresh_rest = [{"time": current_time, "open": 3, "high": 3, "low": 3, "close": 3, "vol": 3}]
+        fetch_binance = Mock(return_value=fresh_rest)
+
+        with _candle_cache_lock:
+            _candle_cache[("BTCUSDT", "H1", 100)] = (cached, time.time() + 3600)
+
+        candles = fetch_candles(
+            pair,
+            "H1",
+            100,
+            fetch_candles_live=Mock(return_value={"candles": live}),
+            fetch_binance=fetch_binance,
+            fetch_eodhd=_noop_fetch,
+            fetch_polygon=_noop_fetch,
+            fetch_yfinance=_noop_fetch,
+            fetch_mt5=None,
+            yfinance_symbol_for_pair=lambda _pair: None,
+            tf_b={"H1": "1h", "H4": "4h", "D1": "1d"},
+        )
+        meta = get_candle_fetch_meta(pair, "H1", 100)
+
+        assert fetch_binance.call_count == 1
+        assert candles[-1]["close"] == 2
+        assert meta["cacheBypass"] is True
+        assert meta["cacheHit"] is False
+        with _candle_cache_lock:
+            assert ("BTCUSDT", "H1", 100) not in _candle_cache
 
     def test_binance_large_limit_uses_paginated_fetch(self):
         pair = {
@@ -430,7 +532,7 @@ class TestCandleCacheKeys:
         assert fetch_mt5.call_count == 2
 
     def test_single_flight_dedupes_parallel_fetches(self):
-        pair = {"symbol": "EURUSD.FOREX", "display": "EUR/USD", "source": "eodhd", "type": "forex"}
+        pair = {"symbol": "AAPL.US", "display": "AAPL", "source": "eodhd", "type": "stock"}
         candles = [{"time": "2026-03-27T14:00:00+00:00", "open": 1.1, "high": 1.2, "low": 1.0, "close": 1.15, "vol": 1000}]
         call_count = 0
         call_lock = threading.Lock()
