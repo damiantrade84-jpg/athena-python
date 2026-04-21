@@ -195,7 +195,15 @@ def _merge_forex_forming_ws(candles: list, display: str, tf: str, limit: int):
 
 # N1: CONFIG loaded from config.py (YAML overrides + validation happen there)
 
-from config import CONFIG, scan_candle_limits  # noqa: E402
+from config import (
+    CONFIG,
+    ai_key_configured,
+    create_ai_client,
+    get_ai_api_key,
+    get_ai_base_url,
+    get_ai_model,
+    scan_candle_limits,
+)  # noqa: E402
 from athena.datafeeds.ws_ssl import configure_process_ca_bundle  # noqa: E402
 from regime_shift_monitor import classify_position as _regime_classify  # noqa: E402
 
@@ -3675,7 +3683,7 @@ def _build_signal_message(
     drawdown_pct: float = 0.0,
     learning_ctx: dict | None = None,
 ) -> str:
-    """Build sectioned signal string sent to Marcus Reid (xAI Grok) for analysis.
+    """Build sectioned signal string sent to Marcus Reid for AI analysis.
 
 
 
@@ -4166,19 +4174,16 @@ def run_ai(
     drawdown_pct: float = 0.0,
     learning_ctx: dict | None = None,
 ) -> dict:
-    """Send signal data to xAI Grok for Marcus Reid AI analysis. Returns parsed JSON dict."""
+    """Send signal data to the configured AI provider for Marcus Reid analysis."""
 
-    if not CONFIG.get("XAI_API_KEY") or CONFIG["XAI_API_KEY"] == "YOUR_XAI_API_KEY":
-        log.error("[AI] xAI API key is None or not configured!")
-
-        return {"error": "xAI API key not configured"}
+    if not ai_key_configured(CONFIG):
+        log.error("[AI] MOONSHOT_API_KEY is not configured")
+        return {"error": "MOONSHOT_API_KEY not configured"}
 
     try:
         log.info(f"[AI] Analyzing {signal['pair']}...")
 
-        import openai
-
-        c = openai.OpenAI(api_key=CONFIG["XAI_API_KEY"], base_url="https://api.x.ai/v1")
+        c = create_ai_client(CONFIG)
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
 
         style_labels = {
@@ -4205,50 +4210,25 @@ def run_ai(
             learning_ctx=learning_ctx,
         )
 
-        result = None
+        _model = get_ai_model(CONFIG, "AI_MODEL", "kimi-k2.6")
+        completion = c.chat.completions.create(
+            model=_model,
+            max_tokens=1100,
+            temperature=_temp,
+            messages=[
+                {"role": "system", "content": EXPERT_PROMPT},
+                {"role": "user", "content": msg},
+            ],
+            response_format={"type": "json_object"},
+        )
+        t = (completion.choices[0].message.content or "").strip()
+        result = _parse_ai_json(t, signal["pair"])
 
-        # Try structured outputs first (guaranteed valid JSON)
-        if CONFIG.get("AI_STRUCTURED_OUTPUTS", True):
-            try:
-                from ai_schemas import EngineAResponse
-
-                completion = c.beta.chat.completions.parse(
-                    model=CONFIG["XAI_MODEL"],
-                    max_tokens=1100,
-                    temperature=_temp,
-                    messages=[
-                        {"role": "system", "content": EXPERT_PROMPT},
-                        {"role": "user", "content": msg},
-                    ],
-                    response_format=EngineAResponse,
-                )
-                if completion.choices[0].message.parsed:
-                    result = completion.choices[0].message.parsed.model_dump()
-                    log.debug(f"[AI] {signal['pair']}: structured output success")
-            except Exception as _so_err:
-                log.debug(
-                    f"[AI] {signal['pair']}: structured output failed ({_so_err}), using fallback"
-                )
-
-        # Fallback to Responses API + manual parsing
         if result is None:
-            r = c.responses.create(
-                model=CONFIG["XAI_MODEL"],
-                max_output_tokens=1100,
-                temperature=_temp,
-                input=[
-                    {"role": "system", "content": EXPERT_PROMPT},
-                    {"role": "user", "content": msg},
-                ],
+            log.error(
+                f"[AI] {signal['pair']}: could not parse JSON from response: {t[:200]}"
             )
-            t = r.output_text.strip()
-            result = _parse_ai_json(t, signal["pair"])
-
-            if result is None:
-                log.error(
-                    f"[AI] {signal['pair']}: could not parse JSON from response: {t[:200]}"
-                )
-                return {"error": "AI response was not valid JSON"}
+            return {"error": "AI response was not valid JSON"}
 
         # Validate required keys
 
@@ -5375,8 +5355,8 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                     structure_result=res,
                     confidence_result=conf,
                     learning_ctx=learning_ctx,
-                    xai_api_key=CONFIG.get("XAI_API_KEY"),
-                    xai_model=CONFIG.get("XAI_MODEL", "grok-4-1-fast-reasoning"),
+                    xai_api_key=get_ai_api_key(CONFIG),
+                    xai_model=get_ai_model(CONFIG, "AI_MODEL", "kimi-k2.6"),
                     engine_a_ctx=engine_a_ctx,
                     news_ctx=_news_ctx,
                 )
@@ -8320,8 +8300,8 @@ def api_meta_analysis():
 
         result = run_meta_analysis(
             _AUDIT_DB,
-            CONFIG.get("XAI_API_KEY", ""),
-            CONFIG.get("XAI_MODEL", "grok-4-1-fast-reasoning"),
+            get_ai_api_key(CONFIG),
+            get_ai_model(CONFIG, "AI_MODEL", "kimi-k2.6"),
         )
 
         return jsonify(result)
@@ -8439,7 +8419,7 @@ def _xai_chat_completions_retry(client, *, max_attempts: int = 4, base_delay_sec
 
 
 def _chart_blocks_to_openai_user_content(blocks: list) -> list:
-    """Anthropic-style content blocks → OpenAI multimodal user content (xAI Grok vision)."""
+    """Anthropic-style content blocks -> OpenAI multimodal user content."""
     out: list = []
     for block in blocks or []:
         btype = block.get("type")
@@ -8837,13 +8817,14 @@ def api_chart_analysis():
     )
 
     try:
-        _xai_key = os.environ.get("XAI_API_KEY", "").strip() or str(
-            CONFIG.get("XAI_API_KEY") or ""
-        ).strip()
-        if not _xai_key or _xai_key == "YOUR_XAI_API_KEY":
-            return jsonify({"error": "XAI_API_KEY not set"}), 500
+        _ai_key = get_ai_api_key(CONFIG)
+        if not _ai_key:
+            return jsonify({"error": "MOONSHOT_API_KEY not set"}), 500
 
-        client = _openai_chart.OpenAI(api_key=_xai_key, base_url="https://api.x.ai/v1")
+        client = _openai_chart.OpenAI(
+            api_key=_ai_key,
+            base_url=get_ai_base_url(CONFIG),
+        )
 
         img_h4 = str(data["image"])
         if img_h4.startswith("data:"):
@@ -8900,7 +8881,7 @@ def api_chart_analysis():
             log.info(f"[AI CHART] Single-TF {tf} analysis for {symbol}")
 
         _max_tokens = 1100 if triple_mode else 800
-        _vision_model = str(CONFIG.get("VISION_MODEL") or "grok-4-1-fast-reasoning").strip() or "grok-4-1-fast-reasoning"
+        _vision_model = get_ai_model(CONFIG, "VISION_MODEL", "kimi-k2.6")
         _vision_temp = float(CONFIG.get("AI_VISION_TEMPERATURE", 0.2))
         _user_parts = _chart_blocks_to_openai_user_content(content)
         _completion = _xai_chat_completions_retry(
@@ -9542,9 +9523,9 @@ def api_candles():
 
 @app.route("/api/news-sentiment", methods=["GET", "POST"])
 def api_news_sentiment():
-    """EODHD news + Grok structured sentiment for one pair (display or Yahoo symbol).
+    """EODHD news + AI-provider structured sentiment for one pair (display or Yahoo symbol).
 
-    Uses ``EODHD_KEY`` and ``XAI_API_KEY``. Model: ``NEWS_SENTIMENT_MODEL`` or ``XAI_MODEL``.
+    Uses ``EODHD_KEY`` and ``MOONSHOT_API_KEY``. Model: ``NEWS_SENTIMENT_MODEL`` or ``AI_MODEL``.
     """
     from news_sentiment_feed import get_news_sentiment, news_to_confluence_vote
 
@@ -9566,11 +9547,9 @@ def api_news_sentiment():
     if not eod_key:
         return jsonify({"error": "EODHD_KEY not set"}), 503
 
-    xai_key = os.environ.get("XAI_API_KEY", "").strip() or str(
-        CONFIG.get("XAI_API_KEY") or ""
-    ).strip()
-    if not xai_key or xai_key == "YOUR_XAI_API_KEY":
-        return jsonify({"error": "XAI_API_KEY not set"}), 500
+    ai_key = get_ai_api_key(CONFIG)
+    if not ai_key:
+        return jsonify({"error": "MOONSHOT_API_KEY not set"}), 500
 
     price = None
     disp = pair.get("display", "")
@@ -9582,13 +9561,11 @@ def api_news_sentiment():
     except Exception:
         pass
 
-    model = CONFIG.get("NEWS_SENTIMENT_MODEL") or CONFIG.get(
-        "XAI_MODEL", "grok-4-1-fast-reasoning"
-    )
+    model = get_ai_model(CONFIG, "NEWS_SENTIMENT_MODEL", "kimi-k2.6")
     result = get_news_sentiment(
         pair,
         eodhd_api_key=eod_key,
-        xai_api_key=xai_key,
+        xai_api_key=ai_key,
         eodhd_ticker_for_pair=_eodhd_ticker_for_pair,
         current_price=price,
         model=model,
@@ -9630,7 +9607,8 @@ def health():
             "microstructureFeedsEnabled": bool(
                 CONFIG.get("MICROSTRUCTURE_FEEDS_ENABLED")
             ),
-            "xaiKey": CONFIG["XAI_API_KEY"] != "YOUR_XAI_API_KEY",
+            "aiKey": ai_key_configured(CONFIG),
+            "xaiKey": ai_key_configured(CONFIG),
         }
     )
 
@@ -9917,10 +9895,10 @@ def _check_api_keys() -> None:
             "EODHD_KEY — real-time WebSocket prices, indicators, screener, and news all disabled"
         )
 
-    _ak = os.environ.get("XAI_API_KEY", CONFIG.get("XAI_API_KEY", ""))
+    _ak = get_ai_api_key(CONFIG)
 
-    if not _ak or _ak == "YOUR_XAI_API_KEY":
-        missing.append("XAI_API_KEY — AI trade grading disabled")
+    if not _ak:
+        missing.append("MOONSHOT_API_KEY — AI trade grading disabled")
 
     if not os.environ.get("CRYPTOPANIC_KEY"):
         missing.append("CRYPTOPANIC_KEY (optional) — crypto news sentiment reduced")
@@ -11615,20 +11593,13 @@ def _get_decay_ai_verdict(
     direction_flip: bool,
     signal_context: dict,
 ) -> dict:
-    """Ask Grok to assess whether a decaying position should be EXIT / HOLD / WATCH.
+    """Ask the configured AI provider whether a decaying position should be EXIT / HOLD / WATCH.
 
     Returns {"verdict": "EXIT"|"HOLD"|"WATCH", "urgency": "HIGH"|"MEDIUM"|"LOW", "reasoning": str}
-    Skips gracefully if XAI_API_KEY is not configured.
+    Skips gracefully if MOONSHOT_API_KEY is not configured.
     Results are cached 30 min per pair unless decay worsens by >= 0.5.
     """
-    api_key = os.environ.get("XAI_API_KEY", "")
-    if not api_key:
-        try:
-            api_key = CONFIG.get("XAI_API_KEY", "")
-            if api_key == "YOUR_XAI_API_KEY":
-                api_key = ""
-        except Exception:
-            pass
+    api_key = get_ai_api_key(CONFIG)
     if not api_key:
         return {}
 
@@ -11666,11 +11637,10 @@ def _get_decay_ai_verdict(
     )
 
     try:
-        import openai
         from ai_utils import parse_json_object
 
-        client = openai.OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-        _model = CONFIG.get("DEBATE_MODEL") or CONFIG.get("XAI_MODEL", "grok-4-1-fast-reasoning")
+        client = create_ai_client(CONFIG, api_key=api_key)
+        _model = get_ai_model(CONFIG, "DEBATE_MODEL", "kimi-k2.6")
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
 
         result = None
@@ -12047,7 +12017,7 @@ def _lottery_ai_extract_json(raw_text: str) -> dict:
 
 
 def _lottery_ai_openai_message_text(content) -> str:
-    """Extract assistant text from OpenAI/xAI chat completion ``message.content`` (str or parts)."""
+    """Extract assistant text from OpenAI-compatible chat completion ``message.content``."""
     if content is None:
         return ""
     if isinstance(content, str):
@@ -12549,16 +12519,14 @@ def api_lottery_bonus_intelligence():
 @app.route("/api/lottery/ai-analysis", methods=["POST"])
 def api_lottery_ai_analysis():
     try:
-        xai_key = os.environ.get("XAI_API_KEY", "").strip() or str(
-            CONFIG.get("XAI_API_KEY") or ""
-        ).strip()
-        if not xai_key or xai_key == "YOUR_XAI_API_KEY":
-            return jsonify({"error": "XAI_API_KEY not configured (Grok / xAI)"}), 500
+        ai_key = get_ai_api_key(CONFIG)
+        if not ai_key:
+            return jsonify({"error": "MOONSHOT_API_KEY not configured"}), 500
 
         try:
             import openai
         except ImportError:
-            return jsonify({"error": "openai library not installed (required for xAI Grok)"}), 500
+            return jsonify({"error": "openai library not installed (required for Moonshot Kimi)"}), 500
 
         data = request.get_json(silent=True) or {}
         game = str(data.get("game") or "").strip().lower()
@@ -12584,10 +12552,10 @@ def api_lottery_ai_analysis():
         )
         _lottery_model = (
             str(CONFIG.get("LOTTERY_AI_MODEL") or "").strip()
-            or CONFIG.get("XAI_MODEL", "grok-4-1-fast-reasoning")
+            or get_ai_model(CONFIG, "AI_MODEL", "kimi-k2.6")
         )
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
-        client = openai.OpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
+        client = openai.OpenAI(api_key=ai_key, base_url=get_ai_base_url(CONFIG))
         completion = client.chat.completions.create(
             model=_lottery_model,
             max_tokens=1800,

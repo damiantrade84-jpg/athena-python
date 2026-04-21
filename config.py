@@ -9,6 +9,11 @@ import logging
 
 log = logging.getLogger("sentinel")
 
+AI_API_KEY_PLACEHOLDER = "YOUR_MOONSHOT_API_KEY"
+_LEGACY_AI_API_KEY_PLACEHOLDER = "YOUR_XAI_API_KEY"
+_AI_BASE_URL_DEFAULT = "https://api.moonshot.ai/v1"
+_AI_MODEL_DEFAULT = os.environ.get("AI_MODEL", "kimi-k2.6")
+
 
 def _deep_merge_dict(base: dict, overrides: dict) -> dict:
     """Recursively merge nested dicts while preserving unspecified defaults."""
@@ -19,6 +24,84 @@ def _deep_merge_dict(base: dict, overrides: dict) -> dict:
         else:
             merged[key] = value
     return merged
+
+
+def _clean_ai_value(value: object) -> str:
+    text = str(value or "").strip()
+    if text in {
+        "",
+        AI_API_KEY_PLACEHOLDER,
+        _LEGACY_AI_API_KEY_PLACEHOLDER,
+    }:
+        return ""
+    return text
+
+
+def get_ai_api_key(cfg: dict | None = None) -> str:
+    cfg = cfg or CONFIG
+    candidates = (
+        os.environ.get("MOONSHOT_API_KEY", ""),
+        cfg.get("MOONSHOT_API_KEY", ""),
+        os.environ.get("XAI_API_KEY", ""),
+        cfg.get("XAI_API_KEY", ""),
+    )
+    for candidate in candidates:
+        cleaned = _clean_ai_value(candidate)
+        if cleaned:
+            return cleaned
+    return ""
+
+
+def ai_key_configured(cfg: dict | None = None) -> bool:
+    return bool(get_ai_api_key(cfg))
+
+
+def get_ai_base_url(cfg: dict | None = None) -> str:
+    cfg = cfg or CONFIG
+    return (
+        str(os.environ.get("AI_BASE_URL", "") or "").strip()
+        or str(cfg.get("AI_BASE_URL", "") or "").strip()
+        or _AI_BASE_URL_DEFAULT
+    )
+
+
+def get_ai_model(
+    cfg: dict | None = None,
+    preferred_key: str = "AI_MODEL",
+    fallback: str = "kimi-k2.6",
+) -> str:
+    cfg = cfg or CONFIG
+    candidates = []
+    if preferred_key:
+        candidates.extend(
+            [
+                os.environ.get(preferred_key, ""),
+                cfg.get(preferred_key, ""),
+            ]
+        )
+    candidates.extend(
+        [
+            os.environ.get("AI_MODEL", ""),
+            cfg.get("AI_MODEL", ""),
+            cfg.get("XAI_MODEL", ""),
+            fallback,
+        ]
+    )
+    for candidate in candidates:
+        cleaned = str(candidate or "").strip()
+        if cleaned:
+            return cleaned
+    return fallback
+
+
+def create_ai_client(cfg: dict | None = None, api_key: str | None = None):
+    import openai
+
+    resolved_key = _clean_ai_value(api_key) or get_ai_api_key(cfg)
+    return openai.OpenAI(
+        api_key=resolved_key,
+        base_url=get_ai_base_url(cfg),
+    )
 
 PAIR_PROFILE_VOTES = {
     "d1_trend",
@@ -64,12 +147,15 @@ except Exception as _e:
 
 # ── Default CONFIG ───────────────────────────────────────────────────────────
 CONFIG: dict = {
-    "XAI_API_KEY": os.environ.get("XAI_API_KEY", "YOUR_XAI_API_KEY"),
-    "XAI_MODEL": "grok-4-1-fast-reasoning",
-    "LOTTERY_AI_MODEL": "",  # empty → use XAI_MODEL for /api/lottery/ai-analysis
-    "DEBATE_MODEL": "grok-4-1-fast-reasoning",
-    "VISION_MODEL": "grok-4-1-fast-reasoning",
-    "NEWS_SENTIMENT_MODEL": "grok-4-1-fast-reasoning",
+    "MOONSHOT_API_KEY": os.environ.get("MOONSHOT_API_KEY", AI_API_KEY_PLACEHOLDER),
+    "XAI_API_KEY": os.environ.get("XAI_API_KEY", ""),
+    "AI_BASE_URL": os.environ.get("AI_BASE_URL", _AI_BASE_URL_DEFAULT),
+    "AI_MODEL": _AI_MODEL_DEFAULT,
+    "XAI_MODEL": os.environ.get("XAI_MODEL", _AI_MODEL_DEFAULT),
+    "LOTTERY_AI_MODEL": os.environ.get("LOTTERY_AI_MODEL", ""),  # empty → use AI_MODEL for /api/lottery/ai-analysis
+    "DEBATE_MODEL": os.environ.get("DEBATE_MODEL", _AI_MODEL_DEFAULT),
+    "VISION_MODEL": os.environ.get("VISION_MODEL", _AI_MODEL_DEFAULT),
+    "NEWS_SENTIMENT_MODEL": os.environ.get("NEWS_SENTIMENT_MODEL", _AI_MODEL_DEFAULT),
     "NEWS_SENTIMENT_CONFLUENCE_ENABLED": False,
     "NEWS_SENTIMENT_CACHE_TTL_SEC": 900,
     "NEWS_SENTIMENT_SCORE_IMPACT": 0.06,
@@ -659,7 +745,7 @@ CONFIG: dict = {
     "LEARNING_ENABLED": True,  # Extract learning data after each trade closes
     "LEARNING_MIN_TRADES": 5,  # Min trades before context injected into AI
     "LEARNING_LOOKBACK_DAYS": 90,  # Days of history to query for context
-    "META_ANALYSIS_ENABLED": True,  # Weekly meta-analysis via xAI
+    "META_ANALYSIS_ENABLED": True,  # Weekly meta-analysis via configured AI provider
     "EODHD_EARNINGS_CALENDAR_ENABLED": False,  # Disabled by default; unsupported on many EODHD plans
     # ── Engine B AI Controls ─────────────────────────────────────────────────
     "ENGINE_B_NEWS_CONTEXT_ENABLED": True,  # Feed news into Engine B AI advisory (not checklist)

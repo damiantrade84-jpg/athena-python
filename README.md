@@ -44,7 +44,7 @@ Copy environment variables you need into a **`.env`** file in the repo root (loa
 | Variable | Purpose |
 |----------|---------|
 | `EODHD_KEY` | EODHD market data / news where used |
-| `XAI_API_KEY` | xAI (Grok) — Marcus Reid, chart vision, lottery AI, some Engine B advisory routes |
+| `MOONSHOT_API_KEY` | Moonshot Kimi — Marcus Reid, chart vision, lottery AI, news sentiment, and Engine B advisory routes |
 | `ANTHROPIC_API_KEY` | Optional news sentiment helpers |
 | `BYBIT_API_KEY` / `BYBIT_API_SECRET` | Crypto execution (`BYBIT_TESTNET=true` for testnet) |
 | Telegram bot vars | As configured for `telegram_notify` |

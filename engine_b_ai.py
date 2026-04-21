@@ -8,7 +8,7 @@ import logging
 from typing import Optional
 
 from ai_utils import parse_json_object
-from config import CONFIG
+from config import CONFIG, create_ai_client, get_ai_model
 
 log = logging.getLogger("athena")
 
@@ -298,12 +298,12 @@ def get_engine_b_ai_verdict(
     confidence_result: dict,
     learning_ctx: Optional[dict] = None,
     xai_api_key: str = None,
-    xai_model: str = "grok-4-1-fast-reasoning",
+    xai_model: str = "kimi-k2.6",
     engine_a_ctx: Optional[dict] = None,
     news_ctx: Optional[dict] = None,
 ) -> dict:
     """
-    Get AI analysis for Engine B signal using xAI Grok API.
+    Get AI analysis for Engine B signal using the configured AI provider.
 
     Returns dict with:
         - grade: A+ to F
@@ -313,13 +313,11 @@ def get_engine_b_ai_verdict(
         - error: if failed
     """
     if not xai_api_key:
-        log.warning("[ENGINE_B_AI] xAI API key not provided, skipping AI analysis")
+        log.warning("[ENGINE_B_AI] AI API key not provided, skipping AI analysis")
         return {"error": "API key not configured"}
 
     try:
-        import openai
-
-        client = openai.OpenAI(api_key=xai_api_key, base_url="https://api.x.ai/v1")
+        client = create_ai_client(CONFIG, api_key=xai_api_key)
 
         message = build_engine_b_signal_message(
             pair,
@@ -360,44 +358,19 @@ def get_engine_b_ai_verdict(
         )
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
 
-        parsed = None
+        completion = client.chat.completions.create(
+            model=str(xai_model or get_ai_model(CONFIG, "AI_MODEL", "kimi-k2.6")).strip(),
+            max_tokens=800,
+            temperature=_temp,
+            messages=[
+                {"role": "system", "content": expert_prompt},
+                {"role": "user", "content": message},
+            ],
+            response_format={"type": "json_object"},
+        )
 
-        # Try structured outputs first (guaranteed valid JSON)
-        try:
-            from ai_schemas import EngineBResponse
-
-            completion = client.beta.chat.completions.parse(
-                model=xai_model,
-                max_tokens=800,
-                temperature=_temp,
-                messages=[
-                    {"role": "system", "content": expert_prompt},
-                    {"role": "user", "content": message},
-                ],
-                response_format=EngineBResponse,
-            )
-            if completion.choices[0].message.parsed:
-                parsed = completion.choices[0].message.parsed.model_dump()
-                log.debug(f"[ENGINE_B_AI] {pair}: structured output success")
-        except Exception as _so_err:
-            log.debug(
-                f"[ENGINE_B_AI] {pair}: structured output failed ({_so_err}), using fallback"
-            )
-
-        # Fallback to Responses API + manual parsing
-        if parsed is None:
-            response = client.responses.create(
-                model=xai_model,
-                max_output_tokens=800,
-                temperature=_temp,
-                input=[
-                    {"role": "system", "content": expert_prompt},
-                    {"role": "user", "content": message},
-                ],
-            )
-
-            text = response.output_text.strip()
-            parsed = parse_json_object(text)
+        text = (completion.choices[0].message.content or "").strip()
+        parsed = parse_json_object(text)
 
         if parsed is None:
             log.error(f"[ENGINE_B_AI] {pair}: Failed to parse JSON from AI response")

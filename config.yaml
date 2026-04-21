@@ -403,14 +403,16 @@ ADAPTIVE_KELLY_ENABLED: true       # Use fractional Kelly for dynamic position s
 KELLY_FRACTION: 0.5                # Half-Kelly (safety proven)
 
 # ── Signal Debate (Bull/Bear/Judge) ───────────────────────
-SIGNAL_DEBATE_ENABLED: true        # Run LLM debate before auto-trades (needs XAI_API_KEY)
-XAI_MODEL: "grok-4-1-fast-reasoning"
-# Optional: POST /api/lottery/ai-analysis model (defaults to XAI_MODEL). Same OpenAI SDK + https://api.x.ai/v1
-# LOTTERY_AI_MODEL: "grok-4-1-fast-reasoning"
-DEBATE_MODEL: "grok-4-1-fast-reasoning"
-VISION_MODEL: "grok-4-1-fast-reasoning"          # /api/chart-analysis
-NEWS_SENTIMENT_MODEL: "grok-4-1-fast-reasoning"  # News AI text; defaults to XAI_MODEL if empty — uses XAI_API_KEY
-# Blend News AI into Engine A scan score (EODHD news + Grok). Heavy: uses TTL cache per pair.
+SIGNAL_DEBATE_ENABLED: true        # Run LLM debate before auto-trades (needs MOONSHOT_API_KEY)
+AI_BASE_URL: "https://api.moonshot.ai/v1"
+AI_MODEL: "kimi-k2.6"
+XAI_MODEL: "kimi-k2.6"  # Legacy alias kept aligned with AI_MODEL for compatibility.
+# Optional: POST /api/lottery/ai-analysis model (defaults to AI_MODEL). Same OpenAI SDK + Moonshot base URL.
+# LOTTERY_AI_MODEL: "kimi-k2.6"
+DEBATE_MODEL: "kimi-k2.6"
+VISION_MODEL: "kimi-k2.6"          # /api/chart-analysis
+NEWS_SENTIMENT_MODEL: "kimi-k2.6"  # News AI text; defaults to AI_MODEL if empty — uses MOONSHOT_API_KEY
+# Blend News AI into Engine A scan score (EODHD news + Kimi). Heavy: uses TTL cache per pair.
 NEWS_SENTIMENT_CONFLUENCE_ENABLED: false
 NEWS_SENTIMENT_CACHE_TTL_SEC: 900                # seconds; same pair reuses vote until expiry
 NEWS_SENTIMENT_SCORE_IMPACT: 0.06               # delta = impact * maxScore * vote (vote ~ -1..1)
@@ -425,7 +427,7 @@ ENGINE_B_PROFILE_SCORING_ENABLED: true
 LEARNING_ENABLED: true             # Enable AI self-learning (outcome extraction + prompt injection)
 LEARNING_LOOKBACK_DAYS: 90         # How many days of trade history to use for learning context
 LEARNING_MIN_TRADES: 30            # Minimum trades required before injecting learning context into AI prompts
-META_ANALYSIS_ENABLED: true        # false = skip auto-trader weekly xAI meta-analysis (manual POST still works)
+META_ANALYSIS_ENABLED: true        # false = skip auto-trader weekly AI meta-analysis (manual POST still works)
 EODHD_EARNINGS_CALENDAR_ENABLED: false   # false = skip unsupported EODHD earnings calendar endpoint entirely
 
 # ── EODHD Insider / Fundamentals Enrichment ───────────────

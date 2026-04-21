@@ -1,4 +1,4 @@
-"""EODHD news + Grok (xAI) structured sentiment score for optional confluence use.
+"""EODHD news + AI-provider structured sentiment score for optional confluence use.
 
 Tickers must come from the caller via ``eodhd_ticker_for_pair(pair)`` (e.g. athena's
 ``_eodhd_ticker_for_pair``) so vendor overrides and display/symbol rules stay single-sourced.
@@ -15,7 +15,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from config import CONFIG
+from config import CONFIG, create_ai_client, get_ai_api_key
 from data_feeds import http_requests
 
 log = logging.getLogger("athena")
@@ -321,17 +321,17 @@ def get_news_sentiment(
     eodhd_ticker_for_pair: Callable[[dict], Optional[str]],
     current_price: Optional[float] = None,
     news_limit: int = 8,
-    model: str = "grok-4-1-fast-reasoning",
+    model: str = "kimi-k2.6",
 ) -> Optional[dict]:
     """
-    Full pipeline: resolve EODHD ticker → news → optional EODHD sentiment → Grok JSON.
+    Full pipeline: resolve EODHD ticker -> news -> optional EODHD sentiment -> JSON.
 
     Returns parsed result dict or None on failure / no articles.
     """
     try:
         import openai
     except ImportError:
-        log.error("[NewsAI] openai package not installed (required for xAI Grok)")
+        log.error("[NewsAI] openai package not installed (required for Moonshot Kimi)")
         return None
 
     ticker = eodhd_ticker_for_pair(pair)
@@ -354,7 +354,7 @@ def get_news_sentiment(
     )
 
     try:
-        client = openai.OpenAI(api_key=xai_api_key, base_url="https://api.x.ai/v1")
+        client = create_ai_client(CONFIG, api_key=xai_api_key)
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
         response = client.chat.completions.create(
             model=model,
@@ -381,7 +381,7 @@ def get_news_sentiment(
         except ValueError as e:
             if "empty model text" in str(e).lower():
                 log.warning(
-                    "[NewsAI] empty Grok text for %s",
+                    "[NewsAI] empty AI text for %s",
                     display,
                 )
             else:
@@ -397,7 +397,7 @@ def get_news_sentiment(
         )
         return result
     except Exception as e:
-        log.error("[NewsAI] xAI Grok API error for %s: %s", display, e)
+        log.error("[NewsAI] AI provider error for %s: %s", display, e)
         return None
 
 
@@ -484,23 +484,21 @@ def apply_news_sentiment_to_scan_result(
     """If enabled and keys present, blend cached News AI vote into ``res['score']`` (mutates ``res``).
 
     Applied after structural gates so Engine B uses the pre-news technical score.
-    Requires ``EODHD_KEY`` and ``XAI_API_KEY`` (env or config).
+    Requires ``EODHD_KEY`` and ``MOONSHOT_API_KEY`` (env or config).
     """
     if not config.get("NEWS_SENTIMENT_CONFLUENCE_ENABLED"):
         return
 
     eod = os.environ.get("EODHD_KEY", "").strip()
-    xai = os.environ.get("XAI_API_KEY", "").strip() or str(
-        config.get("XAI_API_KEY") or ""
-    ).strip()
-    if not eod or not xai or xai == "YOUR_XAI_API_KEY":
+    xai = get_ai_api_key(config)
+    if not eod or not xai:
         return
 
     ttl = float(config.get("NEWS_SENTIMENT_CACHE_TTL_SEC", 900))
     model = str(
         config.get("NEWS_SENTIMENT_MODEL")
-        or config.get("XAI_MODEL")
-        or config.get("VISION_MODEL", "grok-4-1-fast-reasoning")
+        or config.get("AI_MODEL")
+        or config.get("VISION_MODEL", "kimi-k2.6")
     )
     vote, detail = get_cached_news_confluence_vote(
         pair,
