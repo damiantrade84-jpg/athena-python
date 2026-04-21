@@ -285,6 +285,16 @@ def test_calculate_levels_keys():
         assert k in levels, f"Missing key: {k}"
 
 
+def test_calculate_levels_trend_continuation_flags_low_rr():
+    vp = {"poc": 0.917362, "vah": 0.917585, "val": 0.91714}
+    levels = calculate_scalp_levels(
+        "SHORT", 0.91789, vp, "trend_continuation",
+        {"digits": 5, "point": 0.00001}, "forex"
+    )
+    assert levels["rr"] < 1.0
+    assert levels["rr_below_min"] is True
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 5. GRADING  (actual: ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup, sessions, spread, htf_bias))
 # ═══════════════════════════════════════════════════════════════════════════════

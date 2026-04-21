@@ -9916,7 +9916,10 @@ def analyze_pair(
         try:
             from candle_manager import fetch_market_state as _fms
             h1_state = _fms(pair, "H1", _lim["H1"])
-            h1 = h1_state["confirmed"] + ([h1_state["forming"]] if h1_state["forming"] else [])
+            if pair.get("source") == "mt5" and pair.get("type") == "forex":
+                h1 = list(h1_state.get("confirmed") or [])
+            else:
+                h1 = h1_state["confirmed"] + ([h1_state["forming"]] if h1_state["forming"] else [])
             is_forming = h1_state["is_live"]
         except Exception:
             h1 = fetch_candles(pair, "H1", _lim["H1"])

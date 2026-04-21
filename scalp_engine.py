@@ -1497,10 +1497,10 @@ def calculate_scalp_levels(
             f"(VP structure likely stale — price drifted past target)"
         )
 
-    # For mean_reversion setups, if the natural structural TP does not meet MIN_RR,
-    # flag it so the caller can skip rather than distorting the level.
-    # trend_extension always meets MIN_RR by construction (tp1 = entry ± sl_dist * min_rr).
-    rr_below_min = not tp_direction_ok or (setup_type == "mean_reversion" and actual_rr < min_rr_cfg)
+    # If the natural structural TP does not meet MIN_RR, flag it so the caller can
+    # skip rather than distorting the level. trend_extension always meets MIN_RR by
+    # construction (tp1 = entry ± sl_dist * min_rr).
+    rr_below_min = not tp_direction_ok or (setup_type != "trend_extension" and actual_rr < min_rr_cfg)
 
     # --- Defensive Rounding Safeguard ---
     # Protect against level collapse if symbol_info.digits are too coarse (e.g. 2 digits for a 0.09 crypto pair).
@@ -2163,7 +2163,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             _min_rr = _scalp_min_rr_for_group(asset_type, _scalp_score_group)
             levels = calculate_scalp_levels(direction, current_price, vp, setup["setup_type"], sym_info, asset_type, min_rr_override=_min_rr)
             if levels.get("rr_below_min"):
-                log.warning(f"[SCALP] {display}: mean_reversion RR {levels['rr']:.2f} < MIN_RR — skipping (natural TP too close)")
+                log.warning(
+                    f"[SCALP] {display}: {setup['setup_type']} RR {levels['rr']:.2f} < MIN_RR "
+                    f"— skipping (natural TP too close)"
+                )
                 _record_stability_sample(display, asset_type, False, reason="rr_below_min")
                 skipped.append({"pair": display, "reason": "rr_below_min"})
                 continue
