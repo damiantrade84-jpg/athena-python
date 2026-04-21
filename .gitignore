@@ -37,3 +37,6 @@ tickdata_test2/
 
 # Database backups
 db_backups/
+
+# Test-generated artifacts (chart PNGs, vision model JSON, etc.)
+tests/_artifacts/

@@ -33,4 +33,8 @@ class TestForexSessionUtc:
         assert _session_state(14, "EUR/USD")["is_active"] is True
 
     def test_in_session_false_for_major_pair_in_asian_session(self):
-        assert _session_state(2, "EUR/USD")["is_active"] is False
+        # With session_mode="soft" (2026-04-17): Asian session is active but with
+        # a reduced multiplier (0.75) rather than a hard block (is_active=False).
+        state = _session_state(2, "EUR/USD")
+        assert state["is_active"] is True
+        assert state["multiplier"] < 1.0
