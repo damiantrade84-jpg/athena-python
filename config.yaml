@@ -1028,6 +1028,12 @@ SCALP_ENGINE:
 TIMED_EXIT:
   enabled: true
   check_interval_sec: 30       # how often the monitor wakes (seconds)
+  # Minimum R-fraction of risk_amount needed before BE is armed.
+  # Prevents arming BE on $0.01 profit where spread stops out at 0.00R.
+  breakeven_min_profit_r: 0.20
+  # Fraction of SL distance added as buffer above/below entry for the BE SL level.
+  # e.g. 0.05 on a 20-pip SL → 1 pip above entry; ensures close price > 0.00R.
+  breakeven_buffer_r: 0.05
   scalp:
     breakeven_min: 5           # move SL to entry after 5 min if in profit
     close_min: 5               # testing: close profitable scalps at first timed check instead of waiting for BE retrace
