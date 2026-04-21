@@ -1725,8 +1725,19 @@ class NakedEngine:
                 else:
                     _profile_alignment = "weak"
                 total_score += _profile_points
-        pct = min(100, int((total_score / max_possible) * 100))
 
+        # D1 PD-array conflict penalty (B-1).
+        # When an unmitigated D1 OB or FVG opposes the trade direction within 3×ATR,
+        # deduct 0.5 from total_score. Effect: a signal at the exact min_score gate
+        # (e.g. 4/5) drops to 3.5 and fails engine_b_confidence_passes(). Signals
+        # with structural surplus (5+/5) absorb the penalty and may still pass.
+        # `passed` boolean is intentionally NOT changed — the penalty acts through the
+        # numeric score gate, not the checklist flags.
+        _d1_conflict = bool(res.get("d1_pd_array_conflict", False))
+        _d1_penalty = 0.5 if _d1_conflict else 0.0
+        total_score = max(0.0, total_score - _d1_penalty)
+
+        pct = min(100, int((total_score / max_possible) * 100))
         if checklist_mode == "strict":
             passed = structure_ok and zone_ok and trigger_ok and room_ok and rr_ok and macro_ok
         else:
@@ -1785,6 +1796,8 @@ class NakedEngine:
             "profile_context": _profile_context,
             "lifecycle_state": lifecycle_state,
             "lifecycle_reason": lifecycle_reason,
+            "d1_pd_conflict_penalty": round(_d1_penalty, 2),
+            "d1_conflict_details": res.get("d1_conflict_details", []),
             "engine_b_diagnostics": {"reason_codes": _diag_codes},
         }
 

@@ -212,9 +212,103 @@ def print_verdict(per_class: dict[str, list[sqlite3.Row]]) -> None:
         print("   Investigate the class with strongest |rho| first.")
 
 
+def print_direction_split(rows: list[sqlite3.Row]) -> None:
+    """LONG/SHORT WR, Spearman, and directional hit-rate breakdown."""
+    print("\n=== LONG / SHORT SPLIT ===")
+    by_dir: dict[str, list] = defaultdict(list)
+    for r in rows:
+        d = (r["direction"] or "UNKNOWN").upper()
+        by_dir[d].append(r)
+
+    for d in ("LONG", "SHORT"):
+        subset = by_dir.get(d, [])
+        n = len(subset)
+        label = f"  {d} (n={n})"
+        if n < MIN_CELL_N:
+            print(f"{label}: sample too small")
+            continue
+        scores = [float(r["score"]) for r in subset]
+        r_vals = [float(r["r_multiple"]) for r in subset]
+        rho = spearman(scores, r_vals)
+        hits, total, dr = directional_hitrate(subset)
+        wins = sum(1 for r in subset if (r["r_multiple"] or 0) > 0)
+        wrv = wins / n
+        avg_sc = statistics.mean(scores)
+        print(
+            f"{label}: WR={wrv:.1%}  avgScore={avg_sc:.3f}  "
+            f"Spearman(score,R)={rho:+.3f}  dirHitRate={dr:.1%}"
+        )
+        qs = quintile_wr(subset)
+        if qs:
+            print(f"    quintile WR: " + "  ".join(f"Q{q}={wrq:.0%}" for q, _, wrq, _ in qs))
+
+    # Direction bias diagnostic
+    long_n = len(by_dir.get("LONG", []))
+    short_n = len(by_dir.get("SHORT", []))
+    total_n = long_n + short_n
+    if total_n > 0:
+        long_pct = long_n / total_n
+        print(f"\n  Signal mix: LONG={long_pct:.0%}  SHORT={1-long_pct:.0%}  (tie-break favours LONG by design)")
+        if long_pct > 0.70:
+            print("  WARNING: heavy LONG bias — SHORT WR may be too small to interpret")
+
+
+def print_regime_split(rows: list[sqlite3.Row]) -> None:
+    """WR and Spearman by regime."""
+    print("\n=== REGIME SPLIT ===")
+    by_reg: dict[str, list] = defaultdict(list)
+    for r in rows:
+        reg = (r["regime"] or "UNKNOWN").upper()
+        by_reg[reg].append(r)
+
+    print(f"  {'regime':<20} {'n':>5} {'WR':>7} {'avgR':>8} {'Spearman':>10}")
+    print(f"  {'-'*20} {'-'*5} {'-'*7} {'-'*8} {'-'*10}")
+    for reg in sorted(by_reg):
+        subset = by_reg[reg]
+        n = len(subset)
+        if n < MIN_CELL_N:
+            print(f"  {reg:<20} {n:>5}   (skip — n < {MIN_CELL_N})")
+            continue
+        scores = [float(r["score"]) for r in subset]
+        r_vals = [float(r["r_multiple"]) for r in subset]
+        rho = spearman(scores, r_vals)
+        wins = sum(1 for r in subset if (r["r_multiple"] or 0) > 0)
+        wrv = wins / n
+        avg_r = statistics.mean(r_vals)
+        print(f"  {reg:<20} {n:>5} {wrv:>6.1%} {avg_r:>+8.3f} {rho:>+9.3f}")
+
+
+def print_direction_regime_cross(rows: list[sqlite3.Row]) -> None:
+    """2×4 cross-table: direction × regime."""
+    print("\n=== DIRECTION × REGIME CROSS ===")
+    by_dr: dict[tuple, list] = defaultdict(list)
+    for r in rows:
+        d = (r["direction"] or "UNKNOWN").upper()
+        reg = (r["regime"] or "UNKNOWN").upper()
+        by_dr[(d, reg)].append(r)
+
+    all_regimes = sorted({k[1] for k in by_dr})
+    header = f"  {'':20}" + "".join(f"{reg[:12]:>14}" for reg in all_regimes)
+    print(header)
+    for d in ("LONG", "SHORT"):
+        row_parts = [f"  {d:<20}"]
+        for reg in all_regimes:
+            subset = by_dr.get((d, reg), [])
+            n = len(subset)
+            if n < MIN_CELL_N:
+                row_parts.append(f"{'n='+str(n):>14}")
+            else:
+                wins = sum(1 for r in subset if (r["r_multiple"] or 0) > 0)
+                wrv = wins / n
+                row_parts.append(f"{'WR='+f'{wrv:.0%}'+'('+str(n)+')':>14}")
+        print("".join(row_parts))
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("db", nargs="?", default="audit.db")
+    parser.add_argument("--no-split", action="store_true",
+                        help="Skip direction/regime split tables")
     args = parser.parse_args(argv)
 
     db_path = Path(args.db)
@@ -241,6 +335,12 @@ def main(argv: list[str]) -> int:
         print_class_block(ac, per_class[ac])
 
     print_verdict(per_class)
+
+    # Direction and regime split diagnostics (open next steps from 2026-04-18 audit)
+    if not args.no_split:
+        print_direction_split(rows)
+        print_regime_split(rows)
+        print_direction_regime_cross(rows)
 
     print("\nDone.")
     return 0
