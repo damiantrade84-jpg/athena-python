@@ -36,10 +36,13 @@ log = logging.getLogger("sentinel")
 # Engine B dominates in ranges (BOS/CHoCH/zones more meaningful at structure).
 # Blend weights for Engine A vs Engine B (NOT config.yaml REGIME_WEIGHTS, which adjusts factor weights inside A).
 ENGINE_C_AB_WEIGHTS = {
-    "TRENDING":        {"A": 0.65, "B": 0.35},
+    # A weight reduced from 0.65 pending validation: Engine A directional hit-rate is
+    # 42.3% (2026-04-18 audit). Giving A 65% weight in trends amplifies a noisy scorer.
+    # Equalise until LONG/SHORT regime split confirms A adds directional value in trends.
+    "TRENDING":        {"A": 0.40, "B": 0.60},
     "RANGING":         {"A": 0.35, "B": 0.65},
-    "HIGH_VOLATILITY": {"A": 0.50, "B": 0.50},
-    "LOW_VOLATILITY":  {"A": 0.45, "B": 0.55},
+    "HIGH_VOLATILITY": {"A": 0.45, "B": 0.55},
+    "LOW_VOLATILITY":  {"A": 0.40, "B": 0.60},
 }
 ENGINE_C_META_BLEND = 0.20  # Default; override with CONFIG["ENGINE_C_META_BLEND"] (0..1)
 
@@ -760,6 +763,13 @@ def compute_consensus(
         conviction = a["score_norm"] * 0.6  # 60% of A score (no B confirmation)
         tier, sizing = classify_conviction(conviction)
 
+        # C-2: If Engine B shows near-zero structural presence, A-only is a coin-flip
+        # (Engine A directional hit-rate 42.3% — 2026-04-18 audit). Gate reduced_risk
+        # (trade=True) behind a minimum B structural norm floor. Watchlist is still
+        # allowed so the signal surfaces for manual review.
+        b_partial_norm = b["score_norm"]
+        _b_floor_met = b_partial_norm >= 0.10
+
         sl_resolved = resolve_sl(entry, a["sl"], None, direction, atr)
         tp_resolved = resolve_tp(entry, sl_resolved["sl"], a["tp"], None, direction)
 
@@ -767,17 +777,17 @@ def compute_consensus(
         a_quality = 0.50 # fallback
         a_reliability = (a.get("confidence", 0.5) * 0.5) + (a_quality * 0.5)
         c_reliability = a_reliability # 100% allocation to A
-        
+
         decision_state = "blocked"
         if tier != "SKIP":
-            if c_reliability >= 0.60 and conviction >= 0.65:
+            if c_reliability >= 0.60 and conviction >= 0.65 and _b_floor_met:
                 decision_state = "execute"
-            elif c_reliability >= 0.45 and conviction >= 0.50:
+            elif c_reliability >= 0.45 and conviction >= 0.50 and _b_floor_met:
                 decision_state = "reduced_risk"
                 sizing = max(0.0, sizing - 0.25)
             elif conviction >= 0.40:
                 decision_state = "watchlist"
-        
+
         if decision_state == "blocked":
             tier = "SKIP"
             sizing = 0.0

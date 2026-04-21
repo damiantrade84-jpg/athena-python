@@ -1060,6 +1060,45 @@ class NakedEngine:
         d1_closes = np.array([float(c["close"]) for c in d1_candles])
         d1_bos = self._detect_bos(d1_highs, d1_lows, atr, closes=d1_closes)
 
+        # D1 PD-array detection (informational — no scoring gate change).
+        # Detects D1 order blocks and FVGs that price is approaching and flags a
+        # directional conflict when a D1 zone opposes the requested trade direction.
+        # Consumers (Engine C, Marcus Reid) can use d1_pd_array_conflict as a soft
+        # veto or reduce conviction — not enforced here.
+        d1_order_blocks_raw: list = []
+        d1_fvgs_raw: list = []
+        d1_pd_array_conflict: bool = False
+        d1_conflict_details: list = []
+        try:
+            d1_order_blocks_raw = self._detect_order_blocks(d1_candles, d1_bos, atr)
+            d1_fvgs_raw = [f for f in self._detect_fvg(d1_candles) if not f.get("mitigated")]
+            _conflict_window = atr * 3.0  # within 3 ATRs is "approaching"
+            for ob in d1_order_blocks_raw:
+                ob_mid = (ob["top"] + ob["bottom"]) / 2.0
+                ob_dist = abs(current_price - ob_mid)
+                if ob_dist > _conflict_window:
+                    continue
+                # Opposing D1 OB: bearish OB above price on a LONG; bullish OB below on SHORT
+                if direction == "LONG" and ob["type"] == "bearish" and ob_mid > current_price:
+                    d1_pd_array_conflict = True
+                    d1_conflict_details.append(f"D1_bearish_OB@{ob_mid:.5f} (str={ob['strength']})")
+                elif direction == "SHORT" and ob["type"] == "bullish" and ob_mid < current_price:
+                    d1_pd_array_conflict = True
+                    d1_conflict_details.append(f"D1_bullish_OB@{ob_mid:.5f} (str={ob['strength']})")
+            for fvg in d1_fvgs_raw:
+                fvg_mid = (fvg["top"] + fvg["bottom"]) / 2.0
+                fvg_dist = abs(current_price - fvg_mid)
+                if fvg_dist > _conflict_window:
+                    continue
+                if direction == "LONG" and fvg["type"] == "bearish" and fvg_mid > current_price:
+                    d1_pd_array_conflict = True
+                    d1_conflict_details.append(f"D1_bearish_FVG@{fvg_mid:.5f}")
+                elif direction == "SHORT" and fvg["type"] == "bullish" and fvg_mid < current_price:
+                    d1_pd_array_conflict = True
+                    d1_conflict_details.append(f"D1_bullish_FVG@{fvg_mid:.5f}")
+        except Exception as _d1e:
+            log.debug(f"[D1-PD] detection error: {_d1e}")
+
         bos_mtf_confirmed = (
             (bos_data.get("bos_bull") and d1_bos.get("bos_bull")) or
             (bos_data.get("bos_bear") and d1_bos.get("bos_bear"))
@@ -1473,6 +1512,13 @@ class NakedEngine:
                 choch_data=choch_data,
                 sweep_data=sweep_data,
             ),
+            # D1 PD-array context (informational — no scoring gate).
+            # d1_pd_array_conflict=True when an opposing D1 OB or unmitigated FVG is within
+            # 3×ATR in the direction of trade. Surfaces in Marcus Reid input and UI diagnostics.
+            "d1_order_blocks": d1_order_blocks_raw,
+            "d1_fvgs": d1_fvgs_raw,
+            "d1_pd_array_conflict": d1_pd_array_conflict,
+            "d1_conflict_details": d1_conflict_details,
             **_profile_result,
         }
 

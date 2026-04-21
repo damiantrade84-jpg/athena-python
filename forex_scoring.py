@@ -942,13 +942,13 @@ def compute_forex_score(
             else False
         )
         if fvg_overlap:
-            fvg_bonus = 0.20  # multiplicative: 1.20x
+            fvg_bonus = 0.20
 
         # 2. Liquidity sweep
         h1_highs = [c.get("high", 0) for c in (h1_candles or []) if c.get("high")]
         h1_lows = [c.get("low", 0) for c in (h1_candles or []) if c.get("low")]
         if h1_highs and h1_lows and detect_liquidity_sweep(h1_candles or [], atr):
-            liquidity_bonus = 0.15  # multiplicative: 1.15x
+            liquidity_bonus = 0.15
 
         # 3. Volume strength at Asian range or Fib level
         fib = calc_fib(h4_candles or [])
@@ -957,12 +957,15 @@ def compute_forex_score(
             if direction == "LONG"
             else fib.get("fib382", current_price)
         )
-        volume_bonus = volume_strength_at_level(h1_candles or [], key_level) * 0.10  # up to 1.10x
+        volume_bonus = volume_strength_at_level(h1_candles or [], key_level) * 0.10  # 0.0–0.10
     except Exception as e:
         log.error(f"[FOREX SMC ERROR] {e}", exc_info=True)
         fvg_bonus, liquidity_bonus, volume_bonus, fvg_overlap = 0.0, 0.0, 0.0, False
 
-    # ── Final score with multiplicative bonuses (avoids 1.0 saturation) ─────
+    # ── Final score with additive SMC bonus (capped) ──────────────────────────
+    # Bonuses are additive and capped so they can only nudge near-threshold signals,
+    # not rescue weak base scores. Multiplicative stacking (old: up to 1.518×) allowed
+    # a base of 0.70 to pass the 1.0 gate purely on pattern presence — now prevented.
     # F1 FIX: When trend_score == bo_final, use momentum confirmation as tie-breaker
     # instead of always favoring trend. This allows valid breakout reversals to win.
     if trend_score > bo_final:
@@ -988,8 +991,8 @@ def compute_forex_score(
             base_score = trend_score
             result.direction = trend_dir
             result.signal_type = "TREND_PULLBACK" if trend_score > 0 else "NONE"
-    # Removed 1.0 cap — true max is ~1.97 with all SMC bonuses. Scale is now 0-2.0.
-    final_score = round(base_score * (1.0 + fvg_bonus) * (1.0 + liquidity_bonus) * (1.0 + volume_bonus), 4)
+    smc_bonus = min(0.20, fvg_bonus + liquidity_bonus + volume_bonus)
+    final_score = round(base_score + smc_bonus, 4)
 
     result.final_score = min(2.0, final_score)  # safety cap at 2.0
     try:
