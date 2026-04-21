@@ -356,7 +356,7 @@ def get_engine_b_ai_verdict(
             "grade, edgeProbability, riskLevel, verdict, style_ratings. "
             "style_ratings must contain scalp, intraday, and swing objects with grade, edgeProbability, riskLevel."
         )
-        _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
+        _temp = float(CONFIG.get("AI_TEMPERATURE", 1))
 
         completion = client.chat.completions.create(
             model=str(xai_model or get_ai_model(CONFIG, "AI_MODEL", "kimi-k2.6")).strip(),
