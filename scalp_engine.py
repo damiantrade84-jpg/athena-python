@@ -1422,6 +1422,13 @@ def calculate_scalp_levels(
     }
     buffer = _buffers.get(asset_type, _buffers["forex"])
 
+    # Forex fills at ASK (LONG) or BID (SHORT), not midpoint. Add half-spread to the
+    # SL buffer so that sl_distance is measured from the actual fill price, not mid.
+    # commodity/index/stock buffers are already 0.2% of entry (wide enough to absorb spread).
+    if asset_type == "forex":
+        spread_half = (float(symbol_info.get("spread", 0)) * float(point)) / 2.0
+        buffer = buffer + spread_half
+
     poc = vp.get("poc", entry)
     vah = vp.get("vah", entry)
     val = vp.get("val", entry)
