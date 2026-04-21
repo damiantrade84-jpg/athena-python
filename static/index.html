@@ -847,6 +847,30 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
 .panel-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
 .panel-row-title{font-size:13px;font-weight:700;letter-spacing:0.08em;color:var(--muted);font-family:'IBM Plex Mono',monospace;}
 .panel-row-actions{display:flex;gap:8px;align-items:center;}
+.settings-shell{display:flex;flex-direction:column;gap:16px;}
+.settings-banner{padding:12px 14px;border-radius:10px;background:rgba(255,255,255,0.03);border:1px solid var(--border);font-size:12px;line-height:1.6;color:var(--text2);}
+.settings-banner strong{color:var(--text);}
+.settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;}
+.settings-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px 16px 14px;display:flex;flex-direction:column;gap:12px;}
+.settings-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;}
+.settings-card-title{font-size:13px;font-weight:700;color:var(--text);}
+.settings-card-key{font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace;letter-spacing:0.05em;}
+.settings-card-copy{font-size:11px;line-height:1.6;color:var(--text2);}
+.settings-impact{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.settings-impact-block{padding:10px 12px;border-radius:8px;background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.05);}
+.settings-impact-label{font-size:10px;font-family:'IBM Plex Mono',monospace;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:4px;}
+.settings-impact-label.high{color:var(--accent);}
+.settings-impact-label.low{color:var(--accent2);}
+.settings-impact-copy{font-size:10px;line-height:1.55;color:var(--text2);}
+.settings-control{display:flex;flex-direction:column;gap:8px;}
+.settings-control-row{display:flex;align-items:center;gap:10px;}
+.settings-number{width:96px;padding:8px 10px;border-radius:8px;background:var(--bg);border:1px solid var(--border);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:12px;}
+.settings-range{flex:1;accent-color:var(--accent);}
+.settings-value{font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace;}
+.settings-toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border-radius:8px;background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.05);}
+.settings-toggle-copy{font-size:11px;line-height:1.55;color:var(--text2);}
+.settings-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+.settings-status{font-size:11px;color:var(--muted);}
 .count-lbl{font-size:11px;color:var(--accent);font-family:'IBM Plex Mono',monospace;}
 .flex-wrap-grid{display:flex;flex-wrap:wrap;gap:12px;}
 .empty-msg{color:var(--muted);font-size:13px;padding:40px;text-align:center;width:100%;}
@@ -1209,6 +1233,9 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
     <div class="nav-item" id="nav-pair-browser" role="button" tabindex="0" onclick="switchPanel('pair-browser')">
       <div class="nav-left"><span class="nav-ico">[]</span>Pair Browser</div>
     </div>
+    <div class="nav-item" id="nav-settings" role="button" tabindex="0" onclick="switchPanel('settings')">
+      <div class="nav-left"><span class="nav-ico">&#9881;</span>Settings</div>
+    </div>
     <div class="nav-item" id="nav-trades" role="button" tabindex="0" onclick="switchPanel('trades')">
       <div class="nav-left"><span class="nav-ico">◉</span>Trades</div>
       <span class="nav-badge" id="tradesTabCount"></span>
@@ -1403,6 +1430,34 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
             <p>This tab lets you inspect a single pair without relying on the latest global scan state.</p>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel tab-panel" id="panel-settings">
+    <div class="panel-row" style="margin-bottom:18px;">
+      <div class="panel-row-title">SCAN SETTINGS</div>
+      <div class="panel-row-actions">
+        <span class="ctrl-note">Verified live scan runtime keys from <code>config.yaml</code>. Saves apply to new scans without a server restart.</span>
+      </div>
+    </div>
+    <div class="settings-shell">
+      <div class="settings-banner">
+        <strong>Scope</strong>: this tab only exposes scan-runtime settings confirmed in code to affect Engine A and/or Engine B scan paths.
+        <br />
+        <strong>Not exposed as live scan settings</strong>: <code>FOREX_H4_RESAMPLE_OFFSET_HOURS</code> still exists in <code>config.yaml</code>, but its active scan read path was not verified in the current code, so it remains read-only here.
+      </div>
+      <div id="scanSettingsGrid" class="settings-grid">
+        <div class="empty-state">
+          <div class="icon">&#9881;</div>
+          <h3>Scan Settings</h3>
+          <p>Open this tab to load the current scan configuration.</p>
+        </div>
+      </div>
+      <div class="settings-actions">
+        <button class="bt-btn" id="scanSettingsSaveBtn" onclick="saveScanSettings()">&#10003; SAVE SCAN SETTINGS</button>
+        <button class="bt-btn bt-btn-sm" onclick="loadScanSettings(true)">&#8635; RELOAD</button>
+        <span id="scanSettingsStatus" class="settings-status"></span>
       </div>
     </div>
   </div>
@@ -2708,6 +2763,7 @@ function switchTab(tab) {
     loadLotteryLab();
   }
   if (tab === 'pair-browser' && typeof loadPairBrowserPairs === 'function') loadPairBrowserPairs();
+  if (tab === 'settings' && typeof loadScanSettings === 'function') loadScanSettings();
   if (tab === 'markets' && typeof loadMarketHours === 'function') loadMarketHours();
   if (tab === 'performance') {
     if (typeof loadPerformance === 'function') loadPerformance();
@@ -4840,6 +4896,206 @@ function selectBacktestEngine(engine) {
 }
 
 // ── BT_MIN fine-tuning ──────────────────────────────────────────────────────
+var _scanSettingsLoaded = false;
+var _scanSettingsMeta = {
+  D1_CANDLES: {
+    key: 'D1_CANDLES',
+    label: 'Daily Candle Depth',
+    type: 'number',
+    min: 10,
+    max: 5000,
+    step: 1,
+    description: 'How many D1 candles the scan loads before the forming bar is dropped. Used in the shared scan candle limits.',
+    highLabel: 'Higher',
+    highEffect: 'More long-range context for slow indicators and regime reads, but heavier fetches and slower scans.',
+    lowLabel: 'Lower',
+    lowEffect: 'Lighter and faster scans, but less history for long-horizon context and a higher chance of thin indicator inputs.'
+  },
+  H4_CANDLES: {
+    key: 'H4_CANDLES',
+    label: 'H4 Candle Depth',
+    type: 'number',
+    min: 10,
+    max: 5000,
+    step: 1,
+    description: 'How many H4 candles the scan pulls for the shared H4 analysis path used across scans.',
+    highLabel: 'Higher',
+    highEffect: 'Keeps more medium-term structure in view, with more data transferred and processed per scan.',
+    lowLabel: 'Lower',
+    lowEffect: 'Speeds up scans and reduces load, but trims H4 context and can make diagnostics less complete.'
+  },
+  H1_CANDLES: {
+    key: 'H1_CANDLES',
+    label: 'H1 Candle Depth',
+    type: 'number',
+    min: 10,
+    max: 5000,
+    step: 1,
+    description: 'How many H1 candles the scan loads for the intraday leg before dropping the possibly forming bar.',
+    highLabel: 'Higher',
+    highEffect: 'Gives the scan more intraday history for H1 indicators and overlays, at the cost of more work per pair.',
+    lowLabel: 'Lower',
+    lowEffect: 'Makes scans lighter, but reduces H1 context and can starve shorter-horizon diagnostics sooner.'
+  },
+  SCAN_MAX_WORKERS: {
+    key: 'SCAN_MAX_WORKERS',
+    label: 'Parallel Scan Workers',
+    type: 'number',
+    min: 1,
+    max: 64,
+    step: 1,
+    description: 'Maximum worker threads used by the Engine A full-universe scan and the Engine B naked global scan.',
+    highLabel: 'Higher',
+    highEffect: 'More parallelism and potentially faster full scans, but more CPU, network, and broker/data pressure.',
+    lowLabel: 'Lower',
+    lowEffect: 'Less load on the machine and upstream feeds, but slower full-universe scan completion.'
+  },
+  SCAN_DEBUG_CANDLE_META: {
+    key: 'SCAN_DEBUG_CANDLE_META',
+    label: 'Attach Candle Debug Meta',
+    type: 'boolean',
+    description: 'Adds per-timeframe candle fetch metadata into scan payloads for debugging and operator inspection.',
+    highLabel: 'On',
+    highEffect: 'Richer scan diagnostics and fetch visibility, but larger payloads and noisier response bodies.',
+    lowLabel: 'Off',
+    lowEffect: 'Lean scan payloads with less noise, but no detailed candle source metadata in results.'
+  }
+};
+
+function renderScanSettingCard(meta, value) {
+  if (meta.type === 'boolean') {
+    return '' +
+      '<div class="settings-card">' +
+        '<div class="settings-card-head">' +
+          '<div>' +
+            '<div class="settings-card-title">' + meta.label + '</div>' +
+            '<div class="settings-card-key">' + meta.key + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="settings-card-copy">' + meta.description + '</div>' +
+        '<div class="settings-impact">' +
+          '<div class="settings-impact-block">' +
+            '<div class="settings-impact-label high">' + meta.highLabel + '</div>' +
+            '<div class="settings-impact-copy">' + meta.highEffect + '</div>' +
+          '</div>' +
+          '<div class="settings-impact-block">' +
+            '<div class="settings-impact-label low">' + meta.lowLabel + '</div>' +
+            '<div class="settings-impact-copy">' + meta.lowEffect + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<label class="settings-toggle">' +
+          '<div class="settings-toggle-copy">Turn this on if you want scan payloads to include candle resolution details for troubleshooting.</div>' +
+          '<input type="checkbox" id="scan-setting-' + meta.key + '"' + (value ? ' checked' : '') + ' />' +
+        '</label>' +
+      '</div>';
+  }
+
+  return '' +
+    '<div class="settings-card">' +
+      '<div class="settings-card-head">' +
+        '<div>' +
+          '<div class="settings-card-title">' + meta.label + '</div>' +
+          '<div class="settings-card-key">' + meta.key + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="settings-card-copy">' + meta.description + '</div>' +
+      '<div class="settings-impact">' +
+        '<div class="settings-impact-block">' +
+          '<div class="settings-impact-label high">' + meta.highLabel + '</div>' +
+          '<div class="settings-impact-copy">' + meta.highEffect + '</div>' +
+        '</div>' +
+        '<div class="settings-impact-block">' +
+          '<div class="settings-impact-label low">' + meta.lowLabel + '</div>' +
+          '<div class="settings-impact-copy">' + meta.lowEffect + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="settings-control">' +
+        '<div class="settings-control-row">' +
+          '<input class="settings-number" type="number" id="scan-setting-' + meta.key + '" value="' + value + '" min="' + meta.min + '" max="' + meta.max + '" step="' + meta.step + '" oninput="syncScanSettingFromInput(\'' + meta.key + '\')" />' +
+          '<input class="settings-range" type="range" id="scan-setting-range-' + meta.key + '" value="' + value + '" min="' + meta.min + '" max="' + meta.max + '" step="' + meta.step + '" oninput="syncScanSettingFromRange(\'' + meta.key + '\')" />' +
+        '</div>' +
+        '<div class="settings-value">Range ' + meta.min + ' - ' + meta.max + ' | Current <span id="scan-setting-value-' + meta.key + '">' + value + '</span></div>' +
+      '</div>' +
+    '</div>';
+}
+
+function syncScanSettingFromInput(key) {
+  var input = document.getElementById('scan-setting-' + key);
+  var range = document.getElementById('scan-setting-range-' + key);
+  var valueLabel = document.getElementById('scan-setting-value-' + key);
+  if (!input || !range) return;
+  range.value = input.value;
+  if (valueLabel) valueLabel.textContent = input.value;
+}
+
+function syncScanSettingFromRange(key) {
+  var input = document.getElementById('scan-setting-' + key);
+  var range = document.getElementById('scan-setting-range-' + key);
+  var valueLabel = document.getElementById('scan-setting-value-' + key);
+  if (!input || !range) return;
+  input.value = range.value;
+  if (valueLabel) valueLabel.textContent = range.value;
+}
+
+async function loadScanSettings(force) {
+  if (_scanSettingsLoaded && !force) return;
+  var grid = document.getElementById('scanSettingsGrid');
+  var status = document.getElementById('scanSettingsStatus');
+  if (!grid) return;
+  grid.innerHTML = '<div class="empty-state"><div class="icon">&#9881;</div><h3>Loading settings</h3><p>Reading live scan configuration from the server.</p></div>';
+  if (status) status.textContent = '';
+  try {
+    var data = await window.apiClient.getJson('/api/scan-settings');
+    var settings = data.settings || {};
+    var html = '';
+    ['D1_CANDLES', 'H4_CANDLES', 'H1_CANDLES', 'SCAN_MAX_WORKERS', 'SCAN_DEBUG_CANDLE_META'].forEach(function(key) {
+      html += renderScanSettingCard(_scanSettingsMeta[key], settings[key]);
+    });
+    grid.innerHTML = html;
+    _scanSettingsLoaded = true;
+  } catch (e) {
+    grid.innerHTML = '<div class="empty-state"><div class="icon">&#9888;</div><h3>Settings unavailable</h3><p>' + e.message + '</p></div>';
+  }
+}
+
+async function saveScanSettings() {
+  var btn = document.getElementById('scanSettingsSaveBtn');
+  var status = document.getElementById('scanSettingsStatus');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  if (status) status.textContent = '';
+
+  var payload = {
+    D1_CANDLES: parseInt(document.getElementById('scan-setting-D1_CANDLES').value, 10),
+    H4_CANDLES: parseInt(document.getElementById('scan-setting-H4_CANDLES').value, 10),
+    H1_CANDLES: parseInt(document.getElementById('scan-setting-H1_CANDLES').value, 10),
+    SCAN_MAX_WORKERS: parseInt(document.getElementById('scan-setting-SCAN_MAX_WORKERS').value, 10),
+    SCAN_DEBUG_CANDLE_META: !!document.getElementById('scan-setting-SCAN_DEBUG_CANDLE_META').checked
+  };
+
+  try {
+    await window.apiClient.postJson('/api/scan-settings', payload);
+    if (status) {
+      status.textContent = 'Saved to config.yaml and applied to new scans (restart not required)';
+      status.style.color = '#22c55e';
+    }
+    _scanSettingsLoaded = false;
+    await loadScanSettings(true);
+  } catch (e) {
+    if (status) {
+      status.textContent = 'Error: ' + e.message;
+      status.style.color = '#ef4444';
+    }
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'SAVE SCAN SETTINGS';
+  setTimeout(function() {
+    if (status) status.textContent = '';
+  }, 5000);
+}
+
 var _btMinOpen = false;
 var _btMinLive = {};
 

@@ -84,3 +84,56 @@ def test_api_feed_health_exposes_cached_timeframe_meta(monkeypatch):
     assert data["pairs"][0]["pair"] == "EUR/USD"
     assert data["pairs"][0]["timeframes"]["H4"]["upstream"] == "mt5"
     assert data["pairs"][0]["timeframes"]["H4"]["lastBarAgeSec"] == 1800.0
+
+
+def test_api_scan_settings_updates_runtime_config_without_restart(monkeypatch):
+    athena_module = _load_athena_module()
+
+    def _fake_apply_scan_settings_updates(new_vals):
+        current = athena_module._scan_settings_snapshot()
+        current.update(new_vals)
+        for key, value in current.items():
+            athena_module.CONFIG[key] = value
+        return athena_module._scan_settings_snapshot()
+
+    monkeypatch.setattr(
+        athena_module,
+        "_apply_scan_settings_updates",
+        _fake_apply_scan_settings_updates,
+    )
+
+    client = athena_module.app.test_client()
+    resp = client.post(
+        "/api/scan-settings",
+        json={
+            "D1_CANDLES": 1200,
+            "H4_CANDLES": 900,
+            "H1_CANDLES": 700,
+            "SCAN_MAX_WORKERS": 5,
+            "SCAN_DEBUG_CANDLE_META": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["saved"] is True
+    assert data["settings"]["D1_CANDLES"] == 1200
+    assert data["settings"]["SCAN_MAX_WORKERS"] == 5
+    assert data["settings"]["SCAN_DEBUG_CANDLE_META"] is True
+    assert athena_module.CONFIG["D1_CANDLES"] == 1200
+    assert athena_module.CONFIG["SCAN_DEBUG_CANDLE_META"] is True
+
+
+def test_api_scan_settings_rejects_invalid_worker_range():
+    athena_module = _load_athena_module()
+    client = athena_module.app.test_client()
+
+    resp = client.post(
+        "/api/scan-settings",
+        json={"SCAN_MAX_WORKERS": 0},
+    )
+
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert data["saved"] is False
+    assert "SCAN_MAX_WORKERS" in data["error"]

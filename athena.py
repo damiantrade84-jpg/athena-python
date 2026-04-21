@@ -7249,6 +7249,136 @@ def _engine_a_threshold_max_for_class(asset_class: str) -> float:
     return 2.0 if str(asset_class or "").lower() == "forex" else 3.0
 
 
+_SCAN_SETTINGS_KEYS = (
+    "D1_CANDLES",
+    "H4_CANDLES",
+    "H1_CANDLES",
+    "SCAN_MAX_WORKERS",
+    "SCAN_DEBUG_CANDLE_META",
+)
+
+
+def _scan_settings_snapshot() -> dict:
+    return {
+        "D1_CANDLES": int(CONFIG.get("D1_CANDLES", 1001) or 1001),
+        "H4_CANDLES": int(CONFIG.get("H4_CANDLES", 1001) or 1001),
+        "H1_CANDLES": int(CONFIG.get("H1_CANDLES", 1001) or 1001),
+        "SCAN_MAX_WORKERS": int(CONFIG.get("SCAN_MAX_WORKERS", 3) or 3),
+        "SCAN_DEBUG_CANDLE_META": bool(CONFIG.get("SCAN_DEBUG_CANDLE_META", False)),
+    }
+
+
+def _persist_scan_settings_yaml(cfg_path: str, current: dict) -> None:
+    import re as _re
+
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    for key in _SCAN_SETTINGS_KEYS:
+        if key not in current:
+            continue
+        value = current[key]
+        if isinstance(value, bool):
+            rendered = "true" if value else "false"
+        else:
+            rendered = str(int(value))
+        content, count = _re.subn(
+            rf"^({_re.escape(key)}\s*:\s*)([^#\n]+?)(\s*(?:#.*)?)$",
+            lambda m, v=rendered: f"{m.group(1)}{v}{m.group(3)}",
+            content,
+            count=1,
+            flags=_re.MULTILINE,
+        )
+        if count == 0:
+            raise ValueError(f"config.yaml: {key} not found")
+
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def _apply_scan_settings_updates(new_vals: dict) -> dict:
+    current = _scan_settings_snapshot()
+
+    for key in ("D1_CANDLES", "H4_CANDLES", "H1_CANDLES"):
+        if key in new_vals:
+            try:
+                value = int(new_vals[key])
+            except (TypeError, ValueError):
+                raise ValueError(f"{key} must be an integer") from None
+            if value < 10 or value > 5000:
+                raise ValueError(f"{key} must be between 10 and 5000")
+            current[key] = value
+
+    if "SCAN_MAX_WORKERS" in new_vals:
+        try:
+            workers = int(new_vals["SCAN_MAX_WORKERS"])
+        except (TypeError, ValueError):
+            raise ValueError("SCAN_MAX_WORKERS must be an integer") from None
+        if workers < 1 or workers > 64:
+            raise ValueError("SCAN_MAX_WORKERS must be between 1 and 64")
+        current["SCAN_MAX_WORKERS"] = workers
+
+    if "SCAN_DEBUG_CANDLE_META" in new_vals:
+        raw_debug = new_vals["SCAN_DEBUG_CANDLE_META"]
+        if isinstance(raw_debug, str):
+            current["SCAN_DEBUG_CANDLE_META"] = raw_debug.strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
+        else:
+            current["SCAN_DEBUG_CANDLE_META"] = bool(raw_debug)
+
+    for key, value in current.items():
+        CONFIG[key] = value
+
+    cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+    _persist_scan_settings_yaml(cfg_path, current)
+    log.info("[SCAN_SETTINGS] Updated via UI: %s", current)
+    return current
+
+
+@app.route("/api/scan-settings", methods=["GET", "POST"])
+def api_scan_settings():
+    """GET/POST verified live scan runtime settings exposed in the dashboard."""
+    if request.method == "GET":
+        return jsonify(
+            {
+                "settings": _scan_settings_snapshot(),
+                "unverified_scan_keys": ["FOREX_H4_RESAMPLE_OFFSET_HOURS"],
+            }
+        )
+
+    data = request.get_json(silent=True) or {}
+    allowed_keys = set(_SCAN_SETTINGS_KEYS)
+    updates = {key: data[key] for key in allowed_keys if key in data}
+    if not updates:
+        return jsonify({"error": "No valid scan settings provided"}), 400
+
+    try:
+        current = _apply_scan_settings_updates(updates)
+    except ValueError as e:
+        return jsonify({"saved": False, "error": str(e)}), 400
+    except Exception as e:
+        log.error(f"Failed to persist scan settings to config.yaml: {e}")
+        return jsonify(
+            {
+                "saved": False,
+                "error": str(e),
+                "settings": _scan_settings_snapshot(),
+            }
+        ), 500
+
+    return jsonify(
+        {
+            "saved": True,
+            "settings": current,
+            "unverified_scan_keys": ["FOREX_H4_RESAMPLE_OFFSET_HOURS"],
+        }
+    )
+
+
 @app.route("/api/bt-min", methods=["GET", "POST"])
 def api_bt_min():
     """GET: BT_MIN + live MIN_CONFLUENCE_CLASS + flags for Engine A backtest routing.
