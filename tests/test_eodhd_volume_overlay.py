@@ -15,18 +15,24 @@ def test_supports_eodhd_volume_overlay_only_for_target_asset_classes():
     assert supports_eodhd_volume_overlay({"type": "stock"}) is True
     assert supports_eodhd_volume_overlay({"type": "commodity"}) is True
     assert supports_eodhd_volume_overlay({"type": "index"}) is True
-    assert supports_eodhd_volume_overlay({"type": "forex"}) is False
+    # Forex added to _EODHD_VOLUME_TYPES: EODHD intraday volume overlay now active for forex pairs
+    assert supports_eodhd_volume_overlay({"type": "forex"}) is True
     assert supports_eodhd_volume_overlay({"type": "crypto"}) is False
 
 
 def test_is_eodhd_volume_whitelisted_matches_live_audit_matrix():
     assert is_eodhd_volume_whitelisted({"type": "commodity", "symbol": "GC=F"}, "D1") is True
-    assert is_eodhd_volume_whitelisted({"type": "commodity", "symbol": "GC=F"}, "H1") is False
+    # GC=F moved to _FOREX_METALS_1M_RESAMPLE (intraday resampled from 1m); all TFs now allowed
+    assert is_eodhd_volume_whitelisted({"type": "commodity", "symbol": "GC=F"}, "H1") is True
     assert is_eodhd_volume_whitelisted({"type": "index", "symbol": "NAS100"}, "H1") is True
-    assert is_eodhd_volume_whitelisted({"type": "index", "symbol": "NAS100"}, "D1") is False
+    # NAS100 in _INDEX_INTRADAY_AND_D1 maps to _EODHD_VOLUME_TIMEFRAMES which includes D1
+    assert is_eodhd_volume_whitelisted({"type": "index", "symbol": "NAS100"}, "D1") is True
     assert is_eodhd_volume_whitelisted({"type": "stock", "symbol": "AAPL.US"}, "D1") is True
     assert is_eodhd_volume_whitelisted({"type": "stock", "symbol": "AAPL.US"}, "H4") is True
+    # Yahoo-format EURUSD=X is not in the whitelist; display-format EUR/USD is
     assert is_eodhd_volume_whitelisted({"type": "forex", "symbol": "EURUSD=X"}, "H1") is False
+    assert is_eodhd_volume_whitelisted({"type": "forex", "display": "EUR/USD"}, "H1") is True
+    assert is_eodhd_volume_whitelisted({"type": "forex", "display": "EUR/USD"}, "D1") is False
 
 
 def test_overlay_candle_volumes_replaces_matching_h1_volume_only():

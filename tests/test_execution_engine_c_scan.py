@@ -264,11 +264,12 @@ def test_engine_c_scan_uses_style_timeframes_and_tests_both_directions(monkeypat
 
     data = response.get_json()
 
-    # After fix: fetch set includes H1 for Engine A preload even when Engine B uses swing TFs
+    # After 2026-04-13 fix: forex intraday Engine B no longer upgrades to swing TFs.
+    # zone_tf=H4, entry_tf=H1 (proper intraday profile). D1 still fetched for Engine A.
     assert sorted(set(captured["fetch_tfs"])) == ["D1", "H1", "H4"]
     assert [call["direction"] for call in captured["analyze_calls"]] == ["LONG", "SHORT"]
-    assert captured["analyze_calls"][0]["zone_first"] == bars_by_tf["D1"][0]["close"]
-    assert captured["analyze_calls"][0]["entry_first"] == bars_by_tf["H4"][0]["close"]
+    assert captured["analyze_calls"][0]["zone_first"] == bars_by_tf["H4"][0]["close"]
+    assert captured["analyze_calls"][0]["entry_first"] == bars_by_tf["H1"][0]["close"]
     assert captured["signal_b"]["direction"] == "SHORT"
     assert len(data["b_only"]) == 1
 
