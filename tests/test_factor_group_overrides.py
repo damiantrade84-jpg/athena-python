@@ -1,4 +1,4 @@
-"""Tests for factor-engine subgroup and pair-profile overrides."""
+"""Tests that the live Engine A factor core stays intentionally small."""
 
 import os
 import sys
@@ -6,51 +6,56 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from config import CONFIG
-from factor_scoring import _apply_pair_profile_weight_rules
+from factor_scoring import compute_factor_scores
 
 
-def test_pair_profile_weight_overrides_affect_factor_weights():
+def _sample_factor_inputs():
+    pair = {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}
+    d1 = {"ema21": 1.20, "ema200": 1.00, "adx": 30.0, "close": 1.25}
+    h4 = {
+        "ema21": 1.21,
+        "ema50": 1.10,
+        "rsi": 55.0,
+        "macdHist": 0.01,
+        "adx": 28.0,
+        "close": 1.24,
+        "atr": 0.01,
+    }
+    h1 = {"ema21": 1.22, "ema50": 1.15, "close": 1.24}
+    return pair, d1, h4, h1
+
+
+def test_pair_profile_weight_overrides_do_not_change_live_factor_engine_output():
     original_profiles = CONFIG.get("PAIR_PROFILES")
     try:
         CONFIG["PAIR_PROFILES"] = {
-            "XAU/USD": {
+            "EUR/USD": {
                 "weight_overrides": {
-                    "h4_fib": 1.5,  # maps to structure
-                    "h1_bb": 0.5,   # maps to volatility
+                    "h4_fib": 1.5,
+                    "h1_bb": 0.5,
                 }
             }
         }
-        base = {
-            "trend": 2.0,
-            "momentum": 1.0,
-            "derivatives": 1.0,
-            "microstructure": 1.0,
-            "trend_strength": 1.0,
-            "volatility": 1.0,
-            "volume": 1.0,
-            "structure": 1.0,
-            "carry": 1.0,
-        }
-        out = _apply_pair_profile_weight_rules({"display": "XAU/USD"}, base)
-        assert out["structure"] == 1.5
-        assert out["volatility"] == 0.5
+        pair, d1, h4, h1 = _sample_factor_inputs()
+        overridden = compute_factor_scores(d1, h4, h1, pair, [], [], [], 1.0)
+
+        CONFIG["PAIR_PROFILES"] = {}
+        baseline = compute_factor_scores(d1, h4, h1, pair, [], [], [], 1.0)
+
+        assert overridden["final_score"] == baseline["final_score"]
+        assert overridden["factor_scores"] == baseline["factor_scores"]
+        assert overridden["weights"] == baseline["weights"]
     finally:
         CONFIG["PAIR_PROFILES"] = original_profiles
 
 
-def test_score_group_multipliers_apply_to_weights():
-    base = {
-        "trend": 2.0,
-        "momentum": 1.0,
-        "derivatives": 1.0,
-        "microstructure": 1.0,
-        "trend_strength": 1.0,
-        "volatility": 1.0,
-        "volume": 1.0,
-        "structure": 1.0,
-        "carry": 1.0,
-    }
-    out = _apply_pair_profile_weight_rules({"score_group": "crypto_doge"}, base)
-    assert out["volatility"] > base["volatility"]
-    # crypto_doge has no microstructure multiplier; base weight still from FACTOR_WEIGHTS
-    assert out["microstructure"] == base["microstructure"]
+def test_score_group_metadata_does_not_change_live_factor_engine_output():
+    pair, d1, h4, h1 = _sample_factor_inputs()
+    baseline = compute_factor_scores(d1, h4, h1, pair, [], [], [], 1.0)
+
+    pair_with_group = dict(pair)
+    pair_with_group["score_group"] = "forex_exotics"
+    grouped = compute_factor_scores(d1, h4, h1, pair_with_group, [], [], [], 1.0)
+
+    assert grouped["final_score"] == baseline["final_score"]
+    assert grouped["factor_scores"] == baseline["factor_scores"]

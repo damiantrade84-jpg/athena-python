@@ -276,7 +276,14 @@ FOREX_SESSION_FILTER: true    # true = London+NY+Asian only; false = 24h (disabl
 SERVER_TZ_OFFSET_HOURS: 2    # Your local timezone UTC offset — SAST = 2 (GMT+2)
 FOREX_H4_RESAMPLE_OFFSET_HOURS: 1.0  # Align H4 grid to 01/05/09/13/17/21 UTC (matches TV NY-aligned brokers)
 
-# Forex session / ADX gate config (Engine A v2 reads session_soft_multiplier, session_shoulder_multiplier, ADX_TREND_MIN_CLASS.forex)
+# Forex config surface.
+# Active live Engine A v2 currently reads only:
+# - session_soft_multiplier
+# - session_shoulder_multiplier
+# - session_shoulder_hours
+# together with ADX_TREND_MIN_CLASS.forex from the top-level config.
+# The Hurst / breakout / score-group keys below are legacy forex_scoring research knobs,
+# not the active live Engine A factor route.
 FOREX_ENGINE:
   hurst_gate_enabled: true      # Block trend signals when Hurst <= threshold
   hurst_gate_threshold: 0.40   # Only block strong mean-reversion (H < 0.40); allows neutral/random-walk markets
@@ -675,8 +682,11 @@ BYBIT_RECV_WINDOW_MS: 30000
 # When true, each ENGINE C scan logs ALIGNED tradeable consensus rows to shadow_signals (audit.db).
 SHADOW_LEDGER_ENABLED: true 
 
-# Pair-specific routing. Use this to disable filters that do not help a pair,
-# zero out weak votes, or tighten thresholds without touching the whole asset class.
+# Pair-specific routing.
+# For the current live Engine A factor route, the pair-profile fields that materially
+# affect score gating are `min_confluence` and `bt_min`. `disable_filters` remains
+# live for filter gates. Do not assume `weight_overrides` change factor_scoring.py
+# unless a traced live call path proves it.
 # Valid vote keys: d1_trend, h1_ema, d1_adx, h4_macd, h4_oscillator, volume,
 # funding, session, h4_fib, h1_bb, weinstein, divergence
 # Valid filter keys: weinstein, session, regime_transition, obv, funding,

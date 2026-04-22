@@ -27,10 +27,9 @@ def test_pair_score_group_mapping_examples():
     )
 
 
-def test_min_confluence_uses_group_threshold_when_no_pair_override():
+def test_min_confluence_uses_class_threshold_when_live_group_config_absent():
     pair = {"display": "USD/ZAR", "symbol": "USDZAR=X", "type": "forex"}
-    # forex_exotics: MIN_CONFLUENCE_GROUP.forex.forex_exotics in config.yaml (Engine A v2 0–3.0 scale)
-    assert get_min_confluence_threshold(pair) == 1.30
+    assert get_min_confluence_threshold(pair) == CONFIG["MIN_CONFLUENCE_CLASS"]["forex"]
 
 
 def test_pair_profile_can_override_score_group_and_threshold():
@@ -106,8 +105,8 @@ def test_backtest_min_score_uses_bt_chain_when_backtest_flag_only():
         CONFIG["BACKTEST_USE_BT_MIN_THRESHOLDS"] = original_btf
 
 
-def test_forex_scoring_source_exposes_score_group_adjustments():
-    src = Path(__file__).resolve().parents[1] / "forex_scoring.py"
+def test_divergence_monitor_replays_shared_factor_path_for_forex():
+    src = Path(__file__).resolve().parents[1] / "divergence_monitor.py"
     text = src.read_text(encoding="utf-8")
-    assert "score_group: Optional[str] = None" in text
-    assert "score_group_adjustments" in text
+    assert "from scoring import calc_confluence" in text
+    assert "compute_forex_score" not in text

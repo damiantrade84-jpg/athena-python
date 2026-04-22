@@ -1,16 +1,12 @@
 """
-forex_scoring.py — Dedicated forex scoring engine for Athena.
+forex_scoring.py — Legacy forex scoring engine kept for audit and regression work.
 
-Replaces Z-score factor engine for forex pairs with a rules-based system
-calibrated to how forex actually moves:
-  - Trend gate: D1/H4 EMA alignment (binary — on or off)
-  - Session filter: London (07:00-11:00 UTC) and NY (12:00-16:00 UTC) only
-  - Entry quality: RSI(14) H1 pullback depth
-  - COT confirmation: commercial positioning as signal booster
-  - London breakout: Asian range breakout at session open
+Live Engine A no longer routes forex here. The active live path is:
+athena.py -> scoring.calc_confluence() -> factor_scoring.compute_factor_scores().
 
-Output: ForexScoreResult with final_score, direction, signal_type, components
-Threshold: MIN_FOREX_CONFLUENCE / MIN_CONFLUENCE_CLASS.forex (see config.yaml)
+This module remains on disk so older diagnostics, parity probes, and historical
+research branches can still be inspected without guessing what the retired
+rules-based forex engine used to do.
 """
 
 from __future__ import annotations

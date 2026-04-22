@@ -660,11 +660,10 @@ class AutoTrader:
         else:
             _blocked_regimes = {str(v).upper() for v in (_blocked_regime_cfg or ["RANGING"])}
 
-        # NOTE: For forex signals, trendState is set to the signal type ("TREND_PULLBACK",
-        # "LONDON_BREAKOUT", "NONE") rather than a regime label. As a result, this
-        # blocked-state filter has no practical effect on forex — quality gating for forex
-        # is handled upstream by trend_gate and session_ok in forex_scoring.compute_forex_score().
-        # To add forex-specific regime blocking, filter on signal.get("regimeName") instead.
+        # NOTE: Engine A v2 now routes forex through the shared factor engine as well.
+        # trendState is still not a reliable forex regime label, so this blocked-state
+        # filter has little practical effect on forex. If forex-specific regime blocking
+        # is needed, filter on signal.get("regimeName") instead.
         if _trend_state in _blocked_states or _regime.upper() in _blocked_regimes:
             return (
                 False,

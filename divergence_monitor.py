@@ -80,15 +80,24 @@ def check_divergence(
     h1_candles: list,
     funding_rate: float | None = None,
     btc_bias: str = "neutral",
+    oi_data: dict | None = None,
+    oi_context: dict | None = None,
+    macro_context: dict | None = None,
+    intermarket_context: dict | None = None,
+    bar_time: str | None = None,
 ) -> dict:
     """Compare live scan result against backtest scoring path on same data.
 
     Args:
         pair: Pair dict with display, type, symbol, score_group
-        live_result: The result dict from the live scan (calc_confluence or compute_forex_score)
+        live_result: The result dict from the live Engine A scan
         d1_candles, h4_candles, h1_candles: Same candle data used by live scan
         funding_rate: Same funding rate used by live scan
         btc_bias: Same BTC bias used by live scan
+        oi_data, oi_context, macro_context, intermarket_context: Optional
+            contextual inputs from the live scan so the replay path can match
+            the current Engine A factor route more closely
+        bar_time: Optional explicit bar timestamp. Falls back to the last H4 bar.
 
     Returns:
         dict with diverged (bool), severity, live_*, bt_*, diffs, and summary
@@ -107,73 +116,55 @@ def check_divergence(
     else:
         live_regime = "UNKNOWN"
 
-    # Run backtest scoring path on the same data
+    # Re-run the same Engine A factor path on the same data.
     bt_score = 0.0
     bt_dir = "UNKNOWN"
     bt_regime = "UNKNOWN"
 
     try:
-        if asset_type == "forex":
-            # Forex should use compute_forex_score (the live path)
-            from forex_scoring import compute_forex_score
-            from regime import detect_regime
-            from indicators import calc_indicators_with_normalized
+        from scoring import calc_confluence
+        from indicators import (
+            calc_indicators_with_normalized,
+            calc_stochastic,
+            calc_sma,
+        )
 
-            h4i = calc_indicators_with_normalized(h4_candles, asset_type)
-            h1i = calc_indicators_with_normalized(h1_candles, asset_type)
-            d1i = calc_indicators_with_normalized(d1_candles, asset_type)
+        d1i = calc_indicators_with_normalized(d1_candles, asset_type)
+        h4i = calc_indicators_with_normalized(h4_candles, asset_type)
+        h1i = calc_indicators_with_normalized(h1_candles, asset_type)
 
-            bar_time = h4_candles[-1].get("time") if h4_candles else None
-            fx_result = compute_forex_score(
-                d1_snap=d1i["snap"],
-                h4_snap=h4i["snap"],
-                h1_snap=h1i["snap"],
-                h1_candles=h1_candles,
-                pair=pair,
-                bar_time=bar_time,
-                backtest_mode=True,  # bypass session filter
-                h4_candles=h4_candles,
-            )
-            bt_score = fx_result.final_score
-            bt_dir = fx_result.direction
+        vols = [c.get("vol", 0) for c in h1_candles]
+        vsma = calc_sma(vols, 20)
+        vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
 
-            regime_det = detect_regime(h4i["snap"], "forex")
-            bt_regime = regime_det.get("label", "RANGING")
-        else:
-            # Non-forex uses calc_confluence (factor engine)
-            from scoring import calc_confluence
-            from indicators import (
-                calc_indicators_with_normalized,
-                calc_stochastic,
-                calc_sma,
-            )
+        stoch = calc_stochastic(h4_candles, 5, 3, 3)
+        replay_bar_time = bar_time or (h4_candles[-1].get("time") if h4_candles else None)
 
-            d1i = calc_indicators_with_normalized(d1_candles, asset_type)
-            h4i = calc_indicators_with_normalized(h4_candles, asset_type)
-            h1i = calc_indicators_with_normalized(h1_candles, asset_type)
-
-            vols = [c.get("vol", 0) for c in h1_candles]
-            vsma = calc_sma(vols, 20)
-            vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
-
-            stoch = calc_stochastic(h4_candles, 5, 3, 3)
-            bar_time = h4_candles[-1].get("time") if h4_candles else None
-
-            bt_result = calc_confluence(
-                d1i, h4i, h1i, vr, stoch, pair, btc_bias,
-                d1_candles=d1_candles,
-                h4_candles=h4_candles,
-                h1_candles=h1_candles,
-                funding_rate=funding_rate,
-                bar_time=bar_time,
-            )
-            bt_score = bt_result.get("score", 0)
-            bt_dir = bt_result.get("direction", "UNKNOWN")
-            regime_raw = bt_result.get("regime")
-            if isinstance(regime_raw, dict):
-                bt_regime = regime_raw.get("label", "UNKNOWN")
-            elif isinstance(regime_raw, str):
-                bt_regime = regime_raw
+        bt_result = calc_confluence(
+            d1i,
+            h4i,
+            h1i,
+            vr,
+            stoch,
+            pair,
+            btc_bias,
+            d1_candles=d1_candles,
+            h4_candles=h4_candles,
+            h1_candles=h1_candles,
+            funding_rate=funding_rate,
+            bar_time=replay_bar_time,
+            oi_data=oi_data,
+            oi_context=oi_context,
+            macro_context=macro_context,
+            intermarket_context=intermarket_context,
+        )
+        bt_score = bt_result.get("score", 0)
+        bt_dir = bt_result.get("direction", "UNKNOWN")
+        regime_raw = bt_result.get("regime")
+        if isinstance(regime_raw, dict):
+            bt_regime = regime_raw.get("label", "UNKNOWN")
+        elif isinstance(regime_raw, str):
+            bt_regime = regime_raw
     except Exception as e:
         log.debug(f"[DIVERGENCE] BT scoring failed for {display}: {e}")
         return {

@@ -11,7 +11,7 @@ alwaysApply: true
 
 **Do not change anything that alters live or backtest scoring unless the user explicitly instructs it.**
 
-- **Engine A live:** `MIN_CONFLUENCE_CLASS`, `MIN_CONFLUENCE_GROUP`, `MIN_CONFLUENCE_CLASS.forex`, `PAIR_PROFILES.min_confluence`, `AUTO_TRADE_MIN_SCORE`, `SCAN_QUANTILE_*`, confluence logic in `scoring.py` / `factor_scoring.py`, `analyze_pair` tiering. Soft gating keys: `FOREX_ENGINE.session_soft_multiplier`, `FOREX_ENGINE.session_shoulder_multiplier`, `ADX_TREND_MIN_CLASS`.
+- **Engine A live:** `MIN_CONFLUENCE_CLASS`, `PAIR_PROFILES.min_confluence`, `AUTO_TRADE_MIN_SCORE`, `SCAN_QUANTILE_*`, confluence logic in `scoring.py` / `factor_scoring.py`, `analyze_pair` tiering. Current `config.yaml` does **not** define `MIN_CONFLUENCE_GROUP`; helper support remains in `scoring.py` only for backward-compatible configs that explicitly restore it. Active soft gating keys on the live factor route are `FOREX_ENGINE.session_soft_multiplier`, `FOREX_ENGINE.session_shoulder_multiplier`, `FOREX_ENGINE.session_shoulder_hours`, and `ADX_TREND_MIN_CLASS`.
 - **Engine A backtest:** `BT_MIN`, `PAIR_PROFILES.bt_min`, `get_backtest_min_score_threshold`, backtest score gates in `backtest_runner.py`.
 - **Engine B live + backtest:** `NAKED_ENGINE.style_profiles` (`min_score`, `min_rr`), `ENGINE_B_REGIME_MULTIPLIERS` (score scaling — currently neutralized to 1.0), `zone_multipliers` (structural width), naked checklist gates in `market_structure.py`.
 - **Engine D (Scalp Lab):** `SCALP_ENGINE` in `config.yaml` (`MIN_RR`, `MAX_SPREAD_PIPS`, `WITH_TREND_ONLY`, `BIAS_TIMEFRAME`, `M1_CANDLES`, `M15_CANDLES`, `M5_CANDLES`, `H1_CANDLES`, `SESSION_MODE`, `NY_OPEN_SKIP_MINUTES`, `EXECUTION_TIMEFRAME`, `MIN_GRADE_AUTO_EXECUTE`, `BT_ENABLED`, `BT_SESSION_MODE`, `BT_NY_OPEN_SKIP_MINUTES`, `BT_WALK_BARS`, `BT_MAX_CONCURRENT`, `BT_SLIPPAGE_TICKS`, `BT_SCRATCH_ENABLED`, `BT_SCRATCH_BARS`, `BT_SCRATCH_MIN_R`, optional `SCALP_PAIRS`) and core pass/fail logic in `scalp_engine.py` (session filter via `scalp_session_window()`, spread filter, VP build, absorption/CVD/AAA, VWAP, setup classification, HTF bias gate, level math, `ai_quality_grade`).
@@ -69,8 +69,8 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 | `data_feeds.py` | HTTP session, EODHD client, funding/OI helpers |
 | `news_sentiment_feed.py` | EODHD news + Claude sentiment; optional scan blend; TTL cache |
 | `scoring.py` | Confluence engine, vote weights, signal classification, pair profiles, `get_min_confluence_threshold` |
-| `factor_scoring.py` | Engine A v2: 3-factor engine (Trend EMA coherence, Momentum Quality RSI+MACD, ADX Gate) + asset addon (carry/funding/COT). Unified 0-3.0 scale for ALL asset classes. Forex routes here — `forex_scoring.py` is no longer called. |
-| `forex_scoring.py` | Legacy forex scorer — **no longer active**. Kept on disk for reference only. All forex pairs now route through `factor_scoring.py`. |
+| `factor_scoring.py` | Engine A v2: 3-factor engine (Trend EMA coherence, Momentum Quality RSI+MACD, ADX Gate) + asset addon (carry/funding/COT). Unified 0-3.0 scale for ALL asset classes. Live Engine A for forex also routes here via `scoring.calc_confluence()`. |
+| `forex_scoring.py` | Legacy forex scorer kept for audit, regression, and historical research only. **Not the live Engine A route.** |
 | `market_structure.py` | Engine B: `NakedEngine`, swing analysis, BOS/CHoCH/FVG/order blocks, shared checklist pass/fail |
 | `engine_b_ai.py` | Engine B advisory AI verdict (review only — not a pass/fail gate) |
 | `engine_c.py` | Engine C consensus: `ENGINE_C_AB_WEIGHTS` blend, conviction tiers, SL/TP resolution, Vision modifier |
@@ -221,9 +221,10 @@ Other Engine C paths:
 
 In each path the consensus logic is:
   └─ compute_consensus(signal_a, signal_b, confidence_b, regime, entry, atr)
-       ├─ normalise_engine_a() → 0–1  (max_score 2.0 for forex, 3.0 for non-forex)
+       ├─ normalise_engine_a() → 0–1  (max_score 3.0 for all asset classes)
        ├─ normalise_engine_b() → 0–1  (max_possible from calculate_confidence, default 5.0)
-       ├─ ENGINE_C_AB_WEIGHTS regime blend: TRENDING={A:0.65,B:0.35}, RANGING={A:0.35,B:0.65}
+       ├─ ENGINE_C_AB_WEIGHTS regime blend from `engine_c.py`
+       │    Current values: TRENDING={A:0.40,B:0.60}, RANGING={A:0.35,B:0.65}
        ├─ resolve_sl() — structural → ATR-clamped → tighter
        ├─ resolve_tp() — structural if RR≥1.5, else ATR
        └─ returns {conviction, tier, sizing_override, sl, tp, rr, ...}
@@ -326,13 +327,31 @@ api_execute()
 
 ---
 
+## Current Engine A Contract (2026-04-22)
+
+- Live route: `athena.py analyze_pair() -> scoring.calc_confluence() -> factor_scoring.compute_factor_scores()` for **all** asset classes, including forex.
+- Score scale: Engine A uses a unified **0-3.0** scale. `athena.py._max_score_for_pair()` returns `3.0` for every asset class.
+- Live threshold priority in the current config: `PAIR_PROFILES[pair].min_confluence -> MIN_CONFLUENCE_CLASS[type] -> MIN_CONFLUENCE`. Current `config.yaml` does not define `MIN_CONFLUENCE_GROUP`.
+- Current live forex floor: `MIN_CONFLUENCE_CLASS.forex = 2.1`; `AUTO_TRADE_MIN_SCORE.forex = 2.1`.
+- Backtest threshold chain when `BACKTEST_USE_BT_MIN_THRESHOLDS` or `RESEARCH_MODE` is true: `PAIR_PROFILES[pair].bt_min -> BT_MIN[type]`. Current `config.yaml` does not define `BT_MIN_GROUP`.
+- Score groups (`forex_majors`, `forex_crosses`, etc.) still exist as metadata/routing helpers, but they do **not** change live `factor_scoring.py` output by themselves.
+- Research guardrail: keep live Engine A production alpha small and orthogonal. The current production core is trend + momentum quality + ADX gate + one asset addon. Do not reintroduce Hurst, FVG/Fib/SMC bonuses, or pair-specific weight tuning into live Engine A without fresh out-of-sample evidence.
+
+### Research basis for the live Engine A guardrails
+
+- Trend/momentum persistence: Moskowitz, Ooi, Pedersen (2012) and Hurst, Ooi, Pedersen (2017)
+- FX-specific momentum/carry evidence: Menkhoff et al. (2012)
+- FX microstructure relevance: Evans and Lyons (1999/2005)
+- Model-stability warning: Rossi (2013)
+- Overfitting warning: Bailey et al. (2014)
+
 ## Key Functions
 
 ### `calc_confluence(d1, h4, h1, vr, stoch, pair, ...)` — `scoring.py`
 Calls `compute_factor_scores()` from `factor_scoring.py` (Engine A v2). Returns legacy-compatible dict with `{score, votes, direction, signalClass, regime, factor_scores, factor_weights, factorDiagnostics, confidenceDetail, ...}`. Factor scores: `trend` (±3.0), `momentum` (0-1), `addon` (-0.15/0/+0.30). Final score 0-3.0.
 
 ### `get_min_confluence_threshold(pair)` — `scoring.py`
-Priority: `PAIR_PROFILES[pair].min_confluence` → `MIN_CONFLUENCE_GROUP[type][score_group]` → `MIN_CONFLUENCE_CLASS[type]`
+Priority in the current config: `PAIR_PROFILES[pair].min_confluence` → `MIN_CONFLUENCE_CLASS[type]` → `MIN_CONFLUENCE`. Backward-compatible support for `MIN_CONFLUENCE_GROUP[type][score_group]` still exists in `scoring.py`, but it is inactive unless the key is explicitly restored in config.
 
 ### `_max_score_for_pair(pair)` — `athena.py`
 Returns 3.0 for all asset classes (Engine A v2 unified scale). No per-class fork.
@@ -457,27 +476,30 @@ When news sentiment confluence is enabled, score blending must respect the Engin
 - **All asset classes (including forex) = 0–3.0** — `maxScoreOverride` is 3.0 for every path.
 - `NEWS_SENTIMENT_SCORE_IMPACT` delta scales from 3.0 max. Do not use the old 2.0 forex cap.
 
-### Current active forex thresholds
+### Historical forex threshold snapshot (superseded by Current Engine A Contract above)
 
-- Engine A forex scale = **0–3.0** (unified with all other asset classes since Engine A v2)
-- `MIN_CONFLUENCE_CLASS.forex` = **1.20** (see config.yaml — updated from 1.0)
-- `AUTO_TRADE_MIN_SCORE.forex` = **1.20** — aligned to class floor on 0–3.0 scale
+Historical 2026-04 migration notes used a lower forex floor during earlier scale-conversion work.
+Do not use those legacy values for live decisions.
+Use the **Current Engine A Contract (2026-04-22)** section above for the verified live forex floor and score-scale rules.
 
 ---
+## Pair Profiles (config.yaml) - current example shapes
 
-## Pair Profiles (`config.yaml`)
+Current live Engine A guidance:
+- `min_confluence` and `bt_min` are the pair-profile fields that materially affect score gating on the active factor route.
+- disable_filters remains live for filter gates.
+- Do not assume `weight_overrides` change `factor_scoring.py` unless you trace a live call path that proves it.
 
 ```yaml
 PAIR_PROFILES:
   XAU/USD:
     disable_filters: [obv, session]
-    weight_overrides: {h4_fib: 1.5, h1_bb: 0.5}
-    min_confluence: 5.8
-    bt_min: 4.6
-  EUR/USD:
-    disabled_votes: [volume]
-    weight_overrides: {session: 1.25}
+    min_confluence: 1.05
+    bt_min: 1.80
+  USD/CHF:
+    disable_filters: [obv]
 ```
+
 Valid vote keys: `d1_trend, h1_ema, d1_adx, h4_macd, h4_oscillator, volume, funding, session, h4_fib, h1_bb, weinstein, divergence`
 Valid filter keys: `weinstein, session, regime_transition, obv, funding, squeeze, mean_revert, btc_bias, divergence_warning`
 `PAIR_PROFILE_VOTES` and `PAIR_PROFILE_FILTERS` constants live in `config.py` only.
@@ -487,7 +509,7 @@ Valid filter keys: `weinstein, session, regime_transition, obv, funding, squeeze
 ## Auto-Trader (`auto_trader.py`)
 
 - Daemon thread wakes every 30s, scans every `AUTO_TRADE_SCAN_INTERVAL_MIN` minutes
-- Execute gate: **`combinedConviction`** ≥ `AUTO_TRADE_MIN_CONVICTION` (adjusted for alignment / meta). `AUTO_TRADE_MIN_SCORE` is status-only; align per-class scales (forex **0–2.0**).
+- Execute gate: **`combinedConviction`** ≥ `AUTO_TRADE_MIN_CONVICTION` (adjusted for alignment / meta). `AUTO_TRADE_MIN_SCORE` is status-only; current forex informational scale is **0-3.0**, aligned to `MIN_CONFLUENCE_CLASS.forex`.
 - Diagnosing: `SELECT pair, score, direction, error_tag, grade FROM audit_log WHERE grade LIKE 'AUTO%' ORDER BY ts DESC LIMIT 20`
 - `grade='AUTO-DEMO'` = success. `grade='AUTO-ERR-DEMO'` = blocked (see `error_tag`)
 
@@ -620,14 +642,38 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 
 ## DECISIONS
 
+## 2026-04-22: Engine A v2 contract audit - current verified contract
+
+This section **supersedes older threshold notes below** when they conflict with the live code.
+
+**Verified current contract:**
+- Engine A live route: `athena.py analyze_pair() -> scoring.calc_confluence() -> factor_scoring.compute_factor_scores()`
+- Engine A live scale: `0-3.0` for all asset classes
+- Current live threshold priority: `PAIR_PROFILES.min_confluence -> MIN_CONFLUENCE_CLASS[type] -> MIN_CONFLUENCE`
+- Current live forex floor: `MIN_CONFLUENCE_CLASS.forex = 2.1`; `AUTO_TRADE_MIN_SCORE.forex = 2.1`
+- Current `config.yaml` intentionally omits `MIN_CONFLUENCE_GROUP` and `BT_MIN_GROUP`; helper support remains only for backward-compatible configs that explicitly restore them
+
+**Audit-driven cleanup completed this session:**
+- `divergence_monitor.py` now replays the shared live factor path for forex instead of treating `compute_forex_score()` as the live route
+- `forex_scoring.py` now labels itself legacy/reference-only at the module level
+- `tests/test_scoring_group_routing.py` now asserts the current class-level forex threshold behavior and shared divergence replay path
+- `tests/test_factor_group_overrides.py` now guards the small-core contract: `PAIR_PROFILES.weight_overrides` and `score_group` metadata do not change live `factor_scoring.py` output by themselves
+- Targeted regression suite after the audit: `31 passed`
+
+**Research guardrail carried into the repo contract:**
+- Keep live Engine A production alpha small: trend + momentum quality + ADX gate + one asset addon
+- Do not reintroduce Hurst, FVG/Fib/SMC bonuses, subgroup multipliers, or pair-specific weight tuning into the live factor route without fresh out-of-sample evidence
+
 ## 2026-04-22: Engine A v2 threshold audit — stale hardcoded values purged, factor_scoring tunables wired
+
+Historical note only. If any value here conflicts with the **Current Engine A Contract (2026-04-22)** section above, the current-contract section is the source of truth.
 
 **Audit scope:** Searched all scoring, backtest, advisory, and test files for hardcoded thresholds that conflicted with `config.yaml` or referenced the deprecated 0–2.0 forex scale.
 
 **Production code fixes:**
 - `factor_scoring.py` — 10 hardcoded module constants now read from `CONFIG` with safe fallbacks. New config.yaml keys: `FACTOR_ADX_HARD_FAIL`, `FACTOR_ADX_SOFT_MULT`, `FACTOR_SESSION_CORE_MULT`, `FACTOR_SESSION_SHOULDER_MULT`, `FACTOR_SESSION_OFF_MULT`, `FACTOR_MOMENTUM_WEIGHT`, `FACTOR_ADDON_WEIGHT`, `FACTOR_BASE_WEIGHT`, `FACTOR_CONVICTION_FLOOR`. All preserve existing default values — **no scoring behavior change unless config.yaml is edited**.
 - `advisory_thresholds.py` — `_ENGINE_A_BY_ASSET["forex"]` changed from `"forex_scoring"` → `"factor_scoring"` (Engine A v2 unified). `_BT_LIMITS` and `_LIVE_LIMITS` upper bounds raised from 2.0 → 3.0 scale. Advisory dashboard was silently clamping proposed thresholds to old ceiling.
-- `config.py` — Fallback defaults aligned with current `config.yaml`: `BT_MIN`, `BT_MIN_GROUP`, `MIN_CONFLUENCE_CLASS` (forex 1.0→1.20), `MIN_CONFLUENCE_GROUP` (forex_majors 0.85→1.05, forex_exotics 1.05→1.30). Prevents silent regression if yaml fails to load.
+- `config.py` — Fallback defaults aligned with the then-current `config.yaml`: `BT_MIN`, `BT_MIN_GROUP`, `MIN_CONFLUENCE_CLASS` (forex 1.0→1.20), `MIN_CONFLUENCE_GROUP` (forex_majors 0.85→1.05, forex_exotics 1.05→1.30). Historical note only; current live config no longer defines group thresholds.
 
 **Test fixes (forex max_score 2.0 → 3.0):**
 - `test_crit_fixes.py` — CRIT-002 assertions updated to 3.0
@@ -636,10 +682,10 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 - `test_news_sentiment_feed.py` — news blend test updated to maxScoreOverride 3.0 + corrected delta
 - `test_scoring_group_routing.py` — forex_exotics threshold assertion updated 1.05 → 1.30
 
-**CLAUDE.md fixes:**
-- "Current active forex thresholds" section: `MIN_CONFLUENCE_CLASS.forex` 1.0 → **1.20**, `AUTO_TRADE_MIN_SCORE.forex` 1.0 → **1.20**
+**Historical `CLAUDE.md` fixes in that session:**
+- The then-current forex threshold note was updated from `MIN_CONFLUENCE_CLASS.forex` 1.0 to **1.20**, and `AUTO_TRADE_MIN_SCORE.forex` 1.0 to **1.20**
 - Historical "2026-04-17" section: forex floor updated from "scale 0–2.0" → "scale **0–3.0**"
-- Historical "2026-04-07" section: "Current active contract" updated from 0–2.0 / 1.0 → 0–3.0 / 1.20
+- Historical "2026-04-07" section: the then-current contract note was updated from 0–2.0 / 1.0 → 0–3.0 / 1.20
 
 **Verified correct (no change needed):**
 - `scoring.py` `get_score_threshold()` — reads all thresholds from CONFIG at runtime ✓
@@ -652,7 +698,7 @@ Schema auto-migrated on startup. To add a column: add to both `CREATE TABLE` and
 
 ---
 
-## 2026-04-21: Confidence session multiplier + forex counter-trend SHORT gate + BE fix
+## 2026-04-21: Confidence session multiplier + legacy forex_scoring research branch + BE fix
 
 **`confidence_engine.py` — session quality multiplier:**
 `compute_confidence()` now accepts `session_quality: Optional[str]` and post-multiplies confidence:
@@ -789,7 +835,7 @@ Diagnostic (`diagnose_engine_a_forex.py`) showed only **3/24 UTC hours** produce
 
 **No scoring gate, weight, or threshold changes.** These are **soft-gate** flips — live scoring logic untouched per locked policy. Revert by flipping any of the three keys back.
 
-**Engine A forex class floor:** `MIN_CONFLUENCE_CLASS.forex = 1.20`, scale **0–3.0** (Engine A v2 unified). See config.yaml for current values.
+**Historical Engine A forex class floor at that time:** `MIN_CONFLUENCE_CLASS.forex = 1.20`, scale **0–3.0** (Engine A v2 unified). For current live values, use the **Current Engine A Contract (2026-04-22)** section above.
 
 **Engine D (Scalp Lab) tightening:**
 
@@ -874,10 +920,10 @@ This made `MIN_CONFLUENCE_CLASS` gates unreachable:
 
 1. Removed caps on `trend_score` and on the multiplicative `final_score` (no 0.507 scaling).
 2. **0–2.0** display scale: `result.final_score` capped at **2.0** (matches achievable max ~1.97).
-3. Historical thresholds at that point: **`MIN_CONFLUENCE_CLASS.forex`** and **`MIN_CONFLUENCE_CLASS.forex`** ? **1.60** (~80% of 2.0, similar selectivity to old **0.80** on 0?1.0). **`BT_MIN.forex`** ? **1.50**; **`BT_MIN_GROUP`** forex ? **1.50 / 1.55 / 1.65**; **`MIN_CONFLUENCE_GROUP`** forex aligned to the same ladder.
+3. Historical thresholds at that point included a forex class gate of **1.60** (~80% of 2.0, similar selectivity to the old **0.80** on 0-1.0). **`BT_MIN.forex`** was **1.50**; **`BT_MIN_GROUP`** forex was **1.50 / 1.55 / 1.65**; **`MIN_CONFLUENCE_GROUP`** forex was aligned to the same ladder.
 4. **`advisory_thresholds.py`:** `_BT_LIMITS.forex` → **(0.80, 1.90)**; `_LIVE_LIMITS.forex` → **(1.00, 2.00)**.
 5. **`maxScoreOverride` / Engine C forex path:** **2.0** in `athena.py` and `backtest_runner.py`; **`normalize_engine_a`** treats **`max_score ≤ 2.01`** like forex for the A-side floor. Engine C **conviction** calibration / `record_signal_event` stay **`max_score=1.0`** (0–1 normalized).
-6. Historical fallback sync at that point: **`config.py` fallbacks** and **`AUTO_TRADE_MIN_SCORE.forex`** ? **1.60** (informational; matched the then-current class gate on 0?2.0).
+6. Historical fallback sync at that point: **`config.py` fallbacks** and **`AUTO_TRADE_MIN_SCORE.forex`** were aligned to **1.60** (informational; matched the then-current class gate on 0-2.0).
 
 **Score mapping (illustrative):**
 
@@ -886,11 +932,11 @@ This made `MIN_CONFLUENCE_CLASS` gates unreachable:
 | 0.80 gate | 1.60 gate | ~same selectivity |
 | 1.00 (cap) | 1.97 | True max visible |
 
-**Expected at that time:** Trade counts closer to pre?0.507 fix; elite scores **1.8?2.0** separable from good **1.4?1.6**. Re-run forex backtests.
+**Expected at that time:** Trade counts closer to the pre-0.507 fix baseline; elite scores **1.8-2.0** separable from good **1.4-1.6**. Re-run forex backtests.
 
 ---
 
-## 2026-04-07: Forex threshold correction (too high) ? historical / superseded again later
+## 2026-04-07: Forex threshold correction (too high) — historical / superseded again later
 
 **Problem:** After the 0–2.0 scale fix, forex thresholds remained at **80% of max** (1.60), which was unreachable without rare SMC bonuses (FVG overlap + liquidity sweep). Typical good forex signals scored 0.8–1.1, so no signals passed.
 
@@ -907,10 +953,11 @@ This made `MIN_CONFLUENCE_CLASS` gates unreachable:
 
 **Impact at that time:** Forex signals now appear in main scan. BT_MIN thresholds scaled proportionally to maintain BT/live ratio.
 
-Current active contract (superseded — Engine A v2 unified 0–3.0 scale applies now):
-- Engine A forex scale is **0–3.0** (unified with all asset classes since Engine A v2)
-- `MIN_CONFLUENCE_CLASS.forex` is **1.20** (see config.yaml)
-- `AUTO_TRADE_MIN_SCORE.forex` is **1.20** and remains informational/status-only
+Historical active contract at that time (now superseded):
+- Engine A forex scale was **0–3.0** at that point in the migration
+- `MIN_CONFLUENCE_CLASS.forex` was **1.20** at that point
+- `AUTO_TRADE_MIN_SCORE.forex` was **1.20** and remained informational/status-only at that point
+- For the current live contract, use the **Current Engine A Contract (2026-04-22)** section above
 
 ---
 
