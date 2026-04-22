@@ -110,6 +110,10 @@ from eodhd_volume_overlay import (  # noqa: E402
     resample_eodhd_volume_bars as _resample_eodhd_volume_bars,
     supports_eodhd_volume_overlay as _supports_eodhd_volume_overlay,
 )
+from eodhd_volume_batch import (  # noqa: E402
+    build_non_ws_stock_pairs,
+    start_live_v2_batcher_for_non_ws_stocks,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -534,14 +538,14 @@ INDEX_PAIRS = [
         "display": "S&P 500",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +1.23 WR 60.0% (10T) ← WS: us endpoint GSPC.INDX
+    },  # SQN +1.23 WR 60.0% (10T) <- WS: us endpoint GSPC.INDX
     {
         "symbol": "^DJI",
         "type": "index",
         "display": "Dow Jones",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +0.61 WR 55.6% (9T) ← WS: us endpoint DJI.INDX
+    },  # SQN +0.61 WR 55.6% (9T) <- WS: us endpoint DJI.INDX
     {
         "symbol": "^GDAXI",
         "type": "index",
@@ -556,28 +560,28 @@ INDEX_PAIRS = [
         "display": "UK100",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +0.67 WR 50.0% (12T) Pepperstone: UK100 ← WS: forex ep
+    },  # SQN +0.67 WR 50.0% (12T) Pepperstone: UK100 <- WS: forex ep
     {
         "symbol": "^AXJO",
         "type": "index",
         "display": "ASX 200",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +0.12 WR 40.0% (10T) Pepperstone: AUS200 ← WS: forex ep
+    },  # SQN +0.12 WR 40.0% (10T) Pepperstone: AUS200 <- WS: forex ep
     {
         "symbol": "^N225",
         "type": "index",
         "display": "Nikkei 225",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -0.39 WR 33.3% (9T) Pepperstone: JPN225 ← WS: forex ep
+    },  # SQN -0.39 WR 33.3% (9T) Pepperstone: JPN225 <- WS: forex ep
     {
         "symbol": "^HSI",
         "type": "index",
         "display": "Hang Seng",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -0.38 WR 33.3% (9T) Pepperstone: HK50 ← WS: forex ep
+    },  # SQN -0.38 WR 33.3% (9T) Pepperstone: HK50 <- WS: forex ep
     {
         "symbol": "EURX",
         "type": "index",
@@ -1881,49 +1885,80 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
         "volume_source": "cache_miss",
     }
 
-    # --- CandleBuilder WS-first check for US stocks (all TFs: M1/M5/M15/H1/H4/D1) ---
-    # CandleBuilder accumulates real exchange volume from EODHD US WS ticks (msg["v"]).
-    # M1/M5/M15: added Phase 1. H1/H4/D1: seeded from EODHD REST on startup then kept
-    # live by ongoing WS tick accumulation — always fresher than REST during session.
-    # This check runs regardless of cache_only so Engine A (cache_only=False) also benefits.
-    # Forex/commodity/index excluded — no real volume in OTC ticks.
-    # Backtest: excluded via tf_key check — D1 uses EOD REST which gives full history.
-    if ptype == "stock" and tf_key in {"M1", "M5", "M15", "H1", "H4"}:
+    # --- CandleBuilder check for US stocks (M1/M5/M15/H1/H4/D1) ---
+    #
+    # M1-H4: CandleBuilder has data from either:
+    #   - ws:True stocks: EODHD US WebSocket on_tick() accumulation (existing path)
+    #   - ws:False stocks: Live v2 batch batcher on_tick() injection (eodhd_volume_batch.py)
+    #   Accepted when last bar is within 2x bar-period of now (session-fresh data).
+    #
+    # D1: CandleBuilder has data seeded by bulk_update_d1() which runs at startup and
+    #     every 4h via the Bulk EOD API. Accepted when we have >=20 bars with volume > 0.
+    #     This eliminates per-pair get_eod_historical_stock_market_data() REST calls for D1.
+    #
+    # Forex/commodity/index: excluded — no real exchange volume in OTC ticks.
+    if ptype == "stock" and tf_key in {"M1", "M5", "M15", "H1", "H4", "D1"}:
         try:
             cb = get_candle_builder()
             if cb:
-                ws_candles = cb.get_candles(display, tf_key, limit)
-                _min_bars = {"M1": 5, "M5": 5, "M15": 5, "H1": 20, "H4": 10}.get(tf_key, 5)
-                if ws_candles and len(ws_candles) >= _min_bars:
-                    last_ts_str = ws_candles[-1].get("time", "")
-                    if last_ts_str:
-                        last_dt = datetime.fromisoformat(str(last_ts_str).replace("Z", "+00:00"))
-                        if last_dt.tzinfo is None:
-                            last_dt = last_dt.replace(tzinfo=timezone.utc)
-                        age_s = (datetime.now(timezone.utc) - last_dt).total_seconds()
-                        _tf_sec = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400}.get(tf_key, 3600)
-                        # Accept WS bars if last bar is within 2 bar-lengths of now
-                        if age_s < _tf_sec * 2 + 30:
-                            usable = [c for c in ws_candles if float(c.get("vol", 0) or 0) > 0]
-                            if usable:
-                                ws_payload = {
-                                    "error": False,
-                                    "symbol": display,
-                                    "detail": "",
-                                    "candles": ws_candles,
-                                    "ticker": display,
-                                    "request_tf": tf_key,
-                                    "source_tf": "ws_tick",
-                                    "volume_source": "ws_tick",
-                                }
-                                _store_cached_eodhd_volume_only(pair, tf_key, limit, ws_payload)
-                                log.debug(
-                                    "[EODHD-VOL] %s %s: WS bars used bars=%s age_s=%.0f (Engine A/D)",
-                                    display, tf_key, len(ws_candles), age_s,
-                                )
-                                return ws_payload
+                cb_candles = cb.get_candles(display, tf_key, limit)
+
+                if tf_key == "D1":
+                    # D1 path: use bulk_update_d1 seeded data from CandleBuilder
+                    _min_d1_bars = 20
+                    if cb_candles and len(cb_candles) >= _min_d1_bars:
+                        usable_d1 = [c for c in cb_candles if float(c.get("vol", 0) or 0) > 0]
+                        if usable_d1:
+                            d1_payload = {
+                                "error": False,
+                                "symbol": display,
+                                "detail": "",
+                                "candles": cb_candles,
+                                "ticker": display,
+                                "request_tf": tf_key,
+                                "source_tf": "candle_builder_d1",
+                                "volume_source": "candle_builder_d1",
+                            }
+                            _store_cached_eodhd_volume_only(pair, tf_key, limit, d1_payload)
+                            log.debug(
+                                "[EODHD-VOL] %s D1: CandleBuilder used bars=%s (bulk_update_d1)",
+                                display, len(cb_candles),
+                            )
+                            return d1_payload
+                    # D1 not yet populated in CandleBuilder - fall through to REST
+
+                else:
+                    # M1-H4 path: WS ticks or Live v2 injected ticks
+                    _min_bars = {"M1": 5, "M5": 5, "M15": 5, "H1": 20, "H4": 10}.get(tf_key, 5)
+                    if cb_candles and len(cb_candles) >= _min_bars:
+                        last_ts_str = cb_candles[-1].get("time", "")
+                        if last_ts_str:
+                            last_dt = datetime.fromisoformat(str(last_ts_str).replace("Z", "+00:00"))
+                            if last_dt.tzinfo is None:
+                                last_dt = last_dt.replace(tzinfo=timezone.utc)
+                            age_s = (datetime.now(timezone.utc) - last_dt).total_seconds()
+                            _tf_sec = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400}.get(tf_key, 3600)
+                            if age_s < _tf_sec * 2 + 30:
+                                usable = [c for c in cb_candles if float(c.get("vol", 0) or 0) > 0]
+                                if usable:
+                                    ws_payload = {
+                                        "error": False,
+                                        "symbol": display,
+                                        "detail": "",
+                                        "candles": cb_candles,
+                                        "ticker": display,
+                                        "request_tf": tf_key,
+                                        "source_tf": "ws_tick",
+                                        "volume_source": "ws_tick",
+                                    }
+                                    _store_cached_eodhd_volume_only(pair, tf_key, limit, ws_payload)
+                                    log.debug(
+                                        "[EODHD-VOL] %s %s: CandleBuilder bars used bars=%s age_s=%.0f (Engine A/D)",
+                                        display, tf_key, len(cb_candles), age_s,
+                                    )
+                                    return ws_payload
         except Exception as _ws_err:
-            log.debug("[EODHD-VOL] %s %s WS candle check failed: %s", display, tf_key, _ws_err)
+            log.debug("[EODHD-VOL] %s %s CandleBuilder check failed: %s", display, tf_key, _ws_err)
 
     if cache_only:
         # cache_miss for a whitelisted pair — trigger background re-warm so next scan gets real data
@@ -3105,7 +3140,11 @@ _DIV_SPLIT_PAIRS = [p["symbol"] for p in ALL_PAIRS if p.get("type") == "stock"]
 
 
 def fetch_div_split_context():
-    """Fetch upcoming dividends and splits for stock pairs. Warns AI if ex-div within 7 days."""
+    """Fetch upcoming dividends and splits for stock pairs.
+
+    Preserves the existing event-risk semantics, but fetches symbols concurrently so
+    a cold scan is not blocked by dozens of sequential EODHD round-trips.
+    """
 
     global _divsplit_cache
 
@@ -3123,8 +3162,13 @@ def fetch_div_split_context():
     today = datetime.now(timezone.utc).date()
 
     result = {}
+    symbols = list(dict.fromkeys(_DIV_SPLIT_PAIRS))
+    max_workers = min(
+        len(symbols),
+        max(1, int(CONFIG.get("SCAN_MAX_WORKERS", 3) or 3)),
+    )
 
-    for sym in _DIV_SPLIT_PAIRS:
+    def _fetch_symbol_div_split(sym: str) -> tuple[str, dict]:
         entry = {}
 
         # Dividends
@@ -3220,8 +3264,24 @@ def fetch_div_split_context():
         except Exception as e:
             log.warning(f"[SPLITS] {sym}: {e}")
 
-        if entry:
-            result[sym] = entry
+        return sym, entry
+
+    if symbols:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(_fetch_symbol_div_split, sym): sym for sym in symbols
+            }
+            for fut in as_completed(futures):
+                sym = futures[fut]
+                try:
+                    out_sym, entry = fut.result()
+                except Exception as e:
+                    log.warning(f"[DIVS] {sym}: worker failed: {e}")
+                    continue
+                if entry:
+                    result[out_sym] = entry
 
     _divsplit_cache = {"data": result, "ts": now}
 
@@ -13548,6 +13608,23 @@ def _start_eodhd_volume_warmer() -> None:
 
     threading.Thread(target=_engine_a_loop, daemon=True, name="EODHDVolumeWarmerEngineA").start()
 
+    # Start the Live v2 batch poller for ws:False stocks.
+    # One HTTP request per poll interval covers all non-WS tickers combined,
+    # replacing ~33 per-pair REST calls per minute with 1 batch call.
+    # Injects delta-volume ticks into CandleBuilder via on_tick() so M1/M5/M15/H1/H4
+    # bars accumulate real exchange volume identically to ws:True stocks.
+    # D1 is already covered by bulk_update_d1() — the batcher does not touch D1.
+    try:
+        from eodhd_volume_batch import start_live_v2_batcher_for_non_ws_stocks
+        _livev2_interval = max(30, int(cfg.get("LIVEV2_POLL_INTERVAL_SEC", 60) or 60))
+        start_live_v2_batcher_for_non_ws_stocks(
+            ACTIVE_PAIRS,
+            api_key=os.environ.get("EODHD_KEY", ""),
+            poll_interval=_livev2_interval,
+        )
+    except Exception as _lv2_err:
+        log.warning("[LIVEV2] Failed to start Live v2 batcher: %s", _lv2_err)
+
 
 def ensure_runtime_services_started() -> None:
     """Start background feed/runtime services once for both script and app-factory boot."""
@@ -13574,15 +13651,16 @@ def ensure_runtime_services_started() -> None:
             cb = get_candle_builder()
             if cb is None:
                 return
-            
-            # Heavy historical seeding removed from startup to prevent machine freeze. 
-            # fetch_candles() in candles_cache.py automatically falls back to REST 
-            # during the first scan if the cache is missing.
-            # _seed_pairs = [p for p in ALL_PAIRS if p.get("source") == "eodhd"]
-            # cb.seed(_seed_pairs) 
+
+            # Re-seed only the non-WS US stock/ETF set so CandleBuilder has enough
+            # H1/H4 history to avoid per-pair intraday REST fallback on cold start.
+            non_ws_stock_pairs = build_non_ws_stock_pairs(ALL_PAIRS)
+            if non_ws_stock_pairs:
+                cb.seed(non_ws_stock_pairs)
 
             cb.bulk_update_d1()  # fresh D1 from Bulk API
             cb.start_refresh_loop()  # bulk D1 every 4h
+            start_live_v2_batcher_for_non_ws_stocks(ALL_PAIRS, _ws_key, poll_interval=60)
 
         threading.Thread(target=_cb_startup, daemon=True, name="candle-seed").start()
         log.info(
