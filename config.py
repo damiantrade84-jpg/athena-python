@@ -358,41 +358,8 @@ CONFIG: dict = {
         "stock": 1.10,
         "index": 1.17,
     },
-    "BT_MIN_GROUP": {
-        "forex": {
-            "forex_majors": 1.50,
-            "forex_crosses": 1.60,
-            "forex_exotics": 1.70,
-        },
-        "crypto": {
-            "crypto_btc": 2.15,
-            "crypto_eth": 2.15,
-            "crypto_alt_majors": 2.15,
-            "crypto_doge": 2.15,
-            "crypto_other": 2.15,
-        },
-        "commodity": {
-            "nat_gas": 1.80,
-            "pgm_metals": 1.80,
-            "copper": 1.80,
-            "precious_trackers": 1.80,
-            "energy_oil": 1.80,
-            "commodity_other": 1.80,
-        },
-        "index": {
-            "asian_indices": 1.17,
-            "us_indices_trackers": 1.17,
-            "eu_indices": 1.17,
-            "index_other": 1.17,
-        },
-        "stock": {
-            "us_stock_single": 1.10,
-            "smallcap_em_etf": 1.10,
-            "bond_tlt": 1.10,
-            "stock_other": 1.10,
-        },
-    },
-    # Engine A backtest: use BT_MIN / BT_MIN_GROUP / pair bt_min when True (live unchanged).
+    # BT_MIN_GROUP removed — backtest uses BT_MIN class-level thresholds directly.
+    # Engine A backtest: use BT_MIN / pair bt_min when True (live unchanged).
     # RESEARCH_MODE also enables the same BT chain (legacy alias).
     "RESEARCH_MODE": False,
     "BACKTEST_USE_BT_MIN_THRESHOLDS": False,
