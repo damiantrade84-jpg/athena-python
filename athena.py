@@ -7160,7 +7160,7 @@ def _persist_bt_min_yaml(cfg_path: str, current: dict) -> None:
         block = m.group(0)
         for cls, val in current.items():
             block = _re.sub(
-                rf"^({_re.escape(cls)}\s*:\s*)[\d.]+",
+                rf"^([ \t]+{_re.escape(cls)}\s*:\s*)[\d.]+",
                 lambda mm, v=val: f"{mm.group(1)}{v}",
                 block,
                 flags=_re.MULTILINE,
@@ -7282,7 +7282,7 @@ def _apply_naked_style_score_updates(new_vals: dict) -> dict:
 
 def _engine_a_threshold_max_for_class(asset_class: str) -> float:
     """Return the Engine A score-cap-aligned max threshold for an asset class."""
-    return 2.0 if str(asset_class or "").lower() == "forex" else 3.0
+    return 3.0  # Engine A v2: unified 0-3.0 scale for all asset classes (was 2.0 for forex pre-v2)
 
 
 _SCAN_SETTINGS_KEYS = (
