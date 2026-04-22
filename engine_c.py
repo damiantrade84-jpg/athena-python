@@ -285,9 +285,8 @@ def normalise_engine_a(signal_a: dict) -> dict:
         norm = min(1.0, score / max_score) if max_score > 0 else 0.0
     norm = max(0.0, min(1.0, norm))
 
-    # No forex-specific rescale. Both forex (0-2.0) and non-forex (0-3.0) use
-    # the same raw bounded ratio: norm = score / max_score. This keeps the
-    # normalization simple and asset-consistent.
+    # No forex-specific rescale. All asset classes (Engine A v2) use 0-3.0 scale.
+    # norm = score / max_score keeps normalization simple and asset-consistent.
 
     regime_data = signal_a.get("regime", {})
     if isinstance(regime_data, dict):
@@ -313,8 +312,7 @@ def normalise_engine_a(signal_a: dict) -> dict:
     ])
 
     # Floor for signal participation: norm must exceed 30% of max_score.
-    # Both forex (0-2.0) and non-forex (0-3.0) use norm = score/max_score,
-    # so forex needs score > 0.60, non-forex needs score > 0.90 to participate.
+    # All asset classes use 0-3.0 scale (Engine A v2): score > 0.90 to participate.
     _a_has_floor = 0.30
     return {
         "score_norm": round(norm, 4),

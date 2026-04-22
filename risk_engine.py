@@ -341,7 +341,7 @@ def _adaptive_risk_pct(asset_type: str, regime: str = "") -> float:
 
     Uses half-Kelly criterion: kelly * 0.5 for safety.
     Falls back to fixed RISK_PCT if insufficient data (<10 trades).
-    Clamped to 0.5%-3% hard safety bounds.
+    Clamped between per-asset base risk floor and per-asset KELLY_MAX_RISK cap from config.
 
     Per-asset-class base risk:
     - Forex: 0.5% (lower risk, tighter stops with D1 ATR)
@@ -402,8 +402,10 @@ def _adaptive_risk_pct(asset_type: str, regime: str = "") -> float:
         # Half-Kelly for safety (proven approach)
         half_kelly = kelly_pct * 0.5
 
-        # Clamp between 0.5% and 3%
-        adaptive_risk = max(0.005, min(0.03, half_kelly))
+        # Clamp between base_risk floor and per-asset Kelly max cap
+        _kelly_max_map = _cfg("KELLY_MAX_RISK", {}) or {}
+        _kelly_cap = _kelly_max_map.get(asset_type, _cfg("MAX_RISK_PER_TRADE", 0.03))
+        adaptive_risk = max(base_risk, min(_kelly_cap, half_kelly))
 
         # Regime adjustment: reduce in HIGH_VOLATILITY
         if regime == "HIGH_VOLATILITY":
@@ -555,10 +557,18 @@ def _calc_volume(
         vol_step = (
             symbol_info.get("volume_step", 1.0) if symbol_info else 1.0
         )  # whole shares
-    else:
+    else:  # forex, commodity, index
         vol_min = symbol_info.get("volume_min", 0.01) if symbol_info else 0.01
         vol_max = symbol_info.get("volume_max", 100.0) if symbol_info else 100.0
         vol_step = symbol_info.get("volume_step", 0.01) if symbol_info else 0.01
+        # Hard max lot cap from config (safety net for forex/commodity)
+        _max_lots_map = _cfg("MAX_LOTS", {}) or {}
+        _cfg_max = _max_lots_map.get(asset_type)
+        if _cfg_max is not None and volume > float(_cfg_max):
+            log.warning(
+                f"[RISK] {asset_type} volume {volume:.2f} clamped to MAX_LOTS={_cfg_max} (config safety cap)"
+            )
+            volume = float(_cfg_max)
 
     if volume < vol_min:
         log.warning(f"[RISK] volume {volume:.6f} < vol_min {vol_min} — too small")

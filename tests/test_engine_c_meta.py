@@ -109,20 +109,20 @@ def test_blocked_remains_skip():
 def test_normalise_engine_a_uses_raw_ratio_no_forex_rescale():
     """Verify normalise_engine_a() uses raw bounded ratio without forex rescale.
 
-    After Phase 2B fix: no forex-specific 1.5x rescale. Both forex (0-2.0) and
-    non-forex (0-3.0) use the same raw bounded ratio: norm = score / max_score.
+    After Phase 2B fix: no forex-specific 1.5x rescale. All asset classes use
+    unified 0-3.0 scale (Engine A v2): norm = score / max_score.
     """
-    # Forex signal with max_score 2.0
+    # Forex signal with max_score 3.0 (Engine A v2 unified scale)
     signal_forex = {
         "confluenceScore": 0.95,
-        "maxScore": 2.0,
+        "maxScore": 3.0,
         "direction": "LONG",
     }
     norm = normalise_engine_a(signal_forex)
 
-    # Raw norm = 0.95/2.0 = 0.475 (no rescale)
+    # Raw norm = 0.95/3.0 ≈ 0.3167 (no rescale)
     # Floor = 0.30, so has_signal = True
-    assert norm["score_norm"] == 0.475
+    assert round(norm["score_norm"], 4) == 0.3167
     assert norm["has_signal"] is True
 
     # Non-forex signal with max_score 3.0
@@ -141,12 +141,12 @@ def test_normalise_engine_a_uses_raw_ratio_no_forex_rescale():
     # Forex signal below floor (no rescale)
     signal_forex_low = {
         "confluenceScore": 0.5,
-        "maxScore": 2.0,
+        "maxScore": 3.0,
         "direction": "LONG",
     }
     norm3 = normalise_engine_a(signal_forex_low)
 
-    # Raw norm = 0.5/2.0 = 0.25 (no rescale)
+    # Raw norm = 0.5/3.0 ≈ 0.1667 (no rescale)
     # Floor = 0.30, so has_signal = False
-    assert norm3["score_norm"] == 0.25
+    assert round(norm3["score_norm"], 4) == 0.1667
     assert norm3["has_signal"] is False

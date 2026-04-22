@@ -399,6 +399,22 @@ BACKTEST_DISABLE_HURST_GATE: false  # Measurement complete 2026-04-18: disabling
 ADAPTIVE_KELLY_ENABLED: true       # Use fractional Kelly for dynamic position sizing
 KELLY_FRACTION: 0.5                # Half-Kelly (safety proven)
 
+# Per-asset Kelly max risk cap (fraction of account). Prevents oversized forex positions
+# when tight SLs (scalp/intraday H1 ATR ~16 pips) amplify lot size.
+# Default 3% inherited from MAX_RISK_PER_TRADE for asset classes without an entry.
+KELLY_MAX_RISK:
+  forex:     0.010    # 1.0% — forex scalp SL ~16 pips → 1% keeps lots ≤ ~1.8 on $30K
+  crypto:    0.030    # 3.0% (unchanged)
+  stock:     0.030
+  commodity: 0.020    # 2.0% — commodities can have wide tick values
+  index:     0.020
+
+# Hard max lot cap per asset class. Safety net against oversized positions regardless of sizing math.
+MAX_LOTS:
+  forex:     1.0      # 1.0 standard lot = 100K units. Prevents 5+ lot forex entries.
+  commodity: 5.0
+  # crypto/stock: use broker vol_max (no additional cap needed)
+
 # ── Signal Debate (Bull/Bear/Judge) ───────────────────────
 SIGNAL_DEBATE_ENABLED: true        # Run LLM debate before auto-trades (needs XAI_API_KEY)
 AI_BASE_URL: "https://api.x.ai/v1"
@@ -564,6 +580,24 @@ FACTOR_MIN_DIRECTIONAL: 0.25
 FACTOR_DIRECTIONAL_SOFT_SPAN: 0.20
 FACTOR_MIN_DIRECTIONAL_CRYPTO: 0.15
 FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO: 0.30
+
+# ── Engine A v2 factor_scoring.py tunables ────────────────────────────────────
+# ADX gate (Wilder 1978): hard abort below hard_fail, soft penalty between hard_fail and ADX_TREND_MIN_CLASS.
+FACTOR_ADX_HARD_FAIL: 15.0          # ADX below this = dead market, score 0 (hard abort)
+FACTOR_ADX_SOFT_MULT: 0.65          # Multiplier applied when ADX is between hard_fail and class min
+
+# Session multipliers (forex only — soft liquidity adjustment, not hard gate)
+FACTOR_SESSION_CORE_MULT: 1.00      # London 07-16 UTC, NY 13-21 UTC
+FACTOR_SESSION_SHOULDER_MULT: 0.90  # ±1h around core sessions
+FACTOR_SESSION_OFF_MULT: 0.75       # Outside all sessions
+
+# Conviction formula weights (how momentum + addon size the final score)
+FACTOR_MOMENTUM_WEIGHT: 0.50        # Weight of momentum quality (RSI+MACD) in conviction
+FACTOR_ADDON_WEIGHT: 0.30           # Weight of asset addon (carry/funding/COT) in conviction
+FACTOR_BASE_WEIGHT: 0.20            # Floor conviction (always present if trend valid)
+
+# Final score blend: score = base_score × (floor + (1-floor) × conviction)
+FACTOR_CONVICTION_FLOOR: 0.60       # Even flat conviction passes 60% of trend signal
 
 # Regime smoothing: number of consecutive H4 bars that must agree on a new regime
 # before the committed regime switches. Prevents regime whipsawing from bar to bar.

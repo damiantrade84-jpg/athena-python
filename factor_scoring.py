@@ -31,25 +31,28 @@ log = logging.getLogger("athena")
 
 _CRYPTO_COT_PAIRS = {"BTC/USDT", "ETH/USDT"}
 
-# ADX gate thresholds (Wilder 1978 standard)
-_ADX_HARD_FAIL = 15.0   # below this → dead market, abort
-_ADX_SOFT_FULL = 25.0   # at or above this → full credit
-_ADX_SOFT_MULT = 0.65   # multiplier in soft zone (15–25)
+# ADX gate thresholds (Wilder 1978 standard) — tunable via config.yaml FACTOR_ADX_*
+_ADX_HARD_FAIL = float(CONFIG.get("FACTOR_ADX_HARD_FAIL", 15.0))   # below this → dead market, abort
+_ADX_SOFT_FULL = 25.0   # at or above this → full credit (uses ADX_TREND_MIN_CLASS per asset)
+_ADX_SOFT_MULT = float(CONFIG.get("FACTOR_ADX_SOFT_MULT", 0.65))   # multiplier in soft zone
 
-# Session multipliers (forex only — soft, not hard)
-_SESSION_CORE_MULT = 1.00    # London 07-16 UTC, NY 13-21 UTC
-_SESSION_SHOULDER_MULT = 0.90
-_SESSION_OFF_MULT = 0.75
+# Session multipliers (forex only — soft, not hard) — tunable via config.yaml FACTOR_SESSION_*
+_SESSION_CORE_MULT = float(CONFIG.get("FACTOR_SESSION_CORE_MULT", 1.00))
+_SESSION_SHOULDER_MULT = float(CONFIG.get("FACTOR_SESSION_SHOULDER_MULT", 0.90))
+_SESSION_OFF_MULT = float(CONFIG.get("FACTOR_SESSION_OFF_MULT", 0.75))
 
 # Addon contribution bounds
 _ADDON_CONFIRM = 0.30    # confirming the trend direction
 _ADDON_NEUTRAL = 0.00    # data missing or neutral
 _ADDON_AGAINST = -0.15   # actively opposing direction
 
-# Final score formula weights
-_MOMENTUM_WEIGHT = 0.50
-_ADDON_WEIGHT = 0.30
-_BASE_WEIGHT = 0.20      # base floor contribution (always present if trend valid)
+# Final score formula weights — tunable via config.yaml FACTOR_*_WEIGHT
+_MOMENTUM_WEIGHT = float(CONFIG.get("FACTOR_MOMENTUM_WEIGHT", 0.50))
+_ADDON_WEIGHT = float(CONFIG.get("FACTOR_ADDON_WEIGHT", 0.30))
+_BASE_WEIGHT = float(CONFIG.get("FACTOR_BASE_WEIGHT", 0.20))
+
+# Conviction floor in final score blend — tunable via config.yaml FACTOR_CONVICTION_FLOOR
+_CONVICTION_FLOOR = float(CONFIG.get("FACTOR_CONVICTION_FLOOR", 0.60))
 
 
 # ── Regime smoothing (kept for scan-level stability) ──────────────────────────
@@ -543,10 +546,10 @@ def compute_factor_scores(
     # ── Final score ───────────────────────────────────────────────────────────
     # base_score: driven by trend coherence (0-3.0 scale from _coherent_trend_score)
     # applied: adx_mult * session_mult * conviction blend
-    # Formula: abs(trend_score) * adx_mult * session_mult * (0.6 + 0.4*conviction)
-    # The 0.6 floor means even a flat momentum+addon still passes >50% of trend signal.
+    # Formula: abs(trend_score) * adx_mult * session_mult * (floor + (1-floor)*conviction)
+    # The conviction floor means even flat momentum+addon still passes a fraction of trend signal.
     base_score = abs(trend_score) * adx_mult * session_mult
-    final_score = base_score * (0.6 + 0.4 * conviction)
+    final_score = base_score * (_CONVICTION_FLOOR + (1.0 - _CONVICTION_FLOOR) * conviction)
     final_score = max(0.0, min(3.0, final_score))
 
     # ── Factor scores dict (for UI / Marcus Reid diagnostics) ─────────────────

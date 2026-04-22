@@ -29,8 +29,8 @@ def test_pair_score_group_mapping_examples():
 
 def test_min_confluence_uses_group_threshold_when_no_pair_override():
     pair = {"display": "USD/ZAR", "symbol": "USDZAR=X", "type": "forex"}
-    # forex_exotics: MIN_CONFLUENCE_GROUP.forex.forex_exotics in config.yaml (0–2.0 forex scale)
-    assert get_min_confluence_threshold(pair) == 1.05
+    # forex_exotics: MIN_CONFLUENCE_GROUP.forex.forex_exotics in config.yaml (Engine A v2 0–3.0 scale)
+    assert get_min_confluence_threshold(pair) == 1.30
 
 
 def test_pair_profile_can_override_score_group_and_threshold():

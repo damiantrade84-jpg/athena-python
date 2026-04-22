@@ -74,16 +74,16 @@ def test_athena_source_uses_class_specific_engine_b_overlay_gate():
 # ── Phase 1: _max_score_for_pair contract tests ──────────────────────────────
 
 
-def test_max_score_for_pair_forex_returns_2_0():
-    """Forex pairs use forex_scoring.py with 0-2.0 scale."""
+def test_max_score_for_pair_forex_returns_3_0():
+    """Forex pairs use factor_scoring.py with unified 0-3.0 scale (Engine A v2)."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("athena_main", ATHENA_PATH)
     athena_mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(athena_mod)
     _max_score_for_pair = athena_mod._max_score_for_pair
 
-    assert _max_score_for_pair({"type": "forex"}) == 2.0
-    assert _max_score_for_pair({"type": "forex", "display": "EUR/USD"}) == 2.0
+    assert _max_score_for_pair({"type": "forex"}) == 3.0
+    assert _max_score_for_pair({"type": "forex", "display": "EUR/USD"}) == 3.0
 
 
 def test_max_score_for_pair_crypto_returns_3_0():

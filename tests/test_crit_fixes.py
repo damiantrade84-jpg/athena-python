@@ -3,7 +3,7 @@
 CRIT-001: /api/quick-execute must enforce EXECUTION_ENABLED and kill_switch
           guards with the same behavior as /api/execute.
 
-CRIT-002: Forex intermarket max_score cap must be the same (2.0) across
+CRIT-002: Forex intermarket max_score cap must be the same (3.0) across
           live (athena.py) and backtest (backtest_runner.py) paths.
 """
 import importlib
@@ -165,19 +165,19 @@ class TestQuickExecuteExecutionGuard:
 class TestForexIntermarketCapParity:
 
     def test_constant_value(self):
-        """FOREX_ENGINE_A_MAX_SCORE must equal 2.0 (the live contract)."""
+        """FOREX_ENGINE_A_MAX_SCORE must equal 3.0 (Engine A v2 unified scale)."""
         from intermarket import FOREX_ENGINE_A_MAX_SCORE
-        assert FOREX_ENGINE_A_MAX_SCORE == 2.0
+        assert FOREX_ENGINE_A_MAX_SCORE == 3.0
 
     def test_live_path_uses_shared_constant(self):
-        """FOREX_ENGINE_A_MAX_SCORE must equal the live athena.py hardcoded value (2.0).
+        """FOREX_ENGINE_A_MAX_SCORE must equal the live athena.py value (3.0).
 
-        The live athena.py path calls apply_confirmation_to_score(max_score=2.0).
+        Engine A v2 uses a unified 0-3.0 scale for all asset classes including forex.
         The constant must be equal so both paths are always in sync.
         """
         from intermarket import FOREX_ENGINE_A_MAX_SCORE
-        # Live hard-codes 2.0 (athena.py:9302); the constant must match exactly.
-        assert FOREX_ENGINE_A_MAX_SCORE == 2.0
+        # Engine A v2 unified 0-3.0 scale; the constant must match exactly.
+        assert FOREX_ENGINE_A_MAX_SCORE == 3.0
 
         # Sanity: the old (wrong) backtest value was 1.0
         assert FOREX_ENGINE_A_MAX_SCORE != 1.0, (
@@ -231,7 +231,7 @@ class TestForexIntermarketCapParity:
 
 
     def test_parity_equivalent_inputs_live_and_backtest_style(self):
-        """Live-style (max_score=2.0) and backtest-style (FOREX_ENGINE_A_MAX_SCORE)
+        """Live-style (max_score=3.0) and backtest-style (FOREX_ENGINE_A_MAX_SCORE)
         calls with identical inputs must produce the same adjusted score."""
         from intermarket import apply_confirmation_to_score, FOREX_ENGINE_A_MAX_SCORE
 
@@ -240,7 +240,7 @@ class TestForexIntermarketCapParity:
         raw_ctx = None  # engine_a disabled → delta=0 in both paths, base returned unchanged
 
         result_live_style = apply_confirmation_to_score(
-            base, "LONG", pair, raw_ctx, max_score=2.0  # live athena.py value
+            base, "LONG", pair, raw_ctx, max_score=3.0  # Engine A v2 unified scale
         )
         result_bt_style = apply_confirmation_to_score(
             base, "LONG", pair, raw_ctx, max_score=FOREX_ENGINE_A_MAX_SCORE  # fixed constant

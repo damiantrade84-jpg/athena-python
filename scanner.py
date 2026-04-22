@@ -719,7 +719,14 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             futures = {pool.submit(_analyse, pair): pair for pair in candidate_pairs}
 
             for fut in as_completed(futures):
-                pair, sig, err = fut.result()
+                pair = futures[fut]
+                try:
+                    pair_result, sig, err = fut.result(timeout=60)
+                except TimeoutError:
+                    errors.append({"pair": pair["display"], "error": "Scan timeout (60s)"})
+                    scan_funnel["errors"] += 1
+                    log.error(f"{pair['display']:12s} ERR: Scan timeout (60s)")
+                    continue
 
                 if err:
                     errors.append({"pair": pair["display"], "error": err})

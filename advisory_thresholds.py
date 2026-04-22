@@ -23,7 +23,7 @@ _ENGINE_A_BY_ASSET = {
     "commodity": "factor_scoring",
     "stock": "factor_scoring",
     "index": "factor_scoring",
-    "forex": "forex_scoring",
+    "forex": "factor_scoring",  # Engine A v2 unified — forex routes through factor_scoring.py
 }
 
 _ASSET_LABELS = {
@@ -36,19 +36,19 @@ _ASSET_LABELS = {
 
 _BT_STEP = {"forex": 0.03}
 _BT_LIMITS = {
-    "forex": (0.80, 1.90),
-    "crypto": (0.30, 2.00),
-    "commodity": (0.30, 2.00),
-    "stock": (0.30, 2.00),
-    "index": (0.30, 2.00),
+    "forex": (0.80, 2.80),      # Engine A v2: 0-3.0 scale (was 0.80-1.90 on old 0-2.0 scale)
+    "crypto": (0.60, 3.00),     # Engine A v2: 0-3.0 scale (was 0.30-2.00)
+    "commodity": (0.60, 3.00),  # Engine A v2: 0-3.0 scale (was 0.30-2.00)
+    "stock": (0.60, 3.00),      # Engine A v2: 0-3.0 scale (was 0.30-2.00)
+    "index": (0.60, 3.00),      # Engine A v2: 0-3.0 scale (was 0.30-2.00)
 }
 _LIVE_STEP = 0.05
 _LIVE_LIMITS = {
-    "forex": (1.00, 2.00),
-    "crypto": (0.60, 2.50),
-    "commodity": (0.60, 2.50),
-    "stock": (0.60, 2.50),
-    "index": (0.60, 2.50),
+    "forex": (1.00, 2.80),      # Engine A v2: 0-3.0 scale (was 1.00-2.00 on old 0-2.0 scale)
+    "crypto": (0.80, 3.00),     # Engine A v2: 0-3.0 scale (was 0.60-2.50)
+    "commodity": (0.80, 3.00),  # Engine A v2: 0-3.0 scale (was 0.60-2.50)
+    "stock": (0.80, 3.00),      # Engine A v2: 0-3.0 scale (was 0.60-2.50)
+    "index": (0.80, 3.00),      # Engine A v2: 0-3.0 scale (was 0.60-2.50)
 }
 _ENGINE_A_TRADE_FLOOR = {
     "forex": 25.0,

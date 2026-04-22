@@ -124,5 +124,5 @@ def test_execution_uses_aware_utc_timestamp_and_no_dead_macro_expression():
 
 def test_live_forex_payload_exposes_explicit_regime_name():
     src = ATHENA_PATH.read_text(encoding="utf-8")
-    assert '"regimeName": _fx_regime.get("label", "RANGING")' in src
-
+    # Engine A v2: forex uses unified calc_confluence; regimeName still exposed in signal dict
+    assert '"regimeName": res.get("regimeName")' in src
