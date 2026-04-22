@@ -1555,7 +1555,7 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       <div style="display:flex;align-items:center;gap:12px;">
         <button class="bt-btn" onclick="saveBtMin()" id="btMinSaveBtn" style="padding:8px 20px;font-size:12px;">&#10003; SAVE THRESHOLDS</button>
         <span id="btMinStatus" style="font-size:11px;color:var(--muted);"></span>
-        <span style="font-size:11px;color:var(--muted);margin-left:auto;">Factor engine scale: crypto/commodity/stock/index = 0–3.0 &nbsp;|&nbsp; Forex = 0–2.0</span>
+        <span style="font-size:11px;color:var(--muted);margin-left:auto;">Factor engine scale: crypto/commodity/stock/index = 0–3.0 &nbsp;|&nbsp; Forex = 0–3.0</span>
       </div>
     </div>
 
@@ -5091,9 +5091,9 @@ async function loadBtMinValues() {
       }
     }
 
-    var LABELS = {crypto:'Crypto (0–3 scale)',forex:'Forex (0–2 scale)',commodity:'Commodity (0–3)',stock:'Stock (0–3)',index:'Index (0–3)'};
+    var LABELS = {crypto:'Crypto (0–3 scale)',forex:'Forex (0–3 scale)',commodity:'Commodity (0–3)',stock:'Stock (0–3)',index:'Index (0–3)'};
     var STEPS  = {crypto:0.05,forex:0.01,commodity:0.05,stock:0.05,index:0.05};
-    var MAXES  = {crypto:3.0,forex:2.0,commodity:3.0,stock:3.0,index:3.0};
+    var MAXES  = {crypto:3.0,forex:3.0,commodity:3.0,stock:3.0,index:3.0};
 
     container.innerHTML = '';
     for (var cls of ['crypto','forex','commodity','stock','index']) {
@@ -6121,7 +6121,7 @@ async function checkScoreDecay() {
       if (!isOpenOnBoard) continue;
 
       var lastAlerted = _lastDecayAlerts[pair] || 0;
-      // Use decayPct (scale-neutral %) so forex (0-2) and factor (0-3) pairs both alert.
+      // Use decayPct (scale-neutral %) so all asset classes alert uniformly (0-3 unified scale).
       // Fire toast if: 40%+ drop  OR  direction flip  OR  AI says EXIT with 25%+ drop — only when worsening
       var pct = d.decayPct || 0;
       var shouldAlert = (pct >= 40 || d.directionFlip || (d.aiVerdict === 'EXIT' && pct >= 25)) && pct > lastAlerted;
