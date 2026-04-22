@@ -366,11 +366,11 @@ CONFIG: dict = {
     "BACKTEST_EVENT_RISK_GATING": False,
     "BACKTEST_SENTIMENT_GATING": False,
     "MIN_CONFLUENCE_CLASS": {
-        "forex": 1.20,
-        "crypto": 1.40,
-        "commodity": 1.40,
-        "stock": 1.55,
-        "index": 1.35,
+        "crypto": 2.4,
+        "forex": 2.1,
+        "commodity": 1.8,
+        "stock": 1.8,
+        "index": 1.5,
     },
     # PHASE 3: Engine C Backtest Exit Controls - explicit config for MAX_HOLD and BE parameters
     "ENGINE_C_BT_EXIT": {
@@ -412,40 +412,7 @@ CONFIG: dict = {
         "index": 0.15,
         "commodity": 0.18,
     },
-    # Optional subgroup thresholds (used when score_group is available on a pair).
-    "MIN_CONFLUENCE_GROUP": {
-        "forex": {
-            "forex_majors": 1.05,
-            "forex_crosses": 1.15,
-            "forex_exotics": 1.30,
-        },
-        "crypto": {
-            "crypto_btc": 1.28,
-            "crypto_eth": 1.34,
-            "crypto_alt_majors": 1.40,
-            "crypto_other": 1.40,
-        },
-        "commodity": {
-            "nat_gas": 1.45,
-            "pgm_metals": 1.40,
-            "copper": 1.35,
-            "precious_trackers": 1.40,
-            "energy_oil": 1.25,
-            "commodity_other": 1.35,
-        },
-        "index": {
-            "asian_indices": 1.45,
-            "us_indices_trackers": 1.35,
-            "eu_indices": 1.30,
-            "index_other": 1.35,
-        },
-        "stock": {
-            "us_stock_single": 1.55,
-            "smallcap_em_etf": 1.40,
-            "bond_tlt": 1.25,
-            "stock_other": 1.50,
-        },
-    },
+    # MIN_CONFLUENCE_GROUP removed — live uses MIN_CONFLUENCE_CLASS directly.
     # Factor scoring gates — see factor_scoring.py
     "FACTOR_MIN_DIRECTIONAL": 0.25,  # Skip if abs(dir_score) < this (near-directionless signal)
     "FACTOR_DIRECTIONAL_SOFT_SPAN": 0.20,  # Smooth transition width for directional confidence
