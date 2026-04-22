@@ -458,6 +458,28 @@ def pre_trade_check(
         pass  # Degrade gracefully if config unavailable
 
     # ── Check 6: Signal freshness ──────────────────────────────────────
+    try:
+        from config import CONFIG
+
+        if CONFIG.get("ENGINE_A_STALE_CANDLE_GUARD", True):
+            candle_meta = signal.get("candleFetchMeta") or signal.get("candleMeta")
+            if isinstance(candle_meta, dict):
+                stale_tfs = []
+                for tf in ("H1", "H4"):
+                    tf_meta = candle_meta.get(tf)
+                    if not isinstance(tf_meta, dict):
+                        continue
+                    if tf_meta.get("lastBarStale") is True:
+                        age = tf_meta.get("lastBarAgeSec")
+                        try:
+                            stale_tfs.append(f"{tf}:{float(age):.0f}s")
+                        except (TypeError, ValueError):
+                            stale_tfs.append(tf)
+                if stale_tfs:
+                    return False, f"STALE_CANDLES: {', '.join(stale_tfs)}"
+    except Exception:
+        pass
+
     ts_str = signal.get("timestamp")
     if ts_str:
         try:

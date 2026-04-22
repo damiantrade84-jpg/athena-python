@@ -19,6 +19,7 @@ NEWS_BG_INTERVAL_SEC: 3600    # How often the background news loop runs (seconds
 NEWS_PAIR_CACHE_TTL_SEC: 14400 # How long per-pair news/word-weights are cached after an AI fetch (seconds). Default 14400 = 4 hours.
 BACKTEST_MAX_WORKERS: 8       # Parallel workers for backtesting (Engine A & B). Increase for faster backtests.
 SCAN_DEBUG_CANDLE_META: false # Optional scan/debug payload metadata about candle resolution path.
+ENGINE_A_DIVERGENCE_MONITOR_ENABLED: true  # Replay Engine A on the same trade-tier live candles to log parity checks.
 FOREX_H4_RESAMPLE_OFFSET_HOURS: 1   # EURAUD/TradingView-aligned forex H4 grid: 01/05/09/13/17/21 UTC
 
 # Per-class D1 ADX trend minimum
@@ -272,6 +273,7 @@ MAX_PORTFOLIO_HEAT: 0.06      # 6% total risk across all positions
 MAX_OPEN_POSITIONS: 20        # Testing only — revert before live
 MAX_CORRELATED_POSITIONS: 3   # Allow up to 3 correlated positions (e.g. 3 USD pairs)
 SIGNAL_MAX_AGE_SEC: 300       # 5 min freshness window
+ENGINE_A_STALE_CANDLE_GUARD: true  # Block execution when Engine A H1/H4 fetch metadata says the last closed bar is stale.
 FOREX_SESSION_FILTER: true    # true = London+NY+Asian only; false = 24h (disable for testing)
 SERVER_TZ_OFFSET_HOURS: 2    # Your local timezone UTC offset — SAST = 2 (GMT+2)
 FOREX_H4_RESAMPLE_OFFSET_HOURS: 1.0  # Align H4 grid to 01/05/09/13/17/21 UTC (matches TV NY-aligned brokers)
@@ -751,11 +753,11 @@ NAKED_ENGINE:
   # Dashboard: Backtest tab → ENGINE B THRESHOLDS → saves via POST /api/naked-style-thresholds (no restart).
   style_profiles:
     scalp:
-      min_score: 3.0
+      min_score: 4.0
       min_rr: 1.5
       fallback_rr: 2.0
     intraday:
-      min_score: 4.0
+      min_score: 5.0
       min_rr: 1.5
       fallback_rr: 2.0
     swing:
@@ -793,64 +795,64 @@ NAKED_ENGINE:
       intraday: {min_room_atr: 0.85, min_rr: 1.35}
       swing: {min_room_atr: 1.2, min_rr: 1.8}
     nat_gas:
-      scalp: {min_score: 3.0, min_rr: 1.4}
-      intraday: {min_score: 4.0, min_rr: 1.6}
+      scalp: {min_score: 4.0, min_rr: 1.4}
+      intraday: {min_score: 5.0, min_rr: 1.6}
       swing: {min_score: 5.0, min_rr: 2.0}
     crypto_doge:
-      scalp: {min_score: 3.0, min_room_atr: 0.5, min_rr: 1.3}
-      intraday: {min_score: 4.0, min_room_atr: 0.9, min_rr: 1.5}
+      scalp: {min_score: 4.0, min_room_atr: 0.5, min_rr: 1.3}
+      intraday: {min_score: 5.0, min_room_atr: 0.9, min_rr: 1.5}
       swing: {min_score: 5.0, min_room_atr: 1.2, min_rr: 1.9}
     crypto_btc:
-      scalp: {min_score: 3.0}
-      intraday: {min_score: 4.0}
+      scalp: {min_score: 4.0}
+      intraday: {min_score: 5.0}
       swing: {min_score: 5.0}
     crypto_eth:
-      scalp: {min_score: 3.0}
-      intraday: {min_score: 4.0}
+      scalp: {min_score: 4.0}
+      intraday: {min_score: 5.0}
       swing: {min_score: 5.0}
     crypto_alt_majors:
-      scalp: {min_score: 3.0}
-      intraday: {min_score: 4.0}
+      scalp: {min_score: 4.0}
+      intraday: {min_score: 5.0}
       swing: {min_score: 5.0}
     crypto_other:
-      scalp: {min_score: 3.0}
-      intraday: {min_score: 4.0}
+      scalp: {min_score: 4.0}
+      intraday: {min_score: 5.0}
       swing: {min_score: 5.0}
     energy_oil:
-      scalp: {min_score: 3.0}
-      intraday: {min_score: 4.0}
+      scalp: {min_score: 4.0}
+      intraday: {min_score: 5.0}
       swing: {min_score: 5.0}
     precious_trackers:
-      scalp: {min_score: 3.0}
-      intraday: {min_score: 4.0}
+      scalp: {min_score: 4.0}
+      intraday: {min_score: 5.0}
       swing: {min_score: 5.0}
     commodity_other:
-      scalp: {min_score: 3.0}
-      intraday: {min_score: 4.0}
+      scalp: {min_score: 4.0}
+      intraday: {min_score: 5.0}
       swing: {min_score: 5.0}
     copper:
-      scalp: {min_score: 3.0}
-      intraday: {min_score: 4.0}
+      scalp: {min_score: 4.0}
+      intraday: {min_score: 5.0}
       swing: {min_score: 5.0}
     pgm_metals:
-      scalp: {min_score: 3.0}
-      intraday: {min_score: 4.0}
+      scalp: {min_score: 4.0}
+      intraday: {min_score: 5.0}
       swing: {min_score: 5.0}
     us_stock_single:
-      scalp: {min_score: 3.0}
-      intraday: {min_score: 4.0}
+      scalp: {min_score: 4.0}
+      intraday: {min_score: 5.0}
       swing: {min_score: 5.0}
     stock_other:
-      scalp: {min_score: 3.0}
-      intraday: {min_score: 4.0}
+      scalp: {min_score: 4.0}
+      intraday: {min_score: 5.0}
       swing: {min_score: 5.0}
     smallcap_em_etf:
-      scalp: {min_score: 3.0}
-      intraday: {min_score: 4.0}
+      scalp: {min_score: 4.0}
+      intraday: {min_score: 5.0}
       swing: {min_score: 5.0}
     bond_tlt:
-      scalp: {min_score: 3.0}
-      intraday: {min_score: 4.0}
+      scalp: {min_score: 4.0}
+      intraday: {min_score: 5.0}
       swing: {min_score: 5.0}
 
 # Neutralized by default — use the base Engine B min_score directly unless

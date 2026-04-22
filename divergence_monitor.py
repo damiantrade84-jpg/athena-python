@@ -85,6 +85,10 @@ def check_divergence(
     macro_context: dict | None = None,
     intermarket_context: dict | None = None,
     bar_time: str | None = None,
+    style: str = "swing",
+    volume_threshold: float | None = None,
+    regime_context: dict | None = None,
+    volume_ratio: float | None = None,
 ) -> dict:
     """Compare live scan result against backtest scoring path on same data.
 
@@ -97,7 +101,12 @@ def check_divergence(
         oi_data, oi_context, macro_context, intermarket_context: Optional
             contextual inputs from the live scan so the replay path can match
             the current Engine A factor route more closely
-        bar_time: Optional explicit bar timestamp. Falls back to the last H4 bar.
+        bar_time: Optional explicit bar timestamp. When omitted, the replay keeps
+            the live calc_confluence() default behavior.
+        style: Engine A style so the replay uses the same stochastic source as
+            analyze_pair().
+        volume_threshold: Same pair/profile threshold used by analyze_pair().
+        regime_context: Same regime smoothing context used by analyze_pair().
 
     Returns:
         dict with diverged (bool), severity, live_*, bt_*, diffs, and summary
@@ -106,7 +115,10 @@ def check_divergence(
     display = pair.get("display", "")
 
     # Extract live values
-    live_score = live_result.get("score", live_result.get("final_score", 0))
+    live_score = live_result.get(
+        "score",
+        live_result.get("final_score", live_result.get("confluenceScore", 0)),
+    )
     live_dir = live_result.get("direction", "UNKNOWN")
     live_regime_raw = live_result.get("regime")
     if isinstance(live_regime_raw, dict):
@@ -133,12 +145,18 @@ def check_divergence(
         h4i = calc_indicators_with_normalized(h4_candles, asset_type)
         h1i = calc_indicators_with_normalized(h1_candles, asset_type)
 
-        vols = [c.get("vol", 0) for c in h1_candles]
-        vsma = calc_sma(vols, 20)
-        vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
+        if volume_ratio is not None:
+            # Use the pre-computed vr from analyze_pair (asset-class-specific path:
+            # TOD Z-score for stock/index, Dukascopy tick-volume for forex, sma20 otherwise).
+            vr = volume_ratio
+        else:
+            vols = [c.get("vol", 0) for c in h1_candles]
+            vsma = calc_sma(vols, 20)
+            vr = vols[-1] / vsma[-1] if vsma and vsma[-1] and vsma[-1] > 0 else 1.0
 
-        stoch = calc_stochastic(h4_candles, 5, 3, 3)
-        replay_bar_time = bar_time or (h4_candles[-1].get("time") if h4_candles else None)
+        replay_style = str(style or "swing").lower()
+        stoch_source = h1_candles if replay_style in ("intraday", "scalp") else h4_candles
+        stoch = calc_stochastic(stoch_source, 5, 3, 3)
 
         bt_result = calc_confluence(
             d1i,
@@ -152,7 +170,9 @@ def check_divergence(
             h4_candles=h4_candles,
             h1_candles=h1_candles,
             funding_rate=funding_rate,
-            bar_time=replay_bar_time,
+            volume_threshold=volume_threshold,
+            bar_time=bar_time,
+            regime_context=regime_context,
             oi_data=oi_data,
             oi_context=oi_context,
             macro_context=macro_context,

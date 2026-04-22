@@ -7534,6 +7534,48 @@ def _persist_naked_style_profiles_yaml(cfg_path: str, full_profiles: dict) -> No
         f.write(new_content)
 
 
+def _persist_score_group_overrides_yaml(cfg_path: str, group_overrides: dict) -> None:
+    """Update min_score values in NAKED_ENGINE.score_group_overrides in config.yaml."""
+    import re as _re
+
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # Find the score_group_overrides block
+    m = _re.search(
+        r"(^  score_group_overrides:\n)(.*?)(^# Neutralized by default)",
+        content,
+        _re.MULTILINE | _re.DOTALL,
+    )
+    if not m:
+        log.warning("config.yaml: score_group_overrides block not found, skipping update")
+        return
+
+    block = m.group(2)
+    for group_name, group_styles in group_overrides.items():
+        if not isinstance(group_styles, dict):
+            continue
+        for style in ("scalp", "intraday", "swing"):
+            style_cfg = group_styles.get(style)
+            if not isinstance(style_cfg, dict) or "min_score" not in style_cfg:
+                continue
+            ms = float(style_cfg["min_score"])
+            # Pattern: "      scalp: {min_score: 3.0" or "      scalp: {min_score: 3.0, min_rr: 1.4"
+            # We need to find lines within the specific group block
+            group_pattern = rf"(    {_re.escape(group_name)}:\n(?:.*?\n)*?      {_re.escape(style)}: \{{min_score: )[\d.]+"
+            block = _re.sub(
+                group_pattern,
+                lambda mm, v=ms: f"{mm.group(1)}{v}",
+                block,
+                count=1,
+                flags=_re.DOTALL,
+            )
+
+    new_content = content[: m.start()] + m.group(1) + block + m.group(3) + content[m.end() :]
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write(new_content)
+
+
 @app.route("/api/naked-style-thresholds", methods=["GET", "POST"])
 def api_naked_style_thresholds():
     """GET: NAKED_ENGINE.style_profiles (Engine B live + backtest).
@@ -7603,11 +7645,28 @@ def api_naked_style_thresholds():
             entry["min_rr"] = p["min_rr"]
         full_for_yaml[s] = entry
 
+    # Also update score_group_overrides min_score to match the new base thresholds
+    group_overrides = ne.setdefault("score_group_overrides", {})
+    groups_updated = []
+    for group_name, group_styles in list(group_overrides.items()):
+        if not isinstance(group_styles, dict):
+            continue
+        for style in STYLES:
+            style_cfg = group_styles.get(style)
+            if isinstance(style_cfg, dict) and "min_score" in style_cfg:
+                new_min_score = full_for_yaml.get(style, {}).get("min_score")
+                if new_min_score is not None:
+                    style_cfg["min_score"] = new_min_score
+                    groups_updated.append(f"{group_name}.{style}")
+
     try:
         import os as _os
 
         cfg_path = _os.path.join(_os.path.dirname(__file__), "config.yaml")
         _persist_naked_style_profiles_yaml(cfg_path, full_for_yaml)
+        if groups_updated:
+            _persist_score_group_overrides_yaml(cfg_path, group_overrides)
+            log.info(f"[NAKED_ENGINE] score_group_overrides also updated: {groups_updated}")
         log.info(f"[NAKED_ENGINE] style_profiles updated via UI: {full_for_yaml}")
     except Exception as e:
         log.error(f"Failed to persist NAKED_ENGINE.style_profiles: {e}")
@@ -10638,6 +10697,43 @@ def analyze_pair(
     except Exception as _ssi_err:
         log.debug(f"[SSI] Engine A sample skipped: {_ssi_err}")
 
+    if (
+        CONFIG.get("ENGINE_A_DIVERGENCE_MONITOR_ENABLED", True)
+        and float(res.get("score", 0) or 0) >= float(_threshold or 0)
+    ):
+        try:
+            from divergence_monitor import check_divergence
+
+            check_divergence(
+                _pair_ctx,
+                {
+                    "score": float(res.get("score", 0) or 0.0),
+                    "direction": direction,
+                    "regime": res.get("regime"),
+                },
+                _cf_d1c,
+                _cf_h4c,
+                _cf_h1c,
+                funding_rate=_funding_rate,
+                btc_bias=btc_bias,
+                oi_data=_oi_data,
+                oi_context=_oi_context,
+                macro_context=_usd_relative_strength,
+                intermarket_context=_intermarket_raw_context,
+                style=_style,
+                volume_threshold=pair_profile.get(
+                    "volume_threshold", CONFIG["VOLUME_THRESHOLD"]
+                ),
+                regime_context=regime_context,
+                volume_ratio=vr,
+            )
+        except Exception as _div_err:
+            log.debug(
+                "[DIVERGENCE] %s replay skipped: %s",
+                pair.get("display"),
+                _div_err,
+            )
+
     signal = {
         "pair": pair["display"],
         "display": pair["display"],
@@ -10742,24 +10838,21 @@ def analyze_pair(
         ),
         "engine_b_overlay": _engine_b_overlay_meta,
     }
-    if pair.get("type") == "forex":
-        signal["candleFetchMeta"] = {
-            "D1": preloaded_fetch_meta.get("D1")
-            or _get_candle_fetch_meta(pair, "D1", _lim["D1"]),
-            "H4": preloaded_fetch_meta.get("H4")
-            or _get_candle_fetch_meta(pair, "H4", _lim["H4"]),
-            "H1": preloaded_fetch_meta.get("H1")
-            or _get_candle_fetch_meta(pair, "H1", _lim["H1"]),
-            "pairSource": pair.get("source"),
-        }
+    _candle_fetch_meta = {
+        "D1": preloaded_fetch_meta.get("D1")
+        or _get_candle_fetch_meta(pair, "D1", _lim["D1"]),
+        "H4": preloaded_fetch_meta.get("H4")
+        or _get_candle_fetch_meta(pair, "H4", _lim["H4"]),
+        "H1": preloaded_fetch_meta.get("H1")
+        or _get_candle_fetch_meta(pair, "H1", _lim["H1"]),
+        "pairSource": pair.get("source"),
+    }
+    signal["candleFetchMeta"] = _candle_fetch_meta
     if CONFIG.get("SCAN_DEBUG_CANDLE_META", False):
         signal["candleMeta"] = {
-            "D1": preloaded_fetch_meta.get("D1")
-            or _get_candle_fetch_meta(pair, "D1", _lim["D1"]),
-            "H4": preloaded_fetch_meta.get("H4")
-            or _get_candle_fetch_meta(pair, "H4", _lim["H4"]),
-            "H1": preloaded_fetch_meta.get("H1")
-            or _get_candle_fetch_meta(pair, "H1", _lim["H1"]),
+            "D1": _candle_fetch_meta.get("D1"),
+            "H4": _candle_fetch_meta.get("H4"),
+            "H1": _candle_fetch_meta.get("H1"),
         }
     return signal
 

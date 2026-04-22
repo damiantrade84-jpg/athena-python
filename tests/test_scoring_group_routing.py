@@ -110,3 +110,11 @@ def test_divergence_monitor_replays_shared_factor_path_for_forex():
     text = src.read_text(encoding="utf-8")
     assert "from scoring import calc_confluence" in text
     assert "compute_forex_score" not in text
+
+
+def test_analyze_pair_wires_divergence_monitor_and_candle_fetch_meta():
+    src = Path(__file__).resolve().parents[1] / "athena.py"
+    text = src.read_text(encoding="utf-8")
+    assert "ENGINE_A_DIVERGENCE_MONITOR_ENABLED" in text
+    assert "check_divergence(" in text
+    assert 'signal["candleFetchMeta"] = _candle_fetch_meta' in text

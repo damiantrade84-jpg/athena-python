@@ -43,6 +43,65 @@ def _mt5_entry_slippage_bps(
     return ref, bps
 
 
+def _mt5_position_fee_cost(
+    mt5,
+    position_ticket: int | None,
+    *,
+    retries: int = 3,
+    delay_s: float = 0.15,
+) -> float | None:
+    """Return summed commission+fee cost for one MT5 position from deal history.
+
+    Verified against the official MQL5 Python docs: history_deals_get(position=...)
+    returns deal records with ``commission`` and ``fee`` fields.
+    """
+    if not position_ticket:
+        return None
+
+    for attempt in range(max(1, int(retries))):
+        try:
+            deals = mt5.history_deals_get(position=int(position_ticket))
+        except Exception as exc:
+            log.debug(f"[MT5] fee lookup failed for position {position_ticket}: {exc}")
+            deals = None
+
+        if deals:
+            total_cost = 0.0
+            for deal in deals:
+                for field_name in ("commission", "fee"):
+                    try:
+                        total_cost += abs(float(getattr(deal, field_name, 0.0) or 0.0))
+                    except (TypeError, ValueError):
+                        continue
+            return round(total_cost, 8)
+
+        if attempt < max(1, int(retries)) - 1:
+            time.sleep(max(0.0, float(delay_s)))
+
+    return None
+
+
+def _mt5_total_fee_cost(mt5, position_tickets: list[int | None]) -> float | None:
+    """Aggregate broker-reported entry costs across one or more opened legs."""
+    total = 0.0
+    found_any = False
+    seen: set[int] = set()
+    for raw_ticket in position_tickets or []:
+        try:
+            ticket = int(raw_ticket)
+        except (TypeError, ValueError):
+            continue
+        if ticket <= 0 or ticket in seen:
+            continue
+        seen.add(ticket)
+        fee_cost = _mt5_position_fee_cost(mt5, ticket)
+        if fee_cost is None:
+            continue
+        total += float(fee_cost)
+        found_any = True
+    return round(total, 8) if found_any else None
+
+
 # ── Lazy MT5 import (only needed when execution is used) ─────────────────────
 
 _mt5 = None
@@ -1175,6 +1234,7 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
 
     _ref_slip = float(signal_price) if signal_price > 0 else float(price)
     _sref, _sbps = _mt5_entry_slippage_bps(direction, _ref_slip, float(result.price))
+    _fee_cost = _mt5_total_fee_cost(mt5, [leg.get("ticket") for leg in legs])
 
     # Calculate total volume from all partial fills
     total_filled_vol = sum(float(r.volume) for r in results)
@@ -1196,6 +1256,7 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         "legs": legs,
         "riskAmount": approval.risk_amount,
         "riskPct": approval.risk_pct,
+        "feeCost": _fee_cost,
         "signalPriceRef": _sref,
         "slippageBps": _sbps,
     }
