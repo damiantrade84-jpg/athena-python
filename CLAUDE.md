@@ -1011,7 +1011,7 @@ Historical active contract at that time (now superseded):
 **New files/modules:**
 - `volume_profile.py` — fixed-range VP computation (POC, VAH, VAL, LVN)
 - `indicators.py` — appended: `calc_vwap`, `detect_absorption`, `calc_cvd`, `detect_range_contraction`
-- `scalp_engine.py` — fully replaced (~1327 lines)
+- `scalp_engine.py` — fully replaced (~2450 lines as of 2026-04-23)
 - `backtest_runner.py` — `backtest_pair_scalp()` inserted before `run_full_backtest`
 - `athena.py` — `/api/backtest-scalp` route added; backtest import updated
 - `tests/test_scalp_engine.py` — fully replaced to match new API
@@ -1066,13 +1066,6 @@ Historical active contract at that time (now superseded):
 - `active_exit_indices` tracking replaces simple `open_positions` counter
 - Trade records include `session` field from session window
 
-**Helper interface fixes (not yet applied):**
-- VP external helper: `num_bins` vs `bins` kwarg mismatch
-- LVN config: `VP_LVN_THRESHOLD` vs `VP_LVN_FACTOR` key mismatch
-- Absorption: filter to `absorbed=True` rows only
-- CVD: `cvd_raw` vs `cvd` key mismatch
-- VWAP: handle list return, take last non-None value
-
 **Size multiplier support:**
 - `ai_quality_grade()` reads explicit `GRADE_A/B/C/D_SIZE_MULT` config keys
 - Backtest and live execution pass `sizing_override` to `risk_check()`
@@ -1091,6 +1084,40 @@ SCALP_ENGINE:
   BT_SCRATCH_BARS: 3
   BT_SCRATCH_MIN_R: 0.10
 ```
+
+---
+
+## 2026-04-23: Engine A, B, and D bug fixes
+
+### Engine A (`factor_scoring.py`, `scoring.py`, `confidence_engine.py`) — 6 fixes
+
+1. **Module-level constants frozen at import (`factor_scoring.py`):** 10 module-level constants (`_ADX_SOFT_MULT`, `_MOMENTUM_WEIGHT`, etc.) were evaluated once at import time using `CONFIG.get()`. Any config reload after startup left them stale. Fixed by replacing each module-level read with a lazy inline `CONFIG.get("FACTOR_*", default)` at call time. No scoring behavior change — values are identical to existing `config.yaml` defaults.
+
+2. **`_ADDON_AGAINST` floored to 0.0 in `addon_norm` (`factor_scoring.py`):** The negative-penalty branch `_ADDON_AGAINST` was defined but then clamped to `max(0.0, addon_raw)`, making all negative addon scores zero. Fixed: removed the floor so penalties flow through as intended.
+
+3. **Dead `_ADX_SOFT_FULL` constant removed (`factor_scoring.py`):** Constant was declared but never referenced. Removed.
+
+4. **`detect_div` RSI window comparison (`scoring.py`):** The RSI divergence check compared `pr[-1]` (single last bar) against the prior window peak. Changed to compare the **final third** vs **middle third** of the lookback window — more robust zone-vs-zone divergence detection.
+
+5. **`timeframe_alignment` divisor wrong for 0-3 scale (`confidence_engine.py`):** Divisor was `2.0` (old forex 0-2.0 scale). Changed to `1.5` to match the Engine A v2 unified 0-3.0 scale.
+
+6. **`_mad()` even-length uses single middle value (`confidence_engine.py`):** For even-length deviation lists, took only `devs[n//2 - 1]` (lower middle). Fixed to average both middle values `(devs[n//2 - 1] + devs[n//2]) / 2`.
+
+### Engine D (`scalp_engine.py`) — 6 fixes
+
+1. **`time` module clobbered by `datetime.time` import [CRITICAL]:** `import time` on line 27 was overwritten by `from datetime import datetime, time, timezone` on line 29. All `time.time()` calls in `_build_trade_bucket_volume_profile` and `_check_trade_bucket_cvd` crashed with `TypeError: 'type' object is not callable`. Fixed: `import time as _time`; all call sites updated to `_time.time()`.
+
+2. **`_locate_price_vs_vp` check-order tiebreak bias [MEDIUM]:** Sequential `if _near(vah) / if _near(val) / if _near(poc)` calls meant VAH always won even if POC was nearer. Replaced with candidate-collection + `min(distance)` so the actual closest level is returned.
+
+3. **`_check_trade_bucket_cvd` slope measured in price-space, not time [MEDIUM]:** Rows were sorted by `price_bucket` before computing `slope = sum(deltas[-3:]) - sum(deltas[:3])`. In a rising market high-price bins always have more buy delta — a structural false positive. Fixed: sort by `last_ts` (falling back to `price_bucket` when unavailable) so slope reflects temporal order flow.
+
+4. **`size_cut_active` one-way latch [MEDIUM]:** Once `net_r_today >= 2.0`, `size_cut_active` was set to `True` and only reset at UTC midnight. After subsequent losses brought `net_r_today` back below 2R, the cut remained active permanently. Fixed: `size_cut_active` now recomputed from `net_r_today >= 2.0` on every `record_scalp_trade_outcome()` call — deactivates correctly.
+
+5. **`_calc_balance_ratio` returns `0.5` when `session_high/low` both missing [LOW]:** The constant 0.5 fallback equals the `BALANCE_THRESHOLD` (0.40 default), classifying all such VPs as `balance`. Fixed: when session bounds are absent, estimate total range from `(vah - val) / 0.8` (20% headroom) so the ratio is still meaningful.
+
+6. **`infer_bias_from_ema_stack` blocks pullback entries [LOW]:** Condition `last_close >= ema21` for LONG bias meant price had to be above EMA21 to get a bullish bias — exactly the opposite of what Engine D targets (pullback below EMA21 in uptrend). Removed the price-position gate; bias is now determined by EMA stack order (`ema21 > ema50 > ema200`) only.
+
+**Commits:** `bd5cb65` (Engine D), `e52d7eb` (Engine A/B + config + tests)
 
 ---
 
