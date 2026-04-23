@@ -477,7 +477,7 @@ Reply in JSON only:
 def run_meta_analysis(db_path: str, xai_key: str, model: str, days: int = 7) -> dict:
     """Ask the configured AI provider to review recent outcomes and identify systematic biases."""
     if not xai_key:
-        return {"error": "MOONSHOT_API_KEY not configured"}
+        return {"error": "AI API key not configured"}
 
     context = get_meta_analysis_context(db_path, days=days)
     if not context or context.startswith("Insufficient"):

@@ -321,7 +321,7 @@ def get_news_sentiment(
     eodhd_ticker_for_pair: Callable[[dict], Optional[str]],
     current_price: Optional[float] = None,
     news_limit: int = 8,
-    model: str = "kimi-k2.6",
+    model: str = "grok-4-1-fast-reasoning",
 ) -> Optional[dict]:
     """
     Full pipeline: resolve EODHD ticker -> news -> optional EODHD sentiment -> JSON.
@@ -331,7 +331,7 @@ def get_news_sentiment(
     try:
         import openai
     except ImportError:
-        log.error("[NewsAI] openai package not installed (required for Moonshot Kimi)")
+        log.error("[NewsAI] openai package not installed (required for AI provider client)")
         return None
 
     ticker = eodhd_ticker_for_pair(pair)
@@ -484,7 +484,7 @@ def apply_news_sentiment_to_scan_result(
     """If enabled and keys present, blend cached News AI vote into ``res['score']`` (mutates ``res``).
 
     Applied after structural gates so Engine B uses the pre-news technical score.
-    Requires ``EODHD_KEY`` and ``MOONSHOT_API_KEY`` (env or config).
+    Requires ``EODHD_KEY`` and an AI API key (env or config).
     """
     if not config.get("NEWS_SENTIMENT_CONFLUENCE_ENABLED"):
         return
@@ -498,7 +498,7 @@ def apply_news_sentiment_to_scan_result(
     model = str(
         config.get("NEWS_SENTIMENT_MODEL")
         or config.get("AI_MODEL")
-        or config.get("VISION_MODEL", "kimi-k2.6")
+        or config.get("VISION_MODEL", "grok-4-1-fast-reasoning")
     )
     vote, detail = get_cached_news_confluence_vote(
         pair,

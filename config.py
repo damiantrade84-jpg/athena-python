@@ -52,6 +52,17 @@ def get_ai_api_key(cfg: dict | None = None) -> str:
     return ""
 
 
+def get_ai_provider_label(cfg: dict | None = None) -> str:
+    base_url = str(get_ai_base_url(cfg) or "").strip().lower()
+    if "api.x.ai" in base_url or "x.ai" in base_url:
+        return "xAI"
+    if "moonshot" in base_url:
+        return "Moonshot"
+    if not base_url:
+        return "Unknown"
+    return base_url
+
+
 def ai_key_configured(cfg: dict | None = None) -> bool:
     return bool(get_ai_api_key(cfg))
 
@@ -102,6 +113,24 @@ def create_ai_client(cfg: dict | None = None, api_key: str | None = None):
         api_key=resolved_key,
         base_url=get_ai_base_url(cfg),
     )
+
+
+def ai_runtime_descriptor(
+    cfg: dict | None = None,
+    preferred_model_key: str = "AI_MODEL",
+    fallback_model: str = "grok-4-1-fast-reasoning",
+) -> dict:
+    resolved_cfg = cfg or CONFIG
+    return {
+        "provider": get_ai_provider_label(resolved_cfg),
+        "base_url": get_ai_base_url(resolved_cfg),
+        "model": get_ai_model(
+            resolved_cfg,
+            preferred_key=preferred_model_key,
+            fallback=fallback_model,
+        ),
+        "key_configured": ai_key_configured(resolved_cfg),
+    }
 
 PAIR_PROFILE_VOTES = {
     "d1_trend",

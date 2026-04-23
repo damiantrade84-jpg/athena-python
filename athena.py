@@ -203,6 +203,7 @@ from config import (
     CONFIG,
     ai_key_configured,
     create_ai_client,
+    get_ai_provider_label,
     get_ai_api_key,
     get_ai_base_url,
     get_ai_model,
@@ -4233,11 +4234,15 @@ def run_ai(
     """Send signal data to the configured AI provider for Marcus Reid analysis."""
 
     if not ai_key_configured(CONFIG):
-        log.error("[AI] MOONSHOT_API_KEY is not configured")
-        return {"error": "MOONSHOT_API_KEY not configured"}
+        log.error("[AI] AI API key is not configured")
+        return {"error": "AI API key not configured"}
 
     try:
-        log.info(f"[AI] Analyzing {signal['pair']}...")
+        _provider = get_ai_provider_label(CONFIG)
+        log.info(
+            f"[AI] Analyzing {signal['pair']} via provider={_provider} "
+            f"base_url={get_ai_base_url(CONFIG)} model={get_ai_model(CONFIG, 'AI_MODEL', 'grok-4-1-fast-reasoning')}"
+        )
 
         c = create_ai_client(CONFIG)
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
@@ -4266,7 +4271,7 @@ def run_ai(
             learning_ctx=learning_ctx,
         )
 
-        _model = get_ai_model(CONFIG, "AI_MODEL", "kimi-k2.6")
+        _model = get_ai_model(CONFIG, "AI_MODEL", "grok-4-1-fast-reasoning")
         completion = c.chat.completions.create(
             model=_model,
             max_tokens=1100,
@@ -5412,7 +5417,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                     confidence_result=conf,
                     learning_ctx=learning_ctx,
                     xai_api_key=get_ai_api_key(CONFIG),
-                    xai_model=get_ai_model(CONFIG, "AI_MODEL", "kimi-k2.6"),
+                    xai_model=get_ai_model(CONFIG, "AI_MODEL", "grok-4-1-fast-reasoning"),
                     engine_a_ctx=engine_a_ctx,
                     news_ctx=_news_ctx,
                 )
@@ -8465,7 +8470,7 @@ def api_meta_analysis():
         result = run_meta_analysis(
             _AUDIT_DB,
             get_ai_api_key(CONFIG),
-            get_ai_model(CONFIG, "AI_MODEL", "kimi-k2.6"),
+            get_ai_model(CONFIG, "AI_MODEL", "grok-4-1-fast-reasoning"),
         )
 
         return jsonify(result)
@@ -8983,11 +8988,15 @@ def api_chart_analysis():
     try:
         _ai_key = get_ai_api_key(CONFIG)
         if not _ai_key:
-            return jsonify({"error": "MOONSHOT_API_KEY not set"}), 500
+            return jsonify({"error": "AI API key not set"}), 500
 
         client = _openai_chart.OpenAI(
             api_key=_ai_key,
             base_url=get_ai_base_url(CONFIG),
+        )
+        log.info(
+            f"[AI CHART] provider={get_ai_provider_label(CONFIG)} "
+            f"base_url={get_ai_base_url(CONFIG)} model={get_ai_model(CONFIG, 'VISION_MODEL', 'grok-4-1-fast-reasoning')}"
         )
 
         img_h4 = str(data["image"])
@@ -9689,7 +9698,7 @@ def api_candles():
 def api_news_sentiment():
     """EODHD news + AI-provider structured sentiment for one pair (display or Yahoo symbol).
 
-    Uses ``EODHD_KEY`` and ``MOONSHOT_API_KEY``. Model: ``NEWS_SENTIMENT_MODEL`` or ``AI_MODEL``.
+    Uses ``EODHD_KEY`` and the configured AI API key. Model: ``NEWS_SENTIMENT_MODEL`` or ``AI_MODEL``.
     """
     from news_sentiment_feed import get_news_sentiment, news_to_confluence_vote
 
@@ -9713,7 +9722,7 @@ def api_news_sentiment():
 
     ai_key = get_ai_api_key(CONFIG)
     if not ai_key:
-        return jsonify({"error": "MOONSHOT_API_KEY not set"}), 500
+        return jsonify({"error": "AI API key not set"}), 500
 
     price = None
     disp = pair.get("display", "")
@@ -9725,7 +9734,7 @@ def api_news_sentiment():
     except Exception:
         pass
 
-    model = get_ai_model(CONFIG, "NEWS_SENTIMENT_MODEL", "kimi-k2.6")
+    model = get_ai_model(CONFIG, "NEWS_SENTIMENT_MODEL", "grok-4-1-fast-reasoning")
     result = get_news_sentiment(
         pair,
         eodhd_api_key=eod_key,
@@ -10062,7 +10071,7 @@ def _check_api_keys() -> None:
     _ak = get_ai_api_key(CONFIG)
 
     if not _ak:
-        missing.append("MOONSHOT_API_KEY — AI trade grading disabled")
+        missing.append("AI API key — AI trade grading disabled")
 
     if not os.environ.get("CRYPTOPANIC_KEY"):
         missing.append("CRYPTOPANIC_KEY (optional) — crypto news sentiment reduced")
@@ -11703,7 +11712,7 @@ def _get_decay_ai_verdict(
     """Ask the configured AI provider whether a decaying position should be EXIT / HOLD / WATCH.
 
     Returns {"verdict": "EXIT"|"HOLD"|"WATCH", "urgency": "HIGH"|"MEDIUM"|"LOW", "reasoning": str}
-    Skips gracefully if MOONSHOT_API_KEY is not configured.
+    Skips gracefully if no AI API key is configured.
     Results are cached 30 min per pair unless decay worsens by >= 0.5.
     """
     api_key = get_ai_api_key(CONFIG)
@@ -12628,12 +12637,12 @@ def api_lottery_ai_analysis():
     try:
         ai_key = get_ai_api_key(CONFIG)
         if not ai_key:
-            return jsonify({"error": "MOONSHOT_API_KEY not configured"}), 500
+            return jsonify({"error": "AI API key not configured"}), 500
 
         try:
             import openai
         except ImportError:
-            return jsonify({"error": "openai library not installed (required for Moonshot Kimi)"}), 500
+            return jsonify({"error": "openai library not installed (required for AI analysis)"}), 500
 
         data = request.get_json(silent=True) or {}
         game = str(data.get("game") or "").strip().lower()

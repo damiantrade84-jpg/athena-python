@@ -14,10 +14,10 @@ Only runs on auto-trade candidates (not manual scans) to control API costs.
 
 import json
 import logging
-import os
 
 from ai_schemas import DebateCaseResponse, JudgeVerdictResponse
 from ai_utils import parse_json_object
+from config import CONFIG, create_ai_client, get_ai_api_key, get_ai_model
 
 log = logging.getLogger("sentinel.debate")
 
@@ -60,30 +60,16 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
             "allowed": bool
         }
     """
-    api_key = os.environ.get("XAI_API_KEY", "")
-    if not api_key:
-        try:
-            from config import CONFIG
-
-            api_key = CONFIG.get("XAI_API_KEY", "")
-            if api_key == "YOUR_XAI_API_KEY":
-                api_key = ""
-        except ImportError:
-            pass
+    api_key = get_ai_api_key(CONFIG)
     if not api_key:
         return {
             "grade": "SKIP",
             "allowed": True,
-            "reasoning": "No XAI_API_KEY — debate skipped",
+            "reasoning": "No AI API key configured — debate skipped",
             "bull_conviction": 0,
             "bear_conviction": 0,
             "score_adjustment": 0.0,
         }
-
-    try:
-        from config import CONFIG
-    except Exception:
-        CONFIG = {}
 
     pair = signal.get("display", signal.get("pair", "?"))
     direction = signal.get("direction", "?")
@@ -126,11 +112,8 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
     )
 
     try:
-        import openai
-
-        client = openai.OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-
-        _model = CONFIG.get("DEBATE_MODEL") or CONFIG.get("XAI_MODEL", "grok-4.20-0309-reasoning")
+        client = create_ai_client(CONFIG, api_key=api_key)
+        _model = get_ai_model(CONFIG, "DEBATE_MODEL", "grok-4-1-fast-reasoning")
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
 
         # Step 1: Bull Case

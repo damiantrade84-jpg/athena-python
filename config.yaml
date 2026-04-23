@@ -808,23 +808,23 @@ KELLY_FRACTION: 0.5                # Half-Kelly (safety proven)
 
 # ── Signal Debate (Bull/Bear/Judge) ───────────────────────
 
-SIGNAL_DEBATE_ENABLED: true        # Run LLM debate before auto-trades (needs MOONSHOT_API_KEY)
+SIGNAL_DEBATE_ENABLED: true        # Run LLM debate before auto-trades (needs XAI_API_KEY)
 
-AI_BASE_URL: "https://api.moonshot.ai/v1"
+AI_BASE_URL: "https://api.x.ai/v1"
 
-AI_MODEL: "kimi-k2.6"
+AI_MODEL: "grok-4-1-fast-reasoning"
 
-XAI_MODEL: "kimi-k2.6"  # Legacy alias kept aligned with AI_MODEL for compatibility.
+XAI_MODEL: "grok-4-1-fast-reasoning"  # Legacy alias kept aligned with AI_MODEL for compatibility.
 
-# Optional: POST /api/lottery/ai-analysis model (defaults to AI_MODEL). Same OpenAI SDK + Moonshot base URL.
+# Optional: POST /api/lottery/ai-analysis model (defaults to AI_MODEL). Same OpenAI SDK + xAI base URL.
 
-# LOTTERY_AI_MODEL: "kimi-k2.6"
+# LOTTERY_AI_MODEL: "grok-4-1-fast-reasoning"
 
-DEBATE_MODEL: "kimi-k2.6"
+DEBATE_MODEL: "grok-4-1-fast-reasoning"
 
-VISION_MODEL: "kimi-k2.6"          # /api/chart-analysis
+VISION_MODEL: "grok-4-1-fast-reasoning"          # /api/chart-analysis
 
-NEWS_SENTIMENT_MODEL: "kimi-k2.6"  # News AI text; defaults to AI_MODEL if empty — uses MOONSHOT_API_KEY
+NEWS_SENTIMENT_MODEL: "grok-4-1-fast-reasoning"  # News AI text; defaults to AI_MODEL if empty — uses XAI_API_KEY
 
 # Blend News AI into Engine A scan score (EODHD news + Kimi). Heavy: uses TTL cache per pair.
 
