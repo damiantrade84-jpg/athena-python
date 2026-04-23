@@ -24,7 +24,7 @@ All trades route through risk_engine.risk_check() before execution.
 
 import logging
 import math
-import time
+import time as _time
 import pandas as pd
 from datetime import datetime, time, timezone
 from typing import Any, Optional
@@ -77,10 +77,13 @@ def record_scalp_trade_outcome(r_multiple: float):
         _session_state["total_losses_today"] += 1
     else:
         _session_state["consecutive_losses"] = 0
-    # Check +2R size cut
+    # Recompute size cut from current net_r (not a one-way latch).
+    # Deactivates if subsequent losses bring net_r back below the 2R threshold.
     cfg = CONFIG.get("SCALP_ENGINE", {})
-    if cfg.get("SIZE_CUT_AFTER_2R", True) and _session_state["net_r_today"] >= 2.0:
-        _session_state["size_cut_active"] = True
+    if cfg.get("SIZE_CUT_AFTER_2R", True):
+        _session_state["size_cut_active"] = _session_state["net_r_today"] >= 2.0
+    else:
+        _session_state["size_cut_active"] = False
 
 
 def get_scalp_session_risk_state() -> dict:
@@ -460,11 +463,13 @@ def infer_bias_from_ema_stack(candles: list) -> Optional[str]:
     ema21  = ema21_series[-1]
     ema50  = ema50_series[-1]
     ema200 = ema200_series[-1]
-    last_close = closes[-1]
 
-    if ema21 > ema50 > ema200 and last_close >= ema21:
+    # Bias is determined by EMA stack order alone. Price relative to EMA21
+    # is intentionally NOT required here: pullbacks below EMA21 in an uptrend
+    # are precisely the entries Engine D targets, so blocking them defeats the purpose.
+    if ema21 > ema50 > ema200:
         return "LONG"
-    if ema21 < ema50 < ema200 and last_close <= ema21:
+    if ema21 < ema50 < ema200:
         return "SHORT"
     return None
 
@@ -847,7 +852,7 @@ def _build_trade_bucket_volume_profile(display: str, reference_ts=None, require_
             symbol,
             exchange="binance",
             session_id=_trade_bucket_session_id(reference_ts),
-            min_last_ts=(time.time() - max_age_sec) if require_fresh else None,
+            min_last_ts=(_time.time() - max_age_sec) if require_fresh else None,
         )
         if len(rows) < min_buckets:
             return {"valid": False, "reason": "insufficient_trade_buckets", "bucket_count": len(rows)}
@@ -874,6 +879,12 @@ def _calc_balance_ratio(vp: dict) -> float:
     session_high = vp.get("session_high")
     session_low = vp.get("session_low")
     if session_high is None or session_low is None:
+        # Fallback: estimate total range from vah/val with a 20% headroom
+        # so ratio is meaningful rather than a constant 0.5 bias.
+        if vah and val and float(vah) > float(val):
+            estimated_range = (float(vah) - float(val)) / 0.8
+            va_width = float(vah) - float(val)
+            return round(max(0.0, min(1.0, va_width / estimated_range)), 3)
         return 0.5
     total_range = float(session_high) - float(session_low)
     va_width = float(vah) - float(val) if vah and val else 0.0
@@ -906,16 +917,25 @@ def _locate_price_vs_vp(price: float, vp: dict) -> dict:
     def _near(level):
         return abs(price - level) / level < proximity_pct if level else False
 
-    if _near(vah):
-        return {"location": "at_vah", "nearest_level": vah, "distance_pct": round(abs(price - vah) / vah * 100, 3)}
-    if _near(val):
-        return {"location": "at_val", "nearest_level": val, "distance_pct": round(abs(price - val) / val * 100, 3)}
-    if _near(poc):
-        return {"location": "at_poc", "nearest_level": poc, "distance_pct": round(abs(price - poc) / poc * 100, 3)}
+    def _dist(level):
+        return abs(price - level) / level if level else float("inf")
 
+    # Collect all nearby named levels and pick the closest one to avoid
+    # check-order tiebreak bias (e.g. VAH winning over a nearer POC).
+    candidates = []
+    if _near(vah):
+        candidates.append(("at_vah", vah, _dist(vah)))
+    if _near(val):
+        candidates.append(("at_val", val, _dist(val)))
+    if _near(poc):
+        candidates.append(("at_poc", poc, _dist(poc)))
     for lvn in lvn_levels:
         if _near(lvn):
-            return {"location": "at_lvn", "nearest_level": lvn, "distance_pct": round(abs(price - lvn) / lvn * 100, 3)}
+            candidates.append(("at_lvn", lvn, _dist(lvn)))
+
+    if candidates:
+        label, level, dist = min(candidates, key=lambda t: t[2])
+        return {"location": label, "nearest_level": level, "distance_pct": round(dist * 100, 3)}
 
     if val <= price <= vah:
         return {"location": "inside_va", "nearest_level": poc, "distance_pct": round(abs(price - poc) / poc * 100, 3)}
@@ -1034,11 +1054,14 @@ def _check_trade_bucket_cvd(display: str, reference_ts=None, require_fresh: bool
             symbol,
             exchange="binance",
             session_id=_trade_bucket_session_id(reference_ts),
-            min_last_ts=(time.time() - max_age_sec) if require_fresh else None,
+            min_last_ts=(_time.time() - max_age_sec) if require_fresh else None,
         )
         if len(rows) < min_buckets:
             return {"direction": None, "cvd_value": 0, "cvd_slope": 0, "source": "unavailable"}
-        rows = sorted(rows, key=lambda r: float(r.get("price_bucket") or 0.0))
+        # Sort by last_ts (time-ordered) so slope = recent flow - early flow.
+        # Price-bucket sorting produces a spatial bias: high-price bins always
+        # accumulate more buy delta in a rising market, giving a false positive.
+        rows = sorted(rows, key=lambda r: float(r.get("last_ts") or r.get("price_bucket") or 0.0))
         deltas = [float(r.get("delta") or 0.0) for r in rows]
         cvd = sum(deltas)
         slope = (sum(deltas[-3:]) - sum(deltas[:3])) if len(deltas) >= 6 else cvd
