@@ -330,6 +330,107 @@ def test_backtest_pair_naked_skips_profile_context_when_profile_scoring_disabled
     assert all(call.get("enable_profile_context") is False for call in captured)
 
 
+def test_backtest_pair_naked_forex_auto_keeps_intraday_style_under_d1_structure(monkeypatch):
+    pair = {"display": "USD/CHF", "symbol": "USDCHF", "type": "forex", "source": "mt5"}
+    d1 = _make_bars(datetime(2024, 1, 1, tzinfo=timezone.utc), 260, 24, base=0.90)
+    h4 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 620, 4, base=0.89)
+    h1 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 1100, 1, base=0.88)
+
+    audit_dir = Path(os.path.dirname(__file__)) / "_artifacts"
+    audit_dir.mkdir(exist_ok=True)
+
+    style_calls = []
+    runtime = SimpleNamespace(
+        fetch_candles=lambda _pair, tf, _limit: {"D1": d1, "H4": h4, "H1": h1}[tf],
+        naked_scan_style_profile=lambda style, score_group=None: (
+            style_calls.append((style, score_group)) or (
+                "intraday",
+                {
+                    "min_score": 0.5,
+                    "fallback_rr": 2.0,
+                    "min_rr": 1.0,
+                    "zone_tf": "H4",
+                    "entry_tf": "H1",
+                    "atr_tf": "H4",
+                },
+            )
+        ),
+        engine_b_regime_label=lambda *_args, **_kwargs: "TRENDING",
+        AUDIT_DB=str(audit_dir / "audit.db"),
+    )
+
+    monkeypatch.setattr(backtest_runner, "_rt", lambda: runtime)
+    monkeypatch.setattr(backtest_runner, "_get_slippage_for_bar", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr(backtest_runner, "get_pair_score_group", lambda _pair: "forex_majors")
+    monkeypatch.setattr(backtest_runner, "record_backtest_summary", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backtest_runner, "calibration_report", lambda *args, **kwargs: {})
+    monkeypatch.setattr(backtest_runner, "meta_report", lambda *args, **kwargs: {})
+    monkeypatch.setattr(backtest_runner, "enrich_backtest_summary", lambda result, returns, **kwargs: result)
+    monkeypatch.setattr(
+        backtest_runner,
+        "_format_backtest_results",
+        lambda trades, pair, engine_type="NAKED", same_bar_both_hit=0, **kwargs: {
+            "pair": pair["display"],
+            "engine": engine_type,
+            "totalTrades": len(trades),
+            "trades": trades,
+            "same_bar_both_hit": same_bar_both_hit,
+            "winRate": 0.0,
+            "profitFactor": 0.0,
+            "expectancy": 0.0,
+            "sqn": 0.0,
+            "maxDrawdownPct": 0.0,
+            "sharpe": 0.0,
+            "sortino": 0.0,
+            "wfSplit": {},
+        },
+    )
+
+    import market_structure
+
+    monkeypatch.setattr(
+        market_structure.engine,
+        "analyze_structure",
+        lambda *_args, **_kwargs: {
+            "structural_verdict": "CLEAR",
+            "recommended_stop_loss": 0.8790,
+            "recommended_take_profit": 0.8840,
+            "order_blocks": [],
+            "liquidity_sweep": False,
+            "fvg_overlap": False,
+            "bos_volume_confirmed": True,
+            "choch_confirmed": False,
+            "ob_at_zone": False,
+            "bos_mtf_confirmed": False,
+            "d1_pd_array_conflict": False,
+        },
+    )
+    monkeypatch.setattr(
+        market_structure.engine,
+        "calculate_confidence",
+        lambda _res, _px, direction, **_kwargs: {
+            "score": 1.0 if direction == "LONG" else 0.0,
+            "pct": 80.0 if direction == "LONG" else 0.0,
+            "rr": 2.0,
+            "passed": direction == "LONG",
+            "structure_ok": direction == "LONG",
+            "location_ok": direction == "LONG",
+            "entry_ok": direction == "LONG",
+            "rr_ok": direction == "LONG",
+            "room_ok": direction == "LONG",
+            "macro_ok": True,
+            "max_possible": 5.0,
+        },
+    )
+    monkeypatch.setitem(backtest_runner.CONFIG, "ENGINE_B_FOREX_STRUCTURE_TF", "D1")
+    monkeypatch.setitem(backtest_runner.CONFIG, "ENGINE_B_PROFILE_SCORING_ENABLED", False)
+
+    result = backtest_runner.backtest_pair_naked(pair, style="naked")
+
+    assert result["btStyle"] == "intraday"
+    assert style_calls == [("auto", "forex_majors")]
+
+
 def test_backtest_pair_naked_caps_post_fill_rr_to_style_fallback(monkeypatch):
     pair = {"display": "AAPL", "symbol": "AAPL", "type": "stock", "source": "eodhd"}
     d1 = _make_bars(datetime(2024, 1, 1, tzinfo=timezone.utc), 100, 24, base=90.0)

@@ -388,7 +388,7 @@ NEWS_PAIR_CAP: 40   # Max pairs to fetch per-pair EODHD news and word weights pe
 AI_STRUCTURED_OUTPUTS: true
 AI_TEMPERATURE: 0.3
 AI_VISION_TEMPERATURE: 0.2
-ENGINE_B_PROFILE_SCORING_ENABLED: true
+ENGINE_B_PROFILE_SCORING_ENABLED: false
 
 # ── AI Learning ───────────────────────────────────────────
 LEARNING_ENABLED: true             # Enable AI self-learning (outcome extraction + prompt injection)
@@ -794,6 +794,10 @@ NAKED_ENGINE:
       scalp: {min_room_atr: 0.5, min_rr: 1.2}
       intraday: {min_room_atr: 0.85, min_rr: 1.35}
       swing: {min_room_atr: 1.2, min_rr: 1.8}
+    forex_other:
+      scalp: {min_room_atr: 0.5, min_rr: 1.2}
+      intraday: {min_room_atr: 0.85, min_rr: 1.35}
+      swing: {min_room_atr: 1.2, min_rr: 1.8}
     nat_gas:
       scalp: {min_score: 4.0, min_rr: 1.4}
       intraday: {min_score: 5.0, min_rr: 1.6}
@@ -851,6 +855,22 @@ NAKED_ENGINE:
       intraday: {min_score: 5.0}
       swing: {min_score: 5.0}
     bond_tlt:
+      scalp: {min_score: 4.0}
+      intraday: {min_score: 5.0}
+      swing: {min_score: 5.0}
+    us_indices_trackers:
+      scalp: {min_score: 4.0}
+      intraday: {min_score: 5.0}
+      swing: {min_score: 5.0}
+    eu_indices:
+      scalp: {min_score: 4.0}
+      intraday: {min_score: 5.0}
+      swing: {min_score: 5.0}
+    asian_indices:
+      scalp: {min_score: 4.0}
+      intraday: {min_score: 5.0}
+      swing: {min_score: 5.0}
+    index_other:
       scalp: {min_score: 4.0}
       intraday: {min_score: 5.0}
       swing: {min_score: 5.0}

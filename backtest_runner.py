@@ -3331,12 +3331,6 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         requested_style, score_group=_pair_score_group
     )
     _pair_type = pair.get("type", "stock")
-    _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
-    if _pair_type == "forex" and _forex_struct_tf == "D1" and resolved_style == "intraday" and requested_style in ("auto", "naked"):
-        resolved_style, style_profile = _rt().naked_scan_style_profile(
-            "swing", score_group=_pair_score_group
-        )
-        log.info(f"[ENGINE B BT] {pair['display']}: forex D1 structure → auto-promoted to swing style")
     _zone_tf = style_profile.get("zone_tf", "H4")
     _entry_tf = style_profile.get("entry_tf", "H1")
     _atr_tf = style_profile.get("atr_tf", "H4")

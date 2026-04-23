@@ -27,6 +27,17 @@ def test_pair_score_group_mapping_examples():
     )
 
 
+def test_engine_b_runtime_groups_have_explicit_override_coverage():
+    groups = ((CONFIG.get("NAKED_ENGINE") or {}).get("score_group_overrides") or {})
+    assert "forex_other" in groups
+    assert "us_indices_trackers" in groups
+    assert "eu_indices" in groups
+    assert "asian_indices" in groups
+    assert "index_other" in groups
+    assert groups["forex_other"]["intraday"]["min_room_atr"] == 0.85
+    assert bool(CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED")) is False
+
+
 def test_min_confluence_uses_class_threshold_when_live_group_config_absent():
     pair = {"display": "USD/ZAR", "symbol": "USDZAR=X", "type": "forex"}
     assert get_min_confluence_threshold(pair) == CONFIG["MIN_CONFLUENCE_CLASS"]["forex"]
