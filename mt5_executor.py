@@ -76,7 +76,7 @@ def _mt5_position_fee_cost(
             return round(total_cost, 8)
 
         if attempt < max(1, int(retries)) - 1:
-            time.sleep(max(0.0, float(delay_s)))
+            time.sleep(min(5.0, max(0.0, float(delay_s))))
 
     return None
 

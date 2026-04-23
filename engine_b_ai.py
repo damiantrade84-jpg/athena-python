@@ -307,7 +307,7 @@ def get_engine_b_ai_verdict(
     confidence_result: dict,
     learning_ctx: Optional[dict] = None,
     xai_api_key: Optional[str] = None,
-    xai_model: str = "kimi-k2.6",
+    xai_model: Optional[str] = None,
     engine_a_ctx: Optional[dict] = None,
     news_ctx: Optional[dict] = None,
 ) -> dict:
@@ -368,7 +368,7 @@ def get_engine_b_ai_verdict(
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
 
         completion = client.chat.completions.create(
-            model=str(xai_model or get_ai_model(CONFIG, "AI_MODEL", "grok-4-1-fast-reasoning")).strip(),
+            model=str(xai_model or get_ai_model(CONFIG, "AI_MODEL")).strip(),
             max_tokens=800,
             temperature=_temp,
             messages=[

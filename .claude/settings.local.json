@@ -69,7 +69,9 @@
       "Bash(powershell -Command \"Remove-Item -Force 'C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\.git\\\\index.lock' -ErrorAction SilentlyContinue; exit 0\")",
       "Bash(powershell -Command \"Remove-Item -Force 'C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\.git\\\\index.lock' -ErrorAction SilentlyContinue; Write-Host 'Lock removed'\")",
       "Bash(powershell -Command \"Start-Sleep -Milliseconds 500; Remove-Item -Force 'C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\.git\\\\index.lock' -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500; Test-Path 'C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\.git\\\\index.lock'\")",
-      "Bash(powershell -Command ':*)"
+      "Bash(powershell -Command ':*)",
+      "Bash(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/test_divergence_monitor_contract.py tests/test_scoring_group_routing.py -v)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_divergence_monitor_contract.py tests/test_scoring_group_routing.py -v)"
     ]
   }
 }

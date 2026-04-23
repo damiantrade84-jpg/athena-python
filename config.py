@@ -721,11 +721,6 @@ CONFIG: dict = {
         },
         # Optional subgroup-level Engine B strictness overrides by style.
         "score_group_overrides": {
-            "forex_exotics": {
-                "scalp": {"min_room_atr": 0.5, "min_rr": 1.2},
-                "intraday": {"min_room_atr": 0.85, "min_rr": 1.35},
-                "swing": {"min_room_atr": 1.2, "min_rr": 1.8},
-            },
             "nat_gas": {
                 "scalp": {"min_score": 4.0, "min_rr": 1.4},
                 "intraday": {"min_score": 4.0, "min_rr": 1.6},

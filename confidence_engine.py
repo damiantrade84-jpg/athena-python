@@ -82,10 +82,11 @@ def _mad(values: List[float]) -> float:
         if n % 2 == 1
         else (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2
     )
+    devs = sorted(abs(v - median) for v in values)
     mad = (
-        sorted(abs(v - median) for v in values)[n // 2]
+        devs[n // 2]
         if n % 2 == 1
-        else sorted(abs(v - median) for v in values)[n // 2 - 1]
+        else (devs[n // 2 - 1] + devs[n // 2]) / 2
     )
     return mad
 
@@ -152,8 +153,10 @@ def timeframe_alignment(
     if len(scores) < 2:
         return None
     std_val = _std(scores)
-    # Normalize: typical score range is roughly [-10, 10]
-    return max(0.0, min(1.0, 1.0 - std_val / 2.0))
+    # Normalize: Engine A v2 final_score is on a 0-3.0 scale.
+    # Max natural std of a fully divergent set (e.g. [0, 3, 0]) is ~1.4.
+    # Dividing by 1.5 ensures fully-disagreeing TFs map near 0 alignment.
+    return max(0.0, min(1.0, 1.0 - std_val / 1.5))
 
 
 def regime_fit(regime: str, signal_type: str = "trend") -> Optional[float]:

@@ -49,3 +49,39 @@ def test_pre_trade_check_ignores_d1_only_staleness():
         assert reason == "OK"
     finally:
         CONFIG["ENGINE_A_STALE_CANDLE_GUARD"] = original
+
+
+def test_pre_trade_check_blocks_h4_only_staleness():
+    original = CONFIG.get("ENGINE_A_STALE_CANDLE_GUARD", True)
+    try:
+        CONFIG["ENGINE_A_STALE_CANDLE_GUARD"] = True
+        signal = _base_signal()
+        signal["candleFetchMeta"] = {
+            "H1": {"lastBarStale": False, "lastBarAgeSec": 0},
+            "H4": {"lastBarStale": True, "lastBarAgeSec": 28800},
+        }
+
+        ok, reason = pre_trade_check(signal, [], {"balance": 1000.0, "equity": 1000.0})
+
+        assert ok is False
+        assert reason == "STALE_CANDLES: H4:28800s"
+    finally:
+        CONFIG["ENGINE_A_STALE_CANDLE_GUARD"] = original
+
+
+def test_pre_trade_check_blocks_multiple_stale_timeframes():
+    original = CONFIG.get("ENGINE_A_STALE_CANDLE_GUARD", True)
+    try:
+        CONFIG["ENGINE_A_STALE_CANDLE_GUARD"] = True
+        signal = _base_signal()
+        signal["candleFetchMeta"] = {
+            "H1": {"lastBarStale": True, "lastBarAgeSec": 7200},
+            "H4": {"lastBarStale": True, "lastBarAgeSec": 28800},
+        }
+
+        ok, reason = pre_trade_check(signal, [], {"balance": 1000.0, "equity": 1000.0})
+
+        assert ok is False
+        assert reason == "STALE_CANDLES: H1:7200s, H4:28800s"
+    finally:
+        CONFIG["ENGINE_A_STALE_CANDLE_GUARD"] = original

@@ -27,15 +27,22 @@ def test_pair_score_group_mapping_examples():
     )
 
 
-def test_engine_b_runtime_groups_have_explicit_override_coverage():
+def test_engine_b_runtime_groups_keep_non_forex_override_coverage():
     groups = ((CONFIG.get("NAKED_ENGINE") or {}).get("score_group_overrides") or {})
-    assert "forex_other" in groups
     assert "us_indices_trackers" in groups
     assert "eu_indices" in groups
     assert "asian_indices" in groups
     assert "index_other" in groups
-    assert groups["forex_other"]["intraday"]["min_room_atr"] == 0.85
     assert bool(CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED")) is False
+
+
+def test_engine_b_forex_uses_base_style_profile_when_group_override_absent():
+    groups = ((CONFIG.get("NAKED_ENGINE") or {}).get("score_group_overrides") or {})
+    assert "forex_majors" not in groups
+    assert "forex_crosses" not in groups
+    assert "forex_exotics" not in groups
+    assert "forex_other" not in groups
+    assert float(CONFIG["NAKED_ENGINE"]["style_profiles"]["intraday"]["min_rr"]) > 0
 
 
 def test_min_confluence_uses_class_threshold_when_live_group_config_absent():

@@ -32,27 +32,25 @@ log = logging.getLogger("athena")
 _CRYPTO_COT_PAIRS = {"BTC/USDT", "ETH/USDT"}
 
 # ADX gate thresholds (Wilder 1978 standard) — tunable via config.yaml FACTOR_ADX_*
-_ADX_HARD_FAIL = float(CONFIG.get("FACTOR_ADX_HARD_FAIL", 15.0))   # below this → dead market, abort
-_ADX_SOFT_FULL = 25.0   # at or above this → full credit (uses ADX_TREND_MIN_CLASS per asset)
-_ADX_SOFT_MULT = float(CONFIG.get("FACTOR_ADX_SOFT_MULT", 0.65))   # multiplier in soft zone
+# NOTE: Read lazily inside _adx_gate() so config reloads take effect without restart.
+_ADX_HARD_FAIL_DEFAULT = 15.0    # below this → dead market, abort
+_ADX_SOFT_MULT_DEFAULT = 0.65    # multiplier in soft zone
 
-# Session multipliers (forex only — soft, not hard) — tunable via config.yaml FACTOR_SESSION_*
-_SESSION_CORE_MULT = float(CONFIG.get("FACTOR_SESSION_CORE_MULT", 1.00))
-_SESSION_SHOULDER_MULT = float(CONFIG.get("FACTOR_SESSION_SHOULDER_MULT", 0.90))
-_SESSION_OFF_MULT = float(CONFIG.get("FACTOR_SESSION_OFF_MULT", 0.75))
+# Session multiplier defaults (forex only — read lazily in _session_multiplier)
+_SESSION_CORE_MULT_DEFAULT = 1.00
+_SESSION_SHOULDER_MULT_DEFAULT = 0.90
+_SESSION_OFF_MULT_DEFAULT = 0.75
 
 # Addon contribution bounds
 _ADDON_CONFIRM = 0.30    # confirming the trend direction
 _ADDON_NEUTRAL = 0.00    # data missing or neutral
 _ADDON_AGAINST = -0.15   # actively opposing direction
 
-# Final score formula weights — tunable via config.yaml FACTOR_*_WEIGHT
-_MOMENTUM_WEIGHT = float(CONFIG.get("FACTOR_MOMENTUM_WEIGHT", 0.50))
-_ADDON_WEIGHT = float(CONFIG.get("FACTOR_ADDON_WEIGHT", 0.30))
-_BASE_WEIGHT = float(CONFIG.get("FACTOR_BASE_WEIGHT", 0.20))
-
-# Conviction floor in final score blend — tunable via config.yaml FACTOR_CONVICTION_FLOOR
-_CONVICTION_FLOOR = float(CONFIG.get("FACTOR_CONVICTION_FLOOR", 0.60))
+# Final score formula weight defaults — read lazily inside compute_factor_scores
+_MOMENTUM_WEIGHT_DEFAULT = 0.50
+_ADDON_WEIGHT_DEFAULT = 0.30
+_BASE_WEIGHT_DEFAULT = 0.20
+_CONVICTION_FLOOR_DEFAULT = 0.60
 
 
 # ── Regime smoothing (kept for scan-level stability) ──────────────────────────
@@ -291,8 +289,8 @@ def _adx_gate(d1_snap: dict, h4_snap: dict, asset_type: str) -> tuple:
 
     Returns (multiplier, adx_value, adx_source).
     multiplier = 0.0  → hard abort (ADX < 15, dead market)
-    multiplier = 0.65 → soft penalty (15 ≤ ADX < 25)
-    multiplier = 1.0  → full credit (ADX ≥ 25)
+    multiplier = 0.65 → soft penalty (15 ≤ ADX < adx_min)
+    multiplier = 1.0  → full credit (ADX ≥ adx_min)
 
     Source preference: D1 ADX (structural) first, H4 ADX fallback.
     Per-class ADX minimum from ADX_TREND_MIN_CLASS config.
@@ -300,7 +298,7 @@ def _adx_gate(d1_snap: dict, h4_snap: dict, asset_type: str) -> tuple:
     adx_min = float(
         (CONFIG.get("ADX_TREND_MIN_CLASS") or {}).get(asset_type, 25)
     )
-    hard_fail = _ADX_HARD_FAIL
+    hard_fail = float(CONFIG.get("FACTOR_ADX_HARD_FAIL", _ADX_HARD_FAIL_DEFAULT))
 
     adx = d1_snap.get("adx")
     source = "d1"
@@ -309,17 +307,17 @@ def _adx_gate(d1_snap: dict, h4_snap: dict, asset_type: str) -> tuple:
         source = "h4"
     if adx is None:
         # No ADX data — use soft penalty (can't hard abort without data)
-        return _ADX_SOFT_MULT, None, "missing"
+        return float(CONFIG.get("FACTOR_ADX_SOFT_MULT", _ADX_SOFT_MULT_DEFAULT)), None, "missing"
 
     try:
         adx = float(adx)
     except (TypeError, ValueError):
-        return _ADX_SOFT_MULT, None, "parse_error"
+        return float(CONFIG.get("FACTOR_ADX_SOFT_MULT", _ADX_SOFT_MULT_DEFAULT)), None, "parse_error"
 
     if adx < hard_fail:
         return 0.0, adx, source  # hard abort — dead market
     if adx < adx_min:
-        return _ADX_SOFT_MULT, adx, source  # soft penalty
+        return float(CONFIG.get("FACTOR_ADX_SOFT_MULT", _ADX_SOFT_MULT_DEFAULT)), adx, source  # soft penalty
     return 1.0, adx, source  # full credit
 
 
@@ -432,6 +430,9 @@ def _session_multiplier(bar_time: Optional[str], asset_type: str) -> float:
     if asset_type != "forex":
         return 1.0
     from datetime import datetime, timezone
+    _core_mult = float(CONFIG.get("FACTOR_SESSION_CORE_MULT", _SESSION_CORE_MULT_DEFAULT))
+    _shoulder_mult_default = float(CONFIG.get("FACTOR_SESSION_SHOULDER_MULT", _SESSION_SHOULDER_MULT_DEFAULT))
+    _off_mult_default = float(CONFIG.get("FACTOR_SESSION_OFF_MULT", _SESSION_OFF_MULT_DEFAULT))
     try:
         if bar_time:
             dt = datetime.fromisoformat(bar_time.replace("Z", "+00:00"))
@@ -439,16 +440,16 @@ def _session_multiplier(bar_time: Optional[str], asset_type: str) -> float:
         else:
             h = datetime.now(timezone.utc).hour
     except Exception:
-        return _SESSION_CORE_MULT
+        return _core_mult
 
     cfg = CONFIG.get("FOREX_ENGINE", {}) or {}
-    soft_mult = float(cfg.get("session_soft_multiplier", _SESSION_OFF_MULT))
-    shoulder_mult = float(cfg.get("session_shoulder_multiplier", _SESSION_SHOULDER_MULT))
+    soft_mult = float(cfg.get("session_soft_multiplier", _off_mult_default))
+    shoulder_mult = float(cfg.get("session_shoulder_multiplier", _shoulder_mult_default))
     shoulder_h = int(cfg.get("session_shoulder_hours", 1))
 
     # Core sessions: London 07-16 UTC, NY 13-21 UTC
     if (7 <= h < 16) or (13 <= h < 21):
-        return _SESSION_CORE_MULT
+        return _core_mult
     # Shoulder zones: ±shoulder_h of core
     shoulder_zones = list(range(7 - shoulder_h, 7)) + list(range(16, 16 + shoulder_h)) + \
                      list(range(21, 21 + shoulder_h))
@@ -527,14 +528,19 @@ def compute_factor_scores(
     feed_status["session"] = f"{session_mult:.2f}"
 
     # ── Conviction score: weighted combination ────────────────────────────────
+    # Read weights lazily so config reloads take effect without restart.
+    _momentum_w = float(CONFIG.get("FACTOR_MOMENTUM_WEIGHT", _MOMENTUM_WEIGHT_DEFAULT))
+    _addon_w = float(CONFIG.get("FACTOR_ADDON_WEIGHT", _ADDON_WEIGHT_DEFAULT))
+    _base_w = float(CONFIG.get("FACTOR_BASE_WEIGHT", _BASE_WEIGHT_DEFAULT))
+    _conviction_floor = float(CONFIG.get("FACTOR_CONVICTION_FLOOR", _CONVICTION_FLOOR_DEFAULT))
     # conviction ∈ [0, 1] — how strongly we believe in this setup
-    # Base floor (0.20) + momentum quality contribution (0.50) + addon (0.30)
-    # addon_val ∈ {-0.15, 0.00, 0.30} so conviction ∈ [0.05, 1.0]
-    addon_norm = max(0.0, addon_val / _ADDON_CONFIRM) if _ADDON_CONFIRM > 0 else 0.0
+    # Base floor + momentum quality + addon (addon_val can be negative → reduces conviction).
+    # Normalise addon: +0.30 → +1.0, 0.00 → 0.0, -0.15 → -0.5 (penalty preserved, not floored).
+    addon_norm = (addon_val / _ADDON_CONFIRM) if _ADDON_CONFIRM > 0 else 0.0
     conviction = (
-        _BASE_WEIGHT
-        + _MOMENTUM_WEIGHT * mom_quality
-        + _ADDON_WEIGHT * addon_norm
+        _base_w
+        + _momentum_w * mom_quality
+        + _addon_w * addon_norm
     )
     conviction = max(0.0, min(1.0, conviction))
 
@@ -549,7 +555,7 @@ def compute_factor_scores(
     # Formula: abs(trend_score) * adx_mult * session_mult * (floor + (1-floor)*conviction)
     # The conviction floor means even flat momentum+addon still passes a fraction of trend signal.
     base_score = abs(trend_score) * adx_mult * session_mult
-    final_score = base_score * (_CONVICTION_FLOOR + (1.0 - _CONVICTION_FLOOR) * conviction)
+    final_score = base_score * (_conviction_floor + (1.0 - _conviction_floor) * conviction)
     final_score = max(0.0, min(3.0, final_score))
 
     # ── Factor scores dict (for UI / Marcus Reid diagnostics) ─────────────────
@@ -572,7 +578,7 @@ def compute_factor_scores(
         "regime": regime,
         # ── Factor breakdown (UI + AI) ────────────────────────────────────────
         "factor_scores": factor_scores,
-        "weights": {"trend": 1.0, "momentum": _MOMENTUM_WEIGHT, "addon": _ADDON_WEIGHT},
+        "weights": {"trend": 1.0, "momentum": _momentum_w, "addon": _addon_w},
         "trend_coherence": trend_detail,
         # ── Diagnostic fields (backward compat with Engine C / scoring.py) ───
         "directional_score": round(trend_score, 4),
@@ -622,7 +628,7 @@ def _zero_result(
         "direction": direction,
         "regime": regime,
         "factor_scores": {"trend": 0.0, "momentum": 0.0, "addon": 0.0},
-        "weights": {"trend": 1.0, "momentum": _MOMENTUM_WEIGHT, "addon": _ADDON_WEIGHT},
+        "weights": {"trend": 1.0, "momentum": _MOMENTUM_WEIGHT_DEFAULT, "addon": _ADDON_WEIGHT_DEFAULT},
         "trend_coherence": trend_detail,
         "directional_score": 0.0,
         "nondirectional_score": 0.0,

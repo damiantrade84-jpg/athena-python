@@ -434,7 +434,7 @@ class NakedEngine:
                     c = candles[i]
                     if float(c["close"]) < float(c["open"]):  # bearish candle
                         ob_top = float(c["open"])
-                        ob_bottom = float(c["low"])
+                        ob_bottom = float(c["close"])  # body only — wick excluded per SMC
                         # Displacement: how far price moved after this candle (in ATRs)
                         if i + 1 < len(candles):
                             max_after = max(float(candles[j]["high"]) for j in range(i + 1, min(i + 6, len(candles))))
@@ -473,7 +473,7 @@ class NakedEngine:
                 for i in range(bos_index - 1, max(0, bos_index - 20), -1):
                     c = candles[i]
                     if float(c["close"]) > float(c["open"]):  # bullish candle
-                        ob_top = float(c["high"])
+                        ob_top = float(c["close"])  # body only — wick excluded per SMC
                         ob_bottom = float(c["open"])
                         # Displacement
                         if i + 1 < len(candles):
@@ -597,7 +597,7 @@ class NakedEngine:
         using the widest boundaries.
         """
         raw_fvgs = []
-        for i in range(2, len(candles) - 1):
+        for i in range(1, len(candles) - 1):
             prev_high = float(candles[i - 1]["high"])
             prev_low = float(candles[i - 1]["low"])
             next_high = float(candles[i + 1]["high"])
@@ -1744,12 +1744,13 @@ class NakedEngine:
             # Flexible but not free — require BOTH location AND a trigger/catalyst.
             # BOS alone is not enough. You need: structure + (zone OR breakout) + trigger + room/rr.
             # This prevents BOS from single-handedly passing 3 gates.
+            # macro_ok is only a hard gate when require_macro_align=True (mirrors confirmations list).
             passed = (
                 structure_ok
                 and location_ok
                 and entry_ok
                 and rr_ok
-                and macro_ok
+                and (macro_ok if require_macro_align else True)
             )
 
         lifecycle_state, lifecycle_reason = self._determine_lifecycle_state(

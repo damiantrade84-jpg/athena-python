@@ -277,20 +277,24 @@ def detect_div(d1c: list, h4c: list, h1c: list) -> list:
         n = len(pr)
         if n >= 10 and rsi[-1] is not None:
             t = n // 3
-            # Find prior price peak/trough index and get RSI at that exact bar
+            # Prior zone: middle third; current zone: final third
             prior_highs = pr[t : 2 * t]
             prior_lows = lows[t : 2 * t]
             prior_rsi = rsi[t : 2 * t]
-            if prior_highs and prior_rsi:
+            curr_highs = pr[2 * t :]
+            curr_lows = lows[2 * t :]
+            if prior_highs and prior_rsi and curr_highs:
                 peak_idx = prior_highs.index(max(prior_highs))
                 trough_idx = prior_lows.index(min(prior_lows))
                 rsi_at_peak = prior_rsi[peak_idx] if peak_idx < len(prior_rsi) else None
                 rsi_at_trough = prior_rsi[trough_idx] if trough_idx < len(prior_rsi) else None
-                # Bearish div: higher high in price, lower RSI at the peak
-                if rsi_at_peak is not None and pr[-1] > max(prior_highs) and rsi[-1] < rsi_at_peak:
+                curr_high = max(curr_highs)
+                curr_low = min(curr_lows)
+                # Bearish div: current zone makes higher high, but RSI is lower
+                if rsi_at_peak is not None and curr_high > max(prior_highs) and rsi[-1] < rsi_at_peak:
                     w.append("H4 RSI Bearish Divergence")
-                # Bullish div: lower low in price, higher RSI at the trough
-                if rsi_at_trough is not None and lows[-1] < min(prior_lows) and rsi[-1] > rsi_at_trough:
+                # Bullish div: current zone makes lower low, but RSI is higher
+                if rsi_at_trough is not None and curr_low < min(prior_lows) and rsi[-1] > rsi_at_trough:
                     w.append("H4 RSI Bullish Divergence")
     except Exception as e:
         log.warning(f"detect_div H4: {e}")

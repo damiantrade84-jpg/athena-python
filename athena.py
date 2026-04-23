@@ -7534,12 +7534,17 @@ def _persist_naked_style_profiles_yaml(cfg_path: str, full_profiles: dict) -> No
         f.write(new_content)
 
 
-def _persist_score_group_overrides_yaml(cfg_path: str, group_overrides: dict) -> None:
-    """Update min_score values in NAKED_ENGINE.score_group_overrides in config.yaml."""
+def _persist_score_group_overrides_yaml(cfg_path: str, group_overrides: dict) -> dict:
+    """Update min_score values in NAKED_ENGINE.score_group_overrides in config.yaml.
+
+    Returns a small status dict so callers can surface partial-write warnings.
+    """
     import re as _re
 
     with open(cfg_path, "r", encoding="utf-8") as f:
         content = f.read()
+
+    status = {"saved": False, "updated": [], "warnings": []}
 
     # Find the score_group_overrides block
     m = _re.search(
@@ -7548,8 +7553,10 @@ def _persist_score_group_overrides_yaml(cfg_path: str, group_overrides: dict) ->
         _re.MULTILINE | _re.DOTALL,
     )
     if not m:
-        log.warning("config.yaml: score_group_overrides block not found, skipping update")
-        return
+        warning = "config.yaml: score_group_overrides block not found, skipping update"
+        log.warning(warning)
+        status["warnings"].append(warning)
+        return status
 
     block = m.group(2)
     for group_name, group_styles in group_overrides.items():
@@ -7563,17 +7570,68 @@ def _persist_score_group_overrides_yaml(cfg_path: str, group_overrides: dict) ->
             # Pattern: "      scalp: {min_score: 3.0" or "      scalp: {min_score: 3.0, min_rr: 1.4"
             # We need to find lines within the specific group block
             group_pattern = rf"(    {_re.escape(group_name)}:\n(?:.*?\n)*?      {_re.escape(style)}: \{{min_score: )[\d.]+"
-            block = _re.sub(
+            block, replaced = _re.subn(
                 group_pattern,
                 lambda mm, v=ms: f"{mm.group(1)}{v}",
                 block,
                 count=1,
                 flags=_re.DOTALL,
             )
+            key = f"{group_name}.{style}"
+            if replaced:
+                status["updated"].append(key)
+            else:
+                warning = f"config.yaml: score_group_overrides entry not found for {key}, skipping update"
+                log.warning(warning)
+                status["warnings"].append(warning)
 
     new_content = content[: m.start()] + m.group(1) + block + m.group(3) + content[m.end() :]
     with open(cfg_path, "w", encoding="utf-8") as f:
         f.write(new_content)
+    status["saved"] = True
+    return status
+
+
+def _sync_score_group_override_min_scores(
+    group_overrides: dict,
+    previous_base_min_scores: dict,
+    new_base_min_scores: dict,
+) -> tuple[list[str], list[str]]:
+    """Propagate base style min_score only for entries that were inheriting the old base."""
+    updated = []
+    skipped_custom = []
+
+    for group_name, group_styles in list(group_overrides.items()):
+        if not isinstance(group_styles, dict):
+            continue
+        for style in ("scalp", "intraday", "swing"):
+            style_cfg = group_styles.get(style)
+            if not isinstance(style_cfg, dict) or "min_score" not in style_cfg:
+                continue
+
+            old_base = previous_base_min_scores.get(style)
+            new_base = new_base_min_scores.get(style)
+            key = f"{group_name}.{style}"
+            if old_base is None or new_base is None:
+                skipped_custom.append(key)
+                continue
+
+            try:
+                current_group_min = float(style_cfg["min_score"])
+                old_base_f = float(old_base)
+                new_base_f = float(new_base)
+            except (TypeError, ValueError):
+                skipped_custom.append(key)
+                continue
+
+            if abs(current_group_min - old_base_f) > 1e-9:
+                skipped_custom.append(key)
+                continue
+
+            style_cfg["min_score"] = new_base_f
+            updated.append(key)
+
+    return updated, skipped_custom
 
 
 @app.route("/api/naked-style-thresholds", methods=["GET", "POST"])
@@ -7603,6 +7661,10 @@ def api_naked_style_thresholds():
     data = request.get_json(silent=True) or {}
     ne = CONFIG.setdefault("NAKED_ENGINE", {})
     styles = ne.setdefault("style_profiles", {})
+    previous_base_min_scores = {
+        style: (dict(styles.get(style) or {})).get("min_score")
+        for style in STYLES
+    }
     any_change = False
     for style in STYLES:
         payload = data.get(style)
@@ -7647,17 +7709,16 @@ def api_naked_style_thresholds():
 
     # Also update score_group_overrides min_score to match the new base thresholds
     group_overrides = ne.setdefault("score_group_overrides", {})
-    groups_updated = []
-    for group_name, group_styles in list(group_overrides.items()):
-        if not isinstance(group_styles, dict):
-            continue
-        for style in STYLES:
-            style_cfg = group_styles.get(style)
-            if isinstance(style_cfg, dict) and "min_score" in style_cfg:
-                new_min_score = full_for_yaml.get(style, {}).get("min_score")
-                if new_min_score is not None:
-                    style_cfg["min_score"] = new_min_score
-                    groups_updated.append(f"{group_name}.{style}")
+    new_base_min_scores = {
+        style: full_for_yaml.get(style, {}).get("min_score")
+        for style in STYLES
+    }
+    groups_updated, groups_skipped_custom = _sync_score_group_override_min_scores(
+        group_overrides,
+        previous_base_min_scores,
+        new_base_min_scores,
+    )
+    persist_warnings = []
 
     try:
         import os as _os
@@ -7665,8 +7726,13 @@ def api_naked_style_thresholds():
         cfg_path = _os.path.join(_os.path.dirname(__file__), "config.yaml")
         _persist_naked_style_profiles_yaml(cfg_path, full_for_yaml)
         if groups_updated:
-            _persist_score_group_overrides_yaml(cfg_path, group_overrides)
+            persist_status = _persist_score_group_overrides_yaml(cfg_path, group_overrides)
+            persist_warnings.extend(persist_status.get("warnings") or [])
             log.info(f"[NAKED_ENGINE] score_group_overrides also updated: {groups_updated}")
+        if groups_skipped_custom:
+            log.info(
+                f"[NAKED_ENGINE] preserved custom score_group_overrides min_score values: {groups_skipped_custom}"
+            )
         log.info(f"[NAKED_ENGINE] style_profiles updated via UI: {full_for_yaml}")
     except Exception as e:
         log.error(f"Failed to persist NAKED_ENGINE.style_profiles: {e}")
@@ -7676,7 +7742,15 @@ def api_naked_style_thresholds():
     for s in STYLES:
         p = dict(styles.get(s) or {})
         out[s] = {"min_score": p.get("min_score"), "min_rr": p.get("min_rr")}
-    return jsonify({"saved": True, "style_profiles": out})
+    response = {
+        "saved": True,
+        "style_profiles": out,
+        "score_group_overrides_updated": groups_updated,
+        "score_group_overrides_preserved_custom": groups_skipped_custom,
+    }
+    if persist_warnings:
+        response["warnings"] = persist_warnings
+    return jsonify(response)
 
 
 def _persist_scalp_group_rr_yaml(cfg_path: str, group: str, style: str, min_rr: float) -> None:
