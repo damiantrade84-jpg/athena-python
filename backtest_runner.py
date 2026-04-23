@@ -1416,7 +1416,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     same_bar_both_hit += 1
                 if _bar_outcome == "TP2":
                     outcome = "TP2"
-                    result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult))
+                    _sl_dist_r = abs(entry - sl)
+                    result_r = (abs(tp2 - entry) / _sl_dist_r) if _sl_dist_r > 0 else (tp2_mult / sl_mult)
                     exit_bar = j
                     break
                 if _bar_outcome == "TP1":
@@ -1845,7 +1846,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     same_bar_both_hit += 1
                 if _bar_outcome == "TP2":
                     outcome = "TP2"
-                    result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult))
+                    _sl_dist_r = abs(entry - sl)
+                    result_r = (abs(tp2 - entry) / _sl_dist_r) if _sl_dist_r > 0 else (tp2_mult / sl_mult)
                     exit_bar = j
                     break
                 if _bar_outcome == "TP1":
@@ -2258,7 +2260,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     same_bar_both_hit += 1
                 if _bar_outcome == "TP2":
                     outcome = "TP2"
-                    result_r = (tp2_mult / sl_mult) - (slip / (atr * sl_mult))
+                    _sl_dist_r = abs(entry - sl)
+                    result_r = (abs(tp2 - entry) / _sl_dist_r) if _sl_dist_r > 0 else (tp2_mult / sl_mult)
                     exit_bar = j
                     break
                 if _bar_outcome == "TP1":
@@ -4709,6 +4712,9 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     vp_bins = int(cfg.get("VP_BINS", 64))
     abs_vol_mult = float(cfg.get("ABSORPTION_VOL_MULT", 2.0))
     slippage_ticks = int(cfg.get("BT_SLIPPAGE_TICKS", 3))
+    _grade_order = ["A", "B", "C", "D"]
+    _min_grade_str = str(cfg.get("MIN_GRADE_AUTO_EXECUTE", cfg.get("MIN_GRADE", "C"))).upper()
+    _min_grade_idx = _grade_order.index(_min_grade_str) if _min_grade_str in _grade_order else 2
     scratch_enabled = bool(cfg.get("BT_SCRATCH_ENABLED", True))
     scratch_bars = max(1, int(cfg.get("BT_SCRATCH_BARS", 3)))
     scratch_min_r = max(0.0, float(cfg.get("BT_SCRATCH_MIN_R", 0.10)))
@@ -4859,6 +4865,18 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         direction = setup["direction"]
         setup_type = setup["setup_type"]
 
+        # Grade gate: compute grade from pipeline outputs BEFORE entering the trade.
+        # Mirrors live run_scalp_scan() which skips grades below MIN_GRADE_AUTO_EXECUTE.
+        _pre_grade_sessions = get_grade_sessions_for_mode(asset_type, when=signal_close_dt, backtest=True)
+        _pre_quality = _ai_quality_grade(
+            vp=vp, price_loc=price_loc, absorption=absorption, cvd=cvd,
+            aaa=aaa, vwap=vwap, setup=setup, sessions=_pre_grade_sessions,
+            spread_pips=0.0, htf_bias=htf_bias,
+        )
+        _pre_grade = _pre_quality.get("grade", "D")
+        if _grade_order.index(_pre_grade) > _min_grade_idx:
+            continue
+
         if absorption.get("detected"):
             trigger_type = "absorption"
         elif cvd.get("direction") == direction:
@@ -5003,6 +5021,13 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             r_multiple = round(max(-5.0, min(5.0, 0.5 * 1.0 + 0.5 * raw_r)), 3)
         else:
             r_multiple = round(max(-5.0, min(5.0, raw_r)), 3)
+
+        # F3: Deduct round-trip fee — mirrors Engine A / Engine B deduction.
+        # fee_r = fee_pct * entry_price / sl_distance  (cost as a fraction of 1R)
+        _fee_pct_d = float(CONFIG.get("FEE_PCT", {}).get(asset_type, CONFIG.get("FEE_PCT", {}).get("stock", 0.0004)))
+        if sl_distance > 0 and exit_reason != "TIMEOUT":
+            _fee_r_d = _fee_pct_d * entry / sl_distance
+            r_multiple = round(r_multiple - _fee_r_d, 4)
 
         # Grade through the same scorer as live scan, using the pipeline outputs
         # already computed for this historical decision point.
