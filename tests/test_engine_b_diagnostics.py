@@ -15,6 +15,7 @@ from market_structure import (
     ENGINE_B_REASON_SUPPORT_TOO_CLOSE,
     NakedEngine,
     engine,
+    engine_b_confidence_passes,
 )
 
 
@@ -267,3 +268,39 @@ def test_calculate_confidence_rejects_tp_on_wrong_side_of_entry():
     assert out["tp_side_ok"] is False
     assert out["rr"] == 0.0
     assert out["rr_ok"] is False
+
+
+def test_calculate_confidence_flexible_mode_accepts_liquidity_sweep_catalyst():
+    res = _base_res_long()
+    res["bos_confirmed"] = False
+    res["trigger_ok"] = False
+    res["liquidity_sweep"] = True
+    res["ob_at_zone"] = False
+    res["distance_to_res"] = 3.0
+    res["recommended_stop_loss"] = 99.0
+    res["recommended_take_profit"] = 102.0
+
+    style_profile = {
+        "min_room_atr": 0.35,
+        "min_rr": 1.5,
+        "min_score": 5.0,
+        "require_macro_align": False,
+        "checklist_mode": "flexible",
+    }
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile=style_profile,
+    )
+    gate_ok, min_score_scaled = engine_b_confidence_passes(
+        out, style_profile, regime_label="RANGING"
+    )
+
+    assert out["entry_ok"] is True
+    assert out["passed"] is True
+    assert out["score"] == pytest.approx(5.0)
+    assert min_score_scaled == 5.0
+    assert gate_ok is True

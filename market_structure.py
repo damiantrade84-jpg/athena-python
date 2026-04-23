@@ -1747,7 +1747,7 @@ class NakedEngine:
             passed = (
                 structure_ok
                 and location_ok
-                and (trigger_ok or (breakout_ok and bool(res.get("bos_volume_confirmed", False))) or (bool(res.get("choch_confirmed")) and zone_ok))
+                and entry_ok
                 and rr_ok
                 and macro_ok
             )

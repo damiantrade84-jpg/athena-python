@@ -13,6 +13,15 @@ from config import CONFIG, create_ai_client, get_ai_model
 log = logging.getLogger("athena")
 
 
+def _get_present_value(payload: dict | None, *keys, default=None):
+    if not isinstance(payload, dict):
+        return default
+    for key in keys:
+        if key in payload:
+            return payload[key]
+    return default
+
+
 def _normalise_engine_b_ai_payload(parsed: dict) -> dict:
     """Accept common model key aliases before falling back to safe defaults."""
     if not isinstance(parsed, dict):
@@ -84,11 +93,11 @@ def build_engine_b_signal_message(
     # === ENGINE A CROSS-CHECK (only when compare mode) ===
     if engine_a_ctx and isinstance(engine_a_ctx, dict):
         a_dir = engine_a_ctx.get("direction", "?")
-        a_score = engine_a_ctx.get("confluenceScore") or engine_a_ctx.get("score", 0)
-        a_max = engine_a_ctx.get("maxScore") or engine_a_ctx.get("max_score", 3.0)
-        a_pct = engine_a_ctx.get("confluencePct") or round(
-            (a_score / a_max * 100) if a_max else 0
-        )
+        a_score = _get_present_value(engine_a_ctx, "confluenceScore", "score", default=0)
+        a_max = _get_present_value(engine_a_ctx, "maxScore", "max_score", default=3.0)
+        a_pct = _get_present_value(engine_a_ctx, "confluencePct")
+        if a_pct is None:
+            a_pct = round((a_score / a_max * 100) if a_max else 0)
         a_trend = engine_a_ctx.get("trendState") or engine_a_ctx.get("trend_state", "?")
         a_sl = engine_a_ctx.get("sl")
         a_tp = engine_a_ctx.get("tp1")
@@ -297,7 +306,7 @@ def get_engine_b_ai_verdict(
     structure_result: dict,
     confidence_result: dict,
     learning_ctx: Optional[dict] = None,
-    xai_api_key: str = None,
+    xai_api_key: Optional[str] = None,
     xai_model: str = "kimi-k2.6",
     engine_a_ctx: Optional[dict] = None,
     news_ctx: Optional[dict] = None,
