@@ -456,83 +456,15 @@ ENGINE_A_BLOCKED_TREND_STATES:
 
 MIN_CONFLUENCE_CLASS:
 
-  forex:     1.0      # forex engine max=2.0; was 1.60 (80%!) — unreachable without rare SMC bonuses
+  crypto:    2.4
 
-  crypto:    1.4      # was 1.20, restore to 1.40
+  forex:     2.1
 
-  commodity: 1.4      # was 1.10, restore to 1.40
+  commodity: 1.8
 
-  stock:     1.55      # was 1.10, restore to 1.55
+  stock:     1.8
 
-  index:     1.35      # was 1.05, restore to 1.35
-
-
-
-# Forex scan threshold — forex_scoring engine outputs 0–2.0 (not 0–3.0 factor scale)
-
-# MIN_CONFLUENCE_CLASS.forex must match this — keep in sync
-
-
-
-# Optional subgroup thresholds (used when score_group is available on a pair)
-
-# NOTE: get_score_threshold() uses GROUP value directly — no class floor check.
-
-# Group values must be proportionally in line with MIN_CONFLUENCE_CLASS.
-
-MIN_CONFLUENCE_GROUP:
-
-  forex:
-
-    forex_majors: 0.85     # was 1.50 — unreachable; majors most liquid, lower bar
-
-    forex_crosses: 0.95     # was 1.55
-
-    forex_exotics: 1.05     # was 1.65; exotics need higher conviction
-
-  crypto:
-
-    crypto_btc: 1.28      # was 1.10 (old lowered-class era) × 1.167
-
-    crypto_eth: 1.34      # was 1.15 × 1.167
-
-    crypto_alt_majors: 1.40  # was 1.20 × 1.167 = class floor
-
-    crypto_other: 1.40    # was 1.20 × 1.167 = class floor
-
-  commodity:
-
-    nat_gas: 1.45
-
-    pgm_metals: 1.40
-
-    copper: 1.35
-
-    precious_trackers: 1.40  # was 1.10 (old lowered-class value) — restored to class floor
-
-    energy_oil: 1.25
-
-    commodity_other: 1.35
-
-  index:
-
-    asian_indices: 1.45
-
-    us_indices_trackers: 1.35
-
-    eu_indices: 1.30
-
-    index_other: 1.35
-
-  stock:
-
-    us_stock_single: 1.55  # was 1.10 (old lowered-class era) × 1.409 = class floor
-
-    smallcap_em_etf: 1.40  # was 1.00 × 1.409
-
-    bond_tlt: 1.25         # was 0.90 × 1.409; slight allowance below class for bond ETFs
-
-    stock_other: 1.50      # was 1.05 × 1.409
+  index:     1.5
 
 
 
@@ -628,15 +560,15 @@ AUTO_TRADE_ENABLED: false          # Start auto-trader on server boot
 
 AUTO_TRADE_MIN_SCORE:
 
-  crypto:    1.40   # factor 0–3: align with MIN_CONFLUENCE_CLASS.crypto
+  crypto:    2.4    # align with MIN_CONFLUENCE_CLASS.crypto
 
-  commodity: 1.40   # factor 0–3: align with MIN_CONFLUENCE_CLASS.commodity
+  forex:     2.1    # align with MIN_CONFLUENCE_CLASS.forex
 
-  stock:     1.55   # factor 0–3: align with MIN_CONFLUENCE_CLASS.stock
+  commodity: 1.8    # align with MIN_CONFLUENCE_CLASS.commodity
 
-  index:     1.35   # factor 0–3: align with MIN_CONFLUENCE_CLASS.index
+  stock:     1.8    # align with MIN_CONFLUENCE_CLASS.stock
 
-  forex:     1.0    # forex 0–2: align with MIN_CONFLUENCE_CLASS.forex
+  index:     1.5    # align with MIN_CONFLUENCE_CLASS.index
 
 # AUTO_TRADE_MIN_CONVICTION is the real live gate used inside auto_trader.py.
 
