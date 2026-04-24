@@ -15,6 +15,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 
 from config import CONFIG
+from athena_app.services.data_freshness import evaluate_execution_data_freshness
 from scoring import CORR_CLUSTERS, _PAIR_TO_CLUSTER
 
 log = logging.getLogger("sentinel")
@@ -617,6 +618,16 @@ def risk_check(
     pair = signal.get("pair", "UNKNOWN")
     prefix = f"[RISK] {pair}"
 
+    try:
+        account_balance = float(account_balance)
+        account_equity = float(account_equity)
+    except (TypeError, ValueError):
+        log.warning(f"{prefix} REJECTED: missing account balance/equity")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "MISSING_ACCOUNT_DATA")
+    if account_balance <= 0 or account_equity <= 0:
+        log.warning(f"{prefix} REJECTED: invalid account balance/equity")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "MISSING_ACCOUNT_DATA")
+
     # ── Check 0a: Direction validation ──────────────────────────────────────
     direction = signal.get("direction", "").upper()
     if direction not in ("LONG", "SHORT"):
@@ -629,6 +640,41 @@ def risk_check(
     if kill_switch:
         log.warning(f"{prefix} REJECTED: kill switch active")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "KILL_SWITCH_ACTIVE")
+
+    decision_state = str(signal.get("decision_state") or "").lower()
+    tier = str(signal.get("tier") or signal.get("signalTier") or "").upper()
+    verdict = str(signal.get("verdict") or "").upper()
+    if decision_state in ("watchlist", "blocked") or (
+        verdict and tier in ("WATCHLIST", "SKIP")
+    ):
+        log.warning(f"{prefix} REJECTED: non-executable signal state")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "NON_EXECUTABLE_SIGNAL_STATE")
+
+    if verdict in ("B_ONLY", "B_ONLY_SCORED", "B_ONLY_VISION_CONFIRMED", "ALIGNED"):
+        engine_b_status = signal.get("engine_b_status") or {}
+        components = signal.get("components") or {}
+        checklist_failed = (
+            isinstance(engine_b_status, dict)
+            and engine_b_status.get("checklist_passed") is False
+        ) or (
+            isinstance(components, dict)
+            and components.get("b_checklist_passed") is False
+        )
+        if checklist_failed:
+            log.warning(f"{prefix} REJECTED: Engine B checklist failed")
+            return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "ENGINE_B_CHECKLIST_FAILED")
+
+    if verdict == "A_ONLY":
+        components = signal.get("components") or {}
+        if isinstance(components, dict) and components.get("a_has_signal") is False:
+            log.warning(f"{prefix} REJECTED: Engine A signal invalid")
+            return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "ENGINE_A_SIGNAL_INVALID")
+
+    freshness = evaluate_execution_data_freshness(signal, CONFIG)
+    if not freshness["allowed"]:
+        reason = freshness["reason"] or "STALE_DATA_BLOCK"
+        log.warning(f"{prefix} REJECTED: {reason}")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, reason)
 
     # ── Check 0.5: Daily loss limit ────────────────────────────────────────
     daily_blocked, daily_loss_pct = _check_daily_loss(account_balance, asset_type)

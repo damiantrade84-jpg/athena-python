@@ -80,6 +80,8 @@ def _annotate_fetch_meta_with_bar_freshness(
     tf: str,
     *,
     now: float | None = None,
+    offset_hours: float = 0.0,
+    live_feed: bool = False,
 ) -> dict:
     """Add read-only last-bar freshness fields for diagnostics and health routes."""
     if not isinstance(fetch_meta, dict):
@@ -96,12 +98,35 @@ def _annotate_fetch_meta_with_bar_freshness(
     last_epoch = candle_time_epoch_utc(last_ts)
     if last_epoch is None:
         return fetch_meta
+    fetch_meta["lastBarEpoch"] = int(last_epoch)
     now_ts = time.time() if now is None else float(now)
     age_sec = round(max(0.0, now_ts - float(last_epoch)), 1)
     fetch_meta["lastBarAgeSec"] = age_sec
     tf_seconds = _TF_SECONDS.get(str(tf or "").upper())
     if tf_seconds:
-        fetch_meta["lastBarStale"] = bool(age_sec > (2 * tf_seconds))
+        current_bucket = _bucket_start_epoch(tf, now_ts, offset_hours=offset_hours)
+        last_bucket = _bucket_start_epoch(tf, float(last_epoch), offset_hours=offset_hours)
+        bucket_lag = max(
+            0,
+            int((int(current_bucket) - int(last_bucket)) // int(tf_seconds)),
+        )
+        has_current_bucket = int(last_bucket) == int(current_bucket)
+        if has_current_bucket:
+            severity = "fresh"
+        elif bucket_lag == 1:
+            severity = "stale_1_bucket"
+        elif bucket_lag > 1:
+            severity = "stale_multi_bucket"
+        else:
+            severity = "missing_current_bucket"
+        fetch_meta["expectedCurrentBucketEpoch"] = int(current_bucket)
+        fetch_meta["bucketLag"] = bucket_lag
+        fetch_meta["hasCurrentBucket"] = bool(has_current_bucket)
+        fetch_meta["stalenessSeverity"] = severity
+        fetch_meta["lastBarStale"] = bool(
+            age_sec > (2 * tf_seconds)
+            or (live_feed and not has_current_bucket)
+        )
     return fetch_meta
 
 
@@ -268,6 +293,18 @@ def candle_time_epoch_utc(val) -> int | None:
         return None
 
 
+def _bucket_start_epoch(tf: str, ts_s: float, offset_hours: float = 0.0) -> int:
+    """Return timeframe bucket start in epoch seconds, with optional H4-style offset."""
+    tf_sec = _TF_SECONDS.get((tf or "").upper())
+    if not tf_sec:
+        return int(ts_s)
+    try:
+        offset_s = float(offset_hours or 0.0) * 3600.0
+    except (TypeError, ValueError):
+        offset_s = 0.0
+    return int(((float(ts_s) - offset_s) // tf_sec) * tf_sec + offset_s)
+
+
 def _ttl_cache_last_bar_stale(candles: list[dict] | None, tf: str, now_s: float) -> bool:
     """True when the newest cached bar is too old vs ``now_s`` for this timeframe."""
     if not candles:
@@ -421,6 +458,12 @@ def fetch_candles(
         "cacheHit": False,
     }
     ptype = str(pair.get("type") or "").lower()
+    offset_hours = (
+        forex_h4_resample_offset_hours()
+        if ptype == "forex" and tf == "H4"
+        else 0.0
+    )
+    is_live_forex_crypto = ptype in {"forex", "crypto"}
     bypass_ttl_cache = ptype in {"forex", "crypto"}
     if bypass_ttl_cache:
         fetch_meta["cacheBypass"] = True
@@ -466,7 +509,13 @@ def fetch_candles(
                 }
             )
             out = live_candles[-limit:] if len(live_candles) > limit else live_candles
-            _annotate_fetch_meta_with_bar_freshness(fetch_meta, out, tf)
+            _annotate_fetch_meta_with_bar_freshness(
+                fetch_meta,
+                out,
+                tf,
+                offset_hours=offset_hours,
+                live_feed=is_live_forex_crypto,
+            )
             with _candle_cache_lock:
                 _store_fetch_meta(key, fetch_meta)
             log.debug(
@@ -487,7 +536,13 @@ def fetch_candles(
             out_candles = extract_candles(out_candles)
 
         fetch_meta["bars"] = len(out_candles) if out_candles else 0
-        _annotate_fetch_meta_with_bar_freshness(fetch_meta, out_candles, tf)
+        _annotate_fetch_meta_with_bar_freshness(
+            fetch_meta,
+            out_candles,
+            tf,
+            offset_hours=offset_hours,
+            live_feed=is_live_forex_crypto,
+        )
         with _candle_cache_lock:
             _candle_cache.pop(key, None)
             _store_fetch_meta(key, fetch_meta)
@@ -640,7 +695,13 @@ def fetch_candles(
 
         if candles:
             fetch_meta["bars"] = len(candles)
-            _annotate_fetch_meta_with_bar_freshness(fetch_meta, candles, tf)
+            _annotate_fetch_meta_with_bar_freshness(
+                fetch_meta,
+                candles,
+                tf,
+                offset_hours=offset_hours,
+                live_feed=is_live_forex_crypto,
+            )
             with _candle_cache_lock:
                 if bypass_ttl_cache:
                     _candle_cache.pop(key, None)

@@ -1,1535 +1,235 @@
-"""test_factor_scoring.py — Unit tests for factor_scoring.py."""
-
-import sys
-import os
-from unittest.mock import patch
-
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
+from config import CONFIG
 from factor_scoring import (
+    build_oi_context_for_factor_scoring,
     compute_factor_scores,
-    _factor_score,
     make_regime_smoothing_context,
 )
-from config import CONFIG, _deep_merge_dict
-from scoring import calc_confluence
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
-
-
-def _make_snap(**overrides):
-    """Minimal H4 snap with z-score fields."""
-    base = {
-        "adx": 30,
-        "adx_z": 0.5,
-        "rsi_z": 0.3,
-        "macdLine_z": 0.2,
-        "atr_z": 0.1,
-        "bbWidth_z": -0.1,
-        "realized_vol_z": 0.0,
-        "obv_trend": 1,
-        "fib_proximity": 1,
-        "ema21": 105,
-        "ema50": 100,
-        "adxMomentum": "ACCELERATING",
-        "adxSlope": 0.5,
-    }
-    base.update(overrides)
-    return base
-
-
-def _make_pair(**overrides):
-    base = {"type": "crypto", "display": "BTC/USDT"}
-    base.update(overrides)
-    return base
-
-
-def _make_candles(n=200, base=100):
-    """Generate N synthetic candles."""
-    return [
-        {
-            "open": base + i,
-            "high": base + i + 2,
-            "low": base + i - 1,
-            "close": base + i + 1,
+def _snap(direction="long", *, adx=30.0, include_adx=True, momentum=None):
+    if direction == "long":
+        snap = {
+            "ema21": 110.0,
+            "ema50": 100.0,
+            "ema200": 90.0,
+            "close": 111.0,
+            "atr": 1.0,
         }
-        for i in range(n)
-    ]
-
-
-def _make_volume_candles(n=200, base=100):
-    """Generate candles with real volume and a late bullish conviction acceleration."""
-    candles = []
-    for i in range(n):
-        open_price = base + i * 0.1
-        if i < n - 10:
-            body = 0.4
-            wick = 0.2
-            vol = 20
-        else:
-            body = 1.8
-            wick = 0.3
-            vol = 120
-        close_price = open_price + body
-        candles.append(
-            {
-                "open": open_price,
-                "high": close_price + wick,
-                "low": open_price - wick,
-                "close": close_price,
-                "vol": vol,
-            }
-        )
-    return candles
-
-
-# ── Factor score computation ────────────────────────────────────────────────
-
-
-class TestFactorScore:
-    def test_mean_of_values(self):
-        indicators = {"a": 1.0, "b": 3.0, "c": None}
-        result = _factor_score(indicators, {"a": "a", "b": "b", "c": "c"})
-        assert result == 2.0  # mean of [1.0, 3.0]
-
-    def test_all_none_returns_none(self):
-        indicators = {"a": None, "b": None}
-        result = _factor_score(indicators, {"a": "a", "b": "b"})
-        assert result is None
-
-    def test_empty_mapping(self):
-        indicators = {"a": 1.0}
-        result = _factor_score(indicators, {})
-        assert result is None
-
-
-# ── Minimum factor count gate ───────────────────────────────────────────────
-
-
-class TestMinFactorGate:
-    def test_insufficient_factors_zeroes_score(self):
-        """With very sparse data (unknown pair, no candles), score should be zero."""
-        empty_snap = {}
-        result = compute_factor_scores(
-            d1_snap=empty_snap,
-            h4_snap=empty_snap,
-            h1_snap=empty_snap,
-            pair={
-                "type": "forex",
-                "display": "XYZ/ABC",
-            },  # unknown — no COT/carry cache
-            d1_candles=[],
-            h4_candles=[],
-            h1_candles=[],
-            volume_ratio=None,
-        )
-        assert result["insufficient_factors"] is True
-        assert result["final_score"] == 0.0
-
-    def test_sufficient_factors_produces_score(self):
-        """With full data, should produce a non-zero score."""
-        snap = _make_snap()
-        result = compute_factor_scores(
-            d1_snap=snap,
-            h4_snap=snap,
-            h1_snap=snap,
-            pair=_make_pair(),
-            d1_candles=_make_candles(200),
-            h4_candles=_make_candles(200),
-            h1_candles=_make_candles(200),
-            volume_ratio=1.5,
-        )
-        assert result["insufficient_factors"] is False
-        assert isinstance(result["final_score"], float)
-
-
-# ── Regime detection ────────────────────────────────────────────────────────
-
-
-class TestRegimeDetection:
-    def test_regime_present(self):
-        snap = _make_snap()
-        result = compute_factor_scores(
-            d1_snap=snap,
-            h4_snap=snap,
-            h1_snap=snap,
-            pair=_make_pair(),
-            d1_candles=_make_candles(200),
-            h4_candles=_make_candles(200),
-            h1_candles=_make_candles(200),
-            volume_ratio=1.5,
-        )
-        assert result["regime"] in (
-            "TRENDING",
-            "RANGING",
-            "HIGH_VOLATILITY",
-            "LOW_VOLATILITY",
-            "UNKNOWN",
-        )
-
-
-# ── Return structure ────────────────────────────────────────────────────────
-
-
-class TestReturnStructure:
-    def test_all_expected_keys(self):
-        snap = _make_snap()
-        result = compute_factor_scores(
-            d1_snap=snap,
-            h4_snap=snap,
-            h1_snap=snap,
-            pair=_make_pair(),
-            d1_candles=_make_candles(200),
-            h4_candles=_make_candles(200),
-            h1_candles=_make_candles(200),
-            volume_ratio=1.5,
-        )
-        expected_keys = {
-            "final_score",
-            "factor_scores",
-            "weights",
-            "regime",
-            "filtered_indicators",
-            "disabled_factors",
-            "insufficient_factors",
+    elif direction == "short":
+        snap = {
+            "ema21": 90.0,
+            "ema50": 100.0,
+            "ema200": 110.0,
+            "close": 89.0,
+            "atr": 1.0,
         }
-        assert expected_keys.issubset(result.keys())
-
-
-class TestCryptoDirectionalOverrides:
-    def test_crypto_uses_asset_specific_directional_settings(self):
-        snap = _make_snap(
-            ema21=None,
-            ema50=None,
-            rsi_z=0.2,
-            macdLine_z=0.2,
-            order_book_imbalance=None,
-            orderflow_delta=None,
-            liquidity_pressure=None,
-            fib_proximity=None,
-            obv_trend=None,
-        )
-        original_min = CONFIG.get("FACTOR_MIN_DIRECTIONAL_CRYPTO")
-        original_span = CONFIG.get("FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO")
-        try:
-            CONFIG["FACTOR_MIN_DIRECTIONAL_CRYPTO"] = 0.15
-            CONFIG["FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO"] = 0.30
-            result = compute_factor_scores(
-                d1_snap=snap,
-                h4_snap=snap,
-                h1_snap=snap,
-                pair=_make_pair(display="SOL/USDT"),
-                d1_candles=_make_candles(200),
-                h4_candles=_make_candles(200),
-                h1_candles=_make_candles(200),
-                volume_ratio=1.5,
-            )
-        finally:
-            CONFIG["FACTOR_MIN_DIRECTIONAL_CRYPTO"] = original_min
-            CONFIG["FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO"] = original_span
-
-        assert result["min_directional_threshold"] == 0.15
-        assert result["effective_min_directional"] == pytest.approx(0.1125)
-        assert result["directional_confidence_multiplier"] > 0.5
-
-    def test_crypto_optional_coverage_uses_live_funding_only_for_alts(self):
-        snap = _make_snap(
-            order_book_imbalance=None,
-            orderflow_delta=None,
-            liquidity_pressure=None,
-            fib_proximity=None,
-        )
-        result = compute_factor_scores(
-            d1_snap=snap,
-            h4_snap=snap,
-            h1_snap=snap,
-            pair=_make_pair(display="SOL/USDT"),
-            d1_candles=_make_candles(200),
-            h4_candles=_make_candles(200),
-            h1_candles=_make_candles(200),
-            volume_ratio=1.5,
-            funding_rate=0.0001,
-        )
-        # Optional slots: funding + OI feed; funding present, OI absent.
-        assert result["optional_factor_coverage"] == 0.5
-        assert result["missing_directional_optional_count"] == 1
-
-    def test_crypto_disables_candle_proxy_microstructure(self):
-        snap = _make_snap(
-            order_book_imbalance=None,
-            orderflow_delta=None,
-            liquidity_pressure=None,
-            liquidity_wall_detection=None,
-        )
-        result = compute_factor_scores(
-            d1_snap=snap,
-            h4_snap=snap,
-            h1_snap=snap,
-            pair=_make_pair(display="SOL/USDT"),
-            d1_candles=_make_candles(200),
-            h4_candles=_make_candles(200),
-            h1_candles=_make_candles(200),
-            volume_ratio=1.5,
-        )
-        assert result["factor_scores"]["microstructure"] is None
-        assert "microstructure" in result["disabled_factors"]
-
-    def test_crypto_routes_vms_into_momentum_without_reenabling_microstructure(self):
-        snap = _make_snap(
-            rsi_z=0.0,
-            macdLine_z=0.0,
-            order_book_imbalance=None,
-            orderflow_delta=None,
-            liquidity_pressure=None,
-            liquidity_wall_detection=None,
-        )
-        candles = _make_volume_candles(200)
-        with patch.dict(
-            CONFIG,
-            {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": False},
-        ):
-            result = compute_factor_scores(
-                d1_snap=snap,
-                h4_snap=snap,
-                h1_snap=snap,
-                pair=_make_pair(display="SOL/USDT"),
-                d1_candles=candles,
-                h4_candles=candles,
-                h1_candles=candles,
-                volume_ratio=1.5,
-            )
-        assert result["filtered_indicators"]["volume_momentum_spread"] is not None
-        assert result["factor_scores"]["momentum"] > 0
-        assert result["factor_scores"]["microstructure"] is None
-        assert result["weights"]["microstructure"] == 0
-
-    @patch("carry_feed.get_carry_z", return_value=2.0)
-    @patch("cot_feed.get_cot_z", return_value=1.2)
-    def test_crypto_cot_only_applies_to_btc_eth_and_carry_is_removed(self, *_mocks):
-        snap = _make_snap()
-        btc_result = compute_factor_scores(
-            d1_snap=snap,
-            h4_snap=snap,
-            h1_snap=snap,
-            pair=_make_pair(display="BTC/USDT"),
-            d1_candles=_make_candles(200),
-            h4_candles=_make_candles(200),
-            h1_candles=_make_candles(200),
-            volume_ratio=1.5,
-            funding_rate=0.0001,
-        )
-        alt_result = compute_factor_scores(
-            d1_snap=snap,
-            h4_snap=snap,
-            h1_snap=snap,
-            pair=_make_pair(display="SOL/USDT"),
-            d1_candles=_make_candles(200),
-            h4_candles=_make_candles(200),
-            h1_candles=_make_candles(200),
-            volume_ratio=1.5,
-            funding_rate=0.0001,
-        )
-        assert btc_result["filtered_indicators"]["cot_z"] == 1.2
-        assert alt_result["filtered_indicators"]["cot_z"] is None
-        assert btc_result["filtered_indicators"]["carry_z"] is None
-        assert "carry" not in btc_result["factor_scores"]
-
-    def test_crypto_short_horizon_weights_are_capped(self):
-        snap = _make_snap()
-        result = compute_factor_scores(
-            d1_snap=snap,
-            h4_snap=snap,
-            h1_snap=snap,
-            pair=_make_pair(display="BTC/USDT", score_group="crypto_btc"),
-            d1_candles=_make_candles(200),
-            h4_candles=_make_candles(200),
-            h1_candles=_make_candles(200),
-            volume_ratio=1.5,
-            funding_rate=0.0001,
-        )
-        assert result["weights"]["derivatives"] <= CONFIG["CRYPTO_FACTOR_WEIGHT_CAPS"]["derivatives"]
-        assert result["weights"]["microstructure"] <= CONFIG["CRYPTO_FACTOR_WEIGHT_CAPS"]["microstructure"]
-
-
-# ── Crypto simplification tests ──────────────────────────────────────────────
-
-
-class TestCryptoOptionalCoverage:
-    """optional_directional_keys for crypto: funding + OI feed slot + optional cot for BTC/ETH."""
-
-    def test_crypto_alt_optional_coverage_funding_only(self):
-        from factor_scoring import _optional_directional_keys
-
-        keys = _optional_directional_keys("crypto", {"display": "SOL/USDT"})
-        assert keys == ("funding_rate", "oi")
-
-    def test_crypto_btc_includes_cot(self):
-        from factor_scoring import _optional_directional_keys
-
-        keys = _optional_directional_keys("crypto", {"display": "BTC/USDT"})
-        assert "funding_rate" in keys
-        assert "oi" in keys
-        assert "cot_z" in keys
-        assert "carry_z" not in keys
-
-    def test_forex_keeps_all_optional_keys(self):
-        from factor_scoring import _optional_directional_keys
-
-        keys = _optional_directional_keys("forex", {"display": "EUR/USD"})
-        assert set(keys) == {"cot_z", "carry_z"}
-
-    def test_crypto_alt_full_coverage_when_funding_present(self):
-        snap = _make_snap()
-        result = compute_factor_scores(
-            d1_snap=snap, h4_snap=snap, h1_snap=snap,
-            pair=_make_pair(display="DOGE/USDT"),
-            d1_candles=_make_candles(200),
-            h4_candles=_make_candles(200),
-            h1_candles=_make_candles(200),
-            volume_ratio=1.5,
-            funding_rate=0.0002,
-            oi_context={"oi_change_pct": 2.0, "price_change_pct": 1.0},
-        )
-        assert result["optional_factor_coverage"] == 1.0
-        assert result["missing_directional_optional_count"] == 0
-
-
-class TestCryptoOiDerivativesIndicators:
-    """OI sub-indicators inside derivatives factor (crypto only)."""
-
-    def test_oi_rising_price_rising_bullish_conviction(self):
-        from factor_scoring import _crypto_oi_indicators_from_context
-
-        zz, pd = _crypto_oi_indicators_from_context(
-            {"oi_change_pct": 6.0, "price_change_pct": 4.0}
-        )
-        assert zz is not None and zz > 0
-        assert pd is not None and pd > 0
-
-    def test_oi_rising_price_falling_bearish_divergence(self):
-        from factor_scoring import _crypto_oi_indicators_from_context
-
-        zz, pd = _crypto_oi_indicators_from_context(
-            {"oi_change_pct": 6.0, "price_change_pct": -4.0}
-        )
-        assert pd is not None and pd < 0
-
-    def test_oi_falling_price_rising_exhaustion_fade(self):
-        from factor_scoring import _crypto_oi_indicators_from_context
-
-        zz, pd = _crypto_oi_indicators_from_context(
-            {"oi_change_pct": -6.0, "price_change_pct": 4.0}
-        )
-        assert pd is not None and pd < 0
-
-    def test_oi_absent_no_oi_indicators(self):
-        from factor_scoring import _crypto_oi_indicators_from_context
-
-        assert _crypto_oi_indicators_from_context(None) == (None, None)
-        assert _crypto_oi_indicators_from_context({}) == (None, None)
-
-    def test_derivatives_funding_only_still_aggregates(self):
-        snap = _make_snap()
-        result = compute_factor_scores(
-            d1_snap=snap,
-            h4_snap=snap,
-            h1_snap=snap,
-            pair=_make_pair(display="DOGE/USDT"),
-            d1_candles=_make_candles(200),
-            h4_candles=_make_candles(200),
-            h1_candles=_make_candles(200),
-            volume_ratio=1.5,
-            funding_rate=0.0002,
-            oi_context=None,
-        )
-        assert result["factor_scores"]["derivatives"] is not None
-        assert result["filtered_indicators"]["funding_rate"] is not None
-        assert result["filtered_indicators"]["oi_change_z"] is None
-        assert result["filtered_indicators"]["oi_price_divergence"] is None
-
-
-class TestCryptoLiveMicrostructureGate:
-    """CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED controls crypto microstructure *weight* (not indicator math)."""
-
-    def test_gate_false_forces_microstructure_weight_zero_with_live_snap(self):
-        snap = _make_snap(
-            order_book_imbalance=-3.0,
-            liquidity_wall_detection=-3.0,
-            orderflow_delta=-3.0,
-            liquidity_pressure=-3.0,
-            microstructure_age_sec=1.0,
-        )
-        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
-            with patch.dict(
-                CONFIG,
-                {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": False},
-            ):
-                result = compute_factor_scores(
-                    d1_snap=snap,
-                    h4_snap=snap,
-                    h1_snap=snap,
-                    pair=_make_pair(display="BTC/USDT"),
-                    d1_candles=_make_candles(220),
-                    h4_candles=_make_candles(220),
-                    h1_candles=_make_candles(220),
-                    volume_ratio=1.5,
-                    funding_rate=0.0001,
-                )
-        assert result["weights"]["microstructure"] == 0
-        assert result["factor_scores"]["microstructure"] == -3.0
-        assert "microstructure" not in result["active_directional_factors"]
-
-    def test_gate_true_enables_live_microstructure_in_active_factors_when_fresh(self):
-        snap = _make_snap(
-            order_book_imbalance=-3.0,
-            liquidity_wall_detection=-3.0,
-            orderflow_delta=-3.0,
-            liquidity_pressure=-3.0,
-            microstructure_age_sec=1.0,
-        )
-        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
-            with patch.dict(
-                CONFIG,
-                {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": True},
-            ):
-                result = compute_factor_scores(
-                    d1_snap=snap,
-                    h4_snap=snap,
-                    h1_snap=snap,
-                    pair=_make_pair(display="BTC/USDT"),
-                    d1_candles=_make_candles(220),
-                    h4_candles=_make_candles(220),
-                    h1_candles=_make_candles(220),
-                    volume_ratio=1.5,
-                    funding_rate=0.0001,
-                )
-        assert result["weights"]["microstructure"] > 0
-        assert result["weights"]["microstructure"] <= CONFIG["CRYPTO_FACTOR_WEIGHT_CAPS"]["microstructure"]
-        assert "microstructure" in result["active_directional_factors"]
-        assert result["factor_scores"]["microstructure"] == -3.0
-
-    def test_gate_true_stale_ws_does_not_score_microstructure(self):
-        snap = _make_snap(
-            order_book_imbalance=-3.0,
-            liquidity_wall_detection=-3.0,
-            orderflow_delta=-3.0,
-            liquidity_pressure=-3.0,
-            microstructure_age_sec=120.0,
-        )
-        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
-            with patch.dict(
-                CONFIG,
-                {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": True},
-            ):
-                result = compute_factor_scores(
-                    d1_snap=snap,
-                    h4_snap=snap,
-                    h1_snap=snap,
-                    pair=_make_pair(display="BTC/USDT"),
-                    d1_candles=_make_candles(220),
-                    h4_candles=_make_candles(220),
-                    h1_candles=_make_candles(220),
-                    volume_ratio=1.5,
-                    funding_rate=0.0001,
-                )
-        assert result["factor_scores"]["microstructure"] is None
-        assert "microstructure" not in result["active_directional_factors"]
-
-
-class TestCryptoEngineADiagnostics:
-    """crypto_engine_a_diagnostics on compute_factor_scores (scan/API visibility)."""
-
-    def test_non_crypto_returns_none_diagnostics(self):
-        snap = _make_snap()
-        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
-            result = compute_factor_scores(
-                d1_snap=snap,
-                h4_snap=snap,
-                h1_snap=snap,
-                pair={"type": "stock", "display": "AAPL"},
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-            )
-        assert result.get("crypto_engine_a_diagnostics") is None
-
-    def test_gate_off_skip_reason_and_inactive(self):
-        snap = _make_snap(
-            order_book_imbalance=-3.0,
-            liquidity_wall_detection=-3.0,
-            orderflow_delta=-3.0,
-            liquidity_pressure=-3.0,
-            microstructure_age_sec=1.0,
-        )
-        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
-            with patch.dict(
-                CONFIG,
-                {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": False},
-            ):
-                result = compute_factor_scores(
-                    d1_snap=snap,
-                    h4_snap=snap,
-                    h1_snap=snap,
-                    pair=_make_pair(display="BTC/USDT"),
-                    d1_candles=_make_candles(220),
-                    h4_candles=_make_candles(220),
-                    h1_candles=_make_candles(220),
-                    volume_ratio=1.5,
-                    funding_rate=0.0001,
-                )
-        d = result["crypto_engine_a_diagnostics"]
-        assert d["microstructureGateEnabled"] is False
-        assert d["liveMicrostructureSkippedReason"] == "microstructure_gate_disabled"
-        assert d["microstructureActiveInScore"] is False
-        assert d["microstructureLiveDataPresent"] is True
-
-    def test_gate_on_fresh_live_active_scores(self):
-        snap = _make_snap(
-            order_book_imbalance=-3.0,
-            liquidity_wall_detection=-3.0,
-            orderflow_delta=-3.0,
-            liquidity_pressure=-3.0,
-            microstructure_age_sec=1.0,
-        )
-        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
-            with patch.dict(
-                CONFIG,
-                {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": True},
-            ):
-                result = compute_factor_scores(
-                    d1_snap=snap,
-                    h4_snap=snap,
-                    h1_snap=snap,
-                    pair=_make_pair(display="BTC/USDT"),
-                    d1_candles=_make_candles(220),
-                    h4_candles=_make_candles(220),
-                    h1_candles=_make_candles(220),
-                    volume_ratio=1.5,
-                    funding_rate=0.0001,
-                    oi_context={"oi_change_pct": 2.0, "price_change_pct": 1.0},
-                )
-        d = result["crypto_engine_a_diagnostics"]
-        assert d["microstructureGateEnabled"] is True
-        assert d["liveMicrostructureSkippedReason"] is None
-        assert d["microstructureLiveDataPresent"] is True
-        assert d["microstructureActiveInScore"] is True
-        assert d["microstructureFactorScore"] == -3.0
-        assert d["derivativesFactorScore"] is not None
-        assert d["oiSubfactorsActive"] is True
-        assert d["oiFeedStatus"] == "ok"
-
-    def test_stale_ws_skip_reason_not_active(self):
-        snap = _make_snap(
-            order_book_imbalance=-3.0,
-            liquidity_wall_detection=-3.0,
-            orderflow_delta=-3.0,
-            liquidity_pressure=-3.0,
-            microstructure_age_sec=120.0,
-        )
-        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
-            with patch.dict(
-                CONFIG,
-                {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": True},
-            ):
-                result = compute_factor_scores(
-                    d1_snap=snap,
-                    h4_snap=snap,
-                    h1_snap=snap,
-                    pair=_make_pair(display="BTC/USDT"),
-                    d1_candles=_make_candles(220),
-                    h4_candles=_make_candles(220),
-                    h1_candles=_make_candles(220),
-                    volume_ratio=1.5,
-                    funding_rate=0.0001,
-                )
-        d = result["crypto_engine_a_diagnostics"]
-        assert d["liveMicrostructureSkippedReason"] == "stale_ws"
-        assert d["microstructureLiveDataPresent"] is False
-        assert d["microstructureActiveInScore"] is False
-
-
-class TestCryptoMicrostructureZeroWeight:
-    """When the live microstructure gate is off, crypto microstructure weight is forced to 0."""
-
-    def test_score_nonzero_with_zero_micro_weight(self):
-        snap = _make_snap()
-        with patch.dict(
-            CONFIG,
-            {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": False},
-        ):
-            result = compute_factor_scores(
-                d1_snap=snap, h4_snap=snap, h1_snap=snap,
-                pair=_make_pair(display="SOL/USDT"),
-                d1_candles=_make_candles(200),
-                h4_candles=_make_candles(200),
-                h1_candles=_make_candles(200),
-                volume_ratio=1.5,
-                funding_rate=0.0001,
-            )
-        assert result["weights"].get("microstructure", 0) == 0
-        assert result["final_score"] > 0
-        assert result["direction"] in ("LONG", "SHORT")
-
-    def test_carry_not_in_crypto_factors(self):
-        snap = _make_snap()
-        result = compute_factor_scores(
-            d1_snap=snap, h4_snap=snap, h1_snap=snap,
-            pair=_make_pair(display="ETH/USDT"),
-            d1_candles=_make_candles(200),
-            h4_candles=_make_candles(200),
-            h1_candles=_make_candles(200),
-            volume_ratio=1.5,
-        )
-        assert "carry" not in result["factor_scores"]
-
-
-class TestAdaptiveWeights:
-    def test_neutral_adaptive_weights_leave_resolved_weights_unchanged(self):
-        snap = _make_snap()
-        with patch.dict(CONFIG, {"ADAPTIVE_WEIGHTS_ENABLED": True}), \
-             patch("adaptive_weights.get_adaptive_weights", return_value={}):
-            baseline = compute_factor_scores(
-                d1_snap=snap,
-                h4_snap=snap,
-                h1_snap=snap,
-                pair={"type": "forex", "display": "EUR/USD"},
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-            )
-        neutral = {
-            "trend": 1.0,
-            "momentum": 1.0,
-            "volatility": 1.0,
-            "volume": 1.0,
-            "structure": 1.0,
-            "derivatives": 1.0,
-            "microstructure": 1.0,
-            "carry": 1.0,
-            "trend_strength": 1.0,
-        }
-        with patch.dict(CONFIG, {"ADAPTIVE_WEIGHTS_ENABLED": True}), \
-             patch("adaptive_weights.get_adaptive_weights", return_value=neutral):
-            result = compute_factor_scores(
-                d1_snap=snap,
-                h4_snap=snap,
-                h1_snap=snap,
-                pair={"type": "forex", "display": "EUR/USD"},
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-            )
-        assert result["weights"] == pytest.approx(baseline["weights"])
-
-    def test_adaptive_weights_scale_runtime_weights_instead_of_replacing_them(self):
-        snap = _make_snap()
-        with patch.dict(CONFIG, {"ADAPTIVE_WEIGHTS_ENABLED": True}), \
-             patch("adaptive_weights.get_adaptive_weights", return_value={}):
-            baseline = compute_factor_scores(
-                d1_snap=snap,
-                h4_snap=snap,
-                h1_snap=snap,
-                pair={"type": "forex", "display": "EUR/USD"},
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-            )
-        adaptive = {
-            "trend": 1.1,
-            "momentum": 0.8,
-            "volatility": 1.0,
-            "volume": 1.0,
-            "structure": 1.0,
-            "derivatives": 1.0,
-            "microstructure": 1.0,
-            "carry": 1.0,
-            "trend_strength": 1.25,
-        }
-        with patch.dict(CONFIG, {"ADAPTIVE_WEIGHTS_ENABLED": True}), \
-             patch("adaptive_weights.get_adaptive_weights", return_value=adaptive):
-            result = compute_factor_scores(
-                d1_snap=snap,
-                h4_snap=snap,
-                h1_snap=snap,
-                pair={"type": "forex", "display": "EUR/USD"},
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-            )
-        assert result["weights"]["trend"] == pytest.approx(baseline["weights"]["trend"] * 1.1)
-        assert result["weights"]["momentum"] == pytest.approx(
-            baseline["weights"]["momentum"] * 0.8
-        )
-        assert result["weights"]["trend_strength"] == pytest.approx(
-            baseline["weights"]["trend_strength"] * 1.25
-        )
-
-    def test_adaptive_weights_do_not_reenable_zero_weight_factors(self):
-        snap = _make_snap()
-        adaptive = {
-            "trend": 1.0,
-            "momentum": 1.0,
-            "volatility": 1.0,
-            "volume": 1.0,
-            "structure": 1.0,
-            "derivatives": 1.5,
-            "microstructure": 2.0,
-            "carry": 3.0,
-            "trend_strength": 1.0,
-        }
-        with patch.dict(
-            CONFIG,
-            {
-                "ADAPTIVE_WEIGHTS_ENABLED": True,
-                "CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": False,
-            },
-        ), patch("adaptive_weights.get_adaptive_weights", return_value=adaptive):
-            result = compute_factor_scores(
-                d1_snap=snap,
-                h4_snap=snap,
-                h1_snap=snap,
-                pair=_make_pair(display="BTC/USDT"),
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-                funding_rate=0.0001,
-            )
-        assert result["weights"]["microstructure"] == 0
-        assert "carry" not in result["weights"] or result["weights"].get("carry", 0) == 0
-
-
-class TestDirectionUsesEffectiveWeights:
-    def test_zero_weight_directional_factor_cannot_flip_direction(self):
-        snap = _make_snap(
-            order_book_imbalance=-3.0,
-            liquidity_wall_detection=-3.0,
-            orderflow_delta=-3.0,
-            liquidity_pressure=-3.0,
-            microstructure_age_sec=1.0,
-        )
-        with patch("adaptive_weights.get_adaptive_weights", return_value={}), patch.dict(
-            CONFIG,
-            {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": False},
-        ):
-            result = compute_factor_scores(
-                d1_snap=snap,
-                h4_snap=snap,
-                h1_snap=snap,
-                pair=_make_pair(display="BTC/USDT", score_group="crypto_btc"),
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-                funding_rate=0.0001,
-            )
-        assert result["weights"]["microstructure"] == 0
-        assert result["factor_scores"]["microstructure"] == -3.0
-        assert result["direction"] == "LONG"
-        assert "microstructure" not in result["active_directional_factors"]
-        assert result["directional_score"] > 0
-
-
-class TestRegimeSmoothing:
-    def test_default_calls_are_stateless(self):
-        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
-            first = compute_factor_scores(
-                d1_snap=_make_snap(adx=40, bbWidth_pct=70, adxMomentum="stable"),
-                h4_snap=_make_snap(adx=40, bbWidth_pct=70, adxMomentum="stable"),
-                h1_snap=_make_snap(adx=40, bbWidth_pct=70, adxMomentum="stable"),
-                pair={"type": "stock", "display": "AAPL"},
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-            )
-            second = compute_factor_scores(
-                d1_snap=_make_snap(adx=10, bbWidth_pct=10, adxMomentum="collapsing"),
-                h4_snap=_make_snap(adx=10, bbWidth_pct=10, adxMomentum="collapsing"),
-                h1_snap=_make_snap(adx=10, bbWidth_pct=10, adxMomentum="collapsing"),
-                pair={"type": "stock", "display": "AAPL"},
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-            )
-        assert first["regime"] == "TRENDING"
-        assert second["regime"] == "LOW_VOLATILITY"
-
-    def test_explicit_context_preserves_smoothing(self):
-        regime_context = make_regime_smoothing_context()
-        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
-            first = compute_factor_scores(
-                d1_snap=_make_snap(adx=40, bbWidth_pct=70, adxMomentum="stable"),
-                h4_snap=_make_snap(adx=40, bbWidth_pct=70, adxMomentum="stable"),
-                h1_snap=_make_snap(adx=40, bbWidth_pct=70, adxMomentum="stable"),
-                pair={"type": "stock", "display": "AAPL"},
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-                regime_context=regime_context,
-            )
-            second = compute_factor_scores(
-                d1_snap=_make_snap(adx=10, bbWidth_pct=10, adxMomentum="collapsing"),
-                h4_snap=_make_snap(adx=10, bbWidth_pct=10, adxMomentum="collapsing"),
-                h1_snap=_make_snap(adx=10, bbWidth_pct=10, adxMomentum="collapsing"),
-                pair={"type": "stock", "display": "AAPL"},
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-                regime_context=regime_context,
-            )
-        assert first["regime"] == "TRENDING"
-        assert second["regime"] == "TRENDING"
-
-
-class TestConfigDeepMerge:
-    def test_deep_merge_preserves_unspecified_nested_defaults(self):
-        merged = _deep_merge_dict(
-            {"REGIME_WEIGHTS": {"TRENDING": {"trend": 2.0, "trend_strength": 1.5}}},
-            {"REGIME_WEIGHTS": {"TRENDING": {"trend": 2.5}}},
-        )
-        assert merged["REGIME_WEIGHTS"]["TRENDING"]["trend"] == 2.5
-        assert merged["REGIME_WEIGHTS"]["TRENDING"]["trend_strength"] == 1.5
-
-    def test_deep_merge_overwrites_scalars(self):
-        merged = _deep_merge_dict({"FACTOR_MIN_DIRECTIONAL": 0.25}, {"FACTOR_MIN_DIRECTIONAL": 0.4})
-        assert merged["FACTOR_MIN_DIRECTIONAL"] == 0.4
-
-
-class TestTrendWeights:
-    def test_asset_specific_trend_weights_affect_trend_score(self):
-        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
-            stock = compute_factor_scores(
-                d1_snap=_make_snap(ema21=105, ema50=100),
-                h4_snap=_make_snap(ema21=105, ema50=100),
-                h1_snap=_make_snap(ema21=95, ema50=100),
-                pair={"type": "stock", "display": "AAPL"},
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-            )
-            commodity = compute_factor_scores(
-                d1_snap=_make_snap(ema21=105, ema50=100),
-                h4_snap=_make_snap(ema21=105, ema50=100),
-                h1_snap=_make_snap(ema21=95, ema50=100),
-                pair={"type": "commodity", "display": "XAU/USD"},
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-            )
-        assert stock["factor_scores"]["trend"] != commodity["factor_scores"]["trend"]
-
-    def test_missing_trend_weight_config_falls_back_safely(self):
-        original = CONFIG["INDICATOR_WEIGHTS"].get("trend")
-        try:
-            CONFIG["INDICATOR_WEIGHTS"]["trend"] = {}
-            with patch("adaptive_weights.get_adaptive_weights", return_value={}):
-                result = compute_factor_scores(
-                    d1_snap=_make_snap(ema21=105, ema50=100),
-                    h4_snap=_make_snap(ema21=105, ema50=100),
-                    h1_snap=_make_snap(ema21=95, ema50=100),
-                    pair={"type": "stock", "display": "AAPL"},
-                    d1_candles=_make_candles(220),
-                    h4_candles=_make_candles(220),
-                    h1_candles=_make_candles(220),
-                    volume_ratio=1.5,
-                )
-        finally:
-            CONFIG["INDICATOR_WEIGHTS"]["trend"] = original
-        assert isinstance(result["factor_scores"]["trend"], float)
-
-
-class TestCalcConfluenceIntegration:
-    def test_calc_confluence_preserves_effective_direction_diagnostics(self):
-        snap = _make_snap(
-            order_book_imbalance=-3.0,
-            liquidity_wall_detection=-3.0,
-            orderflow_delta=-3.0,
-            liquidity_pressure=-3.0,
-            microstructure_age_sec=1.0,
-        )
-        tf = {"snap": snap}
-        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
-            with patch.dict(
-                CONFIG,
-                {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": False},
-            ):
-                result = calc_confluence(
-                    d1=tf,
-                    h4=tf,
-                    h1=tf,
-                    vr=1.5,
-                    stoch={},
-                    pair={"type": "crypto", "display": "BTC/USDT", "score_group": "crypto_btc"},
-                    btc_bias="neutral",
-                    d1_candles=_make_candles(220),
-                    h4_candles=_make_candles(220),
-                    h1_candles=_make_candles(220),
-                    funding_rate=0.0001,
-                )
-        assert result["direction"] == "LONG"
-        assert "microstructure" not in result["factorDiagnostics"]["activeDirectionalFactors"]
-        assert result["factor_scores"]["microstructure"] == -3.0
-        fd = result["factorDiagnostics"].get("cryptoEngineADiagnostics") or {}
-        assert fd.get("microstructureGateEnabled") is False
-        assert fd.get("microstructureActiveInScore") is False
-
-    def test_calc_confluence_gate_true_includes_microstructure_when_live_fresh(self):
-        snap = _make_snap(
-            order_book_imbalance=-3.0,
-            liquidity_wall_detection=-3.0,
-            orderflow_delta=-3.0,
-            liquidity_pressure=-3.0,
-            microstructure_age_sec=1.0,
-        )
-        tf = {"snap": snap}
-        with patch("adaptive_weights.get_adaptive_weights", return_value={}):
-            with patch.dict(
-                CONFIG,
-                {"CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": True},
-            ):
-                result = calc_confluence(
-                    d1=tf,
-                    h4=tf,
-                    h1=tf,
-                    vr=1.5,
-                    stoch={},
-                    pair={"type": "crypto", "display": "BTC/USDT", "score_group": "crypto_btc"},
-                    btc_bias="neutral",
-                    d1_candles=_make_candles(220),
-                    h4_candles=_make_candles(220),
-                    h1_candles=_make_candles(220),
-                    funding_rate=0.0001,
-                )
-        assert "microstructure" in result["factorDiagnostics"]["activeDirectionalFactors"]
-        assert result["factor_scores"]["microstructure"] == -3.0
-        fd = result["factorDiagnostics"].get("cryptoEngineADiagnostics") or {}
-        assert fd.get("microstructureGateEnabled") is True
-        assert fd.get("microstructureActiveInScore") is True
-        assert fd.get("liveMicrostructureSkippedReason") is None
-
-
-class TestCarryZDirectional:
-    @patch("carry_feed.get_carry_z", return_value=2.0)
-    @patch("cot_feed.get_cot_z", return_value=0.0)
-    def test_positive_carry_supports_long_directionally(self, *_mocks):
-        snap = _make_snap()
-        result = compute_factor_scores(
-            d1_snap=snap,
-            h4_snap=snap,
-            h1_snap=snap,
-            pair={"type": "forex", "display": "EUR/USD"},
-            d1_candles=_make_candles(220),
-            h4_candles=_make_candles(220),
-            h1_candles=_make_candles(220),
-            volume_ratio=1.5,
-        )
-
-        assert result["direction"] == "LONG"
-        assert result["filtered_indicators"]["carry_z"] == 2.0
-        assert result["factor_scores"]["carry"] > 0
-        assert "carry" in result["active_directional_factors"]
-        assert "carry" not in result["active_nondirectional_factors"]
-
-    @patch("carry_feed.get_carry_z", return_value=-2.0)
-    @patch("cot_feed.get_cot_z", return_value=0.0)
-    def test_negative_carry_opposes_long_directionally(self, *_mocks):
-        snap = _make_snap()
-        result = compute_factor_scores(
-            d1_snap=snap,
-            h4_snap=snap,
-            h1_snap=snap,
-            pair={"type": "forex", "display": "EUR/USD"},
-            d1_candles=_make_candles(220),
-            h4_candles=_make_candles(220),
-            h1_candles=_make_candles(220),
-            volume_ratio=1.5,
-        )
-
-        assert result["direction"] == "LONG"
-        assert result["filtered_indicators"]["carry_z"] == -2.0
-        assert result["factor_scores"]["carry"] < 0
-        assert "carry" in result["active_directional_factors"]
-        assert "carry" not in result["active_nondirectional_factors"]
-
-    @patch("carry_feed.get_carry_z", return_value=2.0)
-    @patch("cot_feed.get_cot_z", return_value=0.0)
-    def test_crypto_still_excludes_carry(self, *_mocks):
-        snap = _make_snap()
-        result = compute_factor_scores(
-            d1_snap=snap,
-            h4_snap=snap,
-            h1_snap=snap,
-            pair=_make_pair(display="ETH/USDT"),
-            d1_candles=_make_candles(220),
-            h4_candles=_make_candles(220),
-            h1_candles=_make_candles(220),
-            volume_ratio=1.5,
-            funding_rate=0.0001,
-        )
-
-        assert result["filtered_indicators"]["carry_z"] is None
-        assert "carry" not in result["factor_scores"]
-
-
-# XAU/USD DXY macro proxy
-
-
-class TestXauUsdMacroProxy:
-    @patch("carry_feed.get_carry_z", return_value=0.0)
-    @patch("cot_feed.get_cot_z", return_value=0.0)
-    def test_xau_macro_proxy_contributes_to_carry_factor(self, *_mocks):
-        snap = _make_snap()
-        result = compute_factor_scores(
-            d1_snap=snap,
-            h4_snap=snap,
-            h1_snap=snap,
-            pair={"type": "commodity", "display": "XAU/USD"},
-            d1_candles=_make_candles(220),
-            h4_candles=_make_candles(220),
-            h1_candles=_make_candles(220),
-            volume_ratio=1.5,
-            macro_context={"usd_proxy_score": 1.8},
-        )
-
-        assert result["filtered_indicators"]["usd_proxy_score"] == 1.8
-        assert result["factor_scores"]["carry"] == pytest.approx(1.8)
-        assert "carry" in result["active_directional_factors"]
-        assert result["feed_status"]["usd_proxy"] == "ok"
-
-    @patch("carry_feed.get_carry_z", return_value=0.0)
-    @patch("cot_feed.get_cot_z", return_value=0.0)
-    def test_calc_confluence_surfaces_xau_macro_context(self, *_mocks):
-        tf = {"snap": _make_snap()}
-        macro_context = {"usd_proxy_score": -1.4, "biasLabel": "USD stronger"}
-
-        result = calc_confluence(
-            d1=tf,
-            h4=tf,
-            h1=tf,
-            vr=1.5,
-            stoch={},
-            pair={"type": "commodity", "display": "XAU/USD"},
-            btc_bias="neutral",
-            d1_candles=_make_candles(220),
-            h4_candles=_make_candles(220),
-            h1_candles=_make_candles(220),
-            macro_context=macro_context,
-        )
-
-        assert result["factor_scores"]["carry"] == pytest.approx(-1.4)
-        assert result["factorDiagnostics"]["feedStatus"]["usd_proxy"] == "ok"
-        assert result["factorDiagnostics"]["macroContext"]["usd_proxy_score"] == -1.4
-
-
-def _make_intermarket_context(driver_recent_change_pct: float, *, flipped=False):
-    return {
-        "target": "EUR/USD",
-        "drivers": [
-            {
-                "driver": "DXY",
-                "driverAssetClass": "macro",
-                "sourceType": "both",
-                "priorRelation": "inverse",
-                "effectivePriorRelation": "inverse",
-                "summary": {
-                    "regime": {
-                        "relation": "inverse",
-                        "label": "flipped recently" if flipped else "strongly inverse",
-                    },
-                    "current": {
-                        "correlation": -0.82,
-                        "stability": 0.90,
-                        "signPersistence": 0.88,
-                        "volAdjustedScore": -0.70,
-                        "driverRecentChangePct": driver_recent_change_pct,
-                        "targetRecentChangePct": 1.10,
-                        "window": 50,
-                        "flippedRecently": flipped,
-                        "lastBarContradiction": False,
-                        "leadLag": {"leader": "driver", "evidence": "moderate"},
-                    },
-                },
-            }
-        ],
-        "unavailablePriors": [],
+    else:
+        snap = {"close": 100.0, "atr": 1.0}
+
+    if include_adx:
+        snap["adx"] = adx
+    if momentum == "bullish":
+        snap.update({"rsi": 60.0, "macdHist": 0.5})
+    elif momentum == "bearish":
+        snap.update({"rsi": 40.0, "macdHist": -0.5})
+    return snap
+
+
+def _score(
+    d1=None,
+    h4=None,
+    h1=None,
+    *,
+    pair=None,
+    funding_rate=None,
+    bar_time=None,
+    volume_ratio=1.0,
+    macro_context=None,
+    intermarket_context=None,
+):
+    return compute_factor_scores(
+        d1_snap=d1 if d1 is not None else _snap("long"),
+        h4_snap=h4 if h4 is not None else _snap("long"),
+        h1_snap=h1 if h1 is not None else _snap("long"),
+        pair=pair or {"type": "stock", "display": "TEST"},
+        d1_candles=[],
+        h4_candles=[],
+        h1_candles=[],
+        volume_ratio=volume_ratio,
+        funding_rate=funding_rate,
+        bar_time=bar_time,
+        macro_context=macro_context,
+        intermarket_context=intermarket_context,
+    )
+
+
+def test_public_helpers_match_current_contract():
+    ctx = make_regime_smoothing_context()
+    assert set(ctx) == {"history", "committed", "lock"}
+
+    oi_context = build_oi_context_for_factor_scoring(
+        {"oiChange": 6.0},
+        [{"close": 100.0}, {"close": 105.0}],
+        {"close": 110.0},
+    )
+    assert oi_context == {
+        "oi_change_pct": 6.0,
+        "price_change_pct": pytest.approx(10.0),
     }
 
 
-class TestIntermarketConfirmationFactor:
-    @patch("carry_feed.get_carry_z", return_value=0.0)
-    @patch("cot_feed.get_cot_z", return_value=0.0)
-    def test_intermarket_delta_is_zero_when_disabled(self, *_mocks):
-        snap = _make_snap()
-        base = compute_factor_scores(
-            d1_snap=snap,
-            h4_snap=snap,
-            h1_snap=snap,
-            pair={"type": "forex", "display": "EUR/USD"},
-            d1_candles=_make_candles(220),
-            h4_candles=_make_candles(220),
-            h1_candles=_make_candles(220),
-            volume_ratio=1.5,
-        )
-        with patch.dict(
-            CONFIG,
-            _deep_merge_dict(
-                CONFIG,
-                {
-                    "INTERMARKET_CONFIRMATION": {
-                        "enabled": False,
-                        "engine_a_enabled": False,
-                    }
-                },
-            ),
-            clear=True,
-        ):
-            result = compute_factor_scores(
-                d1_snap=snap,
-                h4_snap=snap,
-                h1_snap=snap,
-                pair={"type": "forex", "display": "EUR/USD"},
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-                intermarket_context=_make_intermarket_context(-1.2),
-            )
-        assert result["final_score"] == pytest.approx(base["final_score"])
-        assert result["intermarket_engine_a_delta"] == 0.0
+def test_adx_hard_fail_blocks_to_zero_score():
+    hard_fail = float(CONFIG.get("FACTOR_ADX_HARD_FAIL", 15.0))
 
-    @patch("carry_feed.get_carry_z", return_value=0.0)
-    @patch("cot_feed.get_cot_z", return_value=0.0)
-    def test_supportive_intermarket_bonus_is_bounded(self, *_mocks):
-        snap = _make_snap()
-        with patch.dict(
-            CONFIG,
-            _deep_merge_dict(
-                CONFIG,
-                {
-                    "INTERMARKET_CONFIRMATION": {
-                        "enabled": True,
-                        "engine_a_enabled": True,
-                        "engine_a_score_cap": 0.12,
-                        "lead_lag_enabled": True,
-                    }
-                },
-            ),
-            clear=True,
-        ):
-            base = compute_factor_scores(
-                d1_snap=snap,
-                h4_snap=snap,
-                h1_snap=snap,
-                pair={"type": "forex", "display": "EUR/USD"},
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-            )
-            result = compute_factor_scores(
-                d1_snap=snap,
-                h4_snap=snap,
-                h1_snap=snap,
-                pair={"type": "forex", "display": "EUR/USD"},
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-                intermarket_context=_make_intermarket_context(-1.2),
-            )
-        assert result["final_score"] > base["final_score"]
-        assert 0 < result["intermarket_engine_a_delta"] <= 0.12
-        assert result["intermarket_confirmation"]["verdict"] == "supportive"
+    result = _score(
+        _snap("long", adx=hard_fail - 0.1),
+        _snap("long", adx=hard_fail - 0.1),
+        _snap("long", adx=hard_fail - 0.1),
+    )
 
-    @patch("carry_feed.get_carry_z", return_value=0.0)
-    @patch("cot_feed.get_cot_z", return_value=0.0)
-    def test_contradictory_intermarket_penalty_is_bounded(self, *_mocks):
-        snap = _make_snap()
-        with patch.dict(
-            CONFIG,
-            _deep_merge_dict(
-                CONFIG,
-                {
-                    "INTERMARKET_CONFIRMATION": {
-                        "enabled": True,
-                        "engine_a_enabled": True,
-                        "engine_a_score_cap": 0.10,
-                    }
-                },
-            ),
-            clear=True,
-        ):
-            base = compute_factor_scores(
-                d1_snap=snap,
-                h4_snap=snap,
-                h1_snap=snap,
-                pair={"type": "forex", "display": "EUR/USD"},
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-            )
-            result = compute_factor_scores(
-                d1_snap=snap,
-                h4_snap=snap,
-                h1_snap=snap,
-                pair={"type": "forex", "display": "EUR/USD"},
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-                intermarket_context=_make_intermarket_context(1.3),
-            )
-        assert result["final_score"] < base["final_score"]
-        assert -0.10 <= result["intermarket_engine_a_delta"] < 0
-        assert result["intermarket_confirmation"]["verdict"] == "contradictory"
-
-    @patch("carry_feed.get_carry_z", return_value=0.0)
-    @patch("cot_feed.get_cot_z", return_value=0.0)
-    def test_flipped_intermarket_context_stays_near_neutral(self, *_mocks):
-        snap = _make_snap()
-        with patch.dict(
-            CONFIG,
-            _deep_merge_dict(
-                CONFIG,
-                {
-                    "INTERMARKET_CONFIRMATION": {
-                        "enabled": True,
-                        "engine_a_enabled": True,
-                        "engine_a_score_cap": 0.15,
-                    }
-                },
-            ),
-            clear=True,
-        ):
-            result = compute_factor_scores(
-                d1_snap=snap,
-                h4_snap=snap,
-                h1_snap=snap,
-                pair={"type": "forex", "display": "EUR/USD"},
-                d1_candles=_make_candles(220),
-                h4_candles=_make_candles(220),
-                h1_candles=_make_candles(220),
-                volume_ratio=1.5,
-                intermarket_context=_make_intermarket_context(-1.0, flipped=True),
-            )
-        assert abs(result["intermarket_engine_a_delta"]) < 0.08
+    assert result["final_score"] == 0.0
+    assert result["adx_multiplier"] == 0.0
+    assert result["abort_reason"] == "adx_hard_abort"
 
 
-# ── Direction tie and funding rate calibration (FIX 1 & 2) ──────────────────
+def test_missing_adx_uses_configured_soft_multiplier():
+    result = _score(
+        _snap("long", include_adx=False),
+        _snap("long", include_adx=False),
+        _snap("long", include_adx=False),
+    )
+
+    assert result["adx_source"] == "missing"
+    assert result["adx_multiplier"] == pytest.approx(
+        float(CONFIG.get("FACTOR_ADX_SOFT_MULT", 0.65))
+    )
+    assert result["final_score"] > 0.0
 
 
-class TestDirectionAndFundingFixes:
-    def test_direction_tie_is_short(self):
-        """dir_sum = 0 must resolve SHORT, not LONG (FIX 1: >= changed to >)."""
-        dir_sum = 0.0
-        direction = "LONG" if dir_sum > 0 else "SHORT"
-        assert direction == "SHORT", "Tie (dir_sum=0) must resolve SHORT, not LONG"
+def test_full_bullish_alignment_is_stronger_than_partial_alignment():
+    full = _score(_snap("long"), _snap("long"), _snap("long"))
+    d1_only = _score(_snap("long"), {}, {})
 
-    @patch("carry_feed.get_carry_z", return_value=0.0)
-    @patch("cot_feed.get_cot_z", return_value=0.0)
-    def test_direction_tie_via_balanced_factors(self, *_mocks):
-        """All directional z-scores zero → dir_sum=0 → SHORT (FIX 1 regression guard)."""
-        zero_snap = {
-            "adx": 25,
-            "adx_z": 0.0,
-            "rsi_z": 0.0,
-            "macdLine_z": 0.0,
-            "atr_z": 0.0,
-            "bbWidth_z": 0.0,
-            "realized_vol_z": 0.0,
-            "obv_trend": 0,
-            "fib_proximity": 0,
-            "ema21": 100,
-            "ema50": 100,  # equal EMAs → no alignment signal
-            "adxMomentum": "FLAT",
-            "adxSlope": 0.0,
-        }
-        result = compute_factor_scores(
-            d1_snap=zero_snap,
-            h4_snap=zero_snap,
-            h1_snap=zero_snap,
-            pair=_make_pair(display="BTC/USDT"),
-            d1_candles=_make_candles(220),
-            h4_candles=_make_candles(220),
-            h1_candles=_make_candles(220),
-            volume_ratio=1.0,
-            funding_rate=0.0001,  # exact neutral → 0.0 score
-        )
-        # dir_sum of 0 must produce SHORT (not LONG)
-        assert result["direction"] == "SHORT"
-
-    def test_funding_moderate_does_not_max(self):
-        """funding_rate=0.0005 (0.05%) → adjusted=0.0004 → score=-2.0 (FIX 2: multiplier 5000)."""
-        adjusted = 0.0005 - 0.0001  # = 0.0004
-        score = max(-3.0, min(3.0, -adjusted * 5000))
-        assert abs(score) < 3.0, f"Score {score} hit ±3.0 clamp — multiplier too aggressive"
-        assert score == pytest.approx(-2.0, abs=1e-9)
-
-    def test_funding_neutral_excluded(self):
-        """funding_rate=0.0001 (exact neutral) → adjusted=0.0 → score=0.0."""
-        adjusted = 0.0001 - 0.0001  # = 0.0
-        # At 0.0: -0.0 * 5000 = 0.0 → indicator = 0.0 (passes gate, zero contribution)
-        score = max(-3.0, min(3.0, -adjusted * 5000))
-        assert score == 0.0
+    assert full["direction"] == "LONG"
+    assert d1_only["direction"] == "LONG"
+    assert full["final_score"] > d1_only["final_score"]
+    assert full["factor_scores"]["trend"] > d1_only["factor_scores"]["trend"]
 
 
-def test_direction_uses_weighted_score_not_unweighted_sum():
-    """BUG[1] regression: direction must follow the weighted dir_score sign,
-    not the unweighted sum. trend=+0.6 (w=2.0) + momentum=-0.7 (w=1.5)
-    has unweighted sum=-0.1 (SHORT) but weighted avg=+0.043 (LONG)."""
-    from unittest.mock import patch
-    from factor_scoring import compute_factor_scores
+def test_full_bearish_alignment_is_stronger_than_partial_alignment():
+    full = _score(_snap("short"), _snap("short"), _snap("short"))
+    d1_only = _score(_snap("short"), {}, {})
 
-    # Minimal snaps with EMA alignment for trend and RSI/MACD for momentum
-    d1_snap = {"ema21": 101, "ema50": 100, "close": 102, "adx": 30, "atr": 1.0,
-               "rsi": 55, "macdLine": 0.5, "macdHist": 0.1, "macdSignal": 0.4,
-               "ema200": 99, "adxMomentum": "stable"}
-    h4_snap = dict(d1_snap)
-    h1_snap = dict(d1_snap)
-    pair = {"display": "TEST/USD", "type": "stock", "symbol": "TEST.US"}
-    # We need to control factor_scores directly, so patch _weighted_factor_score
-    # and _coherent_trend_score to return controlled values
-    def mock_weighted(indicators, keys, corr_weights, use_abs=False, factor_name="", asset_type=""):
-        if factor_name == "trend":
-            return None  # let _coherent_trend_score override
-        if factor_name == "momentum":
-            return -0.7
-        if factor_name == "derivatives":
-            return None
-        if factor_name == "microstructure":
-            return None
-        if factor_name == "carry":
-            return None
-        # non-directional
-        if factor_name == "trend_strength":
-            return 1.0
-        if factor_name == "volatility":
-            return 1.0
-        if factor_name == "volume":
-            return None
-        if factor_name == "structure":
-            return None
-        return None
-
-    def mock_coherent_trend(indicators, asset_type):
-        return 0.6, {"agreement_count": 3, "total_count": 3,
-                      "coherence_ratio": 1.0, "dominant_direction": "LONG",
-                      "weighted_balance": 1.0}
-
-    with patch("factor_scoring._weighted_factor_score", side_effect=mock_weighted), \
-         patch("factor_scoring._coherent_trend_score", side_effect=mock_coherent_trend), \
-         patch("factor_scoring.CONFIG", {
-             "REGIME_WEIGHTS": {},
-             "FACTOR_WEIGHTS": {"stock": {"trend": 2.0, "momentum": 1.5, "trend_strength": 1.0, "volatility": 1.0, "volume": 1.0, "structure": 1.0, "derivatives": 0.5, "microstructure": 0.75, "carry": 1.0}},
-             "CRYPTO_FACTOR_WEIGHT_CAPS": {},
-             "INDICATOR_WEIGHTS": {},
-             "INDICATOR_CORRELATION_WINDOW": 200,
-             "FACTOR_MIN_DIRECTIONAL": 0.0,
-             "FACTOR_DIRECTIONAL_SOFT_SPAN": 0.20,
-             "NORMALIZATION_LOOKBACK": {"stock": 350},
-             "ADAPTIVE_WEIGHTS_ENABLED": False,
-             "REGIME_SMOOTHING_BARS": 3,
-             "PAIR_PROFILES": {},
-             "FACTOR_SCORE_GROUP_MULTIPLIERS": {},
-         }):
-        result = compute_factor_scores(
-            d1_snap, h4_snap, h1_snap, pair,
-            [], [], [], 1.0,
-        )
-        # Weighted: trend=+0.6 (w=2.0), momentum=-0.7 (w=1.5)
-        # dir_score = (2.0/3.5)*0.6 + (1.5/3.5)*(-0.7) = 0.3429 - 0.3 = +0.0429
-        assert result["directional_score"] > 0, f"Expected positive dir_score, got {result['directional_score']}"
-        assert result["direction"] == "LONG", f"Expected LONG, got {result['direction']}"
+    assert full["direction"] == "SHORT"
+    assert d1_only["direction"] == "SHORT"
+    assert full["final_score"] > d1_only["final_score"]
+    assert abs(full["factor_scores"]["trend"]) > abs(d1_only["factor_scores"]["trend"])
 
 
-# ── Phase 1 regression tests: score contract ─────────────────────────────────
+def test_h4_h1_against_d1_do_not_create_full_strength_trend_score():
+    full_short = _score(_snap("short"), _snap("short"), _snap("short"))
+    conflicted = _score(_snap("long"), _snap("short"), _snap("short"))
+
+    assert conflicted["direction"] == "SHORT"
+    assert conflicted["final_score"] < full_short["final_score"]
+    assert abs(conflicted["factor_scores"]["trend"]) < abs(full_short["factor_scores"]["trend"])
+    assert conflicted["trend_coherence"]["coherence_ratio"] < 1.0
 
 
-class TestScoreContractBounded:
-    """Regression tests: non-forex Engine A score must stay within 0-3.0 contract."""
+def test_bullish_rsi_macd_momentum_increases_long_conviction():
+    neutral = _score(_snap("long"), _snap("long"), _snap("long"))
+    bullish = _score(_snap("long"), _snap("long", momentum="bullish"), _snap("long"))
 
-    def test_max_factors_do_not_exceed_3_0(self):
-        """With all factors at max-supported values, final_score must not exceed 3.0."""
-        # Build snap with maximum positive z-scores
-        max_snap = _make_snap(
-            adx=50,
-            adx_z=3.0,
-            rsi_z=3.0,
-            macdLine_z=3.0,
-            atr_z=3.0,
-            bbWidth_z=3.0,
-            realized_vol_z=3.0,
-            obv_trend=1,
-            fib_proximity=1,
-            ema21=110,
-            ema50=100,
-            adxMomentum="ACCELERATING",
-            adxSlope=1.0,
-        )
-        result = compute_factor_scores(
-            d1_snap=max_snap,
-            h4_snap=max_snap,
-            h1_snap=max_snap,
-            pair=_make_pair(type="crypto", display="BTC/USDT"),
-            d1_candles=_make_candles(300),
-            h4_candles=_make_candles(300),
-            h1_candles=_make_candles(300),
-            volume_ratio=3.0,
-            funding_rate=0.001,
-            oi_context={"oi_change_pct": 10.0, "price_change_pct": 5.0},
-        )
-        assert result["final_score"] <= 3.0, (
-            f"final_score {result['final_score']} exceeds documented 3.0 max"
-        )
-        assert result["final_score"] >= 0.0
+    assert bullish["direction"] == "LONG"
+    assert bullish["momentum_quality"] > neutral["momentum_quality"]
+    assert bullish["conviction"] > neutral["conviction"]
+    assert bullish["final_score"] > neutral["final_score"]
 
-    def test_stock_score_bounded_to_3_0(self):
-        """Stock pair score must stay within 0-3.0 contract."""
-        snap = _make_snap()
-        result = compute_factor_scores(
-            d1_snap=snap,
-            h4_snap=snap,
-            h1_snap=snap,
-            pair={"type": "stock", "display": "AAPL"},
-            d1_candles=_make_candles(300),
-            h4_candles=_make_candles(300),
-            h1_candles=_make_candles(300),
-            volume_ratio=2.0,
-        )
-        assert result["final_score"] <= 3.0, (
-            f"Stock final_score {result['final_score']} exceeds 3.0"
-        )
-        assert result["final_score"] >= 0.0
 
-    def test_commodity_score_bounded_to_3_0(self):
-        """Commodity pair score must stay within 0-3.0 contract."""
-        snap = _make_snap()
-        result = compute_factor_scores(
-            d1_snap=snap,
-            h4_snap=snap,
-            h1_snap=snap,
-            pair={"type": "commodity", "display": "XAU/USD"},
-            d1_candles=_make_candles(300),
-            h4_candles=_make_candles(300),
-            h1_candles=_make_candles(300),
-            volume_ratio=2.0,
-        )
-        assert result["final_score"] <= 3.0, (
-            f"Commodity final_score {result['final_score']} exceeds 3.0"
-        )
-        assert result["final_score"] >= 0.0
+def test_bearish_rsi_macd_momentum_supports_short_direction():
+    neutral = _score(_snap("short"), _snap("short"), _snap("short"))
+    bearish = _score(_snap("short"), _snap("short", momentum="bearish"), _snap("short"))
+
+    assert bearish["direction"] == "SHORT"
+    assert bearish["momentum_quality"] > neutral["momentum_quality"]
+    assert bearish["conviction"] > neutral["conviction"]
+    assert bearish["final_score"] > neutral["final_score"]
+
+
+def test_crypto_addon_conviction_positive_zero_negative_ordering():
+    pair = {"type": "crypto", "display": "BTC/USDT"}
+
+    positive = _score(pair=pair, funding_rate=-0.0002)
+    zero = _score(pair=pair, funding_rate=0.0001)
+    negative = _score(pair=pair, funding_rate=0.0010)
+
+    assert positive["addon_value"] == pytest.approx(0.30)
+    assert zero["addon_value"] == pytest.approx(0.0)
+    assert negative["addon_value"] == pytest.approx(-0.15)
+    assert positive["conviction"] > zero["conviction"] > negative["conviction"]
+    assert positive["final_score"] > zero["final_score"] > negative["final_score"]
+
+
+def test_conviction_floor_default_is_explicit_and_no_momentum_uses_floor_blend():
+    floor = float(CONFIG["FACTOR_CONVICTION_FLOOR"])
+    result = _score(_snap("long"), _snap("long"), _snap("long"))
+
+    assert floor == pytest.approx(0.60)
+    assert result["conviction"] == pytest.approx(
+        float(CONFIG.get("FACTOR_BASE_WEIGHT", 0.20))
+    )
+    expected = 3.0 * (floor + (1.0 - floor) * result["conviction"])
+    assert result["final_score"] == pytest.approx(expected)
+    assert result["final_score"] < 3.0
+
+
+def test_final_score_is_clamped_to_zero_to_three_contract():
+    high = _score(
+        _snap("long"),
+        _snap("long", momentum="bullish"),
+        _snap("long"),
+        pair={"type": "crypto", "display": "BTC/USDT"},
+        funding_rate=-0.0002,
+    )
+    blocked = _score(
+        _snap("long", adx=1.0),
+        _snap("long", adx=1.0),
+        _snap("long", adx=1.0),
+    )
+
+    assert 0.0 <= high["final_score"] <= 3.0
+    assert 0.0 <= blocked["final_score"] <= 3.0
+
+
+def test_forex_session_multiplier_does_not_penalize_crypto():
+    off_session = "2026-04-24T02:00:00+00:00"
+
+    forex = _score(
+        pair={"type": "forex", "display": "TEST/FX"},
+        bar_time=off_session,
+    )
+    crypto = _score(
+        pair={"type": "crypto", "display": "BTC/USDT"},
+        bar_time=off_session,
+        funding_rate=0.0001,
+    )
+
+    assert forex["session_multiplier"] < 1.0
+    assert crypto["session_multiplier"] == pytest.approx(1.0)
+    assert forex["final_score"] < crypto["final_score"]
+
+
+def test_volume_macro_and_intermarket_context_do_not_affect_current_score():
+    baseline = _score(pair={"type": "stock", "display": "AAPL"})
+    with_unused_context = _score(
+        pair={"type": "stock", "display": "AAPL"},
+        volume_ratio=999.0,
+        macro_context={"usd_proxy_score": -3.0},
+        intermarket_context={"drivers": [{"driver": "DXY", "summary": {"current": 1}}]},
+    )
+
+    assert with_unused_context["final_score"] == baseline["final_score"]
+    assert with_unused_context["factor_scores"] == baseline["factor_scores"]
+    assert with_unused_context["intermarket_engine_a_delta"] == 0.0

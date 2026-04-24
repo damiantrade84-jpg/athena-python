@@ -314,3 +314,25 @@ def test_run_auto_scan_skips_already_open_pair(monkeypatch):
     trader._run_auto_scan()
 
     assert called["execute"] is False
+
+
+def test_run_auto_scan_skips_when_kill_switch_active():
+    trader = AutoTrader()
+    cfg = _base_cfg()
+    called = {"scan": False}
+
+    def _scan(style="auto"):
+        called["scan"] = True
+        return {"success": True, "tradeSignals": []}
+
+    trader.configure(
+        _scan,
+        lambda: True,
+        lambda: False,
+        "",
+        lambda: cfg,
+    )
+
+    trader._run_auto_scan()
+
+    assert called["scan"] is False

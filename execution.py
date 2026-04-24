@@ -855,6 +855,10 @@ def api_engine_c_scan():
             consensus["scoreGroup"] = _pair_score_group
             consensus["style"] = engine_a_style
             consensus["atr"] = round(atr, 6)
+            if isinstance(sig_a, dict):
+                for _fresh_key in ("candleFetchMeta", "candleFreshness", "dataFreshness"):
+                    if sig_a.get(_fresh_key) is not None:
+                        consensus[_fresh_key] = sig_a.get(_fresh_key)
             # Reuse engine_c.normalise_engine_a() for consistent A-side diagnostics
             a_norm_result = normalise_engine_a(sig_a)
             a_direction = sig_a.get("direction")

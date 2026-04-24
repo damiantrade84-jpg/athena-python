@@ -182,6 +182,7 @@ from candle_feeds import (  # noqa: E402
     _live_prices_lock,
     fetch_candles_live,
     get_candle_builder,
+    resolve_binance_kline_ws_intervals,
     set_candle_builder,
 )
 
@@ -9910,6 +9911,141 @@ def api_feed_health():
     return jsonify(_json_safe(_feed_health_snapshot()))
 
 
+@app.route("/api/live-feed-diagnostics", methods=["GET", "POST"])
+def api_live_feed_diagnostics():
+    """Read-only live candle diagnostics. Does not place trades."""
+    payload = request.get_json(silent=True) if request.method == "POST" else {}
+    payload = payload or {}
+    raw_symbols = payload.get("symbols") or request.args.get("symbols")
+    if isinstance(raw_symbols, str):
+        wanted = {s.strip().upper() for s in raw_symbols.split(",") if s.strip()}
+    elif isinstance(raw_symbols, list):
+        wanted = {str(s).strip().upper() for s in raw_symbols if str(s).strip()}
+    else:
+        wanted = set()
+
+    raw_tfs = payload.get("timeframes") or request.args.get("timeframes")
+    if isinstance(raw_tfs, str):
+        timeframes = [s.strip().upper() for s in raw_tfs.split(",") if s.strip()]
+    elif isinstance(raw_tfs, list):
+        timeframes = [str(s).strip().upper() for s in raw_tfs if str(s).strip()]
+    else:
+        timeframes = ["H1", "H4", "D1"]
+
+    pairs = []
+    for pair in ACTIVE_PAIRS:
+        keys = {
+            str(pair.get("display", "")).upper(),
+            str(pair.get("symbol", "")).upper(),
+        }
+        if wanted and not (wanted & keys):
+            continue
+        pairs.append(pair)
+
+    from athena_app.services.data_freshness import (
+        build_live_feed_diagnostic,
+        check_live_candle_consistency,
+    )
+    from athena_app.services.engine_b_market_state import engine_b_live_market_state
+    from athena_app.services.market_state import get_tf_market_state
+
+    rows = []
+    generated_at = datetime.now(timezone.utc).isoformat()
+    for pair in pairs:
+        limits = scan_candle_limits(pair)
+        for tf in timeframes:
+            tf_u = str(tf or "").upper()
+            limit = int(limits.get(tf_u, CONFIG.get(f"{tf_u}_CANDLES", 300)) or 300)
+            started = time.perf_counter()
+            candles = None
+            provider_error = None
+            try:
+                candles = fetch_candles(pair, tf_u, limit)
+            except Exception as exc:
+                provider_error = str(exc)
+            duration_ms = (time.perf_counter() - started) * 1000.0
+            meta = _get_candle_fetch_meta(pair, tf_u, limit) or {}
+            diag = build_live_feed_diagnostic(
+                pair,
+                tf_u,
+                candles,
+                fetch_meta=meta,
+                source=meta.get("upstream") or pair.get("source"),
+                fetch_duration_ms=duration_ms,
+                provider_error=provider_error,
+            )
+
+            state_a = get_tf_market_state(pair, tf_u, candles=candles or [])
+            state_b = engine_b_live_market_state(
+                pair,
+                tf_u,
+                len(candles or []),
+                candles=candles or [],
+            )
+            if pair.get("source") == "mt5" and pair.get("type") == "forex":
+                engine_a_input = list(state_a.get("confirmed") or [])
+            else:
+                engine_a_input = list(state_a.get("confirmed") or [])
+                if state_a.get("forming"):
+                    engine_a_input.append(state_a["forming"])
+            engine_b_input = list(state_b.get("confirmed") or [])
+            scanner_input = list(engine_a_input)
+            diag["consistency"] = check_live_candle_consistency(
+                pair,
+                tf_u,
+                {
+                    "raw_provider": candles or [],
+                    "cache": diag,
+                    "market_state": state_a,
+                    "engine_a": engine_a_input,
+                    "engine_b": engine_b_input,
+                    "scanner": scanner_input,
+                    "compare": scanner_input,
+                },
+            )
+            rows.append(diag)
+
+            if pair.get("type") == "crypto" and tf_u in {"H1", "H4", "D1"}:
+                cb = get_candle_builder()
+                ws_candles = None
+                if cb is not None:
+                    try:
+                        ws_candles = cb.get_candles(pair.get("display", ""), tf_u, min(limit, 1001))
+                    except Exception as exc:
+                        ws_diag = build_live_feed_diagnostic(
+                            pair,
+                            tf_u,
+                            [],
+                            source="binance_ws",
+                            provider_status="error",
+                            provider_error=str(exc),
+                        )
+                        rows.append(ws_diag)
+                        continue
+                if ws_candles:
+                    rows.append(
+                        build_live_feed_diagnostic(
+                            pair,
+                            tf_u,
+                            ws_candles,
+                            source="binance_ws",
+                            provider_status="ok",
+                        )
+                    )
+
+    return jsonify(
+        _json_safe(
+            {
+                "success": True,
+                "generatedAt": generated_at,
+                "count": len(rows),
+                "diagnostics": rows,
+                "tradesPlaced": 0,
+            }
+        )
+    )
+
+
 @app.route("/api/signal-stability")
 def api_signal_stability():
 
@@ -10959,12 +11095,68 @@ def analyze_pair(
         "pairSource": pair.get("source"),
     }
     signal["candleFetchMeta"] = _candle_fetch_meta
+    try:
+        from athena_app.services.data_freshness import evaluate_execution_data_freshness
+
+        _freshness_eval = evaluate_execution_data_freshness(signal, CONFIG)
+        signal["dataFreshness"] = _freshness_eval
+        if _freshness_eval.get("warnOnStaleScan") and _freshness_eval.get("blocked"):
+            _warn = "DATA_FRESHNESS: " + "; ".join(
+                f"{b.get('timeframe')} {b.get('severity')}"
+                for b in _freshness_eval.get("blocked", [])
+            )
+            signal.setdefault("warnings", [])
+            if _warn not in signal["warnings"]:
+                signal["warnings"].append(_warn)
+    except Exception as _freshness_err:
+        log.debug(
+            "[ANALYZE] %s data freshness evaluation unavailable: %s",
+            pair.get("display", "?"),
+            _freshness_err,
+        )
     if CONFIG.get("SCAN_DEBUG_CANDLE_META", False):
         signal["candleMeta"] = {
             "D1": _candle_fetch_meta.get("D1"),
             "H4": _candle_fetch_meta.get("H4"),
             "H1": _candle_fetch_meta.get("H1"),
         }
+        try:
+            from athena_app.services.market_state import candle_freshness_diagnostic
+
+            def _series_for_candle_diag(tf_key, fallback):
+                state = preloaded_market_state.get(tf_key)
+                if isinstance(state, dict):
+                    confirmed = list(state.get("confirmed") or [])
+                    forming = state.get("forming")
+                    return confirmed + ([forming] if forming else [])
+                return list(fallback or [])
+
+            signal["candleFreshness"] = {
+                "D1": candle_freshness_diagnostic(
+                    pair,
+                    "D1",
+                    _series_for_candle_diag("D1", d1),
+                    source=pair.get("source"),
+                ),
+                "H4": candle_freshness_diagnostic(
+                    pair,
+                    "H4",
+                    _series_for_candle_diag("H4", h4),
+                    source=pair.get("source"),
+                ),
+                "H1": candle_freshness_diagnostic(
+                    pair,
+                    "H1",
+                    _series_for_candle_diag("H1", h1),
+                    source=pair.get("source"),
+                ),
+            }
+        except Exception as _diag_err:
+            log.debug(
+                "[ANALYZE] %s candle freshness diagnostic unavailable: %s",
+                pair.get("display", "?"),
+                _diag_err,
+            )
     return signal
 
 
@@ -13893,7 +14085,7 @@ def ensure_runtime_services_started() -> None:
     crypto_enabled = [p for p in CRYPTO_PAIRS if p.get("enabled", True)]
     if crypto_enabled:
         selected_symbols = _select_live_crypto_symbols_for_ws()
-        selected_intervals = ["1m", "5m", "15m", "1h"]  # live Engine D-required frames
+        selected_intervals = resolve_binance_kline_ws_intervals(CONFIG)
         _binance_ws = BinanceLivePriceWS()
         _binance_ws.start()
         _binance_candle_ws = BinanceCandleWS(

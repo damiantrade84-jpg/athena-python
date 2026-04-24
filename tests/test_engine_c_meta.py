@@ -4,7 +4,47 @@ from engine_c import (
     _engine_c_meta_blend,
     compute_consensus,
     normalise_engine_a,
+    normalise_engine_b,
 )
+
+
+def _engine_b_signal(verdict="CLEAR", direction="LONG"):
+    return {
+        "structural_verdict": verdict,
+        "direction": direction,
+        "recommended_stop_loss": 1.0900,
+        "recommended_take_profit": 1.1300,
+        "bos_confirmed": True,
+        "bos_mtf_confirmed": True,
+        "ob_at_zone": True,
+        "order_blocks": [{"strength": 80}],
+        "current_swing_sequence": "HH-HL",
+        "macro_swing_sequence": "HH-HL",
+    }
+
+
+def _engine_b_confidence(*, passed=True):
+    return {
+        "score": 5.0,
+        "max_possible": 5.0,
+        "passed": passed,
+        "rr": 2.0,
+        "structure_ok": True,
+        "zone_ok": True,
+        "trigger_ok": True,
+    }
+
+
+def _engine_a_signal(score=0.0, direction="LONG"):
+    return {
+        "confluenceScore": score,
+        "maxScore": 3.0,
+        "direction": direction,
+        "confidenceDetail": {"confidence": 0.8},
+        "sl": 1.0900,
+        "tp1": 1.1300,
+        "regime": {"label": "TRENDING"},
+    }
 
 
 def test_blended_ab_weights_fall_back_to_base_and_move_within_bound():
@@ -150,3 +190,84 @@ def test_normalise_engine_a_uses_raw_ratio_no_forex_rescale():
     # Floor = 0.30, so has_signal = False
     assert round(norm3["score_norm"], 4) == 0.1667
     assert norm3["has_signal"] is False
+
+
+def test_normalise_engine_b_clear_passed_high_score_has_signal():
+    norm = normalise_engine_b(
+        _engine_b_signal(),
+        _engine_b_confidence(passed=True),
+    )
+
+    assert norm["has_signal"] is True
+    assert norm["passed"] is True
+    assert norm["signal_diagnostic"] == ""
+
+
+def test_normalise_engine_b_clear_failed_checklist_has_no_signal():
+    norm = normalise_engine_b(
+        _engine_b_signal(),
+        _engine_b_confidence(passed=False),
+    )
+
+    assert norm["score_norm"] == 1.0
+    assert norm["has_signal"] is False
+    assert norm["passed"] is False
+    assert norm["signal_diagnostic"] == "engine_b_checklist_failed"
+
+
+def test_normalise_engine_b_clear_missing_passed_has_no_signal():
+    confidence = _engine_b_confidence(passed=True)
+    confidence.pop("passed")
+
+    norm = normalise_engine_b(_engine_b_signal(), confidence)
+
+    assert norm["score_norm"] == 1.0
+    assert norm["has_signal"] is False
+    assert norm["passed"] is False
+    assert norm["signal_diagnostic"] == "engine_b_checklist_missing_passed"
+
+
+def test_normalise_engine_b_error_verdict_has_no_signal_even_if_passed():
+    norm = normalise_engine_b(
+        _engine_b_signal(verdict="ERROR"),
+        _engine_b_confidence(passed=True),
+    )
+
+    assert norm["has_signal"] is False
+    assert norm["passed"] is True
+    assert norm["signal_diagnostic"] == "engine_b_verdict_not_clear"
+
+
+def test_b_only_consensus_does_not_execute_when_engine_b_checklist_failed():
+    result = compute_consensus(
+        signal_a=_engine_a_signal(score=0.1),
+        signal_b=_engine_b_signal(),
+        confidence_b=_engine_b_confidence(passed=False),
+        regime="TRENDING",
+        entry_price=1.1000,
+        atr=0.0020,
+        asset_type="forex",
+    )
+
+    assert result["trade"] is False
+    assert result["verdict"] == "NO_SIGNAL"
+    assert result["components"]["b_has_signal"] is False
+    assert result["components"]["b_checklist_passed"] is False
+    assert result["components"]["b_signal_diagnostic"] == "engine_b_checklist_failed"
+
+
+def test_aligned_consensus_does_not_use_engine_b_when_checklist_failed():
+    result = compute_consensus(
+        signal_a=_engine_a_signal(score=2.4),
+        signal_b=_engine_b_signal(),
+        confidence_b=_engine_b_confidence(passed=False),
+        regime="TRENDING",
+        entry_price=1.1000,
+        atr=0.0020,
+        asset_type="forex",
+    )
+
+    assert result["verdict"] != "ALIGNED"
+    assert result["components"]["a_has_signal"] is True
+    assert result["components"]["b_has_signal"] is False
+    assert result["components"]["b_checklist_passed"] is False

@@ -97,6 +97,8 @@ def test_key_endpoints_exist_with_methods():
     assert "/api/scalp-execute" in ep and "POST" in ep["/api/scalp-execute"]
     assert "/api/execute" in ep and "POST" in ep["/api/execute"]
     assert "/api/quick-execute" in ep and "POST" in ep["/api/quick-execute"]
+    assert "/api/live-feed-diagnostics" in ep and "GET" in ep["/api/live-feed-diagnostics"]
+    assert "POST" in ep["/api/live-feed-diagnostics"]
     assert "/api/backtest" in ep and "POST" in ep["/api/backtest"]
     assert "/api/intermarket-matrix" in ep and "GET" in ep["/api/intermarket-matrix"]
     assert "/api/bt-min" in ep and "GET" in ep["/api/bt-min"] and "POST" in ep["/api/bt-min"]

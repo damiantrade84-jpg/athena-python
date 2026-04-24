@@ -19,6 +19,7 @@ def engine_b_live_market_state(
     fetch_market_state: Callable[[dict, str, int], dict] | None = None,
     extract_candles: Callable[[Any], list[dict[str, Any]] | None] | None = None,
     log: Any | None = None,
+    time_now: float | None = None,
 ) -> dict:
     """Return market state dict: {confirmed, forming, is_live, ...}.
 
@@ -28,13 +29,20 @@ def engine_b_live_market_state(
     - Else for MT5 pairs, fetch directly from MT5 and split via `split_market_state`.
     - Else fall back to the shared `fetch_market_state` path.
     """
-    from athena_app.services.market_state import split_market_state
+    from athena_app.services.market_state import market_state_offset_hours, split_market_state
 
     tf_u = str(tf or "").upper()
     display = pair.get("display") or pair.get("symbol") or ""
+    offset_hours = market_state_offset_hours(pair, tf_u)
 
     if candles is not None:
-        return split_market_state(list(candles or []), tf_u, display)
+        return split_market_state(
+            list(candles or []),
+            tf_u,
+            display,
+            time_now=time_now,
+            offset_hours=offset_hours,
+        )
 
     if pair.get("source") == "mt5" and fetch_mt5 is not None:
         try:
@@ -46,7 +54,13 @@ def engine_b_live_market_state(
                 series = raw
             elif isinstance(raw, dict):
                 series = (raw.get("candles") or []) if isinstance(raw.get("candles"), list) else []
-            return split_market_state(series, tf_u, display)
+            return split_market_state(
+                series,
+                tf_u,
+                display,
+                time_now=time_now,
+                offset_hours=offset_hours,
+            )
         except Exception as e:
             if log is not None:
                 try:
@@ -62,7 +76,13 @@ def engine_b_live_market_state(
     if fetch_market_state is None:
         # Best-effort fallback: no market state available.
         return {
-            **split_market_state([], tf_u, display),
+            **split_market_state(
+                [],
+                tf_u,
+                display,
+                time_now=time_now,
+                offset_hours=offset_hours,
+            ),
             "error": "market_state_unavailable",
             "reason": "no_fetch_market_state_and_no_candles",
         }

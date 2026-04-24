@@ -214,6 +214,7 @@ CONFIG: dict = {
     "SCAN_MAX_WORKERS": 3,
     "SCAN_DEBUG_CANDLE_META": False,
     "FOREX_H4_RESAMPLE_OFFSET_HOURS": 0.0,
+    "BINANCE_KLINE_WS_INTERVALS": ["1m", "5m", "15m", "1h", "4h", "1d"],
     "MIN_CONFLUENCE": 1.0,
     "RISK_MULT": {
         "commodity": 1.2,
@@ -648,6 +649,18 @@ CONFIG: dict = {
         "commodity": 0.04,
         "index":     0.04,
         "stock":     0.08,
+    },
+    "DATA_FRESHNESS_GATES": {
+        "WARN_ON_STALE_SCAN": True,
+        "BLOCK_EXECUTION_ON_STALE": True,
+        "BLOCK_TIMEFRAMES": ["H1", "H4", "D1"],
+        "BLOCK_SEVERITIES": [
+            "missing_current_bucket",
+            "stale_1_bucket",
+            "stale_multi_bucket",
+            "error_path_mismatch",
+            "error_offset_mismatch",
+        ],
     },
     "DRAWDOWN_REDUCE_THRESHOLD": 0.10,  # At 10% drawdown, halve position sizes
     "DRAWDOWN_STOP_THRESHOLD": 0.15,  # At 15% drawdown, reject ALL new trades

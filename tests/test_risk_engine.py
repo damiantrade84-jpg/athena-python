@@ -104,6 +104,141 @@ class TestKillSwitch:
         assert result.approved is False
         assert result.reason == "KILL_SWITCH_ACTIVE"
 
+    def test_auto_execution_uses_same_kill_switch_gate(self):
+        result = risk_check(_make_signal(), 10000, 10000, [], kill_switch=True)
+        assert result.approved is False
+        assert result.reason == "KILL_SWITCH_ACTIVE"
+
+
+class TestDataFreshnessGate:
+    def test_fresh_candles_allow_execution(self, monkeypatch):
+        monkeypatch.setitem(
+            risk_engine.CONFIG,
+            "DATA_FRESHNESS_GATES",
+            {
+                "BLOCK_EXECUTION_ON_STALE": True,
+                "BLOCK_TIMEFRAMES": ["H1", "H4", "D1"],
+                "BLOCK_SEVERITIES": ["stale_1_bucket"],
+            },
+        )
+        result = risk_check(
+            _make_signal(
+                candleFetchMeta={
+                    "H1": {"stalenessSeverity": "fresh"},
+                    "H4": {"stalenessSeverity": "fresh"},
+                    "D1": {"stalenessSeverity": "fresh"},
+                }
+            ),
+            100000,
+            100000,
+            [],
+        )
+        assert result.approved is True
+
+    def test_h4_stale_one_bucket_blocks_when_gate_enabled(self, monkeypatch):
+        monkeypatch.setitem(
+            risk_engine.CONFIG,
+            "DATA_FRESHNESS_GATES",
+            {
+                "BLOCK_EXECUTION_ON_STALE": True,
+                "BLOCK_TIMEFRAMES": ["H4"],
+                "BLOCK_SEVERITIES": ["stale_1_bucket"],
+            },
+        )
+        result = risk_check(
+            _make_signal(candleFetchMeta={"H4": {"stalenessSeverity": "stale_1_bucket"}}),
+            100000,
+            100000,
+            [],
+        )
+        assert result.approved is False
+        assert result.reason == "STALE_DATA_BLOCK:H4:stale_1_bucket"
+
+    def test_h4_stale_one_bucket_allows_when_execution_gate_disabled(self, monkeypatch):
+        monkeypatch.setitem(
+            risk_engine.CONFIG,
+            "DATA_FRESHNESS_GATES",
+            {
+                "BLOCK_EXECUTION_ON_STALE": False,
+                "BLOCK_TIMEFRAMES": ["H4"],
+                "BLOCK_SEVERITIES": ["stale_1_bucket"],
+            },
+        )
+        result = risk_check(
+            _make_signal(candleFetchMeta={"H4": {"stalenessSeverity": "stale_1_bucket"}}),
+            100000,
+            100000,
+            [],
+        )
+        assert result.approved is True
+
+    def test_engine_a_b_path_mismatch_blocks_execution(self, monkeypatch):
+        monkeypatch.setitem(
+            risk_engine.CONFIG,
+            "DATA_FRESHNESS_GATES",
+            {
+                "BLOCK_EXECUTION_ON_STALE": True,
+                "BLOCK_TIMEFRAMES": ["H4"],
+                "BLOCK_SEVERITIES": ["error_path_mismatch"],
+            },
+        )
+        result = risk_check(
+            _make_signal(candleConsistency={"H4": {"status": "ERROR_PATH_MISMATCH"}}),
+            100000,
+            100000,
+            [],
+        )
+        assert result.approved is False
+        assert result.reason == "STALE_DATA_BLOCK:H4:error_path_mismatch"
+
+    def test_crypto_h4_d1_stale_data_blocks_execution(self, monkeypatch):
+        monkeypatch.setitem(
+            risk_engine.CONFIG,
+            "DATA_FRESHNESS_GATES",
+            {
+                "BLOCK_EXECUTION_ON_STALE": True,
+                "BLOCK_TIMEFRAMES": ["H4", "D1"],
+                "BLOCK_SEVERITIES": ["stale_multi_bucket"],
+            },
+        )
+        result = risk_check(
+            _make_signal(
+                type="crypto",
+                candleFetchMeta={"D1": {"stalenessSeverity": "stale_multi_bucket"}},
+            ),
+            100000,
+            100000,
+            [],
+        )
+        assert result.approved is False
+        assert result.reason == "STALE_DATA_BLOCK:D1:stale_multi_bucket"
+
+    def test_forex_h4_offset_mismatch_blocks_execution(self, monkeypatch):
+        monkeypatch.setitem(
+            risk_engine.CONFIG,
+            "DATA_FRESHNESS_GATES",
+            {
+                "BLOCK_EXECUTION_ON_STALE": True,
+                "BLOCK_TIMEFRAMES": ["H4"],
+                "BLOCK_SEVERITIES": ["error_offset_mismatch"],
+            },
+        )
+        result = risk_check(
+            _make_signal(
+                pair="EUR/USD",
+                type="forex",
+                price=1.1000,
+                sl=1.0900,
+                tp1=1.1200,
+                candleConsistency={"H4": {"status": "ERROR_OFFSET_MISMATCH"}},
+            ),
+            100000,
+            100000,
+            [],
+        )
+        assert result.approved is False
+        assert result.reason == "STALE_DATA_BLOCK:H4:error_offset_mismatch"
+
 
 # ── Drawdown circuit breaker ────────────────────────────────────────────────
 
@@ -150,6 +285,80 @@ class TestMaxPositions:
         result = risk_check(_make_signal(), 100000, 100000, positions)
         assert result.approved is False
         assert result.reason == "MAX_POSITIONS_REACHED"
+
+
+class TestExecutionStateSafety:
+    def test_watchlist_state_blocks_execution(self):
+        result = risk_check(
+            _make_signal(
+                verdict="ALIGNED",
+                decision_state="watchlist",
+                tier="WATCHLIST",
+            ),
+            100000,
+            100000,
+            [],
+        )
+        assert result.approved is False
+        assert result.reason == "NON_EXECUTABLE_SIGNAL_STATE"
+
+    def test_blocked_state_blocks_execution(self):
+        result = risk_check(
+            _make_signal(verdict="A_ONLY", decision_state="blocked", tier="SKIP"),
+            100000,
+            100000,
+            [],
+        )
+        assert result.approved is False
+        assert result.reason == "NON_EXECUTABLE_SIGNAL_STATE"
+
+    def test_failed_risk_check_blocks_execution(self):
+        result = risk_check(_make_signal(price=100, sl=100), 100000, 100000, [])
+        assert result.approved is False
+        assert result.reason == "INVALID_LEVELS"
+
+    def test_missing_account_data_blocks_execution(self):
+        result = risk_check(_make_signal(), None, 100000, [])
+        assert result.approved is False
+        assert result.reason == "MISSING_ACCOUNT_DATA"
+
+    def test_duplicate_signal_order_blocks_execution(self):
+        result = risk_check(
+            _make_signal(pair="BTCUSDT"),
+            100000,
+            100000,
+            [{"pair": "BTCUSDT", "risk_amount": 10}],
+        )
+        assert result.approved is False
+        assert result.reason == "DUPLICATE_PAIR"
+
+    def test_aligned_with_failed_engine_b_checklist_blocks_execution(self):
+        result = risk_check(
+            _make_signal(
+                verdict="ALIGNED",
+                tier="HIGH",
+                engine_b_status={"checklist_passed": False},
+            ),
+            100000,
+            100000,
+            [],
+        )
+        assert result.approved is False
+        assert result.reason == "ENGINE_B_CHECKLIST_FAILED"
+
+    def test_a_only_without_valid_engine_a_signal_blocks_execution(self):
+        result = risk_check(
+            _make_signal(
+                verdict="A_ONLY",
+                tier="HIGH",
+                components={"a_has_signal": False},
+            ),
+            100000,
+            100000,
+            [],
+        )
+        assert result.approved is False
+        assert result.reason == "ENGINE_A_SIGNAL_INVALID"
 
 
 # ── Invalid levels ───────────────────────────────────────────────────────────

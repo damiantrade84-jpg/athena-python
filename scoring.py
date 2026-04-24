@@ -38,15 +38,30 @@ def _tf_score_proxy(snap: dict) -> dict | None:
     # RSI bias
     rsi = snap.get("rsi")
     if rsi is not None:
-        components.append((rsi - 50) / 50)  # -1 to +1
+        rsi_bias = (rsi - 50) / 50
+        components.append(max(-1.0, min(1.0, rsi_bias)))
     # MACD direction
     macd_hist = snap.get("macdHist")
     if macd_hist is not None:
-        components.append(1.0 if macd_hist > 0 else -1.0)
+        if macd_hist > 0:
+            components.append(1.0)
+        elif macd_hist < 0:
+            components.append(-1.0)
+        else:
+            components.append(0.0)
     if not components:
         return None
     avg = sum(components) / len(components)
     return {"final_score": round(avg, 4)}
+
+
+def _vote_sign(val) -> int:
+    """Map a numeric factor value to a tri-state vote."""
+    if val > 0:
+        return 1
+    if val < 0:
+        return -1
+    return 0
 
 _MAJOR_FOREX = {
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"
@@ -526,7 +541,7 @@ def calc_confluence(
     v = {}
     for factor, val in factor_result["factor_scores"].items():
         if val is not None:
-            v[f"FACTOR_{factor.upper()}"] = 1 if val > 0 else -1
+            v[f"FACTOR_{factor.upper()}"] = _vote_sign(val)
 
     # Map legacy vote names for UI compatibility
     legacy_votes = {

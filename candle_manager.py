@@ -10,7 +10,7 @@ from typing import Any
 
 from athena_legacy import load as _load_legacy
 
-from athena_app.services.market_state import split_market_state, MarketState
+from athena_app.services.market_state import get_tf_market_state, MarketState
 
 def _backend():
     return _load_legacy()
@@ -27,8 +27,7 @@ def fetch_market_state(pair: dict[str, Any], tf: str, limit: int) -> MarketState
     Use this when you need metadata about whether the latest bar is still 'open'.
     """
     candles = fetch_candles(pair, tf, limit)
-    display = pair.get("display") or pair.get("symbol") or ""
-    return split_market_state(candles or [], tf, display)
+    return get_tf_market_state(pair, tf, candles=candles or [])
 
 
 def fetch_confirmed_candles(pair: dict[str, Any], tf: str, limit: int) -> list[dict[str, Any]]:

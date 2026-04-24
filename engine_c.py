@@ -186,6 +186,8 @@ def _build_disagreement_diagnosis(
         _b_missing = []
         if b_verdict_b != "CLEAR":
             _b_missing.append(f"verdict={b_verdict_b}")
+        if b_verdict_b == "CLEAR" and not b.get("passed"):
+            _b_missing.append(b.get("signal_diagnostic") or "engine_b_checklist_failed")
         if not b_struct_ok:
             _b_reason_codes = (signal_b.get("engine_b_diagnostics") or {}).get("reason_codes", [])
             _b_missing.append(f"structure_failed (codes={_b_reason_codes})")
@@ -355,6 +357,23 @@ def normalise_engine_b(signal_b: dict, confidence_b: dict = None) -> dict:
 
     verdict = signal_b.get("structural_verdict", "ERROR")
     direction = signal_b.get("direction")
+    passed_raw = conf.get("passed")
+    passed = passed_raw is True
+    high_enough = norm > 0.2
+    valid_direction = direction in ("LONG", "SHORT")
+    diagnostic = ""
+    if verdict == "CLEAR" and high_enough and valid_direction and not passed:
+        diagnostic = (
+            "engine_b_checklist_missing_passed"
+            if "passed" not in conf
+            else "engine_b_checklist_failed"
+        )
+    elif verdict != "CLEAR":
+        diagnostic = "engine_b_verdict_not_clear"
+    elif not valid_direction:
+        diagnostic = "engine_b_direction_missing"
+    elif not high_enough:
+        diagnostic = "engine_b_confidence_below_threshold"
 
     return {
         "score_norm": round(norm, 4),
@@ -364,7 +383,10 @@ def normalise_engine_b(signal_b: dict, confidence_b: dict = None) -> dict:
         "rr": float(conf.get("rr", 0)),
         "raw_score": score,
         "max_possible": max_possible,
-        "has_signal": verdict == "CLEAR" and norm > 0.2 and direction in ("LONG", "SHORT"),
+        "has_signal": verdict == "CLEAR" and high_enough and valid_direction and passed,
+        "passed": passed,
+        "checklist_passed": passed,
+        "signal_diagnostic": diagnostic,
         "bos_confirmed": bool(signal_b.get("bos_confirmed")),
         "bos_mtf": bool(signal_b.get("bos_mtf_confirmed")),
         "choch_confirmed": bool(signal_b.get("choch_confirmed")),
@@ -1192,6 +1214,8 @@ def _build_result(
             "b_norm": round(b_norm["score_norm"], 4) if b_norm else 0.0,
             "b_direction": b_norm.get("direction") if b_norm else None,
             "b_has_signal": b_norm.get("has_signal", False) if b_norm else False,
+            "b_checklist_passed": b_norm.get("passed", False) if b_norm else False,
+            "b_signal_diagnostic": b_norm.get("signal_diagnostic", "") if b_norm else "",
             "b_bos": b_norm.get("bos_confirmed", False) if b_norm else False,
             "b_ob_at_zone": b_norm.get("ob_at_zone", False) if b_norm else False,
             "b_sequence": b_norm.get("swing_sequence", "") if b_norm else "",

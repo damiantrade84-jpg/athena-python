@@ -506,6 +506,25 @@ class BinanceCandleWS:
         log.info("[BN-KLINE-WS] Stopped")
 
 
+DEFAULT_BINANCE_KLINE_WS_INTERVALS = ["1m", "5m", "15m", "1h", "4h", "1d"]
+
+
+def resolve_binance_kline_ws_intervals(config: dict | None = None) -> list[str]:
+    """Return configured Binance kline intervals, limited to supported streams."""
+    cfg = config if isinstance(config, dict) else {}
+    raw = cfg.get("BINANCE_KLINE_WS_INTERVALS", DEFAULT_BINANCE_KLINE_WS_INTERVALS)
+    if not isinstance(raw, (list, tuple)):
+        raw = DEFAULT_BINANCE_KLINE_WS_INTERVALS
+
+    supported = set(BinanceCandleWS._STREAM_TFS)
+    out = []
+    for item in raw:
+        interval = str(item or "").strip().lower()
+        if interval in supported and interval not in out:
+            out.append(interval)
+    return out or list(DEFAULT_BINANCE_KLINE_WS_INTERVALS)
+
+
 def _format_eodhd_ws_disconnect(exc: BaseException) -> str:
     """Readable disconnect detail for logs (websockets 16 uses rcvd/sent, not exc.code)."""
     name = type(exc).__name__

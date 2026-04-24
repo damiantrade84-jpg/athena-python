@@ -42,6 +42,14 @@ SCAN_DEBUG_CANDLE_META: false # Optional scan/debug payload metadata about candl
 
 FOREX_H4_RESAMPLE_OFFSET_HOURS: 1   # EURAUD/TradingView-aligned forex H4 grid: 01/05/09/13/17/21 UTC
 
+BINANCE_KLINE_WS_INTERVALS:
+  - "1m"
+  - "5m"
+  - "15m"
+  - "1h"
+  - "4h"
+  - "1d"
+
 
 
 # Per-class D1 ADX trend minimum
@@ -57,6 +65,8 @@ ADX_TREND_MIN_CLASS:
   stock: 25
 
   index: 25
+
+FACTOR_CONVICTION_FLOOR: 0.60 # Engine A v2 default used by factor_scoring when unset.
 
 
 
@@ -623,6 +633,20 @@ MAX_RISK_PER_TRADE: 0.03      # Hard cap 3% per trade
 DRAWDOWN_REDUCE_THRESHOLD: 0.10   # Halve size at 10% drawdown
 
 DRAWDOWN_STOP_THRESHOLD: 0.15     # Stop all trading at 15% drawdown
+
+DATA_FRESHNESS_GATES:
+  WARN_ON_STALE_SCAN: true
+  BLOCK_EXECUTION_ON_STALE: true
+  BLOCK_TIMEFRAMES:
+    - H1
+    - H4
+    - D1
+  BLOCK_SEVERITIES:
+    - missing_current_bucket
+    - stale_1_bucket
+    - stale_multi_bucket
+    - error_path_mismatch
+    - error_offset_mismatch
 
 
 
