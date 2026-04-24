@@ -1127,6 +1127,7 @@ class NakedEngine:
         d1_fvgs_raw: list = []
         d1_pd_array_conflict: bool = False
         d1_conflict_details: list = []
+        d1_conflict_metric_details: list = []
         try:
             d1_order_blocks_raw = self._detect_order_blocks(d1_candles, d1_bos, d1_atr)
             d1_fvgs_raw = [f for f in self._detect_fvg(d1_candles) if not f.get("mitigated")]
@@ -1140,9 +1141,29 @@ class NakedEngine:
                 if direction == "LONG" and ob["type"] == "bearish" and ob_mid > current_price:
                     d1_pd_array_conflict = True
                     d1_conflict_details.append(f"D1_bearish_OB@{ob_mid:.5f} (str={ob['strength']})")
+                    d1_conflict_metric_details.append({
+                        "zone_type": "bearish_OB",
+                        "zone_price_range": {"top": ob["top"], "bottom": ob["bottom"]},
+                        "zone_mid": ob_mid,
+                        "distance_to_conflict": ob_dist,
+                        "distance_in_atr": (ob_dist / d1_atr) if d1_atr > 0 else None,
+                        "conflict_side": "above_price",
+                        "entry_side_or_tp_side": "tp_side",
+                        "strength": ob.get("strength"),
+                    })
                 elif direction == "SHORT" and ob["type"] == "bullish" and ob_mid < current_price:
                     d1_pd_array_conflict = True
                     d1_conflict_details.append(f"D1_bullish_OB@{ob_mid:.5f} (str={ob['strength']})")
+                    d1_conflict_metric_details.append({
+                        "zone_type": "bullish_OB",
+                        "zone_price_range": {"top": ob["top"], "bottom": ob["bottom"]},
+                        "zone_mid": ob_mid,
+                        "distance_to_conflict": ob_dist,
+                        "distance_in_atr": (ob_dist / d1_atr) if d1_atr > 0 else None,
+                        "conflict_side": "below_price",
+                        "entry_side_or_tp_side": "tp_side",
+                        "strength": ob.get("strength"),
+                    })
             for fvg in d1_fvgs_raw:
                 fvg_mid = (fvg["top"] + fvg["bottom"]) / 2.0
                 fvg_dist = abs(current_price - fvg_mid)
@@ -1151,9 +1172,27 @@ class NakedEngine:
                 if direction == "LONG" and fvg["type"] == "bearish" and fvg_mid > current_price:
                     d1_pd_array_conflict = True
                     d1_conflict_details.append(f"D1_bearish_FVG@{fvg_mid:.5f}")
+                    d1_conflict_metric_details.append({
+                        "zone_type": "bearish_FVG",
+                        "zone_price_range": {"top": fvg["top"], "bottom": fvg["bottom"]},
+                        "zone_mid": fvg_mid,
+                        "distance_to_conflict": fvg_dist,
+                        "distance_in_atr": (fvg_dist / d1_atr) if d1_atr > 0 else None,
+                        "conflict_side": "above_price",
+                        "entry_side_or_tp_side": "tp_side",
+                    })
                 elif direction == "SHORT" and fvg["type"] == "bullish" and fvg_mid < current_price:
                     d1_pd_array_conflict = True
                     d1_conflict_details.append(f"D1_bullish_FVG@{fvg_mid:.5f}")
+                    d1_conflict_metric_details.append({
+                        "zone_type": "bullish_FVG",
+                        "zone_price_range": {"top": fvg["top"], "bottom": fvg["bottom"]},
+                        "zone_mid": fvg_mid,
+                        "distance_to_conflict": fvg_dist,
+                        "distance_in_atr": (fvg_dist / d1_atr) if d1_atr > 0 else None,
+                        "conflict_side": "below_price",
+                        "entry_side_or_tp_side": "tp_side",
+                    })
         except Exception as _d1e:
             log.debug(f"[D1-PD] detection error: {_d1e}")
 
@@ -1378,23 +1417,52 @@ class NakedEngine:
         tp = None
         tp_source = "fallback_rr"
         tp_structural_limited = False
+        structural_target_candidates = []
         if direction == "LONG" and valid_res:
             for zone in sorted(valid_res, key=lambda z: z["lower"]):
                 structural_tp = zone["lower"] - (atr * sl_mult)
+                target_distance = structural_tp - current_price
+                structural_target_candidates.append({
+                    "target_type": "resistance_zone",
+                    "target_price": structural_tp,
+                    "zone": dict(zone),
+                    "correct_side": structural_tp > current_price,
+                    "distance_to_target": target_distance,
+                    "atr_multiple_to_target": (target_distance / atr) if atr > 0 else None,
+                    "selected": False,
+                    "rejected_reason": "too_close_or_wrong_side"
+                    if structural_tp <= current_price + (atr * 0.5)
+                    else None,
+                })
                 if structural_tp <= current_price + (atr * 0.5):
                     tp_structural_limited = True
                     continue
                 tp = structural_tp
                 tp_source = "structural_zone"
+                structural_target_candidates[-1]["selected"] = True
                 break
         elif direction == "SHORT" and valid_sup:
             for zone in sorted(valid_sup, key=lambda z: z["upper"], reverse=True):
                 structural_tp = zone["upper"] + (atr * sl_mult)
+                target_distance = current_price - structural_tp
+                structural_target_candidates.append({
+                    "target_type": "support_zone",
+                    "target_price": structural_tp,
+                    "zone": dict(zone),
+                    "correct_side": structural_tp < current_price,
+                    "distance_to_target": target_distance,
+                    "atr_multiple_to_target": (target_distance / atr) if atr > 0 else None,
+                    "selected": False,
+                    "rejected_reason": "too_close_or_wrong_side"
+                    if structural_tp >= current_price - (atr * 0.5)
+                    else None,
+                })
                 if structural_tp >= current_price - (atr * 0.5):
                     tp_structural_limited = True
                     continue
                 tp = structural_tp
                 tp_source = "structural_zone"
+                structural_target_candidates[-1]["selected"] = True
                 break
 
         # Generate TP from fallback_rr when no usable opposing structural zone exists.
@@ -1406,6 +1474,9 @@ class NakedEngine:
                 tp = current_price + (sl_dist * fallback_rr)
             else:
                 tp = current_price - (sl_dist * fallback_rr)
+        selected_structural_target = next(
+            (c for c in structural_target_candidates if c.get("selected")), None
+        )
 
         # 6. BOS validation
         bos_confirmed = (direction == "LONG" and bos_data["bos_bull"]) or (
@@ -1444,6 +1515,15 @@ class NakedEngine:
             zone_ctx["zone_touched"] or zone_ctx["near_zone"],
             bos_confirmed,
         )
+        latest_trigger_candle_time = None
+        if trigger_candles:
+            _last_trigger_candle = trigger_candles[-1]
+            latest_trigger_candle_time = (
+                _last_trigger_candle.get("time")
+                or _last_trigger_candle.get("timestamp")
+                or _last_trigger_candle.get("datetime")
+                or _last_trigger_candle.get("date")
+            )
 
         # Previous-session fixed-range profile from the latest completed UTC session.
         _profile_result = {
@@ -1564,6 +1644,7 @@ class NakedEngine:
 
         return {
             "structural_verdict": "CLEAR",
+            "direction": direction,
             "nearest_resistance_zone": nearest_res,
             "nearest_support_zone": nearest_sup,
             "current_swing_sequence": sequence_data["state"],
@@ -1572,6 +1653,11 @@ class NakedEngine:
             "recommended_take_profit": tp,
             "tp_source": tp_source,
             "tp_structural_limited": tp_structural_limited,
+            "current_price": current_price,
+            "structural_target_candidates": structural_target_candidates,
+            "selected_structural_target": selected_structural_target,
+            "nearest_target_type": (selected_structural_target or {}).get("target_type"),
+            "nearest_target_price": (selected_structural_target or {}).get("target_price"),
             "distance_to_res": (nearest_res["lower"] - current_price)
             if nearest_res
             else None,
@@ -1605,6 +1691,8 @@ class NakedEngine:
             "engulfing_candle": trigger_ctx["engulfing"],
             "inside_break_candle": trigger_ctx["inside_break"],
             "strong_close": trigger_ctx["strong_close"],
+            "trigger_timeframe": "H4" if _use_d1_structure else "H1",
+            "latest_confirmed_trigger_candle_time": latest_trigger_candle_time,
             "structure_tf": structure_tf,
             "asset_type": asset_type,
             "d1_adx": d1_adx_val,
@@ -1627,6 +1715,7 @@ class NakedEngine:
             "d1_fvgs": d1_fvgs_raw,
             "d1_pd_array_conflict": d1_pd_array_conflict,
             "d1_conflict_details": d1_conflict_details,
+            "d1_conflict_metric_details": d1_conflict_metric_details,
             **_profile_result,
         }
 

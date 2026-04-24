@@ -67,6 +67,113 @@ def _top_table(counter: Counter, limit: int = 10) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _fmt(value: Any) -> str:
+    if value is None:
+        return "not logged"
+    if isinstance(value, float):
+        return f"{value:.6g}"
+    return str(value)
+
+
+def _engine_b_closest(rows: list[dict[str, Any]], limit: int = 20) -> str:
+    ranked = sorted(
+        rows,
+        key=lambda r: (
+            float((r.get("thresholds") or {}).get("engine_b") or 0.0)
+            - float(r.get("engine_b_raw_score") or 0.0)
+        ),
+    )
+    lines = ["| symbol | asset | score | threshold | passed | top fail reasons |", "|---|---|---:|---:|---|---|"]
+    for row in ranked[:limit]:
+        lines.append(
+            f"| {_fmt(row.get('symbol'))} | {_fmt(row.get('asset_type'))} | "
+            f"{_fmt(row.get('engine_b_raw_score'))} | {_fmt((row.get('thresholds') or {}).get('engine_b'))} | "
+            f"{_fmt(row.get('engine_b_confidence_passed'))} | {', '.join((row.get('engine_b_fail_reasons') or [])[:4])} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _engine_b_tp_rows(rows: list[dict[str, Any]], limit: int = 20) -> str:
+    filtered = [r for r in rows if "structural_tp_too_close" in (r.get("engine_b_fail_reasons") or [])]
+    lines = [
+        "| symbol | asset | dir | entry | SL | TP | dist TP | dist SL | RR | ATR | ATR to TP | target side ok | TP source | fail reason |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|",
+    ]
+    for row in filtered[:limit]:
+        d = row.get("engine_b_structural_tp_diagnostics") or {}
+        lines.append(
+            f"| {_fmt(row.get('symbol'))} | {_fmt(row.get('asset_type'))} | {_fmt(d.get('direction'))} | "
+            f"{_fmt(d.get('entry'))} | {_fmt(d.get('structural_sl'))} | {_fmt(d.get('structural_tp'))} | "
+            f"{_fmt(d.get('distance_to_tp'))} | {_fmt(d.get('distance_to_sl'))} | {_fmt(d.get('rr'))} | "
+            f"{_fmt(d.get('atr'))} | {_fmt(d.get('atr_multiple_to_tp'))} | {_fmt(d.get('target_correct_side_of_entry'))} | "
+            f"{_fmt(d.get('tp_source'))} | {_fmt(d.get('fail_reason'))} |"
+        )
+    if not filtered:
+        lines.append("| none | n/a | n/a | not logged | not logged | not logged | not logged | not logged | not logged | not logged | not logged | n/a | n/a | none |")
+    return "\n".join(lines) + "\n"
+
+
+def _engine_b_trigger_rows(rows: list[dict[str, Any]], limit: int = 20) -> str:
+    filtered = [r for r in rows if "no_trigger_pattern" in (r.get("engine_b_fail_reasons") or [])]
+    lines = [
+        "| symbol | asset | verdict | BOS/CHoCH | OB | FVG | sweep | breaker | zone retest | rejection | displacement | tf | latest candle | missing condition | classification |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for row in filtered[:limit]:
+        d = row.get("engine_b_trigger_diagnostics") or {}
+        lines.append(
+            f"| {_fmt(row.get('symbol'))} | {_fmt(row.get('asset_type'))} | {_fmt(d.get('structural_verdict'))} | "
+            f"{_fmt(bool(d.get('bos_status')) or bool(d.get('choch_status')))} | {_fmt(d.get('ob_present'))} | "
+            f"{_fmt(d.get('fvg_present'))} | {_fmt(d.get('sweep_present'))} | {_fmt(d.get('breaker_present'))} | "
+            f"{_fmt(d.get('zone_retest'))} | {_fmt(d.get('rejection_candle'))} | {_fmt(d.get('displacement_candle'))} | "
+            f"{_fmt(d.get('trigger_timeframe'))} | {_fmt(d.get('latest_confirmed_candle_timestamp'))} | "
+            f"{_fmt(d.get('exact_missing_trigger_condition'))} | {_fmt(d.get('report_only_classification'))} |"
+        )
+    if not filtered:
+        lines.append("| none | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | not logged | none | none |")
+    return "\n".join(lines) + "\n"
+
+
+def _engine_b_d1_rows(rows: list[dict[str, Any]], limit: int = 20) -> str:
+    filtered = [r for r in rows if "d1_pd_array_conflict" in (r.get("engine_b_fail_reasons") or [])]
+    lines = [
+        "| symbol | asset | dir | current price | conflict type | range | distance | ATR distance | side | entry/TP side | H4/H1 |",
+        "|---|---|---|---:|---|---|---:|---:|---|---|---|",
+    ]
+    emitted = 0
+    for row in filtered:
+        d = row.get("engine_b_d1_conflict_diagnostics") or {}
+        conflicts = d.get("conflicts") or [{}]
+        for conflict in conflicts:
+            if emitted >= limit:
+                return "\n".join(lines) + "\n"
+            lines.append(
+                f"| {_fmt(row.get('symbol'))} | {_fmt(row.get('asset_type'))} | {_fmt(d.get('direction'))} | "
+                f"{_fmt(d.get('current_price'))} | {_fmt(conflict.get('zone_type'))} | {_fmt(conflict.get('zone_price_range'))} | "
+                f"{_fmt(conflict.get('distance_to_conflict'))} | {_fmt(conflict.get('distance_in_atr'))} | "
+                f"{_fmt(conflict.get('conflict_side'))} | {_fmt(conflict.get('entry_side_or_tp_side'))} | "
+                f"{_fmt(d.get('h4_h1_agreement'))} |"
+            )
+            emitted += 1
+    if emitted == 0:
+        lines.append("| none | n/a | n/a | not logged | not logged | not logged | not logged | not logged | not logged | not logged | not logged |")
+    return "\n".join(lines) + "\n"
+
+
+def _engine_b_shadow_summary(rows: list[dict[str, Any]]) -> str:
+    watch_entry = sum(1 for r in rows if (r.get("engine_b_shadow_simulation") or {}).get("watchlist_entry_pending"))
+    next_target = sum(1 for r in rows if (r.get("engine_b_shadow_simulation") or {}).get("next_structural_target_valid"))
+    d1_watch = sum(1 for r in rows if (r.get("engine_b_shadow_simulation") or {}).get("d1_conflict_watchlist_candidate"))
+    added_execution = sum(1 for r in rows if (r.get("engine_b_shadow_simulation") or {}).get("adds_execution"))
+    return (
+        "| simulation | count |\n|---|---:|\n"
+        f"| structure valid but no trigger -> WATCHLIST_ENTRY_PENDING | {watch_entry} |\n"
+        f"| structural TP too close -> next valid structural target exists | {next_target} |\n"
+        f"| D1 conflict beyond 0.75 ATR -> watchlist candidate | {d1_watch} |\n"
+        f"| all report-only simulations -> added execution signals | {added_execution} |\n"
+    )
+
+
 def _near_misses(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row in rows:
@@ -204,6 +311,28 @@ def build_report(rows: list[dict[str, Any]]) -> str:
         _top_table(count_reasons(rows, "engine_a_fail_reasons")),
         "### Engine B",
         _top_table(count_reasons(rows, "engine_b_fail_reasons")),
+        "## Engine B Checklist Funnel",
+        f"Total scanned: {total}",
+        "### Structural Verdict Counts",
+        _top_table(Counter(r.get("engine_b_structural_verdict") or "not_evaluated" for r in rows)),
+        "### Raw Score Distribution",
+        f"`{b_dist}`",
+        "### Confidence Passed Counts",
+        _top_table(Counter(str(r.get("engine_b_confidence_passed")) for r in rows)),
+        "### Checklist Fail Counts",
+        _top_table(count_reasons(rows, "engine_b_fail_reasons"), limit=20),
+        "### Top 20 Closest To Passing Engine B",
+        _engine_b_closest(rows),
+        "### Top 20 structural_tp_too_close Diagnostics",
+        _engine_b_tp_rows(rows),
+        "### Top 20 no_trigger_pattern Diagnostics",
+        _engine_b_trigger_rows(rows),
+        "### Top 20 d1_pd_array_conflict Diagnostics",
+        _engine_b_d1_rows(rows),
+        "### Engine B Shadow Behaviour Simulation",
+        _engine_b_shadow_summary(rows),
+        "### Recommended First Fix",
+        _recommendation(rows),
         "### Engine C",
         _top_table(Counter(r.get("engine_c_block_watchlist_reason") or "none" for r in rows)),
         "### Risk/Freshness",

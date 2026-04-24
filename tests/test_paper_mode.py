@@ -302,7 +302,7 @@ def test_paper_mode_prevents_broker_order_call():
         assert False, "Real orders should not be allowed in paper mode"
 
 
-def test_paper_mode_still_runs_risk_check():
+def test_paper_mode_still_runs_risk_check(temp_log_dir: Path):
     """Test that paper mode still runs risk check (doesn't bypass)."""
     config = {
         "PAPER_SOAK": {
@@ -312,6 +312,8 @@ def test_paper_mode_still_runs_risk_check():
         }
     }
     enforcer = PaperModeEnforcer(config)
+    enforcer.log_dir = temp_log_dir
+    enforcer._init_log_files()
     
     # Paper mode should still require freshness gate
     assert enforcer.requires_freshness_gate()
