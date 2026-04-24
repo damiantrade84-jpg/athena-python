@@ -1747,7 +1747,7 @@ class NakedEngine:
                         _adx_val = 0.0
                     _forex_adx_gate = _adx_val >= _forex_adx_min
                 else:
-                    _forex_adx_gate = False
+                    _forex_adx_gate = True  # no ADX data available — don't block
 
         _diag_codes: list[str] = []
         if not _forex_adx_gate:
