@@ -11,7 +11,7 @@
 # All would-be executions must be logged as paper/demo decisions.
 
 PAPER_SOAK:
-  ENABLED: false
+  ENABLED: true
   REAL_ORDERS_ALLOWED: false
   LOG_ALL_SIGNALS: true
   LOG_BLOCKED_SIGNALS: true
@@ -1461,7 +1461,7 @@ NAKED_ENGINE:
 
     intraday:
 
-      min_score: 4.0
+      min_score: 3.0
 
       min_rr: 1.5
 
