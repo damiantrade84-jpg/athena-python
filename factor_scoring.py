@@ -193,7 +193,10 @@ def _coherent_trend_score(
     dominant_w = long_w if dominant_sign > 0 else short_w
     coherence_ratio = max(0.5, min(1.0, dominant_w / total_w))
     agreement_count = sum(1 for _, d, _ in votes if d == dominant_sign)
-    magnitude = (0.35 + 0.65 * coherence_ratio) * 3.0
+    # Scale by TF coverage so a single available TF cannot produce a full 3.0 score.
+    # D1 only → max 1.0; D1+H4 → max 2.0; all three → max 3.0.
+    _tf_coverage = len(votes) / 3.0
+    magnitude = (0.35 + 0.65 * coherence_ratio) * 3.0 * _tf_coverage
     trend_score = dominant_sign * magnitude
     direction = "LONG" if dominant_sign > 0 else "SHORT"
 
@@ -201,6 +204,7 @@ def _coherent_trend_score(
         "agreement_count": agreement_count,
         "total_count": len(votes),
         "coherence_ratio": round(coherence_ratio, 4),
+        "tf_coverage": round(_tf_coverage, 4),
         "dominant_direction": direction,
         "weighted_balance": round((long_w - short_w) / total_w, 4),
     })
@@ -233,7 +237,9 @@ def _momentum_quality(
     ob = float(rsi_bounds.get("ob", 70))
     os_ = float(rsi_bounds.get("os", 30))
 
-    # RSI score
+    # RSI score — graded by 50-midline so only RSI above 50 (LONG) or below 50 (SHORT)
+    # counts as confirming.  RSI on the wrong side of 50 is weak/non-confirming.
+    # The original os_-to-ob flat +0.50 treated RSI=35 the same as RSI=65 on a LONG.
     rsi_score = 0.0
     rsi = h4_snap.get("rsi")
     if rsi is not None:
@@ -241,14 +247,21 @@ def _momentum_quality(
             rsi = float(rsi)
             if is_long:
                 if rsi >= ob:
-                    rsi_score = -0.25  # overbought = overextended long entry
-                elif os_ <= rsi < ob:
-                    rsi_score = 0.50   # confirming bullish zone
+                    rsi_score = -0.25  # overbought — late entry risk
+                elif rsi >= 50:
+                    rsi_score = 0.50   # above midline — momentum confirming LONG
+                elif rsi >= os_:
+                    rsi_score = 0.10   # below midline — trend not yet in momentum
+                # rsi < os_: oversold on LONG is a reversal zone — Engine B handles structure;
+                # leave rsi_score = 0.0 (neutral) here rather than double-counting
             else:
                 if rsi <= os_:
-                    rsi_score = -0.25  # oversold = overextended short entry
-                elif os_ < rsi <= ob:
-                    rsi_score = 0.50   # confirming bearish zone
+                    rsi_score = -0.25  # oversold — late short entry risk
+                elif rsi <= 50:
+                    rsi_score = 0.50   # below midline — momentum confirming SHORT
+                elif rsi <= ob:
+                    rsi_score = 0.10   # above midline — weak short confirmation
+                # rsi > ob: overbought on SHORT is reversal zone — leave neutral
         except (TypeError, ValueError):
             pass
 
@@ -394,11 +407,39 @@ def _funding_addon(funding_rate: Optional[float], direction: str) -> float:
         return _ADDON_NEUTRAL
 
 
+def _oi_addon(oi_context: dict, direction: str) -> float:
+    """Open-interest divergence addon for crypto. Returns _ADDON_* constant.
+
+    OI rising + price rising  → momentum confirmed (bullish)
+    OI rising + price falling → shorts adding (bearish confirmed)
+    OI falling + price rising → short covering only, not smart money (less conviction)
+    OI falling + price falling → longs capitulating (bearish confirmed)
+    """
+    try:
+        oi_chg = float(oi_context["oi_change_pct"])
+        px_chg = float(oi_context["price_change_pct"])
+        if abs(oi_chg) < 0.5:
+            return _ADDON_NEUTRAL  # OI change too small to be meaningful
+        is_long = direction == "LONG"
+        if is_long and oi_chg > 0 and px_chg > 0:
+            return _ADDON_CONFIRM    # smart money adding longs
+        if is_long and oi_chg < 0 and px_chg < 0:
+            return _ADDON_AGAINST    # longs capitulating
+        if not is_long and oi_chg > 0 and px_chg < 0:
+            return _ADDON_CONFIRM    # shorts adding into falling price
+        if not is_long and oi_chg < 0 and px_chg > 0:
+            return _ADDON_AGAINST    # short covering only — not confirmed trend
+        return _ADDON_NEUTRAL
+    except (TypeError, ValueError, KeyError):
+        return _ADDON_NEUTRAL
+
+
 def _asset_addon(
     pair: dict,
     direction: str,
     funding_rate: Optional[float],
     bar_time: Optional[str],
+    oi_context: Optional[dict] = None,
 ) -> tuple:
     """Resolve the single asset-class-specific addon factor.
 
@@ -412,8 +453,17 @@ def _asset_addon(
         return val, "carry", "ok" if val != _ADDON_NEUTRAL else "neutral"
 
     if asset_type == "crypto":
-        val = _funding_addon(funding_rate, direction)
-        return val, "funding", "ok" if funding_rate is not None else "missing"
+        funding_val = _funding_addon(funding_rate, direction)
+        if oi_context is not None:
+            oi_val = _oi_addon(oi_context, direction)
+            # Funding is more real-time; OI is supporting signal (lower weight).
+            val = round(funding_val * 0.6 + oi_val * 0.4, 6)
+            val = max(_ADDON_AGAINST, min(_ADDON_CONFIRM, val))
+            status = "ok" if funding_rate is not None else "oi_only"
+        else:
+            val = funding_val
+            status = "ok" if funding_rate is not None else "missing"
+        return val, "funding+oi", status
 
     if asset_type == "commodity":
         val = _cot_addon(display, asset_type, direction, bar_time)
@@ -451,8 +501,9 @@ def _session_multiplier(bar_time: Optional[str], asset_type: str) -> float:
     if (7 <= h < 16) or (13 <= h < 21):
         return _core_mult
     # Shoulder zones: ±shoulder_h of core
-    shoulder_zones = list(range(7 - shoulder_h, 7)) + list(range(16, 16 + shoulder_h)) + \
-                     list(range(21, 21 + shoulder_h))
+    # Hour 16 is already inside the NY core window (13 <= h < 21) so including
+    # range(16, 16+shoulder_h) here is dead code — core check fires first.
+    shoulder_zones = list(range(7 - shoulder_h, 7)) + list(range(21, 21 + shoulder_h))
     if h in shoulder_zones:
         return shoulder_mult
     return soft_mult
@@ -520,7 +571,9 @@ def compute_factor_scores(
     mom_quality = _momentum_quality(h4_snap, direction, asset_type)
 
     # ── ADDON: Asset-specific secondary factor ────────────────────────────────
-    addon_val, addon_type, addon_status = _asset_addon(pair, direction, funding_rate, bar_time)
+    addon_val, addon_type, addon_status = _asset_addon(
+        pair, direction, funding_rate, bar_time, oi_context=oi_context
+    )
     feed_status["addon"] = f"{addon_type}:{addon_status}"
 
     # ── Session multiplier (forex only) ───────────────────────────────────────
@@ -545,7 +598,9 @@ def compute_factor_scores(
     conviction = max(0.0, min(1.0, conviction))
 
     # ── Regime detection (informational — not used for weight modification) ───
-    _bbw_pct = h4_snap.get("bbWidth_pct") or h4_snap.get("bb_width_pct")
+    _bbw_pct = h4_snap.get("bbWidth_pct")
+    if _bbw_pct is None:
+        _bbw_pct = h4_snap.get("bb_width_pct")
     regime_raw = detect_regime(h4_snap, asset_type, bb_width_pct=_bbw_pct).get("regime", "UNKNOWN")
     regime = _get_smoothed_regime(regime_context, pair_id, regime_raw)
 
@@ -628,7 +683,11 @@ def _zero_result(
         "direction": direction,
         "regime": regime,
         "factor_scores": {"trend": 0.0, "momentum": 0.0, "addon": 0.0},
-        "weights": {"trend": 1.0, "momentum": _MOMENTUM_WEIGHT_DEFAULT, "addon": _ADDON_WEIGHT_DEFAULT},
+        "weights": {
+            "trend": 1.0,
+            "momentum": float(CONFIG.get("FACTOR_MOMENTUM_WEIGHT", _MOMENTUM_WEIGHT_DEFAULT)),
+            "addon": float(CONFIG.get("FACTOR_ADDON_WEIGHT", _ADDON_WEIGHT_DEFAULT)),
+        },
         "trend_coherence": trend_detail,
         "directional_score": 0.0,
         "nondirectional_score": 0.0,
