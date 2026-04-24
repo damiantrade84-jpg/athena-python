@@ -207,6 +207,7 @@ def compute_fixed_range_volume_profile(
         "session_low": None,
         "session_start": None,
         "session_end": None,
+        "volume_source": "unknown",
     }
     if not session_candles:
         return out
@@ -237,7 +238,8 @@ def compute_fixed_range_volume_profile(
 
     out["session_high"] = max(highs)
     out["session_low"] = min(lows)
-    if total_input_volume <= 0:
+    used_range_proxy = total_input_volume <= 0
+    if used_range_proxy:
         # Fallback: use candle range as proxy volume (equal-weighted VP).
         # Forex / index MT5 data often has zero tick_volume on historical bars.
         log.debug("volume_profile: zero tick volume — using range proxy for VP")
@@ -262,6 +264,7 @@ def compute_fixed_range_volume_profile(
             "profile_valid": True,
             "total_volume": round(total_input_volume, 4),
             "bin_count": 1,
+            "volume_source": "range_proxy" if used_range_proxy else "candle_volume",
         })
         return out
 
@@ -338,6 +341,7 @@ def compute_fixed_range_volume_profile(
         "profile_valid": True,
         "total_volume": round(total_volume, 4),
         "bin_count": bins,
+        "volume_source": "range_proxy" if used_range_proxy else "candle_volume",
     })
     return out
 

@@ -183,7 +183,9 @@ def _mock_scalp_setup(monkeypatch, candles, tp1, tp2):
         "MIN_RR": 0.5,
         "TP2_ENABLED": (tp2 is not None),
         "BT_SCRATCH_ENABLED": False,
-        "SCALP_VP_LOOKBACK_BARS": 20
+        "SCALP_VP_LOOKBACK_BARS": 20,
+        "BIAS_TIMEFRAME": "M15",
+        "MIN_GRADE_AUTO_EXECUTE": "C",
     })
 
     monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda x: "EURUSD")
@@ -193,8 +195,8 @@ def _mock_scalp_setup(monkeypatch, candles, tp1, tp2):
     monkeypatch.setattr(volume_profile, "compute_fixed_range_volume_profile", lambda *args, **kwargs: {
         "profile_valid": True, "poc": tp1, "vah": 105.0, "val": 100.0, "balance_ratio": 0.5
     })
-    monkeypatch.setattr(indicators, "detect_absorption", lambda *args, **kwargs: [{"absorbed": (i==100), "direction": "bullish"} for i in range(len(candles))])
-    monkeypatch.setattr(indicators, "calc_cvd", lambda *args, **kwargs: {"smoothed_delta": [0]*len(candles)})
+    monkeypatch.setattr(indicators, "detect_absorption", lambda c, *args, **kwargs: [{"absorbed": i >= len(c) - 5, "direction": "bullish"} for i in range(len(c))])
+    monkeypatch.setattr(indicators, "calc_cvd", lambda c, *args, **kwargs: {"smoothed_delta": list(range(len(c))), "cvd": list(range(len(c)))})
     monkeypatch.setattr(scalp_engine, "scalp_session_window", lambda *args, **kwargs: (True, "mock"))
     monkeypatch.setattr(scalp_engine, "_classify_market_state", lambda *args: "balance")
     monkeypatch.setattr(backtest_runner, "_format_backtest_results", lambda trades, *args, **kwargs: {"trades": trades, "summary": {}})

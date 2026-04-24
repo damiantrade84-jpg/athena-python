@@ -11034,11 +11034,12 @@ def _update_trade_outcome(
 
     # Check if exit_reason was already set (e.g., TIMED_CLOSE) before resolving
     existing_exit_reason = None
+    _ssi_row = None
     try:
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as _ssi_con:
             _ssi_con.row_factory = sqlite3.Row
             _ssi_row = _ssi_con.execute(
-                "SELECT exit_reason FROM audit_log WHERE ticket=? ORDER BY id DESC LIMIT 1",
+                "SELECT exit_reason, style, engine, score, max_score FROM audit_log WHERE ticket=? ORDER BY id DESC LIMIT 1",
                 (ticket,),
             ).fetchone()
             if _ssi_row:
@@ -11124,9 +11125,10 @@ def _update_trade_outcome(
 
     # existing_exit_reason already checked at top of function
 
+    _audit_outcome_updated = False
     try:
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
-            con.execute(
+            _audit_update_cur = con.execute(
                 "UPDATE audit_log SET exit_price=?, exit_time=?, pnl=?, r_multiple=?, "
                 "exit_reason=?, holding_period_hours=? WHERE ticket=? AND exit_price IS NULL",
                 (
@@ -11141,10 +11143,22 @@ def _update_trade_outcome(
             )
 
             con.commit()
+            _audit_outcome_updated = (_audit_update_cur.rowcount or 0) > 0 or con.total_changes > 0
 
         log.info(
             f"[MONITOR] Outcome logged: ticket={ticket} exit={exit_price} pnl={pnl} R={r_multiple} reason={exit_reason}"
         )
+
+        if _audit_outcome_updated and r_multiple is not None and _ssi_row:
+            try:
+                _row_engine = str(_ssi_row["engine"] or "").strip().lower()
+                _row_style = str(_ssi_row["style"] or "").strip().lower()
+                if _row_engine in ("scalp", "engine d", "scalp_vp") or _row_style == "scalp":
+                    from scalp_engine import record_scalp_trade_outcome
+
+                    record_scalp_trade_outcome(r_multiple)
+            except Exception as _scalp_outcome_err:
+                log.debug(f"[SCALP] session outcome record failed for ticket={ticket}: {_scalp_outcome_err}")
 
         # AI self-learning: extract outcome into learning_log
 

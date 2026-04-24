@@ -224,12 +224,43 @@ def test_check_absorption_fires_on_absorbing_bar():
     assert r["detected"] is True
 
 
+def test_check_absorption_ignores_old_primary_hits(monkeypatch):
+    rows = [{"absorbed": i == 10, "direction": "bullish"} for i in range(30)]
+    monkeypatch.setattr(indicators, "detect_absorption", lambda *args, **kwargs: rows)
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {**scalp_engine.CONFIG.get("SCALP_ENGINE", {}), "ABSORPTION_RECENT_BARS": 5},
+    )
+
+    r = _check_absorption(_candles(30))
+
+    assert r["detected"] is False
+    assert r["bars"] == []
+
+
 def test_check_cvd_returns_direction():
     candles = [{"open": 100, "high": 102, "low": 99.5, "close": 101.8, "vol": 1000}] * 20
     r = _check_cvd(candles)
     assert "direction" in r
     assert r["direction"] in ("LONG", "SHORT", None)
     assert "cvd_slope" in r
+
+
+def test_check_cvd_prefers_cumulative_cvd_slope(monkeypatch):
+    monkeypatch.setattr(
+        indicators,
+        "calc_cvd",
+        lambda candles, smooth_period=5: {
+            "cvd": [0, 1, 2, 3, 4, 10],
+            "smoothed_delta": [10, 9, 8, 7, 6, 0],
+        },
+    )
+
+    r = _check_cvd(_candles(10))
+
+    assert r["direction"] == "LONG"
+    assert r["cvd_slope"] == 10
 
 
 def test_check_aaa_sequence_no_absorption():
@@ -242,6 +273,31 @@ def test_check_aaa_sequence_no_absorption():
 # ═══════════════════════════════════════════════════════════════════════════════
 # 4. RISK LEVEL CALCULATION  (actual signature: direction, entry, vp, setup_type, sym_info, asset_type)
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def test_check_aaa_sequence_rejects_stale_absorption(monkeypatch):
+    monkeypatch.setattr(indicators, "detect_range_contraction", lambda *args, **kwargs: {"contracting": True})
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {**scalp_engine.CONFIG.get("SCALP_ENGINE", {}), "AAA_ABSORPTION_RECENT_BARS": 5},
+    )
+
+    r = _check_aaa_sequence(
+        _candles(30),
+        {"detected": True, "count": 1, "bars": [{"index": 0}]},
+        {"direction": "LONG"},
+    )
+
+    assert r["complete"] is False
+    assert r["phase"] == "stale_absorption"
+
+
+def test_fixed_range_vp_marks_range_proxy_source():
+    vp = compute_fixed_range_volume_profile(_candles(30, vol=0.0, spread=2.0))
+
+    assert vp["profile_valid"] is True
+    assert vp["volume_source"] == "range_proxy"
+
 
 def test_calculate_levels_long_sl_below_val():
     vp = {"poc": 1.1050, "vah": 1.1080, "val": 1.0970}
@@ -1072,6 +1128,7 @@ def test_run_scalp_scan_uses_m1_execution_tf(monkeypatch):
     assert sig.get("advisory_summary") == sig["advisory"]["summary"]
     assert sig.get("premarket_delta_cluster_type") == "proxy"
     assert isinstance(sig.get("premarket_delta_proxy_levels"), dict)
+    assert sig["premarket_delta_proxy_levels"].get("reason") == "stock_only"
     assert ("M1", True) in requested_tfs
 
 
@@ -1136,3 +1193,206 @@ def test_scalp_fetch_candles_crypto_m1_falls_back_when_ws_stale(monkeypatch):
         300,
     )
     assert out == routed
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 10. UNCOVERED FIXES (Engine D audit residuals)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_min_grade_a_blocks_b_and_below(monkeypatch):
+    """Grade gate must reject B/C/D when MIN_GRADE is set to A."""
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "MIN_GRADE": "A",
+        },
+    )
+    monkeypatch.setattr(scalp_engine, "get_current_sessions", lambda: ["london"])
+    monkeypatch.setattr(scalp_engine, "is_valid_session", lambda asset="forex": (True, "london"))
+    monkeypatch.setattr(scalp_engine, "scalp_session_window", lambda *args, **kwargs: (True, "london"))
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")
+    monkeypatch.setattr(scalp_engine, "mt5_market_open_state", lambda symbol: {"open": True, "reason": "market_open"})
+    monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda display: {"digits": 5, "point": 0.00001, "spread": 10})
+    monkeypatch.setattr(scalp_engine, "check_spread", lambda sym_info, asset_type: (True, 1.0))
+    monkeypatch.setattr(scalp_engine, "mt5_fetch_scalp_candles", lambda *args, **kwargs: _candles(300))
+    monkeypatch.setattr(scalp_engine, "mt5_get_live_price", lambda symbol: 100.0)
+    monkeypatch.setattr(scalp_engine, "_build_volume_profile", lambda candles: {"valid": True, "poc": 100.0, "vah": 101.0, "val": 99.0})
+    monkeypatch.setattr(scalp_engine, "_classify_market_state", lambda vp: "balance")
+    monkeypatch.setattr(scalp_engine, "_locate_price_vs_vp", lambda price, vp: {"location": "at_val", "nearest_level": 99.0, "distance_pct": 0.0})
+    monkeypatch.setattr(scalp_engine, "_check_absorption", lambda candles: {"detected": True, "count": 1, "bars": [{}]})
+    monkeypatch.setattr(scalp_engine, "_check_cvd", lambda candles: {"direction": "LONG", "cvd_slope": 1.0})
+    monkeypatch.setattr(scalp_engine, "_check_aaa_sequence", lambda candles, absorption, cvd: {"complete": False, "phase": "absorption_only"})
+    monkeypatch.setattr(scalp_engine, "_check_vwap_lean", lambda candles, price: {"lean": "LONG", "vwap_value": 100.0})
+    monkeypatch.setattr(scalp_engine, "_classify_setup", lambda *args, **kwargs: {"valid": True, "direction": "LONG", "setup_type": "mean_reversion", "reasons": []})
+    monkeypatch.setattr(scalp_engine, "calculate_scalp_levels", lambda *args, **kwargs: {"entry": 100.0, "sl": 99.0, "tp_partial": 101.0, "tp1": 102.0, "tp2": 103.0, "rr": 2.0, "sl_distance": 1.0, "sl_method": "vp_boundary"})
+    monkeypatch.setattr(scalp_engine, "ai_quality_grade", lambda *args, **kwargs: {"score": 75, "grade": "B", "reasons": [], "size_multiplier": 0.5})
+    monkeypatch.setattr(scalp_engine, "record_signal_event", lambda **kwargs: None)
+
+    result = scalp_engine.run_scalp_scan(["EUR/USD"])
+    assert result["signals"] == []
+    assert result["skipped"][0]["reason"] == "grade_B_below_min"
+    assert result["skipped"][0]["ai_grade"] == "B"
+
+
+def test_mt5_market_open_state_time_msc_milliseconds(monkeypatch):
+    """time_msc is milliseconds since epoch, not seconds."""
+    now = datetime(2026, 4, 14, 12, 0, tzinfo=timezone.utc)
+    # time_msc = 12:00:00 UTC in milliseconds
+    time_msec = int(now.timestamp() * 1000)
+    stale_msec = int((now - timedelta(minutes=20)).timestamp() * 1000)
+
+    fake_tick = types.SimpleNamespace(
+        bid=1.2345,
+        ask=1.2347,
+        last=1.2346,
+        time_msc=stale_msec,
+    )
+    fake_mt5 = types.SimpleNamespace(
+        SYMBOL_TRADE_MODE_DISABLED=0,
+        symbol_select=lambda s, e: True,
+        symbol_info=lambda s: types.SimpleNamespace(trade_mode=1),
+        symbol_info_tick=lambda s: fake_tick,
+    )
+    monkeypatch.setitem(sys.modules, "MetaTrader5", fake_mt5)
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(scalp_engine, "_current_utc_datetime", lambda: now)
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "MARKET_OPEN_CHECK_ENABLED": True,
+            "MARKET_TICK_MAX_AGE_SEC": 900,
+        },
+    )
+
+    state = scalp_engine.mt5_market_open_state("EURUSD")
+    assert state["open"] is False
+    assert state["reason"] == "MARKET_CLOSED_STALE_TICK"
+    assert abs(state["age_sec"] - 1200) <= 1
+
+    # Fresh tick (within max_age)
+    fresh_tick = types.SimpleNamespace(
+        bid=1.2345,
+        ask=1.2347,
+        last=1.2346,
+        time_msc=time_msec,
+    )
+    fake_mt5.symbol_info_tick = lambda s: fresh_tick
+    state2 = scalp_engine.mt5_market_open_state("EURUSD")
+    assert state2["open"] is True
+
+
+def test_run_scalp_scan_no_duplicate_skips_on_mt5_disconnect(monkeypatch):
+    """When MT5 is disconnected, each MT5 pair must appear in skipped exactly once."""
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "SESSION_FILTER": True,
+            "SESSION_MODE": "all",
+        },
+    )
+    monkeypatch.setattr(scalp_engine, "get_current_sessions", lambda: ["london"])
+    monkeypatch.setattr(scalp_engine, "scalp_session_window", lambda *args, **kwargs: (True, "all"))
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: False)
+    monkeypatch.setattr(scalp_engine, "record_signal_event", lambda **kwargs: None)
+
+    result = scalp_engine.run_scalp_scan(["EUR/USD", "GBP/USD"])
+
+    assert result["signals"] == []
+    skipped_pairs = [s["pair"] for s in result["skipped"]]
+    assert skipped_pairs.count("EUR/USD") == 1
+    assert skipped_pairs.count("GBP/USD") == 1
+    assert all(s["reason"] == "MT5_NOT_CONNECTED" for s in result["skipped"])
+
+
+def test_check_aaa_sequence_no_false_aggression_on_doji():
+    """A doji previous bar must not collapse the aggression body threshold to ~0."""
+    # Build candles: absorption hit on bar 28, then doji prev bar, then breakout
+    candles = _candles(30, vol=100, spread=2.0)
+    # bar 28 is the "previous" bar — make it a doji
+    candles[28] = {
+        "time": "T28",
+        "open": 100.0,
+        "high": 100.0,
+        "low": 100.0,
+        "close": 100.0,
+        "vol": 100.0,
+    }
+    # bar 29 is the breakout — small body, high volume
+    candles[29] = {
+        "time": "T29",
+        "open": 100.0,
+        "high": 100.01,
+        "low": 99.99,
+        "close": 100.005,
+        "vol": 500.0,
+    }
+    absorption = {"detected": True, "count": 1, "bars": [{"index": 25}]}
+    cvd = {"direction": "LONG"}
+
+    result = scalp_engine._check_aaa_sequence(candles, absorption, cvd)
+    # Because prev_range is a doji (0), the old code would set prev_range = 1e-10
+    # and body > 0.8e-10 would be true, causing false aggression.
+    # With the fix, prev_range is clamped to a meaningful minimum based on price,
+    # so the tiny body should NOT exceed 0.8 * meaningful_range.
+    assert result["complete"] is False
+
+
+def test_calculate_levels_trend_continuation_uses_config_fallback(monkeypatch):
+    """Trend-continuation SL fallback should respect config override."""
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "TREND_CONT_SL_FALLBACK_PCT": 0.005,
+        },
+    )
+    vp = {"poc": 1.1020, "vah": 1.1080, "val": 1.0970}
+    # Entry below POC → fallback SL = entry - entry * 0.005
+    levels = scalp_engine.calculate_scalp_levels(
+        "LONG", 1.1000, vp, "trend_continuation",
+        {"digits": 5, "point": 0.00001}, "forex"
+    )
+    expected_sl = round(1.1000 - (1.1000 * 0.005), 5)
+    assert levels["sl"] == expected_sl
+
+
+def test_grade_spread_penalty_per_asset_type(monkeypatch):
+    """Spread penalty should use asset-type-specific max spread config."""
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "MAX_SPREAD_PIPS": {"forex": 4, "commodity": 30},
+        },
+    )
+    vp = {"poc": 1.1030, "vah": 1.1060, "val": 1.0970, "lvn_levels": [], "balance_ratio": 0.5}
+    price_loc = {"location": "at_vah", "nearest_level": 1.1060, "distance_pct": 0.0}
+    absorption = {"detected": True, "count": 1}
+    cvd = {"direction": "SHORT"}
+    aaa = {"complete": False, "phase": "absorption_only"}
+    vwap = {"lean": None}
+    setup = {"direction": "SHORT", "setup_type": "mean_reversion"}
+
+    # Forex with 25 "pips" — should be penalized as wide (max=4, 0.8*4=3.2)
+    q_forex = scalp_engine.ai_quality_grade(
+        vp, price_loc, absorption, cvd, aaa, vwap, setup,
+        ["london"], 25.0, "SHORT", asset_type="forex"
+    )
+    assert any("Wide spread" in r for r in q_forex["reasons"])
+
+    # Commodity with 10 raw points — should get a BONUS (max=30, 0.5*30=15)
+    # because the same 10 points would be wide for forex but tight for commodity.
+    q_comm = scalp_engine.ai_quality_grade(
+        vp, price_loc, absorption, cvd, aaa, vwap, setup,
+        ["london"], 10.0, "SHORT", asset_type="commodity"
+    )
+    assert any("Tight spread" in r for r in q_comm["reasons"])

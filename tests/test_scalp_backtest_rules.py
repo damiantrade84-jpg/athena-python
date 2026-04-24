@@ -56,6 +56,8 @@ def test_backtest_pair_scalp_uses_stable_m15_execution_proxy(monkeypatch):
             "BT_SCRATCH_MIN_R": 0.10,
             "BT_WALK_BARS": 6,
             "MIN_RR": 2.0,
+            "BIAS_TIMEFRAME": "M15",
+            "MIN_GRADE_AUTO_EXECUTE": "C",
         },
     )
     monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")
@@ -108,6 +110,69 @@ def test_backtest_pair_scalp_uses_stable_m15_execution_proxy(monkeypatch):
     assert trade["exit_bar_index"] - trade["entry_bar_index"] == 3
 
 
+def test_backtest_pair_scalp_uses_h1_bias_context_when_configured(monkeypatch):
+    candles_m15 = _timed_candles(840, 15)
+    captured = []
+    monkeypatch.setitem(
+        backtest_runner.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **backtest_runner.CONFIG.get("SCALP_ENGINE", {}),
+            "BT_ENABLED": True,
+            "BT_SESSION_MODE": "all",
+            "BT_SCRATCH_ENABLED": True,
+            "BT_SCRATCH_BARS": 1,
+            "BT_WALK_BARS": 2,
+            "MIN_RR": 1.0,
+            "BIAS_TIMEFRAME": "H1",
+        },
+    )
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")
+    monkeypatch.setattr(scalp_engine, "mt5_fetch_scalp_candles", lambda *args, **kwargs: candles_m15)
+    monkeypatch.setattr(backtest_runner, "calc_atr", lambda highs, lows, closes, period: [1.0] * len(closes))
+    monkeypatch.setattr(
+        indicators,
+        "detect_absorption",
+        lambda candles, vol_mult, max_move_atr, sma_period: [{"absorbed": True, "direction": "bullish"} for _ in candles],
+    )
+    monkeypatch.setattr(
+        indicators,
+        "calc_cvd",
+        lambda candles, smooth_period=5: {"smoothed_delta": list(range(len(candles))), "cvd": list(range(len(candles)))},
+    )
+    monkeypatch.setattr(
+        volume_profile,
+        "compute_fixed_range_volume_profile",
+        lambda candles, bins=64, value_area_pct=0.70: {
+            "profile_valid": True,
+            "poc": 101.0,
+            "vah": 102.0,
+            "val": 100.0,
+            "session_high": 102.0,
+            "session_low": 99.0,
+            "volume_source": "candle_volume",
+        },
+    )
+    monkeypatch.setattr(scalp_engine, "infer_bias_from_ema_stack", lambda candles: captured.append(candles) or "LONG")
+    monkeypatch.setattr(
+        backtest_runner,
+        "_format_backtest_results",
+        lambda trades, pair, engine_type, same_bar_both_hit, validation_mode: {
+            "totalTrades": len(trades),
+            "trades": trades,
+            "wfSplit": {},
+        },
+    )
+    monkeypatch.setattr(backtest_runner, "_rt", lambda: types.SimpleNamespace(AUDIT_DB=":memory:"))
+
+    result = backtest_runner.backtest_pair_scalp({"display": "EUR/USD", "type": "forex"})
+
+    assert result["trades"]
+    assert captured
+    assert len(captured[0]) == 200
+    assert captured[0][1]["_close_dt"] - captured[0][0]["_close_dt"] == timedelta(hours=1)
+
+
 def test_backtest_pair_scalp_scratches_when_no_follow_through(monkeypatch):
     candles = _m15_candles(120)
     monkeypatch.setitem(
@@ -123,6 +188,8 @@ def test_backtest_pair_scalp_scratches_when_no_follow_through(monkeypatch):
             "BT_SCRATCH_MIN_R": 0.10,
             "BT_WALK_BARS": 6,
             "MIN_RR": 2.0,
+            "BIAS_TIMEFRAME": "M15",
+            "MIN_GRADE_AUTO_EXECUTE": "C",
         },
     )
     monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")
@@ -181,6 +248,8 @@ def test_backtest_pair_scalp_scratch_clock_2_vs_3_bars(monkeypatch, scratch_bars
             "BT_SCRATCH_MIN_R": 0.10,
             "BT_WALK_BARS": 6,
             "MIN_RR": 2.0,
+            "BIAS_TIMEFRAME": "M15",
+            "MIN_GRADE_AUTO_EXECUTE": "C",
         },
     )
     monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")

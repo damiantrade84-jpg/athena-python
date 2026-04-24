@@ -4766,6 +4766,38 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     # Normalize candles to ensure float types and attach optional bar timestamps.
     candles = _normalize_bt_candles(m15_raw, 15)
 
+    def _resample_closed_m15_context(context: list, tf: str) -> list:
+        tf_norm = str(tf or "M15").upper()
+        factor_map = {"M15": 1, "H1": 4, "H4": 16}
+        factor = factor_map.get(tf_norm)
+        if factor is None:
+            log.warning("[SCALP-BT] Unsupported BIAS_TIMEFRAME=%s; falling back to M15 bias", tf_norm)
+            factor = 1
+        if factor <= 1:
+            return context
+        closed_len = (len(context) // factor) * factor
+        out = []
+        for start in range(0, closed_len, factor):
+            chunk = context[start:start + factor]
+            if len(chunk) < factor:
+                continue
+            first = chunk[0]
+            last = chunk[-1]
+            out.append({
+                "time": first.get("time"),
+                "open": first["open"],
+                "high": max(c["high"] for c in chunk),
+                "low": min(c["low"] for c in chunk),
+                "close": last["close"],
+                "vol": sum(float(c.get("vol", 0) or 0) for c in chunk),
+                "_seq": len(out),
+                "_dt": first.get("_dt"),
+                "_close_dt": last.get("_close_dt"),
+            })
+        return out
+
+    bias_tf = str(cfg.get("BIAS_TIMEFRAME", "H1")).upper()
+
     # ── Volume quality check ────────────────────────────────────────────────
     raw_vols = [c["vol"] for c in candles]
     nonzero_vols = [v for v in raw_vols if v > 0]
@@ -4834,7 +4866,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         if not vp.get("valid"):
             vp = _build_volume_profile(vp_window)
             if vp.get("valid"):
-                vp["volume_source"] = "candles"
+                vp.setdefault("volume_source", "candles")
         if not vp.get("valid") or vp.get("poc") is None:
             continue
 
@@ -4858,7 +4890,8 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             cvd["source"] = "candles"
         aaa = _check_aaa_sequence(exec_context, absorption, cvd) if cfg.get("AAA_ENABLED", True) else {"complete": False, "phase": "disabled"}
         vwap = _check_vwap_lean(context_for_vwap, current_price) if cfg.get("VWAP_ENABLED", True) else {"lean": None, "vwap_value": 0}
-        htf_bias = infer_bias_from_ema_stack(m15_context) if len(m15_context) >= 200 else None
+        bias_context = _resample_closed_m15_context(m15_context, bias_tf)
+        htf_bias = infer_bias_from_ema_stack(bias_context) if len(bias_context) >= 200 else None
         setup = _classify_setup(market_state, price_loc, absorption, cvd, aaa, vwap, htf_bias, asset_type=asset_type)
         if not setup.get("valid"):
             continue

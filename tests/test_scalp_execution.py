@@ -1,6 +1,8 @@
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+import sqlite3
 import sys
+import uuid
 
 import execution
 import scalp_engine
@@ -158,6 +160,97 @@ def test_scalp_execute_passes_size_multiplier_to_risk_engine(monkeypatch):
     data = resp.get_json()
     assert data["success"] is True
     assert captured["sizing_override"] == 0.25
+
+
+def _make_outcome_db(path, *, engine="scalp", style="scalp"):
+    with sqlite3.connect(path) as con:
+        con.execute(
+            """
+            CREATE TABLE audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket TEXT,
+                exit_reason TEXT,
+                style TEXT,
+                engine TEXT,
+                score REAL,
+                max_score REAL,
+                exit_price REAL,
+                exit_time TEXT,
+                pnl REAL,
+                r_multiple REAL,
+                holding_period_hours REAL
+            )
+            """
+        )
+        con.execute(
+            "INSERT INTO audit_log(ticket, style, engine, score, max_score) VALUES (?, ?, ?, ?, ?)",
+            ("T1", style, engine, 75.0, 100.0),
+        )
+        con.commit()
+
+
+def _local_test_db_path():
+    root = Path(__file__).resolve().parents[1] / ".pytest_local_tmp"
+    root.mkdir(exist_ok=True)
+    return root / f"audit_{uuid.uuid4().hex}.db"
+
+
+def test_update_trade_outcome_records_scalp_session_r(monkeypatch):
+    athena_module = _load_athena_module()
+    db_path = _local_test_db_path()
+    _make_outcome_db(db_path, engine="scalp", style="scalp")
+    calls = []
+
+    monkeypatch.setattr(athena_module, "_AUDIT_DB", str(db_path))
+    monkeypatch.setitem(athena_module.CONFIG, "LEARNING_ENABLED", False)
+    monkeypatch.setattr(athena_module, "record_outcome_event", lambda **kwargs: None)
+    monkeypatch.setattr(mt5_executor, "mt5_get_account", lambda: {"balance": 0.0})
+    monkeypatch.setattr(scalp_engine, "record_scalp_trade_outcome", lambda r: calls.append(r))
+
+    athena_module._update_trade_outcome(
+        ticket="T1",
+        exit_price=102.0,
+        exit_time="2026-04-24T10:00:00+00:00",
+        pnl=100.0,
+        entry_price=100.0,
+        sl=99.0,
+        tp=102.0,
+        volume=1.0,
+        entry_ts="2026-04-24T09:00:00+00:00",
+        risk_amount=50.0,
+        asset_type="forex",
+    )
+
+    assert calls == [2.0]
+
+
+def test_update_trade_outcome_skips_non_scalp_session_r(monkeypatch):
+    athena_module = _load_athena_module()
+    db_path = _local_test_db_path()
+    _make_outcome_db(db_path, engine="engine_a", style="intraday")
+    calls = []
+
+    monkeypatch.setattr(athena_module, "_AUDIT_DB", str(db_path))
+    monkeypatch.setitem(athena_module.CONFIG, "LEARNING_ENABLED", False)
+    monkeypatch.setattr(athena_module, "record_outcome_event", lambda **kwargs: None)
+    monkeypatch.setattr(mt5_executor, "mt5_get_account", lambda: {"balance": 0.0})
+    monkeypatch.setattr(scalp_engine, "record_scalp_trade_outcome", lambda r: calls.append(r))
+
+    athena_module._update_trade_outcome(
+        ticket="T1",
+        exit_price=102.0,
+        exit_time="2026-04-24T10:00:00+00:00",
+        pnl=100.0,
+        entry_price=100.0,
+        sl=99.0,
+        tp=102.0,
+        volume=1.0,
+        entry_ts="2026-04-24T09:00:00+00:00",
+        risk_amount=50.0,
+        asset_type="forex",
+    )
+
+    assert calls == []
 
 
 def test_scalp_execute_returns_fresh_skip_details(monkeypatch):

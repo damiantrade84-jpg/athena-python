@@ -24,6 +24,7 @@ All trades route through risk_engine.risk_check() before execution.
 
 import logging
 import math
+import threading
 import time as _time
 import pandas as pd
 from datetime import datetime, time, timezone
@@ -55,10 +56,11 @@ _session_state = {
     "net_r_today": 0.0,
     "size_cut_active": False,
 }
+_session_state_lock = threading.Lock()
 
 
-def _reset_session_state_if_new_day():
-    """Reset daily counters at UTC midnight."""
+def _reset_session_state_if_new_day_locked():
+    """Caller must hold _session_state_lock."""
     today = _current_utc_datetime().date()
     if _session_state["date"] != today:
         _session_state["date"] = today
@@ -68,28 +70,40 @@ def _reset_session_state_if_new_day():
         _session_state["size_cut_active"] = False
 
 
+def _reset_session_state_if_new_day():
+    """Reset daily counters at UTC midnight (thread-safe)."""
+    with _session_state_lock:
+        _reset_session_state_if_new_day_locked()
+
+
 def record_scalp_trade_outcome(r_multiple: float):
-    """Called after a scalp trade closes to update session risk state."""
-    _reset_session_state_if_new_day()
-    _session_state["net_r_today"] += r_multiple
-    if r_multiple <= 0:
-        _session_state["consecutive_losses"] += 1
-        _session_state["total_losses_today"] += 1
-    else:
-        _session_state["consecutive_losses"] = 0
-    # Recompute size cut from current net_r (not a one-way latch).
-    # Deactivates if subsequent losses bring net_r back below the 2R threshold.
+    """Called after a scalp trade closes to update session risk state (thread-safe)."""
+    try:
+        r_multiple = float(r_multiple)
+    except (TypeError, ValueError):
+        return
     cfg = CONFIG.get("SCALP_ENGINE", {})
-    if cfg.get("SIZE_CUT_AFTER_2R", True):
-        _session_state["size_cut_active"] = _session_state["net_r_today"] >= 2.0
-    else:
-        _session_state["size_cut_active"] = False
+    with _session_state_lock:
+        _reset_session_state_if_new_day_locked()
+        _session_state["net_r_today"] += r_multiple
+        if r_multiple <= 0:
+            _session_state["consecutive_losses"] += 1
+            _session_state["total_losses_today"] += 1
+        else:
+            _session_state["consecutive_losses"] = 0
+        # Recompute size cut from current net_r (not a one-way latch).
+        # Deactivates if subsequent losses bring net_r back below the 2R threshold.
+        if cfg.get("SIZE_CUT_AFTER_2R", True):
+            _session_state["size_cut_active"] = _session_state["net_r_today"] >= 2.0
+        else:
+            _session_state["size_cut_active"] = False
 
 
 def get_scalp_session_risk_state() -> dict:
-    """Return current session risk state for UI/logging."""
-    _reset_session_state_if_new_day()
-    return dict(_session_state)
+    """Return current session risk state for UI/logging (thread-safe snapshot)."""
+    with _session_state_lock:
+        _reset_session_state_if_new_day_locked()
+        return dict(_session_state)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -386,7 +400,10 @@ def mt5_market_open_state(mt5_symbol: str) -> dict:
             return {"open": False, "reason": "MARKET_CLOSED_NO_PRICE"}
 
         tick_time = _tick_value(tick, "time_msc", None)
-        if tick_time is None:
+        if tick_time is not None:
+            # time_msc is milliseconds since epoch; convert to seconds for datetime
+            tick_time = float(tick_time) / 1000.0
+        else:
             tick_time = _tick_value(tick, "time", None)
         tick_dt = _coerce_utc_datetime(tick_time)
         if tick_dt is not None:
@@ -963,12 +980,14 @@ def _check_absorption(candles: list) -> dict:
     vol_mult = float(cfg.get("ABSORPTION_VOL_MULT", cfg.get("ABS_VOL_MULT", 2.0)))
     max_move = float(cfg.get("ABSORPTION_MAX_MOVE_ATR", cfg.get("ABS_MAX_MOVE_ATR", 0.30)))
     sma_period = int(cfg.get("ABSORPTION_SMA_PERIOD", cfg.get("ABS_SMA_PERIOD", 20)))
+    recent_window = max(1, int(cfg.get("ABSORPTION_RECENT_BARS", 5)))
 
     try:
         from indicators import detect_absorption
         rows = detect_absorption(candles, vol_mult=vol_mult, max_move_atr=max_move, sma_period=sma_period)
         hits = []
-        for idx, row in enumerate(rows):
+        start_idx = max(0, len(rows) - recent_window)
+        for idx, row in enumerate(rows[start_idx:], start=start_idx):
             if row.get("absorbed"):
                 hits.append({"index": idx, **row})
         return {"detected": len(hits) > 0, "count": len(hits), "bars": hits}
@@ -988,7 +1007,7 @@ def _check_absorption(candles: list) -> dict:
     avg_atr = sum(atr_vals) / len(atr_vals) if atr_vals else 1
 
     hits = []
-    for i in range(-5, 0):
+    for i in range(-min(recent_window, len(candles)), 0):
         c = candles[i]
         vol = float(c.get("vol", 0) or 0)
         move = abs(c["close"] - c["open"])
@@ -1010,10 +1029,10 @@ def _check_cvd(candles: list) -> dict:
     try:
         from indicators import calc_cvd
         result = calc_cvd(candles, smooth_period=smooth_period)
-        smoothed = (result.get("smoothed_delta") or result.get("cvd") or []) if result else []
         cvd_raw = (result.get("cvd") or []) if result else []
-        if smoothed and len(smoothed) >= 6:
-            slope = smoothed[-1] - smoothed[-6]
+        slope_series = cvd_raw or ((result.get("smoothed_delta") or []) if result else [])
+        if slope_series and len(slope_series) >= 6:
+            slope = slope_series[-1] - slope_series[-6]
             direction = "LONG" if slope > 0 else "SHORT" if slope < 0 else None
             cvd_val = round(cvd_raw[-1], 2) if cvd_raw else 0
             return {"direction": direction, "cvd_value": cvd_val, "cvd_slope": round(slope, 4)}
@@ -1089,9 +1108,19 @@ def _check_aaa_sequence(candles: list, absorption: dict, cvd: dict) -> dict:
     lookback = int(cfg.get("AAA_ACCUMULATION_LOOKBACK", 10))
     contraction_threshold = float(cfg.get("AAA_CONTRACTION_THRESHOLD", 0.5))
     breakout_vol_mult = float(cfg.get("AAA_BREAKOUT_VOL_MULT", 1.5))
+    absorption_window = max(1, int(cfg.get("AAA_ABSORPTION_RECENT_BARS", lookback * 2)))
 
     if not absorption.get("detected"):
         return {"complete": False, "phase": "no_absorption"}
+    absorption_hits = absorption.get("bars") or []
+    latest_abs_idx = None
+    for hit in absorption_hits:
+        try:
+            latest_abs_idx = max(latest_abs_idx if latest_abs_idx is not None else -1, int(hit.get("index")))
+        except (TypeError, ValueError):
+            continue
+    if latest_abs_idx is not None and len(candles) - 1 - latest_abs_idx > absorption_window:
+        return {"complete": False, "phase": "stale_absorption"}
 
     # Accumulation: check range contraction
     try:
@@ -1122,7 +1151,10 @@ def _check_aaa_sequence(candles: list, absorption: dict, cvd: dict) -> dict:
     )
 
     body = abs(last["close"] - last["open"])
-    prev_range = prev["high"] - prev["low"] if prev["high"] > prev["low"] else 1e-10
+    prev_range = prev["high"] - prev["low"]
+    # Protect against doji prev bar collapsing the body threshold to near-zero
+    min_meaningful_range = max(prev["high"] * 1e-6, 1e-10)
+    prev_range = max(prev_range, min_meaningful_range)
 
     aggression = vol > avg_vol * breakout_vol_mult and body > prev_range * 0.8
 
@@ -1199,7 +1231,8 @@ def _classify_setup(
     Mean Reversion (balance market):
       - Price at VAH → SHORT toward POC
       - Price at VAL → LONG toward POC
-      - Requires absorption + CVD divergence (price at high, CVD falling → reversal)
+      - Needs at least one confirmation: absorption OR CVD agrees OR VWAP lean agrees
+      - CVD actively opposing the reversion direction is a hard veto
 
     Trend Continuation (imbalance market):
       - Price pulls back to LVN inside impulse → continue in trend direction
@@ -1483,12 +1516,13 @@ def calculate_scalp_levels(
             tp2 = (entry - va_width) if cfg.get("TP2_ENABLED", True) else None
 
     else:  # trend_continuation
+        _tc_fallback_pct = float(cfg.get("TREND_CONT_SL_FALLBACK_PCT", 0.003))
         if direction == "LONG":
-            sl = poc - buffer if poc < entry else entry - (entry * 0.003)
+            sl = poc - buffer if poc < entry else entry - (entry * _tc_fallback_pct)
             tp1 = vah
             tp2 = (vah + (vah - poc)) if cfg.get("TP2_ENABLED", True) else None
         else:
-            sl = poc + buffer if poc > entry else entry + (entry * 0.003)
+            sl = poc + buffer if poc > entry else entry + (entry * _tc_fallback_pct)
             tp1 = val
             tp2 = (val - (poc - val)) if cfg.get("TP2_ENABLED", True) else None
 
@@ -1571,6 +1605,7 @@ def ai_quality_grade(
     sessions: list,
     spread_pips: float,
     htf_bias: Optional[str],
+    asset_type: Optional[str] = None,
 ) -> dict:
     """Rule-based quality scoring (0–100). No API call — instant.
 
@@ -1646,7 +1681,7 @@ def ai_quality_grade(
         reasons.append(f"HTF EMA bias aligned ({htf_bias})")
 
     # ── Spread penalty (−5 to +5) ────────────────────────────────────────
-    max_sp = cfg.get("MAX_SPREAD_PIPS", {}).get("forex", 4)
+    max_sp = cfg.get("MAX_SPREAD_PIPS", {}).get(asset_type, cfg.get("MAX_SPREAD_PIPS", {}).get("forex", 4))
     if spread_pips > 0:
         if spread_pips <= max_sp * 0.5:
             score += 5
@@ -1917,10 +1952,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             log.debug(f"[SSI] Scalp sample skipped for {display}: {exc}")
 
     # Daily risk rules check
-    _reset_session_state_if_new_day()
+    _session_snapshot = get_scalp_session_risk_state()
     max_daily = int(cfg.get("MAX_DAILY_LOSSES", 3))
-    if cfg.get("MAX_DAILY_LOSSES") and _session_state["total_losses_today"] >= max_daily:
-        log.warning(f"[SCALP] Daily loss limit reached: {_session_state['total_losses_today']} losses")
+    if cfg.get("MAX_DAILY_LOSSES") and _session_snapshot["total_losses_today"] >= max_daily:
+        log.warning(f"[SCALP] Daily loss limit reached: {_session_snapshot['total_losses_today']} losses")
         return {
             "signals": [], "skipped": len(pairs_or_symbols), "scanned": 0,
             "session": "DAILY_LOSS_LIMIT", "reason": f"MAX_DAILY_LOSSES ({max_daily}) reached",
@@ -1944,14 +1979,18 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
     signals = []
     skipped = []
 
+    _already_skipped = set()
     mt5_pairs = [p for p in pairs_or_symbols if _guess_asset_type(p) != "crypto"]
     if not mt5_connect() and mt5_pairs:
         for display in mt5_pairs:
             _record_stability_sample(display, _guess_asset_type(display), False, reason="MT5_NOT_CONNECTED")
             skipped.append({"pair": display, "reason": "MT5_NOT_CONNECTED"})
+            _already_skipped.add(display)
         mt5_pairs = []
 
     for display in pairs_or_symbols:
+        if display in _already_skipped:
+            continue
         mt5_sym = None
         try:
             asset_type = _guess_asset_type(display)
@@ -2015,7 +2054,15 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
 
                 if use_bias:
                     candles_bias = _scalp_fetch_candles(pair_dict, bias_tf, h1_count)
-                    if candles_bias and len(candles_bias) >= 200:
+                    if not candles_bias or len(candles_bias) < 200:
+                        bias_require = bool(cfg.get("BIAS_REQUIRE_CONFIRMATION", True))
+                        if bias_require:
+                            _record_stability_sample(display, asset_type, False,
+                                                     reason="htf_bias_unavailable: insufficient bias bars for EMA stack")
+                            skipped.append({"pair": display, "reason": "htf_bias_unavailable: insufficient bias bars for EMA stack"})
+                            continue
+                        # else: allow trade without bias confirmation
+                    else:
                         fresh, stale_reason = _scalp_candles_fresh(candles_bias, bias_tf, "bias")
                         if not fresh:
                             _record_stability_sample(display, asset_type, False, reason=stale_reason)
@@ -2145,7 +2192,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     )
                 vp = _build_volume_profile(candles_m15[-vp_lookback:])
                 if vp.get("valid"):
-                    vp["volume_source"] = "candles"
+                    vp.setdefault("volume_source", "candles")
             if not vp.get("valid"):
                 _record_stability_sample(display, asset_type, False, reason=f"vp_invalid:{vp.get('reason', '?')}")
                 skipped.append({"pair": display, "reason": f"vp_invalid:{vp.get('reason', '?')}"})
@@ -2213,27 +2260,32 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 htf_bias=htf_bias,
             )
             proxy_cfg = CONFIG.get("SCALP_ENGINE", {})
-            premarket_delta_proxy_levels = _build_premarket_delta_proxy_levels(
-                candles_exec,
-                top_n=int(proxy_cfg.get("PREMARKET_DELTA_PROXY_TOP_LEVELS", 3)),
-                min_candles=int(proxy_cfg.get("PREMARKET_DELTA_PROXY_MIN_CANDLES", 10)),
-                bucket_size=float(sym_info.get("point") or 0.0) * 10.0 if sym_info else None,
-            )
+            if asset_type == "stock":
+                premarket_delta_proxy_levels = _build_premarket_delta_proxy_levels(
+                    candles_exec,
+                    top_n=int(proxy_cfg.get("PREMARKET_DELTA_PROXY_TOP_LEVELS", 3)),
+                    min_candles=int(proxy_cfg.get("PREMARKET_DELTA_PROXY_MIN_CANDLES", 10)),
+                    bucket_size=float(sym_info.get("point") or 0.0) * 10.0 if sym_info else None,
+                )
+            else:
+                premarket_delta_proxy_levels = {
+                    "label": "premarket_delta_proxy_levels",
+                    "valid": False,
+                    "reason": "stock_only",
+                    "levels": [],
+                }
 
             # Quality grade
             if cfg.get("AI_GRADING", True):
                 grade_sessions = get_grade_sessions_for_mode(asset_type)
-                quality = ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup, grade_sessions, spread_pips, htf_bias)
+                quality = ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup, grade_sessions, spread_pips, htf_bias, asset_type)
             else:
                 quality = {"score": 50, "grade": "C", "reasons": ["grading_disabled"], "size_multiplier": 1.0}
 
             # Grade gate
             grade = quality["grade"]
-            if min_grade == "C" and grade == "D":
-                _record_stability_sample(display, asset_type, False, reason=f"grade_D_skip")
-                skipped.append({"pair": display, "reason": "grade_D_skip"})
-                continue
-            if min_grade == "B" and grade in ("C", "D"):
+            _GRADE_RANK = {"A": 4, "B": 3, "C": 2, "D": 1}
+            if _GRADE_RANK.get(grade, 0) < _GRADE_RANK.get(min_grade, 2):
                 _record_stability_sample(display, asset_type, False, reason=f"grade_{grade}_below_min")
                 skipped.append({
                     "pair": display,
@@ -2291,7 +2343,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "vp_vah":          vp.get("vah"),
                 "vp_val":          vp.get("val"),
                 "vp_lvn_count":    len(vp.get("lvn_levels", [])),
-                "vp_volume_source": _vol_src_dominant,
+                "vp_volume_source": vp.get("volume_source", _vol_src_dominant),
                 "vp_bucket_count":  vp.get("bucket_count"),
                 "absorption_count": absorption.get("count", 0),
                 "cvd_direction":   cvd.get("direction"),
@@ -2312,11 +2364,13 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "maxScore":        1.0,
             }
             
-            # Apply consecutive-loss halving and +2R size cut
-            if cfg.get("CONSECUTIVE_LOSS_HALVE", True) and _session_state["consecutive_losses"] >= 2:
+            # Apply consecutive-loss halving and +2R size cap. The +2R rule caps
+            # size at 0.5x; it does not increase smaller grade-based sizes.
+            _risk_snapshot = get_scalp_session_risk_state()
+            if cfg.get("CONSECUTIVE_LOSS_HALVE", True) and _risk_snapshot["consecutive_losses"] >= 2:
                 signal["size_multiplier"] = signal.get("size_multiplier", 1.0) * 0.5
                 signal["ai_reasons"] = signal.get("ai_reasons", []) + ["size_halved:consecutive_losses"]
-            if _session_state.get("size_cut_active"):
+            if _risk_snapshot.get("size_cut_active"):
                 signal["size_multiplier"] = min(signal.get("size_multiplier", 1.0), 0.5)
                 signal["ai_reasons"] = signal.get("ai_reasons", []) + ["size_cut:+2R_reached"]
             
@@ -2326,7 +2380,9 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 score_norm=quality["score"] / 100.0,
                 feature_map={
                     "market_state": 1.0 if market_state == "balance" else 0.0,
-                    "location": price_loc.get("location", "unknown"),
+                    "location_at_value_edge": 1.0 if price_loc.get("location") in ("at_vah", "at_val") else 0.0,
+                    "location_at_lvn": 1.0 if price_loc.get("location") == "at_lvn" else 0.0,
+                    "location_outside_va": 1.0 if price_loc.get("location") == "outside_va" else 0.0,
                     "absorption": absorption.get("detected", False),
                     "cvd_aligned": cvd.get("direction") == direction,
                     "aaa_complete": aaa.get("complete", False),
