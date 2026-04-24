@@ -36,6 +36,15 @@ from stability_monitor import record_signal_event
 
 log = logging.getLogger("sentinel.scalp")
 
+# Engine D funnel diagnostics (report-only)
+try:
+    from scalp_audit import build_funnel_row, log_engine_d_funnel, shadow_proximity_simulations
+except Exception as _sa_err:
+    build_funnel_row = None  # type: ignore
+    log_engine_d_funnel = None  # type: ignore
+    shadow_proximity_simulations = None  # type: ignore
+    log.debug("[SCALP-AUDIT] scalp_audit import failed: %s", _sa_err)
+
 
 def _london_cash_open_utc_minute_of_day(when_utc: datetime | None = None) -> int:
     """UTC minute-of-day (0..1439) for 08:00 Europe/London on London's calendar day of ``when_utc``."""
@@ -1992,8 +2001,54 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
         if display in _already_skipped:
             continue
         mt5_sym = None
+        _funnel: dict[str, Any] = {
+            "symbol": display,
+            "asset_type": "",
+            "source": "",
+            "scalp_enabled": bool(cfg.get("enabled", True)),
+            "called": True,
+            "data_available": False,
+            "candle_timeframes_available": [],
+            "lower_tf_candle_count": None,
+            "latest_lower_tf_candle": None,
+            "freshness_status": "",
+            "spread": None,
+            "spread_ok": None,
+            "atr": None,
+            "atr_ok": None,
+            "volume_available": None,
+            "volume_profile_available": None,
+            "poc": None,
+            "vah": None,
+            "val": None,
+            "lvn_count": None,
+            "price_near_poc": None,
+            "price_near_vah": None,
+            "price_near_val": None,
+            "cvd_available": None,
+            "cvd_bias": None,
+            "absorption_detected": None,
+            "vwap_available": None,
+            "vwap_bias": None,
+            "setup_type": None,
+            "setup_direction": None,
+            "setup_score": None,
+            "setup_grade": None,
+            "min_grade_required": min_grade,
+            "min_score_required": None,
+            "rr": None,
+            "rr_ok": None,
+            "entry": None,
+            "sl": None,
+            "tp": None,
+            "gate_result": "NOT_CALLED",
+            "fail_reasons": [],
+            "soft_warnings": [],
+            "diagnostic_notes": {},
+        }
         try:
             asset_type = _guess_asset_type(display)
+            _funnel["asset_type"] = asset_type
             session_ok, active_session = scalp_session_window(asset_type)
             if not session_ok:
                 reason = active_session if active_session == "NY_OPEN_COOLDOWN" else "OUTSIDE_SESSION"
@@ -2194,12 +2249,38 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 if vp.get("valid"):
                     vp.setdefault("volume_source", "candles")
             if not vp.get("valid"):
-                _record_stability_sample(display, asset_type, False, reason=f"vp_invalid:{vp.get('reason', '?')}")
-                skipped.append({"pair": display, "reason": f"vp_invalid:{vp.get('reason', '?')}"})
+                _vp_reason = f"vp_invalid:{vp.get('reason', '?')}"
+                _record_stability_sample(display, asset_type, False, reason=_vp_reason)
+                skipped.append({"pair": display, "reason": _vp_reason})
+                _funnel["gate_result"] = "NO_SETUP"
+                _funnel["fail_reasons"].append(_vp_reason)
                 continue
 
             market_state = _classify_market_state(vp)
             price_loc = _locate_price_vs_vp(current_price, vp)
+            _funnel["volume_profile_available"] = True
+            _funnel["poc"] = vp.get("poc")
+            _funnel["vah"] = vp.get("vah")
+            _funnel["val"] = vp.get("val")
+            _funnel["lvn_count"] = len(vp.get("lvn_levels", []))
+            _funnel["price_near_poc"] = price_loc.get("location") == "at_poc"
+            _funnel["price_near_vah"] = price_loc.get("location") == "at_vah"
+            _funnel["price_near_val"] = price_loc.get("location") == "at_val"
+
+            # Shadow proximity simulation (report-only)
+            if shadow_proximity_simulations is not None:
+                try:
+                    _atr_shadow = 0.0
+                    if candles_m15 and len(candles_m15) >= 20:
+                        _hh = max(float(c["high"]) for c in candles_m15[-20:])
+                        _ll = min(float(c["low"]) for c in candles_m15[-20:])
+                        _atr_shadow = (_hh - _ll) / 20.0
+                    _tick = float(sym_info.get("point", 1e-6)) if sym_info else 1e-6
+                    _funnel["diagnostic_notes"]["shadow_proximity"] = shadow_proximity_simulations(
+                        current_price, vp, _atr_shadow, tick_size=_tick
+                    )
+                except Exception as _sp_err:
+                    _funnel["diagnostic_notes"]["shadow_proximity_error"] = str(_sp_err)
 
             # Pillar 2: Aggression — absorption, CVD, AAA
             absorption = _check_absorption(candles_exec)
@@ -2219,19 +2300,26 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             # Setup classification
             setup = _classify_setup(market_state, price_loc, absorption, cvd, aaa, vwap, htf_bias, asset_type=asset_type)
             if not setup.get("valid"):
-                _record_stability_sample(display, asset_type, False,
-                                         reason=f"no_setup:{setup.get('reason', '?')}")
-                skipped.append({"pair": display, "reason": f"no_setup:{setup.get('reason', '?')}"})
+                _setup_reason = f"no_setup:{setup.get('reason', '?')}"
+                _record_stability_sample(display, asset_type, False, reason=_setup_reason)
+                skipped.append({"pair": display, "reason": _setup_reason})
+                _funnel["gate_result"] = "NO_SETUP"
+                _funnel["fail_reasons"].append(_setup_reason)
                 continue
 
             direction = setup["direction"]
+            _funnel["setup_type"] = setup.get("setup_type")
+            _funnel["setup_direction"] = direction
 
             # HTF bias filter
             if use_bias and htf_bias and direction != htf_bias:
+                _ct_reason = f"counter_trend:{direction}_vs_{bias_tf}_{htf_bias}"
                 _record_stability_sample(display, asset_type, False,
                                          feature_map={"bias_aligned": False},
-                                         reason=f"counter_trend:{direction}_vs_{bias_tf}_{htf_bias}")
-                skipped.append({"pair": display, "reason": f"counter_trend:{direction}_vs_{bias_tf}_{htf_bias}"})
+                                         reason=_ct_reason)
+                skipped.append({"pair": display, "reason": _ct_reason})
+                _funnel["gate_result"] = "BLOCKED"
+                _funnel["fail_reasons"].append(_ct_reason)
                 continue
 
             # Risk levels — use per-group min_rr if available (e.g. forex_majors/crosses)
@@ -2246,6 +2334,8 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 )
                 _record_stability_sample(display, asset_type, False, reason="rr_below_min")
                 skipped.append({"pair": display, "reason": "rr_below_min"})
+                _funnel["gate_result"] = "BLOCKED"
+                _funnel["fail_reasons"].append("rr_below_min")
                 continue
             advisory = _build_engine_d_advisory(
                 market_state=market_state,
@@ -2286,17 +2376,28 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             grade = quality["grade"]
             _GRADE_RANK = {"A": 4, "B": 3, "C": 2, "D": 1}
             if _GRADE_RANK.get(grade, 0) < _GRADE_RANK.get(min_grade, 2):
-                _record_stability_sample(display, asset_type, False, reason=f"grade_{grade}_below_min")
+                _grade_reason = f"grade_{grade}_below_min"
+                _record_stability_sample(display, asset_type, False, reason=_grade_reason)
                 skipped.append({
                     "pair": display,
-                    "reason": f"grade_{grade}_below_min",
+                    "reason": _grade_reason,
                     "ai_grade": grade,
                     "ai_score": quality.get("score"),
                     "min_grade": min_grade,
                     "size_multiplier": quality.get("size_multiplier"),
                     "ai_reasons": quality.get("reasons", []),
                 })
+                _funnel["gate_result"] = "BLOCKED"
+                _funnel["fail_reasons"].append(_grade_reason)
                 continue
+
+            _funnel["setup_score"] = quality.get("score")
+            _funnel["setup_grade"] = grade
+            _funnel["rr"] = levels.get("rr")
+            _funnel["rr_ok"] = not levels.get("rr_below_min", False)
+            _funnel["entry"] = levels.get("entry")
+            _funnel["sl"] = levels.get("sl")
+            _funnel["tp"] = levels.get("tp1")
 
             # ── Build signal dict (preserves keys required by athena.py) ─
             signal = {
@@ -2374,6 +2475,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 signal["size_multiplier"] = min(signal.get("size_multiplier", 1.0), 0.5)
                 signal["ai_reasons"] = signal.get("ai_reasons", []) + ["size_cut:+2R_reached"]
             
+            _funnel["gate_result"] = "PASS"
             signals.append(signal)
             _record_stability_sample(
                 display, asset_type, True,
@@ -2396,6 +2498,12 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             log.error(f"[SCALP] Error on {display}: {e}")
             _record_stability_sample(display, _guess_asset_type(display), False, reason=f"error:{str(e)[:60]}")
             skipped.append({"pair": display, "reason": f"error:{str(e)[:60]}"})
+        finally:
+            if log_engine_d_funnel is not None and build_funnel_row is not None:
+                try:
+                    log_engine_d_funnel(build_funnel_row(**_funnel))
+                except Exception as _f_err:
+                    log.debug("[SCALP-AUDIT] funnel log error: %s", _f_err)
 
     signals.sort(key=lambda s: s.get("ai_score", 0), reverse=True)
 

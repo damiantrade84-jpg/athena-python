@@ -34,12 +34,20 @@ def _get_active_pairs():
     Note: This CLI tool uses a hardcoded subset of common pairs to avoid
     complex import issues with athena.py. For full pair coverage, use the
     API endpoint /api/live-feed-diagnostics on the running Flask app.
+    
+    Symbol formats must match athena.py definitions (e.g., EURUSD=X for forex).
     """
     return [
         {"symbol": "EURUSD=X", "display": "EUR/USD", "type": "forex", "source": "mt5", "enabled": True},
         {"symbol": "GBPUSD=X", "display": "GBP/USD", "type": "forex", "source": "mt5", "enabled": True},
         {"symbol": "USDJPY=X", "display": "USD/JPY", "type": "forex", "source": "mt5", "enabled": True},
         {"symbol": "AUDUSD=X", "display": "AUD/USD", "type": "forex", "source": "mt5", "enabled": True},
+        {"symbol": "XAUUSD=X", "display": "XAU/USD", "type": "commodity", "source": "mt5", "enabled": True},
+        {"symbol": "XAGUSD=X", "display": "XAG/USD", "type": "commodity", "source": "mt5", "enabled": True},
+        {"symbol": "AAPL.US", "display": "AAPL", "type": "stock", "source": "mt5", "enabled": True},
+        {"symbol": "NVDA.US", "display": "NVDA", "type": "stock", "source": "mt5", "enabled": True},
+        {"symbol": "MSFT.US", "display": "MSFT", "type": "stock", "source": "mt5", "enabled": True},
+        {"symbol": "TSLA.US", "display": "TSLA", "type": "stock", "source": "mt5", "enabled": True},
         {"symbol": "BTCUSDT", "display": "BTCUSDT", "type": "crypto", "source": "binance", "enabled": True},
         {"symbol": "ETHUSDT", "display": "ETHUSDT", "type": "crypto", "source": "binance", "enabled": True},
     ]
@@ -205,7 +213,7 @@ def main():
             symbol = row.get("symbol", "UNKNOWN")
             tf = row.get("timeframe", "UNKNOWN")
             source = row.get("source", "UNKNOWN")
-            candle_count = row.get("candleCount", 0)
+            candle_count = row.get("candle_count", 0)
             last_bar_iso = row.get("lastBarIso", "N/A")
             staleness = row.get("stalenessSeverity", "unknown")
             provider_status = row.get("providerStatus", "unknown")

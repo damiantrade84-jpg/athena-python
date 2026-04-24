@@ -8210,18 +8210,31 @@ def api_scalp_scan():
         if not isinstance(pairs, list) or not pairs:
             pairs = get_scalp_pairs(ACTIVE_PAIRS)
 
+        diagnostic = bool(payload.get("diagnostic", False))
         result = run_scalp_scan(pairs)
         signals = [_scalp_ui_signal(s) for s in (result.get("signals", []) or [])]
+        skipped = result.get("skipped", []) or []
+
+        # In diagnostic mode, enrich skipped rows so UI can show why each failed
+        if diagnostic:
+            for row in skipped:
+                if isinstance(row, dict):
+                    row["_diagnostic"] = True
+                    row["gate_result"] = row.get("reason", "BLOCKED").split(":")[0]
+
         return jsonify(
             {
                 "signals": signals,
-                "skipped": result.get("skipped", []),
+                "skipped": skipped,
                 "scanned": result.get("scanned", len(pairs)),
                 "pairs": pairs,
                 "pair_count": len(pairs),
                 "session": result.get("session"),
                 "sessions_active": result.get("sessions_active", []),
                 "reason": result.get("reason"),
+                "diagnostic": diagnostic,
+                "pass_count": len(signals),
+                "skip_count": len(skipped),
             }
         )
     except Exception as e:
@@ -14485,11 +14498,16 @@ if __name__ == "__main__":
         log.warning(f"[BACKUP] Startup backup failed: {_bak_e}")
 
     # Start Telegram bot (two-way command centre)
-    try:
-        from telegram_bot import start_telegram_bot
-        start_telegram_bot()
-    except Exception as e:
-        log.warning(f"[TELEGRAM] Bot startup failed: {e}")
+    # Skip if ATHENA_DISABLE_TELEGRAM environment variable is set
+    import os as _os
+    if not _os.environ.get("ATHENA_DISABLE_TELEGRAM"):
+        try:
+            from telegram_bot import start_telegram_bot
+            start_telegram_bot()
+        except Exception as e:
+            log.warning(f"[TELEGRAM] Bot startup failed: {e}")
+    else:
+        log.info("[TELEGRAM] Bot disabled via ATHENA_DISABLE_TELEGRAM environment variable")
 
     # Clean Ctrl-C shutdown on Windows — daemon threads stop automatically
     import signal as _signal

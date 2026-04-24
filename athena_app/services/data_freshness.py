@@ -403,17 +403,6 @@ def evaluate_execution_data_freshness(
         elif code_norm:
             warnings.append(item)
 
-    for source_key in ("candleFreshness", "candleFetchMeta"):
-        meta = sig.get(source_key)
-        if not isinstance(meta, dict):
-            continue
-        for tf, diag in meta.items():
-            if not isinstance(diag, dict):
-                continue
-            severity = diag.get("stalenessSeverity")
-            if severity:
-                _add(tf, severity, source_key, diag)
-
     consistency = sig.get("candleConsistency")
     if isinstance(consistency, dict):
         for tf, diag in consistency.items():
@@ -424,6 +413,36 @@ def evaluate_execution_data_freshness(
                     _add(tf, status, "candleConsistency", diag)
             elif isinstance(diag, str) and diag not in ("OK", "CONFIRMED_ONLY_OK"):
                 _add(tf, diag, "candleConsistency", {})
+    
+    # Determine if any timeframe has CONFIRMED_ONLY_OK status
+    # This indicates the staleness is intentional policy lag, not true stale data
+    has_confirmed_only_ok = False
+    if isinstance(consistency, dict):
+        for tf, diag in consistency.items():
+            if isinstance(diag, dict):
+                status = diag.get("status")
+                if status == "CONFIRMED_ONLY_OK":
+                    has_confirmed_only_ok = True
+                    break
+            elif diag == "CONFIRMED_ONLY_OK":
+                has_confirmed_only_ok = True
+                break
+    
+    for source_key in ("candleFreshness", "candleFetchMeta"):
+        meta = sig.get(source_key)
+        if not isinstance(meta, dict):
+            continue
+        for tf, diag in meta.items():
+            if not isinstance(diag, dict):
+                continue
+            severity = diag.get("stalenessSeverity")
+            if severity:
+                # If this timeframe has CONFIRMED_ONLY_OK consistency, exclude stale_1_bucket (policy-expected lag)
+                # Otherwise, block on all severities as configured
+                if has_confirmed_only_ok and severity == "stale_1_bucket":
+                    # Skip blocking on stale_1_bucket when policy-aware status is CONFIRMED_ONLY_OK
+                    continue
+                _add(tf, severity, source_key, diag)
 
     allowed = not (bool(gate.get("BLOCK_EXECUTION_ON_STALE", True)) and blocked)
     reason = ""

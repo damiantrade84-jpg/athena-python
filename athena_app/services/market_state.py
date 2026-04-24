@@ -81,15 +81,33 @@ def _epoch_iso(epoch: int | None) -> str | None:
 
 
 def market_state_offset_hours(pair: dict[str, Any] | None, tf: str) -> float:
-    """Return the bucket offset for this pair/timeframe market-state split."""
+    """Return the bucket offset for this pair/timeframe market-state split.
+    
+    Offset rules:
+    - MT5 forex/metals/commodities/indices: 2h offset (02/06/10/14/18/22 UTC grid)
+    - MT5 stocks: 3h offset (15/19 UTC grid for US exchange session)
+    - Crypto (Binance): 0h offset (24/7 UTC grid)
+    """
     if str(tf or "").upper() != "H4":
         return 0.0
-    if not isinstance(pair, dict) or pair.get("type") != "forex":
+    if not isinstance(pair, dict):
         return 0.0
+    
+    source = pair.get("source", "").lower()
+    asset_type = pair.get("type", "").lower()
+    
+    if source != "mt5":
+        return 0.0
+    
+    # Stocks use US exchange session H4 grid (15/19 UTC = 3h offset)
+    if asset_type == "stock":
+        return 3.0
+    
+    # Forex, metals, commodities, indices use broker grid (2h offset)
     try:
-        return float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 0.0) or 0.0)
+        return float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 2.0) or 2.0)
     except (TypeError, ValueError):
-        return 0.0
+        return 2.0
 
 
 def split_market_state(
