@@ -146,11 +146,25 @@ def main():
                 state_a = get_tf_market_state(pair, tf_u, candles=candles or [])
                 state_b = engine_b_live_market_state(pair, tf_u, limit, candles=candles or [])
                 
-                engine_a_input = []
-                if isinstance(state_a, dict):
-                    engine_a_input = list(state_a.get("forming", [])) + list(state_a.get("confirmed", []))
+                # Simulate actual engine path policies:
+                # - Engine A: For non-MT5, uses confirmed+forming; for MT5 forex, uses confirmed-only
+                # - Engine B: Always uses confirmed-only (naked engine policy)
+                # - Scanner: Same as Engine B (confirmed-only)
+                # - Compare: Same as Engine B (confirmed-only)
+                
+                if pair.get("source") == "mt5" and pair.get("type") == "forex":
+                    # MT5 forex: confirmed-only for all engines
+                    engine_a_input = list(state_a.get("confirmed", [])) if isinstance(state_a, dict) else []
+                else:
+                    # Non-MT5: Engine A uses confirmed+forming
+                    engine_a_input = []
+                    if isinstance(state_a, dict):
+                        engine_a_input = list(state_a.get("forming", [])) + list(state_a.get("confirmed", []))
+                
+                # Engine B, scanner, compare always use confirmed-only
                 engine_b_input = list(state_b.get("confirmed", [])) if isinstance(state_b, dict) else []
-                scanner_input = list(engine_a_input)
+                scanner_input = list(state_b.get("confirmed", [])) if isinstance(state_b, dict) else []
+                compare_input = list(state_b.get("confirmed", [])) if isinstance(state_b, dict) else []
                 
                 diag["consistency"] = check_live_candle_consistency(
                     pair,
@@ -162,7 +176,7 @@ def main():
                         "engine_a": engine_a_input,
                         "engine_b": engine_b_input,
                         "scanner": scanner_input,
-                        "compare": scanner_input,
+                        "compare": compare_input,
                     },
                 )
             except Exception as e:

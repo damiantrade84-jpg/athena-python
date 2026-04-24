@@ -176,7 +176,15 @@ def check_live_candle_consistency(
     *,
     time_now: float | None = None,
 ) -> dict[str, Any]:
-    """Compare live candle state across provider/cache/engine/scanner paths."""
+    """Compare live candle state across provider/cache/engine/scanner paths.
+    
+    Candle policy classification:
+    - CONFIRMED_ONLY: Engine uses confirmed candles only (intentional one-bucket lag behind raw forming)
+    - FORMING_ALLOWED: Engine uses confirmed + forming candles
+    - RAW_CURRENT_REQUIRED: Engine must have current forming candle
+    """
+    from athena_app.services.market_state import _timeframe_seconds
+    
     tf = str(timeframe or "").upper()
     expected_offset = market_state_offset_hours(pair, tf)
     expected_bucket = (
@@ -184,6 +192,8 @@ def check_live_candle_consistency(
         if time_now is not None
         else None
     )
+    expected_confirmed_bucket = expected_bucket - _timeframe_seconds(tf) if expected_bucket else None
+    
     diagnostics = {
         name: _normalise_path(pair, tf, name, payload, time_now=time_now)
         for name, payload in (paths or {}).items()
@@ -215,25 +225,80 @@ def check_live_candle_consistency(
             "paths": diagnostics,
         }
 
-    engine_epochs = {
-        k: (v.get("confirmedLatestEpoch") if v.get("usesForming") else v.get("lastBarEpoch"))
-        for k, v in diagnostics.items()
-        if k in ("engine_a", "engine_b", "scanner", "compare")
-        and (v.get("confirmedLatestEpoch") if v.get("usesForming") else v.get("lastBarEpoch")) is not None
+    # Determine candle policy for each engine path
+    engine_paths = {}
+    for name in ("engine_a", "engine_b", "scanner", "compare"):
+        if name in diagnostics:
+            diag = diagnostics[name]
+            uses_forming = diag.get("usesForming", False)
+            bucket_lag = int(diag.get("bucketLag") or 0)
+            
+            # Determine policy based on pair type and source
+            if pair.get("source") == "mt5" and pair.get("type") == "forex":
+                # MT5 forex uses confirmed-only policy
+                policy = "CONFIRMED_ONLY"
+            elif name == "engine_b":
+                # Engine B (naked engine) uses confirmed-only policy for all pairs in scanner
+                policy = "CONFIRMED_ONLY"
+            elif uses_forming:
+                policy = "FORMING_ALLOWED"
+            else:
+                policy = "CONFIRMED_ONLY"
+            
+            engine_paths[name] = {
+                "policy": policy,
+                "usesForming": uses_forming,
+                "bucketLag": bucket_lag,
+                "lastBarEpoch": diag.get("lastBarEpoch"),
+                "confirmedLatestEpoch": diag.get("confirmedLatestEpoch"),
+                "formingEpoch": diag.get("formingEpoch"),
+            }
+
+    # Check for path mismatch in confirmed candles
+    confirmed_epochs = {
+        k: v.get("confirmedLatestEpoch")
+        for k, v in engine_paths.items()
+        if v.get("confirmedLatestEpoch") is not None
     }
-    if len(set(engine_epochs.values())) > 1:
+    if len(set(confirmed_epochs.values())) > 1:
         return {
             "status": "ERROR_PATH_MISMATCH",
-            "reason": f"path latest epochs differ: {engine_epochs}",
+            "reason": f"path confirmed epochs differ: {confirmed_epochs}",
             "paths": diagnostics,
+            "enginePolicies": engine_paths,
         }
 
-    if any(int(d.get("bucketLag") or 0) == 1 for d in diagnostics.values()):
-        return {
-            "status": "WARNING_ONE_BUCKET_LAG",
-            "reason": "one or more paths lag by one bucket",
-            "paths": diagnostics,
-        }
+    # Check for one-bucket lag - classify based on policy
+    has_one_bucket_lag = any(
+        int(d.get("bucketLag") or 0) == 1 for d in diagnostics.values()
+    )
+    
+    if has_one_bucket_lag:
+        # Check if all engine paths use CONFIRMED_ONLY policy
+        all_confirmed_only = all(
+            ep.get("policy") == "CONFIRMED_ONLY"
+            for ep in engine_paths.values()
+        )
+        
+        # Check if raw provider has current bucket
+        raw_has_current = diagnostics.get("raw_provider", {}).get("hasCurrentBucket", False)
+        
+        if all_confirmed_only and raw_has_current:
+            # This is intentional confirmed-only behavior
+            return {
+                "status": "CONFIRMED_ONLY_OK",
+                "reason": "engine paths use confirmed-only policy (intentional one-bucket lag behind raw forming)",
+                "paths": diagnostics,
+                "enginePolicies": engine_paths,
+            }
+        else:
+            # This is a true lag issue
+            return {
+                "status": "WARNING_ONE_BUCKET_LAG",
+                "reason": "one or more paths lag by one bucket",
+                "paths": diagnostics,
+                "enginePolicies": engine_paths,
+            }
 
     if any(
         d.get("usesForming")
@@ -244,9 +309,15 @@ def check_live_candle_consistency(
             "status": "WARNING_FORMING_USED",
             "reason": "one or more scoring paths include the forming bucket",
             "paths": diagnostics,
+            "enginePolicies": engine_paths,
         }
 
-    return {"status": "OK", "reason": "", "paths": diagnostics}
+    return {
+        "status": "OK",
+        "reason": "",
+        "paths": diagnostics,
+        "enginePolicies": engine_paths,
+    }
 
 
 def _gate_config(config: dict[str, Any] | None) -> dict[str, Any]:
@@ -303,9 +374,10 @@ def evaluate_execution_data_freshness(
         for tf, diag in consistency.items():
             if isinstance(diag, dict):
                 status = diag.get("status")
-                if status and status != "OK":
+                # CONFIRMED_ONLY_OK is not a blocking condition - it's intentional confirmed-only policy
+                if status and status not in ("OK", "CONFIRMED_ONLY_OK"):
                     _add(tf, status, "candleConsistency", diag)
-            elif isinstance(diag, str) and diag != "OK":
+            elif isinstance(diag, str) and diag not in ("OK", "CONFIRMED_ONLY_OK"):
                 _add(tf, diag, "candleConsistency", {})
 
     allowed = not (bool(gate.get("BLOCK_EXECUTION_ON_STALE", True)) and blocked)

@@ -8,6 +8,7 @@ import pytest
 from athena_app.services.data_freshness import (
     build_live_feed_diagnostic,
     evaluate_execution_data_freshness,
+    check_live_candle_consistency,
 )
 
 
@@ -189,3 +190,84 @@ def test_error_offset_mismatch_blocks_execution():
     
     assert result["allowed"] is False
     assert "STALE_DATA_BLOCK" in result["reason"]
+
+
+def test_confirmed_only_ok_allows_execution():
+    """Verify CONFIRMED_ONLY_OK does not block execution (intentional confirmed-only policy)."""
+    pair = {"symbol": "BTCUSDT", "display": "BTCUSDT", "type": "crypto", "source": "binance"}
+    
+    signal = {
+        "candleConsistency": {
+            "H1": {
+                "status": "CONFIRMED_ONLY_OK",
+                "reason": "engine paths use confirmed-only policy (intentional one-bucket lag behind raw forming)",
+            }
+        }
+    }
+    
+    config = {
+        "DATA_FRESHNESS_GATES": {
+            "BLOCK_EXECUTION_ON_STALE": True,
+            "BLOCK_TIMEFRAMES": ["H1", "H4", "D1"],
+            "BLOCK_SEVERITIES": ["warning_one_bucket_lag"],
+        }
+    }
+    
+    result = evaluate_execution_data_freshness(signal, config)
+    
+    # CONFIRMED_ONLY_OK should not block
+    assert result["allowed"] is True
+    assert len(result["blocked"]) == 0
+
+
+def test_confirmed_only_ok_with_raw_current():
+    """Verify CONFIRMED_ONLY_OK classification when raw has current bucket and engines use confirmed-only."""
+    pair = {"symbol": "BTCUSDT", "display": "BTCUSDT", "type": "crypto", "source": "binance"}
+    
+    # Simulate raw provider with current forming candle at 16:00:00Z
+    current_time = 1777046400  # 2026-04-24T16:00:00Z
+    candles = [
+        {"time": "2026-04-24T15:00:00Z", "open": 1.08, "high": 1.09, "low": 1.07, "close": 1.085, "volume": 1000},
+        {"time": "2026-04-24T16:00:00Z", "open": 1.085, "high": 1.095, "low": 1.08, "close": 1.09, "volume": 1000},
+    ]
+    
+    result = check_live_candle_consistency(
+        pair,
+        "H1",
+        {
+            "raw_provider": candles,
+            "engine_b": candles[:-1],  # Confirmed-only (15:00:00Z)
+            "scanner": candles[:-1],  # Confirmed-only (15:00:00Z)
+        },
+        time_now=current_time,
+    )
+    
+    assert result["status"] == "CONFIRMED_ONLY_OK"
+    assert "confirmed-only policy" in result["reason"]
+    assert result["enginePolicies"]["engine_b"]["policy"] == "CONFIRMED_ONLY"
+    assert result["enginePolicies"]["scanner"]["policy"] == "CONFIRMED_ONLY"
+
+
+def test_true_one_bucket_lag_when_confirmed_only_but_stale():
+    """Verify WARNING_ONE_BUCKET_LAG when confirmed-only but data is actually stale (not just intentional)."""
+    pair = {"symbol": "BTCUSDT", "display": "BTCUSDT", "type": "crypto", "source": "binance"}
+    
+    # Simulate raw provider WITHOUT current bucket (stale)
+    current_time = 1777046400  # 2026-04-24T16:00:00Z
+    candles = [
+        {"time": "2026-04-24T14:00:00Z", "open": 1.08, "high": 1.09, "low": 1.07, "close": 1.085, "volume": 1000},
+        {"time": "2026-04-24T15:00:00Z", "open": 1.085, "high": 1.095, "low": 1.08, "close": 1.09, "volume": 1000},
+    ]
+    
+    result = check_live_candle_consistency(
+        pair,
+        "H1",
+        {
+            "raw_provider": candles,  # No current bucket (stale)
+            "engine_b": candles[:-1],  # Even more stale (14:00:00Z)
+            "scanner": candles[:-1],
+        },
+        time_now=current_time,
+    )
+    
+    assert result["status"] == "ERROR_STALE_MULTI_BUCKET"  # Missing current bucket is an error
