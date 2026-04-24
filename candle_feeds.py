@@ -274,10 +274,15 @@ class BinanceLivePriceWS:
                                                 }
 
                             except asyncio.TimeoutError:
-                                log.warning(
-                                    "[BINANCE-WS] Receive timeout, reconnecting..."
-                                )
-                                break
+                                try:
+                                    await asyncio.wait_for(ws.ping(), timeout=10)
+                                    _last_ping = time.time()
+                                    continue
+                                except Exception:
+                                    log.warning(
+                                        "[BINANCE-WS] Receive timeout + ping failed, reconnecting..."
+                                    )
+                                    break
                             except json.JSONDecodeError as e:
                                 log.warning(
                                     f"[BINANCE-WS] Non-JSON payload, reconnecting: {e}"
@@ -449,8 +454,13 @@ class BinanceCandleWS:
                                         bool(k.get("x", False)),
                                     )
                             except asyncio.TimeoutError:
-                                log.warning("[BN-KLINE-WS] Receive timeout, reconnecting...")
-                                break
+                                try:
+                                    await asyncio.wait_for(ws.ping(), timeout=10)
+                                    _last_ping = time.time()
+                                    continue
+                                except Exception:
+                                    log.warning("[BN-KLINE-WS] Receive timeout + ping failed, reconnecting...")
+                                    break
                             except json.JSONDecodeError as e:
                                 log.warning(f"[BN-KLINE-WS] JSON error: {e}")
                                 break
