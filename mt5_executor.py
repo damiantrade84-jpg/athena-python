@@ -629,16 +629,49 @@ def mt5_move_sl_to_breakeven(ticket: int, entry_price: float) -> dict:
 
     pos = positions[0]
 
+    # Get symbol info for stops_level validation
+    sym_info = mt5.symbol_info(pos.symbol)
+    if not sym_info:
+        return {"success": False, "error": f"Cannot get symbol info for {pos.symbol}"}
+
+    point = sym_info.point or 0.00001
+    stops_level = sym_info.trade_stops_level if hasattr(sym_info, 'trade_stops_level') else 0
+    current_price = pos.price_current if hasattr(pos, 'price_current') else 0
+
     # Only move SL if entry_price is better than current SL
     # (do not move SL to a worse level)
     direction_long = pos.type == 0
     current_sl = pos.sl
 
-    if direction_long and current_sl >= entry_price:
+    # Add tolerance for floating point comparison (within 10 points)
+    tolerance = point * 10
+    if direction_long and current_sl >= (entry_price - tolerance):
         return {"success": True, "skipped": True, "reason": "SL already at or above breakeven"}
 
-    if not direction_long and current_sl > 0 and current_sl <= entry_price:
+    if not direction_long and current_sl > 0 and current_sl <= (entry_price + tolerance):
         return {"success": True, "skipped": True, "reason": "SL already at or below breakeven"}
+
+    # Validate stops_level: SL must be at least stops_level away from current price
+    if stops_level > 0 and current_price > 0:
+        min_sl_distance = stops_level * point
+        if direction_long:
+            min_allowed_sl = current_price - min_sl_distance
+            if entry_price > min_allowed_sl:
+                log.warning(
+                    f"[MT5] BE SL too close to price: ticket={ticket} "
+                    f"requested_sl={entry_price:.5f} min_allowed={min_allowed_sl:.5f} "
+                    f"(stops_level={stops_level})"
+                )
+                return {"success": False, "error": f"SL too close to price (min: {min_allowed_sl:.5f})"}
+        else:
+            min_allowed_sl = current_price + min_sl_distance
+            if entry_price < min_allowed_sl:
+                log.warning(
+                    f"[MT5] BE SL too close to price: ticket={ticket} "
+                    f"requested_sl={entry_price:.5f} min_allowed={min_allowed_sl:.5f} "
+                    f"(stops_level={stops_level})"
+                )
+                return {"success": False, "error": f"SL too close to price (min: {min_allowed_sl:.5f})"}
 
     request = {
         "action": mt5.TRADE_ACTION_SLTP,
@@ -657,7 +690,10 @@ def mt5_move_sl_to_breakeven(ticket: int, entry_price: float) -> dict:
         return {"success": True, "newSl": entry_price}
 
     err = result.comment if result else "order_send failed"
-    log.warning(f"[MT5] Breakeven SL failed ticket={ticket}: {err}")
+    log.warning(
+        f"[MT5] Breakeven SL failed ticket={ticket}: {err} "
+        f"(requested={entry_price:.5f} current_sl={current_sl:.5f} current_price={current_price:.5f})"
+    )
     return {"success": False, "error": err}
 
 
