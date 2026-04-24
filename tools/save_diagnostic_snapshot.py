@@ -37,7 +37,7 @@ def main():
         json.dump(data, f, indent=2)
     
     print(f"Saved diagnostic snapshot to {output_path}")
-    print(f"Total rows: {len(data.get('rows', []))}")
+    print(f"Total rows: {len(data.get('diagnostics', []))}")
 
 if __name__ == "__main__":
     main()

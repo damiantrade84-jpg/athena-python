@@ -2690,9 +2690,10 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
         return _mt5_fallback(f"MT5 failed: {err}")
         
     # Dynamic timezone detection to align broker integers to perfect UTC strings
+    # D1 bars should always be at 00:00 UTC regardless of broker timezone offset
     tick = mt5.symbol_info_tick(mt5_symbol)
     offset_seconds = 0
-    if tick and tick.time > 0:
+    if tick and tick.time > 0 and tf != "D1":
         utc_now = time.time()
         diff_sec = tick.time - utc_now
         offset_hours = round(diff_sec / 3600.0)

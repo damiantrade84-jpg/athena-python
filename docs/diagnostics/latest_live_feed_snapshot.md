@@ -1,6 +1,6 @@
 # Live Feed Diagnostic Snapshot
 
-**Generated:** 2026-04-24T18:26:41.039816+00:00
+**Generated:** 2026-04-24T18:41:20.381270+00:00
 **Total Rows:** 12
 
 ## Summary
@@ -9,10 +9,10 @@
 |--------|----|----------------|-------------------|---------------|
 | EURUSD=X | H1 | ok | CONFIRMED_ONLY_OK | ALLOW |
 | EURUSD=X | H4 | ok | CONFIRMED_ONLY_OK | ALLOW |
-| EURUSD=X | D1 | ok | WARNING_ONE_BUCKET_LAG | BLOCK |
+| EURUSD=X | D1 | ok | CONFIRMED_ONLY_OK | ALLOW |
 | GBPUSD=X | H1 | ok | CONFIRMED_ONLY_OK | ALLOW |
 | GBPUSD=X | H4 | ok | CONFIRMED_ONLY_OK | ALLOW |
-| GBPUSD=X | D1 | ok | WARNING_ONE_BUCKET_LAG | BLOCK |
+| GBPUSD=X | D1 | ok | CONFIRMED_ONLY_OK | ALLOW |
 | BTCUSDT | H1 | ok | CONFIRMED_ONLY_OK | ALLOW |
 | BTCUSDT | H4 | ok | CONFIRMED_ONLY_OK | ALLOW |
 | BTCUSDT | D1 | ok | CONFIRMED_ONLY_OK | ALLOW |
@@ -73,20 +73,20 @@
 | symbol | EURUSD=X |
 | timeframe | D1 |
 | providerStatus | ok |
-| rawStatus | stale_1_bucket |
-| rawLatestBarIso | 2026-04-23T21:00:00Z |
+| rawStatus | fresh |
+| rawLatestBarIso | 2026-04-24T00:00:00Z |
 | expectedCurrentBucketIso | 2026-04-24T00:00:00Z |
-| expectedConfirmedBucketIso | 2026-04-22T21:00:00Z |
-| consistencyStatus | WARNING_ONE_BUCKET_LAG |
+| expectedConfirmedBucketIso | 2026-04-23T00:00:00Z |
+| consistencyStatus | CONFIRMED_ONLY_OK |
 | engine_a policy | CONFIRMED_ONLY |
-| engine_a policyStatus | POLICY_LAG |
+| engine_a policyStatus | POLICY_OK |
 | engine_b policy | CONFIRMED_ONLY |
-| engine_b policyStatus | POLICY_LAG |
-| scanner policyStatus | POLICY_LAG |
-| compare policyStatus | POLICY_LAG |
-| gateDecision | BLOCK |
-| blockReason | True one-bucket lag |
-| reason | one or more paths lag by one bucket |
+| engine_b policyStatus | POLICY_OK |
+| scanner policyStatus | POLICY_OK |
+| compare policyStatus | POLICY_OK |
+| gateDecision | ALLOW |
+| blockReason |  |
+| reason | engine paths use confirmed-only policy (intentional one-bucket lag behind raw forming) |
 
 ### GBPUSD=X - H1
 
@@ -139,20 +139,20 @@
 | symbol | GBPUSD=X |
 | timeframe | D1 |
 | providerStatus | ok |
-| rawStatus | stale_1_bucket |
-| rawLatestBarIso | 2026-04-23T21:00:00Z |
+| rawStatus | fresh |
+| rawLatestBarIso | 2026-04-24T00:00:00Z |
 | expectedCurrentBucketIso | 2026-04-24T00:00:00Z |
-| expectedConfirmedBucketIso | 2026-04-22T21:00:00Z |
-| consistencyStatus | WARNING_ONE_BUCKET_LAG |
+| expectedConfirmedBucketIso | 2026-04-23T00:00:00Z |
+| consistencyStatus | CONFIRMED_ONLY_OK |
 | engine_a policy | CONFIRMED_ONLY |
-| engine_a policyStatus | POLICY_LAG |
+| engine_a policyStatus | POLICY_OK |
 | engine_b policy | CONFIRMED_ONLY |
-| engine_b policyStatus | POLICY_LAG |
-| scanner policyStatus | POLICY_LAG |
-| compare policyStatus | POLICY_LAG |
-| gateDecision | BLOCK |
-| blockReason | True one-bucket lag |
-| reason | one or more paths lag by one bucket |
+| engine_b policyStatus | POLICY_OK |
+| scanner policyStatus | POLICY_OK |
+| compare policyStatus | POLICY_OK |
+| gateDecision | ALLOW |
+| blockReason |  |
+| reason | engine paths use confirmed-only policy (intentional one-bucket lag behind raw forming) |
 
 ### BTCUSDT - H1
 
