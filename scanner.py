@@ -22,7 +22,12 @@ from scoring import (
     get_score_threshold,
     get_pair_score_group,
 )
-from market_structure import NakedEngine
+from market_structure import NakedEngine, engine_b_min_score_threshold
+from threshold_audit import (
+    audit_enabled as threshold_audit_enabled,
+    build_signal_funnel_row,
+    write_signal_funnel_rows,
+)
 from factor_scoring import make_regime_smoothing_context
 
 log = logging.getLogger("sentinel")
@@ -299,6 +304,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
         active_pairs = [p for p in candidate_pairs if p.get("enabled", True)]
 
         results, watchlist, errors, skipped = [], [], [], []
+        threshold_audit_rows: list[dict[str, Any]] = []
+        _threshold_audit_on = threshold_audit_enabled()
 
         scan_funnel = {
             "total": len(candidate_pairs),
@@ -655,6 +662,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     h4_snap=_sc_h4_snap,
                                 )
 
+                                conf_b = None
                                 if res_b.get("structural_verdict") == "CLEAR":
                                     conf_b = _engine_b.calculate_confidence(
                                         res_b,
@@ -698,6 +706,15 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     sig_a["combinedConviction"] = round(a_norm * 0.6, 4)
                                     sig_a["enginesAligned"] = False
                                     sig_a["engine_b_verdict"] = res_b.get("structural_verdict", "UNCLEAR")
+                                if _threshold_audit_on:
+                                    sig_a["_threshold_audit_b_res"] = res_b
+                                    sig_a["_threshold_audit_b_conf"] = conf_b
+                                    sig_a["_threshold_audit_b_threshold"] = engine_b_min_score_threshold(
+                                        style_profile_b,
+                                        regime_label,
+                                        ptype,
+                                    )
+                                    sig_a["_threshold_audit_b_style_profile"] = style_profile_b
 
                 except Exception as _b_err:
                     log.debug(f"[SCAN+B] {pair.get('display')} Engine B failed: {_b_err}")
@@ -707,6 +724,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     sig_a["combinedConviction"] = round(a_norm * 0.6, 4)
                     sig_a["enginesAligned"] = False
                     sig_a["engine_b_error"] = str(_b_err)
+                    if _threshold_audit_on:
+                        sig_a["_threshold_audit_b_error"] = str(_b_err)
 
                 return pair, sig_a, None
 
@@ -738,6 +757,15 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     continue
 
                 if isinstance(sig, dict) and sig.get("skipCode") == "rate_limited":
+                    if _threshold_audit_on:
+                        threshold_audit_rows.append(
+                            build_signal_funnel_row(
+                                pair,
+                                None,
+                                tier="skip",
+                                skipped_reason=sig.get("skipDetail", "Rate limited"),
+                            )
+                        )
                     skipped.append(
                         {
                             "pair": pair["display"],
@@ -759,6 +787,15 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     continue
 
                 if not sig:
+                    if _threshold_audit_on:
+                        threshold_audit_rows.append(
+                            build_signal_funnel_row(
+                                pair,
+                                None,
+                                tier="skip",
+                                skipped_reason="No data",
+                            )
+                        )
                     skipped.append(
                         {
                             "pair": pair["display"],
@@ -854,6 +891,17 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 sig["scoreNormPct"] = min(100, max(0, round((_cs / _maxs) * 100)))
 
             tier, tier_reason = _classify_signal(sig, pair)
+            if _threshold_audit_on:
+                threshold_audit_rows.append(
+                    build_signal_funnel_row(
+                        pair,
+                        sig,
+                        tier=tier,
+                        tier_reason=tier_reason,
+                        style_profile_b=sig.get("_threshold_audit_b_style_profile"),
+                        engine_b_threshold=sig.get("_threshold_audit_b_threshold"),
+                    )
+                )
 
             sig["signalTier"] = tier
 
@@ -920,6 +968,12 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 )
 
         log.info(f"Scan funnel: {scan_funnel}")
+        if _threshold_audit_on:
+            try:
+                write_signal_funnel_rows(threshold_audit_rows)
+                log.info("[THRESHOLD-AUDIT] wrote %d signal funnel rows", len(threshold_audit_rows))
+            except Exception as _audit_err:
+                log.warning("[THRESHOLD-AUDIT] write failed: %s", _audit_err)
 
         results.sort(
             key=lambda x: x.get(

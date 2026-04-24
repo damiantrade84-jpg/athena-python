@@ -56,6 +56,24 @@ BACKTEST_MAX_WORKERS: 8       # Parallel workers for backtesting (Engine A & B).
 
 SCAN_DEBUG_CANDLE_META: false # Optional scan/debug payload metadata about candle resolution path.
 
+THRESHOLD_AUDIT:
+  ENABLED: false
+  SHADOW_THRESHOLDS:
+    ENGINE_A:
+      - current
+      - current_minus_5pct
+      - current_minus_10pct
+      - current_minus_15pct
+    ENGINE_B:
+      - current
+      - current_minus_5pct
+      - current_minus_10pct
+      - current_minus_15pct
+    ENGINE_C:
+      - current
+      - current_minus_5pct
+      - current_minus_10pct
+
 FOREX_H4_RESAMPLE_OFFSET_HOURS: 1   # EURAUD/TradingView-aligned forex H4 grid: 01/05/09/13/17/21 UTC
 
 BINANCE_KLINE_WS_INTERVALS:
