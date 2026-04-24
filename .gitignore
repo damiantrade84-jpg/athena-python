@@ -21,6 +21,7 @@ test_ws.py
 # IDE
 .windsurf/
 .vscode/
+.claude/worktrees/
 
 # SQLite databases — too large for GitHub, contain runtime/market data
 *.db
