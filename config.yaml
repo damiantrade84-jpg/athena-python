@@ -1823,6 +1823,18 @@ SCALP_ENGINE:
 
   BIAS_REQUIRE_CONFIRMATION: false  # false = allow setup when H1 bars insufficient for EMA stack rather than skip
 
+  # ── Watchlist / Execution Filter ─────────────────────────
+
+  WATCHLIST_GRADE_C_ENABLED: true    # Allow grade C setups on watchlist (overrides EXECUTION_MIN_GRADE)
+
+  WATCHLIST_REQUIRES_TREND: true    # Watchlist setups must align with HTF bias trend
+
+  WATCHLIST_MIN_RR: 2.0              # Minimum R:R for watchlist setups
+
+  WATCHLIST_LOCATION_REQUIRED: true  # Watchlist setups must be at VAH/VAL/POC or LVN
+
+  EXECUTION_MIN_GRADE: "B"           # Minimum grade for auto-execution (non-watchlist)
+
   # ── Spread Limits ─────────────────────────────────────────
 
   MAX_SPREAD_PIPS:

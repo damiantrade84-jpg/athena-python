@@ -1,5 +1,5 @@
 import sqlite3
-import uuid
+import tempfile
 from pathlib import Path
 
 from lottery_engine import (
@@ -25,8 +25,14 @@ from lottery_engine import (
 from lottery_service import ensure_lottery_schema
 
 
-def _db_path():
-    return Path.cwd() / f"lottery-engine-test-{uuid.uuid4().hex}.db"
+import pytest
+
+
+@pytest.fixture
+def local_tmpdir():
+    """Local temp directory fixture using tempfile for better permission handling."""
+    tmpdir = Path(tempfile.mkdtemp(prefix="lottery_test_"))
+    yield tmpdir
 
 
 def _seed_draws(db_path: Path):
@@ -56,8 +62,8 @@ def _seed_draws(db_path: Path):
         con.commit()
 
 
-def test_dashboard_and_frequency_pipeline():
-    db_path = _db_path()
+def test_dashboard_and_frequency_pipeline(local_tmpdir):
+    db_path = local_tmpdir / "lottery-engine-test.db"
     _seed_draws(db_path)
 
     board = build_lottery_dashboard("lotto", db_path=str(db_path))
@@ -80,8 +86,8 @@ def test_dashboard_and_frequency_pipeline():
     assert "draws_since_seen" in first_overdue
 
 
-def test_pairs_triplets_and_history():
-    db_path = _db_path()
+def test_pairs_triplets_and_history(local_tmpdir):
+    db_path = local_tmpdir / "lottery-engine-test.db"
     _seed_draws(db_path)
 
     pairs = compute_pair_frequency("lotto", db_path=str(db_path))
@@ -95,8 +101,8 @@ def test_pairs_triplets_and_history():
     assert len(hist["history"]) == 10
 
 
-def test_generator_scoring_and_simulation():
-    db_path = _db_path()
+def test_generator_scoring_and_simulation(local_tmpdir):
+    db_path = local_tmpdir / "lottery-engine-test.db"
     _seed_draws(db_path)
 
     generated = generate_tickets(
@@ -137,8 +143,8 @@ def test_generator_scoring_and_simulation():
     assert len(cmp_payload["modes"]) == 3
 
 
-def test_generator_retry_cap_falls_back_for_impossible_constraints():
-    db_path = _db_path()
+def test_generator_retry_cap_falls_back_for_impossible_constraints(local_tmpdir):
+    db_path = local_tmpdir / "lottery-engine-test.db"
     _seed_draws(db_path)
 
     generated = generate_tickets(
@@ -181,8 +187,8 @@ def test_generator_retry_cap_falls_back_for_impossible_constraints():
     )
 
 
-def test_new_lottery_analytics_and_wheel():
-    db_path = _db_path()
+def test_new_lottery_analytics_and_wheel(local_tmpdir):
+    db_path = local_tmpdir / "lottery-engine-test.db"
     _seed_draws(db_path)
 
     sum_range = compute_recommended_sum_range("lotto", db_path=str(db_path))
@@ -216,8 +222,8 @@ def test_new_lottery_analytics_and_wheel():
         pass
 
 
-def test_bonus_intelligence_handles_bonus_and_no_bonus_games():
-    db_path = _db_path()
+def test_bonus_intelligence_handles_bonus_and_no_bonus_games(local_tmpdir):
+    db_path = local_tmpdir / "lottery-engine-test.db"
     _seed_draws(db_path)
 
     bonus = compute_bonus_intelligence("lotto", window=5, db_path=str(db_path))

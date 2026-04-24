@@ -1694,6 +1694,7 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
         SCAN SCALPS
       </button>
       <button id="scalpRrToggleBtn" onclick="toggleScalpRrPanel()" title="Adjust forex min RR per group — prevents mean_reversion rejections" style="background:linear-gradient(135deg,#1e3a5f,#7c3aed);border:none;color:#fff;padding:7px 14px;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:11px;font-weight:700;">⚙ FOREX MIN RR</button>
+      <button id="scalpDiagToggleBtn" onclick="toggleScalpDiagnostic()" title="Show blocked/no-setup rows with fail reasons" style="background:linear-gradient(135deg,#1e3a5f,#0ea5e9);border:none;color:#fff;padding:7px 14px;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:11px;font-weight:700;">🔍 DIAGNOSTIC</button>
       <span id="scalpStatus" style="font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;"></span>
     </div>
 
@@ -5314,6 +5315,16 @@ setTimeout(function() { status.textContent = ''; }, 5000);
 
 // ── Scalp Lab forex min_rr panel ──────────────────────────────────────────
 var _scalpRrOpen = false;
+var _scalpDiagnostic = false;
+
+function toggleScalpDiagnostic() {
+  _scalpDiagnostic = !_scalpDiagnostic;
+  var btn = document.getElementById('scalpDiagToggleBtn');
+  if (btn) {
+    btn.style.background = _scalpDiagnostic ? 'linear-gradient(135deg,#0ea5e9,#10b981)' : 'linear-gradient(135deg,#1e3a5f,#0ea5e9)';
+    btn.textContent = _scalpDiagnostic ? '🔍 DIAGNOSTIC ON' : '🔍 DIAGNOSTIC';
+  }
+}
 
 function toggleScalpRrPanel() {
   _scalpRrOpen = !_scalpRrOpen;
@@ -10840,7 +10851,11 @@ async function runScalpScan() {
   if (btn) { btn.disabled = true; btn.textContent = 'Scanning...'; }
   if (status) status.textContent = 'M15/M5 structural check...';
   try {
-    var resp = await fetch('/api/scalp-scan', {method:'POST'});
+    var resp = await fetch('/api/scalp-scan', {
+      method:'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({diagnostic: _scalpDiagnostic})
+    });
     var data = await resp.json();
     if (data.error) throw new Error(data.error);
     if (data.pairs && data.pairs.length) {
@@ -10849,10 +10864,12 @@ async function runScalpScan() {
       if (cntEl) cntEl.textContent = String(data.pair_count != null ? data.pair_count : data.pairs.length);
       renderScalpPairChips(listEl, data.pairs);
     }
-    renderScalpSignals(data.signals || []);
+    renderScalpSignals(data.signals || [], data.skipped || [], data.diagnostic || false);
     var n = (data.signals || []).length;
+    var sk = (data.skipped || []).length;
     var tot = data.scanned != null ? data.scanned : (data.pair_count || n);
-    if (status) status.textContent = 'Scanned ' + tot + ' | ' + n + ' setup(s) | ' + new Date().toLocaleTimeString();
+    var diagLabel = _scalpDiagnostic ? ' [DIAG]' : '';
+    if (status) status.textContent = 'Scanned ' + tot + diagLabel + ' | ' + n + ' pass | ' + sk + ' skip | ' + new Date().toLocaleTimeString();
   } catch(e) {
     if (status) status.textContent = 'Error: ' + e.message;
     showToast('Scalp Scan: ' + e.message, true);
@@ -10861,34 +10878,45 @@ async function runScalpScan() {
   }
 }
 
-function renderScalpSignals(signals) {
+function renderScalpSignals(signals, skipped, diagnostic) {
   var grid = document.getElementById('scalpSignals');
   if (!grid) return;
   window._scalpSignalsById = {};
-  if (!signals || signals.length === 0) {
-    grid.innerHTML = '<div class="empty-state"><div class="icon">⚡</div><h3>No Scalps Found</h3><p>Try again later or check MT5 connection.</p></div>';
+  var rows = [];
+  if (diagnostic && skipped && skipped.length) {
+    rows = rows.concat(skipped.map(function(s) { s._isSkipped = true; return s; }));
+  }
+  if (signals && signals.length) {
+    rows = rows.concat(signals.map(function(s) { s._isSkipped = false; return s; }));
+  }
+  if (rows.length === 0) {
+    var msg = diagnostic
+      ? '<div class="empty-state"><div class="icon">⚡</div><h3>No Scalps Found</h3><p>Diagnostic mode is on — all rows were filtered. Check skipped list below.</p></div>'
+      : '<div class="empty-state"><div class="icon">⚡</div><h3>No Scalps Found</h3><p>Try again later or check MT5 connection.</p></div>';
+    grid.innerHTML = msg;
     return;
   }
-  signals.forEach(function(s) {
+  rows.forEach(function(s) {
     var display = s.display || s.pair || s.symbol || '';
     var sid = display.replace(/[\/=^. ]/g, '_');
     window._scalpSignalsById[sid] = s;
   });
-  grid.innerHTML = signals.map(function(s, i) { return buildScalpCard(s, i); }).join('');
+  grid.innerHTML = rows.map(function(s, i) { return buildScalpCard(s, i, diagnostic); }).join('');
 }
 
-function buildScalpCard(s, idx) {
+function buildScalpCard(s, idx, diagnostic) {
   var display = s.display || s.pair || s.symbol || '?';
   var sid = display.replace(/[\/=^. ]/g, '_');
+  var isSkipped = s._isSkipped || false;
   var gk = s.ai_grade || 'C';
   var dirCls = s.direction === 'LONG' ? 'LONG' : 'SHORT';
   var gradeColors = {A:'#10b981', B:'#3b82f6', C:'#f59e0b', D:'#ef4444'};
-  var borderColor = gradeColors[gk] || 'var(--border)';
+  var borderColor = isSkipped ? '#ef4444' : (gradeColors[gk] || 'var(--border)');
 
   // VP level badge helper
-  var zoneType = (s.zone_type || 'mean_reversion').replace('_', ' ').toUpperCase();
-  var mktState = (s.market_state || 'balance').toUpperCase();
-  var mktStateColor = s.market_state === 'balance' ? '#22c55e' : '#f59e0b';
+  var zoneType = (s.zone_type || 'unknown').replace('_', ' ').toUpperCase();
+  var mktState = (s.market_state || 'N/A').toUpperCase();
+  var mktStateColor = s.market_state === 'balance' ? '#22c55e' : (s.market_state === 'imbalance' ? '#f59e0b' : '#94a3b8');
 
   // Confluence pills
   var pills = '';
@@ -10950,6 +10978,15 @@ function buildScalpCard(s, idx) {
   var rr = s.rr1 != null ? s.rr1 : (s.rr || 0);
   var sizeLabel = s.size_multiplier != null ? (s.size_multiplier === 1.0 ? 'Full' : s.size_multiplier === 0.5 ? 'Half' : s.size_multiplier === 0.25 ? 'Quarter' : s.size_multiplier + 'x') : '';
 
+  var skippedBanner = '';
+  if (isSkipped) {
+    var skipReason = escapeHtml(String(s.reason || 'BLOCKED'));
+    skippedBanner = '<div style="padding:8px 10px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;margin-bottom:10px">' +
+      '<div style="font-size:10px;font-weight:700;color:#ef4444">DIAGNOSTIC — SKIPPED</div>' +
+      '<div style="font-size:10px;color:#fca5a5;font-family:monospace">' + skipReason + '</div>' +
+    '</div>';
+  }
+
   return '<div class="signal-card scalp-card" id="scalp-card-'+sid+'" style="animation-delay:'+(idx*60)+'ms;border-left:4px solid '+borderColor+'">'+
     '<div class="card-header">'+
       '<div class="pair-info">'+
@@ -10960,28 +10997,30 @@ function buildScalpCard(s, idx) {
         '</div>'+
       '</div>'+
       '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">'+
-        '<span class="direction-badge '+dirCls+'">'+s.direction+'</span>'+
-        '<span style="background:'+borderColor+'22;color:'+borderColor+';border:1px solid '+borderColor+'55;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:800">'+
+        (s.direction ? '<span class="direction-badge '+dirCls+'">'+s.direction+'</span>' : '')+
+        (!isSkipped ? '<span style="background:'+borderColor+'22;color:'+borderColor+';border:1px solid '+borderColor+'55;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:800">'+
           gk+' &nbsp;<span style="font-weight:400;font-size:10px">'+s.ai_score+'</span>'+(sizeLabel?' &middot; '+sizeLabel:'')+ 
-        '</span>'+
+        '</span>' : '')+
       '</div>'+
     '</div>'+
     '<div class="card-body">'+
+      skippedBanner +
 
       // Confluence pills row
-      (pills ? '<div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:4px">'+pills+'</div>' : '') +
+      (pills && !isSkipped ? '<div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:4px">'+pills+'</div>' : '') +
 
       // VP levels
       vpBlock +
 
       // Entry / SL / TP levels — Fabio 3-clip structure
+      (isSkipped ? '' :
       '<div class="levels-grid">'+
-        '<div class="level-box"><div class="level-label">Entry</div><div class="level-val">'+fmtPrice(s.price)+'</div></div>'+
-        '<div class="level-box"><div class="level-label">SL</div><div class="level-val bear">'+fmtPrice(s.sl)+'</div></div>'+
-        '<div class="level-box"><div class="level-label" title="First scale-out +1R — move stop to BE">T1 <span style="color:var(--muted);font-size:9px">+1R</span></div><div class="level-val" style="color:#f0b90b">'+fmtPrice(s.tp_partial || s.price)+'</div></div>'+
+        '<div class="level-box"><div class="level-label">Entry</div><div class="level-val">'+fmtPrice(s.price || 0)+'</div></div>'+
+        '<div class="level-box"><div class="level-label">SL</div><div class="level-val bear">'+fmtPrice(s.sl || 0)+'</div></div>'+
+        '<div class="level-box"><div class="level-label" title="First scale-out +1R — move stop to BE">T1 <span style="color:var(--muted);font-size:9px">+1R</span></div><div class="level-val" style="color:#f0b90b">'+fmtPrice(s.tp_partial || s.price || 0)+'</div></div>'+
       '</div>'+
       '<div class="levels-grid" style="margin-top:4px">'+
-        '<div class="level-box" style="grid-column:1/3"><div class="level-label" title="Structural target — trail after BE armed">T2 <span style="color:var(--muted);font-size:9px">structural · '+rr.toFixed(1)+'R</span></div><div class="level-val bull">'+fmtPrice(s.tp1)+'</div></div>'+
+        '<div class="level-box" style="grid-column:1/3"><div class="level-label" title="Structural target — trail after BE armed">T2 <span style="color:var(--muted);font-size:9px">structural · '+rr.toFixed(1)+'R</span></div><div class="level-val bull">'+fmtPrice(s.tp1 || 0)+'</div></div>'+
         (s.tp2 ? '<div class="level-box"><div class="level-label" title="Runner / HTF extension">T3 <span style="color:var(--muted);font-size:9px">runner</span></div><div class="level-val" style="color:#a78bfa">'+fmtPrice(s.tp2)+'</div></div>' : '<div class="level-box"></div>')+
       '</div>'+
 
@@ -10992,7 +11031,7 @@ function buildScalpCard(s, idx) {
         '<span style="font-size:10px;color:var(--muted);margin:0 4px">→</span>'+
         '<span class="rr-val">T2 1:'+rr.toFixed(2)+'R</span>'+
         (s.spread_pips ? '<span style="font-size:10px;color:var(--muted);margin-left:auto">Spread '+s.spread_pips.toFixed(1)+'pip &middot; '+s.sl_method+'</span>' : '')+
-      '</div>'+
+      '</div>')+
 
       advisoryHtml +
       pmProxyHtml +
@@ -11001,10 +11040,11 @@ function buildScalpCard(s, idx) {
       reasonsHtml +
 
       '<div id="scalp-vision-res-'+sid+'"></div>'+
+      (isSkipped ? '' :
       '<div style="display:flex;gap:8px;margin-top:12px">'+
         '<button class="analyze-btn" style="flex:1" onclick="runScalpVisionConfirm(this, \''+display+'\')">🧠 VISION</button>'+
         '<button class="exec-btn '+dirCls+'" style="flex:2;margin-top:0" onclick="executeScalp(this, \''+sid+'\')">⚡ EXECUTE SCALP</button>'+
-      '</div>'+
+      '</div>') +
     '</div>'+
   '</div>';
 }

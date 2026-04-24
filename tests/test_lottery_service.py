@@ -1,6 +1,7 @@
 import sqlite3
-import uuid
+import tempfile
 from pathlib import Path
+import pytest
 
 from lottery_service import (
     clear_lottery_draws,
@@ -12,8 +13,11 @@ from lottery_service import (
 )
 
 
-def _db_path():
-    return Path.cwd() / f"lottery-test-{uuid.uuid4().hex}.db"
+@pytest.fixture
+def local_tmpdir():
+    """Local temp directory fixture using tempfile for better permission handling."""
+    tmpdir = Path(tempfile.mkdtemp(prefix="lottery_test_"))
+    yield tmpdir
 
 
 def test_parse_lottery_csv_filters_invalid_rows():
@@ -34,8 +38,8 @@ bad-date,1,2,3,4,5,6,7
     assert result["error_counts"]["missing_numbers"] == 1
 
 
-def test_import_and_stats_round_trip():
-    db_path = _db_path()
+def test_import_and_stats_round_trip(local_tmpdir):
+    db_path = local_tmpdir / "lottery-test.db"
     with sqlite3.connect(db_path) as con:
         ensure_lottery_schema(con)
         con.commit()
@@ -60,8 +64,8 @@ def test_import_and_stats_round_trip():
     assert any(item["number"] == 11 and item["count"] == 1 for item in stats["bonus_frequency"])
 
 
-def test_replace_mode_and_clear():
-    db_path = _db_path()
+def test_replace_mode_and_clear(local_tmpdir):
+    db_path = local_tmpdir / "lottery-test.db"
     import_lottery_csv(
         str(db_path),
         "daily_lotto",
