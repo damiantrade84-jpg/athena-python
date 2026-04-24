@@ -128,3 +128,31 @@ def test_live_forex_payload_exposes_explicit_regime_name():
     src = ATHENA_PATH.read_text(encoding="utf-8")
     # Engine A v2: forex uses unified calc_confluence; regimeName still exposed in signal dict
     assert '"regimeName": res.get("regimeName")' in src
+
+
+def test_live_feed_diagnostics_route_is_read_only():
+    """Verify /api/live-feed-diagnostics does not call order execution functions."""
+    src = ATHENA_PATH.read_text(encoding="utf-8")
+    # Find the api_live_feed_diagnostics function
+    import ast
+    tree = ast.parse(src)
+    
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "api_live_feed_diagnostics":
+            # Check the function body for any calls to execution/order functions
+            forbidden_calls = [
+                "mt5_send_order",
+                "bybit_send_order",
+                "execute_trade",
+                "place_order",
+                "send_order",
+                "open_position",
+                "close_position",
+            ]
+            
+            func_source = ast.unparse(node)
+            for forbidden in forbidden_calls:
+                assert forbidden not in func_source, f"Found forbidden call {forbidden} in api_live_feed_diagnostics"
+            break
+    else:
+        raise AssertionError("api_live_feed_diagnostics function not found")
