@@ -7,11 +7,15 @@ from typing import Optional, get_type_hints
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from engine_b_ai import (
+    _call_ai_with_retry,
+    _is_retryable_ai_error,
     _normalise_engine_b_grade,
     _validate_engine_b_ai_payload,
     build_engine_b_signal_message,
     get_engine_b_ai_verdict,
 )
+
+import engine_b_ai
 
 
 def test_build_engine_b_signal_message_preserves_explicit_zero_engine_a_values():
@@ -113,3 +117,56 @@ def test_get_engine_b_ai_verdict_returns_error_when_no_api_key():
         xai_api_key=None,
     )
     assert result.get("error") == "API key not configured"
+
+
+def test_is_retryable_ai_error_detects_timeout_text():
+    assert _is_retryable_ai_error(RuntimeError("Request timed out")) is True
+    assert _is_retryable_ai_error(RuntimeError("Too many requests")) is True
+    assert _is_retryable_ai_error(RuntimeError("schema invalid")) is False
+
+
+def test_call_ai_with_retry_uses_configured_timeout_and_retries(monkeypatch):
+    calls = []
+
+    class _FakeCompletions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) < 3:
+                raise RuntimeError("Request timed out")
+            return type(
+                "Resp",
+                (),
+                {"choices": [type("Choice", (), {"message": type("Msg", (), {"content": "{}"})()})()]},
+            )()
+
+    fake_client = type(
+        "Client",
+        (),
+        {"chat": type("Chat", (), {"completions": _FakeCompletions()})()},
+    )()
+
+    monkeypatch.setitem(engine_b_ai.CONFIG, "ENGINE_B_AI_TIMEOUT_SEC", 42)
+    monkeypatch.setitem(engine_b_ai.CONFIG, "ENGINE_B_AI_MAX_RETRIES", 2)
+    monkeypatch.setitem(engine_b_ai.CONFIG, "ENGINE_B_AI_RETRY_BACKOFF_SEC", 0)
+    monkeypatch.setattr(engine_b_ai.time, "sleep", lambda _s: None)
+
+    _call_ai_with_retry(fake_client, "model-x", [{"role": "user", "content": "hi"}], 0.3)
+
+    assert len(calls) == 3
+    assert all(call["timeout"] == 42 for call in calls)
+
+
+def test_get_engine_b_ai_verdict_normalizes_timeout_error(monkeypatch):
+    monkeypatch.setattr(engine_b_ai, "create_ai_client", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(engine_b_ai, "_call_ai_with_retry", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("Request timed out")))
+
+    result = get_engine_b_ai_verdict(
+        pair="XAU/USD",
+        direction="LONG",
+        current_price=1.1,
+        structure_result={},
+        confidence_result={"score": 4.0, "max_possible": 5.0, "passed": True},
+        xai_api_key="key",
+    )
+
+    assert result["error"] == "AI request timed out after retry attempts"

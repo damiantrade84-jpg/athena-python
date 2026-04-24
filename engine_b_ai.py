@@ -5,6 +5,7 @@ Adapts Engine A's AI design pattern for Engine B structural analysis.
 """
 
 import logging
+import time
 from typing import Optional
 
 from ai_utils import parse_json_object
@@ -16,8 +17,32 @@ VALID_ENGINE_B_RISK_LEVELS = {"Low", "Medium", "High"}
 REQUIRED_STYLE_KEYS = {"scalp", "intraday", "swing"}
 
 
-def _call_ai_with_retry(client, model: str, messages: list, temperature: float, max_retries: int = 2):
-    """Call AI with timeout and exponential backoff retry."""
+def _is_retryable_ai_error(exc: Exception) -> bool:
+    text = str(exc or "").strip().lower()
+    if not text:
+        return False
+    markers = (
+        "timed out",
+        "timeout",
+        "connection reset",
+        "connection aborted",
+        "connection refused",
+        "temporarily unavailable",
+        "server error",
+        "rate limit",
+        "too many requests",
+        "502",
+        "503",
+        "504",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _call_ai_with_retry(client, model: str, messages: list, temperature: float):
+    """Call AI with timeout and exponential backoff retry on transient provider failures."""
+    timeout_sec = float(CONFIG.get("ENGINE_B_AI_TIMEOUT_SEC", 30.0) or 30.0)
+    max_retries = int(CONFIG.get("ENGINE_B_AI_MAX_RETRIES", 2) or 2)
+    backoff_base = float(CONFIG.get("ENGINE_B_AI_RETRY_BACKOFF_SEC", 1.0) or 1.0)
     last_exc = None
     for attempt in range(max_retries + 1):
         try:
@@ -27,13 +52,21 @@ def _call_ai_with_retry(client, model: str, messages: list, temperature: float, 
                 temperature=temperature,
                 messages=messages,
                 response_format={"type": "json_object"},
-                timeout=15,
+                timeout=timeout_sec,
             )
         except Exception as e:
             last_exc = e
-            if attempt < max_retries:
-                import time
-                time.sleep(2 ** attempt)
+            if attempt >= max_retries or not _is_retryable_ai_error(e):
+                break
+            sleep_sec = backoff_base * (2 ** attempt)
+            log.warning(
+                "[ENGINE_B_AI] transient AI failure on attempt %s/%s: %s; retrying in %.1fs",
+                attempt + 1,
+                max_retries + 1,
+                e,
+                sleep_sec,
+            )
+            time.sleep(sleep_sec)
     raise last_exc
 
 
@@ -489,5 +522,8 @@ def get_engine_b_ai_verdict(
         return parsed
 
     except Exception as e:
-        log.error(f"[ENGINE_B_AI] {pair}: AI analysis failed - {e}")
-        return {"error": str(e)}
+        err_text = str(e).strip() or e.__class__.__name__
+        if "timed out" in err_text.lower() or "timeout" in err_text.lower():
+            err_text = "AI request timed out after retry attempts"
+        log.error(f"[ENGINE_B_AI] {pair}: AI analysis failed - {err_text}")
+        return {"error": err_text}
