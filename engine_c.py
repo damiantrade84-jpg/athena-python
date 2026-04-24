@@ -669,9 +669,17 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
                     reward = abs(updated["tp"] - updated["entry"])
                     updated["rr"] = round(reward / risk, 2)
 
-    # If Vision confirms and conviction is above LOW threshold, allow trade
+    # Vision confirm path — gated by AI_VISION_CAN_UPGRADE_TRADE (default False = downgrade-only)
     if action == "confirm" and new_conviction >= 0.35:
-        updated["trade"] = True
+        if CONFIG.get("AI_VISION_CAN_UPGRADE_TRADE", False):
+            # Sanctioned upgrade: CONFIRM + conviction ≥ 0.35 → trade=True
+            updated["trade"] = True
+        else:
+            # Downgrade-only mode: CONFIRM records visual confirmation but cannot create trade=True.
+            # If trade was already True (e.g. Engine C passed), preserve it.
+            updated["ai_visual_confirmed"] = True
+            updated["vision_supports_setup"] = True
+            # Do not set trade=True here — it must have been True before Vision ran.
 
     if action in ("override", "contradict"):
         updated["trade"] = False

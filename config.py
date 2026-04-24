@@ -193,6 +193,7 @@ CONFIG: dict = {
     "AI_STRUCTURED_OUTPUTS": True,
     "AI_TEMPERATURE": 0.3,
     "AI_VISION_TEMPERATURE": 0.2,  # /api/chart-analysis factual mode (override in config.yaml if needed)
+    "AI_VISION_CAN_UPGRADE_TRADE": False,  # Vision CONFIRM cannot create trade=True; downgrade only by default
     "ENGINE_B_PROFILE_SCORING_ENABLED": True,
     "CHART_VISION_DATASET_ENABLED": False,
     "CHART_VISION_V2_SHADOW_ENABLED": False,

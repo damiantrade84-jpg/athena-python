@@ -4154,6 +4154,16 @@ def _build_signal_message(
         for cp in _ctx_parts:
             lines.append(cp)
 
+    # === CANDLE DATA FRESHNESS ===
+    try:
+        from ai_utils import build_freshness_ai_context as _build_freshness
+        _freshness_str = _build_freshness(signal)
+        if _freshness_str:
+            lines.append("")
+            lines.append(_freshness_str)
+    except Exception:
+        pass
+
     # === PORTFOLIO ===
 
     if portfolio_heat > 0 or drawdown_pct > 0:
@@ -4334,6 +4344,55 @@ def run_ai(
         log.warning(
             f"[AI] {signal['pair']} => Grade:{result.get('grade', '?')} Prob:{result.get('edgeProbability', '?')}% Risk:{result.get('riskLevel', '?')} | {str(result.get('verdict', ''))[:60]}"
         )
+
+        try:
+            from ai_review_logger import (
+                log_ai_review,
+                REVIEW_TYPE_MARCUS_REID,
+                map_engine_b_grade_to_ai_state,
+                AI_STATE_REVIEW_INCOMPLETE,
+                AI_STATE_CONFIRM,
+                AI_STATE_CAUTION,
+                AI_STATE_REJECT,
+            )
+            _grade = (result.get("grade") or "").upper()
+            if _grade in ("A+", "A"):
+                _ai_state = AI_STATE_CONFIRM
+            elif _grade == "B":
+                _ai_state = AI_STATE_CAUTION
+            elif _grade in ("C", "D", "F"):
+                _ai_state = AI_STATE_REJECT
+            else:
+                _ai_state = AI_STATE_REVIEW_INCOMPLETE
+            log_ai_review(
+                symbol=signal.get("pair", "?"),
+                asset_type=signal.get("type", "?"),
+                review_type=REVIEW_TYPE_MARCUS_REID,
+                model=_model,
+                provider=get_ai_provider_label(CONFIG),
+                prompt_version="EXPERT_PROMPT_v4",
+                input_packet={"pair": signal.get("pair"), "score": signal.get("confluenceScore")},
+                has_chart_image=False,
+                candle_freshness_status=(
+                    (signal.get("dataFreshness") or {}).get("reason") or "unknown"
+                ),
+                engine_a_state=signal.get("confluenceScore"),
+                engine_b_state=signal.get("engine_b", {}).get("score") if isinstance(signal.get("engine_b"), dict) else None,
+                engine_c_state=None,
+                engine_d_state=None,
+                risk_state=None,
+                ai_review_state=_ai_state,
+                ai_confidence=result.get("edgeProbability"),
+                contradictions_count=0,
+                missing_information_count=0,
+                parse_success=True,
+                schema_valid=not bool(_missing),
+                execution_allowed_before_ai=True,
+                execution_allowed_after_ai=True,
+                final_action="advisory",
+            )
+        except Exception as _log_err:
+            log.debug("[AI_AUDIT] Marcus Reid audit log failed: %s", _log_err)
 
         return result
 
@@ -5458,6 +5517,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                     xai_model=get_ai_model(CONFIG, "AI_MODEL", "grok-4-1-fast-reasoning"),
                     engine_a_ctx=engine_a_ctx,
                     news_ctx=_news_ctx,
+                    freshness_ctx=engine_a_ctx if isinstance(engine_a_ctx, dict) else None,
                 )
                 if "error" not in ai_verdict:
                     res["ai_analysis"] = _enrich_engine_b_ai_payload(ai_verdict)
@@ -8731,6 +8791,34 @@ def api_chart_analysis():
     if not data.get("image"):
         return jsonify({"error": "Missing image data"}), 400
 
+    # === Chart timestamp / freshness validation ===
+    # Warn (non-blocking) when client chart images lack timestamp grounding.
+    _chart_ts_warnings: list[str] = []
+    _chart_generated_at = data.get("chart_generated_at") or data.get("chartGeneratedAt")
+    _latest_candle_ts = data.get("latest_candle_ts") or data.get("latestCandleTs")
+    _is_server_render = bool(data.get("server_render"))
+
+    if not _is_server_render:
+        # Client-side (browser) charts may be stale screenshots.
+        if not _chart_generated_at:
+            _chart_ts_warnings.append("chart_generated_at missing — client chart image age unknown")
+        if not _latest_candle_ts:
+            _chart_ts_warnings.append("latest_candle_ts missing — cannot verify chart data freshness")
+    else:
+        # Server-render always generates from the candles passed in the request.
+        # Derive latest_candle_ts from the last candle in the primary TF candle array if not provided.
+        if not _latest_candle_ts and data.get("candles"):
+            try:
+                _last_candle = data["candles"][-1]
+                _latest_candle_ts = (
+                    _last_candle.get("t") or _last_candle.get("time") or _last_candle.get("ts")
+                )
+            except Exception:
+                pass
+
+    if _chart_ts_warnings:
+        log.debug("[CHART-VISION] Timestamp warnings for %s: %s", symbol, _chart_ts_warnings)
+
     pair = next(
         (p for p in ALL_PAIRS if p.get("symbol") == symbol or p.get("display") == symbol),
         None,
@@ -9239,17 +9327,61 @@ def api_chart_analysis():
             _engine_b_cache_put(_vsym_key, _vision_payload)
         except Exception:
             pass
-        return jsonify(
-            {
-                "analysis": analysis,
-                "structured": structured,
-                "model": _vision_model,
-                "symbol": symbol,
-                "tf": _tf_label,
-                "dual_tf": dual_mode,
-                "triple_tf": triple_mode,
-            }
-        )
+        try:
+            from ai_review_logger import (
+                log_ai_review,
+                map_vision_rating_to_ai_state,
+                REVIEW_TYPE_CHART_VISION,
+            )
+            _re_status = (structured or {}).get("right_edge_status", "")
+            _vision_ai_state = map_vision_rating_to_ai_state(_re_status)
+            _vision_before = bool((sig or {}).get("trade", False))
+            _vision_after = _vision_before  # chart-analysis doesn't set trade directly here
+            log_ai_review(
+                symbol=symbol,
+                asset_type=(pair or {}).get("type", "unknown") if pair else "unknown",
+                review_type=REVIEW_TYPE_CHART_VISION,
+                model=_vision_model,
+                provider="xAI",
+                prompt_version="VISION_v4",
+                input_packet={"symbol": symbol, "tf": _tf_label},
+                has_chart_image=True,
+                candle_freshness_status=(
+                    "server_render" if _is_server_render
+                    else ("stale_unknown" if _chart_ts_warnings else "client_render")
+                ),
+                engine_a_state=(sig or {}).get("confluenceScore"),
+                engine_b_state=None,
+                engine_c_state=None,
+                engine_d_state=None,
+                risk_state=None,
+                ai_review_state=_vision_ai_state,
+                ai_confidence=None,
+                contradictions_count=0,
+                missing_information_count=len(_chart_ts_warnings),
+                parse_success=True,
+                schema_valid=bool(_re_status),
+                execution_allowed_before_ai=_vision_before,
+                execution_allowed_after_ai=_vision_after,
+                final_action="vision_advisory",
+            )
+        except Exception as _log_err:
+            log.debug("[AI_AUDIT] Chart Vision audit log failed: %s", _log_err)
+
+        _response_payload: dict = {
+            "analysis": analysis,
+            "structured": structured,
+            "model": _vision_model,
+            "symbol": symbol,
+            "tf": _tf_label,
+            "dual_tf": dual_mode,
+            "triple_tf": triple_mode,
+        }
+        if _chart_ts_warnings:
+            _response_payload["chart_timestamp_warnings"] = _chart_ts_warnings
+        if _latest_candle_ts:
+            _response_payload["latest_candle_ts"] = _latest_candle_ts
+        return jsonify(_response_payload)
 
     except Exception as e:
         log.error(f"[AI CHART] Error: {e}")
