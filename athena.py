@@ -10053,6 +10053,19 @@ def api_signal_stability():
     return jsonify(get_signal_stability_index(engine=engine, db_path=_AUDIT_DB))
 
 
+@app.route("/api/debug/routes")
+def api_debug_routes():
+    """Debug endpoint to list all registered API routes. Read-only."""
+    routes = []
+    for rule in app.url_map.iter_rules():
+        if rule.rule.startswith("/api/"):
+            routes.append({
+                "path": rule.rule,
+                "methods": sorted(list(rule.methods - {"HEAD", "OPTIONS"})),
+                "endpoint": rule.endpoint,
+            })
+    return jsonify({"routes": sorted(routes, key=lambda x: x["path"])})
+
 @app.route("/api/open-trades-timed")
 def api_open_trades_timed():
     """
