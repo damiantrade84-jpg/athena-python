@@ -269,7 +269,10 @@ def detect_div(d1c: list, h4c: list, h1c: list) -> list:
     """Detect H4 RSI divergence and H1 volume divergence. Returns list of warning strings."""
     w = []
     try:
-        h4 = h4c[-20:]
+        # Use 40 bars so RSI(14) is fully warmed before the comparison zones.
+        # With 20 bars the middle-third indices (6-12) fall entirely inside the
+        # 14-bar None-padding zone and no divergence can ever be detected.
+        h4 = h4c[-40:]
         cl = [c["close"] for c in h4]
         lows = [c["low"] for c in h4]
         rsi = calc_rsi(cl, 14)
@@ -463,8 +466,8 @@ def calc_confluence(
     # Fix 2 — btcBias penalty: when BTC bias opposes direction, apply mild conviction reduction
     # Only applies to crypto — BTC is the tide for all crypto alts
     _btc_mult = 1.0
-    if pair.get("type") == "crypto" and btc_bias and btc_bias != "neutral":
-        _dir = factor_result.get("direction", "LONG")
+    _dir = factor_result.get("direction")
+    if pair.get("type") == "crypto" and btc_bias and btc_bias != "neutral" and _dir is not None:
         if (btc_bias == "bearish" and _dir == "LONG") or \
            (btc_bias == "bullish" and _dir == "SHORT"):
             _btc_mult = 0.85  # 15% penalty when BTC opposes direction
@@ -475,8 +478,13 @@ def calc_confluence(
     _fs = factor_result.get("final_score", 0.0)
     if _btc_mult != 1.0:
         factor_result = dict(factor_result)
-        factor_result["final_score"] = round(min(3.0, _fs * _btc_mult), 4)
+        _adjusted = round(min(3.0, _fs * _btc_mult), 4)
+        factor_result["final_score"] = _adjusted
         factor_result["btc_bias_applied"] = _btc_mult
+        # btc_bias_delta lets Marcus Reid and UI show the raw vs adjusted difference
+        # without conflating it with factor math (directional_score stays pre-BTC).
+        factor_result["btc_bias_adjusted_score"] = _adjusted
+        factor_result["btc_bias_delta"] = round(_adjusted - _fs, 4)
 
     # Preserve warnings for readability (raw thresholds)
     w = []
@@ -564,7 +572,8 @@ def calc_confluence(
         "LOW_VOLATILITY": 3,
     }
     _regime = {"state": _REGIME_STATE.get(_regime_str.upper(), 1), "label": _regime_str}
-    w.append(f"Regime: {_regime_str.upper()}")
+    # Regime is informational — do not append to warnings so the signal warnings
+    # list stays signal-quality only (consumed by Marcus Reid AI prompt).
     # Confidence engine — diagnostic field (graceful degradation)
     # Derive signal classification from factor result flags
     _squeeze_bonus = factor_result.get("squeeze_bonus", False)
@@ -612,6 +621,7 @@ def calc_confluence(
         "regime": _regime,
         "fundingRate": funding_rate,
         "maxScoreOverride": 3.0,  # Engine A v2 score cap (trend × adx × session × conviction)
+        "regimeNote": f"Regime: {_regime_str.upper()}",
         # New fields for factor diagnostics (Unified to snake_case)
         "factor_scores": factor_result["factor_scores"],
         "factor_weights": factor_result["weights"],

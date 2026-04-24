@@ -153,10 +153,13 @@ def timeframe_alignment(
     if len(scores) < 2:
         return None
     std_val = _std(scores)
-    # Normalize: Engine A v2 final_score is on a 0-3.0 scale.
-    # Max natural std of a fully divergent set (e.g. [0, 3, 0]) is ~1.4.
-    # Dividing by 1.5 ensures fully-disagreeing TFs map near 0 alignment.
-    return max(0.0, min(1.0, 1.0 - std_val / 1.5))
+    # Normalize: the per-TF proxies fed from scoring.py._tf_score_proxy() are
+    # averages of EMA/RSI/MACD components each in [-1, +1], so the proxy
+    # final_score is also in roughly [-1, +1].  A perfectly divergent 3-set
+    # (e.g. [-1, +1, +1]) has std ≈ 0.94.  Dividing by 1.0 maps that near
+    # 0 alignment, which is correct.  Using 1.5 (calibrated for the raw
+    # 0-3.0 Engine A scale) over-rewarded divergent TFs.
+    return max(0.0, min(1.0, 1.0 - std_val / 1.0))
 
 
 def regime_fit(regime: str, signal_type: str = "trend") -> Optional[float]:
