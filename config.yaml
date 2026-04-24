@@ -4,6 +4,22 @@
 
 
 
+# ── Paper/Demo Soak Mode ────────────────────────────────────────────────────────
+
+# Safe paper/demo mode that cannot place real orders.
+
+# All would-be executions must be logged as paper/demo decisions.
+
+PAPER_SOAK:
+  ENABLED: false
+  REAL_ORDERS_ALLOWED: false
+  LOG_ALL_SIGNALS: true
+  LOG_BLOCKED_SIGNALS: true
+  LOG_EXECUTION_DECISIONS: true
+  REQUIRED_FRESHNESS_GATE: true
+
+
+
 # ── Candle depth for analyze_pair / scans (Engine A indicators) ─────────────
 
 # Fetched per TF, then last bar dropped (forming). Must satisfy analyze_pair mins:

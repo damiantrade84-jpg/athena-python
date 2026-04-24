@@ -2,6 +2,31 @@
 
 This checklist is for paper/demo operation only. It does not approve real-money automation.
 
+## Paper/Demo Start Requirements
+
+Paper/demo can start only after:
+- Full live feed matrix passes validation: `python tools/validate_live_feed_matrix.py --input docs/diagnostics/latest_live_feed_snapshot.json`
+- No missing H1/H4/D1 rows for required symbols (EURUSD, GBPUSD, BTCUSDT, ETHUSDT)
+- All gate decisions are ALLOW for tested market data
+- PAPER_SOAK.ENABLED is true in config.yaml
+- REAL_ORDERS_ALLOWED is false in config.yaml
+- All required candle policies show POLICY_OK status
+- No ERROR_PATH_MISMATCH or ERROR_OFFSET_MISMATCH
+- No WARNING_ONE_BUCKET_LAG (genuine stale, not intentional confirmed-only lag)
+
+## Real-Money Automation Requirements
+
+Real-money can only be considered after:
+- Minimum 1 full trading week of paper/demo logs (not 2 weeks - reduced for faster validation)
+- No unexplained stale candle events
+- No ERROR_PATH_MISMATCH in logs
+- No ERROR_OFFSET_MISMATCH in logs
+- No unexpected real order calls in paper mode (verify no broker API calls)
+- Risk sizing verified manually
+- Execution rejects reviewed
+- Drawdown reviewed
+- Manual approval
+
 ## Run Live Feed Diagnostics
 
 Start Athena in demo mode, then call:
@@ -90,7 +115,7 @@ Capture these during the soak:
 
 ## Minimum Soak Period
 
-Run at least 2 full trading weeks in paper/demo before considering any real-money review. Include at least one forex market open, one New York session, one Asian/off-session period, and one crypto weekend.
+Run at least 1 full trading week in paper/demo before considering any real-money review. Include at least one forex market open, one New York session, one Asian/off-session period, and one crypto weekend.
 
 ## Required Metrics
 
