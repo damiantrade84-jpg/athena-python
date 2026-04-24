@@ -768,6 +768,8 @@ AI_TEMPERATURE: 0.3
 
 AI_VISION_TEMPERATURE: 0.2
 
+AI_VISION_CAN_UPGRADE_TRADE: false  # Vision CONFIRM cannot create trade=True; downgrade only by default
+
 ENGINE_B_PROFILE_SCORING_ENABLED: true
 
 

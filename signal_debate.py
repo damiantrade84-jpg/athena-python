@@ -97,7 +97,7 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
     _warnings = signal.get("warnings", [])
 
     # Build signal context
-    context = (
+    _base_context = (
         f"Pair: {pair} | Direction: {direction} | Score: {score}/{max_score} "
         f"| Regime: {regime} | Asset: {asset_type}\n"
         f"Factor Scores: {_factor_str}\n"
@@ -110,6 +110,12 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
         f"EMA200 Slope: {signal.get('ema200Slope', '?')}%\n"
         f"Warnings: {'; '.join(_warnings) if _warnings else 'None'}"
     )
+    try:
+        from ai_utils import build_freshness_ai_context as _build_freshness
+        _freshness_str = _build_freshness(signal)
+        context = _base_context + ("\n\n" + _freshness_str if _freshness_str else "")
+    except Exception:
+        context = _base_context
 
     try:
         client = create_ai_client(CONFIG, api_key=api_key)
