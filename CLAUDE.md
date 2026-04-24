@@ -20,6 +20,429 @@ Cosmetic UI copy is fine. **Do not "tune", "align", or "simplify" thresholds** i
 
 ---
 
+## ⚠️ Current Safety State
+
+Athena is currently approved for **controlled paper/demo validation only**.
+
+**Real-money automation is NOT approved.**
+
+Mandatory runtime safety state:
+- `PAPER_SOAK.ENABLED: true`
+- `REAL_ORDERS_ALLOWED: false`
+
+No change may enable real broker orders unless the user explicitly approves after:
+- minimum 1 full trading week of paper/demo logs
+- clean candle freshness logs
+- no unexplained stale events
+- no `ERROR_PATH_MISMATCH`
+- no `ERROR_OFFSET_MISMATCH`
+- risk sizing reviewed
+- execution rejects reviewed
+- drawdown reviewed
+- manual approval
+
+Any code path that bypasses paper mode, freshness gates, kill switch, or risk_check is a critical bug.
+
+---
+
+## ⚠️ Non-Negotiable Development Rules
+
+- No guessing.
+- No fake validation.
+- No silent threshold changes.
+- No execution safety weakening.
+- No real orders while `PAPER_SOAK.ENABLED=true` or `REAL_ORDERS_ALLOWED=false`.
+- All strategy changes must be config-gated and default-safe.
+- All behavioural changes require tests.
+- All diagnostic/audit modes must be report-only unless explicitly approved.
+- Risk, freshness, kill-switch, duplicate-position, max-risk, and account-balance gates must never be bypassed.
+- AI may not override risk or freshness gates.
+- Engine changes must preserve live/backtest/paper parity.
+
+---
+
+## ⚠️ Candle Freshness / Data Integrity Rules
+
+Freshness gate remains mandatory.
+
+**Confirmed-only candle logic:**
+- A one-bucket lag behind the current forming candle is allowed only when the path policy is `CONFIRMED_ONLY` and the latest expected confirmed candle is present.
+- This must be classified as `CONFIRMED_ONLY_OK`.
+- It must not be treated as true stale data.
+- True stale means the latest candle is older than the expected confirmed candle.
+
+**Risk gate behaviour:**
+- Allow: `OK`, `CONFIRMED_ONLY_OK`
+- Block: `TRUE_STALE_1_BUCKET`, `TRUE_STALE_MULTI_BUCKET`, `PROVIDER_STALE`, `PROVIDER_ERROR`, `ERROR_PATH_MISMATCH`, `ERROR_OFFSET_MISMATCH`, `WARNING_ONE_BUCKET_LAG` when policy expects forming/current data
+
+Never disable the freshness gate to fix a signal issue.
+
+---
+
+## ⚠️ H4 Offset / Source Grid Rules
+
+Document the latest validated H4 grids:
+- **Binance crypto:** 0h UTC grid, 00/04/08/12/16/20 UTC.
+- **MT5 forex/metals/commodities/indices:** 2h H4 grid, 02/06/10/14/18/22 UTC.
+- **MT5 US stocks:** 3h session H4 grid, 15/19 UTC observed.
+- **MT5 D1 must remain UTC 00:00.**
+- Do not apply H4 broker/session offset to D1.
+- Do not apply MT5 offsets to Binance crypto.
+- H4 alignment must be source/session-aware, not only asset-type based.
+
+**Required diagnostic tools:**
+- `tools/live_feed_diagnostics.py`
+- `tools/probe_mt5_h4.py`
+- `tools/probe_mt5_d1.py`
+- `tools/validate_live_feed_matrix.py`
+
+Before paper/demo:
+- full H1/H4/D1 matrix must pass for configured symbols.
+- every row must show `providerStatus ok`, `policyStatus POLICY_OK`, and `gateDecision ALLOW` or confirmed-only equivalent.
+
+---
+
+## ⚠️ Engine A Rules
+
+Engine A v2 is validated and test-covered.
+
+Do not lower Engine A thresholds without evidence from:
+- signal funnel distribution
+- near-miss counts
+- paper/demo results
+- gate-failure breakdown
+
+**Known current state:**
+- Engine A is producing A_ONLY signals.
+- Engine A threshold was not proven to be too high.
+- Engine A `volume_ratio`, `macro_context`, and `intermarket_context` are currently accepted but not active scoring factors. This is a known diagnostic gap, not a bug.
+
+Do not silently add these factors into scoring without explicit testing and config-gating.
+
+---
+
+## ⚠️ Engine B Rules
+
+Engine B is strict by design.
+
+**Document the distinction:**
+- `structural_verdict == CLEAR` means data/structure analysis ran successfully.
+- `checklist structure_ok` is a tradeability gate and can fail even when `structural_verdict` is CLEAR.
+
+**Engine B must require:**
+- structure
+- location
+- entry trigger
+- room/RR
+- D1 conflict check
+- checklist `confidence.passed == true`
+
+Engine B `passed=True` rows must have empty `hard_fail_reasons`.
+
+**Engine B diagnostics must separate:**
+- `hard_fail_reasons`
+- `soft_warnings`
+- `diagnostic_notes`
+
+**Current validated findings:**
+- Engine B raw threshold is not the main bottleneck.
+- `confidence.passed false` is the main reason B does not pass often.
+- `no_trigger_pattern` often means structure is ready but entry trigger is not present.
+- `structural_tp_too_close` often falls back to RR-based TP and is not automatically a bug.
+- D1 PD array conflict within configured ATR distance is a safety gate.
+
+Do not weaken Engine B checklist for execution.
+
+**Safe future improvement:**
+- expand watchlist visibility only.
+- `STRUCTURE_READY_NO_TRIGGER` may become watchlist, not execution.
+- D1 conflict watchlist candidates may be shown, not executed.
+- next valid target logic may be simulated/report-only before any execution use.
+
+---
+
+## ⚠️ Engine C Rules
+
+Engine C must not use failed Engine B confirmation.
+
+Engine B can only count in Engine C when:
+- `structural_verdict == CLEAR`
+- direction is LONG or SHORT
+- normalized score exceeds threshold
+- `confidence.passed == true`
+
+Engine C must not create aligned/B-only execution from failed Engine B checklist.
+
+**Engine C decision states:**
+- `A_ONLY`
+- `B_ONLY`
+- `ALIGNED`
+- `CONFLICT`
+- `WATCHLIST`
+- `BLOCKED`
+
+Engine C can be starved if Engine B fails checklist. Do not lower Engine C threshold to compensate for missing Engine B confirmation.
+
+---
+
+## ⚠️ Engine D / Scalp Lab Rules
+
+Engine D is working and being called.
+
+The previous issue was UI visibility:
+- Scalp Lab only displayed PASS rows.
+- Diagnostic Mode now displays skipped/no-pass rows and fail reasons.
+
+**Engine D is strict by design:**
+- `MIN_GRADE: B`
+- `WITH_TREND_ONLY: true`
+- `MIN_RR: 2.0`
+- `VP_PROXIMITY_PCT: 0.30`
+
+Do not lower Engine D thresholds yet.
+
+**Engine D should currently be used as:**
+- crypto scalp radar
+- paper/watchlist only
+- diagnostic-first
+
+Crypto has the strongest Engine D data because Binance provides real volume and aggTrade/CVD data.
+
+Forex, commodities, indices, metals, and stocks are microstructure-limited:
+- MT5 tick volume is noisy.
+- CVD may be synthetic.
+- absorption confirmation is less reliable.
+
+Non-crypto Engine D outputs should be treated as watchlist/diagnostic unless later validated by paper evidence.
+
+**Safe future improvement:**
+- Grade A/B = valid scalp candidate.
+- Grade C with good location + trend + RR = WATCHLIST only.
+- Grade D = no setup.
+- Do not create execution signals from Grade C without explicit approval.
+
+**Engine D audit logs:**
+- `logs/scalp_audit/engine_d_funnel.jsonl`
+- `docs/diagnostics/engine_d_scalp_audit.md`
+
+---
+
+## ⚠️ AI Review Rules
+
+AI is now safety-grounded but must remain controlled.
+
+**AI review modes:**
+- Marcus Reid: commentary-only
+- Engine B AI: commentary-only
+- News sentiment: context-only
+- Signal Debate: downgrade-only
+- Chart Vision: downgrade-only by default
+
+**Mandatory AI safety rules:**
+- AI may not bypass `risk_check`.
+- AI may not bypass candle freshness gates.
+- AI may not bypass paper mode.
+- AI may not increase position size.
+- AI may not override kill switch.
+- AI may not create execution permission by itself.
+
+**Signal Debate:**
+- `score_adjustment` must be clamped to `<= 0.0`.
+- Debate may reduce score or block.
+- Debate may not increase `confluenceScore`.
+
+**Chart Vision:**
+- `AI_VISION_CAN_UPGRADE_TRADE` must default to `false`.
+- `CONTRADICT` may set `trade=false`.
+- `CONFIRM` may set `ai_visual_confirmed=true` and `vision_supports_setup=true`.
+- `CONFIRM` must not flip `trade` from `false` to `true` unless `AI_VISION_CAN_UPGRADE_TRADE=true` and all additional safety conditions are explicitly met.
+
+**AI context must include:**
+- `candleFetchMeta`
+- `dataFreshness`
+- candle timestamps
+- freshness gate decision
+- engine context
+- entry/SL/TP/RR where applicable
+
+If freshness/timestamp context is missing, AI review must be `REVIEW_INCOMPLETE` or cautionary.
+
+**AI audit logger:**
+- `ai_review_logger.py`
+- `logs/ai_review/ai_review_audit.jsonl`
+
+---
+
+## ⚠️ Telegram / Runtime Safety
+
+Telegram conflicts can block diagnostic scans.
+
+**Environment override:**
+```
+ATHENA_DISABLE_TELEGRAM=1
+```
+
+This may be used for local scans/audits to prevent Telegram bot startup.
+
+This override must only disable Telegram startup/polling. It must not affect:
+- scanning
+- data freshness
+- paper mode
+- risk checks
+- audit logging
+- strategy logic
+
+---
+
+## ⚠️ Threshold Audit Rules
+
+Threshold audit is report-only.
+
+Do not lower thresholds based on "few signals" without:
+- signal funnel data
+- score distributions
+- near-miss counts
+- fail reason counts
+- shadow threshold simulation
+- paper/demo results
+
+**Current validated conclusion:**
+- Engine A threshold should not be lowered.
+- Engine B raw threshold should not be lowered.
+- Engine C thresholds should not be lowered.
+- Engine B checklist should not be weakened for execution.
+- Watchlist expansion is preferred over execution expansion.
+
+**Threshold audit files:**
+- `threshold_audit.py`
+- `tools/threshold_audit_report.py`
+- `docs/diagnostics/threshold_audit_report.md`
+- `docs/diagnostics/engine_b_checklist_audit.md`
+- `logs/threshold_audit/signal_funnel.jsonl`
+
+---
+
+## ⚠️ Paper Soak Rules
+
+Paper/demo can continue.
+
+Paper soak must log:
+- all signals
+- watchlists
+- blocked signals
+- execution decisions
+- freshness blocks
+- risk blocks
+- engine consensus
+- paper entries/exits if tracked
+
+**Required logs:**
+- `logs/paper_soak/signals.jsonl`
+- `logs/paper_soak/execution_decisions.jsonl`
+- `logs/paper_soak/freshness_blocks.jsonl`
+- `logs/paper_soak/risk_blocks.jsonl`
+- `logs/paper_soak/engine_consensus.jsonl`
+
+Real-money cannot be considered until:
+- 1 full trading week minimum paper soak
+- clean diagnostics
+- reviewed drawdown
+- reviewed execution rejects
+- risk sizing verified manually
+- no unexpected real order calls
+- explicit user approval
+
+---
+
+## ⚠️ Required Validation Commands
+
+After meaningful code changes, run:
+```bash
+python -m pytest
+```
+
+Run `py_compile` on changed Python files.
+
+**For data freshness:**
+```bash
+python tools/live_feed_diagnostics.py --symbols EURUSD,GBPUSD,XAU/USD,XAG/USD,AAPL,NVDA,MSFT,TSLA,BTCUSDT,ETHUSDT --timeframes H1,H4,D1 --json-output
+```
+
+**For MT5 H4:**
+```bash
+python tools/probe_mt5_h4.py --symbols EUR/USD,XAU/USD,AAPL,NVDA,"S&P 500","NASDAQ-100",WTI Oil --count 10 --json-output
+```
+
+**For threshold audit:**
+```bash
+ATHENA_THRESHOLD_AUDIT=1
+ATHENA_DISABLE_TELEGRAM=1
+python athena.py scan
+python tools/threshold_audit_report.py --input logs/threshold_audit/signal_funnel.jsonl
+```
+
+**For paper soak report:**
+```bash
+python tools/paper_soak_report.py --log-dir logs/paper_soak
+```
+
+---
+
+## ⚠️ Current System Status Summary
+
+Current validated status:
+- Candle freshness: fixed and policy-aware.
+- H4 source/session alignment: fixed.
+- MT5 D1 UTC handling: protected.
+- Engine A: validated, do not lower threshold yet.
+- Engine B: strict by design, do not weaken execution checklist.
+- Engine C: must require Engine B checklist pass.
+- Engine D: working, diagnostic mode added, do not lower thresholds yet.
+- AI review: freshness-grounded, downgrade-only for execution by default.
+- Paper/demo: approved.
+- Real-money automation: not approved.
+- Next priority: paper soak evidence, not more tuning.
+
+---
+
+## ⚠️ UI/API Contract Rules
+
+The UI must display backend contract fields, not legacy placeholders.
+
+**Engine A UI must use Engine A v2 fields:**
+- `factorScores.trend`
+- `factorScores.momentum`
+- `factorScores.addon`
+- `trendCoherence`
+- `adxValue`
+- `sessionMultiplier`
+- `conviction`
+- `direction`
+- `score/maxScore/threshold`
+- fail reasons
+
+Do not reintroduce legacy Engine A vote fields as active scoring indicators unless backend Engine A v2 actually returns and uses them.
+
+**Freshness display must be policy-aware:**
+- `CONFIRMED_ONLY_OK` must not be shown as `stale_1_bucket`.
+- policy-aware `consistencyStatus` takes priority over raw `stalenessSeverity`.
+- raw `stalenessSeverity` may appear only in detailed diagnostics, not as a blocking warning when `gateDecision` is ALLOW.
+
+**Scan responses must include:**
+- `payloadVersion`
+- `contract` metadata
+- `generated_at/run_id` where available
+- engineA/engineB/engineC/engineD contract names
+
+UI must warn or fall back safely if `payloadVersion` is missing or old.
+
+**Execution payload safety:**
+- UI payload must never be trusted as the source of truth for freshness/risk.
+- Backend must re-check freshness, risk, kill switch, paper mode, duplicate trades, and signal age.
+- UI must not allow WATCHLIST/BLOCKED states to execute.
+
+---
+
 ## ⚠️ Data Protection
 
 `audit.db` and `candle_cache.db` contain all live trading history.

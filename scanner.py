@@ -1012,6 +1012,13 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             "scanQuantileEnabled": _q_enabled,
             "scanQuantileFloors": quantile_floors,
             "scanQuantileMinSamples": _q_min_n,
+            "payloadVersion": "2.0",
+            "contract": {
+                "engineA": "v2_factor_scoring",
+                "engineB": "naked_structure",
+                "engineC": "consensus",
+                "engineD": "scalp_vp",
+            },
         }
 
     finally:

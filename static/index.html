@@ -6804,21 +6804,28 @@ function buildCardInner(s, idx) {
     ? '<div style="margin-bottom:8px;padding:8px 10px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.25);border-radius:8px;font-size:11px;color:var(--warn)"><strong>Watchlist:</strong> ' + s.watchlistReason + '</div>'
     : '';
 
-  var screen1keys = ['D1 Trend Gate', 'D1 ADX Trend', 'D1 Weinstein Stage'];
-  var screen2keys = ['H4 MACD Momentum', 'H4 RSI Zone', 'H4 Stochastic', 'H4 Fib Level'];
-  var screen3keys = ['H1 EMA Entry', 'H1 BB Pullback', 'H1 RSI Divergence'];
-
-  function voteHtml(keys, label) {
-    var pills = keys.map(function(k) {
-      var v = (s.votes || {})[k]; if (v === undefined) return '';
-      return '<span class="vote-pill ' + (v > 0 ? 'bull' : v < 0 ? 'bear' : 'neutral') + '">' + k.replace('D1 ', '').replace('H4 ', '').replace('H1 ', '') + '</span>';
-    }).join('');
-    return '<div class="screen-group"><div class="screen-label">' + label + '</div><div class="votes-row">' + pills + '</div></div>';
+  // Engine A v2 factor scores display
+  function factorScoreHtml(label, value, max) {
+    if (value === undefined || value === null) return '';
+    var pct = max > 0 ? (value / max * 100) : 0;
+    var color = pct >= 67 ? 'var(--bull)' : pct >= 33 ? 'var(--accent)' : 'var(--muted)';
+    return '<span class="vote-pill" style="color:' + color + '">' + label + ': ' + value.toFixed(2) + '</span>';
   }
 
+  var factorScores = s.factorScores || {};
+  var adxVal = s.adx_value !== undefined ? s.adx_value : (s.adx || null);
+  var sessionMult = s.session_multiplier !== undefined ? s.session_multiplier : 1.0;
+  var addonType = s.addon_type || 'none';
+  
   var votesHtml = isNaked
     ? '<div style="margin:8px 0;padding:8px 10px;background:rgba(14,203,129,0.1);border:1px solid rgba(14,203,129,0.2);border-radius:6px;color:#0ecb81;font-size:11px;font-family:monospace;text-align:center;letter-spacing:1px;font-weight:bold;">🌍 PURE NAKED STRUCTURE ENTRY</div>'
-    : voteHtml(screen1keys, 'Screen 1 | D1 Tide') + voteHtml(screen2keys, 'Screen 2 | H4 Wave') + voteHtml(screen3keys, 'Screen 3 | H1 Ripple');
+    : '<div class="screen-group"><div class="screen-label">Engine A v2 Factors</div><div class="votes-row">' +
+      factorScoreHtml('Trend', factorScores.trend, 3.0) +
+      factorScoreHtml('Momentum', factorScores.momentum, 1.0) +
+      factorScoreHtml('Addon (' + addonType + ')', factorScores.addon, 0.3) +
+      (adxVal !== null ? '<span class="vote-pill">ADX: ' + adxVal.toFixed(1) + '</span>' : '') +
+      '<span class="vote-pill">Session: ' + sessionMult.toFixed(2) + 'x</span>' +
+      '</div></div>';
 
   var warnHtml = '';
   if (s.warnings && s.warnings.length > 0) {

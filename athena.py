@@ -11254,19 +11254,78 @@ def analyze_pair(
         "pairSource": pair.get("source"),
     }
     signal["candleFetchMeta"] = _candle_fetch_meta
+    
+    # Populate candleConsistency for policy-aware freshness evaluation
+    try:
+        from athena_app.services.data_freshness import check_live_candle_consistency
+        from athena_app.services.market_state import split_market_state, market_state_offset_hours
+        
+        time_now = datetime.now(timezone.utc).timestamp()
+        for tf_u in ("H4", "H1", "D1"):
+            state = preloaded_market_state.get(tf_u) if preloaded_market_state else None
+            if not state:
+                continue
+            # Build engine input paths for consistency check
+            if pair.get("source") == "mt5" and pair.get("type") == "forex":
+                engine_a_input = list(state.get("confirmed") or [])
+            else:
+                engine_a_input = list(state.get("confirmed") or [])
+                if state.get("forming"):
+                    engine_a_input.append(state["forming"])
+            engine_b_input = list(state.get("confirmed") or [])
+            scanner_input = list(engine_a_input)
+            
+            # Get raw candles for this timeframe
+            tf_candles = {"H4": h4, "H1": h1, "D1": d1}.get(tf_u, [])
+            
+            consistency_result = check_live_candle_consistency(
+                pair,
+                tf_u,
+                {
+                    "raw_provider": tf_candles or [],
+                    "cache": _candle_fetch_meta.get(tf_u, {}),
+                    "market_state": state,
+                    "engine_a": engine_a_input,
+                    "engine_b": engine_b_input,
+                    "scanner": scanner_input,
+                    "compare": scanner_input,
+                },
+                time_now=time_now,
+            )
+            if consistency_result:
+                signal.setdefault("candleConsistency", {})[tf_u] = consistency_result
+    except Exception as _consistency_err:
+        log.debug(f"[ANALYZE] {pair.get('display')} candle consistency check unavailable: {_consistency_err}")
+    
     try:
         from athena_app.services.data_freshness import evaluate_execution_data_freshness
 
         _freshness_eval = evaluate_execution_data_freshness(signal, CONFIG)
         signal["dataFreshness"] = _freshness_eval
+        
+        # Check if any timeframe has CONFIRMED_ONLY_OK status (intentional policy lag)
+        # If so, do not warn about stale_1_bucket as it's expected behavior
+        consistency = signal.get("candleConsistency", {})
+        has_confirmed_only_ok = any(
+            (isinstance(d, dict) and d.get("status") == "CONFIRMED_ONLY_OK") or d == "CONFIRMED_ONLY_OK"
+            for d in consistency.values()
+        ) if isinstance(consistency, dict) else False
+        
         if _freshness_eval.get("warnOnStaleScan") and _freshness_eval.get("blocked"):
-            _warn = "DATA_FRESHNESS: " + "; ".join(
-                f"{b.get('timeframe')} {b.get('severity')}"
-                for b in _freshness_eval.get("blocked", [])
-            )
-            signal.setdefault("warnings", [])
-            if _warn not in signal["warnings"]:
-                signal["warnings"].append(_warn)
+            # Filter out stale_1_bucket warnings when CONFIRMED_ONLY_OK is present
+            blocked_items = _freshness_eval.get("blocked", [])
+            filtered_blocked = [
+                b for b in blocked_items
+                if not (has_confirmed_only_ok and b.get("severity") == "stale_1_bucket")
+            ]
+            if filtered_blocked:
+                _warn = "DATA_FRESHNESS: " + "; ".join(
+                    f"{b.get('timeframe')} {b.get('severity')}"
+                    for b in filtered_blocked
+                )
+                signal.setdefault("warnings", [])
+                if _warn not in signal["warnings"]:
+                    signal["warnings"].append(_warn)
     except Exception as _freshness_err:
         log.debug(
             "[ANALYZE] %s data freshness evaluation unavailable: %s",

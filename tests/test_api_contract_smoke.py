@@ -156,3 +156,14 @@ def test_live_feed_diagnostics_route_is_read_only():
             break
     else:
         raise AssertionError("api_live_feed_diagnostics function not found")
+
+
+def test_scan_response_includes_payload_version_and_contract():
+    """Verify scan response includes payloadVersion and contract metadata."""
+    scanner_src = (ROOT / "scanner.py").read_text(encoding="utf-8")
+    assert '"payloadVersion": "2.0"' in scanner_src
+    assert '"contract": {' in scanner_src
+    assert '"engineA": "v2_factor_scoring"' in scanner_src
+    assert '"engineB": "naked_structure"' in scanner_src
+    assert '"engineC": "consensus"' in scanner_src
+    assert '"engineD": "scalp_vp"' in scanner_src
