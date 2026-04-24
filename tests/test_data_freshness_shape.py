@@ -249,7 +249,7 @@ def test_confirmed_only_ok_with_raw_current():
 
 
 def test_true_one_bucket_lag_when_confirmed_only_but_stale():
-    """Verify WARNING_ONE_BUCKET_LAG when confirmed-only but data is actually stale (not just intentional)."""
+    """Verify ERROR_STALE_MULTI_BUCKET when raw provider is missing current bucket."""
     pair = {"symbol": "BTCUSDT", "display": "BTCUSDT", "type": "crypto", "source": "binance"}
     
     # Simulate raw provider WITHOUT current bucket (stale)
@@ -271,3 +271,168 @@ def test_true_one_bucket_lag_when_confirmed_only_but_stale():
     )
     
     assert result["status"] == "ERROR_STALE_MULTI_BUCKET"  # Missing current bucket is an error
+
+
+def test_gate_confirmed_only_ok_allows_execution():
+    """Phase 2: CONFIRMED_ONLY_OK at top-level allows execution even if per-path shows stale_1_bucket."""
+    pair = {"symbol": "BTCUSDT", "display": "BTCUSDT", "type": "crypto", "source": "binance"}
+    
+    signal = {
+        "candleConsistency": {
+            "H1": {
+                "status": "CONFIRMED_ONLY_OK",
+                "reason": "engine paths use confirmed-only policy",
+                "paths": {
+                    "engine_b": {"stalenessSeverity": "stale_1_bucket"},  # Per-path shows lag
+                    "scanner": {"stalenessSeverity": "stale_1_bucket"},
+                }
+            }
+        }
+    }
+    
+    config = {
+        "DATA_FRESHNESS_GATES": {
+            "BLOCK_EXECUTION_ON_STALE": True,
+            "BLOCK_TIMEFRAMES": ["H1", "H4", "D1"],
+            "BLOCK_SEVERITIES": ["warning_one_bucket_lag", "stale_1_bucket"],
+        }
+    }
+    
+    result = evaluate_execution_data_freshness(signal, config)
+    
+    # CONFIRMED_ONLY_OK at top-level should allow even with per-path stale_1_bucket
+    assert result["allowed"] is True
+    assert len(result["blocked"]) == 0
+
+
+def test_gate_warning_one_bucket_lag_blocks_execution():
+    """Phase 2: WARNING_ONE_BUCKET_LAG at top-level blocks execution."""
+    pair = {"symbol": "BTCUSDT", "display": "BTCUSDT", "type": "crypto", "source": "binance"}
+    
+    signal = {
+        "candleConsistency": {
+            "H1": {
+                "status": "WARNING_ONE_BUCKET_LAG",
+                "reason": "one or more paths lag by one bucket",
+            }
+        }
+    }
+    
+    config = {
+        "DATA_FRESHNESS_GATES": {
+            "BLOCK_EXECUTION_ON_STALE": True,
+            "BLOCK_TIMEFRAMES": ["H1", "H4", "D1"],
+            "BLOCK_SEVERITIES": ["warning_one_bucket_lag"],
+        }
+    }
+    
+    result = evaluate_execution_data_freshness(signal, config)
+    
+    assert result["allowed"] is False
+    assert "STALE_DATA_BLOCK" in result["reason"]
+
+
+def test_gate_error_stale_multi_bucket_blocks_execution():
+    """Phase 2: ERROR_STALE_MULTI_BUCKET blocks execution."""
+    pair = {"symbol": "BTCUSDT", "display": "BTCUSDT", "type": "crypto", "source": "binance"}
+    
+    signal = {
+        "candleConsistency": {
+            "H1": {
+                "status": "ERROR_STALE_MULTI_BUCKET",
+                "reason": "missing current bucket or lag multiple buckets",
+            }
+        }
+    }
+    
+    config = {
+        "DATA_FRESHNESS_GATES": {
+            "BLOCK_EXECUTION_ON_STALE": True,
+            "BLOCK_TIMEFRAMES": ["H1", "H4", "D1"],
+            "BLOCK_SEVERITIES": ["error_stale_multi_bucket"],
+        }
+    }
+    
+    result = evaluate_execution_data_freshness(signal, config)
+    
+    assert result["allowed"] is False
+    assert "STALE_DATA_BLOCK" in result["reason"]
+
+
+def test_gate_provider_error_blocks_execution():
+    """Phase 2: provider_error blocks execution."""
+    pair = {"symbol": "BTCUSDT", "display": "BTCUSDT", "type": "crypto", "source": "binance"}
+    
+    signal = {
+        "candleFreshness": {
+            "H1": {
+                "stalenessSeverity": "provider_error",
+                "providerStatus": "error",
+                "providerError": "Connection timeout",
+            }
+        }
+    }
+    
+    config = {
+        "DATA_FRESHNESS_GATES": {
+            "BLOCK_EXECUTION_ON_STALE": True,
+            "BLOCK_TIMEFRAMES": ["H1", "H4", "D1"],
+            "BLOCK_SEVERITIES": ["provider_error"],
+        }
+    }
+    
+    result = evaluate_execution_data_freshness(signal, config)
+    
+    assert result["allowed"] is False
+
+
+def test_gate_error_path_mismatch_blocks_execution():
+    """Phase 2: ERROR_PATH_MISMATCH blocks execution."""
+    pair = {"symbol": "BTCUSDT", "display": "BTCUSDT", "type": "crypto", "source": "binance"}
+    
+    signal = {
+        "candleConsistency": {
+            "H1": {
+                "status": "ERROR_PATH_MISMATCH",
+                "reason": "path latest epochs differ",
+            }
+        }
+    }
+    
+    config = {
+        "DATA_FRESHNESS_GATES": {
+            "BLOCK_EXECUTION_ON_STALE": True,
+            "BLOCK_TIMEFRAMES": ["H1", "H4", "D1"],
+            "BLOCK_SEVERITIES": ["error_path_mismatch"],
+        }
+    }
+    
+    result = evaluate_execution_data_freshness(signal, config)
+    
+    assert result["allowed"] is False
+
+
+def test_gate_error_offset_mismatch_blocks_execution():
+    """Phase 2: ERROR_OFFSET_MISMATCH blocks execution."""
+    pair = {"symbol": "EURUSD", "display": "EUR/USD", "type": "forex", "source": "mt5"}
+    
+    signal = {
+        "candleConsistency": {
+            "H4": {
+                "status": "ERROR_OFFSET_MISMATCH",
+                "reason": "offset mismatch",
+            }
+        }
+    }
+    
+    config = {
+        "DATA_FRESHNESS_GATES": {
+            "BLOCK_EXECUTION_ON_STALE": True,
+            "BLOCK_TIMEFRAMES": ["H1", "H4", "D1"],
+            "BLOCK_SEVERITIES": ["error_offset_mismatch"],
+        }
+    }
+    
+    result = evaluate_execution_data_freshness(signal, config)
+    
+    assert result["allowed"] is False

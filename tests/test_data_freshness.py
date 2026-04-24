@@ -22,8 +22,8 @@ def _candle(iso_text):
     }
 
 
-def _diag(tf, last_iso, expected_iso, *, offset=0.0, severity="fresh", lag=0):
-    return {
+def _diag(tf, last_iso, expected_iso, *, offset=0.0, severity="fresh", lag=0, confirmed_iso=None):
+    diag = {
         "timeframe": tf,
         "lastBarEpoch": _epoch(last_iso),
         "expectedCurrentBucketEpoch": _epoch(expected_iso),
@@ -35,6 +35,13 @@ def _diag(tf, last_iso, expected_iso, *, offset=0.0, severity="fresh", lag=0):
         "usesOffset": bool(offset),
         "offsetHours": offset,
     }
+    # If confirmed_iso provided or lag > 0 (confirmed-only), set confirmedLatestEpoch
+    if confirmed_iso:
+        diag["confirmedLatestEpoch"] = _epoch(confirmed_iso)
+    elif lag > 0:
+        # For confirmed-only paths with lag, the last bar is the confirmed candle
+        diag["confirmedLatestEpoch"] = _epoch(last_iso)
+    return diag
 
 
 def test_live_feed_diagnostic_includes_execution_safe_fields(monkeypatch):
@@ -86,6 +93,7 @@ def test_candle_consistency_all_paths_aligned_ok(monkeypatch):
 
 
 def test_candle_consistency_cache_one_bucket_lag_warns(monkeypatch):
+    """Verify CONFIRMED_ONLY_OK when all engine paths have correct one-bucket lag for MT5 forex."""
     monkeypatch.setitem(CONFIG, "FOREX_H4_RESAMPLE_OFFSET_HOURS", 1)
     pair = {"type": "forex", "display": "EUR/USD", "symbol": "EURUSD", "source": "mt5"}
 
@@ -93,7 +101,9 @@ def test_candle_consistency_cache_one_bucket_lag_warns(monkeypatch):
         pair,
         "H4",
         {
+            # Raw provider has current forming bucket at 05:00:00Z
             "raw_provider": _diag("H4", "2026-04-24T05:00:00Z", "2026-04-24T05:00:00Z", offset=1.0),
+            # Cache lags by one bucket (confirmed candle at 01:00:00Z)
             "cache": _diag(
                 "H4",
                 "2026-04-24T01:00:00Z",
@@ -102,16 +112,38 @@ def test_candle_consistency_cache_one_bucket_lag_warns(monkeypatch):
                 severity="stale_1_bucket",
                 lag=1,
             ),
-            "engine_a": _diag("H4", "2026-04-24T05:00:00Z", "2026-04-24T05:00:00Z", offset=1.0),
-            "engine_b": _diag("H4", "2026-04-24T05:00:00Z", "2026-04-24T05:00:00Z", offset=1.0),
+            # Engine paths use confirmed-only (one bucket behind raw)
+            "engine_a": _diag(
+                "H4",
+                "2026-04-24T01:00:00Z",
+                "2026-04-24T05:00:00Z",
+                offset=1.0,
+                severity="stale_1_bucket",
+                lag=1,
+            ),
+            "engine_b": _diag(
+                "H4",
+                "2026-04-24T01:00:00Z",
+                "2026-04-24T05:00:00Z",
+                offset=1.0,
+                severity="stale_1_bucket",
+                lag=1,
+            ),
         },
         time_now=_epoch("2026-04-24T06:30:00Z"),
     )
 
-    assert result["status"] == "WARNING_ONE_BUCKET_LAG"
+    # MT5 forex uses CONFIRMED_ONLY policy, so one-bucket lag is intentional
+    assert result["status"] == "CONFIRMED_ONLY_OK"
+    assert "confirmed-only policy" in result["reason"]
+    # All engine paths should have POLICY_OK
+    for path_name in ["engine_a", "engine_b"]:
+        assert result["enginePolicies"][path_name]["policy"] == "CONFIRMED_ONLY"
+        assert result["enginePolicies"][path_name]["policyStatus"] == "POLICY_OK"
 
 
 def test_candle_consistency_engine_a_b_latest_mismatch_errors(monkeypatch):
+    """Verify ERROR_PATH_MISMATCH when engine paths have different confirmed epochs."""
     monkeypatch.setitem(CONFIG, "FOREX_H4_RESAMPLE_OFFSET_HOURS", 1)
     pair = {"type": "forex", "display": "EUR/USD", "symbol": "EURUSD", "source": "mt5"}
 
@@ -119,13 +151,41 @@ def test_candle_consistency_engine_a_b_latest_mismatch_errors(monkeypatch):
         pair,
         "H4",
         {
-            "engine_a": _diag("H4", "2026-04-24T05:00:00Z", "2026-04-24T05:00:00Z", offset=1.0),
-            "engine_b": _diag("H4", "2026-04-24T01:00:00Z", "2026-04-24T05:00:00Z", offset=1.0),
+            # Different confirmedLatestEpoch should trigger path mismatch
+            "engine_a": {
+                "timeframe": "H4",
+                "lastBarEpoch": _epoch("2026-04-24T05:00:00Z"),
+                "expectedCurrentBucketEpoch": _epoch("2026-04-24T05:00:00Z"),
+                "bucketLag": 0,
+                "hasCurrentBucket": True,
+                "stalenessSeverity": "fresh",
+                "confirmedCount": 10,
+                "formingCount": 0,
+                "usesOffset": True,
+                "offsetHours": 1.0,
+                "confirmedLatestEpoch": _epoch("2026-04-24T05:00:00Z"),
+                "usesForming": False,
+            },
+            "engine_b": {
+                "timeframe": "H4",
+                "lastBarEpoch": _epoch("2026-04-24T01:00:00Z"),
+                "expectedCurrentBucketEpoch": _epoch("2026-04-24T05:00:00Z"),
+                "bucketLag": 1,
+                "hasCurrentBucket": False,
+                "stalenessSeverity": "stale_1_bucket",
+                "confirmedCount": 10,
+                "formingCount": 0,
+                "usesOffset": True,
+                "offsetHours": 1.0,
+                "confirmedLatestEpoch": _epoch("2026-04-24T01:00:00Z"),  # Different from engine_a
+                "usesForming": False,
+            },
         },
         time_now=_epoch("2026-04-24T06:30:00Z"),
     )
 
     assert result["status"] == "ERROR_PATH_MISMATCH"
+    assert "confirmed-only paths have different epochs" in result["reason"]
 
 
 def test_candle_consistency_forex_h4_utc_bucket_when_offset_expected_errors(monkeypatch):

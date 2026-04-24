@@ -225,45 +225,93 @@ def check_live_candle_consistency(
             "paths": diagnostics,
         }
 
-    # Determine candle policy for each engine path
+    # Determine candle policy for each engine path and compute policy status
     engine_paths = {}
+    raw_has_current = diagnostics.get("raw_provider", {}).get("hasCurrentBucket", False)
+    raw_current_epoch = diagnostics.get("raw_provider", {}).get("lastBarEpoch") if raw_has_current else None
+    
     for name in ("engine_a", "engine_b", "scanner", "compare"):
         if name in diagnostics:
             diag = diagnostics[name]
             uses_forming = diag.get("usesForming", False)
             bucket_lag = int(diag.get("bucketLag") or 0)
+            confirmed_epoch = diag.get("confirmedLatestEpoch")
+            forming_epoch = diag.get("formingEpoch")
+            last_bar_epoch = diag.get("lastBarEpoch")
             
             # Determine policy based on pair type and source
             if pair.get("source") == "mt5" and pair.get("type") == "forex":
-                # MT5 forex uses confirmed-only policy
                 policy = "CONFIRMED_ONLY"
             elif name == "engine_b":
-                # Engine B (naked engine) uses confirmed-only policy for all pairs in scanner
+                policy = "CONFIRMED_ONLY"
+            elif name == "scanner":
+                policy = "CONFIRMED_ONLY"
+            elif name == "compare":
                 policy = "CONFIRMED_ONLY"
             elif uses_forming:
                 policy = "FORMING_ALLOWED"
             else:
                 policy = "CONFIRMED_ONLY"
             
+            # Determine policy status
+            if policy == "FORMING_ALLOWED":
+                # Should have forming candle at raw current epoch
+                if forming_epoch and raw_current_epoch and forming_epoch == raw_current_epoch:
+                    policy_status = "POLICY_OK"
+                elif bucket_lag == 0:
+                    policy_status = "POLICY_OK"
+                else:
+                    policy_status = "POLICY_LAG"
+            elif policy == "CONFIRMED_ONLY":
+                # Should have confirmed candle at raw_current - 1 bucket
+                if confirmed_epoch and raw_current_epoch:
+                    expected_confirmed = raw_current_epoch - _timeframe_seconds(tf)
+                    if confirmed_epoch == expected_confirmed:
+                        policy_status = "POLICY_OK"
+                    elif confirmed_epoch < expected_confirmed:
+                        policy_status = "POLICY_LAG"
+                    else:
+                        policy_status = "POLICY_MISMATCH"
+                elif bucket_lag == 1 and raw_has_current:
+                    policy_status = "POLICY_OK"
+                else:
+                    policy_status = "POLICY_LAG"
+            else:
+                policy_status = "POLICY_OK"
+            
             engine_paths[name] = {
                 "policy": policy,
+                "policyStatus": policy_status,
                 "usesForming": uses_forming,
                 "bucketLag": bucket_lag,
-                "lastBarEpoch": diag.get("lastBarEpoch"),
-                "confirmedLatestEpoch": diag.get("confirmedLatestEpoch"),
-                "formingEpoch": diag.get("formingEpoch"),
+                "lastBarEpoch": last_bar_epoch,
+                "confirmedLatestEpoch": confirmed_epoch,
+                "formingEpoch": forming_epoch,
             }
 
-    # Check for path mismatch in confirmed candles
-    confirmed_epochs = {
+    # Check for path mismatch - only compare paths with the SAME policy
+    confirmed_only_epochs = {
         k: v.get("confirmedLatestEpoch")
         for k, v in engine_paths.items()
-        if v.get("confirmedLatestEpoch") is not None
+        if v.get("confirmedLatestEpoch") is not None and v.get("policy") == "CONFIRMED_ONLY"
     }
-    if len(set(confirmed_epochs.values())) > 1:
+    if len(set(confirmed_only_epochs.values())) > 1:
         return {
             "status": "ERROR_PATH_MISMATCH",
-            "reason": f"path confirmed epochs differ: {confirmed_epochs}",
+            "reason": f"confirmed-only paths have different epochs: {confirmed_only_epochs}",
+            "paths": diagnostics,
+            "enginePolicies": engine_paths,
+        }
+    
+    forming_allowed_epochs = {
+        k: v.get("lastBarEpoch")
+        for k, v in engine_paths.items()
+        if v.get("lastBarEpoch") is not None and v.get("policy") == "FORMING_ALLOWED"
+    }
+    if len(set(forming_allowed_epochs.values())) > 1:
+        return {
+            "status": "ERROR_PATH_MISMATCH",
+            "reason": f"forming-allowed paths have different epochs: {forming_allowed_epochs}",
             "paths": diagnostics,
             "enginePolicies": engine_paths,
         }
@@ -274,16 +322,13 @@ def check_live_candle_consistency(
     )
     
     if has_one_bucket_lag:
-        # Check if all engine paths use CONFIRMED_ONLY policy
-        all_confirmed_only = all(
-            ep.get("policy") == "CONFIRMED_ONLY"
+        # Check if all engine paths are POLICY_OK
+        all_policy_ok = all(
+            ep.get("policyStatus") == "POLICY_OK"
             for ep in engine_paths.values()
         )
         
-        # Check if raw provider has current bucket
-        raw_has_current = diagnostics.get("raw_provider", {}).get("hasCurrentBucket", False)
-        
-        if all_confirmed_only and raw_has_current:
+        if all_policy_ok and raw_has_current:
             # This is intentional confirmed-only behavior
             return {
                 "status": "CONFIRMED_ONLY_OK",
