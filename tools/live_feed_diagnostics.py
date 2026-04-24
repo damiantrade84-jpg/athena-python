@@ -23,17 +23,41 @@ from athena_app.services.engine_b_market_state import engine_b_live_market_state
 from athena_app.services.market_state import get_tf_market_state
 
 
+def _normalize_symbol(sym: str) -> str:
+    """Normalize symbol for matching: remove slashes, =X suffix, and convert to uppercase."""
+    return sym.replace("/", "").replace("=", "").upper()
+
+
 def _get_active_pairs():
-    """Return ACTIVE_PAIRS from config."""
-    return config.ACTIVE_PAIRS
+    """Return ACTIVE_PAIRS - hardcoded for CLI diagnostic tool.
+    
+    Note: This CLI tool uses a hardcoded subset of common pairs to avoid
+    complex import issues with athena.py. For full pair coverage, use the
+    API endpoint /api/live-feed-diagnostics on the running Flask app.
+    """
+    return [
+        {"symbol": "EURUSD=X", "display": "EUR/USD", "type": "forex", "source": "mt5", "enabled": True},
+        {"symbol": "GBPUSD=X", "display": "GBP/USD", "type": "forex", "source": "mt5", "enabled": True},
+        {"symbol": "USDJPY=X", "display": "USD/JPY", "type": "forex", "source": "mt5", "enabled": True},
+        {"symbol": "AUDUSD=X", "display": "AUD/USD", "type": "forex", "source": "mt5", "enabled": True},
+        {"symbol": "BTCUSDT", "display": "BTCUSDT", "type": "crypto", "source": "binance", "enabled": True},
+        {"symbol": "ETHUSDT", "display": "ETHUSDT", "type": "crypto", "source": "binance", "enabled": True},
+    ]
 
 
 def _fetch_candles_for_pair(pair, tf, limit):
     """Fetch candles for a pair/timeframe. Read-only."""
-    from data_feeds import fetch_candles_live
+    from candle_manager import fetch_market_state
     
     try:
-        candles = fetch_candles_live(pair, tf, limit=limit)
+        state = fetch_market_state(pair, tf, limit)
+        candles = []
+        if isinstance(state, dict):
+            confirmed = state.get("confirmed", [])
+            forming = state.get("forming")
+            candles = list(confirmed)
+            if forming:
+                candles.append(forming)
         return candles, "ok", None
     except Exception as e:
         return [], "error", str(e)
@@ -85,8 +109,8 @@ def main():
     pairs = []
     for pair in active_pairs:
         keys = {
-            str(pair.get("display", "")).upper(),
-            str(pair.get("symbol", "")).upper(),
+            _normalize_symbol(str(pair.get("display", ""))),
+            _normalize_symbol(str(pair.get("symbol", ""))),
         }
         if wanted_symbols and not (wanted_symbols & keys):
             continue
@@ -119,8 +143,8 @@ def main():
             
             # Add market state consistency check
             try:
-                state_a = get_tf_market_state(pair, tf_u)
-                state_b = engine_b_live_market_state(pair, tf_u)
+                state_a = get_tf_market_state(pair, tf_u, candles=candles or [])
+                state_b = engine_b_live_market_state(pair, tf_u, limit, candles=candles or [])
                 
                 engine_a_input = []
                 if isinstance(state_a, dict):
