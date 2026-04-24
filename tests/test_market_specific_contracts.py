@@ -54,9 +54,10 @@ def test_calc_levels_are_asset_class_specific():
 
 
 def test_athena_source_disables_forex_factor_fallback():
+    # Forex routes through Engine A v2 (factor_scoring.py) — forex_scoring is legacy/reference only.
+    # athena.py must not call compute_forex_score anywhere in the live path.
     src = ATHENA_PATH.read_text(encoding="utf-8")
-    assert "skipping pair to avoid factor-engine fallback" in src
-    assert "falling back to calc_confluence" not in src
+    assert "compute_forex_score" not in src
 
 
 def test_athena_source_keeps_engine_b_scalp_as_distinct_profile():

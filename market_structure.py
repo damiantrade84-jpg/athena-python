@@ -265,14 +265,10 @@ class NakedEngine:
         last_troughs = [lows[i] for i in trough_idx[-3:]] if len(trough_idx) > 0 else []
 
         sequence = "RANGING"
-        if len(last_peaks) >= 3 and len(last_troughs) >= 3:
-            peaks_rising = last_peaks[-1] > last_peaks[-2] > last_peaks[-3]
-            troughs_rising = last_troughs[-1] > last_troughs[-2] > last_troughs[-3]
-            peaks_falling = last_peaks[-1] < last_peaks[-2] < last_peaks[-3]
-            troughs_falling = last_troughs[-1] < last_troughs[-2] < last_troughs[-3]
-            if peaks_rising and troughs_rising:
+        if len(last_peaks) >= 2 and len(last_troughs) >= 2:
+            if last_peaks[-1] > last_peaks[-2] and last_troughs[-1] > last_troughs[-2]:
                 sequence = "HH_HL"  # Uptrend structure
-            elif peaks_falling and troughs_falling:
+            elif last_peaks[-1] < last_peaks[-2] and last_troughs[-1] < last_troughs[-2]:
                 sequence = "LH_LL"  # Downtrend structure
             elif (
                 last_peaks[-1] < last_peaks[-2] and last_troughs[-1] > last_troughs[-2]
@@ -332,7 +328,7 @@ class NakedEngine:
             last_troughs = [lows[i] for i in trough_idx[-3:]]
 
             # Insufficient data for BOS detection
-            if len(last_peaks) < 3 or len(last_troughs) < 3:
+            if len(last_peaks) < 2 or len(last_troughs) < 2:
                 return {
                     "bos_bull": False,
                     "bos_bear": False,

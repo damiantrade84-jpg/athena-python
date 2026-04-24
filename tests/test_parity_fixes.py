@@ -320,31 +320,17 @@ class TestHigh01ScalpBTPairArg:
 
     def test_backtest_runner_scalp_loop_has_pair_arg(self):
         """
-        HIGH-01 regression: verify that the scalp BT forex call now includes
-        pair=_pair_ctx. We test this by reading the source file.
+        HIGH-01: backtest_runner must not call compute_forex_score for forex pairs.
+        Forex BT now routes through Engine A v2 (factor_scoring) via backtest_pair.
         """
         import inspect
         import backtest_runner as bt
 
         src = inspect.getsource(bt)
 
-        # Count occurrences of compute_forex_score in scalp context
-        # The scalp loop contains 'h1_raw[i]' and the call must have 'pair=_pair_ctx'
-        import re
-        # Find all compute_forex_score(...) blocks that contain h1_raw[i]
-        # and check they also contain pair=
-        pattern = re.compile(
-            r'compute_forex_score\([^)]*?pair=_pair_ctx[^)]*?h1_raw',
-            re.DOTALL
-        )
-        # Also check the reverse order (pair before h1_raw or after)
-        pattern2 = re.compile(
-            r'compute_forex_score\([^)]*?h1_raw[^)]*?pair=_pair_ctx',
-            re.DOTALL
-        )
-        # Simply check the HIGH-01 fix comment is present as a proxy
-        assert "HIGH-01 fix: was missing pair arg" in src, (
-            "HIGH-01 fix not found in backtest_runner.py — scalp loop is missing pair=_pair_ctx"
+        # compute_forex_score must not be called anywhere in the backtest runner
+        assert "compute_forex_score" not in src, (
+            "backtest_runner.py still calls compute_forex_score — forex BT must use Engine A v2"
         )
 
 
@@ -357,24 +343,18 @@ class TestHigh06EngineCBTParity:
 
     def test_engine_c_bt_no_longer_forces_13utc_for_forex(self):
         """
-        HIGH-06 regression: Engine-C BT used _bt_forex_d1_bar_time(h4_time)
-        which forces midnight bars to 13:00, suppressing breakout in 07-09 range.
-        After fix, candles_h4[i].get('time') is passed directly.
+        HIGH-06: Engine-C BT must pass H4 bar time directly, not via _bt_forex_d1_bar_time
+        which forced midnight bars to 13:00 and suppressed 07-09 breakout detection.
         """
         import inspect
         import backtest_runner as bt
 
         src = inspect.getsource(bt)
 
-        # The fix comment must be present
-        assert "HIGH-06 fix: use actual H4 bar time, NOT _bt_forex_d1_bar_time" in src, (
-            "HIGH-06 fix not found in backtest_runner.py — Engine-C BT still uses _bt_forex_d1_bar_time"
+        # Correct pattern: candles_h4[i].get("time") passed directly (not via _bt_forex_d1_bar_time)
+        assert 'candles_h4[i].get("time") if candles_h4 else None' in src, (
+            "Engine-C BT is not passing H4 bar time directly — check backtest_runner.py"
         )
-
-        # The old pattern should no longer exist in the Engine C BT area
-        # i.e. the _bt_forex_d1_bar_time call with candles_h4 should be removed from that location
-        # We confirm by checking the corrected pattern is present
-        assert "candles_h4[i].get(\"time\", \"\") if candles_h4 else \"\"" in src
 
     def test_breakout_eval_hour_resolver_is_independent_of_bar_time(self, monkeypatch):
         """

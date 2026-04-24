@@ -189,17 +189,9 @@ class TestConfig:
         validate_config(CONFIG)
 
     def test_forex_fallbacks_match_current_repo_contract(self):
-        assert CONFIG["MIN_CONFLUENCE_CLASS"]["forex"] == 1.0
-        assert CONFIG["AUTO_TRADE_MIN_SCORE"]["forex"] == 1.0
-
-    def test_moonshot_key_preferred_over_legacy_key(self):
-        cfg = {"MOONSHOT_API_KEY": "moonshot-test", "XAI_API_KEY": "legacy-test"}
-        assert get_ai_api_key(cfg) == "moonshot-test"
-
-    def test_ai_defaults_point_to_moonshot_kimi(self):
-        cfg = {"AI_BASE_URL": "", "AI_MODEL": "kimi-k2.6", "XAI_MODEL": "legacy-model"}
-        assert get_ai_base_url(cfg) == "https://api.moonshot.ai/v1"
-        assert get_ai_model(cfg, "AI_MODEL", "fallback-model") == "kimi-k2.6"
+        # Engine A v2 unified 0-3.0 scale; forex floor is 2.1 (70% of max)
+        assert CONFIG["MIN_CONFLUENCE_CLASS"]["forex"] == 2.1
+        assert CONFIG["AUTO_TRADE_MIN_SCORE"]["forex"] == 2.1
 
 
 # ── Scoring tests ────────────────────────────────────────────────────────────

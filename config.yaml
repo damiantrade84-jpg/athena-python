@@ -50,7 +50,7 @@ ADX_TREND_MIN_CLASS:
 
   crypto: 15
 
-  forex: 25    # Wilder (1978): ADX > 25 = trending; was 40 (too strict, missed most trends)
+  forex: 20    # ADX 15-20 gets 0.65× soft penalty in factor_scoring; 20 allows developing trends through
 
   commodity: 25
 
@@ -452,7 +452,7 @@ ENGINE_A_BLOCKED_TREND_STATES:
 
 # Per-class live scan minimum confluence — execute / tradeSignals tier threshold.
 
-# Forex: forex_scoring 0–2.0 (true max ~1.97). Non-forex: factor engine (true bounded 0–3.0).
+# All asset classes use Engine A v2 (factor_scoring.py), unified 0–3.0 scale.
 
 MIN_CONFLUENCE_CLASS:
 
@@ -606,83 +606,17 @@ FOREX_H4_RESAMPLE_OFFSET_HOURS: 1.0  # Align H4 grid to 01/05/09/13/17/21 UTC (m
 
 FOREX_ENGINE:
 
-  hurst_gate_enabled: true      # Block trend signals when Hurst <= threshold
+  # Session multipliers — read by factor_scoring._session_mult() (live) and forex_scoring._session_state() (legacy).
 
-  hurst_gate_threshold: 0.40   # Only block strong mean-reversion (H < 0.40); allows neutral/random-walk markets
+  session_mode: "soft"               # forex_scoring legacy: "soft" = off-session active at reduced mult
 
-  h1_ema_entry_filter: true   # H1 ema21/50 alignment modifier on RSI entry quality; false = RSI only
-
-  trend_gate_adx_min: 25   # Match ADX_TREND_MIN_CLASS.forex — must stay in sync
-
-  trend_gate_adx_hard_fail_min: 15.0
-
-  trend_gate_adx_soft_full_at: 25.0
-
-  trend_gate_adx_soft_enabled: true   # 2026-04-20: Re-enabled — ADX 15-25 gets score penalty, not hard block
-
-  # Which timeframe supplies Wilder ADX for the trend gate: d1 (slow) | h4 (matches H4 screen)
-
-  # 2026-04-20: Reverted h4 -> d1. H4 ADX is too volatile; it hard-blocks during normal
-
-  # D1-trend pullbacks (exactly when swing entries should fire). D1 ADX reflects the
-
-  # structural trend correctly and was the original working setting.
-
-  trend_gate_adx_source: d1
-
-  session_mode: "soft"          # 2026-04-17: was "strict" — off-session now 0.75x instead of hard-block
-
-  session_soft_multiplier: 0.75
+  session_soft_multiplier: 0.75      # Off-session (Asian / off-hours) score multiplier
 
   session_shoulder_enabled: true
 
-  session_shoulder_multiplier: 0.90
+  session_shoulder_multiplier: 0.90  # Shoulder hour (±1h of core) score multiplier
 
-  session_shoulder_hours: 1
-
-  # London breakout eval: london_local = first hours after 08:00 Europe/London (DST-safe).
-
-  # Use explicit_utc + london_breakout_window_lo/hi for fixed UTC hours (backtests / brokers).
-
-  london_breakout_window_mode: london_local
-
-  london_breakout_local_start_h: 8
-
-  london_breakout_local_end_h: 10
-
-  london_breakout_window_lo: 7
-
-  london_breakout_window_hi: 11
-
-  trend_support_weights:
-
-    momentum: 0.30  # H4 momentum contribution to trend score
-
-    adx: 0.20       # H4 ADX contribution to trend score
-
-    carry: 0.10     # Carry tilt contribution to trend score
-
-  # Counter-trend SHORT gate (data: 2026-04-21 backtest — hurst/trend_gate_raw SUSPECT in forex/SHORT).
-
-  # Case A: London breakout SHORT when EMA stack (trend_dir) is persistently LONG and Hurst is trending
-
-  #         → counter-trend breakout; bo_final multiplied down so it rarely beats trend_score or gate.
-
-  # Case B: Trend-path SHORT when Hurst > high_hurst_threshold (very mature downtrend, exhaustion risk)
-
-  #         → trend_score multiplied down.
-
-  # Both cases are config-driven and can be disabled independently.
-
-  counter_trend_short_gate:
-
-    enabled: true
-
-    bo_counter_trend_mult: 0.70       # Case A: multiply bo_final when breakout SHORT vs LONG EMA stack
-
-    high_hurst_threshold: 0.65        # Case B: "very strong trend" threshold for mature-downtrend penalty
-
-    trend_high_hurst_short_mult: 0.80 # Case B: multiply trend_score for SHORT in very strong trend
+  session_shoulder_hours: 1          # Hours either side of core sessions treated as shoulder
 
 MAX_RISK_PER_TRADE: 0.03      # Hard cap 3% per trade
 
@@ -1495,7 +1429,7 @@ NAKED_ENGINE:
 
     swing:
 
-      min_score: 5.0
+      min_score: 4.0
 
       min_rr: 2.0
 
@@ -1565,121 +1499,121 @@ NAKED_ENGINE:
 
       scalp: {min_score: 3.0, min_rr: 1.4}
 
-      intraday: {min_score: 5.0, min_rr: 1.6}
+      intraday: {min_score: 4.0, min_rr: 1.6}
 
-      swing: {min_score: 5.0, min_rr: 2.0}
+      swing: {min_score: 4.0, min_rr: 2.0}
 
     crypto_doge:
 
       scalp: {min_score: 3.0, min_room_atr: 0.5, min_rr: 1.3}
 
-      intraday: {min_score: 5.0, min_room_atr: 0.9, min_rr: 1.5}
+      intraday: {min_score: 4.0, min_room_atr: 0.9, min_rr: 1.5}
 
-      swing: {min_score: 5.0, min_room_atr: 1.2, min_rr: 1.9}
+      swing: {min_score: 4.0, min_room_atr: 1.2, min_rr: 1.9}
 
     crypto_btc:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.0}
+      swing: {min_score: 4.0}
 
     crypto_eth:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.0}
+      swing: {min_score: 4.0}
 
     crypto_alt_majors:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.0}
+      swing: {min_score: 4.0}
 
     crypto_other:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.0}
+      swing: {min_score: 4.0}
 
     energy_oil:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.0}
+      swing: {min_score: 4.0}
 
     precious_trackers:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.0}
+      swing: {min_score: 4.0}
 
     commodity_other:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.0}
+      swing: {min_score: 4.0}
 
     copper:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.0}
+      swing: {min_score: 4.0}
 
     pgm_metals:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.0}
+      swing: {min_score: 4.0}
 
     us_stock_single:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.0}
+      swing: {min_score: 4.0}
 
     stock_other:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.0}
+      swing: {min_score: 4.0}
 
     smallcap_em_etf:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.0}
+      swing: {min_score: 4.0}
 
     bond_tlt:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.0}
+      swing: {min_score: 4.0}
 
 
 
@@ -1733,7 +1667,7 @@ ENGINE_B_FOREX_STRUCTURE_TF: "D1"
 
 # Wilder ADX < ~20 = weak trend; 18 is a compromise vs full 20 gate.
 
-ENGINE_B_FOREX_ADX_MIN: 18
+ENGINE_B_FOREX_ADX_MIN: 12
 
 
 
@@ -1827,7 +1761,7 @@ SCALP_ENGINE:
 
   BIAS_TIMEFRAME: "H1"          # Higher-TF direction gate for scalp signals
 
-  BIAS_REQUIRE_CONFIRMATION: true  # Skip pair if H1 bars insufficient for EMA stack; false = allow without bias
+  BIAS_REQUIRE_CONFIRMATION: false  # false = allow setup when H1 bars insufficient for EMA stack rather than skip
 
   # ── Spread Limits ─────────────────────────────────────────
 
