@@ -185,6 +185,7 @@ def build_engine_b_signal_message(
     learning_ctx: Optional[dict] = None,
     engine_a_ctx: Optional[dict] = None,
     news_ctx: Optional[dict] = None,
+    freshness_ctx: Optional[dict] = None,
 ) -> str:
     """
     Build AI prompt message for Engine B structural signals.
@@ -411,6 +412,17 @@ def build_engine_b_signal_message(
                     lines.append(f"  - {cn}")
             lines.append("")
 
+    # === CANDLE DATA FRESHNESS ===
+    try:
+        from ai_utils import build_freshness_ai_context as _build_freshness
+        _signal_proxy = freshness_ctx or {}
+        _freshness_str = _build_freshness(_signal_proxy)
+        if _freshness_str:
+            lines.append("")
+            lines.append(_freshness_str)
+    except Exception:
+        pass
+
     return "\n".join(lines)
 
 
@@ -425,6 +437,7 @@ def get_engine_b_ai_verdict(
     xai_model: Optional[str] = None,
     engine_a_ctx: Optional[dict] = None,
     news_ctx: Optional[dict] = None,
+    freshness_ctx: Optional[dict] = None,
 ) -> dict:
     """
     Get AI analysis for Engine B signal using the configured AI provider.
@@ -452,6 +465,7 @@ def get_engine_b_ai_verdict(
             learning_ctx,
             engine_a_ctx=engine_a_ctx,
             news_ctx=news_ctx,
+            freshness_ctx=freshness_ctx,
         )
 
         cross_engine_note = (
@@ -518,6 +532,43 @@ def get_engine_b_ai_verdict(
             f"[ENGINE_B_AI] {pair} => Grade:{parsed.get('grade', '?')} "
             f"Prob:{parsed.get('edgeProbability', '?')}% Risk:{parsed.get('riskLevel', '?')}"
         )
+
+        try:
+            from ai_review_logger import (
+                log_ai_review,
+                map_engine_b_grade_to_ai_state,
+                REVIEW_TYPE_ENGINE_B_AI,
+            )
+            _freshness_reason = (
+                (freshness_ctx or {}).get("dataFreshness", {}) or {}
+            ).get("reason") or "unknown"
+            log_ai_review(
+                symbol=pair,
+                asset_type="unknown",
+                review_type=REVIEW_TYPE_ENGINE_B_AI,
+                model=str(xai_model or get_ai_model(CONFIG, "AI_MODEL")).strip(),
+                provider="xAI",
+                prompt_version="ENGINE_B_AI_v1",
+                input_packet={"pair": pair, "direction": direction},
+                has_chart_image=False,
+                candle_freshness_status=_freshness_reason,
+                engine_a_state=(engine_a_ctx or {}).get("confluenceScore") if isinstance(engine_a_ctx, dict) else None,
+                engine_b_state=confidence_result.get("pct"),
+                engine_c_state=None,
+                engine_d_state=None,
+                risk_state=None,
+                ai_review_state=map_engine_b_grade_to_ai_state(parsed.get("grade", "")),
+                ai_confidence=parsed.get("edgeProbability"),
+                contradictions_count=0,
+                missing_information_count=0,
+                parse_success=True,
+                schema_valid=not bool(missing),
+                execution_allowed_before_ai=True,
+                execution_allowed_after_ai=True,
+                final_action="advisory",
+            )
+        except Exception as _log_err:
+            log.debug("[AI_AUDIT] Engine B AI audit log failed: %s", _log_err)
 
         return parsed
 

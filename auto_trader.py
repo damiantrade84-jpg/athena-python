@@ -750,8 +750,10 @@ class AutoTrader:
                 # AI debate Telegram notification disabled
                 if not _allowed:
                     return False, f"Debate: {_grade} — {_reasoning}"
-                # Apply score adjustment from debate (optional tuning)
-                _adj = debate.get("score_adjustment", 0.0)
+                # Apply score adjustment from debate — downgrade-only (clamp to ≤ 0)
+                _adj_raw = float(debate.get("score_adjustment", 0.0) or 0.0)
+                _adj = min(0.0, _adj_raw)  # debate is a safety gate: can reduce score, never increase it
+                _debate_adjustment_clamped = _adj_raw > 0.0  # true when a positive adj was suppressed
                 if _adj != 0.0:
                     signal["confluenceScore"] = max(
                         0, signal.get("confluenceScore", 0) + _adj
@@ -764,6 +766,49 @@ class AutoTrader:
                             False,
                             f"debate-adjusted conviction {signal['combinedConviction']:.3f} < min {auto_min_conviction:.3f}",
                         )
+                if _debate_adjustment_clamped:
+                    log.debug(
+                        "[AUTO] %s debate score_adjustment=%.3f clamped to 0.0 (downgrade-only policy)",
+                        signal.get("pair"), _adj_raw,
+                    )
+                signal["_debate_adjustment_clamped"] = _debate_adjustment_clamped
+
+                try:
+                    from ai_review_logger import (
+                        log_ai_review,
+                        map_debate_grade_to_ai_state,
+                        REVIEW_TYPE_SIGNAL_DEBATE,
+                    )
+                    log_ai_review(
+                        symbol=signal.get("pair", "?"),
+                        asset_type=asset_type,
+                        review_type=REVIEW_TYPE_SIGNAL_DEBATE,
+                        model=cfg.get("DEBATE_MODEL", "unknown"),
+                        provider="xAI",
+                        prompt_version="SIGNAL_DEBATE_v1",
+                        input_packet={"pair": signal.get("pair"), "score": signal.get("confluenceScore")},
+                        has_chart_image=False,
+                        candle_freshness_status=(
+                            (signal.get("dataFreshness") or {}).get("reason") or "unknown"
+                        ),
+                        engine_a_state=signal.get("confluenceScore"),
+                        engine_b_state=None,
+                        engine_c_state=signal.get("combinedConviction"),
+                        engine_d_state=None,
+                        risk_state=None,
+                        ai_review_state=map_debate_grade_to_ai_state(_grade),
+                        ai_confidence=None,
+                        contradictions_count=0,
+                        missing_information_count=0,
+                        parse_success=True,
+                        schema_valid=True,
+                        execution_allowed_before_ai=True,
+                        execution_allowed_after_ai=_allowed,
+                        final_action="debate_gate",
+                    )
+                except Exception as _log_err:
+                    log.debug("[AI_AUDIT] Debate audit log failed: %s", _log_err)
+
             except ImportError:
                 log.debug("[AUTO] signal_debate not available — skipping")
             except Exception as _debate_err:
