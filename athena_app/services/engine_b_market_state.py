@@ -61,7 +61,16 @@ def engine_b_live_market_state(
 
     if fetch_market_state is None:
         # Best-effort fallback: no market state available.
-        return split_market_state([], tf_u, display)
+        return {
+            **split_market_state([], tf_u, display),
+            "error": "market_state_unavailable",
+            "reason": "no_fetch_market_state_and_no_candles",
+        }
 
-    return fetch_market_state(pair, tf_u, int(limit))
+    result = fetch_market_state(pair, tf_u, int(limit))
+    if not result or not result.get("confirmed"):
+        result = dict(result or {})
+        result.setdefault("error", "market_state_empty")
+        result.setdefault("reason", "fetch_market_state_returned_empty")
+    return result
 

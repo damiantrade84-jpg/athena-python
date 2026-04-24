@@ -2854,6 +2854,35 @@ _test_mode = (
 
 _disabled_pairs: set = set()  # per-pair kill-switch — display names of pairs to exclude
 
+# Per-scan DXY H4 cache to avoid redundant yfinance fetches in Engine B overlay
+_dxy_h4_cache: tuple[list[float], float] | None = None  # (closes, timestamp)
+
+
+def _get_dxy_h4_closes(force_refresh: bool = False) -> list[float] | None:
+    """Fetch DXY H4 closes with a 5-minute in-memory cache per scan batch."""
+    global _dxy_h4_cache
+    import time
+    now = time.time()
+    if not force_refresh and _dxy_h4_cache is not None:
+        closes, ts = _dxy_h4_cache
+        if now - ts < 300:  # 5 min cache
+            return closes
+    _dxy = fetch_candles(
+        {
+            "symbol": "DX-Y.NYB",
+            "display": "DXY",
+            "source": "yfinance",
+            "type": "index",
+        },
+        "H4",
+        100,
+    )
+    if _dxy:
+        closes = [float(c["close"]) for c in _dxy]
+        _dxy_h4_cache = (closes, now)
+        return closes
+    return None
+
 
 def _normalize_style(style: str | None) -> str:
     """Normalize style strings used by scan/backtest endpoints."""
@@ -4708,6 +4737,8 @@ def index():
 
 @app.route("/api/scan", methods=["POST"])
 def api_scan():
+    global _dxy_h4_cache
+    _dxy_h4_cache = None  # fresh DXY fetch per scan batch
     d = request.get_json(force=True, silent=True) or {}
     result = api_scan_impl(
         d,
@@ -5103,6 +5134,11 @@ def _engine_b_regime_label(
     _forex_signal_to_zone_regime = {
         "TREND_PULLBACK": "TRENDING",
         "LONDON_BREAKOUT": "TRENDING",
+        "MOMENTUM_BURST": "TRENDING",
+        "RANGE_REVERSION": "RANGING",
+        "MEAN_REVERSION": "RANGING",
+        "CONSOLIDATION_BREAK": "HIGH_VOLATILITY",
+        "LOW_VOL_ENV": "LOW_VOLATILITY",
     }
 
     raw = None
@@ -5596,6 +5632,8 @@ def api_compare_engines():
 
 @app.route("/api/scan-naked", methods=["POST"])
 def api_scan_naked():
+    global _dxy_h4_cache
+    _dxy_h4_cache = None  # fresh DXY fetch per scan batch
     d = request.get_json(silent=True) or {}
     asset_class = str(d.get("assetClass") or "").strip().lower()
     requested_style = d.get("style", "auto")
@@ -10662,19 +10700,9 @@ def analyze_pair(
                     _engine_b_block_reasons.append(f"ENGINE-B: {ENGINE_B_REASON_SUPPORT_TOO_CLOSE}")
 
                 if pair.get("type") in ("crypto", "forex", "commodity"):
-                    # Light fetch for DXY correlation
-                    _dxy = fetch_candles(
-                        {
-                            "symbol": "DX-Y.NYB",
-                            "display": "DXY",
-                            "source": "yfinance",
-                            "type": "index",
-                        },
-                        "H4",
-                        100,
-                    )
-                    if _dxy:
-                        _dxy_c = [float(c["close"]) for c in _dxy]
+                    # Light fetch for DXY correlation (cached per scan batch)
+                    _dxy_c = _get_dxy_h4_closes()
+                    if _dxy_c:
                         _asset_c = [float(c["close"]) for c in h4]
                         _dxy_ok, _dxy_reason = naked_engine.check_macro_correlation_detail(
                             _asset_c, _dxy_c, direction

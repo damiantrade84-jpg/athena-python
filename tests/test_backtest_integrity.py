@@ -120,9 +120,9 @@ def test_engine_b_confidence_gate_requires_passed_and_score_floor():
         style_profile,
         "TRENDING",
     )
-    # engine_b_min_score_threshold applies regime gate then math.ceil (discrete checklist floor)
-    # With default yaml TRENDING multiplier neutralized to 1.0: ceil(1.1 * 1.0) == 2.0
-    assert round(scaled_min, 3) == 2.0
+    # engine_b_min_score_threshold applies regime gate then round() to avoid unreachable gates.
+    # With default yaml TRENDING multiplier neutralized to 1.0: round(1.1 * 1.0) == 1.0
+    assert round(scaled_min, 3) == 1.0
     assert gate_ok is False
 
     gate_ok, scaled_min = engine_b_confidence_passes(
@@ -130,7 +130,7 @@ def test_engine_b_confidence_gate_requires_passed_and_score_floor():
         style_profile,
         "TRENDING",
     )
-    assert round(scaled_min, 3) == 2.0
+    assert round(scaled_min, 3) == 1.0
     assert gate_ok is True
 
 

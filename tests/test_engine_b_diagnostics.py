@@ -10,9 +10,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from market_structure import (
     ENGINE_B_REASON_ADVERSE_DXY,
+    ENGINE_B_REASON_BOS_WITHOUT_VOLUME,
+    ENGINE_B_REASON_D1_PD_ARRAY_CONFLICT,
     ENGINE_B_REASON_FOREX_ADX_LOW,
+    ENGINE_B_REASON_NO_TRIGGER_PATTERN,
     ENGINE_B_REASON_RESISTANCE_TOO_CLOSE,
+    ENGINE_B_REASON_SEQUENCE_COUNTER_TREND,
+    ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE,
     ENGINE_B_REASON_SUPPORT_TOO_CLOSE,
+    ENGINE_B_REASON_TP_WRONG_SIDE,
     NakedEngine,
     engine,
     engine_b_confidence_passes,
@@ -126,11 +132,11 @@ def test_calculate_confidence_forex_adx_below_min_blocks_structure():
 
 
 def test_check_macro_correlation_detail_returns_reason_when_blocking():
-    # Construct 40 bars: asset falls while DXY rises → negative correlation; last segment DXY up → block LONG
+    # Construct 60 bars: asset falls while DXY rises → negative correlation; last segment DXY up → block LONG
     rng = np.random.default_rng(42)
-    t = np.arange(40, dtype=float)
-    dxy = 100 + t * 0.05 + rng.normal(0, 0.02, size=40)
-    asset = 200 - t * 0.12 + rng.normal(0, 0.05, size=40)
+    t = np.arange(60, dtype=float)
+    dxy = 100 + t * 0.05 + rng.normal(0, 0.02, size=60)
+    asset = 200 - t * 0.12 + rng.normal(0, 0.05, size=60)
     ok, reason = engine.check_macro_correlation_detail(
         asset.tolist(), dxy.tolist(), "LONG"
     )
@@ -268,6 +274,7 @@ def test_calculate_confidence_rejects_tp_on_wrong_side_of_entry():
     assert out["tp_side_ok"] is False
     assert out["rr"] == 0.0
     assert out["rr_ok"] is False
+    assert ENGINE_B_REASON_TP_WRONG_SIDE in out.get("engine_b_diagnostics", {}).get("reason_codes", [])
 
 
 def test_calculate_confidence_flexible_mode_accepts_liquidity_sweep_catalyst():
@@ -304,3 +311,99 @@ def test_calculate_confidence_flexible_mode_accepts_liquidity_sweep_catalyst():
     assert out["score"] == pytest.approx(5.0)
     assert min_score_scaled == 5.0
     assert gate_ok is True
+
+
+def test_calculate_confidence_emits_no_trigger_pattern_when_missing():
+    res = _base_res_long()
+    res["trigger_ok"] = False
+    res["bos_confirmed"] = False
+    res["liquidity_sweep"] = False
+    res["choch_confirmed"] = False
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+    codes = out.get("engine_b_diagnostics", {}).get("reason_codes", [])
+    assert ENGINE_B_REASON_NO_TRIGGER_PATTERN in codes
+
+
+def test_calculate_confidence_emits_bos_without_volume():
+    res = _base_res_long()
+    res["bos_volume_confirmed"] = False
+    res["trigger_ok"] = False
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+    codes = out.get("engine_b_diagnostics", {}).get("reason_codes", [])
+    assert ENGINE_B_REASON_BOS_WITHOUT_VOLUME in codes
+
+
+def test_calculate_confidence_emits_d1_pd_array_conflict():
+    res = _base_res_long()
+    res["d1_pd_array_conflict"] = True
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+    codes = out.get("engine_b_diagnostics", {}).get("reason_codes", [])
+    assert ENGINE_B_REASON_D1_PD_ARRAY_CONFLICT in codes
+
+
+def test_calculate_confidence_emits_structural_tp_too_close():
+    res = _base_res_long()
+    res["tp_structural_limited"] = True
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+    codes = out.get("engine_b_diagnostics", {}).get("reason_codes", [])
+    assert ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE in codes
+
+
+def test_calculate_confidence_d1_penalty_is_reduced():
+    """Default D1 PD-array penalty should be 0.25, not 0.5."""
+    res = _base_res_long()
+    res["d1_pd_array_conflict"] = True
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+    assert out["d1_pd_conflict_penalty"] == pytest.approx(0.25)
+
+
+def test_calculate_confidence_emits_sequence_counter_trend():
+    res = _base_res_long()
+    res["current_swing_sequence"] = "LH_LL"
+    res["macro_swing_sequence"] = "LH_LL"
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+    codes = out.get("engine_b_diagnostics", {}).get("reason_codes", [])
+    assert ENGINE_B_REASON_SEQUENCE_COUNTER_TREND in codes
+    assert out["structure_ok"] is False

@@ -204,6 +204,13 @@ def _infer_live_engine(row: dict[str, Any]) -> str | None:
     if max_score is not None:
         return "engine_a"
 
+    # Engine B heuristic: check for explicit naked/structure keys first
+    factors = _load_json_dict(row.get("factors_json"))
+    scores = factors.get("scores") if isinstance(factors.get("scores"), dict) else {}
+    if any(str(key).startswith("Naked_") for key in scores.keys()):
+        return "engine_b"
+    if row.get("engine_b") is not None or row.get("naked_data") is not None:
+        return "engine_b"
     if style in ("intraday", "swing") and row.get("pair") and row.get("score") is not None:
         return "engine_b"
 

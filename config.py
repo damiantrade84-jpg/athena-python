@@ -193,7 +193,7 @@ CONFIG: dict = {
     "AI_STRUCTURED_OUTPUTS": True,
     "AI_TEMPERATURE": 0.3,
     "AI_VISION_TEMPERATURE": 0.2,  # /api/chart-analysis factual mode (override in config.yaml if needed)
-    "ENGINE_B_PROFILE_SCORING_ENABLED": False,
+    "ENGINE_B_PROFILE_SCORING_ENABLED": True,
     "CHART_VISION_DATASET_ENABLED": False,
     "CHART_VISION_V2_SHADOW_ENABLED": False,
     "CRYPTOPANIC_KEY": os.environ.get("CRYPTOPANIC_KEY", ""),

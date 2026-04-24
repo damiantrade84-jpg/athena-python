@@ -11,6 +11,80 @@ from ai_utils import parse_json_object
 from config import CONFIG, create_ai_client, get_ai_model
 
 log = logging.getLogger("athena")
+VALID_ENGINE_B_GRADES = {"A+", "A", "B", "C", "D", "F"}
+VALID_ENGINE_B_RISK_LEVELS = {"Low", "Medium", "High"}
+REQUIRED_STYLE_KEYS = {"scalp", "intraday", "swing"}
+
+
+def _call_ai_with_retry(client, model: str, messages: list, temperature: float, max_retries: int = 2):
+    """Call AI with timeout and exponential backoff retry."""
+    last_exc = None
+    for attempt in range(max_retries + 1):
+        try:
+            return client.chat.completions.create(
+                model=model,
+                max_tokens=800,
+                temperature=temperature,
+                messages=messages,
+                response_format={"type": "json_object"},
+                timeout=15,
+            )
+        except Exception as e:
+            last_exc = e
+            if attempt < max_retries:
+                import time
+                time.sleep(2 ** attempt)
+    raise last_exc
+
+
+def _validate_engine_b_ai_payload(parsed: dict, pair: str) -> dict:
+    """Validate and sanitize AI response fields after normalization."""
+    out = dict(parsed)
+
+    # edgeProbability must be numeric 0-100
+    ep = out.get("edgeProbability")
+    try:
+        ep_val = float(ep) if ep is not None else 50.0
+        ep_val = max(0.0, min(100.0, ep_val))
+    except (TypeError, ValueError):
+        log.warning(f"[ENGINE_B_AI] {pair}: Invalid edgeProbability {ep!r}; using 50")
+        ep_val = 50.0
+    out["edgeProbability"] = ep_val
+
+    # riskLevel must be valid
+    rl = str(out.get("riskLevel", "Medium")).strip().title()
+    if rl not in VALID_ENGINE_B_RISK_LEVELS:
+        log.warning(f"[ENGINE_B_AI] {pair}: Invalid riskLevel {rl!r}; using Medium")
+        rl = "Medium"
+    out["riskLevel"] = rl
+
+    # style_ratings must contain all three styles with valid fields
+    style_ratings = out.get("style_ratings")
+    if not isinstance(style_ratings, dict):
+        style_ratings = {}
+    for style in REQUIRED_STYLE_KEYS:
+        if style not in style_ratings or not isinstance(style_ratings[style], dict):
+            style_ratings[style] = {
+                "grade": out.get("grade", "C"),
+                "edgeProbability": ep_val,
+                "riskLevel": rl,
+            }
+        else:
+            sr = dict(style_ratings[style])
+            sr["grade"] = _normalise_engine_b_grade(sr.get("grade", out.get("grade", "C")), pair)
+            try:
+                sr_ep = float(sr.get("edgeProbability", ep_val))
+                sr_ep = max(0.0, min(100.0, sr_ep))
+            except (TypeError, ValueError):
+                sr_ep = ep_val
+            sr["edgeProbability"] = sr_ep
+            sr_rl = str(sr.get("riskLevel", rl)).strip().title()
+            if sr_rl not in VALID_ENGINE_B_RISK_LEVELS:
+                sr_rl = rl
+            sr["riskLevel"] = sr_rl
+            style_ratings[style] = sr
+    out["style_ratings"] = style_ratings
+    return out
 
 
 def _get_present_value(payload: dict | None, *keys, default=None):
@@ -59,6 +133,14 @@ def _normalise_engine_b_ai_payload(parsed: dict) -> dict:
         out["style_ratings"] = normalised_styles
 
     return out
+
+
+def _normalise_engine_b_grade(value, pair: str = "?") -> str:
+    grade = str(value or "C").strip().upper()
+    if grade in VALID_ENGINE_B_GRADES:
+        return grade
+    log.warning(f"[ENGINE_B_AI] {pair}: Invalid grade {value!r}; using C")
+    return "C"
 
 
 def build_engine_b_signal_message(
@@ -322,7 +404,7 @@ def get_engine_b_ai_verdict(
         - error: if failed
     """
     if not xai_api_key:
-        log.warning("[ENGINE_B_AI] AI API key not provided, skipping AI analysis")
+        log.info("[ENGINE_B_AI] AI API key not provided, skipping AI analysis")
         return {"error": "API key not configured"}
 
     try:
@@ -367,15 +449,14 @@ def get_engine_b_ai_verdict(
         )
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
 
-        completion = client.chat.completions.create(
+        completion = _call_ai_with_retry(
+            client,
             model=str(xai_model or get_ai_model(CONFIG, "AI_MODEL")).strip(),
-            max_tokens=800,
-            temperature=_temp,
             messages=[
                 {"role": "system", "content": expert_prompt},
                 {"role": "user", "content": message},
             ],
-            response_format={"type": "json_object"},
+            temperature=_temp,
         )
 
         text = (completion.choices[0].message.content or "").strip()
@@ -396,24 +477,9 @@ def get_engine_b_ai_verdict(
             parsed.setdefault("edgeProbability", 50)
             parsed.setdefault("riskLevel", "Medium")
             parsed.setdefault("verdict", "Model response missing fields; using safe defaults.")
-        parsed["riskLevel"] = str(parsed.get("riskLevel", "Medium")).title()
-        parsed["style_ratings"] = parsed.get("style_ratings") or {
-            "scalp": {
-                "grade": parsed.get("grade", "C"),
-                "edgeProbability": parsed.get("edgeProbability", 50),
-                "riskLevel": parsed.get("riskLevel", "Medium"),
-            },
-            "intraday": {
-                "grade": parsed.get("grade", "C"),
-                "edgeProbability": parsed.get("edgeProbability", 50),
-                "riskLevel": parsed.get("riskLevel", "Medium"),
-            },
-            "swing": {
-                "grade": parsed.get("grade", "C"),
-                "edgeProbability": parsed.get("edgeProbability", 50),
-                "riskLevel": parsed.get("riskLevel", "Medium"),
-            },
-        }
+
+        parsed = _validate_engine_b_ai_payload(parsed, pair)
+        parsed["grade"] = _normalise_engine_b_grade(parsed.get("grade"), pair)
 
         log.info(
             f"[ENGINE_B_AI] {pair} => Grade:{parsed.get('grade', '?')} "

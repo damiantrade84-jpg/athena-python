@@ -23,6 +23,12 @@ ENGINE_B_REASON_SUPPORT_TOO_CLOSE = "support_too_close"
 ENGINE_B_REASON_ADVERSE_DXY = "adverse_dxy_correlation"
 ENGINE_B_REASON_STRUCTURAL_SL_HARD_CAP = "structural_sl_rejected_hard_cap"
 ENGINE_B_REASON_FOREX_ADX_LOW = "forex_adx_below_min"
+ENGINE_B_REASON_TP_WRONG_SIDE = "tp_wrong_side"
+ENGINE_B_REASON_SEQUENCE_COUNTER_TREND = "sequence_counter_trend"
+ENGINE_B_REASON_NO_TRIGGER_PATTERN = "no_trigger_pattern"
+ENGINE_B_REASON_BOS_WITHOUT_VOLUME = "bos_without_volume"
+ENGINE_B_REASON_D1_PD_ARRAY_CONFLICT = "d1_pd_array_conflict"
+ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE = "structural_tp_too_close"
 
 
 def _adx_from_indicator_snap(snap: dict | None) -> float | None:
@@ -73,8 +79,8 @@ def engine_b_min_score_threshold(
     scaled = base_min * _engine_b_regime_gate(regime_label, asset_type)
     if scaled <= 0:
         return 0.0
-    # Engine B scores in whole checklist points, so make the discrete gate explicit.
-    return float(math.ceil(scaled - 1e-12))
+    # Engine B scores in checklist points; round regime scaling to avoid unreachable gates.
+    return float(round(scaled))
 
 
 def engine_b_confidence_passes(
@@ -88,7 +94,7 @@ def engine_b_confidence_passes(
         style_profile, regime_label, asset_type
     )
     conf = conf_data if isinstance(conf_data, dict) else {}
-    score = float(conf.get("score", 0.0) or 0.0)
+    score = float(conf.get("gate_score", conf.get("score", 0.0)) or 0.0)
     passed = bool(conf.get("passed", False))
     return passed and score >= min_score_scaled, min_score_scaled
 
@@ -96,6 +102,34 @@ def engine_b_confidence_passes(
 class NakedEngine:
     def __init__(self):
         self._registry_context = threading.local()
+
+    @staticmethod
+    def _compute_atr_from_candles(candles: list, period: int = 14, fallback: float | None = None) -> float:
+        if not candles or len(candles) < 2:
+            return float(fallback or 0.0)
+        trs = []
+        prev_close = None
+        for c in candles:
+            high = float(c["high"])
+            low = float(c["low"])
+            close = float(c["close"])
+            if prev_close is None:
+                trs.append(high - low)
+            else:
+                trs.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+            prev_close = close
+        window = trs[-period:] if len(trs) >= period else trs
+        atr = float(np.mean(window)) if window else 0.0
+        return atr if atr > 0 else float(fallback or 0.0)
+
+    @staticmethod
+    def _swing_cache(highs: np.ndarray, lows: np.ndarray, atr: float, distance: int = 3) -> dict:
+        if atr <= 0:
+            return {"peak_idx": np.array([], dtype=int), "trough_idx": np.array([], dtype=int)}
+        prominence = atr * 0.8
+        peak_idx, _ = find_peaks(highs, prominence=prominence, distance=distance)
+        trough_idx, _ = find_peaks(-lows, prominence=prominence, distance=distance)
+        return {"peak_idx": peak_idx, "trough_idx": trough_idx}
 
     def set_registry_context(self, symbol: str | None):
         self._registry_context.symbol = (
@@ -220,23 +254,25 @@ class NakedEngine:
         return res_zones, sup_zones
 
     def _determine_sequence(
-        self, highs: np.ndarray, lows: np.ndarray, atr: float, direction: str
+        self, highs: np.ndarray, lows: np.ndarray, atr: float, direction: str, swings: dict | None = None
     ) -> dict:
         """Finds the most recent swings to determine HH/HL or LH/LL sequence."""
-        prominence = atr * 0.8
-        peak_idx, _ = find_peaks(highs, prominence=prominence, distance=3)
-        trough_idx, _ = find_peaks(-lows, prominence=prominence, distance=3)
+        swings = swings if isinstance(swings, dict) else self._swing_cache(highs, lows, atr)
+        peak_idx = swings.get("peak_idx", [])
+        trough_idx = swings.get("trough_idx", [])
 
         last_peaks = [highs[i] for i in peak_idx[-3:]] if len(peak_idx) > 0 else []
         last_troughs = [lows[i] for i in trough_idx[-3:]] if len(trough_idx) > 0 else []
 
         sequence = "RANGING"
-        if len(last_peaks) >= 2 and len(last_troughs) >= 2:
-            if last_peaks[-1] > last_peaks[-2] and last_troughs[-1] > last_troughs[-2]:
+        if len(last_peaks) >= 3 and len(last_troughs) >= 3:
+            peaks_rising = last_peaks[-1] > last_peaks[-2] > last_peaks[-3]
+            troughs_rising = last_troughs[-1] > last_troughs[-2] > last_troughs[-3]
+            peaks_falling = last_peaks[-1] < last_peaks[-2] < last_peaks[-3]
+            troughs_falling = last_troughs[-1] < last_troughs[-2] < last_troughs[-3]
+            if peaks_rising and troughs_rising:
                 sequence = "HH_HL"  # Uptrend structure
-            elif (
-                last_peaks[-1] < last_peaks[-2] and last_troughs[-1] < last_troughs[-2]
-            ):
+            elif peaks_falling and troughs_falling:
                 sequence = "LH_LL"  # Downtrend structure
             elif (
                 last_peaks[-1] < last_peaks[-2] and last_troughs[-1] > last_troughs[-2]
@@ -274,7 +310,8 @@ class NakedEngine:
         }
 
     def _detect_bos(self, highs: np.ndarray, lows: np.ndarray, atr: float,
-                    volumes: np.ndarray = None, closes: np.ndarray = None) -> dict:
+                    volumes: np.ndarray = None, closes: np.ndarray = None,
+                    swings: dict | None = None) -> dict:
         """
         Detect Break of Structure (BOS) patterns using peak/trough analysis.
         Returns dict with bullish/bearish BOS signals and broken levels.
@@ -286,18 +323,16 @@ class NakedEngine:
         closes: numpy array of bar closes. None = fall back to highs/lows (legacy).
         """
         try:
-            from scipy.signal import find_peaks
-
-            # Find peaks and troughs with ATR-based prominence
-            peak_idx, _ = find_peaks(highs, prominence=atr * 0.8, distance=3)
-            trough_idx, _ = find_peaks(-lows, prominence=atr * 0.8, distance=3)
+            swings = swings if isinstance(swings, dict) else self._swing_cache(highs, lows, atr)
+            peak_idx = swings.get("peak_idx", [])
+            trough_idx = swings.get("trough_idx", [])
 
             # Get last 3 peaks and troughs
             last_peaks = [highs[i] for i in peak_idx[-3:]]
             last_troughs = [lows[i] for i in trough_idx[-3:]]
 
             # Insufficient data for BOS detection
-            if len(last_peaks) < 2 or len(last_troughs) < 2:
+            if len(last_peaks) < 3 or len(last_troughs) < 3:
                 return {
                     "bos_bull": False,
                     "bos_bear": False,
@@ -310,19 +345,21 @@ class NakedEngine:
             _last_close = closes[-1] if closes is not None and len(closes) > 0 else highs[-1]
             _last_close_bear = closes[-1] if closes is not None and len(closes) > 0 else lows[-1]
 
-            # BOS Bull: recent peak > previous peak AND current CLOSE > previous peak
+            # BOS Bull: current CLOSE breaks the prior structural swing high.
             bos_bull = False
             last_broken_high = None
-            if last_peaks[-1] > last_peaks[-2] and _last_close > last_peaks[-2]:
+            prior_high = float(last_peaks[-2])
+            if _last_close > prior_high:
                 bos_bull = True
-                last_broken_high = last_peaks[-2]
+                last_broken_high = prior_high
 
-            # BOS Bear: recent trough < previous trough AND current CLOSE < previous trough
+            # BOS Bear: current CLOSE breaks the prior structural swing low.
             bos_bear = False
             last_broken_low = None
-            if last_troughs[-1] < last_troughs[-2] and _last_close_bear < last_troughs[-2]:
+            prior_low = float(last_troughs[-2])
+            if _last_close_bear < prior_low:
                 bos_bear = True
-                last_broken_low = last_troughs[-2]
+                last_broken_low = prior_low
 
             # Volume confirmation (only when volume data available)
             bos_volume_confirmed = True  # default True when no volume data
@@ -330,7 +367,10 @@ class NakedEngine:
                 avg_vol_20 = float(np.mean(volumes[-20:]))
                 last_vol = float(volumes[-1])
                 if avg_vol_20 > 0:
-                    bos_volume_confirmed = last_vol >= avg_vol_20 * 1.0  # at or above average
+                    multiplier = float(
+                        config.CONFIG.get("NAKED_ENGINE", {}).get("bos_volume_multiplier", 1.3)
+                    )
+                    bos_volume_confirmed = last_vol >= avg_vol_20 * multiplier
                 # If volume data exists but is all zeros (forex with no real vol), skip
                 if avg_vol_20 == 0:
                     bos_volume_confirmed = True
@@ -353,7 +393,10 @@ class NakedEngine:
                 "bos_volume_confirmed": False,
             }
 
-    def _detect_choch(self, highs: np.ndarray, lows: np.ndarray, atr: float) -> dict:
+    def _detect_choch(
+        self, highs: np.ndarray, lows: np.ndarray, atr: float,
+        closes: np.ndarray = None, swings: dict | None = None
+    ) -> dict:
         """
         Detect Change of Character (CHoCH) — structural reversal signal.
         CHoCH occurs when price breaks the swing that produced the last BOS,
@@ -367,42 +410,51 @@ class NakedEngine:
             choch_level: The price level that was broken
         """
         try:
-            from scipy.signal import find_peaks
+            swings = swings if isinstance(swings, dict) else self._swing_cache(highs, lows, atr)
+            peak_idx = swings.get("peak_idx", [])
+            trough_idx = swings.get("trough_idx", [])
 
-            peak_idx, _ = find_peaks(highs, prominence=atr * 0.8, distance=3)
-            trough_idx, _ = find_peaks(-lows, prominence=atr * 0.8, distance=3)
-
-            last_peaks = [highs[i] for i in peak_idx[-4:]]
-            last_troughs = [lows[i] for i in trough_idx[-4:]]
+            last_peaks = [highs[i] for i in peak_idx[-3:]]
+            last_troughs = [lows[i] for i in trough_idx[-3:]]
 
             if len(last_peaks) < 3 or len(last_troughs) < 3:
-                return {"choch_bull": False, "choch_bear": False, "choch_level": None}
+                return {"choch_bull": False, "choch_bear": False, "choch_level": None, "choch_events": []}
 
             # Bullish CHoCH: price was making LH/LL (downtrend), then breaks
             # above the most recent Lower High — structure shifts bullish.
-            was_bearish = (last_peaks[-2] < last_peaks[-3] and
-                           last_troughs[-2] < last_troughs[-3])
-            choch_bull = was_bearish and highs[-1] > last_peaks[-2]
+            was_bearish = (
+                last_peaks[-1] < last_peaks[-2] < last_peaks[-3]
+                and last_troughs[-1] < last_troughs[-2] < last_troughs[-3]
+            )
+            bull_break = closes[-1] if closes is not None and len(closes) > 0 else highs[-1]
+            choch_bull = bool(was_bearish and bull_break > last_peaks[-1])
 
             # Bearish CHoCH: price was making HH/HL (uptrend), then breaks
             # below the most recent Higher Low — structure shifts bearish.
-            was_bullish = (last_peaks[-2] > last_peaks[-3] and
-                           last_troughs[-2] > last_troughs[-3])
-            choch_bear = was_bullish and lows[-1] < last_troughs[-2]
+            was_bullish = (
+                last_peaks[-1] > last_peaks[-2] > last_peaks[-3]
+                and last_troughs[-1] > last_troughs[-2] > last_troughs[-3]
+            )
+            bear_break = closes[-1] if closes is not None and len(closes) > 0 else lows[-1]
+            choch_bear = bool(was_bullish and bear_break < last_troughs[-1])
 
             choch_level = None
+            choch_events = []
             if choch_bull:
-                choch_level = float(last_peaks[-2])
+                choch_level = float(last_peaks[-1])
+                choch_events.append({"type": "bullish", "level": choch_level})
             elif choch_bear:
-                choch_level = float(last_troughs[-2])
+                choch_level = float(last_troughs[-1])
+                choch_events.append({"type": "bearish", "level": choch_level})
 
             return {
                 "choch_bull": choch_bull,
                 "choch_bear": choch_bear,
                 "choch_level": choch_level,
+                "choch_events": choch_events,
             }
         except Exception:
-            return {"choch_bull": False, "choch_bear": False, "choch_level": None}
+            return {"choch_bull": False, "choch_bear": False, "choch_level": None, "choch_events": []}
 
     def _detect_order_blocks(self, candles: list, bos_data: dict, atr: float) -> list:
         """
@@ -437,7 +489,11 @@ class NakedEngine:
                         ob_bottom = float(c["close"])  # body only — wick excluded per SMC
                         # Displacement: how far price moved after this candle (in ATRs)
                         if i + 1 < len(candles):
-                            max_after = max(float(candles[j]["high"]) for j in range(i + 1, min(i + 6, len(candles))))
+                            _ob_lookforward = int(
+                                (config.CONFIG.get("NAKED_ENGINE", {}).get("ob_displacement_bars") or {})
+                                .get("H4", 6)
+                            )
+                            max_after = max(float(candles[j]["high"]) for j in range(i + 1, min(i + _ob_lookforward, len(candles))))
                             displacement = (max_after - ob_top) / atr if atr > 0 else 0
                         else:
                             displacement = 0
@@ -477,7 +533,11 @@ class NakedEngine:
                         ob_bottom = float(c["open"])
                         # Displacement
                         if i + 1 < len(candles):
-                            min_after = min(float(candles[j]["low"]) for j in range(i + 1, min(i + 6, len(candles))))
+                            _ob_lookforward = int(
+                                (config.CONFIG.get("NAKED_ENGINE", {}).get("ob_displacement_bars") or {})
+                                .get("H4", 6)
+                            )
+                            min_after = min(float(candles[j]["low"]) for j in range(i + 1, min(i + _ob_lookforward, len(candles))))
                             displacement = (ob_top - min_after) / atr if atr > 0 else 0
                         else:
                             displacement = 0
@@ -677,7 +737,13 @@ class NakedEngine:
         else:
             distance = abs(current_price - center) if center is not None else None
 
-        near_zone = distance is not None and distance <= atr_val * 0.5
+        _proximity_cfg = config.CONFIG.get("NAKED_ENGINE", {}).get("zone_proximity_atr_mult") or {}
+        _proximity_mult = 0.5
+        if isinstance(_proximity_cfg, dict):
+            _proximity_mult = float(_proximity_cfg.get("default", 0.5))
+        else:
+            _proximity_mult = float(_proximity_cfg)
+        near_zone = distance is not None and distance <= atr_val * _proximity_mult
         zone_touched = False
 
         if candles:
@@ -737,7 +803,9 @@ class NakedEngine:
         prev2_high = float(prev2["high"])
         prev2_low = float(prev2["low"])
 
-        range_ = max(high - low, atr * 0.05, 1e-9)
+        _current_price = float(candles[-1]["close"]) if candles else 0.0
+        _min_range = max(atr * 0.05, _current_price * 1e-6 if _current_price > 0 else 1e-9, 1e-12)
+        range_ = max(high - low, _min_range)
         body = abs(close - open_)
         upper_wick = high - max(open_, close)
         lower_wick = min(open_, close) - low
@@ -854,27 +922,16 @@ class NakedEngine:
         else:
             votes["h4_swing"] = 0
 
-        # --- BOS direction (structural momentum) ---
+        # --- BOS direction (diagnostic only; primary checklist already gates on BOS) ---
         bos_bull = bool(bos_data.get("bos_bull"))
         bos_bear = bool(bos_data.get("bos_bear"))
-        if bos_bull and not bos_bear:
-            votes["bos"] = 1
-        elif bos_bear and not bos_bull:
-            votes["bos"] = -1
-        elif bos_bull and bos_bear:
-            votes["bos"] = 0  # both — conflicted
-        else:
-            votes["bos"] = 0  # no BOS
+        diagnostic_bos = {"bos_bull": bos_bull, "bos_bear": bos_bear}
+        # BOS stays diagnostic-only; it is already used by the primary checklist.
 
-        # --- D1 BOS (macro confirmation, higher weight) ---
+        # --- D1 BOS (diagnostic only; MTF BOS is tracked separately) ---
         d1_bull = bool(d1_bos.get("bos_bull"))
         d1_bear = bool(d1_bos.get("bos_bear"))
-        if d1_bull and not d1_bear:
-            votes["d1_bos"] = 1
-        elif d1_bear and not d1_bull:
-            votes["d1_bos"] = -1
-        else:
-            votes["d1_bos"] = 0
+        diagnostic_bos.update({"d1_bull": d1_bull, "d1_bear": d1_bear})
 
         # --- CHoCH (early reversal signal, lower weight) ---
         if choch_data.get("choch_bull") and not choch_data.get("choch_bear"):
@@ -893,16 +950,14 @@ class NakedEngine:
             votes["sweep"] = 0
 
         # --- Weight the votes ---
-        # D1 BOS and H4 swing carry more weight than H1 or CHoCH
+        # H4 swing carries more weight than H1, CHoCH, or sweep.
         weights = {
-            "d1_bos":   3,
             "h4_swing": 2,
-            "bos":      2,
             "h1_swing": 1,
             "choch":    1,
             "sweep":    1,
         }
-        total_weight = sum(weights.values())  # 10
+        total_weight = sum(weights.values())
         weighted_score = sum(
             votes.get(k, 0) * w for k, w in weights.items()
         )
@@ -916,6 +971,7 @@ class NakedEngine:
                 "confidence": "NONE",
                 "reason": "No structural evidence available",
                 "votes": votes,
+                "diagnostic_bos": diagnostic_bos,
                 "weighted_score": 0.0,
             }
 
@@ -935,13 +991,13 @@ class NakedEngine:
             direction = "LONG"
             reason = (
                 f"Structural evidence bullish: {positive}/{len(active_votes)} indicators agree "
-                f"(h4={h4_sequence}, bos={'YES' if bos_bull else 'NO'}, d1_bos={'YES' if d1_bull else 'NO'})"
+                f"(h4={h4_sequence}, choch={votes.get('choch', 0)}, sweep={votes.get('sweep', 0)})"
             )
         elif score_ratio < -0.15:
             direction = "SHORT"
             reason = (
                 f"Structural evidence bearish: {negative}/{len(active_votes)} indicators agree "
-                f"(h4={h4_sequence}, bos={'YES' if bos_bear else 'NO'}, d1_bos={'YES' if d1_bear else 'NO'})"
+                f"(h4={h4_sequence}, choch={votes.get('choch', 0)}, sweep={votes.get('sweep', 0)})"
             )
         else:
             direction = None
@@ -956,6 +1012,7 @@ class NakedEngine:
             "confidence": confidence,
             "reason": reason,
             "votes": votes,
+            "diagnostic_bos": diagnostic_bos,
             "weighted_score": round(score_ratio, 4),
         }
 
@@ -1012,6 +1069,7 @@ class NakedEngine:
         struct_highs = np.array([float(c["high"]) for c in struct_candles])
         struct_lows = np.array([float(c["low"]) for c in struct_candles])
         struct_closes = np.array([float(c["close"]) for c in struct_candles])
+        struct_swings = self._swing_cache(struct_highs, struct_lows, atr)
 
         # 1. Macro Zones (D1/H4)
         # Using H4 to find thick zones gives standard resolution.
@@ -1024,8 +1082,9 @@ class NakedEngine:
         active_fvgs = [f for f in fvgs if not f.get("mitigated", False)]
 
         # 2. Immediate Structure Sequence and Macro H4 Sequence
-        sequence_data = self._determine_sequence(struct_highs, struct_lows, atr, direction)
-        macro_seq_data = self._determine_sequence(h4_highs, h4_lows, atr, direction)
+        h4_swings = self._swing_cache(h4_highs, h4_lows, atr)
+        sequence_data = self._determine_sequence(struct_highs, struct_lows, atr, direction, swings=struct_swings)
+        macro_seq_data = self._determine_sequence(h4_highs, h4_lows, atr, direction, swings=h4_swings)
 
         # 3. BOS and Sweep Detection
         # Extract volumes for BOS volume confirmation (None for forex — no centralized volume)
@@ -1034,15 +1093,16 @@ class NakedEngine:
         if _has_vol:
             struct_volumes = np.array([float(c.get("vol", 0)) for c in struct_candles])
 
-        bos_data = self._detect_bos(struct_highs, struct_lows, atr, volumes=struct_volumes, closes=struct_closes)
+        bos_data = self._detect_bos(
+            struct_highs, struct_lows, atr, volumes=struct_volumes, closes=struct_closes, swings=struct_swings
+        )
 
         # Compute swing highs/lows for sweep detection (structural reference levels)
         _sweep_swing_high = None
         _sweep_swing_low = None
         try:
-            from scipy.signal import find_peaks as _fp
-            _pk_idx, _ = _fp(struct_highs, prominence=atr * 0.8, distance=3)
-            _tr_idx, _ = _fp(-struct_lows, prominence=atr * 0.8, distance=3)
+            _pk_idx = struct_swings.get("peak_idx", [])
+            _tr_idx = struct_swings.get("trough_idx", [])
             if len(_pk_idx) >= 1:
                 _sweep_swing_high = float(struct_highs[_pk_idx[-1]])
             if len(_tr_idx) >= 1:
@@ -1058,7 +1118,9 @@ class NakedEngine:
         d1_highs = np.array([float(c["high"]) for c in d1_candles])
         d1_lows = np.array([float(c["low"]) for c in d1_candles])
         d1_closes = np.array([float(c["close"]) for c in d1_candles])
-        d1_bos = self._detect_bos(d1_highs, d1_lows, atr, closes=d1_closes)
+        d1_atr = self._compute_atr_from_candles(d1_candles, fallback=atr)
+        d1_swings = self._swing_cache(d1_highs, d1_lows, d1_atr)
+        d1_bos = self._detect_bos(d1_highs, d1_lows, d1_atr, closes=d1_closes, swings=d1_swings)
 
         # D1 PD-array detection (informational — no scoring gate change).
         # Detects D1 order blocks and FVGs that price is approaching and flags a
@@ -1070,9 +1132,9 @@ class NakedEngine:
         d1_pd_array_conflict: bool = False
         d1_conflict_details: list = []
         try:
-            d1_order_blocks_raw = self._detect_order_blocks(d1_candles, d1_bos, atr)
+            d1_order_blocks_raw = self._detect_order_blocks(d1_candles, d1_bos, d1_atr)
             d1_fvgs_raw = [f for f in self._detect_fvg(d1_candles) if not f.get("mitigated")]
-            _conflict_window = atr * 3.0  # within 3 ATRs is "approaching"
+            _conflict_window = d1_atr * 3.0  # within 3 D1 ATRs is "approaching"
             for ob in d1_order_blocks_raw:
                 ob_mid = (ob["top"] + ob["bottom"]) / 2.0
                 ob_dist = abs(current_price - ob_mid)
@@ -1135,12 +1197,12 @@ class NakedEngine:
                 zone["fvg_size_atr"] = 0.0
 
         # 3b. CHoCH Detection (structural reversal)
-        choch_data = self._detect_choch(struct_highs, struct_lows, atr)
+        choch_data = self._detect_choch(struct_highs, struct_lows, atr, closes=struct_closes, swings=struct_swings)
 
         # 3d. Breaker Blocks — after CHoCH, the broken swing level becomes new S/R
         # A bullish CHoCH breaks above a Lower High → that LH level becomes support (breaker)
         # A bearish CHoCH breaks below a Higher Low → that HL level becomes resistance (breaker)
-        breaker_block = None
+        breaker_blocks = []
         if choch_data.get("choch_bull") and choch_data.get("choch_level") is not None:
             breaker_block = {
                 "type": "bullish_breaker",
@@ -1158,6 +1220,7 @@ class NakedEngine:
                 "fvg_size_atr": 0.0,
                 "is_breaker": True,
             })
+            breaker_blocks.append(breaker_block)
         elif choch_data.get("choch_bear") and choch_data.get("choch_level") is not None:
             breaker_block = {
                 "type": "bearish_breaker",
@@ -1175,6 +1238,47 @@ class NakedEngine:
                 "fvg_size_atr": 0.0,
                 "is_breaker": True,
             })
+            breaker_blocks.append(breaker_block)
+        for event in choch_data.get("choch_events") or []:
+            level = event.get("level")
+            if level is None or level == choch_data.get("choch_level"):
+                continue
+            level = float(level)
+            if event.get("type") == "bullish":
+                breaker = {
+                    "type": "bullish_breaker",
+                    "level": level,
+                    "upper": level + (atr * 0.3),
+                    "lower": level - (atr * 0.3),
+                }
+                sup_zones.append({
+                    "upper": breaker["upper"],
+                    "lower": breaker["lower"],
+                    "center": breaker["level"],
+                    "volume_strength": 0.8,
+                    "fvg_overlap": False,
+                    "fvg_size_atr": 0.0,
+                    "is_breaker": True,
+                })
+                breaker_blocks.append(breaker)
+            elif event.get("type") == "bearish":
+                breaker = {
+                    "type": "bearish_breaker",
+                    "level": level,
+                    "upper": level + (atr * 0.3),
+                    "lower": level - (atr * 0.3),
+                }
+                res_zones.append({
+                    "upper": breaker["upper"],
+                    "lower": breaker["lower"],
+                    "center": breaker["level"],
+                    "volume_strength": 0.8,
+                    "fvg_overlap": False,
+                    "fvg_size_atr": 0.0,
+                    "is_breaker": True,
+                })
+                breaker_blocks.append(breaker)
+        breaker_block = breaker_blocks[-1] if breaker_blocks else None
 
         # ── Zone Merging: cluster zones within 0.5 ATR into single high-confluence pools ──
         def _merge_zones(zones, merge_dist):
@@ -1182,9 +1286,10 @@ class NakedEngine:
                 return zones
             sorted_z = sorted(zones, key=lambda z: z["center"])
             merged = [sorted_z[0]]
+            anchors = [float(sorted_z[0]["center"])]
             for z in sorted_z[1:]:
                 prev = merged[-1]
-                if abs(z["center"] - prev["center"]) <= merge_dist:
+                if abs(z["center"] - anchors[-1]) <= merge_dist:
                     # Merge: widen boundaries, keep strongest volume
                     prev["upper"] = max(prev["upper"], z["upper"])
                     prev["lower"] = min(prev["lower"], z["lower"])
@@ -1200,6 +1305,7 @@ class NakedEngine:
                         )
                 else:
                     merged.append(z)
+                    anchors.append(float(z["center"]))
             return merged
 
         _merge_dist = atr * 0.5
@@ -1276,20 +1382,24 @@ class NakedEngine:
         tp = None
         tp_source = "fallback_rr"
         tp_structural_limited = False
-        if direction == "LONG" and nearest_res:
-            structural_tp = nearest_res["lower"] - (atr * sl_mult)
-            if structural_tp <= current_price + (atr * 0.5):
-                tp_structural_limited = True
-            else:
+        if direction == "LONG" and valid_res:
+            for zone in sorted(valid_res, key=lambda z: z["lower"]):
+                structural_tp = zone["lower"] - (atr * sl_mult)
+                if structural_tp <= current_price + (atr * 0.5):
+                    tp_structural_limited = True
+                    continue
                 tp = structural_tp
                 tp_source = "structural_zone"
-        elif direction == "SHORT" and nearest_sup:
-            structural_tp = nearest_sup["upper"] + (atr * sl_mult)
-            if structural_tp >= current_price - (atr * 0.5):
-                tp_structural_limited = True
-            else:
+                break
+        elif direction == "SHORT" and valid_sup:
+            for zone in sorted(valid_sup, key=lambda z: z["upper"], reverse=True):
+                structural_tp = zone["upper"] + (atr * sl_mult)
+                if structural_tp >= current_price - (atr * 0.5):
+                    tp_structural_limited = True
+                    continue
                 tp = structural_tp
                 tp_source = "structural_zone"
+                break
 
         # Generate TP from fallback_rr when no usable opposing structural zone exists.
         if tp is None:
@@ -1473,6 +1583,7 @@ class NakedEngine:
             if nearest_sup
             else None,
             "atr": atr,
+            "d1_atr": d1_atr,
             "bos_confirmed": bos_confirmed,
             "bos_mtf_confirmed": bos_mtf_confirmed,
             "bos_volume_confirmed": bos_data.get("bos_volume_confirmed", True),
@@ -1482,6 +1593,7 @@ class NakedEngine:
             "choch_data": choch_data,
             "choch_confirmed": choch_confirmed,
             "breaker_block": breaker_block,
+            "breaker_blocks": breaker_blocks,
             "order_blocks": order_blocks,
             "ob_at_zone": _ob_at_zone,
             "fvg_overlap": fvg_overlap,
@@ -1686,17 +1798,21 @@ class NakedEngine:
         )
         space_ok = room_ok or rr_ok
 
-        confirmations = [structure_ok, location_ok, entry_ok, room_ok, rr_ok]
+        gate_confirmations = [structure_ok, location_ok, entry_ok, room_ok, rr_ok]
         if require_macro_align:
-            confirmations.append(macro_ok)
+            gate_confirmations.append(macro_ok)
+        confirmations = list(gate_confirmations)
+        bonus_points = 0.0
         # Bonus confirmations — these add to the score but don't block if missing
         if bos_mtf:
-            confirmations.append(True)  # MTF BOS alignment = extra point
+            bonus_points += 1.0  # MTF BOS alignment = extra point
         if ob_at_zone:
-            confirmations.append(True)  # OB at zone = extra point
+            bonus_points += 1.0  # OB at zone = extra point
 
-        total_score = float(sum(1 for passed in confirmations if passed))
-        max_possible = float(len(confirmations)) if confirmations else 1.0
+        gate_score = float(sum(1 for passed in gate_confirmations if passed))
+        gate_max_possible = float(len(gate_confirmations)) if gate_confirmations else 1.0
+        total_score = gate_score + bonus_points
+        max_possible = gate_max_possible + bonus_points
         _profile_points = 0.0
         _profile_ok = False
         _profile_alignment = "none"
@@ -1724,18 +1840,22 @@ class NakedEngine:
                     _profile_alignment = "moderate"
                 else:
                     _profile_alignment = "weak"
+                bonus_points += _profile_points
                 total_score += _profile_points
 
         # D1 PD-array conflict penalty (B-1).
         # When an unmitigated D1 OB or FVG opposes the trade direction within 3×ATR,
-        # deduct 0.5 from total_score. Effect: a signal at the exact min_score gate
-        # (e.g. 4/5) drops to 3.5 and fails engine_b_confidence_passes(). Signals
-        # with structural surplus (5+/5) absorb the penalty and may still pass.
-        # `passed` boolean is intentionally NOT changed — the penalty acts through the
+        # deduct from total_score. Default penalty reduced from 0.5 to 0.25 so that
+        # signals at the exact min_score gate (e.g. 4/5 = 80%) drop to 3.75 and
+        # may still pass if structural surplus exists. The penalty acts through the
         # numeric score gate, not the checklist flags.
         _d1_conflict = bool(res.get("d1_pd_array_conflict", False))
-        _d1_penalty = 0.5 if _d1_conflict else 0.0
+        _d1_penalty = float(
+            config.CONFIG.get("NAKED_ENGINE", {}).get("d1_pd_array_penalty", 0.25)
+        )
+        _d1_penalty = _d1_penalty if _d1_conflict else 0.0
         total_score = max(0.0, total_score - _d1_penalty)
+        gate_score = max(0.0, gate_score - _d1_penalty)
 
         pct = min(100, int((total_score / max_possible) * 100))
         if checklist_mode == "strict":
@@ -1757,16 +1877,31 @@ class NakedEngine:
             res, current_price, direction, trigger_ok
         )
 
+        if hard_counter:
+            _diag_codes.append(ENGINE_B_REASON_SEQUENCE_COUNTER_TREND)
+        if not trigger_ok and not breakout_ok:
+            _diag_codes.append(ENGINE_B_REASON_NO_TRIGGER_PATTERN)
+        elif breakout_ok and not res.get("bos_volume_confirmed", True):
+            _diag_codes.append(ENGINE_B_REASON_BOS_WITHOUT_VOLUME)
+        if _d1_conflict:
+            _diag_codes.append(ENGINE_B_REASON_D1_PD_ARRAY_CONFLICT)
         if not room_ok:
             if direction == "LONG":
                 _diag_codes.append(ENGINE_B_REASON_RESISTANCE_TOO_CLOSE)
             elif direction == "SHORT":
                 _diag_codes.append(ENGINE_B_REASON_SUPPORT_TOO_CLOSE)
+        if sl and tp and not tp_side_ok:
+            _diag_codes.append(ENGINE_B_REASON_TP_WRONG_SIDE)
+        if res.get("tp_structural_limited"):
+            _diag_codes.append(ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE)
 
         return {
             "score": total_score,
+            "gate_score": gate_score,
             "pct": pct,
             "max_possible": round(max_possible, 2),
+            "gate_max_possible": round(gate_max_possible, 2),
+            "bonus_points": round(bonus_points, 2),
             "struct_points": 1.0 if structure_ok else 0.0,
             "rr_points": 1.0 if rr_ok else 0.0,
             "room_points": 1.0 if room_ok else 0.0,
@@ -1806,10 +1941,10 @@ class NakedEngine:
         self, asset_close_series: list, dxy_close_series: list, direction: str
     ) -> tuple[bool, str | None]:
         """Same gate as check_macro_correlation; returns optional block reason code when False."""
-        if len(asset_close_series) < 30 or len(dxy_close_series) < 30:
+        if len(asset_close_series) < 60 or len(dxy_close_series) < 60:
             return True, None
 
-        min_len = min(len(asset_close_series), len(dxy_close_series), 30)
+        min_len = min(len(asset_close_series), len(dxy_close_series), 60)
         a_series = pd.Series(asset_close_series[-min_len:])
         d_series = pd.Series(dxy_close_series[-min_len:])
 
