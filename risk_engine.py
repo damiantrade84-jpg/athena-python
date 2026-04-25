@@ -752,6 +752,15 @@ def risk_check(
         log.warning(f"{prefix} REJECTED: SHORT stop {sl} must be above entry {entry}")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
 
+    # TP validation
+    tp1 = float(signal.get("tp1") or 0)
+    if direction == "LONG" and tp1 > 0 and tp1 <= entry:
+        log.warning(f"{prefix} REJECTED: LONG tp1 {tp1} must be above entry {entry}")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
+    if direction == "SHORT" and tp1 > 0 and tp1 >= entry:
+        log.warning(f"{prefix} REJECTED: SHORT tp1 {tp1} must be below entry {entry}")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
+
     # ── Check 5: SL distance within MAX_SL_PCT ──────────────────────────────
     # BUG 4 fix: Enforce hard rejection for over-wide stops before volume calc.
     # Matches implementation in executors to prevent late-stage rejections.
