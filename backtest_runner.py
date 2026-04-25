@@ -3571,11 +3571,11 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             if sl is None or tp is None:
                 continue
 
-            rr = conf_data.get("rr", 0.0)
-            if rr <= 0:
-                sl_dist = abs(entry - sl)
-                tp_dist = abs(tp - entry)
-                rr = (tp_dist / sl_dist) if sl_dist > 0 else 0.0
+            # Always recompute RR from actual SL/TP used — matches execution parity.
+            # conf_data.rr may be structural; when _bt_sl_mode="atr", sl/tp are ATR-based.
+            _rr_sl_dist = abs(entry - sl)
+            _rr_tp_dist = abs(tp - entry)
+            rr = (_rr_tp_dist / _rr_sl_dist) if _rr_sl_dist > 0 else 0.0
             if rr <= 0:
                 continue
             if rr < float(style_profile.get("min_rr", 1.0)):

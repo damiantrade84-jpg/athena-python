@@ -234,6 +234,19 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
     """Parallel scan of tracked pairs. Optional asset_class filter."""
     r = rt()
 
+    # REGRESSION CHECK: Print config state at scan startup
+    print("\n" + "="*80)
+    print("REGRESSION CHECK - CONFIG STATE")
+    print("="*80)
+    print(f"ENGINE_B_CRYPTO_PROFILE_ENABLED: {CONFIG.get('ENGINE_B_CRYPTO_PROFILE_ENABLED')}")
+    print(f"ENGINE_B_CRYPTO_TARGET_V2_ENABLED: {CONFIG.get('ENGINE_B_CRYPTO_TARGET_V2_ENABLED')}")
+    print(f"ENGINE_B_CRYPTO_TRIGGER_PROFILE_ENABLED: {CONFIG.get('ENGINE_B_CRYPTO_TRIGGER_PROFILE_ENABLED')}")
+    print(f"ENGINE_B_CRYPTO_ALLOW_FALLBACK_TARGET_FOR_PASS: {CONFIG.get('ENGINE_B_CRYPTO_ALLOW_FALLBACK_TARGET_FOR_PASS')}")
+    print(f"ENGINE_B_CRYPTO_REQUIRE_STRUCTURAL_TARGET_FOR_PASS: {CONFIG.get('ENGINE_B_CRYPTO_REQUIRE_STRUCTURAL_TARGET_FOR_PASS')}")
+    print(f"Requested asset_class: {asset_class}")
+    print(f"Requested style: {style}")
+    print("="*80 + "\n")
+
     _requested_style = _normalize_style(style)
 
     _valid_classes = {"crypto", "forex", "stock", "commodity", "index"}
@@ -525,6 +538,18 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     preloaded_fetch_meta=fetch_meta,
                     intermarket_snapshot=intermarket_snapshot,
                 )
+
+                # REGRESSION CHECK: Log per-pair Engine A details
+                d1_count = len(raw_candles.get("D1", []))
+                h4_count = len(raw_candles.get("H4", []))
+                h1_count = len(raw_candles.get("H1", []))
+                if sig_a:
+                    score = sig_a.get("confluenceScore", 0)
+                    max_score = sig_a.get("maxScore", 3.0)
+                    direction = sig_a.get("direction", "NONE")
+                    print(f"[REGRESSION-A] {pair['display']:12s} type={pair.get('type'):8s} D1={d1_count:3d} H4={h4_count:3d} H1={h1_count:3d} score={score:.2f}/{max_score:.1f} dir={direction:5s}")
+                else:
+                    print(f"[REGRESSION-A] {pair['display']:12s} type={pair.get('type'):8s} D1={d1_count:3d} H4={h4_count:3d} H1={h1_count:3d} NO SIGNAL")
 
                 if not sig_a:
                     return pair, None, None
@@ -968,6 +993,25 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 )
 
         log.info(f"Scan funnel: {scan_funnel}")
+        
+        # REGRESSION CHECK: Print Engine A scan-funnel summary
+        print("\n" + "="*80)
+        print("REGRESSION CHECK - ENGINE A SCAN FUNNEL")
+        print("="*80)
+        print(f"Total pairs scanned: {scan_funnel['total']}")
+        print(f"Active pairs: {scan_funnel['active']}")
+        print(f"No data: {scan_funnel['no_data']}")
+        print(f"Low score: {scan_funnel['low_score']}")
+        print(f"Passed: {scan_funnel['passed']}")
+        print(f"Watchlist: {scan_funnel['watchlist']}")
+        print(f"Errors: {scan_funnel['errors']}")
+        print(f"Closed exchange: {scan_funnel['closed_exchange']}")
+        print(f"Event block: {scan_funnel['event_block']}")
+        print(f"Inactive pair: {scan_funnel['inactive_pair']}")
+        print(f"Counter trend: {scan_funnel['counter_trend']}")
+        print(f"Dead ranging: {scan_funnel['dead_ranging']}")
+        print("="*80 + "\n")
+        
         if _threshold_audit_on:
             try:
                 write_signal_funnel_rows(threshold_audit_rows)

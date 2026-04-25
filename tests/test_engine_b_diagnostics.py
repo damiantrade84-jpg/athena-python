@@ -340,21 +340,32 @@ def test_analyze_structure_falls_back_to_rr_when_resistance_is_too_close(monkeyp
     assert result["recommended_take_profit"] > 100.0
 
 
-def test_calculate_confidence_rejects_tp_on_wrong_side_of_entry():
+def test_calculate_confidence_structural_tp_wrong_side_emits_diagnostic():
+    """Wrong structural TP emits ENGINE_B_REASON_TP_WRONG_SIDE.
+    rr_ok is now True because the RR gate uses ATR execution levels (not structural TP).
+    tp_side_ok reflects the structural TP side check for diagnostic purposes.
+    """
     res = _base_res_long()
-    res["recommended_take_profit"] = 99.8
+    res["recommended_take_profit"] = 99.8  # structural TP below entry — wrong side for LONG
+    res["atr"] = 1.0
     out = engine.calculate_confidence(
         res,
         current_price=100.0,
         direction="LONG",
         learning_ctx=None,
         entry_candles=[],
-        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False, "style": "intraday"},
     )
+    # Structural TP diagnostic is still emitted
     assert out["tp_side_ok"] is False
-    assert out["rr"] == 0.0
-    assert out["rr_ok"] is False
     assert ENGINE_B_REASON_TP_WRONG_SIDE in out.get("engine_b_diagnostics", {}).get("reason_codes", [])
+    # ATR execution TP (above entry) is valid so rr_ok=True with execution RR
+    assert out["execution_levels_valid"] is True
+    assert out["rr_used_for_gate"] > 0
+    assert out["rr_ok"] is True
+    # Execution levels are present
+    assert out["execution_sl"] is not None
+    assert out["execution_tp"] is not None
 
 
 def test_calculate_confidence_flexible_mode_accepts_liquidity_sweep_catalyst():
@@ -596,3 +607,212 @@ def test_forex_engine_b_behavior_unchanged_when_crypto_flags_enabled(monkeypatch
     assert out["trigger_ok"] is True
     assert out["passed"] is True
     assert out["failed_gate_names"] == []
+
+
+# ─── Engine B RR basis tests ──────────────────────────────────────────────────
+
+from market_structure import resolve_engine_b_execution_levels
+
+
+def test_resolve_engine_b_execution_levels_atr_sl_structural_tp_long():
+    """Wide structural SL + valid structural TP → ATR SL + structural TP → good execution RR."""
+    import config as _cfg
+    # Wide structural SL would give structural_rr=0.6
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=97.0,   # 3 ATR below — wide structural stop
+        structural_tp=101.8,  # structural target 1.8 ATR above
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+    )
+    assert out["structural_rr"] == pytest.approx(1.8 / 3.0, abs=1e-3)
+    # ATR intraday SL for forex = 1.5 ATR
+    assert out["execution_sl"] == pytest.approx(100.0 - 1.5 * 1.0, abs=1e-6)
+    # execution TP = structural TP (valid)
+    assert out["execution_tp"] == pytest.approx(101.8, abs=1e-6)
+    # execution_rr = (101.8 - 100.0) / (100.0 - 98.5) = 1.8/1.5 = 1.2
+    assert out["execution_rr"] == pytest.approx(1.8 / 1.5, abs=1e-3)
+    assert out["rr_used_for_gate"] == pytest.approx(1.8 / 1.5, abs=1e-3)
+    assert out["execution_levels_valid"] is True
+    assert "atr" in out["rr_source"]
+
+
+def test_resolve_engine_b_execution_levels_atr_sl_fallback_tp_when_structural_missing():
+    """No structural TP → ATR SL + ATR TP."""
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=98.5,
+        structural_tp=None,
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+    )
+    assert out["execution_sl"] is not None
+    assert out["execution_tp"] is not None
+    assert out["execution_tp"] > 100.0
+    assert out["execution_rr"] > 0
+    assert out["execution_levels_valid"] is True
+    assert "atr" in out["tp_source"] if "tp_source" in out else True
+
+
+def test_resolve_engine_b_execution_levels_structural_fallback_when_atr_config_missing():
+    """If config has no ATR mults for an asset, fall back to structural levels."""
+    import config as _cfg
+    old_style = _cfg.CONFIG.get("STYLE_ATR_MULTS", {})
+    old_atr = _cfg.CONFIG.get("ATR_CLASS", {})
+    _cfg.CONFIG["STYLE_ATR_MULTS"] = {}
+    _cfg.CONFIG["ATR_CLASS"] = {}
+    try:
+        out = resolve_engine_b_execution_levels(
+            direction="LONG",
+            entry=100.0,
+            structural_sl=99.0,
+            structural_tp=103.0,
+            atr=1.0,
+            style="intraday",
+            asset_class="forex",
+        )
+        assert out["execution_sl"] == pytest.approx(99.0)
+        assert out["execution_tp"] == pytest.approx(103.0)
+        assert out["rr_source"] == "structural_sl_structural_tp"
+        assert out["execution_levels_valid"] is True
+    finally:
+        _cfg.CONFIG["STYLE_ATR_MULTS"] = old_style
+        _cfg.CONFIG["ATR_CLASS"] = old_atr
+
+
+def test_rr_gate_uses_execution_rr_not_structural_when_structural_rr_fails():
+    """Key regression: structural RR fails but execution RR passes → rr_ok=True."""
+    res = _base_res_long()
+    res["atr"] = 1.0
+    res["recommended_stop_loss"] = 97.0   # wide structural SL → structural_rr = 0.6
+    res["recommended_take_profit"] = 101.8  # structural target
+    res["distance_to_res"] = 3.0
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.2, "require_macro_align": False, "style": "intraday"},
+    )
+    assert out["structural_rr"] == pytest.approx(1.8 / 3.0, abs=1e-3)
+    assert out["execution_rr"] >= 1.2
+    assert out["rr_used_for_gate"] >= 1.2
+    assert out["rr_ok"] is True
+    assert "atr" in out["rr_source"]
+
+
+def test_rr_gate_fails_when_execution_rr_also_insufficient():
+    """If both structural and execution RR are below min_rr, rr_ok must be False."""
+    res = _base_res_long()
+    res["atr"] = 1.0
+    # Structural TP only 0.5 ATR above entry — gives execution_rr = 0.5/1.5 ≈ 0.33
+    res["recommended_stop_loss"] = 99.5
+    res["recommended_take_profit"] = 100.5
+    res["distance_to_res"] = 3.0
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.2, "require_macro_align": False, "style": "intraday"},
+    )
+    assert out["execution_rr"] < 1.2
+    assert out["rr_ok"] is False
+
+
+def test_rr_gate_short_direction_atr_sl():
+    """SHORT direction: ATR SL above entry, structural TP below entry."""
+    res = {
+        "atr": 1.0,
+        "current_swing_sequence": "LH_LL",
+        "macro_swing_sequence": "LH_LL",
+        "bos_confirmed": True,
+        "liquidity_sweep": False,
+        "choch_confirmed": False,
+        "zone_touched": True,
+        "near_active_zone": False,
+        "trigger_ok": True,
+        "bos_volume_confirmed": True,
+        "strong_close": True,
+        "inside_break_candle": False,
+        "engulfing_candle": False,
+        "ob_at_zone": False,
+        "breaker_block": False,
+        "bos_mtf_confirmed": False,
+        "distance_to_res": 5.0,
+        "distance_to_sup": 0.5,
+        "recommended_stop_loss": 103.5,   # wide structural SL (above entry for SHORT)
+        "recommended_take_profit": 98.2,  # structural target below entry
+        "profile_notes": "",
+        "prev_session_profile_valid": False,
+        "profile_in_play": False,
+        "profile_reaction_strength": 0.0,
+        "profile_bias": "neutral",
+    }
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="SHORT",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False, "style": "intraday"},
+    )
+    # Execution SL should be ATR above entry for SHORT
+    assert out["execution_sl"] > 100.0
+    # Execution TP is structural (98.2, below entry)
+    assert out["execution_tp"] < 100.0
+    assert out["execution_levels_valid"] is True
+    assert out["rr_used_for_gate"] > 0
+
+
+def test_execution_levels_exposed_in_confidence_output():
+    """All execution-level keys are present in calculate_confidence return dict."""
+    res = _base_res_long()
+    res["atr"] = 1.0
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False, "style": "intraday"},
+    )
+    for key in (
+        "structural_sl", "structural_tp", "structural_rr",
+        "execution_sl", "execution_tp", "execution_rr",
+        "rr_used_for_gate", "rr_source", "level_mode",
+        "execution_levels_valid", "execution_level_reject_reason",
+    ):
+        assert key in out, f"Missing key: {key}"
+
+
+def test_crypto_fallback_projection_cannot_pass_final_rr_gate(monkeypatch):
+    """Fallback projection used for final pass → rr_ok may be True from ATR but crypto gates block passed."""
+    _set_crypto_profile_flags(monkeypatch)
+    res = _crypto_res_long_with_structural_target()
+    res["crypto_target_selected_target_price"] = None
+    res["crypto_target_selected_target_tf"] = None
+    res["crypto_target_selected_target_is_structural"] = False
+    res["crypto_target_used_fallback_projection"] = True
+    res["crypto_target_fallback_used_for_diagnostics_only"] = False
+    res["recommended_take_profit"] = 102.0
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.2, "require_macro_align": False, "style": "intraday"},
+        crypto_entry_candles_by_tf={"M15": _crypto_trigger_candles_long(), "M5": []},
+    )
+    assert out["passed"] is False
+    assert out["fallback_used_for_final_pass"] is True

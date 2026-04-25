@@ -99,6 +99,165 @@ def engine_b_confidence_passes(
     return passed and score >= min_score_scaled, min_score_scaled
 
 
+def resolve_engine_b_execution_levels(
+    *,
+    direction: str,
+    entry: float,
+    structural_sl,
+    structural_tp,
+    atr: float,
+    style: str = "intraday",
+    asset_class: str = "forex",
+) -> dict:
+    """Resolve final Engine B execution SL/TP for RR gating.
+
+    Priority:
+    - SL : ATR-based execution SL (fallback: structural SL).
+    - TP : structural TP when valid (preserves structural targets including crypto);
+           fallback: ATR TP when structural is missing or invalid.
+
+    Using ATR SL + structural TP accurately reflects execution reality:
+    - mechanical stop placement at ATR distance
+    - profit-target at the structural level price action identified
+
+    Returns dict with structural, execution, and gate fields.
+    """
+    _style = (style or "intraday").lower()
+    _asset = (asset_class or "forex").lower()
+
+    def _safe_float(v):
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    try:
+        _entry = float(entry) if entry is not None else 0.0
+    except (TypeError, ValueError):
+        _entry = 0.0
+    try:
+        _atr = float(atr) if atr is not None and atr > 0 else 0.0001
+    except (TypeError, ValueError):
+        _atr = 0.0001
+
+    _struct_sl = _safe_float(structural_sl)
+    _struct_tp = _safe_float(structural_tp)
+
+    _struct_sl_valid = bool(
+        _struct_sl is not None and _entry > 0
+        and ((direction == "LONG" and _struct_sl < _entry)
+             or (direction == "SHORT" and _struct_sl > _entry))
+    )
+    _struct_tp_valid = bool(
+        _struct_tp is not None and _entry > 0
+        and ((direction == "LONG" and _struct_tp > _entry)
+             or (direction == "SHORT" and _struct_tp < _entry))
+    )
+
+    _structural_rr = 0.0
+    if _struct_sl_valid and _struct_tp_valid:
+        _sd = abs(_entry - _struct_sl)
+        _td = abs(_struct_tp - _entry)
+        _structural_rr = _td / _sd if _sd > 0 else 0.0
+
+    # ATR execution SL
+    _style_mults = (config.CONFIG.get("STYLE_ATR_MULTS") or {}).get(_style, {})
+    _m = _style_mults.get(_asset) or (config.CONFIG.get("ATR_CLASS") or {}).get(_asset, {})
+
+    _atr_sl = None
+    _atr_tp = None
+    _atr_sl_valid = False
+    _atr_reject = None
+
+    if _m and _atr > 0 and _entry > 0:
+        _sl_mult = float(_m.get("sl", 1.5))
+        _tp_mult = float(_m.get("tp1", 2.5))
+        if direction == "LONG":
+            _atr_sl = _entry - _atr * _sl_mult
+            _atr_tp = _entry + _atr * _tp_mult
+        else:
+            _atr_sl = _entry + _atr * _sl_mult
+            _atr_tp = _entry - _atr * _tp_mult
+
+        _atr_sl_valid = (direction == "LONG" and _atr_sl < _entry) or (direction == "SHORT" and _atr_sl > _entry)
+        if not _atr_sl_valid:
+            _atr_reject = "atr_sl_wrong_side"
+    else:
+        _atr_reject = "no_atr_config_or_zero_atr"
+
+    # Select execution SL: use the tighter of ATR SL and structural SL.
+    # Tighter SL = closer to entry (LONG: higher value; SHORT: lower value).
+    # This fixes the original bug (wide structural SL → poor structural_rr) while
+    # preserving existing behaviour when structural SL is already inside ATR distance.
+    if _atr_sl_valid and _struct_sl_valid:
+        if direction == "LONG":
+            _exec_sl = max(_atr_sl, _struct_sl)
+        else:
+            _exec_sl = min(_atr_sl, _struct_sl)
+        _sl_source = "atr" if _exec_sl == _atr_sl else "structural"
+    elif _atr_sl_valid:
+        _exec_sl = _atr_sl
+        _sl_source = "atr"
+    elif _struct_sl_valid:
+        _exec_sl = _struct_sl
+        _sl_source = "structural"
+    else:
+        _exec_sl = _struct_sl
+        _sl_source = "structural_invalid"
+
+    # Select execution TP: structural when valid, ATR fallback
+    if _struct_tp_valid:
+        _exec_tp = _struct_tp
+        _tp_source = "structural"
+    elif _atr_tp is not None:
+        _exec_tp = _atr_tp
+        _tp_source = "atr"
+    else:
+        _exec_tp = _struct_tp
+        _tp_source = "structural_missing"
+
+    _level_mode = f"{_sl_source}_sl_{_tp_source}_tp"
+    _rr_source = _level_mode
+
+    # Compute execution RR
+    _exec_rr = 0.0
+    _exec_valid = False
+    _exec_reject = None
+    _exec_tp_side_ok = False
+
+    if _exec_sl is not None and _exec_tp is not None and _entry > 0:
+        _esl_ok = (direction == "LONG" and _exec_sl < _entry) or (direction == "SHORT" and _exec_sl > _entry)
+        _etp_ok = (direction == "LONG" and _exec_tp > _entry) or (direction == "SHORT" and _exec_tp < _entry)
+        _exec_tp_side_ok = _etp_ok
+        if _esl_ok and _etp_ok:
+            _sd2 = abs(_entry - _exec_sl)
+            _td2 = abs(_exec_tp - _entry)
+            _exec_rr = _td2 / _sd2 if _sd2 > 0 else 0.0
+            _exec_valid = True
+        else:
+            _exec_reject = "sl_wrong_side" if not _esl_ok else "tp_wrong_side"
+    else:
+        _exec_reject = "levels_missing"
+
+    return {
+        "entry": _entry,
+        "structural_sl": _struct_sl,
+        "structural_tp": _struct_tp,
+        "structural_rr": round(_structural_rr, 4),
+        "structural_sl_valid": _struct_sl_valid,
+        "structural_tp_valid": _struct_tp_valid,
+        "execution_sl": _exec_sl,
+        "execution_tp": _exec_tp,
+        "execution_rr": round(_exec_rr, 4),
+        "rr_used_for_gate": round(_exec_rr, 4),
+        "rr_source": _rr_source,
+        "level_mode": _level_mode,
+        "execution_levels_valid": _exec_valid,
+        "execution_level_reject_reason": _exec_reject,
+        "execution_tp_side_ok": _exec_tp_side_ok,
+    }
+
+
 class NakedEngine:
     def __init__(self):
         self._registry_context = threading.local()
@@ -2436,6 +2595,7 @@ class NakedEngine:
         h1_seq = res.get("current_swing_sequence", "")
         h4_seq = res.get("macro_swing_sequence", "")
         profile = style_profile if isinstance(style_profile, dict) else {}
+        exec_style = str(profile.get("style", "intraday"))
         min_room_atr = float(profile.get("min_room_atr", 0.35))
         min_rr = float(profile.get("min_rr", 1.0))
         asset_type_lower = str(res.get("asset_type") or "").lower()
@@ -2530,27 +2690,34 @@ class NakedEngine:
         room_dist = res.get("distance_to_res") if direction == "LONG" else res.get("distance_to_sup")
         room_ok = room_dist is None or room_dist >= atr_val * min_room_atr
 
-        sl = res.get("recommended_stop_loss")
-        tp = res.get("recommended_take_profit")
-        rr = 0.0
-        rr_ok = False
-        tp_side_ok = False
-        if sl and tp:
-            sl_dist = abs(current_price - sl)
-            if direction == "LONG":
-                tp_side_ok = tp > current_price
-            else:
-                tp_side_ok = tp < current_price
-            tp_dist = abs(tp - current_price) if tp_side_ok else 0.0
-            if sl_dist > 0 and tp_side_ok:
-                rr = tp_dist / sl_dist
-                rr_ok = rr >= min_rr
+        # Structural levels from analyze_structure
+        _struct_sl = res.get("recommended_stop_loss")
+        _struct_tp = res.get("recommended_take_profit")
 
-        stop_valid = False
-        if sl:
-            stop_valid = (direction == "LONG" and sl < current_price) or (
-                direction == "SHORT" and sl > current_price
+        # Resolve final execution levels for RR gating
+        _exec_lvl = resolve_engine_b_execution_levels(
+            direction=direction,
+            entry=current_price,
+            structural_sl=_struct_sl,
+            structural_tp=_struct_tp,
+            atr=atr_val,
+            style=exec_style,
+            asset_class=asset_type_lower,
+        )
+        # Structural TP side check — kept for diagnostics / ENGINE_B_REASON_TP_WRONG_SIDE
+        sl = _exec_lvl["execution_sl"]
+        tp = _exec_lvl["execution_tp"]
+        rr = _exec_lvl["rr_used_for_gate"]
+        rr_ok = rr >= min_rr
+        # tp_side_ok reflects structural TP for diagnostic purposes
+        tp_side_ok = _exec_lvl["structural_tp_valid"]
+
+        stop_valid = bool(
+            sl is not None and (
+                (direction == "LONG" and sl < current_price)
+                or (direction == "SHORT" and sl > current_price)
             )
+        )
 
         selected_target_price = res.get("crypto_target_selected_target_price")
         selected_target_tf = res.get("crypto_target_selected_target_tf")
@@ -2740,7 +2907,7 @@ class NakedEngine:
         if not entry_ok:
             failed_gate_names.append("trigger")
         if not rr_ok:
-            failed_gate_names.append(f"rr={rr:.1f}")
+            failed_gate_names.append(f"rr={rr:.1f}(src={_exec_lvl['rr_source']})")
 
         structure_verdict_clear = str(res.get("structural_verdict") or "CLEAR").upper() == "CLEAR"
         if crypto_profile_enabled:
@@ -2790,7 +2957,7 @@ class NakedEngine:
                 _diag_codes.append(ENGINE_B_REASON_RESISTANCE_TOO_CLOSE)
             elif direction == "SHORT":
                 _diag_codes.append(ENGINE_B_REASON_SUPPORT_TOO_CLOSE)
-        if sl and tp and not tp_side_ok:
+        if _struct_sl and _struct_tp and not _exec_lvl["structural_tp_valid"]:
             _diag_codes.append(ENGINE_B_REASON_TP_WRONG_SIDE)
         if res.get("tp_structural_limited"):
             _diag_codes.append(ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE)
@@ -2810,6 +2977,17 @@ class NakedEngine:
             "zone_points": 1.0 if location_ok else 0.0,
             "macro_points": 1.0 if macro_ok and require_macro_align else 0.0,
             "rr": round(rr, 2),
+            "rr_used_for_gate": round(rr, 2),
+            "rr_source": _exec_lvl["rr_source"],
+            "structural_sl": _exec_lvl["structural_sl"],
+            "structural_tp": _exec_lvl["structural_tp"],
+            "structural_rr": _exec_lvl["structural_rr"],
+            "execution_sl": _exec_lvl["execution_sl"],
+            "execution_tp": _exec_lvl["execution_tp"],
+            "execution_rr": _exec_lvl["execution_rr"],
+            "level_mode": _exec_lvl["level_mode"],
+            "execution_levels_valid": _exec_lvl["execution_levels_valid"],
+            "execution_level_reject_reason": _exec_lvl["execution_level_reject_reason"],
             "passed": passed,
             "structure_ok": structure_ok,
             "macro_ok": macro_ok,
@@ -2968,8 +3146,8 @@ class NakedEngine:
 
         return {
             "entry_price": current_price,
-            "sl": result["recommended_stop_loss"],
-            "tp1": result["recommended_take_profit"],
+            "sl": confidence.get("execution_sl") or result.get("recommended_stop_loss"),
+            "tp1": confidence.get("execution_tp") or result.get("recommended_take_profit"),
             "direction": direction,
             "score": confidence["score"],
             "confidence_pct": confidence["pct"],

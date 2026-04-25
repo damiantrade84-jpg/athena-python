@@ -378,9 +378,9 @@ def normalise_engine_b(signal_b: dict, confidence_b: dict = None) -> dict:
     return {
         "score_norm": round(norm, 4),
         "direction": direction,
-        "sl": signal_b.get("recommended_stop_loss"),
-        "tp": signal_b.get("recommended_take_profit"),
-        "rr": float(conf.get("rr", 0)),
+        "sl": conf.get("execution_sl") or signal_b.get("recommended_stop_loss"),
+        "tp": conf.get("execution_tp") or signal_b.get("recommended_take_profit"),
+        "rr": float(conf.get("rr_used_for_gate") or conf.get("rr", 0)),
         "raw_score": score,
         "max_possible": max_possible,
         "has_signal": verdict == "CLEAR" and high_enough and valid_direction and passed,

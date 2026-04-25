@@ -5171,6 +5171,7 @@ def _naked_scan_style_profile(
             if isinstance(style_override, dict):
                 resolved_profile = {**resolved_profile, **style_override}
 
+    resolved_profile["style"] = resolved
     return resolved, resolved_profile
 
 
@@ -5455,6 +5456,10 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
         res["style"] = resolved_style
         res["regime"] = regime_label
         res["is_forming"] = is_forming_b
+        # Expose execution-resolved levels as final levels for consumers
+        res["final_stop_loss"] = conf.get("execution_sl") or res.get("recommended_stop_loss")
+        res["final_take_profit"] = conf.get("execution_tp") or res.get("recommended_take_profit")
+        res["rr_used_for_gate"] = conf.get("rr_used_for_gate", conf.get("rr", 0.0))
 
         try:
             record_signal_event(
@@ -6142,9 +6147,9 @@ def api_scan_naked():
                 _res["atr_tf"] = _atr_tf
                 _res["is_forming"] = _engine_b_is_forming
 
-                sl = _res.get("recommended_stop_loss")
-                tp = _res.get("recommended_take_profit")
-                rr = conf_data.get("rr", 0.0)
+                sl = conf_data.get("execution_sl") or _res.get("recommended_stop_loss")
+                tp = conf_data.get("execution_tp") or _res.get("recommended_take_profit")
+                rr = conf_data.get("rr_used_for_gate", conf_data.get("rr", 0.0))
 
                 _crypto_requires_structural_target = (
                     pair.get("type") == "crypto"
@@ -6287,6 +6292,18 @@ def api_scan_naked():
 
     _max_workers = max(1, int(CONFIG.get("SCAN_MAX_WORKERS", 3) or 3))
     debug_rows = []
+    
+    # REGRESSION CHECK: Engine B scan-funnel tracking
+    engine_b_funnel = {
+        "total": len(candidate_pairs),
+        "no_clear_structure": 0,
+        "gate_fail_struct": 0,
+        "gate_fail_loc": 0,
+        "gate_fail_trigger": 0,
+        "gate_fail_rr": 0,
+        "passed": 0,
+    }
+    
     log.info(f"[DEBUG] Starting scan with {len(candidate_pairs)} candidate pairs, debug_mode={debug_mode}")
     with ThreadPoolExecutor(max_workers=_max_workers) as pool:
         futures = {pool.submit(_scan_pair, pair, debug_mode): pair for pair in candidate_pairs}
@@ -6297,6 +6314,23 @@ def api_scan_naked():
                 if debug_mode and row.get("debug"):
                     debug_rows.append(row["debug"])
                     log.debug(f"[DEBUG] Added debug row for {row['debug'].get('pair')}")
+                    
+                    # REGRESSION CHECK: Track Engine B funnel
+                    dbg = row["debug"]
+                    if not dbg.get("long_structural_verdict") and not dbg.get("short_structural_verdict"):
+                        engine_b_funnel["no_clear_structure"] += 1
+                    else:
+                        for gate in dbg.get("failed_gate_names", []):
+                            if "struct" in gate:
+                                engine_b_funnel["gate_fail_struct"] += 1
+                            elif "loc" in gate:
+                                engine_b_funnel["gate_fail_loc"] += 1
+                            elif "trigger" in gate:
+                                engine_b_funnel["gate_fail_trigger"] += 1
+                            elif "rr" in gate:
+                                engine_b_funnel["gate_fail_rr"] += 1
+                        if dbg.get("long_passed") or dbg.get("short_passed"):
+                            engine_b_funnel["passed"] += 1
                 else:
                     results.append(row)
                     _pair_key = row.get("display", "")
@@ -6312,6 +6346,19 @@ def api_scan_naked():
     )
 
     if debug_mode:
+        # REGRESSION CHECK: Print Engine B scan-funnel summary
+        print("\n" + "="*80)
+        print("REGRESSION CHECK - ENGINE B SCAN FUNNEL")
+        print("="*80)
+        print(f"Total pairs scanned: {engine_b_funnel['total']}")
+        print(f"No clear structure: {engine_b_funnel['no_clear_structure']}")
+        print(f"Gate fail - structure: {engine_b_funnel['gate_fail_struct']}")
+        print(f"Gate fail - location: {engine_b_funnel['gate_fail_loc']}")
+        print(f"Gate fail - trigger: {engine_b_funnel['gate_fail_trigger']}")
+        print(f"Gate fail - RR: {engine_b_funnel['gate_fail_rr']}")
+        print(f"Passed: {engine_b_funnel['passed']}")
+        print("="*80 + "\n")
+        
         return jsonify(_json_safe({
             "success": True, 
             "signals": results,
