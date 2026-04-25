@@ -8,6 +8,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import config
 from market_structure import (
     ENGINE_B_REASON_ADVERSE_DXY,
     ENGINE_B_REASON_BOS_WITHOUT_VOLUME,
@@ -23,6 +24,85 @@ from market_structure import (
     engine,
     engine_b_confidence_passes,
 )
+
+
+def _set_crypto_profile_flags(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_PROFILE_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_TARGET_V2_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_TRIGGER_PROFILE_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_ALLOW_FALLBACK_TARGET_FOR_PASS", False)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_REQUIRE_STRUCTURAL_TARGET_FOR_PASS", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_MIN_RR", 1.2)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_LOCATION_ATR_BUFFER", 0.75)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_MIN_DISPLACEMENT_ATR", 0.35)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_MIN_VOLUME_RATIO", 1.2)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_MIN_TAKER_DELTA_RATIO", 0.55)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_ENTRY_TIMEFRAMES", ["M15", "M5"])
+
+
+def _crypto_kline(open_, high, low, close, volume=100.0, taker_buy=None):
+    candle = {
+        "open_time": 1,
+        "open": float(open_),
+        "high": float(high),
+        "low": float(low),
+        "close": float(close),
+        "volume": float(volume),
+        "vol": float(volume),
+        "quote_volume": float(volume) * float(close),
+        "number_of_trades": 10,
+    }
+    if taker_buy is not None:
+        candle["taker_buy_base_volume"] = float(taker_buy)
+        candle["taker_buy_quote_volume"] = float(taker_buy) * float(close)
+    return candle
+
+
+def _crypto_trigger_candles_long():
+    candles = [
+        _crypto_kline(100.0, 100.48, 99.95, 100.12, volume=100.0, taker_buy=50.0)
+        for _ in range(20)
+    ]
+    candles.append(
+        _crypto_kline(100.05, 100.50, 100.00, 100.45, volume=150.0, taker_buy=100.0)
+    )
+    return candles
+
+
+def _crypto_res_long_with_structural_target():
+    res = _base_res_long()
+    res.update(
+        {
+            "asset_type": "crypto",
+            "structural_verdict": "CLEAR",
+            "trigger_ok": False,
+            "bos_confirmed": True,
+            "strong_close": False,
+            "inside_break_candle": False,
+            "engulfing_candle": False,
+            "liquidity_sweep": False,
+            "choch_confirmed": False,
+            "zone_touched": False,
+            "near_active_zone": False,
+            "ob_at_zone": False,
+            "active_zone_distance": 0.5,
+            "distance_to_res": 3.0,
+            "nearest_support_zone": {"lower": 99.2, "upper": 100.1, "center": 99.8},
+            "recommended_stop_loss": 99.0,
+            "recommended_take_profit": 101.4,
+            "crypto_target_selected_target_price": 101.4,
+            "crypto_target_selected_target_tf": "H4",
+            "crypto_target_selected_target_type": "resistance_zone",
+            "crypto_target_selected_target_rr": 1.4,
+            "crypto_target_selected_target_is_structural": True,
+            "crypto_target_used_fallback_projection": False,
+            "crypto_target_fallback_used_for_diagnostics_only": True,
+            "crypto_target_fallback_projection_price": 102.0,
+            "crypto_target_path_clear_to_tp2": True,
+            "crypto_target_path_block_reason": None,
+        }
+    )
+    return res
 
 
 def _base_res_long():
@@ -407,3 +487,112 @@ def test_calculate_confidence_emits_sequence_counter_trend():
     codes = out.get("engine_b_diagnostics", {}).get("reason_codes", [])
     assert ENGINE_B_REASON_SEQUENCE_COUNTER_TREND in codes
     assert out["structure_ok"] is False
+
+
+def test_crypto_taker_pressure_uses_binance_kline_fields():
+    pressure = engine._crypto_kline_taker_pressure(
+        _crypto_kline(100.0, 101.0, 99.0, 100.5, volume=100.0, taker_buy=60.0)
+    )
+    assert pressure["taker_data_missing"] is False
+    assert pressure["taker_buy_ratio"] == pytest.approx(0.6)
+    assert pressure["taker_sell_ratio"] == pytest.approx(0.4)
+
+    missing = engine._crypto_kline_taker_pressure(
+        {"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 100.0}
+    )
+    assert missing["taker_data_missing"] is True
+
+
+def test_crypto_profile_m15_trigger_can_create_pass_with_structural_target(monkeypatch):
+    _set_crypto_profile_flags(monkeypatch)
+    res = _crypto_res_long_with_structural_target()
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.2, "require_macro_align": False},
+        crypto_entry_candles_by_tf={"M15": _crypto_trigger_candles_long(), "M5": []},
+    )
+
+    assert out["passed"] is True
+    assert out["trigger_passed"] is True
+    assert out["trigger_timeframe"] == "M15"
+    assert out["selected_target_is_structural"] is True
+    assert out["fallback_used_for_final_pass"] is False
+    assert out["failed_gate_names"] == []
+
+
+def test_crypto_profile_requires_real_h4_or_d1_target(monkeypatch):
+    _set_crypto_profile_flags(monkeypatch)
+    res = _crypto_res_long_with_structural_target()
+    res["crypto_target_selected_target_price"] = None
+    res["crypto_target_selected_target_tf"] = None
+    res["crypto_target_selected_target_is_structural"] = False
+    res["recommended_take_profit"] = 101.4
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.2, "require_macro_align": False},
+        crypto_entry_candles_by_tf={"M15": _crypto_trigger_candles_long(), "M5": []},
+    )
+
+    assert out["passed"] is False
+    assert out["crypto_target_v2_valid"] is False
+    assert "target_v2" in out["failed_gate_names"]
+
+
+def test_crypto_profile_fallback_target_cannot_create_final_pass(monkeypatch):
+    _set_crypto_profile_flags(monkeypatch)
+    res = _crypto_res_long_with_structural_target()
+    res["crypto_target_selected_target_price"] = None
+    res["crypto_target_selected_target_tf"] = None
+    res["crypto_target_selected_target_is_structural"] = False
+    res["crypto_target_used_fallback_projection"] = True
+    res["crypto_target_fallback_used_for_diagnostics_only"] = False
+    res["recommended_take_profit"] = 102.0
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.2, "require_macro_align": False},
+        crypto_entry_candles_by_tf={"M15": _crypto_trigger_candles_long(), "M5": []},
+    )
+
+    assert out["passed"] is False
+    assert out["fallback_used_for_final_pass"] is True
+    assert "fallback_target" in out["failed_gate_names"]
+    assert "target_v2" in out["failed_gate_names"]
+
+
+def test_forex_engine_b_behavior_unchanged_when_crypto_flags_enabled(monkeypatch):
+    _set_crypto_profile_flags(monkeypatch)
+    res = _base_res_long()
+    res["asset_type"] = "forex"
+    res["distance_to_res"] = 3.0
+    res["recommended_stop_loss"] = 99.0
+    res["recommended_take_profit"] = 102.0
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.5, "require_macro_align": False},
+        crypto_entry_candles_by_tf={"M15": _crypto_trigger_candles_long(), "M5": []},
+    )
+
+    assert out["crypto_profile_enabled"] is False
+    assert out["trigger_ok"] is True
+    assert out["passed"] is True
+    assert out["failed_gate_names"] == []

@@ -877,6 +877,284 @@ class NakedEngine:
             "strong_close": strong_close,
         }
 
+    @staticmethod
+    def _float_or_none(value):
+        try:
+            if value is None:
+                return None
+            out = float(value)
+            if out != out:
+                return None
+            return out
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _candle_value(cls, candle: dict, *keys: str, default: float = 0.0) -> float:
+        if not isinstance(candle, dict):
+            return default
+        for key in keys:
+            value = cls._float_or_none(candle.get(key))
+            if value is not None:
+                return value
+        return default
+
+    @classmethod
+    def _crypto_kline_taker_pressure(cls, candle: dict) -> dict:
+        total_volume = cls._candle_value(candle, "volume", "vol", default=0.0)
+        taker_buy_volume = cls._float_or_none(
+            (candle or {}).get("taker_buy_base_volume")
+            if isinstance(candle, dict)
+            else None
+        )
+        if taker_buy_volume is None and isinstance(candle, dict):
+            taker_buy_volume = cls._float_or_none(candle.get("taker_buy_volume"))
+        if taker_buy_volume is None or total_volume <= 0:
+            return {
+                "taker_data_missing": True,
+                "taker_buy_volume": None,
+                "taker_sell_volume": None,
+                "taker_buy_ratio": None,
+                "taker_sell_ratio": None,
+            }
+        taker_buy_volume = max(0.0, min(float(taker_buy_volume), float(total_volume)))
+        taker_sell_volume = max(float(total_volume) - taker_buy_volume, 0.0)
+        return {
+            "taker_data_missing": False,
+            "taker_buy_volume": taker_buy_volume,
+            "taker_sell_volume": taker_sell_volume,
+            "taker_buy_ratio": taker_buy_volume / float(total_volume),
+            "taker_sell_ratio": taker_sell_volume / float(total_volume),
+        }
+
+    @classmethod
+    def _crypto_volume_ratio(cls, candles: list, lookback: int = 20) -> float | None:
+        if not candles or len(candles) < 2:
+            return None
+        last_volume = cls._candle_value(candles[-1], "volume", "vol", default=0.0)
+        prior = candles[-(lookback + 1):-1] if len(candles) > lookback else candles[:-1]
+        prior_volumes = [
+            cls._candle_value(c, "volume", "vol", default=0.0)
+            for c in prior
+        ]
+        prior_volumes = [v for v in prior_volumes if v > 0]
+        if not prior_volumes:
+            return None
+        avg_volume = float(np.mean(prior_volumes))
+        if avg_volume <= 0:
+            return None
+        return last_volume / avg_volume
+
+    def _crypto_timeframe_trigger(
+        self,
+        candles: list,
+        direction: str,
+        atr: float,
+        res: dict,
+        timeframe: str,
+    ) -> dict:
+        state = {
+            "trigger_passed": False,
+            "trigger_timeframe": timeframe,
+            "trigger_type": None,
+            "trigger_volume_ratio": None,
+            "trigger_taker_buy_ratio": None,
+            "trigger_taker_sell_ratio": None,
+            "trigger_displacement_atr": None,
+            "taker_data_missing": True,
+            "candle_pattern_state": {},
+            "sweep_state": {},
+            "bos_choch_trigger_state": {},
+            "displacement_state": {},
+            "retest_rejection_state": {},
+            "trigger_reject_reason": "insufficient_candles",
+        }
+        if not candles or len(candles) < 6:
+            return state
+
+        last = candles[-1]
+        prev_window = candles[-11:-1] if len(candles) > 11 else candles[:-1]
+        if not prev_window:
+            return state
+
+        open_ = self._candle_value(last, "open")
+        high = self._candle_value(last, "high")
+        low = self._candle_value(last, "low")
+        close = self._candle_value(last, "close")
+        atr_val = float(atr) if atr and atr > 0 else self._compute_atr_from_candles(
+            candles, fallback=max(abs(high - low), 1e-9)
+        )
+        atr_val = atr_val if atr_val > 0 else max(abs(high - low), 1e-9)
+        range_ = max(high - low, 1e-9)
+        body = abs(close - open_)
+        upper_wick = max(high - max(open_, close), 0.0)
+        lower_wick = max(min(open_, close) - low, 0.0)
+        close_position = (close - low) / range_
+        displacement_atr = body / atr_val
+
+        prior_high = max(self._candle_value(c, "high") for c in prev_window)
+        prior_low = min(self._candle_value(c, "low") for c in prev_window)
+        volume_ratio = self._crypto_volume_ratio(candles)
+        min_volume_ratio = float(config.CONFIG.get("ENGINE_B_CRYPTO_MIN_VOLUME_RATIO", 1.2) or 1.2)
+        min_displacement_atr = float(
+            config.CONFIG.get("ENGINE_B_CRYPTO_MIN_DISPLACEMENT_ATR", 0.35) or 0.35
+        )
+        min_taker_delta_ratio = float(
+            config.CONFIG.get("ENGINE_B_CRYPTO_MIN_TAKER_DELTA_RATIO", 0.55) or 0.55
+        )
+        volume_ok = volume_ratio is not None and volume_ratio >= min_volume_ratio
+        pressure = self._crypto_kline_taker_pressure(last)
+        taker_missing = bool(pressure.get("taker_data_missing"))
+        buy_ratio = pressure.get("taker_buy_ratio")
+        sell_ratio = pressure.get("taker_sell_ratio")
+        if direction == "LONG":
+            taker_ok = taker_missing or (
+                buy_ratio is not None and buy_ratio >= min_taker_delta_ratio
+            )
+            sweep_ok = low < prior_low and close > prior_low and volume_ok
+            bos_ok = close > prior_high
+            displacement_ok = (
+                close > open_
+                and displacement_atr >= min_displacement_atr
+                and close_position >= 0.65
+                and volume_ok
+                and taker_ok
+            )
+            zone = res.get("nearest_support_zone") if isinstance(res, dict) else None
+            level = (zone or {}).get("upper", (zone or {}).get("center"))
+            retest_ok = (
+                level is not None
+                and low <= float(level)
+                and close > float(level)
+                and lower_wick >= max(body * 0.5, atr_val * 0.05)
+                and (volume_ok or displacement_atr >= min_displacement_atr)
+                and taker_ok
+            )
+            near_close_ok = close_position >= 0.65
+        else:
+            taker_ok = taker_missing or (
+                sell_ratio is not None and sell_ratio >= min_taker_delta_ratio
+            )
+            sweep_ok = high > prior_high and close < prior_high and volume_ok
+            bos_ok = close < prior_low
+            displacement_ok = (
+                close < open_
+                and displacement_atr >= min_displacement_atr
+                and close_position <= 0.35
+                and volume_ok
+                and taker_ok
+            )
+            zone = res.get("nearest_resistance_zone") if isinstance(res, dict) else None
+            level = (zone or {}).get("lower", (zone or {}).get("center"))
+            retest_ok = (
+                level is not None
+                and high >= float(level)
+                and close < float(level)
+                and upper_wick >= max(body * 0.5, atr_val * 0.05)
+                and (volume_ok or displacement_atr >= min_displacement_atr)
+                and taker_ok
+            )
+            near_close_ok = close_position <= 0.35
+
+        trigger_type = None
+        if sweep_ok:
+            trigger_type = "SWEEP_RECLAIM"
+        elif bos_ok:
+            trigger_type = "BOS_CHOCH_CONFIRMATION"
+        elif displacement_ok:
+            trigger_type = "DISPLACEMENT"
+        elif retest_ok:
+            trigger_type = "RETEST_REJECTION"
+
+        state.update(
+            {
+                "trigger_passed": trigger_type is not None,
+                "trigger_type": trigger_type,
+                "trigger_volume_ratio": round(volume_ratio, 4) if volume_ratio is not None else None,
+                "trigger_taker_buy_ratio": round(buy_ratio, 4) if buy_ratio is not None else None,
+                "trigger_taker_sell_ratio": round(sell_ratio, 4) if sell_ratio is not None else None,
+                "trigger_displacement_atr": round(displacement_atr, 4),
+                "taker_data_missing": taker_missing,
+                "candle_pattern_state": {
+                    "open": open_,
+                    "high": high,
+                    "low": low,
+                    "close": close,
+                    "body": round(body, 8),
+                    "range": round(range_, 8),
+                    "close_position": round(close_position, 4),
+                    "near_required_close_area": near_close_ok,
+                },
+                "sweep_state": {
+                    "prior_local_high": prior_high,
+                    "prior_local_low": prior_low,
+                    "sweep_reclaim": sweep_ok,
+                },
+                "bos_choch_trigger_state": {
+                    "minor_structure_high": prior_high,
+                    "minor_structure_low": prior_low,
+                    "break_confirmed": bos_ok,
+                },
+                "displacement_state": {
+                    "body_atr_multiple": round(displacement_atr, 4),
+                    "volume_ok": volume_ok,
+                    "taker_pressure_ok": taker_ok,
+                },
+                "retest_rejection_state": {
+                    "level": float(level) if level is not None else None,
+                    "retest_rejection": retest_ok,
+                },
+                "trigger_reject_reason": None if trigger_type else "no_crypto_m15_m5_trigger",
+            }
+        )
+        return state
+
+    def _crypto_trigger_profile(
+        self,
+        candles_by_tf: dict | None,
+        direction: str,
+        atr: float,
+        res: dict,
+    ) -> dict:
+        configured_tfs = config.CONFIG.get(
+            "ENGINE_B_CRYPTO_ENTRY_TIMEFRAMES", ["M15", "M5"]
+        )
+        if not isinstance(configured_tfs, (list, tuple)):
+            configured_tfs = ["M15", "M5"]
+        states = {}
+        selected = None
+        for tf in [str(tf).upper() for tf in configured_tfs]:
+            candles = (candles_by_tf or {}).get(tf) or []
+            tf_state = self._crypto_timeframe_trigger(candles, direction, atr, res, tf)
+            states[tf] = tf_state
+            if tf_state.get("trigger_passed") and selected is None:
+                selected = tf_state
+
+        selected = selected or {
+            "trigger_passed": False,
+            "trigger_timeframe": None,
+            "trigger_type": None,
+            "trigger_volume_ratio": None,
+            "trigger_taker_buy_ratio": None,
+            "trigger_taker_sell_ratio": None,
+            "trigger_displacement_atr": None,
+            "taker_data_missing": True,
+            "trigger_reject_reason": "no_crypto_m15_m5_trigger",
+        }
+        reject_reasons = [
+            f"{tf}:{state.get('trigger_reject_reason')}"
+            for tf, state in states.items()
+            if not state.get("trigger_passed")
+        ]
+        return {
+            **selected,
+            "trigger_reject_reason": None
+            if selected.get("trigger_passed")
+            else ";".join(reject_reasons) or "no_crypto_m15_m5_trigger",
+            "m15_trigger_state": states.get("M15"),
+            "m5_trigger_state": states.get("M5"),
+        }
+
     def _determine_independent_direction(
         self,
         h1_sequence: str,
@@ -1420,7 +1698,13 @@ class NakedEngine:
         structural_target_candidates = []
         
         # Crypto-specific target selection model
-        crypto_target_model_enabled = config.CONFIG.get("ENGINE_B_CRYPTO_TARGET_MODEL_ENABLED", False)
+        crypto_target_v2_enabled_cfg = bool(
+            config.CONFIG.get("ENGINE_B_CRYPTO_TARGET_V2_ENABLED", False)
+        )
+        crypto_target_model_enabled = bool(
+            config.CONFIG.get("ENGINE_B_CRYPTO_TARGET_MODEL_ENABLED", False)
+            or crypto_target_v2_enabled_cfg
+        )
         is_crypto = asset_type.lower() == "crypto"
         
         # Debug fields for crypto target model
@@ -1433,9 +1717,42 @@ class NakedEngine:
         target_reject_reason = None
         path_clear_to_tp2 = None
         target_atr_multiple = None
+        target_mode_used = target_selection_mode
+        used_true_h4_liquidity_target = False
+        used_fallback_projection = False
+        fallback_reason = None
+        tp2_reject_reason = None
+        h4_liquidity_target_count = None
+        selected_h4_liquidity_rank = None
+        selected_h4_liquidity_price = None
+        min_target_atr_multiple = None
+        max_target_atr_multiple = None
+        path_block_reason = None
+        candidate_targets = []
+        candidate_targets_total = 0
+        candidate_targets_considered = 0
+        candidate_targets_rejected = 0
+        candidate_reject_reasons_count = {}
+        selected_target_price = None
+        selected_target_tf = None
+        selected_target_type = None
+        selected_target_rank = None
+        selected_target_rr = None
+        selected_target_atr_multiple = None
+        selected_target_is_structural = False
+        fallback_projection_price = None
+        fallback_projection_rr = None
+        fallback_used_for_diagnostics_only = False
+        target_v2_reject_reason = None
         
         if is_crypto and crypto_target_model_enabled:
-            target_selection_mode = "crypto_model"
+            crypto_target_v2_enabled = crypto_target_v2_enabled_cfg
+            allow_fallback_target_for_pass = bool(config.CONFIG.get("ENGINE_B_CRYPTO_ALLOW_FALLBACK_TARGET_FOR_PASS", False))
+            target_selection_mode = "crypto_target_v2" if crypto_target_v2_enabled else "crypto_model"
+            target_mode_used = target_selection_mode
+            h4_targets = valid_res if direction == "LONG" else valid_sup
+            h4_liquidity_target_count = len(h4_targets or [])
+            tp2_candidate_source = None
             
             # First, calculate standard TP as old_target for comparison
             if direction == "LONG" and valid_res:
@@ -1468,85 +1785,243 @@ class NakedEngine:
             
             # TP1: nearest minor level (same as standard logic)
             new_tp1 = old_target
-            
-            # TP2: next major H4 liquidity zone (skip the first, use the second)
-            if direction == "LONG" and len(valid_res) >= 2:
-                sorted_res = sorted(valid_res, key=lambda z: z["lower"])
-                # Skip first (used for TP1), use second for TP2
-                major_zone = sorted_res[1]
-                new_tp2 = major_zone["lower"] - (atr * sl_mult)
-            elif direction == "SHORT" and len(valid_sup) >= 2:
-                sorted_sup = sorted(valid_sup, key=lambda z: z["upper"], reverse=True)
-                major_zone = sorted_sup[1]
-                new_tp2 = major_zone["upper"] + (atr * sl_mult)
-            
-            # If no second zone, use RR projection with higher multiple
-            if new_tp2 is None:
-                sl_dist = abs(current_price - sl) if (sl is not None) else (atr * sl_mult)
-                if sl_dist == 0:
-                    sl_dist = atr * sl_mult
-                # Use 2x fallback RR for TP2
+
+            sl_dist_for_target = abs(current_price - sl) if sl is not None else 0.0
+            if sl_dist_for_target > 0:
                 if direction == "LONG":
-                    new_tp2 = current_price + (sl_dist * (fallback_rr * 2))
+                    fallback_projection_price = current_price + (sl_dist_for_target * (fallback_rr * 2))
                 else:
-                    new_tp2 = current_price - (sl_dist * (fallback_rr * 2))
-            
-            # Validate TP2
-            max_atr_multiple = config.CONFIG.get("ENGINE_B_CRYPTO_MAX_TARGET_ATR_MULTIPLE", 6.0)
-            min_atr_multiple = config.CONFIG.get("ENGINE_B_CRYPTO_MIN_TARGET_ATR_MULTIPLE", 1.0)
-            require_clear_path = config.CONFIG.get("ENGINE_B_CRYPTO_REQUIRE_CLEAR_PATH_TO_TP2", True)
-            
-            tp2_valid = True
-            tp2_atr_multiple = 0.0
-            
-            if new_tp2 is not None:
-                tp2_dist = abs(new_tp2 - current_price)
-                tp2_atr_multiple = tp2_dist / atr if atr > 0 else 0.0
-                target_atr_multiple = tp2_atr_multiple
-                
-                # Check direction
-                if direction == "LONG" and new_tp2 <= current_price:
-                    tp2_valid = False
-                    target_reject_reason = "tp2_wrong_direction"
-                elif direction == "SHORT" and new_tp2 >= current_price:
-                    tp2_valid = False
-                    target_reject_reason = "tp2_wrong_direction"
-                # Check too close
-                elif tp2_atr_multiple < min_atr_multiple:
-                    tp2_valid = False
-                    target_reject_reason = f"tp2_too_close_{tp2_atr_multiple:.2f}atr"
-                # Check too far
-                elif tp2_atr_multiple > max_atr_multiple:
-                    tp2_valid = False
-                    target_reject_reason = f"tp2_too_far_{tp2_atr_multiple:.2f}atr"
-                # Check path clarity (simplified - check if major opposing structure between entry and TP2)
-                elif require_clear_path:
-                    # For LONG: check if any major support between entry and TP2
-                    # For SHORT: check if any major resistance between entry and TP2
-                    # This is a simplified check - full path analysis would require more complex logic
-                    path_clear_to_tp2 = True  # Placeholder for full path analysis
-            
-            # Use TP2 if valid, otherwise use 2x RR projection for better RR
-            if tp2_valid and new_tp2 is not None:
-                tp = new_tp2
-                tp_source = "crypto_tp2_major_h4"
+                    fallback_projection_price = current_price - (sl_dist_for_target * (fallback_rr * 2))
+                fallback_projection_rr = (
+                    abs(fallback_projection_price - current_price) / sl_dist_for_target
+                )
+
+            if crypto_target_v2_enabled:
+                max_rank = int(config.CONFIG.get("ENGINE_B_CRYPTO_TARGET_SEARCH_MAX_RANK", 8) or 8)
+                min_rr_required = float(config.CONFIG.get("ENGINE_B_CRYPTO_TARGET_MIN_RR", 1.2) or 1.2)
+                min_atr_multiple = float(config.CONFIG.get("ENGINE_B_CRYPTO_TARGET_MIN_ATR_MULTIPLE", 1.0) or 1.0)
+                max_atr_multiple = float(config.CONFIG.get("ENGINE_B_CRYPTO_TARGET_MAX_ATR_MULTIPLE", 6.0) or 6.0)
+                min_target_atr_multiple = min_atr_multiple
+                max_target_atr_multiple = max_atr_multiple
+                allow_d1_targets = bool(config.CONFIG.get("ENGINE_B_CRYPTO_ALLOW_D1_TARGETS", True))
+
+                def _candidate_price(zone, _direction):
+                    return float(zone["lower"] if _direction == "LONG" else zone["upper"])
+
+                def _zone_rows(zones, tf_name, target_type):
+                    rows = []
+                    sorted_zones = (
+                        sorted(zones, key=lambda z: z["lower"])
+                        if direction == "LONG"
+                        else sorted(zones, key=lambda z: z["upper"], reverse=True)
+                    )
+                    for idx, zone in enumerate(sorted_zones[:max_rank], 1):
+                        rows.append({
+                            "zone": zone,
+                            "target_price": _candidate_price(zone, direction),
+                            "target_tf": tf_name,
+                            "target_type": target_type,
+                            "rank": idx,
+                        })
+                    return rows
+
+                h4_candidate_rows = _zone_rows(h4_targets or [], "H4", "liquidity_zone")
+                d1_candidate_rows = []
+                if allow_d1_targets:
+                    try:
+                        d1_res, d1_sup = self._find_zones(d1_highs, d1_lows, d1_atr, regime, d1_candles)
+                        d1_res = [z for z in d1_res if z["upper"] >= current_price]
+                        d1_sup = [z for z in d1_sup if z["lower"] <= current_price]
+                        d1_targets = d1_res if direction == "LONG" else d1_sup
+                        d1_candidate_rows = _zone_rows(d1_targets or [], "D1", "liquidity_zone")
+                    except Exception:
+                        d1_candidate_rows = []
+
+                raw_candidate_rows = h4_candidate_rows + d1_candidate_rows
+                candidate_targets_total = len(raw_candidate_rows)
+                reject_counts = {}
+                selected_candidate = None
+
+                def _reject(candidate, reason):
+                    candidate["valid"] = False
+                    candidate["reject_reason"] = reason
+                    reject_counts[reason] = reject_counts.get(reason, 0) + 1
+                    candidate_targets.append(candidate)
+
+                for row in raw_candidate_rows:
+                    candidate_targets_considered += 1
+                    price = float(row["target_price"])
+                    candidate = {
+                        "target_price": price,
+                        "target_tf": row["target_tf"],
+                        "target_type": row["target_type"],
+                        "rank": row["rank"],
+                        "is_structural": True,
+                        "distance_from_entry": abs(price - current_price),
+                        "atr_multiple": (abs(price - current_price) / atr) if atr > 0 else None,
+                        "rr": None,
+                        "path_clear": True,
+                        "path_block_reason": None,
+                        "valid": True,
+                        "reject_reason": None,
+                    }
+                    if sl_dist_for_target <= 0:
+                        _reject(candidate, "stop_invalid")
+                        continue
+                    if direction == "LONG" and price <= current_price:
+                        _reject(candidate, "wrong_side_of_entry")
+                        continue
+                    if direction == "SHORT" and price >= current_price:
+                        _reject(candidate, "wrong_side_of_entry")
+                        continue
+                    candidate["rr"] = abs(price - current_price) / sl_dist_for_target
+                    if candidate["rr"] < min_rr_required:
+                        _reject(candidate, "rr_below_crypto_target_min")
+                        continue
+                    if candidate["atr_multiple"] is not None and candidate["atr_multiple"] < min_atr_multiple:
+                        _reject(candidate, "atr_multiple_below_min")
+                        continue
+                    if candidate["atr_multiple"] is not None and candidate["atr_multiple"] > max_atr_multiple:
+                        _reject(candidate, "atr_multiple_above_max")
+                        continue
+                    blockers = [
+                        other for other in raw_candidate_rows
+                        if other is not row
+                        and other["target_tf"] == row["target_tf"]
+                        and (
+                            (direction == "LONG" and current_price < float(other["target_price"]) < price)
+                            or (direction == "SHORT" and price < float(other["target_price"]) < current_price)
+                        )
+                    ]
+                    if blockers:
+                        candidate["path_clear"] = False
+                        candidate["path_block_reason"] = "major_structure_between_entry_and_target"
+                        _reject(candidate, "blocked_by_major_opposing_structure")
+                        continue
+                    candidate_targets.append(candidate)
+                    selected_candidate = candidate
+                    break
+
+                candidate_targets_rejected = sum(1 for c in candidate_targets if not c.get("valid"))
+                candidate_reject_reasons_count = reject_counts
+
+                if selected_candidate:
+                    tp = float(selected_candidate["target_price"])
+                    new_tp2 = tp
+                    new_rr = selected_candidate["rr"]
+                    tp_source = f"crypto_target_v2_{selected_candidate['target_tf'].lower()}_structural"
+                    target_mode_used = "crypto_target_v2_structural"
+                    used_true_h4_liquidity_target = selected_candidate["target_tf"] == "H4"
+                    selected_h4_liquidity_rank = selected_candidate["rank"] if selected_candidate["target_tf"] == "H4" else None
+                    selected_h4_liquidity_price = tp if selected_candidate["target_tf"] == "H4" else None
+                    target_atr_multiple = selected_candidate["atr_multiple"]
+                    path_clear_to_tp2 = selected_candidate["path_clear"]
+                    path_block_reason = selected_candidate["path_block_reason"]
+                    selected_target_price = tp
+                    selected_target_tf = selected_candidate["target_tf"]
+                    selected_target_type = selected_candidate["target_type"]
+                    selected_target_rank = selected_candidate["rank"]
+                    selected_target_rr = selected_candidate["rr"]
+                    selected_target_atr_multiple = selected_candidate["atr_multiple"]
+                    selected_target_is_structural = True
+                else:
+                    target_v2_reject_reason = "no_valid_structural_target"
+                    target_reject_reason = target_v2_reject_reason
+                    fallback_reason = target_v2_reject_reason
+                    fallback_used_for_diagnostics_only = True
+                    # Leave tp unset so a diagnostic fallback projection cannot pass Engine B.
+                    tp = None
+                    new_rr = None
+
             else:
-                # TP2 invalid - use 2x RR projection instead of TP1 for better RR
-                sl_dist = abs(current_price - sl) if (sl is not None) else (atr * sl_mult)
-                if sl_dist == 0:
-                    sl_dist = atr * sl_mult
-                if direction == "LONG":
-                    tp = current_price + (sl_dist * (fallback_rr * 2))
-                else:
-                    tp = current_price - (sl_dist * (fallback_rr * 2))
-                tp_source = "crypto_fallback_2x_rr"
-                target_reject_reason = target_reject_reason or "tp2_invalid_used_2x_rr"
             
-            # Calculate new RR against TP2 (or TP1 if TP2 invalid)
-            if sl and tp:
-                sl_dist = abs(current_price - sl)
-                tp_dist = abs(tp - current_price)
-                new_rr = tp_dist / sl_dist if sl_dist > 0 else 0.0
+                # TP2: legacy next major H4 liquidity zone (skip the first, use the second)
+                if direction == "LONG" and len(valid_res) >= 2:
+                    sorted_res = sorted(valid_res, key=lambda z: z["lower"])
+                    major_zone = sorted_res[1]
+                    selected_h4_liquidity_price = major_zone["lower"]
+                    new_tp2 = major_zone["lower"] - (atr * sl_mult)
+                    selected_h4_liquidity_rank = 2
+                    tp2_candidate_source = "true_h4_liquidity"
+                elif direction == "SHORT" and len(valid_sup) >= 2:
+                    sorted_sup = sorted(valid_sup, key=lambda z: z["upper"], reverse=True)
+                    major_zone = sorted_sup[1]
+                    selected_h4_liquidity_price = major_zone["upper"]
+                    new_tp2 = major_zone["upper"] + (atr * sl_mult)
+                    selected_h4_liquidity_rank = 2
+                    tp2_candidate_source = "true_h4_liquidity"
+                
+                if new_tp2 is None:
+                    fallback_reason = "no_second_h4_liquidity_target"
+                    tp2_candidate_source = "fallback_projection"
+                    new_tp2 = fallback_projection_price
+                
+                max_atr_multiple = config.CONFIG.get("ENGINE_B_CRYPTO_MAX_TARGET_ATR_MULTIPLE", 6.0)
+                min_atr_multiple = config.CONFIG.get("ENGINE_B_CRYPTO_MIN_TARGET_ATR_MULTIPLE", 1.0)
+                require_clear_path = config.CONFIG.get("ENGINE_B_CRYPTO_REQUIRE_CLEAR_PATH_TO_TP2", True)
+                min_target_atr_multiple = min_atr_multiple
+                max_target_atr_multiple = max_atr_multiple
+                
+                tp2_valid = True
+                if new_tp2 is not None:
+                    tp2_dist = abs(new_tp2 - current_price)
+                    tp2_atr_multiple = tp2_dist / atr if atr > 0 else 0.0
+                    target_atr_multiple = tp2_atr_multiple
+                    if direction == "LONG" and new_tp2 <= current_price:
+                        tp2_valid = False
+                        target_reject_reason = "tp2_wrong_direction"
+                    elif direction == "SHORT" and new_tp2 >= current_price:
+                        tp2_valid = False
+                        target_reject_reason = "tp2_wrong_direction"
+                    elif tp2_atr_multiple < min_atr_multiple:
+                        tp2_valid = False
+                        target_reject_reason = f"tp2_too_close_{tp2_atr_multiple:.2f}atr"
+                    elif tp2_atr_multiple > max_atr_multiple:
+                        tp2_valid = False
+                        target_reject_reason = f"tp2_too_far_{tp2_atr_multiple:.2f}atr"
+                    elif require_clear_path:
+                        path_clear_to_tp2 = True
+                        path_block_reason = None
+                    if not tp2_valid:
+                        tp2_reject_reason = target_reject_reason
+                
+                if tp2_valid and new_tp2 is not None:
+                    tp = new_tp2
+                    if tp2_candidate_source == "true_h4_liquidity":
+                        tp_source = "crypto_tp2_major_h4"
+                        target_mode_used = "true_h4_liquidity_tp2"
+                        used_true_h4_liquidity_target = True
+                    elif allow_fallback_target_for_pass:
+                        tp_source = "crypto_fallback_2x_rr"
+                        target_mode_used = "fallback_2x_rr_projection"
+                        used_fallback_projection = True
+                    else:
+                        tp = None
+                        target_mode_used = "fallback_2x_rr_projection_diagnostic_only"
+                        used_fallback_projection = True
+                        fallback_used_for_diagnostics_only = True
+                        target_reject_reason = "fallback_target_not_allowed"
+                else:
+                    if allow_fallback_target_for_pass:
+                        tp = fallback_projection_price
+                        tp_source = "crypto_fallback_2x_rr"
+                    else:
+                        tp = None
+                        fallback_used_for_diagnostics_only = True
+                    target_mode_used = "fallback_2x_rr_projection" if allow_fallback_target_for_pass else "fallback_2x_rr_projection_diagnostic_only"
+                    used_fallback_projection = True
+                    if fallback_reason is None and target_reject_reason is not None:
+                        if tp2_candidate_source == "true_h4_liquidity" and selected_h4_liquidity_rank:
+                            fallback_reason = f"selected_h4_rank_{selected_h4_liquidity_rank}_{target_reject_reason}"
+                        else:
+                            fallback_reason = target_reject_reason
+                    fallback_reason = fallback_reason or "tp2_invalid_used_2x_rr"
+                    target_reject_reason = target_reject_reason or "tp2_invalid_used_2x_rr"
+                
+                if sl and tp:
+                    sl_dist = abs(current_price - sl)
+                    tp_dist = abs(tp - current_price)
+                    new_rr = tp_dist / sl_dist if sl_dist > 0 else 0.0
         else:
             # Standard target selection (non-crypto or crypto model disabled)
             if direction == "LONG" and valid_res:
@@ -1839,6 +2314,35 @@ class NakedEngine:
             "crypto_target_reject_reason": target_reject_reason,
             "crypto_target_path_clear_to_tp2": path_clear_to_tp2,
             "crypto_target_atr_multiple": target_atr_multiple,
+            "crypto_target_final_target": tp,
+            "crypto_target_final_rr": new_rr,
+            "crypto_target_mode_used": target_mode_used,
+            "crypto_target_used_true_h4_liquidity_target": used_true_h4_liquidity_target,
+            "crypto_target_used_fallback_projection": used_fallback_projection,
+            "crypto_target_fallback_reason": fallback_reason,
+            "crypto_target_tp2_reject_reason": tp2_reject_reason,
+            "crypto_target_h4_liquidity_target_count": h4_liquidity_target_count,
+            "crypto_target_selected_h4_liquidity_rank": selected_h4_liquidity_rank,
+            "crypto_target_selected_h4_liquidity_price": selected_h4_liquidity_price,
+            "crypto_target_min_target_atr_multiple": min_target_atr_multiple,
+            "crypto_target_max_target_atr_multiple": max_target_atr_multiple,
+            "crypto_target_path_block_reason": path_block_reason,
+            "crypto_target_candidate_targets": candidate_targets,
+            "crypto_target_candidate_targets_total": candidate_targets_total,
+            "crypto_target_candidate_targets_considered": candidate_targets_considered,
+            "crypto_target_candidate_targets_rejected": candidate_targets_rejected,
+            "crypto_target_candidate_reject_reasons_count": candidate_reject_reasons_count,
+            "crypto_target_selected_target_price": selected_target_price,
+            "crypto_target_selected_target_tf": selected_target_tf,
+            "crypto_target_selected_target_type": selected_target_type,
+            "crypto_target_selected_target_rank": selected_target_rank,
+            "crypto_target_selected_target_rr": selected_target_rr,
+            "crypto_target_selected_target_atr_multiple": selected_target_atr_multiple,
+            "crypto_target_selected_target_is_structural": selected_target_is_structural,
+            "crypto_target_fallback_projection_price": fallback_projection_price,
+            "crypto_target_fallback_projection_rr": fallback_projection_rr,
+            "crypto_target_fallback_used_for_diagnostics_only": fallback_used_for_diagnostics_only,
+            "crypto_target_v2_reject_reason": target_v2_reject_reason,
             # Independent directional assessment from Engine B's own price-action evidence.
             # Advisory only — does not affect scoring, checklist, or execution gates.
             # Allows Engine C to detect genuine direction conflicts vs inherited ones.
@@ -1925,6 +2429,7 @@ class NakedEngine:
         learning_ctx: dict = None,
         entry_candles: list | None = None,
         style_profile: dict | None = None,
+        crypto_entry_candles_by_tf: dict | None = None,
     ) -> dict:
         atr = res.get("atr", 1.0)
         atr_val = atr if atr > 0 else 0.0001
@@ -1933,9 +2438,28 @@ class NakedEngine:
         profile = style_profile if isinstance(style_profile, dict) else {}
         min_room_atr = float(profile.get("min_room_atr", 0.35))
         min_rr = float(profile.get("min_rr", 1.0))
+        asset_type_lower = str(res.get("asset_type") or "").lower()
+        crypto_profile_enabled = (
+            asset_type_lower == "crypto"
+            and bool(config.CONFIG.get("ENGINE_B_CRYPTO_PROFILE_ENABLED", False))
+        )
+        crypto_trigger_profile_enabled = (
+            crypto_profile_enabled
+            and bool(config.CONFIG.get("ENGINE_B_CRYPTO_TRIGGER_PROFILE_ENABLED", False))
+        )
+        crypto_target_v2_enabled = bool(
+            config.CONFIG.get("ENGINE_B_CRYPTO_TARGET_V2_ENABLED", False)
+        )
+        if crypto_profile_enabled:
+            min_rr = float(
+                config.CONFIG.get(
+                    "ENGINE_B_CRYPTO_MIN_RR",
+                    config.CONFIG.get("ENGINE_B_CRYPTO_TARGET_MIN_RR", min_rr),
+                )
+                or min_rr
+            )
         _rma_cfg = profile.get("require_macro_align", False)
         if isinstance(_rma_cfg, dict):
-            asset_type_lower = str(res.get("asset_type") or "").lower()
             require_macro_align = bool(_rma_cfg.get(asset_type_lower, False))
         else:
             require_macro_align = bool(_rma_cfg)
@@ -1996,6 +2520,13 @@ class NakedEngine:
         )
         ob_at_zone = bool(res.get("ob_at_zone"))
         location_ok = zone_ok or ob_at_zone or (allow_breakout_entry and breakout_ok)
+        location_mode = "normal" if location_ok else "none"
+        location_distance_atr = None
+        if res.get("active_zone_distance") is not None:
+            try:
+                location_distance_atr = abs(float(res.get("active_zone_distance"))) / atr_val
+            except (TypeError, ValueError):
+                location_distance_atr = None
         room_dist = res.get("distance_to_res") if direction == "LONG" else res.get("distance_to_sup")
         room_ok = room_dist is None or room_dist >= atr_val * min_room_atr
 
@@ -2015,6 +2546,104 @@ class NakedEngine:
                 rr = tp_dist / sl_dist
                 rr_ok = rr >= min_rr
 
+        stop_valid = False
+        if sl:
+            stop_valid = (direction == "LONG" and sl < current_price) or (
+                direction == "SHORT" and sl > current_price
+            )
+
+        selected_target_price = res.get("crypto_target_selected_target_price")
+        selected_target_tf = res.get("crypto_target_selected_target_tf")
+        selected_target_type = res.get("crypto_target_selected_target_type")
+        selected_target_rr = res.get("crypto_target_selected_target_rr")
+        selected_target_is_structural = bool(
+            res.get("crypto_target_selected_target_is_structural")
+        )
+        fallback_projection_price = res.get("crypto_target_fallback_projection_price")
+        fallback_used_for_final_pass = bool(
+            res.get("crypto_target_used_fallback_projection")
+            and not res.get("crypto_target_fallback_used_for_diagnostics_only")
+        )
+        structural_target_required = bool(
+            config.CONFIG.get("ENGINE_B_CRYPTO_REQUIRE_STRUCTURAL_TARGET_FOR_PASS", True)
+        )
+        selected_target_tf_ok = str(selected_target_tf or "").upper() in {"H4", "D1"}
+        target_v2_valid = (
+            crypto_target_v2_enabled
+            and selected_target_price is not None
+            and selected_target_tf_ok
+            and selected_target_is_structural
+            and not fallback_used_for_final_pass
+        )
+        path_block_reason = res.get("crypto_target_path_block_reason")
+        path_clear_value = res.get("crypto_target_path_clear_to_tp2")
+        path_clear_to_target = path_clear_value is not False and not path_block_reason
+
+        crypto_trigger_state = {
+            "trigger_passed": False,
+            "trigger_timeframe": None,
+            "trigger_type": None,
+            "trigger_volume_ratio": None,
+            "trigger_taker_buy_ratio": None,
+            "trigger_taker_sell_ratio": None,
+            "trigger_displacement_atr": None,
+            "taker_data_missing": True,
+            "trigger_reject_reason": "crypto_trigger_profile_disabled",
+            "m15_trigger_state": None,
+            "m5_trigger_state": None,
+        }
+        if crypto_profile_enabled and crypto_trigger_profile_enabled:
+            crypto_trigger_state = self._crypto_trigger_profile(
+                crypto_entry_candles_by_tf or {},
+                direction,
+                atr_val,
+                res,
+            )
+
+        if crypto_profile_enabled:
+            location_buffer = float(
+                config.CONFIG.get("ENGINE_B_CRYPTO_LOCATION_ATR_BUFFER", 0.75) or 0.75
+            )
+            location_sources = []
+            if location_distance_atr is not None:
+                location_sources.append("zone_or_retest_area")
+            if bool(res.get("breaker_block")):
+                location_sources.append("breaker_block")
+            if bool(res.get("ob_at_zone")):
+                location_sources.append("order_block")
+            if bool(res.get("fvg_overlap")):
+                location_sources.append("fvg_edge")
+            for distance_key, source_name in (
+                ("vwap_distance", "vwap"),
+                ("volume_level_distance", "volume_level"),
+                ("retest_area_distance", "retest_area"),
+            ):
+                distance_value = res.get(distance_key)
+                if distance_value is None:
+                    continue
+                try:
+                    distance_atr = abs(float(distance_value)) / atr_val
+                except (TypeError, ValueError):
+                    continue
+                if location_distance_atr is None or distance_atr < location_distance_atr:
+                    location_distance_atr = distance_atr
+                location_sources.append(source_name)
+            trend_continuation_location_ok = (
+                structure_ok
+                and target_v2_valid
+                and rr_ok
+                and location_distance_atr is not None
+                and location_distance_atr <= location_buffer
+                and bool(location_sources)
+            )
+            if location_ok:
+                location_mode = "normal"
+            elif trend_continuation_location_ok:
+                location_ok = True
+                location_mode = "trend_continuation"
+            else:
+                location_mode = "none"
+
         # Entry requires a candle pattern trigger OR a confirmed structural breakout
         # OR a professional technical catalyst (Sweep/CHoCH) at a key zone.
         entry_ok = (
@@ -2023,6 +2652,9 @@ class NakedEngine:
             or (bool(res.get("liquidity_sweep")) and zone_ok)
             or (bool(res.get("choch_confirmed")) and zone_ok)
         )
+        if crypto_profile_enabled:
+            trigger_ok = bool(crypto_trigger_state.get("trigger_passed"))
+            entry_ok = crypto_trigger_profile_enabled and trigger_ok
         space_ok = room_ok or rr_ok
 
         gate_confirmations = [structure_ok, location_ok, entry_ok, room_ok, rr_ok]
@@ -2100,6 +2732,47 @@ class NakedEngine:
                 and (macro_ok if require_macro_align else True)
             )
 
+        failed_gate_names = []
+        if not structure_ok:
+            failed_gate_names.append("struct")
+        if not location_ok:
+            failed_gate_names.append("loc")
+        if not entry_ok:
+            failed_gate_names.append("trigger")
+        if not rr_ok:
+            failed_gate_names.append(f"rr={rr:.1f}")
+
+        structure_verdict_clear = str(res.get("structural_verdict") or "CLEAR").upper() == "CLEAR"
+        if crypto_profile_enabled:
+            target_gate_ok = target_v2_valid
+            fallback_gate_ok = not fallback_used_for_final_pass
+            stop_gate_ok = stop_valid
+            path_gate_ok = path_clear_to_target
+            crypto_gates = {
+                "crypto_profile": True,
+                "struct": bool(structure_ok and structure_verdict_clear),
+                "target_v2": bool(target_gate_ok),
+                "fallback_not_used": bool(fallback_gate_ok),
+                "rr": bool(rr_ok),
+                "loc": bool(location_ok),
+                "trigger": bool(entry_ok),
+                "stop": bool(stop_gate_ok),
+                "path": bool(path_gate_ok),
+            }
+            if not crypto_gates["target_v2"] and "target_v2" not in failed_gate_names:
+                failed_gate_names.append("target_v2")
+            if not crypto_gates["fallback_not_used"] and "fallback_target" not in failed_gate_names:
+                failed_gate_names.append("fallback_target")
+            if not crypto_gates["stop"] and "stop" not in failed_gate_names:
+                failed_gate_names.append("stop")
+            if not crypto_gates["path"] and "path" not in failed_gate_names:
+                failed_gate_names.append("path")
+            if not crypto_trigger_profile_enabled and "trigger_profile_disabled" not in failed_gate_names:
+                failed_gate_names.append("trigger_profile_disabled")
+            if not structure_verdict_clear and "structural_verdict" not in failed_gate_names:
+                failed_gate_names.append("structural_verdict")
+            passed = all(crypto_gates.values())
+
         lifecycle_state, lifecycle_reason = self._determine_lifecycle_state(
             res, current_price, direction, trigger_ok
         )
@@ -2149,7 +2822,9 @@ class NakedEngine:
             "rr_ok": rr_ok,
             "tp_side_ok": tp_side_ok,
             "space_ok": space_ok,
-            "trigger_pattern": res.get("trigger_pattern", "NONE"),
+            "trigger_pattern": crypto_trigger_state.get("trigger_type")
+            if crypto_profile_enabled
+            else res.get("trigger_pattern", "NONE"),
             "ob_at_zone": ob_at_zone,
             "bos_mtf_confirmed": bos_mtf,
             "breaker_active": bool(res.get("breaker_block")),
@@ -2161,6 +2836,43 @@ class NakedEngine:
             "lifecycle_reason": lifecycle_reason,
             "d1_pd_conflict_penalty": round(_d1_penalty, 2),
             "d1_conflict_details": res.get("d1_conflict_details", []),
+            "target_v2_enabled": crypto_target_v2_enabled,
+            "selected_target_price": selected_target_price,
+            "selected_target_tf": selected_target_tf,
+            "selected_target_type": selected_target_type,
+            "selected_target_rr": selected_target_rr,
+            "selected_target_is_structural": selected_target_is_structural,
+            "fallback_projection_price": fallback_projection_price,
+            "fallback_used_for_final_pass": fallback_used_for_final_pass,
+            "location_passed": location_ok,
+            "location_mode": location_mode,
+            "location_distance_atr": round(location_distance_atr, 4)
+            if location_distance_atr is not None
+            else None,
+            "trigger_passed": trigger_ok,
+            "trigger_timeframe": crypto_trigger_state.get("trigger_timeframe")
+            if crypto_profile_enabled
+            else res.get("trigger_timeframe"),
+            "trigger_type": crypto_trigger_state.get("trigger_type")
+            if crypto_profile_enabled
+            else res.get("trigger_pattern", "NONE"),
+            "trigger_volume_ratio": crypto_trigger_state.get("trigger_volume_ratio"),
+            "trigger_taker_buy_ratio": crypto_trigger_state.get("trigger_taker_buy_ratio"),
+            "trigger_taker_sell_ratio": crypto_trigger_state.get("trigger_taker_sell_ratio"),
+            "trigger_displacement_atr": crypto_trigger_state.get("trigger_displacement_atr"),
+            "taker_data_missing": crypto_trigger_state.get("taker_data_missing"),
+            "m15_trigger_state": crypto_trigger_state.get("m15_trigger_state"),
+            "m5_trigger_state": crypto_trigger_state.get("m5_trigger_state"),
+            "exact_trigger_reject_reason": crypto_trigger_state.get("trigger_reject_reason")
+            if crypto_profile_enabled
+            else None,
+            "failed_gate_names": failed_gate_names,
+            "final_engine_b_passed": passed,
+            "crypto_profile_enabled": crypto_profile_enabled,
+            "crypto_trigger_profile_enabled": crypto_trigger_profile_enabled,
+            "crypto_target_v2_valid": target_v2_valid,
+            "crypto_stop_valid": stop_valid,
+            "crypto_path_clear_to_target": path_clear_to_target,
             "engine_b_diagnostics": {"reason_codes": _diag_codes},
         }
 

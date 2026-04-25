@@ -1604,6 +1604,24 @@ def fetch_yfinance(sym, tf, limit):
         return None
 
 
+def _binance_futures_kline_to_candle(k):
+    """Map Binance USD-M futures kline rows without dropping volume provenance."""
+    return {
+        "open_time": int(k[0]),
+        "time": datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc).isoformat(),
+        "open": float(k[1]),
+        "high": float(k[2]),
+        "low": float(k[3]),
+        "close": float(k[4]),
+        "volume": float(k[5]),
+        "vol": float(k[5]),
+        "quote_volume": float(k[7]),
+        "number_of_trades": int(k[8]),
+        "taker_buy_base_volume": float(k[9]),
+        "taker_buy_quote_volume": float(k[10]),
+    }
+
+
 def fetch_binance(sym, interval, limit):
     """Download OHLCV candles from Binance USD-M futures REST with failover."""
 
@@ -1616,19 +1634,7 @@ def fetch_binance(sym, interval, limit):
             )
 
             if r.status_code == 200:
-                return [
-                    {
-                        "time": datetime.fromtimestamp(
-                            k[0] / 1000, tz=timezone.utc
-                        ).isoformat(),
-                        "open": float(k[1]),
-                        "high": float(k[2]),
-                        "low": float(k[3]),
-                        "close": float(k[4]),
-                        "vol": float(k[5]),
-                    }
-                    for k in r.json()
-                ]
+                return [_binance_futures_kline_to_candle(k) for k in r.json()]
 
             log.warning(f"[BN-FUT] {sym} HTTP {r.status_code}: {r.text[:120]}")
 
@@ -1666,19 +1672,7 @@ def fetch_binance_paginated(sym, interval, total_bars):
                     if not data:
                         break
 
-                    batch = [
-                        {
-                            "time": datetime.fromtimestamp(
-                                k[0] / 1000, tz=timezone.utc
-                            ).isoformat(),
-                            "open": float(k[1]),
-                            "high": float(k[2]),
-                            "low": float(k[3]),
-                            "close": float(k[4]),
-                            "vol": float(k[5]),
-                        }
-                        for k in data
-                    ]
+                    batch = [_binance_futures_kline_to_candle(k) for k in data]
 
                     all_candles = batch + all_candles  # prepend older data
 
@@ -5743,7 +5737,8 @@ def api_scan_naked():
             "long_passed": False,
             "short_passed": False,
             "failed_gate_names": [],
-            "final_reject_reason": None
+            "final_reject_reason": None,
+            "direction_details": {}
         }
         
         try:
@@ -5753,6 +5748,13 @@ def api_scan_naked():
             resolved_style, style_profile = _naked_scan_style_profile(
                 requested_style, score_group=_pair_score_group
             )
+            _is_crypto_profile = (
+                pair.get("type") == "crypto"
+                and bool(CONFIG.get("ENGINE_B_CRYPTO_PROFILE_ENABLED", False))
+            )
+            _is_crypto_trigger_profile = _is_crypto_profile and bool(
+                CONFIG.get("ENGINE_B_CRYPTO_TRIGGER_PROFILE_ENABLED", False)
+            )
             
             debug_row["style"] = resolved_style
 
@@ -5760,7 +5762,27 @@ def api_scan_naked():
             _zone_tf = style_profile.get("zone_tf", "H4")
             _entry_tf = style_profile.get("entry_tf", "H1")
             _atr_tf = style_profile.get("atr_tf", "H4")
-            _needed_tfs = list({_zone_tf, _entry_tf, _atr_tf, "D1"})
+            if _is_crypto_profile:
+                _structure_tfs = CONFIG.get(
+                    "ENGINE_B_CRYPTO_STRUCTURE_TIMEFRAMES", ["H4", "D1"]
+                )
+                if not isinstance(_structure_tfs, (list, tuple)):
+                    _structure_tfs = ["H4", "D1"]
+                _structure_tfs = [str(tf).upper() for tf in _structure_tfs]
+                _zone_tf = "H4" if "H4" in _structure_tfs else _structure_tfs[0]
+                _entry_tf = str(CONFIG.get("ENGINE_B_CRYPTO_CONTEXT_TIMEFRAME", "H1")).upper()
+                _atr_tf = _zone_tf
+            _needed_tfs = {_zone_tf, _entry_tf, _atr_tf, "D1"}
+            _crypto_entry_tfs = []
+            if _is_crypto_trigger_profile:
+                _configured_entry_tfs = CONFIG.get(
+                    "ENGINE_B_CRYPTO_ENTRY_TIMEFRAMES", ["M15", "M5"]
+                )
+                if not isinstance(_configured_entry_tfs, (list, tuple)):
+                    _configured_entry_tfs = ["M15", "M5"]
+                _crypto_entry_tfs = [str(tf).upper() for tf in _configured_entry_tfs]
+                _needed_tfs.update(_crypto_entry_tfs)
+            _needed_tfs = list(_needed_tfs)
             
             debug_row["zone_tf"] = _zone_tf
             debug_row["entry_tf"] = _entry_tf
@@ -5772,12 +5794,30 @@ def api_scan_naked():
             for tf in _needed_tfs:
                 cfg_key = f"{tf.upper()}_CANDLES"
                 if cfg_key not in CONFIG:
-                    cfg_key = "H4_CANDLES"
-                limit = int(CONFIG[cfg_key])
+                    scalp_cfg = CONFIG.get("SCALP_ENGINE", {}) or {}
+                    if cfg_key in scalp_cfg:
+                        limit = int(scalp_cfg[cfg_key])
+                    else:
+                        cfg_key = "H4_CANDLES"
+                        limit = int(CONFIG[cfg_key])
+                else:
+                    limit = int(CONFIG[cfg_key])
                 if pair.get("source") == "mt5":
                     state = _engine_b_live_market_state(pair, tf, limit)
                     _tf_state_map[tf] = state
                     _tf_map[tf] = _market_state_series(state)
+                elif _is_crypto_profile and pair.get("source") == "binance":
+                    raw = (
+                        fetch_binance_paginated(pair["symbol"], TF_B[tf], limit)
+                        if limit > 1000
+                        else fetch_binance(pair["symbol"], TF_B[tf], limit)
+                    )
+                    if raw and len(raw) > 1:
+                        _tf_map[tf] = raw[:-1]  # drop incomplete current bar
+                    elif raw:
+                        _tf_map[tf] = raw
+                    else:
+                        _tf_map[tf] = []
                 else:
                     raw = fetch_candles(pair, tf, limit)
                     if raw and len(raw) > 1:
@@ -5791,6 +5831,9 @@ def api_scan_naked():
             entry_candles = _tf_map.get(_entry_tf, [])
             d1_candles = _tf_map.get("D1", [])
             atr_candles = _tf_map.get(_atr_tf, zone_candles)
+            crypto_entry_candles_by_tf = {
+                tf: _tf_map.get(tf, []) for tf in _crypto_entry_tfs
+            }
             _engine_b_is_forming = any(
                 bool((_tf_state_map.get(tf) or {}).get("is_live"))
                 for tf in (_zone_tf, _entry_tf, _atr_tf, "D1")
@@ -5860,6 +5903,132 @@ def api_scan_naked():
                 pass
             local_results = []
             _best_signal = None
+            def _build_direction_debug(direction, verdict, res, conf_data, threshold, fail_gates):
+                _conf = conf_data or {}
+                _res = res if isinstance(res, dict) else {}
+                _failed_gate_names = list(_conf.get("failed_gate_names") or fail_gates)
+                _price_action_trigger = bool(_res.get("trigger_ok"))
+                _entry_ok = bool(_conf.get("entry_ok", False))
+                _bos_volume = bool(_res.get("bos_volume_confirmed"))
+                _trigger_type_found = "NONE"
+                if _price_action_trigger:
+                    _trigger_type_found = _res.get("trigger_pattern", "PRICE_ACTION")
+                elif bool(_conf.get("breakout_ok")) and _bos_volume:
+                    _trigger_type_found = "BOS_BREAKOUT_WITH_VOLUME"
+                elif bool(_res.get("liquidity_sweep")) and _entry_ok:
+                    _trigger_type_found = "LIQUIDITY_SWEEP_AT_ZONE"
+                elif bool(_res.get("choch_confirmed")) and _entry_ok:
+                    _trigger_type_found = "CHOCH_AT_ZONE"
+                return {
+                    "symbol": pair.get("symbol"),
+                    "direction": direction,
+                    "score": _conf.get("score"),
+                    "structural_verdict": verdict,
+                    "confidence_score": _conf.get("score"),
+                    "threshold": threshold,
+                    "passed_all_gates": bool(_conf.get("passed", False)),
+                    "passed_all_non_trigger_gates": (
+                        "struct" not in _failed_gate_names
+                        and "loc" not in _failed_gate_names
+                        and not any(str(g).startswith("rr=") or g == "rr_gate" for g in _failed_gate_names)
+                    ),
+                    "final_engine_b_passed": False,
+                    "trigger_failed": ("trigger" in _failed_gate_names) if conf_data else None,
+                    "rr_failed": any(str(g).startswith("rr=") or g == "rr_gate" for g in _failed_gate_names) if conf_data else None,
+                    "production_pass_flag": False,
+                    "debug_gate_failed_names": _failed_gate_names,
+                    "failed_gate_names": _failed_gate_names,
+                    "final_reject_reason": None,
+                    "trigger_required": True,
+                    "trigger_timeframe": _conf.get("trigger_timeframe", _res.get("trigger_timeframe")),
+                    "trigger_detected": _entry_ok,
+                    "trigger_type_checked": "crypto_m15_m5_profile" if _conf.get("crypto_profile_enabled") else "price_action_or_structural_catalyst",
+                    "trigger_type_found": _conf.get("trigger_type") or _trigger_type_found,
+                    "candle_pattern_state": {
+                        "pattern": _res.get("trigger_pattern", "NONE"),
+                        "rejection": bool(_res.get("rejection_candle")),
+                        "engulfing": bool(_res.get("engulfing_candle")),
+                        "inside_break": bool(_res.get("inside_break_candle")),
+                        "strong_close": bool(_res.get("strong_close")),
+                    },
+                    "sweep_state": _res.get("sweep_data"),
+                    "bos_choch_trigger_state": {
+                        "bos_confirmed": bool(_res.get("bos_confirmed")),
+                        "bos_volume_confirmed": _bos_volume,
+                        "choch_confirmed": bool(_res.get("choch_confirmed")),
+                        "liquidity_sweep": bool(_res.get("liquidity_sweep")),
+                        "entry_ok": _entry_ok,
+                    },
+                    "displacement_state": {
+                        "strong_close": bool(_res.get("strong_close")),
+                        "inside_break": bool(_res.get("inside_break_candle")),
+                        "engulfing": bool(_res.get("engulfing_candle")),
+                    },
+                    "volume_confirmation_state": {
+                        "bos_volume_confirmed": _bos_volume,
+                    },
+                    "m15_trigger_state": _conf.get("m15_trigger_state"),
+                    "m5_trigger_state": _conf.get("m5_trigger_state"),
+                    "exact_trigger_reject_reason": (
+                        _conf.get("exact_trigger_reject_reason")
+                        or ("no_price_action_or_structural_catalyst" if "trigger" in _failed_gate_names else None)
+                    ),
+                    "target_v2_enabled": _conf.get("target_v2_enabled"),
+                    "selected_target_price": _conf.get("selected_target_price"),
+                    "selected_target_tf": _conf.get("selected_target_tf"),
+                    "selected_target_type": _conf.get("selected_target_type"),
+                    "selected_target_rr": _conf.get("selected_target_rr"),
+                    "selected_target_is_structural": _conf.get("selected_target_is_structural"),
+                    "fallback_projection_price": _conf.get("fallback_projection_price"),
+                    "fallback_used_for_final_pass": _conf.get("fallback_used_for_final_pass"),
+                    "location_passed": _conf.get("location_passed", _conf.get("location_ok")),
+                    "location_mode": _conf.get("location_mode"),
+                    "location_distance_atr": _conf.get("location_distance_atr"),
+                    "trigger_passed": _conf.get("trigger_passed", _conf.get("trigger_ok")),
+                    "trigger_type": _conf.get("trigger_type"),
+                    "trigger_volume_ratio": _conf.get("trigger_volume_ratio"),
+                    "trigger_taker_buy_ratio": _conf.get("trigger_taker_buy_ratio"),
+                    "trigger_taker_sell_ratio": _conf.get("trigger_taker_sell_ratio"),
+                    "trigger_displacement_atr": _conf.get("trigger_displacement_atr"),
+                    "crypto_target_old_target": res.get("crypto_target_old_target") if isinstance(res, dict) else None,
+                    "crypto_target_old_rr": res.get("crypto_target_old_rr") if isinstance(res, dict) else None,
+                    "crypto_target_tp1": res.get("crypto_target_tp1") if isinstance(res, dict) else None,
+                    "crypto_target_tp2": res.get("crypto_target_tp2") if isinstance(res, dict) else None,
+                    "crypto_target_final_target": res.get("crypto_target_final_target") if isinstance(res, dict) else None,
+                    "crypto_target_final_rr": res.get("crypto_target_final_rr") if isinstance(res, dict) else None,
+                    "crypto_target_mode_used": res.get("crypto_target_mode_used") if isinstance(res, dict) else None,
+                    "crypto_target_used_true_h4_liquidity_target": res.get("crypto_target_used_true_h4_liquidity_target") if isinstance(res, dict) else None,
+                    "crypto_target_used_fallback_projection": res.get("crypto_target_used_fallback_projection") if isinstance(res, dict) else None,
+                    "crypto_target_fallback_reason": res.get("crypto_target_fallback_reason") if isinstance(res, dict) else None,
+                    "crypto_target_tp2_reject_reason": res.get("crypto_target_tp2_reject_reason") if isinstance(res, dict) else None,
+                    "crypto_target_h4_liquidity_target_count": res.get("crypto_target_h4_liquidity_target_count") if isinstance(res, dict) else None,
+                    "crypto_target_selected_h4_liquidity_rank": res.get("crypto_target_selected_h4_liquidity_rank") if isinstance(res, dict) else None,
+                    "crypto_target_selected_h4_liquidity_price": res.get("crypto_target_selected_h4_liquidity_price") if isinstance(res, dict) else None,
+                    "crypto_target_atr_multiple": res.get("crypto_target_atr_multiple") if isinstance(res, dict) else None,
+                    "crypto_target_min_target_atr_multiple": res.get("crypto_target_min_target_atr_multiple") if isinstance(res, dict) else None,
+                    "crypto_target_max_target_atr_multiple": res.get("crypto_target_max_target_atr_multiple") if isinstance(res, dict) else None,
+                    "crypto_target_path_clear_to_tp2": res.get("crypto_target_path_clear_to_tp2") if isinstance(res, dict) else None,
+                    "crypto_target_path_block_reason": res.get("crypto_target_path_block_reason") if isinstance(res, dict) else None,
+                    "crypto_target_candidate_targets": res.get("crypto_target_candidate_targets") if isinstance(res, dict) else None,
+                    "crypto_target_candidate_targets_total": res.get("crypto_target_candidate_targets_total") if isinstance(res, dict) else None,
+                    "crypto_target_candidate_targets_considered": res.get("crypto_target_candidate_targets_considered") if isinstance(res, dict) else None,
+                    "crypto_target_candidate_targets_rejected": res.get("crypto_target_candidate_targets_rejected") if isinstance(res, dict) else None,
+                    "crypto_target_candidate_reject_reasons_count": res.get("crypto_target_candidate_reject_reasons_count") if isinstance(res, dict) else None,
+                    "crypto_target_selected_target_price": res.get("crypto_target_selected_target_price") if isinstance(res, dict) else None,
+                    "crypto_target_selected_target_tf": res.get("crypto_target_selected_target_tf") if isinstance(res, dict) else None,
+                    "crypto_target_selected_target_type": res.get("crypto_target_selected_target_type") if isinstance(res, dict) else None,
+                    "crypto_target_selected_target_rank": res.get("crypto_target_selected_target_rank") if isinstance(res, dict) else None,
+                    "crypto_target_selected_target_rr": res.get("crypto_target_selected_target_rr") if isinstance(res, dict) else None,
+                    "crypto_target_selected_target_atr_multiple": res.get("crypto_target_selected_target_atr_multiple") if isinstance(res, dict) else None,
+                    "crypto_target_selected_target_is_structural": res.get("crypto_target_selected_target_is_structural") if isinstance(res, dict) else None,
+                    "crypto_target_fallback_projection_price": res.get("crypto_target_fallback_projection_price") if isinstance(res, dict) else None,
+                    "crypto_target_fallback_projection_rr": res.get("crypto_target_fallback_projection_rr") if isinstance(res, dict) else None,
+                    "crypto_target_fallback_used_for_diagnostics_only": res.get("crypto_target_fallback_used_for_diagnostics_only") if isinstance(res, dict) else None,
+                    "crypto_target_v2_reject_reason": res.get("crypto_target_v2_reject_reason") if isinstance(res, dict) else None,
+                    "entry": res.get("current_price") if isinstance(res, dict) else None,
+                    "stop": res.get("recommended_stop_loss") if isinstance(res, dict) else None,
+                }
+
             for direction in ["LONG", "SHORT"]:
                 if direction == "LONG":
                     debug_row["tested_long"] = True
@@ -5892,6 +6061,11 @@ def api_scan_naked():
                     
                 if verdict != "CLEAR":
                     log.debug(f"[NAKED-DBG] {pair['display']} {direction}: verdict={verdict} seq={seq} — SKIPPED")
+                    _direction_debug = _build_direction_debug(
+                        direction, verdict, res, {}, None, ["struct"]
+                    )
+                    _direction_debug["final_reject_reason"] = f"structural_verdict_{verdict}"
+                    debug_row["direction_details"][direction] = _direction_debug
                     continue
 
                 conf_data = engine.calculate_confidence(
@@ -5900,6 +6074,7 @@ def api_scan_naked():
                     direction,
                     entry_candles=entry_candles,
                     style_profile=style_profile,
+                    crypto_entry_candles_by_tf=crypto_entry_candles_by_tf,
                 )
                 
                 if direction == "LONG":
@@ -5925,27 +6100,30 @@ def api_scan_naked():
                     pair.get("type", ""),
                 )
 
+                _fail_gates = []
+                if not conf_data.get("structure_ok"):
+                    _fail_gates.append("struct")
+                if not conf_data.get("location_ok"):
+                    _fail_gates.append("loc")
+                if not conf_data.get("entry_ok"):
+                    _fail_gates.append("trigger")
+                if not conf_data.get("rr_ok"):
+                    _fail_gates.append(f"rr={conf_data.get('rr', 0):.1f}")
+                _conf_failed_gates = list(conf_data.get("failed_gate_names") or _fail_gates)
+                _direction_debug = _build_direction_debug(
+                    direction, verdict, res, conf_data, _min_score_scaled, _conf_failed_gates
+                )
+
                 if not _gate_ok:
-                    _fail_gates = []
-                    if not conf_data.get("structure_ok"):
-                        _fail_gates.append("struct")
-                    if not conf_data.get("location_ok"):
-                        _fail_gates.append("loc")
-                    if not conf_data.get("passed"):
-                        # Check trigger/catalyst
-                        _has_trigger = bool(conf_data.get("catalyst_bonus", 0))
-                        if not _has_trigger:
-                            _fail_gates.append("trigger")
-                    if not conf_data.get("rr_points", 0):
-                        _fail_gates.append(f"rr={conf_data.get('rr', 0):.1f}")
-                    
-                    debug_row["failed_gate_names"].extend(_fail_gates)
+                    debug_row["failed_gate_names"].extend(_conf_failed_gates)
+                    _direction_debug["final_reject_reason"] = f"gate_failures: {','.join(_conf_failed_gates)}"
+                    debug_row["direction_details"][direction] = _direction_debug
                     
                     log.debug(
                         f"[NAKED-DBG] {pair['display']} {direction}: "
                         f"score={conf_data['score']:.1f} vs min={_min_score_scaled:.1f}, "
                         f"passed={conf_data.get('passed')}, regime={regime_label}, "
-                        f"fails=[{','.join(_fail_gates)}] — REJECTED"
+                        f"fails=[{','.join(_conf_failed_gates)}] — REJECTED"
                     )
                     continue
 
@@ -5968,7 +6146,16 @@ def api_scan_naked():
                 tp = _res.get("recommended_take_profit")
                 rr = conf_data.get("rr", 0.0)
 
-                if not tp and sl:
+                _crypto_requires_structural_target = (
+                    pair.get("type") == "crypto"
+                    and bool(CONFIG.get("ENGINE_B_CRYPTO_PROFILE_ENABLED", False))
+                    and bool(
+                        CONFIG.get(
+                            "ENGINE_B_CRYPTO_REQUIRE_STRUCTURAL_TARGET_FOR_PASS", True
+                        )
+                    )
+                )
+                if not tp and sl and not _crypto_requires_structural_target:
                     sl_dist = abs(current_price - sl)
                     if direction == "LONG":
                         tp = current_price + (sl_dist * style_profile["fallback_rr"])
@@ -5976,6 +6163,9 @@ def api_scan_naked():
                         tp = current_price - (sl_dist * style_profile["fallback_rr"])
                     _res["recommended_take_profit"] = tp
                     _res["fallback_tp_applied"] = True
+                elif not tp and sl and _crypto_requires_structural_target:
+                    _res["fallback_tp_applied"] = False
+                    _res["fallback_blocked_reason"] = "crypto_requires_structural_target"
 
                 if sl and tp and rr <= 0:
                     sl_dist = abs(current_price - sl)
@@ -5983,6 +6173,14 @@ def api_scan_naked():
                     rr = (tp_dist / sl_dist) if sl_dist > 0 else 0.0
                 if rr < style_profile["min_rr"]:
                     debug_row["failed_gate_names"].append(f"rr_gate")
+                    if "rr_gate" not in _direction_debug["debug_gate_failed_names"]:
+                        _direction_debug["debug_gate_failed_names"].append("rr_gate")
+                    _direction_debug["rr_failed"] = True
+                    _direction_debug["passed_all_gates"] = False
+                    _direction_debug["final_reject_reason"] = (
+                        f"rr={rr:.2f} < min_rr={style_profile['min_rr']}"
+                    )
+                    debug_row["direction_details"][direction] = _direction_debug
                     log.debug(
                         f"[NAKED-DBG] {pair['display']} {direction}: "
                         f"rr={rr:.2f} < min_rr={style_profile['min_rr']} — REJECTED"
@@ -5994,6 +6192,10 @@ def api_scan_naked():
                     debug_row["long_passed"] = True
                 else:
                     debug_row["short_passed"] = True
+                _direction_debug["final_engine_b_passed"] = True
+                _direction_debug["production_pass_flag"] = True
+                _direction_debug["debug_gate_failed_names"] = []
+                debug_row["direction_details"][direction] = _direction_debug
 
                 signal = {
                     "id": f"NKD_{pair['display']}_{direction}_{int(time.time())}",

@@ -727,6 +727,25 @@ CONFIG: dict = {
     # ── Engine B AI Controls ─────────────────────────────────────────────────
     "ENGINE_B_NEWS_CONTEXT_ENABLED": True,  # Feed news into Engine B AI advisory (not checklist)
     "ENGINE_B_ZONE_PERSISTENCE": False,  # Persist Engine B OB/FVG registry to zones.db
+    "ENGINE_B_CRYPTO_PROFILE_ENABLED": False,
+    "ENGINE_B_CRYPTO_TARGET_MODEL_ENABLED": False,
+    "ENGINE_B_CRYPTO_TARGET_V2_ENABLED": False,
+    "ENGINE_B_CRYPTO_REQUIRE_STRUCTURAL_TARGET_FOR_PASS": True,
+    "ENGINE_B_CRYPTO_ALLOW_FALLBACK_TARGET_FOR_PASS": False,
+    "ENGINE_B_CRYPTO_TARGET_SEARCH_MAX_RANK": 8,
+    "ENGINE_B_CRYPTO_TARGET_MIN_RR": 1.2,
+    "ENGINE_B_CRYPTO_MIN_RR": 1.2,
+    "ENGINE_B_CRYPTO_TARGET_MIN_ATR_MULTIPLE": 1.0,
+    "ENGINE_B_CRYPTO_TARGET_MAX_ATR_MULTIPLE": 6.0,
+    "ENGINE_B_CRYPTO_ALLOW_D1_TARGETS": True,
+    "ENGINE_B_CRYPTO_TRIGGER_PROFILE_ENABLED": False,
+    "ENGINE_B_CRYPTO_ENTRY_TIMEFRAMES": ["M15", "M5"],
+    "ENGINE_B_CRYPTO_CONTEXT_TIMEFRAME": "H1",
+    "ENGINE_B_CRYPTO_STRUCTURE_TIMEFRAMES": ["H4", "D1"],
+    "ENGINE_B_CRYPTO_LOCATION_ATR_BUFFER": 0.75,
+    "ENGINE_B_CRYPTO_MIN_DISPLACEMENT_ATR": 0.35,
+    "ENGINE_B_CRYPTO_MIN_VOLUME_RATIO": 1.2,
+    "ENGINE_B_CRYPTO_MIN_TAKER_DELTA_RATIO": 0.55,
     "AI_ON_DEMAND_ONLY": True,  # AI runs on user-initiated actions only, not auto-scans
     # ── Engine C B-side fallback controls ─────────────────────────────────────
     "ENGINE_C_B_ONLY_MULT": 0.65,  # Scale B-only conviction when A has no signal
