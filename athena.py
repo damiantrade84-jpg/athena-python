@@ -5701,6 +5701,7 @@ def api_scan_naked():
     d = request.get_json(silent=True) or {}
     asset_class = str(d.get("assetClass") or "").strip().lower()
     requested_style = d.get("style", "auto")
+    debug_mode = d.get("debug", False)
 
     candidate_pairs = []
     for p in ALL_PAIRS:
@@ -5719,7 +5720,32 @@ def api_scan_naked():
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    def _scan_pair(pair):
+    def _scan_pair(pair, debug_mode=False):
+        debug_row = {
+            "pair": pair.get("display"),
+            "symbol": pair.get("symbol"),
+            "style": None,
+            "zone_tf": None,
+            "entry_tf": None,
+            "atr_tf": None,
+            "zone_count": 0,
+            "entry_count": 0,
+            "d1_count": 0,
+            "atr_count": 0,
+            "atr_value": None,
+            "volatility_gate_passed": True,
+            "tested_long": False,
+            "tested_short": False,
+            "long_structural_verdict": None,
+            "short_structural_verdict": None,
+            "long_confidence_score": None,
+            "short_confidence_score": None,
+            "long_passed": False,
+            "short_passed": False,
+            "failed_gate_names": [],
+            "final_reject_reason": None
+        }
+        
         try:
             engine = NakedEngine()
 
@@ -5727,12 +5753,18 @@ def api_scan_naked():
             resolved_style, style_profile = _naked_scan_style_profile(
                 requested_style, score_group=_pair_score_group
             )
+            
+            debug_row["style"] = resolved_style
 
             # Determine which timeframes this pair/style needs
             _zone_tf = style_profile.get("zone_tf", "H4")
             _entry_tf = style_profile.get("entry_tf", "H1")
             _atr_tf = style_profile.get("atr_tf", "H4")
             _needed_tfs = list({_zone_tf, _entry_tf, _atr_tf, "D1"})
+            
+            debug_row["zone_tf"] = _zone_tf
+            debug_row["entry_tf"] = _entry_tf
+            debug_row["atr_tf"] = _atr_tf
 
             # Fetch all needed timeframes
             _tf_map = {}
@@ -5763,8 +5795,16 @@ def api_scan_naked():
                 bool((_tf_state_map.get(tf) or {}).get("is_live"))
                 for tf in (_zone_tf, _entry_tf, _atr_tf, "D1")
             )
+            
+            debug_row["zone_count"] = len(zone_candles)
+            debug_row["entry_count"] = len(entry_candles)
+            debug_row["d1_count"] = len(d1_candles)
+            debug_row["atr_count"] = len(atr_candles)
 
             if len(zone_candles) < 10 or len(entry_candles) < 10:
+                debug_row["final_reject_reason"] = "insufficient_candles"
+                if debug_mode:
+                    return {"debug": debug_row}
                 return []
 
             # ATR from the style's designated timeframe
@@ -5773,8 +5813,13 @@ def api_scan_naked():
             _atr_closes = [float(c["close"]) for c in atr_candles]
             atr_series = calc_atr(_atr_highs, _atr_lows, _atr_closes, 14)
             atr = float(atr_series[-1]) if atr_series else 0.0
+            
+            debug_row["atr_value"] = atr
 
             if not atr or atr <= 0:
+                debug_row["final_reject_reason"] = "invalid_atr"
+                if debug_mode:
+                    return {"debug": debug_row}
                 return []
 
             # Volatility gate
@@ -5782,7 +5827,11 @@ def api_scan_naked():
                 _valid_atrs = [a for a in atr_series[-50:] if a and a > 0]
                 _atr_avg = sum(_valid_atrs) / len(_valid_atrs) if _valid_atrs else 0
                 if _atr_avg > 0 and atr < _atr_avg * 0.6:
+                    debug_row["volatility_gate_passed"] = False
+                    debug_row["final_reject_reason"] = "volatility_gate"
                     log.debug(f"[NAKED-DBG] {pair['display']}: ATR={atr:.6f} < 60% avg={_atr_avg:.6f} — VOL GATE")
+                    if debug_mode:
+                        return {"debug": debug_row}
                     return []
 
             current_price = float(entry_candles[-1]["close"])
@@ -5812,6 +5861,11 @@ def api_scan_naked():
             local_results = []
             _best_signal = None
             for direction in ["LONG", "SHORT"]:
+                if direction == "LONG":
+                    debug_row["tested_long"] = True
+                else:
+                    debug_row["tested_short"] = True
+                    
                 res = engine.set_registry_context(
                     pair.get("symbol") or pair.get("display")
                 ).analyze_structure(
@@ -5830,6 +5884,12 @@ def api_scan_naked():
 
                 verdict = res.get("structural_verdict", "NONE")
                 seq = res.get("current_swing_sequence", "")
+                
+                if direction == "LONG":
+                    debug_row["long_structural_verdict"] = verdict
+                else:
+                    debug_row["short_structural_verdict"] = verdict
+                    
                 if verdict != "CLEAR":
                     log.debug(f"[NAKED-DBG] {pair['display']} {direction}: verdict={verdict} seq={seq} — SKIPPED")
                     continue
@@ -5841,6 +5901,23 @@ def api_scan_naked():
                     entry_candles=entry_candles,
                     style_profile=style_profile,
                 )
+                
+                if direction == "LONG":
+                    debug_row["long_confidence_score"] = conf_data.get("score", 0)
+                else:
+                    debug_row["short_confidence_score"] = conf_data.get("score", 0)
+                
+                # Capture crypto target model debug fields from res
+                debug_row["crypto_target_old_target"] = res.get("crypto_target_old_target")
+                debug_row["crypto_target_old_rr"] = res.get("crypto_target_old_rr")
+                debug_row["crypto_target_tp1"] = res.get("crypto_target_tp1")
+                debug_row["crypto_target_tp2"] = res.get("crypto_target_tp2")
+                debug_row["crypto_target_new_rr"] = res.get("crypto_target_new_rr")
+                debug_row["crypto_target_selection_mode"] = res.get("crypto_target_selection_mode")
+                debug_row["crypto_target_reject_reason"] = res.get("crypto_target_reject_reason")
+                debug_row["crypto_target_path_clear_to_tp2"] = res.get("crypto_target_path_clear_to_tp2")
+                debug_row["crypto_target_atr_multiple"] = res.get("crypto_target_atr_multiple")
+                
                 _gate_ok, _min_score_scaled = engine_b_confidence_passes(
                     conf_data,
                     style_profile,
@@ -5861,6 +5938,9 @@ def api_scan_naked():
                             _fail_gates.append("trigger")
                     if not conf_data.get("rr_points", 0):
                         _fail_gates.append(f"rr={conf_data.get('rr', 0):.1f}")
+                    
+                    debug_row["failed_gate_names"].extend(_fail_gates)
+                    
                     log.debug(
                         f"[NAKED-DBG] {pair['display']} {direction}: "
                         f"score={conf_data['score']:.1f} vs min={_min_score_scaled:.1f}, "
@@ -5902,11 +5982,18 @@ def api_scan_naked():
                     tp_dist = abs(tp - current_price)
                     rr = (tp_dist / sl_dist) if sl_dist > 0 else 0.0
                 if rr < style_profile["min_rr"]:
+                    debug_row["failed_gate_names"].append(f"rr_gate")
                     log.debug(
                         f"[NAKED-DBG] {pair['display']} {direction}: "
                         f"rr={rr:.2f} < min_rr={style_profile['min_rr']} — REJECTED"
                     )
                     continue
+                
+                # Signal passed all gates
+                if direction == "LONG":
+                    debug_row["long_passed"] = True
+                else:
+                    debug_row["short_passed"] = True
 
                 signal = {
                     "id": f"NKD_{pair['display']}_{direction}_{int(time.time())}",
@@ -5972,28 +6059,62 @@ def api_scan_naked():
                 if _best_signal is None or signal["confluenceScore"] > _best_signal["confluenceScore"]:
                     _best_signal = signal
         except Exception as e:
+            debug_row["final_reject_reason"] = f"exception: {str(e)}"
             log.warning(f"[NAKED SCAN] {pair.get('display')} error: {e}")
+            if debug_mode:
+                return {"debug": debug_row}
             return []
+        
+        # If no signal was generated but we tested both directions, set final reject reason
+        if _best_signal is None:
+            if not debug_row["long_structural_verdict"] and not debug_row["short_structural_verdict"]:
+                debug_row["final_reject_reason"] = "no_clear_structural_verdict"
+            elif debug_row["failed_gate_names"]:
+                debug_row["final_reject_reason"] = f"gate_failures: {','.join(debug_row['failed_gate_names'])}"
+            else:
+                debug_row["final_reject_reason"] = "unknown"
+        
         if _best_signal is not None:
             local_results.append(_best_signal)
+        
+        # Always return debug row in debug mode
+        if debug_mode:
+            local_results.append({"debug": debug_row})
+        
         return local_results
 
     _max_workers = max(1, int(CONFIG.get("SCAN_MAX_WORKERS", 3) or 3))
+    debug_rows = []
+    log.info(f"[DEBUG] Starting scan with {len(candidate_pairs)} candidate pairs, debug_mode={debug_mode}")
     with ThreadPoolExecutor(max_workers=_max_workers) as pool:
-        futures = {pool.submit(_scan_pair, pair): pair for pair in candidate_pairs}
+        futures = {pool.submit(_scan_pair, pair, debug_mode): pair for pair in candidate_pairs}
         for future in as_completed(futures):
-            for row in (future.result() or []):
-                results.append(row)
-                _pair_key = row.get("display", "")
-                _existing = _best_per_pair.get(_pair_key)
-                if _existing is None or row["confluenceScore"] > _existing["confluenceScore"]:
-                    _best_per_pair[_pair_key] = row
+            result = future.result()
+            log.debug(f"[DEBUG] Future result type: {type(result)}, length: {len(result) if isinstance(result, list) else 'N/A'}")
+            for row in (result or []):
+                if debug_mode and row.get("debug"):
+                    debug_rows.append(row["debug"])
+                    log.debug(f"[DEBUG] Added debug row for {row['debug'].get('pair')}")
+                else:
+                    results.append(row)
+                    _pair_key = row.get("display", "")
+                    _existing = _best_per_pair.get(_pair_key)
+                    if _existing is None or row["confluenceScore"] > _existing["confluenceScore"]:
+                        _best_per_pair[_pair_key] = row
+    log.info(f"[DEBUG] Collected {len(debug_rows)} debug rows, {len(results)} signals")
 
     results = sorted(
         _best_per_pair.values(),
         key=lambda x: x.get("confluenceScore", 0),
         reverse=True,
     )
+
+    if debug_mode:
+        return jsonify(_json_safe({
+            "success": True, 
+            "signals": results,
+            "debugRows": debug_rows
+        }))
 
     return jsonify(_json_safe({"success": True, "signals": results}))
 

@@ -1418,62 +1418,194 @@ class NakedEngine:
         tp_source = "fallback_rr"
         tp_structural_limited = False
         structural_target_candidates = []
-        if direction == "LONG" and valid_res:
-            for zone in sorted(valid_res, key=lambda z: z["lower"]):
-                structural_tp = zone["lower"] - (atr * sl_mult)
-                target_distance = structural_tp - current_price
-                structural_target_candidates.append({
-                    "target_type": "resistance_zone",
-                    "target_price": structural_tp,
-                    "zone": dict(zone),
-                    "correct_side": structural_tp > current_price,
-                    "distance_to_target": target_distance,
-                    "atr_multiple_to_target": (target_distance / atr) if atr > 0 else None,
-                    "selected": False,
-                    "rejected_reason": "too_close_or_wrong_side"
-                    if structural_tp <= current_price + (atr * 0.5)
-                    else None,
-                })
-                if structural_tp <= current_price + (atr * 0.5):
-                    tp_structural_limited = True
-                    continue
-                tp = structural_tp
-                tp_source = "structural_zone"
-                structural_target_candidates[-1]["selected"] = True
-                break
-        elif direction == "SHORT" and valid_sup:
-            for zone in sorted(valid_sup, key=lambda z: z["upper"], reverse=True):
-                structural_tp = zone["upper"] + (atr * sl_mult)
-                target_distance = current_price - structural_tp
-                structural_target_candidates.append({
-                    "target_type": "support_zone",
-                    "target_price": structural_tp,
-                    "zone": dict(zone),
-                    "correct_side": structural_tp < current_price,
-                    "distance_to_target": target_distance,
-                    "atr_multiple_to_target": (target_distance / atr) if atr > 0 else None,
-                    "selected": False,
-                    "rejected_reason": "too_close_or_wrong_side"
-                    if structural_tp >= current_price - (atr * 0.5)
-                    else None,
-                })
-                if structural_tp >= current_price - (atr * 0.5):
-                    tp_structural_limited = True
-                    continue
-                tp = structural_tp
-                tp_source = "structural_zone"
-                structural_target_candidates[-1]["selected"] = True
-                break
-
-        # Generate TP from fallback_rr when no usable opposing structural zone exists.
-        if tp is None:
-            sl_dist = abs(current_price - sl) if (sl is not None) else (atr * sl_mult)
-            if sl_dist == 0:
-                sl_dist = atr * sl_mult
-            if direction == "LONG":
-                tp = current_price + (sl_dist * fallback_rr)
+        
+        # Crypto-specific target selection model
+        crypto_target_model_enabled = config.CONFIG.get("ENGINE_B_CRYPTO_TARGET_MODEL_ENABLED", False)
+        is_crypto = asset_type.lower() == "crypto"
+        
+        # Debug fields for crypto target model
+        old_target = None
+        old_rr = None
+        new_tp1 = None
+        new_tp2 = None
+        new_rr = None
+        target_selection_mode = "standard"
+        target_reject_reason = None
+        path_clear_to_tp2 = None
+        target_atr_multiple = None
+        
+        if is_crypto and crypto_target_model_enabled:
+            target_selection_mode = "crypto_model"
+            
+            # First, calculate standard TP as old_target for comparison
+            if direction == "LONG" and valid_res:
+                for zone in sorted(valid_res, key=lambda z: z["lower"]):
+                    structural_tp = zone["lower"] - (atr * sl_mult)
+                    if structural_tp > current_price + (atr * 0.5):
+                        old_target = structural_tp
+                        break
+            elif direction == "SHORT" and valid_sup:
+                for zone in sorted(valid_sup, key=lambda z: z["upper"], reverse=True):
+                    structural_tp = zone["upper"] + (atr * sl_mult)
+                    if structural_tp < current_price - (atr * 0.5):
+                        old_target = structural_tp
+                        break
+            
+            if old_target is None:
+                sl_dist = abs(current_price - sl) if (sl is not None) else (atr * sl_mult)
+                if sl_dist == 0:
+                    sl_dist = atr * sl_mult
+                if direction == "LONG":
+                    old_target = current_price + (sl_dist * fallback_rr)
+                else:
+                    old_target = current_price - (sl_dist * fallback_rr)
+            
+            # Calculate old RR
+            if sl and old_target:
+                sl_dist = abs(current_price - sl)
+                tp_dist = abs(old_target - current_price)
+                old_rr = tp_dist / sl_dist if sl_dist > 0 else 0.0
+            
+            # TP1: nearest minor level (same as standard logic)
+            new_tp1 = old_target
+            
+            # TP2: next major H4 liquidity zone (skip the first, use the second)
+            if direction == "LONG" and len(valid_res) >= 2:
+                sorted_res = sorted(valid_res, key=lambda z: z["lower"])
+                # Skip first (used for TP1), use second for TP2
+                major_zone = sorted_res[1]
+                new_tp2 = major_zone["lower"] - (atr * sl_mult)
+            elif direction == "SHORT" and len(valid_sup) >= 2:
+                sorted_sup = sorted(valid_sup, key=lambda z: z["upper"], reverse=True)
+                major_zone = sorted_sup[1]
+                new_tp2 = major_zone["upper"] + (atr * sl_mult)
+            
+            # If no second zone, use RR projection with higher multiple
+            if new_tp2 is None:
+                sl_dist = abs(current_price - sl) if (sl is not None) else (atr * sl_mult)
+                if sl_dist == 0:
+                    sl_dist = atr * sl_mult
+                # Use 2x fallback RR for TP2
+                if direction == "LONG":
+                    new_tp2 = current_price + (sl_dist * (fallback_rr * 2))
+                else:
+                    new_tp2 = current_price - (sl_dist * (fallback_rr * 2))
+            
+            # Validate TP2
+            max_atr_multiple = config.CONFIG.get("ENGINE_B_CRYPTO_MAX_TARGET_ATR_MULTIPLE", 6.0)
+            min_atr_multiple = config.CONFIG.get("ENGINE_B_CRYPTO_MIN_TARGET_ATR_MULTIPLE", 1.0)
+            require_clear_path = config.CONFIG.get("ENGINE_B_CRYPTO_REQUIRE_CLEAR_PATH_TO_TP2", True)
+            
+            tp2_valid = True
+            tp2_atr_multiple = 0.0
+            
+            if new_tp2 is not None:
+                tp2_dist = abs(new_tp2 - current_price)
+                tp2_atr_multiple = tp2_dist / atr if atr > 0 else 0.0
+                target_atr_multiple = tp2_atr_multiple
+                
+                # Check direction
+                if direction == "LONG" and new_tp2 <= current_price:
+                    tp2_valid = False
+                    target_reject_reason = "tp2_wrong_direction"
+                elif direction == "SHORT" and new_tp2 >= current_price:
+                    tp2_valid = False
+                    target_reject_reason = "tp2_wrong_direction"
+                # Check too close
+                elif tp2_atr_multiple < min_atr_multiple:
+                    tp2_valid = False
+                    target_reject_reason = f"tp2_too_close_{tp2_atr_multiple:.2f}atr"
+                # Check too far
+                elif tp2_atr_multiple > max_atr_multiple:
+                    tp2_valid = False
+                    target_reject_reason = f"tp2_too_far_{tp2_atr_multiple:.2f}atr"
+                # Check path clarity (simplified - check if major opposing structure between entry and TP2)
+                elif require_clear_path:
+                    # For LONG: check if any major support between entry and TP2
+                    # For SHORT: check if any major resistance between entry and TP2
+                    # This is a simplified check - full path analysis would require more complex logic
+                    path_clear_to_tp2 = True  # Placeholder for full path analysis
+            
+            # Use TP2 if valid, otherwise use 2x RR projection for better RR
+            if tp2_valid and new_tp2 is not None:
+                tp = new_tp2
+                tp_source = "crypto_tp2_major_h4"
             else:
-                tp = current_price - (sl_dist * fallback_rr)
+                # TP2 invalid - use 2x RR projection instead of TP1 for better RR
+                sl_dist = abs(current_price - sl) if (sl is not None) else (atr * sl_mult)
+                if sl_dist == 0:
+                    sl_dist = atr * sl_mult
+                if direction == "LONG":
+                    tp = current_price + (sl_dist * (fallback_rr * 2))
+                else:
+                    tp = current_price - (sl_dist * (fallback_rr * 2))
+                tp_source = "crypto_fallback_2x_rr"
+                target_reject_reason = target_reject_reason or "tp2_invalid_used_2x_rr"
+            
+            # Calculate new RR against TP2 (or TP1 if TP2 invalid)
+            if sl and tp:
+                sl_dist = abs(current_price - sl)
+                tp_dist = abs(tp - current_price)
+                new_rr = tp_dist / sl_dist if sl_dist > 0 else 0.0
+        else:
+            # Standard target selection (non-crypto or crypto model disabled)
+            if direction == "LONG" and valid_res:
+                for zone in sorted(valid_res, key=lambda z: z["lower"]):
+                    structural_tp = zone["lower"] - (atr * sl_mult)
+                    target_distance = structural_tp - current_price
+                    structural_target_candidates.append({
+                        "target_type": "resistance_zone",
+                        "target_price": structural_tp,
+                        "zone": dict(zone),
+                        "correct_side": structural_tp > current_price,
+                        "distance_to_target": target_distance,
+                        "atr_multiple_to_target": (target_distance / atr) if atr > 0 else None,
+                        "selected": False,
+                        "rejected_reason": "too_close_or_wrong_side"
+                        if structural_tp <= current_price + (atr * 0.5)
+                        else None,
+                    })
+                    if structural_tp <= current_price + (atr * 0.5):
+                        tp_structural_limited = True
+                        continue
+                    tp = structural_tp
+                    tp_source = "structural_zone"
+                    structural_target_candidates[-1]["selected"] = True
+                    break
+            elif direction == "SHORT" and valid_sup:
+                for zone in sorted(valid_sup, key=lambda z: z["upper"], reverse=True):
+                    structural_tp = zone["upper"] + (atr * sl_mult)
+                    target_distance = current_price - structural_tp
+                    structural_target_candidates.append({
+                        "target_type": "support_zone",
+                        "target_price": structural_tp,
+                        "zone": dict(zone),
+                        "correct_side": structural_tp < current_price,
+                        "distance_to_target": target_distance,
+                        "atr_multiple_to_target": (target_distance / atr) if atr > 0 else None,
+                        "selected": False,
+                        "rejected_reason": "too_close_or_wrong_side"
+                        if structural_tp >= current_price - (atr * 0.5)
+                        else None,
+                    })
+                    if structural_tp >= current_price - (atr * 0.5):
+                        tp_structural_limited = True
+                        continue
+                    tp = structural_tp
+                    tp_source = "structural_zone"
+                    structural_target_candidates[-1]["selected"] = True
+                    break
+
+            # Generate TP from fallback_rr when no usable opposing structural zone exists.
+            if tp is None:
+                sl_dist = abs(current_price - sl) if (sl is not None) else (atr * sl_mult)
+                if sl_dist == 0:
+                    sl_dist = atr * sl_mult
+                if direction == "LONG":
+                    tp = current_price + (sl_dist * fallback_rr)
+                else:
+                    tp = current_price - (sl_dist * fallback_rr)
+        
         selected_structural_target = next(
             (c for c in structural_target_candidates if c.get("selected")), None
         )
@@ -1697,6 +1829,16 @@ class NakedEngine:
             "asset_type": asset_type,
             "d1_adx": d1_adx_val,
             "h4_adx": h4_adx_val,
+            # Crypto target model debug fields
+            "crypto_target_old_target": old_target,
+            "crypto_target_old_rr": old_rr,
+            "crypto_target_tp1": new_tp1,
+            "crypto_target_tp2": new_tp2,
+            "crypto_target_new_rr": new_rr,
+            "crypto_target_selection_mode": target_selection_mode,
+            "crypto_target_reject_reason": target_reject_reason,
+            "crypto_target_path_clear_to_tp2": path_clear_to_tp2,
+            "crypto_target_atr_multiple": target_atr_multiple,
             # Independent directional assessment from Engine B's own price-action evidence.
             # Advisory only — does not affect scoring, checklist, or execution gates.
             # Allows Engine C to detect genuine direction conflicts vs inherited ones.

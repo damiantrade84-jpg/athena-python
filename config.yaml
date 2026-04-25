@@ -1731,6 +1731,30 @@ ENGINE_B_FOREX_ADX_MIN: 12
 
 
 
+# ── Crypto Engine B Target Selection Model ───────────────────────────────────
+
+# Crypto-specific target selection to improve RR by using major H4 liquidity zones.
+
+# Default false to preserve existing behavior until explicitly enabled.
+
+ENGINE_B_CRYPTO_TARGET_MODEL_ENABLED: false
+
+ENGINE_B_CRYPTO_TARGET_MODE: "next_major_h4_liquidity"
+
+ENGINE_B_CRYPTO_MIN_RR: 1.2
+
+ENGINE_B_CRYPTO_TP1_MODE: "nearest_minor_level"
+
+ENGINE_B_CRYPTO_TP2_MODE: "next_major_h4_liquidity"
+
+ENGINE_B_CRYPTO_REQUIRE_CLEAR_PATH_TO_TP2: true
+
+ENGINE_B_CRYPTO_MAX_TARGET_ATR_MULTIPLE: 6.0
+
+ENGINE_B_CRYPTO_MIN_TARGET_ATR_MULTIPLE: 1.0
+
+
+
 # Engine B backtest SL/TP mode:
 
 # "atr" = use Engine A calc_levels (ATR × multiplier) — proven, matches bar resolution
