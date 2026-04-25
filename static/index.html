@@ -1265,6 +1265,54 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
 .ld-data-missing{display:flex;flex-direction:column;align-items:center;justify-content:center;height:90px;gap:4px;}
 .ld-data-missing-label{font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace;}
 .ld-status-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;background:rgba(10,14,20,0.7);border:1px solid var(--border);border-radius:8px;margin-bottom:12px;}
+
+/* Live Dashboard v3 mockup-aligned cockpit overrides */
+#panel-live-dashboard{background:#050914;padding:14px;border-radius:18px;border:1px solid rgba(34,211,238,0.18);}
+.ld-cockpit-header{padding:16px 18px;background:#0b1628;border-color:rgba(34,211,238,0.38);border-radius:18px;box-shadow:0 0 45px rgba(34,211,238,0.12);}
+.ld-cockpit-title{font-size:24px;letter-spacing:0;color:#67e8f9;}
+.ld-cockpit-sub{font-size:12px;letter-spacing:0.02em;color:#94a3b8;}
+.ld-hbadge,.ld-badge{padding:8px 11px;border-radius:8px;font-size:11px;letter-spacing:0.04em;}
+.ld-toolbar{margin:14px 0;gap:10px;}
+.ld-sym-input{max-width:none;min-height:38px;border-radius:10px;border-color:rgba(34,211,238,0.35);background:#06101e;}
+.ld-btn,.ld-select{min-height:38px;border-radius:10px;background:#0b1524;border-color:rgba(34,211,238,0.3);}
+.ld-layout{grid-template-columns:minmax(0,1fr) 360px;gap:16px;}
+.ld-status-tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px;}
+.ld-status-tile{border:1px solid rgba(34,211,238,0.35);background:#0b1524;border-radius:14px;padding:12px;box-shadow:0 0 24px rgba(34,211,238,0.06);}
+.ld-status-tile .k{font-family:'IBM Plex Mono',monospace;font-size:10px;text-transform:uppercase;letter-spacing:0.16em;color:#64748b;}
+.ld-status-tile .v{margin-top:6px;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:800;color:#67e8f9;}
+.ld-card-grid{grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:16px;}
+.ld-card{background:#0b1524;border-color:rgba(34,211,238,0.35);border-radius:18px;padding:14px;box-shadow:0 0 25px rgba(34,211,238,0.08);}
+.ld-card:hover{border-color:rgba(34,211,238,0.68);box-shadow:0 0 30px rgba(34,211,238,0.16);}
+.ld-card.selected{border-color:#facc15;box-shadow:0 0 34px rgba(250,204,21,0.18);}
+.ld-card-header{padding:0 0 12px;border-bottom:none;}
+.ld-card-sym{font-size:19px;color:#67e8f9;}
+.ld-card-type{display:block;margin-left:0;margin-top:3px;font-size:11px;color:#94a3b8;letter-spacing:0;}
+.ld-card-price{font-size:20px;color:#fff;}
+.ld-card-chg{font-size:12px;}
+.ld-chart-wrap{padding:0;min-height:220px;border:1px solid rgba(34,211,238,0.55);border-radius:14px;overflow:hidden;background:#06101e;box-shadow:inset 0 0 25px rgba(8,145,178,0.12);}
+.ld-chart-wrap:before{content:"";position:absolute;inset:0;opacity:.35;background-image:linear-gradient(#1c3554 1px,transparent 1px),linear-gradient(90deg,#1c3554 1px,transparent 1px);background-size:42px 30px;pointer-events:none;}
+.ld-chart-svg{height:220px;position:relative;z-index:1;}
+.ld-chart-ticket{position:absolute;left:12px;bottom:12px;z-index:2;border:1px solid rgba(100,116,139,0.55);background:rgba(0,0,0,0.55);border-radius:10px;padding:8px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;line-height:1.55;color:#cbd5e1;}
+.ld-chart-ticket strong{color:#34d399;}
+.ld-engine-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:12px 0 0;}
+.ld-epill{border-radius:10px;padding:10px;background:rgba(15,23,42,0.54);}
+.ld-epill-label{font-size:10px;letter-spacing:0.16em;}
+.ld-epill-val{font-size:12px;}
+.ld-card-setup{margin-top:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #334155;background:rgba(2,6,23,.42);border-radius:12px;padding:10px 12px;}
+.ld-card-setup .k{font-family:'IBM Plex Mono',monospace;font-size:10px;text-transform:uppercase;letter-spacing:.16em;color:#64748b;}
+.ld-card-setup .v{margin-top:4px;font-size:12px;color:#e2e8f0;}
+.ld-rr-pill{font-size:14px;border-radius:8px;color:#fde047;border-color:rgba(250,204,21,.42);background:rgba(250,204,21,.10);}
+.ld-card-footer{padding:10px 0 0;border-top:none;}
+.ld-side-section,.ld-detail-panel{background:#0b1524;border-color:rgba(34,211,238,0.35);border-radius:18px;box-shadow:0 0 25px rgba(34,211,238,0.07);}
+.ld-side-head{padding:13px 14px;font-size:13px;color:#67e8f9;background:transparent;}
+.ld-side-body{padding:12px;max-height:none;}
+.ld-detail-panel{order:-1;margin-bottom:12px;}
+.ld-detail-body{max-height:430px;}
+.ld-event{display:block;border:1px solid rgba(34,211,238,0.18);border-radius:10px;padding:9px 10px;margin-bottom:8px;background:rgba(15,23,42,.35);}
+.ld-event-sym{display:block;margin-bottom:4px;}
+.ld-event-msg{display:block;font-size:11px;line-height:1.35;}
+@media(max-width:1280px){.ld-layout{grid-template-columns:1fr}.ld-status-tiles{grid-template-columns:repeat(2,minmax(0,1fr));}.ld-card-grid{grid-template-columns:repeat(auto-fit,minmax(340px,1fr));}}
+@media(max-width:720px){.ld-status-tiles{grid-template-columns:1fr}.ld-card-grid{grid-template-columns:1fr}.ld-cockpit-title{font-size:18px;}.ld-chart-svg{height:190px}.ld-chart-wrap{min-height:190px;}}
 </style>
 </head>
 <body>
@@ -2315,13 +2363,16 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
         <input type="checkbox" id="ldAutoPoll" onchange="ldToggleAutoPoll(this.checked)"> Auto (5s)
       </label>
       <select class="ld-select" id="ldFilterSelect" onchange="ldApplyFilter()">
-        <option value="all">All States</option>
-        <option value="aligned">Aligned Only</option>
+        <option value="all">All</option>
+        <option value="paper">Paper Candidates</option>
         <option value="watchlist">Watchlist</option>
-        <option value="d_pass">Engine D PASS</option>
+        <option value="blocked">Blocked</option>
+        <option value="engine_d">Engine D</option>
+        <option value="crypto">Crypto</option>
+        <option value="index">Indexes</option>
       </select>
       <select class="ld-select" id="ldSortSelect" onchange="ldApplyFilter()">
-        <option value="default">Default Order</option>
+        <option value="conviction_desc">Highest conviction</option>
         <option value="score_desc">Score ↓</option>
         <option value="rr_desc">RR ↓</option>
       </select>
@@ -2332,6 +2383,12 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
 
       <!-- Left: card grid -->
       <div class="ld-card-area">
+        <div class="ld-status-tiles" id="ldStatusTiles">
+          <div class="ld-status-tile"><div class="k">Dashboard Status</div><div class="v">WAITING</div></div>
+          <div class="ld-status-tile"><div class="k">Freshness Gate</div><div class="v">--</div></div>
+          <div class="ld-status-tile"><div class="k">AI Review</div><div class="v">DOWNGRADE ONLY</div></div>
+          <div class="ld-status-tile"><div class="k">Kill Switch</div><div class="v">OFF</div></div>
+        </div>
         <div class="ld-card-grid" id="ldCardGrid">
           <div class="ld-empty-state">
             Click <strong style="color:#22d3ee">↻ Refresh</strong> or enable Auto to load the cockpit.
@@ -2431,11 +2488,64 @@ function fmtTickerPrice(p) {
 
 var _latestPrices = {};
 
+// Converts any symbol variant to the BTC/USDT-style key that /api/prices returns.
+function normalizeLivePriceKey(value) {
+  if (!value || typeof value !== 'string') return '';
+  var s = value.replace(/^[A-Z0-9]+:/i, ''); // strip exchange prefix  e.g. BINANCE:
+  s = s.replace(/\.P$/i, '');               // strip .P perpetual suffix
+  s = s.replace(/[-_]/g, '/');              // normalize separators → /
+  if (s.indexOf('/') === -1) {
+    var quotes = ['USDT','BUSD','USDC','USD','BTC','ETH','BNB'];
+    for (var qi = 0; qi < quotes.length; qi++) {
+      var q = quotes[qi];
+      var up = s.toUpperCase();
+      if (up.endsWith(q) && up.length > q.length) {
+        s = s.slice(0, s.length - q.length) + '/' + q;
+        break;
+      }
+    }
+  }
+  return s.toUpperCase();
+}
+
+// Tries signal.display / signal.pair / signal.symbol (and normalized variants)
+// against the prices dict, returning the matching price object or null.
+function getLivePriceForSymbol(sigOrSymbol, prices) {
+  if (!prices) return null;
+  var raws = [];
+  if (typeof sigOrSymbol === 'string') {
+    raws.push(sigOrSymbol);
+  } else if (sigOrSymbol) {
+    raws.push(sigOrSymbol.display);
+    raws.push(sigOrSymbol.pair);
+    raws.push(sigOrSymbol.symbol);
+    raws.push(sigOrSymbol.mt5_symbol);
+  }
+  for (var i = 0; i < raws.length; i++) {
+    var raw = raws[i];
+    if (!raw) continue;
+    if (prices[raw]) {
+      console.log('[LIVE-PRICE] matched', raw, '=>', raw, prices[raw].price);
+      return prices[raw];
+    }
+    var up = raw.toUpperCase();
+    if (prices[up]) {
+      console.log('[LIVE-PRICE] matched', raw, '=>', up, prices[up].price);
+      return prices[up];
+    }
+    var norm = normalizeLivePriceKey(raw);
+    if (norm && prices[norm]) {
+      console.log('[LIVE-PRICE] matched', raw, '=>', norm, prices[norm].price);
+      return prices[norm];
+    }
+  }
+  return null;
+}
+
 function getSignalLivePrice(sig) {
   if (!sig) return null;
-  var disp = sig.display || sig.pair || '';
-  var live = ((_latestPrices[disp] || {}).price);
-  if (live != null && !isNaN(live)) return parseFloat(live);
+  var lp = getLivePriceForSymbol(sig, _latestPrices);
+  if (lp && lp.price != null && !isNaN(lp.price)) return parseFloat(lp.price);
   if (sig.livePrice != null && !isNaN(sig.livePrice)) return parseFloat(sig.livePrice);
   if (sig.price != null && !isNaN(sig.price)) return parseFloat(sig.price);
   return null;
@@ -2816,8 +2926,17 @@ function applyLivePriceUpdates(prices) {
   updateTickerStrip(prices);
   allSignals.forEach(function(s) {
     var disp = s.display || s.pair || '';
-    var lp = prices[disp];
-    if (!lp || !lp.price) return;
+    var lp = getLivePriceForSymbol(s, prices);
+    if (!lp || !lp.price) {
+      var sid0 = (s.symbol||'').replace(/[\/=^.]/g,'_');
+      var el0 = document.getElementById('livep-' + sid0);
+      if (el0 && el0.textContent === 'connecting...' && Object.keys(prices).length > 0) {
+        el0.textContent = 'No live price: ' + disp;
+        el0.style.color = 'var(--muted)';
+        el0.style.fontSize = '10px';
+      }
+      return;
+    }
     if (s.scanPrice == null && s.price != null && !isNaN(s.price)) s.scanPrice = parseFloat(s.price);
     var livePrice = parseFloat(lp.price);
     if (!(livePrice > 0)) return;
@@ -10195,7 +10314,7 @@ function _acmStartLive() {
     var display = _acm.priceDisplay
       || (_acm.sig && (_acm.sig.display || _acm.sig.pair))
       || _acm.symbol;
-    var lp = (_latestPrices || {})[display];
+    var lp = getLivePriceForSymbol(display, _latestPrices);
     if (!lp || !lp.price) return;
 
     var price = parseFloat(lp.price);
@@ -11770,6 +11889,7 @@ window.ldLoadSnapshot = ldLoadSnapshot;
 function ldRender(d) {
   if (!d) return;
   ldRenderStatusBar(d);
+  ldRenderStatusTiles(d);
   ldApplyFilter();
   var evts = d.events || [];
   _ldEventHistory = evts.concat(_ldEventHistory).slice(0, 80);
@@ -11818,20 +11938,27 @@ function ldApplyFilter() {
   var filter   = filterEl ? filterEl.value : 'all';
   var sort     = sortEl   ? sortEl.value   : 'default';
   var syms = (_ldLastSnapshot.symbols || []).slice();
-  if (filter === 'aligned') {
-    syms = syms.filter(function(s){ return (s.engineC||{}).decisionState === 'ALIGNED'; });
+  if (filter === 'paper') {
+    syms = syms.filter(function(s){ return s.finalState === 'PAPER CANDIDATE' || ((s.executableState||{}).canPaperExecute === true); });
   } else if (filter === 'watchlist') {
-    syms = syms.filter(function(s){
-      var st = (s.engineC||{}).decisionState;
-      return st === 'WATCHLIST' || st === 'A_ONLY' || st === 'B_ONLY';
-    });
-  } else if (filter === 'd_pass') {
-    syms = syms.filter(function(s){ return (s.engineD||{}).gateResult === 'PASS'; });
+    syms = syms.filter(function(s){ return s.finalState === 'WATCHLIST' || ['WATCHLIST','A_ONLY','B_ONLY'].indexOf((s.engineC||{}).decisionState) >= 0; });
+  } else if (filter === 'blocked') {
+    syms = syms.filter(function(s){ return s.finalState === 'BLOCKED' || ((s.executableState||{}).disabledReason); });
+  } else if (filter === 'engine_d') {
+    syms = syms.filter(function(s){ return ['PASS','WATCHLIST','BLOCKED','DATA_MISSING'].indexOf((s.engineD||{}).gateResult) >= 0; });
+  } else if (filter === 'crypto') {
+    syms = syms.filter(function(s){ return s.asset_type === 'crypto'; });
+  } else if (filter === 'index') {
+    syms = syms.filter(function(s){ return s.asset_type === 'index'; });
   }
-  if (sort === 'score_desc') {
-    syms.sort(function(a,b){ return ((b.engineA||{}).score||0) - ((a.engineA||{}).score||0); });
+  if (sort === 'conviction_desc' || sort === 'score_desc') {
+    syms.sort(function(a,b){ return ((b.engineC||{}).conviction || (b.engineA||{}).conviction || (b.engineA||{}).score || 0) - ((a.engineC||{}).conviction || (a.engineA||{}).conviction || (a.engineA||{}).score || 0); });
   } else if (sort === 'rr_desc') {
-    syms.sort(function(a,b){ return ((b.engineB||{}).rr||0) - ((a.engineB||{}).rr||0); });
+    syms.sort(function(a,b){ return ((b.levels||{}).rr || (b.engineB||{}).rr || 0) - ((a.levels||{}).rr || (a.engineB||{}).rr || 0); });
+  } else if (sort === 'engine_c') {
+    syms.sort(function(a,b){ return String((a.engineC||{}).decisionState || '').localeCompare(String((b.engineC||{}).decisionState || '')); });
+  } else if (sort === 'freshness') {
+    syms.sort(function(a,b){ return String((b.freshness||{}).gateDecision || '').localeCompare(String((a.freshness||{}).gateDecision || '')); });
   }
   ldRenderCards(syms);
 }
@@ -11889,7 +12016,9 @@ function ldBuildCard(sym) {
     + '<span class="ld-card-price">' + priceStr + '</span>' + chgHtml
     + '</div></div>';
 
-  var chartHtml = '<div class="ld-chart-wrap">' + ldBuildChartSvg(sym) + '</div>';
+  var chartHtml = '<div class="ld-chart-wrap">' + ldBuildChartSvg(sym)
+    + '<div class="ld-chart-ticket"><div>Qty: backend</div><div>Mode: <strong>Paper</strong></div><div>PnL: <strong>$0.00</strong></div></div>'
+    + '</div>';
 
   // 2×2 engine pill grid
   var engGrid = '<div class="ld-engine-grid">'
@@ -11904,15 +12033,21 @@ function ldBuildCard(sym) {
   if (!reason && (sym.engineA||{}).failReasons && (sym.engineA.failReasons||[])[0]) {
     reason = sym.engineA.failReasons[0];
   }
-  var rrVal = (sym.engineB||{}).rr || (sym.engineA||{}).rr;
+  var missingD = (sym.engineD||{}).gateResult === 'DATA_MISSING'
+    ? ' Engine D missing: ' + (((sym.engineD||{}).missingData || []).join(', ') || 'cache/result')
+    : '';
+  var rrVal = (sym.levels||{}).rr || (sym.engineB||{}).rr || (sym.engineA||{}).rr;
   var rrHtml    = rrVal != null ? '<span class="ld-rr-pill">RR ' + parseFloat(rrVal).toFixed(1) + '</span>' : '';
   var paperHtml = (sym.paper||{}).hasOpenPaperPosition ? '<span class="ld-paper-pill">📄 PAPER</span>' : '';
+  var setupBlock = '<div class="ld-card-setup"><div><div class="k">Setup</div><div class="v">' + ldEsc(sym.mainReason || reason || 'No setup') + '</div></div>'
+    + (rrHtml || '<span class="ld-rr-pill">WAITING</span>') + '</div>';
   var footer = '<div class="ld-card-footer">'
     + ldBuildFreshnessPill(sym.freshness)
-    + '<span class="ld-card-reason" title="' + ldEsc(reason) + '">' + ldEsc(reason) + '</span>'
+    + '<span class="ld-paper-pill">' + ldEsc(sym.finalState || 'NO SETUP') + '</span>'
+    + '<span class="ld-card-reason" title="' + ldEsc((sym.mainReason || reason || '') + missingD) + '">' + ldEsc((sym.mainReason || reason || 'NO SETUP') + missingD) + '</span>'
     + rrHtml + paperHtml + '</div>';
 
-  wrap.innerHTML = header + chartHtml + engGrid + footer;
+  wrap.innerHTML = header + chartHtml + engGrid + setupBlock + footer;
   return wrap;
 }
 
@@ -11969,8 +12104,8 @@ function ldBuildChartSvg(sym) {
     if (!isNaN(l) && l < lo) lo = l;
     if (!isNaN(h) && h > hi) hi = h;
   });
-  var engB = sym.engineB || {}, engD = sym.engineD || {}, vp = engD.vp || {};
-  [engB.entry, engB.sl, engB.tp, vp.poc, vp.vah, vp.val, sym.latest_price].forEach(function(v) {
+  var engB = sym.engineB || {}, engD = sym.engineD || {}, vp = engD.vp || {}, levels = sym.levels || {};
+  [levels.entry || engB.entry, levels.sl || engB.sl, levels.tp1 || levels.tp || engB.tp, levels.tp2, vp.poc, vp.vah, vp.val, sym.latest_price].forEach(function(v) {
     if (v != null) { var pv = parseFloat(v); if (!isNaN(pv)) { lo = Math.min(lo, pv); hi = Math.max(hi, pv); } }
   });
   if (lo === Infinity || hi === -Infinity || lo === hi) {
@@ -11996,9 +12131,9 @@ function ldBuildChartSvg(sym) {
   });
 
   // Zone band (entry↔sl)
-  if (engB.entry != null && engB.sl != null) {
-    var zoneLo = Math.min(parseFloat(engB.entry), parseFloat(engB.sl));
-    var zoneHi = Math.max(parseFloat(engB.entry), parseFloat(engB.sl));
+  if ((levels.entry || engB.entry) != null && (levels.sl || engB.sl) != null) {
+    var zoneLo = Math.min(parseFloat(levels.entry || engB.entry), parseFloat(levels.sl || engB.sl));
+    var zoneHi = Math.max(parseFloat(levels.entry || engB.entry), parseFloat(levels.sl || engB.sl));
     var zy1 = py(zoneHi), zy2 = py(zoneLo);
     if (!isNaN(zy1) && !isNaN(zy2) && zy2 > zy1) {
       parts.push('<rect x="' + mL + '" y="' + zy1 + '" width="' + plotW + '" height="' + (zy2-zy1) + '" fill="rgba(240,185,11,0.06)"/>');
@@ -12022,9 +12157,10 @@ function ldBuildChartSvg(sym) {
     parts.push('<line x1="' + mL + '" y1="' + ly + '" x2="' + (W - mR) + '" y2="' + ly + '" stroke="' + color + '" stroke-width="0.8"' + da + '/>');
     parts.push('<text x="' + (W - mR + 2) + '" y="' + (ly + 3) + '" fill="' + color + '" font-family="monospace" font-size="6.5">' + ldEsc(lbl) + '</text>');
   }
-  levelLine(engB.tp,    'rgba(14,203,129,0.7)',  '4,2', 'TP');
-  levelLine(engB.entry, 'rgba(240,185,11,0.8)',  null,  'ENT');
-  levelLine(engB.sl,    'rgba(246,70,93,0.7)',   '4,2', 'SL');
+  levelLine(levels.tp1 || levels.tp || engB.tp, 'rgba(14,203,129,0.7)', '4,2', 'TP1');
+  levelLine(levels.tp2, 'rgba(14,203,129,0.45)', '2,3', 'TP2');
+  levelLine(levels.entry || engB.entry, 'rgba(240,185,11,0.8)', null, 'ENT');
+  levelLine(levels.sl || engB.sl, 'rgba(246,70,93,0.7)', '4,2', 'SL');
   levelLine(vp.poc,     'rgba(34,211,238,0.6)',  '2,3', 'POC');
   levelLine(vp.vah,     'rgba(34,211,238,0.35)', '1,4', 'VAH');
   levelLine(vp.val,     'rgba(34,211,238,0.35)', '1,4', 'VAL');
@@ -12115,7 +12251,7 @@ window.ldSelectCard = ldSelectCard;
 function ldShowDetail(sym) {
   var sidePanel   = document.getElementById('ldSidePanel');
   var detailPanel = document.getElementById('ldDetailPanel');
-  if (sidePanel)   sidePanel.style.display   = 'none';
+  if (sidePanel)   sidePanel.style.display   = '';
   if (detailPanel) detailPanel.style.display = 'block';
   ldUpdateDetailPrice(sym);
   ldRenderDetailTab(sym, _ldCurrentTab);
@@ -12175,7 +12311,12 @@ function ldRenderDetailTab(sym, tab) {
 // ── Tab content renderers ─────────────────────────────────────────────────────
 function ldTabOverview(sym) {
   var a = sym.engineA||{}, b = sym.engineB||{}, c = sym.engineC||{}, d = sym.engineD||{}, fr = sym.freshness||{};
-  return '<div class="ld-section-head">Market</div>'
+  var ex = sym.executableState || {};
+  return '<div class="ld-section-head">Control State</div>'
+    + ldKV('Final State', sym.finalState || 'NO SETUP', sym.finalState==='PAPER CANDIDATE'?'bull':sym.finalState==='WATCHLIST'?'warn':sym.finalState==='BLOCKED'?'bear':'')
+    + ldKV('Main Reason', sym.mainReason || 'not verified')
+    + ldKV('Block Reason', sym.blockReason || ex.disabledReason || 'none', (sym.blockReason||ex.disabledReason)?'bear':'')
+    + '<div class="ld-section-head">Market</div>'
     + ldKV('Symbol', sym.symbol)
     + ldKV('Asset Type', sym.asset_type)
     + ldKV('Source', sym.source)
@@ -12188,10 +12329,14 @@ function ldTabOverview(sym) {
     + ldKV('Engine A Score',  a.score != null ? parseFloat(a.score).toFixed(2) : '—', a.passed?'bull':'')
     + ldKV('Engine B Passed', b.confidencePassed===true?'YES':'NO', b.confidencePassed===true?'bull':'bear')
     + ldKV('Engine C State',  c.decisionState||'NO_SETUP', c.decisionState==='ALIGNED'?'bull':c.decisionState==='CONFLICT'?'bear':'')
+    + ldKV('Conviction', c.conviction != null ? parseFloat(c.conviction).toFixed(2) : (a.conviction != null ? a.conviction : '---'))
+    + ldKV('RR', (sym.levels||{}).rr != null ? parseFloat((sym.levels||{}).rr).toFixed(2) : '---', 'cyan')
     + ldKV('Engine D Gate',   (d.gateResult||'—') + (d.grade?' '+d.grade:''), d.gateResult==='PASS'?'bull':'')
     + '<div class="ld-section-head">Safety</div>'
     + ldKV('Freshness Gate', fr.gateDecision||'—', fr.gateDecision==='ALLOW'?'bull':'bear')
-    + ldKV('Paper Position', (sym.paper||{}).hasOpenPaperPosition ? 'YES' : 'NO', (sym.paper||{}).hasOpenPaperPosition?'warn':'');
+    + ldKV('Paper Position', (sym.paperPosition||sym.paper||{}).hasOpenPaperPosition ? 'OPEN' : 'NONE', (sym.paperPosition||sym.paper||{}).hasOpenPaperPosition?'warn':'')
+    + ldKV('Paper Execute', ex.canPaperExecute ? 'ENABLED' : 'DISABLED', ex.canPaperExecute?'bull':'bear')
+    + ldKV('Real Orders', ex.canRealExecute ? 'ENABLED' : 'BLOCKED', ex.canRealExecute?'bear':'bull');
 }
 
 function ldTabLevels(sym) {
@@ -12277,6 +12422,16 @@ function ldTabEngineD(sym) {
     + ldKV('VAL', vp.val != null ? ldFmtPrice(vp.val) : '—')
     + ldKV('Market State',  d.marketState||'—')
     + ldKV('CVD Available', d.cvdAvailable===true?'YES':'NO')
+    + ldKV('CVD Bias', d.cvdBias || '---')
+    + ldKV('Absorption', d.absorptionDetected===true?'YES':'NO')
+    + ldKV('Spread', d.spread != null ? d.spread : '---')
+    + ldKV('RR', d.rr != null ? parseFloat(d.rr).toFixed(2) : '---')
+    + '<div class="ld-section-head">Missing Data</div>'
+    + ldList(d.missingData || [])
+    + '<div class="ld-section-head">Fail Reasons</div>'
+    + ldList(d.failReasons || [])
+    + '<div class="ld-section-head">Diagnostic Notes</div>'
+    + ldList(d.diagnosticNotes || [])
     + (d.softWarnings && d.softWarnings.length
         ? '<div class="ld-section-head">Soft Warnings</div>' + d.softWarnings.map(function(w){
             return '<div style="color:#f0b90b;font-size:9px;padding:2px 0;">⚠ ' + ldEsc(w) + '</div>'; }).join('') : '');
@@ -12294,13 +12449,13 @@ function ldTabAI(sym) {
 }
 
 function ldTabExecute(sym) {
-  var c = sym.engineC||{}, a = sym.engineA||{}, b = sym.engineB||{};
-  var canExec = (sym.freshness||{}).gateDecision === 'ALLOW';
+  var c = sym.engineC||{}, a = sym.engineA||{}, b = sym.engineB||{}, l = sym.levels||{}, ex = sym.executableState||{};
+  var canExec = ex.canPaperExecute === true;
   var dir   = a.direction || b.direction || '—';
-  var entry = b.entry || a.entry;
-  var sl    = b.sl;
-  var tp    = b.tp;
-  var rr    = b.rr;
+  var entry = l.entry || b.entry || a.entry;
+  var sl    = l.sl || b.sl || a.sl;
+  var tp    = l.tp1 || l.tp || b.tp || a.tp;
+  var rr    = l.rr || b.rr || a.rr;
   return '<div class="ld-exec-warn">'
     + '📄 <strong>PAPER MODE ONLY</strong> — This logs a paper trade entry.<br>'
     + 'No real orders will be placed. REAL_ORDERS_ALLOWED=false enforced server-side.'
@@ -12312,21 +12467,40 @@ function ldTabExecute(sym) {
     + ldKV('Stop Loss',   sl != null ? ldFmtPrice(sl) : '—', 'bear')
     + ldKV('Take Profit', tp != null ? ldFmtPrice(tp) : '—', 'bull')
     + ldKV('RR',          rr != null ? parseFloat(rr).toFixed(2) : '—', 'cyan')
+    + ldKV('Suggested Qty', ex.volume || ex.suggestedQty || 'backend risk_check')
+    + ldKV('Risk %', ex.riskPct || ex.riskStatus || 'NOT_CHECKED')
     + ldKV('Engine C',    c.decisionState||'NO_SETUP', c.decisionState==='ALIGNED'?'bull':'bear')
     + ldKV('Freshness',   (sym.freshness||{}).gateDecision||'—', canExec?'bull':'bear')
+    + '<div class="ld-section-head">Gates</div>'
+    + ldKV('Freshness Gate', ex.freshnessStatus || (sym.freshness||{}).gateDecision || '---', (sym.freshness||{}).gateDecision==='ALLOW'?'bull':'bear')
+    + ldKV('Risk Gate', ex.riskStatus || 'NOT_CHECKED', ex.riskStatus==='OK'?'bull':ex.riskStatus==='NOT_CHECKED'?'warn':'bear')
+    + ldKV('Paper Mode', ex.paperMode ? 'ON' : 'OFF', ex.paperMode?'bull':'bear')
+    + ldKV('Real Orders', ex.realOrdersAllowed ? 'ALLOWED' : 'BLOCKED', ex.realOrdersAllowed?'bear':'bull')
+    + ldKV('Disabled Reason', ex.disabledReason || 'none', ex.disabledReason?'bear':'bull')
+    + '<button class="ld-exec-btn" type="button">ADD TO WATCHLIST</button>'
+    + '<button class="ld-exec-btn" type="button">IGNORE</button>'
     + '<div id="ldExecResult"></div>'
     + '<button class="ld-exec-btn" id="ldExecPaperBtn"'
-    + (!canExec ? ' disabled title="Freshness gate blocked"' : '')
-    + '>📄 LOG PAPER ENTRY</button>';
+    + (!canExec ? ' disabled title="' + ldEsc(ex.disabledReason || 'Paper execute blocked') + '"' : '')
+    + '>PAPER EXECUTE</button>';
 }
 
 function ldTabDiagnostics(sym) {
   var fr = sym.freshness||{};
-  return '<div class="ld-section-head">Freshness</div>'
+  var snap = _ldLastSnapshot || {};
+  return '<div class="ld-section-head">Payload</div>'
+    + ldKV('payloadVersion', snap.payloadVersion || '---')
+    + ldKV('source', sym.source || '---')
+    + ldKV('offset hours', (sym.chart||{}).h4GridOffsetHours != null ? (sym.chart||{}).h4GridOffsetHours : '---')
+    + '<div class="ld-section-head">Freshness</div>'
     + ldKV('Consistency Status', fr.consistencyStatus||'—', fr.gateDecision==='ALLOW'?'bull':'bear')
     + ldKV('Policy Status',      fr.policyStatus||'—')
     + ldKV('Gate Decision',      fr.gateDecision||'—', fr.gateDecision==='ALLOW'?'bull':'bear')
     + ldKV('Block Reason',       fr.blockReason||'none')
+    + ldKV('Latest Candle',      fr.lastBarIso || (sym.chart||{}).latestConfirmedCandleIso || '---')
+    + ldKV('Confirmed/Forming',  (sym.chart||{}).candlePolicy || '---')
+    + ldKV('candleFetchMeta',    JSON.stringify((sym.chart||{}).candleFetchMeta || {}))
+    + ldKV('candleConsistency',  JSON.stringify(fr.candleConsistency || {}))
     + ldKV('Age (secs)',          fr.ageSecs != null ? fr.ageSecs : '—')
     + '<div class="ld-section-head">Data Source</div>'
     + ldKV('Source',     sym.source||'—', 'cyan')
@@ -12369,11 +12543,11 @@ function ldExecutePaper(sym) {
         resultEl.innerHTML = '✗ ' + ldEsc(d.error || 'Unknown error');
       }
     }
-    if (btn) { btn.disabled = false; btn.textContent = '📄 LOG PAPER ENTRY'; }
+    if (btn) { btn.disabled = !((sym.executableState||{}).canPaperExecute); btn.textContent = 'PAPER EXECUTE'; }
   })
   .catch(function(err){
     if (resultEl) { resultEl.className = 'ld-exec-result err'; resultEl.innerHTML = '✗ ' + ldEsc(String(err)); }
-    if (btn) { btn.disabled = false; btn.textContent = '📄 LOG PAPER ENTRY'; }
+    if (btn) { btn.disabled = !((sym.executableState||{}).canPaperExecute); btn.textContent = 'PAPER EXECUTE'; }
   });
 }
 window.ldExecutePaper = ldExecutePaper;
@@ -12384,6 +12558,28 @@ function ldKV(key, val, valCls) {
     + '<span class="ld-kv-key">' + ldEsc(key) + '</span>'
     + '<span class="ld-kv-val' + (valCls ? ' ' + valCls : '') + '">' + ldEsc(String(val != null ? val : '—')) + '</span>'
     + '</div>';
+}
+
+function ldRenderStatusTiles(d) {
+  var el = document.getElementById('ldStatusTiles');
+  if (!el) return;
+  var symbols = d.symbols || [];
+  var paperReady = symbols.filter(function(s){ return (s.executableState||{}).canPaperExecute === true; }).length;
+  var blocked = symbols.filter(function(s){ return s.finalState === 'BLOCKED'; }).length;
+  var fresh = d.freshnessAllOk !== false ? 'POLICY OK' : 'CHECK BLOCKS';
+  el.innerHTML = ''
+    + '<div class="ld-status-tile"><div class="k">Dashboard Status</div><div class="v">LIVE</div></div>'
+    + '<div class="ld-status-tile"><div class="k">Freshness Gate</div><div class="v">' + ldEsc(fresh) + '</div></div>'
+    + '<div class="ld-status-tile"><div class="k">Paper Candidates</div><div class="v">' + paperReady + '</div></div>'
+    + '<div class="ld-status-tile"><div class="k">Blocked</div><div class="v">' + blocked + '</div></div>';
+}
+
+function ldList(items) {
+  items = items || [];
+  if (!items.length) return '<div style="color:var(--muted);font-size:9px;">None</div>';
+  return items.map(function(x){
+    return '<div style="color:var(--muted);font-size:9px;padding:2px 0;">- ' + ldEsc(x) + '</div>';
+  }).join('');
 }
 
 // ── Event feed ────────────────────────────────────────────────────────────────

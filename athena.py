@@ -180,6 +180,8 @@ from candle_feeds import (  # noqa: E402
     EODHDWebSocketManager,
     _live_prices,
     _live_prices_lock,
+    _run_binance_price_poller,
+    _run_mt5_tick_poller,
     fetch_candles_live,
     get_candle_builder,
     resolve_binance_kline_ws_intervals,
@@ -13993,16 +13995,23 @@ def _ld_empty_engine_a() -> dict:
         "score": None, "maxScore": None, "threshold": None,
         "direction": None, "passed": False,
         "factorScores": {"trend": None, "momentum": None, "addon": None},
-        "adxValue": None, "sessionMultiplier": None, "conviction": None,
+        "trendScore": None, "momentumScore": None, "addonScore": None,
+        "adxValue": None, "adxGate": None, "sessionMultiplier": None, "conviction": None,
+        "entry": None, "sl": None, "tp": None, "tp1": None, "tp2": None, "rr": None,
         "failReasons": [],
+        "freshnessPolicyStatus": None,
     }
 
 
 def _ld_empty_engine_b() -> dict:
     return {
         "score": None, "maxScore": None, "threshold": None,
-        "direction": None, "structuralVerdict": None, "confidencePassed": False,
+        "direction": None, "structuralVerdict": None, "structuralDataValid": False,
+        "confidencePassed": False,
+        "structure_ok": False, "location_ok": False, "entry_ok": False,
+        "room_rr_ok": False, "d1_conflict": None,
         "hardFailReasons": [], "softWarnings": [], "diagnosticNotes": [],
+        "noTriggerClassification": None,
         "entry": None, "sl": None, "tp": None, "rr": None,
     }
 
@@ -14011,6 +14020,8 @@ def _ld_empty_engine_c() -> dict:
     return {
         "decisionState": "NO_SETUP", "consensusType": None,
         "conviction": None, "tier": None, "trade": False, "reason": None,
+        "engineAContribution": None, "engineBContribution": None,
+        "engineBChecklistPassed": False, "watchlistReason": None, "blockReason": None,
     }
 
 
@@ -14018,9 +14029,95 @@ def _ld_empty_engine_d() -> dict:
     return {
         "enabled": True, "gateResult": "DATA_MISSING",
         "grade": None, "score": None, "setupType": None,
-        "failReasons": [], "softWarnings": [],
+        "spread": None, "rr": None, "direction": None,
+        "failReasons": [], "softWarnings": [], "diagnosticNotes": [],
+        "missingData": ["engine_d_cache_missing"],
         "vp": {"vah": None, "poc": None, "val": None},
-        "cvdAvailable": None, "absorptionDetected": None,
+        "nearPoc": None, "nearVah": None, "nearVal": None,
+        "cvdAvailable": None, "cvdBias": None, "absorptionDetected": None,
+    }
+
+
+def _ld_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(v) for v in value if v is not None and str(v)]
+    if isinstance(value, tuple):
+        return [str(v) for v in value if v is not None and str(v)]
+    if isinstance(value, str):
+        return [value] if value else []
+    return [str(value)]
+
+
+def _ld_has_valid_levels(levels: dict | None) -> bool:
+    if not isinstance(levels, dict):
+        return False
+    try:
+        entry = float(levels.get("entry"))
+        sl = float(levels.get("sl"))
+        tp = float(levels.get("tp") if levels.get("tp") is not None else levels.get("tp1"))
+        rr = float(levels.get("rr"))
+    except (TypeError, ValueError):
+        return False
+    return bool(entry and sl and tp and rr > 0 and entry != sl)
+
+
+def _ld_final_state(engine_c: dict, engine_d: dict, freshness: dict, levels: dict) -> tuple[str, str | None, str | None]:
+    c_state = engine_c.get("decisionState") or "NO_SETUP"
+    d_gate = engine_d.get("gateResult") or "DATA_MISSING"
+    if freshness.get("gateDecision") != "ALLOW":
+        return "BLOCKED", "Freshness gate blocked", freshness.get("blockReason") or freshness.get("consistencyStatus")
+    if d_gate == "DATA_MISSING":
+        missing = ", ".join(_ld_list(engine_d.get("missingData"))) or "Engine D data missing"
+        return "BLOCKED", "Engine D data missing", missing
+    if c_state == "BLOCKED" or d_gate == "BLOCKED":
+        return "BLOCKED", engine_c.get("blockReason") or "Engine gate blocked", engine_c.get("blockReason") or (engine_d.get("failReasons") or [None])[0]
+    if c_state in ("A_ONLY", "B_ONLY", "WATCHLIST") or d_gate == "WATCHLIST":
+        return "WATCHLIST", engine_c.get("watchlistReason") or engine_c.get("reason") or "Watchlist only", None
+    if c_state == "ALIGNED" and _ld_has_valid_levels(levels):
+        return "PAPER CANDIDATE", "Aligned paper candidate", None
+    return "NO SETUP", engine_c.get("reason") or "No executable setup", None
+
+
+def _ld_executable_state(symbol_row: dict, risk_reason: str | None = None) -> dict:
+    paper_soak = CONFIG.get("PAPER_SOAK") or {}
+    paper_enabled = bool(paper_soak.get("ENABLED", True))
+    real_allowed = bool(CONFIG.get("REAL_ORDERS_ALLOWED", False))
+    freshness = symbol_row.get("freshness") or {}
+    engine_c = symbol_row.get("engineC") or {}
+    engine_d = symbol_row.get("engineD") or {}
+    levels = symbol_row.get("levels") or {}
+    final_state = symbol_row.get("finalState") or "NO SETUP"
+
+    disabled_reason = None
+    if not paper_enabled:
+        disabled_reason = "PAPER_SOAK.ENABLED_FALSE"
+    elif real_allowed:
+        disabled_reason = "REAL_ORDERS_ALLOWED_TRUE"
+    elif freshness.get("gateDecision") != "ALLOW":
+        disabled_reason = freshness.get("blockReason") or "FRESHNESS_BLOCK"
+    elif engine_c.get("decisionState") in ("BLOCKED", "WATCHLIST"):
+        disabled_reason = "ENGINE_C_" + str(engine_c.get("decisionState"))
+    elif engine_d.get("gateResult") == "DATA_MISSING":
+        disabled_reason = "ENGINE_D_DATA_MISSING: " + (", ".join(_ld_list(engine_d.get("missingData"))) or "missing_data")
+    elif engine_d.get("gateResult") == "BLOCKED":
+        disabled_reason = "ENGINE_D_BLOCKED"
+    elif final_state in ("BLOCKED", "WATCHLIST", "NO SETUP"):
+        disabled_reason = final_state.replace(" ", "_")
+    elif not _ld_has_valid_levels(levels):
+        disabled_reason = "INVALID_LEVELS"
+    elif risk_reason and risk_reason != "OK":
+        disabled_reason = "RISK_" + risk_reason
+
+    return {
+        "canPaperExecute": disabled_reason is None,
+        "canRealExecute": False,
+        "disabledReason": disabled_reason,
+        "riskStatus": risk_reason or "NOT_CHECKED",
+        "freshnessStatus": freshness.get("gateDecision") or "BLOCK",
+        "paperMode": paper_enabled,
+        "realOrdersAllowed": real_allowed,
     }
 
 
@@ -14058,10 +14155,21 @@ def _ld_build_engine_a_row(sig: dict) -> dict:
             "momentum": factor_scores.get("momentum"),
             "addon": factor_scores.get("addon"),
         },
+        "trendScore": factor_scores.get("trend"),
+        "momentumScore": factor_scores.get("momentum"),
+        "addonScore": factor_scores.get("addon"),
         "adxValue": sig.get("adxValue"),
+        "adxGate": sig.get("adxGate") or sig.get("adx_gate"),
         "sessionMultiplier": sig.get("sessionMultiplier"),
         "conviction": sig.get("conviction"),
+        "entry": sig.get("entry"),
+        "sl": sig.get("sl"),
+        "tp": sig.get("tp") or sig.get("tp1"),
+        "tp1": sig.get("tp1") or sig.get("tp"),
+        "tp2": sig.get("tp2"),
+        "rr": sig.get("rr"),
         "failReasons": fail_reasons,
+        "freshnessPolicyStatus": (sig.get("dataFreshness") or {}).get("policyStatus"),
     }
 
 
@@ -14070,6 +14178,8 @@ def _ld_build_engine_b_row(sig_b: dict) -> dict:
     if not sig_b:
         return _ld_empty_engine_b()
     conf = sig_b.get("confidence") or {}
+    checklist = sig_b.get("checklist") or conf.get("checklist") or {}
+    structural_verdict = sig_b.get("structural_verdict")
     score = (sig_b.get("confidence_score") or conf.get("score") or
              sig_b.get("score"))
     max_score = sig_b.get("confidence_max") or conf.get("max_score") or sig_b.get("max_score")
@@ -14079,14 +14189,21 @@ def _ld_build_engine_b_row(sig_b: dict) -> dict:
         "maxScore": max_score,
         "threshold": sig_b.get("min_score"),
         "direction": sig_b.get("direction"),
-        "structuralVerdict": sig_b.get("structural_verdict"),
+        "structuralVerdict": structural_verdict,
+        "structuralDataValid": bool(sig_b.get("structural_data_valid") or structural_verdict),
         "confidencePassed": confidence_passed,
-        "hardFailReasons": (conf.get("hard_fail_reasons") or
-                            sig_b.get("hard_fail_reasons") or []),
-        "softWarnings": (conf.get("soft_warnings") or
-                         sig_b.get("soft_warnings") or []),
-        "diagnosticNotes": (conf.get("diagnostic_notes") or
-                            sig_b.get("diagnostic_notes") or []),
+        "structure_ok": bool(checklist.get("structure_ok") or sig_b.get("structure_ok")),
+        "location_ok": bool(checklist.get("location_ok") or sig_b.get("location_ok")),
+        "entry_ok": bool(checklist.get("entry_ok") or sig_b.get("entry_ok")),
+        "room_rr_ok": bool(checklist.get("room_rr_ok") or checklist.get("room_ok") or sig_b.get("room_rr_ok")),
+        "d1_conflict": checklist.get("d1_conflict") if "d1_conflict" in checklist else sig_b.get("d1_conflict"),
+        "hardFailReasons": _ld_list(conf.get("hard_fail_reasons") or
+                                    sig_b.get("hard_fail_reasons")),
+        "softWarnings": _ld_list(conf.get("soft_warnings") or
+                                 sig_b.get("soft_warnings")),
+        "diagnosticNotes": _ld_list(conf.get("diagnostic_notes") or
+                                    sig_b.get("diagnostic_notes")),
+        "noTriggerClassification": sig_b.get("no_trigger_classification") or sig_b.get("no_trigger"),
         "entry": sig_b.get("entry"),
         "sl": sig_b.get("sl"),
         "tp": sig_b.get("tp"),
@@ -14141,6 +14258,12 @@ def _ld_derive_engine_c_state(a_row: dict, b_row: dict) -> dict:
         "conviction": conviction_f if state == "ALIGNED" else None,
         "tier": tier,
         "trade": False,  # Dashboard never creates execution permission
+        "engineAContribution": a_row.get("score"),
+        "engineBContribution": b_row.get("score"),
+        "engineBChecklistPassed": bool(b_row.get("confidencePassed")),
+        "watchlistReason": ("single_engine_only" if state in ("A_ONLY", "B_ONLY")
+                            else ("engine_conflict" if state == "CONFLICT" else None)),
+        "blockReason": None,
         "reason": (f"{direction} — {state}" if state != "NO_SETUP" else "no engine setup"),
     }
 
@@ -14159,7 +14282,8 @@ def _ld_build_engine_d_row(scalp_cached: dict, pair: dict) -> dict:
     soft_warnings = ["DATA_LIMITED_NON_CRYPTO"] if limited_data else []
 
     if is_stale:
-        return {**_ld_empty_engine_d(), "softWarnings": soft_warnings}
+        return {**_ld_empty_engine_d(), "softWarnings": soft_warnings,
+                "missingData": ["engine_d_cache_stale_or_missing"]}
 
     if scalp_cached.get("_skipped"):
         reason_raw = scalp_cached.get("reason") or "BLOCKED"
@@ -14167,9 +14291,14 @@ def _ld_build_engine_d_row(scalp_cached: dict, pair: dict) -> dict:
         return {
             "enabled": True, "gateResult": "BLOCKED",
             "grade": None, "score": None, "setupType": None,
+            "spread": scalp_cached.get("spread"), "rr": scalp_cached.get("rr1") or scalp_cached.get("rr"),
+            "direction": scalp_cached.get("direction"),
             "failReasons": fail_reasons, "softWarnings": soft_warnings,
+            "diagnosticNotes": _ld_list(scalp_cached.get("diagnostic_notes")),
+            "missingData": _ld_list(scalp_cached.get("missing_data")),
             "vp": {"vah": None, "poc": None, "val": None},
-            "cvdAvailable": False, "absorptionDetected": False,
+            "nearPoc": None, "nearVah": None, "nearVal": None,
+            "cvdAvailable": False, "cvdBias": None, "absorptionDetected": False,
         }
 
     grade = scalp_cached.get("ai_grade")
@@ -14189,14 +14318,23 @@ def _ld_build_engine_d_row(scalp_cached: dict, pair: dict) -> dict:
         "grade": grade,
         "score": score,
         "setupType": scalp_cached.get("zone_type") or scalp_cached.get("setup_type"),
-        "failReasons": scalp_cached.get("ai_reasons") or [],
+        "spread": scalp_cached.get("spread"),
+        "rr": scalp_cached.get("rr1") or scalp_cached.get("rr"),
+        "direction": scalp_cached.get("direction"),
+        "failReasons": _ld_list(scalp_cached.get("ai_reasons")),
         "softWarnings": soft_warnings,
+        "diagnosticNotes": _ld_list(scalp_cached.get("diagnostic_notes")),
+        "missingData": _ld_list(scalp_cached.get("missing_data")),
         "vp": {
             "vah": scalp_cached.get("vp_vah"),
             "poc": scalp_cached.get("vp_poc"),
             "val": scalp_cached.get("vp_val"),
         },
+        "nearPoc": bool(scalp_cached.get("near_poc")) if scalp_cached.get("near_poc") is not None else None,
+        "nearVah": bool(scalp_cached.get("near_vah")) if scalp_cached.get("near_vah") is not None else None,
+        "nearVal": bool(scalp_cached.get("near_val")) if scalp_cached.get("near_val") is not None else None,
         "cvdAvailable": scalp_cached.get("cvd_direction") is not None,
+        "cvdBias": scalp_cached.get("cvd_direction"),
         "absorptionDetected": bool((scalp_cached.get("absorption_count") or 0) > 0),
     }
 
@@ -14253,6 +14391,7 @@ def _ld_freshness_row(pair: dict, tf: str, candles: list | None, provider_error:
             "blockReason": block_reason,
             "bucketLag": diag.get("bucketLag"),
             "lastBarIso": diag.get("lastBarIso"),
+            "candleConsistency": diag,
         }
     except Exception as exc:
         return {
@@ -14300,6 +14439,41 @@ def _ld_binance_ws_live() -> bool:
         return bool(t is not None and t.is_alive())
     except Exception:
         return False
+
+
+def _ld_open_paper_positions() -> list[dict]:
+    rows: list[dict] = []
+    try:
+        with sqlite3.connect(_AUDIT_DB, timeout=5.0) as con:
+            con.row_factory = sqlite3.Row
+            for row in con.execute(
+                "SELECT pair, entry_price, sl, tp FROM audit_log "
+                "WHERE grade LIKE 'LD-PAPER%' AND exit_price IS NULL"
+            ).fetchall():
+                entry = row["entry_price"]
+                sl = row["sl"]
+                risk_amount = 0.0
+                try:
+                    risk_amount = abs(float(entry or 0) - float(sl or 0))
+                except (TypeError, ValueError):
+                    risk_amount = 0.0
+                rows.append({"pair": row["pair"], "entry": entry, "sl": sl, "tp": row["tp"], "risk_amount": risk_amount})
+    except Exception:
+        return []
+    return rows
+
+
+def _ld_resolve_pair(symbol: str) -> dict | None:
+    sym_upper = str(symbol or "").upper()
+    for p in ALL_PAIRS:
+        keys = {
+            str(p.get("display", "")).upper(),
+            str(p.get("symbol", "")).upper(),
+            str(p.get("pair", "")).upper(),
+        }
+        if sym_upper in keys:
+            return p
+    return None
 
 
 @app.route("/api/live-dashboard/snapshot")
@@ -14383,7 +14557,20 @@ def api_live_dashboard_snapshot():
                               "gateDecision": "BLOCK", "blockReason": "symbol_not_found"},
                 "engineA": _ld_empty_engine_a(), "engineB": _ld_empty_engine_b(),
                 "engineC": _ld_empty_engine_c(), "engineD": _ld_empty_engine_d(),
+                "aiReview": {},
+                "paperPosition": {"hasOpenPaperPosition": False, "entry": None, "sl": None, "tp": None, "pnl": None},
                 "paper": {"hasOpenPaperPosition": False, "entry": None, "sl": None, "tp": None, "pnl": None},
+                "levels": {},
+                "finalState": "BLOCKED",
+                "mainReason": "symbol_not_found",
+                "blockReason": "symbol_not_found",
+                "executableState": {
+                    "canPaperExecute": False, "canRealExecute": False,
+                    "disabledReason": "symbol_not_found", "riskStatus": "NOT_CHECKED",
+                    "freshnessStatus": "BLOCK",
+                    "paperMode": bool((CONFIG.get("PAPER_SOAK") or {}).get("ENABLED", True)),
+                    "realOrdersAllowed": bool(CONFIG.get("REAL_ORDERS_ALLOWED", False)),
+                },
             })
             continue
 
@@ -14520,12 +14707,51 @@ def api_live_dashboard_snapshot():
         _levels: dict = {}
         if engine_b_row.get("entry") is not None:
             _levels = {"entry": engine_b_row.get("entry"), "sl": engine_b_row.get("sl"),
-                       "tp": engine_b_row.get("tp"), "rr": engine_b_row.get("rr"),
+                       "tp": engine_b_row.get("tp"), "tp1": engine_b_row.get("tp"),
+                       "tp2": None, "rr": engine_b_row.get("rr"),
                        "source": "engineB"}
         elif sig_a.get("entry") is not None:
             _levels = {"entry": sig_a.get("entry"), "sl": sig_a.get("sl"),
-                       "tp": sig_a.get("tp"), "rr": sig_a.get("rr"),
+                       "tp": sig_a.get("tp") or sig_a.get("tp1"),
+                       "tp1": sig_a.get("tp1") or sig_a.get("tp"),
+                       "tp2": sig_a.get("tp2"), "rr": sig_a.get("rr"),
                        "source": "engineA"}
+
+        if chart_row is not None:
+            chart_row["levels"] = {
+                "entry": _levels.get("entry"),
+                "sl": _levels.get("sl"),
+                "tp1": _levels.get("tp1") or _levels.get("tp"),
+                "tp2": _levels.get("tp2"),
+                "live": latest_price,
+                "vah": (engine_d_row.get("vp") or {}).get("vah"),
+                "poc": (engine_d_row.get("vp") or {}).get("poc"),
+                "val": (engine_d_row.get("vp") or {}).get("val"),
+            }
+
+        final_state, main_reason, block_reason = _ld_final_state(
+            engine_c_row, engine_d_row, freshness_result, _levels
+        )
+        _symbol_state = {
+            "freshness": freshness_result,
+            "engineC": engine_c_row,
+            "engineD": engine_d_row,
+            "levels": _levels,
+            "finalState": final_state,
+        }
+        _executable_state_obj = _ld_executable_state(_symbol_state)
+        _ai_review = {
+            "marcusReid": sig_a.get("aiAnalysis") or sig_a.get("analysis"),
+            "engineBAI": (sig_b or {}).get("ai_review"),
+            "signalDebate": sig_a.get("signalDebate") or sig_a.get("debate"),
+            "chartVision": sig_a.get("chartVision") or sig_a.get("vision"),
+            "reviewState": sig_a.get("aiReviewState") or "NOT_VERIFIED",
+            "confidence": sig_a.get("aiConfidence"),
+            "contradictions": _ld_list(sig_a.get("aiContradictions")),
+            "missingInformation": _ld_list(sig_a.get("aiMissingInformation")),
+            "downgradeOnly": True,
+            "affectedExecutionPermission": False,
+        }
 
         # executableState: paper-only — never grants real execution
         _c_state = engine_c_row.get("decisionState", "NO_SETUP")
@@ -14551,13 +14777,18 @@ def api_live_dashboard_snapshot():
             "engineB": engine_b_row,
             "engineC": engine_c_row,
             "engineD": engine_d_row,
+            "aiReview": _ai_review,
+            "paperPosition": paper_row,
             "paper": paper_row,
             "levels": _levels,
-            "executableState": _executable_state,
+            "finalState": final_state,
+            "mainReason": main_reason,
+            "blockReason": block_reason,
+            "executableState": _executable_state_obj,
         })
 
     return jsonify(_json_safe({
-        "payloadVersion": "live-dashboard-v2",
+        "payloadVersion": "live-dashboard-v3",
         "contract": {
             "engineA": "v2_factor_scoring",
             "engineB": "naked_structure",
@@ -14598,6 +14829,7 @@ def api_live_dashboard_paper_execute():
     entry = data.get("entry")
     sl = data.get("sl")
     tp = data.get("tp")
+    rr = data.get("rr")
 
     if not symbol:
         return jsonify({"ok": False, "error": "symbol required"}), 400
@@ -14613,12 +14845,9 @@ def api_live_dashboard_paper_execute():
         pass
 
     # Freshness re-check — find the pair config
-    pair_cfg = None
-    for p in ALL_PAIRS:
-        d = p.get("display") or p.get("pair") or ""
-        if d.upper() == symbol or (p.get("pair") or "").upper() == symbol:
-            pair_cfg = p
-            break
+    pair_cfg = _ld_resolve_pair(symbol)
+    if pair_cfg is None:
+        return jsonify({"ok": False, "allowed": False, "error": "symbol_not_found"}), 404
 
     if pair_cfg is not None:
         try:
@@ -14631,7 +14860,97 @@ def api_live_dashboard_paper_execute():
                     "freshnessStatus": fresh.get("consistencyStatus"),
                 }), 409
         except Exception:
-            pass  # freshness probe failure is non-fatal for paper logging
+            return jsonify({"ok": False, "allowed": False, "error": "Freshness validation failed"}), 409
+
+    display = str(pair_cfg.get("display") or pair_cfg.get("symbol") or symbol)
+    sig_a = {}
+    for _sig in (_last_scan_results.get("signals") or []):
+        _disp = str(_sig.get("display") or _sig.get("pair") or "").upper()
+        if _disp == display.upper():
+            sig_a = _sig
+            break
+    engine_a_row = _ld_build_engine_a_row(sig_a)
+    sig_b = _engine_b_cache_get(display) or _engine_b_cache_get(display.upper()) or {}
+    engine_b_row = _ld_build_engine_b_row(sig_b)
+    engine_c_row = _ld_derive_engine_c_state(engine_a_row, engine_b_row)
+    with _live_dashboard_scalp_cache_lock:
+        scalp_cached = dict(_live_dashboard_scalp_cache.get(display.upper()) or {})
+    engine_d_row = _ld_build_engine_d_row(scalp_cached, pair_cfg)
+
+    if engine_b_row.get("entry") is not None:
+        levels = {"entry": engine_b_row.get("entry"), "sl": engine_b_row.get("sl"),
+                  "tp": engine_b_row.get("tp"), "tp1": engine_b_row.get("tp"),
+                  "rr": engine_b_row.get("rr"), "source": "engineB"}
+    elif engine_a_row.get("entry") is not None:
+        levels = {"entry": engine_a_row.get("entry"), "sl": engine_a_row.get("sl"),
+                  "tp": engine_a_row.get("tp"), "tp1": engine_a_row.get("tp1"),
+                  "tp2": engine_a_row.get("tp2"), "rr": engine_a_row.get("rr"),
+                  "source": "engineA"}
+    else:
+        levels = {"entry": entry, "sl": sl, "tp": tp, "tp1": tp, "rr": rr,
+                  "source": "request_fallback"}
+
+    final_state, main_reason, block_reason = _ld_final_state(engine_c_row, engine_d_row, fresh, levels)
+    exec_state = _ld_executable_state({
+        "freshness": fresh, "engineC": engine_c_row, "engineD": engine_d_row,
+        "levels": levels, "finalState": final_state,
+    })
+    if not exec_state.get("canPaperExecute"):
+        return jsonify({
+            "ok": False,
+            "allowed": False,
+            "error": exec_state.get("disabledReason") or "PAPER_EXECUTE_BLOCKED",
+            "finalState": final_state,
+            "mainReason": main_reason,
+            "blockReason": block_reason,
+            "executableState": exec_state,
+        }), 409
+
+    direction = (engine_a_row.get("direction") or engine_b_row.get("direction") or direction).upper()
+    signal_for_risk = {
+        "pair": display,
+        "type": pair_cfg.get("type"),
+        "direction": direction,
+        "price": levels.get("entry"),
+        "sl": levels.get("sl"),
+        "tp1": levels.get("tp1") or levels.get("tp"),
+        "tp2": levels.get("tp2"),
+        "rr": levels.get("rr"),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "decision_state": engine_c_row.get("decisionState"),
+        "tier": engine_c_row.get("tier"),
+        "verdict": engine_c_row.get("decisionState"),
+        "components": {"b_checklist_passed": bool(engine_b_row.get("confidencePassed"))},
+        "engine_b_status": {"checklist_passed": bool(engine_b_row.get("confidencePassed"))},
+        "dataFreshness": {"allowed": True, "reason": None},
+    }
+    try:
+        from risk_engine import risk_check
+
+        paper_balance = float(paper_cfg.get("ACCOUNT_BALANCE", 10000.0))
+        approval = risk_check(
+            signal=signal_for_risk,
+            account_balance=paper_balance,
+            account_equity=paper_balance,
+            open_positions=_ld_open_paper_positions(),
+            symbol_info=None,
+            kill_switch=_kill_switch,
+            sizing_override=1.0,
+        )
+    except Exception as exc:
+        return jsonify({"ok": False, "allowed": False, "error": f"risk_check failed: {exc}"}), 409
+
+    if not approval.approved:
+        return jsonify({
+            "ok": False,
+            "allowed": False,
+            "error": f"Risk engine rejected: {approval.reason}",
+            "approval": approval.to_dict(),
+            "executableState": _ld_executable_state({
+                "freshness": fresh, "engineC": engine_c_row, "engineD": engine_d_row,
+                "levels": levels, "finalState": final_state,
+            }, approval.reason),
+        }), 409
 
     now_ts = datetime.now(timezone.utc).isoformat()
     log_id = None
@@ -14642,11 +14961,11 @@ def api_live_dashboard_paper_execute():
                 """INSERT INTO audit_log
                    (ts, pair, direction, grade, style, asset_class, entry_price, sl, tp)
                    VALUES (?,?,?,?,?,?,?,?,?)""",
-                (now_ts, symbol, direction, "LD-PAPER-EXECUTE", "paper",
+                (now_ts, display, direction, "LD-PAPER-EXECUTE", "paper",
                  pair_cfg.get("type") if pair_cfg else None,
-                 float(entry) if entry is not None else None,
-                 float(sl) if sl is not None else None,
-                 float(tp) if tp is not None else None),
+                 float(levels.get("entry")) if levels.get("entry") is not None else None,
+                 float(levels.get("sl")) if levels.get("sl") is not None else None,
+                 float(levels.get("tp")) if levels.get("tp") is not None else None),
             )
             con.commit()
             log_id = cur.lastrowid
@@ -14655,10 +14974,12 @@ def api_live_dashboard_paper_execute():
 
     return jsonify({
         "ok": True,
+        "allowed": True,
         "log_id": log_id,
-        "symbol": symbol,
+        "symbol": display,
         "direction": direction,
         "grade": "LD-PAPER-EXECUTE",
+        "approval": approval.to_dict(),
         "timestamp": now_ts,
         "note": "Paper log only — no broker order placed",
     })
@@ -15003,6 +15324,12 @@ def ensure_runtime_services_started() -> None:
 
     _start_eodhd_volume_warmer()
 
+    # MT5 tick poller — keeps forex/commodity/index/stock prices fresh in
+    # _live_prices independent of /api/candles traffic.
+    threading.Thread(
+        target=_run_mt5_tick_poller, daemon=True, name="mt5-price-poll"
+    ).start()
+
     # Start Binance Futures WebSocket for crypto live prices + kline candles
     crypto_enabled = [p for p in CRYPTO_PAIRS if p.get("enabled", True)]
     if crypto_enabled:
@@ -15015,6 +15342,11 @@ def ensure_runtime_services_started() -> None:
             intervals=selected_intervals,
         )
         _binance_candle_ws.start()
+        # REST fallback poller — runs in parallel with the !ticker@arr WS so crypto
+        # prices keep flowing even if the WS is in a silent reconnect loop.
+        threading.Thread(
+            target=_run_binance_price_poller, daemon=True, name="binance-price-poll"
+        ).start()
         log.info(
             "[BINANCE-WS] Price feed active; kline scope symbols=%s tfs=%s (enabled_crypto=%s)",
             len(selected_symbols),

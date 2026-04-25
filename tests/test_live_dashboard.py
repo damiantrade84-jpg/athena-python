@@ -5,7 +5,7 @@ a live broker, MT5, or Binance connection.
 
 Covered:
 - /api/live-dashboard/snapshot endpoint is registered (GET)
-- payloadVersion is live-dashboard-v1
+- payloadVersion is live-dashboard-v3
 - paperMode contract fields present
 - snapshot endpoint never calls order-placement functions
 - CONFIRMED_ONLY_OK maps to ALLOW gate (not BLOCK)
@@ -111,8 +111,8 @@ def test_snapshot_docstring_states_no_orders():
 
 def test_payload_version_string_present():
     src = _src()
-    assert '"live-dashboard-v2"' in src or "'live-dashboard-v2'" in src, (
-        "payloadVersion 'live-dashboard-v2' not found in athena.py"
+    assert '"live-dashboard-v3"' in src or "'live-dashboard-v3'" in src, (
+        "payloadVersion 'live-dashboard-v3' not found in athena.py"
     )
 
 
@@ -299,7 +299,7 @@ def test_symbol_not_found_returns_row_not_500():
     # Look in a wider window since the dict literal itself can be large.
     idx = src.find('"symbol_not_found"')
     assert idx != -1
-    snippet = src[idx: idx + 700]
+    snippet = src[idx: idx + 2200]
     assert "continue" in snippet, (
         "After appending symbol_not_found row, must `continue` to next symbol"
     )
@@ -440,7 +440,7 @@ def test_paper_execute_never_calls_broker():
     assert fn_node is not None, "api_live_dashboard_paper_execute function not found"
 
     forbidden = {
-        "mt5_execute", "bybit_execute", "risk_check", "api_execute",
+        "mt5_execute", "bybit_execute", "api_execute",
         "api_quick_execute", "place_order", "send_order", "open_position",
         "close_position", "mt5_send_order", "bybit_send_order",
     }
@@ -472,6 +472,47 @@ def test_paper_execute_enforces_real_orders_blocked():
     )
     # Must return 403 when real orders are allowed
     assert "403" in fn_body, "paper-execute must return HTTP 403 when REAL_ORDERS_ALLOWED=true"
+
+
+def test_snapshot_v3_executable_state_shape():
+    src = _src()
+    assert '"canPaperExecute"' in src
+    assert '"canRealExecute"' in src
+    assert '"disabledReason"' in src
+    assert '"riskStatus"' in src
+    assert '"freshnessStatus"' in src
+    assert '"paperMode"' in src
+    assert '"realOrdersAllowed"' in src
+
+
+def test_paper_execute_calls_risk_check_and_blocks_states():
+    src = _src()
+    idx = src.find("def api_live_dashboard_paper_execute(")
+    assert idx != -1
+    fn_end = src.find("\n@app.route", idx + 1)
+    fn_body = src[idx:fn_end] if fn_end != -1 else src[idx:]
+    assert "risk_check(" in fn_body
+    assert "DATA_MISSING" in src
+    assert "WATCHLIST" in src
+    assert "BLOCKED" in src
+    assert "_ld_executable_state" in fn_body
+
+
+def test_frontend_execute_uses_executable_state():
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    assert "PAPER EXECUTE" in html
+    assert "canPaperExecute" in html
+    assert "canRealExecute" in html
+    assert "ADD TO WATCHLIST" in html
+    assert "IGNORE" in html
+
+
+def test_engine_d_missing_reasons_visible():
+    src = _src()
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    assert '"missingData"' in src
+    assert "Missing Data" in html
+    assert "Engine D missing" in html
 
 
 # ── Phase 9: py_compile check ────────────────────────────────────────────────

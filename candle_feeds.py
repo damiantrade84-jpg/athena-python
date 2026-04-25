@@ -169,6 +169,165 @@ def _fetch_eodhd_live_prices(pairs: list) -> None:
             log.warning(f"[PRICE-POLL] EODHD batch {i // 15 + 1} error: {_e}")
 
 
+# Tracks last successful WS recv per feed so health checks can distinguish
+# "thread alive" from "actually receiving messages".
+_binance_ws_last_recv_ts: float = 0.0
+
+
+def _run_mt5_tick_poller(poll_interval: float = 1.5):
+    """Background daemon: poll MT5 symbol_info_tick for every enabled MT5 pair
+    and write bid/ask/mid into _live_prices. Forex/commodity/index/stock prices
+    only landed in _live_prices as a side effect of fetch_mt5() before this; this
+    keeps them continuously fresh independent of /api/candles traffic.
+    """
+    log.info("[MT5-PRICE-POLL] Started — interval=%.1fs", poll_interval)
+    while True:
+        try:
+            try:
+                pairs = list(rt().ALL_PAIRS)
+            except RuntimeError:
+                pairs = []
+
+            mt5_pairs = [
+                p for p in pairs
+                if p.get("source") == "mt5" and p.get("enabled", True)
+            ]
+            if not mt5_pairs:
+                time.sleep(poll_interval)
+                continue
+
+            try:
+                import mt5_executor
+            except Exception as exc:
+                log.debug("[MT5-PRICE-POLL] mt5_executor import failed: %s", exc)
+                time.sleep(poll_interval)
+                continue
+
+            if not mt5_executor.mt5_connect():
+                time.sleep(poll_interval)
+                continue
+
+            mt5 = mt5_executor._get_mt5()
+            if mt5 is None:
+                time.sleep(poll_interval)
+                continue
+
+            updated = 0
+            for p in mt5_pairs:
+                try:
+                    display = p.get("display") or p.get("symbol") or ""
+                    if not display:
+                        continue
+                    mt5_symbol = mt5_executor.mt5_map_symbol(display)
+                    if not mt5_symbol:
+                        continue
+                    try:
+                        mt5.symbol_select(mt5_symbol, True)
+                    except Exception:
+                        pass
+                    tick = mt5.symbol_info_tick(mt5_symbol)
+                    if not tick:
+                        continue
+                    bid = float(tick.bid) if getattr(tick, "bid", 0) > 0 else None
+                    ask = float(tick.ask) if getattr(tick, "ask", 0) > 0 else None
+                    if bid is not None and ask is not None:
+                        price = (bid + ask) / 2.0
+                    elif getattr(tick, "last", 0) > 0:
+                        price = float(tick.last)
+                    elif bid is not None:
+                        price = bid
+                    elif ask is not None:
+                        price = ask
+                    else:
+                        continue
+                    with _live_prices_lock:
+                        _live_prices[display] = {
+                            "price": price,
+                            "bid": bid,
+                            "ask": ask,
+                            "ts": time.time(),
+                            "source": "mt5",
+                        }
+                    updated += 1
+                except Exception as e:
+                    log.debug("[MT5-PRICE-POLL] %s tick error: %s", p.get("display"), e)
+            if updated == 0:
+                log.debug("[MT5-PRICE-POLL] no ticks updated this cycle (%d pairs)", len(mt5_pairs))
+        except Exception as e:
+            log.warning("[MT5-PRICE-POLL] cycle error: %s", e)
+        time.sleep(poll_interval)
+
+
+def _run_binance_price_poller(poll_interval: float = 3.0):
+    """Background daemon: REST poll Binance Futures all-tickers price endpoint
+    and write crypto pair prices into _live_prices. Acts as a fallback when
+    BinanceLivePriceWS (!ticker@arr) is silently failing — the WS still runs
+    in parallel; whichever updates last wins, which is fine since both write
+    the same shape.
+    """
+    url = "https://fapi.binance.com/fapi/v1/ticker/price"
+    log.info("[BINANCE-PRICE-POLL] Started — interval=%.1fs", poll_interval)
+    while True:
+        try:
+            try:
+                _cp = list(rt().CRYPTO_PAIRS)
+            except RuntimeError:
+                _cp = []
+            crypto_symbols = {
+                str(p.get("symbol", "")).replace("/", "").upper(): p.get("display")
+                for p in _cp
+                if p.get("enabled", True) and p.get("display")
+            }
+            if not crypto_symbols:
+                time.sleep(poll_interval)
+                continue
+
+            try:
+                resp = http_requests.get(url, timeout=8)
+            except Exception as e:
+                log.debug("[BINANCE-PRICE-POLL] HTTP error: %s", e)
+                time.sleep(poll_interval)
+                continue
+            if resp.status_code != 200:
+                log.debug("[BINANCE-PRICE-POLL] HTTP %s", resp.status_code)
+                time.sleep(poll_interval)
+                continue
+            try:
+                items = resp.json()
+            except ValueError:
+                time.sleep(poll_interval)
+                continue
+            if not isinstance(items, list):
+                time.sleep(poll_interval)
+                continue
+
+            now_ts = time.time()
+            updated = 0
+            for item in items:
+                sym = str(item.get("symbol", "")).upper()
+                if sym not in crypto_symbols:
+                    continue
+                display = crypto_symbols[sym]
+                try:
+                    price = float(item.get("price", 0))
+                except (TypeError, ValueError):
+                    continue
+                if price <= 0:
+                    continue
+                with _live_prices_lock:
+                    _live_prices[display] = {
+                        "price": price,
+                        "ts": now_ts,
+                        "source": "binance_rest",
+                    }
+                updated += 1
+            if updated == 0:
+                log.debug("[BINANCE-PRICE-POLL] no crypto matches in response")
+        except Exception as e:
+            log.warning("[BINANCE-PRICE-POLL] cycle error: %s", e)
+        time.sleep(poll_interval)
+
+
 def _run_eodhd_price_poller():
     """Background daemon thread: poll EODHD REST prices for non-WS pairs every 21min.
     Optimized for delayed stock data (15-20min delay) and API efficiency."""
