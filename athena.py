@@ -8282,6 +8282,25 @@ def api_scalp_scan():
                     row["_diagnostic"] = True
                     row["gate_result"] = row.get("reason", "BLOCKED").split(":")[0]
 
+        # Populate live dashboard scalp cache so snapshot can read Engine D state
+        _ts_now = time.time()
+        with _live_dashboard_scalp_cache_lock:
+            for _sig in (result.get("signals") or []):
+                _key = str(_sig.get("display") or _sig.get("pair") or "").upper()
+                if _key:
+                    _live_dashboard_scalp_cache[_key] = dict(_sig)
+                    _live_dashboard_scalp_cache[_key]["_ts"] = _ts_now
+                    _live_dashboard_scalp_cache[_key]["_skipped"] = False
+            for _row in (result.get("skipped") or []):
+                _key = str(_row.get("display") or _row.get("pair") or "").upper()
+                if _key:
+                    _live_dashboard_scalp_cache[_key] = {
+                        "gateResult": "BLOCKED",
+                        "reason": _row.get("reason"),
+                        "_ts": _ts_now,
+                        "_skipped": True,
+                    }
+
         return jsonify(
             {
                 "signals": signals,
@@ -13933,6 +13952,13 @@ def api_performance():
 _micro_cache: dict = {}
 _ws_clients: list = []  # WS client instances for graceful shutdown
 
+# ── Live Dashboard v1 — scalp results cache ──────────────────────────────────
+# Populated by api_scalp_scan after each scan run. Keyed by display.upper().
+# Used by the live dashboard snapshot endpoint (read-only).
+_live_dashboard_scalp_cache: dict = {}
+_live_dashboard_scalp_cache_lock = threading.Lock()
+_LIVE_DASHBOARD_SCALP_TTL = 300.0  # 5 min — longer TTL so snapshot returns something even between scans
+
 
 @app.route("/api/microstructure-health")
 def api_microstructure_health():
@@ -13958,6 +13984,684 @@ def api_microstructure_health():
     return jsonify(
         _json_safe({"feeds_enabled": enabled, "symbol_count": len(rows), "symbols": rows})
     )
+
+
+# ── Live Dashboard v1 — snapshot helpers ─────────────────────────────────────
+
+def _ld_empty_engine_a() -> dict:
+    return {
+        "score": None, "maxScore": None, "threshold": None,
+        "direction": None, "passed": False,
+        "factorScores": {"trend": None, "momentum": None, "addon": None},
+        "adxValue": None, "sessionMultiplier": None, "conviction": None,
+        "failReasons": [],
+    }
+
+
+def _ld_empty_engine_b() -> dict:
+    return {
+        "score": None, "maxScore": None, "threshold": None,
+        "direction": None, "structuralVerdict": None, "confidencePassed": False,
+        "hardFailReasons": [], "softWarnings": [], "diagnosticNotes": [],
+        "entry": None, "sl": None, "tp": None, "rr": None,
+    }
+
+
+def _ld_empty_engine_c() -> dict:
+    return {
+        "decisionState": "NO_SETUP", "consensusType": None,
+        "conviction": None, "tier": None, "trade": False, "reason": None,
+    }
+
+
+def _ld_empty_engine_d() -> dict:
+    return {
+        "enabled": True, "gateResult": "DATA_MISSING",
+        "grade": None, "score": None, "setupType": None,
+        "failReasons": [], "softWarnings": [],
+        "vp": {"vah": None, "poc": None, "val": None},
+        "cvdAvailable": None, "absorptionDetected": None,
+    }
+
+
+def _ld_build_engine_a_row(sig: dict) -> dict:
+    """Extract Engine A v2 fields from a cached scan signal dict."""
+    if not sig:
+        return _ld_empty_engine_a()
+    score = sig.get("confluenceScore") or sig.get("score") or 0.0
+    max_score = sig.get("maxScore") or 3.0
+    direction = sig.get("direction")
+    threshold = sig.get("threshold") or sig.get("minThreshold")
+    # Derive threshold from pair profile if not in signal
+    if threshold is None:
+        try:
+            from scoring import get_min_confluence_threshold
+            _pair_lookup = _resolve_pair_from_signal(sig) or {}
+            if _pair_lookup:
+                threshold = get_min_confluence_threshold(_pair_lookup)
+        except Exception:
+            pass
+    passed = bool(threshold is not None and float(score or 0) >= float(threshold)) if threshold else bool(float(score or 0) > 0 and direction)
+    factor_scores = sig.get("factorScores") or {}
+    fail_reasons = []
+    _warns = sig.get("warnings") or []
+    if isinstance(_warns, list):
+        fail_reasons = [str(w) for w in _warns if w]
+    return {
+        "score": score,
+        "maxScore": max_score,
+        "threshold": threshold,
+        "direction": direction,
+        "passed": passed,
+        "factorScores": {
+            "trend": factor_scores.get("trend"),
+            "momentum": factor_scores.get("momentum"),
+            "addon": factor_scores.get("addon"),
+        },
+        "adxValue": sig.get("adxValue"),
+        "sessionMultiplier": sig.get("sessionMultiplier"),
+        "conviction": sig.get("conviction"),
+        "failReasons": fail_reasons,
+    }
+
+
+def _ld_build_engine_b_row(sig_b: dict) -> dict:
+    """Extract Engine B fields from a cached naked analysis dict."""
+    if not sig_b:
+        return _ld_empty_engine_b()
+    conf = sig_b.get("confidence") or {}
+    score = (sig_b.get("confidence_score") or conf.get("score") or
+             sig_b.get("score"))
+    max_score = sig_b.get("confidence_max") or conf.get("max_score") or sig_b.get("max_score")
+    confidence_passed = bool(conf.get("passed") or sig_b.get("passed"))
+    return {
+        "score": score,
+        "maxScore": max_score,
+        "threshold": sig_b.get("min_score"),
+        "direction": sig_b.get("direction"),
+        "structuralVerdict": sig_b.get("structural_verdict"),
+        "confidencePassed": confidence_passed,
+        "hardFailReasons": (conf.get("hard_fail_reasons") or
+                            sig_b.get("hard_fail_reasons") or []),
+        "softWarnings": (conf.get("soft_warnings") or
+                         sig_b.get("soft_warnings") or []),
+        "diagnosticNotes": (conf.get("diagnostic_notes") or
+                            sig_b.get("diagnostic_notes") or []),
+        "entry": sig_b.get("entry"),
+        "sl": sig_b.get("sl"),
+        "tp": sig_b.get("tp"),
+        "rr": sig_b.get("rr"),
+    }
+
+
+def _ld_derive_engine_c_state(a_row: dict, b_row: dict) -> dict:
+    """Derive Engine C decision state from Engine A/B rows (no scoring change)."""
+    a_passed = bool(a_row.get("passed"))
+    b_passed = bool(b_row.get("confidencePassed"))
+    a_dir = a_row.get("direction")
+    b_dir = b_row.get("direction")
+
+    if not a_passed and not b_passed:
+        state = "NO_SETUP"
+    elif a_passed and b_passed:
+        dirs_conflict = bool(a_dir and b_dir and a_dir != b_dir)
+        state = "CONFLICT" if dirs_conflict else "ALIGNED"
+    elif a_passed:
+        state = "A_ONLY"
+    else:
+        state = "B_ONLY"
+
+    conviction = a_row.get("conviction")
+    try:
+        conviction_f = float(conviction or 0.0)
+    except (TypeError, ValueError):
+        conviction_f = 0.0
+
+    tier = None
+    if state == "ALIGNED":
+        if conviction_f >= 0.70:
+            tier = "HIGH"
+        elif conviction_f >= 0.50:
+            tier = "MEDIUM"
+        elif conviction_f >= 0.35:
+            tier = "LOW"
+        else:
+            tier = "SKIP"
+    elif state in ("A_ONLY", "B_ONLY"):
+        tier = "WATCHLIST"
+    elif state == "CONFLICT":
+        tier = "WATCHLIST"
+
+    direction = a_dir or b_dir
+    return {
+        "decisionState": state,
+        "consensusType": ("A+B" if state == "ALIGNED"
+                          else ("A" if state == "A_ONLY"
+                                else ("B" if state == "B_ONLY" else None))),
+        "conviction": conviction_f if state == "ALIGNED" else None,
+        "tier": tier,
+        "trade": False,  # Dashboard never creates execution permission
+        "reason": (f"{direction} — {state}" if state != "NO_SETUP" else "no engine setup"),
+    }
+
+
+def _ld_build_engine_d_row(scalp_cached: dict, pair: dict) -> dict:
+    """Build Engine D row from cached scalp result dict."""
+    if not scalp_cached:
+        return _ld_empty_engine_d()
+
+    ts = scalp_cached.get("_ts")
+    engine_d_ttl = float((CONFIG.get("LIVE_DASHBOARD") or {}).get("ENGINE_D_UPDATE_SEC", 300))
+    is_stale = ts is None or (time.time() - ts) > max(engine_d_ttl, 60.0)
+
+    asset_type = pair.get("type") or ""
+    limited_data = asset_type not in ("crypto",)
+    soft_warnings = ["DATA_LIMITED_NON_CRYPTO"] if limited_data else []
+
+    if is_stale:
+        return {**_ld_empty_engine_d(), "softWarnings": soft_warnings}
+
+    if scalp_cached.get("_skipped"):
+        reason_raw = scalp_cached.get("reason") or "BLOCKED"
+        fail_reasons = [reason_raw] if isinstance(reason_raw, str) else list(reason_raw or [])
+        return {
+            "enabled": True, "gateResult": "BLOCKED",
+            "grade": None, "score": None, "setupType": None,
+            "failReasons": fail_reasons, "softWarnings": soft_warnings,
+            "vp": {"vah": None, "poc": None, "val": None},
+            "cvdAvailable": False, "absorptionDetected": False,
+        }
+
+    grade = scalp_cached.get("ai_grade")
+    score = scalp_cached.get("ai_score")
+    if grade in ("A", "B"):
+        gate_result = "PASS"
+    elif grade == "C":
+        gate_result = "WATCHLIST"
+    elif grade == "D":
+        gate_result = "BLOCKED"
+    else:
+        gate_result = "NO_SETUP"
+
+    return {
+        "enabled": True,
+        "gateResult": gate_result,
+        "grade": grade,
+        "score": score,
+        "setupType": scalp_cached.get("zone_type") or scalp_cached.get("setup_type"),
+        "failReasons": scalp_cached.get("ai_reasons") or [],
+        "softWarnings": soft_warnings,
+        "vp": {
+            "vah": scalp_cached.get("vp_vah"),
+            "poc": scalp_cached.get("vp_poc"),
+            "val": scalp_cached.get("vp_val"),
+        },
+        "cvdAvailable": scalp_cached.get("cvd_direction") is not None,
+        "absorptionDetected": bool((scalp_cached.get("absorption_count") or 0) > 0),
+    }
+
+
+def _ld_freshness_row(pair: dict, tf: str, candles: list | None, provider_error: str | None) -> dict:
+    """Build a policy-aware freshness summary row for the live dashboard."""
+    if provider_error or not candles:
+        return {
+            "consistencyStatus": "PROVIDER_ERROR" if provider_error else "DATA_MISSING",
+            "policyStatus": None,
+            "gateDecision": "BLOCK",
+            "blockReason": provider_error or "no_candles",
+        }
+    try:
+        from athena_app.services.market_state import candle_freshness_diagnostic
+        diag = candle_freshness_diagnostic(pair, tf, candles)
+        severity = diag.get("stalenessSeverity") or "missing_current_bucket"
+
+        # Policy mapping: MT5-sourced pairs use CONFIRMED_ONLY — stale_1_bucket is expected
+        source = pair.get("source") or ""
+        ptype = pair.get("type") or ""
+        confirmed_only = source == "mt5" or ptype in ("forex", "commodity", "index", "stock")
+
+        if severity == "fresh":
+            consistency = "OK"
+            policy_status = "POLICY_OK"
+            gate = "ALLOW"
+            block_reason = None
+        elif severity == "stale_1_bucket" and confirmed_only:
+            consistency = "CONFIRMED_ONLY_OK"
+            policy_status = "POLICY_OK"
+            gate = "ALLOW"
+            block_reason = None
+        elif severity == "stale_1_bucket":
+            consistency = "TRUE_STALE_1_BUCKET"
+            policy_status = "POLICY_LAG"
+            gate = "BLOCK"
+            block_reason = "stale_1_bucket"
+        elif severity == "stale_multi_bucket":
+            consistency = "TRUE_STALE_MULTI_BUCKET"
+            policy_status = "POLICY_LAG"
+            gate = "BLOCK"
+            block_reason = "stale_multi_bucket"
+        else:
+            consistency = "PROVIDER_STALE"
+            policy_status = None
+            gate = "BLOCK"
+            block_reason = severity
+
+        return {
+            "consistencyStatus": consistency,
+            "policyStatus": policy_status,
+            "gateDecision": gate,
+            "blockReason": block_reason,
+            "bucketLag": diag.get("bucketLag"),
+            "lastBarIso": diag.get("lastBarIso"),
+        }
+    except Exception as exc:
+        return {
+            "consistencyStatus": "PROVIDER_ERROR",
+            "policyStatus": None,
+            "gateDecision": "BLOCK",
+            "blockReason": str(exc)[:120],
+        }
+
+
+def _ld_paper_position(display: str) -> dict:
+    """Look up the latest open paper/demo position for a symbol from audit_log."""
+    empty = {"hasOpenPaperPosition": False, "entry": None, "sl": None, "tp": None, "pnl": None}
+    try:
+        with sqlite3.connect(_AUDIT_DB, timeout=5.0) as con:
+            con.row_factory = sqlite3.Row
+            row = con.execute(
+                "SELECT entry_price, sl, tp, direction FROM audit_log "
+                "WHERE pair=? AND grade LIKE 'PAPER%' AND exit_price IS NULL "
+                "ORDER BY ts DESC LIMIT 1",
+                (display,),
+            ).fetchone()
+        if row:
+            return {
+                "hasOpenPaperPosition": True,
+                "entry": row["entry_price"],
+                "sl": row["sl"],
+                "tp": row["tp"],
+                "pnl": None,
+            }
+    except Exception:
+        pass
+    return empty
+
+
+def _ld_binance_ws_live() -> bool:
+    """Check if the Binance live price WebSocket is running."""
+    try:
+        bws = _binance_ws
+        if bws is None:
+            return False
+        if not getattr(bws, "_running", False):
+            return False
+        t = getattr(bws, "_thread", None)
+        return bool(t is not None and t.is_alive())
+    except Exception:
+        return False
+
+
+@app.route("/api/live-dashboard/snapshot")
+def api_live_dashboard_snapshot():
+    """Read-only live dashboard snapshot for paper/demo monitoring.
+
+    SAFETY CONTRACT:
+    - Never places orders.
+    - Never calls broker order APIs.
+    - Never mutates account state.
+    - PAPER_SOAK.ENABLED and REAL_ORDERS_ALLOWED are always re-read from CONFIG.
+    - Returns per-symbol error rows on failure; never 500 for individual symbols.
+    """
+    cfg_ld = CONFIG.get("LIVE_DASHBOARD") or {}
+    if not cfg_ld.get("ENABLED", True):
+        return jsonify({"error": "Live Dashboard disabled in config"}), 503
+
+    # Parse requested symbols
+    raw_syms = request.args.get("symbols", "")
+    tf = str(request.args.get("timeframe") or cfg_ld.get("DEFAULT_TIMEFRAME") or "H4").upper()
+    if tf not in ("H1", "H4", "D1"):
+        tf = "H4"
+
+    if raw_syms:
+        req_symbols = [s.strip() for s in raw_syms.split(",") if s.strip()]
+    else:
+        req_symbols = list(cfg_ld.get("DEFAULT_SYMBOLS") or [])
+
+    max_syms = max(1, int(cfg_ld.get("MAX_SYMBOLS", 8)))
+    truncated = len(req_symbols) > max_syms
+    if truncated:
+        log.warning("[LIVE-DASH] %d symbols requested; truncating to %d", len(req_symbols), max_syms)
+    req_symbols = req_symbols[:max_syms]
+
+    # Safety state — always read from CONFIG
+    paper_soak = CONFIG.get("PAPER_SOAK") or {}
+    paper_mode = {
+        "enabled": bool(paper_soak.get("ENABLED", True)),
+        "realOrdersAllowed": bool(CONFIG.get("REAL_ORDERS_ALLOWED", False)),
+    }
+
+    # Connection status
+    mt5_health = _mt5_connection_health()
+    binance_live = _ld_binance_ws_live()
+    connections = {
+        "mt5": ("connected" if mt5_health.get("connected")
+                else ("error" if mt5_health.get("available") else "unknown")),
+        "binanceWs": "live" if binance_live else "unknown",
+    }
+
+    # Build lookup from last full scan results (Engine A)
+    _last_a_by_display: dict = {}
+    for _sig in (_last_scan_results.get("signals") or []):
+        _disp = str(_sig.get("display") or _sig.get("pair") or "").upper()
+        if _disp:
+            _last_a_by_display[_disp] = _sig
+
+    now = datetime.now(timezone.utc)
+    symbol_rows = []
+    events = []
+    freshness_all_ok = True
+
+    for sym_req in req_symbols:
+        sym_upper = sym_req.strip().upper()
+
+        # Resolve pair dict from ALL_PAIRS
+        pair = None
+        for _p in ALL_PAIRS:
+            _keys = {str(_p.get("display", "")).upper(), str(_p.get("symbol", "")).upper()}
+            if sym_upper in _keys:
+                pair = _p
+                break
+
+        if pair is None:
+            symbol_rows.append({
+                "symbol": sym_req, "asset_type": None, "source": None, "timeframe": tf,
+                "error": "symbol_not_found",
+                "latest_price": None, "bid": None, "ask": None, "spread": None, "change_pct": None,
+                "chart": None,
+                "freshness": {"consistencyStatus": "DATA_MISSING", "policyStatus": None,
+                              "gateDecision": "BLOCK", "blockReason": "symbol_not_found"},
+                "engineA": _ld_empty_engine_a(), "engineB": _ld_empty_engine_b(),
+                "engineC": _ld_empty_engine_c(), "engineD": _ld_empty_engine_d(),
+                "paper": {"hasOpenPaperPosition": False, "entry": None, "sl": None, "tp": None, "pnl": None},
+            })
+            continue
+
+        display = str(pair.get("display") or pair.get("symbol") or sym_req)
+
+        # Live price
+        with _live_prices_lock:
+            lp_entry = dict(_live_prices.get(display) or {})
+        latest_price = lp_entry.get("price")
+        bid = lp_entry.get("bid")
+        ask = lp_entry.get("ask")
+        spread = None
+        if bid is not None and ask is not None:
+            try:
+                spread = round(float(ask) - float(bid), 6)
+            except (TypeError, ValueError):
+                pass
+        change_pct = lp_entry.get("change_pct")
+
+        # H4 candles for chart (limit 65 to get 60 confirmed bars after forming-bar considerations)
+        chart_candles = None
+        freshness_result = {"consistencyStatus": "DATA_MISSING", "policyStatus": None,
+                            "gateDecision": "BLOCK", "blockReason": "no_candles"}
+        provider_error_str = None
+        raw_candles = None
+        try:
+            raw_candles = fetch_candles(pair, tf, 65)
+        except Exception as exc:
+            provider_error_str = str(exc)[:120]
+
+        freshness_result = _ld_freshness_row(pair, tf, raw_candles, provider_error_str)
+
+        if raw_candles:
+            display_candles = raw_candles[-60:] if len(raw_candles) > 60 else raw_candles
+            chart_candles = []
+            for _c in display_candles:
+                if not isinstance(_c, dict):
+                    continue
+                chart_candles.append({
+                    "time": _c.get("time") or _c.get("t") or _c.get("date"),
+                    "open": _c.get("open") or _c.get("o"),
+                    "high": _c.get("high") or _c.get("h"),
+                    "low": _c.get("low") or _c.get("l"),
+                    "close": _c.get("close") or _c.get("c"),
+                    "volume": _c.get("volume") or _c.get("v"),
+                })
+
+        # H4 grid offset for display annotation
+        h4_offset_hours: float | None = None
+        if tf == "H4":
+            src = pair.get("source") or ""
+            ptype = pair.get("type") or ""
+            if src == "binance":
+                h4_offset_hours = 0.0
+            elif ptype == "stock":
+                h4_offset_hours = 3.0
+            else:
+                h4_offset_hours = 2.0
+
+        chart_row = None
+        if chart_candles:
+            latest_iso = chart_candles[-1].get("time") if chart_candles else None
+            chart_row = {
+                "candles": chart_candles,
+                "latestConfirmedCandleIso": latest_iso,
+                "latestFormingCandleIso": None,
+                "candlePolicy": "CONFIRMED_ONLY",
+                "h4GridOffsetHours": h4_offset_hours,
+            }
+
+        # Engine A — from last scan cache (no re-run on snapshot)
+        sig_a = _last_a_by_display.get(display.upper()) or {}
+        engine_a_row = _ld_build_engine_a_row(sig_a)
+
+        # Engine B — from in-process cache
+        sig_b = _engine_b_cache_get(display) or _engine_b_cache_get(display.upper()) or {}
+        engine_b_row = _ld_build_engine_b_row(sig_b)
+
+        # Engine C — derived (no scoring change, no execution)
+        engine_c_row = _ld_derive_engine_c_state(engine_a_row, engine_b_row)
+
+        # Engine D — from scalp cache
+        with _live_dashboard_scalp_cache_lock:
+            scalp_cached = dict(_live_dashboard_scalp_cache.get(display.upper()) or {})
+        engine_d_row = _ld_build_engine_d_row(scalp_cached, pair)
+
+        # Paper position
+        paper_row = _ld_paper_position(display)
+
+        # Freshness aggregate
+        if freshness_result.get("gateDecision") != "ALLOW":
+            freshness_all_ok = False
+
+        # Build event entries for notable state changes
+        c_state = engine_c_row.get("decisionState")
+        if c_state == "ALIGNED":
+            events.append({
+                "timestamp": now.isoformat(),
+                "symbol": display,
+                "severity": "pass",
+                "message": f"Engine C ALIGNED [{engine_c_row.get('tier','?')}] — {engine_a_row.get('direction','?')}",
+            })
+        elif c_state == "WATCHLIST" or c_state in ("A_ONLY", "B_ONLY"):
+            events.append({
+                "timestamp": now.isoformat(),
+                "symbol": display,
+                "severity": "watch",
+                "message": f"Engine C {c_state} — {engine_a_row.get('direction') or engine_b_row.get('direction') or '?'}",
+            })
+        if freshness_result.get("gateDecision") == "BLOCK":
+            events.append({
+                "timestamp": now.isoformat(),
+                "symbol": display,
+                "severity": "block",
+                "message": f"Freshness BLOCK [{display}]: {freshness_result.get('consistencyStatus','?')}",
+            })
+        d_gate = engine_d_row.get("gateResult")
+        if d_gate == "PASS":
+            events.append({
+                "timestamp": now.isoformat(),
+                "symbol": display,
+                "severity": "pass",
+                "message": f"Engine D PASS grade={engine_d_row.get('grade','?')} — {engine_d_row.get('setupType','?')}",
+            })
+        elif d_gate == "WATCHLIST":
+            events.append({
+                "timestamp": now.isoformat(),
+                "symbol": display,
+                "severity": "watch",
+                "message": f"Engine D WATCHLIST (grade C) — {engine_d_row.get('setupType','?')}",
+            })
+
+        # Derive levels from best available engine (B > A > D)
+        _levels: dict = {}
+        if engine_b_row.get("entry") is not None:
+            _levels = {"entry": engine_b_row.get("entry"), "sl": engine_b_row.get("sl"),
+                       "tp": engine_b_row.get("tp"), "rr": engine_b_row.get("rr"),
+                       "source": "engineB"}
+        elif sig_a.get("entry") is not None:
+            _levels = {"entry": sig_a.get("entry"), "sl": sig_a.get("sl"),
+                       "tp": sig_a.get("tp"), "rr": sig_a.get("rr"),
+                       "source": "engineA"}
+
+        # executableState: paper-only — never grants real execution
+        _c_state = engine_c_row.get("decisionState", "NO_SETUP")
+        _fresh_ok = freshness_result.get("gateDecision") == "ALLOW"
+        _executable_state = (
+            "PAPER_READY" if (_c_state in ("ALIGNED", "A_ONLY", "B_ONLY") and _fresh_ok)
+            else "NOT_READY"
+        )
+
+        symbol_rows.append({
+            "symbol": display,
+            "asset_type": pair.get("type"),
+            "source": pair.get("source"),
+            "timeframe": tf,
+            "latest_price": latest_price,
+            "bid": bid,
+            "ask": ask,
+            "spread": spread,
+            "change_pct": change_pct,
+            "chart": chart_row,
+            "freshness": freshness_result,
+            "engineA": engine_a_row,
+            "engineB": engine_b_row,
+            "engineC": engine_c_row,
+            "engineD": engine_d_row,
+            "paper": paper_row,
+            "levels": _levels,
+            "executableState": _executable_state,
+        })
+
+    return jsonify(_json_safe({
+        "payloadVersion": "live-dashboard-v2",
+        "contract": {
+            "engineA": "v2_factor_scoring",
+            "engineB": "naked_structure",
+            "engineC": "consensus",
+            "engineD": "scalp_vp",
+            "execution": "paper_only",
+        },
+        "generated_at": now.isoformat(),
+        "paperMode": paper_mode,
+        "connections": connections,
+        "truncatedSymbols": truncated,
+        "freshnessAllOk": freshness_all_ok,
+        "symbols": symbol_rows,
+        "events": events[-50:],
+    }))
+
+
+@app.route("/api/live-dashboard/paper-execute", methods=["POST"])
+def api_live_dashboard_paper_execute():
+    """Paper-only execution logger for Live Dashboard v2.
+
+    Never calls any broker API. Logs the paper entry to audit_log with
+    grade='LD-PAPER-EXECUTE' for soak tracking. Enforces paper mode,
+    freshness gate, and kill-switch — identical safety stack as live
+    execution except no broker call is made.
+    """
+    # Safety: abort immediately if real orders are somehow enabled
+    if CONFIG.get("REAL_ORDERS_ALLOWED", False):
+        return jsonify({"ok": False, "error": "REAL_ORDERS_ALLOWED is true — paper endpoint blocked"}), 403
+
+    paper_cfg = CONFIG.get("PAPER_SOAK") or {}
+    if not paper_cfg.get("ENABLED", True):
+        return jsonify({"ok": False, "error": "PAPER_SOAK.ENABLED is false — paper mode is off"}), 403
+
+    data = request.get_json(force=True, silent=True) or {}
+    symbol = (data.get("symbol") or "").strip().upper()
+    direction = (data.get("direction") or "").strip().upper()
+    entry = data.get("entry")
+    sl = data.get("sl")
+    tp = data.get("tp")
+
+    if not symbol:
+        return jsonify({"ok": False, "error": "symbol required"}), 400
+    if direction not in ("LONG", "SHORT"):
+        return jsonify({"ok": False, "error": "direction must be LONG or SHORT"}), 400
+
+    # Kill-switch check
+    try:
+        from risk_engine import is_kill_switch_active
+        if is_kill_switch_active():
+            return jsonify({"ok": False, "error": "Kill switch is active"}), 409
+    except Exception:
+        pass
+
+    # Freshness re-check — find the pair config
+    pair_cfg = None
+    for p in ALL_PAIRS:
+        d = p.get("display") or p.get("pair") or ""
+        if d.upper() == symbol or (p.get("pair") or "").upper() == symbol:
+            pair_cfg = p
+            break
+
+    if pair_cfg is not None:
+        try:
+            raw_c = fetch_candles(pair_cfg, "H4", 10)
+            fresh = _ld_freshness_row(pair_cfg, "H4", raw_c, None)
+            if fresh.get("gateDecision") == "BLOCK":
+                return jsonify({
+                    "ok": False,
+                    "error": "Freshness gate BLOCK",
+                    "freshnessStatus": fresh.get("consistencyStatus"),
+                }), 409
+        except Exception:
+            pass  # freshness probe failure is non-fatal for paper logging
+
+    now_ts = datetime.now(timezone.utc).isoformat()
+    log_id = None
+    try:
+        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
+            con.execute("PRAGMA journal_mode=WAL")
+            cur = con.execute(
+                """INSERT INTO audit_log
+                   (ts, pair, direction, grade, style, asset_class, entry_price, sl, tp)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (now_ts, symbol, direction, "LD-PAPER-EXECUTE", "paper",
+                 pair_cfg.get("type") if pair_cfg else None,
+                 float(entry) if entry is not None else None,
+                 float(sl) if sl is not None else None,
+                 float(tp) if tp is not None else None),
+            )
+            con.commit()
+            log_id = cur.lastrowid
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"DB write failed: {exc}"}), 500
+
+    return jsonify({
+        "ok": True,
+        "log_id": log_id,
+        "symbol": symbol,
+        "direction": direction,
+        "grade": "LD-PAPER-EXECUTE",
+        "timestamp": now_ts,
+        "note": "Paper log only — no broker order placed",
+    })
 
 
 @app.route("/api/shadow-signals")

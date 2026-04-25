@@ -2051,3 +2051,22 @@ CHART_VISION_DATASET_ENABLED: false
 
 CHART_VISION_V2_SHADOW_ENABLED: false
 
+
+# ── Live Dashboard v1 — paper/demo monitoring cockpit ────────────────────────
+# Display + paper/demo monitoring ONLY. No execution. No real orders.
+
+LIVE_DASHBOARD:
+  ENABLED: true
+  MAX_SYMBOLS: 8
+  DEFAULT_SYMBOLS:
+    - NAS100
+    - SPY.US
+    - XAU/USD
+    - BTCUSDT
+    - ETHUSDT
+  PRICE_UPDATE_MS: 5000          # UI poll interval (5s default; 1s is too heavy for full engine refresh)
+  ENGINE_D_UPDATE_SEC: 10        # Engine D cached result max age before DATA_MISSING (seconds)
+  ENGINE_AB_UPDATE_ON_CONFIRMED_CANDLE: true
+  DEFAULT_TIMEFRAME: H4
+  PAPER_MONITOR_ONLY: true       # Safety flag — dashboard never creates execution permission
+

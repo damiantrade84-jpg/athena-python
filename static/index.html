@@ -1138,6 +1138,133 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
 .topbar .tick-item .ticker-ms.open { background: rgba(14,203,129,0.12); color: var(--bull); }
 .topbar .tick-item .ticker-ms.closed { background: rgba(246,70,93,0.1); color: var(--bear); }
 .topbar .tick-item .ticker-ms.extended { background: rgba(245,158,11,0.1); color: var(--warn); }
+
+/* ── Live Dashboard v2 — Cyber Cockpit ─────────────────────────────────────── */
+#panel-live-dashboard{padding-bottom:24px;}
+.ld-cockpit-header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:10px 14px;background:rgba(5,9,20,0.85);border:1px solid rgba(34,211,238,0.18);border-radius:10px;margin-bottom:10px;box-shadow:0 0 24px rgba(34,211,238,0.03);}
+.ld-header-left{display:flex;flex-direction:column;gap:2px;}
+.ld-cockpit-title{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:700;color:#22d3ee;letter-spacing:0.12em;text-transform:uppercase;}
+.ld-cockpit-sub{font-family:'IBM Plex Mono',monospace;font-size:9px;color:rgba(34,211,238,0.4);letter-spacing:0.1em;}
+.ld-header-badges{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+/* hbadge = cockpit header badge; badge = legacy compat */
+.ld-badge,.ld-hbadge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:4px;font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;}
+.ld-hbadge.paper-on,.ld-badge.paper-on{background:rgba(240,185,11,0.10);color:#f0b90b;border:1px solid rgba(240,185,11,0.3);}
+.ld-hbadge.real-off,.ld-badge.real-off{background:rgba(14,203,129,0.08);color:#0ecb81;border:1px solid rgba(14,203,129,0.25);}
+.ld-hbadge.kill-ok{background:rgba(34,211,238,0.07);color:#22d3ee;border:1px solid rgba(34,211,238,0.2);}
+.ld-hbadge.conn-ok,.ld-badge.conn-ok{background:rgba(14,203,129,0.08);color:#0ecb81;border:1px solid rgba(14,203,129,0.25);}
+.ld-hbadge.conn-err,.ld-badge.conn-err{background:rgba(246,70,93,0.10);color:#f6465d;border:1px solid rgba(246,70,93,0.3);}
+.ld-hbadge.conn-unk,.ld-badge.conn-unk{background:rgba(159,176,197,0.07);color:var(--muted);border:1px solid var(--border);}
+.ld-hbadge.fresh-ok,.ld-badge.fresh-ok{background:rgba(14,203,129,0.08);color:#0ecb81;border:1px solid rgba(14,203,129,0.25);}
+.ld-hbadge.fresh-warn,.ld-badge.fresh-warn{background:rgba(246,70,93,0.10);color:#f6465d;border:1px solid rgba(246,70,93,0.3);}
+.ld-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;}
+.ld-sym-input{flex:1;min-width:200px;max-width:380px;padding:6px 10px;border-radius:6px;border:1px solid rgba(34,211,238,0.2);background:rgba(5,9,20,0.9);color:#e0e0e0;font-size:11px;font-family:'IBM Plex Mono',monospace;outline:none;}
+.ld-sym-input:focus{border-color:rgba(34,211,238,0.5);box-shadow:0 0 0 2px rgba(34,211,238,0.07);}
+.ld-btn{padding:6px 12px;border-radius:6px;border:1px solid rgba(34,211,238,0.3);background:rgba(34,211,238,0.07);color:#22d3ee;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;cursor:pointer;letter-spacing:0.04em;transition:background 0.15s;}
+.ld-btn:hover{background:rgba(34,211,238,0.15);}
+.ld-select{padding:5px 8px;border-radius:6px;border:1px solid var(--border);background:var(--panel);color:var(--text2);font-size:10px;font-family:'IBM Plex Mono',monospace;cursor:pointer;}
+.ld-auto-label{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace;cursor:pointer;}
+.ld-layout{display:grid;grid-template-columns:1fr 340px;gap:14px;align-items:start;}
+@media(max-width:1200px){.ld-layout{grid-template-columns:1fr 300px;}}
+@media(max-width:960px){.ld-layout{grid-template-columns:1fr;}}
+.ld-card-area{min-width:0;}
+.ld-card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;}
+/* Cards */
+.ld-card{background:rgba(8,17,31,0.95);border:1px solid rgba(34,211,238,0.14);border-radius:10px;padding:0;overflow:hidden;cursor:pointer;transition:border-color 0.2s,box-shadow 0.2s;}
+.ld-card:hover{border-color:rgba(34,211,238,0.38);box-shadow:0 0 12px rgba(34,211,238,0.07);}
+.ld-card.selected{border-color:#22d3ee;box-shadow:0 0 20px rgba(34,211,238,0.18);}
+.ld-card.aligned{border-color:rgba(14,203,129,0.4);}
+.ld-card.aligned:hover{border-color:rgba(14,203,129,0.65);}
+.ld-card.conflict{border-color:rgba(246,70,93,0.4);}
+.ld-card.watchlist{border-color:rgba(240,185,11,0.35);}
+.ld-card-header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px 6px;border-bottom:1px solid rgba(34,211,238,0.09);}
+.ld-card-sym{font-size:13px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#e4e4e7;}
+.ld-card-type{font-size:9px;color:rgba(34,211,238,0.45);font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:0.08em;margin-left:6px;}
+.ld-card-price{font-size:16px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#f4f4f5;}
+.ld-card-chg{font-size:10px;font-family:'IBM Plex Mono',monospace;margin-left:4px;}
+.ld-card-chg.pos{color:#0ecb81;}
+.ld-card-chg.neg{color:#f6465d;}
+.ld-dir-badge{display:inline-block;padding:2px 6px;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:8px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;margin-left:6px;}
+.ld-dir-badge.long{background:rgba(14,203,129,0.12);color:#0ecb81;border:1px solid rgba(14,203,129,0.3);}
+.ld-dir-badge.short{background:rgba(246,70,93,0.12);color:#f6465d;border:1px solid rgba(246,70,93,0.3);}
+.ld-chart-wrap{padding:4px 8px;position:relative;background:rgba(5,9,20,0.5);}
+.ld-chart-svg{width:100%;height:110px;display:block;overflow:hidden;}
+/* Engine pill 2×2 grid */
+.ld-engine-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 12px 4px;}
+.ld-engine-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:6px 10px 4px;}
+.ld-epill{display:flex;flex-direction:column;gap:1px;padding:4px 8px;border-radius:5px;font-family:'IBM Plex Mono',monospace;border:1px solid var(--border);background:rgba(159,176,197,0.03);}
+.ld-epill-label{font-size:7px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:rgba(159,176,197,0.45);}
+.ld-epill-val{font-size:9px;font-weight:700;color:var(--muted);}
+.ld-epill.pass{border-color:rgba(14,203,129,0.3);background:rgba(14,203,129,0.05);}
+.ld-epill.pass .ld-epill-val{color:#0ecb81;}
+.ld-epill.watch{border-color:rgba(240,185,11,0.28);background:rgba(240,185,11,0.05);}
+.ld-epill.watch .ld-epill-val{color:#f0b90b;}
+.ld-epill.block{border-color:rgba(246,70,93,0.28);background:rgba(246,70,93,0.05);}
+.ld-epill.block .ld-epill-val{color:#f6465d;}
+.ld-epill.miss .ld-epill-val{color:rgba(159,176,197,0.4);}
+/* Legacy pill classes — kept for backward compat */
+.ld-pill{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;}
+.ld-pill.pass{background:rgba(14,203,129,0.14);color:var(--bull);border:1px solid rgba(14,203,129,0.3);}
+.ld-pill.watch{background:rgba(240,185,11,0.12);color:var(--accent);border:1px solid rgba(240,185,11,0.3);}
+.ld-pill.block{background:rgba(246,70,93,0.12);color:var(--bear);border:1px solid rgba(246,70,93,0.3);}
+.ld-pill.miss{background:rgba(159,176,197,0.07);color:var(--muted);border:1px solid var(--border);}
+.ld-pill.aligned-c{background:rgba(14,203,129,0.2);color:var(--bull);border:1px solid rgba(14,203,129,0.4);}
+.ld-pill.conflict-c{background:rgba(246,70,93,0.15);color:var(--bear);border:1px solid rgba(246,70,93,0.35);}
+.ld-pill.fresh-ok{background:rgba(14,203,129,0.1);color:var(--bull);border:1px solid rgba(14,203,129,0.25);}
+.ld-pill.fresh-conf{background:rgba(240,185,11,0.1);color:var(--accent);border:1px solid rgba(240,185,11,0.25);}
+.ld-pill.fresh-bad{background:rgba(246,70,93,0.12);color:var(--bear);border:1px solid rgba(246,70,93,0.3);}
+/* Card footer */
+.ld-card-footer{padding:4px 10px 8px;display:flex;align-items:center;gap:5px;border-top:1px solid rgba(34,211,238,0.06);}
+.ld-card-reason{font-size:8px;color:var(--muted);font-family:'IBM Plex Mono',monospace;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ld-rr-pill{padding:2px 6px;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:700;background:rgba(34,211,238,0.09);color:#22d3ee;border:1px solid rgba(34,211,238,0.22);}
+.ld-paper-pill{padding:2px 6px;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:700;background:rgba(240,185,11,0.14);color:var(--accent);border:1px solid rgba(240,185,11,0.3);}
+.ld-card-error{padding:14px 12px;font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;}
+.ld-empty-state{color:var(--muted);font-size:11px;font-family:'IBM Plex Mono',monospace;padding:20px 4px;}
+/* Detail / side column */
+.ld-detail-col{display:flex;flex-direction:column;gap:0;}
+.ld-side{display:flex;flex-direction:column;gap:10px;}
+.ld-side-section{background:rgba(8,17,31,0.95);border:1px solid rgba(34,211,238,0.12);border-radius:10px;overflow:hidden;}
+.ld-side-head{padding:8px 12px;background:rgba(34,211,238,0.04);border-bottom:1px solid rgba(34,211,238,0.09);font-size:9px;font-weight:700;letter-spacing:0.1em;color:#22d3ee;font-family:'IBM Plex Mono',monospace;text-transform:uppercase;}
+.ld-side-body{padding:8px 10px;max-height:200px;overflow-y:auto;}
+.ld-event{display:flex;gap:8px;padding:4px 0;border-bottom:1px solid rgba(34,211,238,0.06);font-size:10px;font-family:'IBM Plex Mono',monospace;}
+.ld-event:last-child{border-bottom:none;}
+.ld-event-sym{font-weight:700;color:#e4e4e7;min-width:56px;}
+.ld-event-msg{color:var(--text2);flex:1;font-size:9px;}
+.ld-event.pass .ld-event-sym{color:#0ecb81;}
+.ld-event.block .ld-event-sym{color:#f6465d;}
+.ld-event.watch .ld-event-sym{color:#f0b90b;}
+.ld-scalp-row{display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(34,211,238,0.06);font-family:'IBM Plex Mono',monospace;font-size:10px;}
+.ld-scalp-row:last-child{border-bottom:none;}
+.ld-no-data{color:var(--muted);font-size:10px;font-family:'IBM Plex Mono',monospace;padding:6px 0;}
+.ld-last-updated{font-size:9px;color:rgba(34,211,238,0.35);font-family:'IBM Plex Mono',monospace;margin-left:auto;}
+/* Detail panel */
+.ld-detail-panel{background:rgba(8,17,31,0.98);border:1px solid rgba(34,211,238,0.2);border-radius:10px;overflow:hidden;}
+.ld-detail-header{display:flex;align-items:center;gap:10px;padding:10px 14px;background:rgba(34,211,238,0.04);border-bottom:1px solid rgba(34,211,238,0.11);}
+.ld-detail-sym{font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:700;color:#22d3ee;letter-spacing:0.05em;}
+.ld-detail-price{font-family:'IBM Plex Mono',monospace;font-size:13px;color:#e4e4e7;margin-left:auto;}
+.ld-close-btn{padding:3px 8px;font-size:10px;margin-left:6px;}
+.ld-detail-tabs{display:flex;flex-wrap:wrap;gap:2px;padding:5px 8px;background:rgba(5,9,20,0.5);border-bottom:1px solid rgba(34,211,238,0.09);}
+.ld-tab{padding:4px 9px;border-radius:4px;border:1px solid transparent;background:transparent;color:rgba(159,176,197,0.55);font-size:9px;font-family:'IBM Plex Mono',monospace;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;cursor:pointer;transition:all 0.15s;}
+.ld-tab:hover{color:#22d3ee;border-color:rgba(34,211,238,0.18);}
+.ld-tab.active{background:rgba(34,211,238,0.09);color:#22d3ee;border-color:rgba(34,211,238,0.32);}
+.ld-detail-body{padding:12px;font-family:'IBM Plex Mono',monospace;font-size:10px;max-height:520px;overflow-y:auto;}
+.ld-kv{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid rgba(34,211,238,0.05);}
+.ld-kv:last-child{border-bottom:none;}
+.ld-kv-key{color:rgba(159,176,197,0.55);font-size:9px;}
+.ld-kv-val{color:#e4e4e7;font-size:9px;font-weight:700;text-align:right;}
+.ld-kv-val.bull{color:#0ecb81;}.ld-kv-val.bear{color:#f6465d;}.ld-kv-val.cyan{color:#22d3ee;}.ld-kv-val.warn{color:#f0b90b;}
+.ld-section-head{font-size:8px;font-weight:700;letter-spacing:0.12em;color:rgba(34,211,238,0.45);text-transform:uppercase;margin:10px 0 4px;padding-bottom:3px;border-bottom:1px solid rgba(34,211,238,0.08);}
+/* Execute tab */
+.ld-exec-warn{background:rgba(240,185,11,0.07);border:1px solid rgba(240,185,11,0.22);border-radius:6px;padding:10px 12px;font-size:10px;color:#f0b90b;margin-bottom:10px;line-height:1.5;}
+.ld-exec-btn{width:100%;padding:10px;margin-top:12px;border-radius:8px;border:1px solid rgba(34,211,238,0.38);background:rgba(34,211,238,0.07);color:#22d3ee;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;cursor:pointer;letter-spacing:0.06em;text-transform:uppercase;transition:background 0.15s;}
+.ld-exec-btn:hover{background:rgba(34,211,238,0.16);}
+.ld-exec-btn:disabled{opacity:0.38;cursor:not-allowed;}
+.ld-exec-result{margin-top:8px;padding:8px;border-radius:6px;font-size:9px;line-height:1.5;}
+.ld-exec-result.ok{background:rgba(14,203,129,0.07);border:1px solid rgba(14,203,129,0.2);color:#0ecb81;}
+.ld-exec-result.err{background:rgba(246,70,93,0.07);border:1px solid rgba(246,70,93,0.2);color:#f6465d;}
+/* Error/missing card state (legacy keep) */
+.ld-data-missing{display:flex;flex-direction:column;align-items:center;justify-content:center;height:90px;gap:4px;}
+.ld-data-missing-label{font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace;}
+.ld-status-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;background:rgba(10,14,20,0.7);border:1px solid var(--border);border-radius:8px;margin-bottom:12px;}
 </style>
 </head>
 <body>
@@ -1268,6 +1395,10 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
     <div class="nav-item" id="nav-guardian" role="button" tabindex="0" onclick="switchPanel('guardian')">
       <div class="nav-left"><span class="nav-ico">⛊</span>Guardian</div>
       <span class="conn-dot off" id="guardian-dot" aria-hidden="true"></span>
+    </div>
+    <div class="nav-item" id="nav-live-dashboard" role="button" tabindex="0" onclick="switchPanel('live-dashboard')">
+      <div class="nav-left"><span class="nav-ico">📡</span>Live Cockpit</div>
+      <span class="conn-dot off" id="ld-nav-dot" aria-hidden="true"></span>
     </div>
   </div>
 
@@ -2153,6 +2284,115 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       </div>
     </div>
   </div><!-- /panel-tv -->
+
+  <!-- ── Live Dashboard v2 — Cyber Cockpit ──────────────────────────────── -->
+  <div class="panel tab-panel" id="panel-live-dashboard">
+
+    <!-- Cockpit header with safety badges -->
+    <div class="ld-cockpit-header">
+      <div class="ld-header-left">
+        <span class="ld-cockpit-title">⚡ ATHENA LIVE COCKPIT</span>
+        <span class="ld-cockpit-sub">Paper · Demo · Read-Only Monitor</span>
+      </div>
+      <div class="ld-header-badges">
+        <span class="ld-hbadge paper-on">📄 PAPER MODE ON</span>
+        <span class="ld-hbadge real-off">🔒 REAL ORDERS OFF</span>
+        <span class="ld-hbadge kill-ok" id="ld-killswitch-badge">⚡ KILL SWITCH OK</span>
+        <span class="ld-hbadge conn-unk" id="ld-mt5-badge">MT5 —</span>
+        <span class="ld-hbadge conn-unk" id="ld-binance-badge">BINANCE —</span>
+        <span class="ld-hbadge fresh-ok" id="ld-freshness-badge">FRESHNESS —</span>
+        <span class="ld-last-updated" id="ld-last-updated">—</span>
+      </div>
+    </div>
+
+    <!-- Control row -->
+    <div class="ld-toolbar">
+      <input class="ld-sym-input" id="ldSymbolInput" type="text"
+             placeholder="Symbols comma-separated (e.g. XAU/USD,BTCUSDT,NAS100)"
+             title="Enter up to 8 symbols separated by commas"/>
+      <button class="ld-btn" onclick="ldLoadSnapshot()">↻ Refresh</button>
+      <label class="ld-auto-label">
+        <input type="checkbox" id="ldAutoPoll" onchange="ldToggleAutoPoll(this.checked)"> Auto (5s)
+      </label>
+      <select class="ld-select" id="ldFilterSelect" onchange="ldApplyFilter()">
+        <option value="all">All States</option>
+        <option value="aligned">Aligned Only</option>
+        <option value="watchlist">Watchlist</option>
+        <option value="d_pass">Engine D PASS</option>
+      </select>
+      <select class="ld-select" id="ldSortSelect" onchange="ldApplyFilter()">
+        <option value="default">Default Order</option>
+        <option value="score_desc">Score ↓</option>
+        <option value="rr_desc">RR ↓</option>
+      </select>
+    </div>
+
+    <!-- Main 2-column layout -->
+    <div class="ld-layout" id="ldMainLayout">
+
+      <!-- Left: card grid -->
+      <div class="ld-card-area">
+        <div class="ld-card-grid" id="ldCardGrid">
+          <div class="ld-empty-state">
+            Click <strong style="color:#22d3ee">↻ Refresh</strong> or enable Auto to load the cockpit.
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: detail / side panel -->
+      <div class="ld-detail-col" id="ldDetailCol">
+
+        <!-- Default side panel (visible when no card selected) -->
+        <div id="ldSidePanel" class="ld-side">
+          <div class="ld-side-section">
+            <div class="ld-side-head">⚡ Engine D Radar</div>
+            <div class="ld-side-body" id="ldScalpRadar">
+              <div class="ld-no-data">Run Engine D scan to populate.</div>
+            </div>
+          </div>
+          <div class="ld-side-section">
+            <div class="ld-side-head">📡 Live Events</div>
+            <div class="ld-side-body" id="ldEventFeed">
+              <div class="ld-no-data">No events yet.</div>
+            </div>
+          </div>
+          <div class="ld-side-section">
+            <div class="ld-side-head">📋 Paper Soak</div>
+            <div class="ld-side-body" id="ldPaperSummary">
+              <div class="ld-no-data" style="font-size:9px;">
+                Paper mode active.<br>No real orders permitted.
+              </div>
+            </div>
+          </div>
+        </div><!-- /ldSidePanel -->
+
+        <!-- Symbol detail panel (shown on card click) -->
+        <div id="ldDetailPanel" class="ld-detail-panel" style="display:none">
+          <div class="ld-detail-header">
+            <span class="ld-detail-sym" id="ldDetailSym">—</span>
+            <span class="ld-detail-price" id="ldDetailPrice">—</span>
+            <button class="ld-btn ld-close-btn" onclick="ldCloseDetail()">✕ Close</button>
+          </div>
+          <div class="ld-detail-tabs" id="ldDetailTabs">
+            <button class="ld-tab active" data-tab="overview" onclick="ldShowTab('overview')">Overview</button>
+            <button class="ld-tab" data-tab="levels" onclick="ldShowTab('levels')">Levels</button>
+            <button class="ld-tab" data-tab="engine-a" onclick="ldShowTab('engine-a')">Engine A</button>
+            <button class="ld-tab" data-tab="engine-b" onclick="ldShowTab('engine-b')">Engine B</button>
+            <button class="ld-tab" data-tab="engine-c" onclick="ldShowTab('engine-c')">Engine C</button>
+            <button class="ld-tab" data-tab="engine-d" onclick="ldShowTab('engine-d')">Engine D</button>
+            <button class="ld-tab" data-tab="ai" onclick="ldShowTab('ai')">AI</button>
+            <button class="ld-tab" data-tab="execute" onclick="ldShowTab('execute')">Execute</button>
+            <button class="ld-tab" data-tab="diagnostics" onclick="ldShowTab('diagnostics')">Diagnostics</button>
+          </div>
+          <div class="ld-detail-body" id="ldDetailBody">
+            <div class="ld-no-data">Select a symbol card to view details.</div>
+          </div>
+        </div><!-- /ldDetailPanel -->
+
+      </div><!-- /ld-detail-col -->
+    </div><!-- /ld-layout -->
+
+  </div><!-- /panel-live-dashboard -->
 
     </main>
   </div><!-- /.layout -->
@@ -11467,6 +11707,755 @@ function shieldReset() {
     setInterval(poll, 45000);
   }
 })();
+
+// ── Live Dashboard v2 — Cyber Cockpit ────────────────────────────────────────
+// Paper/demo monitoring only. No execution. No real orders.
+(function() {
+'use strict';
+
+var _ldPollTimer = null;
+var _ldLastSnapshot = null;
+var _ldEventHistory = [];
+var _ldSelectedSym = null;
+var _ldCurrentTab = 'overview';
+
+// ── switchPanel hook ──────────────────────────────────────────────────────────
+var _ldOrigSwitchPanel = window.switchPanel;
+window.switchPanel = function(name) {
+  if (typeof _ldOrigSwitchPanel === 'function') _ldOrigSwitchPanel(name);
+  if (name === 'live-dashboard') {
+    ldLoadSnapshot();
+    if (document.getElementById('ldAutoPoll') && document.getElementById('ldAutoPoll').checked) {
+      ldStartAutoPoll();
+    }
+  } else {
+    ldStopAutoPoll();
+  }
+};
+
+function ldToggleAutoPoll(on) {
+  if (on) ldStartAutoPoll(); else ldStopAutoPoll();
+}
+window.ldToggleAutoPoll = ldToggleAutoPoll;
+
+function ldStartAutoPoll() {
+  ldStopAutoPoll();
+  _ldPollTimer = setInterval(ldLoadSnapshot, 5000);
+}
+function ldStopAutoPoll() {
+  if (_ldPollTimer) { clearInterval(_ldPollTimer); _ldPollTimer = null; }
+}
+
+// ── Main snapshot loader ──────────────────────────────────────────────────────
+function ldLoadSnapshot() {
+  var inp = document.getElementById('ldSymbolInput');
+  var syms = inp ? inp.value.trim() : '';
+  var url = '/api/live-dashboard/snapshot';
+  if (syms) url += '?symbols=' + encodeURIComponent(syms);
+  fetch(url)
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      _ldLastSnapshot = d;
+      ldRender(d);
+    })
+    .catch(function(err) {
+      console.warn('[LD] snapshot fetch failed:', err);
+      var grid = document.getElementById('ldCardGrid');
+      if (grid) grid.innerHTML = '<div style="color:var(--bear);font-size:11px;font-family:var(--mono);padding:12px;">Snapshot fetch error: ' + err + '</div>';
+    });
+}
+window.ldLoadSnapshot = ldLoadSnapshot;
+
+// ── Main render ───────────────────────────────────────────────────────────────
+function ldRender(d) {
+  if (!d) return;
+  ldRenderStatusBar(d);
+  ldApplyFilter();
+  var evts = d.events || [];
+  _ldEventHistory = evts.concat(_ldEventHistory).slice(0, 80);
+  ldRenderEventFeed(_ldEventHistory);
+  ldRenderScalpRadar(d.symbols || []);
+  ldRenderPaperSummary(d.symbols || [], d.paperMode || {});
+  var lu = document.getElementById('ld-last-updated');
+  if (lu) lu.textContent = 'Updated ' + new Date().toLocaleTimeString();
+  var ndot = document.getElementById('ld-nav-dot');
+  if (ndot) { ndot.className = 'conn-dot'; ndot.style.background = '#22d3ee'; }
+  // Refresh detail panel if a symbol is currently selected
+  if (_ldSelectedSym) {
+    var fresh = (d.symbols || []).find(function(s){ return s.symbol === _ldSelectedSym; });
+    if (fresh) { ldUpdateDetailPrice(fresh); }
+  }
+}
+
+// ── Status bar ────────────────────────────────────────────────────────────────
+function ldRenderStatusBar(d) {
+  var mt5El = document.getElementById('ld-mt5-badge');
+  var bnEl  = document.getElementById('ld-binance-badge');
+  var frEl  = document.getElementById('ld-freshness-badge');
+  var conn  = d.connections || {};
+  if (mt5El) {
+    var mt5s = conn.mt5 || 'unknown';
+    mt5El.className = 'ld-hbadge ' + (mt5s === 'connected' ? 'conn-ok' : mt5s === 'error' ? 'conn-err' : 'conn-unk');
+    mt5El.textContent = 'MT5 ' + mt5s.toUpperCase();
+  }
+  if (bnEl) {
+    var bns = conn.binanceWs || 'unknown';
+    bnEl.className = 'ld-hbadge ' + (bns === 'live' ? 'conn-ok' : bns === 'error' ? 'conn-err' : 'conn-unk');
+    bnEl.textContent = 'BINANCE ' + bns.toUpperCase();
+  }
+  if (frEl) {
+    var allOk = d.freshnessAllOk !== false;
+    frEl.className = 'ld-hbadge ' + (allOk ? 'fresh-ok' : 'fresh-warn');
+    frEl.textContent = allOk ? '✓ FRESHNESS OK' : '⚠ FRESHNESS ISSUE';
+  }
+}
+
+// ── Filter / sort + card grid render ─────────────────────────────────────────
+function ldApplyFilter() {
+  if (!_ldLastSnapshot) return;
+  var filterEl = document.getElementById('ldFilterSelect');
+  var sortEl   = document.getElementById('ldSortSelect');
+  var filter   = filterEl ? filterEl.value : 'all';
+  var sort     = sortEl   ? sortEl.value   : 'default';
+  var syms = (_ldLastSnapshot.symbols || []).slice();
+  if (filter === 'aligned') {
+    syms = syms.filter(function(s){ return (s.engineC||{}).decisionState === 'ALIGNED'; });
+  } else if (filter === 'watchlist') {
+    syms = syms.filter(function(s){
+      var st = (s.engineC||{}).decisionState;
+      return st === 'WATCHLIST' || st === 'A_ONLY' || st === 'B_ONLY';
+    });
+  } else if (filter === 'd_pass') {
+    syms = syms.filter(function(s){ return (s.engineD||{}).gateResult === 'PASS'; });
+  }
+  if (sort === 'score_desc') {
+    syms.sort(function(a,b){ return ((b.engineA||{}).score||0) - ((a.engineA||{}).score||0); });
+  } else if (sort === 'rr_desc') {
+    syms.sort(function(a,b){ return ((b.engineB||{}).rr||0) - ((a.engineB||{}).rr||0); });
+  }
+  ldRenderCards(syms);
+}
+window.ldApplyFilter = ldApplyFilter;
+
+function ldRenderCards(symbols) {
+  var grid = document.getElementById('ldCardGrid');
+  if (!grid) return;
+  if (!symbols || !symbols.length) {
+    grid.innerHTML = '<div class="ld-no-data">No symbols match the current filter.</div>';
+    return;
+  }
+  grid.innerHTML = '';
+  symbols.forEach(function(sym) { grid.appendChild(ldBuildCard(sym)); });
+}
+
+// ── Card builder ──────────────────────────────────────────────────────────────
+function ldBuildCard(sym) {
+  var wrap = document.createElement('div');
+  var cState = ((sym.engineC || {}).decisionState || '').toLowerCase();
+  var borderCls = '';
+  if (cState === 'aligned') borderCls = ' aligned';
+  else if (cState === 'conflict') borderCls = ' conflict';
+  else if (cState === 'a_only' || cState === 'b_only' || cState === 'watchlist') borderCls = ' watchlist';
+  if (sym.symbol === _ldSelectedSym) borderCls += ' selected';
+  wrap.className = 'ld-card' + borderCls;
+  wrap.setAttribute('data-sym', sym.symbol || '');
+  wrap.onclick = function() { ldSelectCard(sym); };
+
+  if (sym.error) {
+    wrap.innerHTML = '<div class="ld-card-error">⚠ ' + ldEsc(sym.symbol) + ': ' + ldEsc(sym.error) + '</div>';
+    return wrap;
+  }
+
+  // Direction badge
+  var dir = (sym.engineA||{}).direction || (sym.engineB||{}).direction || '';
+  var dirHtml = dir ? '<span class="ld-dir-badge ' + (dir==='LONG'?'long':'short') + '">' + ldEsc(dir) + '</span>' : '';
+
+  // Price / change
+  var chg = sym.change_pct != null ? sym.change_pct : null;
+  var chgHtml = '';
+  if (chg != null) {
+    var chgNum = parseFloat(chg);
+    chgHtml = '<span class="ld-card-chg ' + (chgNum >= 0 ? 'pos' : 'neg') + '">'
+      + (chgNum >= 0 ? '+' : '') + chgNum.toFixed(2) + '%</span>';
+  }
+  var priceStr = sym.latest_price != null ? ldFmtPrice(sym.latest_price) : '—';
+
+  var header = '<div class="ld-card-header">'
+    + '<div style="display:flex;align-items:baseline;gap:0">'
+    + '<span class="ld-card-sym">' + ldEsc(sym.symbol) + '</span>'
+    + '<span class="ld-card-type">' + ldEsc(sym.asset_type || '') + '</span>'
+    + dirHtml + '</div>'
+    + '<div style="display:flex;align-items:baseline">'
+    + '<span class="ld-card-price">' + priceStr + '</span>' + chgHtml
+    + '</div></div>';
+
+  var chartHtml = '<div class="ld-chart-wrap">' + ldBuildChartSvg(sym) + '</div>';
+
+  // 2×2 engine pill grid
+  var engGrid = '<div class="ld-engine-grid">'
+    + ldBuildEPill('Engine A', sym.engineA, 'a')
+    + ldBuildEPill('Engine B', sym.engineB, 'b')
+    + ldBuildEPillC(sym.engineC)
+    + ldBuildEPillD(sym.engineD)
+    + '</div>';
+
+  // Footer: freshness pill + reason + RR + paper tag
+  var reason = (sym.engineC||{}).reason || '';
+  if (!reason && (sym.engineA||{}).failReasons && (sym.engineA.failReasons||[])[0]) {
+    reason = sym.engineA.failReasons[0];
+  }
+  var rrVal = (sym.engineB||{}).rr || (sym.engineA||{}).rr;
+  var rrHtml    = rrVal != null ? '<span class="ld-rr-pill">RR ' + parseFloat(rrVal).toFixed(1) + '</span>' : '';
+  var paperHtml = (sym.paper||{}).hasOpenPaperPosition ? '<span class="ld-paper-pill">📄 PAPER</span>' : '';
+  var footer = '<div class="ld-card-footer">'
+    + ldBuildFreshnessPill(sym.freshness)
+    + '<span class="ld-card-reason" title="' + ldEsc(reason) + '">' + ldEsc(reason) + '</span>'
+    + rrHtml + paperHtml + '</div>';
+
+  wrap.innerHTML = header + chartHtml + engGrid + footer;
+  return wrap;
+}
+
+// 2×2 pill helpers
+function ldBuildEPill(label, eng, _type) {
+  eng = eng || {};
+  var passed = eng.passed === true || eng.confidencePassed === true;
+  var dir    = eng.direction || '';
+  var score  = eng.score != null ? parseFloat(eng.score).toFixed(2) : '—';
+  var cls    = passed ? 'pass' : (eng.score != null && eng.score > 0) ? 'watch' : 'miss';
+  return '<div class="ld-epill ' + cls + '">'
+    + '<span class="ld-epill-label">' + ldEsc(label) + '</span>'
+    + '<span class="ld-epill-val">' + (dir ? dir + ' ' : '') + ldEsc(score) + '</span>'
+    + '</div>';
+}
+function ldBuildEPillC(engC) {
+  engC = engC || {};
+  var state = engC.decisionState || 'NO_SETUP';
+  var cls = state === 'ALIGNED' ? 'pass' : state === 'CONFLICT' ? 'block'
+          : (state === 'A_ONLY' || state === 'B_ONLY' || state === 'WATCHLIST') ? 'watch' : 'miss';
+  return '<div class="ld-epill ' + cls + '">'
+    + '<span class="ld-epill-label">Engine C</span>'
+    + '<span class="ld-epill-val">' + ldEsc(state) + '</span>'
+    + '</div>';
+}
+function ldBuildEPillD(engD) {
+  engD = engD || {};
+  var gate  = engD.gateResult || 'NO_DATA';
+  var grade = engD.grade || '';
+  var cls   = gate === 'PASS' ? 'pass' : gate === 'WATCHLIST' ? 'watch' : gate === 'BLOCKED' ? 'block' : 'miss';
+  return '<div class="ld-epill ' + cls + '">'
+    + '<span class="ld-epill-label">Engine D</span>'
+    + '<span class="ld-epill-val">' + ldEsc(gate) + (grade ? ' ' + grade : '') + '</span>'
+    + '</div>';
+}
+
+// ── MiniChart SVG (cyber cockpit style) ───────────────────────────────────────
+function ldBuildChartSvg(sym) {
+  var chart = sym.chart;
+  if (!chart || !chart.candles || !chart.candles.length) {
+    return '<svg class="ld-chart-svg" viewBox="0 0 300 110" xmlns="http://www.w3.org/2000/svg">'
+      + '<rect width="300" height="110" fill="rgba(5,9,20,0.8)"/>'
+      + '<text x="150" y="60" text-anchor="middle" fill="rgba(100,116,139,0.45)" font-family="monospace" font-size="10">NO CHART DATA</text>'
+      + '</svg>';
+  }
+  var candles = chart.candles;
+  if (candles.length > 30) candles = candles.slice(candles.length - 30);
+  var n = candles.length;
+
+  // Compute price range, include level lines
+  var lo = Infinity, hi = -Infinity;
+  candles.forEach(function(c) {
+    var l = parseFloat(c.low), h = parseFloat(c.high);
+    if (!isNaN(l) && l < lo) lo = l;
+    if (!isNaN(h) && h > hi) hi = h;
+  });
+  var engB = sym.engineB || {}, engD = sym.engineD || {}, vp = engD.vp || {};
+  [engB.entry, engB.sl, engB.tp, vp.poc, vp.vah, vp.val, sym.latest_price].forEach(function(v) {
+    if (v != null) { var pv = parseFloat(v); if (!isNaN(pv)) { lo = Math.min(lo, pv); hi = Math.max(hi, pv); } }
+  });
+  if (lo === Infinity || hi === -Infinity || lo === hi) {
+    return '<svg class="ld-chart-svg" viewBox="0 0 300 110"><text x="150" y="60" text-anchor="middle" fill="#4a5568" font-family="monospace" font-size="10">RANGE ZERO</text></svg>';
+  }
+  var pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+  var range = hi - lo;
+
+  var W = 300, H = 108, mL = 2, mR = 36, mT = 5, mB = 5;
+  var plotW = W - mL - mR, plotH = H - mT - mB;
+  var candleW = Math.max(2, Math.floor(plotW / n) - 1);
+  var gap = plotW / n;
+
+  function py(price) { return mT + plotH - plotH * (price - lo) / range; }
+
+  var parts = ['<svg class="ld-chart-svg" viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg">'];
+  parts.push('<rect width="' + W + '" height="' + H + '" fill="rgba(5,9,20,0.85)"/>');
+
+  // Horizontal grid lines at 25/50/75%
+  [0.25, 0.50, 0.75].forEach(function(f) {
+    var gy = mT + plotH * (1 - f);
+    parts.push('<line x1="' + mL + '" y1="' + gy + '" x2="' + (W - mR) + '" y2="' + gy + '" stroke="rgba(34,211,238,0.06)" stroke-width="0.5"/>');
+  });
+
+  // Zone band (entry↔sl)
+  if (engB.entry != null && engB.sl != null) {
+    var zoneLo = Math.min(parseFloat(engB.entry), parseFloat(engB.sl));
+    var zoneHi = Math.max(parseFloat(engB.entry), parseFloat(engB.sl));
+    var zy1 = py(zoneHi), zy2 = py(zoneLo);
+    if (!isNaN(zy1) && !isNaN(zy2) && zy2 > zy1) {
+      parts.push('<rect x="' + mL + '" y="' + zy1 + '" width="' + plotW + '" height="' + (zy2-zy1) + '" fill="rgba(240,185,11,0.06)"/>');
+    }
+  }
+  // VP band (vah↔val)
+  if (vp.vah != null && vp.val != null) {
+    var vpy1 = py(parseFloat(vp.vah)), vpy2 = py(parseFloat(vp.val));
+    if (!isNaN(vpy1) && !isNaN(vpy2) && vpy2 > vpy1) {
+      parts.push('<rect x="' + mL + '" y="' + vpy1 + '" width="' + plotW + '" height="' + (vpy2-vpy1) + '" fill="rgba(34,211,238,0.04)"/>');
+    }
+  }
+
+  // Level lines with right-side labels
+  function levelLine(price, color, dash, lbl) {
+    if (price == null) return;
+    var pv = parseFloat(price); if (isNaN(pv)) return;
+    var ly = py(pv);
+    if (ly < mT || ly > H - mB) return;
+    var da = dash ? ' stroke-dasharray="' + dash + '"' : '';
+    parts.push('<line x1="' + mL + '" y1="' + ly + '" x2="' + (W - mR) + '" y2="' + ly + '" stroke="' + color + '" stroke-width="0.8"' + da + '/>');
+    parts.push('<text x="' + (W - mR + 2) + '" y="' + (ly + 3) + '" fill="' + color + '" font-family="monospace" font-size="6.5">' + ldEsc(lbl) + '</text>');
+  }
+  levelLine(engB.tp,    'rgba(14,203,129,0.7)',  '4,2', 'TP');
+  levelLine(engB.entry, 'rgba(240,185,11,0.8)',  null,  'ENT');
+  levelLine(engB.sl,    'rgba(246,70,93,0.7)',   '4,2', 'SL');
+  levelLine(vp.poc,     'rgba(34,211,238,0.6)',  '2,3', 'POC');
+  levelLine(vp.vah,     'rgba(34,211,238,0.35)', '1,4', 'VAH');
+  levelLine(vp.val,     'rgba(34,211,238,0.35)', '1,4', 'VAL');
+  // Paper position
+  var paper = sym.paper || {};
+  if (paper.hasOpenPaperPosition && paper.entry != null) {
+    levelLine(paper.entry, 'rgba(240,185,11,0.95)', null, 'POS');
+  }
+
+  // Candlesticks
+  candles.forEach(function(c, i) {
+    var o = parseFloat(c.open), cl = parseFloat(c.close);
+    var h2 = parseFloat(c.high), l2 = parseFloat(c.low);
+    if (isNaN(o) || isNaN(cl) || isNaN(h2) || isNaN(l2)) return;
+    var bull = cl >= o;
+    var color = bull ? '#0ecb81' : '#f6465d';
+    var cx = mL + i * gap + gap / 2;
+    var bodyTop = py(bull ? cl : o);
+    var bodyBot = py(bull ? o : cl);
+    var bodyH = Math.max(1, bodyBot - bodyTop);
+    parts.push('<line x1="' + cx + '" y1="' + py(h2) + '" x2="' + cx + '" y2="' + py(l2) + '" stroke="' + color + '" stroke-width="0.8" opacity="0.6"/>');
+    parts.push('<rect x="' + (cx - candleW/2) + '" y="' + bodyTop + '" width="' + candleW + '" height="' + bodyH + '" fill="' + color + '" opacity="0.8"/>');
+  });
+
+  // Live price line + label
+  if (sym.latest_price != null) {
+    var livePrice = parseFloat(sym.latest_price);
+    if (!isNaN(livePrice)) {
+      var liveY = py(livePrice);
+      if (liveY >= mT && liveY <= H - mB) {
+        parts.push('<line x1="' + mL + '" y1="' + liveY + '" x2="' + (W - mR) + '" y2="' + liveY + '" stroke="rgba(240,185,11,0.8)" stroke-width="1" stroke-dasharray="2,2"/>');
+        parts.push('<text x="' + (W - mR + 2) + '" y="' + (liveY + 3) + '" fill="#f0b90b" font-family="monospace" font-size="6.5" font-weight="700">LIVE</text>');
+      }
+    }
+  }
+
+  // TF label
+  parts.push('<text x="' + (mL + 2) + '" y="' + (mT + 8) + '" fill="rgba(34,211,238,0.4)" font-family="monospace" font-size="7">' + ldEsc(sym.timeframe || 'H4') + '</text>');
+  parts.push('</svg>');
+  return parts.join('');
+}
+
+// ── Legacy pill builders — kept for backward compat and tests ─────────────────
+function ldBuildEnginePill(label, eng) {
+  eng = eng || {};
+  var passed = eng.passed || eng.confidencePassed;
+  var dir = eng.direction || '';
+  var cls = passed ? 'pass' : 'miss';
+  var text = label + (dir ? ' ' + dir : '') + (passed ? ' ✓' : '');
+  return '<span class="ld-pill ' + cls + '" title="Engine ' + label + ' score: ' + (eng.score || '—') + '">' + ldEsc(text) + '</span>';
+}
+function ldBuildEngineCPill(engC) {
+  engC = engC || {};
+  var state = engC.decisionState || 'NO_SETUP';
+  var cls = 'miss';
+  if (state === 'ALIGNED') cls = 'aligned-c';
+  else if (state === 'CONFLICT') cls = 'conflict-c';
+  else if (state === 'A_ONLY' || state === 'B_ONLY' || state === 'WATCHLIST') cls = 'watch';
+  return '<span class="ld-pill ' + cls + '">' + ldEsc('C:' + state) + '</span>';
+}
+function ldBuildFreshnessPill(fr) {
+  fr = fr || {};
+  var status = fr.consistencyStatus || 'DATA_MISSING';
+  var gate   = fr.gateDecision || 'BLOCK';
+  var cls = 'miss', label = status;
+  if (status === 'OK') { cls = 'fresh-ok'; label = '✓ OK'; }
+  else if (status === 'CONFIRMED_ONLY_OK') { cls = 'fresh-conf'; label = 'CONF-ONLY OK'; }
+  else if (gate === 'BLOCK') { cls = 'fresh-bad'; }
+  return '<span class="ld-pill ' + cls + '" title="' + ldEsc(status) + '">' + ldEsc(label) + '</span>';
+}
+function ldBuildEngineDPill(engD) {
+  engD = engD || {};
+  var gate = engD.gateResult || 'DATA_MISSING', grade = engD.grade || '';
+  var cls = gate === 'PASS' ? 'pass' : gate === 'WATCHLIST' ? 'watch' : gate === 'BLOCKED' ? 'block' : 'miss';
+  return '<span class="ld-pill ' + cls + '">' + ldEsc('D:' + gate + (grade ? ' ' + grade : '')) + '</span>';
+}
+
+// ── Card selection & detail panel ─────────────────────────────────────────────
+function ldSelectCard(sym) {
+  _ldSelectedSym = sym.symbol;
+  document.querySelectorAll('#ldCardGrid .ld-card').forEach(function(el) {
+    el.classList.toggle('selected', el.getAttribute('data-sym') === _ldSelectedSym);
+  });
+  ldShowDetail(sym);
+}
+window.ldSelectCard = ldSelectCard;
+
+function ldShowDetail(sym) {
+  var sidePanel   = document.getElementById('ldSidePanel');
+  var detailPanel = document.getElementById('ldDetailPanel');
+  if (sidePanel)   sidePanel.style.display   = 'none';
+  if (detailPanel) detailPanel.style.display = 'block';
+  ldUpdateDetailPrice(sym);
+  ldRenderDetailTab(sym, _ldCurrentTab);
+}
+window.ldShowDetail = ldShowDetail;
+
+function ldUpdateDetailPrice(sym) {
+  var symEl   = document.getElementById('ldDetailSym');
+  var priceEl = document.getElementById('ldDetailPrice');
+  if (symEl)   symEl.textContent   = sym.symbol || '—';
+  if (priceEl) priceEl.textContent = sym.latest_price != null ? ldFmtPrice(sym.latest_price) : '—';
+}
+
+function ldCloseDetail() {
+  _ldSelectedSym = null;
+  _ldCurrentTab  = 'overview';
+  var sidePanel   = document.getElementById('ldSidePanel');
+  var detailPanel = document.getElementById('ldDetailPanel');
+  if (sidePanel)   sidePanel.style.display   = '';
+  if (detailPanel) detailPanel.style.display = 'none';
+  document.querySelectorAll('#ldCardGrid .ld-card').forEach(function(el){ el.classList.remove('selected'); });
+}
+window.ldCloseDetail = ldCloseDetail;
+
+function ldShowTab(tab) {
+  _ldCurrentTab = tab;
+  document.querySelectorAll('#ldDetailTabs .ld-tab').forEach(function(btn) {
+    btn.classList.toggle('active', btn.getAttribute('data-tab') === tab);
+  });
+  if (!_ldLastSnapshot || !_ldSelectedSym) return;
+  var sym = (_ldLastSnapshot.symbols||[]).find(function(s){ return s.symbol === _ldSelectedSym; });
+  if (sym) ldRenderDetailTab(sym, tab);
+}
+window.ldShowTab = ldShowTab;
+
+function ldRenderDetailTab(sym, tab) {
+  var body = document.getElementById('ldDetailBody');
+  if (!body) return;
+  var html = '';
+  tab = tab || 'overview';
+  if      (tab === 'overview')     html = ldTabOverview(sym);
+  else if (tab === 'levels')       html = ldTabLevels(sym);
+  else if (tab === 'engine-a')     html = ldTabEngineA(sym);
+  else if (tab === 'engine-b')     html = ldTabEngineB(sym);
+  else if (tab === 'engine-c')     html = ldTabEngineC(sym);
+  else if (tab === 'engine-d')     html = ldTabEngineD(sym);
+  else if (tab === 'ai')           html = ldTabAI(sym);
+  else if (tab === 'execute')      html = ldTabExecute(sym);
+  else if (tab === 'diagnostics')  html = ldTabDiagnostics(sym);
+  body.innerHTML = html;
+  if (tab === 'execute') {
+    var btn = document.getElementById('ldExecPaperBtn');
+    if (btn) btn.onclick = function(){ ldExecutePaper(sym); };
+  }
+}
+
+// ── Tab content renderers ─────────────────────────────────────────────────────
+function ldTabOverview(sym) {
+  var a = sym.engineA||{}, b = sym.engineB||{}, c = sym.engineC||{}, d = sym.engineD||{}, fr = sym.freshness||{};
+  return '<div class="ld-section-head">Market</div>'
+    + ldKV('Symbol', sym.symbol)
+    + ldKV('Asset Type', sym.asset_type)
+    + ldKV('Source', sym.source)
+    + ldKV('Timeframe', sym.timeframe)
+    + ldKV('Live Price', sym.latest_price != null ? ldFmtPrice(sym.latest_price) : '—')
+    + ldKV('Change', sym.change_pct != null ? (parseFloat(sym.change_pct)>=0?'+':'') + parseFloat(sym.change_pct).toFixed(2)+'%' : '—',
+            sym.change_pct != null ? (parseFloat(sym.change_pct)>=0 ? 'bull' : 'bear') : '')
+    + '<div class="ld-section-head">Engine Summary</div>'
+    + ldKV('Engine A Dir',    a.direction || '—', a.direction==='LONG'?'bull':a.direction==='SHORT'?'bear':'')
+    + ldKV('Engine A Score',  a.score != null ? parseFloat(a.score).toFixed(2) : '—', a.passed?'bull':'')
+    + ldKV('Engine B Passed', b.confidencePassed===true?'YES':'NO', b.confidencePassed===true?'bull':'bear')
+    + ldKV('Engine C State',  c.decisionState||'NO_SETUP', c.decisionState==='ALIGNED'?'bull':c.decisionState==='CONFLICT'?'bear':'')
+    + ldKV('Engine D Gate',   (d.gateResult||'—') + (d.grade?' '+d.grade:''), d.gateResult==='PASS'?'bull':'')
+    + '<div class="ld-section-head">Safety</div>'
+    + ldKV('Freshness Gate', fr.gateDecision||'—', fr.gateDecision==='ALLOW'?'bull':'bear')
+    + ldKV('Paper Position', (sym.paper||{}).hasOpenPaperPosition ? 'YES' : 'NO', (sym.paper||{}).hasOpenPaperPosition?'warn':'');
+}
+
+function ldTabLevels(sym) {
+  var b = sym.engineB||{}, d = sym.engineD||{}, vp = d.vp||{};
+  return '<div class="ld-section-head">Engine B Levels</div>'
+    + ldKV('Entry',     b.entry != null ? ldFmtPrice(b.entry) : '—', 'warn')
+    + ldKV('Stop Loss', b.sl    != null ? ldFmtPrice(b.sl)    : '—', 'bear')
+    + ldKV('Take Profit', b.tp  != null ? ldFmtPrice(b.tp)    : '—', 'bull')
+    + ldKV('R:R', b.rr != null ? parseFloat(b.rr).toFixed(2) : '—', 'cyan')
+    + (vp.poc != null ? '<div class="ld-section-head">Engine D VP Levels</div>'
+      + ldKV('POC', ldFmtPrice(vp.poc), 'cyan')
+      + ldKV('VAH', vp.vah != null ? ldFmtPrice(vp.vah) : '—')
+      + ldKV('VAL', vp.val != null ? ldFmtPrice(vp.val) : '—')
+      + ldKV('Market State', d.marketState || '—') : '');
+}
+
+function ldTabEngineA(sym) {
+  var a = sym.engineA||{}, fs = a.factorScores||{};
+  return '<div class="ld-section-head">Engine A v2 — Factor Scores</div>'
+    + ldKV('Direction',  a.direction||'—', a.direction==='LONG'?'bull':a.direction==='SHORT'?'bear':'')
+    + ldKV('Score',      a.score != null ? parseFloat(a.score).toFixed(3) : '—')
+    + ldKV('Max Score',  a.maxScore != null ? a.maxScore : '—')
+    + ldKV('Threshold',  a.threshold != null ? a.threshold : '—')
+    + ldKV('Passed',     a.passed===true?'YES':'NO', a.passed===true?'bull':'bear')
+    + ldKV('Conviction', a.conviction||'—')
+    + '<div class="ld-section-head">Factor Breakdown</div>'
+    + ldKV('Trend',    fs.trend    != null ? parseFloat(fs.trend).toFixed(3)    : '—')
+    + ldKV('Momentum', fs.momentum != null ? parseFloat(fs.momentum).toFixed(3) : '—')
+    + ldKV('Addon',    fs.addon    != null ? parseFloat(fs.addon).toFixed(3)    : '—')
+    + '<div class="ld-section-head">Indicators</div>'
+    + ldKV('ADX Value',       a.adxValue != null ? parseFloat(a.adxValue).toFixed(1) : '—')
+    + ldKV('Trend Coherence', a.trendCoherence != null ? parseFloat(a.trendCoherence).toFixed(3) : '—')
+    + ldKV('Session Mult',    a.sessionMultiplier != null ? parseFloat(a.sessionMultiplier).toFixed(2) : '—')
+    + (a.failReasons && a.failReasons.length
+        ? '<div class="ld-section-head">Fail Reasons</div>' + a.failReasons.map(function(r){
+            return '<div style="color:#f6465d;font-size:9px;padding:2px 0;">• ' + ldEsc(r) + '</div>'; }).join('') : '');
+}
+
+function ldTabEngineB(sym) {
+  var b = sym.engineB||{};
+  var hf = b.hardFailReasons||[], sw = b.softWarnings||[], dn = b.diagnosticNotes||[];
+  return '<div class="ld-section-head">Engine B — Naked Structure</div>'
+    + ldKV('Confidence Passed', b.confidencePassed===true?'YES':'NO', b.confidencePassed===true?'bull':'bear')
+    + ldKV('Direction', b.direction||'—', b.direction==='LONG'?'bull':b.direction==='SHORT'?'bear':'')
+    + ldKV('Entry', b.entry != null ? ldFmtPrice(b.entry) : '—', 'warn')
+    + ldKV('SL',    b.sl    != null ? ldFmtPrice(b.sl)    : '—', 'bear')
+    + ldKV('TP',    b.tp    != null ? ldFmtPrice(b.tp)    : '—', 'bull')
+    + ldKV('RR',    b.rr    != null ? parseFloat(b.rr).toFixed(2) : '—', 'cyan')
+    + '<div class="ld-section-head">Hard Failures</div>'
+    + (hf.length ? hf.map(function(r){ return '<div style="color:#f6465d;font-size:9px;padding:2px 0;">✗ ' + ldEsc(r) + '</div>'; }).join('') : '<div style="color:var(--muted);font-size:9px;">None</div>')
+    + '<div class="ld-section-head">Soft Warnings</div>'
+    + (sw.length ? sw.map(function(r){ return '<div style="color:#f0b90b;font-size:9px;padding:2px 0;">⚠ ' + ldEsc(r) + '</div>'; }).join('') : '<div style="color:var(--muted);font-size:9px;">None</div>')
+    + '<div class="ld-section-head">Diagnostic Notes</div>'
+    + (dn.length ? dn.map(function(r){ return '<div style="color:var(--muted);font-size:9px;padding:2px 0;">• ' + ldEsc(r) + '</div>'; }).join('') : '<div style="color:var(--muted);font-size:9px;">None</div>');
+}
+
+function ldTabEngineC(sym) {
+  var c = sym.engineC||{};
+  var allStates = ['ALIGNED','A_ONLY','B_ONLY','CONFLICT','WATCHLIST','BLOCKED','NO_SETUP'];
+  var stateRow = allStates.map(function(st) {
+    var active = c.decisionState === st;
+    var col = active ? (st==='ALIGNED'?'#0ecb81':st==='CONFLICT'||st==='BLOCKED'?'#f6465d':'#f0b90b') : 'rgba(159,176,197,0.2)';
+    return '<span style="margin-right:5px;color:' + col + ';font-size:8px;font-weight:' + (active?'700':'400') + ';">' + st + '</span>';
+  }).join('');
+  return '<div class="ld-section-head">Engine C — Consensus</div>'
+    + '<div style="padding:5px 0 8px;">' + stateRow + '</div>'
+    + ldKV('Decision State', c.decisionState||'NO_SETUP', c.decisionState==='ALIGNED'?'bull':c.decisionState==='CONFLICT'?'bear':'')
+    + ldKV('Tier',           c.tier||'—')
+    + ldKV('Trade Allowed',  'NO — Paper/Demo only', 'bear')
+    + ldKV('Reason',         c.reason||'—');
+}
+
+function ldTabEngineD(sym) {
+  var d = sym.engineD||{}, vp = d.vp||{};
+  return '<div class="ld-section-head">Engine D — Scalp VP</div>'
+    + ldKV('Gate Result', d.gateResult||'NO_DATA', d.gateResult==='PASS'?'bull':d.gateResult==='BLOCKED'?'bear':'')
+    + ldKV('AI Grade',    d.grade||'—', d.grade==='A'||d.grade==='B'?'bull':d.grade==='C'?'warn':'bear')
+    + ldKV('Setup Type',  d.setupType||'—')
+    + ldKV('Direction',   d.direction||'—', d.direction==='LONG'?'bull':d.direction==='SHORT'?'bear':'')
+    + '<div class="ld-section-head">Volume Profile</div>'
+    + ldKV('POC', vp.poc != null ? ldFmtPrice(vp.poc) : '—', 'cyan')
+    + ldKV('VAH', vp.vah != null ? ldFmtPrice(vp.vah) : '—')
+    + ldKV('VAL', vp.val != null ? ldFmtPrice(vp.val) : '—')
+    + ldKV('Market State',  d.marketState||'—')
+    + ldKV('CVD Available', d.cvdAvailable===true?'YES':'NO')
+    + (d.softWarnings && d.softWarnings.length
+        ? '<div class="ld-section-head">Soft Warnings</div>' + d.softWarnings.map(function(w){
+            return '<div style="color:#f0b90b;font-size:9px;padding:2px 0;">⚠ ' + ldEsc(w) + '</div>'; }).join('') : '');
+}
+
+function ldTabAI(sym) {
+  var a = sym.engineA||{};
+  return '<div class="ld-section-head">AI Context</div>'
+    + '<div style="color:rgba(159,176,197,0.5);font-size:9px;line-height:1.6;padding:6px 0;">'
+    + 'AI narrative is populated from the last full Engine A/B scan.<br>'
+    + 'Run a scan then check the signal panel for Marcus Reid analysis.<br><br>'
+    + 'Conviction: <strong style="color:#22d3ee">' + ldEsc(a.conviction||'—') + '</strong><br>'
+    + 'Score: <strong style="color:#22d3ee">' + (a.score != null ? parseFloat(a.score).toFixed(3) : '—') + '</strong>'
+    + '</div>';
+}
+
+function ldTabExecute(sym) {
+  var c = sym.engineC||{}, a = sym.engineA||{}, b = sym.engineB||{};
+  var canExec = (sym.freshness||{}).gateDecision === 'ALLOW';
+  var dir   = a.direction || b.direction || '—';
+  var entry = b.entry || a.entry;
+  var sl    = b.sl;
+  var tp    = b.tp;
+  var rr    = b.rr;
+  return '<div class="ld-exec-warn">'
+    + '📄 <strong>PAPER MODE ONLY</strong> — This logs a paper trade entry.<br>'
+    + 'No real orders will be placed. REAL_ORDERS_ALLOWED=false enforced server-side.'
+    + '</div>'
+    + '<div class="ld-section-head">Signal</div>'
+    + ldKV('Symbol',      sym.symbol)
+    + ldKV('Direction',   dir, dir==='LONG'?'bull':dir==='SHORT'?'bear':'')
+    + ldKV('Entry',       entry != null ? ldFmtPrice(entry) : '—', 'warn')
+    + ldKV('Stop Loss',   sl != null ? ldFmtPrice(sl) : '—', 'bear')
+    + ldKV('Take Profit', tp != null ? ldFmtPrice(tp) : '—', 'bull')
+    + ldKV('RR',          rr != null ? parseFloat(rr).toFixed(2) : '—', 'cyan')
+    + ldKV('Engine C',    c.decisionState||'NO_SETUP', c.decisionState==='ALIGNED'?'bull':'bear')
+    + ldKV('Freshness',   (sym.freshness||{}).gateDecision||'—', canExec?'bull':'bear')
+    + '<div id="ldExecResult"></div>'
+    + '<button class="ld-exec-btn" id="ldExecPaperBtn"'
+    + (!canExec ? ' disabled title="Freshness gate blocked"' : '')
+    + '>📄 LOG PAPER ENTRY</button>';
+}
+
+function ldTabDiagnostics(sym) {
+  var fr = sym.freshness||{};
+  return '<div class="ld-section-head">Freshness</div>'
+    + ldKV('Consistency Status', fr.consistencyStatus||'—', fr.gateDecision==='ALLOW'?'bull':'bear')
+    + ldKV('Policy Status',      fr.policyStatus||'—')
+    + ldKV('Gate Decision',      fr.gateDecision||'—', fr.gateDecision==='ALLOW'?'bull':'bear')
+    + ldKV('Block Reason',       fr.blockReason||'none')
+    + ldKV('Age (secs)',          fr.ageSecs != null ? fr.ageSecs : '—')
+    + '<div class="ld-section-head">Data Source</div>'
+    + ldKV('Source',     sym.source||'—', 'cyan')
+    + ldKV('Asset Type', sym.asset_type||'—')
+    + ldKV('Timeframe',  sym.timeframe||'—')
+    + ldKV('Bid',        sym.bid  != null ? ldFmtPrice(sym.bid)  : '—')
+    + ldKV('Ask',        sym.ask  != null ? ldFmtPrice(sym.ask)  : '—')
+    + ldKV('Spread',     sym.spread != null ? sym.spread : '—');
+}
+
+// ── Paper execute ─────────────────────────────────────────────────────────────
+function ldExecutePaper(sym) {
+  var btn = document.getElementById('ldExecPaperBtn');
+  var resultEl = document.getElementById('ldExecResult');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Submitting...'; }
+  var a = sym.engineA||{}, b = sym.engineB||{};
+  var payload = {
+    symbol:        sym.symbol,
+    direction:     a.direction || b.direction || null,
+    entry:         b.entry || a.entry || sym.latest_price || null,
+    sl:            b.sl || null,
+    tp:            b.tp || null,
+    rr:            b.rr || null,
+    engineC_state: (sym.engineC||{}).decisionState || null,
+    asset_type:    sym.asset_type || null,
+  };
+  fetch('/api/live-dashboard/paper-execute', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  })
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if (resultEl) {
+      if (d.ok) {
+        resultEl.className = 'ld-exec-result ok';
+        resultEl.innerHTML = '✓ Paper entry logged. Log ID: ' + ldEsc(String(d.log_id||'—'));
+      } else {
+        resultEl.className = 'ld-exec-result err';
+        resultEl.innerHTML = '✗ ' + ldEsc(d.error || 'Unknown error');
+      }
+    }
+    if (btn) { btn.disabled = false; btn.textContent = '📄 LOG PAPER ENTRY'; }
+  })
+  .catch(function(err){
+    if (resultEl) { resultEl.className = 'ld-exec-result err'; resultEl.innerHTML = '✗ ' + ldEsc(String(err)); }
+    if (btn) { btn.disabled = false; btn.textContent = '📄 LOG PAPER ENTRY'; }
+  });
+}
+window.ldExecutePaper = ldExecutePaper;
+
+// ── KV row helper ─────────────────────────────────────────────────────────────
+function ldKV(key, val, valCls) {
+  return '<div class="ld-kv">'
+    + '<span class="ld-kv-key">' + ldEsc(key) + '</span>'
+    + '<span class="ld-kv-val' + (valCls ? ' ' + valCls : '') + '">' + ldEsc(String(val != null ? val : '—')) + '</span>'
+    + '</div>';
+}
+
+// ── Event feed ────────────────────────────────────────────────────────────────
+function ldRenderEventFeed(events) {
+  var el = document.getElementById('ldEventFeed');
+  if (!el) return;
+  if (!events || !events.length) {
+    el.innerHTML = '<div class="ld-no-data">No events yet.</div>';
+    return;
+  }
+  var html = '';
+  events.slice(0, 30).forEach(function(ev) {
+    var sev = ev.severity || 'info';
+    var ts  = ev.timestamp ? ev.timestamp.slice(11, 19) : '';
+    html += '<div class="ld-event ' + ldEsc(sev) + '">'
+      + '<span class="ld-event-sym">' + ldEsc(ev.symbol || '') + '</span>'
+      + '<span class="ld-event-msg">' + ldEsc((ts ? '[' + ts + '] ' : '') + (ev.message || '')) + '</span>'
+      + '</div>';
+  });
+  el.innerHTML = html;
+}
+
+// ── Engine D radar ────────────────────────────────────────────────────────────
+function ldRenderScalpRadar(symbols) {
+  var el = document.getElementById('ldScalpRadar');
+  if (!el) return;
+  var active = symbols.filter(function(s) {
+    var g = (s.engineD||{}).gateResult;
+    return g === 'PASS' || g === 'WATCHLIST';
+  });
+  if (!active.length) { el.innerHTML = '<div class="ld-no-data">No Engine D setups.</div>'; return; }
+  var html = '';
+  active.forEach(function(s) {
+    var d = s.engineD||{};
+    var grade = d.grade || '—';
+    var gradeCls = (grade === 'A' || grade === 'B') ? 'pass' : grade === 'C' ? 'watch' : 'miss';
+    html += '<div class="ld-scalp-row">'
+      + '<span style="color:#e4e4e7;font-weight:700;font-size:10px;">' + ldEsc(s.symbol) + '</span>'
+      + '<span class="ld-pill ' + gradeCls + '">' + ldEsc(grade) + '</span>'
+      + '<span style="color:var(--muted);font-size:9px;">' + ldEsc(d.setupType || d.gateResult || '') + '</span>'
+      + '</div>';
+  });
+  el.innerHTML = html;
+}
+
+// ── Paper soak summary ────────────────────────────────────────────────────────
+function ldRenderPaperSummary(symbols, paperMode) {
+  var el = document.getElementById('ldPaperSummary');
+  if (!el) return;
+  var openCount = symbols.filter(function(s){ return (s.paper||{}).hasOpenPaperPosition; }).length;
+  var pm = paperMode || {};
+  el.innerHTML = '<div style="font-size:9px;font-family:var(--mono);line-height:1.7;">'
+    + '<div>Paper Mode: <strong style="color:' + (pm.enabled ? '#0ecb81' : '#f6465d') + '">' + (pm.enabled ? 'ON' : 'OFF') + '</strong></div>'
+    + '<div>Real Orders: <strong style="color:' + (!pm.realOrdersAllowed ? '#0ecb81' : '#f6465d') + '">' + (pm.realOrdersAllowed ? 'ALLOWED ⚠' : 'BLOCKED ✓') + '</strong></div>'
+    + '<div>Open Paper Pos: <strong style="color:#22d3ee">' + openCount + '</strong></div>'
+    + '</div>';
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function ldEsc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function ldFmtPrice(p) {
+  var n = parseFloat(p);
+  if (isNaN(n)) return '—';
+  if (n >= 10000) return n.toLocaleString(undefined, {maximumFractionDigits: 1});
+  if (n >= 100)   return n.toLocaleString(undefined, {maximumFractionDigits: 2});
+  if (n >= 1)     return n.toFixed(4);
+  return n.toPrecision(5);
+}
+
+})(); // end Live Dashboard IIFE
 </script>
 
 <div class="watermark" aria-hidden="true">

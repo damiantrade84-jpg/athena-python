@@ -42,6 +42,7 @@ def _get_active_pairs():
         {"symbol": "GBPUSD=X", "display": "GBP/USD", "type": "forex", "source": "mt5", "enabled": True},
         {"symbol": "USDJPY=X", "display": "USD/JPY", "type": "forex", "source": "mt5", "enabled": True},
         {"symbol": "AUDUSD=X", "display": "AUD/USD", "type": "forex", "source": "mt5", "enabled": True},
+        {"symbol": "EURAUD=X", "display": "EUR/AUD", "type": "forex", "source": "mt5", "enabled": True},
         {"symbol": "XAUUSD=X", "display": "XAU/USD", "type": "commodity", "source": "mt5", "enabled": True},
         {"symbol": "XAGUSD=X", "display": "XAG/USD", "type": "commodity", "source": "mt5", "enabled": True},
         {"symbol": "AAPL.US", "display": "AAPL", "type": "stock", "source": "mt5", "enabled": True},
@@ -105,7 +106,7 @@ def main():
     # Parse inputs
     raw_symbols = args.symbols.strip()
     if raw_symbols:
-        wanted_symbols = {s.strip().upper() for s in raw_symbols.split(",") if s.strip()}
+        wanted_symbols = {_normalize_symbol(s.strip()) for s in raw_symbols.split(",") if s.strip()}
     else:
         wanted_symbols = None
 
