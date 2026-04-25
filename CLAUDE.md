@@ -161,6 +161,63 @@ Do not weaken Engine B checklist for execution.
 
 ---
 
+## ⚠️ Engine B Crypto Profile
+
+Crypto Engine B has its own execution profile behind safe config gates.
+
+**Current confirmed state:**
+- Crypto live prices are working through `/api/prices`.
+- Crypto candle data is working through Binance USD-M futures klines.
+- Engine B crypto scoring is working.
+- Engine B crypto structure detection is working.
+- Crypto Target v2 can find real H4/D1 structural targets.
+- Crypto Engine B now has its own execution profile.
+- Fallback projection is diagnostics-only and must never create a final crypto signal.
+- Existing forex, commodities, indices, stocks, Engine A, Engine C, and Live Cockpit behavior must remain unchanged unless explicitly requested.
+
+**Non-Negotiable Rules:**
+Do not change these without explicit user approval:
+- Engine A scoring logic
+- Engine C consensus logic
+- Live Cockpit
+- live price pollers
+- forex/index/stock/commodity Engine B behavior
+- default crypto config values
+- fallback projection safety rules
+
+Do not force crypto signals by:
+- lowering RR blindly
+- loosening trigger gates blindly
+- allowing fallback projection as a final target
+- bypassing structural target requirements
+- forcing Engine C consensus when Engine B does not pass
+
+If no crypto signals pass after the crypto profile is enabled, the correct output is:
+```
+No valid crypto Engine B setup under current market conditions.
+```
+
+**Crypto profile config gates (all default to false):**
+- `ENGINE_B_CRYPTO_PROFILE_ENABLED` - Master switch for crypto profile
+- `ENGINE_B_CRYPTO_TRIGGER_PROFILE_ENABLED` - Crypto-specific M15/M5 trigger detection
+- `ENGINE_B_CRYPTO_TARGET_V2_ENABLED` - Crypto Target v2 with structural target search
+- `ENGINE_B_CRYPTO_ALLOW_FALLBACK_TARGET_FOR_PASS` - Fallback projection pass policy (default false)
+- `ENGINE_B_CRYPTO_REQUIRE_STRUCTURAL_TARGET_FOR_PASS` - Require structural target for final pass
+
+**Crypto profile features:**
+- Target v2: H4/D1 liquidity zone search with candidate validation (RR, ATR bounds, path clarity, direction)
+- Trigger profile: M15/M5 timeframes with volume ratio, taker buy/sell pressure, displacement ATR
+- Location buffer: ATR-based buffer for trend-continuation setups
+- Binance futures kline: Includes taker buy/sell volume provenance for orderflow analysis
+
+**Audit and validation:**
+- `crypto_engine_b_gate_calibration.py` - Validation-only audit (no tuning recommendations)
+- H4 target provenance comparison (A/B/C/D scenarios)
+- Audit-only config overrides do not write to config.yaml
+- All crypto features are report-only unless explicitly enabled
+
+---
+
 ## ⚠️ Engine C Rules
 
 Engine C must not use failed Engine B confirmation.
