@@ -26,7 +26,7 @@ OUTPUT_COLUMNS = [
     "trade_count", "win_rate", "profit_factor", "avg_return", "expectancy",
     "max_drawdown", "sharpe", "sqn", "exposure_pct", "avg_duration_bars",
     "gross_return", "net_return", "is_return", "oos_return",
-    "robustness_score", "param_sensitivity", "skip_reason",
+    "robustness_score", "param_sensitivity", "skip_reason", "data_source",
 ]
 
 
@@ -53,9 +53,12 @@ def make_run_dir(base_dir: str | Path, run_id: str) -> Path:
 # ─── DataFrame helpers ────────────────────────────────────────────────────────
 
 def metrics_to_df(results: list[StrategyMetrics]) -> pd.DataFrame:
+    if not results:
+        # Return empty DataFrame with correct schema so CSV writers never crash
+        return pd.DataFrame(columns=OUTPUT_COLUMNS)
     rows = [r.to_dict() for r in results]
     df = pd.DataFrame(rows)
-    # Ensure all expected columns exist
+    # Ensure all expected columns exist (handles schema additions gracefully)
     for col in OUTPUT_COLUMNS:
         if col not in df.columns:
             df[col] = float("nan")

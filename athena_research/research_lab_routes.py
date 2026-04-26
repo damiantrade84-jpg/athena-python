@@ -97,18 +97,20 @@ def register_research_lab_routes(app) -> None:
             status = info.get("status", "unknown")
             if status == "complete":
                 result = info.get("result", {})
-                result.pop("thread", None)
-                return jsonify({"run_id": run_id, "status": status, **result})
+                # Strip non-serialisable keys (thread object lives in info, not result)
+                safe = {k: v for k, v in result.items()
+                        if k not in ("thread",) and not callable(v)}
+                return jsonify({"run_id": run_id, "status": status, **safe})
             return jsonify({"run_id": run_id, "status": status,
                             "error": info.get("error", "")})
 
         # Check completed runs on disk
         df = get_run_results(run_id, _DEFAULT_OUTPUT)
         if df is None:
-            abort(404)
+            return jsonify({"error": "Run not found", "run_id": run_id}), 404
 
         summary = {
-            "total": len(df),
+            "total": int(len(df)),
             "strong": int((df["status"] == "STRONG_CANDIDATE").sum()) if "status" in df.columns else 0,
             "weak": int((df["status"] == "WEAK_CANDIDATE").sum()) if "status" in df.columns else 0,
             "reject": int((df["status"] == "REJECT").sum()) if "status" in df.columns else 0,
@@ -123,7 +125,7 @@ def register_research_lab_routes(app) -> None:
 
         run_dir = _DEFAULT_OUTPUT / run_id
         if not run_dir.exists():
-            abort(404)
+            return jsonify({"error": "Run not found", "run_id": run_id}), 404
 
         body = request.get_json(silent=True) or {}
         try:
@@ -147,7 +149,7 @@ def register_research_lab_routes(app) -> None:
 
         run_dir = _DEFAULT_OUTPUT / run_id
         if not run_dir.exists():
-            abort(404)
+            return jsonify({"error": "Run not found", "run_id": run_id}), 404
 
         data = load_ai_review(run_dir)
         if not data:
@@ -167,11 +169,11 @@ def register_research_lab_routes(app) -> None:
             "ai_engine_recommendations.json", "run_meta.json",
         }
         if filename not in allowed:
-            abort(403)
+            return jsonify({"error": "File not allowed", "filename": filename}), 403
 
         file_path = _DEFAULT_OUTPUT / run_id / filename
         if not file_path.exists():
-            abort(404)
+            return jsonify({"error": "File not found", "filename": filename}), 404
 
         return send_file(str(file_path), as_attachment=True, download_name=filename)
 
@@ -181,13 +183,19 @@ def register_research_lab_routes(app) -> None:
         """Return ranked strategies JSON for dashboard display."""
         import pandas as pd
 
-        ranked_path = _DEFAULT_OUTPUT / run_id / "ranked_strategies.csv"
+        run_dir = _DEFAULT_OUTPUT / run_id
+        ranked_path = run_dir / "ranked_strategies.csv"
+
+        # Run dir exists but file missing → run failed before writing; return empty
         if not ranked_path.exists():
-            abort(404)
+            if not run_dir.exists():
+                return jsonify({"error": "Run not found", "run_id": run_id}), 404
+            return jsonify({"run_id": run_id, "ranked": [], "note": "no ranked results"})
 
         try:
             df = pd.read_csv(ranked_path).head(50)
-            records = df.fillna("").to_dict(orient="records")
+            # Use pandas JSON serialiser which handles numpy types correctly
+            records = json.loads(df.fillna("").to_json(orient="records"))
             return jsonify({"run_id": run_id, "ranked": records})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
