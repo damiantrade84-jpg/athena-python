@@ -1,0 +1,20 @@
+[
+  {
+    "symbol": "BTC/USDT",
+    "r_multiple": 3.97,
+    "pnl": 0.0,
+    "timestamp": "2025-05-19",
+    "flags": [
+      "Missing exit reason but large R: 3.97"
+    ]
+  },
+  {
+    "symbol": "BTC/USDT",
+    "r_multiple": -1.9,
+    "pnl": 0.0,
+    "timestamp": "2026-04-04",
+    "flags": [
+      "Max DD contributor"
+    ]
+  }
+]

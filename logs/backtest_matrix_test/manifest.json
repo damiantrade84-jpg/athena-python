@@ -1,0 +1,29 @@
+{
+  "timestamp": "2026-04-25T21:56:45.412977+00:00",
+  "total_jobs": 1,
+  "completed_jobs": 1,
+  "failed_jobs": 0,
+  "skipped_jobs": 1,
+  "running_started_at": "2026-04-25T21:56:45.413007+00:00",
+  "last_updated_at": "2026-04-25T21:56:45.413016+00:00",
+  "matrix_hash": "350a73dcdc26595d",
+  "command_args": {
+    "matrix": "configs/backtest_matrix.yaml",
+    "output": "logs/backtest_matrix_test",
+    "resume": true,
+    "max_workers": 1,
+    "engines": [
+      "A"
+    ],
+    "groups": null,
+    "symbols": [
+      "BTC/USDT"
+    ],
+    "timeframes": [
+      "H1"
+    ],
+    "start_date": null,
+    "end_date": null,
+    "dry_run": false
+  }
+}

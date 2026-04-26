@@ -189,7 +189,11 @@ def _build_disagreement_diagnosis(
         if b_verdict_b == "CLEAR" and not b.get("passed"):
             _b_missing.append(b.get("signal_diagnostic") or "engine_b_checklist_failed")
         if not b_struct_ok:
-            _b_reason_codes = (signal_b.get("engine_b_diagnostics") or {}).get("reason_codes", [])
+            _b_diagnostics = signal_b.get("engine_b_diagnostics") or {}
+            if isinstance(_b_diagnostics, str):
+                log.debug("[ENGINE C] signal_b['engine_b_diagnostics'] is a string (%r), treating as empty dict", _b_diagnostics)
+                _b_diagnostics = {}
+            _b_reason_codes = _b_diagnostics.get("reason_codes", [])
             _b_missing.append(f"structure_failed (codes={_b_reason_codes})")
         if not b_zone_ok:
             _b_missing.append("no_zone_touch")

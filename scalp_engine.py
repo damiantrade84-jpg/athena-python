@@ -2337,6 +2337,37 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 _funnel["gate_result"] = "BLOCKED"
                 _funnel["fail_reasons"].append("rr_below_min")
                 continue
+
+            # --- ENGINE D FEE GUARD ---
+            if cfg.get("ENGINE_D_FEE_GUARD_ENABLED", True):
+                risk_distance_abs = abs(levels["entry"] - levels["sl"])
+                risk_distance_pct = risk_distance_abs / levels["entry"] if levels["entry"] > 0 else 0
+                
+                estimated_fee_pct = float(cfg.get("ESTIMATED_FEE_PCT", 0.0006))
+                estimated_slippage_pct = float(cfg.get("ESTIMATED_SLIPPAGE_PCT", 0.0002))
+                estimated_total_cost_pct = estimated_fee_pct + estimated_slippage_pct
+                
+                cost_as_R = estimated_total_cost_pct / risk_distance_pct if risk_distance_pct > 0 else float('inf')
+                
+                max_cost_R = float(cfg.get("ENGINE_D_MAX_COST_R", 0.20))
+                min_stop_pct = float(cfg.get("ENGINE_D_MIN_STOP_PCT", 0.0005))
+                
+                if risk_distance_abs <= 0 or risk_distance_pct < min_stop_pct or cost_as_R > max_cost_R:
+                    _fee_reason = "fee_guard_micro_stop"
+                    log.warning(f"[SCALP] {_fee_reason} on {display}: cost_as_R={cost_as_R:.2f} > {max_cost_R} or stop_pct={risk_distance_pct:.5f} < {min_stop_pct}")
+                    _record_stability_sample(display, asset_type, False, reason=_fee_reason)
+                    skipped.append({"pair": display, "reason": _fee_reason})
+                    _funnel["gate_result"] = "BLOCKED"
+                    _funnel["fail_reasons"].append(_fee_reason)
+                    _funnel["diagnostic_notes"].update({
+                        "engine_d_reject_reason": _fee_reason,
+                        "risk_distance_pct": risk_distance_pct,
+                        "estimated_total_cost_pct": estimated_total_cost_pct,
+                        "cost_as_R": cost_as_R,
+                        "min_required_stop_pct": min_stop_pct
+                    })
+                    continue
+
             advisory = _build_engine_d_advisory(
                 market_state=market_state,
                 price_loc=price_loc,

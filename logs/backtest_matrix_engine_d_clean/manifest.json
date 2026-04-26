@@ -1,0 +1,25 @@
+{
+  "timestamp": "2026-04-26T07:20:27.132651+00:00",
+  "total_jobs": 15,
+  "completed_jobs": 14,
+  "failed_jobs": 1,
+  "skipped_jobs": 0,
+  "running_started_at": "2026-04-26T07:18:41.691632+00:00",
+  "last_updated_at": "2026-04-26T07:20:27.132669+00:00",
+  "matrix_hash": "38f155fc8c8ed9fc",
+  "command_args": {
+    "matrix": "configs/backtest_matrix.yaml",
+    "output": "logs/backtest_matrix_engine_d_clean",
+    "resume": false,
+    "max_workers": 1,
+    "engines": [
+      "D"
+    ],
+    "groups": null,
+    "symbols": null,
+    "timeframes": null,
+    "start_date": null,
+    "end_date": null,
+    "dry_run": false
+  }
+}

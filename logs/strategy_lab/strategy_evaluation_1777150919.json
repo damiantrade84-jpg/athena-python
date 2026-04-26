@@ -1,0 +1,6011 @@
+{
+  "timestamp": "2026-04-25T23:01:59.456852",
+  "best_symbol": "XAG/USD",
+  "worst_symbol": "TLT",
+  "results": [
+    {
+      "asset_group": "forex_major",
+      "symbol": "EUR/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 10,
+        "win_rate": 0.5,
+        "profit_factor": 0.9932523616734142,
+        "average_R": -0.005000000000000027,
+        "max_drawdown": 3.22,
+        "average_win": 1.472,
+        "average_loss": -1.482,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "EUR/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.23529411764705882,
+        "profit_factor": 0.3727678571428571,
+        "average_R": -0.6611764705882353,
+        "max_drawdown": 15.37,
+        "average_win": 1.67,
+        "average_loss": -1.3784615384615384,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "EUR/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 22,
+        "win_rate": 0.36363636363636365,
+        "profit_factor": 0.8763056624518966,
+        "average_R": -0.10227272727272728,
+        "max_drawdown": 5.779999999999999,
+        "average_win": 1.9925,
+        "average_loss": -1.2992857142857144,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "EUR/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 1,
+        "win_rate": 1.0,
+        "profit_factor": Infinity,
+        "average_R": 1.87,
+        "max_drawdown": 0,
+        "average_win": 1.87,
+        "average_loss": 0,
+        "most_common_failure_reason": "N/A",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "GBP/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 14,
+        "win_rate": 0.5,
+        "profit_factor": 0.9468283582089552,
+        "average_R": -0.040714285714285724,
+        "max_drawdown": 6.87,
+        "average_win": 1.45,
+        "average_loss": -1.5314285714285714,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "GBP/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 10,
+        "win_rate": 0.2,
+        "profit_factor": 0.2863475177304965,
+        "average_R": -0.805,
+        "max_drawdown": 9.18,
+        "average_win": 1.615,
+        "average_loss": -1.41,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "GBP/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 11,
+        "win_rate": 0.2727272727272727,
+        "profit_factor": 0.45562671546203115,
+        "average_R": -0.5409090909090909,
+        "max_drawdown": 8.28,
+        "average_win": 1.66,
+        "average_loss": -1.36625,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "GBP/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 15,
+        "win_rate": 0.4,
+        "profit_factor": 0.7491197183098591,
+        "average_R": -0.19,
+        "max_drawdown": 7.97,
+        "average_win": 1.4183333333333332,
+        "average_loss": -1.2622222222222221,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "USD/JPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 8,
+        "win_rate": 0.5,
+        "profit_factor": 0.99320882852292,
+        "average_R": -0.0050000000000000044,
+        "max_drawdown": 3.1500000000000004,
+        "average_win": 1.4625,
+        "average_loss": -1.4725000000000001,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "USD/JPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 10,
+        "win_rate": 0.2,
+        "profit_factor": 0.3640973630831643,
+        "average_R": -0.627,
+        "max_drawdown": 6.949999999999999,
+        "average_win": 1.795,
+        "average_loss": -1.2325,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "USD/JPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 19,
+        "win_rate": 0.2631578947368421,
+        "profit_factor": 0.5109769484083425,
+        "average_R": -0.4689473684210526,
+        "max_drawdown": 10.770000000000001,
+        "average_win": 1.862,
+        "average_loss": -1.3014285714285714,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "USD/JPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.3076923076923077,
+        "profit_factor": 0.5457038391224863,
+        "average_R": -0.3823076923076923,
+        "max_drawdown": 4.97,
+        "average_win": 1.4925,
+        "average_loss": -1.2155555555555555,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "AUD/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.4232505643340858,
+        "average_R": -0.5677777777777777,
+        "max_drawdown": 6.529999999999999,
+        "average_win": 1.25,
+        "average_loss": -1.4766666666666666,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "AUD/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.4117647058823529,
+        "profit_factor": 1.023980815347722,
+        "average_R": 0.01764705882352943,
+        "max_drawdown": 7.66,
+        "average_win": 1.83,
+        "average_loss": -1.251,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "AUD/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 8,
+        "win_rate": 0.25,
+        "profit_factor": 0.6309192200557102,
+        "average_R": -0.33125000000000004,
+        "max_drawdown": 6.02,
+        "average_win": 2.2649999999999997,
+        "average_loss": -1.1966666666666668,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "AUD/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.4375,
+        "profit_factor": 1.0867106503298776,
+        "average_R": 0.05750000000000002,
+        "max_drawdown": 7.0200000000000005,
+        "average_win": 1.6471428571428572,
+        "average_loss": -1.1788888888888889,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "NZD/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.4166666666666667,
+        "profit_factor": 0.7824639289678136,
+        "average_R": -0.16333333333333336,
+        "max_drawdown": 4.710000000000001,
+        "average_win": 1.41,
+        "average_loss": -1.2871428571428571,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "NZD/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.554655870445344,
+        "average_R": -0.3666666666666667,
+        "max_drawdown": 3.79,
+        "average_win": 1.3699999999999999,
+        "average_loss": -1.235,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "NZD/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 19,
+        "win_rate": 0.42105263157894735,
+        "profit_factor": 0.9969856819894499,
+        "average_R": -0.0021052631578947385,
+        "max_drawdown": 5.89,
+        "average_win": 1.65375,
+        "average_loss": -1.2063636363636363,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "NZD/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 10,
+        "win_rate": 0.4,
+        "profit_factor": 1.0162499999999999,
+        "average_R": 0.012999999999999946,
+        "max_drawdown": 4.0200000000000005,
+        "average_win": 2.0324999999999998,
+        "average_loss": -1.3333333333333335,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "EUR/GBP",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 15,
+        "win_rate": 0.13333333333333333,
+        "profit_factor": 0.19147727272727272,
+        "average_R": -0.9486666666666667,
+        "max_drawdown": 14.910000000000002,
+        "average_win": 1.685,
+        "average_loss": -1.353846153846154,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "EUR/GBP",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 2,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -1.415,
+        "max_drawdown": 2.83,
+        "average_win": 0,
+        "average_loss": -1.415,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "EUR/GBP",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.3908145580589255,
+        "average_R": -0.5858333333333333,
+        "max_drawdown": 10.319999999999999,
+        "average_win": 1.1275,
+        "average_loss": -1.4425,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "EUR/GBP",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 21,
+        "win_rate": 0.23809523809523808,
+        "profit_factor": 0.1985268326902841,
+        "average_R": -1.088095238095238,
+        "max_drawdown": 22.849999999999998,
+        "average_win": 1.1320000000000001,
+        "average_loss": -1.781875,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "USD/CAD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 14,
+        "win_rate": 0.6428571428571429,
+        "profit_factor": 1.9261637239165328,
+        "average_R": 0.41214285714285714,
+        "max_drawdown": 3.3500000000000005,
+        "average_win": 1.3333333333333333,
+        "average_loss": -1.246,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "USD/CAD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.29411764705882354,
+        "profit_factor": 0.5264200792602378,
+        "average_R": -0.42176470588235293,
+        "max_drawdown": 7.17,
+        "average_win": 1.594,
+        "average_loss": -1.2616666666666667,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "USD/CAD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 19,
+        "win_rate": 0.42105263157894735,
+        "profit_factor": 0.877643504531722,
+        "average_R": -0.08526315789473686,
+        "max_drawdown": 4.37,
+        "average_win": 1.4525,
+        "average_loss": -1.2036363636363636,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "USD/CHF",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.2222222222222222,
+        "profit_factor": 0.30138445154419596,
+        "average_R": -0.7288888888888889,
+        "max_drawdown": 9.389999999999999,
+        "average_win": 1.415,
+        "average_loss": -1.3414285714285714,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "USD/CHF",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.3076923076923077,
+        "profit_factor": 0.5427046263345195,
+        "average_R": -0.3953846153846154,
+        "max_drawdown": 7.640000000000001,
+        "average_win": 1.525,
+        "average_loss": -1.248888888888889,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "USD/CHF",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 19,
+        "win_rate": 0.3157894736842105,
+        "profit_factor": 0.6379635449402892,
+        "average_R": -0.30315789473684207,
+        "max_drawdown": 9.950000000000001,
+        "average_win": 1.6916666666666667,
+        "average_loss": -1.2238461538461538,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_major",
+      "symbol": "USD/CHF",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.1111111111111111,
+        "profit_factor": 0.10471204188481675,
+        "average_R": -1.14,
+        "max_drawdown": 10.260000000000002,
+        "average_win": 1.2,
+        "average_loss": -1.4324999999999999,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "EUR/JPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 15,
+        "win_rate": 0.4,
+        "profit_factor": 0.6386623164763459,
+        "average_R": -0.29533333333333334,
+        "max_drawdown": 8.23,
+        "average_win": 1.305,
+        "average_loss": -1.3622222222222222,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "EUR/JPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 14,
+        "win_rate": 0.21428571428571427,
+        "profit_factor": 0.3470790378006873,
+        "average_R": -0.6785714285714286,
+        "max_drawdown": 10.84,
+        "average_win": 1.6833333333333333,
+        "average_loss": -1.3227272727272728,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "EUR/JPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.6849865951742626,
+        "average_R": -0.26111111111111107,
+        "max_drawdown": 3.5999999999999996,
+        "average_win": 1.7033333333333334,
+        "average_loss": -1.2433333333333332,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "EUR/JPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.25,
+        "profit_factor": 0.33207547169811324,
+        "average_R": -0.7375,
+        "max_drawdown": 10.07,
+        "average_win": 1.4666666666666666,
+        "average_loss": -1.4722222222222223,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "GBP/JPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 14,
+        "win_rate": 0.21428571428571427,
+        "profit_factor": 0.44651830581478824,
+        "average_R": -0.5507142857142857,
+        "max_drawdown": 8.79,
+        "average_win": 2.0733333333333333,
+        "average_loss": -1.2663636363636364,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "GBP/JPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 23,
+        "win_rate": 0.30434782608695654,
+        "profit_factor": 0.48568912373403783,
+        "average_R": -0.5078260869565218,
+        "max_drawdown": 13.75,
+        "average_win": 1.5757142857142856,
+        "average_loss": -1.419375,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "GBP/JPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 7,
+        "win_rate": 0.14285714285714285,
+        "profit_factor": 0.270306258322237,
+        "average_R": -0.7828571428571429,
+        "max_drawdown": 5.48,
+        "average_win": 2.03,
+        "average_loss": -1.2516666666666667,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "GBP/JPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 6,
+        "win_rate": 0.16666666666666666,
+        "profit_factor": 0.24394184168012925,
+        "average_R": -0.78,
+        "max_drawdown": 4.68,
+        "average_win": 1.51,
+        "average_loss": -1.238,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "AUD/JPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.35294117647058826,
+        "profit_factor": 0.6436609152288072,
+        "average_R": -0.27941176470588236,
+        "max_drawdown": 10.98,
+        "average_win": 1.43,
+        "average_loss": -1.2118181818181817,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "AUD/JPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 2,
+        "win_rate": 1.0,
+        "profit_factor": Infinity,
+        "average_R": 1.44,
+        "max_drawdown": 0,
+        "average_win": 1.44,
+        "average_loss": 0,
+        "most_common_failure_reason": "N/A",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "AUD/JPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.5384615384615384,
+        "profit_factor": 1.6703910614525141,
+        "average_R": 0.36923076923076925,
+        "max_drawdown": 3.59,
+        "average_win": 1.7085714285714286,
+        "average_loss": -1.1933333333333334,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "AUD/JPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 18,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.7687253613666228,
+        "average_R": -0.1955555555555556,
+        "max_drawdown": 10.25,
+        "average_win": 1.95,
+        "average_loss": -1.2683333333333333,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "EUR/AUD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 5,
+        "win_rate": 0.4,
+        "profit_factor": 0.6871657754010696,
+        "average_R": -0.23399999999999999,
+        "max_drawdown": 2.48,
+        "average_win": 1.2850000000000001,
+        "average_loss": -1.2466666666666666,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "EUR/AUD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.375,
+        "profit_factor": 0.5644122383252818,
+        "average_R": -0.338125,
+        "max_drawdown": 9.72,
+        "average_win": 1.1683333333333334,
+        "average_loss": -1.242,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "EUR/AUD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 14,
+        "win_rate": 0.35714285714285715,
+        "profit_factor": 0.7049327354260089,
+        "average_R": -0.23500000000000001,
+        "max_drawdown": 9.649999999999999,
+        "average_win": 1.5719999999999998,
+        "average_loss": -1.238888888888889,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "EUR/AUD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 15,
+        "win_rate": 0.13333333333333333,
+        "profit_factor": 0.1915011037527594,
+        "average_R": -0.9766666666666667,
+        "max_drawdown": 14.65,
+        "average_win": 1.735,
+        "average_loss": -1.393846153846154,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "GBP/AUD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.23076923076923078,
+        "profit_factor": 0.3587736464448793,
+        "average_R": -0.7561538461538462,
+        "max_drawdown": 15.329999999999998,
+        "average_win": 1.8333333333333333,
+        "average_loss": -1.533,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "GBP/AUD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 15,
+        "win_rate": 0.4666666666666667,
+        "profit_factor": 0.8828571428571428,
+        "average_R": -0.08199999999999996,
+        "max_drawdown": 5.56,
+        "average_win": 1.3242857142857143,
+        "average_loss": -1.3125,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "GBP/AUD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 19,
+        "win_rate": 0.3684210526315789,
+        "profit_factor": 0.8195592286501377,
+        "average_R": -0.13789473684210526,
+        "max_drawdown": 5.92,
+        "average_win": 1.7,
+        "average_loss": -1.21,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "GBP/AUD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 3,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.2047244094488189,
+        "average_R": -0.6733333333333333,
+        "max_drawdown": 2.54,
+        "average_win": 0.52,
+        "average_loss": -1.27,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_exotic",
+      "symbol": "USD/ZAR",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.8620268620268622,
+        "average_R": -0.09416666666666669,
+        "max_drawdown": 4.380000000000001,
+        "average_win": 1.7650000000000001,
+        "average_loss": -1.02375,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_exotic",
+      "symbol": "USD/ZAR",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 15,
+        "win_rate": 0.4,
+        "profit_factor": 0.9662813102119461,
+        "average_R": -0.023333333333333296,
+        "max_drawdown": 2.8,
+        "average_win": 1.6716666666666666,
+        "average_loss": -1.1533333333333333,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_exotic",
+      "symbol": "USD/ZAR",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 11,
+        "win_rate": 0.18181818181818182,
+        "profit_factor": 0.27928772258669166,
+        "average_R": -0.6990909090909091,
+        "max_drawdown": 7.6899999999999995,
+        "average_win": 1.49,
+        "average_loss": -1.1855555555555555,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_exotic",
+      "symbol": "USD/ZAR",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.4166666666666667,
+        "profit_factor": 1.0449735449735449,
+        "average_R": 0.02833333333333332,
+        "max_drawdown": 3.24,
+        "average_win": 1.58,
+        "average_loss": -1.08,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "EUR/CHF",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 7,
+        "win_rate": 0.14285714285714285,
+        "profit_factor": 0.1858974358974359,
+        "average_R": -0.9071428571428571,
+        "max_drawdown": 6.35,
+        "average_win": 1.45,
+        "average_loss": -1.3,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "EUR/CHF",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.5555555555555556,
+        "profit_factor": 1.3838582677165354,
+        "average_R": 0.21666666666666667,
+        "max_drawdown": 2.55,
+        "average_win": 1.406,
+        "average_loss": -1.27,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "EUR/CHF",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.29411764705882354,
+        "profit_factor": 0.44777986241400874,
+        "average_R": -0.5194117647058824,
+        "max_drawdown": 11.2,
+        "average_win": 1.432,
+        "average_loss": -1.3325,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_cross",
+      "symbol": "EUR/CHF",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.35294117647058826,
+        "profit_factor": 0.421084704448507,
+        "average_R": -0.5588235294117647,
+        "max_drawdown": 11.540000000000001,
+        "average_win": 1.1516666666666666,
+        "average_loss": -1.491818181818182,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_exotic",
+      "symbol": "USD/MXN",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.2222222222222222,
+        "profit_factor": 0.42643678160919546,
+        "average_R": -0.5544444444444445,
+        "max_drawdown": 4.989999999999999,
+        "average_win": 1.855,
+        "average_loss": -1.2428571428571429,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_exotic",
+      "symbol": "USD/MXN",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.23076923076923078,
+        "profit_factor": 0.3685003767897514,
+        "average_R": -0.6446153846153846,
+        "max_drawdown": 10.63,
+        "average_win": 1.6300000000000001,
+        "average_loss": -1.327,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_exotic",
+      "symbol": "USD/MXN",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 6,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.6384778012684988,
+        "average_R": -0.285,
+        "max_drawdown": 2.34,
+        "average_win": 1.51,
+        "average_loss": -1.1825,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_exotic",
+      "symbol": "USD/MXN",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 22,
+        "win_rate": 0.5454545454545454,
+        "profit_factor": 1.683982683982684,
+        "average_R": 0.35909090909090907,
+        "max_drawdown": 3.4399999999999995,
+        "average_win": 1.6208333333333333,
+        "average_loss": -1.155,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "forex_exotic",
+      "symbol": "USD/SGD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 14,
+        "win_rate": 0.42857142857142855,
+        "profit_factor": 0.6515533165407221,
+        "average_R": -0.2964285714285714,
+        "max_drawdown": 4.97,
+        "average_win": 1.2933333333333334,
+        "average_loss": -1.48875,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_exotic",
+      "symbol": "USD/SGD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 14,
+        "win_rate": 0.14285714285714285,
+        "profit_factor": 0.08224479922593131,
+        "average_R": -1.355,
+        "max_drawdown": 18.97,
+        "average_win": 0.8500000000000001,
+        "average_loss": -1.7225,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_exotic",
+      "symbol": "USD/SGD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.4444444444444444,
+        "profit_factor": 0.7699859747545582,
+        "average_R": -0.18222222222222217,
+        "max_drawdown": 5.9399999999999995,
+        "average_win": 1.3725,
+        "average_loss": -1.426,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "forex_exotic",
+      "symbol": "USD/SGD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.38461538461538464,
+        "profit_factor": 0.7130681818181818,
+        "average_R": -0.23307692307692307,
+        "max_drawdown": 6.800000000000001,
+        "average_win": 1.506,
+        "average_loss": -1.32,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "XAU/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.5,
+        "profit_factor": 1.590500641848524,
+        "average_R": 0.3833333333333333,
+        "max_drawdown": 2.9699999999999998,
+        "average_win": 2.065,
+        "average_loss": -1.2983333333333333,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "XAU/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 11,
+        "win_rate": 0.18181818181818182,
+        "profit_factor": 0.36797752808988765,
+        "average_R": -0.6136363636363636,
+        "max_drawdown": 9.499999999999998,
+        "average_win": 1.9649999999999999,
+        "average_loss": -1.1866666666666668,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "XAU/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 20,
+        "win_rate": 0.35,
+        "profit_factor": 0.8265682656826568,
+        "average_R": -0.141,
+        "max_drawdown": 7.14,
+        "average_win": 1.92,
+        "average_loss": -1.2507692307692306,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "XAU/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 7,
+        "win_rate": 0.5714285714285714,
+        "profit_factor": 2.409090909090909,
+        "average_R": 0.7085714285714285,
+        "max_drawdown": 2.1000000000000005,
+        "average_win": 2.12,
+        "average_loss": -1.1733333333333333,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "XAG/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 15,
+        "win_rate": 0.4666666666666667,
+        "profit_factor": 1.4912820512820513,
+        "average_R": 0.31933333333333336,
+        "max_drawdown": 2.7399999999999998,
+        "average_win": 2.077142857142857,
+        "average_loss": -1.21875,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "XAG/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 18,
+        "win_rate": 0.4444444444444444,
+        "profit_factor": 1.546028880866426,
+        "average_R": 0.3361111111111111,
+        "max_drawdown": 4.1899999999999995,
+        "average_win": 2.14125,
+        "average_loss": -1.108,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "XAG/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 10,
+        "win_rate": 0.6,
+        "profit_factor": 3.4077448747152617,
+        "average_R": 1.057,
+        "max_drawdown": 2.21,
+        "average_win": 2.493333333333333,
+        "average_loss": -1.0975000000000001,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "XAG/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 7,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -1.0771428571428572,
+        "max_drawdown": 7.54,
+        "average_win": 0,
+        "average_loss": -1.0771428571428572,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "WTI Oil",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.16666666666666666,
+        "profit_factor": 0.3292181069958848,
+        "average_R": -0.6791666666666666,
+        "max_drawdown": 10.92,
+        "average_win": 2.0,
+        "average_loss": -1.2149999999999999,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "WTI Oil",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.29411764705882354,
+        "profit_factor": 0.8538781163434903,
+        "average_R": -0.12411764705882351,
+        "max_drawdown": 8.27,
+        "average_win": 2.466,
+        "average_loss": -1.2033333333333334,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "WTI Oil",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.5,
+        "profit_factor": 1.8783977110157368,
+        "average_R": 0.5116666666666667,
+        "max_drawdown": 3.4699999999999998,
+        "average_win": 2.1883333333333335,
+        "average_loss": -1.165,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "WTI Oil",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.9694323144104804,
+        "average_R": -0.023333333333333303,
+        "max_drawdown": 4.53,
+        "average_win": 2.22,
+        "average_loss": -1.145,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "Nat Gas",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 14,
+        "win_rate": 0.5,
+        "profit_factor": 1.9099462365591398,
+        "average_R": 0.4835714285714286,
+        "max_drawdown": 3.74,
+        "average_win": 2.0300000000000002,
+        "average_loss": -1.062857142857143,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "Nat Gas",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.08333333333333333,
+        "profit_factor": 0.22384219554030874,
+        "average_R": -0.7541666666666668,
+        "max_drawdown": 9.05,
+        "average_win": 2.61,
+        "average_loss": -1.06,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "Nat Gas",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.9062500000000001,
+        "average_R": -0.06666666666666668,
+        "max_drawdown": 4.82,
+        "average_win": 1.9333333333333333,
+        "average_loss": -1.0666666666666667,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "Nat Gas",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 15,
+        "win_rate": 0.26666666666666666,
+        "profit_factor": 0.6339590443686006,
+        "average_R": -0.28600000000000003,
+        "max_drawdown": 6.41,
+        "average_win": 1.8575,
+        "average_loss": -1.0654545454545454,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "XPT/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.0625,
+        "profit_factor": 0.14352120859965137,
+        "average_R": -0.9212499999999999,
+        "max_drawdown": 14.74,
+        "average_win": 2.47,
+        "average_loss": -1.1473333333333333,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "XPT/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 8,
+        "win_rate": 0.375,
+        "profit_factor": 1.0497237569060773,
+        "average_R": 0.033749999999999974,
+        "max_drawdown": 4.3500000000000005,
+        "average_win": 1.9000000000000001,
+        "average_loss": -1.086,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "XPT/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.29411764705882354,
+        "profit_factor": 0.7197026022304833,
+        "average_R": -0.22176470588235295,
+        "max_drawdown": 9.96,
+        "average_win": 1.936,
+        "average_loss": -1.1208333333333333,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "XPT/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.4444444444444444,
+        "profit_factor": 1.5603773584905658,
+        "average_R": 0.32999999999999996,
+        "max_drawdown": 2.17,
+        "average_win": 2.0675,
+        "average_loss": -1.06,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "XPD/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 15,
+        "win_rate": 0.13333333333333333,
+        "profit_factor": 0.3507925568573398,
+        "average_R": -0.628,
+        "max_drawdown": 10.870000000000001,
+        "average_win": 2.545,
+        "average_loss": -1.1161538461538463,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "XPD/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 14,
+        "win_rate": 0.21428571428571427,
+        "profit_factor": 0.48026868178001675,
+        "average_R": -0.44214285714285717,
+        "max_drawdown": 8.14,
+        "average_win": 1.9066666666666667,
+        "average_loss": -1.0827272727272728,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "XPD/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 14,
+        "win_rate": 0.2857142857142857,
+        "profit_factor": 0.8340888485947414,
+        "average_R": -0.13071428571428578,
+        "max_drawdown": 3.7800000000000002,
+        "average_win": 2.3,
+        "average_loss": -1.103,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "commodity",
+      "symbol": "XPD/USD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 7,
+        "win_rate": 0.14285714285714285,
+        "profit_factor": 0.3993808049535603,
+        "average_R": -0.5542857142857144,
+        "max_drawdown": 4.359999999999999,
+        "average_win": 2.58,
+        "average_loss": -1.0766666666666667,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "S&P 500",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.4444444444444444,
+        "profit_factor": 0.5358056265984655,
+        "average_R": -0.4033333333333333,
+        "max_drawdown": 5.73,
+        "average_win": 1.0475,
+        "average_loss": -1.564,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "S&P 500",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 25,
+        "win_rate": 0.2,
+        "profit_factor": 0.27853736089030207,
+        "average_R": -0.9076,
+        "max_drawdown": 22.690000000000005,
+        "average_win": 1.752,
+        "average_loss": -1.5725,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "S&P 500",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 5,
+        "win_rate": 0.6,
+        "profit_factor": 1.6482084690553747,
+        "average_R": 0.398,
+        "max_drawdown": 2.1199999999999997,
+        "average_win": 1.6866666666666668,
+        "average_loss": -1.5350000000000001,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "S&P 500",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 11,
+        "win_rate": 0.09090909090909091,
+        "profit_factor": 0.1487341772151899,
+        "average_R": -1.2227272727272727,
+        "max_drawdown": 15.799999999999999,
+        "average_win": 2.35,
+        "average_loss": -1.58,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Nasdaq",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 5,
+        "win_rate": 0.6,
+        "profit_factor": 2.185770750988142,
+        "average_R": 0.6000000000000001,
+        "max_drawdown": 2.5300000000000002,
+        "average_win": 1.8433333333333335,
+        "average_loss": -1.2650000000000001,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Nasdaq",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 21,
+        "win_rate": 0.14285714285714285,
+        "profit_factor": 0.22268383880348983,
+        "average_R": -0.8909523809523809,
+        "max_drawdown": 21.179999999999996,
+        "average_win": 1.7866666666666666,
+        "average_loss": -1.3372222222222223,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Nasdaq",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.25,
+        "profit_factor": 0.43771507226428086,
+        "average_R": -0.510625,
+        "max_drawdown": 9.65,
+        "average_win": 1.59,
+        "average_loss": -1.2108333333333332,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Nasdaq",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 8,
+        "win_rate": 0.125,
+        "profit_factor": 0.2441025641025641,
+        "average_R": -0.92125,
+        "max_drawdown": 7.37,
+        "average_win": 2.38,
+        "average_loss": -1.3928571428571428,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Dow Jones",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 6,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.7652859960552267,
+        "average_R": -0.19833333333333333,
+        "max_drawdown": 3.9000000000000004,
+        "average_win": 1.94,
+        "average_loss": -1.2675,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Dow Jones",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 24,
+        "win_rate": 0.125,
+        "profit_factor": 0.2052238805970149,
+        "average_R": -0.9762500000000001,
+        "max_drawdown": 25.860000000000003,
+        "average_win": 2.0166666666666666,
+        "average_loss": -1.4038095238095238,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Dow Jones",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 7,
+        "win_rate": 0.14285714285714285,
+        "profit_factor": 0.3025210084033613,
+        "average_R": -0.83,
+        "max_drawdown": 8.33,
+        "average_win": 2.52,
+        "average_loss": -1.3883333333333334,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Dow Jones",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.38461538461538464,
+        "profit_factor": 0.8654377880184333,
+        "average_R": -0.11230769230769232,
+        "max_drawdown": 5.43,
+        "average_win": 1.878,
+        "average_loss": -1.35625,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "DAX 40",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 19,
+        "win_rate": 0.2631578947368421,
+        "profit_factor": 0.404667046101309,
+        "average_R": -0.5505263157894736,
+        "max_drawdown": 16.38,
+        "average_win": 1.422,
+        "average_loss": -1.255,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "DAX 40",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.25,
+        "profit_factor": 0.4711842938568715,
+        "average_R": -0.521875,
+        "max_drawdown": 8.35,
+        "average_win": 1.86,
+        "average_loss": -1.3158333333333334,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "DAX 40",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 4,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -1.1575,
+        "max_drawdown": 4.63,
+        "average_win": 0,
+        "average_loss": -1.1575,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "DAX 40",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 11,
+        "win_rate": 0.18181818181818182,
+        "profit_factor": 0.24870912220309813,
+        "average_R": -0.7936363636363636,
+        "max_drawdown": 10.3,
+        "average_win": 1.445,
+        "average_loss": -1.291111111111111,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "UK100",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.2222222222222222,
+        "profit_factor": 0.29247311827956984,
+        "average_R": -0.7311111111111112,
+        "max_drawdown": 8.07,
+        "average_win": 1.3599999999999999,
+        "average_loss": -1.3285714285714285,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "UK100",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.35294117647058826,
+        "profit_factor": 0.6382699868938402,
+        "average_R": -0.3247058823529412,
+        "max_drawdown": 6.82,
+        "average_win": 1.6233333333333333,
+        "average_loss": -1.3872727272727272,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "UK100",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 18,
+        "win_rate": 0.2222222222222222,
+        "profit_factor": 0.4287179487179487,
+        "average_R": -0.6188888888888889,
+        "max_drawdown": 13.170000000000002,
+        "average_win": 2.09,
+        "average_loss": -1.3928571428571428,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "UK100",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 5,
+        "win_rate": 0.4,
+        "profit_factor": 0.9785867237687367,
+        "average_R": -0.019999999999999973,
+        "max_drawdown": 4.67,
+        "average_win": 2.285,
+        "average_loss": -1.5566666666666666,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "ASX 200",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 11,
+        "win_rate": 0.5454545454545454,
+        "profit_factor": 1.3625,
+        "average_R": 0.23727272727272725,
+        "max_drawdown": 4.41,
+        "average_win": 1.635,
+        "average_loss": -1.44,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "ASX 200",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 14,
+        "win_rate": 0.5,
+        "profit_factor": 1.3846153846153848,
+        "average_R": 0.28214285714285714,
+        "max_drawdown": 5.64,
+        "average_win": 2.0314285714285716,
+        "average_loss": -1.467142857142857,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "ASX 200",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 14,
+        "win_rate": 0.35714285714285715,
+        "profit_factor": 0.6529850746268656,
+        "average_R": -0.3321428571428572,
+        "max_drawdown": 7.08,
+        "average_win": 1.75,
+        "average_loss": -1.488888888888889,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "ASX 200",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 8,
+        "win_rate": 0.5,
+        "profit_factor": 1.164983164983165,
+        "average_R": 0.1225,
+        "max_drawdown": 3.5699999999999994,
+        "average_win": 1.73,
+        "average_loss": -1.4849999999999999,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Nikkei 225",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 5,
+        "win_rate": 0.2,
+        "profit_factor": 0.44981412639405205,
+        "average_R": -0.592,
+        "max_drawdown": 2.96,
+        "average_win": 2.42,
+        "average_loss": -1.345,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Nikkei 225",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 14,
+        "win_rate": 0.35714285714285715,
+        "profit_factor": 0.713915298184961,
+        "average_R": -0.23642857142857146,
+        "max_drawdown": 7.99,
+        "average_win": 1.652,
+        "average_loss": -1.2855555555555556,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Nikkei 225",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.25,
+        "profit_factor": 0.38550135501355015,
+        "average_R": -0.566875,
+        "max_drawdown": 12.0,
+        "average_win": 1.4225,
+        "average_loss": -1.23,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Nikkei 225",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 5,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -1.214,
+        "max_drawdown": 6.07,
+        "average_win": 0,
+        "average_loss": -1.214,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Hang Seng",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 11,
+        "win_rate": 0.45454545454545453,
+        "profit_factor": 1.2946058091286308,
+        "average_R": 0.19363636363636366,
+        "max_drawdown": 4.83,
+        "average_win": 1.872,
+        "average_loss": -1.205,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Hang Seng",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 6,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.8503253796095446,
+        "average_R": -0.11499999999999995,
+        "max_drawdown": 2.21,
+        "average_win": 1.96,
+        "average_loss": -1.1524999999999999,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Hang Seng",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 11,
+        "win_rate": 0.18181818181818182,
+        "profit_factor": 0.352622061482821,
+        "average_R": -0.6509090909090909,
+        "max_drawdown": 8.69,
+        "average_win": 1.9500000000000002,
+        "average_loss": -1.228888888888889,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Hang Seng",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.16666666666666666,
+        "profit_factor": 0.30862207896857374,
+        "average_R": -0.715,
+        "max_drawdown": 8.58,
+        "average_win": 1.915,
+        "average_loss": -1.241,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Euro Stoxx 50",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 8,
+        "win_rate": 0.375,
+        "profit_factor": 0.8438880706921945,
+        "average_R": -0.13249999999999998,
+        "max_drawdown": 5.640000000000001,
+        "average_win": 1.9100000000000001,
+        "average_loss": -1.358,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Euro Stoxx 50",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 21,
+        "win_rate": 0.14285714285714285,
+        "profit_factor": 0.2113985448666128,
+        "average_R": -0.929047619047619,
+        "max_drawdown": 21.95,
+        "average_win": 1.7433333333333334,
+        "average_loss": -1.3744444444444444,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Euro Stoxx 50",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 10,
+        "win_rate": 0.5,
+        "profit_factor": 1.3602305475504324,
+        "average_R": 0.25,
+        "max_drawdown": 5.66,
+        "average_win": 1.8880000000000001,
+        "average_loss": -1.388,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "Euro Stoxx 50",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.2222222222222222,
+        "profit_factor": 0.4689146469968387,
+        "average_R": -0.56,
+        "max_drawdown": 8.23,
+        "average_win": 2.2249999999999996,
+        "average_loss": -1.3557142857142856,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "AAPL",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 11,
+        "win_rate": 0.18181818181818182,
+        "profit_factor": 0.4846153846153846,
+        "average_R": -0.48727272727272725,
+        "max_drawdown": 7.85,
+        "average_win": 2.52,
+        "average_loss": -1.1555555555555554,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "AAPL",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 19,
+        "win_rate": 0.3684210526315789,
+        "profit_factor": 0.9410939691444601,
+        "average_R": -0.04421052631578946,
+        "max_drawdown": 7.09,
+        "average_win": 1.917142857142857,
+        "average_loss": -1.1883333333333332,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "AAPL",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 5,
+        "win_rate": 0.2,
+        "profit_factor": 0.32298136645962733,
+        "average_R": -0.6539999999999999,
+        "max_drawdown": 3.63,
+        "average_win": 1.56,
+        "average_loss": -1.2075,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "AAPL",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.07692307692307693,
+        "profit_factor": 0.10473457675753228,
+        "average_R": -0.96,
+        "max_drawdown": 12.48,
+        "average_win": 1.46,
+        "average_loss": -1.1616666666666666,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "TSLA",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 10,
+        "win_rate": 0.3,
+        "profit_factor": 0.7395833333333334,
+        "average_R": -0.2,
+        "max_drawdown": 4.43,
+        "average_win": 1.8933333333333333,
+        "average_loss": -1.0971428571428572,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "TSLA",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 20,
+        "win_rate": 0.55,
+        "profit_factor": 2.4943705220061414,
+        "average_R": 0.73,
+        "max_drawdown": 3.9700000000000024,
+        "average_win": 2.2154545454545453,
+        "average_loss": -1.0855555555555556,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "TSLA",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.5555555555555556,
+        "profit_factor": 2.2896551724137932,
+        "average_R": 0.6233333333333333,
+        "max_drawdown": 3.2600000000000007,
+        "average_win": 1.992,
+        "average_loss": -1.0875000000000001,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "TSLA",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 11,
+        "win_rate": 0.09090909090909091,
+        "profit_factor": 0.23007246376811594,
+        "average_R": -0.7727272727272728,
+        "max_drawdown": 8.5,
+        "average_win": 2.54,
+        "average_loss": -1.104,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "NVDA",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.11764705882352941,
+        "profit_factor": 0.19356796116504857,
+        "average_R": -0.7817647058823529,
+        "max_drawdown": 14.91,
+        "average_win": 1.5950000000000002,
+        "average_loss": -1.0986666666666667,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "NVDA",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 18,
+        "win_rate": 0.2777777777777778,
+        "profit_factor": 0.6621067031463749,
+        "average_R": -0.27444444444444444,
+        "max_drawdown": 6.999999999999999,
+        "average_win": 1.936,
+        "average_loss": -1.1246153846153846,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "NVDA",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.7017804154302671,
+        "average_R": -0.22333333333333333,
+        "max_drawdown": 4.64,
+        "average_win": 1.5766666666666667,
+        "average_loss": -1.1233333333333333,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "NVDA",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 5,
+        "win_rate": 0.2,
+        "profit_factor": 0.5452586206896551,
+        "average_R": -0.42200000000000004,
+        "max_drawdown": 3.54,
+        "average_win": 2.53,
+        "average_loss": -1.16,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "MSFT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 18,
+        "win_rate": 0.16666666666666666,
+        "profit_factor": 0.3082795067527892,
+        "average_R": -0.6544444444444444,
+        "max_drawdown": 14.139999999999999,
+        "average_win": 1.75,
+        "average_loss": -1.1353333333333333,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "MSFT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 15,
+        "win_rate": 0.2,
+        "profit_factor": 0.31149825783972124,
+        "average_R": -0.6586666666666666,
+        "max_drawdown": 12.92,
+        "average_win": 1.49,
+        "average_loss": -1.1958333333333333,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "MSFT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.38461538461538464,
+        "profit_factor": 0.8867924528301888,
+        "average_R": -0.08307692307692308,
+        "max_drawdown": 4.569999999999999,
+        "average_win": 1.692,
+        "average_loss": -1.1925,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "MSFT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 3,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -1.2633333333333334,
+        "max_drawdown": 3.79,
+        "average_win": 0,
+        "average_loss": -1.2633333333333334,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "AMZN",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 27,
+        "win_rate": 0.2222222222222222,
+        "profit_factor": 0.4969199178644764,
+        "average_R": -0.45370370370370366,
+        "max_drawdown": 15.579999999999995,
+        "average_win": 2.0166666666666666,
+        "average_loss": -1.1595238095238094,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "AMZN",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 8,
+        "win_rate": 0.375,
+        "profit_factor": 0.8291814946619217,
+        "average_R": -0.12,
+        "max_drawdown": 3.37,
+        "average_win": 1.5533333333333335,
+        "average_loss": -1.124,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "AMZN",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.2222222222222222,
+        "profit_factor": 0.5106117353308365,
+        "average_R": -0.4355555555555556,
+        "max_drawdown": 5.76,
+        "average_win": 2.045,
+        "average_loss": -1.1442857142857144,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "AMZN",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 4,
+        "win_rate": 0.25,
+        "profit_factor": 0.6807909604519774,
+        "average_R": -0.2825,
+        "max_drawdown": 3.54,
+        "average_win": 2.41,
+        "average_loss": -1.18,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "META",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.625,
+        "profit_factor": 3.15625,
+        "average_R": 0.905625,
+        "max_drawdown": 2.3200000000000003,
+        "average_win": 2.121,
+        "average_loss": -1.12,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "META",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 18,
+        "win_rate": 0.3888888888888889,
+        "profit_factor": 1.0055335968379446,
+        "average_R": 0.0038888888888888922,
+        "max_drawdown": 6.89,
+        "average_win": 1.8171428571428572,
+        "average_loss": -1.15,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "META",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.23076923076923078,
+        "profit_factor": 0.4668989547038327,
+        "average_R": -0.4707692307692308,
+        "max_drawdown": 6.119999999999999,
+        "average_win": 1.7866666666666666,
+        "average_loss": -1.148,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "META",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 1,
+        "win_rate": 1.0,
+        "profit_factor": Infinity,
+        "average_R": 1.48,
+        "max_drawdown": 0,
+        "average_win": 1.48,
+        "average_loss": 0,
+        "most_common_failure_reason": "N/A",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "GOOG",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 1,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -1.19,
+        "max_drawdown": 1.19,
+        "average_win": 0,
+        "average_loss": -1.19,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "GOOG",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.6923076923076923,
+        "profit_factor": 4.131578947368421,
+        "average_R": 1.0984615384615386,
+        "max_drawdown": 1.17,
+        "average_win": 2.0933333333333333,
+        "average_loss": -1.14,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "GOOG",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 14,
+        "win_rate": 0.21428571428571427,
+        "profit_factor": 0.5220529270248596,
+        "average_R": -0.4257142857142857,
+        "max_drawdown": 10.94,
+        "average_win": 2.17,
+        "average_loss": -1.1336363636363636,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "GOOG",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 18,
+        "win_rate": 0.2222222222222222,
+        "profit_factor": 0.3802816901408451,
+        "average_R": -0.5622222222222222,
+        "max_drawdown": 12.47,
+        "average_win": 1.5525,
+        "average_loss": -1.1664285714285714,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "JPM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.23529411764705882,
+        "profit_factor": 0.45454545454545453,
+        "average_R": -0.4976470588235294,
+        "max_drawdown": 11.74,
+        "average_win": 1.7625,
+        "average_loss": -1.1930769230769231,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "JPM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 6,
+        "win_rate": 0.16666666666666666,
+        "profit_factor": 0.4124579124579125,
+        "average_R": -0.5816666666666667,
+        "max_drawdown": 4.72,
+        "average_win": 2.45,
+        "average_loss": -1.188,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "JPM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 24,
+        "win_rate": 0.375,
+        "profit_factor": 0.7884187082405345,
+        "average_R": -0.15833333333333333,
+        "max_drawdown": 5.819999999999999,
+        "average_win": 1.5733333333333333,
+        "average_loss": -1.1973333333333334,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "JPM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 3,
+        "win_rate": 0.6666666666666666,
+        "profit_factor": 3.4821428571428568,
+        "average_R": 0.9266666666666666,
+        "max_drawdown": 1.12,
+        "average_win": 1.95,
+        "average_loss": -1.12,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "V",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.2222222222222222,
+        "profit_factor": 0.45475910693302,
+        "average_R": -0.5155555555555555,
+        "max_drawdown": 8.510000000000002,
+        "average_win": 1.935,
+        "average_loss": -1.2157142857142857,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "V",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 15,
+        "win_rate": 0.26666666666666666,
+        "profit_factor": 0.5271614384085692,
+        "average_R": -0.41200000000000003,
+        "max_drawdown": 10.149999999999999,
+        "average_win": 1.7225,
+        "average_loss": -1.1881818181818182,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "V",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.0625,
+        "profit_factor": 0.08231368186874305,
+        "average_R": -1.03125,
+        "max_drawdown": 16.5,
+        "average_win": 1.48,
+        "average_loss": -1.1986666666666665,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "V",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 3,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 1.0254237288135593,
+        "average_R": 0.020000000000000018,
+        "max_drawdown": 1.19,
+        "average_win": 2.42,
+        "average_loss": -1.18,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "XOM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 24,
+        "win_rate": 0.08333333333333333,
+        "profit_factor": 0.11044101017715792,
+        "average_R": -0.9833333333333333,
+        "max_drawdown": 23.6,
+        "average_win": 1.4649999999999999,
+        "average_loss": -1.2059090909090908,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "XOM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 3,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 1.0164609053497944,
+        "average_R": 0.01333333333333342,
+        "max_drawdown": 2.4299999999999997,
+        "average_win": 2.47,
+        "average_loss": -1.2149999999999999,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "XOM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.08333333333333333,
+        "profit_factor": 0.18783679753656657,
+        "average_R": -0.8791666666666667,
+        "max_drawdown": 11.809999999999997,
+        "average_win": 2.44,
+        "average_loss": -1.180909090909091,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "XOM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 11,
+        "win_rate": 0.2727272727272727,
+        "profit_factor": 0.482646420824295,
+        "average_R": -0.43363636363636365,
+        "max_drawdown": 6.6499999999999995,
+        "average_win": 1.4833333333333334,
+        "average_loss": -1.1525,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "NFLX",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 15,
+        "win_rate": 0.26666666666666666,
+        "profit_factor": 0.4131121642969984,
+        "average_R": -0.49533333333333335,
+        "max_drawdown": 7.439999999999999,
+        "average_win": 1.3074999999999999,
+        "average_loss": -1.1509090909090909,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "NFLX",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 11,
+        "win_rate": 0.2727272727272727,
+        "profit_factor": 0.5209713024282561,
+        "average_R": -0.39454545454545453,
+        "max_drawdown": 4.34,
+        "average_win": 1.5733333333333335,
+        "average_loss": -1.1325,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "NFLX",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 14,
+        "win_rate": 0.2857142857142857,
+        "profit_factor": 0.6121057118499573,
+        "average_R": -0.32499999999999996,
+        "max_drawdown": 9.14,
+        "average_win": 1.795,
+        "average_loss": -1.173,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "NFLX",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 1,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -1.21,
+        "max_drawdown": 1.21,
+        "average_win": 0,
+        "average_loss": -1.21,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "AMD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 14,
+        "win_rate": 0.2857142857142857,
+        "profit_factor": 0.7536231884057971,
+        "average_R": -0.19428571428571434,
+        "max_drawdown": 6.11,
+        "average_win": 2.08,
+        "average_loss": -1.104,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "AMD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 5,
+        "win_rate": 0.4,
+        "profit_factor": 0.9212121212121211,
+        "average_R": -0.052000000000000046,
+        "max_drawdown": 2.22,
+        "average_win": 1.52,
+        "average_loss": -1.1,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "AMD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.4166666666666667,
+        "profit_factor": 1.3019607843137255,
+        "average_R": 0.1925,
+        "max_drawdown": 3.3200000000000003,
+        "average_win": 1.992,
+        "average_loss": -1.092857142857143,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "AMD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 11,
+        "win_rate": 0.45454545454545453,
+        "profit_factor": 1.5243902439024388,
+        "average_R": 0.3127272727272727,
+        "max_drawdown": 3.3000000000000003,
+        "average_win": 2.0,
+        "average_loss": -1.0933333333333335,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "CRM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.23529411764705882,
+        "profit_factor": 0.48108108108108105,
+        "average_R": -0.45176470588235296,
+        "max_drawdown": 7.68,
+        "average_win": 1.78,
+        "average_loss": -1.1384615384615384,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "CRM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.375,
+        "profit_factor": 0.9541125541125541,
+        "average_R": -0.033124999999999946,
+        "max_drawdown": 8.05,
+        "average_win": 1.8366666666666667,
+        "average_loss": -1.155,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "CRM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.8960612691466082,
+        "average_R": -0.07916666666666666,
+        "max_drawdown": 9.14,
+        "average_win": 2.0475,
+        "average_loss": -1.1425,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "CRM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 5,
+        "win_rate": 0.2,
+        "profit_factor": 0.5364806866952789,
+        "average_R": -0.43199999999999994,
+        "max_drawdown": 4.66,
+        "average_win": 2.5,
+        "average_loss": -1.165,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "DIS",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.667605633802817,
+        "average_R": -0.2622222222222222,
+        "max_drawdown": 4.8,
+        "average_win": 1.58,
+        "average_loss": -1.1833333333333333,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "DIS",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 10,
+        "win_rate": 0.3,
+        "profit_factor": 0.6761083743842365,
+        "average_R": -0.26299999999999996,
+        "max_drawdown": 4.609999999999999,
+        "average_win": 1.83,
+        "average_loss": -1.16,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "DIS",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 5,
+        "win_rate": 0.4,
+        "profit_factor": 1.3106267029972754,
+        "average_R": 0.22800000000000004,
+        "max_drawdown": 1.29,
+        "average_win": 2.4050000000000002,
+        "average_loss": -1.2233333333333334,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "DIS",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.375,
+        "profit_factor": 1.0784148397976392,
+        "average_R": 0.05812499999999998,
+        "max_drawdown": 9.45,
+        "average_win": 2.131666666666667,
+        "average_loss": -1.186,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "BA",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.5,
+        "profit_factor": 1.5427027027027027,
+        "average_R": 0.31375000000000003,
+        "max_drawdown": 2.29,
+        "average_win": 1.78375,
+        "average_loss": -1.15625,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "BA",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 10,
+        "win_rate": 0.3,
+        "profit_factor": 0.8352201257861636,
+        "average_R": -0.131,
+        "max_drawdown": 5.68,
+        "average_win": 2.2133333333333334,
+        "average_loss": -1.1357142857142857,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "BA",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.29411764705882354,
+        "profit_factor": 0.5784457478005866,
+        "average_R": -0.338235294117647,
+        "max_drawdown": 7.969999999999999,
+        "average_win": 1.578,
+        "average_loss": -1.1366666666666667,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "BA",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 1,
+        "win_rate": 1.0,
+        "profit_factor": Infinity,
+        "average_R": 1.46,
+        "max_drawdown": 0,
+        "average_win": 1.46,
+        "average_loss": 0,
+        "most_common_failure_reason": "N/A",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "COIN",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 24,
+        "win_rate": 0.375,
+        "profit_factor": 1.1905940594059405,
+        "average_R": 0.1283333333333333,
+        "max_drawdown": 6.4,
+        "average_win": 2.137777777777778,
+        "average_loss": -1.0773333333333335,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "COIN",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 4,
+        "win_rate": 0.75,
+        "profit_factor": 6.1,
+        "average_R": 1.4025,
+        "max_drawdown": 1.1,
+        "average_win": 2.236666666666667,
+        "average_loss": -1.1,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "COIN",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 5,
+        "win_rate": 0.2,
+        "profit_factor": 0.37971698113207547,
+        "average_R": -0.526,
+        "max_drawdown": 4.24,
+        "average_win": 1.61,
+        "average_loss": -1.06,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "COIN",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.47058823529411764,
+        "profit_factor": 1.551362683438155,
+        "average_R": 0.30941176470588233,
+        "max_drawdown": 3.7500000000000004,
+        "average_win": 1.85,
+        "average_loss": -1.06,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "PYPL",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 14,
+        "win_rate": 0.14285714285714285,
+        "profit_factor": 0.2987582176771366,
+        "average_R": -0.6857142857142857,
+        "max_drawdown": 9.879999999999999,
+        "average_win": 2.045,
+        "average_loss": -1.1408333333333334,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "PYPL",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.375,
+        "profit_factor": 0.9005235602094241,
+        "average_R": -0.07124999999999997,
+        "max_drawdown": 7.4,
+        "average_win": 1.72,
+        "average_loss": -1.146,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "PYPL",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 8,
+        "win_rate": 0.125,
+        "profit_factor": 0.2043701799485861,
+        "average_R": -0.77375,
+        "max_drawdown": 7.780000000000002,
+        "average_win": 1.59,
+        "average_loss": -1.1114285714285714,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "PYPL",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 5,
+        "win_rate": 0.4,
+        "profit_factor": 1.1271186440677967,
+        "average_R": 0.09,
+        "max_drawdown": 2.29,
+        "average_win": 1.995,
+        "average_loss": -1.18,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "INTC",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.25,
+        "profit_factor": 0.7861507128309573,
+        "average_R": -0.17500000000000002,
+        "max_drawdown": 6.52,
+        "average_win": 2.5733333333333333,
+        "average_loss": -1.0911111111111111,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "INTC",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.25,
+        "profit_factor": 0.717001055966209,
+        "average_R": -0.22333333333333336,
+        "max_drawdown": 5.24,
+        "average_win": 2.263333333333333,
+        "average_loss": -1.0522222222222222,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "INTC",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.5,
+        "profit_factor": 1.7345399698340873,
+        "average_R": 0.4058333333333333,
+        "max_drawdown": 4.08,
+        "average_win": 1.9166666666666667,
+        "average_loss": -1.105,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "INTC",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 5,
+        "win_rate": 0.4,
+        "profit_factor": 1.1705202312138727,
+        "average_R": 0.11800000000000006,
+        "max_drawdown": 1.16,
+        "average_win": 2.025,
+        "average_loss": -1.1533333333333333,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "UBER",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 11,
+        "win_rate": 0.2727272727272727,
+        "profit_factor": 0.8508474576271186,
+        "average_R": -0.12000000000000005,
+        "max_drawdown": 6.68,
+        "average_win": 2.51,
+        "average_loss": -1.10625,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "UBER",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 29,
+        "win_rate": 0.3103448275862069,
+        "profit_factor": 0.7134502923976608,
+        "average_R": -0.21965517241379315,
+        "max_drawdown": 8.620000000000001,
+        "average_win": 1.7622222222222221,
+        "average_loss": -1.1115000000000002,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "UBER",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 6,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.6912751677852349,
+        "average_R": -0.22999999999999998,
+        "max_drawdown": 4.47,
+        "average_win": 1.545,
+        "average_loss": -1.1175,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "UBER",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 1,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -1.14,
+        "max_drawdown": 1.14,
+        "average_win": 0,
+        "average_loss": -1.14,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "PLTR",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.5,
+        "profit_factor": 2.076569678407351,
+        "average_R": 0.5858333333333333,
+        "max_drawdown": 3.9000000000000004,
+        "average_win": 2.26,
+        "average_loss": -1.0883333333333334,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "PLTR",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.4166666666666667,
+        "profit_factor": 1.335113484646195,
+        "average_R": 0.20916666666666664,
+        "max_drawdown": 2.18,
+        "average_win": 2.0,
+        "average_loss": -1.07,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "PLTR",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.4375,
+        "profit_factor": 1.2364380757420677,
+        "average_R": 0.14437500000000003,
+        "max_drawdown": 6.050000000000001,
+        "average_win": 1.7257142857142858,
+        "average_loss": -1.0855555555555556,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "PLTR",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.1111111111111111,
+        "profit_factor": 0.2878103837471783,
+        "average_R": -0.7011111111111111,
+        "max_drawdown": 6.659999999999999,
+        "average_win": 2.55,
+        "average_loss": -1.1075,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "SPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 18,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.5015290519877675,
+        "average_R": -0.4527777777777778,
+        "max_drawdown": 9.9,
+        "average_win": 1.3666666666666667,
+        "average_loss": -1.3625,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "SPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.07692307692307693,
+        "profit_factor": 0.05746478873239437,
+        "average_R": -1.2869230769230768,
+        "max_drawdown": 16.73,
+        "average_win": 1.02,
+        "average_loss": -1.4791666666666667,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "SPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 6,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.5615866388308977,
+        "average_R": -0.35,
+        "max_drawdown": 3.26,
+        "average_win": 1.345,
+        "average_loss": -1.1975,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "SPY",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 7,
+        "win_rate": 0.14285714285714285,
+        "profit_factor": 0.310727496917386,
+        "average_R": -0.7985714285714286,
+        "max_drawdown": 8.11,
+        "average_win": 2.52,
+        "average_loss": -1.3516666666666666,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "QQQ",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 21,
+        "win_rate": 0.23809523809523808,
+        "profit_factor": 0.444059405940594,
+        "average_R": -0.5347619047619048,
+        "max_drawdown": 11.470000000000002,
+        "average_win": 1.794,
+        "average_loss": -1.2625,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "QQQ",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 7,
+        "win_rate": 0.5714285714285714,
+        "profit_factor": 1.5714285714285712,
+        "average_R": 0.34285714285714286,
+        "max_drawdown": 1.53,
+        "average_win": 1.65,
+        "average_loss": -1.4000000000000001,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "QQQ",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 6,
+        "win_rate": 0.5,
+        "profit_factor": 1.432225063938619,
+        "average_R": 0.28166666666666673,
+        "max_drawdown": 3.9099999999999997,
+        "average_win": 1.8666666666666667,
+        "average_loss": -1.3033333333333332,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "QQQ",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.3076923076923077,
+        "profit_factor": 0.5892226148409894,
+        "average_R": -0.35769230769230764,
+        "max_drawdown": 7.819999999999999,
+        "average_win": 1.6675,
+        "average_loss": -1.2577777777777777,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "GLD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.5,
+        "profit_factor": 1.6109785202863964,
+        "average_R": 0.42666666666666664,
+        "max_drawdown": 4.15,
+        "average_win": 2.25,
+        "average_loss": -1.3966666666666667,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "GLD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.3125,
+        "profit_factor": 0.635593220338983,
+        "average_R": -0.3225,
+        "max_drawdown": 8.04,
+        "average_win": 1.8,
+        "average_loss": -1.2872727272727273,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "GLD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 18,
+        "win_rate": 0.2222222222222222,
+        "profit_factor": 0.350531914893617,
+        "average_R": -0.6783333333333333,
+        "max_drawdown": 14.049999999999997,
+        "average_win": 1.6475,
+        "average_loss": -1.342857142857143,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "GLD",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 2,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -1.44,
+        "max_drawdown": 2.88,
+        "average_win": 0,
+        "average_loss": -1.44,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "TLT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.1111111111111111,
+        "profit_factor": 0.07896735003796508,
+        "average_R": -1.3477777777777777,
+        "max_drawdown": 13.17,
+        "average_win": 1.04,
+        "average_loss": -1.64625,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "TLT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 19,
+        "win_rate": 0.10526315789473684,
+        "profit_factor": 0.09988202909948879,
+        "average_R": -1.204736842105263,
+        "max_drawdown": 22.889999999999997,
+        "average_win": 1.27,
+        "average_loss": -1.4958823529411764,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "TLT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 21,
+        "win_rate": 0.19047619047619047,
+        "profit_factor": 0.27400082406262877,
+        "average_R": -0.839047619047619,
+        "max_drawdown": 18.12,
+        "average_win": 1.6625,
+        "average_loss": -1.4276470588235295,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "TLT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 1,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -1.47,
+        "max_drawdown": 1.47,
+        "average_win": 0,
+        "average_loss": -1.47,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "IWM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 20,
+        "win_rate": 0.25,
+        "profit_factor": 0.5953663793103449,
+        "average_R": -0.3755,
+        "max_drawdown": 13.629999999999999,
+        "average_win": 2.21,
+        "average_loss": -1.2373333333333334,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "IWM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.2222222222222222,
+        "profit_factor": 0.41608391608391604,
+        "average_R": -0.5566666666666666,
+        "max_drawdown": 7.2299999999999995,
+        "average_win": 1.785,
+        "average_loss": -1.2257142857142858,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "IWM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 8,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -1.225,
+        "max_drawdown": 9.8,
+        "average_win": 0,
+        "average_loss": -1.225,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "IWM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 6,
+        "win_rate": 0.5,
+        "profit_factor": 1.3196480938416422,
+        "average_R": 0.18166666666666667,
+        "max_drawdown": 2.2800000000000002,
+        "average_win": 1.5,
+        "average_loss": -1.1366666666666667,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "EEM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.1875,
+        "profit_factor": 0.222158766419189,
+        "average_R": -0.8512500000000001,
+        "max_drawdown": 13.62,
+        "average_win": 1.2966666666666666,
+        "average_loss": -1.346923076923077,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "EEM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.3125,
+        "profit_factor": 0.4932214331826985,
+        "average_R": -0.490625,
+        "max_drawdown": 9.18,
+        "average_win": 1.528,
+        "average_loss": -1.4081818181818182,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "EEM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.08333333333333333,
+        "profit_factor": 0.14715947980835042,
+        "average_R": -1.0383333333333333,
+        "max_drawdown": 12.46,
+        "average_win": 2.15,
+        "average_loss": -1.3281818181818181,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "index",
+      "symbol": "EEM",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 5,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -1.38,
+        "max_drawdown": 6.8999999999999995,
+        "average_win": 0,
+        "average_loss": -1.38,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "XLF",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.2222222222222222,
+        "profit_factor": 0.297085201793722,
+        "average_R": -0.6966666666666667,
+        "max_drawdown": 7.609999999999999,
+        "average_win": 1.3250000000000002,
+        "average_loss": -1.2742857142857142,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "XLF",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 19,
+        "win_rate": 0.42105263157894735,
+        "profit_factor": 0.982468443197756,
+        "average_R": -0.013157894736842105,
+        "max_drawdown": 6.39,
+        "average_win": 1.75125,
+        "average_loss": -1.2963636363636364,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "XLF",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.23076923076923078,
+        "profit_factor": 0.42937399678972715,
+        "average_R": -0.546923076923077,
+        "max_drawdown": 9.93,
+        "average_win": 1.7833333333333332,
+        "average_loss": -1.246,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "XLF",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 6,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.6533575317604357,
+        "average_R": -0.31833333333333325,
+        "max_drawdown": 2.86,
+        "average_win": 1.8000000000000003,
+        "average_loss": -1.3775,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "XLE",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.16666666666666666,
+        "profit_factor": 0.24032921810699587,
+        "average_R": -0.7691666666666667,
+        "max_drawdown": 9.23,
+        "average_win": 1.46,
+        "average_loss": -1.215,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "XLE",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.17647058823529413,
+        "profit_factor": 0.37323943661971837,
+        "average_R": -0.628235294117647,
+        "max_drawdown": 13.370000000000001,
+        "average_win": 2.12,
+        "average_loss": -1.217142857142857,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "XLE",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 5,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -1.246,
+        "max_drawdown": 6.2299999999999995,
+        "average_win": 0,
+        "average_loss": -1.246,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "XLE",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.25,
+        "profit_factor": 0.5190697674418605,
+        "average_R": -0.4308333333333333,
+        "max_drawdown": 6.699999999999999,
+        "average_win": 1.86,
+        "average_loss": -1.1944444444444444,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "SLV",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.3076923076923077,
+        "profit_factor": 0.6657250470809792,
+        "average_R": -0.2730769230769231,
+        "max_drawdown": 8.07,
+        "average_win": 1.7675,
+        "average_loss": -1.18,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "SLV",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 15,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.9326334208223972,
+        "average_R": -0.05133333333333336,
+        "max_drawdown": 5.4,
+        "average_win": 2.132,
+        "average_loss": -1.143,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "SLV",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 15,
+        "win_rate": 0.2,
+        "profit_factor": 0.45752089136490254,
+        "average_R": -0.5193333333333333,
+        "max_drawdown": 7.789999999999998,
+        "average_win": 2.19,
+        "average_loss": -1.1966666666666668,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "SLV",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 7,
+        "win_rate": 0.2857142857142857,
+        "profit_factor": 0.7264150943396225,
+        "average_R": -0.24857142857142864,
+        "max_drawdown": 2.9000000000000004,
+        "average_win": 2.3099999999999996,
+        "average_loss": -1.272,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "USO",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.1875,
+        "profit_factor": 0.5104800540906018,
+        "average_R": -0.45249999999999996,
+        "max_drawdown": 11.22,
+        "average_win": 2.5166666666666666,
+        "average_loss": -1.1376923076923076,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "USO",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 20,
+        "win_rate": 0.3,
+        "profit_factor": 0.5831339712918661,
+        "average_R": -0.3485,
+        "max_drawdown": 7.039999999999999,
+        "average_win": 1.625,
+        "average_loss": -1.1942857142857142,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "USO",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 8,
+        "win_rate": 0.125,
+        "profit_factor": 0.27023945267958954,
+        "average_R": -0.8,
+        "max_drawdown": 8.77,
+        "average_win": 2.37,
+        "average_loss": -1.252857142857143,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "stock",
+      "symbol": "USO",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 4,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -1.09,
+        "max_drawdown": 4.36,
+        "average_win": 0,
+        "average_loss": -1.09,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_major",
+      "symbol": "BTC/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 26,
+        "win_rate": 0.4230769230769231,
+        "profit_factor": 0.6307692307692307,
+        "average_R": -0.16615384615384615,
+        "max_drawdown": 6.019999999999999,
+        "average_win": 0.6709090909090909,
+        "average_loss": -0.78,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_major",
+      "symbol": "BTC/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 6,
+        "win_rate": 0.5,
+        "profit_factor": 1.548076923076923,
+        "average_R": 0.18999999999999995,
+        "max_drawdown": 1.5700000000000003,
+        "average_win": 1.0733333333333333,
+        "average_loss": -0.6933333333333334,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_major",
+      "symbol": "BTC/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.35294117647058826,
+        "profit_factor": 0.8779472954230236,
+        "average_R": -0.05176470588235295,
+        "max_drawdown": 3.67,
+        "average_win": 1.055,
+        "average_loss": -0.6554545454545455,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_major",
+      "symbol": "BTC/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 1,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -1.25,
+        "max_drawdown": 1.25,
+        "average_win": 0,
+        "average_loss": -1.25,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_major",
+      "symbol": "ETH/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 21,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.9181818181818182,
+        "average_R": -0.030000000000000016,
+        "max_drawdown": 6.15,
+        "average_win": 1.01,
+        "average_loss": -0.55,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_major",
+      "symbol": "ETH/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 24,
+        "win_rate": 0.20833333333333334,
+        "profit_factor": 0.14911660777385158,
+        "average_R": -0.5016666666666667,
+        "max_drawdown": 12.259999999999998,
+        "average_win": 0.422,
+        "average_loss": -0.7447368421052631,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_major",
+      "symbol": "ETH/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 2,
+        "win_rate": 0.5,
+        "profit_factor": 3.1999999999999997,
+        "average_R": 0.825,
+        "max_drawdown": 0.75,
+        "average_win": 2.4,
+        "average_loss": -0.75,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_major",
+      "symbol": "ETH/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 3,
+        "win_rate": 0.6666666666666666,
+        "profit_factor": 25.4,
+        "average_R": 0.4066666666666667,
+        "max_drawdown": 0.050000000000000044,
+        "average_win": 0.635,
+        "average_loss": -0.05,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "XRP/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 10,
+        "win_rate": 0.4,
+        "profit_factor": 0.8034825870646766,
+        "average_R": -0.079,
+        "max_drawdown": 3.64,
+        "average_win": 0.8075,
+        "average_loss": -0.67,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "XRP/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 23,
+        "win_rate": 0.21739130434782608,
+        "profit_factor": 0.45664335664335665,
+        "average_R": -0.3378260869565217,
+        "max_drawdown": 9.770000000000001,
+        "average_win": 1.306,
+        "average_loss": -0.7944444444444444,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "XRP/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 4,
+        "win_rate": 0.75,
+        "profit_factor": 4.76,
+        "average_R": 0.705,
+        "max_drawdown": 0.75,
+        "average_win": 1.19,
+        "average_loss": -0.75,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "XRP/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.6923076923076923,
+        "profit_factor": 3.849557522123893,
+        "average_R": 0.24769230769230768,
+        "max_drawdown": 0.9600000000000004,
+        "average_win": 0.48333333333333334,
+        "average_loss": -0.28250000000000003,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "SOL/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.5,
+        "profit_factor": 1.5916870415647921,
+        "average_R": 0.15125,
+        "max_drawdown": 2.670000000000001,
+        "average_win": 0.81375,
+        "average_loss": -0.51125,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "SOL/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.25,
+        "profit_factor": 0.42070773263433814,
+        "average_R": -0.36833333333333335,
+        "max_drawdown": 6.16,
+        "average_win": 1.07,
+        "average_loss": -0.8477777777777779,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "SOL/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 19,
+        "win_rate": 0.42105263157894735,
+        "profit_factor": 0.6780354706684857,
+        "average_R": -0.1242105263157895,
+        "max_drawdown": 4.870000000000001,
+        "average_win": 0.62125,
+        "average_loss": -0.6663636363636364,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "SOL/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 3,
+        "win_rate": 0.6666666666666666,
+        "profit_factor": 8.333333333333334,
+        "average_R": 0.5133333333333334,
+        "max_drawdown": 0.20999999999999996,
+        "average_win": 0.875,
+        "average_loss": -0.21,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "ADA/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.5740432612312811,
+        "average_R": -0.21333333333333335,
+        "max_drawdown": 5.42,
+        "average_win": 0.8624999999999999,
+        "average_loss": -0.75125,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "ADA/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.25,
+        "profit_factor": 0.47276688453159044,
+        "average_R": -0.3025,
+        "max_drawdown": 6.83,
+        "average_win": 1.085,
+        "average_loss": -0.765,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "ADA/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.35294117647058826,
+        "profit_factor": 1.1005434782608694,
+        "average_R": 0.021764705882352936,
+        "max_drawdown": 1.8800000000000001,
+        "average_win": 0.675,
+        "average_loss": -0.33454545454545453,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "ADA/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 5,
+        "win_rate": 0.6,
+        "profit_factor": 3.5081967213114744,
+        "average_R": 0.306,
+        "max_drawdown": 0.6100000000000001,
+        "average_win": 0.7133333333333333,
+        "average_loss": -0.30500000000000005,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "DOGE/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 20,
+        "win_rate": 0.5,
+        "profit_factor": 0.7697642163661581,
+        "average_R": -0.083,
+        "max_drawdown": 3.9100000000000006,
+        "average_win": 0.555,
+        "average_loss": -0.721,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "DOGE/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 7,
+        "win_rate": 0.42857142857142855,
+        "profit_factor": 1.1818181818181819,
+        "average_R": 0.06857142857142857,
+        "max_drawdown": 2.64,
+        "average_win": 1.04,
+        "average_loss": -0.66,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "DOGE/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 19,
+        "win_rate": 0.3684210526315789,
+        "profit_factor": 0.5057971014492754,
+        "average_R": -0.17947368421052634,
+        "max_drawdown": 3.64,
+        "average_win": 0.49857142857142855,
+        "average_loss": -0.5750000000000001,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "DOGE/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 4,
+        "win_rate": 0.25,
+        "profit_factor": 0.8917910447761194,
+        "average_R": -0.07249999999999997,
+        "max_drawdown": 2.6799999999999997,
+        "average_win": 2.39,
+        "average_loss": -0.8933333333333333,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "AVAX/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 22,
+        "win_rate": 0.5909090909090909,
+        "profit_factor": 2.3917197452229297,
+        "average_R": 0.19863636363636364,
+        "max_drawdown": 1.8399999999999999,
+        "average_win": 0.5776923076923077,
+        "average_loss": -0.3488888888888889,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "AVAX/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 11,
+        "win_rate": 0.09090909090909091,
+        "profit_factor": 0.358433734939759,
+        "average_R": -0.3872727272727273,
+        "max_drawdown": 6.640000000000001,
+        "average_win": 2.38,
+        "average_loss": -0.664,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "AVAX/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.6470588235294118,
+        "profit_factor": 2.032882011605416,
+        "average_R": 0.3141176470588235,
+        "max_drawdown": 2.3099999999999996,
+        "average_win": 0.9554545454545454,
+        "average_loss": -0.8616666666666666,
+        "most_common_failure_reason": "SL",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "LINK/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 19,
+        "win_rate": 0.5263157894736842,
+        "profit_factor": 1.2465960665658093,
+        "average_R": 0.0857894736842105,
+        "max_drawdown": 4.140000000000001,
+        "average_win": 0.824,
+        "average_loss": -0.7344444444444445,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "LINK/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 23,
+        "win_rate": 0.34782608695652173,
+        "profit_factor": 0.5175355450236967,
+        "average_R": -0.221304347826087,
+        "max_drawdown": 8.86,
+        "average_win": 0.6825,
+        "average_loss": -0.7033333333333334,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "LINK/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 6,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -0.7283333333333334,
+        "max_drawdown": 4.37,
+        "average_win": 0,
+        "average_loss": -0.7283333333333334,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "LINK/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 2,
+        "win_rate": 0.5,
+        "profit_factor": 0.33035714285714285,
+        "average_R": -0.37500000000000006,
+        "max_drawdown": 1.12,
+        "average_win": 0.37,
+        "average_loss": -1.12,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "MATIC/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 3,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.22377622377622375,
+        "average_R": -0.37000000000000005,
+        "max_drawdown": 1.4300000000000002,
+        "average_win": 0.32,
+        "average_loss": -0.7150000000000001,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "MATIC/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.5,
+        "profit_factor": 1.5059523809523812,
+        "average_R": 0.1416666666666667,
+        "max_drawdown": 2.3499999999999996,
+        "average_win": 0.8433333333333334,
+        "average_loss": -0.5599999999999999,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "MATIC/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 29,
+        "win_rate": 0.5862068965517241,
+        "profit_factor": 2.450116009280743,
+        "average_R": 0.21551724137931036,
+        "max_drawdown": 1.5999999999999996,
+        "average_win": 0.6211764705882353,
+        "average_loss": -0.3591666666666667,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "MATIC/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 6,
+        "win_rate": 1.0,
+        "profit_factor": Infinity,
+        "average_R": 0.6566666666666667,
+        "max_drawdown": 0,
+        "average_win": 0.6566666666666667,
+        "average_loss": 0,
+        "most_common_failure_reason": "N/A",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "BNB/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 18,
+        "win_rate": 0.6666666666666666,
+        "profit_factor": 1.8860398860398861,
+        "average_R": 0.17277777777777778,
+        "max_drawdown": 1.879999999999999,
+        "average_win": 0.5516666666666666,
+        "average_loss": -0.585,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "BNB/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.15384615384615385,
+        "profit_factor": 0.4093097913322633,
+        "average_R": -0.28307692307692306,
+        "max_drawdown": 5.77,
+        "average_win": 1.2750000000000001,
+        "average_loss": -0.5663636363636363,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "BNB/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.47058823529411764,
+        "profit_factor": 0.4542635658914729,
+        "average_R": -0.20705882352941174,
+        "max_drawdown": 4.489999999999999,
+        "average_win": 0.36625,
+        "average_loss": -0.7166666666666667,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "BNB/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 2,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -0.835,
+        "max_drawdown": 1.67,
+        "average_win": 0,
+        "average_loss": -0.835,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "DOT/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 24,
+        "win_rate": 0.4166666666666667,
+        "profit_factor": 1.1088082901554404,
+        "average_R": 0.026250000000000002,
+        "max_drawdown": 4.05,
+        "average_win": 0.642,
+        "average_loss": -0.4135714285714286,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "DOT/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 7,
+        "win_rate": 0.2857142857142857,
+        "profit_factor": 0.3203883495145631,
+        "average_R": -0.19999999999999998,
+        "max_drawdown": 1.8499999999999996,
+        "average_win": 0.32999999999999996,
+        "average_loss": -0.412,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "DOT/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 18,
+        "win_rate": 0.3888888888888889,
+        "profit_factor": 0.42658227848101266,
+        "average_R": -0.2516666666666667,
+        "max_drawdown": 5.890000000000001,
+        "average_win": 0.48142857142857143,
+        "average_loss": -0.7181818181818183,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "DOT/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 1,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -0.13,
+        "max_drawdown": 0.13,
+        "average_win": 0,
+        "average_loss": -0.13,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "LTC/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 26,
+        "win_rate": 0.3076923076923077,
+        "profit_factor": 0.43887147335423204,
+        "average_R": -0.27538461538461534,
+        "max_drawdown": 9.07,
+        "average_win": 0.7000000000000001,
+        "average_loss": -0.7088888888888889,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "LTC/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 6,
+        "win_rate": 0.16666666666666666,
+        "profit_factor": 0.7484472049689441,
+        "average_R": -0.13499999999999998,
+        "max_drawdown": 3.2199999999999998,
+        "average_win": 2.41,
+        "average_loss": -0.644,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "LTC/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 17,
+        "win_rate": 0.47058823529411764,
+        "profit_factor": 1.7866242038216558,
+        "average_R": 0.1452941176470588,
+        "max_drawdown": 1.6700000000000008,
+        "average_win": 0.7012499999999999,
+        "average_loss": -0.3488888888888889,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "LTC/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 1,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -0.9,
+        "max_drawdown": 0.9,
+        "average_win": 0,
+        "average_loss": -0.9,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "SUI/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 10,
+        "win_rate": 0.4,
+        "profit_factor": 0.3044496487119438,
+        "average_R": -0.29700000000000004,
+        "max_drawdown": 4.180000000000001,
+        "average_win": 0.325,
+        "average_loss": -0.7116666666666667,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "SUI/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 21,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 1.5823529411764705,
+        "average_R": 0.1414285714285714,
+        "max_drawdown": 3.4600000000000004,
+        "average_win": 1.1528571428571428,
+        "average_loss": -0.3642857142857143,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "SUI/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.4375,
+        "profit_factor": 0.9391143911439114,
+        "average_R": -0.020625000000000004,
+        "max_drawdown": 3.04,
+        "average_win": 0.7271428571428571,
+        "average_loss": -0.6022222222222222,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "SUI/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 3,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.21341463414634143,
+        "average_R": -0.43000000000000005,
+        "max_drawdown": 1.6400000000000001,
+        "average_win": 0.35,
+        "average_loss": -0.8200000000000001,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "NEAR/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 22,
+        "win_rate": 0.5454545454545454,
+        "profit_factor": 1.828371278458844,
+        "average_R": 0.215,
+        "max_drawdown": 4.9,
+        "average_win": 0.87,
+        "average_loss": -0.5710000000000001,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "NEAR/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 10,
+        "win_rate": 0.3,
+        "profit_factor": 0.815426997245179,
+        "average_R": -0.06700000000000003,
+        "max_drawdown": 3.0700000000000003,
+        "average_win": 0.9866666666666667,
+        "average_loss": -0.5185714285714286,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "NEAR/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 18,
+        "win_rate": 0.4444444444444444,
+        "profit_factor": 0.7888086642599278,
+        "average_R": -0.065,
+        "max_drawdown": 5.46,
+        "average_win": 0.54625,
+        "average_loss": -0.554,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "APT/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 28,
+        "win_rate": 0.5357142857142857,
+        "profit_factor": 3.1406551059730248,
+        "average_R": 0.3967857142857143,
+        "max_drawdown": 2.4300000000000015,
+        "average_win": 1.0866666666666667,
+        "average_loss": -0.3992307692307692,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "APT/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.38461538461538464,
+        "profit_factor": 0.4400715563506261,
+        "average_R": -0.24076923076923076,
+        "max_drawdown": 4.48,
+        "average_win": 0.492,
+        "average_loss": -0.69875,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "APT/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 9,
+        "win_rate": 0.4444444444444444,
+        "profit_factor": 0.9886792452830188,
+        "average_R": -0.003333333333333357,
+        "max_drawdown": 1.4300000000000002,
+        "average_win": 0.655,
+        "average_loss": -0.53,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "INJ/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 15,
+        "win_rate": 0.6666666666666666,
+        "profit_factor": 2.457792207792208,
+        "average_R": 0.29933333333333334,
+        "max_drawdown": 2.3099999999999996,
+        "average_win": 0.757,
+        "average_loss": -0.616,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "INJ/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 5,
+        "win_rate": 0.8,
+        "profit_factor": 23.333333333333336,
+        "average_R": 0.268,
+        "max_drawdown": 0.06000000000000005,
+        "average_win": 0.35000000000000003,
+        "average_loss": -0.06,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "INJ/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 29,
+        "win_rate": 0.41379310344827586,
+        "profit_factor": 0.8267326732673267,
+        "average_R": -0.06034482758620691,
+        "max_drawdown": 4.49,
+        "average_win": 0.6958333333333333,
+        "average_loss": -0.5941176470588235,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "INJ/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 1,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "average_R": -1.11,
+        "max_drawdown": 1.11,
+        "average_win": 0,
+        "average_loss": -1.11,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "FET/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 16,
+        "win_rate": 0.6875,
+        "profit_factor": 3.0994152046783627,
+        "average_R": 0.22437500000000002,
+        "max_drawdown": 1.1099999999999999,
+        "average_win": 0.4818181818181818,
+        "average_loss": -0.342,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "FET/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 13,
+        "win_rate": 0.15384615384615385,
+        "profit_factor": 0.10557532621589562,
+        "average_R": -0.5800000000000001,
+        "max_drawdown": 7.540000000000001,
+        "average_win": 0.445,
+        "average_loss": -0.7663636363636364,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "FET/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 19,
+        "win_rate": 0.5263157894736842,
+        "profit_factor": 1.7428571428571429,
+        "average_R": 0.17789473684210524,
+        "max_drawdown": 3.059999999999999,
+        "average_win": 0.7929999999999999,
+        "average_loss": -0.5055555555555555,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "FET/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 2,
+        "win_rate": 0.5,
+        "profit_factor": 0.3831775700934579,
+        "average_R": -0.33000000000000007,
+        "max_drawdown": 1.07,
+        "average_win": 0.41,
+        "average_loss": -1.07,
+        "most_common_failure_reason": "SL",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "RENDER/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "trending",
+      "metrics": {
+        "trade_count": 12,
+        "win_rate": 0.5833333333333334,
+        "profit_factor": 3.1207729468599035,
+        "average_R": 0.36583333333333334,
+        "max_drawdown": 1.6800000000000002,
+        "average_win": 0.9228571428571428,
+        "average_loss": -0.41400000000000003,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "PASS"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "RENDER/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "ranging",
+      "metrics": {
+        "trade_count": 25,
+        "win_rate": 0.28,
+        "profit_factor": 0.31098696461824954,
+        "average_R": -0.29600000000000004,
+        "max_drawdown": 9.6,
+        "average_win": 0.47714285714285715,
+        "average_loss": -0.5966666666666667,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "RENDER/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_expansion",
+      "metrics": {
+        "trade_count": 7,
+        "win_rate": 0.42857142857142855,
+        "profit_factor": 1.1855670103092781,
+        "average_R": 0.05142857142857141,
+        "max_drawdown": 1.94,
+        "average_win": 0.7666666666666666,
+        "average_loss": -0.48500000000000004,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    },
+    {
+      "asset_group": "crypto_alt",
+      "symbol": "RENDER/USDT",
+      "timeframe": "UNKNOWN",
+      "engine": "ENGINE_C",
+      "strategy_family": "ENGINE_C_CONSENSUS",
+      "regime": "volatility_compression",
+      "metrics": {
+        "trade_count": 6,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.6426512968299711,
+        "average_R": -0.2066666666666667,
+        "max_drawdown": 3.47,
+        "average_win": 1.115,
+        "average_loss": -0.8675,
+        "most_common_failure_reason": "TIMEOUT",
+        "verdict": "FAIL"
+      }
+    }
+  ]
+}

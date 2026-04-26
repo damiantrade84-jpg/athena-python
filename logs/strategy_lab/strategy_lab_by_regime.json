@@ -1,0 +1,60 @@
+{
+  "ranging": {
+    "trade_count": 163,
+    "closed_trade_count": 163,
+    "rejected_setup_count": 0,
+    "skipped_row_count": 0,
+    "unknown_row_count": 0,
+    "outlier_count": 3,
+    "win_rate": 0.39263803680981596,
+    "profit_factor": 3.7859462524835887,
+    "average_R": 2.5135969325153376,
+    "max_drawdown_R": 19.393800000000013,
+    "average_win_R": 8.6997140625,
+    "average_loss_R": -1.4855090909090911,
+    "gross_profit_R": 556.7817,
+    "gross_loss_R": 147.0654,
+    "best_symbol": "AVAX/USDT",
+    "worst_symbol": "ETH/USDT",
+    "failure_reason_counts": {
+      "SL": 91,
+      "SCRATCH_NO_FOLLOW_THROUGH": 2,
+      "TIMEOUT": 6
+    },
+    "most_common_failure_reason": "SL",
+    "warnings": [
+      "Missing timestamps; preserving input order for drawdown calculation."
+    ],
+    "verdict": "FAIL"
+  },
+  "trending": {
+    "trade_count": 320,
+    "closed_trade_count": 320,
+    "rejected_setup_count": 0,
+    "skipped_row_count": 0,
+    "unknown_row_count": 0,
+    "outlier_count": 0,
+    "win_rate": 0.3375,
+    "profit_factor": 0.44910229612774116,
+    "average_R": -0.7116990624999999,
+    "max_drawdown_R": 228.10460000000015,
+    "average_win_R": 1.7190833333333333,
+    "average_loss_R": -1.9500221698113207,
+    "gross_profit_R": 185.661,
+    "gross_loss_R": 413.4047,
+    "best_symbol": "DOGE/USDT",
+    "worst_symbol": "S&P 500",
+    "failure_reason_counts": {
+      "SL": 191,
+      "BE": 6,
+      "SCRATCH_NO_FOLLOW_THROUGH": 9,
+      "UNKNOWN": 5,
+      "TIMEOUT": 1
+    },
+    "most_common_failure_reason": "SL",
+    "warnings": [
+      "Missing timestamps; preserving input order for drawdown calculation."
+    ],
+    "verdict": "FAIL"
+  }
+}

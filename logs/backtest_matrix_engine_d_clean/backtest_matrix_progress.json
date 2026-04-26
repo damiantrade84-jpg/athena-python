@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-04-26T07:20:27.067466+00:00",
+  "total": 15,
+  "completed": 14,
+  "failed": 1,
+  "skipped": 0,
+  "remaining": 0,
+  "percent_complete": 100.0,
+  "avg_runtime_seconds": 7.52,
+  "eta_seconds": 0
+}

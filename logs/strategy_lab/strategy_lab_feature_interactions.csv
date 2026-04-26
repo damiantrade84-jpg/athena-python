@@ -1,0 +1,19 @@
+combo,n,wr,pf,avg_r,baseline_avg_r,uplift,confidence,verdict
+A: trend_aligned + score>=1.5,5729,0.3128,0.4352,-0.5448,0.0,-0.5448,LOW,INSUFFICIENT_SAMPLE
+A: trend_strong(>=2) + score>=1.5,5729,0.3128,0.4352,-0.5448,0.0,-0.5448,LOW,INSUFFICIENT_SAMPLE
+A: trend_aligned + mom>=0.6,0,0.0,0.0,0.0,-0.5448,0.5448,LOW,INSUFFICIENT_SAMPLE
+A: score>=2.0 + trending,2324,0.3515,0.569,-0.3721,-0.6626,0.2905,HIGH,HARMFUL
+A: score>=1.5 + addon>0 + trending,583,0.4048,0.9028,-0.0643,-0.5992,0.5349,HIGH,NEUTRAL
+A: score>=1.5 + trend_strong + mom>=0.5,3523,0.3401,0.5219,-0.4231,-0.7391,0.316,HIGH,HARMFUL
+A: LOW score(1.0-1.5) + trending,0,0.0,0.0,0.0,-0.5448,0.5448,LOW,INSUFFICIENT_SAMPLE
+A: ranging + any score,3047,0.2885,0.3659,-0.655,-0.4196,-0.2354,HIGH,HARMFUL
+B: sweep + bos_vol_confirmed,95,0.2842,0.8022,-0.1373,-0.0488,-0.0885,MEDIUM,HARMFUL
+B: sweep + bos_vol + ob_at_zone,0,0.0,0.0,0.0,-0.0535,0.0535,LOW,INSUFFICIENT_SAMPLE
+B: ob_at_zone + rr>=2.0,257,0.3658,1.1437,0.0883,-0.0771,0.1654,HIGH,KEEP_STRONG_EDGE
+B: bos_mtf + vol_confirmed,237,0.3207,0.9969,-0.0019,-0.0613,0.0594,HIGH,NEUTRAL
+B: sweep + bos_mtf,22,0.1818,0.4686,-0.4041,-0.0491,-0.355,LOW,INSUFFICIENT_SAMPLE
+B: rr>=2.0 + vol_strength>0,0,0.0,0.0,0.0,-0.0535,0.0535,LOW,INSUFFICIENT_SAMPLE
+B: fvg_overlap + zone_touched,474,0.3038,0.8874,-0.071,-0.0472,-0.0238,HIGH,NEUTRAL
+B: choch_confirmed + zone_touched,4,0.0,0.0,-1.035,-0.0513,-0.9837,LOW,INSUFFICIENT_SAMPLE
+B: rr>=2.0 + trending,706,0.2975,0.8538,-0.0975,-0.0251,-0.0724,HIGH,NEUTRAL
+B: ALL_PRESENT: sweep+bos_vol+ob+bos_mtf,0,0.0,0.0,0.0,-0.0535,0.0535,LOW,INSUFFICIENT_SAMPLE

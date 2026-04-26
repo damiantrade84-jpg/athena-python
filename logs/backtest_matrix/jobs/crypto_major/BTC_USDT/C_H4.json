@@ -1,0 +1,21 @@
+{
+  "job_id": "crypto_major_BTC_USDT_C_H4",
+  "asset_group": "crypto_major",
+  "symbol": "BTC/USDT",
+  "engine": "C",
+  "strategy_family": "ENGINE_C_CONSENSUS",
+  "timeframe": "H4",
+  "start_date": "2024-01-01",
+  "end_date": "2026-04-25",
+  "status": "failed",
+  "error": "AttributeError: 'str' object has no attribute 'get'",
+  "started_at": "2026-04-26T04:47:37.893961+00:00",
+  "finished_at": "2026-04-26T04:48:45.602712+00:00",
+  "runtime_seconds": 67.71,
+  "closed_trades": [],
+  "rejected_setups": [],
+  "summary_metrics": {},
+  "data_source": "binance",
+  "candle_count": null,
+  "telemetry_version": "unknown"
+}

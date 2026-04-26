@@ -1,0 +1,21 @@
+{
+  "job_id": "index_US30_D_M15",
+  "asset_group": "index",
+  "symbol": "US30",
+  "engine": "D",
+  "strategy_family": "ENGINE_D_SCALP",
+  "timeframe": "M15",
+  "start_date": "2024-01-01",
+  "end_date": "2026-04-25",
+  "status": "failed",
+  "error": "Symbol US30 not found in ALL_PAIRS",
+  "started_at": "2026-04-26T07:20:27.064060+00:00",
+  "finished_at": "2026-04-26T07:20:27.064132+00:00",
+  "runtime_seconds": 0.0,
+  "closed_trades": [],
+  "rejected_setups": [],
+  "summary_metrics": {},
+  "data_source": null,
+  "candle_count": null,
+  "telemetry_version": "unknown"
+}

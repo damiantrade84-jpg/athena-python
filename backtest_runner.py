@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 
 import pandas as pd
+from telemetry import build_strategy_lab_telemetry
 
 from athena_runtime import rt as _art_rt
 from backtest_candle_cache import fetch_backtest_candles, fetch_backtest_eodhd_intraday
@@ -666,6 +667,22 @@ def _attach_research_validation_payload(
     folds: int,
     mode_warning: str | None,
 ) -> None:
+    if trades:
+        _has_fvg = any(t.get("fvg_bonus", 0.0) > 0 for t in trades)
+        _has_vol = any(t.get("volume_strength", 0.0) > 0 for t in trades)
+        _engine = result.get("engineType", "")
+        if _engine == "NAKED":
+            if not _has_fvg:
+                log.warning(f"[TELEMETRY-WARN] {result.get('pair', 'Unknown')} Engine B backtest has 0 non-zero fvg_bonus. Possible regression.")
+            if not _has_vol:
+                log.warning(f"[TELEMETRY-WARN] {result.get('pair', 'Unknown')} Engine B backtest has 0 non-zero volume_strength. Possible regression.")
+            _all_2r = all(abs(t.get("rr_target", 0.0) - 2.0) < 0.01 for t in trades)
+            if _all_2r:
+                log.warning(f"[TELEMETRY-WARN] {result.get('pair', 'Unknown')} Engine B backtest rr_target is constant 2.0. Possible regression.")
+            _missing_actual_rr = sum(1 for t in trades if "actual_rr" not in t)
+            if _missing_actual_rr / len(trades) > 0.05:
+                log.warning(f"[TELEMETRY-WARN] {result.get('pair', 'Unknown')} Engine B backtest actual_rr is missing from >5% trades.")
+
     result["validationMode"] = canonical_vm
     result["researchValidation"] = build_validation_report(
         trades,
@@ -1506,6 +1523,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             funnel["taken"] += 1
 
+            from scoring import get_session
+
             trades.append(
                 {
                     "date": entry_bar["time"][:10],
@@ -1519,12 +1538,31 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     "outcome": outcome,
                     "resultR": round(result_r, 2),
                     "regime": _regime,
+                    **build_strategy_lab_telemetry(
+                        engine="ENGINE_A",
+                        strategy_family="ENGINE_A_ONLY",
+                        regime=_regime,
+                        setup_type="standard",
+                        timeframe="D1",
+                        failure_reason=outcome if outcome not in ["TP1", "TP2"] else None,
+                        entry_reason=None,
+                        exit_reason=outcome,
+                        source_module="backtest_runner",
+                        source_function="backtest_pair"
+                    ),
                     "oos": _vf["oos_label"],
                     "wf_fold": _vf["wf_fold"],
                     "validation_mode": _canonical_vm,
                     "volAdj": _vol_adj,
                     "factors": res.get("factor_scores") or {},
                     "factor_weights": res.get("factor_weights") or {},
+                    "rsi": d1_window[-1].get("rsi") if d1_window else None,
+                    "adx": d1_window[-1].get("adx") if d1_window else None,
+                    "ema_directions": "aligned" if (d1_window and d1_window[-1].get("ema21", 0) > d1_window[-1].get("ema50", 0)) else "split",
+                    "addon_score": res.get("factor_scores", {}).get("addon", 0.0),
+                    "trend_score": res.get("factor_scores", {}).get("trend", 0.0),
+                    "momentum_score": res.get("factor_scores", {}).get("momentum", 0.0),
+                    "session": get_session(entry_bar["time"]).get("name", "UNKNOWN") if "time" in entry_bar else "UNKNOWN",
                     **_exit_path,
                 }
             )
@@ -1930,6 +1968,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             funnel["taken"] += 1
 
+            from scoring import get_session
+
             trades.append(
                 {
                     "date": entry_bar["time"][:10],
@@ -1943,12 +1983,31 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     "outcome": outcome,
                     "resultR": round(result_r, 2),
                     "regime": _regime,
+                    **build_strategy_lab_telemetry(
+                        engine="ENGINE_A",
+                        strategy_family="ENGINE_A_ONLY",
+                        regime=_regime,
+                        setup_type="standard",
+                        timeframe="H4",
+                        failure_reason=outcome if outcome not in ["TP1", "TP2"] else None,
+                        entry_reason=None,
+                        exit_reason=outcome,
+                        source_module="backtest_runner",
+                        source_function="backtest_pair"
+                    ),
                     "oos": _vf["oos_label"],
                     "wf_fold": _vf["wf_fold"],
                     "validation_mode": _canonical_vm,
                     "volAdj": _vol_adj,
                     "factors": res.get("factor_scores") or {},
                     "factor_weights": res.get("factor_weights") or {},
+                    "rsi": h4_window[-1].get("rsi") if h4_window else None,
+                    "adx": h4_window[-1].get("adx") if h4_window else None,
+                    "ema_directions": "aligned" if (h4_window and h4_window[-1].get("ema21", 0) > h4_window[-1].get("ema50", 0)) else "split",
+                    "addon_score": res.get("factor_scores", {}).get("addon", 0.0),
+                    "trend_score": res.get("factor_scores", {}).get("trend", 0.0),
+                    "momentum_score": res.get("factor_scores", {}).get("momentum", 0.0),
+                    "session": get_session(entry_bar["time"]).get("name", "UNKNOWN") if "time" in entry_bar else "UNKNOWN",
                     **_exit_path,
                 }
             )
@@ -2357,6 +2416,18 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     "outcome": outcome,
                     "resultR": round(result_r, 2),
                     "regime": _regime,
+                    **build_strategy_lab_telemetry(
+                        engine="ENGINE_A",
+                        strategy_family="ENGINE_A_ONLY",
+                        regime=_regime,
+                        setup_type="standard",
+                        timeframe="H1",
+                        failure_reason=outcome if outcome not in ["TP1", "TP2"] else None,
+                        entry_reason=None,
+                        exit_reason=outcome,
+                        source_module="backtest_runner",
+                        source_function="backtest_pair"
+                    ),
                     "oos": _vf["oos_label"],
                     "wf_fold": _vf["wf_fold"],
                     "validation_mode": _canonical_vm,
@@ -2864,7 +2935,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         "same_bar_both_hit": same_bar_both_hit,
         "pairMaxScore": _pair_max_score,
         "equityCurve": equity_curve,
-        "trades": trades[-50:],
+        "trades": trades,
     }
     _attach_research_validation_payload(
         _bt_result,
@@ -3076,7 +3147,7 @@ def _format_backtest_results(
         },
         # ── Curves & trades (CRITICAL — JS crashes without these) ─────────────
         "equityCurve": equity_curve,
-        "trades": trades[-50:],
+        "trades": trades,
     }
 
     liquidity_pct = sum(1 for t in trades if t.get("liquidity_sweep")) / len(trades) * 100
@@ -3653,17 +3724,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             i += 1
             continue
 
-        # Engine B BT-only target relevance: cap post-fill TP to the style fallback_rr ceiling.
-        _fallback_rr = style_profile.get("fallback_rr", 2.0)
-        if target_rr > _fallback_rr:
-            _sl_dist = abs(entry - sl)
-            if _sl_dist > 0:
-                if direction == "LONG":
-                    tp = entry + (_sl_dist * _fallback_rr)
-                else:
-                    tp = entry - (_sl_dist * _fallback_rr)
-                target_rr = _fallback_rr
-                selected_tp_source = "capped_to_fallback_rr"
+        # We removed the post-fill TP cap. We want the true actual structural target for attribution.
+        actual_rr = target_rr
 
         # MAX_SL_PCT rejection — Ensuring backtest results reflect the same risk thresholds as live trading.
         _max_sl_pct_b = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
@@ -3841,6 +3903,14 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             r_multiple = round(r_multiple - _fee_r, 4)
 
         bar_date = entry_bar.get("time", "")[:10] if entry_bar.get("time") else ""
+        
+        _vol_str = best["res"].get("bos_data", {}).get("volume_strength", 0.0)
+        if not _vol_str:
+            _nz = best["res"].get("nearest_support_zone") if direction == "LONG" else best["res"].get("nearest_resistance_zone")
+            if _nz:
+                _vol_str = _nz.get("volume_strength", 0.0)
+        _fvg_bonus = 1.0 if best["res"].get("fvg_overlap") else 0.0
+
         trades.append(
             {
                 "date": bar_date,
@@ -3854,6 +3924,18 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 "outcome": outcome,
                 "resultR": round(r_multiple, 2),
                 "regime": best.get("regime_label", "RANGING"),
+                **build_strategy_lab_telemetry(
+                    engine="ENGINE_B",
+                    strategy_family="ENGINE_B_ONLY",
+                    regime=best.get("regime_label", "RANGING"),
+                    setup_type="naked",
+                    timeframe="H4",
+                    failure_reason=outcome if outcome not in ["TP1", "TP2"] else None,
+                    entry_reason=None,
+                    exit_reason=outcome,
+                    source_module="backtest_runner",
+                    source_function="backtest_pair"
+                ),
                 "oos": _vf["oos_label"],
                 "wf_fold": _vf["wf_fold"],
                 "validation_mode": _canonical_vm,
@@ -3864,15 +3946,24 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 "trigger_pattern": best["conf"].get("trigger_pattern", "NONE"),
                 "zone_touched": best["res"].get("zone_touched", False),
                 "rr_target": round(target_rr, 2),
+                "actual_rr": round(actual_rr, 2),
+                "selected_tp": round(float(tp), 6),
+                "selected_sl": round(float(sl), 6),
                 "bos_volume_confirmed": best["res"].get("bos_volume_confirmed", True),
                 "choch_confirmed": best["res"].get("choch_confirmed", False),
                 "ob_at_zone": best["res"].get("ob_at_zone", False),
                 "bos_mtf_confirmed": best["res"].get("bos_mtf_confirmed", False),
                 "breaker_active": best["conf"].get("breaker_active", False),
                 "ob_strength": max((ob.get("strength", 0) for ob in best["res"].get("order_blocks", [])), default=0),
-                # Forex-specific fields
-                "fvg_bonus": best["res"].get("fvg_bonus", 0.0),
-                "volume_strength": best["res"].get("volume_strength", 0.0),
+                # Enhanced item-level telemetry
+                "fvg_bonus": _fvg_bonus,
+                "volume_strength": round(_vol_str, 2),
+                "checklist_struct": best["conf"].get("structure_ok", False),
+                "checklist_loc": best["conf"].get("location_ok", False),
+                "checklist_trigger": best["conf"].get("entry_ok", False),
+                "checklist_rr": best["conf"].get("rr_ok", False),
+                "checklist_room": best["conf"].get("room_ok", False),
+                "bos_confirmed": best["res"].get("bos_confirmed", False),
                 # PHASE 1C: Level source tracking
                 "selected_tp_source": selected_tp_source,
                 "selected_sl_source": selected_sl_source,
@@ -4430,7 +4521,7 @@ def backtest_pair_consensus(
             pair_type=_ptype,
             atr=atr,
             max_sl_pct=_max_sl_pct,
-            regime_state=(consensus.get("regime") or {}).get("state"),
+            regime_state=(consensus.get("regime").get("state") if isinstance(consensus.get("regime"), dict) else {"TRENDING": 0, "RANGING": 1, "HIGH_VOLATILITY": 2, "LOW_VOLATILITY": 3}.get(str(consensus.get("regime")).upper(), 0)) if consensus.get("regime") else 0,
         )
         sl = _bt_levels.get("final_sl")
         tp = _bt_levels.get("final_tp")
@@ -4555,6 +4646,18 @@ def backtest_pair_consensus(
             "score": round(conviction, 4), "entry": round(float(entry), 6),
             "sl": round(float(sl), 6), "tp1": round(float(tp), 6), "tp2": round(float(tp), 6),
             "outcome": outcome, "resultR": round(r_multiple, 2), "regime": regime_label,
+            **build_strategy_lab_telemetry(
+                engine="ENGINE_C",
+                strategy_family="ENGINE_C_CONSENSUS",
+                regime=regime_label,
+                setup_type=consensus.get("setup_type"),
+                timeframe="H4",
+                failure_reason=outcome if outcome not in ["TP1", "TP2"] else None,
+                entry_reason=None,
+                exit_reason=outcome,
+                source_module="backtest_runner",
+                source_function="backtest_pair"
+            ),
             "oos": _vf["oos_label"], "wf_fold": _vf["wf_fold"],
             "validation_mode": _canonical_vm, "volAdj": consensus.get("sizing_override", 1.0),
             "r_multiple": r_multiple, "verdict": consensus.get("verdict", ""),
@@ -4983,108 +5086,172 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         # Fabio: first scale-out is always at +1R ("pay yourself first")
         tp_partial = entry + sl_distance if direction == "LONG" else entry - sl_distance
 
-        # ── Step 5: Walk forward — Fabio partial-exit model ──────────────────────────
-        # Sequence: hit +1R → take 50% off, move stop to BE → trail to tp1 → runner to tp2
+        # ── Step 5: Walk forward — Engine D Partial-exit model ──────────────────────────
+        # Sequence: hit TP1 -> close ENGINE_D_TP1_SIZE (default 50%) -> move SL to BE -> trail to TP2/SL/TIMEOUT
         exit_reason = None
         exit_price = None
         exit_bar_idx = None
         best_favorable_r = 0.0
-        partial_hit = False   # True once +1R (tp_partial) is touched
-        be_stop = entry       # breakeven stop level (armed after partial_hit)
-        live_sl = sl          # tracks current effective SL (original → BE after partial)
+        
         tp1_hit = False
+        tp2_hit = False
+        sl_hit = False
+        timeout_hit = False
+        scratch_hit = False
+        be_hit = False
+
+        partial_enabled = bool(cfg.get("ENGINE_D_PARTIAL_EXIT_ENABLED", True))
+        tp1_size = float(cfg.get("ENGINE_D_TP1_SIZE", 0.5)) if partial_enabled else 1.0
+        move_sl_to_be = bool(cfg.get("ENGINE_D_MOVE_SL_TO_BE_AFTER_TP1", True))
+        runner_enabled = bool(cfg.get("ENGINE_D_RUNNER_ENABLED", True))
+        same_candle_policy = str(cfg.get("ENGINE_D_SAME_CANDLE_POLICY", "conservative_sl_first"))
+        
+        # If partials are disabled, TP1 is the terminal exit (100% size)
+        if not partial_enabled or not runner_enabled:
+            tp1_size = 1.0
+
+        live_sl = sl
+        be_armed = False
+        be_stop = entry
 
         for w, wbar in enumerate(walk_rows, start=1):
             walk_idx = int(wbar.get("_seq", entry_bar_idx + w))
             if direction == "LONG":
-                best_favorable_r = max(best_favorable_r, max(0.0, (wbar["high"] - entry) / sl_distance))
+                bar_high = wbar["high"]
+                bar_low = wbar["low"]
+                best_favorable_r = max(best_favorable_r, max(0.0, (bar_high - entry) / sl_distance))
+                
+                # Check for same-candle hits
+                hit_sl_now = bar_low <= live_sl
+                hit_tp1_now = bar_high >= tp1
+                
             else:
-                best_favorable_r = max(best_favorable_r, max(0.0, (entry - wbar["low"]) / sl_distance))
+                bar_high = wbar["high"]
+                bar_low = wbar["low"]
+                best_favorable_r = max(best_favorable_r, max(0.0, (entry - bar_low) / sl_distance))
+                
+                # Check for same-candle hits
+                hit_sl_now = bar_high >= live_sl
+                hit_tp1_now = bar_low <= tp1
 
-            # Check +1R scale-out first; once hit, move stop to breakeven
-            if not partial_hit:
-                tp_partial_reached = (
-                    (direction == "LONG" and wbar["high"] >= tp_partial)
-                    or (direction == "SHORT" and wbar["low"] <= tp_partial)
-                )
-                if tp_partial_reached:
-                    partial_hit = True
-                    live_sl = be_stop  # remainder now trails with SL at BE
+            # Same candle resolution
+            if hit_sl_now and hit_tp1_now and same_candle_policy == "conservative_sl_first":
+                hit_tp1_now = False # assume SL hit first
 
-            outcome, both_hit = _resolve_barrier_exit(
-                wbar, direction=direction, sl=live_sl, tp1=tp1, tp2=None, sl_outcome="SL"
-            )
-            if both_hit:
-                same_bar_both_hit_count += 1
-
-            if outcome is not None:
-                exit_reason = outcome
+            # 1. Check SL (or BE)
+            if hit_sl_now:
+                sl_hit = True
+                exit_price = live_sl
                 exit_bar_idx = walk_idx
-                if outcome == "SL":
-                    exit_price = live_sl  # original SL or BE, depending on partial_hit
-                elif outcome == "TP1":
-                    tp1_hit = True
-                    exit_price = tp1
+                if be_armed:
+                    be_hit = True
                 break
 
-            # Invalidation clock: only scratch BEFORE first partial — once +1R is banked
-            # the remainder runs with zero risk (stop at BE), so no early exit needed.
-            if scratch_enabled and not partial_hit and w >= scratch_bars and best_favorable_r < scratch_min_r:
-                exit_reason = "SCRATCH_NO_FOLLOW_THROUGH"
+            # 2. Check TP1
+            if hit_tp1_now and not tp1_hit:
+                tp1_hit = True
+                if move_sl_to_be:
+                    live_sl = be_stop
+                    be_armed = True
+                if tp1_size >= 1.0:
+                    # Full exit
+                    exit_price = tp1
+                    exit_bar_idx = walk_idx
+                    break
+
+            # 3. Check TP2 (only if TP1 hit and runner enabled)
+            if tp1_hit and tp1_size < 1.0:
+                hit_tp2_now = (direction == "LONG" and bar_high >= tp2) or (direction == "SHORT" and bar_low <= tp2)
+                if hit_tp2_now:
+                    tp2_hit = True
+                    exit_price = tp2
+                    exit_bar_idx = walk_idx
+                    break
+
+            # 4. Check Scratch
+            if scratch_enabled and not tp1_hit and w >= scratch_bars and best_favorable_r < scratch_min_r:
+                scratch_hit = True
                 exit_price = wbar["close"]
                 exit_bar_idx = walk_idx
                 break
 
         # Timeout / End of Data fallback
-        if exit_reason is None:
+        if not exit_bar_idx:
             timeout_bar = walk_rows[-1] if walk_rows else entry_bar
             timeout_idx = int(timeout_bar.get("_seq", entry_bar_idx))
             exit_price = timeout_bar["close"]
-            exit_reason = "TIMEOUT"
+            timeout_hit = True
             exit_bar_idx = timeout_idx
 
-        if direction == "LONG":
-            raw_r = (exit_price - entry) / sl_distance
+        # Calculate Gross R
+        def _calc_r(px):
+            if direction == "LONG":
+                return (px - entry) / sl_distance
+            else:
+                return (entry - px) / sl_distance
+
+        if tp1_hit:
+            if tp1_size >= 1.0:
+                gross_R = _calc_r(tp1)
+            else:
+                runner_price = tp2 if tp2_hit else exit_price
+                gross_R = (tp1_size * _calc_r(tp1)) + ((1.0 - tp1_size) * _calc_r(runner_price))
         else:
-            raw_r = (entry - exit_price) / sl_distance
+            gross_R = _calc_r(exit_price)
 
-        if partial_hit:
-            # 50% exited at +1R (tp_partial), 50% exits at final price (tp1, BE, or timeout)
-            # Worst case: SL hit after partial → 0.5×1R + 0.5×0R = +0.5R (locked winner)
-            r_multiple = round(max(-5.0, min(5.0, 0.5 * 1.0 + 0.5 * raw_r)), 3)
+        # Path exit reason
+        if tp1_hit:
+            if tp1_size >= 1.0:
+                path_exit_reason = "DIRECT_TP1_TERMINAL"
+                primary_exit_reason = "TP1"
+            elif tp2_hit:
+                path_exit_reason = "TP1_THEN_TP2"
+                primary_exit_reason = "TP2"
+            elif sl_hit or be_hit:
+                path_exit_reason = "TP1_THEN_BE" if be_hit else "TP1_THEN_SL"
+                primary_exit_reason = "BE" if be_hit else "SL"
+            elif timeout_hit:
+                path_exit_reason = "TP1_THEN_TIMEOUT"
+                primary_exit_reason = "TIMEOUT"
+            else:
+                path_exit_reason = "TP1_THEN_SCRATCH"
+                primary_exit_reason = "SCRATCH"
+        elif sl_hit:
+            path_exit_reason = "DIRECT_SL"
+            primary_exit_reason = "SL"
+        elif scratch_hit:
+            path_exit_reason = "SCRATCH_NO_TP1"
+            primary_exit_reason = "SCRATCH_NO_FOLLOW_THROUGH"
         else:
-            r_multiple = round(max(-5.0, min(5.0, raw_r)), 3)
+            path_exit_reason = "TIMEOUT_NO_TP1"
+            primary_exit_reason = "TIMEOUT"
 
-        # F3: Deduct round-trip fee — mirrors Engine A / Engine B deduction.
-        # fee_r = fee_pct * entry_price / sl_distance  (cost as a fraction of 1R)
-        _fee_pct_d = float(CONFIG.get("FEE_PCT", {}).get(asset_type, CONFIG.get("FEE_PCT", {}).get("stock", 0.0004)))
-        if sl_distance > 0 and exit_reason != "TIMEOUT":
-            _fee_r_d = _fee_pct_d * entry / sl_distance
-            r_multiple = round(r_multiple - _fee_r_d, 4)
+        exit_reason = primary_exit_reason
+        final_exit_reason = path_exit_reason
 
-        # Grade through the same scorer as live scan, using the pipeline outputs
-        # already computed for this historical decision point.
+        # Fee & Slippage calculation
+        # fee_R = estimated_fee_pct / risk_pct
+        risk_pct = sl_distance / entry if entry > 0 else 0
+        estimated_fee_pct = float(cfg.get("ESTIMATED_FEE_PCT", 0.0006))
+        fee_R = estimated_fee_pct / risk_pct if risk_pct > 0 else 0
+        slippage_R = slippage_ticks * point_est / sl_distance if sl_distance > 0 else 0
+        
+        # Only apply fees if we entered the trade
+        net_R = round(gross_R - fee_R - slippage_R, 4)
+        r_multiple = net_R
+
+        # Grade through the same scorer as live scan
         _grade_sessions = get_grade_sessions_for_mode(asset_type, when=signal_close_dt, backtest=True)
         _quality = _ai_quality_grade(
-            vp=vp,
-            price_loc=price_loc,
-            absorption=absorption,
-            cvd=cvd,
-            aaa=aaa,
-            vwap=vwap,
-            setup=setup,
-            sessions=_grade_sessions,
-            spread_pips=0.0,
-            htf_bias=htf_bias,
+            vp=vp, price_loc=price_loc, absorption=absorption, cvd=cvd, aaa=aaa,
+            vwap=vwap, setup=setup, sessions=_grade_sessions, spread_pips=0.0, htf_bias=htf_bias,
         )
         grade = _quality["grade"]
         grade_score = _quality["score"]
 
-        # Determine OOS flag (last 30% of bars)
+        # Determine OOS flag
         oos = i > total_bars * 0.70
-        exit_structure_idx = i + 1
-        if exit_bar_idx is not None:
-            exit_structure_idx = exit_bar_idx
+        exit_structure_idx = exit_bar_idx if exit_bar_idx is not None else (i + 1)
 
         trade = {
             "bar_index": i,
@@ -5095,6 +5262,11 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             "execution_tf": exit_tf,
             "context_tf": "M15",
             "structure_tf": "M15",
+            "symbol": display.replace("/", "") if asset_type == "crypto" else display,
+            "pair": display,
+            "asset_group": asset_type,
+            "engine": "ENGINE_D",
+            "strategy_family": "ENGINE_D_SCALP",
             "direction": direction,
             "setup_type": setup_type,
             "trigger_type": trigger_type,
@@ -5110,10 +5282,17 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             "tp1": round(tp1, 6),
             "tp2": round(tp2, 6) if tp2 else round(tp1, 6),
             "tp1_hit": bool(tp1_hit),
-            "partial_taken_1r": bool(partial_hit),
-            "runner_be_armed": bool(partial_hit),  # BE is armed as soon as partial is taken
+            "partial_taken_1r": bool(tp1_hit),
+            "runner_be_armed": bool(be_armed),
             "exit_price": round(exit_price, 6),
             "exit_reason": exit_reason,
+            "primary_exit_reason": primary_exit_reason,
+            "final_exit_reason": final_exit_reason,
+            "path_exit_reason": path_exit_reason,
+            "gross_R": round(gross_R, 4),
+            "fee_R": round(fee_R, 4),
+            "slippage_R": round(slippage_R, 4),
+            "net_R": net_R,
             "resultR": r_multiple,
             "r_multiple": r_multiple,
             "rr_planned": round(actual_rr, 2),
@@ -5126,6 +5305,19 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             "session": session_label,
             "oos": oos,
             "regime": "SCALP",
+            "bars_held": (exit_bar_idx - entry_bar_idx) if exit_bar_idx else 0,
+            **build_strategy_lab_telemetry(
+                engine="ENGINE_D",
+                strategy_family="ENGINE_D_SCALP",
+                regime="breakout" if "breakout" in (setup_type or "").lower() else "unknown",
+                setup_type=setup_type,
+                timeframe=exit_tf,
+                failure_reason=exit_reason if exit_reason not in ["TP1", "TP2", "TP_PARTIAL"] else None,
+                entry_reason=None,
+                exit_reason=exit_reason,
+                source_module="backtest_runner",
+                source_function="backtest_pair"
+            ),
             "market_state": market_state,
             "price_location": price_loc.get("location"),
             "vp_volume_source": vp.get("volume_source", "candles"),
@@ -5136,6 +5328,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             "cvd_bucket_count": cvd.get("bucket_count"),
             "aaa_complete": bool(aaa.get("complete")),
             "vwap_lean": vwap.get("lean"),
+
             # Compatibility fields for _format_backtest_results
             "ob_at_zone": False,
             "bos_mtf_confirmed": False,
@@ -5257,6 +5450,8 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         pass
 
     return result
+
+
 
 
 def run_full_backtest(style="auto", asset_class: str | None = None):

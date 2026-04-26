@@ -1,0 +1,22 @@
+{
+  "timestamp": "2026-04-25T21:56:45.563897+00:00",
+  "total_jobs": 1,
+  "total_trades": 493,
+  "avg_runtime_seconds": 189.6,
+  "by_group": {
+    "crypto_major": {
+      "total": 1,
+      "completed": 1,
+      "failed": 0,
+      "trades": 493
+    }
+  },
+  "by_engine": {
+    "A": {
+      "total": 1,
+      "completed": 1,
+      "failed": 0,
+      "trades": 493
+    }
+  }
+}

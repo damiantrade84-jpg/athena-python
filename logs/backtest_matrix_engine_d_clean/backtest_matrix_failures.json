@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-04-26T07:20:27.211709+00:00",
+  "failure_count": 1,
+  "failures": [
+    {
+      "job_id": "index_US30_D_M15",
+      "asset_group": "index",
+      "symbol": "US30",
+      "engine": "D",
+      "timeframe": "M15",
+      "error": "Symbol US30 not found in ALL_PAIRS",
+      "runtime_seconds": 0.0
+    }
+  ]
+}

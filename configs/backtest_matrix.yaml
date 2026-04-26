@@ -1,0 +1,126 @@
+asset_groups:
+  crypto_major:
+    symbols:
+      - BTC/USDT
+      - ETH/USDT
+      - SOL/USDT
+      - BNB/USDT
+      - XRP/USDT
+      - LTC/USDT
+    engines:
+      - A
+      - B
+      - C
+      - D
+    timeframes:
+      - M15
+      - H1
+      - H4
+
+  crypto_alt:
+    symbols:
+      - ADA/USDT
+      - DOGE/USDT
+      - TRX/USDT
+      - AVAX/USDT
+      - LINK/USDT
+    engines:
+      - A
+      - B
+      - C
+      - D
+    timeframes:
+      - M15
+      - H1
+      - H4
+
+  forex_major:
+    symbols:
+      - EUR/USD
+      - GBP/USD
+      - USD/JPY
+      - USD/CHF
+      - AUD/USD
+      - NZD/USD
+      - USD/CAD
+    engines:
+      - A
+      - B
+      - C
+    timeframes:
+      - H1
+      - H4
+
+  forex_cross:
+    symbols:
+      - EUR/JPY
+      - EUR/GBP
+      - GBP/JPY
+      - GBP/AUD
+      - EUR/AUD
+      - AUD/JPY
+      - CAD/JPY
+      - CHF/JPY
+    engines:
+      - A
+      - B
+      - C
+    timeframes:
+      - H1
+      - H4
+
+  index:
+    symbols:
+      - S&P 500
+      - NAS100
+      - DAX 40
+      - US30
+    engines:
+      - A
+      - B
+      - C
+      - D
+    timeframes:
+      - M15
+      - H1
+      - H4
+
+  commodity:
+    symbols:
+      - GOLD
+      - XAU/USD
+      - SILVER
+      - XAG/USD
+      - BRENT OIL
+      - WTI
+      - COFFEE
+    engines:
+      - A
+      - B
+      - C
+    timeframes:
+      - H1
+      - H4
+
+  stock:
+    symbols:
+      - AMD
+      - NVDA
+      - AAPL
+      - MSFT
+      - TSLA
+    engines:
+      - A
+      - B
+      - C
+    timeframes:
+      - H1
+      - H4
+      - D1
+
+defaults:
+  start_date: "2024-01-01"
+  end_date: "2026-04-25"
+  initial_balance: 10000
+  save_after_each_job: true
+  fail_fast: false

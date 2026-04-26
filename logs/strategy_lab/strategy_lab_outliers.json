@@ -1,0 +1,468 @@
+[
+  {
+    "symbol": "BTC/USDT",
+    "r_multiple": 3.9875,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 3.9875"
+    ]
+  },
+  {
+    "symbol": "BTC/USDT",
+    "r_multiple": 3.4417,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 3.4417"
+    ]
+  },
+  {
+    "symbol": "BTC/USDT",
+    "r_multiple": 3.6713,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 3.6713"
+    ]
+  },
+  {
+    "symbol": "ETH/USDT",
+    "r_multiple": 3.221,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 3.221"
+    ]
+  },
+  {
+    "symbol": "ETH/USDT",
+    "r_multiple": -6.9062,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: -6.9062"
+    ]
+  },
+  {
+    "symbol": "SOL/USDT",
+    "r_multiple": 4.2925,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 4.2925"
+    ]
+  },
+  {
+    "symbol": "BNB/USDT",
+    "r_multiple": 11.2535,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: 11.2535",
+      "Missing exit reason but large R: 11.2535"
+    ]
+  },
+  {
+    "symbol": "BNB/USDT",
+    "r_multiple": 6.8968,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: 6.8968",
+      "Missing exit reason but large R: 6.8968"
+    ]
+  },
+  {
+    "symbol": "BNB/USDT",
+    "r_multiple": 3.9548,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 3.9548"
+    ]
+  },
+  {
+    "symbol": "BNB/USDT",
+    "r_multiple": 4.9466,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 4.9466"
+    ]
+  },
+  {
+    "symbol": "BNB/USDT",
+    "r_multiple": 3.4336,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 3.4336"
+    ]
+  },
+  {
+    "symbol": "BNB/USDT",
+    "r_multiple": 3.9902,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 3.9902"
+    ]
+  },
+  {
+    "symbol": "BNB/USDT",
+    "r_multiple": 6.8188,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: 6.8188",
+      "Missing exit reason but large R: 6.8188"
+    ]
+  },
+  {
+    "symbol": "XRP/USDT",
+    "r_multiple": 3.6223,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 3.6223"
+    ]
+  },
+  {
+    "symbol": "XRP/USDT",
+    "r_multiple": 4.531,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 4.531"
+    ]
+  },
+  {
+    "symbol": "XRP/USDT",
+    "r_multiple": 7.9015,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: 7.9015",
+      "Missing exit reason but large R: 7.9015"
+    ]
+  },
+  {
+    "symbol": "XRP/USDT",
+    "r_multiple": 4.5954,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 4.5954"
+    ]
+  },
+  {
+    "symbol": "XRP/USDT",
+    "r_multiple": 4.7414,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 4.7414"
+    ]
+  },
+  {
+    "symbol": "LTC/USDT",
+    "r_multiple": 5.2585,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: 5.2585",
+      "Missing exit reason but large R: 5.2585"
+    ]
+  },
+  {
+    "symbol": "ADA/USDT",
+    "r_multiple": 6.325,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: 6.325",
+      "Missing exit reason but large R: 6.325"
+    ]
+  },
+  {
+    "symbol": "ADA/USDT",
+    "r_multiple": 5.8393,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: 5.8393",
+      "Missing exit reason but large R: 5.8393"
+    ]
+  },
+  {
+    "symbol": "DOGE/USDT",
+    "r_multiple": 6.236,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: 6.236",
+      "Missing exit reason but large R: 6.236"
+    ]
+  },
+  {
+    "symbol": "DOGE/USDT",
+    "r_multiple": 3.4442,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 3.4442"
+    ]
+  },
+  {
+    "symbol": "DOGE/USDT",
+    "r_multiple": 3.4889,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 3.4889"
+    ]
+  },
+  {
+    "symbol": "TRX/USDT",
+    "r_multiple": -29.2164,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: -29.2164"
+    ]
+  },
+  {
+    "symbol": "TRX/USDT",
+    "r_multiple": 3.8194,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 3.8194"
+    ]
+  },
+  {
+    "symbol": "TRX/USDT",
+    "r_multiple": 3.9513,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 3.9513"
+    ]
+  },
+  {
+    "symbol": "TRX/USDT",
+    "r_multiple": -6.6934,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: -6.6934"
+    ]
+  },
+  {
+    "symbol": "TRX/USDT",
+    "r_multiple": 4.437,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 4.437"
+    ]
+  },
+  {
+    "symbol": "TRX/USDT",
+    "r_multiple": 40.3523,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: 40.3523",
+      "Missing exit reason but large R: 40.3523"
+    ]
+  },
+  {
+    "symbol": "TRX/USDT",
+    "r_multiple": 31.737,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: 31.737",
+      "Missing exit reason but large R: 31.737"
+    ]
+  },
+  {
+    "symbol": "AVAX/USDT",
+    "r_multiple": 249.1945,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: 249.1945",
+      "Missing exit reason but large R: 249.1945"
+    ]
+  },
+  {
+    "symbol": "AVAX/USDT",
+    "r_multiple": 9.2083,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: 9.2083",
+      "Missing exit reason but large R: 9.2083"
+    ]
+  },
+  {
+    "symbol": "AVAX/USDT",
+    "r_multiple": -6.2048,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: -6.2048"
+    ]
+  },
+  {
+    "symbol": "AVAX/USDT",
+    "r_multiple": 5.5507,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: 5.5507",
+      "Missing exit reason but large R: 5.5507"
+    ]
+  },
+  {
+    "symbol": "AVAX/USDT",
+    "r_multiple": 3.0452,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 3.0452"
+    ]
+  },
+  {
+    "symbol": "LINK/USDT",
+    "r_multiple": 4.578,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 4.578"
+    ]
+  },
+  {
+    "symbol": "LINK/USDT",
+    "r_multiple": 4.7131,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 4.7131"
+    ]
+  },
+  {
+    "symbol": "LINK/USDT",
+    "r_multiple": 6.3948,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: 6.3948",
+      "Missing exit reason but large R: 6.3948"
+    ]
+  },
+  {
+    "symbol": "S&P 500",
+    "r_multiple": 3.2414,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 3.2414"
+    ]
+  },
+  {
+    "symbol": "S&P 500",
+    "r_multiple": 3.6101,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 3.6101"
+    ]
+  },
+  {
+    "symbol": "S&P 500",
+    "r_multiple": -4.2693,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: -4.2693"
+    ]
+  },
+  {
+    "symbol": "S&P 500",
+    "r_multiple": -25.9254,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: -25.9254"
+    ]
+  },
+  {
+    "symbol": "NASDAQ-100",
+    "r_multiple": -7.1227,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: -7.1227"
+    ]
+  },
+  {
+    "symbol": "NASDAQ-100",
+    "r_multiple": -6.009,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: -6.009"
+    ]
+  },
+  {
+    "symbol": "NASDAQ-100",
+    "r_multiple": -3.4417,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: -3.4417"
+    ]
+  },
+  {
+    "symbol": "DAX 40",
+    "r_multiple": 3.4538,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Missing exit reason but large R: 3.4538"
+    ]
+  },
+  {
+    "symbol": "DAX 40",
+    "r_multiple": -2.2053,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "Max DD contributor"
+    ]
+  },
+  {
+    "symbol": "DAX 40",
+    "r_multiple": 5.4389,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: 5.4389",
+      "Missing exit reason but large R: 5.4389"
+    ]
+  },
+  {
+    "symbol": "DAX 40",
+    "r_multiple": 23.1844,
+    "pnl": 0.0,
+    "timestamp": null,
+    "flags": [
+      "abs(R) > 5: 23.1844",
+      "Missing exit reason but large R: 23.1844"
+    ]
+  }
+]

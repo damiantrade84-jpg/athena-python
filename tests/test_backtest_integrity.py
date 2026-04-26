@@ -683,3 +683,139 @@ def test_intermarket_point_in_time_context_excludes_future_bars():
     assert ctx["drivers"]
     spy_driver = next(d for d in ctx["drivers"] if d["driver"] == "SPY")
     assert spy_driver["summary"]["current"]["driverRecentChangePct"] < 0
+
+
+def test_backtest_pair_naked_telemetry_captures_non_zero_values(monkeypatch):
+    pair = {"display": "AAPL", "symbol": "AAPL", "type": "stock", "source": "eodhd"}
+    d1 = _make_bars(datetime(2024, 1, 1, tzinfo=timezone.utc), 100, 24, base=90.0)
+    h4 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 70, 4, base=99.0)
+    h1 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 400, 1, base=100.0)
+
+    audit_dir = Path(os.path.dirname(__file__)) / "_artifacts"
+    audit_dir.mkdir(exist_ok=True)
+    runtime = SimpleNamespace(
+        fetch_eodhd=lambda *_args, **_kwargs: d1,
+        extract_candles=lambda candles: candles,
+        fetch_candles=lambda *_args, **_kwargs: d1,
+        fetch_eodhd_intraday_bt=lambda *_args, **_kwargs: (h4, h1),
+        naked_scan_style_profile=lambda style, score_group=None: (
+            "intraday",
+            {"min_score": 0.5, "fallback_rr": 2.0, "min_rr": 1.0, "atr_tf": "H4"},
+        ),
+        engine_b_regime_label=lambda *_args, **_kwargs: "TRENDING",
+        AUDIT_DB=str(audit_dir / "audit.db"),
+    )
+
+    monkeypatch.setattr(backtest_runner, "_rt", lambda: runtime)
+    monkeypatch.setattr(backtest_runner, "_get_slippage_for_bar", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr(backtest_runner, "get_pair_score_group", lambda _pair: "default")
+    monkeypatch.setitem(backtest_runner.CONFIG, "ENGINE_B_BT_SL_MODE", "structural")
+    monkeypatch.setattr(
+        backtest_runner,
+        "calc_levels",
+        lambda entry, atr, direction, ptype, regime_state=None, style="intraday": {
+            "sl": entry - 1.0 if direction == "LONG" else entry + 1.0,
+            "tp1": entry + 2.0 if direction == "LONG" else entry - 2.0,
+            "tp2": entry + 3.0 if direction == "LONG" else entry - 3.0,
+            "rr1": 2.0,
+            "rr2": 3.0,
+            "mults": {"sl": 1, "tp1": 2, "tp2": 3},
+        },
+    )
+    monkeypatch.setattr(backtest_runner, "enrich_backtest_summary", lambda result, returns: result)
+    monkeypatch.setattr(backtest_runner, "record_backtest_summary", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backtest_runner, "calibration_report", lambda *args, **kwargs: {})
+    monkeypatch.setattr(backtest_runner, "meta_report", lambda *args, **kwargs: {})
+    monkeypatch.setattr(backtest_runner, "_attach_research_validation_payload", lambda *args, **kwargs: None)
+
+    intercepted_trades = []
+    monkeypatch.setattr(
+        backtest_runner,
+        "_format_backtest_results",
+        lambda trades, pair, engine_type="NAKED", same_bar_both_hit=0, **kwargs: intercepted_trades.extend(trades) or {
+            "pair": pair["display"],
+            "engine": engine_type,
+            "totalTrades": len(trades),
+            "trades": trades,
+            "same_bar_both_hit": same_bar_both_hit,
+            "winRate": 0.0,
+            "profitFactor": 0.0,
+            "expectancy": 0.0,
+            "sqn": 0.0,
+        },
+    )
+
+    import market_structure
+
+    monkeypatch.setattr(
+        market_structure.engine,
+        "analyze_structure",
+        lambda *_args, **_kwargs: {
+            "structural_verdict": "CLEAR",
+            "recommended_stop_loss": 95.0,
+            "recommended_take_profit": 120.0,
+            "regime_state": "TRENDING",
+            "order_blocks": [],
+            "liquidity_sweep": False,
+            "fvg_overlap": True,
+            "bos_volume_confirmed": True,
+            "bos_data": {"volume_strength": 0.88},
+            "choch_confirmed": False,
+            "ob_at_zone": False,
+            "bos_mtf_confirmed": False,
+        },
+    )
+    monkeypatch.setattr(
+        market_structure.engine,
+        "calculate_confidence",
+        lambda _res, _px, direction, **_kwargs: {
+            "score": 4.0,
+            "gate_score": 4.0,
+            "pct": 100,
+            "passed": True,
+            "structure_ok": True,
+            "macro_ok": True,
+            "zone_ok": True,
+            "breakout_ok": False,
+            "location_ok": True,
+            "trigger_ok": True,
+            "entry_ok": True,
+            "room_ok": True,
+            "rr_ok": True,
+            "tp_side_ok": True,
+            "space_ok": True,
+            "trigger_pattern": "ENGULFING",
+            "ob_at_zone": False,
+            "bos_mtf_confirmed": False,
+            "breaker_active": False,
+            "execution_sl": 95.0,
+            "execution_tp": 120.0,
+            "execution_rr": 2.5,
+            "structural_sl": 95.0,
+            "structural_tp": 120.0,
+            "structural_rr": 2.5,
+            "rr_used_for_gate": 2.5,
+            "rr_source": "structural",
+            "level_mode": "structural",
+            "execution_levels_valid": True,
+            "execution_level_reject_reason": None,
+        },
+    )
+
+    result = backtest_runner.backtest_pair_naked(pair, style="intraday")
+    assert result is not None
+    assert len(intercepted_trades) > 0
+
+    trade = intercepted_trades[0]
+    assert trade["fvg_bonus"] == 1.0
+    assert trade["volume_strength"] == 0.88
+    assert trade["checklist_struct"] is True
+    assert trade["checklist_loc"] is True
+    assert trade["checklist_trigger"] is True
+    assert trade["trigger_pattern"] == "ENGULFING"
+    assert "actual_rr" in trade
+    assert trade["actual_rr"] > 2.0
+    assert trade["rr_target"] == trade["actual_rr"]
+    assert "selected_tp_source" in trade
+    assert "selected_sl_source" in trade
+    assert trade["selected_tp_source"] == "structural"

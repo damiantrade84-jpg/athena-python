@@ -71,7 +71,12 @@
       "Bash(powershell -Command \"Start-Sleep -Milliseconds 500; Remove-Item -Force 'C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\.git\\\\index.lock' -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500; Test-Path 'C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\.git\\\\index.lock'\")",
       "Bash(powershell -Command ':*)",
       "Bash(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/test_divergence_monitor_contract.py tests/test_scoring_group_routing.py -v)",
-      "Bash(.venv/Scripts/python.exe -m pytest tests/test_divergence_monitor_contract.py tests/test_scoring_group_routing.py -v)"
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_divergence_monitor_contract.py tests/test_scoring_group_routing.py -v)",
+      "Bash(.\\\\.venv\\\\Scripts\\\\python.exe -c \"import yaml; cfg = yaml.safe_load\\(open\\('config.yaml'\\)\\); print\\('PROFILE_ENABLED:', cfg.get\\('ENGINE_B_CRYPTO_PROFILE_ENABLED'\\)\\); print\\('TRIGGER_PROFILE_ENABLED:', cfg.get\\('ENGINE_B_CRYPTO_TRIGGER_PROFILE_ENABLED'\\)\\); print\\('TARGET_V2_ENABLED:', cfg.get\\('ENGINE_B_CRYPTO_TARGET_V2_ENABLED'\\)\\); print\\('TARGET_MODEL_ENABLED:', cfg.get\\('ENGINE_B_CRYPTO_TARGET_MODEL_ENABLED'\\)\\); print\\('ALLOW_FALLBACK_TARGET_FOR_PASS:', cfg.get\\('ENGINE_B_CRYPTO_ALLOW_FALLBACK_TARGET_FOR_PASS'\\)\\); print\\('REQUIRE_STRUCTURAL_TARGET_FOR_PASS:', cfg.get\\('ENGINE_B_CRYPTO_REQUIRE_STRUCTURAL_TARGET_FOR_PASS'\\)\\); print\\('PAPER_SOAK:', cfg.get\\('PAPER_SOAK'\\)\\); print\\('REAL_ORDERS_ALLOWED:', cfg.get\\('REAL_ORDERS_ALLOWED'\\)\\)\")",
+      "Bash(./.venv/Scripts/python.exe -m py_compile config.py scoring.py factor_scoring.py market_structure.py engine_c.py scalp_engine.py)",
+      "Bash(./.venv/Scripts/python.exe -m pytest tests/ -x -q)",
+      "Bash(.venv/Scripts/python.exe *)",
+      "Bash(awk '{print $NF}')"
     ]
   }
 }

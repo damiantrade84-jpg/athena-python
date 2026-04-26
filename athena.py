@@ -11802,10 +11802,10 @@ def _build_style_levels(price: float, atr: float, direction: str, pair_type: str
 
 
 def _resolve_exit_reason(exit_price: float, sl: float | None, tp: float | None) -> str:
-    """Classify exit as SL_HIT, TP_HIT, or MANUAL_CLOSE based on price proximity."""
+    """Classify exit as SL_HIT, TP_HIT, or MANUAL_OPERATOR_CLOSE based on price proximity."""
 
     if exit_price is None:
-        return "MANUAL_CLOSE"
+        return "MANUAL_OPERATOR_CLOSE"
 
     tol_pct = 0.002  # 0.2% tolerance
 
@@ -11815,7 +11815,7 @@ def _resolve_exit_reason(exit_price: float, sl: float | None, tp: float | None) 
     if tp and abs(exit_price - tp) / max(abs(tp), 1e-9) <= tol_pct:
         return "TP_HIT"
 
-    return "MANUAL_CLOSE"
+    return "MANUAL_OPERATOR_CLOSE"
 
 
 def _update_trade_outcome(
