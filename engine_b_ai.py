@@ -512,7 +512,7 @@ def get_engine_b_ai_verdict(
             " Rate all three styles independently: SCALP(H1, 1.5-2R), INTRADAY(H4, 2-3R), SWING(D1, 3-6R). "
             "Top-level grade/edgeProbability/riskLevel must represent the best style. "
             "Output strict JSON only with exactly these top-level keys: "
-            "grade, edgeProbability, riskLevel, verdict, style_ratings. "
+            "reviewSource, resolvedStyle, structureRisk, executionRisk, crossEngineAlignment, bestValidStyle, grade, edgeProbability, riskLevel, verdict, style_ratings. "
             "style_ratings must contain scalp, intraday, and swing objects with grade, edgeProbability, riskLevel."
         )
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
@@ -537,14 +537,16 @@ def get_engine_b_ai_verdict(
         parsed = _normalise_engine_b_ai_payload(parsed)
 
         # Validate required keys
-        required = {"grade", "edgeProbability", "riskLevel", "verdict"}
+        required = {"grade", "edgeProbability", "riskLevel", "verdict", "reviewSource"}
         missing = required - set(parsed.keys())
         if missing:
             log.warning(f"[ENGINE_B_AI] {pair}: Missing keys {missing} in AI response")
             parsed.setdefault("grade", "C")
             parsed.setdefault("edgeProbability", 50)
             parsed.setdefault("riskLevel", "Medium")
+            parsed.setdefault("reviewSource", "engine_b_marcus")
             parsed.setdefault("verdict", "Model response missing fields; using safe defaults.")
+
 
         parsed = _validate_engine_b_ai_payload(parsed, pair)
         parsed["grade"] = _normalise_engine_b_grade(parsed.get("grade"), pair)

@@ -2977,7 +2977,7 @@ PER-STYLE RATINGS — rate ALL THREE independently using specific data:
 - SWING: Need D1 EMA stack + trendCoherence > 0.8, RR >= 3.0, no upcoming high-impact events
 
 OUTPUT — EXACT JSON (no other text):
-{"grade":"A","verdict":"One punchy sentence citing specific factor scores","narrative":"2-3 sentences. MUST reference specific factor names, scores, and weights from the input. Name the strongest and weakest factors.","entryZone":"exact price or fib level from input","invalidation":"exact price from SL or structural level","keyLevels":"S1/R1 from input data only","positionSizing":"Full/Half/Quarter + why (reference confidence_multiplier and nondirectionalScore)","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"cite specific data","warnings":["specific risks citing data points"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}
+{"reviewSource":"engine_a_marcus","resolvedStyle":"SWING|INTRADAY|SCALP","scannerReadiness":"Weak|Medium|Strong","factorQuality":85,"structuralRisk":"Low","executionRisk":"Medium","selectedStyleGrade":"A","grade":"A","verdict":"One punchy sentence citing specific factor scores","narrative":"2-3 sentences. MUST reference specific factor names, scores, and weights from the input. Name the strongest and weakest factors.","entryZone":"exact price or fib level from input","invalidation":"exact price from SL or structural level","keyLevels":"S1/R1 from input data only","positionSizing":"Full/Half/Quarter + why (reference confidence_multiplier and nondirectionalScore)","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"cite specific data","warnings":["specific risks citing data points"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}
 """
 
 
@@ -5663,6 +5663,14 @@ def api_compare_engines():
 
         engine_b["style"] = engine_b_style
 
+        _ctx_a, _ctx_b = None, None
+        try:
+            from ai_context import build_ai_calibration_context
+            _ctx_a = build_ai_calibration_context(engine_a, engine_source="Engine A")
+            _ctx_b = build_ai_calibration_context(engine_b, engine_source="Engine B")
+        except Exception as _ctx_err:
+            log.debug("[COMPARE] AI context generation failed: %s", _ctx_err)
+
         b_seq = engine_b.get("current_swing_sequence", "")
         b_macro = engine_b.get("macro_swing_sequence", "")
         a_dir = engine_a.get("direction")
@@ -5686,8 +5694,15 @@ def api_compare_engines():
             else "CONFLICT",
         }
         return jsonify(
-            _json_safe({"engineA": engine_a, "engineB": engine_b, "summary": summary})
+            _json_safe({
+                "engineA": engine_a, 
+                "engineB": engine_b, 
+                "summary": summary,
+                "aiCalibrationContextA": _ctx_a,
+                "aiCalibrationContextB": _ctx_b
+            })
         )
+
     except Exception as e:
         log.error(f"compare_engines error: {e}")
         return jsonify({"error": "Engine comparison failed"}), 500
@@ -9334,6 +9349,22 @@ def api_chart_analysis():
             context_parts.append("STYLE LEVELS:\n" + "\n".join(_level_lines))
     algo_context = "\n".join(context_parts) if context_parts else "No algorithmic data available."
 
+    try:
+        from vision_candle_features import extract_candle_features
+        _candle_ctx_lines = []
+        _cf_prim = extract_candle_features(data.get("candles") or [], direction_str)
+        if _cf_prim: _candle_ctx_lines.append(f"CANDLE FEATURES — PRIMARY RIGHT EDGE:\n- {_cf_prim['candle_summary']}")
+        _cf_h1 = extract_candle_features(data.get("candles_h1") or [], direction_str)
+        if _cf_h1: _candle_ctx_lines.append(f"CANDLE FEATURES — H1 RIGHT EDGE:\n- {_cf_h1['candle_summary']}")
+        _cf_h4 = extract_candle_features(data.get("candles_h4") or [], direction_str)
+        if _cf_h4: _candle_ctx_lines.append(f"CANDLE FEATURES — H4 RIGHT EDGE:\n- {_cf_h4['candle_summary']}")
+        _cf_d1 = extract_candle_features(data.get("candles_d1") or [], direction_str)
+        if _cf_d1: _candle_ctx_lines.append(f"CANDLE FEATURES — D1 RIGHT EDGE:\n- {_cf_d1['candle_summary']}")
+        if _candle_ctx_lines:
+            algo_context += "\n\n" + "\n\n".join(_candle_ctx_lines)
+    except Exception as _cf_err:
+        log.debug("[CHART-VISION] Failed to extract candle features context: %s", _cf_err)
+
     system_prompt = build_system_prompt()
     direction_str = sig.get("direction", "UNKNOWN") if sig else "UNKNOWN"
 
@@ -9359,7 +9390,12 @@ def api_chart_analysis():
             "final_verdict": "",
             "ema_reclaim_flag": None,
             "countertrend_volume_flag": None,
+            "reviewSource": "ai_vision",
+            "selectedStyleGrade": "",
+            "executionRisk": "Medium",
+            "structuralRisk": "Medium",
         }
+
         for style in ("SCALP", "INTRADAY", "SWING"):
             m = _re.search(
                 rf"{style}\s+RATING\s*:\s*(STRONG|MODERATE|WEAK|AVOID|CONTRADICTS?)",
@@ -9507,7 +9543,23 @@ def api_chart_analysis():
 
         if not out["rating"]:
             out["rating"] = "MODERATE"
+
+        _res_style = str(data.get("resolvedStyle") or (sig or {}).get("tradeStyle") or "swing").lower()
+        if _res_style in out["style_ratings"]:
+            out["selectedStyleGrade"] = out["style_ratings"][_res_style]
+        elif out["style_ratings"]:
+            _hierarchy = ["STRONG", "MODERATE", "WEAK", "AVOID", "CONTRADICTS"]
+            _best = "WEAK"
+            for _h in _hierarchy:
+                if _h in out["style_ratings"].values():
+                    _best = _h
+                    break
+            out["selectedStyleGrade"] = _best
+        else:
+            out["selectedStyleGrade"] = out["rating"]
+
         return out
+
 
     user_prompt = build_single_prompt(
         symbol=symbol,
@@ -9645,7 +9697,12 @@ def api_chart_analysis():
                             "sl": (sig or {}).get("sl"),
                             "tp1": (sig or {}).get("tp1"),
                             "rr1": (sig or {}).get("rr1"),
+                            "cf_primary": _cf_prim if '_cf_prim' in locals() else None,
+                            "cf_h1": _cf_h1 if '_cf_h1' in locals() else None,
+                            "cf_h4": _cf_h4 if '_cf_h4' in locals() else None,
+                            "cf_d1": _cf_d1 if '_cf_d1' in locals() else None,
                         },
+
                     },
                     _VISION_ARTIFACTS_DIR,
                 )

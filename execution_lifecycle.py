@@ -35,6 +35,33 @@ def run_managed_execution(
     pair = (signal.get("pair") or signal.get("symbol") or "").strip()
     phases: list[dict[str, Any]] = []
 
+    _vo = signal.get("vision_output") or signal.get("structured") or {}
+    if isinstance(_vo, dict) and _vo.get("confirms_direction") is False:
+        log.warning(f"[VISION-VETO] Vetoing execution for {pair} due to conflicting direction.")
+        try:
+            import sqlite3
+            from datetime import datetime, timezone
+            _db = "audit.db"
+            with sqlite3.connect(_db, timeout=1.0) as _con:
+                _con.execute("PRAGMA journal_mode=WAL")
+                _con.execute(
+                    "INSERT INTO audit_log(ts, pair, direction, grade, error_tag, reasoning) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        datetime.now(timezone.utc).isoformat(),
+                        pair,
+                        signal.get("direction", "UNKNOWN"),
+                        "VISION-VETO",
+                        "vision_veto",
+                        "AI Vision direction conflict",
+                    )
+                )
+        except Exception as _audit_exc:
+            log.warning(f"[VISION-VETO] Failed to insert vision veto into audit_log: {_audit_exc}")
+
+        return {"success": False, "error": "AI Vision direction conflict", "error_tag": "vision_veto"}
+
+
     if v == "mt5":
         from mt5_executor import (
             mt5_cancel_pending_athena_orders,

@@ -1149,9 +1149,16 @@ def compute_consensus(
         ),
     )
 
+    try:
+        from ai_context import build_ai_calibration_context
+        result["aiCalibrationContext"] = build_ai_calibration_context(result, engine_source="Engine C")
+    except Exception as _ctx_err:
+        log.debug("[ENGINE_C] Failed to generate AI calibration context: %s", _ctx_err)
+
     # Step 6: Apply Vision if available
     if ai_vision:
         result = apply_vision(result, ai_vision)
+
 
     log.warning(
         f"[ENGINE C] {asset_type} {direction}: A={a['score_norm']:.2f} B={b['score_norm']:.2f} "

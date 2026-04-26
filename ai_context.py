@@ -279,5 +279,9 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
     if ctx["engine_c"].get("conviction") is not None:
         lines.append(f"CombinedConviction: {ctx['engine_c']['conviction']}")
         
+    lines.append(f"Entry: {trade_risk['entry']} | SL: {trade_risk['sl']} | TP1: {trade_risk['tp1']} | TP2: {trade_risk['tp2']}")
+    lines.append(f"R:R = 1:{trade_risk['rr1']} / 1:{trade_risk['rr2']}")
+
     lines.append("Note: thresholdProgressPct is scanner readiness; rawScorePct is theoretical factor quality.")
+
     return "\n".join(lines)

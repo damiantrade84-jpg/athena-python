@@ -21,17 +21,17 @@ _STRUCTURED_FOOTER = (
 
 def _ae_framework(authority_tf: str) -> str:
     return (
-        f"RIGHT EDGE A-E FRAMEWORK (authoritative TF: {authority_tf}):\n"
-        "A. Pattern ID: Name visible candle pattern(s) and structural location "
-        "(at support/resistance, order block, FVG edge, BOS/CHoCH retest, range boundary).\n"
-        "B. Wick Analysis: State wick direction, wick-to-body ratio, and interpretation "
-        "(rejection, absorption, liquidity grab, or EMA test).\n"
-        "C. Body Conviction: State whether candle bodies are expanding, contracting, or alternating, "
-        "and what that implies for momentum.\n"
-        "D. Sequence Narrative: The first sentence of RIGHT EDGE MUST synthesize A+B+C in one line.\n"
-        "E. Candle Rules: Engulfing calls require explicit volume confirmation. "
-        "Counter-trend move plus rising volume must map to RIGHT EDGE: POTENTIAL REVERSAL.\n"
+        f"RIGHT EDGE A-H FRAMEWORK (authoritative TF: {authority_tf}):\n"
+        "A. Trend/Location: Where is the right edge relative to structure/levels?\n"
+        "B. Last Candle Anatomy: body %, close location, wick dominance.\n"
+        "C. Last 3/5 Candle Sequence: expansion, contraction, control shift, higher/lower closes.\n"
+        "D. Pattern ID: Name visible/OHLC-supported pattern ONLY if valid.\n"
+        "E. Auction Behaviour: Rejection, absorption, liquidity sweep, failed breakout, displacement.\n"
+        "F. Confirmation: Volume, level reaction, structure, indicator context.\n"
+        "G. Style Suitability: Rate scalp, intraday, and swing suitability separately.\n"
+        "H. Verdict: HOLD/ADJUST/CLOSE with a strict reason citing right edge evidence.\n"
     )
+
 
 
 def build_system_prompt() -> str:

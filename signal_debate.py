@@ -61,15 +61,19 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
         }
     """
     api_key = get_ai_api_key(CONFIG)
+    _fail_policy = str(CONFIG.get("AUTO_TRADE_AI_FAIL_POLICY", "allow")).lower()
+    _allowed_on_fail = (_fail_policy != "block")
+
     if not api_key:
         return {
             "grade": "SKIP",
-            "allowed": True,
+            "allowed": _allowed_on_fail,
             "reasoning": "No AI API key configured — debate skipped",
             "bull_conviction": 0,
             "bear_conviction": 0,
             "score_adjustment": 0.0,
         }
+
 
     pair = signal.get("display", signal.get("pair", "?"))
     direction = signal.get("direction", "?")
@@ -96,26 +100,38 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
         _confidence = (signal.get("confidenceDetail") or {}).get("confidence", "?")
     _warnings = signal.get("warnings", [])
 
-    # Build signal context
-    _base_context = (
-        f"Pair: {pair} | Direction: {direction} | Score: {score}/{max_score} "
-        f"| Regime: {regime} | Asset: {asset_type}\n"
-        f"Factor Scores: {_factor_str}\n"
-        f"Confidence: {_confidence}\n"
-        f"Votes: {json.dumps(votes, default=str)}\n"
-        f"Entry: {signal.get('price')} | SL: {signal.get('sl')} | "
-        f"TP1: {signal.get('tp1')} | TP2: {signal.get('tp2')}\n"
-        f"R:R = 1:{signal.get('rr1', '?')} / 1:{signal.get('rr2', '?')}\n"
-        f"Vol Ratio: {signal.get('volRatio', '?')} | "
-        f"EMA200 Slope: {signal.get('ema200Slope', '?')}%\n"
-        f"Warnings: {'; '.join(_warnings) if _warnings else 'None'}"
-    )
+    # Build signal context using unified calibration context
+    try:
+        from ai_context import build_ai_calibration_context_string
+        _calib_str = build_ai_calibration_context_string(signal, engine_source="Auto-Trade Debate Gate", explicit_style=style_pref)
+        _base_context = _calib_str + "\n\n=== ADDITIONAL DETAILS ===\n" + (
+            f"Votes: {json.dumps(votes, default=str)}\n"
+            f"EMA200 Slope: {signal.get('ema200Slope', '?')}%\n"
+            f"Warnings: {'; '.join(_warnings) if _warnings else 'None'}"
+        )
+    except Exception as _calib_err:
+        log.debug("[DEBATE] build_ai_calibration_context_string failed: %s", _calib_err)
+        _base_context = (
+            f"Pair: {pair} | Direction: {direction} | Score: {score}/{max_score} "
+            f"| Regime: {regime} | Asset: {asset_type}\n"
+            f"Factor Scores: {_factor_str}\n"
+            f"Confidence: {_confidence}\n"
+            f"Votes: {json.dumps(votes, default=str)}\n"
+            f"Entry: {signal.get('price')} | SL: {signal.get('sl')} | "
+            f"TP1: {signal.get('tp1')} | TP2: {signal.get('tp2')}\n"
+            f"R:R = 1:{signal.get('rr1', '?')} / 1:{signal.get('rr2', '?')}\n"
+            f"Vol Ratio: {signal.get('volRatio', '?')} | "
+            f"EMA200 Slope: {signal.get('ema200Slope', '?')}%\n"
+            f"Warnings: {'; '.join(_warnings) if _warnings else 'None'}"
+        )
+
     try:
         from ai_utils import build_freshness_ai_context as _build_freshness
         _freshness_str = _build_freshness(signal)
         context = _base_context + ("\n\n" + _freshness_str if _freshness_str else "")
     except Exception:
         context = _base_context
+
 
     try:
         client = create_ai_client(CONFIG, api_key=api_key)
@@ -160,7 +176,7 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
         log.warning("[DEBATE] openai library not installed — debate skipped")
         return {
             "grade": "SKIP",
-            "allowed": True,
+            "allowed": _allowed_on_fail,
             "reasoning": "openai library not available",
             "bull_conviction": 0,
             "bear_conviction": 0,
@@ -170,12 +186,13 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
         log.error(f"[DEBATE] Error: {e}")
         return {
             "grade": "ERROR",
-            "allowed": True,
+            "allowed": _allowed_on_fail,
             "reasoning": f"Debate error: {e}",
             "bull_conviction": 0,
             "bear_conviction": 0,
             "score_adjustment": 0.0,
         }
+
 
 
 def _get_debate_case(
