@@ -12829,10 +12829,12 @@ function ldFmtPrice(p) {
   };
 
 
-  // Hook into switchPanel
+  // Hook into switchPanel (chain with existing hooks)
   const _origSwitch = window.switchPanel;
   window.switchPanel = function(panel) {
-    _origSwitch && _origSwitch(panel);
+    // Call existing hook (includes Live Dashboard hook)
+    if (typeof _origSwitch === 'function') _origSwitch(panel);
+    // Research Lab specific logic
     if (panel === 'research') window._onResearchPanelOpen();
   };
 
