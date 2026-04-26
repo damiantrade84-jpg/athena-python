@@ -380,7 +380,11 @@ def generate_all_reports(
     run_dir = make_run_dir(base_dir, run_id)
     run_meta = run_meta or {}
 
-    df = metrics_to_df(results)
+    try:
+        df = metrics_to_df(results)
+    except Exception as e:
+        log.error("[reporting] metrics_to_df failed: %s", e, exc_info=True)
+        df = pd.DataFrame(columns=OUTPUT_COLUMNS)
 
     errors: list[str] = []
 

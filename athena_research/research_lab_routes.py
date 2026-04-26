@@ -55,11 +55,20 @@ def register_research_lab_routes(app) -> None:
                 _active_runs[run_id]["status"] = "complete"
                 _active_runs[run_id]["result"] = result
             except Exception as e:
-                import traceback
+                import traceback as _tb
+                full_tb = _tb.format_exc()
                 log.error("[research_lab_routes] Run %s failed: %s\n%s",
-                          run_id, e, traceback.format_exc())
+                          run_id, e, full_tb)
                 _active_runs[run_id]["status"] = "failed"
                 _active_runs[run_id]["error"] = str(e)
+                _active_runs[run_id]["traceback"] = full_tb
+                # Write traceback to disk so it survives server restarts
+                try:
+                    tb_path = _DEFAULT_OUTPUT / run_id / "error_traceback.txt"
+                    tb_path.parent.mkdir(parents=True, exist_ok=True)
+                    tb_path.write_text(full_tb, encoding="utf-8")
+                except Exception:
+                    pass
 
         _active_runs[run_id] = {"status": "queued", "run_id": run_id}
         t = threading.Thread(target=_worker, daemon=True, name=f"research-{run_id}")
@@ -104,7 +113,8 @@ def register_research_lab_routes(app) -> None:
                         if k not in ("thread",) and not callable(v)}
                 return jsonify({"run_id": run_id, "status": status, **safe})
             return jsonify({"run_id": run_id, "status": status,
-                            "error": info.get("error", "")})
+                            "error": info.get("error", ""),
+                            "traceback": info.get("traceback", "")})
 
         # Check completed runs on disk
         run_dir = _DEFAULT_OUTPUT / run_id
@@ -187,7 +197,7 @@ def register_research_lab_routes(app) -> None:
             "by_symbol.csv", "by_timeframe.csv", "by_session.csv", "by_direction.csv",
             "indicator_attribution.csv", "rejected_or_failed_configs.csv",
             "research_report.md", "ai_research_review.md", "ai_action_plan.json",
-            "ai_engine_recommendations.json", "run_meta.json",
+            "ai_engine_recommendations.json", "run_meta.json", "error_traceback.txt",
         }
         if filename not in allowed:
             return jsonify({"error": "File not allowed", "filename": filename}), 403

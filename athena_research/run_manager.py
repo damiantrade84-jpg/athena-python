@@ -175,12 +175,16 @@ def run_research(
     allow_yfinance = bool(data_cfg.get("ALLOW_YFINANCE_FALLBACK", False))
 
     for tf in timeframes:
-        pair_dict = load_ohlcv_multi(
-            symbols, tf,
-            cache_dir=cache_dir,
-            force_refresh=force_refresh,
-            allow_yfinance=allow_yfinance,
-        )
+        try:
+            pair_dict = load_ohlcv_multi(
+                symbols, tf,
+                cache_dir=cache_dir,
+                force_refresh=force_refresh,
+                allow_yfinance=allow_yfinance,
+            )
+        except Exception as e:
+            log.error("[run_manager] load_ohlcv_multi failed for TF=%s: %s", tf, e, exc_info=True)
+            continue
         for sym, (df, prov) in pair_dict.items():
             all_data[(sym, tf)] = (df, prov)
 
@@ -228,7 +232,12 @@ def run_research(
         "results_count": len(all_results),
         "direction": direction,
     }
-    run_dir = generate_all_reports(all_results, output_dir, run_id, run_meta)
+    try:
+        run_dir = generate_all_reports(all_results, output_dir, run_id, run_meta)
+    except Exception as e:
+        log.error("[run_manager] generate_all_reports failed: %s", e, exc_info=True)
+        run_dir = Path(output_dir) / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
 
     result = {
         "run_id": run_id,
