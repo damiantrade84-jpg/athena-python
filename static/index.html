@@ -13216,37 +13216,6 @@ function ldFmtPrice(p) {
       const statusColor = data.aggregate_classification === 'CONFIRMED' ? '#6ee7b7' 
                         : data.aggregate_classification === 'WEAKENED' ? '#fbbf24' : '#f87171';
                         
-      let aggregateHtml = `
-        <div style="background:#111827; border:1px solid #38bdf8; padding:16px; border-radius:8px; margin-bottom:16px;">
-          <div style="font-size:1.1rem; font-weight:700; color:#38bdf8; display:flex; align-items:center; gap:8px;">
-            🤖 Autopilot Validation Results: 
-            <span style="color:${statusColor}">${data.aggregate_classification}</span>
-          </div>
-          <div style="display:grid; grid-template-columns: repeat(5, 1fr); gap:12px; margin-top:12px; font-size:.85rem;">
-            <div style="background:#0f172a; padding:10px; border-radius:6px; border:1px solid #1e293b; text-align:center;">
-              <div style="opacity:.6; font-size:.75rem;">COMPLETED</div>
-              <div style="font-size:1.3rem; font-weight:600; color:#cdd6e0;">${agg.tests_completed || 0}</div>
-            </div>
-            <div style="background:#0f172a; padding:10px; border-radius:6px; border:1px solid #1e293b; text-align:center;">
-              <div style="color:#6ee7b7; font-size:.75rem;">CONFIRMED</div>
-              <div style="font-size:1.3rem; font-weight:600; color:#6ee7b7;">${agg.confirmed || 0}</div>
-            </div>
-            <div style="background:#0f172a; padding:10px; border-radius:6px; border:1px solid #1e293b; text-align:center;">
-              <div style="color:#fbbf24; font-size:.75rem;">WEAKENED</div>
-              <div style="font-size:1.3rem; font-weight:600; color:#fbbf24;">${agg.weakened || 0}</div>
-            </div>
-            <div style="background:#0f172a; padding:10px; border-radius:6px; border:1px solid #1e293b; text-align:center;">
-              <div style="color:#f87171; font-size:.75rem;">REJECTED</div>
-              <div style="font-size:1.3rem; font-weight:600; color:#f87171;">${agg.rejected || 0}</div>
-            </div>
-            <div style="background:#0f172a; padding:10px; border-radius:6px; border:1px solid #1e293b; text-align:center;">
-              <div style="opacity:.6; font-size:.75rem;">NEEDS MORE</div>
-              <div style="font-size:1.3rem; font-weight:600; color:#94a3b8;">${agg.needs_more_data || 0}</div>
-            </div>
-          </div>
-        </div>
-      `;
-      
       let mainFinding = data.aggregate_classification === 'CONFIRMED' ? 'At least one strategy configuration successfully passed validation criteria across expanded datasets.' : 'Strategies failed to meet strict validation thresholds on broader testing sets.';
 
       let aggregateHtml = `
