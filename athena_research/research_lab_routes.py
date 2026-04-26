@@ -261,12 +261,22 @@ def register_research_lab_routes(app) -> None:
                 ranked_strategies = []
                 summary = {}
                 
+                import math
+                def _clean_nans(obj):
+                    if isinstance(obj, dict):
+                        return {k: _clean_nans(v) for k, v in obj.items()}
+                    elif isinstance(obj, list):
+                        return [_clean_nans(v) for v in obj]
+                    elif isinstance(obj, float):
+                        if math.isnan(obj) or math.isinf(obj):
+                            return None
+                    return obj
+
                 ranked_csv = r_dir / "ranked_strategies.csv"
                 if ranked_csv.exists():
                     try:
                         df = pd.read_csv(ranked_csv)
-                        df = df.where(pd.notnull(df), None)
-                        ranked_strategies = df.to_dict(orient="records")
+                        ranked_strategies = _clean_nans(df.to_dict(orient="records"))
                     except Exception:
                         pass
                         
@@ -274,8 +284,7 @@ def register_research_lab_routes(app) -> None:
                 if summary_csv.exists():
                     try:
                         df_sum = pd.read_csv(summary_csv)
-                        df_sum = df_sum.where(pd.notnull(df_sum), None)
-                        sum_recs = df_sum.to_dict(orient="records")
+                        sum_recs = _clean_nans(df_sum.to_dict(orient="records"))
                         if sum_recs:
                             summary = sum_recs[0]
                     except Exception:
