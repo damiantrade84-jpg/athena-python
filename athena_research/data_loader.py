@@ -701,4 +701,7 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
     if "volume" not in df.columns:
         df["volume"] = 0.0
     df["volume"] = df["volume"].fillna(0.0).clip(lower=0)
-    return df.sort_index()
+    df = df.sort_index()
+    if df.index.has_duplicates:
+        df = df[~df.index.duplicated(keep="last")]
+    return df
