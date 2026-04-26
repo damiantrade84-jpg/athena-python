@@ -13131,7 +13131,8 @@ function ldFmtPrice(p) {
           clearInterval(_rlPollTimer);
           window.rlLoadRuns();
 
-          if (st === 'complete') rlShowResults(runId);
+          if (st === 'complete') window.rlShowResults(runId);
+
         }
       } catch (_) {}
     }, 3000);
@@ -13278,7 +13279,8 @@ function ldFmtPrice(p) {
       openBtn.id = "rl-open-autopilot-result-btn";
       openBtn.textContent = '📂 Open Autopilot Result';
       openBtn.style.cssText = 'margin-top:10px; background:linear-gradient(135deg,#0369a1,#0284c7); color:#fff; border:none; padding:6px 12px; border-radius:5px; cursor:pointer; font-size:.75rem;';
-      openBtn.onclick = () => rlOpenAutopilotResult(parentId);
+      openBtn.onclick = () => window.rlOpenAutopilotResult(parentId);
+
       progressDiv.appendChild(openBtn);
     }
   }
@@ -13677,7 +13679,8 @@ function ldFmtPrice(p) {
       _rlSetStatus(hasFiles ? 'Loaded' : 'Complete — no ranked results (all data unavailable or < min trades)', runId);
 
       // Try to load existing AI review only if files exist
-      if (hasFiles) rlLoadAiReview(runId);
+      if (hasFiles) window.rlLoadAiReview(runId);
+
     } catch (e) {
       _rlSetStatus('Error: ' + e.message, runId);
     }
@@ -13694,7 +13697,8 @@ function ldFmtPrice(p) {
         headers:{'Content-Type':'application/json'}, body:'{}'});
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      rlLoadAiReview(_rlCurrentRunId);
+      window.rlLoadAiReview(_rlCurrentRunId);
+
     } catch (e) {
       alert('AI review failed: ' + e.message);
     } finally {
