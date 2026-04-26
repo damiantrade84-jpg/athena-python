@@ -2926,11 +2926,25 @@ ABSOLUTE RULES — VIOLATION = FAILURE:
 1. Output ONLY valid JSON. No markdown, no text outside JSON values.
 2. NEVER state anything not directly supported by the input data. If a factor is None/missing, say "data unavailable" — do NOT guess.
 3. NEVER use "will", "guaranteed", "definitely". Use "edge suggests", "probability favors", "setup indicates".
-4. EVERY claim in your narrative MUST reference a specific data point from the input (factor name, score value, weight, z-score, regime label, vote name, level price). If you cannot cite the data, do not make the claim.
+4. EVERY claim in your narrative MUST reference a specific data point from the input (factor name, score value, weight, z-score, regime label, level price). If you cannot cite the data, do not make the claim.
 5. Counter-trend signal = automatic grade drop of 1 full level + explicit warning.
 6. If directionalScore and direction disagree, FLAG THIS as a critical issue.
+7. DEAD RANGING regime = automatic F grade. Do not execute.
+
+STYLE & ASSET AWARENESS RULES:
+Evaluate the trade setup based on the 'Resolved AI style' and 'Asset type' provided in the AI CALIBRATION CONTEXT.
+- Do NOT judge a Scalp setup by Swing criteria (or vice versa).
+- Risk:Reward (RR) thresholds per style:
+  * SCALP: RR >= 1.5 is acceptable.
+  * INTRADAY: RR >= 2.0 is preferred.
+  * SWING: RR >= 3.0 is preferred.
+- Stop Loss (SL) bounds per Asset Type & Style:
+  * CRYPTO: SL > 2% is normal for alts; do NOT automatically force quarter sizing for wide SL unless it exceeds MAX_SL_PCT.
+  * FOREX: SL% is typically tighter. A wide SL can be an elevated risk if ATR confirms it.
+  * If SL exceeds configured MAX_SL_PCT, treat as invalid/execution-blocking.
 
 INPUT SECTIONS:
+=== AI CALIBRATION CONTEXT === (engine source, asset type, style, raw score %, thresholds, dashboard confluence labels)
 === SIGNAL === (pair, direction, score/maxScore, conviction, regime, style)
 === FACTOR DIAGNOSTICS === (per-factor scores with weights, directional vs nondirectional breakdown, confidence multiplier, trend coherence, optional coverage)
 === CONFIDENCE ENGINE === (confidence value and component breakdown)
@@ -2942,40 +2956,20 @@ INPUT SECTIONS:
 === PORTFOLIO === (heat, drawdown)
 
 HOW TO ANALYSE — FOLLOW THIS EXACT ORDER:
-Step 1: Read FACTOR DIAGNOSTICS first. Which directional factors are active? What are their scores and weights? Is directionalScore positive or negative? Does direction match? What is the confidence multiplier?
-Step 2: Check trendCoherence. How many timeframes agree? What is the coherence ratio? If < 0.7, this is a mixed signal — flag it.
-Step 3: Read regime. TRENDING with ADX > 35 = full rules. RANGING = downgrade. DEAD RANGING = F-grade instantly.
-Step 4: Check nondirectional factors (trend_strength, volatility, volume, structure). These are the signal QUALITY layer. Low quality + high direction = fragile setup.
-Step 5: Read LEVELS. Is SL within MAX_SL_PCT for this asset class? Is RR >= 2.0? Is TP near a known resistance/support?
+Step 1: Read AI CALIBRATION CONTEXT first. Identify the Asset Type and Resolved AI style. Note whether the dashboard confluence label is Weak, Medium, or Strong. Do not confuse thresholdProgressPct with rawScorePct.
+Step 2: Read FACTOR DIAGNOSTICS. Which directional factors are active? Does direction match? What is the confidence multiplier?
+Step 3: Check trendCoherence. How many timeframes agree? If < 0.7, this is a mixed signal.
+Step 4: Read regime. RANGING = downgrade. DEAD RANGING = F-grade instantly.
+Step 5: Read LEVELS. Evaluate SL and RR according to the Style & Asset Awareness Rules above. Do not automatically penalize Crypto for >2% SL.
 Step 6: If ENGINE B data is present, cross-reference structural verdict with factor direction. Agreement = boost. Conflict = major red flag.
-Step 7: If CONTEXT data is present, use for narrative color ONLY. Never let news override the quantitative signal.
+Step 7: If CONTEXT data is present, use for narrative color ONLY.
 
-GRADING (based on score/maxScore percentage):
+GRADING (based on score/maxScore percentage or dashboard confluence):
 A+ (85-100%): Elite — full size, all factors aligned, high confidence multiplier.
 A  (70-84%): Strong — normal size, minor gaps only.
 B  (55-69%): Valid — half size, needs monitoring. Check which factors are weak.
 C  (40-54%): Watchlist only — interesting but not ready. Name the missing factors.
 F  (0-39%): Avoid — insufficient edge. Name exactly why.
-
-CRITICAL CROSS-CHECKS (do ALL of these):
-- If trend factor score > 1.0 but momentum < 0 → "momentum divergence, trend may stall"
-- If directionalScore is positive but direction says SHORT → "DIRECTION FLIP BUG — do not trade"
-- If confidence_multiplier < 0.5 → "weak directional conviction — half size maximum"
-- If trendCoherence ratio < 0.7 → "timeframe disagreement — wait for alignment"
-- If nondirectionalScore < 0.5 → "low signal quality — reduce size"
-- If SL > 2% of price → quarter size mandatory
-
-edgeProbability: Estimate 20-95 using this formula as a GUIDE (not exact):
-  base = score_pct × 0.8
-  if confidence_multiplier > 0.8: +5
-  if trendCoherence > 0.8: +5
-  if regime is TRENDING and ADX > 30: +5
-  if Engine B confirms: +5
-  if counter-trend: -15
-  if momentum divergence: -10
-  Clamp to 20-95.
-
-riskLevel: "Low" if edgeProb >= 70 and TRENDING. "High" if edgeProb < 40 or DEAD RANGING or counter-trend. "Medium" otherwise.
 
 PER-STYLE RATINGS — rate ALL THREE independently using specific data:
 - SCALP: Need ADX > 30, clean H1 entry, vol_ratio > 1.5, RR >= 1.5
@@ -2984,8 +2978,7 @@ PER-STYLE RATINGS — rate ALL THREE independently using specific data:
 
 OUTPUT — EXACT JSON (no other text):
 {"grade":"A","verdict":"One punchy sentence citing specific factor scores","narrative":"2-3 sentences. MUST reference specific factor names, scores, and weights from the input. Name the strongest and weakest factors.","entryZone":"exact price or fib level from input","invalidation":"exact price from SL or structural level","keyLevels":"S1/R1 from input data only","positionSizing":"Full/Half/Quarter + why (reference confidence_multiplier and nondirectionalScore)","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"cite specific data","warnings":["specific risks citing data points"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}
-
-Now analyse the following signal data and reply with JSON only:"""
+"""
 
 
 def fetch_dxy_context():
@@ -3875,6 +3868,13 @@ def _build_signal_message(
         f"  ATR percentile: {signal.get('h4', {}).get('snap', {}).get('atrPct', '?')} "
         f"({signal.get('h4', {}).get('snap', {}).get('atrLabel', '?')})"
     )
+
+    try:
+        from ai_context import build_ai_calibration_context_string
+        lines.append("")
+        lines.append(build_ai_calibration_context_string(signal, engine_source="Engine A factor/confluence signal", explicit_style=style_pref))
+    except Exception as _ai_ctx_err:
+        log.debug("[BUILD_SIGNAL] aiContext string failed: %s", _ai_ctx_err)
 
     # === FACTOR DIAGNOSTICS (quantitative scoring breakdown) ===
     _fd = signal.get("factorDiagnostics", {})
@@ -11543,6 +11543,10 @@ def analyze_pair(
         "scoreNorm": round(score_norm, 4),
         "votes": res["votes"],
         "maxScore": max_score,
+        "liveThreshold": _threshold,
+        "rawScorePct": round((float(res["score"]) / float(max_score) * 100) if max_score else 0, 2),
+        "thresholdProgressPct": _confluence_pct,
+        "engine_b": structure_data if structure_data else {},
         "price": round(float(price), 6),
         "sl": round(float(lvl["sl"]), 6),
         "tp1": round(float(lvl["tp1"]), 6),
@@ -11645,6 +11649,13 @@ def analyze_pair(
         "pairSource": pair.get("source"),
     }
     signal["candleFetchMeta"] = _candle_fetch_meta
+
+    try:
+        from ai_context import build_ai_calibration_context
+        signal["aiContext"] = build_ai_calibration_context(signal, engine_source="engine_a")
+    except Exception as _ai_ctx_err:
+        log.debug("[ANALYZE] aiContext generation failed: %s", _ai_ctx_err)
+
     
     # Populate candleConsistency for policy-aware freshness evaluation
     try:

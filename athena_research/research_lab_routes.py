@@ -105,15 +105,34 @@ def register_research_lab_routes(app) -> None:
                             "error": info.get("error", "")})
 
         # Check completed runs on disk
+        run_dir = _DEFAULT_OUTPUT / run_id
+        if not run_dir.exists():
+            return jsonify({"error": "Run not found", "run_id": run_id}), 404
+
         df = get_run_results(run_id, _DEFAULT_OUTPUT)
         if df is None:
-            return jsonify({"error": "Run not found", "run_id": run_id}), 404
+            return jsonify({"run_id": run_id, "status": "failed",
+                            "error": "Run directory exists but results CSV missing — run may have crashed"})
+
+        # Read sentinel if available
+        status_path = run_dir / "status.json"
+        files_ok = True
+        report_errors: list = []
+        if status_path.exists():
+            try:
+                sd = json.loads(status_path.read_text(encoding="utf-8"))
+                files_ok = sd.get("files_ok", True)
+                report_errors = sd.get("errors", [])
+            except Exception:
+                pass
 
         summary = {
             "total": int(len(df)),
             "strong": int((df["status"] == "STRONG_CANDIDATE").sum()) if "status" in df.columns else 0,
             "weak": int((df["status"] == "WEAK_CANDIDATE").sum()) if "status" in df.columns else 0,
             "reject": int((df["status"] == "REJECT").sum()) if "status" in df.columns else 0,
+            "files_ok": files_ok,
+            "report_errors": report_errors,
         }
         return jsonify({"run_id": run_id, "status": "complete", "summary": summary})
 

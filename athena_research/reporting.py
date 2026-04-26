@@ -381,10 +381,44 @@ def generate_all_reports(
     run_meta = run_meta or {}
 
     df = metrics_to_df(results)
-    write_csvs(df, run_dir)
-    write_markdown_report(df, run_dir, run_id, run_meta)
-    if run_meta:
-        write_run_meta(run_dir, run_id, run_meta)
 
-    log.info("[reporting] All reports written to %s", run_dir)
+    errors: list[str] = []
+
+    try:
+        write_csvs(df, run_dir)
+    except Exception as e:
+        log.error("[reporting] write_csvs failed: %s", e)
+        errors.append(f"write_csvs: {e}")
+
+    try:
+        write_markdown_report(df, run_dir, run_id, run_meta)
+    except Exception as e:
+        log.error("[reporting] write_markdown_report failed: %s", e)
+        errors.append(f"write_markdown_report: {e}")
+
+    if run_meta:
+        try:
+            write_run_meta(run_dir, run_id, run_meta)
+        except Exception as e:
+            log.error("[reporting] write_run_meta failed: %s", e)
+            errors.append(f"write_run_meta: {e}")
+
+    # Sentinel file: written last so routes can confirm all reports exist
+    status_path = run_dir / "status.json"
+    status_data = {
+        "run_id": run_id,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "results_count": len(results),
+        "files_ok": len(errors) == 0,
+        "errors": errors,
+    }
+    try:
+        status_path.write_text(json.dumps(status_data, indent=2, default=str), encoding="utf-8")
+    except Exception:
+        pass
+
+    if errors:
+        log.warning("[reporting] %d file(s) failed for %s: %s", len(errors), run_id, errors)
+    else:
+        log.info("[reporting] All reports written to %s", run_dir)
     return run_dir

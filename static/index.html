@@ -12779,9 +12779,14 @@ function ldFmtPrice(p) {
         const res  = await fetch(`/api/research-lab/run/${runId}`);
         const data = await res.json();
         const st   = data.status;
-        _rlSetStatus(st === 'complete' ? `Complete — ${data.results_count || '?'} results`
-                   : st === 'failed'   ? 'Failed: ' + (data.error || '?')
-                   : 'Running…', runId);
+        if (st === 'complete') {
+          const n = data.results_count ?? (data.summary && data.summary.total) ?? '?';
+          _rlSetStatus(`Complete — ${n} results`, runId);
+        } else if (st === 'failed') {
+          _rlSetStatus('Failed: ' + (data.error || 'unknown error — check server logs'), runId);
+        } else {
+          _rlSetStatus('Running…', runId);
+        }
         if (st === 'complete' || st === 'failed') {
           clearInterval(_rlPollTimer);
           rlLoadRuns();
@@ -12848,14 +12853,18 @@ function ldFmtPrice(p) {
       }
 
       document.getElementById('rl-results').style.display = 'block';
-      document.getElementById('rl-ai-btn').style.display = 'inline-block';
-      document.getElementById('rl-report-link').style.display = 'inline';
-      document.getElementById('rl-report-link').href =
-        `/api/research-lab/download/${runId}/research_report.md`;
-      _rlSetStatus('Loaded', runId);
+      // Only show download / AI buttons when the run actually produced files
+      const hasFiles = rows.length > 0 && !data.note;
+      document.getElementById('rl-ai-btn').style.display = hasFiles ? 'inline-block' : 'none';
+      document.getElementById('rl-report-link').style.display = hasFiles ? 'inline' : 'none';
+      if (hasFiles) {
+        document.getElementById('rl-report-link').href =
+          `/api/research-lab/download/${runId}/research_report.md`;
+      }
+      _rlSetStatus(hasFiles ? 'Loaded' : 'Complete — no ranked results (all data unavailable or < min trades)', runId);
 
-      // Try to load existing AI review
-      rlLoadAiReview(runId);
+      // Try to load existing AI review only if files exist
+      if (hasFiles) rlLoadAiReview(runId);
     } catch (e) {
       _rlSetStatus('Error: ' + e.message, runId);
     }

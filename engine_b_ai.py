@@ -206,6 +206,23 @@ def build_engine_b_signal_message(
     """
     lines = []
 
+    _signal_proxy = dict(engine_a_ctx or {})
+    _signal_proxy.update({
+        "pair": pair,
+        "display": pair,
+        "direction": direction,
+        "price": current_price,
+        "engine_b": structure_result,
+        "engine_b_overlay": structure_result,
+    })
+
+    try:
+        from ai_context import build_ai_calibration_context_string
+        lines.append(build_ai_calibration_context_string(_signal_proxy, engine_source="Engine B naked market structure"))
+        lines.append("")
+    except Exception:
+        pass
+
     # === ENGINE A CROSS-CHECK (only when compare mode) ===
     if engine_a_ctx and isinstance(engine_a_ctx, dict):
         a_dir = engine_a_ctx.get("direction", "?")
@@ -480,12 +497,16 @@ def get_engine_b_ai_verdict(
         expert_prompt = (
             "You are Marcus Reid, veteran SMC/ICT structural trader analyzing naked price action setups. "
             "Focus only on structure and liquidity evidence: swing alignment, BOS, sweeps, FVG overlap, zone quality, "
-            "trigger quality, and risk:reward."
+            "trigger quality, and risk:reward. "
+            "Evaluate the trade setup based on the 'Resolved AI style' and 'Asset type' provided in the AI CALIBRATION CONTEXT. "
+            "Do NOT judge a Scalp setup by Swing criteria (or vice versa). "
+            "Evaluate Risk:Reward per style rules (SCALP: RR >= 1.5 acceptable; INTRADAY: RR >= 2.0 preferred; SWING: RR >= 3.0 preferred). "
+            "Do not automatically penalize Crypto for wide SL unless it exceeds MAX_SL_PCT. "
             + cross_engine_note
             + " Grade rubric: "
-            "A+=BOS aligned + clean zone + clear trigger + RR>=2.5 + multi-TF alignment; "
-            "A=strong structure with minor weakness and RR>=2.0; "
-            "B=tradable but mixed structure or RR>=1.5; "
+            "A+=BOS aligned + clean zone + clear trigger + multi-TF alignment; "
+            "A=strong structure with minor weakness; "
+            "B=tradable but mixed structure; "
             "C=marginal/incomplete setup; "
             "D/F=reject."
             " Rate all three styles independently: SCALP(H1, 1.5-2R), INTRADAY(H4, 2-3R), SWING(D1, 3-6R). "
