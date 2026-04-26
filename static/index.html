@@ -12825,8 +12825,9 @@ function ldFmtPrice(p) {
 
   // ── Panel lifecycle ────────────────────────────────────────────────────────
   window._onResearchPanelOpen = function() {
-    rlLoadRuns();
+    window.rlLoadRuns();
   };
+
 
   // Hook into switchPanel
   const _origSwitch = window.switchPanel;
@@ -13128,7 +13129,8 @@ function ldFmtPrice(p) {
         }
         if (st === 'complete' || st === 'failed') {
           clearInterval(_rlPollTimer);
-          rlLoadRuns();
+          window.rlLoadRuns();
+
           if (st === 'complete') rlShowResults(runId);
         }
       } catch (_) {}
@@ -13267,7 +13269,8 @@ function ldFmtPrice(p) {
       runBtn.style.opacity = '1.0';
     }
     _rlIsRunningPlan = false;
-    rlLoadRuns();
+    window.rlLoadRuns();
+
     
     const progressDiv = document.getElementById('rl-autopilot-progress');
     if (progressDiv) {
@@ -13754,8 +13757,12 @@ function ldFmtPrice(p) {
     document.getElementById('rl-run-id').textContent = runId ? `Run: ${runId}` : '';
   }
 
+  // Initial load
+  window.rlLoadRuns();
+
 })();
 </script>
+
 
 <div class="watermark" aria-hidden="true">
   <svg viewBox="0 0 200 210" fill="none" xmlns="http://www.w3.org/2000/svg" width="300" height="315">
