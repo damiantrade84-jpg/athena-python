@@ -1920,7 +1920,48 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       <span style="font-size:.7rem;background:#1a2535;border:1px solid #2a3a50;border-radius:4px;padding:2px 8px;color:#7fa8c8">DISCOVERY MODE — Backtest only</span>
     </div>
 
-    <!-- Run controls -->
+    <!-- 🚀 Style-Driven Autopilot Selector -->
+    <div style="background:#0f172a; border:1px solid #1e3a8a; border-radius:8px; padding:14px; margin-bottom:16px;">
+      <div style="font-size:.85rem; font-weight:700; color:#38bdf8; margin-bottom:10px; display:flex; align-items:center; gap:6px;">
+        🤖 Style-Driven Autopilot Research
+      </div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+        <div>
+          <label style="font-size:.72rem; opacity:.6; display:block; margin-bottom:4px">MARKET GROUP</label>
+          <select id="rl-market-group" style="background:#111827; border:1px solid #2a3a50; color:#cdd6e0; padding:6px 10px; border-radius:6px; font-size:.82rem">
+            <option value="crypto">Crypto</option>
+            <option value="forex">Forex</option>
+            <option value="metals">Metals</option>
+            <option value="indices">Indices</option>
+            <option value="stocks">Stocks</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:.72rem; opacity:.6; display:block; margin-bottom:4px">TRADING STYLE</label>
+          <select id="rl-trading-style" style="background:#111827; border:1px solid #2a3a50; color:#cdd6e0; padding:6px 10px; border-radius:6px; font-size:.82rem">
+            <option value="scalp">Scalp</option>
+            <option value="intra">Intra</option>
+            <option value="swing">Swing</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:.72rem; opacity:.6; display:block; margin-bottom:4px">RESEARCH DEPTH</label>
+          <select id="rl-research-depth" style="background:#111827; border:1px solid #2a3a50; color:#cdd6e0; padding:6px 10px; border-radius:6px; font-size:.82rem">
+            <option value="quick">Quick</option>
+            <option value="standard" selected>Standard</option>
+            <option value="deep">Deep</option>
+          </select>
+        </div>
+        <button onclick="rlStartStyleRun()" id="rl-style-run-btn" style="background:linear-gradient(135deg,#0369a1,#0284c7); color:#fff; border:none; padding:8px 18px; border-radius:7px; cursor:pointer; font-size:.85rem; font-weight:600">▶ Start Autopilot Research</button>
+      </div>
+    </div>
+
+    <!-- Manual controls (optional override) -->
+    <details style="margin-bottom: 12px; opacity: 0.85;">
+      <summary style="font-size: .8rem; color: #7fa8c8; cursor: pointer;">⚙️ Manual Criteria Override</summary>
+      <div style="margin-top: 8px;">
+
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end">
       <div>
         <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">MODE</label>
@@ -1968,6 +2009,8 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       <button onclick="rlApplyPreset('crypto_macd')" style="background:#1a2238;color:#a5b4fc;border:1px solid #312e81;padding:6px 12px;border-radius:6px;font-size:.75rem;cursor:pointer;">Engine A Crypto MACD Validation</button>
       <button onclick="rlApplyPreset('xau_micro')" style="background:#1a2238;color:#a5b4fc;border:1px solid #312e81;padding:6px 12px;border-radius:6px;font-size:.75rem;cursor:pointer;">Engine D XAU Micro Breakout Validation</button>
     </div>
+    </details>
+
 
 
     <!-- Status -->
@@ -12792,7 +12835,45 @@ function ldFmtPrice(p) {
     if (panel === 'research') window._onResearchPanelOpen();
   };
 
+  window.rlStartStyleRun = async function() {
+    const market_group = document.getElementById('rl-market-group').value;
+    const trading_style = document.getElementById('rl-trading-style').value;
+    const research_depth = document.getElementById('rl-research-depth').value;
+
+    const btn = document.getElementById('rl-style-run-btn');
+    if (btn) {
+      btn.disabled = true;
+      btn.style.opacity = '0.5';
+    }
+
+    _rlSetStatus(`Queuing Autopilot research for ${market_group} [${trading_style}]…`, '');
+    document.getElementById('rl-status').style.display = 'block';
+    document.getElementById('rl-results').style.display = 'none';
+    document.getElementById('rl-ai-panel').style.display = 'none';
+
+    try {
+      const res = await fetch('/api/research-lab/style-run', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ market_group, trading_style, research_depth })
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      _rlCurrentRunId = data.run_id;
+      _rlSetStatus(`Discovery started — mode: ${data.mode}`, data.run_id);
+      _rlPollStatus(data.run_id);
+    } catch (e) {
+      _rlSetStatus('Error starting autopilot run: ' + e.message, '');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.style.opacity = '1.0';
+      }
+    }
+  };
+
   // ── Start a new run ────────────────────────────────────────────────────────
+
   window.rlStartRun = async function() {
     const mode        = document.getElementById('rl-mode').value;
     const direction   = document.getElementById('rl-direction').value;
@@ -13468,9 +13549,19 @@ function ldFmtPrice(p) {
     document.getElementById('rl-status').style.display = 'block';
     _rlSetStatus('Loading results…', runId);
 
-    try {
-      const metaRes = await fetch(`/api/research-lab/run/${runId}`);
-      const metaData = await metaRes.json();
+      let metaData = {};
+      try {
+        const metaRes = await fetch(`/api/research-lab/run/${runId}`);
+        metaData = await metaRes.json();
+        
+        const metaFileRes = await fetch(`/api/research-lab/download/${runId}/run_meta.json`);
+        if (metaFileRes.ok) {
+          const fileData = await metaFileRes.json();
+          metaData = { ...metaData, ...fileData };
+        }
+      } catch (e) {
+        console.warn('Metadata resolution fallback:', e);
+      }
       
       const res  = await fetch(`/api/research-lab/ranked/${runId}`);
       const data = await res.json();
@@ -13505,6 +13596,34 @@ function ldFmtPrice(p) {
           }).join('') + '</tr>';
         }).join('');
         
+        let styleProfileHtml = '';
+        if (metaData.trading_style) {
+          const style = metaData.trading_style;
+          const zoneSet = metaData.zone_set || '';
+          const focus = metaData.validation_focus || [];
+          const mGroup = metaData.market_group || '';
+          const focusTags = (focus || []).map(f => `<span style="background:#1e3a8a; color:#93c5fd; padding:3px 8px; border-radius:4px; font-size:.7rem; border:1px solid #3b82f6;">${f}</span>`).join(' ');
+          
+          styleProfileHtml = `
+            <div style="background:linear-gradient(135deg, #0f172a, #1e1b4b); border:1px solid #581c87; padding:16px; border-radius:10px; margin-bottom:16px;">
+              <div style="font-size:1.05rem; font-weight:700; color:#c084fc; display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+                🌌 ${style.toUpperCase()} Style Context Profile
+              </div>
+              <div style="display:grid; grid-template-columns: 1fr 2fr; gap:12px; font-size:.8rem;">
+                <div style="background:rgba(0,0,0,0.2); padding:10px; border-radius:6px; border:1px solid #334155;">
+                  <strong>Market Group:</strong> <span style="color:#e2e8f0; margin-left:4px;">${mGroup.toUpperCase()}</span><br/>
+                  <strong>Zone Set:</strong> <span style="color:#fb923c; margin-left:4px;">${zoneSet}</span><br/>
+                  <strong>Timeframes:</strong> <span style="color:#38bdf8; margin-left:4px;">${(metaData.timeframes || []).join(', ')}</span>
+                </div>
+                <div style="background:rgba(0,0,0,0.2); padding:10px; border-radius:6px; border:1px solid #334155;">
+                  <strong style="display:block; margin-bottom:6px; opacity:.8;">Focus Metrics & Objectives:</strong>
+                  <div style="display:flex; flex-wrap:wrap; gap:6px;">${focusTags || '<span style="opacity:.5">N/A</span>'}</div>
+                </div>
+              </div>
+            </div>
+          `;
+        }
+
         let childVerdictHtml = '';
         if (metaData.parent_run_id) {
           let confirmedCount = 0, weakenedCount = 0, rejectedCount = 0, needsMoreCount = 0;
@@ -13532,7 +13651,8 @@ function ldFmtPrice(p) {
           `;
         }
 
-        document.getElementById('rl-ranked-table').innerHTML = childVerdictHtml +
+        document.getElementById('rl-ranked-table').innerHTML = styleProfileHtml + childVerdictHtml +
+
           `<table style="border-collapse:collapse;width:100%"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`;
       }
 

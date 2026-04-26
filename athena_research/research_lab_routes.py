@@ -201,6 +201,98 @@ def register_research_lab_routes(app) -> None:
             "child_run_ids": child_run_ids,
             "message": "Autopilot validation started"
         }), 202
+    # ── POST /api/research-lab/style-run ──────────────────────────────────────
+    @app.route("/api/research-lab/style-run", methods=["POST"])
+    def api_research_lab_style_run():
+        """Launch discovery for a market group and trading style profile."""
+        body = request.get_json(silent=True) or {}
+        market_group = body.get("market_group", "crypto").lower()
+        trading_style = body.get("trading_style", "intra").lower()
+        research_depth = body.get("research_depth", "standard").lower()
+
+        # Resolve mode
+        if research_depth == "quick":
+            mode = "tiny"
+        elif research_depth == "deep":
+            mode = "large"
+        else:
+            mode = "medium"
+
+        # Resolve symbols
+        group_symbols = {
+            "crypto": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "ADA/USDT"],
+            "forex": ["EUR/USD", "GBP/USD", "AUD/USD", "USD/JPY"],
+            "metals": ["XAU/USD", "XAG/USD"],
+            "indices": ["US30", "NAS100", "GER30"],
+            "stocks": ["AAPL", "TSLA", "NVDA", "MSFT"],
+            "custom": ["BTC/USDT", "EUR/USD"]
+        }
+        symbols = group_symbols.get(market_group, ["BTC/USDT"])
+
+        # Resolve profiles
+        from athena_research.autopilot import RESEARCH_STYLE_PROFILES
+        if trading_style not in RESEARCH_STYLE_PROFILES:
+            return jsonify({"error": f"Invalid trading style: {trading_style}"}), 400
+
+        profile = RESEARCH_STYLE_PROFILES[trading_style]
+        timeframes = profile["timeframes"]
+        families = profile["strategy_families"]
+
+        from athena_research.run_manager import run_research, _DEFAULT_CONFIG
+        
+        run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+
+        def _worker_style():
+            _active_runs[run_id]["status"] = "running"
+            try:
+                result = run_research(
+                    mode=mode,
+                    config_path=_DEFAULT_CONFIG,
+                    output_dir=_DEFAULT_OUTPUT,
+                    run_id=run_id,
+                    direction="both",
+                    run_ai_review=False,
+                    symbols=symbols,
+                    timeframes=timeframes,
+                    families=families
+                )
+                
+                # Write trading style specifics to run_meta
+                meta_path = _DEFAULT_OUTPUT / run_id / "run_meta.json"
+                if meta_path.exists():
+                    try:
+                        mdata = json.loads(meta_path.read_text(encoding="utf-8"))
+                        mdata["market_group"] = market_group
+                        mdata["trading_style"] = trading_style
+                        mdata["research_depth"] = research_depth
+                        mdata["zone_set"] = profile.get("zone_set")
+                        mdata["validation_focus"] = profile.get("validation_focus")
+                        meta_path.write_text(json.dumps(mdata, indent=2), encoding="utf-8")
+                    except Exception:
+                        pass
+
+                _active_runs[run_id]["status"] = "complete"
+                _active_runs[run_id]["result"] = result
+            except Exception as e:
+                import traceback as _tb
+                full_tb = _tb.format_exc()
+                log.error("[research_lab_routes] Style run %s failed: %s\n%s", run_id, e, full_tb)
+                _active_runs[run_id]["status"] = "failed"
+                _active_runs[run_id]["error"] = str(e)
+                try:
+                    tb_path = _DEFAULT_OUTPUT / run_id / "error_traceback.txt"
+                    tb_path.parent.mkdir(parents=True, exist_ok=True)
+                    tb_path.write_text(full_tb, encoding="utf-8")
+                except Exception:
+                    pass
+
+        _active_runs[run_id] = {"status": "queued", "run_id": run_id}
+        t = threading.Thread(target=_worker_style, daemon=True, name=f"style-research-{run_id}")
+        _active_runs[run_id]["thread"] = t
+        t.start()
+
+        return jsonify({"run_id": run_id, "status": "queued", "mode": mode}), 202
+
 
     # ── GET /api/research-lab/run-status ──────────────────────────────────────
     @app.route("/api/research-lab/run-status", methods=["GET"])
@@ -374,23 +466,45 @@ def register_research_lab_routes(app) -> None:
             status = info.get("status", "unknown")
             if status == "complete":
                 result = info.get("result", {})
-                # Strip non-serialisable keys (thread object lives in info, not result)
                 safe = {k: v for k, v in result.items()
                         if k not in ("thread",) and not callable(v)}
+                
+                run_dir = _DEFAULT_OUTPUT / run_id
+                meta_path = run_dir / "run_meta.json"
+                if meta_path.exists():
+                    try:
+                        safe.update(json.loads(meta_path.read_text(encoding="utf-8")))
+                    except Exception:
+                        pass
+
                 return jsonify({"run_id": run_id, "status": status, **safe})
             return jsonify({"run_id": run_id, "status": status,
                             "error": info.get("error", ""),
                             "traceback": info.get("traceback", "")})
 
-        # Check completed runs on disk
+
         run_dir = _DEFAULT_OUTPUT / run_id
         if not run_dir.exists():
             return jsonify({"error": "Run not found", "run_id": run_id}), 404
 
+        # Read run_meta.json if available
+
+        meta_path = run_dir / "run_meta.json"
+        meta_data = {}
+        if meta_path.exists():
+            try:
+                meta_data = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
         df = get_run_results(run_id, _DEFAULT_OUTPUT)
         if df is None:
-            return jsonify({"run_id": run_id, "status": "failed",
-                            "error": "Run directory exists but results CSV missing — run may have crashed"})
+            return jsonify({
+                "run_id": run_id, 
+                "status": "failed",
+                "error": "Run directory exists but results CSV missing — run may have crashed",
+                **meta_data
+            })
 
         # Read sentinel if available
         status_path = run_dir / "status.json"
@@ -412,7 +526,8 @@ def register_research_lab_routes(app) -> None:
             "files_ok": files_ok,
             "report_errors": report_errors,
         }
-        return jsonify({"run_id": run_id, "status": "complete", "summary": summary})
+        return jsonify({"run_id": run_id, "status": "complete", "summary": summary, **meta_data})
+
 
     # ── POST /api/research-lab/analyze/<run_id> ───────────────────────────────
     @app.route("/api/research-lab/analyze/<run_id>", methods=["POST"])

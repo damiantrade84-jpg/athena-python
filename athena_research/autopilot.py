@@ -19,6 +19,35 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
+RESEARCH_STYLE_PROFILES = {
+  "scalp": {
+    "timeframes": ["M1", "M5", "M15"],
+    "zone_set": "scalp_zones",
+    "strategy_families": [
+      "micro_breakout", "opening_range", "liquidity_sweep", 
+      "vwap_reclaim", "absorption", "scalp_pullback"
+    ],
+    "validation_focus": ["fast reaction", "tight stop feasibility", "TP1 hit rate", "fee/slippage sensitivity", "session quality"]
+  },
+  "intra": {
+    "timeframes": ["M15", "H1", "H4"],
+    "zone_set": "intra_zones",
+    "strategy_families": [
+      "trend_momentum", "pullback", "breakout", "mean_reversion", "structure_filters"
+    ],
+    "validation_focus": ["same-day continuation", "intraday reversal", "liquidity sweep into zone", "session continuation", "target room"]
+  },
+  "swing": {
+    "timeframes": ["H4", "D1"],
+    "zone_set": "swing_zones",
+    "strategy_families": [
+      "trend_momentum", "pullback", "breakout", "mean_reversion", "engine_b_proxy"
+    ],
+    "validation_focus": ["higher timeframe trend", "value area reaction", "support/resistance reaction", "structural continuation", "wider target room"]
+  }
+}
+
+
 def generate_auto_plan(
     run_id: str,
     output_dir: Path,
