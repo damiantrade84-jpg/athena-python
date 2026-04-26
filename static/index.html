@@ -13191,12 +13191,146 @@ function ldFmtPrice(p) {
     const progressDiv = document.getElementById('rl-autopilot-progress');
     if (progressDiv) {
       const openBtn = document.createElement('button');
+      openBtn.id = "rl-open-autopilot-result-btn";
       openBtn.textContent = '📂 Open Autopilot Result';
       openBtn.style.cssText = 'margin-top:10px; background:linear-gradient(135deg,#0369a1,#0284c7); color:#fff; border:none; padding:6px 12px; border-radius:5px; cursor:pointer; font-size:.75rem;';
-      openBtn.onclick = () => rlShowResults(parentId);
+      openBtn.onclick = () => rlOpenAutopilotResult(parentId);
       progressDiv.appendChild(openBtn);
     }
   }
+
+  window.rlOpenAutopilotResult = async function(parentId) {
+    console.log('[autopilot] Open button clicked', parentId);
+    _rlSetStatus('Loading aggregated autopilot validation results…', parentId);
+    
+    try {
+      const res = await fetch(`/api/research-lab/autopilot-result?parent_run_id=${parentId}`);
+      console.log('[autopilot] Response received', res.status);
+      const data = await res.json();
+      
+      if (data.error) throw new Error(data.error);
+      
+      console.log('[autopilot] Rendering aggregate summary results', data);
+      
+      const agg = data.aggregate_summary || {};
+      const statusColor = data.aggregate_classification === 'CONFIRMED' ? '#6ee7b7' 
+                        : data.aggregate_classification === 'WEAKENED' ? '#fbbf24' : '#f87171';
+                        
+      let aggregateHtml = `
+        <div style="background:#111827; border:1px solid #38bdf8; padding:16px; border-radius:8px; margin-bottom:16px;">
+          <div style="font-size:1.1rem; font-weight:700; color:#38bdf8; display:flex; align-items:center; gap:8px;">
+            🤖 Autopilot Validation Results: 
+            <span style="color:${statusColor}">${data.aggregate_classification}</span>
+          </div>
+          <div style="display:grid; grid-template-columns: repeat(5, 1fr); gap:12px; margin-top:12px; font-size:.85rem;">
+            <div style="background:#0f172a; padding:10px; border-radius:6px; border:1px solid #1e293b; text-align:center;">
+              <div style="opacity:.6; font-size:.75rem;">COMPLETED</div>
+              <div style="font-size:1.3rem; font-weight:600; color:#cdd6e0;">${agg.tests_completed || 0}</div>
+            </div>
+            <div style="background:#0f172a; padding:10px; border-radius:6px; border:1px solid #1e293b; text-align:center;">
+              <div style="color:#6ee7b7; font-size:.75rem;">CONFIRMED</div>
+              <div style="font-size:1.3rem; font-weight:600; color:#6ee7b7;">${agg.confirmed || 0}</div>
+            </div>
+            <div style="background:#0f172a; padding:10px; border-radius:6px; border:1px solid #1e293b; text-align:center;">
+              <div style="color:#fbbf24; font-size:.75rem;">WEAKENED</div>
+              <div style="font-size:1.3rem; font-weight:600; color:#fbbf24;">${agg.weakened || 0}</div>
+            </div>
+            <div style="background:#0f172a; padding:10px; border-radius:6px; border:1px solid #1e293b; text-align:center;">
+              <div style="color:#f87171; font-size:.75rem;">REJECTED</div>
+              <div style="font-size:1.3rem; font-weight:600; color:#f87171;">${agg.rejected || 0}</div>
+            </div>
+            <div style="background:#0f172a; padding:10px; border-radius:6px; border:1px solid #1e293b; text-align:center;">
+              <div style="opacity:.6; font-size:.75rem;">NEEDS MORE</div>
+              <div style="font-size:1.3rem; font-weight:600; color:#94a3b8;">${agg.needs_more_data || 0}</div>
+            </div>
+          </div>
+        </div>
+      `;
+      
+      let childListHtml = (data.child_runs || []).map(cr => {
+        const cColor = cr.classification === 'CONFIRMED' ? '#6ee7b7' 
+                     : cr.classification === 'WEAKENED' ? '#fbbf24' : '#f87171';
+                     
+        let stratRowsHtml = (cr.ranked_strategies || []).map(strat => `
+          <tr style="font-size:.75rem; border-top:1px solid #1e293b;">
+            <td style="padding:6px 8px; font-weight:600; color:#f3f4f6;">${strat.strategy_name || ''}</td>
+            <td style="padding:6px 8px;">${strat.symbol || ''}</td>
+            <td style="padding:6px 8px; opacity:.7;">${strat.timeframe || ''}</td>
+            <td style="padding:6px 8px;">${strat.trade_count ?? 0}</td>
+            <td style="padding:6px 8px;">${((strat.win_rate ?? 0) * 100).toFixed(1)}%</td>
+            <td style="padding:6px 8px;">${(strat.profit_factor ?? 0).toFixed(2)}</td>
+            <td style="padding:6px 8px; color:${(strat.net_return ?? 0) >= 0 ? '#6ee7b7' : '#f87171'}">${((strat.net_return ?? 0)*100).toFixed(1)}%</td>
+            <td style="padding:6px 8px; opacity:.7;">${(strat.robustness_score ?? 0).toFixed(2)}</td>
+            <td style="padding:6px 8px; font-weight:600; color:${strat.status === 'STRONG_CANDIDATE' ? '#6ee7b7' : '#f87171'}">${strat.status || ''}</td>
+          </tr>
+        `).join('');
+        
+        return `
+          <div style="background:#0f172a; border:1px solid #1e293b; border-radius:8px; padding:12px; margin-bottom:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+              <div>
+                <span style="font-family:monospace; color:#38bdf8; font-weight:600; cursor:pointer; text-decoration:underline;" onclick="rlShowResults('${cr.run_id}')">
+                  ${cr.run_id}
+                </span>
+                <span style="font-size:.75rem; margin-left:12px; padding:3px 8px; background:#1e293b; color:${cColor}; border-radius:4px; font-weight:600; border:1px solid ${cColor}50;">
+                  ${cr.classification}
+                </span>
+              </div>
+              <div style="font-size:.72rem; opacity:.7; max-width:400px; text-align:right;">${cr.reason || ''}</div>
+            </div>
+            
+            ${cr.ranked_strategies && cr.ranked_strategies.length > 0 ? `
+              <div style="overflow-x:auto;">
+                <table style="width:100%; border-collapse:collapse; text-align:left;">
+                  <thead>
+                    <tr style="font-size:.72rem; opacity:.6; text-transform:uppercase;">
+                      <th style="padding:4px 8px;">Strategy</th>
+                      <th style="padding:4px 8px;">Symbol</th>
+                      <th style="padding:4px 8px;">TF</th>
+                      <th style="padding:4px 8px;">Trades</th>
+                      <th style="padding:4px 8px;">WR</th>
+                      <th style="padding:4px 8px;">PF</th>
+                      <th style="padding:4px 8px;">Net Ret</th>
+                      <th style="padding:4px 8px;">Robust</th>
+                      <th style="padding:4px 8px;">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${stratRowsHtml}
+                  </tbody>
+                </table>
+              </div>
+            ` : `<div style="font-size:.75rem; opacity:.5; padding:6px 8px;">No strategy outcomes mapped for this execution vector.</div>`}
+          </div>
+        `;
+      }).join('');
+      
+      const targetTable = document.getElementById('rl-ranked-table');
+      if (targetTable) {
+        targetTable.innerHTML = aggregateHtml + `
+          <div style="font-size:.85rem; font-weight:600; opacity:.6; margin-bottom:8px; letter-spacing:.05em;">INDIVIDUAL VALIDATION VECTORS</div>
+          ${childListHtml || '<div style="font-size:.8rem; opacity:.5;">No child results aggregated.</div>'}
+        `;
+      }
+      
+      _rlSetStatus('Aggregated validation results loaded successfully.', parentId);
+      
+    } catch (e) {
+      console.error('[autopilot] Aggregate failure', e);
+      _rlSetStatus('Failed loading autopilot metrics: ' + e.message, parentId);
+      
+      // Fallback
+      const targetTable = document.getElementById('rl-ranked-table');
+      if (targetTable) {
+        targetTable.innerHTML = `
+          <div style="background:#7f1d1d; color:#fca5a5; border:1px solid #f87171; padding:12px; border-radius:6px; margin-bottom:12px; font-size:.8rem;">
+            ⚠️ Aggregation Error: ${e.message}. Individual child datasets may still be inspected in isolation via the primary sidebar hierarchy.
+          </div>
+        `;
+      }
+    }
+  };
+
 
   // ── Load runs list ─────────────────────────────────────────────────────────
   window.rlLoadRuns = async function() {

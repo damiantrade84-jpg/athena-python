@@ -124,3 +124,17 @@ def test_backend_child_ids_returned():
         assert data["status"] == "started"
         assert len(data["child_run_ids"]) == 1
         assert "validation started" in data["message"]
+def test_backend_aggregate_autopilot_result():
+    from flask import Flask
+    from athena_research.research_lab_routes import register_research_lab_routes
+    
+    app = Flask(__name__)
+    register_research_lab_routes(app)
+    
+    with app.test_client() as client:
+        res = client.get("/api/research-lab/autopilot-result?parent_run_id=mock_parent")
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["parent_run_id"] == "mock_parent"
+        assert "child_runs" in data
+        assert "aggregate_classification" in data

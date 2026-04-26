@@ -229,6 +229,111 @@ def register_research_lab_routes(app) -> None:
         return jsonify({"run_id": run_id, "status": "complete"})
 
 
+    # ── GET /api/research-lab/autopilot-result ────────────────────────────────
+    @app.route("/api/research-lab/autopilot-result", methods=["GET"])
+    def api_research_lab_autopilot_result():
+        """Retrieve aggregated validation reports for child tests."""
+        parent_id = request.args.get("parent_run_id")
+        if not parent_id:
+            return jsonify({"error": "parent_run_id is required"}), 400
+            
+        from athena_research.run_manager import list_runs
+        import pandas as pd
+        import json
+        
+        try:
+            runs = list_runs(_DEFAULT_OUTPUT)
+        except Exception as e:
+            return jsonify({"error": f"Failed listing runs: {str(e)}"}), 500
+            
+        child_runs_data = []
+        tests_completed = 0
+        confirmed = 0
+        weakened = 0
+        rejected = 0
+        needs_more_data = 0
+        
+        for r in runs:
+            if r.get("parent_run_id") == parent_id:
+                rid = r["run_id"]
+                r_dir = _DEFAULT_OUTPUT / rid
+                
+                ranked_strategies = []
+                summary = {}
+                
+                ranked_csv = r_dir / "ranked_strategies.csv"
+                if ranked_csv.exists():
+                    try:
+                        df = pd.read_csv(ranked_csv)
+                        df = df.where(pd.notnull(df), None)
+                        ranked_strategies = df.to_dict(orient="records")
+                    except Exception:
+                        pass
+                        
+                summary_csv = r_dir / "research_summary.csv"
+                if summary_csv.exists():
+                    try:
+                        df_sum = pd.read_csv(summary_csv)
+                        df_sum = df_sum.where(pd.notnull(df_sum), None)
+                        sum_recs = df_sum.to_dict(orient="records")
+                        if sum_recs:
+                            summary = sum_recs[0]
+                    except Exception:
+                        pass
+                        
+                status_list = [str(st).upper() for st in [item.get("status") for item in ranked_strategies] if st]
+                
+                classification = "NEEDS_MORE_DATA"
+                reason = "Insufficient tests or failed setup."
+                
+                if "STRONG_CANDIDATE" in status_list:
+                    classification = "CONFIRMED"
+                    confirmed += 1
+                    reason = "Strong candidate identified during validation tests."
+                elif "WEAK_CANDIDATE" in status_list:
+                    classification = "WEAKENED"
+                    weakened += 1
+                    reason = "Metrics showed degradation, weak validation outcome."
+                elif "REJECT" in status_list:
+                    classification = "REJECTED"
+                    rejected += 1
+                    reason = "Strategies failed basic profitability or robustness thresholds."
+                else:
+                    needs_more_data += 1
+                    
+                tests_completed += 1
+                
+                child_runs_data.append({
+                    "run_id": rid,
+                    "status": "complete",
+                    "report_path": f"/api/research-lab/download/{rid}/research_report.md",
+                    "ranked_strategies": ranked_strategies,
+                    "summary": summary,
+                    "classification": classification,
+                    "reason": reason
+                })
+                
+        aggregate_classification = "NEEDS_MORE_DATA"
+        if confirmed > 0:
+            aggregate_classification = "CONFIRMED"
+        elif weakened > 0:
+            aggregate_classification = "WEAKENED"
+        elif rejected > 0:
+            aggregate_classification = "REJECTED"
+            
+        return jsonify({
+            "parent_run_id": parent_id,
+            "child_runs": child_runs_data,
+            "aggregate_classification": aggregate_classification,
+            "aggregate_summary": {
+                "tests_completed": tests_completed,
+                "confirmed": confirmed,
+                "weakened": weakened,
+                "rejected": rejected,
+                "needs_more_data": needs_more_data
+            }
+        }), 200
+
     # ── GET /api/research-lab/runs ────────────────────────────────────────────
     @app.route("/api/research-lab/runs", methods=["GET"])
     def api_research_lab_list():
