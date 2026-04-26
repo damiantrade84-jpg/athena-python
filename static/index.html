@@ -13247,11 +13247,90 @@ function ldFmtPrice(p) {
         </div>
       `;
       
-      let childListHtml = (data.child_runs || []).map(cr => {
-        const cColor = cr.classification === 'CONFIRMED' ? '#6ee7b7' 
-                     : cr.classification === 'WEAKENED' ? '#fbbf24' : '#f87171';
-                     
-        let stratRowsHtml = (cr.ranked_strategies || []).map(strat => `
+      let mainFinding = data.aggregate_classification === 'CONFIRMED' ? 'At least one strategy configuration successfully passed validation criteria across expanded datasets.' : 'Strategies failed to meet strict validation thresholds on broader testing sets.';
+
+      let aggregateHtml = `
+        <div style="background:#111827; border:1px solid #38bdf8; padding:16px; border-radius:8px; margin-bottom:16px;">
+          <div style="font-size:1.1rem; font-weight:700; color:#38bdf8; display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+            🤖 Autopilot Validation Results
+          </div>
+          <div style="font-size:.85rem; margin-bottom:12px;">
+             <strong>Research Decision:</strong> <span style="color:${statusColor}; font-weight:bold; padding:2px 6px; background:#1e293b; border-radius:4px; margin-left:4px;">${data.aggregate_classification}</span><br/>
+             <div style="margin-top:6px;"><strong>Main Finding:</strong> <span style="opacity:.8;">${mainFinding}</span></div>
+          </div>
+          <div style="display:grid; grid-template-columns: repeat(5, 1fr); gap:12px; margin-top:12px; font-size:.85rem;">
+            <div style="background:#0f172a; padding:10px; border-radius:6px; border:1px solid #1e293b; text-align:center;">
+              <div style="opacity:.6; font-size:.75rem;">COMPLETED</div>
+              <div style="font-size:1.3rem; font-weight:600; color:#cdd6e0;">${agg.tests_completed || 0}</div>
+            </div>
+            <div style="background:#0f172a; padding:10px; border-radius:6px; border:1px solid #1e293b; text-align:center;">
+              <div style="color:#6ee7b7; font-size:.75rem;">CONFIRMED</div>
+              <div style="font-size:1.3rem; font-weight:600; color:#6ee7b7;">${agg.confirmed || 0}</div>
+            </div>
+            <div style="background:#0f172a; padding:10px; border-radius:6px; border:1px solid #1e293b; text-align:center;">
+              <div style="color:#fbbf24; font-size:.75rem;">WEAKENED</div>
+              <div style="font-size:1.3rem; font-weight:600; color:#fbbf24;">${agg.weakened || 0}</div>
+            </div>
+            <div style="background:#0f172a; padding:10px; border-radius:6px; border:1px solid #1e293b; text-align:center;">
+              <div style="color:#f87171; font-size:.75rem;">REJECTED</div>
+              <div style="font-size:1.3rem; font-weight:600; color:#f87171;">${agg.rejected || 0}</div>
+            </div>
+            <div style="background:#0f172a; padding:10px; border-radius:6px; border:1px solid #1e293b; text-align:center;">
+              <div style="opacity:.6; font-size:.75rem;">NEEDS MORE</div>
+              <div style="font-size:1.3rem; font-weight:600; color:#94a3b8;">${agg.needs_more_data || 0}</div>
+            </div>
+          </div>
+        </div>
+      `;
+      
+      const allStrats = [];
+      (data.child_runs || []).forEach(cr => {
+        (cr.ranked_strategies || []).forEach(s => {
+          s._run_id = cr.run_id;
+          allStrats.push(s);
+        });
+      });
+      
+      const groups = {};
+      allStrats.forEach(s => {
+        const key = `${s.strategy_name}|${s.family || s.family_name}|${s.timeframe}`;
+        if (!groups[key]) {
+          groups[key] = {
+            strategy: s.strategy_name,
+            family: s.family || s.family_name,
+            timeframe: s.timeframe,
+            strats: [],
+            symbols: new Set(),
+            confirmed: [],
+            weakened: [],
+            rejected: [],
+            totalPF: 0,
+            totalNet: 0,
+            totalRobust: 0
+          };
+        }
+        const g = groups[key];
+        g.strats.push(s);
+        g.symbols.add(s.symbol);
+        if (s.status === 'STRONG_CANDIDATE') g.confirmed.push(s);
+        else if (s.status === 'WEAK_CANDIDATE') g.weakened.push(s);
+        else if (s.status === 'REJECT') g.rejected.push(s);
+        
+        g.totalPF += s.profit_factor || 0;
+        g.totalNet += s.net_return || 0;
+        g.totalRobust += s.robustness_score || 0;
+      });
+      
+      let childListHtml = Object.values(groups).map(g => {
+        const c = g.strats.length;
+        const avgPF = (g.totalPF / c).toFixed(2);
+        const avgNet = ((g.totalNet / c) * 100).toFixed(1) + '%';
+        const avgRob = (g.totalRobust / c).toFixed(2);
+        
+        const bestSyms = g.confirmed.map(x => x.symbol).join(', ') || 'None';
+        const weakSyms = [...g.weakened, ...g.rejected].map(x => x.symbol).join(', ') || 'None';
+        
+        let stratRowsHtml = g.strats.map(strat => `
           <tr style="font-size:.75rem; border-top:1px solid #1e293b;">
             <td style="padding:6px 8px; font-weight:600; color:#f3f4f6;">${strat.strategy_name || ''}</td>
             <td style="padding:6px 8px;">${strat.symbol || ''}</td>
@@ -13261,46 +13340,62 @@ function ldFmtPrice(p) {
             <td style="padding:6px 8px;">${(strat.profit_factor ?? 0).toFixed(2)}</td>
             <td style="padding:6px 8px; color:${(strat.net_return ?? 0) >= 0 ? '#6ee7b7' : '#f87171'}">${((strat.net_return ?? 0)*100).toFixed(1)}%</td>
             <td style="padding:6px 8px; opacity:.7;">${(strat.robustness_score ?? 0).toFixed(2)}</td>
-            <td style="padding:6px 8px; font-weight:600; color:${strat.status === 'STRONG_CANDIDATE' ? '#6ee7b7' : '#f87171'}">${strat.status || ''}</td>
+            <td style="padding:6px 8px; font-weight:600; color:${strat.status === 'STRONG_CANDIDATE' ? '#6ee7b7' : strat.status === 'WEAK_CANDIDATE' ? '#fbbf24' : '#f87171'}">${strat.status || ''}</td>
+            <td style="padding:6px 8px; font-family:monospace; cursor:pointer; color:#38bdf8; text-decoration:underline;" onclick="rlShowResults('${strat._run_id}')">📂 ${strat._run_id.slice(-4)}</td>
           </tr>
         `).join('');
-        
+
         return `
           <div style="background:#0f172a; border:1px solid #1e293b; border-radius:8px; padding:12px; margin-bottom:12px;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
               <div>
-                <span style="font-family:monospace; color:#38bdf8; font-weight:600; cursor:pointer; text-decoration:underline;" onclick="rlShowResults('${cr.run_id}')">
-                  ${cr.run_id}
-                </span>
-                <span style="font-size:.75rem; margin-left:12px; padding:3px 8px; background:#1e293b; color:${cColor}; border-radius:4px; font-weight:600; border:1px solid ${cColor}50;">
-                  ${cr.classification}
-                </span>
+                <span style="color:#f3f4f6; font-weight:600; font-size:1rem;">${g.strategy}</span>
+                <span style="opacity:.6; font-size:.8rem; margin-left:8px; padding-left:8px; border-left:1px solid #334155;">${g.family} • ${g.timeframe} • ${g.symbols.size} symbols</span>
               </div>
-              <div style="font-size:.72rem; opacity:.7; max-width:400px; text-align:right;">${cr.reason || ''}</div>
+              <div style="font-size:.75rem; display:flex; gap:12px; padding:4px 8px; background:#111827; border-radius:4px;">
+                <span style="color:#6ee7b7; font-weight:600;">Confirmed: ${g.confirmed.length}</span>
+                <span style="color:#fbbf24;">Weakened: ${g.weakened.length}</span>
+                <span style="color:#f87171;">Rejected: ${g.rejected.length}</span>
+              </div>
             </div>
             
-            ${cr.ranked_strategies && cr.ranked_strategies.length > 0 ? `
-              <div style="overflow-x:auto;">
-                <table style="width:100%; border-collapse:collapse; text-align:left;">
-                  <thead>
-                    <tr style="font-size:.72rem; opacity:.6; text-transform:uppercase;">
-                      <th style="padding:4px 8px;">Strategy</th>
-                      <th style="padding:4px 8px;">Symbol</th>
-                      <th style="padding:4px 8px;">TF</th>
-                      <th style="padding:4px 8px;">Trades</th>
-                      <th style="padding:4px 8px;">WR</th>
-                      <th style="padding:4px 8px;">PF</th>
-                      <th style="padding:4px 8px;">Net Ret</th>
-                      <th style="padding:4px 8px;">Robust</th>
-                      <th style="padding:4px 8px;">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${stratRowsHtml}
-                  </tbody>
-                </table>
-              </div>
-            ` : `<div style="font-size:.75rem; opacity:.5; padding:6px 8px;">No strategy outcomes mapped for this execution vector.</div>`}
+            <div style="display:flex; flex-wrap:wrap; gap:16px; font-size:.75rem; margin-bottom:12px; background:#111827; padding:10px; border-radius:4px; border:1px solid #1e293b;">
+               <div><span style="opacity:.6; margin-right:4px;">Avg PF:</span> <strong>${avgPF}</strong></div>
+               <div><span style="opacity:.6; margin-right:4px;">Avg Net:</span> <strong style="color:${g.totalNet >= 0 ? '#6ee7b7' : '#f87171'}">${avgNet}</strong></div>
+               <div><span style="opacity:.6; margin-right:4px;">Avg Robustness:</span> <strong>${avgRob}</strong></div>
+               <div style="margin-left:auto;"><span style="color:#6ee7b7; margin-right:4px;">Best:</span> ${bestSyms}</div>
+               <div><span style="color:#fbbf24; margin-right:4px;">Weak:</span> ${weakSyms}</div>
+            </div>
+            
+            <div style="overflow-x:auto;">
+              <table style="width:100%; border-collapse:collapse; text-align:left;">
+                <thead>
+                  <tr style="font-size:.72rem; opacity:.6; text-transform:uppercase;">
+                    <th style="padding:4px 8px;">Strategy</th>
+                    <th style="padding:4px 8px;">Symbol</th>
+                    <th style="padding:4px 8px;">TF</th>
+                    <th style="padding:4px 8px;">Trades</th>
+                    <th style="padding:4px 8px;">WR</th>
+                    <th style="padding:4px 8px;">PF</th>
+                    <th style="padding:4px 8px;">Net Ret</th>
+                    <th style="padding:4px 8px;">Robust</th>
+                    <th style="padding:4px 8px;">Status</th>
+                    <th style="padding:4px 8px;">Source</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${stratRowsHtml}
+                </tbody>
+              </table>
+            </div>
+            
+            <div style="margin-top:12px; padding-top:12px; border-top:1px dashed #1e293b; font-size:.8rem; display:flex; justify-content:space-between; align-items:center;">
+               <div>
+                 <strong style="color:#38bdf8;">Next Research Action:</strong> 
+                 <span style="opacity:.8; margin-left:4px;">${g.confirmed.length > 0 ? 'Expand symbols and time windows to confirm global robustness.' : 'Pause or compare against alternative strategy.'}</span>
+               </div>
+               <button onclick="rlGenerateFollowUp('${g.strategy}', '${g.timeframe}', '${g.family}')" style="background:#1e293b; color:#38bdf8; border:1px solid #38bdf8; padding:5px 12px; border-radius:4px; cursor:pointer; font-size:.75rem; font-weight:600; transition:all 0.2s;">⚡ Generate Follow-Up Plan</button>
+            </div>
           </div>
         `;
       }).join('');
@@ -13308,7 +13403,7 @@ function ldFmtPrice(p) {
       const targetTable = document.getElementById('rl-ranked-table');
       if (targetTable) {
         targetTable.innerHTML = aggregateHtml + `
-          <div style="font-size:.85rem; font-weight:600; opacity:.6; margin-bottom:8px; letter-spacing:.05em;">INDIVIDUAL VALIDATION VECTORS</div>
+          <div style="font-size:.85rem; font-weight:600; opacity:.6; margin-bottom:12px; letter-spacing:.05em; margin-top:20px;">GROUPED STRATEGY OUTCOMES</div>
           ${childListHtml || '<div style="font-size:.8rem; opacity:.5;">No child results aggregated.</div>'}
         `;
       }
@@ -13329,6 +13424,26 @@ function ldFmtPrice(p) {
         `;
       }
     }
+  };
+
+  window.rlGenerateFollowUp = function(strat, tf, fam) {
+    console.log('[autopilot] generating follow up for', strat, tf, fam);
+    
+    const modeEl = document.getElementById('rl-mode');
+    if(modeEl) modeEl.value = 'medium'; 
+    
+    const symEl = document.getElementById('rl-symbols');
+    if(symEl) symEl.value = 'BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT, ADA/USDT, XRP/USDT, DOT/USDT, MATIC/USDT, LINK/USDT';
+    
+    const tfEl = document.getElementById('rl-timeframes');
+    if(tfEl) tfEl.value = tf;
+    
+    const stratEl = document.getElementById('rl-strategies');
+    if(stratEl) stratEl.value = strat;
+    
+    _rlSetStatus(`Follow-up plan formulated: Expanded symbol breadth and validation depth for ${strat}. Ready to execute new discovery sweep.`, _rlCurrentRunId);
+    
+    alert(`Follow-up plan loaded!\n\nStrategy: ${strat}\nAction: Validating across broader crypto symbols and wider date windows.\n\nSettings have been pre-filled. Click 'Run AI Discovery' to execute.`);
   };
 
 

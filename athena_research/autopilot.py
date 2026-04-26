@@ -192,6 +192,28 @@ def generate_auto_plan(
             })
             priority += 1
 
+    # Deduplicate tests
+    seen_signatures = set()
+    deduped_tests = []
+    import json
+    
+    for t in tests:
+        sig_data = {
+            "families": sorted(t.get("families", [])),
+            "strategies": sorted(t.get("strategies", [])),
+            "timeframes": sorted(t.get("timeframes", [])),
+            "symbols": sorted(t.get("symbols", [])),
+            "directions": sorted(t.get("directions", [])),
+            "mode": t.get("mode"),
+            "acceptance": t.get("acceptance_criteria")
+        }
+        sig = json.dumps(sig_data, sort_keys=True)
+        if sig not in seen_signatures:
+            seen_signatures.add(sig)
+            deduped_tests.append(t)
+            
+    tests = deduped_tests
+
     return {
         "plan_id": plan_id,
         "source_run_id": run_id,
