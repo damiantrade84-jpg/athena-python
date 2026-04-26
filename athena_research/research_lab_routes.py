@@ -55,7 +55,9 @@ def register_research_lab_routes(app) -> None:
                 _active_runs[run_id]["status"] = "complete"
                 _active_runs[run_id]["result"] = result
             except Exception as e:
-                log.error("[research_lab_routes] Run %s failed: %s", run_id, e)
+                import traceback
+                log.error("[research_lab_routes] Run %s failed: %s\n%s",
+                          run_id, e, traceback.format_exc())
                 _active_runs[run_id]["status"] = "failed"
                 _active_runs[run_id]["error"] = str(e)
 

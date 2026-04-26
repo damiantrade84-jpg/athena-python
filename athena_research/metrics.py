@@ -410,13 +410,26 @@ def evaluate_strategy(
     )
 
 
+def _dedup_series(s: pd.Series) -> pd.Series:
+    if s.index.has_duplicates:
+        return s[~s.index.duplicated(keep="last")]
+    return s
+
+
+def _dedup_idx(idx):
+    if idx.has_duplicates:
+        return idx[~idx.duplicated(keep="last")]
+    return idx
+
+
 def _slice_signals(signals: dict, idx, direction: str) -> dict:
-    entries = signals.get("entries", pd.Series(False)).reindex(idx, fill_value=False)
-    exits = signals.get("exits", pd.Series(False)).reindex(idx, fill_value=False)
+    idx = _dedup_idx(idx)
+    entries = _dedup_series(signals.get("entries", pd.Series(False))).reindex(idx, fill_value=False)
+    exits = _dedup_series(signals.get("exits", pd.Series(False))).reindex(idx, fill_value=False)
     se = signals.get("short_entries")
     sx = signals.get("short_exits")
-    se = se.reindex(idx, fill_value=False) if se is not None else None
-    sx = sx.reindex(idx, fill_value=False) if sx is not None else None
+    se = _dedup_series(se).reindex(idx, fill_value=False) if se is not None else None
+    sx = _dedup_series(sx).reindex(idx, fill_value=False) if sx is not None else None
     if direction == "long":
         se = None; sx = None
     elif direction == "short":
