@@ -1434,6 +1434,10 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
     <div class="nav-item" id="nav-lottery" role="button" tabindex="0" onclick="switchPanel('lottery')">
       <div class="nav-left"><span class="nav-ico">🎯</span>Lottery Lab</div>
     </div>
+    <div class="nav-item" id="nav-research" role="button" tabindex="0" onclick="switchPanel('research')">
+      <div class="nav-left"><span class="nav-ico">🔬</span>Research Lab</div>
+      <span class="nav-badge dim">VBT</span>
+    </div>
     <div class="nav-item" id="nav-performance" role="button" tabindex="0" onclick="switchPanel('performance')">
       <div class="nav-left"><span class="nav-ico">📊</span>Performance</div>
     </div>
@@ -1908,6 +1912,73 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       </div>
     </div>
   </div>
+
+  <!-- ══ RESEARCH LAB PANEL ══════════════════════════════════════════════ -->
+  <div class="panel tab-panel" id="panel-research" style="padding:16px">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+      <h2 style="margin:0;font-size:1.15rem;letter-spacing:.03em">🔬 Research Lab <span style="font-size:.75rem;opacity:.55;font-weight:400">VectorBT Strategy Discovery</span></h2>
+      <span style="font-size:.7rem;background:#1a2535;border:1px solid #2a3a50;border-radius:4px;padding:2px 8px;color:#7fa8c8">DISCOVERY MODE — Backtest only</span>
+    </div>
+
+    <!-- Run controls -->
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:flex-end">
+      <div>
+        <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">MODE</label>
+        <select id="rl-mode" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem">
+          <option value="tiny">Tiny (validation)</option>
+          <option value="full">Full sweep</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">DIRECTION</label>
+        <select id="rl-direction" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem">
+          <option value="both">Both</option>
+          <option value="long">Long only</option>
+          <option value="short">Short only</option>
+        </select>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <input type="checkbox" id="rl-ai-review" style="accent-color:#4a9fd8">
+        <label for="rl-ai-review" style="font-size:.82rem">Run AI review after</label>
+      </div>
+      <button onclick="rlStartRun()" style="background:linear-gradient(135deg,#1e40af,#1d4ed8);color:#fff;border:none;padding:8px 18px;border-radius:7px;cursor:pointer;font-size:.85rem;font-weight:600">▶ Start Run</button>
+      <button onclick="rlLoadRuns()" style="background:#1a2535;color:#7fa8c8;border:1px solid #2a3a50;padding:8px 14px;border-radius:7px;cursor:pointer;font-size:.82rem">↺ Refresh</button>
+    </div>
+
+    <!-- Status -->
+    <div id="rl-status" style="display:none;padding:10px 14px;background:#111827;border:1px solid #2a3a50;border-radius:8px;margin-bottom:14px;font-size:.82rem">
+      <span id="rl-status-text">Idle</span>
+      <span id="rl-run-id" style="opacity:.5;margin-left:12px;font-size:.72rem"></span>
+    </div>
+
+    <!-- Runs list -->
+    <div style="margin-bottom:16px">
+      <div style="font-size:.78rem;opacity:.55;margin-bottom:8px;font-weight:600;letter-spacing:.05em">COMPLETED RUNS</div>
+      <div id="rl-runs-list" style="font-size:.8rem;color:#7fa8c8">Loading…</div>
+    </div>
+
+    <!-- Results panel -->
+    <div id="rl-results" style="display:none">
+      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+        <span style="font-size:.78rem;opacity:.55;font-weight:600;letter-spacing:.05em">RANKED STRATEGIES</span>
+        <button id="rl-ai-btn" onclick="rlRunAiReview()" style="background:linear-gradient(135deg,#6d28d9,#7c3aed);color:#fff;border:none;padding:5px 12px;border-radius:5px;cursor:pointer;font-size:.78rem;display:none">✨ Run AI Review</button>
+        <a id="rl-report-link" style="display:none;font-size:.78rem;color:#4a9fd8;text-decoration:none" target="_blank">⬇ Download Report</a>
+      </div>
+      <div id="rl-ranked-table" style="overflow-x:auto;font-size:.78rem"></div>
+    </div>
+
+    <!-- AI Review panel -->
+    <div id="rl-ai-panel" style="display:none;margin-top:16px">
+      <div style="font-size:.78rem;opacity:.55;margin-bottom:8px;font-weight:600;letter-spacing:.05em">AI RESEARCH REVIEW</div>
+      <div id="rl-ai-verdict" style="padding:10px 14px;background:#0f1c14;border:1px solid #1a3a24;border-radius:8px;color:#6ee7b7;font-size:.85rem;margin-bottom:10px"></div>
+      <div id="rl-ai-candidates" style="margin-bottom:10px"></div>
+      <div id="rl-ai-engine-recs" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px"></div>
+      <details style="margin-top:10px">
+        <summary style="font-size:.78rem;opacity:.6;cursor:pointer">Full AI review text</summary>
+        <pre id="rl-ai-raw" style="font-size:.72rem;white-space:pre-wrap;max-height:400px;overflow-y:auto;background:#0a0f1a;padding:12px;border-radius:6px;margin-top:8px;color:#a0b4c8"></pre>
+      </details>
+    </div>
+  </div><!-- /panel-research -->
 
   <div class="panel tab-panel lottery-panel" id="panel-lottery">
     <div class="lottery-controls">
@@ -12652,6 +12723,219 @@ function ldFmtPrice(p) {
 }
 
 })(); // end Live Dashboard IIFE
+</script>
+
+<!-- ══ RESEARCH LAB JS ══════════════════════════════════════════════════════ -->
+<script>
+(function() {
+  'use strict';
+
+  let _rlCurrentRunId = null;
+  let _rlPollTimer = null;
+
+  // ── Panel lifecycle ────────────────────────────────────────────────────────
+  window._onResearchPanelOpen = function() {
+    rlLoadRuns();
+  };
+
+  // Hook into switchPanel
+  const _origSwitch = window.switchPanel;
+  window.switchPanel = function(panel) {
+    _origSwitch && _origSwitch(panel);
+    if (panel === 'research') window._onResearchPanelOpen();
+  };
+
+  // ── Start a new run ────────────────────────────────────────────────────────
+  window.rlStartRun = async function() {
+    const mode      = document.getElementById('rl-mode').value;
+    const direction = document.getElementById('rl-direction').value;
+    const aiReview  = document.getElementById('rl-ai-review').checked;
+
+    _rlSetStatus('Queuing run…', '');
+    document.getElementById('rl-status').style.display = 'block';
+    document.getElementById('rl-results').style.display = 'none';
+    document.getElementById('rl-ai-panel').style.display = 'none';
+
+    try {
+      const res = await fetch('/api/research-lab/run', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({mode, direction, run_ai_review: aiReview}),
+      });
+      const data = await res.json();
+      _rlCurrentRunId = data.run_id;
+      _rlSetStatus(`Run started — mode: ${mode}`, data.run_id);
+      _rlPollStatus(data.run_id);
+    } catch (e) {
+      _rlSetStatus('Error starting run: ' + e.message, '');
+    }
+  };
+
+  // ── Poll run status ────────────────────────────────────────────────────────
+  function _rlPollStatus(runId) {
+    if (_rlPollTimer) clearInterval(_rlPollTimer);
+    _rlPollTimer = setInterval(async () => {
+      try {
+        const res  = await fetch(`/api/research-lab/run/${runId}`);
+        const data = await res.json();
+        const st   = data.status;
+        _rlSetStatus(st === 'complete' ? `Complete — ${data.results_count || '?'} results`
+                   : st === 'failed'   ? 'Failed: ' + (data.error || '?')
+                   : 'Running…', runId);
+        if (st === 'complete' || st === 'failed') {
+          clearInterval(_rlPollTimer);
+          rlLoadRuns();
+          if (st === 'complete') rlShowResults(runId);
+        }
+      } catch (_) {}
+    }, 3000);
+  }
+
+  // ── Load runs list ─────────────────────────────────────────────────────────
+  window.rlLoadRuns = async function() {
+    const el = document.getElementById('rl-runs-list');
+    try {
+      const res  = await fetch('/api/research-lab/runs');
+      const data = await res.json();
+      const runs = data.runs || [];
+      if (!runs.length) { el.textContent = 'No runs yet.'; return; }
+      el.innerHTML = runs.slice(0, 10).map(r => `
+        <div style="display:flex;gap:10px;align-items:center;padding:6px 10px;border-radius:6px;
+                    background:#111827;margin-bottom:4px;cursor:pointer;border:1px solid #1a2535"
+             onclick="rlShowResults('${r.run_id}')">
+          <span style="font-family:monospace;opacity:.7;font-size:.75rem">${r.run_id}</span>
+          <span style="font-size:.75rem;opacity:.5">${r.mode || ''}</span>
+          <span style="margin-left:auto;display:flex;gap:8px">
+            ${r.strong != null ? `<span style="color:#6ee7b7;font-size:.73rem">${r.strong} strong</span>` : ''}
+            ${r.weak   != null ? `<span style="color:#fbbf24;font-size:.73rem">${r.weak} weak</span>`   : ''}
+          </span>
+        </div>`).join('');
+    } catch (e) {
+      el.textContent = 'Error loading runs.';
+    }
+  };
+
+  // ── Show results for a run ─────────────────────────────────────────────────
+  window.rlShowResults = async function(runId) {
+    _rlCurrentRunId = runId;
+    document.getElementById('rl-status').style.display = 'block';
+    _rlSetStatus('Loading results…', runId);
+
+    try {
+      const res  = await fetch(`/api/research-lab/ranked/${runId}`);
+      const data = await res.json();
+      const rows = data.ranked || [];
+
+      if (!rows.length) {
+        document.getElementById('rl-ranked-table').innerHTML = '<em style="opacity:.5">No ranked results yet.</em>';
+      } else {
+        const cols = ['strategy_name','symbol','timeframe','direction','status',
+                      'trade_count','win_rate','profit_factor','net_return',
+                      'oos_return','robustness_score','sqn'];
+        const th = cols.map(c => `<th style="padding:5px 8px;white-space:nowrap;opacity:.6">${c}</th>`).join('');
+        const trs = rows.map(r => {
+          const statusColor = r.status === 'STRONG_CANDIDATE' ? '#6ee7b7'
+                            : r.status === 'WEAK_CANDIDATE'   ? '#fbbf24' : '#f87171';
+          return '<tr>' + cols.map(c => {
+            let v = r[c] ?? '';
+            if (c === 'status') v = `<span style="color:${statusColor}">${v}</span>`;
+            if (typeof v === 'number') v = v.toFixed ? v.toFixed(4) : v;
+            return `<td style="padding:4px 8px;border-top:1px solid #1a2535">${v}</td>`;
+          }).join('') + '</tr>';
+        }).join('');
+        document.getElementById('rl-ranked-table').innerHTML =
+          `<table style="border-collapse:collapse;width:100%"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`;
+      }
+
+      document.getElementById('rl-results').style.display = 'block';
+      document.getElementById('rl-ai-btn').style.display = 'inline-block';
+      document.getElementById('rl-report-link').style.display = 'inline';
+      document.getElementById('rl-report-link').href =
+        `/api/research-lab/download/${runId}/research_report.md`;
+      _rlSetStatus('Loaded', runId);
+
+      // Try to load existing AI review
+      rlLoadAiReview(runId);
+    } catch (e) {
+      _rlSetStatus('Error: ' + e.message, runId);
+    }
+  };
+
+  // ── Run AI review ──────────────────────────────────────────────────────────
+  window.rlRunAiReview = async function() {
+    if (!_rlCurrentRunId) return;
+    const btn = document.getElementById('rl-ai-btn');
+    btn.disabled = true;
+    btn.textContent = '✨ Analysing…';
+    try {
+      const res  = await fetch(`/api/research-lab/analyze/${_rlCurrentRunId}`, {method:'POST',
+        headers:{'Content-Type':'application/json'}, body:'{}'});
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      rlLoadAiReview(_rlCurrentRunId);
+    } catch (e) {
+      alert('AI review failed: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '✨ Run AI Review';
+    }
+  };
+
+  // ── Load existing AI review ────────────────────────────────────────────────
+  window.rlLoadAiReview = async function(runId) {
+    try {
+      const res  = await fetch(`/api/research-lab/ai-review/${runId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+
+      const panel = document.getElementById('rl-ai-panel');
+      panel.style.display = 'block';
+
+      const ap = data.action_plan || {};
+      document.getElementById('rl-ai-verdict').textContent =
+        ap.overall_verdict || '(No verdict)';
+
+      // Top candidates
+      const cands = (ap.top_candidates || []).slice(0, 5);
+      document.getElementById('rl-ai-candidates').innerHTML = cands.length
+        ? '<div style="font-size:.75rem;opacity:.55;margin-bottom:6px">TOP CANDIDATES</div>' +
+          cands.map(c => {
+            const col = c.label === 'STRONG_CANDIDATE' ? '#6ee7b7' : '#fbbf24';
+            return `<span style="display:inline-block;margin:2px 4px;padding:3px 8px;
+                    background:#111827;border:1px solid #2a3a50;border-radius:4px;font-size:.78rem">
+                    <span style="color:${col}">●</span> ${c.strategy} · ${c.symbol} · ${c.tf}</span>`;
+          }).join('') : '';
+
+      // Engine recommendations
+      const erDiv = document.getElementById('rl-ai-engine-recs');
+      const engines = [['Engine A', ap.engine_a || {}], ['Engine B', ap.engine_b || {}], ['Engine D', ap.engine_d || {}]];
+      erDiv.innerHTML = engines.map(([label, eng]) => `
+        <div style="background:#111827;border:1px solid #1a2535;border-radius:8px;padding:10px">
+          <div style="font-size:.75rem;font-weight:700;margin-bottom:8px;color:#7fa8c8">${label}</div>
+          ${_rlEngineSection('Keep', eng.keep, '#6ee7b7')}
+          ${_rlEngineSection('Remove', eng.remove_or_demote, '#f87171')}
+          ${_rlEngineSection('Next tests', eng.next_tests, '#fbbf24')}
+        </div>`).join('');
+
+      // Full review text
+      document.getElementById('rl-ai-raw').textContent = data.review_md || '(empty)';
+    } catch (_) {}
+  };
+
+  function _rlEngineSection(label, items, color) {
+    if (!items || !items.length) return '';
+    return `<div style="margin-bottom:5px">
+      <div style="font-size:.68rem;opacity:.5;margin-bottom:2px">${label}</div>
+      ${items.map(i => `<div style="font-size:.75rem;color:${color};padding:1px 0">• ${i}</div>`).join('')}
+    </div>`;
+  }
+
+  function _rlSetStatus(text, runId) {
+    document.getElementById('rl-status-text').textContent = text;
+    document.getElementById('rl-run-id').textContent = runId ? `Run: ${runId}` : '';
+  }
+
+})();
 </script>
 
 <div class="watermark" aria-hidden="true">

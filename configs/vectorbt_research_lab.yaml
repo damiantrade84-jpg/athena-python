@@ -1,0 +1,161 @@
+research_lab:
+  name: "Athena Research Lab"
+  version: "1.0"
+
+  # In-sample / out-of-sample split (chronological)
+  is_pct: 0.70
+  min_trades: 20
+  min_trades_robust: 50
+
+  # Fee assumptions per asset class (round-trip fraction)
+  fees:
+    crypto: 0.0006
+    forex: 0.0002
+    stock: 0.0010
+    commodity: 0.0005
+    index: 0.0003
+  slippage:
+    default: 0.0002
+
+  # ── Tiny validation run (first run, limited scope) ──────────────────────
+  tiny_run:
+    symbols:
+      - BTC/USDT
+      - ETH/USDT
+      - EUR/USD
+      - GBP/USD
+      - XAU/USD
+      - US500
+    timeframes: [H1, H4]
+    families:
+      - trend_momentum
+      - pullback
+      - breakout
+      - mean_reversion
+
+  # ── Full run universe ─────────────────────────────────────────────────
+  symbols:
+    crypto: [BTC/USDT, ETH/USDT, SOL/USDT]
+    forex: [EUR/USD, GBP/USD, AUD/USD, USD/JPY]
+    index: [US500, NAS100, GER40]
+    commodity: [XAU/USD, XAG/USD, WTI Oil]
+    stock: [AAPL, NVDA, MSFT]
+
+  timeframes: [M15, H1, H4, D1]
+
+  # Data source settings — Athena-native sources only
+  data:
+    source: athena_native       # crypto→Binance REST, forex/commodity/index→MT5, stock→EODHD
+    ALLOW_YFINANCE_FALLBACK: false   # explicit opt-in required; default false
+    cache_dir: logs/research_lab/data_cache
+    # Max bars per symbol/TF
+    max_bars:
+      M5: 1000
+      M15: 2000
+      H1: 5000
+      H4: 3000
+      D1: 3000
+
+  # ── Strategy parameter grids ─────────────────────────────────────────
+  strategies:
+    trend_momentum:
+      ema_cross:
+        fast_period: [10, 20]
+        slow_period: [50, 100, 200]
+        adx_min: [0, 20, 25]
+        rsi_confirm: [false, true]
+      ema_alignment:
+        ema_short: [20]
+        ema_mid: [50]
+        ema_long: [200]
+        adx_min: [0, 20, 25]
+      macd_direction:
+        fast: [12]
+        slow: [26]
+        signal_period: [9]
+        adx_min: [0, 20]
+
+    pullback:
+      pullback_ema:
+        trend_period: [200]
+        pullback_period: [20, 50]
+        rsi_reclaim: [false, true]
+        rsi_threshold: [50]
+
+    breakout:
+      prev_day_hl:
+        atr_expand_min: [0.0, 0.5, 1.0]
+      session_opening_range:
+        range_bars: [6, 12]
+        atr_expand_min: [0.0, 0.5]
+      london_breakout:
+        utc_start: 7
+        utc_end: 11
+        atr_expand_min: [0.0, 0.5]
+      ny_breakout:
+        utc_start: 13
+        utc_end: 16
+        atr_expand_min: [0.0, 0.5]
+
+    mean_reversion:
+      rsi_extreme:
+        period: [14]
+        oversold: [30, 25]
+        overbought: [70, 75]
+      bollinger_touch:
+        period: [20]
+        num_std: [2.0, 2.5]
+      vwap_deviation:
+        std_threshold: [1.5, 2.0]
+
+    volatility:
+      bb_squeeze_breakout:
+        period: [20]
+        squeeze_pct: [20, 30]
+        confirm_ema: [true, false]
+      atr_compression:
+        period: [14]
+        squeeze_pct: [20, 30]
+        confirm_ema: [true, false]
+
+    engine_b_proxy:
+      ob_bos:
+        swing_period: [5, 10]
+        require_engulf: [false, true]
+        require_vol_expand: [false, true]
+      structure_filters:
+        strong_close_pct: [0.70, 0.80]
+        fvg_detection: [false, true]
+
+    engine_d_proxy:
+      vwap_reclaim:
+        band_std: [0.5, 1.0]
+        atr_sl_mult: [0.5, 1.0]
+      micro_breakout:
+        range_bars: [3, 6]
+        atr_sl_mult: [0.5, 1.0]
+        fee_guard_r: [0.5]
+      ema_scalp_pullback:
+        ema_period: [21]
+        atr_sl_mult: [0.5, 1.0]
+
+  # ── Robustness rules ─────────────────────────────────────────────────
+  robustness:
+    sample_weight: 0.30
+    consistency_weight: 0.30
+    fee_survival_weight: 0.20
+    symbol_breadth_weight: 0.20
+    oos_diff_tolerance: 0.50   # max IS-OOS diff as fraction of IS
+
+  # ── Output ───────────────────────────────────────────────────────────
+  output:
+    base_dir: logs/research_lab
+    latest_symlink: latest
+
+  # ── AI analyst ───────────────────────────────────────────────────────
+  ai:
+    provider: auto            # auto | xai | anthropic | none
+    model: null               # null = use project default
+    max_tokens: 4000
+    temperature: 0.2
+    timeout: 90

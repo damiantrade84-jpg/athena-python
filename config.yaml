@@ -197,7 +197,6 @@ RESEARCH_MODE: false
 # are inactive unless this flag is true.
 
 BACKTEST_USE_BT_MIN_THRESHOLDS: false
-
 BT_MIN:
 
   crypto:    2.15   # live-score p75 (was 0.95)

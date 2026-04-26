@@ -15434,6 +15434,14 @@ set_runtime(
 )
 register_execution_routes(app)
 
+# ── Research Lab routes (optional — does not affect production logic) ─────────
+try:
+    from athena_research.research_lab_routes import register_research_lab_routes
+    register_research_lab_routes(app)
+    log.info("[startup] Research Lab routes registered")
+except Exception as _rl_err:
+    log.warning("[startup] Research Lab routes not loaded: %s", _rl_err)
+
 _runtime_services_lock = threading.Lock()
 _runtime_services_started = False
 _binance_ws = None
