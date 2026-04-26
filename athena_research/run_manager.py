@@ -128,32 +128,39 @@ def run_research(
     max_workers: int = 4,
     direction: str = "both",
     run_ai_review: bool = False,
+    symbols: Optional[list[str]] = None,
+    timeframes: Optional[list[str]] = None,
+    families: Optional[list[str]] = None,
+    strategies: Optional[list[str]] = None,
+    params: Optional[dict] = None,
+    directions: Optional[list[str]] = None,
 ) -> dict:
     """
-    Execute a full research lab run.
-
-    Parameters
-    ----------
-    mode        : "tiny" (validation) | "full"
-    config_path : path to vectorbt_research_lab.yaml
-    output_dir  : base output directory
-    run_id      : unique run ID (auto-generated if None)
-    force_refresh: force re-download of data
-    max_workers : thread pool size for parallel symbol/TF processing
-    direction   : "long" | "short" | "both"
-    run_ai_review: automatically run AI analyst after backtest
-
-    Returns
-    -------
-    dict with run metadata and file paths
+    Execute a full or focused research lab run.
     """
     cfg = load_config(config_path)
     run_id = run_id or f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     output_dir = Path(output_dir)
 
-    symbols = _symbols_for_mode(cfg, mode)
-    timeframes = _timeframes_for_mode(cfg, mode)
-    families = _families_for_mode(cfg, mode)
+    # Allow custom overrides
+    if symbols is not None:
+        if isinstance(symbols, str):
+            symbols = [s.strip() for s in symbols.split(",") if s.strip()]
+    else:
+        symbols = _symbols_for_mode(cfg, mode)
+
+    if timeframes is not None:
+        if isinstance(timeframes, str):
+            timeframes = [t.strip() for t in timeframes.split(",") if t.strip()]
+    else:
+        timeframes = _timeframes_for_mode(cfg, mode)
+
+    if families is not None:
+        if isinstance(families, str):
+            families = [f.strip() for f in families.split(",") if f.strip()]
+    else:
+        families = _families_for_mode(cfg, mode)
+
     fees_cfg = cfg.get("fees", {})
     slippage = float(cfg.get("slippage", {}).get("default", 0.0002))
     is_pct = float(cfg.get("is_pct", 0.70))
@@ -165,7 +172,34 @@ def run_research(
 
     # Build strategy specs
     specs = list(iter_strategy_specs(families, strategy_params, direction=direction))
+    
+    # Apply strategy/param filters
+    if strategies is not None:
+        if isinstance(strategies, str):
+            strategies = [s.strip() for s in strategies.split(",") if s.strip()]
+        specs = [s for s in specs if s.name in strategies]
+
+    if params is not None:
+        # If params is passed, keep only specs that match the passed parameters
+        # params can be a dict of key=values
+        filtered_specs = []
+        for s in specs:
+            matches = True
+            for pk, pv in params.items():
+                if str(s.params.get(pk)) != str(pv):
+                    matches = False
+                    break
+            if matches:
+                filtered_specs.append(s)
+        specs = filtered_specs
+
+    if directions is not None:
+        if isinstance(directions, str):
+            directions = [d.upper().strip() for d in directions.split(",") if d.strip()]
+        specs = [s for s in specs if s.direction.upper() in [d.upper() for d in directions]]
+
     log.info("[run_manager] %d strategy specs to test", len(specs))
+
 
     # Download data for all symbol × TF combinations
     # load_ohlcv_multi returns dict[str, tuple[Optional[DataFrame], DataProvenance]]

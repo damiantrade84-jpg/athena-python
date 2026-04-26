@@ -36,6 +36,11 @@ def register_research_lab_routes(app) -> None:
         symbols = body.get("symbols", None)
         run_ai = bool(body.get("run_ai_review", False))
 
+        timeframes = body.get("timeframes", None)
+        strategies = body.get("strategies", None)
+        params = body.get("params", None)
+        directions = body.get("directions", None)
+
         from athena_research.run_manager import run_research, _DEFAULT_CONFIG
         from datetime import datetime, timezone
 
@@ -51,8 +56,15 @@ def register_research_lab_routes(app) -> None:
                     run_id=run_id,
                     direction=direction,
                     run_ai_review=run_ai,
+                    symbols=symbols,
+                    timeframes=timeframes,
+                    families=families,
+                    strategies=strategies,
+                    params=params,
+                    directions=directions,
                 )
                 _active_runs[run_id]["status"] = "complete"
+
                 _active_runs[run_id]["result"] = result
             except Exception as e:
                 import traceback as _tb
@@ -76,6 +88,88 @@ def register_research_lab_routes(app) -> None:
         t.start()
 
         return jsonify({"run_id": run_id, "status": "queued", "mode": mode}), 202
+
+    # ── POST /api/research-lab/auto-plan ──────────────────────────────────────
+    @app.route("/api/research-lab/auto-plan", methods=["POST"])
+    def api_research_lab_auto_plan():
+        """Create automated recommendation plan."""
+        body = request.get_json(silent=True) or {}
+        run_id = body.get("run_id")
+        planner_mode = body.get("planner_mode", "balanced")
+        max_tests = int(body.get("max_tests", 5))
+        max_comb = int(body.get("max_combinations_per_test", 300))
+        
+        if not run_id:
+            return jsonify({"error": "run_id is required"}), 400
+            
+        from athena_research.autopilot import generate_auto_plan
+        try:
+            plan = generate_auto_plan(run_id, _DEFAULT_OUTPUT, planner_mode, max_tests, max_comb)
+            return jsonify(plan)
+        except Exception as e:
+            log.error("[research_lab_routes] Auto plan failed: %s", e, exc_info=True)
+            return jsonify({"error": str(e)}), 500
+
+    # ── POST /api/research-lab/run-auto-plan ──────────────────────────────────
+    @app.route("/api/research-lab/run-auto-plan", methods=["POST"])
+    def api_research_lab_run_auto_plan():
+        """Execute selected items from recommendations."""
+        import uuid
+        body = request.get_json(silent=True) or {}
+        plan_id = body.get("plan_id")
+        source_run_id = body.get("source_run_id")
+        tests = body.get("tests", [])
+        
+        if not source_run_id:
+            return jsonify({"error": "source_run_id is required"}), 400
+            
+        from athena_research.run_manager import run_research, _DEFAULT_CONFIG
+        
+        child_run_ids = []
+        for t_spec in tests:
+            from datetime import datetime, timezone
+            child_run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}"
+            child_run_ids.append(child_run_id)
+            
+            mode = t_spec.get("mode", "small") # small maps cleanly to backend modes
+            direction = t_spec.get("directions", ["both"])[0] if t_spec.get("directions") else "both"
+            symbols = t_spec.get("symbols")
+            timeframes = t_spec.get("timeframes")
+            families = t_spec.get("families")
+            strategies = t_spec.get("strategies")
+            params = t_spec.get("params")
+            
+            def _worker_child(cid, m, d, s, tf, f, strats, p):
+                _active_runs[cid] = {"status": "running", "run_id": cid}
+                try:
+                    run_research(
+                        mode=m,
+                        config_path=_DEFAULT_CONFIG,
+                        output_dir=_DEFAULT_OUTPUT,
+                        run_id=cid,
+                        direction=d,
+                        run_ai_review=False,
+                        symbols=s,
+                        timeframes=tf,
+                        families=f,
+                        strategies=strats,
+                        params=p,
+                    )
+                    _active_runs[cid]["status"] = "complete"
+                except Exception as ex:
+                    _active_runs[cid]["status"] = "failed"
+                    _active_runs[cid]["error"] = str(ex)
+                    
+            _active_runs[child_run_id] = {"status": "queued", "run_id": child_run_id}
+            t = threading.Thread(target=_worker_child, args=(child_run_id, mode, direction, symbols, timeframes, families, strategies, params), daemon=True)
+            _active_runs[child_run_id]["thread"] = t
+            t.start()
+            
+        return jsonify({
+            "status": "started",
+            "parent_run_id": source_run_id,
+            "child_run_ids": child_run_ids
+        }), 202
 
     # ── GET /api/research-lab/runs ────────────────────────────────────────────
     @app.route("/api/research-lab/runs", methods=["GET"])

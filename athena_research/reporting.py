@@ -154,13 +154,25 @@ def _indicator_attribution(df: pd.DataFrame) -> pd.DataFrame:
         avg_win_rate=("win_rate", "mean"),
         avg_robustness=("robustness_score", "mean"),
         avg_sqn=("sqn", "mean"),
+        avg_oos_return=("oos_return", "mean"),
+        total_trades=("trade_count", "sum"),
     ).reset_index()
     agg["pass_rate"] = (agg["strong"] + agg["weak"]) / agg["total_configs"].replace(0, 1)
-    agg["verdict"] = agg.apply(
-        lambda r: "HELPS" if r["pass_rate"] >= 0.3 and _safe_float(r["avg_net_return"]) > 0
-        else ("HURTS" if _safe_float(r["avg_net_return"]) < 0 else "NEUTRAL"), axis=1
-    )
+    
+    def _calc_verdict(r):
+        oos = _safe_float(r["avg_oos_return"])
+        rob = _safe_float(r["avg_robustness"])
+        trades = _safe_float(r["total_trades"])
+        # Positive OOS, acceptable robustness (>= 0.3), and minimum trades
+        if oos > 0 and rob >= 0.3 and trades >= 10:
+            return "HELPS"
+        elif oos < 0:
+            return "HURTS"
+        return "NEUTRAL"
+
+    agg["verdict"] = agg.apply(_calc_verdict, axis=1)
     return agg.sort_values("avg_robustness", ascending=False)
+
 
 
 # ─── Markdown report ─────────────────────────────────────────────────────────
@@ -260,9 +272,15 @@ def write_markdown_report(df: pd.DataFrame, run_dir: Path, run_id: str, run_meta
         helps = attr[attr["verdict"] == "HELPS"][["strategy_name", "pass_rate", "avg_net_return", "avg_sqn"]].head(10)
         hurts = attr[attr["verdict"] == "HURTS"][["strategy_name", "pass_rate", "avg_net_return"]].head(5)
         a("**Helpful indicators/strategies:**")
+        a(_df_to_md(helps) if not helps.empty else "No clear indicator edge.")
+        a("\n**Globally weak across tested configs:**")
+        a(_df_to_md(hurts) if not hurts.empty else "No clear globally weak indicators.")
+    elif not valid.empty:
+        a("**Helpful indicators/strategies:**")
+        helps = valid.groupby("strategy_name").agg(pass_rate=("status", "count"), avg_net_return=("net_return", "mean")).reset_index().head(10)
         a(_df_to_md(helps))
-        a("\n**Harmful indicators/strategies:**")
-        a(_df_to_md(hurts))
+        a("\n**Globally weak across tested configs:**")
+        a("No data.")
     else:
         a("Insufficient data.")
     a("")
@@ -291,6 +309,25 @@ def write_markdown_report(df: pd.DataFrame, run_dir: Path, run_id: str, run_meta
         a(_df_to_md(lo_fam))
     a("")
 
+    # ── New Autopilot sections ────────────────────────────────────────────────
+    a("## Recommended Research Queue")
+    a("Please use the Autopilot console on the dashboard to generate comprehensive research vectors.")
+    a("")
+
+    a("## Confirmed / Weakened / Rejected After Validation")
+    a("Validation tracks are executed sequentially.")
+    a("")
+
+    a("## Conditional Edge Candidates")
+    conditional_edges = df[(df["net_return"].apply(_safe_float) > 0) & (df["status"] == "REJECT")]
+    if not conditional_edges.empty:
+        a("The following configurations show high conditional edge potential despite global weakness:")
+        ce_agg = conditional_edges[["strategy_name", "symbol", "timeframe", "net_return"]].head(5)
+        a(_df_to_md(ce_agg))
+    else:
+        a("No conditional edges detected.")
+    a("")
+
     # ── Q8–Q10: Engine recommendations ──────────────────────────────────────
     a("## Engine A Findings")
     a(_engine_recommendation(valid, "trend_momentum") + "\n" + _engine_recommendation(valid, "pullback"))
@@ -315,9 +352,7 @@ def write_markdown_report(df: pd.DataFrame, run_dir: Path, run_id: str, run_meta
     a("## Recommended Next Tiny Test")
     if n_strong > 0:
         best = strong.sort_values("robustness_score", ascending=False).iloc[0]
-        a(f"Focus on: `{best['family']}` / `{best['strategy_name']}` on `{best['symbol']}` `{best['timeframe']}`.")
-        a(f"Robustness: {best['robustness_score']:.2f}, Net return: {best['net_return']:.3f}, "
-          f"Trade count: {int(best['trade_count'])}")
+        a(f"Run `{best.get('strategy_name', '')}` on `{best.get('symbol', '')}` `{best.get('timeframe', '')}`.")
     else:
         a("No strong candidates yet.  Run more symbols and timeframes before tuning.")
     a("")

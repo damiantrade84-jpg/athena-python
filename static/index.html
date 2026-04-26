@@ -1921,7 +1921,7 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
     </div>
 
     <!-- Run controls -->
-    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:flex-end">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end">
       <div>
         <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">MODE</label>
         <select id="rl-mode" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem">
@@ -1937,13 +1937,38 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
           <option value="short">Short only</option>
         </select>
       </div>
-      <div style="display:flex;align-items:center;gap:6px">
+      <div>
+        <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">SYMBOLS</label>
+        <input type="text" id="rl-symbols" placeholder="BTC/USDT, EUR/USD" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem;width:140px;">
+      </div>
+      <div>
+        <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">TIMEFRAMES</label>
+        <input type="text" id="rl-timeframes" placeholder="M5,H1,H4,D1" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem;width:100px;">
+      </div>
+      <div>
+        <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">FAMILIES</label>
+        <input type="text" id="rl-families" placeholder="trend_momentum,pullback" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem;width:140px;">
+      </div>
+      <div>
+        <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">STRATEGIES</label>
+        <input type="text" id="rl-strategies" placeholder="bollinger_touch,macd" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem;width:140px;">
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
         <input type="checkbox" id="rl-ai-review" style="accent-color:#4a9fd8">
-        <label for="rl-ai-review" style="font-size:.82rem">Run AI review after</label>
+        <label for="rl-ai-review" style="font-size:.82rem">Run AI review</label>
       </div>
       <button onclick="rlStartRun()" style="background:linear-gradient(135deg,#1e40af,#1d4ed8);color:#fff;border:none;padding:8px 18px;border-radius:7px;cursor:pointer;font-size:.85rem;font-weight:600">▶ Start Run</button>
       <button onclick="rlLoadRuns()" style="background:#1a2535;color:#7fa8c8;border:1px solid #2a3a50;padding:8px 14px;border-radius:7px;cursor:pointer;font-size:.82rem">↺ Refresh</button>
     </div>
+
+    <!-- Preset Actions -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+      <button onclick="rlApplyPreset('crypto_h4_bb')" style="background:#1a2238;color:#a5b4fc;border:1px solid #312e81;padding:6px 12px;border-radius:6px;font-size:.75rem;cursor:pointer;">Crypto H4 Bollinger Touch Validation</button>
+      <button onclick="rlApplyPreset('engine_b_h4')" style="background:#1a2238;color:#a5b4fc;border:1px solid #312e81;padding:6px 12px;border-radius:6px;font-size:.75rem;cursor:pointer;">Engine B H4 Structure Filter Validation</button>
+      <button onclick="rlApplyPreset('crypto_macd')" style="background:#1a2238;color:#a5b4fc;border:1px solid #312e81;padding:6px 12px;border-radius:6px;font-size:.75rem;cursor:pointer;">Engine A Crypto MACD Validation</button>
+      <button onclick="rlApplyPreset('xau_micro')" style="background:#1a2238;color:#a5b4fc;border:1px solid #312e81;padding:6px 12px;border-radius:6px;font-size:.75rem;cursor:pointer;">Engine D XAU Micro Breakout Validation</button>
+    </div>
+
 
     <!-- Status -->
     <div id="rl-status" style="display:none;padding:10px 14px;background:#111827;border:1px solid #2a3a50;border-radius:8px;margin-bottom:14px;font-size:.82rem">
@@ -1961,6 +1986,7 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
     <div id="rl-results" style="display:none">
       <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
         <span style="font-size:.78rem;opacity:.55;font-weight:600;letter-spacing:.05em">RANKED STRATEGIES</span>
+        <button id="rl-validate-btn" onclick="rlValidateCandidate()" style="background:linear-gradient(135deg,#059669,#10b981);color:#fff;border:none;padding:5px 12px;border-radius:5px;cursor:pointer;font-size:.78rem;display:none">🧪 Validate selected candidate</button>
         <button id="rl-ai-btn" onclick="rlRunAiReview()" style="background:linear-gradient(135deg,#6d28d9,#7c3aed);color:#fff;border:none;padding:5px 12px;border-radius:5px;cursor:pointer;font-size:.78rem;display:none">✨ Run AI Review</button>
         <a id="rl-report-link" style="display:none;font-size:.78rem;color:#4a9fd8;text-decoration:none" target="_blank">⬇ Download Report</a>
       </div>
@@ -1977,6 +2003,27 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
         <summary style="font-size:.78rem;opacity:.6;cursor:pointer">Full AI review text</summary>
         <pre id="rl-ai-raw" style="font-size:.72rem;white-space:pre-wrap;max-height:400px;overflow-y:auto;background:#0a0f1a;padding:12px;border-radius:6px;margin-top:8px;color:#a0b4c8"></pre>
       </details>
+    <!-- AI Research Plan panel -->
+    <div id="rl-plan-panel" style="display:none;margin-top:16px;padding:12px;background:#111827;border:1px solid #2a3a50;border-radius:8px">
+      <div style="font-size:.78rem;opacity:.55;margin-bottom:12px;font-weight:600;letter-spacing:.05em">AI RESEARCH PLAN / AUTOPILOT</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end">
+        <div>
+          <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">PLANNER MODE</label>
+          <select id="rl-plan-mode" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem">
+            <option value="balanced">Balanced</option>
+            <option value="conservative">Conservative</option>
+            <option value="exploratory">Exploratory</option>
+            <option value="autopilot">Autopilot</option>
+          </select>
+        </div>
+        <button onclick="rlGeneratePlan()" style="background:#1a2535;color:#7fa8c8;border:1px solid #2a3a50;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:.82rem">💡 Generate Plan</button>
+        <button onclick="rlRunAutoPlan()" style="background:linear-gradient(135deg,#059669,#10b981);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.82rem;font-weight:600">🚀 Run Recommended Plan</button>
+        <button onclick="rlSavePlan()" style="background:#111827;color:#cdd6e0;border:1px solid #2a3a50;padding:7px 12px;border-radius:6px;cursor:pointer;font-size:.82rem">💾 Save Plan</button>
+        <button onclick="rlDownloadPlan()" style="background:#111827;color:#cdd6e0;border:1px solid #2a3a50;padding:7px 12px;border-radius:6px;cursor:pointer;font-size:.82rem">⬇ Download JSON</button>
+      </div>
+      
+      <!-- Plan cards display -->
+      <div id="rl-plan-cards" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px"></div>
     </div>
   </div><!-- /panel-research -->
 
@@ -12747,9 +12794,13 @@ function ldFmtPrice(p) {
 
   // ── Start a new run ────────────────────────────────────────────────────────
   window.rlStartRun = async function() {
-    const mode      = document.getElementById('rl-mode').value;
-    const direction = document.getElementById('rl-direction').value;
-    const aiReview  = document.getElementById('rl-ai-review').checked;
+    const mode        = document.getElementById('rl-mode').value;
+    const direction   = document.getElementById('rl-direction').value;
+    const aiReview    = document.getElementById('rl-ai-review').checked;
+    const symbols     = document.getElementById('rl-symbols').value;
+    const timeframes  = document.getElementById('rl-timeframes').value;
+    const families    = document.getElementById('rl-families').value;
+    const strategies  = document.getElementById('rl-strategies').value;
 
     _rlSetStatus('Queuing run…', '');
     document.getElementById('rl-status').style.display = 'block';
@@ -12757,10 +12808,29 @@ function ldFmtPrice(p) {
     document.getElementById('rl-ai-panel').style.display = 'none';
 
     try {
+      const payload = {
+        mode, 
+        direction, 
+        run_ai_review: aiReview
+      };
+      
+      if (symbols && symbols.trim()) {
+        payload.symbols = symbols.split(',').map(s => s.trim()).filter(Boolean);
+      }
+      if (timeframes && timeframes.trim()) {
+        payload.timeframes = timeframes.split(',').map(s => s.trim()).filter(Boolean);
+      }
+      if (families && families.trim()) {
+        payload.families = families.split(',').map(s => s.trim()).filter(Boolean);
+      }
+      if (strategies && strategies.trim()) {
+        payload.strategies = strategies.split(',').map(s => s.trim()).filter(Boolean);
+      }
+
       const res = await fetch('/api/research-lab/run', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({mode, direction, run_ai_review: aiReview}),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       _rlCurrentRunId = data.run_id;
@@ -12769,6 +12839,194 @@ function ldFmtPrice(p) {
     } catch (e) {
       _rlSetStatus('Error starting run: ' + e.message, '');
     }
+  };
+
+  window.rlApplyPreset = function(preset) {
+    const s = document.getElementById('rl-symbols');
+    const t = document.getElementById('rl-timeframes');
+    const f = document.getElementById('rl-families');
+    const st = document.getElementById('rl-strategies');
+    const m = document.getElementById('rl-mode');
+    const d = document.getElementById('rl-direction');
+    
+    if (preset === 'crypto_h4_bb') {
+      s.value = 'BTC/USDT, ETH/USDT, SOL/USDT';
+      t.value = 'H4';
+      f.value = 'volatility';
+      st.value = 'bollinger_touch';
+      m.value = 'tiny';
+      d.value = 'both';
+    } else if (preset === 'engine_b_h4') {
+      s.value = 'EUR/USD, GBP/USD, AUD/USD';
+      t.value = 'H4';
+      f.value = 'engine_b_proxy';
+      st.value = 'market_structure';
+      m.value = 'tiny';
+      d.value = 'both';
+    } else if (preset === 'crypto_macd') {
+      s.value = 'BTC/USDT, ETH/USDT';
+      t.value = 'H4';
+      f.value = 'trend_momentum';
+      st.value = 'macd_direction';
+      m.value = 'tiny';
+      d.value = 'both';
+    } else if (preset === 'xau_micro') {
+      s.value = 'XAU/USD';
+      t.value = 'M5, M15';
+      f.value = 'breakout';
+      st.value = 'range_breakout';
+      m.value = 'tiny';
+      d.value = 'both';
+    }
+  };
+
+  window.rlValidateCandidate = async function() {
+    const selected = document.querySelector('input[name="rl-selected-candidate"]:checked');
+    if (!selected) {
+      alert('Please select a candidate from the ranked strategies table first.');
+      return;
+    }
+    
+    const symbol = selected.getAttribute('data-symbol');
+    const timeframe = selected.getAttribute('data-tf');
+    const family = selected.getAttribute('data-family');
+    const strategy = selected.getAttribute('data-strategy');
+    const direction = selected.getAttribute('data-direction');
+
+    _rlSetStatus('Queuing validation run…', '');
+    document.getElementById('rl-status').style.display = 'block';
+
+    try {
+      const payload = {
+        mode: 'tiny', // validation implies focused mode
+        direction: direction || 'both',
+        run_ai_review: document.getElementById('rl-ai-review').checked,
+        symbols: symbol ? [symbol] : undefined,
+        timeframes: timeframe ? [timeframe] : undefined,
+        families: family ? [family] : undefined,
+        strategies: strategy ? [strategy] : undefined
+      };
+
+      const res = await fetch('/api/research-lab/run', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      _rlCurrentRunId = data.run_id;
+      _rlSetStatus(`Validation started — ${strategy} (${symbol})`, data.run_id);
+      _rlPollStatus(data.run_id);
+    } catch (e) {
+      _rlSetStatus('Error starting validation: ' + e.message, '');
+    }
+  };
+
+  let _rlCurrentPlan = null;
+
+  window.rlGeneratePlan = async function() {
+    if (!_rlCurrentRunId) { alert('No active run selected'); return; }
+    const mode = document.getElementById('rl-plan-mode').value;
+    
+    _rlSetStatus('Generating research plan…', _rlCurrentRunId);
+    
+    try {
+      const res = await fetch('/api/research-lab/auto-plan', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          run_id: _rlCurrentRunId,
+          planner_mode: mode,
+          max_tests: 5,
+          max_combinations_per_test: 300
+        })
+      });
+      const plan = await res.json();
+      if (plan.error) throw new Error(plan.error);
+      
+      _rlCurrentPlan = plan;
+      
+      const cardsEl = document.getElementById('rl-plan-cards');
+      if (!plan.tests || plan.tests.length === 0) {
+        cardsEl.innerHTML = '<div style="grid-column:1/-1;opacity:.5;font-size:.8rem;padding:12px">No recommended tests generated for this run.</div>';
+        return;
+      }
+      
+      cardsEl.innerHTML = plan.tests.map((t, idx) => `
+        <div style="background:#111827;border:1px solid #2a3a50;border-radius:6px;padding:12px;font-size:.8rem;display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <span style="font-weight:600;color:#7fa8c8">#${t.priority} ${t.title}</span>
+            <input type="checkbox" id="plan-chk-${idx}" ${t.selected_by_default ? 'checked' : ''} style="accent-color:#059669">
+          </div>
+          <div style="font-size:.75rem;opacity:.8">${t.purpose}</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:.72rem;background:#0a0f1a;padding:8px;border-radius:4px">
+            <div><strong>Type:</strong> <span style="color:#fbbf24">${t.test_type}</span></div>
+            <div><strong>Symbols:</strong> ${t.symbols ? t.symbols.join(', ') : 'N/A'}</div>
+            <div><strong>Timeframes:</strong> ${t.timeframes ? t.timeframes.join(', ') : 'N/A'}</div>
+            <div><strong>Families:</strong> ${t.families ? t.families.join(', ') : 'N/A'}</div>
+            <div><strong>Mode:</strong> ${t.mode}</div>
+            <div><strong>Estimated Combs:</strong> ${t.max_combinations}</div>
+          </div>
+          <div style="font-size:.72rem;opacity:.7"><strong>Why:</strong> ${t.reason}</div>
+          <div style="font-size:.72rem;color:#6ee7b7"><strong>Acceptance:</strong> Trades >=${t.acceptance_criteria.min_trade_count}, PF >=${t.acceptance_criteria.min_profit_factor}</div>
+        </div>
+      `).join('');
+      _rlSetStatus('Plan generated', _rlCurrentRunId);
+    } catch (e) {
+      alert('Plan Generation failed: ' + e.message);
+      _rlSetStatus('Error: ' + e.message, _rlCurrentRunId);
+    }
+  };
+
+  window.rlRunAutoPlan = async function() {
+    if (!_rlCurrentPlan || !_rlCurrentPlan.tests) { alert('Generate a plan first.'); return; }
+    
+    const selectedTests = [];
+    _rlCurrentPlan.tests.forEach((t, idx) => {
+      const chk = document.getElementById(`plan-chk-${idx}`);
+      if (chk && chk.checked) {
+        selectedTests.push(t);
+      }
+    });
+    
+    if (selectedTests.length === 0) { alert('No tests selected.'); return; }
+    
+    _rlSetStatus('Queuing selected auto-plan validation runs…', _rlCurrentRunId);
+    
+    try {
+      const res = await fetch('/api/research-lab/run-auto-plan', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          plan_id: _rlCurrentPlan.plan_id,
+          source_run_id: _rlCurrentRunId,
+          tests: selectedTests
+        })
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      
+      _rlSetStatus(`Queue started. Parent: ${_rlCurrentRunId} — Launched ${data.child_run_ids.length} validation runs.`, _rlCurrentRunId);
+    } catch (e) {
+      alert('Failed to launch plan tests: ' + e.message);
+      _rlSetStatus('Error: ' + e.message, _rlCurrentRunId);
+    }
+  };
+
+  window.rlSavePlan = function() {
+    if (!_rlCurrentPlan) { alert('No plan exists'); return; }
+    localStorage.setItem(`rl_plan_${_rlCurrentPlan.source_run_id}`, JSON.stringify(_rlCurrentPlan));
+    alert('Plan saved to local cache');
+  };
+
+  window.rlDownloadPlan = function() {
+    if (!_rlCurrentPlan) { alert('No plan exists'); return; }
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(_rlCurrentPlan, null, 2));
+    const dlAnchor = document.createElement('a');
+    dlAnchor.setAttribute("href",     dataStr);
+    dlAnchor.setAttribute("download", `${_rlCurrentPlan.plan_id}_autopilot.json`);
+    document.body.appendChild(dlAnchor);
+    dlAnchor.click();
+    dlAnchor.remove();
   };
 
   // ── Poll run status ────────────────────────────────────────────────────────
@@ -12835,15 +13093,26 @@ function ldFmtPrice(p) {
         document.getElementById('rl-ranked-table').innerHTML = '<em style="opacity:.5">No ranked results yet.</em>';
       } else {
         const cols = ['strategy_name','symbol','timeframe','direction','status',
-                      'trade_count','win_rate','profit_factor','net_return',
-                      'oos_return','robustness_score','sqn'];
-        const th = cols.map(c => `<th style="padding:5px 8px;white-space:nowrap;opacity:.6">${c}</th>`).join('');
-        const trs = rows.map(r => {
+                      'trade_count','win_rate','profit_factor','is_return','oos_return',
+                      'robustness_score','sqn','skip_reason','verdict'];
+        const th = '<th style="padding:5px 8px;opacity:.6">Select</th>' + cols.map(c => {
+          let label = c.toUpperCase().replace(/_/g, ' ');
+          if (c === 'profit_factor') label = 'PF';
+          if (c === 'is_return') label = 'IS RETURN';
+          if (c === 'oos_return') label = 'OOS RETURN';
+          return `<th style="padding:5px 8px;white-space:nowrap;opacity:.6">${label}</th>`;
+        }).join('');
+        const trs = rows.map((r, idx) => {
           const statusColor = r.status === 'STRONG_CANDIDATE' ? '#6ee7b7'
                             : r.status === 'WEAK_CANDIDATE'   ? '#fbbf24' : '#f87171';
-          return '<tr>' + cols.map(c => {
+          const radio = `<input type="radio" name="rl-selected-candidate" data-symbol="${r.symbol || ''}" data-tf="${r.timeframe || ''}" data-family="${r.family_name || r.family || ''}" data-strategy="${r.strategy_name || ''}" data-direction="${r.direction || ''}">`;
+          return '<tr>' + `<td style="padding:4px 8px;border-top:1px solid #1a2535;text-align:center;">${radio}</td>` + cols.map(c => {
             let v = r[c] ?? '';
             if (c === 'status') v = `<span style="color:${statusColor}">${v}</span>`;
+            if (c === 'verdict') {
+              const isConfirmed = r.status === 'STRONG_CANDIDATE' || r.status === 'WEAK_CANDIDATE';
+              v = isConfirmed ? '<span style="color:#6ee7b7">CONFIRMS</span>' : '<span style="color:#f87171">REJECTS</span>';
+            }
             if (typeof v === 'number') v = v.toFixed ? v.toFixed(4) : v;
             return `<td style="padding:4px 8px;border-top:1px solid #1a2535">${v}</td>`;
           }).join('') + '</tr>';
@@ -12855,8 +13124,14 @@ function ldFmtPrice(p) {
       document.getElementById('rl-results').style.display = 'block';
       // Only show download / AI buttons when the run actually produced files
       const hasFiles = rows.length > 0 && !data.note;
+      document.getElementById('rl-validate-btn').style.display = hasFiles ? 'inline-block' : 'none';
       document.getElementById('rl-ai-btn').style.display = hasFiles ? 'inline-block' : 'none';
       document.getElementById('rl-report-link').style.display = hasFiles ? 'inline' : 'none';
+      
+      // AI Research Plan container activation
+      const planPanel = document.getElementById('rl-plan-panel');
+      if (planPanel) planPanel.style.display = hasFiles ? 'block' : 'none';
+
       if (hasFiles) {
         document.getElementById('rl-report-link').href =
           `/api/research-lab/download/${runId}/research_report.md`;
