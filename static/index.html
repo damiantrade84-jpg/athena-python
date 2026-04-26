@@ -2017,7 +2017,7 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
           </select>
         </div>
         <button onclick="rlGeneratePlan()" style="background:#1a2535;color:#7fa8c8;border:1px solid #2a3a50;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:.82rem">💡 Generate Plan</button>
-        <button onclick="rlRunAutoPlan()" style="background:linear-gradient(135deg,#059669,#10b981);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.82rem;font-weight:600">🚀 Run Recommended Plan</button>
+        <button id="rl-run-plan-btn" onclick="rlRunAutoPlan()" style="background:linear-gradient(135deg,#059669,#10b981);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.82rem;font-weight:600">🚀 Run Recommended Plan</button>
         <button onclick="rlSavePlan()" style="background:#111827;color:#cdd6e0;border:1px solid #2a3a50;padding:7px 12px;border-radius:6px;cursor:pointer;font-size:.82rem">💾 Save Plan</button>
         <button onclick="rlDownloadPlan()" style="background:#111827;color:#cdd6e0;border:1px solid #2a3a50;padding:7px 12px;border-radius:6px;cursor:pointer;font-size:.82rem">⬇ Download JSON</button>
       </div>
@@ -13054,6 +13054,150 @@ function ldFmtPrice(p) {
     }, 3000);
   }
 
+  let _rlIsRunningPlan = false;
+
+  window.rlRunAutoPlan = async function() {
+    if (_rlIsRunningPlan) {
+      console.log('[autopilot] Plan already executing, ignoring duplicate click');
+      return;
+    }
+    
+    if (!_rlCurrentPlan || !_rlCurrentPlan.tests) { alert('Generate a plan first.'); return; }
+    
+    const selectedTests = [];
+    _rlCurrentPlan.tests.forEach((t, idx) => {
+      const chk = document.getElementById(`plan-chk-${idx}`);
+      if (chk && chk.checked) {
+        selectedTests.push(t);
+      }
+    });
+    
+    if (selectedTests.length === 0) { alert('No tests selected.'); return; }
+    
+    const runBtn = document.getElementById('rl-run-plan-btn');
+    if (runBtn) {
+      runBtn.disabled = true;
+      runBtn.style.opacity = '0.5';
+    }
+    
+    _rlIsRunningPlan = true;
+    _rlSetStatus('Queuing selected auto-plan validation runs…', _rlCurrentRunId);
+    
+    try {
+      const res = await fetch('/api/research-lab/run-auto-plan', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          plan_id: _rlCurrentPlan.plan_id,
+          source_run_id: _rlCurrentRunId,
+          tests: selectedTests
+        })
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      
+      const childIds = data.child_run_ids || [];
+      _rlSetStatus(`Queue started. Parent: ${_rlCurrentRunId} — Launched ${childIds.length} validation runs.`, _rlCurrentRunId);
+      
+      // Update UI with running state
+      const planCards = document.getElementById('rl-plan-cards');
+      if (planCards) {
+        const progressDiv = document.createElement('div');
+        progressDiv.id = 'rl-autopilot-progress';
+        progressDiv.style.gridColumn = '1/-1';
+        progressDiv.style.background = '#0f172a';
+        progressDiv.style.border = '1px solid #1e293b';
+        progressDiv.style.borderRadius = '6px';
+        progressDiv.style.padding = '12px';
+        progressDiv.style.marginTop = '10px';
+        progressDiv.innerHTML = `
+          <div style="font-weight: 600; color:#38bdf8; margin-bottom: 6px;">🤖 Autopilot Plan Executing</div>
+          <div style="font-size:.75rem; opacity:.8;"><strong>Parent Run:</strong> ${_rlCurrentRunId}</div>
+          <div style="font-size:.75rem; opacity:.8;"><strong>Tests Selected:</strong> ${selectedTests.length}</div>
+          <div style="font-size:.75rem; color:#fbbf24; margin-top:6px;" id="rl-autopilot-status">Polling child runs...</div>
+          <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;" id="rl-autopilot-child-chips">
+            ${childIds.map(cid => `<span id="chip-${cid}" style="font-size:.72rem; padding:3px 6px; background:#1e293b; color:#94a3b8; border-radius:4px; border:1px solid #334155;">${cid} (polling)</span>`).join('')}
+          </div>
+        `;
+        planCards.appendChild(progressDiv);
+      }
+      
+      // Begin polling child runs
+      _rlPollChildRuns(childIds, _rlCurrentRunId);
+      
+    } catch (e) {
+      alert('Failed to launch plan tests: ' + e.message);
+      _rlSetStatus('Error: ' + e.message, _rlCurrentRunId);
+      
+      if (runBtn) {
+        runBtn.disabled = false;
+        runBtn.style.opacity = '1.0';
+      }
+      _rlIsRunningPlan = false;
+    }
+  };
+
+  function _rlPollChildRuns(childIds, parentId) {
+    if (childIds.length === 0) {
+      _rlFinishAutopilotExecution(parentId);
+      return;
+    }
+    
+    let pending = [...childIds];
+    const statusText = document.getElementById('rl-autopilot-status');
+    
+    const pollInterval = setInterval(async () => {
+      try {
+        for (let i = pending.length - 1; i >= 0; i--) {
+          const cid = pending[i];
+          const res = await fetch(`/api/research-lab/run-status?run_id=${cid}`);
+          const data = await res.json();
+          
+          if (data.status === 'complete' || data.status === 'failed') {
+            pending.splice(i, 1);
+            const chip = document.getElementById(`chip-${cid}`);
+            if (chip) {
+              chip.style.background = data.status === 'complete' ? '#064e3b' : '#7f1d1d';
+              chip.style.color = data.status === 'complete' ? '#6ee7b7' : '#fca5a5';
+              chip.textContent = `${cid} (${data.status})`;
+            }
+          }
+        }
+        
+        if (statusText) {
+          statusText.textContent = `Polling child runs... (${childIds.length - pending.length}/${childIds.length} complete)`;
+        }
+        
+        if (pending.length === 0) {
+          clearInterval(pollInterval);
+          if (statusText) statusText.textContent = '🤖 All child runs finalized.';
+          _rlFinishAutopilotExecution(parentId);
+        }
+      } catch (e) {
+        console.error('[autopilot] error polling children', e);
+      }
+    }, 4000);
+  }
+
+  function _rlFinishAutopilotExecution(parentId) {
+    const runBtn = document.getElementById('rl-run-plan-btn');
+    if (runBtn) {
+      runBtn.disabled = false;
+      runBtn.style.opacity = '1.0';
+    }
+    _rlIsRunningPlan = false;
+    rlLoadRuns();
+    
+    const progressDiv = document.getElementById('rl-autopilot-progress');
+    if (progressDiv) {
+      const openBtn = document.createElement('button');
+      openBtn.textContent = '📂 Open Autopilot Result';
+      openBtn.style.cssText = 'margin-top:10px; background:linear-gradient(135deg,#0369a1,#0284c7); color:#fff; border:none; padding:6px 12px; border-radius:5px; cursor:pointer; font-size:.75rem;';
+      openBtn.onclick = () => rlShowResults(parentId);
+      progressDiv.appendChild(openBtn);
+    }
+  }
+
   // ── Load runs list ─────────────────────────────────────────────────────────
   window.rlLoadRuns = async function() {
     const el = document.getElementById('rl-runs-list');
@@ -13062,17 +13206,39 @@ function ldFmtPrice(p) {
       const data = await res.json();
       const runs = data.runs || [];
       if (!runs.length) { el.textContent = 'No runs yet.'; return; }
-      el.innerHTML = runs.slice(0, 10).map(r => `
-        <div style="display:flex;gap:10px;align-items:center;padding:6px 10px;border-radius:6px;
-                    background:#111827;margin-bottom:4px;cursor:pointer;border:1px solid #1a2535"
-             onclick="rlShowResults('${r.run_id}')">
-          <span style="font-family:monospace;opacity:.7;font-size:.75rem">${r.run_id}</span>
-          <span style="font-size:.75rem;opacity:.5">${r.mode || ''}</span>
-          <span style="margin-left:auto;display:flex;gap:8px">
-            ${r.strong != null ? `<span style="color:#6ee7b7;font-size:.73rem">${r.strong} strong</span>` : ''}
-            ${r.weak   != null ? `<span style="color:#fbbf24;font-size:.73rem">${r.weak} weak</span>`   : ''}
-          </span>
-        </div>`).join('');
+      
+      const parents = runs.filter(r => !r.parent_run_id);
+      const children = runs.filter(r => r.parent_run_id);
+
+      el.innerHTML = parents.slice(0, 15).map(r => {
+        const myChildren = children.filter(c => c.parent_run_id === r.run_id);
+        
+        let parentHtml = `
+          <div style="display:flex;gap:10px;align-items:center;padding:6px 10px;border-radius:6px;
+                      background:#111827;margin-bottom:4px;cursor:pointer;border:1px solid #1a2535"
+               onclick="rlShowResults('${r.run_id}')">
+            <span style="font-family:monospace;opacity:.7;font-size:.75rem">${r.run_id}</span>
+            <span style="font-size:.75rem;opacity:.5">${r.mode || ''}</span>
+            <span style="margin-left:auto;display:flex;gap:8px">
+              ${r.strong != null ? `<span style="color:#6ee7b7;font-size:.73rem">${r.strong} strong</span>` : ''}
+              ${r.weak   != null ? `<span style="color:#fbbf24;font-size:.73rem">${r.weak} weak</span>`   : ''}
+            </span>
+          </div>`;
+          
+        if (myChildren.length > 0) {
+          const childListHtml = myChildren.map(c => `
+            <div style="display:flex;gap:10px;align-items:center;padding:4px 8px;border-radius:4px;
+                        background:#0f172a;margin-bottom:2px;margin-left:20px;cursor:pointer;border:1px dashed #1e293b"
+                 onclick="rlShowResults('${c.run_id}')">
+              <span style="color:#38bdf8;font-size:.68rem;font-weight:600;">↳ Autopilot validation</span>
+              <span style="font-family:monospace;opacity:.6;font-size:.7rem">${c.run_id}</span>
+            </div>
+          `).join('');
+          parentHtml += `<div style="margin-bottom:6px;">${childListHtml}</div>`;
+        }
+        
+        return parentHtml;
+      }).join('');
     } catch (e) {
       el.textContent = 'Error loading runs.';
     }
@@ -13085,6 +13251,9 @@ function ldFmtPrice(p) {
     _rlSetStatus('Loading results…', runId);
 
     try {
+      const metaRes = await fetch(`/api/research-lab/run/${runId}`);
+      const metaData = await metaRes.json();
+      
       const res  = await fetch(`/api/research-lab/ranked/${runId}`);
       const data = await res.json();
       const rows = data.ranked || [];
@@ -13117,7 +13286,35 @@ function ldFmtPrice(p) {
             return `<td style="padding:4px 8px;border-top:1px solid #1a2535">${v}</td>`;
           }).join('') + '</tr>';
         }).join('');
-        document.getElementById('rl-ranked-table').innerHTML =
+        
+        let childVerdictHtml = '';
+        if (metaData.parent_run_id) {
+          let confirmedCount = 0, weakenedCount = 0, rejectedCount = 0, needsMoreCount = 0;
+          rows.forEach(r => {
+            if (r.status === 'STRONG_CANDIDATE') confirmedCount++;
+            else if (r.status === 'WEAK_CANDIDATE') weakenedCount++;
+            else if (r.status === 'REJECT') rejectedCount++;
+            else if (r.status === 'NEEDS_MORE_DATA') needsMoreCount++;
+          });
+          const overallChildVerdict = confirmedCount > 0 ? '<span style="color:#6ee7b7">CONFIRMED</span>' 
+                                    : weakenedCount > 0 ? '<span style="color:#fbbf24">WEAKENED</span>' 
+                                    : '<span style="color:#f87171">REJECTED</span>';
+                                    
+          childVerdictHtml = `
+            <div style="background:#0f172a; border:1px solid #334155; padding:12px; border-radius:8px; margin-bottom:12px; font-size:.8rem">
+              <div style="font-weight: 600; color:#38bdf8; margin-bottom: 6px;">🛡️ Autopilot Validation Verdict: ${overallChildVerdict}</div>
+              <div style="font-size:.75rem; opacity:.8; display:flex; gap:12px;">
+                <span><strong>Parent ID:</strong> ${metaData.parent_run_id}</span>
+                <span style="color:#6ee7b7">Confirmed: ${confirmedCount}</span>
+                <span style="color:#fbbf24">Weakened: ${weakenedCount}</span>
+                <span style="color:#f87171">Rejected: ${rejectedCount}</span>
+                <span style="opacity:.6">Needs More: ${needsMoreCount}</span>
+              </div>
+            </div>
+          `;
+        }
+
+        document.getElementById('rl-ranked-table').innerHTML = childVerdictHtml +
           `<table style="border-collapse:collapse;width:100%"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`;
       }
 

@@ -19,6 +19,8 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_OUTPUT = Path("logs/research_lab")
 _active_runs: dict[str, dict] = {}  # run_id → {status, thread, result}
+_running_autopilot_plans: dict[str, list[str]] = {}  # idempotency_key → [child_ids]
+
 
 
 def register_research_lab_routes(app) -> None:
@@ -113,25 +115,39 @@ def register_research_lab_routes(app) -> None:
     # ── POST /api/research-lab/run-auto-plan ──────────────────────────────────
     @app.route("/api/research-lab/run-auto-plan", methods=["POST"])
     def api_research_lab_run_auto_plan():
-        """Execute selected items from recommendations."""
+        """Execute selected items from recommendations with idempotency protection."""
         import uuid
         body = request.get_json(silent=True) or {}
-        plan_id = body.get("plan_id")
+        plan_id = body.get("plan_id") or "default_plan"
         source_run_id = body.get("source_run_id")
         tests = body.get("tests", [])
         
         if not source_run_id:
             return jsonify({"error": "source_run_id is required"}), 400
+
+        # Backend Idempotency
+        idempotency_key = body.get("idempotency_key") or f"{source_run_id}_{plan_id}"
+        if idempotency_key in _running_autopilot_plans:
+            log.info("[research_lab_routes] Duplicate auto plan request intercepted for %s", idempotency_key)
+            return jsonify({
+                "status": "started",
+                "plan_id": plan_id,
+                "parent_run_id": source_run_id,
+                "child_run_ids": _running_autopilot_plans[idempotency_key],
+                "message": "Autopilot validation already in progress"
+            }), 200
             
         from athena_research.run_manager import run_research, _DEFAULT_CONFIG
         
         child_run_ids = []
+        _running_autopilot_plans[idempotency_key] = child_run_ids
+
         for t_spec in tests:
             from datetime import datetime, timezone
             child_run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}"
             child_run_ids.append(child_run_id)
             
-            mode = t_spec.get("mode", "small") # small maps cleanly to backend modes
+            mode = t_spec.get("mode", "small")
             direction = t_spec.get("directions", ["both"])[0] if t_spec.get("directions") else "both"
             symbols = t_spec.get("symbols")
             timeframes = t_spec.get("timeframes")
@@ -142,6 +158,7 @@ def register_research_lab_routes(app) -> None:
             def _worker_child(cid, m, d, s, tf, f, strats, p):
                 _active_runs[cid] = {"status": "running", "run_id": cid}
                 try:
+                    import json
                     run_research(
                         mode=m,
                         config_path=_DEFAULT_CONFIG,
@@ -155,6 +172,18 @@ def register_research_lab_routes(app) -> None:
                         strategies=strats,
                         params=p,
                     )
+                    
+                    # Update metadata on disk to link parent safely
+                    meta_path = _DEFAULT_OUTPUT / cid / "run_meta.json"
+                    if meta_path.exists():
+                        try:
+                            mdata = json.loads(meta_path.read_text(encoding="utf-8"))
+                            mdata["parent_run_id"] = source_run_id
+                            mdata["is_autopilot"] = True
+                            meta_path.write_text(json.dumps(mdata, indent=2), encoding="utf-8")
+                        except Exception:
+                            pass
+                            
                     _active_runs[cid]["status"] = "complete"
                 except Exception as ex:
                     _active_runs[cid]["status"] = "failed"
@@ -167,9 +196,38 @@ def register_research_lab_routes(app) -> None:
             
         return jsonify({
             "status": "started",
+            "plan_id": plan_id,
             "parent_run_id": source_run_id,
-            "child_run_ids": child_run_ids
+            "child_run_ids": child_run_ids,
+            "message": "Autopilot validation started"
         }), 202
+
+    # ── GET /api/research-lab/run-status ──────────────────────────────────────
+    @app.route("/api/research-lab/run-status", methods=["GET"])
+    def api_research_lab_run_status_query():
+        """Polling endpoint for single child run updates."""
+        run_id = request.args.get("run_id")
+        if not run_id:
+            return jsonify({"error": "run_id is required"}), 400
+            
+        if run_id in _active_runs:
+            return jsonify({"run_id": run_id, "status": _active_runs[run_id].get("status", "unknown")})
+            
+        run_dir = _DEFAULT_OUTPUT / run_id
+        if not run_dir.exists():
+            return jsonify({"error": "Run not found", "run_id": run_id}), 404
+            
+        import json
+        status_path = run_dir / "status.json"
+        if status_path.exists():
+            try:
+                data = json.loads(status_path.read_text(encoding="utf-8"))
+                return jsonify({"run_id": run_id, "status": data.get("status", "complete")})
+            except Exception:
+                pass
+                
+        return jsonify({"run_id": run_id, "status": "complete"})
+
 
     # ── GET /api/research-lab/runs ────────────────────────────────────────────
     @app.route("/api/research-lab/runs", methods=["GET"])

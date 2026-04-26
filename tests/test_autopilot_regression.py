@@ -79,3 +79,48 @@ def test_conditional_edges_population():
     edge_cases = df[(df["net_return"] > 0) & (df["status"] == "REJECT")]
     assert not edge_cases.empty
     assert edge_cases.iloc[0]["strategy_name"] == "edge_strat"
+def test_backend_duplicate_prevention_flask():
+    from flask import Flask
+    from athena_research.research_lab_routes import register_research_lab_routes, _running_autopilot_plans
+    
+    app = Flask(__name__)
+    register_research_lab_routes(app)
+    
+    with app.test_client() as client:
+        # Pre-seed the state
+        _running_autopilot_plans["mock_parent_default_plan"] = ["child_1", "child_2"]
+        
+        payload = {
+            "source_run_id": "mock_parent",
+            "plan_id": "default_plan",
+            "tests": []
+        }
+        
+        # Call 1: Intercepted duplicate
+        res = client.post("/api/research-lab/run-auto-plan", json=payload)
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["status"] == "started"
+        assert data["child_run_ids"] == ["child_1", "child_2"]
+        assert "validation already in progress" in data["message"]
+
+def test_backend_child_ids_returned():
+    from flask import Flask
+    from athena_research.research_lab_routes import register_research_lab_routes
+    
+    app = Flask(__name__)
+    register_research_lab_routes(app)
+    
+    with app.test_client() as client:
+        payload = {
+            "source_run_id": "mock_fresh_parent",
+            "plan_id": "fresh_plan",
+            "tests": [{"mode": "small", "symbols": ["BTC/USDT"]}]
+        }
+        
+        res = client.post("/api/research-lab/run-auto-plan", json=payload)
+        assert res.status_code == 202
+        data = res.get_json()
+        assert data["status"] == "started"
+        assert len(data["child_run_ids"]) == 1
+        assert "validation started" in data["message"]
