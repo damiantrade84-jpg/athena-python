@@ -21,11 +21,10 @@ log = logging.getLogger(__name__)
 
 RESEARCH_STYLE_PROFILES = {
   "scalp": {
-    "timeframes": ["M1", "M5", "M15"],
+    "timeframes": ["M15", "H1"],
     "zone_set": "scalp_zones",
     "strategy_families": [
-      "micro_breakout", "opening_range", "liquidity_sweep", 
-      "vwap_reclaim", "absorption", "scalp_pullback"
+      "engine_d_proxy", "breakout", "mean_reversion"
     ],
     "validation_focus": ["fast reaction", "tight stop feasibility", "TP1 hit rate", "fee/slippage sensitivity", "session quality"]
   },
@@ -33,7 +32,7 @@ RESEARCH_STYLE_PROFILES = {
     "timeframes": ["M15", "H1", "H4"],
     "zone_set": "intra_zones",
     "strategy_families": [
-      "trend_momentum", "pullback", "breakout", "mean_reversion", "structure_filters"
+      "trend_momentum", "pullback", "breakout", "mean_reversion", "engine_b_proxy"
     ],
     "validation_focus": ["same-day continuation", "intraday reversal", "liquidity sweep into zone", "session continuation", "target room"]
   },
@@ -45,6 +44,17 @@ RESEARCH_STYLE_PROFILES = {
     ],
     "validation_focus": ["higher timeframe trend", "value area reaction", "support/resistance reaction", "structural continuation", "wider target room"]
   }
+}
+
+# Alternative families to try when a family produces all-reject results
+_FAMILY_ALTERNATIVES: dict[str, list[str]] = {
+    "trend_momentum":  ["pullback", "mean_reversion"],
+    "pullback":        ["trend_momentum", "breakout"],
+    "breakout":        ["mean_reversion", "volatility"],
+    "mean_reversion":  ["volatility", "pullback"],
+    "volatility":      ["engine_b_proxy", "mean_reversion"],
+    "engine_b_proxy":  ["engine_d_proxy", "breakout"],
+    "engine_d_proxy":  ["mean_reversion", "breakout"],
 }
 
 
@@ -220,6 +230,45 @@ def generate_auto_plan(
                 }
             })
             priority += 1
+
+    # 4. Alternative family tests — when majority of results are REJECT/NEEDS_MORE_DATA
+    if priority <= max_tests:
+        reject_df = df[df["status"].isin(["REJECT", "NEEDS_MORE_DATA"])]
+        if len(reject_df) > 0 and len(reject_df) >= len(df) * 0.6:
+            # Most tested configs failed — recommend a pivot to a different family
+            top_reject = reject_df.groupby("family").size().idxmax() if "family" in reject_df.columns else None
+            if top_reject:
+                alts = _FAMILY_ALTERNATIVES.get(top_reject, [])
+            else:
+                alts = []
+            if alts:
+                alt_fam = alts[0]
+                # Use symbols from the run (first symbol found)
+                sym_sample = df["symbol"].dropna().unique()[:3].tolist() if "symbol" in df.columns else []
+                tf_sample = df["timeframe"].dropna().unique()[:1].tolist() if "timeframe" in df.columns else ["H1"]
+                tests.append({
+                    "test_id": f"pivot_alt_{alt_fam}_{priority}",
+                    "selected_by_default": True,
+                    "priority": priority,
+                    "title": f"Pivot: Try {alt_fam.replace('_', ' ').title()}",
+                    "purpose": f"Majority of {top_reject} strategies rejected. Testing alternative family {alt_fam}.",
+                    "test_type": "alternative_pivot",
+                    "families": [alt_fam],
+                    "strategies": [],
+                    "symbols": sym_sample,
+                    "timeframes": tf_sample,
+                    "directions": ["both"],
+                    "mode": "tiny",
+                    "max_combinations": max_combinations_per_test,
+                    "reason": f"{top_reject} showed mostly rejects — pivoting to {alt_fam} to find edge.",
+                    "acceptance_criteria": {
+                        "min_trade_count": 15,
+                        "min_profit_factor": 1.10,
+                        "min_oos_return": 0.0,
+                        "min_robustness": 0.35
+                    }
+                })
+                priority += 1
 
     # Deduplicate tests
     seen_signatures = set()

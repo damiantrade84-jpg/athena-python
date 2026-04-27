@@ -76,7 +76,10 @@
       "Bash(./.venv/Scripts/python.exe -m py_compile config.py scoring.py factor_scoring.py market_structure.py engine_c.py scalp_engine.py)",
       "Bash(./.venv/Scripts/python.exe -m pytest tests/ -x -q)",
       "Bash(.venv/Scripts/python.exe *)",
-      "Bash(awk '{print $NF}')"
+      "Bash(awk '{print $NF}')",
+      "Bash(.venv\\\\Scripts\\\\python.exe -m pytest tests/test_vectorbt_research_lab.py -v --tb=short)",
+      "Bash(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/test_vectorbt_research_lab.py -v)",
+      "Bash(.\\\\.venv\\\\Scripts\\\\python.exe -m py_compile athena_research/metrics.py athena_research/strategies.py athena_research/run_manager.py tools/vectorbt_research_lab.py)"
     ]
   }
 }

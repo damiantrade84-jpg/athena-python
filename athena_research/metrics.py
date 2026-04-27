@@ -88,7 +88,7 @@ def run_portfolio(
 
     # Pandas fallback
     return _pandas_portfolio(close, entries, exits, short_entries, short_exits,
-                             fees, slippage)
+                             fees, slippage, freq=freq)
 
 
 def _vbt_portfolio(close, entries, exits, short_entries, short_exits,
@@ -127,15 +127,28 @@ def _vbt_portfolio(close, entries, exits, short_entries, short_exits,
 
     # Try to get trade records for granular stats
     try:
-        trades_rec = pf.trades.records
-        trade_returns = trades_rec["return"].values if "return" in trades_rec.columns else np.array([])
-        trade_durations = (trades_rec["exit_idx"] - trades_rec["entry_idx"]).values \
-            if "exit_idx" in trades_rec.columns else np.array([])
-    except Exception:
+        trades_df = pf.trades.records_readable  # proper DataFrame with named columns
+        ret_col = next((c for c in trades_df.columns if c.lower() in ("return", "ret")), None)
+        if ret_col and len(trades_df) > 0:
+            trade_returns = trades_df[ret_col].values.astype(float)
+        else:
+            trade_returns = np.array([])
+
+        if len(trades_df) > 0:
+            raw_rec = pf.trades.records  # structured array for index positions
+            entry_idx = raw_rec["entry_idx"] if "entry_idx" in raw_rec.dtype.names else None
+            exit_idx = raw_rec["exit_idx"] if "exit_idx" in raw_rec.dtype.names else None
+            if entry_idx is not None and exit_idx is not None:
+                trade_durations = (exit_idx - entry_idx).astype(float)
+            else:
+                trade_durations = np.array([])
+        else:
+            trade_durations = np.array([])
+    except Exception as e:
+        log.debug("[metrics] VBT trade record extraction failed (%s) — using empty", e)
         trade_returns = np.array([])
         trade_durations = np.array([])
 
-    n = len(trade_returns)
     return _build_stats(
         trade_returns=trade_returns,
         trade_durations=trade_durations,
@@ -143,10 +156,11 @@ def _vbt_portfolio(close, entries, exits, short_entries, short_exits,
         init_cash=init_cash,
         fees=fees,
         stats_dict=stats,
+        freq=freq,
     )
 
 
-def _pandas_portfolio(close, entries, exits, short_entries, short_exits, fees, slippage) -> dict:
+def _pandas_portfolio(close, entries, exits, short_entries, short_exits, fees, slippage, freq="1h") -> dict:
     """Simple bar-by-bar backtester — no VectorBT dependency."""
     position = 0    # 0=flat, 1=long, -1=short
     entry_price = 0.0
@@ -214,12 +228,13 @@ def _pandas_portfolio(close, entries, exits, short_entries, short_exits, fees, s
         init_cash=1.0,
         fees=fees,
         stats_dict={},
+        freq=freq,
     )
 
 
 def _build_stats(trade_returns: np.ndarray, trade_durations: np.ndarray,
                  equity: pd.Series, init_cash: float, fees: float,
-                 stats_dict: dict) -> dict:
+                 stats_dict: dict, freq: str = "1h") -> dict:
     n = len(trade_returns)
     if n == 0:
         return {"trade_count": 0}
@@ -241,11 +256,16 @@ def _build_stats(trade_returns: np.ndarray, trade_durations: np.ndarray,
     dd = (eq - running_max) / running_max
     max_dd = float(dd.min())
 
-    # Sharpe (annualised, assuming daily periods unless equity freq known)
+    # Sharpe (annualised with correct bars-per-year for the timeframe)
+    _BARS_PER_YEAR = {
+        "1min": 252 * 390, "5min": 252 * 78, "15min": 252 * 26,
+        "1h": 252 * 24, "4h": 252 * 6, "1D": 252, "1W": 52,
+    }
+    ann_factor = math.sqrt(_BARS_PER_YEAR.get(freq, 252 * 24))
     if len(eq) > 1:
         ret_series = pd.Series(eq).pct_change().dropna()
         if ret_series.std() > 0:
-            sharpe = float(ret_series.mean() / ret_series.std() * math.sqrt(252))
+            sharpe = float(ret_series.mean() / ret_series.std() * ann_factor)
         else:
             sharpe = float("nan")
     else:

@@ -9,6 +9,7 @@ Safety: no live imports, no production config writes, no execution calls.
 from __future__ import annotations
 
 import logging
+import math
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -49,8 +50,15 @@ def _fee_for(symbol: str, fees_cfg: dict) -> float:
 def _symbols_for_mode(cfg: dict, mode: str = "tiny") -> list[str]:
     if mode == "tiny":
         return cfg.get("tiny_run", {}).get("symbols", [])
+    if mode in ("medium", "standard"):
+        symbols_cfg = cfg.get("symbols", {})
+        syms: list[str] = []
+        for group in ("crypto", "forex"):
+            syms.extend(symbols_cfg.get(group, []))
+        return syms
+    # full, large, or anything else
     symbols_cfg = cfg.get("symbols", {})
-    all_syms = []
+    all_syms: list[str] = []
     for group_syms in symbols_cfg.values():
         if isinstance(group_syms, list):
             all_syms.extend(group_syms)
@@ -60,6 +68,8 @@ def _symbols_for_mode(cfg: dict, mode: str = "tiny") -> list[str]:
 def _timeframes_for_mode(cfg: dict, mode: str = "tiny") -> list[str]:
     if mode == "tiny":
         return cfg.get("tiny_run", {}).get("timeframes", ["H1", "H4"])
+    if mode in ("medium", "standard"):
+        return ["H1", "H4"]
     return cfg.get("timeframes", ["H1", "H4", "D1"])
 
 
@@ -255,6 +265,20 @@ def run_research(
                 log.error("[run_manager] Worker failed: %s", e)
 
     log.info("[run_manager] Completed %d strategy evaluations", len(all_results))
+
+    # Apply symbol breadth component to robustness (0.20 weight)
+    from collections import defaultdict
+    strategy_symbol_returns: dict[str, list[float]] = defaultdict(list)
+    for m in all_results:
+        if math.isfinite(m.net_return):
+            key = f"{m.family}::{m.strategy_name}::{m.params_str}"
+            strategy_symbol_returns[key].append(m.net_return)
+    for m in all_results:
+        key = f"{m.family}::{m.strategy_name}::{m.params_str}"
+        returns = strategy_symbol_returns.get(key, [])
+        if returns:
+            breadth = sum(1 for r in returns if r > 0) / len(returns)
+            m.robustness_score = min(1.0, m.robustness_score + breadth * 0.20)
 
     # Generate reports
     run_meta = {

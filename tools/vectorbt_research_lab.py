@@ -216,18 +216,6 @@ def main():
         print(f"ERROR: Config not found: {config_path}", file=sys.stderr)
         sys.exit(1)
 
-    # Apply CLI overrides
-    if args.symbols:
-        cfg.setdefault("tiny_run", {})["symbols"] = args.symbols
-        cfg.setdefault("symbols", {})["override"] = args.symbols
-
-    if args.timeframes:
-        cfg.setdefault("tiny_run", {})["timeframes"] = args.timeframes
-        cfg["timeframes"] = args.timeframes
-
-    if args.families:
-        cfg.setdefault("tiny_run", {})["families"] = args.families
-
     log.info("Starting Research Lab run | mode=%s | workers=%d", args.mode, args.workers)
 
     result = run_research(
@@ -238,6 +226,9 @@ def main():
         max_workers=args.workers,
         direction=args.direction,
         run_ai_review=args.ai_review,
+        symbols=args.symbols if args.symbols else None,
+        timeframes=args.timeframes if args.timeframes else None,
+        families=args.families if args.families else None,
     )
 
     _print_run_summary(result)

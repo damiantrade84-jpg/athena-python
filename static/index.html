@@ -2042,10 +2042,13 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       <div id="rl-ai-verdict" style="padding:10px 14px;background:#0f1c14;border:1px solid #1a3a24;border-radius:8px;color:#6ee7b7;font-size:.85rem;margin-bottom:10px"></div>
       <div id="rl-ai-candidates" style="margin-bottom:10px"></div>
       <div id="rl-ai-engine-recs" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px"></div>
+      <div id="rl-ai-next-test" style="margin-bottom:10px"></div>
       <details style="margin-top:10px">
         <summary style="font-size:.78rem;opacity:.6;cursor:pointer">Full AI review text</summary>
         <pre id="rl-ai-raw" style="font-size:.72rem;white-space:pre-wrap;max-height:400px;overflow-y:auto;background:#0a0f1a;padding:12px;border-radius:6px;margin-top:8px;color:#a0b4c8"></pre>
       </details>
+    </div><!-- /rl-ai-panel -->
+
     <!-- AI Research Plan panel -->
     <div id="rl-plan-panel" style="display:none;margin-top:16px;padding:12px;background:#111827;border:1px solid #2a3a50;border-radius:8px">
       <div style="font-size:.78rem;opacity:.55;margin-bottom:12px;font-weight:600;letter-spacing:.05em">AI RESEARCH PLAN / AUTOPILOT</div>
@@ -3256,6 +3259,9 @@ function renderScreenerResults(data) {
 })();
 
 // Panel switching — syncs sidebar nav + existing switchTab()
+// Hook system for panel-specific callbacks
+window._panelCallbacks = window._panelCallbacks || {};
+
 function switchPanel(name) {
   switchTab(name);
   document.querySelectorAll('.nav-item').forEach(function(n) {
@@ -3273,6 +3279,12 @@ function switchPanel(name) {
       else inp.value = String(disp).replace(/\//g, '');
     }
     if (typeof loadTVChart === 'function') loadTVChart();
+  }
+  // Call all registered panel callbacks
+  if (window._panelCallbacks && window._panelCallbacks[name]) {
+    window._panelCallbacks[name].forEach(function(cb) {
+      try { cb(name); } catch(e) { console.warn('Panel callback error:', e); }
+    });
   }
 }
 
@@ -3302,6 +3314,9 @@ function switchTab(tab) {
   } else if (window._guardianInterval) {
     clearInterval(window._guardianInterval);
     window._guardianInterval = null;
+  }
+  if (tab === 'research' && typeof window.rlLoadRuns === 'function') {
+    window.rlLoadRuns();
   }
 }
 
@@ -11717,6 +11732,7 @@ function guardianSyncHealthDots(overall) {
 }
 
 function guardianRefresh() {
+  console.log('[Guardian] guardianRefresh called');
   var btn = document.getElementById('guardian-refresh-btn');
   if (btn) btn.disabled = true;
 
@@ -11999,10 +12015,10 @@ var _ldEventHistory = [];
 var _ldSelectedSym = null;
 var _ldCurrentTab = 'overview';
 
-// ── switchPanel hook ──────────────────────────────────────────────────────────
-var _ldOrigSwitchPanel = window.switchPanel;
-window.switchPanel = function(name) {
-  if (typeof _ldOrigSwitchPanel === 'function') _ldOrigSwitchPanel(name);
+// ── Register panel callback ──────────────────────────────────────────────────────────
+window._panelCallbacks = window._panelCallbacks || {};
+window._panelCallbacks['live-dashboard'] = window._panelCallbacks['live-dashboard'] || [];
+window._panelCallbacks['live-dashboard'].push(function(name) {
   if (name === 'live-dashboard') {
     ldLoadSnapshot();
     if (document.getElementById('ldAutoPoll') && document.getElementById('ldAutoPoll').checked) {
@@ -12011,7 +12027,7 @@ window.switchPanel = function(name) {
   } else {
     ldStopAutoPoll();
   }
-};
+});
 
 function ldToggleAutoPoll(on) {
   if (on) ldStartAutoPoll(); else ldStopAutoPoll();
@@ -12028,10 +12044,12 @@ function ldStopAutoPoll() {
 
 // ── Main snapshot loader ──────────────────────────────────────────────────────
 function ldLoadSnapshot() {
+  console.log('[Live Dashboard] ldLoadSnapshot called');
   var inp = document.getElementById('ldSymbolInput');
   var syms = inp ? inp.value.trim() : '';
   var url = '/api/live-dashboard/snapshot';
   if (syms) url += '?symbols=' + encodeURIComponent(syms);
+  console.log('[Live Dashboard] Fetching:', url);
   fetch(url)
     .then(function(r) { return r.json(); })
     .then(function(d) {
@@ -12828,20 +12846,13 @@ function ldFmtPrice(p) {
     window.rlLoadRuns();
   };
 
-
-  // Hook into switchPanel (chain with existing hooks)
-  const _origSwitch = window.switchPanel;
-  window.switchPanel = function(panel) {
-    // Call existing hook (includes Live Dashboard hook)
-    if (typeof _origSwitch === 'function') _origSwitch(panel);
-    // Research Lab specific logic
-    if (panel === 'research') window._onResearchPanelOpen();
-  };
-
   window.rlStartStyleRun = async function() {
+    console.log('[Research Lab] rlStartStyleRun called');
     const market_group = document.getElementById('rl-market-group').value;
     const trading_style = document.getElementById('rl-trading-style').value;
     const research_depth = document.getElementById('rl-research-depth').value;
+
+    console.log('[Research Lab] Parameters:', { market_group, trading_style, research_depth });
 
     const btn = document.getElementById('rl-style-run-btn');
     if (btn) {
@@ -12855,17 +12866,21 @@ function ldFmtPrice(p) {
     document.getElementById('rl-ai-panel').style.display = 'none';
 
     try {
+      console.log('[Research Lab] Fetching /api/research-lab/style-run');
       const res = await fetch('/api/research-lab/style-run', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ market_group, trading_style, research_depth })
       });
+      console.log('[Research Lab] Response status:', res.status);
       const data = await res.json();
+      console.log('[Research Lab] Response data:', data);
       if (data.error) throw new Error(data.error);
       _rlCurrentRunId = data.run_id;
       _rlSetStatus(`Discovery started — mode: ${data.mode}`, data.run_id);
       _rlPollStatus(data.run_id);
     } catch (e) {
+      console.error('[Research Lab] Error:', e);
       _rlSetStatus('Error starting autopilot run: ' + e.message, '');
     } finally {
       if (btn) {
@@ -12944,7 +12959,7 @@ function ldFmtPrice(p) {
       s.value = 'EUR/USD, GBP/USD, AUD/USD';
       t.value = 'H4';
       f.value = 'engine_b_proxy';
-      st.value = 'market_structure';
+      st.value = 'structure_filters';
       m.value = 'tiny';
       d.value = 'both';
     } else if (preset === 'crypto_macd') {
@@ -12956,9 +12971,9 @@ function ldFmtPrice(p) {
       d.value = 'both';
     } else if (preset === 'xau_micro') {
       s.value = 'XAU/USD';
-      t.value = 'M5, M15';
-      f.value = 'breakout';
-      st.value = 'range_breakout';
+      t.value = 'M15, H1';
+      f.value = 'engine_d_proxy';
+      st.value = 'micro_breakout';
       m.value = 'tiny';
       d.value = 'both';
     }
@@ -13057,41 +13072,6 @@ function ldFmtPrice(p) {
       _rlSetStatus('Plan generated', _rlCurrentRunId);
     } catch (e) {
       alert('Plan Generation failed: ' + e.message);
-      _rlSetStatus('Error: ' + e.message, _rlCurrentRunId);
-    }
-  };
-
-  window.rlRunAutoPlan = async function() {
-    if (!_rlCurrentPlan || !_rlCurrentPlan.tests) { alert('Generate a plan first.'); return; }
-    
-    const selectedTests = [];
-    _rlCurrentPlan.tests.forEach((t, idx) => {
-      const chk = document.getElementById(`plan-chk-${idx}`);
-      if (chk && chk.checked) {
-        selectedTests.push(t);
-      }
-    });
-    
-    if (selectedTests.length === 0) { alert('No tests selected.'); return; }
-    
-    _rlSetStatus('Queuing selected auto-plan validation runs…', _rlCurrentRunId);
-    
-    try {
-      const res = await fetch('/api/research-lab/run-auto-plan', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          plan_id: _rlCurrentPlan.plan_id,
-          source_run_id: _rlCurrentRunId,
-          tests: selectedTests
-        })
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      
-      _rlSetStatus(`Queue started. Parent: ${_rlCurrentRunId} — Launched ${data.child_run_ids.length} validation runs.`, _rlCurrentRunId);
-    } catch (e) {
-      alert('Failed to launch plan tests: ' + e.message);
       _rlSetStatus('Error: ' + e.message, _rlCurrentRunId);
     }
   };
@@ -13483,24 +13463,59 @@ function ldFmtPrice(p) {
     }
   };
 
-  window.rlGenerateFollowUp = function(strat, tf, fam) {
-    console.log('[autopilot] generating follow up for', strat, tf, fam);
-    
-    const modeEl = document.getElementById('rl-mode');
-    if(modeEl) modeEl.value = 'medium'; 
-    
-    const symEl = document.getElementById('rl-symbols');
-    if(symEl) symEl.value = 'BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT, ADA/USDT, XRP/USDT, DOT/USDT, MATIC/USDT, LINK/USDT';
-    
-    const tfEl = document.getElementById('rl-timeframes');
-    if(tfEl) tfEl.value = tf;
-    
-    const stratEl = document.getElementById('rl-strategies');
-    if(stratEl) stratEl.value = strat;
-    
-    _rlSetStatus(`Follow-up plan formulated: Expanded symbol breadth and validation depth for ${strat}. Ready to execute new discovery sweep.`, _rlCurrentRunId);
-    
-    alert(`Follow-up plan loaded!\n\nStrategy: ${strat}\nAction: Validating across broader crypto symbols and wider date windows.\n\nSettings have been pre-filled. Click 'Run AI Discovery' to execute.`);
+  // Launch a focused follow-up run for a different family on the same TF
+  window.rlGenerateFollowUp = async function(strat, tf, fam) {
+    const _altMap = {
+      trend_momentum: ['pullback','mean_reversion'],
+      pullback: ['trend_momentum','breakout'],
+      breakout: ['mean_reversion','volatility'],
+      mean_reversion: ['volatility','pullback'],
+      volatility: ['engine_b_proxy','mean_reversion'],
+      engine_b_proxy: ['engine_d_proxy','breakout'],
+      engine_d_proxy: ['mean_reversion','breakout'],
+    };
+    const alts = _altMap[fam] || ['trend_momentum'];
+    const altFamily = alts[0];
+    _rlSetStatus(`Queuing follow-up: ${altFamily} on ${tf} (alternative to ${fam})…`, _rlCurrentRunId);
+    document.getElementById('rl-status').style.display = 'block';
+    try {
+      const payload = { mode: 'tiny', direction: 'both', run_ai_review: false,
+        families: [altFamily], timeframes: tf ? [tf] : undefined };
+      const res = await fetch('/api/research-lab/run', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      _rlCurrentRunId = data.run_id;
+      _rlSetStatus(`Follow-up started — testing ${altFamily}`, data.run_id);
+      _rlPollStatus(data.run_id);
+    } catch (e) {
+      _rlSetStatus('Error starting follow-up: ' + e.message, '');
+    }
+  };
+
+  // Launch a one-click alternative-family run (from the all-rejected banner)
+  window.rlTryAlternative = async function(altFamily) {
+    _rlSetStatus(`Queuing alternative run: ${altFamily}…`, '');
+    document.getElementById('rl-status').style.display = 'block';
+    document.getElementById('rl-results').style.display = 'none';
+    document.getElementById('rl-ai-panel').style.display = 'none';
+    try {
+      const payload = { mode: 'tiny', direction: 'both', run_ai_review: false,
+        families: [altFamily] };
+      const res = await fetch('/api/research-lab/run', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      _rlCurrentRunId = data.run_id;
+      _rlSetStatus(`Alternative run started — ${altFamily}`, data.run_id);
+      _rlPollStatus(data.run_id);
+    } catch (e) {
+      _rlSetStatus('Error: ' + e.message, '');
+    }
   };
 
 
@@ -13556,137 +13571,167 @@ function ldFmtPrice(p) {
     document.getElementById('rl-status').style.display = 'block';
     _rlSetStatus('Loading results…', runId);
 
-      let metaData = {};
-      try {
-        const metaRes = await fetch(`/api/research-lab/run/${runId}`);
-        metaData = await metaRes.json();
-        
-        const metaFileRes = await fetch(`/api/research-lab/download/${runId}/run_meta.json`);
-        if (metaFileRes.ok) {
-          const fileData = await metaFileRes.json();
-          metaData = { ...metaData, ...fileData };
-        }
-      } catch (e) {
-        console.warn('Metadata resolution fallback:', e);
+  try {
+    let metaData = {};
+    try {
+      const metaRes = await fetch(`/api/research-lab/run/${runId}`);
+      metaData = await metaRes.json();
+
+      const metaFileRes = await fetch(`/api/research-lab/download/${runId}/run_meta.json`);
+      if (metaFileRes.ok) {
+        const fileData = await metaFileRes.json();
+        metaData = { ...metaData, ...fileData };
       }
-      
-      const res  = await fetch(`/api/research-lab/ranked/${runId}`);
-      const data = await res.json();
-      const rows = data.ranked || [];
-
-      if (!rows.length) {
-        document.getElementById('rl-ranked-table').innerHTML = '<em style="opacity:.5">No ranked results yet.</em>';
-      } else {
-        const cols = ['strategy_name','symbol','timeframe','direction','status',
-                      'trade_count','win_rate','profit_factor','is_return','oos_return',
-                      'robustness_score','sqn','skip_reason','verdict'];
-        const th = '<th style="padding:5px 8px;opacity:.6">Select</th>' + cols.map(c => {
-          let label = c.toUpperCase().replace(/_/g, ' ');
-          if (c === 'profit_factor') label = 'PF';
-          if (c === 'is_return') label = 'IS RETURN';
-          if (c === 'oos_return') label = 'OOS RETURN';
-          return `<th style="padding:5px 8px;white-space:nowrap;opacity:.6">${label}</th>`;
-        }).join('');
-        const trs = rows.map((r, idx) => {
-          const statusColor = r.status === 'STRONG_CANDIDATE' ? '#6ee7b7'
-                            : r.status === 'WEAK_CANDIDATE'   ? '#fbbf24' : '#f87171';
-          const radio = `<input type="radio" name="rl-selected-candidate" data-symbol="${r.symbol || ''}" data-tf="${r.timeframe || ''}" data-family="${r.family_name || r.family || ''}" data-strategy="${r.strategy_name || ''}" data-direction="${r.direction || ''}">`;
-          return '<tr>' + `<td style="padding:4px 8px;border-top:1px solid #1a2535;text-align:center;">${radio}</td>` + cols.map(c => {
-            let v = r[c] ?? '';
-            if (c === 'status') v = `<span style="color:${statusColor}">${v}</span>`;
-            if (c === 'verdict') {
-              const isConfirmed = r.status === 'STRONG_CANDIDATE' || r.status === 'WEAK_CANDIDATE';
-              v = isConfirmed ? '<span style="color:#6ee7b7">CONFIRMS</span>' : '<span style="color:#f87171">REJECTS</span>';
-            }
-            if (typeof v === 'number') v = v.toFixed ? v.toFixed(4) : v;
-            return `<td style="padding:4px 8px;border-top:1px solid #1a2535">${v}</td>`;
-          }).join('') + '</tr>';
-        }).join('');
-        
-        let styleProfileHtml = '';
-        if (metaData.trading_style) {
-          const style = metaData.trading_style;
-          const zoneSet = metaData.zone_set || '';
-          const focus = metaData.validation_focus || [];
-          const mGroup = metaData.market_group || '';
-          const focusTags = (focus || []).map(f => `<span style="background:#1e3a8a; color:#93c5fd; padding:3px 8px; border-radius:4px; font-size:.7rem; border:1px solid #3b82f6;">${f}</span>`).join(' ');
-          
-          styleProfileHtml = `
-            <div style="background:linear-gradient(135deg, #0f172a, #1e1b4b); border:1px solid #581c87; padding:16px; border-radius:10px; margin-bottom:16px;">
-              <div style="font-size:1.05rem; font-weight:700; color:#c084fc; display:flex; align-items:center; gap:8px; margin-bottom:10px;">
-                🌌 ${style.toUpperCase()} Style Context Profile
-              </div>
-              <div style="display:grid; grid-template-columns: 1fr 2fr; gap:12px; font-size:.8rem;">
-                <div style="background:rgba(0,0,0,0.2); padding:10px; border-radius:6px; border:1px solid #334155;">
-                  <strong>Market Group:</strong> <span style="color:#e2e8f0; margin-left:4px;">${mGroup.toUpperCase()}</span><br/>
-                  <strong>Zone Set:</strong> <span style="color:#fb923c; margin-left:4px;">${zoneSet}</span><br/>
-                  <strong>Timeframes:</strong> <span style="color:#38bdf8; margin-left:4px;">${(metaData.timeframes || []).join(', ')}</span>
-                </div>
-                <div style="background:rgba(0,0,0,0.2); padding:10px; border-radius:6px; border:1px solid #334155;">
-                  <strong style="display:block; margin-bottom:6px; opacity:.8;">Focus Metrics & Objectives:</strong>
-                  <div style="display:flex; flex-wrap:wrap; gap:6px;">${focusTags || '<span style="opacity:.5">N/A</span>'}</div>
-                </div>
-              </div>
-            </div>
-          `;
-        }
-
-        let childVerdictHtml = '';
-        if (metaData.parent_run_id) {
-          let confirmedCount = 0, weakenedCount = 0, rejectedCount = 0, needsMoreCount = 0;
-          rows.forEach(r => {
-            if (r.status === 'STRONG_CANDIDATE') confirmedCount++;
-            else if (r.status === 'WEAK_CANDIDATE') weakenedCount++;
-            else if (r.status === 'REJECT') rejectedCount++;
-            else if (r.status === 'NEEDS_MORE_DATA') needsMoreCount++;
-          });
-          const overallChildVerdict = confirmedCount > 0 ? '<span style="color:#6ee7b7">CONFIRMED</span>' 
-                                    : weakenedCount > 0 ? '<span style="color:#fbbf24">WEAKENED</span>' 
-                                    : '<span style="color:#f87171">REJECTED</span>';
-                                    
-          childVerdictHtml = `
-            <div style="background:#0f172a; border:1px solid #334155; padding:12px; border-radius:8px; margin-bottom:12px; font-size:.8rem">
-              <div style="font-weight: 600; color:#38bdf8; margin-bottom: 6px;">🛡️ Autopilot Validation Verdict: ${overallChildVerdict}</div>
-              <div style="font-size:.75rem; opacity:.8; display:flex; gap:12px;">
-                <span><strong>Parent ID:</strong> ${metaData.parent_run_id}</span>
-                <span style="color:#6ee7b7">Confirmed: ${confirmedCount}</span>
-                <span style="color:#fbbf24">Weakened: ${weakenedCount}</span>
-                <span style="color:#f87171">Rejected: ${rejectedCount}</span>
-                <span style="opacity:.6">Needs More: ${needsMoreCount}</span>
-              </div>
-            </div>
-          `;
-        }
-
-        document.getElementById('rl-ranked-table').innerHTML = styleProfileHtml + childVerdictHtml +
-
-          `<table style="border-collapse:collapse;width:100%"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`;
-      }
-
-      document.getElementById('rl-results').style.display = 'block';
-      // Only show download / AI buttons when the run actually produced files
-      const hasFiles = rows.length > 0 && !data.note;
-      document.getElementById('rl-validate-btn').style.display = hasFiles ? 'inline-block' : 'none';
-      document.getElementById('rl-ai-btn').style.display = hasFiles ? 'inline-block' : 'none';
-      document.getElementById('rl-report-link').style.display = hasFiles ? 'inline' : 'none';
-      
-      // AI Research Plan container activation
-      const planPanel = document.getElementById('rl-plan-panel');
-      if (planPanel) planPanel.style.display = hasFiles ? 'block' : 'none';
-
-      if (hasFiles) {
-        document.getElementById('rl-report-link').href =
-          `/api/research-lab/download/${runId}/research_report.md`;
-      }
-      _rlSetStatus(hasFiles ? 'Loaded' : 'Complete — no ranked results (all data unavailable or < min trades)', runId);
-
-      // Try to load existing AI review only if files exist
-      if (hasFiles) window.rlLoadAiReview(runId);
-
     } catch (e) {
-      _rlSetStatus('Error: ' + e.message, runId);
+      console.warn('Metadata resolution fallback:', e);
     }
-  };
+
+  const res  = await fetch(`/api/research-lab/ranked/${runId}`);
+  const data = await res.json();
+  const rows = data.ranked || [];
+
+  if (!rows.length) {
+    document.getElementById('rl-ranked-table').innerHTML = '<em style="opacity:.5">No ranked results yet.</em>';
+  } else {
+    const cols = ['strategy_name','symbol','timeframe','direction','status',
+                  'trade_count','win_rate','profit_factor','is_return','oos_return',
+                  'robustness_score','sqn','skip_reason','verdict'];
+    const th = '<th style="padding:5px 8px;opacity:.6">Select</th>' + cols.map(c => {
+      let label = c.toUpperCase().replace(/_/g, ' ');
+      if (c === 'profit_factor') label = 'PF';
+      if (c === 'is_return') label = 'IS RETURN';
+      if (c === 'oos_return') label = 'OOS RETURN';
+      return `<th style="padding:5px 8px;white-space:nowrap;opacity:.6">${label}</th>`;
+    }).join('');
+    const trs = rows.map((r, idx) => {
+      const statusColor = r.status === 'STRONG_CANDIDATE' ? '#6ee7b7'
+                        : r.status === 'WEAK_CANDIDATE'   ? '#fbbf24' : '#f87171';
+      const radio = `<input type="radio" name="rl-selected-candidate" data-symbol="${r.symbol || ''}" data-tf="${r.timeframe || ''}" data-family="${r.family_name || r.family || ''}" data-strategy="${r.strategy_name || ''}" data-direction="${r.direction || ''}">`;
+      return '<tr>' + `<td style="padding:4px 8px;border-top:1px solid #1a2535;text-align:center;">${radio}</td>` + cols.map(c => {
+        let v = r[c] ?? '';
+        if (c === 'status') v = `<span style="color:${statusColor}">${v}</span>`;
+        if (c === 'verdict') {
+          const isConfirmed = r.status === 'STRONG_CANDIDATE' || r.status === 'WEAK_CANDIDATE';
+          v = isConfirmed ? '<span style="color:#6ee7b7">CONFIRMS</span>' : '<span style="color:#f87171">REJECTS</span>';
+        }
+        if (typeof v === 'number') v = v.toFixed ? v.toFixed(4) : v;
+        return `<td style="padding:4px 8px;border-top:1px solid #1a2535">${v}</td>`;
+      }).join('') + '</tr>';
+    }).join('');
+
+    let styleProfileHtml = '';
+    if (metaData.trading_style) {
+      const style = metaData.trading_style;
+      const zoneSet = metaData.zone_set || '';
+      const focus = metaData.validation_focus || [];
+      const mGroup = metaData.market_group || '';
+      const focusTags = (focus || []).map(f => `<span style="background:#1e3a8a; color:#93c5fd; padding:3px 8px; border-radius:4px; font-size:.7rem; border:1px solid #3b82f6;">${f}</span>`).join(' ');
+
+      styleProfileHtml = `
+        <div style="background:linear-gradient(135deg, #0f172a, #1e1b4b); border:1px solid #581c87; padding:16px; border-radius:10px; margin-bottom:16px;">
+          <div style="font-size:1.05rem; font-weight:700; color:#c084fc; display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+            🌌 ${style.toUpperCase()} Style Context Profile
+          </div>
+          <div style="display:grid; grid-template-columns: 1fr 2fr; gap:12px; font-size:.8rem;">
+            <div style="background:rgba(0,0,0,0.2); padding:10px; border-radius:6px; border:1px solid #334155;">
+              <strong>Market Group:</strong> <span style="color:#e2e8f0; margin-left:4px;">${mGroup.toUpperCase()}</span><br/>
+              <strong>Zone Set:</strong> <span style="color:#fb923c; margin-left:4px;">${zoneSet}</span><br/>
+              <strong>Timeframes:</strong> <span style="color:#38bdf8; margin-left:4px;">${(metaData.timeframes || []).join(', ')}</span>
+            </div>
+            <div style="background:rgba(0,0,0,0.2); padding:10px; border-radius:6px; border:1px solid #334155;">
+              <strong style="display:block; margin-bottom:6px; opacity:.8;">Focus Metrics & Objectives:</strong>
+              <div style="display:flex; flex-wrap:wrap; gap:6px;">${focusTags || '<span style="opacity:.5">N/A</span>'}</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    let childVerdictHtml = '';
+    if (metaData.parent_run_id) {
+      let confirmedCount = 0, weakenedCount = 0, rejectedCount = 0, needsMoreCount = 0;
+      rows.forEach(r => {
+        if (r.status === 'STRONG_CANDIDATE') confirmedCount++;
+        else if (r.status === 'WEAK_CANDIDATE') weakenedCount++;
+        else if (r.status === 'REJECT') rejectedCount++;
+        else if (r.status === 'NEEDS_MORE_DATA') needsMoreCount++;
+      });
+      const overallChildVerdict = confirmedCount > 0 ? '<span style="color:#6ee7b7">CONFIRMED</span>'
+                                : weakenedCount > 0 ? '<span style="color:#fbbf24">WEAKENED</span>'
+                                : '<span style="color:#f87171">REJECTED</span>';
+
+      childVerdictHtml = `
+        <div style="background:#0f172a; border:1px solid #334155; padding:12px; border-radius:8px; margin-bottom:12px; font-size:.8rem">
+          <div style="font-weight: 600; color:#38bdf8; margin-bottom: 6px;">🛡️ Autopilot Validation Verdict: ${overallChildVerdict}</div>
+          <div style="font-size:.75rem; opacity:.8; display:flex; gap:12px;">
+            <span><strong>Parent ID:</strong> ${metaData.parent_run_id}</span>
+            <span style="color:#6ee7b7">Confirmed: ${confirmedCount}</span>
+            <span style="color:#fbbf24">Weakened: ${weakenedCount}</span>
+            <span style="color:#f87171">Rejected: ${rejectedCount}</span>
+            <span style="opacity:.6">Needs More: ${needsMoreCount}</span>
+          </div>
+        </div>
+      `;
+    }
+
+    document.getElementById('rl-ranked-table').innerHTML = styleProfileHtml + childVerdictHtml +
+      `<table style="border-collapse:collapse;width:100%"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`;
+
+    // If every result is REJECT or NEEDS_MORE_DATA, show the adaptive pivot banner
+    const _allRejected = rows.length > 0 && rows.every(r => r.status === 'REJECT' || r.status === 'NEEDS_MORE_DATA');
+    if (_allRejected) {
+      const _detectedFam = rows[0] && (rows[0].family_name || rows[0].family || '');
+      const _altMap = {
+        trend_momentum: ['pullback','mean_reversion'],
+        pullback: ['trend_momentum','breakout'],
+        breakout: ['mean_reversion','volatility'],
+        mean_reversion: ['volatility','pullback'],
+        volatility: ['engine_b_proxy','mean_reversion'],
+        engine_b_proxy: ['engine_d_proxy','breakout'],
+        engine_d_proxy: ['mean_reversion','breakout'],
+      };
+      const _alts = (_altMap[_detectedFam] || ['trend_momentum','mean_reversion']);
+      const _altBtns = _alts.map(f =>
+        `<button onclick="rlTryAlternative('${f}')" style="background:#1e3a2a;color:#6ee7b7;border:1px solid #065f46;padding:6px 12px;border-radius:5px;cursor:pointer;font-size:.77rem;font-weight:600">${f.replace(/_/g,' ')}</button>`
+      ).join('');
+      const _banner = document.createElement('div');
+      _banner.innerHTML = `<div style="background:#1c1917;border:1px solid #78350f;border-radius:8px;padding:14px;margin-top:14px;">
+        <div style="font-size:.85rem;font-weight:700;color:#fb923c;margin-bottom:8px;">⚠️ No profitable strategies found — try an alternative approach</div>
+        <div style="font-size:.77rem;opacity:.75;margin-bottom:10px;">All tested configurations were rejected or produced insufficient trades. The autopilot planner can suggest a different family — or pick one below to run now.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <span style="font-size:.74rem;opacity:.55;margin-right:4px;">Try instead:</span>
+          ${_altBtns}
+          <button onclick="rlGeneratePlan()" style="background:#1e293b;color:#38bdf8;border:1px solid #1e40af;padding:6px 12px;border-radius:5px;cursor:pointer;font-size:.77rem;margin-left:8px;">💡 Generate AI Plan</button>
+        </div>
+      </div>`;
+      document.getElementById('rl-ranked-table').appendChild(_banner.firstElementChild);
+    }
+  }
+
+  document.getElementById('rl-results').style.display = 'block';
+  // Only show download / AI buttons when the run actually produced files
+  const hasFiles = rows.length > 0 && !data.note;
+  document.getElementById('rl-validate-btn').style.display = hasFiles ? 'inline-block' : 'none';
+  document.getElementById('rl-ai-btn').style.display = hasFiles ? 'inline-block' : 'none';
+  document.getElementById('rl-report-link').style.display = hasFiles ? 'inline' : 'none';
+
+  // AI Research Plan container activation
+  const planPanel = document.getElementById('rl-plan-panel');
+  if (planPanel) planPanel.style.display = hasFiles ? 'block' : 'none';
+
+  if (hasFiles) {
+    document.getElementById('rl-report-link').href =
+      `/api/research-lab/download/${runId}/research_report.md`;
+  }
+  _rlSetStatus(hasFiles ? 'Loaded' : 'Complete — no ranked results (all data unavailable or < min trades)', runId);
+
+  // Try to load existing AI review only if files exist
+  if (hasFiles) window.rlLoadAiReview(runId);
+
+  } catch (e) {
+    _rlSetStatus('Error: ' + e.message, runId);
+  }
+};
 
   // ── Run AI review ──────────────────────────────────────────────────────────
   window.rlRunAiReview = async function() {
@@ -13745,9 +13790,67 @@ function ldFmtPrice(p) {
           ${_rlEngineSection('Next tests', eng.next_tests, '#fbbf24')}
         </div>`).join('');
 
+      // Next tiny test recommendation with one-click run
+      const ntDiv = document.getElementById('rl-ai-next-test');
+      const nt = ap.next_tiny_test || {};
+      const doNot = (ap.do_not_do_next || []).slice(0, 3);
+      window._rlNextTestRec = nt;   // stored so onclick can reference without serialising into attr
+      if (nt.strategy_families || nt.symbols) {
+        const ntSyms = (nt.symbols || []).join(', ') || 'auto';
+        const ntTfs  = (nt.timeframes || []).join(', ') || 'H1,H4';
+        const ntFams = (nt.strategy_families || []).join(', ') || 'trend_momentum';
+        const reasonHtml = nt.reason
+          ? '<div style="font-size:.73rem;opacity:.7;margin-bottom:10px">' + nt.reason + '</div>'
+          : '';
+        const doNotHtml = doNot.length
+          ? '<div style="font-size:.73rem;color:#f87171;margin-bottom:10px"><strong>Avoid:</strong> ' + doNot.join(' \xb7 ') + '</div>'
+          : '';
+        ntDiv.innerHTML =
+          '<div style="background:#0f1c2e;border:1px solid #1e3a5f;border-radius:8px;padding:12px">' +
+          '<div style="font-size:.78rem;font-weight:700;color:#38bdf8;margin-bottom:8px">🎯 AI Recommended Next Test</div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:.75rem;margin-bottom:10px">' +
+            '<div><span style="opacity:.5">Symbols:</span><br><strong>' + ntSyms + '</strong></div>' +
+            '<div><span style="opacity:.5">Timeframes:</span><br><strong>' + ntTfs + '</strong></div>' +
+            '<div><span style="opacity:.5">Families:</span><br><strong>' + ntFams + '</strong></div>' +
+          '</div>' +
+          reasonHtml + doNotHtml +
+          '<button onclick="rlRunAiRecommendation(window._rlNextTestRec)" style="background:linear-gradient(135deg,#0369a1,#0284c7);color:#fff;border:none;padding:6px 14px;border-radius:5px;cursor:pointer;font-size:.78rem;font-weight:600">▶ Run This Recommendation</button>' +
+          '</div>';
+      } else {
+        ntDiv.innerHTML = '';
+      }
+
       // Full review text
       document.getElementById('rl-ai-raw').textContent = data.review_md || '(empty)';
     } catch (_) {}
+  };
+
+  // Run the AI's next-test recommendation directly
+  window.rlRunAiRecommendation = async function(nt) {
+    const syms = Array.isArray(nt.symbols) && nt.symbols.length ? nt.symbols : undefined;
+    const tfs   = Array.isArray(nt.timeframes) && nt.timeframes.length ? nt.timeframes : undefined;
+    const fams  = Array.isArray(nt.strategy_families) && nt.strategy_families.length ? nt.strategy_families : undefined;
+    _rlSetStatus('Queuing AI-recommended run…', '');
+    document.getElementById('rl-status').style.display = 'block';
+    document.getElementById('rl-results').style.display = 'none';
+    document.getElementById('rl-ai-panel').style.display = 'none';
+    try {
+      const payload = { mode: 'tiny', direction: 'both', run_ai_review: false };
+      if (syms) payload.symbols = syms;
+      if (tfs)  payload.timeframes = tfs;
+      if (fams) payload.families = fams;
+      const res = await fetch('/api/research-lab/run', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      _rlCurrentRunId = data.run_id;
+      _rlSetStatus(`AI recommendation run started`, data.run_id);
+      _rlPollStatus(data.run_id);
+    } catch (e) {
+      _rlSetStatus('Error: ' + e.message, '');
+    }
   };
 
   function _rlEngineSection(label, items, color) {
@@ -13762,9 +13865,6 @@ function ldFmtPrice(p) {
     document.getElementById('rl-status-text').textContent = text;
     document.getElementById('rl-run-id').textContent = runId ? `Run: ${runId}` : '';
   }
-
-  // Initial load
-  window.rlLoadRuns();
 
 })();
 </script>

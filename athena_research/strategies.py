@@ -165,7 +165,7 @@ def strategy_ema_cross(df: pd.DataFrame, params: dict) -> dict:
 
 
 def strategy_ema_alignment(df: pd.DataFrame, params: dict) -> dict:
-    """EMA stack alignment continuation (short/mid/long all in order)."""
+    """EMA stack alignment — enter on pullback to short EMA during aligned state."""
     close = df["close"]
     s = int(params.get("ema_short", 20))
     m = int(params.get("ema_mid", 50))
@@ -174,19 +174,24 @@ def strategy_ema_alignment(df: pd.DataFrame, params: dict) -> dict:
 
     es, em, el = _ema(close, s), _ema(close, m), _ema(close, l)
 
-    bullish = (es > em) & (em > el) & (~((es > em) & (em > el)).shift(1).fillna(False))
-    bearish = (es < em) & (em < el) & (~((es < em) & (em < el)).shift(1).fillna(False))
+    # Alignment state (persistent, not transition-only)
+    bullish_aligned = (es > em) & (em > el)
+    bearish_aligned = (es < em) & (em < el)
 
-    long_exits = _crossed_below(es, em)
-    short_exits = _crossed_above(es, em)
+    # Entry: aligned + pullback touch of short EMA
+    bull_entry = bullish_aligned & (df["low"] <= es) & (close > es)
+    bear_entry = bearish_aligned & (df["high"] >= es) & (close < es)
+
+    long_exits = _crossed_below(close, em)
+    short_exits = _crossed_above(close, em)
 
     if adx_min > 0:
         adx = _adx(df["high"], df["low"], close)
         adx_ok = adx >= adx_min
-        bullish &= adx_ok
-        bearish &= adx_ok
+        bull_entry &= adx_ok
+        bear_entry &= adx_ok
 
-    return _signals(bullish, long_exits, bearish, short_exits,
+    return _signals(bull_entry, long_exits, bear_entry, short_exits,
                     meta={"family": "trend_momentum", "sub": "ema_alignment"})
 
 
@@ -259,13 +264,14 @@ def strategy_prev_day_hl(df: pd.DataFrame, params: dict) -> dict:
     close = df["close"]
     atr_min = float(params.get("atr_expand_min", 0.0))
 
-    # Resample to daily to get prior-day high/low, then forward-fill
+    # Resample actual high/low (not the close series) to get prior-day levels
     try:
-        daily = df["close"].resample("1D").ohlc()
-        prev_high = daily["high"].shift(1).reindex(df.index).ffill()
-        prev_low = daily["low"].shift(1).reindex(df.index).ffill()
+        daily_high = df["high"].resample("1D").max()
+        daily_low = df["low"].resample("1D").min()
+        prev_high = daily_high.shift(1).reindex(df.index, method="ffill")
+        prev_low = daily_low.shift(1).reindex(df.index, method="ffill")
     except Exception:
-        # If resampling fails (e.g. no datetime index), use rolling 24-bar proxy
+        # Fallback for non-datetime index: rolling 24-bar proxy
         n = 24
         prev_high = df["high"].rolling(n).max().shift(1)
         prev_low = df["low"].rolling(n).min().shift(1)
@@ -320,16 +326,20 @@ def strategy_london_breakout(df: pd.DataFrame, params: dict) -> dict:
     atr_min = float(params.get("atr_expand_min", 0.0))
     close = df["close"]
 
+    # Guard: session strategies require sub-daily data
+    if not hasattr(df.index, "hour"):
+        return _signals(idx=df.index, meta={"skip": "session_strategy_requires_intraday_data"})
+    if pd.Series(df.index.hour).nunique() <= 1:
+        return _signals(idx=df.index, meta={"skip": "session_strategy_requires_intraday_data"})
+
     # Asian range: bars before utc_start in same session day (proxy: rolling 8 bars)
     asian_high = df["high"].rolling(8).max().shift(1)
     asian_low = df["low"].rolling(8).min().shift(1)
 
-    in_window = pd.Series(False, index=df.index)
-    if hasattr(df.index, "hour"):
-        in_window = pd.Series(
-            (df.index.hour >= utc_start) & (df.index.hour < utc_end),
-            index=df.index
-        )
+    in_window = pd.Series(
+        (df.index.hour >= utc_start) & (df.index.hour < utc_end),
+        index=df.index
+    )
 
     long_entries = in_window & _crossed_above(close, asian_high)
     long_exits = close < asian_low
@@ -354,15 +364,19 @@ def strategy_ny_breakout(df: pd.DataFrame, params: dict) -> dict:
     atr_min = float(params.get("atr_expand_min", 0.0))
     close = df["close"]
 
+    # Guard: session strategies require sub-daily data
+    if not hasattr(df.index, "hour"):
+        return _signals(idx=df.index, meta={"skip": "session_strategy_requires_intraday_data"})
+    if pd.Series(df.index.hour).nunique() <= 1:
+        return _signals(idx=df.index, meta={"skip": "session_strategy_requires_intraday_data"})
+
     pre_session_high = df["high"].rolling(8).max().shift(1)
     pre_session_low = df["low"].rolling(8).min().shift(1)
 
-    in_window = pd.Series(False, index=df.index)
-    if hasattr(df.index, "hour"):
-        in_window = pd.Series(
-            (df.index.hour >= utc_start) & (df.index.hour < utc_end),
-            index=df.index
-        )
+    in_window = pd.Series(
+        (df.index.hour >= utc_start) & (df.index.hour < utc_end),
+        index=df.index
+    )
 
     long_entries = in_window & _crossed_above(close, pre_session_high)
     long_exits = close < pre_session_low
