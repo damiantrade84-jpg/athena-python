@@ -10541,10 +10541,36 @@ def api_live_feed_diagnostics():
         check_live_candle_consistency,
     )
     from athena_app.services.engine_b_market_state import engine_b_live_market_state
-    from athena_app.services.market_state import get_tf_market_state
+    from athena_app.services.market_state import get_tf_market_state, market_state_offset_hours
+
+    def _last_n_candle_opens(ser, n: int = 5) -> list[str]:
+        """Open-time strings for the last n candles (MT5 H4 bar grid visibility)."""
+        if not ser or not isinstance(ser, list):
+            return []
+        from datetime import datetime, timezone
+
+        out: list[str] = []
+        for c in ser[-n:]:
+            if not isinstance(c, dict):
+                continue
+            t = c.get("time", c.get("datetime"))
+            if t is None:
+                continue
+            if isinstance(t, (int, float)):
+                e = int(t / 1000) if t > 1e12 else int(t)
+                out.append(
+                    datetime.fromtimestamp(e, tz=timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                )
+            else:
+                out.append(str(t))
+        return out
 
     rows = []
     generated_at = datetime.now(timezone.utc).isoformat()
+    _off = float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 1.0) or 1.0)
+    _tnow = time.time()
     for pair in pairs:
         limits = scan_candle_limits(pair)
         for tf in timeframes:
@@ -10567,6 +10593,7 @@ def api_live_feed_diagnostics():
                 source=meta.get("upstream") or pair.get("source"),
                 fetch_duration_ms=duration_ms,
                 provider_error=provider_error,
+                time_now=_tnow,
             )
 
             state_a = get_tf_market_state(pair, tf_u, candles=candles or [])
@@ -10596,7 +10623,24 @@ def api_live_feed_diagnostics():
                     "scanner": scanner_input,
                     "compare": scanner_input,
                 },
+                time_now=_tnow,
             )
+            if tf_u == "H4" and pair.get("source") == "mt5":
+                diag["mt5H4Diagnostics"] = {
+                    "forexH4ResampleOffsetHours": _off,
+                    "marketStateOffsetHours": float(
+                        market_state_offset_hours(pair, "H4")
+                    ),
+                    "fetchMetaOffsetHours": meta.get("offsetHours"),
+                    "last5BarOpenIso": _last_n_candle_opens(candles or []),
+                    "expectedCurrentBucketIso": diag.get("expectedCurrentBucketIso"),
+                    "lastBarIso": diag.get("lastBarIso"),
+                    "stalenessSeverity": diag.get("stalenessSeverity"),
+                    "bucketLag": diag.get("bucketLag"),
+                    "resolution": meta.get("resolution"),
+                    "upstream": meta.get("upstream"),
+                    "cacheBypass": bool(meta.get("cacheBypass") or meta.get("cacheWriteSkipped")),
+                }
             rows.append(diag)
 
             if pair.get("type") == "crypto" and tf_u in {"H1", "H4", "D1"}:
@@ -10635,6 +10679,13 @@ def api_live_feed_diagnostics():
                 "count": len(rows),
                 "diagnostics": rows,
                 "tradesPlaced": 0,
+                "forexH4ResampleOffsetHours": float(
+                    CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 1.0) or 1.0
+                ),
+                "mt5H4OffsetNote": (
+                    "FOREX_H4_RESAMPLE_OFFSET_HOURS drives MT5 H4 (non-stock) bar grid in "
+                    "market_state; US stocks H4 use 3h offset. Prove grid with tools/probe_mt5_h4.py"
+                ),
             }
         )
     )
@@ -11723,7 +11774,14 @@ def analyze_pair(
         for tf_u in ("H4", "H1", "D1"):
             state = preloaded_market_state.get(tf_u) if preloaded_market_state else None
             if not state:
-                continue
+                tf_candles_for_state = {"H4": h4, "H1": h1, "D1": d1}.get(tf_u, [])
+                state = split_market_state(
+                    list(tf_candles_for_state or []),
+                    tf_u,
+                    pair.get("display") or pair.get("symbol") or "",
+                    time_now=time_now,
+                    offset_hours=market_state_offset_hours(pair, tf_u),
+                )
             # Build engine input paths for consistency check
             if pair.get("source") == "mt5" and pair.get("type") == "forex":
                 engine_a_input = list(state.get("confirmed") or [])
@@ -11737,18 +11795,22 @@ def analyze_pair(
             # Get raw candles for this timeframe
             tf_candles = {"H4": h4, "H1": h1, "D1": d1}.get(tf_u, [])
             
+            consistency_paths = {
+                "raw_provider": tf_candles or [],
+                "market_state": state,
+                "engine_a": engine_a_input,
+                "engine_b": engine_b_input,
+                "scanner": scanner_input,
+                "compare": scanner_input,
+            }
+            cache_meta = _candle_fetch_meta.get(tf_u)
+            if isinstance(cache_meta, dict) and cache_meta:
+                consistency_paths["cache"] = cache_meta
+
             consistency_result = check_live_candle_consistency(
                 pair,
                 tf_u,
-                {
-                    "raw_provider": tf_candles or [],
-                    "cache": _candle_fetch_meta.get(tf_u, {}),
-                    "market_state": state,
-                    "engine_a": engine_a_input,
-                    "engine_b": engine_b_input,
-                    "scanner": scanner_input,
-                    "compare": scanner_input,
-                },
+                consistency_paths,
                 time_now=time_now,
             )
             if consistency_result:

@@ -74,7 +74,9 @@ THRESHOLD_AUDIT:
       - current_minus_5pct
       - current_minus_10pct
 
-FOREX_H4_RESAMPLE_OFFSET_HOURS: 1   # EURAUD/TradingView-aligned forex H4 grid: 01/05/09/13/17/21 UTC
+# Proven MT5 forex H4 open grid on this account: 01/05/09/13/17/21 UTC (1h offset).
+# Do not guess: validate with `python tools/probe_mt5_h4.py` on your broker/account server.
+FOREX_H4_RESAMPLE_OFFSET_HOURS: 1.0
 
 BINANCE_KLINE_WS_INTERVALS:
   - "1m"
@@ -640,9 +642,6 @@ SIGNAL_MAX_AGE_SEC: 300       # 5 min freshness window
 FOREX_SESSION_FILTER: true    # true = London+NY+Asian only; false = 24h (disable for testing)
 
 SERVER_TZ_OFFSET_HOURS: 2    # Your local timezone UTC offset — SAST = 2 (GMT+2)
-
-FOREX_H4_RESAMPLE_OFFSET_HOURS: 2.0  # Align H4 grid to 02/06/10/14/18/22 UTC (matches Pepperstone MT5 broker actual grid)
-
 
 
 # Forex scoring engine (merged into CONFIG["FOREX_ENGINE"] — see config.py for full defaults)

@@ -12,6 +12,7 @@ import time
 from typing import Any, Callable
 
 from config import CONFIG
+from athena_app.services.market_state import market_state_offset_hours
 
 log = logging.getLogger("sentinel")
 
@@ -127,6 +128,7 @@ def _annotate_fetch_meta_with_bar_freshness(
             age_sec > (2 * tf_seconds)
             or (live_feed and not has_current_bucket)
         )
+    fetch_meta["offsetHours"] = float(offset_hours or 0.0)
     return fetch_meta
 
 
@@ -147,11 +149,11 @@ def extract_candles(resp) -> list | None:
 
 
 def forex_h4_resample_offset_hours() -> float:
-    """Project-configured H4 bucket offset for forex feeds."""
+    """H4 bucket offset (hours) for H1→H4 resampling — must match `market_state` / MT5 grid."""
     try:
-        return float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 0.0) or 0.0)
+        return float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 1.0) or 1.0)
     except (TypeError, ValueError):
-        return 0.0
+        return 1.0
 
 
 def resample_from_h1(
@@ -458,10 +460,10 @@ def fetch_candles(
         "cacheHit": False,
     }
     ptype = str(pair.get("type") or "").lower()
+    # Must match `candle_freshness_diagnostic` / `market_state_offset_hours` for all MT5 H4
+    # (forex, metals, commodities, indices, stocks — stocks use 3h session offset).
     offset_hours = (
-        forex_h4_resample_offset_hours()
-        if ptype == "forex" and tf == "H4"
-        else 0.0
+        market_state_offset_hours(pair, tf) if (pair.get("source") == "mt5" and tf == "H4") else 0.0
     )
     is_live_forex_crypto = ptype in {"forex", "crypto"}
     bypass_ttl_cache = ptype in {"forex", "crypto"}

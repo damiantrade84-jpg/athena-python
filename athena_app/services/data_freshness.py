@@ -263,8 +263,18 @@ def check_live_candle_consistency(
                 else:
                     policy_status = "POLICY_LAG"
             elif policy == "CONFIRMED_ONLY":
-                # Should have confirmed candle at raw_current - 1 bucket
-                if confirmed_epoch and raw_current_epoch:
+                # Confirmed-only feeds/engines may only expose the latest closed bucket.
+                # Classify that as OK when it matches the expected confirmed bucket,
+                # even if the raw provider did not include the current forming bucket.
+                expected_confirmed = expected_confirmed_bucket
+                if confirmed_epoch and expected_confirmed:
+                    if confirmed_epoch == expected_confirmed:
+                        policy_status = "POLICY_OK"
+                    elif confirmed_epoch < expected_confirmed:
+                        policy_status = "POLICY_LAG"
+                    else:
+                        policy_status = "POLICY_MISMATCH"
+                elif confirmed_epoch and raw_current_epoch:
                     expected_confirmed = raw_current_epoch - _timeframe_seconds(tf)
                     if confirmed_epoch == expected_confirmed:
                         policy_status = "POLICY_OK"
@@ -272,7 +282,7 @@ def check_live_candle_consistency(
                         policy_status = "POLICY_LAG"
                     else:
                         policy_status = "POLICY_MISMATCH"
-                elif bucket_lag == 1 and raw_has_current:
+                elif bucket_lag == 1:
                     policy_status = "POLICY_OK"
                 else:
                     policy_status = "POLICY_LAG"
@@ -328,11 +338,11 @@ def check_live_candle_consistency(
             for ep in engine_paths.values()
         )
         
-        if all_policy_ok and raw_has_current:
+        if all_policy_ok and engine_paths:
             # This is intentional confirmed-only behavior
             return {
                 "status": "CONFIRMED_ONLY_OK",
-                "reason": "engine paths use confirmed-only policy (intentional one-bucket lag behind raw forming)",
+                "reason": "engine paths use confirmed-only policy (intentional one-bucket lag behind current/forming bucket)",
                 "paths": diagnostics,
                 "enginePolicies": engine_paths,
             }

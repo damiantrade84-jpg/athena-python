@@ -84,7 +84,7 @@ def market_state_offset_hours(pair: dict[str, Any] | None, tf: str) -> float:
     """Return the bucket offset for this pair/timeframe market-state split.
     
     Offset rules:
-    - MT5 forex/metals/commodities/indices: 2h offset (02/06/10/14/18/22 UTC grid)
+    - MT5 non-stock H4 grid: configured by FOREX_H4_RESAMPLE_OFFSET_HOURS
     - MT5 stocks: 3h offset (15/19 UTC grid for US exchange session)
     - Crypto (Binance): 0h offset (24/7 UTC grid)
     """
@@ -103,11 +103,11 @@ def market_state_offset_hours(pair: dict[str, Any] | None, tf: str) -> float:
     if asset_type == "stock":
         return 3.0
     
-    # Forex, metals, commodities, indices use broker grid (2h offset)
+    # Forex, metals, commodities, indices use the configured broker H4 grid.
     try:
-        return float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 2.0) or 2.0)
+        return float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 1.0) or 1.0)
     except (TypeError, ValueError):
-        return 2.0
+        return 1.0
 
 
 def split_market_state(

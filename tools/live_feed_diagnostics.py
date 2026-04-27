@@ -132,6 +132,7 @@ def main():
     # Collect diagnostics
     rows = []
     generated_at = datetime.now(tz.utc).isoformat()
+    _off = float(config.CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 1.0) or 1.0)
     
     for pair in pairs:
         for tf_u in timeframes:
@@ -200,6 +201,11 @@ def main():
         "count": len(rows),
         "diagnostics": rows,
         "tradesPlaced": 0,
+        "forexH4ResampleOffsetHours": _off,
+        "mt5H4OffsetNote": (
+            "FOREX_H4_RESAMPLE_OFFSET_HOURS drives MT5 H4 bar grid in market_state; "
+            "prove with tools/probe_mt5_h4.py"
+        ),
     }
 
     if args.json_output:

@@ -9,6 +9,30 @@ import logging
 
 log = logging.getLogger("sentinel")
 
+
+def scan_duplicate_top_level_yaml_keys(yaml_text: str) -> dict[str, list[int]]:
+    """Return {key: [line numbers]} for keys that appear more than once at YAML root.
+
+    Indented (nested) keys are ignored. Used to catch duplicate scalars in config.yaml
+    where the last value silently wins in PyYAML.
+    """
+    import re
+    from collections import defaultdict
+
+    key_lines: dict[str, list[int]] = defaultdict(list)
+    for i, line in enumerate(yaml_text.splitlines(), 1):
+        if not line.strip():
+            continue
+        if line[0] in " \t":
+            continue
+        head = line.split("#", 1)[0].rstrip()
+        if not head:
+            continue
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:", head)
+        if m:
+            key_lines[m.group(1)].append(i)
+    return {k: v for k, v in key_lines.items() if len(v) > 1}
+
 AI_API_KEY_PLACEHOLDER = "YOUR_XAI_API_KEY"
 _LEGACY_AI_API_KEY_PLACEHOLDER = "YOUR_MOONSHOT_API_KEY"
 _AI_BASE_URL_DEFAULT = "https://api.x.ai/v1"
@@ -166,8 +190,25 @@ try:
 
     _cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
     if os.path.exists(_cfg_path):
-        with open(_cfg_path, "r") as _f:
-            _yaml_overrides = _yaml.safe_load(_f) or {}
+        with open(_cfg_path, "r", encoding="utf-8") as _f:
+            _raw_yaml = _f.read()
+        _dupes = scan_duplicate_top_level_yaml_keys(_raw_yaml)
+        if _dupes:
+            for _k, _lines in sorted(_dupes.items()):
+                log.critical(
+                    "[CFG] Duplicate top-level key %r in config.yaml (lines %s) — last value wins; remove duplicates",
+                    _k,
+                    _lines,
+                )
+            if os.environ.get("ATHENA_CONFIG_STRICT", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            ):
+                raise ValueError(
+                    f"config.yaml has duplicate top-level keys: {sorted(_dupes.keys())}"
+                )
+        _yaml_overrides = _yaml.safe_load(_raw_yaml) or {}
         log.info(f"Loaded config.yaml ({len(_yaml_overrides)} keys)")
 except ImportError:
     pass  # pyyaml optional
@@ -214,7 +255,7 @@ CONFIG: dict = {
     "H1_CANDLES": 1000,
     "SCAN_MAX_WORKERS": 3,
     "SCAN_DEBUG_CANDLE_META": False,
-    "FOREX_H4_RESAMPLE_OFFSET_HOURS": 0.0,
+    "FOREX_H4_RESAMPLE_OFFSET_HOURS": 1.0,
     "BINANCE_KLINE_WS_INTERVALS": ["1m", "5m", "15m", "1h", "4h", "1d"],
     "MIN_CONFLUENCE": 1.0,
     "RISK_MULT": {
@@ -930,7 +971,7 @@ def validate_config(cfg: dict) -> None:
         if not isinstance(v, int) or v < 10:
             log.warning(f"[CFG] {k}={v} is too low — minimum 10 candles required")
     try:
-        float(cfg.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 0.0) or 0.0)
+        float(cfg.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 1.0) or 1.0)
     except (TypeError, ValueError):
         log.warning("[CFG] FOREX_H4_RESAMPLE_OFFSET_HOURS must be numeric")
     if cfg.get("RISK_PCT", 0) > 0.05:
