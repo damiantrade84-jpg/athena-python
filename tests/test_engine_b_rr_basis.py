@@ -4,8 +4,15 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import risk_engine
 from risk_engine import risk_check
-from market_structure import resolve_engine_b_execution_levels
+from market_structure import NakedEngine, resolve_engine_b_execution_levels
+
+
+@pytest.fixture(autouse=True)
+def _isolate_risk_drawdown(monkeypatch):
+    monkeypatch.setattr(risk_engine, "_current_drawdown", lambda *_args, **_kwargs: 0.0)
+
 
 def _make_signal(**overrides):
     base = {
@@ -94,3 +101,81 @@ def test_live_and_backtest_same_sl_tp_basis():
     # Live engine:
     assert out["execution_sl"] == pytest.approx(98.5)
     assert out["execution_tp"] == pytest.approx(120.0)
+
+
+def test_forex_structural_tp_below_min_rr_uses_execution_sl_fallback():
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=90.0,
+        structural_tp=101.0,
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.5,
+        fallback_rr=2.0,
+    )
+
+    assert out["structural_rr"] == pytest.approx(0.1)
+    assert out["execution_sl"] == pytest.approx(98.5)
+    assert out["execution_tp"] == pytest.approx(103.0)
+    assert out["rr_used_for_gate"] == pytest.approx(2.0)
+    assert out["rr_source"] == "atr_sl_fallback_rr_tp"
+    assert out["fallback_tp_applied"] is True
+    assert out["fallback_tp_reason"] == "structural_tp_below_min_rr"
+
+
+def test_crypto_does_not_use_forex_rr_fallback():
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=90.0,
+        structural_tp=101.0,
+        atr=1.0,
+        style="intraday",
+        asset_class="crypto",
+        min_rr=1.5,
+        fallback_rr=2.0,
+    )
+
+    assert out["execution_tp"] == pytest.approx(101.0)
+    assert out["rr_used_for_gate"] < 1.5
+    assert out["rr_source"] == "atr_sl_structural_tp"
+    assert out["fallback_tp_applied"] is False
+
+
+def test_calculate_confidence_reports_forex_fallback_rr_basis():
+    engine = NakedEngine()
+    out = engine.calculate_confidence(
+        {
+            "atr": 1.0,
+            "asset_type": "forex",
+            "current_swing_sequence": "HH_HL",
+            "macro_swing_sequence": "HH_HL",
+            "bos_confirmed": True,
+            "trigger_ok": True,
+            "zone_touched": True,
+            "near_active_zone": True,
+            "distance_to_res": 5.0,
+            "recommended_stop_loss": 90.0,
+            "recommended_take_profit": 101.0,
+            "structural_verdict": "CLEAR",
+        },
+        current_price=100.0,
+        direction="LONG",
+        entry_candles=[],
+        style_profile={
+            "style": "intraday",
+            "min_score": 3.0,
+            "min_room_atr": 0.35,
+            "min_rr": 1.5,
+            "fallback_rr": 2.0,
+            "require_macro_align": False,
+        },
+    )
+
+    assert out["rr_ok"] is True
+    assert out["rr_used_for_gate"] == pytest.approx(2.0)
+    assert out["execution_tp"] == pytest.approx(103.0)
+    assert out["rr_source"] == "atr_sl_fallback_rr_tp"
+    assert out["fallback_tp_applied"] is True

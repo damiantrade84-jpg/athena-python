@@ -108,6 +108,8 @@ def resolve_engine_b_execution_levels(
     atr: float,
     style: str = "intraday",
     asset_class: str = "forex",
+    min_rr: float | None = None,
+    fallback_rr: float | None = None,
 ) -> dict:
     """Resolve final Engine B execution SL/TP for RR gating.
 
@@ -219,25 +221,57 @@ def resolve_engine_b_execution_levels(
     _level_mode = f"{_sl_source}_sl_{_tp_source}_tp"
     _rr_source = _level_mode
 
-    # Compute execution RR
-    _exec_rr = 0.0
-    _exec_valid = False
-    _exec_reject = None
-    _exec_tp_side_ok = False
-
-    if _exec_sl is not None and _exec_tp is not None and _entry > 0:
-        _esl_ok = (direction == "LONG" and _exec_sl < _entry) or (direction == "SHORT" and _exec_sl > _entry)
-        _etp_ok = (direction == "LONG" and _exec_tp > _entry) or (direction == "SHORT" and _exec_tp < _entry)
-        _exec_tp_side_ok = _etp_ok
-        if _esl_ok and _etp_ok:
-            _sd2 = abs(_entry - _exec_sl)
-            _td2 = abs(_exec_tp - _entry)
-            _exec_rr = _td2 / _sd2 if _sd2 > 0 else 0.0
-            _exec_valid = True
+    def _compute_exec_rr(_sl, _tp):
+        _rr = 0.0
+        _valid = False
+        _reject = None
+        _tp_side_ok = False
+        if _sl is not None and _tp is not None and _entry > 0:
+            _sl_ok = (direction == "LONG" and _sl < _entry) or (direction == "SHORT" and _sl > _entry)
+            _tp_ok = (direction == "LONG" and _tp > _entry) or (direction == "SHORT" and _tp < _entry)
+            _tp_side_ok = _tp_ok
+            if _sl_ok and _tp_ok:
+                _sd = abs(_entry - _sl)
+                _td = abs(_tp - _entry)
+                _rr = _td / _sd if _sd > 0 else 0.0
+                _valid = True
+            else:
+                _reject = "sl_wrong_side" if not _sl_ok else "tp_wrong_side"
         else:
-            _exec_reject = "sl_wrong_side" if not _esl_ok else "tp_wrong_side"
-    else:
-        _exec_reject = "levels_missing"
+            _reject = "levels_missing"
+        return _rr, _valid, _reject, _tp_side_ok
+
+    # Compute execution RR
+    _exec_rr, _exec_valid, _exec_reject, _exec_tp_side_ok = _compute_exec_rr(_exec_sl, _exec_tp)
+
+    _fallback_applied = False
+    _fallback_reason = None
+    if _asset == "forex" and _exec_valid and fallback_rr is not None:
+        try:
+            _min_rr = float(min_rr) if min_rr is not None else None
+        except (TypeError, ValueError):
+            _min_rr = None
+        try:
+            _fallback_rr = float(fallback_rr)
+        except (TypeError, ValueError):
+            _fallback_rr = 0.0
+        if _min_rr is not None and _fallback_rr > 0 and _exec_rr < _min_rr:
+            _sl_dist = abs(_entry - _exec_sl)
+            if _sl_dist > 0:
+                _target_rr = max(_fallback_rr, _min_rr)
+                _exec_tp = (
+                    _entry + (_sl_dist * _target_rr)
+                    if direction == "LONG"
+                    else _entry - (_sl_dist * _target_rr)
+                )
+                _tp_source = "fallback_rr"
+                _level_mode = f"{_sl_source}_sl_{_tp_source}_tp"
+                _rr_source = _level_mode
+                _fallback_applied = True
+                _fallback_reason = "structural_tp_below_min_rr"
+                _exec_rr, _exec_valid, _exec_reject, _exec_tp_side_ok = _compute_exec_rr(
+                    _exec_sl, _exec_tp
+                )
 
     return {
         "entry": _entry,
@@ -255,6 +289,8 @@ def resolve_engine_b_execution_levels(
         "execution_levels_valid": _exec_valid,
         "execution_level_reject_reason": _exec_reject,
         "execution_tp_side_ok": _exec_tp_side_ok,
+        "fallback_tp_applied": _fallback_applied,
+        "fallback_tp_reason": _fallback_reason,
     }
 
 
@@ -2703,6 +2739,8 @@ class NakedEngine:
             atr=atr_val,
             style=exec_style,
             asset_class=asset_type_lower,
+            min_rr=min_rr,
+            fallback_rr=profile.get("fallback_rr"),
         )
         # Structural TP side check — kept for diagnostics / ENGINE_B_REASON_TP_WRONG_SIDE
         sl = _exec_lvl["execution_sl"]
@@ -2988,6 +3026,8 @@ class NakedEngine:
             "level_mode": _exec_lvl["level_mode"],
             "execution_levels_valid": _exec_lvl["execution_levels_valid"],
             "execution_level_reject_reason": _exec_lvl["execution_level_reject_reason"],
+            "fallback_tp_applied": _exec_lvl["fallback_tp_applied"],
+            "fallback_tp_reason": _exec_lvl["fallback_tp_reason"],
             "passed": passed,
             "structure_ok": structure_ok,
             "macro_ok": macro_ok,
