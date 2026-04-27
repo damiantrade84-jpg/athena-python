@@ -612,4 +612,87 @@ def register_research_lab_routes(app) -> None:
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
+    # ── Session Autopilot routes ──────────────────────────────────────────────
+    _register_session_autopilot_routes(app)
+
     log.info("[research_lab_routes] Research Lab routes registered")
+
+
+def _register_session_autopilot_routes(app) -> None:
+    """Register /api/research-lab/session-autopilot/* routes."""
+    from flask import jsonify, request
+
+    from athena_research.autopilot_session import (
+        _SESSIONS_DIR, _OUTPUT_DIR,
+        start_session, get_session_status, get_session_result,
+        stop_session, list_sessions,
+    )
+
+    # ── POST /api/research-lab/session-autopilot/start ────────────────────────
+    @app.route("/api/research-lab/session-autopilot/start", methods=["POST"])
+    def api_session_autopilot_start():
+        """Create and start a new one-click autopilot session."""
+        body = request.get_json(silent=True) or {}
+        market_group = str(body.get("market_group", "crypto")).lower()
+        trading_style = str(body.get("trading_style", "intra")).lower()
+        research_depth = str(body.get("research_depth", "standard")).lower()
+
+        # Optional overrides forwarded from "Run Next Action"
+        symbols_override = body.get("symbols") or None
+        timeframes_override = body.get("timeframes") or None
+        families_override = body.get("families") or None
+
+        from athena_research.autopilot import RESEARCH_STYLE_PROFILES
+        from athena_research.autopilot_session import GROUP_SYMBOLS
+        if trading_style not in RESEARCH_STYLE_PROFILES:
+            return jsonify({"error": f"Invalid trading_style: {trading_style}"}), 400
+        if market_group not in GROUP_SYMBOLS:
+            return jsonify({"error": f"Invalid market_group: {market_group}"}), 400
+
+        try:
+            state = start_session(
+                market_group=market_group,
+                trading_style=trading_style,
+                research_depth=research_depth,
+                sessions_dir=_SESSIONS_DIR,
+                output_dir=_OUTPUT_DIR,
+                symbols_override=symbols_override,
+                timeframes_override=timeframes_override,
+                families_override=families_override,
+            )
+            return jsonify(state), 202
+        except Exception as e:
+            log.error("[session_autopilot] start failed: %s", e, exc_info=True)
+            return jsonify({"error": str(e)}), 500
+
+    # ── GET /api/research-lab/session-autopilot/status/<session_id> ───────────
+    @app.route("/api/research-lab/session-autopilot/status/<session_id>", methods=["GET"])
+    def api_session_autopilot_status(session_id: str):
+        state = get_session_status(session_id, _SESSIONS_DIR)
+        if state is None:
+            return jsonify({"error": "Session not found", "session_id": session_id}), 404
+        return jsonify(state)
+
+    # ── GET /api/research-lab/session-autopilot/result/<session_id> ───────────
+    @app.route("/api/research-lab/session-autopilot/result/<session_id>", methods=["GET"])
+    def api_session_autopilot_result(session_id: str):
+        result = get_session_result(session_id, _OUTPUT_DIR, _SESSIONS_DIR)
+        if result is None:
+            return jsonify({"error": "Session not found", "session_id": session_id}), 404
+        return jsonify(result)
+
+    # ── GET /api/research-lab/session-autopilot/sessions ─────────────────────
+    @app.route("/api/research-lab/session-autopilot/sessions", methods=["GET"])
+    def api_session_autopilot_list():
+        sessions = list_sessions(_SESSIONS_DIR)
+        return jsonify({"sessions": sessions})
+
+    # ── POST /api/research-lab/session-autopilot/stop/<session_id> ───────────
+    @app.route("/api/research-lab/session-autopilot/stop/<session_id>", methods=["POST"])
+    def api_session_autopilot_stop(session_id: str):
+        state = stop_session(session_id, _SESSIONS_DIR)
+        if state is None:
+            return jsonify({"error": "Session not found", "session_id": session_id}), 404
+        return jsonify(state)
+
+    log.info("[research_lab_routes] Session Autopilot routes registered")

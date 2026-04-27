@@ -1920,6 +1920,100 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       <span style="font-size:.7rem;background:#1a2535;border:1px solid #2a3a50;border-radius:4px;padding:2px 8px;color:#7fa8c8">DISCOVERY MODE — Backtest only</span>
     </div>
 
+    <!-- ══ ONE-CLICK AUTOPILOT COCKPIT ══════════════════════════════════════ -->
+    <div style="background:#0a1628; border:2px solid #0ea5e9; border-radius:10px; padding:16px; margin-bottom:18px;">
+      <div style="font-size:.9rem; font-weight:700; color:#0ea5e9; margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+        🧠 One-Click Autopilot Cockpit
+        <span style="font-size:.68rem; font-weight:400; color:#64748b; background:#0f172a; border:1px solid #1e3a5f; border-radius:4px; padding:2px 7px;">FULL PIPELINE</span>
+      </div>
+
+      <!-- Selectors + Buttons row -->
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; margin-bottom:14px;">
+        <div>
+          <label style="font-size:.72rem; opacity:.6; display:block; margin-bottom:4px">MARKET GROUP</label>
+          <select id="rl-sess-market-group" style="background:#111827; border:1px solid #2a3a50; color:#cdd6e0; padding:6px 10px; border-radius:6px; font-size:.82rem">
+            <option value="crypto">Crypto</option>
+            <option value="forex">Forex</option>
+            <option value="metals">Metals</option>
+            <option value="indices">Indices</option>
+            <option value="stocks">Stocks</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:.72rem; opacity:.6; display:block; margin-bottom:4px">TRADING STYLE</label>
+          <select id="rl-sess-trading-style" style="background:#111827; border:1px solid #2a3a50; color:#cdd6e0; padding:6px 10px; border-radius:6px; font-size:.82rem">
+            <option value="scalp">Scalp</option>
+            <option value="intra" selected>Intra</option>
+            <option value="swing">Swing</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:.72rem; opacity:.6; display:block; margin-bottom:4px">RESEARCH DEPTH</label>
+          <select id="rl-sess-research-depth" style="background:#111827; border:1px solid #2a3a50; color:#cdd6e0; padding:6px 10px; border-radius:6px; font-size:.82rem">
+            <option value="quick">Quick</option>
+            <option value="standard" selected>Standard</option>
+            <option value="deep">Deep</option>
+          </select>
+        </div>
+        <button onclick="rlSessStart()" id="rl-sess-start-btn" style="background:linear-gradient(135deg,#0284c7,#0369a1); color:#fff; border:none; padding:8px 18px; border-radius:7px; cursor:pointer; font-size:.85rem; font-weight:600">🚀 Start One-Click Autopilot</button>
+        <button onclick="rlSessStop()" id="rl-sess-stop-btn" style="display:none; background:#7f1d1d; color:#fca5a5; border:1px solid #991b1b; padding:8px 14px; border-radius:7px; cursor:pointer; font-size:.82rem">■ Stop</button>
+      </div>
+
+      <!-- Cockpit Status Card -->
+      <div id="rl-sess-card" style="display:none; background:#0f172a; border:1px solid #1e3a5f; border-radius:8px; padding:14px; font-size:.82rem;">
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:12px;">
+          <div><span style="opacity:.5; font-size:.7rem; display:block">SESSION ID</span><span id="rl-sess-id" style="font-family:monospace; color:#7fa8c8; font-size:.75rem"></span></div>
+          <div><span style="opacity:.5; font-size:.7rem; display:block">PHASE</span><span id="rl-sess-phase" style="color:#38bdf8; font-weight:600"></span></div>
+          <div><span style="opacity:.5; font-size:.7rem; display:block">PROGRESS</span><span id="rl-sess-pct" style="color:#6ee7b7; font-weight:700"></span></div>
+          <div><span style="opacity:.5; font-size:.7rem; display:block">DISCOVERY RUN</span><span id="rl-sess-disc-run" style="font-family:monospace; color:#7fa8c8; font-size:.75rem"></span></div>
+          <div><span style="opacity:.5; font-size:.7rem; display:block">VALIDATION RUNS</span><span id="rl-sess-val-runs" style="font-family:monospace; color:#7fa8c8; font-size:.75rem"></span></div>
+          <div><span style="opacity:.5; font-size:.7rem; display:block">AI REVIEW</span><span id="rl-sess-ai-status" style="color:#a78bfa; font-size:.75rem"></span></div>
+        </div>
+
+        <!-- Final Verdict badge -->
+        <div id="rl-sess-verdict-row" style="display:none; margin-bottom:12px;">
+          <span style="opacity:.5; font-size:.7rem; display:block; margin-bottom:4px">FINAL VERDICT</span>
+          <span id="rl-sess-verdict" style="font-size:.95rem; font-weight:700; padding:4px 14px; border-radius:20px;"></span>
+        </div>
+
+        <!-- Final Summary -->
+        <div id="rl-sess-summary-row" style="display:none; margin-bottom:10px;">
+          <span style="opacity:.5; font-size:.7rem; display:block; margin-bottom:3px">SUMMARY</span>
+          <div id="rl-sess-summary" style="color:#cdd6e0; line-height:1.5;"></div>
+        </div>
+
+        <!-- What Worked / What Failed / Do Not Implement / Next Action -->
+        <div id="rl-sess-clusters-row" style="display:none;">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:10px;">
+            <div>
+              <div style="font-size:.72rem; color:#6ee7b7; font-weight:600; margin-bottom:6px">✅ WHAT WORKED</div>
+              <div id="rl-sess-best" style="font-size:.75rem; color:#a7f3d0; line-height:1.6;"></div>
+            </div>
+            <div>
+              <div style="font-size:.72rem; color:#fca5a5; font-weight:600; margin-bottom:6px">❌ WHAT FAILED</div>
+              <div id="rl-sess-rejected" style="font-size:.75rem; color:#fca5a5; line-height:1.6;"></div>
+            </div>
+          </div>
+          <div style="margin-bottom:8px;">
+            <div style="font-size:.72rem; color:#fb923c; font-weight:600; margin-bottom:4px">🚫 DO NOT IMPLEMENT</div>
+            <div id="rl-sess-dont" style="font-size:.75rem; color:#fed7aa; line-height:1.5;"></div>
+          </div>
+          <div>
+            <div style="font-size:.72rem; color:#38bdf8; font-weight:600; margin-bottom:4px">🔭 NEXT RESEARCH ACTION</div>
+            <div id="rl-sess-next" style="font-size:.75rem; color:#bae6fd; line-height:1.5; margin-bottom:8px;"></div>
+            <button id="rl-sess-run-next-btn" onclick="rlSessRunNext()" style="display:none; background:linear-gradient(135deg,#065f46,#059669); color:#fff; border:none; padding:7px 16px; border-radius:7px; cursor:pointer; font-size:.82rem; font-weight:600">▶ Run Next Action</button>
+            <div id="rl-sess-run-next-summary" style="font-size:.7rem; color:#6ee7b7; margin-top:5px; opacity:.75;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- ══ END COCKPIT ══════════════════════════════════════════════════════ -->
+
+    <!-- 🚀 Advanced Manual Research (collapsible) -->
+    <details id="rl-advanced-section" style="margin-bottom:16px;">
+      <summary style="font-size:.85rem; color:#38bdf8; cursor:pointer; font-weight:600; padding:8px 0;">⚙️ Advanced Manual Research</summary>
+      <div style="margin-top:10px;">
+
     <!-- 🚀 Style-Driven Autopilot Selector -->
     <div style="background:#0f172a; border:1px solid #1e3a8a; border-radius:8px; padding:14px; margin-bottom:16px;">
       <div style="font-size:.85rem; font-weight:700; color:#38bdf8; margin-bottom:10px; display:flex; align-items:center; gap:6px;">
@@ -2010,6 +2104,9 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       <button onclick="rlApplyPreset('xau_micro')" style="background:#1a2238;color:#a5b4fc;border:1px solid #312e81;padding:6px 12px;border-radius:6px;font-size:.75rem;cursor:pointer;">Engine D XAU Micro Breakout Validation</button>
     </div>
     </details>
+
+      </div><!-- /Advanced Manual Research inner -->
+    </details><!-- /rl-advanced-section -->
 
 
 
@@ -13865,6 +13962,198 @@ function ldFmtPrice(p) {
     document.getElementById('rl-status-text').textContent = text;
     document.getElementById('rl-run-id').textContent = runId ? `Run: ${runId}` : '';
   }
+
+  // ── One-Click Autopilot Cockpit ────────────────────────────────────────────
+  let _rlSessId = null;
+  let _rlSessPollTimer = null;
+
+  window.rlSessStart = async function() {
+    const market_group   = document.getElementById('rl-sess-market-group').value;
+    const trading_style  = document.getElementById('rl-sess-trading-style').value;
+    const research_depth = document.getElementById('rl-sess-research-depth').value;
+
+    const startBtn = document.getElementById('rl-sess-start-btn');
+    const stopBtn  = document.getElementById('rl-sess-stop-btn');
+    startBtn.disabled = true;
+    startBtn.textContent = '⏳ Starting…';
+    stopBtn.style.display = 'none';
+
+    try {
+      const res = await fetch('/api/research-lab/session-autopilot/start', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ market_group, trading_style, research_depth }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      _rlSessId = data.session_id;
+      document.getElementById('rl-sess-card').style.display = 'block';
+      stopBtn.style.display = 'inline-block';
+      _rlSessRenderStatus(data);
+      _rlSessPoll(_rlSessId);
+    } catch (e) {
+      alert('Failed to start session: ' + e.message);
+    } finally {
+      startBtn.disabled = false;
+      startBtn.textContent = '🚀 Start One-Click Autopilot';
+    }
+  };
+
+  window.rlSessStop = async function() {
+    if (!_rlSessId) return;
+    try {
+      const res = await fetch(`/api/research-lab/session-autopilot/stop/${_rlSessId}`, {method:'POST'});
+      const data = await res.json();
+      _rlSessRenderStatus(data);
+      if (_rlSessPollTimer) { clearInterval(_rlSessPollTimer); _rlSessPollTimer = null; }
+      document.getElementById('rl-sess-stop-btn').style.display = 'none';
+    } catch (e) {
+      console.error('[sess] stop failed', e);
+    }
+  };
+
+  function _rlSessPoll(sessionId) {
+    if (_rlSessPollTimer) clearInterval(_rlSessPollTimer);
+    _rlSessPollTimer = setInterval(async () => {
+      try {
+        const res  = await fetch(`/api/research-lab/session-autopilot/status/${sessionId}`);
+        const data = await res.json();
+        _rlSessRenderStatus(data);
+        const terminal = ['COMPLETE','FAILED','CANCELLED'];
+        if (terminal.includes(data.status)) {
+          clearInterval(_rlSessPollTimer);
+          _rlSessPollTimer = null;
+          document.getElementById('rl-sess-stop-btn').style.display = 'none';
+          if (data.status === 'COMPLETE') {
+            // Load final result for scoped rows
+            const rres = await fetch(`/api/research-lab/session-autopilot/result/${sessionId}`);
+            const rdata = await rres.json();
+            _rlSessRenderStatus(rdata);
+          }
+        }
+      } catch (e) {
+        console.warn('[sess] poll error', e);
+      }
+    }, 5000);
+  }
+
+  function _rlSessRenderStatus(data) {
+    if (!data) return;
+    const $ = id => document.getElementById(id);
+    $('rl-sess-id').textContent        = data.session_id || '';
+    $('rl-sess-phase').textContent     = data.current_phase || data.status || '';
+    $('rl-sess-pct').textContent       = (data.progress_pct != null) ? data.progress_pct + '%' : '';
+    $('rl-sess-disc-run').textContent  = data.discovery_run_id || '—';
+    $('rl-sess-val-runs').textContent  = (data.validation_run_ids || []).length
+                                         ? (data.validation_run_ids || []).length + ' run(s)' : '—';
+    $('rl-sess-ai-status').textContent = data.ai_review_status || '';
+
+    const verdict = data.final_verdict || '';
+    const verdictEl = $('rl-sess-verdict');
+    if (verdict) {
+      $('rl-sess-verdict-row').style.display = 'block';
+      const colors = {
+        IMPLEMENTATION_CANDIDATE: ['#065f46','#6ee7b7'],
+        VALIDATION_CANDIDATE:     ['#1e3a8a','#93c5fd'],
+        WEAK_EDGE:                ['#713f12','#fde68a'],
+        REJECTED:                 ['#7f1d1d','#fca5a5'],
+        NEEDS_MORE_DATA:          ['#1c1c1c','#9ca3af'],
+        PIPELINE_FAILED:          ['#4c1d95','#c4b5fd'],
+      };
+      const [bg, fg] = colors[verdict] || ['#1a2535','#cdd6e0'];
+      verdictEl.style.background = bg;
+      verdictEl.style.color      = fg;
+      verdictEl.textContent      = verdict.replace(/_/g,' ');
+    } else {
+      $('rl-sess-verdict-row').style.display = 'none';
+    }
+
+    if (data.final_summary) {
+      $('rl-sess-summary-row').style.display = 'block';
+      $('rl-sess-summary').textContent = data.final_summary;
+    } else {
+      $('rl-sess-summary-row').style.display = 'none';
+    }
+
+    const hasClusters = (data.best_clusters||[]).length + (data.rejected_clusters||[]).length
+                        + (data.do_not_implement||[]).length + (data.next_research_action||'').length;
+    if (hasClusters) {
+      $('rl-sess-clusters-row').style.display = 'block';
+      $('rl-sess-best').innerHTML = (data.best_clusters||[]).slice(0,5)
+        .map(r => `<div>• ${r.strategy_name||''} @ ${r.symbol||''} ${r.timeframe||''} <span style="color:#34d399">${(r.net_return!=null?((r.net_return*100).toFixed(1)+'%'):'')}</span></div>`)
+        .join('') || '<span style="opacity:.4">None</span>';
+      $('rl-sess-rejected').innerHTML = (data.rejected_clusters||[]).slice(0,5)
+        .map(r => `<div>• ${r.strategy_name||''} @ ${r.symbol||''}</div>`)
+        .join('') || '<span style="opacity:.4">None</span>';
+      $('rl-sess-dont').textContent = (data.do_not_implement||[]).join(', ') || '—';
+      $('rl-sess-next').textContent = data.next_research_action || '—';
+
+      // "Run Next Action" button — only show when structured params are available
+      const nrp = data.next_research_params || {};
+      const runNextBtn = $('rl-sess-run-next-btn');
+      const runNextSummary = $('rl-sess-run-next-summary');
+      if (nrp && nrp.symbols && nrp.symbols.length > 0 && data.status === 'COMPLETE') {
+        window._rlSessNextParams = nrp;
+        runNextBtn.style.display = 'inline-block';
+        const syms = (nrp.symbols || []).join(', ');
+        const tfs  = (nrp.timeframes || []).join(', ');
+        const fams = (nrp.families || []).join(', ');
+        runNextSummary.textContent = `${nrp.market_group || ''} · ${nrp.trading_style || ''} · ${nrp.research_depth || 'quick'} · ${syms} · ${tfs} · ${fams}`;
+      } else {
+        runNextBtn.style.display = 'none';
+        runNextSummary.textContent = '';
+        window._rlSessNextParams = null;
+      }
+    } else {
+      $('rl-sess-clusters-row').style.display = 'none';
+    }
+  }
+
+  window.rlSessRunNext = async function() {
+    const nrp = window._rlSessNextParams;
+    if (!nrp) return;
+
+    // Pre-fill the cockpit selectors so the user can see what's being launched
+    const mg = document.getElementById('rl-sess-market-group');
+    const ts = document.getElementById('rl-sess-trading-style');
+    const rd = document.getElementById('rl-sess-research-depth');
+    if (mg && nrp.market_group) mg.value = nrp.market_group;
+    if (ts && nrp.trading_style) ts.value = nrp.trading_style;
+    if (rd && nrp.research_depth) rd.value = nrp.research_depth;
+
+    const btn = document.getElementById('rl-sess-run-next-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Starting…';
+
+    try {
+      const payload = {
+        market_group:   nrp.market_group   || 'crypto',
+        trading_style:  nrp.trading_style  || 'intra',
+        research_depth: nrp.research_depth || 'quick',
+        symbols:    nrp.symbols    || undefined,
+        timeframes: nrp.timeframes || undefined,
+        families:   nrp.families   || undefined,
+      };
+      const res = await fetch('/api/research-lab/session-autopilot/start', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      _rlSessId = data.session_id;
+      document.getElementById('rl-sess-card').style.display = 'block';
+      document.getElementById('rl-sess-stop-btn').style.display = 'inline-block';
+      _rlSessRenderStatus(data);
+      _rlSessPoll(_rlSessId);
+      window._rlSessNextParams = null;
+    } catch (e) {
+      alert('Failed to start follow-up session: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '▶ Run Next Action';
+    }
+  };
 
 })();
 </script>
