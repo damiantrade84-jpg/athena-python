@@ -1496,7 +1496,10 @@ def _classify_setup(
         }
 
     # ── No valid setup ───────────────────────────────────────────────────
-    return {"valid": False, "reason": f"no_setup:{market_state}_{location}"}
+    # Return the bare classification; caller (run_scalp_scan) prepends
+    # "no_setup:" — keeping the prefix here would produce "no_setup:no_setup:..."
+    # which was observed 88 times in baseline audit logs (audit 8577d0 §7.1).
+    return {"valid": False, "reason": f"{market_state}_{location}"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2590,9 +2593,13 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "premarket_delta_proxy_levels": premarket_delta_proxy_levels,
                 "timestamp":       datetime.now(timezone.utc).isoformat(),
                 "engine":          "SCALP",
-                # Fields required by risk_engine.risk_check()
-                "confluenceScore": quality["score"] / 100.0,
-                "maxScore":        1.0,
+                # Fields required by risk_engine.risk_check().
+                # Audit 8577d0 §1.9 / §4.4 fix: emit raw 0-100 score with
+                # explicit maxScore=100 so signal_debate / Engine B AI prompts
+                # do not silently mix Engine A's 0-3 scale with Engine D's
+                # 0-1 normalised scale (same field name, two rubrics).
+                "confluenceScore": float(quality["score"]),
+                "maxScore":        100.0,
             }
             
             # Apply consecutive-loss halving and +2R size cap. The +2R rule caps
