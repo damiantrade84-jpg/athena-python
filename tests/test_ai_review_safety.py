@@ -1094,3 +1094,18 @@ class TestVisionDowngradeOnlyConfig:
         result = apply_vision(consensus, vision)
         assert result["trade"] is False
         assert result["tier"] == "SKIP"
+
+
+class TestExpertPromptDeadRangingMarcusRule:
+    """EXPERT_PROMPT (Marcus Reid) must not auto-F on DEAD RANGING (advisory wording)."""
+
+    def test_expert_prompt_no_automatic_dead_ranging_f(self):
+        athena_path = os.path.join(os.path.dirname(__file__), "..", "athena.py")
+        with open(athena_path, encoding="utf-8") as f:
+            text = f.read()
+        marker = 'EXPERT_PROMPT = """'
+        i0 = text.index(marker) + len(marker)
+        i1 = text.index('"""', i0)
+        prompt_body = text[i0:i1]
+        assert "DEAD RANGING regime = automatic F grade" not in prompt_body
+        assert "default grade ceiling C" in prompt_body or "never A+" in prompt_body

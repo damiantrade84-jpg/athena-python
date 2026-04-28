@@ -2929,7 +2929,7 @@ ABSOLUTE RULES — VIOLATION = FAILURE:
 4. EVERY claim in your narrative MUST reference a specific data point from the input (factor name, score value, weight, z-score, regime label, level price). If you cannot cite the data, do not make the claim.
 5. Counter-trend signal = automatic grade drop of 1 full level + explicit warning.
 6. If directionalScore and direction disagree, FLAG THIS as a critical issue.
-7. DEAD RANGING regime = automatic F grade. Do not execute.
+7. DEAD RANGING regime: do NOT assign F solely because of trendState. Low ADX/chop means elevated follow-through risk — default grade ceiling C (watchlist). If === ENGINE B === is present and structural_verdict is CLEAR with naked direction aligned to Engine A direction, allow up to B; never A+, never "Full" position sizing from factor score alone. Always cite ADX percentile/label from SIGNAL in narrative or warnings.
 
 STYLE & ASSET AWARENESS RULES:
 Evaluate the trade setup based on the 'Resolved AI style' and 'Asset type' provided in the AI CALIBRATION CONTEXT.
@@ -2959,7 +2959,7 @@ HOW TO ANALYSE — FOLLOW THIS EXACT ORDER:
 Step 1: Read AI CALIBRATION CONTEXT first. Identify the Asset Type and Resolved AI style. Note whether the dashboard confluence label is Weak, Medium, or Strong. Do not confuse thresholdProgressPct with rawScorePct.
 Step 2: Read FACTOR DIAGNOSTICS. Which directional factors are active? Does direction match? What is the confidence multiplier?
 Step 3: Check trendCoherence. How many timeframes agree? If < 0.7, this is a mixed signal.
-Step 4: Read regime. RANGING = downgrade. DEAD RANGING = F-grade instantly.
+Step 4: Read regime. RANGING = downgrade one band. DEAD RANGING = apply Absolute Rule 7 (watchlist-tier default; ENGINE B CLEAR alignment allows up to B per Rule 7).
 Step 5: Read LEVELS. Evaluate SL and RR according to the Style & Asset Awareness Rules above. Do not automatically penalize Crypto for >2% SL.
 Step 6: If ENGINE B data is present, cross-reference structural verdict with factor direction. Agreement = boost. Conflict = major red flag.
 Step 7: If CONTEXT data is present, use for narrative color ONLY.
@@ -4366,7 +4366,7 @@ def run_ai(
                 review_type=REVIEW_TYPE_MARCUS_REID,
                 model=_model,
                 provider=get_ai_provider_label(CONFIG),
-                prompt_version="EXPERT_PROMPT_v4",
+                prompt_version="EXPERT_PROMPT_v5",
                 input_packet={"pair": signal.get("pair"), "score": signal.get("confluenceScore")},
                 has_chart_image=False,
                 candle_freshness_status=(
