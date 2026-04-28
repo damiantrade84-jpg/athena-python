@@ -13,7 +13,12 @@ def test_signal_max_score_prefers_explicit_value():
 
 
 def test_signal_max_score_uses_current_one_point_scale_when_score_is_unit_interval():
-    assert _signal_max_score({"confluenceScore": 0.8}) == 1.0
+    # Engine D signals carry engine="SCALP" and maxScore=1.0 — explicit maxScore wins.
+    assert _signal_max_score({"maxScore": 1.0, "confluenceScore": 0.8}) == 1.0
+    # Engine D via engine tag fallback:
+    assert _signal_max_score({"engine": "SCALP", "confluenceScore": 0.8}) == 1.0
+    # Engine A without explicit maxScore: default 3.0 (no heuristic from confluenceScore)
+    assert _signal_max_score({"confluenceScore": 0.8}) == 3.0
 
 
 def test_signal_max_score_falls_back_to_current_three_point_engine_a_scale():

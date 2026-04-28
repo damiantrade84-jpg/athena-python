@@ -4981,7 +4981,12 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             continue
 
         market_state = _classify_market_state(vp)
-        price_loc = _locate_price_vs_vp(current_price, vp)
+        # Compute ATR for proximity + buffer scaling in backtest
+        _bt_atr_m15 = 0.0
+        if len(m15_context) >= 14:
+            _bt_ranges = [float(c["high"]) - float(c["low"]) for c in m15_context[-14:]]
+            _bt_atr_m15 = sum(_bt_ranges) / len(_bt_ranges)
+        price_loc = _locate_price_vs_vp(current_price, vp, atr_m15=_bt_atr_m15)
         absorption = _check_absorption(exec_context)
         cvd = (
             _check_trade_bucket_cvd(display, reference_ts=signal_close_dt, require_fresh=False)
@@ -4991,7 +4996,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         if not cvd.get("direction"):
             cvd = _check_cvd(exec_context)
             cvd["source"] = "candles"
-        aaa = _check_aaa_sequence(exec_context, absorption, cvd) if cfg.get("AAA_ENABLED", True) else {"complete": False, "phase": "disabled"}
+        aaa = _check_aaa_sequence(exec_context, absorption, cvd, asset_type=asset_type) if cfg.get("AAA_ENABLED", True) else {"complete": False, "phase": "disabled"}
         vwap = _check_vwap_lean(context_for_vwap, current_price) if cfg.get("VWAP_ENABLED", True) else {"lean": None, "vwap_value": 0}
         bias_context = _resample_closed_m15_context(m15_context, bias_tf)
         htf_bias = infer_bias_from_ema_stack(bias_context) if len(bias_context) >= 200 else None

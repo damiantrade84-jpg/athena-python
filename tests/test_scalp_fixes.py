@@ -199,6 +199,8 @@ def _mock_scalp_setup(monkeypatch, candles, tp1, tp2):
     monkeypatch.setattr(indicators, "calc_cvd", lambda c, *args, **kwargs: {"smoothed_delta": list(range(len(c))), "cvd": list(range(len(c)))})
     monkeypatch.setattr(scalp_engine, "scalp_session_window", lambda *args, **kwargs: (True, "mock"))
     monkeypatch.setattr(scalp_engine, "_classify_market_state", lambda *args: "balance")
+    monkeypatch.setattr(scalp_engine, "_locate_price_vs_vp", lambda price, vp, atr_m15=0: {"location": "at_val", "nearest_level": vp.get("val", 100.0), "distance_pct": 0.0})
+    monkeypatch.setattr(scalp_engine, "_check_aaa_sequence", lambda candles, absorption, cvd, asset_type=None: {"complete": False, "phase": "absorption_only"})
     monkeypatch.setattr(backtest_runner, "_format_backtest_results", lambda trades, *args, **kwargs: {"trades": trades, "summary": {}})
     monkeypatch.setattr(backtest_runner, "_rt", lambda: types.SimpleNamespace(AUDIT_DB=":memory:"))
 

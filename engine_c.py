@@ -317,9 +317,13 @@ def normalise_engine_a(signal_a: dict) -> dict:
         factor_scores.get("carry_tilt")
     ])
 
-    # Floor for signal participation: norm must exceed 30% of max_score.
+    # Floor for signal participation: norm must exceed the floor to count as a full signal.
     # All asset classes use 0-3.0 scale (Engine A v2): score > 0.90 to participate.
-    _a_has_floor = 0.30
+    _a_has_floor = float(CONFIG.get("ENGINE_C_A_HAS_FLOOR", 0.30))
+    _a_partial_floor = float(CONFIG.get("ENGINE_C_A_PARTIAL_FLOOR", 0.20))
+    _dir_ok = signal_a.get("direction") in ("LONG", "SHORT")
+    _is_full = norm > _a_has_floor and _dir_ok
+    _is_partial = (not _is_full) and norm > _a_partial_floor and _dir_ok
     return {
         "score_norm": round(norm, 4),
         "direction": signal_a.get("direction"),
@@ -330,8 +334,8 @@ def normalise_engine_a(signal_a: dict) -> dict:
         "rr": signal_a.get("rr1", 0),
         "raw_score": score,
         "max_score": max_score,
-        "has_signal": norm > _a_has_floor
-        and signal_a.get("direction") in ("LONG", "SHORT"),
+        "has_signal": _is_full,
+        "has_partial_signal": _is_partial,
         "cot_active": bool(cot_active),
         "carry_active": bool(carry_active),
         "style": signal_a.get("style", signal_a.get("tradeStyle", "swing")),
@@ -674,7 +678,8 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
                     updated["rr"] = round(reward / risk, 2)
 
     # Vision confirm path — gated by AI_VISION_CAN_UPGRADE_TRADE (default False = downgrade-only)
-    if action == "confirm" and new_conviction >= 0.35:
+    _vision_upgrade_min = float(CONFIG.get("ENGINE_C_VISION_UPGRADE_MIN_CONVICTION", 0.35))
+    if action == "confirm" and new_conviction >= _vision_upgrade_min:
         if CONFIG.get("AI_VISION_CAN_UPGRADE_TRADE", False):
             # Sanctioned upgrade: CONFIRM + conviction ≥ 0.35 → trade=True
             updated["trade"] = True
@@ -774,8 +779,16 @@ def compute_consensus(
     entry = entry_price or float(signal_a.get("price", 0))
 
     # Step 2: Determine signal availability
+    # When A has a partial signal (norm between partial_floor and has_floor) and
+    # B also has a signal, promote A to participate at half weight so borderline
+    # trend signals are not silently dropped from the consensus blend.
     a_has = a["has_signal"]
+    a_partial = a.get("has_partial_signal", False) and not a_has
     b_has = b["has_signal"]
+    if a_partial and b_has:
+        a_has = True
+        a = dict(a)
+        a["score_norm"] = a["score_norm"] * 0.5  # half-weight for partial
 
     # Neither engine has a signal
     if not a_has and not b_has:
@@ -1003,6 +1016,75 @@ def compute_consensus(
                 c_reliability=c_reliability,
                 disagreement_diagnosis=_build_disagreement_diagnosis(
                     "B_OVERRIDE_CONFLICT", a, b, signal_a, signal_b, regime
+                ),
+            )
+            if ai_vision:
+                result = apply_vision(result, ai_vision)
+            return _finalize_consensus(result, asset_type)
+
+        # Mirror: A-override when A is strong and B is weak.
+        # Config-gated (default off) because Engine A directional hit-rate is 42.3%.
+        allow_a_override = bool(CONFIG.get("ENGINE_C_A_CONFLICT_OVERRIDE_ENABLED", False))
+        a_override_min = float(CONFIG.get("ENGINE_C_A_CONFLICT_MIN_SCORE", 0.70))
+        b_override_max_for_a = float(CONFIG.get("ENGINE_C_B_CONFLICT_MAX_SCORE_FOR_A", 0.45))
+        a_override_penalty = float(CONFIG.get("ENGINE_C_A_CONFLICT_PENALTY", 0.80))
+        if (
+            allow_a_override
+            and not opposing_high_confidence
+            and a["score_norm"] >= a_override_min
+            and b["score_norm"] <= b_override_max_for_a
+        ):
+            direction = a["direction"]
+            conviction = min(1.0, a["score_norm"] * a_override_penalty)
+            tier, sizing = classify_conviction(conviction)
+
+            sl_resolved = resolve_sl(entry, a["sl"], None, direction, atr)
+            tp_resolved = resolve_tp(entry, sl_resolved["sl"], a["tp"], None, direction)
+            if tp_resolved["rr"] < 1.0:
+                tier = "SKIP"
+                sizing = 0.0
+
+            a_quality = 0.50
+            a_reliability = (a.get("confidence", 0.5) * 0.5) + (a_quality * 0.5)
+            c_reliability = a_reliability
+
+            decision_state = "blocked"
+            if tier != "SKIP":
+                if c_reliability >= 0.60 and conviction >= 0.65:
+                    decision_state = "execute"
+                elif c_reliability >= 0.45 and conviction >= 0.50:
+                    decision_state = "reduced_risk"
+                    sizing = max(0.0, sizing - 0.25)
+                elif conviction >= 0.40:
+                    decision_state = "watchlist"
+
+            if decision_state == "blocked":
+                tier = "SKIP"
+                sizing = 0.0
+            elif decision_state == "watchlist":
+                tier = "WATCHLIST"
+                sizing = 0.0
+
+            result = _build_result(
+                trade=decision_state in ("execute", "reduced_risk"),
+                verdict="A_OVERRIDE_CONFLICT",
+                direction=direction,
+                conviction=conviction,
+                tier=tier,
+                sizing=sizing,
+                a_norm=a, b_norm=b, entry=entry,
+                sl=sl_resolved["sl"], sl_method=sl_resolved["method"],
+                tp=tp_resolved["tp"], tp_method=tp_resolved["method"],
+                rr=tp_resolved["rr"],
+                weights={"A": 1.0, "B": 0.0},
+                regime=regime,
+                opposing_high_confidence=opposing_high_confidence,
+                decision_state=decision_state,
+                a_reliability=a_reliability,
+                b_reliability=0.0,
+                c_reliability=c_reliability,
+                disagreement_diagnosis=_build_disagreement_diagnosis(
+                    "A_OVERRIDE_CONFLICT", a, b, signal_a, signal_b, regime
                 ),
             )
             if ai_vision:

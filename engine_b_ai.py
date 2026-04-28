@@ -500,7 +500,7 @@ def get_engine_b_ai_verdict(
             "trigger quality, and risk:reward. "
             "Evaluate the trade setup based on the 'Resolved AI style' and 'Asset type' provided in the AI CALIBRATION CONTEXT. "
             "Do NOT judge a Scalp setup by Swing criteria (or vice versa). "
-            "Evaluate Risk:Reward per style rules (SCALP: RR >= 1.5 acceptable; INTRADAY: RR >= 2.0 preferred; SWING: RR >= 3.0 preferred). "
+            "Evaluate Risk:Reward per style rules (SCALP: RR >= 2.0 acceptable (Engine D MIN_RR); INTRADAY: RR >= 2.0 preferred; SWING: RR >= 3.0 preferred). "
             "Do not automatically penalize Crypto for wide SL unless it exceeds MAX_SL_PCT. "
             + cross_engine_note
             + " Grade rubric: "

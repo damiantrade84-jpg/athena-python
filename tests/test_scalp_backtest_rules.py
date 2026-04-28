@@ -58,6 +58,7 @@ def test_backtest_pair_scalp_uses_stable_m15_execution_proxy(monkeypatch):
             "MIN_RR": 2.0,
             "BIAS_TIMEFRAME": "M15",
             "MIN_GRADE_AUTO_EXECUTE": "C",
+            "VP_PROXIMITY_USE_ATR": False,
         },
     )
     monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")
@@ -125,6 +126,7 @@ def test_backtest_pair_scalp_uses_h1_bias_context_when_configured(monkeypatch):
             "BT_WALK_BARS": 2,
             "MIN_RR": 1.0,
             "BIAS_TIMEFRAME": "H1",
+            "VP_PROXIMITY_USE_ATR": False,
         },
     )
     monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")
@@ -190,6 +192,7 @@ def test_backtest_pair_scalp_scratches_when_no_follow_through(monkeypatch):
             "MIN_RR": 2.0,
             "BIAS_TIMEFRAME": "M15",
             "MIN_GRADE_AUTO_EXECUTE": "C",
+            "VP_PROXIMITY_USE_ATR": False,
         },
     )
     monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")
@@ -250,6 +253,7 @@ def test_backtest_pair_scalp_scratch_clock_2_vs_3_bars(monkeypatch, scratch_bars
             "MIN_RR": 2.0,
             "BIAS_TIMEFRAME": "M15",
             "MIN_GRADE_AUTO_EXECUTE": "C",
+            "VP_PROXIMITY_USE_ATR": False,
         },
     )
     monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")

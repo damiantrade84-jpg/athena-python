@@ -678,6 +678,13 @@ CONFIG: dict = {
     # ── Execution engine ────────────────────────────────────────────────────
     "EXECUTION_ENABLED": True,  # Master switch — enabled for demo live-level testing
     "AUTO_EXECUTE": False,  # Auto-execute after AI grade (manual click only when False)
+    # eToro adapter scaffold (default-safe/off; no live wiring by default)
+    "ETORO": {
+        "ENABLED": False,
+        "DEMO_MODE": True,
+        "BASE_URL": "https://public-api.etoro.com",
+        "REQUEST_TIMEOUT_SEC": 10,
+    },
     "AUTO_EXECUTE_MIN_SCORE": 8.0,  # Minimum confluence score for auto-execute
     "AUTO_EXECUTE_MIN_GRADE": "B",  # Minimum AI grade for auto-execute
     "MAX_PORTFOLIO_HEAT": 0.06,  # 6% total risk across all positions

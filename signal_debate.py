@@ -23,7 +23,16 @@ log = logging.getLogger("sentinel.debate")
 
 
 def _signal_max_score(signal: dict) -> float:
-    """Best-effort current-system max score fallback for debate context."""
+    """Return the max possible score for the signal's asset class / engine.
+
+    Priority:
+      1. Explicit ``maxScore`` on the signal (Engine D sets 1.0, Engine A sets 3.0).
+      2. Engine tag: ``engine == "SCALP"`` -> 1.0 (Engine D normalised scale).
+      3. Default: 3.0 (Engine A v2 unified).
+
+    The old heuristic (confluenceScore <= 1.0 -> maxScore=1.0) was removed
+    because Engine A can produce confluenceScore < 1.0 on its 0-3 scale.
+    """
     raw = signal.get("maxScore")
     if raw is not None:
         try:
@@ -32,13 +41,7 @@ def _signal_max_score(signal: dict) -> float:
                 return val
         except (TypeError, ValueError):
             pass
-
-    try:
-        score = float(signal.get("confluenceScore", 0) or 0)
-    except (TypeError, ValueError):
-        score = 0.0
-
-    if 0.0 <= score <= 1.0:
+    if signal.get("engine") == "SCALP":
         return 1.0
     return 3.0
 

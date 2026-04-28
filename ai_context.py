@@ -144,6 +144,7 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "confidenceDetail": signal.get("confidenceDetail") or signal.get("confidence_detail"),
         "trendState": signal.get("trendState") or signal.get("regimeName") or signal.get("regime", {}).get("label"),
         "warnings": signal.get("warnings", []),
+        "addonStatus": (signal.get("factorDiagnostics") or signal.get("factor_diagnostics") or {}).get("addon_status"),
     }
     
     # 3. Engine B metrics
@@ -228,7 +229,15 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "spread_fees_guard": signal.get("spread_fees_guard"),
     }
     
-    # 7. Calibration notes
+    # 7. Data quality flags
+    candle_meta = signal.get("candleFetchMeta") or {}
+    data_quality = {
+        "forming_bar_included": candle_meta.get("forming_bar_included"),
+        "freshness_status": signal.get("freshnessStatus") or signal.get("freshness_status"),
+        "data_freshness": signal.get("dataFreshness") or signal.get("data_freshness"),
+    }
+
+    # 8. Calibration notes
     calibration_notes = {
         "rawScorePct": "Theoretical score quality.",
         "thresholdProgressPct": "Scanner readiness versus actual live threshold.",
@@ -243,6 +252,7 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "engine_c": engine_c,
         "vision": vision,
         "trade_risk": trade_risk,
+        "data_quality": data_quality,
         "calibration_notes": calibration_notes,
     }
 
@@ -283,5 +293,11 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
     lines.append(f"R:R = 1:{trade_risk['rr1']} / 1:{trade_risk['rr2']}")
 
     lines.append("Note: thresholdProgressPct is scanner readiness; rawScorePct is theoretical factor quality.")
+
+    dq = ctx.get("data_quality") or {}
+    if dq.get("forming_bar_included") is not None:
+        lines.append(f"Forming bar included: {dq['forming_bar_included']}")
+    if dq.get("freshness_status"):
+        lines.append(f"Freshness status: {dq['freshness_status']}")
 
     return "\n".join(lines)

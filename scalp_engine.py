@@ -898,42 +898,72 @@ def _build_trade_bucket_volume_profile(display: str, reference_ts=None, require_
         return {"valid": False, "reason": "trade_bucket_error"}
 
 
-def _calc_balance_ratio(vp: dict) -> float:
-    """Ratio of value area width to total range.  High → balanced, low → trending."""
+def _calc_balance_ratio(vp: dict) -> float | None:
+    """Ratio of value area width to total range.  High -> balanced, low -> trending.
+
+    Returns ``None`` when neither session bounds nor a usable vah/val range
+    are available, so the caller can classify the market using an alternative
+    signal (e.g. H1 ADX) instead of silently defaulting to 'balance'.
+    """
     vah = vp.get("vah", 0)
     val = vp.get("val", 0)
     session_high = vp.get("session_high")
     session_low = vp.get("session_low")
-    if session_high is None or session_low is None:
-        # Fallback: estimate total range from vah/val with a 20% headroom
-        # so ratio is meaningful rather than a constant 0.5 bias.
-        if vah and val and float(vah) > float(val):
-            estimated_range = (float(vah) - float(val)) / 0.8
-            va_width = float(vah) - float(val)
-            return round(max(0.0, min(1.0, va_width / estimated_range)), 3)
-        return 0.5
-    total_range = float(session_high) - float(session_low)
-    va_width = float(vah) - float(val) if vah and val else 0.0
-    ratio = va_width / total_range if total_range > 0 else 0.5
-    return round(max(0.0, min(1.0, ratio)), 3)
+    if session_high is not None and session_low is not None:
+        total_range = float(session_high) - float(session_low)
+        if total_range > 0:
+            va_width = float(vah) - float(val) if vah and val else 0.0
+            return round(max(0.0, min(1.0, va_width / total_range)), 3)
+    # Fallback: use LVN count as a heuristic — many LVNs suggest imbalance
+    # (price traversed multiple thin zones).  Two or more LVNs -> ratio 0.30.
+    lvn_count = len(vp.get("lvn_levels", []))
+    if vah and val and float(vah) > float(val):
+        va_width = float(vah) - float(val)
+        # With no session range we cannot compute the true ratio.
+        # Use LVN count: >=2 LVNs in a short profile → likely imbalance.
+        if lvn_count >= 2:
+            return 0.30
+        # Single/no LVN but we have vah/val — estimate conservatively at 0.55.
+        # This is above BALANCE_THRESHOLD (0.40) so it leans toward balance,
+        # but is no longer the automatic 0.80 that blocked all imbalance paths.
+        return 0.55
+    return None
 
 
 def _classify_market_state(vp: dict) -> str:
-    """Classify market as 'balance' or 'imbalance' from VP shape."""
-    br = vp.get("balance_ratio", 0.5)
+    """Classify market as 'balance' or 'imbalance' from VP shape.
+
+    When the balance ratio is ``None`` (session bounds unavailable), default
+    to 'balance' — the safer assumption — but log a warning so the gap is
+    visible in diagnostics.
+    """
+    br = vp.get("balance_ratio")
     cfg = CONFIG.get("SCALP_ENGINE", {})
     threshold = float(cfg.get("BALANCE_THRESHOLD", 0.40))
+    if br is None:
+        log.debug("[SCALP] balance_ratio unavailable — defaulting to 'balance'")
+        return "balance"
     return "balance" if br >= threshold else "imbalance"
 
 
-def _locate_price_vs_vp(price: float, vp: dict) -> dict:
+def _locate_price_vs_vp(price: float, vp: dict, atr_m15: float = 0.0) -> dict:
     """Determine price location relative to VP levels.
 
     Returns {location: str, nearest_level: float, distance_pct: float}
     Locations: 'at_vah', 'at_val', 'at_poc', 'at_lvn', 'inside_va', 'outside_va'
+
+    When *atr_m15* > 0 and VP_PROXIMITY_USE_ATR is true, proximity is measured
+    as ``ATR_M15 * VP_PROXIMITY_ATR_K`` instead of a fixed percentage of price.
+    This prevents forex pairs (e.g. EUR/USD) from having a 32-pip proximity band
+    that matches almost any random close to a VP level.
     """
     cfg = CONFIG.get("SCALP_ENGINE", {})
     proximity_pct = float(cfg.get("VP_PROXIMITY_PCT", 0.15)) / 100.0
+
+    use_atr_proximity = cfg.get("VP_PROXIMITY_USE_ATR", True) and atr_m15 > 0
+    if use_atr_proximity:
+        atr_k = float(cfg.get("VP_PROXIMITY_ATR_K", 0.20))
+        atr_proximity = atr_m15 * atr_k
 
     poc = vp.get("poc", 0)
     vah = vp.get("vah", 0)
@@ -941,10 +971,14 @@ def _locate_price_vs_vp(price: float, vp: dict) -> dict:
     lvn_levels = vp.get("lvn_levels", [])
 
     def _near(level):
-        return abs(price - level) / level < proximity_pct if level else False
+        if not level:
+            return False
+        if use_atr_proximity:
+            return abs(price - level) < atr_proximity
+        return abs(price - level) / level < proximity_pct
 
     def _dist(level):
-        return abs(price - level) / level if level else float("inf")
+        return abs(price - level) if level else float("inf")
 
     # Collect all nearby named levels and pick the closest one to avoid
     # check-order tiebreak bias (e.g. VAH winning over a nearer POC).
@@ -959,20 +993,22 @@ def _locate_price_vs_vp(price: float, vp: dict) -> dict:
         if _near(lvn):
             candidates.append(("at_lvn", lvn, _dist(lvn)))
 
+    def _pct(level):
+        return round(abs(price - level) / level * 100, 3) if level else 0.0
+
     if candidates:
         label, level, dist = min(candidates, key=lambda t: t[2])
-        return {"location": label, "nearest_level": level, "distance_pct": round(dist * 100, 3)}
+        return {"location": label, "nearest_level": level, "distance_pct": _pct(level)}
 
     if val <= price <= vah:
-        return {"location": "inside_va", "nearest_level": poc, "distance_pct": round(abs(price - poc) / poc * 100, 3)}
+        return {"location": "inside_va", "nearest_level": poc, "distance_pct": _pct(poc)}
 
-    # Price is outside value area — flag which side so _classify_setup can set direction
     above_va = price > vah
     return {
         "location": "outside_va",
         "above_va": above_va,
         "nearest_level": vah if above_va else val,
-        "distance_pct": round(abs(price - (vah if above_va else val)) / (vah if above_va else val) * 100, 3),
+        "distance_pct": _pct(vah if above_va else val),
     }
 
 
@@ -1106,8 +1142,9 @@ def _check_trade_bucket_cvd(display: str, reference_ts=None, require_fresh: bool
         return {"direction": None, "cvd_value": 0, "cvd_slope": 0, "source": "error"}
 
 
-def _check_aaa_sequence(candles: list, absorption: dict, cvd: dict) -> dict:
-    """Detect Absorption → Accumulation → Aggression sequence.
+def _check_aaa_sequence(candles: list, absorption: dict, cvd: dict,
+                        asset_type: Optional[str] = None) -> dict:
+    """Detect Absorption -> Accumulation -> Aggression sequence.
 
     - Absorption: already detected (pillar)
     - Accumulation: range contraction after absorption (narrow bars)
@@ -1115,7 +1152,15 @@ def _check_aaa_sequence(candles: list, absorption: dict, cvd: dict) -> dict:
     """
     cfg = CONFIG.get("SCALP_ENGINE", {})
     lookback = int(cfg.get("AAA_ACCUMULATION_LOOKBACK", 10))
-    contraction_threshold = float(cfg.get("AAA_CONTRACTION_THRESHOLD", 0.5))
+    _default_ct = 0.5
+    # Per-asset contraction threshold: MT5 tick-volume pairs have noisier
+    # candle ranges, so use a more lenient threshold (0.65) to avoid
+    # accumulation detection being unreachable on M1/M5 forex.
+    _ct_by_class = cfg.get("AAA_CONTRACTION_THRESHOLD_CLASS", {})
+    if isinstance(_ct_by_class, dict) and asset_type and asset_type in _ct_by_class:
+        contraction_threshold = float(_ct_by_class[asset_type])
+    else:
+        contraction_threshold = float(cfg.get("AAA_CONTRACTION_THRESHOLD", _default_ct))
     breakout_vol_mult = float(cfg.get("AAA_BREAKOUT_VOL_MULT", 1.5))
     absorption_window = max(1, int(cfg.get("AAA_ABSORPTION_RECENT_BARS", lookback * 2)))
 
@@ -1225,6 +1270,23 @@ def _check_vwap_lean(candles: list, current_price: float) -> dict:
 # SETUP CLASSIFICATION — Mean Reversion vs Trend Continuation
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _has_meaningful_absorption(absorption: dict, asset_type: Optional[str]) -> bool:
+    """Return True when absorption is reliable enough to count as confirmation.
+
+    MT5 tick-volume absorption on a single bar is noisy — require
+    ``MT5_ABSORPTION_MIN_COUNT`` (default 2) bars for non-crypto pairs.
+    Crypto (Binance real bid/ask volume) has no extra requirement.
+    """
+    if not absorption.get("detected"):
+        return False
+    if asset_type and asset_type != "crypto":
+        cfg = CONFIG.get("SCALP_ENGINE", {})
+        mt5_min = int(cfg.get("MT5_ABSORPTION_MIN_COUNT", 2))
+        if int(absorption.get("count", 0)) < mt5_min:
+            return False
+    return True
+
+
 def _classify_setup(
     market_state: str,
     price_loc: dict,
@@ -1263,22 +1325,24 @@ def _classify_setup(
         side_label = "above VAH" if above_va else "below VAL"
 
         # Need at least one confirmation: absorption OR CVD agrees OR VWAP lean agrees
-        # (MT5 tick-volume makes absorption unreliable — require any one of three)
         cvd_dir = cvd.get("direction")
-        has_absorption = absorption.get("detected", False)
-        # 2026-04-17: MT5 tick-volume absorption is noisy — require >=2 bars to count as valid
-        if asset_type and asset_type != "crypto":
-            mt5_min_abs = int(cfg.get("MT5_ABSORPTION_MIN_COUNT", 2))
-            if has_absorption and int(absorption.get("count", 0)) < mt5_min_abs:
-                has_absorption = False
+        has_absorption = _has_meaningful_absorption(absorption, asset_type)
         cvd_confirms = (cvd_dir == direction) or (cvd_dir is None)
         vwap_confirms = (vwap.get("lean") == direction)
         if not has_absorption and not cvd_confirms and not vwap_confirms:
             return {"valid": False, "reason": "no_absorption_outside_va"}
 
-        # CVD must not actively oppose the reversion direction
+        # CVD must not actively oppose the reversion direction.
+        # For non-crypto pairs using candle-proxy CVD, the veto is downgraded to a
+        # grade penalty (advisory) since the proxy is noisy.  Config-gated.
+        _cvd_source = cvd.get("source", "candles")
+        _cvd_proxy = _cvd_source in ("candles", "error", "disabled")
+        _cvd_veto_proxy = cfg.get("CVD_PROXY_HARD_VETO", False)
         if cvd_dir and cvd_dir != direction:
-            return {"valid": False, "reason": f"cvd_against_reversion:{cvd_dir}_vs_{direction}"}
+            if _cvd_proxy and not _cvd_veto_proxy:
+                reasons.append(f"CVD proxy conflict ({cvd_dir}) — advisory only (grade reduced)")
+            else:
+                return {"valid": False, "reason": f"cvd_against_reversion:{cvd_dir}_vs_{direction}"}
 
         reasons.append(f"Mean reversion: price extended {side_label} — revert to POC")
         if cvd_dir == direction:
@@ -1299,9 +1363,8 @@ def _classify_setup(
         direction = "SHORT" if location == "at_vah" else "LONG"
 
         # Need at least one confirmation: absorption OR CVD agrees OR VWAP lean agrees
-        # (MT5 tick-volume makes absorption unreliable — require any one of three)
         _cvd_pre = cvd.get("direction")
-        _has_abs = absorption.get("detected", False)
+        _has_abs = _has_meaningful_absorption(absorption, asset_type)
         _vwap_pre = (vwap.get("lean") == direction)
         if not _has_abs and not (_cvd_pre == direction) and not _vwap_pre:
             return {"valid": False, "reason": "no_absorption_at_va_extreme"}
@@ -1320,7 +1383,13 @@ def _classify_setup(
             reasons.append("CVD neutral — proceed with caution")
 
         if not cvd_confirms:
-            return {"valid": False, "reason": f"cvd_against_reversion:{cvd_dir}_vs_{direction}"}
+            _cvd_source_va = cvd.get("source", "candles")
+            _cvd_proxy_va = _cvd_source_va in ("candles", "error", "disabled")
+            _cvd_veto_proxy_va = cfg.get("CVD_PROXY_HARD_VETO", False)
+            if _cvd_proxy_va and not _cvd_veto_proxy_va:
+                reasons.append(f"CVD proxy conflict ({cvd_dir}) — advisory only (grade reduced)")
+            else:
+                return {"valid": False, "reason": f"cvd_against_reversion:{cvd_dir}_vs_{direction}"}
 
         # VWAP lean as bonus (not required for mean reversion)
         if vwap.get("lean") == direction:
@@ -1460,6 +1529,7 @@ def calculate_scalp_levels(
     symbol_info: dict,
     asset_type: str,
     min_rr_override: float | None = None,
+    atr_m15: float = 0.0,
 ) -> dict:
     """Calculate SL, TP1, TP2 using VP levels.
 
@@ -1478,18 +1548,27 @@ def calculate_scalp_levels(
     point = symbol_info.get("point", 0.00001)
 
     _pip = point * 10 if digits >= 4 else point
-    _buffers = {
+    # Static asset-class minimums (preserved as floors).
+    _min_buffers = {
         "forex":     _pip * 3,
         "commodity": entry * 0.002 if entry > 0 else _pip * 5,
         "crypto":    entry * 0.003 if entry > 0 else 0,
         "index":     entry * 0.002 if entry > 0 else 0,
         "stock":     entry * 0.002 if entry > 0 else 0,
     }
-    buffer = _buffers.get(asset_type, _buffers["forex"])
+    _min_buf = _min_buffers.get(asset_type, _min_buffers["forex"])
+
+    # ATR-scaled buffer: ATR_M15 * BUFFER_ATR_K (default 0.25).
+    # Takes the larger of the ATR buffer and the asset-class minimum so
+    # volatile pairs get wider buffers while quiet pairs keep a sensible floor.
+    if atr_m15 > 0 and cfg.get("BUFFER_USE_ATR", True):
+        _buf_k = float(cfg.get("BUFFER_ATR_K", 0.25))
+        buffer = max(_min_buf, atr_m15 * _buf_k)
+    else:
+        buffer = _min_buf
 
     # Forex fills at ASK (LONG) or BID (SHORT), not midpoint. Add half-spread to the
     # SL buffer so that sl_distance is measured from the actual fill price, not mid.
-    # commodity/index/stock buffers are already 0.2% of entry (wide enough to absorb spread).
     if asset_type == "forex":
         spread_half = (float(symbol_info.get("spread", 0)) * float(point)) / 2.0
         buffer = buffer + spread_half
@@ -1525,13 +1604,27 @@ def calculate_scalp_levels(
             tp2 = (entry - va_width) if cfg.get("TP2_ENABLED", True) else None
 
     else:  # trend_continuation
+        # When POC sits on the wrong side of entry, use ATR-based SL (1.5x ATR_M15)
+        # instead of the old fixed 0.3% fallback which was too tight on BTC and
+        # too wide on quiet forex pairs.
         _tc_fallback_pct = float(cfg.get("TREND_CONT_SL_FALLBACK_PCT", 0.003))
+        _tc_atr_mult = float(cfg.get("TREND_CONT_SL_ATR_MULT", 1.5))
         if direction == "LONG":
-            sl = poc - buffer if poc < entry else entry - (entry * _tc_fallback_pct)
+            if poc < entry:
+                sl = poc - buffer
+            elif atr_m15 > 0:
+                sl = entry - atr_m15 * _tc_atr_mult
+            else:
+                sl = entry - (entry * _tc_fallback_pct)
             tp1 = vah
             tp2 = (vah + (vah - poc)) if cfg.get("TP2_ENABLED", True) else None
         else:
-            sl = poc + buffer if poc > entry else entry + (entry * _tc_fallback_pct)
+            if poc > entry:
+                sl = poc + buffer
+            elif atr_m15 > 0:
+                sl = entry + atr_m15 * _tc_atr_mult
+            else:
+                sl = entry + (entry * _tc_fallback_pct)
             tp1 = val
             tp2 = (val - (poc - val)) if cfg.get("TP2_ENABLED", True) else None
 
@@ -1594,6 +1687,7 @@ def calculate_scalp_levels(
         "tp2":          round(tp2, digits) if tp2 else None,
         "rr":           actual_rr,
         "rr_below_min": rr_below_min,
+        "rr_synthetic": setup_type == "trend_extension",
         "sl_distance":  round(sl_distance, digits),
         "sl_method":    "vp_boundary",
     }
@@ -2257,7 +2351,12 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 continue
 
             market_state = _classify_market_state(vp)
-            price_loc = _locate_price_vs_vp(current_price, vp)
+            # Compute M15 ATR for proximity + buffer scaling.
+            _atr_m15 = 0.0
+            if candles_m15 and len(candles_m15) >= 14:
+                _ranges = [float(c["high"]) - float(c["low"]) for c in candles_m15[-14:]]
+                _atr_m15 = sum(_ranges) / len(_ranges)
+            price_loc = _locate_price_vs_vp(current_price, vp, atr_m15=_atr_m15)
             _funnel["volume_profile_available"] = True
             _funnel["poc"] = vp.get("poc")
             _funnel["vah"] = vp.get("vah")
@@ -2292,7 +2391,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             if not cvd.get("direction"):
                 cvd = _check_cvd(candles_exec)
                 cvd["source"] = "candles"
-            aaa = _check_aaa_sequence(candles_exec, absorption, cvd) if cfg.get("AAA_ENABLED", True) else {"complete": False, "phase": "disabled"}
+            aaa = _check_aaa_sequence(candles_exec, absorption, cvd, asset_type=asset_type) if cfg.get("AAA_ENABLED", True) else {"complete": False, "phase": "disabled"}
 
             # Pillar 3: VWAP directional lean
             vwap = _check_vwap_lean(candles_m15, current_price) if cfg.get("VWAP_ENABLED", True) else {"lean": None, "vwap_value": 0}
@@ -2326,7 +2425,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             from scoring import get_pair_score_group as _gpsg
             _scalp_score_group = _gpsg({"display": display, "type": asset_type})
             _min_rr = _scalp_min_rr_for_group(asset_type, _scalp_score_group)
-            levels = calculate_scalp_levels(direction, current_price, vp, setup["setup_type"], sym_info, asset_type, min_rr_override=_min_rr)
+            levels = calculate_scalp_levels(direction, current_price, vp, setup["setup_type"], sym_info, asset_type, min_rr_override=_min_rr, atr_m15=_atr_m15)
             if levels.get("rr_below_min"):
                 log.warning(
                     f"[SCALP] {display}: {setup['setup_type']} RR {levels['rr']:.2f} < MIN_RR "

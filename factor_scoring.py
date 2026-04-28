@@ -349,6 +349,11 @@ def _adx_gate(d1_snap: dict, h4_snap: dict, asset_type: str) -> tuple:
         adx, source = _h4, "h4"
 
     if adx is None:
+        # Both D1 and H4 ADX unavailable — likely a feed issue.
+        # ADX_MISSING_BOTH_ABORT (default False): when True, treat as hard abort
+        # instead of soft-pass, since no ADX data means no trend confirmation.
+        if CONFIG.get("ADX_MISSING_BOTH_ABORT", False):
+            return 0.0, None, "missing_both_abort"
         return _soft, None, "missing"
 
     if adx < hard_fail:
@@ -421,20 +426,43 @@ def _cot_addon(pair_display: str, asset_type: str, direction: str, bar_time: Opt
         return _ADDON_NEUTRAL
 
 
-def _funding_addon(funding_rate: Optional[float], direction: str) -> float:
-    """Funding rate addon for crypto. Returns _ADDON_* constant."""
+def _funding_addon(funding_rate: Optional[float], direction: str,
+                   funding_stats: Optional[dict] = None) -> float:
+    """Funding rate addon for crypto. Returns _ADDON_* constant.
+
+    When *funding_stats* is provided (keys: mean, std) and
+    ``FACTOR_FUNDING_USE_ZSCORE`` is True, classify using a rolling z-score
+    instead of a fixed noise band so the threshold auto-adapts per pair.
+    """
     if funding_rate is None:
         return _ADDON_NEUTRAL
     try:
         fr = float(funding_rate)
-        # Neutral baseline: 0.0001 (0.01% per 8h). Score from deviation.
+        # Z-score mode: (fr - mean) / std.  |z| < 1.0 → neutral.
+        if (CONFIG.get("FACTOR_FUNDING_USE_ZSCORE", False)
+                and funding_stats
+                and isinstance(funding_stats, dict)):
+            _mean = float(funding_stats.get("mean", 0))
+            _std = float(funding_stats.get("std", 0))
+            _z_thresh = float(CONFIG.get("FACTOR_FUNDING_Z_THRESHOLD", 1.0))
+            if _std > 0:
+                z = (fr - _mean) / _std
+                if abs(z) < _z_thresh:
+                    return _ADDON_NEUTRAL
+                is_long = direction == "LONG"
+                # z < -threshold → funding cheaper for longs → bullish
+                funding_bullish = z < -_z_thresh
+                if (is_long and funding_bullish) or (not is_long and not funding_bullish):
+                    return _ADDON_CONFIRM
+                return _ADDON_AGAINST
+
+        # Absolute threshold mode (default)
         _baseline = float(CONFIG.get("FACTOR_FUNDING_BASELINE", 0.0001))
         _noise_band = float(CONFIG.get("FACTOR_FUNDING_NOISE_BAND", 0.0001))
         adjusted = fr - _baseline
         if abs(adjusted) < _noise_band:
             return _ADDON_NEUTRAL
         is_long = direction == "LONG"
-        # Negative funding → bullish (longs cheap to hold); positive → shorts cheap
         funding_bullish = adjusted < 0
         if (is_long and funding_bullish) or (not is_long and not funding_bullish):
             return _ADDON_CONFIRM
@@ -629,16 +657,22 @@ def compute_factor_scores(
     # Normalise addon: +0.30 → +1.0, 0.00 → 0.0, -0.15 → -0.5 (penalty preserved, not floored).
     addon_norm = (addon_val / _ADDON_CONFIRM) if _ADDON_CONFIRM > 0 else 0.0
 
-    # When addon is unsupported (stock/index), redistribute addon weight into
-    # momentum so these classes can reach conviction 1.0 like addon-supported classes.
+    # When addon is unsupported (stock/index), redistribute addon weight.
+    # ADDON_UNSUPPORTED_SPLIT (default 0.5): fraction of addon weight that goes
+    # to base (raises floor) vs momentum (amplifies single-factor).  At 0.5 the
+    # split is 50/50 so momentum carries 0.65 instead of 0.80.
     _eff_mom_w = _momentum_w
     _eff_addon_w = _addon_w
+    _eff_base_w = _base_w
     if addon_status == "unsupported":
-        _eff_mom_w = _momentum_w + _addon_w
+        _split_to_base = float(CONFIG.get("ADDON_UNSUPPORTED_SPLIT_TO_BASE", 0.0))
+        _split_to_base = max(0.0, min(1.0, _split_to_base))
+        _eff_base_w = _base_w + _addon_w * _split_to_base
+        _eff_mom_w = _momentum_w + _addon_w * (1.0 - _split_to_base)
         _eff_addon_w = 0.0
 
     conviction = (
-        _base_w
+        _eff_base_w
         + _eff_mom_w * mom_quality
         + _eff_addon_w * addon_norm
     )
@@ -655,9 +689,17 @@ def compute_factor_scores(
     # base_score: driven by trend coherence (0-3.0 scale from _coherent_trend_score)
     # applied: adx_mult * session_mult * conviction blend
     # Formula: abs(trend_score) * adx_mult * session_mult * (floor + (1-floor)*conviction)
-    # The conviction floor means even flat momentum+addon still passes a fraction of trend signal.
+    #
+    # The conviction floor is regime-conditional when CONVICTION_FLOOR_BY_REGIME is
+    # present. RANGING / HIGH_VOLATILITY use a lower floor (default 0.40) because
+    # momentum noise is higher — weak momentum should count for less.
+    _floor_by_regime = CONFIG.get("CONVICTION_FLOOR_BY_REGIME") or {}
+    if isinstance(_floor_by_regime, dict) and regime in _floor_by_regime:
+        _eff_floor = float(_floor_by_regime[regime])
+    else:
+        _eff_floor = _conviction_floor
     base_score = abs(trend_score) * adx_mult * session_mult
-    final_score = base_score * (_conviction_floor + (1.0 - _conviction_floor) * conviction)
+    final_score = base_score * (_eff_floor + (1.0 - _eff_floor) * conviction)
     final_score = max(0.0, min(3.0, final_score))
 
     # ── Factor scores dict (for UI / Marcus Reid diagnostics) ─────────────────
