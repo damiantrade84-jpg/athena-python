@@ -1631,6 +1631,8 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
         <strong>Read-only</strong>: this screen does not write to <code>config.yaml</code> and does not apply runtime changes.
         <br />
         <strong>Not exposed as live scan settings</strong>: <code>FOREX_H4_RESAMPLE_OFFSET_HOURS</code> still exists in <code>config.yaml</code>, but its active scan read path was not verified in the current code, so it remains informational only here.
+        <br />
+        <strong>Also shown (read-only)</strong>: merged <code>TIMED_EXIT</code> (hybrid timed close + optional ATR trail TP) and <code>SCALP_LIVE_MILESTONES</code> (+1R partial / <code>SL_AFTER_PARTIAL</code>) for operator visibility.
       </div>
       <div id="scanSettingsGrid" class="settings-grid">
         <div class="empty-state">

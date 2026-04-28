@@ -101,6 +101,11 @@ def test_api_scan_settings_returns_runtime_snapshot():
         athena_module.CONFIG.get("SCAN_MAX_WORKERS", 3)
     )
     assert data["unverified_scan_keys"] == ["FOREX_H4_RESAMPLE_OFFSET_HOURS"]
+    assert "TIMED_EXIT" in data["settings"]
+    assert isinstance(data["settings"]["TIMED_EXIT"], dict)
+    assert "scalp" in data["settings"]["TIMED_EXIT"]
+    assert "SCALP_LIVE_MILESTONES" in data["settings"]
+    assert "LIVE_MILESTONE_MANAGEMENT" in data["settings"]["SCALP_LIVE_MILESTONES"]
 
 
 def test_api_scan_settings_is_read_only():

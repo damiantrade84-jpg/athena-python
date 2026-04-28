@@ -7795,13 +7795,27 @@ _SCAN_SETTINGS_KEYS = (
 
 
 def _scan_settings_snapshot() -> dict:
-    return {
+    snap = {
         "D1_CANDLES": int(CONFIG.get("D1_CANDLES", 1001) or 1001),
         "H4_CANDLES": int(CONFIG.get("H4_CANDLES", 1001) or 1001),
         "H1_CANDLES": int(CONFIG.get("H1_CANDLES", 1001) or 1001),
         "SCAN_MAX_WORKERS": int(CONFIG.get("SCAN_MAX_WORKERS", 3) or 3),
         "SCAN_DEBUG_CANDLE_META": bool(CONFIG.get("SCAN_DEBUG_CANDLE_META", False)),
     }
+    try:
+        from timed_exit_monitor import _get_timed_cfg as _timed_cfg_merge
+
+        snap["TIMED_EXIT"] = _json_safe(_timed_cfg_merge(lambda: CONFIG))
+    except Exception:
+        snap["TIMED_EXIT"] = {}
+    _se = CONFIG.get("SCALP_ENGINE") or {}
+    snap["SCALP_LIVE_MILESTONES"] = _json_safe(
+        {
+            "LIVE_MILESTONE_MANAGEMENT": bool(_se.get("LIVE_MILESTONE_MANAGEMENT", False)),
+            "SL_AFTER_PARTIAL": str(_se.get("SL_AFTER_PARTIAL", "tp_partial")),
+        }
+    )
+    return snap
 
 
 def _persist_scan_settings_yaml(cfg_path: str, current: dict) -> None:
@@ -8921,9 +8935,9 @@ def api_scalp_execute():
                 con.execute(
                     "INSERT INTO audit_log("
                     "ts,pair,score,max_score,engine,direction,grade,risk,style,"
-                    "entry_price,sl,tp,tp2,volume,ticket,risk_amount,risk_pct,"
+                    "entry_price,sl,tp,tp_partial,tp2,volume,ticket,risk_amount,risk_pct,"
                     "asset_class,regime,factors_json"
-                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         datetime.now(timezone.utc).isoformat(),
                         signal.get("pair") or symbol,
@@ -8937,6 +8951,7 @@ def api_scalp_execute():
                         result.get("entryPrice") or result.get("entry_price"),
                         signal.get("sl"),
                         signal.get("tp1"),
+                        signal.get("tp_partial"),
                         signal.get("tp2"),
                         result.get("volume"),
                         str(result.get("ticket", "")),
@@ -10757,18 +10772,20 @@ def api_open_trades_timed():
     Returns open positions from MT5 + Bybit enriched with:
     - open_time_iso: when the trade was opened (from MT5 pos.time or audit_log ts)
     - style: scalp / intraday / swing (from audit_log)
-    - be_trigger_min: minutes until/since breakeven SL trigger
-    - close_trigger_min: minutes until/since timed close trigger
+    - audit_engine / is_engine_d: Engine D (Scalp Lab) vs other engines
+    - tp_partial: +1R scale-out level from audit (Engine D)
+    - timed_tp_mode / trail_activation_r: global TIMED_EXIT TP policy
+    - be_trigger_min / close_trigger_min: hybrid timed exit windows (omitted for Engine D)
     Used by the dashboard countdown timer on each position card.
     """
     from datetime import datetime, timezone as _tz
-    from timed_exit_monitor import _load_recent_audit_rows, _match_audit_row_for_position
+    from timed_exit_monitor import (
+        _get_timed_cfg,
+        _load_recent_audit_rows,
+        _match_audit_row_for_position,
+    )
 
-    _style_windows = {
-        "scalp":    {"be_min": 5,         "close_min": 10},
-        "intraday": {"be_min": 15,        "close_min": 30},
-        "swing":    {"be_min": 2.5 * 1440, "close_min": 5.0 * 1440},
-    }
+    tcfg = _get_timed_cfg(lambda: CONFIG)
 
     out = []
     now_ts = datetime.now(_tz.utc).timestamp()
@@ -10799,11 +10816,11 @@ def api_open_trades_timed():
 
     audit_rows = _load_recent_audit_rows(_AUDIT_DB)
 
-    cfg_te = CONFIG.get("TIMED_EXIT", {})
-
     for p in all_positions:
         ticket = str(p.get("ticket", ""))
-        audit  = _match_audit_row_for_position(p, audit_rows) or {}
+        audit = _match_audit_row_for_position(p, audit_rows) or {}
+        audit_engine = str(audit.get("engine") or "").strip().lower()
+        is_engine_d = audit_engine in ("scalp", "engine d", "scalp_vp")
 
         # Resolve open time
         raw_open_time = p.get("open_time", 0)  # Unix seconds from MT5
@@ -10836,7 +10853,6 @@ def api_open_trades_timed():
         # Resolve style safely: scalp must never degrade to generic intraday labeling.
         style = ""
         audit_style = str(audit.get("style") or "").strip().lower()
-        audit_engine = str(audit.get("engine") or "").strip().lower()
         pos_engine = str(p.get("engine") or "").strip().lower()
         engine_hint = audit_engine or pos_engine
         if engine_hint in ("scalp", "engine d", "scalp_vp"):
@@ -10848,22 +10864,38 @@ def api_open_trades_timed():
         elif engine_hint in ("intraday", "swing"):
             style = engine_hint
 
-        # Timed exit parameters (disabled for scalps/unknowns)
+        # Timed exit windows: merged TIMED_EXIT (scalp/intraday/swing). Engine D trades
+        # are managed by milestone logic + broker TP/SL — timed_exit_monitor skips them.
         be_min = None
         close_min = None
-        
-        # Resolve display timers only for non-scalp styles shown on this endpoint.
-        if style in ("intraday", "swing"):
-            scfg = cfg_te.get(style, {})
+        style_cfg = tcfg.get(style) if style in ("scalp", "intraday", "swing") else {}
+        timed_global = bool(tcfg.get("enabled", True))
+        timed_style_on = bool((style_cfg or {}).get("timed_close_enabled", True))
+
+        if (
+            style in ("scalp", "intraday", "swing")
+            and timed_global
+            and timed_style_on
+            and not is_engine_d
+        ):
+            scfg = style_cfg or {}
             if style == "swing":
-                be_min = float(scfg.get("breakeven_days", 2.5)) * 1440
-                close_min = float(scfg.get("close_days", 5.0)) * 1440
+                be_min = float(scfg.get("breakeven_days", 2.5)) * 1440.0
+                close_min = float(scfg.get("close_days", 5.0)) * 1440.0
             else:
-                be_min = float(scfg.get("breakeven_min", _style_windows[style]["be_min"]))
-                close_min = float(scfg.get("close_min",   _style_windows[style]["close_min"]))
+                be_min = float(scfg.get("breakeven_min", 5 if style == "scalp" else 15))
+                close_min = float(scfg.get("close_min", 10 if style == "scalp" else 30))
 
         profit = float(p.get("profit", 0))
         in_profit = profit > 0
+
+        _tp_part = audit.get("tp_partial")
+        try:
+            _tp_part_f = float(_tp_part) if _tp_part not in (None, "") else None
+        except (TypeError, ValueError):
+            _tp_part_f = None
+
+        _se = CONFIG.get("SCALP_ENGINE") or {}
 
         # Construct position data with conditional timer fields
         res_p = {
@@ -10884,6 +10916,15 @@ def api_open_trades_timed():
             "close_reached":   False,
             "mins_to_be":      0,
             "mins_to_close":   0,
+            "audit_engine":    audit_engine or None,
+            "is_engine_d":     is_engine_d,
+            "tp_partial":      _tp_part_f,
+            "timed_tp_mode":   str(tcfg.get("tp_mode", "fixed")),
+            "trail_activation_r": float(tcfg.get("trail_activation_r", 1.0)),
+            "timed_exit_daemon_enabled": timed_global,
+            "timed_close_style_enabled": timed_style_on if style in ("scalp", "intraday", "swing") else None,
+            "sl_after_partial": str(_se.get("SL_AFTER_PARTIAL", "tp_partial")),
+            "live_milestone_management": bool(_se.get("LIVE_MILESTONE_MANAGEMENT", False)),
         }
 
         # Attach timers only if both are resolved (hides UI timer for scalps/unknowns)
@@ -12324,7 +12365,7 @@ def _check_mt5_outcomes() -> None:
             con.row_factory = sqlite3.Row
 
             pending = con.execute(
-                "SELECT id, ticket, pair, direction, entry_price, sl, tp, volume, ts, risk_amount, asset_class, engine, style FROM audit_log "
+                "SELECT id, ticket, pair, direction, entry_price, sl, tp, tp_partial, volume, ts, risk_amount, asset_class, engine, style FROM audit_log "
                 "WHERE ticket IS NOT NULL AND ticket != '' AND exit_price IS NULL"
             ).fetchall()
 
@@ -12358,6 +12399,8 @@ def _check_mt5_outcomes() -> None:
                                 cur_px = ((bid + ask) / 2.0) if (bid > 0 and ask > 0) else (bid or ask or 0.0)
                                 if cur_px > 0:
                                     current_r = (cur_px - entry) / sl_dist if direction == "LONG" else (entry - cur_px) / sl_dist
+
+                                    # Step 1: +1R -> close 50% partial + move SL to tp_partial
                                     if current_r >= 1.0 and ticket_str not in _scalp_partial_applied:
                                         partial_vol = max(0.0, vol * 0.5)
                                         close_res = mt5_close_position(int(ticket_str), volume=partial_vol)
@@ -12366,15 +12409,46 @@ def _check_mt5_outcomes() -> None:
                                             log.info(
                                                 f"[MONITOR] MT5 {pos.get('symbol')}: +1R reached - closed 50% ticket={ticket_str}"
                                             )
-                                    tp1_hit = (cur_px >= tp1) if direction == "LONG" else (cur_px <= tp1)
-                                    if tp1 > 0 and tp1_hit and ticket_str not in _scalp_be_applied:
-                                        be_res = mt5_move_sl_to_breakeven(int(ticket_str), entry)
-                                        if be_res.get("success"):
-                                            _scalp_be_applied.add(ticket_str)
-                                            _breakeven_applied.add(ticket_str)
-                                            log.info(
-                                                f"[MONITOR] MT5 {pos.get('symbol')}: TP1 reached - SL moved to BE ticket={ticket_str}"
-                                            )
+                                            _sl_after = str(
+                                                (CONFIG.get("SCALP_ENGINE") or {}).get("SL_AFTER_PARTIAL", "tp_partial")
+                                            ).lower()
+                                            if _sl_after == "tp_partial":
+                                                _tp_partial_raw = float(row.get("tp_partial") or 0) if row.get("tp_partial") else 0.0
+                                                if _tp_partial_raw <= 0:
+                                                    _tp_partial_raw = (entry + sl_dist) if direction == "LONG" else (entry - sl_dist)
+                                                _valid = (
+                                                    (_tp_partial_raw > entry and _tp_partial_raw < cur_px)
+                                                    if direction == "LONG"
+                                                    else (_tp_partial_raw < entry and _tp_partial_raw > cur_px)
+                                                )
+                                                if _valid:
+                                                    be_res = mt5_move_sl_to_breakeven(int(ticket_str), _tp_partial_raw)
+                                                    if be_res.get("success"):
+                                                        _scalp_be_applied.add(ticket_str)
+                                                        _breakeven_applied.add(ticket_str)
+                                                        log.info(
+                                                            f"[MONITOR] MT5 {pos.get('symbol')}: SL moved to tp_partial={_tp_partial_raw:.5f} ticket={ticket_str}"
+                                                        )
+                                            elif _sl_after == "breakeven":
+                                                be_res = mt5_move_sl_to_breakeven(int(ticket_str), entry)
+                                                if be_res.get("success"):
+                                                    _scalp_be_applied.add(ticket_str)
+                                                    _breakeven_applied.add(ticket_str)
+                                                    log.info(
+                                                        f"[MONITOR] MT5 {pos.get('symbol')}: SL moved to BE after partial ticket={ticket_str}"
+                                                    )
+
+                                    # Step 2: fallback — if tp1 hit and SL not yet moved, move to BE
+                                    if tp1 > 0 and ticket_str not in _scalp_be_applied:
+                                        tp1_hit = (cur_px >= tp1) if direction == "LONG" else (cur_px <= tp1)
+                                        if tp1_hit:
+                                            be_res = mt5_move_sl_to_breakeven(int(ticket_str), entry)
+                                            if be_res.get("success"):
+                                                _scalp_be_applied.add(ticket_str)
+                                                _breakeven_applied.add(ticket_str)
+                                                log.info(
+                                                    f"[MONITOR] MT5 {pos.get('symbol')}: TP1 reached - SL moved to BE ticket={ticket_str}"
+                                                )
                     except Exception as me:
                         log.debug(f"[MONITOR] MT5 scalp management check failed for {ticket_str}: {me}")
                 continue  # still open
@@ -12479,7 +12553,7 @@ def _check_ccxt_outcomes() -> None:
                 with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
                     con.row_factory = sqlite3.Row
                     match = con.execute(
-                        "SELECT ticket, sl, tp, entry_price, engine, style FROM audit_log "
+                        "SELECT ticket, sl, tp, tp_partial, entry_price, engine, style FROM audit_log "
                         "WHERE exit_price IS NULL AND ticket IS NOT NULL AND ticket != '' "
                         "AND (pair LIKE '%USDT%') ORDER BY ts DESC LIMIT 20"
                     ).fetchall()
@@ -12509,7 +12583,6 @@ def _check_ccxt_outcomes() -> None:
                     if sl_dist == 0:
                         continue
 
-                    # Entry anchoring guard.
                     if abs(audit_entry - entry_px) / entry_px > 0.01:
                         continue
 
@@ -12518,7 +12591,9 @@ def _check_ccxt_outcomes() -> None:
                     else:
                         current_r = (entry_px - cur_px) / sl_dist
 
-                    # Step 1: +1R -> pay yourself first (close 50%).
+                    _direction_str = "LONG" if side == "long" else "SHORT"
+
+                    # Step 1: +1R -> close 50% partial + move SL to tp_partial
                     if current_r >= 1.0 and ticket not in _scalp_partial_applied:
                         try:
                             close_side = "sell" if side == "long" else "buy"
@@ -12534,32 +12609,57 @@ def _check_ccxt_outcomes() -> None:
                                 log.info(
                                     f"[MONITOR] {ccxt_sym}: +1R reached - closed 50% ({reduce_qty}) ticket={ticket}"
                                 )
+                                _sl_after = str(
+                                    (CONFIG.get("SCALP_ENGINE") or {}).get("SL_AFTER_PARTIAL", "tp_partial")
+                                ).lower()
+                                _remaining = contracts - reduce_qty
+                                if _sl_after == "tp_partial" and _remaining > 0:
+                                    _tp_partial_raw = float(row.get("tp_partial") or 0) if row.get("tp_partial") else 0.0
+                                    if _tp_partial_raw <= 0:
+                                        _tp_partial_raw = (audit_entry + sl_dist) if side == "long" else (audit_entry - sl_dist)
+                                    _valid = (
+                                        (_tp_partial_raw > audit_entry and _tp_partial_raw < cur_px)
+                                        if side == "long"
+                                        else (_tp_partial_raw < audit_entry and _tp_partial_raw > cur_px)
+                                    )
+                                    if _valid:
+                                        be_res = _bybit_mod.bybit_move_sl_to_breakeven(
+                                            ccxt_sym, _direction_str, _tp_partial_raw, _remaining,
+                                        )
+                                        if be_res.get("success"):
+                                            _scalp_be_applied.add(ticket)
+                                            _breakeven_applied.add(ticket)
+                                            log.info(
+                                                f"[MONITOR] {ccxt_sym}: SL moved to tp_partial={_tp_partial_raw:.5f} ticket={ticket}"
+                                            )
+                                elif _sl_after == "breakeven" and _remaining > 0:
+                                    be_res = _bybit_mod.bybit_move_sl_to_breakeven(
+                                        ccxt_sym, _direction_str, entry_px, _remaining,
+                                    )
+                                    if be_res.get("success"):
+                                        _scalp_be_applied.add(ticket)
+                                        _breakeven_applied.add(ticket)
+                                        log.info(
+                                            f"[MONITOR] {ccxt_sym}: SL moved to BE after partial ticket={ticket}"
+                                        )
                         except Exception as pe:
                             log.warning(f"[MONITOR] {ccxt_sym}: +1R partial close failed for ticket={ticket}: {pe}")
 
-                    # Step 2: after TP1 milestone, move SL to breakeven (never widen).
-                    tp1_hit = False
-                    if audit_tp1 > 0:
-                        if side == "long":
-                            tp1_hit = cur_px >= audit_tp1
-                        else:
-                            tp1_hit = cur_px <= audit_tp1
-
-                    if tp1_hit and ticket not in _scalp_be_applied:
-                        result = _bybit_mod.bybit_move_sl_to_breakeven(
-                            ccxt_sym,
-                            "LONG" if side == "long" else "SHORT",
-                            entry_px,
-                            contracts,
-                        )
-                        if result.get("success"):
-                            _scalp_be_applied.add(ticket)
-                            _breakeven_applied.add(ticket)
-                            log.info(
-                                f"[MONITOR] {ccxt_sym}: TP1 reached - SL moved to breakeven @ {entry_px} ticket={ticket}"
+                    # Step 2: fallback — if TP1 hit and SL not yet moved, move to BE
+                    if audit_tp1 > 0 and ticket not in _scalp_be_applied:
+                        tp1_hit = (cur_px >= audit_tp1) if side == "long" else (cur_px <= audit_tp1)
+                        if tp1_hit:
+                            result = _bybit_mod.bybit_move_sl_to_breakeven(
+                                ccxt_sym, _direction_str, entry_px, contracts,
                             )
+                            if result.get("success"):
+                                _scalp_be_applied.add(ticket)
+                                _breakeven_applied.add(ticket)
+                                log.info(
+                                    f"[MONITOR] {ccxt_sym}: TP1 reached - SL moved to BE ticket={ticket}"
+                                )
 
-                    break  # only match one audit row per position
+                    break
 
             except Exception as e:
                 log.debug(f"[MONITOR] breakeven check error: {e}")

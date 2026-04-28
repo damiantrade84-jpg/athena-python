@@ -741,6 +741,75 @@ def calc_bb_width_percentile(
     return pct, label
 
 
+def chandelier_exit(
+    highs: list,
+    lows: list,
+    closes: list,
+    atr_period: int = 14,
+    lookback: int = 22,
+    mult: float = 3.0,
+) -> dict:
+    """Chandelier Exit — ATR-based trailing stop for trend following.
+
+    Returns dict with:
+      long_stop:  list aligned with input — trailing stop for long positions
+                  (highest_high(lookback) - mult * ATR)
+      short_stop: list aligned with input — trailing stop for short positions
+                  (lowest_low(lookback) + mult * ATR)
+      direction:  list of 1 (bullish) / -1 (bearish) based on which stop is active
+
+    The stops ratchet: long_stop only rises, short_stop only falls.
+    Direction flips when price crosses the opposite stop.
+    """
+    n = len(closes)
+    atr_series = calc_atr(highs, lows, closes, atr_period)
+
+    long_stop = [None] * n
+    short_stop = [None] * n
+    direction_out = [None] * n
+
+    start = max(lookback, atr_period + 1)
+    if n <= start:
+        return {"long_stop": long_stop, "short_stop": short_stop, "direction": direction_out}
+
+    for i in range(start, n):
+        atr_val = atr_series[i]
+        if atr_val is None:
+            long_stop[i] = long_stop[i - 1]
+            short_stop[i] = short_stop[i - 1]
+            direction_out[i] = direction_out[i - 1]
+            continue
+
+        hh = max(highs[i - lookback + 1 : i + 1])
+        ll = min(lows[i - lookback + 1 : i + 1])
+
+        raw_long = hh - mult * atr_val
+        raw_short = ll + mult * atr_val
+
+        prev_long = long_stop[i - 1]
+        prev_short = short_stop[i - 1]
+
+        if prev_long is not None and closes[i - 1] > prev_long:
+            raw_long = max(raw_long, prev_long)
+        if prev_short is not None and closes[i - 1] < prev_short:
+            raw_short = min(raw_short, prev_short)
+
+        long_stop[i] = raw_long
+        short_stop[i] = raw_short
+
+        prev_dir = direction_out[i - 1]
+        if prev_dir is None:
+            direction_out[i] = 1 if closes[i] > raw_long else -1
+        elif closes[i] > prev_short if prev_dir == -1 else False:
+            direction_out[i] = 1
+        elif closes[i] < prev_long if prev_dir == 1 else False:
+            direction_out[i] = -1
+        else:
+            direction_out[i] = prev_dir
+
+    return {"long_stop": long_stop, "short_stop": short_stop, "direction": direction_out}
+
+
 def calc_levels(
     price: float,
     atr: float,

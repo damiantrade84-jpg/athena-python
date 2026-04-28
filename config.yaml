@@ -615,7 +615,7 @@ ETORO:
 
 # ── Auto-Trader ────────────────────────────────────────────
 
-AUTO_TRADE_ENABLED: false          # Start auto-trader on server boot
+AUTO_TRADE_ENABLED: true          # Start auto-trader on server boot
 
 # AUTO_TRADE_MIN_SCORE is the scan floor that decides which signals reach the
 
@@ -1577,7 +1577,7 @@ NAKED_ENGINE:
 
       scalp: {min_score: 3.0, min_rr: 1.4}
 
-      intraday: {min_score: 3.0, min_rr: 1.6}
+      intraday: {min_score: 4.0, min_rr: 1.6}
 
       swing: {min_score: 4.0, min_rr: 2.0}
 
@@ -1585,7 +1585,7 @@ NAKED_ENGINE:
 
       scalp: {min_score: 3.0, min_room_atr: 0.5, min_rr: 1.3}
 
-      intraday: {min_score: 3.0, min_room_atr: 0.9, min_rr: 1.5}
+      intraday: {min_score: 4.0, min_room_atr: 0.9, min_rr: 1.5}
 
       swing: {min_score: 4.0, min_room_atr: 1.2, min_rr: 1.9}
 
@@ -1593,7 +1593,7 @@ NAKED_ENGINE:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 3.0}
+      intraday: {min_score: 4.0}
 
       swing: {min_score: 4.0}
 
@@ -1601,7 +1601,7 @@ NAKED_ENGINE:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 3.0}
+      intraday: {min_score: 4.0}
 
       swing: {min_score: 4.0}
 
@@ -1609,7 +1609,7 @@ NAKED_ENGINE:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 3.0}
+      intraday: {min_score: 4.0}
 
       swing: {min_score: 4.0}
 
@@ -1617,7 +1617,7 @@ NAKED_ENGINE:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 3.0}
+      intraday: {min_score: 4.0}
 
       swing: {min_score: 4.0}
 
@@ -1625,7 +1625,7 @@ NAKED_ENGINE:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 3.0}
+      intraday: {min_score: 4.0}
 
       swing: {min_score: 4.0}
 
@@ -1633,7 +1633,7 @@ NAKED_ENGINE:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 3.0}
+      intraday: {min_score: 4.0}
 
       swing: {min_score: 4.0}
 
@@ -1641,7 +1641,7 @@ NAKED_ENGINE:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 3.0}
+      intraday: {min_score: 4.0}
 
       swing: {min_score: 4.0}
 
@@ -1649,7 +1649,7 @@ NAKED_ENGINE:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 3.0}
+      intraday: {min_score: 4.0}
 
       swing: {min_score: 4.0}
 
@@ -1657,7 +1657,7 @@ NAKED_ENGINE:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 3.0}
+      intraday: {min_score: 4.0}
 
       swing: {min_score: 4.0}
 
@@ -1665,7 +1665,7 @@ NAKED_ENGINE:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 3.0}
+      intraday: {min_score: 4.0}
 
       swing: {min_score: 4.0}
 
@@ -1673,7 +1673,7 @@ NAKED_ENGINE:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 3.0}
+      intraday: {min_score: 4.0}
 
       swing: {min_score: 4.0}
 
@@ -1681,7 +1681,7 @@ NAKED_ENGINE:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 3.0}
+      intraday: {min_score: 4.0}
 
       swing: {min_score: 4.0}
 
@@ -1689,7 +1689,7 @@ NAKED_ENGINE:
 
       scalp: {min_score: 3.0}
 
-      intraday: {min_score: 3.0}
+      intraday: {min_score: 4.0}
 
       swing: {min_score: 4.0}
 
@@ -2110,11 +2110,19 @@ TIMED_EXIT:
 
     close_min: 5               # testing: close profitable scalps at first timed check instead of waiting for BE retrace
 
+    timed_close_enabled: true  # set false to keep BE-on-timer but never force close (SL/TP only)
+
+    tp_progress_exempt: 0.40   # skip timed close if >= 40% toward TP (mirrors swing logic)
+
   intraday:
 
     breakeven_min: 15          # move SL to entry after 15 min if in profit
 
     close_min: 30              # close at market after 30 min if still in profit
+
+    timed_close_enabled: true  # set false to keep BE-on-timer but never force close (SL/TP only)
+
+    tp_progress_exempt: 0.50   # skip timed close if >= 50% toward TP (mirrors swing logic)
 
   swing:
 
@@ -2122,7 +2130,43 @@ TIMED_EXIT:
 
     close_days: 5.0            # close at market after 5 days if still in profit
 
+    timed_close_enabled: true  # set false to disable timed close for swing
+
     tp_progress_exempt: 0.50   # skip close if >= 50% toward TP — let TP manage it
+
+  # ── Trailing ATR TP (Phase 2) ────────────────────────────────────────────
+  # When tp_mode is "trailing_atr", after a trade reaches +trail_activation_r
+  # in profit, the fixed TP is replaced by a Chandelier-style ATR trail.
+  # The trail only moves in the trade's favour (never widens).
+  # Trade closes when price closes below the trail level.
+
+  tp_mode: "fixed"             # "fixed" = current behavior | "trailing_atr" = Chandelier trail
+
+  trail_activation_r: 1.0     # trailing begins after trade reaches this R-multiple in profit
+
+  trail_atr_mult:              # ATR multiplier for the trailing distance per style
+    scalp: 2.0
+    intraday: 2.5
+    swing: 3.0
+
+  trail_lookback: 14           # bars of execution TF for highest_high/lowest_low lookback
+
+  trail_timeframe:             # candle TF used for trailing computation per style
+    scalp: "H1"
+    intraday: "H4"
+    swing: "D1"
+
+  # ── Indicator confirmation (Phase 3) ─────────────────────────────────────
+  # When enabled, trail-triggered close requires secondary indicator confirmation.
+  # Prevents premature exits during normal retracements within a trend.
+
+  trail_indicator_confirm: false   # set true to require RSI/MACD confirmation
+
+  trail_confirm_rsi_threshold: 40  # LONG close when RSI drops below this; SHORT when above (100 - this)
+
+  trail_confirm_rsi_period: 14     # RSI lookback period
+
+  trail_confirm_macd: true         # also require MACD histogram sign flip
 
 CHART_VISION_DATASET_ENABLED: false
 

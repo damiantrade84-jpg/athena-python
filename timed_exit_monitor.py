@@ -7,10 +7,18 @@ Hybrid logic per style:
   SCALP   : move SL to breakeven at 5 min → close at 10 min if still in profit
   INTRADAY: move SL to breakeven at 15 min → close at 30 min if still in profit
   SWING   : move SL to breakeven at 2.5 days → close at 5 days if in profit
-            AND price has not yet covered >= 50% of TP distance (exempt if it has)
 
-If profit <= 0 at close-trigger time → do NOT force close (SL is now at breakeven,
-protecting the trade). The trade closes naturally via SL or TP.
+All styles support tp_progress_exempt: skip timed close if price has covered
+>= threshold fraction of entry→TP distance (letting TP manage the trade).
+
+Phase 2 — Trailing ATR TP (Chandelier exit):
+  When tp_mode="trailing_atr", after a trade reaches +trail_activation_r in profit,
+  the timed-close path is replaced by a Chandelier-style ATR trail. Trade closes when
+  price breaks below the trail level. SL stays ATR-based as always.
+
+Phase 3 — Indicator confirmation:
+  When trail_indicator_confirm=true, a trail-triggered close also requires RSI reversal
+  and/or MACD histogram flip to confirm the direction change. Prevents whipsaws.
 
 All windows are read from CONFIG["TIMED_EXIT"] — edit in config.yaml, not here.
 """
@@ -25,22 +33,26 @@ from datetime import datetime, timezone
 
 log = logging.getLogger("timed_exit")
 
-# Tracks which tickets have already had SL moved to breakeven this session.
-# Reset on process restart (intentional — BE state is re-evaluated from position data).
 _be_done: set = set()
+_trail_state: dict = {}
 
 _DEFAULT_CFG: dict = {
     "enabled": True,
     "check_interval_sec": 30,
-    # Minimum R-fraction of risk_amount the trade must be in profit before BE is armed.
-    # Prevents arming BE on $0.01 profit where spread immediately stops out at 0.00.
     "breakeven_min_profit_r": 0.20,
-    # Fraction of SL distance added as buffer above/below entry for the BE SL price.
-    # e.g. 0.05 on a 20-pip SL → 1 pip above entry, ensuring a small positive close.
     "breakeven_buffer_r": 0.05,
-    "scalp":    {"breakeven_min": 5,   "close_min": 10},
-    "intraday": {"breakeven_min": 15,  "close_min": 30},
-    "swing":    {"breakeven_days": 2.5, "close_days": 5.0, "tp_progress_exempt": 0.50},
+    "scalp":    {"breakeven_min": 5,   "close_min": 10, "timed_close_enabled": True, "tp_progress_exempt": 0.40},
+    "intraday": {"breakeven_min": 15,  "close_min": 30, "timed_close_enabled": True, "tp_progress_exempt": 0.50},
+    "swing":    {"breakeven_days": 2.5, "close_days": 5.0, "timed_close_enabled": True, "tp_progress_exempt": 0.50},
+    "tp_mode": "fixed",
+    "trail_activation_r": 1.0,
+    "trail_atr_mult": {"scalp": 2.0, "intraday": 2.5, "swing": 3.0},
+    "trail_lookback": 14,
+    "trail_timeframe": {"scalp": "H1", "intraday": "H4", "swing": "D1"},
+    "trail_indicator_confirm": False,
+    "trail_confirm_rsi_threshold": 40,
+    "trail_confirm_rsi_period": 14,
+    "trail_confirm_macd": True,
 }
 
 
@@ -58,6 +70,23 @@ def _get_timed_cfg(config_fn) -> dict:
     merged["breakeven_buffer_r"] = float(
         raw.get("breakeven_buffer_r", _DEFAULT_CFG["breakeven_buffer_r"])
     )
+    merged["tp_mode"] = str(raw.get("tp_mode", _DEFAULT_CFG["tp_mode"])).lower()
+    merged["trail_activation_r"] = float(raw.get("trail_activation_r", _DEFAULT_CFG["trail_activation_r"]))
+    trail_mult_raw = raw.get("trail_atr_mult") or {}
+    merged["trail_atr_mult"] = {
+        s: float(trail_mult_raw.get(s, _DEFAULT_CFG["trail_atr_mult"][s]))
+        for s in ("scalp", "intraday", "swing")
+    }
+    merged["trail_lookback"] = int(raw.get("trail_lookback", _DEFAULT_CFG["trail_lookback"]))
+    trail_tf_raw = raw.get("trail_timeframe") or {}
+    merged["trail_timeframe"] = {
+        s: str(trail_tf_raw.get(s, _DEFAULT_CFG["trail_timeframe"][s])).upper()
+        for s in ("scalp", "intraday", "swing")
+    }
+    merged["trail_indicator_confirm"] = bool(raw.get("trail_indicator_confirm", _DEFAULT_CFG["trail_indicator_confirm"]))
+    merged["trail_confirm_rsi_threshold"] = int(raw.get("trail_confirm_rsi_threshold", _DEFAULT_CFG["trail_confirm_rsi_threshold"]))
+    merged["trail_confirm_rsi_period"] = int(raw.get("trail_confirm_rsi_period", _DEFAULT_CFG["trail_confirm_rsi_period"]))
+    merged["trail_confirm_macd"] = bool(raw.get("trail_confirm_macd", _DEFAULT_CFG["trail_confirm_macd"]))
     return merged
 
 
@@ -69,7 +98,7 @@ def _load_recent_audit_rows(db_path: str) -> list[dict]:
             rows = con.execute(
                 """
                 SELECT id, ticket, pair, engine, style, ts, direction, entry_price, sl, tp,
-                       volume, risk_amount, asset_class, exit_time
+                       tp_partial, volume, risk_amount, asset_class, exit_time
                 FROM   audit_log
                 WHERE  pair IS NOT NULL
                   AND  grade NOT LIKE '%ERR%'
@@ -184,6 +213,7 @@ def _row_for_live_position(position: dict, audit_rows: list[dict]) -> dict | Non
         "entry_price": audit.get("entry_price") or position.get("entry") or position.get("entryPrice"),
         "sl": audit.get("sl") or position.get("sl"),
         "tp": audit.get("tp") or position.get("tp"),
+        "tp_partial": audit.get("tp_partial"),
         "volume": audit.get("volume") or position.get("volume"),
         "risk_amount": audit.get("risk_amount"),
         "asset_class": audit.get("asset_class"),
@@ -303,6 +333,186 @@ def _live_current_price(live: dict, fallback: float = 0.0) -> float:
         return 0.0
 
 
+def _compute_chandelier_trail(
+    pair: str, style: str, direction: str, entry: float, sl: float,
+    tcfg: dict, ticket_key: str,
+) -> float | None:
+    """Compute Chandelier-style trailing stop from recent candle data.
+
+    Returns the trail price level, or None if candle data is unavailable.
+    Updates _trail_state[ticket_key] with the running best trail level
+    (ratchets in the trade's favour; never widens).
+    """
+    try:
+        from candles_cache import fetch_candles
+        from indicators import calc_atr
+    except ImportError:
+        return None
+
+    tf = tcfg["trail_timeframe"].get(style, "H4")
+    lookback = tcfg["trail_lookback"]
+    mult = tcfg["trail_atr_mult"].get(style, 2.5)
+
+    try:
+        candles = fetch_candles({"pair": pair, "source": "auto"}, tf, lookback + 20)
+    except Exception:
+        candles = None
+
+    if not candles or len(candles) < lookback + 1:
+        return None
+
+    highs = [float(c[2]) for c in candles]
+    lows = [float(c[3]) for c in candles]
+    closes = [float(c[4]) for c in candles]
+
+    atr_series = calc_atr(highs, lows, closes, 14)
+    atr_val = next((v for v in reversed(atr_series) if v is not None), None)
+    if atr_val is None or atr_val <= 0:
+        return None
+
+    recent_highs = highs[-lookback:]
+    recent_lows = lows[-lookback:]
+    highest = max(recent_highs)
+    lowest = min(recent_lows)
+
+    if direction == "LONG":
+        raw_trail = highest - mult * atr_val
+    else:
+        raw_trail = lowest + mult * atr_val
+
+    prev = _trail_state.get(ticket_key)
+    if prev is not None:
+        if direction == "LONG":
+            raw_trail = max(raw_trail, prev)
+        else:
+            raw_trail = min(raw_trail, prev)
+
+    _trail_state[ticket_key] = raw_trail
+    return raw_trail
+
+
+def _check_indicator_confirmation(
+    pair: str, style: str, direction: str, tcfg: dict,
+) -> bool:
+    """Check RSI and/or MACD for direction-change confirmation.
+
+    Returns True if indicators confirm the reversal (safe to close).
+    Returns True on any data error (fail-open: allow close if we can't check).
+    """
+    if not tcfg.get("trail_indicator_confirm", False):
+        return True
+
+    try:
+        from candles_cache import fetch_candles
+        from indicators import calc_rsi, calc_macd
+    except ImportError:
+        return True
+
+    tf = tcfg["trail_timeframe"].get(style, "H4")
+    rsi_period = tcfg.get("trail_confirm_rsi_period", 14)
+    rsi_thresh = tcfg.get("trail_confirm_rsi_threshold", 40)
+    check_macd = tcfg.get("trail_confirm_macd", True)
+
+    try:
+        candles = fetch_candles({"pair": pair, "source": "auto"}, tf, max(rsi_period + 30, 60))
+    except Exception:
+        return True
+
+    if not candles or len(candles) < rsi_period + 5:
+        return True
+
+    closes = [float(c[4]) for c in candles]
+
+    rsi_series = calc_rsi(closes, rsi_period)
+    rsi_val = next((v for v in reversed(rsi_series) if v is not None), None)
+    if rsi_val is None:
+        return True
+
+    rsi_confirms = False
+    if direction == "LONG" and rsi_val < rsi_thresh:
+        rsi_confirms = True
+    elif direction == "SHORT" and rsi_val > (100 - rsi_thresh):
+        rsi_confirms = True
+
+    if not rsi_confirms:
+        return False
+
+    if not check_macd:
+        return True
+
+    macd_data = calc_macd(closes)
+    hist = macd_data.get("hist", [])
+    recent_hist = [v for v in hist[-3:] if v is not None]
+    if len(recent_hist) < 2:
+        return True
+
+    if direction == "LONG" and recent_hist[-1] < 0 and recent_hist[-2] >= 0:
+        return True
+    if direction == "SHORT" and recent_hist[-1] > 0 and recent_hist[-2] <= 0:
+        return True
+
+    if direction == "LONG" and recent_hist[-1] < 0:
+        return True
+    if direction == "SHORT" and recent_hist[-1] > 0:
+        return True
+
+    return False
+
+
+def _should_trail_close(
+    row: dict, style: str, direction: str, entry: float, sl: float,
+    cur_price: float, tcfg: dict,
+) -> bool:
+    """Evaluate whether a trailing ATR TP close should fire.
+
+    Returns True if price has broken the Chandelier trail AND indicator
+    confirmation passes (when enabled). Returns False otherwise.
+    """
+    _risk_dist = abs(entry - sl) if sl > 0 else 0.0
+    if _risk_dist <= 0:
+        return False
+
+    if direction == "LONG":
+        current_r = (cur_price - entry) / _risk_dist
+    else:
+        current_r = (entry - cur_price) / _risk_dist
+
+    activation_r = tcfg.get("trail_activation_r", 1.0)
+    if current_r < activation_r * 0.5:
+        return False
+
+    pair = row.get("pair") or ""
+    ticket_key = f"{row.get('ticket')}_{pair}"
+
+    trail_level = _compute_chandelier_trail(
+        pair, style, direction, entry, sl, tcfg, ticket_key,
+    )
+    if trail_level is None:
+        return False
+
+    breached = False
+    if direction == "LONG" and cur_price < trail_level:
+        breached = True
+    elif direction == "SHORT" and cur_price > trail_level:
+        breached = True
+
+    if not breached:
+        return False
+
+    if not _check_indicator_confirmation(pair, style, direction, tcfg):
+        log.debug(
+            f"[TIMED_EXIT] Trail breached but indicator confirmation failed: {pair} "
+            f"style={style} trail={trail_level:.5f} price={cur_price:.5f}"
+        )
+        return False
+
+    log.info(
+        f"[TIMED_EXIT] TRAIL CLOSE signal: {pair} style={style} direction={direction} "
+        f"trail={trail_level:.5f} price={cur_price:.5f} R={current_r:.2f}"
+    )
+    return True
+
+
 def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
     """Apply timed exit logic to a single MT5 trade row."""
     try:
@@ -351,71 +561,88 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
     if style == "swing":
         be_trigger_min  = scfg["breakeven_days"] * 24 * 60
         close_trigger_min = scfg["close_days"] * 24 * 60
-        exempt_threshold  = scfg.get("tp_progress_exempt", 0.50)
     else:
         be_trigger_min    = float(scfg["breakeven_min"])
         close_trigger_min = float(scfg["close_min"])
-        exempt_threshold  = 1.0  # not used for scalp/intraday
+
+    exempt_threshold = float(scfg.get("tp_progress_exempt", 1.0))
+    timed_close_enabled = scfg.get("timed_close_enabled", True)
 
     close_due_now = mins >= close_trigger_min
     be_due_now = mins >= be_trigger_min
 
+    _sl_raw = float(row.get("sl") or 0)
+
+    # ── Phase 2: Trailing ATR TP ──────────────────────────────────────────────
+    if tcfg.get("tp_mode") == "trailing_atr" and profit > 0:
+        if _should_trail_close(row, style, direction, entry, _sl_raw, cur_price, tcfg):
+            result = mt5_close_position(ticket)
+            if result.get("success"):
+                actual_close_price = result.get("closePrice")
+                live_pnl = result.get("liveProfit", 0.0)
+                pnl_r = 0.0
+                if live_pnl != 0 and row.get("risk_amount") and row["risk_amount"] > 0:
+                    pnl_r = round(live_pnl / float(row["risk_amount"]), 2)
+                if db_path:
+                    _mark_timed_close(db_path, row, "mt5", actual_close_price=actual_close_price, live_pnl=live_pnl)
+                log.info(
+                    f"[TIMED_EXIT] TRAIL CLOSE: {row['pair']} ticket={ticket} "
+                    f"style={style} mins={mins:.0f} profit=${live_pnl:.2f} R={pnl_r}"
+                )
+                try:
+                    telegram_notify.notify_trade_closed(pair=row["pair"], pnl_r=pnl_r, is_win=live_pnl > 0, duration_minutes=mins)
+                except Exception:
+                    pass
+                return
+
+    # ── Degenerate close-before-BE path (scalp/intraday with close_min <= be_min)
     if (
         style != "swing"
+        and timed_close_enabled
         and close_due_now
         and be_due_now
         and close_trigger_min <= be_trigger_min
         and profit > 0
     ):
-        result = mt5_close_position(ticket)
-        if result.get("success"):
-            actual_close_price = result.get("closePrice")
-            live_pnl = result.get("liveProfit", 0.0)
-            entry_price = result.get("entryPrice")
-
-            pnl_r = 0.0
-            if live_pnl != 0 and row.get("risk_amount") and row["risk_amount"] > 0:
-                pnl_r = round(live_pnl / float(row["risk_amount"]), 2)
-
-            if db_path:
-                _mark_timed_close(
-                    db_path,
-                    row,
-                    "mt5",
-                    actual_close_price=actual_close_price,
-                    live_pnl=live_pnl,
-                )
+        progress = _tp_progress(cur_price, entry, tp, direction)
+        if progress >= exempt_threshold:
             log.info(
-                f"[TIMED_EXIT] TIMED CLOSE: {row['pair']} ticket={ticket} "
-                f"style={style} mins={mins:.0f} profit=${live_pnl:.2f} R={pnl_r} "
-                f"fill={actual_close_price} entry={entry_price}"
+                f"[TIMED_EXIT] {style.upper()} EXEMPT: {row['pair']} ticket={ticket} "
+                f"TP progress={progress:.0%} >= {exempt_threshold:.0%} — letting TP manage"
             )
-            try:
-                telegram_notify.notify_trade_closed(
-                    pair=row["pair"],
-                    pnl_r=pnl_r,
-                    is_win=live_pnl > 0,
-                    duration_minutes=mins,
+        else:
+            result = mt5_close_position(ticket)
+            if result.get("success"):
+                actual_close_price = result.get("closePrice")
+                live_pnl = result.get("liveProfit", 0.0)
+                entry_price = result.get("entryPrice")
+                pnl_r = 0.0
+                if live_pnl != 0 and row.get("risk_amount") and row["risk_amount"] > 0:
+                    pnl_r = round(live_pnl / float(row["risk_amount"]), 2)
+                if db_path:
+                    _mark_timed_close(db_path, row, "mt5", actual_close_price=actual_close_price, live_pnl=live_pnl)
+                log.info(
+                    f"[TIMED_EXIT] TIMED CLOSE: {row['pair']} ticket={ticket} "
+                    f"style={style} mins={mins:.0f} profit=${live_pnl:.2f} R={pnl_r} "
+                    f"fill={actual_close_price} entry={entry_price}"
                 )
-            except Exception:
-                pass
-            return
-        log.warning(
-            f"[TIMED_EXIT] Immediate close failed before BE: {row['pair']} ticket={ticket} "
-            f"— {result.get('error')}"
-        )
+                try:
+                    telegram_notify.notify_trade_closed(pair=row["pair"], pnl_r=pnl_r, is_win=live_pnl > 0, duration_minutes=mins)
+                except Exception:
+                    pass
+                return
+            log.warning(
+                f"[TIMED_EXIT] Immediate close failed before BE: {row['pair']} ticket={ticket} "
+                f"— {result.get('error')}"
+            )
 
     # ── Step 1: Breakeven trigger ─────────────────────────────────────────────
-    # Require meaningful profit before arming BE — avoids setting SL at entry on
-    # a $0.01 gain where spread immediately stops the trade out at 0.00R.
     _risk_amount = float(row.get("risk_amount") or 0)
-    _sl_raw = float(row.get("sl") or 0)
     _sl_dist = abs(entry - _sl_raw) if _sl_raw > 0 else 0.0
     _be_min_profit_r = tcfg.get("breakeven_min_profit_r", 0.20)
     _be_buffer_r = tcfg.get("breakeven_buffer_r", 0.05)
     _be_min_profit = (_risk_amount * _be_min_profit_r) if _risk_amount > 0 else 0.0
 
-    # Shift the BE SL slightly in the trade's favour so close is always > 0.00R.
     if _sl_dist > 0 and _be_buffer_r > 0:
         _be_buffer = _sl_dist * _be_buffer_r
         _direction_long = str(direction).upper() != "SHORT"
@@ -442,6 +669,9 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
                 pass
 
     # ── Step 2: Close trigger ─────────────────────────────────────────────────
+    if not timed_close_enabled:
+        return
+
     if close_due_now:
         if profit <= 0:
             log.debug(
@@ -450,35 +680,26 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
             )
             return
 
-        # Swing exemption: if >= 50% toward TP, let TP manage it
-        if style == "swing":
-            progress = _tp_progress(cur_price, entry, tp, direction)
-            if progress >= exempt_threshold:
-                log.info(
-                    f"[TIMED_EXIT] SWING EXEMPT: {row['pair']} ticket={ticket} "
-                    f"TP progress={progress:.0%} — letting TP manage"
-                )
-                return
+        progress = _tp_progress(cur_price, entry, tp, direction)
+        if progress >= exempt_threshold:
+            log.info(
+                f"[TIMED_EXIT] {style.upper()} EXEMPT: {row['pair']} ticket={ticket} "
+                f"TP progress={progress:.0%} >= {exempt_threshold:.0%} — letting TP manage"
+            )
+            return
 
         result = mt5_close_position(ticket)
         if result.get("success"):
-            # Use actual fill price and live profit from close result
             actual_close_price = result.get("closePrice")
             live_pnl = result.get("liveProfit", 0.0)
             entry_price = result.get("entryPrice")
-            direction = result.get("direction")
-            
-            # Compute R-multiple if we have risk info
             pnl_r = 0.0
             if live_pnl != 0 and row.get("risk_amount") and row["risk_amount"] > 0:
                 pnl_r = round(live_pnl / float(row["risk_amount"]), 2)
             elif live_pnl != 0 and entry_price and row.get("sl"):
                 risk_dist = abs(float(entry_price) - float(row["sl"]))
                 if risk_dist > 0:
-                    # For forex: volume is in lots, risk_amount should be used
-                    # This fallback is only for crypto/stocks where volume is in base units
                     pnl_r = round(live_pnl / (risk_dist * float(row.get("volume", 1))), 2)
-            
             if db_path:
                 _mark_timed_close(db_path, row, "mt5", actual_close_price=actual_close_price, live_pnl=live_pnl)
             log.info(
@@ -487,12 +708,7 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
                 f"fill={actual_close_price} entry={entry_price}"
             )
             try:
-                telegram_notify.notify_trade_closed(
-                    pair=row["pair"],
-                    pnl_r=pnl_r,
-                    is_win=live_pnl > 0,
-                    duration_minutes=mins,
-                )
+                telegram_notify.notify_trade_closed(pair=row["pair"], pnl_r=pnl_r, is_win=live_pnl > 0, duration_minutes=mins)
             except Exception:
                 pass
         else:
@@ -554,49 +770,72 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
     if style == "swing":
         be_trigger_min    = scfg["breakeven_days"] * 24 * 60
         close_trigger_min = scfg["close_days"] * 24 * 60
-        exempt_threshold  = scfg.get("tp_progress_exempt", 0.50)
     else:
         be_trigger_min    = float(scfg["breakeven_min"])
         close_trigger_min = float(scfg["close_min"])
-        exempt_threshold  = 1.0
+
+    exempt_threshold = float(scfg.get("tp_progress_exempt", 1.0))
+    timed_close_enabled = scfg.get("timed_close_enabled", True)
 
     ccxt_sym = bybit_map_symbol(pair)
 
     close_due_now = mins >= close_trigger_min
     be_due_now = mins >= be_trigger_min
 
+    _sl_raw = float(row.get("sl") or 0)
+
+    # ── Phase 2: Trailing ATR TP ──────────────────────────────────────────────
+    if tcfg.get("tp_mode") == "trailing_atr" and profit > 0:
+        if _should_trail_close(row, style, direction, entry, _sl_raw, cur_price, tcfg):
+            result = bybit_close_position(pair, direction, volume)
+            if result.get("success"):
+                if db_path:
+                    _mark_timed_close(db_path, row, "bybit")
+                log.info(
+                    f"[TIMED_EXIT] TRAIL CLOSE: {pair} style={style} "
+                    f"mins={mins:.0f} profit=${profit:.2f}"
+                )
+                try:
+                    telegram_notify.notify_trade_closed(pair=pair, pnl_r=0.0, is_win=True, duration_minutes=mins)
+                except Exception:
+                    pass
+                return
+
+    # ── Degenerate close-before-BE path (scalp/intraday with close_min <= be_min)
     if (
         style != "swing"
+        and timed_close_enabled
         and close_due_now
         and be_due_now
         and close_trigger_min <= be_trigger_min
         and profit > 0
     ):
-        result = bybit_close_position(pair, direction, volume)
-        if result.get("success"):
-            if db_path:
-                _mark_timed_close(db_path, row, "bybit")
+        progress = _tp_progress(cur_price, entry, tp, direction)
+        if progress >= exempt_threshold:
             log.info(
-                f"[TIMED_EXIT] TIMED CLOSE: {pair} style={style} "
-                f"mins={mins:.0f} profit=${profit:.2f}"
+                f"[TIMED_EXIT] {style.upper()} EXEMPT: {pair} "
+                f"TP progress={progress:.0%} >= {exempt_threshold:.0%} — letting TP manage"
             )
-            try:
-                telegram_notify.notify_trade_closed(
-                    pair=pair,
-                    pnl_r=0,
-                    is_win=profit > 0,
-                    duration_minutes=mins,
+        else:
+            result = bybit_close_position(pair, direction, volume)
+            if result.get("success"):
+                if db_path:
+                    _mark_timed_close(db_path, row, "bybit")
+                log.info(
+                    f"[TIMED_EXIT] TIMED CLOSE: {pair} style={style} "
+                    f"mins={mins:.0f} profit=${profit:.2f}"
                 )
-            except Exception:
-                pass
-            return
-        log.warning(
-            f"[TIMED_EXIT] Immediate close failed before BE: {pair} — {result.get('error')}"
-        )
+                try:
+                    telegram_notify.notify_trade_closed(pair=pair, pnl_r=0, is_win=profit > 0, duration_minutes=mins)
+                except Exception:
+                    pass
+                return
+            log.warning(
+                f"[TIMED_EXIT] Immediate close failed before BE: {pair} — {result.get('error')}"
+            )
 
     # ── Step 1: Breakeven trigger ─────────────────────────────────────────────
     _risk_amount = float(row.get("risk_amount") or 0)
-    _sl_raw = float(row.get("sl") or 0)
     _sl_dist = abs(entry - _sl_raw) if _sl_raw > 0 else 0.0
     _be_min_profit_r = tcfg.get("breakeven_min_profit_r", 0.20)
     _be_buffer_r = tcfg.get("breakeven_buffer_r", 0.05)
@@ -627,6 +866,9 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
                 pass
 
     # ── Step 2: Close trigger ─────────────────────────────────────────────────
+    if not timed_close_enabled:
+        return
+
     if close_due_now:
         if profit <= 0:
             log.debug(
@@ -634,13 +876,13 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
             )
             return
 
-        if style == "swing":
-            progress = _tp_progress(cur_price, entry, tp, direction)
-            if progress >= exempt_threshold:
-                log.info(
-                    f"[TIMED_EXIT] SWING EXEMPT: {pair} TP progress={progress:.0%}"
-                )
-                return
+        progress = _tp_progress(cur_price, entry, tp, direction)
+        if progress >= exempt_threshold:
+            log.info(
+                f"[TIMED_EXIT] {style.upper()} EXEMPT: {pair} "
+                f"TP progress={progress:.0%} >= {exempt_threshold:.0%} — letting TP manage"
+            )
+            return
 
         result = bybit_close_position(pair, direction, volume)
         if result.get("success"):
@@ -651,12 +893,7 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
                 f"mins={mins:.0f} profit=${profit:.2f}"
             )
             try:
-                telegram_notify.notify_trade_closed(
-                    pair=pair,
-                    pnl_r=0.0,
-                    is_win=True,
-                    duration_minutes=mins,
-                )
+                telegram_notify.notify_trade_closed(pair=pair, pnl_r=0.0, is_win=True, duration_minutes=mins)
             except Exception:
                 pass
         else:
