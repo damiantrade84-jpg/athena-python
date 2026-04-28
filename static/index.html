@@ -5667,6 +5667,22 @@ async function loadScanSettings(force) {
     ['D1_CANDLES', 'H4_CANDLES', 'H1_CANDLES', 'SCAN_MAX_WORKERS', 'SCAN_DEBUG_CANDLE_META'].forEach(function(key) {
       html += renderScanSettingCard(_scanSettingsMeta[key], settings[key]);
     });
+    if (settings.TIMED_EXIT && typeof settings.TIMED_EXIT === 'object') {
+      html += '<div class="settings-card">' +
+        '<div class="settings-card-head"><div><div class="settings-card-title">Timed exit &amp; trail TP</div>' +
+        '<div class="settings-card-key">TIMED_EXIT</div></div></div>' +
+        '<div class="settings-card-copy">Merged runtime policy for hybrid BE / timed close, <code>tp_progress_exempt</code>, and optional <code>trailing_atr</code> mode. Edit in <code>config.yaml</code>; restart not required if server reloads config.</div>' +
+        '<pre style="margin:10px 0 0;padding:12px;background:rgba(0,0,0,0.35);border-radius:8px;font-size:10px;line-height:1.35;overflow:auto;max-height:320px;color:#e2e8f0;font-family:ui-monospace,monospace">' +
+        escapeHtml(JSON.stringify(settings.TIMED_EXIT, null, 2)) + '</pre></div>';
+    }
+    if (settings.SCALP_LIVE_MILESTONES && typeof settings.SCALP_LIVE_MILESTONES === 'object') {
+      html += '<div class="settings-card">' +
+        '<div class="settings-card-head"><div><div class="settings-card-title">Scalp Lab live milestones</div>' +
+        '<div class="settings-card-key">SCALP_ENGINE</div></div></div>' +
+        '<div class="settings-card-copy">+1R partial and where the runner stop moves after partial (<code>SL_AFTER_PARTIAL</code>).</div>' +
+        '<pre style="margin:10px 0 0;padding:12px;background:rgba(0,0,0,0.35);border-radius:8px;font-size:10px;line-height:1.35;overflow:auto;max-height:160px;color:#e2e8f0;font-family:ui-monospace,monospace">' +
+        escapeHtml(JSON.stringify(settings.SCALP_LIVE_MILESTONES, null, 2)) + '</pre></div>';
+    }
     grid.innerHTML = html;
     _scanSettingsLoaded = true;
     if (status) {
@@ -6758,7 +6774,16 @@ async function checkScoreDecay() {
 
     for (var pair in data) {
       var d = data[pair];
-      var isOpenOnBoard = Array.isArray(window.timedOpenPositions) && window.timedOpenPositions.some(function(p) {
+      var onBoardPositions = [];
+      try {
+        if (typeof mergedOpenPositions === 'function') {
+          onBoardPositions = mergedOpenPositions();
+        }
+      } catch (_) {}
+      if ((!onBoardPositions || !onBoardPositions.length) && window._openPositions && window._openPositions.length) {
+        onBoardPositions = window._openPositions;
+      }
+      var isOpenOnBoard = Array.isArray(onBoardPositions) && onBoardPositions.some(function(p) {
         return (p && (p.pair === pair || p.symbol === pair));
       });
       if (!isOpenOnBoard) continue;
@@ -9237,6 +9262,16 @@ function renderOpenPositions(positions) {
     var closeMins = timedData.close_trigger_min;
     var inProfit = timedData.in_profit;
     var timerHtml = '';
+    var engDNote = '';
+    if (timedData.is_engine_d) {
+      engDNote = '<div class="pos-card-row" style="font-size:10px;color:#a78bfa;line-height:1.4">' +
+        'Scalp Lab — broker milestones: ' + (timedData.live_milestone_management ? 'ON' : 'OFF') +
+        ' · after +1R partial, SL → ' + escapeHtml(String(timedData.sl_after_partial || 'tp_partial')) +
+        (timedData.tp_partial != null && timedData.tp_partial > 0
+          ? ' @ ' + fmtPrice(timedData.tp_partial)
+          : '') +
+        '</div>';
+    }
 
     var hasTimedWindow = (beMins != null && closeMins != null);
     var styleHasTimedExit = (style === 'scalp' || style === 'intraday' || style === 'swing');
@@ -9269,6 +9304,12 @@ function renderOpenPositions(positions) {
             timerMeta = (inProfit ? '✅ In profit' : '⏳ Not in profit') + ' · BE in ' + formatMins(timedData.mins_to_be);
           }
         }
+        if (timedData.timed_tp_mode === 'trailing_atr' && inProfit) {
+          var tar = timedData.trail_activation_r != null ? timedData.trail_activation_r : 1;
+          timerMeta = (timerMeta ? timerMeta + ' · ' : '') + 'TP mode: ATR trail after +' + tar + 'R';
+        } else if (timedData.timed_tp_mode && timedData.timed_tp_mode !== 'fixed') {
+          timerMeta = (timerMeta ? timerMeta + ' · ' : '') + 'TP mode: ' + escapeHtml(String(timedData.timed_tp_mode));
+        }
       }
 
       var timerPrefix = (timerLabel && timerVal !== undefined) ? '<span>' + timerLabel + (timerVal ? ' <strong>' + timerVal + '</strong>' : '') + '</span>' : '';
@@ -9286,7 +9327,12 @@ function renderOpenPositions(positions) {
       '</div>' +
       '<div class="pos-card-pnl ' + pnlClass + '">' + pnlSign + '$' + pnl.toFixed(2) + '</div>' +
       '<div class="pos-card-row">Entry: ' + fmtPrice(p.entry) + '</div>' +
-      '<div class="pos-card-row">SL: ' + fmtPrice(p.sl) + ' &nbsp; TP: ' + fmtPrice(p.tp) + '</div>' +
+      '<div class="pos-card-row">SL: ' + fmtPrice(p.sl) + ' &nbsp; TP: ' + fmtPrice(p.tp) +
+        (timedData.tp_partial != null && Number(timedData.tp_partial) > 0
+          ? ' &nbsp; T1: ' + fmtPrice(timedData.tp_partial)
+          : '') +
+      '</div>' +
+      engDNote +
       '<div class="pos-card-row">Vol: ' + p.volume + (p.ticket ? ' &nbsp; #' + p.ticket : '') + '</div>' +
       timerHtml +
       '<button class="pos-close-btn" onclick="confirmClosePosition(\'' + exch + '\',\'' + pairSafe + '\',\'' + dir + '\',' + p.volume + ',' + (p.ticket || 0) + ',this)">CLOSE</button>' +
@@ -11677,10 +11723,10 @@ function buildScalpCard(s, idx, diagnostic) {
       '<div class="levels-grid">'+
         '<div class="level-box"><div class="level-label">Entry</div><div class="level-val">'+fmtPrice(s.price || 0)+'</div></div>'+
         '<div class="level-box"><div class="level-label">SL</div><div class="level-val bear">'+fmtPrice(s.sl || 0)+'</div></div>'+
-        '<div class="level-box"><div class="level-label" title="First scale-out +1R — move stop to BE">T1 <span style="color:var(--muted);font-size:9px">+1R</span></div><div class="level-val" style="color:#f0b90b">'+fmtPrice(s.tp_partial || s.price || 0)+'</div></div>'+
+        '<div class="level-box"><div class="level-label" title="First scale-out at +1R. Live: stop moves to this level after partial (SCALP_ENGINE.SL_AFTER_PARTIAL, default tp_partial).">T1 <span style="color:var(--muted);font-size:9px">+1R</span></div><div class="level-val" style="color:#f0b90b">'+fmtPrice(s.tp_partial || s.price || 0)+'</div></div>'+
       '</div>'+
       '<div class="levels-grid" style="margin-top:4px">'+
-        '<div class="level-box" style="grid-column:1/3"><div class="level-label" title="Structural target — trail after BE armed">T2 <span style="color:var(--muted);font-size:9px">structural · '+rr.toFixed(1)+'R</span></div><div class="level-val bull">'+fmtPrice(s.tp1 || 0)+'</div></div>'+
+        '<div class="level-box" style="grid-column:1/3"><div class="level-label" title="Primary take-profit (structural / MIN_RR target)">T2 <span style="color:var(--muted);font-size:9px">structural · '+rr.toFixed(1)+'R</span></div><div class="level-val bull">'+fmtPrice(s.tp1 || 0)+'</div></div>'+
         (s.tp2 ? '<div class="level-box"><div class="level-label" title="Runner / HTF extension">T3 <span style="color:var(--muted);font-size:9px">runner</span></div><div class="level-val" style="color:#a78bfa">'+fmtPrice(s.tp2)+'</div></div>' : '<div class="level-box"></div>')+
       '</div>'+
 
