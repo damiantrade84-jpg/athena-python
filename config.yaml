@@ -2108,9 +2108,9 @@ TIMED_EXIT:
 
     breakeven_min: 5           # move SL to entry after 5 min if in profit
 
-    close_min: 5               # testing: close profitable scalps at first timed check instead of waiting for BE retrace
+    close_min: 10              # force-close at 10 min if still in profit and TP not near
 
-    timed_close_enabled: true  # set false to keep BE-on-timer but never force close (SL/TP only)
+    timed_close_enabled: false # Engine A/B scalp: BE-only — timed close OFF (SL/TP manages rest)
 
     tp_progress_exempt: 0.40   # skip timed close if >= 40% toward TP (mirrors swing logic)
 
@@ -2140,7 +2140,7 @@ TIMED_EXIT:
   # The trail only moves in the trade's favour (never widens).
   # Trade closes when price closes below the trail level.
 
-  tp_mode: "fixed"             # "fixed" = current behavior | "trailing_atr" = Chandelier trail
+  tp_mode: "trailing_atr"      # "fixed" = current behavior | "trailing_atr" = Chandelier trail (test mode)
 
   trail_activation_r: 1.0     # trailing begins after trade reaches this R-multiple in profit
 
