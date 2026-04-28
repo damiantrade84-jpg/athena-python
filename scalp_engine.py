@@ -2063,7 +2063,12 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
     if cfg.get("MAX_DAILY_LOSSES") and _session_snapshot["total_losses_today"] >= max_daily:
         log.warning(f"[SCALP] Daily loss limit reached: {_session_snapshot['total_losses_today']} losses")
         return {
-            "signals": [], "skipped": len(pairs_or_symbols), "scanned": 0,
+            "signals": [],
+            "skipped": [
+                {"pair": display, "reason": f"MAX_DAILY_LOSSES ({max_daily}) reached"}
+                for display in pairs_or_symbols
+            ],
+            "scanned": 0,
             "session": "DAILY_LOSS_LIMIT", "reason": f"MAX_DAILY_LOSSES ({max_daily}) reached",
         }
 
@@ -2098,6 +2103,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
         if display in _already_skipped:
             continue
         mt5_sym = None
+        _skip_start = len(skipped)
         _funnel: dict[str, Any] = {
             "symbol": display,
             "asset_type": "",
@@ -2222,6 +2228,12 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                             continue
                         htf_bias = infer_bias_from_ema_stack(candles_bias)
 
+                _funnel["data_available"] = True
+                _funnel["candle_timeframes_available"] = ["M15", "M5", execution_tf]
+                _funnel["lower_tf_candle_count"] = len(candles_exec)
+                _funnel["latest_lower_tf_candle"] = str((candles_exec[-1] or {}).get("time"))
+                _funnel["freshness_status"] = "fresh"
+
             else:
                 mt5_sym = mt5_map_symbol(display)
                 if not mt5_sym:
@@ -2321,6 +2333,12 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                             continue
                         htf_bias = infer_bias_from_ema_stack(candles_bias)
 
+                _funnel["data_available"] = True
+                _funnel["candle_timeframes_available"] = ["M15", "M5", execution_tf]
+                _funnel["lower_tf_candle_count"] = len(candles_exec)
+                _funnel["latest_lower_tf_candle"] = str((candles_exec[-1] or {}).get("time"))
+                _funnel["freshness_status"] = "fresh"
+
             # ══════════════════════════════════════════════════════════════
             # FABIO VALENTINI PIPELINE
             # ══════════════════════════════════════════════════════════════
@@ -2398,6 +2416,11 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
 
             # Pillar 3: VWAP directional lean
             vwap = _check_vwap_lean(candles_m15, current_price) if cfg.get("VWAP_ENABLED", True) else {"lean": None, "vwap_value": 0}
+            _funnel["cvd_available"] = bool(cvd.get("direction"))
+            _funnel["cvd_bias"] = cvd.get("direction")
+            _funnel["absorption_detected"] = bool(absorption.get("detected"))
+            _funnel["vwap_available"] = bool(vwap.get("vwap_value"))
+            _funnel["vwap_bias"] = vwap.get("lean")
 
             # Setup classification
             setup = _classify_setup(market_state, price_loc, absorption, cvd, aaa, vwap, htf_bias, asset_type=asset_type)
@@ -2413,16 +2436,11 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             _funnel["setup_type"] = setup.get("setup_type")
             _funnel["setup_direction"] = direction
 
-            # HTF bias filter
+            candidate_fail_reasons: list[str] = []
+            candidate_soft_warnings: list[str] = []
             if use_bias and htf_bias and direction != htf_bias:
                 _ct_reason = f"counter_trend:{direction}_vs_{bias_tf}_{htf_bias}"
-                _record_stability_sample(display, asset_type, False,
-                                         feature_map={"bias_aligned": False},
-                                         reason=_ct_reason)
-                skipped.append({"pair": display, "reason": _ct_reason})
-                _funnel["gate_result"] = "BLOCKED"
-                _funnel["fail_reasons"].append(_ct_reason)
-                continue
+                candidate_soft_warnings.append(_ct_reason)
 
             # Risk levels — use per-group min_rr if available (e.g. forex_majors/crosses)
             from scoring import get_pair_score_group as _gpsg
@@ -2432,15 +2450,12 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             if levels.get("rr_below_min"):
                 log.warning(
                     f"[SCALP] {display}: {setup['setup_type']} RR {levels['rr']:.2f} < MIN_RR "
-                    f"— skipping (natural TP too close)"
+                    f"— surfacing as watchlist candidate (natural TP too close)"
                 )
-                _record_stability_sample(display, asset_type, False, reason="rr_below_min")
-                skipped.append({"pair": display, "reason": "rr_below_min"})
-                _funnel["gate_result"] = "BLOCKED"
-                _funnel["fail_reasons"].append("rr_below_min")
-                continue
+                candidate_fail_reasons.append("rr_below_min")
 
             # --- ENGINE D FEE GUARD ---
+            fee_guard_metrics = {}
             if cfg.get("ENGINE_D_FEE_GUARD_ENABLED", True):
                 risk_distance_abs = abs(levels["entry"] - levels["sl"])
                 risk_distance_pct = risk_distance_abs / levels["entry"] if levels["entry"] > 0 else 0
@@ -2453,22 +2468,21 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 
                 max_cost_R = float(cfg.get("ENGINE_D_MAX_COST_R", 0.20))
                 min_stop_pct = float(cfg.get("ENGINE_D_MIN_STOP_PCT", 0.0005))
+                fee_guard_metrics = {
+                    "engine_d_reject_reason": None,
+                    "risk_distance_pct": risk_distance_pct,
+                    "estimated_total_cost_pct": estimated_total_cost_pct,
+                    "cost_as_R": cost_as_R,
+                    "min_required_stop_pct": min_stop_pct,
+                    "max_allowed_cost_R": max_cost_R,
+                }
                 
                 if risk_distance_abs <= 0 or risk_distance_pct < min_stop_pct or cost_as_R > max_cost_R:
                     _fee_reason = "fee_guard_micro_stop"
                     log.warning(f"[SCALP] {_fee_reason} on {display}: cost_as_R={cost_as_R:.2f} > {max_cost_R} or stop_pct={risk_distance_pct:.5f} < {min_stop_pct}")
-                    _record_stability_sample(display, asset_type, False, reason=_fee_reason)
-                    skipped.append({"pair": display, "reason": _fee_reason})
-                    _funnel["gate_result"] = "BLOCKED"
-                    _funnel["fail_reasons"].append(_fee_reason)
-                    _funnel["diagnostic_notes"].update({
-                        "engine_d_reject_reason": _fee_reason,
-                        "risk_distance_pct": risk_distance_pct,
-                        "estimated_total_cost_pct": estimated_total_cost_pct,
-                        "cost_as_R": cost_as_R,
-                        "min_required_stop_pct": min_stop_pct
-                    })
-                    continue
+                    candidate_fail_reasons.append(_fee_reason)
+                    fee_guard_metrics["engine_d_reject_reason"] = _fee_reason
+                _funnel["diagnostic_notes"].update(fee_guard_metrics)
 
             advisory = _build_engine_d_advisory(
                 market_state=market_state,
@@ -2508,22 +2522,6 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             # Grade gate
             grade = quality["grade"]
             _GRADE_RANK = {"A": 4, "B": 3, "C": 2, "D": 1}
-            if _GRADE_RANK.get(grade, 0) < _GRADE_RANK.get(min_grade, 2):
-                _grade_reason = f"grade_{grade}_below_min"
-                _record_stability_sample(display, asset_type, False, reason=_grade_reason)
-                skipped.append({
-                    "pair": display,
-                    "reason": _grade_reason,
-                    "ai_grade": grade,
-                    "ai_score": quality.get("score"),
-                    "min_grade": min_grade,
-                    "size_multiplier": quality.get("size_multiplier"),
-                    "ai_reasons": quality.get("reasons", []),
-                })
-                _funnel["gate_result"] = "BLOCKED"
-                _funnel["fail_reasons"].append(_grade_reason)
-                continue
-
             _funnel["setup_score"] = quality.get("score")
             _funnel["setup_grade"] = grade
             _funnel["rr"] = levels.get("rr")
@@ -2531,6 +2529,27 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             _funnel["entry"] = levels.get("entry")
             _funnel["sl"] = levels.get("sl")
             _funnel["tp"] = levels.get("tp1")
+
+            execution_min_grade = str(cfg.get("EXECUTION_MIN_GRADE", cfg.get("MIN_GRADE_AUTO_EXECUTE", "B"))).upper()
+            grade_rank = _GRADE_RANK.get(grade, 0)
+            execution_rank = _GRADE_RANK.get(execution_min_grade, 3)
+            gate_result = "PASS"
+            executable = True
+            candidate_status_reason = "method_valid"
+            if grade == "D":
+                gate_result = "BLOCKED"
+                executable = False
+                candidate_status_reason = "grade_D_context_only"
+                candidate_fail_reasons.append("grade_D_context_only")
+            elif candidate_fail_reasons or grade_rank < execution_rank:
+                gate_result = "WATCHLIST"
+                executable = False
+                candidate_status_reason = ",".join(candidate_fail_reasons) if candidate_fail_reasons else f"grade_{grade}_watchlist"
+                if grade_rank < execution_rank:
+                    candidate_soft_warnings.append(f"grade_{grade}_below_execution_min_{execution_min_grade}")
+            _funnel["gate_result"] = gate_result
+            _funnel["fail_reasons"] = list(candidate_fail_reasons)
+            _funnel["soft_warnings"] = list(candidate_soft_warnings)
 
             # ── Build signal dict (preserves keys required by athena.py) ─
             signal = {
@@ -2563,6 +2582,13 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "ai_grade":        quality["grade"],
                 "ai_reasons":      quality["reasons"],
                 "size_multiplier": quality["size_multiplier"],
+                "gate_result":      gate_result,
+                "executable":       executable,
+                "candidate_status": candidate_status_reason,
+                "fail_reasons":     list(candidate_fail_reasons),
+                "soft_warnings":    list(candidate_soft_warnings),
+                "rr_ok":            not levels.get("rr_below_min", False),
+                "fee_guard":        fee_guard_metrics,
                 # Context
                 "spread_pips":     spread_pips,
                 "session_risk_state": get_scalp_session_risk_state(),
@@ -2612,10 +2638,9 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 signal["size_multiplier"] = min(signal.get("size_multiplier", 1.0), 0.5)
                 signal["ai_reasons"] = signal.get("ai_reasons", []) + ["size_cut:+2R_reached"]
             
-            _funnel["gate_result"] = "PASS"
             signals.append(signal)
             _record_stability_sample(
-                display, asset_type, True,
+                display, asset_type, executable,
                 score_norm=quality["score"] / 100.0,
                 feature_map={
                     "market_state": 1.0 if market_state == "balance" else 0.0,
@@ -2628,7 +2653,9 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     "vwap_aligned": vwap.get("lean") == direction,
                     "spread_pips": spread_pips,
                     "bias_aligned": htf_bias == direction if htf_bias else True,
+                    "gate_result": gate_result,
                 },
+                reason=None if executable else candidate_status_reason,
             )
 
         except Exception as e:
@@ -2636,6 +2663,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             _record_stability_sample(display, _guess_asset_type(display), False, reason=f"error:{str(e)[:60]}")
             skipped.append({"pair": display, "reason": f"error:{str(e)[:60]}"})
         finally:
+            if _funnel.get("gate_result") == "NOT_CALLED" and len(skipped) > _skip_start:
+                _reason = str((skipped[-1] or {}).get("reason") or "BLOCKED")
+                _funnel["gate_result"] = "NO_SETUP" if _reason.startswith("no_setup:") else "BLOCKED"
+                _funnel["fail_reasons"].append(_reason)
             if log_engine_d_funnel is not None and build_funnel_row is not None:
                 try:
                     log_engine_d_funnel(build_funnel_row(**_funnel))

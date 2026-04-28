@@ -8324,18 +8324,23 @@ function toggleChart(sid) {
 }
 
 function buildExecButton(s) {
-  if (s.signalTier === 'watchlist' && !window._testMode) return '';
   var sid=(s.symbol||'').replace(/[\/=^.]/g,'_');
   var dir=s.direction==='LONG'?'LONG':'SHORT';
   var isCrypto=s.type==='crypto';
+  var isWatchlist = String(s.signalTier || '').toLowerCase() === 'watchlist';
   var entryPrice = getSignalLivePrice(s);
   var connected = isCrypto ? window._bybitConnected : window._mt5Connected;
   var disTitle = isCrypto ? 'Broker Not Connected (Bybit)' : 'Broker Not Connected (MT5)';
-  var disabled = !connected;
+  if (isWatchlist && !window._testMode) {
+    disTitle = 'Watchlist signal: enable Test Mode to force execute';
+  }
+  var disabled = !connected || (isWatchlist && !window._testMode);
   var via = isCrypto ? ' (Bybit Futures)' : ' (MT5)';
-  var isForce = s.signalTier === 'watchlist' && window._testMode;
+  var isForce = isWatchlist && window._testMode;
   var btnClass = isForce ? 'exec-btn force' : 'exec-btn '+dir;
-  var label = isForce ? 'FORCE EXECUTE '+dir+via : 'EXECUTE '+dir+via;
+  var label = isForce
+    ? 'FORCE EXECUTE '+dir+via
+    : (isWatchlist ? 'EXECUTE BLOCKED '+dir+via : 'EXECUTE '+dir+via);
   var styleExecHtml = buildStyleExecButtons(s);
   return '<button class="'+btnClass+'" id="execbtn-'+sid+'" onclick="confirmExecute(\''+s._execKey+'\', '+isForce+')" '+(disabled?'disabled title="'+disTitle+'"':'')+'>'+
     label+
@@ -8346,6 +8351,9 @@ function buildExecButton(s) {
 function buildStyleExecButtons(s) {
   if (!s || !s.symbol) return '';
   var sid=(s.symbol||'').replace(/[\/=^.]/g,'_');
+  var isWatchlist = String(s.signalTier || '').toLowerCase() === 'watchlist';
+  var forceBlocked = isWatchlist && !window._testMode;
+  var disabledAttr = forceBlocked ? ' disabled title="Watchlist signal: enable Test Mode to force execute"' : '';
   var ai = s.aiAnalysis || s.ai_analysis || {};
   var sr = ai.style_ratings || {};
   function warn(style) {
@@ -8356,9 +8364,9 @@ function buildStyleExecButtons(s) {
     return '';
   }
   var row = '<div style="display:flex;gap:6px;margin-top:8px;">';
-  row += '<button class="exec-btn force" id="exec-style-scalp-'+sid+'" style="flex:1;font-size:11px;" onclick="executeSignalStyle(\''+s._execKey+'\',\'scalp\',\'exec-style-scalp-'+sid+'\')">⚡ SCALP'+warn('scalp')+'</button>';
-  row += '<button class="exec-btn force" id="exec-style-intraday-'+sid+'" style="flex:1;font-size:11px;" onclick="executeSignalStyle(\''+s._execKey+'\',\'intraday\',\'exec-style-intraday-'+sid+'\')">📊 INTRADAY'+warn('intraday')+'</button>';
-  row += '<button class="exec-btn force" id="exec-style-swing-'+sid+'" style="flex:1;font-size:11px;" onclick="executeSignalStyle(\''+s._execKey+'\',\'swing\',\'exec-style-swing-'+sid+'\')">🌊 SWING'+warn('swing')+'</button>';
+  row += '<button class="exec-btn force" id="exec-style-scalp-'+sid+'" style="flex:1;font-size:11px;" onclick="executeSignalStyle(\''+s._execKey+'\',\'scalp\',\'exec-style-scalp-'+sid+'\')"'+disabledAttr+'>⚡ SCALP'+warn('scalp')+'</button>';
+  row += '<button class="exec-btn force" id="exec-style-intraday-'+sid+'" style="flex:1;font-size:11px;" onclick="executeSignalStyle(\''+s._execKey+'\',\'intraday\',\'exec-style-intraday-'+sid+'\')"'+disabledAttr+'>📊 INTRADAY'+warn('intraday')+'</button>';
+  row += '<button class="exec-btn force" id="exec-style-swing-'+sid+'" style="flex:1;font-size:11px;" onclick="executeSignalStyle(\''+s._execKey+'\',\'swing\',\'exec-style-swing-'+sid+'\')"'+disabledAttr+'>🌊 SWING'+warn('swing')+'</button>';
   row += '</div>';
   return row;
 }
@@ -11504,11 +11512,12 @@ async function runScalpScan() {
       renderScalpPairChips(listEl, data.pairs);
     }
     renderScalpSignals(data.signals || [], data.skipped || [], data.diagnostic || false);
-    var n = (data.signals || []).length;
+    var candidates = (data.signals || []).length;
+    var n = data.pass_count != null ? data.pass_count : candidates;
     var sk = (data.skipped || []).length;
     var tot = data.scanned != null ? data.scanned : (data.pair_count || n);
     var diagLabel = _scalpDiagnostic ? ' [DIAG]' : '';
-    if (status) status.textContent = 'Scanned ' + tot + diagLabel + ' | ' + n + ' pass | ' + sk + ' skip | ' + new Date().toLocaleTimeString();
+    if (status) status.textContent = 'Scanned ' + tot + diagLabel + ' | ' + n + ' pass | ' + candidates + ' rated | ' + sk + ' skip | ' + new Date().toLocaleTimeString();
   } catch(e) {
     if (status) status.textContent = 'Error: ' + e.message;
     showToast('Scalp Scan: ' + e.message, true);
@@ -11548,9 +11557,11 @@ function buildScalpCard(s, idx, diagnostic) {
   var sid = display.replace(/[\/=^. ]/g, '_');
   var isSkipped = s._isSkipped || false;
   var gk = s.ai_grade || 'C';
+  var gateResult = String(s.gate_result || s.gateResult || (s.executable === false ? 'WATCHLIST' : 'PASS')).toUpperCase();
+  var isActionable = !isSkipped && s.executable !== false && gateResult === 'PASS';
   var dirCls = s.direction === 'LONG' ? 'LONG' : 'SHORT';
   var gradeColors = {A:'#10b981', B:'#3b82f6', C:'#f59e0b', D:'#ef4444'};
-  var borderColor = isSkipped ? '#ef4444' : (gradeColors[gk] || 'var(--border)');
+  var borderColor = isSkipped || gateResult === 'BLOCKED' ? '#ef4444' : (gateResult === 'WATCHLIST' ? '#f59e0b' : (gradeColors[gk] || 'var(--border)'));
 
   // VP level badge helper
   var zoneType = (s.zone_type || 'unknown').replace('_', ' ').toUpperCase();
@@ -11625,6 +11636,15 @@ function buildScalpCard(s, idx, diagnostic) {
       '<div style="font-size:10px;color:#fca5a5;font-family:monospace">' + skipReason + '</div>' +
     '</div>';
   }
+  var nonExecBanner = '';
+  if (!isSkipped && !isActionable) {
+    var statusReason = escapeHtml(String(s.candidate_status || (s.fail_reasons && s.fail_reasons.length ? s.fail_reasons.join(', ') : gateResult)));
+    var label = gateResult === 'BLOCKED' ? 'BLOCKED - CONTEXT ONLY' : 'WATCHLIST - NOT AUTO EXECUTABLE';
+    nonExecBanner = '<div style="padding:8px 10px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.35);border-radius:6px;margin-bottom:10px">' +
+      '<div style="font-size:10px;font-weight:700;color:#f59e0b">' + label + '</div>' +
+      '<div style="font-size:10px;color:#fde68a;font-family:monospace">' + statusReason + '</div>' +
+    '</div>';
+  }
 
   return '<div class="signal-card scalp-card" id="scalp-card-'+sid+'" style="animation-delay:'+(idx*60)+'ms;border-left:4px solid '+borderColor+'">'+
     '<div class="card-header">'+
@@ -11644,6 +11664,7 @@ function buildScalpCard(s, idx, diagnostic) {
     '</div>'+
     '<div class="card-body">'+
       skippedBanner +
+      nonExecBanner +
 
       // Confluence pills row
       (pills && !isSkipped ? '<div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:4px">'+pills+'</div>' : '') +
@@ -11682,7 +11703,8 @@ function buildScalpCard(s, idx, diagnostic) {
       (isSkipped ? '' :
       '<div style="display:flex;gap:8px;margin-top:12px">'+
         '<button class="analyze-btn" style="flex:1" onclick="runScalpVisionConfirm(this, \''+display+'\')">🧠 VISION</button>'+
-        '<button class="exec-btn '+dirCls+'" style="flex:2;margin-top:0" onclick="executeScalp(this, \''+sid+'\')">⚡ EXECUTE SCALP</button>'+
+        (isActionable ? '<button class="exec-btn '+dirCls+'" style="flex:2;margin-top:0" onclick="executeScalp(this, \''+sid+'\')">⚡ EXECUTE SCALP</button>' :
+          '<button class="exec-btn" disabled style="flex:2;margin-top:0;opacity:.55;cursor:not-allowed">WATCHLIST ONLY</button>')+
       '</div>') +
     '</div>'+
   '</div>';

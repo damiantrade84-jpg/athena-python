@@ -8627,7 +8627,15 @@ def _scalp_ui_signal(raw_signal: dict) -> dict:
         "size_multiplier": raw_signal.get("size_multiplier"),
         "sl_method": raw_signal.get("sl_method"),
         "rr1": raw_signal.get("rr1"),
+        "tp_partial": raw_signal.get("tp_partial"),
         "ai_reasons": raw_signal.get("ai_reasons", []),
+        "gate_result": raw_signal.get("gate_result", "PASS"),
+        "executable": bool(raw_signal.get("executable", True)),
+        "candidate_status": raw_signal.get("candidate_status"),
+        "fail_reasons": raw_signal.get("fail_reasons", []),
+        "soft_warnings": raw_signal.get("soft_warnings", []),
+        "fee_guard": raw_signal.get("fee_guard", {}),
+        "rr_ok": raw_signal.get("rr_ok"),
         "advisory": raw_signal.get("advisory"),
         "advisory_summary": raw_signal.get("advisory_summary"),
         "premarket_delta_cluster_type": raw_signal.get("premarket_delta_cluster_type"),
@@ -8707,7 +8715,12 @@ def api_scalp_scan():
                 "sessions_active": result.get("sessions_active", []),
                 "reason": result.get("reason"),
                 "diagnostic": diagnostic,
-                "pass_count": len(signals),
+                "pass_count": sum(
+                    1
+                    for _sig in signals
+                    if _sig.get("executable") and _sig.get("gate_result", "PASS") == "PASS"
+                ),
+                "candidate_count": len(signals),
                 "skip_count": len(skipped),
             }
         )
@@ -8793,6 +8806,25 @@ def api_scalp_execute():
                 ), 200
         else:
             signal = raw_signals[0]
+
+        if signal.get("gate_result", "PASS") != "PASS" or signal.get("executable") is False:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": signal.get("candidate_status") or "ENGINE_D_NOT_EXECUTABLE",
+                    "skipped": [
+                        {
+                            "pair": signal.get("pair") or symbol,
+                            "reason": signal.get("candidate_status") or "ENGINE_D_NOT_EXECUTABLE",
+                            "gate_result": signal.get("gate_result"),
+                            "ai_grade": signal.get("ai_grade"),
+                            "ai_score": signal.get("ai_score"),
+                            "fail_reasons": signal.get("fail_reasons", []),
+                        }
+                    ],
+                    "fresh_scan": scan,
+                }
+            ), 200
 
         is_crypto = (signal.get("type") == "crypto")
 
@@ -14788,6 +14820,7 @@ def _ld_build_engine_d_row(scalp_cached: dict, pair: dict) -> dict:
     asset_type = pair.get("type") or ""
     limited_data = asset_type not in ("crypto",)
     soft_warnings = ["DATA_LIMITED_NON_CRYPTO"] if limited_data else []
+    soft_warnings.extend(_ld_list(scalp_cached.get("soft_warnings")))
 
     if is_stale:
         return {**_ld_empty_engine_d(), "softWarnings": soft_warnings,
@@ -14811,7 +14844,10 @@ def _ld_build_engine_d_row(scalp_cached: dict, pair: dict) -> dict:
 
     grade = scalp_cached.get("ai_grade")
     score = scalp_cached.get("ai_score")
-    if grade in ("A", "B"):
+    explicit_gate = scalp_cached.get("gate_result") or scalp_cached.get("gateResult")
+    if explicit_gate:
+        gate_result = explicit_gate
+    elif grade in ("A", "B"):
         gate_result = "PASS"
     elif grade == "C":
         gate_result = "WATCHLIST"
@@ -14829,7 +14865,7 @@ def _ld_build_engine_d_row(scalp_cached: dict, pair: dict) -> dict:
         "spread": scalp_cached.get("spread"),
         "rr": scalp_cached.get("rr1") or scalp_cached.get("rr"),
         "direction": scalp_cached.get("direction"),
-        "failReasons": _ld_list(scalp_cached.get("ai_reasons")),
+        "failReasons": _ld_list(scalp_cached.get("fail_reasons") or scalp_cached.get("ai_reasons")),
         "softWarnings": soft_warnings,
         "diagnosticNotes": _ld_list(scalp_cached.get("diagnostic_notes")),
         "missingData": _ld_list(scalp_cached.get("missing_data")),

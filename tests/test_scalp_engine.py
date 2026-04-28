@@ -967,7 +967,7 @@ def test_grade_uses_explicit_config_size_multipliers(monkeypatch):
     assert q["size_multiplier"] == 0.75
 
 
-def test_run_scalp_scan_uses_min_grade_for_scan_gate(monkeypatch):
+def test_run_scalp_scan_surfaces_grade_c_as_watchlist(monkeypatch):
     monkeypatch.setitem(
         scalp_engine.CONFIG,
         "SCALP_ENGINE",
@@ -1002,6 +1002,8 @@ def test_run_scalp_scan_uses_min_grade_for_scan_gate(monkeypatch):
     result = scalp_engine.run_scalp_scan(["EUR/USD"])
     assert len(result["signals"]) == 1
     assert result["signals"][0]["ai_grade"] == "C"
+    assert result["signals"][0]["gate_result"] == "WATCHLIST"
+    assert result["signals"][0]["executable"] is False
 
     monkeypatch.setitem(
         scalp_engine.CONFIG,
@@ -1014,11 +1016,62 @@ def test_run_scalp_scan_uses_min_grade_for_scan_gate(monkeypatch):
     )
 
     result = scalp_engine.run_scalp_scan(["EUR/USD"])
-    assert result["signals"] == []
-    assert result["skipped"][0]["reason"] == "grade_C_below_min"
-    assert result["skipped"][0]["ai_grade"] == "C"
-    assert result["skipped"][0]["ai_score"] == 55
-    assert result["skipped"][0]["min_grade"] == "B"
+    assert result["skipped"] == []
+    assert len(result["signals"]) == 1
+    assert result["signals"][0]["ai_grade"] == "C"
+    assert result["signals"][0]["ai_score"] == 55
+    assert result["signals"][0]["gate_result"] == "WATCHLIST"
+    assert result["signals"][0]["executable"] is False
+    assert "grade_C_below_execution_min_B" in result["signals"][0]["soft_warnings"]
+
+
+def test_run_scalp_scan_surfaces_fee_guard_candidate(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "SESSION_FILTER": True,
+            "SESSION_MODE": "all",
+            "EXECUTION_TIMEFRAME": "M1",
+            "EXECUTION_MIN_GRADE": "B",
+            "ENGINE_D_FEE_GUARD_ENABLED": True,
+            "ENGINE_D_MAX_COST_R": 0.20,
+            "ENGINE_D_MIN_STOP_PCT": 0.0005,
+            "ESTIMATED_FEE_PCT": 0.0006,
+            "ESTIMATED_SLIPPAGE_PCT": 0.0002,
+        },
+    )
+    monkeypatch.setattr(scalp_engine, "get_current_sessions", lambda: ["london"])
+    monkeypatch.setattr(scalp_engine, "scalp_session_window", lambda *args, **kwargs: (True, "all"))
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")
+    monkeypatch.setattr(scalp_engine, "mt5_market_open_state", lambda symbol: {"open": True, "reason": "market_open"})
+    monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda display: {"digits": 5, "point": 0.00001, "spread": 10})
+    monkeypatch.setattr(scalp_engine, "check_spread", lambda sym_info, asset_type: (True, 1.0))
+    monkeypatch.setattr(scalp_engine, "mt5_fetch_scalp_candles", lambda *args, **kwargs: _candles(300))
+    monkeypatch.setattr(scalp_engine, "mt5_get_live_price", lambda symbol: 100.0)
+    monkeypatch.setattr(scalp_engine, "_build_volume_profile", lambda candles: {"valid": True, "poc": 100.0, "vah": 101.0, "val": 99.0, "lvn_levels": []})
+    monkeypatch.setattr(scalp_engine, "_classify_market_state", lambda vp: "balance")
+    monkeypatch.setattr(scalp_engine, "_locate_price_vs_vp", lambda price, vp, atr_m15=0: {"location": "at_val", "nearest_level": 99.0, "distance_pct": 0.0})
+    monkeypatch.setattr(scalp_engine, "_check_absorption", lambda candles: {"detected": True, "count": 2, "bars": [{}]})
+    monkeypatch.setattr(scalp_engine, "_check_cvd", lambda candles: {"direction": "LONG", "cvd_slope": 1.0})
+    monkeypatch.setattr(scalp_engine, "_check_aaa_sequence", lambda candles, absorption, cvd, asset_type=None: {"complete": False, "phase": "absorption_only"})
+    monkeypatch.setattr(scalp_engine, "_check_vwap_lean", lambda candles, price: {"lean": "LONG", "vwap_value": 100.0})
+    monkeypatch.setattr(scalp_engine, "_classify_setup", lambda *args, **kwargs: {"valid": True, "direction": "LONG", "setup_type": "mean_reversion", "reasons": []})
+    monkeypatch.setattr(scalp_engine, "calculate_scalp_levels", lambda *args, **kwargs: {"entry": 100.0, "sl": 99.95, "tp_partial": 100.05, "tp1": 100.20, "tp2": 100.40, "rr": 4.0, "rr_below_min": False, "rr_synthetic": False, "sl_distance": 0.05, "sl_method": "vp_boundary"})
+    monkeypatch.setattr(scalp_engine, "ai_quality_grade", lambda *args, **kwargs: {"score": 75, "grade": "B", "reasons": [], "size_multiplier": 0.5})
+    monkeypatch.setattr(scalp_engine, "record_signal_event", lambda **kwargs: None)
+
+    result = scalp_engine.run_scalp_scan(["EUR/USD"])
+
+    assert result["skipped"] == []
+    assert len(result["signals"]) == 1
+    sig = result["signals"][0]
+    assert sig["gate_result"] == "WATCHLIST"
+    assert sig["executable"] is False
+    assert "fee_guard_micro_stop" in sig["fail_reasons"]
+    assert sig["fee_guard"]["cost_as_R"] > 0.20
 
 
 def test_run_scalp_scan_skips_closed_mt5_market(monkeypatch):
@@ -1199,14 +1252,14 @@ def test_scalp_fetch_candles_crypto_m1_falls_back_when_ws_stale(monkeypatch):
 # 10. UNCOVERED FIXES (Engine D audit residuals)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def test_min_grade_a_blocks_b_and_below(monkeypatch):
-    """Grade gate must reject B/C/D when MIN_GRADE is set to A."""
+def test_execution_min_grade_a_marks_b_as_watchlist_not_skip(monkeypatch):
+    """Grade is no longer an AI veto; below execution grade becomes visible watchlist."""
     monkeypatch.setitem(
         scalp_engine.CONFIG,
         "SCALP_ENGINE",
         {
             **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
-            "MIN_GRADE": "A",
+            "EXECUTION_MIN_GRADE": "A",
         },
     )
     monkeypatch.setattr(scalp_engine, "get_current_sessions", lambda: ["london"])
@@ -1232,9 +1285,12 @@ def test_min_grade_a_blocks_b_and_below(monkeypatch):
     monkeypatch.setattr(scalp_engine, "record_signal_event", lambda **kwargs: None)
 
     result = scalp_engine.run_scalp_scan(["EUR/USD"])
-    assert result["signals"] == []
-    assert result["skipped"][0]["reason"] == "grade_B_below_min"
-    assert result["skipped"][0]["ai_grade"] == "B"
+    assert result["skipped"] == []
+    assert len(result["signals"]) == 1
+    assert result["signals"][0]["ai_grade"] == "B"
+    assert result["signals"][0]["gate_result"] == "WATCHLIST"
+    assert result["signals"][0]["executable"] is False
+    assert "grade_B_below_execution_min_A" in result["signals"][0]["soft_warnings"]
 
 
 def test_mt5_market_open_state_time_msc_milliseconds(monkeypatch):
