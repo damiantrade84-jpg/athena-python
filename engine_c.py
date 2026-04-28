@@ -811,6 +811,7 @@ def compute_consensus(
         c_reliability = a_reliability # 100% allocation to A
 
         decision_state = "blocked"
+        decision_state_reason = None
         if tier != "SKIP":
             if c_reliability >= 0.60 and conviction >= 0.65 and _b_floor_met:
                 decision_state = "execute"
@@ -819,6 +820,19 @@ def compute_consensus(
                 sizing = max(0.0, sizing - 0.25)
             elif conviction >= 0.40:
                 decision_state = "watchlist"
+                if not _b_floor_met:
+                    decision_state_reason = f"b_partial_norm={b_partial_norm:.3f}<0.10"
+            else:
+                if not _b_floor_met:
+                    decision_state_reason = f"b_partial_norm={b_partial_norm:.3f}<0.10"
+                elif c_reliability < 0.45:
+                    decision_state_reason = f"reliability={c_reliability:.3f}<0.45"
+                elif conviction < 0.40:
+                    decision_state_reason = f"conviction={conviction:.3f}<0.40"
+
+        if not _b_floor_met and decision_state in ("execute", "reduced_risk"):
+            decision_state = "watchlist"
+            decision_state_reason = f"b_partial_norm={b_partial_norm:.3f}<0.10"
 
         if decision_state == "blocked":
             tier = "SKIP"
@@ -826,7 +840,7 @@ def compute_consensus(
         elif decision_state == "watchlist":
             tier = "WATCHLIST"
             sizing = 0.0
-            
+
         result = _build_result(
             trade=decision_state in ("execute", "reduced_risk"),
             verdict="A_ONLY",
@@ -839,6 +853,7 @@ def compute_consensus(
             tp=tp_resolved["tp"], tp_method=tp_resolved["method"],
             rr=tp_resolved["rr"],
             decision_state=decision_state,
+            decision_state_reason=decision_state_reason,
             a_reliability=a_reliability,
             b_reliability=0.0,
             c_reliability=c_reliability,
@@ -1218,6 +1233,7 @@ def _build_result(
         "signalTier": signal_tier,
         "watchlistReason": watchlist_reason,
         "decision_state": decision_state,
+        "decision_state_reason": kwargs.get("decision_state_reason") or None,
         "sizing_override": round(sizing, 4),
         "engine_weights": weights or {},
         "engine_base_weights": kwargs.get("meta_base_weights") or {},

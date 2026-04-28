@@ -1710,20 +1710,22 @@ class NakedEngine:
         # 3d. Breaker Blocks — after CHoCH, the broken swing level becomes new S/R
         # A bullish CHoCH breaks above a Lower High → that LH level becomes support (breaker)
         # A bearish CHoCH breaks below a Higher Low → that HL level becomes resistance (breaker)
+        _breaker_atr_mult = float(
+            config.CONFIG.get("NAKED_ENGINE", {}).get("breaker_width_atr_mult", 0.3)
+        )
         breaker_blocks = []
         if choch_data.get("choch_bull") and choch_data.get("choch_level") is not None:
             breaker_block = {
                 "type": "bullish_breaker",
                 "level": choch_data["choch_level"],
-                "upper": choch_data["choch_level"] + (atr * 0.3),
-                "lower": choch_data["choch_level"] - (atr * 0.3),
+                "upper": choch_data["choch_level"] + (atr * _breaker_atr_mult),
+                "lower": choch_data["choch_level"] - (atr * _breaker_atr_mult),
             }
-            # Add as a support zone
             sup_zones.append({
                 "upper": breaker_block["upper"],
                 "lower": breaker_block["lower"],
                 "center": breaker_block["level"],
-                "volume_strength": 0.8,  # high default — breakers are institutional
+                "volume_strength": 0.8,
                 "fvg_overlap": False,
                 "fvg_size_atr": 0.0,
                 "is_breaker": True,
@@ -1733,8 +1735,8 @@ class NakedEngine:
             breaker_block = {
                 "type": "bearish_breaker",
                 "level": choch_data["choch_level"],
-                "upper": choch_data["choch_level"] + (atr * 0.3),
-                "lower": choch_data["choch_level"] - (atr * 0.3),
+                "upper": choch_data["choch_level"] + (atr * _breaker_atr_mult),
+                "lower": choch_data["choch_level"] - (atr * _breaker_atr_mult),
             }
             # Add as a resistance zone
             res_zones.append({
@@ -1756,8 +1758,8 @@ class NakedEngine:
                 breaker = {
                     "type": "bullish_breaker",
                     "level": level,
-                    "upper": level + (atr * 0.3),
-                    "lower": level - (atr * 0.3),
+                    "upper": level + (atr * _breaker_atr_mult),
+                    "lower": level - (atr * _breaker_atr_mult),
                 }
                 sup_zones.append({
                     "upper": breaker["upper"],
@@ -1773,8 +1775,8 @@ class NakedEngine:
                 breaker = {
                     "type": "bearish_breaker",
                     "level": level,
-                    "upper": level + (atr * 0.3),
-                    "lower": level - (atr * 0.3),
+                    "upper": level + (atr * _breaker_atr_mult),
+                    "lower": level - (atr * _breaker_atr_mult),
                 }
                 res_zones.append({
                     "upper": breaker["upper"],

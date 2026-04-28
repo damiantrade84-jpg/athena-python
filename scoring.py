@@ -478,17 +478,20 @@ def calc_confluence(
         intermarket_context=intermarket_context,
     )
 
-    # Fix 2 — btcBias penalty: when BTC bias opposes direction, apply mild conviction reduction
-    # Only applies to crypto — BTC is the tide for all crypto alts
+    # BTC bias: when BTC opposes crypto alt direction, penalise; when aligned, boost.
+    # Config-driven so the asymmetry (penalty vs boost) is tuneable and auditable.
+    _btc_cfg = CONFIG.get("BTC_BIAS_MULTIPLIERS") or {}
+    _btc_penalty = float(_btc_cfg.get("penalty", 0.85))
+    _btc_boost = float(_btc_cfg.get("boost", 1.10))
     _btc_mult = 1.0
     _dir = factor_result.get("direction")
     if pair.get("type") == "crypto" and btc_bias and btc_bias != "neutral" and _dir is not None:
         if (btc_bias == "bearish" and _dir == "LONG") or \
            (btc_bias == "bullish" and _dir == "SHORT"):
-            _btc_mult = 0.85  # 15% penalty when BTC opposes direction
+            _btc_mult = _btc_penalty
         elif (btc_bias == "bullish" and _dir == "LONG") or \
              (btc_bias == "bearish" and _dir == "SHORT"):
-            _btc_mult = 1.10  # 10% boost when BTC confirms direction (capped by final clamp)
+            _btc_mult = _btc_boost
 
     _fs = factor_result.get("final_score", 0.0)
     if _btc_mult != 1.0:

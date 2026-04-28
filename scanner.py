@@ -22,6 +22,7 @@ from scoring import (
     get_score_threshold,
     get_pair_score_group,
 )
+from engine_c import ENGINE_C_AB_WEIGHTS
 from market_structure import NakedEngine, engine_b_min_score_threshold
 from threshold_audit import (
     audit_enabled as threshold_audit_enabled,
@@ -640,11 +641,33 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                             if h1 and len(h1) > 1:
                                 h1 = h1[:-1]
                     else:
-                        if d1 and len(d1) > 1:
+                        # Non-MT5 (Binance/EODHD): check whether the last bar
+                        # is likely still forming before blindly chopping.  If
+                        # the bar open is in the future (i.e. still forming)
+                        # drop it; otherwise the bar is confirmed — keep it.
+                        _now_ts = datetime.now(timezone.utc)
+
+                        def _should_drop_last(bars):
+                            """Return True when the last bar appears to be forming."""
+                            if not bars or len(bars) <= 1:
+                                return False
+                            _last_t = bars[-1].get("time") or bars[-1].get("datetime")
+                            if not _last_t:
+                                return True  # no timestamp → conservative chop
+                            try:
+                                _ts_str = str(_last_t).replace("Z", "+00:00")
+                                _bar_dt = datetime.fromisoformat(_ts_str)
+                                if _bar_dt.tzinfo is None:
+                                    _bar_dt = _bar_dt.replace(tzinfo=timezone.utc)
+                                return _bar_dt > _now_ts
+                            except Exception:
+                                return True
+
+                        if _should_drop_last(d1):
                             d1 = d1[:-1]
-                        if h4 and len(h4) > 1:
+                        if _should_drop_last(h4):
                             h4 = h4[:-1]
-                        if h1 and len(h1) > 1:
+                        if _should_drop_last(h1):
                             h1 = h1[:-1]
 
                     if h4 and len(h4) >= 20:
@@ -715,20 +738,30 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     a_norm = float(sig_a.get("scoreNorm", 0))
                                     b_norm = min(b_score / b_max, 1.0) if b_max else 0
 
-                                    combined_conviction = (a_norm * 0.6) + (b_norm * 0.4)
+                                    # Use same regime-conditional weights as engine_c.
+                                    _rl = (regime_label or "").upper()
+                                    _w = ENGINE_C_AB_WEIGHTS.get(_rl, ENGINE_C_AB_WEIGHTS.get("TRENDING", {"A": 0.40, "B": 0.60}))
+                                    _w_a = float(_w.get("A", 0.40))
+                                    _w_b = float(_w.get("B", 0.60))
+
+                                    combined_conviction = (a_norm * _w_a) + (b_norm * _w_b)
                                     sig_a["combinedConviction"] = round(combined_conviction, 4)
                                     sig_a["engine_b_scoreNorm"] = round(b_norm, 4)
-                                    sig_a["enginesAligned"] = True
+                                    sig_a["enginesAligned"] = bool(conf_b.get("passed", False))
 
                                     log.debug(
                                         f"[SCAN+B] {pair.get('display')} A={a_score:.2f}/{a_max} B={b_score:.2f}/{b_max} "
-                                        f"combined={combined_conviction:.3f}"
+                                        f"regime={_rl} wA={_w_a} wB={_w_b} combined={combined_conviction:.3f}"
                                     )
                                 else:
                                     a_max = sig_a.get("maxScore", 3.0)
                                     a_score = sig_a.get("confluenceScore", 0)
                                     a_norm = float(sig_a.get("scoreNorm", 0))
-                                    sig_a["combinedConviction"] = round(a_norm * 0.6, 4)
+                                    # A-only fallback: use A weight only.
+                                    _rl_fb = (regime_label or "").upper()
+                                    _w_fb = ENGINE_C_AB_WEIGHTS.get(_rl_fb, ENGINE_C_AB_WEIGHTS.get("TRENDING", {"A": 0.40}))
+                                    _w_a_fb = float(_w_fb.get("A", 0.40))
+                                    sig_a["combinedConviction"] = round(a_norm * _w_a_fb, 4)
                                     sig_a["enginesAligned"] = False
                                     sig_a["engine_b_verdict"] = res_b.get("structural_verdict", "UNCLEAR")
                                 if _threshold_audit_on:

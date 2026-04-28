@@ -102,6 +102,18 @@ ADX_TREND_MIN_CLASS:
 
   index: 25
 
+# Per-class ADX hard-fail override.  Global default is 15 (from code).
+# Crypto class_min=15 collides with global hard_fail=15 leaving zero soft zone;
+# setting crypto to 10 creates a genuine 10-15 soft-penalty band.
+FACTOR_ADX_HARD_FAIL_CLASS:
+  crypto: 10
+
+# Funding rate addon: baseline (0.01% per 8h) and noise band half-width.
+# Narrowed from 0.0002 to 0.0001 so typical Binance/Bybit funding deviations
+# are no longer silently absorbed inside the neutral zone.
+FACTOR_FUNDING_BASELINE: 0.0001
+FACTOR_FUNDING_NOISE_BAND: 0.0001
+
 FACTOR_CONVICTION_FLOOR: 0.60 # Engine A v2 default used by factor_scoring when unset.
 
 
@@ -590,6 +602,14 @@ INDICATOR_CORRELATION_ENABLED: false
 EXECUTION_ENABLED: true       # Enable manual execution via dashboard
 
 AUTO_EXECUTE: false            # Manual click only (no auto-fire)
+
+# ── eToro Adapter (scaffold) ─────────────────────────────────────────────
+# Default-safe: docs/integration only until explicitly wired into execution routing.
+ETORO:
+  ENABLED: false
+  DEMO_MODE: true
+  BASE_URL: "https://public-api.etoro.com"
+  REQUEST_TIMEOUT_SEC: 10
 
 
 
@@ -1723,8 +1743,9 @@ ENGINE_B_FOREX_STRUCTURE_TF: "D1"
 
 # — this preserves Engine B's independent signal in the 15-25 transition zone.
 
-# Wilder ADX < ~20 = weak trend; 18 is a compromise vs full 20 gate.
-
+# Engine B forex ADX floor.  Wilder defined ADX < 20 as non-trending;
+# 12 is intentionally low to allow directionally-biased ranging markets
+# through to the checklist while still filtering dead-flat conditions.
 ENGINE_B_FOREX_ADX_MIN: 12
 
 

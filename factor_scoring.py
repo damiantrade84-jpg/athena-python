@@ -184,9 +184,12 @@ def _coherent_trend_score(
         return 0.0, None, {"error": "zero_weight", **detail}
 
     if abs(long_w - short_w) < 1e-9:
-        # Perfectly tied — use D1 as tiebreaker
+        # Perfectly tied — use D1 as tiebreaker; refuse to guess if D1 is absent.
         d1_vote = next((d for name, d, _ in votes if name == "d1_ema_trend"), None)
-        dominant_sign = d1_vote if d1_vote is not None else 1.0
+        if d1_vote is None:
+            detail["tie_no_d1"] = True
+            return 0.0, None, {"error": "tied_no_d1_tiebreaker", **detail}
+        dominant_sign = d1_vote
     else:
         dominant_sign = 1.0 if long_w > short_w else -1.0
 
@@ -265,11 +268,10 @@ def _momentum_quality(
         except (TypeError, ValueError):
             pass
 
-    # MACD histogram score
+    # MACD histogram score — aligned confirms, opposing penalises (not neutral).
     macd_score = 0.0
     macd_hist = h4_snap.get("macdHist") or h4_snap.get("macd_hist")
     if macd_hist is None:
-        # Try macdLine z-score as proxy
         macd_hist = h4_snap.get("macdLine_z")
     if macd_hist is not None:
         try:
@@ -278,6 +280,8 @@ def _momentum_quality(
                 macd_score = 0.50
             elif not is_long and hist < 0:
                 macd_score = 0.50
+            elif (is_long and hist < 0) or (not is_long and hist > 0):
+                macd_score = -0.15
         except (TypeError, ValueError):
             pass
 
@@ -311,27 +315,47 @@ def _adx_gate(d1_snap: dict, h4_snap: dict, asset_type: str) -> tuple:
     adx_min = float(
         (CONFIG.get("ADX_TREND_MIN_CLASS") or {}).get(asset_type, 25)
     )
-    hard_fail = float(CONFIG.get("FACTOR_ADX_HARD_FAIL", _ADX_HARD_FAIL_DEFAULT))
+    # Per-class hard-fail so crypto (class_min=15) gets a soft zone (10-15)
+    # instead of the 15/15 cliff where hard_fail == class_min.
+    _hf_class = (CONFIG.get("FACTOR_ADX_HARD_FAIL_CLASS") or {})
+    if isinstance(_hf_class, dict) and asset_type in _hf_class:
+        hard_fail = float(_hf_class[asset_type])
+    else:
+        hard_fail = float(CONFIG.get("FACTOR_ADX_HARD_FAIL", _ADX_HARD_FAIL_DEFAULT))
 
-    adx = d1_snap.get("adx")
-    source = "d1"
-    if adx is None:
-        adx = h4_snap.get("adx")
-        source = "h4"
-    if adx is None:
-        # No ADX data — use soft penalty (can't hard abort without data)
-        return float(CONFIG.get("FACTOR_ADX_SOFT_MULT", _ADX_SOFT_MULT_DEFAULT)), None, "missing"
+    # Use the stronger of D1 and H4 ADX so a rising intraday trend isn't
+    # masked by a lagging D1 value.  D1 is still the primary label for source.
+    _soft = float(CONFIG.get("FACTOR_ADX_SOFT_MULT", _ADX_SOFT_MULT_DEFAULT))
 
+    d1_adx = d1_snap.get("adx")
+    h4_adx = h4_snap.get("adx")
+    adx = None
+    source = "missing"
     try:
-        adx = float(adx)
+        _d1 = float(d1_adx) if d1_adx is not None else None
     except (TypeError, ValueError):
-        return float(CONFIG.get("FACTOR_ADX_SOFT_MULT", _ADX_SOFT_MULT_DEFAULT)), None, "parse_error"
+        _d1 = None
+    try:
+        _h4 = float(h4_adx) if h4_adx is not None else None
+    except (TypeError, ValueError):
+        _h4 = None
+
+    if _d1 is not None and _h4 is not None:
+        adx = max(_d1, _h4)
+        source = "d1" if _d1 >= _h4 else "h4"
+    elif _d1 is not None:
+        adx, source = _d1, "d1"
+    elif _h4 is not None:
+        adx, source = _h4, "h4"
+
+    if adx is None:
+        return _soft, None, "missing"
 
     if adx < hard_fail:
-        return 0.0, adx, source  # hard abort — dead market
+        return 0.0, adx, source
     if adx < adx_min:
-        return float(CONFIG.get("FACTOR_ADX_SOFT_MULT", _ADX_SOFT_MULT_DEFAULT)), adx, source  # soft penalty
-    return 1.0, adx, source  # full credit
+        return _soft, adx, source
+    return 1.0, adx, source
 
 
 # ── Addon: asset-specific secondary factor ────────────────────────────────────
@@ -370,9 +394,21 @@ def _cot_addon(pair_display: str, asset_type: str, direction: str, bar_time: Opt
         if cot is None or cot == 0.0:
             return _ADDON_NEUTRAL
         cot = float(cot)
-        # Fade the herd at extremes for commodity/forex
-        if asset_type in ("forex", "commodity") and abs(cot) >= 2.0:
-            cot = -cot * 1.5  # fade overcrowded positioning
+        # Fade the herd at extremes — linear taper avoids the sharp discontinuity
+        # that previously flipped the sign at exactly |z|=2.0.
+        # z < 1.5  → confirm direction
+        # 1.5..2.5 → linear blend from confirm toward fade
+        # z > 2.5  → full fade (opposing direction, 1.5× magnitude)
+        if asset_type in ("forex", "commodity") and abs(cot) > 1.5:
+            _fade_lo, _fade_hi = 1.5, 2.5
+            _abs_cot = abs(cot)
+            if _abs_cot >= _fade_hi:
+                cot = -cot * 1.5
+            else:
+                _blend = (_abs_cot - _fade_lo) / (_fade_hi - _fade_lo)
+                _confirm = cot
+                _fade = -cot * 1.5
+                cot = _confirm * (1.0 - _blend) + _fade * _blend
         if abs(cot) < 1.0:
             return _ADDON_NEUTRAL  # insignificant signal
         is_long = direction == "LONG"
@@ -391,10 +427,12 @@ def _funding_addon(funding_rate: Optional[float], direction: str) -> float:
         return _ADDON_NEUTRAL
     try:
         fr = float(funding_rate)
-        # Neutral baseline: 0.0001 (0.01%). Score from deviation.
-        adjusted = fr - 0.0001
-        if abs(adjusted) < 0.0002:
-            return _ADDON_NEUTRAL  # within noise band
+        # Neutral baseline: 0.0001 (0.01% per 8h). Score from deviation.
+        _baseline = float(CONFIG.get("FACTOR_FUNDING_BASELINE", 0.0001))
+        _noise_band = float(CONFIG.get("FACTOR_FUNDING_NOISE_BAND", 0.0001))
+        adjusted = fr - _baseline
+        if abs(adjusted) < _noise_band:
+            return _ADDON_NEUTRAL
         is_long = direction == "LONG"
         # Negative funding → bullish (longs cheap to hold); positive → shorts cheap
         funding_bullish = adjusted < 0
@@ -590,10 +628,19 @@ def compute_factor_scores(
     # Base floor + momentum quality + addon (addon_val can be negative → reduces conviction).
     # Normalise addon: +0.30 → +1.0, 0.00 → 0.0, -0.15 → -0.5 (penalty preserved, not floored).
     addon_norm = (addon_val / _ADDON_CONFIRM) if _ADDON_CONFIRM > 0 else 0.0
+
+    # When addon is unsupported (stock/index), redistribute addon weight into
+    # momentum so these classes can reach conviction 1.0 like addon-supported classes.
+    _eff_mom_w = _momentum_w
+    _eff_addon_w = _addon_w
+    if addon_status == "unsupported":
+        _eff_mom_w = _momentum_w + _addon_w
+        _eff_addon_w = 0.0
+
     conviction = (
         _base_w
-        + _momentum_w * mom_quality
-        + _addon_w * addon_norm
+        + _eff_mom_w * mom_quality
+        + _eff_addon_w * addon_norm
     )
     conviction = max(0.0, min(1.0, conviction))
 
@@ -645,6 +692,7 @@ def compute_factor_scores(
         "momentum_quality": round(mom_quality, 4),
         "addon_type": addon_type,
         "addon_value": round(addon_val, 4),
+        "addon_unsupported": addon_status == "unsupported",
         "session_multiplier": round(session_mult, 4),
         "conviction": round(conviction, 4),
         # ── Compatibility flags ───────────────────────────────────────────────
