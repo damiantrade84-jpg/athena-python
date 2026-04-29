@@ -14150,34 +14150,138 @@ function ldFmtPrice(p) {
       $('rl-sess-summary-row').style.display = 'none';
     }
 
-    const hasClusters = (data.best_clusters||[]).length + (data.rejected_clusters||[]).length
-                        + (data.do_not_implement||[]).length + (data.next_research_action||'').length;
-    if (hasClusters) {
+    // ── New Zone-Aware Layout ────────────────────────────────────────────
+    const hasResults = (data.best_clusters||[]).length + (data.rejected_clusters||[]).length
+                        + (data.do_not_implement||[]).length + (data.next_research_action||'').length
+                        + Object.keys(data.zone_summary||{}).length;
+    if (hasResults) {
       $('rl-sess-clusters-row').style.display = 'block';
-      $('rl-sess-best').innerHTML = (data.best_clusters||[]).slice(0,5)
-        .map(r => `<div>• ${r.strategy_name||''} @ ${r.symbol||''} ${r.timeframe||''} <span style="color:#34d399">${(r.net_return!=null?((r.net_return*100).toFixed(1)+'%'):'')}</span></div>`)
-        .join('') || '<span style="opacity:.4">None</span>';
-      $('rl-sess-rejected').innerHTML = (data.rejected_clusters||[]).slice(0,5)
-        .map(r => `<div>• ${r.strategy_name||''} @ ${r.symbol||''}</div>`)
-        .join('') || '<span style="opacity:.4">None</span>';
-      $('rl-sess-dont').textContent = (data.do_not_implement||[]).join(', ') || '—';
-      $('rl-sess-next').textContent = data.next_research_action || '—';
 
-      // "Run Next Action" button — only show when structured params are available
+      // Coverage stats line
+      const cs = data.coverage_stats || {};
+      const covPairs = cs.pairs || 0;
+      const covStrats = cs.strategies || 0;
+      const covZones = cs.zones || 0;
+
+      // Build zone cards
+      const zSum = data.zone_summary || {};
+      const zones = ['scalp','intra','swing'];
+      const zColors = {scalp:{bg:'#831843',border:'#f472b6',text:'#fbcfe8'}, intra:{bg:'#0c4a6e',border:'#38bdf8',text:'#bae6fd'}, swing:{bg:'#4c1d95',border:'#a78bfa',text:'#ddd6fe'}};
+      const zCards = zones.map(z => {
+        const info = zSum[z];
+        if (!info) return `<div style="background:#0f172a;border:1px solid #1e293b;border-radius:6px;padding:10px;opacity:.5"><div style="font-size:.7rem;color:#64748b;text-transform:uppercase">${z}</div><div style="font-size:.75rem;color:#475569">No data</div></div>`;
+        const c = zColors[z] || {bg:'#1e293b',border:'#475569',text:'#94a3b8'};
+        const bestStrat = info.best_strategy || '—';
+        const bestSym = info.best_symbol || '';
+        const bestTf = info.best_timeframe || '';
+        const ret = info.best_return != null ? `+${info.best_return}%` : '';
+        return `<div style="background:${c.bg};border:1px solid ${c.border};border-radius:6px;padding:10px;">
+          <div style="font-size:.65rem;color:${c.text};text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">${z}</div>
+          <div style="font-size:.85rem;font-weight:700;color:${c.text};margin-bottom:4px">${info.strong||0} strong · ${info.weak||0} weak</div>
+          <div style="font-size:.72rem;color:${c.text};opacity:.9">Best: <strong>${bestStrat}</strong></div>
+          <div style="font-size:.7rem;color:${c.text};opacity:.8">${bestSym} ${bestTf} <span style="color:#6ee7b7">${ret}</span></div>
+        </div>`;
+      }).join('');
+
+      // Per-pair recommendations table
+      const ppRecs = data.per_pair_recommendations || [];
+      const ppRows = ppRecs.slice(0,6).map(r => {
+        const sym = r.symbol || '—';
+        const strat = r.strategy_name || r.strategy || '—';
+        const tf = r.timeframe || '—';
+        const zone = r.zone || '—';
+        const dir = r.direction || 'LONG';
+        const ret = r.net_return != null ? `${r.net_return.toFixed(1)}%` : '—';
+        const wr = r.win_rate != null ? `${r.win_rate.toFixed(0)}%` : '—';
+        const zoneClr = zone==='scalp'?'#f472b6':zone==='intra'?'#38bdf8':zone==='swing'?'#a78bfa':'#64748b';
+        return `<tr style="font-size:.75rem;border-top:1px solid #1e293b">
+          <td style="padding:6px 8px;font-weight:600;color:#e2e8f0">${sym}</td>
+          <td style="padding:6px 8px;color:#94a3b8">${strat}</td>
+          <td style="padding:6px 8px;color:${zoneClr}">${zone}</td>
+          <td style="padding:6px 8px;color:#94a3b8">${tf}</td>
+          <td style="padding:6px 8px;color:${dir==='LONG'?'#6ee7b7':dir==='SHORT'?'#f87171':'#fbbf24'}">${dir}</td>
+          <td style="padding:6px 8px;color:#6ee7b7">${ret}</td>
+          <td style="padding:6px 8px;color:#38bdf8">${wr}</td>
+        </tr>`;
+      }).join('');
+      const ppTable = ppRows ? `<table style="width:100%;border-collapse:collapse"><thead><tr style="font-size:.68rem;color:#64748b;text-transform:uppercase"><th style="padding:4px 8px;text-align:left">Symbol</th><th style="padding:4px 8px;text-align:left">Strategy</th><th style="padding:4px 8px;text-align:left">Zone</th><th style="padding:4px 8px;text-align:left">TF</th><th style="padding:4px 8px;text-align:left">Dir</th><th style="padding:4px 8px;text-align:left">Ret</th><th style="padding:4px 8px;text-align:left">WR</th></tr></thead><tbody>${ppRows}</tbody></table>` : '<div style="font-size:.75rem;color:#64748b">No per-pair recommendations yet.</div>';
+
+      // Engine comparison (Engine A, Engine B, ADX Gate)
+      const eng = data.engine_comparison || {};
+      const ea = eng.engine_a || {};
+      const eb = eng.engine_b || {};
+      const adx = eng.adx_gate || {};
+      const eaLive = ea.live_floor != null ? ea.live_floor.toFixed(1) : '—';
+      const eaDisc = ea.discovery_proxy != null ? ea.discovery_proxy.toFixed(2) : '—';
+      const ebLive = eb.live_min_score != null ? eb.live_min_score.toFixed(1) : '—';
+      const ebDisc = eb.discovery_proxy != null ? eb.discovery_proxy.toFixed(2) : '—';
+      const adxLive = adx.live_trend_min != null ? adx.live_trend_min.toFixed(0) : '—';
+      const adxFail = adx.live_hard_fail != null ? adx.live_hard_fail.toFixed(0) : '—';
+      const adxDisc = adx.discovery_proxy != null ? adx.discovery_proxy.toFixed(0) : '—';
+      const engComp = `<div style="display:flex;flex-direction:column;gap:8px;font-size:.73rem;margin-top:8px">
+        <div style="display:flex;gap:8px;align-items:center">
+          <span style="color:#64748b;width:70px">Engine A:</span>
+          <span style="background:#0f172a;border:1px solid #1e293b;border-radius:4px;padding:4px 8px">Live: <strong style="color:#fbbf24">${eaLive}</strong></span>
+          <span style="background:#0f172a;border:1px solid #1e293b;border-radius:4px;padding:4px 8px">Discovery: <strong style="color:${eaDisc!='—'?'#6ee7b7':'#94a3b8'}">${eaDisc}</strong></span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span style="color:#64748b;width:70px">Engine B:</span>
+          <span style="background:#0f172a;border:1px solid #1e293b;border-radius:4px;padding:4px 8px">Live: <strong style="color:#fbbf24">${ebLive}</strong></span>
+          <span style="background:#0f172a;border:1px solid #1e293b;border-radius:4px;padding:4px 8px">Discovery: <strong style="color:${ebDisc!='—'?'#6ee7b7':'#94a3b8'}">${ebDisc}</strong></span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span style="color:#64748b;width:70px">ADX Gate:</span>
+          <span style="background:#0f172a;border:1px solid #1e293b;border-radius:4px;padding:4px 8px">Trend Min: <strong style="color:#fbbf24">${adxLive}</strong></span>
+          <span style="background:#0f172a;border:1px solid #1e293b;border-radius:4px;padding:4px 8px">Hard Fail: <strong style="color:#f87171">${adxFail}</strong></span>
+          <span style="background:#0f172a;border:1px solid #1e293b;border-radius:4px;padding:4px 8px">Discovery: <strong style="color:${adxDisc!='—'?'#6ee7b7':'#94a3b8'}">${adxDisc}</strong></span>
+        </div>
+      </div>`;
+
+      // Build full clusters HTML
+      $('rl-sess-clusters-row').innerHTML = `
+        <!-- Coverage Stats -->
+        <div style="font-size:.75rem;color:#94a3b8;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid #1e293b">
+          Coverage: <strong style="color:#e2e8f0">${covPairs} pairs</strong> · <strong style="color:#e2e8f0">${covStrats} strategies</strong> · <strong style="color:#e2e8f0">${covZones} zones</strong>
+        </div>
+
+        <!-- Zone Performance Cards -->
+        <div style="font-size:.72rem;color:#64748b;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:.03em">Zone Performance</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">${zCards}</div>
+
+        <!-- Per-Pair Recommendations -->
+        <div style="font-size:.72rem;color:#64748b;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:.03em">Per-Pair Recommendations</div>
+        <div style="background:#0f172a;border:1px solid #1e293b;border-radius:6px;padding:8px;margin-bottom:16px;overflow-x:auto">${ppTable}</div>
+
+        <!-- Engine Comparison -->
+        <div style="font-size:.72rem;color:#64748b;font-weight:600;margin-bottom:4px;text-transform:uppercase;letter-spacing:.03em">Engine Comparison</div>
+        <div style="margin-bottom:12px">${engComp}</div>
+
+        <!-- Do Not Implement -->
+        ${(data.do_not_implement||[]).length ? `<div style="margin-bottom:12px">
+          <div style="font-size:.72rem;color:#fb923c;font-weight:600;margin-bottom:4px">🚫 Do Not Implement</div>
+          <div style="font-size:.75rem;color:#fed7aa;line-height:1.5">${(data.do_not_implement||[]).join(', ')}</div>
+        </div>` : ''}
+
+        <!-- Next Research Action -->
+        <div style="margin-bottom:8px">
+          <div style="font-size:.72rem;color:#38bdf8;font-weight:600;margin-bottom:4px">🔭 Next Research Action</div>
+          <div style="font-size:.75rem;color:#bae6fd;line-height:1.5;margin-bottom:8px">${data.next_research_action || '—'}</div>
+          <button id="rl-sess-run-next-btn" onclick="rlSessRunNext()" style="display:none; background:linear-gradient(135deg,#065f46,#059669); color:#fff; border:none; padding:7px 16px; border-radius:7px; cursor:pointer; font-size:.82rem; font-weight:600">▶ Run Next Action</button>
+          <div id="rl-sess-run-next-summary" style="font-size:.7rem; color:#6ee7b7; margin-top:5px; opacity:.75;"></div>
+        </div>
+      `;
+
+      // Re-bind Run Next Action button visibility
       const nrp = data.next_research_params || {};
       const runNextBtn = $('rl-sess-run-next-btn');
       const runNextSummary = $('rl-sess-run-next-summary');
-      if (nrp && nrp.symbols && nrp.symbols.length > 0 && data.status === 'COMPLETE') {
+      if (runNextBtn && nrp && nrp.symbols && nrp.symbols.length > 0 && data.status === 'COMPLETE') {
         window._rlSessNextParams = nrp;
         runNextBtn.style.display = 'inline-block';
         const syms = (nrp.symbols || []).join(', ');
         const tfs  = (nrp.timeframes || []).join(', ');
         const fams = (nrp.families || []).join(', ');
         runNextSummary.textContent = `${nrp.market_group || ''} · ${nrp.trading_style || ''} · ${nrp.research_depth || 'quick'} · ${syms} · ${tfs} · ${fams}`;
-      } else {
-        runNextBtn.style.display = 'none';
-        runNextSummary.textContent = '';
-        window._rlSessNextParams = null;
       }
     } else {
       $('rl-sess-clusters-row').style.display = 'none';

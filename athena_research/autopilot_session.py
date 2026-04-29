@@ -181,6 +181,12 @@ class AutopilotSession:
         self.next_research_params: dict = {}  # structured params for "Run Next Action" button
         self.errors: list[str] = []
 
+        # New zone-aware aggregation fields (populated in _finalize)
+        self.zone_summary: dict = {}  # {scalp:{strong:N,weak:N,best_strategy:...,best_symbol:...}, intra:{...}, swing:{...}}
+        self.per_pair_recommendations: list[dict] = []  # Top strategy per symbol
+        self.engine_comparison: dict = {}  # Live thresholds vs discovery results
+        self.coverage_stats: dict = {"pairs": 0, "strategies": 0, "zones": 0}
+
         # Optional discovery overrides (used when launched from "Run Next Action")
         self._symbols_override: Optional[list[str]] = None
         self._timeframes_override: Optional[list[str]] = None
@@ -233,6 +239,10 @@ class AutopilotSession:
             "next_research_action": self.next_research_action,
             "next_research_params": self.next_research_params,
             "errors": self.errors,
+            "zone_summary": self.zone_summary,
+            "per_pair_recommendations": self.per_pair_recommendations,
+            "engine_comparison": self.engine_comparison,
+            "coverage_stats": self.coverage_stats,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -282,6 +292,10 @@ class AutopilotSession:
         sess.next_research_action = data.get("next_research_action", "")
         sess.next_research_params = data.get("next_research_params", {})
         sess.errors = data.get("errors", [])
+        sess.zone_summary = data.get("zone_summary", {})
+        sess.per_pair_recommendations = data.get("per_pair_recommendations", [])
+        sess.engine_comparison = data.get("engine_comparison", {})
+        sess.coverage_stats = data.get("coverage_stats", {"pairs": 0, "strategies": 0, "zones": 0})
         sess._symbols_override = None
         sess._timeframes_override = None
         sess._families_override = None
@@ -356,9 +370,6 @@ class AutopilotSession:
         mode = DEPTH_MODE.get(self.research_depth, "medium")
 
         profile = RESEARCH_STYLE_PROFILES.get(self.trading_style, RESEARCH_STYLE_PROFILES["intra"])
-        timeframes = (self._timeframes_override
-                      if self._timeframes_override
-                      else profile["timeframes"])
         families = (self._families_override
                     if self._families_override
                     else profile["strategy_families"])
@@ -369,9 +380,9 @@ class AutopilotSession:
         self.discovery_run_id = discovery_run_id
         self._save()
 
-        # Map trading_style to zone for zone-aware testing
-        _style_to_zone = {"scalp": ["scalp"], "intra": ["intra"], "swing": ["swing"]}
-        zones = _style_to_zone.get(self.trading_style)
+        # Force all One-Click Autopilot sessions to scan all three zones
+        # Do NOT pass explicit timeframes - let run_manager resolve from zones
+        zones = ["scalp", "intra", "swing"]
 
         try:
             run_research(
@@ -382,7 +393,7 @@ class AutopilotSession:
                 direction="both",
                 run_ai_review=False,
                 symbols=symbols,
-                timeframes=timeframes,
+                timeframes=None,  # Let zones resolve timeframes
                 families=families,
                 zones=zones,
                 test_directions=True,
@@ -458,9 +469,11 @@ class AutopilotSession:
                                if t_spec.get("directions") else "both"),
                     run_ai_review=False,
                     symbols=t_spec.get("symbols"),
-                    timeframes=t_spec.get("timeframes"),
+                    timeframes=None,  # Let zones resolve timeframes
                     families=t_spec.get("families"),
                     strategies=t_spec.get("strategies"),
+                    zones=["scalp", "intra", "swing"],
+                    test_directions=True,
                 )
                 self._tag_run_meta(child_run_id, role="validation",
                                    parent_run_id=discovery_run_id)
@@ -561,6 +574,142 @@ class AutopilotSession:
                 self.rejected_clusters = _rows_to_dicts(statuses == "REJECT")
             except Exception:
                 pass
+
+            # ── Zone-aware aggregation ─────────────────────────────────────────
+            try:
+                zones = ["scalp", "intra", "swing"]
+                zone_summary = {}
+                for z in zones:
+                    z_mask = combined["zone"].str.lower() == z if "zone" in combined.columns else pd.Series(False, index=combined.index)
+                    z_df = combined[z_mask]
+                    if len(z_df) == 0:
+                        continue
+                    strong_mask = z_df["status"].str.upper() == "STRONG_CANDIDATE" if "status" in z_df.columns else pd.Series(False, index=z_df.index)
+                    weak_mask = z_df["status"].str.upper() == "WEAK_CANDIDATE" if "status" in z_df.columns else pd.Series(False, index=z_df.index)
+                    strong_count = int(strong_mask.sum())
+                    weak_count = int(weak_mask.sum())
+                    # Best strategy in this zone
+                    best_row = None
+                    if strong_mask.any():
+                        best_idx = z_df.loc[strong_mask, "net_return"].idxmax() if "net_return" in z_df.columns else z_df[strong_mask].index[0]
+                        best_row = z_df.loc[best_idx]
+                    elif len(z_df) > 0:
+                        best_idx = z_df["net_return"].idxmax() if "net_return" in z_df.columns else z_df.index[0]
+                        best_row = z_df.loc[best_idx]
+                    zone_summary[z] = {
+                        "strong": strong_count,
+                        "weak": weak_count,
+                        "best_strategy": best_row["strategy_name"] if best_row is not None and "strategy_name" in best_row else None,
+                        "best_symbol": best_row["symbol"] if best_row is not None and "symbol" in best_row else None,
+                        "best_timeframe": best_row["timeframe"] if best_row is not None and "timeframe" in best_row else None,
+                        "best_return": round(best_row["net_return"] * 100, 1) if best_row is not None and "net_return" in best_row and pd.notna(best_row["net_return"]) else None,
+                    }
+                self.zone_summary = zone_summary
+            except Exception as e:
+                log.warning("[autopilot_session] Zone aggregation failed: %s", e)
+
+            # ── Coverage stats ────────────────────────────────────────────────
+            try:
+                pairs = combined["symbol"].nunique() if "symbol" in combined.columns else 0
+                strategies = combined["strategy_name"].nunique() if "strategy_name" in combined.columns else 0
+                zones_tested = combined["zone"].dropna().str.lower().unique().tolist() if "zone" in combined.columns else []
+                self.coverage_stats = {
+                    "pairs": int(pairs),
+                    "strategies": int(strategies),
+                    "zones": len(zones_tested),
+                    "zone_list": zones_tested,
+                }
+            except Exception as e:
+                log.warning("[autopilot_session] Coverage stats failed: %s", e)
+
+        # ── Per-pair recommendations (from combined session rows) ────────────
+        try:
+            if not combined.empty and "symbol" in combined.columns:
+                # Get best ranked candidate per symbol across combined rows
+                pp_recs = []
+                for symbol in combined["symbol"].unique():
+                    sym_df = combined[combined["symbol"] == symbol]
+                    # Prefer STRONG_CANDIDATE, then by net_return descending
+                    if "status" in sym_df.columns:
+                        strong = sym_df[sym_df["status"].str.upper() == "STRONG_CANDIDATE"]
+                        if not strong.empty:
+                            best = strong.sort_values("net_return", ascending=False).iloc[0] if "net_return" in strong.columns else strong.iloc[0]
+                        else:
+                            best = sym_df.sort_values("net_return", ascending=False).iloc[0] if "net_return" in sym_df.columns else sym_df.iloc[0]
+                    else:
+                        best = sym_df.sort_values("net_return", ascending=False).iloc[0] if "net_return" in sym_df.columns else sym_df.iloc[0]
+                    rec = {
+                        "symbol": best.get("symbol"),
+                        "zone": best.get("zone"),
+                        "strategy_name": best.get("strategy_name"),
+                        "timeframe": best.get("timeframe"),
+                        "direction": best.get("direction"),
+                        "status": best.get("status"),
+                        "net_return": round(best.get("net_return") * 100, 2) if pd.notna(best.get("net_return")) else None,
+                        "win_rate": round(best.get("win_rate") * 100, 1) if pd.notna(best.get("win_rate")) else None,
+                    }
+                    pp_recs.append(rec)
+                # Sort by net_return descending, take top 10
+                pp_recs = sorted(pp_recs, key=lambda x: (x.get("net_return") or 0), reverse=True)[:10]
+                self.per_pair_recommendations = pp_recs
+        except Exception as e:
+            log.warning("[autopilot_session] Per-pair recs from combined rows failed: %s", e)
+
+        # ── Engine comparison (Engine A, Engine B, ADX Gate) ──────────────────
+        try:
+            import yaml
+            cfg_path = Path(__file__).parent.parent / "config.yaml"
+            cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
+            asset_key = self.market_group.lower()
+
+            # Engine A: MIN_CONFLUENCE_CLASS live floor
+            min_conf = cfg.get("MIN_CONFLUENCE_CLASS", {})
+            engine_a_live = min_conf.get(asset_key, min_conf.get("crypto", 2.0))
+            # Discovery proxy for Engine A: lowest robustness_score among strong candidates
+            engine_a_disc = None
+            if not combined.empty and "robustness_score" in combined.columns:
+                strong_df = combined[combined["status"].str.upper() == "STRONG_CANDIDATE"] if "status" in combined.columns else pd.DataFrame()
+                if not strong_df.empty:
+                    engine_a_disc = round(strong_df["robustness_score"].min(), 2)
+
+            # Engine B: NAKED_ENGINE.style_profiles min_score
+            naked = cfg.get("NAKED_ENGINE", {})
+            style_profiles = naked.get("style_profiles", {})
+            # Use intraday as default for Engine B comparison
+            engine_b_live = style_profiles.get("intraday", {}).get("min_score", 3.0)
+            # Discovery proxy for Engine B: if any engine_b_proxy strategies, use their best score
+            engine_b_disc = None
+            if not combined.empty and "strategy_name" in combined.columns:
+                eb_df = combined[combined["strategy_name"].str.contains("engine_b", case=False, na=False)]
+                if not eb_df.empty and "robustness_score" in eb_df.columns:
+                    engine_b_disc = round(eb_df["robustness_score"].max(), 2)
+
+            # ADX Gate: ADX_TREND_MIN_CLASS and FACTOR_ADX_HARD_FAIL_CLASS
+            adx_trend_min = cfg.get("ADX_TREND_MIN_CLASS", {})
+            adx_hard_fail = cfg.get("FACTOR_ADX_HARD_FAIL_CLASS", {})
+            adx_live = adx_trend_min.get(asset_key, adx_trend_min.get("crypto", 15))
+            adx_hard_fail_val = adx_hard_fail.get(asset_key, adx_hard_fail.get("crypto", 10))
+            # Discovery proxy for ADX: use avg ADX from results if available (placeholder for now)
+            adx_disc = None
+
+            self.engine_comparison = {
+                "engine_a": {
+                    "live_floor": engine_a_live,
+                    "discovery_proxy": engine_a_disc,
+                },
+                "engine_b": {
+                    "live_min_score": engine_b_live,
+                    "discovery_proxy": engine_b_disc,
+                },
+                "adx_gate": {
+                    "live_trend_min": adx_live,
+                    "live_hard_fail": adx_hard_fail_val,
+                    "discovery_proxy": adx_disc,
+                },
+                "asset_class": asset_key,
+            }
+        except Exception as e:
+            log.warning("[autopilot_session] Engine comparison failed: %s", e)
 
         verdict = _compute_verdict_from_df(combined, len(self.validation_run_ids))
         self.final_verdict = verdict
