@@ -1,0 +1,124 @@
+# Athena Research Lab — AI Review
+**Run ID:** `run_20260426_192958`  **Model:** `grok-4-1-fast-reasoning`  **Generated:** 2026-04-26 20:11 UTC
+
+> AI-powered analysis.
+> Backtest discovery only — NOT a live execution recommendation.
+
+---
+
+# Athena Pro v4 Backtest Discovery Decision Memo
+**Run ID:** run_20260426_192958 | **Analyst:** Quantitative Research | **Date:** 2026-04-27  
+**Key Caveat:** These are discovery results at lowered BT_MIN thresholds (worse than live). **Do NOT execute live, copy thresholds to live gates, or deploy without forward validation.** All labels per safety rules. Robustness penalized for <30 trades, single-symbol, net-negative after fees, IS>OOS decay, lack of multi-symbol/TF clusters.
+
+## 1. Strategy Family Performance
+- **mean_reversion** (bollinger_touch variants): **STRONG_CANDIDATE** – Cluster of 2+ STRONG_CANDIDATEs (SOL/USDT H4, ETH/USDT H4) + multiple WEAKs (NAS100 H4, WTI Oil M15); highest family avg_net_return proxy via attribution (0.0080); works cross-asset (crypto/commodity/index); H4 bias.
+- **pullback** (pullback_ema): **WEAK_CANDIDATE** – Top avg_net_return (0.197) but single-symbol heavy (XAG/USD); low WR (0.26); OOS decay.
+- **trend_momentum**: **REJECT** – Mostly ema_cross fails; 1 STRONG (macd_direction ETH H1) but overwhelmed by hurts.
+- **breakout** / **engine_b_proxy** / **engine_d_proxy** / **volatility**: **REJECT** – Fee survival issues, OOS negative, no robust clusters.
+
+## 2. Indicator Helped Most
+**bollinger_touch** (num_std=2.0-2.5, period=20): **STRONG_CANDIDATE** – Top attribution (pass_rate 25%, avg_net 0.0080); multi-symbol cluster (SOL/ETH/NAS100/WTI); H4 strong; mean_reversion family lift.
+
+## 3. Indicator Hurt Most
+**ema_cross** (all params): **REJECT** – Worst attribution (pass_rate 0.35%, avg_net -0.1322); tiny samples rampant (<30 trades 80%+); gross/net similar negative; single-symbol ETH M15 fails.
+
+## 4. Asset Group Performance
+**commodity**: **WEAK_CANDIDATE** – Best net_return (0.1995), PF (1.74); XAG/WTI/XAU cluster; but OOS -0.0286 flags decay. Crypto close second (0.1687 net). Forex/index/stock: **REJECT** (low expectancy, OOS decay).
+
+## 5. Symbol Performance
+**XAG/USD**: **WEAK_CANDIDATE** – Best net (0.3481) but single-symbol penalty; pullback/engine proxies. **SOL/USDT**: **STRONG_CANDIDATE** – 0.2802 net, high WR (0.625), bollinger_touch H4. BTC/ETH/XAU/WTI: **WEAK_CANDIDATE** (clusters). Others: **REJECT** (tiny samples or OOS fail).
+
+## 6. Timeframe Performance
+**H4**: **STRONG_CANDIDATE** – Best net (0.1608), count (96), cross-family/symbol; low drawdown. H1: **WEAK_CANDIDATE** (macd edge). M15: **NEEDS_MORE_DATA** (only 12 valid, tiny samples).
+
+## 7. Session Performance
+**all**: **WEAK_CANDIDATE** – Only data; no session split. **NEEDS_MORE_DATA** for london/ny/etc. (attribution shows minor edges but hurts overall).
+
+## 8. LONG vs SHORT
+**both**: **WEAK_CANDIDATE** – Only direction tested; no split. No clear bias (symmetric fails).
+
+## 9. Setups Collapsed After Fees
+None explicitly gross-profitable/net-negative (per report). But **REJECT** micro_breakout/engine_d_proxy (BTC H4: gross 0.404/net similar but OOS -0.123 decay simulates fee kill at scale).
+
+## 10. Setups with Too Little Sample (<30 trades)
+Penalized 2747/4512 (61%). By family:
+- **trend_momentum**: **NEEDS_MORE_DATA** (1377; ema_cross 80%+ <20 trades).
+- **engine_b_proxy**: **NEEDS_MORE_DATA** (358).
+- **mean_reversion**: **NEEDS_MORE_DATA** (306; non-bollinger).
+- **breakout**: **NEEDS_MORE_DATA** (296; session_opening_range).
+- **engine_d_proxy**: **NEEDS_MORE_DATA** (195).
+- **volatility**: **NEEDS_MORE_DATA** (191).
+- **pullback**: Minor (24).
+
+## 11. Engine A (EMA/RSI/MACD/ADX) Recommendations
+- **Keep**: MACD direction (adx_min=0-20|fast=12|slow=26|signal=9) – **STRONG_CANDIDATE** ETH H1 (56 trades, PF 1.48, robustness 0.80).
+- **Remove/Demote**: EMA cross (all) – **REJECT** (1728 configs, avg_net -0.132); EMA alignment/scalp_pullback – **REJECT**.
+- **Tune**: ADX gate higher (>20) – reduces samples but filters noise (weak lift); RSI confirm – marginal, test off.
+- No threshold changes to live 2.1 floor.
+
+## 12. Engine B (Price Action Checklist) Recommendations
+- **Keep**: structure_filters (fvg_detection=False/True|strong_close_pct=0.7) – **STRONG_CANDIDATE** MSFT H4 (58 trades), **WEAK_CANDIDATE** XAG/XAU H4.
+- **Remove/Demote**: ob_bos – **REJECT** (0 strong/weak, net -0.092); FVG/zone logic overfit.
+- **Tune**: Strong close >0.7 strict; add RR room filter (proxy via duration); BOS/CHoCH only multi-TF.
+- Checklist pass/fail strict – good, no loosen.
+
+## 13. Engine D (VP/OrderFlow Scalping) Recommendations
+- **Keep**: micro_breakout (atr_sl_mult=0.5-1.0|fee_guard_r=0.5|range_bars=3-6) – **STRONG_CANDIDATE** XAU H4 (86 trades, robustness 0.69).
+- **Remove/Demote**: Absorption/CVD/VWAP proxies – **REJECT** (no strong, OOS decay).
+- **Tune**: Range_bars=3 (higher trades); fee_guard_r=0.5 (survives); Grade B+ only (crypto focus, but commodity edge).
+- VP params (POC/VAH/VAL): Needs AAA sequence test.
+
+## 14. Next Smallest Useful Test
+H4 bollinger_touch (num_std=2.0-2.5) cluster expansion: symbols [SOL/USDT, ETH/USDT, XAG/USD, NAS100, WTI Oil]; add OOS extend + multi-session. (~50 configs).
+
+## 15. What Should NOT Be Tested Further Right Now
+- ema_cross (all params) – **REJECT**, sample famine, consistent loser.
+- Single-symbol M15 trend_momentum (ETH) – **REJECT**, no cluster.
+- ob_bos/vwap_reclaim – **REJECT**, zero strong/pass_rate.
+
+**Overall:** Weak edges in mean_reversion/bollinger (H4 commodity/crypto); Engines need proxy lifts but OOS decay everywhere – **NEEDS_MORE_DATA** before live consider. No direct execution.
+
+```json
+{
+  "overall_verdict": "Sparse edges in mean_reversion (bollinger_touch H4 cluster); heavy OOS decay + sample penalties; Engines A/B/D have isolated proxies but no robust adoption yet. Prioritize H4 commodity/crypto validation.",
+  "top_candidates": [
+    {"strategy": "bollinger_touch", "symbol": "SOL/USDT", "tf": "H4", "label": "STRONG_CANDIDATE"},
+    {"strategy": "bollinger_touch", "symbol": "ETH/USDT", "tf": "H4", "label": "STRONG_CANDIDATE"},
+    {"strategy": "macd_direction", "symbol": "ETH/USDT", "tf": "H1", "label": "STRONG_CANDIDATE"},
+    {"strategy": "structure_filters", "symbol": "MSFT", "tf": "H4", "label": "STRONG_CANDIDATE"},
+    {"strategy": "micro_breakout", "symbol": "XAU/USD", "tf": "H4", "label": "STRONG_CANDIDATE"}
+  ],
+  "rejected_setups": [
+    {"strategy": "ema_cross", "reason": "Consistent net negative, tiny samples (<30 trades 80%+), no OOS survival"},
+    {"strategy": "ob_bos", "reason": "Zero strong/weak, avg_net -0.092, hurts attribution"},
+    {"strategy": "ema_scalp_pullback", "reason": "Worst net -0.191, low pass_rate 4%"}
+  ],
+  "engine_a": {
+    "keep": ["macd_direction (adx_min=0-20)"],
+    "remove_or_demote": ["ema_cross (all)", "ema_alignment", "ema_scalp_pullback"],
+    "tune": ["ADX gate >20 (sample filter)", "RSI confirm off (marginal)"],
+    "next_tests": ["H4 MACD + bollinger confluence"]
+  },
+  "engine_b": {
+    "keep": ["structure_filters (strong_close_pct=0.7)"],
+    "remove_or_demote": ["ob_bos", "fvg_detection heavy"],
+    "tune": ["Add RR room filter", "Multi-TF BOS/CHoCH"],
+    "next_tests": ["H4 structure + pullback_ema proxy"]
+  },
+  "engine_d": {
+    "keep": ["micro_breakout (range_bars=3, atr_sl=0.5-1.0)"],
+    "remove_or_demote": ["Absorption/CVD proxies"],
+    "tune": ["fee_guard_r=0.5 strict", "Grade B+ threshold"],
+    "next_tests": ["XAU/XAG H4 VP AAA sequence"]
+  },
+  "data_quality_warnings": ["OOS decay universal (-0.0186 avg); IS/OOS inconsistency penalizes all"],
+  "telemetry_warnings": [],
+  "next_tiny_test": {
+    "symbols": ["SOL/USDT", "ETH/USDT", "XAG/USD", "NAS100", "WTI Oil"],
+    "timeframes": ["H4"],
+    "strategy_families": ["mean_reversion"],
+    "reason": "Validate bollinger_touch cluster (num_std=2.0-2.5); ~50 configs, multi-symbol robustness check"
+  },
+  "do_not_do_next": ["ema_cross", "M15 trend_momentum single-symbol", "ob_bos", "vwap_reclaim"]
+}
+```

@@ -1,0 +1,36 @@
+{
+  "engine_a": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [
+      "Test EMA/RSI+MACD/ADX >2.1 on H4 commodities"
+    ],
+    "next_tests": [
+      "H4 trend_momentum/pullback on XAU/USD + 4 symbols"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (strong_close_pct=0.7-0.8 + FVG)"
+    ],
+    "remove_or_demote": [
+      "ob_bos (all engulf/vol/swing variants)"
+    ],
+    "tune": [
+      "Prioritize FVG=True, strong_close >=0.7; H4 focus"
+    ],
+    "next_tests": [
+      "H4 structure_filters on 4-6 more symbols (commodity/forex)"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Full engine_d_proxy on crypto/commodities H4"
+    ]
+  },
+  "generated_at": "2026-04-27T17:06:10.716796+00:00",
+  "safety_note": "These are backtest discovery findings only. Do NOT apply to live thresholds without further validation."
+}

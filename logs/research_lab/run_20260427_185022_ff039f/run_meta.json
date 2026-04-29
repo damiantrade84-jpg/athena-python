@@ -1,0 +1,22 @@
+{
+  "run_id": "run_20260427_185022_ff039f",
+  "mode": "tiny",
+  "symbol_count": 4,
+  "timeframes": [
+    "M15",
+    "H4"
+  ],
+  "families": [
+    "breakout",
+    "pullback"
+  ],
+  "specs_count": 15,
+  "results_count": 60,
+  "direction": "both",
+  "generated_at": "2026-04-27T18:50:50.343656+00:00",
+  "session_id": "sess_20260427_185022_01ca9d",
+  "market_group": "forex",
+  "trading_style": "scalp",
+  "research_depth": "quick",
+  "role": "discovery"
+}

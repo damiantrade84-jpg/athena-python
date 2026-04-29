@@ -1,0 +1,21 @@
+{
+  "run_id": "run_20260429_081058_297b",
+  "mode": "small",
+  "symbol_count": 4,
+  "timeframes": [
+    "D1"
+  ],
+  "families": [
+    "mean_reversion"
+  ],
+  "specs_count": 2,
+  "results_count": 0,
+  "direction": "both",
+  "generated_at": "2026-04-29T08:11:06.523489+00:00",
+  "session_id": "sess_20260429_081031_adfa99",
+  "market_group": "forex",
+  "trading_style": "swing",
+  "research_depth": "deep",
+  "role": "validation",
+  "parent_run_id": "run_20260429_081031_bb52a2"
+}

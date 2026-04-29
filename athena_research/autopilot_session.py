@@ -40,14 +40,27 @@ _OUTPUT_DIR = Path("logs/research_lab")
 # In-memory registry of live sessions keyed by session_id
 _active_sessions: dict[str, "AutopilotSession"] = {}
 
-GROUP_SYMBOLS: dict[str, list[str]] = {
-    "crypto":  ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "ADA/USDT"],
-    "forex":   ["EUR/USD", "GBP/USD", "AUD/USD", "USD/JPY"],
-    "metals":  ["XAU/USD", "XAG/USD"],
-    "indices": ["US30", "NAS100", "GER30"],
-    "stocks":  ["AAPL", "TSLA", "NVDA", "MSFT"],
-    "custom":  ["BTC/USDT", "EUR/USD"],
-}
+def _load_group_symbols() -> dict[str, list[str]]:
+    """Load group symbols from YAML config (single source of truth)."""
+    try:
+        from athena_research.run_manager import load_config, get_group_symbols, get_all_group_names
+        cfg = load_config()
+        groups = {}
+        for g in get_all_group_names(cfg):
+            groups[g] = get_group_symbols(cfg, g)
+        # Add UI aliases
+        groups.setdefault("metals", groups.get("commodity", []))
+        groups.setdefault("indices", groups.get("index", []))
+        groups.setdefault("stocks", groups.get("stock", []))
+        groups.setdefault("custom", groups.get("crypto", ["BTC/USDT"])[:2])
+        return groups
+    except Exception:
+        return {
+            "crypto": ["BTC/USDT", "ETH/USDT"], "forex": ["EUR/USD", "GBP/USD"],
+            "commodity": ["XAU/USD"], "index": ["US500"], "stock": ["AAPL"],
+        }
+
+GROUP_SYMBOLS: dict[str, list[str]] = _load_group_symbols()
 
 DEPTH_MODE: dict[str, str] = {
     "quick":    "tiny",
@@ -356,6 +369,10 @@ class AutopilotSession:
         self.discovery_run_id = discovery_run_id
         self._save()
 
+        # Map trading_style to zone for zone-aware testing
+        _style_to_zone = {"scalp": ["scalp"], "intra": ["intra"], "swing": ["swing"]}
+        zones = _style_to_zone.get(self.trading_style)
+
         try:
             run_research(
                 mode=mode,
@@ -367,6 +384,8 @@ class AutopilotSession:
                 symbols=symbols,
                 timeframes=timeframes,
                 families=families,
+                zones=zones,
+                test_directions=True,
             )
         except Exception as e:
             self._fail(f"Discovery run failed: {e}")

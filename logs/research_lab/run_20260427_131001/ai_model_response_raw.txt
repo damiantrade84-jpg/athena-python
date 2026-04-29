@@ -1,0 +1,127 @@
+# Athena Pro v4 Backtest Discovery Decision Memo
+**Run ID:** run_20260427_131001 | **Analyst:** Quantitative Research | **Date:** 2026-04-27  
+**Key Caveat:** These are discovery results at lowered BT_MIN thresholds (worse than live). **Do NOT execute live, copy thresholds to gates, or deploy without multi-symbol OOS validation + forward testing.** All findings labeled per protocol. Robustness penalized for <30 trades, single-symbol, net-negative, IS/OOS decay. Focus on clusters over outliers.
+
+## 1. Strategy Family Performance
+- **breakout** (STRONG_CANDIDATE): Highest avg net_return (0.272), consistent WEAK_CANDIDATEs on H4 (e.g., prev_day_hl, session_opening_range on BTC/ETH). Multi-symbol edge.
+- **mean_reversion** (STRONG_CANDIDATE): Top-ranked (bollinger_touch H4 cluster: SOL/ADA/ETH/BNB), high WR (71.7% avg), PF (1.77). Robust across 4 symbols.
+- **trend_momentum** (WEAK_CANDIDATE): One STRONG_CANDIDATE (macd_direction ETH H1), but mostly REJECT (ema_cross hurts). Marginal OOS.
+- **engine_b_proxy** (REJECT): Weak on high-sample (e.g., structure_filters), net near-zero after fees.
+- **pullback** (REJECT): Low WR, poor OOS survival.
+
+## 2. Most Helpful Indicator
+**bollinger_touch** (STRONG_CANDIDATE): 4 STRONG_CANDIDATEs, 9 WEAK_CANDIDATEs (43% pass), +0.079 avg net_return. H4 crypto cluster (SOL/ADA/ETH/BNB), high WR (64%).
+
+## 3. Most Hurtful Indicator
+**ema_cross** (REJECT): 0% pass (218 rejects), -0.218 avg net_return, destroys edge (low WR 19.6%). TELEMETRY_BUG risk in trend_momentum family.
+
+## 4. Asset Group
+**crypto** (WEAK_CANDIDATE): Only group tested (48 valid), avg net 0.167, robustness 0.52. NEEDS_MORE_DATA (no forex/equity comparison; single-class bias).
+
+## 5. Symbol
+**SOL/USDT** (STRONG_CANDIDATE): Best net (0.279), WR (57.8%), multi-family (mean_reversion/breakout).  
+**ETH/USDT** (WEAK_CANDIDATE): Consistent (0.193 net, 12 configs).  
+Others (ADA/BTC/BNB: WEAK_CANDIDATE/REJECT) – penalize non-clusters.
+
+## 6. Timeframe
+**H4** (STRONG_CANDIDATE): Best net (0.213), 33 configs, multi-symbol.  
+**H1** (WEAK_CANDIDATE): Marginal (0.078 net).  
+**M15** (REJECT): Tiny samples (<30), poor OOS.
+
+## 7. Session
+**all** (NEEDS_MORE_DATA): Only tested. No session splits; cannot label stronger.
+
+## 8. LONG vs SHORT
+**both** (NEEDS_MORE_DATA): Only direction tested (0.468 WR). No long/short split; recommend direction-specific retest.
+
+## 9. Setups Collapsing After Fees
+None (REJECT): Report confirms "No gross-profitable-but-fee-killed setups." All valid are net-positive survivors.
+
+## 10. Too Little Sample (<30 trades)
+Penalized 606 configs:  
+- **trend_momentum** (327, REJECT: ema_cross dominant).  
+- **engine_b_proxy** (107, REJECT).  
+- **mean_reversion** (89, NEEDS_MORE_DATA: bollinger_touch safe but expand).  
+- **breakout** (83, NEEDS_MORE_DATA).
+
+## 11. Engine A (EMA/RSI+MACD/ADX)
+- **Keep:** MACD momentum (adx_min=0 H1 ETH: STRONG_CANDIDATE, WR 46.7%, robustness 0.64). ADX gate low (0-20) helps survival.
+- **Remove/Demote:** EMA trend coherence (ema_cross: REJECT, hurts PF/WR). RSI confirm (mixed, but low sample).
+- **Tune:** Raise ADX_min directionally (20+ filters noise but cuts samples – test 15-25). Blend MACD quality > EMA (target 0-3 scale boost). **NEEDS_MORE_DATA** (single-symbol ETH bias).
+- Not trustworthy: M15 ema_cross (tiny samples, negative returns).
+
+## 12. Engine B (Price-Action Checklist)
+- **Keep:** Structure filters proxy (WEAK_CANDIDATE high-sample BNB/ADA H4, but low WR 38-40%).
+- **Remove/Demote:** FVG/strong_close_pct=0.8 (REJECT: poor OOS, net ~0). OB/BOS (HURTS: -0.268 net).
+- **Tune:** Relax checklist for H4 breakouts (add prev_day_hl integration). Test location/RR gates > current strict.
+- **NEEDS_MORE_DATA** (proxy only; no direct BOS/CHoCH telemetry).
+
+## 13. Engine D (VP/OrderFlow Scalping)
+- **Keep:** VWAP deviation (NEUTRAL: no rejects, but zero strong data).
+- **Remove/Demote:** None explicit (under-tested).
+- **Tune:** Crypto H4 focus (POC/VAH/VAL absorption); grade B/C thresholds for bollinger_touch synergy.
+- **TELEMETRY_BUG:** No D-grade results in top 48/1140; missing VP/CVD data? Not trustworthy without OrderFlow telemetry.
+
+## 14. Next Smallest Useful Test
+H4 crypto cluster (SOL/ETH/ADA/BNB) on **mean_reversion** (bollinger_touch num_std=2.0-2.5|period=20) + **breakout** (prev_day_hl atr_expand_min=0-1.0). Add 2 forex symbols (EURUSD/GBPUSD), split long/short, 20% data holdout. Reason: Validate H4 cluster edge.
+
+## 15. Do NOT Test Further Right Now
+- **ema_cross** (REJECT: consistent loser).  
+- **M15** anything (tiny samples).  
+- **ny_breakout/london_breakout/ob_bos** (HURTS: negative SQN/net).  
+- Single-symbol outliers (e.g., BNB rsi_extreme).  
+Prioritize clusters over one-offs.
+
+**Overall:** Promising H4 crypto mean_reversion/breakout clusters. Engine A MACD viable; B/D need tuning/telemetry. Forward-test top 5 before expansion.
+
+```json
+{
+  "overall_verdict": "H4 crypto mean_reversion (bollinger_touch) and breakout families show clustered edge; trend_momentum marginal. Prioritize multi-symbol validation.",
+  "top_candidates": [
+    {"strategy": "bollinger_touch", "symbol": "SOL/USDT", "tf": "H4", "label": "STRONG_CANDIDATE"},
+    {"strategy": "bollinger_touch", "symbol": "ADA/USDT", "tf": "H4", "label": "STRONG_CANDIDATE"},
+    {"strategy": "bollinger_touch", "symbol": "ETH/USDT", "tf": "H4", "label": "STRONG_CANDIDATE"},
+    {"strategy": "macd_direction", "symbol": "ETH/USDT", "tf": "H1", "label": "STRONG_CANDIDATE"},
+    {"strategy": "bollinger_touch", "symbol": "BNB/USDT", "tf": "H4", "label": "STRONG_CANDIDATE"}
+  ],
+  "rejected_setups": [
+    {"strategy": "ema_cross", "reason": "Consistent net-negative, low WR, 0% pass rate"},
+    {"strategy": "ob_bos", "reason": "Hurts PF/SQN, 0% pass"},
+    {"strategy": "ny_breakout", "reason": "Negative returns, hurts"},
+    {"strategy": "london_breakout", "reason": "Negative returns, hurts"},
+    {"strategy": "structure_filters (fvg=0.8)", "reason": "Poor OOS, net ~0"}
+  ],
+  "engine_a": {
+    "keep": ["MACD direction (adx_min=0)"],
+    "remove_or_demote": ["EMA cross/coherence"],
+    "tune": ["ADX gate to 15-25", "Prioritize MACD over EMA in 0-3 score"],
+    "next_tests": ["H4 multi-crypto + forex, long/short split"]
+  },
+  "engine_b": {
+    "keep": ["Structure filters (high-sample H4)"],
+    "remove_or_demote": ["FVG detection=False + strong_close=0.8", "OB/BOS"],
+    "tune": ["Integrate prev_day_hl, relax RR/location for H4"],
+    "next_tests": ["Direct BOS/CHoCH on H4 crypto cluster"]
+  },
+  "engine_d": {
+    "keep": ["VWAP deviation"],
+    "remove_or_demote": [],
+    "tune": ["Grade B/C for H4 mean_reversion synergy", "Add POC/VAL absorption"],
+    "next_tests": ["Full VP/CVD telemetry on top H4 symbols"]
+  },
+  "data_quality_warnings": ["All crypto-only; no forex/equity", "No long/short or session splits"],
+  "telemetry_warnings": ["Missing Engine D VP/OrderFlow data in tops", "Proxy-only for Engine B"],
+  "next_tiny_test": {
+    "symbols": ["SOL/USDT", "ETH/USDT", "ADA/USDT", "BNB/USDT", "EUR/USD", "GBP/USD"],
+    "timeframes": ["H4"],
+    "strategy_families": ["mean_reversion", "breakout"],
+    "reason": "Validate H4 cluster + asset diversification, long/short split"
+  },
+  "do_not_do_next": [
+    "ema_cross any params",
+    "M15 timeframes",
+    "ny/london_breakout",
+    "Single-symbol deep dives"
+  ]
+}
+```

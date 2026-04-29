@@ -53,6 +53,7 @@ class StrategyMetrics:
     status: str = "NEEDS_MORE_DATA"   # STRONG_CANDIDATE | WEAK_CANDIDATE | REJECT | NEEDS_MORE_DATA
     skip_reason: str = ""
     data_source: str = ""   # "binance_rest"|"mt5"|"eodhd"|"yfinance_fallback"|"synthetic_test"|"DATA_UNAVAILABLE"
+    zone: str = ""          # "scalp"|"intra"|"swing" — tagged post-run by run_manager
 
     def to_dict(self) -> dict:
         return asdict(self)

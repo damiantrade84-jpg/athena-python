@@ -1,0 +1,92 @@
+{
+  "overall_verdict": "WEAK_CANDIDATE: mean_reversion shows mild crypto edge (VWAP/RSI), but tiny samples + no clusters penalize. NEEDS_MORE_DATA for live relevance.",
+  "top_candidates": [
+    {
+      "strategy": "vwap_deviation std_threshold=1.5",
+      "symbol": "ADA/USDT",
+      "tf": "H1",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "vwap_deviation std_threshold=1.5",
+      "symbol": "ETH/USDT",
+      "tf": "M15",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "rsi_extreme overbought=70|oversold=30|period=14",
+      "symbol": "BNB/USDT",
+      "tf": "H1",
+      "label": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "rsi_extreme (75/25 params)",
+      "reason": "tiny samples <15 trades"
+    },
+    {
+      "strategy": "bollinger_touch num_std=2.5",
+      "reason": "negative avg_net_return, poor OOS"
+    }
+  ],
+  "engine_a": {
+    "keep": [
+      "RSI momentum (period=14)"
+    ],
+    "remove_or_demote": [],
+    "tune": [
+      "RSI oversold ~25-30, overbought 70 for crypto mean-reversion"
+    ],
+    "next_tests": [
+      "Add VWAP dev as ADX proxy on H1 crypto"
+    ]
+  },
+  "engine_b": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Proxy mean_reversion (VWAP/RSI) into FVG/OB checklist"
+    ]
+  },
+  "engine_d": {
+    "keep": [
+      "VWAP deviation std=1.5"
+    ],
+    "remove_or_demote": [],
+    "tune": [
+      "Pair with POC/VAH for grade B/C crypto H1/M15"
+    ],
+    "next_tests": [
+      "CVD absorption at VWAP extremes"
+    ]
+  },
+  "data_quality_warnings": [
+    "Tiny mode: avg 26 trades/config; 69% <30 trades penalized"
+  ],
+  "telemetry_warnings": [],
+  "next_tiny_test": {
+    "symbols": [
+      "BTC/USDT",
+      "SOL/USDT",
+      "XRP/USDT",
+      "LINK/USDT",
+      "DOT/USDT"
+    ],
+    "timeframes": [
+      "H1",
+      "M15",
+      "M30"
+    ],
+    "strategy_families": [
+      "mean_reversion"
+    ],
+    "reason": "Build multi-symbol clusters for VWAP/RSI; target 50+ trades/config"
+  },
+  "do_not_do_next": [
+    "rsi_extreme 75/25 params (low sample)",
+    "Single-symbol deep dives",
+    "bollinger_touch 2.5 std (OOS weak)"
+  ]
+}

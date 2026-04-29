@@ -1,0 +1,104 @@
+{
+  "overall_verdict": "WEAK_CANDIDATE: Isolated D1 mean_reversion edges (bollinger_touch); broad rejects in trend_momentum/breakout; penalize small samples/OOS decay/no clusters.",
+  "top_candidates": [
+    {
+      "strategy": "bollinger_touch",
+      "symbol": "AUD/USD",
+      "tf": "D1",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "vwap_deviation",
+      "symbol": "AUD/USD",
+      "tf": "D1",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "rsi_extreme",
+      "symbol": "USD/JPY",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "macd_direction",
+      "symbol": "USD/JPY",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "ema_cross",
+      "reason": "Consistent loser: high rejects, negative net_return, hurts attribution"
+    },
+    {
+      "strategy": "structure_filters",
+      "reason": "91 rejects, hurts attribution, poor OOS"
+    },
+    {
+      "strategy": "ob_bos",
+      "reason": "HURTS attribution, low WR/net"
+    }
+  ],
+  "engine_a": {
+    "keep": [
+      "MACD momentum (adx_min=0)"
+    ],
+    "remove_or_demote": [
+      "EMA cross/coherence"
+    ],
+    "tune": [
+      "ADX gate >20; RSI confirm=False"
+    ],
+    "next_tests": [
+      "macd_direction multi-symbol D1/H4"
+    ]
+  },
+  "engine_b": {
+    "keep": [],
+    "remove_or_demote": [
+      "structure_filters",
+      "ob_bos"
+    ],
+    "tune": [
+      "FVG/OB only if D1 cluster"
+    ],
+    "next_tests": []
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Crypto symbols (BTC/USD) VP/OF baseline"
+    ]
+  },
+  "data_quality_warnings": [
+    "340 tiny samples (56%); forex-only no crypto"
+  ],
+  "telemetry_warnings": [
+    "No Engine D hits (forex data?); mt5 only"
+  ],
+  "next_tiny_test": {
+    "symbols": [
+      "AUD/USD",
+      "GBP/USD",
+      "EUR/USD",
+      "USD/JPY",
+      "BTC/USD",
+      "ETH/USD"
+    ],
+    "timeframes": [
+      "D1"
+    ],
+    "strategy_families": [
+      "mean_reversion"
+    ],
+    "reason": "Validate bollinger_touch/vwap clusters >100 trades/symbol"
+  },
+  "do_not_do_next": [
+    "ema_cross variants",
+    "H4 trend_momentum single-symbol",
+    "engine_b_proxy structure_filters"
+  ]
+}

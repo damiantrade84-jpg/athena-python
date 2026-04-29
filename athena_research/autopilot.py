@@ -125,14 +125,20 @@ def generate_auto_plan(
         fam = str(row.get("family", "mean_reversion"))
         direction = str(row.get("direction", "both"))
         
-        # Build related symbols based on original
+        # Build related symbols from YAML config (single source of truth)
         related_symbols = [sym]
-        if "USDT" in sym:
-            related_symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "LINK/USDT"]
-        elif "USD" in sym or "/" in sym:
-            related_symbols = ["EUR/USD", "GBP/USD", "AUD/USD", "USD/JPY"]
-        else:
-            related_symbols = [sym]
+        try:
+            from athena_research.run_manager import load_config, get_group_symbols
+            from athena_research.data_loader import asset_class_for
+            _ac = asset_class_for(sym)
+            _cfg = load_config()
+            _group_syms = get_group_symbols(_cfg, _ac)
+            if _group_syms:
+                related_symbols = _group_syms[:8]  # cap at 8 for validation
+            if sym not in related_symbols:
+                related_symbols.insert(0, sym)
+        except Exception:
+            pass
             
         tests.append({
             "test_id": f"validate_winners_{strat}_{tf}_{priority}",

@@ -1,0 +1,115 @@
+{
+  "overall_verdict": "Narrow H4 mean-reversion edge (bollinger_touch) on crypto multi-symbols; trend_momentum/breakout weak; no Engine D data.",
+  "top_candidates": [
+    {
+      "strategy": "bollinger_touch",
+      "symbol": "SOL/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "bollinger_touch",
+      "symbol": "ADA/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "bollinger_touch",
+      "symbol": "ETH/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "structure_filters",
+      "symbol": "ADA/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "macd_direction",
+      "symbol": "ETH/USDT",
+      "tf": "H1",
+      "label": "STRONG_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "ema_cross",
+      "reason": "All 540 configs net-negative, low WR"
+    },
+    {
+      "strategy": "ob_bos",
+      "reason": "0 pass rate, net -0.28"
+    },
+    {
+      "strategy": "prev_day_hl",
+      "reason": "OOS decay, avg net -0.13"
+    },
+    {
+      "strategy": "ny_breakout",
+      "reason": "0 pass, hurts performance"
+    }
+  ],
+  "engine_a": {
+    "keep": [
+      "RSI+MACD momentum (macd_direction adx_min=0)"
+    ],
+    "remove_or_demote": [
+      "EMA trend coherence (ema_cross)"
+    ],
+    "tune": [
+      "ADX gate (>20)"
+    ],
+    "next_tests": [
+      "Multi-symbol H1/H4 macd_direction"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (fvg=False, strong_close=0.8)"
+    ],
+    "remove_or_demote": [
+      "OB/BOS logic"
+    ],
+    "tune": [
+      "Strong close threshold"
+    ],
+    "next_tests": [
+      "Non-crypto structure_filters H4"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Full VP/OF suite on crypto M5/H1"
+    ]
+  },
+  "data_quality_warnings": [
+    "Crypto-only; no forex/equity"
+  ],
+  "telemetry_warnings": [
+    "No Engine D data; binance_rest only\u2014no live flow"
+  ],
+  "next_tiny_test": {
+    "symbols": [
+      "SOL/USDT",
+      "ADA/USDT",
+      "XRP/USDT",
+      "EURUSD"
+    ],
+    "timeframes": [
+      "H4"
+    ],
+    "strategy_families": [
+      "mean_reversion"
+    ],
+    "reason": "Validate bollinger_touch cluster multi-symbol"
+  },
+  "do_not_do_next": [
+    "ema_cross variants",
+    "M15 trend_momentum",
+    "ob_bos/ny_breakout"
+  ]
+}

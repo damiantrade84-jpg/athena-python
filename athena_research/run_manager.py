@@ -47,14 +47,41 @@ def _fee_for(symbol: str, fees_cfg: dict) -> float:
     return float(fees_cfg.get(ac, fees_cfg.get("default", 0.001)))
 
 
+def get_group_symbols(cfg: dict, group: str) -> list[str]:
+    """Return symbols for a market group from YAML config (single source of truth)."""
+    symbols_cfg = cfg.get("symbols", {})
+    # Handle alias names the UI uses
+    _aliases = {"metals": "commodity", "indices": "index", "stocks": "stock"}
+    group_key = _aliases.get(group, group)
+    syms = symbols_cfg.get(group_key, [])
+    return list(syms) if isinstance(syms, list) else []
+
+
+def get_all_group_names(cfg: dict) -> list[str]:
+    """Return all available market group names from YAML config."""
+    return list(cfg.get("symbols", {}).keys())
+
+
+def get_zone_timeframes(cfg: dict, zone: str) -> list[str]:
+    """Return timeframes for a trading zone from YAML config."""
+    zones = cfg.get("zones", {})
+    return list(zones.get(zone, {}).get("timeframes", []))
+
+
+def get_all_zones(cfg: dict) -> list[str]:
+    """Return all zone names defined in YAML config."""
+    return list(cfg.get("zones", {}).keys())
+
+
 def _symbols_for_mode(cfg: dict, mode: str = "tiny") -> list[str]:
     if mode == "tiny":
         return cfg.get("tiny_run", {}).get("symbols", [])
     if mode in ("medium", "standard"):
         symbols_cfg = cfg.get("symbols", {})
         syms: list[str] = []
-        for group in ("crypto", "forex"):
-            syms.extend(symbols_cfg.get(group, []))
+        for group_syms in symbols_cfg.values():
+            if isinstance(group_syms, list):
+                syms.extend(group_syms[:10])  # first 10 per group for medium
         return syms
     # full, large, or anything else
     symbols_cfg = cfg.get("symbols", {})
@@ -144,6 +171,8 @@ def run_research(
     strategies: Optional[list[str]] = None,
     params: Optional[dict] = None,
     directions: Optional[list[str]] = None,
+    zones: Optional[list[str]] = None,
+    test_directions: bool = False,
 ) -> dict:
     """
     Execute a full or focused research lab run.
@@ -159,7 +188,16 @@ def run_research(
     else:
         symbols = _symbols_for_mode(cfg, mode)
 
-    if timeframes is not None:
+    # Zone-based timeframe resolution
+    active_zones: list[str] = []
+    if zones is not None:
+        active_zones = zones if isinstance(zones, list) else [zones]
+        zone_tfs = set()
+        for z in active_zones:
+            zone_tfs.update(get_zone_timeframes(cfg, z))
+        if zone_tfs:
+            timeframes = sorted(zone_tfs, key=lambda t: ["M5","M15","H1","H4","D1"].index(t) if t in ["M5","M15","H1","H4","D1"] else 99)
+    elif timeframes is not None:
         if isinstance(timeframes, str):
             timeframes = [t.strip() for t in timeframes.split(",") if t.strip()]
     else:
@@ -180,8 +218,15 @@ def run_research(
     log.info("[run_manager] Run %s | mode=%s | symbols=%d | TFs=%s | families=%s",
              run_id, mode, len(symbols), timeframes, families)
 
-    # Build strategy specs
-    specs = list(iter_strategy_specs(families, strategy_params, direction=direction))
+    # Build direction variants for testing
+    direction_list = [direction]
+    if test_directions and direction == "both":
+        direction_list = ["both", "long", "short"]
+
+    # Build strategy specs for all directions
+    specs = []
+    for d in direction_list:
+        specs.extend(iter_strategy_specs(families, strategy_params, direction=d))
     
     # Apply strategy/param filters
     if strategies is not None:
@@ -280,6 +325,15 @@ def run_research(
             breadth = sum(1 for r in returns if r > 0) / len(returns)
             m.robustness_score = min(1.0, m.robustness_score + breadth * 0.20)
 
+    # Tag results with zone info based on timeframe
+    zone_cfg = cfg.get("zones", {})
+    tf_to_zone: dict[str, str] = {}
+    for zname, zdef in zone_cfg.items():
+        for ztf in zdef.get("timeframes", []):
+            tf_to_zone.setdefault(ztf, zname)
+    for m in all_results:
+        m.zone = tf_to_zone.get(m.timeframe, "")
+
     # Generate reports
     run_meta = {
         "mode": mode,
@@ -289,6 +343,8 @@ def run_research(
         "specs_count": len(specs),
         "results_count": len(all_results),
         "direction": direction,
+        "zones": active_zones or list(zone_cfg.keys()),
+        "test_directions": test_directions,
     }
     try:
         run_dir = generate_all_reports(all_results, output_dir, run_id, run_meta)

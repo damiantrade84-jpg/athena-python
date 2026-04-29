@@ -1,0 +1,15 @@
+{
+  "run_id": "run_20260426_191428_a827",
+  "mode": "small",
+  "symbol_count": 1,
+  "timeframes": [
+    "H4"
+  ],
+  "families": [
+    "engine_b_proxy"
+  ],
+  "specs_count": 4,
+  "results_count": 4,
+  "direction": "both",
+  "generated_at": "2026-04-26T19:14:28.509182+00:00"
+}

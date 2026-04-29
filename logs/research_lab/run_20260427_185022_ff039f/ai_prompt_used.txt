@@ -1,0 +1,266 @@
+You are a quantitative research analyst reviewing backtest discovery results for Athena Pro v4,
+a multi-engine algorithmic trading system.
+
+IMPORTANT SAFETY RULES — YOU MUST FOLLOW THESE:
+1. Never recommend direct live execution from backtest discovery alone.
+2. Never suggest copying BT_MIN / backtest thresholds into live engine gates.
+3. Always label each finding with exactly one of: STRONG_CANDIDATE | WEAK_CANDIDATE | REJECT | NEEDS_MORE_DATA | TELEMETRY_BUG
+4. Penalise tiny samples (< 30 trades).
+5. Penalise strategies that only work on one symbol.
+6. Penalise strategies that are gross-profitable but net-negative after fees.
+7. Penalise strategies that work IS but fail OOS.
+8. Prefer robust clusters (work across multiple symbols/timeframes) over one-off winners.
+9. Separate Engine A, Engine B, and Engine D recommendations.
+10. Mention explicitly if a result is not trustworthy due to missing data or telemetry.
+
+## Project Context
+
+Athena Pro v4 has four engines:
+
+- **Engine A** — 3-factor quantitative scoring: EMA trend coherence (D1/H4/H1), RSI+MACD momentum quality, ADX gate.
+  Unified 0–3.0 scale. Current live forex floor: MIN_CONFLUENCE_CLASS.forex = 2.1.
+  **Do NOT recommend changing live thresholds from backtest findings.**
+
+- **Engine B** — Naked price-action (BOS/CHoCH, FVG, OB, swing sequence, location, trigger, room/RR).
+  Checklist-based pass/fail. Strict by design.
+
+- **Engine C** — Consensus layer blending Engine A + Engine B + AI Vision.
+
+- **Engine D** — Fabio Valentini VP+OrderFlow scalping (POC/VAH/VAL, Absorption, CVD, VWAP, AAA sequence).
+  Crypto-focused. Grade A/B/C/D.
+
+## Backtest Discovery Context
+
+- BT_MIN / discovery thresholds are intentionally LOWER than live thresholds.
+- Backtest results may appear worse because marginal trades are included.
+- IS = In-Sample (first 70% of data), OOS = Out-of-Sample (last 30%).
+- Robustness score: 0–1 combining sample adequacy, IS/OOS consistency, fee survival.
+
+## Purpose of This Analysis
+
+Identify which indicators, strategy families, filters, sessions, and symbols actually produce edge —
+and which do not — so we can make informed decisions about Engine A, Engine B, and Engine D.
+
+Provide a decision memo with specific, actionable recommendations.
+
+## Research Results
+
+### All Results Summary
+Rows: 60
+```
+                    run_id  symbol asset_class timeframe   family         strategy_name                                                             params_str direction session          status  trade_count win_rate profit_factor avg_return expectancy max_drawdown   sharpe     sqn exposure_pct avg_duration_bars gross_return net_return is_return oos_return robustness_score param_sensitivity             skip_reason data_source
+run_20260427_185022_ff039f AUD/USD       forex       M15 breakout           prev_day_hl                                                     atr_expand_min=0.0      both     all NEEDS_MORE_DATA            1      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan  only 1 trades < min 20         mt5
+run_20260427_185022_ff039f AUD/USD       forex       M15 breakout           prev_day_hl                                                     atr_expand_min=0.5      both     all NEEDS_MORE_DATA            1      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan  only 1 trades < min 20         mt5
+run_20260427_185022_ff039f AUD/USD       forex       M15 breakout           prev_day_hl                                                     atr_expand_min=1.0      both     all NEEDS_MORE_DATA            1      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan  only 1 trades < min 20         mt5
+run_20260427_185022_ff039f AUD/USD       forex       M15 breakout session_opening_range                                        atr_expand_min=0.0|range_bars=6      both     all          REJECT           60   0.2000        0.3148    -0.0010    -0.0010      -0.0563  -8.5042 -3.6532       0.0601           15.7333      -0.0556    -0.0556   -0.0285    -0.0256           0.7689               nan                     NaN         mt5
+run_20260427_185022_ff039f AUD/USD       forex       M15 breakout session_opening_range                                        atr_expand_min=0.5|range_bars=6      both     all          REJECT           57   0.2105        0.3377    -0.0009    -0.0009      -0.0510  -7.7893 -3.3069       0.0571           16.3158      -0.0502    -0.0502   -0.0247    -0.0239           0.7896               nan                     NaN         mt5
+run_20260427_185022_ff039f AUD/USD       forex       M15 breakout session_opening_range                                       atr_expand_min=0.0|range_bars=12      both     all          REJECT           28   0.2500        0.4481    -0.0008    -0.0008      -0.0340  -4.2561 -1.7488       0.0280           33.4286      -0.0231    -0.0231    0.0017    -0.0220           0.3180               nan                     NaN         mt5
+run_20260427_185022_ff039f AUD/USD       forex       M15 breakout session_opening_range                                       atr_expand_min=0.5|range_bars=12      both     all          REJECT           28   0.2500        0.4472    -0.0008    -0.0008      -0.0340  -4.2684 -1.7544       0.0280           32.8214      -0.0232    -0.0232    0.0017    -0.0220           0.3180               nan                     NaN         mt5
+run_20260427_185022_ff039f AUD/USD       forex       M15 breakout       london_breakout                              atr_expand_min=0.0|utc_end=11|utc_start=7      both     all NEEDS_MORE_DATA           14      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan              nan               nan only 14 trades < min 20         mt5
+run_20260427_185022_ff039f AUD/USD       forex       M15 breakout       london_breakout                              atr_expand_min=0.5|utc_end=11|utc_start=7      both     all NEEDS_MORE_DATA           14      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan              nan               nan only 14 trades < min 20         mt5
+run_20260427_185022_ff039f AUD/USD       forex       M15 breakout           ny_breakout                             atr_expand_min=0.0|utc_end=16|utc_start=13      both     all NEEDS_MORE_DATA            9      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan              nan               nan  only 9 trades < min 20         mt5
+run_20260427_185022_ff039f AUD/USD       forex       M15 breakout           ny_breakout                             atr_expand_min=0.5|utc_end=16|utc_start=13      both     all NEEDS_MORE_DATA            9      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan              nan               nan  only 9 trades < min 20         mt5
+run_20260427_185022_ff039f AUD/USD       forex       M15 pullback          pullback_ema pullback_period=20|rsi_reclaim=False|rsi_threshold=50|trend_period=200      both     all          REJECT           86   0.1163        0.2285    -0.0009    -0.0009      -0.0766 -13.0022 -5.9624       0.0861            6.0465      -0.0716    -0.0716   -0.0468    -0.0260           0.5669               nan                     NaN         mt5
+run_20260427_185022_ff039f AUD/USD       forex       M15 pullback          pullback_ema  pullback_period=20|rsi_reclaim=True|rsi_threshold=50|trend_period=200      both     all          REJECT           75   0.1333        0.2646    -0.0008    -0.0008      -0.0694 -11.0828 -4.9380       0.0751            6.6133      -0.0599    -0.0599   -0.0361    -0.0247           0.6053               nan                     NaN         mt5
+run_20260427_185022_ff039f AUD/USD       forex       M15 pullback          pullback_ema pullback_period=50|rsi_reclaim=False|rsi_threshold=50|trend_period=200      both     all          REJECT           60   0.0667        0.1843    -0.0010    -0.0010      -0.0563 -11.9948 -5.7857       0.0601            8.8000      -0.0563    -0.0563   -0.0332    -0.0239           0.6155               nan                     NaN         mt5
+run_20260427_185022_ff039f AUD/USD       forex       M15 pullback          pullback_ema  pullback_period=50|rsi_reclaim=True|rsi_threshold=50|trend_period=200      both     all          REJECT           39   0.0769        0.2027    -0.0009    -0.0009      -0.0419  -9.0725 -4.2655       0.0390           10.3590      -0.0364    -0.0364   -0.0206    -0.0161           0.5683               nan                     NaN         mt5
+run_20260427_185022_ff039f EUR/USD       forex        H4 breakout           prev_day_hl                                                     atr_expand_min=0.0      both     all          REJECT           37   0.4595        0.8218    -0.0004    -0.0004      -0.0530  -0.5388 -0.4393       0.0370           25.5946      -0.0172    -0.0172    0.0146    -0.0285           0.4220               nan                     NaN         mt5
+run_20260427_185022_ff039f EUR/USD       forex        H4 breakout           prev_day_hl                                                     atr_expand_min=0.5      both     all          REJECT           37   0.4595        0.8218    -0.0004    -0.0004      -0.0530  -0.5388 -0.4393       0.0370           25.5946      -0.0172    -0.0172    0.0146    -0.0285           0.4220               nan                     NaN         mt5
+run_20260427_185022_ff039f EUR/USD       forex        H4 breakout           prev_day_hl                                                     atr_expand_min=1.0      both     all          REJECT           29   0.4138        0.9419    -0.0001    -0.0001      -0.0427  -0.1470 -0.1196       0.0290           27.0345      -0.0049    -0.0049    0.0166    -0.0243           0.3740               nan                     NaN         mt5
+run_20260427_185022_ff039f EUR/USD       forex        H4 breakout session_opening_range                                        atr_expand_min=0.0|range_bars=6      both     all  WEAK_CANDIDATE           50   0.4800        1.0192     0.0000     0.0000      -0.0571   0.0668  0.0544       0.0500           19.6000       0.0013     0.0013    0.0087    -0.0105           0.6000               nan                     NaN         mt5
+run_20260427_185022_ff039f EUR/USD       forex        H4 breakout session_opening_range                                        atr_expand_min=0.5|range_bars=6      both     all  WEAK_CANDIDATE           50   0.4800        1.0140     0.0000     0.0000      -0.0571   0.0488  0.0397       0.0500           19.5600       0.0008     0.0008    0.0082    -0.0105           0.6000               nan                     NaN         mt5
+```
+
+### Top Ranked Strategies
+Rows: 9
+```
+                    run_id  symbol asset_class timeframe   family         strategy_name                       params_str direction session         status  trade_count win_rate profit_factor avg_return expectancy max_drawdown sharpe    sqn exposure_pct avg_duration_bars gross_return net_return is_return oos_return robustness_score param_sensitivity skip_reason data_source rank_score
+run_20260427_185022_ff039f AUD/USD       forex        H4 breakout session_opening_range  atr_expand_min=0.5|range_bars=6      both     all WEAK_CANDIDATE           44   0.4318        1.8796     0.0022     0.0022      -0.0307 1.7716 1.4744       0.0440           22.3182       0.0997     0.0997    0.1082    -0.0134           0.5640               nan         nan         mt5     0.3414
+run_20260427_185022_ff039f AUD/USD       forex        H4 breakout session_opening_range  atr_expand_min=0.0|range_bars=6      both     all WEAK_CANDIDATE           44   0.4318        1.8796     0.0022     0.0022      -0.0307 1.7716 1.4744       0.0440           22.3182       0.0997     0.0997    0.1082    -0.0134           0.5640               nan         nan         mt5     0.3414
+run_20260427_185022_ff039f EUR/USD       forex        H4 breakout session_opening_range  atr_expand_min=0.0|range_bars=6      both     all WEAK_CANDIDATE           50   0.4800        1.0192     0.0000     0.0000      -0.0571 0.0668 0.0544       0.0500           19.6000       0.0013     0.0013    0.0087    -0.0105           0.6000               nan         nan         mt5     0.3015
+run_20260427_185022_ff039f EUR/USD       forex        H4 breakout session_opening_range  atr_expand_min=0.5|range_bars=6      both     all WEAK_CANDIDATE           50   0.4800        1.0140     0.0000     0.0000      -0.0571 0.0488 0.0397       0.0500           19.5600       0.0008     0.0008    0.0082    -0.0105           0.6000               nan         nan         mt5     0.3010
+run_20260427_185022_ff039f AUD/USD       forex        H4 breakout session_opening_range atr_expand_min=0.0|range_bars=12      both     all WEAK_CANDIDATE           28   0.4643        1.7195     0.0022     0.0022      -0.0506 1.1652 0.9627       0.0280           35.0714       0.0623     0.0623    0.0526     0.0044           0.4428               nan         nan         mt5     0.2594
+run_20260427_185022_ff039f AUD/USD       forex        H4 breakout session_opening_range atr_expand_min=0.5|range_bars=12      both     all WEAK_CANDIDATE           28   0.4643        1.7195     0.0022     0.0022      -0.0506 1.1652 0.9627       0.0280           35.0714       0.0623     0.0623    0.0526     0.0044           0.4428               nan         nan         mt5     0.2594
+run_20260427_185022_ff039f AUD/USD       forex        H4 breakout           prev_day_hl               atr_expand_min=0.0      both     all WEAK_CANDIDATE           33   0.3636        1.1371     0.0005     0.0005      -0.0580 0.3278 0.2669       0.0330           27.3636       0.0153     0.0153    0.0368    -0.0240           0.4980               nan         nan         mt5     0.2589
+run_20260427_185022_ff039f AUD/USD       forex        H4 breakout           prev_day_hl               atr_expand_min=0.5      both     all WEAK_CANDIDATE           33   0.3636        1.1371     0.0005     0.0005      -0.0580 0.3278 0.2669       0.0330           27.3636       0.0153     0.0153    0.0368    -0.0240           0.4980               nan         nan         mt5     0.2589
+run_20260427_185022_ff039f AUD/USD       forex        H4 breakout           prev_day_hl               atr_expand_min=1.0      both     all WEAK_CANDIDATE           27   0.3333        1.2545     0.0010     0.0010      -0.0459 0.5288 0.4315       0.0270           28.3704       0.0257     0.0257    0.0321    -0.0063           0.4620               nan         nan         mt5     0.2473
+```
+
+### By Asset Group
+Rows: 1
+```
+asset_class win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+      forex        0.4236               9             1.4178                    9          0.0012                 9      0.7971             9   0.6593          9          0.0425                 9         -0.0104                 9                0.5191                       9          37.4444                  9
+```
+
+### By Symbol
+Rows: 2
+```
+ symbol win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+AUD/USD        0.4075               7             1.5324                    7          0.0016                 7      1.0083             7   0.8342          7          0.0543                 7         -0.0103                 7                0.4960                       7          33.8571                  7
+EUR/USD        0.4800               2             1.0166                    2          0.0000                 2      0.0578             2   0.0470          2          0.0011                 2         -0.0105                 2                0.6000                       2          50.0000                  2
+```
+
+### By Timeframe
+Rows: 1
+```
+timeframe win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+       H4        0.4236               9             1.4178                    9          0.0012                 9      0.7971             9   0.6593          9          0.0425                 9         -0.0104                 9                0.5191                       9          37.4444                  9
+```
+
+### By Session
+Rows: 1
+```
+session win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+    all        0.4236               9             1.4178                    9          0.0012                 9      0.7971             9   0.6593          9          0.0425                 9         -0.0104                 9                0.5191                       9          37.4444                  9
+```
+
+### By Direction
+Rows: 1
+```
+direction win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+     both        0.4236               9             1.4178                    9          0.0012                 9      0.7971             9   0.6593          9          0.0425                 9         -0.0104                 9                0.5191                       9          37.4444                  9
+```
+
+### Indicator Attribution
+Rows: 5
+```
+        strategy_name  total_configs  strong  weak  reject avg_net_return avg_win_rate avg_robustness avg_sqn avg_oos_return  total_trades pass_rate verdict
+          prev_day_hl             12       0     3       3         0.0029       0.3989         0.7230 -0.0055        -0.0226           211    0.2500   HURTS
+         pullback_ema             16       0     0      15        -0.0583       0.1384         0.5486 -3.7490        -0.0333           862    0.0000   HURTS
+session_opening_range             16       0     6      10        -0.0070       0.3160         0.5243 -1.9366        -0.0155           697    0.3750   HURTS
+      london_breakout              8       0     0       0            nan          nan            nan     nan            nan           118    0.0000 NEUTRAL
+          ny_breakout              8       0     0       0            nan          nan            nan     nan            nan            40    0.0000 NEUTRAL
+```
+
+### Rejected / Failed Configs (by family)
+```
+  family  count
+breakout     35
+pullback     16
+```
+
+### research_report.md (excerpt)
+```
+# Athena Research Lab — Report
+**Run ID:** `run_20260427_185022_ff039f`  **Generated:** 2026-04-27 18:50 UTC  
+**Mode:** tiny  **Symbols:** 4  **Families:** ['breakout', 'pullback']
+
+> **IMPORTANT:** These are backtest discovery findings at intentionally lower thresholds.
+> Do NOT copy these thresholds into live engine gates.
+> Label: **STRONG_CANDIDATE** / **WEAK_CANDIDATE** / **REJECT** / **NEEDS_MORE_DATA**
+
+## Executive Summary
+- Total strategy/param/symbol/TF combinations tested: **60**
+- Valid (pass robustness): **9** (15.0%)
+- Strong candidates: **0**
+
+## Which Strategy Family Works Best?
+family | count | avg_net_return | avg_wr | avg_pf | avg_sqn
+--- | --- | --- | --- | --- | ---
+breakout | 9 | 0.0425 | 0.4236 | 1.4178 | 0.6593
+
+**Best family:** `breakout` (avg net return 0.042)
+
+## Which Symbol Works Best?
+symbol | count | avg_net_return | avg_wr
+--- | --- | --- | ---
+AUD/USD | 7 | 0.0543 | 0.4075
+EUR/USD | 2 | 0.0011 | 0.4800
+
+## Which Timeframe Works Best?
+timeframe | count | avg_net_return | avg_wr
+--- | --- | --- | ---
+H4 | 9 | 0.0425 | 0.4236
+
+## Which Direction Works Better?
+direction | count | avg_net_return | avg_wr
+--- | --- | --- | ---
+both | 9 | 0.0425 | 0.4236
+
+## Which Indicators Help / Hurt?
+**Helpful indicators/strategies:**
+No clear indicator edge.
+
+**Globally weak across tested configs:**
+strategy_name | pass_rate | avg_net_return
+--- | --- | ---
+prev_day_hl | 0.2500 | 0.0029
+pullback_ema | 0.0000 | -0.0583
+session_opening_range | 0.3750 | -0.0070
+
+## Which Setups Collapse After Fees?
+No gross-profitable-but-fee-killed setups found.
+
+## Which Setups Had Too Little Sample?
+23 configs had insufficient trades.  
+family | count
+--- | ---
+breakout | 22
+pullback | 1
+
+## Recommended Research Queue
+Please use the Autopilot console on the dashboard to generate comprehensive research vectors.
+
+## Confirmed / Weakened / Rejected After Validation
+Validation tracks are executed sequentially.
+
+## Conditional Edge Candidates
+No conditional edges detected.
+
+## Engine A Findings
+*No valid `trend_momentum` results — insufficient data or all rejected.*
+*No valid `pullback` results — insufficient data or all rejected.*
+
+## Engine B Findings
+*No valid `engine_b_proxy` results — insufficient data or all rejected.*
+
+## Engine D Findings
+*No valid `engine_d_proxy` results — insufficient data or all rejected.*
+
+## What Should NOT Be Tested Further Right Now?
+- `pullback`: 15 configs rejected — insufficient edge at current parameters
+- `breakout`: 13 configs rejected — insufficient edge at current parameters
+
+## Recommended Next Tiny Test
+No strong candidates yet.  Run more symbols and timeframes before tuning.
+
+---
+*Generated by Athena Research Lab v1.0 — 2026-04-27 18:50 UTC*
+*Backtest discovery findings only.  Not a live execution recommendation.*
+```
+
+## Required Output
+
+Provide a complete decision memo answering ALL of the following questions.
+Use the label tags defined in the safety rules.
+
+1. What strategy family worked best? (label each STRONG_CANDIDATE / WEAK_CANDIDATE / REJECT)
+2. What indicator helped most?
+3. What indicator hurt most?
+4. Which asset group worked best?
+5. Which symbol worked best?
+6. Which timeframe worked best?
+7. Which session worked best?
+8. Did LONG or SHORT work better overall?
+9. Which setups collapsed after fees? (list by family/strategy)
+10. Which setups had too little sample size? (list by family/strategy)
+11. What should Engine A keep / remove / tune? (be specific — factor names, threshold direction)
+12. What should Engine B keep / remove / tune? (be specific — checklist gates, zone logic)
+13. What should Engine D keep / remove / tune? (be specific — VP params, grade thresholds)
+14. What is the next smallest useful test to run?
+15. What should NOT be tested further right now?
+
+After the memo, output a JSON block labelled ```json with this structure:
+{
+  "overall_verdict": "...",
+  "top_candidates": [{"strategy": "...", "symbol": "...", "tf": "...", "label": "STRONG_CANDIDATE"}],
+  "rejected_setups": [{"strategy": "...", "reason": "..."}],
+  "engine_a": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": []},
+  "engine_b": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": []},
+  "engine_d": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": []},
+  "data_quality_warnings": [],
+  "telemetry_warnings": [],
+  "next_tiny_test": {"symbols": [], "timeframes": [], "strategy_families": [], "reason": "..."},
+  "do_not_do_next": []
+}

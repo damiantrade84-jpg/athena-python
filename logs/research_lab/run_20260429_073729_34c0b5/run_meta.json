@@ -1,0 +1,23 @@
+{
+  "run_id": "run_20260429_073729_34c0b5",
+  "mode": "large",
+  "symbol_count": 5,
+  "timeframes": [
+    "M15",
+    "H1"
+  ],
+  "families": [
+    "engine_d_proxy",
+    "breakout",
+    "mean_reversion"
+  ],
+  "specs_count": 29,
+  "results_count": 290,
+  "direction": "both",
+  "generated_at": "2026-04-29T07:38:02.781210+00:00",
+  "session_id": "sess_20260429_073729_8c6fb4",
+  "market_group": "crypto",
+  "trading_style": "scalp",
+  "research_depth": "deep",
+  "role": "discovery"
+}

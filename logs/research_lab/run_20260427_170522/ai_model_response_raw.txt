@@ -1,0 +1,126 @@
+# Athena Pro v4 Backtest Discovery Decision Memo
+**Run ID:** run_20260427_170522 | **Analyst:** Quantitative Research | **Date:** 2026-04-27  
+**Key Caveat:** Backtest discovery uses lower BT_MIN thresholds than live gates. **Do NOT copy thresholds to live Engine A/B/D.** No direct live execution recommended. All findings labeled per protocol. Tiny samples (<30 trades) heavily penalized; no robust clusters across symbols/TFs.
+
+## 1. Strategy Family Performance
+- **engine_b_proxy** (only family tested): WEAK_CANDIDATE  
+  Avg net_return 0.2864 across 3 valid configs (3.1% pass rate). Top configs show edge (PF>3 on XAU H4), but tiny samples (24-166 trades), single-TF bias, and OOS weakness on crypto penalize robustness. No strong clusters.
+
+## 2. Indicator Helped Most
+- **structure_filters** (fvg_detection + strong_close_pct): WEAK_CANDIDATE  
+  Drives all 3 valid configs (pass_rate 9.4%). Best: fvg=True|strong_close=0.7 on XAU H4 (PF 4.09, WR 53%, 32 trades). Edge in strong closes + FVG, but single-symbol/TF limits.
+
+## 3. Indicator Hurt Most
+- **ob_bos** (require_engulf/vol_expand + swing_period): REJECT  
+  0% pass rate, avg net_return -0.0507, avg SQN -1.52. All configs <30 trades or net-negative (e.g., GBP/USD H1: WR 18%, PF<0.3). Hurts overall.
+
+## 4. Asset Group Performance
+- **commodity** (XAU/USD): WEAK_CANDIDATE  
+  Best avg net_return 0.395 (WR 52%, PF 3.84, n=2 configs).  
+- **crypto** (ETH/USDT): REJECT  
+  Net positive gross (0.069) but OOS -0.093 (IS/OOS failure penalty).  
+- **forex** (GBP/USD): REJECT  
+  All net-negative or tiny samples.
+
+## 5. Symbol Performance
+- **XAU/USD**: WEAK_CANDIDATE  
+  Hosts top 2 configs (avg net 0.395, WR 52%, 28 trades avg). Robustness 0.43.  
+- **ETH/USDT**: WEAK_CANDIDATE  
+  Larger sample (166 trades) but OOS collapse (-0.093).  
+- **GBP/USD**: REJECT  
+  Tiny/negative (e.g., 22 trades, net -0.073).
+
+## 6. Timeframe Performance
+- **H4**: WEAK_CANDIDATE  
+  All 3 valid configs (avg net 0.286, SQN 1.51). Higher edge vs H1 rejects.  
+- **H1**: REJECT  
+  All low-sample or net-negative (e.g., XAU structure_filters: net -0.47).
+
+## 7. Session Performance
+- **all**: WEAK_CANDIDATE  
+  Only session tested (avg net 0.286). No session splits for comparison → NEEDS_MORE_DATA for session-specific edge.
+
+## 8. LONG vs SHORT Performance
+- **both**: WEAK_CANDIDATE  
+  Only direction tested (avg net 0.286). No LONG/SHORT split → NEEDS_MORE_DATA. No clear directional bias.
+
+## 9. Setups Collapsed After Fees
+None. All valid configs gross-profitable and net-positive (e.g., top XAU H4: gross 0.459 → net 0.459). No fee-killed setups.
+
+## 10. Setups with Too Little Sample Size
+59 configs (61% of total): NEEDS_MORE_DATA  
+- **engine_b_proxy / ob_bos**: 59/64 configs (<20 trades, e.g., XAU/GBP H1 swing_period=5/10).  
+- **engine_b_proxy / structure_filters**: Minor (e.g., some H1 <30).
+
+## 11. Engine A Recommendations
+NEEDS_MORE_DATA — No valid trend_momentum/pullback results (insufficient data across all symbols/TFs).  
+- **Keep:** N/A.  
+- **Remove/Demote:** N/A.  
+- **Tune:** Test EMA/RSI+MACD/ADX confluences >2.1 on H4 commodities (align with weak B proxy edge). No threshold changes.
+
+## 12. Engine B Recommendations
+WEAK_CANDIDATE signals in structure_filters (FVG + strong_close). ob_bos fully rejected.  
+- **Keep:** structure_filters logic (strong_close_pct=0.7-0.8 + FVG optional) on H4.  
+- **Remove/Demote:** ob_bos (BOS/CHoCH + engulf/vol_expand) — hurts net/SQN.  
+- **Tune:** Raise strong_close_pct floor to 0.7+; test FVG_detection=True priority on commodities. Add multi-symbol cluster check. No live checklist changes.
+
+## 13. Engine D Recommendations
+NEEDS_MORE_DATA — No engine_d_proxy results (missing telemetry). Not trustworthy due to zero coverage.  
+- **Keep/Remove/Tune:** N/A. VP/POC/CVD params untested.
+
+## 14. Next Smallest Useful Test
+Tiny mode: H4 structure_filters (fvg=True|strong_close=0.7-0.8) on 4-6 more commodity/forex symbols (e.g., add USD/JPY, EUR/USD, crude oil) + 1 crypto. Reason: Validate XAU cluster, check OOS/symbol robustness.
+
+## 15. What Should NOT Be Tested Further Right Now?
+- ob_bos (all variants): REJECT — consistent loser (<30 trades or net-negative, 0% pass).  
+- H1 engine_b_proxy: REJECT — no valid configs.  
+- Single-symbol forex (GBP/USD): REJECT — no edge.
+
+**Overall:** Weak edge in Engine B structure_filters on H4 XAU/ETH. Prioritize multi-symbol H4 validation. No Engine A/D signals. Robustness low (tiny samples, no IS/OOS clusters).
+
+```json
+{
+  "overall_verdict": "WEAK_CANDIDATE signals in Engine B structure_filters on H4 (XAU/USD primary); ob_bos REJECT. Engines A/D: NEEDS_MORE_DATA. Limited symbols/TFs penalize robustness.",
+  "top_candidates": [
+    {"strategy": "structure_filters fvg_detection=True|strong_close_pct=0.7", "symbol": "XAU/USD", "tf": "H4", "label": "WEAK_CANDIDATE"},
+    {"strategy": "structure_filters fvg_detection=True|strong_close_pct=0.8", "symbol": "XAU/USD", "tf": "H4", "label": "WEAK_CANDIDATE"},
+    {"strategy": "structure_filters fvg_detection=False|strong_close_pct=0.8", "symbol": "ETH/USDT", "tf": "H4", "label": "WEAK_CANDIDATE"}
+  ],
+  "rejected_setups": [
+    {"strategy": "ob_bos (all params)", "reason": "0% pass rate, net-negative, tiny samples"},
+    {"strategy": "structure_filters H1", "reason": "net-negative, poor SQN"},
+    {"strategy": "engine_b_proxy GBP/USD", "reason": "net-negative, tiny samples"}
+  ],
+  "engine_a": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": ["Test EMA/RSI+MACD/ADX >2.1 on H4 commodities"],
+    "next_tests": ["H4 trend_momentum/pullback on XAU/USD + 4 symbols"]
+  },
+  "engine_b": {
+    "keep": ["structure_filters (strong_close_pct=0.7-0.8 + FVG)"],
+    "remove_or_demote": ["ob_bos (all engulf/vol/swing variants)"],
+    "tune": ["Prioritize FVG=True, strong_close >=0.7; H4 focus"],
+    "next_tests": ["H4 structure_filters on 4-6 more symbols (commodity/forex)"]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": ["Full engine_d_proxy on crypto/commodities H4"]
+  },
+  "data_quality_warnings": ["Tiny samples dominate (59/96 <30 trades)", "Only 4 symbols tested (penalize single-symbol bias)", "H1 heavily rejected vs H4"],
+  "telemetry_warnings": ["No Engine A/D coverage", "Missing IS/OOS for many (nan values)", "Binance_rest vs MT5 inconsistency possible"],
+  "next_tiny_test": {
+    "symbols": ["XAU/USD", "USD/JPY", "EUR/USD", "crude oil", "ETH/USDT"],
+    "timeframes": ["H4"],
+    "strategy_families": ["engine_b_proxy"],
+    "reason": "Validate structure_filters cluster on H4 multi-symbols for robustness/OOS"
+  },
+  "do_not_do_next": [
+    "ob_bos variants",
+    "H1 engine_b_proxy",
+    "GBP/USD-only tests"
+  ]
+}
+```

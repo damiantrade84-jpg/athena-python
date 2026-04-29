@@ -1,0 +1,110 @@
+{
+  "overall_verdict": "Weak breakout signals on H4 forex (WEAK_CANDIDATE); pervasive OOS decay, small samples, forex-only \u2014 needs broader validation before engine tweaks.",
+  "top_candidates": [
+    {
+      "strategy": "session_opening_range",
+      "symbol": "AUD/USD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "prev_day_hl",
+      "symbol": "AUD/USD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "macd_direction",
+      "symbol": "USD/JPY",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "bollinger_touch",
+      "symbol": "AUD/USD",
+      "tf": "M15",
+      "label": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "ema_cross",
+      "reason": "Consistent net loss, low WR, tiny samples"
+    },
+    {
+      "strategy": "ob_bos",
+      "reason": "HURTS performance across configs"
+    },
+    {
+      "strategy": "pullback_ema",
+      "reason": "All configs failed"
+    }
+  ],
+  "engine_a": {
+    "keep": [
+      "ADX gate (macd_direction adx_min=0/20)"
+    ],
+    "remove_or_demote": [
+      "EMA cross/coherence"
+    ],
+    "tune": [
+      "MACD params (higher ADX threshold); disable RSI confirm"
+    ],
+    "next_tests": [
+      "H4 macd_direction on 8+ forex symbols, long/short split"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (FVG + strong_close)"
+    ],
+    "remove_or_demote": [
+      "OB/BOS"
+    ],
+    "tune": [
+      "RR/location gates for H4"
+    ],
+    "next_tests": [
+      "FVG-only proxies on multi-symbols/sessions"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Crypto VP/OF backtests (POC/VAH missing)"
+    ]
+  },
+  "data_quality_warnings": [
+    "Forex-only; no multi-asset",
+    "530/912 tiny samples <30 trades",
+    "OOS consistently negative despite IS edge"
+  ],
+  "telemetry_warnings": [
+    "No Engine D data/telemetry",
+    "Single data_source=mt5; no redundancy"
+  ],
+  "next_tiny_test": {
+    "symbols": [
+      "AUD/USD",
+      "USD/JPY",
+      "EUR/USD",
+      "GBP/USD",
+      "NZD/USD",
+      "USD/CAD"
+    ],
+    "timeframes": [
+      "H4"
+    ],
+    "strategy_families": [
+      "breakout"
+    ],
+    "reason": "Validate H4 breakout cluster with session/long-short splits (low run count ~48)"
+  },
+  "do_not_do_next": [
+    "ema_cross variants",
+    "pullback family",
+    "M15/H1 without H4 baseline"
+  ]
+}

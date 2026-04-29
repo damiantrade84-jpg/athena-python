@@ -1,0 +1,15 @@
+{
+  "run_id": "run_20260427_132015",
+  "mode": "tiny",
+  "symbol_count": 1,
+  "timeframes": [
+    "H1"
+  ],
+  "families": [
+    "trend_momentum"
+  ],
+  "specs_count": 2,
+  "results_count": 2,
+  "direction": "both",
+  "generated_at": "2026-04-27T13:20:18.781008+00:00"
+}

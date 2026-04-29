@@ -1,0 +1,125 @@
+{
+  "overall_verdict": "WEAK_CANDIDATE: Mean_reversion H4 bollinger_touch shows cluster edge in crypto, but penalised for single-asset/OOS weakness. Engines need targeted validation.",
+  "top_candidates": [
+    {
+      "strategy": "bollinger_touch (num_std=2.0|period=20)",
+      "symbol": "SOL/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "bollinger_touch (num_std=2.5|period=20)",
+      "symbol": "ADA/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "macd_direction (adx_min=0|fast=12|signal=9|slow=26)",
+      "symbol": "ETH/USDT",
+      "tf": "H1",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "bollinger_touch (num_std=2.5|period=20)",
+      "symbol": "ETH/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "structure_filters (fvg=False|strong_close=0.8)",
+      "symbol": "BNB/USDT",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "ema_cross (all params)",
+      "reason": "HURTS globally: negative net, high drawdowns, 0% pass_rate"
+    },
+    {
+      "strategy": "ob_bos",
+      "reason": "HURTS: 0% pass, poor WR/net"
+    },
+    {
+      "strategy": "ny_breakout",
+      "reason": "HURTS: 0% pass, negative returns"
+    },
+    {
+      "strategy": "prev_day_hl (low ATR expand)",
+      "reason": "OOS decay on BTC/ETH"
+    }
+  ],
+  "engine_a": {
+    "keep": [
+      "macd_direction (adx_min=0)"
+    ],
+    "remove_or_demote": [
+      "ema_cross",
+      "pullback_ema",
+      "ema_alignment"
+    ],
+    "tune": [
+      "ADX >20 for momentum filter",
+      "RSI_confirm=False"
+    ],
+    "next_tests": [
+      "Multi-symbol H4 macd_direction OOS validation"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (fvg=False)"
+    ],
+    "remove_or_demote": [
+      "ob_bos"
+    ],
+    "tune": [
+      "Strong_close_pct relax for H4 crypto",
+      "Add RR gates"
+    ],
+    "next_tests": [
+      "Session-split structure_filters on top symbols"
+    ]
+  },
+  "engine_d": {
+    "keep": [
+      "vwap_deviation (std=1.5)"
+    ],
+    "remove_or_demote": [],
+    "tune": [
+      "Lower std_threshold; add CVD/Absorption"
+    ],
+    "next_tests": [
+      "VP/POC full backtest on M15/H1 crypto"
+    ]
+  },
+  "data_quality_warnings": [
+    "Crypto-only (no forex/stocks)",
+    "All sessions='all' (no splits)",
+    "Many tiny samples (<30)"
+  ],
+  "telemetry_warnings": [
+    "Binance_rest only\u2014no live orderflow/VP telemetry",
+    "Missing IS/OOS splits in some summaries"
+  ],
+  "next_tiny_test": {
+    "symbols": [
+      "SOL/USDT",
+      "ETH/USDT",
+      "ADA/USDT"
+    ],
+    "timeframes": [
+      "H4"
+    ],
+    "strategy_families": [
+      "mean_reversion"
+    ],
+    "reason": "Validate bollinger_touch cluster robustness with session/direction splits"
+  },
+  "do_not_do_next": [
+    "M15 trend_momentum",
+    "ema_cross variants",
+    "Single-symbol breakout"
+  ]
+}

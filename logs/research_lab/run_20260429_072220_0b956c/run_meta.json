@@ -1,0 +1,26 @@
+{
+  "run_id": "run_20260429_072220_0b956c",
+  "mode": "medium",
+  "symbol_count": 5,
+  "timeframes": [
+    "M15",
+    "H1",
+    "H4"
+  ],
+  "families": [
+    "trend_momentum",
+    "pullback",
+    "breakout",
+    "mean_reversion",
+    "engine_b_proxy"
+  ],
+  "specs_count": 76,
+  "results_count": 1140,
+  "direction": "both",
+  "generated_at": "2026-04-29T07:22:55.621153+00:00",
+  "session_id": "sess_20260429_072220_c96d9d",
+  "market_group": "crypto",
+  "trading_style": "intra",
+  "research_depth": "standard",
+  "role": "discovery"
+}

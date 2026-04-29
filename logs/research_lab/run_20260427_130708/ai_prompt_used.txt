@@ -1,0 +1,276 @@
+You are a quantitative research analyst reviewing backtest discovery results for Athena Pro v4,
+a multi-engine algorithmic trading system.
+
+IMPORTANT SAFETY RULES — YOU MUST FOLLOW THESE:
+1. Never recommend direct live execution from backtest discovery alone.
+2. Never suggest copying BT_MIN / backtest thresholds into live engine gates.
+3. Always label each finding with exactly one of: STRONG_CANDIDATE | WEAK_CANDIDATE | REJECT | NEEDS_MORE_DATA | TELEMETRY_BUG
+4. Penalise tiny samples (< 30 trades).
+5. Penalise strategies that only work on one symbol.
+6. Penalise strategies that are gross-profitable but net-negative after fees.
+7. Penalise strategies that work IS but fail OOS.
+8. Prefer robust clusters (work across multiple symbols/timeframes) over one-off winners.
+9. Separate Engine A, Engine B, and Engine D recommendations.
+10. Mention explicitly if a result is not trustworthy due to missing data or telemetry.
+
+## Project Context
+
+Athena Pro v4 has four engines:
+
+- **Engine A** — 3-factor quantitative scoring: EMA trend coherence (D1/H4/H1), RSI+MACD momentum quality, ADX gate.
+  Unified 0–3.0 scale. Current live forex floor: MIN_CONFLUENCE_CLASS.forex = 2.1.
+  **Do NOT recommend changing live thresholds from backtest findings.**
+
+- **Engine B** — Naked price-action (BOS/CHoCH, FVG, OB, swing sequence, location, trigger, room/RR).
+  Checklist-based pass/fail. Strict by design.
+
+- **Engine C** — Consensus layer blending Engine A + Engine B + AI Vision.
+
+- **Engine D** — Fabio Valentini VP+OrderFlow scalping (POC/VAH/VAL, Absorption, CVD, VWAP, AAA sequence).
+  Crypto-focused. Grade A/B/C/D.
+
+## Backtest Discovery Context
+
+- BT_MIN / discovery thresholds are intentionally LOWER than live thresholds.
+- Backtest results may appear worse because marginal trades are included.
+- IS = In-Sample (first 70% of data), OOS = Out-of-Sample (last 30%).
+- Robustness score: 0–1 combining sample adequacy, IS/OOS consistency, fee survival.
+
+## Purpose of This Analysis
+
+Identify which indicators, strategy families, filters, sessions, and symbols actually produce edge —
+and which do not — so we can make informed decisions about Engine A, Engine B, and Engine D.
+
+Provide a decision memo with specific, actionable recommendations.
+
+## Research Results
+
+### All Results Summary
+Rows: 290
+```
+             run_id   symbol asset_class timeframe         family         strategy_name                                   params_str direction session          status  trade_count win_rate profit_factor avg_return expectancy max_drawdown   sharpe     sqn exposure_pct avg_duration_bars gross_return net_return is_return oos_return robustness_score param_sensitivity             skip_reason  data_source
+run_20260427_130708 BTC/USDT      crypto       M15 engine_d_proxy          vwap_reclaim                 atr_sl_mult=0.5|band_std=0.5      both     all NEEDS_MORE_DATA           15      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 15 trades < min 20 binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15 engine_d_proxy          vwap_reclaim                 atr_sl_mult=1.0|band_std=0.5      both     all NEEDS_MORE_DATA           15      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 15 trades < min 20 binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15 engine_d_proxy          vwap_reclaim                 atr_sl_mult=0.5|band_std=1.0      both     all NEEDS_MORE_DATA            7      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan              nan               nan  only 7 trades < min 20 binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15 engine_d_proxy          vwap_reclaim                 atr_sl_mult=1.0|band_std=1.0      both     all NEEDS_MORE_DATA            7      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan              nan               nan  only 7 trades < min 20 binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15 engine_d_proxy        micro_breakout atr_sl_mult=0.5|fee_guard_r=0.5|range_bars=3      both     all          REJECT           94   0.2660        0.4651    -0.0016    -0.0016      -0.1759  -6.9981 -2.8381       0.0941           10.4681      -0.1427    -0.1427   -0.1068    -0.0429           0.5206               nan                     NaN binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15 engine_d_proxy        micro_breakout atr_sl_mult=1.0|fee_guard_r=0.5|range_bars=3      both     all          REJECT           94   0.2660        0.4651    -0.0016    -0.0016      -0.1759  -6.9981 -2.8381       0.0941           10.4681      -0.1427    -0.1427   -0.1068    -0.0429           0.5206               nan                     NaN binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15 engine_d_proxy        micro_breakout atr_sl_mult=0.5|fee_guard_r=0.5|range_bars=6      both     all          REJECT           52   0.2885        0.7166    -0.0010    -0.0010      -0.0854  -2.2833 -0.8986       0.0521           18.6346      -0.0501    -0.0501   -0.0056    -0.0340           0.4000               nan                     NaN binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15 engine_d_proxy        micro_breakout atr_sl_mult=1.0|fee_guard_r=0.5|range_bars=6      both     all          REJECT           52   0.2885        0.7166    -0.0010    -0.0010      -0.0854  -2.2833 -0.8986       0.0521           18.6346      -0.0501    -0.0501   -0.0056    -0.0340           0.4000               nan                     NaN binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15 engine_d_proxy    ema_scalp_pullback                atr_sl_mult=0.5|ema_period=21      both     all          REJECT          143   0.1189        0.2784    -0.0023    -0.0023      -0.2984 -12.0956 -5.0773       0.1431            6.8881      -0.2836    -0.2836   -0.2048    -0.1000           0.5464               nan                     NaN binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15 engine_d_proxy    ema_scalp_pullback                atr_sl_mult=1.0|ema_period=21      both     all          REJECT          143   0.1189        0.2784    -0.0023    -0.0023      -0.2984 -12.0956 -5.0773       0.1431            6.8881      -0.2836    -0.2836   -0.2048    -0.1000           0.5464               nan                     NaN binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15       breakout           prev_day_hl                           atr_expand_min=0.0      both     all NEEDS_MORE_DATA            3      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan  only 3 trades < min 20 binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15       breakout           prev_day_hl                           atr_expand_min=0.5      both     all NEEDS_MORE_DATA            3      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan  only 3 trades < min 20 binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15       breakout           prev_day_hl                           atr_expand_min=1.0      both     all NEEDS_MORE_DATA            2      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan  only 2 trades < min 20 binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15       breakout session_opening_range              atr_expand_min=0.0|range_bars=6      both     all          REJECT           52   0.2885        0.7166    -0.0010    -0.0010      -0.0854  -2.2833 -0.8986       0.0521           18.6346      -0.0501    -0.0501   -0.0056    -0.0340           0.4000               nan                     NaN binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15       breakout session_opening_range              atr_expand_min=0.5|range_bars=6      both     all          REJECT           52   0.2885        0.7166    -0.0010    -0.0010      -0.0854  -2.2833 -0.8986       0.0521           18.6346      -0.0501    -0.0501   -0.0056    -0.0340           0.4000               nan                     NaN binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15       breakout session_opening_range             atr_expand_min=0.0|range_bars=12      both     all          REJECT           30   0.2667        0.6945    -0.0016    -0.0016      -0.1118  -1.9466 -0.7677       0.0300           32.3667      -0.0483    -0.0483    0.0032    -0.0435           0.2800               nan                     NaN binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15       breakout session_opening_range             atr_expand_min=0.5|range_bars=12      both     all          REJECT           30   0.2667        0.6945    -0.0016    -0.0016      -0.1118  -1.9466 -0.7677       0.0300           32.3667      -0.0483    -0.0483    0.0032    -0.0435           0.2800               nan                     NaN binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15       breakout       london_breakout    atr_expand_min=0.0|utc_end=11|utc_start=7      both     all NEEDS_MORE_DATA            9      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan  only 9 trades < min 20 binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15       breakout       london_breakout    atr_expand_min=0.5|utc_end=11|utc_start=7      both     all NEEDS_MORE_DATA            9      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan  only 9 trades < min 20 binance_rest
+run_20260427_130708 BTC/USDT      crypto       M15       breakout           ny_breakout   atr_expand_min=0.0|utc_end=16|utc_start=13      both     all NEEDS_MORE_DATA            8      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan  only 8 trades < min 20 binance_rest
+```
+
+### Top Ranked Strategies
+Rows: 4
+```
+             run_id   symbol asset_class timeframe         family   strategy_name                          params_str direction session         status  trade_count win_rate profit_factor avg_return expectancy max_drawdown sharpe    sqn exposure_pct avg_duration_bars gross_return net_return is_return oos_return robustness_score param_sensitivity skip_reason  data_source rank_score
+run_20260427_130708 BNB/USDT      crypto        H1 mean_reversion     rsi_extreme overbought=70|oversold=30|period=14      both     all WEAK_CANDIDATE           21   0.7143        1.8282     0.0025     0.0025      -0.0265 2.6230 1.0960       0.0210           16.7143       0.0524     0.0524    0.0227     0.0290           0.7426               nan         nan binance_rest     0.4089
+run_20260427_130708 ADA/USDT      crypto       M15 mean_reversion bollinger_touch               num_std=2.0|period=20      both     all WEAK_CANDIDATE           41   0.7073        1.3028     0.0008     0.0008      -0.0319 1.5970 0.6268       0.0410           12.4390       0.0313     0.0313    0.0412    -0.0095           0.4660               nan         nan binance_rest     0.2549
+run_20260427_130708 BTC/USDT      crypto       M15 mean_reversion bollinger_touch               num_std=2.5|period=20      both     all WEAK_CANDIDATE           29   0.6552        1.2722     0.0004     0.0004      -0.0242 1.3083 0.5133       0.0290           13.0000       0.0121     0.0121    0.0108     0.0013           0.4511               nan         nan binance_rest     0.2395
+run_20260427_130708 SOL/USDT      crypto       M15 mean_reversion bollinger_touch               num_std=2.5|period=20      both     all WEAK_CANDIDATE           23   0.6957        1.7954     0.0013     0.0013      -0.0229 2.4506 0.9766       0.0230           13.2609       0.0294     0.0294    0.0298    -0.0003           0.3780               nan         nan binance_rest     0.2174
+```
+
+### By Asset Group
+Rows: 1
+```
+asset_class win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+     crypto        0.6931               4             1.5497                    4          0.0012                 4      1.9947             4   0.8032          4          0.0313                 4          0.0051                 4                0.5094                       4          28.5000                  4
+```
+
+### By Symbol
+Rows: 4
+```
+  symbol win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+ADA/USDT        0.7073               1             1.3028                    1          0.0008                 1      1.5970             1   0.6268          1          0.0313                 1         -0.0095                 1                0.4660                       1          41.0000                  1
+BNB/USDT        0.7143               1             1.8282                    1          0.0025                 1      2.6230             1   1.0960          1          0.0524                 1          0.0290                 1                0.7426                       1          21.0000                  1
+BTC/USDT        0.6552               1             1.2722                    1          0.0004                 1      1.3083             1   0.5133          1          0.0121                 1          0.0013                 1                0.4511                       1          29.0000                  1
+SOL/USDT        0.6957               1             1.7954                    1          0.0013                 1      2.4506             1   0.9766          1          0.0294                 1         -0.0003                 1                0.3780                       1          23.0000                  1
+```
+
+### By Timeframe
+Rows: 2
+```
+timeframe win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+       H1        0.7143               1             1.8282                    1          0.0025                 1      2.6230             1   1.0960          1          0.0524                 1          0.0290                 1                0.7426                       1          21.0000                  1
+      M15        0.6860               3             1.4568                    3          0.0008                 3      1.7853             3   0.7056          3          0.0243                 3         -0.0028                 3                0.4317                       3          31.0000                  3
+```
+
+### By Session
+Rows: 1
+```
+session win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+    all        0.6931               4             1.5497                    4          0.0012                 4      1.9947             4   0.8032          4          0.0313                 4          0.0051                 4                0.5094                       4          28.5000                  4
+```
+
+### By Direction
+Rows: 1
+```
+direction win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+     both        0.6931               4             1.5497                    4          0.0012                 4      1.9947             4   0.8032          4          0.0313                 4          0.0051                 4                0.5094                       4          28.5000                  4
+```
+
+### Indicator Attribution
+Rows: 10
+```
+        strategy_name  total_configs  strong  weak  reject avg_net_return avg_win_rate avg_robustness avg_sqn avg_oos_return  total_trades pass_rate verdict
+          rsi_extreme             40       0     1       0         0.0524       0.7143         0.9743  1.0960         0.0290           464    0.0250   HELPS
+          ny_breakout             20       0     0       2        -0.1419       0.2000         0.9430 -1.5148        -0.0775           278    0.0000   HURTS
+      london_breakout             20       0     0       2        -0.1252       0.2500         0.9375 -1.4563        -0.0440           247    0.0000   HURTS
+          prev_day_hl             30       0     0       3        -0.4547       0.1364         0.9306 -3.9594        -0.0927           299    0.0000   HURTS
+         vwap_reclaim             40       0     0       4        -0.1079       0.0738         0.8734 -3.9875        -0.0623           462    0.0000   HURTS
+   ema_scalp_pullback             20       0     0      20        -0.2599       0.1568         0.6004 -3.6443        -0.1076          2676    0.0000   HURTS
+       micro_breakout             40       0     0      40        -0.1253       0.2920         0.4904 -1.4623        -0.0625          2932    0.0000   HURTS
+session_opening_range             40       0     0      40        -0.0978       0.2867         0.4355 -1.1883        -0.0561          1805    0.0000   HURTS
+      bollinger_touch             20       0     3      17        -0.0462       0.5954         0.3715 -0.6103         0.0022           620    0.1500   HELPS
+       vwap_deviation             20       0     0       0            nan          nan            nan     nan            nan           206    0.0000 NEUTRAL
+```
+
+### Rejected / Failed Configs (by family)
+```
+        family  count
+      breakout    110
+engine_d_proxy    100
+mean_reversion     76
+```
+
+### research_report.md (excerpt)
+```
+# Athena Research Lab — Report
+**Run ID:** `run_20260427_130708`  **Generated:** 2026-04-27 13:07 UTC  
+**Mode:** large  **Symbols:** 5  **Families:** ['engine_d_proxy', 'breakout', 'mean_reversion']
+
+> **IMPORTANT:** These are backtest discovery findings at intentionally lower thresholds.
+> Do NOT copy these thresholds into live engine gates.
+> Label: **STRONG_CANDIDATE** / **WEAK_CANDIDATE** / **REJECT** / **NEEDS_MORE_DATA**
+
+## Executive Summary
+- Total strategy/param/symbol/TF combinations tested: **290**
+- Valid (pass robustness): **4** (1.4%)
+- Strong candidates: **0**
+
+## Which Strategy Family Works Best?
+family | count | avg_net_return | avg_wr | avg_pf | avg_sqn
+--- | --- | --- | --- | --- | ---
+mean_reversion | 4 | 0.0313 | 0.6931 | 1.5497 | 0.8032
+
+**Best family:** `mean_reversion` (avg net return 0.031)
+
+## Which Symbol Works Best?
+symbol | count | avg_net_return | avg_wr
+--- | --- | --- | ---
+BNB/USDT | 1 | 0.0524 | 0.7143
+ADA/USDT | 1 | 0.0313 | 0.7073
+SOL/USDT | 1 | 0.0294 | 0.6957
+BTC/USDT | 1 | 0.0121 | 0.6552
+
+## Which Timeframe Works Best?
+timeframe | count | avg_net_return | avg_wr
+--- | --- | --- | ---
+H1 | 1 | 0.0524 | 0.7143
+M15 | 3 | 0.0243 | 0.6860
+
+## Which Direction Works Better?
+direction | count | avg_net_return | avg_wr
+--- | --- | --- | ---
+both | 4 | 0.0313 | 0.6931
+
+## Which Indicators Help / Hurt?
+**Helpful indicators/strategies:**
+strategy_name | pass_rate | avg_net_return | avg_sqn
+--- | --- | --- | ---
+rsi_extreme | 0.0250 | 0.0524 | 1.0960
+bollinger_touch | 0.1500 | -0.0462 | -0.6103
+
+**Globally weak across tested configs:**
+strategy_name | pass_rate | avg_net_return
+--- | --- | ---
+ny_breakout | 0.0000 | -0.1419
+london_breakout | 0.0000 | -0.1252
+prev_day_hl | 0.0000 | -0.4547
+vwap_reclaim | 0.0000 | -0.1079
+ema_scalp_pullback | 0.0000 | -0.2599
+
+## Which Setups Collapse After Fees?
+No gross-profitable-but-fee-killed setups found.
+
+## Which Setups Had Too Little Sample?
+158 configs had insufficient trades.  
+family | count
+--- | ---
+breakout | 63
+mean_reversion | 59
+engine_d_proxy | 36
+
+## Recommended Research Queue
+Please use the Autopilot console on the dashboard to generate comprehensive research vectors.
+
+## Confirmed / Weakened / Rejected After Validation
+Validation tracks are executed sequentially.
+
+## Conditional Edge Candidates
+No conditional edges detected.
+
+## Engine A Findings
+*No valid `trend_momentum` results — insufficient data or all rejected.*
+*No valid `pullback` results — insufficient data or all rejected.*
+
+## Engine B Findings
+*No valid `engine_b_proxy` results — insufficient data or all rejected.*
+
+## Engine D Findings
+*No valid `engine_d_proxy` results — insufficient data or all rejected.*
+
+## What Should NOT Be Tested Further Right Now?
+- `engine_d_proxy`: 64 configs rejected — insufficient edge at current parameters
+- `breakout`: 47 configs rejected — insufficient edge at current parameters
+- `mean_reversion`: 17 configs rejected — insufficient edge at current parameters
+
+## Recommen
+... [truncated]
+```
+
+## Required Output
+
+Provide a complete decision memo answering ALL of the following questions.
+Use the label tags defined in the safety rules.
+
+1. What strategy family worked best? (label each STRONG_CANDIDATE / WEAK_CANDIDATE / REJECT)
+2. What indicator helped most?
+3. What indicator hurt most?
+4. Which asset group worked best?
+5. Which symbol worked best?
+6. Which timeframe worked best?
+7. Which session worked best?
+8. Did LONG or SHORT work better overall?
+9. Which setups collapsed after fees? (list by family/strategy)
+10. Which setups had too little sample size? (list by family/strategy)
+11. What should Engine A keep / remove / tune? (be specific — factor names, threshold direction)
+12. What should Engine B keep / remove / tune? (be specific — checklist gates, zone logic)
+13. What should Engine D keep / remove / tune? (be specific — VP params, grade thresholds)
+14. What is the next smallest useful test to run?
+15. What should NOT be tested further right now?
+
+After the memo, output a JSON block labelled ```json with this structure:
+{
+  "overall_verdict": "...",
+  "top_candidates": [{"strategy": "...", "symbol": "...", "tf": "...", "label": "STRONG_CANDIDATE"}],
+  "rejected_setups": [{"strategy": "...", "reason": "..."}],
+  "engine_a": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": []},
+  "engine_b": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": []},
+  "engine_d": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": []},
+  "data_quality_warnings": [],
+  "telemetry_warnings": [],
+  "next_tiny_test": {"symbols": [], "timeframes": [], "strategy_families": [], "reason": "..."},
+  "do_not_do_next": []
+}

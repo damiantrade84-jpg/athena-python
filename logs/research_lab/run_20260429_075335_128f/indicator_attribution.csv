@@ -1,0 +1,2 @@
+strategy_name,total_configs,strong,weak,reject,avg_net_return,avg_win_rate,avg_robustness,avg_sqn,avg_oos_return,total_trades,pass_rate,verdict
+pullback_ema,4,0,4,0,0.573024,0.222388,0.644500,1.305914,-0.112262,167,1.000000,HURTS

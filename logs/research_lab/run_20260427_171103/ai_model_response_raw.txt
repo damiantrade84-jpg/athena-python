@@ -1,0 +1,128 @@
+# Athena Pro v4 Backtest Discovery Decision Memo
+**Run ID:** run_20260427_171103 | **Analyst:** Quantitative Research | **Date:** 2026-04-27  
+**Disclaimer:** These are discovery backtests at intentionally lowered BT_MIN thresholds (looser than live gates). **Do NOT recommend direct live execution.** **Do NOT copy thresholds to live engine gates (e.g., Engine A forex floor remains 2.1).** All findings labeled per rules. No telemetry bugs detected, but small samples (<30 trades penalized) and forex-only data limit trustworthiness.
+
+## 1. Strategy Family Performance
+- **breakout**: WEAK_CANDIDATE (best avg net_return 0.0341 across 12 configs; clusters on H4 prev_day_hl/session_opening_range; survives fees but OOS weak on some symbols).
+- **engine_b_proxy**: WEAK_CANDIDATE (avg net_return 0.0214; structure_filters shows edge on AUD/USD H4).
+- **trend_momentum**: REJECT (macd_direction weak on few symbols; ema_cross globally hurts).
+- **mean_reversion**: WEAK_CANDIDATE (bollinger_touch edge on low samples).
+- **pullback**: REJECT (all configs failed/insufficient data).
+
+**Best family overall: breakout (WEAK_CANDIDATE).** Prefer clusters over one-offs.
+
+## 2. Indicator That Helped Most
+**bollinger_touch (mean_reversion)**: WEAK_CANDIDATE (highest pass_rate 0.0833; avg_sqn -1.25 better than peers; positive OOS on some; works M15/H1).
+
+## 3. Indicator That Hurt Most
+**ema_cross (trend_momentum)**: REJECT (lowest pass_rate 0.0046; avg_net_return -0.0467; destroys edge across 432 configs; penalize tiny/negative samples).
+
+## 4. Asset Group Performance
+**forex**: WEAK_CANDIDATE (only group tested; avg net_return 0.0264, PF 1.29; but OOS negative avg -0.0215). NEEDS_MORE_DATA for crypto/equities comparison.
+
+## 5. Symbol Performance
+**AUD/USD**: WEAK_CANDIDATE (best avg net_return 0.0360; 12 configs, breakout clusters).  
+**USD/JPY**: WEAK_CANDIDATE (0.0243 net).  
+**EUR/USD/GBP/USD**: REJECT (low returns, single-symbol risk).  
+Penalize one-symbol dependence; no robust cross-symbol clusters.
+
+## 6. Timeframe Performance
+**H4**: WEAK_CANDIDATE (best net 0.0313, 18 configs; breakout/trend_momentum clusters).  
+**H1/M15**: NEEDS_MORE_DATA (tiny samples).
+
+## 7. Session Performance
+**all**: NEEDS_MORE_DATA (only session tested; no London/NY/Asia split). Not trustworthy without session filters.
+
+## 8. LONG vs SHORT Performance
+**both**: NEEDS_MORE_DATA (only direction tested; no long/short split). Cannot assess bias.
+
+## 9. Setups That Collapsed After Fees
+None. All top configs net-positive where gross-positive (e.g., no gross-profitable/net-negative cases flagged).
+
+## 10. Setups with Too Little Sample Size (<30 trades penalized)
+- **trend_momentum**: 306 configs (e.g., ema_cross mostly <20).
+- **engine_b_proxy**: 79 configs.
+- **mean_reversion**: 74 configs (bollinger_touch often 25).
+- **breakout**: 70 configs (many session_opening_range <30).  
+Total: 529/912 (58%). **Not trustworthy** without larger samples.
+
+## 11. Engine A Recommendations (3-factor: EMA/RSI+MACD/ADX)
+- **Keep**: macd_direction (WEAK_CANDIDATE; adx_min=0-20 on H4 forex; weak IS/OOS consistency).
+- **Remove/Demote**: ema_cross (REJECT; hurts globally).
+- **Tune**: Increase ADX gate (>20) directionally for macd_direction; test RSI+MACD momentum quality on H4 clusters. No live threshold changes.
+- **Overall**: REJECT major changes; NEEDS_MORE_DATA (pullback absent).
+
+## 12. Engine B Recommendations (Price-action checklist: BOS/FVG/OB etc.)
+- **Keep**: structure_filters (WEAK_CANDIDATE; fvg_detection=True + strong_close_pct=0.7-0.8 on AUD/USD H4).
+- **Remove/Demote**: ob_bos (REJECT; avg_net -0.0509).
+- **Tune**: Add FVG/strong_close to checklist (room/RR proxy); strict pass/fail intact.
+- **Overall**: WEAK_CANDIDATE for H4 forex; prefer over naked PA.
+
+## 13. Engine D Recommendations (VP/OrderFlow: POC/VAH/CVD etc.)
+- No configs in top/attribution (crypto-focused, forex data mismatch).  
+**NEEDS_MORE_DATA** (missing crypto symbols/telemetry). Do not tune without data.
+
+## 14. Next Smallest Useful Test
+Test breakout (prev_day_hl/session_opening_range) + bollinger_touch on 2-3 more forex symbols (e.g., NZD/USD, USD/CAD) at H4, split sessions (London/NY), long/short directions. Target >50 trades/config.
+
+## 15. What Should NOT Be Tested Further Right Now
+- ema_cross (global reject, hurts).
+- ob_bos/pullback_ema (zero pass_rate).
+- Single-symbol one-offs (e.g., GBP/USD bollinger).
+- M15/H1 without sample boost (tiny).
+
+**Final Note:** No STRONG_CANDIDATEs. Weak breakout signals on H4 AUD/USD forex; validate clusters before any engine tweaks. Robustness low (avg 0.47); OOS often negative.
+
+```json
+{
+  "overall_verdict": "Weak edges in breakout family on H4 forex (AUD/USD); no strong candidates; heavy penalization for small samples/single-symbols/OOS decay. Prioritize validation over implementation.",
+  "top_candidates": [
+    {"strategy": "session_opening_range (breakout)", "symbol": "AUD/USD", "tf": "H4", "label": "WEAK_CANDIDATE"},
+    {"strategy": "prev_day_hl (breakout)", "symbol": "AUD/USD", "tf": "H4", "label": "WEAK_CANDIDATE"},
+    {"strategy": "macd_direction (trend_momentum)", "symbol": "USD/JPY", "tf": "H4", "label": "WEAK_CANDIDATE"},
+    {"strategy": "bollinger_touch (mean_reversion)", "symbol": "AUD/USD", "tf": "M15", "label": "WEAK_CANDIDATE"},
+    {"strategy": "structure_filters (engine_b_proxy)", "symbol": "AUD/USD", "tf": "H4", "label": "WEAK_CANDIDATE"}
+  ],
+  "rejected_setups": [
+    {"strategy": "ema_cross", "reason": "Hurts globally (low PF/WR, negative returns)"},
+    {"strategy": "ob_bos", "reason": "Zero pass_rate, avg_net -0.0509"},
+    {"strategy": "pullback_ema", "reason": "All rejected/insufficient data"}
+  ],
+  "engine_a": {
+    "keep": ["macd_direction (adx_min=0-20)"],
+    "remove_or_demote": ["ema_cross"],
+    "tune": ["ADX gate upward for momentum quality; RSI+MACD on H4"],
+    "next_tests": ["H4 multi-symbol macd_direction with session splits"]
+  },
+  "engine_b": {
+    "keep": ["structure_filters (fvg_detection=True)"],
+    "remove_or_demote": ["ob_bos"],
+    "tune": ["strong_close_pct=0.7-0.8 in checklist"],
+    "next_tests": ["FVG/OB combos on H4 forex"]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": ["Crypto symbols (e.g., BTCUSDT) with VP/OrderFlow"]
+  },
+  "data_quality_warnings": [
+    "Tiny samples dominate (529/912 <30 trades)",
+    "Forex-only; no crypto/equities",
+    "No session/direction splits",
+    "OOS often negative despite IS edge"
+  ],
+  "telemetry_warnings": [],
+  "next_tiny_test": {
+    "symbols": ["AUD/USD", "USD/JPY", "NZD/USD"],
+    "timeframes": ["H4"],
+    "strategy_families": ["breakout"],
+    "reason": "Validate top breakout cluster with minor symbol expansion for >50 trades"
+  },
+  "do_not_do_next": [
+    "ema_cross variants",
+    "Single-symbol deep dives",
+    "M15 without sample filters"
+  ]
+}
+```

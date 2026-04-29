@@ -218,16 +218,12 @@ def register_research_lab_routes(app) -> None:
         else:
             mode = "medium"
 
-        # Resolve symbols
-        group_symbols = {
-            "crypto": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "ADA/USDT"],
-            "forex": ["EUR/USD", "GBP/USD", "AUD/USD", "USD/JPY"],
-            "metals": ["XAU/USD", "XAG/USD"],
-            "indices": ["US30", "NAS100", "GER30"],
-            "stocks": ["AAPL", "TSLA", "NVDA", "MSFT"],
-            "custom": ["BTC/USDT", "EUR/USD"]
-        }
-        symbols = group_symbols.get(market_group, ["BTC/USDT"])
+        # Resolve symbols from YAML config (single source of truth)
+        from athena_research.run_manager import load_config, get_group_symbols
+        _cfg = load_config()
+        symbols = get_group_symbols(_cfg, market_group)
+        if not symbols:
+            symbols = ["BTC/USDT"]
 
         # Resolve profiles
         from athena_research.autopilot import RESEARCH_STYLE_PROFILES
@@ -576,6 +572,7 @@ def register_research_lab_routes(app) -> None:
         allowed = {
             "research_summary.csv", "ranked_strategies.csv", "by_asset_group.csv",
             "by_symbol.csv", "by_timeframe.csv", "by_session.csv", "by_direction.csv",
+            "by_zone.csv", "per_pair_recommendation.csv",
             "indicator_attribution.csv", "rejected_or_failed_configs.csv",
             "research_report.md", "ai_research_review.md", "ai_action_plan.json",
             "ai_engine_recommendations.json", "run_meta.json", "error_traceback.txt",

@@ -1,0 +1,2 @@
+session,win_rate_mean,win_rate_count,profit_factor_mean,profit_factor_count,expectancy_mean,expectancy_count,sharpe_mean,sharpe_count,sqn_mean,sqn_count,net_return_mean,net_return_count,oos_return_mean,oos_return_count,robustness_score_mean,robustness_score_count,trade_count_mean,trade_count_count
+all,0.590909,1,1.160752,1,0.000832,1,0.149303,1,0.298006,1,0.016541,1,0.013183,1,0.752833,1,22.000000,1

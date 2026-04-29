@@ -1,0 +1,12 @@
+strategy_name,total_configs,strong,weak,reject,avg_net_return,avg_win_rate,avg_robustness,avg_sqn,pass_rate,verdict
+macd_direction,24,0,5,19,-0.064834,0.349127,0.520910,-0.699511,0.208333,HURTS
+pullback_ema,48,0,7,39,-0.066652,0.186358,0.487897,-1.443403,0.145833,HURTS
+session_opening_range,48,0,12,34,-0.065312,0.329461,0.461914,-0.918272,0.250000,HURTS
+prev_day_hl,36,1,5,17,-0.044538,0.355549,0.457131,-0.752188,0.166667,HURTS
+london_breakout,24,0,0,4,-0.071834,0.278846,0.369236,-1.011356,0.000000,HURTS
+bollinger_touch,24,1,6,15,-0.024735,0.558543,0.361621,-0.541488,0.291667,HURTS
+ema_cross,432,0,0,105,-0.109783,0.213654,0.315339,-1.293075,0.000000,HURTS
+ny_breakout,24,0,0,1,-0.051125,0.200000,0.220000,-0.487869,0.000000,HURTS
+ema_alignment,36,0,0,0,,,,,0.000000,NEUTRAL
+rsi_extreme,48,0,0,0,,,,,0.000000,NEUTRAL
+vwap_deviation,24,0,0,0,,,,,0.000000,NEUTRAL

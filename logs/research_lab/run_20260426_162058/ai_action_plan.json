@@ -1,0 +1,100 @@
+{
+  "overall_verdict": "WEAK_OVERALL: Crypto H4 mean_reversion/breakout shows promise but lacks multi-symbol OOS clusters; heavy penalization for tiny samples/single-symbols.",
+  "top_candidates": [
+    {
+      "strategy": "bollinger_touch",
+      "symbol": "ETH/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "macd_direction",
+      "symbol": "ETH/USDT",
+      "tf": "H1",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "prev_day_hl",
+      "symbol": "XAU/USD",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "ema_cross",
+      "reason": "0% pass_rate, tiny samples, net negative"
+    },
+    {
+      "strategy": "london_breakout",
+      "reason": "0% pass_rate, hurts attribution"
+    },
+    {
+      "strategy": "pullback_ema",
+      "reason": "Low WR, OOS decay"
+    }
+  ],
+  "engine_a": {
+    "keep": [
+      "MACD momentum (adx_min=0)"
+    ],
+    "remove_or_demote": [
+      "EMA cross/trend coherence"
+    ],
+    "tune": [
+      "ADX gate lower (test 0-20); RSI+MACD quality thresholds"
+    ],
+    "next_tests": [
+      "Multi-symbol H4 macd_direction OOS validation"
+    ]
+  },
+  "engine_b": {
+    "keep": [],
+    "remove_or_demote": [
+      "session_opening_range",
+      "prev_day_hl"
+    ],
+    "tune": [
+      "RR/location gates stricter for H4 crypto"
+    ],
+    "next_tests": [
+      "Add engine_b_proxy to breakout/pullback"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Crypto H4 VP/OF proxies (POC/VAH/CVD)"
+    ]
+  },
+  "data_quality_warnings": [
+    "495/768 tiny samples <30 trades",
+    "Frequent IS win / OOS loss"
+  ],
+  "telemetry_warnings": [
+    "No Engine B/D proxies; mt5/binance_rest OOS unverified"
+  ],
+  "next_tiny_test": {
+    "symbols": [
+      "ETH/USDT",
+      "BTC/USDT",
+      "SOL/USDT",
+      "GBP/USD"
+    ],
+    "timeframes": [
+      "H4"
+    ],
+    "strategy_families": [
+      "mean_reversion",
+      "breakout"
+    ],
+    "reason": "Expand top crypto H4 clusters with long/short split"
+  },
+  "do_not_do_next": [
+    "ema_cross any variant",
+    "H1 trend_momentum",
+    "Single-symbol forex"
+  ]
+}

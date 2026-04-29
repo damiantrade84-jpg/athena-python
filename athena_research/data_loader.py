@@ -44,20 +44,48 @@ _DEFAULT_CACHE_DIR = Path("logs/research_lab/data_cache")
 
 # ── Asset class detection ─────────────────────────────────────────────────────
 
-_CRYPTO_SYMBOLS = {"BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
-                   "DOGE/USDT", "ADA/USDT", "MATIC/USDT"}
-_COMMODITY_SYMBOLS = {"XAU/USD", "XAG/USD", "WTI Oil", "Brent Oil", "WTI/USD",
-                      "USOIL", "UKOIL"}
-_INDEX_SYMBOLS = {"US500", "SPX", "NAS100", "NASDAQ-100", "US30", "GER40",
-                  "UK100", "JP225", "AUS200", "S&P 500", "NASDAQ-100"}
-_FOREX_PAIRS = {"EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
-                "USD/CHF", "NZD/USD", "EUR/GBP", "GBP/JPY", "EUR/JPY",
-                "USD/TRY", "USD/ZAR"}
+_CRYPTO_SYMBOLS = {
+    "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "ADA/USDT",
+    "XRP/USDT", "DOGE/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT",
+    "POL/USDT", "MATIC/USDT", "NEAR/USDT", "APT/USDT", "ARB/USDT",
+    "SUI/USDT", "INJ/USDT", "RENDER/USDT", "LTC/USDT",
+    "AAVE/USDT", "ALGO/USDT", "ATOM/USDT", "BCH/USDT", "ETC/USDT",
+    "TRX/USDT", "XLM/USDT", "UNI/USDT", "FIL/USDT", "ICP/USDT",
+    "HBAR/USDT", "OP/USDT", "SEI/USDT",
+    "PEPE/USDT", "WIF/USDT", "FET/USDT",
+}
+_COMMODITY_SYMBOLS = {
+    "XAU/USD", "XAG/USD", "WTI Oil", "Brent Oil", "WTI/USD",
+    "USOIL", "UKOIL", "Nat Gas", "Copper", "Aluminium", "Lead",
+    "Nickel", "Zinc", "XPT/USD", "XPD/USD", "Gasoline",
+    "Cattle", "Cocoa", "Coffee", "Corn", "Cotton", "Soybeans", "Sugar", "Wheat",
+}
+_INDEX_SYMBOLS = {
+    "US500", "SPX", "NAS100", "NASDAQ-100", "US30", "GER40",
+    "UK100", "JP225", "AUS200", "S&P 500", "HK50",
+    "EURX", "JPYX", "USDX", "Dow Jones", "DAX 40", "ASX 200",
+    "Nikkei 225", "Hang Seng",
+}
+_FOREX_PAIRS = {
+    "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "AUD/CHF", "AUD/NZD",
+    "NZD/USD", "EUR/GBP", "USD/CAD", "USD/CHF", "EUR/JPY", "GBP/JPY",
+    "AUD/JPY", "EUR/AUD", "GBP/AUD", "USD/ZAR", "EUR/CHF",
+    "USD/MXN", "USD/SGD", "USD/BRL", "USD/INR", "USD/TRY",
+}
+_STOCK_SYMBOLS = {
+    "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "GOOG", "JPM",
+    "V", "XOM", "NFLX", "AMD", "CRM", "DIS", "BA", "COIN", "PYPL",
+    "INTC", "UBER", "PLTR",
+}
+_ETF_SYMBOLS = {
+    "SPY", "QQQ", "GLD", "TLT", "IWM", "EEM", "DIA", "GDX",
+    "SOXX", "XLE", "SLV", "USO",
+}
 
 
 def asset_class_for(symbol: str) -> str:
     if symbol in _CRYPTO_SYMBOLS or (
-        "/" in symbol and any(c in symbol for c in ["BTC", "ETH", "SOL", "BNB", "XRP"])
+        "/" in symbol and symbol.endswith("/USDT")
     ):
         return "crypto"
     if symbol in _COMMODITY_SYMBOLS:
@@ -66,6 +94,13 @@ def asset_class_for(symbol: str) -> str:
         return "index"
     if symbol in _FOREX_PAIRS:
         return "forex"
+    if symbol in _ETF_SYMBOLS:
+        return "etf"
+    if symbol in _STOCK_SYMBOLS:
+        return "stock"
+    # Heuristic fallbacks
+    if "/" in symbol and not symbol.endswith("/USDT"):
+        return "forex"   # most X/Y pairs are forex or commodity
     return "stock"
 
 

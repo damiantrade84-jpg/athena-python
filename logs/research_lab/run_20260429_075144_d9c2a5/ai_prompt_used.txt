@@ -1,0 +1,289 @@
+You are a quantitative research analyst reviewing backtest discovery results for Athena Pro v4,
+a multi-engine algorithmic trading system.
+
+IMPORTANT SAFETY RULES — YOU MUST FOLLOW THESE:
+1. Never recommend direct live execution from backtest discovery alone.
+2. Never suggest copying BT_MIN / backtest thresholds into live engine gates.
+3. Always label each finding with exactly one of: STRONG_CANDIDATE | WEAK_CANDIDATE | REJECT | NEEDS_MORE_DATA | TELEMETRY_BUG
+4. Penalise tiny samples (< 30 trades).
+5. Penalise strategies that only work on one symbol.
+6. Penalise strategies that are gross-profitable but net-negative after fees.
+7. Penalise strategies that work IS but fail OOS.
+8. Prefer robust clusters (work across multiple symbols/timeframes) over one-off winners.
+9. Separate Engine A, Engine B, and Engine D recommendations.
+10. Mention explicitly if a result is not trustworthy due to missing data or telemetry.
+
+## Project Context
+
+Athena Pro v4 has four engines:
+
+- **Engine A** — 3-factor quantitative scoring: EMA trend coherence (D1/H4/H1), RSI+MACD momentum quality, ADX gate.
+  Unified 0–3.0 scale. Current live forex floor: MIN_CONFLUENCE_CLASS.forex = 2.1.
+  **Do NOT recommend changing live thresholds from backtest findings.**
+
+- **Engine B** — Naked price-action (BOS/CHoCH, FVG, OB, swing sequence, location, trigger, room/RR).
+  Checklist-based pass/fail. Strict by design.
+
+- **Engine C** — Consensus layer blending Engine A + Engine B + AI Vision.
+
+- **Engine D** — Fabio Valentini VP+OrderFlow scalping (POC/VAH/VAL, Absorption, CVD, VWAP, AAA sequence).
+  Crypto-focused. Grade A/B/C/D.
+
+## Backtest Discovery Context
+
+- BT_MIN / discovery thresholds are intentionally LOWER than live thresholds.
+- Backtest results may appear worse because marginal trades are included.
+- IS = In-Sample (first 70% of data), OOS = Out-of-Sample (last 30%).
+- Robustness score: 0–1 combining sample adequacy, IS/OOS consistency, fee survival.
+
+## Purpose of This Analysis
+
+Identify which indicators, strategy families, filters, sessions, and symbols actually produce edge —
+and which do not — so we can make informed decisions about Engine A, Engine B, and Engine D.
+
+Provide a decision memo with specific, actionable recommendations.
+
+## Research Results
+
+### All Results Summary
+Rows: 304
+```
+                    run_id  symbol asset_class timeframe         family strategy_name                                                  params_str direction session          status  trade_count win_rate profit_factor avg_return expectancy max_drawdown sharpe sqn exposure_pct avg_duration_bars gross_return net_return is_return oos_return robustness_score param_sensitivity             skip_reason data_source
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross   adx_min=0|fast_period=10|rsi_confirm=False|slow_period=50      both     all NEEDS_MORE_DATA           17      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 17 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross    adx_min=0|fast_period=10|rsi_confirm=True|slow_period=50      both     all NEEDS_MORE_DATA           15      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 15 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross  adx_min=20|fast_period=10|rsi_confirm=False|slow_period=50      both     all NEEDS_MORE_DATA           16      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 16 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross   adx_min=20|fast_period=10|rsi_confirm=True|slow_period=50      both     all NEEDS_MORE_DATA           14      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 14 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross  adx_min=25|fast_period=10|rsi_confirm=False|slow_period=50      both     all NEEDS_MORE_DATA           13      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 13 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross   adx_min=25|fast_period=10|rsi_confirm=True|slow_period=50      both     all NEEDS_MORE_DATA           11      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 11 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross  adx_min=0|fast_period=10|rsi_confirm=False|slow_period=100      both     all NEEDS_MORE_DATA            8      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan           1.0000               nan  only 8 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross   adx_min=0|fast_period=10|rsi_confirm=True|slow_period=100      both     all NEEDS_MORE_DATA            6      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan           1.0000               nan  only 6 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross adx_min=20|fast_period=10|rsi_confirm=False|slow_period=100      both     all NEEDS_MORE_DATA            8      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan           1.0000               nan  only 8 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross  adx_min=20|fast_period=10|rsi_confirm=True|slow_period=100      both     all NEEDS_MORE_DATA            6      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan           1.0000               nan  only 6 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross adx_min=25|fast_period=10|rsi_confirm=False|slow_period=100      both     all NEEDS_MORE_DATA            8      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan           1.0000               nan  only 8 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross  adx_min=25|fast_period=10|rsi_confirm=True|slow_period=100      both     all NEEDS_MORE_DATA            6      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan              nan               nan  only 6 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross  adx_min=0|fast_period=10|rsi_confirm=False|slow_period=200      both     all NEEDS_MORE_DATA            6      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan              nan               nan  only 6 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross   adx_min=0|fast_period=10|rsi_confirm=True|slow_period=200      both     all NEEDS_MORE_DATA            3      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan              nan               nan  only 3 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross adx_min=20|fast_period=10|rsi_confirm=False|slow_period=200      both     all NEEDS_MORE_DATA            6      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan              nan               nan  only 6 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross  adx_min=20|fast_period=10|rsi_confirm=True|slow_period=200      both     all NEEDS_MORE_DATA            3      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan              nan               nan  only 3 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross adx_min=25|fast_period=10|rsi_confirm=False|slow_period=200      both     all NEEDS_MORE_DATA            6      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan              nan               nan  only 6 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross  adx_min=25|fast_period=10|rsi_confirm=True|slow_period=200      both     all NEEDS_MORE_DATA            3      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan              nan               nan  only 3 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross   adx_min=0|fast_period=20|rsi_confirm=False|slow_period=50      both     all NEEDS_MORE_DATA           13      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 13 trades < min 20         mt5
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum     ema_cross    adx_min=0|fast_period=20|rsi_confirm=True|slow_period=50      both     all NEEDS_MORE_DATA           11      nan           nan        nan        nan          nan    nan nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 11 trades < min 20         mt5
+```
+
+### Top Ranked Strategies
+Rows: 46
+```
+                    run_id  symbol asset_class timeframe         family         strategy_name                                                             params_str direction session         status  trade_count win_rate profit_factor avg_return expectancy max_drawdown sharpe    sqn exposure_pct avg_duration_bars gross_return net_return is_return oos_return robustness_score param_sensitivity skip_reason data_source rank_score
+run_20260429_075144_d9c2a5 XAG/USD   commodity        D1       pullback          pullback_ema pullback_period=20|rsi_reclaim=False|rsi_threshold=50|trend_period=200      both     all WEAK_CANDIDATE           62   0.3226        2.4647     0.0187     0.0187      -0.1486 0.6706 1.3542       0.0621            9.6290       1.4220     1.4220    0.1555     1.0961           0.6500               nan         nan         mt5     0.7787
+run_20260429_075144_d9c2a5 XAG/USD   commodity        D1       pullback          pullback_ema  pullback_period=20|rsi_reclaim=True|rsi_threshold=50|trend_period=200      both     all WEAK_CANDIDATE           50   0.2600        2.3515     0.0197     0.0197      -0.1697 0.5750 1.1601       0.0500            9.7200       1.0483     1.0483   -0.0059     1.0605           0.6500               nan         nan         mt5     0.6627
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1       pullback          pullback_ema pullback_period=50|rsi_reclaim=False|rsi_threshold=50|trend_period=200      both     all WEAK_CANDIDATE           32   0.3125        4.1101     0.0250     0.0250      -0.0538 0.7503 1.5479       0.0320           23.4375       0.9800     0.9800    0.1751     0.3644           0.5920               nan         nan         mt5     0.6209
+run_20260429_075144_d9c2a5 XAG/USD   commodity        H4       pullback          pullback_ema  pullback_period=20|rsi_reclaim=True|rsi_threshold=50|trend_period=200      both     all WEAK_CANDIDATE           49   0.3265        2.4102     0.0129     0.0129      -0.1219 2.1639 1.8152       0.0490           11.9388       0.7721     0.7721    0.9053    -0.0548           0.6440               nan         nan         mt5     0.5899
+run_20260429_075144_d9c2a5 XAG/USD   commodity        D1 engine_b_proxy     structure_filters                               fvg_detection=False|strong_close_pct=0.8      both     all WEAK_CANDIDATE          202   0.4158        1.2842     0.0041     0.0041      -0.3733 0.5330 1.0640       0.2022            4.7079       0.7194     0.7194    0.0185     0.6626           0.6000               nan         nan         mt5     0.5371
+run_20260429_075144_d9c2a5 XAG/USD   commodity        H4       pullback          pullback_ema pullback_period=20|rsi_reclaim=False|rsi_threshold=50|trend_period=200      both     all WEAK_CANDIDATE           54   0.3148        1.9111     0.0096     0.0096      -0.1803 1.7322 1.4339       0.0541           11.2593       0.5783     0.5783    0.7806    -0.0992           0.6500               nan         nan         mt5     0.5272
+run_20260429_075144_d9c2a5 XAG/USD   commodity        H4       pullback          pullback_ema pullback_period=50|rsi_reclaim=False|rsi_threshold=50|trend_period=200      both     all WEAK_CANDIDATE           39   0.1282        2.4778     0.0145     0.0145      -0.1633 1.2925 1.0657       0.0390           14.2308       0.5620     0.5620    0.8670    -0.1633           0.6340               nan         nan         mt5     0.5069
+run_20260429_075144_d9c2a5 XAG/USD   commodity        H4 engine_b_proxy     structure_filters                                fvg_detection=True|strong_close_pct=0.7      both     all WEAK_CANDIDATE           37   0.5135        1.9395     0.0135     0.0135      -0.1432 1.7813 1.4899       0.0370           14.6486       0.5573     0.5573    0.3857     0.1239           0.6184               nan         nan         mt5     0.5062
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1 trend_momentum         ema_alignment                         adx_min=0|ema_long=200|ema_mid=50|ema_short=20      both     all WEAK_CANDIDATE           22   0.2727        3.0773     0.0263     0.0263      -0.1611 0.5843 1.2007       0.0220           27.7273       0.6130     0.6130    0.0117     0.5943           0.5320               nan         nan         mt5     0.4739
+run_20260429_075144_d9c2a5 XAG/USD   commodity        D1       pullback          pullback_ema  pullback_period=50|rsi_reclaim=True|rsi_threshold=50|trend_period=200      both     all WEAK_CANDIDATE           36   0.1944        2.1424     0.0226     0.0226      -0.3457 0.3455 0.6927       0.0360           14.8889       0.4757     0.4757   -0.2021     0.8495           0.6160               nan         nan         mt5     0.4646
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1       pullback          pullback_ema  pullback_period=20|rsi_reclaim=True|rsi_threshold=50|trend_period=200      both     all WEAK_CANDIDATE           54   0.2963        1.7480     0.0063     0.0063      -0.0946 0.5882 1.1860       0.0541           10.2222       0.3532     0.3532    0.1012     0.2288           0.6500               nan         nan         mt5     0.4547
+run_20260429_075144_d9c2a5 XAG/USD   commodity        D1       breakout session_opening_range                                        atr_expand_min=0.5|range_bars=6      both     all WEAK_CANDIDATE           60   0.4333        1.3975     0.0100     0.0100      -0.3387 0.3576 0.7152       0.0601           16.4500       0.3778     0.3778   -0.2436     0.8786           0.6500               nan         nan         mt5     0.4526
+run_20260429_075144_d9c2a5 XAG/USD   commodity        D1       breakout session_opening_range                                        atr_expand_min=0.0|range_bars=6      both     all WEAK_CANDIDATE           60   0.4333        1.3975     0.0100     0.0100      -0.3387 0.3576 0.7152       0.0601           16.4500       0.3778     0.3778   -0.2436     0.8786           0.6500               nan         nan         mt5     0.4526
+run_20260429_075144_d9c2a5 XAU/USD   commodity        D1       pullback          pullback_ema pullback_period=20|rsi_reclaim=False|rsi_threshold=50|trend_period=200      both     all WEAK_CANDIDATE           62   0.2903        1.6324     0.0052     0.0052      -0.0946 0.5525 1.1108       0.0621            9.9355       0.3289     0.3289    0.1020     0.2059           0.6500               nan         nan         mt5     0.4459
+run_20260429_075144_d9c2a5 XAG/USD   commodity        H4       breakout session_opening_range                                        atr_expand_min=0.0|range_bars=6      both     all WEAK_CANDIDATE           47   0.4043        1.3406     0.0074     0.0074      -0.2082 0.8786 0.7182       0.0470           20.2553       0.2675     0.2675    0.1774     0.0338           0.6892               nan         nan         mt5     0.4392
+run_20260429_075144_d9c2a5 XAG/USD   commodity        H4       breakout session_opening_range                                        atr_expand_min=0.5|range_bars=6      both     all WEAK_CANDIDATE           47   0.4043        1.3256     0.0070     0.0070      -0.2082 0.8407 0.6870       0.0470           20.1702       0.2486     0.2486    0.1599     0.0338           0.6954               nan         nan         mt5     0.4360
+run_20260429_075144_d9c2a5 XAU/USD   commodity        H4 engine_b_proxy     structure_filters                                fvg_detection=True|strong_close_pct=0.7      both     all WEAK_CANDIDATE           32   0.5000        3.7807     0.0116     0.0116      -0.0530 2.4549 2.1289       0.0320           16.6875       0.4248     0.4248    0.3696     0.0403           0.5247               nan         nan         mt5     0.4324
+run_20260429_075144_d9c2a5 XAG/USD   commodity        D1       breakout           prev_day_hl                                                     atr_expand_min=0.5      both     all WEAK_CANDIDATE          128   0.4062        1.0733     0.0013     0.0013      -0.2721 0.1473 0.2936       0.1281            6.1953       0.0097     0.0097   -0.0042    -0.0017           0.8258               nan         nan         mt5     0.4217
+run_20260429_075144_d9c2a5 XAG/USD   commodity        H4       pullback          pullback_ema  pullback_period=50|rsi_reclaim=True|rsi_threshold=50|trend_period=200      both     all WEAK_CANDIDATE           25   0.1200        2.6832     0.0162     0.0162      -0.1318 1.0999 0.9088       0.0250           16.2800       0.3796     0.3796    0.5890    -0.1318           0.5500               nan         nan         mt5     0.4071
+run_20260429_075144_d9c2a5 XAG/USD   commodity        D1 trend_momentum         ema_alignment                        adx_min=20|ema_long=200|ema_mid=50|ema_short=20      both     all WEAK_CANDIDATE           26   0.1154        2.1333     0.0278     0.0278      -0.3787 0.3109 0.6238       0.0260           17.8077       0.3682     0.3682   -0.2950     0.9408           0.5560               nan         nan         mt5     0.4009
+```
+
+### By Asset Group
+Rows: 1
+```
+asset_class win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+  commodity        0.3162              46             1.8371                   46          0.0116                46      0.7437            46   0.8402         46          0.3526                46          0.2114                46                0.5813                      46          59.4565                 46
+```
+
+### By Symbol
+Rows: 2
+```
+ symbol win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+XAG/USD        0.3037              30             1.7577                   30          0.0136                30      0.7614            30   0.8063         30          0.4017                30          0.2732                30                0.5830                      30          61.4333                 30
+XAU/USD        0.3396              16             1.9860                   16          0.0080                16      0.7105            16   0.9039         16          0.2607                16          0.0956                16                0.5782                      16          55.7500                 16
+```
+
+### By Timeframe
+Rows: 2
+```
+timeframe win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+       D1        0.3093              23             1.7325                   23          0.0108                23      0.3728            23   0.7516         23          0.3756                23          0.4819                23                0.6129                      23          82.3043                 23
+       H4        0.3231              23             1.9417                   23          0.0125                23      1.1146            23   0.9289         23          0.3296                23         -0.0591                23                0.5498                      23          36.6087                 23
+```
+
+### By Session
+Rows: 1
+```
+session win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+    all        0.3162              46             1.8371                   46          0.0116                46      0.7437            46   0.8402         46          0.3526                46          0.2114                46                0.5813                      46          59.4565                 46
+```
+
+### By Direction
+Rows: 1
+```
+direction win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+     both        0.3162              46             1.8371                   46          0.0116                46      0.7437            46   0.8402         46          0.3526                46          0.2114                46                0.5813                      46          59.4565                 46
+```
+
+### Indicator Attribution
+Rows: 13
+```
+        strategy_name  total_configs  strong  weak  reject avg_net_return avg_win_rate avg_robustness avg_sqn avg_oos_return  total_trades pass_rate verdict
+        ema_alignment             12       0     4       0         0.4113       0.1962         0.7720  0.8946         0.6865           225    0.3333   HELPS
+            ema_cross            144       0     5      22        -0.0968       0.1869         0.7242  0.1121         0.5757          1831    0.0347   HELPS
+         pullback_ema             16       0    13       2         0.4837       0.2528         0.6355  0.9372         0.2524           694    0.8125   HELPS
+session_opening_range             16       0    10       4         0.1315       0.3497         0.6318  0.4375         0.1406           673    0.6250   HELPS
+          prev_day_hl             12       0     4       8        -0.0780       0.3732         0.5371 -0.2508        -0.1251           920    0.3333   HURTS
+    structure_filters             16       0     7       9         0.0230       0.3677         0.5355  0.0916         0.1384          2207    0.4375   HELPS
+       macd_direction              8       0     3       5        -0.0501       0.3363         0.5125 -0.0136        -0.0092           652    0.3750   HURTS
+      bollinger_touch              8       0     0       6        -0.2874       0.5913         0.4931 -0.8032        -0.2227           208    0.0000   HURTS
+      london_breakout              8       0     0       4            nan          nan            nan     nan            nan            64    0.0000 NEUTRAL
+          ny_breakout              8       0     0       4            nan          nan            nan     nan            nan             0    0.0000 NEUTRAL
+               ob_bos             32       0     0       0            nan          nan            nan     nan            nan           309    0.0000 NEUTRAL
+          rsi_extreme             16       0     0       0            nan          nan            nan     nan            nan           192    0.0000 NEUTRAL
+       vwap_deviation              8       0     0       0            nan          nan            nan     nan            nan            37    0.0000 NEUTRAL
+```
+
+### Rejected / Failed Configs (by family)
+```
+        family  count
+      breakout     30
+engine_b_proxy     41
+mean_reversion     32
+      pullback      3
+trend_momentum    152
+```
+
+### research_report.md (excerpt)
+```
+# Athena Research Lab — Report
+**Run ID:** `run_20260429_075144_d9c2a5`  **Generated:** 2026-04-29 07:51 UTC  
+**Mode:** large  **Symbols:** 2  **Families:** ['trend_momentum', 'pullback', 'breakout', 'mean_reversion', 'engine_b_proxy']
+
+> **IMPORTANT:** These are backtest discovery findings at intentionally lower thresholds.
+> Do NOT copy these thresholds into live engine gates.
+> Label: **STRONG_CANDIDATE** / **WEAK_CANDIDATE** / **REJECT** / **NEEDS_MORE_DATA**
+
+## Executive Summary
+- Total strategy/param/symbol/TF combinations tested: **304**
+- Valid (pass robustness): **46** (15.1%)
+- Strong candidates: **0**
+
+## Which Strategy Family Works Best?
+family | count | avg_net_return | avg_wr | avg_pf | avg_sqn
+--- | --- | --- | --- | --- | ---
+pullback | 13 | 0.5599 | 0.2498 | 2.2314 | 1.0917
+engine_b_proxy | 7 | 0.4045 | 0.4531 | 2.0770 | 1.2841
+trend_momentum | 12 | 0.3058 | 0.2455 | 1.9306 | 0.6921
+breakout | 14 | 0.1744 | 0.3700 | 1.2709 | 0.5118
+
+**Best family:** `pullback` (avg net return 0.560)
+
+## Which Symbol Works Best?
+symbol | count | avg_net_return | avg_wr
+--- | --- | --- | ---
+XAG/USD | 30 | 0.4017 | 0.3037
+XAU/USD | 16 | 0.2607 | 0.3396
+
+## Which Timeframe Works Best?
+timeframe | count | avg_net_return | avg_wr
+--- | --- | --- | ---
+D1 | 23 | 0.3756 | 0.3093
+H4 | 23 | 0.3296 | 0.3231
+
+## Which Direction Works Better?
+direction | count | avg_net_return | avg_wr
+--- | --- | --- | ---
+both | 46 | 0.3526 | 0.3162
+
+## Which Indicators Help / Hurt?
+**Helpful indicators/strategies:**
+strategy_name | pass_rate | avg_net_return | avg_sqn
+--- | --- | --- | ---
+ema_alignment | 0.3333 | 0.4113 | 0.8946
+ema_cross | 0.0347 | -0.0968 | 0.1121
+pullback_ema | 0.8125 | 0.4837 | 0.9372
+session_opening_range | 0.6250 | 0.1315 | 0.4375
+structure_filters | 0.4375 | 0.0230 | 0.0916
+
+**Globally weak across tested configs:**
+strategy_name | pass_rate | avg_net_return
+--- | --- | ---
+prev_day_hl | 0.3333 | -0.0780
+macd_direction | 0.3750 | -0.0501
+bollinger_touch | 0.0000 | -0.2874
+
+## Which Setups Collapse After Fees?
+No gross-profitable-but-fee-killed setups found.
+
+## Which Setups Had Too Little Sample?
+194 configs had insufficient trades.  
+family | count
+--- | ---
+trend_momentum | 125
+engine_b_proxy | 32
+mean_reversion | 26
+breakout | 10
+pullback | 1
+
+## Recommended Research Queue
+Please use the Autopilot console on the dashboard to generate comprehensive research vectors.
+
+## Confirmed / Weakened / Rejected After Validation
+Validation tracks are executed sequentially.
+
+## Conditional Edge Candidates
+No conditional edges detected.
+
+## Engine A Findings
+Best `trend_momentum` config: `macd_direction` params=`adx_min=20|fast=12|signal_period=9|slow=26`
+  - Symbol: `XAG/USD` TF: `H4` Direction: `both`
+  - Win rate: 33.8%  PF: 1.14  Robustness: 0.60  Status: `WEAK_CANDIDATE`
+  - **Action:** Validate on additional symbols/windows before considering Engine changes.
+Best `pullback` config: `pullback_ema` params=`pullback_period=50|rsi_reclaim=False|rsi_thresh
+... [truncated]
+```
+
+## Required Output
+
+Provide a complete decision memo answering ALL of the following questions.
+Use the label tags defined in the safety rules.
+
+1. What strategy family worked best? (label each STRONG_CANDIDATE / WEAK_CANDIDATE / REJECT)
+2. What indicator helped most?
+3. What indicator hurt most?
+4. Which asset group worked best?
+5. Which symbol worked best?
+6. Which timeframe worked best?
+7. Which session worked best?
+8. Did LONG or SHORT work better overall?
+9. Which setups collapsed after fees? (list by family/strategy)
+10. Which setups had too little sample size? (list by family/strategy)
+11. What should Engine A keep / remove / tune? (be specific — factor names, threshold direction)
+12. What should Engine B keep / remove / tune? (be specific — checklist gates, zone logic)
+13. What should Engine D keep / remove / tune? (be specific — VP params, grade thresholds)
+14. What is the next smallest useful test to run?
+15. What should NOT be tested further right now?
+
+After the memo, output a JSON block labelled ```json with this structure:
+{
+  "overall_verdict": "...",
+  "top_candidates": [{"strategy": "...", "symbol": "...", "tf": "...", "label": "STRONG_CANDIDATE"}],
+  "rejected_setups": [{"strategy": "...", "reason": "..."}],
+  "engine_a": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": []},
+  "engine_b": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": []},
+  "engine_d": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": []},
+  "data_quality_warnings": [],
+  "telemetry_warnings": [],
+  "next_tiny_test": {"symbols": [], "timeframes": [], "strategy_families": [], "reason": "..."},
+  "do_not_do_next": []
+}

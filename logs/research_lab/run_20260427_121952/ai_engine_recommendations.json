@@ -1,0 +1,43 @@
+{
+  "engine_a": {
+    "keep": [
+      "macd_direction (adx_min=0)"
+    ],
+    "remove_or_demote": [
+      "ema_cross all params"
+    ],
+    "tune": [
+      "ADX gate >20; EMA fast=10/slow=50 H4"
+    ],
+    "next_tests": [
+      "H4 macd_direction on SOL/ADA"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (fvg=False|strong_close_pct=0.8)"
+    ],
+    "remove_or_demote": [
+      "ob_bos",
+      "FVG detection"
+    ],
+    "tune": [
+      "strong_close_pct >0.8; add RR filter"
+    ],
+    "next_tests": [
+      "H4 structure_filters + RR on ETH/BTC"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [
+      "vwap_deviation (neutral)"
+    ],
+    "tune": [],
+    "next_tests": [
+      "Full VP/OF grid on H1/H4 crypto"
+    ]
+  },
+  "generated_at": "2026-04-27T12:21:14.414782+00:00",
+  "safety_note": "These are backtest discovery findings only. Do NOT apply to live thresholds without further validation."
+}

@@ -1,0 +1,87 @@
+{
+  "overall_verdict": "WEAK_CANDIDATE across board; no robust edge, heavy OOS decay, tiny samples/single symbols. NEEDS_MORE_DATA for clusters.",
+  "top_candidates": [
+    {
+      "strategy": "macd_direction (adx_min=0|fast=12|signal_period=9|slow=26)",
+      "symbol": "EUR/USD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "ema_cross (adx_min=20|fast_period=10|rsi_confirm=False|slow_period=50)",
+      "symbol": "AUD/USD",
+      "tf": "H1",
+      "label": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "pullback_ema",
+      "reason": "All configs net-negative, low WR, no pass_rate"
+    },
+    {
+      "strategy": "ema_cross (slow_period=100/200 variants)",
+      "reason": "Net-negative or <20 trades"
+    }
+  ],
+  "engine_a": {
+    "keep": [
+      "ADX gate (min=20)"
+    ],
+    "remove_or_demote": [
+      "pullback_ema integration"
+    ],
+    "tune": [
+      "ADX_min toward 20-25",
+      "RSI_confirm=True",
+      "fast_period=10"
+    ],
+    "next_tests": [
+      "Multi-symbol H1/H4/D1 on ema_cross/macd_direction"
+    ]
+  },
+  "engine_b": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Add engine_b_proxy (BOS/FVG/OB) on forex H1/H4"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Crypto symbols with VP/OrderFlow proxies"
+    ]
+  },
+  "data_quality_warnings": [
+    "Tiny samples (<30 trades) in 330/540 configs",
+    "No multi-symbol/TF clusters",
+    "Consistent OOS failure (negative returns)"
+  ],
+  "telemetry_warnings": [],
+  "next_tiny_test": {
+    "symbols": [
+      "GBP/USD",
+      "USD/JPY",
+      "USD/CAD",
+      "EUR/USD",
+      "AUD/USD"
+    ],
+    "timeframes": [
+      "H1",
+      "H4",
+      "D1"
+    ],
+    "strategy_families": [
+      "trend_momentum"
+    ],
+    "reason": "Build >30 trade samples/symbol, test OOS robustness, focus ema_cross/macd_direction"
+  },
+  "do_not_do_next": [
+    "pullback family",
+    "trend_momentum pullback_period/RSI_reclaim variants"
+  ]
+}

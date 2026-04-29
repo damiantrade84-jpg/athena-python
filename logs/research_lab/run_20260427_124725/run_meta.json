@@ -1,0 +1,32 @@
+{
+  "run_id": "run_20260427_124725",
+  "mode": "large",
+  "symbol_count": 4,
+  "timeframes": [
+    "M15",
+    "H1",
+    "H4"
+  ],
+  "families": [
+    "trend_momentum",
+    "pullback",
+    "breakout",
+    "mean_reversion",
+    "engine_b_proxy"
+  ],
+  "specs_count": 76,
+  "results_count": 912,
+  "direction": "both",
+  "generated_at": "2026-04-27T12:48:02.907380+00:00",
+  "market_group": "forex",
+  "trading_style": "intra",
+  "research_depth": "deep",
+  "zone_set": "intra_zones",
+  "validation_focus": [
+    "same-day continuation",
+    "intraday reversal",
+    "liquidity sweep into zone",
+    "session continuation",
+    "target room"
+  ]
+}

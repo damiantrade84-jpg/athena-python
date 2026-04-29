@@ -1,0 +1,89 @@
+{
+  "overall_verdict": "STRONG_CANDIDATE mean-reversion cluster via bollinger_touch on crypto H4 (SOL/XRP); others NEEDS_MORE_DATA or REJECT due to samples.",
+  "top_candidates": [
+    {
+      "strategy": "bollinger_touch num_std=2.0|period=20",
+      "symbol": "SOL/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "bollinger_touch num_std=2.5|period=20",
+      "symbol": "SOL/USDT",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "bollinger_touch num_std=2.0|period=20",
+      "symbol": "XRP/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "bollinger_touch num_std=2.5|period=20",
+      "symbol": "XRP/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "rsi_extreme",
+      "reason": "tiny samples (<20 trades) across all configs/symbols"
+    },
+    {
+      "strategy": "vwap_deviation",
+      "reason": "tiny samples (<20 trades) across all configs/symbols"
+    },
+    {
+      "strategy": "mean_reversion (EUR/USD)",
+      "reason": "all tiny samples; forex reject"
+    }
+  ],
+  "engine_a": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Add mean-reversion proxies to trend_momentum discovery"
+    ]
+  },
+  "engine_b": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": []
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Crypto VP/orderflow proxies on H4"
+    ]
+  },
+  "data_quality_warnings": [
+    "19/24 configs <20 trades; forex all invalid"
+  ],
+  "telemetry_warnings": [
+    "No Engine A/B/D proxies; missing trend/PA/orderflow data"
+  ],
+  "next_tiny_test": {
+    "symbols": [
+      "BTC/USDT",
+      "ETH/USDT"
+    ],
+    "timeframes": [
+      "H4"
+    ],
+    "strategy_families": [
+      "mean_reversion"
+    ],
+    "reason": "Expand bollinger_touch cluster to more crypto symbols for robustness"
+  },
+  "do_not_do_next": [
+    "rsi_extreme (low samples)",
+    "vwap_deviation (low samples)",
+    "EUR/USD mean_reversion (no edge)"
+  ]
+}

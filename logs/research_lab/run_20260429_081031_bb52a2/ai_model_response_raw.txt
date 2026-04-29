@@ -1,0 +1,122 @@
+# Athena Pro v4 Backtest Discovery Decision Memo
+**Run ID:** run_20260429_081031_bb52a2 | **Analyst:** Quantitative Research | **Date:** 2026-04-29  
+**Key Caveat:** These are discovery results at lowered BT_MIN thresholds including marginal trades. **Do NOT execute live or copy thresholds to live gates (e.g., Engine A forex floor 2.1).** All findings penalized for small samples (<30 trades), single-symbol focus, OOS degradation (common net-positive IS but negative OOS), and lack of multi-symbol clusters. No robust clusters found; tops are isolated. Robustness scores mediocre (avg 0.48). Forex-only data limits generality. No Engine D results (crypto-focused, forex telemetry mismatch?).
+
+## 1. Strategy Family Performance
+- **mean_reversion**: STRONG_CANDIDATE (1 strong + 4 weak; best avg net_return 0.171, high PF 17.58, works D1 forex; but small valid count=5, needs multi-symbol confirmation).
+- **trend_momentum**: WEAK_CANDIDATE (20 weak; avg net 0.082 but high rejects=308, ema_cross subset hurts).
+- **breakout**: WEAK_CANDIDATE (13 weak; avg net 0.079, but 75 rejects).
+- **engine_b_proxy**: REJECT (5 weak but 91 rejects, structure_filters hurts).
+- **pullback**: REJECT (1 weak, 31 rejects).
+
+## 2. Indicator Helped Most
+**bollinger_touch** (num_std=2.0|period=20): STRONG_CANDIDATE (1 strong AUD/USD D1 41 trades WR68% PF2.59 net0.29; 2 weak; avg net0.008; pass_rate18.8%; multi-TF/symbol hints). Edges mean-reversion on D1 forex.
+
+## 3. Indicator Hurt Most
+**ema_cross**: REJECT (0 strong, 11 weak, 61 rejects; avg net -0.079 WR23%; 288 configs, 218 tiny samples; consistent loser across params/symbols/TF).
+
+## 4. Asset Group Performance
+**forex**: WEAK_CANDIDATE (only group tested; avg net0.085 WR44% but OOS -0.03, no crypto/stock comparison; penalize single-group).
+
+## 5. Symbol Performance
+**GBP/USD**: WEAK_CANDIDATE (highest avg net0.1045 WR46%; 8 valid).  
+**AUD/USD**: WEAK_CANDIDATE (net0.097 WR48%; 11 valid, hosts strong bollinger).  
+**USD/JPY**: REJECT (net0.075 but worst OOS -0.066; 16 valid, ema_cross dumps).  
+**EUR/USD**: REJECT (net0.073 OOS -0.032).  
+Penalize: No cross-symbol clusters; all single-asset fragile.
+
+## 6. Timeframe Performance
+**D1**: STRONG_CANDIDATE (29 valid, net0.110 WR45%; hosts strong bollinger/vwap; better OOS survival).  
+**H4**: WEAK_CANDIDATE (15 valid, net0.038 WR43%; more OOS decay).
+
+## 7. Session Performance
+**all**: NEEDS_MORE_DATA (only session tested; no london/ny/asia split; cannot assess).
+
+## 8. LONG vs SHORT Performance
+**both**: NEEDS_MORE_DATA (only direction tested; no long/short split; cannot assess bias).
+
+## 9. Setups Collapsed After Fees
+None. All valid configs gross-profitable survive fees (net_return reflects post-fee).
+
+## 10. Setups with Too Little Sample (<30 trades)
+340 configs (56% of 608):  
+- **trend_momentum** (218; esp ema_cross).  
+- **engine_b_proxy** (55; structure_filters).  
+- **mean_reversion** (51; vwap_deviation/rsi_extreme).  
+- **breakout** (14; session_opening_range).  
+- **pullback** (2).  
+Label: NEEDS_MORE_DATA.
+
+## 11. Engine A Recommendations (EMA trend/RSI+MACD/ADX 0-3.0 score)
+- **Keep**: MACD momentum (weak candidates across USD/JPY/GBP/EUR H4/D1; adx_min=0 best vs 20; tune signal_period=9 fast=12 slow=26 for coherence).  
+- **Remove/Demote**: EMA cross/coherence (consistent REJECT; hurts score).  
+- **Tune**: Raise ADX gate >20 (weak adx_min=0/20 similar, but 25 reduces samples without edge); test RSI confirm=False (similar to True but cleaner). No live threshold changes.  
+Best proxy: macd_direction USD/JPY H4 WEAK_CANDIDATE (63 trades PF1.48 robustness0.60).
+
+## 12. Engine B Recommendations (Checklist: BOS/CHoCH/FVG/OB/swing/location/trigger/RR)
+- **Keep**: Nothing robust (engine_b_proxy 91 rejects).  
+- **Remove/Demote**: structure_filters (REJECT; fvg_detection=False|strong_close_pct=0.8 weak 191 trades net0.048 OOS-0.057); ob_bos (HURTS avg net-0.076).  
+- **Tune**: Relax FVG/OB detection only if multi-symbol D1 cluster emerges (none here). Proxy weak on USD/JPY D1.
+
+## 13. Engine D Recommendations (VP/OF: POC/VAH/VAL/Absorption/CVD/VWAP/AAA; crypto A/B/C/D)
+- No results (forex data only; TELEMETRY_BUG?).  
+- **Keep/Remove/Tune**: NEEDS_MORE_DATA (run crypto symbols e.g. BTC/USD).
+
+## 14. Next Smallest Useful Test
+Test bollinger_touch mean_reversion (num_std=2.0-2.5|period=20) on D1 across 4+ forex + 2 crypto symbols (expand sample>100 trades/symbol, check OOS). Tiny: 2 TF x 6 symbols x 3 params = 36 runs.
+
+## 15. What Should NOT Be Tested Further Right Now
+- ema_cross (all variants REJECT; high rejects, hurts).  
+- H4-only trend_momentum (OOS decay).  
+- Single-symbol ema_cross/many breakout (USD/JPY H4 dumps).  
+- engine_b_proxy structure_filters (91 rejects).
+
+**Overall Verdict**: Weak discovery; no robust multi-symbol clusters. Prioritize mean_reversion D1 forex (bollinger_touch) for validation. **No live actions.**
+
+```json
+{
+  "overall_verdict": "WEAK_CANDIDATE: Isolated D1 mean_reversion edges (bollinger_touch); broad rejects in trend_momentum/breakout; penalize small samples/OOS decay/no clusters.",
+  "top_candidates": [
+    {"strategy": "bollinger_touch", "symbol": "AUD/USD", "tf": "D1", "label": "STRONG_CANDIDATE"},
+    {"strategy": "vwap_deviation", "symbol": "AUD/USD", "tf": "D1", "label": "WEAK_CANDIDATE"},
+    {"strategy": "rsi_extreme", "symbol": "USD/JPY", "tf": "H4", "label": "WEAK_CANDIDATE"},
+    {"strategy": "macd_direction", "symbol": "USD/JPY", "tf": "H4", "label": "WEAK_CANDIDATE"}
+  ],
+  "rejected_setups": [
+    {"strategy": "ema_cross", "reason": "Consistent loser: high rejects, negative net_return, hurts attribution"},
+    {"strategy": "structure_filters", "reason": "91 rejects, hurts attribution, poor OOS"},
+    {"strategy": "ob_bos", "reason": "HURTS attribution, low WR/net"}
+  ],
+  "engine_a": {
+    "keep": ["MACD momentum (adx_min=0)"],
+    "remove_or_demote": ["EMA cross/coherence"],
+    "tune": ["ADX gate >20; RSI confirm=False"],
+    "next_tests": ["macd_direction multi-symbol D1/H4"]
+  },
+  "engine_b": {
+    "keep": [],
+    "remove_or_demote": ["structure_filters", "ob_bos"],
+    "tune": ["FVG/OB only if D1 cluster"],
+    "next_tests": []
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": ["Crypto symbols (BTC/USD) VP/OF baseline"]
+  },
+  "data_quality_warnings": ["340 tiny samples (56%); forex-only no crypto"],
+  "telemetry_warnings": ["No Engine D hits (forex data?); mt5 only"],
+  "next_tiny_test": {
+    "symbols": ["AUD/USD", "GBP/USD", "EUR/USD", "USD/JPY", "BTC/USD", "ETH/USD"],
+    "timeframes": ["D1"],
+    "strategy_families": ["mean_reversion"],
+    "reason": "Validate bollinger_touch/vwap clusters >100 trades/symbol"
+  },
+  "do_not_do_next": [
+    "ema_cross variants",
+    "H4 trend_momentum single-symbol",
+    "engine_b_proxy structure_filters"
+  ]
+}
+```

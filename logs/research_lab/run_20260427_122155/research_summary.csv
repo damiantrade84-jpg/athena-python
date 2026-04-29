@@ -1,0 +1,25 @@
+run_id,symbol,asset_class,timeframe,family,strategy_name,params_str,direction,session,status,trade_count,win_rate,profit_factor,avg_return,expectancy,max_drawdown,sharpe,sqn,exposure_pct,avg_duration_bars,gross_return,net_return,is_return,oos_return,robustness_score,param_sensitivity,skip_reason,data_source
+run_20260427_122155,SOL/USDT,crypto,H4,mean_reversion,rsi_extreme,overbought=70|oversold=30|period=14,both,all,NEEDS_MORE_DATA,13,,,,,,,,,,,,,,,,only 13 trades < min 20,binance_rest
+run_20260427_122155,SOL/USDT,crypto,H4,mean_reversion,rsi_extreme,overbought=75|oversold=30|period=14,both,all,NEEDS_MORE_DATA,8,,,,,,,,,,,,,,,,only 8 trades < min 20,binance_rest
+run_20260427_122155,SOL/USDT,crypto,H4,mean_reversion,rsi_extreme,overbought=70|oversold=25|period=14,both,all,NEEDS_MORE_DATA,10,,,,,,,,,,,,,,,,only 10 trades < min 20,binance_rest
+run_20260427_122155,SOL/USDT,crypto,H4,mean_reversion,rsi_extreme,overbought=75|oversold=25|period=14,both,all,NEEDS_MORE_DATA,5,,,,,,,,,,,,,,,,only 5 trades < min 20,binance_rest
+run_20260427_122155,SOL/USDT,crypto,H4,mean_reversion,bollinger_touch,num_std=2.0|period=20,both,all,STRONG_CANDIDATE,40,0.850000,2.493509,0.017901,0.017901,-0.362813,2.369058,2.018647,0.040040,12.425000,0.898263,0.898263,0.419655,0.337130,0.814338,,,binance_rest
+run_20260427_122155,SOL/USDT,crypto,H4,mean_reversion,bollinger_touch,num_std=2.5|period=20,both,all,WEAK_CANDIDATE,27,0.814815,2.151704,0.017883,0.017883,-0.340329,1.687180,1.421155,0.027027,14.333333,0.514309,0.514309,0.295820,0.168610,0.732992,,,binance_rest
+run_20260427_122155,SOL/USDT,crypto,H4,mean_reversion,vwap_deviation,std_threshold=1.5,both,all,NEEDS_MORE_DATA,10,,,,,,,,,,,,,,,,only 10 trades < min 20,binance_rest
+run_20260427_122155,SOL/USDT,crypto,H4,mean_reversion,vwap_deviation,std_threshold=2.0,both,all,NEEDS_MORE_DATA,7,,,,,,,,,,,,,,,,only 7 trades < min 20,binance_rest
+run_20260427_122155,XRP/USDT,crypto,H4,mean_reversion,rsi_extreme,overbought=70|oversold=30|period=14,both,all,NEEDS_MORE_DATA,13,,,,,,,,,,,,,,,,only 13 trades < min 20,binance_rest
+run_20260427_122155,XRP/USDT,crypto,H4,mean_reversion,rsi_extreme,overbought=75|oversold=30|period=14,both,all,NEEDS_MORE_DATA,12,,,,,,,,,,,,,,,,only 12 trades < min 20,binance_rest
+run_20260427_122155,XRP/USDT,crypto,H4,mean_reversion,rsi_extreme,overbought=70|oversold=25|period=14,both,all,NEEDS_MORE_DATA,9,,,,,,,,,,,,,,,,only 9 trades < min 20,binance_rest
+run_20260427_122155,XRP/USDT,crypto,H4,mean_reversion,rsi_extreme,overbought=75|oversold=25|period=14,both,all,NEEDS_MORE_DATA,8,,,,,,,,,,,,,,,,only 8 trades < min 20,binance_rest
+run_20260427_122155,XRP/USDT,crypto,H4,mean_reversion,bollinger_touch,num_std=2.0|period=20,both,all,STRONG_CANDIDATE,38,0.710526,1.652183,0.007232,0.007232,-0.249183,1.225802,1.009665,0.038038,11.973684,0.264153,0.264153,0.128969,0.119741,0.839867,,,binance_rest
+run_20260427_122155,XRP/USDT,crypto,H4,mean_reversion,bollinger_touch,num_std=2.5|period=20,both,all,STRONG_CANDIDATE,24,0.750000,1.878687,0.010609,0.010609,-0.199981,1.285631,1.069584,0.024024,14.208333,0.250129,0.250129,0.112293,0.123920,0.812938,,,binance_rest
+run_20260427_122155,XRP/USDT,crypto,H4,mean_reversion,vwap_deviation,std_threshold=1.5,both,all,NEEDS_MORE_DATA,8,,,,,,,,,,,,,,,,only 8 trades < min 20,binance_rest
+run_20260427_122155,XRP/USDT,crypto,H4,mean_reversion,vwap_deviation,std_threshold=2.0,both,all,NEEDS_MORE_DATA,8,,,,,,,,,,,,,,,,only 8 trades < min 20,binance_rest
+run_20260427_122155,EUR/USD,forex,H4,mean_reversion,rsi_extreme,overbought=70|oversold=30|period=14,both,all,NEEDS_MORE_DATA,19,,,,,,,,,,,,,,,,only 19 trades < min 20,mt5
+run_20260427_122155,EUR/USD,forex,H4,mean_reversion,rsi_extreme,overbought=75|oversold=30|period=14,both,all,NEEDS_MORE_DATA,15,,,,,,,,,,,,,,,,only 15 trades < min 20,mt5
+run_20260427_122155,EUR/USD,forex,H4,mean_reversion,rsi_extreme,overbought=70|oversold=25|period=14,both,all,NEEDS_MORE_DATA,10,,,,,,,,,,,,,,,,only 10 trades < min 20,mt5
+run_20260427_122155,EUR/USD,forex,H4,mean_reversion,rsi_extreme,overbought=75|oversold=25|period=14,both,all,NEEDS_MORE_DATA,6,,,,,,,,,,,,,,,,only 6 trades < min 20,mt5
+run_20260427_122155,EUR/USD,forex,H4,mean_reversion,bollinger_touch,num_std=2.0|period=20,both,all,REJECT,34,0.411765,0.477928,-0.001409,-0.001409,-0.067723,-1.706502,-1.427417,0.034034,16.500000,-0.047351,-0.047351,-0.052603,0.005544,0.437333,,,mt5
+run_20260427_122155,EUR/USD,forex,H4,mean_reversion,bollinger_touch,num_std=2.5|period=20,both,all,NEEDS_MORE_DATA,19,,,,,,,,,,,,,,1.000000,,only 19 trades < min 20,mt5
+run_20260427_122155,EUR/USD,forex,H4,mean_reversion,vwap_deviation,std_threshold=1.5,both,all,NEEDS_MORE_DATA,14,,,,,,,,,,,,,,,,only 14 trades < min 20,mt5
+run_20260427_122155,EUR/USD,forex,H4,mean_reversion,vwap_deviation,std_threshold=2.0,both,all,NEEDS_MORE_DATA,10,,,,,,,,,,,,,,,,only 10 trades < min 20,mt5

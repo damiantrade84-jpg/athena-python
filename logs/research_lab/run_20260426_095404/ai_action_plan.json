@@ -1,0 +1,102 @@
+{
+  "overall_verdict": "WEAK_EDGES_CRYPTO_H4; heavy penalization for small samples/OOS decay; no live actions",
+  "top_candidates": [
+    {
+      "strategy": "bollinger_touch",
+      "symbol": "ETH/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "prev_day_hl",
+      "symbol": "XAU/USD",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "macd_direction",
+      "symbol": "ETH/USDT",
+      "tf": "H1",
+      "label": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "ema_cross",
+      "reason": "0% pass_rate, consistent losses across 432 configs"
+    },
+    {
+      "strategy": "session_opening_range",
+      "reason": "OOS failure despite gross PF>1"
+    },
+    {
+      "strategy": "london_breakout",
+      "reason": "0% pass, avg_net -0.072"
+    }
+  ],
+  "engine_a": {
+    "keep": [
+      "macd_direction (adx_min=0)"
+    ],
+    "remove_or_demote": [
+      "ema_cross"
+    ],
+    "tune": [
+      "ADX gate (test 15-25 on crypto)",
+      "RSI confirm (disable?)"
+    ],
+    "next_tests": [
+      "multi-symbol MACD H4"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "prev_day_hl (atr_expand_min=0.5)"
+    ],
+    "remove_or_demote": [
+      "session_opening_range"
+    ],
+    "tune": [
+      "range_bars=6 with session filter"
+    ],
+    "next_tests": [
+      "london/ny splits"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Add POC/VAH proxies on crypto H1/H4"
+    ]
+  },
+  "data_quality_warnings": [
+    "Tiny samples dominate tops (<30 trades)",
+    "OOS negative in 80% valid"
+  ],
+  "telemetry_warnings": [
+    "Missing Engine B/D proxies; untrustworthy"
+  ],
+  "next_tiny_test": {
+    "symbols": [
+      "BTC/USDT",
+      "ETH/USDT",
+      "SOL/USDT",
+      "BNB/USDT"
+    ],
+    "timeframes": [
+      "H4"
+    ],
+    "strategy_families": [
+      "mean_reversion",
+      "breakout"
+    ],
+    "reason": "Validate clusters with sessions/directions"
+  },
+  "do_not_do_next": [
+    "ema_cross variants",
+    "forex H1 only",
+    "london/ny breakout"
+  ]
+}

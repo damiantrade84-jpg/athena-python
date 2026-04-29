@@ -1,0 +1,26 @@
+{
+  "run_id": "run_20260428_100014_1cf3",
+  "mode": "small",
+  "symbol_count": 1,
+  "timeframes": [
+    "M15",
+    "H1",
+    "H4",
+    "D1"
+  ],
+  "families": [
+    "trend_momentum",
+    "pullback",
+    "breakout",
+    "mean_reversion",
+    "volatility",
+    "engine_b_proxy",
+    "engine_d_proxy"
+  ],
+  "specs_count": 94,
+  "results_count": 376,
+  "direction": "both",
+  "generated_at": "2026-04-28T10:00:32.211922+00:00",
+  "parent_run_id": "mock_fresh_parent",
+  "is_autopilot": true
+}

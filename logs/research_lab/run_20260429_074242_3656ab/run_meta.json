@@ -1,0 +1,25 @@
+{
+  "run_id": "run_20260429_074242_3656ab",
+  "mode": "tiny",
+  "symbol_count": 5,
+  "timeframes": [
+    "H4",
+    "D1"
+  ],
+  "families": [
+    "trend_momentum",
+    "pullback",
+    "breakout",
+    "mean_reversion",
+    "engine_b_proxy"
+  ],
+  "specs_count": 76,
+  "results_count": 760,
+  "direction": "both",
+  "generated_at": "2026-04-29T07:43:36.079832+00:00",
+  "session_id": "sess_20260429_074242_9e7a78",
+  "market_group": "crypto",
+  "trading_style": "swing",
+  "research_depth": "quick",
+  "role": "discovery"
+}

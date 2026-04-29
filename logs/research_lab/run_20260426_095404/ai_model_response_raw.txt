@@ -1,0 +1,117 @@
+# Athena Pro v4 Backtest Discovery Decision Memo
+**Run ID:** run_20260426_095404 | **Analyst:** Quantitative Research | **Date:** 2026-04-26  
+**Key Caveat:** These are discovery results at lowered BT_MIN thresholds (worse than live). **Do NOT execute live, copy thresholds to live gates, or deploy without forward-testing.** All findings penalized for small samples (<30 trades), single-symbol focus, IS/OOS decay (many positive IS, negative OOS), and net-negative after fees where applicable. No telemetry bugs detected, but missing Engine B/D proxies make results untrustworthy for those.
+
+## 1. Strategy Family Performance
+- **trend_momentum**: WEAK_CANDIDATE (best avg net_return 0.148 across 5 valid; MACD variants show edge on crypto, but ema_cross hurts; OOS decay).
+- **mean_reversion**: WEAK_CANDIDATE (high WR 0.65, but low robustness 0.49; bollinger_touch clusters on crypto/commodity).
+- **breakout**: REJECT (avg net 0.129 but frequent OOS failure, e.g., session_opening_range PF>1 but OOS negative).
+- **pullback**: REJECT (low WR 0.22, poor SQN).
+
+**Best family overall: trend_momentum (WEAK_CANDIDATE).**
+
+## 2. Indicator Helped Most
+**bollinger_touch (mean_reversion)**: WEAK_CANDIDATE (highest pass_rate 0.29, 1 STRONG on ETH/USDT H4 despite 24 trades; avg_net -0.025 but clusters on crypto/index).
+
+No strong helpers; all attribution "HURTS" or NEUTRAL.
+
+## 3. Indicator Hurt Most
+**ema_cross (trend_momentum)**: REJECT (0% pass_rate, avg_net -0.110, 432 configs all losing; tiny samples <30 dominate GBP/USD).
+
+## 4. Asset Group Best
+**crypto**: STRONG_CANDIDATE (highest net_return 0.184, robustness 0.49; clusters across BTC/ETH on H4/H1; multi-symbol).
+
+Commodity/forex/index: WEAK_CANDIDATE (lower net, forex near-zero).
+
+## 5. Symbol Best
+**BTC/USDT**: WEAK_CANDIDATE (top net 0.197, 9 configs; multi-strategy: breakout/prev_day_hl; but OOS -0.055 penalizes).
+**ETH/USDT**: WEAK_CANDIDATE (net 0.172, high WR 0.47).
+
+Single-symbol GBP/USD bollinger_touch: REJECT (tiny 26 trades).
+
+## 6. Timeframe Best
+**H4**: WEAK_CANDIDATE (higher net 0.136 vs H1 0.074; 25 valid configs vs 12; better SQN).
+
+## 7. Session Best
+**all**: NEEDS_MORE_DATA (only session tested; no london/ny breakout valid).
+
+## 8. LONG vs SHORT
+**both**: NEEDS_MORE_DATA (only direction tested; no long/short split).
+
+## 9. Setups Collapsed After Fees
+None (no gross-profitable but net-negative cases; report confirms).
+
+## 10. Setups with Too Little Sample (<30 trades)
+- **trend_momentum**: 363 configs (ema_cross dominant; penalize all <30).
+- **mean_reversion**: 74 configs (bollinger_touch ETH H4 at 24 trades: NEEDS_MORE_DATA).
+- **breakout**: 58 configs (session_opening_range often 50+ but some <30).
+- **pullback**: 2 configs.
+
+## 11. Engine A (EMA/RSI+MACD/ADX) Recommendations
+- **Keep**: MACD direction (adx_min=0 on ETH/USDT H1: WEAK_CANDIDATE, PF 1.93; test as momentum factor).
+- **Remove/Demote**: EMA cross (all REJECT; hurts trend coherence scoring).
+- **Tune**: ADX gate lower (0-20 helps MACD but OOS fails; direction: test 15-25 on crypto H4); RSI confirm NEEDS_MORE_DATA (no edge).
+- Not trustworthy: No multi-symbol cluster beyond crypto.
+
+## 12. Engine B (PA Breakout/Checklist) Recommendations
+- **Keep**: prev_day_hl (XAU H4 STRONG_CANDIDATE, 67 trades; atr_expand_min=0.5).
+- **Remove/Demote**: session_opening_range (REJECT; OOS collapse despite PF>1).
+- **Tune**: Opening range bars=6 (atr_expand_min=0-0.5: WEAK_CANDIDATE but single TF/symbol); add multi-session filter.
+- Not trustworthy: No engine_b_proxy; all breakout hurts attribution.
+
+## 13. Engine D (VP/OrderFlow Crypto Scalping) Recommendations
+**NEEDS_MORE_DATA** (no valid results; missing telemetry for POC/VAH/CVD/VWAP/AAA).
+- **Keep/Remove/Tune**: None (extend to H1/H4 crypto).
+
+## 14. Next Smallest Useful Test
+Expand to 8 symbols (add 2 more crypto: SOL/USDT, BNB/USDT), H4 only, families=['mean_reversion','breakout'], sessions=['london','ny'], directions=['long','short']. Reason: Test bollinger/prev_day_hl clusters for OOS/fee survival.
+
+## 15. What Should NOT Be Tested Further Right Now
+- ema_cross (all REJECT, massive samples confirm no edge).
+- london_breakout/ny_breakout (0% pass, hurts).
+- forex H1 (near-zero net, tiny samples).
+
+**Overall:** Weak edges in crypto H4 mean_reversion/breakout; prioritize validation. Robustness low (~0.49); no live changes.
+
+```json
+{
+  "overall_verdict": "WEAK_EDGES_CRYPTO_H4; heavy penalization for small samples/OOS decay; no live actions",
+  "top_candidates": [
+    {"strategy": "bollinger_touch", "symbol": "ETH/USDT", "tf": "H4", "label": "STRONG_CANDIDATE"},
+    {"strategy": "prev_day_hl", "symbol": "XAU/USD", "tf": "H4", "label": "STRONG_CANDIDATE"},
+    {"strategy": "macd_direction", "symbol": "ETH/USDT", "tf": "H1", "label": "WEAK_CANDIDATE"}
+  ],
+  "rejected_setups": [
+    {"strategy": "ema_cross", "reason": "0% pass_rate, consistent losses across 432 configs"},
+    {"strategy": "session_opening_range", "reason": "OOS failure despite gross PF>1"},
+    {"strategy": "london_breakout", "reason": "0% pass, avg_net -0.072"}
+  ],
+  "engine_a": {
+    "keep": ["macd_direction (adx_min=0)"],
+    "remove_or_demote": ["ema_cross"],
+    "tune": ["ADX gate (test 15-25 on crypto)", "RSI confirm (disable?)"],
+    "next_tests": ["multi-symbol MACD H4"]
+  },
+  "engine_b": {
+    "keep": ["prev_day_hl (atr_expand_min=0.5)"],
+    "remove_or_demote": ["session_opening_range"],
+    "tune": ["range_bars=6 with session filter"],
+    "next_tests": ["london/ny splits"]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": ["Add POC/VAH proxies on crypto H1/H4"]
+  },
+  "data_quality_warnings": ["Tiny samples dominate tops (<30 trades)", "OOS negative in 80% valid"],
+  "telemetry_warnings": ["Missing Engine B/D proxies; untrustworthy"],
+  "next_tiny_test": {
+    "symbols": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"],
+    "timeframes": ["H4"],
+    "strategy_families": ["mean_reversion", "breakout"],
+    "reason": "Validate clusters with sessions/directions"
+  },
+  "do_not_do_next": ["ema_cross variants", "forex H1 only", "london/ny breakout"]
+}
+```

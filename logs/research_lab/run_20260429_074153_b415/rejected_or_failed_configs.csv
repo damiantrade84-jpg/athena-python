@@ -1,0 +1,2 @@
+run_id,symbol,asset_class,timeframe,family,strategy_name,params_str,direction,session,status,trade_count,win_rate,profit_factor,avg_return,expectancy,max_drawdown,sharpe,sqn,exposure_pct,avg_duration_bars,gross_return,net_return,is_return,oos_return,robustness_score,param_sensitivity,skip_reason,data_source
+run_20260429_074153_b415,BTC/USDT,crypto,M15,mean_reversion,bollinger_touch,num_std=2.0|period=20,both,all,REJECT,42,0.571429,0.720925,-0.000712,-0.000712,-0.041022,-1.865946,-0.733433,0.042042,12.952381,-0.030273,-0.030273,-0.016938,-0.009363,0.517825,,,binance_rest

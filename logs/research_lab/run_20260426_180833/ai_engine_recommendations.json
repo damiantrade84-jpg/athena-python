@@ -1,0 +1,48 @@
+{
+  "engine_a": {
+    "keep": [
+      "macd_direction (adx_min=0)"
+    ],
+    "remove_or_demote": [
+      "ema_cross",
+      "rsi_confirm"
+    ],
+    "tune": [
+      "ADX_min >20 on H4 commodities"
+    ],
+    "next_tests": [
+      "RSI+MACD on XAG/USD H4"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (strong_close_pct=0.7)"
+    ],
+    "remove_or_demote": [
+      "ob_bos",
+      "fvg_detection"
+    ],
+    "tune": [
+      "location/RR room checks"
+    ],
+    "next_tests": [
+      "BOS/CHoCH on commodities H4"
+    ]
+  },
+  "engine_d": {
+    "keep": [
+      "micro_breakout (range_bars=3, atr_sl_mult=0.5-1.0)"
+    ],
+    "remove_or_demote": [
+      "CVD/VWAP proxies"
+    ],
+    "tune": [
+      "fee_guard_r=0.5, POC/VAH/VAL grades"
+    ],
+    "next_tests": [
+      "absorption on XAU/USD H4"
+    ]
+  },
+  "generated_at": "2026-04-26T18:12:05.211554+00:00",
+  "safety_note": "These are backtest discovery findings only. Do NOT apply to live thresholds without further validation."
+}

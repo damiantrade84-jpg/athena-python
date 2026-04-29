@@ -1,0 +1,50 @@
+{
+  "engine_a": {
+    "keep": [
+      "macd_direction (adx_min=0-20)"
+    ],
+    "remove_or_demote": [
+      "ema_cross",
+      "rsi_confirm"
+    ],
+    "tune": [
+      "ADX >20",
+      "EMA D1/H4 coherence"
+    ],
+    "next_tests": [
+      "MACD on commodity H4"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (strong_close_pct=0.7)"
+    ],
+    "remove_or_demote": [
+      "fvg_detection",
+      "ob_bos"
+    ],
+    "tune": [
+      "Add commodity location filter"
+    ],
+    "next_tests": [
+      "H4 structure on XAG/XAU"
+    ]
+  },
+  "engine_d": {
+    "keep": [
+      "micro_breakout range_bars=3 atr_sl=0.5-1.0"
+    ],
+    "remove_or_demote": [
+      "AAA sequence proxies"
+    ],
+    "tune": [
+      "VP grades A/B for XAU",
+      "fee_guard_r=0.5"
+    ],
+    "next_tests": [
+      "XAU/XAG H4 expansion"
+    ]
+  },
+  "generated_at": "2026-04-26T19:13:35.065949+00:00",
+  "safety_note": "These are backtest discovery findings only. Do NOT apply to live thresholds without further validation."
+}

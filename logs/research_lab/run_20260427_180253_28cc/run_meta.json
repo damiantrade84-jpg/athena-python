@@ -1,0 +1,21 @@
+{
+  "run_id": "run_20260427_180253_28cc",
+  "mode": "small",
+  "symbol_count": 1,
+  "timeframes": [
+    "H4"
+  ],
+  "families": [
+    "breakout"
+  ],
+  "specs_count": 4,
+  "results_count": 4,
+  "direction": "both",
+  "generated_at": "2026-04-27T18:02:53.686886+00:00",
+  "session_id": "sess_20260427_180242_72ae69",
+  "market_group": "forex",
+  "trading_style": "intra",
+  "research_depth": "standard",
+  "role": "validation",
+  "parent_run_id": "run_20260427_180242_a66738"
+}

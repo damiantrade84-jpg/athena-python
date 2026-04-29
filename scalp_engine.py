@@ -26,6 +26,7 @@ import logging
 import math
 import threading
 import time as _time
+from collections import Counter
 import pandas as pd
 from datetime import datetime, time, timezone
 from typing import Any, Optional
@@ -508,6 +509,153 @@ def _current_utc_datetime() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _normalize_session_mode(raw: Any) -> str:
+    """Map common SESSION_MODE typos/aliases to canonical keys used by scalp_session_window."""
+    mode = str(raw or "new_york").strip().lower()
+    key = mode.replace("-", "_").replace(" ", "_").replace("/", "_")
+    while "__" in key:
+        key = key.replace("__", "_")
+    aliases = {
+        "ny": "new_york",
+        "newyork": "new_york",
+        "new_york": "new_york",
+        "us": "new_york",
+        "london_new_york": "london_ny",
+        "londonny": "london_ny",
+        "london_ny": "london_ny",
+        "overlap": "london_ny",
+        "lny": "london_ny",
+        "24_7": "all",
+        "247": "all",
+        "24x7": "all",
+    }
+    return aliases.get(key, key)
+
+
+def _resolved_normalized_session_mode(cfg: dict, *, backtest: bool = False) -> str:
+    mode_key = "BT_SESSION_MODE" if backtest else "SESSION_MODE"
+    raw_mode = cfg.get(mode_key, cfg.get("SESSION_MODE", "new_york"))
+    if str(raw_mode).strip().lower() in {"inherit", "default"}:
+        raw_mode = cfg.get("SESSION_MODE", "new_york")
+    return _normalize_session_mode(raw_mode)
+
+
+def _as_fraction(
+    value: Any,
+    default: float,
+    *,
+    clamp_minmax: tuple[float, float] = (0.01, 0.99),
+) -> float:
+    """Interpret YAML fractions: accept 0.70 or accidental 70 (→ 0.70). Clamp to range."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    if v > 1.0:
+        v = v / 100.0
+    lo, hi = clamp_minmax
+    return max(lo, min(hi, v))
+
+
+def _as_value_area_pct(value: Any, default: float = 0.70) -> float:
+    """Match volume_profile.compute_fixed_range_volume_profile VA clamp [0.1, 0.95]."""
+    return _as_fraction(value, default, clamp_minmax=(0.1, 0.95))
+
+
+def _merge_vp_aliases(vp: dict) -> dict:
+    """Ensure poc/vah/val exist when optional alternate keys appear on upstream dicts."""
+    def _first_num(keys: tuple[str, ...]) -> Optional[float]:
+        for k in keys:
+            rv = vp.get(k)
+            if rv is None:
+                continue
+            try:
+                return float(rv)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    out = dict(vp)
+    if out.get("poc") is None:
+        p = _first_num(("poc", "POC", "point_of_control"))
+        if p is not None:
+            out["poc"] = p
+    if out.get("vah") is None:
+        p = _first_num(("vah", "VAH", "va_high", "value_area_high", "value_high"))
+        if p is not None:
+            out["vah"] = p
+    if out.get("val") is None:
+        p = _first_num(("val", "VAL", "va_low", "value_area_low", "value_low"))
+        if p is not None:
+            out["val"] = p
+    return out
+
+
+def summarize_engine_d_scan(result: dict) -> dict:
+    """Aggregate skip reasons vs signal funnel (gate_result, executable, fail_reasons).
+
+    Rows in ``skipped`` are hard early exits (no setup, stale data, spread, umbrella session).
+    Grade / RR / fee guard failures appear on ``signals`` with gate_result executable flags.
+    """
+    skipped = result.get("skipped") or []
+    signals = result.get("signals") or []
+    skipped_reason_counts = dict(Counter(s.get("reason", "unknown") for s in skipped).most_common())
+    gate_counts = dict(Counter(str(s.get("gate_result") or "UNKNOWN") for s in signals).most_common())
+    executable_counts = {
+        "executable_true": sum(1 for s in signals if s.get("executable")),
+        "executable_false": sum(1 for s in signals if not s.get("executable")),
+    }
+    flat_fails = Counter()
+    for s in signals:
+        for fr in s.get("fail_reasons") or []:
+            flat_fails[str(fr)] += 1
+        for sw in s.get("soft_warnings") or []:
+            flat_fails[f"warning:{sw}"] += 1
+
+    soft_counts = Counter()
+    for s in signals:
+        for sw in s.get("soft_warnings") or []:
+            soft_counts[str(sw)] += 1
+
+    return {
+        "counts": {
+            "skipped_rows": len(skipped),
+            "signal_candidates": len(signals),
+            "sessions_active_len": len(result.get("sessions_active") or []),
+        },
+        "skipped_reason_counts": skipped_reason_counts,
+        "signals_gate_result_counts": gate_counts,
+        "signals_executable_breakdown": executable_counts,
+        "signals_fail_and_warning_flat_counts": dict(flat_fails.most_common(40)),
+        "signals_soft_warnings_counts": dict(soft_counts.most_common(20)),
+        "top_level_reason": result.get("reason"),
+        "session_label": result.get("session"),
+    }
+
+
+def _finalize_run_scalp_scan_result(
+    *,
+    signals: list,
+    skipped: list,
+    scanned: int,
+    session_name: str,
+    sessions_active: list | None = None,
+    reason: Any = None,
+) -> dict:
+    """Attach ``diagnostic_summary`` to scan responses (including early-exit payloads)."""
+    out: dict[str, Any] = {
+        "signals": signals,
+        "skipped": skipped,
+        "scanned": scanned,
+        "session": session_name,
+        "sessions_active": list(sessions_active or []),
+    }
+    if reason is not None:
+        out["reason"] = reason
+    out["diagnostic_summary"] = summarize_engine_d_scan(out)
+    return out
+
+
 def _coerce_utc_datetime(value: Any) -> Optional[datetime]:
     if value is None:
         return None
@@ -564,9 +712,7 @@ def get_current_sessions() -> list:
 def get_grade_sessions_for_mode(asset_type: str = "forex", when: Any = None, *, backtest: bool = False) -> list:
     """Return session labels used by quality grading under the configured mode."""
     cfg = CONFIG.get("SCALP_ENGINE", {})
-    mode_key = "BT_SESSION_MODE" if backtest else "SESSION_MODE"
-    raw_mode = str(cfg.get(mode_key, cfg.get("SESSION_MODE", "new_york")) or "new_york").strip().lower()
-    mode = raw_mode if raw_mode not in {"inherit", "default"} else str(cfg.get("SESSION_MODE", "new_york")).strip().lower()
+    mode = _resolved_normalized_session_mode(cfg, backtest=backtest)
     if mode in {"all", "any", "disabled", "off"}:
         return ["london", "new_york"]
     return get_sessions_for_time(asset_type, when=when)
@@ -616,9 +762,7 @@ def scalp_session_window(
     if not cfg.get(session_filter_key, True):
         return True, "all"
 
-    mode_key = "BT_SESSION_MODE" if backtest else "SESSION_MODE"
-    raw_mode = str(cfg.get(mode_key, cfg.get("SESSION_MODE", "new_york")) or "new_york").strip().lower()
-    mode = raw_mode if raw_mode not in {"inherit", "default"} else str(cfg.get("SESSION_MODE", "new_york")).strip().lower()
+    mode = _resolved_normalized_session_mode(cfg, backtest=backtest)
     if mode in {"all", "any", "disabled", "off"}:
         return True, "all"
 
@@ -752,8 +896,8 @@ def _build_volume_profile(candles: list) -> dict:
     """
     cfg = CONFIG.get("SCALP_ENGINE", {})
     num_bins = int(cfg.get("VP_BINS", 100))
-    va_pct = float(cfg.get("VP_VALUE_AREA_PCT", cfg.get("VP_VA_PCT", 0.70)))
-    lvn_factor = float(cfg.get("VP_LVN_THRESHOLD", cfg.get("VP_LVN_FACTOR", 0.30)))
+    va_pct = _as_value_area_pct(cfg.get("VP_VALUE_AREA_PCT", cfg.get("VP_VA_PCT", 0.70)), 0.70)
+    lvn_factor = _as_fraction(cfg.get("VP_LVN_THRESHOLD", cfg.get("VP_LVN_FACTOR", 0.30)), 0.30)
 
     if len(candles) < 20:
         return {"valid": False, "reason": "insufficient_candles_for_vp"}
@@ -835,7 +979,8 @@ def _build_volume_profile(candles: list) -> dict:
         from volume_profile import compute_fixed_range_volume_profile
 
         vp = compute_fixed_range_volume_profile(candles, bins=num_bins, value_area_pct=va_pct)
-        if vp and vp.get("profile_valid") and vp.get("poc") is not None:
+        vp = _merge_vp_aliases(dict(vp if vp else {}))
+        if vp.get("profile_valid") and vp.get("poc") is not None:
             result = dict(vp)
             result["valid"] = True
             if not result.get("lvn_levels") or not result.get("distribution"):
@@ -867,8 +1012,8 @@ def _build_trade_bucket_volume_profile(display: str, reference_ts=None, require_
     min_buckets = int(cfg.get("TRADE_BUCKET_MIN_LEVELS", 8))
     min_volume = float(cfg.get("TRADE_BUCKET_MIN_VOLUME", 0.0))
     max_age_sec = int(cfg.get("TRADE_BUCKET_MAX_AGE_SEC", 300))
-    va_pct = float(cfg.get("VP_VALUE_AREA_PCT", cfg.get("VP_VA_PCT", 0.70)))
-    lvn_factor = float(cfg.get("VP_LVN_THRESHOLD", cfg.get("VP_LVN_FACTOR", 0.30)))
+    va_pct = _as_value_area_pct(cfg.get("VP_VALUE_AREA_PCT", cfg.get("VP_VA_PCT", 0.70)), 0.70)
+    lvn_factor = _as_fraction(cfg.get("VP_LVN_THRESHOLD", cfg.get("VP_LVN_FACTOR", 0.30)), 0.30)
     symbol = str(display or "").replace("/", "").upper()
     try:
         from athena.microstructure.trade_bucket_store import query_session_buckets
@@ -939,7 +1084,7 @@ def _classify_market_state(vp: dict) -> str:
     """
     br = vp.get("balance_ratio")
     cfg = CONFIG.get("SCALP_ENGINE", {})
-    threshold = float(cfg.get("BALANCE_THRESHOLD", 0.40))
+    threshold = _as_fraction(cfg.get("BALANCE_THRESHOLD", 0.40), 0.40)
     if br is None:
         log.debug("[SCALP] balance_ratio unavailable — defaulting to 'balance'")
         return "balance"
@@ -1362,11 +1507,14 @@ def _classify_setup(
     if cfg.get("SETUP_MEAN_REVERSION", True) and market_state == "balance" and location in ("at_vah", "at_val"):
         direction = "SHORT" if location == "at_vah" else "LONG"
 
-        # Need at least one confirmation: absorption OR CVD agrees OR VWAP lean agrees
+        # Need at least one confirmation: absorption OR CVD agrees OR VWAP lean agrees.
+        # Neutral CVD (None) matches outside_va mean-reversion behaviour when enabled.
         _cvd_pre = cvd.get("direction")
         _has_abs = _has_meaningful_absorption(absorption, asset_type)
         _vwap_pre = (vwap.get("lean") == direction)
-        if not _has_abs and not (_cvd_pre == direction) and not _vwap_pre:
+        allow_neutral_cvd = bool(cfg.get("ALLOW_NEUTRAL_CVD_AT_VA_EXTREME", True))
+        cvd_pre_ok = (_cvd_pre == direction) or (allow_neutral_cvd and _cvd_pre is None)
+        if not _has_abs and not cvd_pre_ok and not _vwap_pre:
             return {"valid": False, "reason": "no_absorption_at_va_extreme"}
 
         # CVD divergence: price at high but CVD falling (SHORT), or vice versa
@@ -2062,15 +2210,17 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
     max_daily = int(cfg.get("MAX_DAILY_LOSSES", 3))
     if cfg.get("MAX_DAILY_LOSSES") and _session_snapshot["total_losses_today"] >= max_daily:
         log.warning(f"[SCALP] Daily loss limit reached: {_session_snapshot['total_losses_today']} losses")
-        return {
-            "signals": [],
-            "skipped": [
+        return _finalize_run_scalp_scan_result(
+            signals=[],
+            skipped=[
                 {"pair": display, "reason": f"MAX_DAILY_LOSSES ({max_daily}) reached"}
                 for display in pairs_or_symbols
             ],
-            "scanned": 0,
-            "session": "DAILY_LOSS_LIMIT", "reason": f"MAX_DAILY_LOSSES ({max_daily}) reached",
-        }
+            scanned=0,
+            session_name="DAILY_LOSS_LIMIT",
+            sessions_active=[],
+            reason=f"MAX_DAILY_LOSSES ({max_daily}) reached",
+        )
 
     sessions = get_current_sessions()
     mt5_session_ok, session_name = scalp_session_window("forex")
@@ -2079,13 +2229,14 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
     if not mt5_session_ok and not crypto_session_ok:
         for display in pairs_or_symbols:
             _record_stability_sample(display, _guess_asset_type(display), False, reason="OUTSIDE_SESSION")
-        return {
-            "signals": [],
-            "skipped": [{"pair": display, "reason": "OUTSIDE_SESSION"} for display in pairs_or_symbols],
-            "scanned": 0,
-            "session": session_name,
-            "reason": "OUTSIDE_SESSION",
-        }
+        return _finalize_run_scalp_scan_result(
+            signals=[],
+            skipped=[{"pair": display, "reason": "OUTSIDE_SESSION"} for display in pairs_or_symbols],
+            scanned=0,
+            session_name=session_name,
+            sessions_active=sessions,
+            reason="OUTSIDE_SESSION",
+        )
 
     signals = []
     skipped = []
@@ -2681,7 +2832,6 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
     )
 
     if skipped:
-        from collections import Counter
         reason_counts = Counter(s.get("reason", "unknown") for s in skipped)
         for reason, count in reason_counts.most_common():
             log.warning(f"[SCALP] Skip reason: {reason} × {count}")
@@ -2695,13 +2845,14 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             else:
                 log.warning(msg)
 
-    return {
-        "signals": signals,
-        "skipped": skipped,
-        "scanned": len(pairs_or_symbols),
-        "session": session_name,
-        "sessions_active": sessions,
-    }
+    return _finalize_run_scalp_scan_result(
+        signals=signals,
+        skipped=skipped,
+        scanned=len(pairs_or_symbols),
+        session_name=session_name,
+        sessions_active=sessions,
+        reason=None,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

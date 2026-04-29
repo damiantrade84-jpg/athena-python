@@ -1,0 +1,116 @@
+{
+  "session_id": "sess_20260429_073729_8c6fb4",
+  "market_group": "crypto",
+  "trading_style": "scalp",
+  "research_depth": "deep",
+  "status": "COMPLETE",
+  "current_phase": "COMPLETE",
+  "progress_pct": 100,
+  "discovery_run_id": "run_20260429_073729_34c0b5",
+  "plan_id": "plan_f72e6614",
+  "validation_run_ids": [
+    "run_20260429_073802_a5c6",
+    "run_20260429_073802_4e2b"
+  ],
+  "followup_run_ids": [],
+  "ai_review_status": "COMPLETE",
+  "final_verdict": "VALIDATION_CANDIDATE",
+  "final_summary": "Session sess_20260429_073729_8c6fb4 | Crypto Scalp | 12 configs | 0 strong | 12 weak | Verdict: VALIDATION_CANDIDATE",
+  "best_clusters": [],
+  "weak_clusters": [
+    {
+      "strategy_name": "vwap_deviation",
+      "symbol": "ADA/USDT",
+      "timeframe": "H1",
+      "net_return": 0.367122,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "vwap_deviation",
+      "symbol": "ETH/USDT",
+      "timeframe": "M15",
+      "net_return": 0.101484,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "rsi_extreme",
+      "symbol": "BNB/USDT",
+      "timeframe": "H1",
+      "net_return": 0.07288,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "ADA/USDT",
+      "timeframe": "M15",
+      "net_return": 0.05489,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "BNB/USDT",
+      "timeframe": "H1",
+      "net_return": 0.009652,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "BTC/USDT",
+      "timeframe": "M15",
+      "net_return": 0.019938,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "SOL/USDT",
+      "timeframe": "M15",
+      "net_return": 0.028149,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "ADA/USDT",
+      "timeframe": "H1",
+      "net_return": 0.014366,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "ADA/USDT",
+      "timeframe": "H1",
+      "net_return": 0.017834,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "ADA/USDT",
+      "timeframe": "M15",
+      "net_return": 0.002748,
+      "status": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_clusters": [],
+  "do_not_implement": [],
+  "next_research_action": "Run deeper validation sweep across more symbols for scalp style before considering live use.",
+  "next_research_params": {
+    "market_group": "crypto",
+    "trading_style": "scalp",
+    "research_depth": "quick",
+    "symbols": [
+      "ADA/USDT",
+      "ETH/USDT",
+      "BNB/USDT"
+    ],
+    "timeframes": [
+      "M15",
+      "H1"
+    ],
+    "families": [
+      "mean_reversion"
+    ],
+    "reason": "Broaden validation before live consideration"
+  },
+  "errors": [],
+  "created_at": "2026-04-29T07:37:29.048468+00:00",
+  "updated_at": "2026-04-29T07:38:28.720434+00:00"
+}

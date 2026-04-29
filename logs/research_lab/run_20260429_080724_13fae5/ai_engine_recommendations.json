@@ -1,0 +1,44 @@
+{
+  "engine_a": {
+    "keep": [
+      "macd_direction (adx_min=0 on ETH H1)"
+    ],
+    "remove_or_demote": [
+      "ema_cross (all)"
+    ],
+    "tune": [
+      "ADX_min directionally >20; disable RSI confirm"
+    ],
+    "next_tests": [
+      "Test MACD on H4 + new symbols"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (fvg=False, strong_close=0.8)"
+    ],
+    "remove_or_demote": [
+      "ob_bos"
+    ],
+    "tune": [
+      "Loosen strong_close_pct <0.8 with RR filter"
+    ],
+    "next_tests": [
+      "Split sessions (london/ny) on H4 crypto"
+    ]
+  },
+  "engine_d": {
+    "keep": [
+      "vwap_deviation std_threshold=1.5"
+    ],
+    "remove_or_demote": [],
+    "tune": [
+      "Grade A/B for H1/M15 crypto scalps"
+    ],
+    "next_tests": [
+      "Add POC/VAH/VAL + CVD on H1 crypto"
+    ]
+  },
+  "generated_at": "2026-04-29T08:09:41.827483+00:00",
+  "safety_note": "These are backtest discovery findings only. Do NOT apply to live thresholds without further validation."
+}

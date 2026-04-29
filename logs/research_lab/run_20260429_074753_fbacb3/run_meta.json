@@ -1,0 +1,22 @@
+{
+  "run_id": "run_20260429_074753_fbacb3",
+  "mode": "tiny",
+  "symbol_count": 3,
+  "timeframes": [
+    "D1",
+    "H4"
+  ],
+  "families": [
+    "pullback",
+    "mean_reversion"
+  ],
+  "specs_count": 12,
+  "results_count": 72,
+  "direction": "both",
+  "generated_at": "2026-04-29T07:48:01.126406+00:00",
+  "session_id": "sess_20260429_074753_07eeda",
+  "market_group": "forex",
+  "trading_style": "swing",
+  "research_depth": "quick",
+  "role": "discovery"
+}

@@ -1,0 +1,24 @@
+{
+  "run_id": "run_20260426_180833",
+  "mode": "full",
+  "symbol_count": 16,
+  "timeframes": [
+    "M15",
+    "H1",
+    "H4",
+    "D1"
+  ],
+  "families": [
+    "trend_momentum",
+    "pullback",
+    "breakout",
+    "mean_reversion",
+    "volatility",
+    "engine_b_proxy",
+    "engine_d_proxy"
+  ],
+  "specs_count": 94,
+  "results_count": 4512,
+  "direction": "both",
+  "generated_at": "2026-04-26T18:11:20.181821+00:00"
+}

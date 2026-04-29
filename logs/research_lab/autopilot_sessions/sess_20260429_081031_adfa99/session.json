@@ -1,0 +1,131 @@
+{
+  "session_id": "sess_20260429_081031_adfa99",
+  "market_group": "forex",
+  "trading_style": "swing",
+  "research_depth": "deep",
+  "status": "COMPLETE",
+  "current_phase": "COMPLETE",
+  "progress_pct": 100,
+  "discovery_run_id": "run_20260429_081031_bb52a2",
+  "plan_id": "plan_e732571f",
+  "validation_run_ids": [
+    "run_20260429_081058_2ae4",
+    "run_20260429_081058_8dc5",
+    "run_20260429_081058_297b"
+  ],
+  "followup_run_ids": [],
+  "ai_review_status": "COMPLETE",
+  "final_verdict": "IMPLEMENTATION_CANDIDATE",
+  "final_summary": "Session sess_20260429_081031_adfa99 | Forex Swing | 46 configs | 1 strong | 45 weak | Verdict: IMPLEMENTATION_CANDIDATE",
+  "best_clusters": [
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "AUD/USD",
+      "timeframe": "D1",
+      "net_return": 0.289775,
+      "status": "STRONG_CANDIDATE"
+    }
+  ],
+  "weak_clusters": [
+    {
+      "strategy_name": "vwap_deviation",
+      "symbol": "AUD/USD",
+      "timeframe": "D1",
+      "net_return": 0.408012,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "rsi_extreme",
+      "symbol": "USD/JPY",
+      "timeframe": "H4",
+      "net_return": 0.037353,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "macd_direction",
+      "symbol": "GBP/USD",
+      "timeframe": "D1",
+      "net_return": 0.123327,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "macd_direction",
+      "symbol": "GBP/USD",
+      "timeframe": "D1",
+      "net_return": 0.149025,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "macd_direction",
+      "symbol": "USD/JPY",
+      "timeframe": "H4",
+      "net_return": 0.068879,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "macd_direction",
+      "symbol": "USD/JPY",
+      "timeframe": "H4",
+      "net_return": 0.054424,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "session_opening_range",
+      "symbol": "USD/JPY",
+      "timeframe": "D1",
+      "net_return": 0.266163,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "session_opening_range",
+      "symbol": "USD/JPY",
+      "timeframe": "D1",
+      "net_return": 0.266163,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "EUR/USD",
+      "timeframe": "D1",
+      "net_return": 0.052906,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "session_opening_range",
+      "symbol": "AUD/USD",
+      "timeframe": "H4",
+      "net_return": 0.091051,
+      "status": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_clusters": [],
+  "do_not_implement": [
+    "ema_cross variants",
+    "H4 trend_momentum single-symbol",
+    "engine_b_proxy structure_filters"
+  ],
+  "next_research_action": "Run ['mean_reversion'] on ['AUD/USD', 'GBP/USD', 'EUR/USD', 'USD/JPY', 'BTC/USD', 'ETH/USD'] at ['D1'] \u2014 Validate bollinger_touch/vwap clusters >100 trades/symbol",
+  "next_research_params": {
+    "market_group": "forex",
+    "trading_style": "swing",
+    "research_depth": "quick",
+    "symbols": [
+      "AUD/USD",
+      "GBP/USD",
+      "EUR/USD",
+      "USD/JPY",
+      "BTC/USD",
+      "ETH/USD"
+    ],
+    "timeframes": [
+      "D1"
+    ],
+    "families": [
+      "mean_reversion"
+    ],
+    "reason": "Validate bollinger_touch/vwap clusters >100 trades/symbol"
+  },
+  "errors": [],
+  "created_at": "2026-04-29T08:10:31.427181+00:00",
+  "updated_at": "2026-04-29T08:11:38.304460+00:00"
+}

@@ -1,0 +1,92 @@
+# Athena Research Lab — AI Review
+**Run ID:** `run_20260427_185143_6e8d73`  **Model:** `grok-4-1-fast-reasoning`  **Generated:** 2026-04-27 18:52 UTC
+
+> AI-powered analysis.
+> Backtest discovery only — NOT a live execution recommendation.
+
+---
+
+# Athena Pro v4 Backtest Discovery Decision Memo
+**Run ID:** `run_20260427_185143_6e8d73` | **Analyst:** Quantitative Research | **Date:** 2026-04-28  
+**Disclaimer:** These are exploratory backtest discovery results at lowered BT_MIN thresholds. **Do NOT recommend live execution.** **Do NOT copy thresholds to live gates.** All findings labeled per safety rules. Tiny samples (<30 trades), single-asset focus, and OOS failures heavily penalize robustness. No clusters across symbols/timeframes; all one-offs.
+
+## 1. Strategy Family Assessment
+- **breakout** family (only family tested): WEAK_CANDIDATE  
+  Avg net_return=0.0161, PF=1.2257, WR=0.4192 across 10 valid configs. Gross-profitable in IS but OOS often negative (avg oos_return=-0.0196). Tiny samples (avg 31 trades). No robust cluster; survives fees but lacks multi-symbol replication.
+
+## 2. Indicator That Helped Most
+No indicators "helped" (all pass_rates ≤0.25, avg_net_returns negative in attribution). **prev_day_hl**: WEAK_CANDIDATE (highest pass_rate=0.25, avg_net=-0.0201). Marginal edge on USD/CAD/USD/JPY H4 but OOS decay and tiny N=29-39.
+
+## 3. Indicator That Hurt Most
+**session_opening_range**: REJECT (pass_rate=0.125, avg_net=-0.0367, avg_sqn=-1.07). Consistent losses post-fees, poor OOS.
+
+## 4. Asset Group Assessment
+- **forex**: WEAK_CANDIDATE (only group; avg net=0.0161). No comparison; penalize for lack of diversification.
+
+## 5. Symbol Assessment
+- **USD/CAD**: WEAK_CANDIDATE (best: avg_net=0.0233, WR=0.4738, N=5 configs ~30 trades).  
+- **NZD/USD**: REJECT (avg_net=0.0088 but oos_return=-0.0508).  
+- **USD/JPY**: REJECT (avg_net=0.0088, oos_return=-0.0406).  
+Penalize single-symbol focus; no cross-symbol cluster.
+
+## 6. Timeframe Assessment
+- **H4**: WEAK_CANDIDATE (only TF tested; avg_net=0.0161). Insufficient data for verdict.
+
+## 7. Session Assessment
+- **all**: NEEDS_MORE_DATA (only session; no splits like london/ny effective due to tiny N<20).
+
+## 8. LONG vs SHORT
+- **both**: WEAK_CANDIDATE (only direction tested). No directional split; NEEDS_MORE_DATA for long/short isolation.
+
+## 9. Setups That Collapsed After Fees
+None purely gross-profitable but net-negative (gross≈net in all). However:  
+- **breakout/prev_day_hl** (USD/JPY): Gross-positive IS but net oos_return negative (-0.0416). REJECT for fee fragility.
+
+## 10. Setups with Too Little Sample Size
+42 configs total (all **breakout** family):  
+- **breakout/london_breakout**: REJECT/NEEDS_MORE_DATA (N=12-19).  
+- **breakout/ny_breakout**: REJECT (N=0).  
+Penalize all <30 trades per rule.
+
+## 11. Engine A Recommendations
+NEEDS_MORE_DATA — No `trend_momentum` or `pullback` results in this run. Not trustworthy due to missing data. Keep current live floor (2.1). No changes.
+
+## 12. Engine B Recommendations
+WEAK_CANDIDATE signals in **breakout** proxies (prev_day_hl, session_opening_range).  
+- **Keep:** None firmly (no robust clusters).  
+- **Remove_or_demote:** session_opening_range (consistent hurt), ny_breakout/london_breakout (tiny N).  
+- **Tune:** prev_day_hl atr_expand_min=0.0-1.0 (test higher ATR gate >1.0 for OOS stability); add multi-symbol filter. Checklist: Tighten location/trigger for USD/CAD H4. No live gate changes.
+
+## 13. Engine D Recommendations
+NEEDS_MORE_DATA — No `engine_d_proxy` or crypto/VP results. Not trustworthy due to missing data. No changes.
+
+## 14. Next Smallest Useful Test
+Expand to 8+ forex symbols (add EUR/USD, GBP/USD, AUD/USD, USD/CHF), test H1/M15 TFs alongside H4, include **pullback** + **trend_momentum** families for Engine A/B blend. Reason: Build clusters, fix single-symbol/OOS issues.
+
+## 15. What Should NOT Be Tested Further Right Now?
+- **breakout** family: 78/88 rejected, 36 explicit rejects, no strong edges. Prioritize families with IS/OOS alignment first.
+
+**Overall:** Weak forex H4 breakout edges (no STRONG_CANDIDATE). Prioritize data expansion over tuning. Telemetry clean (mt5 source), but results not trustworthy due to tiny N/single-symbols/OOS fails.
+
+```json
+{
+  "overall_verdict": "WEAK_CANDIDATE: Marginal breakout edges on forex H4 (USD/CAD best) but penalized for tiny N<40, single-symbols, OOS decay. No robust clusters.",
+  "top_candidates": [
+    {"strategy": "breakout/prev_day_hl (atr_expand_min=0.0)", "symbol": "USD/CAD", "tf": "H4", "label": "WEAK_CANDIDATE"},
+    {"strategy": "breakout/prev_day_hl (atr_expand_min=1.0)", "symbol": "USD/CAD", "tf": "H4", "label": "WEAK_CANDIDATE"},
+    {"strategy": "breakout/session_opening_range (atr_expand_min=0.5|range_bars=12)", "symbol": "USD/CAD", "tf": "H4", "label": "WEAK_CANDIDATE"}
+  ],
+  "rejected_setups": [
+    {"strategy": "breakout/session_opening_range", "reason": "Consistent net losses, poor SQN"},
+    {"strategy": "breakout/london_breakout", "reason": "Tiny N<20"},
+    {"strategy": "breakout/ny_breakout", "reason": "Zero trades"}
+  ],
+  "engine_a": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": ["Add trend_momentum/pullback families"]},
+  "engine_b": {"keep": ["prev_day_hl (USD/CAD H4)"], "remove_or_demote": ["session_opening_range", "london/ny_breakout"], "tune": ["atr_expand_min >1.0 for OOS"], "next_tests": ["Multi-symbol breakout filters"]},
+  "engine_d": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": ["Crypto VP proxies"]},
+  "data_quality_warnings": ["Tiny samples avg N=32", "OOS failure common", "Only 3 symbols"],
+  "telemetry_warnings": [],
+  "next_tiny_test": {"symbols": ["EUR/USD", "GBP/USD", "AUD/USD", "USD/CHF"], "timeframes": ["H1", "M15", "H4"], "strategy_families": ["pullback", "trend_momentum"], "reason": "Build multi-symbol/TF clusters, test Engine A/B proxies"},
+  "do_not_do_next": ["breakout tuning (78/88 rejected)"]
+}
+```

@@ -1,0 +1,92 @@
+# Athena Pro v4 Backtest Discovery Decision Memo
+**Analyst:** Quantitative Research Analyst  
+**Run ID:** run_20260427_184929_704c27  
+**Date:** 2026-04-27  
+**Scope:** 120 configs across 2 forex symbols (USD/CAD, GBP/JPY), H1 TF, breakout/pullback families. Tiny mode. **No valid candidates (0% pass robustness). All results untrustworthy due to tiny samples (<30 trades penalized), single-TF focus, forex-only, and consistent net losses after fees. No IS/OOS data indicates robustness issues where available. Do NOT use for live execution or threshold changes.**
+
+1. **Strategy family that worked best?**  
+   - breakout: **REJECT** (88 configs rejected; avg metrics poor: negative expectancy, low win_rate ~0.20, high drawdowns; 55 configs **NEEDS_MORE_DATA** <20 trades).  
+   - pullback: **REJECT** (32 configs rejected; avg_net_return -0.0548, avg_win_rate 0.1237, SQN -4.31 hurts performance).
+
+2. **Indicator helped most?** None. All tested (prev_day_hl **NEEDS_MORE_DATA**, london_breakout **NEEDS_MORE_DATA**, ny_breakout **REJECT**, session_opening_range **REJECT**, pullback_ema **REJECT**) show no edge. Neutral verdicts only from insufficient data.
+
+3. **Indicator hurt most?** session_opening_range (**REJECT**; avg_net_return -0.0724, avg_win_rate 0.2286, avg_SQN -3.81, consistent OOS decay).
+
+4. **Asset group worked best?** Only forex tested: **REJECT** (no edge; penalize single asset class).
+
+5. **Symbol worked best?** None. USD/CAD and GBP/JPY both **REJECT** (penalize single-symbol focus; tiny samples, net losses). GBP/JPY slightly worse (higher drawdowns).
+
+6. **Timeframe worked best?** Only H1 tested: **NEEDS_MORE_DATA** (no cross-TF robustness; penalize single TF).
+
+7. **Session worked best?** All 'all' sessions **REJECT**. london_breakout/ny_breakout **NEEDS_MORE_DATA** (15-16 trades only).
+
+8. **LONG or SHORT better?** Both directions tested: neutral/insufficient data. No edge either way (**REJECT** both).
+
+9. **Setups collapsed after fees?** None explicitly gross-profitable/net-negative (all net-negative with gross similar/negative, e.g., session_opening_range gross/net both ~-0.03). All **REJECT** for fee survival failure.
+
+10. **Setups with too little sample?** 55 breakout configs (**NEEDS_MORE_DATA** <20 trades: prev_day_hl, london_breakout, ny_breakout). Penalize <30 trades per rule.
+
+11. **Engine A (EMA/RSI/MACD/ADX)?** **REJECT** all pullback_ema proxies (no valid trend_momentum/pullback; net -0.05, low win_rate). Keep current live floor (2.1). Remove/demote weak EMA pullbacks (period=20/50). Tune: increase rsi_threshold >50, add ADX gate (>25). **NEEDS_MORE_DATA** (no robust clusters).
+
+12. **Engine B (price-action/BOS/FVG/OB)?** **REJECT** all breakout proxies (session_opening_range/prev_day_hl lose consistently). Keep strict checklist. Remove/demote range-based breakouts (range_bars=6/12). Tune: tighten atr_expand_min >1.0, add location/RR filters. **NEEDS_MORE_DATA** (tiny samples).
+
+13. **Engine D (VP/OF/CVD/VWAP)?** No results (**NEEDS_MORE_DATA**; crypto-focused but forex-only data here. Untrustworthy due to missing crypto telemetry).
+
+14. **Next smallest useful test?** Tiny mode: add 4+ forex/crypto symbols (e.g., EUR/USD, BTC/USD), test M15/H4 TFs, same families. Reason: build cross-symbol/TF clusters, escape single-symbol penalty.
+
+15. **What should NOT be tested further right now?** breakout (33 rejected configs), pullback (32 rejected). Avoid H1-only, USD/CAD+GBP/JPY-only.
+
+**Overall: REJECT entire run. No edge discovered. Expand data before tuning.**
+
+```json
+{
+  "overall_verdict": "NO_VALID_CANDIDATES",
+  "top_candidates": [],
+  "rejected_setups": [
+    {"strategy": "breakout", "reason": "88 configs rejected; negative expectancy, high drawdown"},
+    {"strategy": "pullback", "reason": "32 configs rejected; avg_net_return -0.0548"},
+    {"strategy": "session_opening_range", "reason": "HURTS most (avg_net_return -0.0724)"},
+    {"strategy": "ny_breakout", "reason": "HURTS (avg_net_return -0.0508)"},
+    {"strategy": "pullback_ema", "reason": "HURTS (avg_SQN -4.31)"}
+  ],
+  "engine_a": {
+    "keep": [],
+    "remove_or_demote": ["pullback_ema (period=20/50)"],
+    "tune": ["rsi_threshold >50", "add ADX >25"],
+    "next_tests": ["test M15/H4 with multi-symbol"]
+  },
+  "engine_b": {
+    "keep": [],
+    "remove_or_demote": ["session_opening_range", "prev_day_hl"],
+    "tune": ["atr_expand_min >1.0", "add RR/location filters"],
+    "next_tests": ["london/ny sessions on 4+ symbols"]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": ["crypto symbols (BTC/USD etc.)"]
+  },
+  "data_quality_warnings": [
+    "Tiny mode: only 2 symbols, H1 TF",
+    "55 configs <20 trades",
+    "Missing top-ranked/by-group files",
+    "No IS/OOS consistency in most"
+  ],
+  "telemetry_warnings": [
+    "Forex-only (no crypto for Engine D)",
+    "No Engine C/D proxies validated"
+  ],
+  "next_tiny_test": {
+    "symbols": ["EUR/USD", "AUD/USD", "BTC/USD", "ETH/USD"],
+    "timeframes": ["M15", "H4"],
+    "strategy_families": ["breakout", "pullback"],
+    "reason": "Add cross-symbol/TF clusters to escape penalties; include crypto for Engine D"
+  },
+  "do_not_do_next": [
+    "H1-only tests",
+    "USD/CAD+GBP/JPY only",
+    "Untuned breakout/pullback"
+  ]
+}
+```

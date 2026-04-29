@@ -1,0 +1,106 @@
+{
+  "overall_verdict": "Weak edges in mean_reversion bollinger_touch on index H4/H1; Engine A ema_alignment promising but needs multi-symbol data. Heavy small-sample/single-symbol penalties.",
+  "top_candidates": [
+    {
+      "strategy": "bollinger_touch",
+      "symbol": "US30",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "ema_alignment",
+      "symbol": "NAS100",
+      "tf": "M15",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "session_opening_range",
+      "symbol": "NAS100",
+      "tf": "H1",
+      "label": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "ema_cross",
+      "reason": "Consistent net loss (-0.11), pass_rate 0, tiny samples"
+    },
+    {
+      "strategy": "ob_bos",
+      "reason": "Hurts net (-0.147), SQN -3.07, all rejects"
+    },
+    {
+      "strategy": "prev_day_hl",
+      "reason": "Worst net (-0.232), pass_rate 0"
+    },
+    {
+      "strategy": "engine_b_proxy",
+      "reason": "72 rejects, no edge"
+    }
+  ],
+  "engine_a": {
+    "keep": [
+      "ema_alignment (ADX_min>=20)"
+    ],
+    "remove_or_demote": [
+      "ema_cross",
+      "macd_direction"
+    ],
+    "tune": [
+      "ADX gate upward (20+)",
+      "RSI_confirm=False variants"
+    ],
+    "next_tests": [
+      "Multi-symbol H4/M15 ema_alignment (>50 trades)"
+    ]
+  },
+  "engine_b": {
+    "keep": [],
+    "remove_or_demote": [
+      "ob_bos",
+      "structure_filters",
+      "london_breakout",
+      "prev_day_hl"
+    ],
+    "tune": [],
+    "next_tests": []
+  },
+  "engine_d": {
+    "keep": [
+      "vwap_deviation (neutral)"
+    ],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Crypto symbols (BTC/ETH) VP/POC/CVD on H1/H4"
+    ]
+  },
+  "data_quality_warnings": [
+    "Tiny samples dominate (282 <20 trades); limited to 2 index symbols"
+  ],
+  "telemetry_warnings": [
+    "Missing crypto data for Engine D; no session/direction splits"
+  ],
+  "next_tiny_test": {
+    "symbols": [
+      "US30",
+      "NAS100",
+      "GER40",
+      "SPX500"
+    ],
+    "timeframes": [
+      "H4",
+      "H1"
+    ],
+    "strategy_families": [
+      "mean_reversion"
+    ],
+    "reason": "Expand bollinger_touch cluster for >50 trades confirmation"
+  },
+  "do_not_do_next": [
+    "ema_cross any variants",
+    "ob_bos/structure_filters",
+    "engine_b_proxy",
+    "prev_day_hl/london_breakout"
+  ]
+}

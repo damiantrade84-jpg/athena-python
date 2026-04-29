@@ -1,0 +1,120 @@
+{
+  "overall_verdict": "mean_reversion H4 crypto (bollinger_touch) shows strongest cluster edge; trend_momentum/ema_cross globally weak. Prioritize multi-symbol validation.",
+  "top_candidates": [
+    {
+      "strategy": "bollinger_touch (num_std=2.0|period=20)",
+      "symbol": "SOL/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "bollinger_touch (num_std=2.5|period=20)",
+      "symbol": "ADA/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "macd_direction (adx_min=0|fast=12|signal=9|slow=26)",
+      "symbol": "ETH/USDT",
+      "tf": "H1",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "bollinger_touch (num_std=2.0|period=20)",
+      "symbol": "BNB/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "bollinger_touch (num_std=2.5|period=20)",
+      "symbol": "ETH/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "ema_cross",
+      "reason": "0/540 pass; avg net -0.253; low WR 16%"
+    },
+    {
+      "strategy": "ob_bos",
+      "reason": "0/120 pass; avg net -0.299"
+    },
+    {
+      "strategy": "pullback_ema",
+      "reason": "0/60 pass; avg net -0.181"
+    }
+  ],
+  "engine_a": {
+    "keep": [
+      "MACD direction (adx_min=0)"
+    ],
+    "remove_or_demote": [
+      "EMA cross/coherence",
+      "ADX gate (min=0-25)"
+    ],
+    "tune": [
+      "RSI confirm (disable)",
+      "Slow EMA periods (test 50-200)"
+    ],
+    "next_tests": [
+      "Multi-symbol H1 MACD OOS"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "Structure filters (fvg=False|strong_close=0.8)"
+    ],
+    "remove_or_demote": [
+      "OB/BOS"
+    ],
+    "tune": [
+      "FVG detection (disable)",
+      "Zone RR logic"
+    ],
+    "next_tests": [
+      "Multi-symbol H4 structure_filters"
+    ]
+  },
+  "engine_d": {
+    "keep": [
+      "VWAP deviation (std=1.5)"
+    ],
+    "remove_or_demote": [],
+    "tune": [
+      "Grade A/B/C/D thresholds",
+      "Add POC/VAH/VAL params"
+    ],
+    "next_tests": [
+      "Crypto H1/H4 VP+OF full"
+    ]
+  },
+  "data_quality_warnings": [
+    "Only crypto/binance_rest; no forex/stocks comparison"
+  ],
+  "telemetry_warnings": [],
+  "next_tiny_test": {
+    "symbols": [
+      "SOL/USDT",
+      "ETH/USDT",
+      "ADA/USDT",
+      "BNB/USDT",
+      "BTC/USDT",
+      "XRP/USDT"
+    ],
+    "timeframes": [
+      "H4"
+    ],
+    "strategy_families": [
+      "mean_reversion"
+    ],
+    "reason": "Validate bollinger_touch cluster; add 1-2 new symbols/sessions"
+  },
+  "do_not_do_next": [
+    "M15 timeframes",
+    "ema_cross params",
+    "Single-symbol deep dives",
+    "NY/London breakout"
+  ]
+}

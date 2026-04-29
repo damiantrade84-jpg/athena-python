@@ -1,0 +1,21 @@
+{
+  "run_id": "run_20260429_073357_3220",
+  "mode": "small",
+  "symbol_count": 1,
+  "timeframes": [
+    "H4"
+  ],
+  "families": [
+    "mean_reversion"
+  ],
+  "specs_count": 2,
+  "results_count": 2,
+  "direction": "both",
+  "generated_at": "2026-04-29T07:34:01.864283+00:00",
+  "session_id": "sess_20260429_073231_0123c7",
+  "market_group": "crypto",
+  "trading_style": "intra",
+  "research_depth": "deep",
+  "role": "validation",
+  "parent_run_id": "run_20260429_073231_9128a7"
+}

@@ -31,9 +31,14 @@ from scalp_engine import (
     mt5_get_live_price,
     mt5_market_open_state,
     mt5_fetch_scalp_candles,
+    summarize_engine_d_scan,
+    _normalize_session_mode,
+    _as_fraction,
+    _merge_vp_aliases,
     _build_volume_profile,
     _locate_price_vs_vp,
     _classify_market_state,
+    _classify_setup,
     _check_absorption,
     _check_cvd,
     _check_aaa_sequence,
@@ -1452,3 +1457,99 @@ def test_grade_spread_penalty_per_asset_type(monkeypatch):
         ["london"], 10.0, "SHORT", asset_type="commodity"
     )
     assert any("Tight spread" in r for r in q_comm["reasons"])
+
+
+def test_normalize_session_mode_aliases():
+    assert _normalize_session_mode("overlap") == "london_ny"
+    assert _normalize_session_mode("London_New_York") == "london_ny"
+    assert _normalize_session_mode("NY") == "new_york"
+    assert _normalize_session_mode("24/7") == "all"
+
+
+def test_as_fraction_accepts_decimal_or_percent_literal():
+    assert abs(_as_fraction(70, 0.5, clamp_minmax=(0.01, 0.99)) - 0.70) < 1e-9
+    assert abs(_as_fraction(0.15, 0.3, clamp_minmax=(0.01, 0.99)) - 0.15) < 1e-9
+
+
+def test_merge_vp_aliases_fills_standard_keys():
+    raw = {"profile_valid": True, "poc": None, "vah": None, "val": None, "POC": 1.103, "VAH": 1.106, "VAL": 1.097}
+    m = _merge_vp_aliases(dict(raw))
+    assert m["poc"] == 1.103
+    assert m["vah"] == 1.106
+    assert m["val"] == 1.097
+
+
+def test_finalize_run_scalp_scan_attachs_diagnostic_summary():
+    from scalp_engine import _finalize_run_scalp_scan_result
+
+    payload = _finalize_run_scalp_scan_result(
+        signals=[],
+        skipped=[{"pair": "XAU/USD", "reason": "OUTSIDE_SESSION"}],
+        scanned=1,
+        session_name="foo",
+        sessions_active=[],
+        reason=None,
+    )
+    assert payload["diagnostic_summary"]["skipped_reason_counts"]["OUTSIDE_SESSION"] == 1
+
+
+def test_summarize_engine_d_scan_merges_skips_and_signal_funnel():
+    result = summarize_engine_d_scan(
+        {
+            "signals": [
+                {"gate_result": "WATCHLIST", "executable": False, "fail_reasons": ["rr_below_min"], "soft_warnings": []},
+                {"gate_result": "PASS", "executable": True, "fail_reasons": [], "soft_warnings": []},
+            ],
+            "skipped": [{"pair": "X", "reason": "no_setup:balance_inside_va"}],
+            "sessions_active": [],
+            "session": "all",
+        }
+    )
+    assert result["skipped_reason_counts"].get("no_setup:balance_inside_va") == 1
+    assert result["signals_gate_result_counts"]["WATCHLIST"] == 1
+    assert "rr_below_min" in result["signals_fail_and_warning_flat_counts"]
+
+
+def test_classify_mean_reversion_va_extreme_neutral_cvd(monkeypatch):
+    """Neutral CVD at VAH matches outside_va branch when ALLOW_NEUTRAL_CVD_AT_VA_EXTREME is true."""
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {**scalp_engine.CONFIG.get("SCALP_ENGINE", {}), "ALLOW_NEUTRAL_CVD_AT_VA_EXTREME": True},
+    )
+    absorption = {"detected": False, "count": 0}
+    cvd = {"direction": None, "source": "candles"}
+    vwap = {"lean": None}
+    aaa = {}
+    price_loc = {"location": "at_vah", "nearest_level": 101.0}
+    setup = _classify_setup(
+        "balance", price_loc, absorption, cvd, aaa, vwap, None, asset_type="forex"
+    )
+    assert setup["valid"] is True
+    assert setup["setup_type"] == "mean_reversion"
+
+
+def test_classify_mean_reversion_va_extreme_neutral_cvd_respects_disable(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {**scalp_engine.CONFIG.get("SCALP_ENGINE", {}), "ALLOW_NEUTRAL_CVD_AT_VA_EXTREME": False},
+    )
+    absorption = {"detected": False, "count": 0}
+    cvd = {"direction": None, "source": "candles"}
+    setup = _classify_setup(
+        "balance",
+        {"location": "at_vah", "nearest_level": 101.0},
+        absorption,
+        cvd,
+        {},
+        {"lean": None},
+        None,
+        asset_type="forex",
+    )
+    assert setup["valid"] is False
+    assert setup.get("reason") == "no_absorption_at_va_extreme"
+
+
+
+

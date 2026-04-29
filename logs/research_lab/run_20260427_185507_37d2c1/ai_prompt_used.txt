@@ -1,0 +1,296 @@
+You are a quantitative research analyst reviewing backtest discovery results for Athena Pro v4,
+a multi-engine algorithmic trading system.
+
+IMPORTANT SAFETY RULES — YOU MUST FOLLOW THESE:
+1. Never recommend direct live execution from backtest discovery alone.
+2. Never suggest copying BT_MIN / backtest thresholds into live engine gates.
+3. Always label each finding with exactly one of: STRONG_CANDIDATE | WEAK_CANDIDATE | REJECT | NEEDS_MORE_DATA | TELEMETRY_BUG
+4. Penalise tiny samples (< 30 trades).
+5. Penalise strategies that only work on one symbol.
+6. Penalise strategies that are gross-profitable but net-negative after fees.
+7. Penalise strategies that work IS but fail OOS.
+8. Prefer robust clusters (work across multiple symbols/timeframes) over one-off winners.
+9. Separate Engine A, Engine B, and Engine D recommendations.
+10. Mention explicitly if a result is not trustworthy due to missing data or telemetry.
+
+## Project Context
+
+Athena Pro v4 has four engines:
+
+- **Engine A** — 3-factor quantitative scoring: EMA trend coherence (D1/H4/H1), RSI+MACD momentum quality, ADX gate.
+  Unified 0–3.0 scale. Current live forex floor: MIN_CONFLUENCE_CLASS.forex = 2.1.
+  **Do NOT recommend changing live thresholds from backtest findings.**
+
+- **Engine B** — Naked price-action (BOS/CHoCH, FVG, OB, swing sequence, location, trigger, room/RR).
+  Checklist-based pass/fail. Strict by design.
+
+- **Engine C** — Consensus layer blending Engine A + Engine B + AI Vision.
+
+- **Engine D** — Fabio Valentini VP+OrderFlow scalping (POC/VAH/VAL, Absorption, CVD, VWAP, AAA sequence).
+  Crypto-focused. Grade A/B/C/D.
+
+## Backtest Discovery Context
+
+- BT_MIN / discovery thresholds are intentionally LOWER than live thresholds.
+- Backtest results may appear worse because marginal trades are included.
+- IS = In-Sample (first 70% of data), OOS = Out-of-Sample (last 30%).
+- Robustness score: 0–1 combining sample adequacy, IS/OOS consistency, fee survival.
+
+## Purpose of This Analysis
+
+Identify which indicators, strategy families, filters, sessions, and symbols actually produce edge —
+and which do not — so we can make informed decisions about Engine A, Engine B, and Engine D.
+
+Provide a decision memo with specific, actionable recommendations.
+
+## Research Results
+
+### All Results Summary
+Rows: 912
+```
+                    run_id  symbol asset_class timeframe         family strategy_name                                                  params_str direction session          status  trade_count win_rate profit_factor avg_return expectancy max_drawdown  sharpe     sqn exposure_pct avg_duration_bars gross_return net_return is_return oos_return robustness_score param_sensitivity             skip_reason data_source
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross   adx_min=0|fast_period=10|rsi_confirm=False|slow_period=50      both     all          REJECT           21   0.3810        0.6015    -0.0004    -0.0004      -0.0162 -2.0603 -0.8173       0.0210           47.0000      -0.0081    -0.0081   -0.0038    -0.0055           0.4938               nan                     NaN         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross    adx_min=0|fast_period=10|rsi_confirm=True|slow_period=50      both     all          REJECT           20   0.3500        0.2280    -0.0008    -0.0008      -0.0160 -6.1254 -2.8214       0.0200           41.2000      -0.0154    -0.0154   -0.0112    -0.0055           0.3834               nan                     NaN         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross  adx_min=20|fast_period=10|rsi_confirm=False|slow_period=50      both     all          REJECT           21   0.3810        0.6015    -0.0004    -0.0004      -0.0162 -2.0603 -0.8173       0.0210           47.0000      -0.0081    -0.0081   -0.0038    -0.0055           0.4938               nan                     NaN         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross   adx_min=20|fast_period=10|rsi_confirm=True|slow_period=50      both     all          REJECT           20   0.3500        0.2280    -0.0008    -0.0008      -0.0160 -6.1254 -2.8214       0.0200           41.2000      -0.0154    -0.0154   -0.0112    -0.0055           0.3834               nan                     NaN         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross  adx_min=25|fast_period=10|rsi_confirm=False|slow_period=50      both     all NEEDS_MORE_DATA           14      nan           nan        nan        nan          nan     nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 14 trades < min 20         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross   adx_min=25|fast_period=10|rsi_confirm=True|slow_period=50      both     all NEEDS_MORE_DATA           13      nan           nan        nan        nan          nan     nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 13 trades < min 20         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross  adx_min=0|fast_period=10|rsi_confirm=False|slow_period=100      both     all NEEDS_MORE_DATA           13      nan           nan        nan        nan          nan     nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 13 trades < min 20         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross   adx_min=0|fast_period=10|rsi_confirm=True|slow_period=100      both     all NEEDS_MORE_DATA           12      nan           nan        nan        nan          nan     nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 12 trades < min 20         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross adx_min=20|fast_period=10|rsi_confirm=False|slow_period=100      both     all NEEDS_MORE_DATA           13      nan           nan        nan        nan          nan     nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 13 trades < min 20         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross  adx_min=20|fast_period=10|rsi_confirm=True|slow_period=100      both     all NEEDS_MORE_DATA           12      nan           nan        nan        nan          nan     nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 12 trades < min 20         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross adx_min=25|fast_period=10|rsi_confirm=False|slow_period=100      both     all NEEDS_MORE_DATA           12      nan           nan        nan        nan          nan     nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 12 trades < min 20         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross  adx_min=25|fast_period=10|rsi_confirm=True|slow_period=100      both     all NEEDS_MORE_DATA           11      nan           nan        nan        nan          nan     nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 11 trades < min 20         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross  adx_min=0|fast_period=10|rsi_confirm=False|slow_period=200      both     all NEEDS_MORE_DATA           10      nan           nan        nan        nan          nan     nan     nan          nan               nan          nan        nan       nan        nan              nan               nan only 10 trades < min 20         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross   adx_min=0|fast_period=10|rsi_confirm=True|slow_period=200      both     all NEEDS_MORE_DATA            9      nan           nan        nan        nan          nan     nan     nan          nan               nan          nan        nan       nan        nan              nan               nan  only 9 trades < min 20         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross adx_min=20|fast_period=10|rsi_confirm=False|slow_period=200      both     all NEEDS_MORE_DATA           10      nan           nan        nan        nan          nan     nan     nan          nan               nan          nan        nan       nan        nan              nan               nan only 10 trades < min 20         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross  adx_min=20|fast_period=10|rsi_confirm=True|slow_period=200      both     all NEEDS_MORE_DATA            9      nan           nan        nan        nan          nan     nan     nan          nan               nan          nan        nan       nan        nan              nan               nan  only 9 trades < min 20         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross adx_min=25|fast_period=10|rsi_confirm=False|slow_period=200      both     all NEEDS_MORE_DATA            7      nan           nan        nan        nan          nan     nan     nan          nan               nan          nan        nan       nan        nan              nan               nan  only 7 trades < min 20         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross  adx_min=25|fast_period=10|rsi_confirm=True|slow_period=200      both     all NEEDS_MORE_DATA            6      nan           nan        nan        nan          nan     nan     nan          nan               nan          nan        nan       nan        nan              nan               nan  only 6 trades < min 20         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross   adx_min=0|fast_period=20|rsi_confirm=False|slow_period=50      both     all NEEDS_MORE_DATA           13      nan           nan        nan        nan          nan     nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 13 trades < min 20         mt5
+run_20260427_185507_37d2c1 EUR/USD       forex       M15 trend_momentum     ema_cross    adx_min=0|fast_period=20|rsi_confirm=True|slow_period=50      both     all NEEDS_MORE_DATA           12      nan           nan        nan        nan          nan     nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 12 trades < min 20         mt5
+```
+
+### Top Ranked Strategies
+Rows: 26
+```
+                    run_id  symbol asset_class timeframe         family         strategy_name                                 params_str direction session         status  trade_count win_rate profit_factor avg_return expectancy max_drawdown sharpe    sqn exposure_pct avg_duration_bars gross_return net_return is_return oos_return robustness_score param_sensitivity skip_reason data_source rank_score
+run_20260427_185507_37d2c1 AUD/USD       forex        H4       breakout session_opening_range            atr_expand_min=0.0|range_bars=6      both     all WEAK_CANDIDATE           44   0.4318        1.8796     0.0022     0.0022      -0.0307 1.7716 1.4744       0.0440           22.3182       0.0997     0.0997    0.1082    -0.0134           0.4973               nan         nan         mt5     0.3081
+run_20260427_185507_37d2c1 AUD/USD       forex        H4       breakout session_opening_range            atr_expand_min=0.5|range_bars=6      both     all WEAK_CANDIDATE           44   0.4318        1.8796     0.0022     0.0022      -0.0307 1.7716 1.4744       0.0440           22.3182       0.0997     0.0997    0.1082    -0.0134           0.4973               nan         nan         mt5     0.3081
+run_20260427_185507_37d2c1 USD/JPY       forex        H4 trend_momentum        macd_direction  adx_min=0|fast=12|signal_period=9|slow=26      both     all WEAK_CANDIDATE           65   0.4154        1.3575     0.0009     0.0009      -0.0916 0.9931 0.8115       0.0651           15.2462       0.0547     0.0547    0.1535    -0.0900           0.5333               nan         nan         mt5     0.2993
+run_20260427_185507_37d2c1 USD/JPY       forex        H4 trend_momentum        macd_direction adx_min=20|fast=12|signal_period=9|slow=26      both     all WEAK_CANDIDATE           62   0.4032        1.2710     0.0007     0.0007      -0.0916 0.7584 0.6185       0.0621           15.1129       0.0404     0.0404    0.1379    -0.0900           0.5333               nan         nan         mt5     0.2912
+run_20260427_185507_37d2c1 EUR/USD       forex        H4 trend_momentum        macd_direction adx_min=20|fast=12|signal_period=9|slow=26      both     all WEAK_CANDIDATE           69   0.4058        1.0670     0.0001     0.0001      -0.0269 0.2693 0.2191       0.0691           14.3623       0.0082     0.0082    0.0171    -0.0139           0.5333               nan         nan         mt5     0.2735
+run_20260427_185507_37d2c1 EUR/USD       forex        H4 trend_momentum        macd_direction  adx_min=0|fast=12|signal_period=9|slow=26      both     all WEAK_CANDIDATE           69   0.4058        1.0670     0.0001     0.0001      -0.0269 0.2693 0.2191       0.0691           14.3623       0.0082     0.0082    0.0171    -0.0139           0.5333               nan         nan         mt5     0.2735
+run_20260427_185507_37d2c1 GBP/USD       forex        H1 mean_reversion       bollinger_touch                      num_std=2.5|period=20      both     all WEAK_CANDIDATE           25   0.6400        1.5572     0.0004     0.0004      -0.0080 2.3010 0.9520       0.0250           12.5200       0.0096     0.0096    0.0017     0.0079           0.5026               nan         nan         mt5     0.2733
+run_20260427_185507_37d2c1 USD/JPY       forex        H4       breakout           prev_day_hl                         atr_expand_min=0.0      both     all WEAK_CANDIDATE           39   0.3333        1.0617     0.0002     0.0002      -0.0593 0.1648 0.1340       0.0390           22.7692       0.0057     0.0057    0.0414    -0.0416           0.5340               nan         nan         mt5     0.2714
+run_20260427_185507_37d2c1 USD/JPY       forex        H4       breakout           prev_day_hl                         atr_expand_min=0.5      both     all WEAK_CANDIDATE           38   0.3421        1.0805     0.0002     0.0002      -0.0574 0.2112 0.1718       0.0380           23.1053       0.0077     0.0077    0.0414    -0.0397           0.5280               nan         nan         mt5     0.2697
+run_20260427_185507_37d2c1 EUR/USD       forex        H4       breakout session_opening_range            atr_expand_min=0.0|range_bars=6      both     all WEAK_CANDIDATE           50   0.4800        1.0192     0.0000     0.0000      -0.0571 0.0668 0.0544       0.0500           19.6000       0.0013     0.0013    0.0087    -0.0105           0.5333               nan         nan         mt5     0.2682
+run_20260427_185507_37d2c1 EUR/USD       forex        H4       breakout session_opening_range            atr_expand_min=0.5|range_bars=6      both     all WEAK_CANDIDATE           50   0.4800        1.0140     0.0000     0.0000      -0.0571 0.0488 0.0397       0.0500           19.5600       0.0008     0.0008    0.0082    -0.0105           0.5333               nan         nan         mt5     0.2677
+run_20260427_185507_37d2c1 AUD/USD       forex        H4       breakout           prev_day_hl                         atr_expand_min=0.0      both     all WEAK_CANDIDATE           33   0.3636        1.1371     0.0005     0.0005      -0.0580 0.3278 0.2669       0.0330           27.3636       0.0153     0.0153    0.0368    -0.0240           0.4980               nan         nan         mt5     0.2589
+run_20260427_185507_37d2c1 AUD/USD       forex        H4       breakout           prev_day_hl                         atr_expand_min=0.5      both     all WEAK_CANDIDATE           33   0.3636        1.1371     0.0005     0.0005      -0.0580 0.3278 0.2669       0.0330           27.3636       0.0153     0.0153    0.0368    -0.0240           0.4980               nan         nan         mt5     0.2589
+run_20260427_185507_37d2c1 AUD/USD       forex        H4       breakout session_opening_range           atr_expand_min=0.5|range_bars=12      both     all WEAK_CANDIDATE           28   0.4643        1.7195     0.0022     0.0022      -0.0506 1.1652 0.9627       0.0280           35.0714       0.0623     0.0623    0.0526     0.0044           0.4262               nan         nan         mt5     0.2510
+run_20260427_185507_37d2c1 AUD/USD       forex        H4       breakout session_opening_range           atr_expand_min=0.0|range_bars=12      both     all WEAK_CANDIDATE           28   0.4643        1.7195     0.0022     0.0022      -0.0506 1.1652 0.9627       0.0280           35.0714       0.0623     0.0623    0.0526     0.0044           0.4262               nan         nan         mt5     0.2510
+run_20260427_185507_37d2c1 AUD/USD       forex        H4       breakout           prev_day_hl                         atr_expand_min=1.0      both     all WEAK_CANDIDATE           27   0.3333        1.2545     0.0010     0.0010      -0.0459 0.5288 0.4315       0.0270           28.3704       0.0257     0.0257    0.0321    -0.0063           0.4620               nan         nan         mt5     0.2473
+run_20260427_185507_37d2c1 USD/JPY       forex        H4       breakout           prev_day_hl                         atr_expand_min=1.0      both     all WEAK_CANDIDATE           29   0.4138        1.1581     0.0005     0.0005      -0.0494 0.3558 0.2898       0.0290           23.6207       0.0130     0.0130    0.0476    -0.0405           0.4740               nan         nan         mt5     0.2467
+run_20260427_185507_37d2c1 AUD/USD       forex        H4 engine_b_proxy     structure_filters    fvg_detection=True|strong_close_pct=0.7      both     all WEAK_CANDIDATE           29   0.4138        1.5119     0.0012     0.0012      -0.0327 1.0413 0.8572       0.0290           15.9655       0.0338     0.0338    0.0483    -0.0139           0.3907               nan         nan         mt5     0.2226
+run_20260427_185507_37d2c1 AUD/USD       forex       M15 mean_reversion       bollinger_touch                      num_std=2.5|period=20      both     all WEAK_CANDIDATE           25   0.5600        1.2444     0.0001     0.0001      -0.0092 0.9361 0.3667       0.0250           12.2400       0.0030     0.0030   -0.0031     0.0061           0.4127               nan         nan         mt5     0.2146
+run_20260427_185507_37d2c1 EUR/USD       forex        H1       breakout session_opening_range           atr_expand_min=0.0|range_bars=12      both     all WEAK_CANDIDATE           29   0.4138        1.0985     0.0002     0.0002      -0.0255 0.4996 0.2033       0.0290           32.6207       0.0044     0.0044    0.0249    -0.0169           0.4073               nan         nan         mt5     0.2091
+```
+
+### By Asset Group
+Rows: 1
+```
+asset_class win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+      forex        0.4086              26             1.2676                   26          0.0007                26      0.6848            26   0.4638         26          0.0235                26         -0.0204                26                0.4597                      26          37.0385                 26
+```
+
+### By Symbol
+Rows: 4
+```
+ symbol win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+AUD/USD        0.3911              14             1.3648                   14          0.0010                14      0.8118            14   0.5817         14          0.0322                14         -0.0110                14                0.4214                      14          29.2143                 14
+EUR/USD        0.4332               6             1.0607                    6          0.0001                 6      0.2756             6   0.1565          6          0.0046                 6         -0.0137                 6                0.4913                       6          49.3333                  6
+GBP/USD        0.6400               1             1.5572                    1          0.0004                 1      2.3010             1   0.9520          1          0.0096                 1          0.0079                 1                0.5026                       1          25.0000                  1
+USD/JPY        0.3816               5             1.1858                    5          0.0005                 5      0.4967             5   0.4051          5          0.0243                 5         -0.0604                 5                0.5205                       5          46.6000                  5
+```
+
+### By Timeframe
+Rows: 3
+```
+timeframe win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+       H1        0.3958               7             1.1768                    7          0.0003                 7      0.7583             7   0.3108          7          0.0063                 7         -0.0107                 7                0.3909                       7          25.0000                  7
+       H4        0.4051              18             1.3042                   18          0.0008                18      0.6422            18   0.5287         18          0.0313                18         -0.0256                18                0.4891                      18          42.3889                 18
+      M15        0.5600               1             1.2444                    1          0.0001                 1      0.9361             1   0.3667          1          0.0030                 1          0.0061                 1                0.4127                       1          25.0000                  1
+```
+
+### By Session
+Rows: 1
+```
+session win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+    all        0.4086              26             1.2676                   26          0.0007                26      0.6848            26   0.4638         26          0.0235                26         -0.0204                26                0.4597                      26          37.0385                 26
+```
+
+### By Direction
+Rows: 1
+```
+direction win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+     both        0.4086              26             1.2676                   26          0.0007                26      0.6848            26   0.4638         26          0.0235                26         -0.0204                26                0.4597                      26          37.0385                 26
+```
+
+### Indicator Attribution
+Rows: 13
+```
+        strategy_name  total_configs  strong  weak  reject avg_net_return avg_win_rate avg_robustness avg_sqn avg_oos_return  total_trades pass_rate verdict
+      london_breakout             24       0     0       2        -0.0185       0.3077         0.9469 -0.5664        -0.0128           407    0.0000   HURTS
+          prev_day_hl             36       0     6       6         0.0001       0.4009         0.8195 -0.0259        -0.0282           594    0.1667   HURTS
+               ob_bos             96       0     0      16        -0.0525       0.2186         0.7188 -2.7111        -0.0200          1342    0.0000   HURTS
+            ema_cross            432       0     4     120        -0.0450       0.1885         0.6572 -2.5790        -0.0206          6739    0.0093   HURTS
+       macd_direction             24       0     4      20        -0.0500       0.2830         0.5878 -2.9212        -0.0278          1729    0.1667   HURTS
+session_opening_range             48       0     8      40        -0.0367       0.2882         0.5143 -2.4176        -0.0239          2226    0.1667   HURTS
+         pullback_ema             48       0     0      47        -0.0524       0.1435         0.5101 -4.0571        -0.0235          2477    0.0000   HURTS
+    structure_filters             48       0     2      46        -0.1432       0.1888         0.4637 -7.8935        -0.0417          7200    0.0417   HURTS
+      bollinger_touch             24       0     2      20        -0.0194       0.4976         0.4138 -1.2093         0.0042           710    0.0833   HELPS
+        ema_alignment             36       0     0      33        -0.0397       0.1585         0.4057 -2.4679        -0.0149           917    0.0000   HURTS
+          ny_breakout             24       0     0       0            nan          nan            nan     nan            nan           222    0.0000 NEUTRAL
+          rsi_extreme             48       0     0       0            nan          nan            nan     nan            nan           556    0.0000 NEUTRAL
+       vwap_deviation             24       0     0       0            nan          nan            nan     nan            nan           252    0.0000 NEUTRAL
+```
+
+### Rejected / Failed Configs (by family)
+```
+        family  count
+      breakout    118
+engine_b_proxy    142
+mean_reversion     94
+      pullback     48
+trend_momentum    484
+```
+
+### research_report.md (excerpt)
+```
+# Athena Research Lab — Report
+**Run ID:** `run_20260427_185507_37d2c1`  **Generated:** 2026-04-27 18:55 UTC  
+**Mode:** large  **Symbols:** 4  **Families:** ['trend_momentum', 'pullback', 'breakout', 'mean_reversion', 'engine_b_proxy']
+
+> **IMPORTANT:** These are backtest discovery findings at intentionally lower thresholds.
+> Do NOT copy these thresholds into live engine gates.
+> Label: **STRONG_CANDIDATE** / **WEAK_CANDIDATE** / **REJECT** / **NEEDS_MORE_DATA**
+
+## Executive Summary
+- Total strategy/param/symbol/TF combinations tested: **912**
+- Valid (pass robustness): **26** (2.9%)
+- Strong candidates: **0**
+
+## Which Strategy Family Works Best?
+family | count | avg_net_return | avg_wr | avg_pf | avg_sqn
+--- | --- | --- | --- | --- | ---
+breakout | 14 | 0.0298 | 0.4093 | 1.3041 | 0.4954
+engine_b_proxy | 2 | 0.0214 | 0.3800 | 1.3265 | 0.5600
+trend_momentum | 8 | 0.0171 | 0.3667 | 1.1558 | 0.3357
+mean_reversion | 2 | 0.0063 | 0.6000 | 1.4008 | 0.6594
+
+**Best family:** `breakout` (avg net return 0.030)
+
+## Which Symbol Works Best?
+symbol | count | avg_net_return | avg_wr
+--- | --- | --- | ---
+AUD/USD | 14 | 0.0322 | 0.3911
+USD/JPY | 5 | 0.0243 | 0.3816
+GBP/USD | 1 | 0.0096 | 0.6400
+EUR/USD | 6 | 0.0046 | 0.4332
+
+## Which Timeframe Works Best?
+timeframe | count | avg_net_return | avg_wr
+--- | --- | --- | ---
+H4 | 18 | 0.0313 | 0.4051
+H1 | 7 | 0.0063 | 0.3958
+M15 | 1 | 0.0030 | 0.5600
+
+## Which Direction Works Better?
+direction | count | avg_net_return | avg_wr
+--- | --- | --- | ---
+both | 26 | 0.0235 | 0.4086
+
+## Which Indicators Help / Hurt?
+**Helpful indicators/strategies:**
+strategy_name | pass_rate | avg_net_return | avg_sqn
+--- | --- | --- | ---
+bollinger_touch | 0.0833 | -0.0194 | -1.2093
+
+**Globally weak across tested configs:**
+strategy_name | pass_rate | avg_net_return
+--- | --- | ---
+london_breakout | 0.0000 | -0.0185
+prev_day_hl | 0.1667 | 0.0001
+ob_bos | 0.0000 | -0.0525
+ema_cross | 0.0093 | -0.0450
+macd_direction | 0.1667 | -0.0500
+
+## Which Setups Collapse After Fees?
+No gross-profitable-but-fee-killed setups found.
+
+## Which Setups Had Too Little Sample?
+536 configs had insufficient trades.  
+family | count
+--- | ---
+trend_momentum | 311
+engine_b_proxy | 80
+mean_reversion | 74
+breakout | 70
+pullback | 1
+
+## Recommended Research Queue
+Please use the Autopilot console on the dashboard to generate comprehensive research vectors.
+
+## Confirmed / Weakened / Rejected After Validation
+Validation tracks are executed sequentially.
+
+## Conditional Edge Candidates
+No conditional edges detected.
+
+## Engine A Findings
+Best `trend_momentum` config: `macd_direction` params=`adx_min=20|fast=12|signal_period=9|slow=26`
+  - Symbol: `USD/JPY` TF: `H4` Direction: `both`
+  - Win rate: 40.3%  PF: 1.27  Robustness: 0.53  Status: `WEAK_CANDIDATE`
+  - **Action:** Validate on additional symbols/windows before considering Engine changes.
+*No valid `pullback` results — insufficient data or all rejected.*
+
+## Engine B Findings
+Best `engine_b_proxy` config: `s
+... [truncated]
+```
+
+## Required Output
+
+Provide a complete decision memo answering ALL of the following questions.
+Use the label tags defined in the safety rules.
+
+1. What strategy family worked best? (label each STRONG_CANDIDATE / WEAK_CANDIDATE / REJECT)
+2. What indicator helped most?
+3. What indicator hurt most?
+4. Which asset group worked best?
+5. Which symbol worked best?
+6. Which timeframe worked best?
+7. Which session worked best?
+8. Did LONG or SHORT work better overall?
+9. Which setups collapsed after fees? (list by family/strategy)
+10. Which setups had too little sample size? (list by family/strategy)
+11. What should Engine A keep / remove / tune? (be specific — factor names, threshold direction)
+12. What should Engine B keep / remove / tune? (be specific — checklist gates, zone logic)
+13. What should Engine D keep / remove / tune? (be specific — VP params, grade thresholds)
+14. What is the next smallest useful test to run?
+15. What should NOT be tested further right now?
+
+After the memo, output a JSON block labelled ```json with this structure:
+{
+  "overall_verdict": "...",
+  "top_candidates": [{"strategy": "...", "symbol": "...", "tf": "...", "label": "STRONG_CANDIDATE"}],
+  "rejected_setups": [{"strategy": "...", "reason": "..."}],
+  "engine_a": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": []},
+  "engine_b": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": []},
+  "engine_d": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": []},
+  "data_quality_warnings": [],
+  "telemetry_warnings": [],
+  "next_tiny_test": {"symbols": [], "timeframes": [], "strategy_families": [], "reason": "..."},
+  "do_not_do_next": []
+}

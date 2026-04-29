@@ -1,0 +1,2 @@
+symbol,win_rate_mean,win_rate_count,profit_factor_mean,profit_factor_count,expectancy_mean,expectancy_count,sharpe_mean,sharpe_count,sqn_mean,sqn_count,net_return_mean,net_return_count,oos_return_mean,oos_return_count,robustness_score_mean,robustness_score_count,trade_count_mean,trade_count_count
+MSFT,0.416769,2,1.616710,2,0.004438,2,2.636279,2,1.064510,2,0.217346,2,0.068884,2,0.754193,2,50.000000,2

@@ -1,0 +1,5 @@
+run_id,symbol,asset_class,timeframe,family,strategy_name,params_str,direction,session,status,trade_count,win_rate,profit_factor,avg_return,expectancy,max_drawdown,sharpe,sqn,exposure_pct,avg_duration_bars,gross_return,net_return,is_return,oos_return,robustness_score,param_sensitivity,skip_reason,data_source
+run_20260427_124419,BNB/USDT,crypto,H1,mean_reversion,rsi_extreme,overbought=70|oversold=30|period=14,both,all,STRONG_CANDIDATE,21,0.714286,1.993424,0.002813,0.002813,-0.026457,2.976479,1.253881,0.021021,16.285714,0.059576,0.059576,0.029713,0.029001,0.818814,,,binance_rest
+run_20260427_124419,BNB/USDT,crypto,H1,mean_reversion,rsi_extreme,overbought=75|oversold=30|period=14,both,all,NEEDS_MORE_DATA,12,,,,,,,,,,,,,,,,only 12 trades < min 20,binance_rest
+run_20260427_124419,BNB/USDT,crypto,H1,mean_reversion,rsi_extreme,overbought=70|oversold=25|period=14,both,all,NEEDS_MORE_DATA,18,,,,,,,,,,,,,,,,only 18 trades < min 20,binance_rest
+run_20260427_124419,BNB/USDT,crypto,H1,mean_reversion,rsi_extreme,overbought=75|oversold=25|period=14,both,all,NEEDS_MORE_DATA,9,,,,,,,,,,,,,,,,only 9 trades < min 20,binance_rest

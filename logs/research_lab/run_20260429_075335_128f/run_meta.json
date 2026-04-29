@@ -1,0 +1,21 @@
+{
+  "run_id": "run_20260429_075335_128f",
+  "mode": "small",
+  "symbol_count": 1,
+  "timeframes": [
+    "H4"
+  ],
+  "families": [
+    "pullback"
+  ],
+  "specs_count": 4,
+  "results_count": 4,
+  "direction": "both",
+  "generated_at": "2026-04-29T07:53:36.060484+00:00",
+  "session_id": "sess_20260429_075317_387b58",
+  "market_group": "metals",
+  "trading_style": "intra",
+  "research_depth": "deep",
+  "role": "validation",
+  "parent_run_id": "run_20260429_075317_f2ee40"
+}

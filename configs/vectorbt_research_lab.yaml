@@ -12,6 +12,7 @@ research_lab:
     crypto: 0.0006
     forex: 0.0002
     stock: 0.0010
+    etf: 0.0008
     commodity: 0.0005
     index: 0.0003
   slippage:
@@ -25,7 +26,12 @@ research_lab:
       - EUR/USD
       - GBP/USD
       - XAU/USD
+      - WTI Oil
       - US500
+      - NAS100
+      - AAPL
+      - NVDA
+      - SPY
     timeframes: [H1, H4]
     families:
       - trend_momentum
@@ -33,15 +39,147 @@ research_lab:
       - breakout
       - mean_reversion
 
-  # ── Full run universe ─────────────────────────────────────────────────
+  # ── Full run universe (mirrors athena.py ALL_PAIRS) ──────────────────
   symbols:
-    crypto: [BTC/USDT, ETH/USDT, SOL/USDT]
-    forex: [EUR/USD, GBP/USD, AUD/USD, USD/JPY]
-    index: [US500, NAS100, GER40]
-    commodity: [XAU/USD, XAG/USD, WTI Oil]
-    stock: [AAPL, NVDA, MSFT]
+    crypto:
+      - BTC/USDT
+      - ETH/USDT
+      - SOL/USDT
+      - BNB/USDT
+      - ADA/USDT
+      - XRP/USDT
+      - DOGE/USDT
+      - AVAX/USDT
+      - LINK/USDT
+      - DOT/USDT
+      - POL/USDT
+      - NEAR/USDT
+      - APT/USDT
+      - ARB/USDT
+      - SUI/USDT
+      - INJ/USDT
+      - RENDER/USDT
+      - LTC/USDT
+      - AAVE/USDT
+      - ALGO/USDT
+      - ATOM/USDT
+      - BCH/USDT
+      - ETC/USDT
+      - TRX/USDT
+      - XLM/USDT
+      - UNI/USDT
+      - FIL/USDT
+      - ICP/USDT
+      - HBAR/USDT
+      - OP/USDT
+      - SEI/USDT
+      - PEPE/USDT
+      - WIF/USDT
+      - FET/USDT
+    forex:
+      - EUR/USD
+      - GBP/USD
+      - USD/JPY
+      - AUD/USD
+      - AUD/CHF
+      - AUD/NZD
+      - NZD/USD
+      - EUR/GBP
+      - USD/CAD
+      - USD/CHF
+      - EUR/JPY
+      - GBP/JPY
+      - AUD/JPY
+      - EUR/AUD
+      - GBP/AUD
+      - USD/ZAR
+      - EUR/CHF
+      - USD/MXN
+      - USD/SGD
+      - USD/BRL
+      - USD/INR
+    index:
+      - NAS100
+      - US500
+      - US30
+      - GER40
+      - UK100
+      - AUS200
+      - JP225
+      - HK50
+      - EURX
+      - JPYX
+      - USDX
+    commodity:
+      - XAU/USD
+      - XAG/USD
+      - WTI Oil
+      - Brent Oil
+      - Nat Gas
+      - Copper
+      - Aluminium
+      - Lead
+      - Nickel
+      - Zinc
+      - XPT/USD
+      - XPD/USD
+      - Gasoline
+      - Cattle
+      - Cocoa
+      - Coffee
+      - Corn
+      - Cotton
+      - Soybeans
+      - Sugar
+      - Wheat
+    stock:
+      - AAPL
+      - TSLA
+      - NVDA
+      - MSFT
+      - AMZN
+      - META
+      - GOOG
+      - JPM
+      - V
+      - XOM
+      - NFLX
+      - AMD
+      - CRM
+      - DIS
+      - BA
+      - COIN
+      - PYPL
+      - INTC
+      - UBER
+      - PLTR
+    etf:
+      - SPY
+      - QQQ
+      - GLD
+      - TLT
+      - IWM
+      - EEM
+      - DIA
+      - GDX
+      - SOXX
+      - XLE
+      - SLV
+      - USO
 
-  timeframes: [M15, H1, H4, D1]
+  timeframes: [M5, M15, H1, H4, D1]
+
+  # ── Zone → timeframe mappings ───────────────────────────────────────
+  zones:
+    scalp:
+      timeframes: [M5, M15, H1]
+      label: "Scalp (M5-H1)"
+    intra:
+      timeframes: [H1, H4]
+      label: "Intraday (H1-H4)"
+    swing:
+      timeframes: [H4, D1]
+      label: "Swing (H4-D1)"
 
   # Data source settings — Athena-native sources only
   data:
@@ -138,6 +276,57 @@ research_lab:
       ema_scalp_pullback:
         ema_period: [21]
         atr_sl_mult: [0.5, 1.0]
+      cvd_momentum:
+        smooth_period: [5, 10]
+        atr_sl_mult: [0.5, 1.0]
+
+    # ── New strategy families (live engine indicators) ─────────────────
+    stochastic:
+      stochastic_cross:
+        k_period: [5, 14]
+        k_smooth: [3]
+        d_smooth: [3]
+        oversold: [20, 25]
+        overbought: [75, 80]
+      stochastic_divergence:
+        k_period: [14]
+        k_smooth: [3]
+        d_smooth: [3]
+        lookback: [20, 30]
+
+    fibonacci:
+      fib_retracement:
+        level: [0.382, 0.500, 0.618]
+        proximity_pct: [1.5, 2.0]
+        trend_period: [50, 100]
+
+    aroon_family:
+      aroon_trend:
+        period: [14, 25]
+        threshold: [70, 80]
+
+    divergence:
+      obv_divergence:
+        lookback: [20, 30]
+        min_swing_bars: [3, 5]
+      rsi_divergence:
+        lookback: [20, 30]
+        pivot_bars: [3, 5]
+
+    trend_follow:
+      chandelier_trend:
+        atr_period: [14, 22]
+        atr_mult: [2.0, 3.0]
+        lookback: [22]
+      supertrend_follow:
+        atr_period: [10, 14]
+        atr_mult: [2.0, 3.0]
+
+    vol_regime:
+      realized_vol_breakout:
+        lookback: [30]
+        low_vol_pct: [25, 30]
+        atr_sl_mult: [1.0, 1.5]
 
   # ── Robustness rules ─────────────────────────────────────────────────
   robustness:

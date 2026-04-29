@@ -1,0 +1,106 @@
+{
+  "overall_verdict": "Pullback family (D1 BNB/USDT) shows strongest cluster; bollinger_touch helps mean_reversion H4. Trend_momentum mixed, others reject. Crypto-only \u2014 needs forex. No Engine D data.",
+  "top_candidates": [
+    {
+      "strategy": "pullback_ema",
+      "symbol": "BNB/USDT",
+      "tf": "D1",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "pullback_ema",
+      "symbol": "ETH/USDT",
+      "tf": "D1",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "bollinger_touch",
+      "symbol": "SOL/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "macd_direction",
+      "symbol": "BNB/USDT",
+      "tf": "D1",
+      "label": "STRONG_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "ob_bos",
+      "reason": "Lowest pass_rate 1.25%, net -0.36, SQN -1.49"
+    },
+    {
+      "strategy": "ema_cross",
+      "reason": "80% reject, avg net -0.15, tiny samples"
+    },
+    {
+      "strategy": "breakout",
+      "reason": "Poor OOS, single-symbol SOL"
+    }
+  ],
+  "engine_a": {
+    "keep": [
+      "macd_direction (adx_min=20)"
+    ],
+    "remove_or_demote": [
+      "ema_cross"
+    ],
+    "tune": [
+      "ema_alignment (raise ADX>20, test RSI_confirm=False)"
+    ],
+    "next_tests": [
+      "Multi-symbol D1 macd/pullback"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (FVG + strong_close=0.7)"
+    ],
+    "remove_or_demote": [
+      "ob_bos"
+    ],
+    "tune": [
+      "Integrate bollinger_touch as location proxy; loosen FVG for D1"
+    ],
+    "next_tests": [
+      "Full checklist on D1 crypto sessions"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Add VP/OrderFlow scalping on crypto H4"
+    ]
+  },
+  "data_quality_warnings": [
+    "Crypto-only; no forex comparison"
+  ],
+  "telemetry_warnings": [
+    "No Engine D results \u2014 potential missing data"
+  ],
+  "next_tiny_test": {
+    "symbols": [
+      "EURUSD",
+      "GBPUSD",
+      "BNB/USDT"
+    ],
+    "timeframes": [
+      "D1",
+      "H4"
+    ],
+    "strategy_families": [
+      "pullback",
+      "mean_reversion"
+    ],
+    "reason": "Cross-asset validation of pullback/bollinger; add session/direction splits"
+  },
+  "do_not_do_next": [
+    "ema_cross variants",
+    "ob_bos",
+    "SOL-only H4 breakout"
+  ]
+}

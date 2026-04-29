@@ -1,0 +1,112 @@
+# Athena Pro v4 Backtest Discovery Decision Memo
+**Run ID:** run_20260429_073729_34c0b5 | **Analyst:** Quantitative Research | **Date:** 2026-04-29  
+**Key Caveat:** These are discovery backtests at lowered thresholds including marginal trades. **Do NOT execute live, copy thresholds to live gates, or treat as production signals.** All labels per safety rules. Robustness penalized for <30 trades, single-symbol, IS/OOS decay. No clusters found—mostly one-offs.
+
+## 1. Strategy Family
+- **mean_reversion**: WEAK_CANDIDATE (10 valid configs, avg net_return 0.0689, high WR 72.9%, but tiny samples 20-40 trades/symbol, no multi-symbol cluster, OOS decay in some).
+- **breakout**: REJECT (110 rejects, consistent losses, poor PF <0.5, hurts net).
+- **engine_d_proxy**: REJECT (100 rejects/NEEDS_MORE_DATA, gross/net negative, <30 trades dominant).
+
+## 2. Indicator Helped Most
+**vwap_deviation** (std_threshold=1.5): WEAK_CANDIDATE (pass_rate 10%, avg_net 0.2343, SQN 5.68, WR 87.7%; top on ADA H1/ETH M15 but <30 trades/symbol, OOS ok but single-symbol).
+
+## 3. Indicator Hurt Most
+**prev_day_hl**: REJECT (pass_rate 0%, avg_net -0.485, SQN -4.72; tiny samples, massive drawdowns).
+
+## 4. Asset Group
+**crypto**: WEAK_CANDIDATE (only group tested, avg net 0.0689; NEEDS_MORE_DATA—no forex/equity comparison, all crypto telemetry from binance_rest).
+
+## 5. Symbol
+**ADA/USDT**: WEAK_CANDIDATE (5 configs, avg net 0.0914 > ETH's 0.1015 single config; multi-TF but <30 trades/config, no OOS strength cluster).
+Others (ETH/BNB/BTC/SOL): WEAK_CANDIDATE or REJECT (single configs, penalized).
+
+## 6. Timeframe
+**H1**: WEAK_CANDIDATE (avg net 0.0964 > M15's 0.0414, better OOS 0.0621; but 5 configs only, <30 trades).
+**M15**: WEAK_CANDIDATE (higher WR but OOS negative avg).
+
+## 7. Session
+**all**: NEEDS_MORE_DATA (only session tested; no london/ny splits robust).
+
+## 8. LONG vs SHORT
+**both**: NEEDS_MORE_DATA (no directional split; all "both" configs, cannot penalize/prefer).
+
+## 9. Setups Collapsed After Fees
+None. All valid configs net-positive (gross/net aligned, no fee-kills noted).
+
+## 10. Setups with Too Little Sample (<30 trades)
+- **breakout** (prev_day_hl, london_breakout, ny_breakout: 63 configs).
+- **engine_d_proxy** (vwap_reclaim, micro_breakout: 30 configs).
+- **mean_reversion** (57 configs <30; even tops like vwap_deviation at 20-21 trades).
+
+## 11. Engine A (3-factor: EMA trend, RSI+MACD momentum, ADX)
+NEEDS_MORE_DATA—no valid trend_momentum/pullback results (insufficient data/all rejected).  
+- **Keep**: Current live floor (2.1 forex)—no evidence to touch.  
+- **Remove/Demote**: N/A.  
+- **Tune**: Test EMA coherence thresholds lower in discovery only (e.g., D1/H4/H1 gates); probe RSI+MACD on H1 crypto. Not trustworthy—missing telemetry.
+
+## 12. Engine B (Naked PA: BOS/CHoCH, FVG, OB, swings, location, trigger, RR)
+NEEDS_MORE_DATA—no engine_b_proxy results.  
+- **Keep**: Strict checklist (pass/fail)—no edge found to loosen.  
+- **Remove/Demote**: N/A.  
+- **Tune**: Add mean_reversion location filter (e.g., FVG near VWAP deviation)? Not trustworthy—zero valid data.
+
+## 13. Engine D (VP+OF: POC/VAH/VAL, Absorb, CVD, VWAP, AAA; Crypto-focused A/B/C/D grades)
+**REJECT**—all engine_d_proxy (vwap_reclaim/micro_breakout/ema_scalp_pullback) net-negative, low WR <30%, <30 trades.  
+- **Keep**: N/A.  
+- **Remove/Demote**: vwap_reclaim (avg_net -0.286), micro_breakout (-0.150), ema_scalp_pullback (-0.282).  
+- **Tune**: Raise atr_sl_mult >1.0, fee_guard_r >0.5 in discovery; demote to D-grade live. Telemetry bug risk—binance_rest only, tiny samples.
+
+## 14. Next Smallest Useful Test
+Expand mean_reversion (vwap_deviation std=1.5, bollinger_touch num_std=2.0-2.5) on H1 ADA/USDT + 2 more symbols (BTC/SOL) vs forex majors. 50 configs max.
+
+## 15. What Should NOT Be Tested Further Right Now?
+- **engine_d_proxy** (REJECT: 100 fails, no edge).  
+- **breakout** (REJECT: 110 fails, session_opening_range/prev_day_hl/ny/london all hurt).  
+- Single-symbol one-offs without OOS >0.05.
+
+```
+{
+  "overall_verdict": "Weak mean_reversion signals (mostly <30 trades, no clusters); reject breakout/engine_d_proxy. NEEDS_MORE_DATA for engines A/B/multi-asset.",
+  "top_candidates": [
+    {"strategy": "vwap_deviation (std_threshold=1.5)", "symbol": "ADA/USDT", "tf": "H1", "label": "WEAK_CANDIDATE"},
+    {"strategy": "vwap_deviation (std_threshold=1.5)", "symbol": "ETH/USDT", "tf": "M15", "label": "WEAK_CANDIDATE"},
+    {"strategy": "rsi_extreme (overbought=70|oversold=30|period=14)", "symbol": "BNB/USDT", "tf": "H1", "label": "WEAK_CANDIDATE"},
+    {"strategy": "bollinger_touch (num_std=2.0|period=20)", "symbol": "ADA/USDT", "tf": "M15", "label": "WEAK_CANDIDATE"}
+  ],
+  "rejected_setups": [
+    {"strategy": "prev_day_hl", "reason": "avg_net -0.485, 0% pass_rate"},
+    {"strategy": "ny_breakout", "reason": "avg_net -0.109, 0% pass_rate"},
+    {"strategy": "vwap_reclaim", "reason": "avg_net -0.286, 0% pass_rate"},
+    {"strategy": "micro_breakout", "reason": "avg_net -0.150, 0% pass_rate"},
+    {"strategy": "ema_scalp_pullback", "reason": "avg_net -0.282, 0% pass_rate"},
+    {"strategy": "session_opening_range", "reason": "avg_net -0.124, 0% pass_rate"}
+  ],
+  "engine_a": {
+    "keep": ["Current live floor 2.1 (no evidence)"],
+    "remove_or_demote": [],
+    "tune": ["EMA/RSI+MACD on H1 crypto (discovery only)"],
+    "next_tests": ["Add trend_momentum/pullback proxies"]
+  },
+  "engine_b": {
+    "keep": ["Strict checklist pass/fail"],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": ["Proxy with mean_reversion location (FVG/VWAP)"]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": ["vwap_reclaim", "micro_breakout", "ema_scalp_pullback"],
+    "tune": ["atr_sl_mult >1.0, fee_guard_r >0.5 (discovery)"],
+    "next_tests": []
+  },
+  "data_quality_warnings": ["150/290 configs <30 trades", "Only crypto/binance_rest—no forex/multi-source", "No IS/OOS split details for all"],
+  "telemetry_warnings": ["Missing Engine A/B direct results", "engine_d_proxy telemetry suspect (tiny samples)"],
+  "next_tiny_test": {
+    "symbols": ["ADA/USDT", "BTC/USDT", "SOL/USDT"],
+    "timeframes": ["H1"],
+    "strategy_families": ["mean_reversion"],
+    "reason": "Validate vwap_deviation/bollinger_touch cluster (50 configs max)"
+  },
+  "do_not_do_next": ["engine_d_proxy", "breakout (all sub-strats)", "Single-symbol M15"]
+}
+```

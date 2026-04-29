@@ -658,6 +658,308 @@ def strategy_ema_scalp_pullback(df: pd.DataFrame, params: dict) -> dict:
                     meta={"family": "engine_d_proxy", "sub": "ema_scalp_pullback"})
 
 
+# ── G2. CVD Momentum (Engine D) ─────────────────────────────────────────────
+
+def strategy_cvd_momentum(df: pd.DataFrame, params: dict) -> dict:
+    """Cumulative Volume Delta momentum — approximation via candle body ratio."""
+    close, opn = df["close"], df["open"]
+    smooth = int(params.get("smooth_period", 5))
+    atr_sl = float(params.get("atr_sl_mult", 1.0))
+
+    if df["volume"].sum() == 0:
+        return _signals(idx=df.index, meta={"skip": "no_volume"})
+
+    # CVD approximation: buy vol when close > open, sell vol otherwise
+    bar_range = df["high"] - df["low"]
+    buy_ratio = ((close - df["low"]) / bar_range.replace(0, np.nan)).fillna(0.5)
+    buy_vol = df["volume"] * buy_ratio
+    sell_vol = df["volume"] * (1 - buy_ratio)
+    delta = buy_vol - sell_vol
+    cvd = delta.cumsum()
+    cvd_smooth = _ema(cvd, smooth)
+
+    vwap = _vwap(df)
+    long_entries = _crossed_above(cvd_smooth, cvd_smooth.shift(1)) & (close > vwap)
+    short_entries = _crossed_below(cvd_smooth, cvd_smooth.shift(1)) & (close < vwap)
+
+    atr = _atr(df["high"], df["low"], close)
+    long_exits = close < vwap - atr * atr_sl
+    short_exits = close > vwap + atr * atr_sl
+
+    return _signals(long_entries, long_exits, short_entries, short_exits,
+                    meta={"family": "engine_d_proxy", "sub": "cvd_momentum"})
+
+
+# ── H. Stochastic Strategies ────────────────────────────────────────────────
+
+def _stochastic(high: pd.Series, low: pd.Series, close: pd.Series,
+                k_period: int = 14, k_smooth: int = 3, d_smooth: int = 3):
+    """Stochastic %K and %D oscillator."""
+    lowest_low = low.rolling(k_period).min()
+    highest_high = high.rolling(k_period).max()
+    raw_k = 100 * (close - lowest_low) / (highest_high - lowest_low).replace(0, np.nan)
+    k = raw_k.rolling(k_smooth).mean()
+    d = k.rolling(d_smooth).mean()
+    return k, d
+
+
+def strategy_stochastic_cross(df: pd.DataFrame, params: dict) -> dict:
+    """Stochastic K/D crossover with oversold/overbought zones."""
+    close = df["close"]
+    kp = int(params.get("k_period", 14))
+    ks = int(params.get("k_smooth", 3))
+    ds = int(params.get("d_smooth", 3))
+    oversold = float(params.get("oversold", 20))
+    overbought = float(params.get("overbought", 80))
+
+    k, d = _stochastic(df["high"], df["low"], close, kp, ks, ds)
+
+    long_entries = _crossed_above(k, d) & (k < oversold + 10)
+    long_exits = _crossed_below(k, d) & (k > 50)
+    short_entries = _crossed_below(k, d) & (k > overbought - 10)
+    short_exits = _crossed_above(k, d) & (k < 50)
+
+    return _signals(long_entries, long_exits, short_entries, short_exits,
+                    meta={"family": "stochastic", "sub": "stochastic_cross"})
+
+
+def strategy_stochastic_divergence(df: pd.DataFrame, params: dict) -> dict:
+    """Stochastic divergence — price makes new low/high but stochastic doesn't."""
+    close = df["close"]
+    kp = int(params.get("k_period", 14))
+    ks = int(params.get("k_smooth", 3))
+    ds = int(params.get("d_smooth", 3))
+    lookback = int(params.get("lookback", 20))
+
+    k, d = _stochastic(df["high"], df["low"], close, kp, ks, ds)
+
+    # Bullish divergence: price lower low, stochastic higher low
+    price_ll = close < close.rolling(lookback).min().shift(1)
+    stoch_hl = k > k.rolling(lookback).min().shift(1)
+    long_entries = price_ll & stoch_hl & (k < 30)
+
+    # Bearish divergence: price higher high, stochastic lower high
+    price_hh = close > close.rolling(lookback).max().shift(1)
+    stoch_lh = k < k.rolling(lookback).max().shift(1)
+    short_entries = price_hh & stoch_lh & (k > 70)
+
+    long_exits = k > 70
+    short_exits = k < 30
+
+    return _signals(long_entries, long_exits, short_entries, short_exits,
+                    meta={"family": "stochastic", "sub": "stochastic_divergence"})
+
+
+# ── I. Fibonacci Retracement ─────────────────────────────────────────────────
+
+def strategy_fib_retracement(df: pd.DataFrame, params: dict) -> dict:
+    """Fibonacci retracement bounce — enter at fib level in trending market."""
+    close, high, low = df["close"], df["high"], df["low"]
+    level = float(params.get("level", 0.618))
+    prox_pct = float(params.get("proximity_pct", 1.5)) / 100
+    trend_p = int(params.get("trend_period", 50))
+
+    # Trend direction via simple slope
+    trend_ema = _ema(close, trend_p)
+    uptrend = close > trend_ema
+    downtrend = close < trend_ema
+
+    # Rolling swing high/low for fib calc
+    swing_high = high.rolling(trend_p).max()
+    swing_low = low.rolling(trend_p).min()
+    fib_range = swing_high - swing_low
+
+    # Fib levels (bullish: retracement from high)
+    fib_bull = swing_high - fib_range * level
+    fib_bear = swing_low + fib_range * level
+
+    # Proximity check
+    near_bull = ((close - fib_bull).abs() / close) < prox_pct
+    near_bear = ((close - fib_bear).abs() / close) < prox_pct
+
+    long_entries = uptrend & near_bull & (close > fib_bull)
+    short_entries = downtrend & near_bear & (close < fib_bear)
+
+    long_exits = close < swing_low
+    short_exits = close > swing_high
+
+    return _signals(long_entries, long_exits, short_entries, short_exits,
+                    meta={"family": "fibonacci", "sub": "fib_retracement"})
+
+
+# ── J. Aroon Trend ──────────────────────────────────────────────────────────
+
+def strategy_aroon_trend(df: pd.DataFrame, params: dict) -> dict:
+    """Aroon oscillator crossover — trend direction and strength."""
+    high, low = df["high"], df["low"]
+    period = int(params.get("period", 14))
+    threshold = float(params.get("threshold", 70))
+
+    # Aroon Up/Down
+    aroon_up = high.rolling(period + 1).apply(lambda x: x.argmax() / period * 100, raw=True)
+    aroon_down = low.rolling(period + 1).apply(lambda x: x.argmin() / period * 100, raw=True)
+
+    long_entries = _crossed_above(aroon_up, aroon_down) & (aroon_up > threshold)
+    short_entries = _crossed_below(aroon_up, aroon_down) & (aroon_down > threshold)
+
+    long_exits = aroon_down > threshold
+    short_exits = aroon_up > threshold
+
+    return _signals(long_entries, long_exits, short_entries, short_exits,
+                    meta={"family": "aroon_family", "sub": "aroon_trend"})
+
+
+# ── K. Divergence Strategies ────────────────────────────────────────────────
+
+def strategy_obv_divergence(df: pd.DataFrame, params: dict) -> dict:
+    """OBV divergence — price and volume trend disagreement."""
+    close = df["close"]
+    lookback = int(params.get("lookback", 20))
+
+    if df["volume"].sum() == 0:
+        return _signals(idx=df.index, meta={"skip": "no_volume"})
+
+    # OBV
+    vol_signed = df["volume"].where(close > close.shift(1), -df["volume"])
+    vol_signed = vol_signed.where(close != close.shift(1), 0)
+    obv = vol_signed.cumsum()
+
+    obv_slope = obv - obv.shift(lookback)
+    price_slope = close - close.shift(lookback)
+
+    # Bullish divergence: price falling, OBV rising
+    long_entries = (price_slope < 0) & (obv_slope > 0)
+    # Bearish divergence: price rising, OBV falling
+    short_entries = (price_slope > 0) & (obv_slope < 0)
+
+    long_exits = _crossed_below(close, _ema(close, 20))
+    short_exits = _crossed_above(close, _ema(close, 20))
+
+    return _signals(long_entries, long_exits, short_entries, short_exits,
+                    meta={"family": "divergence", "sub": "obv_divergence"})
+
+
+def strategy_rsi_divergence(df: pd.DataFrame, params: dict) -> dict:
+    """RSI divergence — hidden and regular divergence detection."""
+    close = df["close"]
+    lookback = int(params.get("lookback", 20))
+
+    rsi = _rsi(close, 14)
+    rsi_slope = rsi - rsi.shift(lookback)
+    price_slope = close - close.shift(lookback)
+
+    # Bullish: price new low, RSI higher low
+    long_entries = (price_slope < 0) & (rsi_slope > 0) & (rsi < 40)
+    # Bearish: price new high, RSI lower high
+    short_entries = (price_slope > 0) & (rsi_slope < 0) & (rsi > 60)
+
+    long_exits = rsi > 70
+    short_exits = rsi < 30
+
+    return _signals(long_entries, long_exits, short_entries, short_exits,
+                    meta={"family": "divergence", "sub": "rsi_divergence"})
+
+
+# ── L. Trend Following (Chandelier / Supertrend) ────────────────────────────
+
+def strategy_chandelier_trend(df: pd.DataFrame, params: dict) -> dict:
+    """Chandelier Exit — ATR trailing stop direction flip."""
+    close, high, low = df["close"], df["high"], df["low"]
+    atr_period = int(params.get("atr_period", 22))
+    atr_mult = float(params.get("atr_mult", 3.0))
+    lookback = int(params.get("lookback", 22))
+
+    atr = _atr(high, low, close, atr_period)
+    highest = high.rolling(lookback).max()
+    lowest = low.rolling(lookback).min()
+
+    long_stop = highest - atr_mult * atr
+    short_stop = lowest + atr_mult * atr
+
+    # Direction: long when close > short_stop, short when close < long_stop
+    long_signal = close > short_stop
+    short_signal = close < long_stop
+
+    long_entries = long_signal & ~long_signal.shift(1).fillna(False)
+    short_entries = short_signal & ~short_signal.shift(1).fillna(False)
+    long_exits = short_signal
+    short_exits = long_signal
+
+    return _signals(long_entries, long_exits, short_entries, short_exits,
+                    meta={"family": "trend_follow", "sub": "chandelier_trend"})
+
+
+def strategy_supertrend_follow(df: pd.DataFrame, params: dict) -> dict:
+    """Supertrend — ATR-based dynamic support/resistance bands."""
+    close, high, low = df["close"], df["high"], df["low"]
+    atr_period = int(params.get("atr_period", 10))
+    atr_mult = float(params.get("atr_mult", 3.0))
+
+    atr = _atr(high, low, close, atr_period)
+    hl2 = (high + low) / 2
+    upper = hl2 + atr_mult * atr
+    lower = hl2 - atr_mult * atr
+
+    # Initialize supertrend
+    direction = pd.Series(1, index=df.index, dtype=int)
+    final_upper = upper.copy()
+    final_lower = lower.copy()
+
+    for i in range(1, len(df)):
+        if lower.iloc[i] > final_lower.iloc[i - 1]:
+            final_lower.iloc[i] = lower.iloc[i]
+        else:
+            final_lower.iloc[i] = final_lower.iloc[i - 1]
+        if upper.iloc[i] < final_upper.iloc[i - 1]:
+            final_upper.iloc[i] = upper.iloc[i]
+        else:
+            final_upper.iloc[i] = final_upper.iloc[i - 1]
+
+        if close.iloc[i] > final_upper.iloc[i - 1]:
+            direction.iloc[i] = 1
+        elif close.iloc[i] < final_lower.iloc[i - 1]:
+            direction.iloc[i] = -1
+        else:
+            direction.iloc[i] = direction.iloc[i - 1]
+
+    long_entries = (direction == 1) & (direction.shift(1) == -1)
+    short_entries = (direction == -1) & (direction.shift(1) == 1)
+    long_exits = direction == -1
+    short_exits = direction == 1
+
+    return _signals(long_entries, long_exits, short_entries, short_exits,
+                    meta={"family": "trend_follow", "sub": "supertrend_follow"})
+
+
+# ── M. Realized Volatility Regime Breakout ──────────────────────────────────
+
+def strategy_realized_vol_breakout(df: pd.DataFrame, params: dict) -> dict:
+    """Low volatility compression → breakout expansion trade."""
+    close = df["close"]
+    lookback = int(params.get("lookback", 30))
+    low_vol_pct = float(params.get("low_vol_pct", 25))
+    atr_sl = float(params.get("atr_sl_mult", 1.5))
+
+    # Realized vol via log returns
+    log_ret = np.log(close / close.shift(1))
+    rvol = log_ret.rolling(lookback).std() * np.sqrt(252)
+    rvol_rank = _pct_rank(rvol, lookback * 4)
+
+    compressed = rvol_rank <= low_vol_pct
+    expanding = rvol_rank > low_vol_pct
+
+    ema50 = _ema(close, 50)
+    long_entries = compressed.shift(1).fillna(False) & expanding & (close > ema50)
+    short_entries = compressed.shift(1).fillna(False) & expanding & (close < ema50)
+
+    atr = _atr(df["high"], df["low"], close)
+    long_exits = close < ema50 - atr * atr_sl
+    short_exits = close > ema50 + atr * atr_sl
+
+    return _signals(long_entries, long_exits, short_entries, short_exits,
+                    meta={"family": "vol_regime", "sub": "realized_vol_breakout"})
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 STRATEGY_REGISTRY: dict[str, tuple[str, Callable]] = {
@@ -680,6 +982,16 @@ STRATEGY_REGISTRY: dict[str, tuple[str, Callable]] = {
     "vwap_reclaim":           ("engine_d_proxy",  strategy_vwap_reclaim),
     "micro_breakout":         ("engine_d_proxy",  strategy_micro_breakout),
     "ema_scalp_pullback":     ("engine_d_proxy",  strategy_ema_scalp_pullback),
+    "cvd_momentum":           ("engine_d_proxy",  strategy_cvd_momentum),
+    "stochastic_cross":       ("stochastic",      strategy_stochastic_cross),
+    "stochastic_divergence":  ("stochastic",      strategy_stochastic_divergence),
+    "fib_retracement":        ("fibonacci",        strategy_fib_retracement),
+    "aroon_trend":            ("aroon_family",     strategy_aroon_trend),
+    "obv_divergence":         ("divergence",       strategy_obv_divergence),
+    "rsi_divergence":         ("divergence",       strategy_rsi_divergence),
+    "chandelier_trend":       ("trend_follow",     strategy_chandelier_trend),
+    "supertrend_follow":      ("trend_follow",     strategy_supertrend_follow),
+    "realized_vol_breakout":  ("vol_regime",       strategy_realized_vol_breakout),
 }
 
 FAMILY_STRATEGIES: dict[str, list[str]] = {
@@ -689,7 +1001,13 @@ FAMILY_STRATEGIES: dict[str, list[str]] = {
     "mean_reversion": ["rsi_extreme", "bollinger_touch", "vwap_deviation"],
     "volatility":     ["bb_squeeze_breakout", "atr_compression"],
     "engine_b_proxy": ["ob_bos", "structure_filters"],
-    "engine_d_proxy": ["vwap_reclaim", "micro_breakout", "ema_scalp_pullback"],
+    "engine_d_proxy": ["vwap_reclaim", "micro_breakout", "ema_scalp_pullback", "cvd_momentum"],
+    "stochastic":     ["stochastic_cross", "stochastic_divergence"],
+    "fibonacci":      ["fib_retracement"],
+    "aroon_family":   ["aroon_trend"],
+    "divergence":     ["obv_divergence", "rsi_divergence"],
+    "trend_follow":   ["chandelier_trend", "supertrend_follow"],
+    "vol_regime":     ["realized_vol_breakout"],
 }
 
 

@@ -1,0 +1,3 @@
+strategy_name,total_configs,strong,weak,reject,avg_net_return,avg_win_rate,avg_robustness,avg_sqn,avg_oos_return,total_trades,pass_rate,verdict
+structure_filters,24,1,2,17,-0.174008,0.255098,0.574053,-5.576019,-0.078572,2130,0.125000,HURTS
+ob_bos,48,0,0,0,,,,,,384,0.000000,NEUTRAL

@@ -1,0 +1,25 @@
+{
+  "run_id": "run_20260429_081031_bb52a2",
+  "mode": "large",
+  "symbol_count": 4,
+  "timeframes": [
+    "H4",
+    "D1"
+  ],
+  "families": [
+    "trend_momentum",
+    "pullback",
+    "breakout",
+    "mean_reversion",
+    "engine_b_proxy"
+  ],
+  "specs_count": 76,
+  "results_count": 608,
+  "direction": "both",
+  "generated_at": "2026-04-29T08:10:58.307858+00:00",
+  "session_id": "sess_20260429_081031_adfa99",
+  "market_group": "forex",
+  "trading_style": "swing",
+  "research_depth": "deep",
+  "role": "discovery"
+}

@@ -1,0 +1,36 @@
+{
+  "engine_a": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [
+      "raise ADX gate for crypto volatility"
+    ],
+    "next_tests": [
+      "test EMA/RSI+MACD confluences >2.1 on H1/M15 crypto"
+    ]
+  },
+  "engine_b": {
+    "keep": [],
+    "remove_or_demote": [
+      "BOS/CHoCH + FVG/OB in london/ny sessions"
+    ],
+    "tune": [
+      "tighten range_bars>12, atr_expand_min>0.5"
+    ],
+    "next_tests": []
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [
+      "vwap_reclaim",
+      "ema_scalp_pullback",
+      "micro_breakout"
+    ],
+    "tune": [
+      "raise to VP grade B+, add CVD filter"
+    ],
+    "next_tests": []
+  },
+  "generated_at": "2026-04-27T13:09:33.978070+00:00",
+  "safety_note": "These are backtest discovery findings only. Do NOT apply to live thresholds without further validation."
+}

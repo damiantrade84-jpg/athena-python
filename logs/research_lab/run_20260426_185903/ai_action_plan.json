@@ -1,0 +1,87 @@
+{
+  "overall_verdict": "NEEDS_MORE_DATA \u2014 Tiny samples (<30 trades penalized), single symbol (XAU/USD), weak OOS, no multi-engine coverage. Weak hints in Engine B FVG but not robust.",
+  "top_candidates": [
+    {
+      "strategy": "engine_b_proxy/structure_filters fvg_detection=True|strong_close_pct=0.7",
+      "symbol": "XAU/USD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "engine_b_proxy/structure_filters fvg_detection=True|strong_close_pct=0.8",
+      "symbol": "XAU/USD",
+      "tf": "H4",
+      "label": "REJECT"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "engine_b_proxy/structure_filters fvg_detection=False|strong_close_pct=0.7",
+      "reason": "Net negative, low WR/PF"
+    },
+    {
+      "strategy": "engine_b_proxy/structure_filters fvg_detection=False|strong_close_pct=0.8",
+      "reason": "Net negative, low WR/PF"
+    },
+    {
+      "strategy": "engine_b_proxy/structure_filters fvg_detection=True|strong_close_pct=0.8",
+      "reason": "Tiny sample (24 trades)"
+    }
+  ],
+  "engine_a": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Add trend_momentum family on multi-symbols"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "fvg_detection=True"
+    ],
+    "remove_or_demote": [
+      "fvg_detection=False"
+    ],
+    "tune": [
+      "strong_close_pct sensitivity (0.6-0.9)"
+    ],
+    "next_tests": [
+      "Multi-symbol H4 validation"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Add engine_d_proxy on crypto symbols"
+    ]
+  },
+  "data_quality_warnings": [
+    "Tiny samples (<30 trades on 1 config)",
+    "Single symbol/TF/session/direction \u2014 lacks robustness clusters"
+  ],
+  "telemetry_warnings": [
+    "Missing IS/OOS breakdown details; OOS weak (~0.04 vs IS ~0.4)"
+  ],
+  "next_tiny_test": {
+    "symbols": [
+      "XAU/USD",
+      "EUR/USD",
+      "GBP/USD",
+      "BTC/USD"
+    ],
+    "timeframes": [
+      "H4"
+    ],
+    "strategy_families": [
+      "engine_b_proxy"
+    ],
+    "reason": "Expand symbols for robustness; fix fvg_detection=True; target >50 trades/config"
+  },
+  "do_not_do_next": [
+    "engine_b_proxy fvg_detection=False",
+    "Single-symbol only tests"
+  ]
+}

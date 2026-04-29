@@ -1,0 +1,16 @@
+{
+  "run_id": "run_20260427_121905",
+  "mode": "tiny",
+  "symbol_count": 2,
+  "timeframes": [
+    "H4"
+  ],
+  "families": [
+    "trend_momentum",
+    "pullback"
+  ],
+  "specs_count": 45,
+  "results_count": 90,
+  "direction": "both",
+  "generated_at": "2026-04-27T12:19:08.510592+00:00"
+}

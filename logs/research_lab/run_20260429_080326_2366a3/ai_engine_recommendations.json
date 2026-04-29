@@ -1,0 +1,40 @@
+{
+  "engine_a": {
+    "keep": [
+      "ADX gate (macd_direction)"
+    ],
+    "remove_or_demote": [
+      "EMA cross/alignment"
+    ],
+    "tune": [
+      "RSI+MACD: test rsi_confirm=False; raise ADX min>20"
+    ],
+    "next_tests": [
+      "Forex symbols (EURUSD) H1/H4 macd_direction"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (strong_close_pct=0.7)"
+    ],
+    "remove_or_demote": [
+      "FVG detection (when enabled)"
+    ],
+    "tune": [
+      "strong_close_pct 0.7-0.8 on H4"
+    ],
+    "next_tests": [
+      "+4 stocks (GOOGL/AMZN) H4/H1"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Crypto symbols (BTCUSDT) M15/H1 VP/OrderFlow full"
+    ]
+  },
+  "generated_at": "2026-04-29T08:05:05.710827+00:00",
+  "safety_note": "These are backtest discovery findings only. Do NOT apply to live thresholds without further validation."
+}

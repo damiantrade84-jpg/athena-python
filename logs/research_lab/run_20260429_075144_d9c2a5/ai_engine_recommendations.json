@@ -1,0 +1,41 @@
+{
+  "engine_a": {
+    "keep": [
+      "ema_alignment (adx_min=0|ema_long=200|ema_mid=50|ema_short=20)"
+    ],
+    "remove_or_demote": [
+      "ema_cross",
+      "macd_direction"
+    ],
+    "tune": [
+      "ADX gate >20",
+      "RSI confirm=False"
+    ],
+    "next_tests": [
+      "Test on forex majors D1/H4"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (strong_close_pct>=0.8)"
+    ],
+    "remove_or_demote": [],
+    "tune": [
+      "FVG=False priority",
+      "Add pullback location synergy"
+    ],
+    "next_tests": [
+      "Full checklist on XAG/USD + forex"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Crypto symbols (BTC/ETH) with VP params"
+    ]
+  },
+  "generated_at": "2026-04-29T07:52:36.872918+00:00",
+  "safety_note": "These are backtest discovery findings only. Do NOT apply to live thresholds without further validation."
+}

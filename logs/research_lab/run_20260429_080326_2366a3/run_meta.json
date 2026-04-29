@@ -1,0 +1,26 @@
+{
+  "run_id": "run_20260429_080326_2366a3",
+  "mode": "large",
+  "symbol_count": 4,
+  "timeframes": [
+    "M15",
+    "H1",
+    "H4"
+  ],
+  "families": [
+    "trend_momentum",
+    "pullback",
+    "breakout",
+    "mean_reversion",
+    "engine_b_proxy"
+  ],
+  "specs_count": 76,
+  "results_count": 912,
+  "direction": "both",
+  "generated_at": "2026-04-29T08:04:37.394931+00:00",
+  "session_id": "sess_20260429_080326_91c4f7",
+  "market_group": "stocks",
+  "trading_style": "intra",
+  "research_depth": "deep",
+  "role": "discovery"
+}

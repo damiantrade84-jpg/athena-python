@@ -1,0 +1,120 @@
+{
+  "session_id": "sess_20260427_185342_5ca9d7",
+  "market_group": "forex",
+  "trading_style": "swing",
+  "research_depth": "quick",
+  "status": "COMPLETE",
+  "current_phase": "COMPLETE",
+  "progress_pct": 100,
+  "discovery_run_id": "run_20260427_185342_a9d25f",
+  "plan_id": "plan_0271c5fe",
+  "validation_run_ids": [
+    "run_20260427_185409_e392",
+    "run_20260427_185408_d02e"
+  ],
+  "followup_run_ids": [],
+  "ai_review_status": "COMPLETE",
+  "final_verdict": "VALIDATION_CANDIDATE",
+  "final_summary": "Session sess_20260427_185342_5ca9d7 | Forex Swing | 30 configs | 0 strong | 30 weak | Verdict: VALIDATION_CANDIDATE",
+  "best_clusters": [],
+  "weak_clusters": [
+    {
+      "strategy_name": "ema_cross",
+      "symbol": "EUR/USD",
+      "timeframe": "D1",
+      "net_return": 0.121568,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "macd_direction",
+      "symbol": "GBP/USD",
+      "timeframe": "D1",
+      "net_return": 0.141938,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "ema_cross",
+      "symbol": "EUR/USD",
+      "timeframe": "D1",
+      "net_return": 0.095604,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "ema_cross",
+      "symbol": "EUR/USD",
+      "timeframe": "D1",
+      "net_return": 0.095604,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "macd_direction",
+      "symbol": "GBP/USD",
+      "timeframe": "D1",
+      "net_return": 0.110004,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "ema_cross",
+      "symbol": "EUR/USD",
+      "timeframe": "D1",
+      "net_return": 0.131692,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "macd_direction",
+      "symbol": "USD/JPY",
+      "timeframe": "H4",
+      "net_return": 0.054706,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "macd_direction",
+      "symbol": "USD/JPY",
+      "timeframe": "H4",
+      "net_return": 0.040442,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "macd_direction",
+      "symbol": "EUR/USD",
+      "timeframe": "H4",
+      "net_return": 0.008246,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "macd_direction",
+      "symbol": "USD/JPY",
+      "timeframe": "D1",
+      "net_return": 0.002497,
+      "status": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_clusters": [],
+  "do_not_implement": [
+    "H1-only trend_momentum",
+    "Single-symbol deep param sweeps"
+  ],
+  "next_research_action": "Run ['trend_momentum', 'pullback'] on ['USD/CHF', 'NZD/USD', 'AUD/JPY'] at ['D1', 'H4'] \u2014 Expand symbols/TF for clusters; include pullback for Engine A breadth",
+  "next_research_params": {
+    "market_group": "forex",
+    "trading_style": "swing",
+    "research_depth": "quick",
+    "symbols": [
+      "USD/CHF",
+      "NZD/USD",
+      "AUD/JPY"
+    ],
+    "timeframes": [
+      "D1",
+      "H4"
+    ],
+    "families": [
+      "trend_momentum",
+      "pullback"
+    ],
+    "reason": "Expand symbols/TF for clusters; include pullback for Engine A breadth"
+  },
+  "errors": [],
+  "created_at": "2026-04-27T18:53:42.740105+00:00",
+  "updated_at": "2026-04-27T18:54:41.590249+00:00"
+}

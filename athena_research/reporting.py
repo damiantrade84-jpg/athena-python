@@ -21,7 +21,7 @@ from athena_research.metrics import StrategyMetrics
 log = logging.getLogger(__name__)
 
 OUTPUT_COLUMNS = [
-    "run_id", "symbol", "asset_class", "timeframe", "family", "strategy_name",
+    "run_id", "symbol", "asset_class", "timeframe", "zone", "family", "strategy_name",
     "params_str", "direction", "session", "status",
     "trade_count", "win_rate", "profit_factor", "avg_return", "expectancy",
     "max_drawdown", "sharpe", "sqn", "exposure_pct", "avg_duration_bars",
@@ -117,6 +117,15 @@ def write_csvs(df: pd.DataFrame, run_dir: Path) -> list[Path]:
     # By direction
     if "direction" in df.columns:
         _save(_group_agg(df, "direction"), "by_direction.csv")
+
+    # By zone (scalp/intra/swing)
+    if "zone" in df.columns and df["zone"].notna().any() and (df["zone"] != "").any():
+        _save(_group_agg(df[df["zone"] != ""], "zone"), "by_zone.csv")
+
+    # Per-pair recommendation (top result per symbol)
+    if not ranked.empty:
+        per_pair = ranked.groupby("symbol").first().reset_index()
+        _save(per_pair, "per_pair_recommendation.csv")
 
     # Indicator attribution (aggregated by strategy_name)
     _save(_indicator_attribution(df), "indicator_attribution.csv")
@@ -250,6 +259,21 @@ def write_markdown_report(df: pd.DataFrame, run_dir: Path, run_id: str, run_meta
         a(_df_to_md(tf_agg.reset_index()))
     else:
         a("No valid results.")
+    a("")
+
+    # ── Zone breakdown ──────────────────────────────────────────────────────
+    a("## Performance by Zone (Scalp / Intra / Swing)")
+    if not valid.empty and "zone" in valid.columns and (valid["zone"] != "").any():
+        zone_df = valid[valid["zone"] != ""]
+        zone_agg = zone_df.groupby("zone").agg(
+            count=("status", "count"),
+            avg_net_return=("net_return", "mean"),
+            avg_wr=("win_rate", "mean"),
+            avg_robustness=("robustness_score", "mean"),
+        ).sort_values("avg_net_return", ascending=False)
+        a(_df_to_md(zone_agg.reset_index()))
+    else:
+        a("No zone data available for this run.")
     a("")
 
     # ── Q4: Best direction ───────────────────────────────────────────────────

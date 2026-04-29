@@ -1,0 +1,109 @@
+# Athena Pro v4 Backtest Discovery Decision Memo
+**Run ID:** run_20260427_122259 | **Analyst:** Quantitative Research | **Date:** 2026-04-27  
+**Scope:** Mean reversion family discovery on crypto H4 (BTC/USDT, ETH/USDT). Tiny mode (16 configs). **NOT a live execution recommendation. Do NOT copy BT_MIN thresholds to live gates.**
+
+## Key Findings & Labels
+- **Total valid configs (≥20 trades, robustness pass):** 4/16 (25%). All bollinger_touch variants.
+- **Penalties applied:** Heavy for <30 trades (all penalized); single TF/session/direction; limited symbols (2); some OOS weakness (e.g., ETH num_std=2.0 fails OOS).
+- **Robustness preference:** Bollinger_touch shows cluster edge on ETH > BTC. No multi-symbol dominance yet.
+- **Data trustworthiness:** Low sample sizes dominate (12/16 <20 trades). No telemetry bugs, but missing IS/OOS splits in some NaNs. All from binance_rest (reliable source).
+
+### 1. Strategy Family
+mean_reversion: **WEAK_CANDIDATE** (only family tested; avg net_return 0.203, robustness 0.66; 4/16 pass but small samples/single TF).
+
+### 2. Indicator Helped Most
+bollinger_touch: **STRONG_CANDIDATE** (ETH num_std=2.5|period=20: PF=2.82, Sharpe=2.48, robustness=0.83, 25 trades; cluster of 3 weak+1 strong).
+
+### 3. Indicator Hurt Most
+None definitively (no REJECTs). rsi_extreme & vwap_deviation: **NEEDS_MORE_DATA** (all <20 trades).
+
+### 4. Asset Group
+crypto: **WEAK_CANDIDATE** (only group; avg net_return 0.203, WR 70.6%).
+
+### 5. Symbol
+ETH/USDT: **STRONG_CANDIDATE** (avg net 0.317, WR 76.8%, robustness 0.735; outperforms BTC).  
+BTC/USDT: **WEAK_CANDIDATE** (avg net 0.088, WR 64.4%).
+
+### 6. Timeframe
+H4: **WEAK_CANDIDATE** (only TF; avg net 0.203).
+
+### 7. Session
+all: **NEEDS_MORE_DATA** (only session; no breakdown).
+
+### 8. LONG or SHORT
+both: **NEEDS_MORE_DATA** (no long/short split; all "both").
+
+### 9. Setups Collapsed After Fees
+None. All valid configs gross-profitable & net-positive (e.g., ETH bollinger 2.5: gross 0.429/net 0.429).
+
+### 10. Setups with Too Little Sample (<30 trades penalized; <20 auto NEEDS_MORE_DATA)
+- mean_reversion/rsi_extreme (all 8 configs: 7-18 trades): **NEEDS_MORE_DATA**.
+- mean_reversion/vwap_deviation (all 4 configs: 7-8 trades): **NEEDS_MORE_DATA**.
+- BTC bollinger_touch num_std=2.5 (27 trades): **WEAK_CANDIDATE** (penalized but passes min).
+
+### 11. Engine A (3-factor: EMA trend, RSI+MACD momentum, ADX)
+**NEEDS_MORE_DATA** overall (no trend_momentum or pullback proxies in results).  
+- Keep: Current forex floor (2.1) untouched.  
+- Remove/Demote: N/A.  
+- Tune: Test mean_reversion bollinger_touch as momentum filter candidate (direction: loosen RSI+MACD for H4 crypto?).
+
+### 12. Engine B (Naked PA: BOS/CHoCH, FVG, OB, etc.)
+No engine_b_proxy results. **NEEDS_MORE_DATA**.  
+- Keep: Strict checklist untouched.  
+- Remove/Demote: N/A.  
+- Tune: N/A (add mean_reversion location filter?).
+
+### 13. Engine D (VP/OF scalping: POC/VAH, CVD, etc., crypto-focused)
+No engine_d_proxy; H4 too high for scalping. **NEEDS_MORE_DATA**. VWAP deviation weak (low samples).  
+- Keep: Current grades A-D.  
+- Remove/Demote: N/A.  
+- Tune: Test vwap_deviation as VAH/VAL proxy on lower TF (direction: raise std_threshold >2.0 for more trades).
+
+### 14. Next Smallest Useful Test
+Expand bollinger_touch (num_std=2.0-2.5, period=20) on ETH/USDT H4 + 2-3 more crypto symbols (e.g., SOL/USDT, BNB/USDT) to confirm cluster/multi-symbol robustness.
+
+### 15. What Should NOT Be Tested Further Right Now?
+- rsi_extreme (consistently <20 trades across params/symbols; no edge signal).  
+- vwap_deviation (tiny samples, no pass).  
+- Prioritize clusters over one-offs until >30 trades/symbol.
+
+**Actionable Next Steps:** Queue tiny test via Autopilot. Monitor OOS decay. No live changes.
+
+```
+{
+  "overall_verdict": "WEAK_CANDIDATE mean_reversion edge via bollinger_touch on ETH/USDT H4 crypto. Promising but penalize small samples/single TF/symbols. Needs multi-symbol expansion.",
+  "top_candidates": [
+    {"strategy": "bollinger_touch num_std=2.5|period=20", "symbol": "ETH/USDT", "tf": "H4", "label": "STRONG_CANDIDATE"},
+    {"strategy": "bollinger_touch num_std=2.0|period=20", "symbol": "ETH/USDT", "tf": "H4", "label": "WEAK_CANDIDATE"},
+    {"strategy": "bollinger_touch num_std=2.0|period=20", "symbol": "BTC/USDT", "tf": "H4", "label": "WEAK_CANDIDATE"}
+  ],
+  "rejected_setups": [],
+  "engine_a": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": ["Test bollinger_touch as RSI+MACD momentum proxy for crypto H4"],
+    "next_tests": ["mean_reversion bollinger_touch on multi-crypto H4"]
+  },
+  "engine_b": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": []
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": ["Raise vwap_deviation std_threshold >2.0 for sample adequacy"],
+    "next_tests": ["vwap_deviation on lower TF crypto"]
+  },
+  "data_quality_warnings": ["12/16 configs <20 trades", "Only 2 symbols/TF/session/direction tested"],
+  "telemetry_warnings": [],
+  "next_tiny_test": {
+    "symbols": ["ETH/USDT", "SOL/USDT", "BNB/USDT"],
+    "timeframes": ["H4"],
+    "strategy_families": ["mean_reversion"],
+    "reason": "Expand top bollinger_touch cluster for multi-symbol robustness (>30 trades/target)"
+  },
+  "do_not_do_next": ["rsi_extreme (chronic low samples)", "vwap_deviation (until TF lowered)"]
+}
+```

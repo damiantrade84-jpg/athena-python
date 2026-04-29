@@ -1,0 +1,5 @@
+run_id,symbol,asset_class,timeframe,family,strategy_name,params_str,direction,session,status,trade_count,win_rate,profit_factor,avg_return,expectancy,max_drawdown,sharpe,sqn,exposure_pct,avg_duration_bars,gross_return,net_return,is_return,oos_return,robustness_score,param_sensitivity,skip_reason,data_source
+run_20260429_081058_8dc5,USD/JPY,forex,H4,mean_reversion,rsi_extreme,overbought=70|oversold=30|period=14,both,all,WEAK_CANDIDATE,20,0.750000,2.871188,0.001843,0.001843,-0.010164,2.344338,2.102986,0.020020,12.500000,0.037353,0.037353,0.019441,0.017570,0.791127,,,mt5
+run_20260429_081058_8dc5,USD/JPY,forex,H4,mean_reversion,rsi_extreme,overbought=75|oversold=30|period=14,both,all,NEEDS_MORE_DATA,13,,,,,,,,,,,,,,,,only 13 trades < min 20,mt5
+run_20260429_081058_8dc5,USD/JPY,forex,H4,mean_reversion,rsi_extreme,overbought=70|oversold=25|period=14,both,all,NEEDS_MORE_DATA,16,,,,,,,,,,,,,,,,only 16 trades < min 20,mt5
+run_20260429_081058_8dc5,USD/JPY,forex,H4,mean_reversion,rsi_extreme,overbought=75|oversold=25|period=14,both,all,NEEDS_MORE_DATA,9,,,,,,,,,,,,,,,,only 9 trades < min 20,mt5

@@ -1,0 +1,1 @@
+run_id,symbol,asset_class,timeframe,family,strategy_name,params_str,direction,session,status,trade_count,win_rate,profit_factor,avg_return,expectancy,max_drawdown,sharpe,sqn,exposure_pct,avg_duration_bars,gross_return,net_return,is_return,oos_return,robustness_score,param_sensitivity,skip_reason

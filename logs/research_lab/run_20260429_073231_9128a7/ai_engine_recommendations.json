@@ -1,0 +1,48 @@
+{
+  "engine_a": {
+    "keep": [
+      "macd_direction (adx_min=0)"
+    ],
+    "remove_or_demote": [
+      "ema_cross",
+      "pullback_ema",
+      "ema_alignment"
+    ],
+    "tune": [
+      "ADX >20 for momentum filter",
+      "RSI_confirm=False"
+    ],
+    "next_tests": [
+      "Multi-symbol H4 macd_direction OOS validation"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (fvg=False)"
+    ],
+    "remove_or_demote": [
+      "ob_bos"
+    ],
+    "tune": [
+      "Strong_close_pct relax for H4 crypto",
+      "Add RR gates"
+    ],
+    "next_tests": [
+      "Session-split structure_filters on top symbols"
+    ]
+  },
+  "engine_d": {
+    "keep": [
+      "vwap_deviation (std=1.5)"
+    ],
+    "remove_or_demote": [],
+    "tune": [
+      "Lower std_threshold; add CVD/Absorption"
+    ],
+    "next_tests": [
+      "VP/POC full backtest on M15/H1 crypto"
+    ]
+  },
+  "generated_at": "2026-04-29T07:34:29.983474+00:00",
+  "safety_note": "These are backtest discovery findings only. Do NOT apply to live thresholds without further validation."
+}

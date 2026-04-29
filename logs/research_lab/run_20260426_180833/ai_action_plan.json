@@ -1,0 +1,119 @@
+{
+  "overall_verdict": "Promising mean_reversion clusters on H4 commodities; trend_momentum/breakouts rejected. Focus validation on top candidates.",
+  "top_candidates": [
+    {
+      "strategy": "bollinger_touch",
+      "symbol": "SOL/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "pullback_ema",
+      "symbol": "XAG/USD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "structure_filters",
+      "symbol": "MSFT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "macd_direction",
+      "symbol": "ETH/USDT",
+      "tf": "H1",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "micro_breakout",
+      "symbol": "XAU/USD",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "ema_cross",
+      "reason": "net-negative, low WR, OOS fail"
+    },
+    {
+      "strategy": "ema_scalp_pullback",
+      "reason": "worst net_return (-0.191)"
+    },
+    {
+      "strategy": "ob_bos",
+      "reason": "0 passes, net -0.09"
+    }
+  ],
+  "engine_a": {
+    "keep": [
+      "macd_direction (adx_min=0)"
+    ],
+    "remove_or_demote": [
+      "ema_cross",
+      "rsi_confirm"
+    ],
+    "tune": [
+      "ADX_min >20 on H4 commodities"
+    ],
+    "next_tests": [
+      "RSI+MACD on XAG/USD H4"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (strong_close_pct=0.7)"
+    ],
+    "remove_or_demote": [
+      "ob_bos",
+      "fvg_detection"
+    ],
+    "tune": [
+      "location/RR room checks"
+    ],
+    "next_tests": [
+      "BOS/CHoCH on commodities H4"
+    ]
+  },
+  "engine_d": {
+    "keep": [
+      "micro_breakout (range_bars=3, atr_sl_mult=0.5-1.0)"
+    ],
+    "remove_or_demote": [
+      "CVD/VWAP proxies"
+    ],
+    "tune": [
+      "fee_guard_r=0.5, POC/VAH/VAL grades"
+    ],
+    "next_tests": [
+      "absorption on XAU/USD H4"
+    ]
+  },
+  "data_quality_warnings": [
+    "No session/direction splits; all 'both/all'"
+  ],
+  "telemetry_warnings": [
+    "Small samples dominate trend_momentum (1376 <30 trades)"
+  ],
+  "next_tiny_test": {
+    "symbols": [
+      "XAG/USD",
+      "XAU/USD",
+      "SOL/USDT",
+      "NAS100"
+    ],
+    "timeframes": [
+      "H4"
+    ],
+    "strategy_families": [
+      "mean_reversion"
+    ],
+    "reason": "Validate bollinger_touch cluster; add sessions"
+  },
+  "do_not_do_next": [
+    "ema_cross",
+    "M15 trend_momentum",
+    "volatility family"
+  ]
+}

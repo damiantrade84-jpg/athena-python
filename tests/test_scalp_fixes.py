@@ -186,6 +186,8 @@ def _mock_scalp_setup(monkeypatch, candles, tp1, tp2):
         "SCALP_VP_LOOKBACK_BARS": 20,
         "BIAS_TIMEFRAME": "M15",
         "MIN_GRADE_AUTO_EXECUTE": "C",
+        # Terminal TP1 exit for assertions (default partial+runner yields BE/TIMEOUT after TP1 touch).
+        "ENGINE_D_PARTIAL_EXIT_ENABLED": False,
     })
 
     monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda x: "EURUSD")

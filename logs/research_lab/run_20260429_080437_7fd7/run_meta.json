@@ -1,0 +1,21 @@
+{
+  "run_id": "run_20260429_080437_7fd7",
+  "mode": "small",
+  "symbol_count": 1,
+  "timeframes": [
+    "H4"
+  ],
+  "families": [
+    "engine_b_proxy"
+  ],
+  "specs_count": 4,
+  "results_count": 4,
+  "direction": "both",
+  "generated_at": "2026-04-29T08:04:41.406465+00:00",
+  "session_id": "sess_20260429_080326_91c4f7",
+  "market_group": "stocks",
+  "trading_style": "intra",
+  "research_depth": "deep",
+  "role": "validation",
+  "parent_run_id": "run_20260429_080326_2366a3"
+}

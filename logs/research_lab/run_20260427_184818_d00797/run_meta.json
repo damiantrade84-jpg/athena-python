@@ -1,0 +1,20 @@
+{
+  "run_id": "run_20260427_184818_d00797",
+  "mode": "tiny",
+  "symbol_count": 6,
+  "timeframes": [
+    "H4"
+  ],
+  "families": [
+    "breakout"
+  ],
+  "specs_count": 11,
+  "results_count": 44,
+  "direction": "both",
+  "generated_at": "2026-04-27T18:48:33.607359+00:00",
+  "session_id": "sess_20260427_184818_5bb915",
+  "market_group": "forex",
+  "trading_style": "intra",
+  "research_depth": "quick",
+  "role": "discovery"
+}

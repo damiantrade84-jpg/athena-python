@@ -1,0 +1,47 @@
+{
+  "engine_a": {
+    "keep": [
+      "MACD direction (adx_min=0)"
+    ],
+    "remove_or_demote": [
+      "EMA cross/coherence"
+    ],
+    "tune": [
+      "ADX gate to 15-25",
+      "Prioritize MACD over EMA in 0-3 score"
+    ],
+    "next_tests": [
+      "H4 multi-crypto + forex, long/short split"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "Structure filters (high-sample H4)"
+    ],
+    "remove_or_demote": [
+      "FVG detection=False + strong_close=0.8",
+      "OB/BOS"
+    ],
+    "tune": [
+      "Integrate prev_day_hl, relax RR/location for H4"
+    ],
+    "next_tests": [
+      "Direct BOS/CHoCH on H4 crypto cluster"
+    ]
+  },
+  "engine_d": {
+    "keep": [
+      "VWAP deviation"
+    ],
+    "remove_or_demote": [],
+    "tune": [
+      "Grade B/C for H4 mean_reversion synergy",
+      "Add POC/VAL absorption"
+    ],
+    "next_tests": [
+      "Full VP/CVD telemetry on top H4 symbols"
+    ]
+  },
+  "generated_at": "2026-04-27T13:22:26.031896+00:00",
+  "safety_note": "These are backtest discovery findings only. Do NOT apply to live thresholds without further validation."
+}

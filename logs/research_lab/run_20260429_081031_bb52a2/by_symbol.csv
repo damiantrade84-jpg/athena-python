@@ -1,0 +1,5 @@
+symbol,win_rate_mean,win_rate_count,profit_factor_mean,profit_factor_count,expectancy_mean,expectancy_count,sharpe_mean,sharpe_count,sqn_mean,sqn_count,net_return_mean,net_return_count,oos_return_mean,oos_return_count,robustness_score_mean,robustness_score_count,trade_count_mean,trade_count_count
+AUD/USD,0.475219,11,8.632332,11,0.002867,11,0.980381,11,1.660162,11,0.096832,11,0.014222,11,0.485646,11,32.636364,11
+EUR/USD,0.416823,9,1.520648,9,0.003290,9,0.405970,9,0.690958,9,0.073003,9,-0.031454,9,0.457259,9,32.111111,9
+GBP/USD,0.459140,8,1.537744,8,0.002895,8,0.454231,8,0.919022,8,0.104548,8,-0.017417,8,0.498518,8,45.625000,8
+USD/JPY,0.427207,16,1.478434,16,0.002793,16,0.519052,16,0.702023,16,0.074886,16,-0.065893,16,0.491880,16,46.875000,16

@@ -1,0 +1,48 @@
+{
+  "engine_a": {
+    "keep": [
+      "MACD direction (adx_min=0)"
+    ],
+    "remove_or_demote": [
+      "EMA cross/coherence",
+      "ADX gate (min=0-25)"
+    ],
+    "tune": [
+      "RSI confirm (disable)",
+      "Slow EMA periods (test 50-200)"
+    ],
+    "next_tests": [
+      "Multi-symbol H1 MACD OOS"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "Structure filters (fvg=False|strong_close=0.8)"
+    ],
+    "remove_or_demote": [
+      "OB/BOS"
+    ],
+    "tune": [
+      "FVG detection (disable)",
+      "Zone RR logic"
+    ],
+    "next_tests": [
+      "Multi-symbol H4 structure_filters"
+    ]
+  },
+  "engine_d": {
+    "keep": [
+      "VWAP deviation (std=1.5)"
+    ],
+    "remove_or_demote": [],
+    "tune": [
+      "Grade A/B/C/D thresholds",
+      "Add POC/VAH/VAL params"
+    ],
+    "next_tests": [
+      "Crypto H1/H4 VP+OF full"
+    ]
+  },
+  "generated_at": "2026-04-29T07:23:31.941133+00:00",
+  "safety_note": "These are backtest discovery findings only. Do NOT apply to live thresholds without further validation."
+}

@@ -1,0 +1,21 @@
+{
+  "run_id": "run_20260429_075516_1952",
+  "mode": "small",
+  "symbol_count": 1,
+  "timeframes": [
+    "M15"
+  ],
+  "families": [
+    "trend_momentum"
+  ],
+  "specs_count": 3,
+  "results_count": 3,
+  "direction": "both",
+  "generated_at": "2026-04-29T07:55:17.066319+00:00",
+  "session_id": "sess_20260429_075458_26eeb8",
+  "market_group": "indices",
+  "trading_style": "intra",
+  "research_depth": "deep",
+  "role": "validation",
+  "parent_run_id": "run_20260429_075458_22a2d8"
+}

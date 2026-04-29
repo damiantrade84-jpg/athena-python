@@ -1,0 +1,21 @@
+{
+  "run_id": "run_20260429_074801_f935",
+  "mode": "small",
+  "symbol_count": 5,
+  "timeframes": [
+    "D1"
+  ],
+  "families": [
+    "pullback"
+  ],
+  "specs_count": 4,
+  "results_count": 16,
+  "direction": "both",
+  "generated_at": "2026-04-29T07:48:11.965693+00:00",
+  "session_id": "sess_20260429_074753_07eeda",
+  "market_group": "forex",
+  "trading_style": "swing",
+  "research_depth": "quick",
+  "role": "validation",
+  "parent_run_id": "run_20260429_074753_fbacb3"
+}

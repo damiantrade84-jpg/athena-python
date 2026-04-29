@@ -1,0 +1,100 @@
+{
+  "overall_verdict": "WEAK_CANDIDATE signals in Engine B structure_filters on H4 (XAU/USD primary); ob_bos REJECT. Engines A/D: NEEDS_MORE_DATA. Limited symbols/TFs penalize robustness.",
+  "top_candidates": [
+    {
+      "strategy": "structure_filters fvg_detection=True|strong_close_pct=0.7",
+      "symbol": "XAU/USD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "structure_filters fvg_detection=True|strong_close_pct=0.8",
+      "symbol": "XAU/USD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "structure_filters fvg_detection=False|strong_close_pct=0.8",
+      "symbol": "ETH/USDT",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "ob_bos (all params)",
+      "reason": "0% pass rate, net-negative, tiny samples"
+    },
+    {
+      "strategy": "structure_filters H1",
+      "reason": "net-negative, poor SQN"
+    },
+    {
+      "strategy": "engine_b_proxy GBP/USD",
+      "reason": "net-negative, tiny samples"
+    }
+  ],
+  "engine_a": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [
+      "Test EMA/RSI+MACD/ADX >2.1 on H4 commodities"
+    ],
+    "next_tests": [
+      "H4 trend_momentum/pullback on XAU/USD + 4 symbols"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (strong_close_pct=0.7-0.8 + FVG)"
+    ],
+    "remove_or_demote": [
+      "ob_bos (all engulf/vol/swing variants)"
+    ],
+    "tune": [
+      "Prioritize FVG=True, strong_close >=0.7; H4 focus"
+    ],
+    "next_tests": [
+      "H4 structure_filters on 4-6 more symbols (commodity/forex)"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Full engine_d_proxy on crypto/commodities H4"
+    ]
+  },
+  "data_quality_warnings": [
+    "Tiny samples dominate (59/96 <30 trades)",
+    "Only 4 symbols tested (penalize single-symbol bias)",
+    "H1 heavily rejected vs H4"
+  ],
+  "telemetry_warnings": [
+    "No Engine A/D coverage",
+    "Missing IS/OOS for many (nan values)",
+    "Binance_rest vs MT5 inconsistency possible"
+  ],
+  "next_tiny_test": {
+    "symbols": [
+      "XAU/USD",
+      "USD/JPY",
+      "EUR/USD",
+      "crude oil",
+      "ETH/USDT"
+    ],
+    "timeframes": [
+      "H4"
+    ],
+    "strategy_families": [
+      "engine_b_proxy"
+    ],
+    "reason": "Validate structure_filters cluster on H4 multi-symbols for robustness/OOS"
+  },
+  "do_not_do_next": [
+    "ob_bos variants",
+    "H1 engine_b_proxy",
+    "GBP/USD-only tests"
+  ]
+}

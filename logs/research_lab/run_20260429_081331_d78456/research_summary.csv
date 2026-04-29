@@ -1,0 +1,33 @@
+run_id,symbol,asset_class,timeframe,family,strategy_name,params_str,direction,session,status,trade_count,win_rate,profit_factor,avg_return,expectancy,max_drawdown,sharpe,sqn,exposure_pct,avg_duration_bars,gross_return,net_return,is_return,oos_return,robustness_score,param_sensitivity,skip_reason,data_source
+run_20260429_081331_d78456,AUD/USD,forex,D1,mean_reversion,rsi_extreme,overbought=70|oversold=30|period=14,both,all,NEEDS_MORE_DATA,11,,,,,,,,,,,,,,,,only 11 trades < min 20,mt5
+run_20260429_081331_d78456,AUD/USD,forex,D1,mean_reversion,rsi_extreme,overbought=75|oversold=30|period=14,both,all,NEEDS_MORE_DATA,8,,,,,,,,,,,,,,,,only 8 trades < min 20,mt5
+run_20260429_081331_d78456,AUD/USD,forex,D1,mean_reversion,rsi_extreme,overbought=70|oversold=25|period=14,both,all,NEEDS_MORE_DATA,6,,,,,,,,,,,,,,,,only 6 trades < min 20,mt5
+run_20260429_081331_d78456,AUD/USD,forex,D1,mean_reversion,rsi_extreme,overbought=75|oversold=25|period=14,both,all,NEEDS_MORE_DATA,3,,,,,,,,,,,,,,,,only 3 trades < min 20,mt5
+run_20260429_081331_d78456,AUD/USD,forex,D1,mean_reversion,bollinger_touch,num_std=2.0|period=20,both,all,STRONG_CANDIDATE,41,0.682927,2.591300,0.006359,0.006359,-0.053564,1.173435,2.502945,0.041041,10.804878,0.289775,0.289775,0.176297,0.096471,0.710162,,,mt5
+run_20260429_081331_d78456,AUD/USD,forex,D1,mean_reversion,bollinger_touch,num_std=2.5|period=20,both,all,NEEDS_MORE_DATA,15,,,,,,,,,,,,,,1.000000,,only 15 trades < min 20,mt5
+run_20260429_081331_d78456,AUD/USD,forex,D1,mean_reversion,vwap_deviation,std_threshold=1.5,both,all,WEAK_CANDIDATE,24,0.958333,79.577477,0.014386,0.014386,-0.004394,2.214463,9.657219,0.024024,27.958333,0.408012,0.408012,0.285876,0.131110,0.681587,,,mt5
+run_20260429_081331_d78456,AUD/USD,forex,D1,mean_reversion,vwap_deviation,std_threshold=2.0,both,all,NEEDS_MORE_DATA,19,,,,,,,,,,,,,,,,only 19 trades < min 20,mt5
+run_20260429_081331_d78456,USD/JPY,forex,D1,mean_reversion,rsi_extreme,overbought=70|oversold=30|period=14,both,all,NEEDS_MORE_DATA,14,,,,,,,,,,,,,,,,only 14 trades < min 20,mt5
+run_20260429_081331_d78456,USD/JPY,forex,D1,mean_reversion,rsi_extreme,overbought=75|oversold=30|period=14,both,all,NEEDS_MORE_DATA,12,,,,,,,,,,,,,,,,only 12 trades < min 20,mt5
+run_20260429_081331_d78456,USD/JPY,forex,D1,mean_reversion,rsi_extreme,overbought=70|oversold=25|period=14,both,all,NEEDS_MORE_DATA,10,,,,,,,,,,,,,,,,only 10 trades < min 20,mt5
+run_20260429_081331_d78456,USD/JPY,forex,D1,mean_reversion,rsi_extreme,overbought=75|oversold=25|period=14,both,all,NEEDS_MORE_DATA,8,,,,,,,,,,,,,,,,only 8 trades < min 20,mt5
+run_20260429_081331_d78456,USD/JPY,forex,D1,mean_reversion,bollinger_touch,num_std=2.0|period=20,both,all,REJECT,32,0.593750,0.620182,-0.004358,-0.004358,-0.194366,-0.484006,-0.978011,0.032032,18.781250,-0.139491,-0.139491,-0.157220,0.062303,0.392000,,,mt5
+run_20260429_081331_d78456,USD/JPY,forex,D1,mean_reversion,bollinger_touch,num_std=2.5|period=20,both,all,NEEDS_MORE_DATA,19,,,,,,,,,,,,,,1.000000,,only 19 trades < min 20,mt5
+run_20260429_081331_d78456,USD/JPY,forex,D1,mean_reversion,vwap_deviation,std_threshold=1.5,both,all,NEEDS_MORE_DATA,11,,,,,,,,,,,,,,1.000000,,only 11 trades < min 20,mt5
+run_20260429_081331_d78456,USD/JPY,forex,D1,mean_reversion,vwap_deviation,std_threshold=2.0,both,all,NEEDS_MORE_DATA,8,,,,,,,,,,,,,,,,only 8 trades < min 20,mt5
+run_20260429_081331_d78456,EUR/USD,forex,D1,mean_reversion,rsi_extreme,overbought=70|oversold=30|period=14,both,all,NEEDS_MORE_DATA,15,,,,,,,,,,,,,,,,only 15 trades < min 20,mt5
+run_20260429_081331_d78456,EUR/USD,forex,D1,mean_reversion,rsi_extreme,overbought=75|oversold=30|period=14,both,all,NEEDS_MORE_DATA,10,,,,,,,,,,,,,,,,only 10 trades < min 20,mt5
+run_20260429_081331_d78456,EUR/USD,forex,D1,mean_reversion,rsi_extreme,overbought=70|oversold=25|period=14,both,all,NEEDS_MORE_DATA,11,,,,,,,,,,,,,,,,only 11 trades < min 20,mt5
+run_20260429_081331_d78456,EUR/USD,forex,D1,mean_reversion,rsi_extreme,overbought=75|oversold=25|period=14,both,all,NEEDS_MORE_DATA,6,,,,,,,,,,,,,,,,only 6 trades < min 20,mt5
+run_20260429_081331_d78456,EUR/USD,forex,D1,mean_reversion,bollinger_touch,num_std=2.0|period=20,both,all,REJECT,40,0.550000,0.880549,-0.000585,-0.000585,-0.073162,-0.165445,-0.330005,0.040040,14.775000,-0.025595,-0.025595,0.008159,-0.021009,0.440000,,,mt5
+run_20260429_081331_d78456,EUR/USD,forex,D1,mean_reversion,bollinger_touch,num_std=2.5|period=20,both,all,WEAK_CANDIDATE,22,0.636364,1.530441,0.002432,0.002432,-0.043302,0.430163,0.871244,0.022022,16.090909,0.052906,0.052906,0.042587,0.022929,0.693520,,,mt5
+run_20260429_081331_d78456,EUR/USD,forex,D1,mean_reversion,vwap_deviation,std_threshold=1.5,both,all,NEEDS_MORE_DATA,4,,,,,,,,,,,,,,1.000000,,only 4 trades < min 20,mt5
+run_20260429_081331_d78456,EUR/USD,forex,D1,mean_reversion,vwap_deviation,std_threshold=2.0,both,all,NEEDS_MORE_DATA,4,,,,,,,,,,,,,,,,only 4 trades < min 20,mt5
+run_20260429_081331_d78456,GBP/USD,forex,D1,mean_reversion,rsi_extreme,overbought=70|oversold=30|period=14,both,all,NEEDS_MORE_DATA,19,,,,,,,,,,,,,,,,only 19 trades < min 20,mt5
+run_20260429_081331_d78456,GBP/USD,forex,D1,mean_reversion,rsi_extreme,overbought=75|oversold=30|period=14,both,all,NEEDS_MORE_DATA,11,,,,,,,,,,,,,,,,only 11 trades < min 20,mt5
+run_20260429_081331_d78456,GBP/USD,forex,D1,mean_reversion,rsi_extreme,overbought=70|oversold=25|period=14,both,all,NEEDS_MORE_DATA,15,,,,,,,,,,,,,,,,only 15 trades < min 20,mt5
+run_20260429_081331_d78456,GBP/USD,forex,D1,mean_reversion,rsi_extreme,overbought=75|oversold=25|period=14,both,all,NEEDS_MORE_DATA,7,,,,,,,,,,,,,,,,only 7 trades < min 20,mt5
+run_20260429_081331_d78456,GBP/USD,forex,D1,mean_reversion,bollinger_touch,num_std=2.0|period=20,both,all,WEAK_CANDIDATE,41,0.585366,1.347081,0.001697,0.001697,-0.052004,0.357092,0.715591,0.041041,14.073171,0.066880,0.066880,-0.002495,0.099443,0.546000,,,mt5
+run_20260429_081331_d78456,GBP/USD,forex,D1,mean_reversion,bollinger_touch,num_std=2.5|period=20,both,all,NEEDS_MORE_DATA,15,,,,,,,,,,,,,,1.000000,,only 15 trades < min 20,mt5
+run_20260429_081331_d78456,GBP/USD,forex,D1,mean_reversion,vwap_deviation,std_threshold=1.5,both,all,NEEDS_MORE_DATA,5,,,,,,,,,,,,,,1.000000,,only 5 trades < min 20,mt5
+run_20260429_081331_d78456,GBP/USD,forex,D1,mean_reversion,vwap_deviation,std_threshold=2.0,both,all,NEEDS_MORE_DATA,4,,,,,,,,,,,,,,,,only 4 trades < min 20,mt5

@@ -1,0 +1,2 @@
+asset_class,win_rate_mean,win_rate_count,profit_factor_mean,profit_factor_count,expectancy_mean,expectancy_count,sharpe_mean,sharpe_count,sqn_mean,sqn_count,net_return_mean,net_return_count,oos_return_mean,oos_return_count,robustness_score_mean,robustness_score_count,trade_count_mean,trade_count_count
+crypto,0.850000,1,14.346122,1,0.004855,1,8.343800,1,4.708130,1,0.101484,1,0.007354,1,0.544938,1,20.000000,1

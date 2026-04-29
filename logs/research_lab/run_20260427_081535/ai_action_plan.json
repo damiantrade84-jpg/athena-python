@@ -1,0 +1,88 @@
+{
+  "overall_verdict": "0 strong candidates out of 180 tested. More validation needed.",
+  "top_candidates": [
+    {
+      "strategy": "session_opening_range",
+      "symbol": "AUD/USD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "session_opening_range",
+      "symbol": "AUD/USD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "prev_day_hl",
+      "symbol": "GBP/USD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "prev_day_hl",
+      "symbol": "USD/JPY",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "prev_day_hl",
+      "symbol": "USD/CAD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [],
+  "engine_a": {
+    "keep": [
+      "ema_trend",
+      "rsi_momentum"
+    ],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "pullback_ema on H4"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters"
+    ],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "ob_bos on more symbols"
+    ]
+  },
+  "engine_d": {
+    "keep": [
+      "vwap_reclaim"
+    ],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "ema_scalp_pullback on crypto H1"
+    ]
+  },
+  "data_quality_warnings": [
+    "Deterministic review \u2014 AI provider not configured"
+  ],
+  "telemetry_warnings": [],
+  "next_tiny_test": {
+    "symbols": [
+      "BTC/USDT",
+      "ETH/USDT"
+    ],
+    "timeframes": [
+      "H4"
+    ],
+    "strategy_families": [
+      "trend_momentum",
+      "pullback"
+    ],
+    "reason": "Most liquid assets with real volume data for reliable VectorBT simulation"
+  },
+  "do_not_do_next": [
+    "mean_reversion on forex without volume confirmation"
+  ]
+}

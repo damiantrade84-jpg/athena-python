@@ -1,0 +1,8 @@
+strategy_name,total_configs,strong,weak,reject,avg_net_return,avg_win_rate,avg_robustness,avg_sqn,avg_oos_return,total_trades,pass_rate,verdict
+london_breakout,12,0,0,2,-0.014414,0.307692,0.876000,-0.420919,-0.012769,214,0.000000,HURTS
+bollinger_touch,12,4,4,3,0.277435,0.688130,0.661068,0.797156,0.136742,378,0.666667,HELPS
+session_opening_range,24,0,4,20,-0.128608,0.356659,0.457027,-0.463368,-0.096395,1064,0.166667,HURTS
+prev_day_hl,18,0,3,15,-0.093143,0.397607,0.431204,-0.296759,-0.128835,782,0.166667,HURTS
+ny_breakout,12,0,0,0,,,,,,0,0.000000,NEUTRAL
+rsi_extreme,24,0,0,0,,,,,,264,0.000000,NEUTRAL
+vwap_deviation,12,0,0,0,,,,,,106,0.000000,NEUTRAL

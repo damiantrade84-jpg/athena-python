@@ -1,0 +1,123 @@
+# Athena Research Lab — AI Review
+**Run ID:** `run_20260429_080724_13fae5`  **Model:** `grok-4-1-fast-reasoning`  **Generated:** 2026-04-29 08:09 UTC
+
+> AI-powered analysis.
+> Backtest discovery only — NOT a live execution recommendation.
+
+---
+
+### Athena Pro v4 Backtest Discovery Decision Memo
+**Run ID:** run_20260429_080724_13fae5 | **Analyst:** Quantitative Research | **Date:** 2026-04-29  
+**Caveats:** All findings from discovery backtests at lowered BT_MIN thresholds (not for live). No direct live execution recommended. No copying of thresholds to live gates (e.g., Engine A forex floor stays at 2.1). Samples penalized if <30 trades. Single-symbol results penalized. IS/OOS failures penalized. All data crypto-only via binance_rest (no forex/equity/telemetry gaps noted, but trustworthiness limited by single asset class).
+
+1. **Strategy family that worked best?**  
+   mean_reversion **STRONG_CANDIDATE** (19/44 valid configs, highest avg PF 4.57, win rate 72.9%, clusters on H4 bollinger_touch across SOL/ADA/ETH/BNB; robust OOS survival).  
+   breakout **WEAK_CANDIDATE** (8 configs, best avg net return 0.269 but OOS weak on BTC/ETH prev_day_hl/session_opening_range; single-TF bias).  
+   trend_momentum **REJECT** (605 rejects, consistent losses).  
+   engine_b_proxy **REJECT** (176 rejects, marginal WR).  
+   pullback **REJECT** (low WR, poor robustness).
+
+2. **Indicator that helped most?**  
+   bollinger_touch **STRONG_CANDIDATE** (pass rate 53%, 16/30 configs valid incl. 4 STRONG/WEAK on H4 crypto; multi-symbol cluster SOL/ADA/ETH/BNB >=25 trades; positive avg net 0.096, OOS holds).
+
+3. **Indicator that hurt most?**  
+   ema_cross **REJECT** (0/540 pass, avg net -0.246, SQN -2.80; tiny/negative samples across all params/symbols; hurts Engine A momentum).
+
+4. **Asset group that worked best?**  
+   crypto **WEAK_CANDIDATE** (only group tested, avg net 0.175, robustness 0.555; NEEDS_MORE_DATA for forex/equity comparison).
+
+5. **Symbol that worked best?**  
+   SOL/USDT **WEAK_CANDIDATE** (highest avg net 0.321, but only 5 configs, H4 bias; penalize single-symbol).  
+   ETH/USDT **STRONG_CANDIDATE** (9 configs, balanced across mean_reversion/trend_momentum, avg net 0.204).
+
+6. **Timeframe that worked best?**  
+   H4 **STRONG_CANDIDATE** (26/44 valid, avg net 0.244, multi-family cluster; prefer over H1/M15).
+
+7. **Session that worked best?**  
+   all **WEAK_CANDIDATE** (only session tested; NEEDS_MORE_DATA for london/ny/asia splits).
+
+8. **LONG or SHORT better overall?**  
+   both **NEEDS_MORE_DATA** (only direction tested; no long/short split data).
+
+9. **Setups that collapsed after fees?**  
+   None **REJECT** (no gross-profitable/net-negative cases; all valid configs fee-survive).
+
+10. **Setups with too little sample size?**  
+    trend_momentum **REJECT** (299 <30 trades, e.g., ema_cross M15 BNB).  
+    engine_b_proxy **NEEDS_MORE_DATA** (107 <30).  
+    mean_reversion **NEEDS_MORE_DATA** (87 <30, e.g., some vwap_deviation M15).  
+    breakout **NEEDS_MORE_DATA** (83 <30).
+
+11. **Engine A (EMA/RSI-MACD/ADX) keep/remove/tune?**  
+    Keep: macd_direction **WEAK_CANDIDATE** (ETH H1 adx_min=0 STRONG_CANDIDATE, 59 trades, PF 1.42, robustness 0.73; tune ADX gate lower).  
+    Remove/demote: ema_cross **REJECT** (all params lose, hurts confluence score).  
+    Tune: RSI+MACD confirm **REJECT** (worsens all ema_cross); raise ADX_min >20 directionally (filters noise but still net-negative). No live threshold changes.
+
+12. **Engine B (price-action BOS/FVG/OB) keep/remove/tune?**  
+    Keep: structure_filters **WEAK_CANDIDATE** (BNB H4 fvg=False/strong_close=0.8, 191 trades, PF 1.28).  
+    Remove/demote: ob_bos **REJECT** (0 pass, avg net -0.30).  
+    Tune: FVG detection off **WEAK_CANDIDATE** (helps structure_filters); loosen strong_close_pct <0.8 but test RR gates. Checklist remains strict.
+
+13. **Engine D (VP/POC/VAH/CVD/VWAP) keep/remove/tune?**  
+    vwap_deviation **STRONG_CANDIDATE** (ADA H1 std=1.5 WEAK_CANDIDATE 21 trades PF23.9; ETH M15 similar; multi-TF).  
+    No other D-specific (POC/VAH/absorption missing) → **NEEDS_MORE_DATA**.  
+    Tune: std_threshold=1.5 keep (high SQN 6+); grade A/B for crypto scalping. No VP data.
+
+14. **Next smallest useful test?**  
+    H4 mean_reversion bollinger_touch num_std=2.0-2.5 on 2 new crypto symbols (e.g., XRP/USDT, LINK/USDT) + 1 forex (EURUSD), 2024-2026 data → confirm multi-symbol cluster (10-20 configs, <1h compute).
+
+15. **What should NOT be tested further right now?**  
+    ema_cross all params **REJECT** (universal loser).  
+    ob_bos **REJECT** (price-action trap).  
+    M15 trend_momentum **REJECT** (tiny/negative).  
+    Single-symbol outliers (e.g., ADA-only vwap) **NEEDS_MORE_DATA** until clustered.
+
+**Overall:** Focus Engine A/B/D tuning on H4 crypto mean_reversion/breakout clusters. Robustness low (avg 0.555); expand data before promotion. No telemetry bugs.
+
+```json
+{
+  "overall_verdict": "H4 crypto mean_reversion (bollinger_touch) shows strongest cluster; trend_momentum globally weak. Prioritize multi-symbol validation.",
+  "top_candidates": [
+    {"strategy": "bollinger_touch num_std=2.0|period=20", "symbol": "SOL/USDT", "tf": "H4", "label": "STRONG_CANDIDATE"},
+    {"strategy": "bollinger_touch num_std=2.5|period=20", "symbol": "ETH/USDT", "tf": "H4", "label": "STRONG_CANDIDATE"},
+    {"strategy": "bollinger_touch num_std=2.0|period=20", "symbol": "BNB/USDT", "tf": "H4", "label": "STRONG_CANDIDATE"},
+    {"strategy": "macd_direction adx_min=0|fast=12|signal_period=9|slow=26", "symbol": "ETH/USDT", "tf": "H1", "label": "STRONG_CANDIDATE"}
+  ],
+  "rejected_setups": [
+    {"strategy": "ema_cross (all params)", "reason": "0% pass rate, consistent net losses across symbols/TFs"},
+    {"strategy": "ob_bos", "reason": "0% pass, avg net -0.30"},
+    {"strategy": "ny_breakout", "reason": "0% pass, hurts performance"}
+  ],
+  "engine_a": {
+    "keep": ["macd_direction (adx_min=0 on ETH H1)"],
+    "remove_or_demote": ["ema_cross (all)"],
+    "tune": ["ADX_min directionally >20; disable RSI confirm"],
+    "next_tests": ["Test MACD on H4 + new symbols"]
+  },
+  "engine_b": {
+    "keep": ["structure_filters (fvg=False, strong_close=0.8)"],
+    "remove_or_demote": ["ob_bos"],
+    "tune": ["Loosen strong_close_pct <0.8 with RR filter"],
+    "next_tests": ["Split sessions (london/ny) on H4 crypto"]
+  },
+  "engine_d": {
+    "keep": ["vwap_deviation std_threshold=1.5"],
+    "remove_or_demote": [],
+    "tune": ["Grade A/B for H1/M15 crypto scalps"],
+    "next_tests": ["Add POC/VAH/VAL + CVD on H1 crypto"]
+  },
+  "data_quality_warnings": ["Crypto-only; no forex/equity"],
+  "telemetry_warnings": [],
+  "next_tiny_test": {
+    "symbols": ["XRP/USDT", "LINK/USDT", "EURUSD"],
+    "timeframes": ["H4"],
+    "strategy_families": ["mean_reversion"],
+    "reason": "Validate bollinger_touch cluster cheaply (multi-asset)"
+  },
+  "do_not_do_next": [
+    "ema_cross variants",
+    "M15 trend_momentum",
+    "ob_bos price-action"
+  ]
+}
+```

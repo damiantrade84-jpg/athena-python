@@ -1,0 +1,41 @@
+{
+  "engine_a": {
+    "keep": [
+      "macd_direction (adx_min=0)"
+    ],
+    "remove_or_demote": [
+      "ema_cross"
+    ],
+    "tune": [
+      "ADX gate (test 15-25 on crypto)",
+      "RSI confirm (disable?)"
+    ],
+    "next_tests": [
+      "multi-symbol MACD H4"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "prev_day_hl (atr_expand_min=0.5)"
+    ],
+    "remove_or_demote": [
+      "session_opening_range"
+    ],
+    "tune": [
+      "range_bars=6 with session filter"
+    ],
+    "next_tests": [
+      "london/ny splits"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Add POC/VAH proxies on crypto H1/H4"
+    ]
+  },
+  "generated_at": "2026-04-26T09:59:23.757404+00:00",
+  "safety_note": "These are backtest discovery findings only. Do NOT apply to live thresholds without further validation."
+}

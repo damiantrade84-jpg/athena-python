@@ -1,0 +1,107 @@
+{
+  "session_id": "sess_20260429_080610_2d8f64",
+  "market_group": "stocks",
+  "trading_style": "intra",
+  "research_depth": "quick",
+  "status": "COMPLETE",
+  "current_phase": "COMPLETE",
+  "progress_pct": 100,
+  "discovery_run_id": "run_20260429_080610_82fa67",
+  "plan_id": "plan_e6255b54",
+  "validation_run_ids": [
+    "run_20260429_080624_8c96",
+    "run_20260429_080624_d0e8",
+    "run_20260429_080624_348f"
+  ],
+  "followup_run_ids": [],
+  "ai_review_status": "COMPLETE",
+  "final_verdict": "VALIDATION_CANDIDATE",
+  "final_summary": "Session sess_20260429_080610_2d8f64 | Stocks Intra | 8 configs | 3 strong | 5 weak | Verdict: VALIDATION_CANDIDATE",
+  "best_clusters": [
+    {
+      "strategy_name": "structure_filters",
+      "symbol": "MSFT",
+      "timeframe": "H4",
+      "net_return": 0.213616,
+      "status": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy_name": "structure_filters",
+      "symbol": "MSFT",
+      "timeframe": "H4",
+      "net_return": 0.213616,
+      "status": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy_name": "structure_filters",
+      "symbol": "MSFT",
+      "timeframe": "H4",
+      "net_return": 0.213616,
+      "status": "STRONG_CANDIDATE"
+    }
+  ],
+  "weak_clusters": [
+    {
+      "strategy_name": "structure_filters",
+      "symbol": "MSFT",
+      "timeframe": "H4",
+      "net_return": 0.221076,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "structure_filters",
+      "symbol": "MSFT",
+      "timeframe": "H1",
+      "net_return": 0.124999,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "structure_filters",
+      "symbol": "MSFT",
+      "timeframe": "H4",
+      "net_return": 0.221076,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "structure_filters",
+      "symbol": "MSFT",
+      "timeframe": "H4",
+      "net_return": 0.221076,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "structure_filters",
+      "symbol": "MSFT",
+      "timeframe": "H1",
+      "net_return": 0.124999,
+      "status": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_clusters": [],
+  "do_not_implement": [
+    "ob_bos all params",
+    "FVG-enabled structure_filters",
+    "AAPL-only tests"
+  ],
+  "next_research_action": "Run ['engine_b_proxy structure_filters fvg=False strong_close=0.7'] on ['MSFT', 'AAPL', 'GOOGL'] at ['H4'] \u2014 Validate/expand top candidate for multi-symbol cluster",
+  "next_research_params": {
+    "market_group": "stocks",
+    "trading_style": "intra",
+    "research_depth": "quick",
+    "symbols": [
+      "MSFT",
+      "AAPL",
+      "GOOGL"
+    ],
+    "timeframes": [
+      "H4"
+    ],
+    "families": [
+      "engine_b_proxy structure_filters fvg=False strong_close=0.7"
+    ],
+    "reason": "Validate/expand top candidate for multi-symbol cluster"
+  },
+  "errors": [],
+  "created_at": "2026-04-29T08:06:10.214631+00:00",
+  "updated_at": "2026-04-29T08:06:47.723674+00:00"
+}

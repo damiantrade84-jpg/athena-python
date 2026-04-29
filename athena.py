@@ -8728,6 +8728,7 @@ def api_scalp_scan():
                 "session": result.get("session"),
                 "sessions_active": result.get("sessions_active", []),
                 "reason": result.get("reason"),
+                "diagnostic_summary": result.get("diagnostic_summary"),
                 "diagnostic": diagnostic,
                 "pass_count": sum(
                     1

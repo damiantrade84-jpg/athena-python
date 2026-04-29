@@ -1,0 +1,36 @@
+{
+  "engine_a": {
+    "keep": [
+      "RSI momentum (period=14)"
+    ],
+    "remove_or_demote": [],
+    "tune": [
+      "RSI oversold ~25-30, overbought 70 for crypto mean-reversion"
+    ],
+    "next_tests": [
+      "Add VWAP dev as ADX proxy on H1 crypto"
+    ]
+  },
+  "engine_b": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Proxy mean_reversion (VWAP/RSI) into FVG/OB checklist"
+    ]
+  },
+  "engine_d": {
+    "keep": [
+      "VWAP deviation std=1.5"
+    ],
+    "remove_or_demote": [],
+    "tune": [
+      "Pair with POC/VAH for grade B/C crypto H1/M15"
+    ],
+    "next_tests": [
+      "CVD absorption at VWAP extremes"
+    ]
+  },
+  "generated_at": "2026-04-29T07:39:46.455061+00:00",
+  "safety_note": "These are backtest discovery findings only. Do NOT apply to live thresholds without further validation."
+}

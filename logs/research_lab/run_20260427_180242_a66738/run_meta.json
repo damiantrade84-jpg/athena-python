@@ -1,0 +1,26 @@
+{
+  "run_id": "run_20260427_180242_a66738",
+  "mode": "medium",
+  "symbol_count": 4,
+  "timeframes": [
+    "M15",
+    "H1",
+    "H4"
+  ],
+  "families": [
+    "trend_momentum",
+    "pullback",
+    "breakout",
+    "mean_reversion",
+    "engine_b_proxy"
+  ],
+  "specs_count": 76,
+  "results_count": 912,
+  "direction": "both",
+  "generated_at": "2026-04-27T18:02:53.451210+00:00",
+  "session_id": "sess_20260427_180242_72ae69",
+  "market_group": "forex",
+  "trading_style": "intra",
+  "research_depth": "standard",
+  "role": "discovery"
+}

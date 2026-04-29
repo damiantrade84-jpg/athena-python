@@ -1,0 +1,2 @@
+strategy_name,total_configs,strong,weak,reject,avg_net_return,avg_win_rate,avg_robustness,avg_sqn,avg_oos_return,total_trades,pass_rate,verdict
+ema_cross,36,0,4,5,0.023342,0.286993,0.440957,0.178260,0.046129,581,0.111111,HELPS

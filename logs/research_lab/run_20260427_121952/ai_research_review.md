@@ -1,0 +1,131 @@
+# Athena Research Lab — AI Review
+**Run ID:** `run_20260427_121952`  **Model:** `grok-4-1-fast-reasoning`  **Generated:** 2026-04-27 12:21 UTC
+
+> AI-powered analysis.
+> Backtest discovery only — NOT a live execution recommendation.
+
+---
+
+# Athena Pro v4 Backtest Discovery Decision Memo
+**Run ID:** run_20260427_121952 | **Analyst:** Quantitative Research | **Date:** 2026-04-27  
+**Caveat:** These are discovery results at lowered BT_MIN thresholds. **Do NOT execute live, copy thresholds to live gates, or deploy without multi-symbol OOS validation + forward testing.** All labels per safety rules. Penalized: tiny samples (<30 trades), single-symbol, gross-profitable/net-negative, IS/OOS fails. Prefer clusters over outliers.
+
+## 1. Strategy Family Performance
+- **mean_reversion**: STRONG_CANDIDATE (tops rank_score; 14/106 pass; high WR 71.7%, PF 1.79; clusters on H4 crypto; SOL/ADA/ETH/BNB).
+- **breakout**: WEAK_CANDIDATE (exec summary best avg net 0.272; but OOS weak on BTC/ETH prev_day_hl; 10 passes).
+- **trend_momentum**: REJECT (605/605 fails or tiny; ema_cross/macd avg net -0.23).
+- **engine_b_proxy**: WEAK_CANDIDATE (6 weak passes; structure_filters marginal net positive but high DD/exposure).
+- **pullback**: REJECT (8 weak; low WR 24.6%).
+
+## 2. Indicator Helped Most
+**bollinger_touch** (num_std=2.0-2.5|period=20): STRONG_CANDIDATE (4 strong/9 weak; avg net +0.079; WR 64%; clusters H4 crypto; SOL/ADA/ETH/BNB).
+
+## 3. Indicator Hurt Most
+**ema_cross** (all params): REJECT (0/540 pass; avg net -0.229; WR 18.8%; consistent loser across symbols/TF; penalize tiny samples).
+
+## 4. Asset Group Performance
+**crypto**: WEAK_CANDIDATE (only group tested; avg net +0.166, robustness 0.52; but crypto-only = lacks cross-asset robustness).
+
+## 5. Symbol Performance
+**SOL/USDT**: STRONG_CANDIDATE (best net 0.330, WR 61.9%; 5 passes; H4 bollinger_touch cluster).
+- ETH/USDT: WEAK_CANDIDATE (net 0.196).
+- Others (ADA/BTC/BNB): REJECT (OOS negative or marginal; penalize BNB single-symbol rsi).
+
+## 6. Timeframe Performance
+**H4**: STRONG_CANDIDATE (33/33 passes; best net 0.213, WR 47.9%; bollinger/breakout cluster).
+- H1: WEAK_CANDIDATE (marginal net 0.074).
+- M15: NEEDS_MORE_DATA (tiny samples 31 avg; high WR but low net).
+
+## 7. Session Performance
+**all**: NEEDS_MORE_DATA (only session tested; no comparison possible).
+
+## 8. LONG vs SHORT Performance
+**both**: NEEDS_MORE_DATA (only direction tested; no long/short split; cannot assess bias).
+
+## 9. Setups Collapsed After Fees
+None. (No gross-profitable/net-negative cases; all rejects already net-negative.)
+
+## 10. Setups with Too Little Sample
+- trend_momentum (318 <30 trades): REJECT.
+- engine_b_proxy (107): REJECT.
+- mean_reversion (89): REJECT.
+- breakout (83): REJECT.
+(Penalized per rule 4; 597 total tiny configs.)
+
+## 11. Engine A Recommendations (3-factor: EMA/RSI+MACD/ADX)
+- **Keep**: MACD momentum (adx_min=0 H1 ETH: WEAK_CANDIDATE; weak edge).
+- **Remove/Demote**: EMA trend coherence (ema_cross all params: REJECT; hurts globally).
+- **Tune**: Increase ADX gate (>20 preferred in weak survivors); RSI confirm hurts less but no edge; test EMA periods 10/50 H4 (but OOS fail penalizes).
+- Not trustworthy: Single-symbol (ETH); no multi-TF cluster.
+
+## 12. Engine B Recommendations (Naked PA: BOS/CHoCH/FVG/OB/swing/location/trigger/RR)
+- **Keep**: Structure filters proxy (fvg=False|strong_close=0.8: WEAK_CANDIDATE on H4 multi-symbol).
+- **Remove/Demote**: OB/BOS (ob_bos: REJECT, net -0.268); FVG detection (hurts pass_rate 0%).
+- **Tune**: Strong close % >0.8 (weak edge); add RR room filter; avoid swing sequence.
+- Not trustworthy: High exposure (192+ trades but DD -19%); OOS marginal.
+
+## 13. Engine D Recommendations (VP/OF: POC/VAH/VAL/Absorption/CVD/VWAP/AAA; Crypto)
+- **Keep**: None (no strong data).
+- **Remove/Demote**: VWAP deviation (neutral, untested edge).
+- **Tune**: NEEDS_MORE_DATA (no VP/OF in tops; crypto-only but no attribution; missing telemetry?).
+- Not trustworthy: Absent from passes; TELEMETRY_BUG (no D-grade results visible).
+
+## 14. Next Smallest Useful Test
+Test bollinger_touch (num_std=2.0-2.5|period=20) H4 on 2-3 more crypto (e.g., XRP/USDT, LINK/USDT) + 1 forex (EUR/USD) for cross-asset cluster. (Tiny: 5 symbols x 1 TF x 2 params = 10 runs.)
+
+## 15. What Should NOT Be Tested Further Right Now
+- ema_cross all params/families: REJECT (global loser).
+- M15 trend_momentum: REJECT (tiny + net negative).
+- Single-symbol outliers (BNB rsi_extreme): REJECT.
+- NY/London breakout: REJECT (pass_rate 0%).
+
+**Overall:** Focus mean_reversion H4 crypto cluster; validate OOS multi-symbol before any engine tweak. Robustness low (0.52 avg); no live action.
+
+```json
+{
+  "overall_verdict": "WEAK_CANDIDATE: H4 mean_reversion (bollinger_touch) shows cluster edge on crypto; trend_momentum/ema_cross globally rejected; needs multi-asset OOS.",
+  "top_candidates": [
+    {"strategy": "bollinger_touch (num_std=2.0|period=20)", "symbol": "SOL/USDT", "tf": "H4", "label": "STRONG_CANDIDATE"},
+    {"strategy": "bollinger_touch (num_std=2.5|period=20)", "symbol": "ADA/USDT", "tf": "H4", "label": "STRONG_CANDIDATE"},
+    {"strategy": "bollinger_touch (num_std=2.5|period=20)", "symbol": "ETH/USDT", "tf": "H4", "label": "STRONG_CANDIDATE"},
+    {"strategy": "rsi_extreme (overbought=70|oversold=30|period=14)", "symbol": "BNB/USDT", "tf": "H1", "label": "STRONG_CANDIDATE"}
+  ],
+  "rejected_setups": [
+    {"strategy": "ema_cross", "reason": "global net -0.229, WR 18.8%, 0/540 pass"},
+    {"strategy": "ob_bos", "reason": "net -0.268, pass_rate 0%"},
+    {"strategy": "prev_day_hl", "reason": "OOS negative, avg net -0.119"},
+    {"strategy": "ny_breakout / london_breakout", "reason": "pass_rate 0%, net negative"}
+  ],
+  "engine_a": {
+    "keep": ["macd_direction (adx_min=0)"],
+    "remove_or_demote": ["ema_cross all params"],
+    "tune": ["ADX gate >20; EMA fast=10/slow=50 H4"],
+    "next_tests": ["H4 macd_direction on SOL/ADA"]
+  },
+  "engine_b": {
+    "keep": ["structure_filters (fvg=False|strong_close_pct=0.8)"],
+    "remove_or_demote": ["ob_bos", "FVG detection"],
+    "tune": ["strong_close_pct >0.8; add RR filter"],
+    "next_tests": ["H4 structure_filters + RR on ETH/BTC"]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": ["vwap_deviation (neutral)"],
+    "tune": [],
+    "next_tests": ["Full VP/OF grid on H1/H4 crypto"]
+  },
+  "data_quality_warnings": ["Crypto-only; no forex/equity cross-check"],
+  "telemetry_warnings": ["No Engine D results; missing OOS details for some; vwap_deviation incomplete"],
+  "next_tiny_test": {
+    "symbols": ["SOL/USDT", "XRP/USDT", "EUR/USD"],
+    "timeframes": ["H4"],
+    "strategy_families": ["mean_reversion"],
+    "reason": "Validate bollinger_touch cluster cross-asset (10 runs)"
+  },
+  "do_not_do_next": [
+    "ema_cross variants",
+    "M15 trend_momentum",
+    "NY/London breakout"
+  ]
+}
+```

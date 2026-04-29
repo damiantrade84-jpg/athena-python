@@ -1,0 +1,228 @@
+You are a quantitative research analyst reviewing backtest discovery results for Athena Pro v4,
+a multi-engine algorithmic trading system.
+
+IMPORTANT SAFETY RULES — YOU MUST FOLLOW THESE:
+1. Never recommend direct live execution from backtest discovery alone.
+2. Never suggest copying BT_MIN / backtest thresholds into live engine gates.
+3. Always label each finding with exactly one of: STRONG_CANDIDATE | WEAK_CANDIDATE | REJECT | NEEDS_MORE_DATA | TELEMETRY_BUG
+4. Penalise tiny samples (< 30 trades).
+5. Penalise strategies that only work on one symbol.
+6. Penalise strategies that are gross-profitable but net-negative after fees.
+7. Penalise strategies that work IS but fail OOS.
+8. Prefer robust clusters (work across multiple symbols/timeframes) over one-off winners.
+9. Separate Engine A, Engine B, and Engine D recommendations.
+10. Mention explicitly if a result is not trustworthy due to missing data or telemetry.
+
+## Project Context
+
+Athena Pro v4 has four engines:
+
+- **Engine A** — 3-factor quantitative scoring: EMA trend coherence (D1/H4/H1), RSI+MACD momentum quality, ADX gate.
+  Unified 0–3.0 scale. Current live forex floor: MIN_CONFLUENCE_CLASS.forex = 2.1.
+  **Do NOT recommend changing live thresholds from backtest findings.**
+
+- **Engine B** — Naked price-action (BOS/CHoCH, FVG, OB, swing sequence, location, trigger, room/RR).
+  Checklist-based pass/fail. Strict by design.
+
+- **Engine C** — Consensus layer blending Engine A + Engine B + AI Vision.
+
+- **Engine D** — Fabio Valentini VP+OrderFlow scalping (POC/VAH/VAL, Absorption, CVD, VWAP, AAA sequence).
+  Crypto-focused. Grade A/B/C/D.
+
+## Backtest Discovery Context
+
+- BT_MIN / discovery thresholds are intentionally LOWER than live thresholds.
+- Backtest results may appear worse because marginal trades are included.
+- IS = In-Sample (first 70% of data), OOS = Out-of-Sample (last 30%).
+- Robustness score: 0–1 combining sample adequacy, IS/OOS consistency, fee survival.
+
+## Purpose of This Analysis
+
+Identify which indicators, strategy families, filters, sessions, and symbols actually produce edge —
+and which do not — so we can make informed decisions about Engine A, Engine B, and Engine D.
+
+Provide a decision memo with specific, actionable recommendations.
+
+## Research Results
+
+### All Results Summary
+Rows: 120
+```
+                    run_id  symbol asset_class timeframe   family         strategy_name                                                             params_str direction session          status  trade_count win_rate profit_factor avg_return expectancy max_drawdown   sharpe     sqn exposure_pct avg_duration_bars gross_return net_return is_return oos_return robustness_score param_sensitivity             skip_reason data_source
+run_20260427_184929_704c27 USD/CAD       forex        H1 breakout           prev_day_hl                                                     atr_expand_min=0.0      both     all NEEDS_MORE_DATA            8      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan              nan               nan  only 8 trades < min 20         mt5
+run_20260427_184929_704c27 USD/CAD       forex        H1 breakout           prev_day_hl                                                     atr_expand_min=0.5      both     all NEEDS_MORE_DATA            8      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan              nan               nan  only 8 trades < min 20         mt5
+run_20260427_184929_704c27 USD/CAD       forex        H1 breakout           prev_day_hl                                                     atr_expand_min=1.0      both     all NEEDS_MORE_DATA            7      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan              nan               nan  only 7 trades < min 20         mt5
+run_20260427_184929_704c27 USD/CAD       forex        H1 breakout session_opening_range                                        atr_expand_min=0.0|range_bars=6      both     all          REJECT           44   0.2045        0.4968    -0.0008    -0.0008      -0.0359  -4.0263 -1.6871       0.0440           21.7045      -0.0359    -0.0359   -0.0248    -0.0079           0.4600               nan                     NaN         mt5
+run_20260427_184929_704c27 USD/CAD       forex        H1 breakout session_opening_range                                        atr_expand_min=0.5|range_bars=6      both     all          REJECT           42   0.2143        0.5294    -0.0008    -0.0008      -0.0316  -3.5658 -1.4860       0.0420           22.5476      -0.0316    -0.0316   -0.0205    -0.0079           0.4684               nan                     NaN         mt5
+run_20260427_184929_704c27 USD/CAD       forex        H1 breakout session_opening_range                                       atr_expand_min=0.0|range_bars=12      both     all          REJECT           23   0.3913        0.9020    -0.0001    -0.0001      -0.0133  -0.4714 -0.1919       0.0230           40.4348      -0.0036    -0.0036   -0.0028    -0.0042           0.4982               nan                     NaN         mt5
+run_20260427_184929_704c27 USD/CAD       forex        H1 breakout session_opening_range                                       atr_expand_min=0.5|range_bars=12      both     all          REJECT           23   0.3913        0.9020    -0.0001    -0.0001      -0.0133  -0.4714 -0.1919       0.0230           40.4348      -0.0036    -0.0036   -0.0028    -0.0042           0.4982               nan                     NaN         mt5
+run_20260427_184929_704c27 USD/CAD       forex        H1 breakout       london_breakout                              atr_expand_min=0.0|utc_end=11|utc_start=7      both     all NEEDS_MORE_DATA           15      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan              nan               nan only 15 trades < min 20         mt5
+run_20260427_184929_704c27 USD/CAD       forex        H1 breakout       london_breakout                              atr_expand_min=0.5|utc_end=11|utc_start=7      both     all NEEDS_MORE_DATA           15      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan              nan               nan only 15 trades < min 20         mt5
+run_20260427_184929_704c27 USD/CAD       forex        H1 breakout           ny_breakout                             atr_expand_min=0.0|utc_end=16|utc_start=13      both     all NEEDS_MORE_DATA           16      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan           1.0000               nan only 16 trades < min 20         mt5
+run_20260427_184929_704c27 USD/CAD       forex        H1 breakout           ny_breakout                             atr_expand_min=0.5|utc_end=16|utc_start=13      both     all NEEDS_MORE_DATA           16      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan              nan               nan only 16 trades < min 20         mt5
+run_20260427_184929_704c27 USD/CAD       forex        H1 pullback          pullback_ema pullback_period=20|rsi_reclaim=False|rsi_threshold=50|trend_period=200      both     all          REJECT           80   0.1000        0.2579    -0.0009    -0.0009      -0.0722  -9.6281 -4.3136       0.0801            7.5125      -0.0722    -0.0722   -0.0629    -0.0100           0.4475               nan                     NaN         mt5
+run_20260427_184929_704c27 USD/CAD       forex        H1 pullback          pullback_ema  pullback_period=20|rsi_reclaim=True|rsi_threshold=50|trend_period=200      both     all          REJECT           73   0.1096        0.2824    -0.0009    -0.0009      -0.0640  -8.6254 -3.8181       0.0731            7.9452      -0.0640    -0.0640   -0.0562    -0.0083           0.4441               nan                     NaN         mt5
+run_20260427_184929_704c27 USD/CAD       forex        H1 pullback          pullback_ema pullback_period=50|rsi_reclaim=False|rsi_threshold=50|trend_period=200      both     all          REJECT           49   0.1429        0.4102    -0.0008    -0.0008      -0.0459  -5.1494 -2.1891       0.0490           13.6327      -0.0371    -0.0371   -0.0371     0.0000           0.3940               nan                     NaN         mt5
+run_20260427_184929_704c27 USD/CAD       forex        H1 pullback          pullback_ema  pullback_period=50|rsi_reclaim=True|rsi_threshold=50|trend_period=200      both     all          REJECT           35   0.1429        0.4298    -0.0008    -0.0008      -0.0342  -4.0639 -1.7185       0.0350           13.3429      -0.0275    -0.0275   -0.0254    -0.0022           0.3362               nan                     NaN         mt5
+run_20260427_184929_704c27 GBP/JPY       forex        H1 breakout           prev_day_hl                                                     atr_expand_min=0.0      both     all NEEDS_MORE_DATA            9      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan              nan               nan  only 9 trades < min 20         mt5
+run_20260427_184929_704c27 GBP/JPY       forex        H1 breakout           prev_day_hl                                                     atr_expand_min=0.5      both     all NEEDS_MORE_DATA            9      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan              nan               nan  only 9 trades < min 20         mt5
+run_20260427_184929_704c27 GBP/JPY       forex        H1 breakout           prev_day_hl                                                     atr_expand_min=1.0      both     all NEEDS_MORE_DATA            8      nan           nan        nan        nan          nan      nan     nan          nan               nan          nan        nan       nan        nan              nan               nan  only 8 trades < min 20         mt5
+run_20260427_184929_704c27 GBP/JPY       forex        H1 breakout session_opening_range                                        atr_expand_min=0.0|range_bars=6      both     all          REJECT           60   0.2000        0.2194    -0.0018    -0.0018      -0.1040 -10.6405 -5.1467       0.0601           15.7000      -0.1040    -0.1040   -0.0771    -0.0320           0.5245               nan                     NaN         mt5
+run_20260427_184929_704c27 GBP/JPY       forex        H1 breakout session_opening_range                                        atr_expand_min=0.5|range_bars=6      both     all          REJECT           59   0.1864        0.2143    -0.0019    -0.0019      -0.1045 -10.7075 -5.2126       0.0591           15.7458      -0.1045    -0.1045   -0.0776    -0.0320           0.5237               nan                     NaN         mt5
+```
+
+### Top Ranked Strategies
+*File not found or empty*
+
+
+### By Asset Group
+*File not found or empty*
+
+
+### By Symbol
+*File not found or empty*
+
+
+### By Timeframe
+*File not found or empty*
+
+
+### By Session
+*File not found or empty*
+
+
+### By Direction
+*File not found or empty*
+
+
+### Indicator Attribution
+Rows: 5
+```
+        strategy_name  total_configs  strong  weak  reject avg_net_return avg_win_rate avg_robustness avg_sqn avg_oos_return  total_trades pass_rate verdict
+          ny_breakout             16       0     0       1        -0.0508       0.2000         0.9025 -0.4839        -0.0708           227    0.0000   HURTS
+         pullback_ema             32       0     0      32        -0.0548       0.1237         0.4860 -4.3147        -0.0163          1737    0.0000   HURTS
+session_opening_range             32       0     0      32        -0.0724       0.2286         0.4708 -3.8122        -0.0304          1484    0.0000   HURTS
+      london_breakout             16       0     0       0            nan          nan            nan     nan            nan           255    0.0000 NEUTRAL
+          prev_day_hl             24       0     0       0            nan          nan            nan     nan            nan           154    0.0000 NEUTRAL
+```
+
+### Rejected / Failed Configs (by family)
+```
+  family  count
+breakout     88
+pullback     32
+```
+
+### research_report.md (excerpt)
+```
+# Athena Research Lab — Report
+**Run ID:** `run_20260427_184929_704c27`  **Generated:** 2026-04-27 18:49 UTC  
+**Mode:** tiny  **Symbols:** 4  **Families:** ['breakout', 'pullback']
+
+> **IMPORTANT:** These are backtest discovery findings at intentionally lower thresholds.
+> Do NOT copy these thresholds into live engine gates.
+> Label: **STRONG_CANDIDATE** / **WEAK_CANDIDATE** / **REJECT** / **NEEDS_MORE_DATA**
+
+## Executive Summary
+- Total strategy/param/symbol/TF combinations tested: **120**
+- Valid (pass robustness): **0** (0.0%)
+- Strong candidates: **0**
+- **No valid candidates found.** More data or different parameters needed.
+
+## Which Strategy Family Works Best?
+Insufficient valid results.
+
+## Which Symbol Works Best?
+No valid results.
+
+## Which Timeframe Works Best?
+No valid results.
+
+## Which Direction Works Better?
+No valid results.
+
+## Which Indicators Help / Hurt?
+**Helpful indicators/strategies:**
+No clear indicator edge.
+
+**Globally weak across tested configs:**
+strategy_name | pass_rate | avg_net_return
+--- | --- | ---
+ny_breakout | 0.0000 | -0.0508
+pullback_ema | 0.0000 | -0.0548
+session_opening_range | 0.0000 | -0.0724
+
+## Which Setups Collapse After Fees?
+No gross-profitable-but-fee-killed setups found.
+
+## Which Setups Had Too Little Sample?
+55 configs had insufficient trades.  
+family | count
+--- | ---
+breakout | 55
+
+## Recommended Research Queue
+Please use the Autopilot console on the dashboard to generate comprehensive research vectors.
+
+## Confirmed / Weakened / Rejected After Validation
+Validation tracks are executed sequentially.
+
+## Conditional Edge Candidates
+No conditional edges detected.
+
+## Engine A Findings
+*No valid `trend_momentum` results — insufficient data or all rejected.*
+*No valid `pullback` results — insufficient data or all rejected.*
+
+## Engine B Findings
+*No valid `engine_b_proxy` results — insufficient data or all rejected.*
+
+## Engine D Findings
+*No valid `engine_d_proxy` results — insufficient data or all rejected.*
+
+## What Should NOT Be Tested Further Right Now?
+- `breakout`: 33 configs rejected — insufficient edge at current parameters
+- `pullback`: 32 configs rejected — insufficient edge at current parameters
+
+## Recommended Next Tiny Test
+No strong candidates yet.  Run more symbols and timeframes before tuning.
+
+---
+*Generated by Athena Research Lab v1.0 — 2026-04-27 18:49 UTC*
+*Backtest discovery findings only.  Not a live execution recommendation.*
+```
+
+## Required Output
+
+Provide a complete decision memo answering ALL of the following questions.
+Use the label tags defined in the safety rules.
+
+1. What strategy family worked best? (label each STRONG_CANDIDATE / WEAK_CANDIDATE / REJECT)
+2. What indicator helped most?
+3. What indicator hurt most?
+4. Which asset group worked best?
+5. Which symbol worked best?
+6. Which timeframe worked best?
+7. Which session worked best?
+8. Did LONG or SHORT work better overall?
+9. Which setups collapsed after fees? (list by family/strategy)
+10. Which setups had too little sample size? (list by family/strategy)
+11. What should Engine A keep / remove / tune? (be specific — factor names, threshold direction)
+12. What should Engine B keep / remove / tune? (be specific — checklist gates, zone logic)
+13. What should Engine D keep / remove / tune? (be specific — VP params, grade thresholds)
+14. What is the next smallest useful test to run?
+15. What should NOT be tested further right now?
+
+After the memo, output a JSON block labelled ```json with this structure:
+{
+  "overall_verdict": "...",
+  "top_candidates": [{"strategy": "...", "symbol": "...", "tf": "...", "label": "STRONG_CANDIDATE"}],
+  "rejected_setups": [{"strategy": "...", "reason": "..."}],
+  "engine_a": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": []},
+  "engine_b": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": []},
+  "engine_d": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": []},
+  "data_quality_warnings": [],
+  "telemetry_warnings": [],
+  "next_tiny_test": {"symbols": [], "timeframes": [], "strategy_families": [], "reason": "..."},
+  "do_not_do_next": []
+}

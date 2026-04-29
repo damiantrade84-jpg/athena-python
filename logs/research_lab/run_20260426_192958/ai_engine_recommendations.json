@@ -1,0 +1,52 @@
+{
+  "engine_a": {
+    "keep": [
+      "macd_direction (adx_min=0-20)"
+    ],
+    "remove_or_demote": [
+      "ema_cross (all)",
+      "ema_alignment",
+      "ema_scalp_pullback"
+    ],
+    "tune": [
+      "ADX gate >20 (sample filter)",
+      "RSI confirm off (marginal)"
+    ],
+    "next_tests": [
+      "H4 MACD + bollinger confluence"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (strong_close_pct=0.7)"
+    ],
+    "remove_or_demote": [
+      "ob_bos",
+      "fvg_detection heavy"
+    ],
+    "tune": [
+      "Add RR room filter",
+      "Multi-TF BOS/CHoCH"
+    ],
+    "next_tests": [
+      "H4 structure + pullback_ema proxy"
+    ]
+  },
+  "engine_d": {
+    "keep": [
+      "micro_breakout (range_bars=3, atr_sl=0.5-1.0)"
+    ],
+    "remove_or_demote": [
+      "Absorption/CVD proxies"
+    ],
+    "tune": [
+      "fee_guard_r=0.5 strict",
+      "Grade B+ threshold"
+    ],
+    "next_tests": [
+      "XAU/XAG H4 VP AAA sequence"
+    ]
+  },
+  "generated_at": "2026-04-26T20:11:36.292371+00:00",
+  "safety_note": "These are backtest discovery findings only. Do NOT apply to live thresholds without further validation."
+}

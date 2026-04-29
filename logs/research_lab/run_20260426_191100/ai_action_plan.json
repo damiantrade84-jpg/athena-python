@@ -1,0 +1,111 @@
+{
+  "overall_verdict": "Prioritize mean_reversion (bollinger_touch) on H4 commodities; demote trend_momentum/breakout globally.",
+  "top_candidates": [
+    {
+      "strategy": "bollinger_touch",
+      "symbol": "SOL/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "bollinger_touch",
+      "symbol": "ETH/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "structure_filters",
+      "symbol": "MSFT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "micro_breakout",
+      "symbol": "XAU/USD",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "ema_cross",
+      "reason": "HURTS globally, tiny samples"
+    },
+    {
+      "strategy": "ema_scalp_pullback",
+      "reason": "Most negative net_return"
+    },
+    {
+      "strategy": "ob_bos",
+      "reason": "0 strong, HURTS"
+    }
+  ],
+  "engine_a": {
+    "keep": [
+      "macd_direction (adx_min=0-20)"
+    ],
+    "remove_or_demote": [
+      "ema_cross",
+      "rsi_confirm"
+    ],
+    "tune": [
+      "ADX >20",
+      "EMA D1/H4 coherence"
+    ],
+    "next_tests": [
+      "MACD on commodity H4"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (strong_close_pct=0.7)"
+    ],
+    "remove_or_demote": [
+      "fvg_detection",
+      "ob_bos"
+    ],
+    "tune": [
+      "Add commodity location filter"
+    ],
+    "next_tests": [
+      "H4 structure on XAG/XAU"
+    ]
+  },
+  "engine_d": {
+    "keep": [
+      "micro_breakout range_bars=3 atr_sl=0.5-1.0"
+    ],
+    "remove_or_demote": [
+      "AAA sequence proxies"
+    ],
+    "tune": [
+      "VP grades A/B for XAU",
+      "fee_guard_r=0.5"
+    ],
+    "next_tests": [
+      "XAU/XAG H4 expansion"
+    ]
+  },
+  "data_quality_warnings": [],
+  "telemetry_warnings": [],
+  "next_tiny_test": {
+    "symbols": [
+      "XAG/USD",
+      "SOL/USDT",
+      "NAS100",
+      "WTI Oil"
+    ],
+    "timeframes": [
+      "H4"
+    ],
+    "strategy_families": [
+      "mean_reversion"
+    ],
+    "reason": "Confirm bollinger_touch cluster >50 trades/symbol"
+  },
+  "do_not_do_next": [
+    "ema_cross any TF",
+    "M15 trend_momentum single-symbol",
+    "Forex H1"
+  ]
+}

@@ -1,0 +1,5 @@
+strategy_name,total_configs,strong,weak,reject,avg_net_return,avg_win_rate,avg_robustness,avg_sqn,avg_oos_return,total_trades,pass_rate,verdict
+bollinger_touch,12,1,2,6,-0.084710,0.559497,0.630537,-0.753386,0.002407,355,0.250000,HELPS
+pullback_ema,24,2,1,19,0.098961,0.214244,0.581120,-2.628869,-0.000082,1160,0.125000,HURTS
+rsi_extreme,24,0,0,0,,,,,,276,0.000000,NEUTRAL
+vwap_deviation,12,0,0,0,,,,,,85,0.000000,NEUTRAL

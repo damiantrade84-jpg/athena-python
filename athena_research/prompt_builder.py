@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+import yaml
 
 
 # ─── Safety preamble (injected into every prompt) ────────────────────────────
@@ -67,6 +68,85 @@ Provide a decision memo with specific, actionable recommendations.
 """.strip()
 
 
+# ─── Live engine threshold loader ────────────────────────────────────────────
+
+_MAIN_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
+
+
+def _load_engine_thresholds() -> str:
+    """Read relevant live engine thresholds from config.yaml for AI context."""
+    try:
+        cfg = yaml.safe_load(_MAIN_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return "*Live engine thresholds unavailable*"
+
+    lines = ["## Live Engine Thresholds (READ-ONLY context — do NOT recommend changing these)\n"]
+
+    # MIN_CONFLUENCE_CLASS
+    mcc = cfg.get("MIN_CONFLUENCE_CLASS", {})
+    if mcc:
+        lines.append("### Engine A — MIN_CONFLUENCE_CLASS (live scan floor, 0–3.0 scale)")
+        for ac, val in mcc.items():
+            lines.append(f"  {ac}: {val}")
+        lines.append("")
+
+    # ADX / ranging thresholds
+    ranging = cfg.get("RANGING", {})
+    if ranging:
+        lines.append("### Engine A — ADX Ranging Penalties")
+        for ac, vals in ranging.items():
+            if isinstance(vals, dict):
+                lines.append(f"  {ac}: dead<{vals.get('dead','-')} pen={vals.get('dead_pen','-')}, choppy<{vals.get('choppy','-')} pen={vals.get('choppy_pen','-')}")
+        lines.append("")
+
+    # Blocked trend states
+    bts = cfg.get("ENGINE_A_BLOCKED_TREND_STATES", [])
+    if bts:
+        lines.append(f"### Engine A — Blocked Trend States (backtest): {bts}")
+        lines.append("")
+
+    # Factor weights
+    fw = cfg.get("FACTOR_WEIGHTS", {})
+    if fw:
+        lines.append("### Engine A — Factor Weights")
+        for ac, weights in fw.items():
+            lines.append(f"  {ac}: {weights}")
+        lines.append("")
+
+    # Engine C BT exit
+    ec = cfg.get("ENGINE_C_BT_EXIT", {})
+    if ec:
+        lines.append("### Engine C — Backtest Exit Controls")
+        for ac, styles in ec.items():
+            if isinstance(styles, dict):
+                for style, params in styles.items():
+                    if isinstance(params, dict):
+                        lines.append(f"  {ac}.{style}: max_hold={params.get('max_hold_bars','-')}, be_arm_rr={params.get('be_arm_rr','-')}, be_min_target_rr={params.get('be_min_target_rr','-')}")
+        lines.append("")
+
+    # Engine B max daily
+    nmd = cfg.get("NAKED_MAX_DAILY")
+    if nmd:
+        lines.append(f"### Engine B — NAKED_MAX_DAILY: {nmd}")
+        lines.append("")
+
+    # Fee PCT
+    fees = cfg.get("FEE_PCT", {})
+    if fees:
+        lines.append("### Round-Trip Fees (live)")
+        for ac, val in fees.items():
+            lines.append(f"  {ac}: {val}")
+        lines.append("")
+
+    # Auto-trade conviction
+    atmc = cfg.get("AUTO_TRADE_MIN_CONVICTION", {})
+    if atmc:
+        lines.append(f"### Auto-Trade Min Conviction: {atmc.get('default', '-')}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 # ─── Data summariser helpers ──────────────────────────────────────────────────
 
 def _safe_head(df: pd.DataFrame, n: int = 15) -> str:
@@ -102,7 +182,7 @@ def build_prompt(run_dir: Path) -> str:
     Reads all aggregate CSV files from *run_dir* and builds the AI analyst prompt.
     Returns the full prompt string.
     """
-    sections = [_SAFETY_PREAMBLE, "", _PROJECT_CONTEXT, "", _PURPOSE, ""]
+    sections = [_SAFETY_PREAMBLE, "", _PROJECT_CONTEXT, "", _load_engine_thresholds(), "", _PURPOSE, ""]
 
     sections.append("## Research Results\n")
 
@@ -132,6 +212,14 @@ def build_prompt(run_dir: Path) -> str:
 
     # By direction
     sections.append(_summarise_csv(run_dir / "by_direction.csv", "By Direction"))
+    sections.append("")
+
+    # By zone
+    sections.append(_summarise_csv(run_dir / "by_zone.csv", "By Zone (Scalp/Intra/Swing)"))
+    sections.append("")
+
+    # Per-pair recommendation
+    sections.append(_summarise_csv(run_dir / "per_pair_recommendation.csv", "Per-Pair Top Recommendation", head=20))
     sections.append("")
 
     # Indicator attribution

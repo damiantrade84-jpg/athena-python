@@ -1,0 +1,125 @@
+# Athena Research Lab — AI Review
+**Run ID:** `run_20260426_180833`  **Model:** `grok-4-1-fast-reasoning`  **Generated:** 2026-04-26 18:12 UTC
+
+> AI-powered analysis.
+> Backtest discovery only — NOT a live execution recommendation.
+
+---
+
+# Athena Pro v4 Backtest Discovery Decision Memo
+**Run ID:** run_20260426_180833 | **Analyst:** Quantitative Research | **Date:** 2026-04-26  
+**Key Caveat:** These are discovery results at lowered BT_MIN thresholds. **Do NOT execute live, copy thresholds to live gates, or deploy without forward validation.** All labels per safety rules. Penalized low samples (<30 trades), single-symbol, net-negative, OOS failure. Prefer multi-symbol/timeframe clusters.
+
+## 1. Strategy Family Performance
+- **pullback** (STRONG_CANDIDATE): Highest avg net_return (0.205), 14 passes, multi-symbol (e.g., XAG/USD). Robust cluster across commodities.
+- **mean_reversion** (STRONG_CANDIDATE): High WR (0.649), PF (2.04), 24 passes; bollinger_touch shines on crypto/commodities/index (e.g., SOL/USDT H4: 39 trades, PF 2.44).
+- **engine_b_proxy** (WEAK_CANDIDATE): 16 passes, avg net 0.167; structure_filters works on stocks/commodities but single-symbol heavy.
+- **trend_momentum** (REJECT): 16 passes but low robustness (0.50), ema_cross/momentum fails OOS/net-negative on crypto.
+- **breakout**/**engine_d_proxy**/**volatility** (REJECT): Fee-sensitive, OOS decay, no clusters.
+
+## 2. Indicator Helped Most
+**bollinger_touch** (STRONG_CANDIDATE): Only positive avg_net_return (+0.0087), 25% pass_rate, multi-asset (crypto/index/commodity), H4 TF. NEUTRAL verdict but clear edge in mean_reversion family.
+
+## 3. Indicator Hurt Most
+**ema_scalp_pullback** (REJECT): Worst avg_net_return (-0.191), 4% pass_rate, destroys edge across families.
+
+## 4. Asset Group Performance
+**commodity** (STRONG_CANDIDATE): Best net_return (0.20), PF (1.74), multi-symbol (XAG/USD, XAU/USD, WTI Oil). Robust > crypto despite lower WR.
+
+## 5. Symbol Performance
+**XAG/USD** (STRONG_CANDIDATE): Top net_return (0.348), 18 passes, pullback/breakout edges. Cluster with XAU/USD.
+
+## 6. Timeframe Performance
+**H4** (STRONG_CANDIDATE): Best net_return (0.161), 96 passes, highest robustness. M15/H1 penalized for noise/small samples.
+
+## 7. Session Performance
+**all** (NEEDS_MORE_DATA): Only data available; no session splits. Not trustworthy without breakdown (e.g., London/NY).
+
+## 8. LONG vs SHORT
+**both** (NEUTRAL/NEEDS_MORE_DATA): Only direction tested; no long/short split. Cannot assess bias.
+
+## 9. Setups Collapsed After Fees
+None explicitly gross-profitable but net-negative. All top candidates survive fees (e.g., bollinger_touch SOL H4: gross/net similar).
+
+## 10. Setups with Too Little Sample
+- trend_momentum (1376 configs, e.g., ema_cross SOL M15: 16-39 trades)
+- engine_b_proxy (358)
+- mean_reversion (307)
+- breakout (296)
+- engine_d_proxy (195)
+- volatility (192)
+- pullback (25) — All labeled NEEDS_MORE_DATA or penalized.
+
+## 11. Engine A (EMA/RSI+MACD/ADX) Recommendations
+- **Keep:** MACD direction (STRONG_CANDIDATE on ETH/USDT H1: adx_min=0, 54 trades, PF 1.62, robustness 0.67). EMA coherence as filter only.
+- **Remove/Demote:** EMA_cross (REJECT: net-negative, low WR 0.17, OOS fail on SOL). RSI_confirm hurts (worse expectancy).
+- **Tune:** Raise ADX_min >20 (filters noise); test RSI+MACD momentum quality on H4 commodities (not forex). No live threshold changes.
+- Not trustworthy: Single-symbol crypto heavy.
+
+## 12. Engine B (Price-Action Checklist) Recommendations
+- **Keep:** structure_filters (STRONG_CANDIDATE on MSFT H4: fvg_detection=False, strong_close_pct=0.7, 58 trades, PF 1.56).
+- **Remove/Demote:** ob_bos (REJECT: 0 passes, net -0.09). FVG_detection inconsistent (WEAK on XAG).
+- **Tune:** strong_close_pct=0.7 gate; add location/RR room checks. Test BOS/CHoCH on H4 commodities.
+- Prefer checklist strictness; no live changes.
+
+## 13. Engine D (VP/OrderFlow Scalping) Recommendations
+- **Keep:** micro_breakout (STRONG_CANDIDATE on XAU/USD H4: atr_sl_mult=0.5/1.0, range_bars=3, 86 trades, robustness 0.69).
+- **Remove/Demote:** CVD/VWAP (implied in proxies: HURTS, low pass_rate).
+- **Tune:** range_bars=3-6, atr_sl_mult=0.5-1.0, fee_guard_r=0.5; Grade A/B for POC/VAH/VAL absorption on commodities (crypto OOS fail).
+- Crypto-focused but commodities stronger.
+
+## 14. Next Smallest Useful Test
+Expand bollinger_touch/mean_reversion on H4 commodities (XAG/USD, XAU/USD, WTI Oil) + 2 more symbols (e.g., GER40, NAS100). Add session splits (London/NY). 50-100 configs, focus IS/OOS + fees.
+
+## 15. What Should NOT Be Tested Further Right Now
+- ema_cross/ema_scalp_pullback (TELEMETRY_BUG risk: consistent net-loss, small samples).
+- M15 trend_momentum (noise, <30 trades).
+- Single-symbol forex (EUR/USD, GBP/USD: low edge).
+- volatility family (no clusters).
+
+**Overall:** Weak edges; mean_reversion/bollinger_touch + commodity H4 most promising cluster. Prioritize validation over expansion. No live actions.
+
+```json
+{
+  "overall_verdict": "Promising mean_reversion clusters on H4 commodities; trend_momentum/breakouts rejected. Focus validation on top candidates.",
+  "top_candidates": [
+    {"strategy": "bollinger_touch", "symbol": "SOL/USDT", "tf": "H4", "label": "STRONG_CANDIDATE"},
+    {"strategy": "pullback_ema", "symbol": "XAG/USD", "tf": "H4", "label": "WEAK_CANDIDATE"},
+    {"strategy": "structure_filters", "symbol": "MSFT", "tf": "H4", "label": "STRONG_CANDIDATE"},
+    {"strategy": "macd_direction", "symbol": "ETH/USDT", "tf": "H1", "label": "STRONG_CANDIDATE"},
+    {"strategy": "micro_breakout", "symbol": "XAU/USD", "tf": "H4", "label": "STRONG_CANDIDATE"}
+  ],
+  "rejected_setups": [
+    {"strategy": "ema_cross", "reason": "net-negative, low WR, OOS fail"},
+    {"strategy": "ema_scalp_pullback", "reason": "worst net_return (-0.191)"},
+    {"strategy": "ob_bos", "reason": "0 passes, net -0.09"}
+  ],
+  "engine_a": {
+    "keep": ["macd_direction (adx_min=0)"],
+    "remove_or_demote": ["ema_cross", "rsi_confirm"],
+    "tune": ["ADX_min >20 on H4 commodities"],
+    "next_tests": ["RSI+MACD on XAG/USD H4"]
+  },
+  "engine_b": {
+    "keep": ["structure_filters (strong_close_pct=0.7)"],
+    "remove_or_demote": ["ob_bos", "fvg_detection"],
+    "tune": ["location/RR room checks"],
+    "next_tests": ["BOS/CHoCH on commodities H4"]
+  },
+  "engine_d": {
+    "keep": ["micro_breakout (range_bars=3, atr_sl_mult=0.5-1.0)"],
+    "remove_or_demote": ["CVD/VWAP proxies"],
+    "tune": ["fee_guard_r=0.5, POC/VAH/VAL grades"],
+    "next_tests": ["absorption on XAU/USD H4"]
+  },
+  "data_quality_warnings": ["No session/direction splits; all 'both/all'"],
+  "telemetry_warnings": ["Small samples dominate trend_momentum (1376 <30 trades)"],
+  "next_tiny_test": {
+    "symbols": ["XAG/USD", "XAU/USD", "SOL/USDT", "NAS100"],
+    "timeframes": ["H4"],
+    "strategy_families": ["mean_reversion"],
+    "reason": "Validate bollinger_touch cluster; add sessions"
+  },
+  "do_not_do_next": ["ema_cross", "M15 trend_momentum", "volatility family"]
+}
+```

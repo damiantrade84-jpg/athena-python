@@ -1,0 +1,99 @@
+{
+  "overall_verdict": "WEAK_CANDIDATE across forex H4 breakout; OOS failure and single-symbol bias prevent promotion. No strong clusters.",
+  "top_candidates": [
+    {
+      "strategy": "session_opening_range atr_expand_min=0.0|range_bars=6",
+      "symbol": "AUD/USD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "session_opening_range atr_expand_min=0.5|range_bars=6",
+      "symbol": "AUD/USD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "prev_day_hl atr_expand_min=1.0",
+      "symbol": "AUD/USD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "prev_day_hl",
+      "reason": "avg_net -0.0249, OOS hurt, gross/net marginal"
+    },
+    {
+      "strategy": "ny_breakout",
+      "reason": "0 trades"
+    },
+    {
+      "strategy": "london_breakout",
+      "reason": "<20 trades"
+    }
+  ],
+  "engine_a": {
+    "keep": [
+      "Current live floor 2.1"
+    ],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Test EMA/RSI+MACD on H4 forex"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "session_opening_range logic"
+    ],
+    "remove_or_demote": [
+      "prev_day_hl"
+    ],
+    "tune": [
+      "ATR_expand_min >=0.5",
+      "multi-session filters"
+    ],
+    "next_tests": [
+      "H1/M15 breakout proxies"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Crypto symbols for VP/OrderFlow"
+    ]
+  },
+  "data_quality_warnings": [
+    "Tiny samples (<30 trades common)",
+    "Only 3 symbols, single TF/session/direction",
+    "Consistent IS/OOS divergence"
+  ],
+  "telemetry_warnings": [
+    "Missing IS/OOS details for some NEEDS_MORE_DATA",
+    "MT5 data only \u2014 no multi-source"
+  ],
+  "next_tiny_test": {
+    "symbols": [
+      "EUR/USD",
+      "GBP/USD",
+      "USD/CAD"
+    ],
+    "timeframes": [
+      "H1",
+      "M15"
+    ],
+    "strategy_families": [
+      "breakout",
+      "pullback"
+    ],
+    "reason": "Expand to 6+ symbols/TFs for clusters, check OOS robustness"
+  },
+  "do_not_do_next": [
+    "prev_day_hl variants",
+    "ny_breakout (zero trades)"
+  ]
+}

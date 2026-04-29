@@ -1,0 +1,40 @@
+{
+  "engine_a": {
+    "keep": [
+      "RSI+MACD momentum (macd_direction adx_min=0)"
+    ],
+    "remove_or_demote": [
+      "EMA trend coherence (ema_cross)"
+    ],
+    "tune": [
+      "ADX gate (>20)"
+    ],
+    "next_tests": [
+      "Multi-symbol H1/H4 macd_direction"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (fvg=False, strong_close=0.8)"
+    ],
+    "remove_or_demote": [
+      "OB/BOS logic"
+    ],
+    "tune": [
+      "Strong close threshold"
+    ],
+    "next_tests": [
+      "Non-crypto structure_filters H4"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Full VP/OF suite on crypto M5/H1"
+    ]
+  },
+  "generated_at": "2026-04-27T18:46:02.833124+00:00",
+  "safety_note": "These are backtest discovery findings only. Do NOT apply to live thresholds without further validation."
+}

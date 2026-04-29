@@ -1,0 +1,17 @@
+{
+  "run_id": "run_20260427_170815_1216",
+  "mode": "small",
+  "symbol_count": 1,
+  "timeframes": [
+    "H4"
+  ],
+  "families": [
+    "engine_d_proxy"
+  ],
+  "specs_count": 4,
+  "results_count": 4,
+  "direction": "both",
+  "generated_at": "2026-04-27T17:08:18.533956+00:00",
+  "parent_run_id": "run_20260427_170729",
+  "is_autopilot": true
+}

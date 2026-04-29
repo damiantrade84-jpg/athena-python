@@ -1,0 +1,127 @@
+# Athena Research Lab — AI Review
+**Run ID:** `run_20260427_185022_ff039f`  **Model:** `grok-4-1-fast-reasoning`  **Generated:** 2026-04-27 18:51 UTC
+
+> AI-powered analysis.
+> Backtest discovery only — NOT a live execution recommendation.
+
+---
+
+# Athena Pro v4 Backtest Discovery Decision Memo
+**Analyst:** Quantitative Research Analyst  
+**Run ID:** run_20260427_185022_ff039f  
+**Date:** 2026-04-27  
+**Scope:** 60 configs across breakout/pullback families, forex (AUD/USD, EUR/USD), M15/H4 TFs. Tiny mode (limited symbols/TFs). All results at lowered BT_MIN thresholds — **do NOT copy to live gates or execute live**.  
+
+**Key Caveats:**  
+- Tiny samples dominate (<30 trades in 23/60 configs → penalize heavily).  
+- Only 2 symbols → no multi-symbol robustness (penalize).  
+- Frequent IS/OOS decay (e.g., top configs show positive IS net but negative/mixed OOS → penalize).  
+- No gross-profitable/net-negative after fees cases.  
+- Forex-only; no clusters across assets/TFs/sessions.  
+- Data trustworthy (MT5 source), but sparse → many NEEDS_MORE_DATA. No telemetry bugs detected.  
+
+## 1. Strategy Family Assessment
+- **breakout**: WEAK_CANDIDATE (9/35 passing robustness; avg net_return +0.0425, PF 1.42, but small samples, single TF/symbol bias, OOS decay).  
+- **pullback**: REJECT (0/16 passing; avg net_return -0.0583, low WR 0.14, consistent losses).  
+
+## 2. Indicator Helped Most
+session_opening_range (H4): WEAK_CANDIDATE (6 weak passes; top ranks on AUD/USD H4 with PF>1.8, net +0.0997 IS but OOS -0.0134; still hurts overall per attribution). No strong helpers.  
+
+## 3. Indicator Hurt Most
+pullback_ema: REJECT (0 passes, avg net -0.0583, SQN -3.75, destroys capital across 16 configs).  
+
+## 4. Asset Group Worked Best
+**forex**: WEAK_CANDIDATE (only group; avg net +0.0425 but thin data, no cross-asset cluster).  
+
+## 5. Symbol Worked Best
+**AUD/USD**: WEAK_CANDIDATE (7/9 passes; avg net +0.0543 > EUR/USD's +0.0011; but single-symbol penalty, needs multi-symbol validation). EUR/USD: NEEDS_MORE_DATA (higher WR 0.48 but near-zero net).  
+
+## 6. Timeframe Worked Best
+**H4**: WEAK_CANDIDATE (all 9 passes; avg net +0.0425, Sharpe 0.80). M15: REJECT (all low-sample or net-negative).  
+
+## 7. Session Worked Best
+**all**: NEUTRAL (only tested; no session splits show edge). London/ny_breakout: NEEDS_MORE_DATA (<20 trades).  
+
+## 8. LONG vs SHORT
+**both**: NEUTRAL (only direction tested; no long/short split). No directional edge.  
+
+## 9. Setups Collapsed After Fees
+None. All passing configs are net-positive (gross/net aligned).  
+
+## 10. Setups with Too Little Sample (<30 trades)
+- breakout/prev_day_hl (many <30, e.g., AUD/USD M15: 1 trade → NEEDS_MORE_DATA).  
+- breakout/london_breakout (14 trades → NEEDS_MORE_DATA).  
+- breakout/ny_breakout (9 trades → NEEDS_MORE_DATA).  
+- breakout/session_opening_range range_bars=12 (28 trades → penalize but some weak passes).  
+
+## 11. Engine A (EMA/RSI/MACD/ADX): Keep/Remove/Tune
+No valid trend_momentum or pullback_ema results (all REJECT/NEEDS_MORE_DATA due to net-negative, low WR).  
+- **Keep:** Nothing — insufficient positives.  
+- **Remove/Demote:** pullback_ema (consistent capital destruction).  
+- **Tune:** Test EMA trend coherence + RSI reclaim at higher thresholds (e.g., RSI>60) on H4 forex; expand samples >100 trades. NEEDS_MORE_DATA overall.  
+
+## 12. Engine B (Naked PA: BOS/FVG/OB): Keep/Remove/Tune
+Breakout as proxy (session_opening_range weak edge on H4 forex).  
+- **Keep:** session_opening_range logic (range_bars=6, atr_expand_min=0-0.5) as WEAK_CANDIDATE for checklist integration.  
+- **Remove/Demote:** Nothing specific.  
+- **Tune:** Add multi-TF confirmation (e.g., H4 range validated on H1); stricten trigger/room gates for OOS stability. Penalize single-symbol.  
+
+## 13. Engine D (VP/OrderFlow: POC/VAH/CVD): Keep/Remove/Tune
+No valid engine_d_proxy results (crypto-focused, absent here).  
+- **Keep/Remove/Tune:** N/A.  
+- **Next:** NEEDS_MORE_DATA — test on crypto symbols explicitly. Not trustworthy due to missing data.  
+
+## 14. Next Smallest Useful Test
+Tiny mode expansion: Add 4-6 more forex majors (GBP/USD, USD/JPY, etc.), test H1/M30 TFs, focus breakout/session_opening_range on H4 winners. Target >50 trades/config.  
+
+## 15. What Should NOT Be Tested Further Right Now
+- pullback family (16 rejects, no edge).  
+- M15 across families (all low-sample/negative).  
+- Single-digit trade configs (london/ny_breakout).  
+
+**Overall Verdict:** Weak signals only — no robust clusters. Prioritize sample expansion before tuning. **No live implications.**
+
+```json
+{
+  "overall_verdict": "WEAK_CANDIDATE across forex H4 breakout (session_opening_range); heavy penalties for small samples/single symbols/OOS decay. No STRONG_CANDIDATE.",
+  "top_candidates": [
+    {"strategy": "breakout/session_opening_range (atr_expand_min=0.0-0.5|range_bars=6)", "symbol": "AUD/USD", "tf": "H4", "label": "WEAK_CANDIDATE"},
+    {"strategy": "breakout/session_opening_range (atr_expand_min=0.0-0.5|range_bars=6)", "symbol": "EUR/USD", "tf": "H4", "label": "WEAK_CANDIDATE"}
+  ],
+  "rejected_setups": [
+    {"strategy": "pullback/pullback_ema", "reason": "Consistent net-negative (-0.058 avg), low WR, 0 passes"},
+    {"strategy": "breakout M15 variants", "reason": "Net-negative or tiny samples"}
+  ],
+  "engine_a": {
+    "keep": [],
+    "remove_or_demote": ["pullback_ema"],
+    "tune": ["EMA/RSI pullback thresholds (higher RSI>60, H4 focus)"],
+    "next_tests": ["Multi-symbol H4 trend_momentum >100 trades"]
+  },
+  "engine_b": {
+    "keep": ["session_opening_range (range_bars=6)"],
+    "remove_or_demote": [],
+    "tune": ["Add H1 confirmation, stricten triggers for OOS"],
+    "next_tests": ["H4 forex majors, >50 trades/config"]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": ["Crypto symbols (BTC/ETH), VP params"]
+  },
+  "data_quality_warnings": ["Sparse: 2 symbols, H4-only in passes"],
+  "telemetry_warnings": [],
+  "next_tiny_test": {
+    "symbols": ["GBP/USD", "USD/JPY", "USD/CAD", "NZD/USD"],
+    "timeframes": ["H4", "H1"],
+    "strategy_families": ["breakout"],
+    "reason": "Expand samples/multi-symbols on H4 session_opening_range weak signals"
+  },
+  "do_not_do_next": [
+    "pullback family",
+    "M15 timeframes",
+    "london/ny_breakout (low trades)"
+  ]
+}
+```

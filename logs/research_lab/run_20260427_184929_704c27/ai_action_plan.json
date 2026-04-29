@@ -1,0 +1,93 @@
+{
+  "overall_verdict": "NO_VALID_CANDIDATES",
+  "top_candidates": [],
+  "rejected_setups": [
+    {
+      "strategy": "breakout",
+      "reason": "88 configs rejected; negative expectancy, high drawdown"
+    },
+    {
+      "strategy": "pullback",
+      "reason": "32 configs rejected; avg_net_return -0.0548"
+    },
+    {
+      "strategy": "session_opening_range",
+      "reason": "HURTS most (avg_net_return -0.0724)"
+    },
+    {
+      "strategy": "ny_breakout",
+      "reason": "HURTS (avg_net_return -0.0508)"
+    },
+    {
+      "strategy": "pullback_ema",
+      "reason": "HURTS (avg_SQN -4.31)"
+    }
+  ],
+  "engine_a": {
+    "keep": [],
+    "remove_or_demote": [
+      "pullback_ema (period=20/50)"
+    ],
+    "tune": [
+      "rsi_threshold >50",
+      "add ADX >25"
+    ],
+    "next_tests": [
+      "test M15/H4 with multi-symbol"
+    ]
+  },
+  "engine_b": {
+    "keep": [],
+    "remove_or_demote": [
+      "session_opening_range",
+      "prev_day_hl"
+    ],
+    "tune": [
+      "atr_expand_min >1.0",
+      "add RR/location filters"
+    ],
+    "next_tests": [
+      "london/ny sessions on 4+ symbols"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "crypto symbols (BTC/USD etc.)"
+    ]
+  },
+  "data_quality_warnings": [
+    "Tiny mode: only 2 symbols, H1 TF",
+    "55 configs <20 trades",
+    "Missing top-ranked/by-group files",
+    "No IS/OOS consistency in most"
+  ],
+  "telemetry_warnings": [
+    "Forex-only (no crypto for Engine D)",
+    "No Engine C/D proxies validated"
+  ],
+  "next_tiny_test": {
+    "symbols": [
+      "EUR/USD",
+      "AUD/USD",
+      "BTC/USD",
+      "ETH/USD"
+    ],
+    "timeframes": [
+      "M15",
+      "H4"
+    ],
+    "strategy_families": [
+      "breakout",
+      "pullback"
+    ],
+    "reason": "Add cross-symbol/TF clusters to escape penalties; include crypto for Engine D"
+  },
+  "do_not_do_next": [
+    "H1-only tests",
+    "USD/CAD+GBP/JPY only",
+    "Untuned breakout/pullback"
+  ]
+}

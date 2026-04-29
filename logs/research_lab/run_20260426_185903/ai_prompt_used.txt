@@ -1,0 +1,223 @@
+You are a quantitative research analyst reviewing backtest discovery results for Athena Pro v4,
+a multi-engine algorithmic trading system.
+
+IMPORTANT SAFETY RULES — YOU MUST FOLLOW THESE:
+1. Never recommend direct live execution from backtest discovery alone.
+2. Never suggest copying BT_MIN / backtest thresholds into live engine gates.
+3. Always label each finding with exactly one of: STRONG_CANDIDATE | WEAK_CANDIDATE | REJECT | NEEDS_MORE_DATA | TELEMETRY_BUG
+4. Penalise tiny samples (< 30 trades).
+5. Penalise strategies that only work on one symbol.
+6. Penalise strategies that are gross-profitable but net-negative after fees.
+7. Penalise strategies that work IS but fail OOS.
+8. Prefer robust clusters (work across multiple symbols/timeframes) over one-off winners.
+9. Separate Engine A, Engine B, and Engine D recommendations.
+10. Mention explicitly if a result is not trustworthy due to missing data or telemetry.
+
+## Project Context
+
+Athena Pro v4 has four engines:
+
+- **Engine A** — 3-factor quantitative scoring: EMA trend coherence (D1/H4/H1), RSI+MACD momentum quality, ADX gate.
+  Unified 0–3.0 scale. Current live forex floor: MIN_CONFLUENCE_CLASS.forex = 2.1.
+  **Do NOT recommend changing live thresholds from backtest findings.**
+
+- **Engine B** — Naked price-action (BOS/CHoCH, FVG, OB, swing sequence, location, trigger, room/RR).
+  Checklist-based pass/fail. Strict by design.
+
+- **Engine C** — Consensus layer blending Engine A + Engine B + AI Vision.
+
+- **Engine D** — Fabio Valentini VP+OrderFlow scalping (POC/VAH/VAL, Absorption, CVD, VWAP, AAA sequence).
+  Crypto-focused. Grade A/B/C/D.
+
+## Backtest Discovery Context
+
+- BT_MIN / discovery thresholds are intentionally LOWER than live thresholds.
+- Backtest results may appear worse because marginal trades are included.
+- IS = In-Sample (first 70% of data), OOS = Out-of-Sample (last 30%).
+- Robustness score: 0–1 combining sample adequacy, IS/OOS consistency, fee survival.
+
+## Purpose of This Analysis
+
+Identify which indicators, strategy families, filters, sessions, and symbols actually produce edge —
+and which do not — so we can make informed decisions about Engine A, Engine B, and Engine D.
+
+Provide a decision memo with specific, actionable recommendations.
+
+## Research Results
+
+### All Results Summary
+Rows: 4
+```
+             run_id  symbol asset_class timeframe         family     strategy_name                               params_str direction session         status  trade_count win_rate profit_factor avg_return expectancy max_drawdown  sharpe     sqn exposure_pct avg_duration_bars gross_return net_return is_return oos_return robustness_score param_sensitivity skip_reason data_source
+run_20260426_185903 XAU/USD   commodity        H4 engine_b_proxy structure_filters fvg_detection=False|strong_close_pct=0.7      both     all         REJECT          284   0.2500        0.6396    -0.0021    -0.0021      -0.4676 -1.2759 -2.5625       0.2843            3.3838      -0.4598    -0.4598   -0.2281    -0.2845           0.6259               nan         nan         mt5
+run_20260426_185903 XAU/USD   commodity        H4 engine_b_proxy structure_filters  fvg_detection=True|strong_close_pct=0.7      both     all WEAK_CANDIDATE           32   0.5312        4.0868     0.0123     0.0123      -0.0530  1.0629  2.2773       0.0320           17.5000       0.4594     0.4594    0.4028     0.0403           0.4220               nan         nan         mt5
+run_20260426_185903 XAU/USD   commodity        H4 engine_b_proxy structure_filters fvg_detection=False|strong_close_pct=0.8      both     all         REJECT          202   0.2673        0.6492    -0.0022    -0.0022      -0.3840 -0.9932 -1.9939       0.2022            4.5050      -0.3808    -0.3808   -0.0695    -0.3288           0.4000               nan         nan         mt5
+run_20260426_185903 XAU/USD   commodity        H4 engine_b_proxy structure_filters  fvg_detection=True|strong_close_pct=0.8      both     all WEAK_CANDIDATE           24   0.5000        3.5848     0.0125     0.0125      -0.0354  0.8914  1.9017       0.0240           17.9167       0.3310     0.3310    0.2836     0.0370           0.3831               nan         nan         mt5
+```
+
+### Top Ranked Strategies
+Rows: 2
+```
+             run_id  symbol asset_class timeframe         family     strategy_name                              params_str direction session         status  trade_count win_rate profit_factor avg_return expectancy max_drawdown sharpe    sqn exposure_pct avg_duration_bars gross_return net_return is_return oos_return robustness_score param_sensitivity skip_reason data_source rank_score
+run_20260426_185903 XAU/USD   commodity        H4 engine_b_proxy structure_filters fvg_detection=True|strong_close_pct=0.7      both     all WEAK_CANDIDATE           32   0.5312        4.0868     0.0123     0.0123      -0.0530 1.0629 2.2773       0.0320           17.5000       0.4594     0.4594    0.4028     0.0403           0.4220               nan         nan         mt5     0.3944
+run_20260426_185903 XAU/USD   commodity        H4 engine_b_proxy structure_filters fvg_detection=True|strong_close_pct=0.8      both     all WEAK_CANDIDATE           24   0.5000        3.5848     0.0125     0.0125      -0.0354 0.8914 1.9017       0.0240           17.9167       0.3310     0.3310    0.2836     0.0370           0.3831               nan         nan         mt5     0.3289
+```
+
+### By Asset Group
+Rows: 1
+```
+asset_class win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+  commodity        0.5156               2             3.8358                    2          0.0124                 2      0.9771             2   2.0895          2          0.3952                 2          0.0387                 2                0.4026                       2          28.0000                  2
+```
+
+### By Symbol
+Rows: 1
+```
+ symbol win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+XAU/USD        0.5156               2             3.8358                    2          0.0124                 2      0.9771             2   2.0895          2          0.3952                 2          0.0387                 2                0.4026                       2          28.0000                  2
+```
+
+### By Timeframe
+Rows: 1
+```
+timeframe win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+       H4        0.5156               2             3.8358                    2          0.0124                 2      0.9771             2   2.0895          2          0.3952                 2          0.0387                 2                0.4026                       2          28.0000                  2
+```
+
+### By Session
+Rows: 1
+```
+session win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+    all        0.5156               2             3.8358                    2          0.0124                 2      0.9771             2   2.0895          2          0.3952                 2          0.0387                 2                0.4026                       2          28.0000                  2
+```
+
+### By Direction
+Rows: 1
+```
+direction win_rate_mean  win_rate_count profit_factor_mean  profit_factor_count expectancy_mean  expectancy_count sharpe_mean  sharpe_count sqn_mean  sqn_count net_return_mean  net_return_count oos_return_mean  oos_return_count robustness_score_mean  robustness_score_count trade_count_mean  trade_count_count
+     both        0.5156               2             3.8358                    2          0.0124                 2      0.9771             2   2.0895          2          0.3952                 2          0.0387                 2                0.4026                       2          28.0000                  2
+```
+
+### Indicator Attribution
+Rows: 1
+```
+    strategy_name  total_configs  strong  weak  reject avg_net_return avg_win_rate avg_robustness avg_sqn avg_oos_return  total_trades pass_rate verdict
+structure_filters              4       0     2       2        -0.0125       0.3871         0.4577 -0.0944        -0.1340           542    0.5000   HURTS
+```
+
+### Rejected / Failed Configs (by family)
+```
+        family  count
+engine_b_proxy      2
+```
+
+### research_report.md (excerpt)
+```
+# Athena Research Lab — Report
+**Run ID:** `run_20260426_185903`  **Generated:** 2026-04-26 18:59 UTC  
+**Mode:** tiny  **Symbols:** 1  **Families:** ['engine_b_proxy']
+
+> **IMPORTANT:** These are backtest discovery findings at intentionally lower thresholds.
+> Do NOT copy these thresholds into live engine gates.
+> Label: **STRONG_CANDIDATE** / **WEAK_CANDIDATE** / **REJECT** / **NEEDS_MORE_DATA**
+
+## Executive Summary
+- Total strategy/param/symbol/TF combinations tested: **4**
+- Valid (pass robustness): **2** (50.0%)
+- Strong candidates: **0**
+
+## Which Strategy Family Works Best?
+family | count | avg_net_return | avg_wr | avg_pf | avg_sqn
+--- | --- | --- | --- | --- | ---
+engine_b_proxy | 2 | 0.3952 | 0.5156 | 3.8358 | 2.0895
+
+**Best family:** `engine_b_proxy` (avg net return 0.395)
+
+## Which Symbol Works Best?
+symbol | count | avg_net_return | avg_wr
+--- | --- | --- | ---
+XAU/USD | 2 | 0.3952 | 0.5156
+
+## Which Timeframe Works Best?
+timeframe | count | avg_net_return | avg_wr
+--- | --- | --- | ---
+H4 | 2 | 0.3952 | 0.5156
+
+## Which Direction Works Better?
+direction | count | avg_net_return | avg_wr
+--- | --- | --- | ---
+both | 2 | 0.3952 | 0.5156
+
+## Which Indicators Help / Hurt?
+**Helpful indicators/strategies:**
+*No data*
+
+**Globally weak across tested configs:**
+strategy_name | pass_rate | avg_net_return
+--- | --- | ---
+structure_filters | 0.5000 | -0.0125
+
+## Which Setups Collapse After Fees?
+No gross-profitable-but-fee-killed setups found.
+
+## Which Setups Had Too Little Sample?
+0 configs had insufficient trades.  
+
+## Engine A Findings
+*No valid `trend_momentum` results — insufficient data or all rejected.*
+*No valid `pullback` results — insufficient data or all rejected.*
+
+## Engine B Findings
+Best `engine_b_proxy` config: `structure_filters` params=`fvg_detection=True|strong_close_pct=0.7`
+  - Symbol: `XAU/USD` TF: `H4` Direction: `both`
+  - Win rate: 53.1%  PF: 4.09  Robustness: 0.42  Status: `WEAK_CANDIDATE`
+  - **Action:** Validate on additional symbols/windows before considering Engine changes.
+
+## Engine D Findings
+*No valid `engine_d_proxy` results — insufficient data or all rejected.*
+
+## What Should NOT Be Tested Further Right Now?
+- `engine_b_proxy`: 2 configs rejected — insufficient edge at current parameters
+
+## Recommended Next Tiny Test
+No strong candidates yet.  Run more symbols and timeframes before tuning.
+
+---
+*Generated by Athena Research Lab v1.0 — 2026-04-26 18:59 UTC*
+*Backtest discovery findings only.  Not a live execution recommendation.*
+```
+
+## Required Output
+
+Provide a complete decision memo answering ALL of the following questions.
+Use the label tags defined in the safety rules.
+
+1. What strategy family worked best? (label each STRONG_CANDIDATE / WEAK_CANDIDATE / REJECT)
+2. What indicator helped most?
+3. What indicator hurt most?
+4. Which asset group worked best?
+5. Which symbol worked best?
+6. Which timeframe worked best?
+7. Which session worked best?
+8. Did LONG or SHORT work better overall?
+9. Which setups collapsed after fees? (list by family/strategy)
+10. Which setups had too little sample size? (list by family/strategy)
+11. What should Engine A keep / remove / tune? (be specific — factor names, threshold direction)
+12. What should Engine B keep / remove / tune? (be specific — checklist gates, zone logic)
+13. What should Engine D keep / remove / tune? (be specific — VP params, grade thresholds)
+14. What is the next smallest useful test to run?
+15. What should NOT be tested further right now?
+
+After the memo, output a JSON block labelled ```json with this structure:
+{
+  "overall_verdict": "...",
+  "top_candidates": [{"strategy": "...", "symbol": "...", "tf": "...", "label": "STRONG_CANDIDATE"}],
+  "rejected_setups": [{"strategy": "...", "reason": "..."}],
+  "engine_a": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": []},
+  "engine_b": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": []},
+  "engine_d": {"keep": [], "remove_or_demote": [], "tune": [], "next_tests": []},
+  "data_quality_warnings": [],
+  "telemetry_warnings": [],
+  "next_tiny_test": {"symbols": [], "timeframes": [], "strategy_families": [], "reason": "..."},
+  "do_not_do_next": []
+}

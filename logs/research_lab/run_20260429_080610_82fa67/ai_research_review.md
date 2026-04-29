@@ -1,0 +1,87 @@
+# Athena Research Lab — AI Review
+**Run ID:** `run_20260429_080610_82fa67`  **Model:** `grok-4-1-fast-reasoning`  **Generated:** 2026-04-29 08:06 UTC
+
+> AI-powered analysis.
+> Backtest discovery only — NOT a live execution recommendation.
+
+---
+
+# Athena Pro v4 Backtest Discovery Decision Memo
+**Analyst:** Quantitative Research Analyst  
+**Run ID:** run_20260429_080610_82fa67  
+**Date:** 2026-04-29  
+**Key Caveat:** These are discovery backtests at intentionally *lower* thresholds than live gates (e.g., Engine A forex floor remains 2.1). **Do NOT recommend live execution, threshold copies, or direct deployment from these results.** All findings labeled per rules: STRONG_CANDIDATE | WEAK_CANDIDATE | REJECT | NEEDS_MORE_DATA | TELEMETRY_BUG. Penalizing tiny samples (<30 trades), single-symbol results, net-negative after fees, and IS/OOS failures. No telemetry bugs observed, but data limited to stocks (AAPL/MSFT), H1/H4, engine_b_proxy only — **not trustworthy for broad decisions due to missing forex/crypto/multi-symbol coverage**.
+
+## 1. Strategy Family Results
+- **engine_b_proxy** (only family tested): **WEAK_CANDIDATE** overall (1 STRONG_CANDIDATE, 2 WEAK_CANDIDATE, 17 REJECT, 52 NEEDS_MORE_DATA). Avg net_return 0.1866 on valid configs, but single-symbol (MSFT), low pass_rate (4.2%). Sub-families: `structure_filters` **WEAK_CANDIDATE** (mixed, avg_net_return -0.1740 hurts overall); `ob_bos` **REJECT** (all tiny samples).
+
+## 2. Indicator Helped Most
+`structure_filters` with `fvg_detection=False|strong_close_pct=0.7` on MSFT H4: **STRONG_CANDIDATE** (57 trades >30, PF=1.56, net_return=0.2136>0, robustness=0.68, positive OOS). Helped via strong close filter without FVG.
+
+## 3. Indicator Hurt Most
+`structure_filters` overall: **REJECT** (pass_rate=12.5%, avg_net_return=-0.1740, avg_SQN=-5.58). Many configs net-negative (e.g., AAPL H4 variants: net_return -0.08 to -0.11). FVG-enabled params often **NEEDS_MORE_DATA** (tiny samples).
+
+## 4. Asset Group Worked Best
+`stock`: **WEAK_CANDIDATE** (only group, avg_net=0.1866, but single-symbol bias). No forex/crypto data — **NEEDS_MORE_DATA** for cross-asset robustness.
+
+## 5. Symbol Worked Best
+`MSFT`: **WEAK_CANDIDATE** (all 3 valid configs here, avg_net=0.1866). `AAPL`: **REJECT** (net-negative or tiny). **Penalized: single-symbol, no cluster.**
+
+## 6. Timeframe Worked Best
+`H4`: **STRONG_CANDIDATE** (avg_net=0.2173, higher PF/SQNs than H1). `H1`: **WEAK_CANDIDATE** (MSFT net=0.1250 but OOS negative).
+
+## 7. Session Worked Best
+`all`: **NEEDS_MORE_DATA** (only session tested, no breakdown).
+
+## 8. LONG or SHORT Better Overall?
+`both`: **NEEDS_MORE_DATA** (no directional split; all tests bidirectional). No edge attribution possible.
+
+## 9. Setups Collapsed After Fees
+None. All valid configs gross-profitable and net-positive (e.g., top MSFT H4: gross=0.2136, net=0.2136). No gross-positive/net-negative cases.
+
+## 10. Setups Had Too Little Sample Size (<30 trades)
+- `engine_b_proxy / ob_bos`: 48 configs (**REJECT**/NEEDS_MORE_DATA, e.g., AAPL/MSFT swing_period=5/10: 1-6 trades).
+- `engine_b_proxy / structure_filters` FVG-enabled: 12 configs (**NEEDS_MORE_DATA**, e.g., AAPL H4: 7-8 trades).
+Total: 52/72 configs penalized.
+
+## 11. Engine A: Keep/Remove/Tune
+**NEEDS_MORE_DATA** — zero results (no `trend_momentum`/`pullback`). No changes: **keep** current live (EMA/RSI+MACD/ADX at 2.1 forex floor). **Do not tune** from this. Next: Test multi-symbol forex IS/OOS.
+
+## 12. Engine B: Keep/Remove/Tune
+**WEAK_CANDIDATE** proxy results only. **Keep:** Checklist strictness (avoids over-trading). **Remove_or_demote:** `ob_bos` (tiny/zero edge). **Tune:** `structure_filters` — prioritize `fvg_detection=False`, `strong_close_pct=0.7-0.8` (strong close > engulf/vol expand); test location/room gates. **Penalize single-symbol (MSFT).** No live gate changes.
+
+## 13. Engine D: Keep/Remove/Tune
+**NEEDS_MORE_DATA** — zero results (no `engine_d_proxy`). **Keep** current VP+OrderFlow (POC/VAH/VAL/CVD/VWAP/AAA). No changes. Test crypto symbols next.
+
+## 14. Next Smallest Useful Test
+Expand top candidate: `structure_filters` (`fvg_detection=False|strong_close_pct=0.7`) on MSFT + 2-3 more stocks (e.g., AAPL, GOOGL) H4 only. Adds ~50-100 trades/symbol for cluster check.
+
+## 15. What Should NOT Be Tested Further Right Now?
+- `ob_bos` all params (tiny samples, zero valid).
+- `structure_filters` FVG-enabled (consistently tiny/negative).
+- AAPL-only (net-negative REJECTs).
+
+**Overall:** Sparse data (72 rows, 4.2% valid, MSFT H4 bias). One **STRONG_CANDIDATE** but **no robust clusters** — prioritize multi-symbol/telemetry expansion before engine tweaks.
+
+```json
+{
+  "overall_verdict": "WEAK_CANDIDATE: Single strong MSFT H4 structure_filters config amid tiny samples/single-symbol bias. No Engine A/D data. Needs multi-symbol clusters.",
+  "top_candidates": [
+    {"strategy": "structure_filters fvg_detection=False|strong_close_pct=0.7", "symbol": "MSFT", "tf": "H4", "label": "STRONG_CANDIDATE"},
+    {"strategy": "structure_filters fvg_detection=False|strong_close_pct=0.8", "symbol": "MSFT", "tf": "H4", "label": "WEAK_CANDIDATE"},
+    {"strategy": "structure_filters fvg_detection=False|strong_close_pct=0.8", "symbol": "MSFT", "tf": "H1", "label": "WEAK_CANDIDATE"}
+  ],
+  "rejected_setups": [
+    {"strategy": "ob_bos all params", "reason": "Tiny samples (<30 trades) across AAPL/MSFT"},
+    {"strategy": "structure_filters FVG-enabled", "reason": "Tiny samples or net-negative"},
+    {"strategy": "structure_filters AAPL variants", "reason": "Net-negative after fees"}
+  ],
+  "engine_a": {"keep": ["Current EMA/RSI+MACD/ADX at 2.1 forex floor"], "remove_or_demote": [], "tune": [], "next_tests": ["Forex multi-symbol trend_momentum/pullback"]},
+  "engine_b": {"keep": ["Strict checklist pass/fail"], "remove_or_demote": ["ob_bos"], "tune": ["structure_filters: fvg=False, strong_close=0.7-0.8"], "next_tests": ["structure_filters on MSFT + stocks H4"]},
+  "engine_d": {"keep": ["Current POC/VAH/VAL/CVD/VWAP/AAA grades"], "remove_or_demote": [], "tune": [], "next_tests": ["Crypto symbols engine_d_proxy"]},
+  "data_quality_warnings": ["Tiny samples in 52/72 configs", "Single symbol (MSFT) dominance", "No forex/crypto", "No directional/session splits"],
+  "telemetry_warnings": [],
+  "next_tiny_test": {"symbols": ["MSFT", "AAPL", "GOOGL"], "timeframes": ["H4"], "strategy_families": ["engine_b_proxy structure_filters fvg=False strong_close=0.7"], "reason": "Validate/expand top candidate for multi-symbol cluster"},
+  "do_not_do_next": ["ob_bos all params", "FVG-enabled structure_filters", "AAPL-only tests"]
+}
+```

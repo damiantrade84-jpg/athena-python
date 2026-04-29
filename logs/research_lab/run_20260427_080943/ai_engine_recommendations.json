@@ -1,0 +1,40 @@
+{
+  "engine_a": {
+    "keep": [
+      "ADX gate (macd_direction adx_min=0/20)"
+    ],
+    "remove_or_demote": [
+      "EMA cross/coherence"
+    ],
+    "tune": [
+      "MACD params (higher ADX threshold); disable RSI confirm"
+    ],
+    "next_tests": [
+      "H4 macd_direction on 8+ forex symbols, long/short split"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (FVG + strong_close)"
+    ],
+    "remove_or_demote": [
+      "OB/BOS"
+    ],
+    "tune": [
+      "RR/location gates for H4"
+    ],
+    "next_tests": [
+      "FVG-only proxies on multi-symbols/sessions"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Crypto VP/OF backtests (POC/VAH missing)"
+    ]
+  },
+  "generated_at": "2026-04-27T08:11:08.847127+00:00",
+  "safety_note": "These are backtest discovery findings only. Do NOT apply to live thresholds without further validation."
+}

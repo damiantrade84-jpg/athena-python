@@ -1,0 +1,5 @@
+symbol,win_rate_mean,win_rate_count,profit_factor_mean,profit_factor_count,expectancy_mean,expectancy_count,sharpe_mean,sharpe_count,sqn_mean,sqn_count,net_return_mean,net_return_count,oos_return_mean,oos_return_count,robustness_score_mean,robustness_score_count,trade_count_mean,trade_count_count
+BTC/USDT,0.442308,2,1.658764,2,0.006405,2,1.616955,2,1.336218,2,0.352736,2,-0.091230,2,0.633333,2,52.000000,2
+ETH/USDT,0.370370,2,1.133872,2,0.001964,2,0.339367,2,0.276175,2,0.040293,2,-0.146842,2,0.633333,2,54.000000,2
+EUR/USD,0.480000,2,1.019241,2,0.000041,2,0.066836,2,0.054356,2,0.001343,2,-0.010458,2,0.633333,2,50.000000,2
+XAU/USD,0.344446,6,1.159207,6,0.001119,6,0.551312,6,0.448941,6,0.076996,6,0.007132,6,0.566667,6,85.000000,6

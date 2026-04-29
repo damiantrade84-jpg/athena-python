@@ -1936,9 +1936,11 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
           <select id="rl-sess-market-group" style="background:#111827; border:1px solid #2a3a50; color:#cdd6e0; padding:6px 10px; border-radius:6px; font-size:.82rem">
             <option value="crypto">Crypto</option>
             <option value="forex">Forex</option>
+            <option value="commodity">Commodity</option>
             <option value="metals">Metals</option>
             <option value="indices">Indices</option>
             <option value="stocks">Stocks</option>
+            <option value="etf">ETF</option>
           </select>
         </div>
         <div>
@@ -2027,9 +2029,11 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
           <select id="rl-market-group" style="background:#111827; border:1px solid #2a3a50; color:#cdd6e0; padding:6px 10px; border-radius:6px; font-size:.82rem">
             <option value="crypto">Crypto</option>
             <option value="forex">Forex</option>
+            <option value="commodity">Commodity</option>
             <option value="metals">Metals</option>
             <option value="indices">Indices</option>
             <option value="stocks">Stocks</option>
+            <option value="etf">ETF</option>
             <option value="custom">Custom</option>
           </select>
         </div>
@@ -13760,7 +13764,7 @@ function ldFmtPrice(p) {
   if (!rows.length) {
     document.getElementById('rl-ranked-table').innerHTML = '<em style="opacity:.5">No ranked results yet.</em>';
   } else {
-    const cols = ['strategy_name','symbol','timeframe','direction','status',
+    const cols = ['strategy_name','symbol','timeframe','zone','direction','status',
                   'trade_count','win_rate','profit_factor','is_return','oos_return',
                   'robustness_score','sqn','skip_reason','verdict'];
     const th = '<th style="padding:5px 8px;opacity:.6">Select</th>' + cols.map(c => {
@@ -13776,6 +13780,7 @@ function ldFmtPrice(p) {
       const radio = `<input type="radio" name="rl-selected-candidate" data-symbol="${r.symbol || ''}" data-tf="${r.timeframe || ''}" data-family="${r.family_name || r.family || ''}" data-strategy="${r.strategy_name || ''}" data-direction="${r.direction || ''}">`;
       return '<tr>' + `<td style="padding:4px 8px;border-top:1px solid #1a2535;text-align:center;">${radio}</td>` + cols.map(c => {
         let v = r[c] ?? '';
+        if (c === 'zone') { const zClr = v === 'scalp' ? '#f472b6' : v === 'intra' ? '#38bdf8' : v === 'swing' ? '#a78bfa' : '#64748b'; v = v ? `<span style="color:${zClr};font-weight:600">${v}</span>` : '—'; }
         if (c === 'status') v = `<span style="color:${statusColor}">${v}</span>`;
         if (c === 'verdict') {
           const isConfirmed = r.status === 'STRONG_CANDIDATE' || r.status === 'WEAK_CANDIDATE';

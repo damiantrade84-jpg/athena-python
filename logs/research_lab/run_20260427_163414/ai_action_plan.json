@@ -1,0 +1,92 @@
+{
+  "overall_verdict": "WEAK_CANDIDATE on engine_b_proxy/structure_filters (XAU H4 only); ob_bos REJECT; no Engine A/D data.",
+  "top_candidates": [
+    {
+      "strategy": "structure_filters fvg_detection=True|strong_close_pct=0.7",
+      "symbol": "XAU/USD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "structure_filters fvg_detection=True|strong_close_pct=0.8",
+      "symbol": "XAU/USD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "structure_filters fvg_detection=False|strong_close_pct=0.8",
+      "symbol": "ETH/USDT",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "ob_bos (all params)",
+      "reason": "tiny samples, negative net/PF, hurts edge"
+    },
+    {
+      "strategy": "structure_filters (BTC configs)",
+      "reason": "REJECT/NEEDS_MORE_DATA, negative returns"
+    }
+  ],
+  "engine_a": {
+    "keep": [
+      "current live floor 2.1"
+    ],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "add trend_momentum/pullback families"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters logic"
+    ],
+    "remove_or_demote": [
+      "ob_bos"
+    ],
+    "tune": [
+      "strong_close_pct=0.7-0.8, fvg_detection=True"
+    ],
+    "next_tests": [
+      "multi-symbol H1/H4"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "add engine_d_proxy on crypto"
+    ]
+  },
+  "data_quality_warnings": [
+    "Small samples dominate (<30 trades in 50+ configs)",
+    "Single-symbol bias (XAU/ETH)"
+  ],
+  "telemetry_warnings": [
+    "Mixed sources (binance_rest/mt5); no OOS consistency in crypto"
+  ],
+  "next_tiny_test": {
+    "symbols": [
+      "XAU/USD",
+      "EUR/USD",
+      "GBP/USD",
+      "ETH/USDT"
+    ],
+    "timeframes": [
+      "H1",
+      "H4"
+    ],
+    "strategy_families": [
+      "engine_b_proxy"
+    ],
+    "reason": "Validate structure_filters edge across forex/crypto"
+  },
+  "do_not_do_next": [
+    "ob_bos any params",
+    "BTC/USDT H4 only"
+  ]
+}

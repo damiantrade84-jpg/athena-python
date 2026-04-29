@@ -1,0 +1,192 @@
+{
+  "session_id": "sess_20260427_184421_8c98b4",
+  "market_group": "crypto",
+  "trading_style": "intra",
+  "research_depth": "standard",
+  "status": "COMPLETE",
+  "current_phase": "COMPLETE",
+  "progress_pct": 100,
+  "discovery_run_id": "run_20260427_184421_7bc54a",
+  "plan_id": "plan_30313d6a",
+  "validation_run_ids": [
+    "run_20260427_184528_7b6e",
+    "run_20260427_184528_ccd9",
+    "run_20260427_184528_6a94"
+  ],
+  "followup_run_ids": [],
+  "ai_review_status": "COMPLETE",
+  "final_verdict": "IMPLEMENTATION_CANDIDATE",
+  "final_summary": "Session sess_20260427_184421_8c98b4 | Crypto Intra | 59 configs | 11 strong | 48 weak | Verdict: IMPLEMENTATION_CANDIDATE",
+  "best_clusters": [
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "SOL/USDT",
+      "timeframe": "H4",
+      "net_return": 0.898263,
+      "status": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "ADA/USDT",
+      "timeframe": "H4",
+      "net_return": 0.537505,
+      "status": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "ETH/USDT",
+      "timeframe": "H4",
+      "net_return": 0.42898,
+      "status": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy_name": "structure_filters",
+      "symbol": "ADA/USDT",
+      "timeframe": "H4",
+      "net_return": 0.182925,
+      "status": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "BNB/USDT",
+      "timeframe": "H4",
+      "net_return": 0.209738,
+      "status": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy_name": "macd_direction",
+      "symbol": "ETH/USDT",
+      "timeframe": "H1",
+      "net_return": 0.150003,
+      "status": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "ADA/USDT",
+      "timeframe": "H4",
+      "net_return": 0.537505,
+      "status": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "SOL/USDT",
+      "timeframe": "H4",
+      "net_return": 0.898263,
+      "status": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "SOL/USDT",
+      "timeframe": "H4",
+      "net_return": 0.898263,
+      "status": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "ETH/USDT",
+      "timeframe": "H4",
+      "net_return": 0.42898,
+      "status": "STRONG_CANDIDATE"
+    }
+  ],
+  "weak_clusters": [
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "SOL/USDT",
+      "timeframe": "H4",
+      "net_return": 0.514309,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "ADA/USDT",
+      "timeframe": "H4",
+      "net_return": 0.271873,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "session_opening_range",
+      "symbol": "BTC/USDT",
+      "timeframe": "H4",
+      "net_return": 0.352736,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "session_opening_range",
+      "symbol": "BTC/USDT",
+      "timeframe": "H4",
+      "net_return": 0.352736,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "rsi_extreme",
+      "symbol": "BNB/USDT",
+      "timeframe": "H1",
+      "net_return": 0.049952,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "prev_day_hl",
+      "symbol": "ETH/USDT",
+      "timeframe": "H4",
+      "net_return": 0.36477,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "prev_day_hl",
+      "symbol": "BTC/USDT",
+      "timeframe": "H4",
+      "net_return": 0.324934,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "prev_day_hl",
+      "symbol": "BTC/USDT",
+      "timeframe": "H4",
+      "net_return": 0.324934,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "prev_day_hl",
+      "symbol": "ETH/USDT",
+      "timeframe": "H4",
+      "net_return": 0.269846,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "macd_direction",
+      "symbol": "ETH/USDT",
+      "timeframe": "H1",
+      "net_return": 0.123687,
+      "status": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_clusters": [],
+  "do_not_implement": [
+    "ema_cross variants",
+    "M15 trend_momentum",
+    "ob_bos/ny_breakout"
+  ],
+  "next_research_action": "Run ['mean_reversion'] on ['SOL/USDT', 'ADA/USDT', 'XRP/USDT', 'EURUSD'] at ['H4'] \u2014 Validate bollinger_touch cluster multi-symbol",
+  "next_research_params": {
+    "market_group": "crypto",
+    "trading_style": "intra",
+    "research_depth": "quick",
+    "symbols": [
+      "SOL/USDT",
+      "ADA/USDT",
+      "XRP/USDT",
+      "EURUSD"
+    ],
+    "timeframes": [
+      "H4"
+    ],
+    "families": [
+      "mean_reversion"
+    ],
+    "reason": "Validate bollinger_touch cluster multi-symbol"
+  },
+  "errors": [],
+  "created_at": "2026-04-27T18:44:21.587445+00:00",
+  "updated_at": "2026-04-27T18:46:03.391052+00:00"
+}

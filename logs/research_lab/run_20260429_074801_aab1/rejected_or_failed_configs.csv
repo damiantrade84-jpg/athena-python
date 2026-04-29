@@ -1,0 +1,2 @@
+run_id,symbol,asset_class,timeframe,family,strategy_name,params_str,direction,session,status,trade_count,win_rate,profit_factor,avg_return,expectancy,max_drawdown,sharpe,sqn,exposure_pct,avg_duration_bars,gross_return,net_return,is_return,oos_return,robustness_score,param_sensitivity,skip_reason,data_source
+run_20260429_074801_aab1,EURUSD,stock,D1,mean_reversion,bollinger_touch,num_std=2.0|period=20,both,all,REJECT,39,0.487179,0.627741,-0.002110,-0.002110,-0.110462,-0.573766,-1.161822,0.039039,14.769231,-0.081397,-0.081397,-0.034491,-0.034742,0.631814,,,mt5

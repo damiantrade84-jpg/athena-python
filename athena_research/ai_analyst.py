@@ -191,15 +191,33 @@ def _ai_review(run_dir: Path, client, model: str, max_tokens: int = 4000, temper
         log.error("[ai_analyst] AI call failed: %s", e)
         raise
 
-    # Extract JSON block from response
+    # Extract JSON block from response — robust nested-brace aware parsing
     action_plan = {}
-    json_match = re.search(r"```json\s*(\{.*?\})\s*```", raw, re.DOTALL)
+    json_match = re.search(r"```json\s*(\{.*\})\s*```", raw, re.DOTALL)
+    if not json_match:
+        # Fallback: find any top-level JSON object in the response
+        json_match = re.search(r"(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})", raw, re.DOTALL)
+    if not json_match:
+        # Last resort: find outermost braces
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start != -1 and end > start:
+            json_match = type("M", (), {"group": lambda self, n=1: raw[start:end+1]})()
+
     if json_match:
+        raw_json = json_match.group(1)
+        # Try parsing directly
         try:
-            action_plan = json.loads(json_match.group(1))
-        except json.JSONDecodeError as e:
-            log.warning("[ai_analyst] JSON parse failed: %s", e)
-            action_plan = {"parse_error": str(e), "raw_snippet": json_match.group(1)[:500]}
+            action_plan = json.loads(raw_json)
+        except json.JSONDecodeError:
+            # Try fixing common LLM issues: trailing commas, single quotes
+            cleaned = re.sub(r",\s*([}\]])", r"\1", raw_json)  # trailing commas
+            cleaned = cleaned.replace("'", '"')  # single quotes
+            try:
+                action_plan = json.loads(cleaned)
+            except json.JSONDecodeError as e:
+                log.warning("[ai_analyst] JSON parse failed after cleanup: %s", e)
+                action_plan = {"parse_error": str(e), "raw_snippet": raw_json[:500]}
     else:
         log.warning("[ai_analyst] No JSON block found in AI response")
         action_plan = {"warning": "No JSON block found", "raw_length": len(raw)}

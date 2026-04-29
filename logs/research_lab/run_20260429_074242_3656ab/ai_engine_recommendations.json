@@ -1,0 +1,40 @@
+{
+  "engine_a": {
+    "keep": [
+      "macd_direction (adx_min=20)"
+    ],
+    "remove_or_demote": [
+      "ema_cross"
+    ],
+    "tune": [
+      "ema_alignment (raise ADX>20, test RSI_confirm=False)"
+    ],
+    "next_tests": [
+      "Multi-symbol D1 macd/pullback"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (FVG + strong_close=0.7)"
+    ],
+    "remove_or_demote": [
+      "ob_bos"
+    ],
+    "tune": [
+      "Integrate bollinger_touch as location proxy; loosen FVG for D1"
+    ],
+    "next_tests": [
+      "Full checklist on D1 crypto sessions"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Add VP/OrderFlow scalping on crypto H4"
+    ]
+  },
+  "generated_at": "2026-04-29T07:44:09.390118+00:00",
+  "safety_note": "These are backtest discovery findings only. Do NOT apply to live thresholds without further validation."
+}

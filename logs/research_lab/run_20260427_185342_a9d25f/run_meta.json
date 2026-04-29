@@ -1,0 +1,22 @@
+{
+  "run_id": "run_20260427_185342_a9d25f",
+  "mode": "tiny",
+  "symbol_count": 5,
+  "timeframes": [
+    "H1",
+    "H4",
+    "D1"
+  ],
+  "families": [
+    "trend_momentum"
+  ],
+  "specs_count": 41,
+  "results_count": 615,
+  "direction": "both",
+  "generated_at": "2026-04-27T18:54:08.806510+00:00",
+  "session_id": "sess_20260427_185342_5ca9d7",
+  "market_group": "forex",
+  "trading_style": "swing",
+  "research_depth": "quick",
+  "role": "discovery"
+}

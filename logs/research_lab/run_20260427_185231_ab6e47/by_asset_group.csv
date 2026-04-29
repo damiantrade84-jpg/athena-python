@@ -1,0 +1,2 @@
+asset_class,win_rate_mean,win_rate_count,profit_factor_mean,profit_factor_count,expectancy_mean,expectancy_count,sharpe_mean,sharpe_count,sqn_mean,sqn_count,net_return_mean,net_return_count,oos_return_mean,oos_return_count,robustness_score_mean,robustness_score_count,trade_count_mean,trade_count_count
+forex,0.352437,6,1.102909,6,0.000244,6,0.424380,6,0.209212,6,0.006982,6,-0.012814,6,0.408667,6,38.333333,6

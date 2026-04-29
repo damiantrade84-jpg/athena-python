@@ -1,0 +1,32 @@
+{
+  "run_id": "run_20260427_123103",
+  "mode": "large",
+  "symbol_count": 5,
+  "timeframes": [
+    "M15",
+    "H1",
+    "H4"
+  ],
+  "families": [
+    "trend_momentum",
+    "pullback",
+    "breakout",
+    "mean_reversion",
+    "engine_b_proxy"
+  ],
+  "specs_count": 76,
+  "results_count": 1140,
+  "direction": "both",
+  "generated_at": "2026-04-27T12:32:14.762169+00:00",
+  "market_group": "crypto",
+  "trading_style": "intra",
+  "research_depth": "deep",
+  "zone_set": "intra_zones",
+  "validation_focus": [
+    "same-day continuation",
+    "intraday reversal",
+    "liquidity sweep into zone",
+    "session continuation",
+    "target room"
+  ]
+}

@@ -1,0 +1,113 @@
+{
+  "overall_verdict": "No STRONG_CANDIDATEs; weak forex H4 breakout signals on AUD/USD penalized for small samples/single-symbol/OOS decay. Prioritize multi-symbol expansion.",
+  "top_candidates": [
+    {
+      "strategy": "session_opening_range",
+      "symbol": "AUD/USD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "prev_day_hl",
+      "symbol": "AUD/USD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "macd_direction",
+      "symbol": "USD/JPY",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "bollinger_touch",
+      "symbol": "GBP/USD",
+      "tf": "H1",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "structure_filters",
+      "symbol": "AUD/USD",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "ema_cross",
+      "reason": "Low WR/PF, hurts net_return"
+    },
+    {
+      "strategy": "ob_bos",
+      "reason": "Negative net, low pass_rate"
+    },
+    {
+      "strategy": "pullback_ema",
+      "reason": "All rejected/insufficient data"
+    }
+  ],
+  "engine_a": {
+    "keep": [
+      "macd_direction (adx_min=0/20)"
+    ],
+    "remove_or_demote": [
+      "ema_cross"
+    ],
+    "tune": [
+      "ADX gate >20; RSI+MACD momentum upward for H4"
+    ],
+    "next_tests": [
+      "Multi-symbol macd_direction H4"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (fvg_detection=True)"
+    ],
+    "remove_or_demote": [
+      "ob_bos"
+    ],
+    "tune": [
+      "FVG/strong_close for H4; add session filters"
+    ],
+    "next_tests": [
+      "Multi-pair structure_filters H4"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Crypto symbols (BTC/ETH) VP/OrderFlow baseline"
+    ]
+  },
+  "data_quality_warnings": [
+    "Forex-only; no crypto for Engine D"
+  ],
+  "telemetry_warnings": [
+    "None; MT5 data clean but OOS decay suggests overfitting"
+  ],
+  "next_tiny_test": {
+    "symbols": [
+      "AUD/USD",
+      "USD/JPY",
+      "EUR/USD",
+      "GBP/JPY",
+      "NZD/USD"
+    ],
+    "timeframes": [
+      "H4"
+    ],
+    "strategy_families": [
+      "breakout",
+      "mean_reversion"
+    ],
+    "reason": "Validate weak H4 cluster multi-symbol (cheapest robustness check)"
+  },
+  "do_not_do_next": [
+    "ema_cross variants",
+    "M15 deep dives",
+    "Single-symbol tuning"
+  ]
+}

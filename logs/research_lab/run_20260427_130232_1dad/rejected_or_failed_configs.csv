@@ -1,0 +1,2 @@
+run_id,symbol,asset_class,timeframe,family,strategy_name,params_str,direction,session,status,trade_count,win_rate,profit_factor,avg_return,expectancy,max_drawdown,sharpe,sqn,exposure_pct,avg_duration_bars,gross_return,net_return,is_return,oos_return,robustness_score,param_sensitivity,skip_reason,data_source
+run_20260427_130232_1dad,NAS100,index,H4,mean_reversion,bollinger_touch,num_std=2.5|period=20,both,all,NEEDS_MORE_DATA,17,,,,,,,,,,,,,,,,only 17 trades < min 20,mt5

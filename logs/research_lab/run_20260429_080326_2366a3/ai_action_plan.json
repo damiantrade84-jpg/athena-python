@@ -1,0 +1,100 @@
+{
+  "overall_verdict": "WEAK_OVERALL: Thin edge on stocks (MSFT H4 engine_b_proxy). Penalize single-symbols/tiny samples. Prioritize Engine B validation.",
+  "top_candidates": [
+    {
+      "strategy": "structure_filters (fvg_detection=False|strong_close_pct=0.7)",
+      "symbol": "MSFT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "structure_filters (fvg_detection=False|strong_close_pct=0.8)",
+      "symbol": "MSFT",
+      "tf": "H4",
+      "label": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy": "bollinger_touch (num_std=2.5|period=20)",
+      "symbol": "AAPL",
+      "tf": "M15",
+      "label": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "ema_cross",
+      "reason": "Global hurt: low WR/PF/SQN, many tiny samples"
+    },
+    {
+      "strategy": "pullback_ema",
+      "reason": "Low WR, poor OOS"
+    },
+    {
+      "strategy": "session_opening_range",
+      "reason": "Poor robustness"
+    }
+  ],
+  "engine_a": {
+    "keep": [
+      "ADX gate (macd_direction)"
+    ],
+    "remove_or_demote": [
+      "EMA cross/alignment"
+    ],
+    "tune": [
+      "RSI+MACD: test rsi_confirm=False; raise ADX min>20"
+    ],
+    "next_tests": [
+      "Forex symbols (EURUSD) H1/H4 macd_direction"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (strong_close_pct=0.7)"
+    ],
+    "remove_or_demote": [
+      "FVG detection (when enabled)"
+    ],
+    "tune": [
+      "strong_close_pct 0.7-0.8 on H4"
+    ],
+    "next_tests": [
+      "+4 stocks (GOOGL/AMZN) H4/H1"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [],
+    "next_tests": [
+      "Crypto symbols (BTCUSDT) M15/H1 VP/OrderFlow full"
+    ]
+  },
+  "data_quality_warnings": [
+    "No forex/crypto; stocks only. All eodhd \u2014 verify vs live telemetry."
+  ],
+  "telemetry_warnings": [
+    "Engine D missing entirely (TELEMETRY_BUG)"
+  ],
+  "next_tiny_test": {
+    "symbols": [
+      "MSFT",
+      "AAPL",
+      "GOOGL",
+      "EURUSD"
+    ],
+    "timeframes": [
+      "H4",
+      "H1"
+    ],
+    "strategy_families": [
+      "engine_b_proxy"
+    ],
+    "reason": "Validate structure_filters cluster beyond MSFT single-symbol"
+  },
+  "do_not_do_next": [
+    "ema_cross variants",
+    "NVDA M15 only",
+    "Non-H4/H1 without >30 trades"
+  ]
+}

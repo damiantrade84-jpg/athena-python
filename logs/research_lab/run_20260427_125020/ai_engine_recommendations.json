@@ -1,0 +1,42 @@
+{
+  "engine_a": {
+    "keep": [
+      "macd_direction (adx_min=0, ETH H1)"
+    ],
+    "remove_or_demote": [
+      "ema_cross (all params)"
+    ],
+    "tune": [
+      "ADX_min upward from 0; EMA coherence >2.1"
+    ],
+    "next_tests": [
+      "H4 macd_direction multi-symbol OOS"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (fvg=False, strong_close=0.8)"
+    ],
+    "remove_or_demote": [
+      "ob_bos"
+    ],
+    "tune": [
+      "strong_close_pct >0.8; add RR gate"
+    ],
+    "next_tests": [
+      "H4 structure multi-symbol, session splits"
+    ]
+  },
+  "engine_d": {
+    "keep": [],
+    "remove_or_demote": [],
+    "tune": [
+      "Grade A/B/C/D for H4 crypto POC/VAH"
+    ],
+    "next_tests": [
+      "vwap_deviation + CVD/Absorption full backtest"
+    ]
+  },
+  "generated_at": "2026-04-27T12:54:49.780011+00:00",
+  "safety_note": "These are backtest discovery findings only. Do NOT apply to live thresholds without further validation."
+}

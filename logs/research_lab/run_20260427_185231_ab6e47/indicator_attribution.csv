@@ -1,0 +1,5 @@
+strategy_name,total_configs,strong,weak,reject,avg_net_return,avg_win_rate,avg_robustness,avg_sqn,avg_oos_return,total_trades,pass_rate,verdict
+ema_cross,432,0,4,103,-0.037080,0.222243,0.685168,-1.603749,-0.018356,6548,0.009259,HURTS
+macd_direction,24,0,2,22,-0.055082,0.278938,0.560631,-2.848238,-0.023258,1730,0.083333,HURTS
+pullback_ema,48,0,0,47,-0.054939,0.136228,0.522638,-3.351452,-0.023958,2489,0.000000,HURTS
+ema_alignment,36,0,0,32,-0.037030,0.162756,0.437096,-2.046005,-0.014180,902,0.000000,HURTS

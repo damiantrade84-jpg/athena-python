@@ -1,0 +1,5 @@
+symbol,win_rate_mean,win_rate_count,profit_factor_mean,profit_factor_count,expectancy_mean,expectancy_count,sharpe_mean,sharpe_count,sqn_mean,sqn_count,net_return_mean,net_return_count,oos_return_mean,oos_return_count,robustness_score_mean,robustness_score_count,trade_count_mean,trade_count_count
+AAPL,0.458333,6,1.368519,6,0.001570,6,1.564640,6,0.565441,6,0.047979,6,-0.018321,6,0.461094,6,33.500000,6
+MSFT,0.337765,4,1.382558,4,0.002634,4,1.884360,4,0.717266,4,0.140938,4,-0.005849,4,0.515430,4,59.250000,4
+NVDA,0.571429,1,1.280239,1,0.000621,1,1.145689,1,0.448831,1,0.020762,1,0.031118,1,0.510000,1,35.000000,1
+TSLA,0.363793,2,1.206912,2,0.001488,2,0.976845,2,0.387214,2,0.046834,2,0.141873,2,0.443333,2,39.000000,2

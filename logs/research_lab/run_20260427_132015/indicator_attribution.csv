@@ -1,0 +1,2 @@
+strategy_name,total_configs,strong,weak,reject,avg_net_return,avg_win_rate,avg_robustness,avg_sqn,avg_oos_return,total_trades,pass_rate,verdict
+macd_direction,2,1,1,0,0.149306,0.466092,0.780761,0.923411,0.027923,118,1.000000,HELPS

@@ -1,0 +1,123 @@
+{
+  "overall_verdict": "Sparse edges in mean_reversion (bollinger_touch H4 cluster); heavy OOS decay + sample penalties; Engines A/B/D have isolated proxies but no robust adoption yet. Prioritize H4 commodity/crypto validation.",
+  "top_candidates": [
+    {
+      "strategy": "bollinger_touch",
+      "symbol": "SOL/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "bollinger_touch",
+      "symbol": "ETH/USDT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "macd_direction",
+      "symbol": "ETH/USDT",
+      "tf": "H1",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "structure_filters",
+      "symbol": "MSFT",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    },
+    {
+      "strategy": "micro_breakout",
+      "symbol": "XAU/USD",
+      "tf": "H4",
+      "label": "STRONG_CANDIDATE"
+    }
+  ],
+  "rejected_setups": [
+    {
+      "strategy": "ema_cross",
+      "reason": "Consistent net negative, tiny samples (<30 trades 80%+), no OOS survival"
+    },
+    {
+      "strategy": "ob_bos",
+      "reason": "Zero strong/weak, avg_net -0.092, hurts attribution"
+    },
+    {
+      "strategy": "ema_scalp_pullback",
+      "reason": "Worst net -0.191, low pass_rate 4%"
+    }
+  ],
+  "engine_a": {
+    "keep": [
+      "macd_direction (adx_min=0-20)"
+    ],
+    "remove_or_demote": [
+      "ema_cross (all)",
+      "ema_alignment",
+      "ema_scalp_pullback"
+    ],
+    "tune": [
+      "ADX gate >20 (sample filter)",
+      "RSI confirm off (marginal)"
+    ],
+    "next_tests": [
+      "H4 MACD + bollinger confluence"
+    ]
+  },
+  "engine_b": {
+    "keep": [
+      "structure_filters (strong_close_pct=0.7)"
+    ],
+    "remove_or_demote": [
+      "ob_bos",
+      "fvg_detection heavy"
+    ],
+    "tune": [
+      "Add RR room filter",
+      "Multi-TF BOS/CHoCH"
+    ],
+    "next_tests": [
+      "H4 structure + pullback_ema proxy"
+    ]
+  },
+  "engine_d": {
+    "keep": [
+      "micro_breakout (range_bars=3, atr_sl=0.5-1.0)"
+    ],
+    "remove_or_demote": [
+      "Absorption/CVD proxies"
+    ],
+    "tune": [
+      "fee_guard_r=0.5 strict",
+      "Grade B+ threshold"
+    ],
+    "next_tests": [
+      "XAU/XAG H4 VP AAA sequence"
+    ]
+  },
+  "data_quality_warnings": [
+    "OOS decay universal (-0.0186 avg); IS/OOS inconsistency penalizes all"
+  ],
+  "telemetry_warnings": [],
+  "next_tiny_test": {
+    "symbols": [
+      "SOL/USDT",
+      "ETH/USDT",
+      "XAG/USD",
+      "NAS100",
+      "WTI Oil"
+    ],
+    "timeframes": [
+      "H4"
+    ],
+    "strategy_families": [
+      "mean_reversion"
+    ],
+    "reason": "Validate bollinger_touch cluster (num_std=2.0-2.5); ~50 configs, multi-symbol robustness check"
+  },
+  "do_not_do_next": [
+    "ema_cross",
+    "M15 trend_momentum single-symbol",
+    "ob_bos",
+    "vwap_reclaim"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "run_id": "run_20260427_132427_f24d",
+  "mode": "small",
+  "symbol_count": 1,
+  "timeframes": [
+    "H4"
+  ],
+  "families": [
+    "mean_reversion"
+  ],
+  "specs_count": 2,
+  "results_count": 2,
+  "direction": "both",
+  "generated_at": "2026-04-27T13:24:30.755024+00:00",
+  "parent_run_id": "run_20260427_132339",
+  "is_autopilot": true
+}

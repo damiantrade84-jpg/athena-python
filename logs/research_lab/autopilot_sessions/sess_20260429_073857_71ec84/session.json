@@ -1,0 +1,123 @@
+{
+  "session_id": "sess_20260429_073857_71ec84",
+  "market_group": "crypto",
+  "trading_style": "scalp",
+  "research_depth": "quick",
+  "status": "COMPLETE",
+  "current_phase": "COMPLETE",
+  "progress_pct": 100,
+  "discovery_run_id": "run_20260429_073857_9a5fb1",
+  "plan_id": "plan_ddb7d99d",
+  "validation_run_ids": [
+    "run_20260429_073913_c6ff",
+    "run_20260429_073913_83c2"
+  ],
+  "followup_run_ids": [],
+  "ai_review_status": "COMPLETE",
+  "final_verdict": "VALIDATION_CANDIDATE",
+  "final_summary": "Session sess_20260429_073857_71ec84 | Crypto Scalp | 10 configs | 0 strong | 10 weak | Verdict: VALIDATION_CANDIDATE",
+  "best_clusters": [],
+  "weak_clusters": [
+    {
+      "strategy_name": "vwap_deviation",
+      "symbol": "ADA/USDT",
+      "timeframe": "H1",
+      "net_return": 0.367122,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "vwap_deviation",
+      "symbol": "ETH/USDT",
+      "timeframe": "M15",
+      "net_return": 0.101484,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "rsi_extreme",
+      "symbol": "BNB/USDT",
+      "timeframe": "H1",
+      "net_return": 0.07288,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "ADA/USDT",
+      "timeframe": "M15",
+      "net_return": 0.05489,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "BNB/USDT",
+      "timeframe": "H1",
+      "net_return": 0.009652,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "ADA/USDT",
+      "timeframe": "H1",
+      "net_return": 0.014366,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "ADA/USDT",
+      "timeframe": "H1",
+      "net_return": 0.017834,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "bollinger_touch",
+      "symbol": "ADA/USDT",
+      "timeframe": "M15",
+      "net_return": 0.002748,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "vwap_deviation",
+      "symbol": "ETH/USDT",
+      "timeframe": "M15",
+      "net_return": 0.101484,
+      "status": "WEAK_CANDIDATE"
+    },
+    {
+      "strategy_name": "vwap_deviation",
+      "symbol": "ADA/USDT",
+      "timeframe": "H1",
+      "net_return": 0.367122,
+      "status": "WEAK_CANDIDATE"
+    }
+  ],
+  "rejected_clusters": [],
+  "do_not_implement": [
+    "rsi_extreme 75/25 params (low sample)",
+    "Single-symbol deep dives",
+    "bollinger_touch 2.5 std (OOS weak)"
+  ],
+  "next_research_action": "Run ['mean_reversion'] on ['BTC/USDT', 'SOL/USDT', 'XRP/USDT', 'LINK/USDT', 'DOT/USDT'] at ['H1', 'M15', 'M30'] \u2014 Build multi-symbol clusters for VWAP/RSI; target 50+ trades/config",
+  "next_research_params": {
+    "market_group": "crypto",
+    "trading_style": "scalp",
+    "research_depth": "quick",
+    "symbols": [
+      "BTC/USDT",
+      "SOL/USDT",
+      "XRP/USDT",
+      "LINK/USDT",
+      "DOT/USDT"
+    ],
+    "timeframes": [
+      "H1",
+      "M15",
+      "M30"
+    ],
+    "families": [
+      "mean_reversion"
+    ],
+    "reason": "Build multi-symbol clusters for VWAP/RSI; target 50+ trades/config"
+  },
+  "errors": [],
+  "created_at": "2026-04-29T07:38:57.688152+00:00",
+  "updated_at": "2026-04-29T07:39:46.588929+00:00"
+}
