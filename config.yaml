@@ -53,7 +53,7 @@ NEWS_BG_INTERVAL_SEC: 3600    # How often the background news loop runs (seconds
 NEWS_PAIR_CACHE_TTL_SEC: 14400 # How long per-pair news/word-weights are cached after an AI fetch (seconds). Default 14400 = 4 hours.
 
 BACKTEST_MAX_WORKERS: 8       # Parallel workers for backtesting (Engine A & B). Increase for faster backtests.
-BT_VECTORIZED: true           # Option A speed path: exact-window indicator caching for Engine A backtests (parity-safe target).
+BT_VECTORIZED: true           # Speed path: exact-window indicator caching for Engine A/B backtests (parity-safe target).
 
 SCAN_DEBUG_CANDLE_META: false # Optional scan/debug payload metadata about candle resolution path.
 

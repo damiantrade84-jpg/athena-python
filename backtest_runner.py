@@ -3559,9 +3559,35 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         "H1": _full_atr(candles_h1)
     }
 
+    bt_vectorized = bool(CONFIG.get("BT_VECTORIZED", False))
+    d1_indicator_cache: dict[tuple[int, int, str], dict] = {}
+    zone_indicator_cache: dict[tuple[int, int, str], dict] = {}
     _indicator_cache = {}
 
-    def _cached_calc_indicators(candles, asset_type, cache_key):
+    def _cached_calc_indicators(
+        candles,
+        asset_type,
+        cache_key,
+        *,
+        full_candles=None,
+        end_idx=None,
+        window=None,
+    ):
+        if (
+            bt_vectorized
+            and full_candles is not None
+            and end_idx is not None
+            and window is not None
+            and window >= 50
+        ):
+            cache = d1_indicator_cache if cache_key == "d1" else zone_indicator_cache
+            return _bt_indicators_from_cache(
+                full_candles,
+                end_idx=end_idx,
+                window=window,
+                asset_type=asset_type,
+                cache=cache,
+            )
         key = (cache_key, len(candles))
         if key in _indicator_cache:
             return _indicator_cache[key]
@@ -3644,15 +3670,36 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
 
         # Zone context always uses the configured zone_tf (usually H4)
         zone_ctx = h4_ctx if _zone_tf == "H4" else d1_ctx
+        _d1_end_idx = bisect.bisect_left(d1_times, entry_time) - 1
+        if _zone_tf == "H4":
+            _zone_full_candles = candles_h4
+            _zone_end_idx = bisect.bisect_left(h4_times, entry_time) - 1
+        else:
+            _zone_full_candles = candles_d1
+            _zone_end_idx = _d1_end_idx
         regime_label = _rt().engine_b_regime_label(zone_ctx, pair.get("type", "stock"))
         _bt_b_d1_snap = {}
         _bt_b_zone_snap = {}
         try:
             _bt_b_d1_snap = (
-                _cached_calc_indicators(d1_ctx, pair.get("type", "stock"), "d1") or {}
+                _cached_calc_indicators(
+                    d1_ctx,
+                    pair.get("type", "stock"),
+                    "d1",
+                    full_candles=candles_d1,
+                    end_idx=_d1_end_idx,
+                    window=len(d1_ctx),
+                ) or {}
             ).get("snap") or {}
             _bt_b_zone_snap = (
-                _cached_calc_indicators(zone_ctx, pair.get("type", "stock"), "zone") or {}
+                _cached_calc_indicators(
+                    zone_ctx,
+                    pair.get("type", "stock"),
+                    "zone",
+                    full_candles=_zone_full_candles,
+                    end_idx=_zone_end_idx,
+                    window=len(zone_ctx),
+                ) or {}
             ).get("snap") or {}
         except Exception:
             pass
