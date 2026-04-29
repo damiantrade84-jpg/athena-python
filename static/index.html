@@ -1959,7 +1959,14 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
             <option value="deep">Deep</option>
           </select>
         </div>
-        <button onclick="rlSessStart()" id="rl-sess-start-btn" style="background:linear-gradient(135deg,#0284c7,#0369a1); color:#fff; border:none; padding:8px 18px; border-radius:7px; cursor:pointer; font-size:.85rem; font-weight:600">🚀 Start One-Click Autopilot</button>
+        <div style="display:flex; flex-direction:column; gap:4px;">
+          <button onclick="rlSessStart()" id="rl-sess-start-btn" style="background:linear-gradient(135deg,#0284c7,#0369a1); color:#fff; border:none; padding:8px 18px; border-radius:7px; cursor:pointer; font-size:.85rem; font-weight:600">🚀 Start Full Autopilot</button>
+          <span style="font-size:.65rem; opacity:.45; text-align:center">Discovery → Validation → AI Review</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:4px;">
+          <button onclick="rlStartStyleRun()" id="rl-style-run-btn" style="background:transparent; color:#38bdf8; border:1px solid #0369a1; padding:8px 14px; border-radius:7px; cursor:pointer; font-size:.82rem; font-weight:600">⚡ Quick Discovery</button>
+          <span style="font-size:.65rem; opacity:.45; text-align:center">Discovery only · fast</span>
+        </div>
         <button onclick="rlSessStop()" id="rl-sess-stop-btn" style="display:none; background:#7f1d1d; color:#fca5a5; border:1px solid #991b1b; padding:8px 14px; border-radius:7px; cursor:pointer; font-size:.82rem">■ Stop</button>
       </div>
 
@@ -2013,78 +2020,70 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
     </div>
     <!-- ══ END COCKPIT ══════════════════════════════════════════════════════ -->
 
-    <!-- 🚀 Advanced Manual Research (collapsible) -->
+    <!-- ⚙️ Manual Run — Power User (collapsible, collapsed by default) -->
     <details id="rl-advanced-section" style="margin-bottom:16px;">
-      <summary style="font-size:.85rem; color:#38bdf8; cursor:pointer; font-weight:600; padding:8px 0;">⚙️ Advanced Manual Research</summary>
-      <div style="margin-top:10px;">
+      <summary style="font-size:.82rem; color:#64748b; cursor:pointer; padding:6px 0; user-select:none;">⚙️ Manual Run — Power User <span style="font-size:.68rem; opacity:.6">(set exact symbols / timeframes / families)</span></summary>
+      <div style="margin-top:10px; padding:12px; background:#0a0f1a; border:1px solid #1e3a50; border-radius:8px;">
+        <div style="font-size:.72rem; color:#64748b; margin-bottom:10px;">Override all parameters manually. Use the Autopilot Cockpit above for the normal workflow.</div>
 
-    <!-- Quick Discovery — discovery-only run (skips Validation + AI Review).
-         Uses the cockpit's Market Group / Trading Style / Research Depth selectors above. -->
-    <div style="background:#0f172a; border:1px solid #1e3a8a; border-radius:8px; padding:12px; margin-bottom:16px;">
-      <div style="font-size:.78rem; opacity:.7; margin-bottom:8px; color:#cbd5e1;">
-        <strong style="color:#38bdf8">Quick Discovery</strong> — runs Discovery only (no Validation, no AI Review). Uses the One-Click Cockpit selectors above.
-      </div>
-      <button onclick="rlStartStyleRun()" id="rl-style-run-btn" style="background:#1e3a8a; color:#bfdbfe; border:1px solid #2563eb; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:.82rem; font-weight:600">▶ Run Quick Discovery</button>
-    </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end">
+          <div>
+            <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">MODE</label>
+            <select id="rl-mode" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem">
+              <option value="tiny">Tiny (validation)</option>
+              <option value="full">Full sweep</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">DIRECTION</label>
+            <select id="rl-direction" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem">
+              <option value="both">Both</option>
+              <option value="long">Long only</option>
+              <option value="short">Short only</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">SYMBOLS</label>
+            <input type="text" id="rl-symbols" placeholder="BTC/USDT, EUR/USD" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem;width:140px;">
+          </div>
+          <div>
+            <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">TIMEFRAMES</label>
+            <input type="text" id="rl-timeframes" placeholder="M5,H1,H4,D1" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem;width:100px;">
+          </div>
+          <div>
+            <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">FAMILIES</label>
+            <input type="text" id="rl-families" placeholder="trend_momentum,pullback" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem;width:140px;">
+          </div>
+          <div>
+            <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">STRATEGIES</label>
+            <input type="text" id="rl-strategies" placeholder="bollinger_touch,macd" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem;width:140px;">
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+            <input type="checkbox" id="rl-ai-review" style="accent-color:#4a9fd8">
+            <label for="rl-ai-review" style="font-size:.82rem">Run AI review</label>
+          </div>
+          <button onclick="rlStartRun()" style="background:linear-gradient(135deg,#1e40af,#1d4ed8);color:#fff;border:none;padding:8px 18px;border-radius:7px;cursor:pointer;font-size:.85rem;font-weight:600">▶ Start Run</button>
+          <button onclick="rlLoadRuns()" style="background:#1a2535;color:#7fa8c8;border:1px solid #2a3a50;padding:8px 14px;border-radius:7px;cursor:pointer;font-size:.82rem">↺ Refresh</button>
+        </div>
 
-    <!-- Manual controls (optional override) -->
-    <details style="margin-bottom: 12px; opacity: 0.85;">
-      <summary style="font-size: .8rem; color: #7fa8c8; cursor: pointer;">⚙️ Manual Criteria Override</summary>
-      <div style="margin-top: 8px;">
-
-    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end">
-      <div>
-        <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">MODE</label>
-        <select id="rl-mode" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem">
-          <option value="tiny">Tiny (validation)</option>
-          <option value="full">Full sweep</option>
-        </select>
+        <!-- Preset quick-fills -->
+        <div style="font-size:.68rem; opacity:.5; margin-bottom:6px; font-weight:600; letter-spacing:.05em">QUICK-FILL PRESETS</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button onclick="rlApplyPreset('crypto_h4_bb')" style="background:#1a2238;color:#a5b4fc;border:1px solid #312e81;padding:6px 12px;border-radius:6px;font-size:.75rem;cursor:pointer;">Crypto H4 Bollinger Touch</button>
+          <button onclick="rlApplyPreset('engine_b_h4')" style="background:#1a2238;color:#a5b4fc;border:1px solid #312e81;padding:6px 12px;border-radius:6px;font-size:.75rem;cursor:pointer;">Engine B H4 Structure</button>
+          <button onclick="rlApplyPreset('crypto_macd')" style="background:#1a2238;color:#a5b4fc;border:1px solid #312e81;padding:6px 12px;border-radius:6px;font-size:.75rem;cursor:pointer;">Crypto MACD</button>
+          <button onclick="rlApplyPreset('xau_micro')" style="background:#1a2238;color:#a5b4fc;border:1px solid #312e81;padding:6px 12px;border-radius:6px;font-size:.75rem;cursor:pointer;">XAU Micro Breakout</button>
+        </div>
       </div>
-      <div>
-        <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">DIRECTION</label>
-        <select id="rl-direction" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem">
-          <option value="both">Both</option>
-          <option value="long">Long only</option>
-          <option value="short">Short only</option>
-        </select>
-      </div>
-      <div>
-        <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">SYMBOLS</label>
-        <input type="text" id="rl-symbols" placeholder="BTC/USDT, EUR/USD" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem;width:140px;">
-      </div>
-      <div>
-        <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">TIMEFRAMES</label>
-        <input type="text" id="rl-timeframes" placeholder="M5,H1,H4,D1" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem;width:100px;">
-      </div>
-      <div>
-        <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">FAMILIES</label>
-        <input type="text" id="rl-families" placeholder="trend_momentum,pullback" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem;width:140px;">
-      </div>
-      <div>
-        <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">STRATEGIES</label>
-        <input type="text" id="rl-strategies" placeholder="bollinger_touch,macd" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem;width:140px;">
-      </div>
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
-        <input type="checkbox" id="rl-ai-review" style="accent-color:#4a9fd8">
-        <label for="rl-ai-review" style="font-size:.82rem">Run AI review</label>
-      </div>
-      <button onclick="rlStartRun()" style="background:linear-gradient(135deg,#1e40af,#1d4ed8);color:#fff;border:none;padding:8px 18px;border-radius:7px;cursor:pointer;font-size:.85rem;font-weight:600">▶ Start Run</button>
-      <button onclick="rlLoadRuns()" style="background:#1a2535;color:#7fa8c8;border:1px solid #2a3a50;padding:8px 14px;border-radius:7px;cursor:pointer;font-size:.82rem">↺ Refresh</button>
-    </div>
-
-    <!-- Preset Actions -->
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
-      <button onclick="rlApplyPreset('crypto_h4_bb')" style="background:#1a2238;color:#a5b4fc;border:1px solid #312e81;padding:6px 12px;border-radius:6px;font-size:.75rem;cursor:pointer;">Crypto H4 Bollinger Touch Validation</button>
-      <button onclick="rlApplyPreset('engine_b_h4')" style="background:#1a2238;color:#a5b4fc;border:1px solid #312e81;padding:6px 12px;border-radius:6px;font-size:.75rem;cursor:pointer;">Engine B H4 Structure Filter Validation</button>
-      <button onclick="rlApplyPreset('crypto_macd')" style="background:#1a2238;color:#a5b4fc;border:1px solid #312e81;padding:6px 12px;border-radius:6px;font-size:.75rem;cursor:pointer;">Engine A Crypto MACD Validation</button>
-      <button onclick="rlApplyPreset('xau_micro')" style="background:#1a2238;color:#a5b4fc;border:1px solid #312e81;padding:6px 12px;border-radius:6px;font-size:.75rem;cursor:pointer;">Engine D XAU Micro Breakout Validation</button>
-    </div>
-    </details>
-
-      </div><!-- /Advanced Manual Research inner -->
     </details><!-- /rl-advanced-section -->
 
 
+
+    <!-- ── Results area ──────────────────────────────────────────────────── -->
+    <div style="border-top:1px solid #1e2d40; margin:2px 0 14px; padding-top:12px; display:flex; align-items:center; gap:10px;">
+      <span style="font-size:.68rem; color:#38bdf8; opacity:.45; font-weight:700; letter-spacing:.1em; white-space:nowrap">RESULTS</span>
+      <div style="flex:1; height:1px; background:#1e2d40;"></div>
+    </div>
 
     <!-- Status -->
     <div id="rl-status" style="display:none;padding:10px 14px;background:#111827;border:1px solid #2a3a50;border-radius:8px;margin-bottom:14px;font-size:.82rem">
@@ -2120,30 +2119,28 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
         <summary style="font-size:.78rem;opacity:.6;cursor:pointer">Full AI review text</summary>
         <pre id="rl-ai-raw" style="font-size:.72rem;white-space:pre-wrap;max-height:400px;overflow-y:auto;background:#0a0f1a;padding:12px;border-radius:6px;margin-top:8px;color:#a0b4c8"></pre>
       </details>
-    </div><!-- /rl-ai-panel -->
 
-    <!-- AI Research Plan panel -->
-    <div id="rl-plan-panel" style="display:none;margin-top:16px;padding:12px;background:#111827;border:1px solid #2a3a50;border-radius:8px">
-      <div style="font-size:.78rem;opacity:.55;margin-bottom:12px;font-weight:600;letter-spacing:.05em">AI RESEARCH PLAN / AUTOPILOT</div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end">
-        <div>
-          <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">PLANNER MODE</label>
-          <select id="rl-plan-mode" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem">
-            <option value="balanced">Balanced</option>
-            <option value="conservative">Conservative</option>
-            <option value="exploratory">Exploratory</option>
-            <option value="autopilot">Autopilot</option>
-          </select>
+      <!-- AI Research Plan — shown after AI Review runs, nested here so it appears in context -->
+      <div id="rl-plan-panel" style="display:none;margin-top:16px;padding:12px;background:#0a0f1a;border:1px solid #1e3a50;border-radius:8px">
+        <div style="font-size:.78rem;opacity:.55;margin-bottom:12px;font-weight:600;letter-spacing:.05em">AI RESEARCH PLAN / AUTOPILOT</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end">
+          <div>
+            <label style="font-size:.72rem;opacity:.6;display:block;margin-bottom:4px">PLANNER MODE</label>
+            <select id="rl-plan-mode" style="background:#111827;border:1px solid #2a3a50;color:#cdd6e0;padding:6px 10px;border-radius:6px;font-size:.82rem">
+              <option value="balanced">Balanced</option>
+              <option value="conservative">Conservative</option>
+              <option value="exploratory">Exploratory</option>
+              <option value="autopilot">Autopilot</option>
+            </select>
+          </div>
+          <button onclick="rlGeneratePlan()" style="background:#1a2535;color:#7fa8c8;border:1px solid #2a3a50;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:.82rem">💡 Generate Plan</button>
+          <button id="rl-run-plan-btn" onclick="rlRunAutoPlan()" style="background:linear-gradient(135deg,#059669,#10b981);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.82rem;font-weight:600">🚀 Run Recommended Plan</button>
+          <button onclick="rlSavePlan()" style="background:#111827;color:#cdd6e0;border:1px solid #2a3a50;padding:7px 12px;border-radius:6px;cursor:pointer;font-size:.82rem">💾 Save Plan</button>
+          <button onclick="rlDownloadPlan()" style="background:#111827;color:#cdd6e0;border:1px solid #2a3a50;padding:7px 12px;border-radius:6px;cursor:pointer;font-size:.82rem">⬇ Download JSON</button>
         </div>
-        <button onclick="rlGeneratePlan()" style="background:#1a2535;color:#7fa8c8;border:1px solid #2a3a50;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:.82rem">💡 Generate Plan</button>
-        <button id="rl-run-plan-btn" onclick="rlRunAutoPlan()" style="background:linear-gradient(135deg,#059669,#10b981);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.82rem;font-weight:600">🚀 Run Recommended Plan</button>
-        <button onclick="rlSavePlan()" style="background:#111827;color:#cdd6e0;border:1px solid #2a3a50;padding:7px 12px;border-radius:6px;cursor:pointer;font-size:.82rem">💾 Save Plan</button>
-        <button onclick="rlDownloadPlan()" style="background:#111827;color:#cdd6e0;border:1px solid #2a3a50;padding:7px 12px;border-radius:6px;cursor:pointer;font-size:.82rem">⬇ Download JSON</button>
+        <div id="rl-plan-cards" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px"></div>
       </div>
-      
-      <!-- Plan cards display -->
-      <div id="rl-plan-cards" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px"></div>
-    </div>
+    </div><!-- /rl-ai-panel -->
   </div><!-- /panel-research -->
 
   <div class="panel tab-panel lottery-panel" id="panel-lottery">
