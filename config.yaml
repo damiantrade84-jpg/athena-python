@@ -1892,9 +1892,15 @@ ENGINE_C_A_CONFLICT_MAX_SCORE: 0.45
 
 ENGINE_C_B_CONFLICT_PENALTY: 0.85
 
+# Engine C optional xAI A vs B trust verdict (default off). ADJUST may tweak conviction/weights; does not enable trade from false→true alone.
+ENGINE_C_AI_WEIGHT_VERDICT_ENABLED: false
+ENGINE_C_AI_WEIGHT_ADJUST_ENABLED: false
+ENGINE_C_AI_WEIGHT_MIN: 0.20
+ENGINE_C_AI_WEIGHT_MAX: 0.80
+
 VISION_MODIFIERS:
 
-  STRONG: {action: "confirm", conviction_mult: 1.15}
+  STRONG: {action: "confirm", conviction_mult: 1.30}
 
   MODERATE: {action: "confirm", conviction_mult: 1.0}
 

@@ -67,7 +67,7 @@ CONVICTION_TIERS = {
 # ── AI Vision verdict mapping ─────────────────────────────────────────────────
 # Vision is NOT a voter. It modifies conviction after consensus is established.
 _DEFAULT_VISION_MODIFIERS = {
-    "STRONG":    {"action": "confirm",     "conviction_mult": 1.15},  # boost
+    "STRONG":    {"action": "confirm",     "conviction_mult": 1.30},  # boost
     "MODERATE":  {"action": "confirm",     "conviction_mult": 1.0},   # neutral
     "WEAK":      {"action": "weaken",      "conviction_mult": 0.70},  # reduce
     "AVOID":     {"action": "override",    "conviction_mult": 0.0},   # hard veto
@@ -747,6 +747,58 @@ def _finalize_consensus(result: dict, asset_type: str) -> dict:
     return result
 
 
+def _maybe_apply_engine_c_ai_weight_verdict(
+    result: dict,
+    signal_a: dict,
+    signal_b: dict,
+    confidence_b: Optional[dict],
+    regime: str,
+    asset_type: str,
+) -> dict:
+    """Optional xAI trust verdict (advisory); optional conviction tweak if ADJUST enabled."""
+    if not CONFIG.get("ENGINE_C_AI_WEIGHT_VERDICT_ENABLED", False):
+        return result
+    if not isinstance(result, dict):
+        return result
+    try:
+        from engine_c_ai import (
+            apply_engine_c_ai_weight_adjustment,
+            get_engine_c_weight_verdict,
+            normalize_engine_c_ai_weight_verdict,
+        )
+
+        base = ENGINE_C_AB_WEIGHTS.get(regime, {"A": 0.50, "B": 0.50})
+        snap = {
+            "verdict": result.get("verdict"),
+            "trade": result.get("trade"),
+            "conviction": result.get("conviction"),
+            "tier": result.get("tier"),
+            "decision_state": result.get("decision_state"),
+            "engine_weights": result.get("engine_weights"),
+        }
+        wv = get_engine_c_weight_verdict(
+            signal_a or {},
+            signal_b or {},
+            snap,
+            confidence_b,
+            regime,
+            asset_type,
+            base_weights=base,
+        )
+        if not wv.get("error"):
+            w_min = float(CONFIG.get("ENGINE_C_AI_WEIGHT_MIN", 0.20) or 0.20)
+            w_max = float(CONFIG.get("ENGINE_C_AI_WEIGHT_MAX", 0.80) or 0.80)
+            wv = normalize_engine_c_ai_weight_verdict(wv, w_min=w_min, w_max=w_max)
+        result["ai_weight_verdict"] = wv
+        if wv.get("error"):
+            return result
+        if CONFIG.get("ENGINE_C_AI_WEIGHT_ADJUST_ENABLED", False):
+            result = apply_engine_c_ai_weight_adjustment(result, wv)
+    except Exception as exc:
+        log.debug("[ENGINE_C_AI] weight verdict skipped: %s", exc)
+    return result
+
+
 def compute_consensus(
     signal_a: dict,
     signal_b: dict,
@@ -874,6 +926,9 @@ def compute_consensus(
                 "A_ONLY", a, b, signal_a, signal_b, regime
             ),
         )
+        result = _maybe_apply_engine_c_ai_weight_verdict(
+            result, signal_a, signal_b, confidence_b, regime, asset_type
+        )
         if ai_vision:
             result = apply_vision(result, ai_vision)
         return _finalize_consensus(result, asset_type)
@@ -936,6 +991,9 @@ def compute_consensus(
             disagreement_diagnosis=_build_disagreement_diagnosis(
                 "B_ONLY", a, b, signal_a, signal_b, regime
             ),
+        )
+        result = _maybe_apply_engine_c_ai_weight_verdict(
+            result, signal_a, signal_b, confidence_b, regime, asset_type
         )
         if ai_vision:
             result = apply_vision(result, ai_vision)
@@ -1018,6 +1076,9 @@ def compute_consensus(
                     "B_OVERRIDE_CONFLICT", a, b, signal_a, signal_b, regime
                 ),
             )
+            result = _maybe_apply_engine_c_ai_weight_verdict(
+                result, signal_a, signal_b, confidence_b, regime, asset_type
+            )
             if ai_vision:
                 result = apply_vision(result, ai_vision)
             return _finalize_consensus(result, asset_type)
@@ -1087,11 +1148,14 @@ def compute_consensus(
                     "A_OVERRIDE_CONFLICT", a, b, signal_a, signal_b, regime
                 ),
             )
+            result = _maybe_apply_engine_c_ai_weight_verdict(
+                result, signal_a, signal_b, confidence_b, regime, asset_type
+            )
             if ai_vision:
                 result = apply_vision(result, ai_vision)
             return _finalize_consensus(result, asset_type)
 
-        return _finalize_consensus(_build_result(
+        _conflict_result = _build_result(
             trade=False,
             verdict="OPPOSING_HIGH_CONFIDENCE" if opposing_high_confidence else "DIRECTION_CONFLICT",
             direction=None,
@@ -1104,7 +1168,11 @@ def compute_consensus(
                 "OPPOSING_HIGH_CONFIDENCE" if opposing_high_confidence else "DIRECTION_CONFLICT",
                 a, b, signal_a, signal_b, regime
             ),
-        ), asset_type)
+        )
+        _conflict_result = _maybe_apply_engine_c_ai_weight_verdict(
+            _conflict_result, signal_a, signal_b, confidence_b, regime, asset_type
+        )
+        return _finalize_consensus(_conflict_result, asset_type)
 
     # Step 4: Direction agrees — compute weighted conviction
     direction = a["direction"]
@@ -1251,6 +1319,10 @@ def compute_consensus(
         result["aiCalibrationContext"] = build_ai_calibration_context(result, engine_source="Engine C")
     except Exception as _ctx_err:
         log.debug("[ENGINE_C] Failed to generate AI calibration context: %s", _ctx_err)
+
+    result = _maybe_apply_engine_c_ai_weight_verdict(
+        result, signal_a, signal_b, confidence_b, regime, asset_type
+    )
 
     # Step 6: Apply Vision if available
     if ai_vision:

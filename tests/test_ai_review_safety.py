@@ -1108,4 +1108,5 @@ class TestExpertPromptDeadRangingMarcusRule:
         i1 = text.index('"""', i0)
         prompt_body = text[i0:i1]
         assert "DEAD RANGING regime = automatic F grade" not in prompt_body
-        assert "default grade ceiling C" in prompt_body or "never A+" in prompt_body
+        assert "derive from data, NOT from rawScorePct buckets" in prompt_body
+        assert "no fixed caps" in prompt_body

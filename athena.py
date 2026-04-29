@@ -2927,9 +2927,9 @@ ABSOLUTE RULES — VIOLATION = FAILURE:
 2. NEVER state anything not directly supported by the input data. If a factor is None/missing, say "data unavailable" — do NOT guess.
 3. NEVER use "will", "guaranteed", "definitely". Use "edge suggests", "probability favors", "setup indicates".
 4. EVERY claim in your narrative MUST reference a specific data point from the input (factor name, score value, weight, z-score, regime label, level price). If you cannot cite the data, do not make the claim.
-5. Counter-trend signal = automatic grade drop of 1 full level + explicit warning.
+5. Counter-trend setups: FLAG explicitly in warnings with risk rationale (cite SIGNAL/FACTOR data). Grade from evidence — do NOT auto-downgrade by a fixed number of levels.
 6. If directionalScore and direction disagree, FLAG THIS as a critical issue.
-7. DEAD RANGING regime: do NOT assign F solely because of trendState. Low ADX/chop means elevated follow-through risk — default grade ceiling C (watchlist). If === ENGINE B === is present and structural_verdict is CLEAR with naked direction aligned to Engine A direction, allow up to B; never A+, never "Full" position sizing from factor score alone. Always cite ADX percentile/label from SIGNAL in narrative or warnings.
+7. DEAD RANGING / low ADX / chop: name the regime, explain follow-through risk using ADX percentile/label from SIGNAL, then decide the grade from evidence — do NOT use a fixed grade ceiling.
 
 STYLE & ASSET AWARENESS RULES:
 Evaluate the trade setup based on the 'Resolved AI style' and 'Asset type' provided in the AI CALIBRATION CONTEXT.
@@ -2958,18 +2958,31 @@ INPUT SECTIONS:
 HOW TO ANALYSE — FOLLOW THIS EXACT ORDER:
 Step 1: Read AI CALIBRATION CONTEXT first. Identify the Asset Type and Resolved AI style. Note whether the dashboard confluence label is Weak, Medium, or Strong. Do not confuse thresholdProgressPct with rawScorePct.
 Step 2: Read FACTOR DIAGNOSTICS. Which directional factors are active? Does direction match? What is the confidence multiplier?
-Step 3: Check trendCoherence. How many timeframes agree? If < 0.7, this is a mixed signal.
-Step 4: Read regime. RANGING = downgrade one band. DEAD RANGING = apply Absolute Rule 7 (watchlist-tier default; ENGINE B CLEAR alignment allows up to B per Rule 7).
+Step 3: Check trendCoherence. How many timeframes agree? If coherence_ratio < 0.5, signal is fragmented; 0.5–0.7 mixed; >0.7 aligned.
+Step 4: Read regime. Explain follow-through and chop risk from the data. Do not auto-downgrade purely from regime label.
 Step 5: Read LEVELS. Evaluate SL and RR according to the Style & Asset Awareness Rules above. Do not automatically penalize Crypto for >2% SL.
-Step 6: If ENGINE B data is present, cross-reference structural verdict with factor direction. Agreement = boost. Conflict = major red flag.
+Step 6: If ENGINE B data is present, cross-reference structural verdict with factor direction. Agreement = positive; conflict = major red flag.
 Step 7: If CONTEXT data is present, use for narrative color ONLY.
 
-GRADING (based on score/maxScore percentage or dashboard confluence):
-A+ (85-100%): Elite — full size, all factors aligned, high confidence multiplier.
-A  (70-84%): Strong — normal size, minor gaps only.
-B  (55-69%): Valid — half size, needs monitoring. Check which factors are weak.
-C  (40-54%): Watchlist only — interesting but not ready. Name the missing factors.
-F  (0-39%): Avoid — insufficient edge. Name exactly why.
+GRADING — derive from data, NOT from rawScorePct buckets:
+You must arrive at a letter grade (A+ through F) by weighing evidence in this order. Cite which items drove the grade in narrative/warnings.
+1. Factor coherence: how many active directional factors support the call, and do weights justify confidence?
+2. trendCoherence ratio: <0.5 fragmented; 0.5–0.7 mixed; >0.7 aligned.
+3. directionalConfidenceMultiplier: <0.5 is a structural red flag regardless of headline score.
+4. ENGINE B (if present): CLEAR structural_verdict + direction aligned to Engine A is a boost; UNCLEAR/misaligned is a risk.
+5. RR vs style minimum from LEVELS.
+6. Regime: name it, explain follow-through risk, then integrate (no fixed caps).
+7. Counter-trend: flag in warnings with data; grade from full evidence.
+
+A grade must cite specific evidence. "Score is X%" alone is not sufficient rationale.
+
+edgeProbability (0–100) — derive from input with this rubric (do not mirror rawScorePct mechanically):
+- Base from trendCoherence: take coherence_ratio from FACTOR DIAGNOSTICS (0–1). Add min(40, coherence_ratio * 40) points.
+- directionalConfidenceMultiplier: add min(30, multiplier * 30) where multiplier is 0–1 from diagnostics (if missing, use 0).
+- ENGINE B: if structural_verdict is CLEAR and direction matches Engine A, +15; if ENGINE B absent/neutral, +0; if UNCLEAR or direction conflicts, −10.
+- Regime label from SIGNAL: TRENDING or strong trend labels +10; RANGING/chop near neutral +0; DEAD RANGING or explicit dead chop + (−10).
+- RR: meets style minimum from LEVELS +5; below −5.
+Sum, clamp to 5–95. Round to integer for the JSON field.
 
 PER-STYLE RATINGS — rate ALL THREE independently using specific data:
 - SCALP: Need ADX > 30, clean H1 entry, vol_ratio > 1.5, RR >= 1.5
@@ -9319,6 +9332,56 @@ def api_chart_analysis():
         factors = sig.get("factors_json") or sig.get("votes", {})
         if factors:
             context_parts.append(f"FACTOR VOTES: {factors}")
+        # Full Engine A factor breakdown + diagnostics for chart cross-check (not only headline score).
+        _fs = sig.get("factorScores") or sig.get("factor_scores") or {}
+        _fw = sig.get("factorWeights") or sig.get("factor_weights") or {}
+        if _fs:
+            _flines = [f"  {fn}: {fv} [w={_fw.get(fn, '?')}]" for fn, fv in _fs.items()]
+            context_parts.append("ENGINE A FACTORS:\n" + "\n".join(_flines))
+        _fd = sig.get("factorDiagnostics") or {}
+        if _fd:
+            _tc = _fd.get("trendCoherence") or {}
+            _coh = _tc.get("coherence_ratio") if isinstance(_tc, dict) else None
+            context_parts.append(
+                "ENGINE A DIAGNOSTICS: "
+                f"directionalScore={_fd.get('directionalScore')}, "
+                f"nondirectionalScore={_fd.get('nondirectionalScore')}, "
+                f"directionalConfidenceMultiplier={_fd.get('directionalConfidenceMultiplier')}, "
+                f"trendCoherence_ratio={_coh}"
+            )
+        _cd = sig.get("confidenceDetail") or {}
+        if _cd and _cd.get("confidence") is not None:
+            try:
+                _ccf = f"{float(_cd.get('confidence')):.4f}"
+            except (TypeError, ValueError):
+                _ccf = str(_cd.get("confidence"))
+            context_parts.append(
+                f"CONFIDENCE ENGINE (Engine A): confidence={_ccf}, "
+                f"components={_cd.get('components')}"
+            )
+        _eb_vis = sig.get("engine_b") or {}
+        if _eb_vis:
+            _ebc = _eb_vis.get("confidence")
+            if isinstance(_ebc, dict):
+                context_parts.append(
+                    "ENGINE B CONFIDENCE: "
+                    f"structure_ok={_ebc.get('structure_ok')}, "
+                    f"zone_ok={_ebc.get('zone_ok')}, "
+                    f"trigger_ok={_ebc.get('trigger_ok')}, "
+                    f"location_ok={_ebc.get('location_ok')}, "
+                    f"room_ok={_ebc.get('room_ok')}, "
+                    f"rr_ok={_ebc.get('rr_ok')}, "
+                    f"passed={_ebc.get('passed')}, "
+                    f"score={_ebc.get('score')}/{_ebc.get('max_possible')}, "
+                    f"structural_verdict={_eb_vis.get('structural_verdict')}"
+                )
+            elif _eb_vis.get("score_pct") is not None or _eb_vis.get("structural_verdict"):
+                context_parts.append(
+                    "ENGINE B SUMMARY: "
+                    f"structural_verdict={_eb_vis.get('structural_verdict')}, "
+                    f"score_pct={_eb_vis.get('score_pct')}, "
+                    f"is_actionable={_eb_vis.get('is_actionable')}"
+                )
 
     sid = symbol.replace("/", "_").replace("=", "_").replace("^", "_").replace(".", "_")
     eb = data.get("engineB") or _engine_b_cache_get(sid) or _engine_b_cache_get(symbol)

@@ -35,13 +35,17 @@ def test_single_prompt_contains_footer_contract_and_ae_order():
     assert "SWING RATING:" in prompt
     assert "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>" in prompt
 
-    a = prompt.index("A. Pattern ID")
-    b = prompt.index("B. Wick Analysis")
-    c = prompt.index("C. Body Conviction")
-    d = prompt.index("D. Sequence Narrative")
-    e = prompt.index("E. Candle Rules")
-    assert a < b < c < d < e
-    assert "counter-trend move plus rising volume must map to right edge: potential reversal" in prompt.lower()
+    a = prompt.index("A. Trend/Location")
+    b = prompt.index("B. Last Candle Anatomy")
+    c = prompt.index("C. Last 3/5 Candle Sequence")
+    d = prompt.index("D. Pattern ID")
+    e = prompt.index("E. Auction Behaviour")
+    f = prompt.index("F. Confirmation")
+    g = prompt.index("G. Style Suitability")
+    h = prompt.index("H. Verdict")
+    assert a < b < c < d < e < f < g < h
+    assert "entry quality" in prompt.lower()
+    assert "right edge a-h framework" in prompt.lower()
 
 
 def test_dual_prompt_uses_h4_authoritative_right_edge():

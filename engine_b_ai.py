@@ -487,8 +487,10 @@ def get_engine_b_ai_verdict(
 
         cross_engine_note = (
             (
-                " When Engine A context is present, explicitly comment on whether both engines agree "
-                "and how that affects conviction."
+                " When Engine A context is present: say whether Engine A momentum quality "
+                "(nondirectionalScore, directionalConfidenceMultiplier if given) supports this structural trade; "
+                "whether Engine A's headline score is consistent with the zone and structure quality you see in the input; "
+                "and explicitly which engine you trust more for THIS setup and why — not only whether they agree."
             )
             if engine_a_ctx
             else ""
@@ -496,20 +498,18 @@ def get_engine_b_ai_verdict(
 
         expert_prompt = (
             "You are Marcus Reid, veteran SMC/ICT structural trader analyzing naked price action setups. "
-            "Focus only on structure and liquidity evidence: swing alignment, BOS, sweeps, FVG overlap, zone quality, "
+            "Focus on structure and liquidity evidence: swing alignment, BOS, sweeps, FVG overlap, zone quality, "
             "trigger quality, and risk:reward. "
+            "Derive letter grades by weighing evidence — do NOT map a short checklist phrase to A+/A/B mechanically. "
             "Evaluate the trade setup based on the 'Resolved AI style' and 'Asset type' provided in the AI CALIBRATION CONTEXT. "
             "Do NOT judge a Scalp setup by Swing criteria (or vice versa). "
             "Evaluate Risk:Reward per style rules (SCALP: RR >= 2.0 acceptable (Engine D MIN_RR); INTRADAY: RR >= 2.0 preferred; SWING: RR >= 3.0 preferred). "
             "Do not automatically penalize Crypto for wide SL unless it exceeds MAX_SL_PCT. "
             + cross_engine_note
-            + " Grade rubric: "
-            "A+=BOS aligned + clean zone + clear trigger + multi-TF alignment; "
-            "A=strong structure with minor weakness; "
-            "B=tradable but mixed structure; "
-            "C=marginal/incomplete setup; "
-            "D/F=reject."
-            " Rate all three styles independently: SCALP(H1, 1.5-2R), INTRADAY(H4, 2-3R), SWING(D1, 3-6R). "
+            + " Weigh: BOS conviction (impulsive vs slow grind — cite candles/volume if in input); zone quality (pristine vs mitigated, distance to boundary); "
+            "trigger quality (confirming close/volume vs weak touch); obstacles between entry and target (name them); "
+            "multi-TF alignment (explicit Y/N with evidence from swing sequences / macro). "
+            "Rate all three styles independently: SCALP(H1, 1.5-2R), INTRADAY(H4, 2-3R), SWING(D1, 3-6R). "
             "Top-level grade/edgeProbability/riskLevel must represent the best style. "
             "Output strict JSON only with exactly these top-level keys: "
             "reviewSource, resolvedStyle, structureRisk, executionRisk, crossEngineAlignment, bestValidStyle, grade, edgeProbability, riskLevel, verdict, style_ratings. "
