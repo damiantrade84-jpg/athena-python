@@ -2018,43 +2018,13 @@ header,.topbar{display:flex;align-items:center;justify-content:flex-start;gap:10
       <summary style="font-size:.85rem; color:#38bdf8; cursor:pointer; font-weight:600; padding:8px 0;">⚙️ Advanced Manual Research</summary>
       <div style="margin-top:10px;">
 
-    <!-- 🚀 Style-Driven Autopilot Selector -->
-    <div style="background:#0f172a; border:1px solid #1e3a8a; border-radius:8px; padding:14px; margin-bottom:16px;">
-      <div style="font-size:.85rem; font-weight:700; color:#38bdf8; margin-bottom:10px; display:flex; align-items:center; gap:6px;">
-        🤖 Style-Driven Autopilot Research
+    <!-- Quick Discovery — discovery-only run (skips Validation + AI Review).
+         Uses the cockpit's Market Group / Trading Style / Research Depth selectors above. -->
+    <div style="background:#0f172a; border:1px solid #1e3a8a; border-radius:8px; padding:12px; margin-bottom:16px;">
+      <div style="font-size:.78rem; opacity:.7; margin-bottom:8px; color:#cbd5e1;">
+        <strong style="color:#38bdf8">Quick Discovery</strong> — runs Discovery only (no Validation, no AI Review). Uses the One-Click Cockpit selectors above.
       </div>
-      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
-        <div>
-          <label style="font-size:.72rem; opacity:.6; display:block; margin-bottom:4px">MARKET GROUP</label>
-          <select id="rl-market-group" style="background:#111827; border:1px solid #2a3a50; color:#cdd6e0; padding:6px 10px; border-radius:6px; font-size:.82rem">
-            <option value="crypto">Crypto</option>
-            <option value="forex">Forex</option>
-            <option value="commodity">Commodity</option>
-            <option value="metals">Metals</option>
-            <option value="indices">Indices</option>
-            <option value="stocks">Stocks</option>
-            <option value="etf">ETF</option>
-            <option value="custom">Custom</option>
-          </select>
-        </div>
-        <div>
-          <label style="font-size:.72rem; opacity:.6; display:block; margin-bottom:4px">TRADING STYLE</label>
-          <select id="rl-trading-style" style="background:#111827; border:1px solid #2a3a50; color:#cdd6e0; padding:6px 10px; border-radius:6px; font-size:.82rem">
-            <option value="scalp">Scalp</option>
-            <option value="intra">Intra</option>
-            <option value="swing">Swing</option>
-          </select>
-        </div>
-        <div>
-          <label style="font-size:.72rem; opacity:.6; display:block; margin-bottom:4px">RESEARCH DEPTH</label>
-          <select id="rl-research-depth" style="background:#111827; border:1px solid #2a3a50; color:#cdd6e0; padding:6px 10px; border-radius:6px; font-size:.82rem">
-            <option value="quick">Quick</option>
-            <option value="standard" selected>Standard</option>
-            <option value="deep">Deep</option>
-          </select>
-        </div>
-        <button onclick="rlStartStyleRun()" id="rl-style-run-btn" style="background:linear-gradient(135deg,#0369a1,#0284c7); color:#fff; border:none; padding:8px 18px; border-radius:7px; cursor:pointer; font-size:.85rem; font-weight:600">▶ Start Autopilot Research</button>
-      </div>
+      <button onclick="rlStartStyleRun()" id="rl-style-run-btn" style="background:#1e3a8a; color:#bfdbfe; border:1px solid #2563eb; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:.82rem; font-weight:600">▶ Run Quick Discovery</button>
     </div>
 
     <!-- Manual controls (optional override) -->
@@ -13020,9 +12990,12 @@ function ldFmtPrice(p) {
 
   window.rlStartStyleRun = async function() {
     console.log('[Research Lab] rlStartStyleRun called');
-    const market_group = document.getElementById('rl-market-group').value;
-    const trading_style = document.getElementById('rl-trading-style').value;
-    const research_depth = document.getElementById('rl-research-depth').value;
+    // Reuse the One-Click Cockpit selectors (rl-sess-*).
+    // The duplicate rl-market-group/rl-trading-style/rl-research-depth selectors
+    // were removed in the Tier 2 cleanup pass.
+    const market_group = document.getElementById('rl-sess-market-group').value;
+    const trading_style = document.getElementById('rl-sess-trading-style').value;
+    const research_depth = document.getElementById('rl-sess-research-depth').value;
 
     console.log('[Research Lab] Parameters:', { market_group, trading_style, research_depth });
 

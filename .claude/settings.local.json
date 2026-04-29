@@ -81,7 +81,11 @@
       "Bash(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/test_vectorbt_research_lab.py -v)",
       "Bash(.\\\\.venv\\\\Scripts\\\\python.exe -m py_compile athena_research/metrics.py athena_research/strategies.py athena_research/run_manager.py tools/vectorbt_research_lab.py)",
       "Bash(.\\\\.venv\\\\Scripts\\\\python.exe -m py_compile athena_research/research_lab_routes.py athena_research/autopilot.py athena_research/run_manager.py athena_research/autopilot_session.py)",
-      "Bash(xargs grep *)"
+      "Bash(xargs grep *)",
+      "Bash(git checkout *)",
+      "Bash(grep -v \"\\\\.backup$\")",
+      "Bash(git rm *)",
+      "Bash(git mv *)"
     ]
   }
 }
