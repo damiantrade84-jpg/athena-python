@@ -10,6 +10,7 @@ from athena_app.services.market_state import (
     get_bucket_start_epoch,
     market_state_offset_hours,
     split_market_state,
+    trim_mt5_d1_broker_session_ahead_tail,
 )
 
 
@@ -87,6 +88,9 @@ def build_live_feed_diagnostic(
     """Return one log/API-safe diagnostic row for a symbol/timeframe."""
     meta = fetch_meta if isinstance(fetch_meta, dict) else {}
     series = list(candles or [])
+    series, _ = trim_mt5_d1_broker_session_ahead_tail(
+        pair, str(timeframe or "").upper(), series, time_now=time_now
+    )
     diag = candle_freshness_diagnostic(
         pair,
         timeframe,
@@ -139,18 +143,28 @@ def _normalise_path(
     if isinstance(payload, dict) and "expectedCurrentBucketEpoch" in payload:
         out = dict(payload)
     elif isinstance(payload, dict) and ("confirmed" in payload or "forming" in payload):
-        confirmed_epoch, forming_epoch = _state_epochs(payload)
         candles = list(payload.get("confirmed") or [])
         if payload.get("forming"):
             candles.append(payload["forming"])
+        candles, _ = trim_mt5_d1_broker_session_ahead_tail(pair, tf, candles, time_now=time_now)
         out = candle_freshness_diagnostic(pair, tf, candles, time_now=time_now)
+        state = split_market_state(
+            candles,
+            tf,
+            pair.get("display") or pair.get("symbol") or "",
+            time_now=time_now,
+            offset_hours=market_state_offset_hours(pair, tf),
+        )
+        confirmed_epoch, forming_epoch = _state_epochs(state)
         out["confirmedLatestEpoch"] = confirmed_epoch
         out["formingEpoch"] = forming_epoch
         out["usesForming"] = bool(forming_epoch and out.get("lastBarEpoch") == forming_epoch)
     elif isinstance(payload, list):
-        out = candle_freshness_diagnostic(pair, tf, payload, time_now=time_now)
+        series = list(payload or [])
+        series, _ = trim_mt5_d1_broker_session_ahead_tail(pair, tf, series, time_now=time_now)
+        out = candle_freshness_diagnostic(pair, tf, series, time_now=time_now)
         state = split_market_state(
-            payload,
+            series,
             tf,
             pair.get("display") or pair.get("symbol") or "",
             time_now=time_now,

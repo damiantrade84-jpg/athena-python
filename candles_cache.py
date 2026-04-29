@@ -12,7 +12,10 @@ import time
 from typing import Any, Callable
 
 from config import CONFIG
-from athena_app.services.market_state import market_state_offset_hours
+from athena_app.services.market_state import (
+    market_state_offset_hours,
+    trim_mt5_d1_broker_session_ahead_tail,
+)
 
 log = logging.getLogger("sentinel")
 
@@ -83,13 +86,24 @@ def _annotate_fetch_meta_with_bar_freshness(
     now: float | None = None,
     offset_hours: float = 0.0,
     live_feed: bool = False,
+    pair: dict | None = None,
 ) -> dict:
     """Add read-only last-bar freshness fields for diagnostics and health routes."""
     if not isinstance(fetch_meta, dict):
         fetch_meta = {}
     if not candles:
         return fetch_meta
-    last_bar = candles[-1] if isinstance(candles[-1], dict) else None
+    now_ts = time.time() if now is None else float(now)
+    work_candles = list(candles)
+    if pair is not None:
+        work_candles, _trimmed_d1 = trim_mt5_d1_broker_session_ahead_tail(
+            pair, tf, work_candles, time_now=now_ts
+        )
+        if _trimmed_d1:
+            fetch_meta["mt5D1SessionAheadTrimmed"] = True
+    if not work_candles:
+        return fetch_meta
+    last_bar = work_candles[-1] if isinstance(work_candles[-1], dict) else None
     if not last_bar:
         return fetch_meta
     last_ts = last_bar.get("time", last_bar.get("datetime"))
@@ -100,7 +114,6 @@ def _annotate_fetch_meta_with_bar_freshness(
     if last_epoch is None:
         return fetch_meta
     fetch_meta["lastBarEpoch"] = int(last_epoch)
-    now_ts = time.time() if now is None else float(now)
     age_sec = round(max(0.0, now_ts - float(last_epoch)), 1)
     fetch_meta["lastBarAgeSec"] = age_sec
     tf_seconds = _TF_SECONDS.get(str(tf or "").upper())
@@ -517,6 +530,7 @@ def fetch_candles(
                 tf,
                 offset_hours=offset_hours,
                 live_feed=is_live_forex_crypto,
+                pair=pair,
             )
             with _candle_cache_lock:
                 _store_fetch_meta(key, fetch_meta)
@@ -544,6 +558,7 @@ def fetch_candles(
             tf,
             offset_hours=offset_hours,
             live_feed=is_live_forex_crypto,
+            pair=pair,
         )
         with _candle_cache_lock:
             _candle_cache.pop(key, None)
@@ -703,6 +718,7 @@ def fetch_candles(
                 tf,
                 offset_hours=offset_hours,
                 live_feed=is_live_forex_crypto,
+                pair=pair,
             )
             with _candle_cache_lock:
                 if bypass_ttl_cache:

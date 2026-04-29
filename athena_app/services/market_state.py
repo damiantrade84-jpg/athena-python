@@ -110,6 +110,55 @@ def market_state_offset_hours(pair: dict[str, Any] | None, tf: str) -> float:
         return 1.0
 
 
+def trim_mt5_d1_broker_session_ahead_tail(
+    pair: dict[str, Any],
+    tf: str,
+    candles: list[dict[str, Any]],
+    *,
+    time_now: Optional[float] = None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Drop a single trailing D1 bar when MT5 stamps it one UTC bucket ahead of wall-clock.
+
+    Some brokers expose the *forming* daily as open time = session roll (e.g. Sydney)
+    while Athena's D1 grid stays UTC 00:00 per policy. Then the latest bar may read as
+    ``expected_current_bucket + 86400`` even though the true UTC forming bucket exists
+    earlier in the series. Removing the erroneous tail restores freshness checks and
+    market-state split without changing scoring gates in config.
+
+    Returns ``(series, trimmed)`` where ``trimmed`` is True iff the last bar was removed.
+    """
+    if str(tf or "").upper() != "D1":
+        return list(candles or []), False
+    if not isinstance(pair, dict) or str(pair.get("source") or "").lower() != "mt5":
+        return list(candles or []), False
+
+    series = list(candles or [])
+    if len(series) < 2:
+        return series, False
+
+    now = float(time_now if time_now is not None else time.time())
+    # D1 remains UTC 00:00 — never apply the MT5 H4 session offset here (CLAUDE.md).
+    offset_hours = 0.0
+    expected_bucket = get_bucket_start_epoch("D1", now, offset_hours=offset_hours)
+
+    last_epoch = candle_timestamp_epoch(series[-1])
+    if not last_epoch:
+        return series, False
+    last_bucket = get_bucket_start_epoch("D1", float(last_epoch), offset_hours=offset_hours)
+    if int(last_bucket) != int(expected_bucket) + 86400:
+        return series, False
+
+    for c in series[:-1]:
+        e = candle_timestamp_epoch(c)
+        if not e:
+            continue
+        b = get_bucket_start_epoch("D1", float(e), offset_hours=offset_hours)
+        if int(b) == int(expected_bucket):
+            return series[:-1], True
+
+    return series, False
+
+
 def split_market_state(
     candles: list[dict[str, Any]], 
     tf: str, 
@@ -168,6 +217,9 @@ def candle_freshness_diagnostic(
     tf = str(timeframe or "").upper()
     series = list(candles or [])
     now = time_now if time_now is not None else time.time()
+    series, d1_session_trimmed = trim_mt5_d1_broker_session_ahead_tail(
+        pair, tf, series, time_now=now
+    )
     offset_hours = market_state_offset_hours(pair, tf)
     expected_bucket = get_bucket_start_epoch(tf, now, offset_hours=offset_hours)
     state = split_market_state(
@@ -204,7 +256,7 @@ def candle_freshness_diagnostic(
     else:
         severity = "missing_current_bucket"
 
-    return {
+    out = {
         "symbol": pair.get("symbol") or pair.get("display") or "",
         "timeframe": tf,
         "source": source or pair.get("source"),
@@ -220,6 +272,9 @@ def candle_freshness_diagnostic(
         "usesOffset": abs(float(offset_hours or 0.0)) > 1e-9,
         "offsetHours": float(offset_hours or 0.0),
     }
+    if d1_session_trimmed:
+        out["mt5D1SessionAheadTrimmed"] = True
+    return out
 
 
 def get_tf_market_state(
@@ -239,12 +294,14 @@ def get_tf_market_state(
     tf = str(timeframe or "").upper()
     display = pair.get("display") or pair.get("symbol") or ""
     series: list[dict[str, Any]] = list(candles or [])
+    now_ts = time_now if time_now is not None else time.time()
     if not series and fetch_candles is not None and limit is not None:
         raw = fetch_candles(pair, tf, int(limit))
         if isinstance(raw, dict):
             raw = raw.get("candles")
         if isinstance(raw, list):
             series = raw
+    series, _ = trim_mt5_d1_broker_session_ahead_tail(pair, tf, series, time_now=now_ts)
     offset_hours = market_state_offset_hours(pair, tf)
     return split_market_state(
         series,
