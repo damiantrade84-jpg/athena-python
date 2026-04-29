@@ -484,6 +484,53 @@ def test_engine_b_research_lab_micro_breakout_can_satisfy_entry_gate(monkeypatch
     assert ENGINE_B_REASON_NO_TRIGGER_PATTERN not in out.get("engine_b_diagnostics", {}).get("reason_codes", [])
 
 
+def test_engine_b_research_lab_precious_trackers_maps_to_metals_group(monkeypatch):
+    """XAU/XAG score groups are precious_trackers in scoring.py; RL config uses metals."""
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_RESEARCH_LAB_FACTORS", {
+        "ENABLED": True,
+        "ALLOW_GATE_UPGRADE": True,
+        "GROUPS": {"metals": ["micro_breakout"]},
+    })
+
+    res = _base_res_long()
+    res.update({
+        "asset_type": "commodity",
+        "bos_confirmed": False,
+        "trigger_ok": False,
+        "strong_close": False,
+        "inside_break_candle": False,
+        "engulfing_candle": False,
+        "liquidity_sweep": False,
+        "choch_confirmed": False,
+        "distance_to_res": 3.0,
+        "recommended_stop_loss": 100.0,
+        "recommended_take_profit": 104.0,
+    })
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=101.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=_micro_breakout_candles_long(),
+        style_profile={
+            "style": "intraday",
+            "score_group": "precious_trackers",
+            "min_room_atr": 0.35,
+            "min_rr": 1.0,
+            "require_macro_align": False,
+        },
+    )
+
+    detail = out["research_lab_detail"]
+    assert detail.get("enabled") is True
+    assert detail.get("score_group") == "metals"
+    assert "micro_breakout" in detail.get("allowed", [])
+    assert detail["components"]["micro_breakout"]["passed"] is True
+    assert out["research_lab_entry_upgrade"] is True
+    assert out["trigger_ok"] is True
+
+
 def test_calculate_confidence_emits_bos_without_volume():
     res = _base_res_long()
     res["bos_volume_confirmed"] = False

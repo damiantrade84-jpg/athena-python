@@ -248,6 +248,43 @@ def test_research_lab_factor_supports_commodity_group_candidates(monkeypatch):
     assert result["research_lab_detail"]["components"]["aroon_trend"]["signal"] == "bull_trend"
 
 
+def test_calc_confluence_factor_diagnostics_includes_research_lab(monkeypatch):
+    """research_lab_* from compute_factor_scores must appear on API-bound factorDiagnostics."""
+    from scoring import calc_confluence
+
+    cfg = {
+        "ENABLED": True,
+        "BONUS": 0.15,
+        "PENALTY": -0.10,
+        "MAX_ABS": 0.20,
+        "GROUPS": {"forex_crosses": ["obv_divergence"]},
+    }
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS", cfg)
+
+    pair = {"type": "forex", "display": "EUR/AUD"}
+    d1 = {"snap": _snap("long")}
+    h4 = {"snap": _snap("long")}
+    h1 = {"snap": _snap("long")}
+    candles = _candles(trend=0.2, volume_trend=10.0)
+    out = calc_confluence(
+        d1,
+        h4,
+        h1,
+        vr=1.0,
+        stoch={"k": [], "d": []},
+        pair=pair,
+        btc_bias="neutral",
+        d1_candles=candles,
+        h4_candles=candles,
+        h1_candles=candles,
+    )
+    fd = out["factorDiagnostics"]
+    assert fd.get("researchLabValue") == pytest.approx(0.15)
+    detail = fd.get("researchLabDetail") or {}
+    assert detail.get("score_group") == "forex_crosses"
+    assert detail.get("components", {}).get("obv_divergence", {}).get("signal") == "confirming"
+
+
 def test_conviction_floor_default_is_explicit_and_no_momentum_uses_floor_blend():
     floor = float(CONFIG["FACTOR_CONVICTION_FLOOR"])
     result = _score(_snap("long"), _snap("long"), _snap("long"))

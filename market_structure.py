@@ -111,10 +111,18 @@ def _normalise_research_candles(candles: list | None) -> list:
     return rows
 
 
+# get_pair_score_group() uses e.g. "precious_trackers" for XAU/XAG; ENGINE_B_RESEARCH_LAB_FACTORS
+# GROUPS uses "metals" per CLAUDE.md. Map known aliases so config keys stay stable.
+_ENGINE_B_RESEARCH_LAB_GROUP_ALIASES = {
+    "precious_trackers": "metals",
+    "pgm_metals": "metals",
+}
+
+
 def _infer_engine_b_research_group(res: dict, profile: dict) -> str:
     score_group = str(profile.get("score_group") or "").strip()
     if score_group:
-        return score_group
+        return _ENGINE_B_RESEARCH_LAB_GROUP_ALIASES.get(score_group, score_group)
     asset_type = str(res.get("asset_type") or "").lower()
     return asset_type or "unknown"
 

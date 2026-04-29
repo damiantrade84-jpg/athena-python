@@ -667,6 +667,8 @@ def calc_confluence(
             "intermarket": factor_result.get("intermarket_confirmation") or {},
             "insufficientFactors": factor_result.get("insufficient_factors", False),
             "cryptoEngineADiagnostics": factor_result.get("crypto_engine_a_diagnostics"),
+            "researchLabValue": factor_result.get("research_lab_value"),
+            "researchLabDetail": factor_result.get("research_lab_detail"),
         },
         "intermarketConfirmation": factor_result.get("intermarket_confirmation") or {},
     }
