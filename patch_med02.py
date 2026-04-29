@@ -73,7 +73,7 @@ with open("backtest_runner.py", "w", encoding="utf-8", newline="\n") as f:
     f.write(text)
 
 print("Applying LOW-01 (docs for config)...")
-for md_file in ["CLAUDE.md", "SCORING_DIAGNOSTICS_REPORT.md", "SCORING_DIAGNOSTICS_MEASURED_REPORT.md"]:
+for md_file in ["CLAUDE.md", "docs/audits/SCORING_DIAGNOSTICS_REPORT.md", "docs/audits/SCORING_DIAGNOSTICS_MEASURED_REPORT.md"]:
     if os.path.exists(md_file):
         with open(md_file, "r", encoding="utf-8") as f:
             t = f.read()

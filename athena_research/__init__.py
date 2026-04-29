@@ -19,6 +19,10 @@ __all__ = [
     "ai_analyst",
     "prompt_builder",
     "run_manager",
+    "autopilot",
+    "autopilot_session",
+    "research_context",
+    "research_lab_routes",
 ]
 
 # Execution import guard — raise immediately if someone accidentally imports live modules
