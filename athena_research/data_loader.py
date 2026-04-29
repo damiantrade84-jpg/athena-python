@@ -198,8 +198,13 @@ _MT5_SYMBOL_MAP: dict[str, str] = {
     "Brent Oil": "UKOIL", "US500": "US500", "NAS100": "NAS100",
     "S&P 500": "US500", "NASDAQ-100": "NAS100", "US30": "US30",
     "GER40": "GER40", "UK100": "UK100", "JP225": "JP225",
+    # US stocks — all use plain ticker on Pepperstone (same convention as AAPL/NVDA/MSFT)
     "AAPL": "AAPL", "NVDA": "NVDA", "MSFT": "MSFT",
     "TSLA": "TSLA", "AMZN": "AMZN",
+    "META": "META", "GOOG": "GOOG", "JPM": "JPM",
+    "V": "V", "XOM": "XOM", "NFLX": "NFLX", "AMD": "AMD",
+    "CRM": "CRM", "DIS": "DIS", "BA": "BA", "COIN": "COIN",
+    "PYPL": "PYPL", "INTC": "INTC", "UBER": "UBER", "PLTR": "PLTR",
 }
 
 # ── EODHD symbol mapping ──────────────────────────────────────────────────────
@@ -212,15 +217,29 @@ _EODHD_SYMBOL_MAP: dict[str, str] = {
     "XAG/USD": "SI.US", "WTI Oil": "CL.US", "Brent Oil": "BZ.US",
     "US500": "GSPC.INDX", "NAS100": "NDX.INDX", "US30": "DJI.INDX",
     "GER40": "GDAXI.INDX", "UK100": "FTSE.INDX",
+    # US stocks — EODHD uses TICKER.US format
     "AAPL": "AAPL.US", "NVDA": "NVDA.US", "MSFT": "MSFT.US",
     "TSLA": "TSLA.US", "AMZN": "AMZN.US",
+    "META": "META.US", "GOOG": "GOOG.US", "JPM": "JPM.US",
+    "V": "V.US", "XOM": "XOM.US", "NFLX": "NFLX.US", "AMD": "AMD.US",
+    "CRM": "CRM.US", "DIS": "DIS.US", "BA": "BA.US", "COIN": "COIN.US",
+    "PYPL": "PYPL.US", "INTC": "INTC.US", "UBER": "UBER.US", "PLTR": "PLTR.US",
 }
 
 # ── Binance crypto symbol mapping ─────────────────────────────────────────────
 
+# Binance Futures uses non-obvious denominations for some tokens.
+# PEPE perpetual contract is 1000PEPEUSDT (1 contract = 1000 PEPE).
+_BINANCE_SYMBOL_OVERRIDES: dict[str, str] = {
+    "PEPE/USDT": "1000PEPEUSDT",
+    "PEPEUSDT":  "1000PEPEUSDT",
+}
+
+
 def _binance_symbol(symbol: str) -> str:
     """Convert Athena crypto symbol to Binance futures symbol (BTCUSDT)."""
-    return symbol.replace("/", "").replace("-", "").upper()
+    raw = symbol.replace("/", "").replace("-", "").upper()
+    return _BINANCE_SYMBOL_OVERRIDES.get(symbol, _BINANCE_SYMBOL_OVERRIDES.get(raw, raw))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -384,7 +403,12 @@ def _fetch_eodhd(symbol: str, timeframe: str, limit: int = 1000) -> Optional[pd.
             if not data:
                 return None
             df = pd.DataFrame(data[:limit])
-            df.index = pd.to_datetime(df["date"], utc=True)
+            df["date"] = pd.to_datetime(df["date"], utc=True)
+            # Drop duplicate dates before setting as index (EODHD can emit
+            # two rows for the same date after split/adjustment; pandas 3.x
+            # raises on sort_index/reindex when duplicates are present).
+            df = df.drop_duplicates(subset=["date"], keep="last")
+            df = df.set_index("date")
             df.index.name = "time"
             df = df.rename(columns={"adjusted_close": "close"})
             df = df[["open", "high", "low", "close", "volume"]].astype(float)
@@ -401,7 +425,11 @@ def _fetch_eodhd(symbol: str, timeframe: str, limit: int = 1000) -> Optional[pd.
             if not data:
                 return None
             df = pd.DataFrame(data[:limit])
-            df.index = pd.to_datetime(df["timestamp"], unit="s", utc=True)
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s", utc=True)
+            # Drop duplicate timestamps before setting as index so downstream
+            # resample() (H4 via H1) does not crash under pandas 3.x.
+            df = df.drop_duplicates(subset=["timestamp"], keep="last")
+            df = df.set_index("timestamp")
             df.index.name = "time"
             cols = {c: c for c in ["open", "high", "low", "close", "volume"] if c in df.columns}
             df = df[list(cols.values())].astype(float)
@@ -746,7 +774,11 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
     if "volume" not in df.columns:
         df["volume"] = 0.0
     df["volume"] = df["volume"].fillna(0.0).clip(lower=0)
-    df = df.sort_index()
+    # Deduplicate BEFORE sort_index: pandas 3.x raises
+    # "cannot reindex on an axis with duplicate labels" inside sort_index
+    # when duplicates are present (e.g. EODHD EOD returns two rows for the
+    # same date after a split adjustment).
     if df.index.has_duplicates:
         df = df[~df.index.duplicated(keep="last")]
+    df = df.sort_index()
     return df

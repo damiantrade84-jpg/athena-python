@@ -358,27 +358,27 @@ def test_frontend_status_bar_badges():
 
 
 def test_frontend_candlestick_chart_renderer():
-    html_path = ROOT / "static" / "index.html"
-    html = html_path.read_text(encoding="utf-8")
-    assert "ldBuildChartSvg" in html, "SVG candlestick chart function missing"
-    assert "candleW" in html, "Candle width calculation missing"
+    # LD JS moved to live_dashboard.js (Tier 3 extraction)
+    js = (ROOT / "static" / "js" / "features" / "live_dashboard.js").read_text(encoding="utf-8")
+    assert "ldBuildChartSvg" in js, "SVG candlestick chart function missing"
+    assert "candleW" in js, "Candle width calculation missing"
     # Must draw bodies and wicks
-    assert "bodyTop" in html and "bodyBot" in html, "Body top/bottom missing"
+    assert "bodyTop" in js and "bodyBot" in js, "Body top/bottom missing"
 
 
 def test_frontend_freshness_pill_no_stale_1_bucket_for_confirmed_only():
     """Freshness pill must handle CONFIRMED_ONLY_OK distinctly from stale."""
-    html_path = ROOT / "static" / "index.html"
-    html = html_path.read_text(encoding="utf-8")
-    assert "CONFIRMED_ONLY_OK" in html or "CONF-ONLY OK" in html, (
+    # LD JS moved to live_dashboard.js (Tier 3 extraction)
+    js = (ROOT / "static" / "js" / "features" / "live_dashboard.js").read_text(encoding="utf-8")
+    assert "CONFIRMED_ONLY_OK" in js or "CONF-ONLY OK" in js, (
         "Frontend must render CONFIRMED_ONLY_OK status distinctly"
     )
     # The CONFIRMED_ONLY_OK branch in ldBuildFreshnessPill must assign 'fresh-conf',
     # not 'fresh-bad'. We find the branch line and verify the assignment before its `}`.
-    idx = html.find("CONFIRMED_ONLY_OK")
+    idx = js.find("CONFIRMED_ONLY_OK")
     assert idx != -1
-    branch_end = html.find("}", idx)
-    branch_snippet = html[idx: branch_end] if branch_end != -1 else html[idx: idx + 120]
+    branch_end = js.find("}", idx)
+    branch_snippet = js[idx: branch_end] if branch_end != -1 else js[idx: idx + 120]
     assert "fresh-conf" in branch_snippet, (
         "CONFIRMED_ONLY_OK branch must set cls='fresh-conf'; got: " + branch_snippet
     )
@@ -389,15 +389,15 @@ def test_frontend_freshness_pill_no_stale_1_bucket_for_confirmed_only():
 
 def test_frontend_engine_a_no_legacy_vote_pills():
     """Frontend Engine A pill must not show legacy vote fields as scoring indicators."""
-    html_path = ROOT / "static" / "index.html"
-    html = html_path.read_text(encoding="utf-8")
+    # LD JS moved to live_dashboard.js (Tier 3 extraction)
+    js = (ROOT / "static" / "js" / "features" / "live_dashboard.js").read_text(encoding="utf-8")
     # ldBuildEnginePill reads eng.passed (from factorScores path), not vote counts
-    assert "ldBuildEnginePill" in html
+    assert "ldBuildEnginePill" in js
     # Legacy vote keys must not appear inside the pill builder
-    idx = html.find("function ldBuildEnginePill(")
+    idx = js.find("function ldBuildEnginePill(")
     assert idx != -1
-    fn_end = html.find("\nfunction ", idx + 1)
-    fn_body = html[idx: fn_end] if fn_end != -1 else html[idx: idx + 500]
+    fn_end = js.find("\nfunction ", idx + 1)
+    fn_body = js[idx: fn_end] if fn_end != -1 else js[idx: idx + 500]
     for vk in ("d1_trend", "h4_macd", "h1_ema", "h4_oscillator"):
         assert vk not in fn_body, f"Legacy vote key {vk!r} found in ldBuildEnginePill"
 
@@ -499,20 +499,22 @@ def test_paper_execute_calls_risk_check_and_blocks_states():
 
 
 def test_frontend_execute_uses_executable_state():
-    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-    assert "PAPER EXECUTE" in html
-    assert "canPaperExecute" in html
-    assert "canRealExecute" in html
-    assert "ADD TO WATCHLIST" in html
-    assert "IGNORE" in html
+    # LD JS moved to live_dashboard.js (Tier 3 extraction)
+    js = (ROOT / "static" / "js" / "features" / "live_dashboard.js").read_text(encoding="utf-8")
+    assert "PAPER EXECUTE" in js
+    assert "canPaperExecute" in js
+    assert "canRealExecute" in js
+    assert "ADD TO WATCHLIST" in js
+    assert "IGNORE" in js
 
 
 def test_engine_d_missing_reasons_visible():
     src = _src()
-    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    # LD JS moved to live_dashboard.js (Tier 3 extraction)
+    js = (ROOT / "static" / "js" / "features" / "live_dashboard.js").read_text(encoding="utf-8")
     assert '"missingData"' in src
-    assert "Missing Data" in html
-    assert "Engine D missing" in html
+    assert "Missing Data" in js
+    assert "Engine D missing" in js
 
 
 # ── Phase 9: py_compile check ────────────────────────────────────────────────
