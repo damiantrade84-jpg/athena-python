@@ -4821,6 +4821,24 @@ def api_scan():
     return jsonify(_json_safe(result))
 
 
+@app.route("/api/last-scan", methods=["GET"])
+def api_last_scan():
+    """Latest full-universe scan kept in memory — survives dashboard tab refresh.
+
+    Use this instead of relying only on ``localStorage`` (large payloads can exceed
+    quota and fail to persist, leaving an older snapshot).
+    """
+    global _last_scan_results
+    r = _last_scan_results
+    if not isinstance(r, dict):
+        return jsonify({"available": False, "reason": "invalid"}), 200
+    if not r.get("success") or not r.get("scannedAt"):
+        return jsonify({"available": False, "reason": "no_scan"}), 200
+    out = dict(r)
+    out["available"] = True
+    return jsonify(_json_safe(out))
+
+
 @app.route("/api/analyze", methods=["POST"])
 def api_analyze():
 
@@ -11196,6 +11214,16 @@ def analyze_pair(
             d1 = _d1_confirmed + ([_d1_forming] if _d1_forming else [])
     if d1 is None:
         d1 = fetch_candles(pair, "D1", _lim["D1"])
+
+    try:
+        from athena_app.services.market_state import trim_mt5_d1_broker_session_ahead_tail
+
+        if d1:
+            d1, _d1_sess_trim = trim_mt5_d1_broker_session_ahead_tail(
+                pair, "D1", list(d1)
+            )
+    except Exception:
+        pass
 
     _h4_state = preloaded_market_state.get("H4")
     h4 = preloaded_candles.get("H4")

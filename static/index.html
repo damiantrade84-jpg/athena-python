@@ -6808,7 +6808,9 @@ async function runScan() {
     window.allSignals = allSignals;
     renderStats(data);
     renderSignals(applyStyleFilter(allSignals));
-    try { localStorage.setItem('lastScanData', JSON.stringify(data)); } catch(e) {}
+    try { localStorage.setItem('lastScanData', JSON.stringify(data)); } catch(e) {
+      console.warn('[scan] Could not persist results to localStorage (quota or disabled):', e && e.message ? e.message : e);
+    }
 
     // BTC Bias display
     if (data.btcBias) {
@@ -8915,12 +8917,9 @@ fetch('/api/auto-trade').then(function(r){
   return window.safeJson ? window.safeJson(r) : r.json();
 }).then(_updateAutoTradeUI).catch(function(){});
 
-// Restore last scan results from localStorage on page load
+// Restore last scan: prefer server memory (reliable after tab refresh); fall back to localStorage
 (function restoreLastScan() {
-  try {
-    var saved = localStorage.getItem('lastScanData');
-    if (!saved) return;
-    var data = JSON.parse(saved);
+  function applyScanPayload(data) {
     var age = data.scannedAt ? Math.round((Date.now() - new Date(data.scannedAt).getTime()) / 60000) : null;
     var tradeSignals = data.tradeSignals || data.signals || [];
     var watchlistSignals = data.watchlist || [];
@@ -8938,7 +8937,28 @@ fetch('/api/auto-trade').then(function(r){
       bt.style.color = data.btcBias === 'bullish' ? 'var(--bull)' : data.btcBias === 'bearish' ? 'var(--bear)' : 'var(--muted)';
     }
     if (age !== null) showToast('Restored last scan (' + age + 'min ago) — press Scan All to refresh');
-  } catch(e) {}
+  }
+  function restoreFromLocalStorage() {
+    try {
+      var saved = localStorage.getItem('lastScanData');
+      if (!saved) return;
+      var data = JSON.parse(saved);
+      applyScanPayload(data);
+    } catch(e) {}
+  }
+  fetch('/api/last-scan')
+    .then(function(r) { return r.json(); })
+    .then(function(j) {
+      if (j && j.available && j.success && j.scannedAt) {
+        try { localStorage.setItem('lastScanData', JSON.stringify(j)); } catch(e) {
+          console.warn('[scan] Could not mirror server scan to localStorage:', e && e.message ? e.message : e);
+        }
+        applyScanPayload(j);
+        return;
+      }
+      restoreFromLocalStorage();
+    })
+    .catch(function() { restoreFromLocalStorage(); });
 })();
 
 // Poll auto-trade status every 30s (updates next scan time)

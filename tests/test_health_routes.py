@@ -117,6 +117,32 @@ def test_api_scan_settings_is_read_only():
     assert resp.status_code == 405
 
 
+def test_api_last_scan_unavailable_until_successful_scan(monkeypatch):
+    athena_module = _load_athena_module()
+    client = athena_module.app.test_client()
+    resp = client.get("/api/last-scan")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data.get("available") is False
+
+    monkeypatch.setattr(
+        athena_module,
+        "_last_scan_results",
+        {
+            "success": True,
+            "scannedAt": "2026-04-29T12:00:00+00:00",
+            "tradeSignals": [],
+            "watchlist": [],
+            "signals": [],
+        },
+    )
+    resp2 = client.get("/api/last-scan")
+    assert resp2.status_code == 200
+    data2 = resp2.get_json()
+    assert data2.get("available") is True
+    assert data2.get("scannedAt") == "2026-04-29T12:00:00+00:00"
+
+
 def test_api_auto_trade_toggle_persists_runtime_and_yaml(monkeypatch):
     athena_module = _load_athena_module()
     persisted = []
