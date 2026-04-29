@@ -13736,6 +13736,66 @@ function ldFmtPrice(p) {
     }
   };
 
+  function _rlRenderResearchAuditSections(recommendations, nextTests) {
+    const recs = recommendations || [];
+    const tests = nextTests || [];
+    if (!recs.length && !tests.length) return '';
+
+    const zones = ['scalp', 'intra', 'swing'];
+    const zoneCards = zones.map(z => {
+      const zRows = recs.filter(r => (r.timeframe_zone || r.zone || '') === z);
+      const add = zRows.filter(r => r.recommendation === 'ADD').length;
+      const keep = zRows.filter(r => r.recommendation === 'KEEP').length;
+      const retest = zRows.filter(r => ['RETEST','WATCHLIST_ONLY'].includes(r.recommendation)).length;
+      const remove = zRows.filter(r => ['REMOVE_OR_DEMOTE','REJECT'].includes(r.recommendation)).length;
+      const best = zRows[0] || {};
+      const zClr = z === 'scalp' ? '#f472b6' : z === 'intra' ? '#38bdf8' : '#a78bfa';
+      return `<div style="background:#0f172a;border:1px solid ${zClr};border-radius:8px;padding:10px;">
+        <div style="font-size:.68rem;color:${zClr};text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">${z}</div>
+        <div style="font-size:.76rem;color:#cdd6e0">ADD ${add} · KEEP ${keep} · RETEST ${retest} · REMOVE ${remove}</div>
+        <div style="font-size:.7rem;color:#94a3b8;margin-top:5px">Top: ${best.engine || '—'} ${best.strategy_name || '—'} ${best.structure_context ? `(${best.structure_context})` : ''}</div>
+      </div>`;
+    }).join('');
+
+    const recTableRows = recs.slice(0, 12).map(r => {
+      const rec = r.recommendation || '—';
+      const recClr = rec === 'ADD' ? '#6ee7b7' : rec === 'KEEP' ? '#38bdf8' : rec === 'REMOVE_OR_DEMOTE' || rec === 'REJECT' ? '#f87171' : rec === 'WATCHLIST_ONLY' ? '#fbbf24' : '#c4b5fd';
+      const zone = r.timeframe_zone || r.zone || '—';
+      const zClr = zone === 'scalp' ? '#f472b6' : zone === 'intra' ? '#38bdf8' : zone === 'swing' ? '#a78bfa' : '#64748b';
+      const delta = Number(r.baseline_delta_oos);
+      const deltaTxt = Number.isFinite(delta) ? delta.toFixed(4) : '—';
+      return `<tr style="border-top:1px solid #1e293b">
+        <td style="padding:6px 8px;color:${recClr};font-weight:700">${rec}</td>
+        <td style="padding:6px 8px;color:#cdd6e0">${r.engine || '—'}</td>
+        <td style="padding:6px 8px;color:#94a3b8">${r.engine_component || '—'}</td>
+        <td style="padding:6px 8px;color:#e2e8f0">${r.strategy_name || '—'}</td>
+        <td style="padding:6px 8px;color:#94a3b8">${r.pair_group || r.market_group || '—'}</td>
+        <td style="padding:6px 8px;color:${zClr};font-weight:600">${zone}</td>
+        <td style="padding:6px 8px;color:#94a3b8">${r.structure_context || '—'}</td>
+        <td style="padding:6px 8px;color:#6ee7b7">${deltaTxt}</td>
+      </tr>`;
+    }).join('');
+
+    const nextRows = tests.slice(0, 8).map(t => `<tr style="border-top:1px solid #1e293b">
+      <td style="padding:6px 8px;color:#cdd6e0">${t.engine || '—'}</td>
+      <td style="padding:6px 8px;color:#94a3b8">${t.engine_component || '—'}</td>
+      <td style="padding:6px 8px;color:#94a3b8">${t.pair_group || t.market_group || '—'}</td>
+      <td style="padding:6px 8px;color:#a78bfa">${t.timeframe_zone || '—'}</td>
+      <td style="padding:6px 8px;color:#f87171">${t.failed_strategies || '—'}</td>
+      <td style="padding:6px 8px;color:#6ee7b7">${t.suggested_strategies || '—'}</td>
+    </tr>`).join('');
+
+    return `<div style="background:#0b1220;border:1px solid #334155;border-radius:10px;padding:14px;margin-bottom:16px;">
+      <div style="font-size:.95rem;font-weight:700;color:#93c5fd;margin-bottom:8px">Engine A/B Research Audit</div>
+      <div style="font-size:.75rem;color:#94a3b8;margin-bottom:12px">Automated audit split by scalp, intra, and swing. Recommendations compare candidates against the current engine baseline for the same group and zone.</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px">${zoneCards}</div>
+      <div style="font-size:.72rem;color:#64748b;font-weight:600;margin-bottom:6px;text-transform:uppercase">Add / Keep / Remove / Retest</div>
+      <div style="overflow-x:auto;margin-bottom:14px"><table style="width:100%;border-collapse:collapse;font-size:.74rem"><thead><tr style="color:#64748b;text-align:left"><th style="padding:4px 8px">Rec</th><th style="padding:4px 8px">Engine</th><th style="padding:4px 8px">Component</th><th style="padding:4px 8px">Strategy</th><th style="padding:4px 8px">Group</th><th style="padding:4px 8px">Zone</th><th style="padding:4px 8px">Structure</th><th style="padding:4px 8px">Delta OOS</th></tr></thead><tbody>${recTableRows || '<tr><td colspan="8" style="padding:8px;color:#64748b">No recommendations available.</td></tr>'}</tbody></table></div>
+      <div style="font-size:.72rem;color:#64748b;font-weight:600;margin-bottom:6px;text-transform:uppercase">Automated Next Tests</div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.74rem"><thead><tr style="color:#64748b;text-align:left"><th style="padding:4px 8px">Engine</th><th style="padding:4px 8px">Failed Component</th><th style="padding:4px 8px">Group</th><th style="padding:4px 8px">Zone</th><th style="padding:4px 8px">Failed Strategies</th><th style="padding:4px 8px">Try Next</th></tr></thead><tbody>${nextRows || '<tr><td colspan="6" style="padding:8px;color:#64748b">No automated follow-up tests required.</td></tr>'}</tbody></table></div>
+    </div>`;
+  }
+
   // ── Show results for a run ─────────────────────────────────────────────────
   window.rlShowResults = async function(runId) {
     _rlCurrentRunId = runId;
@@ -13760,16 +13820,24 @@ function ldFmtPrice(p) {
   const res  = await fetch(`/api/research-lab/ranked/${runId}`);
   const data = await res.json();
   const rows = data.ranked || [];
+  const recRows = data.recommendations || [];
+  const nextTests = data.automated_next_tests || [];
 
   if (!rows.length) {
-    document.getElementById('rl-ranked-table').innerHTML = '<em style="opacity:.5">No ranked results yet.</em>';
+    document.getElementById('rl-ranked-table').innerHTML = recRows.length
+      ? _rlRenderResearchAuditSections(recRows, nextTests)
+      : '<em style="opacity:.5">No ranked results yet.</em>';
   } else {
-    const cols = ['strategy_name','symbol','timeframe','zone','direction','status',
+    const cols = ['engine','engine_component','strategy_name','symbol','market_group','pair_group',
+                  'timeframe_zone','timeframe','structure_context','direction','status','recommendation',
                   'trade_count','win_rate','profit_factor','is_return','oos_return',
-                  'robustness_score','sqn','skip_reason','verdict'];
+                  'baseline_delta_pf','baseline_delta_oos','robustness_score','sqn','skip_reason','verdict'];
     const th = '<th style="padding:5px 8px;opacity:.6">Select</th>' + cols.map(c => {
       let label = c.toUpperCase().replace(/_/g, ' ');
       if (c === 'profit_factor') label = 'PF';
+      if (c === 'baseline_delta_pf') label = 'DELTA PF';
+      if (c === 'baseline_delta_oos') label = 'DELTA OOS';
+      if (c === 'timeframe_zone') label = 'ZONE';
       if (c === 'is_return') label = 'IS RETURN';
       if (c === 'oos_return') label = 'OOS RETURN';
       return `<th style="padding:5px 8px;white-space:nowrap;opacity:.6">${label}</th>`;
@@ -13780,7 +13848,12 @@ function ldFmtPrice(p) {
       const radio = `<input type="radio" name="rl-selected-candidate" data-symbol="${r.symbol || ''}" data-tf="${r.timeframe || ''}" data-family="${r.family_name || r.family || ''}" data-strategy="${r.strategy_name || ''}" data-direction="${r.direction || ''}">`;
       return '<tr>' + `<td style="padding:4px 8px;border-top:1px solid #1a2535;text-align:center;">${radio}</td>` + cols.map(c => {
         let v = r[c] ?? '';
-        if (c === 'zone') { const zClr = v === 'scalp' ? '#f472b6' : v === 'intra' ? '#38bdf8' : v === 'swing' ? '#a78bfa' : '#64748b'; v = v ? `<span style="color:${zClr};font-weight:600">${v}</span>` : '—'; }
+        if (c === 'timeframe_zone' || c === 'zone') { const zClr = v === 'scalp' ? '#f472b6' : v === 'intra' ? '#38bdf8' : v === 'swing' ? '#a78bfa' : '#64748b'; v = v ? `<span style="color:${zClr};font-weight:600">${v}</span>` : '—'; }
+        if (c === 'engine') { const eClr = v === 'ENGINE_A' ? '#60a5fa' : v === 'ENGINE_B' ? '#a78bfa' : '#94a3b8'; v = v ? `<span style="color:${eClr};font-weight:700">${v}</span>` : '—'; }
+        if (c === 'recommendation') {
+          const recClr = v === 'ADD' ? '#6ee7b7' : v === 'KEEP' ? '#38bdf8' : v === 'REMOVE_OR_DEMOTE' || v === 'REJECT' ? '#f87171' : v === 'WATCHLIST_ONLY' ? '#fbbf24' : '#c4b5fd';
+          v = v ? `<span style="color:${recClr};font-weight:700">${v}</span>` : '—';
+        }
         if (c === 'status') v = `<span style="color:${statusColor}">${v}</span>`;
         if (c === 'verdict') {
           const isConfirmed = r.status === 'STRONG_CANDIDATE' || r.status === 'WEAK_CANDIDATE';
@@ -13847,6 +13920,7 @@ function ldFmtPrice(p) {
     }
 
     document.getElementById('rl-ranked-table').innerHTML = styleProfileHtml + childVerdictHtml +
+      _rlRenderResearchAuditSections(recRows, nextTests) +
       `<table style="border-collapse:collapse;width:100%"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`;
 
     // If every result is REJECT or NEEDS_MORE_DATA, show the adaptive pivot banner
@@ -14172,13 +14246,18 @@ function ldFmtPrice(p) {
         if (!info) return `<div style="background:#0f172a;border:1px solid #1e293b;border-radius:6px;padding:10px;opacity:.5"><div style="font-size:.7rem;color:#64748b;text-transform:uppercase">${z}</div><div style="font-size:.75rem;color:#475569">No data</div></div>`;
         const c = zColors[z] || {bg:'#1e293b',border:'#475569',text:'#94a3b8'};
         const bestStrat = info.best_strategy || '—';
+        const bestEngine = info.best_engine || '';
+        const bestComponent = info.best_component || '';
+        const bestContext = info.best_context || '';
+        const bestRec = info.best_recommendation || '';
         const bestSym = info.best_symbol || '';
         const bestTf = info.best_timeframe || '';
         const ret = info.best_return != null ? `+${info.best_return}%` : '';
         return `<div style="background:${c.bg};border:1px solid ${c.border};border-radius:6px;padding:10px;">
           <div style="font-size:.65rem;color:${c.text};text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">${z}</div>
           <div style="font-size:.85rem;font-weight:700;color:${c.text};margin-bottom:4px">${info.strong||0} strong · ${info.weak||0} weak</div>
-          <div style="font-size:.72rem;color:${c.text};opacity:.9">Best: <strong>${bestStrat}</strong></div>
+          <div style="font-size:.72rem;color:${c.text};opacity:.9">Best: <strong>${bestEngine} ${bestStrat}</strong></div>
+          <div style="font-size:.68rem;color:${c.text};opacity:.85">${bestComponent} · ${bestContext} · ${bestRec}</div>
           <div style="font-size:.7rem;color:${c.text};opacity:.8">${bestSym} ${bestTf} <span style="color:#6ee7b7">${ret}</span></div>
         </div>`;
       }).join('');
@@ -14188,6 +14267,10 @@ function ldFmtPrice(p) {
       const ppRows = ppRecs.slice(0,6).map(r => {
         const sym = r.symbol || '—';
         const strat = r.strategy_name || r.strategy || '—';
+        const engine = r.engine || '—';
+        const group = r.pair_group || r.market_group || '—';
+        const context = r.structure_context || '—';
+        const rec = r.recommendation || '—';
         const tf = r.timeframe || '—';
         const zone = r.zone || '—';
         const dir = r.direction || 'LONG';
@@ -14196,15 +14279,19 @@ function ldFmtPrice(p) {
         const zoneClr = zone==='scalp'?'#f472b6':zone==='intra'?'#38bdf8':zone==='swing'?'#a78bfa':'#64748b';
         return `<tr style="font-size:.75rem;border-top:1px solid #1e293b">
           <td style="padding:6px 8px;font-weight:600;color:#e2e8f0">${sym}</td>
+          <td style="padding:6px 8px;color:#93c5fd">${engine}</td>
           <td style="padding:6px 8px;color:#94a3b8">${strat}</td>
+          <td style="padding:6px 8px;color:#94a3b8">${group}</td>
+          <td style="padding:6px 8px;color:#94a3b8">${context}</td>
           <td style="padding:6px 8px;color:${zoneClr}">${zone}</td>
           <td style="padding:6px 8px;color:#94a3b8">${tf}</td>
           <td style="padding:6px 8px;color:${dir==='LONG'?'#6ee7b7':dir==='SHORT'?'#f87171':'#fbbf24'}">${dir}</td>
+          <td style="padding:6px 8px;color:#c4b5fd">${rec}</td>
           <td style="padding:6px 8px;color:#6ee7b7">${ret}</td>
           <td style="padding:6px 8px;color:#38bdf8">${wr}</td>
         </tr>`;
       }).join('');
-      const ppTable = ppRows ? `<table style="width:100%;border-collapse:collapse"><thead><tr style="font-size:.68rem;color:#64748b;text-transform:uppercase"><th style="padding:4px 8px;text-align:left">Symbol</th><th style="padding:4px 8px;text-align:left">Strategy</th><th style="padding:4px 8px;text-align:left">Zone</th><th style="padding:4px 8px;text-align:left">TF</th><th style="padding:4px 8px;text-align:left">Dir</th><th style="padding:4px 8px;text-align:left">Ret</th><th style="padding:4px 8px;text-align:left">WR</th></tr></thead><tbody>${ppRows}</tbody></table>` : '<div style="font-size:.75rem;color:#64748b">No per-pair recommendations yet.</div>';
+      const ppTable = ppRows ? `<table style="width:100%;border-collapse:collapse"><thead><tr style="font-size:.68rem;color:#64748b;text-transform:uppercase"><th style="padding:4px 8px;text-align:left">Symbol</th><th style="padding:4px 8px;text-align:left">Engine</th><th style="padding:4px 8px;text-align:left">Strategy</th><th style="padding:4px 8px;text-align:left">Group</th><th style="padding:4px 8px;text-align:left">Structure</th><th style="padding:4px 8px;text-align:left">Zone</th><th style="padding:4px 8px;text-align:left">TF</th><th style="padding:4px 8px;text-align:left">Dir</th><th style="padding:4px 8px;text-align:left">Rec</th><th style="padding:4px 8px;text-align:left">Ret</th><th style="padding:4px 8px;text-align:left">WR</th></tr></thead><tbody>${ppRows}</tbody></table>` : '<div style="font-size:.75rem;color:#64748b">No per-pair recommendations yet.</div>';
 
       // Engine comparison (Engine A, Engine B, ADX Gate)
       const eng = data.engine_comparison || {};

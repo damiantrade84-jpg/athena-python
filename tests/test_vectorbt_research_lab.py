@@ -225,6 +225,40 @@ class TestStrategies:
         import athena_research.strategies
         _check_no_live_imports()
 
+    def test_research_context_tags_engine_a_and_b(self):
+        from athena_research.metrics import StrategyMetrics
+        from athena_research.research_context import annotate_research_results
+
+        rows = [
+            StrategyMetrics(
+                run_id="r", symbol="EUR/USD", asset_class="forex", timeframe="H1",
+                zone="intra", family="trend_momentum", strategy_name="ema_cross",
+                params_str="", direction="both", status="STRONG_CANDIDATE",
+                trade_count=30, profit_factor=1.2, oos_return=0.02,
+            ),
+            StrategyMetrics(
+                run_id="r", symbol="EUR/USD", asset_class="forex", timeframe="H1",
+                zone="intra", family="engine_b_proxy", strategy_name="structure_filters",
+                params_str="", direction="both", status="WEAK_CANDIDATE",
+                trade_count=30, profit_factor=1.1, oos_return=0.01,
+            ),
+        ]
+
+        tagged = annotate_research_results(rows, {"min_trades": 20})
+
+        assert tagged[0].engine == "ENGINE_A"
+        assert tagged[0].engine_component == "ema_coherence"
+        assert tagged[0].pair_group == "forex_majors"
+        assert tagged[0].timeframe_zone == "intra"
+        assert tagged[0].recommendation == "KEEP"
+
+        assert tagged[1].engine == "ENGINE_B"
+        assert tagged[1].engine_component == "entry_trigger"
+        assert tagged[1].structure_context == "strong_close_fvg_proxy"
+        assert tagged[1].recommendation in {"RETEST", "WATCHLIST_ONLY"}
+
+        _check_no_live_imports()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. Metrics / VectorBT portfolio tests

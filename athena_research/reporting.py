@@ -27,6 +27,10 @@ OUTPUT_COLUMNS = [
     "max_drawdown", "sharpe", "sqn", "exposure_pct", "avg_duration_bars",
     "gross_return", "net_return", "is_return", "oos_return",
     "robustness_score", "param_sensitivity", "skip_reason", "data_source",
+    "engine", "engine_component", "candidate_action", "source_indicator",
+    "market_group", "pair_group", "timeframe_zone", "session_bucket",
+    "structure_context", "baseline_delta_pf", "baseline_delta_oos",
+    "sample_ok", "recommendation",
 ]
 
 
@@ -121,6 +125,21 @@ def write_csvs(df: pd.DataFrame, run_dir: Path) -> list[Path]:
     # By zone (scalp/intra/swing)
     if "zone" in df.columns and df["zone"].notna().any() and (df["zone"] != "").any():
         _save(_group_agg(df[df["zone"] != ""], "zone"), "by_zone.csv")
+        _save(_zone_breakdown(df[df["zone"] != ""]), "zone_breakdown_scalp_intra_swing.csv")
+
+    if "engine" in df.columns:
+        _save(_engine_component_audit(df, "ENGINE_A"), "engine_a_component_audit.csv")
+        _save(_engine_component_audit(df, "ENGINE_B"), "engine_b_component_audit.csv")
+
+    if "market_group" in df.columns:
+        _save(_group_context_breakdown(df), "group_breakdown.csv")
+
+    if "structure_context" in df.columns:
+        _save(_structure_context_breakdown(df), "structure_context_breakdown.csv")
+
+    if "recommendation" in df.columns:
+        _save(_automated_next_tests(df), "automated_next_tests.csv")
+        _save(_recommendation_table(df), "add_remove_retest_recommendations.csv")
 
     # Per-pair recommendation (top result per symbol)
     if not ranked.empty:
@@ -129,6 +148,7 @@ def write_csvs(df: pd.DataFrame, run_dir: Path) -> list[Path]:
 
     # Indicator attribution (aggregated by strategy_name)
     _save(_indicator_attribution(df), "indicator_attribution.csv")
+    _save(_candidate_indicator_attribution(df), "candidate_indicator_attribution.csv")
 
     # Rejected / failed
     rejected = df[~df["status"].isin(["STRONG_CANDIDATE", "WEAK_CANDIDATE"])]
@@ -181,6 +201,116 @@ def _indicator_attribution(df: pd.DataFrame) -> pd.DataFrame:
 
     agg["verdict"] = agg.apply(_calc_verdict, axis=1)
     return agg.sort_values("avg_robustness", ascending=False)
+
+
+def _candidate_indicator_attribution(df: pd.DataFrame) -> pd.DataFrame:
+    group_cols = [
+        c for c in ["source_indicator", "engine", "engine_component", "strategy_name", "market_group", "pair_group", "timeframe_zone"]
+        if c in df.columns
+    ]
+    return _audit_agg(df, group_cols)
+
+
+def _audit_agg(df: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    cols = [c for c in group_cols if c in df.columns]
+    if not cols:
+        return pd.DataFrame()
+    numeric = {
+        "configs": ("status", "count"),
+        "strong": ("status", lambda x: (x == "STRONG_CANDIDATE").sum()),
+        "weak": ("status", lambda x: (x == "WEAK_CANDIDATE").sum()),
+        "reject": ("status", lambda x: (x == "REJECT").sum()),
+        "needs_more": ("status", lambda x: (x == "NEEDS_MORE_DATA").sum()),
+        "avg_pf": ("profit_factor", "mean"),
+        "avg_wr": ("win_rate", "mean"),
+        "avg_oos": ("oos_return", "mean"),
+        "avg_delta_pf": ("baseline_delta_pf", "mean"),
+        "avg_delta_oos": ("baseline_delta_oos", "mean"),
+        "avg_robustness": ("robustness_score", "mean"),
+        "total_trades": ("trade_count", "sum"),
+    }
+    available = {k: v for k, v in numeric.items() if v[0] in df.columns}
+    if not available:
+        return pd.DataFrame()
+    out = df.groupby(cols, dropna=False).agg(**available).reset_index()
+    out["pass_rate"] = (out["strong"] + out["weak"]) / out["configs"].replace(0, 1)
+    return out.sort_values(["strong", "avg_delta_oos", "avg_oos"], ascending=False)
+
+
+def _engine_component_audit(df: pd.DataFrame, engine: str) -> pd.DataFrame:
+    edf = df[df["engine"] == engine].copy() if "engine" in df.columns else pd.DataFrame()
+    return _audit_agg(edf, ["engine", "engine_component", "strategy_name", "market_group", "pair_group", "timeframe_zone"])
+
+
+def _zone_breakdown(df: pd.DataFrame) -> pd.DataFrame:
+    return _audit_agg(df, ["timeframe_zone", "engine", "market_group", "pair_group"])
+
+
+def _group_context_breakdown(df: pd.DataFrame) -> pd.DataFrame:
+    return _audit_agg(df, ["market_group", "pair_group", "timeframe_zone", "engine", "engine_component"])
+
+
+def _structure_context_breakdown(df: pd.DataFrame) -> pd.DataFrame:
+    return _audit_agg(df, ["structure_context", "engine", "market_group", "pair_group", "timeframe_zone"])
+
+
+def _recommendation_table(df: pd.DataFrame) -> pd.DataFrame:
+    cols = [
+        "recommendation", "engine", "engine_component", "strategy_name", "source_indicator",
+        "market_group", "pair_group", "timeframe_zone", "structure_context", "direction",
+        "status", "trade_count", "win_rate", "profit_factor", "oos_return",
+        "baseline_delta_pf", "baseline_delta_oos", "robustness_score",
+    ]
+    available = [c for c in cols if c in df.columns]
+    if not available:
+        return pd.DataFrame()
+    ranked = df.copy()
+    ranked["_rec_order"] = ranked["recommendation"].map({
+        "ADD": 0,
+        "KEEP": 1,
+        "RETEST": 2,
+        "WATCHLIST_ONLY": 3,
+        "REMOVE_OR_DEMOTE": 4,
+        "REJECT": 5,
+    }).fillna(9)
+    ranked = ranked.sort_values(["_rec_order", "baseline_delta_oos", "robustness_score"], ascending=[True, False, False])
+    return ranked[available].head(200)
+
+
+def _automated_next_tests(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "recommendation" not in df.columns:
+        return pd.DataFrame()
+    weak = df[df["recommendation"].isin(["REMOVE_OR_DEMOTE", "REJECT", "RETEST", "WATCHLIST_ONLY"])].copy()
+    if weak.empty:
+        return pd.DataFrame()
+    rows = []
+    alt_map = {
+        "ema_coherence": ["aroon_trend", "supertrend_follow", "chandelier_trend"],
+        "rsi_macd_momentum": ["stochastic_cross", "rsi_divergence"],
+        "entry_pullback": ["fib_retracement", "structure_filters"],
+        "session_breakout": ["realized_vol_breakout", "bb_squeeze_breakout", "ob_bos"],
+        "breakout_filter": ["realized_vol_breakout", "structure_filters"],
+        "mean_reversion_candidate": ["stochastic_divergence", "rsi_divergence", "obv_divergence"],
+        "structure_break": ["structure_filters", "micro_breakout"],
+        "entry_trigger": ["cvd_momentum", "vwap_reclaim", "micro_breakout"],
+        "location_quality": ["vwap_deviation", "fib_retracement"],
+    }
+    group_cols = ["engine", "engine_component", "market_group", "pair_group", "timeframe_zone"]
+    for keys, grp in weak.groupby([c for c in group_cols if c in weak.columns], dropna=False):
+        if not isinstance(keys, tuple):
+            keys = (keys,)
+        ctx = dict(zip([c for c in group_cols if c in weak.columns], keys))
+        component = str(ctx.get("engine_component", ""))
+        rows.append({
+            **ctx,
+            "failed_configs": len(grp),
+            "failed_strategies": ",".join(sorted(set(str(x) for x in grp.get("strategy_name", [])))[:5]),
+            "suggested_strategies": ",".join(alt_map.get(component, ["trend_momentum", "engine_b_proxy", "volatility"])),
+            "reason": "Automated retest because current component failed or remained conditional in this group/zone.",
+        })
+    return pd.DataFrame(rows)
 
 
 
@@ -274,6 +404,70 @@ def write_markdown_report(df: pd.DataFrame, run_dir: Path, run_id: str, run_meta
         a(_df_to_md(zone_agg.reset_index()))
     else:
         a("No zone data available for this run.")
+    a("")
+
+    # ── Engine A/B audit sections ───────────────────────────────────────────
+    a("## Current Engine A Baseline")
+    ea_audit = _engine_component_audit(df, "ENGINE_A")
+    if not ea_audit.empty:
+        a(_df_to_md(ea_audit.head(15)))
+    else:
+        a("No Engine A research rows were available for this run.")
+    a("")
+
+    a("## Current Engine B Baseline")
+    eb_audit = _engine_component_audit(df, "ENGINE_B")
+    if not eb_audit.empty:
+        a(_df_to_md(eb_audit.head(15)))
+    else:
+        a("No Engine B research rows were available for this run.")
+    a("")
+
+    a("## Scalp Results")
+    scalp_df = df[df.get("timeframe_zone", df.get("zone", "")) == "scalp"] if not df.empty else pd.DataFrame()
+    a(_df_to_md(_audit_agg(scalp_df, ["engine", "engine_component", "strategy_name", "market_group", "pair_group"]).head(12)) if not scalp_df.empty else "No scalp rows.")
+    a("")
+
+    a("## Intraday Results")
+    intra_df = df[df.get("timeframe_zone", df.get("zone", "")) == "intra"] if not df.empty else pd.DataFrame()
+    a(_df_to_md(_audit_agg(intra_df, ["engine", "engine_component", "strategy_name", "market_group", "pair_group"]).head(12)) if not intra_df.empty else "No intraday rows.")
+    a("")
+
+    a("## Swing Results")
+    swing_df = df[df.get("timeframe_zone", df.get("zone", "")) == "swing"] if not df.empty else pd.DataFrame()
+    a(_df_to_md(_audit_agg(swing_df, ["engine", "engine_component", "strategy_name", "market_group", "pair_group"]).head(12)) if not swing_df.empty else "No swing rows.")
+    a("")
+
+    a("## What Works By Group")
+    recs = _recommendation_table(df)
+    works = recs[recs["recommendation"].isin(["ADD", "KEEP"])] if not recs.empty and "recommendation" in recs.columns else pd.DataFrame()
+    a(_df_to_md(works.head(15)) if not works.empty else "No add/keep recommendations found.")
+    a("")
+
+    a("## What Fails By Group")
+    fails = recs[recs["recommendation"].isin(["REMOVE_OR_DEMOTE", "REJECT"])] if not recs.empty and "recommendation" in recs.columns else pd.DataFrame()
+    a(_df_to_md(fails.head(15)) if not fails.empty else "No clear failures found.")
+    a("")
+
+    a("## What Only Works With Structure")
+    conditional = df[df["recommendation"].isin(["WATCHLIST_ONLY", "RETEST"])] if "recommendation" in df.columns else pd.DataFrame()
+    if not conditional.empty:
+        a(_df_to_md(conditional[[
+            c for c in ["engine", "engine_component", "strategy_name", "market_group", "pair_group",
+                        "timeframe_zone", "structure_context", "recommendation", "profit_factor",
+                        "oos_return", "baseline_delta_oos"] if c in conditional.columns
+        ]].head(15)))
+    else:
+        a("No structure-only candidates found.")
+    a("")
+
+    a("## Automated Alternative Tests")
+    next_tests = _automated_next_tests(df)
+    a(_df_to_md(next_tests.head(20)) if not next_tests.empty else "No automated follow-up tests required from this run.")
+    a("")
+
+    a("## Add / Keep / Remove / Retest")
+    a(_df_to_md(recs.head(25)) if not recs.empty else "No recommendations available.")
     a("")
 
     # ── Q4: Best direction ───────────────────────────────────────────────────

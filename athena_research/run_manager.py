@@ -24,6 +24,7 @@ from athena_research.data_loader import (
 )
 from athena_research.metrics import StrategyMetrics, evaluate_strategy
 from athena_research.reporting import generate_all_reports
+from athena_research.research_context import annotate_research_results
 from athena_research.strategies import StrategySpec, iter_strategy_specs, run_strategy
 
 log = logging.getLogger(__name__)
@@ -333,6 +334,9 @@ def run_research(
             tf_to_zone.setdefault(ztf, zname)
     for m in all_results:
         m.zone = tf_to_zone.get(m.timeframe, "")
+
+    # Research-only Engine A/B attribution and group-aware recommendations.
+    all_results = annotate_research_results(all_results, cfg)
 
     # Generate reports
     run_meta = {

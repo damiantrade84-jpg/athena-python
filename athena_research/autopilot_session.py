@@ -602,6 +602,10 @@ class AutopilotSession:
                         "best_strategy": best_row["strategy_name"] if best_row is not None and "strategy_name" in best_row else None,
                         "best_symbol": best_row["symbol"] if best_row is not None and "symbol" in best_row else None,
                         "best_timeframe": best_row["timeframe"] if best_row is not None and "timeframe" in best_row else None,
+                        "best_engine": best_row.get("engine") if best_row is not None and "engine" in best_row else None,
+                        "best_component": best_row.get("engine_component") if best_row is not None and "engine_component" in best_row else None,
+                        "best_context": best_row.get("structure_context") if best_row is not None and "structure_context" in best_row else None,
+                        "best_recommendation": best_row.get("recommendation") if best_row is not None and "recommendation" in best_row else None,
                         "best_return": round(best_row["net_return"] * 100, 1) if best_row is not None and "net_return" in best_row and pd.notna(best_row["net_return"]) else None,
                     }
                 self.zone_summary = zone_summary
@@ -642,6 +646,12 @@ class AutopilotSession:
                         "symbol": best.get("symbol"),
                         "zone": best.get("zone"),
                         "strategy_name": best.get("strategy_name"),
+                        "engine": best.get("engine"),
+                        "engine_component": best.get("engine_component"),
+                        "market_group": best.get("market_group"),
+                        "pair_group": best.get("pair_group"),
+                        "structure_context": best.get("structure_context"),
+                        "recommendation": best.get("recommendation"),
                         "timeframe": best.get("timeframe"),
                         "direction": best.get("direction"),
                         "status": best.get("status"),

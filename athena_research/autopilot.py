@@ -24,37 +24,48 @@ RESEARCH_STYLE_PROFILES = {
     "timeframes": ["M15", "H1"],
     "zone_set": "scalp_zones",
     "strategy_families": [
-      "engine_d_proxy", "breakout", "mean_reversion"
+      "engine_d_proxy", "engine_b_proxy", "trend_momentum", "breakout",
+      "mean_reversion", "volatility", "stochastic", "divergence"
     ],
-    "validation_focus": ["fast reaction", "tight stop feasibility", "TP1 hit rate", "fee/slippage sensitivity", "session quality"]
+    "validation_focus": ["Engine A/B component audit", "fast reaction", "tight stop feasibility", "TP1 hit rate", "fee/slippage sensitivity", "session quality"]
   },
   "intra": {
     "timeframes": ["M15", "H1", "H4"],
     "zone_set": "intra_zones",
     "strategy_families": [
-      "trend_momentum", "pullback", "breakout", "mean_reversion", "engine_b_proxy"
+      "trend_momentum", "pullback", "breakout", "mean_reversion", "engine_b_proxy",
+      "volatility", "stochastic", "fibonacci", "aroon_family", "divergence",
+      "trend_follow", "vol_regime", "engine_d_proxy"
     ],
-    "validation_focus": ["same-day continuation", "intraday reversal", "liquidity sweep into zone", "session continuation", "target room"]
+    "validation_focus": ["Engine A/B component audit", "same-day continuation", "intraday reversal", "liquidity sweep into zone", "session continuation", "target room"]
   },
   "swing": {
     "timeframes": ["H4", "D1"],
     "zone_set": "swing_zones",
     "strategy_families": [
-      "trend_momentum", "pullback", "breakout", "mean_reversion", "engine_b_proxy"
+      "trend_momentum", "pullback", "breakout", "mean_reversion", "engine_b_proxy",
+      "volatility", "stochastic", "fibonacci", "aroon_family", "divergence",
+      "trend_follow", "vol_regime"
     ],
-    "validation_focus": ["higher timeframe trend", "value area reaction", "support/resistance reaction", "structural continuation", "wider target room"]
+    "validation_focus": ["Engine A/B component audit", "higher timeframe trend", "value area reaction", "support/resistance reaction", "structural continuation", "wider target room"]
   }
 }
 
 # Alternative families to try when a family produces all-reject results
 _FAMILY_ALTERNATIVES: dict[str, list[str]] = {
-    "trend_momentum":  ["pullback", "mean_reversion"],
-    "pullback":        ["trend_momentum", "breakout"],
-    "breakout":        ["mean_reversion", "volatility"],
-    "mean_reversion":  ["volatility", "pullback"],
-    "volatility":      ["engine_b_proxy", "mean_reversion"],
-    "engine_b_proxy":  ["engine_d_proxy", "breakout"],
-    "engine_d_proxy":  ["mean_reversion", "breakout"],
+    "trend_momentum":  ["pullback", "stochastic", "aroon_family", "trend_follow"],
+    "pullback":        ["fibonacci", "trend_momentum", "engine_b_proxy"],
+    "breakout":        ["volatility", "vol_regime", "engine_b_proxy"],
+    "mean_reversion":  ["divergence", "stochastic", "volatility"],
+    "volatility":      ["engine_b_proxy", "vol_regime", "mean_reversion"],
+    "engine_b_proxy":  ["engine_d_proxy", "breakout", "volatility"],
+    "engine_d_proxy":  ["engine_b_proxy", "mean_reversion", "breakout"],
+    "stochastic":      ["trend_momentum", "divergence"],
+    "fibonacci":       ["pullback", "engine_b_proxy"],
+    "aroon_family":    ["trend_momentum", "trend_follow"],
+    "divergence":      ["mean_reversion", "stochastic"],
+    "trend_follow":    ["trend_momentum", "vol_regime"],
+    "vol_regime":      ["volatility", "breakout"],
 }
 
 

@@ -54,6 +54,20 @@ class StrategyMetrics:
     skip_reason: str = ""
     data_source: str = ""   # "binance_rest"|"mt5"|"eodhd"|"yfinance_fallback"|"synthetic_test"|"DATA_UNAVAILABLE"
     zone: str = ""          # "scalp"|"intra"|"swing" — tagged post-run by run_manager
+    # Research audit context (report-only; never drives live gates)
+    engine: str = ""
+    engine_component: str = ""
+    candidate_action: str = ""
+    source_indicator: str = ""
+    market_group: str = ""
+    pair_group: str = ""
+    timeframe_zone: str = ""
+    session_bucket: str = ""
+    structure_context: str = ""
+    baseline_delta_pf: float = float("nan")
+    baseline_delta_oos: float = float("nan")
+    sample_ok: bool = False
+    recommendation: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)

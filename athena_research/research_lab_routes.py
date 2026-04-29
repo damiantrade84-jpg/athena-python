@@ -574,6 +574,10 @@ def register_research_lab_routes(app) -> None:
             "by_symbol.csv", "by_timeframe.csv", "by_session.csv", "by_direction.csv",
             "by_zone.csv", "per_pair_recommendation.csv",
             "indicator_attribution.csv", "rejected_or_failed_configs.csv",
+            "engine_a_component_audit.csv", "engine_b_component_audit.csv",
+            "candidate_indicator_attribution.csv", "group_breakdown.csv",
+            "zone_breakdown_scalp_intra_swing.csv", "structure_context_breakdown.csv",
+            "automated_next_tests.csv", "add_remove_retest_recommendations.csv",
             "research_report.md", "ai_research_review.md", "ai_action_plan.json",
             "ai_engine_recommendations.json", "run_meta.json", "error_traceback.txt",
         }
@@ -603,9 +607,24 @@ def register_research_lab_routes(app) -> None:
 
         try:
             df = pd.read_csv(ranked_path).head(50)
+            rec_path = run_dir / "add_remove_retest_recommendations.csv"
+            next_path = run_dir / "automated_next_tests.csv"
             # Use pandas JSON serialiser which handles numpy types correctly
             records = json.loads(df.fillna("").to_json(orient="records"))
-            return jsonify({"run_id": run_id, "ranked": records})
+            recommendations = []
+            next_tests = []
+            if rec_path.exists():
+                rec_df = pd.read_csv(rec_path).head(50)
+                recommendations = json.loads(rec_df.fillna("").to_json(orient="records"))
+            if next_path.exists():
+                next_df = pd.read_csv(next_path).head(50)
+                next_tests = json.loads(next_df.fillna("").to_json(orient="records"))
+            return jsonify({
+                "run_id": run_id,
+                "ranked": records,
+                "recommendations": recommendations,
+                "automated_next_tests": next_tests,
+            })
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
