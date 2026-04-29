@@ -51,6 +51,8 @@ _MOMENTUM_WEIGHT_DEFAULT = 0.50
 _ADDON_WEIGHT_DEFAULT = 0.30
 _BASE_WEIGHT_DEFAULT = 0.20
 _CONVICTION_FLOOR_DEFAULT = 0.60
+_RESEARCH_BONUS_DEFAULT = 0.15
+_RESEARCH_PENALTY_DEFAULT = -0.10
 
 
 # ── Regime smoothing (kept for scan-level stability) ──────────────────────────
@@ -297,6 +299,197 @@ def _momentum_quality(
 
     raw = (rsi_score * rsi_w + macd_score * macd_w) / total_w
     return max(0.0, min(1.0, raw + 0.0))  # floor at 0
+
+
+def _research_lab_candidate_addon(
+    pair: dict,
+    direction: str,
+    h4_candles: list,
+    d1_candles: list,
+    asset_type: str,
+) -> tuple[float, dict]:
+    """Research Lab candidate factor, config-gated and bounded.
+
+    This is intentionally small and diagnostic-rich so it can be reverted by one
+    config switch if paper validation does not improve Engine A.
+    """
+    cfg = CONFIG.get("ENGINE_A_RESEARCH_LAB_FACTORS", {}) or {}
+    if not cfg.get("ENABLED", False):
+        return 0.0, {"enabled": False}
+
+    display = pair.get("display", pair.get("symbol", ""))
+    score_group = pair.get("score_group") or _infer_research_score_group(display, asset_type)
+    group_cfg = cfg.get("GROUPS", {}) or {}
+    allowed = group_cfg.get(score_group, group_cfg.get(asset_type, []))
+    if not allowed:
+        return 0.0, {
+            "enabled": True,
+            "score_group": score_group,
+            "applied": False,
+            "reason": "no_group_factors",
+        }
+
+    candles = d1_candles if len(d1_candles or []) >= 60 else h4_candles
+    if not candles or len(candles) < 60:
+        return 0.0, {
+            "enabled": True,
+            "score_group": score_group,
+            "applied": False,
+            "reason": "insufficient_candles",
+        }
+
+    bonus = float(cfg.get("BONUS", _RESEARCH_BONUS_DEFAULT))
+    penalty = float(cfg.get("PENALTY", _RESEARCH_PENALTY_DEFAULT))
+    max_abs = abs(float(cfg.get("MAX_ABS", 0.20)))
+    components: dict[str, dict] = {}
+    total = 0.0
+
+    for name in allowed:
+        val, detail = _research_factor_value(str(name), direction, candles, bonus, penalty)
+        components[str(name)] = detail
+        total += val
+
+    total = max(-max_abs, min(max_abs, total))
+    return total, {
+        "enabled": True,
+        "score_group": score_group,
+        "allowed": list(allowed),
+        "components": components,
+        "raw_total": round(sum(d.get("value", 0.0) for d in components.values()), 4),
+        "value": round(total, 4),
+    }
+
+
+def _infer_research_score_group(display: str, asset_type: str) -> str:
+    if asset_type == "forex":
+        majors = {"EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"}
+        exotics = {"USD/ZAR", "USD/MXN", "USD/SGD", "USD/BRL", "USD/INR", "USD/TRY"}
+        if display in majors:
+            return "forex_majors"
+        if display in exotics:
+            return "forex_exotics"
+        return "forex_crosses"
+    if asset_type == "crypto":
+        if display in {"BTC/USDT", "ETH/USDT"}:
+            return "crypto_majors"
+        if display in {"DOGE/USDT", "PEPE/USDT", "WIF/USDT"}:
+            return "crypto_meme"
+        return "crypto_alts"
+    if asset_type == "commodity":
+        if any(token in display for token in ("XAU", "XAG", "XPT", "XPD")):
+            return "metals"
+        return "commodity_other"
+    return asset_type
+
+
+def _research_factor_value(name: str, direction: str, candles: list, bonus: float, penalty: float) -> tuple[float, dict]:
+    try:
+        if name == "obv_divergence":
+            return _research_obv_value(direction, candles, bonus, penalty)
+        if name == "stochastic_cross":
+            return _research_stochastic_value(direction, candles, bonus, penalty)
+        if name == "chandelier_trend":
+            return _research_chandelier_value(direction, candles, bonus, penalty)
+        if name == "bollinger_touch":
+            return _research_bollinger_value(direction, candles, bonus, penalty)
+        if name == "aroon_trend":
+            return _research_aroon_value(direction, candles, bonus, penalty)
+    except Exception as e:
+        return 0.0, {"signal": "error", "value": 0.0, "error": str(e)}
+    return 0.0, {"signal": "unsupported", "value": 0.0}
+
+
+def _research_obv_value(direction: str, candles: list, bonus: float, penalty: float) -> tuple[float, dict]:
+    from indicators import calc_obv_trend
+
+    signal = calc_obv_trend(candles, lookback=20)
+    if signal == "confirming":
+        return bonus, {"signal": signal, "value": bonus}
+    if direction == "LONG" and signal == "diverging_bullish":
+        return bonus, {"signal": signal, "value": bonus}
+    if direction == "SHORT" and signal == "diverging_bearish":
+        return bonus, {"signal": signal, "value": bonus}
+    if signal in {"diverging_bullish", "diverging_bearish"}:
+        return penalty, {"signal": signal, "value": penalty}
+    return 0.0, {"signal": signal, "value": 0.0}
+
+
+def _research_stochastic_value(direction: str, candles: list, bonus: float, penalty: float) -> tuple[float, dict]:
+    from indicators import calc_stochastic
+
+    stoch = calc_stochastic(candles, 14, 3, 3)
+    k = stoch.get("k", [])
+    d = stoch.get("d", [])
+    if len(k) < 2 or len(d) < 2 or k[-1] is None or d[-1] is None or k[-2] is None or d[-2] is None:
+        return 0.0, {"signal": "missing", "value": 0.0}
+    crossed_up = k[-1] > d[-1] and k[-2] <= d[-2]
+    crossed_down = k[-1] < d[-1] and k[-2] >= d[-2]
+    if direction == "LONG" and crossed_up:
+        return bonus, {"signal": "bull_cross", "k": round(k[-1], 2), "d": round(d[-1], 2), "value": bonus}
+    if direction == "SHORT" and crossed_down:
+        return bonus, {"signal": "bear_cross", "k": round(k[-1], 2), "d": round(d[-1], 2), "value": bonus}
+    if (direction == "LONG" and crossed_down) or (direction == "SHORT" and crossed_up):
+        return penalty, {"signal": "opposing_cross", "k": round(k[-1], 2), "d": round(d[-1], 2), "value": penalty}
+    return 0.0, {"signal": "no_cross", "k": round(k[-1], 2), "d": round(d[-1], 2), "value": 0.0}
+
+
+def _research_chandelier_value(direction: str, candles: list, bonus: float, penalty: float) -> tuple[float, dict]:
+    from indicators import chandelier_exit
+
+    highs = [float(c["high"]) for c in candles if c.get("high") is not None]
+    lows = [float(c["low"]) for c in candles if c.get("low") is not None]
+    closes = [float(c["close"]) for c in candles if c.get("close") is not None]
+    if len(closes) < 30 or not (len(highs) == len(lows) == len(closes)):
+        return 0.0, {"signal": "missing", "value": 0.0}
+    ce = chandelier_exit(highs, lows, closes, atr_period=14, lookback=22, mult=3.0)
+    ce_dir = (ce.get("direction") or [None])[-1]
+    if ce_dir == 1 and direction == "LONG":
+        return bonus, {"signal": "bull_trail", "value": bonus}
+    if ce_dir == -1 and direction == "SHORT":
+        return bonus, {"signal": "bear_trail", "value": bonus}
+    if ce_dir in (1, -1):
+        return penalty, {"signal": "opposing_trail", "value": penalty}
+    return 0.0, {"signal": "missing", "value": 0.0}
+
+
+def _research_bollinger_value(direction: str, candles: list, bonus: float, penalty: float) -> tuple[float, dict]:
+    closes = [float(c["close"]) for c in candles if c.get("close") is not None]
+    if len(closes) < 25:
+        return 0.0, {"signal": "missing", "value": 0.0}
+    window = closes[-20:]
+    mean = sum(window) / len(window)
+    variance = sum((x - mean) ** 2 for x in window) / len(window)
+    std = math.sqrt(max(0.0, variance))
+    upper = mean + 2.0 * std
+    lower = mean - 2.0 * std
+    close = closes[-1]
+    if direction == "LONG" and close <= lower:
+        return bonus, {"signal": "lower_band_touch", "value": bonus}
+    if direction == "SHORT" and close >= upper:
+        return bonus, {"signal": "upper_band_touch", "value": bonus}
+    if direction == "LONG" and close >= upper:
+        return penalty, {"signal": "long_chasing_upper_band", "value": penalty}
+    if direction == "SHORT" and close <= lower:
+        return penalty, {"signal": "short_chasing_lower_band", "value": penalty}
+    return 0.0, {"signal": "inside_bands", "value": 0.0}
+
+
+def _research_aroon_value(direction: str, candles: list, bonus: float, penalty: float) -> tuple[float, dict]:
+    from indicators import calc_aroon
+
+    aroon = calc_aroon(candles, period=14)
+    up = aroon.get("aroonUp")
+    down = aroon.get("aroonDown")
+    osc = aroon.get("aroonOsc")
+    if up is None or down is None or osc is None:
+        return 0.0, {"signal": "missing", "value": 0.0}
+    if direction == "LONG" and up > down and osc > 0:
+        return bonus, {"signal": "bull_trend", "aroonUp": round(up, 2), "aroonDown": round(down, 2), "value": bonus}
+    if direction == "SHORT" and down > up and osc < 0:
+        return bonus, {"signal": "bear_trend", "aroonUp": round(up, 2), "aroonDown": round(down, 2), "value": bonus}
+    if (direction == "LONG" and osc < 0) or (direction == "SHORT" and osc > 0):
+        return penalty, {"signal": "opposing_trend", "aroonUp": round(up, 2), "aroonDown": round(down, 2), "value": penalty}
+    return 0.0, {"signal": "neutral", "aroonUp": round(up, 2), "aroonDown": round(down, 2), "value": 0.0}
 
 
 # ── Factor 3: ADX gate ────────────────────────────────────────────────────────
@@ -642,6 +835,13 @@ def compute_factor_scores(
     )
     feed_status["addon"] = f"{addon_type}:{addon_status}"
 
+    research_val, research_detail = _research_lab_candidate_addon(
+        pair, direction, h4_candles, d1_candles, asset_type
+    )
+    if research_detail.get("enabled"):
+        addon_val += research_val
+        feed_status["research_lab"] = f"{research_val:.2f}"
+
     # ── Session multiplier (forex only) ───────────────────────────────────────
     session_mult = _session_multiplier(bar_time, asset_type)
     feed_status["session"] = f"{session_mult:.2f}"
@@ -707,6 +907,7 @@ def compute_factor_scores(
         "trend": round(trend_score, 4),
         "momentum": round(mom_quality, 4),
         "addon": round(addon_val, 4),
+        "research_lab": round(research_val, 4),
     }
 
     log.debug(
@@ -734,6 +935,8 @@ def compute_factor_scores(
         "momentum_quality": round(mom_quality, 4),
         "addon_type": addon_type,
         "addon_value": round(addon_val, 4),
+        "research_lab_value": round(research_val, 4),
+        "research_lab_detail": research_detail,
         "addon_unsupported": addon_status == "unsupported",
         "session_multiplier": round(session_mult, 4),
         "conviction": round(conviction, 4),
@@ -742,7 +945,7 @@ def compute_factor_scores(
         "indeterminate_direction": False,
         "min_directional_failed": False,
         "active_directional_factors": ["trend"],
-        "active_nondirectional_factors": ["momentum", "addon"],
+        "active_nondirectional_factors": ["momentum", "addon"] + (["research_lab"] if research_detail.get("enabled") else []),
         "disabled_factors": [],
         "directional_confidence_multiplier": round(conviction, 4),
         "effective_min_directional": 0.0,
@@ -772,7 +975,7 @@ def _zero_result(
         "final_score": 0.0,
         "direction": direction,
         "regime": regime,
-        "factor_scores": {"trend": 0.0, "momentum": 0.0, "addon": 0.0},
+        "factor_scores": {"trend": 0.0, "momentum": 0.0, "addon": 0.0, "research_lab": 0.0},
         "weights": {
             "trend": 1.0,
             "momentum": float(CONFIG.get("FACTOR_MOMENTUM_WEIGHT", _MOMENTUM_WEIGHT_DEFAULT)),
@@ -788,6 +991,8 @@ def _zero_result(
         "momentum_quality": 0.0,
         "addon_type": "none",
         "addon_value": 0.0,
+        "research_lab_value": 0.0,
+        "research_lab_detail": {"enabled": bool(CONFIG.get("ENGINE_A_RESEARCH_LAB_FACTORS", {}).get("ENABLED", False))},
         "session_multiplier": 1.0,
         "conviction": 0.0,
         "insufficient_factors": True,

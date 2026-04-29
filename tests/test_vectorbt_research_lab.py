@@ -117,6 +117,39 @@ class TestDataLoader:
         assert prov.symbol == "SYNTH"
         assert prov.candle_count == 200
 
+    def test_binance_rest_uses_failover_endpoint(self, monkeypatch):
+        from athena_research.data_loader import _fetch_binance_rest
+
+        calls = []
+
+        class Resp:
+            def __init__(self, status_code, payload=None, text=""):
+                self.status_code = status_code
+                self._payload = payload or []
+                self.text = text
+
+            def json(self):
+                return self._payload
+
+        def fake_get(url, params=None, timeout=15):
+            calls.append(url)
+            if "fapi.binance.com" in url and "fapi1" not in url:
+                return Resp(451, text="restricted")
+            row = [
+                1700000000000, "100", "101", "99", "100.5", "123",
+                1700000299999, "0", 10, "60", "0", "0",
+            ]
+            return Resp(200, payload=[row] * 20)
+
+        import requests
+        monkeypatch.setattr(requests, "get", fake_get)
+
+        df = _fetch_binance_rest("BTC/USDT", "M5", limit=20)
+
+        assert df is not None
+        assert len(df) == 20
+        assert any("fapi1.binance.com" in url for url in calls)
+
     def test_no_live_imports_after_data_loader(self):
         import athena_research.data_loader
         _check_no_live_imports()
@@ -256,6 +289,89 @@ class TestStrategies:
         assert tagged[1].engine_component == "entry_trigger"
         assert tagged[1].structure_context == "strong_close_fvg_proxy"
         assert tagged[1].recommendation in {"RETEST", "WATCHLIST_ONLY"}
+
+        _check_no_live_imports()
+
+    def test_retest_plan_can_target_retest_recommendations(self, tmp_path, monkeypatch):
+        from flask import Flask
+        from athena_research import research_lab_routes
+        from athena_research.research_lab_routes import register_research_lab_routes
+
+        run_id = "run_retest_route"
+        run_dir = tmp_path / run_id
+        run_dir.mkdir(parents=True)
+        pd.DataFrame([
+            {
+                "recommendation": "RETEST",
+                "engine": "ENGINE_A",
+                "engine_component": "pullback",
+                "market_group": "commodity",
+                "pair_group": "metals",
+                "timeframe_zone": "intra",
+                "strategy_name": "fib_retracement",
+                "family": "pullback",
+                "symbol": "XPT/USD",
+                "timeframe": "H4",
+                "direction": "both",
+                "baseline_delta_oos": 0.55,
+                "robustness_score": 0.6,
+                "oos_return": 0.03,
+            },
+            {
+                "recommendation": "ADD",
+                "engine": "ENGINE_A",
+                "engine_component": "range_extreme",
+                "market_group": "commodity",
+                "pair_group": "commodity_other",
+                "timeframe_zone": "intra",
+                "strategy_name": "bollinger_touch",
+                "family": "mean_reversion",
+                "symbol": "Lead",
+                "timeframe": "H4",
+                "direction": "both",
+                "baseline_delta_oos": 0.71,
+                "robustness_score": 0.8,
+                "oos_return": 0.04,
+            },
+            {
+                "recommendation": "RETEST",
+                "engine": "ENGINE_B",
+                "engine_component": "entry_trigger",
+                "market_group": "commodity",
+                "pair_group": "commodity_other",
+                "timeframe_zone": "intra",
+                "strategy_name": "micro_breakout",
+                "family": "engine_b_proxy",
+                "symbol": "Gasoline",
+                "timeframe": "H4",
+                "direction": "long",
+                "baseline_delta_oos": 0.53,
+                "robustness_score": 0.5,
+                "oos_return": 0.02,
+            },
+        ]).to_csv(run_dir / "add_remove_retest_recommendations.csv", index=False)
+
+        monkeypatch.setattr(research_lab_routes, "_DEFAULT_OUTPUT", tmp_path)
+        app = Flask(__name__)
+        register_research_lab_routes(app)
+
+        resp = app.test_client().post(
+            "/api/research-lab/retest-plan",
+            json={
+                "run_id": run_id,
+                "recommendations": ["RETEST"],
+                "max_tests": 5,
+                "candidates": [{"recommendation": "RETEST", "strategy_name": "fib_retracement", "symbol": "XPT/USD"}],
+            },
+        )
+        payload = resp.get_json()
+
+        assert resp.status_code == 200
+        assert payload["recommendations"] == ["RETEST"]
+        assert len(payload["tests"]) == 1
+        assert payload["tests"][0]["recommendation"] == "RETEST"
+        assert payload["tests"][0]["strategies"] == ["fib_retracement"]
+        assert payload["tests"][0]["symbols"] == ["XPT/USD"]
 
         _check_no_live_imports()
 

@@ -99,6 +99,213 @@ def engine_b_confidence_passes(
     return passed and score >= min_score_scaled, min_score_scaled
 
 
+def _normalise_research_candles(candles: list | None) -> list:
+    rows = []
+    for c in candles or []:
+        if not isinstance(c, dict):
+            continue
+        row = dict(c)
+        if row.get("vol") is None and row.get("volume") is not None:
+            row["vol"] = row.get("volume")
+        rows.append(row)
+    return rows
+
+
+def _infer_engine_b_research_group(res: dict, profile: dict) -> str:
+    score_group = str(profile.get("score_group") or "").strip()
+    if score_group:
+        return score_group
+    asset_type = str(res.get("asset_type") or "").lower()
+    return asset_type or "unknown"
+
+
+def _engine_b_micro_breakout_value(direction: str, candles: list, range_bars: int) -> dict:
+    if len(candles) < range_bars + 2:
+        return {"passed": False, "signal": "insufficient_candles"}
+    window = candles[-(range_bars + 1):-1]
+    prior_high = max(float(c.get("high", 0.0)) for c in window)
+    prior_low = min(float(c.get("low", 0.0)) for c in window)
+    prev_close = float(candles[-2].get("close", 0.0))
+    close = float(candles[-1].get("close", 0.0))
+    if direction == "LONG":
+        passed = prev_close <= prior_high and close > prior_high
+        level = prior_high
+    else:
+        passed = prev_close >= prior_low and close < prior_low
+        level = prior_low
+    return {
+        "passed": bool(passed),
+        "signal": "micro_breakout" if passed else "no_break",
+        "level": round(level, 8),
+        "close": round(close, 8),
+    }
+
+
+def _engine_b_vwap_reclaim_value(direction: str, candles: list, atr_val: float, band_std: float) -> dict:
+    if len(candles) < 20:
+        return {"passed": False, "signal": "insufficient_candles"}
+    try:
+        from indicators import calc_vwap
+
+        vwap = calc_vwap(candles, band_mult=band_std)
+        values = vwap.get("vwap") or []
+        if len(values) < 2 or values[-1] is None or values[-2] is None:
+            return {"passed": False, "signal": "missing_vwap"}
+        band = max(float(atr_val), 1e-10) * band_std
+        prev_close = float(candles[-2].get("close", 0.0))
+        close = float(candles[-1].get("close", 0.0))
+        prev_vwap = float(values[-2])
+        last_vwap = float(values[-1])
+        if direction == "LONG":
+            trigger = prev_close <= prev_vwap + band and close > last_vwap + band
+        else:
+            trigger = prev_close >= prev_vwap - band and close < last_vwap - band
+        return {
+            "passed": bool(trigger),
+            "signal": "vwap_reclaim" if trigger else "no_reclaim",
+            "vwap": round(last_vwap, 8),
+            "close": round(close, 8),
+        }
+    except Exception as exc:
+        return {"passed": False, "signal": "error", "error": str(exc)}
+
+
+def _engine_b_cvd_momentum_value(direction: str, candles: list) -> dict:
+    if len(candles) < 20:
+        return {"passed": False, "signal": "insufficient_candles"}
+    try:
+        from indicators import calc_cvd, calc_vwap
+
+        cvd = calc_cvd(candles, smooth_period=5)
+        smoothed = cvd.get("smoothed_delta") or []
+        vwap_values = (calc_vwap(candles).get("vwap") or [])
+        if len(smoothed) < 2 or not vwap_values or vwap_values[-1] is None:
+            return {"passed": False, "signal": "missing_cvd_or_vwap"}
+        prev_delta = float(smoothed[-2] or 0.0)
+        last_delta = float(smoothed[-1] or 0.0)
+        close = float(candles[-1].get("close", 0.0))
+        last_vwap = float(vwap_values[-1])
+        if direction == "LONG":
+            passed = last_delta > prev_delta and close > last_vwap
+        else:
+            passed = last_delta < prev_delta and close < last_vwap
+        return {
+            "passed": bool(passed),
+            "signal": "cvd_momentum" if passed else "no_momentum",
+            "delta": round(last_delta, 4),
+            "prev_delta": round(prev_delta, 4),
+            "vwap": round(last_vwap, 8),
+        }
+    except Exception as exc:
+        return {"passed": False, "signal": "error", "error": str(exc)}
+
+
+def _engine_b_vwap_deviation_value(direction: str, candles: list, std_threshold: float) -> dict:
+    if len(candles) < 25:
+        return {"passed": False, "signal": "insufficient_candles"}
+    try:
+        from indicators import calc_vwap
+
+        closes = pd.Series([float(c.get("close", 0.0)) for c in candles])
+        std = float(closes.rolling(20).std().iloc[-1] or 0.0)
+        vwap_values = calc_vwap(candles).get("vwap") or []
+        if not vwap_values or vwap_values[-1] is None or std <= 0:
+            return {"passed": False, "signal": "missing_vwap_or_std"}
+        close = float(closes.iloc[-1])
+        last_vwap = float(vwap_values[-1])
+        upper = last_vwap + std_threshold * std
+        lower = last_vwap - std_threshold * std
+        if direction == "LONG":
+            passed = close <= lower
+        else:
+            passed = close >= upper
+        return {
+            "passed": bool(passed),
+            "signal": "value_deviation" if passed else "inside_vwap_band",
+            "vwap": round(last_vwap, 8),
+            "close": round(close, 8),
+            "upper": round(upper, 8),
+            "lower": round(lower, 8),
+        }
+    except Exception as exc:
+        return {"passed": False, "signal": "error", "error": str(exc)}
+
+
+def _engine_b_research_lab_candidate_gates(
+    res: dict,
+    direction: str,
+    entry_candles: list | None,
+    current_price: float,
+    atr_val: float,
+    profile: dict,
+) -> dict:
+    cfg = config.CONFIG.get("ENGINE_B_RESEARCH_LAB_FACTORS", {}) or {}
+    if not cfg.get("ENABLED", False):
+        return {"enabled": False, "entry_ok": False, "location_ok": False}
+    score_group = _infer_engine_b_research_group(res, profile)
+    group_cfg = cfg.get("GROUPS", {}) or {}
+    allowed = group_cfg.get(score_group, group_cfg.get(str(res.get("asset_type") or "").lower(), []))
+    if not allowed:
+        return {
+            "enabled": True,
+            "score_group": score_group,
+            "allowed": [],
+            "entry_ok": False,
+            "location_ok": False,
+            "reason": "no_group_factors",
+        }
+    candles = _normalise_research_candles(entry_candles)
+    if not candles:
+        candles = _normalise_research_candles(res.get("entry_candles"))
+    if not candles or len(candles) < 10:
+        return {
+            "enabled": True,
+            "score_group": score_group,
+            "allowed": list(allowed),
+            "entry_ok": False,
+            "location_ok": False,
+            "reason": "insufficient_candles",
+        }
+
+    range_bars = int(cfg.get("MICRO_BREAKOUT_RANGE_BARS", 6) or 6)
+    band_std = float(cfg.get("VWAP_RECLAIM_BAND_ATR", 1.0) or 1.0)
+    deviation_std = float(cfg.get("VWAP_DEVIATION_STD", 2.0) or 2.0)
+    components: dict[str, dict] = {}
+    entry_ok = False
+    location_ok = False
+    for name in allowed:
+        name = str(name)
+        if name == "micro_breakout":
+            detail = _engine_b_micro_breakout_value(direction, candles, range_bars)
+            entry_ok = entry_ok or bool(detail.get("passed"))
+        elif name == "vwap_reclaim":
+            detail = _engine_b_vwap_reclaim_value(direction, candles, atr_val, band_std)
+            entry_ok = entry_ok or bool(detail.get("passed"))
+        elif name == "cvd_momentum":
+            detail = _engine_b_cvd_momentum_value(direction, candles)
+            entry_ok = entry_ok or bool(detail.get("passed"))
+        elif name == "vwap_deviation":
+            detail = _engine_b_vwap_deviation_value(direction, candles, deviation_std)
+            location_ok = location_ok or bool(detail.get("passed"))
+        else:
+            detail = {"passed": False, "signal": "unknown_candidate"}
+        components[name] = detail
+
+    allow_gate_upgrade = bool(cfg.get("ALLOW_GATE_UPGRADE", False))
+    return {
+        "enabled": True,
+        "score_group": score_group,
+        "allowed": list(allowed),
+        "allow_gate_upgrade": allow_gate_upgrade,
+        "entry_ok": bool(entry_ok and allow_gate_upgrade),
+        "location_ok": bool(location_ok and allow_gate_upgrade),
+        "raw_entry_ok": bool(entry_ok),
+        "raw_location_ok": bool(location_ok),
+        "components": components,
+        "current_price": round(float(current_price), 8),
+    }
+
+
 def resolve_engine_b_execution_levels(
     *,
     direction: str,
@@ -2851,6 +3058,24 @@ class NakedEngine:
             else:
                 location_mode = "none"
 
+        original_trigger_ok = trigger_ok
+        original_location_ok = location_ok
+        research_lab_detail = _engine_b_research_lab_candidate_gates(
+            res=res,
+            direction=direction,
+            entry_candles=entry_candles,
+            current_price=current_price,
+            atr_val=atr_val,
+            profile=profile,
+        )
+        research_entry_ok = bool(research_lab_detail.get("entry_ok"))
+        research_location_ok = bool(research_lab_detail.get("location_ok"))
+        if research_location_ok and not location_ok:
+            location_ok = True
+            location_mode = "research_lab"
+        if research_entry_ok and not trigger_ok:
+            trigger_ok = True
+
         # Entry requires a candle pattern trigger OR a confirmed structural breakout
         # OR a professional technical catalyst (Sweep/CHoCH) at a key zone.
         entry_ok = (
@@ -3037,6 +3262,8 @@ class NakedEngine:
             "breakout_ok": breakout_ok,
             "location_ok": location_ok,
             "trigger_ok": trigger_ok,
+            "original_location_ok": original_location_ok,
+            "original_trigger_ok": original_trigger_ok,
             "entry_ok": entry_ok,
             "room_ok": room_ok,
             "rr_ok": rr_ok,
@@ -3088,6 +3315,9 @@ class NakedEngine:
             else None,
             "failed_gate_names": failed_gate_names,
             "final_engine_b_passed": passed,
+            "research_lab_entry_upgrade": research_entry_ok,
+            "research_lab_location_upgrade": research_location_ok,
+            "research_lab_detail": research_lab_detail,
             "crypto_profile_enabled": crypto_profile_enabled,
             "crypto_trigger_profile_enabled": crypto_trigger_profile_enabled,
             "crypto_target_v2_valid": target_v2_valid,

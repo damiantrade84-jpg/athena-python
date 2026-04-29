@@ -48,14 +48,16 @@ def _score(
     volume_ratio=1.0,
     macro_context=None,
     intermarket_context=None,
+    d1_candles=None,
+    h4_candles=None,
 ):
     return compute_factor_scores(
         d1_snap=d1 if d1 is not None else _snap("long"),
         h4_snap=h4 if h4 is not None else _snap("long"),
         h1_snap=h1 if h1 is not None else _snap("long"),
         pair=pair or {"type": "stock", "display": "TEST"},
-        d1_candles=[],
-        h4_candles=[],
+        d1_candles=d1_candles or [],
+        h4_candles=h4_candles or [],
         h1_candles=[],
         volume_ratio=volume_ratio,
         funding_rate=funding_rate,
@@ -63,6 +65,24 @@ def _score(
         macro_context=macro_context,
         intermarket_context=intermarket_context,
     )
+
+
+def _candles(n=80, *, trend=0.2, volume_trend=10.0):
+    rows = []
+    close = 100.0
+    volume = 1000.0
+    for i in range(n):
+        close += trend
+        volume += volume_trend
+        rows.append({
+            "open": close - 0.1,
+            "high": close + 0.5,
+            "low": close - 0.5,
+            "close": close,
+            "vol": max(1.0, volume),
+            "volume": max(1.0, volume),
+        })
+    return rows
 
 
 def test_public_helpers_match_current_contract():
@@ -170,6 +190,62 @@ def test_crypto_addon_conviction_positive_zero_negative_ordering():
     assert negative["addon_value"] == pytest.approx(-0.15)
     assert positive["conviction"] > zero["conviction"] > negative["conviction"]
     assert positive["final_score"] > zero["final_score"] > negative["final_score"]
+
+
+def test_research_lab_factor_config_gate_can_disable_scoring(monkeypatch):
+    cfg = dict(CONFIG.get("ENGINE_A_RESEARCH_LAB_FACTORS", {}))
+    cfg["ENABLED"] = False
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS", cfg)
+
+    result = _score(
+        pair={"type": "forex", "display": "EUR/AUD"},
+        d1_candles=_candles(),
+    )
+
+    assert result["factor_scores"]["research_lab"] == 0.0
+    assert result["research_lab_detail"]["enabled"] is False
+
+
+def test_research_lab_factor_adds_bounded_candidate_context(monkeypatch):
+    cfg = {
+        "ENABLED": True,
+        "BONUS": 0.15,
+        "PENALTY": -0.10,
+        "MAX_ABS": 0.20,
+        "GROUPS": {"forex_crosses": ["obv_divergence"]},
+    }
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS", cfg)
+
+    result = _score(
+        pair={"type": "forex", "display": "EUR/AUD"},
+        d1_candles=_candles(trend=0.2, volume_trend=10.0),
+    )
+
+    assert result["research_lab_value"] == pytest.approx(0.15)
+    assert result["factor_scores"]["research_lab"] == pytest.approx(0.15)
+    assert result["research_lab_detail"]["score_group"] == "forex_crosses"
+    assert result["research_lab_detail"]["components"]["obv_divergence"]["signal"] == "confirming"
+    assert "research_lab" in result["active_nondirectional_factors"]
+
+
+def test_research_lab_factor_supports_commodity_group_candidates(monkeypatch):
+    cfg = {
+        "ENABLED": True,
+        "BONUS": 0.15,
+        "PENALTY": -0.10,
+        "MAX_ABS": 0.20,
+        "GROUPS": {"metals": ["aroon_trend"]},
+    }
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS", cfg)
+
+    result = _score(
+        pair={"type": "commodity", "display": "XAG/USD"},
+        d1_candles=_candles(trend=0.2, volume_trend=0.0),
+    )
+
+    assert result["research_lab_value"] == pytest.approx(0.15)
+    assert result["research_lab_detail"]["score_group"] == "metals"
+    assert result["research_lab_detail"]["components"]["aroon_trend"]["signal"] == "bull_trend"
 
 
 def test_conviction_floor_default_is_explicit_and_no_momentum_uses_floor_blend():

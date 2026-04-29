@@ -13011,6 +13011,7 @@ function ldFmtPrice(p) {
 
   let _rlCurrentRunId = null;
   let _rlPollTimer = null;
+  let _rlCurrentRecommendations = [];
 
   // ── Panel lifecycle ────────────────────────────────────────────────────────
   window._onResearchPanelOpen = function() {
@@ -13738,16 +13739,17 @@ function ldFmtPrice(p) {
 
   function _rlRenderResearchAuditSections(recommendations, nextTests) {
     const recs = recommendations || [];
+    _rlCurrentRecommendations = recs;
     const tests = nextTests || [];
     if (!recs.length && !tests.length) return '';
 
     const zones = ['scalp', 'intra', 'swing'];
     const zoneCards = zones.map(z => {
       const zRows = recs.filter(r => (r.timeframe_zone || r.zone || '') === z);
-      const add = zRows.filter(r => r.recommendation === 'ADD').length;
-      const keep = zRows.filter(r => r.recommendation === 'KEEP').length;
-      const retest = zRows.filter(r => ['RETEST','WATCHLIST_ONLY'].includes(r.recommendation)).length;
-      const remove = zRows.filter(r => ['REMOVE_OR_DEMOTE','REJECT'].includes(r.recommendation)).length;
+      const add = zRows.filter(r => String(r.recommendation || '').trim().toUpperCase() === 'ADD').length;
+      const keep = zRows.filter(r => String(r.recommendation || '').trim().toUpperCase() === 'KEEP').length;
+      const retest = zRows.filter(r => ['RETEST', 'WATCHLIST_ONLY'].includes(String(r.recommendation || '').trim().toUpperCase())).length;
+      const remove = zRows.filter(r => ['REMOVE_OR_DEMOTE', 'REJECT'].includes(String(r.recommendation || '').trim().toUpperCase())).length;
       const best = zRows[0] || {};
       const zClr = z === 'scalp' ? '#f472b6' : z === 'intra' ? '#38bdf8' : '#a78bfa';
       return `<div style="background:#0f172a;border:1px solid ${zClr};border-radius:8px;padding:10px;">
@@ -13757,14 +13759,16 @@ function ldFmtPrice(p) {
       </div>`;
     }).join('');
 
-    const recTableRows = recs.slice(0, 12).map(r => {
-      const rec = r.recommendation || '—';
+    const recTableRows = recs.slice(0, 12).map((r, idx) => {
+      const rec = String(r.recommendation || '—').trim().toUpperCase();
+      const canRetest = ['ADD', 'RETEST', 'WATCHLIST_ONLY'].includes(rec);
       const recClr = rec === 'ADD' ? '#6ee7b7' : rec === 'KEEP' ? '#38bdf8' : rec === 'REMOVE_OR_DEMOTE' || rec === 'REJECT' ? '#f87171' : rec === 'WATCHLIST_ONLY' ? '#fbbf24' : '#c4b5fd';
       const zone = r.timeframe_zone || r.zone || '—';
       const zClr = zone === 'scalp' ? '#f472b6' : zone === 'intra' ? '#38bdf8' : zone === 'swing' ? '#a78bfa' : '#64748b';
       const delta = Number(r.baseline_delta_oos);
       const deltaTxt = Number.isFinite(delta) ? delta.toFixed(4) : '—';
       return `<tr style="border-top:1px solid #1e293b">
+        <td style="padding:6px 8px;text-align:center">${canRetest ? `<input type="checkbox" class="rl-retest-row" value="${idx}" style="accent-color:#8b5cf6">` : ''}</td>
         <td style="padding:6px 8px;color:${recClr};font-weight:700">${rec}</td>
         <td style="padding:6px 8px;color:#cdd6e0">${r.engine || '—'}</td>
         <td style="padding:6px 8px;color:#94a3b8">${r.engine_component || '—'}</td>
@@ -13789,12 +13793,138 @@ function ldFmtPrice(p) {
       <div style="font-size:.95rem;font-weight:700;color:#93c5fd;margin-bottom:8px">Engine A/B Research Audit</div>
       <div style="font-size:.75rem;color:#94a3b8;margin-bottom:12px">Automated audit split by scalp, intra, and swing. Recommendations compare candidates against the current engine baseline for the same group and zone.</div>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px">${zoneCards}</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+        <button onclick="rlRetestSelectedCandidates()" style="background:linear-gradient(135deg,#1d4ed8,#38bdf8);color:#fff;border:none;padding:7px 14px;border-radius:7px;cursor:pointer;font-size:.78rem;font-weight:700">Retest Selected</button>
+        <button onclick="rlRetestCandidates('ADD')" style="background:linear-gradient(135deg,#065f46,#059669);color:#fff;border:none;padding:7px 14px;border-radius:7px;cursor:pointer;font-size:.78rem;font-weight:700">Retest ADD Candidates</button>
+        <button onclick="rlRetestCandidates('RETEST')" style="background:linear-gradient(135deg,#6d28d9,#8b5cf6);color:#fff;border:none;padding:7px 14px;border-radius:7px;cursor:pointer;font-size:.78rem;font-weight:700">Retest RETEST Rows</button>
+        <span style="font-size:.72rem;color:#94a3b8">Queues focused validation runs for selected recommendation rows, split by engine, group, and zone.</span>
+      </div>
       <div style="font-size:.72rem;color:#64748b;font-weight:600;margin-bottom:6px;text-transform:uppercase">Add / Keep / Remove / Retest</div>
-      <div style="overflow-x:auto;margin-bottom:14px"><table style="width:100%;border-collapse:collapse;font-size:.74rem"><thead><tr style="color:#64748b;text-align:left"><th style="padding:4px 8px">Rec</th><th style="padding:4px 8px">Engine</th><th style="padding:4px 8px">Component</th><th style="padding:4px 8px">Strategy</th><th style="padding:4px 8px">Group</th><th style="padding:4px 8px">Zone</th><th style="padding:4px 8px">Structure</th><th style="padding:4px 8px">Delta OOS</th></tr></thead><tbody>${recTableRows || '<tr><td colspan="8" style="padding:8px;color:#64748b">No recommendations available.</td></tr>'}</tbody></table></div>
+      <div style="overflow-x:auto;margin-bottom:14px"><table style="width:100%;border-collapse:collapse;font-size:.74rem"><thead><tr style="color:#64748b;text-align:left"><th style="padding:4px 8px;text-align:center">Pick</th><th style="padding:4px 8px">Rec</th><th style="padding:4px 8px">Engine</th><th style="padding:4px 8px">Component</th><th style="padding:4px 8px">Strategy</th><th style="padding:4px 8px">Group</th><th style="padding:4px 8px">Zone</th><th style="padding:4px 8px">Structure</th><th style="padding:4px 8px">Delta OOS</th></tr></thead><tbody>${recTableRows || '<tr><td colspan="9" style="padding:8px;color:#64748b">No recommendations available.</td></tr>'}</tbody></table></div>
       <div style="font-size:.72rem;color:#64748b;font-weight:600;margin-bottom:6px;text-transform:uppercase">Automated Next Tests</div>
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.74rem"><thead><tr style="color:#64748b;text-align:left"><th style="padding:4px 8px">Engine</th><th style="padding:4px 8px">Failed Component</th><th style="padding:4px 8px">Group</th><th style="padding:4px 8px">Zone</th><th style="padding:4px 8px">Failed Strategies</th><th style="padding:4px 8px">Try Next</th></tr></thead><tbody>${nextRows || '<tr><td colspan="6" style="padding:8px;color:#64748b">No automated follow-up tests required.</td></tr>'}</tbody></table></div>
     </div>`;
   }
+
+  function _rlCandidatePayload(rows) {
+    return (rows || []).map(r => ({
+      recommendation: r.recommendation,
+      engine: r.engine,
+      engine_component: r.engine_component,
+      strategy_name: r.strategy_name,
+      symbol: r.symbol,
+      timeframe: r.timeframe,
+      direction: r.direction,
+      pair_group: r.pair_group,
+      timeframe_zone: r.timeframe_zone || r.zone,
+      structure_context: r.structure_context,
+    }));
+  }
+
+  async function _rlReadJsonResponse(res, label) {
+    const text = await res.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch (e) {
+      const preview = text ? text.slice(0, 80).replace(/\s+/g, ' ') : 'empty response';
+      throw new Error(`${label} returned non-JSON (${res.status}). Preview: ${preview}. Restart Flask and hard refresh if this route was just added.`);
+    }
+    if (!res.ok) {
+      throw new Error(data.error || data.message || `${label} failed with HTTP ${res.status}`);
+    }
+    return data;
+  }
+
+  async function _rlBuildRetestPlan(payload, rec, hasSelectedRows) {
+    const primary = await fetch('/api/research-lab/retest-plan', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    try {
+      return await _rlReadJsonResponse(primary, 'Retest plan');
+    } catch (e) {
+      const canFallback = rec === 'ADD' && !hasSelectedRows;
+      if (!canFallback) throw e;
+      const legacy = await fetch('/api/research-lab/retest-add-plan', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+      return await _rlReadJsonResponse(legacy, 'Legacy ADD retest plan');
+    }
+  }
+
+  function _rlRecoTypesFromRows(rows) {
+    const out = [];
+    for (const r of rows || []) {
+      const v = r && (r.recommendation != null ? r.recommendation : r.rec);
+      const t = String(v != null ? v : '').trim().toUpperCase();
+      if (t && t !== '—' && t !== '-') out.push(t);
+    }
+    return out;
+  }
+
+  window.rlRetestCandidates = async function(recommendation = 'ADD', selectedRows = null) {
+    if (!_rlCurrentRunId) { alert('No Research Lab run selected.'); return; }
+    const rec = String(recommendation || 'ADD').toUpperCase();
+    const selectedPayload = selectedRows ? _rlCandidatePayload(selectedRows) : null;
+    const fromPick = selectedRows ? [...new Set(_rlRecoTypesFromRows(selectedRows))] : [];
+    const recoFilter = selectedRows
+      ? (fromPick.length ? fromPick : ['ADD', 'RETEST', 'WATCHLIST_ONLY'])
+      : [rec];
+    const statusLabel = selectedRows ? 'selected' : rec;
+    _rlSetStatus(`Building ${statusLabel} candidate retest plan…`, _rlCurrentRunId);
+    try {
+      const planPayload = {
+        run_id: _rlCurrentRunId,
+        max_tests: 12,
+        recommendations: recoFilter,
+        candidates: selectedPayload || undefined,
+      };
+      const plan = await _rlBuildRetestPlan(planPayload, rec, Boolean(selectedRows));
+      if (plan.error) throw new Error(plan.error);
+      if (!plan.tests || !plan.tests.length) {
+        alert(plan.message || `No ${statusLabel} candidates found to retest.`);
+        _rlSetStatus(`No ${statusLabel} candidates found to retest.`, _rlCurrentRunId);
+        return;
+      }
+      const runRes = await fetch('/api/research-lab/run-auto-plan', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          plan_id: plan.plan_id,
+          source_run_id: _rlCurrentRunId,
+          tests: plan.tests,
+          idempotency_key: `${_rlCurrentRunId}_${plan.plan_id}`
+        })
+      });
+      const data = await _rlReadJsonResponse(runRes, 'Retest run launch');
+      if (data.error) throw new Error(data.error);
+      const childIds = data.child_run_ids || [];
+      _rlSetStatus(`Retest queued — launched ${childIds.length} focused ${statusLabel} validation runs.`, _rlCurrentRunId);
+      _rlPollChildRuns(childIds, _rlCurrentRunId);
+    } catch (e) {
+      alert(`Failed to retest ${statusLabel} candidates: ` + e.message);
+      _rlSetStatus('Retest error: ' + e.message, _rlCurrentRunId);
+    }
+  };
+
+  window.rlRetestAddCandidates = function() {
+    return window.rlRetestCandidates('ADD');
+  };
+
+  window.rlRetestSelectedCandidates = function() {
+    const selected = Array.from(document.querySelectorAll('.rl-retest-row:checked'))
+      .map(cb => _rlCurrentRecommendations[Number(cb.value)])
+      .filter(Boolean);
+    if (!selected.length) {
+      alert('Select one or more ADD/RETEST rows first.');
+      return;
+    }
+    return window.rlRetestCandidates('SELECTED', selected);
+  };
 
   // ── Show results for a run ─────────────────────────────────────────────────
   window.rlShowResults = async function(runId) {

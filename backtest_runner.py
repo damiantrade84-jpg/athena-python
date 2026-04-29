@@ -84,6 +84,30 @@ def _rt():
     return _art_rt()
 
 
+def _bt_indicators_from_cache(
+    candles: list,
+    *,
+    end_idx: int,
+    window: int,
+    asset_type: str,
+    cache: dict[tuple[int, int, str], dict],
+) -> dict | None:
+    """Exact parity cache: compute the same rolling window as legacy path once."""
+    if end_idx < 0:
+        return None
+    key = (end_idx, window, asset_type)
+    hit = cache.get(key)
+    if hit is not None:
+        return hit
+    start = max(0, end_idx - window + 1)
+    w = candles[start : end_idx + 1]
+    if len(w) < 50:
+        return None
+    out = calc_indicators_with_normalized(w, asset_type)
+    cache[key] = out
+    return out
+
+
 def _bt_cached_fetch(
     pair: dict,
     tf: str,
@@ -963,6 +987,13 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     except Exception as e:
         return {"error": f"Data fetch failed: {e}"}
 
+    bt_vectorized = bool(CONFIG.get("BT_VECTORIZED", False))
+    d1_cache: dict[tuple[int, int, str], dict] = {}
+    h4_cache: dict[tuple[int, int, str], dict] = {}
+    h1_cache: dict[tuple[int, int, str], dict] = {}
+    if bt_vectorized:
+        log.info("[BT] %s vectorized indicator cache enabled", pair["display"])
+
     # N8: Session-variable slippage â€" forex widens during Asian/off-hours
 
     # Shared init
@@ -1175,13 +1206,41 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 continue
 
             try:
-                d1i = calc_indicators_with_normalized(
-                    d1_window, pair.get("type", "stock")
-                )
-
-                h4i = calc_indicators_with_normalized(
-                    h4_window, pair.get("type", "stock")
-                )
+                if bt_vectorized:
+                    d1i = _bt_indicators_from_cache(
+                        d1_raw,
+                        end_idx=i - 1,
+                        window=MIN_BARS,
+                        asset_type=pair.get("type", "stock"),
+                        cache=d1_cache,
+                    )
+                    h4i = _bt_indicators_from_cache(
+                        h4_raw,
+                        end_idx=h4_idx - 1,
+                        window=_h4_need,
+                        asset_type=pair.get("type", "stock"),
+                        cache=h4_cache,
+                    )
+                    h1i = _bt_indicators_from_cache(
+                        h1_raw,
+                        end_idx=h1_idx - 1,
+                        window=_h1_need,
+                        asset_type=pair.get("type", "stock"),
+                        cache=h1_cache,
+                    )
+                    if not d1i or not h4i or not h1i:
+                        i += 1
+                        continue
+                else:
+                    d1i = calc_indicators_with_normalized(
+                        d1_window, pair.get("type", "stock")
+                    )
+                    h4i = calc_indicators_with_normalized(
+                        h4_window, pair.get("type", "stock")
+                    )
+                    h1i = calc_indicators_with_normalized(
+                        h1_window, pair.get("type", "stock")
+                    )
 
                 # Inject fib_proximity so structure factor is non-None during backtest
                 try:
@@ -1193,10 +1252,6 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         )
                 except Exception:
                     pass
-
-                h1i = calc_indicators_with_normalized(
-                    h1_window, pair.get("type", "stock")
-                )
 
                 vols = [c["vol"] for c in h1_window]
                 vsma = calc_sma(vols, 20)
@@ -1638,9 +1693,41 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 continue
 
             try:
-                h4i = calc_indicators_with_normalized(
-                    h4_window, pair.get("type", "stock")
-                )
+                if bt_vectorized:
+                    h4i = _bt_indicators_from_cache(
+                        h4_raw,
+                        end_idx=i - 1,
+                        window=MIN_H4,
+                        asset_type=pair.get("type", "stock"),
+                        cache=h4_cache,
+                    )
+                    h1i = _bt_indicators_from_cache(
+                        h1_raw,
+                        end_idx=h1_idx - 1,
+                        window=_h1_need,
+                        asset_type=pair.get("type", "stock"),
+                        cache=h1_cache,
+                    )
+                    d1i_ctx = _bt_indicators_from_cache(
+                        d1_raw,
+                        end_idx=d1_idx - 1,
+                        window=220,
+                        asset_type=pair.get("type", "stock"),
+                        cache=d1_cache,
+                    )
+                    if not h4i or not h1i or not d1i_ctx:
+                        i += 1
+                        continue
+                else:
+                    h4i = calc_indicators_with_normalized(
+                        h4_window, pair.get("type", "stock")
+                    )
+                    h1i = calc_indicators_with_normalized(
+                        h1_window, pair.get("type", "stock")
+                    )
+                    d1i_ctx = calc_indicators_with_normalized(
+                        d1_ctx, pair.get("type", "stock")
+                    )
 
                 # Inject fib_proximity so structure factor is non-None during backtest
                 try:
@@ -1652,14 +1739,6 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         )
                 except Exception:
                     pass
-
-                h1i = calc_indicators_with_normalized(
-                    h1_window, pair.get("type", "stock")
-                )
-
-                d1i_ctx = calc_indicators_with_normalized(
-                    d1_ctx, pair.get("type", "stock")
-                )
 
                 vols = [c["vol"] for c in h1_window]
                 vsma = calc_sma(vols, 20)
@@ -2086,17 +2165,41 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 continue
 
             try:
-                h1i = calc_indicators_with_normalized(
-                    h1_window, pair.get("type", "stock")
-                )
-
-                h4i_ctx = calc_indicators_with_normalized(
-                    h4_ctx, pair.get("type", "stock")
-                )
-
-                d1i_ctx = calc_indicators_with_normalized(
-                    d1_ctx, pair.get("type", "stock")
-                )
+                if bt_vectorized:
+                    h1i = _bt_indicators_from_cache(
+                        h1_raw,
+                        end_idx=i - 1,
+                        window=MIN_H1,
+                        asset_type=pair.get("type", "stock"),
+                        cache=h1_cache,
+                    )
+                    h4i_ctx = _bt_indicators_from_cache(
+                        h4_raw,
+                        end_idx=h4_idx - 1,
+                        window=250,
+                        asset_type=pair.get("type", "stock"),
+                        cache=h4_cache,
+                    )
+                    d1i_ctx = _bt_indicators_from_cache(
+                        d1_raw,
+                        end_idx=d1_idx - 1,
+                        window=220,
+                        asset_type=pair.get("type", "stock"),
+                        cache=d1_cache,
+                    )
+                    if not h1i or not h4i_ctx or not d1i_ctx:
+                        i += 1
+                        continue
+                else:
+                    h1i = calc_indicators_with_normalized(
+                        h1_window, pair.get("type", "stock")
+                    )
+                    h4i_ctx = calc_indicators_with_normalized(
+                        h4_ctx, pair.get("type", "stock")
+                    )
+                    d1i_ctx = calc_indicators_with_normalized(
+                        d1_ctx, pair.get("type", "stock")
+                    )
 
                 vols = [c["vol"] for c in h1_window]
                 vsma = calc_sma(vols, 20)

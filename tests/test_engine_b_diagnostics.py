@@ -69,6 +69,23 @@ def _crypto_trigger_candles_long():
     return candles
 
 
+def _micro_breakout_candles_long():
+    candles = [
+        {
+            "open": 100.0,
+            "high": 100.5,
+            "low": 99.5,
+            "close": 100.1,
+            "vol": 100.0,
+            "volume": 100.0,
+        }
+        for _ in range(20)
+    ]
+    candles[-2]["close"] = 100.2
+    candles[-1].update({"open": 100.2, "high": 101.2, "low": 100.1, "close": 101.0, "vol": 160.0, "volume": 160.0})
+    return candles
+
+
 def _crypto_res_long_with_structural_target():
     res = _base_res_long()
     res.update(
@@ -420,6 +437,51 @@ def test_calculate_confidence_emits_no_trigger_pattern_when_missing():
     )
     codes = out.get("engine_b_diagnostics", {}).get("reason_codes", [])
     assert ENGINE_B_REASON_NO_TRIGGER_PATTERN in codes
+
+
+def test_engine_b_research_lab_micro_breakout_can_satisfy_entry_gate(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_RESEARCH_LAB_FACTORS", {
+        "ENABLED": True,
+        "ALLOW_GATE_UPGRADE": True,
+        "GROUPS": {"commodity_other": ["micro_breakout"]},
+    })
+
+    res = _base_res_long()
+    res.update({
+        "asset_type": "commodity",
+        "bos_confirmed": False,
+        "trigger_ok": False,
+        "strong_close": False,
+        "inside_break_candle": False,
+        "engulfing_candle": False,
+        "liquidity_sweep": False,
+        "choch_confirmed": False,
+        "distance_to_res": 3.0,
+        "recommended_stop_loss": 100.0,
+        "recommended_take_profit": 104.0,
+    })
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=101.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=_micro_breakout_candles_long(),
+        style_profile={
+            "style": "intraday",
+            "score_group": "commodity_other",
+            "min_room_atr": 0.35,
+            "min_rr": 1.0,
+            "require_macro_align": False,
+        },
+    )
+
+    assert out["original_trigger_ok"] is False
+    assert out["trigger_ok"] is True
+    assert out["entry_ok"] is True
+    assert out["research_lab_entry_upgrade"] is True
+    assert out["research_lab_detail"]["components"]["micro_breakout"]["passed"] is True
+    assert ENGINE_B_REASON_NO_TRIGGER_PATTERN not in out.get("engine_b_diagnostics", {}).get("reason_codes", [])
 
 
 def test_calculate_confidence_emits_bos_without_volume():

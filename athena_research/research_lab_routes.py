@@ -112,6 +112,164 @@ def register_research_lab_routes(app) -> None:
             log.error("[research_lab_routes] Auto plan failed: %s", e, exc_info=True)
             return jsonify({"error": str(e)}), 500
 
+    # ── POST /api/research-lab/retest-plan ───────────────────────────────────
+    @app.route("/api/research-lab/retest-plan", methods=["POST"])
+    @app.route("/api/research-lab/retest-add-plan", methods=["POST"])
+    def api_research_lab_retest_add_plan():
+        """Build focused validation tests from selected recommendation rows."""
+        import pandas as pd
+        import uuid
+
+        body = request.get_json(silent=True) or {}
+        run_id = body.get("run_id")
+        max_tests = int(body.get("max_tests", 12))
+        selected_candidates = body.get("candidates") or []
+        raw_recs = body.get("recommendations") or body.get("recommendation") or ["ADD"]
+        if isinstance(raw_recs, str):
+            wanted_recs = {raw_recs.strip().upper()}
+        else:
+            wanted_recs = {str(r).strip().upper() for r in raw_recs if str(r).strip()}
+        if not wanted_recs:
+            wanted_recs = {"ADD"}
+        if "SELECTED" in wanted_recs:
+            wanted_recs.discard("SELECTED")
+            if selected_candidates:
+                wanted_recs.update({"ADD", "RETEST", "WATCHLIST_ONLY"})
+            else:
+                wanted_recs.add("ADD")
+        rec_label = "+".join(sorted(wanted_recs))
+
+        if not run_id:
+            return jsonify({"error": "run_id is required"}), 400
+
+        rec_path = _DEFAULT_OUTPUT / run_id / "add_remove_retest_recommendations.csv"
+        if not rec_path.exists():
+            return jsonify({"error": "No recommendations found for run", "run_id": run_id}), 404
+
+        try:
+            df = pd.read_csv(rec_path)
+            rec_series = (
+                df["recommendation"].astype(str).str.strip().str.upper()
+                if "recommendation" in df.columns
+                else pd.Series([""] * len(df), index=df.index, dtype=str)
+            )
+            plan_df = df[rec_series.isin(wanted_recs)].copy()
+            if selected_candidates and not plan_df.empty:
+                selected_mask = pd.Series(False, index=plan_df.index)
+                for cand in selected_candidates:
+                    if not isinstance(cand, dict):
+                        continue
+                    cand_mask = pd.Series(True, index=plan_df.index)
+                    matched_any_key = False
+                    for key in ("recommendation", "engine", "engine_component", "strategy_name", "symbol", "timeframe", "direction", "pair_group", "timeframe_zone", "structure_context"):
+                        if key not in plan_df.columns or cand.get(key) in (None, ""):
+                            continue
+                        matched_any_key = True
+                        left = plan_df[key].fillna("").astype(str).str.strip().str.upper()
+                        right = str(cand.get(key)).strip().upper()
+                        cand_mask &= left.eq(right)
+                    if matched_any_key:
+                        selected_mask |= cand_mask
+                narrowed = plan_df[selected_mask].copy()
+                if narrowed.empty:
+                    log.warning(
+                        "[research_lab_routes] Retest candidate narrowing matched 0 CSV rows; using recommendation filter only (run_id=%s)",
+                        run_id,
+                    )
+                else:
+                    plan_df = narrowed
+            if plan_df.empty:
+                return jsonify({
+                    "plan_id": f"retest_{rec_label.lower().replace('+', '_')}_{uuid.uuid4().hex[:8]}",
+                    "source_run_id": run_id,
+                    "recommendations": sorted(wanted_recs),
+                    "recommended": False,
+                    "tests": [],
+                    "message": f"No {rec_label} recommendations found",
+                })
+
+            tests = []
+            group_cols = [c for c in ["recommendation", "engine", "market_group", "pair_group", "timeframe_zone", "strategy_name"] if c in plan_df.columns]
+            for priority, (_, grp) in enumerate(plan_df.groupby(group_cols, dropna=False), start=1):
+                if len(tests) >= max_tests:
+                    break
+                row = grp.sort_values(
+                    [c for c in ["baseline_delta_oos", "robustness_score", "oos_return"] if c in grp.columns],
+                    ascending=False,
+                ).iloc[0]
+                strategy = str(row.get("strategy_name", "")).strip()
+                family = str(row.get("family", "")).strip()
+                if not family:
+                    try:
+                        from athena_research.strategies import STRATEGY_REGISTRY
+                        family = STRATEGY_REGISTRY.get(strategy, ("", None))[0] or ""
+                    except Exception:
+                        family = ""
+                symbol = str(row.get("symbol", "")).strip()
+                if not symbol and selected_candidates:
+                    for cand in selected_candidates:
+                        sym = str(cand.get("symbol") or "").strip()
+                        if sym:
+                            symbol = sym
+                            break
+                if not symbol:
+                    mg = str(row.get("market_group", "") or "").strip().lower()
+                    if mg:
+                        try:
+                            from athena_research.run_manager import load_config, get_group_symbols
+                            syms = get_group_symbols(load_config(), mg)
+                            if syms:
+                                symbol = str(syms[0]).strip()
+                        except Exception:
+                            pass
+                timeframe = str(row.get("timeframe", "")).strip()
+                if not timeframe:
+                    zone = str(row.get("timeframe_zone", "")).strip().lower()
+                    timeframe = {"scalp": "M15", "intra": "H4", "swing": "D1"}.get(zone, "H4")
+                if not (strategy and family and symbol and timeframe):
+                    continue
+                row_rec = str(row.get("recommendation", rec_label) or rec_label).strip().upper()
+                row_rec_slug = row_rec.lower().replace("_", "-")
+                tests.append({
+                    "test_id": f"retest_{row_rec.lower()}_{strategy}_{priority}",
+                    "selected_by_default": True,
+                    "priority": priority,
+                    "title": f"Retest {row_rec} {strategy} ({row.get('timeframe_zone', timeframe)})",
+                    "purpose": f"Validate a {row_rec} recommendation against the same group and zone before promotion, removal, or live Engine A/B consideration.",
+                    "test_type": f"{row_rec_slug}_candidate_validation",
+                    "recommendation": row_rec,
+                    "engine": row.get("engine"),
+                    "engine_component": row.get("engine_component"),
+                    "market_group": row.get("market_group"),
+                    "pair_group": row.get("pair_group"),
+                    "structure_context": row.get("structure_context"),
+                    "families": [family],
+                    "strategies": [strategy],
+                    "symbols": [symbol],
+                    "timeframes": [timeframe],
+                    "directions": [str(row.get("direction", "both") or "both")],
+                    "mode": "tiny",
+                    "max_combinations": 80,
+                    "reason": f"{row_rec} recommendation: {row.get('engine', '')} {row.get('engine_component', '')} / {row.get('pair_group', '')} / {row.get('timeframe_zone', '')}",
+                    "acceptance_criteria": {
+                        "min_trade_count": 20,
+                        "min_profit_factor": 1.20,
+                        "min_oos_return": 0.0,
+                        "min_robustness": 0.50,
+                    },
+                })
+
+            return jsonify({
+                "plan_id": f"retest_{rec_label.lower().replace('+', '_')}_{uuid.uuid4().hex[:8]}",
+                "source_run_id": run_id,
+                "recommendations": sorted(wanted_recs),
+                "recommended": bool(tests),
+                "tests": tests,
+            })
+        except Exception as e:
+            log.error("[research_lab_routes] Retest ADD plan failed: %s", e, exc_info=True)
+            return jsonify({"error": str(e)}), 500
+
     # ── POST /api/research-lab/run-auto-plan ──────────────────────────────────
     @app.route("/api/research-lab/run-auto-plan", methods=["POST"])
     def api_research_lab_run_auto_plan():

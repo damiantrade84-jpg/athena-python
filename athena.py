@@ -5172,6 +5172,8 @@ def _naked_scan_style_profile(
                 resolved_profile = {**resolved_profile, **style_override}
 
     resolved_profile["style"] = resolved
+    if score_group:
+        resolved_profile["score_group"] = score_group
     return resolved, resolved_profile
 
 

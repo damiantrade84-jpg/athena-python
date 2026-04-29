@@ -244,7 +244,7 @@ def _fetch_binance_rest(
         return None
 
     bs = _binance_symbol(symbol)
-    url = "https://fapi.binance.com/fapi/v1/klines"
+    bases = ["https://fapi.binance.com", "https://fapi1.binance.com"]
     per_page = 1500
     all_rows: list = []
 
@@ -255,15 +255,25 @@ def _fetch_binance_rest(
         params: dict = {
             "symbol": bs,
             "interval": interval,
-            "limit": min(per_page, limit - len(all_rows) + per_page),
+            "limit": min(per_page, limit - len(all_rows)),
         }
         if end_time is not None:
             params["endTime"] = end_time
 
         try:
-            resp = requests.get(url, params=params, timeout=15)
-            resp.raise_for_status()
-            batch = resp.json()
+            last_error = None
+            batch = None
+            for base in bases:
+                try:
+                    resp = requests.get(f"{base}/fapi/v1/klines", params=params, timeout=15)
+                    if resp.status_code == 200:
+                        batch = resp.json()
+                        break
+                    last_error = f"HTTP {resp.status_code}: {resp.text[:120]}"
+                except Exception as e:
+                    last_error = str(e)
+            if batch is None:
+                raise RuntimeError(last_error or "all Binance endpoints failed")
         except Exception as e:
             if retries < 2:
                 retries += 1

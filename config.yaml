@@ -53,6 +53,7 @@ NEWS_BG_INTERVAL_SEC: 3600    # How often the background news loop runs (seconds
 NEWS_PAIR_CACHE_TTL_SEC: 14400 # How long per-pair news/word-weights are cached after an AI fetch (seconds). Default 14400 = 4 hours.
 
 BACKTEST_MAX_WORKERS: 8       # Parallel workers for backtesting (Engine A & B). Increase for faster backtests.
+BT_VECTORIZED: true           # Option A speed path: exact-window indicator caching for Engine A backtests (parity-safe target).
 
 SCAN_DEBUG_CANDLE_META: false # Optional scan/debug payload metadata about candle resolution path.
 
@@ -115,6 +116,40 @@ FACTOR_FUNDING_BASELINE: 0.0001
 FACTOR_FUNDING_NOISE_BAND: 0.0001
 
 FACTOR_CONVICTION_FLOOR: 0.60 # Engine A v2 default used by factor_scoring when unset.
+
+ENGINE_A_RESEARCH_LAB_FACTORS:
+  ENABLED: true
+  BONUS: 0.15
+  PENALTY: -0.10
+  MAX_ABS: 0.20
+  GROUPS:
+    forex_majors:
+      - obv_divergence
+      - bollinger_touch
+      - stochastic_cross
+    forex_crosses:
+      - obv_divergence
+      - bollinger_touch
+      - stochastic_cross
+    forex_exotics:
+      - obv_divergence
+      - stochastic_cross
+    crypto_alts:
+      - stochastic_cross
+      - chandelier_trend
+      - obv_divergence
+    crypto_meme:
+      - stochastic_cross
+      - chandelier_trend
+      - obv_divergence
+    crypto_majors:
+      - stochastic_cross
+      - chandelier_trend
+      - obv_divergence
+    metals:
+      - aroon_trend
+    commodity_other:
+      - bollinger_touch
 
 
 
@@ -1455,6 +1490,21 @@ AUTO_EXIT_ON_DECAY: false
 
 
 # ── Engine B (Naked Scalp) ───────────────────────────────────────────
+
+ENGINE_B_RESEARCH_LAB_FACTORS:
+  ENABLED: true
+  ALLOW_GATE_UPGRADE: true
+  GROUPS:
+    commodity_other:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    metals:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
 
 NAKED_ENGINE:
 

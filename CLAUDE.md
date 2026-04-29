@@ -462,6 +462,95 @@ Current validated status:
 
 ---
 
+## ⚠️ Research Lab Scoring Experiment — Engine A Candidate Factors (2026-04-29)
+
+The Research Lab findings have been promoted into **Engine A live/backtest scoring as a reversible experiment**.
+
+**Config gate:** `ENGINE_A_RESEARCH_LAB_FACTORS` in `config.yaml`
+
+Current enabled candidates:
+- Forex majors/crosses: `obv_divergence`, `bollinger_touch`, `stochastic_cross`
+- Forex exotics: `obv_divergence`, `stochastic_cross`
+- Crypto majors/alts/meme: `stochastic_cross`, `chandelier_trend`, `obv_divergence`
+- Metals: `aroon_trend`
+- Other commodities: `bollinger_touch`
+
+Implementation:
+- Code lives in `factor_scoring.py`:
+  - `_research_lab_candidate_addon()`
+  - `_research_factor_value()`
+  - `_research_obv_value()`
+  - `_research_stochastic_value()`
+  - `_research_chandelier_value()`
+  - `_research_bollinger_value()`
+  - `_research_aroon_value()`
+- Output diagnostics:
+  - `factor_scores.research_lab`
+  - `research_lab_value`
+  - `research_lab_detail`
+  - `feed_status.research_lab`
+- The factor is bounded by config:
+  - `BONUS: 0.15`
+  - `PENALTY: -0.10`
+  - `MAX_ABS: 0.20`
+- It is added through the existing addon/conviction path, not by changing `MIN_CONFLUENCE_CLASS`, `PAIR_PROFILES.min_confluence`, `BT_MIN`, Engine B gates, or execution/risk logic.
+
+**Revert path if paper/backtest results do not improve:**
+1. Set `ENGINE_A_RESEARCH_LAB_FACTORS.ENABLED: false` in `config.yaml`.
+2. Restart Athena.
+3. Optional full code revert: remove the helper functions listed above from `factor_scoring.py` and remove `research_lab` diagnostic fields from `factor_scores` / return payloads.
+
+**Do not expand this experiment** to more groups, higher bonuses, or threshold changes without:
+- Research Lab group/zone evidence
+- backtest comparison against previous setup
+- paper/demo results
+- fail-reason review
+- explicit user approval
+
+## ⚠️ Research Lab Scoring Experiment — Engine B Candidate Gates (2026-04-29)
+
+The Research Lab Engine B findings have been promoted into **Engine B live/backtest confidence as a reversible experiment**.
+
+**Config gate:** `ENGINE_B_RESEARCH_LAB_FACTORS` in `config.yaml`
+
+Current enabled candidates:
+- `commodity_other`: `micro_breakout`, `vwap_deviation`, `cvd_momentum`, `vwap_reclaim`
+- `metals`: `micro_breakout`, `vwap_deviation`, `cvd_momentum`, `vwap_reclaim`
+
+Implementation:
+- Code lives in `market_structure.py`:
+  - `_engine_b_research_lab_candidate_gates()`
+  - `_engine_b_micro_breakout_value()`
+  - `_engine_b_vwap_deviation_value()`
+  - `_engine_b_cvd_momentum_value()`
+  - `_engine_b_vwap_reclaim_value()`
+- Output diagnostics:
+  - `research_lab_detail`
+  - `research_lab_entry_upgrade`
+  - `research_lab_location_upgrade`
+  - `original_trigger_ok`
+  - `original_location_ok`
+- With `ALLOW_GATE_UPGRADE: true`, Research Lab candidates may satisfy only the matching Engine B checklist gate:
+  - `micro_breakout`, `cvd_momentum`, `vwap_reclaim` -> entry/trigger gate
+  - `vwap_deviation` -> location gate
+- This does **not** change Engine B thresholds, `NAKED_ENGINE.style_profiles.min_score`, `min_rr`, RR math, structural target rules, D1 conflict handling, freshness gates, risk checks, or execution safety.
+
+**Revert path if paper/backtest results do not improve:**
+1. Set `ENGINE_B_RESEARCH_LAB_FACTORS.ENABLED: false` in `config.yaml`.
+2. Restart Athena.
+3. Optional partial revert: set `ENGINE_B_RESEARCH_LAB_FACTORS.ALLOW_GATE_UPGRADE: false` to keep diagnostics while preventing checklist gate upgrades.
+4. Optional full code revert: remove the helper functions listed above from `market_structure.py` and remove `research_lab_*` diagnostic fields from `calculate_confidence()`.
+
+**Do not expand this experiment** to more groups, direct RR changes, threshold changes, or execution bypasses without:
+- Research Lab group/zone evidence
+- retest output for the specific candidate
+- backtest comparison against previous setup
+- paper/demo review
+- fail-reason review
+- explicit user approval
+
+---
+
 ## ⚠️ UI/API Contract Rules
 
 The UI must display backend contract fields, not legacy placeholders.

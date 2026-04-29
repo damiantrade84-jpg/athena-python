@@ -259,7 +259,7 @@ def _structure_context_breakdown(df: pd.DataFrame) -> pd.DataFrame:
 def _recommendation_table(df: pd.DataFrame) -> pd.DataFrame:
     cols = [
         "recommendation", "engine", "engine_component", "strategy_name", "source_indicator",
-        "market_group", "pair_group", "timeframe_zone", "structure_context", "direction",
+        "family", "market_group", "pair_group", "symbol", "timeframe_zone", "timeframe", "structure_context", "direction",
         "status", "trade_count", "win_rate", "profit_factor", "oos_return",
         "baseline_delta_pf", "baseline_delta_oos", "robustness_score",
     ]
