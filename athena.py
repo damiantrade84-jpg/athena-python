@@ -3783,13 +3783,22 @@ def _build_signal_message(
 
     """
 
-    max_score = signal.get("maxScore", 3.0)
+    def _num(x, default: float = 0.0) -> float:
+        """Coerce for formatting; treats explicit None/missing/non-numeric as default."""
+        try:
+            if x is None:
+                return float(default)
+            return float(x)
+        except (TypeError, ValueError):
+            return float(default)
 
-    score = signal.get("confluenceScore", 0)
+    max_score = _num(signal.get("maxScore"), 3.0)
+
+    score = _num(signal.get("confluenceScore"), 0.0)
 
     score_pct = round(score / max_score * 100) if max_score else 0
 
-    spread = signal.get("spread", 0)
+    spread = _num(signal.get("spread"), 0.0)
 
     conviction = "HIGH" if spread >= 0.6 else "MEDIUM" if spread >= 0.3 else "LOW"
 
@@ -3820,22 +3829,22 @@ def _build_signal_message(
         rz = eng_b.get("nearest_resistance_zone")
         if rz:
             lines.append(
-                f"  Nearest Res Zone: {rz.get('lower', 0):.4f} - {rz.get('upper', 0):.4f}"
+                f"  Nearest Res Zone: {_num(rz.get('lower')):.4f} - {_num(rz.get('upper')):.4f}"
             )
 
         sz = eng_b.get("nearest_support_zone")
         if sz:
             lines.append(
-                f"  Nearest Sup Zone: {sz.get('lower', 0):.4f} - {sz.get('upper', 0):.4f}"
+                f"  Nearest Sup Zone: {_num(sz.get('lower')):.4f} - {_num(sz.get('upper')):.4f}"
             )
 
-        lines.append(f"  Distance to Res: {eng_b.get('distance_to_res', 0):.2f}%")
-        lines.append(f"  Distance to Sup: {eng_b.get('distance_to_sup', 0):.2f}%")
+        lines.append(f"  Distance to Res: {_num(eng_b.get('distance_to_res')):.2f}%")
+        lines.append(f"  Distance to Sup: {_num(eng_b.get('distance_to_sup')):.2f}%")
         lines.append(f"  Room to Move Bonus: {eng_b.get('room_to_move_bonus', 0)}")
         lines.append(f"  Catalyst Bonus: {eng_b.get('catalyst_bonus', 0)}")
-        lines.append(f"  AI Stats Adjustment: {eng_b.get('ai_adjustment', 0):.2f}")
+        lines.append(f"  AI Stats Adjustment: {_num(eng_b.get('ai_adjustment')):.2f}")
         lines.append(
-            f"  Engine B Final Score: {eng_b.get('score', 0):.2f} / {eng_b.get('max_possible', 3.0):.2f} ({eng_b.get('score_pct', 0):.1f}%)"
+            f"  Engine B Final Score: {_num(eng_b.get('score')):.2f} / {_num(eng_b.get('max_possible'), 3.0):.2f} ({_num(eng_b.get('score_pct')):.1f}%)"
         )
         lines.append(
             f"  Engine B Actionable: {'YES' if eng_b.get('is_actionable') else 'NO'}"
@@ -4199,8 +4208,8 @@ def _build_signal_message(
 
         if pair_s:
             lines.append(
-                f"This pair history: {pair_s['win_rate'] * 100:.0f}% WR over "
-                f"{pair_s['total_trades']} trades (avg {pair_s['avg_r']:+.2f}R)"
+                f"This pair history: {_num(pair_s.get('win_rate')) * 100:.0f}% WR over "
+                f"{pair_s.get('total_trades', 0)} trades (avg {_num(pair_s.get('avg_r')):+.2f}R)"
                 + (
                     f", best in {pair_s['best_regime']}"
                     if pair_s.get("best_regime")
@@ -4212,8 +4221,8 @@ def _build_signal_message(
 
         if at_s:
             lines.append(
-                f"{signal.get('type', '').upper()} class: {at_s['win_rate'] * 100:.0f}% WR "
-                f"avg {at_s['avg_r']:+.2f}R ({at_s['total_trades']} trades)"
+                f"{signal.get('type', '').upper()} class: {_num(at_s.get('win_rate')) * 100:.0f}% WR "
+                f"avg {_num(at_s.get('avg_r')):+.2f}R ({at_s.get('total_trades', 0)} trades)"
             )
 
         grade_acc = learning_ctx.get("grade_accuracy", {})
@@ -4226,7 +4235,7 @@ def _build_signal_message(
                     s = grade_acc[g]
 
                     grade_parts.append(
-                        f"{g}:{s['win_rate'] * 100:.0f}%WR/{s['avg_r']:+.1f}R"
+                        f"{g}:{_num(s.get('win_rate')) * 100:.0f}%WR/{_num(s.get('avg_r')):+.1f}R"
                     )
 
             if grade_parts:
@@ -4236,7 +4245,7 @@ def _build_signal_message(
 
         if failures:
             fail_summary = "; ".join(
-                f"{f['pair']} {f['grade']} {f['regime']} R={f['r']:.1f}"
+                f"{f['pair']} {f['grade']} {f['regime']} R={_num(f.get('r')):.1f}"
                 for f in failures[:3]
                 if f.get("pair")
             )
