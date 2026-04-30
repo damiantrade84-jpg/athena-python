@@ -42,7 +42,9 @@ _SESSION_SHOULDER_MULT_DEFAULT = 0.90
 _SESSION_OFF_MULT_DEFAULT = 0.75
 
 # Addon contribution bounds
-_ADDON_CONFIRM = 0.30    # confirming the trend direction
+# Stage 1.4: aligned with research lab MAX_ABS (0.20) so clamp order is deterministic.
+# Research lab computes aggregate → single clamp to [-0.15, +0.20].
+_ADDON_CONFIRM = 0.20    # confirming the trend direction
 _ADDON_NEUTRAL = 0.00    # data missing or neutral
 _ADDON_AGAINST = -0.15   # actively opposing direction
 
@@ -308,7 +310,13 @@ def _momentum_quality(
         total_w = 1.0
 
     raw = (rsi_score * rsi_w + macd_score * macd_w) / total_w
-    return max(0.0, min(1.0, raw + 0.0))  # floor at 0
+    # Rescale to true [0, 1] range. The raw weighted sum maxes at 0.50
+    # (both RSI and MACD at +0.50), so we divide by 0.50 to map 0.50 → 1.0.
+    # Worst case: RSI=-0.25, MACD=-0.50 → raw = -0.35 → rescaled = -0.70 → clamped to 0.
+    # This ensures mom_quality can actually reach 1.0 when both indicators confirm.
+    _max_raw = 0.50  # theoretical max of weighted sum
+    rescaled = raw / _max_raw if _max_raw != 0 else 0.0
+    return max(0.0, min(1.0, rescaled))
 
 
 def _research_lab_candidate_addon(
@@ -505,31 +513,22 @@ def _research_aroon_value(direction: str, candles: list, bonus: float, penalty: 
 # ── Factor 3: ADX gate ────────────────────────────────────────────────────────
 
 def _adx_gate(d1_snap: dict, h4_snap: dict, asset_type: str) -> tuple:
-    """ADX trend-strength gate.
+    """ADX trend-strength gate with sigmoid scaling.
 
     Returns (multiplier, adx_value, adx_source).
-    multiplier = 0.0  → hard abort (ADX < 15, dead market)
-    multiplier = 0.65 → soft penalty (15 ≤ ADX < adx_min)
-    multiplier = 1.0  → full credit (ADX ≥ adx_min)
+    multiplier is a continuous sigmoid:
+      ADX ≤ 10  → 0.0 (dead market)
+      ADX = 15  → 0.25
+      ADX = 20  → 0.50
+      ADX = 25  → 0.75
+      ADX ≥ 30  → 1.0 (full credit)
+
+    The old 3-tier step (0.0 / 0.65 / 1.0) made the soft zone too punitive:
+    max final_score in soft zone = 3.0 × 0.65 = 1.955, below all asset-class
+    thresholds (crypto 2.4, forex 2.1, commodity 1.8, stock 1.8).
 
     Source preference: D1 ADX (structural) first, H4 ADX fallback.
-    Per-class ADX minimum from ADX_TREND_MIN_CLASS config.
     """
-    adx_min = float(
-        (CONFIG.get("ADX_TREND_MIN_CLASS") or {}).get(asset_type, 25)
-    )
-    # Per-class hard-fail so crypto (class_min=15) gets a soft zone (10-15)
-    # instead of the 15/15 cliff where hard_fail == class_min.
-    _hf_class = (CONFIG.get("FACTOR_ADX_HARD_FAIL_CLASS") or {})
-    if isinstance(_hf_class, dict) and asset_type in _hf_class:
-        hard_fail = float(_hf_class[asset_type])
-    else:
-        hard_fail = float(CONFIG.get("FACTOR_ADX_HARD_FAIL", _ADX_HARD_FAIL_DEFAULT))
-
-    # Use the stronger of D1 and H4 ADX so a rising intraday trend isn't
-    # masked by a lagging D1 value.  D1 is still the primary label for source.
-    _soft = float(CONFIG.get("FACTOR_ADX_SOFT_MULT", _ADX_SOFT_MULT_DEFAULT))
-
     d1_adx = d1_snap.get("adx")
     h4_adx = h4_snap.get("adx")
     adx = None
@@ -552,18 +551,14 @@ def _adx_gate(d1_snap: dict, h4_snap: dict, asset_type: str) -> tuple:
         adx, source = _h4, "h4"
 
     if adx is None:
-        # Both D1 and H4 ADX unavailable — likely a feed issue.
-        # ADX_MISSING_BOTH_ABORT (default False): when True, treat as hard abort
-        # instead of soft-pass, since no ADX data means no trend confirmation.
         if CONFIG.get("ADX_MISSING_BOTH_ABORT", False):
             return 0.0, None, "missing_both_abort"
-        return _soft, None, "missing"
+        # Soft fallback when ADX missing: use 0.5 (neutral)
+        return 0.5, None, "missing"
 
-    if adx < hard_fail:
-        return 0.0, adx, source
-    if adx < adx_min:
-        return _soft, adx, source
-    return 1.0, adx, source
+    # Sigmoid: linear ramp from 0.0 at ADX=10 to 1.0 at ADX=30
+    mult = max(0.0, min(1.0, (adx - 10.0) / 20.0))
+    return mult, adx, source
 
 
 # ── Addon: asset-specific secondary factor ────────────────────────────────────
@@ -842,7 +837,7 @@ def compute_factor_scores(
     adx_mult, adx_val, adx_source = _adx_gate(d1_snap, h4_snap, asset_type)
     feed_status["adx"] = adx_source
 
-    # Hard abort: dead market
+    # Hard abort: dead market (ADX ≤ 10)
     if adx_mult == 0.0:
         log.debug("[EA2] %s ADX=%.1f hard abort — dead market", display, adx_val or 0)
         regime_raw = detect_regime(h4_snap, asset_type).get("regime", "UNKNOWN")
@@ -865,11 +860,40 @@ def compute_factor_scores(
     if research_detail.get("enabled"):
         addon_val += research_val
         feed_status["research_lab"] = f"{research_val:.2f}"
+    # Stage 1.4: unified addon bound aligned with research lab MAX_ABS
     addon_val = max(_ADDON_AGAINST, min(_ADDON_CONFIRM, addon_val))
 
     # ── Session multiplier (forex only) ───────────────────────────────────────
     session_mult = _session_multiplier(bar_time, asset_type)
     feed_status["session"] = f"{session_mult:.2f}"
+
+    # ── +DI/-DI directional alignment multiplier ──────────────────────────────
+    # Stage 1.3: ADX measures strength but not direction. If EMA says LONG but
+    # -DI > +DI, bearish pressure dominates — score must be suppressed.
+    def _di_alignment_multiplier(trend_dir: str, plus_di: float | None, minus_di: float | None) -> float:
+        if plus_di is None or minus_di is None:
+            return 0.5  # data missing → neutral
+        di_diff = plus_di - minus_di
+        if trend_dir == "LONG":
+            if plus_di > minus_di:
+                return 1.0
+            elif abs(di_diff) < 5.0:
+                return 0.5
+            else:
+                return 0.0
+        elif trend_dir == "SHORT":
+            if minus_di > plus_di:
+                return 1.0
+            elif abs(di_diff) < 5.0:
+                return 0.5
+            else:
+                return 0.0
+        return 0.5
+
+    _plus_di = h4_snap.get("plusDI") or h4_snap.get("plus_di")
+    _minus_di = h4_snap.get("minusDI") or h4_snap.get("minus_di")
+    di_align_mult = _di_alignment_multiplier(direction, _plus_di, _minus_di)
+    feed_status["di_align"] = f"{di_align_mult:.2f}"
 
     # ── Conviction score: weighted combination ────────────────────────────────
     # Read weights lazily so config reloads take effect without restart.
@@ -879,7 +903,7 @@ def compute_factor_scores(
     _conviction_floor = float(CONFIG.get("FACTOR_CONVICTION_FLOOR", _CONVICTION_FLOOR_DEFAULT))
     # conviction ∈ [0, 1] — how strongly we believe in this setup
     # Base floor + momentum quality + addon (addon_val can be negative → reduces conviction).
-    # Normalise addon: +0.30 → +1.0, 0.00 → 0.0, -0.15 → -0.5 (penalty preserved, not floored).
+    # Normalise addon: +0.20 → +1.0, 0.00 → 0.0, -0.15 → -0.75 (penalty preserved, not floored).
     addon_norm = (addon_val / _ADDON_CONFIRM) if _ADDON_CONFIRM > 0 else 0.0
 
     # When addon is unsupported (stock/index), redistribute addon weight.
@@ -912,8 +936,9 @@ def compute_factor_scores(
 
     # ── Final score ───────────────────────────────────────────────────────────
     # base_score: driven by trend coherence (0-3.0 scale from _coherent_trend_score)
-    # applied: adx_mult * session_mult * conviction blend
-    # Formula: abs(trend_score) * adx_mult * session_mult * (floor + (1-floor)*conviction)
+    # applied: adx_mult * session_mult * di_align_mult * conviction blend
+    # Formula: abs(trend_score) * adx_mult * session_mult * di_align_mult *
+    #          (floor + (1-floor)*conviction)
     #
     # The conviction floor is regime-conditional when CONVICTION_FLOOR_BY_REGIME is
     # present. RANGING / HIGH_VOLATILITY use a lower floor (default 0.40) because
@@ -923,7 +948,7 @@ def compute_factor_scores(
         _eff_floor = float(_floor_by_regime[regime])
     else:
         _eff_floor = _conviction_floor
-    base_score = abs(trend_score) * adx_mult * session_mult
+    base_score = abs(trend_score) * adx_mult * session_mult * di_align_mult
     final_score = base_score * (_eff_floor + (1.0 - _eff_floor) * conviction)
     final_score = max(0.0, min(3.0, final_score))
 

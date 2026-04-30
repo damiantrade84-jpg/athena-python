@@ -3156,7 +3156,12 @@ class NakedEngine:
         total_score = max(0.0, total_score - _d1_penalty)
         gate_score = max(0.0, gate_score - _d1_penalty)
 
-        pct = min(100, round((total_score / max_possible) * 100))
+        # Stage 1.5: fixed max_possible so pct is deterministic.
+        # 6 gates + 2 bonuses (BOS MTF + OB at zone) + profile_points = 8 + profile_points
+        # Profile points reserved for future; currently 0 when profile scoring disabled.
+        _profile_points_max = 1.0 if config.CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED", False) else 0.0
+        max_possible = 6 + 2 + _profile_points_max  # 8 base, 9 with profile
+        pct = min(100, max(0, round((total_score / max_possible) * 100)))
         if checklist_mode == "strict":
             passed = structure_ok and zone_ok and trigger_ok and room_ok and rr_ok and macro_ok
         else:
