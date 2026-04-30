@@ -1656,13 +1656,13 @@ NAKED_ENGINE:
 
 ENGINE_B_REGIME_MULTIPLIERS:
 
-  TRENDING: 1.0
+  TRENDING: 0.90
 
-  RANGING: 1.0
+  RANGING: 0.90
 
-  HIGH_VOLATILITY: 1.0
+  HIGH_VOLATILITY: 0.85
 
-  LOW_VOLATILITY: 1.0
+  LOW_VOLATILITY: 1.15
 
 
 
@@ -1980,19 +1980,29 @@ SCALP_ENGINE:
 
   TP1_MAX_RR: 4.0               # Cap TP1 to this multiple of SL distance — prevents unrealistically far targets (0 = disabled)
 
+  TREND_EXT_MAX_RR: 0.0         # Optional cap for trend-extension TP1 distance (0 = disabled; preserves current behavior)
+
   TP2_ENABLED: true             # Second TP at next structural level
 
   AI_GRADING: true              # Enable A/B/C/D quality grading
 
-  MIN_GRADE: "B"                # OPERATOR EXPERIMENT: policy-sensitive grade floor — align with EXECUTION_MIN_GRADE after deliberate review only.
+  GRADE_SESSIONS: ["london", "new_york"]  # Sessions that can contribute to Engine D quality grading
 
-  MIN_GRADE_AUTO_EXECUTE: "B"   # Auto-trader gate: only auto-execute >= this grade
+  MIN_GRADE: "B"                # Deprecated alias / funnel metadata only; use EXECUTION_MIN_GRADE for the executable gate.
+
+  MIN_GRADE_AUTO_EXECUTE: "B"   # Backward-compatible fallback for EXECUTION_MIN_GRADE
 
   GRADE_STRONG_ABSORPTION_MIN_COUNT: 2  # Two absorption bars is enough for strong absorption credit
 
   MT5_ABSORPTION_MIN_COUNT: 1   # OPERATOR EXPERIMENT: tick-volume absorption noise gate — revisit only after paper funnel evidence.
 
   ZONE_MIN_CONDITIONS: 2        # Valid zone needs >= N conditions
+
+  CRYPTO_MIN_BUFFER_PIPS: 10    # Absolute fallback floor for crypto stop buffer when entry/feed data is bad
+
+  EQUITY_MIN_BUFFER_PIPS: 10    # Absolute fallback floor for stock/index stop buffer when entry/feed data is bad
+
+  FOREX_BUFFER_PCT: 0.0         # Optional forex percentage buffer floor (0 = disabled; preserves current behavior)
 
   # ── Grade-Based Position Sizing (Fabio A/B/C system) ──────
 

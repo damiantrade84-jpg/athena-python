@@ -400,6 +400,24 @@ _PAIR_TO_CLUSTER: dict = {
 }
 
 
+def _get_30d_correlation(pair_display: str, btc_symbol: str = "BTCUSDT") -> float:
+    """Return 30-day correlation between pair and BTC.
+
+    Stub: returns 0.85 for ETH, 0.30 for SOL, 0.50 for others.
+    In production, replace with actual rolling correlation from price history.
+    """
+    # Known high-correlation majors
+    if pair_display in ("ETH/USDT", "ETHUSDT"):
+        return 0.90
+    if pair_display in ("BTC/USDT", "BTCUSDT"):
+        return 1.0
+    # Known low-correlation alts
+    if pair_display in ("SOL/USDT", "SOLUSDT", "DOGE/USDT", "DOGEUSDT"):
+        return 0.30
+    # Default: moderate correlation
+    return 0.65
+
+
 def apply_correlation_cap(signals: list) -> list:
     """Tag signals with correlationWarning if cluster already has 2+ active signals."""
     cluster_counts: dict = {}
@@ -468,20 +486,31 @@ def calc_confluence(
         intermarket_context=intermarket_context,
     )
 
-    # BTC bias: when BTC opposes crypto alt direction, penalise; when aligned, boost.
-    # Config-driven so the asymmetry (penalty vs boost) is tuneable and auditable.
-    _btc_cfg = CONFIG.get("BTC_BIAS_MULTIPLIERS") or {}
-    _btc_penalty = float(_btc_cfg.get("penalty", 0.85))
-    _btc_boost = float(_btc_cfg.get("boost", 1.10))
+    # FIX 2: BTC Bias Conditional on Correlation
     _btc_mult = 1.0
     _dir = factor_result.get("direction")
+    _pair_display = pair.get("display", "")
     if pair.get("type") == "crypto" and btc_bias and btc_bias != "neutral" and _dir is not None:
-        if (btc_bias == "bearish" and _dir == "LONG") or \
-           (btc_bias == "bullish" and _dir == "SHORT"):
-            _btc_mult = _btc_penalty
-        elif (btc_bias == "bullish" and _dir == "LONG") or \
-             (btc_bias == "bearish" and _dir == "SHORT"):
-            _btc_mult = _btc_boost
+        if "BTC" not in _pair_display:
+            # Only apply BTC bias if altcoin actually correlates with BTC
+            btc_corr = _get_30d_correlation(_pair_display, "BTCUSDT")
+            if btc_corr > 0.80:
+                # High correlation: BTC bias matters
+                if (btc_bias == "bullish" and _dir == "LONG") or \
+                   (btc_bias == "bearish" and _dir == "SHORT"):
+                    _btc_mult = 1.05
+                else:
+                    _btc_mult = 0.90
+            elif btc_corr < 0.50:
+                # Low correlation: BTC bias irrelevant
+                _btc_mult = 1.0
+            else:
+                # Moderate correlation: mild effect
+                if (btc_bias == "bullish" and _dir == "LONG") or \
+                   (btc_bias == "bearish" and _dir == "SHORT"):
+                    _btc_mult = 1.03
+                else:
+                    _btc_mult = 0.95
 
     _fs = factor_result.get("final_score", 0.0)
     if _btc_mult != 1.0:

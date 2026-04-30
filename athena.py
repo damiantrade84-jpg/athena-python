@@ -11750,10 +11750,18 @@ def analyze_pair(
             log.error(f"[ENGINE-B] Error on {pair['display']}: {e}")
     # ------------------------------------------------
 
-    # News AI sentiment (optional): adjusts score for scan tiering / UI after Engine B gate
+    # FIX 4: News AI sentiment with guard rails
     try:
         from news_sentiment_feed import apply_news_sentiment_to_scan_result
 
+        MAX_NEWS_IMPACT = 0.30
+
+        # Get base score before news
+        base_score = float(res.get("score", 0.0) or 0.0)
+        _threshold = get_min_confluence_threshold(pair)
+
+        # Apply raw news sentiment first to compute adjustment
+        _pre_news_score = base_score
         apply_news_sentiment_to_scan_result(
             res,
             pair,
@@ -11761,6 +11769,25 @@ def analyze_pair(
             eodhd_ticker_for_pair=_eodhd_ticker_for_pair,
             current_price=float(price),
         )
+        _post_news_score = float(res.get("score", 0.0) or 0.0)
+        news_adjustment = _post_news_score - _pre_news_score
+
+        # GUARD 1: Don't let news rescue a weak setup to trade-tier
+        if base_score < _threshold * 0.8:
+            news_adjustment = min(0.0, news_adjustment)  # Only negative adjustments apply
+
+        # GUARD 2: Cap total impact
+        news_adjustment = max(-MAX_NEWS_IMPACT, min(MAX_NEWS_IMPACT, news_adjustment))
+
+        # Apply guarded adjustment
+        final_score = max(0.0, min(3.0, base_score + news_adjustment))
+        res["score"] = round(final_score, 4)
+        if res.get("final_score") is not None:
+            res["final_score"] = res["score"]
+
+        # LOG for audit trail
+        res["news_adjustment"] = round(news_adjustment, 4)
+        res["pre_news_score"] = round(_pre_news_score, 4)
     except Exception as _ns_err:
         log.debug("[NewsAI] scan blend skipped: %s", _ns_err)
 

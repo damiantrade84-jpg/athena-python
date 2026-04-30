@@ -847,9 +847,9 @@ CONFIG: dict = {
     },
     "ENGINE_B_REGIME_MULTIPLIERS": {
         "TRENDING": 0.90,
-        "RANGING": 1.30,
-        "HIGH_VOLATILITY": 1.15,
-        "LOW_VOLATILITY": 1.10,
+        "RANGING": 0.90,
+        "HIGH_VOLATILITY": 0.85,
+        "LOW_VOLATILITY": 1.15,
     },
     "FOREX_ENGINE": {
         "hurst_gate_enabled": True,

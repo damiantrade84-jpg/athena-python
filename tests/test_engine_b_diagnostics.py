@@ -203,13 +203,13 @@ def test_calculate_confidence_engine_b_diagnostics_empty_when_room_ok():
     assert out.get("engine_b_diagnostics", {}).get("reason_codes") == []
 
 
-def test_calculate_confidence_forex_adx_below_min_blocks_structure():
+def test_calculate_confidence_forex_adx_derives_regime_not_blocks_structure():
+    """FIX 6: ADX no longer blocks structure; it drives regime classification."""
     import config
 
     res = _base_res_long()
     res["asset_type"] = "forex"
-    res["d1_adx"] = 18.0
-    res["h4_adx"] = 20.0
+    res["d1_adx"] = 18.0  # Below old 25 min
     old_min = config.CONFIG.get("ENGINE_B_FOREX_ADX_MIN")
     config.CONFIG["ENGINE_B_FOREX_ADX_MIN"] = 25.0
     out = engine.calculate_confidence(
@@ -221,8 +221,12 @@ def test_calculate_confidence_forex_adx_below_min_blocks_structure():
         style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
     )
     try:
-        assert out.get("structure_ok") is False
-        assert ENGINE_B_REASON_FOREX_ADX_LOW in (
+        # FIX 6: Low ADX should NOT block structure anymore
+        assert out.get("structure_ok") is True
+        # ADX should derive regime instead
+        assert out.get("_adx_derived_regime") == "RANGING"
+        # Old diagnostic should NOT appear
+        assert ENGINE_B_REASON_FOREX_ADX_LOW not in (
             out.get("engine_b_diagnostics") or {}
         ).get("reason_codes", [])
     finally:
@@ -418,7 +422,8 @@ def test_calculate_confidence_flexible_mode_accepts_liquidity_sweep_catalyst():
     assert out["entry_ok"] is True
     assert out["passed"] is True
     assert out["score"] == pytest.approx(5.0)
-    assert min_score_scaled == 5.0
+    # FIX 2: RANGING multiplier is now 0.90 (was 1.30), so 5.0 * 0.90 = 4.5 → round = 4
+    assert min_score_scaled == 4.0
     assert gate_ok is True
 
 

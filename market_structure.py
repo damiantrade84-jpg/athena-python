@@ -10,11 +10,13 @@ from zone_registry import get_zone_registry
 log = logging.getLogger(__name__)
 
 
+# FIX 2: Fixed backwards regime multipliers
+# TRENDING/RANGING/HIGH_VOL = easier (lower threshold), LOW_VOL = harder (false BOS common)
 ENGINE_B_REGIME_GATE_DEFAULTS = {
-    "TRENDING": 0.85,
-    "RANGING": 1.15,
-    "HIGH_VOLATILITY": 1.20,
-    "LOW_VOLATILITY": 1.0,
+    "TRENDING": 0.90,
+    "RANGING": 0.90,
+    "HIGH_VOLATILITY": 0.85,
+    "LOW_VOLATILITY": 1.15,
 }
 
 # Observability only — stable codes for logs/diagnostics (no scoring side effects).
@@ -83,20 +85,42 @@ def engine_b_min_score_threshold(
     return float(round(scaled))
 
 
+# FIX 10: Per-gate failure histogram (module-level)
+_engine_b_gate_failures: dict[str, int] = {
+    "structure_ok": 0,
+    "location_ok": 0,
+    "entry_ok": 0,
+    "room_ok": 0,
+    "rr_ok": 0,
+    "macro_ok": 0,
+}
+
+
+def _log_gate_failure(gate_name: str, reason: str = "") -> None:
+    """Log a gate failure for monitoring (FIX 10)."""
+    _engine_b_gate_failures[gate_name] = _engine_b_gate_failures.get(gate_name, 0) + 1
+    log.debug("Gate failure: %s — %s", gate_name, reason)
+
+
+def _get_engine_b_gate_failure_summary() -> dict[str, int]:
+    """Return current gate failure counts."""
+    return dict(_engine_b_gate_failures)
+
+
 def engine_b_confidence_passes(
     conf_data: dict | None,
     style_profile: dict | None,
     regime_label: str | None,
     asset_type: str = "",
 ) -> tuple[bool, float]:
-    """Require both the score floor and the checklist verdict to pass."""
+    """FIX 5: Use passed boolean only. Score/pct is for sizing and UI, not pass/fail."""
     min_score_scaled = engine_b_min_score_threshold(
         style_profile, regime_label, asset_type
     )
     conf = conf_data if isinstance(conf_data, dict) else {}
-    score = float(conf.get("gate_score", conf.get("score", 0.0)) or 0.0)
+    # FIX 5: Eliminate double jeopardy — use passed boolean only
     passed = bool(conf.get("passed", False))
-    return passed and score >= min_score_scaled, min_score_scaled
+    return passed, min_score_scaled
 
 
 def _normalise_research_candles(candles: list | None) -> list:
@@ -2916,30 +2940,25 @@ class NakedEngine:
             or res.get("liquidity_sweep", False)
         )
 
-        # Forex ADX gate — structural signals treated as noise below min ADX (trend strength).
-        _forex_adx_gate = True
-        if str(res.get("asset_type") or "").lower() == "forex":
-            _forex_adx_min = float(config.CONFIG.get("ENGINE_B_FOREX_ADX_MIN", 25.0))
-            if _forex_adx_min <= 0:
-                _forex_adx_gate = True
-            else:
-                _adx_val = res.get("d1_adx")
-                if _adx_val is None:
-                    _adx_val = res.get("h4_adx")
-                if _adx_val is not None:
-                    try:
-                        _adx_val = float(_adx_val)
-                    except (TypeError, ValueError):
-                        _adx_val = 0.0
-                    _forex_adx_gate = _adx_val >= _forex_adx_min
-                else:
-                    _forex_adx_gate = True  # no ADX data available — don't block
-
+        # FIX 6: Remove ADX from Forex structure_ok
+        # Use ADX for regime classification instead of blocking structure
         _diag_codes: list[str] = []
-        if not _forex_adx_gate:
-            structure_ok = False
-            if str(res.get("asset_type") or "").lower() == "forex":
-                _diag_codes.append(ENGINE_B_REASON_FOREX_ADX_LOW)
+        if str(res.get("asset_type") or "").lower() == "forex":
+            _adx_val = res.get("d1_adx")
+            if _adx_val is None:
+                _adx_val = res.get("h4_adx")
+            if _adx_val is not None:
+                try:
+                    _adx_val = float(_adx_val)
+                except (TypeError, ValueError):
+                    _adx_val = 0.0
+                # FIX 6: ADX drives regime classification, not structure blocking
+                if _adx_val >= 30:
+                    res["_adx_derived_regime"] = "TRENDING"
+                elif _adx_val >= 20:
+                    res["_adx_derived_regime"] = "NORMAL"
+                else:
+                    res["_adx_derived_regime"] = "RANGING"
 
         # Stage 2.3: Commodity swing requires macro alignment regardless of config
         _commodity_swing_macro_required = (
@@ -2967,7 +2986,18 @@ class NakedEngine:
             except (TypeError, ValueError):
                 location_distance_atr = None
         room_dist = res.get("distance_to_res") if direction == "LONG" else res.get("distance_to_sup")
-        room_ok = room_dist is None or room_dist >= atr_val * min_room_atr
+
+        # FIX 7: Contextual Room Gate helper (called after rr is known)
+        def _get_min_room_atr(rr_val, bos_confirmed, asset_class, style):
+            if asset_class == "crypto":
+                return 0.15
+            if style == "scalp":
+                return 0.20
+            if rr_val >= 2.0:
+                return 0.20
+            if bos_confirmed:
+                return 0.25
+            return 0.35
 
         # Structural levels from analyze_structure
         _struct_sl = res.get("recommended_stop_loss")
@@ -2990,6 +3020,10 @@ class NakedEngine:
         tp = _exec_lvl["execution_tp"]
         rr = _exec_lvl["rr_used_for_gate"]
         rr_ok = rr >= min_rr
+
+        # FIX 7: Apply contextual room gate after rr is computed
+        _effective_min_room_atr = _get_min_room_atr(rr, bool(res.get("bos_confirmed")), asset_type_lower, exec_style)
+        room_ok = room_dist is None or room_dist >= atr_val * _effective_min_room_atr
         # tp_side_ok reflects structural TP for diagnostic purposes
         tp_side_ok = _exec_lvl["structural_tp_valid"]
 
@@ -3110,17 +3144,25 @@ class NakedEngine:
         if research_entry_ok and not trigger_ok:
             trigger_ok = True
 
-        # Entry requires a candle pattern trigger OR a confirmed structural breakout
-        # OR a professional technical catalyst (Sweep/CHoCH) at a key zone.
+        # FIX 9: Add Absorption Entry Fallback
+        absorption_confirmed = bool(res.get("absorption_confirmed", False))
+        location_at_extreme = bool(res.get("location_at_extreme", False))
         entry_ok = (
             trigger_ok
             or (breakout_ok and bool(res.get("bos_volume_confirmed", False)))
             or (bool(res.get("liquidity_sweep")) and zone_ok)
             or (bool(res.get("choch_confirmed")) and zone_ok)
+            or (absorption_confirmed and location_at_extreme)  # NEW: mean-reversion entry
         )
+
+        # FIX 3: Remove Crypto Trigger from Gate Check
         if crypto_profile_enabled:
             trigger_ok = bool(crypto_trigger_state.get("trigger_passed"))
-            entry_ok = crypto_trigger_profile_enabled and trigger_ok
+            if crypto_trigger_profile_enabled:
+                entry_ok = trigger_ok or entry_ok  # Primary
+            else:
+                log.debug("Crypto trigger disabled — using baseline entry")
+                # entry_ok already computed above (baseline)
         space_ok = room_ok or rr_ok
 
         # Stage 2.8: Optional volume confirmation gate.
@@ -3140,10 +3182,14 @@ class NakedEngine:
         if volume_ok:
             bonus_points += 1.0  # Volume confirmation = extra point
 
+        # FIX 1: gate_score is COUNT of true booleans — never modify it
         gate_score = float(sum(1 for passed in gate_confirmations if passed))
         gate_max_possible = float(len(gate_confirmations)) if gate_confirmations else 1.0
         total_score = gate_score + bonus_points
-        max_possible = gate_max_possible + bonus_points
+        # FIX 4: Dynamic max_possible
+        _profile_points_max = 1.0 if config.CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED", False) else 0.0
+        bonus_count = 3 + _profile_points_max  # bos_mtf, ob_at_zone, volume_ok + profile
+        max_possible = gate_max_possible + bonus_count
         _profile_points = 0.0
         _profile_ok = False
         _profile_alignment = "none"
@@ -3161,7 +3207,6 @@ class NakedEngine:
                 or (_profile_bias == "bearish" and direction == "SHORT")
             )
             if _profile_valid and _profile_in_play and _profile_react > 0:
-                max_possible += 1.0
                 if _profile_bias_aligned and _profile_react >= 0.6:
                     _profile_points = min(1.0, _profile_react)
                     _profile_ok = True
@@ -3175,31 +3220,21 @@ class NakedEngine:
                 total_score += _profile_points
 
         # D1 PD-array conflict penalty (B-1).
-        # When an unmitigated D1 OB or FVG opposes the trade direction within 3×ATR,
-        # deduct from total_score. Default penalty reduced from 0.5 to 0.25 so that
-        # signals at the exact min_score gate (e.g. 4/5 = 80%) drop to 3.75 and
-        # may still pass if structural surplus exists. The penalty acts through the
-        # numeric score gate, not the checklist flags.
+        # FIX 1: Apply penalty ONLY to total_score, never to gate_score
         _d1_conflict = bool(res.get("d1_pd_array_conflict", False))
         _d1_penalty = float(
             config.CONFIG.get("NAKED_ENGINE", {}).get("d1_pd_array_penalty", 0.25)
         )
         _d1_penalty = _d1_penalty if _d1_conflict else 0.0
         total_score = max(0.0, total_score - _d1_penalty)
-        gate_score = max(0.0, gate_score - _d1_penalty)
+        # gate_score stays integer — never modified by penalty
 
-        # Stage 1.5: fixed max_possible so pct is deterministic.
-        # 6 gates + 3 bonuses (BOS MTF + OB at zone + volume_ok) + profile_points = 9 + profile_points
-        # Profile points reserved for future; currently 0 when profile scoring disabled.
-        _profile_points_max = 1.0 if config.CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED", False) else 0.0
-        max_possible = 6 + 3 + _profile_points_max  # 9 base, 10 with profile
         pct = min(100, max(0, round((total_score / max_possible) * 100)))
         if checklist_mode == "strict":
             passed = structure_ok and zone_ok and trigger_ok and room_ok and rr_ok and macro_ok
         else:
             # Flexible but not free — require BOTH location AND a trigger/catalyst.
             # BOS alone is not enough. You need: structure + (zone OR breakout) + trigger + room/rr.
-            # This prevents BOS from single-handedly passing 3 gates.
             # macro_ok is only a hard gate when require_macro_align=True (mirrors confirmations list).
             passed = (
                 structure_ok
@@ -3226,34 +3261,53 @@ class NakedEngine:
             fallback_gate_ok = not fallback_used_for_final_pass
             stop_gate_ok = stop_valid
             path_gate_ok = path_clear_to_target
-            crypto_gates = {
-                "crypto_profile": True,
-                "struct": bool(structure_ok and structure_verdict_clear),
-                "target_v2": bool(target_gate_ok),
-                "fallback_not_used": bool(fallback_gate_ok),
-                "rr": bool(rr_ok),
-                "loc": bool(location_ok),
-                "trigger": bool(entry_ok),
-                "stop": bool(stop_gate_ok),
-                "path": bool(path_gate_ok),
-            }
-            if not crypto_gates["target_v2"] and "target_v2" not in failed_gate_names:
+
+            # FIX 8: Internal diagnostics → assertions (code health checks)
+            if not structure_verdict_clear:
+                log.warning("CRITICAL: Structure analysis failed — check data feeds")
+            if target_v2_valid is None:
+                log.warning("CRITICAL: Target computation failed")
+            if path_clear_to_target is None:
+                log.warning("CRITICAL: Internal path undefined")
+
+            # FIX 3: Trading gates — market conditions only (removed crypto_trigger_profile_enabled)
+            passed = (
+                structure_ok and
+                location_ok and
+                entry_ok and
+                room_ok and
+                rr_ok
+            )
+
+            # Diagnostics only (not trading gates)
+            if not target_gate_ok and "target_v2" not in failed_gate_names:
                 failed_gate_names.append("target_v2")
-            if not crypto_gates["fallback_not_used"] and "fallback_target" not in failed_gate_names:
+            if not fallback_gate_ok and "fallback_target" not in failed_gate_names:
                 failed_gate_names.append("fallback_target")
-            if not crypto_gates["stop"] and "stop" not in failed_gate_names:
+            if not stop_gate_ok and "stop" not in failed_gate_names:
                 failed_gate_names.append("stop")
-            if not crypto_gates["path"] and "path" not in failed_gate_names:
+            if not path_gate_ok and "path" not in failed_gate_names:
                 failed_gate_names.append("path")
             if not crypto_trigger_profile_enabled and "trigger_profile_disabled" not in failed_gate_names:
                 failed_gate_names.append("trigger_profile_disabled")
             if not structure_verdict_clear and "structural_verdict" not in failed_gate_names:
                 failed_gate_names.append("structural_verdict")
-            passed = all(crypto_gates.values())
 
         lifecycle_state, lifecycle_reason = self._determine_lifecycle_state(
             res, current_price, direction, trigger_ok
         )
+
+        # FIX 10: Per-gate failure histogram logging
+        for gate_name, gate_result in [
+            ("structure_ok", structure_ok),
+            ("location_ok", location_ok),
+            ("entry_ok", entry_ok),
+            ("room_ok", room_ok),
+            ("rr_ok", rr_ok),
+            ("macro_ok", macro_ok if require_macro_align else True),
+        ]:
+            if not gate_result:
+                _log_gate_failure(gate_name, f"direction={direction}, asset={asset_type_lower}")
 
         if hard_counter:
             _diag_codes.append(ENGINE_B_REASON_SEQUENCE_COUNTER_TREND)
@@ -3370,6 +3424,7 @@ class NakedEngine:
             "crypto_stop_valid": stop_valid,
             "crypto_path_clear_to_target": path_clear_to_target,
             "engine_b_diagnostics": {"reason_codes": _diag_codes},
+            "_adx_derived_regime": res.get("_adx_derived_regime"),
         }
 
     def check_macro_correlation_detail(

@@ -270,7 +270,15 @@ def _coherent_trend_score(
     agreement_count = sum(1 for _, d, _ in votes if d == dominant_sign)
     # Scale by TF coverage so a single available TF cannot produce a full 3.0 score.
     # D1 only → max 1.0; D1+H4 → max 2.0; all three → max 3.0.
-    _tf_coverage = len(votes) / 3.0
+    # FIX 5: Single-vote trend weight scaling — scale coverage by relative weight
+    # so D1-only > H4-only > H1-only.
+    active_votes = len(votes)
+    if active_votes == 1:
+        max_single_weight = 0.50  # D1 weight
+        dominant_weight = dominant_w
+        _tf_coverage = (1.0 / 3.0) * (dominant_weight / max_single_weight)
+    else:
+        _tf_coverage = active_votes / 3.0
     magnitude = (0.35 + 0.65 * coherence_ratio) * 3.0 * _tf_coverage
     trend_score = dominant_sign * magnitude
     direction = "LONG" if dominant_sign > 0 else "SHORT"
@@ -986,6 +994,13 @@ def compute_factor_scores(
     except (TypeError, ValueError):
         _close_for_vol = None
     vol_scaler = _volatility_scaler(_atr if _atr else 0.0, _close_for_vol, asset_type)
+
+    # FIX 1: For volatile-tier assets, volatility is the opportunity — don't reduce score
+    from scoring import get_pair_score_group
+    score_group = get_pair_score_group(pair)
+    if asset_type == "crypto" or score_group in ("nat_gas", "crypto_doge"):
+        vol_scaler = max(1.0, vol_scaler)
+
     feed_status["vol_scaler"] = f"{vol_scaler:.2f}"
 
     # ── Session multiplier (deprecated, now returns 1.0) ──────────────────────
@@ -1075,29 +1090,34 @@ def compute_factor_scores(
         _eff_floor = _conviction_floor
     base_score = abs(trend_score) * adx_mult * vol_scaler * session_mult * di_align_mult
 
-    # Stage 3.2: Funding / carry cost adjustment
-    # When holding is expensive (high funding or adverse carry), reduce score.
+    # FIX 3: Recalibrate Cost/Funding Penalty Sensitivity
     _cost_penalty = 0.0
     if asset_type == "crypto" and funding_rate is not None:
         try:
             _fr = float(funding_rate)
-            # Funding paid every 8h; annualised ≈ _fr * 3 * 365 ≈ 1095× _fr
-            # Penalise if funding is adverse to direction: longs pay high positive funding
-            _is_long = direction == "LONG"
-            _adverse = (_is_long and _fr > 0.001) or (not _is_long and _fr < -0.001)
-            _favourable = (_is_long and _fr < -0.001) or (not _is_long and _fr > 0.001)
-            if _adverse:
-                _cost_penalty = min(0.15, abs(_fr) * 100)  # 0.01 funding → 0.10 penalty
-            elif _favourable:
-                _cost_penalty = -min(0.10, abs(_fr) * 50)  # small boost for favourable funding
+            if _fr > 0.01:  # Expensive to hold (> 0.01% per 8h = ~11% annualized)
+                _cost_penalty = min(0.10, _fr * 5)
+            elif _fr < -0.01:  # Getting paid to hold
+                _cost_bonus = min(0.05, abs(_fr) * 2.5)
+                _cost_penalty = -_cost_bonus  # Negative penalty = boost
+            else:
+                _cost_penalty = 0  # Normal funding = no penalty
         except (TypeError, ValueError):
             pass
-    elif asset_type == "forex" and addon_type == "carry":
-        # Carry already encoded in addon_val; apply small penalty if carry is against
-        if addon_val == _ADDON_AGAINST:
-            _cost_penalty = 0.05
-        elif addon_val == _ADDON_CONFIRM:
-            _cost_penalty = -0.03
+    elif asset_type == "forex":
+        # Use raw carry differential for cost penalty (independent of addon_val)
+        try:
+            from carry_feed import get_carry_differential
+            carry = get_carry_differential(display)
+            if carry is not None:
+                if carry < -0.02:  # Negative carry > 2% annual
+                    _cost_penalty = 0.05
+                elif carry > 0.02:  # Positive carry
+                    _cost_penalty = -0.03  # Small boost
+                else:
+                    _cost_penalty = 0
+        except Exception:
+            pass
 
     final_score = base_score * (_eff_floor + (1.0 - _eff_floor) * conviction)
     final_score = final_score * (1.0 - _cost_penalty)

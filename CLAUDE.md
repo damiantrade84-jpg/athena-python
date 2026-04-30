@@ -13,7 +13,7 @@ alwaysApply: true
 
 - **Engine A live:** `MIN_CONFLUENCE_CLASS`, `PAIR_PROFILES.min_confluence`, `AUTO_TRADE_MIN_SCORE`, `SCAN_QUANTILE_*`, confluence logic in `scoring.py` / `factor_scoring.py`, `analyze_pair` tiering. Current `config.yaml` does **not** define `MIN_CONFLUENCE_GROUP`; helper support remains in `scoring.py` only for backward-compatible configs that explicitly restore it. Active soft gating keys on the live factor route are `FOREX_ENGINE.session_soft_multiplier`, `FOREX_ENGINE.session_shoulder_multiplier`, `FOREX_ENGINE.session_shoulder_hours`, and `ADX_TREND_MIN_CLASS`.
 - **Engine A backtest:** `BT_MIN`, `PAIR_PROFILES.bt_min`, `get_backtest_min_score_threshold`, backtest score gates in `backtest_runner.py`.
-- **Engine B live + backtest:** `NAKED_ENGINE.style_profiles` (`min_score`, `min_rr`), `ENGINE_B_REGIME_MULTIPLIERS` (score scaling — currently neutralized to 1.0), `zone_multipliers` (structural width), naked checklist gates in `market_structure.py`.
+- **Engine B live + backtest:** `NAKED_ENGINE.style_profiles` (`min_score`, `min_rr`), `ENGINE_B_REGIME_MULTIPLIERS` (score scaling — TRENDING=0.90, RANGING=0.90, HIGH_VOL=0.85, LOW_VOL=1.15), `zone_multipliers` (structural width), naked checklist gates in `market_structure.py`.
 - **Engine D (Scalp Lab):** `SCALP_ENGINE` in `config.yaml` (`MIN_RR`, `MAX_SPREAD_PIPS`, `WITH_TREND_ONLY`, `BIAS_TIMEFRAME`, `M1_CANDLES`, `M15_CANDLES`, `M5_CANDLES`, `H1_CANDLES`, `SESSION_MODE`, `NY_OPEN_SKIP_MINUTES`, `EXECUTION_TIMEFRAME`, `MIN_GRADE_AUTO_EXECUTE`, `BT_ENABLED`, `BT_SESSION_MODE`, `BT_NY_OPEN_SKIP_MINUTES`, `BT_WALK_BARS`, `BT_MAX_CONCURRENT`, `BT_SLIPPAGE_TICKS`, `BT_SCRATCH_ENABLED`, `BT_SCRATCH_BARS`, `BT_SCRATCH_MIN_R`, optional `SCALP_PAIRS`) and core pass/fail logic in `scalp_engine.py` (session filter via `scalp_session_window()`, spread filter, VP build, absorption/CVD/AAA, VWAP, setup classification, HTF bias gate, level math, `ai_quality_grade`).
 
 Cosmetic UI copy is fine. **Do not "tune", "align", or "simplify" thresholds** in passing.
@@ -933,7 +933,19 @@ Returns 3.0 for all asset classes (Engine A v2 unified scale). No per-class fork
 - TTL: H1=55 min, H4=3h55m, D1=23h
 
 ### `NakedEngine.calculate_confidence(...)` — `market_structure.py`
-Shared Engine B checklist for live scan, analysis, compare, backtest. Score = checklist count / UI measure. `passed` = naked price-action rules only — not AI-driven. **Note:** `ENGINE_B_REGIME_MULTIPLIERS` (set to 1.0) ensures the `min_score` from UI or `score_group_overrides` is used directly without hidden regime inflation. **`ENGINE_B_PROFILE_SCORING_ENABLED: true`** — volume profile (POC/VAH/VAL) bonus scoring is active. Crypto uses Binance kline bar volume (`vol = k[5]`); non-crypto uses EODHD real volume overlaid on MT5 candles. `compute_fixed_range_volume_profile()` has a range-proxy fallback for any pair with zero-volume bars.
+Shared Engine B checklist for live scan, analysis, compare, backtest. Score = checklist count / UI measure. `passed` = naked price-action rules only — not AI-driven. **Note:** `ENGINE_B_REGIME_MULTIPLIERS` (TRENDING=0.90, RANGING=0.90, HIGH_VOL=0.85, LOW_VOL=1.15) — easier in chop/vol, harder in flat. `engine_b_confidence_passes` uses `passed` boolean only (no score threshold double-jeopardy). **`ENGINE_B_PROFILE_SCORING_ENABLED: true`** — volume profile (POC/VAH/VAL) bonus scoring is active. Crypto uses Binance kline bar volume (`vol = k[5]`); non-crypto uses EODHD real volume overlaid on MT5 candles. `compute_fixed_range_volume_profile()` has a range-proxy fallback for any pair with zero-volume bars.
+
+**Engine B Fixes Applied (2026-04-30):**
+- FIX 1: D1 penalty applies to `total_score` only; `gate_score` stays integer.
+- FIX 2: Regime multipliers fixed — easier in RANGING/HIGH_VOL, harder in LOW_VOL.
+- FIX 3: Crypto trigger profile no longer bricks all crypto when disabled.
+- FIX 4: `max_possible` is dynamic (`gate_count + bonus_count`).
+- FIX 5: `engine_b_confidence_passes` uses `passed` boolean only (no score threshold).
+- FIX 6: ADX removed from forex `structure_ok`; drives regime classification instead.
+- FIX 7: Contextual `min_room_atr` — crypto=0.15, scalp=0.20, RR≥2=0.20, BOS=0.25.
+- FIX 8: Internal diagnostics (`structural_verdict_clear`, `target_v2`, `path`) are warnings, not gates.
+- FIX 9: Absorption entry fallback added to `entry_ok`.
+- FIX 10: Per-gate failure histogram for monitoring.
 
 ### `_naked_scan_style_profile(style, score_group)` — `athena.py`
 Resolves effective Engine B thresholds. Logic: Hardcoded defaults → `style_profiles` (global UI) → `score_group_overrides` (per-pair BT MIN). Per-group overrides take priority and are displayed in the **"Per-Group BT MIN Overrides"** table in the dashboard's Engine B panel.
@@ -1687,6 +1699,44 @@ SCALP_ENGINE:
 6. **`infer_bias_from_ema_stack` blocks pullback entries [LOW]:** Condition `last_close >= ema21` for LONG bias meant price had to be above EMA21 to get a bullish bias — exactly the opposite of what Engine D targets (pullback below EMA21 in uptrend). Removed the price-position gate; bias is now determined by EMA stack order (`ema21 > ema50 > ema200`) only.
 
 **Commits:** `bd5cb65` (Engine D), `e52d7eb` (Engine A/B + config + tests)
+
+---
+
+## 2026-04-30: Engine A + Engine B Fixes
+
+### Engine A (`factor_scoring.py`, `scoring.py`, `athena.py`) — 5 fixes
+
+1. **Floor Volatility Scaler at 1.0 for Volatile Tier (`factor_scoring.py`):** High ATR was reducing scores for volatile-tier assets (crypto, nat_gas) via `vol_scaler` (down to 0.85) on top of their already-higher 2.0 threshold. Fixed: `vol_scaler = max(1.0, vol_scaler)` for volatile tier so volatility is treated as opportunity, not penalty.
+
+2. **BTC Bias Conditional on Correlation (`scoring.py`):** Altcoins with 0.3-0.5 correlation to BTC were getting penalized (-15%) for moving independently. Fixed: `_get_30d_correlation()` stub added; BTC bias only applies when `btc_corr > 0.80` (high: ±5%), `0.50-0.80` (moderate: ±3%), `< 0.50` (no effect).
+
+3. **Recalibrate Cost/Funding Penalty Sensitivity (`factor_scoring.py`):** `0.005%` funding was triggering max penalty (`min(0.15, abs(fr)*100)`). Fixed: only penalize funding > 0.01% per 8h (`min(0.10, fr*5)`); normal funding = 0 penalty; negative funding > 0.01% gives boost. Forex carry uses raw `get_carry_differential()` with ±2% annual thresholds.
+
+4. **News Sentiment Guard Rails (`athena.py`):** News sentiment could rescue weak setups or kill good ones without bounds. Fixed: `MAX_NEWS_IMPACT = 0.30` cap; if `base_score < threshold * 0.8`, only negative adjustments apply; audit fields `news_adjustment` and `pre_news_score` added.
+
+5. **Single-Vote Trend Weight Scaling (`factor_scoring.py`):** When only one timeframe had EMA data, `_tf_coverage` was `1/3` regardless of which TF. Fixed: `active_votes == 1` scales coverage by relative weight: `(1/3) * (dominant_weight / 0.50)` so D1-only > H4-only > H1-only.
+
+### Engine B (`market_structure.py`, `config.py`, `config.yaml`) — 10 fixes
+
+1. **D1 Penalty Applies to total_score Only:** `gate_score` (integer count) was being modified by `d1_penalty`, making it non-integer. Fixed: penalty subtracted from `total_score` only; `gate_score` stays pure integer.
+
+2. **Fix Backwards Regime Multipliers:** RANGING=1.15 and HIGH_VOL=1.20 made gates harder in choppiest markets. Fixed: TRENDING=0.90, RANGING=0.90, HIGH_VOL=0.85, LOW_VOL=1.15.
+
+3. **Remove Crypto Trigger from Gate Check:** `crypto_trigger_profile_enabled` in `all(crypto_gates.values())` bricked all crypto if False. Fixed: trigger profile status is diagnostic only; `passed` uses market-condition gates only.
+
+4. **Dynamic max_possible:** Hardcoded `6 + 3 + profile` assumed 6 gates. Fixed: `gate_count + bonus_count` so scalp (5 gates) → max 8, swing (6 gates) → max 9.
+
+5. **Eliminate Double Jeopardy:** `passed AND gate_score >= min_score_scaled` was tautological/impossible. Fixed: `engine_b_confidence_passes` uses `passed` boolean only; score/pct used for sizing/UI.
+
+6. **Remove ADX from Forex structure_ok:** ADX < 25 blocked pristine SMC entries. Fixed: ADX drives regime classification (≥30=TRENDING, ≥20=NORMAL, <20=RANGING); `structure_ok` depends on market structure only.
+
+7. **Contextual Room Gate:** Fixed `min_room_atr = 0.35` blocked tight breaker blocks. Fixed: crypto=0.15, scalp=0.20, RR≥2=0.20, BOS confirmed=0.25, default=0.35.
+
+8. **Internal Diagnostics → Assertions:** `structural_verdict_clear`, `target_v2`, `path` were trading gates. Fixed: logged as warnings (code health); trading gates reduced to market conditions only.
+
+9. **Absorption Entry Fallback:** `entry_ok` had ~40% success rate. Fixed: added `absorption_confirmed and location_at_extreme` as new mean-reversion entry path.
+
+10. **Per-Gate Failure Histogram:** Added `_engine_b_gate_failures` dict + `_log_gate_failure()` for observability.
 
 ---
 
