@@ -709,13 +709,26 @@ def get_current_sessions() -> list:
     return get_sessions_for_time("forex")
 
 
+def _grade_session_names(cfg: dict) -> list[str]:
+    raw = cfg.get("GRADE_SESSIONS", ["london", "new_york"])
+    if isinstance(raw, str):
+        raw = [raw]
+    return [str(s).strip().lower() for s in raw if str(s).strip()]
+
+
 def get_grade_sessions_for_mode(asset_type: str = "forex", when: Any = None, *, backtest: bool = False) -> list:
     """Return session labels used by quality grading under the configured mode."""
     cfg = CONFIG.get("SCALP_ENGINE", {})
     mode = _resolved_normalized_session_mode(cfg, backtest=backtest)
+    active = get_sessions_for_time(asset_type, when=when)
+    grade_sessions = _grade_session_names(cfg)
     if mode in {"all", "any", "disabled", "off"}:
-        return ["london", "new_york"]
-    return get_sessions_for_time(asset_type, when=when)
+        return []
+    if mode == "london_ny":
+        return [s for s in active if s in grade_sessions]
+    if mode in grade_sessions:
+        return [mode] if mode in active else []
+    return [s for s in active if s in grade_sessions]
 
 
 def is_valid_session(asset_type: str = "forex") -> tuple:
@@ -1672,6 +1685,19 @@ def _scalp_min_rr_for_group(asset_type: str, score_group: str | None = None) -> 
     return base
 
 
+def _scalp_execution_min_grade(cfg: dict) -> str:
+    if cfg.get("EXECUTION_MIN_GRADE") is not None:
+        return str(cfg.get("EXECUTION_MIN_GRADE")).upper()
+    if cfg.get("MIN_GRADE_AUTO_EXECUTE") is not None:
+        return str(cfg.get("MIN_GRADE_AUTO_EXECUTE")).upper()
+    if cfg.get("MIN_GRADE") is not None:
+        log.warning(
+            "[SCALP] MIN_GRADE is deprecated for execution gating; use EXECUTION_MIN_GRADE"
+        )
+        return str(cfg.get("MIN_GRADE")).upper()
+    return "B"
+
+
 def calculate_scalp_levels(
     direction: str,
     entry: float,
@@ -1700,12 +1726,23 @@ def calculate_scalp_levels(
 
     _pip = point * 10 if digits >= 4 else point
     # Static asset-class minimums (preserved as floors).
+    if entry <= 0:
+        log.warning(
+            "[SCALP] invalid entry for buffer calculation: entry=%s asset_type=%s",
+            entry,
+            asset_type,
+        )
+    _crypto_floor = _pip * float(cfg.get("CRYPTO_MIN_BUFFER_PIPS", 10))
+    _equity_floor = _pip * float(cfg.get("EQUITY_MIN_BUFFER_PIPS", 10))
+    _forex_pct_floor = (
+        entry * float(cfg.get("FOREX_BUFFER_PCT", 0.0)) if entry > 0 else 0.0
+    )
     _min_buffers = {
-        "forex":     _pip * 3,
-        "commodity": entry * 0.002 if entry > 0 else _pip * 5,
-        "crypto":    entry * 0.003 if entry > 0 else 0,
-        "index":     entry * 0.002 if entry > 0 else 0,
-        "stock":     entry * 0.002 if entry > 0 else 0,
+        "forex":     max(_pip * 3, _forex_pct_floor),
+        "commodity": max((entry * 0.002) if entry > 0 else 0.0, _pip * 5),
+        "crypto":    max((entry * 0.003) if entry > 0 else 0.0, _crypto_floor),
+        "index":     max((entry * 0.002) if entry > 0 else 0.0, _equity_floor),
+        "stock":     max((entry * 0.002) if entry > 0 else 0.0, _equity_floor),
     }
     _min_buf = _min_buffers.get(asset_type, _min_buffers["forex"])
 
@@ -1789,6 +1826,16 @@ def calculate_scalp_levels(
         sl = entry + buffer
 
     sl_distance = abs(entry - sl)
+
+    trend_ext_max_rr = float(cfg.get("TREND_EXT_MAX_RR", 0))
+    if trend_ext_max_rr > 0 and sl_distance > 0 and setup_type == "trend_extension":
+        max_tp1_dist = sl_distance * trend_ext_max_rr
+        if direction == "LONG" and tp1 > entry + max_tp1_dist:
+            log.warning("[SCALP] trend_extension TP1 capped at %.2fR", trend_ext_max_rr)
+            tp1 = entry + max_tp1_dist
+        elif direction == "SHORT" and tp1 < entry - max_tp1_dist:
+            log.warning("[SCALP] trend_extension TP1 capped at %.2fR", trend_ext_max_rr)
+            tp1 = entry - max_tp1_dist
 
     # TP1 cap: if the structural target is unrealistically far (e.g. wide value area),
     # clip TP1 to TP1_MAX_RR * sl_distance. trend_extension is already at exactly MIN_RR
@@ -1925,12 +1972,14 @@ def ai_quality_grade(
         reasons.append(f"VWAP lean confirms {setup_dir}")
 
     # ── Session (0–10) ───────────────────────────────────────────────────
-    if "london" in sessions and "new_york" in sessions:
+    grade_sessions = _grade_session_names(cfg)
+    active_grade_sessions = [s for s in grade_sessions if s in set(sessions or [])]
+    if len(active_grade_sessions) >= 2:
         score += 10
-        reasons.append("London/NY overlap — peak liquidity")
-    elif "london" in sessions or "new_york" in sessions:
+        reasons.append(f"Grade session overlap active ({'/'.join(active_grade_sessions)})")
+    elif len(active_grade_sessions) == 1:
         score += 7
-        reasons.append("Major session active")
+        reasons.append(f"Major grade session active ({active_grade_sessions[0]})")
 
     # ── HTF bias alignment (0–5) ─────────────────────────────────────────
     if htf_bias and htf_bias == setup_dir:
@@ -1938,14 +1987,24 @@ def ai_quality_grade(
         reasons.append(f"HTF EMA bias aligned ({htf_bias})")
 
     # ── Spread penalty (−5 to +5) ────────────────────────────────────────
-    max_sp = cfg.get("MAX_SPREAD_PIPS", {}).get(asset_type, cfg.get("MAX_SPREAD_PIPS", {}).get("forex", 4))
+    # Keep units aligned with check_spread(): non-forex uses raw MT5 points,
+    # forex uses pip-converted spread.
+    if asset_type in ("index", "stock", "commodity"):
+        max_points_cfg = cfg.get("MAX_SPREAD_POINTS", {})
+        defaults = {"index": 100, "stock": 50, "commodity": 30}
+        max_sp = float(max_points_cfg.get(asset_type, defaults.get(asset_type, 100)))
+        spread_unit = "points"
+    else:
+        max_spreads = cfg.get("MAX_SPREAD_PIPS", {})
+        max_sp = float(max_spreads.get(asset_type, max_spreads.get("forex", 4)))
+        spread_unit = "pips"
     if spread_pips > 0:
         if spread_pips <= max_sp * 0.5:
             score += 5
-            reasons.append(f"Tight spread ({spread_pips:.1f} pips)")
+            reasons.append(f"Tight spread ({spread_pips:.1f} {spread_unit})")
         elif spread_pips > max_sp * 0.8:
             score -= 5
-            reasons.append(f"Wide spread ({spread_pips:.1f} pips)")
+            reasons.append(f"Wide spread ({spread_pips:.1f} {spread_unit})")
 
     score = max(0, min(100, score))
 
@@ -2182,7 +2241,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
         execution_tf = "M1"
     bias_tf   = str(cfg.get("BIAS_TIMEFRAME", "H1")).upper()
     use_bias  = bool(cfg.get("WITH_TREND_ONLY", True))
-    min_grade = str(cfg.get("MIN_GRADE", "C")).upper()  # scan gate; MIN_GRADE_AUTO_EXECUTE is for auto-trader only
+    min_grade = _scalp_execution_min_grade(cfg)
 
     def _record_stability_sample(
         display: str,
@@ -2639,9 +2698,25 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     "max_allowed_cost_R": max_cost_R,
                 }
                 
-                if risk_distance_abs <= 0 or risk_distance_pct < min_stop_pct or cost_as_R > max_cost_R:
+                _fee_reason = None
+                if risk_distance_abs <= 0:
+                    _fee_reason = "fee_guard_zero_stop"
+                elif risk_distance_pct < min_stop_pct:
                     _fee_reason = "fee_guard_micro_stop"
-                    log.warning(f"[SCALP] {_fee_reason} on {display}: cost_as_R={cost_as_R:.2f} > {max_cost_R} or stop_pct={risk_distance_pct:.5f} < {min_stop_pct}")
+                elif cost_as_R > max_cost_R:
+                    _fee_reason = "fee_guard_high_cost"
+                if _fee_reason:
+                    log.warning(
+                        "[SCALP] %s on %s: risk_abs=%.8f stop_pct=%.5f min_stop_pct=%.5f "
+                        "cost_as_R=%.2f max_cost_R=%.2f",
+                        _fee_reason,
+                        display,
+                        risk_distance_abs,
+                        risk_distance_pct,
+                        min_stop_pct,
+                        cost_as_R,
+                        max_cost_R,
+                    )
                     candidate_fail_reasons.append(_fee_reason)
                     fee_guard_metrics["engine_d_reject_reason"] = _fee_reason
                 _funnel["diagnostic_notes"].update(fee_guard_metrics)
@@ -2692,7 +2767,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             _funnel["sl"] = levels.get("sl")
             _funnel["tp"] = levels.get("tp1")
 
-            execution_min_grade = str(cfg.get("EXECUTION_MIN_GRADE", cfg.get("MIN_GRADE_AUTO_EXECUTE", "B"))).upper()
+            execution_min_grade = _scalp_execution_min_grade(cfg)
             grade_rank = _GRADE_RANK.get(grade, 0)
             execution_rank = _GRADE_RANK.get(execution_min_grade, 3)
             gate_result = "PASS"
@@ -2743,7 +2818,8 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "ai_score":        quality["score"],
                 "ai_grade":        quality["grade"],
                 "ai_reasons":      quality["reasons"],
-                "size_multiplier": quality["size_multiplier"],
+                "original_size_multiplier": quality["size_multiplier"],
+                "size_multiplier":          quality["size_multiplier"],
                 "gate_result":      gate_result,
                 "executable":       executable,
                 "candidate_status": candidate_status_reason,
@@ -2781,11 +2857,14 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "premarket_delta_proxy_levels": premarket_delta_proxy_levels,
                 "timestamp":       datetime.now(timezone.utc).isoformat(),
                 "engine":          "SCALP",
+                "engine_type":     "engine_d",
                 # Fields required by risk_engine.risk_check().
                 # Audit 8577d0 §1.9 / §4.4 fix: emit raw 0-100 score with
                 # explicit maxScore=100 so signal_debate / Engine B AI prompts
                 # do not silently mix Engine A's 0-3 scale with Engine D's
-                # 0-1 normalised scale (same field name, two rubrics).
+                # 0-100 quality rubric (same field name, two rubrics).
+                "qualityScore":    float(quality["score"]),
+                "maxQualityScore": 100.0,
                 "confluenceScore": float(quality["score"]),
                 "maxScore":        100.0,
             }
@@ -2793,12 +2872,24 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             # Apply consecutive-loss halving and +2R size cap. The +2R rule caps
             # size at 0.5x; it does not increase smaller grade-based sizes.
             _risk_snapshot = get_scalp_session_risk_state()
+            _original_size_multiplier = float(
+                signal.get("original_size_multiplier", signal.get("size_multiplier", 1.0)) or 1.0
+            )
             if cfg.get("CONSECUTIVE_LOSS_HALVE", True) and _risk_snapshot["consecutive_losses"] >= 2:
                 signal["size_multiplier"] = signal.get("size_multiplier", 1.0) * 0.5
                 signal["ai_reasons"] = signal.get("ai_reasons", []) + ["size_halved:consecutive_losses"]
             if _risk_snapshot.get("size_cut_active"):
                 signal["size_multiplier"] = min(signal.get("size_multiplier", 1.0), 0.5)
                 signal["ai_reasons"] = signal.get("ai_reasons", []) + ["size_cut:+2R_reached"]
+            _final_size_multiplier = float(signal.get("size_multiplier", 0.0) or 0.0)
+            if _original_size_multiplier > 0 and _final_size_multiplier < (_original_size_multiplier * 0.5):
+                log.info(
+                    "[SCALP] size multiplier reduced >50%% on %s: original=%.3f final=%.3f reasons=%s",
+                    display,
+                    _original_size_multiplier,
+                    _final_size_multiplier,
+                    signal.get("ai_reasons", []),
+                )
             
             signals.append(signal)
             _record_stability_sample(

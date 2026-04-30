@@ -777,8 +777,8 @@ def test_grade_sessions_all_mode_keeps_grade_neutral_to_clock(monkeypatch):
 
     when = datetime(2026, 3, 26, 23, 0, tzinfo=timezone.utc)
 
-    assert get_grade_sessions_for_mode("forex", when=when) == ["london", "new_york"]
-    assert get_grade_sessions_for_mode("forex", when=when, backtest=True) == ["london", "new_york"]
+    assert get_grade_sessions_for_mode("forex", when=when) == []
+    assert get_grade_sessions_for_mode("forex", when=when, backtest=True) == []
 
 
 def test_check_spread_rejects_wide_spread():
