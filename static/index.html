@@ -7110,14 +7110,15 @@ function getConfluencePct(data) {
   if (pct == null) pct = data.confidence_pct;
   if (pct == null) pct = data.score_pct;
   if (pct == null && typeof data.confluenceScore === 'number') {
-    // Use the scan threshold if available (same formula as backend: score/threshold * 67)
+    // Engine A: use scan threshold if available (backend formula: score/threshold * 67)
     var denom = data.scanThresholdEffective || data.scanThresholdStatic || null;
     if (!denom && (data.maxScore||0) > 0) denom = data.maxScore;
     if (denom && denom > 0) pct = (data.confluenceScore / denom) * 67;
   }
   if (pct == null && typeof data.score === 'number') {
+    // Engine B: backend already computes true percentage (score/max_possible * 100)
     var denom2 = (data.max_possible||0) > 0 ? data.max_possible : null;
-    if (denom2) pct = (data.score / denom2) * 67;
+    if (denom2) pct = (data.score / denom2) * 100;
   }
   pct = Number(pct);
   if (!Number.isFinite(pct)) return 0;
@@ -7787,6 +7788,7 @@ function _acmFmtPrice(value, sig) {
 function _acmScoreText(sig) {
   if (!sig) return '';
   if (typeof sig.confluencePct === 'number') return sig.confluencePct.toFixed(0) + '%';
+  if (typeof sig.pct === 'number') return sig.pct.toFixed(0) + '%';  // Engine B
   if (typeof sig.score_pct === 'number') return sig.score_pct.toFixed(0) + '%';
   if (typeof sig.confluenceScore === 'number') return sig.confluenceScore.toFixed(2);
   return '';
@@ -9991,6 +9993,10 @@ function openAcm(symbol, tf, fallbackSig) {
     var maxS = sig.maxScore || sig.maxScoreOverride || 3.0;
     scoreEl.textContent = parseFloat(sig.confluenceScore).toFixed(2) + '/' + maxS;
     scoreEl.style.display = '';
+  } else if (sig && sig.score != null && sig.max_possible != null) {
+    // Engine B score display
+    scoreEl.textContent = parseFloat(sig.score).toFixed(2) + '/' + sig.max_possible;
+    scoreEl.style.display = '';
   } else if (sig && sig.conviction != null) {
     scoreEl.textContent = 'Conv ' + parseFloat(sig.conviction).toFixed(2);
     scoreEl.style.display = '';
@@ -11777,7 +11783,7 @@ function buildScalpCard(s, idx, diagnostic) {
       '</div>'+
       '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">'+
         (s.direction ? '<span class="direction-badge '+dirCls+'">'+s.direction+'</span>' : '')+
-        (!isSkipped ? '<span style="background:'+borderColor+'22;color:'+borderColor+';border:1px solid '+borderColor+'55;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:800">'+
+        (!isSkipped ? '<span class="scalp-grade-badge" style="background:'+borderColor+'22;color:'+borderColor+';border:1px solid '+borderColor+'55;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:800">'+
           gk+' &nbsp;<span style="font-weight:400;font-size:10px">'+s.ai_score+'</span>'+(sizeLabel?' &middot; '+sizeLabel:'')+ 
         '</span>' : '')+
       '</div>'+
@@ -11833,15 +11839,36 @@ function buildScalpCard(s, idx, diagnostic) {
 function markScalpSignalRejected(sid, reason, data) {
   var card = document.getElementById('scalp-card-' + sid);
   if (!card) return;
+  var original = (window._scalpSignalsById || {})[sid] || {};
   var skipped = data && data.skipped && data.skipped.length ? data.skipped[0] : {};
+  var freshSignals = data && data.fresh_scan && Array.isArray(data.fresh_scan.signals) ? data.fresh_scan.signals : [];
+  var fresh = freshSignals.length ? freshSignals[0] : skipped;
+  var oldGrade = original.ai_grade || original.grade || '';
+  var oldScore = original.ai_score != null ? original.ai_score : null;
+  var freshGrade = fresh.ai_grade || fresh.grade || skipped.ai_grade || '';
+  var freshScore = fresh.ai_score != null ? fresh.ai_score : (skipped.ai_score != null ? skipped.ai_score : null);
   var detail = 'Fresh scan rejected this setup: ' + (reason || 'setup invalidated');
-  if (skipped.ai_grade) {
+  if (oldGrade || oldScore != null || freshGrade || freshScore != null) {
+    var oldLabel = (oldGrade || '?') + (oldScore != null ? ' ' + oldScore : '');
+    var freshLabel = (freshGrade || '?') + (freshScore != null ? ' ' + freshScore : '');
+    detail += ' | shown ' + oldLabel + ' -> fresh ' + freshLabel;
+    if (skipped.min_grade) detail += ' below min ' + skipped.min_grade;
+  } else if (skipped.ai_grade) {
     detail += ' | grade ' + skipped.ai_grade;
     if (skipped.ai_score != null) detail += ' ' + skipped.ai_score;
     if (skipped.min_grade) detail += ' below min ' + skipped.min_grade;
   }
   card.style.opacity = '0.62';
   card.style.borderLeftColor = '#ef4444';
+  var badge = card.querySelector('.scalp-grade-badge');
+  if (badge) {
+    var badgeOld = (oldGrade || '?') + (oldScore != null ? ' ' + oldScore : '');
+    var badgeFresh = (freshGrade || freshScore != null) ? ((freshGrade || '?') + (freshScore != null ? ' ' + freshScore : '')) : 'rejected';
+    badge.style.background = 'rgba(239,68,68,0.14)';
+    badge.style.color = '#fecaca';
+    badge.style.borderColor = 'rgba(239,68,68,0.45)';
+    badge.textContent = 'STALE ' + badgeOld + ' -> ' + badgeFresh;
+  }
   var body = card.querySelector('.card-body');
   if (body) {
     var existing = card.querySelector('.scalp-invalid-banner');
