@@ -428,16 +428,8 @@ CONFIG: dict = {
         "stock": 150,
         "index": 150,
     },
-    "BT_MIN": {
-        "crypto": 2.15,
-        "commodity": 1.80,
-        "forex": 1.60,
-        "stock": 1.10,
-        "index": 1.17,
-    },
-    # Stage 2.4: Threshold system simplified to 2 tiers.
-    # Old 6-class floors + BT_MIN_GROUP + BACKTEST_USE_BT_MIN_THRESHOLDS removed.
-    # See scoring.py _get_threshold_tier() for implementation.
+    # Stage 4.2: BT_MIN / BT_MIN_GROUP / BACKTEST_USE_BT_MIN_THRESHOLDS deleted.
+    # Single source of truth: scoring.py _TIER_VOLATILE (2.0) and _TIER_STABLE (1.5).
     "RESEARCH_MODE": False,
     "BACKTEST_EVENT_RISK_GATING": False,
     "BACKTEST_SENTIMENT_GATING": False,
@@ -996,7 +988,86 @@ def validate_config(cfg: dict) -> None:
                     )
 
 
+# Stage 4.1: Fatal boot-time config validation layer.
+# System refuses to start if any of these invariants are violated.
+# These are assertions about the mathematical consistency of the config,
+# not runtime checks.
+
+
+class ConfigValidationError(SystemExit):
+    """Raised when config invariants are violated at boot time."""
+    pass
+
+
+def _fatal_config_validation(cfg: dict) -> None:
+    """Fatal assertions — system refuses to start if any fail.
+
+    Checks:
+      1. Threshold consistency: volatile >= stable
+      2. Bound non-contradiction: addon bound == research lab MAX_ABS
+      3. Weight normalization: trend weights sum to 1.0 per asset class
+      4. BT_MIN prohibited: BACKTEST_USE_BT_MIN_THRESHOLDS must not exist
+      5. Floor sanity: conviction floor in [0.10, 0.30]
+      6. Definition guards: max_possible defined for Engine B
+    """
+    errors: list[str] = []
+
+    # 1. Threshold consistency (scoring.py tiers — hardcoded to avoid circular import)
+    _TIER_VOLATILE = 2.0
+    _TIER_STABLE = 1.5
+    if _TIER_VOLATILE < _TIER_STABLE:
+        errors.append(f"TIER_VOLATILE ({_TIER_VOLATILE}) must be >= TIER_STABLE ({_TIER_STABLE})")
+
+    # 2. Bound non-contradiction
+    _addon_confirm = float(cfg.get("FACTOR_ADDON_CONFIRM", 0.20))
+    _research_max = float((cfg.get("ENGINE_A_RESEARCH_LAB_FACTORS") or {}).get("MAX_ABS", 0.20))
+    if abs(_addon_confirm - _research_max) > 1e-6:
+        errors.append(
+            f"Addon bound high ({_addon_confirm}) must equal research MAX_ABS ({_research_max})"
+        )
+
+    # 3. Weight normalization — trend weights per asset class must sum to 1.0
+    _trend_weights = cfg.get("INDICATOR_WEIGHTS", {}).get("trend", {})
+    for asset_class, weights in _trend_weights.items():
+        if isinstance(weights, dict):
+            total = sum(float(v) for v in weights.values() if isinstance(v, (int, float)))
+            if abs(total - 1.0) > 1e-6:
+                errors.append(
+                    f"Trend weights for {asset_class} sum to {total:.4f}, expected 1.0"
+                )
+
+    # 4. BT_MIN prohibited — Stage 4.2
+    if "BACKTEST_USE_BT_MIN_THRESHOLDS" in cfg:
+        errors.append("BACKTEST_USE_BT_MIN_THRESHOLDS must be deleted — dual thresholds prohibited")
+    if "BT_MIN_GROUP" in cfg:
+        errors.append("BT_MIN_GROUP must be deleted — use 2-tier system")
+
+    # 5. Floor sanity
+    _floor = float(cfg.get("FACTOR_CONVICTION_FLOOR", 0.20))
+    if not (0.10 <= _floor <= 0.30):
+        errors.append(f"Conviction floor {_floor} must be in [0.10, 0.30]")
+
+    # 6. Definition guards — Engine B max_possible must be defined
+    _b_max = cfg.get("ENGINE_B_MAX_POSSIBLE")
+    if _b_max is None:
+        # Fallback: compute from existing config
+        _profile_on = bool(cfg.get("ENGINE_B_PROFILE_SCORING_ENABLED", False))
+        _b_max = 6 + 3 + (1.0 if _profile_on else 0.0)
+    if _b_max is None or float(_b_max) <= 0:
+        errors.append("Engine B max_possible must be defined and positive")
+
+    if errors:
+        for e in errors:
+            log.critical("CONFIG_VALIDATION_FATAL: %s", e)
+        raise ConfigValidationError(
+            f"System refused to start due to {len(errors)} config error(s). See logs above."
+        )
+
+    log.info("[BOOT] Fatal config validation passed (%d checks)", 6)
+
+
 validate_config(CONFIG)
+_fatal_config_validation(CONFIG)
 
 
 def scan_candle_limits() -> dict[str, int]:

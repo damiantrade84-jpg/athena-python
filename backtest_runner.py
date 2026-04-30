@@ -155,22 +155,15 @@ def _live_base_risk_pct(asset_type: str) -> float:
 
 
 def _engine_a_bt_gate_note() -> str:
-    """Explain Engine A backtest threshold routing for API payload (matches scoring.get_score_threshold)."""
-    use_bt = bool(
-        CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
-        or CONFIG.get("RESEARCH_MODE", False)
-    )
+    """Explain Engine A backtest threshold routing for API payload (matches scoring.get_score_threshold).
+
+    Stage 4.2: BT_MIN / BT_MIN_GROUP deleted. Backtest and live use identical
+    2-tier thresholds (volatile=2.0, stable=1.5) from scoring.py.
+    """
     sq_on = bool(CONFIG.get("SCAN_QUANTILE_ENABLED", False))
-    if not use_bt:
-        return (
-            "Engine A backtest mirrors live thresholds (pair min_confluence → "
-            "MIN_CONFLUENCE_GROUP → MIN_CONFLUENCE_CLASS). "
-            "Set BACKTEST_USE_BT_MIN_THRESHOLDS to use BT_MIN / BT_MIN_GROUP / pair bt_min for backtest only. "
-            "Live scan: get_min_confluence_threshold plus optional SCAN_QUANTILE_ENABLED."
-            + ("" if sq_on else " SCAN_QUANTILE_ENABLED is off.")
-        )
     return (
-        "Backtest gates on pair bt_min → BT_MIN_GROUP → BT_MIN. "
+        "Engine A backtest uses live thresholds (2-tier: volatile=2.0, stable=1.5). "
+        "Backtest/live parity enforced. "
         "Live scan: get_min_confluence_threshold plus optional SCAN_QUANTILE_ENABLED."
         + ("" if sq_on else " SCAN_QUANTILE_ENABLED is off.")
     )
@@ -1011,8 +1004,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     _pair_ctx["score_group"] = _pair_score_group
 
     # Engine A backtest gate: pair profile → group → class hierarchy.
-    # Default: same as live (MIN_CONFLUENCE_*). If BACKTEST_USE_BT_MIN_THRESHOLDS or
-    # RESEARCH_MODE is true in config, uses BT_MIN / BT_MIN_GROUP / pair bt_min instead.
+    # Stage 4.2: Backtest and live use identical 2-tier thresholds.
     bt_min = get_score_threshold(_pair_ctx, is_backtest=True)
 
     _canonical_vm, _vm_mode_warning = normalize_validation_mode(validation_mode)

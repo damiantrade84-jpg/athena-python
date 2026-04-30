@@ -50,9 +50,10 @@ def test_engine_b_forex_uses_base_style_profile_when_group_override_absent():
     assert float(CONFIG["NAKED_ENGINE"]["style_profiles"]["intraday"]["min_rr"]) > 0
 
 
-def test_min_confluence_uses_class_threshold_when_live_group_config_absent():
+def test_min_confluence_uses_2tier_stable_for_forex():
+    """Stage 4.2: forex uses stable tier (1.5), not MIN_CONFLUENCE_CLASS."""
     pair = {"display": "USD/ZAR", "symbol": "USDZAR=X", "type": "forex"}
-    assert get_min_confluence_threshold(pair) == CONFIG["MIN_CONFLUENCE_CLASS"]["forex"]
+    assert get_min_confluence_threshold(pair) == 1.5  # _TIER_STABLE
 
 
 def test_pair_profile_can_override_score_group_and_threshold():
@@ -68,10 +69,13 @@ def test_pair_profile_can_override_score_group_and_threshold():
         CONFIG["PAIR_PROFILES"] = original
 
 
-def test_backtest_min_score_falls_back_to_live_chain_when_no_bt_override():
-    """Engine A backtest should mirror live threshold routing unless bt_min is explicit."""
+def test_backtest_live_threshold_parity():
+    """Stage 4.2: Backtest and live use identical 2-tier thresholds.
+
+    BT_MIN / BACKTEST_USE_BT_MIN_THRESHOLDS deleted.
+    Pair profile min_confluence is the only override.
+    """
     original_profiles = CONFIG.get("PAIR_PROFILES")
-    original_bt = dict(CONFIG.get("BT_MIN") or {})
     try:
         CONFIG["PAIR_PROFILES"] = {
             "BTC/USDT": {
@@ -79,53 +83,31 @@ def test_backtest_min_score_falls_back_to_live_chain_when_no_bt_override():
                 "min_confluence": 0.99,
             }
         }
-        CONFIG["BT_MIN"] = {**original_bt, "crypto": 0.12}
         pair = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"}
         assert get_min_confluence_threshold(pair) == 0.99
-        assert get_backtest_min_score_threshold(pair) == 0.99
+        assert get_backtest_min_score_threshold(pair) == 0.99  # same as live
     finally:
         CONFIG["PAIR_PROFILES"] = original_profiles
-        CONFIG["BT_MIN"] = original_bt
 
 
-def test_backtest_min_score_pair_profile_bt_min_override():
+def test_backtest_ignores_legacy_bt_min_field():
+    """Stage 4.2: pair profile bt_min is ignored; min_confluence wins."""
     original = CONFIG.get("PAIR_PROFILES")
-    original_bt = dict(CONFIG.get("BT_MIN") or {})
-    original_rm = CONFIG.get("RESEARCH_MODE", False)
-    original_btf = CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
     try:
-        CONFIG["PAIR_PROFILES"] = {"XAU/USD": {"bt_min": 1.58, "min_confluence": 5.8}}
-        CONFIG["BT_MIN"] = {**original_bt, "commodity": 0.70}
-        CONFIG["RESEARCH_MODE"] = True
-        CONFIG["BACKTEST_USE_BT_MIN_THRESHOLDS"] = False
+        # bt_min in profile is dead code — only min_confluence matters
+        CONFIG["PAIR_PROFILES"] = {"XAU/USD": {"bt_min": 1.58, "min_confluence": 1.25}}
         pair = {"display": "XAU/USD", "symbol": "XAUUSD", "type": "commodity"}
-        assert get_backtest_min_score_threshold(pair) == 1.58
+        assert get_backtest_min_score_threshold(pair) == 1.25
+        assert get_min_confluence_threshold(pair) == 1.25
     finally:
         CONFIG["PAIR_PROFILES"] = original
-        CONFIG["BT_MIN"] = original_bt
-        CONFIG["RESEARCH_MODE"] = original_rm
-        CONFIG["BACKTEST_USE_BT_MIN_THRESHOLDS"] = original_btf
 
 
-def test_backtest_min_score_uses_bt_chain_when_backtest_flag_only():
-    """BACKTEST_USE_BT_MIN_THRESHOLDS enables BT path without RESEARCH_MODE."""
-    original = CONFIG.get("PAIR_PROFILES")
-    original_bt = dict(CONFIG.get("BT_MIN") or {})
-    original_rm = CONFIG.get("RESEARCH_MODE", False)
-    original_btf = CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
-    try:
-        CONFIG["PAIR_PROFILES"] = {"XAU/USD": {"bt_min": 1.58, "min_confluence": 5.8}}
-        CONFIG["BT_MIN"] = {**original_bt, "commodity": 0.70}
-        CONFIG["RESEARCH_MODE"] = False
-        CONFIG["BACKTEST_USE_BT_MIN_THRESHOLDS"] = True
-        pair = {"display": "XAU/USD", "symbol": "XAUUSD", "type": "commodity"}
-        assert get_backtest_min_score_threshold(pair) == 1.58
-        assert get_min_confluence_threshold(pair) == 5.8
-    finally:
-        CONFIG["PAIR_PROFILES"] = original
-        CONFIG["BT_MIN"] = original_bt
-        CONFIG["RESEARCH_MODE"] = original_rm
-        CONFIG["BACKTEST_USE_BT_MIN_THRESHOLDS"] = original_btf
+def test_backtest_no_dual_threshold_flag():
+    """Stage 4.2: BACKTEST_USE_BT_MIN_THRESHOLDS must not exist in CONFIG."""
+    assert "BACKTEST_USE_BT_MIN_THRESHOLDS" not in CONFIG
+    assert "BT_MIN" not in CONFIG
+    assert "BT_MIN_GROUP" not in CONFIG
 
 
 def test_divergence_monitor_replays_shared_factor_path_for_forex():

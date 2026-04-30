@@ -115,7 +115,7 @@ FACTOR_ADX_HARD_FAIL_CLASS:
 FACTOR_FUNDING_BASELINE: 0.0001
 FACTOR_FUNDING_NOISE_BAND: 0.0001
 
-FACTOR_CONVICTION_FLOOR: 0.60 # Engine A v2 default used by factor_scoring when unset.
+FACTOR_CONVICTION_FLOOR: 0.20 # Stage 2.1: lowered from 0.60 to allow more signals through
 
 ENGINE_A_RESEARCH_LAB_FACTORS:
   ENABLED: true
@@ -227,102 +227,11 @@ WEINSTEIN_LOOKBACK:
 
 
 
-# Engine A backtest score gate (get_score_threshold in scoring.py).
-
-# BACKTEST_USE_BT_MIN_THRESHOLDS true = backtest uses pair bt_min → BT_MIN_GROUP → BT_MIN.
-
-# false = backtest mirrors live MIN_CONFLUENCE_* (parity). Live scans always use live gates.
-
-# RESEARCH_MODE also enables the BT chain (legacy); prefer BACKTEST_USE_BT_MIN_THRESHOLDS.
+# Stage 4.2: BT_MIN / BT_MIN_GROUP / BACKTEST_USE_BT_MIN_THRESHOLDS deleted.
+# Single source of truth: scoring.py _TIER_VOLATILE (2.0) and _TIER_STABLE (1.5).
+# Backtest and live use identical thresholds.
 
 RESEARCH_MODE: false
-
-# Engine A backtest: false = same threshold chain as live (min_confluence →
-
-# MIN_CONFLUENCE_GROUP → MIN_CONFLUENCE_CLASS). True = use pair bt_min →
-
-# BT_MIN_GROUP → BT_MIN (research / stricter runs). p75 diagnostic values below
-
-# are inactive unless this flag is true.
-
-BACKTEST_USE_BT_MIN_THRESHOLDS: false
-BT_MIN:
-
-  crypto:    2.15   # live-score p75 (was 0.95)
-
-  commodity: 1.80   # live-score p75 (was 0.90)
-
-  forex:     1.20   # live-score p75 (was 0.85)
-
-  stock:     1.10   # no live data — hold at live class gate (was 0.90)
-
-  index:     1.17   # only one live row; hold at that value (was 0.85)
-
-
-
-# p75 diagnostic — subgroups populated at class p75 so the BT lookup hits
-
-# before the LIVE MIN_CONFLUENCE_GROUP fallback at scoring.py:179-182.
-
-# Previous (lower) values preserved in git history.
-
-BT_MIN_GROUP:
-
-  forex:
-
-    forex_majors: 1.20
-
-    forex_crosses: 1.20
-
-    forex_exotics: 1.20
-
-  crypto:
-
-    crypto_btc: 2.15
-
-    crypto_eth: 2.15
-
-    crypto_alt_majors: 2.15
-
-    crypto_doge: 2.15
-
-    crypto_other: 2.15
-
-  commodity:
-
-    nat_gas: 1.80
-
-    pgm_metals: 1.80
-
-    copper: 1.80
-
-    precious_trackers: 1.80
-
-    energy_oil: 1.80
-
-    commodity_other: 1.80
-
-  index:
-
-    asian_indices: 1.17
-
-    us_indices_trackers: 1.17
-
-    eu_indices: 1.17
-
-    index_other: 1.17
-
-  stock:
-
-    us_stock_single: 1.10
-
-    smallcap_em_etf: 1.10
-
-    bond_tlt: 1.10
-
-    stock_other: 1.10
-
-
 
 # Backtest must not alter live pair enable/disable state
 

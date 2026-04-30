@@ -179,7 +179,6 @@ class TestConfig:
             "RANGING",
             "ATR_CLASS",
             "RSI_BOUNDS",
-            "BT_MIN",
             "MIN_CONFLUENCE_CLASS",
         ):
             assert classes == set(CONFIG[key].keys()), f"{key} missing classes"
