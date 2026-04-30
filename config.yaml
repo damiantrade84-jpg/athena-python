@@ -2171,6 +2171,20 @@ TIMED_EXIT:
 
     tp_progress_exempt: 0.40   # skip timed close if >= 40% toward TP (mirrors swing logic)
 
+    # Engine A/B style=scalp — staged SL profit-lock (generic timed exit; Engine D bypasses this monitor).
+
+    profit_lock_enabled: true
+
+    profit_lock_stages:
+
+      - { trigger_r: 0.50, lock_r: 0.10 }
+
+      - { trigger_r: 0.75, lock_r: 0.25 }
+
+      - { trigger_r: 1.00, lock_r: 0.50 }
+
+      - { trigger_r: 1.50, lock_r: 1.00 }
+
   intraday:
 
     breakeven_min: 15          # move SL to entry after 15 min if in profit

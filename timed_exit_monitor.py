@@ -4,7 +4,8 @@ timed_exit_monitor.py — Hybrid Triple-Barrier Timed Exit (C-barrier)
 Daemon thread that wakes every 30 s and applies timed exit logic to open positions.
 
 Hybrid logic per style:
-  SCALP   : move SL to breakeven at 5 min → close at 10 min if still in profit
+  SCALP   : staged profit-lock SL (trigger/lock tiers) or buffered BE after breakeven_min;
+            optional timed close at close_min (config)
   INTRADAY: move SL to breakeven at 15 min → close at 30 min if still in profit
   SWING   : move SL to breakeven at 2.5 days → close at 5 days if in profit
 
@@ -29,19 +30,34 @@ import logging
 import sqlite3
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 log = logging.getLogger("timed_exit")
 
 _be_done: set = set()
 _trail_state: dict = {}
+# Engine A/B style=scalp: last applied lock_r tier (0.0 = fallback BE only). Upgrades only.
+_scalp_profit_lock_state: dict[str, float] = {}
 
 _DEFAULT_CFG: dict = {
     "enabled": True,
     "check_interval_sec": 30,
     "breakeven_min_profit_r": 0.20,
     "breakeven_buffer_r": 0.05,
-    "scalp":    {"breakeven_min": 5,   "close_min": 10, "timed_close_enabled": True, "tp_progress_exempt": 0.40},
+    "scalp":    {
+        "breakeven_min": 5,
+        "close_min": 10,
+        "timed_close_enabled": True,
+        "tp_progress_exempt": 0.40,
+        "profit_lock_enabled": True,
+        "profit_lock_stages": [
+            {"trigger_r": 0.50, "lock_r": 0.10},
+            {"trigger_r": 0.75, "lock_r": 0.25},
+            {"trigger_r": 1.00, "lock_r": 0.50},
+            {"trigger_r": 1.50, "lock_r": 1.00},
+        ],
+    },
     "intraday": {"breakeven_min": 15,  "close_min": 30, "timed_close_enabled": True, "tp_progress_exempt": 0.50},
     "swing":    {"breakeven_days": 2.5, "close_days": 5.0, "timed_close_enabled": True, "tp_progress_exempt": 0.50},
     "tp_mode": "fixed",
@@ -55,6 +71,186 @@ _DEFAULT_CFG: dict = {
     "trail_confirm_macd": True,
 }
 
+_PROFIT_LOCK_STAGES_DEFAULT: tuple[dict, ...] = (
+    {"trigger_r": 0.50, "lock_r": 0.10},
+    {"trigger_r": 0.75, "lock_r": 0.25},
+    {"trigger_r": 1.00, "lock_r": 0.50},
+    {"trigger_r": 1.50, "lock_r": 1.00},
+)
+
+
+def _normalize_profit_lock_stages(raw) -> list[dict]:
+    """Return sorted valid stages; empty/malformed input → defaults."""
+    if not raw:
+        return [dict(x) for x in _PROFIT_LOCK_STAGES_DEFAULT]
+    out: list[dict] = []
+    try:
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            tr = item.get("trigger_r", item.get("trigger_R"))
+            lr = item.get("lock_r", item.get("lock_R"))
+            if tr is None or lr is None:
+                continue
+            out.append({"trigger_r": float(tr), "lock_r": float(lr)})
+    except (TypeError, ValueError):
+        return [dict(x) for x in _PROFIT_LOCK_STAGES_DEFAULT]
+    out.sort(key=lambda s: (s["trigger_r"], s["lock_r"]))
+    return out if out else [dict(x) for x in _PROFIT_LOCK_STAGES_DEFAULT]
+
+
+def _current_r_multiple(
+    entry: float, audit_sl: float, cur_price: float, direction: str
+) -> float | None:
+    sl_dist = abs(entry - audit_sl) if audit_sl > 0 else 0.0
+    if sl_dist <= 0 or cur_price <= 0 or entry <= 0:
+        return None
+    d = str(direction).upper()
+    if d == "LONG":
+        return (cur_price - entry) / sl_dist
+    if d == "SHORT":
+        return (entry - cur_price) / sl_dist
+    return None
+
+
+def _best_eligible_lock_r(stages: list[dict], current_r: float) -> float | None:
+    """Among stages satisfied by current_r, return maximum lock_r."""
+    best: float | None = None
+    for st in stages:
+        try:
+            tr = float(st["trigger_r"])
+            lr = float(st["lock_r"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if current_r + 1e-12 >= tr:
+            best = lr if best is None else max(best, lr)
+    return best
+
+
+def _sl_for_locked_profit_r(
+    entry: float, sl_dist: float, direction: str, lock_r: float
+) -> float:
+    """SL price locking lock_r × initial risk below/above breakeven (Fabio ladder)."""
+    d = str(direction).upper()
+    if d == "LONG":
+        return entry + lock_r * sl_dist
+    return entry - lock_r * sl_dist
+
+
+def _protective_sl_tightens(
+    direction: str, new_sl: float, ref_sl: float, entry: float
+) -> bool:
+    """True if new_sl is strictly tighter (never widens vs ref_sl). LONG: higher SL."""
+    if new_sl <= 0 or entry <= 0:
+        return False
+    d = str(direction).upper()
+    ref = float(ref_sl)
+    if ref <= 0:
+        # No live SL yet — sanity on correct side of entry
+        return (new_sl > entry) if d == "LONG" else (new_sl < entry)
+    if d == "LONG":
+        return new_sl > ref
+    return new_sl < ref
+
+
+def _try_scalp_profit_lock_sl(
+    *,
+    ticket_key: str,
+    risk_amount: float,
+    scfg: dict,
+    tcfg: dict,
+    entry: float,
+    cur_price: float,
+    direction: str,
+    profit: float,
+    live_sl: float,
+    audit_sl: float,
+    be_due_now: bool,
+    mins_open: float,
+    pair_label: str,
+    move_sl: Callable[[float], dict],
+    telegram_notify,
+) -> None:
+    """Engine A/B style=scalp: staged profit-lock or buffered BE fallback.
+
+    When ``profit_lock_enabled`` is false, callers use the legacy ``_be_done`` path.
+    """
+    if not be_due_now:
+        return
+    if not scfg.get("profit_lock_enabled", True):
+        return
+
+    _be_min_profit_r = float(tcfg.get("breakeven_min_profit_r", 0.20))
+    _be_buffer_r = float(tcfg.get("breakeven_buffer_r", 0.05))
+    _be_min_profit = (risk_amount * _be_min_profit_r) if risk_amount > 0 else 0.0
+
+    if profit < max(0.01, _be_min_profit):
+        return
+
+    _sl_dist = abs(entry - audit_sl) if audit_sl > 0 else 0.0
+    if _sl_dist <= 0:
+        return
+
+    stages = _normalize_profit_lock_stages(scfg.get("profit_lock_stages"))
+    current_r = _current_r_multiple(entry, audit_sl, cur_price, direction)
+
+    ref_sl = live_sl if live_sl > 0 else audit_sl
+    last = _scalp_profit_lock_state.get(ticket_key)
+
+    if _be_buffer_r > 0:
+        buf = _sl_dist * _be_buffer_r
+        is_long = str(direction).upper() != "SHORT"
+        fallback_sl = entry + buf if is_long else entry - buf
+    else:
+        fallback_sl = entry
+
+    target_sl: float | None = None
+    record_lock: float | None = None
+    log_mode = ""
+
+    if current_r is not None:
+        eligible = _best_eligible_lock_r(stages, current_r)
+        if eligible is not None and (last is None or eligible > last + 1e-12):
+            cand = _sl_for_locked_profit_r(entry, _sl_dist, direction, eligible)
+            if _protective_sl_tightens(direction, cand, ref_sl, entry):
+                target_sl = cand
+                record_lock = eligible
+                log_mode = "PROFIT_LOCK"
+
+    if target_sl is None and last is None:
+        if _protective_sl_tightens(direction, fallback_sl, ref_sl, entry):
+            target_sl = fallback_sl
+            record_lock = 0.0
+            log_mode = "BE_FALLBACK"
+
+    if target_sl is None:
+        return
+
+    result = move_sl(target_sl)
+    if result.get("success") and not result.get("skipped"):
+        _scalp_profit_lock_state[ticket_key] = float(record_lock if record_lock is not None else 0.0)
+        cr_txt = f"{current_r:.2f}" if current_r is not None else "?"
+        if log_mode == "PROFIT_LOCK":
+            log.info(
+                f"[TIMED_EXIT] PROFIT_LOCK: {pair_label} ticket={ticket_key} "
+                f"mins_open={mins_open:.1f} current_r={cr_txt} lock_r={record_lock:.2f} "
+                f"new_sl={target_sl:.5f} (entry={entry:.5f})"
+            )
+        else:
+            log.info(
+                f"[TIMED_EXIT] BE set: {pair_label} ticket={ticket_key} "
+                f"style=scalp mins_open={mins_open:.1f} be_price={target_sl:.5f} "
+                f"(entry={entry:.5f} buffer={_be_buffer_r:.0%} of SL dist fallback)"
+            )
+        try:
+            telegram_notify._send_message_async(
+                f"🔒 *Breakeven / profit-lock SL* — {pair_label}\n"
+                f"Style: `scalp` | Open: `{mins_open:.0f} min` | "
+                f"Profit: `${profit:.2f}`"
+            )
+        except Exception:
+            pass
+
 
 def _get_timed_cfg(config_fn) -> dict:
     cfg = config_fn() if config_fn else {}
@@ -62,6 +258,10 @@ def _get_timed_cfg(config_fn) -> dict:
     merged: dict = {}
     for style in ("scalp", "intraday", "swing"):
         merged[style] = {**_DEFAULT_CFG[style], **(raw.get(style) or {})}
+    merged["scalp"]["profit_lock_stages"] = _normalize_profit_lock_stages(
+        merged["scalp"].get("profit_lock_stages")
+    )
+    merged["scalp"]["profit_lock_enabled"] = bool(merged["scalp"].get("profit_lock_enabled", True))
     merged["enabled"] = raw.get("enabled", True)
     merged["check_interval_sec"] = raw.get("check_interval_sec", 30)
     merged["breakeven_min_profit_r"] = float(
@@ -636,21 +836,44 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
                 f"— {result.get('error')}"
             )
 
-    # ── Step 1: Breakeven trigger ─────────────────────────────────────────────
+    # ── Step 1: Breakeven / scalp profit-lock trigger ─────────────────────────
     _risk_amount = float(row.get("risk_amount") or 0)
-    _sl_dist = abs(entry - _sl_raw) if _sl_raw > 0 else 0.0
+    _live_sl = _safe_float(live.get("sl"))
     _be_min_profit_r = tcfg.get("breakeven_min_profit_r", 0.20)
     _be_buffer_r = tcfg.get("breakeven_buffer_r", 0.05)
-    _be_min_profit = (_risk_amount * _be_min_profit_r) if _risk_amount > 0 else 0.0
 
-    if _sl_dist > 0 and _be_buffer_r > 0:
-        _be_buffer = _sl_dist * _be_buffer_r
-        _direction_long = str(direction).upper() != "SHORT"
-        _be_price = entry + _be_buffer if _direction_long else entry - _be_buffer
-    else:
-        _be_price = entry
+    use_scalp_lock = style == "scalp" and scfg.get("profit_lock_enabled", True)
 
-    if be_due_now and ticket not in _be_done and profit >= max(0.01, _be_min_profit):
+    if use_scalp_lock:
+        _try_scalp_profit_lock_sl(
+            ticket_key=str(ticket),
+            risk_amount=_risk_amount,
+            scfg=scfg,
+            tcfg=tcfg,
+            entry=entry,
+            cur_price=cur_price,
+            direction=str(direction),
+            profit=profit,
+            live_sl=_live_sl,
+            audit_sl=_sl_raw,
+            be_due_now=be_due_now,
+            mins_open=mins,
+            pair_label=str(row.get("pair") or ""),
+            move_sl=lambda sl_px: mt5_move_sl_to_breakeven(ticket, sl_px),
+            telegram_notify=telegram_notify,
+        )
+    elif be_due_now and ticket not in _be_done and profit >= max(
+        0.01,
+        ((_risk_amount * _be_min_profit_r) if _risk_amount > 0 else 0.0),
+    ):
+        _sl_dist_legacy = abs(entry - _sl_raw) if _sl_raw > 0 else 0.0
+        if _sl_dist_legacy > 0 and _be_buffer_r > 0:
+            _be_buffer = _sl_dist_legacy * _be_buffer_r
+            _direction_long = str(direction).upper() != "SHORT"
+            _be_price = entry + _be_buffer if _direction_long else entry - _be_buffer
+        else:
+            _be_price = entry
+
         result = mt5_move_sl_to_breakeven(ticket, _be_price)
         if result.get("success") and not result.get("skipped"):
             _be_done.add(ticket)
@@ -834,21 +1057,44 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
                 f"[TIMED_EXIT] Immediate close failed before BE: {pair} — {result.get('error')}"
             )
 
-    # ── Step 1: Breakeven trigger ─────────────────────────────────────────────
+    # ── Step 1: Breakeven / scalp profit-lock trigger ─────────────────────────
     _risk_amount = float(row.get("risk_amount") or 0)
-    _sl_dist = abs(entry - _sl_raw) if _sl_raw > 0 else 0.0
+    _live_sl = _safe_float(live.get("sl"))
     _be_min_profit_r = tcfg.get("breakeven_min_profit_r", 0.20)
     _be_buffer_r = tcfg.get("breakeven_buffer_r", 0.05)
-    _be_min_profit = (_risk_amount * _be_min_profit_r) if _risk_amount > 0 else 0.0
 
-    if _sl_dist > 0 and _be_buffer_r > 0:
-        _be_buffer = _sl_dist * _be_buffer_r
-        _direction_long = str(direction).upper() != "SHORT"
-        _be_price = entry + _be_buffer if _direction_long else entry - _be_buffer
-    else:
-        _be_price = entry
+    use_scalp_lock = style == "scalp" and scfg.get("profit_lock_enabled", True)
 
-    if be_due_now and ticket not in _be_done and profit >= max(0.01, _be_min_profit) and ccxt_sym:
+    if use_scalp_lock and ccxt_sym:
+        _try_scalp_profit_lock_sl(
+            ticket_key=ticket,
+            risk_amount=_risk_amount,
+            scfg=scfg,
+            tcfg=tcfg,
+            entry=entry,
+            cur_price=cur_price,
+            direction=str(direction),
+            profit=profit,
+            live_sl=_live_sl,
+            audit_sl=_sl_raw,
+            be_due_now=be_due_now,
+            mins_open=mins,
+            pair_label=str(pair),
+            move_sl=lambda sl_px: bybit_move_sl_to_breakeven(ccxt_sym, direction, sl_px, volume),
+            telegram_notify=telegram_notify,
+        )
+    elif be_due_now and ticket not in _be_done and profit >= max(
+        0.01,
+        ((_risk_amount * _be_min_profit_r) if _risk_amount > 0 else 0.0),
+    ) and ccxt_sym:
+        _sl_dist_legacy = abs(entry - _sl_raw) if _sl_raw > 0 else 0.0
+        if _sl_dist_legacy > 0 and _be_buffer_r > 0:
+            _be_buffer = _sl_dist_legacy * _be_buffer_r
+            _direction_long = str(direction).upper() != "SHORT"
+            _be_price = entry + _be_buffer if _direction_long else entry - _be_buffer
+        else:
+            _be_price = entry
+
         result = bybit_move_sl_to_breakeven(ccxt_sym, direction, _be_price, volume)
         if result.get("success"):
             _be_done.add(ticket)

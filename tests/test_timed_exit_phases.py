@@ -37,6 +37,13 @@ from timed_exit_monitor import (
     _compute_chandelier_trail,
     _check_indicator_confirmation,
     _trail_state,
+    _normalize_profit_lock_stages,
+    _best_eligible_lock_r,
+    _sl_for_locked_profit_r,
+    _current_r_multiple,
+    _protective_sl_tightens,
+    _try_scalp_profit_lock_sl,
+    _scalp_profit_lock_state,
 )
 
 
@@ -364,3 +371,92 @@ class TestEngineDSlValidation:
             tp_partial_raw = (entry + sl_dist) if direction == "LONG" else (entry - sl_dist)
 
         assert tp_partial_raw == pytest.approx(50500.0)
+
+
+# ── Engine A/B scalp profit-lock (timed_exit_monitor staged SL) ───────────────
+
+class TestScalpProfitLockHelpers:
+    def test_normalize_empty_returns_defaults(self):
+        st = _normalize_profit_lock_stages(None)
+        assert len(st) == 4
+        assert st[0]["trigger_r"] == pytest.approx(0.50)
+
+    def test_best_eligible_picks_max_lock(self):
+        st = _normalize_profit_lock_stages(None)
+        # Default ladder: highest lock whose trigger_r is satisfied (final tier needs +1.5R).
+        assert _best_eligible_lock_r(st, 1.2) == pytest.approx(0.50)
+        assert _best_eligible_lock_r(st, 1.5) == pytest.approx(1.00)
+        assert _best_eligible_lock_r(st, 0.55) == pytest.approx(0.10)
+        assert _best_eligible_lock_r(st, 0.2) is None
+
+    def test_sl_locked_short_one_r(self):
+        entry, dist = 1.10, 0.005
+        assert _sl_for_locked_profit_r(entry, dist, "SHORT", 1.0) == pytest.approx(entry - dist)
+
+    def test_current_r_multiple_short(self):
+        r = _current_r_multiple(1.10, 1.105, 1.086, "SHORT")
+        assert r == pytest.approx(2.8)
+
+    def test_protective_rejects_widen_long(self):
+        assert not _protective_sl_tightens("LONG", 1.098, 1.099, 1.10)
+
+
+class TestScalpProfitLockTry:
+    def setup_method(self):
+        _scalp_profit_lock_state.clear()
+
+    def test_fallback_then_upgrade(self):
+        moves: list[float] = []
+        scfg = {"profit_lock_enabled": True, "profit_lock_stages": _normalize_profit_lock_stages(None)}
+        tcfg = {"breakeven_min_profit_r": 0.2, "breakeven_buffer_r": 0.05}
+        entry, audit_sl = 1.10, 1.105
+        dist = 0.005
+
+        def _record(px: float) -> dict:
+            moves.append(px)
+            return {"success": True}
+
+        _try_scalp_profit_lock_sl(
+            ticket_key="t_fall",
+            risk_amount=100.0,
+            scfg=scfg,
+            tcfg=tcfg,
+            entry=entry,
+            cur_price=1.099,
+            direction="SHORT",
+            profit=50.0,
+            live_sl=audit_sl,
+            audit_sl=audit_sl,
+            be_due_now=True,
+            mins_open=6.0,
+            pair_label="T",
+            move_sl=_record,
+            telegram_notify=sys.modules["telegram_notify"],
+        )
+        assert len(moves) == 1
+        assert moves[0] == pytest.approx(entry - 0.05 * dist)
+
+        _try_scalp_profit_lock_sl(
+            ticket_key="t_fall",
+            risk_amount=100.0,
+            scfg=scfg,
+            tcfg=tcfg,
+            entry=entry,
+            cur_price=1.086,
+            direction="SHORT",
+            profit=50.0,
+            live_sl=moves[-1],
+            audit_sl=audit_sl,
+            be_due_now=True,
+            mins_open=10.0,
+            pair_label="T",
+            move_sl=_record,
+            telegram_notify=sys.modules["telegram_notify"],
+        )
+        assert len(moves) == 2
+        assert moves[1] == pytest.approx(_sl_for_locked_profit_r(entry, dist, "SHORT", 1.0))
+
+    def test_get_timed_cfg_merges_scalp_profit_lock(self):
+        tcfg = _get_timed_cfg(_cfg_fn())
+        assert tcfg["scalp"].get("profit_lock_enabled") is True
+        assert len(tcfg["scalp"].get("profit_lock_stages", [])) >= 4
