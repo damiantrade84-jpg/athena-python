@@ -48,7 +48,7 @@ from scalp_engine import (
     get_scalp_pairs,
     _guess_asset_type,
 )
-from indicators import calc_vwap, detect_absorption, calc_cvd, detect_range_contraction
+from indicators import calc_obv_trend, calc_vwap, detect_absorption, calc_cvd, detect_range_contraction
 from volume_profile import compute_fixed_range_volume_profile
 
 
@@ -112,6 +112,21 @@ def test_calc_vwap_has_bands():
     for i, v in enumerate(r["vwap"]):
         if v is not None and r["upper_band"][i] is not None:
             assert r["upper_band"][i] >= v
+
+
+def test_calc_vwap_returns_none_when_window_has_no_real_volume():
+    candles = _candles(5, vol=0.0)
+    r = calc_vwap(candles, anchor_index=0)
+
+    assert r["vwap"] == [None] * 5
+    assert r["upper_band"] == [None] * 5
+    assert r["lower_band"] == [None] * 5
+
+
+def test_calc_obv_trend_returns_none_without_real_volume():
+    candles = _candles(30, vol=0.0, trend=0.2)
+
+    assert calc_obv_trend(candles, lookback=20) is None
 
 
 def test_detect_absorption_fires_on_high_vol_low_range():
@@ -1549,7 +1564,6 @@ def test_classify_mean_reversion_va_extreme_neutral_cvd_respects_disable(monkeyp
     )
     assert setup["valid"] is False
     assert setup.get("reason") == "no_absorption_at_va_extreme"
-
 
 
 

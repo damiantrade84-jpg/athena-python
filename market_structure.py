@@ -130,7 +130,7 @@ def _infer_engine_b_research_group(res: dict, profile: dict) -> str:
 def _engine_b_micro_breakout_value(direction: str, candles: list, range_bars: int) -> dict:
     if len(candles) < range_bars + 2:
         return {"passed": False, "signal": "insufficient_candles"}
-    window = candles[-(range_bars + 1):-1]
+    window = candles[-(range_bars + 2):-2]
     prior_high = max(float(c.get("high", 0.0)) for c in window)
     prior_low = min(float(c.get("low", 0.0)) for c in window)
     prev_close = float(candles[-2].get("close", 0.0))
@@ -353,9 +353,9 @@ def resolve_engine_b_execution_levels(
     except (TypeError, ValueError):
         _entry = 0.0
     try:
-        _atr = float(atr) if atr is not None and atr > 0 else 0.0001
+        _atr = float(atr) if atr is not None and atr > 0 else (_entry * 1e-5 if _entry > 0 else 0.0001)
     except (TypeError, ValueError):
-        _atr = 0.0001
+        _atr = _entry * 1e-5 if _entry > 0 else 0.0001
 
     _struct_sl = _safe_float(structural_sl)
     _struct_tp = _safe_float(structural_tp)
@@ -3156,7 +3156,7 @@ class NakedEngine:
         total_score = max(0.0, total_score - _d1_penalty)
         gate_score = max(0.0, gate_score - _d1_penalty)
 
-        pct = min(100, int((total_score / max_possible) * 100))
+        pct = min(100, round((total_score / max_possible) * 100))
         if checklist_mode == "strict":
             passed = structure_ok and zone_ok and trigger_ok and room_ok and rr_ok and macro_ok
         else:

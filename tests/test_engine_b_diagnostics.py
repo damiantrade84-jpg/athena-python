@@ -21,6 +21,7 @@ from market_structure import (
     ENGINE_B_REASON_SUPPORT_TOO_CLOSE,
     ENGINE_B_REASON_TP_WRONG_SIDE,
     NakedEngine,
+    _engine_b_micro_breakout_value,
     engine,
     engine_b_confidence_passes,
 )
@@ -482,6 +483,16 @@ def test_engine_b_research_lab_micro_breakout_can_satisfy_entry_gate(monkeypatch
     assert out["research_lab_entry_upgrade"] is True
     assert out["research_lab_detail"]["components"]["micro_breakout"]["passed"] is True
     assert ENGINE_B_REASON_NO_TRIGGER_PATTERN not in out.get("engine_b_diagnostics", {}).get("reason_codes", [])
+
+
+def test_engine_b_micro_breakout_requires_prev_close_inside_prior_range():
+    candles = _micro_breakout_candles_long()
+    candles[-2]["close"] = 100.8
+
+    out = _engine_b_micro_breakout_value("LONG", candles, range_bars=18)
+
+    assert out["passed"] is False
+    assert out["signal"] == "no_break"
 
 
 def test_engine_b_research_lab_precious_trackers_maps_to_metals_group(monkeypatch):

@@ -103,6 +103,20 @@ def test_live_and_backtest_same_sl_tp_basis():
     assert out["execution_tp"] == pytest.approx(120.0)
 
 
+def test_atr_fallback_scales_with_entry_price():
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=99.0,
+        structural_tp=102.0,
+        atr=0.0,
+        style="intraday",
+        asset_class="forex",
+    )
+
+    assert out["execution_sl"] == pytest.approx(99.9985)
+
+
 def test_forex_structural_tp_below_min_rr_uses_execution_sl_fallback():
     out = resolve_engine_b_execution_levels(
         direction="LONG",

@@ -154,11 +154,13 @@ def _coherent_trend_score(
 
     # D1 — primary trend (EMA21 vs EMA200 for cleaner signal)
     d1_e21 = d1_snap.get("ema21")
-    d1_e200 = d1_snap.get("ema200") or d1_snap.get("ema50")
+    d1_e200 = d1_snap.get("ema200")
     if d1_e21 is not None and d1_e200 is not None and d1_e200 != 0:
         sign = 1.0 if d1_e21 > d1_e200 else -1.0
         votes.append(("d1_ema_trend", sign, _w("d1_ema_trend")))
         detail["d1"] = "LONG" if sign > 0 else "SHORT"
+    elif d1_e21 is not None and d1_e200 is None:
+        detail["d1_ema200_missing"] = True
 
     # H4 — momentum confirmation (EMA21 vs EMA50)
     h4_e21 = h4_snap.get("ema21")
@@ -272,9 +274,9 @@ def _momentum_quality(
 
     # MACD histogram score — aligned confirms, opposing penalises (not neutral).
     macd_score = 0.0
-    macd_hist = h4_snap.get("macdHist") or h4_snap.get("macd_hist")
+    macd_hist = h4_snap.get("macdHist")
     if macd_hist is None:
-        macd_hist = h4_snap.get("macdLine_z")
+        macd_hist = h4_snap.get("macd_hist")
     if macd_hist is not None:
         try:
             hist = float(macd_hist)
@@ -458,7 +460,7 @@ def _research_bollinger_value(direction: str, candles: list, bonus: float, penal
         return 0.0, {"signal": "missing", "value": 0.0}
     window = closes[-20:]
     mean = sum(window) / len(window)
-    variance = sum((x - mean) ** 2 for x in window) / len(window)
+    variance = sum((x - mean) ** 2 for x in window) / max(1, len(window) - 1)
     std = math.sqrt(max(0.0, variance))
     upper = mean + 2.0 * std
     lower = mean - 2.0 * std
@@ -680,14 +682,24 @@ def _oi_addon(oi_context: dict, direction: str) -> float:
         if abs(oi_chg) < 0.5:
             return _ADDON_NEUTRAL  # OI change too small to be meaningful
         is_long = direction == "LONG"
-        if is_long and oi_chg > 0 and px_chg > 0:
-            return _ADDON_CONFIRM    # smart money adding longs
-        if is_long and oi_chg < 0 and px_chg < 0:
-            return _ADDON_AGAINST    # longs capitulating
-        if not is_long and oi_chg > 0 and px_chg < 0:
+        if is_long:
+            if oi_chg > 0 and px_chg > 0:
+                return _ADDON_CONFIRM    # smart money adding longs
+            if oi_chg < 0 and px_chg > 0:
+                return _ADDON_NEUTRAL    # short covering only, not smart money
+            if oi_chg < 0 and px_chg < 0:
+                return _ADDON_AGAINST    # longs capitulating
+            if oi_chg > 0 and px_chg < 0:
+                return _ADDON_AGAINST    # shorts adding into falling price
+            return _ADDON_NEUTRAL
+        if oi_chg > 0 and px_chg < 0:
             return _ADDON_CONFIRM    # shorts adding into falling price
-        if not is_long and oi_chg < 0 and px_chg > 0:
+        if oi_chg > 0 and px_chg > 0:
+            return _ADDON_AGAINST    # smart money adding longs
+        if oi_chg < 0 and px_chg > 0:
             return _ADDON_AGAINST    # short covering only — not confirmed trend
+        if oi_chg < 0 and px_chg < 0:
+            return _ADDON_CONFIRM    # longs capitulating
         return _ADDON_NEUTRAL
     except (TypeError, ValueError, KeyError):
         return _ADDON_NEUTRAL
@@ -841,6 +853,7 @@ def compute_factor_scores(
     if research_detail.get("enabled"):
         addon_val += research_val
         feed_status["research_lab"] = f"{research_val:.2f}"
+    addon_val = max(_ADDON_AGAINST, min(_ADDON_CONFIRM, addon_val))
 
     # ── Session multiplier (forex only) ───────────────────────────────────────
     session_mult = _session_multiplier(bar_time, asset_type)
@@ -923,7 +936,7 @@ def compute_factor_scores(
         "regime": regime,
         # ── Factor breakdown (UI + AI) ────────────────────────────────────────
         "factor_scores": factor_scores,
-        "weights": {"trend": 1.0, "momentum": _momentum_w, "addon": _addon_w},
+        "weights": {"trend": 1.0, "momentum": _eff_mom_w, "addon": _eff_addon_w, "base": _eff_base_w},
         "trend_coherence": trend_detail,
         # ── Diagnostic fields (backward compat with Engine C / scoring.py) ───
         "directional_score": round(trend_score, 4),
@@ -1014,4 +1027,3 @@ def _zero_result(
         "btc_bias_applied": None,
         "abort_reason": reason,
     }
-

@@ -325,8 +325,8 @@ def detect_div(d1c: list, h4c: list, h1c: list) -> list:
             m = n // 2
             if pr[-1] > pr[0] and vols[-1] < vols[m] and vols[-1] > 0:
                 w.append("H1 Vol Div - rising price, falling vol")
-            if pr[-1] < pr[0] and vols[-1] < vols[m] and vols[-1] > 0:
-                w.append("H1 Vol Div - falling price, falling vol")
+            if pr[-1] < pr[0] and vols[-1] > vols[m] and vols[-1] > 0:
+                w.append("H1 Vol Div - falling price, rising vol")
     except Exception as e:
         log.warning(f"detect_div H1: {e}")
     return w

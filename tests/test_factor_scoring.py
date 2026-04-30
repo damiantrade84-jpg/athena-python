@@ -2,6 +2,8 @@ import pytest
 
 from config import CONFIG
 from factor_scoring import (
+    _momentum_quality,
+    _oi_addon,
     build_oi_context_for_factor_scoring,
     compute_factor_scores,
     make_regime_smoothing_context,
@@ -178,6 +180,40 @@ def test_bearish_rsi_macd_momentum_supports_short_direction():
     assert bearish["final_score"] > neutral["final_score"]
 
 
+def test_zero_macd_histogram_does_not_fallback_to_macd_line_z():
+    neutral = _momentum_quality(
+        {"rsi": 60.0, "macdHist": 0.0, "macdLine_z": 3.0},
+        "LONG",
+        "stock",
+    )
+    confirming = _momentum_quality(
+        {"rsi": 60.0, "macdHist": 0.5, "macdLine_z": -3.0},
+        "LONG",
+        "stock",
+    )
+
+    assert neutral < confirming
+
+
+def test_oi_addon_covers_symmetric_long_and_short_quadrants():
+    assert _oi_addon({"oi_change_pct": -4.0, "price_change_pct": -2.0}, "SHORT") == pytest.approx(0.30)
+    assert _oi_addon({"oi_change_pct": 4.0, "price_change_pct": -2.0}, "LONG") == pytest.approx(-0.15)
+    assert _oi_addon({"oi_change_pct": -4.0, "price_change_pct": 2.0}, "LONG") == pytest.approx(0.0)
+
+
+def test_missing_d1_ema200_is_flagged_instead_of_using_ema50():
+    d1 = _snap("long")
+    d1.pop("ema200")
+    h4 = _snap("short")
+    h1 = _snap("short")
+
+    result = _score(d1=d1, h4=h4, h1=h1)
+
+    assert result["direction"] == "SHORT"
+    assert result["trend_coherence"]["d1_ema200_missing"] is True
+    assert "d1" not in result["trend_coherence"]
+
+
 def test_crypto_addon_conviction_positive_zero_negative_ordering():
     pair = {"type": "crypto", "display": "BTC/USDT"}
 
@@ -226,6 +262,34 @@ def test_research_lab_factor_adds_bounded_candidate_context(monkeypatch):
     assert result["research_lab_detail"]["score_group"] == "forex_crosses"
     assert result["research_lab_detail"]["components"]["obv_divergence"]["signal"] == "confirming"
     assert "research_lab" in result["active_nondirectional_factors"]
+
+
+def test_research_lab_addon_is_clamped_to_addon_ceiling(monkeypatch):
+    cfg = {
+        "ENABLED": True,
+        "BONUS": 0.20,
+        "PENALTY": -0.10,
+        "MAX_ABS": 0.20,
+        "GROUPS": {"crypto_majors": ["obv_divergence"]},
+    }
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS", cfg)
+
+    result = _score(
+        pair={"type": "crypto", "display": "BTC/USDT"},
+        funding_rate=-0.0002,
+        d1_candles=_candles(trend=0.2, volume_trend=10.0),
+    )
+
+    assert result["research_lab_value"] == pytest.approx(0.20)
+    assert result["addon_value"] == pytest.approx(0.30)
+
+
+def test_weights_report_effective_values_when_addon_is_unsupported():
+    result = _score(pair={"type": "stock", "display": "TEST"})
+
+    assert result["addon_unsupported"] is True
+    assert result["weights"]["addon"] == pytest.approx(0.0)
+    assert "base" in result["weights"]
 
 
 def test_research_lab_factor_supports_commodity_group_candidates(monkeypatch):

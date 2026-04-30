@@ -236,6 +236,16 @@ class TestDetectDiv:
         result = detect_div(candles, candles, candles)
         assert isinstance(result, list)
 
+    def test_h1_falling_price_divergence_requires_rising_volume(self):
+        h1 = [
+            {"close": 100 - i, "high": 101 - i, "low": 99 - i, "vol": 100 + i}
+            for i in range(20)
+        ]
+
+        result = detect_div(h1, h1, h1)
+
+        assert "H1 Vol Div - falling price, rising vol" in result
+
 
 class TestScanClassification:
     def test_trade_signal_requires_enabled_and_unblocked(self):

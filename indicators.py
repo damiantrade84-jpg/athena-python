@@ -347,6 +347,9 @@ def calc_obv_trend(candles: list, lookback: int = 20) -> str | None:
     cl = [c["close"] for c in window]
 
     vols = [c.get("vol", 0) for c in window]
+    nonzero_vol_bars = sum(1 for v in vols if float(v or 0) > 0)
+    if sum(float(v or 0) for v in vols) <= 0 or nonzero_vol_bars < 2:
+        return None
 
     # Build OBV
 
@@ -1328,11 +1331,18 @@ def calc_vwap(candles: list, *, anchor_index: int = 0, band_mult: float = 0.5) -
             continue
 
         typical_price = (float(c.get("high", 0)) + float(c.get("low", 0)) + float(c.get("close", 0))) / 3.0
-        vol = float(c.get("vol", 0)) or 1.0  # fallback to 1.0 to avoid div-by-zero
-        cum_tp_vol += typical_price * vol
-        cum_vol += vol
+        vol = float(c.get("vol", 0) or 0.0)
+        if vol > 0:
+            cum_tp_vol += typical_price * vol
+            cum_vol += vol
 
-        vwap_val = cum_tp_vol / cum_vol if cum_vol > 0 else typical_price
+        if cum_vol <= 0:
+            vwap_values.append(None)
+            upper_band.append(None)
+            lower_band.append(None)
+            continue
+
+        vwap_val = cum_tp_vol / cum_vol
         vwap_values.append(round(vwap_val, 8))
 
         # ATR band
