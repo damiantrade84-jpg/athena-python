@@ -2843,6 +2843,24 @@ class NakedEngine:
         style_profile: dict | None = None,
         crypto_entry_candles_by_tf: dict | None = None,
     ) -> dict:
+        """Calculate Engine B confidence score and gate verdict.
+
+        Stage 3.7: Explicit gate definitions for Engine B.
+        The 6 mandatory gates (flexible mode) are:
+          1. structure_ok  — not hard_counter_trend; micro/macro aligned OR BOS/sweep
+          2. location_ok   — zone_touched OR near_zone OR ob_at_zone OR breakout_ok
+          3. entry_ok      — trigger_ok OR (breakout + volume) OR (sweep/CHoCH + zone)
+          4. room_ok       — distance to next structural level >= min_room_atr × ATR
+          5. rr_ok         — execution RR >= min_rr (style/asset dependent)
+          6. macro_ok      — macro_aligned (only enforced when require_macro_align=True)
+
+        Bonus points (add to score, not required for pass):
+          +1  bos_mtf_confirmed  — multi-TF BOS alignment
+          +1  ob_at_zone         — strong order block at active zone
+          +1  volume_ok          — volume confirmation on breakout
+
+        Crypto profile adds extra gates: target_v2_valid, stop_valid, path_clear.
+        """
         atr = res.get("atr", 1.0)
         atr_val = atr if atr > 0 else 0.0001
         h1_seq = res.get("current_swing_sequence", "")

@@ -41,6 +41,12 @@ _SESSION_CORE_MULT_DEFAULT = 1.00
 _SESSION_SHOULDER_MULT_DEFAULT = 0.90
 _SESSION_OFF_MULT_DEFAULT = 0.75
 
+# Volatility scaler defaults (Stage 3.4: replaces session multiplier)
+_VOLATILITY_SCALER_ATR_PCT_LOW = 0.005   # 0.5% ATR — low vol
+_VOLATILITY_SCALER_ATR_PCT_HIGH = 0.025  # 2.5% ATR — high vol
+_VOLATILITY_SCALER_MULT_LOW = 1.15       # reward precision in low vol
+_VOLATILITY_SCALER_MULT_HIGH = 0.85      # penalise noise in high vol
+
 # Addon contribution bounds
 # Stage 1.4: aligned with research lab MAX_ABS (0.20) so clamp order is deterministic.
 # Research lab computes aggregate → single clamp to [-0.15, +0.20].
@@ -119,8 +125,60 @@ def build_oi_context_for_factor_scoring(
 
 # ── Factor 1: Trend (multi-TF EMA alignment) ─────────────────────────────────
 
+def _ema_cross_confirmed(current_snap: dict, prev_snap: dict, fast_key: str, slow_key: str) -> float | None:
+    """Stage 3.3: EMA vote hysteresis — require 2-bar confirmation for a cross.
+
+    Returns +1.0 (LONG), -1.0 (SHORT), or None (indeterminate / no confirmation).
+    A cross is confirmed only if:
+      - Current bar: fast > slow (or fast < slow)
+      - Previous bar: same relationship holds (not a fresh cross)
+    This filters out whipsaw noise from single-bar EMA breaches.
+    """
+    fast_cur = current_snap.get(fast_key)
+    slow_cur = current_snap.get(slow_key)
+    fast_prev = prev_snap.get(fast_key) if isinstance(prev_snap, dict) else None
+    slow_prev = prev_snap.get(slow_key) if isinstance(prev_snap, dict) else None
+
+    if fast_cur is None or slow_cur is None or slow_cur == 0:
+        return None
+    try:
+        fast_cur = float(fast_cur)
+        slow_cur = float(slow_cur)
+    except (TypeError, ValueError):
+        return None
+
+    cur_long = fast_cur > slow_cur
+    cur_short = fast_cur < slow_cur
+
+    # If previous bar data available, require consistency
+    if fast_prev is not None and slow_prev is not None:
+        try:
+            fast_prev = float(fast_prev)
+            slow_prev = float(slow_prev)
+        except (TypeError, ValueError):
+            fast_prev = None
+            slow_prev = None
+
+    if fast_prev is not None and slow_prev is not None:
+        prev_long = fast_prev > slow_prev
+        prev_short = fast_prev < slow_prev
+        if cur_long and prev_long:
+            return 1.0
+        if cur_short and prev_short:
+            return -1.0
+        # Fresh cross — wait one more bar for confirmation
+        return None
+
+    # No previous data — allow current bar only if gap is significant (>0.1%)
+    _gap = abs(fast_cur - slow_cur) / abs(slow_cur) if slow_cur != 0 else 0
+    if _gap > 0.001:
+        return 1.0 if cur_long else (-1.0 if cur_short else None)
+    return None
+
+
 def _coherent_trend_score(
-    d1_snap: dict, h4_snap: dict, h1_snap: dict, asset_type: str
+    d1_snap: dict, h4_snap: dict, h1_snap: dict, asset_type: str,
+    d1_prev: dict | None = None, h4_prev: dict | None = None, h1_prev: dict | None = None,
 ) -> tuple:
     """Multi-TF EMA alignment trend score.
 
@@ -132,6 +190,9 @@ def _coherent_trend_score(
     D1 weight 0.50 (tide), H4 weight 0.30 (momentum), H1 weight 0.20 (entry).
     All 3 aligned → ±3.0; 2-of-3 dominant → ±(0.35+0.65*coherence)*3.0.
     All split (1.5 LONG / 1.5 SHORT with equal weights) → 0.0, direction=None.
+
+    Stage 3.3: EMA hysteresis — 2-bar confirmation required. Pass previous-bar
+    snaps as d1_prev/h4_prev/h1_prev to enable; missing prev = gap check fallback.
     """
     tf_weights = CONFIG.get("INDICATOR_WEIGHTS", {}).get("trend", {})
     if isinstance(tf_weights, dict):
@@ -155,30 +216,30 @@ def _coherent_trend_score(
     detail = {}
 
     # D1 — primary trend (EMA21 vs EMA200 for cleaner signal)
-    d1_e21 = d1_snap.get("ema21")
-    d1_e200 = d1_snap.get("ema200")
-    if d1_e21 is not None and d1_e200 is not None and d1_e200 != 0:
-        sign = 1.0 if d1_e21 > d1_e200 else -1.0
-        votes.append(("d1_ema_trend", sign, _w("d1_ema_trend")))
-        detail["d1"] = "LONG" if sign > 0 else "SHORT"
-    elif d1_e21 is not None and d1_e200 is None:
+    d1_sign = _ema_cross_confirmed(d1_snap, d1_prev, "ema21", "ema200")
+    if d1_sign is not None:
+        votes.append(("d1_ema_trend", d1_sign, _w("d1_ema_trend")))
+        detail["d1"] = "LONG" if d1_sign > 0 else "SHORT"
+    elif d1_snap.get("ema21") is not None and d1_snap.get("ema200") is None:
         detail["d1_ema200_missing"] = True
+    elif d1_snap.get("ema21") is not None and d1_snap.get("ema200") is not None:
+        detail["d1_hysteresis_pending"] = True
 
     # H4 — momentum confirmation (EMA21 vs EMA50)
-    h4_e21 = h4_snap.get("ema21")
-    h4_e50 = h4_snap.get("ema50")
-    if h4_e21 is not None and h4_e50 is not None and h4_e50 != 0:
-        sign = 1.0 if h4_e21 > h4_e50 else -1.0
-        votes.append(("h4_ema_trend", sign, _w("h4_ema_trend")))
-        detail["h4"] = "LONG" if sign > 0 else "SHORT"
+    h4_sign = _ema_cross_confirmed(h4_snap, h4_prev, "ema21", "ema50")
+    if h4_sign is not None:
+        votes.append(("h4_ema_trend", h4_sign, _w("h4_ema_trend")))
+        detail["h4"] = "LONG" if h4_sign > 0 else "SHORT"
+    elif h4_snap.get("ema21") is not None and h4_snap.get("ema50") is not None:
+        detail["h4_hysteresis_pending"] = True
 
     # H1 — entry quality (EMA21 vs EMA50)
-    h1_e21 = h1_snap.get("ema21")
-    h1_e50 = h1_snap.get("ema50")
-    if h1_e21 is not None and h1_e50 is not None and h1_e50 != 0:
-        sign = 1.0 if h1_e21 > h1_e50 else -1.0
-        votes.append(("ema_trend", sign, _w("ema_trend")))
-        detail["h1"] = "LONG" if sign > 0 else "SHORT"
+    h1_sign = _ema_cross_confirmed(h1_snap, h1_prev, "ema21", "ema50")
+    if h1_sign is not None:
+        votes.append(("ema_trend", h1_sign, _w("ema_trend")))
+        detail["h1"] = "LONG" if h1_sign > 0 else "SHORT"
+    elif h1_snap.get("ema21") is not None and h1_snap.get("ema50") is not None:
+        detail["h1_hysteresis_pending"] = True
 
     if not votes:
         return 0.0, None, {"error": "no_ema_data", **detail}
@@ -785,38 +846,39 @@ def _asset_addon(
 
 # ── Session multiplier (forex only) ──────────────────────────────────────────
 
-def _session_multiplier(bar_time: Optional[str], asset_type: str) -> float:
-    """Return session liquidity multiplier. Only applied to forex pairs."""
-    if asset_type != "forex":
+def _volatility_scaler(atr: float, close: float, asset_type: str) -> float:
+    """Stage 3.4: Volatility-based position-quality scaler.
+
+    Replaces the forex session multiplier with a continuous volatility measure.
+    Low volatility (ATR% < 0.5%) → 1.15 (reward precision)
+    High volatility (ATR% > 2.5%) → 0.85 (penalise noise)
+    Linear interpolation in between.
+
+    Applied to ALL asset classes, not just forex.
+    """
+    if close is None or close <= 0 or atr is None or atr <= 0:
         return 1.0
-    from datetime import datetime, timezone
-    _core_mult = float(CONFIG.get("FACTOR_SESSION_CORE_MULT", _SESSION_CORE_MULT_DEFAULT))
-    _shoulder_mult_default = float(CONFIG.get("FACTOR_SESSION_SHOULDER_MULT", _SESSION_SHOULDER_MULT_DEFAULT))
-    _off_mult_default = float(CONFIG.get("FACTOR_SESSION_OFF_MULT", _SESSION_OFF_MULT_DEFAULT))
-    try:
-        if bar_time:
-            dt = datetime.fromisoformat(bar_time.replace("Z", "+00:00"))
-            h = dt.hour
-        else:
-            h = datetime.now(timezone.utc).hour
-    except Exception:
-        return _core_mult
+    atr_pct = atr / close
+    _low = float(CONFIG.get("VOLATILITY_SCALER_ATR_PCT_LOW", _VOLATILITY_SCALER_ATR_PCT_LOW))
+    _high = float(CONFIG.get("VOLATILITY_SCALER_ATR_PCT_HIGH", _VOLATILITY_SCALER_ATR_PCT_HIGH))
+    _mult_low = float(CONFIG.get("VOLATILITY_SCALER_MULT_LOW", _VOLATILITY_SCALER_MULT_LOW))
+    _mult_high = float(CONFIG.get("VOLATILITY_SCALER_MULT_HIGH", _VOLATILITY_SCALER_MULT_HIGH))
+    if atr_pct <= _low:
+        return _mult_low
+    if atr_pct >= _high:
+        return _mult_high
+    # Linear interpolation
+    t = (atr_pct - _low) / (_high - _low)
+    return _mult_low + t * (_mult_high - _mult_low)
 
-    cfg = CONFIG.get("FOREX_ENGINE", {}) or {}
-    soft_mult = float(cfg.get("session_soft_multiplier", _off_mult_default))
-    shoulder_mult = float(cfg.get("session_shoulder_multiplier", _shoulder_mult_default))
-    shoulder_h = int(cfg.get("session_shoulder_hours", 1))
 
-    # Core sessions: London 07-16 UTC, NY 13-21 UTC
-    if (7 <= h < 16) or (13 <= h < 21):
-        return _core_mult
-    # Shoulder zones: ±shoulder_h of core
-    # Hour 16 is already inside the NY core window (13 <= h < 21) so including
-    # range(16, 16+shoulder_h) here is dead code — core check fires first.
-    shoulder_zones = list(range(7 - shoulder_h, 7)) + list(range(21, 21 + shoulder_h))
-    if h in shoulder_zones:
-        return shoulder_mult
-    return soft_mult
+def _session_multiplier(bar_time: Optional[str], asset_type: str) -> float:
+    """DEPRECATED — kept for backward compat. Returns 1.0 always.
+
+    Stage 3.4: Session-based multiplier replaced by _volatility_scaler.
+    Forex session liquidity is already reflected in spread/ATR.
+    """
+    return 1.0
 
 
 # ── Main scoring function ─────────────────────────────────────────────────────
@@ -896,10 +958,37 @@ def compute_factor_scores(
     if research_detail.get("enabled"):
         addon_val += research_val
         feed_status["research_lab"] = f"{research_val:.2f}"
+
+    # Stage 3.6: Cross-engine research lab correlation cap.
+    # If Engine B research lab is also active for this pair, the two labs may
+    # double-count the same price-action evidence. Cap total research contribution
+    # so it cannot exceed the standalone research bonus by more than 50%.
+    _engine_b_rl_enabled = bool(
+        (CONFIG.get("ENGINE_B_RESEARCH_LAB_FACTORS") or {}).get("ENABLED", False)
+    )
+    if _engine_b_rl_enabled and research_detail.get("enabled"):
+        _standalone_max = float(CONFIG.get("ENGINE_A_RESEARCH_MAX", _RESEARCH_BONUS_DEFAULT))
+        _cross_engine_max = _standalone_max * 1.5
+        _total_research = addon_val - (_ADDON_NEUTRAL if addon_status == "unsupported" else 0.0)
+        # Only cap the research portion, not the carry/funding/oi portion
+        _base_addon = addon_val - research_val
+        _capped_research = max(-_cross_engine_max, min(_cross_engine_max, research_val))
+        addon_val = _base_addon + _capped_research
+        feed_status["research_lab_capped"] = f"{_capped_research:.2f}"
+
     # Stage 1.4: unified addon bound aligned with research lab MAX_ABS
     addon_val = max(_ADDON_AGAINST, min(_ADDON_CONFIRM, addon_val))
 
-    # ── Session multiplier (forex only) ───────────────────────────────────────
+    # ── Volatility scaler (Stage 3.4) ─────────────────────────────────────────
+    _close_for_vol = h4_snap.get("close")
+    try:
+        _close_for_vol = float(_close_for_vol) if _close_for_vol is not None else None
+    except (TypeError, ValueError):
+        _close_for_vol = None
+    vol_scaler = _volatility_scaler(_atr if _atr else 0.0, _close_for_vol, asset_type)
+    feed_status["vol_scaler"] = f"{vol_scaler:.2f}"
+
+    # ── Session multiplier (deprecated, now returns 1.0) ──────────────────────
     session_mult = _session_multiplier(bar_time, asset_type)
     feed_status["session"] = f"{session_mult:.2f}"
 
@@ -984,8 +1073,34 @@ def compute_factor_scores(
         _eff_floor = float(_floor_by_regime[regime])
     else:
         _eff_floor = _conviction_floor
-    base_score = abs(trend_score) * adx_mult * session_mult * di_align_mult
+    base_score = abs(trend_score) * adx_mult * vol_scaler * session_mult * di_align_mult
+
+    # Stage 3.2: Funding / carry cost adjustment
+    # When holding is expensive (high funding or adverse carry), reduce score.
+    _cost_penalty = 0.0
+    if asset_type == "crypto" and funding_rate is not None:
+        try:
+            _fr = float(funding_rate)
+            # Funding paid every 8h; annualised ≈ _fr * 3 * 365 ≈ 1095× _fr
+            # Penalise if funding is adverse to direction: longs pay high positive funding
+            _is_long = direction == "LONG"
+            _adverse = (_is_long and _fr > 0.001) or (not _is_long and _fr < -0.001)
+            _favourable = (_is_long and _fr < -0.001) or (not _is_long and _fr > 0.001)
+            if _adverse:
+                _cost_penalty = min(0.15, abs(_fr) * 100)  # 0.01 funding → 0.10 penalty
+            elif _favourable:
+                _cost_penalty = -min(0.10, abs(_fr) * 50)  # small boost for favourable funding
+        except (TypeError, ValueError):
+            pass
+    elif asset_type == "forex" and addon_type == "carry":
+        # Carry already encoded in addon_val; apply small penalty if carry is against
+        if addon_val == _ADDON_AGAINST:
+            _cost_penalty = 0.05
+        elif addon_val == _ADDON_CONFIRM:
+            _cost_penalty = -0.03
+
     final_score = base_score * (_eff_floor + (1.0 - _eff_floor) * conviction)
+    final_score = final_score * (1.0 - _cost_penalty)
     final_score = max(0.0, min(3.0, final_score))
 
     # ── Factor scores dict (for UI / Marcus Reid diagnostics) ─────────────────

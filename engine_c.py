@@ -1177,6 +1177,14 @@ def compute_consensus(
     # Step 4: Direction agrees — compute weighted conviction
     direction = a["direction"]
 
+    # Stage 3.1: Explicit Engine A × Engine B interaction rules.
+    # Engine A directional hit-rate is 42.3%. If A is weak (score_norm < 0.30),
+    # B cannot rescue it to a full execute — cap at reduced_risk or watchlist.
+    # This prevents B's structural narrative from overriding A's weak quantitative
+    # evidence and creating false-confidence trades.
+    _a_weak_threshold = float(CONFIG.get("ENGINE_C_A_WEAK_THRESHOLD", 0.30))
+    _a_is_weak = a["score_norm"] < _a_weak_threshold
+
     # Get regime-conditional A/B blend (see ENGINE_C_AB_WEIGHTS; distinct from CONFIG REGIME_WEIGHTS).
     base_weights = ENGINE_C_AB_WEIGHTS.get(regime, {"A": 0.50, "B": 0.50})
     meta_context = get_engine_context(
@@ -1273,6 +1281,14 @@ def compute_consensus(
         )
         if _intermarket_blocks:
             decision_state = "blocked"
+        # Stage 3.1: If A is weak, B cannot rescue to execute.
+        elif _a_is_weak and conviction >= 0.65:
+            # A weak but total conviction high → reduced_risk only
+            decision_state = "reduced_risk"
+            sizing = max(0.0, sizing - 0.35)
+        elif _a_is_weak and conviction >= 0.50:
+            decision_state = "reduced_risk"
+            sizing = max(0.0, sizing - 0.25)
         elif c_reliability >= 0.60 and conviction >= 0.65:
             decision_state = "execute"
         elif c_reliability >= 0.45 and conviction >= 0.50:
@@ -1309,6 +1325,7 @@ def compute_consensus(
         c_reliability=c_reliability,
         intermarket_confirmation=_intermarket_confirmation_payload,
         intermarket_multiplier=_intermarket_mult,
+        a_is_weak=_a_is_weak,
         disagreement_diagnosis=_build_disagreement_diagnosis(
             "ALIGNED", a, b, signal_a, signal_b, regime
         ),
@@ -1421,4 +1438,5 @@ def _build_result(
         ),
         # Phase 3: Engine C disagreement diagnostics (display-only, no scoring effect)
         "disagreement_diagnosis": kwargs.get("disagreement_diagnosis") or {},
+        "a_is_weak": kwargs.get("a_is_weak"),
     }
