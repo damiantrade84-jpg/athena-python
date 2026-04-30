@@ -2923,6 +2923,14 @@ class NakedEngine:
             if str(res.get("asset_type") or "").lower() == "forex":
                 _diag_codes.append(ENGINE_B_REASON_FOREX_ADX_LOW)
 
+        # Stage 2.3: Commodity swing requires macro alignment regardless of config
+        _commodity_swing_macro_required = (
+            exec_style == "swing"
+            and asset_type_lower in ("commodity", "nat_gas", "energy_oil", "precious_trackers")
+        )
+        if _commodity_swing_macro_required:
+            require_macro_align = True
+
         macro_ok = macro_aligned or not require_macro_align
         zone_ok = bool(res.get("zone_touched") or res.get("near_active_zone"))
         trigger_ok = bool(res.get("trigger_ok"))
@@ -3097,6 +3105,10 @@ class NakedEngine:
             entry_ok = crypto_trigger_profile_enabled and trigger_ok
         space_ok = room_ok or rr_ok
 
+        # Stage 2.8: Optional volume confirmation gate.
+        # Contributes to gate_score (+1 bonus) but is NOT mandatory for pass.
+        volume_ok = bool(res.get("volume_confirmed", False))
+
         gate_confirmations = [structure_ok, location_ok, entry_ok, room_ok, rr_ok]
         if require_macro_align:
             gate_confirmations.append(macro_ok)
@@ -3107,6 +3119,8 @@ class NakedEngine:
             bonus_points += 1.0  # MTF BOS alignment = extra point
         if ob_at_zone:
             bonus_points += 1.0  # OB at zone = extra point
+        if volume_ok:
+            bonus_points += 1.0  # Volume confirmation = extra point
 
         gate_score = float(sum(1 for passed in gate_confirmations if passed))
         gate_max_possible = float(len(gate_confirmations)) if gate_confirmations else 1.0
@@ -3157,10 +3171,10 @@ class NakedEngine:
         gate_score = max(0.0, gate_score - _d1_penalty)
 
         # Stage 1.5: fixed max_possible so pct is deterministic.
-        # 6 gates + 2 bonuses (BOS MTF + OB at zone) + profile_points = 8 + profile_points
+        # 6 gates + 3 bonuses (BOS MTF + OB at zone + volume_ok) + profile_points = 9 + profile_points
         # Profile points reserved for future; currently 0 when profile scoring disabled.
         _profile_points_max = 1.0 if config.CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED", False) else 0.0
-        max_possible = 6 + 2 + _profile_points_max  # 8 base, 9 with profile
+        max_possible = 6 + 3 + _profile_points_max  # 9 base, 10 with profile
         pct = min(100, max(0, round((total_score / max_possible) * 100)))
         if checklist_mode == "strict":
             passed = structure_ok and zone_ok and trigger_ok and room_ok and rr_ok and macro_ok
@@ -3173,6 +3187,7 @@ class NakedEngine:
                 structure_ok
                 and location_ok
                 and entry_ok
+                and room_ok
                 and rr_ok
                 and (macro_ok if require_macro_align else True)
             )

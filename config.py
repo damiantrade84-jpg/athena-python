@@ -435,20 +435,12 @@ CONFIG: dict = {
         "stock": 1.10,
         "index": 1.17,
     },
-    # BT_MIN_GROUP removed — backtest uses BT_MIN class-level thresholds directly.
-    # Engine A backtest: use BT_MIN / pair bt_min when True (live unchanged).
-    # RESEARCH_MODE also enables the same BT chain (legacy alias).
+    # Stage 2.4: Threshold system simplified to 2 tiers.
+    # Old 6-class floors + BT_MIN_GROUP + BACKTEST_USE_BT_MIN_THRESHOLDS removed.
+    # See scoring.py _get_threshold_tier() for implementation.
     "RESEARCH_MODE": False,
-    "BACKTEST_USE_BT_MIN_THRESHOLDS": False,
     "BACKTEST_EVENT_RISK_GATING": False,
     "BACKTEST_SENTIMENT_GATING": False,
-    "MIN_CONFLUENCE_CLASS": {
-        "crypto": 2.4,
-        "forex": 2.1,
-        "commodity": 1.8,
-        "stock": 1.8,
-        "index": 1.5,
-    },
     # PHASE 3: Engine C Backtest Exit Controls - explicit config for MAX_HOLD and BE parameters
     "ENGINE_C_BT_EXIT": {
         "forex": {
@@ -834,82 +826,30 @@ CONFIG: dict = {
                 "require_macro_align": False,
             },
         },
-        # Optional subgroup-level Engine B strictness overrides by style.
+        # Stage 2.5: Collapsed Engine B group overrides.
+        # Only 4 groups retain overrides; all others use base profiles.
         "score_group_overrides": {
+            "forex_majors": {
+                "intraday": {"min_rr": 1.3},
+                "swing": {"min_rr": 1.8},
+            },
+            "forex_crosses": {
+                "intraday": {"min_rr": 1.3},
+                "swing": {"min_rr": 1.8},
+            },
+            "forex_exotics": {
+                "scalp": {"min_room_atr": 0.5},
+                "intraday": {"min_room_atr": 0.85, "min_rr": 1.35},
+                "swing": {"min_room_atr": 1.2, "min_rr": 1.8},
+            },
             "nat_gas": {
-                "scalp": {"min_score": 4.0, "min_rr": 1.4},
                 "intraday": {"min_score": 4.0, "min_rr": 1.6},
-                "swing": {"min_score": 5.0, "min_rr": 2.0},
+                "swing": {"min_score": 4.0, "min_rr": 2.0},
             },
             "crypto_doge": {
-                "scalp": {"min_score": 4.0, "min_room_atr": 0.5, "min_rr": 1.3},
+                "scalp": {"min_score": 3.0, "min_room_atr": 0.5},
                 "intraday": {"min_score": 4.0, "min_room_atr": 0.9, "min_rr": 1.5},
-                "swing": {"min_score": 5.0, "min_room_atr": 1.2, "min_rr": 1.9},
-            },
-            "crypto_btc": {
-                "scalp": {"min_score": 4.0},
-                "intraday": {"min_score": 4.0},
-                "swing": {"min_score": 5.0},
-            },
-            "crypto_eth": {
-                "scalp": {"min_score": 4.0},
-                "intraday": {"min_score": 4.0},
-                "swing": {"min_score": 5.0},
-            },
-            "crypto_alt_majors": {
-                "scalp": {"min_score": 4.0},
-                "intraday": {"min_score": 4.0},
-                "swing": {"min_score": 5.0},
-            },
-            "crypto_other": {
-                "scalp": {"min_score": 4.0},
-                "intraday": {"min_score": 4.0},
-                "swing": {"min_score": 5.0},
-            },
-            "energy_oil": {
-                "scalp": {"min_score": 4.0},
-                "intraday": {"min_score": 4.0},
-                "swing": {"min_score": 5.0},
-            },
-            "precious_trackers": {
-                "scalp": {"min_score": 4.0},
-                "intraday": {"min_score": 4.0},
-                "swing": {"min_score": 5.0},
-            },
-            "commodity_other": {
-                "scalp": {"min_score": 4.0},
-                "intraday": {"min_score": 4.0},
-                "swing": {"min_score": 5.0},
-            },
-            "copper": {
-                "scalp": {"min_score": 4.0},
-                "intraday": {"min_score": 4.0},
-                "swing": {"min_score": 5.0},
-            },
-            "pgm_metals": {
-                "scalp": {"min_score": 4.0},
-                "intraday": {"min_score": 4.0},
-                "swing": {"min_score": 5.0},
-            },
-            "us_stock_single": {
-                "scalp": {"min_score": 4.0},
-                "intraday": {"min_score": 4.0},
-                "swing": {"min_score": 5.0},
-            },
-            "stock_other": {
-                "scalp": {"min_score": 4.0},
-                "intraday": {"min_score": 4.0},
-                "swing": {"min_score": 5.0},
-            },
-            "smallcap_em_etf": {
-                "scalp": {"min_score": 4.0},
-                "intraday": {"min_score": 4.0},
-                "swing": {"min_score": 5.0},
-            },
-            "bond_tlt": {
-                "scalp": {"min_score": 4.0},
-                "intraday": {"min_score": 4.0},
-                "swing": {"min_score": 5.0},
+                "swing": {"min_score": 4.0, "min_room_atr": 1.2, "min_rr": 1.9},
             },
         },
     },
@@ -998,8 +938,6 @@ def validate_config(cfg: dict) -> None:
         "ADX_TREND_MIN_CLASS",
         "COUNTER_TREND_PEN",
         "RSI_BOUNDS",
-        "BT_MIN",
-        "MIN_CONFLUENCE_CLASS",
     ):
         missing = _asset_classes - set(cfg.get(sub_key, {}).keys())
         if missing:

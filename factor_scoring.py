@@ -52,7 +52,7 @@ _ADDON_AGAINST = -0.15   # actively opposing direction
 _MOMENTUM_WEIGHT_DEFAULT = 0.50
 _ADDON_WEIGHT_DEFAULT = 0.30
 _BASE_WEIGHT_DEFAULT = 0.20
-_CONVICTION_FLOOR_DEFAULT = 0.60
+_CONVICTION_FLOOR_DEFAULT = 0.20
 _RESEARCH_BONUS_DEFAULT = 0.15
 _RESEARCH_PENALTY_DEFAULT = -0.10
 
@@ -279,6 +279,28 @@ def _momentum_quality(
         except (TypeError, ValueError):
             pass
 
+    # Stage 2.7: Divergence detection as disqualification.
+    # If price makes higher highs but RSI/MACD makes lower highs (bearish div),
+    # or price makes lower lows but RSI/MACD makes higher lows (bullish div),
+    # momentum quality is zeroed — divergence precedes reversals.
+    def _detect_divergence(price_vals: list, ind_vals: list, dir_: str) -> bool:
+        if len(price_vals) < 3 or len(ind_vals) < 3:
+            return False
+        if dir_ == "LONG":
+            # Bearish divergence: higher price high, lower indicator high
+            return price_vals[-1] > price_vals[-2] and ind_vals[-1] < ind_vals[-2]
+        else:
+            # Bullish divergence: lower price low, higher indicator low
+            return price_vals[-1] < price_vals[-2] and ind_vals[-1] > ind_vals[-2]
+
+    _price_swings = h4_snap.get("price_swings", [])
+    _rsi_swings = h4_snap.get("rsi_swings", [])
+    _macd_hist_swings = h4_snap.get("macd_hist_swings", [])
+    _divergence_detected = (
+        _detect_divergence(_price_swings, _rsi_swings, direction)
+        or _detect_divergence(_price_swings, _macd_hist_swings, direction)
+    )
+
     # MACD histogram score — aligned confirms, opposing penalises strongly.
     # Penalty increased from -0.15 to -0.50 (2026-04-30 audit): the old value
     # was too weak — with RSI weight 0.6 and MACD weight 0.4, opposing MACD
@@ -298,6 +320,10 @@ def _momentum_quality(
                 macd_score = -0.50
         except (TypeError, ValueError):
             pass
+
+    # If divergence detected, override momentum to zero regardless of indicator values
+    if _divergence_detected:
+        return 0.0
 
     # Per-indicator weights from config
     ind_weights = CONFIG.get("INDICATOR_WEIGHTS", {}).get("momentum", {})
@@ -328,30 +354,18 @@ def _research_lab_candidate_addon(
 ) -> tuple[float, dict]:
     """Research Lab candidate factor, config-gated and bounded.
 
-    This is intentionally small and diagnostic-rich so it can be reverted by one
-    config switch if paper validation does not improve Engine A.
+    Stage 2.6: Collapsed to 3 universal factors for all asset classes:
+      obv_divergence, bollinger_touch, price_momentum
+    Per-group factor lists removed to reduce overfitting.
     """
     cfg = CONFIG.get("ENGINE_A_RESEARCH_LAB_FACTORS", {}) or {}
     if not cfg.get("ENABLED", False):
         return 0.0, {"enabled": False}
 
-    display = pair.get("display", pair.get("symbol", ""))
-    score_group = pair.get("score_group") or _infer_research_score_group(display, asset_type)
-    group_cfg = cfg.get("GROUPS", {}) or {}
-    allowed = group_cfg.get(score_group, group_cfg.get(asset_type, []))
-    if not allowed:
-        return 0.0, {
-            "enabled": True,
-            "score_group": score_group,
-            "applied": False,
-            "reason": "no_group_factors",
-        }
-
     candles = d1_candles if len(d1_candles or []) >= 60 else h4_candles
     if not candles or len(candles) < 60:
         return 0.0, {
             "enabled": True,
-            "score_group": score_group,
             "applied": False,
             "reason": "insufficient_candles",
         }
@@ -359,6 +373,11 @@ def _research_lab_candidate_addon(
     bonus = float(cfg.get("BONUS", _RESEARCH_BONUS_DEFAULT))
     penalty = float(cfg.get("PENALTY", _RESEARCH_PENALTY_DEFAULT))
     max_abs = abs(float(cfg.get("MAX_ABS", 0.20)))
+
+    # Stage 2.6: Universal factor list — same for all asset classes
+    _UNIVERSAL_RL_FACTORS = ["obv_divergence", "bollinger_touch", "price_momentum"]
+    allowed = cfg.get("FACTORS", _UNIVERSAL_RL_FACTORS)
+
     components: dict[str, dict] = {}
     total = 0.0
 
@@ -370,7 +389,7 @@ def _research_lab_candidate_addon(
     total = max(-max_abs, min(max_abs, total))
     return total, {
         "enabled": True,
-        "score_group": score_group,
+        "score_group": "universal",
         "allowed": list(allowed),
         "components": components,
         "raw_total": round(sum(d.get("value", 0.0) for d in components.values()), 4),
@@ -379,37 +398,35 @@ def _research_lab_candidate_addon(
 
 
 def _infer_research_score_group(display: str, asset_type: str) -> str:
-    if asset_type == "forex":
-        majors = {"EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"}
-        exotics = {"USD/ZAR", "USD/MXN", "USD/SGD", "USD/BRL", "USD/INR", "USD/TRY"}
-        if display in majors:
-            return "forex_majors"
-        if display in exotics:
-            return "forex_exotics"
-        return "forex_crosses"
-    if asset_type == "crypto":
-        if display in {"BTC/USDT", "ETH/USDT"}:
-            return "crypto_majors"
-        if display in {"DOGE/USDT", "PEPE/USDT", "WIF/USDT"}:
-            return "crypto_meme"
-        return "crypto_alts"
-    if asset_type == "commodity":
-        if any(token in display for token in ("XAU", "XAG", "XPT", "XPD")):
-            return "metals"
-        return "commodity_other"
-    return asset_type
+    """Stage 2.6: Research lab uses universal factors — group inference is deprecated.
+
+    All asset classes now use the same 3 universal factors:
+    obv_divergence, bollinger_touch, price_momentum.
+    This function returns a generic label for backward-compat diagnostics only.
+    """
+    return "universal"
 
 
 def _research_factor_value(name: str, direction: str, candles: list, bonus: float, penalty: float) -> tuple[float, dict]:
+    """Stage 2.6: Universal research lab factors.
+
+    Supported factors:
+      - obv_divergence   : OBV trend confirmation
+      - bollinger_touch  : Price at band extremes
+      - price_momentum   : 10-period rate of change (replaces stochastic_cross + chandelier)
+    """
     try:
         if name == "obv_divergence":
             return _research_obv_value(direction, candles, bonus, penalty)
+        if name == "bollinger_touch":
+            return _research_bollinger_value(direction, candles, bonus, penalty)
+        if name == "price_momentum":
+            return _research_price_momentum_value(direction, candles, bonus, penalty)
+        # Legacy factors — still callable but not in default factor list
         if name == "stochastic_cross":
             return _research_stochastic_value(direction, candles, bonus, penalty)
         if name == "chandelier_trend":
             return _research_chandelier_value(direction, candles, bonus, penalty)
-        if name == "bollinger_touch":
-            return _research_bollinger_value(direction, candles, bonus, penalty)
         if name == "aroon_trend":
             return _research_aroon_value(direction, candles, bonus, penalty)
     except Exception as e:
@@ -490,6 +507,25 @@ def _research_bollinger_value(direction: str, candles: list, bonus: float, penal
     if direction == "SHORT" and close <= lower:
         return penalty, {"signal": "short_chasing_lower_band", "value": penalty}
     return 0.0, {"signal": "inside_bands", "value": 0.0}
+
+
+def _research_price_momentum_value(direction: str, candles: list, bonus: float, penalty: float) -> tuple[float, dict]:
+    """10-period rate of change momentum factor.
+
+    Replaces stochastic_cross + chandelier_trend with a single
+    universal momentum measure.
+    """
+    closes = [float(c["close"]) for c in candles if c.get("close") is not None]
+    if len(closes) < 15:
+        return 0.0, {"signal": "missing", "value": 0.0}
+    roc = (closes[-1] - closes[-11]) / abs(closes[-11]) if closes[-11] != 0 else 0.0
+    if direction == "LONG" and roc > 0.02:
+        return bonus, {"signal": "positive_momentum", "roc": round(roc, 4), "value": bonus}
+    if direction == "SHORT" and roc < -0.02:
+        return bonus, {"signal": "negative_momentum", "roc": round(roc, 4), "value": bonus}
+    if (direction == "LONG" and roc < -0.02) or (direction == "SHORT" and roc > 0.02):
+        return penalty, {"signal": "opposing_momentum", "roc": round(roc, 4), "value": penalty}
+    return 0.0, {"signal": "neutral_momentum", "roc": round(roc, 4), "value": 0.0}
 
 
 def _research_aroon_value(direction: str, candles: list, bonus: float, penalty: float) -> tuple[float, dict]:

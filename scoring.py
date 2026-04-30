@@ -158,67 +158,50 @@ def get_pair_score_group(pair: dict) -> str:
     return f"{ptype}_other" if ptype else "unknown"
 
 
-def get_score_threshold(pair: dict, is_backtest: bool = False) -> float:
-    """Resolve score threshold with pair profile -> group -> asset-class hierarchy.
+# Stage 2.4: Simplified 2-tier threshold system.
+# Volatile assets (crypto, nat_gas) need higher thresholds.
+# Stable assets (forex, commodity, stock, index) use lower thresholds.
+_TIER_VOLATILE = 2.0
+_TIER_STABLE = 1.5
 
-    Live scans always use MIN_CONFLUENCE_* / pair ``min_confluence``.
+_PAIR_OVERRIDES = {
+    "XAU/USD": 1.5,
+    "XAG/USD": 1.5,
+}
 
-    When ``BACKTEST_USE_BT_MIN_THRESHOLDS`` or ``RESEARCH_MODE`` is true (default in
-    config: use BT presets), backtest uses pair ``bt_min`` → ``BT_MIN_GROUP`` →
-    ``BT_MIN``. Set ``BACKTEST_USE_BT_MIN_THRESHOLDS`` false to mirror live
-    thresholds in backtest only. Live scans are unchanged either way.
-    """
-    profile = get_pair_profile(pair)
+
+def _get_threshold_tier(pair: dict) -> float:
+    """Return the confluence threshold for a pair (2-tier system)."""
+    display = pair.get("display", "")
     ptype = pair.get("type", "")
     score_group = get_pair_score_group(pair)
-    use_bt_chain = bool(
-        CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
-        or CONFIG.get("RESEARCH_MODE", False)
-    )
 
-    # 1. Pair Profile overrides
-    # If backtest + BT chain: prefer bt_min first; if absent, fall through to
-    # BT group/class thresholds.  Live (or BT-parity) uses min_confluence.
-    # NOTE: profile.min_confluence is intentionally NOT used in BT-chain mode
-    # so that backtest thresholds are fully deterministic from BT_MIN_GROUP /
-    # BT_MIN_CLASS / BT_MIN rather than silently inheriting live overrides.
-    if is_backtest and use_bt_chain:
-        if profile.get("bt_min") is not None:
-            return float(profile["bt_min"])
-        # Intentionally skip profile.min_confluence in BT chain — continue to
-        # group/class/global BT thresholds for reproducible backtest results.
-    else:
-        if profile.get("min_confluence") is not None:
-            return float(profile.get("min_confluence"))
+    # 1. Pair-specific overrides
+    if display in _PAIR_OVERRIDES:
+        return float(_PAIR_OVERRIDES[display])
 
-    # 2. Score Group defaults
-    if is_backtest and use_bt_chain:
-        group_cfg = CONFIG.get("BT_MIN_GROUP", {}) or {}
-        group_threshold = (group_cfg.get(ptype, {}) or {}).get(score_group)
-        if group_threshold is not None:
-            return float(group_threshold)
+    # 2. Volatile tier
+    if ptype in ("crypto",) or score_group in ("nat_gas", "crypto_doge"):
+        return _TIER_VOLATILE
 
-    # Live group fallback — must NOT apply to backtest-with-BT-chain, otherwise
-    # the BT path silently returns LIVE thresholds whenever BT_MIN_GROUP is missing
-    # a subgroup, making class-level BT_MIN (below) unreachable.
-    if not (is_backtest and use_bt_chain):
-        group_cfg = CONFIG.get("MIN_CONFLUENCE_GROUP", {}) or {}
-        group_threshold = (group_cfg.get(ptype, {}) or {}).get(score_group)
-        if group_threshold is not None:
-            return float(group_threshold)
+    # 3. Stable tier (everything else)
+    return _TIER_STABLE
 
-    # 3. Asset-Class defaults
-    if is_backtest and use_bt_chain:
-        bt_map = CONFIG.get("BT_MIN") or {}
-        if ptype in bt_map:
-            return float(bt_map[ptype])
 
-    class_cfg = CONFIG.get("MIN_CONFLUENCE_CLASS", {}) or {}
-    if ptype in class_cfg:
-        return float(class_cfg[ptype])
+def get_score_threshold(pair: dict, is_backtest: bool = False) -> float:
+    """Resolve score threshold — simplified 2-tier system.
 
-    # 4. Global fallback
-    return float(CONFIG.get("MIN_CONFLUENCE", 1.0))
+    Replaces the old 6-class + BT_MIN_GROUP + BACKTEST_USE_BT_MIN_THRESHOLDS
+    hierarchy with 2 tiers + pair overrides. Backtest and live use same thresholds.
+    """
+    profile = get_pair_profile(pair)
+
+    # Pair profile override (highest priority)
+    if profile.get("min_confluence") is not None:
+        return float(profile.get("min_confluence"))
+
+    # 2-tier system
+    return _get_threshold_tier(pair)
 
 
 def get_min_confluence_threshold(pair: dict) -> float:
