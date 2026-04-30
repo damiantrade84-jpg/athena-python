@@ -43,12 +43,16 @@ def calc_ema(c: list, p: int) -> list:
 
 
 def calc_sma(a: list, p: int) -> list:
-    """Simple Moving Average. Returns list aligned with input, None-padded."""
-
+    """Simple Moving Average. Returns list aligned with input, None-padded.
+    Skips None values in the window (computes mean of available values).
+    """
     r = [None] * len(a)
 
     for i in range(p - 1, len(a)):
-        r[i] = sum(a[i - p + 1 : i + 1]) / p
+        window = a[i - p + 1 : i + 1]
+        valid = [v for v in window if v is not None]
+        if valid:
+            r[i] = sum(valid) / len(valid)
 
     return r
 
@@ -141,72 +145,77 @@ def calc_atr(h: list, lo: list, c: list, p: int) -> list:
 
 
 def calc_adx(hi: list, lo: list, c: list, p: int) -> dict:
-    """Wilder ADX with +DI/-DI. Returns dict with aligned arrays, None-padded."""
+    """Wilder ADX with +DI/-DI. Returns dict with aligned arrays, None-padded.
+
+    Alignment: all arrays are indexed to the *close* bar they correspond to.
+    - plusDI[i] / minusDI[i] valid from i = p+1 onward (after p-bar smoothing)
+    - adx[i] valid from i = 2*p+1 onward (after p-bar DX smoothing)
+    """
 
     n = len(c)
 
     adx = [None] * n
-
     plus_di = [None] * n
-
     minus_di = [None] * n
 
-    if n < p * 2:
+    if n < p * 2 + 1:
         return {"adx": adx, "plusDI": plus_di, "minusDI": minus_di}
 
     true_range, dm_plus, dm_minus = [], [], []
 
     for i in range(1, n):
         up_move = hi[i] - hi[i - 1]
-
         down_move = lo[i - 1] - lo[i]
 
         dm_plus.append(up_move if up_move > down_move and up_move > 0 else 0)
-
         dm_minus.append(down_move if down_move > up_move and down_move > 0 else 0)
 
         true_range.append(
             max(hi[i] - lo[i], abs(hi[i] - c[i - 1]), abs(lo[i] - c[i - 1]))
         )
 
+    # Wilder smoothing init: first p bars (indices 0..p-1 of true_range)
     smooth_tr = sum(true_range[:p])
-
     smooth_dp = sum(dm_plus[:p])
-
     smooth_dm = sum(dm_minus[:p])
 
     dx_values = []
 
+    # i indexes into true_range (which starts at price bar 1).
+    # After smoothing, DI values correspond to price bar i+1.
     for i in range(p, len(true_range)):
         smooth_tr = smooth_tr - smooth_tr / p + true_range[i]
-
         smooth_dp = smooth_dp - smooth_dp / p + dm_plus[i]
-
         smooth_dm = smooth_dm - smooth_dm / p + dm_minus[i]
 
         pdi_val = (smooth_dp / smooth_tr) * 100 if smooth_tr else 0
-
         mdi_val = (smooth_dm / smooth_tr) * 100 if smooth_tr else 0
 
         di_sum = pdi_val + mdi_val
 
+        # Align DI to the current price bar (i+1 because true_range[0] = bar 1)
         plus_di[i + 1] = pdi_val
-
         minus_di[i + 1] = mdi_val
 
         dx_values.append(abs(pdi_val - mdi_val) / di_sum * 100 if di_sum else 0)
 
+    # ADX: Wilder-smoothed DX. First ADX = mean of first p DX values.
+    # DX value j corresponds to price bar (p + 1 + j) because:
+    #   - first DX computed at i=p → price bar p+1
+    #   - so dx_values[0] → bar p+1, dx_values[p-1] → bar 2p
+    # First smoothed ADX should be at bar 2p+1 (after p DX values smoothed).
     if len(dx_values) >= p:
         adx_avg = sum(dx_values[:p]) / p
 
-        if p * 2 < n:
-            adx[p * 2] = adx_avg
+        # Place first smoothed ADX at bar 2p+1 (index 2*p + 1)
+        first_adx_idx = 2 * p + 1
+        if first_adx_idx < n:
+            adx[first_adx_idx] = adx_avg
 
+        # Continue smoothing: each subsequent DX advances by one bar
         for i in range(p, len(dx_values)):
             adx_avg = (adx_avg * (p - 1) + dx_values[i]) / p
-
-            idx = i + p + 1
-
+            idx = first_adx_idx + (i - p + 1)
             if idx < n:
                 adx[idx] = adx_avg
 
@@ -295,22 +304,17 @@ def calc_squeeze(
 
     squeeze_now = bb_upper < kc_upper and bb_lower > kc_lower
 
-    # Count consecutive squeeze bars
-
-    bars = 0
-
-    for j in range(i, max(bb_period, kc_period), -1):
+    # Count consecutive squeeze bars (including current bar)
+    bars = 1 if squeeze_now else 0
+    for j in range(i - 1, max(bb_period, kc_period) - 1, -1):
         if ema[j] is None or atr[j] is None:
             break
 
         _kcu = ema[j] + kc_mult * atr[j]
-
         _kcl = ema[j] - kc_mult * atr[j]
 
         _sl = cl[j - bb_period + 1 : j + 1]
-
         _mn = sum(_sl) / bb_period
-
         _sd = (
             math.sqrt(sum((x - _mn) ** 2 for x in _sl) / (bb_period - 1))
             if bb_period > 1
@@ -318,17 +322,14 @@ def calc_squeeze(
         )
 
         _bbu = _mn + bb_mult * _sd
-
         _bbl = _mn - bb_mult * _sd
 
         if _bbu < _kcu and _bbl > _kcl:
             bars += 1
-
         else:
             break
 
     # Momentum direction: close relative to midline
-
     mom_dir = "bullish" if cl[-1] > mn else "bearish"
 
     return {"active": squeeze_now, "bars": bars, "momentum": mom_dir}
@@ -531,21 +532,20 @@ def calc_stochastic(candles: list, kp: int, ks: int, ds: int) -> dict:
 
         rawK[i] = ((cl[i] - ll) / (hh - ll)) * 100 if hh != ll else 50
 
-    mapped = [v if v is not None else 0 for v in rawK]
+    # SMA of %K to produce %K-smoothed (often called %K slow).
+    # Preserve None padding: do NOT replace None with 0 before SMA.
+    # Instead, slice from first valid %K and re-align after SMA.
+    valid_start = kp - 1
+    rawK_valid = rawK[valid_start:]
+    kL_sliced = calc_sma(rawK_valid, ks)
+    kL = [None] * valid_start + kL_sliced
 
-    kL = calc_sma(mapped, ks)
-
-    for i in range(kp - 1 + ks - 1):
-        if i < len(kL):
-            kL[i] = None
-
-    mapped2 = [v if v is not None else 0 for v in kL]
-
-    dL = calc_sma(mapped2, ds)
-
-    for i in range(kp - 1 + ks - 1 + ds - 1):
-        if i < len(dL):
-            dL[i] = None
+    # SMA of smoothed %K to produce %D.
+    # First valid %D is after ks-1 more bars.
+    d_valid_start = valid_start + ks - 1
+    kL_valid = kL[d_valid_start:]
+    dL_sliced = calc_sma(kL_valid, ds)
+    dL = [None] * d_valid_start + dL_sliced
 
     return {"k": kL, "d": dL}
 

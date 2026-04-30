@@ -198,7 +198,12 @@ def _coherent_trend_score(
         dominant_sign = 1.0 if long_w > short_w else -1.0
 
     dominant_w = long_w if dominant_sign > 0 else short_w
-    coherence_ratio = max(0.5, min(1.0, dominant_w / total_w))
+    # coherence_ratio floor removed (was 0.5). A tied or near-tied vote should
+    # produce near-zero magnitude, not a "moderate" score that amplifies noise.
+    # Configurable via COHERENCE_RATIO_FLOOR for experiments; default = 0.0.
+    _coh_floor = float(CONFIG.get("COHERENCE_RATIO_FLOOR", 0.0))
+    _coh_floor = max(0.0, min(1.0, _coh_floor))
+    coherence_ratio = max(_coh_floor, min(1.0, dominant_w / total_w))
     agreement_count = sum(1 for _, d, _ in votes if d == dominant_sign)
     # Scale by TF coverage so a single available TF cannot produce a full 3.0 score.
     # D1 only → max 1.0; D1+H4 → max 2.0; all three → max 3.0.
@@ -272,7 +277,10 @@ def _momentum_quality(
         except (TypeError, ValueError):
             pass
 
-    # MACD histogram score — aligned confirms, opposing penalises (not neutral).
+    # MACD histogram score — aligned confirms, opposing penalises strongly.
+    # Penalty increased from -0.15 to -0.50 (2026-04-30 audit): the old value
+    # was too weak — with RSI weight 0.6 and MACD weight 0.4, opposing MACD
+    # only reduced the weighted sum by 0.06, making MACD divergence irrelevant.
     macd_score = 0.0
     macd_hist = h4_snap.get("macdHist")
     if macd_hist is None:
@@ -285,7 +293,7 @@ def _momentum_quality(
             elif not is_long and hist < 0:
                 macd_score = 0.50
             elif (is_long and hist < 0) or (not is_long and hist > 0):
-                macd_score = -0.15
+                macd_score = -0.50
         except (TypeError, ValueError):
             pass
 
@@ -813,6 +821,10 @@ def compute_factor_scores(
     _atr = h4_snap.get("atr")
     if _close and _atr == 0:
         log.warning("[EA2] %s ATR=0 — frozen candle data suspected", display)
+        regime_raw = detect_regime(h4_snap, asset_type).get("regime", "UNKNOWN")
+        regime = _get_smoothed_regime(regime_context, pair_id, regime_raw)
+        return _zero_result(pair, regime, {"error": "atr_zero"}, feed_status,
+                            reason="atr_zero_abort", direction=None)
 
     # ── FACTOR 1: Trend ───────────────────────────────────────────────────────
     trend_score, direction, trend_detail = _coherent_trend_score(

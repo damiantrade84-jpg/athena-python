@@ -401,11 +401,16 @@ CONFIG: dict = {
         "stock": -1.0,
         "index": -1.0,
     },
-    # TA-Lib standard: RSI overbought=70, oversold=30 (confirmed OANDA/LiteFinance/Altrady 2024)
+    # Per-asset-class RSI bounds calibrated to observed volatility:
+    #   Crypto: 80/20 — crypto trends are stronger and more persistent; 70/30
+    #           fires too often in normal bull markets, overstating momentum.
+    #   Forex: 70/30 — standard TA-Lib (confirmed OANDA/LiteFinance/Altrady 2024).
+    #   Commodity: 75/25 — gold/oil have sharper reversals than forex.
+    #   Stock/Index: 70/30 — standard equity regime.
     "RSI_BOUNDS": {
-        "crypto": {"ob": 70, "os": 30},
+        "crypto": {"ob": 80, "os": 20},
         "forex": {"ob": 70, "os": 30},
-        "commodity": {"ob": 70, "os": 30},
+        "commodity": {"ob": 75, "os": 25},
         "stock": {"ob": 70, "os": 30},
         "index": {"ob": 70, "os": 30},
     },

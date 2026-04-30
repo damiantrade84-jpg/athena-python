@@ -177,12 +177,19 @@ def get_score_threshold(pair: dict, is_backtest: bool = False) -> float:
     )
 
     # 1. Pair Profile overrides
-    # If backtest + BT chain: prefer bt_min first; else min_confluence for both live & BT-parity backtest.
+    # If backtest + BT chain: prefer bt_min first; if absent, fall through to
+    # BT group/class thresholds.  Live (or BT-parity) uses min_confluence.
+    # NOTE: profile.min_confluence is intentionally NOT used in BT-chain mode
+    # so that backtest thresholds are fully deterministic from BT_MIN_GROUP /
+    # BT_MIN_CLASS / BT_MIN rather than silently inheriting live overrides.
     if is_backtest and use_bt_chain:
         if profile.get("bt_min") is not None:
             return float(profile["bt_min"])
-    if profile.get("min_confluence") is not None:
-        return float(profile.get("min_confluence"))
+        # Intentionally skip profile.min_confluence in BT chain — continue to
+        # group/class/global BT thresholds for reproducible backtest results.
+    else:
+        if profile.get("min_confluence") is not None:
+            return float(profile.get("min_confluence"))
 
     # 2. Score Group defaults
     if is_backtest and use_bt_chain:

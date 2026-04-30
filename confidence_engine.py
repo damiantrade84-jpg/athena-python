@@ -91,9 +91,15 @@ def _mad(values: List[float]) -> float:
     return mad
 
 
-def _robust_z_score_normalization(mean_mad: float) -> float:
-    """Normalize using robust Z-score approach with graceful scaling for extreme values.
-    Uses 0.6745 constant to convert MAD to standard deviation equivalent.
+def _mad_dispersion_score(mean_mad: float) -> float:
+    """Inverse dispersion transform using MAD-derived standard-deviation equivalent.
+
+    NOT a z-score. A z-score is (x-μ)/σ (centered at 0, unbounded).
+    This function maps dispersion to [0,1] where 1.0 = perfect agreement
+    (mean_mad ≈ 0) and 0.0 = high disagreement (large dispersion).
+
+    Formula: 1 / (1 + std_equiv) with graceful degradation for extremes.
+    std_equiv = mean_mad / 0.6745  (approximates σ from MAD).
     """
     if mean_mad <= 0:
         return 1.0  # perfect agreement
@@ -101,17 +107,15 @@ def _robust_z_score_normalization(mean_mad: float) -> float:
     # Convert MAD to standard deviation equivalent
     std_equiv = mean_mad / 0.6745
 
-    # Robust Z-score scaling with graceful handling of extreme values
-    # Instead of hard-clamping at 3.0, use soft scaling that preserves information
-    robust_z = 1.0 / (1.0 + std_equiv)
+    # Inverse dispersion: high dispersion → low score, low dispersion → high score
+    score = 1.0 / (1.0 + std_equiv)
 
-    # Apply additional scaling for extreme volatility spikes (>3.0 std equiv)
+    # Graceful degradation for extreme volatility spikes (>3.0 std equiv)
     if std_equiv > 3.0:
-        # Graceful degradation for extreme macroeconomic volatility
         extreme_factor = 1.0 / (1.0 + (std_equiv - 3.0) * 0.1)
-        robust_z *= extreme_factor
+        score *= extreme_factor
 
-    return max(0.0, min(1.0, robust_z))
+    return max(0.0, min(1.0, score))
 
 
 def indicator_agreement(
@@ -135,8 +139,8 @@ def indicator_agreement(
     if not mads:
         return None
     mean_mad = sum(mads) / len(mads)
-    # Use robust Z-score normalization instead of hard-clamping
-    return _robust_z_score_normalization(mean_mad)
+    # Use MAD-based dispersion score (0=high disagreement, 1=perfect agreement)
+    return _mad_dispersion_score(mean_mad)
 
 
 def timeframe_alignment(
@@ -145,21 +149,29 @@ def timeframe_alignment(
     h1_factor_result: Optional[Dict],
 ) -> Optional[float]:
     """Compare factor scores across timeframes.
-    alignment = 1 - std(factor_scores_across_timeframes). Returns 0-1 or None."""
+    alignment = 1 - std(normalized_scores). Returns 0-1 or None.
+
+    Scores are normalized to unit direction vectors (+1 for LONG, -1 for SHORT,
+    scaled by relative strength) before computing std. This measures directional
+    agreement independent of absolute score magnitude. All TFs agreeing on
+    direction produce alignment near 1.0; any TF opposing drops alignment.
+    """
     scores = []
     for result in [d1_factor_result, h4_factor_result, h1_factor_result]:
         if result is not None and result.get("final_score") is not None:
-            scores.append(result["final_score"])
+            raw = float(result["final_score"])
+            # Normalize to [-1, +1] preserving sign and relative strength.
+            # Score 3.0 (max LONG) -> +1.0, score 0.0 -> 0.0 (neutral).
+            # Use sigmoid-like soft scaling so small differences near zero
+            # don't exaggerate disagreement.
+            norm = math.tanh(raw / 1.5)
+            scores.append(norm)
     if len(scores) < 2:
         return None
     std_val = _std(scores)
-    # Normalize: the per-TF proxies fed from scoring.py._tf_score_proxy() are
-    # averages of EMA/RSI/MACD components each in [-1, +1], so the proxy
-    # final_score is also in roughly [-1, +1].  A perfectly divergent 3-set
-    # (e.g. [-1, +1, +1]) has std ≈ 0.94.  Dividing by 1.0 maps that near
-    # 0 alignment, which is correct.  Using 1.5 (calibrated for the raw
-    # 0-3.0 Engine A scale) over-rewarded divergent TFs.
-    return max(0.0, min(1.0, 1.0 - std_val / 1.0))
+    # tanh(3.0/1.5)=tanh(2)=0.964, tanh(0)=0. Max spread ~0.964, std max ~0.79.
+    # Divisor 0.85 maps perfectly divergent to near-zero alignment.
+    return max(0.0, min(1.0, 1.0 - std_val / 0.85))
 
 
 def regime_fit(regime: str, signal_type: str = "trend") -> Optional[float]:

@@ -31,8 +31,16 @@ def _rolling_std(series: List[float], window: int) -> List[Optional[float]]:
     return [None if pd.isna(v) else float(v) for v in result]
 
 
-def zscore_normalize(series: List[float], window: int) -> List[Optional[float]]:
-    """Rolling z-score with window; clamped to [-3, +3]. Returns None until window is full."""
+def zscore_normalize(series: List[float], window: int, clamp: bool = True) -> List[Optional[float]]:
+    """Rolling z-score with window. Returns None until window is full.
+
+    Args:
+        series: input values
+        window: rolling window size
+        clamp: if True (default), hard-clamp to [-3, +3] for UI-stable display.
+               Set clamp=False for volatility/ML features where tail information
+               must be preserved (e.g., 6-sigma events should read ~6, not 3).
+    """
     if len(series) < window:
         return [None] * len(series)
     means = _rolling_mean(series, window)
@@ -43,7 +51,8 @@ def zscore_normalize(series: List[float], window: int) -> List[Optional[float]]:
             out.append(None)
         else:
             z = (val - mean_val) / std_val
-            z = max(-3.0, min(3.0, z))  # clamp
+            if clamp:
+                z = max(-3.0, min(3.0, z))
             out.append(z)
     return out
 
