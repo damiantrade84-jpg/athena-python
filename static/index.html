@@ -7490,10 +7490,10 @@ function buildCardInner(s, idx) {
       '</div>' +
       '<div class="ai-content open" id="aic-' + sid + '">' +
         '<p style="font-size:10px;color:var(--muted);margin:0 0 8px;line-height:1.45;font-family:IBM Plex Mono,monospace">' +
-        '<strong style="color:var(--accent)">B only</strong> — Grok reads structure only (no Engine A in prompt). ' +
-        '<strong style="color:#f59e0b">A+B</strong> — fresh Engine A + B; AI sees both (mentions conflicts like “A SHORT”).</p>' +
-        '<button class="analyze-btn" id="abtn-engb-only-' + sid + '" onclick="runEngineBOnlyAI(\'' + s.symbol + '\')" style="margin-bottom:6px">Engine B AI only</button>' +
-        '<button class="analyze-btn" id="abtn-compare-' + sid + '" onclick="runCompare(\'' + s.symbol + '\')" style="background:rgba(245,158,11,0.12);border-color:#f59e0b;color:#f59e0b">Compare A+B review</button>' +
+        '<strong style="color:var(--accent)">B only</strong> - evidence-first read of structure, checklist, location, trigger, RR, and hard fails. ' +
+        '<strong style="color:#f59e0b">A+B</strong> - asks Marcus which engine to trust when factor quality and structure disagree.</p>' +
+        '<button class="analyze-btn" id="abtn-engb-only-' + sid + '" onclick="runEngineBOnlyAI(\'' + s.symbol + '\')" style="margin-bottom:6px">Engine B Evidence Review</button>' +
+        '<button class="analyze-btn" id="abtn-compare-' + sid + '" onclick="runCompare(\'' + s.symbol + '\')" style="background:rgba(245,158,11,0.12);border-color:#f59e0b;color:#f59e0b">A+B Trust Review</button>' +
       '</div>' +
     '</div>';
   } else if (s.aiAnalysis) {
@@ -7501,11 +7501,11 @@ function buildCardInner(s, idx) {
   } else {
     aiSection = '<div class="ai-panel" id="ai-' + sid + '">' +
       '<div class="ai-header" onclick="toggleAI(\'' + sid + '\')">' +
-        '<span class="ai-label"><span class="ai-dot"></span> AI Analysis</span>' +
+        '<span class="ai-label"><span class="ai-dot"></span> Evidence AI Review</span>' +
         '<span style="font-size:11px;color:var(--muted)">Click</span>' +
       '</div>' +
       '<div class="ai-content" id="aic-' + sid + '">' +
-        '<button class="analyze-btn" id="abtn-' + sid + '" onclick="analyzeSignal(\'' + s.symbol + '\',false)">Run Expert Analysis (Marcus Reid v3)</button>' +
+        '<button class="analyze-btn" id="abtn-' + sid + '" onclick="analyzeSignal(\'' + s.symbol + '\',false)">Run Marcus Evidence Review</button>' +
       '</div>' +
     '</div>';
   }
@@ -8424,7 +8424,24 @@ function buildAIContent(ai,symbol,idSuffix) {
   var sid=idSuffix ? sidBase+'-'+String(idSuffix).replace(/[^\w-]/g,'_') : sidBase;
   var gk=ai.grade?(ai.grade==='A+'?'Aplus':ai.grade):'unknown';
   var warnArr=Array.isArray(ai.warnings)?ai.warnings:(ai.warnings?[ai.warnings]:[]);
-  var warns=warnArr.map(function(w){return '<div class="ai-warning-item">'+w+'</div>';}).join('');
+  function escAi(text) {
+    return String(text == null ? '' : text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+  function aiMetric(label, value, tone) {
+    if (value === undefined || value === null || value === '') return '';
+    var color = tone === 'bull' ? 'var(--bull)' : tone === 'bear' ? 'var(--bear)' : tone === 'warn' ? '#f59e0b' : 'var(--accent)';
+    return '<div class="ai-meta-box"><div class="ai-meta-label">'+escAi(label)+'</div><div class="ai-meta-val" style="color:'+color+'">'+escAi(value)+'</div></div>';
+  }
+  function riskTone(v) {
+    var t = String(v || '').toLowerCase();
+    return t === 'low' ? 'bull' : t === 'high' ? 'bear' : 'warn';
+  }
+  var warns=warnArr.map(function(w){return '<div class="ai-warning-item">'+escAi(w)+'</div>';}).join('');
   var narrative = ai.narrative || ai.verdict || 'No detailed rationale returned.';
   var riskLevelText = ai.riskLevel || '';
   var riskLevelNorm = String(riskLevelText).toLowerCase();
@@ -8432,30 +8449,46 @@ function buildAIContent(ai,symbol,idSuffix) {
   var edgeColor = ai.edgeProbability>=70 ? 'var(--bull)' : ai.edgeProbability>=55 ? 'var(--accent)' : 'var(--warn)';
   var riskColor = riskLevelNorm==='low' ? 'var(--bull)' : riskLevelNorm==='high' ? 'var(--bear)' : 'var(--accent)';
   var styleStrip = _buildStyleRatingStrip(ai.style_ratings);
+  var resolvedStyle = ai.resolvedStyle || ai.tradeStyle || '';
+  var selectedGrade = ai.selectedStyleGrade || ai.grade || '';
+  var reviewSource = ai.reviewSource || 'engine_a_marcus';
+  var readinessTone = String(ai.scannerReadiness || '').toLowerCase() === 'strong' ? 'bull' : String(ai.scannerReadiness || '').toLowerCase() === 'weak' ? 'bear' : 'warn';
+  var factorQualityTone = Number(ai.factorQuality) >= 75 ? 'bull' : Number(ai.factorQuality) >= 50 ? 'warn' : 'bear';
+  var newMetrics =
+    aiMetric('Readiness', ai.scannerReadiness, readinessTone) +
+    aiMetric('Factor Quality', ai.factorQuality != null ? ai.factorQuality + '/100' : '', factorQualityTone) +
+    aiMetric('Structure Risk', ai.structuralRisk, riskTone(ai.structuralRisk)) +
+    aiMetric('Execution Risk', ai.executionRisk, riskTone(ai.executionRisk)) +
+    aiMetric('Resolved Style', resolvedStyle, 'accent') +
+    aiMetric('Style Grade', selectedGrade, selectedGrade === 'A+' || selectedGrade === 'A' ? 'bull' : selectedGrade === 'B' ? 'warn' : 'bear');
   return ''+
   '<div class="ai-panel" id="ai-'+sid+'">'+
     '<div class="ai-header" onclick="toggleAI(\''+sid+'\')" style="cursor:pointer">'+
-      '<span class="ai-label"><span class="ai-dot"></span> Marcus Reid</span>'+
+      '<span class="ai-label"><span class="ai-dot"></span> Marcus Reid Evidence Review</span>'+
       '<span class="ai-grade grade-'+gk+'">'+(ai.grade||'N/A')+'</span>'+
-      '<span title="AI estimated win probability. This is separate from raw signal confluence." style="color:'+edgeColor+';font-size:13px;font-weight:600;margin-left:auto">AI Edge '+edgeVal+'</span>'+
-      '<span style="color:'+riskColor+';font-size:11px;margin-left:6px">'+riskLevelText+'</span>'+
+      '<span title="Evidence-derived probability. It is not rawScorePct or dashboard confluence." style="color:'+edgeColor+';font-size:13px;font-weight:600;margin-left:auto">Evidence Edge '+edgeVal+'</span>'+
+      '<span style="color:'+riskColor+';font-size:11px;margin-left:6px">'+escAi(riskLevelText)+'</span>'+
+    '</div>'+
+    '<div style="padding:6px 14px 0;font-size:9px;color:var(--muted);font-family:IBM Plex Mono,monospace;letter-spacing:.5px;text-transform:uppercase;">'+
+      escAi(reviewSource)+' | evidence-first, no raw-score bucket grading'+
     '</div>'+
     styleStrip+
     '<div class="ai-verdict-bar" onclick="toggleAI(\''+sid+'\')" style="cursor:pointer;padding:8px 14px;font-size:13px;color:var(--text-secondary)">'+
-      (ai.verdict||'No verdict returned')+
-      (ai.tradeStyle?' <span class="trade-style '+ai.tradeStyle+'" style="font-size:10px;padding:2px 6px;margin-left:6px">'+ai.tradeStyle+'</span>':'')+
+      escAi(ai.verdict||'No verdict returned')+
+      (resolvedStyle?' <span class="trade-style '+escAi(String(resolvedStyle).toLowerCase())+'" style="font-size:10px;padding:2px 6px;margin-left:6px">'+escAi(resolvedStyle)+'</span>':'')+
       ' <span style="float:right;font-size:10px;opacity:0.5" id="ai-toggle-hint-'+sid+'">&#9660; details</span>'+
     '</div>'+
     '<div class="ai-content" id="aic-'+sid+'">'+
       '<div class="ai-content-body">'+
-        '<p class="ai-narrative">'+narrative+'</p>'+
-        (ai.tradeStyleReason?'<p class="ai-narrative" style="font-size:11px;color:var(--text-secondary)">'+ai.tradeStyleReason+'</p>':'')+
-        (ai.riskNote?'<p class="ai-narrative" style="color:var(--accent)">'+ai.riskNote+'</p>':'')+
+        '<p class="ai-narrative">'+escAi(narrative)+'</p>'+
+        (ai.tradeStyleReason?'<p class="ai-narrative" style="font-size:11px;color:var(--text-secondary)">'+escAi(ai.tradeStyleReason)+'</p>':'')+
+        (ai.riskNote?'<p class="ai-narrative" style="color:var(--accent)">'+escAi(ai.riskNote)+'</p>':'')+
+        (newMetrics?'<div class="ai-meta" style="margin-bottom:8px;">'+newMetrics+'</div>':'')+
         '<div class="ai-meta">'+
-          '<div class="ai-meta-box"><div class="ai-meta-label">Entry Zone</div><div class="ai-meta-val">'+(ai.entryZone||'-')+'</div></div>'+
-          '<div class="ai-meta-box"><div class="ai-meta-label">Invalidation</div><div class="ai-meta-val">'+(ai.invalidation||'-')+'</div></div>'+
-          '<div class="ai-meta-box"><div class="ai-meta-label">Key Levels</div><div class="ai-meta-val">'+(ai.keyLevels||'-')+'</div></div>'+
-          '<div class="ai-meta-box"><div class="ai-meta-label">Position Sizing</div><div class="ai-meta-val" style="color:var(--accent)">'+(ai.positionSizing||'-')+'</div></div>'+
+          '<div class="ai-meta-box"><div class="ai-meta-label">Entry Zone</div><div class="ai-meta-val">'+escAi(ai.entryZone||'-')+'</div></div>'+
+          '<div class="ai-meta-box"><div class="ai-meta-label">Invalidation</div><div class="ai-meta-val">'+escAi(ai.invalidation||'-')+'</div></div>'+
+          '<div class="ai-meta-box"><div class="ai-meta-label">Key Levels</div><div class="ai-meta-val">'+escAi(ai.keyLevels||'-')+'</div></div>'+
+          '<div class="ai-meta-box"><div class="ai-meta-label">Position Sizing</div><div class="ai-meta-val" style="color:var(--accent)">'+escAi(ai.positionSizing||'-')+'</div></div>'+
         '</div>'+
         (warns?'<div class="ai-warnings"><div class="ai-warnings-title">Risk Factors</div>'+warns+'</div>':'')+
       '</div>'+
@@ -10903,6 +10936,51 @@ function buildECSkippedCard(c) {
   '</div>';
 }
 
+function _ecEsc(text) {
+  return String(text == null ? '' : text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildEngineCAIWeightVerdict(c) {
+  var wv = c.ai_weight_verdict || c.aiWeightVerdict;
+  if (!wv) return '';
+  var hasErr = !!wv.error;
+  var trust = String(wv.trust_verdict || 'review_unavailable').replace(/_/g, ' ').toUpperCase();
+  var trustColor = hasErr ? 'var(--muted)' :
+    wv.trust_verdict === 'trust_a' ? '#f59e0b' :
+    wv.trust_verdict === 'trust_b' ? 'var(--accent)' :
+    wv.trust_verdict === 'trust_neither' ? 'var(--bear)' : 'var(--bull)';
+  var wr = wv.weight_recommendation || {};
+  var weights = (wr.A != null && wr.B != null)
+    ? ('A ' + Math.round(Number(wr.A) * 100) + '% / B ' + Math.round(Number(wr.B) * 100) + '%')
+    : 'rule weights unchanged';
+  var mod = wv.conviction_modifier != null ? Number(wv.conviction_modifier) : null;
+  var modOk = mod != null && !isNaN(mod);
+  var modText = modOk ? ((mod >= 0 ? '+' : '') + mod.toFixed(2)) : '0.00';
+  var modColor = !modOk || mod >= 0 ? 'var(--bull)' : 'var(--bear)';
+  var applied = c.ai_weight_adjustment_applied ? 'adjusted' : 'advisory only';
+  var body = hasErr
+    ? ('AI trust verdict unavailable: ' + (wv.error || 'unknown error'))
+    : ((wv.rationale || wv.reasoning || 'No rationale returned.') + '');
+  return '<div style="background:rgba(168,85,247,0.05);border:1px solid rgba(168,85,247,0.2);' +
+    'border-radius:6px;padding:8px;margin-bottom:10px;font-family:IBM Plex Mono,monospace;font-size:10px;line-height:1.55;">' +
+      '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:4px;">' +
+        '<span style="color:#c4b5fd;font-weight:800;">ENGINE C AI TRUST VERDICT</span>' +
+        '<span style="color:' + trustColor + ';font-weight:800;">' + _ecEsc(trust) + '</span>' +
+      '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:6px 12px;color:var(--text-secondary);margin-bottom:5px;">' +
+        '<span>Weights: <span style="color:var(--text);">' + _ecEsc(weights) + '</span></span>' +
+        '<span>Modifier: <span style="color:' + modColor + ';">' + _ecEsc(modText) + '</span></span>' +
+        '<span>Status: <span style="color:var(--accent);">' + _ecEsc(applied) + '</span></span>' +
+      '</div>' +
+      '<div style="color:var(--muted);white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;">' + _ecEsc(body) + '</div>' +
+    '</div>';
+}
+
 function buildECCard(c, category) {
   var sid = (c.symbol || c.display || '').replace(/[\/=^.]/g, '_');
   var isWatchlist = c.tier === 'WATCHLIST' || c.signalTier === 'watchlist' || c.decision_state === 'watchlist';
@@ -11036,6 +11114,8 @@ function buildECCard(c, category) {
        c.sizing_override >= 0.35 ? 'QUARTER' : 'NONE') + '</span>';
     html += '</div></div>';
   }
+
+  html += buildEngineCAIWeightVerdict(c);
 
   // AI Vision section
   if (category === 'aligned' || category === 'a_only' || category === 'b_only') {

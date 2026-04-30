@@ -11222,8 +11222,12 @@ def analyze_pair(
             d1, _d1_sess_trim = trim_mt5_d1_broker_session_ahead_tail(
                 pair, "D1", list(d1)
             )
-    except Exception:
-        pass
+    except Exception as _d1_trim_err:
+        log.debug(
+            "[ANALYZE] %s D1 session-ahead trim skipped: %s",
+            pair.get("display", "?"),
+            _d1_trim_err,
+        )
 
     _h4_state = preloaded_market_state.get("H4")
     h4 = preloaded_candles.get("H4")

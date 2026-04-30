@@ -622,7 +622,7 @@ function ldTabAI(sym) {
   return '<div class="ld-section-head">AI Context</div>'
     + '<div style="color:rgba(159,176,197,0.5);font-size:9px;line-height:1.6;padding:6px 0;">'
     + 'AI narrative is populated from the last full Engine A/B scan.<br>'
-    + 'Run a scan then check the signal panel for Marcus Reid analysis.<br><br>'
+    + 'Run a scan then check the signal panel for Marcus Reid evidence review.<br><br>'
     + 'Conviction: <strong style="color:#22d3ee">' + ldEsc(a.conviction||'—') + '</strong><br>'
     + 'Score: <strong style="color:#22d3ee">' + (a.score != null ? parseFloat(a.score).toFixed(3) : '—') + '</strong>'
     + '</div>';
