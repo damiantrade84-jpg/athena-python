@@ -23,7 +23,7 @@ import logging
 from typing import Optional
 
 from calibration import predict_calibrated_prob
-from config import CONFIG
+from config import CONFIG, AISafetyConstants
 from intermarket import engine_c_conviction_multiplier
 from meta_learner import apply_meta_policy, get_dynamic_engine_weights, get_engine_context
 from stability_monitor import record_signal_event
@@ -677,18 +677,26 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
                     reward = abs(updated["tp"] - updated["entry"])
                     updated["rr"] = round(reward / risk, 2)
 
-    # Vision confirm path — gated by AI_VISION_CAN_UPGRADE_TRADE (default False = downgrade-only)
+    # Vision confirm path — compile-time kill switch overrides YAML (Audit CRIT-001).
     _vision_upgrade_min = float(CONFIG.get("ENGINE_C_VISION_UPGRADE_MIN_CONVICTION", 0.35))
     if action == "confirm" and new_conviction >= _vision_upgrade_min:
-        if CONFIG.get("AI_VISION_CAN_UPGRADE_TRADE", False):
-            # Sanctioned upgrade: CONFIRM + conviction ≥ 0.35 → trade=True
+        _cfg_upgrade = bool(CONFIG.get("AI_VISION_CAN_UPGRADE_TRADE", False))
+        if _cfg_upgrade and AISafetyConstants.DISABLE_AI_VISION_UPGRADE_PATH:
+            log.critical(
+                "[ENGINE_C] Config AI_VISION_CAN_UPGRADE_TRADE=True is OVERRIDDEN by "
+                "AISafetyConstants.DISABLE_AI_VISION_UPGRADE_PATH — Chart Vision cannot "
+                "upgrade trades (Audit CRIT-001)."
+            )
+        if (
+            _cfg_upgrade
+            and not AISafetyConstants.DISABLE_AI_VISION_UPGRADE_PATH
+        ):
+            # Sanctioned upgrade (requires DISABLE_AI_VISION_UPGRADE_PATH=False in source).
             updated["trade"] = True
         else:
-            # Downgrade-only mode: CONFIRM records visual confirmation but cannot create trade=True.
-            # If trade was already True (e.g. Engine C passed), preserve it.
+            # Veto-only / downgrade-only: CONFIRM records support flags but cannot create trade=True.
             updated["ai_visual_confirmed"] = True
             updated["vision_supports_setup"] = True
-            # Do not set trade=True here — it must have been True before Vision ran.
 
     if action in ("override", "contradict"):
         updated["trade"] = False

@@ -11,11 +11,14 @@ Rules being tested:
   - AI CONFIRM cannot override risk gate / freshness gate / Engine C block.
   - AI REJECT cannot upgrade a blocked signal.
   - Signal Debate PASS/STRONG_AVOID must block execution.
-  - Signal Debate error/skip must allow execution (fail-open is intentional).
-  - Debate score_adjustment (positive) cannot enable a sub-threshold signal
-    (debate only runs on signals that already pass the conviction gate).
+  - Signal Debate runtime exceptions default to blocked execution when
+    AISafetyConstants.DEBATE_FAILURE_DEFAULTS_TO_BLOCK=True (Audit HIGH-007).
+  - Debate score_adjustment is downgrade-only (effective ≤ 0); raw AI value in
+    score_adjustment_raw; auto_trader retains defense-in-depth.
   - Vision CONTRADICT must set trade=False.
-  - Vision CONFIRM >= 0.35 conviction sets trade=True (intentional design).
+  - Vision CONFIRM cannot set trade=True when AISafetyConstants.DISABLE_AI_VISION_UPGRADE_PATH=True
+    (compile-time; YAML AI_VISION_CAN_UPGRADE_TRADE alone cannot override).
+  - Vision CONFIRM with upgrade requires monkeypatched compile-time gate off for tests.
   - Vision CONFIRM on already-trade=True must leave trade=True.
   - Engine B AI no-API-key returns non-blocking error dict, not exception.
   - Engine B AI invalid JSON returns non-blocking error dict.
@@ -142,7 +145,7 @@ class TestAuditStateMapping:
 
 
 class TestSignalDebateExecutionSafety:
-    """Signal Debate must gate correctly; errors must fail-open."""
+    """Signal Debate must gate correctly; runtime errors fail-closed when safety constant says so."""
 
     def _base_signal(self, **overrides) -> dict:
         base = {
@@ -221,19 +224,16 @@ class TestSignalDebateExecutionSafety:
         result = run_signal_debate(self._base_signal())
         assert result["allowed"] is True
 
-    def test_debate_exception_falls_back_to_allowed_true(self, monkeypatch):
-        """Debate error => fail-open (allowed=True, grade=ERROR).
-
-        This is intentional — API outages must not halt trading.
-        """
+    def test_debate_exception_defaults_to_blocked_when_safety_constant_true(self, monkeypatch):
+        """Runtime debate failure blocks auto-exec when DEBATE_FAILURE_DEFAULTS_TO_BLOCK."""
         monkeypatch.setattr("signal_debate.get_ai_api_key", lambda _cfg: "xai-key")
         monkeypatch.setattr(
             "signal_debate.create_ai_client",
             lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("network error")),
         )
         result = run_signal_debate(self._base_signal())
-        assert result["allowed"] is True
         assert result["grade"] == "ERROR"
+        assert result["allowed"] is False
 
     def test_debate_positive_score_adjustment_does_not_apply_to_sub_threshold_signals(
         self, monkeypatch
@@ -242,9 +242,9 @@ class TestSignalDebateExecutionSafety:
 
         A signal that is already below threshold never reaches the debate,
         so positive score_adjustment cannot rescue a blocked signal.
-        We verify that by checking debate's own logic: score_adjustment is returned
-        as a field but the debate itself does not check against any threshold.
-        The gate (combinedConviction < auto_min_conviction) lives upstream in _can_execute.
+        We verify: debate returns allowed=True for STRONG_GO but effective
+        score_adjustment is clamped to ≤ 0 (CRIT-002); raw model value is preserved
+        in score_adjustment_raw. The conviction gate still lives upstream in _can_execute.
         """
         monkeypatch.setattr("signal_debate.get_ai_api_key", lambda _cfg: "xai-key")
         monkeypatch.setattr("signal_debate.create_ai_client", lambda *_a, **_kw: object())
@@ -257,15 +257,12 @@ class TestSignalDebateExecutionSafety:
             lambda *_a, **_kw: {
                 "grade": "STRONG_GO",
                 "reasoning": "go",
-                "score_adjustment": 2.0,  # maximum positive
+                "score_adjustment": 2.0,  # maximum positive (must not boost score)
             },
         )
         result = run_signal_debate(self._base_signal(confluenceScore=0.1))
-        # The debate returns allowed=True WITH a positive score_adjustment.
-        # This looks dangerous, but the conviction gate in _can_execute runs BEFORE
-        # the debate, so a 0.1 score signal would never reach this code path.
-        # This test documents that the debate itself has no duplicate gate.
-        assert result["score_adjustment"] == 2.0
+        assert result["score_adjustment"] == 0.0
+        assert result.get("score_adjustment_raw") == 2.0
         assert result["allowed"] is True
         # NOTE: In auto_trader._can_execute, a signal with confluenceScore=0.1
         # (combinedConviction ~ 0.03) fails at line 631 BEFORE debate is called.
@@ -391,8 +388,11 @@ class TestVisionExecutionSafety:
         assert result["trade"] is False
 
     def test_vision_confirm_above_threshold_with_upgrade_enabled_sets_trade_true(self, monkeypatch):
-        """Vision CONFIRM at conviction >= 0.35 sets trade=True only when AI_VISION_CAN_UPGRADE_TRADE=True."""
+        """Vision CONFIRM sets trade=True only when YAML upgrade + compile-time allows."""
         import engine_c
+        from config import AISafetyConstants
+
+        monkeypatch.setattr(AISafetyConstants, "DISABLE_AI_VISION_UPGRADE_PATH", False)
         monkeypatch.setitem(engine_c.CONFIG, "AI_VISION_CAN_UPGRADE_TRADE", True)
         from engine_c import apply_vision
 
@@ -404,7 +404,7 @@ class TestVisionExecutionSafety:
         result = apply_vision(consensus, vision)
         assert result["trade"] is True, (
             "Vision CONFIRM with conviction >= 0.35 must set trade=True "
-            "when AI_VISION_CAN_UPGRADE_TRADE=True"
+            "when AI_VISION_CAN_UPGRADE_TRADE=True and compile-time gate disabled"
         )
 
     def test_vision_confirm_above_threshold_with_upgrade_disabled_does_not_create_trade(self, monkeypatch):
@@ -1002,7 +1002,7 @@ class TestFreshnessAiContext:
 
 
 class TestDebateDowngradeOnly:
-    """Debate score_adjustment must be clamped to <= 0 in auto_trader."""
+    """Debate score_adjustment must be clamped to <= 0 (signal_debate + schema + auto_trader)."""
 
     def test_debate_score_adjustment_field_exists_in_result(self, monkeypatch):
         """Debate returns score_adjustment — it may be positive from the AI."""
@@ -1037,9 +1037,10 @@ class TestDebateDowngradeOnly:
                 "warnings": [],
             }
         )
-        # Debate returns score_adjustment=0.5 — auto_trader must clamp it
+        # Central downgrade-only clamp (signal_debate + schema): effective adjustment ≤ 0
         assert "score_adjustment" in result
-        assert result["score_adjustment"] == 0.5  # debate itself does NOT clamp
+        assert result["score_adjustment"] == 0.0
+        assert result.get("score_adjustment_raw") == 0.5
 
 
 # ============================================================

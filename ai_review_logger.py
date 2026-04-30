@@ -29,6 +29,12 @@ from typing import Any
 
 _LOG_DIR = os.path.join(os.path.dirname(__file__), "logs", "ai_review")
 _LOG_FILE = os.path.join(_LOG_DIR, "ai_review_audit.jsonl")
+_PROMPT_CA_DIR = os.environ.get(
+    "AI_PROMPT_STORE_DIR", os.path.join(_LOG_DIR, "prompt_store")
+)
+_VISION_IMG_DIR = os.environ.get(
+    "VISION_IMAGE_STORE_DIR", os.path.join(_LOG_DIR, "vision_images")
+)
 
 log = logging.getLogger("athena.ai_review")
 
@@ -65,6 +71,96 @@ def _hash_input(obj: Any) -> str:
         return "hash_error"
 
 
+def _serialize_input_packet(input_packet: Any) -> str:
+    if isinstance(input_packet, str):
+        return input_packet
+    try:
+        return json.dumps(input_packet, sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:
+        return str(input_packet)
+
+
+def store_prompt_content(prompt_text: str) -> tuple[str, str]:
+    """Write prompt text to content-addressable storage; return (sha256_hex, relative_key)."""
+    raw = prompt_text or ""
+    content_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    rel_parts = ("prompt", content_hash[:2], content_hash[2:4], content_hash)
+    storage_path = os.path.join(_PROMPT_CA_DIR, *rel_parts)
+    try:
+        os.makedirs(os.path.dirname(storage_path), exist_ok=True)
+        if not os.path.exists(storage_path):
+            with open(storage_path, "w", encoding="utf-8") as wf:
+                wf.write(raw)
+    except Exception as _e:
+        log.warning("[AI_AUDIT] prompt CAS write failed: %s", _e)
+    rel_key = "/".join(rel_parts)
+    return content_hash, rel_key
+
+
+def retrieve_prompt_content(content_hash: str) -> str | None:
+    """Load prompt text by full SHA-256 hex digest."""
+    h = (content_hash or "").strip().lower()
+    if len(h) < 64:
+        return None
+    storage_path = os.path.join(_PROMPT_CA_DIR, "prompt", h[:2], h[2:4], h)
+    try:
+        if os.path.exists(storage_path):
+            with open(storage_path, "r", encoding="utf-8") as rf:
+                return rf.read()
+    except Exception as _e:
+        log.warning("[AI_AUDIT] prompt CAS read failed: %s", _e)
+    return None
+
+
+def store_vision_image(image_bytes: bytes, metadata: dict[str, Any]) -> dict[str, Any]:
+    """Persist chart bytes under SHA-256 key (Audit CRIT-007)."""
+    data = image_bytes or b""
+    image_hash = hashlib.sha256(data).hexdigest()
+    rel_parts = ("vision", image_hash[:2], image_hash[2:4], f"{image_hash}.png")
+    storage_path = os.path.join(_VISION_IMG_DIR, *rel_parts)
+    out = {
+        "image_hash": image_hash,
+        "retrieval_key": "/".join(rel_parts),
+        "storage_path": storage_path,
+    }
+    try:
+        os.makedirs(os.path.dirname(storage_path), exist_ok=True)
+        if data and not os.path.exists(storage_path):
+            with open(storage_path, "wb") as wf:
+                wf.write(data)
+        meta_path = storage_path + ".meta.json"
+        if not os.path.exists(meta_path):
+            with open(meta_path, "w", encoding="utf-8") as mf:
+                json.dump(metadata or {}, mf, default=str)
+    except Exception as _e:
+        log.warning("[AI_AUDIT] vision image store failed: %s", _e)
+    return out
+
+
+def log_ai_failure(
+    *,
+    surface: str,
+    error: str,
+    safe_default_used: bool = True,
+    trace_id: str | None = None,
+) -> None:
+    """Append a minimal failure record — never raises."""
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "review_type": f"{surface}_FAILURE",
+        "error": error,
+        "safe_default_used": safe_default_used,
+        "parse_fallback_used": True,
+        "trace_id": trace_id,
+    }
+    try:
+        _ensure_log_dir()
+        with open(_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, default=str) + "\n")
+    except Exception as _e:
+        log.warning("[AI_AUDIT] Failed to write failure record: %s", _e)
+
+
 def log_ai_review(
     *,
     symbol: str,
@@ -90,6 +186,11 @@ def log_ai_review(
     execution_allowed_before_ai: bool,
     execution_allowed_after_ai: bool,
     final_action: str,
+    trace_id: str | None = None,
+    image_hash: str | None = None,
+    image_retrieval_key: str | None = None,
+    experiment_id: str | None = None,
+    variant_id: str | None = None,
 ) -> None:
     """Write one AI review audit record to JSONL.  Never raises."""
     ai_changed_execution_permission = (
@@ -112,6 +213,9 @@ def log_ai_review(
             execution_allowed_after_ai,
         )
 
+    _prompt_text = _serialize_input_packet(input_packet)
+    _full_hash, _retrieval_key = store_prompt_content(_prompt_text)
+
     record: dict[str, Any] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "symbol": symbol,
@@ -121,6 +225,8 @@ def log_ai_review(
         "provider": provider,
         "prompt_version": prompt_version,
         "input_packet_hash": _hash_input(input_packet),
+        "input_content_sha256": _full_hash,
+        "input_retrieval_key": _retrieval_key,
         "has_chart_image": has_chart_image,
         "candle_freshness_status": candle_freshness_status,
         "engine_a_state": engine_a_state,
@@ -139,6 +245,16 @@ def log_ai_review(
         "ai_changed_execution_permission": ai_changed_execution_permission,
         "final_action": final_action,
     }
+    if trace_id:
+        record["trace_id"] = trace_id
+    if image_hash:
+        record["image_hash"] = image_hash
+    if image_retrieval_key:
+        record["image_retrieval_key"] = image_retrieval_key
+    if experiment_id:
+        record["experiment_id"] = experiment_id
+    if variant_id:
+        record["variant_id"] = variant_id
 
     try:
         _ensure_log_dir()

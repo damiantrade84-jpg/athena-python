@@ -962,6 +962,8 @@ Live execute gate is **`combinedConviction`** vs `AUTO_TRADE_MIN_CONVICTION` (wi
 ### `/api/chart-analysis` — `athena.py`
 Requires `XAI_API_KEY` env var and uses OpenAI-compatible xAI client (`base_url=https://api.x.ai/v1`). `regime` in signal can be dict `{"label":"TRENDING"}` (Engine A) or string `"TRENDING"` (Engine C) — both handled. Context builder is **outside** try/except — keep it simple.
 
+**Engine C Vision payload fix (2026-04-30):** When Engine C consensus calls chart-analysis, `conviction` (0–1 scale) is now sent as `confluenceScore` scaled to 0–100 with `maxScore: 100`, plus the raw `conviction` field preserved. Previously the backend prompt showed `score=0.72/3.0` (misleadingly weak) instead of `score=72/100` (strong consensus). Fixed in `static/index.html` lines 11344–11468 and `_acmBuildChartAiSignalPayload()`.
+
 ### `/api/scalp-scan` / `/api/scalp-execute` — `athena.py`
 See **Scalp Lab / Engine D flow** above. Execute path: **`signal.type == "crypto"` → Bybit**; **else → MT5**. Crypto candles for Engine D come from Binance futures (`fetch_candles` / `CandleBuilder`); orders are **never** sent to Binance.
 
@@ -979,6 +981,8 @@ See **Scalp Lab / Engine D flow** above. Execute path: **`signal.type == "crypto
 **Regime in Engine A v2:** Regime is detected and smoothed (`REGIME_SMOOTHING_BARS`) but does **not** modify factor weights — it is informational/diagnostic only. Only `ENGINE_C_AB_WEIGHTS` in `engine_c.py` uses regime (to control A vs B blend ratio in Engine C).
 
 **`confluencePct` display scaling:** anchored to `get_min_confluence_threshold(pair)` so ~67% = "passing" intent. Engine C uses raw `confluenceScore / maxScore` (not `confluencePct`) for normalization. Engine A v2 max is 3.0 for all asset classes; `FOREX_ENGINE_A_MAX_SCORE` in `intermarket.py` updated to 3.0.
+
+**`getConfluencePct()` engine detection (2026-04-30):** Added early returns for Engine C (`data.conviction` → ×100) and Engine D (`data.ai_score` + `ai_grade` → direct) so signals render correctly if they ever enter shared grids. Engine C/D signals currently live in separate tabs, but this is defensive.
 
 ---
 

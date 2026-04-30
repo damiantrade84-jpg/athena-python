@@ -84,3 +84,5 @@ def test_run_signal_debate_uses_shared_client_and_grok_model(monkeypatch):
     assert result["grade"] == "WEAK_GO"
     assert result["allowed"] is True
     assert result["reasoning"] == "grok-4-1-fast-reasoning"
+    assert result["score_adjustment"] == 0.0
+    assert result.get("score_adjustment_raw") == 0.1

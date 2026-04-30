@@ -9,7 +9,7 @@ import time
 from typing import Optional
 
 from ai_utils import parse_json_object
-from config import CONFIG, create_ai_client, get_ai_model
+from config import CONFIG, AITemperatureConfig, create_ai_client, get_ai_model
 
 log = logging.getLogger("athena")
 VALID_ENGINE_B_GRADES = {"A+", "A", "B", "C", "D", "F"}
@@ -515,7 +515,7 @@ def get_engine_b_ai_verdict(
             "reviewSource, resolvedStyle, structureRisk, executionRisk, crossEngineAlignment, bestValidStyle, grade, edgeProbability, riskLevel, verdict, style_ratings. "
             "style_ratings must contain scalp, intraday, and swing objects with grade, edgeProbability, riskLevel."
         )
-        _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
+        _temp = float(AITemperatureConfig.get_temperature("engine_b_ai"))
 
         completion = _call_ai_with_retry(
             client,
@@ -562,6 +562,8 @@ def get_engine_b_ai_verdict(
                 map_engine_b_grade_to_ai_state,
                 REVIEW_TYPE_ENGINE_B_AI,
             )
+            from prompt_versions import get_prompt_version
+
             _freshness_reason = (
                 (freshness_ctx or {}).get("dataFreshness", {}) or {}
             ).get("reason") or "unknown"
@@ -571,7 +573,7 @@ def get_engine_b_ai_verdict(
                 review_type=REVIEW_TYPE_ENGINE_B_AI,
                 model=str(xai_model or get_ai_model(CONFIG, "AI_MODEL")).strip(),
                 provider="xAI",
-                prompt_version="ENGINE_B_AI_v1",
+                prompt_version=get_prompt_version("engine_b_ai"),
                 input_packet={"pair": pair, "direction": direction},
                 has_chart_image=False,
                 candle_freshness_status=_freshness_reason,
@@ -589,6 +591,11 @@ def get_engine_b_ai_verdict(
                 execution_allowed_before_ai=True,
                 execution_allowed_after_ai=True,
                 final_action="advisory",
+                trace_id=(
+                    (engine_a_ctx or {}).get("trace_id")
+                    if isinstance(engine_a_ctx, dict)
+                    else None
+                ),
             )
         except Exception as _log_err:
             log.debug("[AI_AUDIT] Engine B AI audit log failed: %s", _log_err)

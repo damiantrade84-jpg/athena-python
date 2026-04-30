@@ -895,6 +895,96 @@ for _k, _v in _yaml_overrides.items():
         CONFIG[_k] = _v
 
 
+# =============================================================================
+# AI SAFETY COMPILE-TIME CONSTANTS (Audit CRIT-001, CRIT-002, CRIT-004, CRIT-005)
+# These cannot be overridden by environment variables or YAML.
+# Changing them requires a code review and deployment.
+# =============================================================================
+
+
+class AISafetyConstants:
+    """Master kill switches for AI-mediated execution paths."""
+
+    DISABLE_AI_VISION_UPGRADE_PATH: bool = True
+    FORCE_DEBATE_DOWNGRADE_ONLY: bool = True
+    FORCE_ZERO_TEMP_ON_GATES: bool = True
+    DEBATE_FAILURE_DEFAULTS_TO_BLOCK: bool = True
+
+    @classmethod
+    def startup_safety_check(cls) -> None:
+        """Call once after CONFIG is loaded. Aborts if production invariants are violated."""
+        if not cls.DISABLE_AI_VISION_UPGRADE_PATH:
+            raise RuntimeError(
+                "FATAL: DISABLE_AI_VISION_UPGRADE_PATH is False. "
+                "Chart Vision upgrade path is a CRITICAL safety risk. "
+                "See audit finding CRIT-001."
+            )
+        if not cls.FORCE_DEBATE_DOWNGRADE_ONLY:
+            raise RuntimeError(
+                "FATAL: FORCE_DEBATE_DOWNGRADE_ONLY is False. "
+                "Debate positive adjustments are a CRITICAL safety risk. "
+                "See audit finding CRIT-002."
+            )
+
+
+class AITemperatureConfig:
+    """Per-surface sampling temperature. Execution gates use 0.0 when forced."""
+
+    MARCUS_TEMPERATURE: float = 0.25
+    ENGINE_B_AI_TEMPERATURE: float = 0.15
+    DEBATE_JUDGE_TEMPERATURE: float = 0.0
+    VISION_TEMPERATURE: float = 0.0
+    DECAY_TEMPERATURE: float = 0.0
+    DEBATE_BULL_TEMPERATURE: float = 0.2
+    DEBATE_BEAR_TEMPERATURE: float = 0.2
+
+    @classmethod
+    def get_temperature(cls, surface: str) -> float:
+        """Return temperature for a named AI surface; respects AISafetyConstants."""
+        mapping = {
+            "marcus": cls.MARCUS_TEMPERATURE,
+            "engine_b_ai": cls.ENGINE_B_AI_TEMPERATURE,
+            "vision": cls.VISION_TEMPERATURE,
+            "debate_bull": cls.DEBATE_BULL_TEMPERATURE,
+            "debate_bear": cls.DEBATE_BEAR_TEMPERATURE,
+            "debate_judge": cls.DEBATE_JUDGE_TEMPERATURE,
+            "decay": cls.DECAY_TEMPERATURE,
+        }
+        temp = float(mapping.get(surface, 0.0))
+        cfg = CONFIG
+        # Optional YAML overrides (numeric only); gates still forced to 0.0 below.
+        override_keys = {
+            "marcus": "AI_TEMPERATURE",
+            "vision": "AI_VISION_TEMPERATURE",
+            "debate_bull": "DEBATE_BULL_TEMPERATURE",
+            "debate_bear": "DEBATE_BEAR_TEMPERATURE",
+            "debate_judge": "DEBATE_JUDGE_TEMPERATURE",
+            "decay": "DECAY_AI_TEMPERATURE",
+            "engine_b_ai": "ENGINE_B_AI_TEMPERATURE",
+        }
+        ok = override_keys.get(surface)
+        if ok and ok in cfg:
+            try:
+                temp = float(cfg.get(ok))
+            except (TypeError, ValueError):
+                pass
+
+        if AISafetyConstants.FORCE_ZERO_TEMP_ON_GATES and surface in (
+            "vision",
+            "debate_judge",
+            "decay",
+        ):
+            if temp != 0.0:
+                log.warning(
+                    "[AI_SAFETY] Temperature override: surface=%s forced to 0.0 "
+                    "(was %.4f) per AISafetyConstants.FORCE_ZERO_TEMP_ON_GATES — Audit CRIT-005.",
+                    surface,
+                    temp,
+                )
+            return 0.0
+        return temp
+
+
 def validate_config(cfg: dict) -> None:
     """Warn on mis-typed or dangerous CONFIG values after YAML overrides are applied."""
     for k in (
@@ -1068,6 +1158,8 @@ def _fatal_config_validation(cfg: dict) -> None:
 
 validate_config(CONFIG)
 _fatal_config_validation(CONFIG)
+
+AISafetyConstants.startup_safety_check()
 
 
 def scan_candle_limits() -> dict[str, int]:

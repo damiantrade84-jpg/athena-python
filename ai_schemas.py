@@ -6,7 +6,7 @@ Used with client.beta.chat.completions.parse(response_format=Model).
 
 from enum import Enum
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class RiskLevel(str, Enum):
@@ -104,8 +104,28 @@ class JudgeVerdictResponse(BaseModel):
     grade: str = Field(description="STRONG_GO, WEAK_GO, PASS, or STRONG_AVOID")
     reasoning: str = Field(description="1-2 sentence verdict explanation")
     score_adjustment: float = Field(
-        ge=-1.0, le=1.0, description="Score adjustment -1.0 to +1.0"
+        ge=-1.0,
+        le=1.0,
+        description="Score delta proposed by judge; execution clamps to ≤ 0 (Audit CRIT-002).",
     )
+
+    @field_validator("score_adjustment", mode="after")
+    @classmethod
+    def clamp_positive_adjustment(cls, v: float) -> float:
+        """Debate may only reduce Engine A score, never increase it."""
+        import logging
+
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            return 0.0
+        if x > 0:
+            logging.getLogger("sentinel.debate").warning(
+                "[DEBATE] score_adjustment=%.4f > 0 clamped to 0.0 (downgrade-only, CRIT-002)",
+                x,
+            )
+            return 0.0
+        return x
 
 
 class MetaAnalysisResponse(BaseModel):

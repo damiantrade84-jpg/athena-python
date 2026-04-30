@@ -7105,6 +7105,14 @@ function renderSignals(signals) {
 
 function getConfluencePct(data) {
   if(!data) return 0;
+  // Engine C: conviction is 0-1 scale, multiply by 100 for percentage
+  if (typeof data.conviction === 'number') {
+    return Math.max(0, Math.min(100, Math.round(data.conviction * 100)));
+  }
+  // Engine D: ai_score is 0-100 scale, use directly
+  if (typeof data.ai_score === 'number' && (data.maxScore === 100 || data.ai_grade != null)) {
+    return Math.max(0, Math.min(100, Math.round(data.ai_score)));
+  }
   var pct = data.thresholdProgressPct != null ? data.thresholdProgressPct : data.confluencePct;
   if (pct == null) pct = data.pct;
   if (pct == null) pct = data.confidence_pct;
@@ -10718,9 +10726,14 @@ function _acmStopLive() {
 function _acmBuildChartAiSignalPayload() {
   var payload = buildLiveSignalPayload(_acm.sig || null);
   if (!payload) return null;
+  // Engine C consensus: conviction is 0-1, scale to 0-100 for vision context
+  var isConsensus = payload.conviction != null && payload.confluenceScore == null;
+  var score = isConsensus ? Math.round(payload.conviction * 100) : payload.confluenceScore;
+  var maxS = isConsensus ? 100 : (payload.maxScore || 3.0);
   return {
     direction: payload.direction,
-    confluenceScore: payload.confluenceScore != null ? payload.confluenceScore : payload.conviction,
+    confluenceScore: score,
+    maxScore: maxS,
     price: payload.price != null ? payload.price : (payload.entryPrice != null ? payload.entryPrice : payload.entry),
     sl: payload.sl,
     tp1: payload.tp1 != null ? payload.tp1 : payload.tp,
@@ -11330,7 +11343,9 @@ async function runECVisionConfirm(sid) {
         tf: 'H4',
         signal: {
           direction: consensus.direction,
-          confluenceScore: consensus.conviction,
+          conviction: consensus.conviction,
+          confluenceScore: consensus.conviction != null ? Math.round(consensus.conviction * 100) : null,
+          maxScore: 100,
           price: consensus.entry,
           sl: consensus.sl,
           tp1: consensus.tp,
@@ -11447,7 +11462,9 @@ function confirmExecuteEngineC(sid, pipMode) {
     tp1: consensus.tp,
     tp2: consensus.tp,
     style: pipMode || consensus.style || 'swing',
-    confluenceScore: consensus.conviction,
+    conviction: consensus.conviction,
+    confluenceScore: consensus.conviction != null ? Math.round(consensus.conviction * 100) : null,
+    maxScore: 100,
     timestamp: new Date().toISOString(),
     chart_ai_levels: consensus.vision_level_suggestions || {},
     chart_ai: {

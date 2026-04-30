@@ -15,11 +15,35 @@ Only runs on auto-trade candidates (not manual scans) to control API costs.
 import json
 import logging
 
+from ai_safe_wrappers import ai_call_with_safe_default
 from ai_schemas import DebateCaseResponse, JudgeVerdictResponse
+from ai_signal_trace import ensure_trace_id
 from ai_utils import parse_json_object
-from config import CONFIG, create_ai_client, get_ai_api_key, get_ai_model
+from config import (
+    AISafetyConstants,
+    AITemperatureConfig,
+    CONFIG,
+    create_ai_client,
+    get_ai_api_key,
+    get_ai_model,
+)
 
 log = logging.getLogger("sentinel.debate")
+
+
+def _finalize_score_adjustment(raw: object) -> tuple[float, float]:
+    """Return (raw_as_float, effective_adjustment) with effective <= 0 (Audit CRIT-002)."""
+    try:
+        raw_f = float(raw if raw is not None else 0.0)
+    except (TypeError, ValueError):
+        raw_f = 0.0
+    effective = min(0.0, raw_f)
+    if AISafetyConstants.FORCE_DEBATE_DOWNGRADE_ONLY and raw_f > 0:
+        log.critical(
+            "[DEBATE] Positive score_adjustment %.4f rejected — downgrade-only policy (CRIT-002).",
+            raw_f,
+        )
+    return raw_f, effective
 
 
 def _signal_max_score(signal: dict) -> float:
@@ -46,6 +70,7 @@ def _signal_max_score(signal: dict) -> float:
     return 3.0
 
 
+@ai_call_with_safe_default("debate", max_retries=1)
 def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
     """Run a Bull/Bear/Judge debate for a trade signal.
 
@@ -63,6 +88,7 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
             "allowed": bool
         }
     """
+    ensure_trace_id(signal)
     api_key = get_ai_api_key(CONFIG)
     _fail_policy = str(CONFIG.get("AUTO_TRADE_AI_FAIL_POLICY", "allow")).lower()
     _allowed_on_fail = (_fail_policy != "block")
@@ -75,6 +101,8 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
             "bull_conviction": 0,
             "bear_conviction": 0,
             "score_adjustment": 0.0,
+            "score_adjustment_raw": 0.0,
+            "trace_id": signal.get("trace_id"),
         }
 
 
@@ -139,22 +167,36 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
     try:
         client = create_ai_client(CONFIG, api_key=api_key)
         _model = get_ai_model(CONFIG, "DEBATE_MODEL", "grok-4-1-fast-reasoning")
-        _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
+        _temp_bull = AITemperatureConfig.get_temperature("debate_bull")
+        _temp_bear = AITemperatureConfig.get_temperature("debate_bear")
+        _temp_judge = AITemperatureConfig.get_temperature("debate_judge")
 
         # Step 1: Bull Case
-        bull_response = _get_debate_case(client, context, direction, "BULL", _model, _temp)
+        bull_response = _get_debate_case(
+            client, context, direction, "BULL", _model, _temp_bull
+        )
 
         # Step 2: Bear Case
-        bear_response = _get_debate_case(client, context, direction, "BEAR", _model, _temp)
+        bear_response = _get_debate_case(
+            client, context, direction, "BEAR", _model, _temp_bear
+        )
 
         # Step 3: Judge
         judge_response = _get_judge_verdict(
-            client, context, direction, bull_response, bear_response, _model, _temp
+            client,
+            context,
+            direction,
+            bull_response,
+            bear_response,
+            _model,
+            _temp_judge,
         )
 
         grade = judge_response.get("grade", "PASS")
         allowed = grade in ("STRONG_GO", "WEAK_GO")
-        score_adj = judge_response.get("score_adjustment", 0.0)
+        raw_adj, score_adj = _finalize_score_adjustment(
+            judge_response.get("score_adjustment", 0.0)
+        )
 
         result = {
             "grade": grade,
@@ -164,7 +206,9 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
             "bear_arguments": bear_response.get("key_arguments", []),
             "reasoning": judge_response.get("reasoning", ""),
             "score_adjustment": score_adj,
+            "score_adjustment_raw": raw_adj,
             "allowed": allowed,
+            "trace_id": signal.get("trace_id"),
         }
 
         log.info(
@@ -184,16 +228,25 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
             "bull_conviction": 0,
             "bear_conviction": 0,
             "score_adjustment": 0.0,
+            "score_adjustment_raw": 0.0,
+            "trace_id": signal.get("trace_id"),
         }
     except Exception as e:
         log.error(f"[DEBATE] Error: {e}")
+        _allowed_exc = (
+            False
+            if AISafetyConstants.DEBATE_FAILURE_DEFAULTS_TO_BLOCK
+            else _allowed_on_fail
+        )
         return {
             "grade": "ERROR",
-            "allowed": _allowed_on_fail,
+            "allowed": _allowed_exc,
             "reasoning": f"Debate error: {e}",
             "bull_conviction": 0,
             "bear_conviction": 0,
             "score_adjustment": 0.0,
+            "score_adjustment_raw": 0.0,
+            "trace_id": signal.get("trace_id"),
         }
 
 
@@ -279,7 +332,7 @@ def _get_judge_verdict(
         f"Return ONLY valid JSON: "
         f'{{ "grade": "<STRONG_GO|WEAK_GO|PASS|STRONG_AVOID>", '
         f'"reasoning": "<1-2 sentence verdict>", '
-        f'"score_adjustment": <-1.0 to +1.0, how much to adjust signal score> }}'
+        f'"score_adjustment": <=0.0 penalty only (never positive; downgrade-only policy) }}'
     )
 
     system_prompt = (
