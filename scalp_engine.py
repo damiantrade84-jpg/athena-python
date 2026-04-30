@@ -1878,6 +1878,9 @@ def ai_quality_grade(
     if loc in ("at_vah", "at_val"):
         score += 25
         reasons.append(f"Price at {loc.upper()} — prime location")
+    elif loc == "outside_va":
+        score += 25
+        reasons.append("Price extended outside VA - prime mean-reversion / extension")
     elif loc == "at_lvn":
         score += 20
         reasons.append("Price at LVN — trend continuation zone")
@@ -2611,8 +2614,16 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 risk_distance_abs = abs(levels["entry"] - levels["sl"])
                 risk_distance_pct = risk_distance_abs / levels["entry"] if levels["entry"] > 0 else 0
                 
-                estimated_fee_pct = float(cfg.get("ESTIMATED_FEE_PCT", 0.0006))
-                estimated_slippage_pct = float(cfg.get("ESTIMATED_SLIPPAGE_PCT", 0.0002))
+                _COST_DEFAULTS = {
+                    "crypto": (0.0006, 0.0002),
+                    "forex": (0.00005, 0.00005),
+                    "commodity": (0.00010, 0.00010),
+                    "stock": (0.00010, 0.00005),
+                    "index": (0.00010, 0.00010),
+                }
+                _fee_default, _slip_default = _COST_DEFAULTS.get(asset_type, _COST_DEFAULTS["crypto"])
+                estimated_fee_pct = float(cfg.get("ESTIMATED_FEE_PCT", _fee_default))
+                estimated_slippage_pct = float(cfg.get("ESTIMATED_SLIPPAGE_PCT", _slip_default))
                 estimated_total_cost_pct = estimated_fee_pct + estimated_slippage_pct
                 
                 cost_as_R = estimated_total_cost_pct / risk_distance_pct if risk_distance_pct > 0 else float('inf')

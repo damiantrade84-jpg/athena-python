@@ -1991,6 +1991,7 @@ SCALP_ENGINE:
   VP_LVN_THRESHOLD: 0.15        # Bins below 15% of POC volume are Low Volume Nodes
 
   VP_PROXIMITY_PCT: 0.30        # % of price to classify as "at" VAH/VAL/POC (0.30 = ±0.30%)
+  VP_PROXIMITY_ATR_K: 0.50      # ATR multiplier for VP proximity when ATR mode is enabled
 
   TRADE_BUCKET_VP_ENABLED: true   # Crypto: prefer Binance aggTrade price buckets for VP when fresh
 
@@ -2044,7 +2045,7 @@ SCALP_ENGINE:
 
   AAA_ACCUMULATION_LOOKBACK: 10 # Bars to measure range contraction
 
-  AAA_CONTRACTION_THRESHOLD: 0.5 # ATR ratio threshold for accumulation (0.5 = 50%)
+  AAA_CONTRACTION_THRESHOLD: 0.70 # ATR ratio threshold for accumulation (0.70 = 70%)
 
   AAA_BREAKOUT_VOL_MULT: 1.5   # Breakout bar volume must exceed avg * this
 
@@ -2080,7 +2081,7 @@ SCALP_ENGINE:
 
   GRADE_STRONG_ABSORPTION_MIN_COUNT: 2  # Two absorption bars is enough for strong absorption credit
 
-  MT5_ABSORPTION_MIN_COUNT: 2   # OPERATOR EXPERIMENT: tick-volume absorption noise gate — revisit only after paper funnel evidence.
+  MT5_ABSORPTION_MIN_COUNT: 1   # OPERATOR EXPERIMENT: tick-volume absorption noise gate — revisit only after paper funnel evidence.
 
   ZONE_MIN_CONDITIONS: 2        # Valid zone needs >= N conditions
 
