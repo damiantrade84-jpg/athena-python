@@ -20,6 +20,7 @@ Design principles:
 import math
 import logging
 import threading
+import warnings
 from typing import Dict, List, Optional
 
 from config import CONFIG
@@ -35,6 +36,9 @@ _CRYPTO_COT_PAIRS = {"BTC/USDT", "ETH/USDT"}
 # NOTE: Read lazily inside _adx_gate() so config reloads take effect without restart.
 _ADX_HARD_FAIL_DEFAULT = 15.0    # below this → dead market, abort
 _ADX_SOFT_MULT_DEFAULT = 0.65    # multiplier in soft zone
+
+# Track whether we've emitted the fallback warning (per-process, not per-call)
+_adx_fallback_warned = False
 
 # Session multiplier defaults (forex only — read lazily in _session_multiplier)
 _SESSION_CORE_MULT_DEFAULT = 1.00
@@ -621,19 +625,28 @@ def _adx_gate(d1_snap: dict, h4_snap: dict, asset_type: str) -> tuple:
     """ADX trend-strength gate with sigmoid scaling.
 
     Returns (multiplier, adx_value, adx_source).
-    multiplier is a continuous sigmoid:
-      ADX ≤ 10  → 0.0 (dead market)
-      ADX = 15  → 0.25
-      ADX = 20  → 0.50
-      ADX = 25  → 0.75
-      ADX ≥ 30  → 1.0 (full credit)
+    multiplier is a continuous linear ramp:
+      ADX ≤ hard_fail  → 0.0 (dead market)
+      ADX = hard_fail + 25% of range  → 0.25
+      ADX = hard_fail + 50% of range  → 0.50
+      ADX = hard_fail + 75% of range  → 0.75
+      ADX ≥ trend_min  → 1.0 (full credit)
 
     The old 3-tier step (0.0 / 0.65 / 1.0) made the soft zone too punitive:
     max final_score in soft zone = 3.0 × 0.65 = 1.955, below all asset-class
     thresholds (crypto 2.4, forex 2.1, commodity 1.8, stock 1.8).
 
+    Thresholds are read per-class from config.yaml:
+      ADX_TREND_MIN_CLASS[asset_type]  → upper bound (full credit)
+      FACTOR_ADX_HARD_FAIL_CLASS[asset_type] → lower bound (zero)
+
+    Backward compatibility: if a class is missing from config, falls back to
+    hardcoded hard_fail=10, trend_min=30 and emits a single warnings.warn.
+
     Source preference: D1 ADX (structural) first, H4 ADX fallback.
     """
+    global _adx_fallback_warned
+
     d1_adx = d1_snap.get("adx")
     h4_adx = h4_snap.get("adx")
     adx = None
@@ -661,8 +674,48 @@ def _adx_gate(d1_snap: dict, h4_snap: dict, asset_type: str) -> tuple:
         # Soft fallback when ADX missing: use 0.5 (neutral)
         return 0.5, None, "missing"
 
-    # Sigmoid: linear ramp from 0.0 at ADX=10 to 1.0 at ADX=30
-    mult = max(0.0, min(1.0, (adx - 10.0) / 20.0))
+    # ── Read per-class thresholds from config ────────────────────────────────
+    _trend_min_cfg = CONFIG.get("ADX_TREND_MIN_CLASS") or {}
+    _hard_fail_cfg = CONFIG.get("FACTOR_ADX_HARD_FAIL_CLASS") or {}
+
+    trend_min = (_trend_min_cfg.get(asset_type)
+                 if isinstance(_trend_min_cfg, dict) else None)
+    hard_fail = (_hard_fail_cfg.get(asset_type)
+                 if isinstance(_hard_fail_cfg, dict) else None)
+
+    # Backward compatibility: fall back individually per missing key
+    _used_fallback = False
+    if trend_min is None:
+        _used_fallback = True
+        trend_min = 30.0
+    if hard_fail is None:
+        _used_fallback = True
+        hard_fail = 10.0
+
+    if _used_fallback and not _adx_fallback_warned:
+        _adx_fallback_warned = True
+        warnings.warn(
+            f"ADX thresholds for asset_type='{asset_type}' not found in config. "
+            f"Falling back to hardcoded defaults (hard_fail=10.0, trend_min=30.0) "
+            f"for missing entries. Add ADX_TREND_MIN_CLASS and/or "
+            f"FACTOR_ADX_HARD_FAIL_CLASS entries to config.yaml to silence.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    trend_min = float(trend_min)
+    hard_fail = float(hard_fail)
+
+    # Sanity: ensure hard_fail < trend_min so the ramp has positive width
+    if hard_fail >= trend_min:
+        hard_fail = trend_min - 5.0
+
+    # Linear ramp: 0.0 at hard_fail → 1.0 at trend_min
+    _range = trend_min - hard_fail
+    if _range <= 0:
+        mult = 1.0 if adx >= trend_min else 0.0
+    else:
+        mult = max(0.0, min(1.0, (adx - hard_fail) / _range))
     return mult, adx, source
 
 
@@ -1119,8 +1172,53 @@ def compute_factor_scores(
         except Exception:
             pass
 
+    # ── Phase 2 parameter wiring: volume_ratio, macro_context, intermarket_context ──
+    # These parameters were previously accepted but silently ignored.  They now
+    # contribute small bounded adjustments (±5% of total score max) to avoid
+    # overfitting while making the inputs materially affect the output.
+
+    # Volume-ratio adjustment: elevated volume confirms conviction; low volume
+    # suppresses it.  Impact bounded to ±3% of final_score.
+    _vol_adj = 0.0
+    if isinstance(volume_ratio, (int, float)) and volume_ratio > 0:
+        if volume_ratio > 1.5:
+            _vol_adj = min(0.03, (volume_ratio - 1.5) * 0.03)  # boost up to +3%
+        elif volume_ratio < 0.5:
+            _vol_adj = max(-0.03, (volume_ratio - 0.5) * 0.06)  # penalty down to -3%
+        # 0.5–1.5 → no adjustment (neutral volume zone)
+
+    # Macro-context adjustment: risk-on boosts trend-aligned scores, risk-off
+    # dampens them.  Impact bounded to ±2% of final_score.
+    _macro_adj = 0.0
+    if isinstance(macro_context, dict):
+        _macro_state = str(macro_context.get("state", "neutral")).lower()
+        if _macro_state == "risk_on":
+            _macro_adj = 0.02
+        elif _macro_state == "risk_off":
+            _macro_adj = -0.02
+        # "neutral" or unknown → 0.0
+    elif isinstance(macro_context, str):
+        _macro_s = macro_context.lower()
+        if _macro_s == "risk_on":
+            _macro_adj = 0.02
+        elif _macro_s == "risk_off":
+            _macro_adj = -0.02
+
+    # Intermarket-context adjustment: divergence signals penalise momentum
+    # proportionally.  Impact bounded to ±2% of final_score.
+    _inter_adj = 0.0
+    if isinstance(intermarket_context, dict):
+        if intermarket_context.get("divergence") is True:
+            _inter_adj = -0.02
+        _divergence_score = intermarket_context.get("divergence_score")
+        if isinstance(_divergence_score, (int, float)):
+            _inter_adj = max(-0.02, min(0.02, -_divergence_score * 0.02))
+    # Total bounded adjustment: ±5% max (3+2, but we clamp the sum)
+    _total_adj = max(-0.05, min(0.05, _vol_adj + _macro_adj + _inter_adj))
+
     final_score = base_score * (_eff_floor + (1.0 - _eff_floor) * conviction)
     final_score = final_score * (1.0 - _cost_penalty)
+    final_score = final_score * (1.0 + _total_adj)
     final_score = max(0.0, min(3.0, final_score))
 
     # ── Factor scores dict (for UI / Marcus Reid diagnostics) ─────────────────

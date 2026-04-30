@@ -204,6 +204,7 @@ def _merge_forex_forming_ws(candles: list, display: str, tf: str, limit: int):
 
 from config import (
     CONFIG,
+    AITemperatureConfig,
     ai_key_configured,
     create_ai_client,
     get_ai_provider_label,
@@ -213,6 +214,9 @@ from config import (
     scan_candle_limits,
 )  # noqa: E402
 from athena.datafeeds.ws_ssl import configure_process_ca_bundle  # noqa: E402
+from ai_safe_wrappers import ai_call_with_safe_default  # noqa: E402
+from ai_signal_trace import ensure_trace_id  # noqa: E402
+from prompt_versions import get_prompt_version  # noqa: E402
 from regime_shift_monitor import classify_position as _regime_classify  # noqa: E402
 
 _ca_bundle = configure_process_ca_bundle()
@@ -4282,6 +4286,7 @@ def _parse_ai_json(text: str, pair: str = "?") -> dict | None:
     return parse_json_object(text)
 
 
+@ai_call_with_safe_default("marcus", max_retries=1)
 def run_ai(
     signal: dict,
     news_ctx: dict | None = None,
@@ -4291,6 +4296,8 @@ def run_ai(
     learning_ctx: dict | None = None,
 ) -> dict:
     """Send signal data to the configured AI provider for Marcus Reid analysis."""
+
+    ensure_trace_id(signal)
 
     if not ai_key_configured(CONFIG):
         log.error("[AI] AI API key is not configured")
@@ -4304,7 +4311,7 @@ def run_ai(
         )
 
         c = create_ai_client(CONFIG)
-        _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
+        _temp = float(AITemperatureConfig.get_temperature("marcus"))
 
         style_labels = {
             "scalp": "SCALP — focus on H1 exhaustion, tight 1.5R, quick execution",
@@ -4388,7 +4395,7 @@ def run_ai(
                 review_type=REVIEW_TYPE_MARCUS_REID,
                 model=_model,
                 provider=get_ai_provider_label(CONFIG),
-                prompt_version="EXPERT_PROMPT_v5",
+                prompt_version=get_prompt_version("marcus_expert"),
                 input_packet={"pair": signal.get("pair"), "score": signal.get("confluenceScore")},
                 has_chart_image=False,
                 candle_freshness_status=(
@@ -4408,6 +4415,7 @@ def run_ai(
                 execution_allowed_before_ai=True,
                 execution_allowed_after_ai=True,
                 final_action="advisory",
+                trace_id=signal.get("trace_id"),
             )
         except Exception as _log_err:
             log.debug("[AI_AUDIT] Marcus Reid audit log failed: %s", _log_err)
@@ -9785,9 +9793,34 @@ def api_chart_analysis():
             ]
             log.info(f"[AI CHART] Single-TF {tf} analysis for {symbol}")
 
+        import base64 as _b64_vision
+
+        _stored_vision: dict = {}
+        try:
+            from ai_review_logger import store_vision_image
+
+            _raw_b64 = str(img_h4).strip()
+            if _raw_b64.startswith("data:"):
+                _raw_b64 = _raw_b64.split(",", 1)[1]
+            _pad_v = (-len(_raw_b64)) % 4
+            _png_bytes = _b64_vision.b64decode(_raw_b64 + ("=" * _pad_v))
+            _stored_vision = store_vision_image(
+                _png_bytes,
+                {
+                    "pair": symbol,
+                    "chart_timeframe": tf,
+                    "chart_source": chart_source,
+                    "dashboard_source": request.headers.get("X-Dashboard-Source", "unknown"),
+                    "chart_generated_at": data.get("chart_generated_at")
+                    or data.get("chartGeneratedAt"),
+                },
+            )
+        except Exception as _vs_err:
+            log.debug("[AI CHART] vision image retention skipped: %s", _vs_err)
+
         _max_tokens = 1100 if triple_mode else 800
         _vision_model = get_ai_model(CONFIG, "VISION_MODEL", "grok-4-1-fast-reasoning")
-        _vision_temp = float(CONFIG.get("AI_VISION_TEMPERATURE", 0.2))
+        _vision_temp = float(AITemperatureConfig.get_temperature("vision"))
         _user_parts = _chart_blocks_to_openai_user_content(content)
         _completion = _xai_chat_completions_retry(
             client,
@@ -9929,6 +9962,8 @@ def api_chart_analysis():
                 map_vision_rating_to_ai_state,
                 REVIEW_TYPE_CHART_VISION,
             )
+            if sig:
+                ensure_trace_id(sig)
             _re_status = (structured or {}).get("right_edge_status", "")
             _vision_ai_state = map_vision_rating_to_ai_state(_re_status)
             _vision_before = bool((sig or {}).get("trade", False))
@@ -9939,7 +9974,7 @@ def api_chart_analysis():
                 review_type=REVIEW_TYPE_CHART_VISION,
                 model=_vision_model,
                 provider="xAI",
-                prompt_version="VISION_v4",
+                prompt_version=get_prompt_version("chart_vision_audit"),
                 input_packet={"symbol": symbol, "tf": _tf_label},
                 has_chart_image=True,
                 candle_freshness_status=(
@@ -9960,6 +9995,9 @@ def api_chart_analysis():
                 execution_allowed_before_ai=_vision_before,
                 execution_allowed_after_ai=_vision_after,
                 final_action="vision_advisory",
+                trace_id=(sig or {}).get("trace_id") if sig else None,
+                image_hash=_stored_vision.get("image_hash"),
+                image_retrieval_key=_stored_vision.get("retrieval_key"),
             )
         except Exception as _log_err:
             log.debug("[AI_AUDIT] Chart Vision audit log failed: %s", _log_err)
@@ -11450,6 +11488,23 @@ def analyze_pair(
             _im_ctx_err,
         )
 
+    # Extract close-price series for real 30-day correlation (Bug 2 fix)
+    _asset_prices = None
+    _benchmark_prices = None
+    if pair.get("type") == "crypto" and _cf_h4c:
+        _asset_prices = [float(c.get("close", 0)) for c in _cf_h4c if c.get("close") is not None]
+        if _asset_prices and len(_asset_prices) >= 15:
+            try:
+                _btc_candles = fetch_candles(
+                    {"symbol": "BTCUSDT", "source": "binance"}, "H4", len(_asset_prices)
+                )
+                if _btc_candles:
+                    _benchmark_prices = [
+                        float(c.get("close", 0)) for c in _btc_candles if c.get("close") is not None
+                    ]
+            except Exception as _btc_fetch_err:
+                log.debug("[CORR] BTC benchmark fetch failed: %s", _btc_fetch_err)
+
     res = calc_confluence(
         _cf_d1i,
         _cf_h4i,
@@ -11470,6 +11525,8 @@ def analyze_pair(
         oi_context=_oi_context,
         macro_context=_usd_relative_strength,
         intermarket_context=_intermarket_raw_context,
+        asset_prices=_asset_prices,
+        benchmark_prices=_benchmark_prices,
     )
 
     # For SCALP: warn if D1 trend disagrees with signal direction
@@ -13004,7 +13061,7 @@ def _get_decay_ai_verdict(
 
         client = create_ai_client(CONFIG, api_key=api_key)
         _model = get_ai_model(CONFIG, "DEBATE_MODEL", "grok-4-1-fast-reasoning")
-        _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
+        _temp = float(AITemperatureConfig.get_temperature("decay"))
 
         result = None
         try:

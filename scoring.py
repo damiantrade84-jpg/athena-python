@@ -4,7 +4,9 @@ Depends on: config.CONFIG, indicators (calc_* functions).
 """
 
 import logging
+import warnings
 from datetime import datetime, timezone
+from typing import List, Optional
 
 from config import CONFIG
 from indicators import (
@@ -400,12 +402,88 @@ _PAIR_TO_CLUSTER: dict = {
 }
 
 
-def _get_30d_correlation(pair_display: str, btc_symbol: str = "BTCUSDT") -> float:
-    """Return 30-day correlation between pair and BTC.
+def _get_30d_correlation(
+    asset_prices: Optional[List[float]] = None,
+    benchmark_prices: Optional[List[float]] = None,
+    *,
+    pair_display: str = "",
+    btc_symbol: str = "BTCUSDT",
+) -> float:
+    """Return 30-day Pearson correlation between asset and benchmark price series.
 
-    Stub: returns 0.85 for ETH, 0.30 for SOL, 0.50 for others.
-    In production, replace with actual rolling correlation from price history.
+    Args:
+        asset_prices:   List/array of asset close prices (chronological order).
+        benchmark_prices: List/array of benchmark close prices (same length).
+        pair_display:   Legacy fallback label — used only when no price series
+                        are provided (returns hardcoded heuristic values).
+        btc_symbol:     Legacy parameter — ignored when real prices are passed.
+
+    Returns:
+        Pearson r in range [-1, 1].  0.0 on insufficient data or zero variance.
     """
+    # ── Real calculation path (preferred) ────────────────────────────────────
+    if asset_prices is not None and benchmark_prices is not None:
+        n = len(asset_prices)
+        if n < 15 or len(benchmark_prices) < 15:
+            warnings.warn(
+                f"_get_30d_correlation: insufficient data points ({n}<15), returning 0.0",
+                UserWarning,
+                stacklevel=2,
+            )
+            return 0.0
+
+        # Try numpy first (fast vectorised path)
+        try:
+            import numpy as np
+
+            a = np.asarray(asset_prices, dtype=float)
+            b = np.asarray(benchmark_prices, dtype=float)
+            # Use minimum length if mismatched
+            min_len = min(len(a), len(b))
+            a = a[-min_len:]
+            b = b[-min_len:]
+            if min_len < 15:
+                warnings.warn(
+                    f"_get_30d_correlation: insufficient overlap ({min_len}<15), returning 0.0",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                return 0.0
+            a_mean = np.mean(a)
+            b_mean = np.mean(b)
+            a_std = np.std(a, ddof=0)
+            b_std = np.std(b, ddof=0)
+            if a_std == 0.0 or b_std == 0.0:
+                return 0.0
+            cov = np.mean((a - a_mean) * (b - b_mean))
+            r = cov / (a_std * b_std)
+            return float(max(-1.0, min(1.0, r)))
+        except ImportError:
+            pass  # fall through to pure-Python
+
+        # Pure-Python Pearson (no numpy)
+        min_len = min(len(asset_prices), len(benchmark_prices))
+        a = [float(x) for x in asset_prices[-min_len:]]
+        b = [float(x) for x in benchmark_prices[-min_len:]]
+        if min_len < 15:
+            warnings.warn(
+                f"_get_30d_correlation: insufficient overlap ({min_len}<15), returning 0.0",
+                UserWarning,
+                stacklevel=2,
+            )
+            return 0.0
+        a_mean = sum(a) / min_len
+        b_mean = sum(b) / min_len
+        a_var = sum((x - a_mean) ** 2 for x in a) / min_len
+        b_var = sum((x - b_mean) ** 2 for x in b) / min_len
+        if a_var == 0.0 or b_var == 0.0:
+            return 0.0
+        cov = sum((a[i] - a_mean) * (b[i] - b_mean) for i in range(min_len)) / min_len
+        denom = (a_var * b_var) ** 0.5
+        r = cov / denom
+        return max(-1.0, min(1.0, r))
+
+    # ── Legacy fallback path (no price data available) ───────────────────────
     # Known high-correlation majors
     if pair_display in ("ETH/USDT", "ETHUSDT"):
         return 0.90
@@ -455,6 +533,8 @@ def calc_confluence(
     oi_context: dict | None = None,
     macro_context: dict | None = None,
     intermarket_context: dict | None = None,
+    asset_prices: list | None = None,
+    benchmark_prices: list | None = None,
 ) -> dict:
     """Factor-based confluence using normalized indicators, regime-aware weights, and correlation filtering.
     Preserves legacy API and raw-threshold warnings for human readability.
@@ -493,7 +573,14 @@ def calc_confluence(
     if pair.get("type") == "crypto" and btc_bias and btc_bias != "neutral" and _dir is not None:
         if "BTC" not in _pair_display:
             # Only apply BTC bias if altcoin actually correlates with BTC
-            btc_corr = _get_30d_correlation(_pair_display, "BTCUSDT")
+            # Prefer real price-series correlation; fall back to heuristic labels
+            if asset_prices is not None and benchmark_prices is not None:
+                btc_corr = _get_30d_correlation(
+                    asset_prices=asset_prices,
+                    benchmark_prices=benchmark_prices,
+                )
+            else:
+                btc_corr = _get_30d_correlation(pair_display=_pair_display, btc_symbol="BTCUSDT")
             if btc_corr > 0.80:
                 # High correlation: BTC bias matters
                 if (btc_bias == "bullish" and _dir == "LONG") or \

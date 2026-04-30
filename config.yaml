@@ -108,6 +108,10 @@ ADX_TREND_MIN_CLASS:
 # setting crypto to 10 creates a genuine 10-15 soft-penalty band.
 FACTOR_ADX_HARD_FAIL_CLASS:
   crypto: 10
+  forex: 10
+  commodity: 10
+  stock: 10
+  index: 10
 
 # Funding rate addon: baseline (0.01% per 8h) and noise band half-width.
 # Narrowed from 0.0002 to 0.0001 so typical Binance/Bybit funding deviations

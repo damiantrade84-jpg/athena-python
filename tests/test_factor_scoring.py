@@ -414,15 +414,56 @@ def test_volatility_scaler_replaces_session_multiplier():
     assert float(high_vol.get("feed_status", {}).get("vol_scaler", 1.0)) < 1.0
 
 
-def test_volume_macro_and_intermarket_context_do_not_affect_current_score():
+def test_volume_macro_and_intermarket_context_affect_score_bounded():
+    # Phase 2 parameter wiring: volume_ratio, macro_context, intermarket_context
+    # now contribute small bounded adjustments (±5% max) to the final score.
     baseline = _score(pair={"type": "stock", "display": "AAPL"})
-    with_unused_context = _score(
+
+    # Extreme volume_ratio (>1.5) → +3% boost capped
+    high_vol = _score(
         pair={"type": "stock", "display": "AAPL"},
         volume_ratio=999.0,
-        macro_context={"usd_proxy_score": -3.0},
-        intermarket_context={"drivers": [{"driver": "DXY", "summary": {"current": 1}}]},
+    )
+    # Low volume_ratio (<0.5) → -3% penalty capped
+    low_vol = _score(
+        pair={"type": "stock", "display": "AAPL"},
+        volume_ratio=0.1,
+    )
+    # risk_on macro → +2% boost
+    risk_on = _score(
+        pair={"type": "stock", "display": "AAPL"},
+        macro_context={"state": "risk_on"},
+    )
+    # risk_off macro → -2% penalty
+    risk_off = _score(
+        pair={"type": "stock", "display": "AAPL"},
+        macro_context={"state": "risk_off"},
+    )
+    # Intermarket divergence → -2% penalty
+    div = _score(
+        pair={"type": "stock", "display": "AAPL"},
+        intermarket_context={"divergence": True},
+    )
+    # Combined: all three at extremes → ±5% total cap
+    combined = _score(
+        pair={"type": "stock", "display": "AAPL"},
+        volume_ratio=999.0,
+        macro_context={"state": "risk_on"},
+        intermarket_context={"divergence": True, "divergence_score": 1.0},
     )
 
-    assert with_unused_context["final_score"] == baseline["final_score"]
-    assert with_unused_context["factor_scores"] == baseline["factor_scores"]
-    assert with_unused_context["intermarket_engine_a_delta"] == 0.0
+    _base = baseline["final_score"]
+    # volume_ratio=999 → capped at +3% boost
+    assert high_vol["final_score"] == pytest.approx(_base * 1.03, abs=1e-4)
+    # volume_ratio=0.1 → (0.1-0.5)*0.06 = -0.024 (proportional, not full -3%)
+    assert low_vol["final_score"] == pytest.approx(_base * 0.976, abs=1e-3)
+    # macro risk_on → +2%
+    assert risk_on["final_score"] == pytest.approx(_base * 1.02, abs=1e-4)
+    # macro risk_off → -2%
+    assert risk_off["final_score"] == pytest.approx(_base * 0.98, abs=1e-4)
+    # intermarket divergence → -2%
+    assert div["final_score"] == pytest.approx(_base * 0.98, abs=1e-4)
+    # Combined: +3% vol +2% macro -2% inter = +3% (capped at +5%)
+    assert combined["final_score"] == pytest.approx(_base * 1.03, abs=1e-4)
+    # factor_scores unchanged (adjustments apply to final_score only)
+    assert high_vol["factor_scores"] == baseline["factor_scores"]
