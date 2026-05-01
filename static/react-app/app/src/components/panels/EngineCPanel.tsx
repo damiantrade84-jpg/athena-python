@@ -1,71 +1,241 @@
-import { useState, useCallback } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useStore } from '@/hooks/useStore';
 import { useApiPoll, useApiPost } from '@/hooks/useApiData';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Progress } from '@/components/ui/progress';
-import { ErrorBanner, SqnBadge } from '@/components/shared';
-import { GitMerge, Play, BarChart3, TrendingUp } from 'lucide-react';
-import type { Signal } from '@/types';
+import { ErrorBanner } from '@/components/shared';
+import { GitMerge, Play, BarChart3, Layers, Activity, Zap, Eye } from 'lucide-react';
+import { fmtNum, toNum } from '@/lib/utils';
+import { fmtPrice } from '@/lib/athenaFormat';
+import type {
+  EngineCConsensusRow,
+  EngineCScanResponse,
+  EngineCBacktestResponse,
+  CompareResponse,
+  PairsResponse,
+  PairListEntry,
+} from '@/types/athena';
+import { AreaChart, Area, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
-interface ConsensusResult {
-  signal?: Signal;
-  engine_a_weight: number;
-  engine_b_weight: number;
-  gating_weight: number;
-  regime: string;
+const ASSET_OPTIONS: { value: string; label: string }[] = [
+  { value: 'all', label: 'All assets' },
+  { value: 'forex', label: 'Forex' },
+  { value: 'crypto', label: 'Crypto' },
+  { value: 'commodity', label: 'Commodities' },
+  { value: 'index', label: 'Indices' },
+  { value: 'stock', label: 'Stocks' },
+  { value: 'etf', label: 'ETFs' },
+];
+
+const STYLE_OPTIONS: { value: string; label: string }[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'scalp', label: 'Scalp' },
+  { value: 'intraday', label: 'Intraday' },
+  { value: 'swing', label: 'Swing' },
+];
+
+type BucketKey = 'aligned' | 'a_only' | 'b_only' | 'conflict' | 'skipped';
+
+const BUCKET_LABELS: Record<BucketKey, string> = {
+  aligned: 'ALIGNED',
+  a_only: 'A_ONLY',
+  b_only: 'B_ONLY',
+  conflict: 'CONFLICT',
+  skipped: 'SKIPPED',
+};
+
+function bucketBadgeClass(b: BucketKey): string {
+  switch (b) {
+    case 'aligned': return 'badge-long';
+    case 'a_only': return 'badge-neutral';
+    case 'b_only': return 'badge-neutral';
+    case 'conflict': return 'badge-short';
+    default: return 'badge-neutral';
+  }
 }
 
-interface BacktestConsensusResult {
-  sqn: number;
-  win_rate: number;
-  profit_factor: number;
-  total_trades: number;
-  sharpe: number;
-  sortino: number;
-  max_drawdown: number;
-  equity_curve: { date: string; equity: number }[];
+function tierBadgeClass(tier?: string): string {
+  switch ((tier || '').toUpperCase()) {
+    case 'HIGH': return 'badge-long';
+    case 'MEDIUM': return 'badge-neutral';
+    case 'LOW': return 'badge-neutral';
+    case 'WATCHLIST': return 'badge-neutral';
+    case 'SKIP': return 'badge-short';
+    default: return 'badge-neutral';
+  }
 }
 
-interface StabilityResult {
-  pair: string;
-  stability_score: number;
-  engine_a_agree: number;
-  engine_b_agree: number;
+function flattenPairs(p: PairsResponse | null | undefined): PairListEntry[] {
+  if (!p) return [];
+  if (Array.isArray(p.pairs)) return p.pairs;
+
+  // New /api/pairs format: { groups: { Forex: [{sym, label, enabled}, ...], ... } }
+  const grouped = (p as Record<string, unknown>).groups;
+  if (grouped && typeof grouped === 'object') {
+    const out: PairListEntry[] = [];
+    const typeMap: Record<string, string> = {
+      Forex: 'forex',
+      Crypto: 'crypto',
+      'US Stocks': 'stock',
+      Indices: 'index',
+      Commodities: 'commodity',
+      ETFs: 'etf',
+    };
+    for (const [label, items] of Object.entries(grouped)) {
+      const type = typeMap[label] || label.toLowerCase();
+      if (Array.isArray(items)) {
+        for (const item of items) {
+          if (item && typeof item === 'object') {
+            out.push({
+              symbol: String((item as Record<string, unknown>).sym || ''),
+              display: String((item as Record<string, unknown>).label || (item as Record<string, unknown>).sym || ''),
+              type,
+              enabled: Boolean((item as Record<string, unknown>).enabled),
+            });
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  // Legacy bucketed shape
+  const out: PairListEntry[] = [];
+  const legacyGroups: { list?: string[]; type: string }[] = [
+    { list: p.forex, type: 'forex' },
+    { list: p.crypto, type: 'crypto' },
+    { list: p.stocks, type: 'stock' },
+    { list: p.indices, type: 'index' },
+    { list: p.commodities, type: 'commodity' },
+    { list: p.etf, type: 'etf' },
+    { list: p.jse, type: 'stock' },
+  ];
+  for (const g of legacyGroups) {
+    for (const sym of g.list || []) {
+      out.push({ symbol: sym, display: sym, type: g.type });
+    }
+  }
+  return out;
 }
 
 export default function EngineCPanel() {
   const { showToast } = useStore();
-  const [pair, setPair] = useState('EURUSD');
-  const [days, setDays] = useState(30);
-  const [consensusResult, setConsensusResult] = useState<ConsensusResult | null>(null);
-  const [backtestResult, setBacktestResult] = useState<BacktestConsensusResult | null>(null);
+  const [assetClass, setAssetClass] = useState<string>('forex');
+  const [style, setStyle] = useState<string>('auto');
+  const [activeBucket, setActiveBucket] = useState<BucketKey>('aligned');
+  const [scanResult, setScanResult] = useState<EngineCScanResponse | null>(null);
+  const [selected, setSelected] = useState<EngineCConsensusRow | null>(null);
 
-  const { post: postConsensus, loading: consensusLoading } = useApiPost<{ signals: Signal[]; scan_time: number; pairs_scanned: number }>();
-  const { post: postBacktest, loading: backtestLoading } = useApiPost<BacktestConsensusResult>();
-  const { data: stability, loading: stabilityLoading, error: stabilityError } = useApiPoll<StabilityResult[]>('/api/signal-stability', 0);
+  const [comparePair, setComparePair] = useState<string>('EURUSD');
+  const [compareStyle, setCompareStyle] = useState<string>('auto');
+  const [compareResult, setCompareResult] = useState<CompareResponse | null>(null);
 
-  const runConsensus = useCallback(async () => {
-    const result = await postConsensus('/api/scan', { asset_class: 'forex', style: 'consensus' });
-    if (result?.signals?.[0]) {
-      setConsensusResult({
-        signal: result.signals[0],
-        engine_a_weight: 0.5,
-        engine_b_weight: 0.4,
-        gating_weight: 0.1,
-        regime: 'trending',
-      });
+  const [scanPairFilter, setScanPairFilter] = useState('');
+  const [comparePairBulk, setComparePairBulk] = useState('');
+  const [bulkCompareResults, setBulkCompareResults] = useState<CompareResponse[]>([]);
+
+  const [btPair, setBtPair] = useState<string>('EURUSD');
+  const [btResult, setBtResult] = useState<EngineCBacktestResponse | null>(null);
+
+  const { data: pairsData } = useApiPoll<PairsResponse>('/api/pairs', 0);
+  const allPairs = useMemo(() => flattenPairs(pairsData), [pairsData]);
+
+  const { post: postScan, loading: scanning, error: scanError } = useApiPost<EngineCScanResponse>();
+  const { post: postCompare, loading: comparing } = useApiPost<CompareResponse>();
+  const { post: postBacktest, loading: backtesting } = useApiPost<EngineCBacktestResponse>();
+
+  const runScan = useCallback(async () => {
+    setSelected(null);
+    const ac = assetClass === 'all' ? '' : assetClass;
+    const tokens = scanPairFilter.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
+    const body: Record<string, unknown> = { assetClass: ac, style };
+    if (tokens.length > 0) body.pairs = tokens;
+    const result = await postScan('/api/engine-c-scan', body);
+    if (!result || result.error) {
+      showToast(`Engine C scan failed: ${result?.error || 'unknown'}`, 'error');
+      return;
     }
-  }, [postConsensus]);
+    setScanResult(result);
+    const counts = (['aligned', 'a_only', 'b_only', 'conflict', 'skipped'] as BucketKey[]).map(
+      (b) => `${BUCKET_LABELS[b]}=${(result[b] || []).length}`,
+    );
+    showToast(`Engine C: ${counts.join(' · ')}`, 'success');
+    if ((result.aligned || []).length === 0) {
+      const fallback: BucketKey = (['a_only', 'b_only', 'conflict', 'skipped'] as BucketKey[]).find(
+        (b) => (result[b] || []).length > 0,
+      ) || 'aligned';
+      setActiveBucket(fallback);
+    } else {
+      setActiveBucket('aligned');
+    }
+  }, [assetClass, style, scanPairFilter, postScan, showToast]);
+
+  const runCompareBulk = useCallback(async () => {
+    const tokens = comparePairBulk.split(/[,;\n\r]+/).map((s) => s.trim()).filter(Boolean);
+    if (!tokens.length) {
+      showToast('Enter comma-separated symbols for bulk compare.', 'info');
+      return;
+    }
+    setBulkCompareResults([]);
+    const out: CompareResponse[] = [];
+    for (const tok of tokens) {
+      const seed = { symbol: tok, pair: tok, display: tok };
+      const row = await postCompare('/api/compare-engines', { signal: seed, style: compareStyle });
+      if (row && !row.error) out.push(row);
+    }
+    setBulkCompareResults(out);
+    showToast(`Compare finished: ${out.length}/${tokens.length} OK`, out.length ? 'success' : 'error');
+  }, [comparePairBulk, compareStyle, postCompare, showToast]);
+
+  const runCompare = useCallback(async () => {
+    if (!comparePair) return;
+    const seed = { symbol: comparePair, pair: comparePair, display: comparePair };
+    const result = await postCompare('/api/compare-engines', { signal: seed, style: compareStyle });
+    if (!result || result.error) {
+      showToast(`Compare failed: ${result?.error || 'unknown'}`, 'error');
+      return;
+    }
+    setCompareResult(result);
+    showToast(`Compare ${comparePair}: ${result.summary?.verdict || 'done'}`, 'success');
+  }, [comparePair, compareStyle, postCompare, showToast]);
 
   const runBacktest = useCallback(async () => {
-    const result = await postBacktest('/api/backtest-consensus', { pair, days });
-    if (result) setBacktestResult(result);
-  }, [pair, days, postBacktest]);
+    if (!btPair) return;
+    const result = await postBacktest('/api/backtest-consensus', { pair: btPair });
+    if (!result || result.error) {
+      showToast(`Backtest failed: ${result?.error || 'unknown'}`, 'error');
+      return;
+    }
+    setBtResult(result);
+    showToast(`Backtest ${btPair}: ${result.trades ?? 0} trades`, 'success');
+  }, [btPair, postBacktest, showToast]);
+
+  const buckets: Record<BucketKey, EngineCConsensusRow[]> = {
+    aligned: scanResult?.aligned || [],
+    a_only: scanResult?.a_only || [],
+    b_only: scanResult?.b_only || [],
+    conflict: scanResult?.conflict || [],
+    skipped: scanResult?.skipped || [],
+  };
+
+  const equityChart = useMemo(() => {
+    const ec = btResult?.equity_curve;
+    if (!Array.isArray(ec) || ec.length === 0) return [] as { idx: number; equity: number }[];
+    if (typeof ec[0] === 'number') {
+      return (ec as number[]).map((equity, idx) => ({ idx, equity }));
+    }
+    return (ec as { idx?: number; equity: number; date?: string }[]).map((p, idx) => ({
+      idx: typeof p.idx === 'number' ? p.idx : idx,
+      equity: Number(p.equity) || 0,
+    }));
+  }, [btResult?.equity_curve]);
 
   return (
     <div className="space-y-5">
@@ -74,16 +244,19 @@ export default function EngineCPanel() {
         <CardContent className="p-4">
           <div className="flex items-center gap-2 mb-2">
             <GitMerge className="w-4 h-4 text-primary" />
-            <h3 className="text-sm font-semibold">Engine C — Consensus Engine</h3>
+            <h3 className="text-sm font-semibold">Engine C — Consensus Layer</h3>
           </div>
           <p className="text-xs text-muted-foreground">
-            Combines Engine A (factor scoring) and Engine B (market structure) with regime-conditional weighting.
-            Signals only pass when both engines agree and gating conditions are met.
+            Combines Engine A (factor scoring) and Engine B (naked structure) into a single decision per pair.
+            Outputs verdicts <span className="font-mono">ALIGNED</span> / <span className="font-mono">A_ONLY</span> /
+            <span className="font-mono"> B_ONLY</span> / <span className="font-mono">CONFLICT</span> /
+            <span className="font-mono"> SKIPPED</span>, with regime-blended weights, structural SL/TP, conviction tiers and
+            optional Vision overlay.
           </p>
         </CardContent>
       </Card>
 
-      {/* Run Consensus */}
+      {/* Run scan */}
       <Card className="border-border/60 bg-card/50">
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-semibold flex items-center gap-2">
@@ -91,47 +264,251 @@ export default function EngineCPanel() {
             Run Consensus Scan
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center gap-3">
-            <Input
-              value={pair}
-              onChange={e => setPair(e.target.value.toUpperCase())}
-              className="w-32 h-8 text-xs font-mono"
-              placeholder="Pair"
+        <CardContent className="space-y-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Select value={assetClass} onValueChange={setAssetClass}>
+              <SelectTrigger className="w-[140px] h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {ASSET_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={style} onValueChange={setStyle}>
+              <SelectTrigger className="w-[120px] h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {STYLE_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Button size="sm" className="h-8 gap-1 text-xs" onClick={runScan} disabled={scanning}>
+              <Zap className={scanning ? 'w-3.5 h-3.5 animate-pulse' : 'w-3.5 h-3.5'} />
+              {scanning ? 'Engine C scanning…' : 'Engine C Scan'}
+            </Button>
+          </div>
+          <div className="space-y-1">
+            <p className="text-[10px] uppercase text-muted-foreground">Restrict to pairs (optional)</p>
+            <Textarea
+              value={scanPairFilter}
+              onChange={(e) => setScanPairFilter(e.target.value)}
+              placeholder="Comma or space separated, e.g. EUR/USD, GBP/USD, XAU/USD — empty = entire asset class"
+              className="min-h-[56px] text-xs font-mono"
             />
-            <Button size="sm" className="h-8 text-xs" onClick={runConsensus} disabled={consensusLoading}>
-              {consensusLoading ? 'Scanning...' : 'Run Consensus'}
+          </div>
+
+          {scanError && <ErrorBanner message={scanError} onRetry={runScan} />}
+
+          {/* Bucket counts */}
+          {scanResult && (
+            <div className="grid grid-cols-5 gap-2">
+              {(['aligned', 'a_only', 'b_only', 'conflict', 'skipped'] as BucketKey[]).map((b) => (
+                <button
+                  type="button"
+                  key={b}
+                  className={`rounded-md p-2 text-left border transition-colors ${
+                    activeBucket === b ? 'border-primary/60 bg-primary/10' : 'border-border/60 bg-muted/30'
+                  }`}
+                  onClick={() => setActiveBucket(b)}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{BUCKET_LABELS[b]}</span>
+                    <Badge className={`${bucketBadgeClass(b)} text-[10px]`}>{buckets[b].length}</Badge>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Buckets list + selected detail */}
+      {scanResult && (
+        <div className="grid grid-cols-5 gap-4">
+          <Card className="col-span-3 border-border/60 bg-card/50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-semibold flex items-center justify-between">
+                <span>{BUCKET_LABELS[activeBucket]} ({buckets[activeBucket].length})</span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ScrollArea className="h-[480px] pr-2">
+                {buckets[activeBucket].length === 0 ? (
+                  <div className="text-xs text-muted-foreground text-center py-12">
+                    No rows in {BUCKET_LABELS[activeBucket]}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {buckets[activeBucket].map((row, i) => (
+                      <ConsensusRowCard
+                        key={`${row.display || row.symbol || row.pair || i}-${i}`}
+                        row={row}
+                        bucket={activeBucket}
+                        selected={selected === row}
+                        onSelect={setSelected}
+                      />
+                    ))}
+                  </div>
+                )}
+              </ScrollArea>
+            </CardContent>
+          </Card>
+
+          <Card className="col-span-2 border-border/60 bg-card/50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <Activity className="w-4 h-4 text-primary" />
+                Consensus Detail
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {selected ? (
+                <ScrollArea className="h-[480px] pr-2">
+                  <ConsensusDetail row={selected} />
+                </ScrollArea>
+              ) : (
+                <div className="flex flex-col items-center justify-center h-[480px] text-muted-foreground">
+                  <Layers className="w-8 h-8 mb-3 opacity-40" />
+                  <p className="text-sm">Select a row to inspect consensus components</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Compare engines per pair */}
+      <Card className="border-border/60 bg-card/50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <Eye className="w-4 h-4 text-primary" />
+            Compare Engines (single pair)
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Select value={comparePair} onValueChange={setComparePair}>
+              <SelectTrigger className="w-[180px] h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {(allPairs || []).slice(0, 200).map((p) => (
+                  <SelectItem key={p.symbol || p.display} value={p.symbol || p.display}>
+                    {p.display || p.symbol}
+                  </SelectItem>
+                ))}
+                {(allPairs || []).length === 0 && (
+                  <SelectItem value="EURUSD">EURUSD</SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+            <Select value={compareStyle} onValueChange={setCompareStyle}>
+              <SelectTrigger className="w-[120px] h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {STYLE_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Button size="sm" className="h-8 gap-1 text-xs" onClick={runCompare} disabled={comparing}>
+              {comparing ? 'Comparing…' : 'Run Compare'}
             </Button>
           </div>
 
-          {consensusResult?.signal && (
-            <div className="p-4 rounded-md bg-muted/30 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-mono font-bold">{consensusResult.signal.pair}</span>
-                  <Badge className={consensusResult.signal.direction === 'LONG' ? 'badge-long' : 'badge-short'}>
-                    {consensusResult.signal.direction}
-                  </Badge>
-                </div>
-                <Badge variant="outline" className="text-[10px]">Confidence: {consensusResult.signal.confidence}%</Badge>
-              </div>
-              <div className="grid grid-cols-3 gap-2 text-xs">
-                <div className="p-2 rounded bg-blue-500/10">
-                  <p className="text-[10px] text-muted-foreground">Engine A</p>
-                  <p className="font-mono font-bold">{(consensusResult.engine_a_weight * 100).toFixed(0)}%</p>
-                </div>
-                <div className="p-2 rounded bg-purple-500/10">
-                  <p className="text-[10px] text-muted-foreground">Engine B</p>
-                  <p className="font-mono font-bold">{(consensusResult.engine_b_weight * 100).toFixed(0)}%</p>
-                </div>
-                <div className="p-2 rounded bg-amber-500/10">
-                  <p className="text-[10px] text-muted-foreground">Gating</p>
-                  <p className="font-mono font-bold">{(consensusResult.gating_weight * 100).toFixed(0)}%</p>
+          {compareResult && (
+            <div className="grid grid-cols-3 gap-3">
+              <div className="p-3 rounded-md bg-muted/30">
+                <p className="text-[10px] uppercase text-muted-foreground">Verdict</p>
+                <p className={`text-sm font-mono font-bold mt-1 ${
+                  compareResult.summary?.verdict === 'ALIGNED' ? 'text-long'
+                  : compareResult.summary?.verdict === 'CONFLICT' ? 'text-short'
+                  : 'text-foreground'
+                }`}>
+                  {compareResult.summary?.verdict || '—'}
+                </p>
+                <div className="mt-2 text-[10px] space-y-1 text-muted-foreground">
+                  <div>Same direction: {compareResult.summary?.sameDirection ? 'YES' : 'no'}</div>
+                  <div>Structure aligned: {compareResult.summary?.structureAligned ? 'YES' : 'no'}</div>
+                  <div>Macro aligned: {compareResult.summary?.macroAligned ? 'YES' : 'no'}</div>
+                  <div>Engine A style: {compareResult.summary?.engineAStyle || '—'}</div>
+                  <div>Engine B style: {compareResult.summary?.engineBStyle || '—'}</div>
                 </div>
               </div>
-              <div className="text-[10px] text-muted-foreground">Regime: <span className="text-foreground font-mono">{consensusResult.regime}</span></div>
+              <div className="p-3 rounded-md bg-muted/30">
+                <p className="text-[10px] uppercase text-muted-foreground">Engine A</p>
+                {compareResult.engineA ? (
+                  <div className="text-xs space-y-1 mt-1">
+                    <div>
+                      <span className="font-mono font-bold">{compareResult.engineA.direction || '—'}</span>
+                      <span className="ml-2 text-muted-foreground">
+                        {fmtNum(compareResult.engineA.confluenceScore ?? compareResult.engineA.score, 2)}
+                        {' / '}
+                        {fmtNum(compareResult.engineA.maxScore ?? compareResult.engineA.maxScoreOverride, 1)}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-muted-foreground">
+                      Entry {fmtPrice(compareResult.engineA.entry ?? compareResult.engineA.price, comparePair, compareResult.engineA.type)} ·
+                      SL {fmtPrice(compareResult.engineA.sl, comparePair, compareResult.engineA.type)} ·
+                      TP {fmtPrice(compareResult.engineA.tp ?? compareResult.engineA.tp1, comparePair, compareResult.engineA.type)}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground mt-1">No A signal</p>
+                )}
+              </div>
+              <div className="p-3 rounded-md bg-muted/30">
+                <p className="text-[10px] uppercase text-muted-foreground">Engine B</p>
+                {compareResult.engineB ? (
+                  <div className="text-xs space-y-1 mt-1">
+                    <div>
+                      <span className="font-mono font-bold">{compareResult.engineB.direction || '—'}</span>
+                      <span className="ml-2 text-muted-foreground">
+                        {fmtNum(compareResult.engineB.score, 2)}
+                        {' (passed: '}
+                        {compareResult.engineB.passed ? 'yes' : 'no'}
+                        {')'}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-muted-foreground">
+                      {compareResult.summary?.engineBMinScore != null && `min: ${fmtNum(compareResult.summary.engineBMinScore, 2)} · `}
+                      RR {fmtNum(compareResult.engineB.rr, 2)}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground mt-1">No B signal</p>
+                )}
+              </div>
             </div>
           )}
+
+          <div className="border-t border-border/40 pt-3 mt-2 space-y-2">
+            <p className="text-[10px] uppercase text-muted-foreground">Bulk compare (one request per symbol)</p>
+            <Textarea
+              value={comparePairBulk}
+              onChange={(e) => setComparePairBulk(e.target.value)}
+              placeholder="EUR/USD, GBP/USD, XAU/USD ..."
+              className="min-h-[52px] text-xs font-mono"
+            />
+            <Button size="sm" variant="outline" className="h-8 text-xs" onClick={runCompareBulk} disabled={comparing}>
+              Run bulk compare
+            </Button>
+            {bulkCompareResults.length > 0 && (
+              <ScrollArea className="h-[180px] border border-border/40 rounded-md">
+                <table className="w-full text-left text-[11px]">
+                  <thead>
+                    <tr className="border-b border-border/40 bg-muted/30">
+                      <th className="p-2 text-muted-foreground">#</th>
+                      <th className="p-2 text-muted-foreground">Verdict</th>
+                      <th className="p-2 text-muted-foreground">A dir</th>
+                      <th className="p-2 text-muted-foreground">B dir</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bulkCompareResults.map((r, i) => (
+                      <tr key={i} className="border-b border-border/20">
+                        <td className="p-2 font-mono">{i + 1}</td>
+                        <td className="p-2 font-mono">{r.summary?.verdict || '—'}</td>
+                        <td className="p-2 font-mono">{r.engineA?.direction || '—'}</td>
+                        <td className="p-2 font-mono">{r.engineB?.direction || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </ScrollArea>
+            )}
+          </div>
         </CardContent>
       </Card>
 
@@ -140,64 +517,59 @@ export default function EngineCPanel() {
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-semibold flex items-center gap-2">
             <BarChart3 className="w-4 h-4 text-primary" />
-            Consensus Backtest
+            Engine C Backtest
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center gap-3">
-            <Input value={pair} onChange={e => setPair(e.target.value.toUpperCase())} className="w-32 h-8 text-xs font-mono" placeholder="Pair" />
-            <Input type="number" value={days} onChange={e => setDays(parseInt(e.target.value))} className="w-24 h-8 text-xs font-mono" placeholder="Days" />
-            <Button size="sm" className="h-8 text-xs" onClick={runBacktest} disabled={backtestLoading}>
-              {backtestLoading ? 'Running...' : 'Run Backtest'}
+        <CardContent className="space-y-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Input
+              value={btPair}
+              onChange={(e) => setBtPair(e.target.value.toUpperCase())}
+              className="w-32 h-8 text-xs font-mono"
+              placeholder="Pair"
+            />
+            <Button size="sm" className="h-8 gap-1 text-xs" onClick={runBacktest} disabled={backtesting}>
+              {backtesting ? 'Backtesting…' : 'Run Backtest'}
             </Button>
           </div>
-
-          {backtestResult && (
-            <div className="grid grid-cols-6 gap-3">
-              <StatBox title="SQN" value={backtestResult.sqn.toFixed(2)} sqn />
-              <StatBox title="Win Rate" value={`${(backtestResult.win_rate * 100).toFixed(1)}%`} />
-              <StatBox title="Profit Factor" value={backtestResult.profit_factor.toFixed(2)} />
-              <StatBox title="Trades" value={backtestResult.total_trades} />
-              <StatBox title="Sharpe" value={backtestResult.sharpe.toFixed(2)} />
-              <StatBox title="Max DD" value={`${(backtestResult.max_drawdown * 100).toFixed(1)}%`} />
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Signal Stability */}
-      <Card className="border-border/60 bg-card/50">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-semibold flex items-center gap-2">
-            <TrendingUp className="w-4 h-4 text-primary" />
-            Signal Stability
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {stabilityLoading ? (
-            <Skeleton className="h-20 w-full" />
-          ) : stabilityError ? (
-            <ErrorBanner message={stabilityError} />
-          ) : stability && stability.length > 0 ? (
-            <ScrollArea className="h-[300px]">
-              <div className="space-y-2">
-                {stability.map(s => (
-                  <div key={s.pair} className="flex items-center justify-between p-2 rounded-md bg-muted/30">
-                    <span className="text-xs font-mono font-bold">{s.pair}</span>
-                    <div className="flex items-center gap-4 flex-1 mx-4">
-                      <Progress value={s.stability_score} className="h-1.5 flex-1" />
-                      <span className="text-xs font-mono">{s.stability_score.toFixed(0)}%</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                      <span>A:{s.engine_a_agree}</span>
-                      <span>B:{s.engine_b_agree}</span>
-                    </div>
-                  </div>
-                ))}
+          {backtesting && <Skeleton className="h-32 w-full" />}
+          {btResult && !backtesting && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-6 gap-3">
+                <KpiBox title="Trades" value={btResult.trades ?? 0} />
+                <KpiBox title="Win rate" value={btResult.win_rate != null ? `${fmtNum(btResult.win_rate, 1)}%` : '—'} />
+                <KpiBox
+                  title="Profit factor"
+                  value={btResult.profit_factor == null ? '—' : fmtNum(btResult.profit_factor, 2)}
+                  accent={(btResult.profit_factor ?? 0) >= 1.2 ? 'text-long' : 'text-warning'}
+                />
+                <KpiBox title="SQN" value={btResult.sqn == null ? '—' : fmtNum(btResult.sqn, 2)} />
+                <KpiBox title="Sharpe" value={btResult.sharpe == null ? '—' : fmtNum(btResult.sharpe, 2)} />
+                <KpiBox title="Max DD" value={btResult.max_dd_pct == null ? '—' : `${fmtNum(btResult.max_dd_pct, 1)}%`} />
               </div>
-            </ScrollArea>
-          ) : (
-            <div className="text-xs text-muted-foreground">No stability data</div>
+              {equityChart.length > 0 && (
+                <div className="h-[220px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={equityChart} margin={{ left: 0, right: 0, top: 4, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="ecBtFill" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.45} />
+                          <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <XAxis dataKey="idx" hide />
+                      <YAxis domain={['auto', 'auto']} tick={{ fontSize: 10 }} width={50} />
+                      <Tooltip
+                        contentStyle={{ background: 'hsl(var(--popover))', border: '1px solid hsl(var(--border))', fontSize: 11 }}
+                        formatter={(v: number) => [`$${fmtNum(v, 2)}`, 'Equity']}
+                      />
+                      <Area type="monotone" dataKey="equity" stroke="hsl(var(--primary))" fill="url(#ecBtFill)" strokeWidth={2} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+              {btResult.notes && <p className="text-[10px] text-muted-foreground">{btResult.notes}</p>}
+            </div>
           )}
         </CardContent>
       </Card>
@@ -205,16 +577,198 @@ export default function EngineCPanel() {
   );
 }
 
-function StatBox({ title, value, sqn }: { title: string; value: string | number; sqn?: boolean }) {
-  let colorClass = '';
-  if (sqn && typeof value === 'string') {
-    const n = parseFloat(value);
-    colorClass = n >= 2 ? 'text-long' : n >= 1 ? 'text-warning' : 'text-short';
-  }
+function ConsensusRowCard({
+  row, bucket, selected, onSelect,
+}: {
+  row: EngineCConsensusRow;
+  bucket: BucketKey;
+  selected: boolean;
+  onSelect: (r: EngineCConsensusRow) => void;
+}) {
+  const dir = String(row.direction || '').toUpperCase();
+  const long = dir === 'LONG' || dir === 'BUY';
+  const conviction = toNum(row.conviction);
+  const aNorm = row.components?.a_norm;
+  const bNorm = row.components?.b_norm;
+  const tier = row.tier || 'SKIP';
+  const verdict = row.verdict || '—';
+  const display = row.display || row.symbol || row.pair || '—';
+
+  return (
+    <button
+      type="button"
+      className={`w-full text-left p-3 rounded-md border transition-colors ${
+        selected ? 'border-primary/60 bg-primary/10' : 'border-border/60 bg-muted/30 hover:bg-muted/50'
+      }`}
+      onClick={() => onSelect(row)}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-xs font-mono font-bold truncate">{display}</span>
+          {row.direction && (
+            <Badge className={long ? 'badge-long' : 'badge-short'}>{dir}</Badge>
+          )}
+          <Badge variant="outline" className="text-[10px] uppercase">{verdict}</Badge>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge className={`${tierBadgeClass(tier)} text-[10px]`}>{tier}</Badge>
+          <Badge className={`${bucketBadgeClass(bucket)} text-[10px]`}>{BUCKET_LABELS[bucket]}</Badge>
+        </div>
+      </div>
+
+      <div className="mt-2 grid grid-cols-4 gap-2 text-[10px] text-muted-foreground">
+        <div>conv {fmtNum(conviction, 2)}</div>
+        <div>A {fmtNum(aNorm, 2)}</div>
+        <div>B {fmtNum(bNorm, 2)}</div>
+        <div>RR {fmtNum(row.rr, 2)}</div>
+      </div>
+
+      {bucket === 'skipped' && (row.reason || row.detail) && (
+        <p className="mt-1 text-[10px] text-muted-foreground italic truncate">
+          {row.reason || row.detail}
+        </p>
+      )}
+      {row.decision_state_reason && bucket !== 'skipped' && (
+        <p className="mt-1 text-[10px] text-warning truncate">
+          {row.decision_state}: {row.decision_state_reason}
+        </p>
+      )}
+    </button>
+  );
+}
+
+function ConsensusDetail({ row }: { row: EngineCConsensusRow }) {
+  const display = row.display || row.symbol || row.pair || '—';
+  const aNorm = row.components?.a_norm;
+  const bNorm = row.components?.b_norm;
+  return (
+    <div className="space-y-3">
+      <div className="p-3 rounded-md bg-muted/30 space-y-2">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-mono font-bold">{display}</p>
+          <Badge variant="outline" className="text-[10px]">{row.verdict}</Badge>
+        </div>
+        <div className="text-[10px] text-muted-foreground">
+          Direction: {row.direction || '—'} ·
+          Tier: {row.tier || '—'} ·
+          Decision: {row.decision_state || '—'}
+          {row.decision_state_reason ? ` (${row.decision_state_reason})` : ''}
+        </div>
+      </div>
+
+      <Tabs defaultValue="levels" className="w-full">
+        <TabsList className="grid grid-cols-4 w-full">
+          <TabsTrigger value="levels">Levels</TabsTrigger>
+          <TabsTrigger value="components">A/B</TabsTrigger>
+          <TabsTrigger value="weights">Weights</TabsTrigger>
+          <TabsTrigger value="diag">Diag</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="levels" className="mt-3">
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <Row k="Entry" v={fmtPrice(row.entry, row.pair, row.type)} />
+            <Row k="SL" v={`${fmtPrice(row.sl, row.pair, row.type)}${row.sl_method ? ` · ${row.sl_method}` : ''}`} accent="short" />
+            <Row k="TP" v={`${fmtPrice(row.tp, row.pair, row.type)}${row.tp_method ? ` · ${row.tp_method}` : ''}`} accent="long" />
+            <Row k="RR" v={fmtNum(row.rr, 2)} />
+            <Row k="ATR" v={fmtNum(row.atr, 6)} />
+            <Row k="Conviction" v={fmtNum(row.conviction, 3)} />
+            <Row k="Sizing override" v={fmtNum(row.sizing_override, 2)} />
+            <Row k="Style" v={String(row.style || '—')} />
+            <Row k="Regime" v={String(row.regime || '—')} />
+            <Row k="A SL" v={fmtPrice(row.sl_a, row.pair, row.type)} />
+            <Row k="B SL" v={fmtPrice(row.sl_b, row.pair, row.type)} />
+            <Row k="Score group" v={String(row.scoreGroup || '—')} />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="components" className="mt-3">
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <Row k="A norm" v={fmtNum(aNorm, 3)} />
+            <Row k="A direction" v={String(row.components?.a_direction || '—')} />
+            <Row k="A has signal" v={row.components?.a_has_signal ? 'yes' : 'no'} />
+            <Row k="A COT active" v={row.components?.a_cot_active ? 'yes' : 'no'} />
+            <Row k="B norm" v={fmtNum(bNorm, 3)} />
+            <Row k="B direction" v={String(row.components?.b_direction || '—')} />
+            <Row k="B has signal" v={row.components?.b_has_signal ? 'yes' : 'no'} />
+            <Row k="B checklist" v={row.components?.b_checklist_passed ? 'passed' : 'failed'} />
+            <Row k="B BOS" v={row.components?.b_bos ? 'yes' : 'no'} />
+            <Row k="B OB at zone" v={row.components?.b_ob_at_zone ? 'yes' : 'no'} />
+            <Row k="B sequence" v={String(row.components?.b_sequence || '—')} />
+            <Row k="B diagnostic" v={String(row.components?.b_signal_diagnostic || '—')} />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="weights" className="mt-3 space-y-2">
+          {row.engine_weights && Object.keys(row.engine_weights).length > 0 ? (
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              {Object.entries(row.engine_weights).map(([k, v]) => (
+                <Row key={k} k={k} v={fmtNum(v, 3)} />
+              ))}
+            </div>
+          ) : (
+            <p className="text-[11px] text-muted-foreground">No weights returned for this verdict.</p>
+          )}
+          {row.engine_base_weights && Object.keys(row.engine_base_weights).length > 0 && (
+            <>
+              <p className="text-[10px] uppercase text-muted-foreground mt-2">Base (regime)</p>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                {Object.entries(row.engine_base_weights).map(([k, v]) => (
+                  <Row key={`b-${k}`} k={k} v={fmtNum(v, 3)} />
+                ))}
+              </div>
+            </>
+          )}
+          <p className="text-[10px] text-muted-foreground mt-2">
+            Intermarket multiplier: <span className="font-mono">{fmtNum(row.intermarket_multiplier, 3)}</span>
+          </p>
+        </TabsContent>
+
+        <TabsContent value="diag" className="mt-3 space-y-2">
+          {row.opposing_high_confidence && (
+            <p className="text-[11px] text-warning">Opposing high-confidence signal flagged.</p>
+          )}
+          {row.vision_applied && (
+            <div className="text-[11px]">
+              Vision: <span className="font-mono">{row.vision_action || '—'}</span> · rating{' '}
+              <span className="font-mono">{row.vision_rating || '—'}</span>
+              {row.vision_sl_flag && <span> · SL {row.vision_sl_flag}</span>}
+              {row.vision_tp_flag && <span> · TP {row.vision_tp_flag}</span>}
+            </div>
+          )}
+          {row.disagreement_diagnosis && Object.keys(row.disagreement_diagnosis).length > 0 && (
+            <pre className="text-[10px] font-mono whitespace-pre-wrap p-2 bg-muted/20 rounded border border-border/40 max-h-72 overflow-y-auto">
+              {JSON.stringify(row.disagreement_diagnosis, null, 2)}
+            </pre>
+          )}
+          {row.intermarket_confirmation && Object.keys(row.intermarket_confirmation).length > 0 && (
+            <details className="text-[10px]">
+              <summary className="cursor-pointer text-muted-foreground">Intermarket confirmation</summary>
+              <pre className="font-mono whitespace-pre-wrap p-2 bg-muted/20 rounded border border-border/40 max-h-72 overflow-y-auto mt-1">
+                {JSON.stringify(row.intermarket_confirmation, null, 2)}
+              </pre>
+            </details>
+          )}
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+function Row({ k, v, accent }: { k: string; v: string | number | null | undefined; accent?: 'long' | 'short' }) {
+  const cls = accent === 'long' ? 'text-long' : accent === 'short' ? 'text-short' : 'text-foreground';
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-[10px] uppercase text-muted-foreground">{k}</span>
+      <span className={`font-mono ${cls}`}>{v == null || v === '' ? '—' : v}</span>
+    </div>
+  );
+}
+
+function KpiBox({ title, value, accent }: { title: string; value: string | number; accent?: string }) {
   return (
     <div className="p-3 rounded-md bg-muted/30">
       <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{title}</p>
-      <p className={`text-lg font-mono font-bold mt-1 ${colorClass}`}>{value}</p>
+      <p className={`text-lg font-mono font-bold mt-1 ${accent || ''}`}>{value}</p>
     </div>
   );
 }
