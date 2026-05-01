@@ -20,11 +20,11 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ErrorBanner, RefreshButton } from '@/components/shared';
-import { Search, Zap, Filter, Layers, Activity, Eye, Clock, Sun, Moon } from 'lucide-react';
+import { Search, Zap, Filter, Layers, Activity, Eye, Clock, Sun, Moon, FileText } from 'lucide-react';
 import { fmtNum, toNum } from '@/lib/utils';
 import { fmtPrice } from '@/lib/athenaFormat';
 import { EngineASignalCard, EngineBChecklistCard } from '@/components/athena';
-import type { EngineASignal, ScanResponse, NakedScanResponse, ChartAnalysisResponse } from '@/types/athena';
+import type { EngineASignal, ScanResponse, NakedScanResponse, ChartAnalysisResponse, AiTextReviewResponse } from '@/types/athena';
 
 type ScanSource = 'A' | 'B';
 
@@ -78,7 +78,10 @@ export default function SignalsPanel() {
     approval?: { approved: boolean; reason: string };
   }>();
   const { post: postVision, loading: visionLoading } = useApiPost<ChartAnalysisResponse>();
+  const { post: postAiText, loading: textLoading } = useApiPost<AiTextReviewResponse>();
   const [aiReview, setAiReview] = useState<ChartAnalysisResponse | null>(null);
+  const [aiTextReview, setAiTextReview] = useState<AiTextReviewResponse | null>(null);
+  const [aiReviewMode, setAiReviewMode] = useState<'vision' | 'text'>('vision');
   const { priceFor } = useLivePrices(3000);
 
   // Local scan results override (so each engine button replaces the live view).
@@ -197,7 +200,8 @@ export default function SignalsPanel() {
           return;
         }
         setAiReview(result);
-        showToast('AI review ready', 'success');
+        setAiReviewMode('vision');
+        showToast('AI Vision review ready', 'success');
       } catch (err) {
         showToast(`AI Review error: ${err instanceof Error ? err.message : 'unknown'}`, 'error');
       }
@@ -205,10 +209,39 @@ export default function SignalsPanel() {
     [postVision, showToast],
   );
 
+  const runAiTextReview = useCallback(
+    async (sig: EngineASignal | null) => {
+      if (!sig) return;
+      const sym = sig.symbol || sig.pair || sig.display;
+      if (!sym) {
+        showToast('Selected signal has no symbol', 'error');
+        return;
+      }
+      try {
+        const result = await postAiText('/api/analyze', {
+          signal: sig,
+          stylePreference: sig.style || 'auto',
+        });
+        if (!result || result.error) {
+          showToast(`AI Text Review failed: ${result?.error || 'unknown'}`, 'error');
+          setAiTextReview(null);
+          return;
+        }
+        setAiTextReview(result);
+        setAiReviewMode('text');
+        showToast('AI Text review ready', 'success');
+      } catch (err) {
+        showToast(`AI Text Review error: ${err instanceof Error ? err.message : 'unknown'}`, 'error');
+      }
+    },
+    [postAiText, showToast],
+  );
+
   // Reset AI review whenever the selected signal changes
   const handleSelect = useCallback((s: EngineASignal) => {
     setSelected(s);
     setAiReview(null);
+    setAiTextReview(null);
   }, []);
 
   const requestExecute = useCallback(
@@ -530,9 +563,19 @@ export default function SignalsPanel() {
                       disabled={visionLoading}
                     >
                       <Eye className={visionLoading ? 'w-3.5 h-3.5 animate-pulse' : 'w-3.5 h-3.5'} />
-                      {visionLoading ? 'AI Review…' : 'AI Review (Vision)'}
+                      {visionLoading ? 'AI Vision…' : 'AI Review (Vision)'}
                     </Button>
-                    {aiReview?.structured?.right_edge_status && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 text-xs gap-1"
+                      onClick={() => runAiTextReview(selected)}
+                      disabled={textLoading}
+                    >
+                      <FileText className={textLoading ? 'w-3.5 h-3.5 animate-pulse' : 'w-3.5 h-3.5'} />
+                      {textLoading ? 'AI Text…' : 'AI Review (Text)'}
+                    </Button>
+                    {aiReview?.structured?.right_edge_status && aiReviewMode === 'vision' && (
                       <Badge
                         className={
                           aiReview.structured.right_edge_status === 'CONFIRMS' ? 'badge-long'
@@ -543,15 +586,41 @@ export default function SignalsPanel() {
                         RIGHT EDGE: {aiReview.structured.right_edge_status.replace('_', ' ')}
                       </Badge>
                     )}
-                    {aiReview?.structured?.rating && (
+                    {aiTextReview?.grade && aiReviewMode === 'text' && (
                       <Badge variant="outline" className="text-[10px] uppercase">
-                        {aiReview.structured.rating}
+                        Grade {aiTextReview.grade}
                       </Badge>
                     )}
                   </div>
 
-                  {/* AI Review output */}
-                  {aiReview && (
+                  {/* AI Review mode toggle */}
+                  {(aiReview || aiTextReview) && (
+                    <div className="flex items-center gap-1 bg-muted/30 rounded-md p-1 w-fit">
+                      <button
+                        type="button"
+                        onClick={() => setAiReviewMode('vision')}
+                        className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${
+                          aiReviewMode === 'vision' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                        disabled={!aiReview}
+                      >
+                        Vision
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAiReviewMode('text')}
+                        className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${
+                          aiReviewMode === 'text' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                        disabled={!aiTextReview}
+                      >
+                        Text
+                      </button>
+                    </div>
+                  )}
+
+                  {/* AI Vision Review output */}
+                  {aiReview && aiReviewMode === 'vision' && (
                     <Card className="border-border/60 bg-card/50">
                       <CardContent className="p-3 space-y-2">
                         <div className="flex items-center justify-between">
@@ -593,6 +662,60 @@ export default function SignalsPanel() {
                         {aiReview.analysis && (
                           <pre className="text-[11px] font-mono whitespace-pre-wrap text-foreground/90 max-h-72 overflow-y-auto p-2 bg-muted/20 rounded border border-border/40">
                             {aiReview.analysis}
+                          </pre>
+                        )}
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {/* AI Text Review (Marcus Reid) output */}
+                  {aiTextReview && aiReviewMode === 'text' && (
+                    <Card className="border-border/60 bg-card/50">
+                      <CardContent className="p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <p className="text-[10px] uppercase text-muted-foreground">AI Text Review — Marcus Reid</p>
+                          <span className="text-[10px] text-muted-foreground font-mono">
+                            {aiTextReview.grade || '—'} · edge {aiTextReview.edgeProbability ?? '—'}%
+                          </span>
+                        </div>
+
+                        {aiTextReview.style_ratings && (
+                          <div className="grid grid-cols-3 gap-2 text-[11px]">
+                            <div>
+                              <div className="text-muted-foreground text-[10px]">Scalp</div>
+                              <div className="font-mono">{aiTextReview.style_ratings.scalp?.grade || '—'}</div>
+                            </div>
+                            <div>
+                              <div className="text-muted-foreground text-[10px]">Intraday</div>
+                              <div className="font-mono">{aiTextReview.style_ratings.intraday?.grade || '—'}</div>
+                            </div>
+                            <div>
+                              <div className="text-muted-foreground text-[10px]">Swing</div>
+                              <div className="font-mono">{aiTextReview.style_ratings.swing?.grade || '—'}</div>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-2 gap-2 text-[11px]">
+                          <div><span className="text-muted-foreground">Verdict:</span> <span className="font-mono">{aiTextReview.verdict || '—'}</span></div>
+                          <div><span className="text-muted-foreground">Risk:</span> <span className="font-mono">{aiTextReview.riskLevel || '—'}</span></div>
+                          <div><span className="text-muted-foreground">Position:</span> <span className="font-mono">{aiTextReview.positionSizing || '—'}</span></div>
+                          <div><span className="text-muted-foreground">Entry:</span> <span className="font-mono">{aiTextReview.entryZone || '—'}</span></div>
+                          <div><span className="text-muted-foreground">Invalidation:</span> <span className="font-mono">{aiTextReview.invalidation || '—'}</span></div>
+                          <div><span className="text-muted-foreground">Key Levels:</span> <span className="font-mono">{aiTextReview.keyLevels || '—'}</span></div>
+                        </div>
+
+                        {aiTextReview.warnings && aiTextReview.warnings.length > 0 && (
+                          <div className="text-[11px] text-warning">
+                            {aiTextReview.warnings.map((w, i) => (
+                              <div key={i}>• {w}</div>
+                            ))}
+                          </div>
+                        )}
+
+                        {aiTextReview.narrative && (
+                          <pre className="text-[11px] font-mono whitespace-pre-wrap text-foreground/90 max-h-72 overflow-y-auto p-2 bg-muted/20 rounded border border-border/40">
+                            {aiTextReview.narrative}
                           </pre>
                         )}
                       </CardContent>

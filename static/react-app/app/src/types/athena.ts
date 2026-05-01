@@ -321,6 +321,36 @@ export interface ChartAnalysisResponse {
   [k: string]: unknown;
 }
 
+/** /api/analyze (Marcus Reid text analysis) response. */
+export interface AiTextReviewResponse {
+  reviewSource?: string;
+  resolvedStyle?: string;
+  scannerReadiness?: string;
+  factorQuality?: number;
+  structuralRisk?: string;
+  executionRisk?: string;
+  selectedStyleGrade?: string;
+  grade?: string;
+  verdict?: string;
+  narrative?: string;
+  entryZone?: string;
+  invalidation?: string;
+  keyLevels?: string;
+  positionSizing?: string;
+  tradeStyle?: string;
+  tradeStyleReason?: string;
+  warnings?: string[];
+  edgeProbability?: number;
+  riskLevel?: string;
+  style_ratings?: {
+    scalp?: { grade?: string; edgeProbability?: number; riskLevel?: string };
+    intraday?: { grade?: string; edgeProbability?: number; riskLevel?: string };
+    swing?: { grade?: string; edgeProbability?: number; riskLevel?: string };
+  };
+  error?: string;
+  [k: string]: unknown;
+}
+
 // ───────────────────────── Live Dashboard (Cyber Cockpit) ───────────────────
 
 export interface LdEngineARow {
