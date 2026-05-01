@@ -2,8 +2,8 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
-import { cn } from '@/lib/utils';
-import { Play, Clock, ArrowUpRight, ArrowDownRight } from 'lucide-react';
+import { cn, fmtNum, toNum } from '@/lib/utils';
+import { Play, Clock, ArrowUpRight } from 'lucide-react';
 import type { Signal } from '@/types';
 
 interface SignalCardProps {
@@ -15,20 +15,26 @@ interface SignalCardProps {
 }
 
 export default function SignalCard({ signal, onExecute, disabled, disabledLabel, compact }: SignalCardProps) {
-  const dirColor = signal.direction === 'LONG' ? 'text-long' : 'text-short';
   const dirBg = signal.direction === 'LONG' ? 'bg-long/20 text-long' : 'bg-short/20 text-short';
+  const conf = toNum(signal.conviction ?? signal.confidence, 0);
+  // Configurable confidence color thresholds (can be driven by backend later)
+  const CONF_HIGH = 85;
+  const CONF_MED = 70;
+  const confColor = conf >= CONF_HIGH ? 'text-long' : conf >= CONF_MED ? 'text-warning' : 'text-muted-foreground';
+  const tp2Num = Number(signal.tp2);
+  const hasTp2 = signal.tp2 != null && Number.isFinite(tp2Num);
 
   if (compact) {
     return (
       <div className="flex items-center justify-between p-2 rounded-md bg-muted/30 hover:bg-muted/50 transition-colors">
         <div className="flex items-center gap-2">
           <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded', dirBg)}>
-            {signal.direction}
+            {signal.direction || '—'}
           </span>
-          <span className="text-xs font-mono font-medium">{signal.pair}</span>
+          <span className="text-xs font-mono font-medium">{signal.pair || '—'}</span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-[10px] text-muted-foreground">{signal.confidence}%</span>
+          <span className="text-[10px] text-muted-foreground">{fmtNum(conf, 0)}%</span>
           <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={() => onExecute?.(signal)} disabled={disabled}>
             <Play className="w-3 h-3 text-primary" />
           </Button>
@@ -42,13 +48,13 @@ export default function SignalCard({ signal, onExecute, disabled, disabledLabel,
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-mono font-bold">{signal.pair}</span>
-            <Badge className={cn('text-[10px]', dirBg)}>{signal.direction}</Badge>
-            <Badge variant="outline" className="text-[10px]">{signal.engine}</Badge>
+            <span className="text-sm font-mono font-bold">{signal.pair || '—'}</span>
+            <Badge className={cn('text-[10px]', dirBg)}>{signal.direction || '—'}</Badge>
+            <Badge variant="outline" className="text-[10px]">{signal.engine || '—'}</Badge>
           </div>
           <span className="text-[10px] font-mono text-muted-foreground">
             <Clock className="w-3 h-3 inline mr-1" />
-            {new Date(signal.timestamp).toLocaleTimeString()}
+            {signal.timestamp ? new Date(signal.timestamp).toLocaleTimeString() : '—'}
           </span>
         </div>
       </CardHeader>
@@ -56,22 +62,22 @@ export default function SignalCard({ signal, onExecute, disabled, disabledLabel,
         <div className="grid grid-cols-3 gap-2">
           <div className="p-2 rounded-md bg-muted/30">
             <p className="text-[10px] text-muted-foreground uppercase">Entry</p>
-            <p className="text-xs font-mono font-bold">{signal.entry.toFixed(5)}</p>
+            <p className="text-xs font-mono font-bold">{fmtNum(signal.entry, 5)}</p>
           </div>
           <div className="p-2 rounded-md bg-short/10">
             <p className="text-[10px] text-short uppercase">SL</p>
-            <p className="text-xs font-mono font-bold text-short">{signal.sl.toFixed(5)}</p>
+            <p className="text-xs font-mono font-bold text-short">{fmtNum(signal.sl, 5)}</p>
           </div>
           <div className="p-2 rounded-md bg-long/10">
             <p className="text-[10px] text-long uppercase">TP</p>
-            <p className="text-xs font-mono font-bold text-long">{signal.tp.toFixed(5)}</p>
+            <p className="text-xs font-mono font-bold text-long">{fmtNum(signal.tp, 5)}</p>
           </div>
         </div>
 
-        {signal.tp2 && (
+        {hasTp2 && (
           <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
             <ArrowUpRight className="w-3 h-3 text-long" />
-            TP2: <span className="font-mono text-foreground">{signal.tp2.toFixed(5)}</span>
+            TP2: <span className="font-mono text-foreground">{fmtNum(signal.tp2, 5)}</span>
           </div>
         )}
 
@@ -79,14 +85,14 @@ export default function SignalCard({ signal, onExecute, disabled, disabledLabel,
           <div className="flex-1">
             <div className="flex items-center justify-between mb-1">
               <span className="text-[10px] text-muted-foreground">Confidence</span>
-              <span className={cn('text-[10px] font-mono font-bold', signal.confidence >= 85 ? 'text-long' : signal.confidence >= 70 ? 'text-warning' : 'text-muted-foreground')}>
-                {signal.confidence}%
+              <span className={cn('text-[10px] font-mono font-bold', confColor)}>
+                {fmtNum(conf, 0)}%
               </span>
             </div>
-            <Progress value={signal.confidence} className="h-1.5" />
+            <Progress value={Number.isFinite(conf) ? conf : 0} className="h-1.5" />
           </div>
           <Badge variant="outline" className="text-[10px] font-mono">
-            R:R {signal.rRatio.toFixed(2)}
+            R:R {fmtNum(signal.rr ?? signal.rRatio, 2)}
           </Badge>
         </div>
 

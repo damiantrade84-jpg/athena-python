@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import type { PanelId, Signal, Position, GuardianStatus, NewsItem, SessionHours } from '@/types';
 import { syncPricesToGlobal, syncSignalsToGlobal } from '@/lib/globalState';
+import apiClient from '@/lib/apiClient';
 
 interface AppState {
   activePanel: PanelId;
@@ -25,7 +26,7 @@ interface AppActions {
   executeSignal: (signalId: string) => void;
   closePosition: (positionId: string) => void;
   showToast: (message: string, type: 'success' | 'error' | 'info') => void;
-  getLivePrice: (pair: string) => number;
+  getLivePrice: (pair: string) => number | undefined;
 }
 
 const StoreContext = createContext<(AppState & AppActions) | null>(null);
@@ -39,9 +40,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     bootChecks: [],
     circuitBreaker: false,
     dailyLoss: 0,
-    dailyLossLimit: 500,
+    dailyLossLimit: 0,
     openRisk: 0,
-    maxOpenRisk: 2000,
+    maxOpenRisk: 0,
     divergence: false,
   });
   const [news] = useState<NewsItem[]>([]);
@@ -64,17 +65,51 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     toastTimeout.current = setTimeout(() => setToast(null), 4000);
   }, []);
 
-  const refreshSignals = useCallback(() => {
-    showToast('Signals refreshed', 'success');
+  const refreshSignals = useCallback(async () => {
+    try {
+      const res = await apiClient.getJson('/api/last-scan') as { signals?: Signal[] };
+      if (res && Array.isArray(res.signals)) {
+        setSignals(res.signals);
+        showToast('Signals refreshed', 'success');
+      }
+    } catch {
+      showToast('Failed to refresh signals', 'error');
+    }
   }, [showToast]);
 
-  const refreshPositions = useCallback(() => {
-    showToast('Positions refreshed', 'success');
+  const refreshPositions = useCallback(async () => {
+    try {
+      const res = await apiClient.getJson('/api/open-trades-timed') as { positions?: Position[] } | Position[];
+      let arr: Position[] = [];
+      if (Array.isArray(res)) arr = res;
+      else if (res && Array.isArray((res as { positions?: Position[] }).positions)) {
+        arr = (res as { positions: Position[] }).positions;
+      }
+      setPositions(arr);
+      showToast('Positions refreshed', 'success');
+    } catch {
+      showToast('Failed to refresh positions', 'error');
+    }
   }, [showToast]);
 
-  const refreshGuardian = useCallback(() => {
-    showToast('Guardian refreshed', 'success');
+  const refreshGuardian = useCallback(async () => {
+    try {
+      const res = await apiClient.getJson('/api/guardian/status') as GuardianStatus | null;
+      if (res && typeof res === 'object') {
+        setGuardian(res);
+        showToast('Guardian refreshed', 'success');
+      }
+    } catch {
+      showToast('Failed to refresh guardian', 'error');
+    }
   }, [showToast]);
+
+  // Initial fetch on mount
+  useEffect(() => {
+    refreshSignals();
+    refreshPositions();
+    refreshGuardian();
+  }, [refreshSignals, refreshPositions, refreshGuardian]);
 
   const toggleAutoTrade = useCallback(() => {
     setIsAutoTrade(prev => {
@@ -123,10 +158,37 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     window.AppState.activePanel = activePanel;
   }, [signals, activePanel]);
 
-  const livePriceGetter = useCallback((pair: string) => {
-    // Will be populated by real price data via API
-    return 0;
+  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+    async function fetchPrices() {
+      try {
+        const res = await apiClient.getJson('/api/prices') as { prices?: Record<string, { price?: number }> };
+        if (res && res.prices) {
+          const map: Record<string, number> = {};
+          for (const [key, entry] of Object.entries(res.prices)) {
+            const price = typeof entry === 'object' && entry != null ? (entry as { price?: number }).price : undefined;
+            if (typeof price === 'number' && Number.isFinite(price) && price > 0) {
+              map[key.toUpperCase()] = price;
+            }
+          }
+          setLivePrices(map);
+        }
+      } catch {
+        // Silently ignore price poll errors
+      }
+    }
+    fetchPrices();
+    timer = setInterval(fetchPrices, 5000);
+    return () => { if (timer) clearInterval(timer); };
   }, []);
+
+  const livePriceGetter = useCallback((pair: string) => {
+    if (!pair) return undefined;
+    const key = pair.toUpperCase().trim();
+    return livePrices[key] ?? livePrices[key.replace(/[\s/_:-]/g, '')];
+  }, [livePrices]);
 
   return (
     <StoreContext.Provider value={{

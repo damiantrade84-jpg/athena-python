@@ -12,14 +12,15 @@ import sqlite3
 from typing import Any
 
 from calibration import calibration_quality_summary, predict_calibrated_prob
+from config import CONFIG
 from stability_monitor import get_engine_stability_snapshot, get_signal_stability_index
 
 _ENGINES = ("engine_a", "engine_b", "engine_c", "scalp")
-_MIN_SAMPLES_FOR_ADAPTATION = 20
-_MIN_SAMPLES_FOR_SUSPENSION = 30
-_MAX_WEIGHT_STEP = 0.08
-_MIN_CAL_EXPECTANCY_WEIGHT = 0.20
-_MAX_CAL_EXPECTANCY_WEIGHT = 0.75
+_MIN_SAMPLES_FOR_ADAPTATION = int(CONFIG.get("META_MIN_SAMPLES_FOR_ADAPTATION", 20))
+_MIN_SAMPLES_FOR_SUSPENSION = int(CONFIG.get("META_MIN_SAMPLES_FOR_SUSPENSION", 30))
+_MAX_WEIGHT_STEP = float(CONFIG.get("META_MAX_WEIGHT_STEP", 0.08))
+_MIN_CAL_EXPECTANCY_WEIGHT = float(CONFIG.get("META_MIN_CAL_EXPECTANCY_WEIGHT", 0.20))
+_MAX_CAL_EXPECTANCY_WEIGHT = float(CONFIG.get("META_MAX_CAL_EXPECTANCY_WEIGHT", 0.75))
 
 # Explicit boundary: these are the only adaptive alpha surfaces this module controls.
 _ADAPTIVE_ALPHA_SURFACES = (
@@ -42,8 +43,10 @@ _BASE_WEIGHTS_BY_STYLE = {
     "intraday": {"engine_a": 0.28, "engine_b": 0.27, "engine_c": 0.35, "scalp": 0.10},
     "scalp": {"engine_a": 0.15, "engine_b": 0.20, "engine_c": 0.15, "scalp": 0.50},
 }
-_MIN_WEIGHT_CAPS = {"engine_a": 0.12, "engine_b": 0.12, "engine_c": 0.18, "scalp": 0.05}
-_MAX_WEIGHT_CAPS = {"engine_a": 0.42, "engine_b": 0.40, "engine_c": 0.48, "scalp": 0.55}
+_MIN_WEIGHT_CAPS = dict(CONFIG.get("META_MIN_WEIGHT_CAPS",
+    {"engine_a": 0.12, "engine_b": 0.12, "engine_c": 0.18, "scalp": 0.05}))
+_MAX_WEIGHT_CAPS = dict(CONFIG.get("META_MAX_WEIGHT_CAPS",
+    {"engine_a": 0.42, "engine_b": 0.40, "engine_c": 0.48, "scalp": 0.55}))
 
 
 def _default_db_path() -> str:

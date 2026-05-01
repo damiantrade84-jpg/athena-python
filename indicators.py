@@ -526,9 +526,15 @@ def calc_stochastic(candles: list, kp: int, ks: int, ds: int) -> dict:
         if not window_hi or not window_lo:
             rawK[i] = 50
             continue
-            
-        hh = max(window_hi)
-        ll = min(window_lo)
+
+        _valid_hi = [v for v in window_hi if v is not None]
+        _valid_lo = [v for v in window_lo if v is not None]
+        if not _valid_hi or not _valid_lo:
+            rawK[i] = 50
+            continue
+
+        hh = max(_valid_hi)
+        ll = min(_valid_lo)
 
         rawK[i] = ((cl[i] - ll) / (hh - ll)) * 100 if hh != ll else 50
 
@@ -1330,7 +1336,10 @@ def calc_vwap(candles: list, *, anchor_index: int = 0, band_mult: float = 0.5) -
             lower_band.append(None)
             continue
 
-        typical_price = (float(c.get("high", 0)) + float(c.get("low", 0)) + float(c.get("close", 0))) / 3.0
+        _close = float(c.get("close", 0))
+        typical_price = (
+            float(c.get("high", _close)) + float(c.get("low", _close)) + _close
+        ) / 3.0
         vol = float(c.get("vol", 0) or 0.0)
         if vol > 0:
             cum_tp_vol += typical_price * vol

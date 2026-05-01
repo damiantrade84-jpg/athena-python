@@ -79,6 +79,12 @@ function _signalSid(sig: SignalLike, fallback?: string): string {
 // ── Public functions ─────────────────────────────────────────────────────────
 
 export function getExecutionSizingOverride(): number {
+  // React app path: global override set by React components
+  const reactGlobal = (window as unknown as Record<string, unknown>).__execRiskSizing;
+  if (typeof reactGlobal === 'number' && reactGlobal >= 0.25 && reactGlobal <= 1.0) {
+    return reactGlobal;
+  }
+  // Legacy DOM path
   const el = document.getElementById('execRiskSizing') as HTMLInputElement | null;
   const v = el ? parseFloat(el.value) : NaN;
   if (!(v >= 0.25 && v <= 1)) return 1.0;

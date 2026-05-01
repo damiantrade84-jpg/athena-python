@@ -12,7 +12,7 @@ export interface EngineAResult {
   maxScore?: number;
   threshold?: number;
   passed?: boolean;
-  conviction?: string | number;
+  conviction?: number;
   entry?: number;
   sl?: number;
   tp1?: number;

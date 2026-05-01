@@ -36,15 +36,17 @@ export const apiClient = {
     });
   },
   // Typed convenience methods for React code
+  // NOTE: Flask backend returns flat JSON (NOT { data: T } wrapper).
+  // These methods pass through the raw response directly.
   async get<T>(url: string): Promise<T> {
-    return (await requestJson(url, { method: 'GET' }) as { data: T }).data;
+    return requestJson(url, { method: 'GET' }) as Promise<T>;
   },
   async post<T>(url: string, payload?: Record<string, unknown>): Promise<T> {
-    return (await requestJson(url, {
+    return requestJson(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload || {}),
-    }) as { data: T }).data;
+    }) as Promise<T>;
   },
 };
 

@@ -1,24 +1,45 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import apiClient from '@/lib/apiClient';
 
 export function useApiPoll<T>(url: string, interval = 0, enabled = true) {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const staleRef = useRef(false);
+  const fetchedRef = useRef(false);
 
   const fetch = useCallback(async () => {
     if (!enabled) return;
-    setLoading(true);
+    const isSubsequent = fetchedRef.current;
+    if (isSubsequent) setIsRefreshing(true);
+    else setLoading(true);
+    staleRef.current = false;
     try {
       const result = await apiClient.getJson(url) as T;
-      setData(result);
-      setError(null);
+      if (!staleRef.current) {
+        setData(result);
+        setError(null);
+        fetchedRef.current = true;
+      }
     } catch (e: any) {
-      setError(e.message || 'Unknown error');
+      if (!staleRef.current) {
+        setError(e.message || 'Unknown error');
+      }
     } finally {
-      setLoading(false);
+      if (!staleRef.current) {
+        setLoading(false);
+        setIsRefreshing(false);
+      }
     }
   }, [url, enabled]);
+
+  useEffect(() => {
+    staleRef.current = true;
+    fetchedRef.current = false;
+    setLoading(true);
+    setIsRefreshing(false);
+  }, [url]);
 
   useEffect(() => {
     fetch();
@@ -28,7 +49,7 @@ export function useApiPoll<T>(url: string, interval = 0, enabled = true) {
     }
   }, [fetch, interval]);
 
-  return { data, loading, error, refresh: fetch };
+  return { data, loading, isRefreshing, error, refresh: fetch };
 }
 
 export function useApiPost<T>() {

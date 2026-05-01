@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -19,7 +20,9 @@ _DEFAULT_PRIOR_WEIGHT = 3.0
 _CACHE_TTL_SEC = 60.0
 
 _RECORD_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_RECORD_CACHE_LOCK = threading.Lock()
 _CALIBRATOR_CACHE: dict[tuple, tuple[float, dict[str, Any]]] = {}
+_CALIBRATOR_CACHE_LOCK = threading.Lock()
 
 
 def _default_db_path() -> str:
@@ -141,13 +144,15 @@ def _infer_engine_from_audit_row(row: sqlite3.Row) -> str | None:
 def _load_records_from_audit_db(db_path: str | None = None) -> list[dict[str, Any]]:
     path = db_path or _default_db_path()
     now = time.time()
-    cached = _RECORD_CACHE.get(path)
-    if cached and (now - cached[0]) < _CACHE_TTL_SEC:
-        return cached[1]
+    with _RECORD_CACHE_LOCK:
+        cached = _RECORD_CACHE.get(path)
+        if cached and (now - cached[0]) < _CACHE_TTL_SEC:
+            return cached[1]
 
     records: list[dict[str, Any]] = []
     if not os.path.exists(path):
-        _RECORD_CACHE[path] = (now, records)
+        with _RECORD_CACHE_LOCK:
+            _RECORD_CACHE[path] = (now, records)
         return records
 
     try:
@@ -184,7 +189,8 @@ def _load_records_from_audit_db(db_path: str | None = None) -> list[dict[str, An
             }
         )
 
-    _RECORD_CACHE[path] = (now, records)
+    with _RECORD_CACHE_LOCK:
+        _RECORD_CACHE[path] = (now, records)
     return records
 
 
@@ -366,9 +372,10 @@ def _get_cached_calibrator(
         default_max_score,
     )
     now = time.time()
-    cached = _CALIBRATOR_CACHE.get(key)
-    if cached and (now - cached[0]) < _CACHE_TTL_SEC:
-        return cached[1]
+    with _CALIBRATOR_CACHE_LOCK:
+        cached = _CALIBRATOR_CACHE.get(key)
+        if cached and (now - cached[0]) < _CACHE_TTL_SEC:
+            return cached[1]
 
     calibrator = fit_calibrator(
         _load_records_from_audit_db(path),
@@ -381,7 +388,8 @@ def _get_cached_calibrator(
         prior_weight=prior_weight,
         default_max_score=default_max_score,
     )
-    _CALIBRATOR_CACHE[key] = (now, calibrator)
+    with _CALIBRATOR_CACHE_LOCK:
+        _CALIBRATOR_CACHE[key] = (now, calibrator)
     return calibrator
 
 

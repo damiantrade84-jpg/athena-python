@@ -889,7 +889,13 @@ def check_spread(symbol_info: dict, asset_type: str) -> tuple:
     max_spreads = cfg.get("MAX_SPREAD_PIPS", {})
     spread_price = spread_raw * point
     digits = symbol_info.get("digits", 5)
-    pip_size = point * 10 if digits >= 4 else point
+    if digits == 3:
+        # JPY pairs: pip = 0.01 (point is typically 0.001)
+        pip_size = 0.01
+    elif digits >= 4:
+        pip_size = point * 10
+    else:
+        pip_size = point
     spread_pips = spread_price / pip_size if pip_size > 0 else 0
     max_spread = max_spreads.get(asset_type, max_spreads.get("forex", 4))
     ok = spread_pips <= max_spread

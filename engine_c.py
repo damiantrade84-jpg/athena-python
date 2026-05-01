@@ -56,6 +56,18 @@ def _engine_c_meta_blend() -> float:
     except (TypeError, ValueError):
         return ENGINE_C_META_BLEND
 
+def _compute_b_reliability(b: dict, b_quality: float = 0.50) -> float:
+    """Compute Engine B structural reliability from B signal metadata."""
+    b_struct_rel = 0.5
+    if b.get("structure_ok"):
+        b_struct_rel += 0.2
+    if b.get("zone_ok"):
+        b_struct_rel += 0.15
+    if b.get("trigger_ok"):
+        b_struct_rel += 0.15
+    return (b_struct_rel * 0.5) + (b_quality * 0.5)
+
+
 # ── Conviction tier thresholds ────────────────────────────────────────────────
 CONVICTION_TIERS = {
     "HIGH":   {"min": 0.70, "sizing": 1.0},
@@ -838,6 +850,18 @@ def compute_consensus(
 
     entry = entry_price or float(signal_a.get("price", 0))
 
+    # Reliability / conviction thresholds (configurable)
+    _REL_EXEC = float(CONFIG.get("ENGINE_C_REL_EXECUTE", 0.60))
+    _CONV_EXEC = float(CONFIG.get("ENGINE_C_CONV_EXECUTE", 0.65))
+    _REL_RR = float(CONFIG.get("ENGINE_C_REL_REDUCED_RISK", 0.45))
+    _CONV_RR = float(CONFIG.get("ENGINE_C_CONV_REDUCED_RISK", 0.50))
+    _CONV_WATCH = float(CONFIG.get("ENGINE_C_CONV_WATCHLIST", 0.40))
+    _CONV_WATCH_CONS = float(CONFIG.get("ENGINE_C_CONV_WATCHLIST_CONSENSUS", 0.50))
+    _WEAK_A_CONV_RR = float(CONFIG.get("ENGINE_C_WEAK_A_CONV_REDUCED_RISK", 0.65))
+    _WEAK_A_CONV_RR2 = float(CONFIG.get("ENGINE_C_WEAK_A_CONV_REDUCED_RISK2", 0.50))
+    _SIZING_DELTA_RR = float(CONFIG.get("ENGINE_C_SIZING_DELTA_REDUCED_RISK", 0.25))
+    _SIZING_DELTA_RR_WEAK = float(CONFIG.get("ENGINE_C_SIZING_DELTA_REDUCED_RISK_WEAK", 0.35))
+
     # Step 2: Determine signal availability
     # When A has a partial signal (norm between partial_floor and has_floor) and
     # B also has a signal, promote A to participate at half weight so borderline
@@ -886,12 +910,12 @@ def compute_consensus(
         decision_state = "blocked"
         decision_state_reason = None
         if tier != "SKIP":
-            if c_reliability >= 0.60 and conviction >= 0.65 and _b_floor_met:
+            if c_reliability >= _REL_EXEC and conviction >= _CONV_EXEC and _b_floor_met:
                 decision_state = "execute"
-            elif c_reliability >= 0.45 and conviction >= 0.50 and _b_floor_met:
+            elif c_reliability >= _REL_RR and conviction >= _CONV_RR and _b_floor_met:
                 decision_state = "reduced_risk"
-                sizing = max(0.0, sizing - 0.25)
-            elif conviction >= 0.40:
+                sizing = max(0.0, sizing - _SIZING_DELTA_RR)
+            elif conviction >= _CONV_WATCH:
                 decision_state = "watchlist"
                 if not _b_floor_met:
                     decision_state_reason = f"b_partial_norm={b_partial_norm:.3f}<0.10"
@@ -956,20 +980,16 @@ def compute_consensus(
 
         # Reliability Layer for B_ONLY
         b_quality = 0.50 # fallback
-        b_struct_rel = 0.5
-        if b.get("structure_ok"): b_struct_rel += 0.2
-        if b.get("zone_ok"): b_struct_rel += 0.15
-        if b.get("trigger_ok"): b_struct_rel += 0.15
-        b_reliability = (b_struct_rel * 0.5) + (b_quality * 0.5)
+        b_reliability = _compute_b_reliability(b, b_quality)
         c_reliability = b_reliability
         
         decision_state = "blocked"
         if tier != "SKIP":
-            if c_reliability >= 0.60 and conviction >= 0.65:
+            if c_reliability >= _REL_EXEC and conviction >= _CONV_EXEC:
                 decision_state = "execute"
-            elif c_reliability >= 0.45 and conviction >= 0.50:
+            elif c_reliability >= _REL_RR and conviction >= _CONV_RR:
                 decision_state = "reduced_risk"
-                sizing = max(0.0, sizing - 0.25)
+                sizing = max(0.0, sizing - _SIZING_DELTA_RR)
             elif conviction >= 0.40:
                 decision_state = "watchlist"
                 
@@ -1038,20 +1058,16 @@ def compute_consensus(
                 sizing = 0.0
 
             b_quality = 0.50
-            b_struct_rel = 0.5
-            if b.get("structure_ok"): b_struct_rel += 0.2
-            if b.get("zone_ok"): b_struct_rel += 0.15
-            if b.get("trigger_ok"): b_struct_rel += 0.15
-            b_reliability = (b_struct_rel * 0.5) + (b_quality * 0.5)
+            b_reliability = _compute_b_reliability(b, b_quality)
             c_reliability = b_reliability
 
             decision_state = "blocked"
             if tier != "SKIP":
                 if c_reliability >= 0.60 and conviction >= 0.65:
                     decision_state = "execute"
-                elif c_reliability >= 0.45 and conviction >= 0.50:
+                elif c_reliability >= _REL_RR and conviction >= _CONV_RR:
                     decision_state = "reduced_risk"
-                    sizing = max(0.0, sizing - 0.25)
+                    sizing = max(0.0, sizing - _SIZING_DELTA_RR)
                 elif conviction >= 0.40:
                     decision_state = "watchlist"
                     
@@ -1123,7 +1139,7 @@ def compute_consensus(
                     decision_state = "execute"
                 elif c_reliability >= 0.45 and conviction >= 0.50:
                     decision_state = "reduced_risk"
-                    sizing = max(0.0, sizing - 0.25)
+                    sizing = max(0.0, sizing - _SIZING_DELTA_RR)
                 elif conviction >= 0.40:
                     decision_state = "watchlist"
 
@@ -1269,12 +1285,7 @@ def compute_consensus(
     b_quality = meta_policy.get("engineQualities", {}).get("engine_b", {}).get("quality_score", 0.50)
     
     a_reliability = (a.get("confidence", 0.5) * 0.5) + (a_quality * 0.5)
-    
-    b_struct_rel = 0.5
-    if b.get("structure_ok"): b_struct_rel += 0.2
-    if b.get("zone_ok"): b_struct_rel += 0.15
-    if b.get("trigger_ok"): b_struct_rel += 0.15
-    b_reliability = (b_struct_rel * 0.5) + (b_quality * 0.5)
+    b_reliability = _compute_b_reliability(b, b_quality)
     
     c_reliability = (a_reliability * weights["A"]) + (b_reliability * weights["B"])
 
@@ -1290,19 +1301,19 @@ def compute_consensus(
         if _intermarket_blocks:
             decision_state = "blocked"
         # Stage 3.1: If A is weak, B cannot rescue to execute.
-        elif _a_is_weak and conviction >= 0.65:
+        elif _a_is_weak and conviction >= _WEAK_A_CONV_RR:
             # A weak but total conviction high → reduced_risk only
             decision_state = "reduced_risk"
-            sizing = max(0.0, sizing - 0.35)
-        elif _a_is_weak and conviction >= 0.50:
+            sizing = max(0.0, sizing - _SIZING_DELTA_RR_WEAK)
+        elif _a_is_weak and conviction >= _WEAK_A_CONV_RR2:
             decision_state = "reduced_risk"
             sizing = max(0.0, sizing - 0.25)
-        elif c_reliability >= 0.60 and conviction >= 0.65:
+        elif c_reliability >= _REL_EXEC and conviction >= _CONV_EXEC:
             decision_state = "execute"
         elif c_reliability >= 0.45 and conviction >= 0.50:
             decision_state = "reduced_risk"
             sizing = max(0.0, sizing - 0.25)
-        elif conviction >= 0.50:
+        elif conviction >= _CONV_WATCH_CONS:
             decision_state = "watchlist"
 
     if decision_state == "blocked":

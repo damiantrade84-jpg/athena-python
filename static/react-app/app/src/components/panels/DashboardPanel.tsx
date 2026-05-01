@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useStore } from '@/hooks/useStore';
-import { useApiPoll } from '@/hooks/useApiData';
+import { useApiPoll, useApiPost } from '@/hooks/useApiData';
+import { useLivePrices } from '@/hooks/useLivePrices';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -48,7 +49,7 @@ function asArray<T>(value: unknown): T[] {
 }
 
 export default function DashboardPanel() {
-  const { isAutoTrade, toggleAutoTrade, executeSignal } = useStore();
+  const { isAutoTrade, toggleAutoTrade, showToast } = useStore();
 
   const { data: health, loading: healthLoading, error: healthError, refresh: refreshHealth }
     = useApiPoll<HealthStatus>('/api/health', 10000);
@@ -65,6 +66,8 @@ export default function DashboardPanel() {
   const { data: performance, error: perfError }
     = useApiPoll<PerformanceMetrics>('/api/performance', 30000);
   const { data: autoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 10000);
+  const { post: postQuickExecute, loading: executingSignal } = useApiPost<{ success?: boolean; ticket?: string; error?: string; approval?: { approved: boolean; reason: string } }>();
+  const { priceFor } = useLivePrices(3000);
 
   const openTrades = asArray<OpenTrade>(openTradesRaw);
   const recentSignals = (lastScan?.signals || []).slice(0, 6);
@@ -95,6 +98,46 @@ export default function DashboardPanel() {
   const totalLiveProfit = openTrades.reduce((sum, t) => sum + toNum((t as OpenTrade & { profit?: number }).profit), 0);
   const winRatePct = performance?.win_rate;
   const profitFactor = performance?.profit_factor;
+
+  const runSignal = useCallback(async (sig: EngineASignal) => {
+    const pair = String(sig.pair || sig.display || sig.symbol || '').trim();
+    if (!pair) {
+      showToast('Execution failed: missing pair on signal', 'error');
+      return;
+    }
+    const entryPrice = sig.price ?? sig.entry;
+    if (!entryPrice) {
+      showToast(`Execution failed: ${pair} has no live entry price`, 'error');
+      return;
+    }
+
+    const style = String(sig.style || 'swing');
+    const payload = {
+      signal: {
+        ...sig,
+        pair,
+        display: sig.display || pair,
+        price: entryPrice,
+        style,
+      },
+      engine_b: sig.naked_data ?? sig.engine_b ?? {},
+      pip_mode: style,
+      sizing_override: sig.sizing_override ?? 1.0,
+    };
+    const result = await postQuickExecute('/api/quick-execute', payload as unknown as Record<string, unknown>);
+    if (!result) {
+      showToast(`Execution failed: no response for ${pair}`, 'error');
+      return;
+    }
+    if (result.approval && !result.approval.approved) {
+      showToast(`Rejected: ${result.approval.reason}`, 'error');
+    } else if (result.success || result.ticket) {
+      showToast(`Executed ${sig.direction || ''} ${pair}${result.ticket ? ` — ${result.ticket}` : ''}`, 'success');
+      refreshTrades();
+    } else {
+      showToast(`Execution failed: ${result.error || 'unknown'}`, 'error');
+    }
+  }, [postQuickExecute, refreshTrades, showToast]);
 
   return (
     <div className="space-y-5">
@@ -302,26 +345,31 @@ export default function DashboardPanel() {
                     const long = dir === 'LONG' || dir === 'BUY';
                     const score = sig.confluenceScore ?? sig.score;
                     const max = sig.maxScore ?? 3.0;
-                    const symbol = String(sig.symbol || sig.display || sig.pair || `signal-${i}`);
+                    const label = String(sig.display || sig.pair || sig.symbol || `signal-${i}`);
+                    const entryPrice = sig.price ?? sig.entry;
+                    const livePrice = priceFor(sig);
                     return (
                       <div
-                        key={`${symbol}-${i}`}
+                        key={`${label}-${i}`}
                         className="flex items-center justify-between p-2 rounded-md bg-muted/30"
                       >
                         <div className="flex items-center gap-2 min-w-0">
                           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${long ? 'bg-long/20 text-long' : 'bg-short/20 text-short'}`}>
                             {dir}
                           </span>
-                          <span className="text-xs font-mono truncate">{symbol}</span>
+                          <span className="text-xs font-mono truncate">{label}</span>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[10px] text-primary font-mono">
+                            L {livePrice ? fmtNum(livePrice, livePrice > 100 ? 2 : 5) : '—'}
+                          </span>
                           <span className="text-[10px] text-muted-foreground">
                             {fmtNum(score, 2)}/{fmtNum(max, 1)}
                           </span>
                           <Button
                             size="sm" variant="outline" className="h-6 text-[10px]"
-                            onClick={() => executeSignal(symbol)}
-                            disabled={!sig.entry}
+                            onClick={() => runSignal(sig)}
+                            disabled={executingSignal || !entryPrice}
                           >
                             Run
                           </Button>

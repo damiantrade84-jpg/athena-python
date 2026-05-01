@@ -4,10 +4,15 @@
 import { fmtNum, toNum } from './utils';
 import type { EngineASignal } from '@/types/athena';
 
-/** Choose decimals based on pair type (forex/JPY-pair-aware). */
+/** Choose decimals based on pair type (forex/JPY-pair-aware, crypto-aware). */
 export function priceDecimals(pair: string | undefined, type: string | undefined): number {
   const p = (pair || '').toUpperCase();
-  if (type === 'crypto') return 2;
+  if (type === 'crypto') {
+    // Low-value coins need higher precision
+    if (p.includes('DOGE') || p.includes('SHIB') || p.includes('PEPE') || p.includes('FLOKI') || p.includes('BONK')) return 6;
+    if (p.includes('TRX') || p.includes('XRP') || p.includes('ADA') || p.includes('DOT')) return 4;
+    return 2;
+  }
   if (type === 'stock' || type === 'etf' || type === 'index') return 2;
   if (type === 'commodity' && p.includes('XAU')) return 2;
   if (type === 'commodity' && p.includes('XAG')) return 3;

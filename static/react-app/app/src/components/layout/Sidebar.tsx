@@ -1,6 +1,6 @@
 import { useStore } from '@/hooks/useStore';
 import type { PanelId } from '@/types';
-import { cn } from '@/lib/utils';
+import { cn, fmtNum, toNum } from '@/lib/utils';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -15,6 +15,7 @@ const navItems: { id: PanelId; label: string; icon: React.ElementType; badge?: s
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'signals', label: 'Signals', icon: Zap, badge: 'LIVE' },
   { id: 'pairBrowser', label: 'Pair Browser', icon: Search },
+  { id: 'liveCockpit', label: 'Live Cockpit', icon: Radio, badge: 'CYBER' },
   { id: 'scanConfig', label: 'Scan Config', icon: Settings },
   { id: 'trades', label: 'Trades', icon: TrendingUp },
   { id: 'engineC', label: 'Engine C', icon: Layers },
@@ -34,6 +35,8 @@ export default function Sidebar() {
 
   const activeSignals = signals.filter(s => s.status === 'active').length;
   const openPositions = positions.filter(p => p.status === 'open').length;
+  const dailyLoss = toNum(guardian?.dailyLoss);
+  const dailyLossLimit = toNum(guardian?.dailyLossLimit, 1);
 
   return (
     <aside className="w-[210px] shrink-0 border-r border-border/60 bg-sidebar flex flex-col">
@@ -58,14 +61,14 @@ export default function Sidebar() {
           </div>
           <div className="bg-sidebar-accent/50 rounded-md p-2">
             <div className="text-[10px] text-sidebar-foreground/60 uppercase tracking-wider">Daily P&L</div>
-            <div className={`text-sm font-mono font-bold leading-tight ${guardian.dailyLoss >= 0 ? 'text-long' : 'text-short'}`}>
-              {guardian.dailyLoss >= 0 ? '+' : ''}${guardian.dailyLoss.toFixed(0)}
+            <div className={`text-sm font-mono font-bold leading-tight ${dailyLoss >= 0 ? 'text-long' : 'text-short'}`}>
+              {dailyLoss >= 0 ? '+' : ''}${fmtNum(dailyLoss, 0, '0')}
             </div>
           </div>
           <div className="bg-sidebar-accent/50 rounded-md p-2">
             <div className="text-[10px] text-sidebar-foreground/60 uppercase tracking-wider">Win Rate</div>
             <div className="text-sm font-mono font-bold text-primary leading-tight">
-              {(57.3).toFixed(1)}%
+              57.3%
             </div>
           </div>
         </div>
@@ -123,18 +126,18 @@ export default function Sidebar() {
         <div className="bg-sidebar-accent/30 rounded-md p-2.5 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-[10px] text-sidebar-foreground/60">Circuit Breaker</span>
-            <div className={`w-1.5 h-1.5 rounded-full ${guardian.circuitBreaker ? 'bg-short animate-pulse' : 'bg-long'}`} />
+            <div className={`w-1.5 h-1.5 rounded-full ${guardian?.circuitBreaker ? 'bg-short animate-pulse' : 'bg-long'}`} />
           </div>
           <div className="flex items-center justify-between">
             <span className="text-[10px] text-sidebar-foreground/60">Daily Risk</span>
             <span className="text-[10px] font-mono text-sidebar-foreground/80">
-              ${guardian.dailyLoss.toFixed(0)}/${guardian.dailyLossLimit}
+              ${fmtNum(dailyLoss, 0, '0')}/${fmtNum(dailyLossLimit, 0, '0')}
             </span>
           </div>
           <div className="w-full bg-sidebar-border/30 rounded-full h-1 overflow-hidden">
             <div
               className="h-full rounded-full transition-all duration-500 bg-primary/70"
-              style={{ width: `${Math.min(100, (Math.abs(guardian.dailyLoss) / guardian.dailyLossLimit) * 100)}%` }}
+              style={{ width: `${Math.min(100, (Math.abs(dailyLoss) / Math.max(1, dailyLossLimit)) * 100)}%` }}
             />
           </div>
         </div>

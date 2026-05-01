@@ -2,11 +2,11 @@
 // Extracted as standalone module for modular migration compatibility.
 
 export async function safeJson(resp: Response | null): Promise<unknown> {
-  if (!resp) return {};
+  if (!resp) throw new Error('No response');
   try {
     return await resp.json();
-  } catch {
-    return {};
+  } catch (e) {
+    throw new Error(`JSON parse error: ${e instanceof Error ? e.message : 'unknown'}`);
   }
 }
 

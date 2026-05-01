@@ -402,8 +402,7 @@ def test_volatility_scaler_replaces_session_multiplier():
     high_vol_h1 = {"ema21": 110.0, "ema50": 100.0, "close": 100.0, "atr": 5.0}
     high_vol = _score(
         d1=high_vol_d1, h4=high_vol_h4, h1=high_vol_h1,
-        pair={"type": "crypto", "display": "BTC/USDT"},
-        funding_rate=0.0001,
+        pair={"type": "stock", "display": "AAPL"},
     )
 
     # Session multiplier is now always 1.0 (deprecated)

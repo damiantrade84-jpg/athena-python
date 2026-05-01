@@ -397,3 +397,96 @@ def test_engine_c_forex_intraday_engine_a_gets_real_tfs(monkeypatch):
     assert preloaded["D1"][0]["close"] == bars_by_tf["D1"][0]["close"], "D1 must be real D1"
     assert preloaded["H4"][0]["close"] == bars_by_tf["H4"][0]["close"], "H4 must be real H4"
     assert preloaded["H1"][0]["close"] == bars_by_tf["H1"][0]["close"], "H1 must be real H1"
+
+
+def test_engine_c_scan_optional_pairs_filter(monkeypatch):
+    """Optional JSON `pairs` / `symbols` list narrows forex scan subset."""
+    p1 = {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex", "enabled": True}
+    p2 = {"display": "GBP/USD", "symbol": "GBPUSD", "type": "forex", "enabled": True}
+    bars_by_tf = {
+        "D1": _make_bars(count=35, base=1.1000),
+        "H4": _make_bars(count=35, base=1.0900),
+        "H1": _make_bars(count=35, base=1.0800),
+    }
+    scanned: list[str] = []
+
+    def _spy_analyze_pair(pair, btc_bias, **kwargs):  # noqa: ARG001
+        scanned.append(str(pair.get("display") or pair.get("symbol") or "?"))
+        return {"direction": "LONG", "price": 1.1, "atr": 0.001}
+
+    runtime = SimpleNamespace(
+        ALL_PAIRS=[p1, p2],
+        disabled_pairs=set(),
+        current_btc_bias=lambda: "neutral",
+        resolve_scan_style=lambda style, _pair: style,
+        normalize_style=lambda style: style,
+        analyze_pair=_spy_analyze_pair,
+        naked_scan_style_profile=lambda requested_style, score_group=None: (
+            "intraday",
+            {
+                "min_score": 1.0,
+                "fallback_rr": 2.0,
+                "min_rr": 1.0,
+                "zone_tf": "H4",
+                "entry_tf": "H1",
+                "atr_tf": "H4",
+            },
+        ),
+        CONFIG={"ENGINE_B_FOREX_STRUCTURE_TF": "D1"},
+        fetch_candles=lambda pair, tf, _limit: list(bars_by_tf[tf]),
+        engine_b_regime_label=lambda *_a, **_k: "TRENDING",
+        insert_shadow_from_engine_c=lambda *_a, **_k: None,
+        log=SimpleNamespace(
+            warning=lambda *args, **kwargs: None,
+            error=lambda *args, **kwargs: None,
+            info=lambda *args, **kwargs: None,
+        ),
+    )
+
+    class StubNaked:
+        def set_registry_context(self, *_a, **_k):
+            return self
+
+        def analyze_structure(self, *_a, **_k):
+            return {"structural_verdict": "CLEAR", "direction": "LONG"}
+
+        def calculate_confidence(self, *_a, **_k):
+            return {
+                "score": 5.0,
+                "max_possible": 6.0,
+                "pct": 80.0,
+                "passed": True,
+                "rr": 2.0,
+                "structure_ok": True,
+                "zone_ok": True,
+                "trigger_ok": True,
+                "location_ok": True,
+            }
+
+    def _stub_consensus(**kwargs):
+        return {"verdict": "ALIGNED", "conviction": 0.5, "trade": False, "tier": "MEDIUM"}
+
+    monkeypatch.setattr(execution, "rt", lambda: runtime)
+    monkeypatch.setattr(execution, "NakedEngine", StubNaked)
+    monkeypatch.setattr(
+        execution,
+        "scan_candle_limits",
+        lambda: {"D1": len(bars_by_tf["D1"]), "H4": len(bars_by_tf["H4"]), "H1": len(bars_by_tf["H1"])},
+    )
+    monkeypatch.setattr(
+        execution,
+        "calc_indicators_with_normalized",
+        lambda _candles, _ptype: {"snap": {"atr": 0.002, "close": 1.1}},
+    )
+    monkeypatch.setattr(execution, "compute_consensus", _stub_consensus)
+    monkeypatch.setattr(execution, "get_pair_score_group", lambda _p: "forex_majors")
+
+    app = Flask(__name__)
+    with app.test_request_context(
+        "/api/engine-c-scan",
+        method="POST",
+        json={"assetClass": "forex", "style": "intraday", "pairs": ["GBPUSD"]},
+    ):
+        execution.api_engine_c_scan()
+
+    assert scanned == ["GBP/USD"]

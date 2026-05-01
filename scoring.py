@@ -629,11 +629,19 @@ def calc_confluence(
 
         d1c = d1_candles or []
         h1_snap = h1.get("snap") if h1 else {}
-        _prev_close = float(d1c[-2]["close"]) if len(d1c) >= 2 else None
+        _prev_close = None
+        if len(d1c) >= 2:
+            try:
+                _prev_close = float(d1c[-2]["close"])
+            except (TypeError, ValueError):
+                _prev_close = None
         _cur_close = h1_snap.get("close") if h1_snap else None
         if _cur_close is None and d1c:
-            _cur_close = float(d1c[-1]["close"])
-        if _prev_close and _cur_close is not None:
+            try:
+                _cur_close = float(d1c[-1]["close"])
+            except (TypeError, ValueError):
+                _cur_close = None
+        if _prev_close is not None and _cur_close is not None:
             div = _calc_oi_divergence(oi_data, float(_cur_close), _prev_close)
             if div and div.get("warning"):
                 w.append(div["warning"])

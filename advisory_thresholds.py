@@ -334,7 +334,7 @@ def _current_policy_snapshot() -> dict[str, Any]:
 
 def _recommendation_id(scope_type: str, scope_key: str, current_value: float, proposed_value: float) -> str:
     raw = f"{scope_type}|{scope_key}|{round(current_value, 4)}|{round(proposed_value, 4)}"
-    return hashlib.md5(raw.encode("utf-8")).hexdigest()
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _build_engine_a_recommendations(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

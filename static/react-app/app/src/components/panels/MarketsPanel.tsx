@@ -115,7 +115,15 @@ export default function MarketsPanel() {
                         <td className="py-2 text-xs font-mono font-bold">{pair}</td>
                         <td className="py-2 text-xs font-mono text-right">{data.bid.toFixed(5)}</td>
                         <td className="py-2 text-xs font-mono text-right">{data.ask.toFixed(5)}</td>
-                        <td className="py-2 text-xs font-mono text-right">{(data.spread * 10000).toFixed(1)}</td>
+                        <td className="py-2 text-xs font-mono text-right">{
+                          (() => {
+                            const p = String(pair).toUpperCase();
+                            const isJpy = p.includes('JPY');
+                            const isCrypto = p.includes('BTC') || p.includes('ETH') || p.includes('SOL') || p.includes('BNB') || p.includes('DOGE') || p.includes('SHIB');
+                            const mult = isCrypto ? 1 : isJpy ? 100 : 10000;
+                            return (data.spread * mult).toFixed(1);
+                          })()
+                        }</td>
                         <td className={`py-2 text-xs font-mono font-bold text-right ${data.change_pct >= 0 ? 'text-long' : 'text-short'}`}>
                           {data.change_pct >= 0 ? '+' : ''}{data.change_pct.toFixed(2)}%
                         </td>

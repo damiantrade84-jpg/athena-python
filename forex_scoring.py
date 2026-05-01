@@ -374,7 +374,9 @@ def _apply_h1_ema_entry_quality_modifier(
 
 
 def _entry_quality(h1_snap: dict, direction: str, rsi_history: list = None) -> float:
-    rsi = h1_snap.get("rsi") or h1_snap.get("rsi14")
+    rsi = h1_snap.get("rsi")
+    if rsi is None:
+        rsi = h1_snap.get("rsi14")
     if rsi is None:
         return 0.3
 

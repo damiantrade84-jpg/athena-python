@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useStore } from '@/hooks/useStore';
 import { useApiPoll, useApiPost } from '@/hooks/useApiData';
+import { useLivePrices } from '@/hooks/useLivePrices';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -50,6 +51,45 @@ const BUCKET_LABELS: Record<BucketKey, string> = {
   conflict: 'CONFLICT',
   skipped: 'SKIPPED',
 };
+
+/** Derive group key from row for sub-grouping within buckets */
+function rowGroupKey(row: EngineCConsensusRow): string {
+  const sg = ((row as Record<string, unknown>).scoreGroup as string) || '';
+  if (sg.trim()) return sg.trim().toLowerCase();
+  const t = (row.type || '').trim().toLowerCase();
+  return t || 'other';
+}
+
+/** Format group key for display */
+function formatGroupLabel(key: string): string {
+  if (!key || key === 'other') return 'Other';
+  return key
+    .split('_')
+    .map((w) => (w.length ? w[0].toUpperCase() + w.slice(1) : ''))
+    .join(' ');
+}
+
+/** Group rows by scoreGroup and sort groups by top conviction */
+function groupRows(rows: EngineCConsensusRow[]): { key: string; rows: EngineCConsensusRow[] }[] {
+  const map = new Map<string, EngineCConsensusRow[]>();
+  for (const r of rows) {
+    const k = rowGroupKey(r);
+    if (!map.has(k)) map.set(k, []);
+    map.get(k)!.push(r);
+  }
+  // Sort rows within each group by conviction descending
+  const entries = [...map.entries()].map(([key, items]) => {
+    const sorted = [...items].sort((a, b) => toNum(b.conviction) - toNum(a.conviction));
+    const topConv = sorted.length ? toNum(sorted[0].conviction, 0) : 0;
+    return { key, rows: sorted, topConv };
+  });
+  // Sort groups by top conviction, then alphabetically
+  entries.sort((a, b) => {
+    if (b.topConv !== a.topConv) return b.topConv - a.topConv;
+    return a.key.localeCompare(b.key);
+  });
+  return entries.map(({ key, rows }) => ({ key, rows }));
+}
 
 function bucketBadgeClass(b: BucketKey): string {
   switch (b) {
@@ -150,6 +190,7 @@ export default function EngineCPanel() {
   const { post: postScan, loading: scanning, error: scanError } = useApiPost<EngineCScanResponse>();
   const { post: postCompare, loading: comparing } = useApiPost<CompareResponse>();
   const { post: postBacktest, loading: backtesting } = useApiPost<EngineCBacktestResponse>();
+  const { priceFor } = useLivePrices(3000);
 
   const runScan = useCallback(async () => {
     setSelected(null);
@@ -224,6 +265,8 @@ export default function EngineCPanel() {
     conflict: scanResult?.conflict || [],
     skipped: scanResult?.skipped || [],
   };
+
+  const groupedRows = useMemo(() => groupRows(buckets[activeBucket]), [buckets, activeBucket]);
 
   const equityChart = useMemo(() => {
     const ec = btResult?.equity_curve;
@@ -334,15 +377,30 @@ export default function EngineCPanel() {
                     No rows in {BUCKET_LABELS[activeBucket]}
                   </div>
                 ) : (
-                  <div className="space-y-2">
-                    {buckets[activeBucket].map((row, i) => (
-                      <ConsensusRowCard
-                        key={`${row.display || row.symbol || row.pair || i}-${i}`}
-                        row={row}
-                        bucket={activeBucket}
-                        selected={selected === row}
-                        onSelect={setSelected}
-                      />
+                  <div className="space-y-4">
+                    {groupedRows.map(({ key, rows }) => (
+                      <div key={key} className="space-y-2">
+                        <div className="flex items-center justify-between sticky top-0 z-[1] bg-card/95 backdrop-blur-sm py-1 border-b border-border/50">
+                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+                            {formatGroupLabel(key)}
+                          </span>
+                          <Badge variant="outline" className="text-[9px] font-mono">
+                            {rows.length} · conv {fmtNum(rows[0]?.conviction, 2)}
+                          </Badge>
+                        </div>
+                        <div className="space-y-2">
+                          {rows.map((row, i) => (
+                            <ConsensusRowCard
+                              key={`${row.display || row.symbol || row.pair || key}-${i}`}
+                              row={row}
+                              livePrice={priceFor(row)}
+                              bucket={activeBucket}
+                              selected={selected === row}
+                              onSelect={setSelected}
+                            />
+                          ))}
+                        </div>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -360,7 +418,7 @@ export default function EngineCPanel() {
             <CardContent>
               {selected ? (
                 <ScrollArea className="h-[480px] pr-2">
-                  <ConsensusDetail row={selected} />
+                  <ConsensusDetail row={{ ...selected, livePrice: priceFor(selected) }} />
                 </ScrollArea>
               ) : (
                 <div className="flex flex-col items-center justify-center h-[480px] text-muted-foreground">
@@ -578,9 +636,10 @@ export default function EngineCPanel() {
 }
 
 function ConsensusRowCard({
-  row, bucket, selected, onSelect,
+  row, livePrice, bucket, selected, onSelect,
 }: {
   row: EngineCConsensusRow;
+  livePrice?: number;
   bucket: BucketKey;
   selected: boolean;
   onSelect: (r: EngineCConsensusRow) => void;
@@ -593,6 +652,7 @@ function ConsensusRowCard({
   const tier = row.tier || 'SKIP';
   const verdict = row.verdict || '—';
   const display = row.display || row.symbol || row.pair || '—';
+  const live = toNum(livePrice);
 
   return (
     <button
@@ -620,7 +680,7 @@ function ConsensusRowCard({
         <div>conv {fmtNum(conviction, 2)}</div>
         <div>A {fmtNum(aNorm, 2)}</div>
         <div>B {fmtNum(bNorm, 2)}</div>
-        <div>RR {fmtNum(row.rr, 2)}</div>
+        <div className="text-primary">live {live > 0 ? fmtPrice(live, row.pair, row.type) : '—'}</div>
       </div>
 
       {bucket === 'skipped' && (row.reason || row.detail) && (
@@ -666,6 +726,7 @@ function ConsensusDetail({ row }: { row: EngineCConsensusRow }) {
 
         <TabsContent value="levels" className="mt-3">
           <div className="grid grid-cols-2 gap-2 text-xs">
+            <Row k="Live" v={fmtPrice(row.livePrice, row.pair, row.type)} />
             <Row k="Entry" v={fmtPrice(row.entry, row.pair, row.type)} />
             <Row k="SL" v={`${fmtPrice(row.sl, row.pair, row.type)}${row.sl_method ? ` · ${row.sl_method}` : ''}`} accent="short" />
             <Row k="TP" v={`${fmtPrice(row.tp, row.pair, row.type)}${row.tp_method ? ` · ${row.tp_method}` : ''}`} accent="long" />

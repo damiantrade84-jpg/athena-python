@@ -115,9 +115,9 @@ Do not lower Engine A thresholds without evidence from:
 **Known current state:**
 - Engine A is producing A_ONLY signals.
 - Engine A threshold was not proven to be too high.
-- Engine A `volume_ratio`, `macro_context`, and `intermarket_context` are currently accepted but not active scoring factors. This is a known diagnostic gap, not a bug.
+- Engine A `volume_ratio`, `macro_context`, and `intermarket_context` are wired in `factor_scoring.py` Phase 2 (config-gated via `VOLATILITY_SCALER_ENABLED`, macro context from `fetch_macro_context()`, and intermarket from `intermarket_context` feed). These feed into the addon/conviction path, not as standalone factor weights.
 
-Do not silently add these factors into scoring without explicit testing and config-gating.
+Do not silently reweight these factors or bypass their config gates without explicit testing.
 
 ---
 
@@ -555,6 +555,12 @@ Implementation:
 
 The UI must display backend contract fields, not legacy placeholders.
 
+**Flask backend returns flat JSON — no `{ data: T }` wrapper:**
+- `apiClient.getJson()` / `postJson()` return the response body directly.
+- Frontend must **not** extract `.data` from responses.
+- Legacy `.data` extraction was removed from `apiClient.ts` during the 2026-04-30 audit.
+- If a route needs metadata, it returns it at the top level (e.g., `{ results: [...], meta: {...} }`), not nested under `.data`.
+
 **Engine A UI must use Engine A v2 fields:**
 - `factorScores.trend`
 - `factorScores.momentum`
@@ -581,6 +587,11 @@ Do not reintroduce legacy Engine A vote fields as active scoring indicators unle
 - engineA/engineB/engineC/engineD contract names
 
 UI must warn or fall back safely if `payloadVersion` is missing or old.
+
+**Guardian / Sidebar live state:**
+- `useStore.tsx` polls `/api/guardian/status`, `/api/last-scan`, `/api/open-trades-timed`, and `/api/prices` every 5 s.
+- Guardian daily loss limit and max open risk come from the live backend config — no hardcoded frontend overrides.
+- `SqnBadge.tsx` and `LivePrice.tsx` use `fmtNum()` null guards to prevent crash-on-null.
 
 **Execution payload safety:**
 - UI payload must never be trusted as the source of truth for freshness/risk.

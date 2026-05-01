@@ -54,9 +54,9 @@ _VOLATILITY_SCALER_MULT_HIGH = 0.85      # penalise noise in high vol
 # Addon contribution bounds
 # Stage 1.4: aligned with research lab MAX_ABS (0.20) so clamp order is deterministic.
 # Research lab computes aggregate → single clamp to [-0.15, +0.20].
-_ADDON_CONFIRM = 0.20    # confirming the trend direction
+_ADDON_CONFIRM = float(CONFIG.get("FACTOR_ADDON_CONFIRM_MAX", 0.20))    # confirming the trend direction
 _ADDON_NEUTRAL = 0.00    # data missing or neutral
-_ADDON_AGAINST = -0.15   # actively opposing direction
+_ADDON_AGAINST = float(CONFIG.get("FACTOR_ADDON_AGAINST_MIN", -0.15))   # actively opposing direction
 
 # Final score formula weight defaults — read lazily inside compute_factor_scores
 _MOMENTUM_WEIGHT_DEFAULT = 0.50
@@ -1141,17 +1141,27 @@ def compute_factor_scores(
         _eff_floor = float(_floor_by_regime[regime])
     else:
         _eff_floor = _conviction_floor
-    base_score = abs(trend_score) * adx_mult * vol_scaler * session_mult * di_align_mult
+    base_score = abs(trend_score) * adx_mult * vol_scaler * di_align_mult
 
     # FIX 3: Recalibrate Cost/Funding Penalty Sensitivity
     _cost_penalty = 0.0
+    _fund_high = float(CONFIG.get("FACTOR_FUNDING_HIGH_PCT", 0.01))
+    _fund_low = float(CONFIG.get("FACTOR_FUNDING_LOW_PCT", -0.01))
+    _fund_pen_cap = float(CONFIG.get("FACTOR_FUNDING_PENALTY_CAP", 0.10))
+    _fund_pen_mult = float(CONFIG.get("FACTOR_FUNDING_PENALTY_MULT", 5.0))
+    _fund_bonus_cap = float(CONFIG.get("FACTOR_FUNDING_BONUS_CAP", 0.05))
+    _fund_bonus_mult = float(CONFIG.get("FACTOR_FUNDING_BONUS_MULT", 2.5))
+    _carry_neg = float(CONFIG.get("FACTOR_CARRY_NEGATIVE_PCT", -0.02))
+    _carry_pos = float(CONFIG.get("FACTOR_CARRY_POSITIVE_PCT", 0.02))
+    _carry_pen = float(CONFIG.get("FACTOR_CARRY_PENALTY", 0.05))
+    _carry_boost = float(CONFIG.get("FACTOR_CARRY_BOOST", -0.03))
     if asset_type == "crypto" and funding_rate is not None:
         try:
             _fr = float(funding_rate)
-            if _fr > 0.01:  # Expensive to hold (> 0.01% per 8h = ~11% annualized)
-                _cost_penalty = min(0.10, _fr * 5)
-            elif _fr < -0.01:  # Getting paid to hold
-                _cost_bonus = min(0.05, abs(_fr) * 2.5)
+            if _fr > _fund_high:  # Expensive to hold
+                _cost_penalty = min(_fund_pen_cap, _fr * _fund_pen_mult)
+            elif _fr < _fund_low:  # Getting paid to hold
+                _cost_bonus = min(_fund_bonus_cap, abs(_fr) * _fund_bonus_mult)
                 _cost_penalty = -_cost_bonus  # Negative penalty = boost
             else:
                 _cost_penalty = 0  # Normal funding = no penalty
@@ -1163,10 +1173,10 @@ def compute_factor_scores(
             from carry_feed import get_carry_differential
             carry = get_carry_differential(display)
             if carry is not None:
-                if carry < -0.02:  # Negative carry > 2% annual
-                    _cost_penalty = 0.05
-                elif carry > 0.02:  # Positive carry
-                    _cost_penalty = -0.03  # Small boost
+                if carry < _carry_neg:  # Negative carry
+                    _cost_penalty = _carry_pen
+                elif carry > _carry_pos:  # Positive carry
+                    _cost_penalty = _carry_boost  # Small boost
                 else:
                     _cost_penalty = 0
         except Exception:
@@ -1178,43 +1188,51 @@ def compute_factor_scores(
     # overfitting while making the inputs materially affect the output.
 
     # Volume-ratio adjustment: elevated volume confirms conviction; low volume
-    # suppresses it.  Impact bounded to ±3% of final_score.
+    # suppresses it.  Impact bounded to CONFIG-tunable limits.
+    _vol_adj_max = float(CONFIG.get("FACTOR_VOL_ADJ_MAX", 0.03))
+    _vol_adj_min = float(CONFIG.get("FACTOR_VOL_ADJ_MIN", -0.03))
+    _vol_hi_thresh = float(CONFIG.get("FACTOR_VOL_HIGH_THRESHOLD", 1.5))
+    _vol_lo_thresh = float(CONFIG.get("FACTOR_VOL_LOW_THRESHOLD", 0.5))
     _vol_adj = 0.0
     if isinstance(volume_ratio, (int, float)) and volume_ratio > 0:
-        if volume_ratio > 1.5:
-            _vol_adj = min(0.03, (volume_ratio - 1.5) * 0.03)  # boost up to +3%
-        elif volume_ratio < 0.5:
-            _vol_adj = max(-0.03, (volume_ratio - 0.5) * 0.06)  # penalty down to -3%
-        # 0.5–1.5 → no adjustment (neutral volume zone)
+        if volume_ratio > _vol_hi_thresh:
+            _vol_adj = min(_vol_adj_max, (volume_ratio - _vol_hi_thresh) * _vol_adj_max)
+        elif volume_ratio < _vol_lo_thresh:
+            _vol_adj = max(_vol_adj_min, (volume_ratio - _vol_lo_thresh) * abs(_vol_adj_min) * 2)
+        # neutral zone → no adjustment
 
     # Macro-context adjustment: risk-on boosts trend-aligned scores, risk-off
-    # dampens them.  Impact bounded to ±2% of final_score.
+    # dampens them.  Impact bounded to CONFIG-tunable limits.
+    _macro_adj_max = float(CONFIG.get("FACTOR_MACRO_ADJ_MAX", 0.02))
+    _macro_adj_min = float(CONFIG.get("FACTOR_MACRO_ADJ_MIN", -0.02))
     _macro_adj = 0.0
     if isinstance(macro_context, dict):
         _macro_state = str(macro_context.get("state", "neutral")).lower()
         if _macro_state == "risk_on":
-            _macro_adj = 0.02
+            _macro_adj = _macro_adj_max
         elif _macro_state == "risk_off":
-            _macro_adj = -0.02
-        # "neutral" or unknown → 0.0
+            _macro_adj = _macro_adj_min
     elif isinstance(macro_context, str):
         _macro_s = macro_context.lower()
         if _macro_s == "risk_on":
-            _macro_adj = 0.02
+            _macro_adj = _macro_adj_max
         elif _macro_s == "risk_off":
-            _macro_adj = -0.02
+            _macro_adj = _macro_adj_min
 
     # Intermarket-context adjustment: divergence signals penalise momentum
-    # proportionally.  Impact bounded to ±2% of final_score.
+    # proportionally.  Impact bounded to CONFIG-tunable limits.
+    _inter_adj_max = float(CONFIG.get("FACTOR_INTER_ADJ_MAX", 0.02))
+    _inter_adj_min = float(CONFIG.get("FACTOR_INTER_ADJ_MIN", -0.02))
     _inter_adj = 0.0
     if isinstance(intermarket_context, dict):
         if intermarket_context.get("divergence") is True:
-            _inter_adj = -0.02
+            _inter_adj = _inter_adj_min
         _divergence_score = intermarket_context.get("divergence_score")
         if isinstance(_divergence_score, (int, float)):
-            _inter_adj = max(-0.02, min(0.02, -_divergence_score * 0.02))
-    # Total bounded adjustment: ±5% max (3+2, but we clamp the sum)
-    _total_adj = max(-0.05, min(0.05, _vol_adj + _macro_adj + _inter_adj))
+            _inter_adj = max(_inter_adj_min, min(_inter_adj_max, -_divergence_score * abs(_inter_adj_min)))
+    # Total bounded adjustment: clamp sum to ±5% default
+    _total_adj_cap = float(CONFIG.get("FACTOR_TOTAL_ADJ_CAP", 0.05))
+    _total_adj = max(-_total_adj_cap, min(_total_adj_cap, _vol_adj + _macro_adj + _inter_adj))
 
     final_score = base_score * (_eff_floor + (1.0 - _eff_floor) * conviction)
     final_score = final_score * (1.0 - _cost_penalty)
@@ -1299,6 +1317,7 @@ def _zero_result(
             "trend": 1.0,
             "momentum": float(CONFIG.get("FACTOR_MOMENTUM_WEIGHT", _MOMENTUM_WEIGHT_DEFAULT)),
             "addon": float(CONFIG.get("FACTOR_ADDON_WEIGHT", _ADDON_WEIGHT_DEFAULT)),
+            "base": float(CONFIG.get("FACTOR_BASE_WEIGHT", _BASE_WEIGHT_DEFAULT)),
         },
         "trend_coherence": trend_detail,
         "directional_score": 0.0,

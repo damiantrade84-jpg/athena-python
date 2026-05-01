@@ -300,7 +300,8 @@ export default function BacktestPanel() {
     const id = rec.rec_id ?? rec.id;
     if (id == null) return;
     const r = await postApprove(`/api/advisory-thresholds/${id}/approve`, {});
-    if (r?.error) showToast(`Approve failed: ${r.error}`, 'error');
+    if (!r) showToast('Approve failed: no response', 'error');
+    else if (r.error) showToast(`Approve failed: ${r.error}`, 'error');
     else showToast('Threshold recommendation approved', 'success');
     refreshAdvisory();
   }, [postApprove, showToast, refreshAdvisory]);
@@ -309,7 +310,8 @@ export default function BacktestPanel() {
     const id = rec.rec_id ?? rec.id;
     if (id == null) return;
     const r = await postApprove(`/api/advisory-thresholds/${id}/reject`, {});
-    if (r?.error) showToast(`Reject failed: ${r.error}`, 'error');
+    if (!r) showToast('Reject failed: no response', 'error');
+    else if (r.error) showToast(`Reject failed: ${r.error}`, 'error');
     else showToast('Threshold recommendation rejected', 'info');
     refreshAdvisory();
   }, [postApprove, showToast, refreshAdvisory]);

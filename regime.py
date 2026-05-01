@@ -28,7 +28,6 @@ def detect_regime(
             regime           str   config-compatible key (TRENDING/RANGING/HIGH_VOLATILITY/LOW_VOLATILITY)
             adx_value        float|None
             adx_momentum     str   'strengthening'|'stable'|'exhausting'|'collapsing'
-            ranging_penalty  float  calculated score penalty
             confidence       str   'high'|'medium'|'low'
             bb_width_pct     float|None  BB width percentile for transparency
     """
@@ -42,29 +41,6 @@ def detect_regime(
 
     adx_val = h4_snap.get("adx")
     adx_mom = h4_snap.get("adxMomentum", "stable")
-    # NOTE: ranging_penalty is computed but currently NOT consumed by factor_scoring.py.
-    # The new multiplicative scoring formula uses REGIME_WEIGHTS instead.
-    # CRYPTO_TRANSITION_PENALTY_ENABLED has no effect on live scores.
-    # Keep in return dict for potential future reintroduction.
-    # TODO: Either reconnect to scoring pipeline or remove in a future cleanup.
-    ranging_penalty = 0.0
-
-    if adx_val is not None:
-        if adx_val < _rng["dead"]:
-            ranging_penalty = _rng["dead_pen"]
-        elif adx_val < _rng["choppy"]:
-            ranging_penalty = _rng["choppy_pen"]
-
-    # Crypto-specific transition penalty on top of range penalty (capped at 2.0 total)
-    # Can be disabled via config.yaml to reduce over-filtering.
-    if (
-        pair_type == "crypto"
-        and cfg.get("CRYPTO_TRANSITION_PENALTY_ENABLED", True)
-        and adx_mom in ("collapsing", "exhausting")
-    ):
-        _trans_pen = 1.5 if adx_mom == "collapsing" else 0.8
-        ranging_penalty = min(ranging_penalty + _trans_pen, 2.0)
-
     # Determine state from ADX
     if adx_val is None:
         state = 1
@@ -116,7 +92,6 @@ def detect_regime(
         "regime": label,
         "adx_value": adx_val,
         "adx_momentum": adx_mom,
-        "ranging_penalty": ranging_penalty,
         "confidence": confidence,
         "bb_width_pct": bb_width_pct,
     }

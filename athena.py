@@ -6827,17 +6827,22 @@ def api_bybit_status():
 def api_close_position():
     """Manually close an open position on MT5 or Bybit."""
 
-    data = request.get_json(force=True)
+    data = request.get_json(force=True) or {}
 
-    exch = data.get("exchange", "")
+    exch = str(data.get("exchange") or "").strip().lower()
 
-    pair = data.get("pair", "")
+    pair = str(data.get("pair") or data.get("symbol") or "").strip()
 
-    direction = data.get("direction", "")
+    direction = str(data.get("direction") or "").strip().upper()
 
     volume = float(data.get("volume", 0))
 
     ticket = data.get("ticket")
+
+    # Legacy React payload sent ticket + symbol without exchange — assume MT5.
+    if not exch and ticket not in (None, "", 0):
+        exch = "mt5"
+        log.debug("[CLOSE] Inferred exchange=mt5 from ticket-only payload")
 
     if exch == "bybit":
         from bybit_executor import bybit_close_position
@@ -10659,8 +10664,8 @@ def _mt5_connection_health() -> dict:
 
 def _feed_health_snapshot() -> dict:
     rows = []
+    limits = scan_candle_limits()
     for pair in ACTIVE_PAIRS:
-        limits = scan_candle_limits(pair)
         timeframe_meta = {}
         for tf in ("D1", "H4", "H1"):
             limit = limits.get(tf)
@@ -10757,8 +10762,8 @@ def api_live_feed_diagnostics():
     generated_at = datetime.now(timezone.utc).isoformat()
     _off = float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 1.0) or 1.0)
     _tnow = time.time()
+    limits = scan_candle_limits()
     for pair in pairs:
-        limits = scan_candle_limits(pair)
         for tf in timeframes:
             tf_u = str(tf or "").upper()
             limit = int(limits.get(tf_u, CONFIG.get(f"{tf_u}_CANDLES", 300)) or 300)
@@ -10921,27 +10926,36 @@ def api_open_trades_timed():
     out = []
     now_ts = datetime.now(_tz.utc).timestamp()
 
-    # -- MT5 positions --
-    try:
+    def _fetch_mt5_positions():
         from mt5_executor import mt5_get_positions
-        mt5_res = mt5_get_positions()
-        if mt5_res.get("error"):
-            return jsonify(mt5_res), 500
-        mt5_positions = mt5_res.get("positions", [])
-    except Exception as e:
-        return jsonify({"error": f"MT5 fetch failed: {e}"}), 500
+        return mt5_get_positions()
 
-    # -- Bybit positions --
-    try:
+    def _fetch_bybit_positions():
         from bybit_executor import bybit_get_positions
-        bybit_res = bybit_get_positions()
-        if bybit_res.get("error"):
-            return jsonify(bybit_res), 500
-        bybit_positions = bybit_res.get("positions", [])
-        for p in bybit_positions:
-            p["_bybit"] = True
+        return bybit_get_positions()
+
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+
+        # Both broker reads are independent and read-only. Fetching them in
+        # parallel keeps dashboard latency at max(MT5, Bybit), not MT5+Bybit.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            mt5_future = pool.submit(_fetch_mt5_positions)
+            bybit_future = pool.submit(_fetch_bybit_positions)
+            mt5_res = mt5_future.result()
+            bybit_res = bybit_future.result()
     except Exception as e:
-        return jsonify({"error": f"Bybit fetch failed: {e}"}), 500
+        return jsonify({"error": f"Broker position fetch failed: {e}"}), 500
+
+    if mt5_res.get("error"):
+        return jsonify(mt5_res), 500
+    if bybit_res.get("error"):
+        return jsonify(bybit_res), 500
+
+    mt5_positions = mt5_res.get("positions", [])
+    bybit_positions = bybit_res.get("positions", [])
+    for p in bybit_positions:
+        p["_bybit"] = True
 
     all_positions = mt5_positions + bybit_positions
 
@@ -12442,12 +12456,15 @@ def _update_trade_outcome(
 
 
 _score_decay_counter = 0
+_score_decay_lock = threading.Lock()
+_score_decay_last_run = 0.0
+_SCORE_DECAY_MIN_INTERVAL = 240.0  # 4 min — prevent back-to-back runs
 
 
 def _outcome_monitor_loop() -> None:
     """Background loop: every 60s reconcile closed MT5/CCXT trades against audit_log."""
 
-    global _score_decay_counter
+    global _score_decay_counter, _score_decay_last_run
 
     while True:
         try:
@@ -12464,7 +12481,13 @@ def _outcome_monitor_loop() -> None:
             if _score_decay_counter >= 5:
                 _score_decay_counter = 0
 
-                _check_score_decay()
+                if time.time() - _score_decay_last_run >= _SCORE_DECAY_MIN_INTERVAL:
+                    if _score_decay_lock.acquire(blocking=False):
+                        try:
+                            _check_score_decay()
+                        finally:
+                            _score_decay_last_run = time.time()
+                            _score_decay_lock.release()
 
         except Exception as e:
             log.debug(f"[MONITOR] loop error: {e}")

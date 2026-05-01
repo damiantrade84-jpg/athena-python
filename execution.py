@@ -499,38 +499,41 @@ def api_quick_execute():
         if result.get("success"):
             _audit = _quick_audit_context(sig, engine_b)
             try:
+                _audit_ts = datetime.now(timezone.utc).isoformat()
+                _audit_rows = []
+                for _leg in _execution_audit_legs(result, approval):
+                    _audit_rows.append((
+                        _audit_ts,
+                        pair_name,
+                        _audit["score"],
+                        _audit["engine"],
+                        sig.get("direction"),
+                        _audit["trend"],
+                        "EXECUTED",
+                        _audit["edge_prob"],
+                        f"${_leg['riskAmount']}",
+                        pip_mode or "structural",
+                        _leg.get("entryPrice"),
+                        sig.get("sl"),
+                        _leg.get("tp") or sig.get("tp1"),
+                        _leg.get("volume"),
+                        _audit["regime"],
+                        _leg.get("riskAmount"),
+                        _leg.get("riskPct"),
+                        str(_leg.get("ticket", "")),
+                        result.get("feeCost"),
+                        json.dumps(_audit["factors"]),
+                        _audit["max_score"],
+                        _audit["score_pct"],
+                    ))
                 with sqlite3.connect(_r.AUDIT_DB, timeout=15.0) as con:
-                    for _leg in _execution_audit_legs(result, approval):
-                        con.execute(
-                            "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
-                            "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
-                            "max_score,score_pct) "
-                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (
-                                datetime.now(timezone.utc).isoformat(),
-                                pair_name,
-                                _audit["score"],
-                                _audit["engine"],
-                                sig.get("direction"),
-                                _audit["trend"],
-                                "EXECUTED",
-                                _audit["edge_prob"],
-                                f"${_leg['riskAmount']}",
-                                pip_mode or "structural",
-                                _leg.get("entryPrice"),
-                                sig.get("sl"),
-                                _leg.get("tp") or sig.get("tp1"),
-                                _leg.get("volume"),
-                                _audit["regime"],
-                                _leg.get("riskAmount"),
-                                _leg.get("riskPct"),
-                                str(_leg.get("ticket", "")),
-                                result.get("feeCost"),
-                                json.dumps(_audit["factors"]),
-                                _audit["max_score"],
-                                _audit["score_pct"],
-                            ),
-                        )
+                    con.executemany(
+                        "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
+                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
+                        "max_score,score_pct) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        _audit_rows,
+                    )
                     con.commit()
             except Exception as ae:
                 _r.log.warning(f"[QUICK EXEC] Audit DB write failed: {ae}")
@@ -568,6 +571,32 @@ def api_engine_c_scan():
         if not scan_all and ptype != asset_class:
             continue
         candidate_pairs.append(p)
+
+    _pf_raw = d.get("pairs") if isinstance(d.get("pairs"), list) else None
+    if _pf_raw is None and isinstance(d.get("symbols"), list):
+        _pf_raw = d["symbols"]
+    if isinstance(_pf_raw, list) and _pf_raw:
+
+        def _pair_tag_variants(raw: object) -> set[str]:
+            s = str(raw or "").strip().upper()
+            if not s:
+                return set()
+            compact = s.replace("/", "").replace(" ", "").replace("-", "")
+            return {s, compact}
+
+        def _pair_matches_filter(p: dict) -> bool:
+            for raw in _pf_raw:
+                variants = _pair_tag_variants(raw)
+                for key in ("display", "symbol"):
+                    pv = str(p.get(key) or "").strip().upper()
+                    if not pv:
+                        continue
+                    pvars = _pair_tag_variants(pv)
+                    if variants.intersection(pvars):
+                        return True
+            return False
+
+        candidate_pairs = [p for p in candidate_pairs if _pair_matches_filter(p)]
 
     if not candidate_pairs:
         label = "all enabled pairs" if scan_all else f"enabled pairs for {asset_class}"
@@ -1286,40 +1315,42 @@ def api_execute():
                     _audit_engine = _audit_engine_from_signal(sig)
                     _eng_b_data = sig.get("engine_b") or sig.get("naked_data") or {}
                     
+                    _audit_ts = datetime.now(timezone.utc).isoformat()
+                    _audit_rows = []
                     for _leg in _execution_audit_legs(result, approval):
-                        con.execute(
-                            "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
-                            "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
-                            "signal_price_ref,slippage_bps,max_score,score_pct) "
-                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (
-                                datetime.now(timezone.utc).isoformat(),
-                                pair,
-                                sig.get("confluenceScore"),
-                                _audit_engine,
-                                sig.get("direction"),
-                                sig.get("trendState"),
-                                "EXECUTED",
-                                None,
-                                f"${_leg['riskAmount']}",
-                                sig.get("style") or "intraday",
-                                _leg.get("entryPrice"),
-                                sig.get("sl"),
-                                _leg.get("tp") or sig.get("tp1"),
-                                _leg.get("volume"),
-                                sig.get("trendState"),
-                                _leg.get("riskAmount"),
-                                _leg.get("riskPct"),
-                                str(_leg.get("ticket", "")),
-                                result.get("feeCost"),
-                                json.dumps(_factors),
-                                result.get("signalPriceRef"),
-                                result.get("slippageBps"),
-                                _eng_b_data.get("max_possible") if _audit_engine == "engine_b" else sig.get("maxScore"),
-                                _eng_b_data.get("pct") if _audit_engine == "engine_b" else None,
-                            ),
-                        )
-
+                        _audit_rows.append((
+                            _audit_ts,
+                            pair,
+                            sig.get("confluenceScore"),
+                            _audit_engine,
+                            sig.get("direction"),
+                            sig.get("trendState"),
+                            "EXECUTED",
+                            None,
+                            f"${_leg['riskAmount']}",
+                            sig.get("style") or "intraday",
+                            _leg.get("entryPrice"),
+                            sig.get("sl"),
+                            _leg.get("tp") or sig.get("tp1"),
+                            _leg.get("volume"),
+                            sig.get("trendState"),
+                            _leg.get("riskAmount"),
+                            _leg.get("riskPct"),
+                            str(_leg.get("ticket", "")),
+                            result.get("feeCost"),
+                            json.dumps(_factors),
+                            result.get("signalPriceRef"),
+                            result.get("slippageBps"),
+                            _eng_b_data.get("max_possible") if _audit_engine == "engine_b" else sig.get("maxScore"),
+                            _eng_b_data.get("pct") if _audit_engine == "engine_b" else None,
+                        ))
+                    con.executemany(
+                        "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
+                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
+                        "signal_price_ref,slippage_bps,max_score,score_pct) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        _audit_rows,
+                    )
                     con.commit()
 
             except Exception as ae:
