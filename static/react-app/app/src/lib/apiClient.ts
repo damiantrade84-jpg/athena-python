@@ -17,7 +17,7 @@ async function requestJson(url: string, options?: RequestInit): Promise<unknown>
   const resp = await fetch(fullUrl, options || {});
   const data = (await safeJson(resp)) as ApiResponse;
 
-  if (!resp.ok || (data && data.error)) {
+  if (!resp.ok) {
     const msg = (data && (data.error || data.reason)) || `HTTP ${resp.status}`;
     throw new Error(msg);
   }
