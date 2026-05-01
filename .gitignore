@@ -41,3 +41,6 @@ db_backups/
 
 # Test-generated artifacts (chart PNGs, vision model JSON, etc.)
 tests/_artifacts/
+
+# SQLite CLI binary (downloaded locally)
+sqlite3.exe
