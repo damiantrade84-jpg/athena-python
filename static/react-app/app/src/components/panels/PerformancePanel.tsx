@@ -81,7 +81,7 @@ export default function PerformancePanel() {
       <div className="grid grid-cols-2 gap-5">
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
               <TrendingUp className="w-4 h-4 text-primary" />
               Equity Curve (Cumulative R)
             </CardTitle>
@@ -116,7 +116,7 @@ export default function PerformancePanel() {
 
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
               <BarChart3 className="w-4 h-4 text-primary" />
               Daily P&amp;L
             </CardTitle>
@@ -147,7 +147,7 @@ export default function PerformancePanel() {
       {byEngineEntries.length > 0 && (
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
               <PieChart className="w-4 h-4 text-primary" />
               By Engine
             </CardTitle>

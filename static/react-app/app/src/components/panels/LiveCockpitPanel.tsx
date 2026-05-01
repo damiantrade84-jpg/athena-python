@@ -379,7 +379,7 @@ function CockpitDetail({
     <Tabs defaultValue="overview" className="flex-1 flex flex-col overflow-hidden">
       <CardHeader className="pb-1 shrink-0">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
             <Radio className="w-4 h-4 text-primary" /> {row.symbol}
             <Badge variant="outline" className="text-[10px]">
               {row.asset_type || '—'}

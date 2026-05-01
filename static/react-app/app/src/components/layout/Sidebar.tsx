@@ -39,11 +39,11 @@ export default function Sidebar() {
   const dailyLossLimit = toNum(guardian?.dailyLossLimit, 1);
 
   return (
-    <aside className="w-[210px] shrink-0 border-r border-border/60 bg-sidebar flex flex-col">
+    <aside className="w-[210px] shrink-0 border-r border-border bg-sidebar flex flex-col">
       {/* Logo */}
-      <div className="p-3 border-b border-sidebar-border/40">
+      <div className="p-4 border-b border-sidebar-border/60">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-bold tracking-wider font-mono text-primary">SENTINEL PRO</span>
+          <span className="text-sm font-bold tracking-widest text-foreground" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.14em' }}>SENTINEL PRO</span>
           <Badge variant="outline" className="text-[9px] h-4 px-1 border-primary/40 text-primary bg-primary/10">v4.0</Badge>
         </div>
       </div>
@@ -51,21 +51,25 @@ export default function Sidebar() {
       {/* Stats Bar */}
       <div className="p-3 border-b border-sidebar-border/40">
         <div className="grid grid-cols-2 gap-2">
-          <div className="bg-sidebar-accent/50 rounded-md p-2">
+          <div className="bg-sidebar-accent/30 rounded-sm p-2 border border-sidebar-border/40 relative overflow-hidden">
+            <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-primary/60" />
             <div className="text-[10px] text-sidebar-foreground/60 uppercase tracking-wider">Signals</div>
             <div className="text-lg font-mono font-bold text-primary leading-tight">{activeSignals}</div>
           </div>
-          <div className="bg-sidebar-accent/50 rounded-md p-2">
+          <div className="bg-sidebar-accent/30 rounded-sm p-2 border border-sidebar-border/40 relative overflow-hidden">
+            <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-primary/60" />
             <div className="text-[10px] text-sidebar-foreground/60 uppercase tracking-wider">Positions</div>
             <div className="text-lg font-mono font-bold text-primary leading-tight">{openPositions}</div>
           </div>
-          <div className="bg-sidebar-accent/50 rounded-md p-2">
+          <div className="bg-sidebar-accent/30 rounded-sm p-2 border border-sidebar-border/40 relative overflow-hidden">
+            <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-primary/60" />
             <div className="text-[10px] text-sidebar-foreground/60 uppercase tracking-wider">Daily P&L</div>
             <div className={`text-sm font-mono font-bold leading-tight ${dailyLoss >= 0 ? 'text-long' : 'text-short'}`}>
               {dailyLoss >= 0 ? '+' : ''}${fmtNum(dailyLoss, 0, '0')}
             </div>
           </div>
-          <div className="bg-sidebar-accent/50 rounded-md p-2">
+          <div className="bg-sidebar-accent/30 rounded-sm p-2 border border-sidebar-border/40 relative overflow-hidden">
+            <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-primary/60" />
             <div className="text-[10px] text-sidebar-foreground/60 uppercase tracking-wider">Win Rate</div>
             <div className="text-sm font-mono font-bold text-primary leading-tight">
               57.3%
@@ -87,10 +91,10 @@ export default function Sidebar() {
                 key={item.id}
                 onClick={() => setActivePanel(item.id)}
                 className={cn(
-                  'w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium transition-all duration-150 group relative',
+                  'w-full flex items-center gap-2.5 px-3 py-2 rounded-sm text-xs font-medium transition-all duration-150 group relative',
                   isActive
-                    ? 'bg-sidebar-primary/15 text-sidebar-primary border-l-2 border-sidebar-primary'
-                    : 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50 border-l-2 border-transparent'
+                    ? 'bg-primary/8 text-primary border border-primary/20 nav-active-bar'
+                    : 'text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent/40 border border-transparent'
                 )}
               >
                 <Icon className={cn(

@@ -15,21 +15,21 @@ interface StatCardProps {
 
 export default function StatCard({ title, value, icon, iconClass, valueClass, loading, subtitle }: StatCardProps) {
   return (
-    <Card className="border-border/60 bg-card/50">
+    <Card className="border-border bg-card relative overflow-hidden stat-card-top-line">
       <CardContent className="p-4">
         <div className="flex items-center justify-between">
           <div className="min-w-0">
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{title}</p>
+            <p className="text-[9px] uppercase tracking-[0.15em] text-muted-foreground font-mono">{title}</p>
             {loading ? (
               <Skeleton className="h-7 w-24 mt-1" />
             ) : (
-              <p className={cn('text-2xl font-mono font-bold mt-1 truncate', valueClass)}>{value}</p>
+              <p className={cn('text-2xl font-mono font-bold mt-1 truncate tracking-tight', valueClass)}>{value}</p>
             )}
             {subtitle && !loading && (
               <p className="text-[10px] text-muted-foreground mt-0.5">{subtitle}</p>
             )}
           </div>
-          <div className={cn('p-2 rounded-lg shrink-0', iconClass || 'bg-primary/15')}>
+          <div className={cn('p-2 rounded-sm border border-border shrink-0 bg-muted/30', iconClass)}>
             {icon}
           </div>
         </div>

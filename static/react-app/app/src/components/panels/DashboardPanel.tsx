@@ -234,7 +234,7 @@ export default function DashboardPanel() {
         <Card className="col-span-2 border-border/60 bg-card/50">
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <TrendingUp className="w-4 h-4 text-primary" /> Equity Curve
               </CardTitle>
               <Badge variant="outline" className="text-[10px]">{equityData.length} points</Badge>
@@ -270,7 +270,7 @@ export default function DashboardPanel() {
         <div className="space-y-4">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <Clock className="w-4 h-4 text-primary" /> Market Sessions (UTC)
               </CardTitle>
             </CardHeader>
@@ -297,7 +297,7 @@ export default function DashboardPanel() {
 
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <Activity className="w-4 h-4 text-primary" /> Quick Controls
               </CardTitle>
             </CardHeader>
@@ -328,7 +328,7 @@ export default function DashboardPanel() {
       <div className="grid grid-cols-3 gap-5">
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
               <Target className="w-4 h-4 text-primary" /> Latest Signals
             </CardTitle>
           </CardHeader>
@@ -385,7 +385,7 @@ export default function DashboardPanel() {
 
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
               <BarChart3 className="w-4 h-4 text-primary" /> Open Positions
             </CardTitle>
           </CardHeader>
@@ -424,7 +424,7 @@ export default function DashboardPanel() {
 
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
               <BarChart3 className="w-4 h-4 text-primary" /> Performance by Engine
             </CardTitle>
           </CardHeader>

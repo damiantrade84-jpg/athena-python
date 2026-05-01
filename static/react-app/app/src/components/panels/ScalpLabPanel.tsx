@@ -207,7 +207,7 @@ export default function ScalpLabPanel() {
       {/* Header / scan controls */}
       <Card className="border-border/60 bg-card/50">
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
             <Activity className="w-4 h-4 text-primary" />
             Engine D — Scalp Lab (VP + OrderFlow)
           </CardTitle>

@@ -302,7 +302,7 @@ export default function EngineCPanel() {
       {/* Run scan */}
       <Card className="border-border/60 bg-card/50">
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
             <Play className="w-4 h-4 text-primary" />
             Run Consensus Scan
           </CardTitle>
@@ -410,7 +410,7 @@ export default function EngineCPanel() {
 
           <Card className="col-span-2 border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <Activity className="w-4 h-4 text-primary" />
                 Consensus Detail
               </CardTitle>
@@ -434,7 +434,7 @@ export default function EngineCPanel() {
       {/* Compare engines per pair */}
       <Card className="border-border/60 bg-card/50">
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
             <Eye className="w-4 h-4 text-primary" />
             Compare Engines (single pair)
           </CardTitle>
@@ -573,7 +573,7 @@ export default function EngineCPanel() {
       {/* Backtest */}
       <Card className="border-border/60 bg-card/50">
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
             <BarChart3 className="w-4 h-4 text-primary" />
             Engine C Backtest
           </CardTitle>

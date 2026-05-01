@@ -329,7 +329,7 @@ export default function ResearchLabPanel() {
         <TabsContent value="autopilot" className="mt-3">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <Rocket className="w-4 h-4 text-primary" />
                 Style-driven Discovery
               </CardTitle>
@@ -370,7 +370,7 @@ export default function ResearchLabPanel() {
         <TabsContent value="manual" className="mt-3">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <ListChecks className="w-4 h-4 text-primary" />
                 Manual Discovery Run
               </CardTitle>
@@ -411,7 +411,7 @@ export default function ResearchLabPanel() {
         <TabsContent value="runs" className="mt-3">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <History className="w-4 h-4 text-primary" />
                 Run History
               </CardTitle>
@@ -568,7 +568,7 @@ export default function ResearchLabPanel() {
           {aiReviewData && (
             <Card className="border-border/60 bg-card/50">
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                   <Brain className="w-4 h-4 text-primary" />
                   AI Review
                 </CardTitle>

@@ -341,7 +341,7 @@ export default function BacktestPanel() {
         <TabsContent value="run" className="mt-3 space-y-4">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <FlaskConical className="w-4 h-4 text-primary" />
                 Backtest Config
               </CardTitle>
@@ -617,7 +617,7 @@ export default function BacktestPanel() {
         <TabsContent value="best" className="mt-3">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <Trophy className="w-4 h-4 text-primary" />
                 Best Performing Pairs (latest run per pair, sorted by SQN)
               </CardTitle>
@@ -656,7 +656,7 @@ export default function BacktestPanel() {
         <TabsContent value="advisory" className="mt-3">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <Layers className="w-4 h-4 text-primary" />
                 Advisory Thresholds
               </CardTitle>

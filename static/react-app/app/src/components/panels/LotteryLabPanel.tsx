@@ -218,7 +218,7 @@ export default function LotteryLabPanel() {
           <div className="grid grid-cols-2 gap-4">
             <Card className="border-border/60 bg-card/50">
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                   <TrendingUp className="w-4 h-4 text-long" />
                   Hot Numbers
                 </CardTitle>
@@ -237,7 +237,7 @@ export default function LotteryLabPanel() {
             </Card>
             <Card className="border-border/60 bg-card/50">
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                   <TrendingUp className="w-4 h-4 text-short" />
                   Cold Numbers
                 </CardTitle>
@@ -260,7 +260,7 @@ export default function LotteryLabPanel() {
         <TabsContent value="frequency" className="mt-2">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <BarChart3 className="w-4 h-4 text-primary" />
                 Number Frequency
               </CardTitle>
@@ -291,7 +291,7 @@ export default function LotteryLabPanel() {
         <TabsContent value="history" className="mt-2 space-y-4">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <History className="w-4 h-4 text-primary" />
                 Draw History
               </CardTitle>
@@ -353,7 +353,7 @@ export default function LotteryLabPanel() {
         <TabsContent value="generate" className="mt-2">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <Dices className="w-4 h-4 text-primary" />
                 Generate Ticket
               </CardTitle>
@@ -386,7 +386,7 @@ export default function LotteryLabPanel() {
         <TabsContent value="ai" className="mt-2">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <Sparkles className="w-4 h-4 text-primary" />
                 AI Pattern Analysis
               </CardTitle>

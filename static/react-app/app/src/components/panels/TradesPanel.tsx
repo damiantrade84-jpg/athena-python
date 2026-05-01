@@ -381,7 +381,7 @@ export default function TradesPanel() {
         <TabsContent value="failed" className="mt-2">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <AlertTriangle className="w-4 h-4 text-short" />
                 Failed Executions
               </CardTitle>
