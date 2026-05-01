@@ -12,7 +12,7 @@ c = openai.OpenAI(api_key=k, base_url="https://api.x.ai/v1")
 
 try:
     r = c.chat.completions.create(
-        model="grok-4-1-fast-reasoning",
+        model="grok-4.3",
         max_tokens=50,
         temperature=0.3,
         messages=[

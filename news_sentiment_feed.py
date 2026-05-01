@@ -321,7 +321,7 @@ def get_news_sentiment(
     eodhd_ticker_for_pair: Callable[[dict], Optional[str]],
     current_price: Optional[float] = None,
     news_limit: int = 8,
-    model: str = "grok-4-1-fast-reasoning",
+    model: str = "grok-4.3",
 ) -> Optional[dict]:
     """
     Full pipeline: resolve EODHD ticker -> news -> optional EODHD sentiment -> JSON.
@@ -498,7 +498,7 @@ def apply_news_sentiment_to_scan_result(
     model = str(
         config.get("NEWS_SENTIMENT_MODEL")
         or config.get("AI_MODEL")
-        or config.get("VISION_MODEL", "grok-4-1-fast-reasoning")
+        or config.get("VISION_MODEL", "grok-4.3")
     )
     vote, detail = get_cached_news_confluence_vote(
         pair,

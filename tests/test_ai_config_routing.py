@@ -38,14 +38,14 @@ def test_ai_runtime_descriptor_defaults_to_xai_grok(monkeypatch):
 
     assert desc["provider"] == "xAI"
     assert desc["base_url"] == "https://api.x.ai/v1"
-    assert desc["model"] == "grok-4-1-fast-reasoning"
+    assert desc["model"] == "grok-4.3"
     assert desc["key_configured"] is False
 
 
 def test_ai_runtime_descriptor_uses_explicit_xai_config():
     cfg = {
         "AI_BASE_URL": "https://api.x.ai/v1",
-        "AI_MODEL": "grok-4-1-fast-reasoning",
+        "AI_MODEL": "grok-4.3",
         "XAI_API_KEY": "abc",
     }
 
@@ -53,21 +53,21 @@ def test_ai_runtime_descriptor_uses_explicit_xai_config():
 
     assert desc["provider"] == "xAI"
     assert desc["base_url"] == "https://api.x.ai/v1"
-    assert desc["model"] == "grok-4-1-fast-reasoning"
+    assert desc["model"] == "grok-4.3"
     assert desc["key_configured"] is True
 
 
 def test_ai_helpers_do_not_drift_to_kimi_when_grok_mode_is_intended():
     cfg = {
         "AI_BASE_URL": "https://api.x.ai/v1",
-        "AI_MODEL": "grok-4-1-fast-reasoning",
-        "XAI_MODEL": "grok-4-1-fast-reasoning",
-        "VISION_MODEL": "grok-4-1-fast-reasoning",
-        "DEBATE_MODEL": "grok-4-1-fast-reasoning",
+        "AI_MODEL": "grok-4.3",
+        "XAI_MODEL": "grok-4.3",
+        "VISION_MODEL": "grok-4.3",
+        "DEBATE_MODEL": "grok-4.3",
     }
 
     assert get_ai_provider_label(cfg) == "xAI"
     assert get_ai_base_url(cfg) == "https://api.x.ai/v1"
-    assert get_ai_model(cfg, "AI_MODEL", "fallback") == "grok-4-1-fast-reasoning"
-    assert get_ai_model(cfg, "VISION_MODEL", "fallback") == "grok-4-1-fast-reasoning"
-    assert get_ai_model(cfg, "DEBATE_MODEL", "fallback") == "grok-4-1-fast-reasoning"
+    assert get_ai_model(cfg, "AI_MODEL", "fallback") == "grok-4.3"
+    assert get_ai_model(cfg, "VISION_MODEL", "fallback") == "grok-4.3"
+    assert get_ai_model(cfg, "DEBATE_MODEL", "fallback") == "grok-4.3"

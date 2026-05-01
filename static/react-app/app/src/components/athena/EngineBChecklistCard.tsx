@@ -102,7 +102,7 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, comp
             <SmallStat label="Entry" value={fmtPrice(data.entry, pair, type)} />
             <SmallStat label="SL" value={fmtPrice(data.sl, pair, type)} accent="short" />
             <SmallStat label="TP" value={fmtPrice(data.tp, pair, type)} accent="long" />
-            <SmallStat label="R:R" value={fmtNum(data.rr, 2)} accent={Number.isFinite(data.rr) && Number.isFinite(minRr) && data.rr >= minRr ? 'long' : 'muted'} />
+            <SmallStat label="R:R" value={fmtNum(data.rr, 2)} accent={typeof data.rr === 'number' && typeof minRr === 'number' && data.rr >= minRr ? 'long' : 'muted'} />
           </div>
         )}
 

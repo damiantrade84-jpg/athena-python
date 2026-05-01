@@ -19,10 +19,10 @@ interface SignalData {
   tp: number;
   tp2?: number;
   tp3?: number;
-  confidence: number;
+  confidence?: number;
   engine: string;
   timeframe: string;
-  rRatio: number;
+  rRatio?: number;
   votes?: number;
   timestamp: string;
   status: 'active' | 'closed' | 'pending';

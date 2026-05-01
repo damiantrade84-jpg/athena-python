@@ -86,7 +86,18 @@
       "Bash(grep -v \"\\\\.backup$\")",
       "Bash(git rm *)",
       "Bash(git mv *)",
-      "Bash(node --check static/js/features/research_lab.js)"
+      "Bash(node --check static/js/features/research_lab.js)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5000/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5000/static/assets/index-awYxopev.js)",
+      "Bash(curl -s http://localhost:5000/api/health)",
+      "Bash(curl -s http://localhost:5000/api/mt5-status)",
+      "Bash(curl -s http://localhost:5000/api/bybit-status)",
+      "Bash(curl -s http://localhost:5000/api/guardian/status)",
+      "Bash(curl -s http://localhost:5000/api/open-trades-timed)",
+      "Bash(curl -s http://localhost:5000/api/auto-trade)",
+      "Bash(npm run *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5000/static/assets/index-DA-W0Kdy.js)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5000/static/assets/index-b1RVDAh0.css)"
     ]
   }
 }

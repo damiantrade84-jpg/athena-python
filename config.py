@@ -36,7 +36,7 @@ def scan_duplicate_top_level_yaml_keys(yaml_text: str) -> dict[str, list[int]]:
 AI_API_KEY_PLACEHOLDER = "YOUR_XAI_API_KEY"
 _LEGACY_AI_API_KEY_PLACEHOLDER = "YOUR_MOONSHOT_API_KEY"
 _AI_BASE_URL_DEFAULT = "https://api.x.ai/v1"
-_AI_MODEL_DEFAULT = os.environ.get("AI_MODEL", "grok-4-1-fast-reasoning")
+_AI_MODEL_DEFAULT = os.environ.get("AI_MODEL", "grok-4.3")
 
 
 def _deep_merge_dict(base: dict, overrides: dict) -> dict:
@@ -103,7 +103,7 @@ def get_ai_base_url(cfg: dict | None = None) -> str:
 def get_ai_model(
     cfg: dict | None = None,
     preferred_key: str = "AI_MODEL",
-    fallback: str = "grok-4-1-fast-reasoning",
+    fallback: str = "grok-4.3",
 ) -> str:
     cfg = cfg or CONFIG
     candidates = []
@@ -142,7 +142,7 @@ def create_ai_client(cfg: dict | None = None, api_key: str | None = None):
 def ai_runtime_descriptor(
     cfg: dict | None = None,
     preferred_model_key: str = "AI_MODEL",
-    fallback_model: str = "grok-4-1-fast-reasoning",
+    fallback_model: str = "grok-4.3",
 ) -> dict:
     resolved_cfg = cfg or CONFIG
     return {

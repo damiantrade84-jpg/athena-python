@@ -674,19 +674,19 @@ SIGNAL_DEBATE_ENABLED: true        # Run LLM debate before auto-trades (needs XA
 
 AI_BASE_URL: "https://api.x.ai/v1"
 
-AI_MODEL: "grok-4-1-fast-reasoning"
+AI_MODEL: "grok-4.3"
 
-XAI_MODEL: "grok-4-1-fast-reasoning"  # Legacy alias kept aligned with AI_MODEL for compatibility.
+XAI_MODEL: "grok-4.3"  # Legacy alias kept aligned with AI_MODEL for compatibility.
 
 # Optional: POST /api/lottery/ai-analysis model (defaults to AI_MODEL). Same OpenAI SDK + xAI base URL.
 
-# LOTTERY_AI_MODEL: "grok-4-1-fast-reasoning"
+# LOTTERY_AI_MODEL: "grok-4.3"
 
-DEBATE_MODEL: "grok-4-1-fast-reasoning"
+DEBATE_MODEL: "grok-4.3"
 
-VISION_MODEL: "grok-4-1-fast-reasoning"          # /api/chart-analysis
+VISION_MODEL: "grok-4.3"          # /api/chart-analysis
 
-NEWS_SENTIMENT_MODEL: "grok-4-1-fast-reasoning"  # News AI text; defaults to AI_MODEL if empty — uses XAI_API_KEY
+NEWS_SENTIMENT_MODEL: "grok-4.3"  # News AI text; defaults to AI_MODEL if empty — uses XAI_API_KEY
 
 # Blend News AI into Engine A scan score (EODHD news + Kimi). Heavy: uses TTL cache per pair.
 

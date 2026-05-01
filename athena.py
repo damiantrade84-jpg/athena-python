@@ -4352,7 +4352,7 @@ def run_ai(
         _provider = get_ai_provider_label(CONFIG)
         log.info(
             f"[AI] Analyzing {signal['pair']} via provider={_provider} "
-            f"base_url={get_ai_base_url(CONFIG)} model={get_ai_model(CONFIG, 'AI_MODEL', 'grok-4-1-fast-reasoning')}"
+            f"base_url={get_ai_base_url(CONFIG)} model={get_ai_model(CONFIG, 'AI_MODEL', 'grok-4.3')}"
         )
 
         c = create_ai_client(CONFIG)
@@ -4382,7 +4382,7 @@ def run_ai(
             learning_ctx=learning_ctx,
         )
 
-        _model = get_ai_model(CONFIG, "AI_MODEL", "grok-4-1-fast-reasoning")
+        _model = get_ai_model(CONFIG, "AI_MODEL", "grok-4.3")
         completion = c.chat.completions.create(
             model=_model,
             max_tokens=1100,
@@ -4782,6 +4782,14 @@ try:
     from guardian_routes import guardian_bp
 
     app.register_blueprint(guardian_bp)
+except ImportError:
+    pass
+
+# ── Kimi Code Integration Bridge ─────────────────────────────────────────
+try:
+    from tools.kimi_bridge import register_kimi_routes
+
+    register_kimi_routes(app)
 except ImportError:
     pass
 
@@ -5610,7 +5618,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                     confidence_result=conf,
                     learning_ctx=learning_ctx,
                     xai_api_key=get_ai_api_key(CONFIG),
-                    xai_model=get_ai_model(CONFIG, "AI_MODEL", "grok-4-1-fast-reasoning"),
+                    xai_model=get_ai_model(CONFIG, "AI_MODEL", "grok-4.3"),
                     engine_a_ctx=engine_a_ctx,
                     news_ctx=_news_ctx,
                     freshness_ctx=engine_a_ctx if isinstance(engine_a_ctx, dict) else None,
@@ -9145,7 +9153,7 @@ def api_meta_analysis():
         result = run_meta_analysis(
             _AUDIT_DB,
             get_ai_api_key(CONFIG),
-            get_ai_model(CONFIG, "AI_MODEL", "grok-4-1-fast-reasoning"),
+            get_ai_model(CONFIG, "AI_MODEL", "grok-4.3"),
         )
 
         return jsonify(result)
@@ -9818,7 +9826,7 @@ def api_chart_analysis():
         )
         log.info(
             f"[AI CHART] provider={get_ai_provider_label(CONFIG)} "
-            f"base_url={get_ai_base_url(CONFIG)} model={get_ai_model(CONFIG, 'VISION_MODEL', 'grok-4-1-fast-reasoning')}"
+            f"base_url={get_ai_base_url(CONFIG)} model={get_ai_model(CONFIG, 'VISION_MODEL', 'grok-4.3')}"
         )
 
         img_h4 = str(data["image"])
@@ -9901,7 +9909,7 @@ def api_chart_analysis():
             log.debug("[AI CHART] vision image retention skipped: %s", _vs_err)
 
         _max_tokens = 1100 if triple_mode else 800
-        _vision_model = get_ai_model(CONFIG, "VISION_MODEL", "grok-4-1-fast-reasoning")
+        _vision_model = get_ai_model(CONFIG, "VISION_MODEL", "grok-4.3")
         _vision_temp = float(AITemperatureConfig.get_temperature("vision"))
         _user_parts = _chart_blocks_to_openai_user_content(content)
         _completion = _xai_chat_completions_retry(
@@ -10635,7 +10643,7 @@ def api_news_sentiment():
     except Exception:
         pass
 
-    model = get_ai_model(CONFIG, "NEWS_SENTIMENT_MODEL", "grok-4-1-fast-reasoning")
+    model = get_ai_model(CONFIG, "NEWS_SENTIMENT_MODEL", "grok-4.3")
     result = get_news_sentiment(
         pair,
         eodhd_api_key=eod_key,
@@ -11005,11 +11013,17 @@ def api_open_trades_timed():
 
     def _fetch_mt5_positions():
         from mt5_executor import mt5_get_positions
-        return mt5_get_positions()
+        _res = mt5_get_positions()
+        if isinstance(_res, dict) and _res.get("error"):
+            return {"error": _res["error"]}
+        return _res
 
     def _fetch_bybit_positions():
         from bybit_executor import bybit_get_positions
-        return bybit_get_positions()
+        _res = bybit_get_positions()
+        if isinstance(_res, dict) and _res.get("error"):
+            return {"error": _res["error"]}
+        return _res
 
     try:
         from concurrent.futures import ThreadPoolExecutor
@@ -13160,7 +13174,7 @@ def _get_decay_ai_verdict(
         from ai_utils import parse_json_object
 
         client = create_ai_client(CONFIG, api_key=api_key)
-        _model = get_ai_model(CONFIG, "DEBATE_MODEL", "grok-4-1-fast-reasoning")
+        _model = get_ai_model(CONFIG, "DEBATE_MODEL", "grok-4.3")
         _temp = float(AITemperatureConfig.get_temperature("decay"))
 
         result = None
@@ -14072,7 +14086,7 @@ def api_lottery_ai_analysis():
         )
         _lottery_model = (
             str(CONFIG.get("LOTTERY_AI_MODEL") or "").strip()
-            or get_ai_model(CONFIG, "AI_MODEL", "grok-4-1-fast-reasoning")
+            or get_ai_model(CONFIG, "AI_MODEL", "grok-4.3")
         )
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
         client = openai.OpenAI(api_key=ai_key, base_url=get_ai_base_url(CONFIG))
