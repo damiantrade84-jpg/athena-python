@@ -285,9 +285,9 @@ def _live_engine_b_signal(summary: dict[str, Any]) -> str | None:
     avg_r = _safe_float(summary.get("avg_r"))
     if trades < 8:
         return None
-    if sqn is not None and sqn <= -0.40:
+    if sqn is not None and sqn <= -0.50:
         return "tighten"
-    if sqn is not None and sqn >= 0.75 and avg_r is not None and avg_r >= 0.10:
+    if sqn is not None and sqn >= 0.35 and avg_r is not None and avg_r >= 0.10:
         return "loosen"
     return None
 
@@ -461,13 +461,13 @@ def _build_engine_b_recommendations(rows: list[dict[str, Any]]) -> list[dict[str
         direction = None
         reasons: list[str] = []
 
-        if avg_sqn <= -0.20 and avg_trades >= _ENGINE_B_STYLE_FLOOR.get(style, 25.0) and pair_count >= 5:
+        if avg_sqn <= -0.40 and avg_trades >= _ENGINE_B_STYLE_FLOOR.get(style, 25.0) and pair_count >= 5:
             proposed = _clamp(cur_min + 1.0, min_low, min_high)
             direction = "tighten"
             reasons.append(
                 f"Latest Engine B {style} cohort averages SQN {avg_sqn:.2f} across {pair_count} pairs."
             )
-        elif avg_sqn >= 0.75 and avg_trades < _ENGINE_B_STYLE_FLOOR.get(style, 25.0) * 0.75 and pair_count >= 5:
+        elif avg_sqn >= 0.35 and avg_trades < _ENGINE_B_STYLE_FLOOR.get(style, 25.0) * 0.75 and pair_count >= 5:
             proposed = _clamp(cur_min - 1.0, min_low, min_high)
             direction = "loosen"
             reasons.append(
