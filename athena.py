@@ -3895,6 +3895,51 @@ def _build_signal_message(
         f"({signal.get('h4', {}).get('snap', {}).get('atrLabel', '?')})"
     )
 
+    # === RAW MARKET DATA (last 20 H4 bars) ===
+    # Give Marcus Reid actual OHLCV + indicator time-series so the AI can
+    # independently verify Engine A conclusions, not just read summaries.
+    _h4_candles = signal.get("h4Candles", [])
+    if _h4_candles:
+        _raw_count = min(20, len(_h4_candles))
+        _raw_slice = _h4_candles[-_raw_count:]
+        _closes = [c.get("c", c.get("close")) for c in _h4_candles]
+        _highs = [c.get("h", c.get("high")) for c in _h4_candles]
+        _lows = [c.get("l", c.get("low")) for c in _h4_candles]
+        try:
+            from indicators import calc_ema, calc_rsi, calc_macd, calc_adx, calc_atr
+            _ema21_s = calc_ema(_closes, 21)
+            _ema50_s = calc_ema(_closes, 50)
+            _ema200_s = calc_ema(_closes, 200)
+            _rsi_s = calc_rsi(_closes, 14)
+            _macd_s = calc_macd(_closes, 12, 26, 9)
+            _adx_s = calc_adx(_highs, _lows, _closes, 14)
+            _atr_s = calc_atr(_highs, _lows, _closes, 14)
+            lines.append("")
+            lines.append(f"=== RAW MARKET DATA (last {_raw_count} H4 bars) ===")
+            lines.append(
+                "Bar | Time | Open | High | Low | Close | Vol | EMA21 | EMA50 | RSI | MACD | MACD_Sig | ADX | +DI | -DI | ATR"
+            )
+            for idx, c in enumerate(_raw_slice):
+                _g = idx + (len(_h4_candles) - _raw_count)  # global index in full array
+                _fmt = lambda x: f"{x:.5f}" if isinstance(x, (int, float)) else str(x) if x is not None else "-"
+                _fmt_rsi = lambda x: f"{x:.1f}" if isinstance(x, (int, float)) else "-"
+                _row = (
+                    f"{_g:3d} | {c.get('t','')[:16]} | {_fmt(c.get('o',c.get('open')))} | "
+                    f"{_fmt(c.get('h',c.get('high')))} | {_fmt(c.get('l',c.get('low')))} | "
+                    f"{_fmt(c.get('c',c.get('close')))} | {_fmt(c.get('v',c.get('volume')))} | "
+                    f"{_fmt(_ema21_s[_g])} | {_fmt(_ema50_s[_g])} | {_fmt_rsi(_rsi_s[_g])} | "
+                    f"{_fmt(_macd_s['macd'][_g])} | {_fmt(_macd_s['signal'][_g])} | "
+                    f"{_fmt_rsi(_adx_s['adx'][_g])} | {_fmt_rsi(_adx_s['plusDI'][_g])} | "
+                    f"{_fmt_rsi(_adx_s['minusDI'][_g])} | {_fmt(_atr_s[_g])}"
+                )
+                lines.append(_row)
+            lines.append(
+                "NOTE: EMA50/EMA200 may show '-' until lookback fills. "
+                "MACD valid after 26 bars. ADX valid after 28 bars."
+            )
+        except Exception as _raw_err:
+            log.debug("[BUILD_SIGNAL] raw market data section failed: %s", _raw_err)
+
     try:
         from ai_context import build_ai_calibration_context_string
         lines.append("")
@@ -9508,6 +9553,38 @@ def api_chart_analysis():
             )
         if _level_lines:
             context_parts.append("STYLE LEVELS:\n" + "\n".join(_level_lines))
+
+    # Raw candle + indicator table for vision model cross-check
+    _prim_candles = data.get("candles") or []
+    if _prim_candles:
+        _vc = min(15, len(_prim_candles))
+        _vslice = _prim_candles[-_vc:]
+        _vcls = [c.get("c", c.get("close")) for c in _prim_candles]
+        _vhi = [c.get("h", c.get("high")) for c in _prim_candles]
+        _vlo = [c.get("l", c.get("low")) for c in _prim_candles]
+        try:
+            from indicators import calc_ema, calc_rsi, calc_macd, calc_adx, calc_atr
+            _ve21 = calc_ema(_vcls, 21)
+            _ve50 = calc_ema(_vcls, 50)
+            _vrsi = calc_rsi(_vcls, 14)
+            _vmac = calc_macd(_vcls, 12, 26, 9)
+            _vadx = calc_adx(_vhi, _vlo, _vcls, 14)
+            _vatr = calc_atr(_vhi, _vlo, _vcls, 14)
+            _vlines = [f"RAW DATA — last {_vc} {tf} bars (cross-check chart visually):"]
+            _vlines.append("Time | Close | EMA21 | EMA50 | RSI | MACD | ADX | ATR")
+            for vidx, vc in enumerate(_vslice):
+                _vg = vidx + (len(_prim_candles) - _vc)
+                _fv = lambda x: f"{x:.5f}" if isinstance(x, (int, float)) else "-"
+                _fv1 = lambda x: f"{x:.1f}" if isinstance(x, (int, float)) else "-"
+                _vlines.append(
+                    f"{vc.get('t','')[:16]} | {_fv(vc.get('c',vc.get('close')))} | "
+                    f"{_fv(_ve21[_vg])} | {_fv(_ve50[_vg])} | {_fv1(_vrsi[_vg])} | "
+                    f"{_fv(_vmac['macd'][_vg])} | {_fv1(_vadx['adx'][_vg])} | {_fv(_vatr[_vg])}"
+                )
+            context_parts.append("\n".join(_vlines))
+        except Exception as _vraw_err:
+            log.debug("[CHART-VISION] raw data table failed: %s", _vraw_err)
+
     algo_context = "\n".join(context_parts) if context_parts else "No algorithmic data available."
 
     try:
