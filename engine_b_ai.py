@@ -506,13 +506,12 @@ def get_engine_b_ai_verdict(
             "Evaluate Risk:Reward per style rules (SCALP: RR >= 2.0 acceptable (Engine D MIN_RR); INTRADAY: RR >= 2.0 preferred; SWING: RR >= 3.0 preferred). "
             "Do not automatically penalize Crypto for wide SL unless it exceeds MAX_SL_PCT. "
             + cross_engine_note
-            + " Weigh: BOS conviction (impulsive vs slow grind — cite candles/volume if in input); zone quality (pristine vs mitigated, distance to boundary); "
-            "trigger quality (confirming close/volume vs weak touch); obstacles between entry and target (name them); "
-            "multi-TF alignment (explicit Y/N with evidence from swing sequences / macro). "
+            + " Weigh: overall structural conviction; distance to boundary; "
+            "trigger quality; multi-TF alignment (explicit Y/N with evidence from available swing sequences). "
             "Rate all three styles independently: SCALP(H1, 1.5-2R), INTRADAY(H4, 2-3R), SWING(D1, 3-6R). "
             "Top-level grade/edgeProbability/riskLevel must represent the best style. "
-            "Output strict JSON only with exactly these top-level keys: "
-            "reviewSource, resolvedStyle, structureRisk, executionRisk, crossEngineAlignment, bestValidStyle, grade, edgeProbability, riskLevel, verdict, style_ratings. "
+            "Output strict JSON only with exactly these top-level keys in this precise order: "
+            "reasoning, verdict, reviewSource, resolvedStyle, bestValidStyle, grade, edgeProbability, riskLevel, style_ratings. "
             "style_ratings must contain scalp, intraday, and swing objects with grade, edgeProbability, riskLevel."
         )
         _temp = float(AITemperatureConfig.get_temperature("engine_b_ai"))

@@ -22,7 +22,7 @@ _ENGINE_C_AI_SYSTEM = """You are Marcus Reid, prop-desk risk head reviewing Engi
 Output ONLY valid JSON. No markdown.
 
 ABSOLUTE RULES:
-1. Every claim in rationale/reasoning MUST cite a specific field from the user packet (factor name, score, checklist flag).
+1. Every claim in reasoning MUST cite a specific field from the user packet (factor name, score, checklist flag).
 2. NEVER use "will", "guaranteed", "definitely".
 
 TASK:
@@ -30,8 +30,8 @@ TASK:
 - weight_recommendation: {"A": x, "B": y} must sum to 1.0 (approx); each between 0.2 and 0.8 unless trust_neither (then near 0.5/0.5).
 - conviction_modifier: float in [-0.15, 0.15] — edge only, not a full rescoring.
 
-REQUIRED JSON KEYS:
-trust_verdict, rationale, weight_recommendation, conviction_modifier, reasoning
+REQUIRED JSON KEYS IN THIS EXACT ORDER:
+reasoning, trust_verdict, weight_recommendation, conviction_modifier
 """
 
 
@@ -47,7 +47,6 @@ def normalize_engine_c_ai_weight_verdict(
     if not isinstance(parsed, dict):
         return {
             "trust_verdict": None,
-            "rationale": "",
             "weight_recommendation": None,
             "conviction_modifier": 0.0,
             "reasoning": "",
@@ -71,8 +70,7 @@ def normalize_engine_c_ai_weight_verdict(
         tv = "trust_both"
 
     out["trust_verdict"] = tv
-    out["rationale"] = str(out.get("rationale") or "")[:8000]
-    out["reasoning"] = str(out.get("reasoning") or "")[:8000]
+    out["reasoning"] = str(out.get("reasoning") or out.get("rationale") or "")[:8000]
 
     try:
         cm = float(out.get("conviction_modifier", 0.0))

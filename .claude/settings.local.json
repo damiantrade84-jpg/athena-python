@@ -97,7 +97,13 @@
       "Bash(curl -s http://localhost:5000/api/auto-trade)",
       "Bash(npm run *)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5000/static/assets/index-DA-W0Kdy.js)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5000/static/assets/index-b1RVDAh0.css)"
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5000/static/assets/index-b1RVDAh0.css)",
+      "Bash(git -C \"C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\" status --short)",
+      "Bash(git *)",
+      "Bash(Copy-Item \"C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\static\\\\react-app\\\\dist\\\\assets\\\\index-DzFRarLm.css\" \"C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\static\\\\assets\\\\index-DzFRarLm.css\")",
+      "Bash(Copy-Item \"C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\static\\\\react-app\\\\dist\\\\assets\\\\index-eXX1rHRd.js\" \"C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\static\\\\assets\\\\index-eXX1rHRd.js\")",
+      "Bash(Write-Host \"Copied\")",
+      "Bash(.\\\\.venv\\\\Scripts\\\\python.exe -c \"import py_compile; py_compile.compile\\('bybit_executor.py', doraise=True\\); print\\('OK'\\)\")"
     ]
   }
 }

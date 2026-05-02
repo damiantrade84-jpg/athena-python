@@ -628,6 +628,18 @@ export default function SignalsPanel() {
                           <span className="text-[10px] text-muted-foreground font-mono">{aiReview.model || 'vision'} · {aiReview.tf || 'H4'}</span>
                         </div>
 
+                        {/* Chart image the AI analyzed */}
+                        {aiReview.chart_image && (
+                          <div className="border border-border/50 rounded-md overflow-hidden">
+                            <img
+                              src={aiReview.chart_image}
+                              alt={`${aiReview.symbol || 'Chart'} ${aiReview.tf || 'H4'}`}
+                              className="w-full h-auto"
+                              style={{ maxHeight: '280px', objectFit: 'contain' }}
+                            />
+                          </div>
+                        )}
+
                         {aiReview.structured?.style_ratings && (
                           <div className="grid grid-cols-3 gap-2 text-[11px]">
                             <div>
