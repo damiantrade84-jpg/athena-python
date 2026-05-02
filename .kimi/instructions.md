@@ -11,8 +11,8 @@
 
 | Engine | Style | What It Does |
 |--------|-------|-------------|
-| **Engine A** | Factor-based | Confluence scoring across trend, momentum, volume, structure, derivatives, microstructure |
-| **Engine B** | Naked structure | BOS/CHoCH, order blocks, liquidity sweeps, VWAP, volume profile |
+| **Engine A** | Factor-based | Confluence scoring across trend, momentum, volume, structure, derivatives, microstructure. **Mean Reversion factor** (config-gated): Bollinger %B, RSI extremes, z-score fade. |
+| **Engine B** | Naked structure | BOS/CHoCH, order blocks, liquidity sweeps, VWAP, volume profile. **Breakout Follow-Through** (config-gated): detects false breakouts via post-break continuation. |
 | **Engine C** | Meta-learner | Blend of A + B with AI debate (Bull/Bear/Judge) + trust scoring |
 | **Engine D** | Scalp | 1m-15m execution, absorption detection, CVD, AAA framework |
 

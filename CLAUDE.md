@@ -649,9 +649,9 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 | `data_feeds.py` | HTTP session, EODHD client, funding/OI helpers |
 | `news_sentiment_feed.py` | EODHD news + Claude sentiment; optional scan blend; TTL cache |
 | `scoring.py` | Confluence engine, vote weights, signal classification, pair profiles, `get_min_confluence_threshold` |
-| `factor_scoring.py` | Engine A v2: 3-factor engine (Trend EMA coherence, Momentum Quality RSI+MACD, ADX Gate) + asset addon (carry/funding/COT). Unified 0-3.0 scale for ALL asset classes. Live Engine A for forex also routes here via `scoring.calc_confluence()`. |
+| `factor_scoring.py` | Engine A v2: 3-factor engine (Trend EMA coherence, Momentum Quality RSI+MACD, ADX Gate) + asset addon (carry/funding/COT). Unified 0-3.0 scale. **Factor 4 (config-gated): Mean Reversion** using Bollinger %B, RSI extremes, price z-score. Live Engine A for forex also routes here via `scoring.calc_confluence()`. |
 | `forex_scoring.py` | Legacy forex scorer kept for audit, regression, and historical research only. **Not the live Engine A route.** |
-| `market_structure.py` | Engine B: `NakedEngine`, swing analysis, BOS/CHoCH/FVG/order blocks, shared checklist pass/fail |
+| `market_structure.py` | Engine B: `NakedEngine`, swing analysis, BOS/CHoCH/FVG/order blocks, shared checklist pass/fail. **Breakout Follow-Through Factor** (config-gated): detects false breakouts via post-break continuation scoring (wick ratio, aligned bars, reversal count). |
 | `engine_b_ai.py` | Engine B advisory AI verdict (review only — not a pass/fail gate) |
 | `engine_c.py` | Engine C consensus: `ENGINE_C_AB_WEIGHTS` blend, conviction tiers, SL/TP resolution, Vision modifier |
 | `confidence_engine.py` | 4-component confidence scoring (indicator agreement, TF alignment, regime fit, liquidity) + `session_quality` post-multiplier (high=1.0, medium=0.9, low=0.7). Off-hours signals are demoted before Engine C's reliability gate. |
@@ -675,6 +675,11 @@ Multi-asset algorithmic trading system built on Flask. Covers forex, crypto, sto
 | `lottery_service.py` | DB schema, CSV import, draw history |
 | `static/index.html` | Dashboard UI: signals, Pair Browser, Engine C tab, backtest, ACM charts | ~2550 lines |
 | `static/js/features/pair_browser.js` | Pair Browser tab logic: single-pair browsing, Engine A/B/compare actions, and news/intermarket/chart/AI vision sections |
+| `.kimi/instructions.md` | **Kimi Code context** — Athena architecture, coding rules, safety red lines (auto-loaded when Kimi Code opens this project) |
+| `.kimi/mcp.json` | **Kimi Code MCP servers** — SQLite (audit, microstructure, candle-cache) + filesystem + fetch |
+| `tools/kimi_bridge.py` | **HTTP bridge** — 9 API routes (`/api/kimi/*`) for Kimi Code to query live Athena data |
+| `tools/run_kimi_tests.py` | **Smart test runner** — engine-specific pytest suites, JSON output, coverage reports |
+| `KIMI_INTEGRATION_PLAN.md` | Full Kimi Code integration blueprint |
 
 ---
 

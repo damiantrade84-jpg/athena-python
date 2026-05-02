@@ -10,10 +10,11 @@ Multi-asset algorithmic trading and research platform built on **Flask**. It sco
 
 | Area | What it does |
 |------|----------------|
-| **Engine A** | Multi-factor / confluence scoring (MFQS + dedicated forex rules) |
-| **Engine B** | Naked market structure (zones, BOS/CHoCH, FVG, checklist) |
+| **Engine A** | Multi-factor / confluence scoring (MFQS + dedicated forex rules). **Mean Reversion factor** (config-gated, additive): Bollinger %B, RSI extremes, z-score fade. |
+| **Engine B** | Naked market structure (zones, BOS/CHoCH, FVG, checklist). **Breakout Follow-Through** (config-gated): detects false breakouts via post-break continuation. |
 | **Engine C** | Blends A + B with optional multimodal chart vision |
 | **Engine D (Scalp Lab)** | M15 structure + M5 tactical setups (dashboard + API) |
+| **Kimi Code Integration** | `.kimi/` config + HTTP bridge (`/api/kimi/*`) + smart test runner for AI-assisted development |
 | **Dashboard** | `static/index.html` — scans, backtests, Engine C, Scalp Lab, lottery lab, guardian |
 | **Data** | MT5 OHLC (non-crypto), Binance futures candles for crypto, EODHD where configured |
 
@@ -56,6 +57,23 @@ python athena.py
 ```
 
 Optional CLI flags (see `athena.py` near `if __name__ == "__main__"`) include scan/backtest-style entry points.
+
+---
+
+## Development / AI-Assisted Coding
+
+**Kimi Code Integration:**
+- Open the project in Kimi Code: `kimi C:\Users\damia\OneDrive\Desktop\athena-python`
+- Auto-loaded context: Athena architecture, 4 engines, safety rules
+- MCP servers: query SQLite databases, browse filesystem, fetch URLs
+- Smart test runner: `python tools/run_kimi_tests.py --engine A --coverage --json`
+
+**HTTP Bridge (when Athena is running):**
+```bash
+curl http://localhost:5000/api/kimi/health
+curl http://localhost:5000/api/kimi/signals/latest?limit=10
+curl -X POST http://localhost:5000/api/kimi/audit/query -d '{"sql": "SELECT * FROM trades ORDER BY ts DESC LIMIT 5"}'
+```
 
 ---
 
