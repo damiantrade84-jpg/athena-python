@@ -1221,8 +1221,15 @@ def bybit_move_sl_to_breakeven(
         )
         return {"success": True, "newSl": entry_price}
     except Exception as e:
+        err_str = str(e)
+        # retCode 34040 "not modified" — SL is already at the target price; treat as success.
+        if "34040" in err_str or "not modified" in err_str.lower():
+            log.debug(
+                f"[BYBIT] BREAKEVEN already set for {ccxt_symbol} (34040 not modified) — no action needed"
+            )
+            return {"success": True, "newSl": entry_price, "alreadySet": True}
         log.warning(f"[BYBIT] Failed to move SL to breakeven for {ccxt_symbol}: {e}")
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": err_str}
 
 
 def bybit_disconnect():
