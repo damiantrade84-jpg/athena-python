@@ -4944,12 +4944,12 @@ def api_conductor_last():
 
     pair_arg = request.args.get("pair", "").strip()
     if pair_arg and _cmod._ALL_CONDUCTOR_RESULTS:
-        # Try exact match, then case-insensitive
+        # Try exact match, then case-insensitive, then slash-normalized
         _res = _cmod._ALL_CONDUCTOR_RESULTS.get(pair_arg)
         if _res is None:
-            pair_arg_up = pair_arg.upper()
+            pair_norm = pair_arg.upper().replace("/", "")
             for k, v in _cmod._ALL_CONDUCTOR_RESULTS.items():
-                if k.upper() == pair_arg_up:
+                if k.upper() == pair_arg.upper() or k.upper().replace("/", "") == pair_norm:
                     _res = v
                     break
         if _res:
