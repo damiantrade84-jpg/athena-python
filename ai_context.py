@@ -142,7 +142,7 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "factorWeights": signal.get("factorWeights") or signal.get("factor_weights"),
         "factorDiagnostics": signal.get("factorDiagnostics") or signal.get("factor_diagnostics"),
         "confidenceDetail": signal.get("confidenceDetail") or signal.get("confidence_detail"),
-        "trendState": signal.get("trendState") or signal.get("regimeName") or signal.get("regime", {}).get("label"),
+        "trendState": signal.get("trendState") or signal.get("regimeName") or (signal.get("regime", {}).get("label") if isinstance(signal.get("regime", {}), dict) else signal.get("regime")),
         "warnings": signal.get("warnings", []),
         "addonStatus": (signal.get("factorDiagnostics") or signal.get("factor_diagnostics") or {}).get("addon_status"),
     }
