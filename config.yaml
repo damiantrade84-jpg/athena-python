@@ -1,6 +1,6 @@
-# Athena v3.0 — Tunable thresholds (override CONFIG defaults)
+# Athena v3.0 - Tunable thresholds (override CONFIG defaults)
 
-# Edit this file and restart to apply changes — no code deploy needed.
+# Edit this file and restart to apply changes - no code deploy needed.
 
 
 
@@ -139,7 +139,7 @@ ENGINE_A_MEAN_REVERSION:
 
 
 
-# Per-class counter-trend penalty (standardized — Trend Gate already handles direction)
+# Per-class counter-trend penalty (standardized - Trend Gate already handles direction)
 
 COUNTER_TREND_PEN:
 
@@ -157,15 +157,15 @@ COUNTER_TREND_PEN:
 
 # Per-class RSI bounds
 
-# Crypto: 80/20 — PMC9920669 (2023) + practitioner consensus; BTC/alts regularly sustain
+# Crypto: 80/20 - PMC9920669 (2023) + practitioner consensus; BTC/alts regularly sustain
 
-#   RSI 70–90 in bull markets — standard 70/30 causes premature false-reversal warnings.
+#   RSI 70-90 in bull markets - standard 70/30 causes premature false-reversal warnings.
 
-# Commodity: 80/20 — gold/silver specific research (Metalorix, Kinesis, OpoFinance);
+# Commodity: 80/20 - gold/silver specific research (Metalorix, Kinesis, OpoFinance);
 
-#   precious metals frequently hold RSI 70–80 during trending phases; 70/30 over-signals.
+#   precious metals frequently hold RSI 70-80 during trending phases; 70/30 over-signals.
 
-# Forex/stock/index: 70/30 — Wilder standard; well-supported by backtesting literature.
+# Forex/stock/index: 70/30 - Wilder standard; well-supported by backtesting literature.
 
 RSI_BOUNDS:
 
@@ -231,7 +231,7 @@ BT_PERCENTILE_FILTER: false
 
 # Engine B min_score per style is set in NAKED_ENGINE.style_profiles below (scalp/intraday/swing).
 
-# Both backtest and live scan read from _naked_scan_style_profile() — single source of truth.
+# Both backtest and live scan read from _naked_scan_style_profile() - single source of truth.
 
 # NAKED_MAX_DAILY: Max Engine B trades per pair per day (live auto-trade cap)
 
@@ -383,7 +383,7 @@ ENGINE_C_BT_EXIT:
 
 
 
-# Engine A trend-state block list — BACKTEST ONLY by default. Live scan tier
+# Engine A trend-state block list - BACKTEST ONLY by default. Live scan tier
 
 # classification is NOT affected unless a "live" scope is explicitly configured.
 
@@ -395,19 +395,19 @@ ENGINE_C_BT_EXIT:
 
 # 4 crypto + 4 forex):
 
-#   DEAD RANGING — WR 18.5%, avgR -0.59R  (strong block)
+#   DEAD RANGING - WR 18.5%, avgR -0.59R  (strong block)
 
-#   DEVELOPING   — WR 32.7%, avgR -0.19R  (clear loser)
+#   DEVELOPING   - WR 32.7%, avgR -0.19R  (clear loser)
 
-#   RANGING      — WR 41.3%, avgR +0.12R  (keep)
+#   RANGING      - WR 41.3%, avgR +0.12R  (keep)
 
-#   TRENDING     — WR 39.3%, avgR +0.04R  (keep)
+#   TRENDING     - WR 39.3%, avgR +0.04R  (keep)
 
 #
 
 # Formats accepted:
 
-#   flat list:      applies to backtest only (live untouched) — this is the safe default
+#   flat list:      applies to backtest only (live untouched) - this is the safe default
 
 #     ENGINE_A_BLOCKED_TREND_STATES: ["DEAD RANGING", "DEVELOPING"]
 
@@ -437,9 +437,9 @@ ENGINE_A_BLOCKED_TREND_STATES:
 
 
 
-# Per-class live scan minimum confluence — execute / tradeSignals tier threshold.
+# Per-class live scan minimum confluence - execute / tradeSignals tier threshold.
 
-# All asset classes use Engine A v2 (factor_scoring.py), unified 0–3.0 scale.
+# All asset classes use Engine A v2 (factor_scoring.py), unified 0-3.0 scale.
 
 MIN_CONFLUENCE_CLASS:
 
@@ -459,7 +459,7 @@ MIN_CONFLUENCE_CLASS:
 
 # max(static MIN_CONFLUENCE_*, percentile cut) per asset class so only ~top fraction of
 
-# that scan’s scores can clear trade tier (self-scales with regime).
+# that scan's scores can clear trade tier (self-scales with regime).
 
 SCAN_QUANTILE_ENABLED: false
 
@@ -521,7 +521,7 @@ FEE_PCT:
 
 # ── Execution Engine ──────────────────────────────────────
 
-# Indicator correlation filter — expensive O(n²) operation, disable for backtest speed
+# Indicator correlation filter - expensive O(n²) operation, disable for backtest speed
 
 # Enable only when doing deep live analysis; backtest accuracy unaffected without it
 
@@ -551,7 +551,7 @@ AUTO_TRADE_ENABLED: false          # Start auto-trader on server boot
 
 # auto-trader candidate list. It is not the final live execute gate.
 
-# Factor engine (crypto/stock/commodity/index) outputs 0–3.0.
+# Factor engine (crypto/stock/commodity/index) outputs 0-3.0.
 
 AUTO_TRADE_MIN_SCORE:
 
@@ -567,7 +567,7 @@ AUTO_TRADE_MIN_SCORE:
 
 # AUTO_TRADE_MIN_CONVICTION is the real live gate used inside auto_trader.py.
 
-# Metric: combinedConviction on a 0–1 scale. When Engine A + B align, the live
+# Metric: combinedConviction on a 0-1 scale. When Engine A + B align, the live
 
 # gate gets a 15% discount (effective min = configured min * 0.85).
 
@@ -583,7 +583,7 @@ AUTO_TRADE_SCAN_INTERVAL_MIN: 30   # Scan every 30 minutes
 
 MAX_PORTFOLIO_HEAT: 0.06      # 6% total risk across all positions
 
-MAX_OPEN_POSITIONS: 20        # Testing only — revert before live
+MAX_OPEN_POSITIONS: 20        # Testing only - revert before live
 
 MAX_CORRELATED_POSITIONS: 3   # Allow up to 3 correlated positions (e.g. 3 USD pairs)
 
@@ -591,14 +591,14 @@ SIGNAL_MAX_AGE_SEC: 300       # 5 min freshness window
 
 FOREX_SESSION_FILTER: true    # true = London+NY+Asian only; false = 24h (disable for testing)
 
-SERVER_TZ_OFFSET_HOURS: 2    # Your local timezone UTC offset — SAST = 2 (GMT+2)
+SERVER_TZ_OFFSET_HOURS: 2    # Your local timezone UTC offset - SAST = 2 (GMT+2)
 
 
-# Forex scoring engine (merged into CONFIG["FOREX_ENGINE"] — see config.py for full defaults)
+# Forex scoring engine (merged into CONFIG["FOREX_ENGINE"] - see config.py for full defaults)
 
 FOREX_ENGINE:
 
-  # Session multipliers — read by factor_scoring._session_mult() (live) and forex_scoring._session_state() (legacy).
+  # Session multipliers - read by factor_scoring._session_mult() (live) and forex_scoring._session_state() (legacy).
 
   session_mode: "soft"               # forex_scoring legacy: "soft" = off-session active at reduced mult
 
@@ -666,7 +666,7 @@ BACKTEST_EVENT_RISK_GATING: false
 
 BACKTEST_SENTIMENT_GATING: false
 
-BACKTEST_DISABLE_HURST_GATE: false  # Measurement complete 2026-04-18: disabling added +2 trades / +1.6pp WR on GBP/USD — within noise. Hurst gate is not the edge problem.
+BACKTEST_DISABLE_HURST_GATE: false  # Measurement complete 2026-04-18: disabling added +2 trades / +1.6pp WR on GBP/USD - within noise. Hurst gate is not the edge problem.
 
 
 
@@ -696,7 +696,7 @@ DEBATE_MODEL: "grok-4.3"
 
 VISION_MODEL: "grok-4.3"          # /api/chart-analysis
 
-NEWS_SENTIMENT_MODEL: "grok-4.3"  # News AI text; defaults to AI_MODEL if empty — uses XAI_API_KEY
+NEWS_SENTIMENT_MODEL: "grok-4.3"  # News AI text; defaults to AI_MODEL if empty - uses XAI_API_KEY
 
 # Blend News AI into Engine A scan score (EODHD news + Kimi). Heavy: uses TTL cache per pair.
 
@@ -742,7 +742,7 @@ INSIDER_TRADING_ENABLED: true      # Check SEC Form 4 insider activity for stock
 
 FUNDAMENTALS_ENABLED: true         # Enrich stock signals with fundamental data
 
-# Ranging penalties — halved (ADX vote=0 already penalises, one penalty per condition)
+# Ranging penalties - halved (ADX vote=0 already penalises, one penalty per condition)
 
 RANGING:
 
@@ -798,7 +798,7 @@ RANGING:
 
 
 
-# Crypto transition penalty — disabled by default (was always-on, adding up to -2.0 only for crypto)
+# Crypto transition penalty - disabled by default (was always-on, adding up to -2.0 only for crypto)
 
 # Enable and tune if crypto signals become too noisy after RANGING recalibration
 
@@ -816,7 +816,7 @@ CRYPTO_TRANSITION_PENALTY:
 
 # Live crypto microstructure (WS-injected order book / flow) as an Engine A factor.
 
-# Research validation: enabled — factor_scoring applies FACTOR_WEIGHTS.crypto.microstructure
+# Research validation: enabled - factor_scoring applies FACTOR_WEIGHTS.crypto.microstructure
 
 # and CRYPTO_FACTOR_WEIGHT_CAPS.microstructure when live WS data passes age checks.
 
@@ -836,7 +836,7 @@ FACTOR_WEIGHTS:
 
   crypto:    { trend: 2.0, momentum: 1.5, volatility: 0.8, volume: 1.0, structure: 0.5, derivatives: 1.2, microstructure: 0.6, carry: 0, trend_strength: 1.0 }
 
-  forex:     { trend: 2.0, momentum: 1.0, volatility: 1.0, volume: 0.3, structure: 0.3, derivatives: 0.8, microstructure: 0.5, carry: 0.7 }  # NOTE: not used — forex routes to forex_scoring.py, not factor_scoring.py
+  forex:     { trend: 2.0, momentum: 1.0, volatility: 1.0, volume: 0.3, structure: 0.3, derivatives: 0.8, microstructure: 0.5, carry: 0.7 }  # NOTE: not used - forex routes to forex_scoring.py, not factor_scoring.py
 
   stock:     { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.5, structure: 1.0, derivatives: 0.5, microstructure: 0.75, carry: 1.0 }
 
@@ -858,7 +858,7 @@ INDICATOR_WEIGHTS:
 
   # TREND factor: D1 is the tide (dominant), H4 is momentum, H1 is entry timing
 
-  # Equal weighting treats a normal H1 pullback as weak direction — wrong for trend-following.
+  # Equal weighting treats a normal H1 pullback as weak direction - wrong for trend-following.
 
   # D1-dominant: pullback in strong D1 trend scores 0.60 instead of 0.33.
 
@@ -926,7 +926,7 @@ INDICATOR_WEIGHTS:
 
   # DERIVATIVES: COT is weekly (lagging), funding is crypto-only
 
-  # Crypto OI sub-indicators (oi_change_z, oi_price_divergence) are small vs funding — conservative.
+  # Crypto OI sub-indicators (oi_change_z, oi_price_divergence) are small vs funding - conservative.
 
   # When only one fires (e.g. funding only for crypto), it gets full weight automatically.
 
@@ -950,7 +950,7 @@ INDICATOR_WEIGHTS:
 
   # MICROSTRUCTURE: For non-crypto (candle proxies), OBI is the strongest signal.
 
-  # OFD and LP are derived from the same OHLC data — correlated, so down-weighted.
+  # OFD and LP are derived from the same OHLC data - correlated, so down-weighted.
 
   # For crypto (real WS orderbook), liquidity_wall_detection gets meaningful weight.
 
@@ -1232,7 +1232,7 @@ INDICATOR_CORRELATION_WINDOW: 200
 
 # the normal ranging penalty.
 
-CRYPTO_TRANSITION_PENALTY_ENABLED: false  # NOTE: no effect on scores currently — see regime.py
+CRYPTO_TRANSITION_PENALTY_ENABLED: false  # NOTE: no effect on scores currently - see regime.py
 
 
 
@@ -1270,7 +1270,7 @@ BYBIT_RECV_WINDOW_MS: 30000
 
 # When true, each ENGINE C scan logs ALIGNED tradeable consensus rows to shadow_signals (audit.db).
 
-SHADOW_LEDGER_ENABLED: true 
+SHADOW_LEDGER_ENABLED: true
 
 
 
@@ -1300,7 +1300,7 @@ PAIR_PROFILES:
 
     min_confluence: 1.05
 
-    bt_min: 1.80   # p75 diagnostic — was 0.65 (bypassed class BT_MIN)
+    bt_min: 1.80   # p75 diagnostic - was 0.65 (bypassed class BT_MIN)
 
   XAG/USD:
 
@@ -1312,7 +1312,7 @@ PAIR_PROFILES:
 
     min_confluence: 1.05
 
-    bt_min: 1.80   # p75 diagnostic — was 0.65
+    bt_min: 1.80   # p75 diagnostic - was 0.65
 
   LINK/USDT:
 
@@ -1360,7 +1360,7 @@ TELEGRAM:
 
   # Token and chat_id loaded from environment variables (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
 
-  # NEVER commit real tokens to config.yaml — revoke and regenerate if exposed.
+  # NEVER commit real tokens to config.yaml - revoke and regenerate if exposed.
 
   token: ""
 
@@ -1420,11 +1420,11 @@ NAKED_ENGINE:
 
   # Overlay observability (logs / engine_b_overlay / calculate_confidence.engine_b_diagnostics):
 
-  # stable reason codes in market_structure — resistance_too_close, support_too_close,
+  # stable reason codes in market_structure - resistance_too_close, support_too_close,
 
   # adverse_dxy_correlation, structural_sl_rejected_hard_cap (no extra alpha weights).
 
-  # Per-style min_score thresholds — tune here after backtesting.
+  # Per-style min_score thresholds - tune here after backtesting.
 
   # These override the hardcoded defaults in _naked_scan_style_profile().
 
@@ -1636,7 +1636,7 @@ NAKED_ENGINE:
 
 
 
-# Neutralized by default — use the base Engine B min_score directly unless
+# Neutralized by default - use the base Engine B min_score directly unless
 
 # a deliberate regime-specific policy is introduced again.
 
@@ -1652,7 +1652,7 @@ ENGINE_B_REGIME_MULTIPLIERS:
 
 
 
-# Engine B AI news context — feeds news into AI advisory review (not checklist)
+# Engine B AI news context - feeds news into AI advisory review (not checklist)
 
 ENGINE_B_NEWS_CONTEXT_ENABLED: true
 
@@ -1682,7 +1682,7 @@ ENGINE_B_FOREX_STRUCTURE_TF: "D1"
 
 # lower because structural patterns (BOS/CHoCH/OB) remain valid down to ~15
 
-# — this preserves Engine B's independent signal in the 15-25 transition zone.
+# - this preserves Engine B's independent signal in the 15-25 transition zone.
 
 # Engine B forex ADX floor.  Wilder defined ADX < 20 as non-trending;
 # 12 is intentionally low to allow directionally-biased ranging markets
@@ -1766,17 +1766,17 @@ ENGINE_B_FOLLOW_THROUGH:
 
 # Engine B backtest SL/TP mode:
 
-# "atr" = use Engine A calc_levels (ATR × multiplier) — proven, matches bar resolution
+# "atr" = use Engine A calc_levels (ATR × multiplier) - proven, matches bar resolution
 
-# "structural" = use Engine B naked zone placement (behind swing lows) — wider stops
+# "structural" = use Engine B naked zone placement (behind swing lows) - wider stops
 
 ENGINE_B_BT_SL_MODE: "atr"
 
 
 
-# AI usage control — when true, AI only runs on explicit user actions
+# AI usage control - when true, AI only runs on explicit user actions
 
-# (manual analysis clicks, compare engines) — NOT on automatic scans
+# (manual analysis clicks, compare engines) - NOT on automatic scans
 
 AI_ON_DEMAND_ONLY: true
 
@@ -1882,7 +1882,7 @@ SCALP_ENGINE:
 
     commodity: 8
 
-    crypto: 0                   # disabled — spread not applicable for crypto perpetuals
+    crypto: 0                   # disabled - spread not applicable for crypto perpetuals
 
     index: 6
 
@@ -1896,7 +1896,7 @@ SCALP_ENGINE:
 
   VP_BINS: 64                   # Price level granularity for Volume Profile histogram
 
-  VP_VALUE_AREA_PCT: 0.70       # Fraction 0–1 for volume inside VA (use 0.70 not 70 — 70 coerces but avoid confusion).
+  VP_VALUE_AREA_PCT: 0.70       # Fraction 0-1 for volume inside VA (use 0.70 not 70 - 70 coerces but avoid confusion).
 
   VP_LVN_THRESHOLD: 0.15        # Bins below 15% of POC volume are Low Volume Nodes
 
@@ -1944,7 +1944,7 @@ SCALP_ENGINE:
 
   EODHD_VOLUME_WARMER_ENGINE_A_ENABLED: true      # Pre-warm H1/H4/D1 for all non-crypto pairs (Engine A + chart Vision)
 
-  EODHD_VOLUME_WARMER_SLOW_INTERVAL_SEC: 900      # 15 min — H1 TTL=55m, H4 TTL=235m, D1 TTL=23h; API-rate safe
+  EODHD_VOLUME_WARMER_SLOW_INTERVAL_SEC: 900      # 15 min - H1 TTL=55m, H4 TTL=235m, D1 TTL=23h; API-rate safe
 
   # ── Spread limits for non-forex (raw MT5 points, not pip-converted) ──────
 
@@ -1990,7 +1990,7 @@ SCALP_ENGINE:
 
   SETUP_TREND: true             # LVN pullback continuation trades
 
-  # At VAH/VAL: neutral CVD (None) counts as preliminary confirmation — matches outside_VA branch.
+  # At VAH/VAL: neutral CVD (None) counts as preliminary confirmation - matches outside_VA branch.
   # Set false to require directional CVD, absorption, or VWAP alignment at extremes (legacy stricter behaviour).
   ALLOW_NEUTRAL_CVD_AT_VA_EXTREME: true
 
@@ -1998,7 +1998,7 @@ SCALP_ENGINE:
 
   MIN_RR: 1.2                   # Global Engine D minimum RR; unified floor (operator-approved).
 
-  TP1_MAX_RR: 4.0               # Cap TP1 to this multiple of SL distance — prevents unrealistically far targets (0 = disabled)
+  TP1_MAX_RR: 4.0               # Cap TP1 to this multiple of SL distance - prevents unrealistically far targets (0 = disabled)
 
   TREND_EXT_MAX_RR: 0.0         # Optional cap for trend-extension TP1 distance (0 = disabled; preserves current behavior)
 
@@ -2014,7 +2014,7 @@ SCALP_ENGINE:
 
   GRADE_STRONG_ABSORPTION_MIN_COUNT: 2  # Two absorption bars is enough for strong absorption credit
 
-  MT5_ABSORPTION_MIN_COUNT: 1   # OPERATOR EXPERIMENT: tick-volume absorption noise gate — revisit only after paper funnel evidence.
+  MT5_ABSORPTION_MIN_COUNT: 1   # OPERATOR EXPERIMENT: tick-volume absorption noise gate - revisit only after paper funnel evidence.
 
   ZONE_MIN_CONDITIONS: 2        # Valid zone needs >= N conditions
 
@@ -2106,11 +2106,11 @@ TIMED_EXIT:
 
     close_min: 10              # force-close at 10 min if still in profit and TP not near
 
-    timed_close_enabled: false # Engine A/B scalp: BE-only — timed close OFF (SL/TP manages rest)
+    timed_close_enabled: false # Engine A/B scalp: BE-only - timed close OFF (SL/TP manages rest)
 
     tp_progress_exempt: 0.40   # skip timed close if >= 40% toward TP (mirrors swing logic)
 
-    # Engine A/B style=scalp — staged SL profit-lock (generic timed exit; Engine D bypasses this monitor).
+    # Engine A/B style=scalp - staged SL profit-lock (generic timed exit; Engine D bypasses this monitor).
 
     profit_lock_enabled: true
 
@@ -2142,7 +2142,7 @@ TIMED_EXIT:
 
     timed_close_enabled: true  # set false to disable timed close for swing
 
-    tp_progress_exempt: 0.50   # skip close if >= 50% toward TP — let TP manage it
+    tp_progress_exempt: 0.50   # skip close if >= 50% toward TP - let TP manage it
 
   # ── Trailing ATR TP (Phase 2) ────────────────────────────────────────────
   # When tp_mode is "trailing_atr", after a trade reaches +trail_activation_r
@@ -2183,7 +2183,24 @@ CHART_VISION_DATASET_ENABLED: false
 CHART_VISION_V2_SHADOW_ENABLED: false
 
 
-# ── Live Dashboard v1 — paper/demo monitoring cockpit ────────────────────────
+# ── AI Conductor (Deterministic Router) ────────────────────────────────────
+# Replaces "always run everything" with explicit rules.
+# Zero LLM calls for routing. Fully auditable.
+CONDUCTOR:
+  ENABLED: true
+  # Score thresholds (%)
+  HARD_FAIL_SCORE_PCT: 35          # Below this: skip signal entirely
+  DEBATE_MIN_SCORE_PCT: 50         # Below this: too weak for debate
+  DEBATE_MAX_SCORE_PCT: 75         # Above this: strong enough, skip debate
+  STRONG_SCORE_PCT: 80             # Above this + clear B verdict: skip debate
+  # Trigger conditions
+  VISION_ON_DIVERGENCE: true       # Volume divergence or stop-run -> vision
+  VISION_ON_STOP_RUN: true
+  SENTIMENT_ON_NEWS: true          # News risk detected -> sentiment
+  # Engine weighting
+  DYNAMIC_WEIGHTING_ENABLED: true  # Adjust A/B weights from DB performance
+  DYNAMIC_WEIGHT_BLEND: 0.40      # % empirical vs default (0.4 = 40% empirical, 60% default)
+  MIN_SAMPLE_SIZE: 10              # Min trades before using empirical weights─
 # Display + paper/demo monitoring ONLY. No execution. No real orders.
 
 LIVE_DASHBOARD:
@@ -2199,5 +2216,5 @@ LIVE_DASHBOARD:
   ENGINE_D_UPDATE_SEC: 10        # Engine D cached result max age before DATA_MISSING (seconds)
   ENGINE_AB_UPDATE_ON_CONFIRMED_CANDLE: true
   DEFAULT_TIMEFRAME: H4
-  PAPER_MONITOR_ONLY: true       # Safety flag — dashboard never creates execution permission
+  PAPER_MONITOR_ONLY: true       # Safety flag - dashboard never creates execution permission
 

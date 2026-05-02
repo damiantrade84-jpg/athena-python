@@ -52,22 +52,22 @@ export default function DashboardPanel() {
   const { isAutoTrade, toggleAutoTrade, showToast } = useStore();
 
   const { data: health, loading: healthLoading, error: healthError, refresh: refreshHealth }
-    = useApiPoll<HealthStatus>('/api/health', 10000);
+    = useApiPoll<HealthStatus>('/api/health', 15000);
   const { data: mt5, loading: mt5Loading, error: mt5Error, refresh: refreshMt5 }
-    = useApiPoll<MT5Status>('/api/mt5-status', 10000);
+    = useApiPoll<MT5Status>('/api/mt5-status', 15000);
   const { data: bybit, loading: bybitLoading, error: bybitError, refresh: refreshBybit }
-    = useApiPoll<BybitStatus>('/api/bybit-status', 10000);
+    = useApiPoll<BybitStatus>('/api/bybit-status', 15000);
   const { data: guardianStatus, loading: guardianLoading, error: guardianError, refresh: refreshGuardian }
-    = useApiPoll<GuardianApiStatus>('/api/guardian/status', 10000);
+    = useApiPoll<GuardianApiStatus>('/api/guardian/status', 15000);
   const { data: openTradesRaw, loading: tradesLoading, error: tradesError, refresh: refreshTrades }
-    = useApiPoll<OpenTrade[] | { positions?: OpenTrade[] }>('/api/open-trades-timed', 10000);
+    = useApiPoll<OpenTrade[] | { positions?: OpenTrade[] }>('/api/open-trades-timed', 15000);
   const { data: lastScan, error: lastScanError, refresh: refreshScan }
-    = useApiPoll<LastScanResponse>('/api/last-scan', 30000);
+    = useApiPoll<LastScanResponse>('/api/last-scan', 60000);
   const { data: performance, error: perfError }
-    = useApiPoll<PerformanceMetrics>('/api/performance', 30000);
-  const { data: autoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 10000);
+    = useApiPoll<PerformanceMetrics>('/api/performance', 60000);
+  const { data: autoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 15000);
   const { post: postQuickExecute, loading: executingSignal } = useApiPost<{ success?: boolean; ticket?: string; error?: string; approval?: { approved: boolean; reason: string } }>();
-  const { priceFor } = useLivePrices(3000);
+  const { priceFor } = useLivePrices(10000);
 
   const openTrades = asArray<OpenTrade>(openTradesRaw);
   const recentSignals = (lastScan?.signals || []).slice(0, 6);

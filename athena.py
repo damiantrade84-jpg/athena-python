@@ -33,7 +33,7 @@ try:
 
     load_dotenv()
 except ImportError:
-    pass  # dotenv optional — falls back to os.environ
+    pass  # dotenv optional - falls back to os.environ
 
 import telegram_notify
 
@@ -123,7 +123,7 @@ logging.basicConfig(
 
 log = logging.getLogger("sentinel")
 
-# Silence noisy HTTP and library loggers — reduces console flood
+# Silence noisy HTTP and library loggers - reduces console flood
 import logging as _logging
 _logging.getLogger("werkzeug").setLevel(_logging.WARNING)
 _logging.getLogger("urllib3").setLevel(_logging.WARNING)
@@ -238,21 +238,21 @@ FOREX_PAIRS = [
         "display": "EUR/USD",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +0.16 — enabled; score gate filters low-conviction setups
+    },  # SQN +0.16 - enabled; score gate filters low-conviction setups
     {
         "symbol": "GBPUSD=X",
         "type": "forex",
         "display": "GBP/USD",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -1.62 (post-fix BT 2026-03-13): 7 trades/730d, WR 14%, OOS:-10 — no edge confirmed # re-enabled for ATR-fix retest
+    },  # SQN -1.62 (post-fix BT 2026-03-13): 7 trades/730d, WR 14%, OOS:-10 - no edge confirmed # re-enabled for ATR-fix retest
     {
         "symbol": "USDJPY=X",
         "type": "forex",
         "display": "USD/JPY",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -2.33 — enabled; re-evaluate post-formula fix
+    },  # SQN -2.33 - enabled; re-evaluate post-formula fix
     {
         "symbol": "AUDUSD=X",
         "type": "forex",
@@ -280,7 +280,7 @@ FOREX_PAIRS = [
         "display": "NZD/USD",
         "source": "mt5",
         "enabled": True,
-    },  # SQN 0.00 — enabled; zero trades was data gap not signal failure
+    },  # SQN 0.00 - enabled; zero trades was data gap not signal failure
     {
         "symbol": "EURGBP=X",
         "type": "forex",
@@ -329,7 +329,7 @@ FOREX_PAIRS = [
         "display": "EUR/AUD",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -1.43 (old look-ahead bias) — re-evaluate post-formula fix
+    },  # SQN -1.43 (old look-ahead bias) - re-evaluate post-formula fix
     {
         "symbol": "GBPAUD=X",
         "type": "forex",
@@ -395,14 +395,14 @@ COMMODITY_PAIRS = [
         "display": "XAG/USD",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -0.07 — DISABLE (borderline, no edge confirmed)
+    },  # SQN -0.07 - DISABLE (borderline, no edge confirmed)
     {
         "symbol": "CL=F",
         "type": "commodity",
         "display": "WTI Oil",
         "source": "mt5",
         "enabled": True,
-    },  # SQN not retested with correct ATR — monitor only
+    },  # SQN not retested with correct ATR - monitor only
     {
         "symbol": "BZ=F",
         "type": "commodity",
@@ -620,7 +620,7 @@ US_STOCK_PAIRS = [
         "display": "AAPL",
         "source": "mt5",
         "enabled": True,
-    },  # SQN -0.30 — score gate filters
+    },  # SQN -0.30 - score gate filters
     {
         "symbol": "TSLA.US",
         "type": "stock",
@@ -1189,7 +1189,7 @@ ALL_PAIRS = (
     + CRYPTO_PAIRS
 )
 
-# Pairs that opted out of WS — polled via REST every 60s
+# Pairs that opted out of WS - polled via REST every 60s
 _NON_WS_EODHD = [
     p for p in ALL_PAIRS if not p.get("ws", True) and p.get("source") == "eodhd"
 ]
@@ -1265,7 +1265,7 @@ _VENDOR_SYMBOL_OVERRIDES = {
     "WTI Oil": {"yfinance": "CL=F", "eodhd": "CL", "fallback": "yfinance"},
     "Brent Oil": {"yfinance": "BZ=F", "eodhd": "BZ", "fallback": "yfinance"},
     "Nat Gas": {"yfinance": "NG=F", "eodhd": "NG", "fallback": "yfinance"},
-    # COPPER/ALUMINUM: no valid EODHD EOD ticker — falls back to yfinance
+    # COPPER/ALUMINUM: no valid EODHD EOD ticker - falls back to yfinance
     "Copper": {"yfinance": "HG=F", "eodhd": "", "fallback": "yfinance"},
     "Aluminium": {"yfinance": "ALI=F", "eodhd": "", "fallback": "yfinance"},
     # Agricultural commodities: COFFEE/COTTON/SUGAR/WHEAT have no valid EODHD EOD ticker
@@ -1330,7 +1330,7 @@ _VENDOR_SYMBOL_OVERRIDES = {
         "eodhd_intraday": "HSI.INDX",
         "fallback": "yfinance",
     },
-    # Currency basket indices: no valid EODHD EOD ticker — falls back to MT5
+    # Currency basket indices: no valid EODHD EOD ticker - falls back to MT5
     "EURX": {"eodhd": "", "fallback": "yfinance"},
     "JPYX": {"eodhd": "", "fallback": "yfinance"},
     "USDX": {"eodhd": "", "fallback": "yfinance"},
@@ -1357,7 +1357,7 @@ def _yfinance_symbol_for_pair(pair: dict) -> str | None:
 
 
 def _eodhd_ticker_for_pair(pair: dict) -> str | None:
-    # Check vendor override first — highest priority
+    # Check vendor override first - highest priority
     # Empty string "" is an explicit block (pair confirmed to have no valid EODHD EOD ticker)
     override = _vendor_overrides(pair).get("eodhd")
     if override is not None:
@@ -1454,7 +1454,7 @@ def _fetch_fallback_candles(pair: dict, tf: str, limit: int, reason: str = ""):
     tag = f" ({reason})" if reason else ""
     disp = pair["display"]
 
-    # 1. Polygon — good for forex/metals, rate-limited to 5 req/min on free tier
+    # 1. Polygon - good for forex/metals, rate-limited to 5 req/min on free tier
     if _polygon_ticker_for_pair(pair):
         resp = fetch_polygon(pair, tf, limit)
         candles = _extract_candles(resp)
@@ -1462,7 +1462,7 @@ def _fetch_fallback_candles(pair: dict, tf: str, limit: int, reason: str = ""):
             log.info(f"[FALLBACK] {disp} {tf}: using Polygon{tag}")
             return candles
 
-    # 2. yfinance — last resort, broad coverage but lower reliability
+    # 2. yfinance - last resort, broad coverage but lower reliability
     yf_symbol = _yfinance_symbol_for_pair(pair)
     if yf_symbol:
         log.info(f"[FALLBACK] {disp} {tf}: using yfinance{tag}")
@@ -1475,16 +1475,16 @@ def _atr_for_levels(
     d1i: dict, h4i: dict, h1i: dict, pair: dict = None, style: str | None = None
 ):
     """
-    Returns ATR value for SL/TP calculation — correct timeframe per asset class.
+    Returns ATR value for SL/TP calculation - correct timeframe per asset class.
 
-    CRYPTO:              H4 ATR first — entries are H4-based, H1 too tight for
+    CRYPTO:              H4 ATR first - entries are H4-based, H1 too tight for
                          overnight crypto gaps and volatile moves
-    FOREX:               D1 ATR first — D1 swing trades, normal pullback 40-80
+    FOREX:               D1 ATR first - D1 swing trades, normal pullback 40-80
                          pips, H1 ATR (25-30 pips) causes premature stop-outs
-    STOCKS/ETFs:         D1 ATR first — stocks gap at open daily, H1 too tight
+    STOCKS/ETFs:         D1 ATR first - stocks gap at open daily, H1 too tight
                          for 5-20 day swing holds
-    COMMODITIES:         D1 ATR first — macro-driven, daily gaps common on news
-    INDICES:             D1 ATR first — daily range 0.5-1.5%, H1 only 0.1-0.3%
+    COMMODITIES:         D1 ATR first - macro-driven, daily gaps common on news
+    INDICES:             D1 ATR first - daily range 0.5-1.5%, H1 only 0.1-0.3%
     """
     ptype = (pair or {}).get("type", "")
     resolved_style = _normalize_style(style or "swing")
@@ -1571,7 +1571,7 @@ def fetch_yfinance(sym, tf, limit):
         df = df.loc[:, ~df.columns.duplicated(keep="first")]
 
         if tf == "H4":
-            # Column-by-column resample — avoids pandas version issues with .agg(dict)
+            # Column-by-column resample - avoids pandas version issues with .agg(dict)
 
             vol_col = (
                 df["Volume"]
@@ -1861,9 +1861,9 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
     """Best-effort EODHD volume fetch for MT5-routed symbols only.
 
     Priority order for live scans (cache_only=True path):
-      1. In-memory TTL cache (always checked first — zero latency)
+      1. In-memory TTL cache (always checked first - zero latency)
       2. CandleBuilder WS bars (US stocks M1/M5/M15: near-real-time exchange volume)
-      3. EODHD Intraday Historical REST (all TFs: finalized 2-3h after close — fallback)
+      3. EODHD Intraday Historical REST (all TFs: finalized 2-3h after close - fallback)
 
     Backtest callers pass cache_only=False which skips the WS path and goes straight
     to REST so backtests continue to use the same historical data as before.
@@ -1898,7 +1898,7 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
     #     every 4h via the Bulk EOD API. Accepted when we have >=20 bars with volume > 0.
     #     This eliminates per-pair get_eod_historical_stock_market_data() REST calls for D1.
     #
-    # Forex/commodity/index: excluded — no real exchange volume in OTC ticks.
+    # Forex/commodity/index: excluded - no real exchange volume in OTC ticks.
     if ptype == "stock" and tf_key in {"M1", "M5", "M15", "H1", "H4", "D1"}:
         try:
             cb = get_candle_builder()
@@ -1963,10 +1963,10 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
             log.debug("[EODHD-VOL] %s %s CandleBuilder check failed: %s", display, tf_key, _ws_err)
 
     if cache_only:
-        # cache_miss for a whitelisted pair — trigger background re-warm so next scan gets real data
+        # cache_miss for a whitelisted pair - trigger background re-warm so next scan gets real data
         if _supports_eodhd_volume_overlay(pair) and _is_eodhd_volume_whitelisted(pair, tf_key):
             log.warning(
-                "[EODHD-VOL] %s %s: cache_miss — volume overlay unavailable, "
+                "[EODHD-VOL] %s %s: cache_miss - volume overlay unavailable, "
                 "VP will use MT5 tick-volume this scan; bg re-warm triggered",
                 display, tf_key,
             )
@@ -2288,7 +2288,7 @@ def _fetch_eodhd_intraday_bt(pair, days=730):
 _eodhd_cooldown_until = 0.0  # global cooldown timestamp for 402 errors
 
 def fetch_eodhd(pair, tf, limit):
-    """Download OHLCV candles via EODHD SDK (APIClient). Covers forex, stocks, indices – 1000 req/min.
+    """Download OHLCV candles via EODHD SDK (APIClient). Covers forex, stocks, indices - 1000 req/min.
 
     Returns dict with standardized error format."""
     global _eodhd_cooldown_until
@@ -2342,14 +2342,14 @@ def fetch_eodhd(pair, tf, limit):
                     break
                 except Exception as e:
                     if "402" in str(e) or "429" in str(e) or "Payment Required" in str(e):
-                        log.warning(f"[EODHD] {ticker} D1: 402/429 — cooldown 10 min")
+                        log.warning(f"[EODHD] {ticker} D1: 402/429 - cooldown 10 min")
                         _eodhd_cooldown_until = time.time() + 600
                         return {"error": True, "symbol": symbol, "detail": "rate_limited"}
                     if attempt == 3:
                         log.warning(f"[EODHD] {ticker} D1 failed after 3 attempts: {e}")
                         raise
                     log.warning(
-                        f"[EODHD] {ticker} D1 attempt {attempt} failed — fast-fail without retry sleep: {e}"
+                        f"[EODHD] {ticker} D1 attempt {attempt} failed - fast-fail without retry sleep: {e}"
                     )
                     return {"error": True, "symbol": symbol, "detail": "rate_limited"}
 
@@ -2401,14 +2401,14 @@ def fetch_eodhd(pair, tf, limit):
                     break
                 except Exception as e:
                     if "402" in str(e) or "429" in str(e) or "Payment Required" in str(e):
-                        log.warning(f"[EODHD] {ticker} intraday: 402/429 — cooldown 10 min")
+                        log.warning(f"[EODHD] {ticker} intraday: 402/429 - cooldown 10 min")
                         _eodhd_cooldown_until = time.time() + 600
                         return {"error": True, "symbol": symbol, "detail": "rate_limited"}
                     if attempt == 3:
                         log.warning(f"[EODHD] {ticker} intraday failed after 3 attempts: {e}")
                         raise
                     log.warning(
-                        f"[EODHD] {ticker} intraday attempt {attempt} failed — fast-fail without retry sleep: {e}"
+                        f"[EODHD] {ticker} intraday attempt {attempt} failed - fast-fail without retry sleep: {e}"
                     )
                     return {"error": True, "symbol": symbol, "detail": "rate_limited"}
 
@@ -2490,7 +2490,7 @@ def fetch_polygon(pair, tf, limit):
     Returns dict with standardized error format."""
 
     symbol = pair.get("display", pair.get("symbol", "unknown"))
-    
+
     # DEBUG: Log Polygon data fetch for comparison test
     log.info(f"[PG] FETCH {symbol} {tf} limit={limit}")
 
@@ -2508,7 +2508,7 @@ def fetch_polygon(pair, tf, limit):
 
     if _polygon_throttle_reject:
         log.warning(
-            f"[PG] {symbol}: client throttle — min interval {_POLYGON_MIN_INTERVAL}s not elapsed"
+            f"[PG] {symbol}: client throttle - min interval {_POLYGON_MIN_INTERVAL}s not elapsed"
         )
         return {
             "error": True,
@@ -2557,7 +2557,7 @@ def fetch_polygon(pair, tf, limit):
         )
 
         if r.status_code == 403:
-            log.warning(f"[PG] {ticker}: 403 Forbidden — check API key or plan")
+            log.warning(f"[PG] {ticker}: 403 Forbidden - check API key or plan")
 
             return {
                 "error": True,
@@ -2567,7 +2567,7 @@ def fetch_polygon(pair, tf, limit):
 
         if r.status_code == 429:
             log.warning(
-                f"[PG] {ticker}: 429 rate limited — throttle will apply before next request"
+                f"[PG] {ticker}: 429 rate limited - throttle will apply before next request"
             )
 
             # Log Polygon rate limit error (no Telegram notification)
@@ -2648,7 +2648,7 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
     import mt5_executor
     import time
     from datetime import datetime, timezone
-    
+
     symbol = pair.get("display", pair.get("symbol", ""))
 
     def _mt5_fallback(detail: str):
@@ -2656,19 +2656,19 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
         if fallback:
             return {"error": True, "symbol": symbol, "detail": detail, "candles": fallback}
         return {"error": True, "symbol": symbol, "detail": detail}
-    
+
     if not mt5_executor.mt5_connect():
         return _mt5_fallback("MT5 not connected")
-        
+
     mt5 = mt5_executor._get_mt5()
     mt5_symbol = mt5_executor.mt5_map_symbol(symbol)
-    
+
     if not mt5_symbol:
         return _mt5_fallback("no MT5 symbol mapping")
-        
+
     if not mt5.symbol_select(mt5_symbol, True):
         return _mt5_fallback("symbol not found in MT5")
-        
+
     # Map timeframe
     tf_map = {
         "M1": mt5.TIMEFRAME_M1,
@@ -2680,15 +2680,15 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
         "D1": mt5.TIMEFRAME_D1,
     }
     mt5_tf = tf_map.get(tf, mt5.TIMEFRAME_H1)
-    
+
     request_limit = limit + 100
-    
+
     bars = mt5.copy_rates_from_pos(mt5_symbol, mt5_tf, 0, request_limit)
-    
+
     if bars is None or len(bars) == 0:
         err = mt5.last_error()
         return _mt5_fallback(f"MT5 failed: {err}")
-        
+
     # Dynamic timezone detection to align broker integers to perfect UTC strings
     # D1 bars should always be at 00:00 UTC regardless of broker timezone offset
     tick = mt5.symbol_info_tick(mt5_symbol)
@@ -2698,7 +2698,7 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
         diff_sec = tick.time - utc_now
         offset_hours = round(diff_sec / 3600.0)
         offset_seconds = int(offset_hours * 3600)
-    
+
     candles = []
     for b in bars:
         shifted_ts = b['time'] - offset_seconds
@@ -2732,7 +2732,7 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
                 "ts": time.time(),
                 "source": "mt5",
             }
-        
+
     resp = {
         "error": False,
         "symbol": symbol,
@@ -2848,13 +2848,13 @@ from vision_prompts import (  # noqa: E402
 
 _scan_lock = threading.Lock()  # thread-safe scan guard (replaces bare boolean)
 
-_kill_switch = False  # N4: Kill-switch — blocks new scans/analyses when True
+_kill_switch = False  # N4: Kill-switch - blocks new scans/analyses when True
 
 _test_mode = (
     False  # Test mode: drops score thresholds, enables force-execute on all signals
 )
 
-_disabled_pairs: set = set()  # per-pair kill-switch — display names of pairs to exclude
+_disabled_pairs: set = set()  # per-pair kill-switch - display names of pairs to exclude
 
 # Per-scan DXY H4 cache to avoid redundant yfinance fetches in Engine B overlay
 _dxy_h4_cache: tuple[list[float], float] | None = None  # (closes, timestamp)
@@ -2922,18 +2922,18 @@ def _effective_backtest_style(pair: dict, requested_style: str) -> str:
     return resolve_auto_style(requested_style, pair)
 
 
-EXPERT_PROMPT = """You are Marcus Reid — 18-year prop-desk veteran turned trading mentor.
-You speak like a sharp friend who happens to be a market wizard — concise, opinionated.
+EXPERT_PROMPT = """You are Marcus Reid - 18-year prop-desk veteran turned trading mentor.
+You speak like a sharp friend who happens to be a market wizard - concise, opinionated.
 No corporate-speak. No filler. No hedging.
 
-ABSOLUTE RULES — VIOLATION = FAILURE:
+ABSOLUTE RULES - VIOLATION = FAILURE:
 1. Output ONLY valid JSON. No markdown, no text outside JSON values.
-2. NEVER state anything not directly supported by the input data. If a factor is None/missing, say "data unavailable" — do NOT guess.
+2. NEVER state anything not directly supported by the input data. If a factor is None/missing, say "data unavailable" - do NOT guess.
 3. NEVER use "will", "guaranteed", "definitely". Use "edge suggests", "probability favors", "setup indicates".
 4. EVERY claim in your narrative MUST reference a specific data point from the input (factor name, score value, weight, z-score, regime label, level price). If you cannot cite the data, do not make the claim.
-5. Counter-trend setups: FLAG explicitly in warnings with risk rationale (cite SIGNAL/FACTOR data). Grade from evidence — do NOT auto-downgrade by a fixed number of levels.
+5. Counter-trend setups: FLAG explicitly in warnings with risk rationale (cite SIGNAL/FACTOR data). Grade from evidence - do NOT auto-downgrade by a fixed number of levels.
 6. If directionalScore and direction disagree, FLAG THIS as a critical issue.
-7. DEAD RANGING / low ADX / chop: name the regime, explain follow-through risk using ADX percentile/label from SIGNAL, then decide the grade from evidence — do NOT use a fixed grade ceiling.
+7. DEAD RANGING / low ADX / chop: name the regime, explain follow-through risk using ADX percentile/label from SIGNAL, then decide the grade from evidence - do NOT use a fixed grade ceiling.
 
 STYLE & ASSET AWARENESS RULES:
 Evaluate the trade setup based on the 'Resolved AI style' and 'Asset type' provided in the AI CALIBRATION CONTEXT.
@@ -2952,26 +2952,26 @@ INPUT SECTIONS:
 === SIGNAL === (pair, direction, score/maxScore, conviction, regime, style)
 === FACTOR DIAGNOSTICS === (per-factor scores with weights, directional vs nondirectional breakdown, confidence multiplier, trend coherence, optional coverage)
 === CONFIDENCE ENGINE === (confidence value and component breakdown)
-=== ENGINE B === (naked market structure — swing sequence, BOS, CHoCH, order blocks, FVGs, zones)
+=== ENGINE B === (naked market structure - swing sequence, BOS, CHoCH, order blocks, FVGs, zones)
 === TECHNICALS === (individual voted indicators + z-scores)
 === LEVELS === (entry, SL, TP1, TP2 with R-multiples, ATR, fib levels)
-=== WARNINGS === (penalties already applied — these are FACTS not opinions)
-=== CONTEXT === (NOT scored — news, DXY, yield curve, backtest stats, learning history)
+=== WARNINGS === (penalties already applied - these are FACTS not opinions)
+=== CONTEXT === (NOT scored - news, DXY, yield curve, backtest stats, learning history)
 === PORTFOLIO === (heat, drawdown)
 
-HOW TO ANALYSE — FOLLOW THIS EXACT ORDER:
+HOW TO ANALYSE - FOLLOW THIS EXACT ORDER:
 Step 1: Read AI CALIBRATION CONTEXT first. Identify the Asset Type and Resolved AI style. Note whether the dashboard confluence label is Weak, Medium, or Strong. Do not confuse thresholdProgressPct with rawScorePct.
 Step 2: Read FACTOR DIAGNOSTICS. Which directional factors are active? Does direction match? What is the confidence multiplier?
-Step 3: Check trendCoherence. How many timeframes agree? If coherence_ratio < 0.5, signal is fragmented; 0.5–0.7 mixed; >0.7 aligned.
+Step 3: Check trendCoherence. How many timeframes agree? If coherence_ratio < 0.5, signal is fragmented; 0.5-0.7 mixed; >0.7 aligned.
 Step 4: Read regime. Explain follow-through and chop risk from the data. Do not auto-downgrade purely from regime label.
 Step 5: Read LEVELS. Evaluate SL and RR according to the Style & Asset Awareness Rules above. Do not automatically penalize Crypto for >2% SL.
 Step 6: If ENGINE B data is present, cross-reference structural verdict with factor direction. Agreement = positive; conflict = major red flag.
 Step 7: If CONTEXT data is present, use for narrative color ONLY.
 
-GRADING — derive from data, NOT from rawScorePct buckets:
+GRADING - derive from data, NOT from rawScorePct buckets:
 You must arrive at a letter grade (A+ through F) by weighing evidence in this order. Cite which items drove the grade in narrative/warnings.
 1. Factor coherence: how many active directional factors support the call, and do weights justify confidence?
-2. trendCoherence ratio: <0.5 fragmented; 0.5–0.7 mixed; >0.7 aligned.
+2. trendCoherence ratio: <0.5 fragmented; 0.5-0.7 mixed; >0.7 aligned.
 3. directionalConfidenceMultiplier: <0.5 is a structural red flag regardless of headline score.
 4. ENGINE B (if present): CLEAR structural_verdict + direction aligned to Engine A is a boost; UNCLEAR/misaligned is a risk.
 5. RR vs style minimum from LEVELS.
@@ -2980,20 +2980,20 @@ You must arrive at a letter grade (A+ through F) by weighing evidence in this or
 
 A grade must cite specific evidence. "Score is X%" alone is not sufficient rationale.
 
-edgeProbability (0–100) — derive from input with this rubric (do not mirror rawScorePct mechanically):
-- Base from trendCoherence: take coherence_ratio from FACTOR DIAGNOSTICS (0–1). Add min(40, coherence_ratio * 40) points.
-- directionalConfidenceMultiplier: add min(30, multiplier * 30) where multiplier is 0–1 from diagnostics (if missing, use 0).
-- ENGINE B: if structural_verdict is CLEAR and direction matches Engine A, +15; if ENGINE B absent/neutral, +0; if UNCLEAR or direction conflicts, −10.
-- Regime label from SIGNAL: TRENDING or strong trend labels +10; RANGING/chop near neutral +0; DEAD RANGING or explicit dead chop + (−10).
-- RR: meets style minimum from LEVELS +5; below −5.
-Sum, clamp to 5–95. Round to integer for the JSON field.
+edgeProbability (0-100) - derive from input with this rubric (do not mirror rawScorePct mechanically):
+- Base from trendCoherence: take coherence_ratio from FACTOR DIAGNOSTICS (0-1). Add min(40, coherence_ratio * 40) points.
+- directionalConfidenceMultiplier: add min(30, multiplier * 30) where multiplier is 0-1 from diagnostics (if missing, use 0).
+- ENGINE B: if structural_verdict is CLEAR and direction matches Engine A, +15; if ENGINE B absent/neutral, +0; if UNCLEAR or direction conflicts, -10.
+- Regime label from SIGNAL: TRENDING or strong trend labels +10; RANGING/chop near neutral +0; DEAD RANGING or explicit dead chop + (-10).
+- RR: meets style minimum from LEVELS +5; below -5.
+Sum, clamp to 5-95. Round to integer for the JSON field.
 
-PER-STYLE RATINGS — rate ALL THREE independently using specific data:
+PER-STYLE RATINGS - rate ALL THREE independently using specific data:
 - SCALP: Need ADX > 30, clean H1 entry, vol_ratio > 1.5, RR >= 1.5
 - INTRADAY: Need H4+H1 aligned, same session, RR >= 2.0, momentum confirming
 - SWING: Need D1 EMA stack + trendCoherence > 0.8, RR >= 3.0, no upcoming high-impact events
 
-OUTPUT — EXACT JSON (no other text):
+OUTPUT - EXACT JSON (no other text):
 {"reviewSource":"engine_a_marcus","resolvedStyle":"SWING|INTRADAY|SCALP","scannerReadiness":"Weak|Medium|Strong","factorQuality":85,"structuralRisk":"Low","executionRisk":"Medium","selectedStyleGrade":"A","grade":"A","verdict":"One punchy sentence citing specific factor scores","narrative":"2-3 sentences. MUST reference specific factor names, scores, and weights from the input. Name the strongest and weakest factors.","entryZone":"exact price or fib level from input","invalidation":"exact price from SL or structural level","keyLevels":"S1/R1 from input data only","positionSizing":"Full/Half/Quarter + why (reference confidence_multiplier and nondirectionalScore)","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"cite specific data","warnings":["specific risks citing data points"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}
 """
 
@@ -3062,7 +3062,7 @@ def fetch_usd_relative_strength_context(
         return None
 
 
-# Phase A: UST Yield Curve cache (1hr TTL — rates change slowly)
+# Phase A: UST Yield Curve cache (1hr TTL - rates change slowly)
 
 _yield_cache = {"data": None, "ts": 0}
 
@@ -3189,7 +3189,7 @@ def fetch_div_split_context():
     now = time.time()
 
     if _divsplit_cache["ts"] > 0 and (now - _divsplit_cache["ts"]) < _DIVSPLIT_TTL:
-        log.debug(f"[DIVS] Cache hit — age {int(now - _divsplit_cache['ts'])}s")
+        log.debug(f"[DIVS] Cache hit - age {int(now - _divsplit_cache['ts'])}s")
         return _divsplit_cache["data"]
 
     _key = os.environ.get("EODHD_KEY", "")
@@ -3324,11 +3324,11 @@ def fetch_div_split_context():
     _divsplit_cache = {"data": result, "ts": now}
 
     log.info(
-        f"[DIVS] Checked {len(_DIV_SPLIT_PAIRS)} pairs — {len(result)} with upcoming events"
+        f"[DIVS] Checked {len(_DIV_SPLIT_PAIRS)} pairs - {len(result)} with upcoming events"
     )
 
     log.info(
-        f"[DIVS] Cache populated — {len(_DIV_SPLIT_PAIRS)} pairs, {len(result)} events found. Next refresh in 24h."
+        f"[DIVS] Cache populated - {len(_DIV_SPLIT_PAIRS)} pairs, {len(result)} events found. Next refresh in 24h."
     )
 
     return result
@@ -3358,7 +3358,7 @@ def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
         return _earnings_cache["data"]
 
     if _EARNINGS_AVAILABLE is False:
-        return {}  # Already confirmed unavailable on this EODHD plan — skip API call
+        return {}  # Already confirmed unavailable on this EODHD plan - skip API call
 
     api = _get_eodhd_client()
 
@@ -3391,11 +3391,11 @@ def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
     except Exception as e:
         if "403" in str(e) or "Forbidden" in str(e):
             _EARNINGS_AVAILABLE = (
-                False  # Disable for this session — plan doesn't include it
+                False  # Disable for this session - plan doesn't include it
             )
 
             log.warning(
-                "[EARN] 403 Forbidden — earnings calendar not available on this EODHD plan. Disabling for session."
+                "[EARN] 403 Forbidden - earnings calendar not available on this EODHD plan. Disabling for session."
             )
 
         else:
@@ -3441,7 +3441,7 @@ def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
     _earnings_cache = {"data": result, "ts": now}
 
     log.info(
-        f"[EARN] Checked {len(symbols)} stock symbols — {len(result)} with upcoming earnings"
+        f"[EARN] Checked {len(symbols)} stock symbols - {len(result)} with upcoming earnings"
     )
 
     return result
@@ -3455,7 +3455,7 @@ _news_thread_started = False
 _news_thread_lock = threading.Lock()
 
 _NEWS_BG_INTERVAL_SEC = float(CONFIG.get("NEWS_BG_INTERVAL_SEC", 3600.0) or 3600.0)  # default 60 min
-_news_pair_cache: dict = {}  # sticker -> {"news": [...], "weights": [...], "ts": float} — populated on-demand (AI only)
+_news_pair_cache: dict = {}  # sticker -> {"news": [...], "weights": [...], "ts": float} - populated on-demand (AI only)
 
 _NEWS_EMPTY: dict = {"forexEvents": [], "cryptoNews": [], "marketNews": []}
 
@@ -3657,7 +3657,7 @@ def _news_updater_loop():
         _refresh_news_cache(None)
     except Exception as e:
         log.warning(f"[NEWS] Background refresh failed: {e}")
-    
+
     global _news_thread_started
     with _news_thread_lock:
         _news_thread_started = False
@@ -3709,13 +3709,13 @@ def fetch_news_context(pairs: list | None = None, allow_refresh: bool = True):
     """Return cached news context immediately. Trigger refresh if missing or expired (unless allow_refresh is False)."""
     global _news_cache
     now = time.time()
-    
+
     with _news_lock:
         stale = _news_cache["data"] is None or (now - _news_cache["ts"]) > _NEWS_BG_INTERVAL_SEC
-    
+
     if stale and allow_refresh:
         _ensure_news_background_started()
-        
+
     with _news_lock:
         data = _news_cache["data"]
     return _filter_news_ctx_for_pairs(data if data is not None else {}, pairs)
@@ -3942,6 +3942,7 @@ def _build_signal_message(
 
     try:
         from ai_context import build_ai_calibration_context_string
+        from conductor import conductor_orchestrate
         lines.append("")
         lines.append(build_ai_calibration_context_string(signal, engine_source="Engine A factor/confluence signal", explicit_style=style_pref))
     except Exception as _ai_ctx_err:
@@ -3970,7 +3971,7 @@ def _build_signal_message(
         if _fd.get("minDirectionalThreshold") is not None:
             lines.append(f"  Min directional threshold: {_fd['minDirectionalThreshold']}")
         if _fd.get("minDirectionalFailed"):
-            lines.append("  ** MIN DIRECTIONAL FAILED — signal below directional threshold **")
+            lines.append("  ** MIN DIRECTIONAL FAILED - signal below directional threshold **")
         _tc = _fd.get("trendCoherence", {})
         if _tc:
             lines.append(
@@ -4013,7 +4014,7 @@ def _build_signal_message(
                     + ", ".join(str(x) for x in (_im.get("unavailablePriors") or []))
                 )
         if _fd.get("insufficientFactors"):
-            lines.append("  ** INSUFFICIENT FACTORS — too few active to produce valid score **")
+            lines.append("  ** INSUFFICIENT FACTORS - too few active to produce valid score **")
 
     # Engine B signals: emit naked scoring summary in place of factor diagnostics
     if _is_naked and _naked and not _fs:
@@ -4036,7 +4037,7 @@ def _build_signal_message(
         for cname, cval in _comps.items():
             lines.append(f"    {cname}: {cval if cval is not None else 'N/A'}")
         if _conf.get("degraded"):
-            lines.append(f"  ** DEGRADED — only {_conf.get('available_count', '?')}/{len(_comps)} components available **")
+            lines.append(f"  ** DEGRADED - only {_conf.get('available_count', '?')}/{len(_comps)} components available **")
 
     # === LEVELS ===
 
@@ -4054,7 +4055,7 @@ def _build_signal_message(
     fib = signal.get("fib")
 
     if fib:
-        # Only send key fib levels — full dump is ~100 extra tokens
+        # Only send key fib levels - full dump is ~100 extra tokens
         _key_fibs = {
             k: v
             for k, v in fib.items()
@@ -4096,7 +4097,7 @@ def _build_signal_message(
     if _yc:
         lines.append(
             f"Yield curve: {_yc['shape']} (2Y-10Y spread: {_yc['spread_2_10']}%, "
-            f"3M: {_yc.get('y3m')}%, 10Y: {_yc['y10y']}%) — {_yc['riskContext']}"
+            f"3M: {_yc.get('y3m')}%, 10Y: {_yc['y10y']}%) - {_yc['riskContext']}"
         )
 
     _ds = fetch_div_split_context()
@@ -4110,14 +4111,14 @@ def _build_signal_message(
             _d = _ev["upcomingDiv"][0]
 
             lines.append(
-                f"Ex-div in {_d['daysTo']} days ({_d['exDate']}, amount: {_d.get('amount', '?')}) — gap-down risk"
+                f"Ex-div in {_d['daysTo']} days ({_d['exDate']}, amount: {_d.get('amount', '?')}) - gap-down risk"
             )
 
         if _ev.get("upcomingSplit"):
             _s = _ev["upcomingSplit"][0]
 
             lines.append(
-                f"Split in {_s['daysTo']} days ({_s['splitDate']}, ratio: {_s.get('ratio', '?')}) — price distortion risk"
+                f"Split in {_s['daysTo']} days ({_s['splitDate']}, ratio: {_s.get('ratio', '?')}) - price distortion risk"
             )
 
     _oi_div = signal.get("oiDivergence")
@@ -4164,7 +4165,7 @@ def _build_signal_message(
     if news_ctx:
         _ctx_parts = []
 
-        # Forex events — keep only event name + date (strip full object bloat)
+        # Forex events - keep only event name + date (strip full object bloat)
         if news_ctx.get("forexEvents"):
             _fe = [
                 {
@@ -4195,7 +4196,7 @@ def _build_signal_message(
             ]
 
             if relevant:
-                # Title only — strip full article body
+                # Title only - strip full article body
                 _ctx_parts.append(
                     f"Crypto news: {', '.join(n.get('title', '')[:80] for n in relevant[:2])}"
                 )
@@ -4359,9 +4360,9 @@ def run_ai(
         _temp = float(AITemperatureConfig.get_temperature("marcus"))
 
         style_labels = {
-            "scalp": "SCALP — focus on H1 exhaustion, tight 1.5R, quick execution",
-            "intraday": "INTRADAY — H4+H1 alignment, same-session execution, 2-3R",
-            "swing": "SWING — D1 trend dominance, EMA200 slope, 4-6R multi-day hold",
+            "scalp": "SCALP - focus on H1 exhaustion, tight 1.5R, quick execution",
+            "intraday": "INTRADAY - H4+H1 alignment, same-session execution, 2-3R",
+            "swing": "SWING - D1 trend dominance, EMA200 slope, 4-6R multi-day hold",
         }
 
         if style_pref == "auto":
@@ -4614,7 +4615,7 @@ def _init_audit_db(db_path: str) -> None:
         ("risk_amount", "REAL"),
         ("risk_pct", "REAL"),
         ("ticket", "TEXT"),
-        # Task 1 — outcome tracking
+        # Task 1 - outcome tracking
         ("exit_price", "REAL"),
         ("exit_time", "TEXT"),
         ("pnl", "REAL"),
@@ -4632,7 +4633,7 @@ def _init_audit_db(db_path: str) -> None:
         ("adx_pct", "REAL"),
         ("btc_bias", "TEXT"),
         ("session_name", "TEXT"),
-        ("error_tag", "TEXT"),  # AUTO-ERR: reason — set on failed auto-trade attempts
+        ("error_tag", "TEXT"),  # AUTO-ERR: reason - set on failed auto-trade attempts
         ("fee_cost", "REAL"),  # Actual paid commission captured from exchange order
         (
             "factors_json",
@@ -4811,7 +4812,7 @@ _RATE_MAX_REQUESTS = 120  # max requests per window (2/sec average)
 _RATE_EXECUTE_MAX = 5  # stricter limit for execution endpoints
 
 
-# _json_safe imported from config.py — see that module for implementation
+# _json_safe imported from config.py - see that module for implementation
 
 
 @app.before_request
@@ -4823,17 +4824,17 @@ def _auth_and_rate_limit():
 
     ip = _req.remote_addr or "unknown"
 
-    # Auth check — only enforced when ATHENA_API_KEY is set in .env
+    # Auth check - only enforced when ATHENA_API_KEY is set in .env
 
     if _ATHENA_API_KEY and path not in _AUTH_EXEMPT:
         provided = _req.headers.get("X-Sentinel-Key", "")
 
         if provided != _ATHENA_API_KEY:
             log.warning(
-                f"[AUTH] {ip} rejected on {path} — invalid/missing X-Sentinel-Key"
+                f"[AUTH] {ip} rejected on {path} - invalid/missing X-Sentinel-Key"
             )
 
-            return jsonify({"error": "Unauthorized — set X-Sentinel-Key header"}), 401
+            return jsonify({"error": "Unauthorized - set X-Sentinel-Key header"}), 401
 
     # Rate limiting
 
@@ -4893,7 +4894,7 @@ def api_scan():
 
 @app.route("/api/last-scan", methods=["GET"])
 def api_last_scan():
-    """Latest full-universe scan kept in memory — survives dashboard tab refresh.
+    """Latest full-universe scan kept in memory - survives dashboard tab refresh.
 
     Use this instead of relying only on ``localStorage`` (large payloads can exceed
     quota and fail to persist, leaving an older snapshot).
@@ -4925,7 +4926,7 @@ def api_analyze():
         return jsonify({"error": "Invalid signal object"}), 400
 
     if _kill_switch:
-        return jsonify({"error": "Kill-switch active — system paused"}), 503
+        return jsonify({"error": "Kill-switch active - system paused"}), 503
 
     try:
         news_ctx = sig.get("newsCtx") or fetch_news_context()
@@ -5012,6 +5013,22 @@ def api_analyze():
             except Exception as enc_err:
                 log.debug(f"[ENRICH] failed: {enc_err}")
 
+        # ── Conductor: Decide which AI functions to run ──────────────────
+        _conductor_plan = None
+        try:
+            from conductor import conductor_orchestrate
+            _conductor_plan = conductor_orchestrate(
+                sig,
+                sig.get("regime", "UNKNOWN"),
+                _AUDIT_DB,
+                news_ctx=news_ctx,
+                news_risk=news_ctx.get("risk") if news_ctx else None,
+            )
+            sig["conductor"] = _conductor_plan.get("routing", {})
+            sig["conductor_context"] = _conductor_plan.get("context", {})
+        except Exception as _cerr:
+            log.debug(f"[CONDUCTOR] failed: {_cerr}")
+
         result = run_ai(
             sig,
             news_ctx,
@@ -5021,7 +5038,7 @@ def api_analyze():
             learning_ctx=_learning_ctx,
         )
 
-        # N9: Audit log — persist every AI analysis to SQLite
+        # N9: Audit log - persist every AI analysis to SQLite
 
         try:
             _max_s = sig.get("maxScore", 3.0)
@@ -5029,6 +5046,11 @@ def api_analyze():
             _score_pct = (
                 round(sig.get("confluenceScore", 0) / _max_s * 100, 1) if _max_s else 0
             )
+
+            # Add conductor output to result for dashboard display
+            if _conductor_plan:
+                result["conductor"] = _conductor_plan.get("routing", {})
+                result["conductor_context"] = _conductor_plan.get("context", {})
 
             with sqlite3.connect(_AUDIT_DB, timeout=15.0) as _con:
                 # CLAUDE.md Hard Rule 23: signal dict uses camelCase. Legacy
@@ -5085,7 +5107,7 @@ def api_analyze():
         return jsonify(result)
 
     except Exception as e:
-        # S2: Sanitise exception — don't leak internal paths
+        # S2: Sanitise exception - don't leak internal paths
 
         log.error(f"api_analyze error: {e}")
 
@@ -5219,7 +5241,7 @@ def _naked_scan_style_profile(
 ) -> tuple[str, dict]:
     resolved = _normalize_style(style)
     if resolved == "auto":
-        resolved = "intraday"  # Engine B walks H4 bars — intraday is the natural default
+        resolved = "intraday"  # Engine B walks H4 bars - intraday is the natural default
     profiles = {
         "scalp": {
             "min_score": 3.0,
@@ -5655,7 +5677,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
 
         # ── Phase 1: AI Reconciliation layer ─────────────────────────────────
         # Compare Marcus Reid (text) vs any Vision result available for this pair.
-        # Output is display-only — no scoring effect.
+        # Output is display-only - no scoring effect.
         try:
             from ai_reconciliation import compute_ai_agreement, reconcile_style_ratings
             _vision_cache_key = (
@@ -5798,8 +5820,8 @@ def api_compare_engines():
         }
         return jsonify(
             _json_safe({
-                "engineA": engine_a, 
-                "engineB": engine_b, 
+                "engineA": engine_a,
+                "engineB": engine_b,
                 "summary": summary,
                 "aiCalibrationContextA": _ctx_a,
                 "aiCalibrationContextB": _ctx_b
@@ -5863,7 +5885,7 @@ def api_scan_naked():
             "final_reject_reason": None,
             "direction_details": {}
         }
-        
+
         try:
             engine = NakedEngine()
 
@@ -5878,7 +5900,7 @@ def api_scan_naked():
             _is_crypto_trigger_profile = _is_crypto_profile and bool(
                 CONFIG.get("ENGINE_B_CRYPTO_TRIGGER_PROFILE_ENABLED", False)
             )
-            
+
             debug_row["style"] = resolved_style
 
             # Determine which timeframes this pair/style needs
@@ -5906,7 +5928,7 @@ def api_scan_naked():
                 _crypto_entry_tfs = [str(tf).upper() for tf in _configured_entry_tfs]
                 _needed_tfs.update(_crypto_entry_tfs)
             _needed_tfs = list(_needed_tfs)
-            
+
             debug_row["zone_tf"] = _zone_tf
             debug_row["entry_tf"] = _entry_tf
             debug_row["atr_tf"] = _atr_tf
@@ -5961,7 +5983,7 @@ def api_scan_naked():
                 bool((_tf_state_map.get(tf) or {}).get("is_live"))
                 for tf in (_zone_tf, _entry_tf, _atr_tf, "D1")
             )
-            
+
             debug_row["zone_count"] = len(zone_candles)
             debug_row["entry_count"] = len(entry_candles)
             debug_row["d1_count"] = len(d1_candles)
@@ -5979,7 +6001,7 @@ def api_scan_naked():
             _atr_closes = [float(c["close"]) for c in atr_candles]
             atr_series = calc_atr(_atr_highs, _atr_lows, _atr_closes, 14)
             atr = float(atr_series[-1]) if atr_series else 0.0
-            
+
             debug_row["atr_value"] = atr
 
             if not atr or atr <= 0:
@@ -5995,7 +6017,7 @@ def api_scan_naked():
                 if _atr_avg > 0 and atr < _atr_avg * 0.6:
                     debug_row["volatility_gate_passed"] = False
                     debug_row["final_reject_reason"] = "volatility_gate"
-                    log.debug(f"[NAKED-DBG] {pair['display']}: ATR={atr:.6f} < 60% avg={_atr_avg:.6f} — VOL GATE")
+                    log.debug(f"[NAKED-DBG] {pair['display']}: ATR={atr:.6f} < 60% avg={_atr_avg:.6f} - VOL GATE")
                     if debug_mode:
                         return {"debug": debug_row}
                     return []
@@ -6165,7 +6187,7 @@ def api_scan_naked():
                     debug_row["tested_long"] = True
                 else:
                     debug_row["tested_short"] = True
-                    
+
                 res = engine.set_registry_context(
                     pair.get("symbol") or pair.get("display")
                 ).analyze_structure(
@@ -6184,14 +6206,14 @@ def api_scan_naked():
 
                 verdict = res.get("structural_verdict", "NONE")
                 seq = res.get("current_swing_sequence", "")
-                
+
                 if direction == "LONG":
                     debug_row["long_structural_verdict"] = verdict
                 else:
                     debug_row["short_structural_verdict"] = verdict
-                    
+
                 if verdict != "CLEAR":
-                    log.debug(f"[NAKED-DBG] {pair['display']} {direction}: verdict={verdict} seq={seq} — SKIPPED")
+                    log.debug(f"[NAKED-DBG] {pair['display']} {direction}: verdict={verdict} seq={seq} - SKIPPED")
                     _direction_debug = _build_direction_debug(
                         direction, verdict, res, {}, None, ["struct"]
                     )
@@ -6207,12 +6229,12 @@ def api_scan_naked():
                     style_profile=style_profile,
                     crypto_entry_candles_by_tf=crypto_entry_candles_by_tf,
                 )
-                
+
                 if direction == "LONG":
                     debug_row["long_confidence_score"] = conf_data.get("score", 0)
                 else:
                     debug_row["short_confidence_score"] = conf_data.get("score", 0)
-                
+
                 # Capture crypto target model debug fields from res
                 debug_row["crypto_target_old_target"] = res.get("crypto_target_old_target")
                 debug_row["crypto_target_old_rr"] = res.get("crypto_target_old_rr")
@@ -6223,7 +6245,7 @@ def api_scan_naked():
                 debug_row["crypto_target_reject_reason"] = res.get("crypto_target_reject_reason")
                 debug_row["crypto_target_path_clear_to_tp2"] = res.get("crypto_target_path_clear_to_tp2")
                 debug_row["crypto_target_atr_multiple"] = res.get("crypto_target_atr_multiple")
-                
+
                 _gate_ok, _min_score_scaled = engine_b_confidence_passes(
                     conf_data,
                     style_profile,
@@ -6249,12 +6271,12 @@ def api_scan_naked():
                     debug_row["failed_gate_names"].extend(_conf_failed_gates)
                     _direction_debug["final_reject_reason"] = f"gate_failures: {','.join(_conf_failed_gates)}"
                     debug_row["direction_details"][direction] = _direction_debug
-                    
+
                     log.debug(
                         f"[NAKED-DBG] {pair['display']} {direction}: "
                         f"score={conf_data['score']:.1f} vs min={_min_score_scaled:.1f}, "
                         f"passed={conf_data.get('passed')}, regime={regime_label}, "
-                        f"fails=[{','.join(_conf_failed_gates)}] — REJECTED"
+                        f"fails=[{','.join(_conf_failed_gates)}] - REJECTED"
                     )
                     continue
 
@@ -6314,10 +6336,10 @@ def api_scan_naked():
                     debug_row["direction_details"][direction] = _direction_debug
                     log.debug(
                         f"[NAKED-DBG] {pair['display']} {direction}: "
-                        f"rr={rr:.2f} < min_rr={style_profile['min_rr']} — REJECTED"
+                        f"rr={rr:.2f} < min_rr={style_profile['min_rr']} - REJECTED"
                     )
                     continue
-                
+
                 # Signal passed all gates
                 if direction == "LONG":
                     debug_row["long_passed"] = True
@@ -6374,13 +6396,13 @@ def api_scan_naked():
                     ),
                     "naked_data": _res,
                 }
-                
+
                 # Calculate style-specific SL/TP for display
                 try:
                     from indicators import calc_levels
-                    _lvl_scalp = calc_levels(current_price, atr, direction, 
+                    _lvl_scalp = calc_levels(current_price, atr, direction,
                                               pair.get("type", "stock"), style="scalp")
-                    _lvl_intra = calc_levels(current_price, atr, direction, 
+                    _lvl_intra = calc_levels(current_price, atr, direction,
                                               pair.get("type", "stock"), style="intraday")
                     signal["scalp_sl"] = _lvl_scalp["sl"]
                     signal["scalp_tp"] = _lvl_scalp["tp1"]
@@ -6388,7 +6410,7 @@ def api_scan_naked():
                     signal["intraday_tp"] = _lvl_intra["tp1"]
                 except Exception:
                     pass
-                
+
                 if _best_signal is None or signal["confluenceScore"] > _best_signal["confluenceScore"]:
                     _best_signal = signal
         except Exception as e:
@@ -6397,7 +6419,7 @@ def api_scan_naked():
             if debug_mode:
                 return {"debug": debug_row}
             return []
-        
+
         # If no signal was generated but we tested both directions, set final reject reason
         if _best_signal is None:
             if not debug_row["long_structural_verdict"] and not debug_row["short_structural_verdict"]:
@@ -6406,19 +6428,19 @@ def api_scan_naked():
                 debug_row["final_reject_reason"] = f"gate_failures: {','.join(debug_row['failed_gate_names'])}"
             else:
                 debug_row["final_reject_reason"] = "unknown"
-        
+
         if _best_signal is not None:
             local_results.append(_best_signal)
-        
+
         # Always return debug row in debug mode
         if debug_mode:
             local_results.append({"debug": debug_row})
-        
+
         return local_results
 
     _max_workers = max(1, int(CONFIG.get("SCAN_MAX_WORKERS", 3) or 3))
     debug_rows = []
-    
+
     # REGRESSION CHECK: Engine B scan-funnel tracking
     engine_b_funnel = {
         "total": len(candidate_pairs),
@@ -6429,7 +6451,7 @@ def api_scan_naked():
         "gate_fail_rr": 0,
         "passed": 0,
     }
-    
+
     log.info(f"[DEBUG] Starting scan with {len(candidate_pairs)} candidate pairs, debug_mode={debug_mode}")
     with ThreadPoolExecutor(max_workers=_max_workers) as pool:
         futures = {pool.submit(_scan_pair, pair, debug_mode): pair for pair in candidate_pairs}
@@ -6440,7 +6462,7 @@ def api_scan_naked():
                 if debug_mode and row.get("debug"):
                     debug_rows.append(row["debug"])
                     log.debug(f"[DEBUG] Added debug row for {row['debug'].get('pair')}")
-                    
+
                     # REGRESSION CHECK: Track Engine B funnel
                     dbg = row["debug"]
                     if not dbg.get("long_structural_verdict") and not dbg.get("short_structural_verdict"):
@@ -6484,9 +6506,9 @@ def api_scan_naked():
         print(f"Gate fail - RR: {engine_b_funnel['gate_fail_rr']}")
         print(f"Passed: {engine_b_funnel['passed']}")
         print("="*80 + "\n")
-        
+
         return jsonify(_json_safe({
-            "success": True, 
+            "success": True,
             "signals": results,
             "debugRows": debug_rows
         }))
@@ -6536,7 +6558,7 @@ def api_webhook():
         return jsonify({"error": "Execution disabled in config.yaml"}), 403
 
     if _kill_switch:
-        return jsonify({"error": "Kill-switch active — webhook blocked"}), 503
+        return jsonify({"error": "Kill-switch active - webhook blocked"}), 503
 
     d = request.get_json(force=True, silent=True) or {}
 
@@ -6545,9 +6567,9 @@ def api_webhook():
     _wh_secret = os.environ.get("WEBHOOK_SECRET", "")
 
     if _wh_secret and d.get("secret", "") != _wh_secret:
-        log.warning(f"[WEBHOOK] {request.remote_addr} rejected — invalid secret")
+        log.warning(f"[WEBHOOK] {request.remote_addr} rejected - invalid secret")
 
-        return jsonify({"error": "Unauthorized — invalid webhook secret"}), 401
+        return jsonify({"error": "Unauthorized - invalid webhook secret"}), 401
 
     # Build minimal signal dict from webhook payload
 
@@ -6594,7 +6616,7 @@ def api_webhook():
         "trendState": d.get("trendState", "DEVELOPING"),
     }
 
-    # Duplicate guard — webhook signals use pair+direction+minute-bucket as key
+    # Duplicate guard - webhook signals use pair+direction+minute-bucket as key
 
     _minute = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
 
@@ -6627,7 +6649,7 @@ def api_webhook():
             _pos_resp = bybit_get_positions()
 
             if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
-                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
+                return jsonify({"error": "Positions unavailable - cannot verify exposure"}), 503
 
             positions = (
                 _pos_resp.get("positions", [])
@@ -6657,7 +6679,7 @@ def api_webhook():
             _pos_resp = mt5_get_positions()
 
             if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
-                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
+                return jsonify({"error": "Positions unavailable - cannot verify exposure"}), 503
 
             positions = (
                 _pos_resp.get("positions", [])
@@ -6757,7 +6779,7 @@ def api_webhook():
     except Exception as e:
         log.error(f"[WEBHOOK] execution error: {e}")
 
-        return jsonify({"error": "Webhook execution failed — check logs"}), 500
+        return jsonify({"error": "Webhook execution failed - check logs"}), 500
 
 
 @app.route("/api/mt5-status")
@@ -6892,7 +6914,7 @@ def api_close_position():
 
     ticket = data.get("ticket")
 
-    # Legacy React payload sent ticket + symbol without exchange — assume MT5.
+    # Legacy React payload sent ticket + symbol without exchange - assume MT5.
     if not exch and ticket not in (None, "", 0):
         exch = "mt5"
         log.debug("[CLOSE] Inferred exchange=mt5 from ticket-only payload")
@@ -6939,7 +6961,7 @@ def api_close_position():
                             entry_price = float(_arow["entry_price"])
                             deal_price = float(_close_deal.price)
                             exit_price_to_use = deal_price
-                            
+
                             if abs(deal_price - entry_price) < 1e-8 and abs(_total_pnl) < 1e-8:
                                 # Pepperstone bug detected - deal shows entry price as close price
                                 # Try to get live position profit before it closed
@@ -6950,12 +6972,12 @@ def api_close_position():
                                 # For manual closes, we can't easily compute the correct price
                                 # So we'll leave it as is for now
                                 pass
-                            
+
                             # Fix timezone: MT5 deal.time is broker time (UTC+3), convert to UTC
                             broker_timestamp = int(_close_deal.time)
                             utc_timestamp = broker_timestamp - 3 * 3600  # Pepperstone UTC+3
                             exit_time_utc = datetime.fromtimestamp(utc_timestamp, tz=timezone.utc).isoformat()
-                            
+
                             _update_trade_outcome(
                                 ticket=str(ticket),
                                 exit_price=exit_price_to_use,
@@ -6984,7 +7006,7 @@ def api_close_position():
 
 @app.route("/api/binance-status")
 def api_binance_status():
-    """Legacy endpoint — redirects to Bybit status."""
+    """Legacy endpoint - redirects to Bybit status."""
 
     return api_bybit_status()
 
@@ -7020,8 +7042,8 @@ def api_market_hours():
         m = minutes % 60
         return f"Opens in {h}h {m}m" if m else f"Opens in {h}h"
 
-    # ── Forex (Sun 22:00 UTC – Fri 22:00 UTC) ────────────────────────────────
-    if utc_weekday == 5:  # Saturday — closed all day
+    # ── Forex (Sun 22:00 UTC - Fri 22:00 UTC) ────────────────────────────────
+    if utc_weekday == 5:  # Saturday - closed all day
         forex_open = False
         forex_status = "Closed (Weekend)"
         # Opens Sun 22:00 UTC = (6-5)*24*60 - utc_total + 22*60
@@ -7041,10 +7063,10 @@ def api_market_hours():
         forex_opens_in = None
 
     # ── Sessions (UTC) ─────────────────────────────────────────────────────────
-    # Sydney:    21:00–06:00 UTC  (23:00–08:00 GMT+2)
-    # Tokyo:     00:00–09:00 UTC  (02:00–11:00 GMT+2)
-    # London:    07:00–16:00 UTC  (09:00–18:00 GMT+2)
-    # New York:  13:00–21:00 UTC  (15:00–23:00 GMT+2)
+    # Sydney:    21:00-06:00 UTC  (23:00-08:00 GMT+2)
+    # Tokyo:     00:00-09:00 UTC  (02:00-11:00 GMT+2)
+    # London:    07:00-16:00 UTC  (09:00-18:00 GMT+2)
+    # New York:  13:00-21:00 UTC  (15:00-23:00 GMT+2)
 
     def session_state(start_utc, end_utc):
         """Returns (is_open, mins_to_open_or_close)."""
@@ -7075,13 +7097,13 @@ def api_market_hours():
     overlap_open = lon_open and ny_open
 
     # ── Equity markets (GMT+2 local times) ────────────────────────────────────
-    # JSE:       09:00–17:00 GMT+2 (Mon-Fri)
-    # LSE/UK100: 09:00–17:30 GMT+2 (Mon-Fri) = 07:00–15:30 UTC
-    # NYSE/DAX:  NYSE 15:30–22:00 GMT+2 | DAX 09:00–17:30 GMT+2
+    # JSE:       09:00-17:00 GMT+2 (Mon-Fri)
+    # LSE/UK100: 09:00-17:30 GMT+2 (Mon-Fri) = 07:00-15:30 UTC
+    # NYSE/DAX:  NYSE 15:30-22:00 GMT+2 | DAX 09:00-17:30 GMT+2
     gmt2_h = now_gmt2.hour
     gmt2_m = now_gmt2.minute
     gmt2_total = gmt2_h * 60 + gmt2_m
-    is_weekday = utc_weekday <= 4  # Mon–Fri
+    is_weekday = utc_weekday <= 4  # Mon-Fri
 
     def equity_state(open_gmt2, close_gmt2):
         s = open_gmt2[0] * 60 + open_gmt2[1]
@@ -7126,12 +7148,12 @@ def api_market_hours():
             "overlap":   {"open": overlap_open and forex_open, "status": "London/NY Overlap" if (overlap_open and forex_open) else "Inactive", "note": "Highest liquidity"},
         },
         "markets": {
-            "forex":  {"open": forex_open, "status": forex_status, "note": forex_opens_in or "Closes Fri 22:00 UTC", "hours": "Sun 22:00 – Fri 22:00 UTC"},
+            "forex":  {"open": forex_open, "status": forex_status, "note": forex_opens_in or "Closes Fri 22:00 UTC", "hours": "Sun 22:00 - Fri 22:00 UTC"},
             "crypto": {"open": True, "status": "Open 24/7", "note": "Always open", "hours": "24/7"},
-            "jse":    {"open": jse_open, "status": jse_status, "note": jse_note, "hours": "09:00–17:00 GMT+2"},
-            "lse":    {"open": lse_open, "status": lse_status, "note": lse_note, "hours": "09:00–17:30 GMT+2"},
-            "dax":    {"open": dax_open, "status": dax_status, "note": dax_note, "hours": "09:00–17:30 GMT+2"},
-            "nyse":   {"open": nyse_open, "status": nyse_status, "note": nyse_note, "hours": "15:30–22:00 GMT+2"},
+            "jse":    {"open": jse_open, "status": jse_status, "note": jse_note, "hours": "09:00-17:00 GMT+2"},
+            "lse":    {"open": lse_open, "status": lse_status, "note": lse_note, "hours": "09:00-17:30 GMT+2"},
+            "dax":    {"open": dax_open, "status": dax_status, "note": dax_note, "hours": "09:00-17:30 GMT+2"},
+            "nyse":   {"open": nyse_open, "status": nyse_status, "note": nyse_note, "hours": "15:30-22:00 GMT+2"},
         },
     })
 
@@ -7443,7 +7465,7 @@ def api_backtest_naked():
             return jsonify(
                 {
                     "success": False,
-                    "error": "No pair selected. Engine B backtest requires a specific pair — select one from the dropdown.",
+                    "error": "No pair selected. Engine B backtest requires a specific pair - select one from the dropdown.",
                 }
             ), 400
 
@@ -7502,7 +7524,7 @@ def api_backtest_naked():
 
 @app.route("/api/backtest-scalp", methods=["POST"])
 def api_backtest_scalp():
-    """Engine D (Scalp — Fabio VP+OrderFlow) backtest endpoint."""
+    """Engine D (Scalp - Fabio VP+OrderFlow) backtest endpoint."""
     try:
         data = request.get_json(force=True, silent=True) or {}
         pair_symbol = data.get("pair") or data.get("symbol")
@@ -7666,7 +7688,7 @@ def api_backtest_best():
         return jsonify({"error": str(e)}), 500
 
 
-# N4: Kill-switch API — immediately blocks new scans/analyses
+# N4: Kill-switch API - immediately blocks new scans/analyses
 
 
 @app.route("/api/killswitch", methods=["POST"])
@@ -8300,7 +8322,7 @@ def api_naked_style_thresholds():
             except (TypeError, ValueError):
                 return jsonify({"error": f"Invalid min_score for {style}"}), 400
             if ms < 0 or ms > 20:
-                return jsonify({"error": f"min_score for {style} out of range (0–20)"}), 400
+                return jsonify({"error": f"min_score for {style} out of range (0-20)"}), 400
             cur["min_score"] = round(ms, 4)
             changed = True
         if "min_rr" in payload:
@@ -8309,7 +8331,7 @@ def api_naked_style_thresholds():
             except (TypeError, ValueError):
                 return jsonify({"error": f"Invalid min_rr for {style}"}), 400
             if mr < 0.1 or mr > 10:
-                return jsonify({"error": f"min_rr for {style} out of range (0.1–10)"}), 400
+                return jsonify({"error": f"min_rr for {style} out of range (0.1-10)"}), 400
             cur["min_rr"] = round(mr, 4)
             changed = True
         if changed:
@@ -8451,7 +8473,7 @@ def api_scalp_group_rr():
         except (TypeError, ValueError):
             return jsonify({"error": f"Invalid value for {style}"}), 400
         if val < 0.5 or val > 5.0:
-            return jsonify({"error": f"{style} min_rr out of range (0.5–5.0)"}), 400
+            return jsonify({"error": f"{style} min_rr out of range (0.5-5.0)"}), 400
         style_entry = grp_entry.setdefault(style, {})
         style_entry["min_rr"] = round(val, 2)
         saved[style] = round(val, 2)
@@ -8475,7 +8497,7 @@ def api_scalp_group_rr():
                     content, count=1,
                 )
             else:
-                # Group+style line exists but no min_rr yet — append it
+                # Group+style line exists but no min_rr yet - append it
                 line_pat = _re.compile(
                     rf"(      {_re.escape(style)}: \{{)([^}}]*)(\}})",
                 )
@@ -8609,7 +8631,7 @@ def api_test_mode():
         _test_mode = not _test_mode
 
     log.warning(
-        f"[TEST MODE] {'ACTIVATED' if _test_mode else 'DEACTIVATED'} — score thresholds {'lowered' if _test_mode else 'restored'}"
+        f"[TEST MODE] {'ACTIVATED' if _test_mode else 'DEACTIVATED'} - score thresholds {'lowered' if _test_mode else 'restored'}"
     )
 
     return jsonify({"testMode": _test_mode})
@@ -8964,7 +8986,7 @@ def api_scalp_execute():
 
             positions_resp = bybit_get_positions()
             if isinstance(positions_resp, dict) and positions_resp.get("error"):
-                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
+                return jsonify({"error": "Positions unavailable - cannot verify exposure"}), 503
             positions = (
                 positions_resp.get("positions", [])
                 if isinstance(positions_resp, dict)
@@ -8990,7 +9012,7 @@ def api_scalp_execute():
 
             positions_resp = mt5_get_positions()
             if isinstance(positions_resp, dict) and positions_resp.get("error"):
-                return jsonify({"error": "Positions unavailable — cannot verify exposure"}), 503
+                return jsonify({"error": "Positions unavailable - cannot verify exposure"}), 503
             positions = (
                 positions_resp.get("positions", [])
                 if isinstance(positions_resp, dict)
@@ -9192,7 +9214,7 @@ def api_inject_sentiment():
 
 @app.route("/api/auto-trade/log")
 def api_auto_trade_log():
-    """Last 30 auto-trade attempts — both successful and failed — for dashboard diagnosis."""
+    """Last 30 auto-trade attempts - both successful and failed - for dashboard diagnosis."""
 
     try:
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
@@ -9371,9 +9393,9 @@ def api_chart_analysis():
     if not _is_server_render:
         # Client-side (browser) charts may be stale screenshots.
         if not _chart_generated_at:
-            _chart_ts_warnings.append("chart_generated_at missing — client chart image age unknown")
+            _chart_ts_warnings.append("chart_generated_at missing - client chart image age unknown")
         if not _latest_candle_ts:
-            _chart_ts_warnings.append("latest_candle_ts missing — cannot verify chart data freshness")
+            _chart_ts_warnings.append("latest_candle_ts missing - cannot verify chart data freshness")
     else:
         # Server-render always generates from the candles passed in the request.
         # Derive latest_candle_ts from the last candle in the primary TF candle array if not provided.
@@ -9578,7 +9600,7 @@ def api_chart_analysis():
             _vmac = calc_macd(_vcls, 12, 26, 9)
             _vadx = calc_adx(_vhi, _vlo, _vcls, 14)
             _vatr = calc_atr(_vhi, _vlo, _vcls, 14)
-            _vlines = [f"RAW DATA — last {_vc} {tf} bars (cross-check chart visually):"]
+            _vlines = [f"RAW DATA - last {_vc} {tf} bars (cross-check chart visually):"]
             _vlines.append("Time | Close | EMA21 | EMA50 | RSI | MACD | ADX | ATR")
             for vidx, vc in enumerate(_vslice):
                 _vg = vidx + (len(_prim_candles) - _vc)
@@ -9599,13 +9621,13 @@ def api_chart_analysis():
         from vision_candle_features import extract_candle_features
         _candle_ctx_lines = []
         _cf_prim = extract_candle_features(data.get("candles") or [], direction_str)
-        if _cf_prim: _candle_ctx_lines.append(f"CANDLE FEATURES — PRIMARY RIGHT EDGE:\n- {_cf_prim['candle_summary']}")
+        if _cf_prim: _candle_ctx_lines.append(f"CANDLE FEATURES - PRIMARY RIGHT EDGE:\n- {_cf_prim['candle_summary']}")
         _cf_h1 = extract_candle_features(data.get("candles_h1") or [], direction_str)
-        if _cf_h1: _candle_ctx_lines.append(f"CANDLE FEATURES — H1 RIGHT EDGE:\n- {_cf_h1['candle_summary']}")
+        if _cf_h1: _candle_ctx_lines.append(f"CANDLE FEATURES - H1 RIGHT EDGE:\n- {_cf_h1['candle_summary']}")
         _cf_h4 = extract_candle_features(data.get("candles_h4") or [], direction_str)
-        if _cf_h4: _candle_ctx_lines.append(f"CANDLE FEATURES — H4 RIGHT EDGE:\n- {_cf_h4['candle_summary']}")
+        if _cf_h4: _candle_ctx_lines.append(f"CANDLE FEATURES - H4 RIGHT EDGE:\n- {_cf_h4['candle_summary']}")
         _cf_d1 = extract_candle_features(data.get("candles_d1") or [], direction_str)
-        if _cf_d1: _candle_ctx_lines.append(f"CANDLE FEATURES — D1 RIGHT EDGE:\n- {_cf_d1['candle_summary']}")
+        if _cf_d1: _candle_ctx_lines.append(f"CANDLE FEATURES - D1 RIGHT EDGE:\n- {_cf_d1['candle_summary']}")
         if _candle_ctx_lines:
             algo_context += "\n\n" + "\n\n".join(_candle_ctx_lines)
     except Exception as _cf_err:
@@ -11101,7 +11123,7 @@ def api_open_trades_timed():
             style = engine_hint
 
         # Timed exit windows: merged TIMED_EXIT (scalp/intraday/swing). Engine D trades
-        # are managed by milestone logic + broker TP/SL — timed_exit_monitor skips them.
+        # are managed by milestone logic + broker TP/SL - timed_exit_monitor skips them.
         be_min = None
         close_min = None
         style_cfg = tcfg.get(style) if style in ("scalp", "intraday", "swing") else {}
@@ -11214,22 +11236,22 @@ def _check_api_keys() -> None:
 
     if not os.environ.get("EODHD_KEY"):
         missing.append(
-            "EODHD_KEY — real-time WebSocket prices, indicators, screener, and news all disabled"
+            "EODHD_KEY - real-time WebSocket prices, indicators, screener, and news all disabled"
         )
 
     _ak = get_ai_api_key(CONFIG)
 
     if not _ak:
-        missing.append("AI API key — AI trade grading disabled")
+        missing.append("AI API key - AI trade grading disabled")
 
     if not os.environ.get("CRYPTOPANIC_KEY"):
-        missing.append("CRYPTOPANIC_KEY (optional) — crypto news sentiment reduced")
+        missing.append("CRYPTOPANIC_KEY (optional) - crypto news sentiment reduced")
 
     if not os.environ.get("FINNHUB_KEY"):
-        missing.append("FINNHUB_KEY (optional) — Polygon news fallback disabled")
+        missing.append("FINNHUB_KEY (optional) - Polygon news fallback disabled")
 
     if missing:
-        log.warning("[KEYS] Running in degraded mode — set missing keys in .env:")
+        log.warning("[KEYS] Running in degraded mode - set missing keys in .env:")
 
         for m in missing:
             log.warning(f"  • {m}")
@@ -11395,7 +11417,7 @@ def analyze_pair(
 
     if not d1 or not h4 or not h1:
         log.warning(
-            f"[ANALYZE] {pair.get('display', '?')} no candles — "
+            f"[ANALYZE] {pair.get('display', '?')} no candles - "
             f"D1={len(d1) if d1 else 0} H4={len(h4) if h4 else 0} H1={len(h1) if h1 else 0}"
         )
         return None
@@ -11406,7 +11428,7 @@ def analyze_pair(
 
     if len(d1) < 220 or len(h4) < 50 or len(h1) < 50:
         log.warning(
-            f"[ANALYZE] {pair.get('display', '?')} insufficient bars — "
+            f"[ANALYZE] {pair.get('display', '?')} insufficient bars - "
             f"D1={len(d1)}/220 H4={len(h4)}/50 H1={len(h1)}/50"
         )
         return None
@@ -11422,7 +11444,7 @@ def analyze_pair(
         if _h4_fib and _h4_close:
             h4i["snap"]["fib_proximity"] = calc_fib_proximity(float(_h4_close), _h4_fib)
     except Exception:
-        pass  # gracefully degrade — structure factor stays None
+        pass  # gracefully degrade - structure factor stays None
 
     # Inject live microstructure signals if WS feed has data for this symbol
     _msig = _micro_cache.get(pair.get("symbol", ""), {})
@@ -11519,7 +11541,7 @@ def analyze_pair(
             h4, 5, 3, 3
         )  # TA-Lib STOCH standard: fastK=5, slowK=3, slowD=3
 
-    # F11: EMA200 slope computed once here (UI display only — not fed to calc_confluence)
+    # F11: EMA200 slope computed once here (UI display only - not fed to calc_confluence)
 
     _e200 = calc_ema([c["close"] for c in d1], 200)
 
@@ -11542,7 +11564,7 @@ def analyze_pair(
     if pair.get("type") == "crypto":
         _bn_sym = pair.get("symbol", "").replace("/", "")  # e.g. BTCUSDT
 
-        # Bybit funding rate — execution is on Bybit; fall back to Binance if Bybit fails
+        # Bybit funding rate - execution is on Bybit; fall back to Binance if Bybit fails
         _fr_resp = _fetch_bybit_funding_rate(_bn_sym)
         if isinstance(_fr_resp, dict) and not _fr_resp.get("error"):
             _funding_rate = _fr_resp.get("rate")
@@ -11651,7 +11673,7 @@ def analyze_pair(
 
             if _d1_dir and _d1_dir != res["direction"]:
                 res["warnings"].append(
-                    f"SCALP COUNTER-TREND: D1 EMA stack is {_d1_dir} — trading against higher-TF trend, reduce size"
+                    f"SCALP COUNTER-TREND: D1 EMA stack is {_d1_dir} - trading against higher-TF trend, reduce size"
                 )
 
     direction = res["direction"]
@@ -11864,15 +11886,15 @@ def analyze_pair(
                 if structure_data.get("recommended_stop_loss"):
                     _struct_sl = float(structure_data["recommended_stop_loss"])
                     _math_sl = float(lvl["sl"])
-                    # LONG: SL below price — max() picks closer (higher) = tighter
-                    # SHORT: SL above price — min() picks closer (lower) = tighter
+                    # LONG: SL below price - max() picks closer (higher) = tighter
+                    # SHORT: SL above price - min() picks closer (lower) = tighter
                     lvl["sl"] = (
                         max(_math_sl, _struct_sl)
                         if direction == "LONG"
                         else min(_math_sl, _struct_sl)
                     )
 
-                    # Hard SL distance cap — prevents runaway structural overrides
+                    # Hard SL distance cap - prevents runaway structural overrides
                     _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(pair.get("type", ""), 0.05)
                     _sl_dist_pct = abs(float(price) - float(lvl["sl"])) / float(price)
                     if _sl_dist_pct > _max_sl_pct:
@@ -12061,7 +12083,7 @@ def analyze_pair(
         "spread": res.get("spread", 0),
         "warnings": warn_list,
         # Session badge = current FX liquidity window (UTC now). Do not use h4[-1]
-        # time — vendor bar timestamps can lag or parse oddly vs wall clock at scan time.
+        # time - vendor bar timestamps can lag or parse oddly vs wall clock at scan time.
         "session": get_session(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "aiAnalysis": None,
@@ -12141,12 +12163,12 @@ def analyze_pair(
     except Exception as _ai_ctx_err:
         log.debug("[ANALYZE] aiContext generation failed: %s", _ai_ctx_err)
 
-    
+
     # Populate candleConsistency for policy-aware freshness evaluation
     try:
         from athena_app.services.data_freshness import check_live_candle_consistency
         from athena_app.services.market_state import split_market_state, market_state_offset_hours
-        
+
         time_now = datetime.now(timezone.utc).timestamp()
         for tf_u in ("H4", "H1", "D1"):
             state = preloaded_market_state.get(tf_u) if preloaded_market_state else None
@@ -12168,10 +12190,10 @@ def analyze_pair(
                     engine_a_input.append(state["forming"])
             engine_b_input = list(state.get("confirmed") or [])
             scanner_input = list(engine_a_input)
-            
+
             # Get raw candles for this timeframe
             tf_candles = {"H4": h4, "H1": h1, "D1": d1}.get(tf_u, [])
-            
+
             consistency_paths = {
                 "raw_provider": tf_candles or [],
                 "market_state": state,
@@ -12194,13 +12216,13 @@ def analyze_pair(
                 signal.setdefault("candleConsistency", {})[tf_u] = consistency_result
     except Exception as _consistency_err:
         log.debug(f"[ANALYZE] {pair.get('display')} candle consistency check unavailable: {_consistency_err}")
-    
+
     try:
         from athena_app.services.data_freshness import evaluate_execution_data_freshness
 
         _freshness_eval = evaluate_execution_data_freshness(signal, CONFIG)
         signal["dataFreshness"] = _freshness_eval
-        
+
         # Check if any timeframe has CONFIRMED_ONLY_OK status (intentional policy lag)
         # If so, do not warn about stale_1_bucket as it's expected behavior
         consistency = signal.get("candleConsistency", {})
@@ -12208,7 +12230,7 @@ def analyze_pair(
             (isinstance(d, dict) and d.get("status") == "CONFIRMED_ONLY_OK") or d == "CONFIRMED_ONLY_OK"
             for d in consistency.values()
         ) if isinstance(consistency, dict) else False
-        
+
         if _freshness_eval.get("warnOnStaleScan") and _freshness_eval.get("blocked"):
             # Filter out stale_1_bucket warnings when CONFIRMED_ONLY_OK is present
             blocked_items = _freshness_eval.get("blocked", [])
@@ -12279,7 +12301,7 @@ def analyze_pair(
 # _build_event_risk imported from scoring.py
 
 
-# _classify_signal imported from scoring.py — see that module for implementation
+# _classify_signal imported from scoring.py - see that module for implementation
 
 
 def _build_style_levels(price: float, atr: float, direction: str, pair_type: str) -> dict:
@@ -12354,7 +12376,7 @@ def _update_trade_outcome(
                 existing_exit_reason = _ssi_row["exit_reason"]
     except Exception as _ssi_lookup_err:
         log.debug(f"[SSI] audit lookup failed for {ticket}: {_ssi_lookup_err}")
-    
+
     # Preserve TIMED_CLOSE even if price matches SL/TP (after BE move)
     if str(existing_exit_reason or "").upper() == "TIMED_CLOSE":
         exit_reason = "TIMED_CLOSE"
@@ -12391,7 +12413,7 @@ def _update_trade_outcome(
         ):
             # Fallback only valid when volume is in base units (crypto USDT-notional,
             # stock shares). Forex/commodity/index use lots/contracts, so
-            # risk_dist * volume is not dollar risk — skip and leave r_multiple None.
+            # risk_dist * volume is not dollar risk - skip and leave r_multiple None.
 
             risk_dist = abs(entry_price - sl)
 
@@ -12549,7 +12571,7 @@ def _update_trade_outcome(
 _score_decay_counter = 0
 _score_decay_lock = threading.Lock()
 _score_decay_last_run = 0.0
-_SCORE_DECAY_MIN_INTERVAL = 240.0  # 4 min — prevent back-to-back runs
+_SCORE_DECAY_MIN_INTERVAL = 240.0  # 4 min - prevent back-to-back runs
 
 
 def _outcome_monitor_loop() -> None:
@@ -12565,7 +12587,7 @@ def _outcome_monitor_loop() -> None:
 
             _check_ccxt_outcomes()
 
-            # Score decay check every 5 minutes (not every 60s — too expensive)
+            # Score decay check every 5 minutes (not every 60s - too expensive)
 
             _score_decay_counter += 1
 
@@ -12587,7 +12609,7 @@ def _outcome_monitor_loop() -> None:
 def _mt5_deals_for_audit_ticket(_mt5_lib, ticket_int: int):
     """All history deals for a closed row. Prefer position= (stable across partials/closes).
 
-    Stored ticket may be position id (preferred) or legacy opening *order* id — both are handled.
+    Stored ticket may be position id (preferred) or legacy opening *order* id - both are handled.
     """
 
     deals = _mt5_lib.history_deals_get(position=ticket_int)
@@ -12743,7 +12765,7 @@ def _check_mt5_outcomes() -> None:
                                                         f"[MONITOR] MT5 {pos.get('symbol')}: SL moved to BE after partial ticket={ticket_str}"
                                                     )
 
-                                    # Step 2: fallback — if tp1 hit and SL not yet moved, move to BE
+                                    # Step 2: fallback - if tp1 hit and SL not yet moved, move to BE
                                     if tp1 > 0 and ticket_str not in _scalp_be_applied:
                                         tp1_hit = (cur_px >= tp1) if direction == "LONG" else (cur_px <= tp1)
                                         if tp1_hit:
@@ -12758,7 +12780,7 @@ def _check_mt5_outcomes() -> None:
                         log.debug(f"[MONITOR] MT5 scalp management check failed for {ticket_str}: {me}")
                 continue  # still open
 
-            # Position closed — look up deal history
+            # Position closed - look up deal history
 
             try:
                 ticket_int = int(ticket_str)
@@ -12769,24 +12791,24 @@ def _check_mt5_outcomes() -> None:
                     deals_sorted = sorted(deals, key=lambda d: d.time)
                     close_deal = deals_sorted[-1]
                     total_profit = sum(float(d.profit) for d in deals_sorted)
-                    
+
                     # Pepperstone can report a zero-PnL SL close at the breakeven entry
                     # after Athena moves SL to BE. That is a valid close; do not leave
                     # the audit row open just because deal.price equals entry.
                     entry_price = float(row["entry_price"])
                     deal_price = float(close_deal.price)
-                    
+
                     if abs(deal_price - entry_price) < 1e-8 and abs(total_profit) < 1e-8:
                         log.warning(
                             f"[AUDIT] Breakeven close detected for {row['pair']} ticket={ticket_str} "
                             f"deal_price={deal_price} equals entry_price; updating audit outcome"
                         )
-                    
+
                     # Fix timezone: MT5 deal.time is broker time (UTC+3), convert to UTC
                     broker_timestamp = int(close_deal.time)
                     utc_timestamp = broker_timestamp - 3 * 3600  # Pepperstone UTC+3
                     exit_time_utc = datetime.fromtimestamp(utc_timestamp, tz=timezone.utc).isoformat()
-                    
+
                     _update_trade_outcome(
                         ticket=ticket_str,
                         exit_price=float(close_deal.price),
@@ -12950,7 +12972,7 @@ def _check_ccxt_outcomes() -> None:
                         except Exception as pe:
                             log.warning(f"[MONITOR] {ccxt_sym}: +1R partial close failed for ticket={ticket}: {pe}")
 
-                    # Step 2: fallback — if TP1 hit and SL not yet moved, move to BE
+                    # Step 2: fallback - if TP1 hit and SL not yet moved, move to BE
                     if audit_tp1 > 0 and ticket not in _scalp_be_applied:
                         tp1_hit = (cur_px >= audit_tp1) if side == "long" else (cur_px <= audit_tp1)
                         if tp1_hit:
@@ -13080,7 +13102,7 @@ def _start_outcome_monitor() -> None:
     log.info("[MONITOR] Trade outcome monitor started (60s interval)")
 
 
-# ── Score Decay Monitor — recalculate confluence for open positions ────────
+# ── Score Decay Monitor - recalculate confluence for open positions ────────
 
 _score_decay_results: dict = {}  # pair -> {"score": float, "entryScore": float, "ts": str}
 _regime_shift_results: dict = {}  # pair -> regime classification dict from regime_shift_monitor
@@ -13137,7 +13159,7 @@ def _get_decay_ai_verdict(
     if not api_key:
         return {}
 
-    # Cache check — skip re-call if recent and decay hasn't worsened significantly
+    # Cache check - skip re-call if recent and decay hasn't worsened significantly
     cached = _decay_ai_cache.get(pair_name)
     if cached:
         try:
@@ -13154,7 +13176,7 @@ def _get_decay_ai_verdict(
     vol_ratio = signal_context.get("volRatio", "?")
     rr = signal_context.get("rr1", "?")
     flip_note = (
-        " WARNING: Current signal direction has FLIPPED vs entry direction — original thesis may be invalidated."
+        " WARNING: Current signal direction has FLIPPED vs entry direction - original thesis may be invalidated."
         if direction_flip
         else ""
     )
@@ -13235,7 +13257,7 @@ def _refresh_trade_score(pair_obj, engine, style, direction):
     _engine = str(engine or "engine_a").lower()
     _style = str(style or "swing").lower()
     _direction = str(direction or "LONG").upper()
-    
+
     # Engine B (Naked Market Structure) re-evaluation path
     if _engine == "engine_b":
         try:
@@ -13264,7 +13286,7 @@ def _refresh_trade_score(pair_obj, engine, style, direction):
         btc_bias = "neutral"
         if pair_obj.get("type") == "crypto":
             btc_bias = _current_btc_bias()
-            
+
         res = analyze_pair(pair_obj, btc_bias, style=_style)
         if res:
             cur_score = res.get("confluenceScore", 0)
@@ -13363,7 +13385,7 @@ def _check_score_decay() -> None:
                     "ts": datetime.now(timezone.utc).isoformat(),
                 }
 
-                # Regime shift classifier (advisory only — never closes trades)
+                # Regime shift classifier (advisory only - never closes trades)
                 try:
                     def _fetch_for_classifier(_tf, _lim, _pair=pair):
                         try:
@@ -13387,10 +13409,10 @@ def _check_score_decay() -> None:
 
                 # Warn at 40%+ drop from entry score (works for both forex 0-2 and factor 0-3 scales)
                 if decay_pct >= 40 or direction_flip:
-                    _msg = f"[DECAY] {pair_name} ({engine}): {score_note} ({decay_pct:.0f}% drop) — consider exit"
+                    _msg = f"[DECAY] {pair_name} ({engine}): {score_note} ({decay_pct:.0f}% drop) - consider exit"
                     if direction_flip:
                         _msg += f" | DIRECTION FLIP: {row['direction']} → {result.get('direction')}"
-                    
+
                     # Diagnostic: Check for major component shifts (Engine A)
                     if engine == "engine_a" and result and "components" in result:
                         comps = result["components"]
@@ -13401,7 +13423,7 @@ def _check_score_decay() -> None:
                             _dr.append(f"regime_blocked ({comps.get('regime_label')})")
                         if _dr:
                             _msg += f" | VETO: {', '.join(_dr)}"
-                            
+
                     log.warning(_msg)
                     try:
                         pass  # decay telegram notifications disabled
@@ -13412,11 +13434,11 @@ def _check_score_decay() -> None:
                         f"[DECAY] {pair_name} ({engine}): {score_note} ({decay_pct:.0f}% drop)"
                     )
 
-                # AI assessment — only for meaningful decay, runs in background to avoid blocking
+                # AI assessment - only for meaningful decay, runs in background to avoid blocking
                 if decay_pct >= 25:
                     def _run_ai_verdict(_pn=pair_name, _dir=row["direction"] or "",
                                         _es=entry_score, _cs=cur_score, _d=decay,
-                                        _dpct=decay_pct, _flip=direction_flip, 
+                                        _dpct=decay_pct, _flip=direction_flip,
                                         _engine=engine, _epct=entry_pct, _cpct=cur_pct, _ctx=result):
                         ai_v = _get_decay_ai_verdict(_pn, _dir, _es, _cs, _d, _flip, _ctx)
                         if ai_v:
@@ -13578,7 +13600,7 @@ def _lottery_ai_prompt_payload(game: str, start_date=None, end_date=None, window
         include_bonus=True,
     )
     if not board.get("total_draws"):
-        raise ValueError("No draw history found — please import draws first")
+        raise ValueError("No draw history found - please import draws first")
 
     rolling = compute_rolling_frequency(game_key, window=window, start_date=start_date, end_date=end_date)
     pair_lift = compute_pair_lift(game_key, start_date=start_date, end_date=end_date, limit=50)
@@ -13649,7 +13671,7 @@ def _lottery_ai_prompt_payload(game: str, start_date=None, end_date=None, window
         entropy_section = f"""
 ENTROPY ANALYSIS (Shannon information theory):
 H(X) = -Σ p(xi)·log2(p(xi)).  Max entropy (perfect uniform) = {entropy.get('h_max_bits')} bits.
-Overall: {pb.get('entropy_bits')} bits — ratio {pb.get('entropy_ratio')} of maximum ({entropy.get('draw_count')} draws, {pb.get('total_observations')} ball observations)
+Overall: {pb.get('entropy_bits')} bits - ratio {pb.get('entropy_ratio')} of maximum ({entropy.get('draw_count')} draws, {pb.get('total_observations')} ball observations)
 Fairness verdict: {entropy.get('fairness')}
 Rolling trend: {entropy.get('rolling_trend')}"""
         for rw in entropy.get("rolling", []):
@@ -13659,7 +13681,7 @@ Rolling trend: {entropy.get('rolling_trend')}"""
             if p.get("entropy_ratio") is not None and float(p["entropy_ratio"]) < 0.85
         ]
         if low_entropy_positions:
-            entropy_section += "\nLow-entropy positions (ratio < 0.85 — concentrated ranges):"
+            entropy_section += "\nLow-entropy positions (ratio < 0.85 - concentrated ranges):"
             for p in low_entropy_positions:
                 entropy_section += f"\n  Ball {p['position']}: {p['entropy_bits']} bits (ratio {p['entropy_ratio']}, {p['distinct_values']} distinct values)"
         else:
@@ -13680,8 +13702,8 @@ Rolling trend: {entropy.get('rolling_trend')}"""
     sum_range = board.get("recommended_sum_range", {}) or {}
     sum_summary = board.get("sum_distribution_summary", {}) or {}
     prompt = f"""
-You are a lottery number analyst. Analyse the following data for {game_key} 
-and recommend exactly which numbers to add to a wheeling system for 
+You are a lottery number analyst. Analyse the following data for {game_key}
+and recommend exactly which numbers to add to a wheeling system for
 tonight's draw. Be precise and data-driven.
 
 GAME RULES:
@@ -13722,7 +13744,7 @@ IMPORTANT MATHEMATICAL CONTEXT:
 - Each lottery draw is an independent event (memoryless property).
   Hot/cold/overdue patterns are descriptive, NOT predictive (Tversky & Kahneman, 1971).
 - The ONLY mathematically justified strategy is anti-crowd: avoiding popular numbers
-  to reduce jackpot split probability (Henze & Riedwyl, 1998 — ~20-30% higher expected
+  to reduce jackpot split probability (Henze & Riedwyl, 1998 - ~20-30% higher expected
   payout, not higher win probability).
 - Entropy ratio close to 1.0 confirms the draw is consistent with fair RNG.
   Deviations below 0.95 warrant investigation but are expected in small samples.
@@ -13741,7 +13763,7 @@ Based on ALL of the above data, provide:
    List 3-5 numbers to exclude and why.
 
 3. GENERATOR MODE RECOMMENDATION:
-   Which mode to use: pure_random / hot_bias / cold_bias / 
+   Which mode to use: pure_random / hot_bias / cold_bias /
    overdue_bias / balanced_mix / pair_bias / anti_crowd
    And why.
 
@@ -13749,7 +13771,7 @@ Based on ALL of the above data, provide:
    Top 2 bonus ball recommendations with reasoning.
 
 5. SUM FILTER:
-   Recommended min_sum and max_sum for scoring tonight 
+   Recommended min_sum and max_sum for scoring tonight
    based on anomaly context.
 
 6. ENTROPY ASSESSMENT (if entropy data provided):
@@ -14751,7 +14773,7 @@ def api_performance():
 
         avg_holding = round(sum(hp_vals) / len(hp_vals), 1) if hp_vals else None
 
-        # Last 20 completed trades — parsed close time + id (string sort breaks on ISO variants)
+        # Last 20 completed trades - parsed close time + id (string sort breaks on ISO variants)
 
         _epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
@@ -14782,7 +14804,7 @@ def api_performance():
 
             equity_curve.append(round(cum, 2))
 
-        # Execution quality — adverse slippage magnitude at entry (Bybit/MT5 when captured)
+        # Execution quality - adverse slippage magnitude at entry (Bybit/MT5 when captured)
         slip_vals = [
             abs(float(t["slippage_bps"]))
             for t in trades
@@ -14895,16 +14917,16 @@ def api_performance():
         return jsonify({"error": str(e)}), 500
 
 
-# Microstructure live cache — populated by WS feed callbacks, keyed by symbol (e.g. "BTCUSDT")
+# Microstructure live cache - populated by WS feed callbacks, keyed by symbol (e.g. "BTCUSDT")
 _micro_cache: dict = {}
 _ws_clients: list = []  # WS client instances for graceful shutdown
 
-# ── Live Dashboard v1 — scalp results cache ──────────────────────────────────
+# ── Live Dashboard v1 - scalp results cache ──────────────────────────────────
 # Populated by api_scalp_scan after each scan run. Keyed by display.upper().
 # Used by the live dashboard snapshot endpoint (read-only).
 _live_dashboard_scalp_cache: dict = {}
 _live_dashboard_scalp_cache_lock = threading.Lock()
-_LIVE_DASHBOARD_SCALP_TTL = 300.0  # 5 min — longer TTL so snapshot returns something even between scans
+_LIVE_DASHBOARD_SCALP_TTL = 300.0  # 5 min - longer TTL so snapshot returns something even between scans
 
 
 @app.route("/api/microstructure-health")
@@ -14933,7 +14955,7 @@ def api_microstructure_health():
     )
 
 
-# ── Live Dashboard v1 — snapshot helpers ─────────────────────────────────────
+# ── Live Dashboard v1 - snapshot helpers ─────────────────────────────────────
 
 def _ld_empty_engine_a() -> dict:
     return {
@@ -15209,7 +15231,7 @@ def _ld_derive_engine_c_state(a_row: dict, b_row: dict) -> dict:
         "watchlistReason": ("single_engine_only" if state in ("A_ONLY", "B_ONLY")
                             else ("engine_conflict" if state == "CONFLICT" else None)),
         "blockReason": None,
-        "reason": (f"{direction} — {state}" if state != "NO_SETUP" else "no engine setup"),
+        "reason": (f"{direction} - {state}" if state != "NO_SETUP" else "no engine setup"),
     }
 
 
@@ -15302,7 +15324,7 @@ def _ld_freshness_row(pair: dict, tf: str, candles: list | None, provider_error:
         diag = candle_freshness_diagnostic(pair, tf, candles)
         severity = diag.get("stalenessSeverity") or "missing_current_bucket"
 
-        # Policy mapping: MT5-sourced pairs use CONFIRMED_ONLY — stale_1_bucket is expected
+        # Policy mapping: MT5-sourced pairs use CONFIRMED_ONLY - stale_1_bucket is expected
         source = pair.get("source") or ""
         ptype = pair.get("type") or ""
         confirmed_only = source == "mt5" or ptype in ("forex", "commodity", "index", "stock")
@@ -15457,7 +15479,7 @@ def api_live_dashboard_snapshot():
         log.warning("[LIVE-DASH] %d symbols requested; truncating to %d", len(req_symbols), max_syms)
     req_symbols = req_symbols[:max_syms]
 
-    # Safety state — always read from CONFIG
+    # Safety state - always read from CONFIG
     paper_soak = CONFIG.get("PAPER_SOAK") or {}
     paper_mode = {
         "enabled": bool(paper_soak.get("ENABLED", True)),
@@ -15590,18 +15612,18 @@ def api_live_dashboard_snapshot():
                 "h4GridOffsetHours": h4_offset_hours,
             }
 
-        # Engine A — from last scan cache (no re-run on snapshot)
+        # Engine A - from last scan cache (no re-run on snapshot)
         sig_a = _last_a_by_display.get(display.upper()) or {}
         engine_a_row = _ld_build_engine_a_row(sig_a)
 
-        # Engine B — from in-process cache
+        # Engine B - from in-process cache
         sig_b = _engine_b_cache_get(display) or _engine_b_cache_get(display.upper()) or {}
         engine_b_row = _ld_build_engine_b_row(sig_b)
 
-        # Engine C — derived (no scoring change, no execution)
+        # Engine C - derived (no scoring change, no execution)
         engine_c_row = _ld_derive_engine_c_state(engine_a_row, engine_b_row)
 
-        # Engine D — from scalp cache
+        # Engine D - from scalp cache
         with _live_dashboard_scalp_cache_lock:
             scalp_cached = dict(_live_dashboard_scalp_cache.get(display.upper()) or {})
         engine_d_row = _ld_build_engine_d_row(scalp_cached, pair)
@@ -15620,14 +15642,14 @@ def api_live_dashboard_snapshot():
                 "timestamp": now.isoformat(),
                 "symbol": display,
                 "severity": "pass",
-                "message": f"Engine C ALIGNED [{engine_c_row.get('tier','?')}] — {engine_a_row.get('direction','?')}",
+                "message": f"Engine C ALIGNED [{engine_c_row.get('tier','?')}] - {engine_a_row.get('direction','?')}",
             })
         elif c_state == "WATCHLIST" or c_state in ("A_ONLY", "B_ONLY"):
             events.append({
                 "timestamp": now.isoformat(),
                 "symbol": display,
                 "severity": "watch",
-                "message": f"Engine C {c_state} — {engine_a_row.get('direction') or engine_b_row.get('direction') or '?'}",
+                "message": f"Engine C {c_state} - {engine_a_row.get('direction') or engine_b_row.get('direction') or '?'}",
             })
         if freshness_result.get("gateDecision") == "BLOCK":
             events.append({
@@ -15642,14 +15664,14 @@ def api_live_dashboard_snapshot():
                 "timestamp": now.isoformat(),
                 "symbol": display,
                 "severity": "pass",
-                "message": f"Engine D PASS grade={engine_d_row.get('grade','?')} — {engine_d_row.get('setupType','?')}",
+                "message": f"Engine D PASS grade={engine_d_row.get('grade','?')} - {engine_d_row.get('setupType','?')}",
             })
         elif d_gate == "WATCHLIST":
             events.append({
                 "timestamp": now.isoformat(),
                 "symbol": display,
                 "severity": "watch",
-                "message": f"Engine D WATCHLIST (grade C) — {engine_d_row.get('setupType','?')}",
+                "message": f"Engine D WATCHLIST (grade C) - {engine_d_row.get('setupType','?')}",
             })
 
         # Derive levels from best available engine (B > A > D)
@@ -15702,7 +15724,7 @@ def api_live_dashboard_snapshot():
             "affectedExecutionPermission": False,
         }
 
-        # executableState: paper-only — never grants real execution
+        # executableState: paper-only - never grants real execution
         _c_state = engine_c_row.get("decisionState", "NO_SETUP")
         _fresh_ok = freshness_result.get("gateDecision") == "ALLOW"
         _executable_state = (
@@ -15761,16 +15783,16 @@ def api_live_dashboard_paper_execute():
 
     Never calls any broker API. Logs the paper entry to audit_log with
     grade='LD-PAPER-EXECUTE' for soak tracking. Enforces paper mode,
-    freshness gate, and kill-switch — identical safety stack as live
+    freshness gate, and kill-switch - identical safety stack as live
     execution except no broker call is made.
     """
     # Safety: abort immediately if real orders are somehow enabled
     if CONFIG.get("REAL_ORDERS_ALLOWED", False):
-        return jsonify({"ok": False, "error": "REAL_ORDERS_ALLOWED is true — paper endpoint blocked"}), 403
+        return jsonify({"ok": False, "error": "REAL_ORDERS_ALLOWED is true - paper endpoint blocked"}), 403
 
     paper_cfg = CONFIG.get("PAPER_SOAK") or {}
     if not paper_cfg.get("ENABLED", True):
-        return jsonify({"ok": False, "error": "PAPER_SOAK.ENABLED is false — paper mode is off"}), 403
+        return jsonify({"ok": False, "error": "PAPER_SOAK.ENABLED is false - paper mode is off"}), 403
 
     data = request.get_json(force=True, silent=True) or {}
     symbol = (data.get("symbol") or "").strip().upper()
@@ -15793,7 +15815,7 @@ def api_live_dashboard_paper_execute():
     except Exception:
         pass
 
-    # Freshness re-check — find the pair config
+    # Freshness re-check - find the pair config
     pair_cfg = _ld_resolve_pair(symbol)
     if pair_cfg is None:
         return jsonify({"ok": False, "allowed": False, "error": "symbol_not_found"}), 404
@@ -15930,7 +15952,7 @@ def api_live_dashboard_paper_execute():
         "grade": "LD-PAPER-EXECUTE",
         "approval": approval.to_dict(),
         "timestamp": now_ts,
-        "note": "Paper log only — no broker order placed",
+        "note": "Paper log only - no broker order placed",
     })
 
 
@@ -16013,7 +16035,7 @@ set_runtime(
 )
 register_execution_routes(app)
 
-# ── Research Lab routes (optional — does not affect production logic) ─────────
+# ── Research Lab routes (optional - does not affect production logic) ─────────
 try:
     from athena_research.research_lab_routes import register_research_lab_routes
     register_research_lab_routes(app)
@@ -16208,7 +16230,7 @@ def _start_eodhd_volume_warmer() -> None:
                             warmed += 1
                     except Exception as exc:
                         log.debug("[EODHD-VOL] Engine A warmer fetch failed %s %s: %s", pair.get("display"), tf, exc)
-                    # Modest request rate — H1/H4/D1 TTLs are long so this loop runs infrequently.
+                    # Modest request rate - H1/H4/D1 TTLs are long so this loop runs infrequently.
                     time.sleep(0.2)
             log.info(
                 "[EODHD-VOL] Engine A warmer cycle warmed=%s skipped=%s pairs=%s tfs=%s",
@@ -16223,7 +16245,7 @@ def _start_eodhd_volume_warmer() -> None:
     # replacing ~33 per-pair REST calls per minute with 1 batch call.
     # Injects delta-volume ticks into CandleBuilder via on_tick() so M1/M5/M15/H1/H4
     # bars accumulate real exchange volume identically to ws:True stocks.
-    # D1 is already covered by bulk_update_d1() — the batcher does not touch D1.
+    # D1 is already covered by bulk_update_d1() - the batcher does not touch D1.
     try:
         from eodhd_volume_batch import start_live_v2_batcher_for_non_ws_stocks
         _livev2_interval = max(30, int(cfg.get("LIVEV2_POLL_INTERVAL_SEC", 60) or 60))
@@ -16256,7 +16278,7 @@ def ensure_runtime_services_started() -> None:
             set_candle_builder(CandleBuilder())
 
         def _cb_startup():
-            # Background news work removed from startup to prevent heavy load. 
+            # Background news work removed from startup to prevent heavy load.
             # It will now start on-demand when fetch_news_context is called.
             cb = get_candle_builder()
             if cb is None:
@@ -16281,7 +16303,7 @@ def ensure_runtime_services_started() -> None:
 
     _start_eodhd_volume_warmer()
 
-    # MT5 tick poller — keeps forex/commodity/index/stock prices fresh in
+    # MT5 tick poller - keeps forex/commodity/index/stock prices fresh in
     # _live_prices independent of /api/candles traffic.
     threading.Thread(
         target=_run_mt5_tick_poller, daemon=True, name="mt5-price-poll"
@@ -16299,7 +16321,7 @@ def ensure_runtime_services_started() -> None:
             intervals=selected_intervals,
         )
         _binance_candle_ws.start()
-        # REST fallback poller — runs in parallel with the !ticker@arr WS so crypto
+        # REST fallback poller - runs in parallel with the !ticker@arr WS so crypto
         # prices keep flowing even if the WS is in a silent reconnect loop.
         threading.Thread(
             target=_run_binance_price_poller, daemon=True, name="binance-price-poll"
@@ -16496,7 +16518,7 @@ if __name__ == "__main__":
 
     ensure_runtime_services_started()
 
-    # Startup position reconciliation — check for open positions on restart
+    # Startup position reconciliation - check for open positions on restart
 
     def _startup_reconcile():
         """On startup, check MT5/Bybit for open positions and log them."""
@@ -16607,13 +16629,13 @@ if __name__ == "__main__":
     except Exception as e:
         log.warning(f"[CARRY] Startup seed failed: {e}")
 
-    # Graceful shutdown handler — clean up connections on SIGINT/SIGTERM
+    # Graceful shutdown handler - clean up connections on SIGINT/SIGTERM
 
     def _graceful_shutdown(signum, frame):
 
         sig_name = "SIGINT" if signum == _signal.SIGINT else "SIGTERM"
 
-        log.warning(f"[SHUTDOWN] {sig_name} received — shutting down gracefully...")
+        log.warning(f"[SHUTDOWN] {sig_name} received - shutting down gracefully...")
 
         try:
             from bybit_executor import bybit_disconnect
@@ -16663,7 +16685,7 @@ if __name__ == "__main__":
         log.info("[AUTO] Auto-trader ENABLED via config")
 
     else:
-        # Start the scheduler thread in standby — it does nothing until enabled
+        # Start the scheduler thread in standby - it does nothing until enabled
         _auto_trader._start_thread()
 
         log.info("[AUTO] Auto-trader standby (toggle via UI)")
@@ -16672,7 +16694,7 @@ if __name__ == "__main__":
         "ATHENA_HOST", "127.0.0.1"
     )  # default localhost; set to 0.0.0.0 in .env for LAN
 
-    # Backup databases at startup — protects against data loss during updates
+    # Backup databases at startup - protects against data loss during updates
     try:
         from backup_db import backup_now
 
@@ -16693,10 +16715,10 @@ if __name__ == "__main__":
     else:
         log.info("[TELEGRAM] Bot disabled via ATHENA_DISABLE_TELEGRAM environment variable")
 
-    # Clean Ctrl-C shutdown on Windows — daemon threads stop automatically
+    # Clean Ctrl-C shutdown on Windows - daemon threads stop automatically
     import signal as _signal
     def _shutdown_handler(sig, frame):
-        log.info("[SHUTDOWN] Ctrl-C received — stopping Sentinel Pro...")
+        log.info("[SHUTDOWN] Ctrl-C received - stopping Sentinel Pro...")
         import os as _os
         _os._exit(0)
     _signal.signal(_signal.SIGINT, _shutdown_handler)

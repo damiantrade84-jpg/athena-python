@@ -61,3 +61,41 @@ def insert_manual_error(
             ),
         )
 
+
+def get_outcome_summary_by_regime(
+    db_path: str,
+    pair: str,
+    regime: str,
+    engine: str,
+    lookback_days: int = 90,
+) -> dict:
+    """Return outcome summary for a specific pair + regime + engine combination.
+
+    Used by Conductor for dynamic engine weighting.
+    """
+    from datetime import datetime, timezone, timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
+    
+    try:
+        with sqlite3.connect(db_path, timeout=10.0) as con:
+            con.row_factory = sqlite3.Row
+            row = con.execute(
+                """SELECT COUNT(*) as total, SUM(win) as wins, AVG(r_multiple) as avg_r
+                   FROM learning_log
+                   WHERE pair = ? AND regime = ? AND engine = ?
+                   AND ts > ? AND (r_multiple IS NULL OR abs(r_multiple) <= 50)
+                   AND outcome IS NOT NULL""",
+                (pair, regime, engine, cutoff),
+            ).fetchone()
+            if row and row["total"] and row["total"] > 0:
+                return {
+                    "total": row["total"],
+                    "wins": row["wins"] or 0,
+                    "win_rate": (row["wins"] or 0) / row["total"],
+                    "avg_r": row["avg_r"] or 0.0,
+                    "valid": True,
+                }
+    except Exception:
+        pass
+    return {"total": 0, "wins": 0, "win_rate": 0.0, "avg_r": 0.0, "valid": False}
+

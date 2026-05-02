@@ -66,9 +66,9 @@ export default function SignalsPanel() {
 
   // Hot-cached snapshot from server-side last scan (Engine A only — matches Athena behaviour).
   const { data: lastScan, loading: lastLoading, error: lastError, refresh: refreshLast } =
-    useApiPoll<ScanResponse>('/api/last-scan', 30_000);
+    useApiPoll<ScanResponse>('/api/last-scan', 60_000);
 
-  const { data: autoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 30_000);
+  const { data: autoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 60_000);
   const { post: postScanA, loading: scanningA } = useApiPost<ScanResponse>();
   const { post: postScanB, loading: scanningB } = useApiPost<NakedScanResponse>();
   const { post: postExecute, loading: executing } = useApiPost<{
@@ -82,7 +82,7 @@ export default function SignalsPanel() {
   const [aiReview, setAiReview] = useState<ChartAnalysisResponse | null>(null);
   const [aiTextReview, setAiTextReview] = useState<AiTextReviewResponse | null>(null);
   const [aiReviewMode, setAiReviewMode] = useState<'vision' | 'text'>('vision');
-  const { priceFor } = useLivePrices(3000);
+  const { priceFor } = useLivePrices(10000);
 
   // Local scan results override (so each engine button replaces the live view).
   const [localScan, setLocalScan] = useState<{ source: ScanSource; signals: EngineASignal[] } | null>(null);
@@ -405,7 +405,7 @@ export default function SignalsPanel() {
         {/* Signal list */}
         <Card className="col-span-3 border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center justify-between">
+            <CardTitle className="text-xs font-semibold flex items-center justify-between uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
               <span>Signal Feed</span>
               <Badge variant="outline" className="text-[10px]">
                 {filtered.length} shown

@@ -34,7 +34,7 @@ function pairAliases(value: unknown): string[] {
   return [...aliases].filter(Boolean);
 }
 
-export function useLivePrices(intervalMs = 3000) {
+export function useLivePrices(intervalMs = 10000) {
   const { data, loading, error, refresh } = useApiPoll<PricesResponse>('/api/prices', intervalMs);
 
   const priceIndex = useMemo(() => {

@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Athena Conductor</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a1a;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', monospace;
+      padding: 20px;
+      min-height: 100vh;
+    }
+    h1 { color: #00d4ff; margin-bottom: 20px; font-size: 24px; }
+    .card {
+      background: #151528;
+      border: 1px solid #2a2a4a;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 15px;
+    }
+    .status {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: bold;
+    }
+    .status.active { background: #1a4a2a; color: #44ff44; }
+    .status.skipped { background: #4a1a1a; color: #ff4444; }
+    .status.waiting { background: #3a3a2a; color: #ffd700; }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #222;
+    }
+    .row:last-child { border-bottom: none; }
+    .label { color: #888; font-size: 13px; }
+    .value { color: #fff; font-size: 13px; font-weight: 500; }
+    .reasons {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid #333;
+      font-size: 11px;
+      color: #aaa;
+      line-height: 1.5;
+    }
+    .refresh {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #00d4ff;
+      color: #000;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    .refresh:hover { background: #33ddff; }
+    .timestamp {
+      font-size: 11px;
+      color: #666;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <button class="refresh" onclick="loadConductor()">🔄 Refresh</button>
+  <h1>🎼 Athena Conductor</h1>
+
+  <div class="card" id="main-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <span class="status waiting" id="status-badge">Waiting...</span>
+      <span class="timestamp" id="timestamp">—</span>
+    </div>
+
+    <div class="row">
+      <span class="label">Signal Score</span>
+      <span class="value" id="score">—</span>
+    </div>
+    <div class="row">
+      <span class="label">Debate</span>
+      <span class="value" id="debate">—</span>
+    </div>
+    <div class="row">
+      <span class="label">Vision</span>
+      <span class="value" id="vision">—</span>
+    </div>
+    <div class="row">
+      <span class="label">Sentiment</span>
+      <span class="value" id="sentiment">—</span>
+    </div>
+    <div class="row">
+      <span class="label">Engine Weights</span>
+      <span class="value" id="weights">—</span>
+    </div>
+    <div class="row">
+      <span class="label">Regime</span>
+      <span class="value" id="regime">—</span>
+    </div>
+
+    <div class="reasons" id="reasons">No conductor data available. Run a scan or click Refresh.</div>
+  </div>
+
+  <script>
+    async function loadConductor() {
+      try {
+        const resp = await fetch('/api/kimi/conductor/last');
+        if (!resp.ok) throw new Error('API error ' + resp.status);
+        const data = await resp.json();
+
+        const badge = document.getElementById('status-badge');
+        const ts = document.getElementById('timestamp');
+        const score = document.getElementById('score');
+        const debate = document.getElementById('debate');
+        const vision = document.getElementById('vision');
+        const sentiment = document.getElementById('sentiment');
+        const weights = document.getElementById('weights');
+        const regime = document.getElementById('regime');
+        const reasons = document.getElementById('reasons');
+
+        if (!data.conductor) {
+          badge.textContent = 'Waiting...';
+          badge.className = 'status waiting';
+          reasons.textContent = data.message || 'No conductor data yet. Run a scan.';
+          ts.textContent = new Date().toLocaleTimeString();
+          return;
+        }
+
+        const r = data.conductor;
+
+        badge.textContent = r.skip_signal ? '⛔ SKIPPED' : '✅ ACTIVE';
+        badge.className = r.skip_signal ? 'status skipped' : 'status active';
+        ts.textContent = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : '—';
+
+        score.textContent = r.score_pct ? r.score_pct.toFixed(1) + '%' : '—';
+        debate.textContent = r.run_debate ? '🟢 YES' : '⚫ NO';
+        vision.textContent = r.run_vision ? '🟢 YES' : '⚫ NO';
+        sentiment.textContent = r.run_sentiment ? '🟢 YES' : '⚫ NO';
+
+        const a = ((r.engine_weights?.engine_a || 0.5) * 100).toFixed(0);
+        const b = ((r.engine_weights?.engine_b || 0.5) * 100).toFixed(0);
+        weights.textContent = `A: ${a}% / B: ${b}%`;
+        regime.textContent = r.regime || '—';
+
+        reasons.textContent = (r.reasons || []).join(' • ') || 'No routing reasons.';
+      } catch (e) {
+        document.getElementById('status-badge').textContent = '❌ ERROR';
+        document.getElementById('reasons').textContent = 'Failed to load: ' + e.message;
+      }
+    }
+
+    loadConductor();
+    setInterval(loadConductor, 15000);
+  </script>
+</body>
+</html>

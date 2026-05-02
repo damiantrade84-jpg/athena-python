@@ -1,0 +1,43 @@
+<!-- Conductor Widget — injected into dashboard -->
+<div id="conductor-widget" style="position:fixed;bottom:20px;right:20px;width:320px;background:#1a1a2e;border:1px solid #4a4a6a;border-radius:8px;padding:15px;z-index:9999;color:#fff;font-family:monospace;font-size:12px;box-shadow:0 4px 20px rgba(0,0,0,0.5);">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+    <strong style="color:#00d4ff;">🎼 Conductor</strong>
+    <span id="conductor-status" style="color:#ffd700;font-size:10px;">waiting...</span>
+  </div>
+  <div id="conductor-content" style="line-height:1.6;">
+    <div style="color:#888;">Click a signal to see conductor routing...</div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const widget = document.getElementById('conductor-content');
+  const status = document.getElementById('conductor-status');
+  
+  // Poll for signal data every 3 seconds
+  setInterval(async () => {
+    try {
+      const resp = await fetch('/api/conductor/last');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (!data.conductor) return;
+      
+      const r = data.conductor;
+      status.textContent = r.skip_signal ? '⛔ SKIPPED' : '✅ ACTIVE';
+      status.style.color = r.skip_signal ? '#ff4444' : '#44ff44';
+      
+      let html = '';
+      html += `<div><span style="color:#888;">Debate:</span> ${r.run_debate ? '🟢 YES' : '⚫ NO'}</div>`;
+      html += `<div><span style="color:#888;">Vision:</span> ${r.run_vision ? '🟢 YES' : '⚫ NO'}</div>`;
+      html += `<div><span style="color:#888;">Sentiment:</span> ${r.run_sentiment ? '🟢 YES' : '⚫ NO'}</div>`;
+      html += `<div><span style="color:#888;">Weights:</span> A=${(r.engine_weights?.engine_a*100).toFixed(0)}% B=${(r.engine_weights?.engine_b*100).toFixed(0)}%</div>`;
+      html += `<div><span style="color:#888;">Score:</span> ${r.score_pct?.toFixed(1)}%</div>`;
+      html += `<div style="margin-top:5px;font-size:10px;color:#aaa;border-top:1px solid #333;padding-top:5px;">${r.reasons?.join(' • ') || 'No reasons'}</div>`;
+      
+      widget.innerHTML = html;
+    } catch (e) {
+      // Silently fail — widget is decorative
+    }
+  }, 3000);
+})();
+</script>

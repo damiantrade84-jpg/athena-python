@@ -48,6 +48,28 @@ def _jsonify_row(rows: list[sqlite3.Row]) -> dict:
     }
 
 
+@kimi_bp.route("/last", methods=["GET"])
+def conductor_last():
+    """Return the last Conductor decision for the dashboard widget."""
+    try:
+        from conductor import _LAST_CONDUCTOR_RESULT
+        if _LAST_CONDUCTOR_RESULT:
+            return jsonify({
+                "conductor": _LAST_CONDUCTOR_RESULT.get("routing", {}),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+        return jsonify({"conductor": None, "message": "No conductor data yet"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Mirror route at /api/conductor/last for the dashboard widget
+@kimi_bp.route("/conductor/last", methods=["GET"])
+def conductor_last_alias():
+    """Alias of /last — the dashboard widget calls /api/conductor/last."""
+    return conductor_last()
+
+
 @kimi_bp.route("/health", methods=["GET"])
 def health():
     return jsonify({
@@ -341,4 +363,6 @@ def trades_drawdown():
 
 def register_kimi_routes(app):
     app.register_blueprint(kimi_bp)
-    print("[KIMI] Bridge routes registered at /api/kimi/*")
+    # Dashboard widget calls /api/conductor/last — mirror it at root
+    app.add_url_rule("/api/conductor/last", "conductor_last_mirror", conductor_last, methods=["GET"])
+    print("[KIMI] Bridge routes registered at /api/kimi/*  (+ /api/conductor/last mirror)")

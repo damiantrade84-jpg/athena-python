@@ -233,7 +233,7 @@ export default function LiveCockpitPanel() {
           {/* Event feed */}
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-1">
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <Activity className="w-3.5 h-3.5" /> Event Feed
               </CardTitle>
             </CardHeader>

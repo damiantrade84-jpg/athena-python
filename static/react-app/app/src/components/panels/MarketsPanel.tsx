@@ -32,7 +32,7 @@ interface NewsSentimentItem {
 }
 
 export default function MarketsPanel() {
-  const { data: prices, loading: pricesLoading, error: pricesError, refresh: refreshPrices } = useApiPoll<BulkPrices>('/api/bulk-prices', 5000);
+  const { data: prices, loading: pricesLoading, error: pricesError, refresh: refreshPrices } = useApiPoll<BulkPrices>('/api/bulk-prices', 10000);
   const { data: hours, loading: hoursLoading, error: hoursError } = useApiPoll<MarketHours>('/api/market-hours', 30000);
   const { data: yieldCurve, loading: yieldLoading, error: yieldError } = useApiPoll<YieldCurve>('/api/yield-curve', 0);
   const { data: regime, loading: regimeLoading, error: regimeError } = useApiPoll<RegimeShift>('/api/regime-shift', 30000);
@@ -148,7 +148,7 @@ export default function MarketsPanel() {
           {/* Yield Curve */}
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold">Yield Curve</CardTitle>
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Yield Curve</CardTitle>
             </CardHeader>
             <CardContent>
               {yieldLoading ? <Skeleton className="h-[180px] w-full" /> : yieldData.length > 0 ? (
@@ -171,7 +171,7 @@ export default function MarketsPanel() {
           {/* Regime Status */}
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold">Regime Status</CardTitle>
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Regime Status</CardTitle>
             </CardHeader>
             <CardContent>
               {regimeLoading ? <Skeleton className="h-20 w-full" /> : regime?.regimes ? (
@@ -192,7 +192,7 @@ export default function MarketsPanel() {
           {/* News Sentiment */}
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold">News Sentiment</CardTitle>
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>News Sentiment</CardTitle>
             </CardHeader>
             <CardContent>
               {sentLoading ? <Skeleton className="h-20 w-full" /> : sentiment && sentiment.length > 0 ? (

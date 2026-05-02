@@ -342,7 +342,7 @@ export default function ScanConfigPanel() {
       {/* Scan Runtime Snapshot */}
       <Card className="border-border/60 bg-card/50">
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-semibold">Scan Runtime Snapshot</CardTitle>
+          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Scan Runtime Snapshot</CardTitle>
         </CardHeader>
         <CardContent>
           {settingsLoading ? (

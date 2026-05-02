@@ -190,7 +190,7 @@ export default function EngineCPanel() {
   const { post: postScan, loading: scanning, error: scanError } = useApiPost<EngineCScanResponse>();
   const { post: postCompare, loading: comparing } = useApiPost<CompareResponse>();
   const { post: postBacktest, loading: backtesting } = useApiPost<EngineCBacktestResponse>();
-  const { priceFor } = useLivePrices(3000);
+  const { priceFor } = useLivePrices(10000);
 
   const runScan = useCallback(async () => {
     setSelected(null);
@@ -366,7 +366,7 @@ export default function EngineCPanel() {
         <div className="grid grid-cols-5 gap-4">
           <Card className="col-span-3 border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center justify-between">
+              <CardTitle className="text-xs font-semibold flex items-center justify-between uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <span>{BUCKET_LABELS[activeBucket]} ({buckets[activeBucket].length})</span>
               </CardTitle>
             </CardHeader>

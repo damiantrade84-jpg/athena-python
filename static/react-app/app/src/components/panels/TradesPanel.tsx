@@ -52,7 +52,7 @@ export default function TradesPanel() {
   const [closeExchange, setCloseExchange] = useState<string>('mt5');
   const [closeDirection, setCloseDirection] = useState<string>('LONG');
 
-  const { data: openTradesResp, loading: openLoading, error: openError, refresh: refreshOpen } = useApiPoll<OpenTradesTimedResp>('/api/open-trades-timed', 15000);
+  const { data: openTradesResp, loading: openLoading, error: openError, refresh: refreshOpen } = useApiPoll<OpenTradesTimedResp>('/api/open-trades-timed', 30000);
   const { data: performance, loading: perfLoading, error: perfError, refresh: refreshPerf } = useApiPoll<PerformanceMetrics>('/api/performance', 0);
   const { data: autoLog } = useApiPoll<unknown>('/api/auto-trade/log', 0);
   const { data: failedExecs } = useApiPoll<unknown>('/api/failed-executions', 0);
@@ -143,7 +143,7 @@ export default function TradesPanel() {
         <TabsContent value="open" className="mt-2">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center justify-between">
+              <CardTitle className="text-xs font-semibold flex items-center justify-between uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <span>Open Positions</span>
                 <Badge variant="outline" className="text-[10px]">{openTrades.length} open</Badge>
               </CardTitle>
@@ -231,7 +231,7 @@ export default function TradesPanel() {
         <TabsContent value="history" className="mt-2">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold">Last 20 Closed Trades</CardTitle>
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Last 20 Closed Trades</CardTitle>
             </CardHeader>
             <CardContent>
               {Array.isArray(performance?.last_20_trades) && performance!.last_20_trades.length > 0 ? (
@@ -286,7 +286,7 @@ export default function TradesPanel() {
 
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold">Equity Curve (Cumulative R)</CardTitle>
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Equity Curve (Cumulative R)</CardTitle>
             </CardHeader>
             <CardContent>
               {perfLoading ? (
@@ -321,7 +321,7 @@ export default function TradesPanel() {
           {byEngineEntries.length > 0 && (
             <Card className="border-border/60 bg-card/50">
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold">By Engine</CardTitle>
+                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>By Engine</CardTitle>
               </CardHeader>
               <CardContent>
                 <Table>
@@ -358,7 +358,7 @@ export default function TradesPanel() {
         <TabsContent value="autolog" className="mt-2">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold">Auto-Trade Log</CardTitle>
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Auto-Trade Log</CardTitle>
             </CardHeader>
             <CardContent>
               <ScrollArea className="h-[400px]">

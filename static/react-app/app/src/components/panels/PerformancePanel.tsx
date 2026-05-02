@@ -184,7 +184,7 @@ export default function PerformancePanel() {
       <div className="grid grid-cols-2 gap-5">
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold">By Regime</CardTitle>
+            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>By Regime</CardTitle>
           </CardHeader>
           <CardContent>
             {regimeRows.length > 0 ? (
@@ -214,7 +214,7 @@ export default function PerformancePanel() {
 
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold">By Asset Class</CardTitle>
+            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>By Asset Class</CardTitle>
           </CardHeader>
           <CardContent>
             {assetRows.length > 0 ? (

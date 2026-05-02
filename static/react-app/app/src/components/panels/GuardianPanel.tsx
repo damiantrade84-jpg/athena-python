@@ -31,11 +31,11 @@ interface ForensicsSummary {
 export default function GuardianPanel() {
   const [confirmReset, setConfirmReset] = useState(false);
 
-  const { data: status, loading: statusLoading, error: statusError, refresh: refreshStatus } = useApiPoll<GuardianApiStatus>('/api/guardian/status', 15000);
+  const { data: status, loading: statusLoading, error: statusError, refresh: refreshStatus } = useApiPoll<GuardianApiStatus>('/api/guardian/status', 30000);
   const { data: bootCheck, loading: bootLoading, error: bootError, refresh: refreshBoot } = useApiPoll<GuardianApiStatus>('/api/guardian/boot-check', 0);
-  const { data: divergence } = useApiPoll<{ divergence_count: number; critical_count: number; checks: any[] }>('/api/divergence', 15000);
-  const { data: shieldStatus } = useApiPoll<{ circuit_breaker_open: boolean; failure_count: number }>('/api/shield/status', 15000);
-  const { data: feedHealth, loading: feedLoading, error: feedError } = useApiPoll<FeedHealth>('/api/feed-health', 15000);
+  const { data: divergence } = useApiPoll<{ divergence_count: number; critical_count: number; checks: any[] }>('/api/divergence', 30000);
+  const { data: shieldStatus } = useApiPoll<{ circuit_breaker_open: boolean; failure_count: number }>('/api/shield/status', 30000);
+  const { data: feedHealth, loading: feedLoading, error: feedError } = useApiPoll<FeedHealth>('/api/feed-health', 30000);
   const { data: forensics, loading: forensicsLoading } = useApiPoll<ForensicsSummary>('/api/forensics/summary', 0);
   const { data: diagnostics } = useApiPoll<Record<string, unknown>>('/api/live-feed-diagnostics', 0);
 
@@ -231,7 +231,7 @@ export default function GuardianPanel() {
       {/* Forensics */}
       <Card className="border-border/60 bg-card/50">
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-semibold">Forensics Summary</CardTitle>
+          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Forensics Summary</CardTitle>
         </CardHeader>
         <CardContent>
           {forensicsLoading ? (

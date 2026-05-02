@@ -73,7 +73,7 @@ export default function PairBrowserPanel() {
   const { post: postVision, loading: visionLoading } = useApiPost<ChartAnalysisResponse>();
   const { post: postNews, loading: newsLoading } = useApiPost<NewsApiResponse>();
   const { post: postExecute, loading: executing } = useApiPost<{ success?: boolean; ticket?: string; error?: string }>();
-  const { priceFor } = useLivePrices(3000);
+  const { priceFor } = useLivePrices(10000);
 
   const groupEntries: Array<[string, Array<{ sym: string; label: string; enabled?: boolean }>]> = useMemo(() => {
     return Object.entries(pairs?.groups || {});
@@ -266,7 +266,7 @@ export default function PairBrowserPanel() {
       {/* Left: pair list */}
       <Card className="w-[260px] shrink-0 border-border/60 bg-card/50 flex flex-col">
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-semibold">Pairs ({pairs?.total ?? '—'})</CardTitle>
+          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Pairs ({pairs?.total ?? '—'})</CardTitle>
           <div className="relative">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
             <Input

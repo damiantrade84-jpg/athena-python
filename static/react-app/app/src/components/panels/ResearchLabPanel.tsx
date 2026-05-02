@@ -464,7 +464,7 @@ export default function ResearchLabPanel() {
         <>
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center justify-between">
+              <CardTitle className="text-xs font-semibold flex items-center justify-between uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <span>Run · <span className="font-mono text-xs">{currentRunId}</span></span>
                 <Badge className={`${statusBadge(runStatus?.status)} text-[10px]`}>{runStatus?.status || '—'}</Badge>
               </CardTitle>
@@ -508,7 +508,7 @@ export default function ResearchLabPanel() {
           {ranked && (ranked.ranked || []).length > 0 && (
             <Card className="border-border/60 bg-card/50">
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold">Ranked Strategies (top 50)</CardTitle>
+                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Ranked Strategies (top 50)</CardTitle>
               </CardHeader>
               <CardContent>
                 <ScrollArea className="h-[420px]">
