@@ -221,6 +221,7 @@ def factor_report(
             query = """
                 SELECT * FROM factor_snapshots
                 WHERE outcome IS NOT NULL AND r_multiple IS NOT NULL
+                AND abs(r_multiple) <= 50
                 AND ts >= ?
             """
             params = [cutoff]

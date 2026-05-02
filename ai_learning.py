@@ -189,7 +189,7 @@ def get_ai_learning_context(
         with sqlite3.connect(db_path, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             rows = con.execute(
-                "SELECT * FROM learning_log WHERE ts > ? ORDER BY ts DESC", (cutoff,)
+                "SELECT * FROM learning_log WHERE ts > ? AND (r_multiple IS NULL OR abs(r_multiple) <= 50) ORDER BY ts DESC", (cutoff,)
             ).fetchall()
     except Exception as e:
         log.debug(f"[LEARN] context query failed: {e}")
@@ -376,7 +376,7 @@ def get_meta_analysis_context(db_path: str, days: int = 7) -> str:
         with sqlite3.connect(db_path, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             rows = con.execute(
-                "SELECT * FROM learning_log WHERE ts > ? ORDER BY ts DESC", (cutoff,)
+                "SELECT * FROM learning_log WHERE ts > ? AND (r_multiple IS NULL OR abs(r_multiple) <= 50) ORDER BY ts DESC", (cutoff,)
             ).fetchall()
     except Exception:
         return ""
