@@ -107,6 +107,138 @@ def _get_engine_b_gate_failure_summary() -> dict[str, int]:
     return dict(_engine_b_gate_failures)
 
 
+def _breakout_follow_through(
+    candles: list,
+    direction: str,
+    atr: float,
+    breakout_bar_index: int | None = None,
+) -> dict:
+    """Evaluate breakout quality by checking follow-through over next 2-3 bars.
+
+    SMC traders frequently get caught in false breakouts where price breaks a
+    level but immediately reverses. This factor scores the *quality* of the
+    breakout by measuring post-break continuation.
+
+    Scoring:
+      +1.5  Strong follow-through — 3+ bars all aligned, close beyond breakout
+      +1.0  Moderate — 2 bars aligned, close near breakout level
+       0.0  Neutral — mixed or insufficient data
+      -0.5  Trap — immediate reversal within 1-2 bars, long wick, close back inside
+
+    Returns dict with score, confidence, and diagnostic details.
+    """
+    if not candles or len(candles) < 5:
+        return {"score": 0.0, "confidence": "insufficient_data", "bars_checked": 0}
+
+    # Default to last bar if no breakout index provided
+    idx = breakout_bar_index if breakout_bar_index is not None else len(candles) - 1
+    if idx < 0 or idx >= len(candles):
+        idx = len(candles) - 1
+
+    breakout = candles[idx]
+    _open = float(breakout.get("open", 0.0))
+    _high = float(breakout.get("high", 0.0))
+    _low = float(breakout.get("low", 0.0))
+    _close = float(breakout.get("close", 0.0))
+    _range = max(_high - _low, 1e-12)
+    _body = abs(_close - _open)
+
+    # Wick analysis on breakout bar
+    upper_wick = _high - max(_open, _close)
+    lower_wick = min(_open, _close) - _low
+
+    is_long = direction == "LONG"
+
+    # Wick ratio: long opposing wick = potential trap
+    _wick_ratio = 0.0
+    if is_long:
+        _wick_ratio = upper_wick / _range if _range > 0 else 0.0
+    else:
+        _wick_ratio = lower_wick / _range if _range > 0 else 0.0
+
+    # Check next 3 bars for follow-through
+    _max_check = min(3, len(candles) - idx - 1)
+    _aligned_bars = 0
+    _reversal_bars = 0
+    _close_beyond_count = 0
+    _avg_close_pos = 0.0
+
+    for i in range(1, _max_check + 1):
+        bar = candles[idx + i]
+        c_open = float(bar.get("open", 0.0))
+        c_high = float(bar.get("high", 0.0))
+        c_low = float(bar.get("low", 0.0))
+        c_close = float(bar.get("close", 0.0))
+
+        if is_long:
+            # Bar aligned if close > breakout close
+            if c_close > _close:
+                _aligned_bars += 1
+                if c_close > _high:
+                    _close_beyond_count += 1
+            # Reversal if close drops below breakout open
+            if c_close < _open:
+                _reversal_bars += 1
+            _avg_close_pos += (c_close - _low) / max(c_high - c_low, 1e-12)
+        else:
+            if c_close < _close:
+                _aligned_bars += 1
+                if c_close < _low:
+                    _close_beyond_count += 1
+            if c_close > _open:
+                _reversal_bars += 1
+            _avg_close_pos += (c_high - c_close) / max(c_high - c_low, 1e-12)
+
+    if _max_check > 0:
+        _avg_close_pos /= _max_check
+
+    # Score determination
+    _score = 0.0
+    _confidence = "neutral"
+
+    if _max_check == 0:
+        _score = 0.0
+        _confidence = "insufficient_data"
+    elif _reversal_bars >= 2 and _aligned_bars == 0:
+        # Immediate full reversal — trap
+        _score = -0.5
+        _confidence = "trap"
+    elif _wick_ratio > 0.6 and _aligned_bars < 2:
+        # Long opposing wick + weak follow-through = likely trap
+        _score = -0.5
+        _confidence = "trap"
+    elif _aligned_bars >= 3 and _close_beyond_count >= 2:
+        # Strong continuation across all checked bars
+        _score = 1.5
+        _confidence = "strong"
+    elif _aligned_bars >= 2 and _close_beyond_count >= 1:
+        # Moderate continuation
+        _score = 1.0
+        _confidence = "moderate"
+    elif _aligned_bars >= 1 and _reversal_bars == 0:
+        # Weak but present continuation
+        _score = 0.5
+        _confidence = "weak"
+    elif _reversal_bars >= 1 and _aligned_bars >= 1:
+        # Mixed — neutral
+        _score = 0.0
+        _confidence = "mixed"
+    else:
+        _score = 0.0
+        _confidence = "neutral"
+
+    return {
+        "score": round(_score, 2),
+        "confidence": _confidence,
+        "bars_checked": _max_check,
+        "aligned_bars": _aligned_bars,
+        "reversal_bars": _reversal_bars,
+        "close_beyond_count": _close_beyond_count,
+        "wick_ratio": round(_wick_ratio, 4),
+        "avg_close_position": round(_avg_close_pos, 4),
+    }
+
+
 def engine_b_confidence_passes(
     conf_data: dict | None,
     style_profile: dict | None,
@@ -3182,6 +3314,20 @@ class NakedEngine:
         if volume_ok:
             bonus_points += 1.0  # Volume confirmation = extra point
 
+        # ── Breakout Follow-Through Bonus (config-gated) ────────────────────────
+        _ft_cfg = config.CONFIG.get("ENGINE_B_FOLLOW_THROUGH", {}) or {}
+        _ft_enabled = bool(_ft_cfg.get("ENABLED", False))
+        _ft_bonus = 0.0
+        _ft_detail = {"enabled": _ft_enabled}
+        if _ft_enabled:
+            _ft_result = _breakout_follow_through(entry_candles or [], direction, atr_val)
+            _ft_detail.update(_ft_result)
+            _ft_max = abs(float(_ft_cfg.get("MAX_BONUS", 1.5)))
+            _ft_min = -abs(float(_ft_cfg.get("MIN_PENALTY", -0.5)))
+            _ft_bonus = max(_ft_min, min(_ft_max, _ft_result.get("score", 0.0)))
+            bonus_points += _ft_bonus
+            _ft_detail["bonus_applied"] = round(_ft_bonus, 2)
+
         # FIX 1: gate_score is COUNT of true booleans — never modify it
         gate_score = float(sum(1 for passed in gate_confirmations if passed))
         gate_max_possible = float(len(gate_confirmations)) if gate_confirmations else 1.0
@@ -3418,6 +3564,8 @@ class NakedEngine:
             "research_lab_entry_upgrade": research_entry_ok,
             "research_lab_location_upgrade": research_location_ok,
             "research_lab_detail": research_lab_detail,
+            "follow_through_bonus": round(_ft_bonus, 2),
+            "follow_through_detail": _ft_detail,
             "crypto_profile_enabled": crypto_profile_enabled,
             "crypto_trigger_profile_enabled": crypto_trigger_profile_enabled,
             "crypto_target_v2_valid": target_v2_valid,
