@@ -223,7 +223,17 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         vwap = _check_vwap_lean(context_for_vwap, current_price) if cfg.get("VWAP_ENABLED", True) else {"lean": None, "vwap_value": 0}
         bias_context = _resample_closed_m15_context(m15_context, bias_tf)
         htf_bias = infer_bias_from_ema_stack(bias_context) if len(bias_context) >= 200 else None
-        setup = _classify_setup(market_state, price_loc, absorption, cvd, aaa, vwap, htf_bias, asset_type=asset_type)
+        setup = _classify_setup(
+            market_state,
+            price_loc,
+            absorption,
+            cvd,
+            aaa,
+            vwap,
+            htf_bias,
+            asset_type=asset_type,
+            candles=exec_context,
+        )
         if not setup.get("valid"):
             continue
         direction = setup["direction"]
