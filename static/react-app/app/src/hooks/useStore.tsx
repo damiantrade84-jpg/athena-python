@@ -180,7 +180,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       }
     }
     fetchPrices();
-    timer = setInterval(fetchPrices, 5000);
+    timer = setInterval(fetchPrices, 30000);
     return () => { if (timer) clearInterval(timer); };
   }, []);
 
