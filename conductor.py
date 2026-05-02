@@ -16,8 +16,11 @@ from ai_context import build_ai_calibration_context
 
 log = logging.getLogger("sentinel.conductor")
 
-# Last conductor result stored for dashboard access
+# Last conductor result (top signal) stored for dashboard access
 _LAST_CONDUCTOR_RESULT: dict | None = None
+
+# All conductor results from latest scan, keyed by pair display name
+_ALL_CONDUCTOR_RESULTS: dict[str, dict] = {}
 
 # ── Deterministic Routing Rules ──────────────────────────────────────────────
 
@@ -219,6 +222,8 @@ def route_ai_functions(
         "score_pct": score_pct,
         "engine_b_verdict": engine_b_verdict,
         "regime": regime,
+        "pair": signal.get("display") or signal.get("pair", "?"),
+        "direction": str(signal.get("direction", "?")).upper(),
     }
 
 
@@ -268,9 +273,16 @@ def build_conductor_context_packet(
     return ctx
 
 
+def _normalise_regime(regime: Any) -> str:
+    """Coerce regime to a plain string — Engine A signals carry a dict, Engine C a string."""
+    if isinstance(regime, dict):
+        return str(regime.get("label", "UNKNOWN")).upper()
+    return str(regime).upper() if regime else "UNKNOWN"
+
+
 def conductor_orchestrate(
     signal: dict[str, Any],
-    regime: str,
+    regime: Any,
     db_path: str,
     news_ctx: dict | None = None,
     volume_divergence: dict | None = None,
@@ -282,6 +294,8 @@ def conductor_orchestrate(
     This is the entry point athena.py calls. Returns everything needed
     to execute the signal with the right AI functions.
     """
+    regime = _normalise_regime(regime)
+
     # Step 1: Route
     routing = route_ai_functions(
         signal,
@@ -302,7 +316,10 @@ def conductor_orchestrate(
     }
 
     # Store for dashboard access
-    global _LAST_CONDUCTOR_RESULT
+    global _LAST_CONDUCTOR_RESULT, _ALL_CONDUCTOR_RESULTS
     _LAST_CONDUCTOR_RESULT = result
+    pair_key = signal.get("display") or signal.get("pair", "")
+    if pair_key:
+        _ALL_CONDUCTOR_RESULTS[pair_key] = result
 
     return result

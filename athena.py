@@ -4888,19 +4888,26 @@ def api_scan():
         ),
     )
 
-    # Run Conductor on top signal so dashboard widget gets routing data
+    # Run Conductor on all signals so widget can show routing for any selected pair
     _signals = result.get("signals", [])
+    _conductor_plan = None
     if _signals:
         try:
             from conductor import conductor_orchestrate
-            _top = _signals[0]
-            conductor_orchestrate(
-                _top,
-                _top.get("regime", "UNKNOWN"),
-                _AUDIT_DB,
-            )
+            for _sig in _signals[:30]:  # cap at 30 to bound DB query cost
+                _plan = conductor_orchestrate(
+                    _sig,
+                    _sig.get("regime", "UNKNOWN"),
+                    _AUDIT_DB,
+                )
+                if _sig is _signals[0]:
+                    _conductor_plan = _plan
+            # Attach top-signal routing to scan result so /api/last-scan serves it
+            if _conductor_plan:
+                result["conductor"] = _conductor_plan.get("routing", {})
+                result["conductor_context"] = _conductor_plan.get("context", {})
         except Exception as _cerr:
-            log.debug(f"[CONDUCTOR] scan-side orchestration failed: {_cerr}")
+            log.warning(f"[CONDUCTOR] scan-side orchestration failed: {_cerr}")
 
     global _last_scan_results
     _last_scan_results = result
@@ -4923,6 +4930,40 @@ def api_last_scan():
     out = dict(r)
     out["available"] = True
     return jsonify(_json_safe(out))
+
+
+@app.route("/api/conductor/last", methods=["GET"])
+@app.route("/api/kimi/conductor/last", methods=["GET"])
+def api_conductor_last():
+    """Return conductor routing for a specific pair (?pair=) or the top scan signal."""
+    try:
+        import conductor as _cmod
+    except Exception as _imp_err:
+        log.debug(f"[CONDUCTOR] import failed: {_imp_err}")
+        return jsonify({"conductor": None, "message": "Conductor module unavailable"}), 200
+
+    pair_arg = request.args.get("pair", "").strip()
+    if pair_arg and _cmod._ALL_CONDUCTOR_RESULTS:
+        # Try exact match, then case-insensitive
+        _res = _cmod._ALL_CONDUCTOR_RESULTS.get(pair_arg)
+        if _res is None:
+            pair_arg_up = pair_arg.upper()
+            for k, v in _cmod._ALL_CONDUCTOR_RESULTS.items():
+                if k.upper() == pair_arg_up:
+                    _res = v
+                    break
+        if _res:
+            return jsonify(_json_safe({"conductor": _res.get("routing", {}), "timestamp": datetime.now(timezone.utc).isoformat()}))
+        return jsonify({"conductor": None, "message": f"{pair_arg} not in last scan"}), 200
+
+    if _cmod._LAST_CONDUCTOR_RESULT is None:
+        return jsonify({"conductor": None, "message": "No conductor data yet. Run a scan."}), 200
+
+    _out = {
+        "conductor": _cmod._LAST_CONDUCTOR_RESULT.get("routing", {}),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    return jsonify(_json_safe(_out))
 
 
 @app.route("/api/analyze", methods=["POST"])
