@@ -4966,6 +4966,26 @@ def api_conductor_last():
     return jsonify(_json_safe(_out))
 
 
+@app.route("/api/conductor/pairs", methods=["GET"])
+def api_conductor_pairs():
+    """Return the list of pairs that have conductor results from the last scan."""
+    try:
+        import conductor as _cmod
+    except Exception:
+        return jsonify({"pairs": []}), 200
+    pairs = []
+    for pair, res in _cmod._ALL_CONDUCTOR_RESULTS.items():
+        r = res.get("routing", {})
+        pairs.append({
+            "pair": pair,
+            "direction": r.get("direction", "?"),
+            "score_pct": r.get("score_pct", 0),
+            "skip_signal": r.get("skip_signal", False),
+        })
+    pairs.sort(key=lambda x: x["score_pct"], reverse=True)
+    return jsonify({"pairs": pairs})
+
+
 @app.route("/api/analyze", methods=["POST"])
 def api_analyze():
 
