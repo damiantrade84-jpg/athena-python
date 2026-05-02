@@ -4887,6 +4887,21 @@ def api_scan():
             payload, run_full_scan=run_full_scan
         ),
     )
+
+    # Run Conductor on top signal so dashboard widget gets routing data
+    _signals = result.get("signals", [])
+    if _signals:
+        try:
+            from conductor import conductor_orchestrate
+            _top = _signals[0]
+            conductor_orchestrate(
+                _top,
+                _top.get("regime", "UNKNOWN"),
+                _AUDIT_DB,
+            )
+        except Exception as _cerr:
+            log.debug(f"[CONDUCTOR] scan-side orchestration failed: {_cerr}")
+
     global _last_scan_results
     _last_scan_results = result
     return jsonify(_json_safe(result))
