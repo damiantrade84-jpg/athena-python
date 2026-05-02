@@ -22,6 +22,17 @@ _LAST_CONDUCTOR_RESULT: dict | None = None
 # All conductor results from latest scan, keyed by pair display name
 _ALL_CONDUCTOR_RESULTS: dict[str, dict] = {}
 
+# Which scan produced the current results
+_LAST_SCAN_TYPE: str = ""
+
+
+def reset_scan_results(scan_type: str = "") -> None:
+    """Clear per-pair results before a new scan so stale data from a different engine is not mixed in."""
+    global _ALL_CONDUCTOR_RESULTS, _LAST_CONDUCTOR_RESULT, _LAST_SCAN_TYPE
+    _ALL_CONDUCTOR_RESULTS = {}
+    _LAST_CONDUCTOR_RESULT = None
+    _LAST_SCAN_TYPE = scan_type
+
 # ── Deterministic Routing Rules ──────────────────────────────────────────────
 
 # Score thresholds for routing decisions
@@ -128,6 +139,11 @@ def route_ai_functions(
     engine_b = ctx.get("engine_b", {})
 
     score_pct = float(engine_a.get("rawScorePct", 0))
+    # Engine B-only signals carry no Engine A score — use their own confidence pct
+    if score_pct == 0 or signal.get("is_naked"):
+        _b_pct = float(signal.get("score_pct") or signal.get("confluencePct") or 0)
+        if _b_pct > 0:
+            score_pct = _b_pct
     engine_b_verdict = str(engine_b.get("structural_verdict", "UNKNOWN")).upper()
     pair = str(ctx.get("identity", {}).get("pair", "")).replace("/", "")
 

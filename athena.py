@@ -4893,7 +4893,8 @@ def api_scan():
     _conductor_plan = None
     if _signals:
         try:
-            from conductor import conductor_orchestrate
+            from conductor import conductor_orchestrate, reset_scan_results
+            reset_scan_results("engine_a")
             for _sig in _signals[:30]:  # cap at 30 to bound DB query cost
                 _plan = conductor_orchestrate(
                     _sig,
@@ -4983,7 +4984,7 @@ def api_conductor_pairs():
             "skip_signal": r.get("skip_signal", False),
         })
     pairs.sort(key=lambda x: x["score_pct"], reverse=True)
-    return jsonify({"pairs": pairs})
+    return jsonify({"pairs": pairs, "scan_type": getattr(_cmod, "_LAST_SCAN_TYPE", "")})
 
 
 @app.route("/api/analyze", methods=["POST"])
@@ -6568,6 +6569,20 @@ def api_scan_naked():
         key=lambda x: x.get("confluenceScore", 0),
         reverse=True,
     )
+
+    # Run Conductor on Engine B signals so widget updates after an Engine B scan
+    if results:
+        try:
+            from conductor import conductor_orchestrate, reset_scan_results
+            reset_scan_results("engine_b")
+            for _sig in results[:30]:
+                conductor_orchestrate(
+                    _sig,
+                    _sig.get("regime", "UNKNOWN"),
+                    _AUDIT_DB,
+                )
+        except Exception as _cerr:
+            log.warning(f"[CONDUCTOR] engine-b scan orchestration failed: {_cerr}")
 
     if debug_mode:
         # REGRESSION CHECK: Print Engine B scan-funnel summary
