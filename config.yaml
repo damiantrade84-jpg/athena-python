@@ -1915,6 +1915,17 @@ SCALP_ENGINE:
   VOLUME_DIVERGENCE_STRONG_PCT: 0.25    # Volume change % to count as "strong" divergence
   VOLUME_DIVERGENCE_MODERATE_PCT: 0.10  # Volume change % to count as "moderate" divergence
 
+  # ── Stop-Run / Liquidity Sweep Detection ──────────────────
+  # Detects false breakouts: rapid move beyond level + immediate rejection
+  STOP_RUN_DETECTION_ENABLED: true
+  STOP_RUN_WICK_PCT: 0.60              # Wick % of range to count as confirmed stop-run
+  STOP_RUN_WICK_SUSPECT_PCT: 0.40      # Wick % for suspected stop-run
+
+  # ── Time-of-Day Grading Adjustment ────────────────────────
+  # Adjusts signal quality by hour of day (UTC). Reduces false signals
+  # during thin periods (lunch, session transitions).
+  TIME_OF_DAY_ADJUSTMENT_ENABLED: true
+
   TRADE_BUCKET_MAX_AGE_SEC: 300   # Max age of live aggTrade buckets before candle fallback
 
   TRADE_BUCKET_MIN_LEVELS: 8      # Minimum price buckets required before using aggTrade VP/CVD

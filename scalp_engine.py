@@ -1391,6 +1391,187 @@ def _detect_volume_divergence(candles: list, lookback: int = 5) -> dict:
     return result
 
 
+def _detect_stop_run(candles: list, direction: str, atr: float) -> dict:
+    """Detect stop-run / liquidity sweep patterns.
+
+    A stop-run occurs when price rapidly moves beyond a key level (VAH/VAL/POC)
+    but immediately reverses with a long wick and close back inside the level.
+    This traps breakout traders and often reverses.
+
+    Scoring:
+      -2.0  Confirmed stop-run (long wick > 60% of range, close back inside, high vol)
+      -1.0  Suspected stop-run (wick > 40%, close near level, moderate vol)
+       0.0  No stop-run detected
+
+    Returns dict with score, confidence, and diagnostic details.
+    """
+    if not candles or len(candles) < 3:
+        return {"stop_run": False, "score": 0.0, "confidence": "insufficient_data"}
+
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    if not cfg.get("STOP_RUN_DETECTION_ENABLED", True):
+        return {"stop_run": False, "score": 0.0, "confidence": "disabled"}
+
+    # Analyze the last 2 bars for stop-run pattern
+    latest = candles[-1]
+    prev = candles[-2] if len(candles) >= 2 else latest
+
+    _open = float(latest.get("open", 0.0))
+    _high = float(latest.get("high", 0.0))
+    _low = float(latest.get("low", 0.0))
+    _close = float(latest.get("close", 0.0))
+    _range = max(_high - _low, 1e-12)
+    _body = abs(_close - _open)
+
+    # Volume context
+    vols = [float(c.get("vol", 0) or 0) for c in candles[-5:]]
+    avg_vol = sum(vols) / len(vols) if vols else 0
+    latest_vol = float(latest.get("vol", 0) or 0)
+    vol_spike = latest_vol > avg_vol * 1.5 if avg_vol > 0 else False
+
+    is_long = direction == "LONG"
+
+    # Wick analysis
+    upper_wick = _high - max(_open, _close)
+    lower_wick = min(_open, _close) - _low
+    upper_wick_pct = upper_wick / _range if _range > 0 else 0
+    lower_wick_pct = lower_wick / _range if _range > 0 else 0
+
+    # ATR-scaled thresholds
+    wick_threshold = float(cfg.get("STOP_RUN_WICK_PCT", 0.60))
+    wick_suspect = float(cfg.get("STOP_RUN_WICK_SUSPECT_PCT", 0.40))
+
+    result = {"stop_run": False, "score": 0.0, "confidence": "none"}
+
+    if is_long:
+        # Stop-run SHORT: price spikes above level (long upper wick) then falls back
+        if upper_wick_pct >= wick_threshold and _close < _high * 0.999:
+            # Close back down, long upper wick
+            score = -2.0 if vol_spike else -1.5
+            result = {
+                "stop_run": True,
+                "score": round(score, 1),
+                "confidence": "confirmed" if vol_spike else "suspected",
+                "wick_pct": round(upper_wick_pct, 4),
+                "vol_spike": vol_spike,
+                "direction": "SHORT",
+                "pattern": "upper_wick_rejection",
+            }
+        elif upper_wick_pct >= wick_suspect and _close < _open:
+            # Moderate upper wick, close below open
+            result = {
+                "stop_run": True,
+                "score": -1.0,
+                "confidence": "suspected",
+                "wick_pct": round(upper_wick_pct, 4),
+                "vol_spike": vol_spike,
+                "direction": "SHORT",
+                "pattern": "moderate_rejection",
+            }
+    else:
+        # Stop-run LONG: price spikes below level (long lower wick) then bounces back
+        if lower_wick_pct >= wick_threshold and _close > _low * 1.001:
+            score = -2.0 if vol_spike else -1.5
+            result = {
+                "stop_run": True,
+                "score": round(score, 1),
+                "confidence": "confirmed" if vol_spike else "suspected",
+                "wick_pct": round(lower_wick_pct, 4),
+                "vol_spike": vol_spike,
+                "direction": "LONG",
+                "pattern": "lower_wick_rejection",
+            }
+        elif lower_wick_pct >= wick_suspect and _close > _open:
+            result = {
+                "stop_run": True,
+                "score": -1.0,
+                "confidence": "suspected",
+                "wick_pct": round(lower_wick_pct, 4),
+                "vol_spike": vol_spike,
+                "direction": "LONG",
+                "pattern": "moderate_rejection",
+            }
+
+    result["latest_close"] = round(_close, 6)
+    result["latest_high"] = round(_high, 6)
+    result["latest_low"] = round(_low, 6)
+    result["latest_vol"] = round(latest_vol, 2)
+    result["avg_vol"] = round(avg_vol, 2)
+    return result
+
+
+def _time_of_day_adjustment(sessions: list, pair: str, cfg: dict) -> tuple[float, str]:
+    """Return grading adjustment based on time-of-day quality.
+
+    Different hours have different liquidity and signal quality.
+    Reduces grade during known low-quality periods, boosts during high-quality.
+
+    Returns (adjustment_pct, reason).
+    """
+    if not cfg.get("TIME_OF_DAY_ADJUSTMENT_ENABLED", True):
+        return 0.0, ""
+
+    try:
+        now_utc = datetime.now(timezone.utc)
+        hour_utc = now_utc.hour
+    except Exception:
+        return 0.0, ""
+
+    # Quality mapping by UTC hour (forex-centric)
+    # 07:00-08:00 = London pre-open (low liquidity, false breaks common)
+    # 08:00-09:00 = London open (high volatility, more noise)
+    # 10:00-12:00 = London mid (cleanest trends)
+    # 12:00-13:00 = London lunch (thin, avoid)
+    # 13:00-16:00 = London-NY overlap (best liquidity)
+    # 16:00-17:00 = London close (choppy)
+    # 17:00-21:00 = NY only (moderate)
+    # 22:00-07:00 = Asia (thin for most pairs, OK for JPY/AUD)
+
+    hour_quality = {
+        7: -5,     # London pre-open
+        8: -3,     # London open (volatile)
+        9: 0,      # Early London
+        10: 3,     # Mid London (good)
+        11: 3,     # Mid London (good)
+        12: -5,    # London lunch (thin)
+        13: 5,     # Overlap start (excellent)
+        14: 5,     # Overlap (excellent)
+        15: 5,     # Overlap (excellent)
+        16: 3,     # Late overlap (good)
+        17: -2,    # London closed, NY only
+        18: -2,    # NY afternoon
+        19: -3,    # NY late (thinning)
+        20: -3,    # NY late
+        21: -5,    # NY close (choppy)
+        22: -3,    # Asia start
+        23: -3,    # Asia
+        0: -3,     # Asia
+        1: -3,     # Asia
+        2: -5,     # Asia mid (thin)
+        3: -5,     # Asia mid (thin)
+        4: -3,     # Asia late
+        5: -3,     # Asia late
+        6: -3,     # Pre-London
+    }
+
+    adjustment = hour_quality.get(hour_utc, 0)
+
+    # JPY pairs get Asia boost
+    if "JPY" in pair and 22 <= hour_utc <= 6:
+        adjustment += 10
+
+    # Crypto is 24h but still has quality hours
+    if "USDT" in pair or "BTC" in pair or "ETH" in pair:
+        # Crypto: overlap hours still matter (more institutional)
+        if 13 <= hour_utc <= 16:
+            adjustment += 5
+        # Asia hours OK for crypto
+        if 22 <= hour_utc <= 6:
+            adjustment = max(adjustment, 0)  # Don't penalize crypto Asia
+
+    return float(adjustment), f"time_of_day_UTC{hour_utc}"
+
+
 def _check_aaa_sequence(candles: list, absorption: dict, cvd: dict,
                         asset_type: Optional[str] = None) -> dict:
     """Detect Absorption -> Accumulation -> Aggression sequence.
@@ -1712,6 +1893,13 @@ def _classify_setup(
             elif direction == "SHORT" and "bullish" in div_type_tc:
                 reasons.append(f"Volume divergence warns exhaustion at low ({vol_div_tc['strength']})")
 
+        # Stop-run detection for trend continuation
+        stop_run_tc = _detect_stop_run(candles or [], direction, atr_val)
+        if stop_run_tc.get("stop_run"):
+            sr_score_tc = stop_run_tc.get("score", 0)
+            sr_conf_tc = stop_run_tc.get("confidence", "")
+            reasons.append(f"STOP-RUN detected ({sr_conf_tc}): wick {stop_run_tc.get('wick_pct', 0):.1%} — score adjustment {sr_score_tc}")
+
         # CVD: hard veto only when no other confirmation exists.
         # If absorption or VWAP already confirms, CVD conflict lowers grade instead.
         cvd_dir = cvd.get("direction")
@@ -1772,6 +1960,15 @@ def _classify_setup(
                 reasons.append(f"Volume divergence warns breakout exhaustion ({vol_div_ext['strength']})")
             elif direction == "SHORT" and "bullish" in div_type_ext:
                 reasons.append(f"Volume divergence warns breakout exhaustion ({vol_div_ext['strength']})")
+
+        # Stop-run detection — catches liquidity sweeps
+        stop_run = _detect_stop_run(candles or [], direction, atr_val)
+        if stop_run.get("stop_run"):
+            sr_score = stop_run.get("score", 0)
+            sr_conf = stop_run.get("confidence", "")
+            reasons.append(f"STOP-RUN detected ({sr_conf}): wick {stop_run.get('wick_pct', 0):.1%} — score adjustment {sr_score}")
+            # Stop-run is a strong warning for trend extension — reduce confidence
+            # The score penalty will be applied in ai_quality_grade
 
         reasons.append(f"Trend extension: price broke {side_label} in imbalance market")
         if has_absorption:
@@ -2041,6 +2238,7 @@ def ai_quality_grade(
     spread_pips: float,
     htf_bias: Optional[str],
     asset_type: Optional[str] = None,
+    pair: str = "",
 ) -> dict:
     """Rule-based quality scoring (0–100). No API call — instant.
 
@@ -2166,6 +2364,26 @@ def ai_quality_grade(
                 penalty = int(10 * div_strength)
                 score -= penalty
                 reasons.append(f"Volume divergence warns exhaustion (−{penalty})")
+
+    # ── Stop-run penalty (−20 to 0) ──────────────────────────────────────
+    stop_run_grade = setup.get("stop_run", {})
+    if stop_run_grade.get("stop_run"):
+        sr_score = stop_run_grade.get("score", 0)
+        if sr_score < 0:
+            penalty = abs(int(sr_score * 10))  # −2.0 → −20 points
+            score -= penalty
+            reasons.append(f"Stop-run / liquidity sweep penalty (−{penalty})")
+
+    # ── Time-of-day adjustment (−5 to +5) ───────────────────────────────
+    tod_adj, tod_reason = 0.0, ""
+    if pair:  # Only apply during live trading, not in unit tests
+        tod_adj, tod_reason = _time_of_day_adjustment(sessions, pair, cfg)
+    if tod_adj != 0:
+        score += int(tod_adj)
+        if tod_adj > 0:
+            reasons.append(f"Time-of-day boost ({tod_reason}: +{int(tod_adj)})")
+        else:
+            reasons.append(f"Time-of-day penalty ({tod_reason}: {int(tod_adj)})")
 
     score = max(0, min(100, score))
 
@@ -2913,7 +3131,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             # Quality grade
             if cfg.get("AI_GRADING", True):
                 grade_sessions = get_grade_sessions_for_mode(asset_type)
-                quality = ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup, grade_sessions, spread_pips, htf_bias, asset_type)
+                quality = ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup, grade_sessions, spread_pips, htf_bias, asset_type, display)
             else:
                 quality = {"score": 50, "grade": "C", "reasons": ["grading_disabled"], "size_multiplier": 1.0}
 
