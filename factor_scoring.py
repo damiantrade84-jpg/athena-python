@@ -905,7 +905,100 @@ def _asset_addon(
     return _ADDON_NEUTRAL, "none", "unsupported"
 
 
-# ── Session multiplier (forex only) ──────────────────────────────────────────
+# ── Factor 4: Mean Reversion (config-gated, additive) ───────────────────────
+
+def _mean_reversion_factor(
+    h4_snap: dict,
+    h4_candles: list,
+    direction: str,
+    asset_type: str,
+) -> tuple[float, dict]:
+    """Mean reversion adjustment: penalise overextended moves, reward pullbacks.
+
+    Returns (adjustment, detail) where adjustment is a small delta applied
+    to the final score (±MAX_ABS).  Disabled by default — gate via config.
+
+    Uses three sub-factors:
+      1. Bollinger %B  — price position within bands
+      2. RSI extreme   — >80 overbought, <20 oversold
+      3. Z-score       — price distance from 20-period mean
+    """
+    cfg = CONFIG.get("ENGINE_A_MEAN_REVERSION", {}) or {}
+    if not cfg.get("ENABLED", False):
+        return 0.0, {"enabled": False}
+
+    max_abs = abs(float(cfg.get("MAX_ABS", 0.15)))
+    bb_weight = float(cfg.get("BB_WEIGHT", 0.40))
+    rsi_weight = float(cfg.get("RSI_WEIGHT", 0.35))
+    z_weight = float(cfg.get("Z_WEIGHT", 0.25))
+
+    closes = [float(c["close"]) for c in (h4_candles or []) if c.get("close") is not None]
+    if len(closes) < 25:
+        return 0.0, {"enabled": True, "applied": False, "reason": "insufficient_candles"}
+
+    # ── Bollinger %B ──
+    window = closes[-20:]
+    mean = sum(window) / len(window)
+    variance = sum((x - mean) ** 2 for x in window) / max(1, len(window) - 1)
+    std = math.sqrt(max(0.0, variance))
+    upper = mean + 2.0 * std
+    lower = mean - 2.0 * std
+    band_range = upper - lower if upper != lower else 1e-9
+    pct_b = (closes[-1] - lower) / band_range  # 0 = lower band, 1 = upper band
+
+    # %B contribution: overbought → negative (reversion down), oversold → positive (reversion up)
+    # But direction matters: if LONG and overbought → fade the long (negative)
+    # If SHORT and overbought → confirm the short (positive)
+    is_long = direction == "LONG"
+    bb_raw = (pct_b - 0.5) * 2.0  # centre at 0.5 → range [-1, +1]
+    bb_score = -bb_raw if is_long else bb_raw  # invert: overbought hurts LONGs, helps SHORTs
+
+    # ── RSI extreme ──
+    rsi = h4_snap.get("rsi")
+    rsi_score = 0.0
+    if rsi is not None:
+        try:
+            rsi = float(rsi)
+            # Extreme RSI → fade the move
+            if rsi > 80:
+                rsi_score = -1.0 if is_long else 1.0
+            elif rsi < 20:
+                rsi_score = 1.0 if is_long else -1.0
+            elif rsi > 70:
+                rsi_score = -0.5 if is_long else 0.5
+            elif rsi < 30:
+                rsi_score = 0.5 if is_long else -0.5
+        except (TypeError, ValueError):
+            pass
+
+    # ── Z-score ──
+    z = (closes[-1] - mean) / std if std > 0 else 0.0
+    z_score = 0.0
+    if abs(z) > 2.5:
+        z_score = -1.0 if is_long else 1.0
+    elif abs(z) > 1.5:
+        z_score = -0.5 if is_long else 0.5
+
+    # ── Weighted blend ──
+    total_w = bb_weight + rsi_weight + z_weight
+    if total_w <= 0:
+        total_w = 1.0
+    raw = (bb_score * bb_weight + rsi_score * rsi_weight + z_score * z_weight) / total_w
+    # Scale to max_abs
+    adjustment = max(-max_abs, min(max_abs, raw * max_abs))
+
+    return adjustment, {
+        "enabled": True,
+        "applied": True,
+        "adjustment": round(adjustment, 4),
+        "pct_b": round(pct_b, 4),
+        "bb_score": round(bb_score, 4),
+        "rsi": round(rsi, 2) if rsi is not None else None,
+        "rsi_score": round(rsi_score, 4),
+        "z_score": round(z, 4),
+        "z_raw": round(z_score, 4),
+        "max_abs": max_abs,
+    }
 
 def _volatility_scaler(atr: float, close: float, asset_type: str) -> float:
     """Stage 3.4: Volatility-based position-quality scaler.
@@ -1039,6 +1132,13 @@ def compute_factor_scores(
 
     # Stage 1.4: unified addon bound aligned with research lab MAX_ABS
     addon_val = max(_ADDON_AGAINST, min(_ADDON_CONFIRM, addon_val))
+
+    # ── FACTOR 4: Mean Reversion (config-gated) ─────────────────────────────
+    mean_rev_adj, mean_rev_detail = _mean_reversion_factor(
+        h4_snap, h4_candles, direction, asset_type
+    )
+    if mean_rev_detail.get("enabled"):
+        feed_status["mean_reversion"] = f"{mean_rev_adj:.2f}"
 
     # ── Volatility scaler (Stage 3.4) ─────────────────────────────────────────
     _close_for_vol = h4_snap.get("close")
@@ -1237,6 +1337,8 @@ def compute_factor_scores(
     final_score = base_score * (_eff_floor + (1.0 - _eff_floor) * conviction)
     final_score = final_score * (1.0 - _cost_penalty)
     final_score = final_score * (1.0 + _total_adj)
+    # Apply mean reversion adjustment (additive, bounded)
+    final_score = final_score + mean_rev_adj
     final_score = max(0.0, min(3.0, final_score))
 
     # ── Factor scores dict (for UI / Marcus Reid diagnostics) ─────────────────
@@ -1245,12 +1347,13 @@ def compute_factor_scores(
         "momentum": round(mom_quality, 4),
         "addon": round(addon_val, 4),
         "research_lab": round(research_val, 4),
+        "mean_reversion": round(mean_rev_adj, 4),
     }
 
     log.debug(
-        "[EA2] %s dir=%s score=%.3f trend=%.3f adx=%.1f(%s) mom=%.3f addon=%.3f(%s) sess=%.2f regime=%s",
+        "[EA2] %s dir=%s score=%.3f trend=%.3f adx=%.1f(%s) mom=%.3f addon=%.3f(%s) mean_rev=%.3f sess=%.2f regime=%s",
         display, direction, final_score, trend_score, adx_val or 0, adx_source,
-        mom_quality, addon_val, addon_type, session_mult, regime,
+        mom_quality, addon_val, addon_type, mean_rev_adj, session_mult, regime,
     )
 
     return {
@@ -1274,6 +1377,8 @@ def compute_factor_scores(
         "addon_value": round(addon_val, 4),
         "research_lab_value": round(research_val, 4),
         "research_lab_detail": research_detail,
+        "mean_reversion_value": round(mean_rev_adj, 4),
+        "mean_reversion_detail": mean_rev_detail,
         "addon_unsupported": addon_status == "unsupported",
         "session_multiplier": round(session_mult, 4),
         "conviction": round(conviction, 4),
@@ -1282,7 +1387,7 @@ def compute_factor_scores(
         "indeterminate_direction": False,
         "min_directional_failed": False,
         "active_directional_factors": ["trend"],
-        "active_nondirectional_factors": ["momentum", "addon"] + (["research_lab"] if research_detail.get("enabled") else []),
+        "active_nondirectional_factors": ["momentum", "addon"] + (["research_lab"] if research_detail.get("enabled") else []) + (["mean_reversion"] if mean_rev_detail.get("enabled") else []),
         "disabled_factors": [],
         "directional_confidence_multiplier": round(conviction, 4),
         "effective_min_directional": 0.0,
@@ -1312,7 +1417,7 @@ def _zero_result(
         "final_score": 0.0,
         "direction": direction,
         "regime": regime,
-        "factor_scores": {"trend": 0.0, "momentum": 0.0, "addon": 0.0, "research_lab": 0.0},
+        "factor_scores": {"trend": 0.0, "momentum": 0.0, "addon": 0.0, "research_lab": 0.0, "mean_reversion": 0.0},
         "weights": {
             "trend": 1.0,
             "momentum": float(CONFIG.get("FACTOR_MOMENTUM_WEIGHT", _MOMENTUM_WEIGHT_DEFAULT)),
@@ -1331,6 +1436,8 @@ def _zero_result(
         "addon_value": 0.0,
         "research_lab_value": 0.0,
         "research_lab_detail": {"enabled": bool(CONFIG.get("ENGINE_A_RESEARCH_LAB_FACTORS", {}).get("ENABLED", False))},
+        "mean_reversion_value": 0.0,
+        "mean_reversion_detail": {"enabled": bool(CONFIG.get("ENGINE_A_MEAN_REVERSION", {}).get("ENABLED", False))},
         "session_multiplier": 1.0,
         "conviction": 0.0,
         "insufficient_factors": True,

@@ -127,6 +127,16 @@ ENGINE_A_RESEARCH_LAB_FACTORS:
   PENALTY: -0.10
   MAX_ABS: 0.20
 
+# ── Engine A Mean Reversion Factor (config-gated, additive) ─────────────────
+# Disabled by default. When enabled, adds a small bounded adjustment (±MAX_ABS)
+# based on Bollinger %B, RSI extremes, and price z-score.
+ENGINE_A_MEAN_REVERSION:
+  ENABLED: false
+  MAX_ABS: 0.15
+  BB_WEIGHT: 0.40
+  RSI_WEIGHT: 0.35
+  Z_WEIGHT: 0.25
+
 
 
 # Per-class counter-trend penalty (standardized — Trend Gate already handles direction)
@@ -1014,13 +1024,13 @@ REGIME_SMOOTHING_BARS: 3
 
 REGIME_WEIGHTS:
 
-  TRENDING:        { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.0, structure: 0.5, derivatives: 1.2, microstructure: 1.5, carry: 1.0, trend_strength: 1.5 }
+  TRENDING:        { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.0, structure: 0.5, derivatives: 1.2, microstructure: 1.5, carry: 1.0, trend_strength: 1.5, mean_reversion: 0.5 }
 
-  RANGING:         { trend: 0.5, momentum: 1.5, volatility: 1.0, volume: 1.0, structure: 2.0, derivatives: 1.0, microstructure: 1.5, carry: 1.0, trend_strength: 0.5 }
+  RANGING:         { trend: 0.5, momentum: 1.5, volatility: 1.0, volume: 1.0, structure: 2.0, derivatives: 1.0, microstructure: 1.5, carry: 1.0, trend_strength: 0.5, mean_reversion: 2.0 }
 
-  HIGH_VOLATILITY: { trend: 1.0, momentum: 1.0, volatility: 2.0, volume: 1.5, structure: 1.0, derivatives: 1.5, microstructure: 1.5, carry: 1.0, trend_strength: 0.8 }
+  HIGH_VOLATILITY: { trend: 1.0, momentum: 1.0, volatility: 2.0, volume: 1.5, structure: 1.0, derivatives: 1.5, microstructure: 1.5, carry: 1.0, trend_strength: 0.8, mean_reversion: 1.5 }
 
-  LOW_VOLATILITY:  { trend: 1.2, momentum: 1.0, volatility: 0.5, volume: 1.0, structure: 1.0, derivatives: 1.0, microstructure: 1.5, carry: 1.0, trend_strength: 1.0 }
+  LOW_VOLATILITY:  { trend: 1.2, momentum: 1.0, volatility: 0.5, volume: 1.0, structure: 1.0, derivatives: 1.0, microstructure: 1.5, carry: 1.0, trend_strength: 1.0, mean_reversion: 0.8 }
 
 
 
