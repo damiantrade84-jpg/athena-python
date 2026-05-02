@@ -1306,6 +1306,91 @@ def _check_trade_bucket_cvd(display: str, reference_ts=None, require_fresh: bool
         return {"direction": None, "cvd_value": 0, "cvd_slope": 0, "source": "error"}
 
 
+def _detect_volume_divergence(candles: list, lookback: int = 5) -> dict:
+    """Detect volume divergence: price new high/low but volume doesn't confirm.
+
+    Bearish divergence: price makes new high, volume flat or lower
+        -> smart money distributing into retail buying
+    Bullish divergence: price makes new low, volume flat or higher
+        -> smart money accumulating into retail selling
+
+    Uses tick volume only — works with MT5 tick volume proxy.
+    """
+    if len(candles) < lookback + 1:
+        return {"divergence": False, "type": None, "strength": 0.0}
+
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    if not cfg.get("VOLUME_DIVERGENCE_ENABLED", True):
+        return {"divergence": False, "type": None, "strength": 0.0, "disabled": True}
+
+    window = candles[-lookback:]
+    highs = [float(c["high"]) for c in window]
+    lows = [float(c["low"]) for c in window]
+    vols = [float(c.get("vol", 0) or 0) for c in window]
+
+    if len(highs) < 3 or len(vols) < 3:
+        return {"divergence": False, "type": None, "strength": 0.0}
+
+    # Need at least some volume variation to detect divergence
+    avg_vol = sum(vols) / len(vols)
+    if avg_vol <= 0:
+        return {"divergence": False, "type": None, "strength": 0.0}
+
+    # Normalize: coefficient of variation
+    vol_std = (sum((v - avg_vol) ** 2 for v in vols) / len(vols)) ** 0.5
+    cv = vol_std / avg_vol if avg_vol > 0 else 0
+    if cv < 0.05:  # Flat volume — no divergence possible
+        return {"divergence": False, "type": None, "strength": 0.0, "reason": "flat_volume"}
+
+    # Price extremes
+    latest_high = highs[-1]
+    latest_low = lows[-1]
+    prior_high = max(highs[:-1]) if len(highs) > 1 else latest_high
+    prior_low = min(lows[:-1]) if len(lows) > 1 else latest_low
+
+    # Volume extremes
+    latest_vol = vols[-1]
+    prior_max_vol = max(vols[:-1]) if len(vols) > 1 else latest_vol
+    prior_avg_vol = sum(vols[:-1]) / max(1, len(vols) - 1)
+
+    # Bearish divergence: new price high + volume not confirming
+    price_new_high = latest_high >= prior_high * 0.999  # allow tiny tolerance
+    volume_declining = latest_vol < prior_avg_vol * 0.85  # 15% below recent avg
+
+    # Bullish divergence: new price low + volume holding or rising
+    price_new_low = latest_low <= prior_low * 1.001
+    volume_holding = latest_vol >= prior_avg_vol * 0.70  # not collapsed
+
+    # Scoring thresholds
+    strong_threshold = float(cfg.get("VOLUME_DIVERGENCE_STRONG_PCT", 0.25))
+    moderate_threshold = float(cfg.get("VOLUME_DIVERGENCE_MODERATE_PCT", 0.10))
+
+    result = {"divergence": False, "type": None, "strength": 0.0}
+
+    if price_new_high and volume_declining:
+        vol_drop = (prior_avg_vol - latest_vol) / prior_avg_vol if prior_avg_vol > 0 else 0
+        if vol_drop >= strong_threshold:
+            strength = min(1.0, vol_drop * 2.0)
+            result = {"divergence": True, "type": "bearish", "strength": round(strength, 2)}
+        elif vol_drop >= moderate_threshold:
+            result = {"divergence": True, "type": "bearish_weak", "strength": 0.5}
+
+    elif price_new_low and volume_holding:
+        vol_rise = (latest_vol - prior_avg_vol) / prior_avg_vol if prior_avg_vol > 0 else 0
+        if vol_rise >= strong_threshold:
+            strength = min(1.0, vol_rise * 2.0)
+            result = {"divergence": True, "type": "bullish", "strength": round(strength, 2)}
+        elif vol_rise >= moderate_threshold:
+            result = {"divergence": True, "type": "bullish_weak", "strength": 0.5}
+
+    result["latest_high"] = round(latest_high, 6)
+    result["latest_low"] = round(latest_low, 6)
+    result["latest_vol"] = round(latest_vol, 2)
+    result["prior_avg_vol"] = round(prior_avg_vol, 2)
+    result["lookback"] = lookback
+    return result
+
+
 def _check_aaa_sequence(candles: list, absorption: dict, cvd: dict,
                         asset_type: Optional[str] = None) -> dict:
     """Detect Absorption -> Accumulation -> Aggression sequence.
@@ -1460,6 +1545,7 @@ def _classify_setup(
     vwap: dict,
     htf_bias: Optional[str],
     asset_type: Optional[str] = None,
+    candles: Optional[list] = None,
 ) -> dict:
     """Decide setup type and direction.
 
@@ -1508,6 +1594,15 @@ def _classify_setup(
             else:
                 return {"valid": False, "reason": f"cvd_against_reversion:{cvd_dir}_vs_{direction}"}
 
+        # Volume divergence check — strengthens mean reversion
+        vol_div = _detect_volume_divergence(candles or [])
+        if vol_div.get("divergence"):
+            div_type = vol_div.get("type", "")
+            if direction == "SHORT" and "bearish" in div_type:
+                reasons.append(f"Volume divergence confirms distribution at high ({vol_div['strength']})")
+            elif direction == "LONG" and "bullish" in div_type:
+                reasons.append(f"Volume divergence confirms accumulation at low ({vol_div['strength']})")
+
         reasons.append(f"Mean reversion: price extended {side_label} — revert to POC")
         if cvd_dir == direction:
             reasons.append(f"CVD confirms {direction} from extended level")
@@ -1520,6 +1615,7 @@ def _classify_setup(
             "direction": direction,
             "target": "POC",
             "reasons": reasons,
+            "volume_divergence": vol_div,
         }
 
     # ── Mean Reversion ───────────────────────────────────────────────────
@@ -1562,6 +1658,15 @@ def _classify_setup(
         if vwap.get("lean") == direction:
             reasons.append(f"VWAP confirms {direction}")
 
+        # Volume divergence check — strengthens mean reversion at VA extremes
+        vol_div_va = _detect_volume_divergence(candles or [])
+        if vol_div_va.get("divergence"):
+            div_type_va = vol_div_va.get("type", "")
+            if direction == "SHORT" and "bearish" in div_type_va:
+                reasons.append(f"Volume divergence confirms distribution at VAH ({vol_div_va['strength']})")
+            elif direction == "LONG" and "bullish" in div_type_va:
+                reasons.append(f"Volume divergence confirms accumulation at VAL ({vol_div_va['strength']})")
+
         reasons.append(f"Mean reversion from {location.upper()} toward POC")
         # target = POC, not the touched VA extreme. nearest_level for at_vah/at_val
         # returns the VA extreme itself, but mean reversion targets POC.
@@ -1573,6 +1678,7 @@ def _classify_setup(
             "direction": direction,
             "target": "POC",
             "reasons": reasons,
+            "volume_divergence": vol_div_va,
         }
 
     # ── Trend Continuation ───────────────────────────────────────────────
@@ -1595,6 +1701,17 @@ def _classify_setup(
         if has_absorption_tc:
             reasons.append("Absorption detected at pullback level")
 
+        # Volume divergence check — weakens trend continuation (exhaustion signal)
+        vol_div_tc = _detect_volume_divergence(candles or [])
+        if vol_div_tc.get("divergence"):
+            div_type_tc = vol_div_tc.get("type", "")
+            # Bearish divergence + LONG trend = exhaustion
+            # Bullish divergence + SHORT trend = exhaustion
+            if direction == "LONG" and "bearish" in div_type_tc:
+                reasons.append(f"Volume divergence warns exhaustion at high ({vol_div_tc['strength']})")
+            elif direction == "SHORT" and "bullish" in div_type_tc:
+                reasons.append(f"Volume divergence warns exhaustion at low ({vol_div_tc['strength']})")
+
         # CVD: hard veto only when no other confirmation exists.
         # If absorption or VWAP already confirms, CVD conflict lowers grade instead.
         cvd_dir = cvd.get("direction")
@@ -1614,6 +1731,7 @@ def _classify_setup(
             "direction": direction,
             "target": "POC_OR_OPPOSITE_VA",
             "reasons": reasons,
+            "volume_divergence": vol_div_tc,
         }
 
     # ── Trend Extension — price broke through the value area in a trending market ─
@@ -1646,6 +1764,15 @@ def _classify_setup(
             override_src = "absorption" if has_absorption else "VWAP"
             reasons.append(f"CVD conflict ({cvd_dir}) — {override_src} override (grade reduced)")
 
+        # Volume divergence check on breakout — warns of false breakout
+        vol_div_ext = _detect_volume_divergence(candles or [])
+        if vol_div_ext.get("divergence"):
+            div_type_ext = vol_div_ext.get("type", "")
+            if direction == "LONG" and "bearish" in div_type_ext:
+                reasons.append(f"Volume divergence warns breakout exhaustion ({vol_div_ext['strength']})")
+            elif direction == "SHORT" and "bullish" in div_type_ext:
+                reasons.append(f"Volume divergence warns breakout exhaustion ({vol_div_ext['strength']})")
+
         reasons.append(f"Trend extension: price broke {side_label} in imbalance market")
         if has_absorption:
             reasons.append("Absorption confirms breakout momentum (not exhaustion)")
@@ -1660,6 +1787,7 @@ def _classify_setup(
             "direction": direction,
             "target": "VA_WIDTH_PROJECTION",
             "reasons": reasons,
+            "volume_divergence": vol_div_ext,
         }
 
     # ── No valid setup ───────────────────────────────────────────────────
@@ -2011,6 +2139,33 @@ def ai_quality_grade(
         elif spread_pips > max_sp * 0.8:
             score -= 5
             reasons.append(f"Wide spread ({spread_pips:.1f} {spread_unit})")
+
+    # ── Volume divergence bonus/penalty (−10 to +10) ───────────────────────
+    vol_div_grade = setup.get("volume_divergence", {})
+    if vol_div_grade.get("divergence"):
+        div_type_grade = vol_div_grade.get("type", "")
+        div_strength = vol_div_grade.get("strength", 0.0)
+        setup_type_grade = setup.get("setup_type", "")
+        # Mean reversion: divergence CONFIRMS (add points)
+        if setup_type_grade in ("mean_reversion",):
+            if setup_dir == "LONG" and "bullish" in div_type_grade:
+                bonus = int(10 * div_strength)
+                score += bonus
+                reasons.append(f"Volume divergence confirms accumulation (+{bonus})")
+            elif setup_dir == "SHORT" and "bearish" in div_type_grade:
+                bonus = int(10 * div_strength)
+                score += bonus
+                reasons.append(f"Volume divergence confirms distribution (+{bonus})")
+        # Trend setups: divergence WARNS (subtract points)
+        elif setup_type_grade in ("trend_continuation", "trend_extension"):
+            if setup_dir == "LONG" and "bearish" in div_type_grade:
+                penalty = int(10 * div_strength)
+                score -= penalty
+                reasons.append(f"Volume divergence warns exhaustion (−{penalty})")
+            elif setup_dir == "SHORT" and "bullish" in div_type_grade:
+                penalty = int(10 * div_strength)
+                score -= penalty
+                reasons.append(f"Volume divergence warns exhaustion (−{penalty})")
 
     score = max(0, min(100, score))
 
@@ -2642,7 +2797,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             _funnel["vwap_bias"] = vwap.get("lean")
 
             # Setup classification
-            setup = _classify_setup(market_state, price_loc, absorption, cvd, aaa, vwap, htf_bias, asset_type=asset_type)
+            setup = _classify_setup(market_state, price_loc, absorption, cvd, aaa, vwap, htf_bias, asset_type=asset_type, candles=candles_exec)
             if not setup.get("valid"):
                 _setup_reason = f"no_setup:{setup.get('reason', '?')}"
                 _record_stability_sample(display, asset_type, False, reason=_setup_reason)

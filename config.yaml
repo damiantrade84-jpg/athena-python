@@ -1757,6 +1757,11 @@ ENGINE_B_FOLLOW_THROUGH:
   MAX_BONUS: 1.5
   MIN_PENALTY: -0.5
 
+# ── Engine D Volume Divergence Detection ────────────────────────────────────
+# Detects hidden institutional positioning via tick volume divergence.
+# Bearish: price new high + volume declining = distribution
+# Bullish: price new low + volume holding/rising = accumulation
+
 
 
 # Engine B backtest SL/TP mode:
@@ -1901,6 +1906,14 @@ SCALP_ENGINE:
   TRADE_BUCKET_VP_ENABLED: true   # Crypto: prefer Binance aggTrade price buckets for VP when fresh
 
   TRADE_BUCKET_CVD_ENABLED: true  # Crypto: prefer Binance aggTrade price buckets for CVD when fresh
+
+  # ── Volume Divergence Detection ───────────────────────────
+  # Detects hidden institutional positioning via tick volume divergence.
+  # Bearish: price new high + volume declining = distribution
+  # Bullish: price new low + volume holding/rising = accumulation
+  VOLUME_DIVERGENCE_ENABLED: true
+  VOLUME_DIVERGENCE_STRONG_PCT: 0.25    # Volume change % to count as "strong" divergence
+  VOLUME_DIVERGENCE_MODERATE_PCT: 0.10  # Volume change % to count as "moderate" divergence
 
   TRADE_BUCKET_MAX_AGE_SEC: 300   # Max age of live aggTrade buckets before candle fallback
 
