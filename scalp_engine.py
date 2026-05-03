@@ -1028,6 +1028,13 @@ def _trade_bucket_session_id(reference_ts=None) -> str | None:
     return dt.strftime("%Y-%m-%d") if dt else None
 
 
+def _trade_bucket_max_last_ts(reference_ts=None, require_fresh: bool = True) -> float | None:
+    if reference_ts is None or require_fresh:
+        return None
+    dt = _coerce_utc_datetime(reference_ts)
+    return dt.timestamp() if dt else None
+
+
 def _build_trade_bucket_volume_profile(display: str, reference_ts=None, require_fresh: bool = True) -> dict:
     """Build crypto VP from live Binance aggregate-trade price buckets."""
     cfg = CONFIG.get("SCALP_ENGINE", {})
@@ -1046,6 +1053,7 @@ def _build_trade_bucket_volume_profile(display: str, reference_ts=None, require_
             exchange="binance",
             session_id=_trade_bucket_session_id(reference_ts),
             min_last_ts=(_time.time() - max_age_sec) if require_fresh else None,
+            max_last_ts=_trade_bucket_max_last_ts(reference_ts, require_fresh=require_fresh),
         )
         if len(rows) < min_buckets:
             return {"valid": False, "reason": "insufficient_trade_buckets", "bucket_count": len(rows)}
@@ -1286,6 +1294,7 @@ def _check_trade_bucket_cvd(display: str, reference_ts=None, require_fresh: bool
             exchange="binance",
             session_id=_trade_bucket_session_id(reference_ts),
             min_last_ts=(_time.time() - max_age_sec) if require_fresh else None,
+            max_last_ts=_trade_bucket_max_last_ts(reference_ts, require_fresh=require_fresh),
         )
         if len(rows) < min_buckets:
             return {"direction": None, "cvd_value": 0, "cvd_slope": 0, "source": "unavailable"}

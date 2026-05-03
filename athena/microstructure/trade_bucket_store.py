@@ -171,13 +171,18 @@ def query_session_buckets(
     exchange: str = "binance",
     session_id: str | None = None,
     min_last_ts: float | None = None,
+    max_last_ts: float | None = None,
 ) -> list[dict]:
     sess = session_id or _session_id()
     params: list = [str(exchange).lower(), str(symbol).replace("/", "").upper(), sess]
-    extra = ""
+    clauses = []
     if min_last_ts is not None:
-        extra = " AND last_ts >= ?"
+        clauses.append(" AND last_ts >= ?")
         params.append(float(min_last_ts))
+    if max_last_ts is not None:
+        clauses.append(" AND last_ts <= ?")
+        params.append(float(max_last_ts))
+    extra = "".join(clauses)
     try:
         with sqlite3.connect(DB_PATH, timeout=15.0) as con:
             con.row_factory = sqlite3.Row

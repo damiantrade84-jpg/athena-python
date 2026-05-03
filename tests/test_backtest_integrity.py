@@ -1,6 +1,7 @@
 """Regression checks for backtest realism fixes."""
 
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -814,8 +815,26 @@ def test_backtest_pair_naked_telemetry_captures_non_zero_values(monkeypatch):
     assert trade["checklist_trigger"] is True
     assert trade["trigger_pattern"] == "ENGULFING"
     assert "actual_rr" in trade
-    assert trade["actual_rr"] > 2.0
+    assert trade["actual_rr"] == 2.0
     assert trade["rr_target"] == trade["actual_rr"]
     assert "selected_tp_source" in trade
     assert "selected_sl_source" in trade
-    assert trade["selected_tp_source"] == "structural"
+    assert trade["selected_tp_source"] == "capped_to_fallback_rr"
+
+
+def test_engine_b_and_c_timeout_exits_are_fee_charged():
+    src = Path(backtest_runner.__file__).read_text(encoding="utf-8")
+
+    assert 'outcome != "TIMEOUT"' not in src
+    assert "_bt_transaction_cost_r(entry, sl, pair.get" in src
+    assert "_bt_transaction_cost_r(entry, sl, _ptype)" in src
+
+
+def test_engine_c_bt_h1_history_depth_covers_h4_span():
+    src = Path(backtest_runner.__file__).read_text(encoding="utf-8")
+
+    assert re.search(
+        r'"H1",\s*20000,\s*lambda lim: _rt\(\)\.fetch_binance_paginated\(sym, "1h", lim\)',
+        src,
+    )
+    assert "h1_limit=20000" in src

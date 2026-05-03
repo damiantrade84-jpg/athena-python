@@ -22,8 +22,12 @@ def backtest_pair_naked(
     return _runner_backtest_pair_naked(pair, style=style, **kwargs)
 
 
-def run_full_backtest(style: str = "auto", asset_class: str | None = None) -> dict[str, Any]:
-    return _runner_run_full_backtest(style=style, asset_class=asset_class)
+def run_full_backtest(
+    style: str = "auto",
+    asset_class: str | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    return _runner_run_full_backtest(style=style, asset_class=asset_class, **kwargs)
 
 
 def backtest_engine_c_pair(pair: dict[str, Any], style: str = "intraday") -> dict[str, Any]:

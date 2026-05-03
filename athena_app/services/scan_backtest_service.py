@@ -73,7 +73,13 @@ def handle_backtest_request(
         result["activePairs"] = len(active_pairs)
         return {"data": result, "status": 200}
 
-    full = run_full_backtest(style=bt_style, asset_class=payload.get("asset_class"))
+    full = run_full_backtest(
+        style=bt_style,
+        asset_class=payload.get("asset_class"),
+        validation_mode=_vm,
+        purge_gap=_pg,
+        folds=max(1, _fd),
+    )
     toggles = []
     if allow_auto_toggle:
         for r in full.get("results", []):

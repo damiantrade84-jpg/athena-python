@@ -1,5 +1,6 @@
 """Taker imbalance ratio used for WebSocket orderflow_delta metrics."""
 
+from datetime import datetime, timezone
 import os
 import sys
 
@@ -74,6 +75,86 @@ def test_bucketed_volume_profile_uses_price_level_volume():
     assert vp["val"] == 100.0
     assert vp["vah"] == 101.0
     assert vp["cvd_value"] == 23.0
+
+
+def test_trade_bucket_query_supports_point_in_time_upper_bound(tmp_path, monkeypatch):
+    from athena.microstructure import trade_bucket_store as store
+
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "trade_buckets.db")
+    store._ensure_db()
+
+    early_ts = datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc).timestamp()
+    late_ts = datetime(2026, 3, 26, 15, 0, tzinfo=timezone.utc).timestamp()
+    store.store_trade(
+        exchange="binance",
+        symbol="BTCUSDT",
+        price=100.0,
+        quantity=1.0,
+        is_buyer_maker=False,
+        ts=early_ts,
+    )
+    store.store_trade(
+        exchange="binance",
+        symbol="BTCUSDT",
+        price=101.0,
+        quantity=1.0,
+        is_buyer_maker=True,
+        ts=late_ts,
+    )
+
+    rows = store.query_session_buckets(
+        "BTCUSDT",
+        exchange="binance",
+        session_id="2026-03-26",
+        max_last_ts=early_ts + 60,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["price_bucket"] == 100.0
+    assert rows[0]["last_ts"] <= early_ts + 60
+
+
+def test_scalp_trade_bucket_helpers_bound_historical_reference_ts(monkeypatch):
+    import scalp_engine
+    import volume_profile
+    from athena.microstructure import trade_bucket_store as store
+
+    cfg = dict(scalp_engine.CONFIG.get("SCALP_ENGINE", {}) or {})
+    cfg["TRADE_BUCKET_MIN_LEVELS"] = 1
+    cfg["TRADE_BUCKET_MIN_VOLUME"] = 0.0
+    monkeypatch.setitem(scalp_engine.CONFIG, "SCALP_ENGINE", cfg)
+
+    calls = []
+
+    def fake_query(symbol, **kwargs):
+        calls.append({"symbol": symbol, **kwargs})
+        return [{"price_bucket": 100.0, "total_volume": 10.0, "delta": 2.0, "last_ts": 0.0}]
+
+    monkeypatch.setattr(store, "query_session_buckets", fake_query)
+    monkeypatch.setattr(
+        volume_profile,
+        "compute_bucketed_volume_profile",
+        lambda rows, value_area_pct=0.70, lvn_threshold=0.30: {
+            "profile_valid": True,
+            "poc": 100.0,
+            "vah": 101.0,
+            "val": 99.0,
+            "session_high": 102.0,
+            "session_low": 98.0,
+            "total_volume": 10.0,
+        },
+    )
+
+    out = scalp_engine._build_trade_bucket_volume_profile(
+        "BTC/USDT",
+        reference_ts="2026-03-26T14:15:00+00:00",
+        require_fresh=False,
+    )
+
+    assert out["valid"] is True
+    assert calls[0]["session_id"] == "2026-03-26"
+    assert calls[0]["min_last_ts"] is None
+    assert calls[0]["max_last_ts"] == datetime(2026, 3, 26, 14, 15, tzinfo=timezone.utc).timestamp()
 
 
 def test_bybit_ws_emit_uses_ratio_from_accumulators():

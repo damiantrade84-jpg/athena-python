@@ -111,6 +111,79 @@ def test_backtest_pair_scalp_uses_stable_m15_execution_proxy(monkeypatch):
     assert trade["exit_bar_index"] - trade["entry_bar_index"] == 3
 
 
+def test_backtest_pair_scalp_uses_asset_aware_cost_assumptions(monkeypatch):
+    candles = _timed_candles(140, 15)
+    calls = []
+    monkeypatch.setitem(
+        backtest_runner.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **backtest_runner.CONFIG.get("SCALP_ENGINE", {}),
+            "BT_ENABLED": True,
+            "BT_SESSION_MODE": "all",
+            "BT_SCRATCH_ENABLED": True,
+            "BT_SCRATCH_BARS": 3,
+            "BT_SCRATCH_MIN_R": 0.10,
+            "BT_WALK_BARS": 6,
+            "BT_SLIPPAGE_TICKS": 0,
+            "MIN_RR": 1.2,
+            "BIAS_TIMEFRAME": "M15",
+            "MIN_GRADE_AUTO_EXECUTE": "C",
+            "VP_PROXIMITY_USE_ATR": False,
+        },
+    )
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "XAUUSD")
+    monkeypatch.setattr(scalp_engine, "mt5_fetch_scalp_candles", lambda *args, **kwargs: candles)
+    monkeypatch.setattr(backtest_runner, "calc_atr", lambda highs, lows, closes, period: [1.0] * len(closes))
+    monkeypatch.setattr(
+        indicators,
+        "detect_absorption",
+        lambda candles, vol_mult, max_move_atr, sma_period: [{"absorbed": False, "direction": "neutral"} for _ in candles],
+    )
+    monkeypatch.setattr(
+        indicators,
+        "calc_cvd",
+        lambda candles, smooth_period=5: {"smoothed_delta": list(range(len(candles))), "cvd": list(range(len(candles)))},
+    )
+    monkeypatch.setattr(
+        volume_profile,
+        "compute_fixed_range_volume_profile",
+        lambda candles, bins=64, value_area_pct=0.70: {
+            "profile_valid": True,
+            "poc": 101.0,
+            "vah": 102.0,
+            "val": 100.0,
+            "session_high": 102.0,
+            "session_low": 99.0,
+        },
+    )
+
+    def cost_assumptions(cfg, asset_type):
+        calls.append(asset_type)
+        return 0.002, 0.001
+
+    monkeypatch.setattr(scalp_engine, "_scalp_cost_assumptions", cost_assumptions)
+    monkeypatch.setattr(
+        backtest_runner,
+        "_format_backtest_results",
+        lambda trades, pair, engine_type, same_bar_both_hit, validation_mode: {
+            "totalTrades": len(trades),
+            "trades": trades,
+            "wfSplit": {},
+        },
+    )
+    monkeypatch.setattr(backtest_runner, "_rt", lambda: types.SimpleNamespace(AUDIT_DB=":memory:"))
+
+    result = backtest_runner.backtest_pair_scalp({"display": "XAU/USD", "type": "commodity"})
+
+    assert calls
+    assert set(calls) == {"commodity"}
+    trade = result["trades"][0]
+    risk_pct = abs(trade["entry"] - trade["sl"]) / trade["entry"]
+    assert trade["fee_R"] == round(0.002 / risk_pct, 4)
+    assert trade["slippage_R"] == round(0.001 / risk_pct, 4)
+
+
 def test_backtest_pair_scalp_uses_h1_bias_context_when_configured(monkeypatch):
     candles_m15 = _timed_candles(840, 15)
     captured = []

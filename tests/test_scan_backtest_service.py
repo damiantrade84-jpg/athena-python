@@ -53,3 +53,39 @@ def test_backtest_unknown_pair_returns_404():
     )
     assert out["status"] == 404
     assert "Unknown pair" in out["error"]
+
+
+def test_backtest_full_run_forwards_validation_controls():
+    seen = []
+
+    def full_bt(**kwargs):
+        seen.append(kwargs)
+        return {"results": []}
+
+    out = handle_backtest_request(
+        {
+            "style": "swing",
+            "asset_class": "crypto",
+            "validation_mode": "walk_forward",
+            "purge_gap": "321",
+            "folds": "5",
+        },
+        normalize_style=lambda s: s or "auto",
+        all_pairs=[],
+        backtest_pair=lambda *args, **kwargs: {},
+        run_full_backtest=full_bt,
+        auto_toggle_pair=lambda p, r: None,
+        active_pairs=[],
+        allow_auto_toggle=False,
+    )
+
+    assert out["status"] == 200
+    assert seen == [
+        {
+            "style": "swing",
+            "asset_class": "crypto",
+            "validation_mode": "walk_forward",
+            "purge_gap": 321,
+            "folds": 5,
+        }
+    ]

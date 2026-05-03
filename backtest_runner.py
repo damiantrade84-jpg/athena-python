@@ -276,6 +276,18 @@ def _get_slippage_for_bar(bar: dict, ptype: str) -> float:
     return base
 
 
+def _bt_transaction_cost_r(entry: float, sl: float, ptype: str) -> float:
+    try:
+        entry_f = float(entry)
+        sl_f = float(sl)
+    except (TypeError, ValueError):
+        return 0.0
+    sl_dist = abs(entry_f - sl_f)
+    if sl_dist <= 0:
+        return 0.0
+    return float(CONFIG.get("FEE_PCT", {}).get(ptype, 0.0004)) * entry_f / sl_dist
+
+
 def _resolve_barrier_exit(
     bar: dict,
     *,
@@ -3839,6 +3851,15 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             _sl_dist = abs(entry - sl)
             _tp_dist = abs(tp - entry)
             target_rr = (_tp_dist / _sl_dist) if _sl_dist > 0 else 0.0
+            _fallback_rr = float(style_profile.get("fallback_rr", 0.0) or 0.0)
+            if _fallback_rr > 0 and target_rr > _fallback_rr and _sl_dist > 0:
+                tp = (
+                    entry + (_sl_dist * _fallback_rr)
+                    if direction == "LONG"
+                    else entry - (_sl_dist * _fallback_rr)
+                )
+                target_rr = _fallback_rr
+                selected_tp_source = "capped_to_fallback_rr"
         else:
             _lvl = calc_levels(
                 entry,
@@ -3866,7 +3887,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             i += 1
             continue
 
-        # We removed the post-fill TP cap. We want the true actual structural target for attribution.
+        # Post-fill structural targets stay bounded by the style fallback RR contract.
         actual_rr = target_rr
 
         # MAX_SL_PCT rejection — Ensuring backtest results reflect the same risk thresholds as live trading.
@@ -4037,11 +4058,9 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 open_r = ((last_close - entry) / risk) if direction == "LONG" else ((entry - last_close) / risk)
                 r_multiple = round(max(-1.0, min(target_rr, open_r)), 2)
 
-        # Deduct round-trip transaction costs from r_multiple
-        _fee_pct = CONFIG.get("FEE_PCT", {}).get(pair.get("type", "stock"), 0.0004)
-        _sl_dist_fee = abs(entry - sl)
-        if _sl_dist_fee > 0 and outcome != "TIMEOUT":
-            _fee_r = _fee_pct * entry / _sl_dist_fee
+        # Deduct round-trip transaction costs from every closed result, including forced TIMEOUT exits.
+        _fee_r = _bt_transaction_cost_r(entry, sl, pair.get("type", "stock"))
+        if _fee_r > 0:
             r_multiple = round(r_multiple - _fee_r, 4)
 
         bar_date = entry_bar.get("time", "")[:10] if entry_bar.get("time") else ""
@@ -4295,7 +4314,7 @@ def backtest_pair_consensus(
         candles_h1 = _bt_cached_fetch(
             pair,
             "H1",
-            2000,
+            20000,
             lambda lim: _rt().fetch_binance_paginated(sym, "1h", lim),
             provider="binance_futures",
             min_bars=500,
@@ -4314,7 +4333,7 @@ def backtest_pair_consensus(
             _yf_d1 = _rt().fetch_yfinance(_yf_sym, "D1", 600)
             if _yf_d1 and len(_yf_d1) > len(candles_d1 or []):
                 candles_d1 = _yf_d1
-        candles_h4, candles_h1 = _bt_cached_eodhd_intraday(pair, days=730, h4_limit=5000, h1_limit=5000)
+        candles_h4, candles_h1 = _bt_cached_eodhd_intraday(pair, days=730, h4_limit=5000, h1_limit=20000)
         if not candles_h4 or not candles_h1:
             log.info(f"[ENGINE C BT] {pair['display']}: EODHD failed, fetching from MT5")
             candles_h4 = candles_h4 or _bt_cached_fetch(
@@ -4349,7 +4368,7 @@ def backtest_pair_consensus(
             provider=str(pair.get("source") or "fallback"),
             min_bars=230,
         )
-        candles_h4, candles_h1 = _bt_cached_eodhd_intraday(pair, days=730, h4_limit=5000, h1_limit=5000)
+        candles_h4, candles_h1 = _bt_cached_eodhd_intraday(pair, days=730, h4_limit=5000, h1_limit=20000)
         if not candles_h4 or not candles_h1:
             candles_h4 = candles_h4 or _bt_cached_fetch(
                 pair,
@@ -4775,10 +4794,9 @@ def backtest_pair_consensus(
                 
                 forced_exit_result_r = r_multiple
 
-        _fee_pct = CONFIG.get("FEE_PCT", {}).get(_ptype, 0.0004)
-        _sl_dist_fee = abs(entry - sl)
-        if _sl_dist_fee > 0 and outcome != "TIMEOUT":
-            r_multiple = round(r_multiple - (_fee_pct * entry / _sl_dist_fee), 4)
+        _fee_r = _bt_transaction_cost_r(entry, sl, _ptype)
+        if _fee_r > 0:
+            r_multiple = round(r_multiple - _fee_r, 4)
 
         bar_date = entry_bar.get("time", "")[:10] if entry_bar.get("time") else ""
         bars_held = exit_bar_offset + 1
@@ -4938,6 +4956,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         _guess_asset_type,
         _locate_price_vs_vp,
         _overlay_eodhd_volume_for_scalp,
+        _scalp_cost_assumptions,
         get_grade_sessions_for_mode,
         infer_bias_from_ema_stack,
         scalp_session_window,
@@ -5389,9 +5408,11 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         # Fee & Slippage calculation
         # fee_R = estimated_fee_pct / risk_pct
         risk_pct = sl_distance / entry if entry > 0 else 0
-        estimated_fee_pct = float(cfg.get("ESTIMATED_FEE_PCT", 0.0006))
+        estimated_fee_pct, estimated_slippage_pct = _scalp_cost_assumptions(cfg, asset_type)
         fee_R = estimated_fee_pct / risk_pct if risk_pct > 0 else 0
-        slippage_R = slippage_ticks * point_est / sl_distance if sl_distance > 0 else 0
+        tick_slippage_R = slippage_ticks * point_est / sl_distance if sl_distance > 0 else 0
+        asset_slippage_R = estimated_slippage_pct / risk_pct if risk_pct > 0 else 0
+        slippage_R = max(tick_slippage_R, asset_slippage_R)
         
         # Only apply fees if we entered the trade
         net_R = round(gross_R - fee_R - slippage_R, 4)
@@ -5611,7 +5632,13 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
 
 
 
-def run_full_backtest(style="auto", asset_class: str | None = None):
+def run_full_backtest(
+    style="auto",
+    asset_class: str | None = None,
+    validation_mode: str = "standard",
+    purge_gap: int = 200,
+    folds: int = 3,
+):
     """Run backtest_pair in parallel. Optional asset_class filter (crypto/forex/stock/commodity/index)."""
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -5643,7 +5670,13 @@ def run_full_backtest(style="auto", asset_class: str | None = None):
     def _bt(pair):
 
         try:
-            return pair, backtest_pair(pair, style=style)
+            return pair, backtest_pair(
+                pair,
+                style=style,
+                validation_mode=validation_mode,
+                purge_gap=purge_gap,
+                folds=folds,
+            )
 
         except Exception as e:
             return pair, {"error": str(e)}
