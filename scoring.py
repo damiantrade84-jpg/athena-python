@@ -160,9 +160,11 @@ def get_pair_score_group(pair: dict) -> str:
     return f"{ptype}_other" if ptype else "unknown"
 
 
-# Stage 2.4: Simplified 2-tier threshold system.
+# Stage 2.4: Simplified 2-tier Engine A threshold system.
 # Volatile assets (crypto, nat_gas) need higher thresholds.
 # Stable assets (forex, commodity, stock, index) use lower thresholds.
+# CONFIG["MIN_CONFLUENCE_CLASS"] is legacy/admin metadata; this resolver does
+# not read it. Pair profile min_confluence remains the only runtime override.
 _TIER_VOLATILE = 2.0
 _TIER_STABLE = 1.5
 
@@ -195,6 +197,7 @@ def get_score_threshold(pair: dict, is_backtest: bool = False) -> float:
 
     Replaces the old 6-class + BT_MIN_GROUP + BACKTEST_USE_BT_MIN_THRESHOLDS
     hierarchy with 2 tiers + pair overrides. Backtest and live use same thresholds.
+    MIN_CONFLUENCE_CLASS is intentionally not read here.
     """
     profile = get_pair_profile(pair)
 

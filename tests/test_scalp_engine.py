@@ -32,6 +32,7 @@ from scalp_engine import (
     mt5_market_open_state,
     mt5_fetch_scalp_candles,
     summarize_engine_d_scan,
+    _scalp_cost_assumptions,
     _normalize_session_mode,
     _as_fraction,
     _merge_vp_aliases,
@@ -57,10 +58,12 @@ from volume_profile import compute_fixed_range_volume_profile
 def _candles(n, base=100.0, vol=1000.0, spread=1.0, trend=0.0):
     out = []
     p = base
+    start = datetime.now(timezone.utc) - timedelta(minutes=max(n - 1, 0))
     for i in range(n):
         p += trend
+        t = start + timedelta(minutes=i)
         out.append({
-            "time": f"T{i}", "open": round(p, 6),
+            "time": t.isoformat(), "open": round(p, 6),
             "high": round(p + spread * 0.6, 6), "low": round(p - spread * 0.4, 6),
             "close": round(p + spread * 0.1, 6), "vol": vol,
         })
@@ -608,6 +611,38 @@ def test_scalp_candles_fresh_rejects_stale_structure(monkeypatch):
     assert reason.startswith("MARKET_DATA_STALE_STRUCTURE_")
 
 
+def test_scalp_candles_fresh_rejects_missing_timestamp_by_default(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "ALLOW_TIMELESS_SCALP_CANDLES": False,
+        },
+    )
+
+    fresh, reason = scalp_engine._scalp_candles_fresh([{"close": 100.0}], "M15", "structure")
+
+    assert fresh is False
+    assert reason == "MARKET_DATA_TIME_UNAVAILABLE_STRUCTURE"
+
+
+def test_scalp_candles_fresh_can_allow_missing_timestamp_when_configured(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "ALLOW_TIMELESS_SCALP_CANDLES": True,
+        },
+    )
+
+    fresh, reason = scalp_engine._scalp_candles_fresh([{"close": 100.0}], "M15", "structure")
+
+    assert fresh is True
+    assert reason == "candle_time_unavailable"
+
+
 def test_get_current_sessions_london_ny_overlap(monkeypatch):
     monkeypatch.setattr(scalp_engine, "_current_utc_datetime",
                         lambda: datetime(2026, 3, 26, 13, 0, tzinfo=timezone.utc))
@@ -1094,6 +1129,56 @@ def test_run_scalp_scan_surfaces_fee_guard_candidate(monkeypatch):
     assert sig["fee_guard"]["cost_as_R"] > 0.20
 
 
+def test_scalp_cost_assumptions_use_asset_overrides_before_global_scalars():
+    cfg = {
+        "ESTIMATED_FEE_PCT": 0.009,
+        "ESTIMATED_SLIPPAGE_PCT": 0.008,
+        "ESTIMATED_FEE_PCT_BY_ASSET": {"forex": 0.00007},
+        "ESTIMATED_SLIPPAGE_PCT_BY_ASSET": {"forex": 0.00003},
+    }
+
+    assert _scalp_cost_assumptions(cfg, "forex") == (0.00007, 0.00003)
+    assert _scalp_cost_assumptions(cfg, "crypto") == (0.009, 0.008)
+
+
+def test_scalp_min_rr_prefers_engine_d_group_override(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "MIN_RR": 1.2,
+            "score_group_overrides": {"forex_majors": {"scalp": {"min_rr": 1.4}}},
+        },
+    )
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "NAKED_ENGINE",
+        {"score_group_overrides": {"forex_majors": {"scalp": {"min_rr": 1.9}}}},
+    )
+
+    assert scalp_engine._scalp_min_rr_for_group("forex", "forex_majors") == 1.4
+
+
+def test_scalp_min_rr_legacy_naked_engine_override_remains_fallback(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "MIN_RR": 1.2,
+            "score_group_overrides": {},
+        },
+    )
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "NAKED_ENGINE",
+        {"score_group_overrides": {"forex_majors": {"scalp": {"min_rr": 1.6}}}},
+    )
+
+    assert scalp_engine._scalp_min_rr_for_group("forex", "forex_majors") == 1.6
+
+
 def test_run_scalp_scan_skips_closed_mt5_market(monkeypatch):
     monkeypatch.setitem(
         scalp_engine.CONFIG,
@@ -1203,6 +1288,58 @@ def test_run_scalp_scan_uses_m1_execution_tf(monkeypatch):
     assert isinstance(sig.get("premarket_delta_proxy_levels"), dict)
     assert sig["premarket_delta_proxy_levels"].get("reason") == "stock_only"
     assert ("M1", True) in requested_tfs
+    assert ("M15", False) in requested_tfs
+    assert ("H1", False) in requested_tfs
+
+
+def test_run_scalp_scan_forming_flags_are_configurable(monkeypatch):
+    requested_tfs = []
+
+    def _fake_mt5_fetch(_symbol, tf, _count, include_forming=False):
+        requested_tfs.append((tf, include_forming))
+        return _candles(300)
+
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "SESSION_FILTER": True,
+            "SESSION_MODE": "new_york",
+            "EXECUTION_TIMEFRAME": "M1",
+            "MIN_GRADE_AUTO_EXECUTE": "C",
+            "USE_FORMING_FOR_STRUCTURE": True,
+            "USE_FORMING_FOR_TRIGGER": False,
+            "USE_FORMING_FOR_BIAS": True,
+        },
+    )
+    monkeypatch.setattr(scalp_engine, "get_current_sessions", lambda: ["new_york"])
+    monkeypatch.setattr(scalp_engine, "scalp_session_window", lambda *args, **kwargs: (True, "new_york"))
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")
+    monkeypatch.setattr(scalp_engine, "mt5_market_open_state", lambda symbol: {"open": True, "reason": "market_open"})
+    monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda display: {"digits": 5, "point": 0.00001, "spread": 10})
+    monkeypatch.setattr(scalp_engine, "check_spread", lambda sym_info, asset_type: (True, 1.0))
+    monkeypatch.setattr(scalp_engine, "mt5_fetch_scalp_candles", _fake_mt5_fetch)
+    monkeypatch.setattr(scalp_engine, "mt5_get_live_price", lambda symbol: 100.0)
+    monkeypatch.setattr(scalp_engine, "_build_volume_profile", lambda candles: {"valid": True, "poc": 100.0, "vah": 101.0, "val": 99.0, "lvn_levels": []})
+    monkeypatch.setattr(scalp_engine, "_classify_market_state", lambda vp: "balance")
+    monkeypatch.setattr(scalp_engine, "_locate_price_vs_vp", lambda price, vp, atr_m15=0: {"location": "at_val", "nearest_level": 99.0, "distance_pct": 0.0})
+    monkeypatch.setattr(scalp_engine, "_check_absorption", lambda candles: {"detected": True, "count": 1, "bars": [{}]})
+    monkeypatch.setattr(scalp_engine, "_check_cvd", lambda candles: {"direction": "LONG", "cvd_slope": 1.0})
+    monkeypatch.setattr(scalp_engine, "_check_aaa_sequence", lambda candles, absorption, cvd, asset_type=None: {"complete": False, "phase": "absorption_only"})
+    monkeypatch.setattr(scalp_engine, "_check_vwap_lean", lambda candles, price: {"lean": "LONG", "vwap_value": 100.0})
+    monkeypatch.setattr(scalp_engine, "_classify_setup", lambda *args, **kwargs: {"valid": True, "direction": "LONG", "setup_type": "mean_reversion", "reasons": []})
+    monkeypatch.setattr(scalp_engine, "calculate_scalp_levels", lambda *args, **kwargs: {"entry": 100.0, "sl": 99.0, "tp_partial": 101.0, "tp1": 102.0, "tp2": 103.0, "rr": 2.0, "rr_synthetic": False, "sl_distance": 1.0, "sl_method": "vp_boundary"})
+    monkeypatch.setattr(scalp_engine, "ai_quality_grade", lambda *args, **kwargs: {"score": 75, "grade": "B", "reasons": [], "size_multiplier": 0.5})
+    monkeypatch.setattr(scalp_engine, "record_signal_event", lambda **kwargs: None)
+
+    result = scalp_engine.run_scalp_scan(["EUR/USD"])
+
+    assert len(result["signals"]) == 1
+    assert ("M15", True) in requested_tfs
+    assert ("M1", False) in requested_tfs
+    assert ("H1", True) in requested_tfs
 
 
 def test_premarket_delta_proxy_levels_are_explicitly_proxy():
@@ -1564,6 +1701,3 @@ def test_classify_mean_reversion_va_extreme_neutral_cvd_respects_disable(monkeyp
     )
     assert setup["valid"] is False
     assert setup.get("reason") == "no_absorption_at_va_extreme"
-
-
-

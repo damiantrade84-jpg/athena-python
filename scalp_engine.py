@@ -447,7 +447,10 @@ def _scalp_candles_fresh(candles: list, timeframe: str, role: str = "execution")
     max_age = max(1, int(cfg.get("MARKET_CANDLE_MAX_AGE_SEC", 900)))
     age_s = _latest_candle_age_seconds(candles)
     if age_s is None:
-        return True, "candle_time_unavailable"
+        if bool(cfg.get("ALLOW_TIMELESS_SCALP_CANDLES", False)):
+            return True, "candle_time_unavailable"
+        role_key = str(role or "data").upper()
+        return False, f"MARKET_DATA_TIME_UNAVAILABLE_{role_key}"
     # Candle timestamps are bar-open times. Allow one extra bar length before
     # declaring live data stale.
     tf_sec = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600}.get(str(timeframe).upper(), 60)
@@ -1999,21 +2002,46 @@ def _classify_setup(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _scalp_min_rr_for_group(asset_type: str, score_group: str | None = None) -> float:
-    """Return the effective Engine D MIN_RR, allowing per-group override for forex."""
+    """Return the effective Engine D MIN_RR with Engine D-owned group overrides."""
     cfg = CONFIG.get("SCALP_ENGINE", {})
     base = float(cfg.get("MIN_RR", 2.0))
     if not score_group:
         return base
-    group_cfg = (
+    group_cfg = (cfg.get("score_group_overrides", {}) or {}).get(score_group, {})
+    scalp_override = (group_cfg.get("scalp") or {}).get("min_rr")
+    if scalp_override is not None:
+        return float(scalp_override)
+
+    legacy_group_cfg = (
         (CONFIG.get("NAKED_ENGINE", {}) or {})
         .get("score_group_overrides", {})
         or {}
     ).get(score_group, {})
-    # Use the scalp-level min_rr override if present, else base
-    scalp_override = (group_cfg.get("scalp") or {}).get("min_rr")
-    if scalp_override is not None:
-        return float(scalp_override)
+    legacy_override = (legacy_group_cfg.get("scalp") or {}).get("min_rr")
+    if legacy_override is not None:
+        log.warning(
+            "[SCALP] Using legacy NAKED_ENGINE.score_group_overrides.%s.scalp.min_rr "
+            "for Engine D; move this override under SCALP_ENGINE.score_group_overrides",
+            score_group,
+        )
+        return float(legacy_override)
     return base
+
+
+def _scalp_cost_assumptions(cfg: dict, asset_type: str) -> tuple[float, float]:
+    cost_defaults = {
+        "crypto": (0.0006, 0.0002),
+        "forex": (0.00005, 0.00005),
+        "commodity": (0.00010, 0.00010),
+        "stock": (0.00010, 0.00005),
+        "index": (0.00010, 0.00010),
+    }
+    fee_default, slip_default = cost_defaults.get(asset_type, cost_defaults["crypto"])
+    fee_by_asset = cfg.get("ESTIMATED_FEE_PCT_BY_ASSET", {}) or {}
+    slip_by_asset = cfg.get("ESTIMATED_SLIPPAGE_PCT_BY_ASSET", {}) or {}
+    fee_pct = float(fee_by_asset.get(asset_type, cfg.get("ESTIMATED_FEE_PCT", fee_default)))
+    slip_pct = float(slip_by_asset.get(asset_type, cfg.get("ESTIMATED_SLIPPAGE_PCT", slip_default)))
+    return fee_pct, slip_pct
 
 
 def _scalp_execution_min_grade(cfg: dict) -> str:
@@ -2857,7 +2885,13 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     continue
 
                 _vol_src_dominant = "mt5_tick"  # updated after overlay calls below
-                candles_m15 = mt5_fetch_scalp_candles(mt5_sym, "M15", m15_count, include_forming=True)
+                structure_include_forming = bool(cfg.get("USE_FORMING_FOR_STRUCTURE", False))
+                trigger_include_forming = bool(cfg.get("USE_FORMING_FOR_TRIGGER", True))
+                bias_include_forming = bool(cfg.get("USE_FORMING_FOR_BIAS", structure_include_forming))
+
+                candles_m15 = mt5_fetch_scalp_candles(
+                    mt5_sym, "M15", m15_count, include_forming=structure_include_forming
+                )
                 candles_m15, _vol_src_m15 = _overlay_eodhd_volume_for_scalp(display, asset_type, "M15", candles_m15)
                 if len(candles_m15) < 30:
                     _record_stability_sample(display, asset_type, False, reason="insufficient_m15_candles")
@@ -2869,7 +2903,9 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     skipped.append({"pair": display, "reason": stale_reason})
                     continue
 
-                candles_m5 = mt5_fetch_scalp_candles(mt5_sym, "M5", m5_count, include_forming=True)
+                candles_m5 = mt5_fetch_scalp_candles(
+                    mt5_sym, "M5", m5_count, include_forming=trigger_include_forming
+                )
                 candles_m5, _vol_src_m5 = _overlay_eodhd_volume_for_scalp(display, asset_type, "M5", candles_m5)
                 if len(candles_m5) < 10:
                     _record_stability_sample(display, asset_type, False, reason="insufficient_m5_candles")
@@ -2884,7 +2920,9 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 # dominant volume source = M15 (used for VP), fallback to M5
                 _vol_src_dominant = _vol_src_m15 if _vol_src_m15 != "mt5_tick" else _vol_src_m5
                 if execution_tf == "M1":
-                    candles_exec = mt5_fetch_scalp_candles(mt5_sym, "M1", m1_count, include_forming=True)
+                    candles_exec = mt5_fetch_scalp_candles(
+                        mt5_sym, "M1", m1_count, include_forming=trigger_include_forming
+                    )
                     candles_exec, _vol_src_m1 = _overlay_eodhd_volume_for_scalp(display, asset_type, "M1", candles_exec)
                     if len(candles_exec) < 30:
                         _record_stability_sample(display, asset_type, False, reason="insufficient_m1_candles")
@@ -2908,7 +2946,9 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 htf_bias = None
 
                 if use_bias:
-                    candles_bias = mt5_fetch_scalp_candles(mt5_sym, bias_tf, h1_count, include_forming=True)
+                    candles_bias = mt5_fetch_scalp_candles(
+                        mt5_sym, bias_tf, h1_count, include_forming=bias_include_forming
+                    )
                     if len(candles_bias) < 200:
                         bias_require = bool(cfg.get("BIAS_REQUIRE_CONFIRMATION", True))
                         if bias_require:
@@ -3052,16 +3092,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 risk_distance_abs = abs(levels["entry"] - levels["sl"])
                 risk_distance_pct = risk_distance_abs / levels["entry"] if levels["entry"] > 0 else 0
                 
-                _COST_DEFAULTS = {
-                    "crypto": (0.0006, 0.0002),
-                    "forex": (0.00005, 0.00005),
-                    "commodity": (0.00010, 0.00010),
-                    "stock": (0.00010, 0.00005),
-                    "index": (0.00010, 0.00010),
-                }
-                _fee_default, _slip_default = _COST_DEFAULTS.get(asset_type, _COST_DEFAULTS["crypto"])
-                estimated_fee_pct = float(cfg.get("ESTIMATED_FEE_PCT", _fee_default))
-                estimated_slippage_pct = float(cfg.get("ESTIMATED_SLIPPAGE_PCT", _slip_default))
+                estimated_fee_pct, estimated_slippage_pct = _scalp_cost_assumptions(cfg, asset_type)
                 estimated_total_cost_pct = estimated_fee_pct + estimated_slippage_pct
                 
                 cost_as_R = estimated_total_cost_pct / risk_distance_pct if risk_distance_pct > 0 else float('inf')

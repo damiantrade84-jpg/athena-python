@@ -298,6 +298,21 @@ def _coherent_trend_score(
     return trend_score, direction, detail
 
 
+def _previous_indicator_snap(candles: list | None) -> dict | None:
+    """Return the prior confirmed indicator snapshot for EMA hysteresis."""
+    if not isinstance(candles, list) or len(candles) < 2:
+        return None
+    try:
+        from indicators import calc_indicators
+
+        prev_indicators = calc_indicators(candles[:-1])
+        prev_snap = prev_indicators.get("snap") if isinstance(prev_indicators, dict) else None
+        return prev_snap if isinstance(prev_snap, dict) else None
+    except Exception as exc:
+        log.debug("[EA2] previous indicator snapshot unavailable: %s", exc)
+        return None
+
+
 # ── Factor 2: Momentum quality (RSI + MACD confirmation) ─────────────────────
 
 def _momentum_quality(
@@ -1074,9 +1089,20 @@ def compute_factor_scores(
                             reason="atr_zero_abort", direction=None)
 
     # ── FACTOR 1: Trend ───────────────────────────────────────────────────────
+    d1_prev = _previous_indicator_snap(d1_candles)
+    h4_prev = _previous_indicator_snap(h4_candles)
+    h1_prev = _previous_indicator_snap(h1_candles)
     trend_score, direction, trend_detail = _coherent_trend_score(
-        d1_snap, h4_snap, h1_snap, asset_type
+        d1_snap, h4_snap, h1_snap, asset_type,
+        d1_prev=d1_prev,
+        h4_prev=h4_prev,
+        h1_prev=h1_prev,
     )
+    trend_detail["hysteresis_prev_available"] = {
+        "d1": d1_prev is not None,
+        "h4": h4_prev is not None,
+        "h1": h1_prev is not None,
+    }
 
     # Hard abort: no direction determinable
     if direction is None or abs(trend_score) < 1e-9:
@@ -1319,8 +1345,9 @@ def compute_factor_scores(
         elif _macro_s == "risk_off":
             _macro_adj = _macro_adj_min
 
-    # Intermarket-context adjustment: divergence signals penalise momentum
-    # proportionally.  Impact bounded to CONFIG-tunable limits.
+    # Intermarket-context adjustment: legacy divergence payloads still get the
+    # small percentage adjustment below. Rich intermarket contexts are applied
+    # through intermarket.apply_confirmation_to_score() after the base score.
     _inter_adj_max = float(CONFIG.get("FACTOR_INTER_ADJ_MAX", 0.02))
     _inter_adj_min = float(CONFIG.get("FACTOR_INTER_ADJ_MIN", -0.02))
     _inter_adj = 0.0
@@ -1340,6 +1367,32 @@ def compute_factor_scores(
     # Apply mean reversion adjustment (additive, bounded)
     final_score = final_score + mean_rev_adj
     final_score = max(0.0, min(3.0, final_score))
+
+    intermarket_confirmation = None
+    intermarket_engine_a_delta = 0.0
+    if isinstance(intermarket_context, dict):
+        try:
+            from intermarket import apply_confirmation_to_score
+
+            _im_result = apply_confirmation_to_score(
+                final_score,
+                direction,
+                pair,
+                intermarket_context,
+                max_score=3.0,
+                config=CONFIG,
+            )
+            _adjusted_score = _im_result.get("adjusted_score")
+            if isinstance(_adjusted_score, (int, float)):
+                final_score = max(0.0, min(3.0, float(_adjusted_score)))
+            _confirmation = _im_result.get("confirmation")
+            if isinstance(_confirmation, dict):
+                intermarket_confirmation = _confirmation
+                intermarket_engine_a_delta = float(_confirmation.get("engineADelta", 0.0) or 0.0)
+                feed_status["intermarket"] = str(_confirmation.get("verdict", "neutral"))
+        except Exception as exc:
+            log.debug("[EA2] %s intermarket confirmation skipped: %s", display, exc)
+            feed_status["intermarket"] = "error"
 
     # ── Factor scores dict (for UI / Marcus Reid diagnostics) ─────────────────
     factor_scores = {
@@ -1396,8 +1449,8 @@ def compute_factor_scores(
         "missing_directional_optional_count": 0,
         "correlation_adjustments": {},
         "crypto_engine_a_diagnostics": None,
-        "intermarket_confirmation": None,
-        "intermarket_engine_a_delta": 0.0,
+        "intermarket_confirmation": intermarket_confirmation,
+        "intermarket_engine_a_delta": round(intermarket_engine_a_delta, 6),
         "feed_status": feed_status,
         "btc_bias_applied": None,
     }

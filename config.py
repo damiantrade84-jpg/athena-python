@@ -473,8 +473,11 @@ CONFIG: dict = {
         "index": 0.15,
         "commodity": 0.18,
     },
-    # MIN_CONFLUENCE_GROUP removed — live uses MIN_CONFLUENCE_CLASS directly.
+    # MIN_CONFLUENCE_GROUP removed. Engine A live/backtest thresholds are resolved
+    # in scoring.py from the two-tier system plus PAIR_PROFILES.min_confluence.
+    # MIN_CONFLUENCE_CLASS is legacy/admin metadata and is not read by that gate.
     # Factor scoring gates — see factor_scoring.py
+    "ADX_MISSING_BOTH_ABORT": True,
     "FACTOR_MIN_DIRECTIONAL": 0.25,  # Skip if abs(dir_score) < this (near-directionless signal)
     "FACTOR_DIRECTIONAL_SOFT_SPAN": 0.20,  # Smooth transition width for directional confidence
     "FACTOR_MIN_DIRECTIONAL_CRYPTO": 0.15,
@@ -764,6 +767,8 @@ CONFIG: dict = {
     # ── Engine B AI Controls ─────────────────────────────────────────────────
     "ENGINE_B_NEWS_CONTEXT_ENABLED": True,  # Feed news into Engine B AI advisory (not checklist)
     "ENGINE_B_ZONE_PERSISTENCE": False,  # Persist Engine B OB/FVG registry to zones.db
+    "ENGINE_B_USE_FORMING_FOR_STRUCTURE": False,
+    "ENGINE_B_USE_FORMING_FOR_TRIGGER": True,
     "ENGINE_B_CRYPTO_PROFILE_ENABLED": False,
     "ENGINE_B_CRYPTO_TARGET_MODEL_ENABLED": False,
     "ENGINE_B_CRYPTO_TARGET_V2_ENABLED": False,

@@ -113,6 +113,10 @@ FACTOR_ADX_HARD_FAIL_CLASS:
   stock: 10
   index: 10
 
+# Engine A fail-safe: when both D1 and H4 ADX are unavailable, block the signal
+# instead of assigning the old neutral 0.5 multiplier.
+ADX_MISSING_BOTH_ABORT: true
+
 # Funding rate addon: baseline (0.01% per 8h) and noise band half-width.
 # Narrowed from 0.0002 to 0.0001 so typical Binance/Bybit funding deviations
 # are no longer silently absorbed inside the neutral zone.
@@ -437,9 +441,10 @@ ENGINE_A_BLOCKED_TREND_STATES:
 
 
 
-# Per-class live scan minimum confluence - execute / tradeSignals tier threshold.
-
-# All asset classes use Engine A v2 (factor_scoring.py), unified 0-3.0 scale.
+# Legacy/admin metadata only. Engine A live/backtest gates use scoring.py's
+# two-tier resolver plus PAIR_PROFILES.*.min_confluence overrides, not this map.
+# Keep values aligned with historical AUTO_TRADE_MIN_SCORE displays until the
+# admin surfaces are migrated.
 
 MIN_CONFLUENCE_CLASS:
 
@@ -1388,7 +1393,7 @@ AUTO_EXIT_ON_DECAY: false
 
 ENGINE_B_RESEARCH_LAB_FACTORS:
   ENABLED: true
-  ALLOW_GATE_UPGRADE: true
+  ALLOW_GATE_UPGRADE: false
   GROUPS:
     commodity_other:
       - micro_breakout
@@ -1658,6 +1663,10 @@ ENGINE_B_NEWS_CONTEXT_ENABLED: true
 
 ENGINE_B_ZONE_PERSISTENCE: false
 
+ENGINE_B_USE_FORMING_FOR_STRUCTURE: false
+
+ENGINE_B_USE_FORMING_FOR_TRIGGER: true
+
 
 
 # Forex structure timeframe for Engine B naked trading.
@@ -1854,6 +1863,14 @@ SCALP_ENGINE:
 
   MARKET_CANDLE_MAX_AGE_SEC: 900  # Max age for execution candles before live scan treats data as stale
 
+  ALLOW_TIMELESS_SCALP_CANDLES: false # Live scan blocks candles without parseable timestamps
+
+  USE_FORMING_FOR_STRUCTURE: false # Use confirmed M15 bars for VP/market-state/location
+
+  USE_FORMING_FOR_TRIGGER: true    # Keep forming M1/M5 bars available for trigger timing
+
+  USE_FORMING_FOR_BIAS: false      # Use confirmed H1 bars for trend-bias confirmation
+
   # ── Directional Filter ────────────────────────────────────
 
   WITH_TREND_ONLY: true         # Reject counter-trend scalp setups
@@ -1998,6 +2015,8 @@ SCALP_ENGINE:
 
   MIN_RR: 1.2                   # Global Engine D minimum RR; unified floor (operator-approved).
 
+  score_group_overrides: {}     # Engine D-owned per-score-group scalp overrides; legacy NAKED_ENGINE fallback remains diagnostic only
+
   TP1_MAX_RR: 4.0               # Cap TP1 to this multiple of SL distance - prevents unrealistically far targets (0 = disabled)
 
   TREND_EXT_MAX_RR: 0.0         # Optional cap for trend-extension TP1 distance (0 = disabled; preserves current behavior)
@@ -2033,6 +2052,20 @@ SCALP_ENGINE:
   GRADE_B_SIZE_MULT: 0.5        # Half position on B setups
 
   GRADE_C_SIZE_MULT: 0.25       # Quarter position on C setups
+
+  ESTIMATED_FEE_PCT_BY_ASSET:
+    crypto: 0.0006
+    forex: 0.00005
+    commodity: 0.00010
+    stock: 0.00010
+    index: 0.00010
+
+  ESTIMATED_SLIPPAGE_PCT_BY_ASSET:
+    crypto: 0.0002
+    forex: 0.00005
+    commodity: 0.00010
+    stock: 0.00005
+    index: 0.00010
 
   # ── Session Risk Rules ────────────────────────────────────
 
@@ -2217,4 +2250,3 @@ LIVE_DASHBOARD:
   ENGINE_AB_UPDATE_ON_CONFIRMED_CANDLE: true
   DEFAULT_TIMEFRAME: H4
   PAPER_MONITOR_ONLY: true       # Safety flag - dashboard never creates execution permission
-

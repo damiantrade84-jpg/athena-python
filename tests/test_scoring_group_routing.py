@@ -56,6 +56,17 @@ def test_min_confluence_uses_2tier_stable_for_forex():
     assert get_min_confluence_threshold(pair) == 1.5  # _TIER_STABLE
 
 
+def test_min_confluence_class_is_not_live_threshold_input():
+    original = CONFIG.get("MIN_CONFLUENCE_CLASS")
+    try:
+        CONFIG["MIN_CONFLUENCE_CLASS"] = {"forex": 2.95}
+        pair = {"display": "USD/ZAR", "symbol": "USDZAR=X", "type": "forex"}
+        assert get_min_confluence_threshold(pair) == 1.5
+        assert get_backtest_min_score_threshold(pair) == 1.5
+    finally:
+        CONFIG["MIN_CONFLUENCE_CLASS"] = original
+
+
 def test_pair_profile_can_override_score_group_and_threshold():
     original = CONFIG.get("PAIR_PROFILES")
     try:

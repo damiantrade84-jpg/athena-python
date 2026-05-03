@@ -427,6 +427,16 @@ def test_calculate_confidence_flexible_mode_accepts_liquidity_sweep_catalyst():
     assert gate_ok is True
 
 
+def test_engine_b_confidence_passes_enforces_min_score_floor():
+    style_profile = {"min_score": 5.0}
+    gate_ok, min_score_scaled = engine_b_confidence_passes(
+        {"passed": True, "score": 3.0}, style_profile, regime_label="RANGING"
+    )
+
+    assert min_score_scaled == 4.0
+    assert gate_ok is False
+
+
 def test_calculate_confidence_emits_no_trigger_pattern_when_missing():
     res = _base_res_long()
     res["trigger_ok"] = False
@@ -488,6 +498,49 @@ def test_engine_b_research_lab_micro_breakout_can_satisfy_entry_gate(monkeypatch
     assert out["research_lab_entry_upgrade"] is True
     assert out["research_lab_detail"]["components"]["micro_breakout"]["passed"] is True
     assert ENGINE_B_REASON_NO_TRIGGER_PATTERN not in out.get("engine_b_diagnostics", {}).get("reason_codes", [])
+
+
+def test_engine_b_research_lab_default_does_not_upgrade_entry_gate(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_RESEARCH_LAB_FACTORS", {
+        "ENABLED": True,
+        "ALLOW_GATE_UPGRADE": False,
+        "GROUPS": {"commodity_other": ["micro_breakout"]},
+    })
+
+    res = _base_res_long()
+    res.update({
+        "asset_type": "commodity",
+        "bos_confirmed": False,
+        "trigger_ok": False,
+        "strong_close": False,
+        "inside_break_candle": False,
+        "engulfing_candle": False,
+        "liquidity_sweep": False,
+        "choch_confirmed": False,
+        "distance_to_res": 3.0,
+        "recommended_stop_loss": 100.0,
+        "recommended_take_profit": 104.0,
+    })
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=101.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=_micro_breakout_candles_long(),
+        style_profile={
+            "style": "intraday",
+            "score_group": "commodity_other",
+            "min_room_atr": 0.35,
+            "min_rr": 1.0,
+            "require_macro_align": False,
+        },
+    )
+
+    assert out["research_lab_detail"]["raw_entry_ok"] is True
+    assert out["research_lab_entry_upgrade"] is False
+    assert out["trigger_ok"] is False
+    assert out["entry_ok"] is False
 
 
 def test_engine_b_micro_breakout_requires_prev_close_inside_prior_range():
@@ -708,6 +761,24 @@ def test_crypto_profile_fallback_target_cannot_create_final_pass(monkeypatch):
     assert out["fallback_used_for_final_pass"] is True
     assert "fallback_target" in out["failed_gate_names"]
     assert "target_v2" in out["failed_gate_names"]
+
+
+def test_crypto_profile_requires_enabled_trigger_profile_to_pass(monkeypatch):
+    _set_crypto_profile_flags(monkeypatch)
+    res = _crypto_res_long_with_structural_target()
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.2, "require_macro_align": False},
+        crypto_entry_candles_by_tf={"M15": [], "M5": []},
+    )
+
+    assert out["passed"] is False
+    assert out["trigger_passed"] is False
 
 
 def test_forex_engine_b_behavior_unchanged_when_crypto_flags_enabled(monkeypatch):

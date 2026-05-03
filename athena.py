@@ -2765,11 +2765,13 @@ def fetch_market_state(pair: dict, tf: str, limit: int) -> dict:
     return _fms(pair, tf, limit)
 
 
-def _market_state_series(state: dict | None) -> list:
+def _market_state_series(state: dict | None, *, include_forming: bool = True) -> list:
     """Flatten a market-state payload into confirmed bars plus optional forming bar."""
     if not isinstance(state, dict):
         return []
     confirmed = list(state.get("confirmed") or [])
+    if not include_forming:
+        return confirmed
     forming = state.get("forming")
     return confirmed + ([forming] if forming else [])
 
@@ -5516,13 +5518,17 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
 
     try:
         _clim = scan_candle_limits()
+        _use_forming_structure = bool(CONFIG.get("ENGINE_B_USE_FORMING_FOR_STRUCTURE", False))
+        _use_forming_trigger = bool(CONFIG.get("ENGINE_B_USE_FORMING_FOR_TRIGGER", True))
         if pair_obj.get("source") == "mt5":
             d1_state = _engine_b_live_market_state(pair_obj, "D1", _clim["D1"])
             h4_state = _engine_b_live_market_state(pair_obj, "H4", _clim["H4"])
             h1_state = _engine_b_live_market_state(pair_obj, "H1", _clim["H1"])
-            d1 = _market_state_series(d1_state)
-            h4 = _market_state_series(h4_state)
-            h1 = _market_state_series(h1_state)
+            d1 = _market_state_series(d1_state, include_forming=_use_forming_structure)
+            h4 = _market_state_series(h4_state, include_forming=_use_forming_structure)
+            h1 = _market_state_series(h1_state, include_forming=_use_forming_structure)
+            h4_trigger = _market_state_series(h4_state, include_forming=_use_forming_trigger)
+            h1_trigger = _market_state_series(h1_state, include_forming=_use_forming_trigger)
             is_forming_b = any(
                 bool(state.get("is_live"))
                 for state in (d1_state, h4_state, h1_state)
@@ -5531,18 +5537,24 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
         else:
             from candle_manager import fetch_market_state as _fms
 
-            # Determine for H4 (naked engine primary TF)
+            d1_state = _fms(pair_obj, "D1", _clim["D1"])
             h4_state = _fms(pair_obj, "H4", _clim["H4"])
-            h4 = _market_state_series(h4_state)
-            is_forming_b = h1_state["is_live"] if "h1_state" in locals() else h4_state["is_live"]
-            d1 = fetch_candles(pair_obj, "D1", _clim["D1"])
-            h1 = fetch_candles(pair_obj, "H1", _clim["H1"])
+            h1_state = _fms(pair_obj, "H1", _clim["H1"])
+            d1 = _market_state_series(d1_state, include_forming=_use_forming_structure)
+            h4 = _market_state_series(h4_state, include_forming=_use_forming_structure)
+            h1 = _market_state_series(h1_state, include_forming=_use_forming_structure)
+            h4_trigger = _market_state_series(h4_state, include_forming=_use_forming_trigger)
+            h1_trigger = _market_state_series(h1_state, include_forming=_use_forming_trigger)
+            is_forming_b = any(
+                bool(state.get("is_live"))
+                for state in (d1_state, h4_state, h1_state)
+                if isinstance(state, dict)
+            )
 
         if not d1 or not h4 or not h1:
             return None, pair_obj, "Failed to fetch D1/H4/H1 candles"
 
-        # F8: As requested, we no longer drop the last (forming) bar automatically.
-        # This provides live-bar scoring for maximum accuracy.
+        # Structure is confirmed-bar first; trigger candles may include the live bar by config.
 
         h4_highs = [float(c["high"]) for c in h4]
         h4_lows = [float(c["low"]) for c in h4]
@@ -5565,7 +5577,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             log.warning(
                 f"[NAKED-AI] {pair_obj.get('display')}: Failed ATR calc - series={atr_series}, using fallback ATR"
             )
-            current_price = float(sig.get("price") or h1[-1]["close"])
+            current_price = float(sig.get("price") or (h1_trigger or h1)[-1]["close"])
             _atr_pct = {
                 "forex": 0.002,
                 "crypto": 0.02,
@@ -5578,7 +5590,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                 f"[NAKED-AI] {pair_obj.get('display')}: Using fallback ATR={atr} (type={pair_obj.get('type')})"
             )
 
-        current_price = float(sig.get("price") or h1[-1]["close"])
+        current_price = float(sig.get("price") or (h1_trigger or h1)[-1]["close"])
 
         from market_structure import (
             NakedEngine,
@@ -5635,7 +5647,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
         )
         _pair_type = pair_obj.get("type", "")
         # Determine correct entry candles based on style
-        _entry_candles = h1 if resolved_style in ("scalp", "intraday") else h4
+        _entry_candles = h1_trigger if resolved_style in ("scalp", "intraday") else h4_trigger
         conf = engine.calculate_confidence(
             res,
             current_price,
@@ -6012,7 +6024,10 @@ def api_scan_naked():
 
             # Fetch all needed timeframes
             _tf_map = {}
+            _tf_trigger_map = {}
             _tf_state_map = {}
+            _use_forming_structure = bool(CONFIG.get("ENGINE_B_USE_FORMING_FOR_STRUCTURE", False))
+            _use_forming_trigger = bool(CONFIG.get("ENGINE_B_USE_FORMING_FOR_TRIGGER", True))
             for tf in _needed_tfs:
                 cfg_key = f"{tf.upper()}_CANDLES"
                 if cfg_key not in CONFIG:
@@ -6027,7 +6042,12 @@ def api_scan_naked():
                 if pair.get("source") == "mt5":
                     state = _engine_b_live_market_state(pair, tf, limit)
                     _tf_state_map[tf] = state
-                    _tf_map[tf] = _market_state_series(state)
+                    _tf_map[tf] = _market_state_series(
+                        state, include_forming=_use_forming_structure
+                    )
+                    _tf_trigger_map[tf] = _market_state_series(
+                        state, include_forming=_use_forming_trigger
+                    )
                 elif _is_crypto_profile and pair.get("source") == "binance":
                     raw = (
                         fetch_binance_paginated(pair["symbol"], TF_B[tf], limit)
@@ -6040,6 +6060,7 @@ def api_scan_naked():
                         _tf_map[tf] = raw
                     else:
                         _tf_map[tf] = []
+                    _tf_trigger_map[tf] = _tf_map[tf]
                 else:
                     raw = fetch_candles(pair, tf, limit)
                     if raw and len(raw) > 1:
@@ -6048,13 +6069,15 @@ def api_scan_naked():
                         _tf_map[tf] = raw
                     else:
                         _tf_map[tf] = []
+                    _tf_trigger_map[tf] = _tf_map[tf]
 
             zone_candles = _tf_map.get(_zone_tf, [])
-            entry_candles = _tf_map.get(_entry_tf, [])
+            structure_entry_candles = _tf_map.get(_entry_tf, [])
+            entry_candles = _tf_trigger_map.get(_entry_tf, _tf_map.get(_entry_tf, []))
             d1_candles = _tf_map.get("D1", [])
             atr_candles = _tf_map.get(_atr_tf, zone_candles)
             crypto_entry_candles_by_tf = {
-                tf: _tf_map.get(tf, []) for tf in _crypto_entry_tfs
+                tf: _tf_trigger_map.get(tf, _tf_map.get(tf, [])) for tf in _crypto_entry_tfs
             }
             _engine_b_is_forming = any(
                 bool((_tf_state_map.get(tf) or {}).get("is_live"))
@@ -6270,7 +6293,7 @@ def api_scan_naked():
                 ).analyze_structure(
                     d1_candles,
                     zone_candles,
-                    entry_candles,
+                    structure_entry_candles,
                     current_price,
                     direction,
                     atr,
@@ -12032,6 +12055,12 @@ def analyze_pair(
             log.error(f"[ENGINE-B] Error on {pair['display']}: {e}")
     # ------------------------------------------------
 
+    _sl_distance_for_rr = abs(float(price) - float(lvl["sl"]))
+    risk_pct = round((_sl_distance_for_rr / float(price) * 100) if float(price) else 0.0, 2)
+    if _sl_distance_for_rr > 0:
+        lvl["rr1"] = abs(float(lvl["tp1"]) - float(price)) / _sl_distance_for_rr
+        lvl["rr2"] = abs(float(lvl["tp2"]) - float(price)) / _sl_distance_for_rr
+
     # FIX 4: News AI sentiment with guard rails
     try:
         from news_sentiment_feed import apply_news_sentiment_to_scan_result
@@ -15142,6 +15171,8 @@ def _ld_final_state(engine_c: dict, engine_d: dict, freshness: dict, levels: dic
         return "WATCHLIST", engine_c.get("watchlistReason") or engine_c.get("reason") or "Watchlist only", None
     if c_state == "ALIGNED" and _ld_has_valid_levels(levels):
         return "PAPER CANDIDATE", "Aligned paper candidate", None
+    if d_gate == "PASS" and _ld_has_valid_levels(levels):
+        return "PAPER CANDIDATE", "Engine D paper candidate", None
     return "NO SETUP", engine_c.get("reason") or "No executable setup", None
 
 
@@ -15390,6 +15421,11 @@ def _ld_build_engine_d_row(scalp_cached: dict, pair: dict) -> dict:
         "spread": scalp_cached.get("spread"),
         "rr": scalp_cached.get("rr1") or scalp_cached.get("rr"),
         "direction": scalp_cached.get("direction"),
+        "entry": scalp_cached.get("price") or scalp_cached.get("entry"),
+        "sl": scalp_cached.get("sl"),
+        "tp": scalp_cached.get("tp1") or scalp_cached.get("tp"),
+        "tp1": scalp_cached.get("tp1") or scalp_cached.get("tp"),
+        "tp2": scalp_cached.get("tp2"),
         "failReasons": _ld_list(scalp_cached.get("fail_reasons") or scalp_cached.get("ai_reasons")),
         "softWarnings": soft_warnings,
         "diagnosticNotes": _ld_list(scalp_cached.get("diagnostic_notes")),
@@ -15785,6 +15821,12 @@ def api_live_dashboard_snapshot():
                        "tp1": sig_a.get("tp1") or sig_a.get("tp"),
                        "tp2": sig_a.get("tp2"), "rr": sig_a.get("rr"),
                        "source": "engineA"}
+        elif engine_d_row.get("entry") is not None:
+            _levels = {"entry": engine_d_row.get("entry"), "sl": engine_d_row.get("sl"),
+                       "tp": engine_d_row.get("tp") or engine_d_row.get("tp1"),
+                       "tp1": engine_d_row.get("tp1") or engine_d_row.get("tp"),
+                       "tp2": engine_d_row.get("tp2"), "rr": engine_d_row.get("rr"),
+                       "source": "engineD"}
 
         if chart_row is not None:
             chart_row["levels"] = {
@@ -15955,6 +15997,12 @@ def api_live_dashboard_paper_execute():
                   "tp": engine_a_row.get("tp"), "tp1": engine_a_row.get("tp1"),
                   "tp2": engine_a_row.get("tp2"), "rr": engine_a_row.get("rr"),
                   "source": "engineA"}
+    elif engine_d_row.get("entry") is not None:
+        levels = {"entry": engine_d_row.get("entry"), "sl": engine_d_row.get("sl"),
+                  "tp": engine_d_row.get("tp") or engine_d_row.get("tp1"),
+                  "tp1": engine_d_row.get("tp1") or engine_d_row.get("tp"),
+                  "tp2": engine_d_row.get("tp2"), "rr": engine_d_row.get("rr"),
+                  "source": "engineD"}
     else:
         levels = {"entry": entry, "sl": sl, "tp": tp, "tp1": tp, "rr": rr,
                   "source": "request_fallback"}
@@ -15975,7 +16023,12 @@ def api_live_dashboard_paper_execute():
             "executableState": exec_state,
         }), 409
 
-    direction = (engine_a_row.get("direction") or engine_b_row.get("direction") or direction).upper()
+    direction = (
+        engine_a_row.get("direction")
+        or engine_b_row.get("direction")
+        or engine_d_row.get("direction")
+        or direction
+    ).upper()
     signal_for_risk = {
         "pair": display,
         "type": pair_cfg.get("type"),

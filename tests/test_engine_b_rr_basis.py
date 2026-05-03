@@ -139,7 +139,8 @@ def test_forex_structural_tp_below_min_rr_uses_execution_sl_fallback():
     assert out["fallback_tp_reason"] == "structural_tp_below_min_rr"
 
 
-def test_crypto_does_not_use_forex_rr_fallback():
+@pytest.mark.parametrize("asset_class", ["crypto", "commodity", "index", "stock"])
+def test_non_forex_structural_tp_below_min_rr_uses_fallback(asset_class):
     out = resolve_engine_b_execution_levels(
         direction="LONG",
         entry=100.0,
@@ -147,15 +148,17 @@ def test_crypto_does_not_use_forex_rr_fallback():
         structural_tp=101.0,
         atr=1.0,
         style="intraday",
-        asset_class="crypto",
+        asset_class=asset_class,
         min_rr=1.5,
         fallback_rr=2.0,
     )
 
-    assert out["execution_tp"] == pytest.approx(101.0)
-    assert out["rr_used_for_gate"] < 1.5
-    assert out["rr_source"] == "atr_sl_structural_tp"
-    assert out["fallback_tp_applied"] is False
+    expected_tp = 100.0 + abs(100.0 - out["execution_sl"]) * 2.0
+    assert out["execution_tp"] == pytest.approx(expected_tp)
+    assert out["rr_used_for_gate"] == pytest.approx(2.0)
+    assert out["rr_source"].endswith("_sl_fallback_rr_tp")
+    assert out["fallback_tp_applied"] is True
+    assert out["fallback_tp_reason"] == "structural_tp_below_min_rr"
 
 
 def test_calculate_confidence_reports_forex_fallback_rr_basis():

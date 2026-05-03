@@ -245,13 +245,17 @@ def engine_b_confidence_passes(
     regime_label: str | None,
     asset_type: str = "",
 ) -> tuple[bool, float]:
-    """FIX 5: Use passed boolean only. Score/pct is for sizing and UI, not pass/fail."""
+    """Return final Engine B gate status including the style/regime score floor."""
     min_score_scaled = engine_b_min_score_threshold(
         style_profile, regime_label, asset_type
     )
     conf = conf_data if isinstance(conf_data, dict) else {}
-    # FIX 5: Eliminate double jeopardy — use passed boolean only
-    passed = bool(conf.get("passed", False))
+    try:
+        score = float(conf.get("score", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
+    score_floor_ok = min_score_scaled <= 0 or score >= min_score_scaled
+    passed = bool(conf.get("passed", False)) and score_floor_ok
     return passed, min_score_scaled
 
 
@@ -617,7 +621,7 @@ def resolve_engine_b_execution_levels(
 
     _fallback_applied = False
     _fallback_reason = None
-    if _asset == "forex" and _exec_valid and fallback_rr is not None:
+    if _exec_valid and fallback_rr is not None:
         try:
             _min_rr = float(min_rr) if min_rr is not None else None
         except (TypeError, ValueError):
@@ -3416,16 +3420,23 @@ class NakedEngine:
             if path_clear_to_target is None:
                 log.warning("CRITICAL: Internal path undefined")
 
-            # FIX 3: Trading gates — market conditions only (removed crypto_trigger_profile_enabled)
+            trigger_gate_ok = (not crypto_trigger_profile_enabled) or trigger_ok
+            structural_target_gate_ok = (
+                not structural_target_required
+                or (target_gate_ok and fallback_gate_ok)
+            )
             passed = (
                 structure_ok and
                 location_ok and
                 entry_ok and
                 room_ok and
-                rr_ok
+                rr_ok and
+                trigger_gate_ok and
+                structural_target_gate_ok and
+                stop_gate_ok and
+                path_gate_ok
             )
 
-            # Diagnostics only (not trading gates)
             if not target_gate_ok and "target_v2" not in failed_gate_names:
                 failed_gate_names.append("target_v2")
             if not fallback_gate_ok and "fallback_target" not in failed_gate_names:

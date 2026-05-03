@@ -230,6 +230,97 @@ class TestChandelierTrail:
         clamped = min(raw, _trail_state[key])
         assert clamped == 102.0
 
+    def test_fetch_timed_exit_candles_uses_resolved_pair(self, monkeypatch):
+        import candle_manager
+        import timed_exit_monitor as tem
+
+        seen = {}
+
+        def fake_fetch(pair, tf, limit):
+            seen.update({"pair": pair, "tf": tf, "limit": limit})
+            return [{"high": 1.2, "low": 1.1, "close": 1.15}]
+
+        monkeypatch.setattr(
+            tem,
+            "_resolve_timed_exit_pair",
+            lambda pair_label: {
+                "symbol": "EURUSD=X",
+                "display": "EUR/USD",
+                "source": "mt5",
+                "type": "forex",
+            },
+        )
+        monkeypatch.setattr(candle_manager, "fetch_candles", fake_fetch)
+
+        out = tem._fetch_timed_exit_candles("EUR/USD", "H4", 34)
+
+        assert out
+        assert seen["pair"]["display"] == "EUR/USD"
+        assert seen["tf"] == "H4"
+        assert seen["limit"] == 34
+
+    def test_ohlc_series_accepts_dict_and_list_candles(self):
+        import timed_exit_monitor as tem
+
+        highs, lows, closes = tem._ohlc_series_from_candles(
+            [
+                {"high": "101.0", "low": "99.5", "close": "100.5"},
+                [None, 100.5, 102.0, 100.0, 101.5, 1000],
+            ]
+        )
+
+        assert highs == [101.0, 102.0]
+        assert lows == [99.5, 100.0]
+        assert closes == [100.5, 101.5]
+
+    def test_compute_chandelier_trail_accepts_dict_candles(self, monkeypatch):
+        import timed_exit_monitor as tem
+
+        _trail_state.clear()
+        candles = []
+        base = 100.0
+        for i in range(40):
+            o = base + i * 0.4
+            candles.append(
+                {
+                    "time": i,
+                    "open": o,
+                    "high": o + 1.0,
+                    "low": o - 0.5,
+                    "close": o + 0.2,
+                }
+            )
+        seen = {}
+
+        def fake_fetch(pair_label, tf, limit):
+            seen.update({"pair": pair_label, "tf": tf, "limit": limit})
+            return candles
+
+        monkeypatch.setattr(tem, "_fetch_timed_exit_candles", fake_fetch)
+        tcfg = _get_timed_cfg(_cfg_fn({"tp_mode": "trailing_atr"}))
+
+        trail = _compute_chandelier_trail(
+            "EUR/USD", "intraday", "LONG", 100.0, 90.0, tcfg, "dict_trail"
+        )
+
+        assert trail is not None
+        assert seen == {"pair": "EUR/USD", "tf": "H4", "limit": 34}
+        assert _trail_state["dict_trail"] == pytest.approx(trail)
+
+    def test_trail_activation_requires_configured_r(self, monkeypatch):
+        import timed_exit_monitor as tem
+
+        tcfg = _get_timed_cfg(
+            _cfg_fn({"tp_mode": "trailing_atr", "trail_activation_r": 1.0})
+        )
+        row = {"ticket": "T1", "pair": "EUR/USD"}
+
+        monkeypatch.setattr(tem, "_compute_chandelier_trail", lambda *args, **kwargs: 112.0)
+        monkeypatch.setattr(tem, "_check_indicator_confirmation", lambda *args, **kwargs: True)
+
+        assert _should_trail_close(row, "intraday", "LONG", 100.0, 90.0, 106.0, tcfg) is False
+        assert _should_trail_close(row, "intraday", "LONG", 100.0, 90.0, 111.0, tcfg) is True
+
 
 # ── Phase 3: Indicator confirmation logic ────────────────────────────────────
 
@@ -239,19 +330,16 @@ class TestIndicatorConfirmation:
         result = _check_indicator_confirmation("EURUSD", "intraday", "LONG", tcfg)
         assert result is True
 
-    def test_confirmation_import_error_returns_true(self):
-        """If candles_cache is not importable, fail-open."""
+    def test_confirmation_candle_fetch_error_returns_true(self, monkeypatch):
+        """If trail confirmation candles are unavailable, fail-open."""
+        import timed_exit_monitor as tem
+
         tcfg = _get_timed_cfg(_cfg_fn({"trail_indicator_confirm": True}))
-        saved = sys.modules.get("candles_cache")
-        sys.modules["candles_cache"] = None
-        try:
-            result = _check_indicator_confirmation("EURUSD", "intraday", "LONG", tcfg)
-            assert result is True
-        finally:
-            if saved is not None:
-                sys.modules["candles_cache"] = saved
-            else:
-                sys.modules.pop("candles_cache", None)
+        monkeypatch.setattr(tem, "_fetch_timed_exit_candles", lambda *args, **kwargs: None)
+
+        result = _check_indicator_confirmation("EURUSD", "intraday", "LONG", tcfg)
+
+        assert result is True
 
 
 # ── Chandelier exit indicator function ───────────────────────────────────────

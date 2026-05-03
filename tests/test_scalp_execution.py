@@ -381,3 +381,44 @@ def test_open_trades_timed_engine_scalp_overrides_stale_intraday_style(monkeypat
     assert row["style"] == "scalp"
     assert row["be_trigger_min"] is None
     assert row["close_trigger_min"] is None
+
+
+def test_live_dashboard_engine_d_pass_can_be_paper_candidate():
+    athena_module = _load_athena_module()
+    freshness = {"gateDecision": "ALLOW"}
+    engine_c = {"decisionState": "NO_SETUP", "reason": "No A/B setup"}
+    engine_d = {"gateResult": "PASS"}
+    levels = {"entry": 100.0, "sl": 99.0, "tp": 102.0, "tp1": 102.0, "rr": 2.0}
+
+    final_state, main_reason, block_reason = athena_module._ld_final_state(
+        engine_c, engine_d, freshness, levels
+    )
+
+    assert final_state == "PAPER CANDIDATE"
+    assert main_reason == "Engine D paper candidate"
+    assert block_reason is None
+
+
+def test_live_dashboard_engine_d_row_exposes_levels():
+    athena_module = _load_athena_module()
+    row = athena_module._ld_build_engine_d_row(
+        {
+            "_ts": __import__("time").time(),
+            "gate_result": "PASS",
+            "ai_grade": "B",
+            "ai_score": 74,
+            "direction": "LONG",
+            "price": 100.0,
+            "sl": 99.0,
+            "tp1": 102.0,
+            "tp2": 103.0,
+            "rr1": 2.0,
+        },
+        {"type": "crypto"},
+    )
+
+    assert row["entry"] == 100.0
+    assert row["sl"] == 99.0
+    assert row["tp"] == 102.0
+    assert row["tp1"] == 102.0
+    assert row["tp2"] == 103.0

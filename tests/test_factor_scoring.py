@@ -52,6 +52,7 @@ def _score(
     intermarket_context=None,
     d1_candles=None,
     h4_candles=None,
+    h1_candles=None,
 ):
     return compute_factor_scores(
         d1_snap=d1 if d1 is not None else _snap("long"),
@@ -60,7 +61,7 @@ def _score(
         pair=pair or {"type": "stock", "display": "TEST"},
         d1_candles=d1_candles or [],
         h4_candles=h4_candles or [],
-        h1_candles=[],
+        h1_candles=h1_candles or [],
         volume_ratio=volume_ratio,
         funding_rate=funding_rate,
         bar_time=bar_time,
@@ -116,7 +117,22 @@ def test_adx_hard_fail_blocks_to_zero_score():
     assert result["abort_reason"] == "adx_hard_abort"
 
 
-def test_missing_adx_uses_configured_soft_multiplier():
+def test_missing_adx_blocks_when_configured_fail_safe_enabled(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ADX_MISSING_BOTH_ABORT", True)
+    result = _score(
+        _snap("long", include_adx=False),
+        _snap("long", include_adx=False),
+        _snap("long", include_adx=False),
+    )
+
+    assert result["adx_source"] == "missing_both_abort"
+    assert result["adx_multiplier"] == pytest.approx(0.0)
+    assert result["final_score"] == 0.0
+    assert result["abort_reason"] == "adx_hard_abort"
+
+
+def test_missing_adx_can_use_legacy_soft_multiplier_when_explicitly_disabled(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ADX_MISSING_BOTH_ABORT", False)
     result = _score(
         _snap("long", include_adx=False),
         _snap("long", include_adx=False),
@@ -124,7 +140,6 @@ def test_missing_adx_uses_configured_soft_multiplier():
     )
 
     assert result["adx_source"] == "missing"
-    # Stage 1.2: Missing ADX fallback is 0.5 (neutral), not old soft_mult 0.65
     assert result["adx_multiplier"] == pytest.approx(0.5)
     assert result["final_score"] > 0.0
 
@@ -212,6 +227,80 @@ def test_missing_d1_ema200_is_flagged_instead_of_using_ema50():
     assert result["direction"] == "SHORT"
     assert result["trend_coherence"]["d1_ema200_missing"] is True
     assert "d1" not in result["trend_coherence"]
+
+
+def test_compute_factor_scores_uses_prior_candle_snapshots_for_hysteresis():
+    current_d1 = _snap("long")
+    current_h4 = _snap("long")
+    current_h1 = _snap("long")
+    flat_candles = [
+        {"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "vol": 1000.0}
+        for _ in range(240)
+    ]
+
+    result = _score(
+        current_d1,
+        current_h4,
+        current_h1,
+        d1_candles=flat_candles,
+        h4_candles=flat_candles,
+        h1_candles=flat_candles,
+    )
+
+    assert result["final_score"] == 0.0
+    assert result["abort_reason"] == "indeterminate_trend"
+    assert result["trend_coherence"]["hysteresis_prev_available"] == {
+        "d1": True,
+        "h4": True,
+        "h1": True,
+    }
+
+
+def test_intermarket_confirmation_adjusts_engine_a_when_enabled(monkeypatch):
+    cfg = {
+        **(CONFIG.get("INTERMARKET_CONFIRMATION", {}) or {}),
+        "enabled": True,
+        "engine_a_enabled": True,
+        "engine_a_score_cap": 0.18,
+        "lead_lag_enabled": False,
+    }
+    monkeypatch.setitem(CONFIG, "INTERMARKET_CONFIRMATION", cfg)
+    context = {
+        "drivers": [
+            {
+                "driver": "DXY",
+                "driverAssetClass": "macro",
+                "sourceType": "both",
+                "priorRelation": "inverse",
+                "effectivePriorRelation": "inverse",
+                "summary": {
+                    "regime": {"relation": "inverse", "label": "strongly inverse"},
+                    "current": {
+                        "correlation": -0.82,
+                        "stability": 0.91,
+                        "signPersistence": 0.88,
+                        "volAdjustedScore": -0.70,
+                        "targetRecentChangePct": 1.1,
+                        "driverRecentChangePct": -1.4,
+                        "window": 50,
+                        "lastBarContradiction": False,
+                        "flippedRecently": False,
+                    }
+                },
+            }
+        ],
+        "unavailablePriors": [],
+    }
+
+    baseline = _score(pair={"type": "forex", "display": "EUR/USD"})
+    adjusted = _score(
+        pair={"type": "forex", "display": "EUR/USD"},
+        intermarket_context=context,
+    )
+
+    assert adjusted["intermarket_confirmation"]["verdict"] == "supportive"
+    assert adjusted["intermarket_engine_a_delta"] > 0.0
+    assert adjusted["final_score"] > baseline["final_score"]
 
 
 def test_crypto_addon_conviction_positive_zero_negative_ordering():

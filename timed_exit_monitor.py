@@ -113,6 +113,76 @@ def _current_r_multiple(
     return None
 
 
+def _pair_label_key(value: str | None) -> str:
+    return str(value or "").replace("/", "").replace(" ", "").upper()
+
+
+def _resolve_timed_exit_pair(pair_label: str) -> dict | None:
+    label = str(pair_label or "").strip()
+    if not label:
+        return None
+    label_key = _pair_label_key(label)
+    try:
+        from athena_runtime import rt
+
+        all_pairs = getattr(rt(), "ALL_PAIRS", []) or []
+    except Exception as exc:
+        log.debug("[TIMED_EXIT] Pair registry unavailable for candle fetch: %s", exc)
+        all_pairs = []
+    for pair in all_pairs:
+        if not isinstance(pair, dict):
+            continue
+        for field in ("display", "symbol", "pair"):
+            raw = pair.get(field)
+            if raw == label or _pair_label_key(raw) == label_key:
+                return dict(pair)
+    log.debug("[TIMED_EXIT] No configured pair found for candle fetch: %s", label)
+    return None
+
+
+def _fetch_timed_exit_candles(pair_label: str, tf: str, limit: int) -> list | None:
+    pair = _resolve_timed_exit_pair(pair_label)
+    if not pair:
+        return None
+    try:
+        from candle_manager import fetch_candles
+    except ImportError:
+        return None
+    try:
+        return fetch_candles(pair, tf, limit)
+    except Exception as exc:
+        log.debug(
+            "[TIMED_EXIT] Candle fetch failed pair=%s tf=%s limit=%s: %s",
+            pair_label,
+            tf,
+            limit,
+            exc,
+        )
+        return None
+
+
+def _ohlc_series_from_candles(candles: list | None) -> tuple[list[float], list[float], list[float]]:
+    highs: list[float] = []
+    lows: list[float] = []
+    closes: list[float] = []
+    for candle in candles or []:
+        try:
+            if isinstance(candle, dict):
+                high = candle.get("high")
+                low = candle.get("low")
+                close = candle.get("close")
+            else:
+                high = candle[2]
+                low = candle[3]
+                close = candle[4]
+            highs.append(float(high))
+            lows.append(float(low))
+            closes.append(float(close))
+        except (IndexError, KeyError, TypeError, ValueError):
+            continue
+    return highs, lows, closes
+
+
 def _best_eligible_lock_r(stages: list[dict], current_r: float) -> float | None:
     """Among stages satisfied by current_r, return maximum lock_r."""
     best: float | None = None
@@ -544,7 +614,6 @@ def _compute_chandelier_trail(
     (ratchets in the trade's favour; never widens).
     """
     try:
-        from candles_cache import fetch_candles
         from indicators import calc_atr
     except ImportError:
         return None
@@ -553,17 +622,14 @@ def _compute_chandelier_trail(
     lookback = tcfg["trail_lookback"]
     mult = tcfg["trail_atr_mult"].get(style, 2.5)
 
-    try:
-        candles = fetch_candles({"pair": pair, "source": "auto"}, tf, lookback + 20)
-    except Exception:
-        candles = None
+    candles = _fetch_timed_exit_candles(pair, tf, lookback + 20)
 
     if not candles or len(candles) < lookback + 1:
         return None
 
-    highs = [float(c[2]) for c in candles]
-    lows = [float(c[3]) for c in candles]
-    closes = [float(c[4]) for c in candles]
+    highs, lows, closes = _ohlc_series_from_candles(candles)
+    if len(closes) < lookback + 1:
+        return None
 
     atr_series = calc_atr(highs, lows, closes, 14)
     atr_val = next((v for v in reversed(atr_series) if v is not None), None)
@@ -603,7 +669,6 @@ def _check_indicator_confirmation(
         return True
 
     try:
-        from candles_cache import fetch_candles
         from indicators import calc_rsi, calc_macd
     except ImportError:
         return True
@@ -613,15 +678,14 @@ def _check_indicator_confirmation(
     rsi_thresh = tcfg.get("trail_confirm_rsi_threshold", 40)
     check_macd = tcfg.get("trail_confirm_macd", True)
 
-    try:
-        candles = fetch_candles({"pair": pair, "source": "auto"}, tf, max(rsi_period + 30, 60))
-    except Exception:
-        return True
+    candles = _fetch_timed_exit_candles(pair, tf, max(rsi_period + 30, 60))
 
     if not candles or len(candles) < rsi_period + 5:
         return True
 
-    closes = [float(c[4]) for c in candles]
+    _highs, _lows, closes = _ohlc_series_from_candles(candles)
+    if len(closes) < rsi_period + 5:
+        return True
 
     rsi_series = calc_rsi(closes, rsi_period)
     rsi_val = next((v for v in reversed(rsi_series) if v is not None), None)
@@ -678,7 +742,7 @@ def _should_trail_close(
         current_r = (entry - cur_price) / _risk_dist
 
     activation_r = tcfg.get("trail_activation_r", 1.0)
-    if current_r < activation_r * 0.5:
+    if current_r < activation_r:
         return False
 
     pair = row.get("pair") or ""
