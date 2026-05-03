@@ -45,7 +45,10 @@ def load_config(config_path: str | Path = _DEFAULT_CONFIG) -> dict:
 
 def _fee_for(symbol: str, fees_cfg: dict) -> float:
     ac = asset_class_for(symbol)
-    return float(fees_cfg.get(ac, fees_cfg.get("default", 0.001)))
+    # Config values are documented as round-trip fractions. VectorBT and the
+    # pandas fallback both charge this input per side, so pass half here.
+    round_trip_fee = float(fees_cfg.get(ac, fees_cfg.get("default", 0.001)))
+    return max(0.0, round_trip_fee / 2.0)
 
 
 def get_group_symbols(cfg: dict, group: str) -> list[str]:
@@ -106,6 +109,17 @@ def _families_for_mode(cfg: dict, mode: str = "tiny") -> list[str]:
         return cfg.get("tiny_run", {}).get("families", ["trend_momentum"])
     all_fams = list(cfg.get("strategies", {}).keys())
     return all_fams
+
+
+def _zones_for_timeframes(cfg: dict, timeframes: list[str]) -> list[str]:
+    """Infer run metadata zones from the actual timeframes used."""
+    tf_set = {str(tf).upper() for tf in timeframes or []}
+    zones = []
+    for zname, zdef in (cfg.get("zones", {}) or {}).items():
+        z_tfs = {str(tf).upper() for tf in zdef.get("timeframes", [])}
+        if tf_set & z_tfs:
+            zones.append(zname)
+    return zones
 
 
 # ─── Single-symbol single-TF worker ──────────────────────────────────────────
@@ -174,6 +188,7 @@ def run_research(
     directions: Optional[list[str]] = None,
     zones: Optional[list[str]] = None,
     test_directions: bool = False,
+    max_combinations: Optional[int] = None,
 ) -> dict:
     """
     Execute a full or focused research lab run.
@@ -256,6 +271,23 @@ def run_research(
 
     log.info("[run_manager] %d strategy specs to test", len(specs))
 
+    requested_combination_count = len(symbols) * len(timeframes) * len(specs)
+    combination_cap = None
+    if max_combinations is not None:
+        try:
+            combination_cap = max(0, int(max_combinations))
+        except (TypeError, ValueError):
+            combination_cap = None
+    planned_combination_count = (
+        min(requested_combination_count, combination_cap)
+        if combination_cap is not None
+        else requested_combination_count
+    )
+    combination_truncated = (
+        combination_cap is not None
+        and requested_combination_count > combination_cap
+    )
+
 
     # Download data for all symbol × TF combinations
     # load_ohlcv_multi returns dict[str, tuple[Optional[DataFrame], DataProvenance]]
@@ -280,12 +312,26 @@ def run_research(
 
     log.info("[run_manager] Loaded data for %d symbol/TF pairs", len(all_data))
 
+    specs_by_pair: dict[tuple[str, str], list[StrategySpec]] = {}
+    remaining = combination_cap
+    for key in all_data.keys():
+        if remaining is None:
+            specs_by_pair[key] = specs
+            continue
+        take = min(len(specs), remaining)
+        specs_by_pair[key] = specs[:take]
+        remaining -= take
+
     # Run strategies in parallel
     all_results: list[StrategyMetrics] = []
     tasks = []
+    executed_combination_count = 0
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         for (symbol, tf), (ohlcv, prov) in all_data.items():
+            pair_specs = specs_by_pair.get((symbol, tf), specs)
+            if not pair_specs:
+                continue
             if ohlcv is None or ohlcv.empty:
                 log.warning("[run_manager] %s %s: DATA_UNAVAILABLE (%s) — skipping",
                             symbol, tf, prov.notes if prov else "no data")
@@ -298,11 +344,12 @@ def run_research(
                 continue
             future = pool.submit(
                 _run_symbol_tf,
-                symbol, tf, ohlcv, specs,
+                symbol, tf, ohlcv, pair_specs,
                 run_id, fees_cfg, slippage, is_pct, min_trades,
                 prov.data_source,
             )
             tasks.append(future)
+            executed_combination_count += len(pair_specs)
 
         for future in as_completed(tasks):
             try:
@@ -347,8 +394,14 @@ def run_research(
         "specs_count": len(specs),
         "results_count": len(all_results),
         "direction": direction,
-        "zones": active_zones or list(zone_cfg.keys()),
+        "zones": active_zones or _zones_for_timeframes(cfg, timeframes),
         "test_directions": test_directions,
+        "fee_model": "config_round_trip_converted_to_per_side",
+        "max_combinations": combination_cap,
+        "combination_count_requested": requested_combination_count,
+        "combination_count_planned": planned_combination_count,
+        "combination_count_executed": executed_combination_count,
+        "combination_truncated": combination_truncated,
     }
     try:
         run_dir = generate_all_reports(all_results, output_dir, run_id, run_meta)
@@ -365,6 +418,10 @@ def run_research(
         "symbols": symbols,
         "timeframes": timeframes,
         "families": families,
+        "max_combinations": combination_cap,
+        "combination_count_requested": requested_combination_count,
+        "combination_count_executed": executed_combination_count,
+        "combination_truncated": combination_truncated,
         "ai_review": None,
     }
 

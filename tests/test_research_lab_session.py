@@ -464,6 +464,78 @@ class TestSessionPublicAPI:
         assert state["market_group"] == "crypto"
         assert state["trading_style"] == "intra"
 
+    def test_session_discovery_uses_selected_timeframes(self, tmp_path):
+        from athena_research.autopilot_session import AutopilotSession
+
+        calls = []
+
+        def fake_run_research(**kwargs):
+            calls.append(kwargs)
+            run_dir = Path(kwargs["output_dir"]) / kwargs["run_id"]
+            run_dir.mkdir(parents=True, exist_ok=True)
+            _make_run_meta(run_dir)
+            pd.DataFrame([WEAK_ROW]).to_csv(run_dir / "ranked_strategies.csv", index=False)
+            return {"run_id": kwargs["run_id"]}
+
+        sess = AutopilotSession(
+            session_id="sess_tf_selected",
+            market_group="crypto",
+            trading_style="intra",
+            research_depth="quick",
+            output_dir=tmp_path / "runs",
+            sessions_dir=tmp_path / "sessions",
+        )
+        sess._timeframes_override = ["M15"]
+
+        with patch("athena_research.run_manager.run_research", side_effect=fake_run_research), \
+             patch("athena_research.autopilot.generate_auto_plan", return_value={"plan_id": "plan_mock", "tests": []}), \
+             patch("athena_research.autopilot_session.AutopilotSession._do_ai_review", return_value=None):
+            sess._run_inner()
+
+        assert calls
+        assert calls[0]["timeframes"] == ["M15"]
+        assert calls[0]["zones"] is None
+
+    def test_validation_child_uses_test_spec_timeframes_and_cap(self, tmp_path):
+        from athena_research.autopilot_session import AutopilotSession
+
+        calls = []
+
+        def fake_run_research(**kwargs):
+            calls.append(kwargs)
+            run_dir = Path(kwargs["output_dir"]) / kwargs["run_id"]
+            run_dir.mkdir(parents=True, exist_ok=True)
+            _make_run_meta(run_dir)
+            pd.DataFrame([WEAK_ROW]).to_csv(run_dir / "ranked_strategies.csv", index=False)
+            return {"run_id": kwargs["run_id"]}
+
+        sess = AutopilotSession(
+            session_id="sess_validation_tf",
+            market_group="crypto",
+            trading_style="intra",
+            research_depth="standard",
+            output_dir=tmp_path / "runs",
+            sessions_dir=tmp_path / "sessions",
+        )
+        test_spec = {
+            "mode": "small",
+            "symbols": ["BTC/USDT"],
+            "timeframes": ["H4"],
+            "zones": ["scalp", "intra", "swing"],
+            "families": ["trend_momentum"],
+            "strategies": ["ema_cross"],
+            "directions": ["long"],
+            "max_combinations": 12,
+        }
+
+        with patch("athena_research.run_manager.run_research", side_effect=fake_run_research):
+            child_ids = sess._run_validations([test_spec], "run_discovery", "small")
+
+        assert len(child_ids) == 1
+        assert calls[0]["timeframes"] == ["H4"]
+        assert calls[0]["zones"] is None
+        assert calls[0]["max_combinations"] == 12
+
     def test_get_session_status_returns_none_for_unknown(self, tmp_path):
         from athena_research.autopilot_session import get_session_status
         result = get_session_status("sess_unknown_xyz", tmp_path / "sessions")

@@ -40,6 +40,17 @@ _OUTPUT_DIR = Path("logs/research_lab")
 # In-memory registry of live sessions keyed by session_id
 _active_sessions: dict[str, "AutopilotSession"] = {}
 
+
+def _clean_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [x.strip() for x in value.split(",") if x.strip()]
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
 def _load_group_symbols() -> dict[str, list[str]]:
     """Load group symbols from YAML config (single source of truth)."""
     try:
@@ -373,16 +384,13 @@ class AutopilotSession:
         families = (self._families_override
                     if self._families_override
                     else profile["strategy_families"])
+        selected_timeframes = _clean_list(self._timeframes_override) or _clean_list(profile.get("timeframes"))
 
         # ── Phase 1: Discovery ─────────────────────────────────────────────
         self._phase("DISCOVERY_RUNNING", 5)
         discovery_run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         self.discovery_run_id = discovery_run_id
         self._save()
-
-        # Force all One-Click Autopilot sessions to scan all three zones
-        # Do NOT pass explicit timeframes - let run_manager resolve from zones
-        zones = ["scalp", "intra", "swing"]
 
         try:
             run_research(
@@ -393,9 +401,9 @@ class AutopilotSession:
                 direction="both",
                 run_ai_review=False,
                 symbols=symbols,
-                timeframes=None,  # Let zones resolve timeframes
+                timeframes=selected_timeframes,
                 families=families,
-                zones=zones,
+                zones=None,
                 test_directions=True,
             )
         except Exception as e:
@@ -459,6 +467,8 @@ class AutopilotSession:
 
         def _run_one(t_spec: dict) -> str:
             child_run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}"
+            child_timeframes = _clean_list(t_spec.get("timeframes"))
+            child_zones = [] if child_timeframes else _clean_list(t_spec.get("zones"))
             try:
                 run_research(
                     mode=t_spec.get("mode", "small"),
@@ -469,11 +479,12 @@ class AutopilotSession:
                                if t_spec.get("directions") else "both"),
                     run_ai_review=False,
                     symbols=t_spec.get("symbols"),
-                    timeframes=None,  # Let zones resolve timeframes
+                    timeframes=child_timeframes or None,
                     families=t_spec.get("families"),
                     strategies=t_spec.get("strategies"),
-                    zones=["scalp", "intra", "swing"],
+                    zones=child_zones or None,
                     test_directions=True,
+                    max_combinations=t_spec.get("max_combinations"),
                 )
                 self._tag_run_meta(child_run_id, role="validation",
                                    parent_run_id=discovery_run_id)
@@ -884,9 +895,9 @@ def start_session(
         output_dir=output_dir,
         sessions_dir=sessions_dir,
     )
-    sess._symbols_override = symbols_override or None
-    sess._timeframes_override = timeframes_override or None
-    sess._families_override = families_override or None
+    sess._symbols_override = _clean_list(symbols_override) or None
+    sess._timeframes_override = _clean_list(timeframes_override) or None
+    sess._families_override = _clean_list(families_override) or None
     _active_sessions[session_id] = sess
     sess._save()
     sess.start()

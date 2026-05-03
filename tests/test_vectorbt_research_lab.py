@@ -709,6 +709,95 @@ class TestRunManager:
         result = get_run_results("nonexistent_run_id", tmp_path)
         assert result is None
 
+    def test_fee_for_converts_round_trip_config_to_per_side(self):
+        from athena_research.run_manager import _fee_for
+
+        assert _fee_for("BTC/USDT", {"crypto": 0.0006, "default": 0.001}) == pytest.approx(0.0003)
+
+    def test_run_research_enforces_max_combinations_and_metadata(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+
+        import athena_research.run_manager as rm
+        from athena_research.strategies import StrategySpec
+
+        config_path = tmp_path / "research_lab.yaml"
+        config_path.write_text(
+            """
+research_lab:
+  fees:
+    crypto: 0.0006
+    default: 0.001
+  slippage:
+    default: 0.0
+  is_pct: 0.70
+  min_trades: 1
+  zones:
+    intra:
+      timeframes: [H1]
+  strategies:
+    trend_momentum: {}
+""",
+            encoding="utf-8",
+        )
+        specs = [
+            StrategySpec(
+                family="trend_momentum",
+                name="ema_cross",
+                params={"idx": idx},
+                direction="both",
+            )
+            for idx in range(3)
+        ]
+        df = _make_ohlcv(80)
+        calls = []
+        captured_meta = {}
+
+        monkeypatch.setattr(rm, "iter_strategy_specs", lambda families, strategy_params, direction="both": iter(specs))
+        monkeypatch.setattr(
+            rm,
+            "load_ohlcv_multi",
+            lambda symbols, timeframe, **kwargs: {
+                sym: (df.copy(), SimpleNamespace(data_source="synthetic_test", notes=""))
+                for sym in symbols
+            },
+        )
+
+        def fake_run_symbol_tf(symbol, timeframe, ohlcv, pair_specs, *args, **kwargs):
+            calls.append((symbol, timeframe, [spec.params["idx"] for spec in pair_specs]))
+            return []
+
+        def fake_generate_all_reports(all_results, output_dir, run_id, run_meta):
+            captured_meta.update(run_meta)
+            run_dir = Path(output_dir) / run_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            return run_dir
+
+        monkeypatch.setattr(rm, "_run_symbol_tf", fake_run_symbol_tf)
+        monkeypatch.setattr(rm, "generate_all_reports", fake_generate_all_reports)
+
+        result = rm.run_research(
+            mode="small",
+            config_path=config_path,
+            output_dir=tmp_path / "runs",
+            run_id="run_cap_test",
+            symbols=["BTC/USDT", "ETH/USDT"],
+            timeframes=["H1"],
+            families=["trend_momentum"],
+            max_combinations=4,
+            max_workers=1,
+        )
+
+        assert sum(len(spec_ids) for _, _, spec_ids in calls) == 4
+        assert calls[0] == ("BTC/USDT", "H1", [0, 1, 2])
+        assert calls[1] == ("ETH/USDT", "H1", [0])
+        assert captured_meta["max_combinations"] == 4
+        assert captured_meta["combination_count_requested"] == 6
+        assert captured_meta["combination_count_planned"] == 4
+        assert captured_meta["combination_count_executed"] == 4
+        assert captured_meta["combination_truncated"] is True
+        assert captured_meta["zones"] == ["intra"]
+        assert result["combination_count_executed"] == 4
+
     def test_no_live_imports_after_run_manager(self):
         import athena_research.run_manager
         _check_no_live_imports()

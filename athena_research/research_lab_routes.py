@@ -19,7 +19,71 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_OUTPUT = Path("logs/research_lab")
 _active_runs: dict[str, dict] = {}  # run_id → {status, thread, result}
-_running_autopilot_plans: dict[str, list[str]] = {}  # idempotency_key → [child_ids]
+_autopilot_plan_lock = threading.Lock()
+_AUTOPILOT_IDEMPOTENCY_TTL_SECONDS = 60 * 60
+_running_autopilot_plans: dict[str, dict] = {}
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_iso_dt(raw: object) -> Optional[datetime]:
+    if not raw:
+        return None
+    try:
+        text = str(raw)
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _cleanup_autopilot_plan_states(now: Optional[datetime] = None) -> None:
+    """Drop completed/failed idempotency records after their replay window."""
+    now = now or _now_utc()
+    stale_keys: list[str] = []
+    for key, state in list(_running_autopilot_plans.items()):
+        if not isinstance(state, dict):
+            continue
+        if state.get("status") == "running":
+            continue
+        updated_at = _parse_iso_dt(state.get("updated_at") or state.get("completed_at") or state.get("failed_at"))
+        if updated_at is None or (now - updated_at).total_seconds() > _AUTOPILOT_IDEMPOTENCY_TTL_SECONDS:
+            stale_keys.append(key)
+    for key in stale_keys:
+        _running_autopilot_plans.pop(key, None)
+
+
+def _mark_autopilot_plan_child_done(
+    idempotency_key: str,
+    child_run_id: str,
+    *,
+    success: bool,
+    error: Optional[str] = None,
+) -> None:
+    now_iso = _now_utc().isoformat()
+    with _autopilot_plan_lock:
+        state = _running_autopilot_plans.get(idempotency_key)
+        if not isinstance(state, dict):
+            return
+        done_key = "completed_child_run_ids" if success else "failed_child_run_ids"
+        state.setdefault(done_key, [])
+        if child_run_id not in state[done_key]:
+            state[done_key].append(child_run_id)
+        if error:
+            state.setdefault("errors", []).append({"run_id": child_run_id, "error": error})
+        state["updated_at"] = now_iso
+        expected = len(state.get("child_run_ids", []))
+        done_count = len(set(state.get("completed_child_run_ids", []) + state.get("failed_child_run_ids", [])))
+        if expected and done_count >= expected:
+            state["status"] = "failed" if state.get("failed_child_run_ids") else "completed"
+            finish_key = "failed_at" if state["status"] == "failed" else "completed_at"
+            state[finish_key] = now_iso
 
 
 
@@ -42,6 +106,7 @@ def register_research_lab_routes(app) -> None:
         strategies = body.get("strategies", None)
         params = body.get("params", None)
         directions = body.get("directions", None)
+        max_combinations = body.get("max_combinations", None)
 
         from athena_research.run_manager import run_research, _DEFAULT_CONFIG
         from datetime import datetime, timezone
@@ -64,6 +129,7 @@ def register_research_lab_routes(app) -> None:
                     strategies=strategies,
                     params=params,
                     directions=directions,
+                    max_combinations=max_combinations,
                 )
                 _active_runs[run_id]["status"] = "complete"
 
@@ -285,26 +351,58 @@ def register_research_lab_routes(app) -> None:
 
         # Backend Idempotency
         idempotency_key = body.get("idempotency_key") or f"{source_run_id}_{plan_id}"
-        if idempotency_key in _running_autopilot_plans:
-            log.info("[research_lab_routes] Duplicate auto plan request intercepted for %s", idempotency_key)
-            return jsonify({
-                "status": "started",
+        from athena_research.run_manager import run_research, _DEFAULT_CONFIG
+
+        with _autopilot_plan_lock:
+            _cleanup_autopilot_plan_states()
+            existing = _running_autopilot_plans.get(idempotency_key)
+            if isinstance(existing, list):
+                existing = {
+                    "status": "running",
+                    "plan_id": plan_id,
+                    "parent_run_id": source_run_id,
+                    "child_run_ids": list(existing),
+                    "completed_child_run_ids": [],
+                    "failed_child_run_ids": [],
+                    "errors": [],
+                    "started_at": _now_utc().isoformat(),
+                    "updated_at": _now_utc().isoformat(),
+                }
+                _running_autopilot_plans[idempotency_key] = existing
+            if isinstance(existing, dict) and existing.get("status") == "running":
+                log.info("[research_lab_routes] Duplicate auto plan request intercepted for %s", idempotency_key)
+                return jsonify({
+                    "status": "started",
+                    "idempotency_status": "running",
+                    "plan_id": plan_id,
+                    "parent_run_id": source_run_id,
+                    "child_run_ids": existing.get("child_run_ids", []),
+                    "message": "Autopilot validation already in progress"
+                }), 200
+
+            child_run_ids = []
+            child_specs = []
+            for t_spec in tests:
+                from datetime import datetime, timezone
+                child_run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}"
+                child_run_ids.append(child_run_id)
+                child_specs.append((child_run_id, t_spec))
+
+            now_iso = _now_utc().isoformat()
+            _running_autopilot_plans[idempotency_key] = {
+                "status": "running" if child_run_ids else "completed",
                 "plan_id": plan_id,
                 "parent_run_id": source_run_id,
-                "child_run_ids": _running_autopilot_plans[idempotency_key],
-                "message": "Autopilot validation already in progress"
-            }), 200
-            
-        from athena_research.run_manager import run_research, _DEFAULT_CONFIG
-        
-        child_run_ids = []
-        _running_autopilot_plans[idempotency_key] = child_run_ids
+                "child_run_ids": child_run_ids,
+                "completed_child_run_ids": [],
+                "failed_child_run_ids": [],
+                "errors": [],
+                "started_at": now_iso,
+                "updated_at": now_iso,
+                "completed_at": now_iso if not child_run_ids else None,
+            }
 
-        for t_spec in tests:
-            from datetime import datetime, timezone
-            child_run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}"
-            child_run_ids.append(child_run_id)
-            
+        for child_run_id, t_spec in child_specs:
             mode = t_spec.get("mode", "small")
             direction = t_spec.get("directions", ["both"])[0] if t_spec.get("directions") else "both"
             symbols = t_spec.get("symbols")
@@ -312,8 +410,9 @@ def register_research_lab_routes(app) -> None:
             families = t_spec.get("families")
             strategies = t_spec.get("strategies")
             params = t_spec.get("params")
+            max_combinations = t_spec.get("max_combinations")
             
-            def _worker_child(cid, m, d, s, tf, f, strats, p):
+            def _worker_child(cid, m, d, s, tf, f, strats, p, max_comb):
                 _active_runs[cid] = {"status": "running", "run_id": cid}
                 try:
                     import json
@@ -329,6 +428,7 @@ def register_research_lab_routes(app) -> None:
                         families=f,
                         strategies=strats,
                         params=p,
+                        max_combinations=max_comb,
                     )
                     
                     # Update metadata on disk to link parent safely
@@ -343,17 +443,24 @@ def register_research_lab_routes(app) -> None:
                             pass
                             
                     _active_runs[cid]["status"] = "complete"
+                    _mark_autopilot_plan_child_done(idempotency_key, cid, success=True)
                 except Exception as ex:
                     _active_runs[cid]["status"] = "failed"
                     _active_runs[cid]["error"] = str(ex)
+                    _mark_autopilot_plan_child_done(idempotency_key, cid, success=False, error=str(ex))
                     
             _active_runs[child_run_id] = {"status": "queued", "run_id": child_run_id}
-            t = threading.Thread(target=_worker_child, args=(child_run_id, mode, direction, symbols, timeframes, families, strategies, params), daemon=True)
+            t = threading.Thread(
+                target=_worker_child,
+                args=(child_run_id, mode, direction, symbols, timeframes, families, strategies, params, max_combinations),
+                daemon=True,
+            )
             _active_runs[child_run_id]["thread"] = t
             t.start()
             
         return jsonify({
             "status": "started",
+            "idempotency_status": "running" if child_run_ids else "completed",
             "plan_id": plan_id,
             "parent_run_id": source_run_id,
             "child_run_ids": child_run_ids,

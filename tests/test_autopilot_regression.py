@@ -6,6 +6,7 @@ Verifies discovery queues, combination counts, and constraints enforcement.
 import pytest
 import pandas as pd
 from pathlib import Path
+import threading
 from athena_research.autopilot import generate_auto_plan
 
 @pytest.fixture
@@ -88,7 +89,18 @@ def test_backend_duplicate_prevention_flask():
     
     with app.test_client() as client:
         # Pre-seed the state
-        _running_autopilot_plans["mock_parent_default_plan"] = ["child_1", "child_2"]
+        _running_autopilot_plans.clear()
+        _running_autopilot_plans["mock_parent_default_plan"] = {
+            "status": "running",
+            "plan_id": "default_plan",
+            "parent_run_id": "mock_parent",
+            "child_run_ids": ["child_1", "child_2"],
+            "completed_child_run_ids": [],
+            "failed_child_run_ids": [],
+            "errors": [],
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+        }
         
         payload = {
             "source_run_id": "mock_parent",
@@ -104,26 +116,116 @@ def test_backend_duplicate_prevention_flask():
         assert data["child_run_ids"] == ["child_1", "child_2"]
         assert "validation already in progress" in data["message"]
 
-def test_backend_child_ids_returned():
+def test_backend_completed_idempotency_does_not_block_repeat():
     from flask import Flask
-    from athena_research.research_lab_routes import register_research_lab_routes
+    from athena_research.research_lab_routes import register_research_lab_routes, _running_autopilot_plans
     
     app = Flask(__name__)
     register_research_lab_routes(app)
     
+    with app.test_client() as client:
+        _running_autopilot_plans.clear()
+        _running_autopilot_plans["mock_parent_default_plan"] = {
+            "status": "completed",
+            "plan_id": "default_plan",
+            "parent_run_id": "mock_parent",
+            "child_run_ids": ["old_child"],
+            "completed_child_run_ids": ["old_child"],
+            "failed_child_run_ids": [],
+            "errors": [],
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "completed_at": "2026-01-01T00:00:00+00:00",
+        }
+        payload = {
+            "source_run_id": "mock_parent",
+            "plan_id": "default_plan",
+            "tests": []
+        }
+
+        res = client.post("/api/research-lab/run-auto-plan", json=payload)
+        assert res.status_code == 202
+        data = res.get_json()
+        assert data["status"] == "started"
+        assert data["idempotency_status"] == "completed"
+        assert data["child_run_ids"] == []
+
+def test_backend_child_ids_returned(monkeypatch, tmp_path):
+    from flask import Flask
+    import athena_research.research_lab_routes as routes
+    from athena_research.research_lab_routes import register_research_lab_routes
+
+    done = threading.Event()
+
+    def fake_run_research(**kwargs):
+        run_dir = Path(kwargs["output_dir"]) / kwargs["run_id"]
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "run_meta.json").write_text("{}", encoding="utf-8")
+        done.set()
+        return {"run_id": kwargs["run_id"]}
+
+    monkeypatch.setattr(routes, "_DEFAULT_OUTPUT", tmp_path)
+    monkeypatch.setattr("athena_research.run_manager.run_research", fake_run_research)
+    routes._running_autopilot_plans.clear()
+
+    app = Flask(__name__)
+    register_research_lab_routes(app)
+
     with app.test_client() as client:
         payload = {
             "source_run_id": "mock_fresh_parent",
             "plan_id": "fresh_plan",
             "tests": [{"mode": "small", "symbols": ["BTC/USDT"]}]
         }
-        
+
         res = client.post("/api/research-lab/run-auto-plan", json=payload)
         assert res.status_code == 202
         data = res.get_json()
         assert data["status"] == "started"
         assert len(data["child_run_ids"]) == 1
         assert "validation started" in data["message"]
+        assert done.wait(2)
+
+def test_backend_run_auto_plan_passes_max_combinations(monkeypatch, tmp_path):
+    from flask import Flask
+    import athena_research.research_lab_routes as routes
+    from athena_research.research_lab_routes import register_research_lab_routes
+
+    done = threading.Event()
+    seen = []
+
+    def fake_run_research(**kwargs):
+        seen.append(kwargs)
+        run_dir = Path(kwargs["output_dir"]) / kwargs["run_id"]
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "run_meta.json").write_text("{}", encoding="utf-8")
+        done.set()
+        return {"run_id": kwargs["run_id"]}
+
+    monkeypatch.setattr(routes, "_DEFAULT_OUTPUT", tmp_path)
+    monkeypatch.setattr("athena_research.run_manager.run_research", fake_run_research)
+    routes._running_autopilot_plans.clear()
+
+    app = Flask(__name__)
+    register_research_lab_routes(app)
+
+    with app.test_client() as client:
+        payload = {
+            "source_run_id": "mock_cap_parent",
+            "plan_id": "cap_plan",
+            "tests": [{
+                "mode": "small",
+                "symbols": ["BTC/USDT"],
+                "timeframes": ["H1"],
+                "families": ["trend_momentum"],
+                "max_combinations": 7,
+            }]
+        }
+
+        res = client.post("/api/research-lab/run-auto-plan", json=payload)
+        assert res.status_code == 202
+        assert done.wait(2)
+        assert seen[0]["max_combinations"] == 7
 def test_backend_aggregate_autopilot_result():
     from flask import Flask
     from athena_research.research_lab_routes import register_research_lab_routes
