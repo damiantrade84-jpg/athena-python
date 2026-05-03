@@ -72,31 +72,19 @@ def _get_recent_performance(
         with sqlite3.connect(db_path, timeout=10.0) as con:
             con.row_factory = sqlite3.Row
 
-            # Engine A win rate in this regime
-            row_a = con.execute(
+            # Pair+regime win rate (learning_log has no engine/outcome columns)
+            row = con.execute(
                 """SELECT COUNT(*) as total, SUM(win) as wins
                    FROM learning_log
-                   WHERE pair = ? AND regime = ? AND engine = 'A'
-                   AND ts > ? AND (r_multiple IS NULL OR abs(r_multiple) <= 50)
-                   AND outcome IS NOT NULL""",
+                   WHERE pair = ? AND regime = ?
+                   AND ts > ? AND (r_multiple IS NULL OR abs(r_multiple) <= 50)""",
                 (pair, regime, cutoff),
             ).fetchone()
-            if row_a and row_a["total"] and row_a["total"] >= 5:
-                result["engine_a_wr"] = row_a["wins"] / row_a["total"]
-                result["sample_size"] += row_a["total"]
-
-            # Engine B win rate in this regime
-            row_b = con.execute(
-                """SELECT COUNT(*) as total, SUM(win) as wins
-                   FROM learning_log
-                   WHERE pair = ? AND regime = ? AND engine = 'B'
-                   AND ts > ? AND (r_multiple IS NULL OR abs(r_multiple) <= 50)
-                   AND outcome IS NOT NULL""",
-                (pair, regime, cutoff),
-            ).fetchone()
-            if row_b and row_b["total"] and row_b["total"] >= 5:
-                result["engine_b_wr"] = row_b["wins"] / row_b["total"]
-                result["sample_size"] += row_b["total"]
+            if row and row["total"] and row["total"] >= 5:
+                wr = row["wins"] / row["total"]
+                result["engine_a_wr"] = wr
+                result["engine_b_wr"] = wr
+                result["sample_size"] = row["total"]
 
     except Exception as e:
         log.warning("[CONDUCTOR] DB query failed: %s", e)
