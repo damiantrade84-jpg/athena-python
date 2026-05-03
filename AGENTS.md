@@ -16,6 +16,46 @@ description: alwaysApply: true
 
 ---
 
+# Engines & Scoring
+
+## Engine A — Factor Confluence (Primary)
+- **Scoring:** `final_score` 0.0–3.0 (normalized indicator confluence)
+- **Directional score:** Trend component (trend_score)
+- **Nondirectional score:** Momentum quality (mom_quality)
+- **Thresholds:** 2-tier system (volatile assets = higher threshold)
+- **Key factors:** BTC bias (conditional on correlation), OI context for crypto, intermarket confirmation
+- **Config keys:** `ENGINE_A`, `ENGINE_A_RESEARCH_LAB_FACTORS`, `ENGINE_A_MEAN_REVERSION`
+
+## Engine B — Naked Market Structure (SMC/ICT)
+- **Scoring:** Score/max_score (%), regime-gated thresholds
+- **Regime multipliers:** TRENDING=0.90, RANGING=0.90, HIGH_VOL=0.85, LOW_VOL=1.15
+- **Checklist:** Swing sequence, BOS, liquidity sweeps, FVG overlap, zone quality, trigger quality
+- **Styles:** scalp (H1), intraday (H4), swing (D1) — each with min_score + min_rr
+- **Config keys:** `NAKED_ENGINE.style_profiles`, `NAKED_MAX_DAILY`, `ENGINE_B_REGIME_MULTIPLIERS`
+
+## Engine C — Consensus Engine (A vs B Trust)
+- **Purpose:** Compare Engine A and B signals, resolve conflicts
+- **Scoring:** Calibrated probability, trust verdict (trust_a/trust_b/trust_both/trust_neither)
+- **Weight recommendation:** {"A": x, "B": y} summing to 1.0
+- **Conviction modifier:** Categorical (UPGRADE/NEUTRAL/DOWNGRADE) mapped to float
+- **Decision states:** trade boolean, tier, sizing_override, disagreement_diagnosis
+
+## Engine D — Scalp Lab (Volume Profile)
+- **Methodology:** Fabio Valentini VP + Order Flow (balance/imbalance, VAL/VAH/POC/LVN)
+- **Setup types:** Mean Reversion (price at VA extreme → target POC) / Trend Continuation (pullback to LVN)
+- **Grading:** A (full) / B (half) / C (quarter) / D (skip)
+- **Three-pillar gate:** Market State + Location + Aggression (ALL must align)
+- **Session filter:** NY open skip, London cash open, session mode (NY/London/Asia/All)
+- **Config keys:** `SCALP_ENGINE`, `BT_*` (backtest params)
+
+## Vision (Chart Analysis)
+- **Input:** Chart screenshots (H4/H1/D1) + algorithmic context
+- **Output:** RIGHT EDGE status (CONFIRMS/REVIEW/POTENTIAL REVERSAL), TF alignment, per-style ratings
+- **Model:** VISION_MODEL (grok-4.3), 800–1100 tokens, temperature from AITemperatureConfig
+- **Parser contract:** Exact footer tokens required — `RIGHT EDGE`, `TF ALIGNMENT`, `RATING`, `LEVELS`
+
+---
+
 # Workflow Orchestration
 
 ## 1. Plan Node Default
@@ -65,4 +105,4 @@ description: alwaysApply: true
 ## 8. Core Principles
 - **Simplicity First**: Make every change as simple as possible. Impact minimal code.
 - **No Laziness**: Find root causes. No temporary fixes. Senior developer standards.
-- **Minimal Impact**: Changes should only touch what's necessary. Avoid introducing bugs.
+- **Minimal Impact:** Changes should only touch what's necessary. Avoid introducing bugs.
