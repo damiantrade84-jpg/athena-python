@@ -687,7 +687,7 @@ def register_research_lab_routes(app) -> None:
     @app.route("/api/research-lab/analyze/<run_id>", methods=["POST"])
     def api_research_lab_analyze(run_id: str):
         """Run AI analyst on an existing research run."""
-        from athena_research.ai_analyst import run_ai_analysis
+        from athena_research.ai_analyst import run_ai_analysis, load_ai_review
 
         run_dir = _DEFAULT_OUTPUT / run_id
         if not run_dir.exists():
@@ -702,7 +702,19 @@ def register_research_lab_routes(app) -> None:
                 max_tokens=int(body.get("max_tokens", 4000)),
                 temperature=float(body.get("temperature", 0.2)),
             )
-            return jsonify(result)
+            
+            # Map correctly for the UI
+            data = load_ai_review(run_dir)
+            action_plan = data.get("action_plan") or {}
+            
+            response_data = {
+                "run_id": run_id,
+                "ai_review": data.get("review_md"),
+                "summary": action_plan.get("summary") or action_plan.get("overall_verdict") or "See AI review for details.",
+                "recommendation": action_plan.get("recommendation") or "See AI review for details.",
+            }
+            response_data.update(result)
+            return jsonify(response_data)
         except Exception as e:
             log.error("[research_lab_routes] AI analysis failed for %s: %s", run_id, e)
             return jsonify({"error": str(e)}), 500
@@ -720,7 +732,17 @@ def register_research_lab_routes(app) -> None:
         data = load_ai_review(run_dir)
         if not data:
             return jsonify({"error": "No AI review found. Run /analyze first."}), 404
-        return jsonify({"run_id": run_id, **data})
+            
+        action_plan = data.get("action_plan") or {}
+        
+        response_data = {
+            "run_id": run_id,
+            "ai_review": data.get("review_md"),
+            "summary": action_plan.get("summary") or action_plan.get("overall_verdict") or "See AI review for details.",
+            "recommendation": action_plan.get("recommendation") or "See AI review for details.",
+        }
+        response_data.update(data)
+        return jsonify(response_data)
 
     # ── GET /api/research-lab/download/<run_id>/<filename> ───────────────────
     @app.route("/api/research-lab/download/<run_id>/<path:filename>", methods=["GET"])

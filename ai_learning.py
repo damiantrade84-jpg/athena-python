@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS learning_log (
     pair             TEXT NOT NULL,
     asset_type       TEXT NOT NULL,
     direction        TEXT,
+    engine           TEXT,
+    outcome          TEXT,
     ai_grade         TEXT,
     edge_prob        REAL,
     confluence_score REAL,
@@ -76,6 +78,10 @@ def init_learning_db(db_path: str) -> None:
             }
             if "factors_json" not in existing:
                 con.execute("ALTER TABLE learning_log ADD COLUMN factors_json TEXT")
+            if "engine" not in existing:
+                con.execute("ALTER TABLE learning_log ADD COLUMN engine TEXT")
+            if "outcome" not in existing:
+                con.execute("ALTER TABLE learning_log ADD COLUMN outcome TEXT")
             con.commit()
         log.info("[LEARN] Learning DB ready")
     except Exception as e:
@@ -124,14 +130,23 @@ def extract_learning_from_trade(
         # Copy factor scores if available
         factors_raw = row.get("factors_json")
 
+        # Extract engine and compute outcome
+        engine = row.get("engine")
+        if not engine:
+            engine = "engine_a" if "engine_a" in row.keys() else "UNKNOWN"
+            
+        outcome = "WIN" if win else "LOSS"
+        if r_mult is not None and abs(r_mult) < 0.1:
+            outcome = "BREAKEVEN"
+
         with sqlite3.connect(db_path, timeout=15.0) as con:
             con.execute(
                 """INSERT INTO learning_log
-                   (ts, trade_ts, ticket, pair, asset_type, direction,
+                   (ts, trade_ts, ticket, pair, asset_type, direction, engine, outcome,
                     ai_grade, edge_prob, confluence_score, max_score, score_pct,
                     votes_json, regime, pnl, r_multiple, win, exit_reason,
                     holding_hours, is_demo, factors_json)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     datetime.now(timezone.utc).isoformat(),
                     row["ts"],
@@ -139,6 +154,8 @@ def extract_learning_from_trade(
                     pair,
                     asset_type,
                     row["direction"],
+                    engine,
+                    outcome,
                     row["grade"] if "grade" in row.keys() else None,
                     row["edge_prob"] if "edge_prob" in row.keys() else None,
                     row["score"],
@@ -158,7 +175,7 @@ def extract_learning_from_trade(
                 ),
             )
             con.commit()
-        log.debug(f"[LEARN] Logged outcome for {pair} win={win} R={r_mult}")
+        log.debug(f"[LEARN] Logged outcome for {pair} ({engine}) win={win} R={r_mult}")
     except Exception as e:
         log.debug(f"[LEARN] extract_learning_from_trade failed for {ticket}: {e}")
 

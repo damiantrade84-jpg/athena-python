@@ -72,19 +72,51 @@ def _get_recent_performance(
         with sqlite3.connect(db_path, timeout=10.0) as con:
             con.row_factory = sqlite3.Row
 
-            # Pair+regime win rate (learning_log has no engine/outcome columns)
-            row = con.execute(
-                """SELECT COUNT(*) as total, SUM(win) as wins
+            # Query per-engine stats
+            rows = con.execute(
+                """SELECT engine, COUNT(*) as total, SUM(win) as wins
                    FROM learning_log
                    WHERE pair = ? AND regime = ?
-                   AND ts > ? AND (r_multiple IS NULL OR abs(r_multiple) <= 50)""",
+                   AND ts > ? AND (r_multiple IS NULL OR abs(r_multiple) <= 50)
+                   GROUP BY engine""",
                 (pair, regime, cutoff),
-            ).fetchone()
-            if row and row["total"] and row["total"] >= 5:
-                wr = row["wins"] / row["total"]
-                result["engine_a_wr"] = wr
-                result["engine_b_wr"] = wr
-                result["sample_size"] = row["total"]
+            ).fetchall()
+
+            total_sample = 0
+            engine_a_wr = 0.0
+            engine_b_wr = 0.0
+
+            for row in rows:
+                eng = row["engine"] or ""
+                total = row["total"] or 0
+                wins = row["wins"] or 0
+                
+                total_sample += total
+                
+                if total >= 3:
+                    wr = wins / total
+                    if eng == "engine_a":
+                        engine_a_wr = wr
+                    elif eng == "engine_b":
+                        engine_b_wr = wr
+
+            # If we don't have enough data for true per-engine, fallback to aggregate
+            if total_sample >= 5 and engine_a_wr == 0.0 and engine_b_wr == 0.0:
+                agg_row = con.execute(
+                    """SELECT COUNT(*) as total, SUM(win) as wins
+                       FROM learning_log
+                       WHERE pair = ? AND regime = ?
+                       AND ts > ? AND (r_multiple IS NULL OR abs(r_multiple) <= 50)""",
+                    (pair, regime, cutoff),
+                ).fetchone()
+                if agg_row and agg_row["total"] and agg_row["total"] >= 5:
+                    wr = agg_row["wins"] / agg_row["total"]
+                    engine_a_wr = wr
+                    engine_b_wr = wr
+
+            result["engine_a_wr"] = engine_a_wr
+            result["engine_b_wr"] = engine_b_wr
+            result["sample_size"] = total_sample
 
     except Exception as e:
         log.warning("[CONDUCTOR] DB query failed: %s", e)
