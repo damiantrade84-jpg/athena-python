@@ -3,6 +3,7 @@ telegram_bot.py — Interactive Telegram command centre for Sentinel Pro
 
 Commands:
   /scan [class]    — Engine A full scan (crypto/forex/commodity/stock/index)
+  /engineb [class] — Engine B naked-structure scan
   /signal <pair>   — Analyse a specific pair
   /positions       — All open positions (MT5 + Bybit) with P&L
   /close <pair>    — Close a position (with confirmation)
@@ -18,14 +19,13 @@ Commands:
   /help            — This message
 """
 
-import os
 import logging
 import threading
 import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from telegram_notify import send_signal_alert
+from telegram_notify import get_configured_chat_ids, get_runtime_config, send_signal_alert
 
 log = logging.getLogger("sentinel")
 
@@ -37,6 +37,27 @@ _BASE = "http://127.0.0.1:5000"
 _TIMEOUT_FAST = 10   # status/balance calls
 _TIMEOUT_SCAN = 120  # scan calls
 _TIMEOUT_EXEC = 30   # execution calls
+
+
+def _telegram_command_specs() -> list[tuple[str, str]]:
+    return [
+        ("scan", "Engine A scan by asset class"),
+        ("engineb", "Engine B naked-structure scan"),
+        ("enginec", "Engine C consensus scan"),
+        ("scalp", "Engine D scalp scan"),
+        ("signal", "Analyse one pair"),
+        ("positions", "Open trades and P&L"),
+        ("status", "System health"),
+        ("forensics", "Signal trust summary"),
+        ("balance", "MT5 and Bybit balances"),
+        ("pnl", "Performance stats"),
+        ("auto", "Toggle auto-trader"),
+        ("decay", "Score decay for open trades"),
+        ("bt", "Quick backtest"),
+        ("kill", "Emergency stop"),
+        ("resume", "Lift kill switch"),
+        ("help", "Show command help"),
+    ]
 
 # ── Pair name fuzzy matching ──────────────────────────────────────────────────
 
@@ -310,6 +331,30 @@ def _fmt_engine_c_card(sig: dict) -> str:
     return "\n".join(lines)
 
 
+def _fmt_engine_b_card(sig: dict) -> str:
+    pair = sig.get("display") or sig.get("pair") or sig.get("symbol") or "?"
+    direction = sig.get("direction") or "?"
+    naked = sig.get("naked_data") or {}
+    score = sig.get("confluenceScore", naked.get("score", 0))
+    max_score = sig.get("maxScore", naked.get("max_possible", 0))
+    pct = sig.get("score_pct", naked.get("pct", naked.get("score_pct", 0)))
+    style = sig.get("style") or naked.get("style") or "?"
+    regime = sig.get("regime") or naked.get("regime") or sig.get("trendState") or "?"
+    rr = sig.get("rr1", naked.get("rr_used_for_gate", naked.get("rr", 0)))
+    sl = sig.get("sl") or naked.get("execution_sl") or naked.get("recommended_stop_loss")
+    tp = sig.get("tp1") or naked.get("execution_tp") or naked.get("recommended_take_profit")
+    zone_tf = sig.get("zone_tf") or naked.get("zone_tf")
+    entry_tf = sig.get("entry_tf") or naked.get("entry_tf")
+    tf_note = f" | TF `{zone_tf}/{entry_tf}`" if zone_tf or entry_tf else ""
+    return "\n".join([
+        f"*{pair}* - {direction} - Engine B",
+        f"Score: `{_safe_float(score):.1f}/{_safe_float(max_score):.1f}` ({_safe_float(pct):.0f}%)",
+        f"Style: `{style}` | Regime: `{regime}`{tf_note}",
+        f"Entry: `{sig.get('price', naked.get('current_price', '?'))}`",
+        f"SL: `{sl}` | TP: `{tp}` | RR: `{_safe_float(rr):.2f}`",
+    ])
+
+
 def _fmt_scalp_card(sig: dict) -> str:
     pair = sig.get("pair") or sig.get("display") or "?"
     direction = sig.get("direction") or "?"
@@ -358,35 +403,60 @@ def _fetch_open_positions_sync(req) -> tuple[list[tuple[dict, str]], dict]:
 
 def start_telegram_bot():
     """Start the Telegram bot in a background thread."""
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-    if not token or not chat_id:
+    config = get_runtime_config()
+    if not config.get("enabled"):
+        log.info("[TELEGRAM] Bot disabled via TELEGRAM.enabled")
+        return
+    token = config.get("token", "")
+    chat_ids = get_configured_chat_ids(config)
+    if not token or not chat_ids:
         log.warning("[TELEGRAM] Bot token or chat_id not set — bot disabled")
         return
-    t = threading.Thread(target=_run_bot, args=(token, chat_id), daemon=True)
+    t = threading.Thread(target=_run_bot, args=(token, chat_ids), daemon=True)
     t.start()
     log.warning("[TELEGRAM] Bot started in background thread")
 
 
-def _run_bot(token: str, chat_id: str):
+def _run_bot(token: str, chat_ids: list[str]):
     import traceback
-    try:
-        _build_and_run(token, chat_id)
-    except Exception as e:
-        log.error(f"[TELEGRAM] Bot failed: {e}\n{traceback.format_exc()}")
+    import time
+    while True:
+        try:
+            _build_and_run(token, chat_ids)
+            break  # Exit cleanly if it ever returns normally
+        except Exception as e:
+            log.error(f"[TELEGRAM] Bot failed: {e}\n{traceback.format_exc()}")
+            log.info("[TELEGRAM] Restarting bot in 15 seconds due to error...")
+            time.sleep(15)
 
 
-def _build_and_run(token: str, chat_id: str):
+def _build_and_run(token: str, chat_ids: list[str]):
     import requests as req
-    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+    from telegram import BotCommand, MenuButtonCommands, Update, InlineKeyboardButton, InlineKeyboardMarkup
     from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-    app = Application.builder().token(token).build()
-    app.bot_data["chat_id"] = chat_id
+    async def _configure_bot_menu(application):
+        commands = [BotCommand(cmd, desc) for cmd, desc in _telegram_command_specs()]
+        await application.bot.set_my_commands(commands)
+        await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+
+    app = (
+        Application.builder()
+        .token(token)
+        .connect_timeout(30.0)
+        .read_timeout(30.0)
+        .write_timeout(30.0)
+        .post_init(_configure_bot_menu)
+        .build()
+    )
+    allowed_chat_ids = {str(chat_id) for chat_id in chat_ids if str(chat_id).strip()}
+    app.bot_data["chat_id"] = next(iter(allowed_chat_ids), "")
+    app.bot_data["allowed_chat_ids"] = allowed_chat_ids
 
     def _guard(update: Update) -> bool:
         """Reject messages from unknown chat IDs silently."""
-        return str(update.effective_chat.id) == str(chat_id)
+        chat = getattr(update, "effective_chat", None)
+        return bool(chat and str(chat.id) in allowed_chat_ids)
 
     async def _run_in_thread(fn):
         loop = asyncio.get_event_loop()
@@ -429,6 +499,7 @@ def _build_and_run(token: str, chat_id: str):
         text = (
             "🤖 *Sentinel Pro — Commands*\n\n"
             "`/scan crypto`       Engine A scan by class\n"
+            "`/engineb crypto`    Engine B naked scan\n"
             "`/enginec forex`      Engine C consensus scan\n"
             "`/scalp BTC/USDT`     Engine D scalp scan\n"
             "`/signal ETH/USDT`   Analyse a single pair\n"
@@ -688,6 +759,55 @@ def _build_and_run(token: str, chat_id: str):
             top = (resp.get("aligned") or resp.get("b_only") or resp.get("a_only") or [])[:3]
             for sig in top:
                 await update.message.reply_text(_fmt_engine_c_card(sig), parse_mode="Markdown")
+        except Exception:
+            await msg.edit_text("Athena offline - check server")
+
+    async def cmd_engineb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not _guard(update):
+            return
+        args = context.args
+        asset_class = args[0].lower() if args else ""
+        style = args[1].lower() if len(args) > 1 else "auto"
+        valid_assets = {"crypto", "forex", "stock", "stocks", "commodity", "index"}
+        valid_styles = {"auto", "scalp", "intraday", "swing"}
+        if asset_class not in valid_assets or style not in valid_styles:
+            await update.message.reply_text(
+                "Usage: `/engineb crypto|forex|commodity|stock|index [auto|scalp|intraday|swing]`",
+                parse_mode="Markdown",
+            )
+            return
+        if asset_class == "stocks":
+            asset_class = "stock"
+
+        msg = await update.message.reply_text(
+            f"Scanning Engine B *{asset_class}* (`{style}`)...",
+            parse_mode="Markdown",
+        )
+        try:
+            resp = await _run_in_thread(lambda: _safe_json(req.post(
+                f"{_BASE}/api/scan-naked",
+                json={"assetClass": asset_class, "style": style},
+                timeout=_TIMEOUT_SCAN,
+            )))
+            if resp.get("error"):
+                await msg.edit_text(f"Engine B error: {resp['error']}")
+                return
+            signals = resp.get("signals", []) or []
+            debug_rows = resp.get("debugRows", []) or []
+            await msg.edit_text(
+                "*Engine B Scan*\n"
+                f"Signals: `{len(signals)}` | Debug rows: `{len(debug_rows)}`\n"
+                f"Asset: `{asset_class}` | Style: `{style}`",
+                parse_mode="Markdown",
+            )
+            if not signals:
+                await update.message.reply_text(
+                    "No Engine B signals passed the current structure/checklist gates.",
+                    parse_mode="Markdown",
+                )
+                return
+            for sig in signals[:3]:
+                await update.message.reply_text(_fmt_engine_b_card(sig), parse_mode="Markdown")
         except Exception:
             await msg.edit_text("Athena offline - check server")
 
@@ -1251,6 +1371,7 @@ def _build_and_run(token: str, chat_id: str):
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("start", cmd_help))
     app.add_handler(CommandHandler("scan", cmd_scan))
+    app.add_handler(CommandHandler("engineb", cmd_engineb))
     app.add_handler(CommandHandler("enginec", cmd_enginec))
     app.add_handler(CommandHandler("scalp", cmd_scalp))
     app.add_handler(CommandHandler("signal", cmd_signal))
