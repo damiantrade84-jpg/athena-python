@@ -129,6 +129,26 @@ def get_ai_model(
     return fallback
 
 
+def get_ai_timeout_sec(
+    cfg: dict | None = None,
+    preferred_key: str = "AI_REQUEST_TIMEOUT_SEC",
+    fallback: float = 30.0,
+) -> float:
+    cfg = cfg or CONFIG
+    candidates = []
+    if preferred_key:
+        candidates.append(cfg.get(preferred_key))
+    candidates.append(cfg.get("AI_REQUEST_TIMEOUT_SEC"))
+    for candidate in candidates:
+        try:
+            timeout = float(candidate)
+        except (TypeError, ValueError):
+            continue
+        if timeout > 0:
+            return timeout
+    return float(fallback)
+
+
 def create_ai_client(cfg: dict | None = None, api_key: str | None = None):
     import openai
 
@@ -226,6 +246,8 @@ CONFIG: dict = {
     "DEBATE_MODEL": os.environ.get("DEBATE_MODEL", _AI_MODEL_DEFAULT),
     "VISION_MODEL": os.environ.get("VISION_MODEL", _AI_MODEL_DEFAULT),
     "NEWS_SENTIMENT_MODEL": os.environ.get("NEWS_SENTIMENT_MODEL", _AI_MODEL_DEFAULT),
+    "AI_REQUEST_TIMEOUT_SEC": 30.0,
+    "MARCUS_AI_TIMEOUT_SEC": 30.0,
     "NEWS_SENTIMENT_CONFLUENCE_ENABLED": False,
     "NEWS_SENTIMENT_CACHE_TTL_SEC": 900,
     "NEWS_SENTIMENT_SCORE_IMPACT": 0.06,

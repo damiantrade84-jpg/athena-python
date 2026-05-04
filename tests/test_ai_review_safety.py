@@ -1111,3 +1111,19 @@ class TestExpertPromptDeadRangingMarcusRule:
         assert "DEAD RANGING regime = automatic F grade" not in prompt_body
         assert "derive from data, NOT from rawScorePct buckets" in prompt_body
         assert "no fixed caps" in prompt_body
+
+
+class TestMarcusTextReviewTimeoutContract:
+    """Marcus Reid text review must not rely on the SDK's long default timeout."""
+
+    def test_marcus_provider_call_passes_configured_timeout(self):
+        athena_path = os.path.join(os.path.dirname(__file__), "..", "athena.py")
+        with open(athena_path, encoding="utf-8") as f:
+            text = f.read()
+        start = text.index("def run_ai(")
+        end = text.index("t = (completion.choices[0].message.content", start)
+        run_ai_body = text[start:end]
+        assert "get_ai_timeout_sec(" in run_ai_body
+        assert 'preferred_key="MARCUS_AI_TIMEOUT_SEC"' in run_ai_body
+        assert "timeout=_timeout_sec" in run_ai_body
+        assert "[AI] %s timing: prompt_build" in run_ai_body

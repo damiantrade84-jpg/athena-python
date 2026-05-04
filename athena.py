@@ -211,6 +211,7 @@ from config import (
     get_ai_api_key,
     get_ai_base_url,
     get_ai_model,
+    get_ai_timeout_sec,
     scan_candle_limits,
 )  # noqa: E402
 from athena.datafeeds.ws_ssl import configure_process_ca_bundle  # noqa: E402
@@ -4382,6 +4383,7 @@ def run_ai(
             style_pref = (
                 "swing" if _pct >= 75 else "intraday" if _pct >= 50 else "scalp"
             )
+        _prompt_started = time.monotonic()
         msg = _build_signal_message(
             signal,
             news_ctx,
@@ -4391,8 +4393,15 @@ def run_ai(
             drawdown_pct=drawdown_pct,
             learning_ctx=learning_ctx,
         )
+        _prompt_sec = time.monotonic() - _prompt_started
 
         _model = get_ai_model(CONFIG, "AI_MODEL", "grok-4.3")
+        _timeout_sec = get_ai_timeout_sec(
+            CONFIG,
+            preferred_key="MARCUS_AI_TIMEOUT_SEC",
+            fallback=30.0,
+        )
+        _provider_started = time.monotonic()
         completion = c.chat.completions.create(
             model=_model,
             max_tokens=1100,
@@ -4402,6 +4411,16 @@ def run_ai(
                 {"role": "user", "content": msg},
             ],
             response_format={"type": "json_object"},
+            timeout=_timeout_sec,
+        )
+        _provider_sec = time.monotonic() - _provider_started
+        log.info(
+            "[AI] %s timing: prompt_build=%.2fs provider=%.2fs timeout=%.1fs prompt_chars=%d",
+            signal.get("pair", "?"),
+            _prompt_sec,
+            _provider_sec,
+            _timeout_sec,
+            len(msg),
         )
         t = (completion.choices[0].message.content or "").strip()
         result = _parse_ai_json(t, signal["pair"])
@@ -5069,6 +5088,7 @@ def api_analyze():
         return jsonify({"error": "Kill-switch active - system paused"}), 503
 
     try:
+        _api_ai_started = time.monotonic()
         news_ctx = sig.get("newsCtx") or fetch_news_context()
 
         style_pref = d.get("stylePreference", "auto")
@@ -5169,6 +5189,7 @@ def api_analyze():
         except Exception as _cerr:
             log.debug(f"[CONDUCTOR] failed: {_cerr}")
 
+        _pre_run_sec = time.monotonic() - _api_ai_started
         result = run_ai(
             sig,
             news_ctx,
@@ -5176,6 +5197,12 @@ def api_analyze():
             portfolio_heat=_p_heat,
             drawdown_pct=_dd_pct,
             learning_ctx=_learning_ctx,
+        )
+        log.info(
+            "[AI] %s api_analyze timing: prep=%.2fs total=%.2fs",
+            sig.get("pair", "?"),
+            _pre_run_sec,
+            time.monotonic() - _api_ai_started,
         )
 
         # N9: Audit log - persist every AI analysis to SQLite

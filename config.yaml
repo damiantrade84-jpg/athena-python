@@ -703,6 +703,10 @@ VISION_MODEL: "grok-4.3"          # /api/chart-analysis
 
 NEWS_SENTIMENT_MODEL: "grok-4.3"  # News AI text; defaults to AI_MODEL if empty - uses XAI_API_KEY
 
+# Default OpenAI-compatible SDK read timeout is much longer; keep advisory AI bounded.
+AI_REQUEST_TIMEOUT_SEC: 30
+MARCUS_AI_TIMEOUT_SEC: 30
+
 # Blend News AI into Engine A scan score (EODHD news + Kimi). Heavy: uses TTL cache per pair.
 
 NEWS_SENTIMENT_CONFLUENCE_ENABLED: false

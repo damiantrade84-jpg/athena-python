@@ -6,7 +6,9 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from config import (
+    CONFIG,
     ai_runtime_descriptor,
+    get_ai_timeout_sec,
     get_ai_api_key,
     get_ai_base_url,
     get_ai_model,
@@ -71,3 +73,25 @@ def test_ai_helpers_do_not_drift_to_kimi_when_grok_mode_is_intended():
     assert get_ai_model(cfg, "AI_MODEL", "fallback") == "grok-4.3"
     assert get_ai_model(cfg, "VISION_MODEL", "fallback") == "grok-4.3"
     assert get_ai_model(cfg, "DEBATE_MODEL", "fallback") == "grok-4.3"
+
+
+def test_marcus_ai_timeout_default_is_bounded():
+    assert get_ai_timeout_sec(CONFIG, "MARCUS_AI_TIMEOUT_SEC", fallback=30.0) == 30.0
+
+
+def test_ai_timeout_resolver_uses_positive_specific_value_before_global():
+    cfg = {
+        "AI_REQUEST_TIMEOUT_SEC": 45,
+        "MARCUS_AI_TIMEOUT_SEC": 12,
+    }
+
+    assert get_ai_timeout_sec(cfg, "MARCUS_AI_TIMEOUT_SEC", fallback=30.0) == 12.0
+
+
+def test_ai_timeout_resolver_falls_back_from_invalid_specific_to_global():
+    cfg = {
+        "AI_REQUEST_TIMEOUT_SEC": 45,
+        "MARCUS_AI_TIMEOUT_SEC": "bad",
+    }
+
+    assert get_ai_timeout_sec(cfg, "MARCUS_AI_TIMEOUT_SEC", fallback=30.0) == 45.0

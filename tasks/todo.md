@@ -82,3 +82,16 @@
 - Focused Engine B validation passed: `python -m pytest tests/test_engine_b_rr_basis.py tests/test_engine_b_diagnostics.py -q` (`55 passed`).
 - Structural TP threshold-audit slice passed: `python -m pytest tests/test_threshold_audit.py -k structural_tp -q`.
 - Full `tests/test_threshold_audit.py -q` was not green due two unrelated near-miss/report assertions (`test_near_miss_classification_works`, `test_fail_reason_counts_are_reported`).
+
+# Marcus AI Review Timeout Fix
+
+- [x] Trace slow AI review evidence to the Marcus/Text Review path.
+- [x] Add config-gated timeout for the Marcus provider call.
+- [x] Add timing logs for prep, prompt build, and provider latency.
+- [x] Run focused compile and pytest validation.
+
+## Review
+
+- Compile validation passed: `python -m py_compile config.py athena.py`.
+- Focused AI routing/review validation passed: `python -m pytest tests/test_ai_config_routing.py tests/test_ai_review_safety.py -q` (`78 passed`).
+- Engine B AI regression validation passed: `python -m pytest tests/test_engine_b_ai.py -q` (`13 passed`).
