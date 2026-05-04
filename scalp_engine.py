@@ -1906,7 +1906,7 @@ def _classify_setup(
                 reasons.append(f"Volume divergence warns exhaustion at low ({vol_div_tc['strength']})")
 
         # Stop-run detection for trend continuation
-        stop_run_tc = _detect_stop_run(candles or [], direction, atr_val)
+        stop_run_tc = _detect_stop_run(candles or [], direction, 0.0)
         if stop_run_tc.get("stop_run"):
             sr_score_tc = stop_run_tc.get("score", 0)
             sr_conf_tc = stop_run_tc.get("confidence", "")
@@ -1974,7 +1974,7 @@ def _classify_setup(
                 reasons.append(f"Volume divergence warns breakout exhaustion ({vol_div_ext['strength']})")
 
         # Stop-run detection — catches liquidity sweeps
-        stop_run = _detect_stop_run(candles or [], direction, atr_val)
+        stop_run = _detect_stop_run(candles or [], direction, 0.0)
         if stop_run.get("stop_run"):
             sr_score = stop_run.get("score", 0)
             sr_conf = stop_run.get("confidence", "")
