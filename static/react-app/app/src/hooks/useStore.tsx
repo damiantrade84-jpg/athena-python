@@ -14,6 +14,11 @@ interface AppState {
   isTestMode: boolean;
   isLoading: boolean;
   toast: { message: string; type: 'success' | 'error' | 'info' } | null;
+  /** Persistent scan result caches — survive panel navigation */
+  scanCacheA: unknown[] | null;
+  scanCacheB: unknown[] | null;
+  scanCacheAMeta: { count: number; scannedAt: string } | null;
+  scanCacheBMeta: { count: number; scannedAt: string } | null;
 }
 
 interface AppActions {
@@ -27,6 +32,8 @@ interface AppActions {
   closePosition: (positionId: string) => void;
   showToast: (message: string, type: 'success' | 'error' | 'info') => void;
   getLivePrice: (pair: string) => number | undefined;
+  setScanCacheA: (signals: unknown[], meta?: { count: number; scannedAt: string }) => void;
+  setScanCacheB: (signals: unknown[], meta?: { count: number; scannedAt: string }) => void;
 }
 
 const StoreContext = createContext<(AppState & AppActions) | null>(null);
@@ -56,6 +63,22 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [isTestMode, setIsTestMode] = useState(false);
   const [isLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  // Persistent scan caches — keyed by engine, survive panel navigation
+  const [scanCacheA, setScanCacheAState] = useState<unknown[] | null>(null);
+  const [scanCacheB, setScanCacheBState] = useState<unknown[] | null>(null);
+  const [scanCacheAMeta, setScanCacheAMeta] = useState<{ count: number; scannedAt: string } | null>(null);
+  const [scanCacheBMeta, setScanCacheBMeta] = useState<{ count: number; scannedAt: string } | null>(null);
+
+  const setScanCacheA = useCallback((signals: unknown[], meta?: { count: number; scannedAt: string }) => {
+    setScanCacheAState(signals);
+    if (meta) setScanCacheAMeta(meta);
+  }, []);
+
+  const setScanCacheB = useCallback((signals: unknown[], meta?: { count: number; scannedAt: string }) => {
+    setScanCacheBState(signals);
+    if (meta) setScanCacheBMeta(meta);
+  }, []);
 
   const toastTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -194,9 +217,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     <StoreContext.Provider value={{
       activePanel, signals, positions, guardian, news, sessions,
       isAutoTrade, isTestMode, isLoading, toast,
+      scanCacheA, scanCacheB, scanCacheAMeta, scanCacheBMeta,
       setActivePanel, refreshSignals, refreshPositions,
       refreshGuardian, toggleAutoTrade, toggleTestMode, executeSignal,
       closePosition, showToast, getLivePrice: livePriceGetter,
+      setScanCacheA, setScanCacheB,
     }}>
       {children}
     </StoreContext.Provider>

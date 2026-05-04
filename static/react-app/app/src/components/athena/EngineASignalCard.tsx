@@ -1,7 +1,6 @@
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Progress } from '@/components/ui/progress';
 import { ArrowUpRight, Play } from 'lucide-react';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 import {
@@ -33,8 +32,13 @@ export default function EngineASignalCard({
   executeLabel,
   compact,
 }: Props) {
-  const dirBg =
-    signal.direction === 'LONG' ? 'bg-long/20 text-long' : signal.direction === 'SHORT' ? 'bg-short/20 text-short' : 'bg-muted/40 text-muted-foreground';
+  const isLong  = signal.direction === 'LONG';
+  const isShort = signal.direction === 'SHORT';
+  const dirStyle = isLong
+    ? { background: 'hsl(var(--long) / 0.18)', color: 'hsl(var(--long))' }
+    : isShort
+    ? { background: 'hsl(var(--short) / 0.18)', color: 'hsl(var(--short))' }
+    : { background: 'hsl(var(--muted) / 0.40)', color: 'hsl(var(--muted-foreground))' };
   const conf = confluencePct(signal);
   const conv = toNum(signal.conviction, NaN);
   const convT = convictionTier(Number.isFinite(conv) ? conv : null);
@@ -48,13 +52,19 @@ export default function EngineASignalCard({
   const livePrice = toNum(signal.livePrice, NaN);
   const displayPrice = Number.isFinite(livePrice) ? livePrice : signal.entry ?? signal.price;
   const decimals = priceDecimals(pair, type);
+  void displayPrice;
 
   return (
     <Card
       className={cn(
-        'border-border/60 bg-card/50 hover:border-primary/30 transition-colors',
-        selected && 'border-primary/60 ring-1 ring-primary/30',
+        'transition-all duration-200',
+        isLong  ? 'signal-long-border'  : '',
+        isShort ? 'signal-short-border' : '',
       )}
+      style={selected
+        ? { background: 'hsl(var(--card) / 0.70)', border: '1px solid hsl(var(--gold) / 0.45)', boxShadow: '0 0 12px hsl(var(--gold) / 0.18)' }
+        : { background: 'hsl(var(--card) / 0.50)', border: '1px solid hsl(var(--border) / 0.60)' }
+      }
       onClick={() => onSelect?.(signal)}
     >
       <CardContent className={compact ? 'p-3 space-y-2' : 'p-4 space-y-3'}>
@@ -62,7 +72,10 @@ export default function EngineASignalCard({
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-sm font-mono font-bold truncate">{pair}</span>
-            <Badge className={cn('text-[10px]', dirBg)}>{signal.direction || '—'}</Badge>
+            {/* Direction badge — pill */}
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={dirStyle}>
+              {signal.direction || '—'}
+            </span>
             {signal.signalClass && (
               <Badge variant="outline" className="text-[9px] uppercase">
                 {String(signal.signalClass)}
@@ -96,7 +109,16 @@ export default function EngineASignalCard({
             </span>
             <span className="font-mono">{conf != null ? `${conf.toFixed(0)}%` : '—'}</span>
           </div>
-          <Progress value={conf ?? 0} className="h-1.5" />
+          {/* Gold gradient bar */}
+          <div className="w-full rounded-full h-1.5 overflow-hidden" style={{ background: 'hsl(var(--border) / 0.50)' }}>
+            <div
+              className="h-full rounded-full transition-all duration-300"
+              style={{
+                width: `${conf ?? 0}%`,
+                background: 'linear-gradient(90deg, hsl(var(--gold-dark)), hsl(var(--gold-light)))',
+              }}
+            />
+          </div>
           <p className="text-[9px] text-muted-foreground leading-snug">
             Final confluence blends trend, momentum quality, ADX/session gates and addon — it is{' '}
             <span className="font-medium text-foreground/80">not</span> the sum of the factor boxes below.
@@ -164,6 +186,11 @@ export default function EngineASignalCard({
           <Button
             size="sm"
             className="w-full gap-2"
+            style={{
+              background: 'linear-gradient(135deg, hsl(var(--gold-dark)), hsl(var(--gold)))',
+              color: 'hsl(var(--primary-foreground))',
+              border: 'none',
+            }}
             onClick={(e) => {
               e.stopPropagation();
               onExecute(signal);
@@ -188,11 +215,12 @@ function FactorBox({
   value: number | undefined;
   accent: 'long' | 'primary' | 'warning';
 }) {
-  const accentClass = accent === 'long' ? 'bg-long/10 text-long' : accent === 'warning' ? 'bg-warning/10 text-warning' : 'bg-primary/10 text-primary';
+  const fg = accent === 'long' ? 'text-long' : accent === 'warning' ? 'text-warning' : 'text-primary';
+  const bg = accent === 'long' ? 'hsl(var(--long) / 0.10)' : accent === 'warning' ? 'hsl(var(--warning) / 0.10)' : 'hsl(var(--gold) / 0.10)';
   return (
-    <div className="p-2 rounded-md bg-muted/30">
+    <div className="p-2 rounded-md" style={{ background: bg }}>
       <p className="text-[10px] text-muted-foreground uppercase">{label}</p>
-      <p className={cn('text-xs font-mono font-bold', accentClass.split(' ')[1])}>
+      <p className={cn('text-xs font-mono font-bold', fg)}>
         {fmtNum(value, 2)}
       </p>
     </div>
@@ -214,10 +242,16 @@ function Level({
   accent: 'muted' | 'long' | 'short' | 'primary';
   decimals?: number;
 }) {
-  const bg = accent === 'long' ? 'bg-long/10' : accent === 'short' ? 'bg-short/10' : accent === 'primary' ? 'bg-primary/10' : 'bg-muted/30';
+  const bgStyle = accent === 'long'
+    ? 'hsl(var(--long) / 0.10)'
+    : accent === 'short'
+    ? 'hsl(var(--short) / 0.10)'
+    : accent === 'primary'
+    ? 'hsl(var(--gold) / 0.10)'
+    : 'hsl(var(--muted) / 0.30)';
   const fg = accent === 'long' ? 'text-long' : accent === 'short' ? 'text-short' : accent === 'primary' ? 'text-primary' : 'text-foreground';
   return (
-    <div className={cn('p-2 rounded-md', bg)}>
+    <div className="p-2 rounded-md" style={{ background: bgStyle }}>
       <p className={cn('text-[10px] uppercase', accent === 'muted' ? 'text-muted-foreground' : fg)}>{label}</p>
       <p className={cn('text-xs font-mono font-bold', fg)}>
         {decimals != null ? fmtNum(value, decimals) : fmtPrice(value, pair, type)}

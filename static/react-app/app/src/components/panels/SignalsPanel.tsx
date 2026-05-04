@@ -52,13 +52,14 @@ function compareSignals(a: EngineASignal, b: EngineASignal, sortBy: string): num
 }
 
 export default function SignalsPanel() {
-  const { showToast, isTestMode } = useStore();
+  const { showToast, isTestMode, scanCacheA, scanCacheB, scanCacheAMeta, scanCacheBMeta, setScanCacheA, setScanCacheB } = useStore();
   const [filter, setFilter] = useState('');
   const [directionFilter, setDirectionFilter] = useState<string>('all');
   const [assetClass, setAssetClass] = useState<string>('forex');
   const [style, setStyle] = useState<string>('auto');
   const [sortBy, setSortBy] = useState<string>('score');
-  const [scanSource, setScanSource] = useState<ScanSource>('A');
+  /** Which engine tab is active — persists in component state (fine, since both caches live in global store) */
+  const [activeTab, setActiveTab] = useState<'A' | 'B'>('A');
   const [selected, setSelected] = useState<EngineASignal | null>(null);
   const [confirmSig, setConfirmSig] = useState<EngineASignal | null>(null);
   const [pendingStyle, setPendingStyle] = useState<'scalp' | 'intraday' | 'swing' | 'auto'>('auto');
@@ -84,11 +85,15 @@ export default function SignalsPanel() {
   const [aiReviewMode, setAiReviewMode] = useState<'vision' | 'text'>('vision');
   const { priceFor } = useLivePrices(10000);
 
-  // Local scan results override (so each engine button replaces the live view).
-  const [localScan, setLocalScan] = useState<{ source: ScanSource; signals: EngineASignal[] } | null>(null);
-  const baseSignals: EngineASignal[] = localScan?.signals
-    ?? (Array.isArray(lastScan?.signals) ? (lastScan!.signals as EngineASignal[]) : []);
-  const baseSource: ScanSource = localScan?.source ?? 'A';
+  /**
+   * Derive the active signal list from global store caches.
+   * Engine A tab: store scanCacheA → fallback to server lastScan
+   * Engine B tab: store scanCacheB (no fallback — must be explicitly scanned)
+   */
+  const baseSignals: EngineASignal[] = activeTab === 'A'
+    ? (scanCacheA as EngineASignal[] | null) ?? (Array.isArray(lastScan?.signals) ? (lastScan!.signals as EngineASignal[]) : [])
+    : (scanCacheB as EngineASignal[] | null) ?? [];
+  const baseSource: ScanSource = activeTab;
   const liveSignals = useMemo(
     () => baseSignals.map((s) => ({ ...s, livePrice: priceFor(s) })),
     [baseSignals, priceFor],
@@ -129,14 +134,15 @@ export default function SignalsPanel() {
   const runScan = useCallback(
     async (which: ScanSource) => {
       const ac = assetClass === 'all' ? '' : assetClass;
-      const prevSource = scanSource;
-      const prevLocal = localScan;
-      setScanSource(which);
+      setActiveTab(which);
       try {
         if (which === 'A') {
           const result = await postScanA('/api/scan', { asset_class: ac, force: false, style });
           if (result?.signals) {
-            setLocalScan({ source: 'A', signals: result.signals as EngineASignal[] });
+            setScanCacheA(
+              result.signals as EngineASignal[],
+              { count: result.signals.length, scannedAt: new Date().toISOString() },
+            );
             setSortBy('score');
             showToast(
               `Engine A: ${result.signals.length} signals · ${result.pairs_scanned ?? '?'} pairs in ${fmtNum(result.scan_time, 1, '?')}s`,
@@ -148,7 +154,10 @@ export default function SignalsPanel() {
         } else {
           const result = await postScanB('/api/scan-naked', { assetClass: ac, style });
           if (result?.signals) {
-            setLocalScan({ source: 'B', signals: result.signals as EngineASignal[] });
+            setScanCacheB(
+              result.signals as EngineASignal[],
+              { count: result.signals.length, scannedAt: new Date().toISOString() },
+            );
             showToast(`Engine B: ${result.signals.length} structural signals`, 'success');
           } else {
             showToast('Engine B scan returned nothing', 'info');
@@ -156,11 +165,9 @@ export default function SignalsPanel() {
         }
       } catch {
         showToast(`${which === 'A' ? 'Engine A' : 'Engine B'} scan failed`, 'error');
-        setScanSource(prevSource);
-        setLocalScan(prevLocal);
       }
     },
-    [assetClass, style, postScanA, postScanB, showToast, scanSource, localScan],
+    [assetClass, style, postScanA, postScanB, showToast, setScanCacheA, setScanCacheB],
   );
 
   const isPaper = autoTrade?.enabled ?? false;
@@ -300,12 +307,61 @@ export default function SignalsPanel() {
     setPendingStyle('auto');
   }, [confirmSig, baseSource, style, pendingStyle, sizingOverride, postExecute, showToast]);
 
-  const sourceLabel = baseSource === 'A' ? 'Engine A' : 'Engine B';
-  const lastScanAgeIso = (lastScan as ScanResponse | null)?.scannedAt;
+  const sourceLabel = activeTab === 'A' ? 'Engine A' : 'Engine B';
+  const lastScanAgeIso = activeTab === 'A'
+    ? (scanCacheAMeta?.scannedAt ?? (lastScan as ScanResponse | null)?.scannedAt)
+    : scanCacheBMeta?.scannedAt;
 
   return (
     <div className="space-y-4">
-      {/* Toolbar */}
+      {/* ── ENGINE TABS ── */}
+      <div className="flex items-center gap-0 rounded-lg overflow-hidden border border-border/60" style={{ background: 'hsl(var(--card))' }}>
+        {(['A', 'B'] as const).map((tab) => {
+          const isActive  = activeTab === tab;
+          const hasCache  = tab === 'A' ? (scanCacheA !== null || lastScan?.signals != null) : scanCacheB !== null;
+          const count     = tab === 'A'
+            ? (scanCacheA?.length ?? lastScan?.signals?.length ?? 0)
+            : (scanCacheB?.length ?? 0);
+          const label     = tab === 'A' ? 'Engine A' : 'Engine B';
+          const scanning  = tab === 'A' ? scanningA : scanningB;
+          return (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold transition-all duration-150 relative"
+              style={isActive
+                ? { background: 'linear-gradient(135deg, hsl(var(--gold-dark)), hsl(var(--gold)))', color: 'hsl(var(--primary-foreground))' }
+                : { background: 'transparent', color: 'hsl(var(--muted-foreground))' }
+              }
+            >
+              {scanning
+                ? <span className="w-3 h-3 rounded-full border-2 border-current border-t-transparent animate-spin" />
+                : tab === 'A'
+                ? <Zap className="w-3.5 h-3.5" />
+                : <Layers className="w-3.5 h-3.5" />
+              }
+              {label}
+              {hasCache && (
+                <span
+                  className="text-[9px] font-mono px-1.5 py-0.5 rounded-full"
+                  style={isActive
+                    ? { background: 'hsl(0 0% 0% / 0.20)', color: 'inherit' }
+                    : { background: 'hsl(var(--gold) / 0.15)', color: 'hsl(var(--gold-light))' }
+                  }
+                >
+                  {count}
+                </span>
+              )}
+              {/* Active underline */}
+              {isActive && (
+                <span className="absolute bottom-0 left-0 right-0 h-0.5" style={{ background: 'hsl(var(--gold-dark))' }} />
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── TOOLBAR ── */}
       <Card className="border-border/60 bg-card/50">
         <CardContent className="p-3 flex items-center gap-2 flex-wrap">
           <div className="relative flex-1 min-w-[180px]">
@@ -318,9 +374,7 @@ export default function SignalsPanel() {
             />
           </div>
           <Select value={assetClass} onValueChange={setAssetClass}>
-            <SelectTrigger className="w-[120px] h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
+            <SelectTrigger className="w-[120px] h-8 text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All assets</SelectItem>
               <SelectItem value="forex">Forex</SelectItem>
@@ -332,9 +386,7 @@ export default function SignalsPanel() {
             </SelectContent>
           </Select>
           <Select value={style} onValueChange={setStyle}>
-            <SelectTrigger className="w-[110px] h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
+            <SelectTrigger className="w-[110px] h-8 text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="auto">Auto</SelectItem>
               <SelectItem value="scalp">Scalp</SelectItem>
@@ -343,9 +395,7 @@ export default function SignalsPanel() {
             </SelectContent>
           </Select>
           <Select value={directionFilter} onValueChange={setDirectionFilter}>
-            <SelectTrigger className="w-[110px] h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
+            <SelectTrigger className="w-[110px] h-8 text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Any direction</SelectItem>
               <SelectItem value="LONG">Long</SelectItem>
@@ -353,9 +403,7 @@ export default function SignalsPanel() {
             </SelectContent>
           </Select>
           <Select value={sortBy} onValueChange={setSortBy}>
-            <SelectTrigger className="w-[120px] h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
+            <SelectTrigger className="w-[120px] h-8 text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="score">Score</SelectItem>
               <SelectItem value="conviction">Conviction</SelectItem>
@@ -364,26 +412,20 @@ export default function SignalsPanel() {
             </SelectContent>
           </Select>
 
+          {/* Scan button for the active tab */}
           <div className="flex items-center gap-1 ml-auto">
             <Button
               size="sm"
-              variant={scanSource === 'A' ? 'default' : 'outline'}
               className="h-8 gap-1 text-xs"
-              onClick={() => runScan('A')}
+              style={{ background: 'linear-gradient(135deg, hsl(var(--gold-dark)), hsl(var(--gold)))', color: 'hsl(var(--primary-foreground))', border: 'none' }}
+              onClick={() => runScan(activeTab)}
               disabled={scanningA || scanningB}
             >
-              <Zap className={scanningA ? 'w-3.5 h-3.5 animate-pulse' : 'w-3.5 h-3.5'} />
-              {scanningA ? 'Engine A…' : 'Engine A scan'}
-            </Button>
-            <Button
-              size="sm"
-              variant={scanSource === 'B' ? 'default' : 'outline'}
-              className="h-8 gap-1 text-xs"
-              onClick={() => runScan('B')}
-              disabled={scanningA || scanningB}
-            >
-              <Layers className={scanningB ? 'w-3.5 h-3.5 animate-pulse' : 'w-3.5 h-3.5'} />
-              {scanningB ? 'Engine B…' : 'Engine B scan'}
+              {activeTab === 'A'
+                ? <Zap className={(scanningA ? 'animate-pulse ' : '') + 'w-3.5 h-3.5'} />
+                : <Layers className={(scanningB ? 'animate-pulse ' : '') + 'w-3.5 h-3.5'} />
+              }
+              {scanningA && activeTab === 'A' ? 'Engine A…' : scanningB && activeTab === 'B' ? 'Engine B…' : `Scan ${activeTab === 'A' ? 'Engine A' : 'Engine B'}`}
             </Button>
             <RefreshButton onClick={refreshLast} loading={lastLoading} />
           </div>
@@ -394,11 +436,18 @@ export default function SignalsPanel() {
 
       {/* Status row */}
       <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
-        <Badge variant="outline" className="text-[10px] uppercase">
-          Source: {sourceLabel}
-        </Badge>
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
+          style={{ background: 'hsl(var(--gold) / 0.12)', color: 'hsl(var(--gold-light))', border: '1px solid hsl(var(--gold) / 0.30)' }}
+        >
+          {activeTab === 'A' ? <Zap className="w-3 h-3" /> : <Layers className="w-3 h-3" />}
+          {sourceLabel}
+        </span>
         <span>{filtered.length} signals match filter ({baseSignals.length} total)</span>
-        {lastScanAgeIso && <span>· Last scan: {new Date(lastScanAgeIso).toLocaleTimeString()}</span>}
+        {lastScanAgeIso && <span>· Scanned: {new Date(lastScanAgeIso).toLocaleTimeString()}</span>}
+        {activeTab === 'B' && scanCacheB === null && (
+          <span className="text-warning">· No Engine B scan yet — click Scan Engine B</span>
+        )}
       </div>
 
       <div className="grid grid-cols-5 gap-4">
