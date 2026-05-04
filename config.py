@@ -803,6 +803,7 @@ CONFIG: dict = {
             "HIGH_VOLATILITY": {"upper": 0.4, "lower": 1.5, "sl": 1.8},
             "LOW_VOLATILITY": {"upper": 0.2, "lower": 0.8, "sl": 1.0},
         },
+        "structural_tp_buffer_atr_mult": 0.25,
         "style_profiles": {
             "scalp": {
                 "min_score": 3.0,

@@ -67,3 +67,18 @@
 - Rebuilt the frontend bundle with `npm run build`.
 - Confirmed the served JS asset has `containsBadMiddleDot=False`, `containsGoodMiddleDot=True`, `containsBadEmDash=False`, and `containsGoodEmDash=True`.
 - `git diff --check -- static/assets/index-B2jOha4b.js` passed after encoding-safe trailing whitespace cleanup.
+
+# Engine B Structural Target And ATR Fixes
+
+- [x] Replace SL-multiplier structural TP buffer with dedicated Engine B config.
+- [x] Route Engine B private ATR helper through shared Wilder ATR.
+- [x] Make zero/non-positive ATR reject execution level resolution instead of using tiny synthetic ATR.
+- [x] Add focused regression coverage.
+- [x] Run focused Engine B validation.
+
+## Review
+
+- Compile validation passed: `python -m py_compile market_structure.py config.py`.
+- Focused Engine B validation passed: `python -m pytest tests/test_engine_b_rr_basis.py tests/test_engine_b_diagnostics.py -q` (`55 passed`).
+- Structural TP threshold-audit slice passed: `python -m pytest tests/test_threshold_audit.py -k structural_tp -q`.
+- Full `tests/test_threshold_audit.py -q` was not green due two unrelated near-miss/report assertions (`test_near_miss_classification_works`, `test_fail_reason_counts_are_reported`).

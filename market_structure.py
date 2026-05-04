@@ -5,6 +5,7 @@ from scipy.signal import find_peaks
 import logging
 import threading
 import config
+from indicators import calc_atr
 from zone_registry import get_zone_registry
 
 log = logging.getLogger(__name__)
@@ -31,6 +32,24 @@ ENGINE_B_REASON_NO_TRIGGER_PATTERN = "no_trigger_pattern"
 ENGINE_B_REASON_BOS_WITHOUT_VOLUME = "bos_without_volume"
 ENGINE_B_REASON_D1_PD_ARRAY_CONFLICT = "d1_pd_array_conflict"
 ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE = "structural_tp_too_close"
+
+
+def _engine_b_structural_tp_buffer_atr_mult() -> float:
+    """Dedicated opposing-zone TP buffer, separate from stop-loss zone width."""
+    naked_cfg = config.CONFIG.get("NAKED_ENGINE", {}) or {}
+    try:
+        mult = float(naked_cfg.get("structural_tp_buffer_atr_mult", 0.25))
+    except (TypeError, ValueError):
+        mult = 0.25
+    return max(0.0, mult)
+
+
+def _engine_b_structural_target_price(
+    zone: dict, direction: str, atr: float, buffer_mult: float
+) -> float:
+    if direction == "LONG":
+        return float(zone["lower"]) - (float(atr) * buffer_mult)
+    return float(zone["upper"]) + (float(atr) * buffer_mult)
 
 
 def _adx_from_indicator_snap(snap: dict | None) -> float | None:
@@ -513,9 +532,9 @@ def resolve_engine_b_execution_levels(
     except (TypeError, ValueError):
         _entry = 0.0
     try:
-        _atr = float(atr) if atr is not None and atr > 0 else (_entry * 1e-5 if _entry > 0 else 0.0001)
+        _atr = float(atr) if atr is not None else 0.0
     except (TypeError, ValueError):
-        _atr = _entry * 1e-5 if _entry > 0 else 0.0001
+        _atr = 0.0
 
     _struct_sl = _safe_float(structural_sl)
     _struct_tp = _safe_float(structural_tp)
@@ -536,6 +555,28 @@ def resolve_engine_b_execution_levels(
         _sd = abs(_entry - _struct_sl)
         _td = abs(_struct_tp - _entry)
         _structural_rr = _td / _sd if _sd > 0 else 0.0
+
+    if _entry <= 0 or _atr <= 0:
+        _reject = "invalid_entry" if _entry <= 0 else "invalid_atr"
+        return {
+            "entry": _entry,
+            "structural_sl": _struct_sl,
+            "structural_tp": _struct_tp,
+            "structural_rr": round(_structural_rr, 4),
+            "structural_sl_valid": _struct_sl_valid,
+            "structural_tp_valid": _struct_tp_valid,
+            "execution_sl": None,
+            "execution_tp": None,
+            "execution_rr": 0.0,
+            "rr_used_for_gate": 0.0,
+            "rr_source": _reject,
+            "level_mode": _reject,
+            "execution_levels_valid": False,
+            "execution_level_reject_reason": _reject,
+            "execution_tp_side_ok": False,
+            "fallback_tp_applied": False,
+            "fallback_tp_reason": None,
+        }
 
     # ATR execution SL
     _style_mults = (config.CONFIG.get("STYLE_ATR_MULTS") or {}).get(_style, {})
@@ -677,19 +718,15 @@ class NakedEngine:
     def _compute_atr_from_candles(candles: list, period: int = 14, fallback: float | None = None) -> float:
         if not candles or len(candles) < 2:
             return float(fallback or 0.0)
-        trs = []
-        prev_close = None
-        for c in candles:
-            high = float(c["high"])
-            low = float(c["low"])
-            close = float(c["close"])
-            if prev_close is None:
-                trs.append(high - low)
-            else:
-                trs.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
-            prev_close = close
-        window = trs[-period:] if len(trs) >= period else trs
-        atr = float(np.mean(window)) if window else 0.0
+        try:
+            highs = [float(c["high"]) for c in candles]
+            lows = [float(c["low"]) for c in candles]
+            closes = [float(c["close"]) for c in candles]
+            atr_series = calc_atr(highs, lows, closes, period)
+        except (KeyError, TypeError, ValueError):
+            return float(fallback or 0.0)
+        valid = [float(v) for v in atr_series if v is not None and float(v) > 0]
+        atr = valid[-1] if valid else 0.0
         return atr if atr > 0 else float(fallback or 0.0)
 
     @staticmethod
@@ -2240,6 +2277,7 @@ class NakedEngine:
             multipliers.get("RANGING", {"upper": 0.5, "lower": 1.2, "sl": 1.0}),
         )
         sl_mult = buf.get("sl", 1.0)
+        structural_tp_buffer_mult = _engine_b_structural_tp_buffer_atr_mult()
 
         # 5. Improved SL logic with sweep detection
         sl = (
@@ -2329,13 +2367,17 @@ class NakedEngine:
             # First, calculate standard TP as old_target for comparison
             if direction == "LONG" and valid_res:
                 for zone in sorted(valid_res, key=lambda z: z["lower"]):
-                    structural_tp = zone["lower"] - (atr * sl_mult)
+                    structural_tp = _engine_b_structural_target_price(
+                        zone, direction, atr, structural_tp_buffer_mult
+                    )
                     if structural_tp > current_price + (atr * 0.5):
                         old_target = structural_tp
                         break
             elif direction == "SHORT" and valid_sup:
                 for zone in sorted(valid_sup, key=lambda z: z["upper"], reverse=True):
-                    structural_tp = zone["upper"] + (atr * sl_mult)
+                    structural_tp = _engine_b_structural_target_price(
+                        zone, direction, atr, structural_tp_buffer_mult
+                    )
                     if structural_tp < current_price - (atr * 0.5):
                         old_target = structural_tp
                         break
@@ -2512,14 +2554,18 @@ class NakedEngine:
                     sorted_res = sorted(valid_res, key=lambda z: z["lower"])
                     major_zone = sorted_res[1]
                     selected_h4_liquidity_price = major_zone["lower"]
-                    new_tp2 = major_zone["lower"] - (atr * sl_mult)
+                    new_tp2 = _engine_b_structural_target_price(
+                        major_zone, direction, atr, structural_tp_buffer_mult
+                    )
                     selected_h4_liquidity_rank = 2
                     tp2_candidate_source = "true_h4_liquidity"
                 elif direction == "SHORT" and len(valid_sup) >= 2:
                     sorted_sup = sorted(valid_sup, key=lambda z: z["upper"], reverse=True)
                     major_zone = sorted_sup[1]
                     selected_h4_liquidity_price = major_zone["upper"]
-                    new_tp2 = major_zone["upper"] + (atr * sl_mult)
+                    new_tp2 = _engine_b_structural_target_price(
+                        major_zone, direction, atr, structural_tp_buffer_mult
+                    )
                     selected_h4_liquidity_rank = 2
                     tp2_candidate_source = "true_h4_liquidity"
                 
@@ -2598,7 +2644,9 @@ class NakedEngine:
             # Standard target selection (non-crypto or crypto model disabled)
             if direction == "LONG" and valid_res:
                 for zone in sorted(valid_res, key=lambda z: z["lower"]):
-                    structural_tp = zone["lower"] - (atr * sl_mult)
+                    structural_tp = _engine_b_structural_target_price(
+                        zone, direction, atr, structural_tp_buffer_mult
+                    )
                     target_distance = structural_tp - current_price
                     structural_target_candidates.append({
                         "target_type": "resistance_zone",
@@ -2621,7 +2669,9 @@ class NakedEngine:
                     break
             elif direction == "SHORT" and valid_sup:
                 for zone in sorted(valid_sup, key=lambda z: z["upper"], reverse=True):
-                    structural_tp = zone["upper"] + (atr * sl_mult)
+                    structural_tp = _engine_b_structural_target_price(
+                        zone, direction, atr, structural_tp_buffer_mult
+                    )
                     target_distance = current_price - structural_tp
                     structural_target_candidates.append({
                         "target_type": "support_zone",
@@ -3021,7 +3071,10 @@ class NakedEngine:
 
         Crypto profile adds extra gates: target_v2_valid, stop_valid, path_clear.
         """
-        atr = res.get("atr", 1.0)
+        try:
+            atr = float(res.get("atr", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            atr = 0.0
         atr_val = atr if atr > 0 else 0.0001
         h1_seq = res.get("current_swing_sequence", "")
         h4_seq = res.get("macro_swing_sequence", "")
@@ -3145,7 +3198,7 @@ class NakedEngine:
             entry=current_price,
             structural_sl=_struct_sl,
             structural_tp=_struct_tp,
-            atr=atr_val,
+            atr=atr,
             style=exec_style,
             asset_class=asset_type_lower,
             min_rr=min_rr,

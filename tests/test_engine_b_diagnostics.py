@@ -21,6 +21,8 @@ from market_structure import (
     ENGINE_B_REASON_SUPPORT_TOO_CLOSE,
     ENGINE_B_REASON_TP_WRONG_SIDE,
     NakedEngine,
+    _engine_b_structural_target_price,
+    _engine_b_structural_tp_buffer_atr_mult,
     _engine_b_micro_breakout_value,
     engine,
     engine_b_confidence_passes,
@@ -267,7 +269,7 @@ def test_analyze_structure_falls_back_to_rr_when_resistance_is_too_close(monkeyp
         local_engine,
         "_find_zones",
         lambda *_args, **_kwargs: (
-            [{"upper": 100.9, "lower": 100.8, "center": 100.85, "volume_strength": 1.0}],
+            [{"upper": 100.7, "lower": 100.6, "center": 100.65, "volume_strength": 1.0}],
             [{"upper": 99.7, "lower": 99.5, "center": 99.6, "volume_strength": 1.0}],
         ),
     )
@@ -644,6 +646,20 @@ def test_calculate_confidence_emits_structural_tp_too_close():
     )
     codes = out.get("engine_b_diagnostics", {}).get("reason_codes", [])
     assert ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE in codes
+
+
+def test_structural_target_uses_dedicated_tp_buffer(monkeypatch):
+    naked_cfg = dict(config.CONFIG.get("NAKED_ENGINE", {}) or {})
+    naked_cfg["structural_tp_buffer_atr_mult"] = 0.25
+    monkeypatch.setitem(config.CONFIG, "NAKED_ENGINE", naked_cfg)
+
+    buffer_mult = _engine_b_structural_tp_buffer_atr_mult()
+    long_zone = {"lower": 101.30, "upper": 101.80}
+    short_zone = {"lower": 98.20, "upper": 98.70}
+
+    assert buffer_mult == pytest.approx(0.25)
+    assert _engine_b_structural_target_price(long_zone, "LONG", 1.0, buffer_mult) == pytest.approx(101.05)
+    assert _engine_b_structural_target_price(short_zone, "SHORT", 1.0, buffer_mult) == pytest.approx(98.95)
 
 
 def test_calculate_confidence_d1_penalty_is_reduced():
