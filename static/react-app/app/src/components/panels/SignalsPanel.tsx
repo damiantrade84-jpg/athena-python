@@ -58,14 +58,14 @@ export default function SignalsPanel() {
   const [assetClass, setAssetClass] = useState<string>('forex');
   const [style, setStyle] = useState<string>('auto');
   const [sortBy, setSortBy] = useState<string>('score');
-  /** Which engine tab is active — persists in component state (fine, since both caches live in global store) */
+  /** Which engine tab is active - persists in component state (fine, since both caches live in global store) */
   const [activeTab, setActiveTab] = useState<'A' | 'B'>('A');
   const [selected, setSelected] = useState<EngineASignal | null>(null);
   const [confirmSig, setConfirmSig] = useState<EngineASignal | null>(null);
   const [pendingStyle, setPendingStyle] = useState<'scalp' | 'intraday' | 'swing' | 'auto'>('auto');
   const [sizingOverride, setSizingOverride] = useState<number>(1.0);
 
-  // Hot-cached snapshot from server-side last scan (Engine A only — matches Athena behaviour).
+  // Hot-cached snapshot from server-side last scan (Engine A only - matches Athena behaviour).
   const { data: lastScan, loading: lastLoading, error: lastError, refresh: refreshLast } =
     useApiPoll<ScanResponse>('/api/last-scan', 60_000);
 
@@ -88,7 +88,7 @@ export default function SignalsPanel() {
   /**
    * Derive the active signal list from global store caches.
    * Engine A tab: store scanCacheA → fallback to server lastScan
-   * Engine B tab: store scanCacheB (no fallback — must be explicitly scanned)
+   * Engine B tab: store scanCacheB (no fallback - must be explicitly scanned)
    */
   const baseSignals: EngineASignal[] = activeTab === 'A'
     ? (scanCacheA as EngineASignal[] | null) ?? (Array.isArray(lastScan?.signals) ? (lastScan!.signals as EngineASignal[]) : [])
@@ -145,7 +145,7 @@ export default function SignalsPanel() {
             );
             setSortBy('score');
             showToast(
-              `Engine A: ${result.signals.length} signals · ${result.pairs_scanned ?? '?'} pairs in ${fmtNum(result.scan_time, 1, '?')}s`,
+              `Engine A: ${result.signals.length} signals - ${result.pairs_scanned ?? '?'} pairs in ${fmtNum(result.scan_time, 1, '?')}s`,
               'success',
             );
           } else {
@@ -294,7 +294,7 @@ export default function SignalsPanel() {
         showToast(`Rejected: ${result.approval.reason}`, 'error');
       } else if (result.success || result.ticket) {
         showToast(
-          `Executed ${confirmSig.pair || confirmSig.display} (${effectiveStyle.toUpperCase()}) — ticket ${result.ticket || '?'}`,
+          `Executed ${confirmSig.pair || confirmSig.display} (${effectiveStyle.toUpperCase()}) - ticket ${result.ticket || '?'}`,
           'success',
         );
       } else {
@@ -314,7 +314,7 @@ export default function SignalsPanel() {
 
   return (
     <div className="space-y-4">
-      {/* ── ENGINE TABS ── */}
+      {/* -- ENGINE TABS -- */}
       <div className="flex items-center gap-0 rounded-lg overflow-hidden border border-border/60" style={{ background: 'hsl(var(--card))' }}>
         {(['A', 'B'] as const).map((tab) => {
           const isActive  = activeTab === tab;
@@ -361,13 +361,13 @@ export default function SignalsPanel() {
         })}
       </div>
 
-      {/* ── TOOLBAR ── */}
+      {/* -- TOOLBAR -- */}
       <Card className="border-border/60 bg-card/50">
         <CardContent className="p-3 flex items-center gap-2 flex-wrap">
           <div className="relative flex-1 min-w-[180px]">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
             <Input
-              placeholder="Filter by pair…"
+              placeholder="Filter by pair..."
               className="pl-8 h-8 text-xs"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
@@ -425,7 +425,7 @@ export default function SignalsPanel() {
                 ? <Zap className={(scanningA ? 'animate-pulse ' : '') + 'w-3.5 h-3.5'} />
                 : <Layers className={(scanningB ? 'animate-pulse ' : '') + 'w-3.5 h-3.5'} />
               }
-              {scanningA && activeTab === 'A' ? 'Engine A…' : scanningB && activeTab === 'B' ? 'Engine B…' : `Scan ${activeTab === 'A' ? 'Engine A' : 'Engine B'}`}
+              {scanningA && activeTab === 'A' ? 'Engine A...' : scanningB && activeTab === 'B' ? 'Engine B...' : `Scan ${activeTab === 'A' ? 'Engine A' : 'Engine B'}`}
             </Button>
             <RefreshButton onClick={refreshLast} loading={lastLoading} />
           </div>
@@ -444,9 +444,9 @@ export default function SignalsPanel() {
           {sourceLabel}
         </span>
         <span>{filtered.length} signals match filter ({baseSignals.length} total)</span>
-        {lastScanAgeIso && <span>· Scanned: {new Date(lastScanAgeIso).toLocaleTimeString()}</span>}
+        {lastScanAgeIso && <span>- Scanned: {new Date(lastScanAgeIso).toLocaleTimeString()}</span>}
         {activeTab === 'B' && scanCacheB === null && (
-          <span className="text-warning">· No Engine B scan yet — click Scan Engine B</span>
+          <span className="text-warning">- No Engine B scan yet - click Scan Engine B</span>
         )}
       </div>
 
@@ -488,7 +488,7 @@ export default function SignalsPanel() {
                   ) : (
                     <>
                       <p className="text-sm">No signals match your filters</p>
-                      <p className="text-[11px] mt-1">{baseSignals.length} signals total — adjust pair / direction / asset filters.</p>
+                      <p className="text-[11px] mt-1">{baseSignals.length} signals total - adjust pair / direction / asset filters.</p>
                     </>
                   )}
                 </div>
@@ -501,7 +501,7 @@ export default function SignalsPanel() {
                           {formatGroupLabel(key)}
                         </span>
                         <Badge variant="outline" className="text-[9px] font-mono">
-                          {signals.length} · top {fmtNum(signals[0]?.confluenceScore ?? signals[0]?.score, 2)}
+                          {signals.length} - top {fmtNum(signals[0]?.confluenceScore ?? signals[0]?.score, 2)}
                         </Badge>
                       </div>
                       <div className="space-y-2 pl-0">
@@ -561,7 +561,7 @@ export default function SignalsPanel() {
                               setSizingOverride(Number.isFinite(v) ? Math.max(0.25, Math.min(1.0, v)) : 1.0);
                             }}
                           />
-                          <span className="font-mono">×</span>
+                          <span className="font-mono">x</span>
                         </div>
                       </div>
                       <div className="grid grid-cols-3 gap-2">
@@ -597,7 +597,7 @@ export default function SignalsPanel() {
                         </Button>
                       </div>
                       <p className="text-[10px] text-muted-foreground">
-                        Backend recomputes SL/TP for the chosen style (ATR ladder). Sizing scales risk between 0.25× and 1.0×.
+                        Backend recomputes SL/TP for the chosen style (ATR ladder). Sizing scales risk between 0.25x and 1.0x.
                       </p>
                     </CardContent>
                   </Card>
@@ -612,7 +612,7 @@ export default function SignalsPanel() {
                       disabled={visionLoading}
                     >
                       <Eye className={visionLoading ? 'w-3.5 h-3.5 animate-pulse' : 'w-3.5 h-3.5'} />
-                      {visionLoading ? 'AI Vision…' : 'AI Review (Vision)'}
+                      {visionLoading ? 'AI Vision...' : 'AI Review (Vision)'}
                     </Button>
                     <Button
                       size="sm"
@@ -622,7 +622,7 @@ export default function SignalsPanel() {
                       disabled={textLoading}
                     >
                       <FileText className={textLoading ? 'w-3.5 h-3.5 animate-pulse' : 'w-3.5 h-3.5'} />
-                      {textLoading ? 'AI Text…' : 'AI Review (Text)'}
+                      {textLoading ? 'AI Text...' : 'AI Review (Text)'}
                     </Button>
                     {aiReview?.structured?.right_edge_status && aiReviewMode === 'vision' && (
                       <Badge
@@ -674,7 +674,7 @@ export default function SignalsPanel() {
                       <CardContent className="p-3 space-y-2">
                         <div className="flex items-center justify-between">
                           <p className="text-[10px] uppercase text-muted-foreground">AI Vision Review</p>
-                          <span className="text-[10px] text-muted-foreground font-mono">{aiReview.model || 'vision'} · {aiReview.tf || 'H4'}</span>
+                          <span className="text-[10px] text-muted-foreground font-mono">{aiReview.model || 'vision'} - {aiReview.tf || 'H4'}</span>
                         </div>
 
                         {/* Chart image the AI analyzed */}
@@ -693,22 +693,22 @@ export default function SignalsPanel() {
                           <div className="grid grid-cols-3 gap-2 text-[11px]">
                             <div>
                               <div className="text-muted-foreground text-[10px]">Scalp</div>
-                              <div className="font-mono">{aiReview.structured.style_ratings.scalp || '—'}</div>
+                              <div className="font-mono">{aiReview.structured.style_ratings.scalp || '-'}</div>
                             </div>
                             <div>
                               <div className="text-muted-foreground text-[10px]">Intraday</div>
-                              <div className="font-mono">{aiReview.structured.style_ratings.intraday || '—'}</div>
+                              <div className="font-mono">{aiReview.structured.style_ratings.intraday || '-'}</div>
                             </div>
                             <div>
                               <div className="text-muted-foreground text-[10px]">Swing</div>
-                              <div className="font-mono">{aiReview.structured.style_ratings.swing || '—'}</div>
+                              <div className="font-mono">{aiReview.structured.style_ratings.swing || '-'}</div>
                             </div>
                           </div>
                         )}
 
                         {(aiReview.structured?.sl_flag === 'too_tight' || aiReview.structured?.tp_flag === 'too_far') && (
                           <div className="text-[11px] text-warning">
-                            {aiReview.structured.sl_flag === 'too_tight' && 'SL flagged tight · '}
+                            {aiReview.structured.sl_flag === 'too_tight' && 'SL flagged tight - '}
                             {aiReview.structured.tp_flag === 'too_far' && 'TP flagged far'}
                           </div>
                         )}
@@ -734,9 +734,9 @@ export default function SignalsPanel() {
                     <Card className="border-border/60 bg-card/50">
                       <CardContent className="p-3 space-y-2">
                         <div className="flex items-center justify-between">
-                          <p className="text-[10px] uppercase text-muted-foreground">AI Text Review — Marcus Reid</p>
+                          <p className="text-[10px] uppercase text-muted-foreground">AI Text Review - Marcus Reid</p>
                           <span className="text-[10px] text-muted-foreground font-mono">
-                            {aiTextReview.grade || '—'} · edge {aiTextReview.edgeProbability ?? '—'}%
+                            {aiTextReview.grade || '-'} - edge {aiTextReview.edgeProbability ?? '-'}%
                           </span>
                         </div>
 
@@ -744,32 +744,32 @@ export default function SignalsPanel() {
                           <div className="grid grid-cols-3 gap-2 text-[11px]">
                             <div>
                               <div className="text-muted-foreground text-[10px]">Scalp</div>
-                              <div className="font-mono">{aiTextReview.style_ratings.scalp?.grade || '—'}</div>
+                              <div className="font-mono">{aiTextReview.style_ratings.scalp?.grade || '-'}</div>
                             </div>
                             <div>
                               <div className="text-muted-foreground text-[10px]">Intraday</div>
-                              <div className="font-mono">{aiTextReview.style_ratings.intraday?.grade || '—'}</div>
+                              <div className="font-mono">{aiTextReview.style_ratings.intraday?.grade || '-'}</div>
                             </div>
                             <div>
                               <div className="text-muted-foreground text-[10px]">Swing</div>
-                              <div className="font-mono">{aiTextReview.style_ratings.swing?.grade || '—'}</div>
+                              <div className="font-mono">{aiTextReview.style_ratings.swing?.grade || '-'}</div>
                             </div>
                           </div>
                         )}
 
                         <div className="grid grid-cols-2 gap-2 text-[11px]">
-                          <div><span className="text-muted-foreground">Verdict:</span> <span className="font-mono">{aiTextReview.verdict || '—'}</span></div>
-                          <div><span className="text-muted-foreground">Risk:</span> <span className="font-mono">{aiTextReview.riskLevel || '—'}</span></div>
-                          <div><span className="text-muted-foreground">Position:</span> <span className="font-mono">{aiTextReview.positionSizing || '—'}</span></div>
-                          <div><span className="text-muted-foreground">Entry:</span> <span className="font-mono">{aiTextReview.entryZone || '—'}</span></div>
-                          <div><span className="text-muted-foreground">Invalidation:</span> <span className="font-mono">{aiTextReview.invalidation || '—'}</span></div>
-                          <div><span className="text-muted-foreground">Key Levels:</span> <span className="font-mono">{aiTextReview.keyLevels || '—'}</span></div>
+                          <div><span className="text-muted-foreground">Verdict:</span> <span className="font-mono">{aiTextReview.verdict || '-'}</span></div>
+                          <div><span className="text-muted-foreground">Risk:</span> <span className="font-mono">{aiTextReview.riskLevel || '-'}</span></div>
+                          <div><span className="text-muted-foreground">Position:</span> <span className="font-mono">{aiTextReview.positionSizing || '-'}</span></div>
+                          <div><span className="text-muted-foreground">Entry:</span> <span className="font-mono">{aiTextReview.entryZone || '-'}</span></div>
+                          <div><span className="text-muted-foreground">Invalidation:</span> <span className="font-mono">{aiTextReview.invalidation || '-'}</span></div>
+                          <div><span className="text-muted-foreground">Key Levels:</span> <span className="font-mono">{aiTextReview.keyLevels || '-'}</span></div>
                         </div>
 
                         {aiTextReview.warnings && aiTextReview.warnings.length > 0 && (
                           <div className="text-[11px] text-warning">
                             {aiTextReview.warnings.map((w, i) => (
-                              <div key={i}>• {w}</div>
+                              <div key={i}>- {w}</div>
                             ))}
                           </div>
                         )}
@@ -791,7 +791,7 @@ export default function SignalsPanel() {
                           <p className="text-[10px] uppercase text-muted-foreground">Confidence Engine</p>
                           <Badge variant="outline" className="text-[10px]">
                             {fmtNum(selected.confidenceDetail.confidence, 2)}
-                            {selected.confidenceDetail.degraded ? ' · degraded' : ''}
+                            {selected.confidenceDetail.degraded ? ' - degraded' : ''}
                           </Badge>
                         </div>
                         <div className="grid grid-cols-2 gap-2 text-xs">
@@ -800,7 +800,7 @@ export default function SignalsPanel() {
                           <DetailRow label="Regime fit" value={fmtNum(selected.confidenceDetail.components?.regime_fit, 2)} />
                           <DetailRow label="Liquidity" value={fmtNum(selected.confidenceDetail.components?.liquidity_quality, 2)} />
                           <DetailRow label="Confidence" value={fmtNum(selected.confidenceDetail.confidence, 2)} />
-                          <DetailRow label="Session quality" value={String(selected.confidenceDetail.session_quality || '—')} />
+                          <DetailRow label="Session quality" value={String(selected.confidenceDetail.session_quality || '-')} />
                           {selected.confidenceDetail.available_count != null && (
                             <DetailRow label="Components active" value={`${selected.confidenceDetail.available_count}/4`} />
                           )}
@@ -809,7 +809,7 @@ export default function SignalsPanel() {
                           <div className="text-[10px] text-muted-foreground">
                             Weights: {Object.entries(selected.confidenceDetail.weights_used)
                               .map(([k, v]) => `${k}=${fmtNum(v, 2)}`)
-                              .join(' · ')}
+                              .join(' - ')}
                           </div>
                         )}
                       </CardContent>
@@ -825,7 +825,7 @@ export default function SignalsPanel() {
                           {Object.entries(selected.factorDiagnostics)
                             .slice(0, 12)
                             .map(([k, v]) => (
-                              <DetailRow key={k} label={k} value={typeof v === 'number' ? fmtNum(v, 2) : String(v ?? '—')} />
+                              <DetailRow key={k} label={k} value={typeof v === 'number' ? fmtNum(v, 2) : String(v ?? '-')} />
                             ))}
                         </div>
                       </CardContent>
@@ -880,7 +880,7 @@ export default function SignalsPanel() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Confirm Execution · {pendingStyle === 'auto' ? (confirmSig?.style?.toUpperCase() || 'AUTO') : pendingStyle.toUpperCase()}
+              Confirm Execution - {pendingStyle === 'auto' ? (confirmSig?.style?.toUpperCase() || 'AUTO') : pendingStyle.toUpperCase()}
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2 text-xs">
@@ -889,13 +889,13 @@ export default function SignalsPanel() {
                   <span className="font-mono">{fmtPrice(confirmSig?.entry ?? confirmSig?.price, confirmSig?.pair, confirmSig?.type)}</span>
                 </div>
                 <div className="font-mono">
-                  SL: {fmtPrice(confirmSig?.sl, confirmSig?.pair, confirmSig?.type)} ·
-                  TP: {fmtPrice(confirmSig?.tp ?? confirmSig?.tp1, confirmSig?.pair, confirmSig?.type)} ·
+                  SL: {fmtPrice(confirmSig?.sl, confirmSig?.pair, confirmSig?.type)} -
+                  TP: {fmtPrice(confirmSig?.tp ?? confirmSig?.tp1, confirmSig?.pair, confirmSig?.type)} -
                   R:R {fmtNum(confirmSig?.rr ?? confirmSig?.rr1, 2)}
                 </div>
                 <div className="text-muted-foreground">
                   Style: <span className="font-mono">{(pendingStyle === 'auto' ? confirmSig?.style || 'auto' : pendingStyle).toUpperCase()}</span>
-                  {' · '}Sizing: <span className="font-mono">{fmtNum(sizingOverride, 2)}×</span>
+                  {' - '}Sizing: <span className="font-mono">{fmtNum(sizingOverride, 2)}x</span>
                 </div>
                 <div className="text-[10px] text-muted-foreground">
                   Backend will recompute SL/TP for the selected style via /api/quick-execute (recompute_levels_for_style),
@@ -908,7 +908,7 @@ export default function SignalsPanel() {
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => setPendingStyle('auto')}>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={onConfirmExecute} disabled={executing}>
-              {executing ? 'Executing…' : `Confirm ${pendingStyle === 'auto' ? '' : pendingStyle.toUpperCase()}`}
+              {executing ? 'Executing...' : `Confirm ${pendingStyle === 'auto' ? '' : pendingStyle.toUpperCase()}`}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

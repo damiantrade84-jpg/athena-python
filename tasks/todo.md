@@ -53,3 +53,17 @@
 - Confirmed the running `/api/feed-health` route returns `activePairCount`, `pairsWithCachedMeta`, and `pairs` with HTTP 200.
 - Frontend production build passed: `npm run build` from `static/react-app/app`.
 - Static route smoke validation passed: `python -m pytest tests/test_api_contract_smoke.py -q`.
+
+# UI Encoding Fix
+
+- [x] Trace weird UI symbols to the built frontend bundle.
+- [x] Regenerate the bundle with correct UTF-8 output.
+- [x] Strip generated trailing whitespace with Node UTF-8 file APIs.
+- [x] Verify the served asset contains normal separators, not mojibake.
+
+## Review
+
+- Confirmed `static/assets/index-B2jOha4b.js` had mojibake such as `Â·` while `SignalsPanel.tsx` had the intended separator.
+- Rebuilt the frontend bundle with `npm run build`.
+- Confirmed the served JS asset has `containsBadMiddleDot=False`, `containsGoodMiddleDot=True`, `containsBadEmDash=False`, and `containsGoodEmDash=True`.
+- `git diff --check -- static/assets/index-B2jOha4b.js` passed after encoding-safe trailing whitespace cleanup.
