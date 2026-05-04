@@ -2990,13 +2990,20 @@ edgeProbability (0-100) - derive from input with this rubric (do not mirror rawS
 - RR: meets style minimum from LEVELS +5; below -5.
 Sum, clamp to 5-95. Round to integer for the JSON field.
 
+STRUCTURED SCORE OUTPUT:
+- Component max scores: trend 20, structure 20, momentum 15, liquidity 10, risk 15, confirmation 20.
+- total_score is the sum of those components, clamped 0-100.
+- risk_score means risk quality: higher is cleaner/safer, lower is worse.
+- ai_action is advisory only. ATHENA Python hard rules decide advisory_rule_trade_allowed after parsing.
+- Use blocking_reasons for data-supported blockers only: NO_STOP_LOSS, RR_BELOW_MIN, DAILY_LOSS_LIMIT_HIT, HIGH_IMPACT_NEWS_NEARBY, or DATA_UNAVAILABLE.
+
 PER-STYLE RATINGS - rate ALL THREE independently using specific data:
 - SCALP: Need ADX > 30, clean H1 entry, vol_ratio > 1.5, RR >= 1.5
 - INTRADAY: Need H4+H1 aligned, same session, RR >= 2.0, momentum confirming
 - SWING: Need D1 EMA stack + trendCoherence > 0.8, RR >= 3.0, no upcoming high-impact events
 
 OUTPUT - EXACT JSON in this precise key order to ensure reasoning happens before scoring (no other text):
-{"narrative":"2-3 sentences. MUST reference specific factor names, scores, and weights from the input. Name the strongest and weakest factors.","verdict":"One punchy sentence citing specific factor scores","reviewSource":"engine_a_marcus","resolvedStyle":"SWING|INTRADAY|SCALP","scannerReadiness":"Weak|Medium|Strong","factorQuality":85,"structuralRisk":"Low","executionRisk":"Medium","selectedStyleGrade":"A","grade":"A","entryZone":"exact price or fib level from input","invalidation":"exact price from SL or structural level","keyLevels":"S1/R1 from input data only","positionSizing":"Full/Half/Quarter + why (reference confidence_multiplier and nondirectionalScore)","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"cite specific data","warnings":["specific risks citing data points"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}
+{"symbol":"BTCUSDT","timeframe":"H4","bias":"long|short|neutral","setup_type":"breakout_retest","trend_score":18,"structure_score":17,"momentum_score":13,"liquidity_score":8,"risk_score":7,"confirmation_score":14,"total_score":77,"grade":"B","ai_action":"needs_confirmation","blocking_reasons":["RR_BELOW_MIN"],"reason":"Good structure, but risk/reward is below required threshold.","narrative":"2-3 sentences. MUST reference specific factor names, scores, and weights from the input. Name the strongest and weakest factors.","verdict":"One punchy sentence citing specific factor scores","reviewSource":"engine_a_marcus","resolvedStyle":"SWING|INTRADAY|SCALP","scannerReadiness":"Weak|Medium|Strong","factorQuality":85,"structuralRisk":"Low","executionRisk":"Medium","selectedStyleGrade":"A","entryZone":"exact price or fib level from input","invalidation":"exact price from SL or structural level","keyLevels":"S1/R1 from input data only","positionSizing":"Full/Half/Quarter + why (reference confidence_multiplier and nondirectionalScore)","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"cite specific data","warnings":["specific risks citing data points"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}
 """
 
 
@@ -4405,14 +4412,67 @@ def run_ai(
             )
             return {"error": "AI response was not valid JSON"}
 
-        # Validate required keys
+        try:
+            from ai_schemas import (
+                EngineAResponse,
+                evaluate_engine_a_ai_advisory_rules,
+            )
+
+            EngineAResponse.model_validate(result)
+            _schema_valid = True
+            _schema_error = None
+        except Exception as _schema_exc:
+            _schema_valid = False
+            _schema_error = str(_schema_exc)[:500]
+            log.warning(
+                "[AI] %s: Marcus structured schema validation failed: %s",
+                signal.get("pair", "?"),
+                _schema_error,
+            )
+
+        try:
+            result.update(
+                evaluate_engine_a_ai_advisory_rules(
+                    result,
+                    signal,
+                    news_ctx,
+                    min_rr=1.5,
+                )
+            )
+        except Exception as _rule_exc:
+            log.debug("[AI] Marcus advisory rule evaluation failed: %s", _rule_exc)
+
+        # Validate legacy and structured keys for audit visibility.
 
         _required = {"grade", "edgeProbability", "riskLevel"}
+        _structured_required = {
+            "symbol",
+            "timeframe",
+            "bias",
+            "setup_type",
+            "trend_score",
+            "structure_score",
+            "momentum_score",
+            "liquidity_score",
+            "risk_score",
+            "confirmation_score",
+            "total_score",
+            "ai_action",
+            "blocking_reasons",
+            "reason",
+        }
 
         _missing = _required - set(result.keys())
+        _structured_missing = _structured_required - set(result.keys())
 
         if _missing:
             log.warning(f"[AI] {signal['pair']}: parsed JSON missing keys {_missing}")
+        if _structured_missing:
+            log.warning(
+                "[AI] %s: parsed JSON missing structured keys %s",
+                signal.get("pair", "?"),
+                sorted(_structured_missing),
+            )
 
         log.warning(
             f"[AI] {signal['pair']} => Grade:{result.get('grade', '?')} Prob:{result.get('edgeProbability', '?')}% Risk:{result.get('riskLevel', '?')} | {str(result.get('verdict', ''))[:60]}"
@@ -4420,6 +4480,7 @@ def run_ai(
 
         try:
             from ai_review_logger import (
+                extract_engine_d_audit_state,
                 log_ai_review,
                 REVIEW_TYPE_MARCUS_REID,
                 map_engine_b_grade_to_ai_state,
@@ -4452,14 +4513,14 @@ def run_ai(
                 engine_a_state=signal.get("confluenceScore"),
                 engine_b_state=signal.get("engine_b", {}).get("score") if isinstance(signal.get("engine_b"), dict) else None,
                 engine_c_state=None,
-                engine_d_state=None,
+                engine_d_state=extract_engine_d_audit_state(signal),
                 risk_state=None,
                 ai_review_state=_ai_state,
                 ai_confidence=result.get("edgeProbability"),
                 contradictions_count=0,
                 missing_information_count=0,
                 parse_success=True,
-                schema_valid=not bool(_missing),
+                schema_valid=bool(_schema_valid) and not bool(_missing),
                 execution_allowed_before_ai=True,
                 execution_allowed_after_ai=True,
                 final_action="advisory",
@@ -9433,11 +9494,6 @@ def _chart_blocks_to_openai_user_content(blocks: list) -> list:
 @app.route("/api/chart-analysis", methods=["POST"])
 def api_chart_analysis():
     """Send chart screenshot to configured vision model for professional TA reading."""
-    try:
-        import openai as _openai_chart
-    except ImportError:
-        return jsonify({"error": "openai library not installed (pip install openai)"}), 500
-
     data = request.get_json(silent=True) or {}
     if not data:
         return jsonify({"error": "Missing request body"}), 400
@@ -9956,10 +10012,7 @@ def api_chart_analysis():
         if not _ai_key:
             return jsonify({"error": "AI API key not set"}), 500
 
-        client = _openai_chart.OpenAI(
-            api_key=_ai_key,
-            base_url=get_ai_base_url(CONFIG),
-        )
+        client = create_ai_client(CONFIG, api_key=_ai_key)
         log.info(
             f"[AI CHART] provider={get_ai_provider_label(CONFIG)} "
             f"base_url={get_ai_base_url(CONFIG)} model={get_ai_model(CONFIG, 'VISION_MODEL', 'grok-4.3')}"
@@ -13351,6 +13404,48 @@ def _get_decay_ai_verdict(
             log.debug(f"[DECAY-AI] {pair_name} chat.completions failed: {_ce}")
 
         if result is None:
+            try:
+                from ai_review_logger import (
+                    AI_STATE_REVIEW_INCOMPLETE,
+                    REVIEW_TYPE_DECAY_AI,
+                    log_ai_review,
+                )
+
+                log_ai_review(
+                    symbol=pair_name,
+                    asset_type=str(signal_context.get("type") or "?"),
+                    review_type=REVIEW_TYPE_DECAY_AI,
+                    model=_model,
+                    provider=get_ai_provider_label(CONFIG),
+                    prompt_version="score_decay_ai_v1",
+                    input_packet=prompt,
+                    has_chart_image=False,
+                    candle_freshness_status=(
+                        (signal_context.get("dataFreshness") or {}).get("reason")
+                        or "unknown"
+                    ),
+                    engine_a_state=cur_score,
+                    engine_b_state=None,
+                    engine_c_state=None,
+                    engine_d_state=None,
+                    risk_state={
+                        "entry_score": entry_score,
+                        "current_score": cur_score,
+                        "decay": decay,
+                        "direction_flip": direction_flip,
+                    },
+                    ai_review_state=AI_STATE_REVIEW_INCOMPLETE,
+                    ai_confidence=None,
+                    contradictions_count=0,
+                    missing_information_count=1,
+                    parse_success=False,
+                    schema_valid=False,
+                    execution_allowed_before_ai=True,
+                    execution_allowed_after_ai=True,
+                    final_action="advisory",
+                )
+            except Exception as _log_exc:
+                log.debug("[DECAY-AI] audit log failed for %s: %s", pair_name, _log_exc)
             return {}
 
         verdict = str(result.get("verdict", "WATCH")).upper()
@@ -13358,6 +13453,59 @@ def _get_decay_ai_verdict(
             verdict = "WATCH"
         result["verdict"] = verdict
         result["urgency"] = str(result.get("urgency", "MEDIUM")).upper()
+
+        try:
+            from ai_review_logger import (
+                AI_STATE_CAUTION,
+                AI_STATE_CONFIRM,
+                AI_STATE_REJECT,
+                REVIEW_TYPE_DECAY_AI,
+                log_ai_review,
+            )
+
+            _state = (
+                AI_STATE_REJECT
+                if verdict == "EXIT"
+                else AI_STATE_CONFIRM
+                if verdict == "HOLD"
+                else AI_STATE_CAUTION
+            )
+            _required = {"verdict", "urgency", "reasoning"}
+            log_ai_review(
+                symbol=pair_name,
+                asset_type=str(signal_context.get("type") or "?"),
+                review_type=REVIEW_TYPE_DECAY_AI,
+                model=_model,
+                provider=get_ai_provider_label(CONFIG),
+                prompt_version="score_decay_ai_v1",
+                input_packet=prompt,
+                has_chart_image=False,
+                candle_freshness_status=(
+                    (signal_context.get("dataFreshness") or {}).get("reason")
+                    or "unknown"
+                ),
+                engine_a_state=cur_score,
+                engine_b_state=None,
+                engine_c_state=None,
+                engine_d_state=None,
+                risk_state={
+                    "entry_score": entry_score,
+                    "current_score": cur_score,
+                    "decay": decay,
+                    "direction_flip": direction_flip,
+                },
+                ai_review_state=_state,
+                ai_confidence=None,
+                contradictions_count=0,
+                missing_information_count=0,
+                parse_success=True,
+                schema_valid=_required.issubset(result.keys()),
+                execution_allowed_before_ai=True,
+                execution_allowed_after_ai=True,
+                final_action="advisory",
+            )
+        except Exception as _log_exc:
+            log.debug("[DECAY-AI] audit log failed for %s: %s", pair_name, _log_exc)
 
         _decay_ai_cache[pair_name] = {
             "decay_at_call": decay,
@@ -14206,11 +14354,6 @@ def api_lottery_ai_analysis():
         if not ai_key:
             return jsonify({"error": "AI API key not configured"}), 500
 
-        try:
-            import openai
-        except ImportError:
-            return jsonify({"error": "openai library not installed (required for AI analysis)"}), 500
-
         data = request.get_json(silent=True) or {}
         game = str(data.get("game") or "").strip().lower()
         if not game:
@@ -14238,7 +14381,7 @@ def api_lottery_ai_analysis():
             or get_ai_model(CONFIG, "AI_MODEL", "grok-4.3")
         )
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
-        client = openai.OpenAI(api_key=ai_key, base_url=get_ai_base_url(CONFIG))
+        client = create_ai_client(CONFIG, api_key=ai_key)
         completion = client.chat.completions.create(
             model=_lottery_model,
             max_tokens=1800,
@@ -14258,7 +14401,85 @@ def api_lottery_ai_analysis():
         raw_text = _lottery_ai_openai_message_text(
             getattr(choice, "content", None) if choice else None
         )
-        parsed = _lottery_ai_extract_json(raw_text)
+        try:
+            parsed = _lottery_ai_extract_json(raw_text)
+        except ValueError as e:
+            try:
+                from ai_review_logger import (
+                    AI_STATE_REVIEW_INCOMPLETE,
+                    REVIEW_TYPE_LOTTERY_AI,
+                    log_ai_review,
+                )
+
+                log_ai_review(
+                    symbol=game,
+                    asset_type="lottery",
+                    review_type=REVIEW_TYPE_LOTTERY_AI,
+                    model=_lottery_model,
+                    provider=get_ai_provider_label(CONFIG),
+                    prompt_version="lottery_ai_v1",
+                    input_packet=analytics.get("prompt", ""),
+                    has_chart_image=False,
+                    candle_freshness_status="not_applicable",
+                    engine_a_state=None,
+                    engine_b_state=None,
+                    engine_c_state=None,
+                    engine_d_state=None,
+                    risk_state=None,
+                    ai_review_state=AI_STATE_REVIEW_INCOMPLETE,
+                    ai_confidence=None,
+                    contradictions_count=0,
+                    missing_information_count=1,
+                    parse_success=False,
+                    schema_valid=False,
+                    execution_allowed_before_ai=True,
+                    execution_allowed_after_ai=True,
+                    final_action="advisory",
+                )
+            except Exception as _log_exc:
+                log.debug("[LOTTERY-AI] audit log failed: %s", _log_exc)
+            return jsonify({"error": str(e)}), 400
+        try:
+            from ai_review_logger import (
+                AI_STATE_CAUTION,
+                REVIEW_TYPE_LOTTERY_AI,
+                log_ai_review,
+            )
+
+            _required = {
+                "recommended_pool",
+                "avoid_numbers",
+                "generator_mode",
+                "confidence",
+                "reasoning",
+            }
+            log_ai_review(
+                symbol=game,
+                asset_type="lottery",
+                review_type=REVIEW_TYPE_LOTTERY_AI,
+                model=_lottery_model,
+                provider=get_ai_provider_label(CONFIG),
+                prompt_version="lottery_ai_v1",
+                input_packet=analytics.get("prompt", ""),
+                has_chart_image=False,
+                candle_freshness_status="not_applicable",
+                engine_a_state=None,
+                engine_b_state=None,
+                engine_c_state=None,
+                engine_d_state=None,
+                risk_state=None,
+                ai_review_state=AI_STATE_CAUTION,
+                ai_confidence=None,
+                contradictions_count=0,
+                missing_information_count=0,
+                parse_success=True,
+                schema_valid=_required.issubset(parsed.keys()),
+                execution_allowed_before_ai=True,
+                execution_allowed_after_ai=True,
+                final_action="advisory",
+            )
+        except Exception as _log_exc:
+            log.debug("[LOTTERY-AI] audit log failed: %s", _log_exc)
         recommended_pool = [int(x) for x in (parsed.get("recommended_pool") or []) if str(x).strip()]
         avoid_numbers = [int(x) for x in (parsed.get("avoid_numbers") or []) if str(x).strip()]
         bonus_picks = [int(x) for x in (parsed.get("bonus_picks") or []) if str(x).strip()]

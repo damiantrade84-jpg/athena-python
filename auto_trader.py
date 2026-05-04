@@ -789,6 +789,7 @@ class AutoTrader:
 
                 try:
                     from ai_review_logger import (
+                        extract_engine_d_audit_state,
                         log_ai_review,
                         map_debate_grade_to_ai_state,
                         REVIEW_TYPE_SIGNAL_DEBATE,
@@ -810,7 +811,7 @@ class AutoTrader:
                         engine_a_state=signal.get("confluenceScore"),
                         engine_b_state=None,
                         engine_c_state=signal.get("combinedConviction"),
-                        engine_d_state=None,
+                        engine_d_state=extract_engine_d_audit_state(signal),
                         risk_state=None,
                         ai_review_state=map_debate_grade_to_ai_state(_grade),
                         ai_confidence=None,

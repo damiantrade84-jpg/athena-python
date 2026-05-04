@@ -491,6 +491,52 @@ Reply in JSON only:
 {{"summary":"one sentence overall assessment","insights":["insight1","insight2","insight3"],"adjustments":["adj1","adj2"],"blind_spot":"one key systematic miss","devils_advocate":"strongest counter-argument to the above conclusions"}}"""
 
 
+def _log_meta_ai_review(
+    *,
+    model: str,
+    context: str,
+    result: dict | None,
+    parse_success: bool,
+    schema_valid: bool,
+) -> None:
+    try:
+        from ai_review_logger import (
+            AI_STATE_CAUTION,
+            AI_STATE_REVIEW_INCOMPLETE,
+            REVIEW_TYPE_META_ANALYSIS,
+            log_ai_review,
+        )
+        from config import CONFIG, get_ai_provider_label
+
+        log_ai_review(
+            symbol="PORTFOLIO",
+            asset_type="portfolio",
+            review_type=REVIEW_TYPE_META_ANALYSIS,
+            model=model,
+            provider=get_ai_provider_label(CONFIG),
+            prompt_version="weekly_meta_analysis_v1",
+            input_packet=context,
+            has_chart_image=False,
+            candle_freshness_status="not_applicable",
+            engine_a_state=None,
+            engine_b_state=None,
+            engine_c_state=None,
+            engine_d_state=None,
+            risk_state=None,
+            ai_review_state=AI_STATE_CAUTION if parse_success else AI_STATE_REVIEW_INCOMPLETE,
+            ai_confidence=None,
+            contradictions_count=0,
+            missing_information_count=0 if parse_success else 1,
+            parse_success=parse_success,
+            schema_valid=schema_valid,
+            execution_allowed_before_ai=True,
+            execution_allowed_after_ai=True,
+            final_action="advisory",
+        )
+    except Exception as _log_exc:
+        log.debug("[LEARN] meta-analysis audit log failed: %s", _log_exc)
+
+
 def run_meta_analysis(db_path: str, xai_key: str, model: str, days: int = 7) -> dict:
     """Ask the configured AI provider to review recent outcomes and identify systematic biases."""
     if not xai_key:
@@ -517,7 +563,22 @@ def run_meta_analysis(db_path: str, xai_key: str, model: str, days: int = 7) -> 
             response_format={"type": "json_object"},
         )
         raw = (completion.choices[0].message.content or "").strip()
-        result = parse_json_object(raw) or {"summary": raw}
+        parsed = parse_json_object(raw)
+        result = parsed or {"summary": raw}
+        _required = {
+            "summary",
+            "insights",
+            "adjustments",
+            "blind_spot",
+            "devils_advocate",
+        }
+        _log_meta_ai_review(
+            model=model,
+            context=context,
+            result=result,
+            parse_success=parsed is not None,
+            schema_valid=isinstance(parsed, dict) and _required.issubset(parsed.keys()),
+        )
 
         # Persist to meta_analysis_log
         try:
@@ -541,6 +602,13 @@ def run_meta_analysis(db_path: str, xai_key: str, model: str, days: int = 7) -> 
 
     except Exception as e:
         log.error(f"[LEARN] Meta-analysis failed: {e}")
+        _log_meta_ai_review(
+            model=model,
+            context=context if "context" in locals() else "",
+            result=None,
+            parse_success=False,
+            schema_valid=False,
+        )
         return {"error": str(e)}
 
 

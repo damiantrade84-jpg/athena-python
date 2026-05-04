@@ -8,11 +8,16 @@ ENGINE_C_AI_WEIGHT_ADJUST_ENABLED (does not flip trade from False → True).
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any, Mapping, Optional
 
 from ai_utils import parse_json_object
-from config import CONFIG, create_ai_client, get_ai_model
+from config import (
+    CONFIG,
+    create_ai_client,
+    get_ai_api_key,
+    get_ai_model,
+    get_ai_provider_label,
+)
 
 log = logging.getLogger("sentinel")
 
@@ -164,6 +169,79 @@ def _build_weight_verdict_user_message(
     return "\n".join(lines)
 
 
+def _engine_c_ai_state(verdict: dict | None) -> str:
+    tv = str((verdict or {}).get("trust_verdict") or "").lower()
+    if tv in ("trust_a", "trust_b", "trust_both"):
+        return "CAUTION"
+    if tv == "trust_neither":
+        return "REJECT"
+    return "REVIEW_INCOMPLETE"
+
+
+def _log_engine_c_ai_review(
+    *,
+    signal_a: dict,
+    signal_b: dict,
+    consensus_snapshot: dict,
+    confidence_b: Optional[dict],
+    asset_type: str,
+    model: str,
+    user_msg: str,
+    verdict: dict | None,
+    parse_success: bool,
+    schema_valid: bool,
+) -> None:
+    try:
+        from ai_review_logger import (
+            REVIEW_TYPE_ENGINE_C_AI,
+            log_ai_review,
+        )
+
+        log_ai_review(
+            symbol=str(
+                signal_a.get("pair")
+                or signal_a.get("symbol")
+                or signal_b.get("pair")
+                or signal_b.get("symbol")
+                or "?"
+            ),
+            asset_type=asset_type or str(signal_a.get("type") or "?"),
+            review_type=REVIEW_TYPE_ENGINE_C_AI,
+            model=model,
+            provider=get_ai_provider_label(CONFIG),
+            prompt_version="engine_c_ai_weight_v1",
+            input_packet=user_msg,
+            has_chart_image=False,
+            candle_freshness_status=(
+                (signal_a.get("dataFreshness") or {}).get("reason") or "unknown"
+            ),
+            engine_a_state=signal_a.get("confluenceScore"),
+            engine_b_state=(
+                (confidence_b or {}).get("score")
+                or signal_b.get("score")
+                or signal_b.get("structural_verdict")
+            ),
+            engine_c_state={
+                "verdict": consensus_snapshot.get("verdict"),
+                "trade": consensus_snapshot.get("trade"),
+                "conviction": consensus_snapshot.get("conviction"),
+            },
+            engine_d_state=None,
+            risk_state=None,
+            ai_review_state=_engine_c_ai_state(verdict),
+            ai_confidence=None,
+            contradictions_count=0,
+            missing_information_count=0 if parse_success else 1,
+            parse_success=parse_success,
+            schema_valid=schema_valid,
+            execution_allowed_before_ai=bool(consensus_snapshot.get("trade")),
+            execution_allowed_after_ai=bool(consensus_snapshot.get("trade")),
+            final_action="advisory",
+        )
+    except Exception as _log_exc:
+        log.debug("[ENGINE_C_AI] audit log failed: %s", _log_exc)
+
+
 def get_engine_c_weight_verdict(
     signal_a: dict,
     signal_b: dict,
@@ -179,7 +257,7 @@ def get_engine_c_weight_verdict(
     """
     Call xAI for a trust verdict. Returns dict (normalized) or {error: str}.
     """
-    key = (xai_api_key or os.environ.get("XAI_API_KEY") or "").strip()
+    key = (xai_api_key or get_ai_api_key(CONFIG) or "").strip()
     if not key:
         return {"error": "API key not configured", "trust_verdict": None}
 
@@ -197,8 +275,8 @@ def get_engine_c_weight_verdict(
     try:
         from engine_b_ai import _call_ai_with_retry
 
-        client = create_ai_client(CONFIG, api_key=key)
         model = str(xai_model or get_ai_model(CONFIG, "AI_MODEL")).strip()
+        client = create_ai_client(CONFIG, api_key=key)
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
         completion = _call_ai_with_retry(
             client,
@@ -213,14 +291,53 @@ def get_engine_c_weight_verdict(
         parsed = parse_json_object(text)
         if parsed is None:
             log.warning("[ENGINE_C_AI] Failed to parse JSON from AI response")
+            _log_engine_c_ai_review(
+                signal_a=signal_a or {},
+                signal_b=signal_b or {},
+                consensus_snapshot=consensus_snapshot or {},
+                confidence_b=confidence_b,
+                asset_type=asset_type,
+                model=model,
+                user_msg=user_msg,
+                verdict={"trust_verdict": None},
+                parse_success=False,
+                schema_valid=False,
+            )
             return {"error": "Invalid AI response format", "trust_verdict": None}
         w_min = float(CONFIG.get("ENGINE_C_AI_WEIGHT_MIN", 0.20) or 0.20)
         w_max = float(CONFIG.get("ENGINE_C_AI_WEIGHT_MAX", 0.80) or 0.80)
         out = normalize_engine_c_ai_weight_verdict(parsed, w_min=w_min, w_max=w_max)
         out["reviewSource"] = "engine_c_marcus_weight"
+        _log_engine_c_ai_review(
+            signal_a=signal_a or {},
+            signal_b=signal_b or {},
+            consensus_snapshot=consensus_snapshot or {},
+            confidence_b=confidence_b,
+            asset_type=asset_type,
+            model=model,
+            user_msg=user_msg,
+            verdict=out,
+            parse_success=True,
+            schema_valid=not bool(out.get("error")),
+        )
         return out
     except Exception as exc:  # pragma: no cover - network
         log.warning("[ENGINE_C_AI] weight verdict failed: %s", exc)
+        try:
+            _log_engine_c_ai_review(
+                signal_a=signal_a or {},
+                signal_b=signal_b or {},
+                consensus_snapshot=consensus_snapshot or {},
+                confidence_b=confidence_b,
+                asset_type=asset_type,
+                model=str(xai_model or get_ai_model(CONFIG, "AI_MODEL")).strip(),
+                user_msg=user_msg,
+                verdict={"trust_verdict": None, "error": str(exc)},
+                parse_success=False,
+                schema_valid=False,
+            )
+        except Exception:
+            pass
         return {"error": str(exc).strip() or exc.__class__.__name__, "trust_verdict": None}
 
 

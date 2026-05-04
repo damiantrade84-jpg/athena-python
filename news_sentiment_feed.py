@@ -15,7 +15,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from config import CONFIG, create_ai_client, get_ai_api_key
+from config import CONFIG, create_ai_client, get_ai_api_key, get_ai_provider_label
 from data_feeds import http_requests
 
 log = logging.getLogger("athena")
@@ -58,6 +58,63 @@ def _asset_class_for_pair(pair: dict) -> str:
     if ptype in ASSET_CONTEXT:
         return ptype
     return "stock"
+
+
+def _log_news_ai_review(
+    *,
+    display: str,
+    asset_class: str,
+    model: str,
+    user_prompt: str,
+    result: dict | None,
+    parse_success: bool,
+    schema_valid: bool,
+) -> None:
+    try:
+        from ai_review_logger import (
+            AI_STATE_CAUTION,
+            AI_STATE_REVIEW_INCOMPLETE,
+            REVIEW_TYPE_NEWS_SENTIMENT,
+            log_ai_review,
+        )
+
+        confidence = None
+        if isinstance(result, dict):
+            try:
+                confidence = float(result.get("confidence"))
+            except (TypeError, ValueError):
+                confidence = None
+        log_ai_review(
+            symbol=display or "?",
+            asset_type=asset_class or "?",
+            review_type=REVIEW_TYPE_NEWS_SENTIMENT,
+            model=model,
+            provider=get_ai_provider_label(CONFIG),
+            prompt_version="news_sentiment_v1",
+            input_packet=user_prompt,
+            has_chart_image=False,
+            candle_freshness_status="not_applicable",
+            engine_a_state=None,
+            engine_b_state=None,
+            engine_c_state=None,
+            engine_d_state=None,
+            risk_state={
+                "major_event_detected": (result or {}).get("major_event_detected")
+                if isinstance(result, dict)
+                else None
+            },
+            ai_review_state=AI_STATE_CAUTION if parse_success else AI_STATE_REVIEW_INCOMPLETE,
+            ai_confidence=confidence,
+            contradictions_count=0,
+            missing_information_count=0 if parse_success else 1,
+            parse_success=parse_success,
+            schema_valid=schema_valid,
+            execution_allowed_before_ai=True,
+            execution_allowed_after_ai=True,
+            final_action="advisory",
+        )
+    except Exception as _log_exc:
+        log.debug("[NewsAI] audit log failed for %s: %s", display, _log_exc)
 
 
 def fetch_news(
@@ -328,12 +385,6 @@ def get_news_sentiment(
 
     Returns parsed result dict or None on failure / no articles.
     """
-    try:
-        import openai
-    except ImportError:
-        log.error("[NewsAI] openai package not installed (required for AI provider client)")
-        return None
-
     ticker = eodhd_ticker_for_pair(pair)
     if not ticker:
         log.warning("[NewsAI] No EODHD ticker for pair display=%s", pair.get("display"))
@@ -377,6 +428,15 @@ def get_news_sentiment(
                 e,
                 preview,
             )
+            _log_news_ai_review(
+                display=display,
+                asset_class=asset_class,
+                model=model,
+                user_prompt=user_prompt,
+                result=None,
+                parse_success=False,
+                schema_valid=False,
+            )
             return None
         except ValueError as e:
             if "empty model text" in str(e).lower():
@@ -386,7 +446,32 @@ def get_news_sentiment(
                 )
             else:
                 log.warning("[NewsAI] unexpected parse error for %s: %s", display, e)
+            _log_news_ai_review(
+                display=display,
+                asset_class=asset_class,
+                model=model,
+                user_prompt=user_prompt,
+                result=None,
+                parse_success=False,
+                schema_valid=False,
+            )
             return None
+        _required = {
+            "sentiment_score",
+            "confidence",
+            "direction",
+            "major_event_detected",
+            "reasoning_summary",
+        }
+        _log_news_ai_review(
+            display=display,
+            asset_class=asset_class,
+            model=model,
+            user_prompt=user_prompt,
+            result=result,
+            parse_success=True,
+            schema_valid=_required.issubset(result.keys()),
+        )
         log.info(
             "[NewsAI] %s: score=%s dir=%s conf=%s major=%s",
             display,
@@ -398,6 +483,15 @@ def get_news_sentiment(
         return result
     except Exception as e:
         log.error("[NewsAI] AI provider error for %s: %s", display, e)
+        _log_news_ai_review(
+            display=display,
+            asset_class=asset_class,
+            model=model,
+            user_prompt=user_prompt,
+            result=None,
+            parse_success=False,
+            schema_valid=False,
+        )
         return None
 
 

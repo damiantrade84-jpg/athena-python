@@ -45,6 +45,10 @@ REVIEW_TYPE_SIGNAL_DEBATE = "signal_debate"
 REVIEW_TYPE_MARCUS_REID = "marcus_reid"
 REVIEW_TYPE_NEWS_SENTIMENT = "news_sentiment"
 REVIEW_TYPE_LOTTERY_AI = "lottery_ai"
+REVIEW_TYPE_ENGINE_C_AI = "engine_c_ai"
+REVIEW_TYPE_DECAY_AI = "decay_ai"
+REVIEW_TYPE_RESEARCH_AI = "research_ai"
+REVIEW_TYPE_META_ANALYSIS = "meta_analysis"
 
 # Canonical ai_review_state values
 AI_STATE_CONFIRM = "CONFIRM"
@@ -264,6 +268,39 @@ def log_ai_review(
         log.warning("[AI_AUDIT] Failed to write audit record: %s", _e)
 
 
+def extract_engine_d_audit_state(signal: Any) -> dict[str, Any] | None:
+    """Return a compact Engine D/scalp state for audit logs when present."""
+    if not isinstance(signal, dict):
+        return None
+
+    for key in ("engine_d_state", "engine_d", "scalp_engine", "scalp_data"):
+        value = signal.get(key)
+        if isinstance(value, dict) and value:
+            return value
+
+    engine = str(signal.get("engine") or signal.get("engine_type") or "").lower()
+    if engine not in ("scalp", "engine_d", "engine-d", "d"):
+        return None
+
+    keys = (
+        "engine",
+        "engine_type",
+        "setup_type",
+        "setupType",
+        "quality_score",
+        "qualityScore",
+        "score",
+        "grade",
+        "trade",
+        "passed",
+        "market_state",
+        "location",
+        "aggression",
+    )
+    out = {key: signal.get(key) for key in keys if signal.get(key) is not None}
+    return out or {"engine": signal.get("engine") or signal.get("engine_type")}
+
+
 def map_debate_grade_to_ai_state(grade: str) -> str:
     """Convert signal_debate grade to canonical ai_review_state."""
     _g = (grade or "").upper()
@@ -288,6 +325,11 @@ def map_engine_b_grade_to_ai_state(grade: str) -> str:
     if _g in ("C", "D", "F"):
         return AI_STATE_REJECT
     return AI_STATE_REVIEW_INCOMPLETE
+
+
+def map_engine_a_grade_to_ai_state(grade: str) -> str:
+    """Convert Marcus Reid Engine A grade to canonical ai_review_state."""
+    return map_engine_b_grade_to_ai_state(grade)
 
 
 def map_vision_rating_to_ai_state(rating: str) -> str:

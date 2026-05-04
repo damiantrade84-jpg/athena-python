@@ -35,15 +35,10 @@ def _get_ai_client(provider: str = "auto") -> Optional[object]:
     """
     # Try to reuse project config helpers (non-execution modules only)
     try:
-        from config import get_ai_api_key, get_ai_base_url, get_ai_model, CONFIG
+        from config import CONFIG, create_ai_client, get_ai_api_key
         api_key = get_ai_api_key(CONFIG)
-        base_url = get_ai_base_url(CONFIG)
         if api_key:
-            try:
-                from openai import OpenAI
-                return OpenAI(api_key=api_key, base_url=base_url)
-            except ImportError:
-                log.warning("[ai_analyst] openai package not installed")
+            return create_ai_client(CONFIG, api_key=api_key)
     except ImportError:
         pass
 
@@ -52,9 +47,9 @@ def _get_ai_client(provider: str = "auto") -> Optional[object]:
     api_key = os.environ.get("XAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
     if api_key:
         try:
-            from openai import OpenAI
+            from config import create_ai_client
             base_url = os.environ.get("AI_BASE_URL", "https://api.x.ai/v1")
-            return OpenAI(api_key=api_key, base_url=base_url)
+            return create_ai_client({"AI_BASE_URL": base_url}, api_key=api_key)
         except ImportError:
             pass
 
@@ -72,6 +67,53 @@ def _get_model_name(cfg_model: Optional[str] = None) -> str:
 
 
 # ─── Deterministic fallback review ───────────────────────────────────────────
+
+def _log_research_ai_review(
+    *,
+    run_id: str,
+    model: str,
+    prompt_text: str,
+    action_plan: dict | None,
+    parse_success: bool,
+    schema_valid: bool,
+) -> None:
+    try:
+        from ai_review_logger import (
+            AI_STATE_CAUTION,
+            AI_STATE_REVIEW_INCOMPLETE,
+            REVIEW_TYPE_RESEARCH_AI,
+            log_ai_review,
+        )
+        from config import CONFIG, get_ai_provider_label
+
+        log_ai_review(
+            symbol=run_id,
+            asset_type="research",
+            review_type=REVIEW_TYPE_RESEARCH_AI,
+            model=model,
+            provider=get_ai_provider_label(CONFIG),
+            prompt_version="research_ai_analyst_v1",
+            input_packet=prompt_text,
+            has_chart_image=False,
+            candle_freshness_status="not_applicable",
+            engine_a_state=(action_plan or {}).get("engine_a") if isinstance(action_plan, dict) else None,
+            engine_b_state=(action_plan or {}).get("engine_b") if isinstance(action_plan, dict) else None,
+            engine_c_state=None,
+            engine_d_state=(action_plan or {}).get("engine_d") if isinstance(action_plan, dict) else None,
+            risk_state=None,
+            ai_review_state=AI_STATE_CAUTION if parse_success else AI_STATE_REVIEW_INCOMPLETE,
+            ai_confidence=None,
+            contradictions_count=0,
+            missing_information_count=0 if parse_success else 1,
+            parse_success=parse_success,
+            schema_valid=schema_valid,
+            execution_allowed_before_ai=True,
+            execution_allowed_after_ai=True,
+            final_action="report_only",
+        )
+    except Exception as _log_exc:
+        log.debug("[ai_analyst] audit log failed: %s", _log_exc)
+
 
 def _deterministic_review(run_dir: Path) -> tuple[str, dict]:
     """Rule-based review from metrics when no AI provider is configured."""
@@ -279,8 +321,24 @@ def run_ai_analysis(
             raw_response, action_plan = _ai_review(run_dir, client, model_name, max_tokens, temperature)
             review_md = _format_review_md(raw_response, run_dir.name, model_name, ai_powered=True)
             used_ai = True
+            _log_research_ai_review(
+                run_id=run_dir.name,
+                model=model_name,
+                prompt_text=prompt_text,
+                action_plan=action_plan,
+                parse_success=not bool(action_plan.get("parse_error") or action_plan.get("warning")),
+                schema_valid=not bool(action_plan.get("parse_error") or action_plan.get("warning")),
+            )
         except Exception as e:
             log.warning("[ai_analyst] AI failed (%s) — using deterministic fallback", e)
+            _log_research_ai_review(
+                run_id=run_dir.name,
+                model=model_name,
+                prompt_text=prompt_text,
+                action_plan=None,
+                parse_success=False,
+                schema_valid=False,
+            )
             review_md, action_plan = _deterministic_review(run_dir)
             raw_response = f"AI FAILED: {e}"
     else:
