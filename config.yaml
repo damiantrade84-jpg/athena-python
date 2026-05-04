@@ -1789,6 +1789,16 @@ ENGINE_B_FOLLOW_THROUGH:
 
 ENGINE_B_BT_SL_MODE: "atr"
 
+# Engine B backtest-only A/B experiment:
+# false = disable the structure gate only inside backtest_pair_naked().
+# Live scan, AI review, and execution paths do not consume this key.
+ENGINE_B_BT_STRUCTURE_GATE_ENABLED: false
+
+# Engine B live scan structure gate:
+# false = disable the structure_ok gate in live calculate_confidence() (same as BT experiment).
+# Live scan, AI review, and execution all consume this key.
+ENGINE_B_STRUCTURE_GATE_ENABLED: false
+
 
 
 # AI usage control - when true, AI only runs on explicit user actions
@@ -1897,7 +1907,7 @@ SCALP_ENGINE:
 
   WATCHLIST_LOCATION_REQUIRED: true  # Watchlist setups must be at VAH/VAL/POC or LVN
 
-  EXECUTION_MIN_GRADE: "B"           # Minimum grade for auto-execution (non-watchlist)
+  EXECUTION_MIN_GRADE: "C"           # Minimum grade for auto-execution (non-watchlist)
 
   # ── Spread Limits ─────────────────────────────────────────
 

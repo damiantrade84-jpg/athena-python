@@ -5464,6 +5464,9 @@ def _naked_scan_style_profile(
     resolved_profile["style"] = resolved
     if score_group:
         resolved_profile["score_group"] = score_group
+    # Propagate live structure gate toggle into the profile dict consumed by calculate_confidence().
+    if not CONFIG.get("ENGINE_B_STRUCTURE_GATE_ENABLED", True):
+        resolved_profile["disable_structure_gate"] = True
     return resolved, resolved_profile
 
 
@@ -6482,6 +6485,10 @@ def api_scan_naked():
                 _res["entry_tf"] = _entry_tf
                 _res["atr_tf"] = _atr_tf
                 _res["is_forming"] = _engine_b_is_forming
+                _res["max_score"] = conf_data.get("max_possible")
+                _res["confidence_max"] = conf_data.get("max_possible")
+                _res["min_score"] = _min_score_scaled
+                _res["min_rr"] = style_profile.get("min_rr")
 
                 sl = conf_data.get("execution_sl") or _res.get("recommended_stop_loss")
                 tp = conf_data.get("execution_tp") or _res.get("recommended_take_profit")
@@ -6550,6 +6557,8 @@ def api_scan_naked():
                     "price": current_price,
                     "confluenceScore": conf_data["score"],
                     "confluencePct": conf_data["pct"],
+                    "maxScore": conf_data.get("max_possible"),
+                    "threshold": _min_score_scaled,
                     "volRatio": 1.0,
                     "stochK": None,
                     "stochD": None,
