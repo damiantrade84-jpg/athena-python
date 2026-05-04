@@ -44,8 +44,8 @@ export default function MarketsPanel() {
     return () => clearInterval(id);
   }, []);
 
-  const priceEntries = prices ? Object.entries(prices.prices) : [];
-  const yieldData = yieldCurve ? Object.entries(yieldCurve.maturities).map(([k, v]) => ({ maturity: k, yield: v })) : [];
+  const priceEntries = prices?.prices ? Object.entries(prices.prices) : [];
+  const yieldData = yieldCurve?.maturities ? Object.entries(yieldCurve.maturities).map(([k, v]) => ({ maturity: k, yield: v })) : [];
 
   const sessionOrder = ['london', 'new_york', 'tokyo', 'sydney'];
 
@@ -195,7 +195,7 @@ export default function MarketsPanel() {
               <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>News Sentiment</CardTitle>
             </CardHeader>
             <CardContent>
-              {sentLoading ? <Skeleton className="h-20 w-full" /> : sentiment && sentiment.length > 0 ? (
+              {sentLoading ? <Skeleton className="h-20 w-full" /> : Array.isArray(sentiment) && sentiment.length > 0 ? (
                 <div className="space-y-1">
                   {sentiment.map(s => (
                     <div key={s.pair} className="flex items-center justify-between p-2 rounded-md bg-muted/30">
