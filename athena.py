@@ -4370,11 +4370,18 @@ def run_ai(
         log.error("[AI] AI API key is not configured")
         return {"error": "AI API key not configured"}
 
+    _provider = get_ai_provider_label(CONFIG)
+    _model = get_ai_model(CONFIG, "AI_MODEL", "grok-4.3")
+    _timeout_sec = None
+    _sdk_max_retries = None
+    _prompt_sec = None
+    _prompt_chars = None
+    _provider_started = None
+
     try:
-        _provider = get_ai_provider_label(CONFIG)
         log.info(
             f"[AI] Analyzing {signal['pair']} via provider={_provider} "
-            f"base_url={get_ai_base_url(CONFIG)} model={get_ai_model(CONFIG, 'AI_MODEL', 'grok-4.3')}"
+            f"base_url={get_ai_base_url(CONFIG)} model={_model}"
         )
 
         _sdk_max_retries = get_ai_max_retries(
@@ -4410,12 +4417,12 @@ def run_ai(
             learning_ctx=learning_ctx,
         )
         _prompt_sec = time.monotonic() - _prompt_started
+        _prompt_chars = len(msg)
 
-        _model = get_ai_model(CONFIG, "AI_MODEL", "grok-4.3")
         _timeout_sec = get_ai_timeout_sec(
             CONFIG,
             preferred_key="MARCUS_AI_TIMEOUT_SEC",
-            fallback=30.0,
+            fallback=60.0,
         )
         _provider_started = time.monotonic()
         completion = c.chat.completions.create(
@@ -4436,7 +4443,7 @@ def run_ai(
             _prompt_sec,
             _provider_sec,
             _timeout_sec,
-            len(msg),
+            _prompt_chars,
         )
         t = (completion.choices[0].message.content or "").strip()
         result = _parse_ai_json(t, signal["pair"])
@@ -4567,7 +4574,24 @@ def run_ai(
         return result
 
     except Exception as e:
-        log.error(f"[AI] ERROR for {signal.get('pair', '?')}: {e}")
+        _elapsed_sec = (
+            time.monotonic() - _provider_started
+            if _provider_started is not None
+            else 0.0
+        )
+        log.error(
+            "[AI] ERROR for %s: %s | elapsed=%.2fs timeout=%.1fs sdk_retries=%s "
+            "provider=%s model=%s prompt_build=%.2fs prompt_chars=%s",
+            signal.get("pair", "?"),
+            e,
+            _elapsed_sec,
+            float(_timeout_sec or 0.0),
+            _sdk_max_retries if _sdk_max_retries is not None else "?",
+            _provider,
+            _model,
+            float(_prompt_sec or 0.0),
+            _prompt_chars if _prompt_chars is not None else "?",
+        )
 
         return {"error": str(e)}
 

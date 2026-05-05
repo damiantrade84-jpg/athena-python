@@ -124,3 +124,19 @@
 - Compile validation passed: `python -m py_compile config.py athena.py`.
 - Focused AI routing/review validation passed: `python -m pytest tests/test_ai_config_routing.py tests/test_ai_review_safety.py -q` (`86 passed`).
 - Engine B AI regression validation passed: `python -m pytest tests/test_engine_b_ai.py -q` (`13 passed`).
+
+# Marcus Single Timeout Follow-up
+
+- [x] Confirm the post-push timeout no longer includes OpenAI SDK retry lines.
+- [x] Confirm the prior timing logs are suppressed by `log.setLevel(logging.WARNING)`.
+- [x] Extend Marcus timeout to one bounded 60s attempt.
+- [x] Make Marcus timeout failures log elapsed/config context at error level.
+- [x] Run focused validation.
+
+## Review
+
+- Confirmed `logs/sentinel.log` changed from retry storm at `15:41-15:42` to one timeout at `16:06`.
+- Confirmed `log.info(...)` Marcus timing lines were not visible because the `sentinel` logger is set to `WARNING`.
+- Compile validation passed: `python -m py_compile config.py athena.py`.
+- Focused AI routing/review validation passed: `python -m pytest tests/test_ai_config_routing.py tests/test_ai_review_safety.py -q` (`86 passed`).
+- Engine B AI regression validation passed: `python -m pytest tests/test_engine_b_ai.py -q` (`13 passed`).

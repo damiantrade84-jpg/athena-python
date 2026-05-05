@@ -78,7 +78,7 @@ def test_ai_helpers_do_not_drift_to_kimi_when_grok_mode_is_intended():
 
 
 def test_marcus_ai_timeout_default_is_bounded():
-    assert get_ai_timeout_sec(CONFIG, "MARCUS_AI_TIMEOUT_SEC", fallback=30.0) == 30.0
+    assert get_ai_timeout_sec(CONFIG, "MARCUS_AI_TIMEOUT_SEC", fallback=60.0) == 60.0
 
 
 def test_ai_timeout_resolver_uses_positive_specific_value_before_global():

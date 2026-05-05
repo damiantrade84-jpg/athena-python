@@ -1257,3 +1257,5 @@ class TestMarcusTextReviewTimeoutContract:
         assert 'preferred_key="MARCUS_AI_TIMEOUT_SEC"' in run_ai_body
         assert "timeout=_timeout_sec" in run_ai_body
         assert "[AI] %s timing: prompt_build" in run_ai_body
+        assert "elapsed=%.2fs timeout=%.1fs sdk_retries=%s" in text
+        assert "prompt_build=%.2fs prompt_chars=%s" in text
