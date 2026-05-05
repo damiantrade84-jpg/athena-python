@@ -110,3 +110,17 @@
 
 - Compile validation passed: `python -m py_compile telegram_notify.py telegram_bot.py telegram_diagnostic.py quick_telegram_test.py`.
 - Focused Telegram validation passed: `python -m pytest tests/test_telegram_bot.py tests/test_telegram_notify.py tests/test_audit_fixes.py::test_telegram_notify_datetime_usage -q` (`13 passed`).
+
+# Marcus AI SDK Retry Timeout Fix
+
+- [x] Trace the timeout log prefix to the Marcus/Text Review path.
+- [x] Disable SDK retry multiplication for Marcus while keeping timeout config-gated.
+- [x] Add focused regression coverage.
+- [x] Run focused compile and pytest validation.
+
+## Review
+
+- Confirmed `[AI] ERROR for ...` is emitted by `run_ai()` in `athena.py`, not by `engine_b_ai.py`.
+- Compile validation passed: `python -m py_compile config.py athena.py`.
+- Focused AI routing/review validation passed: `python -m pytest tests/test_ai_config_routing.py tests/test_ai_review_safety.py -q` (`86 passed`).
+- Engine B AI regression validation passed: `python -m pytest tests/test_engine_b_ai.py -q` (`13 passed`).

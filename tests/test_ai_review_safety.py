@@ -1251,6 +1251,8 @@ class TestMarcusTextReviewTimeoutContract:
         start = text.index("def run_ai(")
         end = text.index("t = (completion.choices[0].message.content", start)
         run_ai_body = text[start:end]
+        assert 'preferred_key="MARCUS_AI_SDK_MAX_RETRIES"' in run_ai_body
+        assert "create_ai_client(CONFIG, max_retries=_sdk_max_retries)" in run_ai_body
         assert "get_ai_timeout_sec(" in run_ai_body
         assert 'preferred_key="MARCUS_AI_TIMEOUT_SEC"' in run_ai_body
         assert "timeout=_timeout_sec" in run_ai_body

@@ -149,14 +149,41 @@ def get_ai_timeout_sec(
     return float(fallback)
 
 
-def create_ai_client(cfg: dict | None = None, api_key: str | None = None):
+def get_ai_max_retries(
+    cfg: dict | None = None,
+    preferred_key: str = "AI_SDK_MAX_RETRIES",
+    fallback: int = 2,
+) -> int:
+    cfg = cfg or CONFIG
+    candidates = []
+    if preferred_key:
+        candidates.append(cfg.get(preferred_key))
+    candidates.append(cfg.get("AI_SDK_MAX_RETRIES"))
+    for candidate in candidates:
+        try:
+            retries = int(candidate)
+        except (TypeError, ValueError):
+            continue
+        if retries >= 0:
+            return retries
+    return max(0, int(fallback))
+
+
+def create_ai_client(
+    cfg: dict | None = None,
+    api_key: str | None = None,
+    max_retries: int | None = None,
+):
     import openai
 
     resolved_key = _clean_ai_value(api_key) or get_ai_api_key(cfg)
-    return openai.OpenAI(
-        api_key=resolved_key,
-        base_url=get_ai_base_url(cfg),
-    )
+    client_kwargs = {
+        "api_key": resolved_key,
+        "base_url": get_ai_base_url(cfg),
+    }
+    if max_retries is not None:
+        client_kwargs["max_retries"] = max(0, int(max_retries))
+    return openai.OpenAI(**client_kwargs)
 
 
 def ai_runtime_descriptor(
@@ -248,6 +275,7 @@ CONFIG: dict = {
     "NEWS_SENTIMENT_MODEL": os.environ.get("NEWS_SENTIMENT_MODEL", _AI_MODEL_DEFAULT),
     "AI_REQUEST_TIMEOUT_SEC": 30.0,
     "MARCUS_AI_TIMEOUT_SEC": 30.0,
+    "MARCUS_AI_SDK_MAX_RETRIES": 0,
     "AI_PROMPT_STORE_CLEANUP_ENABLED": True,
     "AI_PROMPT_STORE_RETENTION_DAYS": 90,
     "AI_PROMPT_STORE_MIN_DELETE_AGE_DAYS": 7,

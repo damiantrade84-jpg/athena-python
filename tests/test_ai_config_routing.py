@@ -8,6 +8,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from config import (
     CONFIG,
     ai_runtime_descriptor,
+    create_ai_client,
+    get_ai_max_retries,
     get_ai_timeout_sec,
     get_ai_api_key,
     get_ai_base_url,
@@ -95,3 +97,35 @@ def test_ai_timeout_resolver_falls_back_from_invalid_specific_to_global():
     }
 
     assert get_ai_timeout_sec(cfg, "MARCUS_AI_TIMEOUT_SEC", fallback=30.0) == 45.0
+
+
+def test_marcus_ai_sdk_retries_default_to_zero():
+    assert get_ai_max_retries(CONFIG, "MARCUS_AI_SDK_MAX_RETRIES", fallback=0) == 0
+
+
+def test_ai_retry_resolver_uses_non_negative_specific_value_before_global():
+    cfg = {
+        "AI_SDK_MAX_RETRIES": 2,
+        "MARCUS_AI_SDK_MAX_RETRIES": 0,
+    }
+
+    assert get_ai_max_retries(cfg, "MARCUS_AI_SDK_MAX_RETRIES", fallback=2) == 0
+
+
+def test_ai_retry_resolver_falls_back_from_invalid_specific_to_global():
+    cfg = {
+        "AI_SDK_MAX_RETRIES": 1,
+        "MARCUS_AI_SDK_MAX_RETRIES": "bad",
+    }
+
+    assert get_ai_max_retries(cfg, "MARCUS_AI_SDK_MAX_RETRIES", fallback=2) == 1
+
+
+def test_create_ai_client_accepts_explicit_sdk_retry_count():
+    client = create_ai_client(
+        {"AI_BASE_URL": "https://api.x.ai/v1"},
+        api_key="test-key",
+        max_retries=0,
+    )
+
+    assert client.max_retries == 0

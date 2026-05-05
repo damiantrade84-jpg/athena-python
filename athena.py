@@ -220,6 +220,7 @@ from config import (
     get_ai_provider_label,
     get_ai_api_key,
     get_ai_base_url,
+    get_ai_max_retries,
     get_ai_model,
     get_ai_timeout_sec,
     scan_candle_limits,
@@ -4376,7 +4377,12 @@ def run_ai(
             f"base_url={get_ai_base_url(CONFIG)} model={get_ai_model(CONFIG, 'AI_MODEL', 'grok-4.3')}"
         )
 
-        c = create_ai_client(CONFIG)
+        _sdk_max_retries = get_ai_max_retries(
+            CONFIG,
+            preferred_key="MARCUS_AI_SDK_MAX_RETRIES",
+            fallback=0,
+        )
+        c = create_ai_client(CONFIG, max_retries=_sdk_max_retries)
         _temp = float(AITemperatureConfig.get_temperature("marcus"))
 
         style_labels = {
