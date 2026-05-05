@@ -274,7 +274,7 @@ CONFIG: dict = {
     "VISION_MODEL": os.environ.get("VISION_MODEL", _AI_MODEL_DEFAULT),
     "NEWS_SENTIMENT_MODEL": os.environ.get("NEWS_SENTIMENT_MODEL", _AI_MODEL_DEFAULT),
     "AI_REQUEST_TIMEOUT_SEC": 30.0,
-    "MARCUS_AI_TIMEOUT_SEC": 60.0,
+    "MARCUS_AI_TIMEOUT_SEC": 90.0,
     "MARCUS_AI_SDK_MAX_RETRIES": 0,
     "AI_PROMPT_STORE_CLEANUP_ENABLED": True,
     "AI_PROMPT_STORE_RETENTION_DAYS": 90,
@@ -291,6 +291,7 @@ CONFIG: dict = {
     "AI_VISION_TEMPERATURE": 0.2,  # /api/chart-analysis factual mode (override in config.yaml if needed)
     "AI_VISION_CAN_UPGRADE_TRADE": False,  # Vision CONFIRM cannot create trade=True; downgrade only by default
     "ENGINE_B_PROFILE_SCORING_ENABLED": True,
+    "ENGINE_B_FAST_FVG_DETECTION": True,
     "CHART_VISION_DATASET_ENABLED": False,
     "CHART_VISION_V2_SHADOW_ENABLED": False,
     "CRYPTOPANIC_KEY": os.environ.get("CRYPTOPANIC_KEY", ""),

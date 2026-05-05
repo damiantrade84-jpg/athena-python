@@ -54,6 +54,7 @@ NEWS_PAIR_CACHE_TTL_SEC: 14400 # How long per-pair news/word-weights are cached 
 
 BACKTEST_MAX_WORKERS: 8       # Parallel workers for backtesting (Engine A & B). Increase for faster backtests.
 BT_VECTORIZED: true           # Speed path: exact-window indicator caching for Engine A/B backtests (parity-safe target).
+ENGINE_B_FAST_FVG_DETECTION: true
 
 SCAN_DEBUG_CANDLE_META: false # Optional scan/debug payload metadata about candle resolution path.
 
@@ -726,9 +727,12 @@ NEWS_SENTIMENT_MODEL: "grok-4.3"  # News AI text; defaults to AI_MODEL if empty 
 
 # Default OpenAI-compatible SDK read timeout is much longer; keep advisory AI bounded.
 AI_REQUEST_TIMEOUT_SEC: 30
-MARCUS_AI_TIMEOUT_SEC: 60
+MARCUS_AI_TIMEOUT_SEC: 90
 # Keep Marcus manual reviews bounded; SDK default retries can multiply the timeout.
 MARCUS_AI_SDK_MAX_RETRIES: 0
+# Retry loop inside run_ai() for transient timeouts (independent of SDK retries).
+MARCUS_AI_MAX_RETRIES: 2
+MARCUS_AI_RETRY_BACKOFF_SEC: 3.0
 
 # Prompt-store janitor is conservative: recent files are preserved even when size cap is exceeded.
 AI_PROMPT_STORE_CLEANUP_ENABLED: true

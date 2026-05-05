@@ -3698,8 +3698,11 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             i += 1
             continue
 
-        h4_ctx = candles_h4[:bisect.bisect_left(h4_times, entry_time)]
-        d1_ctx = candles_d1[:bisect.bisect_left(d1_times, entry_time)]
+        _h4_cut_idx = bisect.bisect_left(h4_times, entry_time)
+        _d1_cut_idx = bisect.bisect_left(d1_times, entry_time)
+        h4_ctx = candles_h4[:_h4_cut_idx]
+        d1_ctx = candles_d1[:_d1_cut_idx]
+
         # entry_ctx is exactly where we are in the entry loop
         entry_ctx = entry_raw[:i + 1]
 
@@ -3711,9 +3714,10 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         # O(1) ATR LOOKUP: Select precomputed ATR value based on the current bar and _atr_tf
         _atr_full = atr_map.get(_atr_tf, atr_map["H4"])
         if _atr_tf == "D1":
-            _idx = bisect.bisect_left(d1_times, entry_time)
+            _idx = _d1_cut_idx
         elif _atr_tf == "H4":
-            _idx = bisect.bisect_left(h4_times, entry_time)
+            _idx = _h4_cut_idx
+
         else: # H1 (entry_tf usually)
             _idx = i + 1 # Align to the context end bar
 
@@ -3739,10 +3743,11 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
 
         # Zone context always uses the configured zone_tf (usually H4)
         zone_ctx = h4_ctx if _zone_tf == "H4" else d1_ctx
-        _d1_end_idx = bisect.bisect_left(d1_times, entry_time) - 1
+        _d1_end_idx = _d1_cut_idx - 1
         if _zone_tf == "H4":
             _zone_full_candles = candles_h4
-            _zone_end_idx = bisect.bisect_left(h4_times, entry_time) - 1
+            _zone_end_idx = _h4_cut_idx - 1
+
         else:
             _zone_full_candles = candles_d1
             _zone_end_idx = _d1_end_idx

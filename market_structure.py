@@ -1246,19 +1246,24 @@ class NakedEngine:
         except Exception:
             return _empty
 
-    def _detect_fvg(self, candles: list) -> list:
-        """
-        Detect Fair Value Gaps with mitigation tracking and consecutive merging.
+    def _merge_fvgs(self, raw_fvgs: list) -> list:
+        if len(raw_fvgs) < 2:
+            return raw_fvgs
 
-        A bullish FVG: candle[i-1].low > candle[i+1].high (gap up)
-        A bearish FVG: candle[i-1].high < candle[i+1].low (gap down)
+        merged = [raw_fvgs[0]]
+        for fvg in raw_fvgs[1:]:
+            prev = merged[-1]
+            if fvg["type"] == prev["type"] and abs(fvg["bar_index"] - prev["bar_index"]) <= 2:
+                prev["top"] = max(prev["top"], fvg["top"])
+                prev["bottom"] = min(prev["bottom"], fvg["bottom"])
+                prev["size"] = round(prev["top"] - prev["bottom"], 6)
+                prev["mitigated"] = prev["mitigated"] and fvg["mitigated"]
+            else:
+                merged.append(fvg)
 
-        Mitigation: FVG is considered mitigated when price has retraced
-        through 50%+ of the gap (consequent encroachment).
+        return merged
 
-        Consecutive merging: adjacent FVGs of same type merge into one
-        using the widest boundaries.
-        """
+    def _detect_fvg_legacy(self, candles: list) -> list:
         raw_fvgs = []
         for i in range(1, len(candles) - 1):
             prev_high = float(candles[i - 1]["high"])
@@ -1300,24 +1305,75 @@ class NakedEngine:
                     "size": round(gap_size, 6), "mitigated": mitigated, "bar_index": i,
                 })
 
-        # Merge consecutive FVGs of same type
-        if len(raw_fvgs) < 2:
-            return raw_fvgs
+        return self._merge_fvgs(raw_fvgs)
 
-        merged = [raw_fvgs[0]]
-        for fvg in raw_fvgs[1:]:
-            prev = merged[-1]
-            # Same type and adjacent (within 2 bars)
-            if fvg["type"] == prev["type"] and abs(fvg["bar_index"] - prev["bar_index"]) <= 2:
-                # Merge: use widest boundaries
-                prev["top"] = max(prev["top"], fvg["top"])
-                prev["bottom"] = min(prev["bottom"], fvg["bottom"])
-                prev["size"] = round(prev["top"] - prev["bottom"], 6)
-                prev["mitigated"] = prev["mitigated"] and fvg["mitigated"]
-            else:
-                merged.append(fvg)
+    def _detect_fvg_fast(self, candles: list) -> list:
+        n = len(candles)
+        if n < 3:
+            return []
 
-        return merged
+        highs = [float(c["high"]) for c in candles]
+        lows = [float(c["low"]) for c in candles]
+        suffix_high = [float("-inf")] * (n + 1)
+        suffix_low = [float("inf")] * (n + 1)
+        for idx in range(n - 1, -1, -1):
+            high = highs[idx]
+            low = lows[idx]
+            next_high = suffix_high[idx + 1]
+            next_low = suffix_low[idx + 1]
+            suffix_high[idx] = high if high > next_high else next_high
+            suffix_low[idx] = low if low < next_low else next_low
+
+        raw_fvgs = []
+        for i in range(1, n - 1):
+            prev_high = highs[i - 1]
+            prev_low = lows[i - 1]
+            next_high = highs[i + 1]
+            next_low = lows[i + 1]
+            future_idx = i + 2
+
+            if prev_low > next_high:
+                gap_top = prev_low
+                gap_bottom = next_high
+                gap_size = gap_top - gap_bottom
+                midpoint = gap_bottom + (gap_size * 0.5)
+                raw_fvgs.append({
+                    "type": "bearish", "top": gap_top, "bottom": gap_bottom,
+                    "size": round(gap_size, 6), "mitigated": future_idx < n and suffix_high[future_idx] >= midpoint, "bar_index": i,
+                })
+
+            if prev_high < next_low:
+                gap_top = next_low
+                gap_bottom = prev_high
+                gap_size = gap_top - gap_bottom
+                midpoint = gap_top - (gap_size * 0.5)
+                raw_fvgs.append({
+                    "type": "bullish", "top": gap_top, "bottom": gap_bottom,
+                    "size": round(gap_size, 6), "mitigated": future_idx < n and suffix_low[future_idx] <= midpoint, "bar_index": i,
+                })
+
+        return self._merge_fvgs(raw_fvgs)
+
+    def _detect_fvg(self, candles: list) -> list:
+        """
+        Detect Fair Value Gaps with mitigation tracking and consecutive merging.
+
+        A bullish FVG: candle[i-1].low > candle[i+1].high (gap up)
+        A bearish FVG: candle[i-1].high < candle[i+1].low (gap down)
+
+        Mitigation: FVG is considered mitigated when price has retraced
+        through 50%+ of the gap (consequent encroachment).
+
+        Consecutive merging: adjacent FVGs of same type merge into one
+        using the widest boundaries.
+        """
+        if not bool(config.CONFIG.get("ENGINE_B_FAST_FVG_DETECTION", True)):
+            return self._detect_fvg_legacy(candles)
+        try:
+            return self._detect_fvg_fast(candles)
+        except Exception as _fvg_err:
+            log.debug(f"[FVG-DETECT] fast path fallback: {_fvg_err}")
+            return self._detect_fvg_legacy(candles)
 
     def _zone_context(
         self, zone: dict | None, current_price: float, atr: float, direction: str, candles: list

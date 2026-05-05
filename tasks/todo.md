@@ -1,3 +1,22 @@
+# Backtest Audit And Engine B Speed
+
+- [x] Save the agreed backtest audit/speed plan.
+- [x] Add a config-gated Engine B FVG fast path with legacy fallback.
+- [x] Add parity coverage for the Engine B FVG fast path.
+- [x] Run focused Engine B/backtest validation.
+
+## Review
+
+- Plan saved to `C:\Users\damia\.windsurf\plans\backtest-audit-speed-plan-37803e.md`.
+- Added `ENGINE_B_FAST_FVG_DETECTION: true` and a legacy fallback path.
+- Replaced nested FVG mitigation scans with suffix high/low lookups. Synthetic 5,000-candle FVG-heavy benchmark: legacy `569.77 ms`, fast `9.92 ms`, identical output.
+- Reused Engine B backtest D1/H4 cutoff indices inside the per-bar loop to avoid repeated timestamp bisection.
+- Compile validation passed: `python -m py_compile backtest_runner.py config.py market_structure.py tests\test_engine_b_diagnostics.py`.
+- Focused validation passed: `python -m pytest tests\test_engine_b_diagnostics.py tests\test_backtest_integrity.py -q` (`59 passed`).
+- Broader Engine B/C/D backtest-adjacent validation passed: `python -m pytest tests\test_engine_b_diagnostics.py tests\test_engine_b_rr_basis.py tests\test_engine_b_ai.py tests\test_backtest_integrity.py tests\test_engine_c_bt_levels.py tests\test_scalp_backtest_rules.py -q` (`103 passed`).
+- Shared cache/API validation passed: `python -m pytest tests\test_backtest_candle_cache.py tests\test_candle_cache_keys.py tests\test_scan_backtest_service.py tests\test_routes_backtest_history.py -q` (`22 passed`).
+- Final focused compile plus regression validation passed: `python -m py_compile backtest_runner.py config.py market_structure.py tests\test_engine_b_diagnostics.py`; `python -m pytest tests\test_engine_b_diagnostics.py tests\test_backtest_integrity.py tests\test_backtest_candle_cache.py tests\test_scan_backtest_service.py -q` (`65 passed`).
+
 # Engine A Logic Fixes
 
 - [x] Wire EMA hysteresis to prior confirmed indicator snapshots.

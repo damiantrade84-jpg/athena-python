@@ -410,6 +410,55 @@ def test_analyze_structure_falls_back_to_rr_when_resistance_is_too_close(monkeyp
     assert result["recommended_take_profit"] > 100.0
 
 
+def _fvg_fixture():
+    candles = []
+    for i in range(90):
+        base = 100.0 + ((i % 9) * 0.05)
+        candles.append(
+            {
+                "open": base,
+                "high": base + 0.25,
+                "low": base - 0.25,
+                "close": base + 0.03,
+                "vol": 1000.0,
+            }
+        )
+    candles[4].update({"open": 110.0, "high": 111.0, "low": 109.0, "close": 109.5})
+    candles[6].update({"open": 104.5, "high": 105.0, "low": 104.0, "close": 104.2})
+    candles[10].update({"open": 107.8, "high": 108.0, "low": 106.0, "close": 107.2})
+    candles[20].update({"open": 90.2, "high": 91.0, "low": 89.5, "close": 90.0})
+    candles[22].update({"open": 96.4, "high": 97.0, "low": 96.0, "close": 96.5})
+    candles[30].update({"open": 92.5, "high": 94.0, "low": 92.0, "close": 93.0})
+    return candles
+
+
+def test_engine_b_fast_fvg_detection_matches_legacy(monkeypatch):
+    local_engine = NakedEngine()
+    candles = _fvg_fixture()
+
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_FAST_FVG_DETECTION", False)
+    legacy = local_engine._detect_fvg(candles)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_FAST_FVG_DETECTION", True)
+    fast = local_engine._detect_fvg(candles)
+
+    assert fast == legacy
+    assert any(fvg.get("mitigated") for fvg in fast)
+
+
+def test_engine_b_fast_fvg_detection_falls_back_to_legacy(monkeypatch):
+    local_engine = NakedEngine()
+    candles = _fvg_fixture()
+    expected = local_engine._detect_fvg_legacy(candles)
+
+    def _raise_fast(_candles):
+        raise RuntimeError("fast path failure")
+
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_FAST_FVG_DETECTION", True)
+    monkeypatch.setattr(local_engine, "_detect_fvg_fast", _raise_fast)
+
+    assert local_engine._detect_fvg(candles) == expected
+
+
 def test_calculate_confidence_structural_tp_wrong_side_emits_diagnostic():
     """Wrong structural TP emits ENGINE_B_REASON_TP_WRONG_SIDE.
     rr_ok is now True because the RR gate uses ATR execution levels (not structural TP).
