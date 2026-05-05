@@ -328,10 +328,10 @@ export default function LiveCockpitPanel() {
       {error && <ErrorBanner message={error} onRetry={fetchSnap} />}
 
       {/* Two-column layout */}
-      <div className="flex-1 grid grid-cols-7 gap-3 overflow-hidden">
+      <div className="flex-1 grid grid-cols-7 gap-3 overflow-hidden min-h-0">
         {/* Left: card grid */}
-        <div className="col-span-3 flex flex-col gap-2 overflow-hidden">
-          <ScrollArea className="flex-1 pr-2">
+        <div className="col-span-3 flex flex-col gap-2 overflow-hidden min-h-0 h-full">
+          <ScrollArea className="flex-1 min-h-0 pr-2">
             <div className="grid grid-cols-1 gap-2">
               {filtered.length === 0 ? (
                 <Card className="border-border/60 bg-card/50">
@@ -388,7 +388,7 @@ export default function LiveCockpitPanel() {
         </div>
 
         {/* Right: detail tabs */}
-        <Card className="col-span-4 border-border/60 bg-card/50 flex flex-col overflow-hidden">
+        <Card className="col-span-4 border-border/60 bg-card/50 flex flex-col overflow-hidden min-h-0 h-full">
           {selectedRow ? (
             <CockpitDetail row={selectedRow} onPaperExecute={onPaperExecute} executing={papering} />
           ) : (
