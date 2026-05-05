@@ -103,7 +103,19 @@
       "Bash(Copy-Item \"C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\static\\\\react-app\\\\dist\\\\assets\\\\index-DzFRarLm.css\" \"C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\static\\\\assets\\\\index-DzFRarLm.css\")",
       "Bash(Copy-Item \"C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\static\\\\react-app\\\\dist\\\\assets\\\\index-eXX1rHRd.js\" \"C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\\\\static\\\\assets\\\\index-eXX1rHRd.js\")",
       "Bash(Write-Host \"Copied\")",
-      "Bash(.\\\\.venv\\\\Scripts\\\\python.exe -c \"import py_compile; py_compile.compile\\('bybit_executor.py', doraise=True\\); print\\('OK'\\)\")"
+      "Bash(.\\\\.venv\\\\Scripts\\\\python.exe -c \"import py_compile; py_compile.compile\\('bybit_executor.py', doraise=True\\); print\\('OK'\\)\")",
+      "Bash(grep -E '\\\\.py$')",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\" -Recurse -Filter \"*.py\")",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "PowerShell(Get-Process *)",
+      "Bash(attrib \"C:\\\\\\\\Users\\\\\\\\damia\\\\\\\\OneDrive\\\\\\\\Desktop\\\\\\\\athena-python\\\\\\\\logs\")",
+      "Bash(mkdir -p /c/athena-data/prompt_store)",
+      "Read(//c//**)",
+      "PowerShell([Environment]::SetEnvironmentVariable\\(\"AI_PROMPT_STORE_DIR\", \"C:\\\\athena-data\\\\prompt_store\", \"User\"\\); $env:AI_PROMPT_STORE_DIR = \"C:\\\\athena-data\\\\prompt_store\"; Write-Output \"User-scope env var set:\"; [Environment]::GetEnvironmentVariable\\(\"AI_PROMPT_STORE_DIR\", \"User\"\\); Write-Output \"Current shell:\"; $env:AI_PROMPT_STORE_DIR)",
+      "PowerShell(Get-ChildItem -Force \"C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\" | Select-Object @{N='Type';E={if\\($_.PSIsContainer\\){'DIR'}else{'FILE'}}}, Name, @{N='Size_MB';E={if\\($_.PSIsContainer\\){''}else{[math]::Round\\($_.Length/1MB,2\\)}}} | Sort-Object Type, Name | Format-Table -AutoSize)",
+      "PowerShell(Test-Path *)",
+      "Bash(awk '{print substr\\($0,1,4\\)}' /c/dev/athena-copy-dryrun-verbose.log)",
+      "PowerShell(Get-ChildItem *)"
     ]
   }
 }

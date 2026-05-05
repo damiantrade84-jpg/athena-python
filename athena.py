@@ -23,6 +23,7 @@ import threading
 import copy
 import webbrowser
 import logging
+import logging.handlers
 import sqlite3
 import signal as _signal
 
@@ -120,6 +121,15 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
 )
+
+_log_file_path = os.path.join(os.path.dirname(__file__), "logs", "sentinel.log")
+os.makedirs(os.path.dirname(_log_file_path), exist_ok=True)
+_file_handler = logging.handlers.RotatingFileHandler(
+    _log_file_path, maxBytes=20 * 1024 * 1024, backupCount=5, encoding="utf-8"
+)
+_file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+_file_handler.setLevel(logging.INFO)
+logging.getLogger().addHandler(_file_handler)
 
 log = logging.getLogger("sentinel")
 

@@ -10,6 +10,8 @@ __pycache__/
 # Logs / audit
 audit.jsonl
 *.log
+logs/
+.learnings/
 
 # Backup files
 *_backup*.py
