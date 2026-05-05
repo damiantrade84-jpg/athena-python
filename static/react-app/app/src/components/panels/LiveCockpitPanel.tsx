@@ -4,11 +4,12 @@ import { useApiPost } from '@/hooks/useApiData';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Checkbox } from '@/components/ui/checkbox';
 import { ErrorBanner, RefreshButton } from '@/components/shared';
 import {
   Radio,
@@ -23,6 +24,8 @@ import {
   Check,
   X,
   Info,
+  ChevronDown,
+  Plus,
 } from 'lucide-react';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 import { fmtPrice } from '@/lib/athenaFormat';
@@ -50,6 +53,8 @@ export default function LiveCockpitPanel() {
   const [snapshot, setSnapshot] = useState<LdSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [availablePairs, setAvailablePairs] = useState<{ display: string; type: string; enabled: boolean }[]>([]);
+  const [pairsDropdownOpen, setPairsDropdownOpen] = useState(false);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { post: postPaperExec, loading: papering } = useApiPost<{ ok?: boolean; error?: string; ticket?: string }>();
 
@@ -82,6 +87,30 @@ export default function LiveCockpitPanel() {
     fetchSnap();
   }, [fetchSnap]);
 
+  // Fetch available pairs for the dropdown
+  useEffect(() => {
+    fetch('/api/pairs')
+      .then((r) => r.json())
+      .then((data) => {
+        const pairs = Array.isArray(data?.pairs) ? data.pairs : Array.isArray(data) ? data : [];
+        setAvailablePairs(
+          pairs
+            .filter((p: any) => p?.enabled !== false)
+            .map((p: any) => ({
+              display: p.display || p.symbol || '',
+              type: p.type || 'unknown',
+              enabled: true,
+            }))
+            .sort((a: any, b: any) => a.display.localeCompare(b.display)),
+        );
+      })
+      .catch(() => setAvailablePairs([]));
+  }, []);
+
+  const activeSymbolsSet = useMemo(() => {
+    return new Set(activeSymbols.split(',').map((s) => s.trim()).filter(Boolean));
+  }, [activeSymbols]);
+
   useEffect(() => {
     if (pollRef.current) clearTimeout(pollRef.current);
     if (!autoPoll) return;
@@ -111,7 +140,19 @@ export default function LiveCockpitPanel() {
 
   const selectedRow = symbols.find((s) => s.symbol === selected) || null;
 
-  const onPaperExecute = useCallback(
+  const toggleSymbol = useCallback((display: string) => {
+    const set = new Set(activeSymbols.split(',').map((s) => s.trim()).filter(Boolean));
+    if (set.has(display)) {
+      set.delete(display);
+    } else {
+      set.add(display);
+    }
+    const joined = Array.from(set).join(',');
+    setSymbolsInput(joined);
+    setActiveSymbols(joined);
+  }, [activeSymbols]);
+
+  const onPaperExecute = useCallback((
     async (row: LdSymbolRow) => {
       const direction = row.engineA?.direction || row.engineB?.direction;
       if (!direction) {
@@ -133,7 +174,7 @@ export default function LiveCockpitPanel() {
   );
 
   return (
-    <div className="flex flex-col h-[calc(100vh-120px)] gap-3">
+    <div className="flex flex-col h-[calc(100vh-120px)] gap-3 overflow-hidden">
       {/* Status bar */}
       <Card className="border-border/60 bg-card/50">
         <CardContent className="p-3 flex items-center gap-2 flex-wrap">
@@ -168,19 +209,94 @@ export default function LiveCockpitPanel() {
         </Card>
       )}
 
-      {/* Symbol input + filters */}
+      {/* Symbol selector + filters */}
       <Card className="border-border/60 bg-card/50">
         <CardContent className="p-3 flex items-center gap-2 flex-wrap">
-          <Input
-            value={symbolsInput}
-            onChange={(e) => setSymbolsInput(e.target.value)}
-            onBlur={() => setActiveSymbols(symbolsInput)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') setActiveSymbols(symbolsInput);
-            }}
-            placeholder="Comma-separated symbols (e.g. EUR/USD,XAU/USD,BTCUSDT)"
-            className="flex-1 min-w-[280px] h-8 text-xs font-mono"
-          />
+          <Popover open={pairsDropdownOpen} onOpenChange={setPairsDropdownOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="outline" className="h-8 text-xs flex items-center gap-1">
+                <Plus className="w-3.5 h-3.5" />
+                Select Symbols
+                <ChevronDown className="w-3 h-3" />
+                {activeSymbolsSet.size > 0 && (
+                  <Badge variant="secondary" className="text-[9px] ml-1">
+                    {activeSymbolsSet.size}
+                  </Badge>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[340px] p-0" align="start">
+              <div className="p-2 border-b">
+                <p className="text-[10px] uppercase text-muted-foreground font-semibold">Available Pairs</p>
+              </div>
+              <ScrollArea className="h-[280px]">
+                <div className="p-2 space-y-1">
+                  {availablePairs.length === 0 && (
+                    <p className="text-[11px] text-muted-foreground p-2">No pairs loaded.</p>
+                  )}
+                  {availablePairs.map((p) => {
+                    const checked = activeSymbolsSet.has(p.display);
+                    return (
+                      <div
+                        key={p.display}
+                        className="flex items-center gap-2 p-1.5 rounded hover:bg-muted/50 cursor-pointer"
+                        onClick={() => toggleSymbol(p.display)}
+                      >
+                        <Checkbox checked={checked} />
+                        <span className="text-xs font-mono flex-1">{p.display}</span>
+                        <Badge variant="outline" className="text-[9px] uppercase">
+                          {p.type}
+                        </Badge>
+                      </div>
+                    );
+                  })}
+                </div>
+              </ScrollArea>
+              <div className="p-2 border-t flex items-center justify-between">
+                <span className="text-[10px] text-muted-foreground">
+                  {activeSymbolsSet.size} selected
+                </span>
+                <div className="flex gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 text-[10px]"
+                    onClick={() => {
+                      setSymbolsInput(DEFAULT_SYMBOLS);
+                      setActiveSymbols(DEFAULT_SYMBOLS);
+                    }}
+                  >
+                    Reset
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="h-6 text-[10px]"
+                    onClick={() => setPairsDropdownOpen(false)}
+                  >
+                    Done
+                  </Button>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+
+          {/* Selected symbols as removable badges */}
+          <div className="flex items-center gap-1 flex-wrap flex-1 min-w-0">
+            {Array.from(activeSymbolsSet).map((sym) => (
+              <Badge
+                key={sym}
+                variant="secondary"
+                className="text-[10px] font-mono cursor-pointer hover:bg-destructive/20"
+                onClick={() => toggleSymbol(sym)}
+              >
+                {sym} <X className="w-2.5 h-2.5 inline ml-0.5" />
+              </Badge>
+            ))}
+            {activeSymbolsSet.size === 0 && (
+              <span className="text-[11px] text-muted-foreground">No symbols selected</span>
+            )}
+          </div>
+
           <Select value={tf} onValueChange={(v) => setTf(v as 'H1' | 'H4' | 'D1')}>
             <SelectTrigger className="w-[80px] h-8 text-xs">
               <SelectValue />
@@ -203,8 +319,8 @@ export default function LiveCockpitPanel() {
               <SelectItem value="blocked">Blocked</SelectItem>
             </SelectContent>
           </Select>
-          <Button size="sm" className="h-8 text-xs" onClick={() => setActiveSymbols(symbolsInput)}>
-            Apply
+          <Button size="sm" className="h-8 text-xs" onClick={() => fetchSnap()}>
+            Refresh
           </Button>
         </CardContent>
       </Card>
@@ -405,7 +521,7 @@ function CockpitDetail({
         </TabsList>
       </CardHeader>
 
-      <ScrollArea className="flex-1 px-4 pb-4">
+      <ScrollArea className="flex-1 min-h-0 px-4 pb-4">
         <TabsContent value="overview" className="m-0 mt-2 space-y-3">
           <div className="grid grid-cols-2 gap-2">
             <Tile label="Final state" value={row.finalState} />
