@@ -140,3 +140,50 @@
 - Compile validation passed: `python -m py_compile config.py athena.py`.
 - Focused AI routing/review validation passed: `python -m pytest tests/test_ai_config_routing.py tests/test_ai_review_safety.py -q` (`86 passed`).
 - Engine B AI regression validation passed: `python -m pytest tests/test_engine_b_ai.py -q` (`13 passed`).
+
+# Athena.py Refactor Plan
+
+- [x] Map current `athena.py` size, top-level functions, routes, and largest risk areas.
+- [x] Confirm existing extraction package shape under `athena_app/api` and `athena_app/services`.
+- [x] Confirm static route tests currently inspect `athena.py` directly and need module-aware compatibility first.
+- [x] Save staged refactor plan to `docs/superpowers/plans/2026-05-05-athena-py-refactor.md`.
+- [x] Execute Task 1: make route contract tests module-aware.
+- [x] Execute Task 2: extract lottery route registration without moving bodies.
+- [x] Execute Task 3: move lottery route bodies after route registration is green.
+- [x] Execute Task 4: extract market metadata read-only routes.
+- [x] Execute Task 5: extract live dashboard route registration, helpers, and route bodies.
+- [x] Execute Task 6: extract status/support read-only routes.
+- [ ] Execute later read-only route groups before touching AI, Engine B, Scalp execute, risk, or runtime startup.
+
+## Review
+
+- `athena.py` is currently 17,220 lines with 229 top-level functions and 106 Flask route decorators.
+- Largest confirmed functions include `analyze_pair`, `api_chart_analysis`, `api_scan_naked`, `_build_signal_message`, `api_performance`, `_compute_naked_analysis`, `api_live_dashboard_snapshot`, and `run_ai`.
+- Current worktree already contains unrelated/user changes in `athena.py`, `config.py`, `config.yaml`, `tests/test_ai_config_routing.py`, and logs; refactor execution must not overwrite or bundle them.
+- Added module-aware static route parsing for `app.add_url_rule(...)` before moving routes.
+- Moved Lottery API handlers from `athena.py` to `athena_app/api/routes_lottery.py` and kept the same URLs, endpoints, and methods through explicit route registration.
+- Left scoring, risk, freshness, broker/live execution, Marcus/Text Review, Engine B AI, and Chart Vision paths unchanged in this slice.
+- Compile validation passed: `python -m py_compile athena.py athena_app/api/routes_lottery.py tests/route_contract_helpers.py`.
+- Static route smoke validation passed: `python -m pytest tests/test_api_contract_smoke.py -q` (`6 passed`).
+- Route-focused live-dashboard validation passed: `python -m pytest tests/test_live_dashboard.py -k "not frontend" -q` (`28 passed, 6 deselected`).
+- Lottery-adjacent research lab validation passed: `python -m pytest tests/test_vectorbt_research_lab.py -q` (`51 passed`, with two pandas `FutureWarning`s).
+- Broader `python -m pytest tests/test_api_contract_smoke.py tests/test_live_dashboard.py -q` is not fully green because `tests/test_live_dashboard.py` still has two static frontend assertions against `static/index.html` (`nav-live-dashboard`, `PAPER MODE ON`).
+- Moved read-only market metadata handlers from `athena.py` to `athena_app/api/routes_market_data.py`: `/api/market-hours`, `/api/prices`, `/api/yield-curve`, `/api/bulk-prices`, `/api/pairs`, `/api/intermarket-matrix`, `/api/candles`, and `/api/news-sentiment`.
+- Added `tests/test_routes_market_data.py` to validate extracted market-data route registration and fake-runtime behavior without importing `athena.py`.
+- Market-data compile validation passed: `python -m py_compile athena.py athena_app/api/routes_market_data.py tests/test_routes_market_data.py`.
+- Market-data route validation passed: `python -m pytest tests/test_api_contract_smoke.py tests/test_routes_market_data.py -q` (`10 passed`).
+- Route-focused combined validation passed: `python -m pytest tests/test_api_contract_smoke.py tests/test_routes_market_data.py tests/test_live_dashboard.py -k "not frontend" -q` (`38 passed, 6 deselected`).
+- `tests/test_health_routes.py -q` is not fully green due an existing `/api/feed-health` test monkeypatch mismatch: the test patches `scan_candle_limits` with a required argument, while `HEAD` and current code call `scan_candle_limits()` without arguments in `_feed_health_snapshot()`.
+- Moved Live Dashboard diagnostics/snapshot/paper-log routes and `_ld_*` helper cluster from `athena.py` to `athena_app/api/routes_live_dashboard.py`.
+- Preserved shared runtime state by passing live references/getters for `_live_dashboard_scalp_cache`, `_last_scan_results`, `_binance_ws`, and `_kill_switch`.
+- Added `tests/test_routes_live_dashboard.py` to validate extracted route registration, disabled snapshot behavior, paper-execute real-orders block, and read-only diagnostics empty-runtime behavior without importing `athena.py`.
+- Live Dashboard compile validation passed: `python -m py_compile athena.py athena_app/api/routes_lottery.py athena_app/api/routes_market_data.py athena_app/api/routes_live_dashboard.py tests/route_contract_helpers.py tests/test_routes_market_data.py tests/test_routes_live_dashboard.py tests/test_api_contract_smoke.py tests/test_live_dashboard.py`.
+- Live Dashboard focused validation passed: `python -m pytest tests/test_api_contract_smoke.py tests/test_routes_market_data.py tests/test_routes_live_dashboard.py tests/test_live_dashboard.py -k "not frontend" -q` (`42 passed, 6 deselected`).
+- Broader `python -m pytest tests/test_live_dashboard.py tests/test_api_contract_smoke.py -q` is not fully green because the same two static frontend assertions against `static/index.html` still fail (`nav-live-dashboard`, `PAPER MODE ON`).
+- Moved status/support read-only handlers from `athena.py` to `athena_app/api/routes_status.py`: `/`, `/api/last-scan`, `/api/conductor/last`, `/api/kimi/conductor/last`, `/api/conductor/pairs`, `/api/health`, `/api/signal-stability`, `/api/debug/routes`, and `/api/microstructure-health`.
+- Preserved mutable status state by passing getters for `ALL_PAIRS`, `ACTIVE_PAIRS`, `_kill_switch`, `_last_scan_results`, `_mt5_connection_health`, and `_micro_cache`.
+- Added `tests/test_routes_status.py` to validate route registration, runtime getter behavior, last-scan state updates, microstructure health, and debug route listing without importing `athena.py`.
+- Status compile validation passed: `python -m py_compile athena.py athena_app/api/routes_status.py tests/test_routes_status.py tests/test_api_contract_smoke.py`.
+- Status route validation passed: `python -m pytest tests/test_routes_status.py -q` (`5 passed`) and `python -m pytest tests/test_api_contract_smoke.py -q` (`6 passed`).
+- Existing health subset validation passed for moved routes: `python -m pytest tests/test_health_routes.py -k "not feed_health" -q` (`5 passed, 1 deselected`).
+- Route-focused combined validation passed: `python -m pytest tests/test_api_contract_smoke.py tests/test_routes_status.py tests/test_routes_market_data.py tests/test_routes_live_dashboard.py tests/test_live_dashboard.py -k "not frontend" -q` (`47 passed, 6 deselected`).
