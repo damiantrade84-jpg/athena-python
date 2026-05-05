@@ -155,6 +155,83 @@ class TestDataLoader:
         _check_no_live_imports()
 
 
+def test_run_portfolio_falls_back_when_vectorbt_returns_zero_with_signals(monkeypatch):
+    from athena_research import metrics
+
+    idx = pd.date_range("2024-01-01", periods=8, freq="1h", tz="UTC")
+    close = pd.Series([100, 102, 101, 103, 102, 104, 103, 105], index=idx)
+    entries = pd.Series([False, True, False, False, True, False, False, False], index=idx)
+    exits = pd.Series([False, False, True, False, False, True, False, False], index=idx)
+    shorts = pd.Series(False, index=idx)
+
+    def fake_vbt(*args, **kwargs):
+        return {"trade_count": 0}
+
+    monkeypatch.setattr(metrics, "_vbt_portfolio", fake_vbt)
+
+    stats = metrics.run_portfolio(
+        close,
+        entries,
+        exits,
+        shorts,
+        shorts,
+        fees=0.0,
+        slippage=0.0,
+    )
+
+    assert stats["trade_count"] == 2
+    assert stats["simulation_backend"] == "pandas_fallback"
+    assert stats["simulation_warning"] == "vectorbt_zero_trades_with_entry_signals"
+
+
+def test_evaluate_strategy_records_signal_and_simulation_audit_fields(monkeypatch):
+    from athena_research import metrics as metrics_mod
+    from athena_research.metrics import evaluate_strategy
+    from athena_research.strategies import StrategySpec
+
+    idx = pd.date_range("2024-01-01", periods=8, freq="1h", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "open": [100, 101, 102, 101, 103, 102, 104, 103],
+            "high": [101, 103, 103, 104, 104, 105, 105, 106],
+            "low": [99, 100, 100, 100, 101, 101, 102, 102],
+            "close": [100, 102, 101, 103, 102, 104, 103, 105],
+            "volume": [1000] * 8,
+        },
+        index=idx,
+    )
+    signals = {
+        "entries": pd.Series([False, True, False, False, True, False, False, False], index=idx),
+        "exits": pd.Series([False, False, True, False, False, True, False, False], index=idx),
+        "short_entries": pd.Series(False, index=idx),
+        "short_exits": pd.Series(False, index=idx),
+        "meta": {},
+    }
+
+    def fake_vbt(*args, **kwargs):
+        return {"trade_count": 0}
+
+    monkeypatch.setattr(metrics_mod, "_vbt_portfolio", fake_vbt)
+
+    result = evaluate_strategy(
+        df=df,
+        signals=signals,
+        spec=StrategySpec("stochastic", "stochastic_cross", {}, "both"),
+        run_id="audit",
+        symbol="BTC/USDT",
+        asset_class="crypto",
+        timeframe="H1",
+        fees=0.0,
+        slippage=0.0,
+        min_trades=1,
+    )
+
+    assert result.entry_signal_count == 2
+    assert result.short_entry_signal_count == 0
+    assert result.simulation_backend == "pandas_fallback"
+    assert result.simulation_warning == "vectorbt_zero_trades_with_entry_signals"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. Strategy family tests
 # ─────────────────────────────────────────────────────────────────────────────
@@ -537,6 +614,37 @@ class TestReporting:
         assert "Engine A" in content
         assert "Engine B" in content
         assert "Engine D" in content
+
+    def test_markdown_report_surfaces_simulation_warnings(self, tmp_path):
+        from athena_research.metrics import StrategyMetrics
+        from athena_research.reporting import metrics_to_df, write_markdown_report
+
+        result = StrategyMetrics(
+            run_id="warn_run",
+            symbol="BTC/USDT",
+            asset_class="crypto",
+            timeframe="H4",
+            family="stochastic",
+            strategy_name="stochastic_cross",
+            params_str="",
+            direction="both",
+            trade_count=2,
+            status="WEAK_CANDIDATE",
+            entry_signal_count=3,
+            simulation_backend="pandas_fallback",
+            simulation_warning="vectorbt_zero_trades_with_entry_signals",
+        )
+
+        report_path = write_markdown_report(
+            metrics_to_df([result]),
+            tmp_path,
+            "warn_run",
+            {"mode": "tiny"},
+        )
+
+        content = report_path.read_text(encoding="utf-8")
+        assert "Research Run Self-Audit" in content
+        assert "vectorbt_zero_trades_with_entry_signals" in content
 
     def test_generate_all_reports(self, tmp_path, sample_results):
         from athena_research.reporting import generate_all_reports

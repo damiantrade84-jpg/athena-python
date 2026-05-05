@@ -1,5 +1,6 @@
 # Lessons
 
+- When Research Lab gives strategy feedback, strengthen the lab's own self-audit instead of manually second-guessing every result; reports must expose simulator backend, fallback reason, and signal/trade consistency so confidence is evidence-based.
 - When auditing ATHENA AI usage, include both AI prompt/output contracts and the construction/routing layer. A shared client constructor can be simple plumbing; the higher-value fix is structured AI output plus deterministic Python gates.
 - When adding ATHENA runtime diagnostics, verify the logger level actually emits them. `log.info(...)` on the `sentinel` logger is suppressed by `log.setLevel(logging.WARNING)`, so failure-critical AI timing/config must be logged at warning/error level or tested as visible.
 - When a dashboard tab shows blank fallback states, verify the live API response shape before changing backend logic; Guardian routes return object-shaped `checks`, feed `pairs/timeframes`, divergence `recent_events`, and forensic `views`.

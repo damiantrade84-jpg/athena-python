@@ -27,6 +27,8 @@ OUTPUT_COLUMNS = [
     "max_drawdown", "sharpe", "sqn", "exposure_pct", "avg_duration_bars",
     "gross_return", "net_return", "is_return", "oos_return",
     "robustness_score", "param_sensitivity", "skip_reason", "data_source",
+    "entry_signal_count", "short_entry_signal_count", "exit_signal_count",
+    "short_exit_signal_count", "simulation_backend", "simulation_warning",
     "engine", "engine_component", "candidate_action", "source_indicator",
     "market_group", "pair_group", "timeframe_zone", "session_bucket",
     "structure_context", "baseline_delta_pf", "baseline_delta_oos",
@@ -349,6 +351,27 @@ def write_markdown_report(df: pd.DataFrame, run_dir: Path, run_id: str, run_meta
     a("")
 
     # ── Q1: Best strategy family ─────────────────────────────────────────────
+    a("## Research Run Self-Audit")
+    if df.empty:
+        a("No rows available for self-audit.")
+    else:
+        warning_col = df.get("simulation_warning", pd.Series("", index=df.index)).fillna("").astype(str)
+        backend_col = df.get("simulation_backend", pd.Series("", index=df.index)).fillna("").astype(str)
+        entry_col = pd.to_numeric(df.get("entry_signal_count", pd.Series(0, index=df.index)), errors="coerce").fillna(0)
+        short_entry_col = pd.to_numeric(df.get("short_entry_signal_count", pd.Series(0, index=df.index)), errors="coerce").fillna(0)
+        warning_rows = warning_col[warning_col != ""]
+        fallback_rows = backend_col[backend_col == "pandas_fallback"]
+        total_signals = int(entry_col.sum() + short_entry_col.sum())
+        a(f"- Rows with simulator warnings: **{len(warning_rows)}**")
+        a(f"- Rows using pandas fallback: **{len(fallback_rows)}**")
+        a(f"- Total entry signals observed: **{total_signals}**")
+        if len(warning_rows) > 0:
+            warn_agg = warning_rows.value_counts().rename_axis("simulation_warning").reset_index(name="count")
+            a(_df_to_md(warn_agg))
+        else:
+            a("- Simulator warnings: none")
+    a("")
+
     a("## Which Strategy Family Works Best?")
     if not valid.empty:
         fam_agg = valid.groupby("family").agg(
@@ -669,6 +692,18 @@ def generate_all_reports(
         "files_ok": len(errors) == 0,
         "errors": errors,
     }
+    try:
+        warnings = df.get("simulation_warning", pd.Series("", index=df.index)).fillna("").astype(str)
+        backends = df.get("simulation_backend", pd.Series("", index=df.index)).fillna("").astype(str)
+        status_data["self_audit"] = {
+            "simulation_warning_rows": int((warnings != "").sum()),
+            "pandas_fallback_rows": int((backends == "pandas_fallback").sum()),
+        }
+    except Exception:
+        status_data["self_audit"] = {
+            "simulation_warning_rows": 0,
+            "pandas_fallback_rows": 0,
+        }
     try:
         status_path.write_text(json.dumps(status_data, indent=2, default=str), encoding="utf-8")
     except Exception:

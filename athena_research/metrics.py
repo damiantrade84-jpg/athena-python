@@ -53,6 +53,12 @@ class StrategyMetrics:
     status: str = "NEEDS_MORE_DATA"   # STRONG_CANDIDATE | WEAK_CANDIDATE | REJECT | NEEDS_MORE_DATA
     skip_reason: str = ""
     data_source: str = ""   # "binance_rest"|"mt5"|"eodhd"|"yfinance_fallback"|"synthetic_test"|"DATA_UNAVAILABLE"
+    entry_signal_count: int = 0
+    short_entry_signal_count: int = 0
+    exit_signal_count: int = 0
+    short_exit_signal_count: int = 0
+    simulation_backend: str = ""
+    simulation_warning: str = ""
     zone: str = ""          # "scalp"|"intra"|"swing" — tagged post-run by run_manager
     # Research audit context (report-only; never drives live gates)
     engine: str = ""
@@ -92,19 +98,40 @@ def run_portfolio(
 
     Returns a unified stats dict.
     """
+    def _count_signals(series: Optional[pd.Series]) -> int:
+        if series is None:
+            return 0
+        try:
+            return int(series.fillna(False).astype(bool).sum())
+        except Exception:
+            return 0
+
+    def _fallback(reason: str) -> dict:
+        stats = _pandas_portfolio(close, entries, exits, short_entries, short_exits,
+                                  fees, slippage, freq=freq)
+        stats["simulation_backend"] = "pandas_fallback"
+        stats["simulation_warning"] = reason
+        return stats
+
     # Try VectorBT
     try:
-        return _vbt_portfolio(close, entries, exits, short_entries, short_exits,
-                              fees, slippage, freq, init_cash)
+        stats = _vbt_portfolio(close, entries, exits, short_entries, short_exits,
+                               fees, slippage, freq, init_cash)
+        if (
+            int(stats.get("trade_count", 0) or 0) == 0
+            and (_count_signals(entries) or _count_signals(short_entries))
+        ):
+            reason = "vectorbt_zero_trades_with_entry_signals"
+            log.debug("[metrics] %s; using pandas fallback", reason)
+            return _fallback(reason)
+        else:
+            stats.setdefault("simulation_backend", "vectorbt")
+            stats.setdefault("simulation_warning", "")
+            return stats
     except ImportError:
-        log.debug("[metrics] vectorbt not installed — using pandas fallback")
+        return _fallback("vectorbt_unavailable")
     except Exception as e:
-        log.debug("[metrics] vectorbt failed (%s) — using pandas fallback", e)
-
-    # Pandas fallback
-    return _pandas_portfolio(close, entries, exits, short_entries, short_exits,
-                             fees, slippage, freq=freq)
-
+        return _fallback(f"vectorbt_error:{type(e).__name__}")
 
 def _vbt_portfolio(close, entries, exits, short_entries, short_exits,
                    fees, slippage, freq, init_cash) -> dict:
@@ -321,6 +348,15 @@ def split_is_oos(df: pd.DataFrame, is_pct: float = 0.70) -> tuple[pd.DataFrame, 
 
 # ─── Full strategy evaluation ─────────────────────────────────────────────────
 
+def _count_bool_signals(series: Optional[pd.Series]) -> int:
+    if series is None:
+        return 0
+    try:
+        return int(series.fillna(False).astype(bool).sum())
+    except Exception:
+        return 0
+
+
 def evaluate_strategy(
     df: pd.DataFrame,
     signals: dict,
@@ -366,6 +402,11 @@ def evaluate_strategy(
         entries = pd.Series(False, index=df.index)
         exits = pd.Series(False, index=df.index)
 
+    entry_signal_count = _count_bool_signals(entries)
+    short_entry_signal_count = _count_bool_signals(short_entries)
+    exit_signal_count = _count_bool_signals(exits)
+    short_exit_signal_count = _count_bool_signals(short_exits)
+
     # Full run
     all_stats = run_portfolio(close, entries, exits, short_entries, short_exits,
                               fees=fees, slippage=slippage, freq=freq)
@@ -395,6 +436,12 @@ def evaluate_strategy(
             trade_count=n, status="NEEDS_MORE_DATA",
             skip_reason=f"only {n} trades < min {min_trades}",
             data_source=data_source,
+            entry_signal_count=entry_signal_count,
+            short_entry_signal_count=short_entry_signal_count,
+            exit_signal_count=exit_signal_count,
+            short_exit_signal_count=short_exit_signal_count,
+            simulation_backend=all_stats.get("simulation_backend", ""),
+            simulation_warning=all_stats.get("simulation_warning", ""),
         )
 
     # Gross vs net: gross_return already excludes fees in our backtester
@@ -442,6 +489,21 @@ def evaluate_strategy(
         robustness_score=robustness,
         status=status,
         data_source=data_source,
+        entry_signal_count=entry_signal_count,
+        short_entry_signal_count=short_entry_signal_count,
+        exit_signal_count=exit_signal_count,
+        short_exit_signal_count=short_exit_signal_count,
+        simulation_backend=all_stats.get("simulation_backend", ""),
+        simulation_warning=";".join(
+            dict.fromkeys(
+                warning for warning in [
+                    all_stats.get("simulation_warning", ""),
+                    is_stats.get("simulation_warning", ""),
+                    oos_stats.get("simulation_warning", ""),
+                ]
+                if warning
+            )
+        ),
     )
 
 

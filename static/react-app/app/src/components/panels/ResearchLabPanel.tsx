@@ -55,9 +55,11 @@ interface RankedRow {
   timeframe?: string;
   family?: string;
   strategy?: string;
+  strategy_name?: string;
   direction?: string;
   status?: string;
   trades?: number;
+  trade_count?: number;
   win_rate?: number;
   profit_factor?: number;
   expectancy?: number;
@@ -130,6 +132,31 @@ function statusBadge(status?: string): string {
     case 'running':
     case 'queued': return 'badge-neutral';
     case 'failed': return 'badge-short';
+    default: return 'badge-neutral';
+  }
+}
+
+function textValue(row: Record<string, unknown>, key: string, fallback = '—'): string {
+  const value = row[key];
+  if (value === null || value === undefined || value === '') return fallback;
+  return String(value);
+}
+
+function numberValue(row: Record<string, unknown>, key: string): number | null {
+  const value = row[key];
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function recommendationBadge(recommendation?: string): string {
+  switch ((recommendation || '').toUpperCase()) {
+    case 'ADD': return 'badge-long';
+    case 'KEEP': return 'badge-neutral';
+    case 'REMOVE_OR_DEMOTE':
+    case 'REJECT': return 'badge-short';
+    case 'RETEST':
+    case 'WATCHLIST_ONLY': return 'badge-neutral';
     default: return 'badge-neutral';
   }
 }
@@ -537,14 +564,14 @@ export default function ResearchLabPanel() {
                             <td className="py-2 text-[11px] font-mono">{row.symbol || '—'}</td>
                             <td className="py-2 text-[10px]">{row.timeframe || '—'}</td>
                             <td className="py-2 text-[10px]">{row.family || '—'}</td>
-                            <td className="py-2 text-[10px]">{row.strategy || '—'}</td>
+                            <td className="py-2 text-[10px]">{row.strategy || row.strategy_name || '—'}</td>
                             <td className="py-2 text-[10px] uppercase">{row.direction || '—'}</td>
                             <td className="py-2 text-[10px]">
                               <Badge className={`text-[10px] ${strong ? 'badge-long' : weak ? 'badge-neutral' : 'badge-short'}`}>
                                 {row.status || '—'}
                               </Badge>
                             </td>
-                            <td className="py-2 text-[10px] font-mono text-right">{row.trades ?? '—'}</td>
+                            <td className="py-2 text-[10px] font-mono text-right">{row.trades ?? row.trade_count ?? '—'}</td>
                             <td className="py-2 text-[10px] font-mono text-right">{row.win_rate != null ? `${fmtNum(row.win_rate, 1)}%` : '—'}</td>
                             <td className="py-2 text-[10px] font-mono text-right">{row.profit_factor != null ? fmtNum(row.profit_factor, 2) : '—'}</td>
                             <td className="py-2 text-[10px] font-mono text-right">{row.sqn != null ? fmtNum(row.sqn, 2) : '—'}</td>
@@ -552,6 +579,100 @@ export default function ResearchLabPanel() {
                           </tr>
                         );
                       })}
+                    </tbody>
+                  </table>
+                </ScrollArea>
+              </CardContent>
+            </Card>
+          )}
+
+          {ranked && (ranked.recommendations || []).length > 0 && (
+            <Card className="border-border/60 bg-card/50">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+                  Keep / Add / Remove / Retest
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ScrollArea className="h-[360px]">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b border-border/40">
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Action</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Engine</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Component</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Strategy</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Symbol</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">TF</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Status</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">Trades</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">PF</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">OOS</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">Robust</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(ranked.recommendations || []).map((row, i) => {
+                        const recommendation = textValue(row, 'recommendation');
+                        const pf = numberValue(row, 'profit_factor');
+                        const oos = numberValue(row, 'oos_return');
+                        const robustness = numberValue(row, 'robustness_score');
+                        return (
+                          <tr key={i} className="border-b border-border/20 hover:bg-muted/30">
+                            <td className="py-2 text-[10px]">
+                              <Badge className={`text-[10px] ${recommendationBadge(recommendation)}`}>{recommendation}</Badge>
+                            </td>
+                            <td className="py-2 text-[10px]">{textValue(row, 'engine')}</td>
+                            <td className="py-2 text-[10px]">{textValue(row, 'engine_component')}</td>
+                            <td className="py-2 text-[10px]">{textValue(row, 'strategy_name')}</td>
+                            <td className="py-2 text-[10px] font-mono">{textValue(row, 'symbol')}</td>
+                            <td className="py-2 text-[10px]">{textValue(row, 'timeframe')}</td>
+                            <td className="py-2 text-[10px]">{textValue(row, 'status')}</td>
+                            <td className="py-2 text-[10px] font-mono text-right">{textValue(row, 'trade_count')}</td>
+                            <td className="py-2 text-[10px] font-mono text-right">{pf != null ? fmtNum(pf, 2) : '—'}</td>
+                            <td className="py-2 text-[10px] font-mono text-right">{oos != null ? fmtNum(oos, 3) : '—'}</td>
+                            <td className="py-2 text-[10px] font-mono text-right">{robustness != null ? fmtNum(robustness, 2) : '—'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </ScrollArea>
+              </CardContent>
+            </Card>
+          )}
+
+          {ranked && (ranked.automated_next_tests || []).length > 0 && (
+            <Card className="border-border/60 bg-card/50">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+                  Suggested Next Tests
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ScrollArea className="h-[260px]">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b border-border/40">
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Engine</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Component</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Group</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Zone</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Failed</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Suggested</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(ranked.automated_next_tests || []).map((row, i) => (
+                        <tr key={i} className="border-b border-border/20 hover:bg-muted/30">
+                          <td className="py-2 text-[10px]">{textValue(row, 'engine')}</td>
+                          <td className="py-2 text-[10px]">{textValue(row, 'engine_component')}</td>
+                          <td className="py-2 text-[10px]">{textValue(row, 'pair_group') || textValue(row, 'market_group')}</td>
+                          <td className="py-2 text-[10px]">{textValue(row, 'timeframe_zone')}</td>
+                          <td className="py-2 text-[10px]">{textValue(row, 'failed_strategies')}</td>
+                          <td className="py-2 text-[10px]">{textValue(row, 'suggested_strategies')}</td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </ScrollArea>
