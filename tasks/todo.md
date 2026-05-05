@@ -207,4 +207,4 @@
 - Added `tests/test_routes_audit.py` to validate route registration and limit/order behavior against a repo-local SQLite fixture without importing `athena.py`.
 - Audit route validation passed: `python -m pytest tests/test_routes_audit.py tests/test_routes_backtest_history.py tests/test_api_contract_smoke.py -q` (`12 passed`).
 - Combined route-focused validation passed: `python -m pytest tests/test_api_contract_smoke.py tests/test_routes_audit.py tests/test_routes_backtest_history.py tests/test_routes_broker_status.py tests/test_routes_status.py tests/test_routes_market_data.py tests/test_routes_live_dashboard.py tests/test_live_dashboard.py tests/test_health_routes.py tests/test_scan_backtest_service.py -q` (`72 passed`).
-- `athena.py` is currently 14,238 lines with 53 Flask route decorators after the safe read-only route slices.
+- `athena.py` at pushed `HEAD` is currently 14,193 lines with 53 Flask route decorators after the safe read-only route slices.
