@@ -7498,64 +7498,6 @@ def api_backtest():
         return jsonify({"error": "Backtest failed"}), 500
 
 
-@app.route("/api/backtest-history")
-def api_backtest_history():
-    """Return all stored backtest results, newest first."""
-    try:
-        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
-            con.row_factory = sqlite3.Row
-            rows = con.execute("""
-                SELECT * FROM backtest_results
-                ORDER BY run_date DESC
-                LIMIT 500
-            """).fetchall()
-            return jsonify([dict(r) for r in rows])
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/backtest-history/<pair_name>")
-def api_backtest_history_pair(pair_name):
-    """Return backtest history for a specific pair."""
-    try:
-        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
-            con.row_factory = sqlite3.Row
-            rows = con.execute(
-                """
-                SELECT * FROM backtest_results
-                WHERE pair = ?
-                ORDER BY run_date DESC
-                LIMIT 50
-            """,
-                (pair_name,),
-            ).fetchall()
-            return jsonify([dict(r) for r in rows])
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/backtest-best")
-def api_backtest_best():
-    """Return best result per pair (highest SQN from most recent run)."""
-    try:
-        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
-            con.row_factory = sqlite3.Row
-            rows = con.execute("""
-                SELECT b.*
-                FROM backtest_results b
-                INNER JOIN (
-                    SELECT pair, MAX(run_date) as latest
-                    FROM backtest_results
-                    GROUP BY pair
-                ) latest ON b.pair = latest.pair
-                AND b.run_date = latest.latest
-                ORDER BY b.sqn DESC
-            """).fetchall()
-            return jsonify([dict(r) for r in rows])
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 # N4: Kill-switch API - immediately blocks new scans/analyses
 
 
@@ -10526,29 +10468,6 @@ def api_open_trades_timed():
     return jsonify({"positions": out, "count": len(out)})
 
 
-@app.route("/api/audit")
-def api_audit():
-    """Return last N audit log entries from SQLite."""
-
-    limit = min(int(request.args.get("limit", 50)), 500)
-
-    try:
-        con = sqlite3.connect(_AUDIT_DB, timeout=15.0)
-
-        con.row_factory = sqlite3.Row
-
-        rows = con.execute(
-            "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)
-        ).fetchall()
-
-        con.close()
-
-        return jsonify([dict(r) for r in rows])
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 def _check_api_keys() -> None:
     """Log startup warnings for missing API keys so the operator knows what's degraded."""
 
@@ -13438,6 +13357,8 @@ _LIVE_DASHBOARD_SCALP_TTL = 300.0  # 5 min - longer TTL so snapshot returns some
 from types import SimpleNamespace  # noqa: E402
 
 from athena_runtime import set_runtime  # noqa: E402
+from athena_app.api.routes_audit import register_audit_routes  # noqa: E402
+from athena_app.api.routes_backtest import register_backtest_history_routes  # noqa: E402
 from athena_app.api.routes_broker_status import register_broker_status_routes  # noqa: E402
 from athena_app.api.routes_live_dashboard import register_live_dashboard_routes  # noqa: E402
 from athena_app.api.routes_lottery import register_lottery_routes  # noqa: E402
@@ -13500,6 +13421,14 @@ register_execution_routes(app)
 register_broker_status_routes(
     app,
     SimpleNamespace(CONFIG=CONFIG),
+)
+register_audit_routes(
+    app,
+    SimpleNamespace(AUDIT_DB=_AUDIT_DB),
+)
+register_backtest_history_routes(
+    app,
+    SimpleNamespace(AUDIT_DB=_AUDIT_DB),
 )
 register_lottery_routes(
     app,

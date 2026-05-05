@@ -20,6 +20,7 @@ ROUTE_FILES = [
     ATHENA_PATH,
     EXECUTION_PATH,
     GUARDIAN_ROUTES_PATH,
+    ROOT / "athena_app" / "api" / "routes_audit.py",
     ROOT / "athena_app" / "api" / "routes_backtest.py",
     ROOT / "athena_app" / "api" / "routes_broker_status.py",
     ROOT / "athena_app" / "api" / "routes_execution.py",
@@ -62,6 +63,10 @@ def test_key_endpoints_exist_with_methods():
     assert "/api/live-feed-diagnostics" in ep and "GET" in ep["/api/live-feed-diagnostics"]
     assert "POST" in ep["/api/live-feed-diagnostics"]
     assert "/api/backtest" in ep and "POST" in ep["/api/backtest"]
+    assert "/api/backtest-history" in ep and "GET" in ep["/api/backtest-history"]
+    assert "/api/backtest-history/<pair_name>" in ep and "GET" in ep["/api/backtest-history/<pair_name>"]
+    assert "/api/backtest-best" in ep and "GET" in ep["/api/backtest-best"]
+    assert "/api/audit" in ep and "GET" in ep["/api/audit"]
     assert "/api/intermarket-matrix" in ep and "GET" in ep["/api/intermarket-matrix"]
     assert "/api/bt-min" in ep and "GET" in ep["/api/bt-min"] and "POST" in ep["/api/bt-min"]
     assert "/api/naked-style-thresholds" in ep and "GET" in ep["/api/naked-style-thresholds"]

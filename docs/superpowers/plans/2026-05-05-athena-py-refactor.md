@@ -532,11 +532,62 @@ git commit -m "refactor(routes): move live dashboard routes"
 - [x] **Step 3: Keep `/api/close-position` in `athena.py`**
 - [x] **Step 4: Add fake MT5/Bybit module tests**
 - [x] **Step 5: Validate compile, route contract, broker status module, health subset, and combined route-focused checks**
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ---
 
-### Task 8: Defer High-Risk Extraction Until Guard Rails Exist
+### Task 8: Extract Read-Only Backtest History Routes
+
+**Files:**
+- Modify: `athena_app/api/routes_backtest.py`
+- Modify: `athena.py`
+- Modify: `tests/test_api_contract_smoke.py`
+- Create: `tests/test_routes_backtest_history.py`
+
+**Routes:**
+
+```text
+/api/backtest-history
+/api/backtest-history/<pair_name>
+/api/backtest-best
+```
+
+POST backtest execution routes are explicitly excluded from this slice.
+
+- [x] **Step 1: Add module-aware route contract coverage for the history routes**
+- [x] **Step 2: Move read-only SQLite SELECT handlers into `routes_backtest.py`**
+- [x] **Step 3: Keep POST backtest execution routes in `athena.py`**
+- [x] **Step 4: Add isolated Flask + repo-local SQLite tests**
+- [x] **Step 5: Validate compile, route contract, route module, health, and frontend baseline checks**
+- [x] **Step 6: Commit**
+
+---
+
+### Task 9: Extract Read-Only Audit Route
+
+**Files:**
+- Create: `athena_app/api/routes_audit.py`
+- Modify: `athena.py`
+- Modify: `tests/test_api_contract_smoke.py`
+- Create: `tests/test_routes_audit.py`
+
+**Routes:**
+
+```text
+/api/audit
+```
+
+`/api/performance`, `/api/score-decay`, and `/api/regime-shift` are explicitly excluded because they have a wider calculation surface or mutate in-memory state.
+
+- [x] **Step 1: Add module-aware route contract coverage**
+- [x] **Step 2: Move read-only audit-log SELECT handler into `routes_audit.py`**
+- [x] **Step 3: Add isolated Flask + repo-local SQLite tests**
+- [x] **Step 4: Validate compile, route contract, and route module**
+- [x] **Step 5: Commit**
+
+---
+
+### Task 10: Defer High-Risk Extraction Until Guard Rails Exist
 
 Do not move these until the lower-risk route groups are already passing and committed:
 

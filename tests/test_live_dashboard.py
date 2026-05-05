@@ -340,22 +340,30 @@ def test_frontend_tab_registered():
     html_path = ROOT / "static" / "index.html"
     assert html_path.exists()
     html = html_path.read_text(encoding="utf-8")
-    assert "nav-live-dashboard" in html, "Live Dashboard nav item missing"
-    assert "panel-live-dashboard" in html, "Live Dashboard panel div missing"
-    assert "ldCardGrid" in html, "ldCardGrid element missing"
-    assert "ldEventFeed" in html, "ldEventFeed element missing"
-    assert "ldScalpRadar" in html, "ldScalpRadar element missing"
-    assert "ldPaperSummary" in html, "ldPaperSummary element missing"
+    assert 'id="root"' in html, "React app mount root missing"
+    assert "/static/assets/" in html, "Built React assets missing from app shell"
+
+    sidebar = (ROOT / "static" / "react-app" / "app" / "src" / "components" / "layout" / "Sidebar.tsx").read_text(encoding="utf-8")
+    home = (ROOT / "static" / "react-app" / "app" / "src" / "pages" / "Home.tsx").read_text(encoding="utf-8")
+    panel = (ROOT / "static" / "react-app" / "app" / "src" / "components" / "panels" / "LiveCockpitPanel.tsx").read_text(encoding="utf-8")
+
+    assert "id: 'liveCockpit'" in sidebar, "Live Cockpit nav item missing"
+    assert "label: 'Live Cockpit'" in sidebar, "Live Cockpit nav label missing"
+    assert "liveCockpit: LiveCockpitPanel" in home, "Live Cockpit panel registration missing"
+    assert "/api/live-dashboard/snapshot" in panel, "Live dashboard snapshot consumer missing"
 
 
 def test_frontend_status_bar_badges():
-    html_path = ROOT / "static" / "index.html"
-    html = html_path.read_text(encoding="utf-8")
-    assert "PAPER MODE ON" in html
-    assert "REAL ORDERS OFF" in html
-    assert "ld-mt5-badge" in html
-    assert "ld-binance-badge" in html
-    assert "ld-freshness-badge" in html
+    panel_path = ROOT / "static" / "react-app" / "app" / "src" / "components" / "panels" / "LiveCockpitPanel.tsx"
+    panel = panel_path.read_text(encoding="utf-8")
+
+    assert "MT5:" in panel
+    assert "BINANCE:" in panel
+    assert "FRESHNESS OK" in panel
+    assert "FRESHNESS ISSUE" in panel
+    assert "Paper:" in panel
+    assert "Real orders:" in panel
+    assert "REAL_ORDERS_ALLOWED" in panel
 
 
 def test_frontend_candlestick_chart_renderer():

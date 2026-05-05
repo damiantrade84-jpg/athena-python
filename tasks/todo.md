@@ -154,6 +154,8 @@
 - [x] Execute Task 5: extract live dashboard route registration, helpers, and route bodies.
 - [x] Execute Task 6: extract status/support read-only routes.
 - [x] Execute Task 7: extract read-only broker status routes.
+- [x] Execute Task 8: extract read-only backtest history routes.
+- [x] Execute Task 9: extract read-only audit route.
 - [ ] Execute later read-only route groups before touching AI, Engine B, Scalp execute, risk, or runtime startup.
 
 ## Review
@@ -194,3 +196,15 @@
 - Broker status compile validation passed: `python -m py_compile athena.py athena_app/api/routes_broker_status.py tests/test_routes_broker_status.py tests/test_api_contract_smoke.py`.
 - Broker status route validation passed: `python -m pytest tests/test_routes_broker_status.py -q` (`4 passed`) and `python -m pytest tests/test_api_contract_smoke.py -q` (`6 passed`).
 - Route-focused combined validation passed: `python -m pytest tests/test_api_contract_smoke.py tests/test_routes_broker_status.py tests/test_routes_status.py tests/test_routes_market_data.py tests/test_routes_live_dashboard.py tests/test_live_dashboard.py -k "not frontend" -q` (`51 passed, 6 deselected`).
+- Fixed stale validation tests without changing runtime code: `/api/feed-health` now monkeypatches no-arg `scan_candle_limits()`, and Live Dashboard frontend checks assert the current React/Vite Live Cockpit source instead of legacy inline `static/index.html` IDs.
+- Health/live-dashboard baseline validation passed: `python -m pytest tests/test_health_routes.py tests/test_live_dashboard.py tests/test_api_contract_smoke.py -q` (`46 passed`).
+- Moved read-only backtest history handlers from `athena.py` to `athena_app/api/routes_backtest.py`: `/api/backtest-history`, `/api/backtest-history/<pair_name>`, and `/api/backtest-best`.
+- Left POST backtest execution routes in `athena.py` because they run backtests and can trigger `BT_AUTO_TOGGLE` behavior.
+- Added `tests/test_routes_backtest_history.py` to validate route registration plus SQLite history ordering/filtering/best-result behavior without importing `athena.py`.
+- Backtest history compile validation passed: `python -m py_compile athena.py athena_app/api/routes_backtest.py tests/test_routes_backtest_history.py tests/test_api_contract_smoke.py`.
+- Backtest history route validation passed: `python -m pytest tests/test_routes_backtest_history.py tests/test_api_contract_smoke.py -q` (`10 passed`).
+- Moved read-only audit-log handler from `athena.py` to `athena_app/api/routes_audit.py`: `/api/audit`.
+- Added `tests/test_routes_audit.py` to validate route registration and limit/order behavior against a repo-local SQLite fixture without importing `athena.py`.
+- Audit route validation passed: `python -m pytest tests/test_routes_audit.py tests/test_routes_backtest_history.py tests/test_api_contract_smoke.py -q` (`12 passed`).
+- Combined route-focused validation passed: `python -m pytest tests/test_api_contract_smoke.py tests/test_routes_audit.py tests/test_routes_backtest_history.py tests/test_routes_broker_status.py tests/test_routes_status.py tests/test_routes_market_data.py tests/test_routes_live_dashboard.py tests/test_live_dashboard.py tests/test_health_routes.py tests/test_scan_backtest_service.py -q` (`72 passed`).
+- `athena.py` is currently 14,238 lines with 53 Flask route decorators after the safe read-only route slices.

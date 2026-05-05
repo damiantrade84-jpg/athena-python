@@ -54,7 +54,7 @@ def test_api_feed_health_exposes_cached_timeframe_meta(monkeypatch):
     monkeypatch.setattr(
         athena_module,
         "scan_candle_limits",
-        lambda pair_obj: {"D1": 300, "H4": 500, "H1": 500},
+        lambda: {"D1": 300, "H4": 500, "H1": 500},
     )
     monkeypatch.setattr(
         athena_module,
