@@ -109,3 +109,35 @@ def test_fetch_open_positions_falls_back_to_brokers():
         ("XAU/USD", "mt5"),
         ("BTC/USDT", "bybit"),
     ]
+
+
+def test_engine_b_card_formats_naked_signal():
+    card = telegram_bot._fmt_engine_b_card(
+        {
+            "display": "BTC/USDT",
+            "direction": "LONG",
+            "confluenceScore": 72.5,
+            "maxScore": 100,
+            "score_pct": 72.5,
+            "style": "intraday",
+            "regime": "TRENDING",
+            "price": 65000,
+            "sl": 64000,
+            "tp1": 68000,
+            "rr1": 3.0,
+            "naked_data": {"zone_tf": "H4", "entry_tf": "H1"},
+        }
+    )
+
+    assert "*BTC/USDT* - LONG - Engine B" in card
+    assert "Score: `72.5/100.0` (72%)" in card
+    assert "Style: `intraday`" in card
+    assert "TF `H4/H1`" in card
+
+
+def test_telegram_command_specs_include_engine_b_menu_entry():
+    commands = dict(telegram_bot._telegram_command_specs())
+
+    assert commands["engineb"] == "Engine B naked-structure scan"
+    assert "scan" in commands
+    assert "enginec" in commands

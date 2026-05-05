@@ -1186,7 +1186,7 @@ def _build_and_run(token: str, chat_ids: list[str]):
                 resp = await _run_in_thread(lambda: _safe_json(req.post(
                     f"{_BASE}/api/analyze",
                     json={"signal": sig, "stylePreference": "auto"},
-                    timeout=60,
+                    timeout=120,
                 )))
                 if resp.get("error"):
                     await query.message.reply_text(f"❌ AI error: {resp['error']}")
@@ -1233,8 +1233,8 @@ def _build_and_run(token: str, chat_ids: list[str]):
                     if key in _pending_signals:
                         del _pending_signals[key]
 
-            except Exception:
-                await query.message.reply_text("⚠️ Athena offline — check server")
+            except Exception as e:
+                await query.message.reply_text(f"⚠️ Athena offline or timed out — check server\n`{str(e)[:150]}`", parse_mode="Markdown")
             return
 
         # ── Decay for specific pair ──

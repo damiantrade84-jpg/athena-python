@@ -95,3 +95,18 @@
 - Compile validation passed: `python -m py_compile config.py athena.py`.
 - Focused AI routing/review validation passed: `python -m pytest tests/test_ai_config_routing.py tests/test_ai_review_safety.py -q` (`78 passed`).
 - Engine B AI regression validation passed: `python -m pytest tests/test_engine_b_ai.py -q` (`13 passed`).
+
+# Telegram Link Upgrade
+
+- [x] Trace current Telegram config, bot startup, notification delivery, and tests.
+- [x] Patch Telegram delivery for retry, bounded queueing, and visible delivery state.
+- [x] Keep Telegram config default-safe and consistent between notifier and bot startup.
+- [x] Add focused tests for delivery retries, disabled config, and startup guards.
+- [x] Run focused compile and pytest validation.
+- [x] Add Engine B Telegram scan command and persistent bot menu.
+- [x] Validate Engine B Telegram command/menu changes.
+
+## Review
+
+- Compile validation passed: `python -m py_compile telegram_notify.py telegram_bot.py telegram_diagnostic.py quick_telegram_test.py`.
+- Focused Telegram validation passed: `python -m pytest tests/test_telegram_bot.py tests/test_telegram_notify.py tests/test_audit_fixes.py::test_telegram_notify_datetime_usage -q` (`13 passed`).

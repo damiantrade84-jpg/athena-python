@@ -1,91 +1,74 @@
 #!/usr/bin/env python3
-"""Detailed Telegram diagnostic test"""
+"""Detailed Telegram diagnostic test."""
 
 import os
-import yaml
-from pathlib import Path
+
+import requests
+
+from telegram_notify import (
+    get_configured_chat_ids,
+    get_delivery_state,
+    get_runtime_config,
+    send_test_message,
+)
 
 
-def diagnose_telegram():
+def diagnose_telegram() -> bool:
     print("=== Telegram Diagnostic ===")
+    runtime_config = get_runtime_config()
+    bot_token = runtime_config.get("token") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_ids = get_configured_chat_ids(runtime_config)
 
-    # 1. Check environment variables
-    print("\n1. Environment Variables:")
-    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-    enabled = os.environ.get("TELEGRAM_ENABLED", "")
-
+    print("\n1. Runtime Config:")
     print(f"   TELEGRAM_BOT_TOKEN: {'SET' if bot_token else 'NOT SET'}")
-    print(f"   TELEGRAM_CHAT_ID: {'SET' if chat_id else 'NOT SET'}")
-    print(f"   TELEGRAM_ENABLED: {enabled}")
+    print(f"   TELEGRAM_CHAT_ID: {'SET' if chat_ids else 'NOT SET'}")
+    print(f"   enabled: {runtime_config.get('enabled', False)}")
+    print(f"   timeout_sec: {runtime_config.get('timeout_sec')}")
+    print(f"   retry_attempts: {runtime_config.get('retry_attempts')}")
+    print(f"   queue_max_size: {runtime_config.get('queue_max_size')}")
 
     if bot_token == "your_bot_token_here":
-        print("   ⚠️  Bot token is still placeholder!")
+        print("   WARNING: Bot token is still placeholder.")
+        return False
+    if not bot_token or not chat_ids:
+        print("   Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID.")
         return False
 
-    # 2. Check config.yaml
-    print("\n2. Config.yaml:")
+    print("\n2. API Test:")
     try:
-        config_path = Path(__file__).parent / "config.yaml"
-        with open(config_path, "r") as f:
-            config = yaml.safe_load(f)
-            telegram_config = config.get("TELEGRAM", {})
-            print(f"   enabled: {telegram_config.get('enabled', False)}")
-            print(f"   token: {'SET' if telegram_config.get('token') else 'EMPTY'}")
-            print(f"   chat_id: {'SET' if telegram_config.get('chat_id') else 'EMPTY'}")
-    except Exception as e:
-        print(f"   Error reading config.yaml: {e}")
-        return False
-
-    # 3. Test actual API call
-    print("\n3. API Test:")
-    try:
-        import requests
-
-        url = f"https://api.telegram.org/bot{bot_token}/getMe"
-        response = requests.get(url, timeout=10)
-
-        if response.status_code == 200:
-            bot_info = response.json()
-            print(f"   ✅ Bot connected: @{bot_info['result']['username']}")
-            print(f"   ✅ Bot name: {bot_info['result']['first_name']}")
-        else:
-            print(f"   ❌ Bot API error: {response.status_code}")
+        response = requests.get(
+            f"https://api.telegram.org/bot{bot_token}/getMe",
+            timeout=runtime_config.get("timeout_sec", 10),
+        )
+        if response.status_code != 200:
+            print(f"   Bot API error: {response.status_code}")
             print(f"   Response: {response.text}")
             return False
-
-    except Exception as e:
-        print(f"   ❌ API test failed: {e}")
+        bot_info = response.json()
+        result = bot_info.get("result", {})
+        print(f"   Bot connected: @{result.get('username', '?')}")
+        print(f"   Bot name: {result.get('first_name', '?')}")
+    except Exception as exc:
+        print(f"   API test failed: {exc}")
         return False
 
-    # 4. Test sending message
-    print("\n4. Message Test:")
+    print("\n3. Message Test:")
     try:
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        payload = {
-            "chat_id": chat_id,
-            "text": "🤖 Athena Diagnostic Test\n\n✅ Direct API test successful!",
-            "parse_mode": "Markdown",
-        }
-
-        response = requests.post(url, json=payload, timeout=10)
-
-        if response.status_code == 200:
-            print("   ✅ Message sent successfully!")
+        delivered = send_test_message("Athena diagnostic test - shared delivery path")
+        if delivered:
+            print("   Message sent successfully.")
+            print(f"   Delivery state: {get_delivery_state()}")
             return True
-        else:
-            print(f"   ❌ Send error: {response.status_code}")
-            print(f"   Response: {response.text}")
-            return False
-
-    except Exception as e:
-        print(f"   ❌ Send failed: {e}")
+        print(f"   Send error: {get_delivery_state().get('last_error', 'unknown')}")
+        return False
+    except Exception as exc:
+        print(f"   Send failed: {exc}")
         return False
 
 
 if __name__ == "__main__":
     success = diagnose_telegram()
     if success:
-        print("\n🎉 Telegram is working! Check your phone.")
+        print("\nTelegram is working. Check your phone.")
     else:
-        print("\n❌ Telegram setup has issues. See above.")
+        print("\nTelegram setup has issues. See above.")

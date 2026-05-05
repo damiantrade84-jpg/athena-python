@@ -11,6 +11,8 @@ All notifications are non-blocking using background threads.
 If TELEGRAM.enabled is false, all notifications silently do nothing.
 """
 
+import logging
+import queue
 import requests
 import threading
 import time
@@ -18,6 +20,8 @@ from datetime import datetime, timezone, time as dt_time
 from typing import Dict, List, Optional, Any
 import yaml
 from pathlib import Path
+
+log = logging.getLogger("sentinel.telegram")
 
 # Global notification state
 _config: Dict[str, Any] = {}
@@ -28,65 +32,371 @@ _daily_stats: Dict[str, Any] = {
     "open_positions": [],
     "last_summary_time": None,
 }
+_DEFAULT_CONFIG: Dict[str, Any] = {
+    "enabled": False,
+    "token": "",
+    "chat_id": "",
+    "timeout_sec": 10,
+    "retry_attempts": 3,
+    "retry_backoff_sec": 2.0,
+    "queue_max_size": 200,
+    "max_message_chars": 3900,
+    "parse_mode": "Markdown",
+    "fallback_plaintext": True,
+}
+_delivery_queue: Optional[queue.Queue] = None
+_delivery_thread: Optional[threading.Thread] = None
+_delivery_lock = threading.Lock()
+_delivery_state_lock = threading.Lock()
+_dotenv_loaded = False
+_delivery_state: Dict[str, Any] = {
+    "queued": 0,
+    "sent": 0,
+    "failed": 0,
+    "dropped": 0,
+    "last_success_time": None,
+    "last_failure_time": None,
+    "last_error": "",
+}
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("1", "true", "yes", "on", "enabled"):
+            return True
+        if normalized in ("0", "false", "no", "off", "disabled"):
+            return False
+    return default
+
+
+def _coerce_int(value: Any, default: int, minimum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, parsed)
+
+
+def _coerce_float(value: Any, default: float, minimum: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, parsed)
+
+
+def _load_dotenv_once() -> None:
+    global _dotenv_loaded
+    if _dotenv_loaded:
+        return
+    _dotenv_loaded = True
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except Exception:
+        pass
+
+
+def _apply_env_overrides(config: Dict[str, Any]) -> None:
+    import os
+
+    _load_dotenv_once()
+
+    env_map = {
+        "TELEGRAM_BOT_TOKEN": "token",
+        "TELEGRAM_CHAT_ID": "chat_id",
+        "TELEGRAM_ENABLED": "enabled",
+        "TELEGRAM_TIMEOUT_SEC": "timeout_sec",
+        "TELEGRAM_RETRY_ATTEMPTS": "retry_attempts",
+        "TELEGRAM_RETRY_BACKOFF_SEC": "retry_backoff_sec",
+        "TELEGRAM_QUEUE_MAX_SIZE": "queue_max_size",
+        "TELEGRAM_MAX_MESSAGE_CHARS": "max_message_chars",
+        "TELEGRAM_PARSE_MODE": "parse_mode",
+        "TELEGRAM_FALLBACK_PLAINTEXT": "fallback_plaintext",
+    }
+    for env_name, key in env_map.items():
+        value = os.environ.get(env_name)
+        if value not in (None, ""):
+            config[key] = value
+
+
+def _normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    for key, value in _DEFAULT_CONFIG.items():
+        config.setdefault(key, value)
+    config["enabled"] = _coerce_bool(config.get("enabled"), _DEFAULT_CONFIG["enabled"])
+    config["timeout_sec"] = _coerce_float(
+        config.get("timeout_sec"), _DEFAULT_CONFIG["timeout_sec"], 1.0
+    )
+    config["retry_attempts"] = _coerce_int(
+        config.get("retry_attempts"), _DEFAULT_CONFIG["retry_attempts"], 1
+    )
+    config["retry_backoff_sec"] = _coerce_float(
+        config.get("retry_backoff_sec"), _DEFAULT_CONFIG["retry_backoff_sec"], 0.0
+    )
+    config["queue_max_size"] = _coerce_int(
+        config.get("queue_max_size"), _DEFAULT_CONFIG["queue_max_size"], 1
+    )
+    config["max_message_chars"] = _coerce_int(
+        config.get("max_message_chars"), _DEFAULT_CONFIG["max_message_chars"], 1000
+    )
+    config["fallback_plaintext"] = _coerce_bool(
+        config.get("fallback_plaintext"), _DEFAULT_CONFIG["fallback_plaintext"]
+    )
+    if config.get("parse_mode") in (None, ""):
+        config["parse_mode"] = None
+    return config
 
 
 def _load_config() -> Dict[str, Any]:
     """Load Telegram configuration from config.yaml"""
     global _config
-    # Skip cache if we cached an empty token — dotenv may not have loaded yet on first call
-    if _config and _config.get("token"):
-        return _config
+    # Keep applying env overrides because dotenv may load after this module imports.
+    if _config:
+        _apply_env_overrides(_config)
+        return _normalize_config(_config)
 
     config_path = Path(__file__).parent / "config.yaml"
     try:
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
             _config = config.get("TELEGRAM", {})
-    except Exception:
+    except Exception as exc:
+        log.warning("[TELEGRAM] Config load failed: %s", exc)
         _config = {}
 
-    import os
-
-    _env_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    _env_chat = os.environ.get("TELEGRAM_CHAT_ID", "")
-    if _env_token:
-        _config["token"] = _env_token
-    if _env_chat:
-        _config["chat_id"] = _env_chat
-
-    return _config
+    if not isinstance(_config, dict):
+        _config = {}
+    _config = {**_DEFAULT_CONFIG, **_config}
+    _apply_env_overrides(_config)
+    return _normalize_config(_config)
 
 
 def _is_enabled() -> bool:
     """Check if Telegram notifications are enabled"""
     config = _load_config()
-    return config.get("enabled", False)
+    return bool(config.get("enabled", False))
 
 
-def _send_message_async(message: str) -> None:
-    """Send message to Telegram in background thread"""
-    if not _is_enabled():
+def get_runtime_config() -> Dict[str, Any]:
+    """Return the normalized Telegram runtime config."""
+    return dict(_load_config())
+
+
+def get_configured_chat_ids(config: Optional[Dict[str, Any]] = None) -> List[str]:
+    """Return configured Telegram chat IDs as strings."""
+    cfg = config or _load_config()
+    raw = cfg.get("chat_ids", cfg.get("chat_id", ""))
+    if isinstance(raw, (list, tuple, set)):
+        values = raw
+    else:
+        values = str(raw).split(",")
+    return [str(value).strip() for value in values if str(value).strip()]
+
+
+def get_delivery_state() -> Dict[str, Any]:
+    """Return delivery counters for diagnostics without exposing credentials."""
+    with _delivery_state_lock:
+        state = dict(_delivery_state)
+    q = _delivery_queue
+    state["queue_size"] = q.qsize() if q is not None else 0
+    state["queue_max_size"] = q.maxsize if q is not None else _load_config().get("queue_max_size")
+    return state
+
+
+def _record_delivery_state(
+    *,
+    queued: int = 0,
+    sent: int = 0,
+    failed: int = 0,
+    dropped: int = 0,
+    error: str = "",
+) -> None:
+    with _delivery_state_lock:
+        _delivery_state["queued"] += queued
+        _delivery_state["sent"] += sent
+        _delivery_state["failed"] += failed
+        _delivery_state["dropped"] += dropped
+        now = datetime.now(timezone.utc).isoformat()
+        if sent:
+            _delivery_state["last_success_time"] = now
+        if failed or dropped or error:
+            _delivery_state["last_failure_time"] = now
+            _delivery_state["last_error"] = error[:300]
+
+
+def _ensure_delivery_worker(config: Dict[str, Any]) -> None:
+    global _delivery_queue, _delivery_thread
+    with _delivery_lock:
+        if _delivery_queue is None:
+            _delivery_queue = queue.Queue(maxsize=int(config.get("queue_max_size", 200)))
+        if _delivery_thread is None or not _delivery_thread.is_alive():
+            _delivery_thread = threading.Thread(
+                target=_delivery_worker,
+                daemon=True,
+                name="telegram-delivery",
+            )
+            _delivery_thread.start()
+
+
+def _delivery_worker() -> None:
+    while True:
+        message = _delivery_queue.get()
+        try:
+            _deliver_message(message)
+        except Exception as exc:
+            _record_delivery_state(failed=1, error=str(exc))
+            log.warning("[TELEGRAM] Delivery worker error: %s", exc)
+        finally:
+            _delivery_queue.task_done()
+
+
+def _send_message_async(message: str) -> bool:
+    """Queue a Telegram message without blocking the trading path."""
+    config = _load_config()
+    if not config.get("enabled"):
+        return False
+
+    token = config.get("token")
+    chat_ids = get_configured_chat_ids(config)
+    if not token or not chat_ids:
+        _record_delivery_state(failed=1, error="missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID")
+        log.warning("[TELEGRAM] Missing token or chat_id; notification skipped")
+        return False
+
+    _ensure_delivery_worker(config)
+    try:
+        _delivery_queue.put_nowait(str(message))
+    except queue.Full:
+        _record_delivery_state(dropped=1, error="telegram delivery queue full")
+        log.warning("[TELEGRAM] Delivery queue full; notification dropped")
+        return False
+    _record_delivery_state(queued=1)
+    return True
+
+
+def _split_message(message: str, max_chars: int) -> List[str]:
+    text = str(message)
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks: List[str] = []
+    current = ""
+    for line in text.splitlines(keepends=True):
+        if len(line) > max_chars:
+            if current:
+                chunks.append(current.rstrip())
+                current = ""
+            for idx in range(0, len(line), max_chars):
+                chunks.append(line[idx : idx + max_chars].rstrip())
+            continue
+        if len(current) + len(line) > max_chars:
+            chunks.append(current.rstrip())
+            current = line
+        else:
+            current += line
+    if current:
+        chunks.append(current.rstrip())
+    return chunks
+
+
+def _response_error(response) -> str:
+    text = (getattr(response, "text", "") or "").strip()
+    try:
+        data = response.json()
+        if isinstance(data, dict):
+            text = str(data.get("description") or data.get("error") or text)
+    except Exception:
+        pass
+    status = getattr(response, "status_code", "?")
+    return f"HTTP {status}: {text[:200] or 'Telegram request failed'}"
+
+
+def _is_markdown_parse_error(response) -> bool:
+    detail = _response_error(response).lower()
+    return "parse" in detail and (
+        "entity" in detail or "entities" in detail or "markdown" in detail
+    )
+
+
+def _post_message(token: str, chat_id: str, text: str, config: Dict[str, Any]) -> None:
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    parse_mode = config.get("parse_mode")
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "disable_web_page_preview": True,
+    }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+
+    response = requests.post(url, json=payload, timeout=config.get("timeout_sec", 10))
+    if getattr(response, "ok", False):
         return
 
-    def _send():
+    if parse_mode and config.get("fallback_plaintext") and _is_markdown_parse_error(response):
+        fallback_payload = dict(payload)
+        fallback_payload.pop("parse_mode", None)
+        response = requests.post(url, json=fallback_payload, timeout=config.get("timeout_sec", 10))
+        if getattr(response, "ok", False):
+            return
+
+    raise RuntimeError(_response_error(response))
+
+
+def _send_chunk_with_retry(
+    token: str,
+    chat_id: str,
+    chunk: str,
+    config: Dict[str, Any],
+) -> bool:
+    attempts = int(config.get("retry_attempts", 3))
+    backoff = float(config.get("retry_backoff_sec", 2.0))
+    last_error = ""
+    for attempt in range(1, attempts + 1):
         try:
-            config = _load_config()
-            token = config.get("token")
-            chat_id = config.get("chat_id")
+            _post_message(token, chat_id, chunk, config)
+            _record_delivery_state(sent=1)
+            return True
+        except Exception as exc:
+            last_error = str(exc)
+            if attempt < attempts and backoff > 0:
+                time.sleep(backoff * attempt)
+    _record_delivery_state(failed=1, error=last_error)
+    log.warning("[TELEGRAM] Message delivery failed after %s attempts: %s", attempts, last_error)
+    return False
 
-            if not token or not chat_id:
-                return
 
-            url = f"https://api.telegram.org/bot{token}/sendMessage"
-            payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
+def _deliver_message(message: str) -> bool:
+    config = _load_config()
+    if not config.get("enabled"):
+        return False
 
-            requests.post(url, json=payload, timeout=10)
-        except Exception:
-            # Silently fail to avoid disrupting main trading logic
-            pass
+    token = config.get("token")
+    chat_ids = get_configured_chat_ids(config)
+    if not token or not chat_ids:
+        _record_delivery_state(failed=1, error="missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID")
+        return False
 
-    # Fire and forget in background thread
-    threading.Thread(target=_send, daemon=True).start()
+    chunks = _split_message(message, int(config.get("max_message_chars", 3900)))
+    ok = True
+    for chat_id in chat_ids:
+        for chunk in chunks:
+            ok = _send_chunk_with_retry(str(token), str(chat_id), chunk, config) and ok
+    return ok
+
+
+def send_test_message(message: Optional[str] = None) -> bool:
+    """Synchronously deliver a Telegram test message for diagnostics."""
+    body = message or f"Athena Telegram test - {datetime.now(timezone.utc).isoformat()}"
+    return _deliver_message(body)
 
 
 def send_signal_alert(signal: Dict[str, Any]) -> None:
@@ -365,6 +675,22 @@ def notify_score_decay(
     )
 
     _send_message_async(message)
+
+
+def notify_bybit_ws_disconnect(symbol: Optional[str] = None) -> None:
+    """Notify that the Bybit websocket disconnected and is reconnecting."""
+    if not _is_enabled():
+        return
+    label = f" for `{symbol}`" if symbol else ""
+    _send_message_async(f"Bybit websocket disconnected{label}. Reconnect backoff is active.")
+
+
+def notify_polygon_rate_limit(symbol: Optional[str] = None) -> None:
+    """Notify that Polygon rate limits are blocking candle fetches."""
+    if not _is_enabled():
+        return
+    label = f" for `{symbol}`" if symbol else ""
+    _send_message_async(f"Polygon rate limit hit{label}. Athena will use configured fallbacks.")
 
 
 def update_open_positions(positions: List[Dict[str, Any]]) -> None:

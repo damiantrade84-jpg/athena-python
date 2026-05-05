@@ -1377,6 +1377,20 @@ TELEGRAM:
 
   enabled: true
 
+  timeout_sec: 10
+
+  retry_attempts: 3
+
+  retry_backoff_sec: 2
+
+  queue_max_size: 200
+
+  max_message_chars: 3900
+
+  parse_mode: "Markdown"
+
+  fallback_plaintext: true
+
 
 
 # ── External API Keys ────────────────────────────────────────────────
