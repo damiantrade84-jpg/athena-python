@@ -879,6 +879,8 @@ CONFIG: dict = {
             "LOW_VOLATILITY": {"upper": 0.2, "lower": 0.8, "sl": 1.0},
         },
         "structural_tp_buffer_atr_mult": 0.25,
+        "d1_pd_array_conflict_window_atr_mult": 3.0,
+        "rejection_wick_body_ratio": 1.2,
         "style_profiles": {
             "scalp": {
                 "min_score": 3.0,

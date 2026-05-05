@@ -1472,6 +1472,14 @@ NAKED_ENGINE:
   zone_proximity_atr_mult:
     default: 0.5
 
+  # D1 PD-array conflict scan distance as a multiple of D1 ATR.
+  # Default preserves current behavior; use backtest/shadow runs before tightening.
+  d1_pd_array_conflict_window_atr_mult: 3.0
+
+  # Rejection trigger wick/body requirement.
+  # Default preserves current behavior; lower only after backtest/shadow validation.
+  rejection_wick_body_ratio: 1.2
+
   # D1 PD-array conflict penalty (points deducted from score)
   d1_pd_array_penalty: 0.25
 
@@ -1819,6 +1827,7 @@ ENGINE_B_CRYPTO_MIN_TARGET_ATR_MULTIPLE: 1.0
 # +1.5 = strong follow-through | -0.5 = suspected liquidity trap
 ENGINE_B_FOLLOW_THROUGH:
   ENABLED: false
+  DIAGNOSTICS_ENABLED: true
   MAX_BONUS: 1.5
   MIN_PENALTY: -0.5
 

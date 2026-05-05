@@ -410,6 +410,172 @@ def test_analyze_structure_falls_back_to_rr_when_resistance_is_too_close(monkeyp
     assert result["recommended_take_profit"] > 100.0
 
 
+def test_d1_pd_array_conflict_window_is_configurable(monkeypatch):
+    local_engine = NakedEngine()
+    naked_cfg = dict(config.CONFIG.get("NAKED_ENGINE", {}) or {})
+    naked_cfg["d1_pd_array_conflict_window_atr_mult"] = 1.5
+    monkeypatch.setitem(config.CONFIG, "NAKED_ENGINE", naked_cfg)
+
+    monkeypatch.setattr(
+        local_engine,
+        "_find_zones",
+        lambda *_args, **_kwargs: (
+            [{"upper": 103.0, "lower": 102.8, "center": 102.9, "volume_strength": 1.0}],
+            [{"upper": 99.7, "lower": 99.5, "center": 99.6, "volume_strength": 1.0}],
+        ),
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_detect_fvg",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_determine_sequence",
+        lambda *_args, **_kwargs: {
+            "state": "HH_HL",
+            "recent_low": 99.6,
+            "recent_high": 102.0,
+            "has_equal_extrema": False,
+        },
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_detect_bos",
+        lambda *_args, **_kwargs: {
+            "bos_bull": True,
+            "bos_bear": False,
+            "bos_volume_confirmed": True,
+        },
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_detect_sweep",
+        lambda *_args, **_kwargs: {
+            "bull_sweep": False,
+            "bear_sweep": False,
+            "sweep_low": None,
+            "sweep_high": None,
+        },
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_detect_order_blocks",
+        lambda *_args, **_kwargs: [
+            {"type": "bearish", "top": 102.1, "bottom": 101.9, "strength": 75}
+        ],
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_detect_choch",
+        lambda *_args, **_kwargs: {
+            "choch_bull": False,
+            "choch_bear": False,
+            "choch_level": None,
+        },
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_zone_context",
+        lambda *_args, **_kwargs: {"distance": 0.2, "near_zone": True, "zone_touched": True},
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_price_action_trigger",
+        lambda *_args, **_kwargs: {
+            "pattern": "REJECTION",
+            "trigger_ok": True,
+            "rejection": True,
+            "engulfing": False,
+            "inside_break": False,
+            "strong_close": True,
+        },
+    )
+
+    candles = [
+        {"open": 100.0, "high": 100.5, "low": 99.5, "close": 100.0, "vol": 1000.0}
+        for _ in range(40)
+    ]
+    result = local_engine.analyze_structure(
+        candles,
+        candles,
+        candles,
+        current_price=100.0,
+        direction="LONG",
+        atr=1.0,
+        regime="RANGING",
+        fallback_rr=1.8,
+        asset_type="forex",
+        enable_zone_registry=False,
+        enable_profile_context=False,
+    )
+
+    assert result["d1_pd_array_conflict"] is False
+    assert result["d1_conflict_metric_details"] == []
+
+
+def test_rejection_wick_body_ratio_is_configurable(monkeypatch):
+    local_engine = NakedEngine()
+    naked_cfg = dict(config.CONFIG.get("NAKED_ENGINE", {}) or {})
+    naked_cfg["rejection_wick_body_ratio"] = 0.8
+    monkeypatch.setitem(config.CONFIG, "NAKED_ENGINE", naked_cfg)
+
+    candles = [
+        {"open": 99.8, "high": 100.1, "low": 99.5, "close": 99.9},
+        {"open": 100.2, "high": 100.4, "low": 99.6, "close": 99.7},
+        {"open": 100.0, "high": 101.1, "low": 99.1, "close": 101.0},
+    ]
+
+    trigger = local_engine._price_action_trigger(
+        candles,
+        direction="LONG",
+        atr=1.0,
+        zone_hit=False,
+        bos_confirmed=False,
+    )
+
+    assert trigger["trigger_ok"] is True
+    assert trigger["pattern"] == "REJECTION"
+
+
+def test_follow_through_diagnostics_can_run_without_score_impact(monkeypatch):
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_FOLLOW_THROUGH",
+        {"ENABLED": False, "DIAGNOSTICS_ENABLED": True, "MAX_BONUS": 1.5, "MIN_PENALTY": -0.5},
+    )
+    res = _base_res_long()
+    res["distance_to_res"] = 3.0
+    baseline = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+
+    entry_candles = [
+        {"open": 100.0, "high": 100.5, "low": 99.8, "close": 100.3}
+        for _ in range(6)
+    ]
+    observed = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=entry_candles,
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+
+    detail = observed["follow_through_detail"]
+    assert observed["score"] == baseline["score"]
+    assert observed["follow_through_bonus"] == 0.0
+    assert detail["enabled"] is False
+    assert detail["diagnostics_enabled"] is True
+    assert detail["confidence"] == "insufficient_data"
+
+
 def _fvg_fixture():
     candles = []
     for i in range(90):

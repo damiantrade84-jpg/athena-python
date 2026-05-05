@@ -1,3 +1,20 @@
+# Engine B Audit-Safe Knobs And Diagnostics
+
+- [x] Add default-safe config knobs for D1 PD-array conflict distance and rejection wick/body ratio.
+- [x] Add follow-through diagnostics while keeping score impact disabled by default.
+- [x] Add focused Engine B regression coverage.
+- [x] Run focused compile and pytest validation.
+
+## Review
+
+- Added `NAKED_ENGINE.d1_pd_array_conflict_window_atr_mult: 3.0` and `NAKED_ENGINE.rejection_wick_body_ratio: 1.2`, preserving current defaults while allowing backtest/shadow trials.
+- Added `ENGINE_B_FOLLOW_THROUGH.DIAGNOSTICS_ENABLED: true`; score impact remains disabled unless `ENGINE_B_FOLLOW_THROUGH.ENABLED` is true.
+- Focused red/green regression coverage passed for configurable D1 conflict window, configurable rejection wick/body ratio, and diagnostics-only follow-through.
+- Compile validation passed: `python -m py_compile market_structure.py config.py tests\test_engine_b_diagnostics.py`.
+- Focused Engine B validation passed: `python -m pytest tests/test_engine_b_diagnostics.py tests/test_engine_b_rr_basis.py -q --basetemp=.\tests\.tmp-engine-b-knobs-focused` (`61 passed`).
+- Threshold-audit diagnostic slice passed: `python -m pytest tests/test_threshold_audit.py -k "d1_pd_array or structural_tp or checklist" -q --basetemp=.\tests\.tmp-engine-b-knobs-threshold` (`4 passed, 24 deselected`).
+- `git diff --check -- market_structure.py config.py config.yaml tests/test_engine_b_diagnostics.py tasks/todo.md` passed with only Windows line-ending warnings.
+
 # Backtest Audit And Engine B Speed
 
 - [x] Save the agreed backtest audit/speed plan.

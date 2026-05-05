@@ -44,6 +44,24 @@ def _engine_b_structural_tp_buffer_atr_mult() -> float:
     return max(0.0, mult)
 
 
+def _engine_b_d1_conflict_window_atr_mult() -> float:
+    naked_cfg = config.CONFIG.get("NAKED_ENGINE", {}) or {}
+    try:
+        mult = float(naked_cfg.get("d1_pd_array_conflict_window_atr_mult", 3.0))
+    except (TypeError, ValueError):
+        mult = 3.0
+    return max(0.0, mult)
+
+
+def _engine_b_rejection_wick_body_ratio() -> float:
+    naked_cfg = config.CONFIG.get("NAKED_ENGINE", {}) or {}
+    try:
+        ratio = float(naked_cfg.get("rejection_wick_body_ratio", 1.2))
+    except (TypeError, ValueError):
+        ratio = 1.2
+    return max(0.0, ratio)
+
+
 def _engine_b_structural_target_price(
     zone: dict, direction: str, atr: float, buffer_mult: float
 ) -> float:
@@ -1469,8 +1487,9 @@ class NakedEngine:
         upper_wick = high - max(open_, close)
         lower_wick = min(open_, close) - low
 
-        bull_rejection = lower_wick >= max(body * 1.2, atr * 0.08) and close >= low + (range_ * 0.6)
-        bear_rejection = upper_wick >= max(body * 1.2, atr * 0.08) and close <= high - (range_ * 0.6)
+        rejection_ratio = _engine_b_rejection_wick_body_ratio()
+        bull_rejection = lower_wick >= max(body * rejection_ratio, atr * 0.08) and close >= low + (range_ * 0.6)
+        bear_rejection = upper_wick >= max(body * rejection_ratio, atr * 0.08) and close <= high - (range_ * 0.6)
 
         bull_engulf = (
             close > open_
@@ -2072,7 +2091,7 @@ class NakedEngine:
         try:
             d1_order_blocks_raw = self._detect_order_blocks(d1_candles, d1_bos, d1_atr)
             d1_fvgs_raw = [f for f in self._detect_fvg(d1_candles) if not f.get("mitigated")]
-            _conflict_window = d1_atr * 3.0  # within 3 D1 ATRs is "approaching"
+            _conflict_window = d1_atr * _engine_b_d1_conflict_window_atr_mult()
             for ob in d1_order_blocks_raw:
                 ob_mid = (ob["top"] + ob["bottom"]) / 2.0
                 ob_dist = abs(current_price - ob_mid)
@@ -3434,15 +3453,22 @@ class NakedEngine:
         # ── Breakout Follow-Through Bonus (config-gated) ────────────────────────
         _ft_cfg = config.CONFIG.get("ENGINE_B_FOLLOW_THROUGH", {}) or {}
         _ft_enabled = bool(_ft_cfg.get("ENABLED", False))
+        _ft_diagnostics_enabled = bool(_ft_cfg.get("DIAGNOSTICS_ENABLED", True))
         _ft_bonus = 0.0
-        _ft_detail = {"enabled": _ft_enabled}
-        if _ft_enabled:
+        _ft_detail = {
+            "enabled": _ft_enabled,
+            "diagnostics_enabled": _ft_diagnostics_enabled,
+        }
+        if _ft_enabled or _ft_diagnostics_enabled:
             _ft_result = _breakout_follow_through(entry_candles or [], direction, atr_val)
             _ft_detail.update(_ft_result)
             _ft_max = abs(float(_ft_cfg.get("MAX_BONUS", 1.5)))
             _ft_min = -abs(float(_ft_cfg.get("MIN_PENALTY", -0.5)))
             _ft_bonus = max(_ft_min, min(_ft_max, _ft_result.get("score", 0.0)))
-            bonus_points += _ft_bonus
+            if _ft_enabled:
+                bonus_points += _ft_bonus
+            else:
+                _ft_bonus = 0.0
             _ft_detail["bonus_applied"] = round(_ft_bonus, 2)
 
         # FIX 1: gate_score is COUNT of true booleans — never modify it
