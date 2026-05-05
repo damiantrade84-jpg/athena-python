@@ -508,7 +508,35 @@ git commit -m "refactor(routes): move live dashboard routes"
 
 ---
 
-### Task 7: Defer High-Risk Extraction Until Guard Rails Exist
+### Task 7: Extract Read-Only Broker Status Routes
+
+**Files:**
+- Create: `athena_app/api/routes_broker_status.py`
+- Modify: `athena.py`
+- Modify: `tests/test_api_contract_smoke.py`
+- Create: `tests/test_routes_broker_status.py`
+
+**Routes:**
+
+```text
+/api/mt5-status
+/api/mt5-positions
+/api/bybit-status
+/api/binance-status
+```
+
+`/api/close-position` is explicitly excluded because it mutates broker state.
+
+- [x] **Step 1: Add module-aware route contract coverage**
+- [x] **Step 2: Move read-only broker status handlers into `routes_broker_status.py`**
+- [x] **Step 3: Keep `/api/close-position` in `athena.py`**
+- [x] **Step 4: Add fake MT5/Bybit module tests**
+- [x] **Step 5: Validate compile, route contract, broker status module, health subset, and combined route-focused checks**
+- [ ] **Step 6: Commit**
+
+---
+
+### Task 8: Defer High-Risk Extraction Until Guard Rails Exist
 
 Do not move these until the lower-risk route groups are already passing and committed:
 

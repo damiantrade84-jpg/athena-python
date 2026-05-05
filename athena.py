@@ -6920,122 +6920,6 @@ def api_webhook():
         return jsonify({"error": "Webhook execution failed - check logs"}), 500
 
 
-@app.route("/api/mt5-status")
-def api_mt5_status():
-    """Get MT5 connection status and account info."""
-
-    try:
-        from mt5_executor import mt5_get_account, mt5_get_positions
-
-        account = mt5_get_account()
-
-        if not account or account.get("error"):
-            return jsonify(
-                {
-                    "connected": False,
-                    "error": account.get("detail", "MT5 not connected")
-                    if isinstance(account, dict)
-                    else "MT5 not connected",
-                }
-            )
-
-        _pos_resp = mt5_get_positions()
-
-        if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
-            positions = []
-        else:
-            positions = (
-                _pos_resp.get("positions", [])
-                if isinstance(_pos_resp, dict)
-                else (_pos_resp or [])
-            )
-
-        return jsonify(
-            {
-                "connected": True,
-                "account": account,
-                "openPositions": len(positions),
-                "positions": positions,
-                "executionEnabled": CONFIG.get("EXECUTION_ENABLED", False),
-            }
-        )
-
-    except Exception as e:
-        return jsonify({"connected": False, "error": str(e)})
-
-
-@app.route("/api/mt5-positions")
-def api_mt5_positions():
-    """Get open MT5 positions."""
-
-    try:
-        from mt5_executor import mt5_get_positions
-
-        _pos_resp = mt5_get_positions()
-
-        if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
-            return jsonify(
-                {
-                    "positions": [],
-                    "error": _pos_resp.get("detail", "Positions unavailable"),
-                }
-            ), 503
-
-        return jsonify(
-            {
-                "positions": _pos_resp.get("positions", [])
-                if isinstance(_pos_resp, dict)
-                else (_pos_resp or [])
-            }
-        )
-
-    except Exception as e:
-        return jsonify({"positions": [], "error": str(e)})
-
-
-@app.route("/api/bybit-status")
-def api_bybit_status():
-    """Get Bybit Futures connection status and account info."""
-
-    try:
-        from bybit_executor import bybit_get_account, bybit_get_positions
-
-        account = bybit_get_account()
-
-        if not account or account.get("error"):
-            return jsonify(
-                {
-                    "connected": False,
-                    "error": account.get("detail", "Bybit not connected")
-                    if isinstance(account, dict)
-                    else "Bybit not connected",
-                }
-            )
-
-        _pos_resp = bybit_get_positions()
-
-        if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
-            positions = []
-        else:
-            positions = (
-                _pos_resp.get("positions", [])
-                if isinstance(_pos_resp, dict)
-                else (_pos_resp or [])
-            )
-
-        return jsonify(
-            {
-                "connected": True,
-                "account": account,
-                "openPositions": len(positions),
-                "positions": positions,
-            }
-        )
-
-    except Exception as e:
-        return jsonify({"connected": False, "error": str(e)})
-
-
 @app.route("/api/close-position", methods=["POST"])
 def api_close_position():
     """Manually close an open position on MT5 or Bybit."""
@@ -7140,15 +7024,6 @@ def api_close_position():
     status = 200 if result.get("success") else 500
 
     return jsonify(result), status
-
-
-@app.route("/api/binance-status")
-def api_binance_status():
-    """Legacy endpoint - redirects to Bybit status."""
-
-    return api_bybit_status()
-
-
 
 
 @app.route("/api/execution-config", methods=["GET", "POST"])
@@ -13563,6 +13438,7 @@ _LIVE_DASHBOARD_SCALP_TTL = 300.0  # 5 min - longer TTL so snapshot returns some
 from types import SimpleNamespace  # noqa: E402
 
 from athena_runtime import set_runtime  # noqa: E402
+from athena_app.api.routes_broker_status import register_broker_status_routes  # noqa: E402
 from athena_app.api.routes_live_dashboard import register_live_dashboard_routes  # noqa: E402
 from athena_app.api.routes_lottery import register_lottery_routes  # noqa: E402
 from athena_app.api.routes_market_data import register_market_data_routes  # noqa: E402
@@ -13621,6 +13497,10 @@ set_runtime(
     )
 )
 register_execution_routes(app)
+register_broker_status_routes(
+    app,
+    SimpleNamespace(CONFIG=CONFIG),
+)
 register_lottery_routes(
     app,
     SimpleNamespace(CONFIG=CONFIG, AUDIT_DB=_AUDIT_DB, log=log),

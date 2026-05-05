@@ -21,6 +21,7 @@ ROUTE_FILES = [
     EXECUTION_PATH,
     GUARDIAN_ROUTES_PATH,
     ROOT / "athena_app" / "api" / "routes_backtest.py",
+    ROOT / "athena_app" / "api" / "routes_broker_status.py",
     ROOT / "athena_app" / "api" / "routes_execution.py",
     ROOT / "athena_app" / "api" / "routes_live_dashboard.py",
     ROOT / "athena_app" / "api" / "routes_lottery.py",

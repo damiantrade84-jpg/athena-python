@@ -153,6 +153,7 @@
 - [x] Execute Task 4: extract market metadata read-only routes.
 - [x] Execute Task 5: extract live dashboard route registration, helpers, and route bodies.
 - [x] Execute Task 6: extract status/support read-only routes.
+- [x] Execute Task 7: extract read-only broker status routes.
 - [ ] Execute later read-only route groups before touching AI, Engine B, Scalp execute, risk, or runtime startup.
 
 ## Review
@@ -187,3 +188,9 @@
 - Status route validation passed: `python -m pytest tests/test_routes_status.py -q` (`5 passed`) and `python -m pytest tests/test_api_contract_smoke.py -q` (`6 passed`).
 - Existing health subset validation passed for moved routes: `python -m pytest tests/test_health_routes.py -k "not feed_health" -q` (`5 passed, 1 deselected`).
 - Route-focused combined validation passed: `python -m pytest tests/test_api_contract_smoke.py tests/test_routes_status.py tests/test_routes_market_data.py tests/test_routes_live_dashboard.py tests/test_live_dashboard.py -k "not frontend" -q` (`47 passed, 6 deselected`).
+- Moved read-only broker status handlers from `athena.py` to `athena_app/api/routes_broker_status.py`: `/api/mt5-status`, `/api/mt5-positions`, `/api/bybit-status`, and legacy `/api/binance-status`.
+- Left `/api/close-position` in `athena.py` because it can close broker positions and is not part of the read-only status slice.
+- Added `tests/test_routes_broker_status.py` to validate route registration and fake MT5/Bybit read-only account/position responses without importing `athena.py` or touching brokers.
+- Broker status compile validation passed: `python -m py_compile athena.py athena_app/api/routes_broker_status.py tests/test_routes_broker_status.py tests/test_api_contract_smoke.py`.
+- Broker status route validation passed: `python -m pytest tests/test_routes_broker_status.py -q` (`4 passed`) and `python -m pytest tests/test_api_contract_smoke.py -q` (`6 passed`).
+- Route-focused combined validation passed: `python -m pytest tests/test_api_contract_smoke.py tests/test_routes_broker_status.py tests/test_routes_status.py tests/test_routes_market_data.py tests/test_routes_live_dashboard.py tests/test_live_dashboard.py -k "not frontend" -q` (`51 passed, 6 deselected`).
