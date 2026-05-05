@@ -4390,20 +4390,65 @@ def run_ai(
         _timeout_sec = get_ai_timeout_sec(
             CONFIG,
             preferred_key="MARCUS_AI_TIMEOUT_SEC",
-            fallback=60.0,
+            fallback=90.0,
         )
         _provider_started = time.monotonic()
-        completion = c.chat.completions.create(
-            model=_model,
-            max_tokens=1100,
-            temperature=_temp,
-            messages=[
-                {"role": "system", "content": EXPERT_PROMPT},
-                {"role": "user", "content": msg},
-            ],
-            response_format={"type": "json_object"},
-            timeout=_timeout_sec,
-        )
+
+        def _is_retryable_ai_error(exc: Exception) -> bool:
+            text = str(exc or "").strip().lower()
+            if not text:
+                return False
+            markers = (
+                "timed out",
+                "timeout",
+                "connection reset",
+                "connection aborted",
+                "connection refused",
+                "temporarily unavailable",
+                "server error",
+                "rate limit",
+                "too many requests",
+                "502",
+                "503",
+                "504",
+            )
+            return any(marker in text for marker in markers)
+
+        _max_ai_retries = int(CONFIG.get("MARCUS_AI_MAX_RETRIES", 1) or 1)
+        _backoff_base = float(CONFIG.get("MARCUS_AI_RETRY_BACKOFF_SEC", 2.0) or 2.0)
+        _last_exc = None
+        completion = None
+        for _attempt in range(_max_ai_retries + 1):
+            try:
+                completion = c.chat.completions.create(
+                    model=_model,
+                    max_tokens=1100,
+                    temperature=_temp,
+                    messages=[
+                        {"role": "system", "content": EXPERT_PROMPT},
+                        {"role": "user", "content": msg},
+                    ],
+                    response_format={"type": "json_object"},
+                    timeout=_timeout_sec,
+                )
+                break
+            except Exception as _e:
+                _last_exc = _e
+                if _attempt >= _max_ai_retries or not _is_retryable_ai_error(_e):
+                    raise
+                _sleep = _backoff_base * (2 ** _attempt)
+                log.warning(
+                    "[AI] transient failure for %s on attempt %s/%s: %s; retrying in %.1fs",
+                    signal.get("pair", "?"),
+                    _attempt + 1,
+                    _max_ai_retries + 1,
+                    _e,
+                    _sleep,
+                )
+                time.sleep(_sleep)
+        if completion is None:
+            raise _last_exc or RuntimeError("AI call failed with no completion")
+
         _provider_sec = time.monotonic() - _provider_started
         log.info(
             "[AI] %s timing: prompt_build=%.2fs provider=%.2fs timeout=%.1fs prompt_chars=%d",
