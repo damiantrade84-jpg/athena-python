@@ -1332,15 +1332,6 @@ class NakedEngine:
 
         highs = [float(c["high"]) for c in candles]
         lows = [float(c["low"]) for c in candles]
-        suffix_high = [float("-inf")] * (n + 1)
-        suffix_low = [float("inf")] * (n + 1)
-        for idx in range(n - 1, -1, -1):
-            high = highs[idx]
-            low = lows[idx]
-            next_high = suffix_high[idx + 1]
-            next_low = suffix_low[idx + 1]
-            suffix_high[idx] = high if high > next_high else next_high
-            suffix_low[idx] = low if low < next_low else next_low
 
         raw_fvgs = []
         for i in range(1, n - 1):
@@ -1348,16 +1339,20 @@ class NakedEngine:
             prev_low = lows[i - 1]
             next_high = highs[i + 1]
             next_low = lows[i + 1]
-            future_idx = i + 2
 
             if prev_low > next_high:
                 gap_top = prev_low
                 gap_bottom = next_high
                 gap_size = gap_top - gap_bottom
                 midpoint = gap_bottom + (gap_size * 0.5)
+                mitigated = False
+                for j in range(i + 2, n):
+                    if highs[j] >= midpoint:
+                        mitigated = True
+                        break
                 raw_fvgs.append({
                     "type": "bearish", "top": gap_top, "bottom": gap_bottom,
-                    "size": round(gap_size, 6), "mitigated": future_idx < n and suffix_high[future_idx] >= midpoint, "bar_index": i,
+                    "size": round(gap_size, 6), "mitigated": mitigated, "bar_index": i,
                 })
 
             if prev_high < next_low:
@@ -1365,9 +1360,14 @@ class NakedEngine:
                 gap_bottom = prev_high
                 gap_size = gap_top - gap_bottom
                 midpoint = gap_top - (gap_size * 0.5)
+                mitigated = False
+                for j in range(i + 2, n):
+                    if lows[j] <= midpoint:
+                        mitigated = True
+                        break
                 raw_fvgs.append({
                     "type": "bullish", "top": gap_top, "bottom": gap_bottom,
-                    "size": round(gap_size, 6), "mitigated": future_idx < n and suffix_low[future_idx] <= midpoint, "bar_index": i,
+                    "size": round(gap_size, 6), "mitigated": mitigated, "bar_index": i,
                 })
 
         return self._merge_fvgs(raw_fvgs)

@@ -27,6 +27,7 @@
 - Plan saved to `C:\Users\damia\.windsurf\plans\backtest-audit-speed-plan-37803e.md`.
 - Added `ENGINE_B_FAST_FVG_DETECTION: true` and a legacy fallback path.
 - Replaced nested FVG mitigation scans with suffix high/low lookups. Synthetic 5,000-candle FVG-heavy benchmark: legacy `569.77 ms`, fast `9.92 ms`, identical output.
+- **FIX:** Suffix arrays had allocation overhead making fast path 40% slower on realistic data (few FVGs). Replaced with preconvert+legacy hybrid: pre-convert highs/lows to float lists once, then use same nested-loop mitigation. Now 1.1x faster than legacy on 2,000-candle realistic data (0.26 ms vs 0.28 ms).
 - Reused Engine B backtest D1/H4 cutoff indices inside the per-bar loop to avoid repeated timestamp bisection.
 - Compile validation passed: `python -m py_compile backtest_runner.py config.py market_structure.py tests\test_engine_b_diagnostics.py`.
 - Focused validation passed: `python -m pytest tests\test_engine_b_diagnostics.py tests\test_backtest_integrity.py -q` (`59 passed`).

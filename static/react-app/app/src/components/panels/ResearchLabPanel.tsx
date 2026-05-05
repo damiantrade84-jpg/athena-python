@@ -74,8 +74,21 @@ interface RankedResponse {
   ranked?: RankedRow[];
   recommendations?: Array<Record<string, unknown>>;
   automated_next_tests?: Array<Record<string, unknown>>;
+  operator_summary?: OperatorSummary;
   note?: string;
   error?: string;
+}
+
+interface OperatorSummary {
+  headline?: string;
+  decision?: string;
+  use_now?: Array<Record<string, unknown>>;
+  keep?: Array<Record<string, unknown>>;
+  remove_or_demote?: Array<Record<string, unknown>>;
+  retest?: Array<Record<string, unknown>>;
+  warnings?: string[];
+  next_step?: string;
+  implementation_ready_count?: number;
 }
 
 interface StartRunResponse {
@@ -213,6 +226,10 @@ export default function ResearchLabPanel() {
   const fetchAiReview = useCallback(async (runId: string) => {
     try {
       const res = await fetch(`/api/research-lab/ai-review/${runId}`);
+      if (!res.ok) {
+        setAiReviewData(null);
+        return;
+      }
       const json = (await res.json()) as AiReviewResponse;
       setAiReviewData(json);
     } catch {
@@ -291,7 +308,11 @@ export default function ResearchLabPanel() {
   }, [postManualRun, mode, direction, aiReview, symbols, timeframes, families, strategies, showToast, pollRun]);
 
   const openRun = useCallback(async (runId: string) => {
+    stopPolling();
     setCurrentRunId(runId);
+    setRunStatus(null);
+    setRanked(null);
+    setAiReviewData(null);
     try {
       const res = await fetch(`/api/research-lab/run/${runId}`);
       const json = (await res.json()) as RunStatusResponse;
@@ -305,7 +326,7 @@ export default function ResearchLabPanel() {
     } catch (e) {
       showToast(`Failed to open run: ${(e as Error).message}`, 'error');
     }
-  }, [fetchRanked, fetchAiReview, pollRun, showToast]);
+  }, [stopPolling, fetchRanked, fetchAiReview, pollRun, showToast]);
 
   const triggerAiAnalyze = useCallback(async () => {
     if (!currentRunId) return;
@@ -532,6 +553,59 @@ export default function ResearchLabPanel() {
             </CardContent>
           </Card>
 
+          {ranked?.operator_summary && (
+            <Card className="border-border/60 bg-card/50">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+                  <ListChecks className="w-4 h-4 text-primary" />
+                  Decision Summary
+                  <Badge className={`text-[10px] ${ranked.operator_summary.decision === 'USE_ADD_CANDIDATE' ? 'badge-long' : ranked.operator_summary.decision === 'REMOVE_OR_DEMOTE' ? 'badge-short' : 'badge-neutral'}`}>
+                    {ranked.operator_summary.decision || 'NEEDS_MORE_DATA'}
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-xs">
+                <p className="text-sm font-medium">{ranked.operator_summary.headline || 'No decision summary available.'}</p>
+                {ranked.operator_summary.next_step && (
+                  <p className="text-[11px] text-muted-foreground">{ranked.operator_summary.next_step}</p>
+                )}
+                {(ranked.operator_summary.use_now || []).length > 0 && (
+                  <div>
+                    <p className="text-[10px] uppercase text-muted-foreground mb-1">Use / Add Candidates</p>
+                    <div className="grid gap-1">
+                      {(ranked.operator_summary.use_now || []).slice(0, 6).map((row, i) => (
+                        <div key={i} className="flex items-center justify-between gap-3 border-b border-border/20 py-1">
+                          <span>{textValue(row, 'strategy_name')} on {textValue(row, 'timeframe')} / {textValue(row, 'symbol')}</span>
+                          <span className="font-mono text-[10px] text-muted-foreground">
+                            PF {numberValue(row, 'profit_factor') != null ? fmtNum(numberValue(row, 'profit_factor') as number, 2) : '—'} · OOS {numberValue(row, 'oos_return') != null ? fmtNum(numberValue(row, 'oos_return') as number, 3) : '—'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {(ranked.operator_summary.remove_or_demote || []).length > 0 && (
+                  <div>
+                    <p className="text-[10px] uppercase text-muted-foreground mb-1">Remove / Demote</p>
+                    <div className="flex flex-wrap gap-1">
+                      {(ranked.operator_summary.remove_or_demote || []).slice(0, 8).map((row, i) => (
+                        <Badge key={i} className="badge-short text-[10px]">{textValue(row, 'strategy_name')}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {(ranked.operator_summary.warnings || []).length > 0 && (
+                  <div className="rounded border border-warning/40 bg-warning/10 p-2">
+                    <p className="text-[10px] uppercase text-muted-foreground mb-1">Warnings</p>
+                    {(ranked.operator_summary.warnings || []).map((w, i) => (
+                      <p key={i} className="text-[11px]">{w}</p>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {ranked && (ranked.ranked || []).length > 0 && (
             <Card className="border-border/60 bg-card/50">
               <CardHeader className="pb-2">
@@ -605,6 +679,7 @@ export default function ResearchLabPanel() {
                         <th className="text-[10px] uppercase py-2 text-muted-foreground">Symbol</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground">TF</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground">Status</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Ready</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">Trades</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">PF</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">OOS</th>
@@ -617,6 +692,7 @@ export default function ResearchLabPanel() {
                         const pf = numberValue(row, 'profit_factor');
                         const oos = numberValue(row, 'oos_return');
                         const robustness = numberValue(row, 'robustness_score');
+                        const readiness = textValue(row, 'implementation_verdict');
                         return (
                           <tr key={i} className="border-b border-border/20 hover:bg-muted/30">
                             <td className="py-2 text-[10px]">
@@ -628,6 +704,11 @@ export default function ResearchLabPanel() {
                             <td className="py-2 text-[10px] font-mono">{textValue(row, 'symbol')}</td>
                             <td className="py-2 text-[10px]">{textValue(row, 'timeframe')}</td>
                             <td className="py-2 text-[10px]">{textValue(row, 'status')}</td>
+                            <td className="py-2 text-[10px]">
+                              <Badge className={`text-[10px] ${readiness === 'IMPLEMENTATION_READY' ? 'badge-long' : 'badge-short'}`}>
+                                {readiness}
+                              </Badge>
+                            </td>
                             <td className="py-2 text-[10px] font-mono text-right">{textValue(row, 'trade_count')}</td>
                             <td className="py-2 text-[10px] font-mono text-right">{pf != null ? fmtNum(pf, 2) : '—'}</td>
                             <td className="py-2 text-[10px] font-mono text-right">{oos != null ? fmtNum(oos, 3) : '—'}</td>

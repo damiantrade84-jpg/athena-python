@@ -152,7 +152,7 @@ export default function LiveCockpitPanel() {
     setActiveSymbols(joined);
   }, [activeSymbols]);
 
-  const onPaperExecute = useCallback((
+  const onPaperExecute = useCallback(
     async (row: LdSymbolRow) => {
       const direction = row.engineA?.direction || row.engineB?.direction;
       if (!direction) {
