@@ -18,8 +18,6 @@ import json
 
 import logging
 
-import sqlite3
-
 import threading
 
 import time
@@ -28,6 +26,11 @@ from datetime import datetime, timezone, timedelta
 
 from calibration import predict_calibrated_prob
 from meta_learner import apply_meta_policy, meta_report
+from sqlite_instrumentation import (
+    timed_sqlite_connect,
+    timed_sqlite_commit,
+    timed_sqlite_execute_write,
+)
 from stability_monitor import get_signal_stability_index, record_execution_event
 from timed_exit_monitor import start_monitor
 
@@ -740,16 +743,22 @@ class AutoTrader:
         # Signal debate gate — AI Bull/Bear/Judge evaluation before auto-execution
         if cfg.get("SIGNAL_DEBATE_ENABLED", True):
             try:
+                from ai_reconciliation import arbitrate_ai
                 from signal_debate import run_signal_debate
 
                 debate = run_signal_debate(signal)
                 _grade = debate.get("grade", "SKIP")
-                _allowed = debate.get("allowed", True)
+                _ai_decision = arbitrate_ai(
+                    {"debate": debate, "trace_id": debate.get("trace_id") or signal.get("trace_id")},
+                    require_trace_id=True,
+                )
+                signal["ai_arbitration"] = _ai_decision
+                _allowed = bool(_ai_decision.get("execution_allowed"))
                 _reasoning = debate.get("reasoning", "")
                 log.info(f"[AUTO] {signal.get('pair')} debate: {_grade} — {_reasoning}")
                 # AI debate Telegram notification disabled
                 if not _allowed:
-                    return False, f"Debate: {_grade} — {_reasoning}"
+                    return False, f"AI arbitration: {_ai_decision.get('reason')} (debate={_grade})"
                 # Apply score adjustment — central clamp in signal_debate; defense-in-depth
                 _adj_eff = float(
                     debate.get("score_penalty", debate.get("score_adjustment", 0.0)) or 0.0
@@ -1171,9 +1180,12 @@ class AutoTrader:
                     else None
                 )
             )
-            with sqlite3.connect(self._audit_db, timeout=15.0) as con:
+            with timed_sqlite_connect(
+                self._audit_db, timeout=15.0, label="auto.audit_success.connect"
+            ) as con:
                 for _leg in _audit_legs():
-                    con.execute(
+                    timed_sqlite_execute_write(
+                        con,
                         "INSERT INTO audit_log"
                         "(ts, pair, score, engine, direction, asset_class, regime,"
                         " entry_price, sl, tp, volume, risk_amount, risk_pct,"
@@ -1205,9 +1217,10 @@ class AutoTrader:
                             _resolve_audit_style(signal.get("style"), signal.get("type")),
                             result.get("feeCost"),
                         ),
+                        label="auto.audit_success.insert",
                     )
 
-                con.commit()
+                timed_sqlite_commit(con, label="auto.audit_success.commit")
 
         except Exception as e:
             log.debug(f"[AUTO] audit write failed: {e}")
@@ -1242,8 +1255,11 @@ class AutoTrader:
             log.debug(f"[SSI] auto-trader failure sample skipped: {_ssi_err}")
 
         try:
-            with sqlite3.connect(self._audit_db, timeout=15.0) as con:
-                con.execute(
+            with timed_sqlite_connect(
+                self._audit_db, timeout=15.0, label="auto.audit_error.connect"
+            ) as con:
+                timed_sqlite_execute_write(
+                    con,
                     """INSERT INTO audit_log
 
                        (ts, pair, score, engine, direction, asset_class, regime,
@@ -1265,9 +1281,10 @@ class AutoTrader:
                         "AUTO-ERR" + ("-DEMO" if is_demo else ""),
                         error_tag,
                     ),
+                    label="auto.audit_error.insert",
                 )
 
-                con.commit()
+                timed_sqlite_commit(con, label="auto.audit_error.commit")
 
         except Exception as e:
             log.debug(f"[AUTO] error audit write failed: {e}")

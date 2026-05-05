@@ -16,8 +16,351 @@ Design principles:
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 log = logging.getLogger("sentinel")
+
+AI_DECISION_ALLOW = "ALLOW"
+AI_DECISION_BLOCK = "BLOCK"
+AI_STATE_CONFIRM = "CONFIRM"
+AI_STATE_CAUTION = "CAUTION"
+AI_STATE_REJECT = "REJECT"
+AI_STATE_REVIEW_INCOMPLETE = "REVIEW_INCOMPLETE"
+
+_DEBATE_CONFIRM = {"STRONG_GO", "WEAK_GO"}
+_DEBATE_REJECT = {"PASS", "STRONG_AVOID"}
+_DEBATE_NEUTRAL = {"SKIP"}
+_DEBATE_FAILURE = {"ERROR"}
+_VISION_CONFIRM = {"CONFIRM", "CONFIRMS", "STRONG", "MODERATE"}
+_VISION_CAUTION = {"CAUTION", "REVIEW", "WEAK"}
+_VISION_REJECT = {
+    "REJECT",
+    "AVOID",
+    "CONTRADICT",
+    "CONTRADICTS",
+    "POTENTIAL REVERSAL",
+    "POTENTIAL_REVERSAL",
+}
+
+
+def _upper_token(value: Any) -> str:
+    return str(value or "").strip().upper().replace("-", "_")
+
+
+def _extract_trace_id(verdicts: dict[str, Any]) -> str | None:
+    trace_id = verdicts.get("trace_id")
+    if trace_id:
+        return str(trace_id)
+    for source in ("debate", "vision", "engine_b", "marcus"):
+        item = verdicts.get(source)
+        if isinstance(item, dict) and item.get("trace_id"):
+            return str(item.get("trace_id"))
+    return None
+
+
+def _source_result(
+    *,
+    source: str,
+    state: str,
+    category: str,
+    reason: str,
+    raw: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "source": source,
+        "state": state,
+        "category": category,
+        "reason": reason,
+        "raw": raw,
+    }
+
+
+def _arbitrate_debate(debate: Any) -> dict[str, Any]:
+    if not isinstance(debate, dict):
+        return _source_result(
+            source="debate",
+            state=AI_STATE_REJECT,
+            category="invalid",
+            reason="DEBATE_SCHEMA_INVALID",
+        )
+    if debate.get("schema_valid") is False or debate.get("parse_success") is False:
+        return _source_result(
+            source="debate",
+            state=AI_STATE_REJECT,
+            category="invalid",
+            reason="DEBATE_SCHEMA_INVALID",
+        )
+    grade = _upper_token(debate.get("grade"))
+    allowed = debate.get("allowed")
+    if grade in _DEBATE_FAILURE or debate.get("error"):
+        return _source_result(
+            source="debate",
+            state=AI_STATE_REJECT,
+            category="failure",
+            reason="DEBATE_AI_FAILURE",
+            raw=grade or None,
+        )
+    if not grade or not isinstance(allowed, bool):
+        return _source_result(
+            source="debate",
+            state=AI_STATE_REJECT,
+            category="invalid",
+            reason="DEBATE_SCHEMA_INVALID",
+            raw=grade or None,
+        )
+    if grade in _DEBATE_REJECT or allowed is False:
+        return _source_result(
+            source="debate",
+            state=AI_STATE_REJECT,
+            category="reject",
+            reason=f"DEBATE_{grade or 'BLOCKED'}",
+            raw=grade,
+        )
+    if grade in _DEBATE_CONFIRM:
+        return _source_result(
+            source="debate",
+            state=AI_STATE_CONFIRM,
+            category="support",
+            reason=f"DEBATE_{grade}",
+            raw=grade,
+        )
+    if grade in _DEBATE_NEUTRAL:
+        return _source_result(
+            source="debate",
+            state=AI_STATE_REVIEW_INCOMPLETE,
+            category="neutral",
+            reason="DEBATE_SKIPPED",
+            raw=grade,
+        )
+    return _source_result(
+        source="debate",
+        state=AI_STATE_REJECT,
+        category="invalid",
+        reason="DEBATE_SCHEMA_INVALID",
+        raw=grade,
+    )
+
+
+def _vision_token(vision: dict[str, Any]) -> str:
+    structured = vision.get("structured") if isinstance(vision.get("structured"), dict) else {}
+    raw = (
+        vision.get("ai_review_state")
+        or vision.get("state")
+        or vision.get("right_edge_status")
+        or structured.get("right_edge_status")
+        or structured.get("rating")
+        or vision.get("vision_rating")
+        or vision.get("rating")
+    )
+    token = _upper_token(raw).replace("_", " ")
+    if token:
+        return token
+    text = str(vision.get("analysis") or "").upper()
+    for candidate in (
+        "POTENTIAL REVERSAL",
+        "CONTRADICTS",
+        "CONTRADICT",
+        "AVOID",
+        "CONFIRMS",
+        "CONFIRM",
+        "STRONG",
+        "MODERATE",
+        "REVIEW",
+        "WEAK",
+    ):
+        if candidate in text:
+            return candidate
+    return ""
+
+
+def _arbitrate_vision(vision: Any) -> dict[str, Any]:
+    if not isinstance(vision, dict):
+        return _source_result(
+            source="vision",
+            state=AI_STATE_REJECT,
+            category="invalid",
+            reason="VISION_SCHEMA_INVALID",
+        )
+    if vision.get("schema_valid") is False or vision.get("parse_success") is False:
+        return _source_result(
+            source="vision",
+            state=AI_STATE_REJECT,
+            category="invalid",
+            reason="VISION_SCHEMA_INVALID",
+        )
+    token = _vision_token(vision)
+    structured = vision.get("structured") if isinstance(vision.get("structured"), dict) else {}
+    confirms_direction = structured.get("confirms_direction", vision.get("confirms_direction"))
+    if vision.get("error"):
+        return _source_result(
+            source="vision",
+            state=AI_STATE_REJECT,
+            category="failure",
+            reason="VISION_AI_FAILURE",
+            raw=token or None,
+        )
+    if confirms_direction is False:
+        return _source_result(
+            source="vision",
+            state=AI_STATE_REJECT,
+            category="reject",
+            reason="VISION_CONTRADICTS_DIRECTION",
+            raw=token or None,
+        )
+    if token in _VISION_REJECT:
+        return _source_result(
+            source="vision",
+            state=AI_STATE_REJECT,
+            category="reject",
+            reason=f"VISION_{token.replace(' ', '_')}",
+            raw=token,
+        )
+    if token in _VISION_CONFIRM:
+        return _source_result(
+            source="vision",
+            state=AI_STATE_CONFIRM,
+            category="support",
+            reason=f"VISION_{token.replace(' ', '_')}",
+            raw=token,
+        )
+    if token in _VISION_CAUTION:
+        return _source_result(
+            source="vision",
+            state=AI_STATE_CAUTION,
+            category="neutral",
+            reason=f"VISION_{token.replace(' ', '_')}",
+            raw=token,
+        )
+    return _source_result(
+        source="vision",
+        state=AI_STATE_REJECT,
+        category="invalid",
+        reason="VISION_SCHEMA_INVALID",
+        raw=token or None,
+    )
+
+
+def arbitrate_ai(verdicts: dict[str, Any] | None, *, require_trace_id: bool = True) -> dict[str, Any]:
+    """Return one deterministic AI execution decision from advisory AI verdicts.
+
+    This function is pure: it reads only its inputs and performs no logging,
+    network calls, persistence, scoring, or model prompting.
+    """
+    result: dict[str, Any] = {
+        "decision": AI_DECISION_ALLOW,
+        "execution_allowed": True,
+        "ai_review_state": AI_STATE_REVIEW_INCOMPLETE,
+        "reason": "NO_AI_VERDICTS",
+        "trace_id": None,
+        "schema_valid": True,
+        "blocking_sources": [],
+        "supporting_sources": [],
+        "neutral_sources": [],
+        "missing_sources": [],
+        "conflict_flags": [],
+        "source_states": {},
+    }
+    if verdicts is None:
+        return result
+    if not isinstance(verdicts, dict):
+        result.update(
+            {
+                "decision": AI_DECISION_BLOCK,
+                "execution_allowed": False,
+                "ai_review_state": AI_STATE_REJECT,
+                "reason": "AI_VERDICTS_SCHEMA_INVALID",
+                "schema_valid": False,
+                "blocking_sources": ["schema"],
+            }
+        )
+        return result
+
+    trace_id = _extract_trace_id(verdicts)
+    result["trace_id"] = trace_id
+    source_states: dict[str, dict[str, Any]] = {}
+    for source, parser in (
+        ("debate", _arbitrate_debate),
+        ("vision", _arbitrate_vision),
+    ):
+        if source in verdicts and verdicts.get(source) is not None:
+            source_states[source] = parser(verdicts.get(source))
+        else:
+            result["missing_sources"].append(source)
+
+    result["source_states"] = source_states
+    has_verdict = bool(source_states)
+    if require_trace_id and has_verdict and not trace_id:
+        result.update(
+            {
+                "decision": AI_DECISION_BLOCK,
+                "execution_allowed": False,
+                "ai_review_state": AI_STATE_REJECT,
+                "reason": "TRACE_ID_MISSING",
+                "blocking_sources": ["trace_id"],
+            }
+        )
+        return result
+
+    blockers = [
+        state["source"]
+        for state in source_states.values()
+        if state["category"] in ("reject", "failure", "invalid")
+    ]
+    supporters = [
+        state["source"]
+        for state in source_states.values()
+        if state["category"] == "support"
+    ]
+    neutrals = [
+        state["source"]
+        for state in source_states.values()
+        if state["category"] == "neutral"
+    ]
+    result["blocking_sources"] = blockers
+    result["supporting_sources"] = supporters
+    result["neutral_sources"] = neutrals
+    invalid_sources = [s for s in source_states.values() if s["category"] == "invalid"]
+    if invalid_sources:
+        result["schema_valid"] = False
+
+    if blockers:
+        if supporters:
+            result["conflict_flags"].append("AI_CONFLICT_BLOCKER_WINS")
+        first_blocker = next(
+            state for state in source_states.values()
+            if state["category"] in ("reject", "failure", "invalid")
+        )
+        result.update(
+            {
+                "decision": AI_DECISION_BLOCK,
+                "execution_allowed": False,
+                "ai_review_state": AI_STATE_REJECT,
+                "reason": first_blocker["reason"],
+            }
+        )
+        return result
+
+    if supporters:
+        result.update(
+            {
+                "decision": AI_DECISION_ALLOW,
+                "execution_allowed": True,
+                "ai_review_state": AI_STATE_CONFIRM,
+                "reason": "AI_SUPPORTS_EXECUTION",
+            }
+        )
+        return result
+
+    if neutrals:
+        result.update(
+            {
+                "decision": AI_DECISION_ALLOW,
+                "execution_allowed": True,
+                "ai_review_state": AI_STATE_REVIEW_INCOMPLETE,
+                "reason": "AI_NEUTRAL_OR_SKIPPED",
+            }
+        )
+    return result
 
 # ── Grade → numeric map (Marcus Reid / Engine B AI) ──────────────────────────
 # A+ = 5, A = 4.5, B = 3.5, C = 2.5, D = 1.5, F = 0.5

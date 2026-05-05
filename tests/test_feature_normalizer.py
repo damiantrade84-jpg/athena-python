@@ -2,10 +2,13 @@
 
 import os
 import sys
+from statistics import mean, stdev
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from feature_normalizer import percentile_rank
+import pytest
+
+from feature_normalizer import percentile_rank, zscore_normalize
 
 
 def _naive_percentile_rank(series, window):
@@ -29,3 +32,19 @@ def test_percentile_rank_matches_previous_behavior_on_representative_series():
 def test_percentile_rank_preserves_none_and_warmup_semantics():
     series = [1, None, 2, 3, 4, 5, None, 6, 7]
     assert percentile_rank(series, 3) == _naive_percentile_rank(series, 3)
+
+
+def test_zscore_normalize_current_window_contract_is_explicit():
+    series = [1, 2, 3, 4, 5, 100]
+    window = 5
+
+    actual = zscore_normalize(series, window, clamp=False)[-1]
+    current_window = series[-window:]
+    prior_window = series[-window - 1 : -1]
+
+    assert actual == pytest.approx(
+        (series[-1] - mean(current_window)) / stdev(current_window)
+    )
+    assert actual != pytest.approx(
+        (series[-1] - mean(prior_window)) / stdev(prior_window)
+    )

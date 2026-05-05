@@ -37,6 +37,79 @@ def _make_bars(start_dt, count, hours, base=100.0):
     return bars
 
 
+def _source_block(src: str, start_marker: str, end_marker: str) -> str:
+    start = src.index(start_marker)
+    end = src.index(end_marker, start)
+    return src[start:end]
+
+
+def test_volatility_slippage_model_never_understates_legacy(monkeypatch):
+    bar = {"time": "2024-01-01T12:00:00+00:00", "open": 100.0, "close": 100.0, "atr": 5.0}
+    monkeypatch.setitem(
+        backtest_runner.CONFIG,
+        "BT_SLIPPAGE_MODEL",
+        {
+            "ENABLED": True,
+            "K1_TICK_MULT": 1.0,
+            "K2_ATR_IMPACT": 0.5,
+            "DEFAULT_QTY_ADV_RATIO": 0.04,
+            "MAX_SLIPPAGE_PCT": 0.10,
+        },
+    )
+
+    legacy = backtest_runner._BASE_BACKTEST_SLIP["stock"]
+    modeled = backtest_runner._get_slippage_for_bar(bar, "stock")
+
+    assert modeled > legacy
+
+
+def test_volatility_slippage_model_can_be_disabled(monkeypatch):
+    bar = {"time": "2024-01-01T12:00:00+00:00", "open": 100.0, "close": 100.0, "atr": 5.0}
+    monkeypatch.setitem(backtest_runner.CONFIG, "BT_SLIPPAGE_MODEL", {"ENABLED": False})
+
+    assert backtest_runner._get_slippage_for_bar(bar, "stock") == backtest_runner._BASE_BACKTEST_SLIP["stock"]
+
+
+def test_engine_a_backtest_indicator_windows_stop_before_fill_bar():
+    src = Path(backtest_runner.__file__).read_text(encoding="utf-8")
+    swing = _source_block(
+        src,
+        'if effective_style == "swing":',
+        'elif effective_style == "intraday":',
+    )
+    intraday = _source_block(
+        src,
+        'elif effective_style == "intraday":',
+        'elif effective_style == "scalp":',
+    )
+    scalp = _source_block(
+        src,
+        'elif effective_style == "scalp":',
+        "if not trades:",
+    )
+
+    assert "d1_window = d1_raw[i - MIN_BARS : i]" in swing
+    assert "calc_indicators_with_normalized(\n                        d1_window" in swing
+    assert "entry_bar = d1_raw[i]" in swing
+    assert swing.index("d1_window = d1_raw[i - MIN_BARS : i]") < swing.index(
+        "entry_bar = d1_raw[i]"
+    )
+
+    assert "h4_window = h4_raw[i - MIN_H4 : i]" in intraday
+    assert "calc_indicators_with_normalized(\n                        h4_window" in intraday
+    assert "entry_bar = h4_raw[i]" in intraday
+    assert intraday.index("h4_window = h4_raw[i - MIN_H4 : i]") < intraday.index(
+        "entry_bar = h4_raw[i]"
+    )
+
+    assert "h1_window = h1_raw[i - MIN_H1 : i]" in scalp
+    assert "calc_indicators_with_normalized(\n                        h1_window" in scalp
+    assert "entry_bar = h1_raw[i]" in scalp
+    assert scalp.index("h1_window = h1_raw[i - MIN_H1 : i]") < scalp.index(
+        "entry_bar = h1_raw[i]"
+    )
+
+
 def test_resolve_barrier_exit_prefers_sl_when_long_bar_hits_tp_and_sl():
     outcome, both_hit = backtest_runner._resolve_barrier_exit(
         {"high": 105.0, "low": 94.0},

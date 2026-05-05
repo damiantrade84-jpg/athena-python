@@ -235,6 +235,52 @@ def test_calculate_confidence_forex_adx_derives_regime_not_blocks_structure():
         config.CONFIG["ENGINE_B_FOREX_ADX_MIN"] = old_min
 
 
+def test_calculate_confidence_can_disable_structure_gate_for_bt_experiment_only():
+    res = _base_res_long()
+    res.update(
+        {
+            "current_swing_sequence": "LH_LL",
+            "macro_swing_sequence": "LH_LL",
+            "distance_to_res": 3.0,
+            "recommended_stop_loss": 99.0,
+            "recommended_take_profit": 103.0,
+        }
+    )
+
+    baseline = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+    disabled = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={
+            "min_room_atr": 0.35,
+            "min_rr": 1.0,
+            "require_macro_align": False,
+            "disable_structure_gate": True,
+        },
+    )
+
+    assert baseline["structure_ok"] is False
+    assert baseline["structure_gate_original_ok"] is False
+    assert baseline["structure_gate_disabled"] is False
+    assert disabled["structure_ok"] is True
+    assert disabled["structure_gate_original_ok"] is False
+    assert disabled["structure_gate_disabled"] is True
+    assert disabled["struct_points"] == pytest.approx(1.0)
+    assert ENGINE_B_REASON_SEQUENCE_COUNTER_TREND in disabled.get(
+        "engine_b_diagnostics", {}
+    ).get("reason_codes", [])
+
+
 def test_check_macro_correlation_detail_returns_reason_when_blocking():
     # Construct 60 bars: asset falls while DXY rises → negative correlation; last segment DXY up → block LONG
     rng = np.random.default_rng(42)

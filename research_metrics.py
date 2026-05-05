@@ -23,6 +23,7 @@ Notes:
 from __future__ import annotations
 
 import math
+import random
 from statistics import NormalDist
 from typing import Any
 
@@ -291,6 +292,63 @@ def probability_of_backtest_overfitting(
     }
 
 
+def bootstrap_confidence_intervals(
+    returns: list[float] | None,
+    *,
+    iterations: int = 1000,
+    seed: int = 1337,
+    trades_per_year: float | None = None,
+) -> dict[str, Any]:
+    """Bootstrap expectancy and Sharpe confidence intervals.
+
+    The resampling is deterministic by default so backtest summaries remain
+    reproducible. It is an i.i.d. bootstrap; exact stationary bootstrap is left
+    explicit in the assumptions until serial-correlation block lengths are
+    configured.
+    """
+    clean_returns = [float(x) for x in (returns or []) if _safe_float(x) is not None]
+    n = len(clean_returns)
+    reps = int(iterations or 0)
+    if n < 2 or reps <= 0:
+        return {
+            "available": False,
+            "iterations": max(0, reps),
+            "expectancyR": None,
+            "sharpe": None,
+            "assumptions": ["insufficient_inputs_for_bootstrap_ci"],
+        }
+
+    annualizer = math.sqrt(float(trades_per_year)) if trades_per_year and trades_per_year > 0 else 1.0
+    rng = random.Random(int(seed))
+    expectancy_samples: list[float] = []
+    sharpe_samples: list[float] = []
+
+    for _ in range(reps):
+        sample = [clean_returns[rng.randrange(n)] for _ in range(n)]
+        mean = sum(sample) / n
+        variance = sum((x - mean) ** 2 for x in sample) / (n - 1)
+        std = math.sqrt(variance) if variance > 0 else 0.0
+        expectancy_samples.append(mean)
+        sharpe_samples.append((mean / std) * annualizer if std > 0 else 0.0)
+
+    def _ci(values: list[float]) -> dict[str, float]:
+        values = sorted(values)
+        hi_idx = min(len(values) - 1, int(len(values) * 0.975))
+        return {
+            "p2_5": round(values[int(len(values) * 0.025)], 6),
+            "p50": round(values[int(len(values) * 0.50)], 6),
+            "p97_5": round(values[hi_idx], 6),
+        }
+
+    return {
+        "available": True,
+        "iterations": reps,
+        "expectancyR": _ci(expectancy_samples),
+        "sharpe": _ci(sharpe_samples),
+        "assumptions": ["iid_bootstrap_serial_correlation_not_preserved"],
+    }
+
+
 def build_research_metrics(
     returns: list[float] | None,
     *,
@@ -299,6 +357,8 @@ def build_research_metrics(
     out_of_sample_scores: list[float] | None = None,
     chosen_index: int | None = None,
     num_trials: int | None = None,
+    bootstrap_iterations: int = 1000,
+    trades_per_year: float | None = None,
 ) -> dict[str, Any]:
     """Build a single additive research-metrics payload for backtest summaries."""
     clean_returns = [float(x) for x in (returns or []) if _safe_float(x) is not None]
@@ -334,6 +394,13 @@ def build_research_metrics(
     if pbo.get("runtimeHeavy"):
         runtime_heavy.append("exact_cscv_pbo_not_run")
 
+    bootstrap_ci = bootstrap_confidence_intervals(
+        clean_returns,
+        iterations=bootstrap_iterations,
+        trades_per_year=trades_per_year,
+    )
+    assumptions.extend(bootstrap_ci.get("assumptions", []))
+
     return {
         "tradeCount": int(moments["count"] or 0),
         "sampleMoments": {
@@ -345,6 +412,7 @@ def build_research_metrics(
         "psr": psr,
         "dsr": dsr,
         "pbo": pbo,
+        "bootstrapCI": bootstrap_ci,
         "assumptions": assumptions,
         "runtimeHeavy": runtime_heavy,
     }
@@ -358,6 +426,8 @@ def enrich_backtest_summary(
     in_sample_scores: list[float] | None = None,
     out_of_sample_scores: list[float] | None = None,
     chosen_index: int | None = None,
+    bootstrap_iterations: int = 1000,
+    trades_per_year: float | None = None,
 ) -> dict[str, Any]:
     """Attach research metrics to an existing backtest summary.
 
@@ -383,5 +453,7 @@ def enrich_backtest_summary(
         in_sample_scores=in_sample_scores,
         out_of_sample_scores=out_of_sample_scores,
         chosen_index=chosen_index,
+        bootstrap_iterations=bootstrap_iterations,
+        trades_per_year=trades_per_year,
     )
     return out

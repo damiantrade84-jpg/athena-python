@@ -3128,6 +3128,10 @@ class NakedEngine:
             or res.get("bos_confirmed", False)
             or res.get("liquidity_sweep", False)
         )
+        structure_gate_original_ok = bool(structure_ok)
+        structure_gate_disabled = bool(profile.get("disable_structure_gate", False))
+        if structure_gate_disabled:
+            structure_ok = True
 
         # FIX 6: Remove ADX from Forex structure_ok
         # Use ADX for regime classification instead of blocking structure
@@ -3567,6 +3571,8 @@ class NakedEngine:
             "fallback_tp_reason": _exec_lvl["fallback_tp_reason"],
             "passed": passed,
             "structure_ok": structure_ok,
+            "structure_gate_original_ok": structure_gate_original_ok,
+            "structure_gate_disabled": structure_gate_disabled,
             "macro_ok": macro_ok,
             "zone_ok": zone_ok,
             "breakout_ok": breakout_ok,

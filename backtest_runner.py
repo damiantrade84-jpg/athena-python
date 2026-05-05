@@ -271,9 +271,53 @@ def _get_slippage_for_bar(bar: dict, ptype: str) -> float:
         if 0 <= h < 7 or h >= 22:
             return base * 1.8
         if 13 <= h < 16:
-            return base * 0.7
+            base = base * 0.7
 
-    return base
+    model = CONFIG.get("BT_SLIPPAGE_MODEL", {}) or {}
+    if not bool(model.get("ENABLED", False)):
+        return base
+
+    def _float_or_none(value):
+        try:
+            out = float(value)
+        except (TypeError, ValueError):
+            return None
+        return out if math.isfinite(out) and out > 0 else None
+
+    price = _float_or_none(bar.get("open", bar.get("close")))
+    atr = _float_or_none(bar.get("atr"))
+    if atr is None:
+        atr = _float_or_none(bar.get("ATR"))
+    qty_adv_ratio = _float_or_none(bar.get("qty_adv_ratio"))
+    if qty_adv_ratio is None:
+        qty = _float_or_none(bar.get("qty"))
+        adv = _float_or_none(bar.get("adv"))
+        if qty is not None and adv is not None:
+            qty_adv_ratio = qty / adv
+    if qty_adv_ratio is None:
+        qty_adv_ratio = _float_or_none(model.get("DEFAULT_QTY_ADV_RATIO")) or 0.0
+
+    k1 = _float_or_none(model.get("K1_TICK_MULT")) or 1.0
+    k2 = _float_or_none(model.get("K2_ATR_IMPACT")) or 0.0
+    cap = _float_or_none(model.get("MAX_SLIPPAGE_PCT")) or 0.05
+    impact = 0.0
+    if price and atr and qty_adv_ratio > 0:
+        impact = (atr / price) * k2 * math.sqrt(qty_adv_ratio)
+    return min(cap, max(base, (k1 * base) + impact))
+
+
+def _bar_with_slippage_context(bar: dict, *, atr: float | None = None) -> dict:
+    if atr is None:
+        return bar
+    try:
+        atr_f = float(atr)
+    except (TypeError, ValueError):
+        return bar
+    if not math.isfinite(atr_f) or atr_f <= 0:
+        return bar
+    out = dict(bar)
+    out["atr"] = atr_f
+    return out
 
 
 def _bt_transaction_cost_r(entry: float, sl: float, ptype: str) -> float:
@@ -1367,15 +1411,17 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             raw_entry = entry_bar.get("open", entry_bar["close"])
 
-            _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
-            slip = raw_entry * _get_slippage_for_bar(entry_bar, _ptype) * _slip_mult
-            entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
-
             atr = _rt().atr_for_levels(d1i, h4i, h1i, pair=pair, style=effective_style)
 
             if not atr or atr == 0:
                 i += 1
                 continue
+
+            _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
+            slip = raw_entry * _get_slippage_for_bar(
+                _bar_with_slippage_context(entry_bar, atr=atr), _ptype
+            ) * _slip_mult
+            entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
             # C4: Use shared calc_levels (deduplicates with analyze_pair)
 
@@ -1503,7 +1549,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     break
                 if _bar_outcome == "SL":
                     _sl_slip_r = (
-                        _get_slippage_for_bar(bar, _ptype) * sl / (atr * sl_mult)
+                        _get_slippage_for_bar(_bar_with_slippage_context(bar, atr=atr), _ptype) * sl / (atr * sl_mult)
                         if atr and sl_mult
                         else 0
                     )
@@ -1848,10 +1894,6 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             raw_entry = entry_bar.get("open", entry_bar["close"])
 
-            _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
-            slip = raw_entry * _get_slippage_for_bar(entry_bar, _ptype) * _slip_mult
-            entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
-
             atr = _rt().atr_for_levels(
                 d1i_ctx, h4i, h1i, pair=pair, style=effective_style
             )
@@ -1859,6 +1901,12 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             if not atr or atr == 0:
                 i += 1
                 continue
+
+            _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
+            slip = raw_entry * _get_slippage_for_bar(
+                _bar_with_slippage_context(entry_bar, atr=atr), _ptype
+            ) * _slip_mult
+            entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
             _bt_regime_state2 = (
                 res.get("regime", {}).get("state") if res.get("regime") else None
@@ -1978,7 +2026,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     break
                 if _bar_outcome == "SL":
                     _sl_slip_r = (
-                        _get_slippage_for_bar(bar, _ptype) * sl / (atr * sl_mult)
+                        _get_slippage_for_bar(_bar_with_slippage_context(bar, atr=atr), _ptype) * sl / (atr * sl_mult)
                         if atr and sl_mult
                         else 0
                     )
@@ -2307,10 +2355,6 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             raw_entry = entry_bar.get("open", entry_bar["close"])
 
-            _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
-            slip = raw_entry * _get_slippage_for_bar(entry_bar, _ptype) * _slip_mult
-            entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
-
             atr = _rt().atr_for_levels(
                 d1i_ctx, h4i_ctx, h1i, pair=pair, style=effective_style
             )
@@ -2318,6 +2362,12 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             if not atr or atr == 0:
                 i += 1
                 continue
+
+            _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
+            slip = raw_entry * _get_slippage_for_bar(
+                _bar_with_slippage_context(entry_bar, atr=atr), _ptype
+            ) * _slip_mult
+            entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
             _bt_regime_state3 = (
                 res.get("regime", {}).get("state") if res.get("regime") else None
@@ -2437,7 +2487,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     break
                 if _bar_outcome == "SL":
                     _sl_slip_r = (
-                        _get_slippage_for_bar(bar, _ptype) * sl / (atr * sl_mult)
+                        _get_slippage_for_bar(_bar_with_slippage_context(bar, atr=atr), _ptype) * sl / (atr * sl_mult)
                         if atr and sl_mult
                         else 0
                     )
@@ -2983,6 +3033,9 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     research_metrics = build_research_metrics(
         r_values,
         observed_sharpe=sharpe,
+        num_trials=int(CONFIG.get("BT_NUM_VARIANTS_TRIED", 1) or 1),
+        bootstrap_iterations=int(CONFIG.get("BT_BOOTSTRAP_CI_ITERATIONS", 1000) or 0),
+        trades_per_year=_trades_per_year,
     )
     meta_summary = meta_report(
         {
@@ -3339,6 +3392,8 @@ def _format_backtest_results(
         in_sample_scores=is_vals,
         out_of_sample_scores=oos_vals,
         chosen_index=0,
+        num_trials=int(CONFIG.get("BT_NUM_VARIANTS_TRIED", 1) or 1),
+        bootstrap_iterations=int(CONFIG.get("BT_BOOTSTRAP_CI_ITERATIONS", 1000) or 0),
     )
 
 
@@ -3511,6 +3566,15 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
     resolved_style, style_profile = _rt().naked_scan_style_profile(
         requested_style, score_group=_pair_score_group
     )
+    _bt_structure_gate_enabled = bool(CONFIG.get("ENGINE_B_BT_STRUCTURE_GATE_ENABLED", True))
+    if not _bt_structure_gate_enabled:
+        style_profile = dict(style_profile)
+        style_profile["disable_structure_gate"] = True
+        log.warning(
+            "[ENGINE B BT] %s structure gate DISABLED for backtest experiment "
+            "(ENGINE_B_BT_STRUCTURE_GATE_ENABLED=false)",
+            pair.get("display"),
+        )
     _pair_type = pair.get("type", "stock")
     _zone_tf = style_profile.get("zone_tf", "H4")
     _entry_tf = style_profile.get("entry_tf", "H1")
@@ -3528,6 +3592,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         "fail_passed":    0,
         "fail_room":      0,
         "fail_macro":     0,
+        "structure_original_miss": 0,
         "passed_gate":    0,
     }
     log.info(
@@ -3740,6 +3805,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 regime_label,
                 pair.get("type", ""),
             )
+            if conf_data.get("structure_gate_original_ok") is False:
+                _b_funnel["structure_original_miss"] += 1
             if not _gate_ok:
                 _cd = conf_data
                 if not _cd.get("structure_ok"):
@@ -3839,7 +3906,9 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         raw_entry = float(entry_bar.get("open", entry_bar["close"]))
         _ptype = pair.get("type", "stock")
         _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
-        slip = raw_entry * _get_slippage_for_bar(entry_bar, _ptype) * _slip_mult
+        slip = raw_entry * _get_slippage_for_bar(
+            _bar_with_slippage_context(entry_bar, atr=atr), _ptype
+        ) * _slip_mult
         entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
         
         # Synchronize future_window to the correct H4 starting position
@@ -4172,6 +4241,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         f"| score_fail={_b_funnel['fail_score']} ({_b_funnel['fail_score']/_b_total*100:.1f}%) "
         f"| passed_fail={_b_funnel['fail_passed']} ({_b_funnel['fail_passed']/_b_total*100:.1f}%) "
         f"| room_miss={_b_funnel['fail_room']} ({_b_funnel['fail_room']/_b_total*100:.1f}%) "
+        f"| struct_original_miss={_b_funnel['structure_original_miss']} "
+        f"({_b_funnel['structure_original_miss']/_b_total*100:.1f}%) "
         f"| passed_gate={_b_funnel['passed_gate']} ({_b_funnel['passed_gate']/_b_total*100:.1f}%)"
     )
     if "error" not in result:
@@ -4179,6 +4250,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
     if "error" not in result:
         result["btStyle"] = resolved_style
         result["btStyleRequested"] = requested_style
+        result["btStructureGateEnabled"] = _bt_structure_gate_enabled
         try:
             import sqlite3 as _sq
 
@@ -4669,7 +4741,9 @@ def backtest_pair_consensus(
         entry_bar = candles_h4[i + 1]
         raw_entry = float(entry_bar.get("open", entry_bar["close"]))
         _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
-        slip = raw_entry * _get_slippage_for_bar(entry_bar, _ptype) * _slip_mult
+        slip = raw_entry * _get_slippage_for_bar(
+            _bar_with_slippage_context(entry_bar, atr=atr), _ptype
+        ) * _slip_mult
         entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
         _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)

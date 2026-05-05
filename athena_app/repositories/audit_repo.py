@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from sqlite_instrumentation import timed_sqlite_connect, timed_sqlite_execute_write
+
 
 def insert_manual_error(
     audit_db: str,
@@ -37,8 +39,9 @@ def insert_manual_error(
         source_function="insert_manual_error",
     )
     
-    with sqlite3.connect(audit_db, timeout=15.0) as con:
-        con.execute(
+    with timed_sqlite_connect(audit_db, timeout=15.0, label="audit_repo.manual_error.connect") as con:
+        timed_sqlite_execute_write(
+            con,
             "INSERT INTO audit_log("
             "ts,pair,score,direction,style,grade,error_tag,"
             "entry_price,sl,tp,volume,risk_amount,risk_pct,warnings_json"
@@ -59,6 +62,7 @@ def insert_manual_error(
                 risk_pct,
                 json.dumps(telemetry),
             ),
+            label="audit_repo.manual_error.insert",
         )
 
 

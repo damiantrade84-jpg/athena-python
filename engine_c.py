@@ -606,6 +606,24 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
         return consensus
 
     updated = dict(consensus)
+    try:
+        from ai_reconciliation import arbitrate_ai
+
+        _ai_decision = arbitrate_ai({"vision": vision_result}, require_trace_id=False)
+        updated["ai_arbitration"] = _ai_decision
+        _vision_state = (_ai_decision.get("source_states") or {}).get("vision") or {}
+        if _vision_state.get("category") in ("invalid", "failure"):
+            updated["trade"] = False
+            updated["verdict"] = _ai_decision.get("reason", "VISION_AI_BLOCK")
+            updated["tier"] = "SKIP"
+            updated["sizing_override"] = 0.0
+            updated["decision_state"] = "blocked"
+            updated["vision_applied"] = True
+            updated["vision_action"] = "block"
+            updated["vision_rating"] = _vision_state.get("raw") or "INVALID"
+            return updated
+    except Exception as _arb_err:
+        log.debug("[AI_ARBITRATION] Vision arbitration skipped: %s", _arb_err)
 
     # Parse structured data if available
     structured = vision_result.get("structured") or {}

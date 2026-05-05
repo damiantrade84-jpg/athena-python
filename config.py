@@ -248,6 +248,11 @@ CONFIG: dict = {
     "NEWS_SENTIMENT_MODEL": os.environ.get("NEWS_SENTIMENT_MODEL", _AI_MODEL_DEFAULT),
     "AI_REQUEST_TIMEOUT_SEC": 30.0,
     "MARCUS_AI_TIMEOUT_SEC": 30.0,
+    "AI_PROMPT_STORE_CLEANUP_ENABLED": True,
+    "AI_PROMPT_STORE_RETENTION_DAYS": 90,
+    "AI_PROMPT_STORE_MIN_DELETE_AGE_DAYS": 7,
+    "AI_PROMPT_STORE_MAX_BYTES": 1073741824,
+    "AI_PROMPT_STORE_CLEANUP_INTERVAL_SEC": 86400,
     "NEWS_SENTIMENT_CONFLUENCE_ENABLED": False,
     "NEWS_SENTIMENT_CACHE_TTL_SEC": 900,
     "NEWS_SENTIMENT_SCORE_IMPACT": 0.06,
@@ -269,6 +274,15 @@ CONFIG: dict = {
     "DAILY_LOSS_LIMIT": 0.05,  # Kill switch: halt trading after losing 5% of account in a day
     "VOLUME_THRESHOLD": 1.5,
     "VOLUME_THRESHOLD_BACKTEST": 1.2,
+    "BT_NUM_VARIANTS_TRIED": 1,
+    "BT_BOOTSTRAP_CI_ITERATIONS": 1000,
+    "BT_SLIPPAGE_MODEL": {
+        "ENABLED": True,
+        "K1_TICK_MULT": 1.0,
+        "K2_ATR_IMPACT": 0.10,
+        "DEFAULT_QTY_ADV_RATIO": 0.001,
+        "MAX_SLIPPAGE_PCT": 0.01,
+    },
     "ADX_TREND_MIN": 25,
     # analyze_pair: fetch then drop last (forming) bar. H4/H1 align with /api/candles max (1000).
     # D1=1001 so closed D1 bars after drop ≈1000; tune in config.yaml. Lower = faster scans, chart diverges.
@@ -690,8 +704,18 @@ CONFIG: dict = {
     "BT_AUTO_TOGGLE": False,  # If False, backtest will never enable/disable live pairs
     "BT_PERCENTILE_FILTER": False,  # If False, disable rolling percentile floor in backtest
     # ── Execution engine ────────────────────────────────────────────────────
+    "REAL_ORDERS_ALLOWED": False,
+    "PAPER_SOAK": {
+        "ENABLED": True,
+        "REAL_ORDERS_ALLOWED": False,
+    },
+    "EXECUTOR_MODE": "paper",
     "EXECUTION_ENABLED": True,  # Master switch — enabled for demo live-level testing
     "AUTO_EXECUTE": False,  # Auto-execute after AI grade (manual click only when False)
+    "RISK_ENGINE_ENABLED": True,
+    "MT5_EXECUTION_ENABLED": True,
+    "BYBIT_EXECUTION_ENABLED": True,
+    "BYBIT_LEVERAGE": 1,
     # eToro adapter scaffold (default-safe/off; no live wiring by default)
     "ETORO": {
         "ENABLED": False,
@@ -916,6 +940,60 @@ CONFIG: dict = {
 }
 
 # Apply YAML overrides — deep-merge dicts, overwrite scalars
+_CONFIG_DEFAULT_KEYS = set(CONFIG.keys())
+_KNOWN_YAML_ONLY_KEYS = {
+    "ADAPTIVE_KELLY_ENABLED",
+    "ADAPTIVE_WEIGHTS_ENABLED",
+    "AUTO_EXIT_ON_DECAY",
+    "BACKTEST_DISABLE_HURST_GATE",
+    "BACKTEST_MAX_WORKERS",
+    "BT_VECTORIZED",
+    "CONDUCTOR",
+    "CONFIDENCE_THRESHOLD",
+    "CRYPTO_TRANSITION_PENALTY",
+    "ENGINE_A_MEAN_REVERSION",
+    "ENGINE_A_RESEARCH_LAB_FACTORS",
+    "ENGINE_B_BT_SL_MODE",
+    "ENGINE_B_BT_STRUCTURE_GATE_ENABLED",
+    "ENGINE_B_CRYPTO_MAX_TARGET_ATR_MULTIPLE",
+    "ENGINE_B_CRYPTO_MIN_TARGET_ATR_MULTIPLE",
+    "ENGINE_B_CRYPTO_REQUIRE_CLEAR_PATH_TO_TP2",
+    "ENGINE_B_CRYPTO_TARGET_MODE",
+    "ENGINE_B_CRYPTO_TP1_MODE",
+    "ENGINE_B_CRYPTO_TP2_MODE",
+    "ENGINE_B_FOLLOW_THROUGH",
+    "ENGINE_B_FOREX_ADX_MIN",
+    "ENGINE_B_FOREX_STRUCTURE_TF",
+    "ENGINE_B_RESEARCH_LAB_FACTORS",
+    "ENGINE_B_STRUCTURE_GATE_ENABLED",
+    "ENGINE_C_AI_WEIGHT_ADJUST_ENABLED",
+    "ENGINE_C_AI_WEIGHT_MAX",
+    "ENGINE_C_AI_WEIGHT_MIN",
+    "ENGINE_C_AI_WEIGHT_VERDICT_ENABLED",
+    "ENGINE_C_META_BLEND",
+    "FACTOR_ADX_HARD_FAIL_CLASS",
+    "FACTOR_CONVICTION_FLOOR",
+    "FACTOR_FUNDING_BASELINE",
+    "FACTOR_FUNDING_NOISE_BAND",
+    "FOREX_SESSION_FILTER",
+    "FUNDAMENTALS_ENABLED",
+    "INSIDER_TRADING_ENABLED",
+    "INTERMARKET_CONFIRMATION",
+    "KELLY_FRACTION",
+    "LIVE_DASHBOARD",
+    "MIN_CONFLUENCE_CLASS",
+    "NAKED_MAX_DAILY",
+    "NEWS_BG_INTERVAL_SEC",
+    "NEWS_PAIR_CACHE_TTL_SEC",
+    "POSITION_SIZE_CONFIDENCE_SCALING",
+    "SCALP_ENGINE",
+    "SERVER_TZ_OFFSET_HOURS",
+    "TELEGRAM",
+    "THRESHOLD_AUDIT",
+    "TIMED_EXIT",
+    "VISION_MODIFIERS",
+}
+
 for _k, _v in _yaml_overrides.items():
     if _k in CONFIG and isinstance(CONFIG[_k], dict) and isinstance(_v, dict):
         CONFIG[_k] = _deep_merge_dict(CONFIG[_k], _v)
@@ -1015,6 +1093,7 @@ class AITemperatureConfig:
 
 def validate_config(cfg: dict) -> None:
     """Warn on mis-typed or dangerous CONFIG values after YAML overrides are applied."""
+    _report_unknown_top_level_config_keys(_yaml_overrides)
     for k in (
         "RISK_PCT",
         "SL_ATR_MULT",
@@ -1117,6 +1196,172 @@ class ConfigValidationError(SystemExit):
     pass
 
 
+_MISSING = object()
+_REAL_ORDER_CONFIRM_ENV = "ATHENA_REAL_ORDERS_CONFIRM"
+_REAL_ORDER_CONFIRM_TOKEN = "I_UNDERSTAND_REAL_ORDER_RISK"
+
+
+def _unknown_top_level_config_keys(
+    yaml_overrides: dict | None,
+    known_keys: set[str] | None = None,
+) -> list[str]:
+    """Return YAML top-level keys that have no default/schema entry."""
+    if not isinstance(yaml_overrides, dict):
+        return []
+    known = known_keys or (_CONFIG_DEFAULT_KEYS | _KNOWN_YAML_ONLY_KEYS)
+    return sorted(str(k) for k in yaml_overrides if k not in known)
+
+
+def _report_unknown_top_level_config_keys(
+    yaml_overrides: dict | None,
+    known_keys: set[str] | None = None,
+) -> list[str]:
+    unknown = _unknown_top_level_config_keys(yaml_overrides, known_keys)
+    if unknown:
+        log.warning(
+            "[CFG] Unknown top-level config key(s) accepted without schema defaults: %s",
+            ", ".join(unknown),
+        )
+    return unknown
+
+
+def _get_config_path(cfg: dict, path: tuple[str, ...]):
+    cur = cfg
+    for part in path:
+        if not isinstance(cur, dict) or part not in cur:
+            return _MISSING
+        cur = cur[part]
+    return cur
+
+
+def _path_label(path: tuple[str, ...]) -> str:
+    return ".".join(path)
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+_CRITICAL_SAFETY_SCHEMA: dict[tuple[str, ...], dict] = {
+    ("REAL_ORDERS_ALLOWED",): {"type": "bool"},
+    ("PAPER_SOAK",): {"type": "dict"},
+    ("PAPER_SOAK", "ENABLED"): {"type": "bool"},
+    ("PAPER_SOAK", "REAL_ORDERS_ALLOWED"): {"type": "bool"},
+    ("EXECUTOR_MODE",): {"type": "enum", "allowed": {"paper", "demo", "live"}},
+    ("EXECUTION_ENABLED",): {"type": "bool"},
+    ("AUTO_EXECUTE",): {"type": "bool"},
+    ("AUTO_TRADE_ENABLED",): {"type": "bool"},
+    ("RISK_ENGINE_ENABLED",): {"type": "bool", "must_be": True},
+    ("MT5_EXECUTION_ENABLED",): {"type": "bool"},
+    ("BYBIT_EXECUTION_ENABLED",): {"type": "bool"},
+    ("BYBIT_LEVERAGE",): {"type": "int", "min": 1, "max": 1},
+    ("RISK_PCT",): {"type": "number", "min": 0.0, "max": 0.05},
+    ("MAX_RISK_PER_TRADE",): {"type": "number", "min": 0.0, "max": 0.05},
+    ("MAX_PORTFOLIO_HEAT",): {"type": "number", "min": 0.0, "max": 0.30},
+    ("MAX_OPEN_POSITIONS",): {"type": "int", "min": 0, "max": 100},
+    ("MAX_CORRELATED_POSITIONS",): {"type": "int", "min": 0, "max": 20},
+    ("DAILY_LOSS_LIMIT",): {"type": "number", "min": 0.0, "max": 0.20},
+    ("DRAWDOWN_REDUCE_THRESHOLD",): {"type": "number", "min": 0.0, "max": 1.0},
+    ("DRAWDOWN_STOP_THRESHOLD",): {"type": "number", "min": 0.0, "max": 1.0},
+}
+
+
+def _critical_safety_config_errors(
+    cfg: dict,
+    *,
+    env: dict | None = None,
+) -> list[str]:
+    """Validate critical trading-safety config keys without modeling the full config."""
+    errors: list[str] = []
+    if not isinstance(cfg, dict):
+        return ["CONFIG must be a dict"]
+
+    for path, rule in _CRITICAL_SAFETY_SCHEMA.items():
+        label = _path_label(path)
+        value = _get_config_path(cfg, path)
+        if value is _MISSING:
+            errors.append(f"{label} is required")
+            continue
+        typ = rule["type"]
+        if typ == "dict":
+            if not isinstance(value, dict):
+                errors.append(f"{label} must be a dict, got {type(value).__name__}")
+            continue
+        if typ == "bool":
+            if not isinstance(value, bool):
+                errors.append(f"{label} must be bool, got {type(value).__name__}")
+                continue
+            if "must_be" in rule and value is not rule["must_be"]:
+                errors.append(f"{label} must be {rule['must_be']!r}")
+            continue
+        if typ == "int":
+            if not isinstance(value, int) or isinstance(value, bool):
+                errors.append(f"{label} must be int, got {type(value).__name__}")
+                continue
+            if "min" in rule and value < rule["min"]:
+                errors.append(f"{label}={value} is below minimum {rule['min']}")
+            if "max" in rule and value > rule["max"]:
+                errors.append(f"{label}={value} exceeds maximum {rule['max']}")
+            continue
+        if typ == "number":
+            if not _is_number(value):
+                errors.append(f"{label} must be number, got {type(value).__name__}")
+                continue
+            if "min" in rule and value < rule["min"]:
+                errors.append(f"{label}={value} is below minimum {rule['min']}")
+            if "max" in rule and value > rule["max"]:
+                errors.append(f"{label}={value} exceeds maximum {rule['max']}")
+            continue
+        if typ == "enum":
+            if not isinstance(value, str):
+                errors.append(f"{label} must be string enum, got {type(value).__name__}")
+                continue
+            normalized = value.strip().lower()
+            if normalized not in rule["allowed"]:
+                allowed = ", ".join(sorted(rule["allowed"]))
+                errors.append(f"{label}={value!r} must be one of: {allowed}")
+
+    reduce_threshold = _get_config_path(cfg, ("DRAWDOWN_REDUCE_THRESHOLD",))
+    stop_threshold = _get_config_path(cfg, ("DRAWDOWN_STOP_THRESHOLD",))
+    if _is_number(reduce_threshold) and _is_number(stop_threshold):
+        if stop_threshold <= reduce_threshold:
+            errors.append(
+                "DRAWDOWN_STOP_THRESHOLD must be greater than DRAWDOWN_REDUCE_THRESHOLD"
+            )
+
+    env_map = env if env is not None else os.environ
+    real_orders_allowed = bool(cfg.get("REAL_ORDERS_ALLOWED", False))
+    paper_soak = cfg.get("PAPER_SOAK") if isinstance(cfg.get("PAPER_SOAK"), dict) else {}
+    nested_real_orders_allowed = bool(paper_soak.get("REAL_ORDERS_ALLOWED", False))
+    executor_mode = str(cfg.get("EXECUTOR_MODE", "paper") or "paper").strip().lower()
+    paper_mode_disabled = paper_soak.get("ENABLED") is False
+    unsafe_live_mode = (
+        real_orders_allowed
+        or nested_real_orders_allowed
+        or executor_mode == "live"
+        or paper_mode_disabled
+    )
+    if unsafe_live_mode:
+        token = str(env_map.get(_REAL_ORDER_CONFIRM_ENV, "") or "").strip()
+        if token != _REAL_ORDER_CONFIRM_TOKEN:
+            errors.append(
+                f"Unsafe live/real-order mode requires {_REAL_ORDER_CONFIRM_ENV}="
+                f"{_REAL_ORDER_CONFIRM_TOKEN!r}"
+            )
+
+    return errors
+
+
+def _validate_critical_safety_config(cfg: dict, *, env: dict | None = None) -> None:
+    errors = _critical_safety_config_errors(cfg, env=env)
+    if errors:
+        for e in errors:
+            log.critical("CONFIG_SAFETY_FATAL: %s", e)
+        raise ConfigValidationError(
+            f"System refused to start due to {len(errors)} critical safety config error(s)."
+        )
+
+
 def _fatal_config_validation(cfg: dict) -> None:
     """Fatal assertions — system refuses to start if any fail.
 
@@ -1129,6 +1374,10 @@ def _fatal_config_validation(cfg: dict) -> None:
       6. Definition guards: max_possible defined for Engine B
     """
     errors: list[str] = []
+    try:
+        _validate_critical_safety_config(cfg)
+    except ConfigValidationError as exc:
+        errors.append(str(exc))
 
     # 1. Threshold consistency (scoring.py tiers — hardcoded to avoid circular import)
     _TIER_VOLATILE = 2.0

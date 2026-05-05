@@ -24,6 +24,7 @@ import hashlib
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -35,6 +36,11 @@ _PROMPT_CA_DIR = os.environ.get(
 _VISION_IMG_DIR = os.environ.get(
     "VISION_IMAGE_STORE_DIR", os.path.join(_LOG_DIR, "vision_images")
 )
+_DEFAULT_PROMPT_STORE_RETENTION_DAYS = 90
+_DEFAULT_PROMPT_STORE_MIN_DELETE_AGE_DAYS = 7
+_DEFAULT_PROMPT_STORE_MAX_BYTES = 1024 * 1024 * 1024
+_DEFAULT_PROMPT_STORE_CLEANUP_INTERVAL_SEC = 24 * 60 * 60
+_prompt_store_last_cleanup_ts = 0.0
 
 log = logging.getLogger("athena.ai_review")
 
@@ -84,6 +90,147 @@ def _serialize_input_packet(input_packet: Any) -> str:
         return str(input_packet)
 
 
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _prompt_store_cleanup_config(config: dict[str, Any] | None = None) -> dict[str, int | bool]:
+    cfg = config
+    if cfg is None:
+        try:
+            from config import CONFIG
+
+            cfg = CONFIG
+        except Exception:
+            cfg = {}
+    cfg = cfg or {}
+    return {
+        "enabled": bool(cfg.get("AI_PROMPT_STORE_CLEANUP_ENABLED", True)),
+        "retention_days": _positive_int(
+            cfg.get("AI_PROMPT_STORE_RETENTION_DAYS"),
+            _DEFAULT_PROMPT_STORE_RETENTION_DAYS,
+        ),
+        "min_delete_age_days": _positive_int(
+            cfg.get("AI_PROMPT_STORE_MIN_DELETE_AGE_DAYS"),
+            _DEFAULT_PROMPT_STORE_MIN_DELETE_AGE_DAYS,
+        ),
+        "max_bytes": _positive_int(
+            cfg.get("AI_PROMPT_STORE_MAX_BYTES"),
+            _DEFAULT_PROMPT_STORE_MAX_BYTES,
+        ),
+        "interval_sec": _positive_int(
+            cfg.get("AI_PROMPT_STORE_CLEANUP_INTERVAL_SEC"),
+            _DEFAULT_PROMPT_STORE_CLEANUP_INTERVAL_SEC,
+        ),
+    }
+
+
+def cleanup_prompt_store(
+    *,
+    store_dir: str | None = None,
+    retention_days: int | None = None,
+    max_bytes: int | None = None,
+    min_delete_age_days: int | None = None,
+    now: float | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Delete old prompt-store files conservatively; never deletes recent files."""
+    cfg = _prompt_store_cleanup_config()
+    root = os.path.abspath(store_dir or _PROMPT_CA_DIR)
+    retention = _positive_int(retention_days, int(cfg["retention_days"]))
+    min_age = _positive_int(min_delete_age_days, int(cfg["min_delete_age_days"]))
+    retention = max(retention, min_age)
+    max_size = _positive_int(max_bytes, int(cfg["max_bytes"]))
+    now_ts = float(now if now is not None else time.time())
+    ttl_cutoff = now_ts - (retention * 86400)
+    size_cutoff = now_ts - (min_age * 86400)
+    result = {
+        "store_dir": root,
+        "dry_run": dry_run,
+        "scanned_files": 0,
+        "removed_files": 0,
+        "removed_bytes": 0,
+        "kept_files": 0,
+        "kept_bytes": 0,
+        "errors": [],
+    }
+    if not os.path.isdir(root):
+        return result
+
+    files: list[dict[str, Any]] = []
+    for dirpath, _, filenames in os.walk(root):
+        for filename in filenames:
+            path = os.path.abspath(os.path.join(dirpath, filename))
+            try:
+                if os.path.commonpath([root, path]) != root:
+                    continue
+                if os.path.islink(path) or not os.path.isfile(path):
+                    continue
+                stat = os.stat(path)
+                files.append({"path": path, "mtime": stat.st_mtime, "size": stat.st_size})
+            except Exception as exc:
+                result["errors"].append(f"{path}: {exc}")
+
+    result["scanned_files"] = len(files)
+    total_bytes = sum(int(item["size"]) for item in files)
+    to_remove: dict[str, dict[str, Any]] = {}
+    for item in files:
+        if float(item["mtime"]) < ttl_cutoff:
+            to_remove[item["path"]] = item
+
+    projected_bytes = total_bytes - sum(int(item["size"]) for item in to_remove.values())
+    if projected_bytes > max_size:
+        size_candidates = [
+            item
+            for item in files
+            if item["path"] not in to_remove and float(item["mtime"]) < size_cutoff
+        ]
+        for item in sorted(size_candidates, key=lambda x: float(x["mtime"])):
+            if projected_bytes <= max_size:
+                break
+            to_remove[item["path"]] = item
+            projected_bytes -= int(item["size"])
+
+    for path, item in sorted(to_remove.items()):
+        try:
+            if not dry_run:
+                os.remove(path)
+            result["removed_files"] += 1
+            result["removed_bytes"] += int(item["size"])
+        except Exception as exc:
+            result["errors"].append(f"{path}: {exc}")
+
+    result["kept_files"] = max(0, result["scanned_files"] - result["removed_files"])
+    result["kept_bytes"] = max(0, total_bytes - result["removed_bytes"])
+    return result
+
+
+def maybe_cleanup_prompt_store(*, now: float | None = None) -> dict[str, Any] | None:
+    """Best-effort throttled prompt-store janitor."""
+    global _prompt_store_last_cleanup_ts
+    cfg = _prompt_store_cleanup_config()
+    if not cfg["enabled"]:
+        return None
+    now_ts = float(now if now is not None else time.time())
+    if now_ts - _prompt_store_last_cleanup_ts < int(cfg["interval_sec"]):
+        return None
+    _prompt_store_last_cleanup_ts = now_ts
+    try:
+        return cleanup_prompt_store(
+            retention_days=int(cfg["retention_days"]),
+            max_bytes=int(cfg["max_bytes"]),
+            min_delete_age_days=int(cfg["min_delete_age_days"]),
+            now=now_ts,
+        )
+    except Exception as exc:
+        log.warning("[AI_AUDIT] prompt store cleanup failed: %s", exc)
+        return {"errors": [str(exc)]}
+
+
 def store_prompt_content(prompt_text: str) -> tuple[str, str]:
     """Write prompt text to content-addressable storage; return (sha256_hex, relative_key)."""
     raw = prompt_text or ""
@@ -95,6 +242,7 @@ def store_prompt_content(prompt_text: str) -> tuple[str, str]:
         if not os.path.exists(storage_path):
             with open(storage_path, "w", encoding="utf-8") as wf:
                 wf.write(raw)
+        maybe_cleanup_prompt_store()
     except Exception as _e:
         log.warning("[AI_AUDIT] prompt CAS write failed: %s", _e)
     rel_key = "/".join(rel_parts)

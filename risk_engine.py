@@ -17,6 +17,12 @@ from datetime import datetime, timezone
 from config import CONFIG
 from athena_app.services.data_freshness import evaluate_execution_data_freshness
 from scoring import CORR_CLUSTERS, _PAIR_TO_CLUSTER
+from sqlite_instrumentation import (
+    timed_sqlite_connect,
+    timed_sqlite_commit,
+    timed_sqlite_execute_write,
+    timed_sqlite_executemany_write,
+)
 
 log = logging.getLogger("sentinel")
 
@@ -97,8 +103,10 @@ _PEAK_AUDIT_BATCH_MAX = 32
 def _init_peak_table():
     """Create peak_equity table if it doesn't exist; migrate legacy single-row schema."""
     try:
-        with sqlite3.connect(_RISK_DB, timeout=15.0) as con:
-            con.execute("PRAGMA journal_mode=WAL")
+        with timed_sqlite_connect(_RISK_DB, timeout=15.0, label="risk.peak_init.connect") as con:
+            timed_sqlite_execute_write(
+                con, "PRAGMA journal_mode=WAL", label="risk.peak_init.wal"
+            )
             cur = con.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='peak_equity'"
             ).fetchone()
@@ -108,15 +116,19 @@ def _init_peak_table():
                     for r in con.execute("PRAGMA table_info(peak_equity)").fetchall()
                 ]
                 if "id" in cols and "asset_type" not in cols:
-                    con.execute("DROP TABLE peak_equity")
+                    timed_sqlite_execute_write(
+                        con, "DROP TABLE peak_equity", label="risk.peak_init.drop_legacy"
+                    )
                     log.info(
                         "[RISK] Migrated peak_equity to per–asset-class schema (legacy row dropped)"
                     )
-            con.execute(
+            timed_sqlite_execute_write(
+                con,
                 "CREATE TABLE IF NOT EXISTS peak_equity ("
-                "asset_type TEXT PRIMARY KEY, value REAL NOT NULL, updated_at TEXT NOT NULL)"
+                "asset_type TEXT PRIMARY KEY, value REAL NOT NULL, updated_at TEXT NOT NULL)",
+                label="risk.peak_init.create",
             )
-            con.commit()
+            timed_sqlite_commit(con, label="risk.peak_init.commit")
     except Exception as e:
         log.error(f"[RISK] Failed to init peak_equity table: {e}")
 
@@ -125,7 +137,7 @@ def _load_peak_equity() -> dict[str, float]:
     """Restore per–account-domain peak equity from SQLite on startup."""
     out: dict[str, float] = {}
     try:
-        with sqlite3.connect(_RISK_DB, timeout=15.0) as con:
+        with timed_sqlite_connect(_RISK_DB, timeout=15.0, label="risk.peak_load.connect") as con:
             rows = con.execute(
                 "SELECT asset_type, value, updated_at FROM peak_equity"
             ).fetchall()
@@ -163,9 +175,13 @@ def _peak_audit_worker_loop() -> None:
                     continue
                 rows.append(row)
             if rows:
-                with sqlite3.connect(_RISK_DB, timeout=15.0) as con:
-                    con.executemany(_PEAK_UPSERT_SQL, rows)
-                    con.commit()
+                with timed_sqlite_connect(
+                    _RISK_DB, timeout=15.0, label="risk.peak_worker.connect"
+                ) as con:
+                    timed_sqlite_executemany_write(
+                        con, _PEAK_UPSERT_SQL, rows, label="risk.peak_worker.upsert"
+                    )
+                    timed_sqlite_commit(con, label="risk.peak_worker.commit")
         except Exception as e:
             log.warning(f"[RISK] peak equity worker batch failed: {e}")
         finally:
@@ -370,7 +386,7 @@ def _adaptive_risk_pct(asset_type: str, regime: str = "") -> float:
             return _cached[0]
 
         db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
-        con = sqlite3.connect(db_path, timeout=15.0)
+        con = timed_sqlite_connect(db_path, timeout=15.0, label="risk.kelly.connect")
         con.execute("PRAGMA journal_mode=WAL")
         con.row_factory = sqlite3.Row
 

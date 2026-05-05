@@ -506,6 +506,27 @@ VOLUME_THRESHOLD_BACKTEST: 1.2
 
 
 
+# Backtest statistical reporting and transaction-cost assumptions.
+# BT_NUM_VARIANTS_TRIED feeds Deflated Sharpe; increase it when comparing many
+# strategy/config variants in a research run.
+BT_NUM_VARIANTS_TRIED: 1
+
+BT_BOOTSTRAP_CI_ITERATIONS: 1000
+
+BT_SLIPPAGE_MODEL:
+
+  ENABLED: true
+
+  K1_TICK_MULT: 1.0
+
+  K2_ATR_IMPACT: 0.10
+
+  DEFAULT_QTY_ADV_RATIO: 0.001
+
+  MAX_SLIPPAGE_PCT: 0.01
+
+
+
 # Round-trip fee per trade as fraction of notional (entry + exit commission)
 
 # Bybit taker 0.055% × 2 sides = 0.11%; forex ECN ~0.02% × 2 = 0.04%
@@ -706,6 +727,13 @@ NEWS_SENTIMENT_MODEL: "grok-4.3"  # News AI text; defaults to AI_MODEL if empty 
 # Default OpenAI-compatible SDK read timeout is much longer; keep advisory AI bounded.
 AI_REQUEST_TIMEOUT_SEC: 30
 MARCUS_AI_TIMEOUT_SEC: 30
+
+# Prompt-store janitor is conservative: recent files are preserved even when size cap is exceeded.
+AI_PROMPT_STORE_CLEANUP_ENABLED: true
+AI_PROMPT_STORE_RETENTION_DAYS: 90
+AI_PROMPT_STORE_MIN_DELETE_AGE_DAYS: 7
+AI_PROMPT_STORE_MAX_BYTES: 1073741824  # 1 GiB
+AI_PROMPT_STORE_CLEANUP_INTERVAL_SEC: 86400
 
 # Blend News AI into Engine A scan score (EODHD news + Kimi). Heavy: uses TTL cache per pair.
 

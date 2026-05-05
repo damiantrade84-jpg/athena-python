@@ -4,6 +4,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from research_metrics import (
+    bootstrap_confidence_intervals,
     build_research_metrics,
     deflated_sharpe_ratio,
     enrich_backtest_summary,
@@ -68,3 +69,26 @@ def test_build_research_metrics_marks_runtime_heavy_pbo_path():
     )
 
     assert "exact_cscv_pbo_not_run" in metrics["runtimeHeavy"]
+
+
+def test_bootstrap_confidence_intervals_are_deterministic():
+    returns = [0.3, -0.1, 0.2, 0.4, -0.2, 0.1]
+
+    first = bootstrap_confidence_intervals(returns, iterations=50, seed=7)
+    second = bootstrap_confidence_intervals(returns, iterations=50, seed=7)
+
+    assert first == second
+    assert first["available"] is True
+    assert first["expectancyR"]["p2_5"] <= first["expectancyR"]["p97_5"]
+    assert first["sharpe"]["p2_5"] <= first["sharpe"]["p97_5"]
+
+
+def test_build_research_metrics_includes_bootstrap_ci():
+    metrics = build_research_metrics(
+        [0.3, -0.1, 0.2, 0.4, -0.2, 0.1],
+        observed_sharpe=1.0,
+        bootstrap_iterations=25,
+    )
+
+    assert metrics["bootstrapCI"]["available"] is True
+    assert metrics["bootstrapCI"]["iterations"] == 25

@@ -25,6 +25,12 @@ from intermarket import build_scan_snapshot
 from market_structure import NakedEngine, engine_b_confidence_passes
 from guardian import pre_trade_check as _guardian_pre_trade
 from scoring import CORR_CLUSTERS, get_pair_score_group
+from sqlite_instrumentation import (
+    timed_sqlite_connect,
+    timed_sqlite_commit,
+    timed_sqlite_execute_write,
+    timed_sqlite_executemany_write,
+)
 
 
 def healthcheck():
@@ -526,15 +532,19 @@ def api_quick_execute():
                         _audit["max_score"],
                         _audit["score_pct"],
                     ))
-                with sqlite3.connect(_r.AUDIT_DB, timeout=15.0) as con:
-                    con.executemany(
+                with timed_sqlite_connect(
+                    _r.AUDIT_DB, timeout=15.0, label="quick_execute.audit_success.connect"
+                ) as con:
+                    timed_sqlite_executemany_write(
+                        con,
                         "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
                         "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
                         "max_score,score_pct) "
                         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         _audit_rows,
+                        label="quick_execute.audit_success.insert",
                     )
-                    con.commit()
+                    timed_sqlite_commit(con, label="quick_execute.audit_success.commit")
             except Exception as ae:
                 _r.log.warning(f"[QUICK EXEC] Audit DB write failed: {ae}")
 
@@ -1269,8 +1279,11 @@ def api_execute():
             _r.log.warning(f"[EXEC] {pair} REJECTED by risk engine: {approval.reason}")
 
             try:
-                with sqlite3.connect(_r.AUDIT_DB, timeout=15.0) as _con:
-                    _con.execute(
+                with timed_sqlite_connect(
+                    _r.AUDIT_DB, timeout=15.0, label="execute.audit_reject.connect"
+                ) as _con:
+                    timed_sqlite_execute_write(
+                        _con,
                         "INSERT INTO audit_log(ts,pair,score,direction,style,grade,error_tag) VALUES(?,?,?,?,?,?,?)",
                         (
                             datetime.now(timezone.utc).isoformat(),
@@ -1281,6 +1294,7 @@ def api_execute():
                             "MANUAL-ERR",
                             approval.reason,
                         ),
+                        label="execute.audit_reject.insert",
                     )
             except Exception as _e:
                 _r.log.warning(f"[EXEC] Failed to log rejection to audit_db: {_e}")
@@ -1303,7 +1317,9 @@ def api_execute():
             executed_signals.add(sig_id)
 
             try:
-                with sqlite3.connect(_r.AUDIT_DB, timeout=15.0) as con:
+                with timed_sqlite_connect(
+                    _r.AUDIT_DB, timeout=15.0, label="execute.audit_success.connect"
+                ) as con:
                     _factors = {
                         "scores": sig.get("factor_scores"),
                         "weights": sig.get("factor_weights"),
@@ -1344,14 +1360,16 @@ def api_execute():
                             _eng_b_data.get("max_possible") if _audit_engine == "engine_b" else sig.get("maxScore"),
                             _eng_b_data.get("pct") if _audit_engine == "engine_b" else None,
                         ))
-                    con.executemany(
+                    timed_sqlite_executemany_write(
+                        con,
                         "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
                         "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
                         "signal_price_ref,slippage_bps,max_score,score_pct) "
                         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         _audit_rows,
+                        label="execute.audit_success.insert",
                     )
-                    con.commit()
+                    timed_sqlite_commit(con, label="execute.audit_success.commit")
 
             except Exception as ae:
                 _r.log.warning(f"Audit DB write failed: {ae}")
@@ -1595,8 +1613,11 @@ def api_scalp_execute():
         if result.get("success"):
             # Log to audit_db
             try:
-                with sqlite3.connect(_r.AUDIT_DB, timeout=15.0) as con:
-                    con.execute(
+                with timed_sqlite_connect(
+                    _r.AUDIT_DB, timeout=15.0, label="scalp_execute.audit_success.connect"
+                ) as con:
+                    timed_sqlite_execute_write(
+                        con,
                         "INSERT INTO audit_log(ts,pair,score,engine,direction,grade,risk,style,entry_price,sl,tp,volume,ticket,risk_amount,risk_pct) "
                         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
@@ -1615,7 +1636,8 @@ def api_scalp_execute():
                             str(result.get("ticket", "")),
                             approval.risk_amount,
                             approval.risk_pct
-                        )
+                        ),
+                        label="scalp_execute.audit_success.insert",
                     )
             except Exception as ae:
                 _r.log.warning(f"[SCALP API] Audit log failed: {ae}")

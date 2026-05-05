@@ -47,10 +47,12 @@ from ai_review_logger import (
     REQUIRED_AUDIT_FIELDS,
     REVIEW_TYPE_CHART_VISION,
     REVIEW_TYPE_SIGNAL_DEBATE,
+    cleanup_prompt_store,
     log_ai_review,
     map_debate_grade_to_ai_state,
     map_engine_b_grade_to_ai_state,
     map_vision_rating_to_ai_state,
+    maybe_cleanup_prompt_store,
     validate_audit_record,
 )
 from engine_b_ai import (
@@ -715,11 +717,20 @@ class TestAiReviewLogger:
     def _make_tmp_dir(self):
         return tempfile.mkdtemp()
 
+    def _write_prompt_store_file(self, root: str, rel_parts: tuple[str, ...], body: bytes, mtime: float):
+        path = os.path.join(root, *rel_parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(body)
+        os.utime(path, (mtime, mtime))
+        return path
+
     def _call_log(self, tmp_dir: str, **overrides):
         import ai_review_logger as _m
 
         _m._LOG_DIR = os.path.join(tmp_dir, "ai_review")
         _m._LOG_FILE = os.path.join(tmp_dir, "ai_review", "ai_review_audit.jsonl")
+        _m._PROMPT_CA_DIR = os.path.join(tmp_dir, "ai_review", "prompt_store")
 
         kwargs = dict(
             symbol="EUR/USD",
@@ -794,6 +805,8 @@ class TestAiReviewLogger:
         """Logger must silently handle I/O failures — trading must not crash."""
         import ai_review_logger as _m
 
+        tmp_dir = self._make_tmp_dir()
+        _m._PROMPT_CA_DIR = os.path.join(tmp_dir, "prompt_store")
         monkeypatch.setattr(_m, "_ensure_log_dir", lambda: None)
         monkeypatch.setattr("builtins.open", lambda *_a, **_kw: (_ for _ in ()).throw(OSError("disk full")))
 
@@ -841,6 +854,7 @@ class TestAiReviewLogger:
         tmp_dir = self._make_tmp_dir()
         _m._LOG_DIR = os.path.join(tmp_dir, "ai_review")
         _m._LOG_FILE = os.path.join(tmp_dir, "ai_review", "ai_review_audit.jsonl")
+        _m._PROMPT_CA_DIR = os.path.join(tmp_dir, "ai_review", "prompt_store")
 
         with caplog.at_level(logging.WARNING, logger="athena.ai_review"):
             log_ai_review(
@@ -870,6 +884,120 @@ class TestAiReviewLogger:
             )
 
         assert any("UNEXPECTED UPGRADE" in r.message for r in caplog.records)
+
+    def test_prompt_store_cleanup_deletes_expired_files_but_keeps_recent_files(self):
+        tmp_dir = self._make_tmp_dir()
+        store_dir = os.path.join(tmp_dir, "prompt_store")
+        now = 1_700_000_000.0
+        old_path = self._write_prompt_store_file(
+            store_dir,
+            ("prompt", "aa", "bb", "old"),
+            b"old prompt",
+            now - (91 * 86400),
+        )
+        recent_path = self._write_prompt_store_file(
+            store_dir,
+            ("prompt", "cc", "dd", "recent"),
+            b"recent prompt",
+            now - (1 * 86400),
+        )
+
+        result = cleanup_prompt_store(
+            store_dir=store_dir,
+            retention_days=90,
+            min_delete_age_days=7,
+            max_bytes=1024 * 1024,
+            now=now,
+        )
+
+        assert result["removed_files"] == 1
+        assert not os.path.exists(old_path)
+        assert os.path.exists(recent_path)
+
+    def test_prompt_store_size_cap_never_deletes_recent_files(self):
+        tmp_dir = self._make_tmp_dir()
+        store_dir = os.path.join(tmp_dir, "prompt_store")
+        now = 1_700_000_000.0
+        old_path = self._write_prompt_store_file(
+            store_dir,
+            ("prompt", "aa", "bb", "old"),
+            b"o" * 800,
+            now - (10 * 86400),
+        )
+        recent_path = self._write_prompt_store_file(
+            store_dir,
+            ("prompt", "cc", "dd", "recent"),
+            b"r" * 800,
+            now - (1 * 86400),
+        )
+
+        result = cleanup_prompt_store(
+            store_dir=store_dir,
+            retention_days=90,
+            min_delete_age_days=7,
+            max_bytes=900,
+            now=now,
+        )
+
+        assert result["removed_files"] == 1
+        assert not os.path.exists(old_path)
+        assert os.path.exists(recent_path)
+        assert result["kept_bytes"] >= 800
+
+    def test_prompt_store_ttl_respects_minimum_delete_age(self):
+        tmp_dir = self._make_tmp_dir()
+        store_dir = os.path.join(tmp_dir, "prompt_store")
+        now = 1_700_000_000.0
+        recent_path = self._write_prompt_store_file(
+            store_dir,
+            ("prompt", "aa", "bb", "recent"),
+            b"recent prompt",
+            now - (3 * 86400),
+        )
+
+        result = cleanup_prompt_store(
+            store_dir=store_dir,
+            retention_days=1,
+            min_delete_age_days=7,
+            max_bytes=1024 * 1024,
+            now=now,
+        )
+
+        assert result["removed_files"] == 0
+        assert os.path.exists(recent_path)
+
+    def test_prompt_store_cleanup_is_throttled(self, monkeypatch):
+        import ai_review_logger as _m
+
+        tmp_dir = self._make_tmp_dir()
+        store_dir = os.path.join(tmp_dir, "prompt_store")
+        now = 1_700_000_000.0
+        old_path = self._write_prompt_store_file(
+            store_dir,
+            ("prompt", "aa", "bb", "old"),
+            b"old prompt",
+            now - (91 * 86400),
+        )
+        config = {
+            "enabled": True,
+            "retention_days": 90,
+            "min_delete_age_days": 7,
+            "max_bytes": 1024 * 1024,
+            "interval_sec": 86400,
+        }
+        monkeypatch.setattr(_m, "_PROMPT_CA_DIR", store_dir)
+        monkeypatch.setattr(_m, "_prompt_store_cleanup_config", lambda _config=None: config)
+        monkeypatch.setattr(_m, "_prompt_store_last_cleanup_ts", now)
+
+        assert maybe_cleanup_prompt_store(now=now + 60) is None
+        assert os.path.exists(old_path)
+
+        monkeypatch.setattr(_m, "_prompt_store_last_cleanup_ts", now - 90000)
+        result = maybe_cleanup_prompt_store(now=now)
+
+        assert result is not None
+        assert result["removed_files"] == 1
+        assert not os.path.exists(old_path)
 
 
 # ============================================================
