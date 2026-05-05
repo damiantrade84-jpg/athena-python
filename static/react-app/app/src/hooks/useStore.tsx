@@ -17,6 +17,8 @@ interface AppState {
   /** Persistent scan result caches — survive panel navigation */
   scanCacheA: unknown[] | null;
   scanCacheB: unknown[] | null;
+  scalpLabScanCache: unknown | null;
+  scalpLabSelectedCache: unknown | null;
   scanCacheAMeta: { count: number; scannedAt: string } | null;
   scanCacheBMeta: { count: number; scannedAt: string } | null;
 }
@@ -34,6 +36,8 @@ interface AppActions {
   getLivePrice: (pair: string) => number | undefined;
   setScanCacheA: (signals: unknown[], meta?: { count: number; scannedAt: string }) => void;
   setScanCacheB: (signals: unknown[], meta?: { count: number; scannedAt: string }) => void;
+  setScalpLabScanCache: (result: unknown | null) => void;
+  setScalpLabSelectedCache: (signal: unknown | null) => void;
 }
 
 const StoreContext = createContext<(AppState & AppActions) | null>(null);
@@ -67,6 +71,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   // Persistent scan caches — keyed by engine, survive panel navigation
   const [scanCacheA, setScanCacheAState] = useState<unknown[] | null>(null);
   const [scanCacheB, setScanCacheBState] = useState<unknown[] | null>(null);
+  const [scalpLabScanCache, setScalpLabScanCache] = useState<unknown | null>(null);
+  const [scalpLabSelectedCache, setScalpLabSelectedCache] = useState<unknown | null>(null);
   const [scanCacheAMeta, setScanCacheAMeta] = useState<{ count: number; scannedAt: string } | null>(null);
   const [scanCacheBMeta, setScanCacheBMeta] = useState<{ count: number; scannedAt: string } | null>(null);
 
@@ -217,11 +223,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     <StoreContext.Provider value={{
       activePanel, signals, positions, guardian, news, sessions,
       isAutoTrade, isTestMode, isLoading, toast,
-      scanCacheA, scanCacheB, scanCacheAMeta, scanCacheBMeta,
+      scanCacheA, scanCacheB, scalpLabScanCache, scalpLabSelectedCache, scanCacheAMeta, scanCacheBMeta,
       setActivePanel, refreshSignals, refreshPositions,
       refreshGuardian, toggleAutoTrade, toggleTestMode, executeSignal,
       closePosition, showToast, getLivePrice: livePriceGetter,
-      setScanCacheA, setScanCacheB,
+      setScanCacheA, setScanCacheB, setScalpLabScanCache, setScalpLabSelectedCache,
     }}>
       {children}
     </StoreContext.Provider>

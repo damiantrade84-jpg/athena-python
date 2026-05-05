@@ -132,10 +132,14 @@ function gradeBorder(grade?: string): string {
 }
 
 export default function ScalpLabPanel() {
-  const { showToast } = useStore();
+  const {
+    showToast,
+    scalpLabScanCache,
+    scalpLabSelectedCache,
+    setScalpLabScanCache,
+    setScalpLabSelectedCache,
+  } = useStore();
   const [diagnostic, setDiagnostic] = useState(false);
-  const [scanResult, setScanResult] = useState<ScalpScanResponse | null>(null);
-  const [selected, setSelected] = useState<ScalpSignal | null>(null);
   const [confirmExec, setConfirmExec] = useState<ScalpSignal | null>(null);
 
   const { data: pairsData } = useApiPoll<ScalpPairsResponse>('/api/scalp-pairs', 0);
@@ -144,20 +148,22 @@ export default function ScalpLabPanel() {
   const { priceFor } = useLivePrices(10000);
 
   const universeCount = pairsData?.count ?? pairsData?.pairs?.length ?? 0;
+  const scanResult = scalpLabScanCache as ScalpScanResponse | null;
+  const selected = scalpLabSelectedCache as ScalpSignal | null;
 
   const runScan = useCallback(async () => {
-    setSelected(null);
+    setScalpLabSelectedCache(null);
     const result = await postScan('/api/scalp-scan', { diagnostic });
     if (!result || result.error) {
       showToast(`Scalp scan failed: ${result?.error || 'unknown'}`, 'error');
       return;
     }
-    setScanResult(result);
+    setScalpLabScanCache(result);
     showToast(
       `Engine D: ${result.pass_count ?? 0}/${result.candidate_count ?? 0} pass · ${result.skip_count ?? 0} skipped (session: ${result.session || '—'})`,
       'success',
     );
-  }, [diagnostic, postScan, showToast]);
+  }, [diagnostic, postScan, showToast, setScalpLabScanCache, setScalpLabSelectedCache]);
 
   const requestExecute = useCallback((s: ScalpSignal) => setConfirmExec(s), []);
 
@@ -285,7 +291,7 @@ export default function ScalpLabPanel() {
                                 sig={s}
                                 livePrice={priceFor(s)}
                                 selected={selected === s}
-                                onSelect={setSelected}
+                                onSelect={setScalpLabSelectedCache}
                                 onExecute={requestExecute}
                               />
                             ))}
