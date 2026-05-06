@@ -8,4 +8,5 @@
 - When adding ATHENA runtime diagnostics, verify the logger level actually emits them. `log.info(...)` on the `sentinel` logger is suppressed by `log.setLevel(logging.WARNING)`, so failure-critical AI timing/config must be logged at warning/error level or tested as visible.
 - When a dashboard tab shows blank fallback states, verify the live API response shape before changing backend logic; Guardian routes return object-shaped `checks`, feed `pairs/timeframes`, divergence `recent_events`, and forensic `views`.
 - When reviewing Engine B target math, verify target-side formulas and fallback behavior together: structural TP diagnostics can look safe because fallback RR prevents bad trades, while the actual bug is suppressed structural target selection.
+- When the user corrects the target engine, immediately re-scope the run artifacts, config keys, and live code path to that engine before summarizing results or making changes.
 - Never rewrite generated UTF-8 frontend bundles with PowerShell default text decoding; use a UTF-8-safe tool such as the frontend build or Node file APIs, then verify mojibake strings like `Â·` and `â€”` are absent.
