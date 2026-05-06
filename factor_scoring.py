@@ -450,8 +450,8 @@ def _research_lab_candidate_addon(
     if not cfg.get("ENABLED", False):
         return 0.0, {"enabled": False}
 
-    candles = d1_candles if len(d1_candles or []) >= 60 else h4_candles
-    if not candles or len(candles) < 60:
+    default_candles = d1_candles if len(d1_candles or []) >= 60 else h4_candles
+    if not default_candles or len(default_candles) < 60:
         return 0.0, {
             "enabled": True,
             "applied": False,
@@ -470,7 +470,18 @@ def _research_lab_candidate_addon(
     total = 0.0
 
     for name in allowed:
-        val, detail = _research_factor_value(str(name), direction, candles, bonus, penalty)
+        factor_name = str(name)
+        candles = h4_candles if factor_name == "stochastic_cross" else default_candles
+        val, detail = _research_factor_value(
+            factor_name,
+            direction,
+            candles,
+            bonus,
+            penalty,
+            cfg=cfg,
+            pair=pair,
+            asset_type=asset_type,
+        )
         components[str(name)] = detail
         total += val
 
@@ -495,7 +506,17 @@ def _infer_research_score_group(display: str, asset_type: str) -> str:
     return "universal"
 
 
-def _research_factor_value(name: str, direction: str, candles: list, bonus: float, penalty: float) -> tuple[float, dict]:
+def _research_factor_value(
+    name: str,
+    direction: str,
+    candles: list,
+    bonus: float,
+    penalty: float,
+    *,
+    cfg: dict | None = None,
+    pair: dict | None = None,
+    asset_type: str = "",
+) -> tuple[float, dict]:
     """Stage 2.6: Universal research lab factors.
 
     Supported factors:
@@ -512,7 +533,7 @@ def _research_factor_value(name: str, direction: str, candles: list, bonus: floa
             return _research_price_momentum_value(direction, candles, bonus, penalty)
         # Legacy factors — still callable but not in default factor list
         if name == "stochastic_cross":
-            return _research_stochastic_value(direction, candles, bonus, penalty)
+            return _research_stochastic_value(direction, candles, bonus, penalty, cfg=cfg, pair=pair, asset_type=asset_type)
         if name == "chandelier_trend":
             return _research_chandelier_value(direction, candles, bonus, penalty)
         if name == "aroon_trend":
@@ -537,23 +558,97 @@ def _research_obv_value(direction: str, candles: list, bonus: float, penalty: fl
     return 0.0, {"signal": signal, "value": 0.0}
 
 
-def _research_stochastic_value(direction: str, candles: list, bonus: float, penalty: float) -> tuple[float, dict]:
+def _research_stochastic_value(
+    direction: str,
+    candles: list,
+    bonus: float,
+    penalty: float,
+    *,
+    cfg: dict | None = None,
+    pair: dict | None = None,
+    asset_type: str = "",
+) -> tuple[float, dict]:
     from indicators import calc_stochastic
 
-    stoch = calc_stochastic(candles, 14, 3, 3)
-    k = stoch.get("k", [])
-    d = stoch.get("d", [])
-    if len(k) < 2 or len(d) < 2 or k[-1] is None or d[-1] is None or k[-2] is None or d[-2] is None:
-        return 0.0, {"signal": "missing", "value": 0.0}
-    crossed_up = k[-1] > d[-1] and k[-2] <= d[-2]
-    crossed_down = k[-1] < d[-1] and k[-2] >= d[-2]
-    if direction == "LONG" and crossed_up:
-        return bonus, {"signal": "bull_cross", "k": round(k[-1], 2), "d": round(d[-1], 2), "value": bonus}
-    if direction == "SHORT" and crossed_down:
-        return bonus, {"signal": "bear_cross", "k": round(k[-1], 2), "d": round(d[-1], 2), "value": bonus}
-    if (direction == "LONG" and crossed_down) or (direction == "SHORT" and crossed_up):
-        return penalty, {"signal": "opposing_cross", "k": round(k[-1], 2), "d": round(d[-1], 2), "value": penalty}
-    return 0.0, {"signal": "no_cross", "k": round(k[-1], 2), "d": round(d[-1], 2), "value": 0.0}
+    stoch_cfg = ((cfg or {}).get("STOCHASTIC_CROSS") or {})
+    if stoch_cfg and not stoch_cfg.get("ENABLED", False):
+        return 0.0, {"signal": "disabled", "value": 0.0}
+
+    allowed_assets = {str(x).lower() for x in stoch_cfg.get("ASSET_TYPES", [])}
+    if allowed_assets and str(asset_type).lower() not in allowed_assets:
+        return 0.0, {"signal": "out_of_scope", "reason": "asset_type_not_enabled", "value": 0.0}
+
+    display = str((pair or {}).get("display") or (pair or {}).get("symbol") or "").upper()
+    enabled_symbols = {str(x).upper() for x in stoch_cfg.get("SYMBOLS", [])}
+    if enabled_symbols and display not in enabled_symbols:
+        return 0.0, {
+            "signal": "out_of_scope",
+            "reason": "symbol_not_enabled",
+            "symbol": display,
+            "value": 0.0,
+        }
+
+    k_periods = stoch_cfg.get("K_PERIODS", [14])
+    k_smooth = int(stoch_cfg.get("K_SMOOTH", 3))
+    d_smooth = int(stoch_cfg.get("D_SMOOTH", 3))
+    timeframe = str(stoch_cfg.get("TIMEFRAME", "H4"))
+    paper_tool_only = bool(stoch_cfg.get("PAPER_TOOL_ONLY", False))
+
+    if not candles or len(candles) < max(int(x) for x in k_periods):
+        return 0.0, {"signal": "missing", "timeframe": timeframe, "value": 0.0}
+
+    checked: list[dict] = []
+    opposing = None
+    for raw_period in k_periods:
+        kp = int(raw_period)
+        stoch = calc_stochastic(candles, kp, k_smooth, d_smooth)
+        k = stoch.get("k", [])
+        d = stoch.get("d", [])
+        if len(k) < 2 or len(d) < 2 or k[-1] is None or d[-1] is None or k[-2] is None or d[-2] is None:
+            checked.append({"k_period": kp, "signal": "missing"})
+            continue
+        crossed_up = k[-1] > d[-1] and k[-2] <= d[-2]
+        crossed_down = k[-1] < d[-1] and k[-2] >= d[-2]
+        base = {
+            "k_period": kp,
+            "k": round(k[-1], 2),
+            "d": round(d[-1], 2),
+        }
+        if direction == "LONG" and crossed_up:
+            return bonus, {
+                **base,
+                "signal": "bull_cross",
+                "timeframe": timeframe,
+                "paper_tool_only": paper_tool_only,
+                "value": bonus,
+            }
+        if direction == "SHORT" and crossed_down:
+            return bonus, {
+                **base,
+                "signal": "bear_cross",
+                "timeframe": timeframe,
+                "paper_tool_only": paper_tool_only,
+                "value": bonus,
+            }
+        if (direction == "LONG" and crossed_down) or (direction == "SHORT" and crossed_up):
+            opposing = {
+                **base,
+                "signal": "opposing_cross",
+                "timeframe": timeframe,
+                "paper_tool_only": paper_tool_only,
+                "value": penalty,
+            }
+        checked.append({**base, "signal": "no_cross"})
+
+    if opposing is not None:
+        return penalty, opposing
+    return 0.0, {
+        "signal": "no_cross",
+        "timeframe": timeframe,
+        "paper_tool_only": paper_tool_only,
+        "checked": checked,
+        "value": 0.0,
+    }
 
 
 def _research_chandelier_value(direction: str, candles: list, bonus: float, penalty: float) -> tuple[float, dict]:

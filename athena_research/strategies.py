@@ -30,6 +30,10 @@ def _ema(s: pd.Series, n: int) -> pd.Series:
     return s.ewm(span=n, adjust=False).mean()
 
 
+def _wilder(s: pd.Series, n: int) -> pd.Series:
+    return s.ewm(alpha=1 / n, adjust=False).mean()
+
+
 def _sma(s: pd.Series, n: int) -> pd.Series:
     return s.rolling(n).mean()
 
@@ -63,10 +67,10 @@ def _adx(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.S
     dm_plus = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
     dm_minus = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
     tr = _atr(high, low, close, n)
-    di_plus = 100 * _ema(dm_plus, n) / tr.replace(0, np.nan)
-    di_minus = 100 * _ema(dm_minus, n) / tr.replace(0, np.nan)
+    di_plus = 100 * _wilder(dm_plus, n) / tr.replace(0, np.nan)
+    di_minus = 100 * _wilder(dm_minus, n) / tr.replace(0, np.nan)
     dx = 100 * (di_plus - di_minus).abs() / (di_plus + di_minus).replace(0, np.nan)
-    return dx.ewm(alpha=1 / n, adjust=False).mean()
+    return _wilder(dx, n)
 
 
 def _bb(s: pd.Series, n: int = 20, k: float = 2.0):
@@ -78,8 +82,13 @@ def _bb(s: pd.Series, n: int = 20, k: float = 2.0):
 def _vwap(df: pd.DataFrame) -> pd.Series:
     typical = (df["high"] + df["low"] + df["close"]) / 3
     vol = df["volume"].replace(0, np.nan)
-    cum_tp_v = (typical * vol).cumsum()
-    cum_v = vol.cumsum()
+    if isinstance(df.index, pd.DatetimeIndex):
+        session_key = df.index.normalize()
+        cum_tp_v = (typical * vol).groupby(session_key).cumsum()
+        cum_v = vol.groupby(session_key).cumsum()
+    else:
+        cum_tp_v = (typical * vol).cumsum()
+        cum_v = vol.cumsum()
     return cum_tp_v / cum_v
 
 
@@ -91,11 +100,13 @@ def _pct_rank(s: pd.Series, n: int = 100) -> pd.Series:
 
 
 def _crossed_above(a: pd.Series, b: pd.Series) -> pd.Series:
-    return (a > b) & (a.shift(1) <= b.shift(1))
+    valid = a.notna() & b.notna() & a.shift(1).notna() & b.shift(1).notna()
+    return valid & (a > b) & (a.shift(1) <= b.shift(1))
 
 
 def _crossed_below(a: pd.Series, b: pd.Series) -> pd.Series:
-    return (a < b) & (a.shift(1) >= b.shift(1))
+    valid = a.notna() & b.notna() & a.shift(1).notna() & b.shift(1).notna()
+    return valid & (a < b) & (a.shift(1) >= b.shift(1))
 
 
 def _bool(s: pd.Series) -> pd.Series:
@@ -900,27 +911,32 @@ def strategy_supertrend_follow(df: pd.DataFrame, params: dict) -> dict:
     upper = hl2 + atr_mult * atr
     lower = hl2 - atr_mult * atr
 
-    # Initialize supertrend
-    direction = pd.Series(1, index=df.index, dtype=int)
-    final_upper = upper.copy()
-    final_lower = lower.copy()
+    # Use arrays for iterative band state to avoid chained Series writes.
+    direction_arr = np.ones(len(df), dtype=int)
+    final_upper_arr = upper.to_numpy(dtype=float, copy=True)
+    final_lower_arr = lower.to_numpy(dtype=float, copy=True)
+    upper_arr = upper.to_numpy(dtype=float, copy=False)
+    lower_arr = lower.to_numpy(dtype=float, copy=False)
+    close_arr = close.to_numpy(dtype=float, copy=False)
 
     for i in range(1, len(df)):
-        if lower.iloc[i] > final_lower.iloc[i - 1]:
-            final_lower.iloc[i] = lower.iloc[i]
+        if lower_arr[i] > final_lower_arr[i - 1]:
+            final_lower_arr[i] = lower_arr[i]
         else:
-            final_lower.iloc[i] = final_lower.iloc[i - 1]
-        if upper.iloc[i] < final_upper.iloc[i - 1]:
-            final_upper.iloc[i] = upper.iloc[i]
+            final_lower_arr[i] = final_lower_arr[i - 1]
+        if upper_arr[i] < final_upper_arr[i - 1]:
+            final_upper_arr[i] = upper_arr[i]
         else:
-            final_upper.iloc[i] = final_upper.iloc[i - 1]
+            final_upper_arr[i] = final_upper_arr[i - 1]
 
-        if close.iloc[i] > final_upper.iloc[i - 1]:
-            direction.iloc[i] = 1
-        elif close.iloc[i] < final_lower.iloc[i - 1]:
-            direction.iloc[i] = -1
+        if close_arr[i] > final_upper_arr[i - 1]:
+            direction_arr[i] = 1
+        elif close_arr[i] < final_lower_arr[i - 1]:
+            direction_arr[i] = -1
         else:
-            direction.iloc[i] = direction.iloc[i - 1]
+            direction_arr[i] = direction_arr[i - 1]
+
+    direction = pd.Series(direction_arr, index=df.index, dtype=int)
 
     long_entries = (direction == 1) & (direction.shift(1) == -1)
     short_entries = (direction == -1) & (direction.shift(1) == 1)

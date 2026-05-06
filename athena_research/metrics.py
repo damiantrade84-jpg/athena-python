@@ -168,6 +168,8 @@ def _vbt_portfolio(close, entries, exits, short_entries, short_exits,
             return default
 
     # Try to get trade records for granular stats
+    trade_returns = np.array([])
+    trade_durations = np.array([])
     try:
         trades_df = pf.trades.records_readable  # proper DataFrame with named columns
         ret_col = next((c for c in trades_df.columns if c.lower() in ("return", "ret")), None)
@@ -178,12 +180,16 @@ def _vbt_portfolio(close, entries, exits, short_entries, short_exits,
 
         if len(trades_df) > 0:
             raw_rec = pf.trades.records  # structured array for index positions
-            entry_idx = raw_rec["entry_idx"] if "entry_idx" in raw_rec.dtype.names else None
-            exit_idx = raw_rec["exit_idx"] if "exit_idx" in raw_rec.dtype.names else None
-            if entry_idx is not None and exit_idx is not None:
-                trade_durations = (exit_idx - entry_idx).astype(float)
+            if isinstance(raw_rec, pd.DataFrame) and {"entry_idx", "exit_idx"}.issubset(raw_rec.columns):
+                trade_durations = (raw_rec["exit_idx"].to_numpy() - raw_rec["entry_idx"].to_numpy()).astype(float)
             else:
-                trade_durations = np.array([])
+                names = getattr(getattr(raw_rec, "dtype", None), "names", None) or []
+                entry_idx = raw_rec["entry_idx"] if "entry_idx" in names else None
+                exit_idx = raw_rec["exit_idx"] if "exit_idx" in names else None
+                if entry_idx is not None and exit_idx is not None:
+                    trade_durations = (exit_idx - entry_idx).astype(float)
+                else:
+                    trade_durations = np.array([])
         else:
             trade_durations = np.array([])
     except Exception as e:
@@ -210,6 +216,7 @@ def _pandas_portfolio(close, entries, exits, short_entries, short_exits, fees, s
     trade_returns: list[float] = []
     trade_durations: list[int] = []
     equity = [1.0]
+    exposure_mask: list[bool] = []
     current_eq = 1.0
 
     n = len(close)
@@ -260,16 +267,18 @@ def _pandas_portfolio(close, entries, exits, short_entries, short_exits, fees, s
                     entry_bar = i
                     position = 1
 
+        exposure_mask.append(position != 0)
         equity.append(current_eq)
 
     equity_s = pd.Series(equity, index=close.index[:len(equity)])
+    exposure_pct = float(np.mean(exposure_mask)) if exposure_mask else float("nan")
     return _build_stats(
         trade_returns=np.array(trade_returns),
         trade_durations=np.array(trade_durations),
         equity=equity_s,
         init_cash=1.0,
         fees=fees,
-        stats_dict={},
+        stats_dict={"exposure_pct": exposure_pct},
         freq=freq,
     )
 
@@ -289,7 +298,12 @@ def _build_stats(trade_returns: np.ndarray, trade_durations: np.ndarray,
     win_rate = win_count / n
     avg_win = trade_returns[wins].mean() if win_count > 0 else 0.0
     avg_loss = abs(trade_returns[losses].mean()) if loss_count > 0 else 0.0
-    profit_factor = (win_count * avg_win) / (loss_count * avg_loss) if (loss_count > 0 and avg_loss > 0) else float("inf")
+    if loss_count > 0 and avg_loss > 0:
+        profit_factor = (win_count * avg_win) / (loss_count * avg_loss)
+    elif win_count > 0:
+        profit_factor = float(win_count)
+    else:
+        profit_factor = 0.0
     expectancy = trade_returns.mean()
 
     # Drawdown from equity curve
@@ -333,6 +347,7 @@ def _build_stats(trade_returns: np.ndarray, trade_durations: np.ndarray,
         "sqn": sqn,
         "gross_return": gross_return,
         "avg_duration_bars": avg_duration,
+        "exposure_pct": stats_dict.get("exposure_pct", float("nan")),
         "equity": equity,
         "trade_returns": trade_returns,
     }
@@ -455,13 +470,18 @@ def evaluate_strategy(
     robustness = _compute_robustness(n, is_r, oos_r, net_r)
     status = _classify_status(n, net_r, robustness, is_r, oos_r, min_trades)
 
-    # Exposure: fraction of bars with open position
-    equity = all_stats.get("equity")
-    exposure_pct = float("nan")
-    if equity is not None and len(equity) > 0:
-        # rough proxy: fraction of consecutive equity changes ≠ 0
-        eq_arr = equity.values if hasattr(equity, "values") else np.array(equity)
-        exposure_pct = float((np.diff(eq_arr) != 0).mean()) if len(eq_arr) > 1 else float("nan")
+    # Exposure: prefer simulator-provided position exposure; keep equity-change
+    # fallback for backends that cannot expose position state.
+    exposure_pct = all_stats.get("exposure_pct", float("nan"))
+    try:
+        exposure_pct = float(exposure_pct)
+    except Exception:
+        exposure_pct = float("nan")
+    if not math.isfinite(exposure_pct):
+        equity = all_stats.get("equity")
+        if equity is not None and len(equity) > 0:
+            eq_arr = equity.values if hasattr(equity, "values") else np.array(equity)
+            exposure_pct = float((np.diff(eq_arr) != 0).mean()) if len(eq_arr) > 1 else float("nan")
 
     return StrategyMetrics(
         run_id=run_id,

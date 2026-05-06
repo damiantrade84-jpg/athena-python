@@ -64,6 +64,122 @@ def _make_ohlcv(n: int = 500, seed: int = 42, trend: float = 0.0001) -> pd.DataF
 # 1. Data loader tests
 # ─────────────────────────────────────────────────────────────────────────────
 
+def test_adx_uses_wilder_smoothing_not_span_ema():
+    from athena_research.strategies import _adx, _atr
+
+    idx = pd.date_range("2024-01-01", periods=8, freq="1h", tz="UTC")
+    high = pd.Series([10, 12, 14, 13, 15, 16, 17, 18], index=idx, dtype=float)
+    low = pd.Series([8, 9, 10, 9, 11, 12, 13, 14], index=idx, dtype=float)
+    close = pd.Series([9, 11, 13, 10, 14, 15, 16, 17], index=idx, dtype=float)
+    n = 3
+
+    up_move = high - high.shift(1)
+    down_move = low.shift(1) - low
+    dm_plus = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    dm_minus = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+    atr = _atr(high, low, close, n)
+    di_plus = 100 * dm_plus.ewm(alpha=1 / n, adjust=False).mean() / atr.replace(0, np.nan)
+    di_minus = 100 * dm_minus.ewm(alpha=1 / n, adjust=False).mean() / atr.replace(0, np.nan)
+    dx = 100 * (di_plus - di_minus).abs() / (di_plus + di_minus).replace(0, np.nan)
+    expected = dx.ewm(alpha=1 / n, adjust=False).mean()
+
+    pd.testing.assert_series_equal(_adx(high, low, close, n), expected)
+
+
+def test_vwap_resets_at_session_boundary():
+    from athena_research.strategies import _vwap
+
+    idx = pd.to_datetime([
+        "2024-01-01T00:00:00Z",
+        "2024-01-01T01:00:00Z",
+        "2024-01-02T00:00:00Z",
+        "2024-01-02T01:00:00Z",
+    ])
+    df = pd.DataFrame(
+        {
+            "high": [10.0, 20.0, 100.0, 200.0],
+            "low": [10.0, 20.0, 100.0, 200.0],
+            "close": [10.0, 20.0, 100.0, 200.0],
+            "volume": [1.0, 1.0, 1.0, 3.0],
+        },
+        index=idx,
+    )
+
+    got = _vwap(df)
+
+    assert got.iloc[0] == 10.0
+    assert got.iloc[1] == 15.0
+    assert got.iloc[2] == 100.0
+    assert got.iloc[3] == 175.0
+
+
+def test_cross_helpers_ignore_nan_warmup_values():
+    from athena_research.strategies import _crossed_above, _crossed_below
+
+    idx = pd.RangeIndex(4)
+    a = pd.Series([np.nan, 2.0, 3.0, 1.0], index=idx)
+    b = pd.Series([1.0, 1.0, 2.0, 2.0], index=idx)
+
+    assert _crossed_above(a, b).tolist() == [False, False, False, False]
+    assert _crossed_below(a, b).tolist() == [False, False, False, True]
+
+
+def test_pandas_portfolio_exposure_counts_flat_price_holding_bars():
+    from athena_research.metrics import _pandas_portfolio
+
+    idx = pd.date_range("2024-01-01", periods=5, freq="1h", tz="UTC")
+    close = pd.Series([100, 100, 100, 100, 101], index=idx, dtype=float)
+    entries = pd.Series([False, True, False, False, False], index=idx)
+    exits = pd.Series([False, False, False, False, True], index=idx)
+    shorts = pd.Series(False, index=idx)
+
+    stats = _pandas_portfolio(close, entries, exits, shorts, shorts, fees=0.0, slippage=0.0)
+
+    assert stats["trade_count"] == 1
+    assert stats["exposure_pct"] == pytest.approx(3 / 4)
+
+
+def test_profit_factor_is_finite_when_no_losing_trades():
+    from athena_research.metrics import _build_stats
+
+    stats = _build_stats(
+        trade_returns=np.array([0.01, 0.02]),
+        trade_durations=np.array([1, 1]),
+        equity=pd.Series([1.0, 1.01, 1.0302]),
+        init_cash=1.0,
+        fees=0.0,
+        stats_dict={},
+    )
+
+    assert math.isfinite(stats["profit_factor"])
+
+
+def test_research_run_meta_tags_keep_session_relationship_fields(tmp_path):
+    from athena_research.research_lab_routes import _merge_run_meta_tags
+
+    run_id = "run_meta_test"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    (run_dir / "run_meta.json").write_text(json.dumps({"run_id": run_id, "mode": "tiny"}), encoding="utf-8")
+
+    _merge_run_meta_tags(
+        tmp_path,
+        run_id,
+        {
+            "parent_run_id": "parent_1",
+            "session_id": "session_1",
+            "role": "manual_child",
+            "empty_value": "",
+        },
+    )
+
+    meta = json.loads((run_dir / "run_meta.json").read_text(encoding="utf-8"))
+    assert meta["parent_run_id"] == "parent_1"
+    assert meta["session_id"] == "session_1"
+    assert meta["role"] == "manual_child"
+    assert "empty_value" not in meta
+
+
 class TestDataLoader:
     def test_ohlcv_from_dict_list(self):
         from athena_research.data_loader import ohlcv_from_dict_list, DataProvenance
@@ -182,6 +298,33 @@ def test_run_portfolio_falls_back_when_vectorbt_returns_zero_with_signals(monkey
     assert stats["trade_count"] == 2
     assert stats["simulation_backend"] == "pandas_fallback"
     assert stats["simulation_warning"] == "vectorbt_zero_trades_with_entry_signals"
+
+
+def test_vectorbt_portfolio_extracts_trade_returns_and_durations():
+    pytest.importorskip("vectorbt")
+    from athena_research.metrics import _vbt_portfolio
+
+    idx = pd.date_range("2024-01-01", periods=8, freq="1h", tz="UTC")
+    close = pd.Series([100, 102, 101, 103, 102, 104, 103, 105], index=idx)
+    entries = pd.Series([False, True, False, False, True, False, False, False], index=idx)
+    exits = pd.Series([False, False, True, False, False, True, False, False], index=idx)
+    shorts = pd.Series(False, index=idx)
+
+    stats = _vbt_portfolio(
+        close,
+        entries,
+        exits,
+        shorts,
+        shorts,
+        fees=0.0,
+        slippage=0.0,
+        freq="1h",
+        init_cash=10_000.0,
+    )
+
+    assert stats["trade_count"] == 2
+    assert stats["avg_duration_bars"] == pytest.approx(1.0)
+    assert stats["profit_factor"] == pytest.approx(2.0)
 
 
 def test_evaluate_strategy_records_signal_and_simulation_audit_fields(monkeypatch):
@@ -334,6 +477,52 @@ class TestStrategies:
     def test_no_live_imports_after_strategies(self):
         import athena_research.strategies
         _check_no_live_imports()
+
+    def test_add_candidate_strong_without_baseline_is_add_not_retest(self):
+        from athena_research.metrics import StrategyMetrics
+        from athena_research.research_context import annotate_research_results
+
+        rows = [
+            StrategyMetrics(
+                run_id="r", symbol="AVAX/USDT", asset_class="crypto", timeframe="H4",
+                zone="swing", family="stochastic", strategy_name="stochastic_cross",
+                params_str="", direction="both", status="STRONG_CANDIDATE",
+                trade_count=53, profit_factor=2.9, oos_return=0.46,
+                robustness_score=0.85,
+            )
+        ]
+
+        tagged = annotate_research_results(rows, {"min_trades": 20})
+
+        assert tagged[0].recommendation == "ADD"
+
+    def test_decision_summary_turns_recommendations_into_operator_actions(self):
+        from athena_research.metrics import StrategyMetrics
+        from athena_research.reporting import build_operator_decision_summary, metrics_to_df
+        from athena_research.research_context import annotate_research_results
+
+        rows = annotate_research_results([
+            StrategyMetrics(
+                run_id="r", symbol="AVAX/USDT", asset_class="crypto", timeframe="H4",
+                zone="swing", family="stochastic", strategy_name="stochastic_cross",
+                params_str="", direction="both", status="STRONG_CANDIDATE",
+                trade_count=53, win_rate=0.64, profit_factor=2.9, net_return=1.2,
+                oos_return=0.46, robustness_score=0.85,
+            ),
+            StrategyMetrics(
+                run_id="r", symbol="BTC/USDT", asset_class="crypto", timeframe="H4",
+                zone="swing", family="trend_momentum", strategy_name="ema_cross",
+                params_str="", direction="both", status="REJECT",
+                trade_count=80, win_rate=0.42, profit_factor=0.7, net_return=-0.3,
+                oos_return=-0.1, robustness_score=0.2,
+            ),
+        ], {"min_trades": 20})
+
+        summary = build_operator_decision_summary(metrics_to_df(rows))
+
+        assert summary["headline"].startswith("Use/add")
+        assert summary["use_now"][0]["strategy_name"] == "stochastic_cross"
+        assert summary["remove_or_demote"][0]["strategy_name"] == "ema_cross"
 
     def test_research_context_tags_engine_a_and_b(self):
         from athena_research.metrics import StrategyMetrics
@@ -597,10 +786,13 @@ class TestReporting:
         from athena_research.reporting import metrics_to_df, write_csvs
 
         df = metrics_to_df(sample_results)
+        df["session_bucket"] = ["all", "london"]
         written = write_csvs(df, tmp_path)
         assert len(written) > 0
         assert (tmp_path / "research_summary.csv").exists()
         assert (tmp_path / "ranked_strategies.csv").exists()
+        assert (tmp_path / "implementation_ready_candidates.csv").exists()
+        assert (tmp_path / "by_session_bucket.csv").exists()
 
     def test_markdown_report_created(self, tmp_path, sample_results):
         from athena_research.reporting import metrics_to_df, write_markdown_report
@@ -614,6 +806,7 @@ class TestReporting:
         assert "Engine A" in content
         assert "Engine B" in content
         assert "Engine D" in content
+        assert "Implementation Readiness" in content
 
     def test_markdown_report_surfaces_simulation_warnings(self, tmp_path):
         from athena_research.metrics import StrategyMetrics
@@ -645,6 +838,86 @@ class TestReporting:
         content = report_path.read_text(encoding="utf-8")
         assert "Research Run Self-Audit" in content
         assert "vectorbt_zero_trades_with_entry_signals" in content
+        assert "NOT_IMPLEMENTABLE" in content
+
+    def test_implementation_ready_requires_clean_strong_real_data(self, tmp_path):
+        from athena_research.metrics import StrategyMetrics
+        from athena_research.reporting import metrics_to_df, write_csvs
+
+        clean = StrategyMetrics(
+            run_id="ready_run",
+            symbol="AVAX/USDT",
+            asset_class="crypto",
+            timeframe="H4",
+            family="stochastic",
+            strategy_name="stochastic_cross",
+            params_str="",
+            direction="both",
+            trade_count=80,
+            profit_factor=1.7,
+            net_return=0.21,
+            oos_return=0.09,
+            robustness_score=0.72,
+            status="STRONG_CANDIDATE",
+            data_source="binance_rest",
+            simulation_backend="vectorbt",
+            sample_ok=True,
+            recommendation="ADD",
+        )
+        warned = StrategyMetrics(
+            run_id="ready_run",
+            symbol="ETC/USDT",
+            asset_class="crypto",
+            timeframe="H4",
+            family="stochastic",
+            strategy_name="stochastic_cross",
+            params_str="",
+            direction="both",
+            trade_count=80,
+            profit_factor=1.7,
+            net_return=0.21,
+            oos_return=0.09,
+            robustness_score=0.72,
+            status="STRONG_CANDIDATE",
+            data_source="binance_rest",
+            simulation_backend="pandas_fallback",
+            simulation_warning="vectorbt_zero_trades_with_entry_signals",
+            sample_ok=True,
+            recommendation="ADD",
+        )
+        weak_sample = StrategyMetrics(
+            run_id="ready_run",
+            symbol="UNI/USDT",
+            asset_class="crypto",
+            timeframe="H4",
+            family="stochastic",
+            strategy_name="stochastic_cross",
+            params_str="",
+            direction="both",
+            trade_count=80,
+            profit_factor=1.7,
+            net_return=0.21,
+            oos_return=0.09,
+            robustness_score=0.72,
+            status="STRONG_CANDIDATE",
+            data_source="binance_rest",
+            simulation_backend="vectorbt",
+            sample_ok=False,
+            recommendation="ADD",
+        )
+
+        write_csvs(metrics_to_df([clean, warned, weak_sample]), tmp_path)
+
+        ready = pd.read_csv(tmp_path / "implementation_ready_candidates.csv")
+        recs = pd.read_csv(tmp_path / "add_remove_retest_recommendations.csv")
+        assert ready["symbol"].tolist() == ["AVAX/USDT"]
+        assert ready["implementation_verdict"].iloc[0] == "IMPLEMENTATION_READY"
+        blocked = recs[recs["symbol"] == "ETC/USDT"].iloc[0]
+        assert blocked["implementation_verdict"] == "NOT_IMPLEMENTABLE"
+        assert "simulator_fallback_used" in blocked["implementation_blockers"]
+        sample_blocked = recs[recs["symbol"] == "UNI/USDT"].iloc[0]
+        assert sample_blocked["implementation_verdict"] == "NOT_IMPLEMENTABLE"
+        assert "sample_not_ok" in sample_blocked["implementation_blockers"]
 
     def test_generate_all_reports(self, tmp_path, sample_results):
         from athena_research.reporting import generate_all_reports

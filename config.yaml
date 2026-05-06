@@ -131,6 +131,23 @@ ENGINE_A_RESEARCH_LAB_FACTORS:
   BONUS: 0.15
   PENALTY: -0.10
   MAX_ABS: 0.20
+  FACTORS:
+    - obv_divergence
+    - bollinger_touch
+    - price_momentum
+    - stochastic_cross
+  STOCHASTIC_CROSS:
+    ENABLED: true
+    PAPER_TOOL_ONLY: true
+    TIMEFRAME: H4
+    ASSET_TYPES:
+      - crypto
+    SYMBOLS: []   # empty = all crypto pairs; no BTC/ETH block
+    K_PERIODS:
+      - 5
+      - 14
+    K_SMOOTH: 3
+    D_SMOOTH: 3
 
 # ── Engine A Mean Reversion Factor (config-gated, additive) ─────────────────
 # Disabled by default. When enabled, adds a small bounded adjustment (±MAX_ABS)

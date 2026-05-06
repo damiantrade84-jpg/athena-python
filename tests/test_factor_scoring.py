@@ -88,6 +88,21 @@ def _candles(n=80, *, trend=0.2, volume_trend=10.0):
     return rows
 
 
+def _stochastic_cross_candles():
+    closes = [100.0] * 60 + [90.0, 90.0, 100.0, 90.0, 90.0, 103.0]
+    return [
+        {
+            "open": close,
+            "high": close + 1.0,
+            "low": close - 1.0,
+            "close": close,
+            "vol": 1000.0,
+            "volume": 1000.0,
+        }
+        for close in closes
+    ]
+
+
 def test_public_helpers_match_current_contract():
     ctx = make_regime_smoothing_context()
     assert set(ctx) == {"history", "committed", "lock"}
@@ -372,6 +387,101 @@ def test_research_lab_addon_is_clamped_to_addon_ceiling(monkeypatch):
 
     assert result["research_lab_value"] == pytest.approx(0.20)
     assert result["addon_value"] == pytest.approx(0.20)
+
+
+def test_research_lab_stochastic_candidate_applies_only_to_confirmed_h4_alt_allowlist(monkeypatch):
+    cfg = {
+        "ENABLED": True,
+        "BONUS": 0.15,
+        "PENALTY": -0.10,
+        "MAX_ABS": 0.20,
+        "FACTORS": ["stochastic_cross"],
+        "STOCHASTIC_CROSS": {
+            "ENABLED": True,
+            "PAPER_TOOL_ONLY": True,
+            "ASSET_TYPES": ["crypto"],
+            "SYMBOLS": ["AVAX/USDT", "SOL/USDT", "LINK/USDT"],
+            "TIMEFRAME": "H4",
+            "K_PERIODS": [5, 14],
+            "K_SMOOTH": 3,
+            "D_SMOOTH": 3,
+        },
+    }
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS", cfg)
+
+    result = _score(
+        pair={"type": "crypto", "display": "AVAX/USDT"},
+        h4_candles=_stochastic_cross_candles(),
+        d1_candles=_candles(n=80, trend=0.0),
+    )
+
+    assert result["research_lab_value"] == pytest.approx(0.15)
+    detail = result["research_lab_detail"]["components"]["stochastic_cross"]
+    assert detail["signal"] == "bull_cross"
+    assert detail["timeframe"] == "H4"
+    assert detail["paper_tool_only"] is True
+
+
+def test_research_lab_stochastic_candidate_allows_btc_and_eth_when_symbol_allowlist_is_empty(monkeypatch):
+    cfg = {
+        "ENABLED": True,
+        "BONUS": 0.15,
+        "PENALTY": -0.10,
+        "MAX_ABS": 0.20,
+        "FACTORS": ["stochastic_cross"],
+        "STOCHASTIC_CROSS": {
+            "ENABLED": True,
+            "PAPER_TOOL_ONLY": True,
+            "ASSET_TYPES": ["crypto"],
+            "SYMBOLS": [],
+            "TIMEFRAME": "H4",
+            "K_PERIODS": [5, 14],
+            "K_SMOOTH": 3,
+            "D_SMOOTH": 3,
+        },
+    }
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS", cfg)
+
+    for symbol in ("BTC/USDT", "ETH/USDT"):
+        result = _score(
+            pair={"type": "crypto", "display": symbol},
+            h4_candles=_stochastic_cross_candles(),
+        )
+
+        assert result["research_lab_value"] == pytest.approx(0.15)
+        detail = result["research_lab_detail"]["components"]["stochastic_cross"]
+        assert detail["signal"] == "bull_cross"
+
+
+def test_research_lab_stochastic_candidate_still_rejects_non_crypto(monkeypatch):
+    cfg = {
+        "ENABLED": True,
+        "BONUS": 0.15,
+        "PENALTY": -0.10,
+        "MAX_ABS": 0.20,
+        "FACTORS": ["stochastic_cross"],
+        "STOCHASTIC_CROSS": {
+            "ENABLED": True,
+            "PAPER_TOOL_ONLY": True,
+            "ASSET_TYPES": ["crypto"],
+            "SYMBOLS": [],
+            "TIMEFRAME": "H4",
+            "K_PERIODS": [5, 14],
+            "K_SMOOTH": 3,
+            "D_SMOOTH": 3,
+        },
+    }
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS", cfg)
+
+    result = _score(
+        pair={"type": "forex", "display": "EUR/USD"},
+        h4_candles=_stochastic_cross_candles(),
+    )
+
+    assert result["research_lab_value"] == pytest.approx(0.0)
+    detail = result["research_lab_detail"]["components"]["stochastic_cross"]
+    assert detail["signal"] == "out_of_scope"
+    assert detail["reason"] == "asset_type_not_enabled"
 
 
 def test_weights_report_effective_values_when_addon_is_unsupported():
